@@ -1057,7 +1057,7 @@ pub enum ExprKind {
     /// (docs/certgen-transcriber-in-language-design.md §3).
     ///
     /// Three things distinguish it from [`ExprKind::Match`], and all three are
-    /// what make a 60-branch elimination writable at all:
+    /// what make a 66-branch elimination writable at all:
     ///
     /// - the motive is a **constant type**, not a lambda: a motive that
     ///   mentioned the scrutinee, its context or its level would give the

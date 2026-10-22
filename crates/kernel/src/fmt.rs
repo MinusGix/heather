@@ -244,6 +244,11 @@ impl fmt::Debug for Term {
             Term::TmWf { level, shape, arity } => {
                 write!(f, "«Wf[{level:?}]({shape:?}). {arity:?}»")
             }
+            Term::TmDVec { level, len, fam } => write!(f, "«DVec[{level:?}]({len:?}; {fam:?})»"),
+            Term::TmIWf { level, idx_level, idx, shape, arity, out, child, index } => write!(
+                f,
+                "«IWf[{level:?},{idx_level:?}]({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?})({index:?})»"
+            ),
             Term::TmM { level, pos_level, idx_level, idx, shape, pos, next, index } => write!(
                 f,
                 "«M[{level:?},{pos_level:?},{idx_level:?}]({idx:?}; {shape:?}; {pos:?}; {next:?})({index:?})»"
@@ -516,7 +521,7 @@ impl fmt::Debug for Motives {
     }
 }
 
-/// All 60 branches, labelled and in declaration order — the same order and
+/// All 66 branches, labelled and in declaration order — the same order and
 /// the same no-`..` destructuring as the cache's structural walker
 /// (`heather_cache::merkle`), so the printed form and the content hash cannot
 /// disagree about what a recursor *is*.
@@ -584,6 +589,12 @@ impl fmt::Debug for Branches {
             tm_m,
             tm_corec,
             tm_out,
+            ty_dvec,
+            tm_dvec,
+            ty_iwf,
+            tm_iwf,
+            tm_sup_i,
+            tm_elim_iwf,
         } = self;
         node(f, |f| {
             f.write_str("b⃗(")?;
@@ -649,6 +660,12 @@ impl fmt::Debug for Branches {
                 ("«M»", tm_m),
                 ("corec", tm_corec),
                 ("out", tm_out),
+                ("DVec", ty_dvec),
+                ("«DVec»", tm_dvec),
+                ("IWf", ty_iwf),
+                ("«IWf»", tm_iwf),
+                ("sup_i", tm_sup_i),
+                ("elim_IWf", tm_elim_iwf),
             ] {
                 if !first {
                     f.write_str("; ")?;

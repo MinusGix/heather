@@ -353,7 +353,7 @@ impl Elaborator {
 
         // The kernel is the gate, at the meta layer. The same oracle seam as
         // the two Ψ sites (`gate.rs`) — this is where a `match code` shell's
-        // 60-branch recursor check lives, the single most expensive gate in
+        // 66-branch recursor check lives, the single most expensive gate in
         // `lib/certgen_code.hthr` — with `lands_in_psi: false` because a
         // `meta fn` registers in the meta-def table and Ψ never grows.
         let empty = LocalCtx::nil();
@@ -1135,9 +1135,9 @@ impl Elaborator {
     /// kernel's code recursor (docs/certgen-transcriber-in-language-design.md
     /// §3). The elimination is `ElimCodeTm` on a term-code scrutinee and
     /// `ElimCodeTy` on a type-code one (docs/fn-signature-reflection-design.md
-    /// §3), and the whole slice exists to make the 60 branches writable:
+    /// §3), and the whole slice exists to make the 66 branches writable:
     ///
-    /// - **the motive is constant**, so all 60 branches expect the *same* type
+    /// - **the motive is constant**, so all 66 branches expect the *same* type
     ///   and one default term can fill the 46 nobody writes. It is elaborated
     ///   with no locals in scope, so "constant" is enforced by name resolution
     ///   rather than by a check after the fact;
@@ -1165,7 +1165,7 @@ impl Elaborator {
         let (scrut_t, scrut_ty, _) = self.elab_infer(cx, scrut)?;
         // A term code (`Code(g |- T)`) eliminates with `ElimCodeTm`; a type
         // code (`TyCode(g)`) with `ElimCodeTy` (docs/fn-signature-reflection-
-        // design.md §3). Same motives, same 60 branches, same `rec_ga` gate —
+        // design.md §3). Same motives, same 66 branches, same `rec_ga` gate —
         // the two recursors differ only in the scrutinee's judgment and in
         // which motive the conclusion instantiates, and a constant motive
         // erases the second difference.
@@ -1225,7 +1225,7 @@ impl Elaborator {
         // to invent 46 branch terms.
         let Some(default) = arms.iter().find(|a| a.default) else {
             return err(
-                "`match code` needs a `_ => …` arm: the recursor has 60 branches and \
+                "`match code` needs a `_ => …` arm: the recursor has 66 branches and \
                  this is what fills the ones you did not write",
                 span,
             );
@@ -1301,7 +1301,7 @@ impl Elaborator {
             terms[idx] = Rc::new(arm_t?);
         }
 
-        let branches: [Rc<Term>; 60] = terms.try_into().expect("one term per branch name");
+        let branches: [Rc<Term>; 66] = terms.try_into().expect("one term per branch name");
         let branches = Rc::new(rec::branches_from(branches));
         let term = match scrutinee {
             Scrutinee::Tm { ctx, ty, level } => Term::ElimCodeTm {

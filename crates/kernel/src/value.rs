@@ -1575,6 +1575,16 @@ pub enum Val<'v> {
     /// [`crate::term::Term::TmM`]'s value, behind one pointer as
     /// [`VMSig`] is, so the code does not widen every value.
     TmM(Rc<VTmM<'v>>),
+    /// [`crate::term::Term::TmDVec`]'s value; `fam` has one pending binder
+    /// (the position).
+    TmDVec {
+        level: Level,
+        len: &'v TmClo<'v>,
+        fam: &'v TmClo<'v>,
+    },
+    /// [`crate::term::Term::TmIWf`]'s value, behind one pointer as
+    /// [`Val::TmM`]'s is.
+    TmIWf(Rc<VTmIWf<'v>>),
     TmId {
         level: Level,
         ty: &'v TmClo<'v>,
@@ -2017,6 +2027,20 @@ pub struct VTmM<'v> {
     pub index: &'v TmClo<'v>,
 }
 
+/// The `IWf` code as a value ([`Val::TmIWf`]): the pieces as closures in
+/// one environment, `arity`/`out` with one pending binder and `child` with
+/// two, as in [`VIWfSig`]; `idx`, `shape` and `index` with none.
+pub struct VTmIWf<'v> {
+    pub level: Level,
+    pub idx_level: Level,
+    pub idx: &'v TmClo<'v>,
+    pub shape: &'v TmClo<'v>,
+    pub arity: &'v TmClo<'v>,
+    pub out: &'v TmClo<'v>,
+    pub child: &'v TmClo<'v>,
+    pub index: &'v TmClo<'v>,
+}
+
 /// A `corec`'s coalgebra: the carrier (one pending binder, `i`), the step
 /// (two, `i, x`), and the environment both were built in, which `out`'s β
 /// extends by the index and the seed (`Eval::fire_out`).
@@ -2403,6 +2427,11 @@ impl fmt::Debug for Val<'_> {
             Val::TmSigma { fst, snd, .. } => write!(f, "`Σ({fst:?}). {snd:?}"),
             Val::TmW { shape, pos, .. } => write!(f, "`W({shape:?}). {pos:?}"),
             Val::TmWf { shape, arity, .. } => write!(f, "`Wf({shape:?}). {arity:?}"),
+            Val::TmDVec { len, fam, .. } => write!(f, "`DVec({len:?}; {fam:?})"),
+            Val::TmIWf(w) => {
+                let VTmIWf { idx, shape, arity, out, child, index, .. } = &**w;
+                write!(f, "`IWf({idx:?}; {shape:?}. {arity:?}; {out:?}; {child:?})({index:?})")
+            }
             Val::TmM(m) => {
                 let VTmM { idx, shape, pos, next, index, .. } = &**m;
                 write!(f, "`M({idx:?}; {shape:?}; {pos:?}; {next:?})({index:?})")

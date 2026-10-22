@@ -190,9 +190,9 @@ Its projection `dnth` is not a former: `term::dnth` materializes design §3's
 `elim_Nat` schema over an embedding `Fin k̂ → Fin n`, transcribed binder by
 binder from the Coq formalization (heather-coq `Term.v`), whose `V_dnth`
 checked that the schema's β-annotated applications type (`tests/dvec.rs`
-checks them here, at an open length). `DVec` has **no code yet**: it is
-admitted at layers p and m only (`Tc::computing_layer`) until the rec.rs
-round gives it `TmDVec` and its branches, as `Vec` was before its phase 3.
+checks them here, at an open length). Its code is `TmDVec` (design §13
+step 4, 2026-10-22), with branches `ty_dvec`/`tm_dvec`; until then it was
+admitted at layers p and m only, as `Vec` was before its phase 3.
 
 `IWf^{l,li}(I; x:S. n; x. o; x i. c)(m)` (2026-10-20,
 `docs/iwf-former-design.md` §13 step 3) is `Wf` with an index: `sup_i(a;
@@ -223,8 +223,11 @@ IWf(…)(j))` and the step in the left telescope, then the scrutinees as
 neutrals, whose inferred `IWf` forces the signature and the index.
 It does not compare the ih types either: equal signatures and motives
 force them (heather-coq `ELIM_CONGRUENCE.md`, `Validity/IWfIhEq.v`,
-MinusGix/heather-coq#24). Like `DVec`, `IWf` has **no code yet** and is
-admitted at layers p and m only until the rec.rs round.
+MinusGix/heather-coq#24). Its code is `TmIWf`, the index inside it as in
+`TmM`, and its four branches `ty_iwf`, `tm_iwf`, `tm_sup_i`,
+`tm_elim_iwf` are heather-coq `RecSpec`'s 57–60 (design §13 step 4,
+2026-10-22; `tests/iwf_codes.rs`): the recursor has 66 branches, and
+`DVec`, `IWf`, `sup_i` and `elim_IWf` are code.
 
 `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` (2026-10-21,
 `docs/kernel-coinduction-design.md` §10 step 3) is the indexed

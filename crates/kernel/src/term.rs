@@ -187,9 +187,9 @@ pub enum Type {
     /// substrate of `IWf` (docs/iwf-former-design.md §1.1); its projection is
     /// the derived [`dnth`], not a former.
     ///
-    /// **Not code yet**: refused inside a `box` payload until the rec.rs
-    /// round gives it `TmDVec` and its branches (design §1, §13 step 4), as
-    /// `Vec` was before its phase 3. A takes-a-binder former rather than a
+    /// Code since the rec.rs round (design §13 step 4): `TmDVec` and the
+    /// `ty_dvec`/`tm_dvec` branches, as `Vec` became at its phase 3. A
+    /// takes-a-binder former rather than a
     /// family argument because Heather has no type-valued functions. `Vec^l(T;
     /// k)` and `DVec^l(k; _. T)` agree reduct for reduct at a canonical
     /// length and are distinct neutral types at a neutral one; they are not
@@ -216,8 +216,8 @@ pub enum Type {
     /// a third larger, and the checker's recursion holds `Type`s in each
     /// frame (`docs/native-depth-budget-design.md`).
     ///
-    /// **Not code yet**: as [`Type::DVec`], admitted at layers p and m only
-    /// until the rec.rs round (design §13 step 4).
+    /// Code since the rec.rs round (design §13 step 4), as [`Type::DVec`]:
+    /// `TmIWf`, and the `ty_iwf`/`tm_iwf`/`tm_sup_i`/`tm_elim_iwf` branches.
     IWf { sig: Rc<IWfSig>, index: Rc<Term> },
     /// `M^{l,l',li}(I; i. S; i s. P; i s p. o)(j)` — the indexed final
     /// coalgebra, the dual of [`Type::W`] with [`Type::IWf`]'s index
@@ -232,8 +232,7 @@ pub enum Type {
     ///
     /// The signature is one shared [`MSig`], as `IWf`'s is.
     ///
-    /// **Not code yet**: admitted at layers p and m only, as [`Type::IWf`]
-    /// was until its codes round (design §1.5).
+    /// Code since docs/kernel-m-codes-design.md: `TmM` and four branches.
     M { sig: Rc<MSig>, index: Rc<Term> },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
@@ -368,6 +367,34 @@ pub enum Term {
         level: Level,
         shape: Rc<Term>,
         arity: Rc<Term>,
+    },
+    /// `DVec^l(k; i. f) : Ty l` where `k : Nat` and `f : Ty l` under
+    /// `i : Fin k` — encoding of the dependent tuple (decoded by
+    /// `El (DVec^l(k; i. f)) ⇝ DVec^l(k; i. El^l f)`;
+    /// docs/iwf-former-design.md §6). The length is a term of the same scope,
+    /// the family binds one local, as the type former's does.
+    TmDVec {
+        level: Level,
+        len: Rc<Term>,
+        fam: Rc<Term>,
+    },
+    /// `IWf^{l,li}(u_I; x:u_S. n; x. o; x i. c)(m) : Ty (l ⊔ li)` — encoding
+    /// of the finitary indexed fixed point applied at index `m`
+    /// (docs/iwf-former-design.md §6), decoded by `El(TmIWf …) ⇝
+    /// IWf(El idx; x : El shape. arity; out; child)(index)`. `arity` and
+    /// `out` bind `x`, `child` binds `x, i : Fin arity`; they and `index` are
+    /// terms (of `Nat` and of `El idx`), carried across the decoding
+    /// unchanged. Flat, as [`Term::TmM`] is: two levels and six pointers is
+    /// `Term`'s widest shape already.
+    TmIWf {
+        level: Level,
+        idx_level: Level,
+        idx: Rc<Term>,
+        shape: Rc<Term>,
+        arity: Rc<Term>,
+        out: Rc<Term>,
+        child: Rc<Term>,
+        index: Rc<Term>,
     },
     /// `M^{l,l',li}(u_I; i. u_S; i s. u_P; i s p. o)(j) : Ty (l ⊔ l' ⊔ li)` —
     /// encoding of the indexed final coalgebra applied at index `j`
@@ -1231,6 +1258,51 @@ pub struct Branches {
     /// `(ℓ, ℓ', ℓi, g, U_I, U_S, U_P, u_o, u_j, u_m, x_I, …, x_m. t_out)` —
     /// code of `out(σ; u_j; u_m)`.
     pub tm_out: Rc<Term>,
+
+    // -- dependent tuples and indexed trees (docs/iwf-former-design.md §6) --
+    //
+    // heather-coq's M17c branches 55–60 (`RecSpec`'s `brDecls`/`br_calls`),
+    // whose scopes were derived from the layer-C rules before these existed;
+    // these are checked against them. Univs `ℓ` (the shapes'), then `ℓi` (the
+    // index type's), then `ℓ'` (a motive's).
+    /// `(ℓ, g, u_n, U_F, x_n, x_F. t_DVec)` — univs: ℓ; globals: g,
+    /// `u_n : Trm_c(g ⊢ Nat @ 0)`, `U_F : Typ_c((g, i : Fin u_n^id @ 0), ℓ)`;
+    /// locals: `x_n` (*term* motive), `x_F` (type motive). Code of the type
+    /// `DVec^ℓ(u_n^id; i. U_F^id)`.
+    pub ty_dvec: Rc<Term>,
+    /// `(ℓ, g, u_n, u_f, x_n, x_f. t'_DVec)` — as `ty_dvec`, with
+    /// `u_f : Trm_c((g, i : Fin u_n^id) ⊢ Ty ℓ @ 1+ℓ)`. Code of the encoding
+    /// `DVec^ℓ(u_n^id; i. u_f^id) : Ty ℓ`.
+    pub tm_dvec: Rc<Term>,
+    /// `(ℓ, ℓi, g, U_X, U_A, u_N, u_O, u_C, u_m, x_X, x_A, x_N, x_O, x_C,
+    /// x_m. t_IWf)` — univs: ℓ, ℓi; globals: g, `U_X : Typ_c(g, ℓi)`,
+    /// `U_A : Typ_c(g, ℓ)`, `u_N : Trm_c((g, x : U_A^id) ⊢ Nat @ 0)`,
+    /// `u_O : Trm_c((g, x) ⊢ U_X^↑ @ ℓi)`,
+    /// `u_C : Trm_c((g, x, i : Fin u_N^id) ⊢ U_X^↑↑ @ ℓi)`,
+    /// `u_m : Trm_c(g ⊢ U_X^id @ ℓi)`; locals: one recursive call per
+    /// global, `x_X`/`x_A` at the type motive. Code of the type
+    /// `IWf(U_X; U_A; u_N; u_O; u_C)(u_m)` @ ℓ⊔ℓi.
+    pub ty_iwf: Rc<Term>,
+    /// `(ℓ, ℓi, g, u_x, u_s, u_n, u_o, u_c, u_m, x_x, …, x_m. t'_IWf)` —
+    /// `ty_iwf` with the index type and shapes as codes (`Trm_c(g ⊢ Ty ℓi)`,
+    /// `Trm_c(g ⊢ Ty ℓ)`) read through `El`, as `tm_wf` is `ty_wf`'s. Code of
+    /// the encoding `TmIWf(…)(u_m) : Ty (ℓ⊔ℓi)`.
+    pub tm_iwf: Rc<Term>,
+    /// `(ℓ, ℓi, g, U_X, U_A, u_N, u_O, u_C, u_a, u_cs, x_X, …, x_C, x_a,
+    /// x_cs. t_supi)` — `ty_iwf`'s five signature globals, then
+    /// `u_a : Trm_c(g ⊢ U_A^id @ ℓ)`,
+    /// `u_cs : Trm_c(g ⊢ DVec^{ℓ⊔ℓi}(u_N^{id,u_a/x}; k. IWf(…)(u_C^{id,u_a/x,k/i})) @ ℓ⊔ℓi)`
+    /// ([`iwf_children_ty`]). Code of `sup_i(…; u_a^id; u_cs^id)`.
+    pub tm_sup_i: Rc<Term>,
+    /// `(ℓ, ℓi, ℓ', g, U_X, U_A, u_N, u_O, u_C, U_M, u_c, u_m, u_t, x_X, …,
+    /// x_t. t_elimIWf)` — the five signature globals, then
+    /// `U_M : Typ_c((g, j : U_X^id, z : IWf(…)(j)), ℓ')`,
+    /// `u_c : Trm_c((g, a, cs, ih) ⊢ U_M^{id, u_O[a]/j, sup_i(a; cs)/z} @ ℓ')`
+    /// (the telescope is [`iwf_step_telescope`], shared with typing),
+    /// `u_m : Trm_c(g ⊢ U_X^id @ ℓi)`, `u_t : Trm_c(g ⊢ IWf(…)(u_m^id) @ ℓ⊔ℓi)`;
+    /// locals: one call per global, `x_M` at the type motive. Code of
+    /// `elim_IWf(…; j z. U_M^id; a cs ih. u_c^id; u_m^id; u_t^id)`.
+    pub tm_elim_iwf: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.
@@ -2745,6 +2817,32 @@ impl MSig {
     /// `o[j/i, s, p]`, in `(Γ, s, p)` for `j` in Γ.
     pub fn next_at(&self, j: &Term) -> Term {
         self.next.inst_top_above(0, 2, j)
+    }
+}
+
+/// The signature a [`Term::TmIWf`] code decodes to: the index type and the
+/// shapes read through `El` at their levels, the arity, output and child
+/// index carried across unchanged (docs/iwf-former-design.md §6). The one
+/// place the decoding is spelled, so both reducers and the typing rule agree
+/// on it.
+pub fn iwf_sig_of_code(
+    level: &Level,
+    idx_level: &Level,
+    idx: &Rc<Term>,
+    shape: &Rc<Term>,
+    arity: &Rc<Term>,
+    out: &Rc<Term>,
+    child: &Rc<Term>,
+) -> IWfSig {
+    let el = |level: &Level, tm: &Rc<Term>| Rc::new(Type::El { level: level.clone(), tm: Rc::clone(tm) });
+    IWfSig {
+        level: level.clone(),
+        idx_level: idx_level.clone(),
+        idx: el(idx_level, idx),
+        shape: el(level, shape),
+        arity: Rc::clone(arity),
+        out: Rc::clone(out),
+        child: Rc::clone(child),
     }
 }
 

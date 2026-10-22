@@ -330,6 +330,12 @@ fn uniform_branches(t: Rc<Term>) -> Branches {
         tm_m: zero(),
         tm_corec: zero(),
         tm_out: zero(),
+        ty_dvec: zero(),
+        tm_dvec: zero(),
+        ty_iwf: zero(),
+        tm_iwf: zero(),
+        tm_sup_i: zero(),
+        tm_elim_iwf: zero(),
     }
 }
 
@@ -430,8 +436,14 @@ fn every_recursor_branch_is_hashed() {
         tm_m,
         tm_corec,
         tm_out,
+        ty_dvec,
+        tm_dvec,
+        ty_iwf,
+        tm_iwf,
+        tm_sup_i,
+        tm_elim_iwf,
     );
-    assert_eq!(mutate.len(), 60, "every branch field must be listed here");
+    assert_eq!(mutate.len(), 66, "every branch field must be listed here");
 
     let mut seen = std::collections::BTreeSet::new();
     for (name, f) in &mutate {

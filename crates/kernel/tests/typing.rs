@@ -4,7 +4,7 @@
 //! disciplines, global contexts and local substitutions, universe
 //! polymorphism, contextual types (box/letbox, checking-only box under
 //! binders), and the code recursors, including a full *identity recursor*
-//! whose 60 branches re-box their telescopes' code — an end-to-end exercise
+//! whose 66 branches re-box their telescopes' code — an end-to-end exercise
 //! of every `G_Typ`/`G_Trm` telescope.
 //!
 //! No generator-based properties: the generators produce ill-typed terms,
@@ -17,8 +17,9 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::reduce::whnf_term;
 use heather_kernel::term::{
-    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, MSig,
-    LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
+    iwf_motive_scrut_ty, iwf_step_telescope, nth, Branches, CtxBase, CtxEntry, GlobalBinding,
+    GlobalCtx, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives, SubstTail, Term,
+    Type,
 };
 use heather_kernel::typing::{
     check_global_ctx, check_global_ctx_extension, check_local_ctx, check_local_subst, check_term,
@@ -580,6 +581,12 @@ fn constant_branches() -> Rc<Branches> {
         tm_m: z(),
         tm_corec: z(),
         tm_out: z(),
+        ty_dvec: z(),
+        tm_dvec: z(),
+        ty_iwf: z(),
+        tm_iwf: z(),
+        tm_sup_i: z(),
+        tm_elim_iwf: z(),
     })
 }
 
@@ -1184,7 +1191,100 @@ fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g)),
             })))
         },
+        // -- indexed well-founded trees (docs/iwf-former-design.md §13) --
+        // box DVec^ℓ(u_n; i. U_F) — g = 2, u_n = 1, U_F = 0.
+        ty_dvec: {
+            let len = rt(gtm(1, &g2));
+            let gi = ext(&g2, Type::Fin { len: Rc::clone(&len) }, Level::Zero);
+            rt(Term::BoxTy(rty(Type::DVec { level: lv(0), len, fam: rty(gty(0, &gi)) })))
+        },
+        tm_dvec: {
+            let len = rt(gtm(1, &g2));
+            let gi = ext(&g2, Type::Fin { len: Rc::clone(&len) }, Level::Zero);
+            rt(Term::BoxTm(rt(Term::TmDVec { level: lv(0), len, fam: rt(gtm(0, &gi)) })))
+        },
+        // box IWf(U_I; U_S; u_n; u_o; u_c)(u_m) — g = 6, I = 5, S = 4, n =
+        // 3, o = 2, c = 1, m = 0; ℓ = lv(1), ℓi = lv(0).
+        ty_iwf: {
+            let v = iwf_sig_at(1, false, lv(1), lv(0));
+            rt(Term::BoxTy(rty(v.sig.at(rt(gtm(0, &v.g))))))
+        },
+        tm_iwf: {
+            let v = iwf_sig_at(1, true, lv(1), lv(0));
+            rt(Term::BoxTm(rt(Term::TmIWf {
+                level: lv(1),
+                idx_level: lv(0),
+                idx: rt(gtm(5, &v.g)),
+                shape: rt(gtm(4, &v.g)),
+                arity: Rc::clone(&v.sig.arity),
+                out: Rc::clone(&v.sig.out),
+                child: Rc::clone(&v.sig.child),
+                index: rt(gtm(0, &v.g)),
+            })))
+        },
+        // box sup_i(…; u_a; u_cs) — g = 7, …, c = 2, a = 1, cs = 0.
+        tm_sup_i: {
+            let v = iwf_sig_at(2, false, lv(1), lv(0));
+            rt(Term::BoxTm(rt(v.sig.supi(rt(gtm(1, &v.g)), rt(gtm(0, &v.g))))))
+        },
+        // box elim_IWf(…; j z. U_M; a cs ih. u_s; u_m; u_t) — g = 9, I = 8,
+        // S = 7, n = 6, o = 5, c = 4, M = 3, s = 2, m = 1, t = 0; ℓ =
+        // lv(2), ℓi = lv(1), ℓ' = lv(0).
+        tm_elim_iwf: {
+            let v = iwf_sig_at(4, false, lv(2), lv(1));
+            let family = v.sig.family_level();
+            let gj = ext(&v.g, (*v.sig.idx).clone(), lv(1));
+            let gjz = ext(&gj, iwf_motive_scrut_ty(&v.sig), family.clone());
+            let motive = gty(3, &gjz);
+            let (cs_ty, ih_ty, _) = iwf_step_telescope(&v.sig, &lv(0), &motive);
+            let ga = ext(&v.g, (*v.sig.shape).clone(), lv(2));
+            let gacs = ext(&ga, cs_ty, family);
+            let gacsi = ext(&gacs, ih_ty, lv(0));
+            rt(Term::BoxTm(rt(Term::ElimIWf {
+                sig: Rc::clone(&v.sig),
+                motive_level: lv(0),
+                motive: rty(motive),
+                step: rt(gtm(2, &gacsi)),
+                index: rt(gtm(1, &v.g)),
+                scrut: rt(gtm(0, &v.g)),
+            })))
+        },
     })
+}
+
+/// The `IWf` signature `(U_I; U_S; u_n; u_o; u_c)` of a branch whose `u_c`
+/// is global `k` (so `g` is `k + 5`), the index type and shapes being (or,
+/// `coded`, `El` of) the globals before it — and `g`'s context. rec.rs's
+/// `iwf_view`, re-derived.
+struct IWfAt {
+    sig: Rc<IWfSig>,
+    g: LocalCtx,
+}
+
+fn iwf_sig_at(k: u32, coded: bool, l: Level, li: Level) -> IWfAt {
+    let g = g_ctx(k + 5);
+    let piece = |var: u32, level: &Level| {
+        if coded {
+            Type::El { level: level.clone(), tm: rt(gtm(var, &g)) }
+        } else {
+            gty(var, &g)
+        }
+    };
+    let idx = piece(k + 4, &li);
+    let shape = piece(k + 3, &l);
+    let gx = ext(&g, shape.clone(), l.clone());
+    let arity = gtm(k + 2, &gx);
+    let gxi = ext(&gx, Type::Fin { len: rt(arity.clone()) }, Level::Zero);
+    let sig = Rc::new(IWfSig {
+        level: l,
+        idx_level: li,
+        idx: rty(idx),
+        shape: rty(shape),
+        arity: rt(arity),
+        out: rt(gtm(k + 1, &gx)),
+        child: rt(gtm(k, &gxi)),
+    });
+    IWfAt { sig, g }
 }
 
 /// The signature `(U_I; U_S; U_P; u_o)` of an `M` branch whose context
@@ -1449,7 +1549,7 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
 /// The pattern is `elim_empty_branch_recursive_call_is_at_the_scrutinee_level`
 /// generalised: the identity body is routed through `λ(z : claim). <body>`
 /// applied to the entry under test, so only `claim` varies. The harness
-/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 60 branches
+/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 66 branches
 /// whatever the scrutinee is, so a single trivial scrutinee observes any
 /// branch's telescope.
 #[test]
@@ -1488,7 +1588,7 @@ fn type_motive_branch_entries_are_usable_at_their_declared_context_and_level() {
         })
     };
     // `elim^Typ` over `box Nat`, whose only job is to make `rec_ga` walk the
-    // 60 branches; it fires `ty_nat`, which no probe touches.
+    // 66 branches; it fires `ty_nat`, which no probe touches.
     let harness = |branches: Rc<Branches>| Term::ElimCodeTy {
         ty_motive_level: Level::Zero,
         tm_motive_level: Level::Zero,
@@ -1946,7 +2046,7 @@ fn pair_projections_and_dependency() {
 /// 4. the guard is §2.3's box side condition, not a layer: layer v refuses
 ///    them, layer **c** admits them (every body is checked there), and the
 ///    payload of a `box` refuses them, which is what leaves the code grammar
-///    and the 60 recursor branches alone;
+///    and the 66 recursor branches alone;
 /// 5. without an annotation an intro checks against the expected type and
 ///    does not infer (design §2.1).
 #[test]

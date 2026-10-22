@@ -227,6 +227,18 @@ impl Walk<'_> {
                 self.term(shape, d);
                 self.term(arity, d + 1);
             }
+            Term::TmDVec { len, fam, .. } => {
+                self.term(len, d);
+                self.term(fam, d + 1);
+            }
+            Term::TmIWf { idx, shape, arity, out, child, index, .. } => {
+                self.term(idx, d);
+                self.term(shape, d);
+                self.term(arity, d + 1);
+                self.term(out, d + 1);
+                self.term(child, d + 2);
+                self.term(index, d);
+            }
             Term::TmM { idx, shape, pos, next, index, .. } => {
                 self.term(idx, d);
                 self.term(shape, d + 1);

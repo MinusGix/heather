@@ -40,7 +40,8 @@ use std::sync::Arc as Rc;
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    iwf_ih, m_out_corec, m_step_ty, nth, wf_step_telescope, MSig, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    iwf_children_ty, iwf_ih, iwf_motive_scrut_ty, iwf_step_telescope, m_out_corec, m_step_ty, nth,
+    wf_step_telescope, IWfSig, MSig, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
     LocalSubst, LocalVar, Term, Type,
 };
 
@@ -465,6 +466,19 @@ fn step_type_frame(t: &Type, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 level: l.clone(),
                 shape: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(shape) }),
                 arity: Rc::clone(arity),
+            }),
+            // El^l (DVec^l(k; i. f)) ⇝ DVec^l(k; i. El^l f)
+            // (docs/iwf-former-design.md §6).
+            Term::TmDVec { level: l, len, fam } => Some(Type::DVec {
+                level: l.clone(),
+                len: Rc::clone(len),
+                fam: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(fam) }),
+            }),
+            // El(TmIWf …) ⇝ IWf(El idx; x : El shape. arity; out; child)(index)
+            // (design §6).
+            Term::TmIWf { level: l, idx_level, idx, shape, arity, out, child, index } => Some(Type::IWf {
+                sig: Rc::new(crate::term::iwf_sig_of_code(l, idx_level, idx, shape, arity, out, child)),
+                index: Rc::clone(index),
             }),
             // El(TmM …) ⇝ M(El idx; El shape; El pos; next)(index)
             // (docs/kernel-m-codes-design.md §1).
@@ -1157,7 +1171,7 @@ pub(crate) struct Rec<'a> {
 
 impl<'a> Rec<'a> {
     /// The recursor's copied-forward parts, for [`crate::eval`]'s β: the
-    /// evaluator shares these functions rather than transcribing the 60
+    /// evaluator shares these functions rather than transcribing the 66
     /// branch telescopes a sixth time (docs/nbe-conversion-design.md §2).
     pub(crate) fn new(
         ty_motive_level: &'a Level,
@@ -1256,6 +1270,37 @@ fn m_sig_pieces(rec: &Rec, delta: &LocalCtx, sig: &MSig) -> (Vec<GlobalEntry>, V
         ],
         vec![s_idx, s_shape, s_pos, s_next],
     )
+}
+
+/// The signature pieces of an `IWf` branch, `U_I, U_S, u_n, u_o, u_c` as
+/// global payloads and `x_I, x_S, x_n, x_o, x_c` as recursive calls, each at
+/// the context its piece lives in (docs/iwf-former-design.md §6). The pieces
+/// are a boxed `IWf`/`sup_i`/`elim_IWf`'s; `TmIWf`'s are codes and are
+/// recursed at `Ty`.
+fn iwf_sig_pieces(rec: &Rec, delta: &LocalCtx, sig: &IWfSig) -> (Vec<GlobalEntry>, Vec<Rc<Term>>) {
+    let dx = extend(delta, Rc::clone(&sig.shape), sig.level.clone());
+    let dxi = extend(&dx, Rc::new(Type::Fin { len: Rc::clone(&sig.arity) }), Level::Zero);
+    let s_idx = rec.elim_ty(sig.idx_level.clone(), delta.clone(), Rc::clone(&sig.idx));
+    let s_shape = rec.elim_ty(sig.level.clone(), delta.clone(), Rc::clone(&sig.shape));
+    let s_arity = rec.elim_tm(Level::Zero, dx.clone(), Rc::new(Type::Nat), Rc::clone(&sig.arity));
+    let s_out = rec.elim_tm(sig.idx_level.clone(), dx, Rc::new(sig.idx.shift_local(1)), Rc::clone(&sig.out));
+    let s_child = rec.elim_tm(sig.idx_level.clone(), dxi, Rc::new(sig.idx.shift_local(2)), Rc::clone(&sig.child));
+    (
+        vec![
+            GlobalEntry::Ctx(delta.clone()),
+            GlobalEntry::Ty(Rc::clone(&sig.idx)),
+            GlobalEntry::Ty(Rc::clone(&sig.shape)),
+            GlobalEntry::Tm(Rc::clone(&sig.arity)),
+            GlobalEntry::Tm(Rc::clone(&sig.out)),
+            GlobalEntry::Tm(Rc::clone(&sig.child)),
+        ],
+        vec![s_idx, s_shape, s_arity, s_out, s_child],
+    )
+}
+
+/// `IWf`'s universe payload, innermost-first: `li, l`.
+fn iwf_univs(sig: &IWfSig) -> Vec<Level> {
+    vec![sig.idx_level.clone(), sig.level.clone()]
 }
 
 /// `M`'s universe payload, innermost-first: `li, l', l`.
@@ -1521,8 +1566,29 @@ pub(crate) fn beta_elim_ty(
             ));
             Some(fire(&b.ty_m, &m_univs(sig), globals, locals, gamma))
         }
-        // Layer-m types cannot be layer-c code, nor can a former with no code
-        // yet (`DVec`): ill-typed, stuck.
+        // (ℓ, g, u_n, U_F, x_n, x_F. t_DVec) — the length at the *term*
+        // motive, the family under `i : Fin u_n`.   (docs/iwf-former-design.md §6)
+        Type::DVec { level, len, fam } => {
+            let di = extend(delta, Rc::new(Type::Fin { len: Rc::clone(len) }), Level::Zero);
+            let s_len = rec.elim_tm(Level::Zero, delta.clone(), Rc::new(Type::Nat), Rc::clone(len));
+            let s_fam = rec.elim_ty(level.clone(), di, Rc::clone(fam));
+            Some(fire(
+                &b.ty_dvec,
+                std::slice::from_ref(level),
+                vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Tm(Rc::clone(len)), GlobalEntry::Ty(Rc::clone(fam))],
+                vec![s_len, s_fam],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓi, g, U_I, U_S, u_n, u_o, u_c, u_m, x_I, …, x_c, x_m. t_IWf)
+        //   (design §6)
+        Type::IWf { sig, index } => {
+            let (mut globals, mut locals) = iwf_sig_pieces(rec, delta, sig);
+            globals.push(GlobalEntry::Tm(Rc::clone(index)));
+            locals.push(rec.elim_tm(sig.idx_level.clone(), delta.clone(), Rc::clone(&sig.idx), Rc::clone(index)));
+            Some(fire(&b.ty_iwf, &iwf_univs(sig), globals, locals, gamma))
+        }
+        // Layer-m types cannot be layer-c code: ill-typed, stuck.
         _ => None,
     }
 }
@@ -2730,6 +2796,79 @@ pub(crate) fn beta_elim_tm(
             globals.extend([GlobalEntry::Tm(Rc::clone(index)), GlobalEntry::Tm(Rc::clone(scrut))]);
             Some(fire(&b.tm_out, &m_univs(sig), globals, locals, gamma))
         }
+        // (ℓ, g, u_n, u_f, x_n, x_f. t'_DVec) — the encoding; the family
+        // recurses at `Ty` under `i : Fin u_n`.   (docs/iwf-former-design.md §6)
+        Term::TmDVec { level, len, fam } => {
+            let di = extend(delta, Rc::new(Type::Fin { len: Rc::clone(len) }), Level::Zero);
+            let s_len = rec.elim_tm(Level::Zero, delta.clone(), Rc::new(Type::Nat), Rc::clone(len));
+            let s_fam = rec.elim_tm(Level::succ(level.clone()), di, Rc::new(Type::Ty(level.clone())), Rc::clone(fam));
+            Some(fire(
+                &b.tm_dvec,
+                std::slice::from_ref(level),
+                vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Tm(Rc::clone(len)), GlobalEntry::Tm(Rc::clone(fam))],
+                vec![s_len, s_fam],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓi, g, u_I, u_S, u_n, u_o, u_c, u_m, x_I, …, x_m. t'_IWf) —
+        // the encoding; the index type and shapes recurse at `Ty`, the rest
+        // under `El` of the shapes, as tm_wf's do.   (design §6)
+        Term::TmIWf { level, idx_level, idx, shape, arity, out, child, index } => {
+            let sig = crate::term::iwf_sig_of_code(level, idx_level, idx, shape, arity, out, child);
+            let code_at = |level: &Level, tm: &Rc<Term>| {
+                rec.elim_tm(Level::succ(level.clone()), delta.clone(), Rc::new(Type::Ty(level.clone())), Rc::clone(tm))
+            };
+            let (mut globals, mut locals) = iwf_sig_pieces(rec, delta, &sig);
+            globals[1] = GlobalEntry::Tm(Rc::clone(idx));
+            globals[2] = GlobalEntry::Tm(Rc::clone(shape));
+            locals[0] = code_at(idx_level, idx);
+            locals[1] = code_at(level, shape);
+            globals.push(GlobalEntry::Tm(Rc::clone(index)));
+            locals.push(rec.elim_tm(idx_level.clone(), delta.clone(), Rc::clone(&sig.idx), Rc::clone(index)));
+            Some(fire(&b.tm_iwf, &iwf_univs(&sig), globals, locals, gamma))
+        }
+        // (ℓ, ℓi, g, U_I, U_S, u_n, u_o, u_c, u_a, u_cs, x_I, …, x_c, x_a,
+        // x_cs. t_supi) — the children recurse at `iwf_children_ty`, as in
+        // the typing rule.   (design §6)
+        Term::Supi { sig, label, children } => {
+            let (mut globals, mut locals) = iwf_sig_pieces(rec, delta, sig);
+            locals.push(rec.elim_tm(sig.level.clone(), delta.clone(), Rc::clone(&sig.shape), Rc::clone(label)));
+            locals.push(rec.elim_tm(
+                sig.family_level(),
+                delta.clone(),
+                Rc::new(iwf_children_ty(sig, label)),
+                Rc::clone(children),
+            ));
+            globals.extend([GlobalEntry::Tm(Rc::clone(label)), GlobalEntry::Tm(Rc::clone(children))]);
+            Some(fire(&b.tm_sup_i, &iwf_univs(sig), globals, locals, gamma))
+        }
+        // (ℓ, ℓi, ℓ', g, U_I, U_S, u_n, u_o, u_c, U_M, u_s, u_m, u_t, x_I, …,
+        // x_t. t_elimIWf) — x_M recurses at the *type* motive under
+        // `(j, z)`; the step's context and annotation come from
+        // `iwf_step_telescope`, exactly as in the typing rule.   (design §6)
+        Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => {
+            let (mut globals, mut locals) = iwf_sig_pieces(rec, delta, sig);
+            let fl = sig.family_level();
+            let dj = extend(delta, Rc::clone(&sig.idx), sig.idx_level.clone());
+            let djz = extend(&dj, Rc::new(iwf_motive_scrut_ty(sig)), fl.clone());
+            let (cs_ty, ih_ty, step_ty) = iwf_step_telescope(sig, motive_level, motive);
+            let da = extend(delta, Rc::clone(&sig.shape), sig.level.clone());
+            let dacs = extend(&da, Rc::new(cs_ty), fl.clone());
+            let dacsi = extend(&dacs, Rc::new(ih_ty), motive_level.clone());
+            locals.push(rec.elim_ty(motive_level.clone(), djz, Rc::clone(motive)));
+            locals.push(rec.elim_tm(motive_level.clone(), dacsi, Rc::new(step_ty), Rc::clone(step)));
+            locals.push(rec.elim_tm(sig.idx_level.clone(), delta.clone(), Rc::clone(&sig.idx), Rc::clone(index)));
+            locals.push(rec.elim_tm(fl, delta.clone(), Rc::new(sig.at(Rc::clone(index))), Rc::clone(scrut)));
+            globals.extend([
+                GlobalEntry::Ty(Rc::clone(motive)),
+                GlobalEntry::Tm(Rc::clone(step)),
+                GlobalEntry::Tm(Rc::clone(index)),
+                GlobalEntry::Tm(Rc::clone(scrut)),
+            ]);
+            let mut univs = vec![motive_level.clone()];
+            univs.extend(iwf_univs(sig));
+            Some(fire(&b.tm_elim_iwf, &univs, globals, locals, gamma))
+        }
         // box (u^δ): blocked, neutral.
         Term::GlobalTm { .. } => None,
         // Layer-m forms cannot be layer-c code: ill-typed, stuck.
@@ -2856,6 +2995,8 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmFin { .. }
         | Term::TmWf { .. }
         | Term::TmM { .. }
+        | Term::TmDVec { .. }
+        | Term::TmIWf { .. }
         | Term::Zero
         | Term::Succ(_)
         | Term::Refl { .. }

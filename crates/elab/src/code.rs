@@ -126,6 +126,25 @@ pub(crate) fn code_of(t: &Type) -> Option<Term> {
             shape: Rc::new(code_of(shape)?),
             arity: Rc::clone(arity),
         },
+        // The dependent tuple and the indexed fixed point
+        // (docs/iwf-former-design.md §6): the family, index type and shapes
+        // coded under the binders they already have; the arity, output and
+        // child index and the index are terms and ride across.
+        Type::DVec { level, len, fam } => Term::TmDVec {
+            level: level.clone(),
+            len: Rc::clone(len),
+            fam: Rc::new(code_of(fam)?),
+        },
+        Type::IWf { sig, index } => Term::TmIWf {
+            level: sig.level.clone(),
+            idx_level: sig.idx_level.clone(),
+            idx: Rc::new(code_of(&sig.idx)?),
+            shape: Rc::new(code_of(&sig.shape)?),
+            arity: Rc::clone(&sig.arity),
+            out: Rc::clone(&sig.out),
+            child: Rc::clone(&sig.child),
+            index: Rc::clone(index),
+        },
         // The coinductive former (docs/kernel-m-codes-design.md §1): the
         // index is part of the code, and the pieces are coded under the
         // binders they already have.

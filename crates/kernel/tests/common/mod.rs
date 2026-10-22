@@ -452,6 +452,61 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
+        // (ℓ, g, u_n, U_F : (g, i), x_n, x_F) — docs/iwf-former-design.md §6.
+        ty_dvec: t(1, 2, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Ty(sh(g, 1))]),
+        tm_dvec: t(1, 2, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Tm(sh(g, 1))]),
+        // (ℓ, ℓi, g, U_I, U_S, u_n : (g, x), u_o : (g, x), u_c : (g, x, i),
+        // u_m, x_I … x_m).
+        ty_iwf: t(2, 6, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 0)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 2)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        tm_iwf: t(2, 6, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 2)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        // … then u_a, u_cs.
+        tm_sup_i: t(2, 7, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 0)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 2)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        // … then U_M : (g, j, z), u_s : (g, a, cs, ih), u_m, u_t.
+        tm_elim_iwf: t(3, 9, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 0)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 2)),
+                GK::Ty(sh(g, 2)),
+                GK::Tm(sh(g, 3)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
     })
 }
 
@@ -688,7 +743,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(45) };
+        let arm = if b == 0 { r.below(5) } else { r.below(47) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -1155,6 +1210,34 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     index: gen_term(sc, r, b / 4),
                 });
             }
+            // The DVec code: the family binds the position.
+            45 if b > 0 => {
+                let mut in1 = sc.clone();
+                in1.local.len += 1;
+                return Rc::new(Term::TmDVec {
+                    level: gen_level(sc, r, 1),
+                    len: gen_term(sc, r, b / 2),
+                    fam: gen_term(&in1, r, b / 2),
+                });
+            }
+            // The IWf code: `arity`/`out` bind `x`, `child` binds `x, i`.
+            46 if b > 0 => {
+                let under = |k: u32| {
+                    let mut inner = sc.clone();
+                    inner.local.len += k;
+                    inner
+                };
+                return Rc::new(Term::TmIWf {
+                    level: gen_level(sc, r, 1),
+                    idx_level: gen_level(sc, r, 1),
+                    idx: gen_term(sc, r, b / 4),
+                    shape: gen_term(sc, r, b / 4),
+                    arity: gen_term(&under(1), r, b / 4),
+                    out: gen_term(&under(1), r, b / 4),
+                    child: gen_term(&under(2), r, b / 4),
+                    index: gen_term(sc, r, b / 4),
+                });
+            }
             _ => continue,
         }
     }
@@ -1322,6 +1405,11 @@ pub fn count_term(t: &Term) -> u64 {
         Term::TmWf { shape, arity, .. } => count_term(shape) + count_term(arity),
         Term::TmM { idx, shape, pos, next, index, .. } => {
             count_term(idx) + count_term(shape) + count_term(pos) + count_term(next) + count_term(index)
+        }
+        Term::TmDVec { len, fam, .. } => count_term(len) + count_term(fam),
+        Term::TmIWf { idx, shape, arity, out, child, index, .. } => {
+            count_term(idx) + count_term(shape) + count_term(arity) + count_term(out) + count_term(child)
+                + count_term(index)
         }
         Term::Sup { shape_ty, pos_ty, label, children, .. } => {
             count_type(shape_ty) + count_type(pos_ty) + count_term(label)
