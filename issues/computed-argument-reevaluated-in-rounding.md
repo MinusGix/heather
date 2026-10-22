@@ -1,6 +1,6 @@
 ---
 title: A computed Nat argument is re-evaluated at each use inside a rounding
-status: open
+status: closed
 labels: [kernel,performance,floating-point]
 area: kernel
 milestone: [math-float]
@@ -48,3 +48,31 @@ unreduced `Rat` (`2^45 / (3 · 2^45)` for `1/3`), and whose `rat_h` and
 `binary32().round_rat(NearestEven, Rat(1, 3))` and `one32().div(three32())`
 evaluate by `refl` inside the default fuel, and the float-arith tests carry
 them.
+
+## Log
+
+- 2026-10-22: closed. The sharing was lost in the kernel's bounded force
+  cache (`ValueArena`, first-in first-out over 64K closures), not in the
+  library. With the cache unbounded both done-when theorems check, in
+  318,124 and 354,288 steps. Evicted closures were almost never forced
+  again: the loss was one level removed. The count's closure
+  (`rat_h(F, x)`, and in `div` an argument of the long division) forces
+  cheaply to a *glued* neutral, whose unfolding is a closure that
+  evaluation made and only the neutral reaches. The 64K thunks made while
+  forcing that unfolding (110K steps in `div`) pushed the neutral out
+  before the unfolding finished; the next reader forced the count's
+  closure again, got a fresh neutral glued to a fresh unfolding, and ran
+  the long division again. Two cache-policy changes
+  (`crates/kernel/src/value.rs`, `ValueArena::cache_tm`; DESIGN.md's arena
+  paragraph):
+  1. **Tombs.** An evicted glued neutral leaves its unfolding keyed by its
+     closure; that closure's next force is glued to the old unfolding
+     (`ValueArena::reglue`). Sound by closure identity, the memo's own
+     argument: the closure denotes what it denoted before.
+  2. **A costly tier.** A value whose force spent at least `COSTLY_FORCE`
+     (256) fuel goes to a second FIFO with its own bound, which cheap
+     entries never push out.
+  Each alone checks both, at 445,820 / 530,446 steps (tombs) or not at all
+  (tier); together they reach the unbounded counts. No library change:
+  `round_rat` and `Finite::div` are as they were. The float-arith binary32
+  tests now carry `third_near` and `div_third`.

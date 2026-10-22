@@ -9,7 +9,9 @@
 //!     (division by zero, `0/0`, `∞ - ∞`, `0 · ∞`), and conversion between
 //!     the two formats; and at binary32, whose half-unit counts are past
 //!     `2^96` (`issues/kernel-wide-run-comparison.md`): a sum on a tie to
-//!     even, a rounded product, and the long division of `1/3` toward zero;
+//!     even, a rounded product, the long division of `1/3` toward zero and
+//!     to nearest, and a quotient of two floats
+//!     (`issues/computed-argument-reevaluated-in-rounding.md`);
 //!  2. the value, sign and error theorems hold at an open format, mode and
 //!     operands, the relation unfolds at a literal mode in a checking
 //!     position, and binary long division agrees with `div`/`mod` at an open
@@ -109,6 +111,14 @@ theorem tie(): Rat::Same(val_or(one32().add(half_ulp32()), 99), 1) { refl }
 theorem sq(): Rat::Same(val_or(next32().mul(next32()), 99), Rat(8388610, 8388608)) { refl }
 // 1/3 = 0x0.AAAAAA…: 0xAAAAAA · 2^-25 truncated.
 theorem third(): Rat::Same(val_or(binary32().round_rat(TowardZero, Rat(1, 3)), 99), Rat(11184810, 33554432)) { refl }
+// To nearest the next bit is 1 and the rest nonzero, so it rounds up. The
+// rounding reads the half-unit count at each of its steps; these two ran out
+// of fuel while each read evaluated the long division again
+// (issues/computed-argument-reevaluated-in-rounding.md).
+theorem third_near(): Rat::Same(val_or(binary32().round_rat(NearestEven, Rat(1, 3)), 99), Rat(11184811, 33554432)) { refl }
+// The quotient of two binary32 floats: `2^45 / (3 · 2^45)` unreduced.
+fn three32() → Finite(binary32()) { s32(False, 12582912, 127, trivial) }
+theorem div_third(): Rat::Same(val_or(one32().div(three32()), 99), Rat(11184811, 33554432)) { refl }
 ";
 
 const LITERAL: &str = "
