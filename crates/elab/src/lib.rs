@@ -667,6 +667,9 @@ pub struct Elaborator {
     /// goal's context are quoted where it expects a `tactic::Expr`
     /// (`host::Quoting`).
     by_quoting: RefCell<Option<Rc<host::Quoting>>>,
+    /// Set while a tactic's split is elaborated: what its branch leaves
+    /// record or are filled with (`host::Leaves`).
+    host_leaves: RefCell<Option<Rc<RefCell<host::Leaves>>>>,
     fuel: u64,
     /// Optional explicit collector for evaluator-region activity. Clones
     /// share it so speculative and generated checking contribute to the same
@@ -1692,6 +1695,7 @@ impl Elaborator {
             positivity: RefCell::new(None),
             native_tactics: RefCell::new(HashMap::new()),
             by_quoting: RefCell::new(None),
+            host_leaves: RefCell::new(None),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
             emission_findings: None,
@@ -4687,6 +4691,12 @@ impl Elaborator {
         }
         if let Some(quoted) = self.quote_for_by(cx, e, expected, lvl)? {
             return Ok(quoted);
+        }
+        // A branch of a tactic's split (`host::Leaves`).
+        if let ExprKind::Var(name) = &e.kind
+            && let Some(k) = host::leaf_index(name)
+        {
+            return self.host_leaf(cx, k, expected, lvl, e.span);
         }
         if let Some(receiver) = cx.dot_receiver.as_ref().and_then(|r| r.inference(cx, e))
             && let Some(Ok((t, got, _))) = receiver.get()

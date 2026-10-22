@@ -10,6 +10,12 @@ theorem example(a, b: Bool): (a && b) = (b && a) {
 }
 ```
 
+A Heather counterpart, `by split_all(reflexivity())` from `lib/std/tactic.hthr`,
+closes the same goals through the host's split requests
+(docs/host-elaboration-interface-design.md §16); it does not port the
+word-comparison facts below. This combinator is what `split_all; all_goals`
+means.
+
 `split_all` inspects the elaborated local context and constructs nested matches
 for every local whose type is a finite case domain: a non-recursive,
 non-indexed inductive with more than one constructor. There is no implicit

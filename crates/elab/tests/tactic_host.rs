@@ -492,6 +492,7 @@ fn view_dispatches_on_the_goal() {
                  HPi(_) => fail(\"a function type\", Nil),
                  HLocal(_, args) => fail(\"a local of \" ++ match args { Nil => \"none\", Cons(_, _) => \"some\" }, Nil),
                  HLit(_) => fail(\"a literal\", Nil),
+                 HMatch(_) => fail(\"a stuck match\", Nil),
                  HHole => fail(\"a hole\", Nil),
                  HOther => fail(\"other\", Nil),
              }
@@ -515,6 +516,8 @@ fn view_dispatches_on_the_goal() {
         ("theorem t(n: Nat): 3 = n { by lhs_kind(False) }", "a literal"),
         ("theorem t(n: Nat): n = 3 { by lhs_kind(False) }", "a local of none"),
         ("theorem t(n: Nat): 1 + 1 = n { by lhs_kind(True) }", "global Succ of some"),
+        ("theorem t(n: Nat): n + 1 = 1 + n { by lhs_kind(False) }", "global add of some"),
+        ("theorem t(n: Nat): 1 + n = n { by lhs_kind(True) }", "a stuck match"),
     ] {
         let msg = refused(&format!("{kinds}\n{goal}"));
         assert!(msg.contains(&format!("the tactic failed: {kind}")), "{goal}: {msg}");

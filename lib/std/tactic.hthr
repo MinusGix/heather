@@ -80,6 +80,9 @@ inductive Head {
     // A local, applied to arguments.
     HLocal(x: LocalRef, args: List<Handle>),
     HLit(n: Nat),
+    // A `match` stuck on its scrutinee: a term that only reduces once
+    // `scrut` is a constructor.
+    HMatch(scrut: Handle),
     // A hole nothing has solved yet.
     HHole,
     HOther,
@@ -97,6 +100,14 @@ inductive Checked<A> { Accepted(a: A), Refused(why: String) }
 // under it, and whether the body mentions the local (a dependent function
 // type, rather than an implication).
 record Opened { local: LocalInfo, body: Handle, dependent: Bool }
+
+// One branch of a split: the locals it adds to the context, the most recent
+// first, and the statement its proof proves there.
+record Branch { locals: List<LocalInfo>, goal: Handle }
+
+// A split of a goal into branches (`Cases`, `Constructor`). `Close` turns one
+// proof per branch into a proof of the goal.
+record Split { id: Nat, branches: List<Branch> }
 
 // ---------------------------------------------------------------------------
 // The requests, and the request tree.
@@ -135,6 +146,18 @@ inductive Req {
     Restore(mark: Nat),
     // A name, resolved where the `by` is, as the global it denotes.
     Lookup(name: String),
+    // Split `goal` by cases on `e`, whose type is an inductive with no
+    // recursive field and no index: the elaborator's own `match`, one branch
+    // per constructor. A branch's locals are the constructor's fields and an
+    // equation `e = C(fields)`; its goal is `goal` with `e`, and what reaches
+    // `e` through a definition, replaced by `C(fields)`.
+    Cases(e: Expr, goal: Handle),
+    // Split a goal whose type is an inductive with one constructor into one
+    // branch per field (`P ∧ Q` into `P` and `Q`). A field whose type
+    // mentions an earlier one is refused.
+    Constructor(goal: Handle),
+    // The proof of a split's goal, from one proof per branch, in order.
+    Close(id: Nat, proofs: List<Expr>),
 }
 
 inductive Never {}
@@ -156,6 +179,9 @@ fn Resp(r: Req) → Type {
         Mark => Nat,
         Restore(_) => True,
         Lookup(_) => Checked<GlobalRef>,
+        Cases(_, _) => Checked<Split>,
+        Constructor(_) => Checked<Split>,
+        Close(_, _) => Checked<Handle>,
     }
 }
 
@@ -193,6 +219,12 @@ fn restore(m: Nat) → Tac<True> { Ask(Restore(m), λ u => Pure(u)) }
 
 fn lookup(name: String) → Tac<Checked<GlobalRef>> { Ask(Lookup(name), λ c => Pure(c)) }
 
+fn cases(e: Expr, goal: Handle) → Tac<Checked<Split>> { Ask(Cases(e, goal), λ c => Pure(c)) }
+
+fn constructor(goal: Handle) → Tac<Checked<Split>> { Ask(Constructor(goal), λ c => Pure(c)) }
+
+fn close(id: Nat, proofs: List<Expr>) → Tac<Checked<Handle>> { Ask(Close(id, proofs), λ c => Pure(c)) }
+
 // An answer of any kind, as the elaborator builds one, and the answer at a
 // request's own type. A `match` on the request would not refine the
 // continuation's domain, so the dependent answer is computed by `fit`
@@ -207,6 +239,7 @@ inductive Answer {
     ANat(n: Nat),
     AUnit,
     AGlobal(c: Checked<GlobalRef>),
+    ASplit(c: Checked<Split>),
 }
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
@@ -226,6 +259,9 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Mark => match a { ANat(n) => Fits(n), _ => Mismatch },
         Restore(_) => match a { AUnit => Fits(trivial), _ => Mismatch },
         Lookup(_) => match a { AGlobal(c) => Fits(c), _ => Mismatch },
+        Cases(_, _) => match a { ASplit(c) => Fits(c), _ => Mismatch },
+        Constructor(_) => match a { ASplit(c) => Fits(c), _ => Mismatch },
+        Close(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -396,6 +432,178 @@ fn apply(f: Expr, premise: Tac<Expr>) → Tac<Expr> {
     }))
 }
 
+// A handle's head normal form, or the handle itself where it has none.
+fn whnf_or(h: Handle) → Tac<Handle> {
+    whnf(h).bind(λ c => match c { Accepted(w) => Pure(w), Refused(_) => Pure(h) })
+}
+
+// `x = x`, for `reflexivity` to apply: a run's result is an `Expr`, and
+// `refl` is a form of the surface, not a term a tactic can hold.
+theorem rfl<A>({x: A}): x = x { refl }
+
+// `reflexivity`: an equation whose two sides are definitionally equal. The
+// goal is read in head normal form, so a statement a definition unfolds to an
+// equation is one.
+fn reflexivity() → Tac<Expr> {
+    goal().bind(λ g => whnf(g.target).bind(λ c => match c {
+        Refused(why) => fail("reflexivity: " ++ why, []),
+        Accepted(w) => view(w).bind(λ v => match v {
+            HEq(l, r) => defeq(Hd(l), Hd(r)).bind(λ same => match same {
+                False => whnf_or(l).bind(λ wl => whnf_or(r).bind(λ wr =>
+                    fail("reflexivity: the two sides differ", [At(Hd(wl), Tried("the left side", "against the right")), At(Hd(wr), Tried("the right side", "against the left"))]))),
+                True => lookup("tactic::rfl").bind(λ c2 => match c2 {
+                    Refused(why) => fail("reflexivity: " ++ why, []),
+                    Accepted(rf) => focus(GoalInfo(w, g.locals), apply(Global(rf), fail("reflexivity: `rfl` has no premise", []))),
+                }),
+            }),
+            _ => fail("reflexivity: the goal is not an equation", [At(Hd(w), Tried("the goal", "not an equation"))]),
+        }),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Splitting goals.
+
+// Each branch of a split proved by `t`, with the branch's locals in front of
+// `locals`.
+fn prove_branches(bs: List<Branch>, locals: List<LocalInfo>, t: Tac<Expr>) → Tac<List<Expr>> {
+    match bs {
+        Nil => Pure([]),
+        Cons(b, rest) => focus(GoalInfo(b.goal, b.locals ++ locals), t).bind(λ p =>
+            prove_branches(rest, locals, t).bind(λ ps => Pure(Cons(p, ps)))),
+    }
+}
+
+// The proof of a split's goal, its branches proved by `t`.
+fn close_by(s: Split, locals: List<LocalInfo>, t: Tac<Expr>) → Tac<Expr> {
+    prove_branches(s.branches, locals, t).bind(λ ps => close(s.id, ps).bind(λ c => match c {
+        Refused(why) => fail("close: " ++ why, []),
+        Accepted(h) => Pure(Hd(h)),
+    }))
+}
+
+// `cases_on(e, t)`: split the goal by cases on `e` and prove every branch
+// with `t`.
+fn cases_on(e: Expr, t: Tac<Expr>) → Tac<Expr> {
+    goal().bind(λ g => cases(e, g.target).bind(λ c => match c {
+        Refused(why) => fail("cases: " ++ why, [At(e, Tried("the scrutinee", "not split"))]),
+        Accepted(s) => close_by(s, g.locals, t),
+    }))
+}
+
+// Does a split have other than one branch? Splitting a record adds no case.
+fn branches_many(bs: List<Branch>) → Bool {
+    match bs { Nil => True, Cons(_, rest) => match rest { Nil => False, Cons(_, _) => True } }
+}
+
+// A name no source can write: a `match`'s own binders are `#…`.
+fn unwritten(name: String) → Bool {
+    match name.chars { Nil => False, Cons(c, _) => c.code.same(35) }
+}
+
+// Split the goal by cases on each local of `ls` whose type has more than one
+// constructor and none recursive, then run `t` in every branch.
+fn split_locals(ls: List<LocalInfo>, t: Tac<Expr>) → Tac<Expr> {
+    match ls {
+        Nil => t,
+        Cons(l, rest) => match unwritten(l.name) {
+            True => split_locals(rest, t),
+            False => goal().bind(λ g => cases(Local(l.ref), g.target).bind(λ c => match c {
+                Refused(_) => split_locals(rest, t),
+                Accepted(s) => match branches_many(s.branches) {
+                    False => split_locals(rest, t),
+                    True => close_by(s, g.locals, split_locals(rest, t)),
+                },
+            })),
+        },
+    }
+}
+
+// The first blocker `blocker` finds among `hs`.
+fn blocker_among(hs: List<Handle>, blocker: Handle → Tac<Option<Handle>>) → Tac<Option<Handle>> {
+    match hs {
+        Nil => Pure(None),
+        Cons(h, rest) => blocker(h).bind(λ o => match o {
+            Some(x) => Pure(Some(x)),
+            None => blocker_among(rest, blocker),
+        }),
+    }
+}
+
+// A call's arguments, as `View` lists them.
+fn head_args(v: Head) → List<Handle> {
+    match v { HGlobal(_, _, args) => args, HLocal(_, args) => args, _ => [] }
+}
+
+// What blocks a term: the scrutinee of the `match` its head normal form is
+// stuck on. A call's arguments are searched first, and a scrutinee's own
+// blocker comes before it, so the deepest one is split first.
+fn blocker(fuel: Nat, t: Handle) → Tac<Option<Handle>> {
+    match fuel {
+        Zero => Pure(None),
+        Succ(f) => view(t).bind(λ v => blocker_among(head_args(v), λ h => blocker(f, h)).bind(λ inside => match inside {
+            Some(x) => Pure(Some(x)),
+            None => whnf(t).bind(λ c => match c {
+                Refused(_) => Pure(None),
+                Accepted(w) => view(w).bind(λ wv => match wv {
+                    HMatch(s) => blocker(f, s).bind(λ o => match o {
+                        Some(x) => Pure(Some(x)),
+                        None => Pure(Some(s)),
+                    }),
+                    _ => Pure(None),
+                }),
+            }),
+        })),
+    }
+}
+
+// One step of `split_all` at the goal in hand: introduce a binder and split
+// it, prove a conjunction one side at a time, split the `match` an equation's
+// side is stuck on, or hand the goal to `leaf`.
+fn split_step(fuel: Nat, leaf: Tac<Expr>) → Tac<Expr> {
+    match fuel {
+        Zero => leaf,
+        Succ(f) => goal().bind(λ g => whnf(g.target).bind(λ c => match c {
+            Refused(_) => leaf,
+            Accepted(w) => view(w).bind(λ v => match v {
+                HPi(_) => open(g.target, "x").bind(λ o => match o {
+                    Refused(_) => leaf,
+                    Accepted(op) => focus(GoalInfo(op.body, Cons(op.local, g.locals)), split_locals([op.local], split_step(f, leaf)))
+                        .bind(λ e => Pure(Lam(op.local.ref, e))),
+                }),
+                HGlobal(r, _, _) => lookup("And").bind(λ a => match a {
+                    Refused(_) => leaf,
+                    Accepted(and) => match r.id.same(and.id) {
+                        False => leaf,
+                        True => constructor(w).bind(λ s => match s {
+                            Refused(_) => leaf,
+                            Accepted(sp) => close_by(sp, g.locals, split_step(f, leaf)),
+                        }),
+                    },
+                }),
+                HEq(l, r) => blocker_among([l, r], λ h => blocker(64, h)).bind(λ found => match found {
+                    None => leaf,
+                    Some(s) => cases(Hd(s), w).bind(λ sc => match sc {
+                        Refused(_) => leaf,
+                        Accepted(sp) => close_by(sp, g.locals, split_step(f, leaf)),
+                    }),
+                }),
+                _ => leaf,
+            }),
+        })),
+    }
+}
+
+// `split_all(leaf)`: split the goal into one goal per case and prove each with
+// `leaf`. Every local of a finite type is split first; then binders are
+// introduced (and split when finite), conjunctions are proved one side at a
+// time, and an equation is split on the `match` that blocks one of its
+// sides, deepest first, until none does. Each split is the elaborator's own
+// `match`, so the proof is an ordinary term.
+fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
+    goal().bind(λ g => split_locals(g.locals, split_step(64, leaf)))
+}
+
 // ---------------------------------------------------------------------------
 // The host's side of the protocol.
 //
@@ -407,7 +615,7 @@ fn apply(f: Expr, premise: Tac<Expr>) → Tac<Expr> {
 
 // 0: a result. 1: `Goal`. 2: `Defeq`. 3: `Fail`. 4: `Infer`. 5: `Open`.
 // 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`. 10: `Hole`. 11: `Mark`.
-// 12: `Restore`. 13: `Lookup`.
+// 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -425,6 +633,9 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Mark => 11,
             Restore(_) => 12,
             Lookup(_) => 13,
+            Cases(_, _) => 14,
+            Constructor(_) => 15,
+            Close(_, _) => 16,
         },
     }
 }
@@ -436,7 +647,7 @@ fn host_result(t: Tac<Expr>) → Expr {
 fn host_lhs(t: Tac<Expr>) → Expr {
     match t {
         Pure(e) => e,
-        Ask(r, _) => match r { Defeq(a, _) => a, Infer(e) => e, _ => NatLit(0) },
+        Ask(r, _) => match r { Defeq(a, _) => a, Infer(e) => e, Cases(e, _) => e, _ => NatLit(0) },
     }
 }
 
@@ -448,7 +659,7 @@ fn host_rhs(t: Tac<Expr>) → Expr {
 }
 
 // The handle `Open`, `View`, `Whnf` and `Hole` are about; `Match`'s function
-// type.
+// type; the goal `Cases` and `Constructor` split.
 fn host_handle(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -458,6 +669,8 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Whnf(h) => h.id,
             Match(ty, _) => ty.id,
             Hole(ty) => ty.id,
+            Cases(_, goal) => goal.id,
+            Constructor(goal) => goal.id,
             _ => 0,
         },
     }
@@ -467,6 +680,29 @@ fn host_handle(t: Tac<Expr>) → Nat {
 fn host_mark(t: Tac<Expr>) → Nat {
     match t { Pure(_) => 0, Ask(r, _) => match r { Restore(m) => m, _ => 0 } }
 }
+
+// `Close`'s split.
+fn host_split_id(t: Tac<Expr>) → Nat {
+    match t { Pure(_) => 0, Ask(r, _) => match r { Close(s, _) => s, _ => 0 } }
+}
+
+// `Close`'s proofs, read one at a time.
+fn host_proofs(t: Tac<Expr>) → List<Expr> {
+    match t { Pure(_) => [], Ask(r, _) => match r { Close(_, proofs) => proofs, _ => [] } }
+}
+
+fn exprs_len(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => Succ(exprs_len(rest)) } }
+
+fn exprs_at(es: List<Expr>, i: Nat) → Expr {
+    match es {
+        Nil => NatLit(0),
+        Cons(e, rest) => match i { Zero => e, Succ(j) => exprs_at(rest, j) },
+    }
+}
+
+fn host_proof_count(t: Tac<Expr>) → Nat { exprs_len(host_proofs(t)) }
+
+fn host_proof(t: Tac<Expr>, i: Nat) → Expr { exprs_at(host_proofs(t), i) }
 
 // `Match`'s target.
 fn host_target(t: Tac<Expr>) → Nat {
@@ -593,6 +829,8 @@ fn host_head_local(x: Nat) → Answer { AHead(HLocal(LocalRef(x), [])) }
 
 fn host_head_lit(n: Nat) → Answer { AHead(HLit(n)) }
 
+fn host_head_match(scrut: Nat) → Answer { AHead(HMatch(Handle(scrut))) }
+
 fn host_head_hole() → Answer { AHead(HHole) }
 
 fn host_head_other() → Answer { AHead(HOther) }
@@ -635,6 +873,40 @@ fn host_unit() → Answer { AUnit }
 fn host_global(g: Nat) → Answer { AGlobal(Accepted(GlobalRef(g))) }
 
 fn host_no_global(why: String) → Answer { AGlobal(Refused(why)) }
+
+// A split is its number, then one branch at a time, each followed by its
+// locals, oldest first.
+fn host_split(id: Nat) → Answer { ASplit(Accepted(Split(id, []))) }
+
+fn host_branch(a: Answer, goal: Nat) → Answer {
+    match a {
+        ASplit(c) => match c { Accepted(s) => ASplit(Accepted(Split(s.id, s.branches ++ [Branch([], Handle(goal))]))), Refused(_) => a },
+        _ => a,
+    }
+}
+
+// The branches with `l` added to the last one's locals, as its most recent.
+fn branches_local(bs: List<Branch>, l: LocalInfo) → List<Branch> {
+    match bs {
+        Nil => [],
+        Cons(b, rest) => match rest {
+            Nil => [Branch(Cons(l, b.locals), b.goal)],
+            Cons(_, _) => Cons(b, branches_local(rest, l)),
+        },
+    }
+}
+
+fn host_branch_local(a: Answer, ref: Nat, name: String, ty: Nat) → Answer {
+    match a {
+        ASplit(c) => match c {
+            Accepted(s) => ASplit(Accepted(Split(s.id, branches_local(s.branches, LocalInfo(LocalRef(ref), name, Handle(ty)))))),
+            Refused(_) => a,
+        },
+        _ => a,
+    }
+}
+
+fn host_split_refused(why: String) → Answer { ASplit(Refused(why)) }
 
 // A term of the goal's context, quoted where a tactic's argument expects an
 // `Expr`.

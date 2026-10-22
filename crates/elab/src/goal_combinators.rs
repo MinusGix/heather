@@ -166,7 +166,7 @@ fn conjunction(inductive: &crate::inductive::Inductive) -> bool {
 
 /// The inductive a type is, reading through `El`-headed spellings that only
 /// unfold to their encoding.
-fn type_inductive(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Rc<crate::inductive::Inductive>> {
+pub(crate) fn type_inductive(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Rc<crate::inductive::Inductive>> {
     elab.tag_of(ty).or_else(|| elab.tag_of(&elab.goal_oracle().diagnostics(64).decode_type(&cx.gamma, ty)?))
 }
 
@@ -224,7 +224,7 @@ fn word_operation(elab: &Elaborator, term: &Term) -> bool {
 }
 
 /// The match at a reduct's head, below any projections of it.
-fn head_match(term: &Term) -> &Term {
+pub(crate) fn head_match(term: &Term) -> &Term {
     match crate::spelling::proj_of(term) {
         Some((_, pair)) => head_match(pair),
         None => term,
@@ -334,7 +334,7 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
 /// definitions, each paired with a reduct that spells it, abstracted. A
 /// position that already spells it, or is the search's own `found`, is left
 /// to the abstraction itself.
-fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Term, scrut: &Term, budget: &mut u32, out: &mut Vec<(Term, Term)>) {
+pub(crate) fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Term, scrut: &Term, budget: &mut u32, out: &mut Vec<(Term, Term)>) {
     if *budget == 0 || term == found {
         return;
     }
@@ -405,7 +405,7 @@ pub(crate) enum Step {
 }
 
 /// A name no local and no global in scope has, from `base`.
-fn fresh(elab: &Elaborator, cx: &Cx, base: String) -> String {
+pub(crate) fn fresh(elab: &Elaborator, cx: &Cx, base: String) -> String {
     let mut name = base;
     while elab.shadowed(cx, &name) || cx.names.iter().any(|n| *n == name) {
         name.push('_');
