@@ -713,7 +713,12 @@ impl Speller<'_> {
     /// An `App` spine as a call. The head's *implicit* parameters are dropped,
     /// so `len<A>(xs)`'s two-argument spine prints as `len(xs)` — what the
     /// caller wrote.
-    fn call(&self, t: &Term, d: u32) -> String {
+    /// The recogniser behind a call's spelling, shared with the tactic
+    /// host's `View` (`host.rs`): `t`'s application spine as a head and its
+    /// arguments, or `None` when the head is neither a named global nor a
+    /// local. A record projection's head is the field and its one argument
+    /// the receiver, the instantiation before it dropped.
+    pub(crate) fn call_parts<'t>(&self, t: &'t Term) -> Option<(CallHead, Vec<&'t Rc<Term>>)> {
         let mut args: Vec<&Rc<Term>> = Vec::new();
         let mut head = t;
         while let Some((fun, arg)) = crate::spelling::app_of(head) {
@@ -738,24 +743,39 @@ impl Speller<'_> {
             && let Some(receiver) = args.last()
             && let Some((Some(name), _)) = record.ctors[0].fields.get(field)
         {
-            let shown = self.tm(receiver, d + 1);
-            return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. }) {
-                format!("{shown}.{name}")
-            } else {
-                format!("({shown}).{name}")
-            };
+            return Some((CallHead::Field(name.clone()), vec![receiver]));
         }
 
+        match head {
+            Term::GlobalTm { var, subst } => {
+                let (name, shown) = self.global(*var, subst)?;
+                Some((CallHead::Global(name, shown), args))
+            }
+            Term::Var(LocalVar(i)) => Some((CallHead::Local(*i), args)),
+            _ => None,
+        }
+    }
+
+    fn call(&self, t: &Term, d: u32) -> String {
+        let (head, args) = match self.call_parts(t) {
+            Some(parts) => parts,
+            None => return self.raw_tm(t),
+        };
         let (name, implicit) = match head {
-            Term::GlobalTm { var, subst } => match self.global(*var, subst) {
-                Some((n, imp)) => (n, imp),
-                None => return self.raw_tm(t),
-            },
-            Term::Var(LocalVar(i)) => match self.var(*i) {
+            CallHead::Field(name) => {
+                let receiver = args[0];
+                let shown = self.tm(receiver, d + 1);
+                return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. }) {
+                    format!("{shown}.{name}")
+                } else {
+                    format!("({shown}).{name}")
+                };
+            }
+            CallHead::Global(n, imp) => (n, imp),
+            CallHead::Local(i) => match self.var(i) {
                 Some(n) => (n, Vec::new()),
                 None => return self.raw_tm(t),
             },
-            _ => return self.raw_tm(t),
         };
         // Named arguments follow every positional one, as the parser requires.
         // Type parameters are written `<…>`, all of them once any one is.
@@ -844,8 +864,18 @@ impl Speller<'_> {
     }
 }
 
+/// A call's head, as [`Speller::call_parts`] recognises it.
+pub(crate) enum CallHead {
+    /// A record field read; the one argument is the receiver.
+    Field(String),
+    /// A named global, and how each of its parameters is shown.
+    Global(String, Vec<Shown>),
+    /// A local, by de Bruijn index.
+    Local(u32),
+}
+
 /// How a call spells one of its head's parameters.
-enum Shown {
+pub(crate) enum Shown {
     Explicit,
     /// An implicit the call's written arguments determine.
     Hidden,
@@ -856,6 +886,20 @@ enum Shown {
 }
 
 impl Elaborator {
+    /// `t`'s call shape as the tactic host's `View` presents it: the head a
+    /// diagnostic would print and the arguments it would write, implicit and
+    /// type arguments dropped as the diagnostic drops them.
+    pub(crate) fn view_call(&self, cx: &Cx, t: &Term) -> Option<(CallHead, Vec<Rc<Term>>)> {
+        let sp = self.speller(cx);
+        let (head, args) = sp.call_parts(t)?;
+        let written = |i: usize| match &head {
+            CallHead::Global(_, shown) => matches!(shown.get(i), Some(Shown::Explicit) | None),
+            CallHead::Field(_) | CallHead::Local(_) => true,
+        };
+        let args = args.iter().enumerate().filter(|(i, _)| written(*i)).map(|(_, a)| Rc::clone(a)).collect();
+        Some((head, args))
+    }
+
     /// For each of the first `count` parameters of the global at `abs`,
     /// whether a later **explicit** parameter's domain mentions it, so that
     /// elaborating the written arguments infers it. An explicit parameter

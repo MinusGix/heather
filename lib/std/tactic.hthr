@@ -22,6 +22,7 @@ import logic;
 import bool;
 import nat;
 import list;
+import option;
 import char;
 import string;
 
@@ -57,6 +58,24 @@ record LocalInfo { ref: LocalRef, name: String, ty: Handle }
 // The goal: its statement, and its locals, the most recent first.
 record GoalInfo { target: Handle, locals: List<LocalInfo> }
 
+// One layer of a term or type, as `View` presents it: the head the
+// diagnostics would print, with its children as handles again. Nothing is
+// reduced (`Whnf` does that), and a form the view does not present is
+// `HOther`.
+inductive Head {
+    // A function type, by its domain; `Open` reaches its body.
+    HPi(dom: Handle),
+    // An equation, by its two sides.
+    HEq(lhs: Handle, rhs: Handle),
+    // A named global or type applied: `Nat::le(n, m)`, `List<Nat>`. Only the
+    // arguments a call writes are listed, implicit ones left out.
+    HGlobal(name: String, args: List<Handle>),
+    // A local, applied to arguments.
+    HLocal(x: LocalRef, args: List<Handle>),
+    HLit(n: Nat),
+    HOther,
+}
+
 // One line of a failure's search state. `Under` marks a note about a
 // sub-search, shown one level deeper.
 inductive Note { Tried(what: String, verdict: String), Under(n: Note) }
@@ -86,6 +105,15 @@ inductive Req {
     // A name, resolved and elaborated where the `by` is (not where the
     // tactic is declared), as a handle to the term.
     Resolve(name: String),
+    // One layer of a handle (see `Head`).
+    View(h: Handle),
+    // A handle to the head normal form of a type or term.
+    Whnf(h: Handle),
+    // Match the conclusion of the function type `ty` against `target`,
+    // treating its leading parameters as unknowns: for the fewest parameters
+    // that make it match, each one's value where the match determines it, and
+    // `None` where it is left for the caller to prove.
+    Match(ty: Handle, target: Handle),
 }
 
 inductive Never {}
@@ -100,6 +128,9 @@ fn Resp(r: Req) → Type {
         Infer(_) => Checked<Handle>,
         Open(_, _) => Checked<Opened>,
         Resolve(_) => Checked<Handle>,
+        View(_) => Head,
+        Whnf(_) => Checked<Handle>,
+        Match(_, _) => Checked<List<Option<Handle>>>,
     }
 }
 
@@ -123,11 +154,24 @@ fn open(h: Handle, name: String) → Tac<Checked<Opened>> { Ask(Open(h, name), �
 
 fn resolve(name: String) → Tac<Checked<Handle>> { Ask(Resolve(name), λ c => Pure(c)) }
 
+fn view(h: Handle) → Tac<Head> { Ask(View(h), λ v => Pure(v)) }
+
+fn whnf(h: Handle) → Tac<Checked<Handle>> { Ask(Whnf(h), λ c => Pure(c)) }
+
+fn match_conclusion(ty: Handle, target: Handle) → Tac<Checked<List<Option<Handle>>>> { Ask(Match(ty, target), λ c => Pure(c)) }
+
 // An answer of any kind, as the elaborator builds one, and the answer at a
 // request's own type. A `match` on the request would not refine the
 // continuation's domain, so the dependent answer is computed by `fit`
 // (design §9).
-inductive Answer { AGoal(g: GoalInfo), ABool(b: Bool), AHandle(c: Checked<Handle>), AOpened(c: Checked<Opened>) }
+inductive Answer {
+    AGoal(g: GoalInfo),
+    ABool(b: Bool),
+    AHandle(c: Checked<Handle>),
+    AOpened(c: Checked<Opened>),
+    AHead(h: Head),
+    AMatch(c: Checked<List<Option<Handle>>>),
+}
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
 
@@ -139,6 +183,9 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Infer(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Open(_, _) => match a { AOpened(c) => Fits(c), _ => Mismatch },
         Resolve(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        View(_) => match a { AHead(h) => Fits(h), _ => Mismatch },
+        Whnf(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Match(_, _) => match a { AMatch(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -237,36 +284,39 @@ fn intro_as(name: String, t: Tac<Expr>) → Tac<Expr> {
 // `intro(t)`: `intro_as` with the local called `x`.
 fn intro(t: Tac<Expr>) → Tac<Expr> { intro_as("x", t) }
 
-// `f`, whose type is `ty`, applied to as many arguments as it takes to reach
-// `target`, each proved by `premise` at the parameter's type. At most `n`
-// arguments are supplied.
-fn apply_upto(n: Nat, f: Expr, ty: Handle, target: Handle, locals: List<LocalInfo>, premise: Tac<Expr>) → Tac<Expr> {
-    match n {
-        Zero => defeq(Hd(ty), Hd(target)).bind(λ same => match same {
-            True => Pure(f),
-            False => fail("apply: no number of arguments makes its type the goal", []),
-        }),
-        Succ(m) => defeq(Hd(ty), Hd(target)).bind(λ same => match same {
-            True => Pure(f),
-            False => open(ty, "_").bind(λ c => match c {
-                Refused(_) => fail("apply: its conclusion is not the goal", []),
+// `f`, whose type is `ty`, applied to one argument per slot: a slot the match
+// determined is that value, and an open one is proved by `premise` at the
+// parameter's type, which by then mentions the arguments before it.
+fn apply_slots(slots: List<Option<Handle>>, f: Expr, ty: Handle, locals: List<LocalInfo>, premise: Tac<Expr>) → Tac<Expr> {
+    match slots {
+        Nil => Pure(f),
+        Cons(s, rest) => match s {
+            Some(h) => infer(App(f, Hd(h))).bind(λ c => match c {
+                Refused(why) => fail("apply: " ++ why, []),
+                Accepted(ty2) => apply_slots(rest, App(f, Hd(h)), ty2, locals, premise),
+            }),
+            None => open(ty, "_").bind(λ c => match c {
+                Refused(why) => fail("apply: " ++ why, []),
                 Accepted(o) => focus(GoalInfo(o.local.ty, locals), premise).bind(λ a => infer(App(f, a)).bind(λ c2 => match c2 {
                     Refused(why) => fail("apply: " ++ why, []),
-                    Accepted(ty2) => apply_upto(m, App(f, a), ty2, target, locals, premise),
+                    Accepted(ty2) => apply_slots(rest, App(f, a), ty2, locals, premise),
                 })),
             }),
-        }),
+        },
     }
 }
 
-// `apply(f, premise)`: use `f` backwards. Its parameters are proved one at a
-// time, left to right, each by `premise` run against the parameter's type,
-// until what is left is the goal. A later parameter's type may mention an
-// earlier one's proof.
+// `apply(f, premise)`: use `f` backwards. Its conclusion is matched against
+// the goal with its parameters as unknowns, as few of them as it takes;
+// those the match determines are filled in, implicit ones included, and the
+// rest are proved left to right by `premise`.
 fn apply(f: Expr, premise: Tac<Expr>) → Tac<Expr> {
     goal().bind(λ g => infer(f).bind(λ c => match c {
         Refused(why) => fail("apply: " ++ why, []),
-        Accepted(ty) => apply_upto(64, f, ty, g.target, g.locals, premise),
+        Accepted(ty) => match_conclusion(ty, g.target).bind(λ m => match m {
+            Refused(why) => fail("apply: " ++ why, []),
+            Accepted(slots) => apply_slots(slots, f, ty, g.locals, premise),
+        }),
     }))
 }
 
@@ -280,7 +330,7 @@ fn apply(f: Expr, premise: Tac<Expr>) → Tac<Expr> {
 // reason to call them.
 
 // 0: a result. 1: `Goal`. 2: `Defeq`. 3: `Fail`. 4: `Infer`. 5: `Open`.
-// 6: `Resolve`.
+// 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -291,6 +341,9 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Infer(_) => 4,
             Open(_, _) => 5,
             Resolve(_) => 6,
+            View(_) => 7,
+            Whnf(_) => 8,
+            Match(_, _) => 9,
         },
     }
 }
@@ -313,9 +366,17 @@ fn host_rhs(t: Tac<Expr>) → Expr {
     }
 }
 
-// `Open`'s handle.
+// The handle `Open`, `View` and `Whnf` are about; `Match`'s function type.
 fn host_handle(t: Tac<Expr>) → Nat {
-    match t { Pure(_) => 0, Ask(r, _) => match r { Open(h, _) => h.id, _ => 0 } }
+    match t {
+        Pure(_) => 0,
+        Ask(r, _) => match r { Open(h, _) => h.id, View(h) => h.id, Whnf(h) => h.id, Match(ty, _) => ty.id, _ => 0 },
+    }
+}
+
+// `Match`'s target.
+fn host_target(t: Tac<Expr>) → Nat {
+    match t { Pure(_) => 0, Ask(r, _) => match r { Match(_, target) => target.id, _ => 0 } }
 }
 
 // `Open`'s or `Resolve`'s name.
@@ -402,6 +463,49 @@ fn host_opened(ref: Nat, name: String, ty: Nat, body: Nat) → Answer {
 }
 
 fn host_not_opened(why: String) → Answer { AOpened(Refused(why)) }
+
+fn host_head_pi(dom: Nat) → Answer { AHead(HPi(Handle(dom))) }
+
+fn host_head_eq(lhs: Nat, rhs: Nat) → Answer { AHead(HEq(Handle(lhs), Handle(rhs))) }
+
+fn host_head_global(name: String) → Answer { AHead(HGlobal(name, [])) }
+
+fn host_head_local(x: Nat) → Answer { AHead(HLocal(LocalRef(x), [])) }
+
+fn host_head_lit(n: Nat) → Answer { AHead(HLit(n)) }
+
+fn host_head_other() → Answer { AHead(HOther) }
+
+// One more argument of a `HGlobal` or `HLocal` head.
+fn host_head_arg(a: Answer, h: Nat) → Answer {
+    match a {
+        AHead(v) => match v {
+            HGlobal(name, args) => AHead(HGlobal(name, args ++ [Handle(h)])),
+            HLocal(x, args) => AHead(HLocal(x, args ++ [Handle(h)])),
+            _ => a,
+        },
+        _ => a,
+    }
+}
+
+fn host_matched() → Answer { AMatch(Accepted([])) }
+
+// One more slot of a match: determined (`Some`) or left open.
+fn host_slot(a: Answer, h: Nat) → Answer {
+    match a {
+        AMatch(c) => match c { Accepted(slots) => AMatch(Accepted(slots ++ [Some(Handle(h))])), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_open_slot(a: Answer) → Answer {
+    match a {
+        AMatch(c) => match c { Accepted(slots) => AMatch(Accepted(slots ++ [None])), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_not_matched(why: String) → Answer { AMatch(Refused(why)) }
 
 // A term of the goal's context, quoted where a tactic's argument expects an
 // `Expr`.

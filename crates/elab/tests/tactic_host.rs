@@ -3,6 +3,8 @@
 //! one against the goal, and checks what it returns. Round 2 adds binders
 //! (`Open`, `Lam`), `Infer` and `Resolve`, quoting of hypotheses into `Expr`
 //! arguments, and the library's `exact`, `intro`, `apply` and `first_of`.
+//! Round 2½ adds `View`, `Whnf`, and `Match`, through which `apply` solves
+//! the parameters its conclusion determines, implicit ones included.
 //!
 //! The axes of `docs/testing-generated-terms.md`: a closed and a neutral
 //! hypothesis, an open element type, a checking position (the goal comes from
@@ -335,7 +337,7 @@ fn apply_closes_implication_chains() {
          theorem searched(a: Nat, b: Nat, c: Nat, h1: a = 1 → b = 2, h2: b = 2 → c = 3, p: a = 1): c = 3 { by auto(3) }",
     );
     let msg = refused("theorem t(a: Nat): a = 1 → a = 1 { by apply(a, assumption()) }");
-    assert!(msg.contains("apply: its conclusion is not the goal"), "{msg}");
+    assert!(msg.contains("apply: no number of arguments makes the conclusion of `Nat` the goal"), "{msg}");
     // A premise the premise tactic cannot prove ends the run with its failure.
     let msg = refused("theorem t(a: Nat, h: a = 1 → a = 2): a = 2 { by apply(h, assumption()) }");
     assert!(msg.contains("no local's type is the goal"), "{msg}");
@@ -442,4 +444,81 @@ fn native_tactics_open_binders() {
     check_in(e.clone(), "theorem t(n: Nat): n = 1 → n = 1 { by native_identity }");
     let msg = refused_in(e, "theorem t(n: Nat, h: n = 1): n = 1 { by native_identity }");
     assert!(msg.contains("the tactic failed: `n = 1` is not a function type"), "{msg}");
+}
+
+/// `apply` matches the conclusion against the goal with the parameters as
+/// unknowns (the elaborator's unifier, as for implicit arguments), so a
+/// lemma's implicit parameters and any explicit one the conclusion
+/// determines are filled in, and only the rest are left to the premise
+/// tactic. A bare global is quoted as itself, its implicits still binders.
+#[test]
+fn apply_solves_what_the_conclusion_determines() {
+    check(
+        "theorem symmetric(a: Nat, b: Nat, p: a = b): b = a { by apply(sym, assumption()) }
+         theorem open_type<A>(a: A, b: A, p: a = b): b = a { by apply(sym, assumption()) }
+         theorem determined(a: Nat, f: (m: Nat) → m = 1 → m = 2, p: a = 1): a = 2 { by apply(f, assumption()) }
+         theorem explicit_lemma(x: Nat, y: Nat): x + y = y + x { by apply(Nat::add_comm, assumption()) }
+         theorem chained(a: Nat, b: Nat, p: a = b): a = b { by apply(sym, apply(sym, assumption())) }",
+    );
+    // `trans`'s middle point is not in its conclusion, so it is a premise
+    // like the others, proved first and by the premise tactic alone:
+    // `assumption` picks the most recent `Nat`, and the next premise fails.
+    let msg = refused("theorem t(a: Nat, b: Nat, c: Nat, p: a = b, q: b = c): a = c { by apply(trans, assumption()) }");
+    assert!(msg.contains("no local's type is the goal"), "{msg}");
+    let msg = refused("theorem t(a: Nat, b: Nat, p: a = b): Nat { by apply(sym, assumption()) }");
+    assert!(msg.contains("no number of arguments makes the conclusion of"), "{msg}");
+}
+
+/// `View` presents one layer of a handle the way a diagnostic would print
+/// it, and `Whnf` reduces a handle first: a tactic dispatches on a Π, an
+/// equation, a relation's name, a local's call, a call to a global, and a
+/// numeral's head normal form.
+#[test]
+fn view_dispatches_on_the_goal() {
+    let kinds = "import bool;
+         import list;
+         import string;
+         import char;
+         fn intros_then(n: Nat, t: tactic::Tac<tactic::Expr>) → tactic::Tac<tactic::Expr> {
+             match n {
+                 Zero => t,
+                 Succ(m) => goal().bind(λ g => view(g.target).bind(λ v => match v {
+                     HPi(_) => intro(intros_then(m, t)),
+                     _ => t,
+                 })),
+             }
+         }
+         fn say(v: Head) → tactic::Tac<tactic::Expr> {
+             match v {
+                 HGlobal(name, args) => fail(\"global \" ++ name ++ \" of \" ++ match args { Nil => \"none\", Cons(_, _) => \"some\" }, Nil),
+                 HEq(_, _) => fail(\"an equation\", Nil),
+                 HPi(_) => fail(\"a function type\", Nil),
+                 HLocal(_, args) => fail(\"a local of \" ++ match args { Nil => \"none\", Cons(_, _) => \"some\" }, Nil),
+                 HLit(_) => fail(\"a literal\", Nil),
+                 HOther => fail(\"other\", Nil),
+             }
+         }
+         fn goal_kind() → tactic::Tac<tactic::Expr> { goal().bind(λ g => view(g.target).bind(λ v => say(v))) }
+         fn lhs_kind(reduce: Bool) → tactic::Tac<tactic::Expr> {
+             goal().bind(λ g => view(g.target).bind(λ v => match v {
+                 HEq(l, _) => match reduce {
+                     True => whnf(l).bind(λ c => match c { Accepted(w) => view(w).bind(λ u => say(u)), Refused(why) => fail(why, Nil) }),
+                     False => view(l).bind(λ u => say(u)),
+                 },
+                 _ => fail(\"not an equation\", Nil),
+             }))
+         }";
+    check(&format!("{kinds}\ntheorem t(a: Nat): a = 1 → a = 2 → a = 1 {{ by intros_then(5, assumption()) }}"));
+    for (goal, kind) in [
+        ("theorem t(n: Nat, m: Nat): n <= m { by goal_kind }", "global Le of some"),
+        ("theorem t(n: Nat): n = n { by goal_kind }", "an equation"),
+        ("theorem t(n: Nat): n = n → n = n { by goal_kind }", "a function type"),
+        ("theorem t(f: Nat → Nat, n: Nat): f(n) = n { by lhs_kind(False) }", "a local of some"),
+        ("theorem t(n: Nat): 3 = n { by lhs_kind(False) }", "a literal"),
+        ("theorem t(n: Nat): n = 3 { by lhs_kind(False) }", "a local of none"),
+        ("theorem t(n: Nat): 1 + 1 = n { by lhs_kind(True) }", "global Succ of some"),
+    ] {
+        let msg = refused(&format!("{kinds}\n{goal}"));
+        assert!(msg.contains(&format!("the tactic failed: {kind}")), "{goal}: {msg}");
+    }
 }
