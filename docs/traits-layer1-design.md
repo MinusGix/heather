@@ -253,7 +253,7 @@ for each positive:
 6. Negatives: unknown class, wrong argument count, duplicate instance at a
    carrier head, an `extends` argument that is not a type parameter,
    unknown/missing/duplicate field in the literal form, a mixed body.
-7. The full suite green, `lib/ir_v1.hthr` unchanged.
+7. The full suite green, `lib/certgen/ir_v1.hthr` unchanged.
 
 ## 7. What implementing this corrected
 

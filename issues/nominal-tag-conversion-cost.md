@@ -52,7 +52,7 @@ The first full suite on the new tag found three places that recognised the
 old shape structurally:
 
 - **certgen's marker pass and in-language walker** (`certgen.rs::mark`,
-  `lib/certgen_code.hthr`'s `transcribe`/`check_sig`) accept `Triv`/`Pair`
+  `lib/certgen/certgen_code.hthr`'s `transcribe`/`check_sig`) accept `Triv`/`Pair`
   and `Unit`/`Σ` as "pure"; they now also accept `srefl`/`sEq`.
 - **The emission walker** flagged an `SRefl.ty` slot: `tag_value` copied
   `El ⌜Nat⌝` off a tag type that arrived as code. The inhabitant is now

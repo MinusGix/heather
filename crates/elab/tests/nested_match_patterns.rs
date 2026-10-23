@@ -108,7 +108,7 @@ fn empty_ctx() -> LocalCtx {
 // ---------------------------------------------------------------------------
 // Axis 1 — a literal scrutinee, and it must COMPUTE.
 //
-// `loopiter` is `lib/ir_v1.hthr`'s `step_loopiter` written flat: three levels
+// `loopiter` is `lib/certgen/ir_v1.hthr`'s `step_loopiter` written flat: three levels
 // deep, and the middle level carries a column (`carried`) *past* a split,
 // which is the case a single-column compiler gets wrong.
 // ---------------------------------------------------------------------------

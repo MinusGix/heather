@@ -1,5 +1,5 @@
 //! The whole-library sweep (`docs/export-fragment-design.md` §7): every
-//! module of `lib/std`, exported, with each refusal counted by cause. Opt-in (`#[ignore]`): it elaborates the
+//! module of `lib/std` and its folders, exported, with each refusal counted by cause. Opt-in (`#[ignore]`): it elaborates the
 //! library and spells every proof, which is minutes of release time and
 //! past the suite's rails in a debug build. `scripts/export-recheck --wide`
 //! runs it and hands `Wide.hxk` to Lean's kernel.
@@ -23,11 +23,22 @@ const KNOWN: &[&str] = &[
 #[ignore = "minutes in release; run by scripts/export-recheck --wide"]
 fn std_library_exports() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/std");
-    let mut roots: Vec<PathBuf> = std::fs::read_dir(&root)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|x| x == "hthr"))
-        .collect();
+    // Every module, folders included, as `heather check lib/std` takes them
+    // (docs/lib-layout-design.md): the library's stems are unique, so no
+    // nested file is shadowed.
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for p in std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()) {
+            if p.is_dir() {
+                if !p.file_name().unwrap().to_string_lossy().starts_with('.') {
+                    walk(&p, out);
+                }
+            } else if p.extension().is_some_and(|x| x == "hthr") {
+                out.push(p);
+            }
+        }
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    walk(&root, &mut roots);
     roots.sort();
     let refs: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
     let modules = loader::load_many(&refs, &[root.clone()]).map_err(|e| e.msg).expect("load");

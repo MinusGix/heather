@@ -1,4 +1,4 @@
-//! `lib/std/logic.hthr` and the connective syntax
+//! `lib/std/core/logic.hthr` and the connective syntax
 //! (`issues/std-logic-module.md`, `docs/logic-connectives-design.md`).
 //!
 //! Two things are under test and they fail differently, so they are kept
@@ -19,9 +19,9 @@
 use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT)]);

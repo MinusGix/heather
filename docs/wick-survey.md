@@ -341,7 +341,7 @@ closed facts, and the general-size theorem stated beside them.
 
 ### 4.2 Floating point
 
-The float library (`lib/std/float/`) already has formats as data (IEEE
+The float library (`lib/std/num/float/`) already has formats as data (IEEE
 interchange, bfloat16 and the OCP microscaling element formats), dyadic
 values and rounding. ML pulls three further pieces, all already milestones:
 `float-error` (the standard model and γ-composition, which is exactly what a

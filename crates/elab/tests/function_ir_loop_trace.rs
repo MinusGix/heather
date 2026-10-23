@@ -340,8 +340,8 @@ fn record_state_loop_certificate_checks() {
 // from source here.
 fn wc_checker() -> heather_elab::Elaborator {
     let modules: Vec<(&str, &str)> = common::MODULES.iter().chain(&crate::read_loop_fixture::READ_LOOP[..8]).copied()
-        .chain([("omega", include_str!("../../../lib/std/omega.hthr")),
-            ("bitvec_omega", include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")),
+        .chain([("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
+            ("bitvec_omega", include_str!("../../../lib/std/tactic/bitvec_omega.hthr")),
             ("wc", WC_SOURCE), ("wc_context", WC_CONTEXT)])
         .collect();
     crate::support::semantic_test_base(&modules)

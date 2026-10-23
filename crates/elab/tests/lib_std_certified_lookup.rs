@@ -1,15 +1,15 @@
-//! `lib/std/certified_lookup.hthr` — generic proof-carrying finite lookup.
+//! `lib/std/data/certified_lookup.hthr` — generic proof-carrying finite lookup.
 
 use crate::support;
 use heather_elab::Elaborator;
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/data/certified_lookup.hthr");
 
 #[test]
 fn certified_lookup_checks_and_computes() {

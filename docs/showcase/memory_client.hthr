@@ -1,4 +1,4 @@
-// Byte memory at work (lib/std/memory.hthr, docs/byte-memory-design.md).
+// Byte memory at work (lib/std/machine/memory.hthr, docs/byte-memory-design.md).
 //
 // The first half runs a 16-byte memory by evaluation: 4-bit addresses, so an
 // offset past 15 wraps to 0. What wrapping, self-overlap and refusal do is

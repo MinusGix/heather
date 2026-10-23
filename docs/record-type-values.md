@@ -181,7 +181,7 @@ nothing about being the right type.
 2. **The payoff, in miniature** (`a_record_domain_can_be_projected_and_
    transported`): a `dom: Nat -> Type` consumer whose hypothesis is a record
    value, with the proof projecting a field off it and transporting along it —
-   `j(sym(d.shape), …)`. This is `lib/ir_v1.hthr`'s `RefinesOn` shrunk to one
+   `j(sym(d.shape), …)`. This is `lib/certgen/ir_v1.hthr`'s `RefinesOn` shrunk to one
    file, and it is the test that pins both §4 repairs.
 3. **An open element type.** `record Boxed<A>(v: Nat) { val: A, … }`, used as
    `Boxed<A>(v)` inside a declaration whose `A` is open, alongside two closed
@@ -196,7 +196,7 @@ nothing about being the right type.
 7. **Shadowing.** A `dom: Nat -> Type` *parameter* named `Boxed` is called, not
    lowered — the routing arm consults `shadowed` before `inductives`.
 
-`lib/ir_v1.hthr` is the acceptance at scale: `RefinesOn(dom: Val -> Type, p1,
+`lib/certgen/ir_v1.hthr` is the acceptance at scale: `RefinesOn(dom: Val -> Type, p1,
 i1, p2, i2)` is now written once and generally, `RefinesNat2` is defined as
 `RefinesOn(λ (e: Val) => NatEnv(e), …)` over a `NatEnv` record packing the two
 embedded arguments, the tail, and the shape proof, and both refinement

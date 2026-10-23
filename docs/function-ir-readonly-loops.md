@@ -1,6 +1,6 @@
 # Bounded read-only loop contract
 
-The source/IR contract lives in `lib/function_ir_loop.hthr`. It is a semantic
+The source/IR contract lives in `lib/native/function_ir/function_ir_loop.hthr`. It is a semantic
 interface for a bounded loop region, before physical selection. Source programs
 use `bounded_readonly`; the elaborated-body reflector recognizes that resolved
 operation, retains the checked step definition's qualified identity, and emits
@@ -267,5 +267,5 @@ signed/reversed bounds tests, swapped address operands, incorrect bytes, stale
 branch displacements, and unsupported branch spans. This is one bounds/read transition. Budget selection,
 carried-state updates, backward edges, outcome encoding, and bounded induction
 remain under `native-bounded-loop-certificates`. Their design is
-`docs/native-bounded-loops-design.md`, and `lib/function_ir_loop_trace.hthr`
+`docs/native-bounded-loops-design.md`, and `lib/native/function_ir/function_ir_loop_trace.hthr`
 holds the bounded induction (`loop_trace`) over the `AccessLoop` code form.

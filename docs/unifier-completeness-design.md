@@ -682,7 +682,7 @@ What the sweep left, and why: `issues/unify-through-constructor-values.md`
 to unfold) and the `Decide` instance heads
 (`issues/instance-binder-occurrence-through-binder-types.md`). The lines with
 `@` in `lib/` and the showcases went from 42 to 10. The last eight were in
-the generated `lib/function_ir_x86.hthr`. The lowering's three binary-operation
+the generated `lib/native/function_ir/function_ir_x86.hthr`. The lowering's three binary-operation
 templates (`crates/elab/src/function_ir_x86_lower.rs`) now write
 `bitvec::BitVec::add(a, b)` and `add(·, ·)`, whose operands pin the width. The
 lowering's other `@`s (`ofNat(64, imm)`, `zero_extend`, the structured

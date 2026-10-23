@@ -1,5 +1,5 @@
 //! `:= infer` at a proposition goal: computation, then `evidence theorem`
-//! rules, with `lib/std/nat.hthr`'s positivity rules as the customer
+//! rules, with `lib/std/num/nat.hthr`'s positivity rules as the customer
 //! (`issues/infer-proposition-evidence.md`,
 //! `docs/positivity-evidence-design.md` §6 A).
 //!
@@ -20,9 +20,9 @@ use heather_elab::{Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
 ];
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();

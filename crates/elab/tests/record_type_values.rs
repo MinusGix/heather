@@ -64,7 +64,7 @@ fn a_record_type_is_a_type_valued_function() {
     );
 }
 
-// **The payoff**, in miniature: `lib/ir_v1.hthr`'s `RefinesOn(dom: Val -> Type,
+// **The payoff**, in miniature: `lib/certgen/ir_v1.hthr`'s `RefinesOn(dom: Val -> Type,
 // …)`. The domain is a record *value*, the hypothesis is an inhabitant of it,
 // and the proof projects a field off that hypothesis and transports along it.
 //

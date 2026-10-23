@@ -1,12 +1,12 @@
 //! The perturbed-LIBRARY controls for the certifying generator's two
-//! in-language analyzers: the transcriber (`lib/certgen_code.hthr`'s body
+//! in-language analyzers: the transcriber (`lib/certgen/certgen_code.hthr`'s body
 //! rule) and the signature checker (its `check_sig`). The certificate fold's
 //! own control is `certgen_cert.rs`; the positives both of these are measured
 //! against are `certgen.rs`.
 //!
 //! Why a binary rather than two more tests in `certgen.rs`: `ulimit -t` is
 //! per process, and every one of these tests elaborates
-//! `lib/certgen_code.hthr` — the suite's most expensive single item — into an
+//! `lib/certgen/certgen_code.hthr` — the suite's most expensive single item — into an
 //! elaborator of its own. Four of them in one binary passed the 300-second
 //! rail when the certificate fold's evaluation joined the generator
 //! (2026-08-12); splitting costs nothing, because each control builds its own
@@ -20,15 +20,15 @@ use heather_syntax::parse_file;
 
 use crate::support;
 
-const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
+const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const CODE: &str = include_str!("../../../lib/certgen/certgen_code.hthr");
 /// The certificate fold (docs/certgen-cert-expression-design.md), unperturbed
 /// in this file: a wrong *transcription* still has to be folded into a
 /// certificate, or the control below would be testing the fold's absence.
-const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
+const CERT: &str = include_str!("../../../lib/certgen/certgen_cert.hthr");
 
 /// 1-ary recursive, a `Succ` arm nesting two constructors around the ih —
 /// `certgen.rs`'s `IR_DBL`, repeated here because the honesty control's whole
@@ -148,11 +148,11 @@ fn a_perturbed_transcriber_is_refused_by_the_kernel() {
     // file's shell, so this is still the only 52-branch check in this thread.
     let mut bad = base();
     support::with_decl_cache(&mut bad, |e| elab(e, &LIB[..cut], "declarations prefix"));
-    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
+    elab(&mut bad, &stripped, "mutated lib/certgen/certgen_code.hthr");
     // The fold is unperturbed here: a wrong *transcription* must still be
     // folded into a certificate, or this control would be testing the fold's
     // absence instead of the transcriber's error.
-    elab(&mut bad, CERT, "lib/certgen_cert.hthr");
+    elab(&mut bad, CERT, "lib/certgen/certgen_cert.hthr");
     elab(&mut bad, &lib_item("dbl"), "fn dbl");
     let wrong = generate_in_language(&bad, &lib_decl("dbl"), &GenCtx::new())
         .expect("a wrong transcriber still emits — that is the point");
@@ -208,7 +208,7 @@ fn a_perturbed_signature_checker_is_a_loud_disagreement() {
     // stripped file's two shells are this thread's only 52-branch checks.
     let mut bad = base();
     support::with_decl_cache(&mut bad, |e| elab(e, &LIB[..cut], "declarations prefix"));
-    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
+    elab(&mut bad, &stripped, "mutated lib/certgen/certgen_code.hthr");
     let nofn = "fn nofn2() -> Nat { 0 }";
     elab(&mut bad, nofn, "fn nofn2");
     let Err(msg) = generate_in_language(&bad, &decl_of(nofn), &GenCtx::new()) else {
@@ -255,9 +255,9 @@ fn a_perturbed_field_merge_is_refused_by_the_kernel() {
     let stripped = format!("{}\n{}", &bad_code[..thms], &bad_code[shell..]);
     let mut bad = base();
     support::with_decl_cache(&mut bad, |e| elab(e, &LIB[..cut], "declarations prefix"));
-    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
+    elab(&mut bad, &stripped, "mutated lib/certgen/certgen_code.hthr");
     // The fold is unperturbed: a wrong *transcription* must still be folded.
-    elab(&mut bad, CERT, "lib/certgen_cert.hthr");
+    elab(&mut bad, CERT, "lib/certgen/certgen_cert.hthr");
     elab(&mut bad, "inductive Both { BNone, BSome(a: Nat, b: Nat) }\n", "the result type");
     elab(&mut bad, PACK, "fn pack");
     let wrong = generate_in_language(&bad, &decl_of(PACK), &GenCtx::new())

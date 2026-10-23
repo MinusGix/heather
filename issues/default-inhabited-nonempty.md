@@ -8,7 +8,7 @@ created: 2026-08-07
 updated: 2026-08-16
 ---
 
-User decision 2026-08-07, from reviewing lib/std/algebra.hthr's `Default<A>`: keep `Default` as the programming-side class (it implies a NATURAL default — 0 for Nat/Rat/Real, empty list — not mere inhabitation) and add the math-side ladder as separate classes rather than renaming:
+User decision 2026-08-07, from reviewing lib/std/algebra/algebra.hthr's `Default<A>`: keep `Default` as the programming-side class (it implies a NATURAL default — 0 for Nat/Rat/Real, empty list — not mere inhabitation) and add the math-side ladder as separate classes rather than renaming:
 
 - `Default<A>` — a canonical value. Programming-facing; already landed.
 - `Inhabited<A>` — SOME value, no canonicality claim. Data-level (a field holding a witness). `Default extends Inhabited` (or a derivation): every default inhabits, sharing the field by flattening.

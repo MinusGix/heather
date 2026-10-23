@@ -20,7 +20,7 @@ calc {
 
 A step is written with `=`, `≈`, `<=` or `<`. An all-`=` chain is unchanged
 (right-nested `trans` with named endpoints). Any other chain folds right
-through ordinary theorems in `lib/std/relation_props.hthr`, every endpoint
+through ordinary theorems in `lib/std/relation/relation_props.hthr`, every endpoint
 passed explicitly, so each written endpoint is checked, a single step's
 included. Prepending step `i` to the rest of the chain picks its helper by
 the pair (step relation, rest's relation):

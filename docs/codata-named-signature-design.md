@@ -2,7 +2,7 @@
 
 Status: implemented, 2026-10-22 (`crates/elab/src/codata.rs`,
 `crates/elab/src/gendefs.rs`); §8 the same day, with
-`lib/std/coitree_eutt.hthr` as its workload. Issue: `issues/codata-named-signature.md`.
+`lib/std/itree/coitree_eutt.hthr` as its workload. Issue: `issues/codata-named-signature.md`.
 It changes how `docs/codata-elaborator-design.md` ("codata §n") and
 `docs/codata-indexed-design.md` ("indexed §n") spell their terms, not what
 they mean: every lowering, rule and test there is unchanged.

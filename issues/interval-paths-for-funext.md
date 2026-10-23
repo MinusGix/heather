@@ -19,7 +19,7 @@ extensionality is then a definition, `path(λi. λx. p x @ i)`, with a
 computing inverse, and `J` is derived with definitional β.
 
 **Why it is on record.** Heather does not assume funext
-(`lib/std/itree.hthr:23`), and that is felt: tier-2 tree laws hold only up
+(`lib/std/itree/itree.hthr:23`), and that is felt: tier-2 tree laws hold only up
 to `Same` or depth-indexed equivalence, `Acc` is not provably a
 proposition (`issues/kernel-v1-extensions.md`, log 2026-07-26), and
 setoids carry what quotients would. The interval is compatible with the

@@ -41,7 +41,7 @@ tree below it twice, and `d` binds nested to the left evaluate the innermost
 the outermost layer; the inner layers are rebuilt by every resume.
 
 The same shape is ordinary Heather code, not only tactics:
-`lib/std/itree.hthr`'s `bind` is this `match`, so evaluating a left-nested
+`lib/std/itree/itree.hthr`'s `bind` is this `match`, so evaluating a left-nested
 interaction tree should show it too (not measured).
 
 ## Possible fixes

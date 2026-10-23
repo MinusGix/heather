@@ -881,7 +881,7 @@ impl<'a> ExprElab<'a> {
         // The binder's own annotation is copied off the expected `Π`, which is
         // itself emitted — so this agreed by luck rather than by rule, and the
         // luck ran out wherever the `Π` was not the cascade-respelled one
-        // (`emission_walk` listed the site on `lib/ir_v1.hthr`; the numbers
+        // (`emission_walk` listed the site on `lib/certgen/ir_v1.hthr`; the numbers
         // are on issues/emission-spelling-chokepoint.md). The context
         // extended above keeps the structural copy, per §3.1's line.
         let dom = elab.emit_ty(cx, &dom, 0).map_or(dom, Rc::new);

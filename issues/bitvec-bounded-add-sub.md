@@ -58,7 +58,7 @@ carry/borrow code plus the cases above are sufficient to start from a worktree.
 
 ## Log
 
-- 2026-09-07: Landed in `lib/std/bitvec.hthr` (section *Width-bounded addition and subtraction*).
+- 2026-09-07: Landed in `lib/std/bitvec/bitvec.hthr` (section *Width-bounded addition and subtraction*).
   **API.** `add_bits(n, a, b, carry)` and `sub_bits(n, a, b, borrow)` are the
   ripples with an incoming carry/borrow, built from the existing
   `carry_majority` and `borrow_next` and forcing the next carry before the

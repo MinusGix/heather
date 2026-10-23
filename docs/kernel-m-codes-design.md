@@ -108,7 +108,7 @@ these places:
 
 On the elaborator side, `code::code_of` gets `Type::M → TmM`, and the
 `match code` surface's arm names come from `BRANCH_NAMES`, so its four new
-arms need no parser change. `lib/certgen_code.hthr`
+arms need no parser change. `lib/certgen/certgen_code.hthr`
 already ends its matches with `_ =>`, so it needs no change.
 
 ## 4. Tests

@@ -107,7 +107,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `it-codata` | interaction-trees | done | A surface `codata` declaration lowers onto the kernel's `M`, with constructors, `match` through `out`, and guarded corecursive functions compiled into one `corec` (`docs/codata-elaborator-design.md`). | it-coinductive |
 | `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |  |
 | `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |  |
-| `math-float` | mathematics | open | Binary floating point (formats as data, a relational rounding spec with one executable rounding, error bounds, arithmetic and the error-free transformations) is in `lib/std/float/`, proved over dyadics and transferable to any ordered field (`docs/floating-point-design.md`; rounds 1–5). |  |
+| `math-float` | mathematics | open | Binary floating point (formats as data, a relational rounding spec with one executable rounding, error bounds, arithmetic and the error-free transformations) is in `lib/std/num/float/`, proved over dyadics and transferable to any ordered field (`docs/floating-point-design.md`; rounds 1–5). |  |
 | `float-values` | mathematics | done | Formats, finite floats and floats, `Dyadic` with its ring and order, value order as a `StrictOrder`, successor and predecessor, and the standard constants proved canonical by evaluation. | math-float |
 | `float-rounding` | mathematics | done | `RoundsTo` for the five IEEE modes, one executable rounding on a dyadic plus sticky proved to satisfy it, its uniqueness, successor/predecessor with spacing, and the mode laws (landed, design §11–§12). | math-float |
 | `float-error` | mathematics | done | The standard model (relative error at most `u` in the normal range), the subnormal absolute bound, `ulp`, and γ-composition (landed, design §13). | math-float |
@@ -285,12 +285,12 @@ tier scheme itself is owned by
 parameter (`ITree<R>(E)`) lower since 2026-10-21
 ([tier2-value-parameters](../issues/tier2-value-parameters.md),
 `docs/surface-value-parameters.md` §6). The core library is
-`lib/std/itree.hthr` (`docs/itree-core-round.md`): events, the tree with a
+`lib/std/itree/itree.hthr` (`docs/itree-core-round.md`): events, the tree with a
 `Cut` leaf, `bind`/`iter`/`interp`/`mrec`, and the laws, the ones through `Vis`
 up to a structural equivalence `ITree::Same` (finite trees need no depth
 index; fuel plays its part). Traces, refinement across fuel, the bridge to
 `converges`/`fuel_monotone`, and a state handler that is world threading are
-`lib/std/itree_trace.hthr` and `lib/std/itree_state.hthr`
+`lib/std/itree/itree_trace.hthr` and `lib/std/itree/itree_state.hthr`
 (`docs/itree-refinement-round.md`), so `it-library` is done. The native program logic has to
 be designed to meet the trees
 ([native-one-program-logic](../issues/native-one-program-logic.md)).
@@ -476,10 +476,10 @@ submilestone.
 
 | lane | main footprint |
 |---|---|
-| Native code (`heather-in-heather`) | `crates/cli/src/native*`, `crates/elab/src/function_ir*`, `heather_emit.rs`, `lib/elf64*`, `lib/linux_x86_64*`, `lib/function_ir*`, `lib/std/arch/` |
-| Tactics | `crates/elab/src/{omega,omega_cert,cutsat,ring,bv_omega,goal_combinators,relational_context}*`, `lib/std/omega.hthr`; later the meta layer |
-| Interaction trees | a new `lib/std` module; `crates/elab/src/inductive.rs` and the W lowering for `it-function-fields`, shared with `language` |
-| Mathematics | `lib/std/*.hthr` other than the above, `docs/showcase/` |
+| Native code (`heather-in-heather`) | `crates/cli/src/native*`, `crates/elab/src/function_ir*`, `heather_emit.rs`, `lib/native/`, `lib/certgen/`, `lib/std/arch/`, `lib/std/os/` |
+| Tactics | `crates/elab/src/{omega,omega_cert,cutsat,ring,bv_omega,goal_combinators,relational_context}*`, `lib/std/tactic/`; later the meta layer |
+| Interaction trees | `lib/std/itree/`; `crates/elab/src/inductive.rs` and the W lowering for `it-function-fields`, shared with `language` |
+| Mathematics | `lib/std/{num,algebra,relation,data}/`, `docs/showcase/` |
 | Export, ML, GPU, Rust, Lean | new crates or scripts and design notes; nearly disjoint from everything |
 | Kernel | `crates/kernel/` |
 | Language, infrastructure | `crates/elab` core (`lib.rs`, `expr.rs`, `unification.rs`, `traits.rs`), `crates/cli`, `scripts/` |
@@ -548,11 +548,11 @@ separate machines do not slow each other's tests.
   read by observation; `SBisim`'s reflexivity, symmetry and transitivity are
   corecursive functions. The library is next under `it-coinductive`.
 - 2026-10-22: `it-cotree` added and done: the coinductive tree library with
-  strong bisimilarity (`lib/std/coitree.hthr`), after codata signatures got
+  strong bisimilarity (`lib/std/itree/coitree.hthr`), after codata signatures got
   names of their own (`docs/codata-named-signature-design.md`). eutt and the
   bridge to the fuelled programs remain (`issues/coitree-eutt.md`,
   `issues/coitree-program-bridge.md`).
-- 2026-10-22: `it-eutt` added and done (`lib/std/coitree_eutt.hthr`), with
+- 2026-10-22: `it-eutt` added and done (`lib/std/itree/coitree_eutt.hthr`), with
   bisimilar and eutt-related trees refining each other as programs. The
   `iter` half of the program bridge stays open
   (`issues/coitree-program-bridge.md`). Simulation between finite trees over

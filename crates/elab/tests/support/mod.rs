@@ -16,7 +16,7 @@
 //! - **Harness helpers** (`ok`/`bad`/`bare`, and per-file variants) are
 //!   local `fn`s at the top of each test file, not shared here — each file
 //!   pins its own prelude-plus-fixture combination on purpose.
-//! - **The whole-library acceptance tests** (`lib/std`, `lib/ir_v1.hthr`)
+//! - **The whole-library acceptance tests** (`lib/std`, `lib/certgen/ir_v1.hthr`)
 //!   live in `lib_algebra.rs` / `lib_list_algos.rs` / `ir_v1.rs` /
 //!   `certgen.rs`; the two expensive ones — the `--fast` skips named in
 //!   `scripts/test` — are in `ir_v1.rs` and `certgen.rs`.
@@ -228,8 +228,8 @@ theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c))
 /// (`issues/elaborator-snapshot-across-test-binaries.md`).
 ///
 /// Five certgen test binaries each elaborate the same checked-in prefix —
-/// `lib/ir_v1.hthr`'s declarations (or the support-prelude slice of it),
-/// `lib/certgen_code.hthr`, `lib/certgen_cert.hthr` — before their own
+/// `lib/certgen/ir_v1.hthr`'s declarations (or the support-prelude slice of it),
+/// `lib/certgen/certgen_code.hthr`, `lib/certgen/certgen_cert.hthr` — before their own
 /// content starts: identical work, re-kernel-checked once per binary. The CLI
 /// already owns the mechanism that makes paying it once sound — the
 /// content-addressed declaration cache behind `heather check --cache`

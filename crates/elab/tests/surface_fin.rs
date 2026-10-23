@@ -18,7 +18,7 @@
 //! Two tests are **oracle-side pins** (design doc §6.1): `xs[i]` must emit
 //! exactly `heather_kernel::term::nth`'s output and a numeral at a `Fin` must
 //! emit exactly `wf.rs`'s `fin_index`'s, each asserted by equality against a
-//! directly-built term. These fixtures never load `lib/vec_code.hthr`, so the
+//! directly-built term. These fixtures never load `lib/lang/vec_code.hthr`, so the
 //! hook declines and the pins hold; they are the left-hand side the port
 //! round's cross-checks compare against (in_language_{tabulate,nth}.rs).
 

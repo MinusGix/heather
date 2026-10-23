@@ -763,7 +763,7 @@ noise floor was ≳1.5× at load 12.8 in stage 1a — the
 golden tests, so the bench fixtures measure the workload the baseline
 measured, and a `check/at-forms` fixture with its own baseline is added
 only once `Tc<Values>` is the gate; re-save with the verdict recorded;
-`lib/ir_v1.hthr` and the routine corpus not regressed in seconds or peak
+`lib/certgen/ir_v1.hthr` and the routine corpus not regressed in seconds or peak
 RSS (§3.6); the x86 certificate gates green under their existing fuel.
 
 *Kill criterion:* a typing-vs-typing disagreement not traced to a

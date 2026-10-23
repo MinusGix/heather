@@ -129,7 +129,7 @@ values directly into its own `RIr`/`RCert` models, which are `u64`s and
 
 At the rim, in `crates/elab/src/certgen.rs`, which is where the
 certifying-generator split says Rust belongs: the *analysis* is in-language
-and untouched — `lib/certgen_code.hthr` and `lib/certgen_cert.hthr` are
+and untouched — `lib/certgen/certgen_code.hthr` and `lib/certgen/certgen_cert.hthr` are
 byte-identical across this round — and what changed is only *how the
 elaborator runs them*. That is the same category as `analyzer_app`'s spine
 construction: invocation, not analysis.

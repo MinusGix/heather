@@ -88,7 +88,7 @@ Five-node module, `mixed ALU kernel=` seconds, three repetitions, same job:
 | mode 0 | 1.005 / 0.998 / 1.007 | +0.9% |
 | mode 2 | 1.095 / 1.089 / 1.008 | +4.9% |
 
-Cold `heather check lib/std/omega.hthr`, release CLI, wall seconds:
+Cold `heather check lib/std/tactic/omega.hthr`, release CLI, wall seconds:
 
 | policy | wall s | vs stock |
 |---|---|---|
@@ -181,7 +181,7 @@ Five-node module, `mixed ALU` seconds, three repetitions:
 | lever 1 | 0.869 / 0.870 / 0.871 | 1.585 / 1.582 / 1.592 | 541.8 MB |
 | | **−12.6% kernel** | −7.2% total | +0.1% (noise) |
 
-Cold `heather check lib/std/omega.hthr`, release CLI, three repetitions:
+Cold `heather check lib/std/tactic/omega.hthr`, release CLI, three repetitions:
 
 | | wall s | peak RSS |
 |---|---|---|

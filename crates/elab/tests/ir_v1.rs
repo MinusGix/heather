@@ -1,4 +1,4 @@
-//! `lib/ir_v1.hthr` — FunctionIR v1, `simulate`, and the fuel interface —
+//! `lib/certgen/ir_v1.hthr` — FunctionIR v1, `simulate`, and the fuel interface —
 //! under `scripts/test`.
 //!
 //! The library file is the deliverable of docs/ir-simulate-design.md §11
@@ -76,13 +76,13 @@
 
 use heather_elab::Elaborator;
 
-const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
-/// `lib/ir_v1.hthr`'s one import: the Nat kit it used to declare itself
+const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
+/// `lib/certgen/ir_v1.hthr`'s one import: the Nat kit it used to declare itself
 /// (docs/modules-design.md §7). The test elaborates the **closure**, in the
 /// order the CLI's loader would — dependencies first — into one accumulator.
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
 
 /// A prelude'd elaborator with `nat` already in it, positioned in module
 /// `ir_v1`: every snippet below is therefore an *addition to the library

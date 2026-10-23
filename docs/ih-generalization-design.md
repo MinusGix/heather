@@ -4,7 +4,7 @@ How a `fn` or `theorem` whose self-calls **vary a non-decreasing parameter**
 is elaborated (`issues/ih-generalization.md`). The customers are the curried
 definitions of `lib/std` — `sub`, `Le`, `leb`, `take`, `drop`, `foldl` — and
 every accumulator proof that wrote its motive by hand
-(`lib/ir_v1.hthr`'s `eval_mono_succ`, `le_add`, `add_loop_runs`).
+(`lib/certgen/ir_v1.hthr`'s `eval_mono_succ`, `le_add`, `add_loop_runs`).
 
 ## 1. What was refused, and why it was not the guard
 

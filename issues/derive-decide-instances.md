@@ -8,7 +8,7 @@ updated: 2026-09-18
 ---
 
 `Decide` should be derivable for a definition whose body is built from
-decidable things, so that `scalar` in `lib/std/char.hthr` needs no
+decidable things, so that `scalar` in `lib/std/text/char.hthr` needs no
 hand-written `scalar_dec` ([[string-char-spec-types]]).
 
 The connective instances already exist (`logic.hthr`: `Decide<P ∧ Q>`,

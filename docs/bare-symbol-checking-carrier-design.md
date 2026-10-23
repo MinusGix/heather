@@ -351,8 +351,8 @@ lookup: no inference, unlike the applied probe, because there is no operand to
 infer. The deferral costs one extra scratch slot per deferred symbol, which the
 `n_defer` pre-count already over-approximates for every checking-only argument.
 
-The measurement is `lib/std/algebra.hthr` (three call sites gained) and
-`lib/list_algos.hthr` / `lib/ir_v1.hthr` as the no-designation controls, per §9
+The measurement is `lib/std/algebra/algebra.hthr` (three call sites gained) and
+`lib/lang/list_algos.hthr` / `lib/certgen/ir_v1.hthr` as the no-designation controls, per §9
 of the operators design.
 
 ## 9. The library payoff
@@ -461,7 +461,7 @@ are exercised, because three of them are the feature's own shape.
 8. **The library** (`lib_algebra.rs`, `lib_list_algos.rs`): the three respelled
    bodies check, and `concat_single` / `all_of_single` / `any_of_single` prove
    unchanged — the term-identity pin of §9.
-9. Full `scripts/test`, suite count recorded; `lib/std/algebra.hthr` timed
+9. Full `scripts/test`, suite count recorded; `lib/std/algebra/algebra.hthr` timed
    against §12.7's numbers with the two no-designation files as controls.
 
 ## 11. What `docs/operators-onto-classes-design.md` should be amended to say

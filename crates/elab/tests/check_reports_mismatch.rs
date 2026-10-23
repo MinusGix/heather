@@ -360,7 +360,7 @@ theorem t(r: Step, w: Nat, h: w = match r { Go(p) => dbl(p), Stop(p) => dbl(p) }
     assert_eq!(&src[span.start as usize..span.end as usize], "h");
 }
 
-/// `lib/std/logic.hthr`'s `Exists`, which `∃` spells.
+/// `lib/std/core/logic.hthr`'s `Exists`, which `∃` spells.
 const EXISTS: &str = "record Exists<A>(P: A → Type) { witness: A, proof: P(witness) }\n";
 
 /// A `refl` refused because the reduction it needed is stuck on a global that

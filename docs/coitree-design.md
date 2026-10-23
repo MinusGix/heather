@@ -1,14 +1,14 @@
 # Coinductive interaction trees
 
-Status: round 1 implemented, 2026-10-22 (`lib/std/coitree.hthr`,
+Status: round 1 implemented, 2026-10-22 (`lib/std/itree/coitree.hthr`,
 `crates/elab/tests/lib_std_coitree.rs`); eutt and the bridge to programs
-(§7) implemented the same day (`lib/std/coitree_eutt.hthr`,
+(§7) implemented the same day (`lib/std/itree/coitree_eutt.hthr`,
 `crates/elab/tests/lib_std_coitree_eutt.rs`). Milestone `it-coinductive`
 (`docs/roadmap.md`); issue `issues/coitree-library.md`. It builds on the
 `codata` surface (`docs/codata-elaborator-design.md`,
 `docs/codata-indexed-design.md`) over the kernel's `M`
 (`docs/kernel-coinduction-design.md`), and on the finite library
-(`lib/std/itree.hthr`, `lib/std/itree_trace.hthr`).
+(`lib/std/itree/itree.hthr`, `lib/std/itree/itree_trace.hthr`).
 
 ---
 
@@ -143,7 +143,7 @@ axes of `docs/testing-generated-terms.md`:
 
 ## 7. Equivalence up to taus
 
-`lib/std/coitree_eutt.hthr`. Issue `issues/coitree-eutt.md`.
+`lib/std/itree/coitree_eutt.hthr`. Issue `issues/coitree-eutt.md`.
 
 ### 7.1 Counts instead of an inductive peel
 

@@ -66,7 +66,7 @@ Unlike a body, this rescoping *is* cacheable as it stands: it is `shift_global(v
   `HEATHER_VALUE_METRICS=1`, cold `--cache` over `docs/showcase/calc_parser.hthr`
   with `-L lib/std -L lib/std/parser`), three **interleaved** before/after samples
   from two binaries built in the same script, whose provenance the script asserts
-  behaviourally — each binary is run on `lib/std/nat.hthr` and its `--timings`
+  behaviourally — each binary is run on `lib/std/num/nat.hthr` and its `--timings`
   header checked for the new column, and the two md5s compared:
 
   | | before (3 samples) | after (3 samples) | delta |

@@ -56,7 +56,7 @@ syntax.  The round should decide from written proofs, not from terminology.
   the pair-shaped baseline, not as completion of this issue: this issue still
   decides how real nested state names locations and states noninterference.
 - 2026-08-26: The x86 vertical slice landed the first generic layer in
-  `lib/std/location.hthr`: total read/write locations, separately carried
+  `lib/std/machine/location.hthr`: total read/write locations, separately carried
   get-put/put-get/put-put evidence, structural composition of locations,
   disjointness as two read-frame laws plus commuting writes, and open-carrier
   probes. Law evidence is deliberately separate from the location constructor,

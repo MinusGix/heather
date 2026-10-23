@@ -6,7 +6,7 @@ use crate::support;
 // mix and a comparison by evaluation, instantiates the theorem for each, and
 // keeps the refusal controls (a clobbering placement, a cleared operand, a
 // shift, a narrow width).
-const FUNCTION_IR_LOWER: &str = include_str!("../../../lib/function_ir_lower.hthr");
+const FUNCTION_IR_LOWER: &str = include_str!("../../../lib/native/function_ir/function_ir_lower.hthr");
 const EXAMPLES: &str = include_str!("fixtures/function_ir_lower_examples.hthr");
 
 // The x86 prefix up to the block layer, then FunctionIR and what a block

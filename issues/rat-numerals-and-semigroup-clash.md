@@ -6,7 +6,7 @@ created: 2026-10-15
 updated: 2026-10-20
 ---
 
-`lib/std/rat.hthr` spells every constant as a call: `Rat::zero()`,
+`lib/std/num/rat.hthr` spells every constant as a call: `Rat::zero()`,
 `Rat::one()`, `Rat::ofInt(OfNat(n))`, and at `Int` it writes `OfNat(1)` where
 `1` should do. Found in the rat style review on PR #42 (2026-10-15).
 

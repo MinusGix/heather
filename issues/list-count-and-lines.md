@@ -31,4 +31,4 @@ accepted where existing proofs rely on it, through `count_eq_len_filter`.
 
 ## Log
 
-- 2026-10-08: Landed: List::count with count_nil, count_cons, count_append, count_eq_len_filter (lib/std/list.hthr); counts_filtered and fold_counts_filtered state bytes.count(p), their count parameter renamed field (a bound count and the method are ambiguous); runs_of is a count; wc and wc_l specs use count. No lines helper: only wc wants it, and bytes.count(newline) says it. Suite 3199.
+- 2026-10-08: Landed: List::count with count_nil, count_cons, count_append, count_eq_len_filter (lib/std/data/list.hthr); counts_filtered and fold_counts_filtered state bytes.count(p), their count parameter renamed field (a bound count and the method are ambiguous); runs_of is a count; wc and wc_l specs use count. No lines helper: only wc wants it, and bytes.count(newline) says it. Suite 3199.

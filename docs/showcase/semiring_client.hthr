@@ -1,5 +1,5 @@
 // One theory, three carriers: the semiring and ring layers
-// (lib/std/semiring.hthr, issues/semiring-ring-structure-api.md) at `Nat`
+// (lib/std/algebra/semiring.hthr, issues/semiring-ring-structure-api.md) at `Nat`
 // and `Int` under identity and at `Rat` under `≈`.
 //
 // Each generic theorem is proved once, at the weakest layer it needs. At

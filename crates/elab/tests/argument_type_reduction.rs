@@ -8,7 +8,7 @@
 //! given that type is a **β-redex**: `(λ (z: Int) => add(a, z) = add(z, a))
 //! (OfNat(k))`. It is an `Id` and does not say so, so every consumer that
 //! fills implicits by unifying against an argument's type — `cong_int`, `sym`,
-//! anything — refused it, and `lib/std/int.hthr` restated the hypothesis
+//! anything — refused it, and `lib/std/num/int.hthr` restated the hypothesis
 //! inside `@cong_int(f, lhs, rhs, ih)` at eight sites.
 //!
 //! `Elaborator::unify_arg_ty` reads the type as written first and, only when
@@ -94,7 +94,7 @@ fn bad(src: &str) -> String {
 // The headline: the issue's arm, at the terse spelling.
 
 /// `ih : (λ (z: Nat) => add(z, 0) = z)(k)` — a redex — and `cong_succ` fills
-/// both endpoints off it. This is `lib/std/int.hthr`'s `add_comm` arm with
+/// both endpoints off it. This is `lib/std/num/int.hthr`'s `add_comm` arm with
 /// `Int` replaced by `Nat` and `cong_int` by the prelude's `cong_succ`.
 #[test]
 fn a_motive_applied_hypothesis_fills_implicits() {

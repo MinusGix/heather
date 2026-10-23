@@ -19,7 +19,7 @@
 //! follows the sub-`Ir` it is about, and staging the top `Ir` into Ψ does not
 //! reach the sub-`Ir`s. The last section pins that boundary too.
 //!
-//! (a) uses the real `Ir` (copied verbatim from `lib/ir_v1.hthr`, without the
+//! (a) uses the real `Ir` (copied verbatim from `lib/certgen/ir_v1.hthr`, without the
 //! interpreter that makes that file a 120 CPU-second test). (c) is pinned
 //! twice: a structurally honest miniature here, and the **real** `ret_conv`
 //! against the real `Converges` inside
@@ -70,7 +70,7 @@ fn last_body(e: &Elaborator) -> (GlobalCtx, Term, Type, heather_kernel::level::L
 // (a) elimination over a Wf-lowered inductive, at Layer::Meta
 // ---------------------------------------------------------------------------
 
-/// `Ir` and its `Refs`, verbatim from `lib/ir_v1.hthr` (comments dropped).
+/// `Ir` and its `Refs`, verbatim from `lib/certgen/ir_v1.hthr` (comments dropped).
 /// Three constructors carry **two** recursive fields, which is what puts the
 /// inductive on the tier-1 `Wf` route (`docs/inductive-tier1-wf-lowering.md`)
 /// rather than the tier-0 Σ/+ one — the whole point of item (a).

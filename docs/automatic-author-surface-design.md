@@ -58,7 +58,7 @@ helper (`match low(x) {…}`) produced a term the kernel refused with a bare
 inconsistently. Both are covered by tests in `crates/elab/tests/goal_combinators.rs`
 and `bv_omega.rs`.
 
-### 2.2 A step at its own type (`lib/function_ir_loop.hthr`, `lib/read_program.hthr`)
+### 2.2 A step at its own type (`lib/native/function_ir/function_ir_loop.hthr`, `lib/read_program.hthr`)
 
 `fold_body<C>(step: C → BitVec(8) → C)` is the loop body
 `λ needle cursor byte s => Continue(step(s, byte))`. The library proves its

@@ -1,4 +1,4 @@
-//! `lib/std/ring.hthr` and the `ring` tactic — commutative-ring
+//! `lib/std/tactic/ring.hthr` and the `ring` tactic — commutative-ring
 //! normalization by reflection (`issues/ring-normalization.md`,
 //! `docs/ring-normalization-design.md`).
 //!
@@ -20,16 +20,16 @@ use heather_elab::{Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/int.hthr")),
-    ("omega", include_str!("../../../lib/std/omega.hthr")),
-    ("ring", include_str!("../../../lib/std/ring.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/num/int.hthr")),
+    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
+    ("ring", include_str!("../../../lib/std/tactic/ring.hthr")),
 ];
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();

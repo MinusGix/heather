@@ -633,7 +633,7 @@ reader that reconstitutes one against the spelling — the 2026-09-10 lesson —
 and two readers are tripped by small names:
 
 - at T = 64, a mint hides a record from `dispatch/member.rs`'s `record_of_at`:
-  `lib/std/relation.hthr`'s `compose_assoc` reports "this is not a record, so
+  `lib/std/relation/relation.hthr`'s `compose_assoc` reports "this is not a record, so
   it has no field `witness`". `record_of_at` now also tries `unspell_here` on
   its whnf, which is the registry's own exact inverse; that was not enough.
 - at T = 256, the showcase's calculator stops converting `leb(2, 2)` against

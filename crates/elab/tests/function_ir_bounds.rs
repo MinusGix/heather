@@ -9,8 +9,8 @@ fn bounds_models_check() {
         ("x86_64_access_code", include_str!("../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
         ("x86_64_access_memory", include_str!("../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
         ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
-        ("function_ir_loop", include_str!("../../../lib/function_ir_loop.hthr")),
-        ("function_ir_loop_x86", include_str!("../../../lib/function_ir_loop_x86.hthr")),
+        ("function_ir_loop", include_str!("../../../lib/native/function_ir/function_ir_loop.hthr")),
+        ("function_ir_loop_x86", include_str!("../../../lib/native/function_ir/function_ir_loop_x86.hthr")),
     ] {
         elab.elab_module_source(name, source).unwrap_or_else(|e| panic!("{}", e.render(source)));
     }

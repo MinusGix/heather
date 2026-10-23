@@ -251,7 +251,7 @@ The frozen-walker rule holds: `crates/elab/src/certgen.rs` gains no analysis.
    evaluator's `V { tag, fields }` and the marker whitelist were all written
    for fields already.
 
-`lib/certgen_cert.hthr` needs **zero** edits, verified rather than assumed: a
+`lib/certgen/certgen_cert.hthr` needs **zero** edits, verified rather than assumed: a
 constructor tag is a `Nat` field of `CCon` and its arguments are a `Refs`, so
 the fold is already field-count-agnostic, and the induction is still over the
 scrutinized `Nat` parameter. That is the second consecutive fragment feature
@@ -266,7 +266,7 @@ been fixed. Wall times are in `issues/certgen-harness-cost.md`'s 2026-08-13
 log per the shape-claims-in-docs policy; the shapes are:
 
 **(a) Elaborating the widened library: a non-issue now.** The whole point of
-re-probing. `lib/certgen_code.hthr` with the §4 widening — one more `TA`
+re-probing. `lib/certgen/certgen_code.hthr` with the §4 widening — one more `TA`
 constructor, three more `Pre`-carrying fields, four more `fn`s, five more
 `refl` pins — elaborates about **30% slower** than the file ships at today, on
 a file that two spelling rounds made roughly an order of magnitude cheaper than

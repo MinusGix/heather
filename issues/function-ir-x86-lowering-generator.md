@@ -45,7 +45,7 @@ whole nested block exhausted ordinary kernel fuel even for sum4. The final
 artifact includes canonical bytes/decoding, relational block execution,
 FunctionIR refinement, memory and protected-register framing, and RIP advance.
 
-`lib/function_ir_x86.hthr` is now a generated golden containing add64 and the
+`lib/native/function_ir/function_ir_x86.hthr` is now a generated golden containing add64 and the
 primary sum4 schedule. Its drift test regenerates from the same ordinary
 Region models, while the semantic suite checks the complete module. The
 alternate sum4 schedule is generated and checked in an independent module so

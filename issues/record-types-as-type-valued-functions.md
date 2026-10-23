@@ -99,7 +99,7 @@ Per docs/testing-generated-terms.md discipline (vary the axes):
 1. `fn BoxedT(v: Nat) -> Type { Boxed(v) }` checks; `BoxedT` then flows as a
    `Nat -> Type` value into `AllOf` (named *and* λ-wrapped).
 2. The motivating consumer: `RefinesOn(dom: Val -> Type, p1, i1, p2, i2)` in
-   lib/ir_v1.hthr, with `RefinesNat2` restated as
+   lib/certgen/ir_v1.hthr, with `RefinesNat2` restated as
    `RefinesOn(λ (e: Val) => NatEnv(e), …)` for a `NatEnv` record packing
    `a, b, tail` and the `e = VCons(embed_nat(a), VCons(embed_nat(b), tail))`
    shape proof — and `loop_refines_rec`/`rec_refines_loop` re-proved through
@@ -124,4 +124,4 @@ Per docs/testing-generated-terms.md discipline (vary the axes):
 
 ## Log
 
-- 2026-08-01: Landed: routing in elab_at_universe (type_former_app -> existing OfExpr lowering, committed so diagnostics re-point), plain/indexed inductives came along, plus two El-of-beta-redex reader repairs (record_of_at, unify_ty decode) the consumer forced — see docs/record-type-values.md. RefinesOn is stated generally in lib/ir_v1.hthr with NatEnv as the domain and both refinement directions re-proved through it; RefinesNat2 survives as sugar. 7 acceptance tests (record_type_values.rs), full suite green, ir_v1 check time unchanged (~41s). Follow-up filed: [[el-reader-decode-audit]].
+- 2026-08-01: Landed: routing in elab_at_universe (type_former_app -> existing OfExpr lowering, committed so diagnostics re-point), plain/indexed inductives came along, plus two El-of-beta-redex reader repairs (record_of_at, unify_ty decode) the consumer forced — see docs/record-type-values.md. RefinesOn is stated generally in lib/certgen/ir_v1.hthr with NatEnv as the domain and both refinement directions re-proved through it; RefinesNat2 survives as sugar. 7 acceptance tests (record_type_values.rs), full suite green, ir_v1 check time unchanged (~41s). Follow-up filed: [[el-reader-decode-audit]].

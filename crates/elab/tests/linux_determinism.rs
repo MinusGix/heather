@@ -5,7 +5,7 @@ use crate::read_loop_fixture::{checker, checker_with};
 // the defined state and none runs at a SYSCALL; a claimed run is then every
 // run that got the same answers from Linux.
 const FORMS: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_step_forms.hthr");
-const DETERMINISM: &str = include_str!("../../../lib/linux_x86_64_determinism.hthr");
+const DETERMINISM: &str = include_str!("../../../lib/std/os/linux/linux_x86_64_determinism.hthr");
 
 #[test]
 fn claimed_runs_are_every_run() {

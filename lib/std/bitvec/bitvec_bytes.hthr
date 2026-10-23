@@ -1,5 +1,5 @@
 // Words as bytes. Endianness is a packing choice made here, never a property
-// of memory: memory holds cells at addresses (`lib/std/memory.hthr`), and a
+// of memory: memory holds cells at addresses (`lib/std/machine/memory.hthr`), and a
 // word becomes cells only through one of these. A `k`-byte word is a
 // `BitVec(8 * k)` and its bytes a `[BitVec(8); k]`, so both round trips are
 // stated without a cast: `8 * Succ(k)` is `8 * k + 8`, `concat`'s index for

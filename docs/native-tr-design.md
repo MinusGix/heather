@@ -213,7 +213,7 @@ issue; signed comparisons stay open there. The example is then spelled
   or reversed, as before), then `MOV scratch, 2^w − 1` and `AND dest,
   scratch`. The scratch is any free temporary other than the destination,
   and it joins the clobbered set. No new instruction.
-- **Law** (`lib/std/bitvec.hthr`): `add_zero_extend_mask` and
+- **Law** (`lib/std/bitvec/bitvec.hthr`): `add_zero_extend_mask` and
   `sub_zero_extend_mask`, `(zext a ± zext b) band zext(all_ones) = zext(a ±
   b)`, structural in the width through the carry and borrow, as
   `borrow_zero_extend` is. The certificate chains the law, the operands'

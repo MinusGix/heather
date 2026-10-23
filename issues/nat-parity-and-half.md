@@ -62,7 +62,7 @@ returning `Or<Even(n), ¬ Even(n)>`, mirroring `le_dec`, with a value-generic
 `Even(n) := ∃k, add(k, k) = n` is the mathematical definition and checks
 today. It is not the definition here because it does not **reduce** — `Even(4)`
 stops being `trivial`, which is the property every recursion in
-`lib/std/nat.hthr` is written to keep. Once the reducing definition exists,
+`lib/std/num/nat.hthr` is written to keep. Once the reducing definition exists,
 this statement is a *lemma* about it, which is the right relationship between
 the two; taking it as the definition now would mean two `Even`s and a bridge
 later.
@@ -82,7 +82,7 @@ The three definitions above check as written, `half(7) = 3` is `refl`,
 
 ## Log
 
-- 2026-08-17: LANDED, the same day the language gap it waited on did ([[recursion-at-deeper-subterms]]). `lib/std/nat.hthr` gained a closing parity section: `half`, `Even`, `Odd` in exactly the spellings this issue wrote down, plus the kit it named — `half_le`, `half_double`, `even_double`, `even_or_odd`, `not_even_and_odd`, `half_add_half`, `even_dec`, and the value-generic `Decide<Even(n)>`.
+- 2026-08-17: LANDED, the same day the language gap it waited on did ([[recursion-at-deeper-subterms]]). `lib/std/num/nat.hthr` gained a closing parity section: `half`, `Even`, `Odd` in exactly the spellings this issue wrote down, plus the kit it named — `half_le`, `half_double`, `even_double`, `even_or_odd`, `not_even_and_odd`, `half_add_half`, `even_dec`, and the value-generic `Decide<Even(n)>`.
 
 Nothing was renegotiated: the spellings checked as written, which is what filing them here bought.
 

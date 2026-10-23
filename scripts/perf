@@ -94,24 +94,24 @@ BUILD_X86 = {
 # the tests, not by their stems, so they are checked here under their stems.
 CORPUS = {
     "quick": [
-        ("lib/std/omega.hthr", []),
-        ("lib/std/nat.hthr", []),
+        ("lib/std/tactic/omega.hthr", []),
+        ("lib/std/num/nat.hthr", []),
         showcase("calc_parser"),
         X86_CERTIFICATE,
     ],
     "full": [
-        ("lib/std/omega.hthr", []),
-        ("lib/std/nat.hthr", []),
-        ("lib/std/int.hthr", []),
-        ("lib/std/list.hthr", []),
-        ("lib/std/bitvec.hthr", []),
-        ("lib/std/algebra.hthr", []),
+        ("lib/std/tactic/omega.hthr", []),
+        ("lib/std/num/nat.hthr", []),
+        ("lib/std/num/int.hthr", []),
+        ("lib/std/data/list.hthr", []),
+        ("lib/std/bitvec/bitvec.hthr", []),
+        ("lib/std/algebra/algebra.hthr", []),
         showcase("calc_parser"),
-        ("lib/ir_v1.hthr", ["lib/std"]),
-        ("lib/function_ir.hthr", ["lib/std"]),
+        ("lib/certgen/ir_v1.hthr", ["lib/std"]),
+        ("lib/native/function_ir/function_ir.hthr", ["lib/std"]),
         ("lib/std/arch/x86_64/x86_64.hthr", ["lib/std"]),
         X86_CERTIFICATE,
-        # lib/certgen_code.hthr is not in the corpus: it has no imports and
+        # lib/certgen/certgen_code.hthr is not in the corpus: it has no imports and
         # elaborates only after a test-only support prelude and ir_v1 in
         # process (crates/elab/tests/certgen_cert.rs), so the CLI refuses it
         # with 83 errors on any machine (2026-09-17). Its cost is the
@@ -918,7 +918,7 @@ AB_DIR = "perf-ab"
 # The file an A/B run probes to read a binary's `--timings` header. Small
 # enough that two runs of it cost nothing, real enough to produce every
 # column.
-AB_PROBE_FILE = "lib/std/nat.hthr"
+AB_PROBE_FILE = "lib/std/num/nat.hthr"
 
 
 def sha256_file(path: Path):

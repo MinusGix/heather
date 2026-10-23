@@ -9,7 +9,7 @@
 //! gone (design doc §3, superseded by §12). Two reasons, and the second is the
 //! one that matters:
 //!
-//! - **Cost.** One `write_exact` pass over `lib/ir_v1.hthr` was ~7 s — the
+//! - **Cost.** One `write_exact` pass over `lib/certgen/ir_v1.hthr` was ~7 s — the
 //!   whole of the cold run's +15% and ~90% of a warm one — essentially all of
 //!   it `std::fmt` machinery producing bytes nobody read.
 //! - **Totality.** The scanner rested on a stated assumption about the

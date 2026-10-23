@@ -7,7 +7,7 @@ created: 2026-09-22
 updated: 2026-09-22
 ---
 
-After the app@ round the heaviest items in the perf corpus are `lib/std/omega.hthr`'s
+After the app@ round the heaviest items in the perf corpus are `lib/std/tactic/omega.hthr`'s
 CutSat lemmas (snapshot `perf/snapshots/2026-09-23T003909Z-local.json`, cold,
 width one, release). They fall into two groups with different costs:
 

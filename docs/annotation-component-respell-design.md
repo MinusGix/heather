@@ -410,7 +410,7 @@ whole `lib/` trio as the suite sees it. Numbers live in the issue log only;
 this document keeps shape claims.
 
 Success criteria, from the charter: a measured reduction on the draft
-reproducer and on `lib/certgen_code.hthr`'s program-layer helpers, and — as
+reproducer and on `lib/certgen/certgen_code.hthr`'s program-layer helpers, and — as
 evidence for the deferred certgen constructor-fields feature — a re-run of
 the non-Nat design §2.2 cost shape showing the with-fields configuration no
 longer threatens the harness rail.
@@ -440,7 +440,7 @@ in `issues/wf-field-conversion-cost.md`'s log, per policy; the shapes:
    a level-tree multiple of the whole type's size. Fixed at the two joins
    with `normalize().canonical()` — `equiv`-preserving by construction, so
    again a spelling change. This was worth roughly as much wall time on
-   `lib/certgen_code.hthr` as the respell itself. (The closed
+   `lib/certgen/certgen_code.hthr` as the respell itself. (The closed
    `issues/level-normalization-allocation.md` was about comparison-time
    allocation; this is emission-side size — a different defect at the same
    type.)
@@ -453,7 +453,7 @@ in `issues/wf-field-conversion-cost.md`'s log, per policy; the shapes:
    stood in the type slot of an `Id` (typing whnfs types before comparing;
    the elaborator's speculative auto-`refl` passes the `Id` component raw),
    and surfaced as every `{}` hole over a coded declaration's result type
-   going unsolved (`lib/list_algos.hthr`). The fix is the mirror of
+   going unsolved (`lib/lang/list_algos.hthr`). The fix is the mirror of
    `ty_w`'s existing δ stage, gated by the same `has_defs` and layer rules;
    pinned kernel-side (`crates/kernel/tests/definitions.rs`,
    `canonical_values_compare_at_a_defined_el_type`) and end-to-end

@@ -30,7 +30,7 @@ instance(n: Nat, a, b: BitVec(n)) Decide<unsigned_lt(n, a, b)> { dec := unsigned
 theorem boundary(): unsigned_lt(64, ofNat(64, 0), ofNat(64, 9223372036854775808)) { decide }
 ```
 
-`lib/std/bitvec.hthr` declares this for `unsigned_lt`, `unsigned_le`,
+`lib/std/bitvec/bitvec.hthr` declares this for `unsigned_lt`, `unsigned_le`,
 `signed_lt` and `signed_le`. The unsigned pair runs the ripple borrow and
 transports through the iff the executable-carry round had already proved; the
 signed pair runs `int::le_dec` over `toInt`, which has been one synchronous

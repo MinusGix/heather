@@ -41,7 +41,7 @@ replaced by the same row under `++`. Consequences, eyes open:
   read as "no designation for `+` at `List`" territory, not a confusing
   `add`-expects-`Nat` type error.
 
-Only `lib/std/algebra.hthr` uses the List designation today, so the library
+Only `lib/std/algebra/algebra.hthr` uses the List designation today, so the library
 edit is one file.
 
 **Acceptance:** lib restated with `++`; a negative control for bare list `+`

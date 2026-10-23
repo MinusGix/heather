@@ -1,4 +1,4 @@
-//! `lib/std/coitree_eutt.hthr` — equivalence up to silent steps on
+//! `lib/std/itree/coitree_eutt.hthr` — equivalence up to silent steps on
 //! coinductive trees (`docs/coitree-design.md` §7, `issues/coitree-eutt.md`,
 //! milestone `it-coinductive`):
 //!
@@ -18,16 +18,16 @@ use heather_elab::{Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("itree", include_str!("../../../lib/std/itree.hthr")),
-    ("itree_trace", include_str!("../../../lib/std/itree_trace.hthr")),
-    ("coitree", include_str!("../../../lib/std/coitree.hthr")),
-    ("coitree_eutt", include_str!("../../../lib/std/coitree_eutt.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("itree", include_str!("../../../lib/std/itree/itree.hthr")),
+    ("itree_trace", include_str!("../../../lib/std/itree/itree_trace.hthr")),
+    ("coitree", include_str!("../../../lib/std/itree/coitree.hthr")),
+    ("coitree_eutt", include_str!("../../../lib/std/itree/coitree_eutt.hthr")),
 ];
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();

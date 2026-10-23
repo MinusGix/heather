@@ -16,25 +16,25 @@ use std::fmt::Write as _;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
-const INT: &str = include_str!("../../../lib/std/int.hthr");
-const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
-const RELATION: &str = include_str!("../../../lib/std/relation.hthr");
-const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
-const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra/algebra.hthr");
+const INT: &str = include_str!("../../../lib/std/num/int.hthr");
+const BITVEC: &str = include_str!("../../../lib/std/bitvec/bitvec.hthr");
+const RELATION: &str = include_str!("../../../lib/std/relation/relation.hthr");
+const LOCATION: &str = include_str!("../../../lib/std/machine/location.hthr");
+const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/data/certified_lookup.hthr");
 const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/x86_64.hthr");
 const X86_64_BLOCK: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_block.hthr");
 const X86_64_CONTROL_BLOCK: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_control_block.hthr");
 const X86_64_CONTROL_FLOW: &str = include_str!("../../../lib/std/arch/x86_64/x86_64_control_flow.hthr");
-const FUNCTION_IR: &str = include_str!("../../../lib/function_ir.hthr");
-const FUNCTION_IR_X86_SUPPORT: &str = include_str!("../../../lib/function_ir_x86_support.hthr");
-const FUNCTION_IR_X86: &str = include_str!("../../../lib/function_ir_x86.hthr");
+const FUNCTION_IR: &str = include_str!("../../../lib/native/function_ir/function_ir.hthr");
+const FUNCTION_IR_X86_SUPPORT: &str = include_str!("../../../lib/native/function_ir/function_ir_x86_support.hthr");
+const FUNCTION_IR_X86: &str = include_str!("../../../lib/native/function_ir/function_ir_x86.hthr");
 
 pub(crate) const MODULES: &[(&str, &str)] = &[
     ("logic", LOGIC),
@@ -47,7 +47,7 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("int", INT),
     ("bitvec", BITVEC),
     ("relation", RELATION),
-    ("relation_props", include_str!("../../../lib/std/relation_props.hthr")),
+    ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
     ("location", LOCATION),
     ("certified_lookup", CERTIFIED_LOOKUP),
     ("x86_64", X86_64),
@@ -737,7 +737,7 @@ fn checked_example_x86_lowerings_are_current() {
     let expected = checked_example_lowering_module();
     if std::env::var_os("UPDATE_FUNCTION_IR_X86").is_some() {
         let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/function_ir_x86.hthr");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/native/function_ir/function_ir_x86.hthr");
         std::fs::write(path, &expected).expect("write FunctionIR x86 lowerings");
         return;
     }

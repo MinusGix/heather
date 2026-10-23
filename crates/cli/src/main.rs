@@ -52,6 +52,7 @@ mod native;
 /// (docs/modules-design.md §3.2). Defaulted only if it exists, so a run from
 /// a directory without one behaves exactly as it did before modules.
 const DEFAULT_LIB: &str = "lib/std";
+const DEFAULT_LIB_ROOT: &str = "lib";
 
 fn main() -> ExitCode {
     let stderr_color = color::stderr_enabled();
@@ -253,8 +254,16 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         }
         files.push(a.clone());
     }
-    if opts.search.is_empty() && Path::new(DEFAULT_LIB).is_dir() {
-        opts.search.push(PathBuf::from(DEFAULT_LIB));
+    // The standard library, then the rest of `lib/` (the native compiler,
+    // certgen), as the native builder and the editor search: modules there
+    // import each other across folders. The lint profile keys on `lib/std`
+    // alone.
+    if opts.search.is_empty() {
+        for dir in [DEFAULT_LIB, DEFAULT_LIB_ROOT] {
+            if Path::new(dir).is_dir() {
+                opts.search.push(PathBuf::from(dir));
+            }
+        }
     }
     if opts.only.is_some() && !opts.cache {
         return Err("`--only` replays the rest of the module from the cache: pass `--cache` (or `--cache-dir`)".into());
@@ -334,14 +343,14 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             c.counts()
         });
         let root_path = Path::new(path);
-        let roots = match roots_for_path(root_path) {
+        let search = search_for_path(root_path, &opts.search);
+        let roots = match roots_for_path(root_path, &search) {
             Ok(roots) => roots,
             Err(msg) => {
                 eprintln!("{}: {msg}", color::error_label(stderr_color));
                 return ExitCode::from(2);
             }
         };
-        let search = search_for_path(root_path, &opts.search);
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
         let modules = match loader::load_many(&root_refs, &search) {
             Ok(m) => m,
@@ -586,14 +595,14 @@ fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
         let lint_profile = lint_profile_for_path(Path::new(path));
         elab.set_lint_profile(lint_profile);
         let root_path = Path::new(path);
-        let roots = match roots_for_path(root_path) {
+        let search = search_for_path(root_path, &opts.search);
+        let roots = match roots_for_path(root_path, &search) {
             Ok(roots) => roots,
             Err(msg) => {
                 eprintln!("{}: {msg}", color::error_label(stderr_color));
                 return ExitCode::from(2);
             }
         };
-        let search = search_for_path(root_path, &opts.search);
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
         let modules = match loader::load_many(&root_refs, &search) {
             Ok(m) => m,
@@ -805,23 +814,31 @@ fn lint_profile_for_path(path: &Path) -> LintProfile {
     }
 }
 
-/// A file is one root. A directory is a deterministic, non-recursive module
-/// set: Heather modules are flat names today, and recursing would silently
-/// merge unrelated module namespaces.
-fn roots_for_path(path: &Path) -> Result<Vec<PathBuf>, String> {
+/// A file is one root. A directory is the deterministic set of modules it
+/// can name: its own `.hthr` files, and every file in a folder below it
+/// (dot-folders aside, as in the loader's lower tier) whose stem no search
+/// directory answers itself. Such a file is exactly what `import <stem>` from
+/// the directory reaches, so the library keeps its modules in folders and
+/// `heather check lib/std` still checks all of them. A nested file shadowed by
+/// a search directory's own (a private `shadow/base.hthr` under a public
+/// `base.hthr`) is no root: no import from outside can name it.
+fn roots_for_path(path: &Path, search: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     if !path.is_dir() {
         return Ok(vec![path.to_path_buf()]);
     }
-    let mut roots = std::fs::read_dir(path)
-        .map_err(|e| format!("cannot read directory `{}`: {e}", path.display()))?
-        .filter_map(|entry| match entry {
-            Ok(entry) if entry.path().extension().is_some_and(|ext| ext == "hthr") => {
-                Some(Ok(entry.path()))
+    let mut roots = hthr_files(path)?;
+    let answered = |stem: &std::ffi::OsStr| {
+        search.iter().any(|dir| dir.join(stem).with_extension("hthr").is_file())
+    };
+    let mut pending = child_dirs(path)?;
+    while let Some(dir) = pending.pop() {
+        for file in hthr_files(&dir)? {
+            if !file.file_stem().is_some_and(answered) {
+                roots.push(file);
             }
-            Ok(_) => None,
-            Err(e) => Some(Err(format!("cannot read directory `{}`: {e}", path.display()))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        }
+        pending.extend(child_dirs(&dir)?);
+    }
     roots.sort();
     if roots.is_empty() {
         return Err(format!("directory `{}` contains no `.hthr` files", path.display()));
@@ -829,8 +846,34 @@ fn roots_for_path(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(roots)
 }
 
-/// A directory target is still a non-recursive set of roots, but imports in
-/// those roots may name implementation modules kept below the public facade:
+fn hthr_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    std::fs::read_dir(dir)
+        .map_err(|e| format!("cannot read directory `{}`: {e}", dir.display()))?
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.path().extension().is_some_and(|ext| ext == "hthr") && entry.path().is_file() => {
+                Some(Ok(entry.path()))
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("cannot read directory `{}`: {e}", dir.display()))),
+        })
+        .collect()
+}
+
+fn child_dirs(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    std::fs::read_dir(dir)
+        .map_err(|e| format!("cannot read directory `{}`: {e}", dir.display()))?
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.path().is_dir() && !entry.file_name().to_string_lossy().starts_with('.') => {
+                Some(Ok(entry.path()))
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("cannot read directory `{}`: {e}", dir.display()))),
+        })
+        .collect()
+}
+
+/// A directory target's imports may name modules kept below it, beside the
+/// roots `roots_for_path` takes from there:
 /// the target joins the search directories, and the loader looks below every
 /// search directory after a miss in them (so a private `shadow/base.hthr`
 /// cannot shadow or conflict with the public `base.hthr`). Module names

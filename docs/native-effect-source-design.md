@@ -76,11 +76,11 @@ value, and a later use of the old value fails the lookup, so `lower` refuses
 - The theorem is proved once, by induction on the source, with each case a
   `Wp`/`loop_at` proof over abstract inputs. It ends at
   `SimProgram(io_linux(), denote(p))` of the image of `compile(p)`
-  (`lib/linux_x86_64_sim.hthr`).
+  (`lib/std/os/linux/linux_x86_64_sim.hthr`).
 - Specs are size-free trees over `Events::linux_spec()`. A source denotes a
   tree over `Events::linux()`, with the sizes it reads, and is related to
   its spec by `ITree::Implements`/`Program::Implements`
-  (`lib/linux_trees.hthr`).
+  (`lib/std/os/linux/linux_trees.hthr`).
 - The surface is uniqueness threading, and the source is the target it
   elaborates to (`issues/effects-direction.md`).
 
@@ -89,7 +89,7 @@ value, and a later use of the old value fails the lookup, so `lower` refuses
 ### 2.1 FunctionIR's meaning is a relation; a tree needs a function
 
 `RegionHolds`, `StructuredRegionHoldsIn` and `Function::Computes`
-(`lib/function_ir.hthr`) are equations over a valuation: "some valuation
+(`lib/native/function_ir/function_ir.hthr`) are equations over a valuation: "some valuation
 satisfies the region". That suits a DAG, because the schedule is not
 observable. A tree, though, has to compute its next command: to build
 `Vis(ReadCmd(fd, size), k)`, `fd` and `size` must be values, not unknowns of
@@ -108,7 +108,7 @@ question in §5: as soon as FunctionIR has a loop that might not terminate,
 Rounds 1–3 prove, for every placement, that `lower`'s code runs from its
 entry to its end and that the region's equations hold of the registers after
 (`Site::Runs`, `Site::Moves`, `Site::Calls`;
-`lib/function_ir_lower_calls.hthr`'s `lower_program_correct`). The runs are
+`lib/native/function_ir/function_ir_lower_calls.hthr`'s `lower_program_correct`). The runs are
 fetched steps, stack steps and calls into the program's own functions. None
 passes a syscall, and the post is pure.
 
@@ -124,7 +124,7 @@ instead of written in the syntax.
 
 Everything the current `compile-x86` path compiles is a Heather function,
 total by construction: structural recursion, or `bounded_readonly`'s
-budgeted loop (`lib/function_ir_loop.hthr`). Partiality enters native code in
+budgeted loop (`lib/native/function_ir/function_ir_loop.hthr`). Partiality enters native code in
 only two ways: a program that talks to Linux, and a general loop (read until
 end of input, or a write loop that may be answered `Wrote(0)` forever). Both
 belong to programs whose meaning is a tree. So the split that keeps every
@@ -134,7 +134,7 @@ special case of it.
 ### 2.4 A `Proved` contract speaks of registers only
 
 `Contract` is `pre`/`post` over `Gprs`, and `Contract::Runs` requires
-`e.memory = s.memory` (`lib/linux_x86_64_wp.hthr`). A region whose code
+`e.memory = s.memory` (`lib/std/os/linux/linux_x86_64_wp.hthr`). A region whose code
 spills to its frame, calls a function (round 3's frames), or stores into a
 buffer (§6) cannot enter `Wp` as a `Proved` item as built. The contract needs
 a footprint: memory unchanged outside a named range, and a post over the
@@ -148,7 +148,7 @@ range. This holds under every option (filed as `wp-proved-memory-contracts`;
 The program: read standard input in chunks of up to 4096 bytes. On an empty
 read, exit 0. On a failed read or write, exit 1. Otherwise map each byte by
 `f`, write the chunk, and keep writing the rest after a short write. Its spec
-is `tr_spec(f)` (`lib/stream_filter_spec.hthr`), an `iter` over
+is `tr_spec(f)` (`lib/native/stream_filter_spec.hthr`), an `iter` over
 `Events::linux_spec()`.
 
 Values below are named by `Nat` ids, as FunctionIR's ports are. `buf` is a
@@ -346,7 +346,7 @@ diverge, with no measure at all, is not a FunctionIR loop: it is the layer's
 *As built (S4 round 5):* the pass that sets the exit bit is a pass too, so
 the bound that provably never runs out is the measure at entry plus one, or
 the measure itself when it stays positive at every pass.
-`loop_runs_unexhausted` (`lib/function_ir.hthr`) takes the invariant and
+`loop_runs_unexhausted` (`lib/native/function_ir/function_ir.hthr`) takes the invariant and
 the measure, and states it for any bound above the measure.
 
 `issues/function-ir-lowering-loops.md` then resolves as: **S4 gains round 5,
@@ -366,7 +366,7 @@ about memory is a tree event, so an array access never splits a region.
 **Uniqueness is checked by the compiler, not trusted.** The lowering already
 tracks an abstract file: which value each register holds. A placement that
 overwrites a value still needed makes a later lookup fail, and `lower`
-refuses (`lib/function_ir_lower.hthr`). Buffers get the same treatment. The
+refuses (`lib/native/function_ir/function_ir_lower.hthr`). Buffers get the same treatment. The
 file also says which buffer value each memory range holds. A `Store` updates
 the range in place to hold `buf'`, so `buf` is no longer held anywhere, and a
 later use of `buf` fails the lookup. The surface's uniqueness discipline is
@@ -380,7 +380,7 @@ environment and its bytes in memory are related by `view.Holds`. With §2.4's
 footprints, a region that stores into a buffer enters `Wp` as a `Proved`
 item whose footprint is that range. Filed as `function-ir-buffer-state-edges`.
 
-**Faults.** `lib/std/memory.hthr` (the memory-model round, in parallel)
+**Faults.** `lib/std/machine/memory.hthr` (the memory-model round, in parallel)
 gives checked accesses as `Result<_, Fault>`, and a buffer is a
 `Memory` over the index space `0..capacity`. A region with loads or stores
 then evaluates to a `Result`, and the layer's `Pure` leaf turns `Err` into a
@@ -437,7 +437,7 @@ decodes a Linux answer into the environment as the machine sees it: a count
 or a negated errno in `result`, and a read's bytes in `buf`'s prefix. It is
 defined once per call shape.
 
-*As landed (S3.1, `lib/native_source.hthr`):* both files are data, not
+*As landed (S3.1, `lib/native/native_source.hthr`):* both files are data, not
 functions: `words: List<Nat>` and `buffers: List<Bytes>`, indexed by id.
 
 - A region sees them through `Env::valuation`, which reads each word at

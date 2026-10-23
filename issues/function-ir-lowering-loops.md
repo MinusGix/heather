@@ -8,7 +8,7 @@ created: 2026-10-21
 updated: 2026-10-22
 ---
 
-FunctionIR has loops (`lib/function_ir_loop.hthr`,
+FunctionIR has loops (`lib/native/function_ir/function_ir_loop.hthr`,
 `docs/function-ir-readonly-loops.md`), and the per-function certificate
 path compiles them (`function_ir_loop_x86`, `function_ir_loop_trace`,
 `crates/elab/src/function_ir_source/loop_native.rs` and `readonly_loop.rs`).

@@ -205,12 +205,12 @@ arm proving". `std/list`'s `filter_filter` is the demonstration: it keeps its
 Twenty-three written motives deleted from the library, all verified by the
 kernel:
 
-- `lib/std/list.hthr` — `len_filter`, `filter_append`, `filter_filter`,
+- `lib/std/data/list.hthr` — `len_filter`, `filter_append`, `filter_filter`,
   `filter_map`, `mem_filter` (5).
-- `lib/list_algos.hthr` — `le_head_insert`, `insert_sorted`, `count_insert`,
+- `lib/lang/list_algos.hthr` — `le_head_insert`, `insert_sorted`, `count_insert`,
   `len_insert`, `mem_insert` (5). These split on a *decision*, so their goals
   reduce through `or_pick` rather than through `filter`; same rung.
-- `lib/std/int.hthr` — `neg_neg`, `isucc_ipred`, `ipred_isucc`, `neg_isucc` ×2,
+- `lib/std/num/int.hthr` — `neg_neg`, `isucc_ipred`, `ipred_isucc`, `neg_isucc` ×2,
   `neg_ipred`, `add_isucc`, `add_ipred`, `add_neg`, `mul_neg_r` ×2, `mul_isucc`,
   `lt_irrefl` (13 of the issue's 14).
 

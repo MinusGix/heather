@@ -76,6 +76,18 @@ fn a_directory_exposes_descendant_module_directories_to_its_closure() {
 }
 
 #[test]
+fn a_directory_checks_the_modules_kept_in_its_folders() {
+    // `foldered` has no file of its own: its modules live in `a/` and `b/`.
+    // Each nested module is a root, so `orphan`, which nothing imports, is
+    // checked too, and its refusal fails the directory.
+    let out = heather(&["check", "foldered"]);
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("orphan"), "{err}");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("foldered: ok"));
+}
+
+#[test]
 fn missing_file_is_a_run_failure() {
     let out = heather(&["check", "no-such.hthr"]);
     assert_eq!(out.status.code(), Some(2));

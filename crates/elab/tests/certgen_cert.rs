@@ -2,7 +2,7 @@
 //!
 //! Round A moved the ∃-kit fold — which lemma applies where, and whose
 //! certificate discharges a call — out of `crates/elab/src/certgen.rs` and into
-//! `lib/certgen_cert.hthr`. The property that move exists for is the one this
+//! `lib/certgen/certgen_cert.hthr`. The property that move exists for is the one this
 //! file tests: **a wrong fold is refused by the kernel**, not believed. One
 //! edit to the library, and the emission it produces must fail to check rather
 //! than prove anything about `dbl`.
@@ -10,7 +10,7 @@
 //! A binary of its own, for the reason `certgen.rs`'s header gives: checking a
 //! `match code` shell is 52 branch telescopes against a library-inductive
 //! motive, and `scripts/test`'s 8 MiB thread stack fits one per thread. This
-//! file elaborates `lib/certgen_code.hthr` exactly once, and gets its own
+//! file elaborates `lib/certgen/certgen_code.hthr` exactly once, and gets its own
 //! 300-second `ulimit -t` rail into the bargain (the certgen binary is the
 //! suite's second most expensive; `issues/certgen-harness-cost.md`).
 //!
@@ -25,12 +25,12 @@ use heather_syntax::parse_file;
 
 use crate::support;
 
-const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
-const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
+const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const CODE: &str = include_str!("../../../lib/certgen/certgen_code.hthr");
+const CERT: &str = include_str!("../../../lib/certgen/certgen_cert.hthr");
 
 /// The same support prelude `certgen.rs` slices — the ∃-composition kit and
 /// its chain — because a fold perturbation shows up in the *invariant*, which
@@ -150,7 +150,7 @@ fn a_perturbed_fold_is_refused_by_the_kernel() {
     // unconditionally after the seal.
     support::with_decl_cache(&mut e, |e| {
         elab(e, &support(), "support prelude");
-        elab(e, CODE, "lib/certgen_code.hthr");
+        elab(e, CODE, "lib/certgen/certgen_code.hthr");
     });
 
     // (2) The invocation's negative control, taken here because this session
@@ -165,7 +165,7 @@ fn a_perturbed_fold_is_refused_by_the_kernel() {
     // (3) The perturbed fold, with the file's own acceptance stripped so the
     // emission is what is on trial.
     let thms = bad_code.find("\ntheorem ").expect("the file states its own acceptance");
-    elab(&mut e, &bad_code[..thms], "mutated lib/certgen_cert.hthr");
+    elab(&mut e, &bad_code[..thms], "mutated lib/certgen/certgen_cert.hthr");
 
     let wrong = generate_in_language(&e, &lib_decl("dbl"), &GenCtx::new())
         .expect("a wrong fold still emits — that is the point");

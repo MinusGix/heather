@@ -23,7 +23,7 @@ it emits is a record projection — the same term the writer's own
 A constrained type variable **is** a structure, and the language had no way to
 say so. `<A: Monoid>` (the previous round) removes the dictionary's name from
 the signature, but a declaration that needs the dictionary in its *body* had to
-put the name back — which is why four of `lib/std/algebra.hthr`'s six
+put the name back — which is why four of `lib/std/algebra/algebra.hthr`'s six
 constrained declarations kept `requires m:` after the inline form shipped
 (`issues/requires-placement-syntax.md`, "What landed", correction 4).
 
@@ -269,7 +269,7 @@ Per `docs/testing-generated-terms.md`, `crates/elab/tests/traits_type_projection
    carrier with nothing to find reports its search.
 5. The other-reading rule pinned in both directions (§4), and the bare form
    pinned as having no other reading at all.
-6. `lib/std/algebra.hthr`: `Nat.zero = Nat::AddMonoid.zero` by `refl`, and
+6. `lib/std/algebra/algebra.hthr`: `Nat.zero = Nat::AddMonoid.zero` by `refl`, and
    `sum(Nil) = Nat.zero` — the empty fold reduced to the projected unit, which
    is `mconcat`'s migrated `Nil` arm computing.
 
@@ -317,7 +317,7 @@ So the feature is cheap and the *ancestor* case is not. The library keeps
 
 ## 10. What the library dropped, and what it kept
 
-`lib/std/algebra.hthr`, after this round. **Historical from 2026-08-09**: the
+`lib/std/algebra/algebra.hthr`, after this round. **Historical from 2026-08-09**: the
 operation-indexed round rewrote this file — the additive hierarchy and
 `plus_zero_of_comm` are deleted, and the table below describes a state that no
 longer exists. It is kept as the record of what *this* round moved.

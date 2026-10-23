@@ -48,7 +48,7 @@ fn bad(src: &str) -> String {
 /// **predicate** over the free value `m`. `dbl` is deliberately a recursive
 /// `fn` rather than a constructor, so `dbl(n)` at a neutral `n` is a stuck
 /// eliminator inside a *type* — the same shape `eval(n, p)(env, ir)` has in
-/// `lib/ir_v1.hthr`, and the one that could have been rejected but is not.
+/// `lib/certgen/ir_v1.hthr`, and the one that could have been rejected but is not.
 const HALTS: &str = r#"
 fn dbl(n: Nat) -> Nat {
     match n { Zero => 0, Succ(k) => Succ(Succ(dbl(k))) }
@@ -357,7 +357,7 @@ fn a_value_parameterized_record_nests_in_another() {
 
 /// Value parameters are a **telescope**: parameter `j`'s declared type may
 /// mention parameters `0..j`, and a *function-valued* parameter is fine (the
-/// `BindInv` shape of `lib/ir_v1.hthr` needs one — `reject_function_fields`
+/// `BindInv` shape of `lib/certgen/ir_v1.hthr` needs one — `reject_function_fields`
 /// keys on self-occurrence, not on shape).
 #[test]
 fn the_parameter_list_is_a_dependent_telescope() {

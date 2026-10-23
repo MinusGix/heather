@@ -7,7 +7,7 @@ created: 2026-10-21
 updated: 2026-10-21
 ---
 
-Found while writing the float rounding laws (`lib/std/float/round.hthr`,
+Found while writing the float rounding laws (`lib/std/num/float/round.hthr`,
 `Float::Le`). `Float(F)` is an inductive with a value parameter whose `Fin`
 constructor carries `f: Finite(F)`. With `fn Float::Le({F: Format}, a, b:
 Float(F))`, the type
@@ -47,7 +47,7 @@ argument's through the call path's `unify_arg_ty`, then the construction is
 built at the solution by the checking route
 (`docs/surface-value-parameters.md` §4.1). `Float::Fin(f)` and
 `Float::Inf(b, h)` both infer, so the four `Float::Le(F := F, …)` spellings in
-`lib/std/float/round.hthr` and the one in `lib_std_float_round.rs` are plain
+`lib/std/num/float/round.hthr` and the one in `lib_std_float_round.rs` are plain
 now. The call note for an unpinned value implicit suggests `name(F := …, …)`
 instead of `name<…>(…)`. Tests: `crates/elab/tests/inductive_value_parameters.rs`
 §7 (field of another value-parameterised type, a proposition field, literal and

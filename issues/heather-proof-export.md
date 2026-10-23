@@ -41,7 +41,7 @@ replacement symbol where the two theories differ. The first round:
   The open-tag β side condition is recommended to stay an exporter-side
   condition measured by [[export-library-sweep]] (design §11.3); Minus
   agreed.
-- 2026-10-21, later (PR #87): the closure of `lib/std/list.hthr` exports
+- 2026-10-21, later (PR #87): the closure of `lib/std/data/list.hthr` exports
   whole, 387 bindings with `List` as a native Lean inductive. Lean's kernel
   accepts it through the `addDecl` route, except two bodies that keep holes
   ([[export-typed-translation]]). The open-tag β side condition held on

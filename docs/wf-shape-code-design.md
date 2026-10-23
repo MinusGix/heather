@@ -17,8 +17,8 @@ the design twice before a line of the fix was written.
 Method: a throwaway exact node counter (`fmt::count_exact`, a tick in the
 `write_exact` path plus a scoped slot category at the three formers), run at
 the elaborator's two kernel-gate sites per declaration. Workloads: the
-`lib/ir_v1.hthr` declarations prefix, prefix + `lib/certgen_cert.hthr`,
-prefix + `lib/certgen_code.hthr`. Numbers live in the issue log; the shapes:
+`lib/certgen/ir_v1.hthr` declarations prefix, prefix + `lib/certgen/certgen_cert.hthr`,
+prefix + `lib/certgen/certgen_code.hthr`. Numbers live in the issue log; the shapes:
 
 1. **The slots are the workload.** Roughly three quarters of every emitted
    node — statements and bodies alike, on all three workloads — sat inside a
@@ -167,7 +167,7 @@ charter ("the match lowerings' own spine uses stay inline") and taken here
 because this round's counters put it above this issue's own slot. A `match` on a
 declaration carrying a `Wf`-lowered field wrote that field type verbatim into
 every `Case`, every `Inr` and every injection; the tier-0 half of it was the
-largest single term left in `lib/certgen_code.hthr` after the tier-1 half
+largest single term left in `lib/certgen/certgen_code.hthr` after the tier-1 half
 landed.
 
 ### 3.5 The motive, component-wise
@@ -300,5 +300,5 @@ annotation is copied from the binder's type during elaboration rather than from
 a callee's Ψ statement. Both are recorded on the issue.
 
 The residual that no spelling reaches is unchanged and still unowned:
-conversion's own cost on large values, which is what `lib/ir_v1.hthr`'s
+conversion's own cost on large values, which is what `lib/certgen/ir_v1.hthr`'s
 theorems pay and why that file moves least of the measured workloads.

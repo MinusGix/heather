@@ -282,15 +282,15 @@ fn a_mutual_group_is_one_slice_keyed_by_every_member() {
     const EV4: &str = "theorem ev4(): ev(4) = 1 { refl }";
     const IMPORTS: &str = "import logic; import nat; import list; import int; import omega; import pair;";
     let image = support::semantic_test_base(&[
-        ("logic", include_str!("../../../lib/std/logic.hthr")),
-        ("bool", include_str!("../../../lib/std/bool.hthr")),
-        ("nat", include_str!("../../../lib/std/nat.hthr")),
-        ("option", include_str!("../../../lib/std/option.hthr")),
-        ("pair", include_str!("../../../lib/std/pair.hthr")),
-        ("list", include_str!("../../../lib/std/list.hthr")),
-        ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-        ("int", include_str!("../../../lib/std/int.hthr")),
-        ("omega", include_str!("../../../lib/std/omega.hthr")),
+        ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+        ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+        ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+        ("option", include_str!("../../../lib/std/core/option.hthr")),
+        ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+        ("list", include_str!("../../../lib/std/data/list.hthr")),
+        ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+        ("int", include_str!("../../../lib/std/num/int.hthr")),
+        ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ])
     .semantic_image();
     let over_nat = |workers: usize| {

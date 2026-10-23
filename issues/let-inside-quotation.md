@@ -36,7 +36,7 @@ re-established, neither of which the block round touched:
   payload is a *third* thing — neither a letbox nor a program-layer alias —
   and what it means for the payload's context `g` is exactly the question.
 
-**Why it would be useful.** `lib/vec_code.hthr`'s templates are the client:
+**Why it would be useful.** `lib/lang/vec_code.hthr`'s templates are the client:
 every `meta fn … for vec.*` payload that wants a shared subterm currently
 either repeats it or hoists it to a `let code` above the quote, which is a
 different scope and only available for *code*-typed values.

@@ -44,7 +44,7 @@ In one line each, why:
   one intro form with their exact β (`out(Vis(c, k)) ≡ (Vis c, k)` up to
   Σ/Π η), where plain `corec` would only give `k` back up to bisimilarity
   (§2.2).
-- **No identification axiom.** Heather assumes no funext (`lib/std/itree.hthr`
+- **No identification axiom.** Heather assumes no funext (`lib/std/itree/itree.hthr`
   works up to `ITree::Same` for exactly this reason), and constructive is a
   principle (`docs/roadmap.md`). Bisimilarity as the working equivalence is
   what the setoid library is for.

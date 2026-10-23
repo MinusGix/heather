@@ -13,12 +13,12 @@ term the kernel refuses:
     error: the kernel rejected `list_eq_dec`: LevelMismatch
 
 Spelling the type argument fixes it, and nothing else about the site changes.
-`lib/std/list.hthr`'s `list_eq_dec` therefore writes `cong_tail<A>(p)` where
+`lib/std/data/list.hthr`'s `list_eq_dec` therefore writes `cong_tail<A>(p)` where
 `cong_tail(p)` is what a reader would write.
 
 ## Reproducing
 
-With `lib/std/list.hthr` at HEAD, in a module importing `logic`, `nat`, `list`:
+With `lib/std/data/list.hthr` at HEAD, in a module importing `logic`, `nat`, `list`:
 
 ```heather
 theorem my_cong_tail<A>({xs, ys: List<A>}, p: xs = ys): xs.tail() = ys.tail() {
@@ -44,7 +44,7 @@ level that route assigns does not survive the kernel.
 
 The site above checks without the type argument, and the reproduction is a
 test beside the other inference tests in `crates/elab/tests/implicit_args.rs`.
-`lib/std/list.hthr`'s `cong_tail<A>(p)` drops back to `cong_tail(p)`.
+`lib/std/data/list.hthr`'s `cong_tail<A>(p)` drops back to `cong_tail(p)`.
 
 ## Log
 

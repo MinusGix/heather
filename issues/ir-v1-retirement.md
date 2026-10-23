@@ -8,7 +8,7 @@ created: 2026-10-20
 updated: 2026-10-20
 ---
 
-Whether `ir_v1` and the certifying generator over it (`lib/ir_v1.hthr`,
+Whether `ir_v1` and the certifying generator over it (`lib/certgen/ir_v1.hthr`,
 `lib/certgen_*.hthr`) are retired onto FunctionIR, or kept as the Nat-level
 source IR.
 

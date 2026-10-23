@@ -1,6 +1,6 @@
 # The logical connectives, and their notation
 
-Source of truth for `lib/std/logic.hthr` and the grammar that spells it
+Source of truth for `lib/std/core/logic.hthr` and the grammar that spells it
 (`issues/std-logic-module.md`, landed 2026-08-16). Tests:
 `crates/elab/tests/logic.rs` (meaning), `crates/syntax/src/parser.rs`'s test
 module (spelling).

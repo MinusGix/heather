@@ -7,7 +7,7 @@ updated: 2026-08-05
 ---
 
 Every `.hthr` file is a whole program: there is no way for one file to use
-a declaration from another, so `lib/ir_v1.hthr` hand-declares a monomorphic
+a declaration from another, so `lib/certgen/ir_v1.hthr` hand-declares a monomorphic
 `OptVal` and a full Nat order kit, and every future library file pays the
 same tax again ([[prelude-option-and-friends]] is the record of that cost).
 
@@ -55,7 +55,7 @@ files make them matter; the design doc should leave them reachable.
   the §4 regime in `crates/elab/src/names.rs` with every table keyed
   `module::name`, the CLI import-DAG loader (`crates/cli/src/loader.rs`:
   dedup by path, cycle printed, `-L` with `lib/std` defaulted), and
-  `lib/std/{nat,option,list}.hthr` with `lib/ir_v1.hthr` migrated to
+  `lib/std/{nat,option,list}.hthr` with `lib/certgen/ir_v1.hthr` migrated to
   `import nat;`. Suite 936 → 971, coordinator-verified. Match arms turned
   out to already be scrutinee-directed (they position within the
   declaration), so cross-module arms were correct by construction; the

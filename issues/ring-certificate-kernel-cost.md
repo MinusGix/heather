@@ -25,7 +25,7 @@ Levers, none measured yet:
   normal forms compared;
 - ordering the atom table so the atoms that occur most get the low indices.
 
-Measure through `scripts/perf ab --source-patch` over `lib/std/rat.hthr`; the
+Measure through `scripts/perf ab --source-patch` over `lib/std/num/rat.hthr`; the
 gate column per item is the one that moved.
 
 ## What it assumes from elsewhere

@@ -28,7 +28,7 @@ the resolver's upcast. Owner-dispatch §7.1 built that upcast as a record
 literal — the ancestor's record over the child dictionary's own projections —
 written out afresh **per occurrence**.
 
-`lib/std/algebra.hthr`'s `plus_zero_of_comm` is four such occurrences in one
+`lib/std/algebra/algebra.hthr`'s `plus_zero_of_comm` is four such occurrences in one
 three-line proof, and it measured (2026-08-08, release, whole-file check):
 
 | spelling | file |
@@ -112,7 +112,7 @@ Three facts, all already relied on elsewhere:
 
 ## 3. What it measures
 
-`lib/std/algebra.hthr`, release, whole-file check, with `plus_zero_of_comm`
+`lib/std/algebra/algebra.hthr`, release, whole-file check, with `plus_zero_of_comm`
 migrated to `<G: AddCommMonoid>` and `G.plus(x, G.zero)`:
 
 | | before | after |

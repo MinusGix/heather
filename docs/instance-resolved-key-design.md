@@ -29,8 +29,8 @@ as though there were one of them. Nothing about the two is ambiguous to a
 reader or to name resolution, which qualifies by module. Only the registry
 could not tell them apart.
 
-The cost was a *kit item*: `lib/std/int.hthr` carried a comment where its
-`Decide` row should have been, and `lib/std/bool.hthr` paid a `Le_bool`
+The cost was a *kit item*: `lib/std/num/int.hthr` carried a comment where its
+`Decide` row should have been, and `lib/std/core/bool.hthr` paid a `Le_bool`
 suffix — an encoding-around that erases the datum and costs the carrier its
 operator.
 
@@ -172,13 +172,13 @@ Three carriers, all of them written `Le`, all of them registered:
 | `std/int` | `int::Le` | **lands** (the stalled row) | already there |
 | `std/bool` | `bool::Le` | **lands** | `designation <= at Bool := Le` (new) |
 
-- **`lib/std/int.hthr`**: `instance(a, b: Int) Decide<Le(a, b)>` replaces the
+- **`lib/std/num/int.hthr`**: `instance(a, b: Int) Decide<Le(a, b)>` replaces the
   stall comment.
-- **`lib/std/bool.hthr`**: the `_bool` suffixes come off —
+- **`lib/std/core/bool.hthr`**: the `_bool` suffixes come off —
   `Le_bool`/`le_bool_refl`/`le_bool_dec`/`leb_bool`/`leb_bool_refl` become
   `Le`/`le_refl`/`le_dec`/`leb`/`leb_refl` — and the module gains the `Decide`
   instance and the `<=` designation its order could not have before.
-- **`lib/std/algebra.hthr`**: the two `Cmp` instances now qualify
+- **`lib/std/algebra/algebra.hthr`**: the two `Cmp` instances now qualify
   (`nat::Le`, `bool::Le`, …). This is the API churn the rename buys, and it is
   the module regime working: a name declared in two visible modules is an
   error *at the use* naming both origins, and the answer is to say which.
@@ -190,7 +190,7 @@ declaring one, a file importing two of them had a symbol that resolved to
 *nothing* — ambiguity, correctly reported, at a symbol the writer never
 suspected of naming anything. A designation reads the carrier off the operand,
 which is exactly the datum the bare name lost, so `nat` and `bool` grow the
-row `int` already had. `lib/std/list.hthr` is the file that caught this: it
+row `int` already had. `lib/std/data/list.hthr` is the file that caught this: it
 imports `nat` and `bool` both, and writes `len(filter(xs, p)) <= len(xs)`.
 
 This is the mechanism the issue said the `Le_bool` dodge cost the carrier, now
@@ -295,5 +295,5 @@ what is under test, and two declarations say it in ten lines):
    claim, the three canonical names written verbatim, and a false decision
    refused as the control.
 
-Plus: the full suite green, `lib/ir_v1.hthr` unchanged,
+Plus: the full suite green, `lib/certgen/ir_v1.hthr` unchanged,
 `scripts/bench --check` in band.

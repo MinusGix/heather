@@ -59,7 +59,7 @@ frontend benchmarks — run via scripts/bench-frontend
   --filter <substr>   only families whose name contains <substr>
   --list              print the family list and exit
   --quick             fewer, shorter samples (shape only, not a number to trust)
-  --no-heavy          skip the cases that cost seconds (lib/ir_v1.hthr)
+  --no-heavy          skip the cases that cost seconds (lib/certgen/ir_v1.hthr)
   --save              write the measured run to the baseline file
   --check             compare against the baseline; exit 1 on a regression
   --baseline <path>   use another baseline file

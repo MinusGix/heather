@@ -54,8 +54,8 @@ arm and no subterm named. Same control on `filter_filter`, same message.
 
 ## The seven sites
 
-`lib/std/list.hthr`: `filter_append`, `filter_filter`, `filter_map`,
-`mem_filter`. `lib/list_algos.hthr`: `count_insert`, `len_insert`,
+`lib/std/data/list.hthr`: `filter_append`, `filter_filter`, `filter_map`,
+`mem_filter`. `lib/lang/list_algos.hthr`: `count_insert`, `len_insert`,
 `mem_insert` — these three restate `or_pick(d, …, …)` rather than `filter`'s
 `match`, which is the same tax at a *decided* scrutinee. Three that landed
 earlier pay it too (`std/list`'s `len_filter`, from wave L2; `list_algos`'s
@@ -84,7 +84,7 @@ count in the two files is **ten**.
 
 ## Acceptance
 
-`filter_append` and `filter_map` in `lib/std/list.hthr` lose their inner
+`filter_append` and `filter_map` in `lib/std/data/list.hthr` lose their inner
 `as λ b => …` motive and still check; the negative control is a `match` whose
 arms genuinely disagree, which must still be refused.
 

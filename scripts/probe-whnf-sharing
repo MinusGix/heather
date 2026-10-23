@@ -32,7 +32,7 @@ THE SHAPE
 =========
 
 Probe files are generated, not committed: each one is the DECLARATIONS half
-of `lib/ir_v1.hthr` (everything before the first `theorem`, exactly the cut
+of `lib/certgen/ir_v1.hthr` (everything before the first `theorem`, exactly the cut
 `crates/elab/tests/ir_v1.rs` makes) plus a single generated theorem. There is
 no import system — a `.hthr` file is a whole program — so generating is what
 keeps the probe honestly tracking the library instead of drifting from a
@@ -160,12 +160,12 @@ FLOOR_RSS = 2.0  # MB
 
 
 def declarations() -> str:
-    """`lib/ir_v1.hthr` up to its first theorem — the same cut the elab test
+    """`lib/certgen/ir_v1.hthr` up to its first theorem — the same cut the elab test
     makes. A probe file is these declarations plus one generated theorem."""
     text = LIB.read_text()
     cut = text.find("\ntheorem ")
     if cut < 0:
-        sys.exit("error: lib/ir_v1.hthr has no theorems; the cut is wrong")
+        sys.exit("error: lib/certgen/ir_v1.hthr has no theorems; the cut is wrong")
     return text[:cut]
 
 

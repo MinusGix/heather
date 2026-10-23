@@ -6,7 +6,7 @@ created: 2026-08-26
 updated: 2026-08-26
 ---
 
-`lib/std/bitvec.hthr` now has two deliberately different views of addition
+`lib/std/bitvec/bitvec.hthr` now has two deliberately different views of addition
 carry. `carry_add(n,a,b)` is the reusable arithmetic proposition stated through
 unsigned interpretation. `carry_add_bit(n,a,b)` is the structural ripple-carry
 Boolean needed by executable instruction semantics: deciding the former at an

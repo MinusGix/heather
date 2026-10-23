@@ -130,7 +130,7 @@ that shape twice, and both refutations are calculus facts worth keeping
    `CodeTy` *locals* and letbox them). Consequence: genericity lives
    *inside* the code, as code-level Π over the universe — ordinary MLTT.
 
-What lands (`lib/vec_code.hthr`):
+What lands (`lib/lang/vec_code.hthr`):
 
 ```heather
 meta fn map_code(g: Ctx) -> Code(g |-
@@ -264,7 +264,7 @@ at the dispatch site.
 
 ## 7. Acceptance
 
-1. `lib/vec_code.hthr` declares `map_code` in the surface slice; the
+1. `lib/lang/vec_code.hthr` declares `map_code` in the surface slice; the
    declaration kernel-checks at `Layer::Meta`.
 2. The hook evaluates it at a **literal** length and element type
    `Nat`: `.map` through the hook produces a term convertible with the
@@ -303,7 +303,7 @@ at the dispatch site.
    `tabulate` keeps the index and loses it anyway (an indexed container
    of unconstrained elements constrains nothing about them), and `nth`'s
    step arm has `head(v)` in scope beside the ih. The unifying reading,
-   recorded in the `lib/vec_code.hthr` headers where each refutation
+   recorded in the `lib/lang/vec_code.hthr` headers where each refutation
    lives: an arm is forced when its context is too poor to offer an
    alternative, never because the result type is indexed. The conversion
    cross-check, not the type, is what carries adequacy in general.

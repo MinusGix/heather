@@ -208,9 +208,9 @@ head now counts once there. That is a lower bound on its true occurrences,
 so the condition can only refuse more than an exact count would, never
 accept more.
 
-This made two library rows expressible. `lib/std/list.hthr` now has
+This made two library rows expressible. `lib/std/data/list.hthr` now has
 `instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys>` in place of the
-`List<Nat>`-only instance, and `lib/std/bitvec.hthr`'s four order instances
+`List<Nat>`-only instance, and `lib/std/bitvec/bitvec.hthr`'s four order instances
 drop their `@`. The list instance also needed a unifier change: the goal's
 endpoint type, inferred from constructor values, is the *inline* lowering,
 while the instance's `List<A>` is the declaration's reference.

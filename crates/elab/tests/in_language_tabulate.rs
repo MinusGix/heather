@@ -1,5 +1,5 @@
 //! The third in-language derived artifact (issues/quotation-stage-artifacts.md):
-//! `lib/vec_code.hthr`'s `tabulate_code` kernel-checks at `Layer::Meta`, the
+//! `lib/lang/vec_code.hthr`'s `tabulate_code` kernel-checks at `Layer::Meta`, the
 //! evaluation hook routes `elab_container_ih`'s phase 2 through it, and the
 //! emitted terms are convertible with the Rust `vec::tabulate` oracle's —
 //! adequacy, not just typing.
@@ -37,7 +37,7 @@ use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
 #[cfg(feature = "value-metrics")]
 use heather_kernel::value::ValueMetrics;
 
-const LIB: &str = include_str!("../../../lib/vec_code.hthr");
+const LIB: &str = include_str!("../../../lib/lang/vec_code.hthr");
 
 /// The lib as it stood before `tabulate_code` — `map_code` and `fold_code`
 /// only. The cut is by declaration text rather than by line number so that a
@@ -45,7 +45,7 @@ const LIB: &str = include_str!("../../../lib/vec_code.hthr");
 fn lib_before_this_round() -> &'static str {
     let cut = LIB
         .find("meta fn tabulate_code")
-        .expect("lib/vec_code.hthr declares `tabulate_code`");
+        .expect("lib/lang/vec_code.hthr declares `tabulate_code`");
     // Back up over the declaration's header comment, which is the block of
     // `//` lines immediately above it.
     let head = &LIB[..cut];

@@ -7,14 +7,14 @@ Status: **design agreed 2026-09-24; probes done (§8); slices A0, A, B and C lan
 ## 1. What exists, and what this adds
 
 The source/IR contract (`docs/function-ir-readonly-loops.md`,
-`lib/function_ir_loop.hthr`) fixes the meaning: one evaluator `loop_run`, a
+`lib/native/function_ir/function_ir_loop.hthr`) fixes the meaning: one evaluator `loop_run`, a
 five-parameter wrapper reflected with its step function, and
 `LoopReadable` defined from the evaluator's own outcome. The 09-20 rounds
 also built one *iteration's* physical pieces: typed certificates for pure
 source functions at explicit placements (`generate_elaborated_typed_x86`), a
 byte load followed by a reflected body (`generate_elaborated_read_x86`),
 effectful composition (`AccessCode`: pure, read, sequence, forward branch),
-and the word/Nat bridges in `lib/function_ir_loop_x86.hthr` (bounds test
+and the word/Nat bridges in `lib/native/function_ir/function_ir_loop_x86.hthr` (bounds test
 polarity, address word, cursor advance). The guarded-read test composes one
 guard → read → body path, but its composition proof is a hand-written
 fixture (`crates/elab/tests/fixtures/guarded_read_consumer.hthr.in`).
@@ -267,7 +267,7 @@ family) before any library work:
 - **A0 — near branches** (V1): `NearControl` in `x86_64_block`, landed 28d84281.
 - **A — library, landed.** `AccessLoop` in `x86_64_access_code` (bytes,
   layout, `LoopRuns`, the exit/break/continue intro lemmas) and its
-  `access_memory` case; `lib/function_ir_loop_trace.hthr` (`LoopHead`, the two
+  `access_memory` case; `lib/native/function_ir/function_ir_loop_trace.hthr` (`LoopHead`, the two
   obligations, `LoopObserved`, `loop_trace`); the word lemmas and the
   `loop_guard`, `loop_next_cursor`, `loop_next_budget` and `loop_copy` source
   functions in `function_ir_loop_x86`. `crates/elab/tests/function_ir_loop_trace.rs`

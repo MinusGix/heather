@@ -9,8 +9,8 @@ updated: 2026-10-22
 ---
 
 `CoTree::program(t)` is the `Program` of `t`'s approximations
-(`lib/std/coitree.hthr`), and the finite library has its own fuelled
-programs (`Program::iter`, `Program::rec`, `lib/std/itree_trace.hthr`).
+(`lib/std/itree/coitree.hthr`), and the finite library has its own fuelled
+programs (`Program::iter`, `Program::rec`, `lib/std/itree/itree_trace.hthr`).
 Nothing yet says they agree.
 
 Done when:
@@ -29,4 +29,4 @@ Done when:
 
 ## Log
 
-- 2026-10-22: Bisimilar trees give programs that refine each other (`Bisim::refines`), and so do trees equivalent up to taus (`Eutt::refines`, `Eutt::refined`), all in `lib/std/coitree_eutt.hthr`. Still open: `CoTree::program(iter(…))` against `Program::iter`, and the optional embedding.
+- 2026-10-22: Bisimilar trees give programs that refine each other (`Bisim::refines`), and so do trees equivalent up to taus (`Eutt::refines`, `Eutt::refined`), all in `lib/std/itree/coitree_eutt.hthr`. Still open: `CoTree::program(iter(…))` against `Program::iter`, and the optional embedding.

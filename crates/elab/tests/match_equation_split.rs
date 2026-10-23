@@ -197,7 +197,7 @@ fn a_block_expression_may_split() {
 
 // -- §3: the equation binding ----------------------------------------------
 
-/// The motivating shape, minimized from `lib/ir_v1.hthr`'s `step_mono`
+/// The motivating shape, minimized from `lib/certgen/ir_v1.hthr`'s `step_mono`
 /// `LoopIter` arm: a **neutral** scrutinee (`f1(a)`, which reduces to nothing),
 /// an **open** payload, an explicit dependent motive, and a *checking*
 /// position. The equation is load-bearing twice — `hyp(a, v, h)` transports the
@@ -283,7 +283,7 @@ fn the_binder_is_the_equation_scrutinee_equals_pattern() {
          }}"
     ));
     // The other direction needs a `sym`, which is exactly the tax the
-    // hand-written convoy in `lib/ir_v1.hthr` was paying (§3.2).
+    // hand-written convoy in `lib/certgen/ir_v1.hthr` was paying (§3.2).
     let msg = bad(&format!(
         "{EQ_USED}
          fn uses_h_flipped<A>(g: A -> Res<A>, a: A) -> Nat {{

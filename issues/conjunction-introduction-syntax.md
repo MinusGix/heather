@@ -23,7 +23,7 @@ type parsing. Pattern/elimination spelling should be considered at the same
 time so introduction does not become a one-off special case.
 
 Acceptance should include the `add64_valid` input-uniqueness proof in
-`lib/function_ir.hthr`, a nested three-or-more-field conjunction, and parser
+`lib/native/function_ir/function_ir.hthr`, a nested three-or-more-field conjunction, and parser
 controls distinguishing term introduction from `P ∧ Q` and Boolean `a && b`.
 
 ## Resolution

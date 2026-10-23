@@ -16,7 +16,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("parser_primitives", include_str!("../../../../lib/std/parser/parser_primitives.hthr")),
     ("parser_recursion", include_str!("../../../../lib/std/parser/parser_recursion.hthr")),
     ("parser_repetition", include_str!("../../../../lib/std/parser/parser_repetition.hthr")),
-    ("parser", include_str!("../../../../lib/std/parser.hthr")),
+    ("parser", include_str!("../../../../lib/std/parser/parser.hthr")),
 ];
 
 pub fn load(e: &mut Elaborator) {

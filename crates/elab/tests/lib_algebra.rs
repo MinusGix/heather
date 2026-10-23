@@ -1,4 +1,4 @@
-//! `lib/std/algebra.hthr` — the library's classes and instances, checked as a
+//! `lib/std/algebra/algebra.hthr` — the library's classes and instances, checked as a
 //! module closure (`docs/traits-design.md` §13, `issues/traits.md`).
 //!
 //! This is the traits feature's first *library* corpus rather than a corpus
@@ -37,13 +37,13 @@ use heather_elab::{ElabError, Elaborator, SemanticImage};
 
 use crate::support;
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra/algebra.hthr");
 
 /// The closure in dependency order — the order the CLI's loader would pick.
 fn modules() -> Vec<(&'static str, &'static str)> {

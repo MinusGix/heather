@@ -12,7 +12,7 @@
 // else. With both shells here, the whole fragment definition — signature and
 // body — reads off this one file.
 //
-// Elaborated on top of `lib/ir_v1.hthr`'s declarations prefix — `Ir`, `Refs`,
+// Elaborated on top of `lib/certgen/ir_v1.hthr`'s declarations prefix — `Ir`, `Refs`,
 // `Prog`, `Val` and `import nat;`'s `add`/`sub` come from there, so this file
 // declares no import and redeclares nothing.
 //

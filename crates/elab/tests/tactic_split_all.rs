@@ -1,5 +1,5 @@
 //! Round 3 of `docs/host-elaboration-interface-design.md`: `split_all`
-//! written in Heather (`lib/std/tactic.hthr`) on the host's `Cases`,
+//! written in Heather (`lib/std/tactic/tactic.hthr`) on the host's `Cases`,
 //! `Constructor` and `Close`, closing the goals the Rust combinator closes in
 //! `goal_combinators.rs`, with `reflexivity()` as the leaf where that file's
 //! leaf block is `refl`.
@@ -17,15 +17,15 @@ use heather_elab::{ElabError, Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("char", include_str!("../../../lib/std/char.hthr")),
-    ("string", include_str!("../../../lib/std/string.hthr")),
-    ("tactic", include_str!("../../../lib/std/tactic.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("char", include_str!("../../../lib/std/text/char.hthr")),
+    ("string", include_str!("../../../lib/std/text/string.hthr")),
+    ("tactic", include_str!("../../../lib/std/tactic/tactic.hthr")),
 ];
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();

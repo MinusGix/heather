@@ -74,7 +74,7 @@ on a customer that needs liveness or concurrency.
     `a^ω`) satisfies every approximant and fails the gfp, so choice trees
     (doc §6.2) reopen Q1. Nothing the finitary route needs is lost for
     deterministic trees.
-- 2026-10-21: Q2, first half (`it-core`): `lib/std/itree.hthr`, written up in
+- 2026-10-21: Q2, first half (`it-core`): `lib/std/itree/itree.hthr`, written up in
   `docs/itree-core-round.md`. Events, sums and container morphisms; the tree
   with a `Cut` leaf; `bind`, `map`, `translate`, `iter` and `mrec` (fuel as an
   argument), `interp` (structural, no fuel). The fit doc's claim checks: the
@@ -88,7 +88,7 @@ on a customer that needs liveness or concurrency.
   half (`it-refinement`): traces, `is_trace_of`, refinement, the bridge to
   `converges`/`fuel_monotone`; and Q3, the state handler.
 - 2026-10-21: Q2, second half, and Q3 (`it-refinement`):
-  `lib/std/itree_trace.hthr` and `lib/std/itree_state.hthr`, written up in
+  `lib/std/itree/itree_trace.hthr` and `lib/std/itree/itree_state.hthr`, written up in
   `docs/itree-refinement-round.md`. Traces end in a prefix, a pending call or
   a return; `IsTrace` (Fig. 20) is computed from the tree, and a `Cut`
   produces only the empty prefix. A program is a family over fuel:

@@ -12,7 +12,7 @@
 //! What it deliberately does **not** do is measure. Every timing here is a
 //! shape at best: the point is that the fixtures build, validate, run and
 //! report, at the smallest size of each family and with the heavy corpus
-//! cases (`lib/ir_v1.hthr`, ~a minute) excluded. `scripts/test`'s CPU rail is
+//! cases (`lib/certgen/ir_v1.hthr`, ~a minute) excluded. `scripts/test`'s CPU rail is
 //! 300 seconds and `crates/elab/tests/ir_v1.rs` already spends a quarter of
 //! it.
 

@@ -35,10 +35,10 @@ resolver declining.
 
 ## What it costs today
 
-`lib/std/list.hthr` registers `instance(xs, ys: List<Nat>) Decide<xs = ys>`
+`lib/std/data/list.hthr` registers `instance(xs, ys: List<Nat>) Decide<xs = ys>`
 instead, so `decide` answers an equation between two `List<Nat>` and nothing
 else: `List<Char>`, `List<List<Nat>>` and every other element type call
-`list_eq_dec` by name. `lib/std/string.hthr` does exactly that, which is fine
+`list_eq_dec` by name. `lib/std/text/string.hthr` does exactly that, which is fine
 there — it wanted the decider, not the goal — but a caller who writes
 `decide` at two `List<Char>` gets a missing-instance trace listing eleven
 candidates, none of which mentions the reason.
@@ -64,4 +64,4 @@ head-absent refusal still fires for a binder nothing determines
 
 - 2026-09-18: Filed from the `Char`/`String` rework, whose generic list
   equality is its first customer.
-- 2026-09-24: 2026-09-24: Landed. The occurrence rule and Paterson's variable condition now consult the elaborated head when the written one lacks a binder (docs/value-generic-instances-design.md §4.4), and the unifier re-spells an inline lowering against a code reference (docs/unifier-completeness-design.md §10.2). lib/std/list.hthr has the generic instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys>; decide answers at List<Nat>, List<Char> and List<List<Nat>> (crates/elab/tests/char_string_literals.rs). bitvec's four order instances drop their @. Full suite 2945 passed.
+- 2026-09-24: 2026-09-24: Landed. The occurrence rule and Paterson's variable condition now consult the elaborated head when the written one lacks a binder (docs/value-generic-instances-design.md §4.4), and the unifier re-spells an inline lowering against a code reference (docs/unifier-completeness-design.md §10.2). lib/std/data/list.hthr has the generic instance<A: DecEq>(xs, ys: List<A>) Decide<xs = ys>; decide answers at List<Nat>, List<Char> and List<List<Nat>> (crates/elab/tests/char_string_literals.rs). bitvec's four order instances drop their @. Full suite 2945 passed.

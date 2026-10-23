@@ -1418,7 +1418,7 @@ theorem Rat::pow_negSucc_inv(self x: Rat, k: Nat, h: x.Apart(0) := infer): x ^ N
 }
 
 // ---------------------------------------------------------------------------
-// The commutative ring modulo `≈` (lib/std/semiring.hthr): the identity-free
+// The commutative ring modulo `≈` (lib/std/algebra/semiring.hthr): the identity-free
 // carrier of the semiring layers. The semigroups and commutativity above fill
 // their parents; what is new is the units, the additive inverse, the second
 // distributive law and zero's annihilation.

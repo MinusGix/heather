@@ -411,7 +411,7 @@ pub(crate) fn elab_nth(
         &Level::Zero,
     )?;
     // The evaluation hook, as in `elab_map`/`elab_fold`:
-    // `lib/vec_code.hthr`'s `nth_code` claims `vec.nth` when the lib is in
+    // `lib/lang/vec_code.hthr`'s `nth_code` claims `vec.nth` when the lib is in
     // scope, and this declines silently when it is not. The kernel schema
     // stays the oracle and the fallback either way.
     if let Some(t) = elab.try_vector_template(
@@ -573,7 +573,7 @@ pub(crate) fn elab_container_ih(
         // The evaluation hook, as in `elab_map`/`elab_fold` — the
         // call `docs/meta-def-registration-design.md` §9 says this site
         // gains once the surface can write `Fin` and its indices.
-        // `lib/vec_code.hthr`'s `tabulate_code` claims `vec.tabulate` when
+        // `lib/lang/vec_code.hthr`'s `tabulate_code` claims `vec.tabulate` when
         // the lib is in scope; without it this declines silently and the
         // schema below runs unchanged.
         //

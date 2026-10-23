@@ -19,7 +19,7 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
 
 ## Plan
 
-- Round 1 (this issue): `lib/std/char.hthr`, `lib/std/string.hthr`; `'x'`
+- Round 1 (this issue): `lib/std/text/char.hthr`, `lib/std/text/string.hthr`; `'x'`
   and `"…"` literals in the lexer, parser and elaborator, with `CharLiteral`
   and `StringLiteral` classes beside `Numeral` for other carriers; tests per
   the design doc §4.
@@ -31,7 +31,7 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
 
 ## Log
 
-- 2026-09-18: Round 1 landed: `lib/std/char.hthr`, `lib/std/string.hthr`, the two lexer
+- 2026-09-18: Round 1 landed: `lib/std/text/char.hthr`, `lib/std/text/string.hthr`, the two lexer
   tokens with their parser and elaborator forms, and the `CharLiteral` /
   `StringLiteral` classes (in `char`/`string` rather than `algebra`, which
   would have had to import them). Filed on the way:
@@ -50,9 +50,9 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
   [[generic-congruence-inferred-type-arg-level-mismatch]], which forced
   `cong_tail<A>(p)` at one use site.
 - 2026-09-18: Round 2 chartered 2026-09-18: docs/string-char-design.md §5. Finding on the way: a truncated `Char.valid` cannot refute a decoder (squash eliminates only into squash), so the witness becomes Bool-reflected (`IsTrue(is_scalar(code))`), which also makes `Decide<scalar(code)>` a one-line match.
-- 2026-09-18: Round 2 landed, theorems 1–6. `lib/std/utf8.hthr` — `encode`/`decode`
+- 2026-09-18: Round 2 landed, theorems 1–6. `lib/std/text/utf8.hthr` — `encode`/`decode`
   with Rust's strict `from_utf8` rejections, the `Utf8` record, `ofString` and
-  `Utf8::toString`; `lib/std/char.hthr`'s witness is now `IsTrue(is_scalar(code))`
+  `Utf8::toString`; `lib/std/text/char.hthr`'s witness is now `IsTrue(is_scalar(code))`
   and `scalar_dec` is gone. Kit that had to be built on the way, each where the
   fact belongs: `bool`'s `IsTrue` section, `nat`'s `leb`/`Le` bridge and
   `half_lt_of_lt_double`, `bitvec`'s `toNat_ofNat` (theorem 1, which `bitvec`
@@ -62,5 +62,5 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
   is no motive to case on — `docs/string-char-design.md` §5.5 records the way
   through. Filed on the way: [[utf8-decode-conversion-blowup]], which forced
   `push_step` to be stated at `emit` rather than at `decode_char`.
-- 2026-09-18: Round 2 landed 2026-09-18: `lib/std/utf8.hthr` with theorems 1–6; the strictness theorem is [[utf8-encode-decode-strictness]]; the fuel-shaped decoder is [[list-course-of-values-recursion]]; conversion finding [[utf8-decode-conversion-blowup]].
+- 2026-09-18: Round 2 landed 2026-09-18: `lib/std/text/utf8.hthr` with theorems 1–6; the strictness theorem is [[utf8-encode-decode-strictness]]; the fuel-shaped decoder is [[list-course-of-values-recursion]]; conversion finding [[utf8-decode-conversion-blowup]].
 - 2026-09-18: Theorem 7 closed 2026-09-18 ([[utf8-encode-decode-strictness]]), and theorem 8 with it: `Utf8` and `String` are mutually inverse presentations. docs/string-char-design.md §5.6.

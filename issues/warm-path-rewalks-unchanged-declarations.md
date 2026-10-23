@@ -9,7 +9,7 @@ code: crates/cache/src/merkle.rs @ 33c65ef
 ---
 
 After the structural walker ([[parallel-checking-and-caching]] log,
-2026-08-06), a warm `heather check --cache lib/ir_v1.hthr` is ~2.2 s:
+2026-08-06), a warm `heather check --cache lib/certgen/ir_v1.hthr` is ~2.2 s:
 roughly 43% parse+elaborate, 57% walking and hashing declarations whose
 source did not change. The encoder is no longer the lever — the v2 round
 measured hashing at ~1.25 s total and SHA-256 itself was never the cost —

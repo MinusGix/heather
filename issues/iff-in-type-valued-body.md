@@ -99,7 +99,7 @@ exactly as this issue asked.
 - 2026-09-04: Filed after the user requested an owner for the parser friction
   found during the manual Mergeable round. No parser change in this filing.
 - 2026-09-17: CLOSED. `crates/syntax/src/parser.rs`: brackets lift the codomain
-  `↔` restriction. `lib/std/list_setoid.hthr` now writes
+  `↔` restriction. `lib/std/data/set/list_setoid.hthr` now writes
   `(a: A) → (Mem(a, xs) ↔ Mem(a, ys))` and the whole module — including every
   downstream `Iff(mp := …, mpr := …)` proof — checks unchanged, which is this
   issue's "compare with the named-constructor spelling". Tests:

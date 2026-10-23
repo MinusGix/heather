@@ -22,15 +22,15 @@ use crate::read_loop_fixture::checker_with;
 
 const MODULES: &[(&str, &str)] = &[
     ("x86_64_step_forms", include_str!("../../../lib/std/arch/x86_64/x86_64_step_forms.hthr")),
-    ("linux_x86_64_determinism", include_str!("../../../lib/linux_x86_64_determinism.hthr")),
-    ("itree", include_str!("../../../lib/std/itree.hthr")),
-    ("itree_trace", include_str!("../../../lib/std/itree_trace.hthr")),
-    ("linux_trees", include_str!("../../../lib/linux_trees.hthr")),
-    ("itree_sim", include_str!("../../../lib/std/itree_sim.hthr")),
-    ("linux_trees_sim", include_str!("../../../lib/linux_trees_sim.hthr")),
-    ("linux_x86_64_sim", include_str!("../../../lib/linux_x86_64_sim.hthr")),
-    ("stream_filter", include_str!("../../../lib/stream_filter.hthr")),
-    ("stream_filter_spec", include_str!("../../../lib/stream_filter_spec.hthr")),
+    ("linux_x86_64_determinism", include_str!("../../../lib/std/os/linux/linux_x86_64_determinism.hthr")),
+    ("itree", include_str!("../../../lib/std/itree/itree.hthr")),
+    ("itree_trace", include_str!("../../../lib/std/itree/itree_trace.hthr")),
+    ("linux_trees", include_str!("../../../lib/std/os/linux/linux_trees.hthr")),
+    ("itree_sim", include_str!("../../../lib/std/itree/itree_sim.hthr")),
+    ("linux_trees_sim", include_str!("../../../lib/std/os/linux/linux_trees_sim.hthr")),
+    ("linux_x86_64_sim", include_str!("../../../lib/std/os/linux/linux_x86_64_sim.hthr")),
+    ("stream_filter", include_str!("../../../lib/native/stream_filter.hthr")),
+    ("stream_filter_spec", include_str!("../../../lib/native/stream_filter_spec.hthr")),
 ];
 
 static PREFIX_LOAD: Mutex<()> = Mutex::new(());

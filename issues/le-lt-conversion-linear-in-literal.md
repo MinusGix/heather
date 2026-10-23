@@ -28,7 +28,7 @@ that as the reason `lt_succ_iff_le` and `lt_succ_self` need no proof. The
 identity is unreachable above a small literal, so any lemma that moves
 between the two forms at a Unicode-sized constant is unwritable.
 
-Found while writing `lib/std/char.hthr` ([[string-char-spec-types]]): the
+Found while writing `lib/std/text/char.hthr` ([[string-char-spec-types]]): the
 first spelling of `scalar_dec` refuted the surrogate range by `le_trans`
 against `¬(Succ(code) <= 0xD800)` and hit this. The landed spelling avoids it
 by deciding `0xD800 <= code` with `le_dec` directly — cheap at a closed code,

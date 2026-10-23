@@ -75,7 +75,7 @@ meta fn map_code(g: Ctx) for vec.map -> Code(g |-
 ) { code { … } }
 ```
 
-Two things changed against the landed `lib/vec_code.hthr`: the `for vec.map`
+Two things changed against the landed `lib/lang/vec_code.hthr`: the `for vec.map`
 clause, and **every payload binder is named**. The names are not decoration —
 they are the argument protocol (§2.3). A dispatched template with an anonymous
 binder (`A -> B` rather than `(f: A -> B)`) is a registration error pointing at
@@ -131,7 +131,7 @@ Step 3 also transfers §7 of the map design doc — parametric rigidity — to u
 templates for free. `map_code` is rigid *at its generic type*; a registered
 template is required to have that type; so the rigidity argument covers every
 registered template, not only the one in `lib/`. Where the type is not rigid
-(`fold_code`, whose result carries no index — see the `lib/vec_code.hthr`
+(`fold_code`, whose result carries no index — see the `lib/lang/vec_code.hthr`
 header) the conversion cross-check keeps doing the real work, unchanged.
 
 **This is not a soundness gate**, and the doc should keep saying so where the
@@ -187,7 +187,7 @@ them, however many there are".
 | decl: unnamed / unknown / duplicated / missing binder | loud, points at the binder | the names *are* the protocol |
 | decl: statement not convertible with the slot type | loud, prints both | a shape the use site could not feed |
 | decl: slot already claimed | loud, names the first template | two templates, one site |
-| use: no template registered for the slot | **decline**, Rust path, silent | the ordinary case for every file that never loads `lib/vec_code.hthr` |
+| use: no template registered for the slot | **decline**, Rust path, silent | the ordinary case for every file that never loads `lib/lang/vec_code.hthr` |
 | use: a `Type` ingredient at level ≠ 0, or with no Tarski code | **decline**, Rust path, silent | the level-0 template honestly cannot take this instance |
 | use: evaluation does not reach a `box` within fuel | loud, names the stuck head | never emit a half-reduced term (§6 of the map design) |
 | use: payload does not type at the use site | loud, "the template is wrong, not the caller" | as today |
@@ -424,7 +424,7 @@ apply to every newly-ported template and are already the shape of
 `crates/elab/tests/template_registration.rs`.
 
 1. **Nothing changed for the existing families.** Both suites stay green after
-   `lib/vec_code.hthr` gains its `for` clauses and its binder names, including
+   `lib/lang/vec_code.hthr` gains its `for` clauses and its binder names, including
    the cross-checks and the "still elaborates without the lib" control. Also
    back-port the fold suite's `assert!(ht != rt)` vacuity guard to the map
    suite (already flagged in `issues/quotation-stage-artifacts.md`'s log) —
@@ -535,7 +535,7 @@ named-bag call of §2.3 and lose their template names, argument vectors, and
 prefix comments. `elab_container_ih` gains the same call for `vec.tabulate`
 when §4.4's blocker clears — not in this round.
 
-**`lib/vec_code.hthr`** — two `for` clauses, four binders named, and a header
+**`lib/lang/vec_code.hthr`** — two `for` clauses, four binders named, and a header
 note that the signature is now checked against the slot.
 
 Net: one new small module, one new parser clause, one hook renamed and

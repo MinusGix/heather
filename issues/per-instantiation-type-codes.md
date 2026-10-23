@@ -22,7 +22,7 @@ instantiation of a parameterized or value-indexed one — `List<BitVec(8)>`,
   same date: "only a reference removes it");
 - the emission walker's dominant residue is the boxed literal a `→ Type`
   body or a type argument quotes through `code_of` (578 of 578 findings on
-  the five-node x86 module, the `Pair` family on `lib/ir_v1.hthr`;
+  the five-node x86 module, the `Pair` family on `lib/certgen/ir_v1.hthr`;
   [[emission-walker-residual-sites]]);
 - `MachineState<M>` is the type every x86 theorem states
   ([[inductive-spelling-codes-nonrecursive]] lever 2).
@@ -61,7 +61,7 @@ through `emit_ty` and the walker audits it; guards can only decline
   `mix_native_loaded_byte` in the conv-miss table are gone or O(1); before
   and after on one furnace box, `--item-timings`, release, `value-metrics`.
 - The emission walker's boxed-literal findings on the five-node module and
-  `lib/ir_v1.hthr` drop, if `code_of` quotes the respelled type (the design
+  `lib/certgen/ir_v1.hthr` drop, if `code_of` quotes the respelled type (the design
   decides whether that slice rides along; if not, it says why).
 - The reflection boundary still unspells (certgen suite green); module
   images encode the new key; `scripts/bench --check` holds; plain full

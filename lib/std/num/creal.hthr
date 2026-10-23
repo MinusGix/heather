@@ -1577,7 +1577,7 @@ theorem CReal::mul_lt_mono_l({x, y, z: CReal}, h: x < y, hz: 0 < z): z * x < z *
 }
 
 // ---------------------------------------------------------------------------
-// The commutative ring modulo `≈` (lib/std/semiring.hthr). The semigroups
+// The commutative ring modulo `≈` (lib/std/algebra/semiring.hthr). The semigroups
 // and commutativity registered with `+` and `*` fill their parents; what is
 // new is the units, the additive inverse, the second distributive law and
 // zero's annihilation, each the law above read from the other side.

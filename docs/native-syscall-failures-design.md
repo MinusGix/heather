@@ -30,7 +30,7 @@ Decisions (2026-09-27, with the user; do not relitigate):
 3. **Determinism** is not this round. The claim stays "a run with this
    trace exists", and uniqueness is a separate `FetchedStep` theorem.
 
-## 2. The trace model (`lib/linux_x86_64_io.hthr`)
+## 2. The trace model (`lib/std/os/linux/linux_x86_64_io.hthr`)
 
 The responses:
 
@@ -152,7 +152,7 @@ it is an error, because a successful count is at most 4096.
 
 ## 5. Library shape
 
-- `lib/linux_x86_64_io.hthr`: §2, and `sent`.
+- `lib/std/os/linux/linux_x86_64_io.hthr`: §2, and `sent`.
 - `lib/elf64_read_loop.hthr`: `eof_from` recurses on `List<ReadOutcome>`,
   not chunks. `Interrupted` is one more arm, which returns to the read label
   with R13 unchanged, and `Failed` ends at the failure block. `EofChunks`
@@ -246,7 +246,7 @@ Each amendment overrides the section it names.
   `test_self_negative/nonnegative`, `near_sign_*_rip`) are in
   `lib/std/arch/x86_64/x86_64_fetched_code.hthr`. The errno facts (`errno_value`,
   `errno_negative`, `errno_nonzero`, `eintr_plus_four`,
-  `other_errno_plus_four`) are in `lib/linux_x86_64_io.hthr`.
+  `other_errno_plus_four`) are in `lib/std/os/linux/linux_x86_64_io.hthr`.
 - **§5, arithmetic in the loops.** Every Nat step inside `write_from`'s arms
   is a small lemma (`all_sent`, `left_after`, `rest_room`, …), the
   `eof_room` pattern. `omega` inside those arms meets facts it cannot spell

@@ -638,7 +638,7 @@ paper too).
   free. The `has_defs` gate survives. The rescoping `shift_global(v + 1)`
   that every unfold used to recompute is memoized per `GlobalVar` in a
   `reduce::GlobalCache` owned beside the Ψ it belongs to (7.8% of a routine
-  `heather check lib/ir_v1.hthr`) — and on the **value** path is not
+  `heather check lib/certgen/ir_v1.hthr`) — and on the **value** path is not
   performed at all: the machine evaluates the body *as stored*, under a
   global-index offset carried by the closure's environment, so a definition
   is read rather than copied however many gate calls unfold it
@@ -829,7 +829,7 @@ paper too).
   rather than shrink, taking the machinery's main customer with it, and that
   the honest outcome would then be deletion. Half the prediction held: the
   bounds machinery is now **0.16%** of a routine `heather check
-  lib/ir_v1.hthr` profile. Deletion is nonetheless wrong, and the
+  lib/certgen/ir_v1.hthr` profile. Deletion is nonetheless wrong, and the
   measurement says so plainly — disabling the two skip hooks costs
   **1.47×** on that same check and turns
   `nat/step-into-closed-body` from slope −0.01 into slope 0.99 (150× at

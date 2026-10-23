@@ -243,5 +243,5 @@ with them, their build recipe and this section's old text is `189659d` (tag
 `native-v0`). They come back as programs of an effectful source whose meaning
 is an interaction tree, compiled by a compiler proved correct once
 (`issues/native-first-compiled-program.md`). Their specs survive:
-`lib/std/decimal.hthr` (what `%d` and `%7d` print) and `lib/stream_filter.hthr`
+`lib/std/text/decimal.hthr` (what `%d` and `%7d` print) and `lib/native/stream_filter.hthr`
 (a filter's fold and the counting lemmas).

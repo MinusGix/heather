@@ -6,7 +6,7 @@ created: 2026-08-16
 updated: 2026-09-09
 ---
 
-**Status (2026-08-17): LANDED and closed** — `lib/std/int.hthr` exists, the
+**Status (2026-08-17): LANDED and closed** — `lib/std/num/int.hthr` exists, the
 encoding below survived contact unchanged, and its prediction about `add` did not.
 Read §"What landed" for both. The text between here and there is the pre-round
 design and is kept as written.
@@ -77,12 +77,12 @@ checking whether `Group` should exist before this lands);
 
 ## What landed (2026-08-17)
 
-`lib/std/int.hthr`, new, 1093 lines / 97 declarations (1 inductive, 13 `fn`, 75
+`lib/std/num/int.hthr`, new, 1093 lines / 97 declarations (1 inductive, 13 `fn`, 75
 `theorem`, 5 instances, 3 designations), plus
 `crates/elab/tests/lib_std_int.rs` (four tests: the closure checks, the law kit is
 present at open integers, the API computes and the operators/instances resolve in a
 file that also imports `nat`, and a false equation at closed integers is refused).
-`lib/std/algebra.hthr` gained a `Group` class and one generic theorem; see §Group.
+`lib/std/algebra/algebra.hthr` gained a `Group` class and one generic theorem; see §Group.
 
 **The encoding survived contact, unchanged.** `inductive Int { OfNat(n: Nat),
 NegSucc(n: Nat) }`. Every reason this issue gave held up in the writing, and two
@@ -185,11 +185,11 @@ half comes from the canonical `CommMonoid<Int>(add)`; writing it again is refuse
 ### Cost of checking, which was the other thing this round was for
 
 Not a perf round, so no protocol and no numbers beyond the shape (CLAUDE.md).
-`heather check lib/std/int.hthr` is ~1.4 s against ~0.85 s for its import closure
+`heather check lib/std/num/int.hthr` is ~1.4 s against ~0.85 s for its import closure
 alone (`algebra`, which pulls in all of `lib/std`), so the file's own elaboration
 and kernel checking is roughly half a second for ~90 declarations at this proof
-density — the same order as `lib/std/list.hthr` and two orders below
-`lib/ir_v1.hthr`. **No pathology to file.** The three things that might have cost
+density — the same order as `lib/std/data/list.hthr` and two orders below
+`lib/certgen/ir_v1.hthr`. **No pathology to file.** The three things that might have cost
 and did not: the eight-case `mul_assoc` (each case is shallow), the 51 written
 motives (a motive is a type, not a search), and `int_ind`'s value-parameter motive
 (instantiated once per use). `scripts/bench --check` is clean, as expected for a
@@ -251,6 +251,6 @@ sequencing-relevant surprises:
   recommendation recorded rather than left implicit — the point being that
   the choice is forced by "no quotients" plus "no junk values", so it can be
   settled now even though the round is not scheduled.
-- 2026-08-17: LANDED: lib/std/int.hthr (1093 lines, 97 declarations) + crates/elab/tests/lib_std_int.rs (4 tests), and a Group class + op_inv_unique added to lib/std/algebra.hthr. The ENCODING survived contact unchanged, and the unpredicted reason it is cheap is that NegSucc(n) is definitionally neg(OfNat(Succ(n))), which is what makes mul's sign cases need no case analysis on a stuck product. The PREDICTION about the operations did NOT survive: add is iterated isucc/ipred rather than the four-way subNatNat split, so no truncated subtraction appears in the file at all and nat's sub cancellation kit is never cashed (reason 3 of the original cost argument is void). Int has no structural recursion of its own, so the file states int_ind once and every law that needs induction is one application of it. Group exists and Int is its only carrier. Checking cost: ~0.5 s of the file's own elaboration+kernel work on top of a 0.85 s import closure -- no pathology. Full narrative, the kit as written, what was cut, and the six-item ranking are in the body above.
-- 2026-08-17: The round's one stalled row LANDED (2026-08-17): `instance(a, b: Int) Decide<Le(a, b)>` is in `lib/std/int.hthr` and the stall comment is out. [[instance-key-collides-across-modules]] carries the narrative.
+- 2026-08-17: LANDED: lib/std/num/int.hthr (1093 lines, 97 declarations) + crates/elab/tests/lib_std_int.rs (4 tests), and a Group class + op_inv_unique added to lib/std/algebra/algebra.hthr. The ENCODING survived contact unchanged, and the unpredicted reason it is cheap is that NegSucc(n) is definitionally neg(OfNat(Succ(n))), which is what makes mul's sign cases need no case analysis on a stuck product. The PREDICTION about the operations did NOT survive: add is iterated isucc/ipred rather than the four-way subNatNat split, so no truncated subtraction appears in the file at all and nat's sub cancellation kit is never cashed (reason 3 of the original cost argument is void). Int has no structural recursion of its own, so the file states int_ind once and every law that needs induction is one application of it. Group exists and Int is its only carrier. Checking cost: ~0.5 s of the file's own elaboration+kernel work on top of a 0.85 s import closure -- no pathology. Full narrative, the kit as written, what was cut, and the six-item ranking are in the body above.
+- 2026-08-17: The round's one stalled row LANDED (2026-08-17): `instance(a, b: Int) Decide<Le(a, b)>` is in `lib/std/num/int.hthr` and the stall comment is out. [[instance-key-collides-across-modules]] carries the narrative.
 - 2026-09-09: The original prediction has come true after all: `add` is now the four-way `subNatNat` split (issue [[int-arithmetic-over-nat-primitives]]), because iterated `isucc`/`ipred` cost the magnitude at closed arguments once the kernel could do Nat arithmetic on runs in one step. `subNatNat` is structural on its first argument with the second synchronized, so its cancellation is definitional; nat's `sub` kit is still never cashed.

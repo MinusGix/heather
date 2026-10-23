@@ -8,7 +8,7 @@ updated: 2026-09-17
 
 Found by the first `scripts/perf snapshot` ([[perf-dashboard]], 2026-09-17):
 an **unchanged** `docs/showcase/calc_parser.hthr` costs 12.5–15 s on a warm
-run at width one, where `lib/std/omega.hthr` costs 0.2 s. The warm run's
+run at width one, where `lib/std/tactic/omega.hthr` costs 0.2 s. The warm run's
 stderr says why:
 
     cache: stored module `calc_parser` is unusable (semantic image was

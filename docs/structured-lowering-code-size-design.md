@@ -477,7 +477,7 @@ Tests:
    later condition would otherwise add two constructors times five folds.
    The 26 lines that name them today become `CodeBranch(NonZero(r), …)`.
 3. **A copy: `xor` + `or` (6 bytes, no IR change) or a FunctionIR `Move` node
-   (3 bytes, `lib/function_ir.hthr` and its consumers)?** *Recommended: `xor`
+   (3 bytes, `lib/native/function_ir/function_ir.hthr` and its consumers)?** *Recommended: `xor`
    now.* After P, copies are rare in these words.
 4. **Order.** *Recommended: F, then P, then I* (F′ after F, V5). F lands the family and removes
    the most per step. P's empty arms need F's negated jumps (§2.3). I is

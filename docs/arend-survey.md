@@ -101,7 +101,7 @@ universe fillers, which §2.5 states as an open problem.
 
 - **Function extensionality as a definition**: `FunExt(f, g, λx.p) :≡
   path(λi. λx. p x @ i)`, with a computing inverse (p. 11). Heather does not
-  assume funext (`lib/std/itree.hthr:23`), and that absence is felt in three
+  assume funext (`lib/std/itree/itree.hthr:23`), and that absence is felt in three
   places: tier-2 tree laws hold only up to `ITree::Same` or depth-indexed
   equivalence, `Acc` is not provably a proposition
   (`issues/kernel-v1-extensions.md`, log 2026-07-26), and the setoid
@@ -228,7 +228,7 @@ which is what a refinement framework is.
 - **Partial implementations (adopt).** `PseudoRing extends PseudoSemiring,
   AbGroup` implements `zero_*-left` from additive inverses, so no ring
   instance proves it again. Heather's `class Ring extends Semiring,
-  GroupRel` has an empty body (`lib/std/semiring.hthr:143`), and `Int`,
+  GroupRel` has an empty body (`lib/std/algebra/semiring.hthr:143`), and `Int`,
   `Rat`, `CReal` and `Dyadic` each supply `zero_mul := …, mul_zero := …`
   with their own per-type theorem (`semiring.hthr:305`, `rat.hthr:1461`,
   `creal.hthr:1616`, `float/dyadic.hthr:283`). Arend's `\default` pairs

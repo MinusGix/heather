@@ -21,7 +21,7 @@ serial cost left on the certificate workload now that the kernel gate is
 parallel: on `reused_callee` `build-x86` at one worker, 20.3 s of the 109.6 s
 summed over the 3474 certificate item rows — 18.5%, against 78.6 s of kernel
 gate — from 33 019 notes, none of which was printed. On
-`heather check lib/std/omega.hthr` it is 0.79 s of 10.2 s from 24 142 notes.
+`heather check lib/std/tactic/omega.hthr` it is 0.79 s of 10.2 s from 24 142 notes.
 See the numbers in [[perf-instrumentation-consolidation]]'s 2026-09-11 log.
 
 The `refl` note is the expensive half by construction: the certificate is
@@ -49,7 +49,7 @@ checking site whose types are not syntactically equal.
 ## Acceptance
 
 - `diag_note` near zero on a successful `reused_callee` `build-x86` and on
-  `heather check lib/std/omega.hthr`, measured the way
+  `heather check lib/std/tactic/omega.hthr`, measured the way
   [[perf-instrumentation-consolidation]]'s 2026-09-11 entry measured it.
 - Byte-identical diagnostics on the failing fixtures that own these messages
   (`issues/elab-refl-accepts-match-eta-kernel-rejects.md`, the
@@ -104,7 +104,7 @@ run row, seconds:
   wall          131.84s  107.79s
   peak RSS       986 MB   994 MB
 
-`heather check lib/std/omega.hthr -L lib/std` at W=1:
+`heather check lib/std/tactic/omega.hthr -L lib/std` at W=1:
 
   total           9.775    8.674
   kernel_gate     6.805    6.354

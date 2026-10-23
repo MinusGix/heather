@@ -65,7 +65,7 @@ source, eight records gaining an index.
 
 ## 3. The character kit
 
-`lib/std/char.hthr` gains `is_digit`, `is_space` and `code_is` as `Bool`
+`lib/std/text/char.hthr` gains `is_digit`, `is_space` and `code_is` as `Bool`
 programs over the code — `is_scalar`'s spelling, so a closed character decides
 by descending two literals together — plus `digit_val`, the `Option` form
 `digit_of` that `parser::recognize` takes, and four facts: `digit_selected`
@@ -75,7 +75,7 @@ characters. `selected_of_match` is the inversion stated at an abstract `Bool`
 and applied at the computed class, because a `match` on the class alone does
 not refine `digit_of(c)`.
 
-`lib/std/list.hthr` gains `cong_append_r`, the missing counterpart of
+`lib/std/data/list.hthr` gains `cong_append_r`, the missing counterpart of
 `cong_append_l` (clients threading a span through a fixed prefix wrote that `j`
 by hand), and `List::nonempty` / `List::all` beside its existing `is_nil` — the
 elementwise class test takes a `Bool` program because that is what a decidable

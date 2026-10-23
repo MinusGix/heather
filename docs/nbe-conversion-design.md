@@ -393,7 +393,7 @@ the evaluator (a small map, lifetime of one conversion), and evaluate it per
 use under that use's `δ` environment. The value cannot be cached, because
 `δ` varies; the syntax can, because it does not. The issue measured
 `ShiftGlobal` at 2.5% of the deep-path profile and 8.6% of the routine
-`lib/ir_v1.hthr` profile, so this is a real if secondary win, and it retires
+`lib/certgen/ir_v1.hthr` profile, so this is a real if secondary win, and it retires
 the sequencing confusion recorded on `issues/outer-namespace-bounds.md`.
 
 **Termination.** Unchanged and unchanged in shape: Ψ is a telescope, so δ is
@@ -863,7 +863,7 @@ What destroys that sharing in the elaborated interpreter is *shifting*:
 payloads inserted under binders get renumbered, which forces a physical
 copy. Reconstructing the exponent therefore requires reconstructing the
 binder depth and term bulk of the real interpreter — which is
-`lib/ir_v1.hthr`, not a fixture.
+`lib/certgen/ir_v1.hthr`, not a fixture.
 
 **Consequences for the plan, and they are not cosmetic:**
 
@@ -958,7 +958,7 @@ conversion-vs-conversion differential green over ≥ 4 seed streams;
 `scripts/bench --check` (expect improvements — re-save the baseline, and
 expect the fuel-threshold tests of §6 to need re-recording); **stage 0's
 probe linear in N**; `conv/simulate-depth` and `conv/simulate-payload` still
-within their slope bands; routine `lib/ir_v1.hthr` not regressed.
+within their slope bands; routine `lib/certgen/ir_v1.hthr` not regressed.
 
 **Kill criterion:** if the conversion-vs-conversion differential shows a
 disagreement that is not traced to a *rewriter* bug within one session,

@@ -141,7 +141,7 @@ when weighing rung 3/4 against their prerequisite features.
   surface and the Cases/open-recursion rungs it owns.
 - 2026-08-18: Rungs 1--3 now all have explicit real consumers. The missing
   Cases/open-recursion control landed as `IrCases<M>` + `ir_cases` in
-  `lib/ir_v1.hthr`; `step_cases(ev, prog, env)` is an ordinary record value
+  `lib/certgen/ir_v1.hthr`; `step_cases(ev, prog, env)` is an ordinary record value
   whose clauses capture the recursive evaluator, and `step` is its generic
   dispatch. All eight constructor equations are definitional, while an
   independent constructor-classifying consumer pins that this is reusable

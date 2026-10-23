@@ -72,8 +72,8 @@ spelling.
 ### 3.2 Resolution and semantics
 
 `import nat` resolves `nat.hthr` against, in order: the importing file's
-directory, then each `-L <dir>` given to the CLI (the standard library is
-`-L lib/std`, defaulted by the CLI when the directory exists), then the
+directory, then each `-L <dir>` given to the CLI (the CLI defaults to
+`-L lib/std -L lib` when no `-L` is given, each folder that exists), then the
 directories below those `-L` dirs. First hit wins; a name found in two
 search dirs of one tier is an error, not a precedence.
 
@@ -84,7 +84,9 @@ nested module carries its family in its stem (`parser_core`, `x86_64_fetch`,
 `bitvec_omega`): the stem is the name every build uses, the CLI's and the
 native builder's bundle alike. The tier is only consulted on a miss above
 it, so a module below cannot shadow or conflict with a public one of the
-same name. It leaves out dot-directories (`.git`, caches, worktree
+same name. Since 2026-10-23 the whole library lives in such folders
+(`docs/lib-layout-design.md`): a folder groups modules by subject and is
+never part of a name. It leaves out dot-directories (`.git`, caches, worktree
 checkouts that hold a second copy of the library), and it is why the editor
 server searches `lib/std` and `lib` but not the workspace root: below a root
 lie build trees and scratch copies, each a second hit for a library name.
@@ -105,13 +107,13 @@ modules (§7).
 
 ### 3.3 What one run means now
 
-`heather check lib/ir_v1.hthr` checks the transitive closure. A fresh
+`heather check lib/certgen/ir_v1.hthr` checks the transitive closure. A fresh
 elaborator per CLI *path* argument stays (two file paths re-elaborate a shared
 import; caching is §8's problem, and at current sizes an import costs what
 the prelude costs — milliseconds for prelude-sized modules).
 
-A directory path denotes one flat module set: the CLI sorts its immediate
-`.hthr` files, loads their union as one deduplicated closure, and prints one
+A directory path denotes one flat module set: every module the directory
+can name (below), sorted by path; the CLI loads their union as one deduplicated closure, and prints one
 result for the directory. Thus the whole standard library, including its
 source lints, is one command with no repeated import diagnostics:
 
@@ -119,16 +121,17 @@ source lints, is one command with no repeated import diagnostics:
 heather check lib/std
 ```
 
-Directory checking is deliberately non-recursive because module names are
-file stems rather than hierarchical paths. Its immediate `.hthr` files are
-the roots, and the target directory joins the search directories, so its
-descendants are the lower tier of §3.2 for their import closure: the target
-directory and explicit `-L` paths are searched first; only a miss there
-searches below them. This permits a public facade
-such as `lib/std/parser.hthr` to keep implementation modules below it without
-making callers enumerate internal directories, while a private nested module
-cannot conflict with a public top-level module of the same name:
-`heather check lib/std` remains the whole-library command.
+The target directory joins the search directories, so its descendants are
+the lower tier of §3.2 for their import closure. Its roots are its own
+`.hthr` files and every nested file (dot-directories aside) whose stem no
+search directory answers itself: exactly the files `import <stem>` from the
+directory reaches. A private nested module shadowed by a public one of the
+same name (`shadow/base.hthr` under `base.hthr`) is no root, so it still
+cannot conflict; and a module nothing imports is still checked. Until
+2026-10-23 only the immediate files were roots, which left the folders
+nobody at the top imported (`float/`, `arch/x86_64/`) out of
+`heather check lib/std`; with the library in folders
+(`docs/lib-layout-design.md`) it is the whole-library command again.
 
 ### 3.4 Reexports: a facade names the same declaration (2026-09-15)
 
@@ -175,7 +178,7 @@ Not built, by decision: whole-module reexport, renaming on export, and
 hierarchical module paths. Each would obscure either the identity rule or
 §3.2's flat search, and the parser umbrella needed none of them.
 
-The acceptance client is `lib/std/parser.hthr`, a pure facade over the
+The acceptance client is `lib/std/parser/parser.hthr`, a pure facade over the
 components in `lib/std/parser/` (the former core now lives in
 `parser_core.hthr` so that no component imports the facade that exports
 it); the mechanism is pinned in `crates/elab/tests/modules.rs` and the
@@ -313,7 +316,7 @@ size of the three bullets above (`issues/std-api-waves.md` sequences them,
 and each wave's own issue holds its content). Read the directory for what is
 there now.
 
-Acceptance is the migration: `lib/ir_v1.hthr` imports `nat` (and `option`
+Acceptance is the migration: `lib/certgen/ir_v1.hthr` imports `nat` (and `option`
 where `OptVal` permits — `OptVal`'s monomorphic uses migrate only where
 the swap is mechanical; forcing it is not the round's job) and deletes its
 local copies. The prelude (`prelude.hthr`) does not move in this round:

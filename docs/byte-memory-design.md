@@ -3,8 +3,8 @@
 The `hih-memory-model` milestone's first round
 (`issues/byte-memory-access-model.md`): a library model of byte-addressed
 memory that the native machine model, the program logic and FunctionIR's
-state edges can all use. It is in `lib/std/memory.hthr`, with vector reversal
-in `lib/std/vector.hthr` and word packing in
+state edges can all use. It is in `lib/std/machine/memory.hthr`, with vector reversal
+in `lib/std/data/vector.hthr` and word packing in
 `lib/std/bitvec/bitvec_bytes.hthr`. The showcase
 `docs/showcase/memory_client.hthr` runs it and proves things with it. The
 controls are in `crates/elab/tests/lib_std_memory.rs`.
@@ -88,7 +88,7 @@ cells equal at every address) is that equality. `set_set_comm` and
 - `get_set_span_apart` (under `Apart`): a span apart from the one stored
   reads as before.
 
-This is also why a single address can't instantiate `lib/std/location.hthr`'s
+This is also why a single address can't instantiate `lib/std/machine/location.hthr`'s
 `LocationLaws`. `get_put` there is an `=` between stores. The frame kit
 (`issues/state-location-and-frame-kit.md`) owns how partial or pointwise
 locations meet total lenses. This model supplies memory's own disjointness
@@ -138,7 +138,7 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
 - `BitVec::bytes_le`/`of_bytes_le` put the low byte first. The round trips
   are `of_bytes_le_bytes_le` and `bytes_le_of_bytes_le`.
 - `BitVec::bytes_be`/`of_bytes_be` are the little-endian forms read through
-  `reverse` (`lib/std/vector.hthr`). Their round trips come from
+  `reverse` (`lib/std/data/vector.hthr`). Their round trips come from
   `reverse_reverse`.
 - `Memory::get_le`/`set_le`/`read_le`/`write_le`, and the `_be` forms, are
   the span operations through a packing. `read_write_le` is the whole normal
@@ -158,7 +158,7 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
 - **The machine model.** x86's access records (`FetchAccess<M>`,
   `ByteReadAccess<M>`, `ByteWrites<M>`, `LinuxIo<M>`) are instantiated from
   this model (`lib/std/arch/x86_64/x86_64_byte_memory.hthr`,
-  `lib/linux_x86_64_byte_memory.hthr`;
+  `lib/std/os/linux/linux_x86_64_byte_memory.hthr`;
   `issues/memory-model-machine-instances.md`). The machine's `M` is
   `X86Memory(x)`: cells, permissions, and a proof that the permissions are
   what the run relies on, which the profile `x` (`X86Profile { relies }`)
@@ -192,7 +192,7 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
   against the profile's `LinuxIo`. A separation-style footprint is `Apart`
   between ranges, which round 1 supplies.
 - **The process image.** The Linux process the I/O profile's ELF makes is a
-  memory of the profile `X86Profile::io()` (`lib/linux_x86_64_image.hthr`;
+  memory of the profile `X86Profile::io()` (`lib/std/os/linux/linux_x86_64_image.hthr`;
   `issues/io-image-on-byte-model.md`). The profile relies on the page
   (0x410000) and the frame (0x411000) having the data permission and on
   nothing else, so both are `DataRegion`s of it. The loader

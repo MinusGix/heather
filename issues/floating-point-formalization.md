@@ -21,11 +21,11 @@ of the area.
 ## Questions
 
 1. Which real-number presentation the specification is stated over: the
-   regular Cauchy reals of `lib/std/creal.hthr`, or rationals where every
+   regular Cauchy reals of `lib/std/num/creal.hthr`, or rationals where every
    float is a dyadic rational and the reals enter only in error bounds.
 2. Formats as data (precision and exponent range as parameters) or a fixed
    binary32/binary64 pair first.
-3. How the bit-level encoding meets `lib/std/bitvec.hthr`, so native code
+3. How the bit-level encoding meets `lib/std/bitvec/bitvec.hthr`, so native code
    can use the same definitions.
 
 ## What it assumes from elsewhere
@@ -51,13 +51,13 @@ of the area.
   Notation for the IEEE orders and for rounding is a language-lane ask:
   [[decorated-relation-symbols]].
 - 2026-10-20: round 1 (`float-values`) landed on the design PR:
-  `lib/std/float/dyadic.hthr` (Dyadic, CommRing and strict order through the
-  embedding into Rat) and `lib/std/float/float.hthr` (formats, canonical
+  `lib/std/num/float/dyadic.hthr` (Dyadic, CommRing and strict order through the
+  embedding into Rat) and `lib/std/num/float/float.hthr` (formats, canonical
   finite floats, `Float(F)` as `Extended`, value order, generic constants).
   What changed from the sketch is in design §10.
 - 2026-10-21: `Float(F)` became an inductive with a value parameter after
   PR #89; round 1 merged as PR #85.
-- 2026-10-21: round 2 part A (`float-rounding`): `lib/std/float/round.hthr`
+- 2026-10-21: round 2 part A (`float-rounding`): `lib/std/num/float/round.hthr`
   with `RoundsTo` for all five modes, the executable rounding through
   half-units and a sticky bit, its correctness in every mode, sign
   symmetry, `round_dyadic` and `round_rat`. Design §11. Part B
@@ -70,13 +70,13 @@ of the area.
   specification and spacing, `Float::Le`, faithfulness, bracketing and
   monotonicity. Design §12. An inference gap it hit is
   [[value-param-constructor-implicit-inference]].
-- 2026-10-21: round 3 (`float-error`): `lib/std/float/error.hthr` with
+- 2026-10-21: round 3 (`float-error`): `lib/std/num/float/error.hthr` with
   `ulp_at`/`err_at`, the rounding error in every mode (half an ulp nearest,
   one directed), the standard model in the normal range, the subnormal
   absolute bound `η`, the combined `u·|x| + η` bound, and γ with its algebra
   and the product composition `gamma_prod`. Design §13. An inference gap it
   hit is [[list-literal-left-of-append]] (a method call on a list literal has the same missing carrier).
-- 2026-10-21: round 4 (`float-arith`): `lib/std/float/arith.hthr` with add,
+- 2026-10-21: round 4 (`float-arith`): `lib/std/num/float/arith.hthr` with add,
   sub, mul, fma, div and format conversion on `Finite` and `Float`, each with
   its value theorem in every mode, the IEEE §6.3 signs (one lemma,
   `round_signed_sign`, through every operation), the special-value table and

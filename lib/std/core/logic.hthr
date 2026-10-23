@@ -155,7 +155,7 @@ theorem iff_trans<P, Q, R>(h1: P ↔ Q, h2: Q ↔ R): P ↔ R {
 // The existential: a record whose second field's type depends on its first,
 // with the predicate arriving as a value parameter
 // (docs/surface-value-parameters.md, issues/surface-existential.md — the same
-// shape `lib/ir_v1.hthr`'s `Converges` is written in, generalized).
+// shape `lib/certgen/ir_v1.hthr`'s `Converges` is written in, generalized).
 //
 // The type argument infers from the predicate's binder, so
 // `Exists(λ (k: Nat) => …)` writes; `Exists<Nat>(…)` remains available when

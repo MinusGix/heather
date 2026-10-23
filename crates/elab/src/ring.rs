@@ -1,7 +1,7 @@
 //! `ring`: commutative-ring normalization by reflection
 //! (`docs/ring-normalization-design.md`, `issues/ring-normalization.md`).
 //!
-//! The tactic is an untrusted reifier in front of `lib/std/ring.hthr`. It
+//! The tactic is an untrusted reifier in front of `lib/std/tactic/ring.hthr`. It
 //! reads an equation at `Int` or `Nat` into `RingExpr`/`RingNat` syntax over
 //! an atom list and writes one application of `RingExpr::sound` (or
 //! `RingNat::sound`) whose `refl` the kernel checks by evaluating the

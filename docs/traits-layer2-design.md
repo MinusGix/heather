@@ -419,4 +419,4 @@ control** for each positive:
 4. `:= infer` finds a proof in scope, and its failure trace says the goal is
    not a class.
 5. The layer-1 suite green but for §9.3's two recorded edits; the full suite
-   green, `lib/ir_v1.hthr` unchanged.
+   green, `lib/certgen/ir_v1.hthr` unchanged.

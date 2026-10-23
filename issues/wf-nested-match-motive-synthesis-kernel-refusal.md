@@ -67,7 +67,7 @@ Two things to settle, the first being the one that matters:
    §7.4 does for the window, or refuse at the nested `match` with a message
    that names the `as` spelling that works.
 
-Repro: `lib/std/utf8.hthr` at the commit that closed the strictness issue,
+Repro: `lib/std/text/utf8.hthr` at the commit that closed the strictness issue,
 with `strict_below`'s four `as` motives deleted.
 
 ## What it assumes from elsewhere

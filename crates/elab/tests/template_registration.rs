@@ -14,7 +14,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
 
-const LIB: &str = include_str!("../../../lib/vec_code.hthr");
+const LIB: &str = include_str!("../../../lib/lang/vec_code.hthr");
 
 const ADD: &str = "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
 ";
@@ -368,7 +368,7 @@ fn a_permuted_template_still_computes() {
 // A third status, recorded by the surface indexing round
 // (docs/surface-fin-indexing-design.md §7 item 15) and resolved by the port
 // round: `vec.tabulate` and `vec.nth` have live use sites — `elab_container_ih`
-// and `xs[i]` — and, since `lib/vec_code.hthr` grew their templates, the
+// and `xs[i]` — and, since `lib/lang/vec_code.hthr` grew their templates, the
 // once-unreachable "a `for vec.nth` template whose payload disagrees" path is
 // reachable and tested below.
 

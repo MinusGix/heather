@@ -1,6 +1,6 @@
 # Parser components
 
-[`../parser.hthr`](../parser.hthr) is the public interface: a facade that
+[`parser.hthr`](parser.hthr) is the public interface: a facade that
 reexports every operation, type, and certificate below. The implementation
 and proofs are ordinary Heather modules in this directory:
 
@@ -17,9 +17,9 @@ and proofs are ordinary Heather modules in this directory:
 
 ## Imports
 
-Module names are flat file stems, so supply both `-L lib/std` and
-`-L lib/std/parser`; the facade's export edges then find the components.
-`import parser;` is the whole library. For example:
+Module names are flat file stems, and the loader searches the folders below
+`lib/std`, so `import parser;` finds the facade and its export edges find the
+components with no `-L` of their own. `import parser;` is the whole library. For example:
 
 ```heather
 import parser;
@@ -34,9 +34,8 @@ theorem example(): parser::run(next_number(),[2]) = Ok<Nat,ErrorView>(3) {
 }
 ```
 
-When checking the standard-library directory itself, the CLI adds descendant
-directories to that target's import search automatically, so the whole tree
-is checked with simply `heather check lib/std`.
+`heather check lib/std` checks every module in the library's folders, the
+parser's included.
 
 A reexport is the original declaration under a second visible path
 (`docs/modules-design.md` §3.4): `parser::token` and

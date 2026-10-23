@@ -15,7 +15,7 @@ Owning issue: `issues/frontend-benchmarks.md`.
 scripts/bench-frontend                          # measure and print
 scripts/bench-frontend --check                  # compare against the baseline; exit 1 on a regression
 scripts/bench-frontend --save                   # record a new baseline
-scripts/bench-frontend --no-heavy               # skip lib/ir_v1.hthr — the fast loop
+scripts/bench-frontend --no-heavy               # skip lib/certgen/ir_v1.hthr — the fast loop
 scripts/bench-frontend --quick --filter forded  # iterate on a fixture (shapes only)
 scripts/bench-frontend --list                   # what is in the suite
 ```
@@ -28,7 +28,7 @@ in the tree *and* sweeps the forded families towards the fuel cliff of
 `docs/inductive-fording-lowering.md` §14.9. The wrapper is where the `ulimit`
 lives: 8 GiB of address space, 30 CPU minutes.
 
-A full run is ~4 minutes and three of them are `lib/ir_v1.hthr`. `--no-heavy`
+A full run is ~4 minutes and three of them are `lib/certgen/ir_v1.hthr`. `--no-heavy`
 is ~40 seconds and is what to run while iterating; `--quick` on top of that is
 seconds, and its numbers are shapes, not measurements.
 
@@ -67,7 +67,7 @@ meaning anything — but it prints which side, because the two want different
 work.
 
 **2. Latency budgets** — an absolute ceiling on a corpus file, checked on
-every machine, baseline or not. `lib/ir_v1.hthr` is the one that matters:
+every machine, baseline or not. `lib/certgen/ir_v1.hthr` is the one that matters:
 59 s through the release CLI on a quiet machine, 67–88 s from this harness
 depending on what else the machine was doing, budget **150 s**. It is not
 derived from the baseline — a budget that moves with the recording is not a
@@ -146,7 +146,7 @@ it cheaper.
 
 **Interim protocol for the time half** (2026-08-17,
 `issues/frontend-bench-heavy-contaminates-cheap-cases.md`): read the absolute
-times from a `--no-heavy` run. A full run's heavy `lib/ir_v1.hthr` cases leave
+times from a `--no-heavy` run. A full run's heavy `lib/certgen/ir_v1.hthr` cases leave
 the process in a state that makes later families read 1.3–1.5× higher —
 measured by controlled experiment, not inferred: the same families are green
 under `--no-heavy` and under `--filter` in the same minute a full run flags
@@ -254,8 +254,8 @@ argument for the slope being the headline: the times moved by up to 1.5×
 between those runs, the exponents by ≤0.25.
 
 Since modules landed (docs/modules-design.md §7), `corpus/check-file` times
-an **import closure** rather than a file: `lib/ir_v1.hthr` imports
-`lib/std/nat.hthr`, and what `heather check lib/ir_v1.hthr` makes a user wait
+an **import closure** rather than a file: `lib/certgen/ir_v1.hthr` imports
+`lib/std/num/nat.hthr`, and what `heather check lib/certgen/ir_v1.hthr` makes a user wait
 for is both. The x-axis stays the root's bytes — the label names the root —
 so the two `ir_v1` cases legitimately changed *shape*, not merely time, on
 2026-08-05, and their baseline rows have to be re-recorded rather than
@@ -263,7 +263,7 @@ compared across that boundary.
 
 **The closure is computed, not listed** (2026-08-17,
 `issues/frontend-bench-ir-closure-stale.md`). It was a list of module names in
-the fixture for two weeks, and it went stale the day `lib/std/bool.hthr`
+the fixture for two weeks, and it went stale the day `lib/std/core/bool.hthr`
 gained `import logic;` — after which every module of the closure failed, since
 a module whose import does not resolve never registers a scope and so breaks
 the module after it too. A corpus case that fails its whole closure is *fast*,
@@ -273,7 +273,7 @@ why `crates/cli` has a `lib` target), so the closure the corpus times is
 whatever the library actually imports.
 
 No exponent is claimed for the corpus: the x-axis is source bytes across
-unrelated files, and `lib/ir_v1.hthr` is not "a bigger `lib/vec_code.hthr`" —
+unrelated files, and `lib/certgen/ir_v1.hthr` is not "a bigger `lib/lang/vec_code.hthr`" —
 it is a file of deep proofs whose cost is conversion, not size. The printed
 slope of ~5.4 there is an artefact of exactly that and means nothing.
 
@@ -368,7 +368,7 @@ absolutes):
 | `declared-index-branching` **after** | 89 ms | 155 ms | 234 ms | 360 ms | 499 ms | **1.57** |
 
 and `forded/occurrences` — the per-use figure — went from **~28 ms to
-~19 ms per use** at an unchanged slope of ~1.0. `lib/ir_v1.hthr` did not
+~19 ms per use** at an unchanged slope of ~1.0. `lib/certgen/ir_v1.hthr` did not
 move (60.5 s against its 150 s budget; it is 99% kernel gate on deep
 proofs, which this round does not touch).
 
@@ -410,14 +410,14 @@ the reason above), `declared-index-branching` 1.20–1.90.
 > the point); current figures live in that issue's log, per the
 > numbers-in-docs policy on `issues/perf-tracking-consistent-environment.md`.
 
-`lib/ir_v1.hthr`: parse **0.0%**, elaborate **1.2%**, kernel gate **98.8%**.
-`lib/vec_code.hthr`, a file with no deep proofs in it: parse 10.6%, elaborate
+`lib/certgen/ir_v1.hthr`: parse **0.0%**, elaborate **1.2%**, kernel gate **98.8%**.
+`lib/lang/vec_code.hthr`, a file with no deep proofs in it: parse 10.6%, elaborate
 49.3%, kernel gate 40.2%.
 
 The issue guessed that a split would tell a regression which layer it was in.
 It does — and it also says that on the file that dominates the tree's check
 time, the frontend is 1% of the wait. Elaborator optimizations aimed at
-`lib/ir_v1.hthr` would be aimed at 1.2% of it; the leverage is entirely in
+`lib/certgen/ir_v1.hthr` would be aimed at 1.2% of it; the leverage is entirely in
 what the elaborator *emits*, which is what the forded families measure and
 what the kernel definitions of `issues/generated-term-defs.md` changed — by
 4–7× on the emitted terms, with the emitted *types* still to go.

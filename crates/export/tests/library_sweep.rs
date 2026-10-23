@@ -1,5 +1,5 @@
 //! The library sweep (`issues/export-library-sweep.md`): export the closure
-//! of `lib/std/list.hthr` (list, nat, bool, logic, option, pair) and report
+//! of `lib/std/data/list.hthr` (list, nat, bool, logic, option, pair) and report
 //! every refusal by cause. With `HEATHER_EXPORT_OUT` set it writes
 //! `Sweep.lean`, the same split one file per module under `Sweep/` (listed
 //! in dependency order in `Sweep/order`), the kernel-route twin
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 #[test]
 fn std_list_closure_exports() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/std");
-    let modules = loader::load(&root.join("list.hthr"), &[PathBuf::from(&root)]).map_err(|e| e.msg).expect("load");
+    let modules = loader::load(&root.join("data/list.hthr"), &[PathBuf::from(&root)]).map_err(|e| e.msg).expect("load");
     let mut e = Elaborator::with_prelude_for_export().expect("prelude");
     for m in &modules {
         e.elab_module_source(&m.name, &m.src).unwrap_or_else(|err| panic!("{}: {err}", m.name));

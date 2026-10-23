@@ -35,7 +35,7 @@ not random. Three of L1's functions came in with **no law at all**:
 
 ## What landed (2026-08-17)
 
-Ten laws into `lib/std/list.hthr` (419 lines → 777 with L3's `Mem` kit), each
+Ten laws into `lib/std/data/list.hthr` (419 lines → 777 with L3's `Mem` kit), each
 one the first fact its function has:
 
 | function | laws |
@@ -125,4 +125,4 @@ first customer; logged there rather than written.
 
 ## Log
 
-- 2026-08-17: LANDED (2026-08-17): ten laws into lib/std/list.hthr, plus two new tests in crates/elab/tests/lib_std_list.rs. See §What landed and §The ranking this round produced above — the ranking covers BOTH halves of the round (L2' here, L3 in [[std-list-mem-and-perm]]) and is stated once. Residue has owners before closing (README rule 3): the seven restated motives are [[goal-motive-by-scrutinee-abstraction]] (filed, ranked #1), the rewrite contexts are [[congruence-by-anti-unification]], the unstated mem_filter converse is [[class-ops-prop-vs-bool]]'s second filter, the bare-map resolution is [[type-owned-namespaces]], and zip_swap's eta-expansion is [[polymorphic-argument-with-unsolved-callee]] (filed).
+- 2026-08-17: LANDED (2026-08-17): ten laws into lib/std/data/list.hthr, plus two new tests in crates/elab/tests/lib_std_list.rs. See §What landed and §The ranking this round produced above — the ranking covers BOTH halves of the round (L2' here, L3 in [[std-list-mem-and-perm]]) and is stated once. Residue has owners before closing (README rule 3): the seven restated motives are [[goal-motive-by-scrutinee-abstraction]] (filed, ranked #1), the rewrite contexts are [[congruence-by-anti-unification]], the unstated mem_filter converse is [[class-ops-prop-vs-bool]]'s second filter, the bare-map resolution is [[type-owned-namespaces]], and zip_swap's eta-expansion is [[polymorphic-argument-with-unsolved-callee]] (filed).

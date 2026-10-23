@@ -1,6 +1,6 @@
 //! The host side of Heather tactics (docs/host-elaboration-interface-design.md).
 //!
-//! `by t` runs a tactic: an ordinary Heather value of `lib/std/tactic.hthr`'s
+//! `by t` runs a tactic: an ordinary Heather value of `lib/std/tactic/tactic.hthr`'s
 //! `Tac<Expr>`, a tree whose nodes are requests to this elaborator and whose
 //! leaves are results. The loop here evaluates the tree to its next node,
 //! answers the request against the goal's context, resumes the tree with the

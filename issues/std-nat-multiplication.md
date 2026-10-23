@@ -6,7 +6,7 @@ created: 2026-08-13
 updated: 2026-08-13
 ---
 
-`lib/std/nat.hthr` stopped at `add`. `docs/showcase/calc.hthr` declared its own
+`lib/std/num/nat.hthr` stopped at `add`. `docs/showcase/calc.hthr` declared its own
 `mul` and its own `designation * at Nat := mul` because of that, and
 `docs/showcase/README.md` recorded the deferral: the library name was believed
 to **collide** with `crates/elab/tests/certgen.rs`'s `fn mul` fixture, which
@@ -130,7 +130,7 @@ a one-row designation table but **not** `nat`; `Nat` is a kernel type and needs
 no import, so the carrier, the diagnostic and both "where `*` does mean
 something" assertions survive intact. The test now tests what it says.
 
-Files: `lib/std/nat.hthr`, `lib/std/algebra.hthr`, `lib/certgen_code.hthr`
+Files: `lib/std/num/nat.hthr`, `lib/std/algebra/algebra.hthr`, `lib/certgen/certgen_code.hthr`
 (`mul_transcribes` → `viaadd_transcribes`, a name and its comment; the theorem
 pins markers and never mentions the fn), `crates/elab/tests/certgen.rs`,
 `crates/elab/tests/certgen_emissions.rs`,
@@ -153,6 +153,6 @@ rewriting them would falsify what those rounds saw. The forwarding note lives
 where a reader arrives — `certgen.rs`'s `VIAADD` doc comment and
 `certgen_code.hthr`'s theorem — and names this issue.
 
-`lib/std/nat.hthr` is part of `crates/elab/benches/frontend`'s corpus, so that
+`lib/std/num/nat.hthr` is part of `crates/elab/benches/frontend`'s corpus, so that
 workload's content grew by six theorems and a `fn`. Expected, not measured:
 this round's issue is not performance.

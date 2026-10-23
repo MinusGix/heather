@@ -92,7 +92,7 @@ What it needs:
 4. **Reduction must survive.** The emitted term is still one `ElimNat`, so
    closed arguments still compute — `half(7) = 3 { refl }` has to keep
    working, and that is the acceptance test that matters, because it is the
-   property `lib/std/nat.hthr` is written to keep throughout.
+   property `lib/std/num/nat.hthr` is written to keep throughout.
 
 **The alternative — a kernel-level `fix` with a structural checker — is the
 bigger change and pulls against the kernel's design** (eliminator-based, and

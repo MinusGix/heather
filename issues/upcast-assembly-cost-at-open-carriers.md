@@ -18,7 +18,7 @@ once per occurrence, FOUR times in that one small proof (the original "five"
 miscounted: `plus_comm` is declared by `AddCommMonoid` itself, an exact-scope
 hit), each a Σ-tuple of law types.
 
-Measured (2026-08-08, release, lib/std/algebra.hthr):
+Measured (2026-08-08, release, lib/std/algebra/algebra.hthr):
 - exact-dictionary spelling (`requires a` / `G::AddCommMonoid.plus`): 0.7 s
 - upcast projections in the statement only: 1.7 s
 - upcast projections in the proof body too: 19–25 s

@@ -15,7 +15,7 @@ fn positive_repr() → SubtypeRepr<Nat, PositiveNat>(Positive) {
 }
 ```
 
-`SubtypeRepr` in [`lib/subtype.hthr`](../lib/subtype.hthr) packages how to read
+`SubtypeRepr` in [`lib/lang/subtype.hthr`](../lib/lang/subtype.hthr) packages how to read
 a value, construct one with evidence, recover its invariant, and prove that
 construction preserves the supplied value. Its predicate is an explicit
 index; the representation never chooses an invariant merely from a carrier.

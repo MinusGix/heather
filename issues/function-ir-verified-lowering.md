@@ -46,7 +46,7 @@ later lookup fail, so `lower` returns `None`. The theorem is over every
 placement: whenever `lower` returns code, the code is right. A bad placement
 costs a refusal, never a wrong program.
 
-1. **Straight-line dataflow regions.** `lib/function_ir_lower.hthr`:
+1. **Straight-line dataflow regions.** `lib/native/function_ir/function_ir_lower.hthr`:
    `Represents(file, values, gprs)` (64-bit values as themselves, 1-bit
    values zero-extended, as `ValuePlaced`/`BitValuePlaced` do today),
    instruction selection per node (Add/Sub/And/Or/Xor as `OP d, b` or
@@ -61,7 +61,7 @@ costs a refusal, never a wrong program.
    clobbering placement refused as a negative control, and a Heather
    placement heuristic produces the placements.
 
-   *Round 1 as built:* `lib/function_ir_lower.hthr`, theorem
+   *Round 1 as built:* `lib/native/function_ir/function_ir_lower.hthr`, theorem
    `Region::lower_correct` (with `execute_block_memory`,
    `execute_block_rip` and `execute_block_kept` for the frame). The
    examples and refusal controls are
@@ -105,7 +105,7 @@ costs a refusal, never a wrong program.
    on its label by `asm_lands`), and `label_target`, `jcc_lands` and
    `jmp_lands` read the landings off that check.
 
-   `lib/function_ir_lower_structured.hthr` threads round 1's file through
+   `lib/native/function_ir/function_ir_lower_structured.hthr` threads round 1's file through
    `StructuredRegion::emit`:
    - a dataflow leaf is one `Block`;
    - a `Conditional` finds its condition as a `Bit` in a register and lowers
@@ -175,7 +175,7 @@ costs a refusal, never a wrong program.
 
    *Round 3 calls as built:* option A of the design question, a `Call`
    node in `StructuredRegion` (Minus, 2026-10-21).
-   - `lib/function_ir.hthr`: `Call(callee, arguments, result)`, at most
+   - `lib/native/function_ir/function_ir.hthr`: `Call(callee, arguments, result)`, at most
      six word arguments. Round 2's `StructuredRegionHolds` says `False` of
      it, so `emit` refuses it and round 2's theorem is unchanged.
      `StructuredRegionHoldsIn(callees, values, region)` reads a call
@@ -191,7 +191,7 @@ costs a refusal, never a wrong program.
      against `Stack::Saved`), `moves_branch` with machine-run arms, and
      `returns_weaken`. `moves_call` takes the return address's offset as a
      function of the state.
-   - `lib/function_ir_lower_calls.hthr` lowers with SysV's registers. A
+   - `lib/native/function_ir/function_ir_lower_calls.hthr` lowers with SysV's registers. A
      call spills the eight caller-saved registers other than RAX into the
      caller's frame, moves the arguments into RDI…R9, CALLs `Succ(f)` and
      reloads, so the file after it is the file before it with the result
@@ -254,7 +254,7 @@ costs a refusal, never a wrong program.
    outcome, lowered and proved inside `emit_calls`.
 
    *Round 5 as built:* `StructuredRegion::Loop(inputs, bound, parameters,
-   count, body, exit, next, outputs, exhausted)` in `lib/function_ir.hthr`.
+   count, body, exit, next, outputs, exhausted)` in `lib/native/function_ir/function_ir.hthr`.
    - Its meaning is `LoopRuns`. Each pass binds the state to `parameters`
      and the passes left, counted down from `bound`, to `count`, in a
      valuation of its own, and runs `body`. The bit `exit` set ends the loop

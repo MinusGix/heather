@@ -6,7 +6,7 @@ created: 2026-09-18
 updated: 2026-09-18
 ---
 
-Found writing `lib/std/utf8.hthr` (round 2 of [[string-char-spec-types]]).
+Found writing `lib/std/text/utf8.hthr` (round 2 of [[string-char-spec-types]]).
 
 `utf8::decode(bytes)` dispatches on a lead byte's class and, in each arm,
 returns `push_char(decode_seq(Ck, b, rest), decode(rest'))`. Converting an

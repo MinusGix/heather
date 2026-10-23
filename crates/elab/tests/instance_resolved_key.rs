@@ -48,7 +48,7 @@ fn bad(mods: &[(&str, &str)]) -> String {
 }
 
 /// The class every test below registers at: `Decide`'s shape, stated locally so
-/// that nothing here depends on `lib/std/logic.hthr`.
+/// that nothing here depends on `lib/std/core/logic.hthr`.
 const CLASSES: &str = r#"
 inductive Verdict<P> { Yes(proof: P), No }
 class Judge<P> { verdict: Verdict<P> }

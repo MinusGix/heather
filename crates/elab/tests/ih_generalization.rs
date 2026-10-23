@@ -60,7 +60,7 @@ fn any_err(src: &str) -> String {
 // -- programs on Nat ----------------------------------------------------------
 
 /// Truncated subtraction, **uncurried**: both arguments descend together, and
-/// the inner `match n` sits on the generalized parameter. `lib/std/nat.hthr`'s
+/// the inner `match n` sits on the generalized parameter. `lib/std/num/nat.hthr`'s
 /// `sub` is the curried spelling this replaces.
 const SUB: &str = r#"
 fn sub(m: Nat, n: Nat) -> Nat {
@@ -161,7 +161,7 @@ fn uncurried_predicate_computes_and_is_provable() {
 #[test]
 fn hypotheses_after_the_generalized_parameters_stay_reducible() {
     // Transitivity: `m` and `l` are generalized, the hypotheses stay in
-    // checking position behind the arrows (as `lib/std/nat.hthr`'s `le_trans`
+    // checking position behind the arrows (as `lib/std/num/nat.hthr`'s `le_trans`
     // keeps them), and the self-call is over-applied to them
     // (issues/call-site-overapplication.md).
     ok(&format!(

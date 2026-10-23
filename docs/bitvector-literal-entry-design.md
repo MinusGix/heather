@@ -145,7 +145,7 @@ width 64:
 | kernel check of the chain | `typing.rs`'s `Term::Pair` arm, 64 times, each against a fresh `Vec` annotation | 2.51 ms, 2 813 steps | `p2_def_64` gate |
 | packing at one conversion | `eval/bits.rs:251` `pack_bit_prefix`, both sides | +1.3 ms, +670 steps | `p2_lit_64` − `p2_def_64` |
 | packing at one classified fold | same walk, charged the fold's fuel | see `a1`/`a4` residue | design §13 |
-| `ofNat(64, ·)` instead of a literal | `lib/std/bitvec.hthr:241` | 18.4 ms | §1.4 |
+| `ofNat(64, ·)` instead of a literal | `lib/std/bitvec/bitvec.hthr:241` | 18.4 ms | §1.4 |
 
 The charter's "~20 steps per bit" for `pack_bit_prefix` is the right order for
 the *packing*; what it did not say is that packing is the small half. Per bit
@@ -328,7 +328,7 @@ type alone, and a `VecLit` over `Bool` is the most closed thing in the repo.
 
 ### 4.1 Why `ofNat` is `Opaque` today — the mechanical answer
 
-`bitvec::ofNat` (`lib/std/bitvec.hthr:241`) is
+`bitvec::ofNat` (`lib/std/bitvec/bitvec.hthr:241`) is
 
 ```
 ofNat(n)(x) = from_bit_list(n,
@@ -405,7 +405,7 @@ two ways, above).
 
 ### 4.3 But a different respelling is worth 5×, and it is four lines
 
-The module header (`lib/std/bitvec.hthr:180–195`) records why the *obvious*
+The module header (`lib/std/bitvec/bitvec.hthr:180–195`) records why the *obvious*
 spelling was rejected on 2026-09-07:
 
 > the low bit by parity, the rest at `half(x)` — peels the argument one
@@ -459,7 +459,7 @@ Two further properties, both free:
   independently written bit vectors and through `toNat`, with single-bit
   flips refused as `NotConvertible`) are statements about `ofNat`'s *values*,
   not its spelling, so they re-check unchanged. Any `ofNat`-specific lemma in
-  `lib/std/bitvec.hthr` needs its proof re-run; that is the implementing
+  `lib/std/bitvec/bitvec.hthr` needs its proof re-run; that is the implementing
   pass's first job (§8.2).
 
 On the item the model actually pays (`probes/t_p4b_mov_half.hthr` — the P4
@@ -532,8 +532,8 @@ Honest costs and risks:
 | `[True, False, …]` vector literals | **0** |
 | `from_bits(n, <literal>)` at `n > 1` | 1 |
 
-`lib/elf64_calls.hthr` alone has 95; `lib/std/arch/x86_64/x86_64_calls.hthr` 64;
-`lib/elf64.hthr:12` is `fn elf_byte(n) → BitVec(8) { bitvec::ofNat(8, n) }`,
+`lib/std/os/linux/elf64_calls.hthr` alone has 95; `lib/std/arch/x86_64/x86_64_calls.hthr` 64;
+`lib/std/os/linux/elf64.hthr:12` is `fn elf_byte(n) → BitVec(8) { bitvec::ofNat(8, n) }`,
 so every ELF byte in the certificate is an `ofNat`. And
 `crates/elab/src/function_ir_source.rs:320` *requires* it: "BitVec constants
 must use `bitvec::ofNat(64, literal)`" — the reflector emits `ofNat` for
@@ -685,7 +685,7 @@ a wrong diagnosis.
    `p4_mov_ofnat` ~48 ms of gate. If they are not, this tree is not the one
    measured here and nothing below applies. (≈ 3 minutes.)
 2. **`ofNat`'s rails, before touching the definition.** Check
-   `lib/std/bitvec.hthr` as it stands and list every theorem whose statement
+   `lib/std/bitvec/bitvec.hthr` as it stands and list every theorem whose statement
    or proof mentions `ofNat`, `from_bit_list`, `bits_at_powers`,
    `powers_of_two_desc` or `mod_succ`. The respelling is only cheap if the
    first set re-checks unchanged and the second set is deleted with its
@@ -789,7 +789,7 @@ peeled probe never sees. **No `FoldClass` variant was added and
 
 ### 10.2 §8.2 — step 1 really is four lines
 
-Nothing outside `lib/std/bitvec.hthr` mentions `from_bit_list`,
+Nothing outside `lib/std/bitvec/bitvec.hthr` mentions `from_bit_list`,
 `bits_at_powers`, `powers_of_two_desc` or `mod_succ`: not `lib/`, not
 `examples/`, not `crates/*/tests`, not the reflector. Every `ofNat` mention
 elsewhere is a statement about its *values*. So the four functions were
@@ -957,5 +957,5 @@ library` and no timings at all. Each column needs its own build. Recorded in
   already reaches (3.1–3.4 ms).
 - `docs/bitvec-width-bounded-defaults-design.md:37` still describes `ofNat`'s
   truncation as a `mod_succ` loop. It is a record of the 2026-09-07 round and
-  was left as written; the live statement is now `lib/std/bitvec.hthr`'s
+  was left as written; the live statement is now `lib/std/bitvec/bitvec.hthr`'s
   header.

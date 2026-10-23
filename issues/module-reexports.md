@@ -8,7 +8,7 @@ updated: 2026-09-15
 
 ## Problem
 
-The parser library is split between `lib/std/parser.hthr` and six modules in
+The parser library is split between `lib/std/parser/parser.hthr` and six modules in
 `lib/std/parser/`. Clients must import each component and qualify moved names
 with its owning module. There is no explicit reexport facility to expose a
 stable library interface while organizing implementation and proof files.
@@ -62,4 +62,4 @@ questions; this issue does not require them to ship with reexports.
 
 ## Log
 
-- 2026-09-15: Landed: `export m::{…};` as a selected, identity-preserving reexport (aliases in the visibility index only; origin resolution, by-origin ambiguity, constructor inclusion, generated-name refusal, loader edge, image field + replay validation). `lib/std/parser.hthr` is now a facade over `parser_core` and the six components. Design in docs/modules-design.md §3.4; tests in crates/elab/tests/modules.rs and crates/cli/tests/semantic.rs. Whole-module reexport, renaming and hierarchical paths stay unbuilt by decision.
+- 2026-09-15: Landed: `export m::{…};` as a selected, identity-preserving reexport (aliases in the visibility index only; origin resolution, by-origin ambiguity, constructor inclusion, generated-name refusal, loader edge, image field + replay validation). `lib/std/parser/parser.hthr` is now a facade over `parser_core` and the six components. Design in docs/modules-design.md §3.4; tests in crates/elab/tests/modules.rs and crates/cli/tests/semantic.rs. Whole-module reexport, renaming and hierarchical paths stay unbuilt by decision.

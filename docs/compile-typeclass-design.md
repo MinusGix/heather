@@ -57,7 +57,7 @@ along the logical/operational line:
 - The **logical** content of an instance is a record: IR production plus a
   certificate field whose type mentions the earlier fields. The surface has
   had exactly this since `surface-records` — a dependent field spine is what
-  `record` *is* — and `lib/ir_v1.hthr` already exports the certificate type
+  `record` *is* — and `lib/certgen/ir_v1.hthr` already exports the certificate type
   it wants (`Converges`, the ∃-form; that issue's 2026-08-01 entry says in
   so many words that this is the shape a `Compile` instance wants).
 - The **operational** content — resolution, coherence, `[Cpu]` indexing,
@@ -82,7 +82,7 @@ Per-signature and monomorphic, matching what records are today
 (monomorphized type parameters, no `Type`-valued fields):
 
 ```heather
-// in lib/ir_v1.hthr — there is no module system, and a sibling file would
+// in lib/certgen/ir_v1.hthr — there is no module system, and a sibling file would
 // have to re-declare the whole IR (ir-simulate-design items 3–4 note)
 record CompileNat2(f: Nat -> Nat -> Nat) {
     prog: Prog,
@@ -126,7 +126,7 @@ Reading it against the contract:
 ## 4. The milestone instance
 
 `issues/end-to-end-compile-instance.md`, at last concrete. The ingredients
-all exist in `lib/ir_v1.hthr`:
+all exist in `lib/certgen/ir_v1.hthr`:
 
 ```heather
 fn add_spec(a: Nat) -> Nat -> Nat { λ (b: Nat) => add(b, a) }
@@ -211,7 +211,7 @@ then automation of a *value* whose type already exists.
 
 ## 7. Acceptance sketch (for the implementing round)
 
-1. `CompileNat2` declared in `lib/ir_v1.hthr`; `heather check` green.
+1. `CompileNat2` declared in `lib/certgen/ir_v1.hthr`; `heather check` green.
 2. `add_spec` + `add_instance` check; this closes
    `issues/end-to-end-compile-instance.md`.
 3. Negative controls in `crates/elab/tests/ir_v1.rs`: wrong-result

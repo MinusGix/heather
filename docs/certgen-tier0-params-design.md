@@ -24,7 +24,7 @@ supported answer and negative controls are mandatory.
 ## 1. The hand-run, and what it sized
 
 Before any machinery, the target emissions were written **by hand** and
-kernel-checked against the *unchanged* `lib/ir_v1.hthr` — three shapes, green
+kernel-checked against the *unchanged* `lib/certgen/ir_v1.hthr` — three shapes, green
 on the first attempt:
 
 - `pick(f: Flag, a, b) -> Nat { match f { Off => a, On => b } }` — the
@@ -37,7 +37,7 @@ on the first attempt:
 
 What that establishes:
 
-- **`lib/ir_v1.hthr` grows nothing** — again. `LetMatch` scrutinizes any slot
+- **`lib/certgen/ir_v1.hthr` grows nothing** — again. `LetMatch` scrutinizes any slot
   with any arm count; `letmatch_conv`'s `hl` premise
   (`Flag_gen_embed(Off) ≡ VCon(0, VNil)`) and the rebind's goal
   (`gate(Off, n)` ι-reduces at the closed pattern) close by `refl`. The
@@ -150,7 +150,7 @@ each position names is the rim's question, answered per-index by
 
 ## 6. The certificate fold: ZERO edits, predicted and verified
 
-`lib/certgen_cert.hthr` is untouched. A tier-0 match is `cert_body_w` with
+`lib/certgen/certgen_cert.hthr` is untouched. A tier-0 match is `cert_body_w` with
 `kids = 0` — the tier-1 entry point at the all-childless mask, which gives
 every arm `IhNo` (so a self-call in any arm declines, the honesty check for
 free) and one `CMatch` per constructor. The `CertOut` shape is `CRecW`, the
@@ -212,7 +212,7 @@ the tier-1 round's `RecT` path serves the tier-0 match end to end once
 
 ## 9. Cost
 
-Not a perf round. Shape: `lib/certgen_code.hthr` grows two small helpers and
+Not a perf round. Shape: `lib/certgen/certgen_code.hthr` grows two small helpers and
 one `ta_finish` arm (no new `TA` constructor, no shell arm — the size law's
 expensive coordinates are untouched); the new fixtures live in their own test
 binary (`certgen_t0param.rs`) with its own rail, its acceptance-class tests on

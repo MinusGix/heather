@@ -67,7 +67,7 @@ leaves about 57% of it.
   children's, one per fact and constructor (`structured_sequence_length`,
   `structured_branch_decodes`, `structured_near_branch_bytes`, …). The
   generator cites them; the elaborator meets the node's type at the
-  constructor after one δ-step of `{n}_code()`. `lib/filter_step_piece.hthr`
+  constructor after one δ-step of `{n}_code()`. `lib/native/filter_step_piece.hthr`
   had its own `structured_sequence_length`/`_bytes` with the same
   statements; they are gone, its callers resolve to these.
 - Each dataflow node's equation is a lemma `{n}_holds_{out}(values, w)`

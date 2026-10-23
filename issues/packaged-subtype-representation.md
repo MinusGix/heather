@@ -23,7 +23,7 @@ interface. Details: `docs/packaged-subtype-round.md`.
 
 ## Log
 
-- 2026-09-05: Implemented the package and concise wrappers in `lib/subtype.hthr`.
+- 2026-09-05: Implemented the package and concise wrappers in `lib/lang/subtype.hthr`.
   The first focused round checked both showcases and an Omega refusal control.
 - 2026-09-05: Complete. The final focused target passed all 46 tests, including
   packaged closure repair and the Omega-backed operation/projection theorem.

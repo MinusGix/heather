@@ -182,7 +182,7 @@ fn a_record_at_tag_two_is_built_against_an_abbreviated_type() {
 
 // A **tier-1** (recursive) inductive as a value parameter, so the abbreviated
 // type's code contains a `Wf`. This is `Converges`'s shape in
-// `lib/ir_v1.hthr`, minus the interpreter.
+// `lib/certgen/ir_v1.hthr`, minus the interpreter.
 #[test]
 fn a_recursive_value_parameter_survives_the_abbreviation() {
     ok("inductive Val { VNil, VCons(a: Nat, b: Val) }
@@ -256,7 +256,7 @@ fn an_abbreviation_is_not_a_term_of_its_own_type() {
 
 // -- 7: the acceptance customer, in miniature ------------------------------
 
-// `Refines` as `lib/ir_v1.hthr` now spells it: a four-parameter type-valued
+// `Refines` as `lib/certgen/ir_v1.hthr` now spells it: a four-parameter type-valued
 // `fn` whose body is a chain of implications between record formations, used
 // as hypothesis, conclusion, and the thing a λ is checked against — all at
 // **neutral** arguments.

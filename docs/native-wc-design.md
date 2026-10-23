@@ -64,7 +64,7 @@ Replace "the loop adds `spec(bytes)` to any count" plus additivity with
 - `step_fold(body, needle, carry, bytes)`: the left fold of the body's
   `Continue` payload over the bytes. It is library-defined, not the
   program's.
-- `loop_run_folds` (library, `lib/function_ir_loop.hthr`): for a body that
+- `loop_run_folds` (library, `lib/native/function_ir/function_ir_loop.hthr`): for a body that
   never breaks and ignores the cursor, the loop over a buffer holding `bytes`
   from any carry ends at `End(|bytes|, 0, step_fold(…, carry, bytes))`.
   Today every program proves this itself; `wc_l`'s `count_lines_reads` is
@@ -106,7 +106,7 @@ Probes V1 and V2 held as written, with two amendments:
   `eof_input(chunks).len() + 4096 < 2^64`. The print profile gains this
   premise beside `small`. `EofFrom` carries `carry + |rest| ≤ limit`.
 
-Library: `lib/function_ir_loop.hthr` (`loop_fold_step`, `LoopFolds`,
+Library: `lib/native/function_ir/function_ir_loop.hthr` (`loop_fold_step`, `LoopFolds`,
 `step_fold`, `step_fold_append`, `step_fold_advances`, `loop_run_folds`) and
 `lib/elf64_read_loop.hthr` (`eof_chunk_folds`, the fold invariant in
 `eof_from`). `wc_l`'s loop facts went from about 70 lines of buffer

@@ -180,7 +180,7 @@ lifting that cap costs anything.
 What is **not** here: checking the declarations the tier-1 lowering emits.
 Those come from `elab`, which sits above the kernel and cannot be reached from
 a kernel bench; `docs/frontend-benchmarking.md` now has that number, and it
-is larger than this suite's framing suggests — on `lib/ir_v1.hthr` the kernel
+is larger than this suite's framing suggests — on `lib/certgen/ir_v1.hthr` the kernel
 gate is **98.8%** of the wall clock, and the frontend suite's forded families
 are cubic in a constructor count for the same reason (a term the elaborator
 emits, re-checked by a kernel that has no definitions).

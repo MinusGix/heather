@@ -379,7 +379,7 @@ designations pays a failed lookup in a usually-empty map. The call-site index
 fill (§5(a)) runs inside the blocked branch of `apply_implicit`'s existing
 fixpoint, beside `fill_index_from_scope`, and adds no iteration of its own.
 
-The measurement that matters is `lib/std/algebra.hthr`, which is where the
+The measurement that matters is `lib/std/algebra/algebra.hthr`, which is where the
 library's designations live and the only file that uses them; §12 records it.
 
 ## 10. Acceptance
@@ -535,8 +535,8 @@ was nominated.
 
 ### 12.7 Measurements
 
-`lib/std/algebra.hthr`, release, ulimit-wrapped, best of three:
-**0.247 s → 0.251 s**. `lib/list_algos.hthr` 0.606 → 0.612; `lib/ir_v1.hthr`
+`lib/std/algebra/algebra.hthr`, release, ulimit-wrapped, best of three:
+**0.247 s → 0.251 s**. `lib/lang/list_algos.hthr` 0.606 → 0.612; `lib/certgen/ir_v1.hthr`
 40.40 → 40.66. All within run-to-run noise (<1.5%), and the last two use no
 designation at all, which is the growth invariant showing up as a number.
 Suite **1354 → 1375**.
@@ -720,8 +720,8 @@ Suite 1419 → 1432.
   drift.
 
 - **Measurements**, release, ulimit-wrapped, best of three. The same binary on
-  the *old* and *new* `lib/std/algebra.hthr`: **0.291 s → 0.290 s**, so the
-  respelling is free; `lib/list_algos.hthr` 0.600 s, which uses no bare symbol
+  the *old* and *new* `lib/std/algebra/algebra.hthr`: **0.291 s → 0.290 s**, so the
+  respelling is free; `lib/lang/list_algos.hthr` 0.600 s, which uses no bare symbol
   in an argument slot at all and sits in §12.7's band, so the resolver change
   is free too.
 

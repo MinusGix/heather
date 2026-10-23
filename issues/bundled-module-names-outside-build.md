@@ -7,8 +7,8 @@ updated: 2026-09-29
 ---
 
 The native builder bundles its proof library under harness names that are not
-file stems: `bitvec_omega` is `lib/std/bitvec/omega.hthr`, `bitvec_nat` is
-`lib/std/bitvec/nat.hthr`, and the x86 modules have their own aliases. Since
+file stems: `bitvec_omega` was `omega.hthr` in `lib/std/bitvec/`, `bitvec_nat` was
+`nat.hthr` there, and the x86 modules have their own aliases. Since
 2026-09-29 `build-x86` lets a program import them
 ([[load-providing-swallows-resolve-errors]] has the mechanism), but `heather
 check examples/x86-native/wc.hthr` still fails with "cannot find module
@@ -32,7 +32,7 @@ directories is the workaround in use.
   (docs/modules-design.md §3.2; before, only a directory *target* got that
   tier), so no client names `lib/std/arch/x86_64` or `lib/std/bitvec`.
   `heather check -L lib/std -L lib examples/x86-native/wc.hthr` checks, as do
-  `lib/std/parser.hthr`, the x86 modules in place and the whole native library
+  `lib/std/parser/parser.hthr`, the x86 modules in place and the whole native library
   stack (`lib/elf64_read_fields.hthr`). The perf corpus row for the x86 model is
   now keyed `lib/std/arch/x86_64/x86_64.hthr`.
 - 2026-09-29: The lower tier skips dot-directories, and the editor server no longer searches

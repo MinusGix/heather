@@ -6,8 +6,8 @@
 
 use heather_elab::Elaborator;
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
 
 fn elaborator() -> Elaborator {
     let mut elab = Elaborator::with_prelude().expect("prelude");

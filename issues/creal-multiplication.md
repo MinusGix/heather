@@ -6,7 +6,7 @@ created: 2026-10-16
 updated: 2026-10-17
 ---
 
-Define multiplication on `CReal` (`lib/std/creal.hthr`) with its respect
+Define multiplication on `CReal` (`lib/std/num/creal.hthr`) with its respect
 proof and the ring laws modulo `≈`. The inverse of a real apart from zero was
 first scoped here and moved to [[creal-inverse]] (2026-10-17).
 

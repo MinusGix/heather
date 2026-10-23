@@ -8,28 +8,28 @@ use heather_elab::{Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("relation", include_str!("../../../lib/std/relation.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
     (
         "relation_props",
-        include_str!("../../../lib/std/relation_props.hthr"),
+        include_str!("../../../lib/std/relation/relation_props.hthr"),
     ),
     (
         "algebra_rel",
-        include_str!("../../../lib/std/algebra_rel.hthr"),
+        include_str!("../../../lib/std/algebra/algebra_rel.hthr"),
     ),
     (
         "relation_context",
-        include_str!("../../../lib/std/relation_context.hthr"),
+        include_str!("../../../lib/std/tactic/relation_context.hthr"),
     ),
     (
         "list_setoid",
-        include_str!("../../../lib/std/list_setoid.hthr"),
+        include_str!("../../../lib/std/data/set/list_setoid.hthr"),
     ),
 ];
 
@@ -51,9 +51,9 @@ fn explicit_subtype_template_builds_positive_addition() {
     check(
         &mut e,
         "subtype_code",
-        include_str!("../../../lib/subtype_code.hthr"),
+        include_str!("../../../lib/lang/subtype_code.hthr"),
     );
-    check(&mut e, "subtype", include_str!("../../../lib/subtype.hthr"));
+    check(&mut e, "subtype", include_str!("../../../lib/lang/subtype.hthr"));
     check(
         &mut e,
         "lift_positive",
@@ -91,7 +91,7 @@ fn emitted_subtype_closure_is_resumable_and_checked() {
     check(
         &mut e,
         "subtype_code",
-        include_str!("../../../lib/subtype_code.hthr"),
+        include_str!("../../../lib/lang/subtype_code.hthr"),
     );
     let source = r#"
 import nat;
@@ -128,16 +128,16 @@ fn omega_proves_positive_subtype_closure() {
     for (name, source) in [
         (
             "subtype_code",
-            include_str!("../../../lib/subtype_code.hthr"),
+            include_str!("../../../lib/lang/subtype_code.hthr"),
         ),
-        ("subtype", include_str!("../../../lib/subtype.hthr")),
+        ("subtype", include_str!("../../../lib/lang/subtype.hthr")),
         (
             "lift_positive",
             include_str!("../../../docs/showcase/lift_positive.hthr"),
         ),
-        ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-        ("int", include_str!("../../../lib/std/int.hthr")),
-        ("omega", include_str!("../../../lib/std/omega.hthr")),
+        ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+        ("int", include_str!("../../../lib/std/num/int.hthr")),
+        ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ] {
         check(&mut e, name, source);
     }
@@ -1401,9 +1401,9 @@ fn witness_dependent_subtype_retains_computation_and_limits_transfer() {
     check(
         &mut e,
         "subtype_code",
-        include_str!("../../../lib/subtype_code.hthr"),
+        include_str!("../../../lib/lang/subtype_code.hthr"),
     );
-    check(&mut e, "subtype", include_str!("../../../lib/subtype.hthr"));
+    check(&mut e, "subtype", include_str!("../../../lib/lang/subtype.hthr"));
     check(
         &mut e,
         "witness_subtype",
@@ -1487,7 +1487,7 @@ fn finite_set_author_and_abstract_client() {
     check(
         &mut e,
         "finite_set",
-        include_str!("../../../lib/std/finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/finite_set.hthr"),
     );
     check(
         &mut e,
@@ -1497,7 +1497,7 @@ fn finite_set_author_and_abstract_client() {
     check(
         &mut e,
         "list_finite_set",
-        include_str!("../../../lib/std/list_finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/list_finite_set.hthr"),
     );
     check(
         &mut e,
@@ -1642,7 +1642,7 @@ fn branching_backend_reuses_the_unchanged_abstract_client() {
     check(
         &mut e,
         "finite_set",
-        include_str!("../../../lib/std/finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/finite_set.hthr"),
     );
     check(
         &mut e,
@@ -1652,7 +1652,7 @@ fn branching_backend_reuses_the_unchanged_abstract_client() {
     check(
         &mut e,
         "tree_finite_set",
-        include_str!("../../../lib/std/tree_finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/tree_finite_set.hthr"),
     );
     check(
         &mut e,
@@ -1667,22 +1667,22 @@ fn independent_set_backends_agree_and_preserve_selected_values() {
     check(
         &mut e,
         "finite_set",
-        include_str!("../../../lib/std/finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/finite_set.hthr"),
     );
     check(
         &mut e,
         "list_finite_set",
-        include_str!("../../../lib/std/list_finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/list_finite_set.hthr"),
     );
     check(
         &mut e,
         "tree_finite_set",
-        include_str!("../../../lib/std/tree_finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/tree_finite_set.hthr"),
     );
     check(
         &mut e,
         "tree_list_set_transfer",
-        include_str!("../../../lib/std/tree_list_set_transfer.hthr"),
+        include_str!("../../../lib/std/data/set/tree_list_set_transfer.hthr"),
     );
     check(
         &mut e,
@@ -1697,12 +1697,12 @@ fn named_set_function_derivation_and_branching() {
     check(
         &mut e,
         "finite_set",
-        include_str!("../../../lib/std/finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/finite_set.hthr"),
     );
     check(
         &mut e,
         "relation_function",
-        include_str!("../../../lib/std/relation_function.hthr"),
+        include_str!("../../../lib/std/relation/relation_function.hthr"),
     );
     check(
         &mut e,
@@ -1717,22 +1717,22 @@ fn generated_function_certificate_is_reusable_on_both_backends() {
     check(
         &mut e,
         "finite_set",
-        include_str!("../../../lib/std/finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/finite_set.hthr"),
     );
     check(
         &mut e,
         "relation_function",
-        include_str!("../../../lib/std/relation_function.hthr"),
+        include_str!("../../../lib/std/relation/relation_function.hthr"),
     );
     check(
         &mut e,
         "list_finite_set",
-        include_str!("../../../lib/std/list_finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/list_finite_set.hthr"),
     );
     check(
         &mut e,
         "tree_finite_set",
-        include_str!("../../../lib/std/tree_finite_set.hthr"),
+        include_str!("../../../lib/std/data/set/tree_finite_set.hthr"),
     );
     check(
         &mut e,
@@ -1752,7 +1752,7 @@ fn named_derivation_reports_and_resumes_branch_obligations() {
     check(
         &mut e,
         "relation_function",
-        include_str!("../../../lib/std/relation_function.hthr"),
+        include_str!("../../../lib/std/relation/relation_function.hthr"),
     );
     let source = r#"
 import bool;

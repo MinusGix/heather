@@ -1,7 +1,7 @@
 # Reading implicit arguments off an argument type that reduces
 
 Design doc for `issues/motive-application-hides-hypothesis-type.md` (ranked #2
-by the `Int` round, eight sites in `lib/std/int.hthr`), landed 2026-08-17. The
+by the `Int` round, eight sites in `lib/std/num/int.hthr`), landed 2026-08-17. The
 claim being designed: **an argument's type is evidence even when it is a
 redex** — the third instalment of the sentence `issues/curried-tail-type-arg-
 inference.md` and `issues/match-arg-of-polymorphic-callee-needs-motive.md`
@@ -109,7 +109,7 @@ extra evidence.
 
 ## 4. What it collected
 
-`lib/std/int.hthr` lost **all twenty-two** of its `@cong_int(f, lhs, rhs, p)`
+`lib/std/num/int.hthr` lost **all twenty-two** of its `@cong_int(f, lhs, rhs, p)`
 spellings, and the split between them is a finding of its own:
 
 - **Eight** are the issue's: `add_comm`, `add_assoc`, `neg_add` and

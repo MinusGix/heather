@@ -192,7 +192,7 @@ measured payers — `MachineState<M>` (`lib/std/arch/x86_64/x86_64.hthr:91`),
 *did* register the simple device. The definitions exist. The certificate is
 just not allowed to use them.
 
-`CallMemory` (`lib/elf64_calls.hthr:30`) is closed and non-dependent, so
+`CallMemory` (`lib/std/os/linux/elf64_calls.hthr:30`) is closed and non-dependent, so
 `register_rec_projs` declines it by design (§13.3: a non-dependent closed spine
 is linear already), and `memory.file` / `memory.stack` land in the
 `El^δ`/`Sigma` bucket — 41 639 misses for 2.072 s, 0.05 ms each. Out of scope,

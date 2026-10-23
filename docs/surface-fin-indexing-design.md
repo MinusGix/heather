@@ -451,7 +451,7 @@ and the kernel.
 ### 6.1 How the oracle cross-check applies here
 
 The fold/map suites' pattern is: elaborate the same fixture twice, once with
-`lib/vec_code.hthr` in scope and once without, and require the two declaration
+`lib/lang/vec_code.hthr` in scope and once without, and require the two declaration
 bodies **convertible at `Layer::Prog`** — adequacy, not typing
 (`in_language_fold.rs:103-141`). Plus the vacuity guard that suite added and
 the map suite still owes: `assert!(ht != rt)`, so a hook that declined cannot
@@ -571,7 +571,7 @@ unaffected in either direction, and should not be edited.
 use sites wired to their slots.
 
 **The port round (`issues/quotation-stage-artifacts`)**: `tabulate_code` and
-`nth_code` in `lib/vec_code.hthr`, and their cross-check suites. Nothing in
+`nth_code` in `lib/lang/vec_code.hthr`, and their cross-check suites. Nothing in
 `crates/` should need to change — that is the acceptance test of this round's
 scope, and if it does not hold, the residue belongs back here.
 
@@ -618,7 +618,7 @@ constant-head tabulate checks at the same signature; `nth`'s `FS` arm has
 `head(v) : A` in scope beside the ih, so the constant-first-element projection
 checks too. Only arms whose context offers no alternative are forced (`nth`'s
 `FZ` arm, by absence). The refutations and the unifying reading live in the
-`lib/vec_code.hthr` template headers and in
+`lib/lang/vec_code.hthr` template headers and in
 `docs/in-language-map-design.md` §7's addendum.
 
 ## 10. Deferred, recorded

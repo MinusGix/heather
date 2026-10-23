@@ -8,7 +8,7 @@ area: heather-in-heather
 milestone: [hih-memory-model]
 ---
 
-The process image (`X86Memory::io_load`, `lib/linux_x86_64_image.hthr`)
+The process image (`X86Memory::io_load`, `lib/std/os/linux/linux_x86_64_image.hthr`)
 maps the file, the page and the frame, and nothing else. Linux also maps a
 stack and starts RSP in it, with argc, argv, envp and the auxiliary vector
 above RSP. A compiled function spills and calls through a `Stack<M>`

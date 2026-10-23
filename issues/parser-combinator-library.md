@@ -96,7 +96,7 @@ before closing its chosen implementation scope.
 - 2026-09-14: Prototype acceptance: focused **2 passed** (checked source laws
   plus seven negative controls); full `scripts/test`: **2668 passed, 0 failed,
   5 ignored**. Tracker and whitespace checks pass.
-- 2026-09-14: Implemented `lib/std/parser.hthr` and migrated the calculator.
+- 2026-09-14: Implemented `lib/std/parser/parser.hthr` and migrated the calculator.
   The library includes dependent composition, operation-indexed progress and
   source-span soundness certificates, committed ordered choice/backtracking,
   diagnostics, lookahead, optional/finite/unbounded repetition, and guarded

@@ -334,7 +334,7 @@ theorem second_survives(): both().second_laws.point = On {{ refl }}
 }
 
 // ---------------------------------------------------------------------------
-// The relation-indexed shape (lib/std/semiring.hthr): a setoid inherited by
+// The relation-indexed shape (lib/std/algebra/semiring.hthr): a setoid inherited by
 // both monoids of a two-operation class, and laws written in body symbols.
 
 const SETOID: &str = r#"

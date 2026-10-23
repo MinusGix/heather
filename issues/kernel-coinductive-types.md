@@ -34,7 +34,7 @@ since July.
    relation, and "bisimilar implies equal" is either an axiom in the same
    family as the funext tier 2 already assumes, or left out, with
    bisimilarity as the working equivalence. (Correction, 2026-10-21: tier
-   2 does not assume funext; `lib/std/itree.hthr` states its laws up to
+   2 does not assume funext; `lib/std/itree/itree.hthr` states its laws up to
    `ITree::Same` because Heather assumes none.) This is the negative
    presentation (copatterns, primitive projections), which avoids the
    subject-reduction failure of Coq's positive `CoInductive`. It is the

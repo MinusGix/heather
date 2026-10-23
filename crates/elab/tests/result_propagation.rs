@@ -2,7 +2,7 @@ use heather_elab::Elaborator;
 
 fn base() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_module_source("result", include_str!("../../../lib/std/result.hthr")).expect("result library");
+    e.elab_module_source("result", include_str!("../../../lib/std/core/result.hthr")).expect("result library");
     e
 }
 fn ok(src: &str) {
@@ -93,12 +93,12 @@ fn wrong_carriers_errors_and_false_equations_are_refused() {
 #[test]
 fn parser_client_checks_and_its_wrong_result_is_rejected() {
     let mut e = base();
-    e.elab_module_source("logic",include_str!("../../../lib/std/logic.hthr")).expect("logic");
-    e.elab_module_source("bool",include_str!("../../../lib/std/bool.hthr")).expect("bool");
-    e.elab_module_source("pair",include_str!("../../../lib/std/pair.hthr")).expect("pair");
-    e.elab_module_source("nat",include_str!("../../../lib/std/nat.hthr")).expect("nat");
-    e.elab_module_source("option",include_str!("../../../lib/std/option.hthr")).expect("option");
-    e.elab_module_source("list",include_str!("../../../lib/std/list.hthr")).expect("list");
+    e.elab_module_source("logic",include_str!("../../../lib/std/core/logic.hthr")).expect("logic");
+    e.elab_module_source("bool",include_str!("../../../lib/std/core/bool.hthr")).expect("bool");
+    e.elab_module_source("pair",include_str!("../../../lib/std/core/pair.hthr")).expect("pair");
+    e.elab_module_source("nat",include_str!("../../../lib/std/num/nat.hthr")).expect("nat");
+    e.elab_module_source("option",include_str!("../../../lib/std/core/option.hthr")).expect("option");
+    e.elab_module_source("list",include_str!("../../../lib/std/data/list.hthr")).expect("list");
     let src = include_str!("../../../docs/showcase/result_parser.hthr");
     e.elab_module_source("parser",src).unwrap_or_else(|e| panic!("{}",e.render(src)));
     let bad = "import parser; import result; theorem wrong(): parse_sum([Number(2), Plus, Number(3)]) = Ok(6) { refl }";

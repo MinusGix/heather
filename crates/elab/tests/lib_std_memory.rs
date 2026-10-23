@@ -1,6 +1,6 @@
-//! `lib/std/memory.hthr` — byte-addressed memory with explicit access
+//! `lib/std/machine/memory.hthr` — byte-addressed memory with explicit access
 //! outcomes (`issues/byte-memory-access-model.md`,
-//! `docs/byte-memory-design.md`), with `lib/std/vector.hthr` and the byte
+//! `docs/byte-memory-design.md`), with `lib/std/data/vector.hthr` and the byte
 //! packing in `lib/std/bitvec/bitvec_bytes.hthr`.
 //!
 //!  1. the closure checks: the modules and the showcase client, which runs a
@@ -20,27 +20,27 @@ use heather_elab::{Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/int.hthr")),
-    ("omega", include_str!("../../../lib/std/omega.hthr")),
-    ("result", include_str!("../../../lib/std/result.hthr")),
-    ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/num/int.hthr")),
+    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
+    ("result", include_str!("../../../lib/std/core/result.hthr")),
+    ("bitvec", include_str!("../../../lib/std/bitvec/bitvec.hthr")),
     (
         "bitvec_nat",
         include_str!("../../../lib/std/bitvec/bitvec_nat.hthr"),
     ),
-    ("vector", include_str!("../../../lib/std/vector.hthr")),
+    ("vector", include_str!("../../../lib/std/data/vector.hthr")),
     (
         "bitvec_bytes",
         include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr"),
     ),
-    ("memory", include_str!("../../../lib/std/memory.hthr")),
+    ("memory", include_str!("../../../lib/std/machine/memory.hthr")),
 ];
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();

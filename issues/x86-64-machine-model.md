@@ -115,7 +115,7 @@ access; it does not claim x86 memory is total.
   owns a second instruction meaning. `lib/std/arch/x86_64/x86_64.hthr` begins the vertical
   slice with all GPR names, arithmetic flags, opaque memory, decoded 1--15 byte
   length, RIP fallthrough, and register forms of `MOV` and `ADD`. The generic
-  total-location vocabulary begins separately in `lib/std/location.hthr`.
+  total-location vocabulary begins separately in `lib/std/machine/location.hthr`.
 - 2026-08-26: The slice kernel-checks with deterministic register execution,
   all six `ADD` arithmetic flags, a 1--15-byte decoded-length invariant,
   distinct coverage status, and generic `MOV` memory/flag frame statements.

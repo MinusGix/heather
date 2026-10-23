@@ -71,7 +71,7 @@ target (2026-09-18, [[sequence-parser-source]]).
 
   checks, and `recur: Recur(0, source, begin)` replaces all four parameter
   spellings. `docs/types-as-expressions.md` already makes the body legal — it is
-  the shape `RefinesOn` uses in `lib/ir_v1.hthr` — so no feature was missing.
+  the shape `RefinesOn` uses in `lib/certgen/ir_v1.hthr` — so no feature was missing.
   (The count drops from seven to four, not zero: the three `checked_*` fixpoints'
   λ binders keep their annotations for an unrelated reason, the `decreases`
   obligation generator, recorded as finding 3 on that issue.)

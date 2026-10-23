@@ -8,7 +8,7 @@ created: 2026-10-22
 updated: 2026-10-22
 ---
 
-Round S3.1 (`lib/native_source.hthr`) wrote `cat` in the effectful layer and
+Round S3.1 (`lib/native/native_source.hthr`) wrote `cat` in the effectful layer and
 ran it against a scripted world by evaluation
 (`crates/elab/tests/fixtures/native_source_cat.hthr`). The claim users care
 about is `Program::Implements(cat(c).denote(), tr_spec(λ b => b))`, for every
@@ -36,4 +36,4 @@ at a literal width.
 
 ## Log
 
-- 2026-10-22: The single-level loop rule landed ([[itree-iter-simulation]], `lib/linux_trees_sim.hthr`'s `Program::implements_iter`), so this is no longer blocked on it. What it does not give is a source pass that is several spec passes: cat's write loop. This round's proof needs one of the two routes above (a nested-loop rule, or folding the inner `iter` into the outer body by a lemma about the layer's `Repeat`).
+- 2026-10-22: The single-level loop rule landed ([[itree-iter-simulation]], `lib/std/os/linux/linux_trees_sim.hthr`'s `Program::implements_iter`), so this is no longer blocked on it. What it does not give is a source pass that is several spec passes: cat's write loop. This round's proof needs one of the two routes above (a nested-loop rule, or folding the inner `iter` into the outer body by a lemma about the layer's `Repeat`).

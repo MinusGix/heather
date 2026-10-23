@@ -8,10 +8,10 @@ created: 2026-10-20
 updated: 2026-10-21
 ---
 
-`OrderedField<A>(≈, <, ≤, +, *)` (lib/std/ordered_field.hthr) restates the ring
+`OrderedField<A>(≈, <, ≤, +, *)` (lib/std/algebra/ordered_field.hthr) restates the ring
 laws as its own fields: `mul_respects`, `mul_assoc`, `mul_comm`, `mul_one`,
 `mul_add_distr`, plus the additive group's `zero`, `neg`, `add_zero`,
-`add_neg`. The semiring layers (lib/std/semiring.hthr) now state exactly
+`add_neg`. The semiring layers (lib/std/algebra/semiring.hthr) now state exactly
 these, relation-indexed, and `Rat` registers `CommRing<Rat>(Rat::Same, …)`
 beside its `OrderedField`. The two do not know each other: a `Ring` theorem
 does not apply to an `OrderedField` binder, and `OrderedField::mul_zero` and

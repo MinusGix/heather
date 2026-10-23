@@ -7,7 +7,7 @@ created: 2026-10-02
 updated: 2026-10-02
 ---
 
-lib/std/list.hthr has `filter`, `map` and folds, but no split. wc's word spec
+lib/std/data/list.hthr has `filter`, `map` and folds, but no split. wc's word spec
 is a bespoke `wc_split` with an `onto_first` helper
 (examples/x86-native/wc.hthr), where a reader would expect
 `bytes.split_by(space_byte).filter(non_empty).len()`.

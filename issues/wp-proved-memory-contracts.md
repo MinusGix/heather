@@ -9,7 +9,7 @@ updated: 2026-10-21
 ---
 
 `Contract` is `pre`/`post` over `Gprs`, and `Contract::Runs` requires
-`e.memory = s.memory` (`lib/linux_x86_64_wp.hthr`). Code that spills to its
+`e.memory = s.memory` (`lib/std/os/linux/linux_x86_64_wp.hthr`). Code that spills to its
 frame, calls a function whose frame is below it (S4 round 3), or stores into
 a buffer (`docs/native-effect-source-design.md` §6) changes memory, so it
 cannot enter `Wp` as a `Proved` item. The effectful source compiles every

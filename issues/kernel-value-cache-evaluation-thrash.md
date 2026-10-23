@@ -15,7 +15,7 @@ world by `refl` stops a few loop passes in. The cause is that the value
 cache drops values that are still live, not the cost of the work itself.
 
 The run is width-64 FunctionIR arithmetic over an environment of word cells
-(`lib/native_source.hthr`, `Env`). Each cell is a constructor field, so it
+(`lib/native/native_source.hthr`, `Env`). Each cell is a constructor field, so it
 is forced once and shared through the term cache. But every 64-bit operation
 forces a few thousand intermediate values. Once a run has forced more than
 `VALUE_CACHE_CAPACITY` (64K) of them, the FIFO evicts cells that later

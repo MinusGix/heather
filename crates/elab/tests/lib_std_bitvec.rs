@@ -15,15 +15,15 @@ static ELAB_LOCK: Mutex<()> = Mutex::new(());
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const INT: &str = include_str!("../../../lib/std/int.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const INT: &str = include_str!("../../../lib/std/num/int.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra/algebra.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const BITVEC: &str = include_str!("../../../lib/std/bitvec/bitvec.hthr");
 
 /// The first nine modules of `semantic_x86_warmup.rs`'s list, in its order,
 /// so the on-disk image keys this file reads are the ones the warmup wrote.

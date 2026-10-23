@@ -21,7 +21,7 @@ The stuck runs list `rat::Rat::inv_succ(n).den.pred` as an atom.
 `Rat::inv_succ(n)` is `Rat(OfNat(1), Pos(n))`, so `.den` is `Pos(n)` and
 `.pred` is `n`; the reader unfolds one projection and stops.
 
-Workaround (`Rat::inv_succ_half`, lib/std/rat.hthr): state the denominator
+Workaround (`Rat::inv_succ_half`, lib/std/num/rat.hthr): state the denominator
 with `refl` in a typed `let`.
 
 Wanted: when the inner projection's receiver whnfs to a constructor, keep

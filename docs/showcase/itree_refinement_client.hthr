@@ -1,4 +1,4 @@
-// A client of `lib/std/itree_trace.hthr` and `lib/std/itree_state.hthr`:
+// A client of `lib/std/itree/itree_trace.hthr` and `lib/std/itree/itree_state.hthr`:
 // traces of a console program, a loop's fuel not being observable, and a
 // stateful program threaded as a world.
 

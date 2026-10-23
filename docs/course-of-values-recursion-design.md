@@ -2,7 +2,7 @@
 
 How a `fn` whose self-call lands on the *predecessor's* predecessor is
 elaborated (`issues/recursion-at-deeper-subterms.md`). The customer is
-`lib/std/nat.hthr`'s parity section — `half`, `Even`, `Odd` — and the classic
+`lib/std/num/nat.hthr`'s parity section — `half`, `Even`, `Odd` — and the classic
 `fib`.
 
 ## 1. What was refused, and why the guard was not the problem
@@ -112,7 +112,7 @@ section existed. Every two-step *proof* — `half_le`, `even_or_odd`,
 a dependent motive and none of them checked.
 
 The fix is the move the library already writes by hand for hypotheses
-(`le_trans` in `lib/std/nat.hthr` convoys two): a nested `match` on the chain's
+(`le_trans` in `lib/std/num/nat.hthr` convoys two): a nested `match` on the chain's
 end is elaborated with its window as an **argument**, not as something in scope
 around it.
 
@@ -203,7 +203,7 @@ rule reads as strictness and sends a reader to the wrong file.
   field and no container): the same transformation with `pred` replaced by the
   recursive-field projection `tail_D`, the chain followed by term rather than
   by binder, and the convoy re-anchored by rebuilding the arm's constructor.
-  `lib/std/utf8.hthr`'s fuel-free `decode` is the customer. A **branching**
+  `lib/std/text/utf8.hthr`'s fuel-free `decode` is the customer. A **branching**
   arm's ih is still one per recursive field; extending the window to a
   grandchild there is a different tupling and has no customer, so a tree keeps
   the refusal — with the message extended to say what chain-shaped means.

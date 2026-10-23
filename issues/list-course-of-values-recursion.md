@@ -18,7 +18,7 @@ equation bindings its obligations need gets no unfolding equation
 open tail.
 
 The decoder therefore recurses on a **fuel** that `decode` sets to the byte
-count (`lib/std/utf8.hthr`, `decode_at`), spending exactly as many steps as
+count (`lib/std/text/utf8.hthr`, `decode_at`), spending exactly as many steps as
 bytes so the proofs' induction hypothesis is the bare recursive call. It
 works, but it is an API shaped by a language limit, which the library is not
 supposed to do ([[string-char-spec-types]] round 2, design §5.5).
@@ -36,7 +36,7 @@ directly and delete the fuel.
   chain-shaped `Wf` declarations: `tail_D` as a `Branches::Tail` eliminator,
   the window and convoy threaded as `WfRec`/`WfConvoy`, and
   `GuardKind::Wf.cov` holding the chain, the window and both anchors. The
-  customer landed with it — `lib/std/utf8.hthr`'s `decode` recurses on
+  customer landed with it — `lib/std/text/utf8.hthr`'s `decode` recurses on
   `rest`/`rest2`/`rest3`/`rest4` directly, `decode_at` and the fuel are gone,
   and theorems 3–6 close (`decode_at_encode_chars` is now
   `decode_encode_chars`, with no `list_len` anywhere in its statement).

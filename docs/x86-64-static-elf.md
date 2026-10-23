@@ -39,12 +39,12 @@ also has a first multi-fragment customer in the call profile.
 
 ## Checked claims
 
-`lib/elf64.hthr` specifies the exact header profile, including field offsets,
+`lib/std/os/linux/elf64.hthr` specifies the exact header profile, including field offsets,
 permissions, mapping base, and entry. `StaticElf64Image` carries nonempty-code
 and file-size proofs. Its entry-byte theorem proves that dropping the header
 area from the serialized image yields exactly the supplied code.
 
-`lib/linux_x86_64_entry.hthr` proves argument initialization and exit-register
+`lib/std/os/linux/linux_x86_64_entry.hthr` proves argument initialization and exit-register
 setup using the existing canonical x86 ExecuteBlock relation. A
 `LinuxInlineTrace` composes the entry, compiled body, and exit-setup stages,
 ending in a `LinuxExitRequest` whose full status value equals the source
@@ -53,7 +53,7 @@ concrete valuation and a RegionHolds witness, so this process theorem has no
 remaining caller-supplied graph assumption. Its initial machine state and
 memory type remain arbitrary.
 
-`lib/elf64_load.hthr` interprets that restricted image as file-backed RX bytes
+`lib/std/os/linux/elf64_load.hthr` interprets that restricted image as file-backed RX bytes
 at absolute 64-bit addresses. The address's upper 48 bits select the fixed
 mapping window; the lower 16 bits select a byte within the file. Reads outside
 the window or past the file end are absent. There is no zero-fill tail because

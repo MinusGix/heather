@@ -43,7 +43,7 @@ Two smaller things found on the way, both real:
   without the field's type in hand. That is a plain defect inside the rule, and
   it is what makes "copy the canonical term" not a workaround.
 - The **working** spelling is to omit every inherited field and write only the
-  three new ones, which is what `lib/std/int.hthr` does. It reads better than the
+  three new ones, which is what `lib/std/num/int.hthr` does. It reads better than the
   repetition, so nothing was lost here — but a writer's first instinct is to fill
   in what the class body lists.
 
@@ -69,4 +69,4 @@ agreement check has the field's type and should check the override against it.
 
 ## Log
 
-- 2026-08-17: Filed by the `Int` round while adding `Group` to `lib/std/algebra.hthr`. Ranked #4 of six: it cost minutes, not lines, and the working spelling is the nicer one.
+- 2026-08-17: Filed by the `Int` round while adding `Group` to `lib/std/algebra/algebra.hthr`. Ranked #4 of six: it cost minutes, not lines, and the working spelling is the nicer one.

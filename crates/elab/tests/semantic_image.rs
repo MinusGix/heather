@@ -6,9 +6,9 @@ use heather_elab::{Elaborator, ModuleDependencyIdentity, ModuleReplayError};
 
 use crate::support;
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const VEC_CODE: &str = include_str!("../../../lib/vec_code.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const VEC_CODE: &str = include_str!("../../../lib/lang/vec_code.hthr");
 
 fn prefix() -> Elaborator {
     let mut elab = Elaborator::with_prelude().expect("prelude");

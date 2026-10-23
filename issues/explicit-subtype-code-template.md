@@ -28,7 +28,7 @@ First executable slice of [[subtype-transfer-and-evidence]] and
 
 - 2026-09-05: Started the explicit template slice. `docs/explicit-subtype-lift-round.md`
   describes `emit_code`, the two templates, and their checked-client target.
-- 2026-09-05: Complete. `lib/subtype_code.hthr` emits the binary wrapper and
+- 2026-09-05: Complete. `lib/lang/subtype_code.hthr` emits the binary wrapper and
   projection certificate; `docs/showcase/lift_positive.hthr` checks positive
   addition, agreement with the manual wrapper, and ambient associativity.
   Regressions cover resumable closure evidence, wrong evidence, positive zero,

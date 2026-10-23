@@ -6,7 +6,7 @@ created: 2026-10-15
 updated: 2026-10-20
 ---
 
-Found moving `lib/std/rat.hthr` to implicit endpoints (PR #42, 2026-10-15).
+Found moving `lib/std/num/rat.hthr` to implicit endpoints (PR #42, 2026-10-15).
 Inside the body of
 
 ```heather

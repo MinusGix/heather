@@ -141,7 +141,7 @@ fraction of the size.
   elaborating the generated forms. Both belong to [[bv-omega-check-cost]].
 
   `scripts/perf ab --base 86de9b67` (width 1, 3 cold samples, every verdict
-  separate): `lib/std/omega.hthr` total −41%, gate −41%, RSS −12%, its
+  separate): `lib/std/tactic/omega.hthr` total −41%, gate −41%, RSS −12%, its
   `cutsat_*` lemmas −50–68%. The `bv_omega` fixture: total −58%, gate −63%,
   RSS −44%, conversion misses −83%, eval steps −68%, `bv_place_step`'s gate
   4.8 s → 1.3 s. Full suite: 2998 passed. The acceptance's "an order of

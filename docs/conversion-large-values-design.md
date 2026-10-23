@@ -2,7 +2,7 @@
 
 Round of `issues/conversion-cost-at-large-values.md` (2026-08-14). The issue
 asked one question first: take the reproducer's handful of individually
-expensive conversions (`k_bind_mono`, lib/ir_v1.hthr) and say what each one
+expensive conversions (`k_bind_mono`, lib/certgen/ir_v1.hthr) and say what each one
 is comparing. This doc records the answer, the lever it justified, and what
 was rejected. Numbers live in the issue log, per the standing policy; this
 file carries shape claims only.
@@ -98,7 +98,7 @@ comparison were already deep `==`; nothing there changes. Raw term roots
 
 ## 4. Acceptance criteria
 
-- The reproducer (`k_bind_mono` and its file) and the whole `lib/ir_v1.hthr`
+- The reproducer (`k_bind_mono` and its file) and the whole `lib/certgen/ir_v1.hthr`
   check materially faster; the certgen family's per-binary walls move on the
   `_gen_conv`-dominated binaries. Numbers in the issue log.
 - Full `scripts/test` green, including the updated fuel pins: a

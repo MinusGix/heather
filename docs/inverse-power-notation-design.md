@@ -48,7 +48,7 @@ term by term, never the notation.
 
 ## 3. The library shape
 
-At each carrier (`lib/std/rat.hthr`, `lib/std/creal.hthr`):
+At each carrier (`lib/std/num/rat.hthr`, `lib/std/num/creal.hthr`):
 
 - `Apart(x, y)` is `x < y ∨ y < x`, with `apart_sym` and `apart_irrefl`.
 - `Positive` / `Negative` are one-place sign predicates, the premises of the

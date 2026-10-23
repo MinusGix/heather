@@ -16,7 +16,7 @@ Transparent unfolding is not a general proof of recursive compatibility. The ind
 - Consume supplied rules for opaque callees, and report unsupported recursion or missing constructor facts as such.
 - Include changed recursive arguments, an invalid observation, and a branch needing a user lemma. Keep termination evidence distinct from relational compatibility.
 
-Do not treat pointwise list parametricity as finite-set semantics. Customers: `tree_image_source` and `tree_image_respects` in `lib/std/tree_finite_set.hthr`. Related: [[certified-parametricity]], [[relational-transfer-core]], [[setoid-auto-lifting]].
+Do not treat pointwise list parametricity as finite-set semantics. Customers: `tree_image_source` and `tree_image_respects` in `lib/std/data/set/tree_finite_set.hthr`. Related: [[certified-parametricity]], [[relational-transfer-core]], [[setoid-auto-lifting]].
 
 ## Scheduling
 

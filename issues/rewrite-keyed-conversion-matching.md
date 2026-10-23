@@ -13,7 +13,7 @@ elaborated terms, implicit arguments included) in the goal as written and
 one exposed layer (`docs/equation-rewrite-design.md` §2). It misses:
 
 - an occurrence whose implicit arguments are spelled differently
-  (`lib/std/bitvec.hthr`'s `ofNat(toNat(x)) = ofNat(0)` site, which needed
+  (`lib/std/bitvec/bitvec.hthr`'s `ofNat(toNat(x)) = ofNat(0)` site, which needed
   `sym` instead);
 - an occurrence one δ/ι step away from the written goal — part of the 71 std
   `j` sites PR #93 left, whose motives state a reduct of the goal

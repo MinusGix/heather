@@ -3,9 +3,9 @@
 Date: 2026-10-12. Owner: [ring-normalization](../issues/ring-normalization.md).
 The client that asked for it is the rationals round
 ([setoid-rationals-round](setoid-rationals-round.md), "Where the proof text
-went"): a third of `lib/std/rat.hthr` was monomial rearrangement.
+went"): a third of `lib/std/num/rat.hthr` was monomial rearrangement.
 
-- [`lib/std/ring.hthr`](../lib/std/ring.hthr): the syntax, the normalizer and
+- [`lib/std/tactic/ring.hthr`](../lib/std/tactic/ring.hthr): the syntax, the normalizer and
   its soundness proof, checked once.
 - `crates/elab/src/ring.rs`: the tactic — reification, the multiplier search,
   the certificate.
@@ -160,7 +160,7 @@ gets its scaled equation from `ring(hxy, hyz)`. `cross_term` and the
 seven-factor `distr_monomial` are gone: they existed only to feed the
 hand-written proofs.
 
-Measured with `scripts/perf ab --source-patch` over `lib/std/rat.hthr`, cold
+Measured with `scripts/perf ab --source-patch` over `lib/std/num/rat.hthr`, cold
 (counters are exact; seconds are this box's and are stated as shapes):
 
 - The module's own declarations check faster than before: the hand

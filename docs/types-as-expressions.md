@@ -226,7 +226,7 @@ the first declaration in a file and wrong for every one after it. The symptom
 was a kernel `NotConvertible` on a term the elaborator was happy with — the
 "checked theorem about the wrong object" half of
 `docs/testing-generated-terms.md`'s dichotomy, caught only because
-`lib/ir_v1.hthr` has many declarations. A single-declaration test could not see
+`lib/certgen/ir_v1.hthr` has many declarations. A single-declaration test could not see
 it, which is why `crates/elab/tests/types_as_expressions.rs` §5 varies the
 declaration *order*.
 
@@ -295,7 +295,7 @@ half that matters**:
 
 ## 6. Cost
 
-Naming `Refines` in `lib/ir_v1.hthr` and restating three theorems through it
+Naming `Refines` in `lib/certgen/ir_v1.hthr` and restating three theorems through it
 **made the file faster**: 35.96s → 32.90s release (−8.5%), and 204 → 194 CPU-s
 for the debug test binary. The δ-unfolding conversion now has to do is more
 than paid for by elaborating the statement once instead of six times (three

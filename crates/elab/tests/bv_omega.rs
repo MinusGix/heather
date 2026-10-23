@@ -11,19 +11,19 @@ use heather_elab::{ElabError, Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/int.hthr")),
-    ("omega", include_str!("../../../lib/std/omega.hthr")),
-    ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/num/int.hthr")),
+    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
+    ("bitvec", include_str!("../../../lib/std/bitvec/bitvec.hthr")),
     ("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")),
-    ("bitvec_omega", include_str!("../../../lib/std/bitvec/bitvec_omega.hthr")),
-    ("char", include_str!("../../../lib/std/char.hthr")),
+    ("bitvec_omega", include_str!("../../../lib/std/tactic/bitvec_omega.hthr")),
+    ("char", include_str!("../../../lib/std/text/char.hthr")),
     ("byte", include_str!("../../../lib/std/bitvec/byte.hthr")),
 ];
 

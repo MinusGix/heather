@@ -6,7 +6,7 @@ definition and never a kernel case for a definition's shape.
 
 ## The swap
 
-`lib/std/bitvec.hthr` defined `add(n, a, b)` as
+`lib/std/bitvec/bitvec.hthr` defined `add(n, a, b)` as
 `iterate_increment(n, a, toNat(n, b))` — one increment per unit of the second
 operand's unsigned value, so a machine-width operand asked for up to `2^64`
 steps, and `sub`, `neg`, `signed_overflow_add`/`_sub` and `signed_lt_bit`
@@ -49,7 +49,7 @@ is a small literal and the vector is open. Three consequences showed up.
 - **`add(n, a, zero) ≡ a` is gone.** `iter_add` absorbed a zero count
   definitionally; the ripple does not. `bitvec::add_of_toNat_zero(n, a, b, h)`
   with `h : toNat(n, b) = 0` is the replacement.
-  `lib/elf64_calls.hthr`'s `stored_word_preserves_return` was the only site:
+  `lib/std/os/linux/elf64_calls.hthr`'s `stored_word_preserves_return` was the only site:
   it passed `outside.byte0`, whose type names
   `bitvec::add(64, protected, ofNat(64, 0))`, where a bare `protected` was
   expected. It now transports with `j` over that lemma. (The symptom was
@@ -112,7 +112,7 @@ comparison over an open vector.
 
 - `mul` and `ofNat` above `2^n`, as above.
 - The byte-offset idiom in `lib/std/arch/x86_64/x86_64_calls.hthr` and
-  `lib/elf64_calls.hthr` (`bitvec::add(64, pointer, ofNat(64, k))` for
+  `lib/std/os/linux/elf64_calls.hthr` (`bitvec::add(64, pointer, ofNat(64, k))` for
   `k` under eight, over an open pointer) still names `add`. Re-pointing it at
   `iter_add` was tried and rejected: it has to be done consistently across
   `WordPrefixWrites`, `WordOutside`, `stack_word` and the certificates

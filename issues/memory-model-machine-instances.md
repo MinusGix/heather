@@ -8,7 +8,7 @@ created: 2026-10-21
 updated: 2026-10-22
 ---
 
-`lib/std/memory.hthr` (docs/byte-memory-design.md) is a library model so far.
+`lib/std/machine/memory.hthr` (docs/byte-memory-design.md) is a library model so far.
 Nothing in the machine model or the program logic uses it yet. x86's memory
 is still an abstract `M` behind access records, and every `Stack<M>` law is
 assumed by whoever builds the stack. This round connects the two
@@ -45,7 +45,7 @@ assumed by whoever builds the stack. This round connects the two
 ## Log
 
 - 2026-10-22: Done. `lib/std/arch/x86_64/x86_64_byte_memory.hthr` and
-  `lib/linux_x86_64_byte_memory.hthr`; tests in
+  `lib/std/os/linux/linux_x86_64_byte_memory.hthr`; tests in
   `crates/elab/tests/x86_64_byte_memory.rs`. The decisions, against the
   acceptance list:
 

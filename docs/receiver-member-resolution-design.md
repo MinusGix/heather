@@ -162,8 +162,8 @@ that previously had no well-typed reading at all.
   - an uninferable receiver whose head is a local of unknown type still falls
     back to the bare name.
 - **Library sweep** over the receiver-position `@BitVec::zero` /
-  `@BitVec::ofNat` sites (`lib/std/bitvec.hthr` ~60, 291, 367, 1026–1077,
-  1645, 1751–1826; `lib/std/utf8.hthr` 451), using the ladder in §0. Plus
+  `@BitVec::ofNat` sites (`lib/std/bitvec/bitvec.hthr` ~60, 291, 367, 1026–1077,
+  1645, 1751–1826; `lib/std/text/utf8.hthr` 451), using the ladder in §0. Plus
   the sites the probe found removable with today's elaborator:
   - `utf8.hthr` 139/144/151: annotated `let`;
   - `x86_64/model.hthr` 1154/1162: `eq_dec` as an argument;
@@ -240,5 +240,5 @@ amending the section named:
     of `issues/unify-succ-under-addition.md`.
   - What is left: 24 lines belong to #1b (`concat`/`from_bits`/`head_bit`),
     7 are the `Decide` instance heads, and 11 were not examined
-    (`@bitvec::BitVec::add(64, …)` ×8 in `lib/function_ir_x86.hthr`,
+    (`@bitvec::BitVec::add(64, …)` ×8 in `lib/native/function_ir/function_ir_x86.hthr`,
     `@byte_cons_cong` ×3 in `x86_64/model.hthr`).

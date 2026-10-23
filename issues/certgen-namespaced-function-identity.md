@@ -32,7 +32,7 @@ in certgen can currently say "the function `nat::Nat::add`".
 
 `in_language_transcriber` fails with `fn viaadd: unbound name add`. The
 heavier certgen emission tests are skipped by the fast lane, but they share
-these assumptions and will fail the same way. `lib/certgen_code.hthr` itself was
+these assumptions and will fail the same way. `lib/certgen/certgen_code.hthr` itself was
 rewritten to the new names (`d.sub(1).sub(l)`, …) and is not the problem.
 
 ## Directions (undecided)

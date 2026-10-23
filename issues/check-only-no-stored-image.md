@@ -48,9 +48,9 @@ should fall under the budget on its own; then this issue is only the diagnostic.
 
 - 2026-09-18: Filed the same day as a claimed `--only` regression ("refuses on
   every module"), which was **wrong** and is corrected here. `--only` works:
-  5 s on `calc_parser`, 1 s on `lib/std/string.hthr`. Two different failures had
+  5 s on `calc_parser`, 1 s on `lib/std/text/string.hthr`. Two different failures had
   been conflated — a transient one where a `.latest` pointer named an older
-  dependency world right after `lib/std/list.hthr` changed, and this permanent
+  dependency world right after `lib/std/data/list.hthr` changed, and this permanent
   one, which is over-budget publication. The transient case repairs itself on
   the next full check; only the over-budget case is a standing defect.
 - 2026-09-18: The diagnostic half landed: `NoPreviousImage` now names both ways to reach it —

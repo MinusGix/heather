@@ -3,7 +3,7 @@
 Status: **design, 2026-09-18**; owner `issues/list-course-of-values-recursion.md`.
 Extends `docs/course-of-values-recursion-design.md` (the `Nat` design, read it
 first; §8 there deferred this case "until a customer"). The customer is
-`lib/std/utf8.hthr`: `decode` consumes one to four bytes per step, so its
+`lib/std/text/utf8.hthr`: `decode` consumes one to four bytes per step, so its
 self-call lands on a grandchild of the scrutinee, and today it recurses on a
 fuel because of that. Heather code below is a sketch and unchecked.
 
@@ -114,7 +114,7 @@ the value at `chain[i]`.
    wrong-value control, a nested `match` on another variable not extending
    the chain, a user chain-shaped inductive with two base constructors, and
    the tree refusal with its message.
-4. **Customer**: `lib/std/utf8.hthr` — `decode_at` and its fuel go;
+4. **Customer**: `lib/std/text/utf8.hthr` — `decode_at` and its fuel go;
    `decode` recurses on `rest`, `rest2`, `rest3`, `rest4` directly. Theorems
    3–6 must close again (they should get *simpler*: no fuel arithmetic in
    `push_step`/`decode_at_encode_chars`), tests in

@@ -1,4 +1,4 @@
-// A client of `lib/std/itree.hthr`: programs over a small console, run by
+// A client of `lib/std/itree/itree.hthr`: programs over a small console, run by
 // evaluation, plus recursion as events and a handler.
 //
 // Everything closed computes by `refl`: a tree is inductive, so a program's

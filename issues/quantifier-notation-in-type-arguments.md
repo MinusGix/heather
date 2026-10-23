@@ -33,7 +33,7 @@ shipped:
 Iff<Le(n, m), Exists(λ (k: Nat) => add(n, k) = m)>
 ```
 
-so `lib/std/nat.hthr`'s `le_iff_exists_add` is written that way and nothing is
+so `lib/std/num/nat.hthr`'s `le_iff_exists_add` is written that way and nothing is
 blocked. What is lost is that the notation and the call spelling are supposed
 to be interchangeable ([[std-logic-module]]'s claim), and here they are not.
 

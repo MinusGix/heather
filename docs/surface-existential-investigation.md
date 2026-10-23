@@ -7,7 +7,7 @@ commits. Tracking issue: `issues/surface-existential.md`.
 > the substitution rule, the construction decision and the parameters-vs-indices
 > line are recorded in `docs/surface-value-parameters.md`, the acceptance in
 > `crates/elab/tests/value_parameters.rs`, and the consumers in
-> `lib/ir_v1.hthr`. Two sizings came in *cheaper* than §C: the AST split (a
+> `lib/certgen/ir_v1.hthr`. Two sizings came in *cheaper* than §C: the AST split (a
 > separate `valparams` list left every existing `ind.params` zip untouched) and
 > **construction, which needed no code at all** — `build_ctor` already reads its
 > annotations off the expected type, so §C.5's "medium" was a decision, not an
@@ -29,7 +29,7 @@ round take?
 `issues/indexed-families.md`'s machinery**. Every part of the encoding already
 type-checks against the real kernel, and everything except *writing the
 parameters as parameters* already works at the surface — including the full
-`Converges` over the real `lib/ir_v1.hthr` declarations at concrete arguments.
+`Converges` over the real `lib/certgen/ir_v1.hthr` declarations at concrete arguments.
 Route 2 (a general Σ over a type-family parameter) is blocked on a different,
 larger thing (a `Ty` form denoting a family; monomorphized parameters) and
 should be deferred. Details below, question by question.
@@ -138,9 +138,9 @@ does catch it. Rule for the generator: the parameter substitution is by
 **What failed:** nothing else. No former was missing, no level had to move,
 no conversion behaviour had to be worked around.
 
-### B.2 Full `Converges` over the real `lib/ir_v1.hthr` — at the surface
+### B.2 Full `Converges` over the real `lib/certgen/ir_v1.hthr` — at the surface
 
-Scratch file (scratchpad `ir_converges.hthr` = `lib/ir_v1.hthr` plus an
+Scratch file (scratchpad `ir_converges.hthr` = `lib/certgen/ir_v1.hthr` plus an
 appendix), run ulimit-wrapped, **`ok`**:
 
 ```heather
@@ -400,7 +400,7 @@ fn add_one_one_conv() -> Converges(add_prog(), VCons(embed_nat(1), VCons(embed_n
 ```
 
 `fuel_monotone` becomes a *lemma about `Converges`* rather than about raw
-fuel (`lib/ir_v1.hthr:780-788` is unchanged; this wraps it):
+fuel (`lib/certgen/ir_v1.hthr:780-788` is unchanged; this wraps it):
 
 ```heather
 theorem conv_loosen(p: Prog, env: Val, ir: Ir, vs: Val, m: Nat,
@@ -409,7 +409,7 @@ theorem conv_loosen(p: Prog, env: Val, ir: Ir, vs: Val, m: Nat,
 { fuel_monotone(p, env, ir, vs, c.n, m, c.h, hle) }
 ```
 
-`refines` (`lib/ir_v1.hthr:789-805`) loses its fuel map:
+`refines` (`lib/certgen/ir_v1.hthr:789-805`) loses its fuel map:
 
 ```heather
 theorem refines_trans(…): (env: Val) -> (vs: Val)
@@ -429,7 +429,7 @@ chaining. The landed bounded proofs are the image of the ∃-form under the
 
 The wanted statement is
 `k_bind(ev, env, rest, r) = Out(vs) -> exists ws. (r = Out(ws)) × …`
-(`k_bind` at `lib/ir_v1.hthr:329-334`). Under route 1 that is an
+(`k_bind` at `lib/certgen/ir_v1.hthr:329-334`). Under route 1 that is an
 **iterated** value-parameterized record — §B.1 test 8 is this shape,
 prototyped and checked:
 
@@ -485,7 +485,7 @@ at level 1 (non-cumulativity).
 Consequence for the consumers: the prelude's `sym`/`trans`
 (`crates/elab/src/prelude.hthr:25-31`) are `theorem sym<A>(…)` with `A` a
 `TyParam` defaulting to `Type<0>`, and `j` is used at level 0 throughout
-`lib/ir_v1.hthr`. A level-0 `Converges` is therefore an ordinary `A` for all
+`lib/certgen/ir_v1.hthr`. A level-0 `Converges` is therefore an ordinary `A` for all
 of them, and §B.1 test 5 exercises `J` at exactly those levels
 (`ty_level = motive_level = 0`) with an *open* motive family. No interaction.
 
@@ -535,7 +535,7 @@ see a dropped join.
    are the places this would show up; worth one bench fixture, not worth
    blocking on.
 6. **Fallback line.** If C.5 or C.3 turns out worse than sized, the
-   computed-bound form already in `lib/ir_v1.hthr` keeps working unchanged
+   computed-bound form already in `lib/certgen/ir_v1.hthr` keeps working unchanged
    and nothing regresses — the ∃-form is its image under the ∃-closure. The
    fallback is "do nothing", and it is cheap.
 
@@ -562,7 +562,7 @@ prototypes in §B are the "before" half and are already done.
    investigation says are load-bearing: the **capture** negative control
    (risk 3), one **nonzero-level** test (§G), and a **neutral-parameter**
    test (the parameter a theorem binder, not a literal).
-6. **Consumers** — `Converges` in `lib/ir_v1.hthr` per §F.1, then
+6. **Consumers** — `Converges` in `lib/certgen/ir_v1.hthr` per §F.1, then
    `k_bind_inv` per §F.2, which is the payoff that retires four convoy
    motives in `step_mono`.
 7. Then close `issues/surface-existential.md` for route 1 and leave route 2
