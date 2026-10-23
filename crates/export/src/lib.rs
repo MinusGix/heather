@@ -280,7 +280,7 @@ struct Tr<'a> {
     /// further binders.
     ctx: RefCell<Vec<Option<(Hx, Rc<Term>)>>>,
     /// The tier-1 declarations met so far (`wf.rs`).
-    wf: &'a wf::WfTable,
+    wf: &'a wf::WfTable<'a>,
     /// The translation's sharing, which keeps it linear in the kernel
     /// term's DAG rather than in the tree it unfolds to (design §5.6).
     memo: RefCell<Memo>,
@@ -913,12 +913,26 @@ pub struct Inductive {
     pub fields: Vec<(u32, u32)>,
 }
 
-/// A definition the target needs that Ψ has no binding for.
+/// A definition the target needs that Ψ has no binding for: a helper, or
+/// (`inductive` set, no body) a native inductive realising a declaration
+/// at a level profile other than its own (`wf.rs`).
 #[derive(Clone, Debug)]
 pub struct Aux {
     pub name: String,
     pub ty: Hx,
-    pub body: Hx,
+    pub body: Option<Hx>,
+    pub inductive: Option<Inductive>,
+}
+
+impl Aux {
+    fn map(&self, f: &mut dyn FnMut(&Hx) -> Hx) -> Aux {
+        Aux {
+            name: self.name.clone(),
+            ty: f(&self.ty),
+            body: self.body.as_ref().map(&mut *f),
+            inductive: self.inductive.as_ref().map(|i| Inductive { ctors: i.ctors.iter().map(|(k, t)| (k.clone(), f(t))).collect(), ..i.clone() }),
+        }
+    }
 }
 
 /// What the exporter reads: Ψ, plus what the elaborator knows beside it.
@@ -934,12 +948,17 @@ pub struct Source<'a> {
     /// (`Elaborator::constructor_names`): what a native inductive's
     /// constructors are called.
     pub ctors: &'a dyn Fn(u64) -> Option<Vec<String>>,
+    /// A tag's whole-type code function at the given type-parameter levels,
+    /// closed in `psi` as a whole (`Elaborator::tycode_fn_at`): what a use
+    /// of a parameterized declaration at another level is realised from.
+    /// The declaration's module-qualified name comes with it.
+    pub tycode_at: &'a dyn Fn(u64, &[Level]) -> Option<(String, Term)>,
 }
 
 impl<'a> Source<'a> {
     /// Ψ alone: sealed proofs only, and no names.
     pub fn psi(psi: &'a GlobalCtx) -> Source<'a> {
-        Source { psi, proof: &|_| None, name: &|_| None, ctors: &|_| None }
+        Source { psi, proof: &|_| None, name: &|_| None, ctors: &|_| None, tycode_at: &|_, _| None }
     }
 }
 
@@ -960,13 +979,12 @@ pub fn export(src: &Source) -> Vec<Exported> {
     let psi = src.psi;
     let mut out: Vec<Exported> = Vec::new();
     let mut refused = vec![false; psi.bindings.len()];
-    let table = wf::WfTable::default();
+    let table = wf::WfTable::new(src);
     let mut interned = Interned::default();
     for (abs, b) in psi.bindings.iter().enumerate() {
         let prefix = psi.prefix(abs);
         let tr = Tr { at: abs, psi: &prefix, ctx: RefCell::new(Vec::new()), wf: &table, memo: RefCell::default() };
         let mut name = (src.name)(abs);
-        table.wanted.borrow_mut().clear();
         let decl = (|| -> R<Decl> {
             let GlobalBinding::Tm { ctx, ty, body, level, .. } = b else {
                 return refuse("context or type global binding");
@@ -997,37 +1015,45 @@ pub fn export(src: &Source) -> Vec<Exported> {
             let spelled = proof.map(|t| {
                 spell_checked_for_export(&prefix, 0, Layer::Code, ctx, Rc::clone(&t), ty, level, DEFAULT_FUEL).unwrap_or(t)
             });
-            if let Some(code) = body.as_ref().filter(|_| entries.is_empty()) {
-                if let Some(w) = tr.register_wf(name.as_deref(), code, ty_tag_ctors(src, &prefix, code))? {
+            let registered = match body.as_ref().filter(|_| entries.is_empty()) {
+                Some(code) => tr.register_wf(name.as_deref(), code, ty_tag_ctors(src, &prefix, code))?,
+                None => None,
+            };
+            let mut d = match registered {
+                Some(w) => {
                     name = Some(w.key.clone());
-                    return tr.wf_inductive(&w, tr.ty(&spelled_ty)?);
+                    tr.wf_inductive(&w, tr.ty(&spelled_ty)?)?
                 }
-            }
-            let (ty, body) = tr.over(&spelled_ctx, &|| Ok((tr.ty(&spelled_ty)?, spelled.as_ref().map(|t| tr.tm(t)).transpose()?)))?;
-            let mut d = Decl { abs, name: name.clone(), ty, body, inductive: None, before: Vec::new(), after: Vec::new() };
+                None => {
+                    let (ty, body) = tr.over(&spelled_ctx, &|| Ok((tr.ty(&spelled_ty)?, spelled.as_ref().map(|t| tr.tm(t)).transpose()?)))?;
+                    Decl { abs, name: name.clone(), ty, body, inductive: None, before: Vec::new(), after: Vec::new() }
+                }
+            };
             // The eliminators this declaration is the first to use, each
             // translated where its declaration is.
             let wanted = std::mem::take(&mut *table.wanted.borrow_mut());
-            for (tag, ml) in wanted {
-                if !table.emitted.borrow_mut().insert((tag, ml)) {
+            for (key, ml) in wanted {
+                if !table.emitted.borrow_mut().insert((key.clone(), ml)) {
                     continue;
                 }
-                let w = table.by_tag.borrow()[&tag].clone();
+                table.emitted_here.borrow_mut().push((key.clone(), ml));
+                let w = table.by_key.borrow()[&key].clone();
                 let at = Tr { at: w.abs, psi: &w.psi, ctx: RefCell::new(Vec::new()), wf: &table, memo: RefCell::default() };
-                match at.wf_elim_def(&w, ml) {
-                    Ok(aux) => d.before.push(aux),
-                    Err(e) => {
-                        table.emitted.borrow_mut().remove(&(tag, ml));
-                        return Err(e);
-                    }
-                }
+                d.before.push(at.wf_elim_def(&w, ml)?);
             }
+            // Before them, the inductives realised at another level profile
+            // for this declaration (`wf.rs`), each before what mentions it.
+            let fresh = std::mem::take(&mut *table.fresh.borrow_mut());
+            d.before.splice(0..0, fresh);
             if let Some(dep) = mentions(&d).into_iter().find(|&g| refused[g]) {
                 let dep = (src.name)(dep).unwrap_or_else(|| format!("g{dep}"));
                 return Err(Refusal(format!("mentions refused declaration {dep}")));
             }
             Ok(d)
         })();
+        // What a refused declaration realised is not printed, so a later
+        // declaration that needs it realises it again.
+        table.settle(decl.is_ok());
         let decl = decl.map(|d| interned.decl(d));
         refused[abs] = decl.is_err();
         out.push(Exported { abs, name, decl });
@@ -1088,13 +1114,12 @@ impl Interned {
     fn decl(&mut self, d: Decl) -> Decl {
         let mut memo = std::collections::HashMap::new();
         let mut f = |t: &Hx| (*self.node(t, &mut memo)).clone();
-        let aux = |a: &Aux, f: &mut dyn FnMut(&Hx) -> Hx| Aux { name: a.name.clone(), ty: f(&a.ty), body: f(&a.body) };
         Decl {
             ty: f(&d.ty),
             body: d.body.as_ref().map(&mut f),
             inductive: d.inductive.as_ref().map(|i| Inductive { ctors: i.ctors.iter().map(|(k, t)| (k.clone(), f(t))).collect(), ..i.clone() }),
-            before: d.before.iter().map(|a| aux(a, &mut f)).collect(),
-            after: d.after.iter().map(|a| aux(a, &mut f)).collect(),
+            before: d.before.iter().map(|a| a.map(&mut f)).collect(),
+            after: d.after.iter().map(|a| a.map(&mut f)).collect(),
             ..d
         }
     }
@@ -1119,7 +1144,9 @@ fn roots(d: &Decl) -> Vec<&Hx> {
     out.extend(&d.body);
     out.extend(d.inductive.iter().flat_map(|i| &i.ctors).map(|(_, t)| t));
     for a in d.before.iter().chain(&d.after) {
-        out.extend([&a.ty, &a.body]);
+        out.push(&a.ty);
+        out.extend(&a.body);
+        out.extend(a.inductive.iter().flat_map(|i| &i.ctors).map(|(_, t)| t));
     }
     out
 }
@@ -1455,7 +1482,8 @@ pub fn print_lean_files(decls: &[Exported]) -> Vec<(String, String)> {
         for e in run {
             file_of_abs.insert(e.abs, i);
             if let Ok(d) = &e.decl {
-                let keys = d.before.iter().chain(&d.after).map(|a| &a.name).chain(d.inductive.iter().flat_map(|ind| ind.ctors.iter().map(|c| &c.0)));
+                let inductives = d.inductive.iter().chain(d.before.iter().flat_map(|a| &a.inductive));
+                let keys = d.before.iter().chain(&d.after).map(|a| &a.name).chain(inductives.flat_map(|ind| ind.ctors.iter().map(|c| &c.0)));
                 for k in keys.chain(d.name.iter()) {
                     file_of_key.insert(k.clone(), i);
                 }
@@ -1525,21 +1553,24 @@ fn print_run<'e>(p: &mut Printer, decls: impl Iterator<Item = &'e Exported> + Cl
     let decls: Vec<&Exported> = if p.target == Target::Coq {
         let mut recs = Recs::new();
         for e in decls.clone() {
-            if let Ok(Decl { name: Some(key), inductive: Some(ind), .. }) = &e.decl {
-                recs.insert(format!("{key}::rec"), (ind.nparams, ind.fields.clone()));
+            if let Ok(d) = &e.decl {
+                let own = d.name.iter().zip(&d.inductive);
+                for (key, ind) in own.chain(d.before.iter().filter_map(|a| Some((&a.name, a.inductive.as_ref()?)))) {
+                    recs.insert(format!("{key}::rec"), (ind.nparams, ind.fields.clone()));
+                }
             }
         }
         let memo = RefCell::new(Nodes::new());
-        let fix = |t: &Hx| (*rocq_minors(t, &recs, &mut memo.borrow_mut())).clone();
+        let mut fix = |t: &Hx| (*rocq_minors(t, &recs, &mut memo.borrow_mut())).clone();
         rocq = decls
             // The memo is keyed by node address, so it reads the
             // declarations in place, never a copy that is dropped after.
             .map(|e| Exported {
                 decl: e.decl.as_ref().map(|d| Decl {
                     ty: fix(&d.ty),
-                    body: d.body.as_ref().map(fix),
-                    before: d.before.iter().map(|a| Aux { name: a.name.clone(), ty: fix(&a.ty), body: fix(&a.body) }).collect(),
-                    after: d.after.iter().map(|a| Aux { name: a.name.clone(), ty: fix(&a.ty), body: fix(&a.body) }).collect(),
+                    body: d.body.as_ref().map(&mut fix),
+                    before: d.before.iter().map(|a| a.map(&mut fix)).collect(),
+                    after: d.after.iter().map(|a| a.map(&mut fix)).collect(),
                     ..d.clone()
                 }).map_err(Refusal::clone),
                 ..e.clone()
@@ -1556,9 +1587,9 @@ fn print_run<'e>(p: &mut Printer, decls: impl Iterator<Item = &'e Exported> + Cl
     if let Some(s) = &mut share {
         for e in decls.clone() {
             if let Ok(d) = &e.decl {
-                for a in d.before.iter().chain(&d.after) {
+                for a in d.before.iter().chain(&d.after).filter(|a| a.inductive.is_none()) {
                     s.count(&a.ty);
-                    s.count(&a.body);
+                    a.body.as_ref().map(|b| s.count(b));
                 }
                 if d.inductive.is_none() {
                     s.count(&d.ty);
@@ -1613,14 +1644,17 @@ fn print_run<'e>(p: &mut Printer, decls: impl Iterator<Item = &'e Exported> + Cl
             None => p.def(name, ty, body),
         };
         for a in &d.before {
-            def(p, &target_name(p.target, &a.name), &a.ty, Some(&a.body));
+            match &a.inductive {
+                Some(ind) => p.inductive(&target_name(p.target, &a.name), &a.ty, ind),
+                None => def(p, &target_name(p.target, &a.name), &a.ty, a.body.as_ref()),
+            }
         }
         match &d.inductive {
             Some(ind) => p.inductive(&name, &d.ty, ind),
             None => def(p, &name, &d.ty, d.body.as_ref()),
         }
         for a in &d.after {
-            def(p, &target_name(p.target, &a.name), &a.ty, Some(&a.body));
+            def(p, &target_name(p.target, &a.name), &a.ty, a.body.as_ref());
         }
     }
 }
@@ -1639,6 +1673,21 @@ struct Dag {
 }
 
 impl Dag {
+    /// One declaration's line: an inductive, a definition or an axiom.
+    fn decl_line(&mut self, name: &str, ty: usize, inductive: Option<&Inductive>, body: Option<&Hx>) -> Result<String, String> {
+        Ok(match (inductive, body) {
+            (Some(ind), _) => {
+                let mut l = format!("i\t{name}\t{}\t{ty}", ind.nparams);
+                for (key, cty) in &ind.ctors {
+                    let _ = write!(l, "\t{key}\t{}", self.node(cty)?);
+                }
+                l
+            }
+            (None, Some(b)) => format!("d\t{name}\t{ty}\t{}", self.node(b)?),
+            (None, None) => format!("ax\t{name}\t{ty}"),
+        })
+    }
+
     fn node(&mut self, t: &Hx) -> Result<usize, String> {
         if let Some(&id) = self.by_node.get(&(t as *const Hx)) {
             return Ok(id);
@@ -1705,23 +1754,14 @@ pub fn print_kernel(decls: &[Exported]) -> String {
             Ok(d) => (|| {
                 let mut lines = Vec::new();
                 let aux = |dag: &mut Dag, a: &Aux| -> Result<String, String> {
-                    Ok(format!("d\t{}\t{}\t{}", a.name, dag.node(&a.ty)?, dag.node(&a.body)?))
+                    let ty = dag.node(&a.ty)?;
+                    dag.decl_line(&a.name, ty, a.inductive.as_ref(), a.body.as_ref())
                 };
                 for a in &d.before {
                     lines.push(aux(&mut dag, a)?);
                 }
                 let ty = dag.node(&d.ty)?;
-                lines.push(match (&d.inductive, &d.body) {
-                    (Some(ind), _) => {
-                        let mut l = format!("i\t{name}\t{}\t{ty}", ind.nparams);
-                        for (key, cty) in &ind.ctors {
-                            let _ = write!(l, "\t{key}\t{}", dag.node(cty)?);
-                        }
-                        l
-                    }
-                    (None, Some(b)) => format!("d\t{name}\t{ty}\t{}", dag.node(b)?),
-                    (None, None) => format!("ax\t{name}\t{ty}"),
-                });
+                lines.push(dag.decl_line(&name, ty, d.inductive.as_ref(), d.body.as_ref())?);
                 for a in &d.after {
                     lines.push(aux(&mut dag, a)?);
                 }

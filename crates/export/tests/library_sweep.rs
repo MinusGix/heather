@@ -29,6 +29,7 @@ fn std_list_closure_exports() {
         proof: &|abs| e.export_proof(abs).cloned(),
         name: &|abs| e.global_key_at(abs).map(str::to_string).or_else(|| e.generated_key_at(abs)),
         ctors: &|tag| e.constructor_names(tag as u32),
+        tycode_at: &|tag, levels| e.tycode_fn_at(tag as u32, levels),
     });
     let mut causes: BTreeMap<String, usize> = BTreeMap::new();
     for d in &decls {
@@ -124,6 +125,7 @@ fn open_tag_control(e: &Elaborator) -> String {
         proof: &|a| e.export_proof(a).cloned(),
         name: &|a| if a == abs { Some("control::open_tag_beta".into()) } else { e.global_key_at(a).map(str::to_string).or_else(|| e.generated_key_at(a)) },
         ctors: &|tag| e.constructor_names(tag as u32),
+        tycode_at: &|tag, levels| e.tycode_fn_at(tag as u32, levels),
     });
     let control = decls.last().expect("the control");
     assert!(control.decl.is_ok(), "the control exports: {:?}", control.decl.as_ref().err());

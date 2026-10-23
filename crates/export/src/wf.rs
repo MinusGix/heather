@@ -5,7 +5,7 @@
 //! can be a native inductive with one constructor per summand of its shape,
 //! holding the summand's payload and the children as fields. The exporter
 //! meets a declaration as its whole-type code, `D#tycode` or
-//! `D#tycode_fn : Π(A : Ty l)…. Ty l := λ…. Wf(x : S). n`, and emits there
+//! `D#tycode_fn : Π(A : Ty l)…(v : T)…. Ty l := λ…. Wf(x : S). n`, and emits there
 //!
 //! - the inductive `D (A…) : Type l`, constructor `k` taking the payload
 //!   `P_k` and `n_k` children (the arity at summand `k` must be a literal);
@@ -24,6 +24,13 @@
 //! declaration has a parameter, the instance has its argument. The walk is
 //! lenient (it compares nothing), because Lean checks the result: a wrong
 //! argument is a rejected declaration, never an accepted wrong one.
+//!
+//! A parameter may be a value (`Trace<R>(E: Events)`), read off the
+//! instance where the declaration's spelling has the variable. A use at
+//! another type-parameter level profile (`List<A → B → Type>`) names that
+//! profile's own native inductive (`list::List::at#1`), lowered by the
+//! elaborator at the profile and declared before the binding that first
+//! needs it (design §5.1).
 //!
 //! What the realisation lacks is `elim_Wf`'s β at an *open* tag, which
 //! Heather has and `D.rec` cannot (`probes/WfNative.lean`, (3)). Generated
@@ -44,9 +51,15 @@ pub(crate) struct WfDecl {
     /// The inductive's key (`list::List`); its constructors, `supf#` and
     /// eliminators live under it.
     pub key: String,
+    /// How a use names the inductive: the binding at `abs` for the
+    /// declaration's own level profile, a target-only constant
+    /// (`list::List::at#1`) for another one.
+    pub head: Hx,
     pub ctors: Vec<String>,
-    /// The parameters' levels, outermost first: `A_i : Ty l_i`.
-    pub params: Vec<Level>,
+    /// The parameters, outermost first, each `(domain, level)` scoped under
+    /// the ones before it: a type parameter `A_i : Ty l_i`, or a value
+    /// parameter `v : T` (`Trace<R>(E: Events)`).
+    pub params: Vec<(Rc<Type>, Level)>,
     pub level: Level,
     pub shape: Rc<Type>,
     /// Under (Δ, x : S).
@@ -70,6 +83,11 @@ impl WfDecl {
 
     fn np(&self) -> u32 {
         self.params.len() as u32
+    }
+
+    /// The type parameters' levels: which profile this realisation is.
+    fn profile(&self) -> R<Vec<u64>> {
+        self.params.iter().filter_map(|(dom, _)| if let Type::Ty(l) = &**dom { Some(lvl(l).map(|l| l.0)) } else { None }).collect()
     }
 
     /// `Wf(S; n)` weakened past `by` binders beyond Δ.
@@ -116,13 +134,77 @@ impl WfDecl {
     }
 }
 
-/// The declarations met so far, and the eliminators the declaration being
-/// translated asked for.
-#[derive(Default)]
-pub(crate) struct WfTable {
+/// The declarations met so far, and what the declaration being translated
+/// asked for: eliminators (by declaration key and motive level), and
+/// realisations at another level profile, which it declares first.
+pub(crate) struct WfTable<'s> {
+    /// Each declaration at its own profile, by nominal tag.
     pub by_tag: RefCell<HashMap<u64, Rc<WfDecl>>>,
-    pub wanted: RefCell<Vec<(u64, u64)>>,
-    pub emitted: RefCell<HashSet<(u64, u64)>>,
+    /// Every realisation, the other profiles' included, by key.
+    pub by_key: RefCell<HashMap<String, Rc<WfDecl>>>,
+    pub wanted: RefCell<Vec<(String, u64)>>,
+    pub emitted: RefCell<HashSet<(String, u64)>>,
+    /// The declarations the current binding added: the realisations (as
+    /// the inductive and its `supf#`) and the eliminators it emits.
+    pub fresh: RefCell<Vec<Aux>>,
+    created: RefCell<Vec<String>>,
+    created_tags: RefCell<Vec<u64>>,
+    pub emitted_here: RefCell<Vec<(String, u64)>>,
+    /// Ψ whole, which another profile's code function is scoped in.
+    full: GlobalCtx,
+    tycode_at: &'s dyn Fn(u64, &[Level]) -> Option<(String, Term)>,
+    ctors: &'s dyn Fn(u64) -> Option<Vec<String>>,
+}
+
+impl<'s> WfTable<'s> {
+    pub fn new(src: &Source<'s>) -> WfTable<'s> {
+        WfTable {
+            by_tag: RefCell::default(),
+            by_key: RefCell::default(),
+            wanted: RefCell::default(),
+            emitted: RefCell::default(),
+            fresh: RefCell::default(),
+            created: RefCell::default(),
+            created_tags: RefCell::default(),
+            emitted_here: RefCell::default(),
+            full: src.psi.prefix(src.psi.bindings.len()),
+            tycode_at: src.tycode_at,
+            ctors: src.ctors,
+        }
+    }
+
+    /// End a binding: what it added stays when it was exported and is
+    /// forgotten when it was refused, since a refused binding's `before`
+    /// is never printed.
+    pub fn settle(&self, exported: bool) {
+        self.wanted.borrow_mut().clear();
+        self.fresh.borrow_mut().clear();
+        let created = std::mem::take(&mut *self.created.borrow_mut());
+        let emitted = std::mem::take(&mut *self.emitted_here.borrow_mut());
+        let tags = std::mem::take(&mut *self.created_tags.borrow_mut());
+        if !exported {
+            let mut by_tag = self.by_tag.borrow_mut();
+            for tag in tags {
+                by_tag.remove(&tag);
+            }
+            let mut by_key = self.by_key.borrow_mut();
+            for key in created {
+                by_key.remove(&key);
+            }
+            let mut done = self.emitted.borrow_mut();
+            for e in emitted {
+                done.remove(&e);
+            }
+        }
+    }
+}
+
+/// A parameter's argument, read off an instance: a type (and the level the
+/// instance has it at, where an annotation says), or a value.
+#[derive(Clone)]
+enum Arg {
+    Ty(Type, Option<Level>),
+    Tm(Term),
 }
 
 fn var(i: u32) -> Rc<Term> {
@@ -205,13 +287,24 @@ impl Tr<'_> {
     }
 
     /// Register the binding being translated when it is a tier-1 type code,
-    /// `λ(A : Ty l)…. Wf(x : S). n`. `None` for any other binding.
+    /// `λ(A : Ty l)…(v : T)…. Wf(x : S). n`. `None` for any other binding.
     pub(crate) fn register_wf(&self, key: Option<&str>, body: &Term, ctors: Option<Vec<String>>) -> R<Option<Rc<WfDecl>>> {
+        let base = key.map(|k| k.trim_end_matches("#tycode_fn").trim_end_matches("#tycode").to_string());
+        let key = base.unwrap_or_else(|| format!("g{}", self.at));
+        let Some(d) = self.wf_decl(key, Hx::Global(self.at), body, ctors)? else { return Ok(None) };
+        let d = Rc::new(d);
+        self.wf.by_tag.borrow_mut().insert(d.tag, Rc::clone(&d));
+        self.wf.by_key.borrow_mut().insert(d.key.clone(), Rc::clone(&d));
+        Ok(Some(d))
+    }
+
+    /// The realisation a code function `body` describes, named `key` and
+    /// used as `head`, scoped at this translation's position.
+    fn wf_decl(&self, key: String, head: Hx, body: &Term, ctors: Option<Vec<String>>) -> R<Option<WfDecl>> {
         let mut params = Vec::new();
         let mut cur = body;
-        while let Term::Lam { dom, body, .. } = cur {
-            let Type::Ty(l) = &**dom else { return Ok(None) };
-            params.push(l.clone());
+        while let Term::Lam { dom, dom_level, body, .. } = cur {
+            params.push((Rc::clone(dom), dom_level.clone()));
             cur = body;
         }
         let Term::TmWf { level, shape, arity } = cur else { return Ok(None) };
@@ -220,13 +313,12 @@ impl Tr<'_> {
         let np = params.len() as u32;
         let Some((spine, summands)) = Self::summands_in(psi, &shape, np) else { return refuse("Wf shape does not evaluate to a sum") };
         let Some(tag) = Self::tag_in(psi, &shape, np) else { return refuse("Wf shape carries no nominal tag") };
-        let base = key.map(|k| k.trim_end_matches("#tycode_fn").trim_end_matches("#tycode").to_string());
-        let key = base.unwrap_or_else(|| format!("g{}", self.at));
         let mut d = WfDecl {
             abs: self.at,
             tag,
             ctors: Vec::new(),
             key,
+            head,
             params,
             level: level.clone(),
             shape,
@@ -244,79 +336,228 @@ impl Tr<'_> {
         d.ctors = (0..d.summands.len())
             .map(|k| format!("{}::{}", d.key, names.as_ref().map_or_else(|| format!("c{k}"), |c| c[k].clone())))
             .collect();
-        let d = Rc::new(d);
-        self.wf.by_tag.borrow_mut().insert(tag, Rc::clone(&d));
         Ok(Some(d))
+    }
+
+    /// `base` realised at another type-parameter level profile: its own
+    /// native inductive (`list::List::at#1`), from the code function the
+    /// elaborator lowers at that profile. The library is level-monomorphic,
+    /// so a realisation per profile used stands in for one level-polymorphic
+    /// inductive, and works the same in both targets.
+    fn realise_at(&self, base: &WfDecl, profile: &[u64]) -> R<Rc<WfDecl>> {
+        let key = format!("{}::at#{}", base.key, profile.iter().map(u64::to_string).collect::<Vec<_>>().join("_"));
+        if let Some(d) = self.wf.by_key.borrow().get(&key) {
+            return Ok(Rc::clone(d));
+        }
+        let levels: Vec<Level> = profile.iter().map(|&l| Level::constant(l)).collect();
+        let Some((_, code)) = (self.wf.tycode_at)(base.tag, &levels) else {
+            return refuse("Wf instance at a level other than its declaration's");
+        };
+        let names = base.ctors.iter().map(|c| c.rsplit("::").next().unwrap_or(c).to_string()).collect();
+        self.realise(key, base.tag, &code, Some(names), false)
+    }
+
+    /// A declaration Ψ has no code binding for (its own code declined at
+    /// registration, so every use spells it inline), realised from the
+    /// code the elaborator lowers for it now and named as the declaration.
+    /// Only a declaration with no type parameters: with them, which profile
+    /// to ask for is not known before there is a template to walk.
+    fn realise_unmet(&self, tag: u64) -> R<Rc<WfDecl>> {
+        let Some((key, code)) = (self.wf.tycode_at)(tag, &[]) else {
+            return refuse("Wf instance of a declaration the exporter has not met");
+        };
+        self.realise(key, tag, &code, (self.wf.ctors)(tag), true)
+    }
+
+    /// The realisation of `code` (closed in Ψ whole) as the native inductive
+    /// `key`, declared with its `supf#` just before the binding that first
+    /// needs it; its eliminators are keyed by it like any other's. `own`:
+    /// it is the declaration at its own profile, which uses find by tag.
+    fn realise(&self, key: String, tag: u64, code: &Term, ctors: Option<Vec<String>>, own: bool) -> R<Rc<WfDecl>> {
+        let full = &self.wf.full;
+        let tr = Tr { at: full.bindings.len(), psi: full, ctx: RefCell::new(Vec::new()), wf: self.wf, memo: RefCell::default() };
+        let Some(d) = tr.wf_decl(key.clone(), Hx::Named(key.clone(), vec![]), code, ctors)? else {
+            return refuse("Wf instance whose declaration's code is not a Wf");
+        };
+        if d.tag != tag {
+            return refuse("Wf instance whose declaration's code is another declaration's");
+        }
+        // `Π Δ. Ty l`, the inductive's statement.
+        let ty = Self::param_pis(&d, &Level::succ(d.level.clone()), Type::Ty(d.level.clone()));
+        // Registered first: its own `supf#` names it.
+        let d = Rc::new(d);
+        self.wf.by_key.borrow_mut().insert(key.clone(), Rc::clone(&d));
+        self.wf.created.borrow_mut().push(key.clone());
+        if own {
+            self.wf.by_tag.borrow_mut().insert(tag, Rc::clone(&d));
+            self.wf.created_tags.borrow_mut().push(tag);
+        }
+        let decl = tr.wf_inductive(&d, tr.ty(&ty)?)?;
+        let mut fresh = self.wf.fresh.borrow_mut();
+        fresh.push(Aux { name: key, ty: decl.ty, body: None, inductive: decl.inductive });
+        fresh.extend(decl.after);
+        Ok(d)
+    }
+
+    /// The parameter a template variable at `k` binders deep is, if it is
+    /// one: its index into `d.params`.
+    fn param_at(d: &WfDecl, v: u32, k: u32) -> Option<usize> {
+        (v >= k && v - k < d.np()).then(|| (d.np() - 1 - (v - k)) as usize)
     }
 
     /// Walk a declaration's type (`tmpl`, under Δ) beside an instance's
     /// (`inst`, here), recording each parameter's argument where the
-    /// declaration has the parameter itself.
-    fn bind_params(&self, d: &WfDecl, tmpl: &Type, inst: &Type, k: u32, out: &mut [Option<Type>], fuel: &mut u32) {
+    /// declaration has the parameter itself; `at` is the level the
+    /// instance's annotation gives `inst`. The two are compared as spelled
+    /// first, which is what finds a value parameter at a closed argument
+    /// (`E.Cmd` beside `Linux.Cmd`, which evaluation would take apart), and
+    /// after evaluation where the spellings part.
+    #[allow(clippy::too_many_arguments)]
+    fn bind_params(&self, d: &WfDecl, tmpl: &Type, inst: &Type, at: Option<&Level>, k: u32, out: &mut [Option<Arg>], fuel: &mut u32) {
         if *fuel == 0 {
             return;
         }
         *fuel -= 1;
-        let depth = self.ctx.borrow().len() as u32;
-        let (Some(t), Some(i)) = (Self::whnf_in(&d.psi, tmpl, d.np() + k), Self::whnf_in(self.psi, inst, depth + k)) else { return };
-        match (&t, &i) {
-            (Type::El { tm, .. }, _) => {
-                if let Term::Var(LocalVar(v)) = &**tm {
-                    if *v >= k && v - k < d.np() {
-                        let slot = &mut out[(d.np() - 1 - (v - k)) as usize];
-                        if slot.is_none() {
-                            // Back out of the binders walked under; a field
-                            // type that mentions one is no argument, and
-                            // Lean says so.
-                            let at = (0..k).fold(i.clone(), |t, _| t.inst_top(0, &Term::Zero));
-                            *slot = Some(at);
-                        }
-                    }
+        let same = std::mem::discriminant(tmpl) == std::mem::discriminant(inst);
+        if same {
+            self.bind_node(d, tmpl, inst, at, k, out, fuel);
+        }
+        if !same || matches!(tmpl, Type::El { .. }) {
+            let depth = self.ctx.borrow().len() as u32;
+            let (Some(t), Some(i)) = (Self::whnf_in(&d.psi, tmpl, d.np() + k), Self::whnf_in(self.psi, inst, depth + k)) else { return };
+            self.bind_node(d, &t, &i, at, k, out, fuel);
+        }
+    }
+
+    /// One step of [`Self::bind_params`], at two nodes taken as they are.
+    #[allow(clippy::too_many_arguments)]
+    fn bind_node(&self, d: &WfDecl, t: &Type, i: &Type, at: Option<&Level>, k: u32, out: &mut [Option<Arg>], fuel: &mut u32) {
+        // Back out of the binders walked under; a field type that mentions
+        // one is no argument, and Lean says so.
+        let back = |i: &Type| (0..k).fold(i.clone(), |t, _| t.inst_top(0, &Term::Zero));
+        match (t, i) {
+            (Type::El { tm, .. }, _) if matches!(&**tm, Term::Var(LocalVar(v)) if Self::param_at(d, *v, k).is_some()) => {
+                let Term::Var(LocalVar(v)) = &**tm else { unreachable!() };
+                let slot = &mut out[Self::param_at(d, *v, k).expect("a parameter")];
+                if slot.is_none() {
+                    let level = match i {
+                        Type::El { level, .. } => Some(level.clone()),
+                        _ => at.cloned(),
+                    };
+                    *slot = Some(Arg::Ty(back(i), level));
                 }
             }
-            (Type::Sigma { fst: a, snd: b, .. }, Type::Sigma { fst: a2, snd: b2, .. })
-            | (Type::Pi { dom: a, cod: b, .. }, Type::Pi { dom: a2, cod: b2, .. })
-            | (Type::W { shape: a, pos: b, .. }, Type::W { shape: a2, pos: b2, .. }) => {
-                self.bind_params(d, a, a2, k, out, fuel);
-                self.bind_params(d, b, b2, k + 1, out, fuel);
+            (Type::El { tm: a, .. }, Type::El { tm: b, .. }) => self.bind_term(d, a, b, k, out, fuel),
+            (Type::Sigma { fst: a, snd: b, .. }, Type::Sigma { fst_level: la, snd_level: lb, fst: a2, snd: b2 })
+            | (Type::Pi { dom: a, cod: b, .. }, Type::Pi { dom_level: la, cod_level: lb, dom: a2, cod: b2 })
+            | (Type::W { shape: a, pos: b, .. }, Type::W { shape_level: la, pos_level: lb, shape: a2, pos: b2 }) => {
+                self.bind_params(d, a, a2, Some(la), k, out, fuel);
+                self.bind_params(d, b, b2, Some(lb), k + 1, out, fuel);
             }
-            (Type::Sum { lhs: a, rhs: b, .. }, Type::Sum { lhs: a2, rhs: b2, .. }) => {
-                self.bind_params(d, a, a2, k, out, fuel);
-                self.bind_params(d, b, b2, k, out, fuel);
+            (Type::Sum { lhs: a, rhs: b, .. }, Type::Sum { lhs_level: la, rhs_level: lb, lhs: a2, rhs: b2 }) => {
+                self.bind_params(d, a, a2, Some(la), k, out, fuel);
+                self.bind_params(d, b, b2, Some(lb), k, out, fuel);
             }
-            (Type::Vec { elem: a, .. }, Type::Vec { elem: a2, .. })
-            | (Type::Id { ty: a, .. }, Type::Id { ty: a2, .. })
-            | (Type::SEq { ty: a, .. }, Type::SEq { ty: a2, .. })
-            | (Type::Squash { ty: a, .. }, Type::Squash { ty: a2, .. })
-            | (Type::Wf { shape: a, .. }, Type::Wf { shape: a2, .. }) => self.bind_params(d, a, a2, k, out, fuel),
+            (Type::Id { ty: a, lhs, rhs, .. }, Type::Id { level, ty: a2, lhs: lhs2, rhs: rhs2 })
+            | (Type::SEq { ty: a, lhs, rhs, .. }, Type::SEq { level, ty: a2, lhs: lhs2, rhs: rhs2 }) => {
+                self.bind_params(d, a, a2, Some(level), k, out, fuel);
+                self.bind_term(d, lhs, lhs2, k, out, fuel);
+                self.bind_term(d, rhs, rhs2, k, out, fuel);
+            }
+            (Type::Vec { elem: a, len, .. }, Type::Vec { level, elem: a2, len: len2 }) => {
+                self.bind_params(d, a, a2, Some(level), k, out, fuel);
+                self.bind_term(d, len, len2, k, out, fuel);
+            }
+            (Type::Squash { ty: a, .. }, Type::Squash { level, ty: a2 }) | (Type::Wf { shape: a, .. }, Type::Wf { level, shape: a2, .. }) => {
+                self.bind_params(d, a, a2, Some(level), k, out, fuel)
+            }
+            (Type::GlobalTy { subst: s, .. }, Type::GlobalTy { subst: s2, .. }) => {
+                for (a, b) in s.terms.iter().zip(&s2.terms) {
+                    self.bind_term(d, a, b, k, out, fuel);
+                }
+            }
             _ => {}
         }
     }
 
-    /// Which declaration `Wf(shape; arity)` is, and its arguments.
+    /// [`Self::bind_params`] over terms, as spelled: a value parameter is
+    /// recorded where the template has the variable, a type parameter where
+    /// it has the code. Applications, projections and the substitutions of
+    /// globals are walked; a node the two spell differently ends the walk
+    /// there.
+    #[allow(clippy::too_many_arguments)]
+    fn bind_term(&self, d: &WfDecl, tmpl: &Term, inst: &Term, k: u32, out: &mut [Option<Arg>], fuel: &mut u32) {
+        if *fuel == 0 {
+            return;
+        }
+        *fuel -= 1;
+        match (tmpl, inst) {
+            (Term::Var(LocalVar(v)), _) => {
+                let Some(p) = Self::param_at(d, *v, k) else { return };
+                if out[p].is_none() {
+                    let back = (0..k).fold(inst.clone(), |t, _| t.inst_top(0, &Term::Zero));
+                    out[p] = Some(match &*d.params[p].0 {
+                        Type::Ty(l) => Arg::Ty(Type::El { level: l.clone(), tm: Rc::new(back) }, None),
+                        _ => Arg::Tm(back),
+                    });
+                }
+            }
+            (Term::App { fun: f, arg: a, .. } | Term::AppAt { fun: f, arg: a }, Term::App { fun: f2, arg: a2, .. } | Term::AppAt { fun: f2, arg: a2 }) => {
+                self.bind_term(d, f, f2, k, out, fuel);
+                self.bind_term(d, a, a2, k, out, fuel);
+            }
+            (Term::Fst { pair: a, .. } | Term::FstAt { pair: a }, Term::Fst { pair: a2, .. } | Term::FstAt { pair: a2 })
+            | (Term::Snd { pair: a, .. } | Term::SndAt { pair: a }, Term::Snd { pair: a2, .. } | Term::SndAt { pair: a2 })
+            | (Term::Succ(a), Term::Succ(a2)) => self.bind_term(d, a, a2, k, out, fuel),
+            (Term::GlobalTm { subst: s, .. }, Term::GlobalTm { subst: s2, .. }) => {
+                for (a, b) in s.terms.iter().zip(&s2.terms) {
+                    self.bind_term(d, a, b, k, out, fuel);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Which declaration `Wf(shape; arity)` is, and its arguments. A use at
+    /// the declaration's own level profile is the declaration; one at
+    /// another (`List<A → B → Type>`) is that profile's realisation.
     fn recognise(&self, level: &Level, shape: &Type) -> R<(Rc<WfDecl>, Vec<Hx>)> {
         let depth = self.ctx.borrow().len() as u32;
         let Some(tag) = Self::tag_in(self.psi, shape, depth) else { return refuse(WF) };
-        let Some(d) = self.wf.by_tag.borrow().get(&tag).cloned() else {
-            return refuse("Wf instance of a declaration the exporter has not met");
+        let met = self.wf.by_tag.borrow().get(&tag).cloned();
+        let base = match met {
+            Some(base) => base,
+            None => self.realise_unmet(tag)?,
         };
-        // The native inductive is realised at its declaration's level; a use
-        // at another (`List<A → B → Type>`) would need one more.
-        if lvl(level)? != lvl(&d.level)? {
-            return refuse("Wf instance at a level other than its declaration's");
-        }
-        let mut out = vec![None; d.params.len()];
+        let mut out = vec![None; base.params.len()];
         if !out.is_empty() {
             let Some((_, inst)) = Self::summands_in(self.psi, shape, depth) else { return refuse(WF) };
             let mut fuel = 4096;
-            for ((tmpl, _), inst) in d.summands.iter().zip(&inst) {
-                self.bind_params(&d, tmpl, inst, 0, &mut out, &mut fuel);
+            for ((tmpl, _), inst) in base.summands.iter().zip(&inst) {
+                self.bind_params(&base, tmpl, inst, None, 0, &mut out, &mut fuel);
             }
+        }
+        // Each type parameter's level is its argument's, where an annotation
+        // of the instance says; the declaration's own where none does (the
+        // argument is then refused below, or the level check is).
+        let mut profile = Vec::new();
+        for ((dom, _), a) in base.params.iter().zip(&out) {
+            if let Type::Ty(l) = &**dom {
+                profile.push(lvl(match a {
+                    Some(Arg::Ty(_, Some(at))) => at,
+                    _ => l,
+                })?.0);
+            }
+        }
+        let d = if profile == base.profile()? { base } else { self.realise_at(&base, &profile)? };
+        if lvl(level)? != lvl(&d.level)? {
+            return refuse("Wf instance at a level other than its declaration's");
         }
         let args = out
             .iter()
             .map(|a| match a {
-                Some(t) => self.ty(t),
+                Some(Arg::Ty(t, _)) => self.ty(t),
+                Some(Arg::Tm(t)) => self.tm(t),
                 None => refuse("Wf parameter that no field of the instance determines"),
             })
             .collect::<R<Vec<_>>>()?;
@@ -326,7 +567,7 @@ impl Tr<'_> {
     /// `⟦Wf(x : S). n⟧ = D args`.
     pub(crate) fn wf_type(&self, level: &Level, shape: &Type) -> R<Hx> {
         let (d, args) = self.recognise(level, shape)?;
-        Ok(app(Hx::Global(d.abs), args))
+        Ok(app(d.head.clone(), args))
     }
 
     /// `⟦sup_f(a; cs)⟧ = D::supf# args a cs`.
@@ -352,8 +593,8 @@ impl Tr<'_> {
     ) -> R<Hx> {
         let (d, mut args) = self.recognise(level, shape)?;
         let ml = lvl(motive_level)?.0;
-        if !self.wf.emitted.borrow().contains(&(d.tag, ml)) {
-            self.wf.wanted.borrow_mut().push((d.tag, ml));
+        if !self.wf.emitted.borrow().contains(&(d.key.clone(), ml)) {
+            self.wf.wanted.borrow_mut().push((d.key.clone(), ml));
         }
         let wf = Type::Wf { level: level.clone(), shape: Rc::clone(shape), arity: Rc::clone(arity) };
         let (cs_ty, ih_ty) = telescope(level, motive_level, &wf, arity, motive);
@@ -369,29 +610,41 @@ impl Tr<'_> {
         (0..d.np()).map(|t| Hx::Var(d.np() - 1 - t + above)).collect()
     }
 
+    /// The parameters' domains, outermost first: `Type l_i`, or a value
+    /// parameter's type under the parameters before it.
+    fn param_doms(&self, d: &WfDecl) -> R<Vec<Hx>> {
+        d.params.iter().enumerate().map(|(i, (dom, _))| self.ty_at(i as u32, dom)).collect()
+    }
+
     /// `λ(A_1 : Type l_1)…. body`.
-    fn param_lams(d: &WfDecl, body: Hx) -> R<Hx> {
-        d.params.iter().rev().try_fold(body, |b, l| Ok(lam(Hx::Sort(lvl(l)?), b)))
+    fn param_lams(&self, d: &WfDecl, body: Hx) -> R<Hx> {
+        Ok(self.param_doms(d)?.into_iter().rev().fold(body, |b, dom| lam(dom, b)))
+    }
+
+    /// `Π Δ. t` over a kernel type under Δ.
+    fn param_pis(d: &WfDecl, cod_level: &Level, t: Type) -> Type {
+        d.params.iter().rev().fold(t, |cod, (dom, l)| Type::Pi { dom_level: l.clone(), cod_level: cod_level.clone(), dom: Rc::clone(dom), cod: Rc::new(cod) })
     }
 
     /// The inductive: its statement and its constructors' types.
     pub(crate) fn wf_inductive(&self, d: &WfDecl, ty: Hx) -> R<Decl> {
         let (mut ctors, mut fields) = (Vec::new(), Vec::new());
+        let doms = self.param_doms(d)?;
         for (k, (p, n)) in d.summands.iter().enumerate() {
             // Π Δ. Π(p : P_k). Π(x_1 … x_n : D Δ). D Δ, innermost first. A
             // closed singleton payload is no field: Rocq has no unit η to
             // convert a bound one with its canonical element (design §5.3).
             let field = self.canon_term(p).is_none();
             let q = field as u32;
-            let mut t = app(Hx::Global(d.abs), Self::param_vars(d, q + *n as u32));
+            let mut t = app(d.head.clone(), Self::param_vars(d, q + *n as u32));
             for i in (0..*n as u32).rev() {
-                t = Hx::Pi(Rc::new(app(Hx::Global(d.abs), Self::param_vars(d, q + i))), Rc::new(t));
+                t = Hx::Pi(Rc::new(app(d.head.clone(), Self::param_vars(d, q + i))), Rc::new(t));
             }
             if field {
                 t = Hx::Pi(Rc::new(self.ty_at(d.np(), p)?), Rc::new(t));
             }
-            for l in d.params.iter().rev() {
-                t = Hx::Pi(Rc::new(Hx::Sort(lvl(l)?)), Rc::new(t));
+            for dom in doms.iter().rev() {
+                t = Hx::Pi(Rc::new(dom.clone()), Rc::new(t));
             }
             ctors.push((d.ctors[k].clone(), t));
             fields.push((q, *n as u32));
@@ -411,7 +664,7 @@ impl Tr<'_> {
     fn wf_supf_def(&self, d: &WfDecl) -> R<Aux> {
         // Π Δ. Π(a : S). Π(cs : Vec(D; n[a])). D, as a kernel type.
         let cs_ty = Type::Vec { level: d.level.clone(), elem: Rc::new(d.wf_at(1)), len: Rc::clone(&d.arity) };
-        let mut ty = Type::Pi {
+        let ty = Type::Pi {
             dom_level: d.level.clone(),
             cod_level: d.level.clone(),
             dom: Rc::clone(&d.shape),
@@ -422,13 +675,11 @@ impl Tr<'_> {
                 cod: Rc::new(d.wf_at(2)),
             }),
         };
-        for l in d.params.iter().rev() {
-            ty = Type::Pi { dom_level: Level::succ(l.clone()), cod_level: d.level.clone(), dom: Rc::new(Type::Ty(l.clone())), cod: Rc::new(ty) };
-        }
+        let ty = Self::param_pis(d, &d.level, ty);
         let chain = if d.summands.len() == 1 { self.supf_arm(d, 0, 0, None)? } else { self.supf_chain(d, 0)? };
         let body = app(chain, vec![Hx::Var(0)]);
         let body = lam(self.ty_at(d.np(), &d.shape)?, lam(self.ty_at(d.np() + 1, &cs_ty)?, body));
-        Ok(Aux { name: d.supf_key(), ty: self.ty(&ty)?, body: Self::param_lams(d, body)? })
+        Ok(Aux { name: d.supf_key(), ty: self.ty(&ty)?, body: Some(self.param_lams(d, body)?), inductive: None })
     }
 
     /// The case at spine node `j`, in (Δ, a, cs, r_1 … r_j), on `a` at the
@@ -563,7 +814,7 @@ impl Tr<'_> {
             level: mlv.clone(),
             tm: Rc::new(Term::App { fun: var(2), dom_level: level.clone(), cod_level: Level::succ(mlv.clone()), dom: Rc::new(d.wf_at(3)), cod: Rc::new(Type::Ty(mlv.clone())), arg: var(0) }),
         };
-        let mut ty = Type::Pi {
+        let ty = Type::Pi {
             dom_level: Level::succ(mlv.clone()),
             cod_level: mlv.clone(),
             dom: Rc::new(m_ty.clone()),
@@ -574,9 +825,7 @@ impl Tr<'_> {
                 cod: Rc::new(Type::Pi { dom_level: level.clone(), cod_level: mlv.clone(), dom: Rc::new(d.wf_at(2)), cod: Rc::new(m_t) }),
             }),
         };
-        for l in d.params.iter().rev() {
-            ty = Type::Pi { dom_level: Level::succ(l.clone()), cod_level: mlv.clone(), dom: Rc::new(Type::Ty(l.clone())), cod: Rc::new(ty) };
-        }
+        let ty = Self::param_pis(d, &mlv, ty);
         // λ Δ M step t. D.rec Δ M minor… t
         let mut rec_args = Self::param_vars(d, 3);
         rec_args.push(Hx::Var(2));
@@ -587,7 +836,7 @@ impl Tr<'_> {
         let rec = Hx::Named(format!("{}::rec", d.key), vec![ml + 1]);
         let np = d.np();
         let body = lam(self.ty_at(np, &m_ty)?, lam(self.ty_at(np + 1, &step_ty)?, lam(self.ty_at(np + 2, &d.wf_at(2))?, app(rec, rec_args))));
-        Ok(Aux { name: d.elim_key(ml), ty: self.ty(&ty)?, body: Self::param_lams(d, body)? })
+        Ok(Aux { name: d.elim_key(ml), ty: self.ty(&ty)?, body: Some(self.param_lams(d, body)?), inductive: None })
     }
 
     /// The minor premise for constructor `k`, in (Δ, M, step, t):

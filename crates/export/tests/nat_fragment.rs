@@ -41,15 +41,35 @@ theorem Rel2::loop<A: Rel2(R)>(R: A → A → Type, x: A): R(x, x) {
 }
 "#;
 
+/// Native inductives beyond one profile of type parameters
+/// (`issues/export-inductive-coverage.md`): a value parameter, as
+/// `itree_trace::Trace<R>(E: Events)` has, and a declaration used at a type
+/// argument of another level (`List<A → B → Type>` in `relation::AnyOf`),
+/// built, matched and recursed over at both.
+const INDUCTIVES: &str = r#"
+record Sig2 { Cmd: Type, Resp: Cmd → Type }
+inductive Log<R>(E: Sig2) { Done(r: R), Step(c: E.Cmd, a: E.Resp(c), rest: Log<R>(E)) }
+fn Log::steps<R>(E: Sig2, l: Log<R>(E)) → Nat { match l { Done(_) => 0, Step(_, _, rest) => Succ(Log::steps(E, rest)) } }
+fn Bits() → Sig2 { Sig2(B, λ _ => B) }
+fn two_steps() → Log<Nat>(Bits()) { Step(T, F, Step(F, T, Done(0))) }
+theorem two_steps_steps(): Log::steps(Bits(), two_steps()) = 2 { refl }
+inductive Seq<A> { End, More(x: A, rest: Seq<A>) }
+fn Seq::len<A>(s: Seq<A>) → Nat { match s { End => 0, More(_, r) => Succ(Seq::len(r)) } }
+fn Seq::count_types(s: Seq<Type>) → Nat { match s { End => 0, More(_, r) => Succ(Seq::count_types(r)) } }
+fn kinds() → Seq<Type> { More(Nat, More(B, End)) }
+theorem kinds_count(): Seq::count_types(kinds()) = 2 { refl }
+"#;
+
 #[test]
 fn nat_and_enum_export_without_refusal() {
     let mut e = Elaborator::with_prelude_for_export().expect("prelude");
-    e.elab_source(SOURCE).expect("source checks");
+    e.elab_source(&format!("{SOURCE}{INDUCTIVES}")).expect("source checks");
     let decls = export(&Source {
         psi: e.psi(),
         proof: &|abs| e.export_proof(abs).cloned(),
         name: &|abs| e.global_key_at(abs).map(str::to_string).or_else(|| e.generated_key_at(abs)),
         ctors: &|tag| e.constructor_names(tag as u32),
+        tycode_at: &|tag, levels| e.tycode_fn_at(tag as u32, levels),
     });
     let refused: Vec<_> = decls.iter().filter(|d| d.decl.is_err()).collect();
     assert!(refused.is_empty(), "refused: {refused:?}");
@@ -65,6 +85,13 @@ fn nat_and_enum_export_without_refusal() {
     // `Expr.proj` with nothing skipped (issues/export-spelling-cost.md).
     let kernel = print_kernel(&decls);
     assert!(kernel.lines().any(|l| l.starts_with("j\t")), "no projection in:\n{kernel}");
+    // `Log` over its value parameter, and `Seq` once at its own profile and
+    // once more at `Seq<Type>`'s, each with the eliminator its match uses.
+    for (inductive, nparams) in [("main::Log", 2), ("main::Seq", 1), ("main::Seq::at#1", 1)] {
+        let head = format!("i\t{inductive}\t{nparams}\t");
+        assert!(kernel.lines().any(|l| l.starts_with(&head)), "no native inductive {inductive}:\n{kernel}");
+    }
+    assert!(kernel.lines().any(|l| l.starts_with("d\tmain::Seq::at#1::elim#")), "Seq<Type> is not eliminated at its own profile");
     let skipped: Vec<&str> = kernel.lines().filter(|l| l.starts_with("x\t")).collect();
     assert!(skipped.is_empty(), "skipped by the kernel route:\n{}", skipped.join("\n"));
     if let Some(dir) = std::env::var_os("HEATHER_EXPORT_OUT") {
