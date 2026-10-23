@@ -632,6 +632,9 @@ pub(crate) fn count_tactic_slots(decl: &Decl) -> u32 {
     }
     count(&decl.body.result);
     decl.body.ons.iter().for_each(|o| count(&o.expr));
+    // A value default is elaborated in the declaration's telescope
+    // (`defaults::check_default_at_declaration`), so its tactics run there.
+    decl.params.iter().filter_map(|p| p.default.as_deref()).for_each(&mut count);
     n
 }
 

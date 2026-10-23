@@ -687,10 +687,89 @@ which no alias can bind
   endpoints differ at some call is reported at the declaration
   (issues/default-kernel-failure-reported-at-declaration.md). An elaboration
   failure is reported at the call, naming the parameter and `name := …`.
+  Since §9.7 a *value* default's kernel-only failure that holds at every call
+  is the declaration's own error and is reported there, correctly; the issue
+  keeps the discharges and the second-reading values whose fit fails at a
+  call.
 
 **A bare reference is the whole function.** `apply(second)` passes
 `Nat -> Nat -> Nat`: a default fills at a call, as a solver parameter does,
 and `λ a => second(a)` is the spelling that fills it.
+
+### 9.7 Checked where it is written (2026-10-23)
+
+§9.6 checks a default at each call that leaves it out, and nowhere else, so
+a default no call uses was checked by nobody
+(issues/parameter-default-unchecked-at-declaration.md, the sibling of
+issues/unused-let-value-unchecked.md):
+
+```heather
+record P { a: Nat, h: a = 3 }
+fn g(x: Nat := P(2, refl).a) -> Nat { x }   // was accepted; refused now
+```
+
+It cannot simply be checked at the declaration as a term of its parameter's
+type, Lean's `optParam` rule, because two kinds of default are in use whose
+meaning is per call:
+
+- `h: 0 < n := omega` (and `:= positivity`) proves the call's goal from the
+  *caller's* hypotheses. In the telescope alone `0 < n` does not hold.
+- `nan: F.specials.has_nan().IsTrue() := trivial` (lib's `Float::div`) and
+  `zero: IsZero(n) := Holds` fit the calls whose arguments make the goal
+  compute to `True`/`Yes`, which is
+  [[true-prop-trivial-hypotheses]]' reason for defaults: discharging a
+  hypothesis that is definitionally trivial *at the call*.
+
+So a default is checked at the declaration exactly as far as the
+declaration decides it, and the rest stays the call's
+(`Elaborator::check_default_at_declaration`, `crates/elab/src/defaults.rs`):
+
+**A discharge is the call's.** A default whose head is a goal-reading form —
+`omega`, `positivity`, `ring`, `bv_omega`, `decide`, `rel_cong`/`rel_derive`,
+`rewrite`, `subst`, `by t`, `refl` — or that contains a goal `?` has no
+meaning apart from the goal a call poses and the hypotheses it has, as
+`:= infer` has none. It is not elaborated at the declaration.
+(`defaults::is_discharge`; it reads the head only, so `mk(omega)` is a value.
+`trivial` is a value: it has a type of its own, `True`.)
+
+**A value is a term, and the kernel judges it at the declaration.** It is
+elaborated in the declaration's telescope — the parameters before it bound
+as binders, names resolving in the declaring scope, as at every call — and
+the result goes to the kernel there, so `P(2, refl)`'s `refl` is refused at
+`g`'s declaration with no call in sight. Two readings, in order:
+
+1. **At the parameter's type.** The ordinary case: `NearestEven`, `seven()`,
+   `n`, `λ y => y` at `A → A`. A default that checks here checks at every
+   call, since a call substitutes arguments for binders.
+2. **At a type of its own**, when the first reading fails. Accepted when the
+   default checks at the type it synthesizes *and* a call could still change
+   whether that type is the parameter's: when either type mentions an
+   earlier parameter. `zero: IsZero(n) := Holds` is a well-typed `Yes`, and
+   `IsZero(n)` is `Yes` at the calls with `n` zero, so it stays legal and a
+   misfit stays the call's error (§9.6). `b: Bool := 5` is a `Nat` where
+   every call wants a `Bool`, and is refused here. When the second reading
+   elaborates but the kernel refuses it (`Holds(refl)` at a `Holds(p: 2 = 3)`),
+   that refusal is the one reported: it is about the default itself, not its
+   fit.
+
+This answers the issue's open question — *a default that only typechecks at
+some instantiations* — as: legal when its own term is well-typed and its fit
+is the instantiations' business, refused when its own term is ill-typed or
+its fit is decided and wrong.
+
+The attempt leaves nothing behind: its goals, checking notes, warnings and
+dependency edges roll back (`resolve::SearchMark`), because the default's
+term belongs to each call's term and never to the declaration's. A tactic
+inside a value (`need(3, omega)`) therefore runs twice, once in the
+telescope and once at each call (its atom slots are reserved with the
+declaration's, `surface::count_tactic_slots`). The call still re-elaborates
+the default rather than instantiating the declaration's term — §9.4's
+mechanism 1 — so the declaration check is a check, not a lowering; storing
+the term would also let a value default mention a type parameter
+(issues/parameter-defaults-mention-type-parameters.md).
+
+Record field defaults (§9.5) are checked only at a construction still
+(issues/field-default-unchecked-at-declaration.md).
 
 ## 10. Out of scope, with homes
 

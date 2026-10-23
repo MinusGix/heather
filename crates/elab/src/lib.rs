@@ -3943,6 +3943,39 @@ impl Elaborator {
         // exclusive, so the resolution, unification and generated-definition
         // work it contains stays in those columns and this one is the walk's
         // own share.
+        // A default runs at the call, where an earlier parameter's name is
+        // bound to the call's argument for it (`defaults::elab_param_default`).
+        // So a default may mention the value parameters before it, and is
+        // refused here, rather than at every call, when it mentions its own
+        // parameter or a later one (the telescope is ordered, §9.4) or a type
+        // parameter, which no alias can bind
+        // (issues/parameter-defaults-mention-type-parameters.md).
+        for (i, p) in decl.params.iter().enumerate() {
+            let Some(default) = p.default.as_deref() else { continue };
+            let mentions = |n: &String| datarepr::mentions_free(default, std::slice::from_ref(n), &mut Vec::new());
+            if let Some(t) = decl.tyvars.iter().map(|t| &t.name).find(|n| measure::mentions_context(default, n)) {
+                return err(
+                    format!(
+                        "`{}`'s default mentions the type parameter `{t}`, and a default cannot \
+                         mention a type parameter yet (issues/parameter-defaults-mention-type-parameters.md): \
+                         its expected type already says what `{t}` is at each call",
+                        p.name
+                    ),
+                    default.span,
+                );
+            }
+            if let Some(later) = decl.params[i..].iter().map(|q| &q.name).find(|n| mentions(n)) {
+                let whose = if *later == p.name { "its own parameter".to_string() } else { format!("the later parameter `{later}`") };
+                return err(
+                    format!(
+                        "`{}`'s default mentions {whose}: a default reads only the parameters \
+                         before it, whose arguments the call has already given",
+                        p.name
+                    ),
+                    default.span,
+                );
+            }
+        }
         let decl_type = stats::guard(stats::Timer::DeclType);
         let mut cx = Cx::empty();
         cx.index_ambiguity = ambiguous;
@@ -3996,6 +4029,12 @@ impl Elaborator {
             // annotation the user wrote and not about `Nat<A>`.
             self.check_constraint_param(p)?;
             let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
+            // A default is checked here, in the telescope of the parameters
+            // before it, as well as at each call that leaves it out, so one no
+            // call uses is still checked (docs/named-arguments-design.md §9.7).
+            if let Some(default) = p.default.as_deref() {
+                self.check_default_at_declaration(&cx, &decl.name, &p.name, default, &ty, &lvl)?;
+            }
             // A binder of a class type at a written index is what fills a value
             // slot that unification left open (§5's ladder step 2), for the dot
             // sugars here and for a call's goal in `apply_implicit`.
@@ -4221,39 +4260,6 @@ impl Elaborator {
             .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
         }
 
-        // A default runs at the call, where an earlier parameter's name is
-        // bound to the call's argument for it (`defaults::elab_param_default`).
-        // So a default may mention the value parameters before it, and is
-        // refused here, rather than at every call, when it mentions its own
-        // parameter or a later one (the telescope is ordered, §9.4) or a type
-        // parameter, which no alias can bind
-        // (issues/parameter-defaults-mention-type-parameters.md).
-        for (i, p) in decl.params.iter().enumerate() {
-            let Some(default) = p.default.as_deref() else { continue };
-            let mentions = |n: &String| datarepr::mentions_free(default, std::slice::from_ref(n), &mut Vec::new());
-            if let Some(t) = decl.tyvars.iter().map(|t| &t.name).find(|n| measure::mentions_context(default, n)) {
-                return err(
-                    format!(
-                        "`{}`'s default mentions the type parameter `{t}`, and a default cannot \
-                         mention a type parameter yet (issues/parameter-defaults-mention-type-parameters.md): \
-                         its expected type already says what `{t}` is at each call",
-                        p.name
-                    ),
-                    default.span,
-                );
-            }
-            if let Some(later) = decl.params[i..].iter().map(|q| &q.name).find(|n| mentions(n)) {
-                let whose = if *later == p.name { "its own parameter".to_string() } else { format!("the later parameter `{later}`") };
-                return err(
-                    format!(
-                        "`{}`'s default mentions {whose}: a default reads only the parameters \
-                         before it, whose arguments the call has already given",
-                        p.name
-                    ),
-                    default.span,
-                );
-            }
-        }
         // A default's names resolve where the declaration was written, at
         // every call (docs/named-arguments-design.md §9.4).
         let default_scope = Rc::new(self.names.scope().clone());
