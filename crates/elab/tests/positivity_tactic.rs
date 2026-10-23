@@ -234,6 +234,19 @@ fn make(k: Nat) -> Positive { Positive(k) }
     assert!(e.contains("`pos` was left to its default"), "{e}");
 }
 
+/// A value default with a tactic inside it runs that tactic where the
+/// default is written (docs/named-arguments-design.md §9.7), with only the
+/// earlier parameters' facts as hypotheses; the default itself is still
+/// elaborated again at each call.
+#[test]
+fn a_tactic_inside_a_value_default_runs_at_the_declaration() {
+    let need = "fn need(n: Nat, h: 0 < n) -> Nat { n }\n";
+    ok(&format!("{need}fn f(k: Nat := need(3, omega)) -> Nat {{ k }}\ntheorem three(): f() = 3 {{ refl }}\n"));
+    ok(&format!("{need}fn f(m: Nat, h: 0 < m, k: Nat := need(m, omega)) -> Nat {{ k }}\n"));
+    let e = bad(&format!("{need}fn f(k: Nat := need(0, omega)) -> Nat {{ k }}\n"));
+    assert!(e.contains("`k`'s default does not check where it is written"), "{e}");
+}
+
 /// A tactic default whose goal mentions an earlier *defaulted* parameter
 /// that itself mentions the first: the goal is the call's (`0 < k + 1`).
 #[test]

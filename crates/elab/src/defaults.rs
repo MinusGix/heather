@@ -10,17 +10,22 @@
 //! that name is bound to the call's argument for it, as a `let` binds an
 //! alias, so the default reads the argument rather than any name the caller
 //! can spell (§9.6).
+//!
+//! A default is also checked once where it is written, as far as the
+//! declaration decides it (§9.7): [`Elaborator::check_default_at_declaration`].
 
 use std::sync::Arc as Rc;
 
+use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{LocalCtx, Term, Type};
 use heather_syntax::{Expr, ExprKind, Span};
 
 use crate::application::ParamMeta;
 use crate::context::Alias;
-use crate::unification::EarlierArg;
-use crate::{Cx, ElabError, Elaborator, R, ResolutionScope, application, datarepr, err};
+use crate::resolve::SearchMark;
+use crate::unification::{EarlierArg, strengthen_ty};
+use crate::{Cx, ElabError, Elaborator, R, ResolutionScope, application, datarepr, err, stats, surface};
 
 impl Elaborator {
     /// A defaulted parameter, filled: its default checked at `expected`, the
@@ -92,6 +97,96 @@ impl Elaborator {
         })
     }
 
+    /// A parameter's default, checked where it is written (§9.7): in the
+    /// declaration's telescope `cx`, which binds exactly the parameters
+    /// before it, at `ty`, the parameter's type there. A call that leaves the
+    /// default out still elaborates it at the call (`elab_param_default`);
+    /// this is the check that does not wait for one.
+    ///
+    /// What the declaration decides is checked here, and what a call decides
+    /// is left to the call:
+    ///
+    /// - A **discharge** ([`is_discharge`]: a tactic, `refl`, `decide`, a
+    ///   goal) has no meaning apart from the goal a call poses and the
+    ///   hypotheses it has, as `:= infer` has none, so nothing is checked.
+    /// - A **value** is checked as a term, by the kernel. It is first read at
+    ///   the parameter's type. Where that reading fails, it is read at a type
+    ///   of its own instead, and accepted when it checks there and the call
+    ///   can still change whether that type is the parameter's: when either
+    ///   type mentions an earlier parameter. `zero: IsZero(n) := Holds` is a
+    ///   `Yes` that fits exactly the calls with `n` zero, and stays legal;
+    ///   `b: Bool := 5` fits none, and is refused here.
+    ///
+    /// So a default's own subterms (`P(2, refl).a`'s `refl`) and its names
+    /// are always checked at the declaration, used or not
+    /// (issues/parameter-default-unchecked-at-declaration.md). The attempt
+    /// leaves nothing behind: its goals, notes, warnings and dependency
+    /// edges are rolled back, since a default belongs to each call's term
+    /// and not to the declaration's.
+    pub(crate) fn check_default_at_declaration(
+        &self,
+        cx: &Cx,
+        decl: &str,
+        param: &str,
+        default: &Expr,
+        ty: &Type,
+        lvl: &Level,
+    ) -> R<()> {
+        if is_discharge(default) {
+            return Ok(());
+        }
+        let depth = cx.names.len() as u32;
+        let fixed = |t: &Type| strengthen_ty(&LocalCtx::nil(), t, depth).is_some();
+        let attempt = |read: &dyn Fn() -> R<()>| {
+            let mark = SearchMark::of(self);
+            let verdict = read();
+            mark.rollback(self);
+            verdict
+        };
+        // The second reading's own failure is the one reported once the
+        // default has a type the call could still fit: it is about the
+        // default itself (`Holds(refl)`'s `refl`), not about its fit.
+        let verdict = attempt(&|| self.default_reading(cx, decl, default, ty, lvl, None)).or_else(|at_param| {
+            attempt(&|| match self.elab_infer(cx, default) {
+                Ok((term, own, own_lvl)) if !(fixed(ty) && fixed(&own)) => {
+                    self.default_reading(cx, decl, default, &own, &own_lvl, Some(term))
+                }
+                _ => Err(at_param.clone()),
+            })
+        });
+        verdict.map_err(|error| match error {
+            ElabError::Elab { msg, span } => ElabError::Elab {
+                msg: format!("`{param}`'s default does not check where it is written: {msg}"),
+                span,
+            },
+            other => other,
+        })
+    }
+
+    /// One reading of a value default: `term` if it was already elaborated
+    /// at `ty` (its own type), else the default checked at `ty`; then the
+    /// kernel's verdict on it in the telescope. A default that would leave
+    /// a goal open is not a value, and is refused.
+    fn default_reading(&self, cx: &Cx, decl: &str, default: &Expr, ty: &Type, lvl: &Level, term: Option<Term>) -> R<()> {
+        let goals = self.attempt.goal_arena.outstanding().len();
+        let term = match term {
+            Some(term) => term,
+            None => self.elab_check(cx, default, ty, lvl)?,
+        };
+        if self.attempt.goal_arena.outstanding().len() != goals {
+            return err("a default cannot leave a goal for its declaration to discharge", default.span);
+        }
+        // The term may name the declaration's goal slots (a lifted proof, a
+        // transparent name), so it is judged in the padded world the
+        // elaborator works in, before the attempt's slots are rolled back.
+        let world = self.goal_psi();
+        stats::time_kernel(|| {
+            self.kernel_check_type(&world, Layer::Prog, &cx.gamma, ty, lvl)?;
+            self.kernel_check_term(&world, Layer::Code, &cx.gamma, &term, ty, lvl)
+        })
+        .map_err(|e| self.kernel_error(decl, default.span, e))
+    }
+
     /// Install a stored declaration scope for one read of stored syntax. The
     /// guard restores the caller's scope on every return path.
     pub(crate) fn use_scope<'a>(&'a self, scope: &Rc<crate::names::Scope>) -> ResolutionScope<'a> {
@@ -121,4 +216,27 @@ pub(crate) fn mentioned_parameters(params: &[ParamMeta], index: usize) -> Vec<us
 pub(crate) fn is_param_default(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::App { head, named, .. }
         if named.is_empty() && matches!(&head.kind, ExprKind::Var(v) if v == application::PARAM_DEFAULT))
+}
+
+/// Is this default a **discharge**: a form whose meaning is the goal it is
+/// checked at, run at each call like `:= infer` (§9.7)? The tactics and the
+/// proof searches (`omega`, `positivity`, `ring`, `bv_omega`, `decide`,
+/// `rel_cong`/`rel_derive`, `rewrite`, `subst`, `by t`), `refl`, whose
+/// endpoints the kernel compares at the goal, and any default that contains
+/// a goal `?`, which it poses to the caller. Read off the head, so
+/// `mk(omega)` is a value whose `omega` runs in the telescope.
+///
+/// A user declaration that shadows one of these names makes a default that
+/// names it a value no check here reaches; the call still checks it.
+pub(crate) fn is_discharge(e: &Expr) -> bool {
+    const SEARCHES: [&str; 7] = ["omega", "positivity", "ring", "bv_omega", "decide", "rel_derive", heather_syntax::POS_SEARCH];
+    const TACTICS: [&str; 7] = ["omega", "ring", "rewrite", "subst", "rel_cong", "rel_derive", heather_syntax::BY_TACTIC];
+    surface::count_holes_expr(e) > 0
+        || match &e.kind {
+            ExprKind::Refl | ExprKind::AutoRefl | ExprKind::Hole(_) => true,
+            ExprKind::Var(v) => SEARCHES.contains(&v.as_str()),
+            ExprKind::App { head, .. } => matches!(&head.kind, ExprKind::Var(v) if TACTICS.contains(&v.as_str())),
+            ExprKind::Block(block) => is_discharge(&block.result),
+            _ => false,
+        }
 }

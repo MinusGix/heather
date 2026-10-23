@@ -721,3 +721,108 @@ fn a_mentioning_default_across_modules() {
     let user = "import declaring::{next};\nfn bump(n: Nat) -> Nat { n }\ntheorem one(n: Nat): next(n) = Succ(n) { refl }";
     e.elab_module_source("user", user).unwrap_or_else(|err| panic!("{}", err.render(user)));
 }
+
+// -- defaults checked where they are written (§9.7) --------------------------
+//
+// issues/parameter-default-unchecked-at-declaration.md. A value default is
+// checked in the declaration's telescope, by the kernel, whether or not any
+// call leaves it out; a discharge (a tactic, `refl`) runs only at a call. The
+// axes: no call at all, a theorem as well as a `fn`, a default mentioning an
+// earlier parameter, an open type, a fit only some calls make, and a
+// positive control beside each refusal.
+
+const CHECKED: &str = "
+record P { a: Nat, h: a = 3 }
+";
+
+/// The issue's case: `P(2, refl)`'s `refl` is the kernel's to judge, and no
+/// call uses the default, so before §9.7 nothing judged it. Refused at the
+/// default, in the declaration; the control is the same default made right.
+#[test]
+fn a_default_no_call_uses_is_still_checked() {
+    let error = bad(&format!("{CHECKED}fn g(x: Nat := P(2, refl).a) -> Nat {{ x }}\n"));
+    assert!(error.starts_with("3:") && error.contains("rejected `g`"), "{error}");
+    let error = bad(&format!("{CHECKED}theorem t(x: Nat := P(2, refl).a): x = x {{ refl }}\n"));
+    assert!(error.starts_with("3:") && error.contains("rejected `t`"), "{error}");
+    ok(&format!("{CHECKED}fn g(x: Nat := P(3, refl).a) -> Nat {{ x }}\ntheorem used(): g() = 3 {{ refl }}\n"));
+}
+
+/// Mentioning an earlier parameter: the default is checked with `n` a
+/// binder, so it is right for every argument or refused. `add(n, True)` is
+/// wrong whatever `n` is.
+#[test]
+fn a_mentioning_default_is_checked_at_the_parameter() {
+    let error = bad("
+inductive Bool { False, True }
+fn add(a: Nat, b: Nat) -> Nat { a }
+fn f(n: Nat, k: Nat := add(n, True)) -> Nat { k }
+");
+    assert!(error.contains("`k`'s default does not check where it is written"), "{error}");
+    let error = bad("fn f(n: Nat, k: Nat := missing(n)) -> Nat { k }");
+    assert!(error.contains("`k`'s default does not check where it is written") && error.contains("missing"), "{error}");
+    ok("
+fn add(a: Nat, b: Nat) -> Nat { a }
+fn f(n: Nat, k: Nat := add(n, n)) -> Nat { k }
+");
+}
+
+/// A default whose fit to the parameter no call can change is refused: here
+/// both `Bool` and the numeral's `Nat` are the same at every call.
+#[test]
+fn a_default_that_fits_no_call_is_refused() {
+    let error = bad("inductive Bool { False, True }\nfn f(n: Nat, b: Bool := 5) -> Nat { n }");
+    assert!(error.contains("`b`'s default does not check where it is written"), "{error}");
+    ok("inductive Bool { False, True }\nfn f(n: Nat, b: Bool := True) -> Nat { n }");
+}
+
+/// A default whose fit depends on the call stays legal, and the call is
+/// still what refuses a misfit (the two `…_refused_at_the_call` tests above
+/// pin that): `Holds` is a `Yes`, which `IsZero(n)` is exactly when `n` is
+/// zero, and `x` is a `Nat` exactly when `A` is. Its own subterms are still
+/// checked here: `Holds2(refl)` proves `2 = 3` at no call.
+#[test]
+fn a_default_whose_fit_depends_on_the_call() {
+    ok("
+inductive Yes { Holds }
+inductive No { Fails }
+fn IsZero(n: Nat) -> Type { match n { Zero => Yes, Succ(_) => No } }
+fn zeroed(n: Nat, zero: IsZero(n) := Holds) -> Nat { n }
+fn pick<A>(x: A, k: Nat := x) -> Nat { k }
+");
+    let error = bad("
+inductive Yes { Holds(p: 2 = 3) }
+inductive No { Fails }
+fn IsZero(n: Nat) -> Type { match n { Zero => Yes, Succ(_) => No } }
+fn zeroed(n: Nat, zero: IsZero(n) := Holds(refl)) -> Nat { n }
+");
+    assert!(error.starts_with("5:") && error.contains("rejected `zeroed`"), "{error}");
+}
+
+/// A discharge has no meaning apart from a call's goal and hypotheses, so a
+/// declaration with no call accepts it: here a `refl` only some calls'
+/// endpoints make true, and the call still checks it. `omega` over facts
+/// only a caller has is `positivity_tactic.rs`'s `DEFAULTS`.
+#[test]
+fn a_discharge_waits_for_a_call() {
+    ok("
+fn zero_only(n: Nat, h: n = Zero := refl) -> Nat { n }
+fn at_zero() -> Nat { zero_only(Zero) }
+");
+    let error = bad("
+fn zero_only(n: Nat, h: n = Zero := refl) -> Nat { n }
+fn at_one() -> Nat { zero_only(Succ(Zero)) }
+");
+    assert!(error.contains("rejected"), "{error}");
+}
+
+/// At an open type a default is checked with the type parameter abstract: a
+/// lambda at `A → A` checks, and is the identity at each call.
+#[test]
+fn a_default_at_an_open_type_is_checked_abstractly() {
+    ok("
+inductive Bool { False, True }
+fn twice<A>(x: A, f: A -> A := λ y => y) -> A { f(f(x)) }
+theorem closed(): twice(True) = True { refl }
+theorem overridden(): twice(True, f := λ b => False) = False { refl }
+");
+}
