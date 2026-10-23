@@ -820,6 +820,7 @@ impl Elaborator {
                 term: Rc::new(Term::Var(LocalVar(0))),
                 ty: ty.shift_local(1),
                 level: level.clone(),
+                spliced: None,
             }));
             if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
                 tcx.op_locals.push((sym.clone(), pname.clone()));

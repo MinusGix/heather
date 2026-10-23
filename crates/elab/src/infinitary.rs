@@ -1003,6 +1003,7 @@ impl Elaborator {
                         term,
                         ty,
                         level,
+                        spliced: None,
                     }));
                 }
                 acx.guard = dec

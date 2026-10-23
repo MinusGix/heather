@@ -28,6 +28,7 @@ use heather_syntax::{Decl, DeclKind, Expr, ExprKind, SlotPath, Span, Stmt, Ty, T
 
 use crate::names::NameKind;
 use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
+use crate::statements::LetValue;
 use crate::{Alias, Cx, ElabError, Elaborator, MetaDef, R, err};
 
 /// One binder of a `meta fn`'s signature, in written order.
@@ -310,6 +311,7 @@ impl Elaborator {
         // The body: `let`/`let code` aliases, then the quote, checked against
         // the result code type. An alias is inlined at its splice, exactly as
         // an ordinary `let` is at its use.
+        let mut values = Vec::new();
         for stmt in &decl.body.stmts {
             let (name, expr) = match stmt {
                 Stmt::LetCode { name, expr, .. } => (name, expr),
@@ -337,16 +339,14 @@ impl Elaborator {
                 }
             };
             let (term, ty, level) = self.elab_infer(&cx, expr)?;
-            cx.aliases.push(Rc::new(Alias {
-                skel: None,
-                name: name.clone(),
-                depth: cx.names.len(),
-                term: Rc::new(term),
-                ty,
-                level,
-            }));
+            let value = LetValue::new(Rc::new(term), ty, level);
+            cx.aliases.push(Rc::new(value.alias(name.clone(), cx.names.len(), None)));
+            values.push(value);
         }
         let body = self.elab_check(&cx, &decl.body.result, &result_ty, &result_lvl)?;
+        // As in an ordinary block: a value no splice used still faces the
+        // gate (`statements.rs`).
+        let body = LetValue::discard_around(self, &cx, values, body, &result_ty, &result_lvl);
 
         let (stmt, lvl) = Self::close_meta_ty(&sig, result_ty, result_lvl.clone());
         let term = Self::close_meta_term(&sig, body, result_lvl);
@@ -1362,6 +1362,7 @@ fn shift_cx(cx: &Cx, univs: u32, globals: u32) -> Cx {
         .iter()
         .map(|a| {
             Rc::new(Alias {
+                spliced: a.spliced.clone(),
                 skel: a.skel.clone(),
                 name: a.name.clone(),
                 depth: a.depth,

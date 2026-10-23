@@ -706,6 +706,7 @@ impl Elaborator {
                             term: Rc::new(t),
                             ty: result.clone(),
                             level: mlvl.clone(),
+                            spliced: None,
                         }));
                         // The placeholder already *is* a reference to it.
                         continue;

@@ -146,3 +146,27 @@ fn malformed_argument_lists_are_refused() {
     let msg = elab_err("theorem t(b: Bool, n: Nat): n < bump(b, n) + 1 { omega(no_such_lemma(n)) }");
     assert!(msg.contains("no_such_lemma"), "{msg}");
 }
+
+/// A listed fact the certificate does not cite is in no term the kernel
+/// sees, so it is discarded around the proof instead, as an unused `let` is
+/// (`statements.rs`): a wrong proof is refused even where `omega` did not
+/// need it. A `let` the certificate does not cite is the same case.
+#[test]
+fn an_uncited_argument_still_faces_the_kernel() {
+    let record = "record P { a: Nat, h: a = 3 }\n";
+    for wrong in [
+        "theorem t(n: Nat): n + 0 = n { omega(P(2, refl).h) }",
+        "theorem t(n: Nat): n + 0 = n { let p = P(2, refl); omega }",
+        "theorem t(n: Nat): n + 0 = n { let p = P(2, refl); omega(p) }",
+    ] {
+        let mut e = base();
+        match e.elab_module_source("m", &format!("{PRELUDE}{record}{wrong}")) {
+            Err(err @ ElabError::Kernel { .. }) => {
+                assert!(err.to_string().contains("NotConvertible"), "{wrong}: {err}")
+            }
+            other => panic!("{wrong}: expected the kernel's refusal, got {other:?}"),
+        }
+    }
+    ok(&format!("{record}theorem t(n: Nat): n + 0 = n {{ omega(P(3, refl).h) }}"));
+    ok(&format!("{record}theorem t(n: Nat): n + 0 = n {{ let p = P(3, refl); omega(p.h) }}"));
+}

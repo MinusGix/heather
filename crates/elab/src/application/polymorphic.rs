@@ -31,7 +31,7 @@ impl Elaborator {
             return None;
         }
         let attempt = || -> R<Option<(Term, Type, Level)>> {
-            let (_, mut ty, mut level) = self.resolve(cx, name, argument.span)?;
+            let (_, mut ty, mut level) = self.resolve_reading(cx, name, argument.span)?;
             let k = prefix as u32;
             ty = ty.shift_global(k);
             let mut inner = vec![Sol::Unsolved; prefix];

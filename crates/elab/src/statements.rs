@@ -9,8 +9,19 @@
 //! (docs/have-design.md): the rest of its block elaborates under `x : T` and
 //! the block becomes the redex `(λ x: T. rest)(v)`, so the kernel checks `v`
 //! once however often `x` is used.
+//!
+//! **Every written value reaches the kernel.** An alias's value is in the
+//! kernel's input only where a use spliced it, and the elaborator does not
+//! decide well-typedness itself: it leaves conversions — a `refl`'s two
+//! sides, a constructor's field types — to the gate. So a `let` no use
+//! spliced (`let p = P(2, refl); 0`) would be accepted however wrong its
+//! value. A block therefore ends by wrapping such a value around its result
+//! as a redex that discards it, `(λ _: T. rest)(v)`
+//! ([`LetValue::discard_around`]); a value some use spliced is already
+//! checked there.
 
 use std::sync::Arc as Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalSubst, Term, Type};
@@ -33,6 +44,14 @@ pub(crate) trait StatementElab {
     ) -> R<Term>;
 
     fn infer_statement_expression(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)>;
+
+    /// A local or alias in scope, by name, read without recording a splice
+    /// (`Elaborator::resolve_reading`): the right side of a renaming `let`.
+    fn read_local(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)>;
+
+    /// `ty` as an emitted annotation slot in `cx` (`Elaborator::annotation_type`,
+    /// the one emission chokepoint): the domain of a discarding redex.
+    fn annotation(&self, cx: &Cx, ty: &Type) -> Type;
 
     fn infer_let_lambda(
         &self,
@@ -77,24 +96,28 @@ pub(crate) trait BlockCheckingElab: StatementElab {
 }
 
 /// Extend a clone of `cx` with the aliases introduced by `statements`, up to
-/// the first `have`. Returns the extended context and the statements from
-/// that `have` on, which are empty when there is none: a `have` scopes over
-/// the rest of its block, so only a caller that holds the block's result can
-/// elaborate it ([`check_block`], [`infer_block`]).
+/// the first `have`. Returns the extended context, the values those aliases
+/// were bound to, and the statements from that `have` on, which are empty
+/// when there is none: a `have` scopes over the rest of its block, so only a
+/// caller that holds the block's result can elaborate it ([`check_block`],
+/// [`infer_block`]). That caller also owns the values: once the result is
+/// built, it discards the ones no use spliced around it
+/// ([`LetValue::discard_around`]).
 pub(crate) fn elaborate<'s>(
     elab: &impl StatementElab,
     cx: &Cx,
     statements: &'s [Stmt],
-) -> R<(Cx, &'s [Stmt])> {
+) -> R<(Cx, Vec<LetValue>, &'s [Stmt])> {
     let mut cx = cx.clone();
+    let mut values = Vec::new();
     for (index, statement) in statements.iter().enumerate() {
         match statement {
-            Stmt::Let { opaque: true, .. } => return Ok((cx, &statements[index..])),
+            Stmt::Let { opaque: true, .. } => return Ok((cx, values, &statements[index..])),
             Stmt::Let { name, ty, expr, .. } => {
-                elaborate_let(elab, &mut cx, name, ty.as_ref(), expr)?;
+                values.extend(elaborate_let(elab, &mut cx, name, ty.as_ref(), expr)?);
             }
             Stmt::LetRecord { fields, expr, span } => {
-                elaborate_record_let(elab, &mut cx, fields, expr, *span)?;
+                values.push(elaborate_record_let(elab, &mut cx, fields, expr, *span)?);
             }
             Stmt::LetCode { span, .. } => {
                 return err(
@@ -105,7 +128,68 @@ pub(crate) fn elaborate<'s>(
             }
         }
     }
-    Ok((cx, &[]))
+    Ok((cx, values, &[]))
+}
+
+/// A written `let`'s value (a record `let`'s whole right side), kept until
+/// its block is built. Every alias it bound shares `spliced`.
+pub(crate) struct LetValue {
+    term: Rc<Term>,
+    ty: Rc<Type>,
+    level: Level,
+    spliced: Rc<AtomicBool>,
+}
+
+impl LetValue {
+    pub(crate) fn new(term: Rc<Term>, ty: Type, level: Level) -> Self {
+        LetValue {
+            term,
+            ty: Rc::new(ty),
+            level,
+            spliced: Rc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The alias a written `let x = v;` binds at `depth`, sharing this
+    /// value's record of being spliced.
+    pub(crate) fn alias(&self, name: String, depth: usize, skel: Option<Rc<Skel>>) -> Alias {
+        Alias {
+            name,
+            depth,
+            term: Rc::clone(&self.term),
+            ty: (*self.ty).clone(),
+            level: self.level.clone(),
+            skel,
+            spliced: Some(Rc::clone(&self.spliced)),
+        }
+    }
+
+    /// `body`, of `body_type` at `body_level` in `cx`, the context the values
+    /// were bound in, with every value no use spliced wrapped around it as
+    /// `(λ _: T. body)(v)` — outermost first, so the redexes read in the order
+    /// the `let`s were written. The block's type is unchanged: the binder is
+    /// unused, so the codomain instantiated at `v` is `body_type` again.
+    pub(crate) fn discard_around(
+        elab: &impl StatementElab,
+        cx: &Cx,
+        values: Vec<LetValue>,
+        body: Term,
+        body_type: &Type,
+        body_level: &Level,
+    ) -> Term {
+        values
+            .into_iter()
+            .rev()
+            .filter(|value| !value.spliced.load(Ordering::Relaxed))
+            .fold(body, |body, value| {
+                HaveValue {
+                    term: value.term,
+                    ty: Rc::new(elab.annotation(cx, &value.ty)),
+                    level: value.level,
+                }
+                .redex(body.shift_local(1), body_type.shift_local(1), body_level.clone())
+            })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -148,9 +232,9 @@ fn check_statements(
     skeleton: Option<&Skel>,
     capture_slots: bool,
 ) -> R<Term> {
-    let (cx, rest) = elaborate(elab, cx, statements)?;
-    let Some((have, rest)) = rest.split_first() else {
-        return elab.check_block_result(
+    let (cx, values, rest) = elaborate(elab, cx, statements)?;
+    let body = match rest.split_first() {
+        None => elab.check_block_result(
             &cx,
             result,
             expected,
@@ -158,22 +242,25 @@ fn check_statements(
             hint,
             skeleton,
             capture_slots,
-        );
+        )?,
+        Some((have, rest)) => {
+            let (inner, value) = elaborate_have(elab, &cx, have)?;
+            let body_type = expected.shift_local(1);
+            let body = check_statements(
+                elab,
+                &inner,
+                rest,
+                result,
+                &body_type,
+                level,
+                hint,
+                skeleton,
+                capture_slots,
+            )?;
+            value.redex(body, body_type, level.clone())
+        }
     };
-    let (inner, value) = elaborate_have(elab, &cx, have)?;
-    let body_type = expected.shift_local(1);
-    let body = check_statements(
-        elab,
-        &inner,
-        rest,
-        result,
-        &body_type,
-        level,
-        hint,
-        skeleton,
-        capture_slots,
-    )?;
-    Ok(value.redex(body, body_type, level.clone()))
+    Ok(LetValue::discard_around(elab, &cx, values, body, expected, level))
 }
 
 pub(crate) fn infer_block(
@@ -193,14 +280,18 @@ fn infer_statements(
     statements: &[Stmt],
     result: &Expr,
 ) -> R<(Term, Type, Level)> {
-    let (cx, rest) = elaborate(elab, cx, statements)?;
-    let Some((have, rest)) = rest.split_first() else {
-        return elab.infer_statement_expression(&cx, result);
+    let (cx, values, rest) = elaborate(elab, cx, statements)?;
+    let (body, ty, level) = match rest.split_first() {
+        None => elab.infer_statement_expression(&cx, result)?,
+        Some((have, rest)) => {
+            let (inner, value) = elaborate_have(elab, &cx, have)?;
+            let (body, body_type, body_level) = infer_statements(elab, &inner, rest, result)?;
+            let ty = body_type
+                .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&value.term)));
+            (value.redex(body, body_type, body_level.clone()), ty, body_level)
+        }
     };
-    let (inner, value) = elaborate_have(elab, &cx, have)?;
-    let (body, body_type, body_level) = infer_statements(elab, &inner, rest, result)?;
-    let ty = body_type.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&value.term)));
-    Ok((value.redex(body, body_type, body_level.clone()), ty, body_level))
+    Ok((LetValue::discard_around(elab, &cx, values, body, &ty, &level), ty, level))
 }
 
 /// A `have`'s elaborated value, ready to be applied to the rest of its block.
@@ -262,22 +353,52 @@ fn elaborate_let(
     name: &str,
     annotation: Option<&Ty>,
     expression: &Expr,
-) -> R<()> {
+) -> R<Option<LetValue>> {
+    if annotation.is_none()
+        && let Some(splice) = renamed(cx, expression)
+    {
+        // `let y = x;`, which `match` desugaring writes for every pattern
+        // variable: a local is well-typed by construction and an alias's
+        // value is its own `let`'s, so there is nothing of `y`'s to check.
+        // A use of `y` is a use of `x`'s value, so it records `x`'s splice.
+        let ExprKind::Var(name_read) = &expression.kind else { unreachable!() };
+        let (term, ty, level) = elab.read_local(cx, name_read, expression.span)?;
+        cx.aliases.push(Rc::new(Alias {
+            skel: None,
+            name: name.to_string(),
+            depth: cx.names.len(),
+            term: Rc::new(term),
+            ty,
+            level,
+            spliced: splice,
+        }));
+        return Ok(None);
+    }
     let (term, ty, level, skeleton) = let_value(elab, cx, annotation, expression)?;
     if let Some(annotation) = annotation
         && let Some(dictionary) = elab.dictionary_alias(name, annotation)
     {
         cx.dicts.push(Rc::new(dictionary));
     }
-    cx.aliases.push(Rc::new(Alias {
-        skel: skeleton,
-        name: name.to_string(),
-        depth: cx.names.len(),
-        term: Rc::new(term),
-        ty,
-        level,
-    }));
-    Ok(())
+    let value = LetValue::new(Rc::new(term), ty, level);
+    cx.aliases.push(Rc::new(value.alias(name.to_string(), cx.names.len(), skeleton)));
+    Ok(Some(value))
+}
+
+/// When `expression` is a bare name of a local or an alias in scope, the
+/// splice record a use of it should set: the alias's own, or none for a
+/// local. Shadowing as `resolve` decides it: an alias bound after a local of
+/// the same name hides it.
+fn renamed(cx: &Cx, expression: &Expr) -> Option<Option<Rc<AtomicBool>>> {
+    let ExprKind::Var(name) = &expression.kind else { return None };
+    let local = cx.names.iter().rposition(|n| n == name);
+    let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+    match (local, alias) {
+        (Some(pos), Some(a)) if a.depth <= pos => Some(None),
+        (_, Some(a)) => Some(a.spliced.clone()),
+        (Some(_), None) => Some(None),
+        (None, None) => None,
+    }
 }
 
 /// A `let` or `have` right-hand side: checked against its annotation, or
@@ -322,12 +443,13 @@ fn elaborate_record_let(
     fields: &[heather_syntax::RecordPatField],
     expression: &Expr,
     span: Span,
-) -> R<()> {
-    let (term, record_type, _) = elab.infer_statement_expression(cx, expression)?;
+) -> R<LetValue> {
+    let (term, record_type, record_level) = elab.infer_statement_expression(cx, expression)?;
     let Some(record) = elab.record_for_destructuring(cx, &record_type, span) else {
         return err("a `let { … }` pattern needs a record on the right", span);
     };
-    let value = Rc::new(term);
+    let whole = LetValue::new(Rc::new(term), record_type.clone(), record_level);
+    let value = Rc::clone(&whole.term);
     let mut selected = vec![None; record.ctors[0].fields.len()];
     for field in fields {
         let Some(index) = record.field_index(&field.name) else {
@@ -373,7 +495,9 @@ fn elaborate_record_let(
             index,
             *pattern_span,
         )?;
+        // A use of any field splices a projection of the whole value.
         cx.aliases.push(Rc::new(Alias {
+            spliced: Some(Rc::clone(&whole.spliced)),
             skel: skel_of_ty(&record.ctors[0].fields[index].1),
             name: name.clone(),
             depth: cx.names.len(),
@@ -382,7 +506,7 @@ fn elaborate_record_let(
             level,
         }));
     }
-    Ok(())
+    Ok(whole)
 }
 
 #[cfg(test)]
@@ -432,6 +556,14 @@ mod tests {
         ) -> R<(Term, Type, Level)> {
             assert!(matches!(expression.kind, ExprKind::Num(_)));
             Ok((Term::Zero, Type::Nat, Level::Zero))
+        }
+
+        fn read_local(&self, _cx: &Cx, _name: &str, _span: Span) -> R<(Term, Type, Level)> {
+            Ok((Term::Zero, Type::Nat, Level::Zero))
+        }
+
+        fn annotation(&self, _cx: &Cx, ty: &Type) -> Type {
+            ty.clone()
         }
 
         fn infer_let_lambda(
@@ -523,7 +655,7 @@ mod tests {
             },
         ];
 
-        let (cx, rest) = elaborate(&fake, &Cx::empty(), &statements).unwrap();
+        let (cx, _, rest) = elaborate(&fake, &Cx::empty(), &statements).unwrap();
         assert!(rest.is_empty());
         assert_eq!(
             cx.aliases
@@ -555,7 +687,7 @@ mod tests {
             opaque,
         };
         let statements = vec![number("a", false), number("h", true), number("b", false)];
-        let (cx, rest) = elaborate(&Fake::default(), &Cx::empty(), &statements).unwrap();
+        let (cx, _, rest) = elaborate(&Fake::default(), &Cx::empty(), &statements).unwrap();
         assert_eq!(cx.aliases.len(), 1);
         assert_eq!(rest.len(), 2);
         assert!(matches!(&rest[0], Stmt::Let { name, opaque: true, .. } if name == "h"));

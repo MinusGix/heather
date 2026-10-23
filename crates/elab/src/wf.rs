@@ -1300,6 +1300,7 @@ impl Elaborator {
                                 len: Rc::clone(&tail_len),
                             },
                             level: tel.level.clone(),
+                            spliced: None,
                         }));
                         // What a self-call over this binder needs (§4.2). The
                         // motive is strengthened here rather than at the call:
@@ -1408,6 +1409,7 @@ impl Elaborator {
                             term: Rc::clone(&c),
                             ty: d_inline_here.clone(),
                             level: tel.level.clone(),
+                            spliced: None,
                         }));
                         children.push((c, ih_at, ih_ty, tel.mlvl.clone()));
                         rec_t += 1;
@@ -1421,6 +1423,7 @@ impl Elaborator {
                             term: proj,
                             ty,
                             level,
+                            spliced: None,
                         }));
                         payload_k += 1;
                     }

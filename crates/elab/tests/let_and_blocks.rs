@@ -383,3 +383,90 @@ fn a_bound_j_is_an_ordinary_name() {
             match i { FZ => 0, FS(j) => xs[j] }
         }");
 }
+
+// -- §6: every written value reaches the kernel ------------------------------
+
+/// A record whose one field the elaborator never decides: the `refl` in
+/// `P(2, refl)` is checked by the kernel's gate alone, so whether the gate
+/// sees it is exactly what a mistake in `P(2, refl)` exposes.
+const P: &str = "record P { a: Nat, h: a = 3 }\n";
+
+/// The reported shape (spotted on PR #102): a `let` is an alias, its value
+/// reaches the kernel only where a use splices it, so an *unused* value was
+/// never checked at all and `let p = P(2, refl); 0` elaborated. Every form a
+/// written value takes — plain, `_`, record destructuring, annotated, behind
+/// another alias, in an arm, under a λ, before a `have`, in a block in
+/// argument position — is refused, each with its well-typed control.
+#[test]
+fn an_unused_let_value_still_faces_the_kernel() {
+    for (wrong, right) in [
+        ("fn f() -> Nat { let p = P(2, refl); 0 }", "fn f() -> Nat { let p = P(3, refl); 0 }"),
+        ("fn f() -> Nat { let _ = P(2, refl); 0 }", "fn f() -> Nat { let _ = P(3, refl); 0 }"),
+        ("fn f() -> Nat { let { a, h } = P(2, refl); 0 }", "fn f() -> Nat { let { a, h } = P(3, refl); 0 }"),
+        ("fn f() -> Nat { let p: P = P(2, refl); 0 }", "fn f() -> Nat { let p: P = P(3, refl); 0 }"),
+        ("fn f() -> Nat { let p = P(2, refl); let q = p; 0 }", "fn f() -> Nat { let p = P(3, refl); let q = p; 0 }"),
+        (
+            "fn f(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => { let p = P(2, refl); k } } }",
+            "fn f(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => { let p = P(3, refl); k } } }",
+        ),
+        ("fn f() -> Nat -> Nat { λ y => { let p = P(2, refl); y } }", "fn f() -> Nat -> Nat { λ y => { let p = P(3, refl); y } }"),
+        ("fn f() -> Nat { let g = λ (y: Nat) => P(2, refl); 0 }", "fn f() -> Nat { let g = λ (y: Nat) => P(3, refl); 0 }"),
+        (
+            "theorem f(): 0 = 0 { let p = P(2, refl); have q: Nat = 1; refl }",
+            "theorem f(): 0 = 0 { let p = P(3, refl); have q: Nat = 1; refl }",
+        ),
+        (
+            "fn takes(n: Nat) -> Nat { n }\nfn f() -> Nat { takes({ let p = P(2, refl); 0 }) }",
+            "fn takes(n: Nat) -> Nat { n }\nfn f() -> Nat { takes({ let p = P(3, refl); 0 }) }",
+        ),
+    ] {
+        let m = bad(&format!("{P}{wrong}"));
+        assert!(m.contains("NotConvertible") && m.contains("`2` and `3`"), "{wrong}: {m}");
+        ok(&format!("{P}{right}"));
+    }
+}
+
+/// The value-parameter shape PR #102 found it with, a neutral scrutinee, and
+/// an open element type: the refusal is the kernel's at each.
+#[test]
+fn an_unused_let_value_is_checked_at_every_axis() {
+    let m = bad("fn dbl(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => Succ(Succ(dbl(k))) } }
+        inductive Two(m: Nat) { A(n: Nat, h: dbl(n) = m), C }
+        fn f() -> Nat { let x: Two(5) = A(2, refl); 0 }");
+    assert!(m.contains("NotConvertible"), "{m}");
+    let m = bad(&format!("{P}fn f(n: Nat) -> Nat {{ let p = P(n, refl); n }}"));
+    assert!(m.contains("NotConvertible"), "{m}");
+    let boxed = "record Same<A> { v: A, w: A, h: v = w }\n";
+    let m = bad(&format!("{boxed}fn f<A>(a: A, b: A) -> A {{ let x = Same(a, b, refl); a }}"));
+    assert!(m.contains("NotConvertible"), "{m}");
+    ok(&format!("{boxed}fn f<A>(a: A) -> A {{ let x = Same(a, a, refl); a }}"));
+}
+
+/// How the value reaches the kernel: an unused value is discarded around the
+/// block as `(λ _: T. body)(v)`, which changes no meaning — the function
+/// still computes, at a literal and at a neutral argument — while a used
+/// `let` keeps the term it always had, the value inlined at the use and no
+/// redex added.
+#[test]
+fn a_discarded_value_changes_no_term_a_use_reaches() {
+    ok(&format!("{P}fn f() -> Nat {{ let p = P(3, refl); 0 }}
+        theorem t(): f() = 0 {{ refl }}
+        fn g(n: Nat) -> Nat {{ let p = P(3, refl); n }}
+        theorem u(n: Nat): g(n) = n {{ refl }}"));
+    let (used, ..) = last_body(&elab("fn f() -> Nat { let x = 1; let y = x; y }"));
+    let (plain, ..) = last_body(&elab("fn f() -> Nat { 1 }"));
+    assert!(used == plain, "a used `let` must not add a redex");
+    let (unused, ..) = last_body(&elab("fn f() -> Nat { let x = 1; 0 }"));
+    assert!(
+        matches!(&unused, Term::App { fun, arg, .. } if matches!(**fun, Term::Lam { .. }) && **arg == plain),
+        "an unused value is discarded around the body"
+    );
+}
+
+/// A `meta fn`'s `let`s are aliases too, and its gate is at the meta layer.
+#[test]
+fn an_unused_meta_let_value_still_faces_the_kernel() {
+    let m = bad(&format!("{P}meta fn q(g: Ctx) -> Code(g |- Nat) {{ let p = P(2, refl); code {{ 0 }} }}"));
+    assert!(m.contains("NotConvertible"), "{m}");
+    ok(&format!("{P}meta fn q(g: Ctx) -> Code(g |- Nat) {{ let p = P(3, refl); code {{ 0 }} }}"));
+}
