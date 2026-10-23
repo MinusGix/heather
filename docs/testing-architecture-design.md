@@ -1,7 +1,7 @@
 # Testing architecture: what to make cheaper, and what to stop running
 
-Status: design 2026-10-23, options for Minus; nothing here is implemented
-yet. Owner: `issues/testing-architecture.md`, which also holds the
+Status: design 2026-10-23, options for Minus. Of the options, only
+single-flight image builds (§3.1.1) is implemented so far. Owner: `issues/testing-architecture.md`, which also holds the
 measurements this note reads (box, commit, seconds). This note states costs
 as shapes and ratios.
 
@@ -51,9 +51,10 @@ thread):
   runs on everything, because the verdict store starts empty.
 - **After an elab edit (the usual PR),** every image is stale under `Exact`,
   so every library module is re-elaborated once (the floor, with the kernel
-  vouched by the warm verdict store). The repeats are smaller than on a
-  fresh box but still there: the concurrent-miss race, plus the
-  by-design repeats.
+  vouched by the warm verdict store). The repeats left are the by-design
+  ones and the same module built under different prefixes. The concurrent
+  race barely shows here: with the kernel vouched, builds are short and the
+  targets drift apart before they collide.
 - **The test phase is throughput-bound**, as #109 found: summed target CPU
   over the job count is about the wall. A single long test such as
   `bv_omega_suite`, which runs some twenty cases serially in one `#[test]`,
@@ -158,8 +159,13 @@ about half of item time is outside the kernel gate.
    first process to miss a key builds and publishes it, and a second
    process that misses the same key blocks on the lock, then replays. This
    removes the concurrent repeats, which are about twice the floor on a
-   fresh box and a share of every post-edit run. It also retires the two
-   hand-written warm-ups. It is the cheapest, clearest win in this note.
+   fresh box (it does not move the post-edit run, where the race barely
+   happens). **Implemented with this note**: on a cold store the full lane's
+   test phase fell by about a third (the issue has the numbers). A process
+   blocked on the lock spends no CPU, so the waiter's rail is safe. The two hand-written
+   warm-ups stay, though, for their other reason: the first process to
+   take a lock still pays the prefix *and* its own suffix under one rail.
+   It is the cheapest, clearest win in this note.
 2. **Seed a fresh box's image store from master.** The sentinel publishes
    `target/semantic-test-images` for the commit it tested, and a fresh
    session fetches it (in `scripts/session-start`, beside the prebuild).
@@ -243,8 +249,8 @@ development fast mode.
 
 Cheap and clearly good, to implement once agreed:
 
-1. **Single-flight image builds** (3.1.1). This is a repository change with
-   a measured target: the fresh-box repeats.
+1. **Single-flight image builds** (3.1.1). Done in the same PR as this
+   note, measured on a cold store.
 2. **The sentinel** (2.1). It needs Minus's yes on a recurring scheduled
    task, its cadence (nightly, or after N merges) and where it reports.
 3. **Record each target's module set on every run** (the input to 2.2's

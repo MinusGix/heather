@@ -241,59 +241,75 @@ impl SemanticSession {
         if let Some(force) = self.only.get(&module.name).cloned() {
             return self.check_only(elab, module, dependencies, force, notices);
         }
-        // The three phases warm replay is made of — read/checksum/decode, the
-        // kernel recheck of the decoded delta, and publication (render plus
-        // hash). The fast lane's premise rests on these
-        // (`issues/semantic-replay-phase-attribution.md`).
-        let decoded = stats::timed(stats::Timer::ImageDecode, || {
-            images.load(key, elab.psi().clone(), module.src.len(), self.freshness)
-        });
-        match decoded {
-            Ok(Some(loaded)) => match stats::timed(stats::Timer::ImageRecheck, || {
-                elab.replay_module_delta(&loaded.delta, &dependencies)
-            }) {
-                Ok(()) => {
-                    self.interfaces.push(loaded.interface_hash);
-                    self.hits += 1;
-                    if let Some(writer) = loaded.stale {
-                        self.stale_hits += 1;
-                        notices.push(CacheNotice {
-                            module: module.name.clone(),
-                            kind: CacheNoticeKind::StaleReplayed,
-                            error: format!(
-                                "build {} rather than {}",
-                                writer.short(),
-                                SemanticsIdentity::current().short()
-                            ),
-                        });
+        // A miss takes the key's build lock and looks again before building:
+        // another process missing the same key at the same moment (the suite
+        // starts its targets together on an empty or newly stale store) has
+        // usually just published it, and replaying beats elaborating twice.
+        // Held until this function returns, i.e. past the publication below.
+        // A hit never takes it, so concurrent replays stay concurrent.
+        let mut build_lock = None;
+        loop {
+            // The three phases warm replay is made of — read/checksum/decode,
+            // the kernel recheck of the decoded delta, and publication (render
+            // plus hash). The fast lane's premise rests on these
+            // (`issues/semantic-replay-phase-attribution.md`).
+            let decoded = stats::timed(stats::Timer::ImageDecode, || {
+                images.load(key, elab.psi().clone(), module.src.len(), self.freshness)
+            });
+            match decoded {
+                Ok(Some(loaded)) => match stats::timed(stats::Timer::ImageRecheck, || {
+                    elab.replay_module_delta(&loaded.delta, &dependencies)
+                }) {
+                    Ok(()) => {
+                        self.interfaces.push(loaded.interface_hash);
+                        self.hits += 1;
+                        if let Some(writer) = loaded.stale {
+                            self.stale_hits += 1;
+                            notices.push(CacheNotice {
+                                module: module.name.clone(),
+                                kind: CacheNoticeKind::StaleReplayed,
+                                error: format!(
+                                    "build {} rather than {}",
+                                    writer.short(),
+                                    SemanticsIdentity::current().short()
+                                ),
+                            });
+                        }
+                        return ModuleOutcome {
+                            errors: Vec::new(),
+                            warnings: loaded.warnings,
+                            replayed: true,
+                            replayed_items: 0,
+                            forced_items: 0,
+                            notices,
+                        };
                     }
-                    return ModuleOutcome {
-                        errors: Vec::new(),
-                        warnings: loaded.warnings,
-                        replayed: true,
-                        replayed_items: 0,
-                        forced_items: 0,
-                        notices,
-                    };
+                    // A dependency theorem this module computed with has a
+                    // new proof under the same statement: an ordinary miss,
+                    // which the slice path below turns into re-checking just
+                    // the declarations that opened it
+                    // (`issues/theorem-witness-unfolding.md`).
+                    Err(heather_elab::ModuleReplayError::OpenedProofChanged) => {}
+                    Err(error) => notices.push(CacheNotice {
+                        module: module.name.clone(),
+                        kind: CacheNoticeKind::ReplayRejected,
+                        error: error.to_string(),
+                    }),
+                },
+                Ok(None) if build_lock.is_none() => {
+                    if let Some(lock) = images.build_lock(key) {
+                        build_lock = Some(lock);
+                        continue;
+                    }
                 }
-                // A dependency theorem this module computed with has a new
-                // proof under the same statement: an ordinary miss, which the
-                // slice path below turns into re-checking just the
-                // declarations that opened it
-                // (`issues/theorem-witness-unfolding.md`).
-                Err(heather_elab::ModuleReplayError::OpenedProofChanged) => {}
+                Ok(None) => {}
                 Err(error) => notices.push(CacheNotice {
                     module: module.name.clone(),
-                    kind: CacheNoticeKind::ReplayRejected,
+                    kind: CacheNoticeKind::LoadRejected,
                     error: error.to_string(),
                 }),
-            },
-            Ok(None) => {}
-            Err(error) => notices.push(CacheNotice {
-                module: module.name.clone(),
-                kind: CacheNoticeKind::LoadRejected,
-                error: error.to_string(),
-            }),
+            }
+            break;
         }
 
         // A source miss with a previous image of this module over the same

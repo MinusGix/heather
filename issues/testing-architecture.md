@@ -60,7 +60,37 @@ which sits under most of the suite). Of all 49 merges: ~9 docs/issues only,
 names, target CPU from `target/test-target-timings-full.tsv`. Scripts were
 throwaway; the per-module and per-target sums are reproducible from the rows.
 
+## Single-flight image builds (implemented 2026-10-23)
+
+`ModuleImageCache::build_lock` (`crates/cache/src/module_image.rs`): a
+`SemanticSession::check` miss takes an OS file lock on the key, loads again,
+and builds only if still missing, holding the lock past publication
+(`crates/cli/src/semantic.rs`). A hit takes no lock. Test:
+`a_miss_waits_for_a_concurrent_build_of_the_same_key_and_replays_it`
+(`crates/cli/tests/semantic.rs`), which fails with the lock disabled.
+
+Same container, same tree plus the change, full lane:
+
+| run | before | after |
+|---|---|---|
+| cold image + verdict stores, tests wall | 459 s | 318 s |
+| cold, target CPU | 1460 s | 1046 s |
+| cold, lib module repeats beyond the floor | 550 s | 205 s |
+| after an elab edit, tests wall / CPU | 240 s / 821 s | 249 s / 822 s |
+
+`round`, `tactic`, `x86_64_stack_runs` and `ordered_field` are each
+elaborated once on a cold store now. The post-edit run does not move: there
+the race barely happened (builds are short with the verdict store warm), and
+its remaining repeats are the by-design ones (`ir_v1`, `list`, `nat`) plus
+modules built under two different prefixes (`function_ir_lower_calls` in
+both `function_ir_lower_*` targets), which is
+[[relocatable-semantic-module-images]]'s. The "before" cold row is the
+fresh-container run above, whose OS caches were also cold, so read the
+ratio and not the seconds. 3699 passed (one new test).
+
 ## Log
 
 - 2026-10-23: Filed with the design note and the measurements above. Next:
   Minus's decisions in the note's §4 (sentinel, single-flight images first).
+- 2026-10-23: Single-flight image builds implemented and measured (above):
+  cold-store test phase 459 → 318 s; the post-edit run unchanged.

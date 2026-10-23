@@ -147,3 +147,51 @@ fn reexport_dependencies_load_replay_and_invalidate_through_a_facade() {
     assert!(heather_cli::loader::load(&client, &[]).is_err());
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Two processes missing one key at once build it once: the second waits on
+/// the key's build lock, looks again, and replays what the first published
+/// (`ModuleImageCache::build_lock`). The test holds the lock itself as the
+/// "first process", so the session under test must be blocked while it is
+/// held and must replay, not elaborate, once it is released.
+#[test]
+fn a_miss_waits_for_a_concurrent_build_of_the_same_key_and_replays_it() {
+    let cache = temp("single-flight");
+    let name = "sample";
+    let src = "theorem stable(n: Nat): n = n { refl }\nfn value() -> Nat { 0 }\n";
+    let dependencies = ModuleDependencyIdentity::default();
+    let key = ModuleCacheKey::for_source(name, src, &dependencies, LintProfile::Default);
+    let store = ModuleImageCache::new(cache.clone());
+    let lock = store.build_lock(key).expect("a fresh store can take a build lock");
+
+    let (done, finished) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn({
+        let cache = cache.clone();
+        move || {
+            let module = Module { name: name.into(), path: "sample.hthr".into(), src: src.into() };
+            let mut elab = Elaborator::with_prelude().unwrap();
+            let mut session = SemanticSession::new(Some(cache));
+            let outcome = session.check(&mut elab, &module, LintProfile::Default);
+            done.send(()).unwrap();
+            (outcome.errors.is_empty(), outcome.replayed, session.hits(), elab.psi().clone())
+        }
+    });
+    // Elaborating this module takes milliseconds; a session that did not
+    // wait would be finished long before this.
+    assert!(
+        finished.recv_timeout(std::time::Duration::from_millis(500)).is_err(),
+        "the session elaborated instead of waiting on the build lock"
+    );
+
+    let mut writer = Elaborator::with_prelude().unwrap();
+    let delta = writer.elab_module_delta(name, src, dependencies).unwrap();
+    store.publish(key, &delta, &[]).unwrap();
+    drop(lock);
+
+    let (clean, replayed, hits, psi) = waiter.join().unwrap();
+    assert!(clean);
+    assert!(replayed, "the waiter rebuilt a key the lock holder published");
+    assert_eq!(hits, 1);
+    assert_eq!(&psi, writer.psi());
+
+    let _ = std::fs::remove_dir_all(cache);
+}

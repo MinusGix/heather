@@ -549,6 +549,31 @@ impl ModuleImageCache {
         }))
     }
 
+    /// Take the build lock for `key`, blocking while another process holds
+    /// it: the single flight a miss goes through before elaborating, so that
+    /// processes missing the same key at once build it once rather than each
+    /// (`issues/testing-architecture.md`: on a fresh store the suite spent
+    /// about as much again as the one-each floor on such repeats). The
+    /// caller loads again once it holds the lock, since the holder it waited
+    /// on has usually just published, and keeps the lock until its own
+    /// publication.
+    ///
+    /// Advisory and best-effort. The lock is an OS file lock, released when
+    /// the holder drops it or dies (a test killed at the CPU rail cannot
+    /// strand its waiters), and an error taking it is `None`: the caller
+    /// builds unlocked, as every caller did before. Correctness never rests
+    /// on it — two builders of one key publish the same content by atomic
+    /// rename. The lock files stay: unlinking one while another process
+    /// waits on it would let a third lock a fresh inode beside it. That is one
+    /// empty file per key built; the retention sweep leaves them alone.
+    pub fn build_lock(&self, key: ModuleCacheKey) -> Option<std::fs::File> {
+        std::fs::create_dir_all(&self.dir).ok()?;
+        let path = self.dir.join(format!("{}.lock", hex(&key.0)));
+        let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
+        file.lock().ok()?;
+        Some(file)
+    }
+
     /// Publish through a unique temporary sibling and atomic rename. Leaving
     /// a temporary file after a crash is harmless: readers name only the
     /// content-addressed final path.
