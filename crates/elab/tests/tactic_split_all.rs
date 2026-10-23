@@ -7,8 +7,7 @@
 //! A literal and a neutral scrutinee (a local, a field, a nested `match`), an
 //! open element type (`sel<A>`), and a false statement as the negative
 //! control. The requests themselves, a checking position and their refusals
-//! are `tactic_splits.rs`'s; the two are separate processes, each well inside
-//! the suite's CPU rail (evaluating the strategy between requests dominates).
+//! are `tactic_splits.rs`'s.
 
 use std::sync::OnceLock;
 

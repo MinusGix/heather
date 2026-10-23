@@ -981,6 +981,7 @@ impl<'v> Dom<'v> for Values {
             // (`docs/native-bitvector-values-design.md` §3.3).
             Val::Lam { .. }
             | Val::WfIh { .. }
+            | Val::WIh { .. }
             | Val::BitRun { .. }
             | Val::NatSync { .. }
             | Val::BitFold { .. }

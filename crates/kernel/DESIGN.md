@@ -104,7 +104,15 @@ neutral on a neutral scrutinee, conversion at `Type::W` compares `sup`
 labels and subtree functions (annotations forced by the type). The β rule
 is the first whose right-hand side **synthesizes a λ**: `elim_W (sup a f) ⇝
 s[a, f, (λy. elim_W … (f y))/ih]` — reduction builds the ih function around
-the recursive call from the eliminator's own annotations. Motivation
+the recursive call from the eliminator's own annotations. The evaluator
+holds that λ as `Val::WIh` (2026-10-23,
+`issues/tactic-strategy-step-cost.md`), as it holds `elim_Wf`'s (below):
+applied over λ children it fires the eliminator on their body, and only a
+stuck child function or a reader that inspects the ih builds its syntax,
+which shifts the whole motive and step under three binders — once per
+recursion depth, since each level fires on the last level's copy. A
+Heather tactic's handlers recurse once per request, so that copy was most
+of a request's cost. Motivation
 (kernel-v1-extensions): general well-founded recursion (`Acc` via
 `W (x:A) (Σ y, R y x)` + Id, funext discharging the indexed-containers
 obligations) — the one thing the finitary encodings provably cannot reach.

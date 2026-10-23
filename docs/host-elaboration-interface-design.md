@@ -511,6 +511,12 @@ Recorded after building it, as the inductive-tier designs do.
   `match`. `ValueArena` now memoizes that syntax by the identity of the
   eliminator's bodies (`fire_elim_w`, `WIhSyntax`); a request costs tens of
   microseconds and a few hundred requests run in well under a second.
+  The memo only shared a copy between recursions at the same depth, and a
+  handler such as `focus` or `bind` recurses one level deeper per request,
+  so every request still paid one copy per handler layer: tens of
+  milliseconds a request in round 3's `split_all`. Since 2026-10-23 the
+  evaluator holds the ih as a value (`Val::WIh`) and builds no syntax for it
+  at all (`issues/tactic-strategy-step-cost.md`).
 - **A run was limited to about a thousand requests** (fixed 2026-10-21).
   A `match` on a tier-2 tree rebuilds the continuation over the scrutinee's
   proof, so each resumed tree's proof was the previous one's applied, and the
