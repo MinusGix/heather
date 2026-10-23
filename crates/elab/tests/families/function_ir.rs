@@ -37,6 +37,8 @@ mod function_ir_lower_loops;
 mod function_ir_eval;
 #[path = "../native_source.rs"]
 mod native_source;
+#[path = "../native_cat_spec.rs"]
+mod native_cat_spec;
 #[path = "../function_ir_loop.rs"]
 mod function_ir_loop;
 #[path = "../function_ir_loop_trace.rs"]

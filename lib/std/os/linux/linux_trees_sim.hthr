@@ -79,3 +79,20 @@ theorem Program::implements_iter<A, A2, B>(R: A → A2 → Type,
         Program::simulates_iter(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(),
             R, body, body2, pass, a, a2, r))
 }
+
+// Simulation under Linux's map and contract, up to a continuation: what a
+// source proof states pass by pass (`ITree::SimK`).
+fn ITree::LinuxSimK<A, B>(K: A → ITree<B>(Events::linux_spec()) → Type, t: ITree<A>(Events::linux()),
+    v: ITree<B>(Events::linux_spec())) → Type
+{
+    ITree::SimK(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(), K, t, v)
+}
+
+// A mapped source tree: the continuation sees the mapped return.
+theorem ITree::linux_sim_map<A, B, C>(K: B → ITree<C>(Events::linux_spec()) → Type, t: ITree<A>(Events::linux()), f: A → B,
+    v: ITree<C>(Events::linux_spec()), g: ITree::LinuxSimK(λ x w => K(f(x), w), t, v)):
+    ITree::LinuxSimK(K, ITree::map(Events::linux(), t, f), v)
+{
+    ITree::simk_bind(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(),
+        λ x w => K(f(x), w), K, t, v, λ r => Ret(f(r)), λ x w h => h, g)
+}

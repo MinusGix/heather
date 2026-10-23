@@ -20,6 +20,7 @@ import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_store;
 import bitvec;
+import bitvec_signed;
 import bool;
 import list;
 import logic;
@@ -257,7 +258,7 @@ theorem slot_offset_value(k: Nat, small: k < 16): slot_offset(k).toNat() = 8 * k
     BitVec::toNat_ofNat(8, 8 * k, { omega })
 }
 theorem slot_offset_clear(k: Nat, small: k < 16): slot_offset(k).sign_bit() = False {
-    sign_bit_small(7, slot_offset(k), j(sym(slot_offset_value(k, small)), λ v _ => v < Nat::pow(2, 7), { omega }))
+    BitVec::sign_bit_small(7, slot_offset(k), j(sym(slot_offset_value(k, small)), λ v _ => v < Nat::pow(2, 7), { omega }))
 }
 theorem slot_at(low: BitVec(64), i, k: Nat, small: k < 16):
     next_rip(low, i).add(slot_offset(k).sign_extend(56)) = next_rip(low, i + 8 * k) {

@@ -19,6 +19,12 @@
 // related, where each source pass from related states either is simulated
 // by one spec pass or makes no call at all and lands in states related to
 // the spec's unchanged one, simulate each other at the same fuel.
+//
+// `SimK` is simulation up to a continuation: where the source returns, the
+// spec need not, and `K` says what it still has to do. `Sim` is its case
+// where the spec exits too. With it a source loop pass may stand for any
+// number of spec passes (`simk_iter`, an invariant indexed by the fuel left),
+// as cat's read-then-write-everything pass does against `tr_spec`.
 
 import logic;
 import nat;
@@ -182,19 +188,29 @@ record SimVis<B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), c: E.
     sub: (a: E.Resp(c)) → ct.valid(c, a) → S(a, k2(m.ans(c, a))),
 }
 
-// `Sim(t, s)`: the spec `s` does what the source `t` does, read through `m`,
-// with returns related by `Q`, and each source call paying what `ct` says it
-// owes. Silent steps on either side are skipped; a `Cut` in the source claims
-// nothing.
-fn ITree::Sim<A, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), Q: A → B → Type,
+// `SimK(K, t, s)`: the spec `s` does what the source `t` does, read through
+// `m`, each source call paying what `ct` says it owes, until the source
+// returns; there `K` relates the return to whatever the spec has still to do.
+// Silent steps on either side are skipped; a `Cut` in the source claims
+// nothing. One source loop pass may so stand for any number of spec passes:
+// `K` says where in the spec the pass leaves off.
+fn ITree::SimK<A, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), K: A → ITree<B>(F) → Type,
     t: ITree<A>(E), s: ITree<B>(F)) → Type
 {
     match t {
-        Ret(x) => SimRet<B>(F, s, λ y => Q(x, y)),
-        Tau(t2) => ITree::Sim(E, F, m, ct, Q, t2, s),
-        Vis(c, k) => SimVis<B>(E, F, m, ct, c, s, λ a v => ITree::Sim(E, F, m, ct, Q, k(a), v)),
+        Ret(x) => K(x, s),
+        Tau(t2) => ITree::SimK(E, F, m, ct, K, t2, s),
+        Vis(c, k) => SimVis<B>(E, F, m, ct, c, s, λ a v => ITree::SimK(E, F, m, ct, K, k(a), v)),
         Cut => True,
     }
+}
+
+// `Sim(t, s)`: the case where the spec exits too, with returns related by
+// `Q`.
+fn ITree::Sim<A, B>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), Q: A → B → Type,
+    t: ITree<A>(E), s: ITree<B>(F)) → Type
+{
+    ITree::SimK(E, F, m, ct, λ x v => SimRet<B>(F, v, λ y => Q(x, y)), t, s)
 }
 
 // The spec is only ever looked at through its next move.
@@ -458,4 +474,78 @@ theorem Program::simulates_iter<A, A2, B>(E: Events, F: Events, m: TraceMap(E, F
 {
     Program::simulates_of_trees(E, F, m, ct, Program::iter(E, body, a), Program::iter(F, body2, a2),
         λ n => ITree::sim_iter(E, F, m, ct, R, body, body2, pass, n, a, a2, r))
+}
+
+// ---------------------------------------------------------------------------
+// Loops whose passes are many spec passes
+
+// `SimK` is a congruence for `bind` on the source alone: where the first tree
+// leaves off in the spec, the continuation picks up.
+theorem ITree::simk_bind<A, B, C>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E),
+    K: A → ITree<C>(F) → Type, P: B → ITree<C>(F) → Type, t: ITree<A>(E), s: ITree<C>(F), h: A → ITree<B>(E),
+    sh: (x: A) → (v: ITree<C>(F)) → K(x, v) → ITree::SimK(E, F, m, ct, P, h(x), v)):
+    ITree::SimK(E, F, m, ct, K, t, s) → ITree::SimK(E, F, m, ct, P, ITree::bind(E, t, h), s)
+{
+    match t {
+        Ret(x) => λ (g: K(x, s)) => sh(x, s, g),
+        Tau(t2) => ITree::simk_bind(E, F, m, ct, K, P, t2, s, h, sh),
+        Vis(c, k) => λ (g: SimVis<C>(E, F, m, ct, c, s, λ a v => ITree::SimK(E, F, m, ct, K, k(a), v))) => {
+            let out: SimVis<C>(E, F, m, ct, c, s, λ a v => ITree::SimK(E, F, m, ct, P, ITree::bind(E, k(a), h), v)) =
+                SimVis(g.owes, g.k2, g.at, λ a v => ITree::simk_bind(E, F, m, ct, K, P, k(a), g.k2(m.ans(c, a)), h, sh, g.sub(a, v)));
+            out
+        },
+        Cut => λ g => trivial,
+    }
+}
+
+// Where a pass leaves the spec: at the loop's invariant to go round again, or
+// at what follows the loop.
+fn ITree::StepK<A, B, C>(F: Events, I: A → ITree<C>(F) → Type, K: B → ITree<C>(F) → Type, x: Step<A, B>,
+    v: ITree<C>(F)) → Type
+{
+    match x { Continue(a) => I(a, v), Break(b) => K(b, v) }
+}
+
+theorem ITree::simk_iter_next<A, B, C>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E),
+    body: A → ITree<Step<A, B>>(E), I: A → ITree<C>(F) → Type, K: B → ITree<C>(F) → Type, n: Nat,
+    ih: (a: A) → (v: ITree<C>(F)) → I(a, v) → ITree::SimK(E, F, m, ct, K, ITree::iter(E, n, body, a), v),
+    x: Step<A, B>, v: ITree<C>(F)): ITree::StepK(F, I, K, x, v) → ITree::SimK(E, F, m, ct, K, ITree::iter_next(E, n, body, x), v)
+{
+    match x {
+        Continue(a) => λ (i: I(a, v)) => ih(a, v, i),
+        Break(b) => λ (q: K(b, v)) => q,
+    }
+}
+
+// The loop rule up to a continuation. The invariant `I(k, a, v)` relates the
+// source's state with `k` passes of fuel left to where the spec is; each pass
+// from it leaves the spec at the invariant one pass down, or at `K` when the
+// loop ends. The spec is never run in step: it may take any number of passes
+// for one of the source's, which the invariant pays for by asking enough of
+// the spec's fuel at each `k`.
+theorem ITree::simk_iter<A, B, C>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E),
+    body: A → ITree<Step<A, B>>(E), I: Nat → A → ITree<C>(F) → Type, K: B → ITree<C>(F) → Type,
+    pass: (k: Nat) → (a: A) → (v: ITree<C>(F)) → I(Succ(k), a, v) →
+        ITree::SimK(E, F, m, ct, λ x w => ITree::StepK(F, I(k), K, x, w), body(a), v), n: Nat):
+    (a: A) → (v: ITree<C>(F)) → I(n, a, v) → ITree::SimK(E, F, m, ct, K, ITree::iter(E, n, body, a), v)
+{
+    match n {
+        Zero => λ a v i => trivial,
+        Succ(k) => λ a v i => ITree::simk_bind(E, F, m, ct, λ x w => ITree::StepK(F, I(k), K, x, w), K, body(a), v,
+            λ x => ITree::iter_next(E, k, body, x),
+            λ x w q => ITree::simk_iter_next(E, F, m, ct, body, I(k), K, k, λ a2 w2 i2 => ITree::simk_iter(E, F, m, ct, body, I, K, pass, k, a2, w2, i2), x, w, q),
+            pass(k, a, v, i)),
+    }
+}
+
+// Simulation with the spec at a fuel of the source's: one that grows with it
+// as fast as the spec's passes outnumber the source's.
+theorem Program::simulates_at<R>(E: Events, F: Events, m: TraceMap(E, F), ct: Contract(E), p: Program<R>(E),
+    q: Program<R>(F), fuel: Nat → Nat, h: (n: Nat) → ITree::Sim(E, F, m, ct, λ x y => x = y, p.at(n), q.at(fuel(n)))):
+    Program::Simulates(E, F, m, ct, p, q)
+{
+    λ tr (c: Converges<R>(E, p.at, tr)) valid => {
+        let both = ITree::sim_trace(E, F, m, ct, p.at(c.n), q.at(fuel(c.n)), h(c.n), tr, c.h, valid);
+        ⟨both.left, Converges(fuel(c.n), both.right)⟩
+    }
 }

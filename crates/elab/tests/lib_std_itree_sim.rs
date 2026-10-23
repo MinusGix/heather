@@ -9,7 +9,10 @@
 //!     in checking position, and negative controls — a spec that leaves with
 //!     another value, and a source call the spec does not make;
 //!  3. a loop with silent passes refines one that leaves at once, and a loop
-//!     that calls refines another whose state has a different type.
+//!     that calls refines another whose state has a different type;
+//!  4. up to a continuation (`ITree::SimK`, `ITree::simk_iter`): a loop whose
+//!     every pass makes two calls is simulated by one making one call a pass,
+//!     at twice the fuel, with the invariant asking that fuel of the spec.
 
 use std::sync::OnceLock;
 
@@ -70,6 +73,9 @@ const KIT: &[&str] = &[
     // Loops.
     "Step::Rel", "ITree::stay", "ITree::PassSim", "ITree::sim_iter_next", "ITree::sim_iter",
     "Program::simulates_iter",
+    // Up to a continuation.
+    "ITree::SimK", "ITree::simk_bind", "ITree::StepK", "ITree::simk_iter_next", "ITree::simk_iter",
+    "Program::simulates_at",
 ];
 
 #[test]
@@ -183,3 +189,94 @@ fn a_calling_pass_is_simulated_call_for_call() {
         ),
     );
 }
+
+/// A countdown whose passes each make two calls, and one whose passes each
+/// make one, from twice the state and one more. `TwiceAt(k, a, v)`: `k`
+/// source passes left at `a`, the spec at `v` two passes behind each of them,
+/// with the fuel for them.
+const TWICE: &str = "
+fn countdown(a: Nat) → Step<Nat, Nat> { match a { Zero => Break(0), Succ(m) => Continue(m) } }
+fn twice_body(E: Events, c: E.Cmd, a: Nat) → ITree<Step<Nat, Nat>>(E) {
+    ITree::bind(E, ITree::trigger(E, c), λ x => ITree::bind(E, ITree::trigger(E, c), λ y => Ret(countdown(a))))
+}
+fn once_body(E: Events, c: E.Cmd, b: Nat) → ITree<Step<Nat, Nat>>(E) {
+    ITree::bind(E, ITree::trigger(E, c), λ x => Ret(countdown(b)))
+}
+fn once_tree(E: Events, c: E.Cmd, fuel, b: Nat) → ITree<Nat>(E) { ITree::iter(E, fuel, λ y => once_body(E, c, y), b) }
+
+// `k` passes of two calls left: the spec one call per pass, two passes
+// behind each of the source's, with the fuel for them.
+record TwiceAt(E: Events, c: E.Cmd, k, a: Nat, v: ITree<Nat>(E)) {
+    fuel: Nat,
+    enough: k.twice() <= fuel,
+    at: ITree::next(E, v) = ITree::next(E, once_tree(E, c, fuel, Succ(a.twice()))),
+}
+
+fn twice_after(E: Events, c: E.Cmd, k: Nat) → Step<Nat, Nat> → ITree<Nat>(E) → Type {
+    λ x w => ITree::StepK(E, λ a v => TwiceAt(E, c, k, a, v), λ r v => SimRet<Nat>(E, v, λ y => r = y), x, w)
+}
+";
+
+// One source pass is two spec passes: `simk_iter` with an invariant indexed
+// by the source's fuel left, at an open state and at a literal one, with the
+// spec at `twice` the source's fuel (`simulates_at`). Leaving with another
+// value is refused.
+#[test]
+fn a_pass_of_two_calls_is_two_spec_passes() {
+    check("itree_sim_twice", &format!("{IMPORTS}{TWICE}{TWICE_PROOFS}"));
+    refused("itree_sim_twice_wrong", &format!("{IMPORTS}{TWICE}{}",
+        TWICE_PROOFS.replace("λ y v => SimRet(0, refl, refl)", "λ y v => SimRet(1, refl, refl)")));
+}
+
+const TWICE_PROOFS: &str = "
+theorem twice_second(E: Events, c: E.Cmd, k, a: Nat, f1: Nat, x: E.Resp(c)): Succ(k.twice()) <= f1 →
+    ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k),
+        ITree::bind(E, ITree::trigger(E, c), λ y => Ret(countdown(a))), Tau(once_tree(E, c, f1, a.twice())))
+{
+    match f1 {
+        Zero => λ (no: False) => false_elim(no),
+        Succ(f2) => λ enough => match a {
+            Zero => SimVis(trivial, λ y => Ret(0), refl, λ y v => SimRet(0, refl, refl)),
+            Succ(m) => SimVis(trivial, λ y => Tau(once_tree(E, c, f2, Succ(m.twice()))), refl,
+                λ y v => TwiceAt(f2, enough, refl)),
+        },
+    }
+}
+
+theorem twice_pass(E: Events, c: E.Cmd, k, a: Nat, v: ITree<Nat>(E), i: TwiceAt(E, c, Succ(k), a, v)):
+    ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k), twice_body(E, c, a), v)
+{
+    (match i.fuel as λ f => Succ(k).twice() <= f → ITree::next(E, v) = ITree::next(E, once_tree(E, c, f, Succ(a.twice()))) →
+            ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k), twice_body(E, c, a), v) {
+        Zero => λ (no: False) at => false_elim(no),
+        Succ(f1) => λ enough at => SimVis(trivial, λ x => Tau(once_tree(E, c, f1, a.twice())), at,
+            λ x valid => twice_second(E, c, k, a, f1, x, enough)),
+    })(i.enough, i.at)
+}
+
+theorem twice_sim(E: Events, c: E.Cmd, n, a: Nat):
+    ITree::Sim<Nat, Nat>(E, E, TraceMap::id(E), Contract::none(E), λ x y => x = y,
+        ITree::iter(E, n, λ x => twice_body(E, c, x), a), once_tree(E, c, n.twice(), Succ(a.twice())))
+{
+    let head: TwiceAt(E, c, n, a, once_tree(E, c, n.twice(), Succ(a.twice()))) = TwiceAt(n.twice(), n.twice().le_refl(), refl);
+    ITree::simk_iter(E, E, TraceMap::id(E), Contract::none(E), λ x => twice_body(E, c, x), λ k x w => TwiceAt(E, c, k, x, w),
+        λ r w => SimRet<Nat>(E, w, λ y => r = y), λ k x w i => twice_pass(E, c, k, x, w, i), n, a,
+        once_tree(E, c, n.twice(), Succ(a.twice())), head)
+}
+
+theorem twice_simulates(E: Events, c: E.Cmd, a: Nat):
+    Program::Simulates<Nat>(E, E, TraceMap::id(E), Contract::none(E),
+        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), Succ(a.twice())))
+{
+    Program::simulates_at(E, E, TraceMap::id(E), Contract::none(E),
+        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), Succ(a.twice())),
+        λ n => n.twice(), λ n => twice_sim(E, c, n, a))
+}
+
+theorem twice_three(E: Events, c: E.Cmd):
+    Program::Simulates<Nat>(E, E, TraceMap::id(E), Contract::none(E),
+        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), 3), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), 7))
+{
+    twice_simulates(E, c, 3)
+}
+";
