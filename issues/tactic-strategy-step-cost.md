@@ -73,5 +73,5 @@ the readback unit test still spells the reducer's λ.
 −98.6% of its time (the slowest, the conjunction, about two orders of
 magnitude), every count column identical but `eval_drives` (−0.1%), peak
 RSS −74%. What a cold check of that file now spends is elaborating
-`lib/std/tactic.hthr` itself, chiefly the kernel gate of its handlers
+`lib/std/tactic/tactic.hthr` itself, chiefly the kernel gate of its handlers
 (`attempt_from`, `first_of_among`, `focus`), which images cache.
