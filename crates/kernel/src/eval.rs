@@ -2020,6 +2020,10 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let (elim, label, children) = (Rc::clone(elim), *label, *children);
                 self.wf_ih_apply(&head, &elim, label, children, e)
             }
+            (Val::WIh { elim, label, children }, Elim::App { .. }) => {
+                let (elim, label, children) = (Rc::clone(elim), *label, *children);
+                self.w_ih_apply(&head, &elim, label, children, e)
+            }
             (Val::ULam { num_vars, body, .. }, Elim::UApp { levels })
                 if *num_vars as usize == levels.len() =>
             {
@@ -2204,22 +2208,49 @@ impl<'a, 'v> Eval<'a, 'v> {
         neutral(n.head.clone(), spine, unfold)
     }
 
-    /// `elim_W (sup(…; a; f)) ⇝ s[a/a, f/f, (λ y. elim_W …(f y))/ih]`.
-    ///
-    /// The ih is the one β that synthesizes a λ. Rather than a native
-    /// closure, it is built as an ordinary syntactic closure over the
-    /// environment `ρ, a, f`: the recursive eliminator is *exactly*
-    /// `reduce.rs`'s term with `a` and `f` named by de Bruijn slots instead
-    /// of substituted, which is why its adequacy is by inspection. The
-    /// whole-node `shift_local(3)` is `reduce.rs`'s `shift_local(1)` widened
-    /// by the two extra slots, and it descends the annotations' own binders
-    /// for the same reason.
+    /// `elim_W (sup(…; a; f)) ⇝ s[a/a, f/f, (λ y. elim_W …(f y))/ih]`,
+    /// with the ih held as [`Val::WIh`] rather than built as that λ's
+    /// syntax. The syntax guards are [`w_ih_lam`](Eval::w_ih_lam)'s, kept
+    /// here so the β fires exactly when it did while the λ was eager.
     fn fire_elim_w(
         &mut self,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
         e: &Elim<'v>,
     ) -> Res<Option<Work<'v>>> {
+        let Elim::ElimW { shape, pos, motive, step, .. } = e else {
+            return Ok(None);
+        };
+        if step.as_syn().is_none()
+            || shape.as_syn().is_none()
+            || pos.as_syn().is_none()
+            || motive.as_syn().is_none()
+        {
+            return Ok(None);
+        }
+        let ih = Rc::new(Val::WIh { elim: Rc::new(e.clone()), label, children });
+        let step = *step;
+        Ok(Some(Work::Apply(
+            step,
+            vec![label, children, self.vclo(ih)],
+        )))
+    }
+
+    /// The λ a [`Val::WIh`] stands for, built as syntax: an ordinary
+    /// syntactic closure over the environment `ρ, a, f`. The recursive
+    /// eliminator is *exactly* `reduce.rs`'s term with `a` and `f` named by
+    /// de Bruijn slots instead of substituted, which is why its adequacy is
+    /// by inspection. The whole-node `shift_local(3)` is `reduce.rs`'s
+    /// `shift_local(1)` widened by the two extra slots, and it descends the
+    /// annotations' own binders for the same reason. Only the fallback of
+    /// [`w_ih_apply`](Eval::w_ih_apply) and the readers that inspect a
+    /// function without applying it pay for this.
+    pub fn w_ih_lam(
+        arena: &'v ValueArena<'v>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: &Elim<'v>,
+    ) -> Option<Rc<Val<'v>>> {
         let Elim::ElimW {
             shape_level,
             pos_level,
@@ -2231,16 +2262,14 @@ impl<'a, 'v> Eval<'a, 'v> {
             env,
         } = e
         else {
-            return Ok(None);
+            return None;
         };
-        let Some((_, step_body)) = step.as_syn() else { return Ok(None) };
-        let (Some((_, shape_body)), Some((_, pos_body)), Some((_, motive_body))) =
-            (shape.as_syn(), pos.as_syn(), motive.as_syn())
-        else {
-            return Ok(None);
-        };
-        let rho_af = env.push(self.arena, label).push(self.arena, children);
-        let syntax = self.arena.w_ih_syntax(
+        let (_, step_body) = step.as_syn()?;
+        let (_, shape_body) = shape.as_syn()?;
+        let (_, pos_body) = pos.as_syn()?;
+        let (_, motive_body) = motive.as_syn()?;
+        let rho_af = env.push(arena, label).push(arena, children);
+        let syntax = arena.w_ih_syntax(
             [shape_level, pos_level, motive_level],
             (shape_body, pos_body, motive_body, step_body),
             || {
@@ -2299,17 +2328,44 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
             },
         );
-        let ih = Rc::new(Val::Lam {
+        Some(Rc::new(Val::Lam {
             dom_level: pos_level.clone(),
             cod_level: motive_level.clone(),
-            dom: self.arena.ty(TyClo::new(rho_af, Rc::clone(&syntax.dom))),
-            body: self.arena.tm(TmClo::syn(rho_af, Rc::clone(&syntax.rec))),
-        });
-        let step = *step;
-        Ok(Some(Work::Apply(
-            step,
-            vec![label, children, self.vclo(ih)],
-        )))
+            dom: arena.ty(TyClo::new(rho_af, Rc::clone(&syntax.dom))),
+            body: arena.tm(TmClo::syn(rho_af, Rc::clone(&syntax.rec))),
+        }))
+    }
+
+    /// `ih y` for a [`Val::WIh`]: when `f` is a λ, `f y` is its β and the
+    /// eliminator fires on that, the λ's body without its syntax, charged the
+    /// two β the λ's application and its body's `f y` charged. Over any other
+    /// `f` it applies the λ itself.
+    fn w_ih_apply(
+        &mut self,
+        head: &Rc<Val<'v>>,
+        elim: &Rc<Elim<'v>>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: Elim<'v>,
+    ) -> Res<Work<'v>> {
+        let Elim::App { arg, .. } = &e else {
+            return Ok(Work::Val(stuck(self.arena, head, &e)));
+        };
+        let arg = *arg;
+        if let Val::Lam { body, .. } = &*self.force(children)? {
+            let body = *body;
+            self.spend()?;
+            self.spend()?;
+            self.frames.push(Frame::Elim(Rc::clone(elim)));
+            return Ok(Work::Apply1(body, arg));
+        }
+        match Eval::w_ih_lam(self.arena, label, children, elim).as_deref() {
+            Some(Val::Lam { body, .. }) => {
+                self.spend()?;
+                Ok(Work::Apply1(*body, arg))
+            }
+            _ => Ok(Work::Val(stuck(self.arena, head, &e))),
+        }
     }
 
     /// `elim_Wf (sup_f(…; a; cs)) ⇝ s[a, cs, λ i. elim_Wf(…; nth … cs i)]`,

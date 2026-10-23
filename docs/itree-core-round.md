@@ -104,7 +104,8 @@ The library's elaborate time was dominated by the elaborator's whnf of types
 computed by recursion over a tree (`Same(E, t, u)` at a constructor form).
 The value machine found the former, but its readback declined on the `elim_W`
 β's induction hypothesis, a λ the machine builds over the step's environment
-(`Eval::fire_elim_w`), and the caller fell back to the substitution reducer,
+(`Eval::fire_elim_w`; since 2026-10-23 a `Val::WIh` value, read back as the
+same λ), and the caller fell back to the substitution reducer,
 which copies the definitions it unfolds. `crates/elab/src/readback.rs` now
 reads that λ back (a unit test checks it spells exactly the reducer's
 reduct), which removed roughly half of the module's elaborate time with every

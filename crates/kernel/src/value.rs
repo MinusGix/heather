@@ -1617,6 +1617,25 @@ pub enum Val<'v> {
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
+    /// The induction hypothesis an `elim_W` β hands its step,
+    /// `λ y. elim_W(e; f y)`, held as the eliminator and the scrutinee's
+    /// label and children instead of as that λ's syntax
+    /// (`Eval::fire_elim_w`), for [`Val::WfIh`]'s reason: the syntax is the
+    /// eliminator's whole motive and step shifted under three binders, and
+    /// each level of a recursion fires on the previous level's copy, so
+    /// every recursive call deeper than any before it paid for a fresh copy
+    /// of the recursor. A Heather tactic's handlers (`focus`, `bind`) recurse
+    /// once per request answered, so that copy was most of a request's cost
+    /// (issues/tactic-strategy-step-cost.md). Applied, it fires `elim` on
+    /// `f y` directly when `f` is a λ, which is what the λ's body reduces
+    /// to; applied over any other `f`, and wherever it is inspected rather
+    /// than applied, it is first built as the λ it stands for
+    /// (`Eval::w_ih_lam`). A strategy change with no semantic content.
+    WIh {
+        elim: Rc<Elim<'v>>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+    },
     Lam {
         dom_level: Level,
         cod_level: Level,
@@ -2321,6 +2340,7 @@ impl fmt::Debug for Val<'_> {
             }
             Val::Lam { dom, body, .. } => write!(f, "λ({dom:?}). {body:?}"),
             Val::WfIh { children, .. } => write!(f, "ih_Wf({children:?})"),
+            Val::WIh { children, .. } => write!(f, "ih_W({children:?})"),
             Val::ULam { num_vars, body, .. } => write!(f, "Λ[{num_vars}ℓ]. {body:?}"),
             Val::CtxLam { body, .. } => write!(f, "Λ(g). {body:?}"),
             Val::TyLam { body, .. } => write!(f, "Λ(U). {body:?}"),

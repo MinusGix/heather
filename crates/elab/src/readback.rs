@@ -217,10 +217,11 @@ impl<'v, 'g> Readback<'v, 'g> {
                 }
             }
             Val::WfIh { elim, label, children } => self.wf_ih(elim, label, children),
-            // An `elim_W` β's induction hypothesis, `λ y. elim_W(…; f y)`:
-            // the machine builds it as a λ over the step's environment
-            // (`Eval::fire_elim_w`), whose two closures are the syntax the
-            // reducer's β substitutes, so it reads back as that λ.
+            Val::WIh { elim, label, children } => self.w_ih(elim, label, children),
+            // An `elim_W` β's induction hypothesis, when the machine built it
+            // as a λ over the step's environment (`Eval::w_ih_lam`): its two
+            // closures are the syntax the reducer's β substitutes, so it reads
+            // back as that λ.
             Val::Lam { dom_level, cod_level, dom, body } => Some(Term::Lam {
                 dom_level: dom_level.clone(),
                 cod_level: cod_level.clone(),
@@ -302,6 +303,68 @@ impl<'v, 'g> Readback<'v, 'g> {
                 scrut: head,
             },
             _ => return None,
+        })
+    }
+
+    /// `elim_W`'s induction hypothesis, which the machine holds as a value
+    /// ([`Val::WIh`]): the λ the reducer's β builds around the recursive call
+    /// (`reduce.rs`, `elim_W (sup(…; a; f))`), `λ y. elim_W(…; f y)`, built
+    /// here the same way from the eliminator's and the scrutinee's syntax.
+    fn w_ih(&mut self, e: &Elim<'v>, label: &'v TmClo<'v>, children: &'v TmClo<'v>) -> Option<Term> {
+        let Elim::ElimW { shape_level, pos_level, motive_level, shape, pos, motive, step, .. } = e else {
+            return None;
+        };
+        let shape = self.ty(shape, 0)?;
+        let pos = self.ty(pos, 1)?;
+        let motive = self.ty(motive, 1)?;
+        let step = self.tm(step, 3)?;
+        let label = self.tm(label, 0)?;
+        let children = self.tm(children, 0)?;
+        let pos_at = pos.apply_local(&LocalSubst::id(self.gamma).extended(label));
+        let w = Type::W {
+            shape_level: shape_level.clone(),
+            pos_level: pos_level.clone(),
+            shape: Rc::clone(&shape),
+            pos: Rc::clone(&pos),
+        };
+        let template = Term::ElimW {
+            shape_level: shape_level.clone(),
+            pos_level: pos_level.clone(),
+            motive_level: motive_level.clone(),
+            shape,
+            pos,
+            motive,
+            step,
+            scrut: Rc::new(Term::Zero),
+        }
+        .shift_local(1);
+        let Term::ElimW { shape: s1, pos: p1, motive: m1, step: st1, .. } = template else {
+            unreachable!("shifting an elim_W yields an elim_W")
+        };
+        // `f y` in `(Γ, y)`; the App's codomain annotation binds one more.
+        let f_y = Term::App {
+            fun: Rc::new(children.shift_local(1)),
+            dom_level: pos_level.clone(),
+            cod_level: Level::max(shape_level.clone(), pos_level.clone()),
+            dom: Rc::new(pos_at.shift_local(1)),
+            cod: Rc::new(w.shift_local(2)),
+            arg: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let rec = Term::ElimW {
+            shape_level: shape_level.clone(),
+            pos_level: pos_level.clone(),
+            motive_level: motive_level.clone(),
+            shape: s1,
+            pos: p1,
+            motive: m1,
+            step: st1,
+            scrut: Rc::new(f_y),
+        };
+        Some(Term::Lam {
+            dom_level: pos_level.clone(),
+            cod_level: motive_level.clone(),
+            dom: Rc::new(pos_at),
+            body: Rc::new(rec),
         })
     }
 

@@ -1169,6 +1169,60 @@ fn w_positive_conversion_and_elim_beta() {
     ok_tm(&psi, &nil_ctx(0), &elim(sup_leaf(num(2))), &num(2), &Type::Nat, &c(0));
 }
 
+/// The evaluator holds the ih an `elim_W` β hands its step natively
+/// (`Val::WIh`): applied where the children are a λ it fires the eliminator
+/// on their body, and over any other children it builds the λ it stands for.
+/// Both must mean what the λ means. `W(x : Nat. Nat)`, step `succ(ih 0)`.
+#[test]
+fn the_elim_w_ih_is_the_recursive_call_on_the_child() {
+    let psi = psi(vec![]);
+    let w = Type::W {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Nat),
+    };
+    let sup = |label: Term, children: Term| Term::Sup {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape_ty: rty(Type::Nat),
+        pos_ty: rty(Type::Nat),
+        label: rt(label),
+        children: rt(children),
+    };
+    let elim = |scrut: Term| Term::ElimW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        motive_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Nat),
+        motive: rty(Type::Nat),
+        step: rt(Term::Succ(rt(app(v(0), Term::Zero)))),
+        scrut: rt(scrut),
+    };
+    // λ children, two levels deep, over a neutral tree z: two steps, then
+    // the recursion stuck on z.
+    let gz = extend(&nil_ctx(0), w.clone(), c(0));
+    let lam_w = |body: Term| Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: rty(Type::Nat), body: rt(body) };
+    let tree = sup(Term::Zero, lam_w(sup(num(1), lam_w(v(2)))));
+    ok_tm(&psi, &gz, &elim(tree.clone()), &Term::Succ(rt(Term::Succ(rt(elim(v(0)))))), &Type::Nat, &c(0));
+    no_tm(&psi, &gz, &elim(tree), &Term::Succ(rt(elim(v(0)))), &Type::Nat, &c(0));
+    // Neutral children f: the ih is the λ, and the recursion is stuck on
+    // `f 0`.
+    let fun_w = Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: rty(Type::Nat), cod: rty(w.clone()) };
+    let gf = extend(&nil_ctx(0), fun_w, c(0));
+    let f0 = Term::App {
+        fun: rt(v(0)),
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Nat),
+        cod: rty(w),
+        arg: rt(Term::Zero),
+    };
+    ok_tm(&psi, &gf, &elim(sup(Term::Zero, v(0))), &Term::Succ(rt(elim(f0.clone()))), &Type::Nat, &c(0));
+    no_tm(&psi, &gf, &elim(sup(Term::Zero, v(0))), &Term::Succ(rt(Term::Succ(rt(elim(f0))))), &Type::Nat, &c(0));
+}
+
 #[test]
 fn elim_w_neutral_congruence() {
     let psi = psi(vec![]);
