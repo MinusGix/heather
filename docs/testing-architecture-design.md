@@ -1,7 +1,8 @@
 # Testing architecture: what to make cheaper, and what to stop running
 
-Status: design 2026-10-23, options for Minus. Of the options, only
-single-flight image builds (§3.1.1) is implemented so far. Owner: `issues/testing-architecture.md`, which also holds the
+Status: design 2026-10-23. Minus's decisions the same day (§5): the
+sentinel, a PR lane over stale images, and seeding fresh boxes. Those three
+and single-flight image builds (§3.1.1) are implemented. Owner: `issues/testing-architecture.md`, which also holds the
 measurements this note reads (box, commit, seconds). This note states costs
 as shapes and ratios.
 
@@ -72,7 +73,7 @@ If two PRs interact badly after both merged, the next thread that fetches
 master is the one that finds out. That is the gap Minus named, and it is the
 cheapest one to close.
 
-### 2.1 A post-merge sentinel (proposed first)
+### 2.1 A post-merge sentinel (implemented: `scripts/sentinel`)
 
 A scheduled cloud session runs the full lane on a **fresh** container at
 `master`'s head, nightly or after every few merges. If master is red, it
@@ -268,3 +269,31 @@ Decisions that are Minus's:
   rebuild that already wants it. This note argues they are the same work.
 - Whether seeding fresh boxes from master (3.1.2) is worth a storage
   location for images (and later `sccache`).
+
+## 5. Decided (Minus, 2026-10-23), and how it was built
+
+Minus took the sentinel, a PR lane over stale images, and seeding fresh
+boxes, and framed what is behind all of it: modules should be trusted and
+shipped, and the arcane optimisations that would make invalidation fine
+grained want Heather-in-Heather's proofs. The bridge until then is **two
+tiers of trust**. A fast lane may use an optimisation nobody has proved; the
+nightly sentinel runs the plain reference path and compares, so a divergence
+names the optimisation that lied. Heather-in-Heather later promotes an
+optimisation from "checked nightly" to "proven".
+
+- **`scripts/test --pr`** is a round's final check: every test, with
+  semantic images other builds wrote replayed (kernel-rechecked, or vouched
+  for by the verdict store), so an elab edit no longer re-elaborates every
+  library module. Plain `scripts/test` keeps the exact policy; a round runs
+  it only when it changes the image format, the caches or the loader.
+- **`scripts/sentinel run`**, nightly from a scheduled cloud session on a
+  fresh container at `master`: the exact-policy suite. Green, it publishes
+  the image stores to the orphan branch `claude/sentinel-images` and reports
+  targets whose CPU grew past the last green run's, and how many library
+  images the current compiler elaborated differently from the last green
+  run's (the stale lane's blind spot, made visible). Red, it bisects each
+  failing target alone over the first-parent merges since the last green
+  run, and the session files an issue naming the first failing merge.
+- **Seeding**: on a fresh cloud box `scripts/test` first unpacks the
+  sentinel's stores (`scripts/sentinel seed`). Images only: a seeded image
+  is rechecked on replay, a seeded verdict would not be.

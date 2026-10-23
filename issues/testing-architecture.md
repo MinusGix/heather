@@ -88,9 +88,39 @@ both `function_ir_lower_*` targets), which is
 fresh-container run above, whose OS caches were also cold, so read the
 ratio and not the seconds. 3699 passed (one new test).
 
+## Minus's decisions (2026-10-23): sentinel, `--pr` lane, seeding
+
+Built as `docs/testing-architecture-design.md` §5 describes. Same container,
+full suite, 3699 passed in each:
+
+| run | before | after |
+|---|---|---|
+| after an elab edit: plain (exact) → `--pr` | 240 s / 821 CPU-s | 182 s / 582 CPU-s |
+| fresh thread's first suite: cold stores, plain → seeded images + `--pr` | 459 s / 1460 CPU-s | 201 s / 686 CPU-s |
+
+The seeded run's verdict store was cold, as a fresh container's is: its
+replays kernel-recheck the library (image decode + recheck ~93 s of item
+time), which is the price of seeding images only.
+
+`claude/sentinel-images` was first published by hand from master 1ae5dd6's
+fresh green run (3698 passed) with this tree's image stores (the same
+elaborator semantics identity: this PR changes no kernel, syntax or elab
+source). Seeding takes ~2 s (a 33 MB archive).
+
+The nightly scheduled task could not be created from the thread that built
+this (a session once linked to a device cannot create a new-session-per-run
+task); its prompt is in the project files (`testing/sentinel-scheduled-task.md`).
+
+Seen on the way, not investigated: this container's session-start prebuild
+logged only its start line, and the first `scripts/test` compiled from
+scratch (205 s). The detached build seems to have died with the hook.
+
 ## Log
 
 - 2026-10-23: Filed with the design note and the measurements above. Next:
   Minus's decisions in the note's §4 (sentinel, single-flight images first).
 - 2026-10-23: Single-flight image builds implemented and measured (above):
   cold-store test phase 459 → 318 s; the post-edit run unchanged.
+- 2026-10-23: Minus took the sentinel, the `--pr` lane and seeding;
+  built and measured (above). Elab-edit PR run 240 → 182 s; a fresh
+  thread's first suite 459 → 201 s.

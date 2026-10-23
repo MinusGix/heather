@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""The master sentinel: the full exact-policy suite on a fresh box, nightly.
+
+docs/testing-architecture-design.md §2.1. A scheduled cloud session checks
+out `master` on a fresh container and runs `scripts/sentinel run`. It is the
+one place the exact image policy runs (round verification is
+`scripts/test --pr`), and the one configuration nobody tests by hand: a cold
+image store, a cold verdict store, a cold target directory.
+
+    scripts/sentinel run          # suite, then publish (green) or bisect (red)
+    scripts/sentinel seed DIR     # unpack the latest published image stores
+
+`run` writes target/sentinel/report.md and exits 0 green, 1 red, 2 when the
+suite was INCOMPLETE (a binary died; the bisect still runs on what failed).
+
+Green: the image stores this run built are published as one commit on the
+orphan branch `claude/sentinel-images` (`images.tgz` + `manifest.json`: the
+commit, the date, the suite line, per-target CPU). A fresh session seeds its
+stores from it (scripts/session-start); replay rechecks every image with the
+reader's kernel, so a seeded image can only ever be a miss, never a wrong
+answer. The verdict store is not published: a vouched verdict skips the
+kernel. The report lists targets whose CPU grew past the last green run's.
+
+Red: the failing targets are bisected over the first-parent merges since the
+last green run, rerunning only those targets at each step, and the report
+names the first merge at which each fails.
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "target" / "sentinel"
+BRANCH = "claude/sentinel-images"
+STORES = ["semantic-test-images", "native-test-images", "showcase-test-images"]
+# A target is reported as grown when its CPU rose by this factor and by at
+# least this many seconds over the last green run's.
+GROWTH_FACTOR = 1.25
+GROWTH_FLOOR_S = 10.0
+
+
+def git(*args, check=True, capture=True):
+    r = subprocess.run(["git", *args], cwd=ROOT, check=check,
+                       stdout=subprocess.PIPE if capture else None, text=True)
+    return r.stdout.strip() if capture else ""
+
+
+def run_suite(args, log):
+    """`scripts/test` with `args`, teed to `log`; returns (exit, output)."""
+    with open(log, "w") as f:
+        p = subprocess.Popen([str(ROOT / "scripts" / "test"), *args], cwd=ROOT,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        lines = []
+        for line in p.stdout:
+            f.write(line)
+            lines.append(line)
+        return p.wait(), "".join(lines)
+
+
+DONE = re.compile(r"^\[done\s+\d+/\d+\] (.+?): (PASS|FAIL|INCOMPLETE)\b", re.M)
+SUITE = re.compile(r"^== suite: .*==$", re.M)
+
+
+def failing_targets(output):
+    return sorted({m.group(1) for m in DONE.finditer(output) if m.group(2) != "PASS"})
+
+
+def suite_line(output):
+    m = list(SUITE.finditer(output))
+    return m[-1].group(0) if m else "== suite: no summary line =="
+
+
+def target_cpu():
+    """Per-target CPU-s from the newest run in the full lane's history."""
+    path = ROOT / "target" / "test-target-timings-full.tsv"
+    if not path.exists():
+        return {}
+    rows = [l.rstrip("\n").split("\t") for l in path.open() if l.strip()]
+    rows = [r for r in rows if len(r) >= 4]
+    if not rows:
+        return {}
+    newest = max(r[0] for r in rows)
+    return {r[2]: float(r[3]) for r in rows if r[0] == newest}
+
+
+def package_of(crate_dir):
+    for line in (ROOT / crate_dir / "Cargo.toml").read_text().splitlines():
+        m = re.match(r'\s*name\s*=\s*"([^"]+)"', line)
+        if m:
+            return m.group(1)
+    raise SystemExit(f"sentinel: no package name in {crate_dir}/Cargo.toml")
+
+
+def target_args(label):
+    """`scripts/test` arguments that run one runner target alone.
+
+    Labels are the runner's: `crates/<c>/tests/<t>.rs` for an integration
+    target (an elab family member included: scripts/test maps the member
+    file to its family), `<package> (<path>/src/lib.rs|main.rs)` for unit
+    tests (the runner strips a `-lib` suffix from the package)."""
+    m = re.fullmatch(r"crates/([^/]+)/tests/([^/]+)\.rs", label)
+    if m:
+        return ["-p", package_of(f"crates/{m.group(1)}"), "--test", m.group(2)]
+    m = re.fullmatch(r"(\S+) \((crates/[^/]+)/src/(lib|main)\.rs\)", label)
+    if m:
+        packages = {package_of(d.relative_to(ROOT)) for d in (ROOT / "crates").iterdir()
+                    if (d / "Cargo.toml").exists()}
+        package = m.group(1)
+        if f"{package}-lib" in packages:
+            package = f"{package}-lib"
+        return ["-p", package, "--lib" if m.group(3) == "lib" else "--bins"]
+    raise SystemExit(f"sentinel: cannot rerun target label {label!r}")
+
+
+def fetch_manifest():
+    """The last green run's manifest, or None when there is none."""
+    if subprocess.run(["git", "fetch", "--quiet", "--depth=1", "origin", BRANCH], cwd=ROOT,
+                      stderr=subprocess.DEVNULL).returncode != 0:
+        return None
+    r = subprocess.run(["git", "show", "FETCH_HEAD:manifest.json"], cwd=ROOT,
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return json.loads(r.stdout) if r.returncode == 0 else None
+
+
+def publish(head, line, cpu):
+    """One orphan commit holding this run's image stores, force-pushed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        with tarfile.open(tmp / "images.tgz", "w:gz") as tar:
+            for store in STORES:
+                if (ROOT / "target" / store).is_dir():
+                    tar.add(ROOT / "target" / store, arcname=store)
+        manifest = {"commit": head, "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "suite": line, "target_cpu": cpu}
+        (tmp / "manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
+        env = dict(os.environ, GIT_INDEX_FILE=str(tmp / "index"))
+        def g(*args, **kw):
+            return subprocess.run(["git", *args], cwd=ROOT, env=env, check=True,
+                                  stdout=subprocess.PIPE, text=True, **kw).stdout.strip()
+        blobs = [(name, g("hash-object", "-w", str(tmp / name))) for name in ("images.tgz", "manifest.json")]
+        for name, blob in blobs:
+            g("update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
+        tree = g("write-tree")
+        commit = g("commit-tree", tree, "-m", f"sentinel images for {head[:12]}\n\n{line}")
+        for delay in (0, 2, 4, 8, 16):
+            time.sleep(delay)
+            if subprocess.run(["git", "push", "--force", "origin", f"{commit}:refs/heads/{BRANCH}"],
+                              cwd=ROOT).returncode == 0:
+                return True
+        return False
+
+
+def image_headers(store_root):
+    """(cache key) -> (producing build, interface hash) for every image under
+    `store_root`, read from the header crates/cache/src/module_image.rs
+    writes: magic, key, semantics, interface hash, each 32 bytes after the
+    8-byte magic."""
+    out = {}
+    for path in Path(store_root).glob("*/modules-v1/*.hmi"):
+        head = path.open("rb").read(104)
+        if len(head) == 104 and head[:7] == b"HTHCACH":
+            out[head[8:40]] = (head[40:72], head[72:104])
+    return out
+
+
+def drifted(before, after):
+    """Images rebuilt by a different build of the compiler whose interface
+    changed: the same source and dependencies, elaborated differently. These
+    are what a stale-image lane (`scripts/test --pr`) was replaying the older
+    elaboration of until this run."""
+    return sorted(k.hex()[:12] for k, (build, iface) in after.items()
+                  if k in before and before[k][0] != build and before[k][1] != iface)
+
+
+def grown(previous, cpu):
+    out = []
+    for label, now in sorted(cpu.items()):
+        before = previous.get(label)
+        if before and now >= before * GROWTH_FACTOR and now - before >= GROWTH_FLOOR_S:
+            out.append((label, before, now))
+    return out
+
+
+def bisect(failing, last_green, head):
+    """First first-parent merge after `last_green` at which each target fails."""
+    # Cloud checkouts are shallow; the bisect needs the merges in between.
+    subprocess.run(["git", "fetch", "--quiet", "--unshallow", "origin"], cwd=ROOT, stderr=subprocess.DEVNULL)
+    merges = git("rev-list", "--first-parent", "--reverse", f"{last_green}..{head}").split()
+    blame = {}
+    for label in failing:
+        lo, hi = 0, len(merges) - 1  # merges[hi] fails (it is head); find the first
+        while lo < hi:
+            mid = (lo + hi) // 2
+            git("checkout", "--quiet", "--detach", merges[mid])
+            code, _ = run_suite(target_args(label), OUT / f"bisect-{merges[mid][:12]}.log")
+            if code == 0:
+                lo = mid + 1
+            else:
+                hi = mid
+        blame[label] = merges[lo]
+    git("checkout", "--quiet", "--detach", head)
+    return blame
+
+
+def run():
+    OUT.mkdir(parents=True, exist_ok=True)
+    head = git("rev-parse", "HEAD")
+    previous = fetch_manifest()
+    # The previous green run's images, unpacked aside, to compare with what
+    # this run's exact policy rebuilds (`drifted`).
+    before = {}
+    if previous is not None:
+        aside = OUT / "previous-images"
+        shutil.rmtree(aside, ignore_errors=True)
+        if seed(aside, fetched=True) == 0:
+            before = image_headers(aside)
+    started = time.time()
+    code, output = run_suite([], OUT / "suite.log")
+    line = suite_line(output)
+    cpu = target_cpu()
+    failing = failing_targets(output)
+    report = [f"# Sentinel {time.strftime('%Y-%m-%d', time.gmtime())} at {head[:12]}", "",
+              f"`{line}` in {int(time.time() - started)} s (fresh box, exact images).", ""]
+    if code == 0 and not failing:
+        ok = publish(head, line, cpu)
+        report.append("Green. Image stores published to `claude/sentinel-images`." if ok
+                      else "Green, but publishing the image stores failed (see the session log).")
+        changed = drifted(before, image_headers(ROOT / "target"))
+        if before:
+            report += ["", f"Library images whose elaboration changed since the last green run: {len(changed)}"
+                       + (f" ({', '.join(changed[:20])}{', …' if len(changed) > 20 else ''})." if changed else ".")
+                       + " A stale-image lane replayed the older elaboration of these until now."]
+        growth = grown((previous or {}).get("target_cpu", {}), cpu)
+        if growth:
+            report += ["", f"Targets whose CPU grew since {previous['commit'][:12]}:", "",
+                       "| target | CPU-s before | now |", "|---|---|---|"]
+            report += [f"| `{l}` | {b:.1f} | {n:.1f} |" for l, b, n in growth]
+        status = 0
+    else:
+        status = 2 if "INCOMPLETE" in line else 1
+        report += ["Red. Failing targets:", ""] + [f"- `{t}`" for t in failing]
+        ancestor = previous is not None and subprocess.run(
+            ["git", "merge-base", "--is-ancestor", previous["commit"], head], cwd=ROOT).returncode == 0
+        if ancestor and failing:
+            blame = bisect(failing, previous["commit"], head)
+            report += ["", f"First failing merge since the last green run ({previous['commit'][:12]}):", ""]
+            for label, commit in blame.items():
+                report.append(f"- `{label}`: {git('log', '-1', '--format=%h %s', commit)}")
+        elif previous is not None:
+            report += ["", f"The last green run ({previous['commit'][:12]}) is not an ancestor of this commit; no bisect."]
+        else:
+            report += ["", "No earlier green run on record; no bisect."]
+    (OUT / "report.md").write_text("\n".join(report) + "\n")
+    print("\n".join(report))
+    return status
+
+
+def seed(dest, fetched=False):
+    """Unpack the published stores into `dest` (normally target/) for any
+    store not already there; staged beside it and renamed into place, so a
+    test that starts meanwhile sees a whole store or none. `fetched`: the
+    branch is already at FETCH_HEAD."""
+    dest = Path(dest)
+    if all((dest / s).exists() for s in STORES):
+        return 0
+    if not fetched and subprocess.run(["git", "fetch", "--quiet", "--depth=1", "origin", BRANCH],
+                                      cwd=ROOT, stderr=subprocess.DEVNULL).returncode != 0:
+        return 1
+    blob = subprocess.run(["git", "show", "FETCH_HEAD:images.tgz"], cwd=ROOT, stdout=subprocess.PIPE)
+    if blob.returncode != 0:
+        return 1
+    dest.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".sentinel-seed-", dir=dest))
+    try:
+        archive = stage / "images.tgz"
+        archive.write_bytes(blob.stdout)
+        with tarfile.open(archive) as tar:
+            tar.extractall(stage, filter="data")
+        for store in STORES:
+            if (stage / store).is_dir() and not (dest / store).exists():
+                os.rename(stage / store, dest / store)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+    return 0
+
+
+def main(argv):
+    if argv[:1] == ["run"]:
+        return run()
+    if argv[:1] == ["seed"] and len(argv) == 2:
+        return seed(argv[1])
+    print(__doc__, file=sys.stderr)
+    return 64
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
