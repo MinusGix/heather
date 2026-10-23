@@ -4,7 +4,7 @@ status: closed
 labels: [testing,performance]
 area: infrastructure
 created: 2026-10-22
-updated: 2026-10-22
+updated: 2026-10-23
 ---
 
 On a fresh 4-CPU cloud container, a full `scripts/test` reports `INCOMPLETE`:
@@ -54,3 +54,14 @@ elaborator whnf).
   `linux_spec` 138 s cold alone including the whole x86 prefix the suite's
   warmup otherwise builds first. Kernel counts of the unchanged items are
   unchanged.
+- 2026-10-23: **Checked on a fresh box after the fix: no longer reproduces.**
+  The failing reports all predate PR #133. On a fresh 4-CPU cloud container
+  at master 1ae5dd6 (#149), with `target/semantic-test-images`,
+  `target/decl-cache` and the runner's timing history all absent, a full
+  `scripts/test` passed (3698 passed), with `linux_wp` at 142 CPU-s of the
+  300 s rail, `linux_wp_count` 129 and `linux_spec` 56. A second run on the
+  same box, with the stores warm, gave 48, 34 and 6. So about 95 CPU-s of
+  `linux_wp`'s cold run is the Linux prefix it builds for itself, and the
+  warmup does not cover that prefix (`semantic_x86_warmup` stops at
+  `x86_64`). The cold margin is about half the rail. If it shrinks again,
+  the lever is a warmup over `READ_LOOP` and the Linux list, not more rail.
