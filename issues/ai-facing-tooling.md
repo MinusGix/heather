@@ -5,7 +5,7 @@ labels: [tooling,design,meta,diagnostics]
 area: tactics
 milestone: [tac-general]
 created: 2026-08-05
-updated: 2026-09-04
+updated: 2026-10-23
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 riff (while the
@@ -128,3 +128,4 @@ See `docs/finite-set-client-design.md` §6 for candidate examples.
 [[generated-proof-cost-diagnostics]] owns bounded declaration/conversion cost
 diagnostics motivated by the x86 certificate round. This issue owns the shared
 structured-output conventions.
+- 2026-10-23: Arend's answer to the same premise is a skills pack for agents (formalize, prove, quirks, error diagnosis); Heather's is [[agent-skills-pack]] (docs/arend-survey.md §6).

@@ -4,7 +4,7 @@ status: open
 labels: [tooling,frontend,design,metaprogramming]
 area: tactics
 created: 2026-08-05
-updated: 2026-08-25
+updated: 2026-10-23
 ---
 
 From the 2026-08-05 riff under [[ai-facing-tooling]]. Not scheduled —
@@ -84,3 +84,13 @@ source theorem rather than occupy an equal-ranked slot.
   design: implicitly expand profiles through the real resolver, rank by the
   additional obligations at the cursor, expose axiom impact, and down-rank
   rather than hide candidates with unmet requirements.
+- 2026-10-23: Evidence from Arend (`docs/arend-survey.md` §6). Arend's CLI,
+  built for coding agents, ships symbol search (`-ss`), proof search by a
+  statement pattern with `_` wildcards and infix (`-ps "_ + _ = _ + _"`,
+  matching subexpressions of parameter and result types rather than unifying
+  whole types), find usages (`-fu`), class hierarchy with instance sites
+  (`-ch`), scope at a definition (`-sc`), all with `--json`, and a daemon
+  holding the checked library in memory. The premise above ("wants a bigger
+  library to be worth it") is met: at about 2,500 declarations agents
+  already grep for lemmas. Suggested first slice: name search and pattern
+  search over module images, `--json`, no ranking yet.

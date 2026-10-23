@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,mathematics,locale-theory,order,research]
 area: mathematics
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-10-23
 ---
 
 Build the point-free foundation needed before localic real numbers: complete
@@ -25,3 +25,14 @@ as maps only as a derived notion; a locale is not defined by its points.
 
 - 2026-09-02: Filed as an independent locale-theory program and prerequisite
   for point-free reals.
+- 2026-10-23: Pointers from Arend (`docs/arend-survey.md` §7). `arend-lib`'s
+  `Locale` has `Join : (E → \Prop) → E`, which is small only because its
+  `\Prop` is impredicative, so the definition does not port. Its construction
+  route does: preorder sites, and `SiteLocale P` as the reflection of a site
+  into locales, are how it builds the locale of reals and spectra of rings by
+  generators and relations, which is this issue's formal-topology start.
+  Schemes are locally ringed locales with affineness stated intrinsically
+  (principal opens, localizations), a long-range customer. For reals, Isaev's
+  cover spaces (arXiv:2412.20835) are a point-set alternative: completing `Q`
+  by Cauchy filters gives the Dedekind reals, cover maps `R → R` match locale
+  morphisms, and compactness reads "every Cauchy cover has a finite subcover".
