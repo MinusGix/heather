@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 #[test]
 fn std_list_closure_exports() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/std");
-    let modules = loader::load(&root.join("list.hthr"), &[PathBuf::from(&root)]).map_err(|e| e.msg).expect("load");
+    let modules = loader::load(&root.join("data/list.hthr"), &[PathBuf::from(&root)]).map_err(|e| e.msg).expect("load");
     let mut e = Elaborator::with_prelude_for_export().expect("prelude");
     for m in &modules {
         e.elab_module_source(&m.name, &m.src).unwrap_or_else(|err| panic!("{}: {err}", m.name));

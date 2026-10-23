@@ -64,7 +64,7 @@ pub fn families() -> Vec<Family> {
 /// module deltas while rechecking every stored kernel binding. Both paths
 /// start from a fresh checked prelude; delta extraction is setup, not timing.
 fn module_replay_family() -> Family {
-    let modules = closure("std/logic.hthr");
+    let modules = closure("std/core/logic.hthr");
     let identity = |n: usize| {
         ModuleDependencyIdentity::new((0..n).map(|i| [i as u8; 32]).collect())
     };
@@ -164,8 +164,8 @@ fn check_file() -> Family {
         // question is "still tolerable?") of what it measured on
         // 2026-08-04. The gate against a 30% drift is the baseline
         // comparison; these fire when a file stops being usable at all.
-        ("vec_code.hthr", "vec_code.hthr", false, false, 100_000_000u64),
-        ("ir_v1.hthr:decls", "ir_v1.hthr", true, true, 8_000_000_000),
+        ("vec_code.hthr", "lang/vec_code.hthr", false, false, 100_000_000u64),
+        ("ir_v1.hthr:decls", "certgen/ir_v1.hthr", true, true, 8_000_000_000),
         // The latency budget, and the suite's alarm bell. Measured
         // 2026-08-04: **59 s** through the release CLI on a quiet machine,
         // 84–88 s from this harness while the machine carried a load
@@ -175,7 +175,7 @@ fn check_file() -> Family {
         // and what it is for is "the library file now takes five minutes".
         // It is deliberately *not* derived from the baseline: a budget that
         // moves with the recording is not a budget.
-        ("ir_v1.hthr", "ir_v1.hthr", false, true, 150_000_000_000),
+        ("ir_v1.hthr", "certgen/ir_v1.hthr", false, true, 150_000_000_000),
     ] {
         // Heavy cases were *unvalidated* for as long as validating one meant
         // ~90 s of `lib/certgen/ir_v1.hthr`; it is seconds now, so every corpus case
