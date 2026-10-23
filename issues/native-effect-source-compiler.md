@@ -5,7 +5,7 @@ labels: [native,x86,ir,proofs,design]
 area: heather-in-heather
 blocked-by: [native-loop-rule, function-ir-verified-lowering]
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-23
 milestone: [hih-pl-source]
 ---
 
@@ -41,3 +41,4 @@ Heather, and the compiler's correctness theorem proved once.
 - 2026-10-22: S3.0 landed as PR #127: `lib/native/function_ir/function_ir_eval.hthr`, a total evaluator proved against the relational semantics ([[function-ir-total-evaluator]], closed).
 - 2026-10-22: S3.1, the layer: `lib/native/native_source.hthr`. It has `Env` (word and buffer files, kept as data so each value is computed once), calls that clamp to their buffers, `Stmt`/`Flow`, `denote` (`Ret`/`Vis`/`bind`/`iter`), `Stmt::grows` and `Source::denote → Program`. `cat` is written in it and run against a scripted world by `refl` (`crates/elab/tests/fixtures/native_source_cat.hthr`). Longer runs hit the kernel's bounded value cache ([[kernel-value-cache-evaluation-thrash]]). cat's `Implements` against `tr_spec` is [[native-source-cat-implements]]. Next: S3.2 (compile the layer and its theorem).
 - 2026-10-22: 2026-10-22: Runs by refl no longer meet a bounded value cache: the kernel keeps what a query forced, and cat copying three bytes one at a time checks ([[kernel-value-cache-evaluation-thrash]]).
+- 2026-10-23: 2026-10-23: S3.1's done-when holds: cat's source implements `tr_spec(λ b => b)` at every capacity `0 < c < 2^63` ([[native-source-cat-implements]], closed; `lib/native/native_cat_spec.hthr`). Source proofs go statement by statement through `lib/native/native_source_sim.hthr` (simulation up to a continuation, docs/itree-simulation-design.md §6). cat now lives in `lib/native/native_cat.hthr`.

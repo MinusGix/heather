@@ -1,0 +1,111 @@
+// Signed readings of words, as unsigned bounds: the sign bit is the top half
+// of a word's unsigned range, a negated small count lands there, and the
+// signed test against zero is the sign bit.
+import bitvec;
+import bitvec_nat;
+import bool;
+import logic;
+import nat;
+import omega;
+
+theorem BitVec::of_bit_le_one(b: Bool): Nat::of_bit(b) <= 1 {
+    match b { False => { omega }, True => { omega } }
+}
+
+// The sign bit is set exactly in the top half of the unsigned range.
+theorem BitVec::sign_bit_small(k: Nat): (x: BitVec(Succ(k))) → x.toNat() < Nat::pow(2, k) → x.sign_bit() = False {
+    match k {
+        Zero => λ x => match x.head_bit() as λ h => Nat::of_bit(h) + 0 < 1 → h = False {
+            False => λ _ => refl,
+            True => λ over => false_elim({ let one: (1 + 0 < 1) = over; omega }),
+        },
+        Succ(j, ih) => λ x small => {
+            let t = x.tail_bits();
+            let pow: (Nat::pow(2, Succ(j)) = Nat::twice(Nat::pow(2, j))) = BitVec::pow_two_succ_twice(j);
+            let sum: (Nat::of_bit(x.head_bit()) + t.toNat().twice() < Nat::pow(2, Succ(j))) = small;
+            let bit: (Nat::of_bit(x.head_bit()) <= 1) = BitVec::of_bit_le_one(x.head_bit());
+            let two: (t.toNat().twice() = t.toNat() + t.toNat()) = Nat::twice_add_self(t.toNat());
+            let ptwo: (Nat::twice(Nat::pow(2, j)) = Nat::pow(2, j) + Nat::pow(2, j)) = Nat::twice_add_self(Nat::pow(2, j));
+            ih(t, { omega })
+        },
+    }
+}
+theorem BitVec::sign_bit_large(k: Nat): (x: BitVec(Succ(k))) → Nat::pow(2, k) <= x.toNat() → x.sign_bit() = True {
+    match k {
+        Zero => λ x => match x.head_bit() as λ h => 1 <= Nat::of_bit(h) + 0 → h = True {
+            True => λ _ => refl,
+            False => λ under => false_elim({ let zero: (1 <= 0 + 0) = under; omega }),
+        },
+        Succ(j, ih) => λ x large => {
+            let t = x.tail_bits();
+            let pow: (Nat::pow(2, Succ(j)) = Nat::twice(Nat::pow(2, j))) = BitVec::pow_two_succ_twice(j);
+            let sum: (Nat::pow(2, Succ(j)) <= Nat::of_bit(x.head_bit()) + t.toNat().twice()) = large;
+            let bit: (Nat::of_bit(x.head_bit()) <= 1) = BitVec::of_bit_le_one(x.head_bit());
+            let two: (t.toNat().twice() = t.toNat() + t.toNat()) = Nat::twice_add_self(t.toNat());
+            let ptwo: (Nat::twice(Nat::pow(2, j)) = Nat::pow(2, j) + Nat::pow(2, j)) = Nat::twice_add_self(Nat::pow(2, j));
+            ih(t, { omega })
+        },
+    }
+}
+
+// Subtraction is undone by adding back.
+theorem BitVec::sub_add_cancel(n: Nat, a, b: BitVec(n)): (a.sub(b)).add(b) = a {
+    trans(sym(BitVec::iter_add_eq_add(n, a.sub(b), b)),
+        trans(BitVec::cong_iterate_increment(n, b.toNat(), sym(BitVec::iter_sub_eq_sub(n, a, b))),
+            BitVec::iterate_sub_add(n, b.toNat(), a)))
+}
+
+theorem BitVec::sub_zero(n: Nat, a: BitVec(n)): a.sub(BitVec::zero()) = a {
+    let z = BitVec::zero(n := n);
+    let value: (a.sub(z).toNat() = a.toNat()) =
+        trans(toNat_sub(n, a, z, j(sym(BitVec::zero_toNat(n)), λ v _ => v <= a.toNat(), Nat::nonneg(a.toNat()))),
+            j(sym(BitVec::zero_toNat(n)), λ v _ => a.toNat() - v = a.toNat(), Nat::sub_zero(a.toNat())));
+    trans(sym(BitVec::ofNat_toNat(n, a.sub(z))),
+        trans(@cong(λ (v: Nat) => BitVec::ofNat(v, n := n), a.sub(z).toNat(), a.toNat(), value), BitVec::ofNat_toNat(n, a)))
+}
+
+// The signed test against zero reads the sign bit.
+theorem BitVec::signed_lt_zero(a: BitVec(64)): a.signed_lt_bit(BitVec::ofNat(0)) = a.sign_bit() {
+    let z = BitVec::ofNat(0, n := 64);
+    let same: (a.sub(z) = a) = j(sym(BitVec::ofNat_zero(64)), λ y _ => a.sub(y) = a, BitVec::sub_zero(64, a));
+    let at_a: (a.sign_bit().xor(!BitVec::bool_eq(a.sign_bit(), z.sign_bit()) && !BitVec::bool_eq(a.sign_bit(), a.sign_bit()))
+            = a.sign_bit()) =
+        match a.sign_bit() {
+            False => refl,
+            True => refl,
+        };
+    j(sym(same), λ y _ => y.sign_bit().xor(!BitVec::bool_eq(a.sign_bit(), z.sign_bit()) && !BitVec::bool_eq(y.sign_bit(), a.sign_bit()))
+        = a.sign_bit(), at_a)
+}
+
+// A count below the top half reads as nonnegative.
+theorem BitVec::ofNat_sign_clear(x: Nat, small: x < Nat::pow(2, 63)): BitVec::ofNat(x, n := 64).sign_bit() = False {
+    let pow: (Nat::pow(2, 64) = Nat::twice(Nat::pow(2, 63))) = BitVec::pow_two_succ_twice(63);
+    let ptwo: (Nat::twice(Nat::pow(2, 63)) = Nat::pow(2, 63) + Nat::pow(2, 63)) = Nat::twice_add_self(Nat::pow(2, 63));
+    let fits: (x < Nat::pow(2, 64)) = { omega };
+    BitVec::sign_bit_small(63, BitVec::ofNat(x, n := 64), j(sym(BitVec::toNat_ofNat(64, x, fits)), λ v _ => v < Nat::pow(2, 63), small))
+}
+
+// A negated positive count no larger than the top half reads as negative:
+// where a syscall's negated errno lands.
+theorem BitVec::neg_ofNat_sign_set(e: Nat, positive: 1 <= e, small: e <= Nat::pow(2, 63)):
+    BitVec::ofNat(e, n := 64).neg().sign_bit() = True
+{
+    let pow: (Nat::pow(2, 64) = Nat::twice(Nat::pow(2, 63))) = BitVec::pow_two_succ_twice(63);
+    let ptwo: (Nat::twice(Nat::pow(2, 63)) = Nat::pow(2, 63) + Nat::pow(2, 63)) = Nat::twice_add_self(Nat::pow(2, 63));
+    let b = BitVec::ofNat(e, n := 64);
+    let x = BitVec::zero(n := 64).sub(b);
+    let fits: (e < Nat::pow(2, 64)) = { omega };
+    let b_value: (b.toNat() = e) = BitVec::toNat_ofNat(64, e, fits);
+    let back: (x.add(b) = BitVec::zero()) = BitVec::sub_add_cancel(64, BitVec::zero(), b);
+    let wrapped: (Nat::pow(2, 64) <= x.toNat() + b.toNat()) = match (x.toNat() + b.toNat()).lt_or_ge(Nat::pow(2, 64)) {
+        Inl(short) => {
+            let sum: (x.add(b).toNat() = x.toNat() + b.toNat()) = toNat_add(64, x, b, short);
+            let none: (x.toNat() + b.toNat() = 0) = trans(sym(sum),
+                trans(@cong(λ (y: BitVec(64)) => y.toNat(), x.add(b), BitVec::zero(), back), BitVec::zero_toNat(64)));
+            false_elim({ omega })
+        },
+        Inr(long) => long,
+    };
+    BitVec::sign_bit_large(63, x, { omega })
+}

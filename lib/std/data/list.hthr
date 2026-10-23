@@ -362,6 +362,75 @@ theorem List::drop_succ<A>(self xs: List<A>, n: Nat): xs.drop(n + 1) = xs.drop(n
     }
 }
 
+theorem List::take_zero<A>(self xs: List<A>): xs.take(0) = Nil { match xs { Nil => refl, Cons(_, _) => refl } }
+
+theorem List::drop_zero<A>(self xs: List<A>): xs.drop(0) = xs { match xs { Nil => refl, Cons(_, _) => refl } }
+
+// As many as asked for, when there are that many.
+theorem List::len_take<A>(self xs: List<A>): (n: Nat) → n <= xs.len() → xs.take(n).len() = n {
+    match xs {
+        Nil => λ n => match n { Zero => λ _ => refl, Succ(_) => λ (h: False) => false_elim(h) },
+        Cons(_, t) => λ n => match n {
+            Zero => λ _ => refl,
+            Succ(k) => λ h => Nat::cong(λ m => Succ(m), t.len_take(k, h)),
+        },
+    }
+}
+
+theorem List::len_drop<A>(self xs: List<A>): (n: Nat) → xs.drop(n).len() = xs.len() - n {
+    match xs {
+        Nil => λ n => refl,
+        Cons(_, t) => λ n => match n { Zero => refl, Succ(k) => t.len_drop(k) },
+    }
+}
+
+// Dropping from a prefix is taking from the dropped list.
+theorem List::drop_take<A>(self xs: List<A>): (n, k: Nat) → xs.take(n).drop(k) = xs.drop(k).take(n - k) {
+    match xs {
+        Nil => λ n k => refl,
+        Cons(h, t) => λ n k => match n {
+            Zero => sym((Cons(h, t)).drop(k).take_zero()),
+            Succ(m) => match k {
+                Zero => refl,
+                Succ(j) => t.drop_take(m, j),
+            },
+        },
+    }
+}
+
+// Dropping twice is dropping the sum. (`+` recurses on its second argument,
+// so the first drop's count is on the right.)
+theorem List::drop_drop<A>(self xs: List<A>): (j, k: Nat) → xs.drop(j).drop(k) = xs.drop(k + j) {
+    match xs {
+        Nil => λ j k => refl,
+        Cons(h, t) => λ j k => match j {
+            Zero => @cong<List<A>, List<A>>(λ ys => ys.drop(k), (Cons(h, t)).drop(0), Cons(h, t), refl),
+            Succ(i) => t.drop_drop(i, k),
+        },
+    }
+}
+
+theorem List::take_take<A>(self xs: List<A>): (n, m: Nat) → m <= n → xs.take(n).take(m) = xs.take(m) {
+    match xs {
+        Nil => λ n m h => refl,
+        Cons(h, t) => λ n m => match m {
+            Zero => λ _ => (Cons(h, t)).take(n).take_zero(),
+            Succ(i) => match n {
+                Zero => λ (no: False) => false_elim(no),
+                Succ(l) => λ le => List::cong_cons(h, t.take_take(l, i, le)),
+            },
+        },
+    }
+}
+
+// A list is the prefix of its length of anything it starts.
+theorem List::take_append_len<A>(self xs: List<A>, ys: List<A>): (xs ++ ys).take(xs.len()) = xs {
+    match xs {
+        Nil => ys.take_zero(),
+        Cons(h, t) => List::cong_cons(h, t.take_append_len(ys)),
+    }
+}
+
 theorem List::len_filter<A>(self xs: List<A>, p: A → Bool): xs.filter(p).len() <= xs.len() {
     match xs {
         Nil => trivial,

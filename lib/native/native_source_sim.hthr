@@ -1,0 +1,95 @@
+// Proving a native source against a spec, statement by statement
+// (docs/itree-simulation-design.md §6; issues/native-source-cat-implements.md).
+//
+// A source's tree is simulated by its spec under Linux's map and contract
+// (`ITree::LinuxSimK`, up to a continuation). Each statement form has its
+// rule here: `Then` hands its first statement's outcome to the rest, a
+// `Branch` whose bit is known takes that side, a loop pass's outcome goes
+// round again or leaves by its bit, and `Repeat` is the loop rule with an
+// invariant indexed by the fuel left (`ITree::simk_iter`), so one source
+// pass may be any number of the spec's.
+import native_source;
+import function_ir_eval;
+import linux_calls;
+import linux_trees;
+import linux_trees_sim;
+import itree;
+import itree_trace;
+import itree_sim;
+import bool;
+import logic;
+
+// What follows a statement in `Then`: the rest on the environment it left,
+// or the exit it took.
+fn Stmt::then_rest(self rest: Stmt, call: Answers(), n: Nat) → Flow → ITree<Flow>(Events::linux()) {
+    λ flow => match flow { Onward(next) => rest.denote(call, n, next), Exited(status) => Ret(Exited(status)) }
+}
+
+theorem Stmt::sim_then<B>(first, rest: Stmt, call: Answers(), n: Nat, env: Env,
+    K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
+    g: ITree::LinuxSimK(λ x w => ITree::LinuxSimK(K, rest.then_rest(call, n, x), w), first.denote(call, n, env), v)):
+    ITree::LinuxSimK(K, Then(first, rest).denote(call, n, env), v)
+{
+    ITree::simk_bind(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(),
+        λ x w => ITree::LinuxSimK(K, rest.then_rest(call, n, x), w), K, first.denote(call, n, env), v,
+        rest.then_rest(call, n), λ x w h => h, g)
+}
+
+theorem Stmt::sim_branch_true<B>(condition: Nat, yes, no: Stmt, call: Answers(), n: Nat, env: Env,
+    K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
+    h: env.bit(condition) = True, g: ITree::LinuxSimK(K, yes.denote(call, n, env), v)):
+    ITree::LinuxSimK(K, Branch(condition, yes, no).denote(call, n, env), v)
+{
+    j(sym(h), λ b _ => ITree::LinuxSimK(K, match b as λ _ => ITree<Flow>(Events::linux()) {
+        True => yes.denote(call, n, env),
+        False => no.denote(call, n, env),
+    }, v), g)
+}
+
+theorem Stmt::sim_branch_false<B>(condition: Nat, yes, no: Stmt, call: Answers(), n: Nat, env: Env,
+    K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
+    h: env.bit(condition) = False, g: ITree::LinuxSimK(K, no.denote(call, n, env), v)):
+    ITree::LinuxSimK(K, Branch(condition, yes, no).denote(call, n, env), v)
+{
+    j(sym(h), λ b _ => ITree::LinuxSimK(K, match b as λ _ => ITree<Flow>(Events::linux()) {
+        True => yes.denote(call, n, env),
+        False => no.denote(call, n, env),
+    }, v), g)
+}
+
+// A pass that went on goes round again while its bit is set.
+theorem Flow::pass_again<B>(env: Env, again: Nat, I: Env → ITree<B>(Events::linux_spec()) → Type,
+    K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
+    h: env.bit(again) = True, i: I(env, v)): ITree::StepK(Events::linux_spec(), I, K, Onward(env).pass(again), v)
+{
+    j(sym(h), λ b _ => ITree::StepK(Events::linux_spec(), I, K, match b as λ _ => Step<Env, Flow> {
+        True => Continue(env),
+        False => Break(Onward(env)),
+    }, v), i)
+}
+
+theorem Flow::pass_leaves<B>(env: Env, again: Nat, I: Env → ITree<B>(Events::linux_spec()) → Type,
+    K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
+    h: env.bit(again) = False, g: K(Onward(env), v)): ITree::StepK(Events::linux_spec(), I, K, Onward(env).pass(again), v)
+{
+    j(sym(h), λ b _ => ITree::StepK(Events::linux_spec(), I, K, match b as λ _ => Step<Env, Flow> {
+        True => Continue(env),
+        False => Break(Onward(env)),
+    }, v), g)
+}
+
+// The loop rule for `Repeat`: from the invariant at `k + 1` passes of fuel,
+// the body leaves the spec at the invariant at `k` when it goes round, and at
+// `K` when the loop is done. The loop's fuel is the statement's.
+theorem Stmt::sim_repeat<B>(body: Stmt, again: Nat, call: Answers(), n: Nat,
+    I: Nat → Env → ITree<B>(Events::linux_spec()) → Type, K: Flow → ITree<B>(Events::linux_spec()) → Type,
+    pass: (k: Nat) → (e: Env) → (w: ITree<B>(Events::linux_spec())) → I(Succ(k), e, w) →
+        ITree::LinuxSimK(λ x w2 => ITree::StepK(Events::linux_spec(), I(k), K, x.pass(again), w2), body.denote(call, n, e), w),
+    env: Env, v: ITree<B>(Events::linux_spec()), i: I(n, env, v)):
+    ITree::LinuxSimK(K, Repeat(body, again).denote(call, n, env), v)
+{
+    ITree::simk_iter(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(),
+        λ e => ITree::map(Events::linux(), body.denote(call, n, e), λ flow => flow.pass(again)), I, K,
+        λ k e w h => ITree::linux_sim_map<Flow, Step<Env, Flow>, B>(λ x w2 => ITree::StepK(Events::linux_spec(), I(k), K, x, w2), body.denote(call, n, e),
+            λ flow => flow.pass(again), w, pass(k, e, w, h)), n, env, v, i)
+}

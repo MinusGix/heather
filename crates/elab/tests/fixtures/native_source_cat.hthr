@@ -1,16 +1,14 @@
-// `cat` in the effectful layer (`native_source`; issues/native-effect-source-compiler.md,
-// round S3.1), run against a scripted world by evaluation.
-//
-// cat reads stdin into its one buffer, and writes what it read to stdout
-// until all of it is sent, then reads again; at the end of the input it
-// exits 0, and on a failed read or write it exits 1: `tr_spec(λ b => b)`'s
-// behaviour, with a buffer.
+// `cat` in the effectful layer (`lib/native/native_cat.hthr`;
+// issues/native-effect-source-compiler.md, round S3.1), run against a
+// scripted world by evaluation. That it implements `tr_spec(λ b => b)` at
+// every capacity is `native_cat_spec`.
 //
 // The world answers every read with at most `chunk` bytes of the input and
 // takes at most `chunk` bytes of every write, so a small chunk drives cat
 // round both of its loops; a world whose writes fail answers each with EIO.
 
 import native_source;
+import native_cat;
 import function_ir;
 import function_ir_eval;
 import linux_calls;
@@ -23,44 +21,6 @@ import logic;
 import nat;
 import option;
 import pair;
-
-// ---------------------------------------------------------------------------
-// cat
-
-fn ops(nodes: List<Node>) → Stmt { Compute(Dataflow(Region(Ports([]), nodes, Ports([])))) }
-
-// Words: 0 stdin, 1 stdout, 2 the buffer's capacity, 3 what a read
-// returned, 4 how much of it is sent, 5 how much is left, 6 what a write
-// returned, 10 and 11 the statuses 1 and 0, 13 the next sent count, 16 zero.
-// Bits: 7 the read failed, 8 the input ended, 12 the write failed, 14 write
-// again, 15 read again, 17 nothing left, 18 stop writing, 19 one.
-fn cat_setup(capacity: Nat) → Stmt {
-    ops([Const(64, 0, 0), Const(64, 1, 1), Const(64, 2, capacity), Const(64, 10, 1), Const(64, 11, 0),
-        Const(64, 16, 0), Const(1, 15, 1), Const(1, 19, 1)])
-}
-
-// One write of what is left, and whether to write again.
-fn cat_write() → Stmt {
-    Then(Invoke(Writes(1, 0, 4, 5, 6)),
-        Then(ops([SignedLessThan(64, 12, 6, 16), Add(64, 13, 4, 6)]),
-            Then(ops([Move(64, 4, 13), Sub(64, 5, 3, 13)]),
-                ops([Equal(64, 17, 5, 16), BitOr(1, 18, 12, 17), BitXor(1, 14, 18, 19)]))))
-}
-
-// One read, and everything it read written.
-fn cat_pass() → Stmt {
-    Then(Invoke(Reads(0, 0, 2, 3)),
-        Then(ops([SignedLessThan(64, 7, 3, 16), Equal(64, 8, 3, 16)]),
-            Branch(7, Exit(10),
-                Branch(8, Exit(11),
-                    Then(ops([Const(64, 4, 0), Move(64, 5, 3)]),
-                        Then(Repeat(cat_write(), 14),
-                            Branch(12, Exit(10), ops([]))))))))
-}
-
-fn cat(capacity: Nat) → Source {
-    Source(functions := [], buffers := [capacity], main := Then(cat_setup(capacity), Repeat(cat_pass(), 15)))
-}
 
 // ---------------------------------------------------------------------------
 // A scripted world

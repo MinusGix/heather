@@ -4,7 +4,8 @@ Status: implemented, 2026-10-22 (`lib/std/itree/itree_sim.hthr`, Linux instance
 `lib/std/os/linux/linux_trees_sim.hthr`; tests `crates/elab/tests/lib_std_itree_sim.rs`
 and `crates/elab/tests/linux_spec.rs`). Issue:
 `issues/itree-iter-simulation.md`, milestones `it-library` and
-`hih-pl-first-program`. It builds on the finite library
+`hih-pl-first-program`. Simulation up to a continuation, the statement kit and
+cat's proof (§6, §7): 2026-10-23, `issues/native-source-cat-implements.md`. It builds on the finite library
 (`lib/std/itree/itree.hthr`, `lib/std/itree/itree_trace.hthr`) and is what the native
 source's proofs against size-free specs go through
 (`docs/native-effect-source-design.md` §8).
@@ -94,11 +95,8 @@ consumes one on the source side only, so the spec has fuel to spare, and
 
 ## 4. What stays out
 
-- **A pass that is many spec passes.** A source pass simulates at most one
-  spec pass. cat's write loop is an inner `iter` that sends in several
-  writes, each a spec pass (`issues/native-source-cat-implements.md`). That
-  needs a nested-loop rule, or a lemma folding the inner loop into the outer
-  body.
+- **A pass that is many spec passes**, under `sim_iter`: a source pass
+  simulates at most one spec pass there. §6 is the rule for that case.
 - **The converse.** `Sim` is partial correctness: a source that is cut early
   simulates anything, so nothing here says the source makes every trace the
   spec makes. No customer needs that direction yet.
@@ -120,3 +118,80 @@ consumes one on the source side only, so the spec has fuel to spare, and
 
 `linux_spec.rs` runs the countdown through `Program::implements_iter`, with a
 spec that leaves with another status as its negative control.
+
+## 6. Up to a continuation
+
+`Sim` relates a source tree to a spec tree that ends where the source ends.
+cat's outer pass is a read and then a whole inner loop of writes, and the
+spec does that in one pass per call plus one to go back to reading: one
+source pass is any number of spec passes, and where the pass returns the
+spec is in the middle of its loop. `SimK` says so:
+
+```
+SimK(K, Ret(x), s)    = K(x, s)          -- the spec's remaining tree, whatever it is
+SimK(K, Tau(t), s)    = SimK(K, t, s)
+SimK(K, Vis(c, k), s) = SimVis(c, s, λ a v. SimK(K, k(a), v))
+SimK(K, Cut, s)       = True
+```
+
+`Sim(Q)` is `SimK` with `K(x, s) = SimRet(s, λ y. Q(x, y))`, by definition,
+so every law above is about `SimK` too. The new laws:
+
+- `simk_bind`: `SimK_K(t, s)`, and `SimK_P(h(x), v)` wherever `K(x, v)`,
+  give `SimK_P(bind(t, h), s)`. Only the source is bound: the continuation
+  carries the spec along.
+- `simk_iter`: the loop rule with an invariant `I(k, a, v)` indexed by the
+  source's fuel left. From `I(k + 1, a, v)` a pass must reach
+  `StepK(I(k), K)`: the invariant one unit down if it goes round, `K` if it
+  leaves. Nothing ties the spec's fuel to the source's; the invariant asks
+  for enough of it (cat's asks `cat_budget(n, k)`, which grows by `n + 2` a
+  pass), and the proof spends it by matching on the spec's fuel where a spec
+  pass happens (a fuel of zero contradicts the bound).
+- `Program::simulates_at`: simulation at every source fuel `n` against the
+  spec at `fuel(n)`.
+
+Nested loops need no rule of their own: the inner loop is `simk_iter` again,
+with the rest of the outer pass as its `K`.
+
+**The statement kit** (`lib/native/native_source_sim.hthr`) states these for
+the native layer's statements under Linux's map and contract
+(`ITree::LinuxSimK`): `Stmt::sim_then` hands the first statement's outcome to
+the rest (`Stmt::then_rest`), `sim_branch_true`/`_false` take the side a known
+bit picks, `Flow::pass_again`/`pass_leaves` go round or leave by a loop's bit,
+and `Stmt::sim_repeat` is `simk_iter` for `Repeat`. A `Compute` block needs no
+rule: on an environment whose word file is a literal list
+(`native_cat_spec`'s `cat_words`), a block computes by evaluation.
+
+## 7. cat
+
+`lib/native/native_cat_spec.hthr` proves `cat_implements`:
+`Program::Implements(cat(c).denote(), tr_spec(λ b => b))` for
+`0 < c < 2^63`, and from it `cat_sends`: along every run Linux can give cat
+that exits 0, what reached stdout is what was read from stdin.
+
+- **The environment is held concretely.** Its word file is a literal list of
+  twenty with the slots cat writes open (`cat_env`), so cat's blocks compute
+  by evaluation and what they store stays as the term they computed
+  (`cat_wrote`, `cat_read`). The facts are about those terms: a count below
+  `2^63` reads back and is nonnegative, a negated errno is negative
+  (`bitvec_signed`), the 64-bit add and subtract of the write's bookkeeping do
+  not wrap (`bitvec_nat`), and the buffer's span after a write is the spec's
+  pending bytes dropped by the count (`List::drop_take`, `drop_drop`).
+- **Two invariants.** `CatReading(n, k)` at the outer loop's head: the spec
+  is reading with `cat_budget(n, k)` fuel or more. `CatWriting(n, k, j)` at
+  the inner loop's head: `left` bytes from `sent` are pending, the spec is
+  writing exactly them, with `j + 1` more passes than the rest of the outer
+  loop needs. Each records where the spec is by its next move, so the
+  spec's silent steps (a pass with nothing pending goes back to reading)
+  never need stating.
+- **Cost.** Each declaration is a constant number of block evaluations at
+  the literal width, independent of the capacity and the fuel; the heaviest
+  are the read of some bytes and the arithmetic of a write.
+
+Testing (`crates/elab/tests/native_cat_spec.rs`): the kit is named; a client
+instantiates cat at a literal and an open capacity; and a cat that exits 0
+after a failed write, with the proof mutated the same way, is refused at the
+failed write's exit. `lib_std_itree_sim.rs` checks `simk_iter` on its own: a
+loop making two calls a pass against one making one, at twice the fuel,
+over open events at an open and a literal state, with a wrong exit refused
+by the kernel.
