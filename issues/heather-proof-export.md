@@ -5,7 +5,7 @@ labels: [translation,metatheory,design]
 area: heather-in-lean-coq
 milestone: [export-fragment]
 created: 2026-10-20
-updated: 2026-10-21
+updated: 2026-10-23
 ---
 
 Owns the roadmap's `export-fragment` milestone (`docs/roadmap.md`):
@@ -69,3 +69,8 @@ replacement symbol where the two theories differ. The first round:
 - 2026-10-22: [[export-spelling-cost]] closed: `⌊·⌋` for export leaves
   `fst@`/`snd@` to the targets (`Hx::Proj`), and the ordered-field tower,
   `rat` and `creal` export too (design §7).
+- 2026-10-23: [[export-inductive-coverage]] closed (value parameters,
+  other level profiles, declarations without a code binding). The wide
+  sweep exports 3833 of 3921 bindings; codata's `M` is what is refused
+  ([[export-codata-m]]). Lean's kernel accepts all but the 16 `utf8`
+  proofs and one eta-long gap.

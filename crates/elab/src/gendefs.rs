@@ -233,6 +233,18 @@ impl GenDef {
     }
 }
 
+/// [`Elaborator::register_ty_code_fn`]'s definition at one level profile:
+/// the open template and its level, the type arguments it was lowered at,
+/// and the closed statement, its level and body.
+struct CodeFnAt {
+    template: Type,
+    l: Level,
+    targs: Vec<(Type, Level)>,
+    ty: Type,
+    ty_level: Level,
+    body: Term,
+}
+
 /// The guard copies of one declaration's `Wf` slot pair
 /// (`docs/wf-shape-code-design.md` §2.3).
 #[derive(Clone)]
@@ -1284,18 +1296,40 @@ impl Elaborator {
         if self.types.gdefs().contains_key(&key) {
             return;
         }
-        let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
+        let profile = vec![Level::Zero; ind.params.len()];
+        let Some(CodeFnAt { template, l, targs, ty, ty_level, body }) = self.tycode_fn_at_profile(ind, &profile, span) else {
             return;
         };
-        let Ok((template, l)) = self.lower_instance(&cx, ind, &targs, &vargs, span) else {
-            return;
-        };
+        if self
+            .push_gen_def(key, &ind.name, ty.clone(), ty_level, body, span)
+            .is_ok()
+        {
+            self.semantic_commit_gen_ty_code_fn(
+                ind.tag,
+                TyCodeFn {
+                    template: Rc::new(template),
+                    stmt: Rc::new(ty),
+                    param_levels: targs.iter().map(|(_, l)| l.clone()).collect(),
+                    level: l,
+                },
+            );
+        }
+    }
+
+    /// `register_ty_code_fn`'s definition at a parameter level **profile**:
+    /// the body `λ(A₁ : Ty l₁)…(v̄). ⌜⟦D<El A₁,…>(v̄)⟧⌝`, its statement, and
+    /// the open template it was quoted from. The registered definition is
+    /// the all-`Ty 0` profile; an exporter asks for the others
+    /// ([`Elaborator::tycode_fn_at`]).
+    fn tycode_fn_at_profile(&self, ind: &Rc<Inductive>, profile: &[Level], span: Span) -> Option<CodeFnAt> {
+        let (cx, binders, targs, vargs) = self.tycode_fn_telescope_at(ind, profile, span)?;
+        let (template, l) = self.lower_instance(&cx, ind, &targs, &vargs, span).ok()?;
         // `register_ty_code`'s precondition, for the same reason (§2.2): the
         // guard finds this entry by running `tag_of` over an instantiation, so
         // a template whose own tag read does not route back here must not be
         // registered.
         if self.tag_of(&template).map(|i| i.tag) != Some(ind.tag) {
-            return;
+            return None;
         }
         // Quote the spelling the emission chokepoint would emit — registered
         // sub-lowerings as references — not the raw inline lowering: what the
@@ -1306,9 +1340,7 @@ impl Elaborator {
         // (`docs/record-projection-reference-design.md` §9.8). The stored
         // `template` stays inline: §4's inverse re-lowers against it.
         let quoted = self.annotation_type(&cx, &template, 0);
-        let Some(code) = crate::code::code_of(&quoted) else {
-            return;
-        };
+        let code = crate::code::code_of(&quoted)?;
         let mut ty = Type::Ty(l.clone());
         let mut ty_level = Level::succ(l.clone());
         let mut body = code;
@@ -1332,20 +1364,25 @@ impl Elaborator {
             };
             ty_level = Level::max(dom_level.clone(), ty_level).normalize().canonical();
         }
-        if self
-            .push_gen_def(key, &ind.name, ty.clone(), ty_level, body, span)
-            .is_ok()
-        {
-            self.semantic_commit_gen_ty_code_fn(
-                ind.tag,
-                TyCodeFn {
-                    template: Rc::new(template),
-                    stmt: Rc::new(ty),
-                    param_levels: targs.iter().map(|(_, l)| l.clone()).collect(),
-                    level: l,
-                },
-            );
+        Some(CodeFnAt { template, l, targs, ty, ty_level, body })
+    }
+
+    /// The whole-type code function of the unindexed declaration with tag
+    /// `tag` at the type parameters' levels `profile`, with the
+    /// declaration's module-qualified name: closed and scoped in Ψ as it
+    /// stands (the code itself for a declaration with no parameters), `None`
+    /// where the lowering or its quotation declines. A use at a profile
+    /// other than the registered one is spelled inline, and so is every use
+    /// of a declaration whose own code was not registered; an exporter
+    /// realises each as a native inductive from this
+    /// (`issues/export-inductive-coverage.md`).
+    pub fn tycode_fn_at(&self, tag: u32, profile: &[Level]) -> Option<(String, Term)> {
+        let ind = Rc::clone(self.types.by_tag(tag)?);
+        if profile.len() != ind.params.len() {
+            return None;
         }
+        let code = self.tycode_fn_at_profile(&ind, profile, Span { start: 0, end: 0 })?.body;
+        Some((crate::names::qkey(&ind.scope.module, &ind.name), code))
     }
 
     /// A declaration's telescope with every domain in the **emission**
@@ -1404,6 +1441,23 @@ impl Elaborator {
         Vec<(Type, Level)>,
         Vec<(Term, Type, Level)>,
     )> {
+        self.tycode_fn_telescope_at(ind, &vec![Level::Zero; ind.params.len()], span)
+    }
+
+    /// [`Self::tycode_fn_telescope`] with type parameter `i` at `Ty
+    /// profile[i]`.
+    #[allow(clippy::type_complexity)]
+    fn tycode_fn_telescope_at(
+        &self,
+        ind: &Rc<Inductive>,
+        profile: &[Level],
+        span: Span,
+    ) -> Option<(
+        Cx,
+        Vec<(Type, Level)>,
+        Vec<(Type, Level)>,
+        Vec<(Term, Type, Level)>,
+    )> {
         let _ = span;
         let np = ind.params.len();
         let nv = ind.valparams.len();
@@ -1411,8 +1465,8 @@ impl Elaborator {
         let mut cx = Cx::empty();
         let mut binders: Vec<(Type, Level)> = Vec::with_capacity(total);
         for (i, p) in ind.params.iter().enumerate() {
-            // §2.1: one profile, all `Ty 0`.
-            let l = Level::Zero;
+            // §2.1: the registered profile is all `Ty 0`.
+            let l = profile[i].clone();
             binders.push((Type::Ty(l.clone()), Level::succ(l.clone())));
             cx.push(format!("#p{i}"), Type::Ty(l.clone()), Level::succ(l.clone()));
             cx.tyvars.push(TyVar {
@@ -1448,10 +1502,10 @@ impl Elaborator {
             .map(|i| {
                 (
                     Type::El {
-                        level: Level::Zero,
+                        level: profile[i].clone(),
                         tm: Rc::new(Term::Var(LocalVar((total - 1 - i) as u32))),
                     },
-                    Level::Zero,
+                    profile[i].clone(),
                 )
             })
             .collect();

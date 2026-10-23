@@ -13,10 +13,15 @@ use std::path::{Path, PathBuf};
 /// The causes a refusal may have today; a new one is a change to look at.
 const KNOWN: &[&str] = &[
     "mentions a refused declaration",
-    // Tier-2 inductives (`ITree`) lower to `W` and a leaf predicate, which
-    // the realisation does not recognise yet.
+    // A tier-1 instance whose declaration was refused or not recognised,
+    // or a level profile the elaborator does not lower: none in the library
+    // since value parameters and other profiles are realised (design §5.1),
+    // but the causes the realisation names.
     "Wf instance of a declaration the exporter has not met",
     "Wf instance at a level other than its declaration's",
+    // Codata (`coitree`, `coitree_eutt`) lowers to the kernel's `M`, which
+    // has no realisation in either target yet (issues/export-codata-m.md).
+    "M (not exported yet)",
 ];
 
 #[test]
@@ -51,6 +56,7 @@ fn std_library_exports() {
         proof: &|abs| e.export_proof(abs).cloned(),
         name: &|abs| e.global_key_at(abs).map(str::to_string).or_else(|| e.generated_key_at(abs)),
         ctors: &|tag| e.constructor_names(tag as u32),
+        tycode_at: &|tag, levels| e.tycode_fn_at(tag as u32, levels),
     });
     let mut causes: BTreeMap<String, usize> = BTreeMap::new();
     for d in &decls {

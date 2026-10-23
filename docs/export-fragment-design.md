@@ -266,6 +266,39 @@ fails unless that declaration is exactly the one Lean rejects. Not covered
 yet: indexed families (`IWf`, refused by name) and declarations whose arity
 depends on the payload (refused by name).
 
+**Value parameters and other level profiles (2026-10-23).** A
+declaration's parameters are its code function's binders whatever their
+domain, so a value parameter (`itree_trace::Trace<R>(E: Events)`) is one
+more parameter of the native inductive. The walk that reads type arguments
+off an instance also reads a value argument, where the declaration's
+spelling has the variable. It compares the two as spelled before it
+evaluates, because evaluation takes `E.Cmd` apart at a closed `E`.
+
+A use at another type-parameter level profile (`List<A → B → Type>` in
+`relation::AnyOf`, whose element is at `Ty 1`) is spelled inline, since the
+elaborator registers the code function at the all-`Ty 0` profile only. The
+walk reads each type argument's level off the instance's own annotations.
+A profile other than the declaration's gets its own native inductive,
+`list::List::at#1`, from the code function the elaborator lowers at that
+profile (`Elaborator::tycode_fn_at`). It is declared, with its `supf#`,
+just before the first binding that uses it, and its eliminators are keyed
+by it like any other's. One inductive per profile used stands in for one
+level-polymorphic inductive. The library is level-monomorphic (§5.5), and
+the copies work the same way in both targets.
+
+A recursive declaration whose own code was not registered (in `tactic`)
+has no binding to meet, so every use spells it inline. The first such use
+asks the elaborator for the code, and the declaration is realised from it
+the same way, named as the declaration. A binding the exporter refuses
+takes the realisations and eliminators it introduced with it, so the next
+binding that needs one declares it again.
+
+Tier-2 inductives need nothing of this. `ITree` lowers to `W` and its leaf
+predicate (`docs/inductive-tier2-w-lowering.md`), both ordinary formers,
+and exports through the prelude's `W`. The 2026-10-21 sweep counted
+`itree_trace`'s refusals as tier-2 uses, but every one of them was
+`Trace`'s value parameter.
+
 ### 5.2 Irrelevance needs eta-long terms
 
 Heather's `sEq`, `sEmpty` and `Squash` are irrelevant: any two terms convert.
@@ -633,6 +666,17 @@ to the wrong definition.
 | slice and sweep, Lean, both routes | unchanged | all accepted |
 | slice, Coq 8.18 | unchanged | all accepted; the sweep still stops at `Bool::is_true_unique` |
 
+On 2026-10-23, with value parameters, other level profiles and
+declarations without a code binding realised (§5.1). This was the first
+sweep since codata landed:
+
+| | declarations | result |
+|---|---|---|
+| export | 54 modules, 3921 bindings | 3833 exported; refused: 86 for codata's `M` ([export-codata-m](../issues/export-codata-m.md)), 2 that mention a refused one; no tier-1 instance refused |
+| wide, Lean kernel route | 3841 definitions (the 3833 and the target-only inductives, helpers and eliminators beside them) | all accepted but the 16 in `utf8` (§5.4) and `itree_state::ITree::returned_of_trace`, the eta-long gap of §5.2 at a Σ with an `sEq` component; no axioms |
+| slice (now with a value-parameter inductive and `Seq<Type>`), Lean, both routes | 67 | all accepted |
+| slice, Coq 8.18 | | all accepted; the sweep still stops at `Bool::is_true_unique` |
+
 The probes (`crates/export/probes/`) are the evidence behind §3 and §5.1. They
 are not part of `scripts/test`, because the suite does not assume Lean or
 Rocq is installed. The design keeps that so: rechecking in a target is an
@@ -723,7 +767,8 @@ whole-library sweep (§7) added two:
    `ordered_field`, `rat` and `creal` inside the rails. Closed
    2026-10-22: `⌊·⌋` leaves the projections (§5.6).
 7. [export-inductive-coverage](../issues/export-inductive-coverage.md):
-   tier-2 inductives and level-polymorphic uses as native inductives.
+   value parameters and other level profiles as native inductives. Closed
+   2026-10-23 (§5.1); tier 2 already exported through `W`.
 
 ## 11. Decisions (Minus, 2026-10-21)
 

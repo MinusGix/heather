@@ -5,7 +5,7 @@ labels: [translation,export]
 area: heather-in-lean-coq
 milestone: [export-fragment]
 created: 2026-10-20
-updated: 2026-10-21
+updated: 2026-10-23
 ---
 
 The prototype exporter (`crates/export`) is syntax-directed and prints
@@ -94,3 +94,13 @@ declarations need nothing from the target's unifier.
   typed pass (Rocq's `is_true_unique`); the spelling cost
   ([[export-spelling-cost]]) closed 2026-10-22 by leaving projections
   unspelled.
+- 2026-10-23: 2026-10-23: a second witness for the eta-long gap.
+  `itree_state::ITree::returned_of_trace` exports now that `Trace`'s value
+  parameter is realised ([[export-inductive-coverage]]). Lean's kernel rejects
+  it at a `sup` label: the label is a bound payload variable `x` of type
+  `Σ(sEq(Nat; 11; 11)). Σ(E.Cmd). Unit`, and the expected label is that same
+  payload eta-long, `⟨srefl, ⟨fst (snd x), tt⟩⟩`. The domain is not a closed
+  singleton, since it has one relevant component, so the prototype's
+  canonical-element rule does not reach it. The typed pass's "through `Σ`s
+  whose components need it" is the fix: write a variable at such a Σ as a pair
+  of its singleton components' canonical elements and its other projections.
