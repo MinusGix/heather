@@ -127,7 +127,7 @@ const B_TO_B: ITy = ITy::Arrow(&EL_B, &EL_B);
 
 /// The vocabulary, one entry per Rust schema in `crates/elab/src/vec.rs` (and
 /// `nth`, whose schema is kernel-side, `term.rs`'s `nth`). All four slots now
-/// have templates in `lib/vec_code.hthr`; `vec.tabulate` and `vec.nth` waited
+/// have templates in `lib/lang/vec_code.hthr`; `vec.tabulate` and `vec.nth` waited
 /// on a surface spelling for `Fin` and its index constructors
 /// (`issues/surface-fin-indexing.md`), and their specs living here ahead of
 /// that round is what let it add a template and not a third dispatch pattern.

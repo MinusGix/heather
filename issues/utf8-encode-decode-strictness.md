@@ -8,7 +8,7 @@ updated: 2026-09-18
 
 Round 2 of [[string-char-spec-types]] closed `decode(encode(s)) = Some(s)`,
 `encode_injective`, `encode_append` and `toString_ofString`
-(`lib/std/utf8.hthr`) but not the converse,
+(`lib/std/text/utf8.hthr`) but not the converse,
 
 ```heather
 theorem encode_decode(bytes: List<BitVec(8)>, s: String, p: decode(bytes) = Some(s)):
@@ -44,7 +44,7 @@ unchanged: `class_of(b)` is still computed inside the body.
 ## Log
 
 - 2026-09-18: Closed: `encode_decode` and, with it, `ofString_toString` (`bytes_injective`,
-  `decode_toString`) landed in `lib/std/utf8.hthr`; the decoder is not weakened.
+  `decode_toString`) landed in `lib/std/text/utf8.hthr`; the decoder is not weakened.
   The route as written was half right. The hoist was not taken — computing all
   four tails per byte is exponential in the byte count unless the evaluator is
   lazy about unused arguments, and nothing should depend on that. What worked is

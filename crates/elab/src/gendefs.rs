@@ -2195,7 +2195,7 @@ impl Elaborator {
         // arity's case tree keeps its inline annotations: respelling them
         // moved no miss and cost evaluator steps (the δs are paid wherever
         // the arity is *computed*, not only where it is compared).
-        // Measured on `lib/ir_v1.hthr` + `lib/certgen_code.hthr`, 2026-10-03.
+        // Measured on `lib/certgen/ir_v1.hthr` + `lib/certgen/certgen_code.hthr`, 2026-10-03.
         let scode = match self.register_spine_codes(ind, d_ty, l, span) {
             Some(named) => named,
             None => {

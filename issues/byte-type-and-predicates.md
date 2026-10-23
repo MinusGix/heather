@@ -21,7 +21,7 @@ methods, so the program reads `b.is_newline()` and `b.is_space()`.
 
 Questions to settle:
 
-- **`Char` or a byte.** `Char` (`lib/std/char.hthr`) is a Unicode scalar, so
+- **`Char` or a byte.** `Char` (`lib/std/text/char.hthr`) is a Unicode scalar, so
   reading input as `Char` presumes a decoder (UTF-8 or UTF-32) in front of the
   step. GNU `wc` under `LC_ALL=C` counts bytes, and so does the claim. The
   likely answer is a byte type for byte programs and `Char` for decoded text,

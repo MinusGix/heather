@@ -7,7 +7,7 @@ updated: 2026-10-17
 ---
 
 Define the inverse of a regular Cauchy real apart from zero
-(`lib/std/creal.hthr`), with `inv_respects` and `mul_inv`, and negative
+(`lib/std/num/creal.hthr`), with `inv_respects` and `mul_inv`, and negative
 controls at a zero argument.
 
 A real apart from zero carries a gap: from some index s on, its terms stay

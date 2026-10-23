@@ -8,7 +8,7 @@ code". Round pattern as usual: this document first, the implementation against
 
 Context it builds on, and does not restate: the transcriber round
 (`docs/certgen-transcriber-in-language-design.md`) moved the *body* half of the
-fragment definition into `lib/certgen_code.hthr`, leaving the signature half in
+fragment definition into `lib/certgen/certgen_code.hthr`, leaving the signature half in
 Rust (`certgen.rs`'s `marked_body`, where peeling the Lam spine doubles as the
 `Nat → … → Nat` check — its §5 table files that under "a fact about the
 *declaration*"). The reflection issue names that split a drift vector: the two
@@ -57,7 +57,7 @@ reads the elaborator's own global table and applies `shift_global` by the Ψ
 growth since the binding (the same `v + 1` convention `Defs::body` uses —
 prefix-scoped kernel data used at the end of Ψ). The opaque-globals kernel
 round replaces that *body* with `u^δ` unfolding-for-analysis under its ch. 07
-obligations; `lib/certgen_code.hthr` and the slot signature do not change,
+obligations; `lib/certgen/certgen_code.hthr` and the slot signature do not change,
 because they only ever see a `TyCode(g)` value. That is requirement (1) of the
 issue discharged by construction: the analyzer cannot observe where the code
 came from.
@@ -69,7 +69,7 @@ untrusted-generator architecture. No level polymorphism is added.
 
 ## 2. The in-language checker
 
-**Decision: the checker joins `lib/certgen_code.hthr`** (the transcriber
+**Decision: the checker joins `lib/certgen/certgen_code.hthr`** (the transcriber
 design's §4 reason 3 — the whole fragment definition in one readable file —
 is exactly what this round is for; a sibling file would re-open the two-homes
 problem one directory closer).
@@ -219,7 +219,7 @@ their existing wording.
 - **Readback and emission**: unchanged homes (transcriber design §5's table).
 
 *Widened 2026-08-12* (`docs/certgen-non-nat-embeddings-design.md` §5): the
-signature rule is still whole in `lib/certgen_code.hthr`, but `SigOut` is no
+signature rule is still whole in `lib/certgen/certgen_code.hthr`, but `SigOut` is no
 longer its own accumulator — the walk runs on an `SA` state type and the
 verdict is `SigYes(arity, res)`, where `res = 0` is a `Nat` result and
 `res = k ≥ 1` an enumeration with `k` constructors. `sig_pi`'s domain rule is
@@ -229,7 +229,7 @@ result type by *name* (an identifier no reflected form carries) and the two
 verdicts must agree on the constructor count as well as on the arity.
 
 After this round the fragment definition reads off one file:
-`lib/certgen_code.hthr` decides the signature (`check_sig`) and the body
+`lib/certgen/certgen_code.hthr` decides the signature (`check_sig`) and the body
 (`transcribe`); Rust contributes coordinates, names, and the kernel-checked
 emission. The drift vector the issue names is closed for v1's fragment; it
 reopens only if a new fragment feature lands with a Rust-side check, which
@@ -262,7 +262,7 @@ stage 1 of `issues/retire-rust-transcriber.md` forbids.
 2. `match code` on a `TyCode` scrutinee elaborates to `ElimCodeTy` and
    computes through the `ty_*` branches; existing `quotation.rs` diagnostics
    unchanged.
-3. `lib/certgen_code.hthr` gains `SigOut`, `sig_pi`, `sig_finish`, their refl
+3. `lib/certgen/certgen_code.hthr` gains `SigOut`, `sig_pi`, `sig_finish`, their refl
    pins, and the `check_sig` shell claiming `certgen.check_sig`; the file
    still elaborates whole (its theorems are its own acceptance).
 4. Positives: `add`, `dbl`, `third3` byte-identical to the Rust path; `seven`

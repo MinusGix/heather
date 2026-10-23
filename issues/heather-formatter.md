@@ -227,7 +227,7 @@ names are bare `String`s with no spans — `class C<A>`, `inductive I<A>`, and
     invariant catches it; it needed `TokenRole::OperatorName`, which is the
     second customer of the general role table and vindicates building one.
   - **The generated certificate module had to be formatted at its source.**
-    `lib/function_ir_certificates.hthr` is written by a test that also asserts
+    `lib/native/function_ir/function_ir_certificates.hthr` is written by a test that also asserts
     it is current, so formatting it in place would have failed on the next
     regeneration. The generator now emits through `format_source`, which is the
     same "generated and hand-written source must not disagree" point the

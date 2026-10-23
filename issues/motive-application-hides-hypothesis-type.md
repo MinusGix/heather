@@ -11,7 +11,7 @@ a hand-written induction principle expensive to *use*, as opposed to expensive t
 state.
 
 `Int` is a non-recursive inductive, so nothing recurses on an integer and every
-law that needs induction goes through `lib/std/int.hthr`'s `int_ind`, whose motive
+law that needs induction goes through `lib/std/num/int.hthr`'s `int_ind`, whose motive
 is a value parameter `P: Int -> Type`. In an arm written as
 
 ```heather
@@ -35,7 +35,7 @@ All three of these check, and the round used the first:
 
 1. `@cong_int(isucc, add(a, OfNat(k)), add(OfNat(k), a), ih)` — the implicits
    spelled positionally. Costs one restatement of `ih`'s type per rewrite; **10
-   sites** in `lib/std/int.hthr` (`add_comm`, `add_assoc`, `neg_add`,
+   sites** in `lib/std/num/int.hthr` (`add_comm`, `add_assoc`, `neg_add`,
    `mul_add_distr` and the three cancellation/`mul_isucc` chains).
 2. A named helper theorem per arm, taking `ih` as an ordinary parameter — the
    conversion check at the call site accepts the redex, and inside the helper the
@@ -77,7 +77,7 @@ Three properties keep it from being a widening: learn-only twice (`unify_ty` rec
 
 **The narrower alternative (§The fix, second paragraph) is declined, and its stated benefit turned out not to exist.** It fixes a spelling rather than a class — the same redex arrives unannotated from a `let`, from a function returning `P(x)`, and from a `match` arm at a synthesized motive, none of which has an annotation to promote. And its second argument, that the context entry would then print as written, is empty: goal-hole entries are *already* displayed reduced (`display_type`'s reader stage), so a `?step` in the issue's own arm lists the equation either way. Not worth having as ergonomics; the verdict is decline, not defer.
 
-**The library, and a correction to this issue's own count.** `lib/std/int.hthr` now contains **no `@` call at all** — all 22 `@cong_int(f, lhs, rhs, p)` spellings are terse. But only **eight** of them were this defect (`add_comm`, `add_assoc`, `neg_add`, `mul_add_distr`, two arms each). The other fourteen — the cancellation and `mul_isucc`/`mul_ipred` chains this issue counted toward its ten — rewrite by an ordinary lemma call at a real `Id`, so nothing was ever hidden there; verified by re-checking the module with the reduction disabled, where all fourteen check terse on the OLD elaborator. They were spelled out for consistency with the arms that had to be, which is how a tax spreads past its own sites and why the filed count was high. [[congruence-by-anti-unification]]'s "23 of 58" is corrected on that issue.
+**The library, and a correction to this issue's own count.** `lib/std/num/int.hthr` now contains **no `@` call at all** — all 22 `@cong_int(f, lhs, rhs, p)` spellings are terse. But only **eight** of them were this defect (`add_comm`, `add_assoc`, `neg_add`, `mul_add_distr`, two arms each). The other fourteen — the cancellation and `mul_isucc`/`mul_ipred` chains this issue counted toward its ten — rewrite by an ordinary lemma call at a real `Id`, so nothing was ever hidden there; verified by re-checking the module with the reduction disabled, where all fourteen check terse on the OLD elaborator. They were spelled out for consistency with the arms that had to be, which is how a tax spreads past its own sites and why the filed count was high. [[congruence-by-anti-unification]]'s "23 of 58" is corrected on that issue.
 
 Tests: `crates/elab/tests/argument_type_reduction.rs`, 8 — the headline arm, the same hypothesis under `sym` (nested in inference position), an already-normal hypothesis on the unchanged path, an OPEN element type (`list_ind` at `List<A>` with `A` a theorem parameter), the composition with [[goal-motive-by-scrutinee-abstraction]]'s synthesis (a motive-less `match` whose expected type is itself an applied motive, each arm filling implicits from the step hypothesis), and three negative controls: an underdetermined `?f` still refused with its own message, a redex whose normal form is `Nat` and not an `Id` refused rather than misfilled or looping, and a hypothesis reduced at the wrong endpoints still refused.
 

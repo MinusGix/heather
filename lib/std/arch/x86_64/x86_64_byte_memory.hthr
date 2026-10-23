@@ -1,6 +1,6 @@
 // x86_64's memory as the byte model (issues/memory-model-machine-instances.md;
 // docs/byte-memory-design.md §6): the machine's access records instantiated
-// from `lib/std/memory.hthr`, and a process stack built from a data region
+// from `lib/std/machine/memory.hthr`, and a process stack built from a data region
 // by proof instead of assumed.
 //
 // A machine memory (`X86Memory(x)`) is cells and permissions, and a proof

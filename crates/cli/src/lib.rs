@@ -5,8 +5,8 @@
 //! `heather` is a binary, and the loader was a private module of it until the
 //! frontend benchmark corpus needed the *same* closure the CLI computes
 //! (`crates/elab/benches/frontend/fixtures/corpus.rs`). It had been carrying
-//! a hand-written list of `lib/ir_v1.hthr`'s imports instead, which drifted
-//! the day `lib/std/bool.hthr` gained `import logic;`
+//! a hand-written list of `lib/certgen/ir_v1.hthr`'s imports instead, which drifted
+//! the day `lib/std/core/bool.hthr` gained `import logic;`
 //! (issues/frontend-bench-ir-closure-stale.md): the closure no longer
 //! satisfied its own imports, every module of it failed, and the corpus timed
 //! an elaborator that was not doing the work.

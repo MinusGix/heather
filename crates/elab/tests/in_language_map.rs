@@ -1,5 +1,5 @@
 //! The first in-language derived artifact, end to end
-//! (docs/in-language-map-design.md §7): `lib/vec_code.hthr`'s `map_code`
+//! (docs/in-language-map-design.md §7): `lib/lang/vec_code.hthr`'s `map_code`
 //! kernel-checks at `Layer::Meta`, the evaluation hook routes `.map` through
 //! it, and the emitted terms are convertible with the Rust `vec::map`
 //! oracle's — adequacy, not just typing. Fixtures follow
@@ -15,7 +15,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
 
-const LIB: &str = include_str!("../../../lib/vec_code.hthr");
+const LIB: &str = include_str!("../../../lib/lang/vec_code.hthr");
 
 fn elab(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");

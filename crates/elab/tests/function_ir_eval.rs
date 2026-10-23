@@ -10,7 +10,7 @@ use crate::read_loop_fixture::checker_with;
 const EXAMPLES: &str = include_str!("fixtures/function_ir_eval_examples.hthr");
 
 fn checker() -> heather_elab::Elaborator {
-    checker_with(&[("function_ir_eval", include_str!("../../../lib/function_ir_eval.hthr"))])
+    checker_with(&[("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr"))])
 }
 
 #[test]

@@ -14,7 +14,7 @@ the answer changed what the round could sensibly build.
 ## 1. The diagnosis
 
 Each of the 84 sites was rewritten to `cong(p)` — one at a time, so that the
-error is attributable — and the failure classified. `lib/std/int.hthr`'s 54
+error is attributable — and the failure classified. `lib/std/num/int.hthr`'s 54
 sites, the largest and most uniform family:
 
 | outcome | sites | meaning |
@@ -189,7 +189,7 @@ both sides and yield `OfNat(□)`.
 
 ## 4. What landed, and the honest yield
 
-At `lib/std/int.hthr` the three buckets went from (38 refused before the
+At `lib/std/num/int.hthr` the three buckets went from (38 refused before the
 trigger, 16 refused by the LGG, 0 accepted) to (23, 27, 4): the deferral moved
 fifteen sites into checking position, where four of them generalize and eleven
 join the wall of §1.2. Across the whole library, 7 of 84 sites accept the terse

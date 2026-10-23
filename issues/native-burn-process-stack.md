@@ -27,7 +27,7 @@ which the rebuild does not reuse.
   process tests, and the command warm-up in `scripts/test`.
 - Delete `examples/x86-native/{wc,wc_l,tr,tr_s,tr_d}.hthr`.
 - Salvage pure specs first: the decimal formatting spec moves to
-  `lib/std/decimal.hthr`; the counting lemmas join the filter fold in
+  `lib/std/text/decimal.hthr`; the counting lemmas join the filter fold in
   `stream_filter`.
 - Docs of the burned layers get a one-line header pointing here; their open
   issues close as not planned with a link.
@@ -44,4 +44,4 @@ beside another native round. Undo is the tag.
 
 ## Log
 
-- 2026-10-21: Done in this round's PR. Deleted: 18 elf64_* modules, command_program, filter_program, decimal_line, field_line; the read-loop/read-filter/command producers and evaluate.rs; filter_step.rs; 17 elab process tests and their warm-ups; native_wc/native_tr/native_filter/native_read_loop; the five stdin examples. Kept (corrected in design §3.1): elf64_io (x86_64_fetched_code imports it), elf64_calls, linux_x86_64_fetch, x86_64_fetch_block, filter_step_piece, order.rs, support.rs: all on the call path or the structured generator, so B2's. Salvaged: lib/std/decimal.hthr; the counting fold lemmas joined stream_filter. crates/elab/tests/native_foundation.rs checks x86_64_asm, stream_filter, filter_step_piece and decimal, which nothing else imports now. Full scripts/test on the cloud box, warm stores: 3433 passed, 0 failed, 5 ignored, ~5 min wall (it was ~13.5 min, 3229 passed before the command rounds' tests were added to it and these removed). The native-v0 tag (189659d) could not be pushed from the cloud box; Minus pushes it.
+- 2026-10-21: Done in this round's PR. Deleted: 18 elf64_* modules, command_program, filter_program, decimal_line, field_line; the read-loop/read-filter/command producers and evaluate.rs; filter_step.rs; 17 elab process tests and their warm-ups; native_wc/native_tr/native_filter/native_read_loop; the five stdin examples. Kept (corrected in design §3.1): elf64_io (x86_64_fetched_code imports it), elf64_calls, linux_x86_64_fetch, x86_64_fetch_block, filter_step_piece, order.rs, support.rs: all on the call path or the structured generator, so B2's. Salvaged: lib/std/text/decimal.hthr; the counting fold lemmas joined stream_filter. crates/elab/tests/native_foundation.rs checks x86_64_asm, stream_filter, filter_step_piece and decimal, which nothing else imports now. Full scripts/test on the cloud box, warm stores: 3433 passed, 0 failed, 5 ignored, ~5 min wall (it was ~13.5 min, 3229 passed before the command rounds' tests were added to it and these removed). The native-v0 tag (189659d) could not be pushed from the cloud box; Minus pushes it.

@@ -15,7 +15,7 @@
 //!   parse the fixture times itself) and min-tracked across rounds like the
 //!   total.
 //! - **Guards.** Frontend work is orders of magnitude more expensive than a
-//!   kernel tree walk (`lib/ir_v1.hthr` is ~a minute, and an uncapped deep
+//!   kernel tree walk (`lib/certgen/ir_v1.hthr` is ~a minute, and an uncapped deep
 //!   check once reached ~22 GB — CLAUDE.md), so every case declares a budget:
 //!   a run over 3× it is not sampled, and the rest of the family — always the
 //!   *larger* sizes — is skipped rather than attempted.
@@ -50,7 +50,7 @@ thread_local! {
     /// Set by the smoke test (`crates/elab/tests/frontend_bench_smoke.rs`),
     /// never by the bench. **Fixture construction is the expensive part** of
     /// this suite — every generated source is validated by elaborating it,
-    /// and the corpus validates `lib/ir_v1.hthr`, which is a minute on its
+    /// and the corpus validates `lib/certgen/ir_v1.hthr`, which is a minute on its
     /// own. In smoke mode a family builds only its smallest non-heavy case,
     /// which is all a rot detector needs and is the difference between a
     /// 95-second test and a 3-second one.
@@ -247,7 +247,7 @@ impl Cfg {
 }
 
 /// Rounds actually taken for a case whose single round costs `round_ns`.
-/// Seven rounds of `lib/ir_v1.hthr` is seven minutes; three is enough to see
+/// Seven rounds of `lib/certgen/ir_v1.hthr` is seven minutes; three is enough to see
 /// a 1.25× move, and the report prints the count so a two-round number is
 /// never mistaken for a seven-round one.
 fn samples_for(cfg: &Cfg, one_round_ns: u64) -> u32 {

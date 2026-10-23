@@ -41,7 +41,7 @@ declined with its reason.
 
 ## Log
 - 2026-10-21: The generated-definitions bullet is now measured, by the first
-  real client (`lib/std/itree.hthr`, `docs/itree-core-round.md`). Each law
+  real client (`lib/std/itree/itree.hthr`, `docs/itree-core-round.md`). Each law
   proved by induction over `ITree<R>(E)` (a four-arm `match` at a motive
   computed by a large elimination, `ITree::Same`) costs seconds of kernel gate
   at width one, and a callgrind profile of one of them (`bind_ret_r`) puts
@@ -57,7 +57,7 @@ declined with its reason.
   `El(app(D#canon^δ; ā, t))` at that profile (inline elsewhere). The size
   probe that chose it: for a four-constructor tree the inline predicate is
   about 97% of `⟦D⟧`'s spelling, `S` and `P` the rest. On
-  `lib/std/itree.hthr` (cold, width one, one machine) the whole check went
+  `lib/std/itree/itree.hthr` (cold, width one, one machine) the whole check went
   from about two minutes to under ten seconds and the kernel gate fell by
   more than an order of magnitude, with the query, miss and step counts
   falling in proportion; `scripts/perf ab` numbers are on the PR. Counts

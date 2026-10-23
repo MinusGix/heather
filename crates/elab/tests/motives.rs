@@ -110,7 +110,7 @@ fn calc_steps_still_parse() {
 // expression grammar. This is what an IH-generalizing induction needs: the
 // motive Π-quantifies the arguments that vary along the recursion, and the
 // arms λ-wrap (`issues/ih-generalization.md`). Without it, `fuel_monotone`
-// (`lib/ir_v1.hthr`) cannot be stated, let alone proved.
+// (`lib/certgen/ir_v1.hthr`) cannot be stated, let alone proved.
 #[test]
 fn a_motive_body_may_be_a_function_type() {
     ok(&format!(

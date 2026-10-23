@@ -188,13 +188,13 @@ fn open_element_types() {
 }
 
 const ITREE_MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("itree", include_str!("../../../lib/std/itree.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("itree", include_str!("../../../lib/std/itree/itree.hthr")),
 ];
 
 // Value parameters (`docs/inductive-value-parameters.md`): the interaction

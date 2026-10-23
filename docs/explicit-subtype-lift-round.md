@@ -6,7 +6,7 @@ described below remains its implementation layer.
 
 The [positive addition example](showcase/lift_positive.hthr) uses a named
 Heather code template to construct its wrapper. The templates live in
-[`lib/subtype_code.hthr`](../lib/subtype_code.hthr); no subtype-specific
+[`lib/lang/subtype_code.hthr`](../lib/lang/subtype_code.hthr); no subtype-specific
 construction rule lives in the compiler.
 
 ```heather

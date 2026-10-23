@@ -444,7 +444,7 @@ The reason to move it: a motive body may be a **function type**, and no
 expression is one. An IH-generalizing induction has motive
 `λ z => (env: Val) -> … -> P(z)` — the arms λ-wrap and `ih` is applied at the
 varied arguments (`issues/ih-generalization.md`) — and without this the
-`fuel_monotone` of `lib/ir_v1.hthr` is not statable, never mind provable.
+`fuel_monotone` of `lib/certgen/ir_v1.hthr` is not statable, never mind provable.
 Mechanically: a one-shot `motive_body` flag on the parser, taken by the first
 `lambda()` it reaches, so the motive's own lambda parses its body as a type
 and a lambda *inside* the body is an ordinary expression lambda. The body is

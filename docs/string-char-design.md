@@ -34,7 +34,7 @@ Three decisions:
 ## 2. The types
 
 Both records seal their witness behind propositional truncation, the
-`BoundedList` pattern (`lib/std/bounded_list.hthr`): equality of values is
+`BoundedList` pattern (`lib/std/data/bounded_list.hthr`): equality of values is
 equality of the code (resp. the list) and rebuilding a witness cannot
 disturb it. **Superseded for `Char` by §5.1**: a truncated witness cannot
 refute a decoder, so `valid` is `IsTrue(is_scalar(code))` — relevant, unique,
@@ -42,7 +42,7 @@ and Bool-reflected. The sketch below is the round-1 shape; read §5.1 for the
 witness and §5.5 for what landed.
 
 ```heather
-// lib/std/char.hthr
+// lib/std/text/char.hthr
 fn scalar(code: Nat) → Type { code < 0x110000 ∧ ¬(0xD800 <= code ∧ code < 0xE000) }
 fn scalar_dec(code: Nat) → scalar(code) ∨ ¬scalar(code)     // from the Nat deciders
 instance(code: Nat) Decide<scalar(code)> { dec := scalar_dec(code) }
@@ -63,7 +63,7 @@ the truncation is unpacked (squash is a `Prop`-level witness, so two records
 with equal `code` are equal — the same argument `BoundedList` would make).
 
 ```heather
-// lib/std/string.hthr
+// lib/std/text/string.hthr
 record String { chars: List<Char> }
 designation ++ at String := append
 fn String::len(self s: String) → Nat
@@ -163,7 +163,7 @@ Two spellings the implementation settled (2026-09-18):
 
 ## 4. Round 1 scope (this round)
 
-1. `lib/std/char.hthr`, `lib/std/string.hthr` as in §2, in stdlib style
+1. `lib/std/text/char.hthr`, `lib/std/text/string.hthr` as in §2, in stdlib style
    (`docs/stdlib-style.md`); exports from `lib/std` follow the existing
    modules' import discipline.
 2. Lexer, AST and parser forms for both literals, with lexer unit tests
@@ -237,7 +237,7 @@ bounded by the width. Bit index 0 is the least significant bit, so a
 continuation byte `10xxxxxx` is `concat(6, 2, payload, from_bits(2, [False, True]))`.
 
 ```heather
-// lib/std/utf8.hthr   (imports: logic, nat, bool, list, option, pair, bitvec, char, string)
+// lib/std/text/utf8.hthr   (imports: logic, nat, bool, list, option, pair, bitvec, char, string)
 fn encode_char(c: Char) → List<BitVec(8)>     // 1–4 bytes, branch on leb(…) against 0x80, 0x800, 0x10000
 fn encode(s: String) → List<BitVec(8)>        // concat_map of encode_char over s.chars
 ```
@@ -366,7 +366,7 @@ implementation had to settle, and what a later round should read first:
 ### 5.6 As landed, theorems 7–8 (2026-09-18)
 
 Theorem 7 (`encode_decode`) and theorem 8 (`ofString_toString`, through
-`bytes_injective` and `decode_toString`) closed in `lib/std/utf8.hthr`; the
+`bytes_injective` and `decode_toString`) closed in `lib/std/text/utf8.hthr`; the
 decoder was not weakened. Against §5.5's route:
 
 - **The hoist was not taken; a named dispatch after the fact was.** Hoisting

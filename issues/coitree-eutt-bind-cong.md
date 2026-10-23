@@ -8,7 +8,7 @@ created: 2026-10-22
 updated: 2026-10-22
 ---
 
-`Eutt` (`lib/std/coitree_eutt.hthr`) has the monad laws through `of_bisim`,
+`Eutt` (`lib/std/itree/coitree_eutt.hthr`) has the monad laws through `of_bisim`,
 but not the congruence: `t ≈ u` and `h1(a) ≈ h2(a)` for every `a` give
 `bind(t, h1) ≈ bind(u, h2)`. A handler proof up to taus wants it next.
 

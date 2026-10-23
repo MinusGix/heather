@@ -91,12 +91,12 @@ eight are 4.08 s of the family's 4.72 s, and they are this round.
 
 ## 2. The unit: a stack address is inside the file's window
 
-`call_memory_read` (`lib/elf64_calls.hthr`) is
+`call_memory_read` (`lib/std/os/linux/elf64_calls.hthr`) is
 
     call_read_choice(static_elf64_read(memory.file, address),
                      stack_page(address), memory.stack(address))
 
-and `static_elf64_read` (`lib/elf64_load.hthr`) decides membership by a 48-bit
+and `static_elf64_read` (`lib/std/os/linux/elf64_load.hthr`) decides membership by a 48-bit
 window test, `is_zero_bits(48, bxor(48, drop_low(16, 48, address), ofNat(48, 64)))`,
 and then indexes the file list, `file.nth(toNat(16, take_low(16, 48, address)))`.
 The window is the whole 64-KiB range at 0x400000 — and the owned stack page at
@@ -206,7 +206,7 @@ interface is not weakened:
    `summary_post`'s contract at `<CallMemory, BitVec(8)>(stack_observation, …)`,
    and supply `memory_effects` from `word_stack_effect_8` (frame branch) or
    `writes_only_equal(stack_observation, NoWrites, …, refl)` (no-frame branch).
-   **`lib/elf64_calls.hthr` already proves `word_stack_effect_0 … _8`** — the
+   **`lib/std/os/linux/elf64_calls.hthr` already proves `word_stack_effect_0 … _8`** — the
    `stack_observation` twins the brief asked whether existed. No new library
    lemma is needed for this step.
 3. `summary_post` gains a conjunct `after.memory.file = before.memory.file`.
@@ -219,7 +219,7 @@ interface is not weakened:
    `trans(<instance>_callee_memory_effects(…)(lit, outside), refl)` — the
    `cong_fn(call_read_value, …)` wrapper disappears with the `Option`.
 6. Anywhere the `call_memory_read`-level fact is still wanted, derive it with a
-   **new library lemma** in `lib/elf64_calls.hthr`:
+   **new library lemma** in `lib/std/os/linux/elf64_calls.hthr`:
 
        theorem memory_writes_of_stack_writes(before, after: CallMemory,
            writes: BitVec(64) → Type, files: after.file = before.file,
@@ -384,7 +384,7 @@ emitted only in the `twice` configuration and it deliberately demonstrates the
 *full* memory observation of a dead frame slot, so do not simply restate it
 over `stack_observation` — that would weaken what it shows. If it is worth
 0.2 s, the honest route is a `list::nth` past-the-end lemma
-(`xs.len() ≤ i → xs.nth(i) = None`, a six-line induction in `lib/std/list.hthr`)
+(`xs.len() ≤ i → xs.nth(i) = None`, a six-line induction in `lib/std/data/list.hthr`)
 plus a `call_memory_read` shortcut keyed on it; the probe says the length is
 5 997 steps against the walk's 31 493, so that route is worth about 5× on the
 unit, not 19×.
@@ -395,7 +395,7 @@ For the implementing pass's first hour. **If one of these refutes the design,
 STOP and report before working around it.**
 
 1. `grep -n "call_memory_read\|stack_observation" crates/cli/src/native/calls.rs
-   lib/elf64_calls.hthr` and confirm `callee_memory_effects` has exactly one
+   lib/std/os/linux/elf64_calls.hthr` and confirm `callee_memory_effects` has exactly one
    consumer (`certify_return_target`'s `from_contract` branch). If it has more,
    §3.3 step 5 is incomplete and each other consumer needs lemma (6).
 2. Re-run `probes/t_chain_contract_read` and `probes/t_chain_contract_stack`
@@ -614,7 +614,7 @@ tests); it passes, so `stale_summary`, `wrong_summary_interface`,
 
 ### 9.6 Files
 
-- `lib/elf64_calls.hthr`: `memory_writes_of_stack_writes`, proved by congruence
+- `lib/std/os/linux/elf64_calls.hthr`: `memory_writes_of_stack_writes`, proved by congruence
   of `call_read_choice` in its file and stack arguments, checked open.
 - `crates/cli/src/native/calls.rs`: `emit_leaf_summary`'s `summary_post`,
   footprint proof and `ensures`; `certify_callee_contract`'s

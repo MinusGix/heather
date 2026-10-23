@@ -64,8 +64,8 @@ the verdict logic is pinned.
     `docs/showcase/calc_text.hthr` is not in the corpus, so it needs `--file`.
 
   Verified end to end, not just by selftest: a probe declaration appended to
-  `lib/std/nat.hthr`, `--heather target/release/heather`, two interleaved samples.
-  One binary hash on both sides, the corpus auto-picked `lib/std/nat.hthr`, and
+  `lib/std/num/nat.hthr`, `--heather target/release/heather`, two interleaved samples.
+  One binary hash on both sides, the corpus auto-picked `lib/std/num/nat.hthr`, and
   the counters moved by exactly what one declaration costs (`decls_gated`
   512 → 514, `check_terms` +1, `cache_hashes` +1, 21 columns identical) while every
   seconds row correctly returned `SPREAD EXCEEDS THE DELTA — not a result` at that

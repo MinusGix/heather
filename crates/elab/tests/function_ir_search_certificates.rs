@@ -12,7 +12,7 @@ fn checker() -> heather_elab::Elaborator {
 fn search_body_uses_shared_narrow_physical_certificates() {
     use heather_elab::function_ir_source::{reflect_elaborated_structured, generate_structured_source_expansion};
     let mut elab = checker();
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
     elab.elab_module_source("readonly_loops", source).unwrap_or_else(|e| panic!("{}", e.render(source)));

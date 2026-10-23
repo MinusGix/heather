@@ -30,8 +30,8 @@ Line references are `crates/elab/src/certgen.rs` unless said otherwise.
 
 ## 1. What Round A is, and the two things it is not
 
-**Is.** `lib/certgen_cert.hthr`: an inductive `Cert` whose constructors are the
-kit lemmas of `lib/ir_v1.hthr` (`ret_conv`, `letcon_conv`, `letcall_conv`,
+**Is.** `lib/certgen/certgen_cert.hthr`: an inductive `Cert` whose constructors are the
+kit lemmas of `lib/certgen/ir_v1.hthr` (`ret_conv`, `letcon_conv`, `letcall_conv`,
 `letmatch_conv`), an inductive `CertOut` for a whole invariant, and the `fn`s
 that fold an `Ir` — the transcriber's own output value — into one. Plus, in
 Rust, a readback and a renderer that turn that value into the proof text, byte
@@ -70,7 +70,7 @@ One constructor per kit lemma, with the exception that `letcall_conv` gets
 **two** — and that split is the round's one genuinely load-bearing decision, so
 it is justified below rather than in passing.
 
-Field by field, against the lemma signatures (`lib/ir_v1.hthr` ll. 841–905) and
+Field by field, against the lemma signatures (`lib/certgen/ir_v1.hthr` ll. 841–905) and
 against what the Rust fold used to spell:
 
 | `Cert` | lemma | fields ↔ arguments |
@@ -163,7 +163,7 @@ Concretely, what the readback supplies and the library cannot:
 | the ih application | `gih(a, VNil)` | the binder `gih` is one the emitted proof text binds (`RESERVED`, l. 134). |
 | a foreign certificate | `add_gen_conv_in_mul(a, gk, VNil)` | the conv-name convention (l. 602) and the callee's own recursion index. |
 | `letmatch_conv`'s `arms` | `Arm(mul_gen_arm_zero(), Arm(mul_gen_arm_succ(), NoArm))` | the arms are spelled by *generated fn name*, not as the `Ir` value they equal. This is the one place where a structural argument is nevertheless a name. |
-| closure indices | `LetCall(1, …)` inside a `rest` | the walker numbers callees in its own coordinate system (0 = self, foreign tags verbatim — `lib/certgen_code.hthr` convention 3); the program closure is computed downstream, from names. |
+| closure indices | `LetCall(1, …)` inside a `rest` | the walker numbers callees in its own coordinate system (0 = self, foreign tags verbatim — `lib/certgen/certgen_code.hthr` convention 3); the program closure is computed downstream, from names. |
 
 And what the library owns, which is everything else: which lemma applies at
 each instruction, the order of the chain (which is the `rest` argument, §2),
@@ -188,9 +188,9 @@ not a decision it makes. What Rust adds to each pushed slot is its *name*.
 
 ## 4. The fold
 
-`lib/certgen_cert.hthr`, ordinary program-layer Heather over `lib/ir_v1.hthr`'s
+`lib/certgen/certgen_cert.hthr`, ordinary program-layer Heather over `lib/certgen/ir_v1.hthr`'s
 declarations prefix (`Ir`, `Refs` and `pick_arm` come from there — the file
-imports nothing and redeclares nothing, exactly as `lib/certgen_code.hthr`
+imports nothing and redeclares nothing, exactly as `lib/certgen/certgen_code.hthr`
 does).
 
 ```heather
@@ -225,7 +225,7 @@ which is where that shape check remains.)
 
 **Termination** is the ordinary structural one: `cert_chain` recurses on the
 `rest` field of the instruction it matched, which is how every `Ir`-consuming
-function in `lib/ir_v1.hthr` is written.
+function in `lib/certgen/ir_v1.hthr` is written.
 
 ## 5. Invocation: no slot, an ordinary application
 
@@ -301,17 +301,17 @@ Staying in Rust, and named honestly rather than fudged:
 
 ## 7. Cost, and which file
 
-`lib/certgen_cert.hthr`, a file of its own, on two criteria:
+`lib/certgen/certgen_cert.hthr`, a file of its own, on two criteria:
 
 - **Elaboration cost per test session.** The new code is inductives and `fn`s —
   no `match code`, so no `rec_ga` gate and no `RUST_MIN_STACK` exposure. Putting
-  it in `lib/certgen_code.hthr` would tie it to that file's two shells, which
+  it in `lib/certgen/certgen_code.hthr` would tie it to that file's two shells, which
   are the expensive thing every certgen test already pays for once and which the
   perturbation controls have to keep to one per thread
   (`crates/elab/tests/certgen.rs` header, `issues/certgen-harness-cost.md`).
   A separate file keeps the fold's own perturbation control cheap and keeps the
   option of a *fold-only* test that pays for no shell at all.
-- **Subject matter.** `lib/certgen_code.hthr` is the fragment's *definition* —
+- **Subject matter.** `lib/certgen/certgen_code.hthr` is the fragment's *definition* —
   which signatures and bodies transcribe. This file is downstream of that
   question entirely: it consumes an `Ir` and knows nothing about code, markers
   or layers. One artifact, one file, is the same rule the transcriber round
@@ -344,7 +344,7 @@ and still says one `match code` shell per test.)
 Across the axes of `docs/testing-generated-terms.md`, and with the perturbation
 story first because it is the round's point:
 
-1. **The library states its own acceptance**, as `lib/certgen_code.hthr` does:
+1. **The library states its own acceptance**, as `lib/certgen/certgen_code.hthr` does:
    `refl` theorems giving the `Cert` of `dbl`'s and `add`'s IRs (the recursive
    shape, the ih routed to `CIh`), of `mul`'s (the *foreign* call routed to
    `CCall` beside a `CIh` — the one fixture where the two-constructor split is
@@ -364,7 +364,7 @@ story first because it is the round's point:
    `a_perturbed_transcriber_is_refused_by_the_kernel`, and in a **binary of its
    own** (`crates/elab/tests/certgen_cert.rs`): one shell per thread for the
    stack rail, and its own `ulimit -t` for the kit it needs (§7). One edit to
-   `lib/certgen_cert.hthr` — `cert_rebind` rebinding the arm's result at slot 1
+   `lib/certgen/certgen_cert.hthr` — `cert_rebind` rebinding the arm's result at slot 1
    — and the emission must *fail to check* rather than prove anything. It
    arrives as two controls for the same reason the transcriber's did: the
    file's own theorems refuse the mutation at its declaration, and with those
@@ -392,7 +392,7 @@ Round A's value proposition was "a new fragment feature should be absorbable as
 constructor-level edits to `Cert`, in a library file a test can perturb". The
 first fragment feature after it — non-`Nat` result embeddings
 (`docs/certgen-non-nat-embeddings-design.md`) — is the test, and the answer is
-**stronger than the claim**: `lib/certgen_cert.hthr` needed *no* edits at all.
+**stronger than the claim**: `lib/certgen/certgen_cert.hthr` needed *no* edits at all.
 
 Why, stated so the next feature can predict its own answer: a `Cert` describes
 a chain of kit applications over an `Ir`, and the widening changed neither the
@@ -431,7 +431,7 @@ one the parameter position needed; the running score is five features, one
 **Tested a second time, 2026-08-13** (`docs/certgen-ctor-fields-design.md`):
 constructor **fields** at the result type were implemented whole — walker,
 signature checker, rim, end-to-end kernel-checked instance — and
-`lib/certgen_cert.hthr` again needed **zero** edits, verified on the
+`lib/certgen/certgen_cert.hthr` again needed **zero** edits, verified on the
 implementation rather than assumed. Same reason, one step further along: a
 `CCon`'s arguments are a `Refs`, so the fold is already field-count-agnostic,
 and the induction is still over the scrutinized `Nat`. What moved was again the

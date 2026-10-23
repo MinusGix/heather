@@ -2,7 +2,7 @@
 //! (fresh prelude'd elaborator per file, `crates/cli/src/main.rs`).
 //!
 //! No exponent is claimed here. The x-axis is source bytes across unrelated
-//! files, and `lib/ir_v1.hthr` is not "a bigger `lib/vec_code.hthr`" — it is
+//! files, and `lib/certgen/ir_v1.hthr` is not "a bigger `lib/lang/vec_code.hthr`" — it is
 //! a file of deep proofs whose cost is conversion, not size. What the corpus
 //! reports is absolute latency and the **phase split**: how much of the wait
 //! is parsing, how much is the elaborator, how much is the kernel gate
@@ -16,8 +16,8 @@ use crate::harness::{Case, Family};
 
 use super::{fresh_closure_runner, validate_closure};
 
-const VEC_CODE: &str = include_str!("../../../../../lib/vec_code.hthr");
-const IR_V1: &str = include_str!("../../../../../lib/ir_v1.hthr");
+const VEC_CODE: &str = include_str!("../../../../../lib/lang/vec_code.hthr");
+const IR_V1: &str = include_str!("../../../../../lib/certgen/ir_v1.hthr");
 
 fn lib_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib")
@@ -27,7 +27,7 @@ fn lib_dir() -> PathBuf {
 /// root last) — computed by **the CLI's own loader**, not listed here.
 ///
 /// It used to be listed (`bool`, `nat`, `ir_v1`), and the list went stale the
-/// day `lib/std/bool.hthr` gained `import logic;`
+/// day `lib/std/core/bool.hthr` gained `import logic;`
 /// (issues/frontend-bench-ir-closure-stale.md). The failure was quiet in the
 /// worst way: `bool`'s unresolvable import aborts `check_module_source`
 /// *before* the module registers a scope, so `nat` then could not see `bool`
@@ -178,7 +178,7 @@ fn check_file() -> Family {
         ("ir_v1.hthr", "ir_v1.hthr", false, true, 150_000_000_000),
     ] {
         // Heavy cases were *unvalidated* for as long as validating one meant
-        // ~90 s of `lib/ir_v1.hthr`; it is seconds now, so every corpus case
+        // ~90 s of `lib/certgen/ir_v1.hthr`; it is seconds now, so every corpus case
         // is validated again and its checksum is the Ψ-binding count that
         // validation returned — a count of declarations landed, not of errors
         // raised. That is what makes "the fixture is doing the same work"

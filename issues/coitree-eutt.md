@@ -8,7 +8,7 @@ created: 2026-10-22
 updated: 2026-10-22
 ---
 
-Strong bisimilarity (`Bisim`, `lib/std/coitree.hthr`) relates trees step for
+Strong bisimilarity (`Bisim`, `lib/std/itree/coitree.hthr`) relates trees step for
 step, so `CTau(t)` is not related to `t`. Weak bisimilarity lets either side
 peel finitely many `CTau`s before the next visible step, which is what
 program equivalence needs (`iter`'s productive `CTau` per pass, and the
@@ -32,4 +32,4 @@ to eutt, and `Eutt` giving equivalent approximation programs (with
 
 ## Log
 
-- 2026-10-22: Done (`lib/std/coitree_eutt.hthr`, `docs/coitree-design.md` §7). Drops are counts, not an inductive peel: each constructor names how many `CTau`s each side drops (`CoTree::after`). refl/sym/trans, `of_bisim`, `tau_l`/`tau_r`, the monad laws (through `of_bisim`), and `Eutt::refines`/`refined` (equivalent trees give programs that refine each other). The `bind` congruence up to eutt is left to [[coitree-eutt-bind-cong]]. Making it cheap needed a codata change: a match's payload fields are now checked-spelling projections (`docs/codata-named-signature-design.md` §8).
+- 2026-10-22: Done (`lib/std/itree/coitree_eutt.hthr`, `docs/coitree-design.md` §7). Drops are counts, not an inductive peel: each constructor names how many `CTau`s each side drops (`CoTree::after`). refl/sym/trans, `of_bisim`, `tau_l`/`tau_r`, the monad laws (through `of_bisim`), and `Eutt::refines`/`refined` (equivalent trees give programs that refine each other). The `bind` congruence up to eutt is left to [[coitree-eutt-bind-cong]]. Making it cheap needed a codata change: a match's payload fields are now checked-spelling projections (`docs/codata-named-signature-design.md` §8).

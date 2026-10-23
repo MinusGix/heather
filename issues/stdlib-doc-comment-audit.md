@@ -40,7 +40,7 @@ Heather does not yet extract documentation mechanically.
 ## What it assumes from elsewhere
 
 - **[[tree-library-public-shape]]** owns the public-vs-experimental boundary in
-  `lib/std/tree.hthr`. Assumed here: that module's deep audit waits until its
+  `lib/std/data/tree.hthr`. Assumed here: that module's deep audit waits until its
   declarations have stable homes.
 
 ## Log

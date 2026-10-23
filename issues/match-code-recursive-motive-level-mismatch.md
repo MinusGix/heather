@@ -24,7 +24,7 @@ meta fn probe(g: Ctx, body: Code(g |- Nat)) -> T {
 - Accepted: only the default arm (`_ => T0`), an arm that returns its
   recursive result (`tm_succ(t) => t`), and every arm shape at a **flat**
   motive (`Flat { FA, FB(n: Nat), … }`), which is what
-  `lib/certgen_code.hthr`'s `TA`/`SA` motives are.
+  `lib/certgen/certgen_code.hthr`'s `TA`/`SA` motives are.
 
 The difference between the accepted and refused arms is where the constructor
 value is *built*: the default arm is elaborated in the outer scope and

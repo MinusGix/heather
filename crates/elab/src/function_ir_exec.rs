@@ -1,7 +1,7 @@
 //! Executable, target-independent semantics for the compiler-owned FunctionIR.
 //!
 //! This is deliberately not trusted.  It is a fast development oracle for the
-//! same graph whose logical meaning is checked in `lib/function_ir.hthr`.
+//! same graph whose logical meaning is checked in `lib/native/function_ir/function_ir.hthr`.
 
 use std::collections::BTreeMap;
 

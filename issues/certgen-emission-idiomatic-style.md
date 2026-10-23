@@ -61,7 +61,7 @@ pattern that matched and cut.
 Emission-text assertions re-baselined: the three the issue named, plus
 `gate_gen_conv_in_wsum`. Doc examples flipped at
 `certgen-tier0-params-design.md` and `certgen-cert-expression-design.md`.
-`lib/ir_v1.hthr`'s own curried `cert: λ (a: Nat) => …` is untouched — hand-written
+`lib/certgen/ir_v1.hthr`'s own curried `cert: λ (a: Nat) => …` is untouched — hand-written
 library, not generator-copied text, the same boundary [[idiomatic-spelling-pass]]
 drew.
 

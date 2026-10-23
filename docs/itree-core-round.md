@@ -5,7 +5,7 @@ Date: 2026-10-21. Question 2 of
 first half: the library that
 [`docs/interaction-trees-fit.md`](interaction-trees-fit.md) §2 and §4 argued
 for, now that tier-2 inductives with value parameters let it be written
-(PRs #88 and #89). The code is [`lib/std/itree.hthr`](../lib/std/itree.hthr),
+(PRs #88 and #89). The code is [`lib/std/itree/itree.hthr`](../lib/std/itree/itree.hthr),
 the client is [`docs/showcase/itree_client.hthr`](showcase/itree_client.hthr),
 and the tests are `crates/elab/tests/lib_std_itree.rs`.
 

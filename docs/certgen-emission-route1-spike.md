@@ -52,7 +52,7 @@ indexed by a generic layer `i`, and layer `m` is "MLTT extended with …"
 
 **Pinned three ways**, because a rule read is not a rule run:
 
-- `ir_is_wf_lowered` — the premise. `Ir` copied verbatim from `lib/ir_v1.hthr`
+- `ir_is_wf_lowered` — the premise. `Ir` copied verbatim from `lib/certgen/ir_v1.hthr`
   really does lower to `Type::Wf`, so this is about `elim_Wf` and not about
   `elim_Sum`. (Three of its constructors carry two recursive fields, which is
   what puts it on the tier-1 route, `docs/inductive-tier1-wf-lowering.md`.)

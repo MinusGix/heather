@@ -43,7 +43,7 @@ The user's calls (2026-10-01):
 
 ## 2. The program, as its author writes it
 
-### 2.1 Semantics (`lib/stream_filter.hthr`, no x86)
+### 2.1 Semantics (`lib/native/stream_filter.hthr`, no x86)
 
 ```heather
 // What one byte does: the next state, and the byte it emits, if any.
@@ -324,7 +324,7 @@ its users. The dead-declaration pruner once swept an `inductive`.
 | slice | content | done when |
 |---|---|---|
 | F0 | `omega` normalises its goal and closes `True`; the `advances` default works for 0 and 1 counts | probe `t_filter_progs` checks |
-| F1 | `lib/stream_filter.hthr` (semantics, append laws, `counting`, `mapping`, `counts_bounded`), the new `Filter` bundle beside the old ones; driver threads `seen` | all programs written against it check, with the old bundles still present |
+| F1 | `lib/native/stream_filter.hthr` (semantics, append laws, `counting`, `mapping`, `counts_bounded`), the new `Filter` bundle beside the old ones; driver threads `seen` | all programs written against it check, with the old bundles still present |
 | F2 | `lib/elf64_read_filter.hthr`: `StepPiece`, `WriteKept`, the per-byte loop, chunk, process, tails, claim and stdout lemma | an elab test composes the process at an abstract file over a **hand-written** step piece |
 | F3 | generator: `Filtered` reflection, emit-first lowering, `{p}_step_piece` | the piece for `tr -s`'s and `wc`'s steps certifies, plus a negative control (wrong emit) |
 | F4 | producer `read_filter.rs`; `tr -s`, `tr -d` build and match host `tr` | CLI tests |

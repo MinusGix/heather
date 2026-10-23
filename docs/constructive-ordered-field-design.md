@@ -1,8 +1,8 @@
 # The constructive ordered-field interface
 
 For [constructive-ordered-field-interface](../issues/constructive-ordered-field-interface.md).
-The module is `lib/std/ordered_field.hthr`; its instances are at the end of
-`lib/std/rat.hthr` and `lib/std/creal.hthr`; the client is
+The module is `lib/std/algebra/ordered_field.hthr`; its instances are at the end of
+`lib/std/num/rat.hthr` and `lib/std/num/creal.hthr`; the client is
 `docs/showcase/ordered_field_client.hthr`, checked with the controls in
 `crates/elab/tests/lib_std_ordered_field.rs`.
 

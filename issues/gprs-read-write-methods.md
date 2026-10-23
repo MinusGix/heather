@@ -23,7 +23,7 @@ theorems beside them.
   `crates/elab/src/function_ir_x86_lower*`, `crates/elab/src/function_ir_source/`
   (`structured*`, `loop_native.rs`) and `crates/cli/src/native/calls*` spell
   `read_gpr(…)`/`write_gpr(…)` in emitted text. The regenerated module
-  `lib/function_ir_x86.hthr` (`UPDATE_FUNCTION_IR_X86=1`) follows from that.
+  `lib/native/function_ir/function_ir_x86.hthr` (`UPDATE_FUNCTION_IR_X86=1`) follows from that.
 - **Timing:** B2 (`docs/native-program-logic-design.md` §3.2) burns most of
   the generator side and several of the modules, so doing it after B2 is
   much smaller. Doing it before B2 means editing code that is about to be

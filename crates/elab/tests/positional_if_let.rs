@@ -4,7 +4,7 @@
 
 use heather_elab::Elaborator;
 
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
 
 fn with_option() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");

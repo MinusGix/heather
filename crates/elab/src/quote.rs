@@ -354,7 +354,7 @@ impl Elaborator {
         // The kernel is the gate, at the meta layer. The same oracle seam as
         // the two Ψ sites (`gate.rs`) — this is where a `match code` shell's
         // 65-branch recursor check lives, the single most expensive gate in
-        // `lib/certgen_code.hthr` — with `lands_in_psi: false` because a
+        // `lib/certgen/certgen_code.hthr` — with `lands_in_psi: false` because a
         // `meta fn` registers in the meta-def table and Ψ never grows.
         let empty = LocalCtx::nil();
         {
@@ -1208,7 +1208,7 @@ impl Elaborator {
         // typically a call whose codomain is the emission spelling
         // (`El (D#tycode^δ)`): an inline motive made each such check walk
         // `⟦D⟧` against the reference — measured as the largest conversion-
-        // miss row of `lib/certgen_code.hthr`'s `transcribe`
+        // miss row of `lib/certgen/certgen_code.hthr`'s `transcribe`
         // (`issues/recursive-spine-codes.md`, 2026-10-03). The elaborator's
         // own checks below keep the inline `m_ty`. Minted at the motive's
         // own local scope — the ambient Γ and the scrutinee binder `x` — since

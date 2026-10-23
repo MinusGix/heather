@@ -1,9 +1,10 @@
 # Library layout: folders for `lib/`
 
-Status: design proposal, 2026-10-23, for Minus's review. Nothing is moved
-yet; the move happens after the layout (§3) and the open choices (§5) are
-agreed. Measurements in §4 and §7 come from a prototype of the whole move in
-a scratch worktree of master at ef37e97.
+Status: adopted 2026-10-23. Minus agreed the layout and settled §5 the same
+day (Linux into `std/os/linux`, `bitvec/` stays top-level, float stems stay
+for now), and phases 0 and 1 (§6) landed together with this doc. Below,
+"today" means master before the move, at ef37e97; the measurements in §2 and
+§7 come from a prototype of the whole move made there.
 
 The ask: give `lib/` a folder structure, so that tactics sit together,
 algebra is grouped, number types have their own folder, and so on. Today
@@ -199,7 +200,11 @@ above".
    (`function_ir*`, certgen) or tests a language feature stays outside it,
    with the default lint profile.
 
-## 5. Open choices for Minus
+## 5. Choices (settled 2026-10-23)
+
+Minus took 1 and 2 as recommended and left 3 as it is. He would like the
+float modules namespaced better somehow, but there is no design for that yet.
+
 
 1. **Should the Linux and ELF model go in `lib/std/os/linux/` (recommended),
    or in `lib/native/`?** The S1 spec (`linux_calls`, `linux_trees`, `Sim`) and
@@ -274,7 +279,11 @@ an issue, not this PR.
 
 Measured on the prototype unless marked as expected:
 
-- **Sources:** 120 renames, 0 lines changed inside any `.hthr`.
+- **Sources:** 87 files moved (the 33 already in `arch/x86_64/`, `parser/`
+  and `bitvec/` stayed where they were). No `import` or code line changed. The
+  landed move also rewrote the comments in 11 sources that cite other files
+  by path, so those modules' images re-key. `logic` is one of them, so the
+  first check after the move is cold.
 - **Path rewrites:** 2081 changed lines across 628 files, besides the renames,
   all mechanical (Rust 1168, issues 595, docs 409, scripts 17, other 3).
 - **Build:** `cargo test --workspace --no-run` passes on the prototype. A

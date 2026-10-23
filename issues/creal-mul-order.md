@@ -6,7 +6,7 @@ created: 2026-10-17
 updated: 2026-10-18
 ---
 
-Relate the product of regular Cauchy reals (`lib/std/creal.hthr`) to the
+Relate the product of regular Cauchy reals (`lib/std/num/creal.hthr`) to the
 order: `mul_pos` (0 < x and 0 < y give 0 < x * y), `mul_nonneg`, and
 `mul_le_mono_r` for a nonnegative factor.
 

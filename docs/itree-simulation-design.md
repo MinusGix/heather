@@ -1,11 +1,11 @@
 # Simulation between interaction trees
 
-Status: implemented, 2026-10-22 (`lib/std/itree_sim.hthr`, Linux instance
-`lib/linux_trees_sim.hthr`; tests `crates/elab/tests/lib_std_itree_sim.rs`
+Status: implemented, 2026-10-22 (`lib/std/itree/itree_sim.hthr`, Linux instance
+`lib/std/os/linux/linux_trees_sim.hthr`; tests `crates/elab/tests/lib_std_itree_sim.rs`
 and `crates/elab/tests/linux_spec.rs`). Issue:
 `issues/itree-iter-simulation.md`, milestones `it-library` and
 `hih-pl-first-program`. It builds on the finite library
-(`lib/std/itree.hthr`, `lib/std/itree_trace.hthr`) and is what the native
+(`lib/std/itree/itree.hthr`, `lib/std/itree/itree_trace.hthr`) and is what the native
 source's proofs against size-free specs go through
 (`docs/native-effect-source-design.md` §8).
 
@@ -15,7 +15,7 @@ source's proofs against size-free specs go through
 
 A compiled program meets its source's tree, and the facts users care about
 are proved against a spec over other events: `tr`'s source reads with a
-size, `tr_spec` reads without one (`lib/stream_filter_spec.hthr`). The
+size, `tr_spec` reads without one (`lib/native/stream_filter_spec.hthr`). The
 statement is about traces:
 
 ```

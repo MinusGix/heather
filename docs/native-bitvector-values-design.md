@@ -113,7 +113,7 @@ column. Subtracting A3's floor, the compute halves are ≈ 197 (add) and ≈ 118
 
 ### 3.1 What the word stands for
 
-`BitVec(n)` is a library record over `[Bool; n]` (`lib/std/bitvec.hthr`), and
+`BitVec(n)` is a library record over `[Bool; n]` (`lib/std/bitvec/bitvec.hthr`), and
 `[Bool; n]` is the kernel former `Vec^l(Bool; n)`, whose canonical values are
 right-nested Σ-pairs `⟨b, ⟨b', … ⟨⟩⟩⟩` (`crates/kernel/src/term.rs`,
 `docs/wf-former-design.md` §1.2). `Bool` is tier-0 lowered

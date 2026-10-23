@@ -1,6 +1,6 @@
 # Checked parser combinators
 
-Implementation: `lib/std/parser.hthr` is a facade that reexports the focused
+Implementation: `lib/std/parser/parser.hthr` is a facade that reexports the focused
 components in [`lib/std/parser/`](../lib/std/parser/README.md). Use
 `-L lib/std -L lib/std/parser` and `import parser;`; every operation, type
 and certificate below is then `parser::name`, and the components stay

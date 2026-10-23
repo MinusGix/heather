@@ -6,9 +6,9 @@
 
 use heather_elab::Elaborator;
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
 
 // `Decide` lives in `bool`, beside the Bool its bit is.
 fn with_logic() -> Elaborator {

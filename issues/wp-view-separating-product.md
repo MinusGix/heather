@@ -8,7 +8,7 @@ area: heather-in-heather
 milestone: [hih-memory-model]
 ---
 
-A `View` (`lib/linux_x86_64_wp.hthr`) knows one thing about memory. The
+A `View` (`lib/std/os/linux/linux_x86_64_wp.hthr`) knows one thing about memory. The
 process image's views (issues/io-image-on-byte-model.md) are each over one
 data region: `DataRegion::program_view` sees the page or the frame, not
 both. The burned frame view knew the page and the frame's slots together,

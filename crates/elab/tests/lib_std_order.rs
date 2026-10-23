@@ -1,19 +1,19 @@
-//! `lib/std/order.hthr` — mathematical orders without decidability.
+//! `lib/std/algebra/order.hthr` — mathematical orders without decidability.
 
 use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
-const INT: &str = include_str!("../../../lib/std/int.hthr");
-const RELATION: &str = include_str!("../../../lib/std/relation.hthr");
-const RELATION_PROPS: &str = include_str!("../../../lib/std/relation_props.hthr");
-const ORDER: &str = include_str!("../../../lib/std/order.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra/algebra.hthr");
+const INT: &str = include_str!("../../../lib/std/num/int.hthr");
+const RELATION: &str = include_str!("../../../lib/std/relation/relation.hthr");
+const RELATION_PROPS: &str = include_str!("../../../lib/std/relation/relation_props.hthr");
+const ORDER: &str = include_str!("../../../lib/std/algebra/order.hthr");
 
 fn elaborated() -> Elaborator {
     let mut e = support::library(&[

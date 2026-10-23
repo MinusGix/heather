@@ -56,7 +56,7 @@ preserving the bounded source program's behavior.
 ## Implementation
 
 The selected contract is documented in `docs/function-ir-readonly-loops.md`.
-`lib/function_ir_loop.hthr` defines one polymorphic semantic loop interface,
+`lib/native/function_ir/function_ir_loop.hthr` defines one polymorphic semantic loop interface,
 its source combinator, and the evaluator used by both. The first reflector
 admits five-parameter wrappers with Nat or Bool carries and a resolved checked
 step definition. It generates source agreement and a typed artifact carrying

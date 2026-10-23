@@ -1,6 +1,6 @@
 //! x86_64's memory as the byte model (`issues/memory-model-machine-instances.md`,
 //! `docs/byte-memory-design.md` §6): the access records over
-//! `lib/std/memory.hthr` (`x86_64_byte_memory`), the stack built from a data
+//! `lib/std/machine/memory.hthr` (`x86_64_byte_memory`), the stack built from a data
 //! region by proof, and the `LinuxIo` record and buffer view for `Wp`
 //! (`linux_x86_64_byte_memory`).
 //!

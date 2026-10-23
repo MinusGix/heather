@@ -15,7 +15,7 @@ is stated, `Lt` exists, and the kit is proved — the scope of this issue in
 full. The arithmetic tail it had been holding open is [[nat-arithmetic-kit]].
 
 Landed: route (a) as the definition of `Le` (curried), `Lt(n, m) :=
-Le(Succ(n), m)`, and — in `lib/std/nat.hthr` — `zero_le`, `le_refl`,
+Le(Succ(n), m)`, and — in `lib/std/num/nat.hthr` — `zero_le`, `le_refl`,
 `not_succ_le_zero`, `le_succ_succ`, `le_of_succ_succ`, `le_succ_r`,
 `le_trans`, `le_antisym`, `le_total`, `le_dec`, `lt_succ_self`,
 `lt_succ_iff_le`, `lt_irrefl`, `le_of_lt`, `lt_trans`, `lt_of_le_of_ne`,
@@ -37,7 +37,7 @@ own scope; splitting it out is what let this one close (README rule 3).
 
 ---
 
-`lib/std/nat.hthr` states its order as `fn Le(n, m: Nat) -> Type { leb(n)(m) =
+`lib/std/num/nat.hthr` states its order as `fn Le(n, m: Nat) -> Type { leb(n)(m) =
 True }` — a *reflection* of a Bool decision. Per [[class-ops-prop-vs-bool]]'s
 recorded direction (2026-08-09, reaffirmed 2026-08-16), that is a v1 artifact:
 the mathematical relation should be stated once, propositionally, with no
@@ -61,7 +61,7 @@ fn Le(n: Nat) -> Nat -> Type {
 **Curried, and not by preference.** The uncurried two-argument spelling is
 REFUSED — "recursive call to `Le` must pass `n` unchanged", the
 [[ih-generalization]] gap — because the inner `match` makes the recursive call
-vary both arguments. `leb` and `sub` in `lib/std/nat.hthr` are already curried
+vary both arguments. `leb` and `sub` in `lib/std/num/nat.hthr` are already curried
 for exactly this reason, so the shape is the file's existing idiom rather than
 a new tax, and call-site over-application means `Le(n, m)` still writes.
 Verified by elaborating both spellings (2026-08-16). Falsity is `Empty` and
@@ -100,7 +100,7 @@ numerals is linear — `Le(3, 1000)` is 997 `le_step`s, which is exactly the
 pressure that produced Lean's `decide`. Blocked on [[indexed-families]].
 
 **(c) `exists k, add(n, k) = m`** — writable today; `le_add` in
-`lib/std/nat.hthr` already half-proves the bridge. Small proofs at numerals
+`lib/std/num/nat.hthr` already half-proves the bridge. Small proofs at numerals
 (`⟨k, refl⟩`), and it is the presentation that makes the *generic* ordered-
 algebra layer work, since "the order comes from the addition" derives an order
 on any such carrier uniformly. Costs: antisymmetry needs cancellation,
@@ -169,9 +169,9 @@ decider.
 
 ## Migration
 
-`Le`'s definition changes under existing consumers. `lib/std/algebra.hthr`'s
-`Cmp<Nat>` instance, `lib/list_algos.hthr`'s `sortedb`/`insert` kit and
-`lib/ir_v1.hthr`'s bounds uses all state things in the reflected form; the
+`Le`'s definition changes under existing consumers. `lib/std/algebra/algebra.hthr`'s
+`Cmp<Nat>` instance, `lib/lang/list_algos.hthr`'s `sortedb`/`insert` kit and
+`lib/certgen/ir_v1.hthr`'s bounds uses all state things in the reflected form; the
 restatement cost is itself the measurement [[decide-class]] wants, so run it
 deliberately rather than incidentally.
 
@@ -214,7 +214,7 @@ deliberately rather than incidentally.
      preference" paragraph predates [[false-collides-with-bools-constructor]]
      being fixed the same day.
   4. **The migration cost this file predicted did not materialize.**
-     `lib/ir_v1.hthr` and `lib/list_algos.hthr` both check **unmodified**: the
+     `lib/certgen/ir_v1.hthr` and `lib/lang/list_algos.hthr` both check **unmodified**: the
      "downstream never unfolds `Le`" discipline was already held, so the
      restatement [[decide-class]] wanted to measure measured zero. What did
      cost something was `Cmp` (three fields, two instances) and one wave-0

@@ -21,7 +21,7 @@ against the pre-stage baseline were:
 | `conv/perturbed-pairs` | 1.5× | the property-test corpus |
 | `check/generated-terms:50` | 1.27× | checker throughput |
 | `wf/mirror-involution` | **0.30–0.40×** | two eliminations over one tree — sharing |
-| routine `lib/ir_v1.hthr` | **recovered** (1.28 s → 1.57 s → 1.26 s) | see below |
+| routine `lib/certgen/ir_v1.hthr` | **recovered** (1.28 s → 1.57 s → 1.26 s) | see below |
 
 The user-visible one came back on its own. Two fixes at the end of the stage
 — sharing Ψ instead of cloning it (and its bindings' local contexts) at every
@@ -79,7 +79,7 @@ and should re-read this at the same time — conversion no longer calls
 
 ## Log
 
-- 2026-08-01: Attribution datum from the release `heather check lib/ir_v1.hthr`
+- 2026-08-01: Attribution datum from the release `heather check lib/certgen/ir_v1.hthr`
   profile (~34s, fp call-graph): allocator time (malloc 4.9% + cfree 5.0% +
   libc internals ~4% + `Rc<VTy>`/`Rc<TyClo>` drop_slow ~5% + Level/Type drop
   glue ~3.6%) is the largest block of the run, ~18-20% combined. Immediate

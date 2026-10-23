@@ -8,7 +8,7 @@ updated: 2026-08-17
 
 Filed by the `Int` round ([[std-int-encoding]]). It is the **one row of that
 round's kit that could not be written**, so per [[std-api-waves]]'s doctrine it
-was stalled rather than worked around, and `lib/std/int.hthr` carries a comment
+was stalled rather than worked around, and `lib/std/num/int.hthr` carries a comment
 where the instance would be.
 
 `std/nat` registers the order's decision generically in both values
@@ -79,7 +79,7 @@ The enabling step is worth recording because it is why this was cheap where `doc
 
 **The library win, all three carriers.** `std/int` gets the stalled row (`instance(a, b: Int) Decide<Le(a, b)>`); `std/bool` drops the `Le_bool`/`le_bool_refl`/`le_bool_dec`/`leb_bool` suffixes for the real names and gains both the `Decide` instance and a `<=` designation; `std/algebra`'s two `Cmp` rows qualify (`nat::Le`, `bool::Le`). `x <= y` now means the right order at Nat, Int and Bool in one downstream file with nothing qualified.
 
-Two corrections reality made. (1) The index component was ALREADY resolved — `index_spelling` has called `key_of` per argument since value indices — so only the head was infected; the round's rule ('no component of the key is a spelling') is what keeps that from drifting back. (2) The `<=` **designations were not optional**: `<=`'s fallback is the bare name `Le`, so with three modules declaring one, `lib/std/list.hthr` (which imports `nat` and `bool` and writes `len(filter(xs, p)) <= len(xs)`) had a symbol resolving to nothing. `nat` and `bool` grew the row `int` already had.
+Two corrections reality made. (1) The index component was ALREADY resolved — `index_spelling` has called `key_of` per argument since value indices — so only the head was infected; the round's rule ('no component of the key is a spelling') is what keeps that from drifting back. (2) The `<=` **designations were not optional**: `<=`'s fallback is the bare name `Le`, so with three modules declaring one, `lib/std/data/list.hthr` (which imports `nat` and `bool` and writes `len(filter(xs, p)) <= len(xs)`) had a symbol resolving to nothing. `nat` and `bool` grew the row `int` already had.
 
 Fixture churn, and it is the whole cost of the rename: five test files write a bare `Le`/`le_dec`/`leb` in a probe that imports `nat` AND `bool`, and each now qualifies (`logic.rs`, `nat_order.rs`, `lib_std_list.rs`, `lib_algebra.rs` ×2). One of them is worth reading — `a_member_name_that_shadows_a_global_is_ambiguous_at_a_receiver` STARTED PASSING for the wrong reason: with `leb` ambiguous at the value it no longer resolves as a global at all, so the member/global collision the test exists for stopped happening and the snippet checked. The fixture moved to `sub`. That failure mode is invisible to a test that asserts only 'it was refused', and it was caught because this one asserts WHICH refusal. Separately, the trace-nesting test in `traits_resolution.rs` now expects a module-qualified candidate line — a deliberate reading of [[diagnostics-name-the-written-form]] and not an exception to it (a trace line is data about the registry, not a quotation of what the writer typed).
 

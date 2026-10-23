@@ -9,7 +9,7 @@ updated: 2026-10-22
 ---
 
 FunctionIR's meaning is relational: `RegionHolds`,
-`StructuredRegionHoldsIn` and `Function::Computes` (`lib/function_ir.hthr`)
+`StructuredRegionHoldsIn` and `Function::Computes` (`lib/native/function_ir/function_ir.hthr`)
 say that some valuation satisfies a region's equations. A tree has to
 *compute* its next command from the values in hand, so the effectful
 source's `denote` needs a function: `StructuredRegion::eval(callees, region,
@@ -36,4 +36,4 @@ the source takes.
 
 ## Log
 
-- 2026-10-22: Done (round S3.0), `lib/function_ir_eval.hthr`. A value is set at every width at once, and a node's value is its equation's right side read at the width asked for, so no width is ever compared or transported. `eval` is total; the theorem asks a Bool `evaluable` computed by evaluation (no node reads its own output; nothing later writes an id earlier code mentions; no arm writes its condition; a call names a function of its arity whose result is not an argument; a function's parameters are distinct and unwritten). `StructuredRegion::eval_holds_in`: any valuation agreeing with the evaluated one on what a region mentions satisfies it, its calls answered by results callees may return. `program_eval_computes`: what `program_eval` returns for a call of the right arity is in `program_callees`. Examples (the lowering rounds' `pair`, a conditional `select` at literal and open arguments, eight refusals) in `crates/elab/tests/fixtures/function_ir_eval_examples.hthr`, with two kernel-refusal controls.
+- 2026-10-22: Done (round S3.0), `lib/native/function_ir/function_ir_eval.hthr`. A value is set at every width at once, and a node's value is its equation's right side read at the width asked for, so no width is ever compared or transported. `eval` is total; the theorem asks a Bool `evaluable` computed by evaluation (no node reads its own output; nothing later writes an id earlier code mentions; no arm writes its condition; a call names a function of its arity whose result is not an argument; a function's parameters are distinct and unwritten). `StructuredRegion::eval_holds_in`: any valuation agreeing with the evaluated one on what a region mentions satisfies it, its calls answered by results callees may return. `program_eval_computes`: what `program_eval` returns for a call of the right arity is in `program_callees`. Examples (the lowering rounds' `pair`, a conditional `select` at literal and open arguments, eight refusals) in `crates/elab/tests/fixtures/function_ir_eval_examples.hthr`, with two kernel-refusal controls.

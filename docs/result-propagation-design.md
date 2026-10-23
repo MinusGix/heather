@@ -22,7 +22,7 @@ A lambda is a separate boundary even when it appears inside a larger function.
 
 ## Library and trust boundary
 
-`lib/std/result.hthr` declares `Result<A,E> { Ok(value:A), Err(error:E) }`,
+`lib/std/core/result.hthr` declares `Result<A,E> { Ok(value:A), Err(error:E) }`,
 `map`, `and_then`, `map_err`, and `unwrap_or`. The module must be imported.
 The parser lowers a value context `K[e?]` to
 `result::and_then(e, λ value => K[value])`. `and_then` is an ordinary Heather

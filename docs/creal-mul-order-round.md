@@ -2,8 +2,8 @@
 
 Date: 2026-10-18. Continues [creal-order-round](creal-order-round.md) and
 [creal-inverse-round](creal-inverse-round.md) in
-[`lib/std/creal.hthr`](../lib/std/creal.hthr), with three rational facts
-added to [`lib/std/rat.hthr`](../lib/std/rat.hthr). The client is
+[`lib/std/num/creal.hthr`](../lib/std/num/creal.hthr), with three rational facts
+added to [`lib/std/num/rat.hthr`](../lib/std/num/rat.hthr). The client is
 [`docs/showcase/creal_client.hthr`](showcase/creal_client.hthr) and the tests
 are `crates/elab/tests/lib_std_creal.rs`. It closes
 [creal-mul-order](../issues/creal-mul-order.md).

@@ -184,7 +184,7 @@ Nothing new is spelled. Precisely:
 
 ## 5. What this lets the library drop
 
-`lib/std/algebra.hthr` declared `Monoid<A>` flat, with a comment saying why,
+`lib/std/algebra/algebra.hthr` declared `Monoid<A>` flat, with a comment saying why,
 and spelled the additive hierarchy's inherited operation as
 `Nat::AddCommMonoid.plus(a, b)`. Both were the workaround. With this slice:
 

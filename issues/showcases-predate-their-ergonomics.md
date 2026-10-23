@@ -12,8 +12,8 @@ shapes those files are full of, and neither file uses them once.
 
 | feature | landed for | uses in `lib/` | uses in either showcase | shapes in `calc_text` wanting it |
 |---|---|---|---|---|
-| `⟨p, q⟩` anonymous constructors ([[conjunction-introduction-syntax]], closed 2026-08-30; `docs/logic-connectives-design.md` §4.1) | nested conjunction certificates | 17 in `lib/function_ir.hthr` | **0** | 20 `And(` calls, nested three deep |
-| `calc { }` equational chains ([[calc-equational-chains]], closed 2026-08-18) | `trans`/`j` towers with spelled motives | `lib/std/nat.hthr` | **0** | 24 `trans(`, 11 `j(` |
+| `⟨p, q⟩` anonymous constructors ([[conjunction-introduction-syntax]], closed 2026-08-30; `docs/logic-connectives-design.md` §4.1) | nested conjunction certificates | 17 in `lib/native/function_ir/function_ir.hthr` | **0** | 20 `And(` calls, nested three deep |
+| `calc { }` equational chains ([[calc-equational-chains]], closed 2026-08-18) | `trans`/`j` towers with spelled motives | `lib/std/num/nat.hthr` | **0** | 24 `trans(`, 11 `j(` |
 
 `sum_grammar`, `product_grammar` and `paren_grammar` are the worst of it: each
 builds its `span` field as a `trans(…, cong_spell(…, trans(…, cong_cons(…,
@@ -56,7 +56,7 @@ itself ([[perf-ab-source-patch]]).
     differing only in the tier `k`. A plain `fn Recur(level: Nat, source, begin)
     -> Type { … }` should collapse all four: `docs/types-as-expressions.md`
     already makes a `fn` returning `Type` first class, and a parameter whose type
-    is a call to one is the shape `RefinesOn` uses in `lib/ir_v1.hthr`.
+    is a call to one is the shape `RefinesOn` uses in `lib/certgen/ir_v1.hthr`.
   - The three `checked_*` fixpoints annotate their λ binders — `λ (next:
     Cursor<Char>(source)) (smaller: nat::Lt(…)) => …` — against an expected Π,
     where `docs/surface-function-types.md` §5.2 says the annotation is a

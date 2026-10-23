@@ -1,6 +1,6 @@
 use crate::read_loop_fixture::checker_with;
 
-// The effectful layer over total FunctionIR (`lib/native_source.hthr`;
+// The effectful layer over total FunctionIR (`lib/native/native_source.hthr`;
 // issues/native-effect-source-compiler.md, round S3.1): statements, their
 // trees over Linux's calls, the program a source denotes, and `cat` written
 // in it and run against a scripted world by evaluation. The controls: a run
@@ -10,11 +10,11 @@ const CAT: &str = include_str!("fixtures/native_source_cat.hthr");
 
 fn checker() -> heather_elab::Elaborator {
     checker_with(&[
-        ("itree", include_str!("../../../lib/std/itree.hthr")),
-        ("itree_trace", include_str!("../../../lib/std/itree_trace.hthr")),
-        ("linux_trees", include_str!("../../../lib/linux_trees.hthr")),
-        ("function_ir_eval", include_str!("../../../lib/function_ir_eval.hthr")),
-        ("native_source", include_str!("../../../lib/native_source.hthr")),
+        ("itree", include_str!("../../../lib/std/itree/itree.hthr")),
+        ("itree_trace", include_str!("../../../lib/std/itree/itree_trace.hthr")),
+        ("linux_trees", include_str!("../../../lib/std/os/linux/linux_trees.hthr")),
+        ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
+        ("native_source", include_str!("../../../lib/native/native_source.hthr")),
     ])
 }
 

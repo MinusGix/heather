@@ -21,13 +21,13 @@
 //!
 //! What the round had to widen, and where:
 //!
-//!   * `lib/certgen_code.hthr` — the walker's `tm_triv`/`tm_pair`/`tm_inl`/
+//!   * `lib/certgen/certgen_code.hthr` — the walker's `tm_triv`/`tm_pair`/`tm_inl`/
 //!     `tm_inr` arms (convention 4) and the signature checker's
 //!     `ty_unit`/`ty_sigma`/`ty_sum` arms. Both are the *analysis*, and the
 //!     frozen-walker rule (`issues/retire-rust-transcriber.md`) says a new
 //!     fragment feature lands in-language only. The file's own `refl`
 //!     theorems pin both, one layer below this binary.
-//!   * `lib/certgen_cert.hthr` — **nothing**. A constructor tag is already a
+//!   * `lib/certgen/certgen_cert.hthr` — **nothing**. A constructor tag is already a
 //!     `Nat` field of `CCon`, and the induction is still over the scrutinized
 //!     `Nat` parameter, so the certificate fold absorbed the feature with zero
 //!     edits. That is the strongest available reading of
@@ -49,12 +49,12 @@ use heather_syntax::parse_file;
 
 use crate::support;
 
-const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
-const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
+const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const CODE: &str = include_str!("../../../lib/certgen/certgen_code.hthr");
+const CERT: &str = include_str!("../../../lib/certgen/certgen_cert.hthr");
 
 /// Items a generated emission needs beyond the declarations prefix, in
 /// dependency (file-consistent) order — the same slice
@@ -97,7 +97,7 @@ fn support() -> String {
     s
 }
 
-/// `add`, from `lib/std/nat.hthr` — the callee the cross-function fixture
+/// `add`, from `lib/std/num/nat.hthr` — the callee the cross-function fixture
 /// composes with, and the only emission here whose result is a `Nat`.
 fn nat_decl(name: &str) -> Decl {
     parse_file(NAT)
@@ -239,8 +239,8 @@ fn nonnat_transcriptions_and_declines() {
     // types and everything generated face the kernel unconditionally.
     support::with_decl_cache(&mut e, |e| {
         elab(e, &LIB[..cut], "declarations prefix");
-        elab(e, CODE, "lib/certgen_code.hthr");
-        elab(e, CERT, "lib/certgen_cert.hthr");
+        elab(e, CODE, "lib/certgen/certgen_code.hthr");
+        elab(e, CERT, "lib/certgen/certgen_cert.hthr");
     });
     elab(&mut e, TYPES, "the non-`Nat` result types");
     elab(&mut e, ISZERO, "fn is_zero");
@@ -337,8 +337,8 @@ fn nonnat_emissions_and_controls() {
     // types and everything generated face the kernel unconditionally.
     support::with_decl_cache(&mut e, |e| {
         elab(e, &sup, "support prelude");
-        elab(e, CODE, "lib/certgen_code.hthr");
-        elab(e, CERT, "lib/certgen_cert.hthr");
+        elab(e, CODE, "lib/certgen/certgen_code.hthr");
+        elab(e, CERT, "lib/certgen/certgen_cert.hthr");
     });
     elab(&mut e, TYPES, "the non-`Nat` result types");
     elab(&mut e, ISZERO, "fn is_zero");

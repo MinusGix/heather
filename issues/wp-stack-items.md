@@ -9,7 +9,7 @@ updated: 2026-10-22
 ---
 
 S4 round 3 (PR #106) added `CallTo`, `Ret`, `Spill` and `Reload` to `Asm`.
-`Wp` (`lib/linux_x86_64_wp.hthr`) was written alongside it, and leaves all
+`Wp` (`lib/std/os/linux/linux_x86_64_wp.hthr`) was written alongside it, and leaves all
 four `False` (its catch-all, and `false_elim` arms in `wp_item_goes`), so a
 program with them can be checked by `Wp` only if they are never reached.
 

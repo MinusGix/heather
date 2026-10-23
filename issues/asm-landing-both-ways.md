@@ -11,7 +11,7 @@ updated: 2026-10-21
 `Prog::laid_out` (`lib/std/arch/x86_64/x86_64_asm_runs.hthr`) asks every
 JCC/JMP to land forward on its label (`jumps_land`), which is what the
 structured lowering needs. A loop jumps back, so `Wp`
-(`lib/linux_x86_64_wp.hthr`) checks landings with its own Bool, `wp_reach`,
+(`lib/std/os/linux/linux_x86_64_wp.hthr`) checks landings with its own Bool, `wp_reach`,
 which accepts either direction (`asm_item_lands || asm_item_lands_back`) and
 proves the landing (`wp_lands`) from it.
 

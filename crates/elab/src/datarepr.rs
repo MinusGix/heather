@@ -296,7 +296,7 @@ impl Elaborator {
                 span,
             );
         };
-        // `Nat` is a kernel type and has no declaration (`lib/std/nat.hthr`'s
+        // `Nat` is a kernel type and has no declaration (`lib/std/num/nat.hthr`'s
         // header), so its constructor list is written here rather than read
         // off one. It is spelled exactly as a declaration would be, which is
         // why nothing downstream needs to know the difference.

@@ -20,7 +20,7 @@ rounds with their own acceptance lists.
 
 One instance per (class, carrier) makes the *choice of structure* part of the
 class system, and every cost in the current library is that choice's rent:
-`lib/std/algebra.hthr` maintains an additive hierarchy
+`lib/std/algebra/algebra.hthr` maintains an additive hierarchy
 (`AddSemigroup → AddMonoid → AddCommMonoid`) that is `Semigroup`/`Monoid` with
 the fields renamed, proves `plus_zero_of_comm` against only that spelling,
 exiles Bool's second monoid to a named value the resolver cannot see
@@ -448,7 +448,7 @@ naturally pass this gate because their law fields mention the operation.
 
 ### 8.1 Relation-indexed two-operation classes
 
-The first library customer, `lib/std/semiring.hthr`
+The first library customer, `lib/std/algebra/semiring.hthr`
 (issues/semiring-ring-structure-api.md), is relation-indexed: both monoids
 of `Semiring<A>(≈, +, *)` extend `SemigroupRel`, so both carry the setoid
 `Equivalence(≈)`. That shape needed four rules beyond the ones above.
@@ -530,7 +530,7 @@ the comparison is on file, not because it was close.
 
 ## 10. What the library becomes
 
-`lib/std/algebra.hthr` after round one (§13), sketched:
+`lib/std/algebra/algebra.hthr` after round one (§13), sketched:
 
 | today | after |
 | --- | --- |

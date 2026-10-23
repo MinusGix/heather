@@ -76,14 +76,14 @@ the error behaviour §8 asks for, already written.
 **(c) The equation direction the one live consumer wants is
 `scrutinee = pattern`, and the issue's note is evidence *for* that direction,
 not against it.** `issues/match-with-equation.md` says "`step_mono` wanted
-`sym`". Read at the source (`lib/ir_v1.hthr:700-710`): the hand-written convoy
+`sym`". Read at the source (`lib/certgen/ir_v1.hthr:700-710`): the hand-written convoy
 binds `e : r = ev1(env, lbody)` — *pattern = scrutinee* — and then every use is
 `sym(e)`. So the `sym` is a tax on the direction the hand-written copy chose,
 and the feature removes it by choosing the other one. §3.2.
 
 **(d) The three features named in the 2026-08-01 demotion log are not in
 competition, and the equation binding is what makes the inversion lemma
-*writable in one line*.** `k_bind_inv` (`lib/ir_v1.hthr:602-611`) is written
+*writable in one line*.** `k_bind_inv` (`lib/certgen/ir_v1.hthr:602-611`) is written
 today with the target varying in the motive — the trick that avoids the idiom —
 and it is four lines of motive for a three-constructor result type. That trick
 works because `k_bind_inv`'s *statement* is an implication whose antecedent
@@ -143,7 +143,7 @@ round; see finding (b).
 
 ### 2.3 The surviving hand-written convoy
 
-`lib/ir_v1.hthr:700-729`, `step_mono`'s `LoopIter` arm. Shape:
+`lib/certgen/ir_v1.hthr:700-729`, `step_mono`'s `LoopIter` arm. Shape:
 
 ```heather
 match ev1(env, lbody) as λ r =>
@@ -479,7 +479,7 @@ designed to prevent.
 
 **Prediction 1 — the `LoopIter` rewrite is shorter and no slower. CONFIRMED,
 with the "slower" half being the interesting one.** `git diff --stat` on
-`lib/ir_v1.hthr` is `7 insertions(+), 8 deletions(-)` for the arm itself: the
+`lib/certgen/ir_v1.hthr` is `7 insertions(+), 8 deletions(-)` for the arm itself: the
 motive loses its first arrow, three arms lose a λ binder each, the trailing
 `(refl)` goes, and the one `sym(e)` becomes a bare `h`. Capped release checks
 (`ulimit -v 8388608 -t 300`) before and after, two runs each:

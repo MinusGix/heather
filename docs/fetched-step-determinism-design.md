@@ -113,7 +113,7 @@ fetched, no step runs, from that state or a related one.
 
 ## 6. The run is the run
 
-`lib/linux_x86_64_determinism.hthr` states it for any `LinuxIo`.
+`lib/std/os/linux/linux_x86_64_determinism.hthr` states it for any `LinuxIo`.
 
 - `LinuxRun` is a run as it happened: `LinuxRuns`' shape with every
   quantifier over what Linux leaves behind (RCX, R11, a failed read's junk)

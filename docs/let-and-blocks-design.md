@@ -243,7 +243,7 @@ whole blast radius of §3):
   `let_binds_with_and_without_an_annotation` (`:1903-1921`).
 - `crates/elab/tests/goal_holes.rs:146` — `let strong: add(n, 0) = n = ?g;`,
   the hole-programming pattern of `docs/sketches/surface-v3.md` §2.
-- `lib/ir_v1.hthr:972`, `:975`, `:994`, `:997` — four `let e1`/`let e2`
+- `lib/certgen/ir_v1.hthr:972`, `:975`, `:994`, `:997` — four `let e1`/`let e2`
   `fuel_monotone` steps inside `letcall_conv` and `letmatch_conv`.
 
 **Six sites.** The `<=`-annotated shape `let h: n <= m = pf;` has **zero**
@@ -307,7 +307,7 @@ argument for it is stale.**
   disambiguated by `let`. `expect_eq`'s doc comment (`parser.rs:741-745`)
   cites it. Undoing that inside a parse-bug fix is out of proportion.
 - *Blast radius: ~40 executable sites against 6.* Every `let` in the corpus
-  changes spelling, annotated or not — `lib/ir_v1.hthr`, the `let` tests in
+  changes spelling, annotated or not — `lib/certgen/ir_v1.hthr`, the `let` tests in
   `goal_holes.rs`, `records.rs`, `quotation.rs`, `function_types.rs`,
   `el_reader_audit.rs`, nine sites in `parser.rs`'s own suite, and every `let`
   in a dozen docs and sketches. Option 2 touches six (§2.5).
@@ -729,7 +729,7 @@ established.
 quote payload's top level, with a named message**, and the question of `let`
 inside quotation is filed as its own issue against
 `issues/in-language-map.md`'s thread. It would be genuinely useful there —
-`lib/vec_code.hthr`'s templates are the client — but "useful" is not
+`lib/lang/vec_code.hthr`'s templates are the client — but "useful" is not
 "analysed", and a wrong answer here is a silently mis-hoisted splice, which
 is the failure mode `docs/surface-fin-indexing-design.md` §6 already flagged as
 the expensive one.
@@ -739,7 +739,7 @@ the expensive one.
 In the style of `docs/in-language-map-design.md` §7, two:
 
 1. §3's migration of the six equality-annotated `let`s will be mechanical, and
-   `lib/ir_v1.hthr` will re-check with no other change. If it does not, the
+   `lib/certgen/ir_v1.hthr` will re-check with no other change. If it does not, the
    likely cause is `no_eq` leaking through `ty()`'s arrow codomain
    (`parser.rs:792`) into a place the annotation did not intend, and the
    acceptance list's item 4 is the control.
@@ -828,7 +828,7 @@ checking position where nothing reduces; axis 4 = a negative control)
 
 **Regressions**
 
-18. `lib/ir_v1.hthr` re-checks after the six migrations; `goal_holes.rs`,
+18. `lib/certgen/ir_v1.hthr` re-checks after the six migrations; `goal_holes.rs`,
     `surface_fin.rs`, `in_language_{map,fold,nth,tabulate}.rs`, `records.rs`,
     `quotation.rs`, `function_types.rs` green.
 19. `parser.rs`'s own suite: `let_binds_with_and_without_an_annotation`
@@ -853,7 +853,7 @@ independent; within a phase, the order matters.
    (`:981-985`) is deleted. Checkable: `a = b = c` and `a <= b = c` get the
    `CHAIN` message; `theorem t(): a = b { refl }` and
    `let x: Type<0> = a = b;` still parse.
-4. The six sites of §2.5 are migrated to `(a = b)`, and `lib/ir_v1.hthr`
+4. The six sites of §2.5 are migrated to `(a = b)`, and `lib/certgen/ir_v1.hthr`
    re-checks unchanged otherwise. Checkable independently of 5.
 5. The elaborator's "not a type" path gains §3.2's hint for a `let`
    annotation that resolved to a term. Checkable: test 4(a).
@@ -930,7 +930,7 @@ found.
 
 ### 10.1 The predictions
 
-**Prediction 1 — the migration is mechanical, and `lib/ir_v1.hthr` re-checks
+**Prediction 1 — the migration is mechanical, and `lib/certgen/ir_v1.hthr` re-checks
 with no other change. CONFIRMED.** Four annotations parenthesised
 (`:972`, `:975`, `:994`, `:997`), `git diff --stat` reports exactly
 `4 insertions(+), 4 deletions(-)`, and a capped release check

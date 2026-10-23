@@ -11,7 +11,7 @@ updated: 2026-10-21
 The `export-fragment` milestone is done when a closed, layer-free fragment of
 the library (Nat and List lemmas) is translated and rechecked in Lean
 (`docs/roadmap.md`). The prototype covers a test source only. This round runs
-the exporter over the real modules, `lib/std/nat.hthr`, `bool.hthr`,
+the exporter over the real modules, `lib/std/num/nat.hthr`, `bool.hthr`,
 `logic.hthr` and `list.hthr`, through the CLI's loader, and records by cause
 every declaration that is:
 
@@ -35,7 +35,7 @@ assume Lean or Rocq is installed.
 
 ## Log
 
-- 2026-10-21 (PR #87): first sweep, over the closure of `lib/std/list.hthr`
+- 2026-10-21 (PR #87): first sweep, over the closure of `lib/std/data/list.hthr`
   (`crates/export/tests/library_sweep.rs`, which pins the refusal causes).
   387 bindings, 293 exported; every refusal is `Wf` (90) or mentions one
   (4), so Nat, Bool, logic, option and pair export whole and `List` waits

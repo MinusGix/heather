@@ -33,7 +33,7 @@ fn run() -> Result<bool, String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or("invalid input path")?;
-    let contexts = Path::new("lib/std/relation_context.hthr");
+    let contexts = Path::new("lib/std/tactic/relation_context.hthr");
     let modules = loader::load_many(&[path, contexts], &["lib/std".into()]).map_err(|e| e.msg)?;
     let mut environment = Elaborator::with_prelude().map_err(|e| format!("{e:?}"))?;
     let mut input = None;

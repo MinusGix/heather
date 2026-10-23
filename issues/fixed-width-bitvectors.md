@@ -65,7 +65,7 @@ waiting for them.
 - 2026-08-25: Filed from the x86-64 model audit.  The demanded API is generic
   because fixed-width arithmetic is also a compiler, format, crypto, and
   data-representation foundation.
-- 2026-08-25: LANDED in `lib/std/bitvec.hthr`, with acceptance coverage in
+- 2026-08-25: LANDED in `lib/std/bitvec/bitvec.hthr`, with acceptance coverage in
   `crates/elab/tests/lib_std_bitvec.rs`. `BitVec(n)` is a one-field record over
   the kernel vector `[Bool; n]`, least-significant bit first. The wrapper is
   representation-transparent in the ordinary Heather sense: it contains no

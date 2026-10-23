@@ -8,7 +8,7 @@ this document first, the implementation against §8's acceptance list.
 
 Context it builds on and does not restate: the transcriber round
 (`docs/certgen-transcriber-in-language-design.md` — the marker convention,
-the analyzer-slot harness, `lib/certgen_code.hthr`), the signature-reflection
+the analyzer-slot harness, `lib/certgen/certgen_code.hthr`), the signature-reflection
 round (`docs/fn-signature-reflection-design.md` — `Elaborator::fn_type_code`,
 the interface/implementation seam this round was expected to fill from the
 kernel side), and the definitions round
@@ -211,7 +211,7 @@ declines. Nothing new to build, one sentence to state.
 
 ## 4. The walker: calls as data, and the in-language numbering
 
-`lib/certgen_code.hthr` gains (all additive — no existing constructor,
+`lib/certgen/certgen_code.hthr` gains (all additive — no existing constructor,
 helper, shell or slot signature changes):
 
 - `Pre` gains `PCall(c: Nat, args: PRefs, rest: Pre)` — a saturated foreign
@@ -277,7 +277,7 @@ controls on the *walker* (library refl pins), end-to-end agreement on the
 *emission* (byte equality with a path that is itself kernel-checked
 end-to-end), and declines that name their deciding party.
 
-- **Library pins** (`lib/certgen_code.hthr`, elaborated with the file):
+- **Library pins** (`lib/certgen/certgen_code.hthr`, elaborated with the file):
   `mul`'s transcription written out — markers spelled as the walker builds
   them, expected `Ir` in the walker's own numbering (`LetCall(0)` self,
   `LetCall(1)` the callee) — checked by `refl` against what the Rust
@@ -329,7 +329,7 @@ end-to-end), and declines that name their deciding party.
 2. Callee markers per §3: `mark` closes Ψ-referencing fragment bodies;
    nullary and body-less callees decline at marking with messages naming the
    policy.
-3. `lib/certgen_code.hthr` gains `PCall`, `TFn`, `TPart`, the composition
+3. `lib/certgen/certgen_code.hthr` gains `PCall`, `TFn`, `TPart`, the composition
    helpers, and the `mul` + decline pins; both shells and both slot
    signatures byte-unchanged; the file still elaborates whole.
 4. **The customer**: `generate_in_language` serves `mul` with an emission

@@ -27,7 +27,7 @@ inferred, it is counted. The per-call deferral
 checking-only argument instead.
 
 Found by the 2026-09-24 probe of the remaining `@` sites: ~20 of the 80
-(`@BitVec::from_bits` ×15 in `lib/std/utf8.hthr`'s bit proofs, `@BitVec::concat`
+(`@BitVec::from_bits` ×15 in `lib/std/text/utf8.hthr`'s bit proofs, `@BitVec::concat`
 ×5). Slice #1b with [[unify-succ-under-addition]], under
 [[elab-unifier-completeness]]. Sibling shape: [[nullary-ctor-argument-not-deferred]].
 

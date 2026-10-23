@@ -1,4 +1,4 @@
-// Linux's `Implements` as a simulation (lib/std/itree_sim.hthr;
+// Linux's `Implements` as a simulation (lib/std/itree/itree_sim.hthr;
 // issues/itree-iter-simulation.md).
 //
 // `ITree::Implements` (`linux_trees`) reads a trace over Linux's calls with

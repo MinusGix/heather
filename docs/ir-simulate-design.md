@@ -354,7 +354,7 @@ option 2, one normal form, is the removal rather than the paper-over).
   derived-artifact story into the meta layer — `embed_T` is exactly such
   an artifact.
 
-## 13. Implementation notes (v1 as landed — `lib/ir_v1.hthr`, 2026-07-31)
+## 13. Implementation notes (v1 as landed — `lib/certgen/ir_v1.hthr`, 2026-07-31)
 
 The implementing round (§11 items 1, 2, 6) landed the same day the sketch
 did, and reality edited the sketch in five places; note 6 is a later
@@ -397,7 +397,7 @@ recorded here with its reason so the next reader doesn't re-derive it.
    instead of one costs **1.24×** on the whole library file. The multiplier
    is gone — a duplicated occurrence now evaluates to a shared value rather
    than a copied term — so the discipline survives as good style and not as
-   a constraint. Keep it in `lib/ir_v1.hthr` (restructuring the library to
+   a constraint. Keep it in `lib/certgen/ir_v1.hthr` (restructuring the library to
    exploit the change is a round of its own); stop *requiring* it of new
    Heather code. The original numbers and the two compounding causes are in
    `issues/simulate-conversion-cost.md`.
@@ -447,7 +447,7 @@ recorded here with its reason so the next reader doesn't re-derive it.
    a branch, and `simulate` — unmodified, in its pretty form — went from
    exponential to flat: the arm-nested probe's N = 15 from 33.8s / 4544 MB
    to 1.45s / 20.9 MB, and `add(2,3)` through `LetCall` from 20.9s to
-   ~0.05s. Both combined theorems are now in `lib/ir_v1.hthr` and the whole
+   ~0.05s. Both combined theorems are now in `lib/certgen/ir_v1.hthr` and the whole
    file checks in 1.25s at 14.4 MB. The bet that the fix belonged in the
    kernel and not in the interpreter's shape paid; the two consequences for
    *this* document are note 4's discipline (a constant now, not a cliff)
@@ -500,7 +500,7 @@ recorded here with its reason so the next reader doesn't re-derive it.
      the reflection equation is gone — `docs/nat-order-design.md`. The
      paragraph is kept as the record of why the reflection was chosen then.
      Nothing in this file changed with it: `fuel_monotone` and every other use
-     here goes through the lemma kit, so all of `lib/ir_v1.hthr` checked
+     here goes through the lemma kit, so all of `lib/certgen/ir_v1.hthr` checked
      unmodified across the swap, which is the evidence for the discipline that
      made the swap safe.)
 
@@ -567,7 +567,7 @@ recorded here with its reason so the next reader doesn't re-derive it.
    ```
 
    is the definition §6 asked for. `refines_refl_conv`, `refines_trans_conv`
-   and `refines_of_bounded` in `lib/ir_v1.hthr` are now stated *through* the
+   and `refines_of_bounded` in `lib/certgen/ir_v1.hthr` are now stated *through* the
    name rather than spelled out — the fuel-map-free ∃-shape is the one that
    got named, which is the right one: the bound is inside `Converges`, so
    `Refines` has exactly the four arguments the relation is about. The bounded
@@ -676,7 +676,7 @@ costs and why it costs nothing later.
 10. **The landed extrinsic nodes do not carry output arities** (2026-08-19,
     found by the certified constant-match-fusion pass). Section 3's region
     model assigns every node an output arity, but the chain encoding in
-    `lib/ir_v1.hthr` binds whatever `Val` spine its sub-region returns:
+    `lib/certgen/ir_v1.hthr` binds whatever `Val` spine its sub-region returns:
     `LetMatch`, `LetLoop`, and `LetCall` contain no arity field. Evaluation is
     total because malformed arities are merely data; reference rewriting is
     not. A pass cannot lift a slot map through one of these binders without

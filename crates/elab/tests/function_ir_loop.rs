@@ -1,21 +1,21 @@
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/int.hthr")),
-    ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/num/int.hthr")),
+    ("bitvec", include_str!("../../../lib/std/bitvec/bitvec.hthr")),
 ];
 
 #[test]
 fn bounded_readonly_semantics_checks() {
     let mut elab = support::semantic_test_base(MODULES);
-    let source = include_str!("../../../lib/function_ir_loop.hthr");
+    let source = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
 }
 
@@ -23,7 +23,7 @@ fn bounded_readonly_semantics_checks() {
 fn readonly_loop_source_reflection_checks() {
     use heather_elab::function_ir_source::{reflect_elaborated_readonly_loop, generate_readonly_loop_certificate};
     let mut elab = support::semantic_test_base(MODULES);
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
     elab.elab_module_source("readonly_loops", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
@@ -127,7 +127,7 @@ fn reject(image: &heather_elab::SemanticImage, name: &str, text: &str) {
 #[test]
 fn readonly_loop_open_contracts_and_rejections() {
     let mut elab = support::semantic_test_base(MODULES);
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     elab.elab_module_source("loop_laws", LAWS).unwrap_or_else(|e| panic!("{}", e.render(LAWS)));
     let image = elab.semantic_image();
@@ -157,7 +157,7 @@ theorem bad_cursor_bound(): LoopBounds(ReadonlyBytes(0, 0, 0, λ address => None
 #[test]
 fn readonly_loop_two_clients_compute() {
     let mut elab = support::semantic_test_base(MODULES);
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
     elab.elab_module_source("readonly_loops", source).unwrap_or_else(|e| panic!("{}", e.render(source)));

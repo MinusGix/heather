@@ -2,7 +2,7 @@
 
 The [abstract client](showcase/finite_set_client.hthr) is unchanged. Its union,
 image, update, and selected-element operations now have a second implementation:
-[`tree_finite_set.hthr`](../lib/std/tree_finite_set.hthr). The
+[`tree_finite_set.hthr`](../lib/std/data/set/tree_finite_set.hthr). The
 [tree client](showcase/finite_set_tree_client.hthr) instantiates the existing
 theorems and dependent functions.
 
@@ -51,7 +51,7 @@ guessing an otherwise unused operation from the carrier would be ambiguous.
 
 ## Switching implementations has proofs too
 
-[`tree_list_set_transfer.hthr`](../lib/std/tree_list_set_transfer.hthr) connects
+[`tree_list_set_transfer.hthr`](../lib/std/data/set/tree_list_set_transfer.hthr) connects
 the two implementations after each has independently established its laws:
 
 - Enumeration preserves and reflects membership, hence semantic equality.

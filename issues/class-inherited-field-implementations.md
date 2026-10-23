@@ -18,15 +18,15 @@ interderivable laws: `FrameHom` states `func-Join` and `func-Join>=`, each
 defaulted from the other, and an instance implements whichever is easier.
 
 Heather today: `class Ring<A>(…) extends Semiring<A>(…), GroupRel<A>(…) {}`
-(`lib/std/semiring.hthr:143`) adds nothing, so every ring instance re-proves
+(`lib/std/algebra/semiring.hthr:143`) adds nothing, so every ring instance re-proves
 the semiring absorption laws that the group structure already implies:
 
 | instance | where |
 |---|---|
-| `CommRing<Int>` | `lib/std/semiring.hthr:304` |
-| `CommRing<Rat>` | `lib/std/rat.hthr:1460` |
-| `CommRing<CReal>` | `lib/std/creal.hthr:1615` |
-| `CommRing<Dyadic>` | `lib/std/float/dyadic.hthr:282` |
+| `CommRing<Int>` | `lib/std/algebra/semiring.hthr:304` |
+| `CommRing<Rat>` | `lib/std/num/rat.hthr:1460` |
+| `CommRing<CReal>` | `lib/std/num/creal.hthr:1615` |
+| `CommRing<Dyadic>` | `lib/std/num/float/dyadic.hthr:282` |
 
 each with `zero_mul := T::zero_mul, mul_zero := T::mul_zero` and a per-type
 theorem behind them. That is the restating of laws that the `math-classes`
@@ -40,7 +40,7 @@ milestone says clients should not do.
    other fields (Arend's implicit `\this`). An instance of `Ring` or any
    descendant may omit the field. The proof is a generic one over the
    additive group and distributivity (`x * 0 + x * 0 ≈ x * 0`, then cancel),
-   written once beside `Ring::neg_mul` (`lib/std/semiring.hthr:200`), which
+   written once beside `Ring::neg_mul` (`lib/std/algebra/semiring.hthr:200`), which
    today itself relies on the instance-supplied `zero_mul`.
 2. Interderivable pairs: two fields each defaulted from the other, and an
    instance must implement at least one. Arend checks the cycle is broken

@@ -288,7 +288,7 @@ reaches the kernel. `impl f for Rp { … }` likewise elaborates to an
 ordinary record value registered at the operation-indexed key.
 
 **Elaborator gaps a landing round must close** (cross-checked against what
-instances can hold today, `lib/std/algebra.hthr`):
+instances can hold today, `lib/std/algebra/algebra.hthr`):
 
 1. **The two declaration forms** (parser + elaboration). The novel part is
    not the record sugar (classes already do namespaces-then-record, and
@@ -816,7 +816,7 @@ decline, not drift.
   name-prefixing and collision refusal; decline-with-reason; exactness
   fixtures; perturbed-library mutation controls; the frozen-rim/in-language
   walker split when it re-homes (a future `lib/reprgen_code.hthr` under the
-  same rules as `lib/certgen_code.hthr`).
+  same rules as `lib/certgen/certgen_code.hthr`).
 - **Code**: the registry query seam (phase 0) is the same resolver walk
   compile-typeclass needs; the schema-fold certificate machinery is
   `cert_body`'s pattern and plausibly its literal library once both are

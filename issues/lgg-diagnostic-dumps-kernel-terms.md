@@ -14,7 +14,7 @@ times over, and the one thing the reader wants — *which subterm of my goal did
 not match my proof* — is not recoverable from it.
 
 Found while diagnosing [[congruence-by-anti-unification]] (2026-08-18): every
-`cannot generalize` failure in `lib/std/int.hthr` and `lib/std/list.hthr`
+`cannot generalize` failure in `lib/std/num/int.hthr` and `lib/std/data/list.hthr`
 produced one, and reading them required a script to slice the string.
 
 `Debug` on kernel terms is budget-bounded and that is working as designed — the

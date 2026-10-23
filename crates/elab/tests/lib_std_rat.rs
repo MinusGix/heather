@@ -1,4 +1,4 @@
-//! `lib/std/rat.hthr` — unreduced rationals over a `Pos<Nat>` denominator,
+//! `lib/std/num/rat.hthr` — unreduced rationals over a `Pos<Nat>` denominator,
 //! the first arithmetic setoid customer
 //! (`issues/positive-naturals-and-rationals.md`,
 //! `docs/setoid-rationals-round.md`).
@@ -26,32 +26,32 @@ use heather_elab::{Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/int.hthr")),
-    ("omega", include_str!("../../../lib/std/omega.hthr")),
-    ("ring", include_str!("../../../lib/std/ring.hthr")),
-    ("relation", include_str!("../../../lib/std/relation.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/num/int.hthr")),
+    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
+    ("ring", include_str!("../../../lib/std/tactic/ring.hthr")),
+    ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
     (
         "relation_props",
-        include_str!("../../../lib/std/relation_props.hthr"),
+        include_str!("../../../lib/std/relation/relation_props.hthr"),
     ),
     (
         "algebra_rel",
-        include_str!("../../../lib/std/algebra_rel.hthr"),
+        include_str!("../../../lib/std/algebra/algebra_rel.hthr"),
     ),
-    ("order", include_str!("../../../lib/std/order.hthr")),
-    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
+    ("order", include_str!("../../../lib/std/algebra/order.hthr")),
+    ("semiring", include_str!("../../../lib/std/algebra/semiring.hthr")),
     (
         "ordered_field",
-        include_str!("../../../lib/std/ordered_field.hthr"),
+        include_str!("../../../lib/std/algebra/ordered_field.hthr"),
     ),
-    ("rat", include_str!("../../../lib/std/rat.hthr")),
+    ("rat", include_str!("../../../lib/std/num/rat.hthr")),
 ];
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();

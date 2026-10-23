@@ -65,7 +65,7 @@ scannerless calculator demonstrates.
 
 ## Plan
 
-- Round 1: character classification in `lib/std/char.hthr` — `is_digit`,
+- Round 1: character classification in `lib/std/text/char.hthr` — `is_digit`,
   `is_space`, `digit_val` and their soundness lemmas.
 - Round 2: certified repetition in the parser library. `many`/`some` carry a
   `Consumes` certificate but **no `Post`/span contract**, so a proof-carrying
@@ -85,12 +85,12 @@ scannerless calculator demonstrates.
 
 - 2026-09-18: Rounds 1–3 landed; the design record is `docs/sequence-parser-source-design.md`.
 
-  - `lib/std/char.hthr`: `is_digit`, `is_space`, `code_is`, `digit_val`,
+  - `lib/std/text/char.hthr`: `is_digit`, `is_space`, `code_is`, `digit_val`,
     `digit_of`, and the facts around them — `selected_of_match` (the inversion at
     an abstract `Bool`, because a `match` on the computed class does not refine
     `digit_of(c)`), `digit_selected`, `digit_val_lt`, `code_is_sound`,
     `code_is_char`.
-  - `lib/std/list.hthr`: `cong_append_r`, the missing counterpart of
+  - `lib/std/data/list.hthr`: `cong_append_r`, the missing counterpart of
     `cong_append_l`.
   - `docs/showcase/calc_text.hthr`: the scannerless calculator. `Number` carries
     its digits, whitespace is carried per-lexeme with an all-spaces obligation,
@@ -163,7 +163,7 @@ scannerless calculator demonstrates.
   `--only` is the difference between a ~13 s and a ~95 s inner loop, so it comes
   before the record-token work if this file is to be iterated on.
 - 2026-09-18: Correction to this issue's 2026-09-18 tooling entry: `--only` is **not**
-  regressed. It works — 5 s on `calc_parser`, 1 s on `lib/std/string.hthr`. The
+  regressed. It works — 5 s on `calc_parser`, 1 s on `lib/std/text/string.hthr`. The
   reason it refuses on `calc_text` is that the module's semantic image is 483 M
   syntax nodes against a 256 M budget and is therefore never stored, so there is
   no previous image to replay; the 95 s warm floor has the same cause.

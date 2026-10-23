@@ -8,7 +8,7 @@ created: 2026-10-21
 updated: 2026-10-21
 ---
 
-`Format::round_rat` (`lib/std/float/round.hthr`) divides `|num| · 2^q` by
+`Format::round_rat` (`lib/std/num/float/round.hthr`) divides `|num| · 2^q` by
 `den · 2^p` with `Nat::div`/`Nat::mod`. Those evaluate through
 `Nat::divmod`, a state machine the kernel does not accelerate
 (`crates/kernel/DESIGN.md`, acceleration policy: `div`'s state machine is

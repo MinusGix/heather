@@ -39,7 +39,7 @@ are visibly one type, in an argument position whose type they consider obvious.
 
 The annotation is not merely verbose, it is **redundant with the callee**: the
 motive states the very type the callee's parameter already gives, so the reader
-of `len_filter` in `lib/std/list.hthr` meets a five-line motive whose whole
+of `len_filter` in `lib/std/data/list.hthr` meets a five-line motive whose whole
 content is `List<A>`. And the trigger is common in exactly the position the
 library is now in — every list function is polymorphic, and case analysis on a
 `Bool` or a `Decide` inside one is the ordinary way to write a program.
@@ -95,7 +95,7 @@ Three properties keep it honest:
 Tests: `crates/elab/tests/motive_synth.rs` — the headline, one-arm-binds-
 nothing-is-enough, every-arm-binds still asks for the motive, and the
 stage-2 *checking*-position synthesis undisturbed. Library:
-`lib/std/list.hthr`'s `len_filter` lost its inner `as λ c => List<A>`; the
+`lib/std/data/list.hthr`'s `len_filter` lost its inner `as λ c => List<A>`; the
 outer motive stays, because that one is doing real dependent work.
 
 **What it bought beyond its own acceptance**, found by the four suite probes
@@ -130,7 +130,7 @@ the motive message itself, that is now also the only shape that produces it.
 ## Acceptance
 
 `len(match b { True => xs, False => Nil })` checks with no motive and no
-spelled type argument, and `lib/std/list.hthr`'s `len_filter` loses its inner
+spelled type argument, and `lib/std/data/list.hthr`'s `len_filter` loses its inner
 `as λ c => List<A>`. Met, with the negative control **as landed rather than as
 written here**: the control that survives is *every arm binds* (no arm can
 name the type, so the motive is still asked for). Arms that merely disagree do

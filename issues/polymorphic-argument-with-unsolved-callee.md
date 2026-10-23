@@ -28,7 +28,7 @@ other two were:
   argument's own implicits *are* solved from a known expected type.
 - **With the argument η-expanded, the callee's type argument is fine.**
   `map(zip(xs, ys), λ (q: Pair<A, B>) => swap(q))` checks, and this is what
-  `lib/std/list.hthr` ships, because it is shorter than the type arguments.
+  `lib/std/data/list.hthr` ships, because it is shorter than the type arguments.
 
 What cannot happen is both at once: solving `map`'s `B` requires knowing
 `swap`'s instance, and `swap`'s instance would come from `map`'s parameter type,
@@ -55,7 +55,7 @@ the argument against it and defer.
 ## Acceptance
 
 `map(zip(xs, ys), swap)` checks with no type arguments and no η-expansion, and
-`lib/std/list.hthr`'s `zip_swap` is restated on it. Negative control: an
+`lib/std/data/list.hthr`'s `zip_swap` is restated on it. Negative control: an
 argument whose implicits are genuinely undetermined by the parameter type still
 reports, and still names which implicit.
 

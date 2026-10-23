@@ -450,7 +450,7 @@ folds' certificates.
 ## 11. Defined propositions and calls that compute to constructors (2026-10-12)
 
 `issues/omega-unfolds-defined-propositions.md`. The rationals client
-(`lib/std/rat.hthr`) restated most goals and hypotheses with a typed `let`
+(`lib/std/num/rat.hthr`) restated most goals and hypotheses with a typed `let`
 before calling omega, because each was spelled through a definition. Five
 pieces, all in `crates/elab/src/omega_cert.rs`:
 

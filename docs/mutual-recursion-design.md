@@ -222,7 +222,7 @@ closing the combined goal (`p1.hthr`).
 > parser's heaviest declaration (`checked_expr`, 797 ms, of which ~640 ms
 > was the five sites' certificates;
 > `issues/measure-obligation-omega-on-a-written-proof.md`). The flattening's
-> two facts are now `lib/std/nat.hthr`'s
+> two facts are now `lib/std/num/nat.hthr`'s
 > `Nat::scaled_lt(self a, b, r, s, n, h: a < b, q: r < n)` and
 > `Nat::scaled_le(self a, b, r, s, n, h: a <= b, q: r < s)`, both concluding
 > `a * n + r < b * n + s`, proved structurally from the `add_le_mono` and

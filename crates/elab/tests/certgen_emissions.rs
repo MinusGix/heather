@@ -19,7 +19,7 @@
 //! **A binary of its own since 2026-08-12** (the non-`Nat` embeddings round):
 //! `scripts/test`'s `ulimit -t` is per *process*, and this test plus
 //! `certgen.rs`'s `in_language_transcriber` no longer fit one 300-second rail
-//! together — each pays a ~40 s elaboration of `lib/certgen_code.hthr` on top
+//! together — each pays a ~40 s elaboration of `lib/certgen/certgen_code.hthr` on top
 //! of its own work. Splitting is the free lever
 //! `issues/certgen-harness-cost.md` records, and it is free because the two
 //! tests never shared an elaborator in the first place. `scripts/test --fast`
@@ -37,27 +37,27 @@ use heather_syntax::parse_file;
 
 use crate::support;
 
-const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
+const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
 /// The library's one import (docs/modules-design.md §7). Elaborated whole,
 /// which is why the arithmetic and order kit is no longer sliced out of
 /// `LIB` item by item below — `import nat;` in the declarations prefix brings
 /// all of it into scope.
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
 /// The transcriber: the data and helpers, plus the two `match code` shells
 /// claiming `certgen.transcribe` and `certgen.check_sig`
 /// (docs/certgen-transcriber-in-language-design.md,
 /// docs/fn-signature-reflection-design.md). This file IS the fragment's
 /// definition — signature rule and body rule both — and nothing in Rust
 /// decides it.
-const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
+const CODE: &str = include_str!("../../../lib/certgen/certgen_code.hthr");
 /// The certificate fold: the `Cert`/`CertOut` data and the `fn`s that fold an
 /// `Ir` into a chain of ∃-kit applications
 /// (docs/certgen-cert-expression-design.md). Ordinary program-layer code — no
 /// `match code`, so no 52-branch gate — and the emitters read its answer back
 /// instead of deciding the fold in Rust.
-const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
+const CERT: &str = include_str!("../../../lib/certgen/certgen_cert.hthr");
 
 /// Items a generated emission needs beyond the declarations prefix, in
 /// dependency (file-consistent) order.
@@ -132,7 +132,7 @@ const THIRD3: &str =
 /// walker is source-blind and derives `Zero` where the source said `0` (both
 /// denote the same Nat) — spelling it this way keeps the pins about the
 /// cross-function call rather than about literal spelling. Named `viaadd`
-/// rather than `mul` since 2026-08-13, when `lib/std/nat.hthr` took the
+/// rather than `mul` since 2026-08-13, when `lib/std/num/nat.hthr` took the
 /// latter name for a differently-spelled library function
 /// (`crates/elab/tests/certgen.rs`'s `VIAADD` carries the reasons). The call
 /// is receiver-style since `add` became the member `Nat::add`.
@@ -155,7 +155,7 @@ fn refuted(e: &mut Elaborator, src: &str, what: &str) {
 }
 
 /// A prelude'd elaborator with `nat` in it — the closure `heather check
-/// lib/ir_v1.hthr` walks, minus the root.
+/// lib/certgen/ir_v1.hthr` walks, minus the root.
 fn base() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_module_source("logic", LOGIC).unwrap_or_else(|err| panic!("{}", err.render(LOGIC)));
@@ -165,7 +165,7 @@ fn base() -> Elaborator {
 }
 
 /// One elaborator serves the whole acceptance: the support prelude and
-/// `lib/certgen_code.hthr` are the expensive parts, so the positive emissions
+/// `lib/certgen/certgen_code.hthr` are the expensive parts, so the positive emissions
 /// and the mutation controls (renamed apart) all share it.
 ///
 /// Positives — every one of them generated, elaborated and kernel-checked:
@@ -188,11 +188,11 @@ fn emissions_check_and_controls() {
     // declaration cache (issues/elaborator-snapshot-across-test-binaries.md);
     // this one is the designated backstop: every full-suite run contains one
     // front-to-back kernel-checked elaboration of the support prelude,
-    // `lib/certgen_code.hthr` and `lib/certgen_cert.hthr`, so a defect in the
+    // `lib/certgen/certgen_code.hthr` and `lib/certgen/certgen_cert.hthr`, so a defect in the
     // cache mechanism itself cannot turn the whole family green.
     elab(&mut e, &sup, "support prelude");
-    elab(&mut e, CODE, "lib/certgen_code.hthr");
-    elab(&mut e, CERT, "lib/certgen_cert.hthr");
+    elab(&mut e, CODE, "lib/certgen/certgen_code.hthr");
+    elab(&mut e, CERT, "lib/certgen/certgen_cert.hthr");
     elab(&mut e, SEVEN, "fn seven");
     elab(&mut e, THIRD3, "fn third3");
     elab(&mut e, VIAADD, "fn viaadd");

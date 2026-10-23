@@ -11,15 +11,15 @@ owns the sequencing that put them next (`0 → 1 → 2 → L1 → L2`); this iss
 owns their content, and the rankings they produce.
 
 `std/list` is 76 lines to `std/nat`'s 1029: `append` with two laws, `map` with
-**none**, `List::nth`. `len` and `rev` are stranded in `lib/list_algos.hthr`
+**none**, `List::nth`. `len` and `rev` are stranded in `lib/lang/list_algos.hthr`
 next to a private `plusl`. That asymmetry is the round.
 
 ## L1 — the API
 
-Into `lib/std/list.hthr`:
+Into `lib/std/data/list.hthr`:
 
 - **Move** `len` and `rev` (+ `rev_append`, `rev_involutive`, `cong_append_l`)
-  out of `lib/list_algos.hthr`, which keeps them by `import list;` exactly as
+  out of `lib/lang/list_algos.hthr`, which keeps them by `import list;` exactly as
   it already keeps `cong_cons` and the append laws (the 2026-08-07 precedent).
 - **Retire `plusl`.** It exists because `nat::add` recurses on its *second*
   argument while `nth_append_r`'s index has to reduce as `xs` is peeled off
@@ -63,8 +63,8 @@ question this round answers.
 
 ## What landed (2026-08-17)
 
-`lib/std/list.hthr`, 76 lines → 419. `lib/std/pair.hthr` is new (14).
-`lib/list_algos.hthr` went 218 → 136 and is now only algorithms. Coverage:
+`lib/std/data/list.hthr`, 76 lines → 419. `lib/std/core/pair.hthr` is new (14).
+`lib/lang/list_algos.hthr` went 218 → 136 and is now only algorithms. Coverage:
 `crates/elab/tests/lib_std_list.rs`, three tests — the closure checks, the law
 kit applies at open arguments, and the API *computes* at closed ones.
 
@@ -117,4 +117,4 @@ the `Nat` waves, which had no type arguments to leave unsolved.
 ## Log
 
 - 2026-08-17: Landed; see §What landed and §The ranking this round produced above. Residue has owners before closing (README rule 3): the unstated laws are [[std-api-waves]]'s new L2' row, zip's inference is [[curried-tail-type-arg-inference]], head/last's spelling is [[guarded-to-option-adapter]], the goal display is [[le-diagnostics-print-raw-el]].
-- 2026-08-17: Both language gaps this round ranked are FIXED, same day (2026-08-17): [[curried-tail-type-arg-inference]] (spilled arguments now solve the callee's type parameters) and [[match-arg-of-polymorphic-callee-needs-motive]] (a motive-less match in inference position takes a constant motive from a non-binding arm). lib/std/list.hthr lost both workarounds — zip(xs, ys) is unspelled and len_filter's inner motive is gone — so the file now reads the way the round wanted to write it. The second fix reached further than its issue predicted: an unannotated `let x = match r { … };` elaborates, and three suite probes that had been using the refusal as a stand-in for 'an expression whose type is unknown' had to be rewritten onto every-arm-binds matches. One new issue came out of the controls: [[check-fallback-discards-expected-type]].
+- 2026-08-17: Both language gaps this round ranked are FIXED, same day (2026-08-17): [[curried-tail-type-arg-inference]] (spilled arguments now solve the callee's type parameters) and [[match-arg-of-polymorphic-callee-needs-motive]] (a motive-less match in inference position takes a constant motive from a non-binding arm). lib/std/data/list.hthr lost both workarounds — zip(xs, ys) is unspelled and len_filter's inner motive is gone — so the file now reads the way the round wanted to write it. The second fix reached further than its issue predicted: an unannotated `let x = match r { … };` elaborates, and three suite probes that had been using the refusal as a stand-in for 'an expression whose type is unknown' had to be rewritten onto every-arm-binds matches. One new issue came out of the controls: [[check-fallback-discards-expected-type]].

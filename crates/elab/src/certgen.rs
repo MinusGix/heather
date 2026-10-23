@@ -3,13 +3,13 @@
 //!
 //! **Transcription lives in the language.** The fragment's definition — which
 //! signatures and which bodies are transcribable, and what they transcribe to
-//! — is `lib/certgen_code.hthr`, two `match code` shells over the reflected
+//! — is `lib/certgen/certgen_code.hthr`, two `match code` shells over the reflected
 //! declaration; there is no Rust walker any more
 //! (`issues/retire-rust-transcriber.md` stage 2, 2026-08-12).
 //!
 //! **And so does the certificate fold.** *Which* kit lemma proves *which*
 //! instruction, and whose certificate discharges a call, is
-//! `lib/certgen_cert.hthr` — ordinary program-layer `fn`s folding the
+//! `lib/certgen/certgen_cert.hthr` — ordinary program-layer `fn`s folding the
 //! transcriber's `Ir` into a first-order certificate expression
 //! (docs/certgen-cert-expression-design.md, Round A of
 //! `issues/in-language-certificate-emission.md`). What is left here is the
@@ -31,7 +31,7 @@
 //!   3. the **emitters** ([`emit_with_model`] and below): *surface text* — the
 //!      IR, the exactness fixtures, the ∃-form invariants ([`render_cert`],
 //!      which is the certificate expression printed) and a `CompileNatK`
-//!      instance value — to be checked appended to `lib/ir_v1.hthr` by the
+//!      instance value — to be checked appended to `lib/certgen/ir_v1.hthr` by the
 //!      ordinary pipeline.
 //!
 //! The generator is untrusted by architecture: everything it emits is
@@ -41,7 +41,7 @@
 //! cannot supply — the *names* ([`surface_params`]).
 //!
 //! v2's proof schema is the ∃-COMPOSITION KIT (`ret_conv` / `letcon_conv` /
-//! `letmatch_conv` / `letcall_conv` in `lib/ir_v1.hthr`): an invariant is
+//! `letmatch_conv` / `letcall_conv` in `lib/certgen/ir_v1.hthr`): an invariant is
 //! `Converges(prog, env, body, out)` proved by folding the kit over the
 //! instruction chain — every `gather`/`lookup` premise discharges by `refl`
 //! on the concrete-spine environment, the self-call's certificate is the
@@ -223,7 +223,7 @@ impl GenCtx {
 }
 
 /// The per-signature certificate record. `CompileNatK` when the result type is
-/// `Nat` (and `None` for K = 2, which `lib/ir_v1.hthr` already declares);
+/// `Nat` (and `None` for K = 2, which `lib/certgen/ir_v1.hthr` already declares);
 /// `CompileNatK{T}` otherwise — "`CompileTK` records per signature until
 /// bundled records exist" (docs/certifying-generator-design.md §8 item 2).
 fn compile_record(arity: usize, pts: &[Option<ParamTy>], res: &ResTy) -> Option<(String, String)> {
@@ -288,7 +288,7 @@ fn record_name(pts: &[Option<ParamTy>], res: &ResTy, arity: usize) -> String {
 // no library change at all: `embed_nat` is one instance of a scheme, and this
 // struct is that scheme's data (docs/certgen-non-nat-embeddings-design.md §1).
 // Everything in it is a NAME — the type's, its embedding function's, its
-// constructors' — which is why it lives here and not in `lib/certgen_code.hthr`
+// constructors' — which is why it lives here and not in `lib/certgen/certgen_code.hthr`
 // (§6): Ψ carries a lowering, not the identifiers it was written with.
 //
 // `Nat` is not a special case; it is the zero-th instance, so every format
@@ -882,7 +882,7 @@ impl ParamTy {
 const RESERVED: [&str; 3] = ["gz", "gk", "gih"];
 
 /// Everything the fragment decision does **not** need the surface AST for is
-/// gone: the signature rule is `lib/certgen_code.hthr`'s `check_sig`
+/// gone: the signature rule is `lib/certgen/certgen_code.hthr`'s `check_sig`
 /// (docs/fn-signature-reflection-design.md §4) and the body rule is the
 /// walker's decline set, both reached through the reflection API. What no
 /// reflected form can supply is the *names* — Ψ carries a body, not the
@@ -1119,7 +1119,7 @@ impl<'a> Evaluator<'a> {
 // The ∃-proof emission: RENDER the certificate expression the in-language
 // fold produced (docs/certgen-cert-expression-design.md).
 //
-// The fold itself is `lib/certgen_cert.hthr`: which kit lemma applies where,
+// The fold itself is `lib/certgen/certgen_cert.hthr`: which kit lemma applies where,
 // the order of the chain, the arm split, and — the interesting one — whether a
 // call's hypothesis is the induction hypothesis or a callee's invariant. What
 // is left here is every *name*: the program, the environment's spec
@@ -1244,7 +1244,7 @@ impl ProofCx<'_> {
     /// The IR the certificate is about, spelled as the emitted proofs spell
     /// it: `letcon_conv`/`letcall_conv` take the *remaining* region as an
     /// argument, and that region is exactly what the sub-certificate proves
-    /// (`lib/certgen_cert.hthr` convention 3). Callee indices are the
+    /// (`lib/certgen/certgen_cert.hthr` convention 3). Callee indices are the
     /// program closure's, which is where the walker's numbering is converted.
     fn cert_ir(&self, c: &RCert) -> Result<String, String> {
         Ok(match c {
@@ -1782,7 +1782,7 @@ fn emit_fixtures(
 /// spec arguments and any environment tail, the body converges to the
 /// embedded spec result.
 ///
-/// The *proof* is `cert`, the certificate expression `lib/certgen_cert.hthr`
+/// The *proof* is `cert`, the certificate expression `lib/certgen/certgen_cert.hthr`
 /// folded out of `m`'s IR; what this function writes around it is the
 /// statement — binders, the induction's motive, and the `Zero`/`Succ(gk)`
 /// spelling of the scrutinized parameter — every token of which is a name.
@@ -2527,7 +2527,7 @@ fn mark(
             }
         }
         // The tier-0 constructor formers a non-`Nat` result type's values are
-        // built from (convention 4 of `lib/certgen_code.hthr`). Type
+        // built from (convention 4 of `lib/certgen/certgen_code.hthr`). Type
         // annotations are carried through untouched: they are closed in the
         // fragment, and the walker binds and ignores them.
         Term::Triv { level } => Term::Triv {
@@ -2911,7 +2911,7 @@ fn global_head(mut t: &Term) -> bool {
 ///
 /// Since the reflection round (docs/fn-signature-reflection-design.md §§4–5)
 /// this is **mechanical residue, not the fragment decision**: the decision is
-/// `lib/certgen_code.hthr`'s `check_sig`, run by [`run_sig_checker`], and this
+/// `lib/certgen/certgen_code.hthr`'s `check_sig`, run by [`run_sig_checker`], and this
 /// peel is kept because marking needs the body under its binders at a known
 /// depth — its checks survive as the agreement oracle `generate_in_language`
 /// compares the in-language verdict against.
@@ -3312,7 +3312,7 @@ impl<'v> Reader<'_, 'v> {
         }
     }
 
-    /// `Ir`, in `lib/ir_v1.hthr`'s declaration order. The instruction forms
+    /// `Ir`, in `lib/certgen/ir_v1.hthr`'s declaration order. The instruction forms
     /// outside the fragment (`LetLoop`, `LoopIter`) decline: the in-language
     /// transcriber never emits them, so reading one means the value is not
     /// what this reader was pointed at.
@@ -3368,7 +3368,7 @@ impl<'v> Reader<'_, 'v> {
 
 // -- the certificate expression, as read back -------------------------------
 //
-// `lib/certgen_cert.hthr`'s `Cert`/`CertOut`, with the two things the readback
+// `lib/certgen/certgen_cert.hthr`'s `Cert`/`CertOut`, with the two things the readback
 // owns already applied: the walker's callee TAGS resolved to names
 // (convention 1 there), and `CStuck` turned into a decline. Everything else is
 // carried across unchanged, because everything else is the fold's answer.
@@ -3419,7 +3419,7 @@ enum RCertOut {
 }
 
 impl<'v> Reader<'_, 'v> {
-    /// `Cert`, in `lib/certgen_cert.hthr`'s declaration order. `callees` is
+    /// `Cert`, in `lib/certgen/certgen_cert.hthr`'s declaration order. `callees` is
     /// the reflection table a foreign tag `c ≥ 1` indexes; the self-call
     /// carries no name, because `CIh` says whose it is.
     fn cert(&self, t: &'v TmClo<'v>, callees: &[usize]) -> Result<RCert, String> {
@@ -3670,7 +3670,7 @@ fn global_app<'v>(
 }
 
 /// The certificate fold (docs/certgen-cert-expression-design.md §5): apply
-/// `lib/certgen_cert.hthr`'s `cert_body` to the transcriber's `Ir` and read
+/// `lib/certgen/certgen_cert.hthr`'s `cert_body` to the transcriber's `Ir` and read
 /// the certificate expression back.
 ///
 /// No analyzer slot, and no `meta fn`: the fold is a program-layer function of
@@ -3823,7 +3823,7 @@ fn chain_from_rir(
                 cur = rest;
             }
             RIr::LetCall { callee, args, rest } => {
-                // The walker's numbering (lib/certgen_code.hthr convention
+                // The walker's numbering (lib/certgen/certgen_code.hthr convention
                 // 3): 0 is the enclosing fn itself, `c ≥ 1` is
                 // `callees[c - 1]` from the body-reflection table. Ψ
                 // indices, not closure indices — this is the one place the
@@ -3867,7 +3867,7 @@ fn chain_from_rir(
 /// the environment at this point of the chain. The two walks must agree,
 /// because they type the same temporaries — and they do by construction, since
 /// the certificate fold is a per-instruction map over exactly this chain
-/// (`lib/certgen_cert.hthr` convention 3).
+/// (`lib/certgen/certgen_cert.hthr` convention 3).
 fn rir_ret_dist(ir: &RIr) -> Option<usize> {
     match ir {
         RIr::Ret(rs) => match rs[..] {
@@ -4066,7 +4066,7 @@ pub fn generate_in_language(e: &Elaborator, d: &Decl, ctx: &GenCtx) -> Result<Em
     // The certificate FOLD, over the same `Ir` value the model came from
     // (docs/certgen-cert-expression-design.md): which kit lemma applies where,
     // and whether a call consumes the induction hypothesis, is decided in
-    // `lib/certgen_cert.hthr`; what comes back is a certificate expression the
+    // `lib/certgen/certgen_cert.hthr`; what comes back is a certificate expression the
     // emitters render. A tier-1 induction goes through `cert_body_w` with its
     // kids mask; everything else through `cert_body`, unchanged.
     let kids = match &model.kind {

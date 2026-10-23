@@ -11,7 +11,7 @@ updated: 2026-10-07
 Equations about appends are assembled by hand from `trans`, `cong_fn`, `sym`
 and `List::append_assoc`. The library has about 1,175 `trans(`, 714 `j(` and
 416 `cong_fn` uses; `elf64_command_output.hthr:192-200` is a typical tower.
-`Monoid<List<A>>(append)` already exists (`lib/std/algebra.hthr:178`), and
+`Monoid<List<A>>(append)` already exists (`lib/std/algebra/algebra.hthr:178`), and
 nothing in the native library uses it.
 
 Wanted:

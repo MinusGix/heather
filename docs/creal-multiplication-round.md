@@ -1,8 +1,8 @@
 # Regular Cauchy reals, second round: products and `≤`
 
 Date: 2026-10-17. Continues [regular-cauchy-reals-round](regular-cauchy-reals-round.md)
-in [`lib/std/creal.hthr`](../lib/std/creal.hthr), with the rational estimates
-it needs added to [`lib/std/rat.hthr`](../lib/std/rat.hthr). The client is
+in [`lib/std/num/creal.hthr`](../lib/std/num/creal.hthr), with the rational estimates
+it needs added to [`lib/std/num/rat.hthr`](../lib/std/num/rat.hthr). The client is
 [`docs/showcase/creal_client.hthr`](showcase/creal_client.hthr) and the tests
 are `crates/elab/tests/lib_std_creal.rs`.
 

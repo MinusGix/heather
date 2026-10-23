@@ -9,12 +9,12 @@ updated: 2026-10-20
 
 `ring` normalizes at `Int` and `Nat` and proves `Rat` laws only through
 cross-multiplication, because its normalizer and soundness proof
-(`lib/std/ring.hthr`) are stated over `Int` with `=`. A goal
+(`lib/std/tactic/ring.hthr`) are stated over `Int` with `=`. A goal
 `x * (y + z) ≈ x * y + x * z` at `Rat` is proved today by unfolding `≈` to an
 `Int` equation and asking `ring` there, with the denominators handed in as
 facts.
 
-`CommRing<A>(≈, +, *)` (lib/std/semiring.hthr) is now the interface that
+`CommRing<A>(≈, +, *)` (lib/std/algebra/semiring.hthr) is now the interface that
 normalization wants: restate `RingExpr::eval`, `RingPoly::eval` and the
 soundness lemmas over a commutative ring modulo its relation, so a
 certificate reads `≈` at `Rat` (and at `CReal`, once it is a ring) without

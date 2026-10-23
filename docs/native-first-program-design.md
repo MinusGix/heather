@@ -27,7 +27,7 @@ Every native certificate so far covers either a fragment or a closed program:
   two inputs are baked in with `--arg`. The process claim is a fetched
   straight-line trace ending in `LinuxExitRequest`, and exit is the only
   syscall it models.
-- The call profile (`docs/x86-64-calls.md`, `lib/elf64_calls.hthr`) adds a
+- The call profile (`docs/x86-64-calls.md`, `lib/std/os/linux/elf64_calls.hthr`) adds a
   zero-filled RW page at `0x401000` and fetched CALL/RET. Its traces are still
   flat instruction lists (`FetchedCallTrace`).
 - The bounded-loop certificates (`docs/native-bounded-loops-design.md`) state
@@ -312,7 +312,7 @@ is refused with "`And` takes 2 argument(s), found 0".
   and refusals of a span one byte short and a start shifted by one. They sit
   in their own member rather than `function_ir_loop_trace.rs`, whose seven
   tests were already near the member's CPU rail.
-- **B — the basic trace, landed.** `lib/linux_x86_64_io.hthr` (`LinuxEvent`,
+- **B — the basic trace, landed.** `lib/std/os/linux/linux_x86_64_io.hthr` (`LinuxEvent`,
   `LinuxIo`, `linux_read_return`, `LinuxRuns` by recursion on the event list,
   constructors, and `linux_exit_request_runs` from the exit profile's request)
   and `lib/elf64_io.hthr` (the memory view, the `LinuxIo` instance,

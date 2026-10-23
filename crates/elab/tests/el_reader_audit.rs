@@ -313,7 +313,7 @@ fn a_named_statement_can_be_proved_by_container_induction() {
 
 // The same, through **β**: the statement is parameterized by the two functions
 // it relates, so the motive is `El` of an application of a δ-global to
-// function *values* — the shape `RefinesOn` has in `lib/ir_v1.hthr`.
+// function *values* — the shape `RefinesOn` has in `lib/certgen/ir_v1.hthr`.
 #[test]
 fn a_parameterized_statement_can_be_proved_by_container_induction() {
     elab(&format!(
@@ -364,7 +364,7 @@ fn a_named_non_equation_motive_still_gets_the_phase_3_message() {
 // `Nat -> Type` value. Each of these already normalized its subject (they call
 // `whnf` at the top or at every spine step), and this pins that: a regression
 // that made any of them structural would show up here rather than in
-// `lib/ir_v1.hthr`.
+// `lib/certgen/ir_v1.hthr`.
 #[test]
 fn the_already_normalizing_readers_take_the_shape() {
     elab(

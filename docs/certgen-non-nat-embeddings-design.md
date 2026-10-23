@@ -9,7 +9,7 @@ This is the **first fragment feature since the Rust transcriber walker was
 deleted** (`issues/retire-rust-transcriber.md`, closed), so it is also the
 first test of the frozen-walker rule: the analysis — which signatures are in
 the fragment, and what a body transcribes to — lands **in-language only**
-(`lib/certgen_code.hthr`), and Rust gains nothing but names, rendering and
+(`lib/certgen/certgen_code.hthr`), and Rust gains nothing but names, rendering and
 fixture arithmetic (`docs/certgen-transcriber-in-language-design.md` §5,
 `docs/certgen-cert-expression-design.md` §3). Where a check *looks* like
 analysis but is really a spelling question, §6 says so out loud rather than
@@ -25,7 +25,7 @@ and negative controls are mandatory.
 
 ## 1. The finding that sizes the round: `Val` needs nothing
 
-`lib/ir_v1.hthr`'s value domain is
+`lib/certgen/ir_v1.hthr`'s value domain is
 
 ```heather
 inductive Val { VNil, VCons(head: Val, tail: Val), VCon(tag: Nat, fields: Val) }
@@ -49,7 +49,7 @@ constructor `i` becomes `VCon(i, <its fields, embedded, as a VCons chain>)`.
 arbitrary tag, and neither ever mentions `Nat`.
 
 **Consequence, and it is the whole reason this stage is affordable: the blast
-radius on `lib/ir_v1.hthr` is zero.** No `Val` extension, no re-proof of the
+radius on `lib/certgen/ir_v1.hthr` is zero.** No `Val` extension, no re-proof of the
 ∃-composition kit, no change to `Converges`, `eval`, `fuel_monotone` or any
 kit lemma. `embed_T` is a *generated* declaration that lands in the emission
 beside the IR, exactly as §8 item 2 said ("a derived artifact"). The one thing
@@ -99,7 +99,7 @@ checked rather than assumed (probe, 2026-08-12):
   convention the marker pass does not have; and an enum with more than two
   constructors is a *nested* `Case` whose inner scrutinee is a fresh bound
   variable, which is precisely the "nested eliminator" the fragment declines
-  (`lib/certgen_code.hthr` convention 1). Any one of those is a round.
+  (`lib/certgen/certgen_code.hthr` convention 1). Any one of those is a round.
 
 So the smallest honest cut that exercises the general mechanism —
 `embed_T`, a per-signature `CompileTK`, a certificate whose goal is
@@ -122,7 +122,7 @@ constant motive — by three constructors carrying two more `Pre` fields, and
 *per `match` on the container*, with `Pre` the largest type this file has.
 Measured, one fixture at a time against the same session:
 
-| | `lib/certgen_code.hthr` elaboration | generating one fixture |
+| | `lib/certgen/certgen_code.hthr` elaboration | generating one fixture |
 | --- | --- | --- |
 | before the round | 36 s | ~10 s |
 | with fields (the first cut) | 75–89 s | 24 s, and **114 s** for the one fixture that had a field |
@@ -265,14 +265,14 @@ record CompileNat1Flag(f: Nat -> Flag) {
 ```
 
 `CompileNat{k}` for a `Nat` result (unchanged, `CompileNat2` still declared in
-`lib/ir_v1.hthr`), `CompileNat{k}{T}` otherwise — "`CompileTK` records per
+`lib/certgen/ir_v1.hthr`), `CompileNat{k}{T}` otherwise — "`CompileTK` records per
 signature until bundled records exist", as §8 item 2 wrote it. The record is
 the **checking position** of `docs/testing-generated-terms.md`: a wrong
 embedding dies in the `cert` field's type.
 
 ## 4. The transcriber's widening (in-language)
 
-`lib/certgen_code.hthr`, four new arms and two new accumulator states. The
+`lib/certgen/certgen_code.hthr`, four new arms and two new accumulator states. The
 motive stays the single constant `TA`, so nothing about the 52-branch shell
 changes.
 
@@ -329,7 +329,7 @@ buy a `TStuck` that is already there.
 ## 5. The signature checker's widening (in-language)
 
 `check_sig` walks the fn's type as code (the reflection primitive), and the
-fragment rule lives whole in `lib/certgen_code.hthr`. Today it accepts
+fragment rule lives whole in `lib/certgen/certgen_code.hthr`. Today it accepts
 `Nat → … → Nat` via a two-state `SigOut` used as its own accumulator. That
 conflation stops paying: recognizing a tier-0 lowering needs intermediate
 states, so the walk gets a proper accumulator and `SigOut` becomes the answer.
@@ -487,7 +487,7 @@ on a non-`Nat` emission, not only on the `Nat` ones.
 
 ## 9. Acceptance
 
-1. **`lib/certgen_code.hthr` states its own acceptance**, as it does today —
+1. **`lib/certgen/certgen_code.hthr` states its own acceptance**, as it does today —
    `refl` theorems for: a two-constructor value at tag 1 and at tag 0, a
    one-constructor enumeration's bare payload, a three-constructor value at
    tag 2, the same constructor at a **non-zero nominal tag** (the finding of
@@ -538,7 +538,7 @@ Not a perf round, and nothing here was measured out of curiosity: every number
 in §2.2 was taken because a test binary was being `SIGKILL`ed by
 `scripts/test`'s per-process `ulimit -t`. What lands:
 
-- `lib/certgen_code.hthr` elaborates in ~42 s where it took ~36 s, i.e. **+17%**
+- `lib/certgen/certgen_code.hthr` elaborates in ~42 s where it took ~36 s, i.e. **+17%**
   for two more `TA` constructors and six more functions — the `VOut` narrowing
   of `ta_val` pays most of the widening back.
 - Generating a non-`Nat` fixture costs ~3 s, *less* than a `Nat` one (~10 s),

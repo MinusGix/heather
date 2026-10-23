@@ -10,7 +10,7 @@ updated: 2026-09-23
 Filed from [[emission-spelling-chokepoint]]'s round (2026-09-06), which landed
 `Elaborator::emit_ty` and the walker (`crates/elab/src/emission_walk.rs`,
 docs/annotation-component-respell-design.md §2.5). The walker's first
-listing on `lib/ir_v1.hthr`'s closure, after the round's own routings
+listing on `lib/certgen/ir_v1.hthr`'s closure, after the round's own routings
 (`Lam.dom` went from 49 to none), is 214 findings whose slots are recorded
 as `WALK_RESIDUE` in `crates/elab/tests/ir_v1.rs` — a regression guard that
 only ever shrinks. This issue owns draining it. By slot:

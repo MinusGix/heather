@@ -148,4 +148,4 @@ where it resolves back to the global, else the qualified one.
 
 Ghost/hygienic identifiers (direction 3). The stem scheme is a mangling, and
 a user could still hand-write `Nat__add_gen_body`. Don't touch
-`lib/certgen_code.hthr` or the kit.
+`lib/certgen/certgen_code.hthr` or the kit.

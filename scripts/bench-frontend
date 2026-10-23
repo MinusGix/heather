@@ -3,7 +3,7 @@
 #
 # ALWAYS use this instead of bare `cargo bench`, for the reason CLAUDE.md
 # gives about direct `heather` runs and then some: this suite checks
-# `lib/ir_v1.hthr`, whose conversion workload is memory-*superlinear* (an
+# `lib/certgen/ir_v1.hthr`, whose conversion workload is memory-*superlinear* (an
 # uncapped release check of a deep-fuel IR theorem once reached ~22 GB), and
 # it deliberately sweeps the forded families towards the fuel cliff of
 # docs/inductive-fording-lowering.md §14.9. Under these limits the bench
@@ -36,7 +36,7 @@ cargo bench --package heather-elab --bench frontend --no-run --quiet
 # the point of the suite.
 #
 # The CPU cap is generous because one full run is ~4 minutes and three of
-# those are `lib/ir_v1.hthr` alone (~59 s per round, 3 rounds); a runaway is
+# those are `lib/certgen/ir_v1.hthr` alone (~59 s per round, 3 rounds); a runaway is
 # orders of magnitude beyond it either way. `--no-heavy` is the fast loop.
 ulimit -v 8388608
 # As in scripts/bench: a slower host raises the CPU cap deliberately per run.

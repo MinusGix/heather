@@ -6,7 +6,7 @@ created: 2026-10-10
 updated: 2026-10-12
 ---
 
-Commutative-ring identities over `Int` are proved by hand. In `lib/std/rat.hthr`
+Commutative-ring identities over `Int` are proved by hand. In `lib/std/num/rat.hthr`
 about a third of the module is monomial rearrangement: `cross_term` and
 `add_respects`, `add_assoc`, `distr_monomial` and `mul_add_distr` (a
 seven-factor monomial lemma), and the shuffles in `same_trans`. The pattern
@@ -44,7 +44,7 @@ one), with the module's cold check no dearer.
 ## Log
 
 - 2026-10-12: Landed (docs/ring-normalization-design.md). Reflective, not a Rust-side
-  `calc`: `lib/std/ring.hthr` holds `RingExpr`/`RingNat`, a sorted
+  `calc`: `lib/std/tactic/ring.hthr` holds `RingExpr`/`RingNat`, a sorted
   exponent-vector normal form and its soundness proof, checked once; the `ring`
   tactic (`crates/elab/src/ring.rs`) reifies and writes
   `RingExpr::sound(atoms, ⟦lhs⟧, ⟦rhs⟧, refl)`. `Nat` goes through its `Int`

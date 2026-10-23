@@ -1,4 +1,4 @@
-//! `lib/std/utf8.hthr` — UTF-8 as the first *representation* of `String`, and
+//! `lib/std/text/utf8.hthr` — UTF-8 as the first *representation* of `String`, and
 //! the `Utf8` byte-level spec type beside it (docs/string-char-design.md §5).
 //!
 //! The acceptance shape is `docs/testing-generated-terms.md`'s: the encoder is
@@ -22,18 +22,18 @@ static BASE: OnceLock<SemanticImage> = OnceLock::new();
 /// so this target reads the images that warmup wrote instead of elaborating
 /// `bitvec` again per case.
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/int.hthr")),
-    ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
-    ("char", include_str!("../../../lib/std/char.hthr")),
-    ("string", include_str!("../../../lib/std/string.hthr")),
-    ("utf8", include_str!("../../../lib/std/utf8.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/num/int.hthr")),
+    ("bitvec", include_str!("../../../lib/std/bitvec/bitvec.hthr")),
+    ("char", include_str!("../../../lib/std/text/char.hthr")),
+    ("string", include_str!("../../../lib/std/text/string.hthr")),
+    ("utf8", include_str!("../../../lib/std/text/utf8.hthr")),
 ];
 
 const PREAMBLE: &str = concat!(

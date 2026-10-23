@@ -281,7 +281,7 @@ each positive:
    one captures nothing. Rule 5 pinned in both directions, and a class field
    named like a builtin makes the builtin call ambiguous rather than silent.
 8. The layer-1 and layer-2 suites green unedited; the full suite green with
-   `lib/ir_v1.hthr` unchanged.
+   `lib/certgen/ir_v1.hthr` unchanged.
 
 ## 7. What implementing this corrected
 

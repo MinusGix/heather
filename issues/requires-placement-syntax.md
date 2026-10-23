@@ -47,7 +47,7 @@ recommendation. Every grammar claim below was **checked against
    criterion the original four options did not name; call it **(i) does it
    generalize to `instance`**.
 5. **What the real library actually does with the binder** (counted, not
-   assumed — `lib/std/algebra.hthr`): six constrained declarations, and
+   assumed — `lib/std/algebra/algebra.hthr`): six constrained declarations, and
    **four of them project the dictionary by name** — `mconcat` (`m.unit`),
    `mconcat_single` (`m.unit_r`), `max_of_self` (`c.le_refl`),
    `plus_zero_of_comm` (`a.plus_comm`, `a.zero`). Only `max_of` and
@@ -212,7 +212,7 @@ two meanings. Its one virtue — the constraint is adjacent to the thing
 constrained — is what (4) delivers without the restrictions. **Not viable even
 as sugar**, because a sugar that covers only the single-parameter,
 carrier-is-a-tyvar case teaches a rule with an exception in the second example
-(`Monoid<List<A>>` appears in `lib/std/algebra.hthr` today).
+(`Monoid<List<A>>` appears in `lib/std/algebra/algebra.hthr` today).
 
 **(7) In-list `infer` marker, name optional.** `infer m: Monoid<A>` named,
 `infer Monoid<A>` anonymous, and the general goal is the *same* form:
@@ -382,7 +382,7 @@ and theorem signatures while remaining the `instance` head's clause (§A.4) —
 one word in two roles, which is better than one meaning in two brackets — and
 `:= infer` should be **retired in favour of the prefix marker** rather than
 kept as an alias, which costs `or_default` plus the `:= infer` tests. That is
-the entire migration: six declarations in `lib/std/algebra.hthr`, ~21 signature
+the entire migration: six declarations in `lib/std/algebra/algebra.hthr`, ~21 signature
 occurrences across `crates/elab/tests/*`, `crates/cache/tests/end_to_end.rs`
 and the frontend bench fixtures, and the `instance` heads untouched.
 
@@ -394,7 +394,7 @@ zero-projection case (`sum`, `all_of`, `concat`) and it is the only form that
 also serves the instance head. **But it should not ship in the same round**: it
 is a second spelling, its named form drags in the colon overload, and it owes
 an answer to the explicit-type-application arity check (§D). Ship (7), write
-`lib/std/algebra.hthr` in it, and let a later round decide whether the
+`lib/std/algebra/algebra.hthr` in it, and let a later round decide whether the
 grouped form earns its keep as sugar with a *no-name* restriction (class
 reference only, never `<A, m: Monoid<A>>`) — which removes both of its costs
 at once and leaves it doing exactly the one job it is best at.
@@ -480,7 +480,7 @@ one thing is a cost only when neither is defined in terms of the other.
 1. **Don't.** §R2-C makes `A.unit`, `A.op(x, y)` and `x.op(y)` work without a
    dictionary name ever appearing. This is the case that should dominate.
 2. **Canonical path.** `A::Monoid` is the dictionary, by the *existing*
-   notation — `lib/std/algebra.hthr` already writes `Nat::AddCommMonoid.plus`
+   notation — `lib/std/algebra/algebra.hthr` already writes `Nat::AddCommMonoid.plus`
    for a registered instance, and extending that path to a constrained binder
    is not new syntax at all, just a new thing a path can name. `A::Monoid.unit`
    is available always, needs no declaration, and is unambiguous under two
@@ -596,7 +596,7 @@ this project's determinism and interface-stability doctrine cannot accept.
 With that rule the elaborated signature is a function of the signature text,
 printable and diffable. **This is the highest-leverage candidate after (23)**:
 it is the only one whose cost per constraint *decreases* with library size, and
-`lib/std/algebra.hthr`'s consumer section is exactly the shape it is for.
+`lib/std/algebra/algebra.hthr`'s consumer section is exactly the shape it is for.
 
 **(13) Named bundles.** `context Sortable<A> = Cmp + Monoid + Default;` and
 then `<A: Sortable>` everywhere. Crucially **not a class**: no instance, no
@@ -744,7 +744,7 @@ it is canonical; the second is named because a reader must be told which is
 which.
 
 **(12) section variables, whole-file sketch** — the consumer half of
-`lib/std/algebra.hthr` as it would read:
+`lib/std/algebra/algebra.hthr` as it would read:
 
 ```heather
 section {
@@ -842,7 +842,7 @@ grouped generics (bracket arity); implicit generalization (17) and inference
 effects; functor modules (14) (use-site ceremony is the thing being removed).
 
 **Staging, if it helps**: (23) and (6′) inline are one round and would let
-`lib/std/algebra.hthr` be rewritten immediately; the `given` clause is the same
+`lib/std/algebra/algebra.hthr` be rewritten immediately; the `given` clause is the same
 round's fallback form for `flatten`; sections and bundles are a second round
 that needs no syntax the first did not already introduce.
 
@@ -874,7 +874,7 @@ Files: `crates/syntax/src/parser.rs` (`typaram_list` now returns
 addition `Elaborator::check_constraint_param` (`crates/elab/src/traits.rs`,
 called from `elab_decl_inner` and `check_decrease`),
 `crates/elab/tests/traits_inline_constraints.rs` (27 tests),
-`lib/std/algebra.hthr` (two signatures), three migrated test signatures, and
+`lib/std/algebra/algebra.hthr` (two signatures), three migrated test signatures, and
 one existing universe test whose expected message changed (below).
 
 **Evidence for "one desugaring, not two features".** The pin is
@@ -914,7 +914,7 @@ really is an annotation on an entry, not an entry.
    spelling that can state a loop at all. Pinned as
    `the_inline_form_cannot_state_a_nonterminating_instance`.
 4. **The migration is two declarations, not six.** §R2-A's staging expected
-   `lib/std/algebra.hthr` to be "rewritten immediately", but that was written
+   `lib/std/algebra/algebra.hthr` to be "rewritten immediately", but that was written
    assuming type-level dot projection (candidate 23) shipped alongside; with
    projection sequenced away, §A.5's count stands and only the declarations
    that never name the dictionary can move. Those are `max_of` and

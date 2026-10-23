@@ -14,15 +14,15 @@ use crate::support;
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const INT: &str = include_str!("../../../lib/std/int.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const INT: &str = include_str!("../../../lib/std/num/int.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra/algebra.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const BITVEC: &str = include_str!("../../../lib/std/bitvec/bitvec.hthr");
 
 fn run(extra: &str) -> Result<(), String> {
     let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());

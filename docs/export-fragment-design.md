@@ -556,7 +556,7 @@ erasure, canonical elements (§5.2) and the **kernel route**:
 distinct subterm), and `prelude/Import.lean` rebuilds each declaration as a
 Lean `Expr` and hands it to `addDecl`. No parser and no elaborator sees an
 exported term. The library sweep (`crates/export/tests/library_sweep.rs`,
-the closure of `lib/std/list.hthr`) gave:
+the closure of `lib/std/data/list.hthr`) gave:
 
 | | declarations | result |
 |---|---|---|
@@ -705,7 +705,7 @@ they pay off:
    typed exporter of §5.6 (checked-spelling erasure, the eta-long invariant,
    names, no holes), with output to Lean's kernel rather than its elaborator.
 3. [export-library-sweep](../issues/export-library-sweep.md): run the export
-   over `lib/std/nat.hthr`, `bool`, `logic`, `list` through the loader, and
+   over `lib/std/num/nat.hthr`, `bool`, `logic`, `list` through the loader, and
    record every refusal and every target rejection by cause. This is the
    milestone's "done when", and it tests §5.1's conjecture.
 4. [export-wf-native-inductives](../issues/export-wf-native-inductives.md):

@@ -142,7 +142,7 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   reflection, hard-equality balanced remainders, and kernel-checked proof
   reconstruction; the `arith` surface form does not invoke this core yet.
 - 2026-08-26: Added the first kernel-certified vertical slice. The ordinary
-  `lib/std/omega.hthr` module proves coefficient-row scaling, addition, linear
+  `lib/std/tactic/omega.hthr` module proves coefficient-row scaling, addition, linear
   combination, and mixed lower/upper Fourier--Motzkin soundness. A narrow
   `omega` checking form reflects explicit `omega::dot` constraints over `Int`,
   replays only the reachable derivation DAG as shared generated bindings, and

@@ -210,7 +210,7 @@ Note what is *not* here: no quotes, no splices, no letbox, no `Ctx`
 computation, no recursion at layer m. The whole meta fn is one elimination
 whose arms are calls.
 
-## 4. The artifact: `lib/certgen_code.hthr`
+## 4. The artifact: `lib/certgen/certgen_code.hthr`
 
 **Decision: the analysis logic is ordinary program-layer Heather; the modal
 layer contributes only the traversal.** (This section's artifact is *not
@@ -276,7 +276,7 @@ ordinary function, and it is the single place where the marker convention and
 the IR's environment layout meet. Pin them in one comment there; a mismatch is
 a non-converging IR, i.e. a refused certificate, which is what §7 is about.
 
-**As landed** (`lib/certgen_code.hthr`, 412 lines): the data above, a dozen
+**As landed** (`lib/certgen/certgen_code.hthr`, 412 lines): the data above, a dozen
 `fn`s, and seven `theorem`s that are the file's own acceptance — `dbl`'s and
 `add`'s transcriptions written out and checked by `refl` against exactly what
 the Rust `Compiler` emits, plus three declines. Two notes worth keeping:
@@ -323,7 +323,7 @@ elsewhere:
 - **Dependent code types over meta-level data** — a kernel/theory round (ch. 04
   has no meta-layer Π over terms at all), which would also give the analysis
   stage its natural motives.
-- **The fold as a lemma**: one theorem in `lib/ir_v1.hthr`, by induction over
+- **The fold as a lemma**: one theorem in `lib/certgen/ir_v1.hthr`, by induction over
   `Ir`, of which today's per-function kit folds are instances. That is the
   route that also retires `issues/prog-extension-lemma.md` — but note it
   changes the trust story from *certifying* to *verified*, so it is a
@@ -341,7 +341,7 @@ conversion check is what turns "it checks" into "it is the same program".
 `generate_forced`, `generate_inner`, `Compiler`/`compile`/`compile_arm` and the
 surface fragment walk are gone from `crates/elab/src/certgen.rs`, and
 `generate_in_language` is the only generator. What replaced the comparison,
-per the issue's four covers: (a) `lib/certgen_code.hthr`'s own `refl` theorems
+per the issue's four covers: (a) `lib/certgen/certgen_code.hthr`'s own `refl` theorems
 pin `add`, `dbl` and `mul` in-language, one layer below the readback; (b) the
 positive fixtures in `crates/elab/tests/certgen.rs` make a silent decline a
 panic; (c) each emission's exactness fixtures catch different-but-converging
@@ -349,7 +349,7 @@ output at a concrete run; (d) the kernel judges the rest. The one property with
 no cover of its own — the *emitted layout*, which two independent
 implementations used to agree on — is pinned as literal expected text
 (`IR_ADD`, `IR_DBL`, `IR_THIRD3`, `IR_SEVEN`, `IR_MUL` in that test file), and
-its sole normative statement is now `lib/certgen_code.hthr`'s
+its sole normative statement is now `lib/certgen/certgen_code.hthr`'s
 three-conventions header plus the emitters (a *fourth* convention — non-`Nat`
 constructor values — was added 2026-08-12 by the non-`Nat` embeddings round). The rows of the table above stand
 unchanged for phases 2–4; row 1's "signature" home became **in-language** at
@@ -639,7 +639,7 @@ crosses `docs/meta-def-registration-design.md`, which this round does not own):
    unknown-name diagnostic leads with the six instead. Sub-code binders are
    still out, by having nowhere to be written: an arm binds recursive results
    and only those.
-2. ✅ **The artifact.** `lib/certgen_code.hthr`: the `TA`/`Pre`/`PRef`/`PRefs`/
+2. ✅ **The artifact.** `lib/certgen/certgen_code.hthr`: the `TA`/`Pre`/`PRef`/`PRefs`/
    `TOut` data, the `ta_*` helpers and their renderer as ordinary `fn`s, seven
    `theorem`s stating the file's own acceptance (`dbl` and `add` transcribed,
    checked by `refl` against the Rust emitter's output, plus three declines),

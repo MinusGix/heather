@@ -340,7 +340,7 @@ work; this result does not freeze the full API.
 
 ## 10. Library implementation (2026-09-14)
 
-`lib/std/parser.hthr` and the component modules in
+`lib/std/parser/parser.hthr` and the component modules in
 [`lib/std/parser/`](../lib/std/parser/README.md) now implement the combinator
 collection, dependent bind,
 operation-indexed `Consumes`/`Sound` certificates, committed diagnostics,

@@ -1,4 +1,4 @@
-//! `lib/std/tree.hthr` — the branching half of the explicit recursion-algebra
+//! `lib/std/data/tree.hthr` — the branching half of the explicit recursion-algebra
 //! experiment (`issues/datatype-container-algebras.md`).
 //!
 //! The headline test folds a tree into a list with `append`, then fuses `len`
@@ -9,13 +9,13 @@
 use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const TREE: &str = include_str!("../../../lib/std/tree.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const TREE: &str = include_str!("../../../lib/std/data/tree.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = support::library(&[

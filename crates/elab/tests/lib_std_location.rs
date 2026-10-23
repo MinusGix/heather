@@ -3,8 +3,8 @@
 use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const LOCATION: &str = include_str!("../../../lib/std/machine/location.hthr");
 
 fn elaborated() -> Elaborator {
     let mut e = support::library(&[("logic", LOGIC), ("location", LOCATION)]);

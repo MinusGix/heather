@@ -7,7 +7,7 @@ updated: 2026-08-10
 ---
 
 Found by the traits **library adoption** round (2026-08-07), which is what a
-dogfooding corpus is for: `lib/std/algebra.hthr` can register
+dogfooding corpus is for: `lib/std/algebra/algebra.hthr` can register
 `instance<A> Monoid<List<A>>` and *use* it freely, but it cannot state the
 class's own one-line lemma at a list carrier.
 
@@ -87,7 +87,7 @@ and keeping both is not.
 This is the shape of *every* algebraic library: prove the law once against the
 class, use it at each carrier. If a container carrier cannot host the generic
 lemma, the class layer buys the abstraction for programs but not for proofs at
-exactly the carriers that most want it. `lib/std/algebra.hthr` records the gap
+exactly the carriers that most want it. `lib/std/algebra/algebra.hthr` records the gap
 in place (the missing `concat_single`) rather than working around it.
 
 ## What it assumes from elsewhere

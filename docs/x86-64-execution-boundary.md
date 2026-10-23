@@ -174,9 +174,9 @@ next-address equations explicitly and does not treat wrapping as valid.
 
 ## Restricted ELF loaded traces (2026-09-07)
 
-`lib/elf64_load.hthr` supplies the reader and execute policy for the fixed RX
+`lib/std/os/linux/elf64_load.hthr` supplies the reader and execute policy for the fixed RX
 file mapping, with no zero-fill tail. `lib/std/arch/x86_64/x86_64_fetch_block.hthr`
-composes canonical fetched steps, and `lib/linux_x86_64_fetch.hthr` ends the
+composes canonical fetched steps, and `lib/std/os/linux/linux_x86_64_fetch.hthr` ends the
 trace with fetched syscall bytes and an exit-request contract.
 
 The standalone producer now emits those witnesses against its actual file

@@ -102,7 +102,7 @@ that must change.
 Tests: `crates/elab/tests/overapplication.rs` §5 — the headline, both
 parameters from their own argument, the parenthesized spelling refused, and a
 phantom parameter no argument mentions still refused. Library:
-`lib/std/list.hthr`'s `zip` comment and `crates/elab/tests/lib_std_list.rs`
+`lib/std/data/list.hthr`'s `zip` comment and `crates/elab/tests/lib_std_list.rs`
 now write `zip(xs, ys)`.
 
 No measurement round: the added work is one `sols.iter().any(…)` scan on a
@@ -113,7 +113,7 @@ route to a hot path).
 ## Acceptance
 
 `zip(xs, ys)` infers both type arguments at a call where `xs: List<Nat>` and
-`ys: List<Bool>` are open variables, and `lib/std/list.hthr`'s comment on
+`ys: List<Bool>` are open variables, and `lib/std/data/list.hthr`'s comment on
 `zip` loses its warning. A negative control stays: a type parameter mentioned
 in *neither* the declared arguments nor the curried tail still asks to be
 written.

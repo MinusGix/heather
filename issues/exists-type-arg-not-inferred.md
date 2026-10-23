@@ -6,7 +6,7 @@ created: 2026-08-16
 updated: 2026-08-16
 ---
 
-`lib/std/logic.hthr`'s existential is
+`lib/std/core/logic.hthr`'s existential is
 
 ```heather
 record Exists<A>(P: A -> Type) { witness: A, proof: P(witness) }

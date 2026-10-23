@@ -1,4 +1,4 @@
-//! `lib/std/float/arith.hthr` — arithmetic on floats
+//! `lib/std/num/float/arith.hthr` — arithmetic on floats
 //! (`docs/floating-point-design.md` §7.1 and §14, roadmap submilestone
 //! `float-arith`).
 //!
@@ -29,37 +29,37 @@ use heather_elab::{Elaborator, SemanticImage};
 use crate::support;
 
 const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/nat.hthr")),
-    ("option", include_str!("../../../lib/std/option.hthr")),
-    ("pair", include_str!("../../../lib/std/pair.hthr")),
-    ("list", include_str!("../../../lib/std/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/int.hthr")),
-    ("omega", include_str!("../../../lib/std/omega.hthr")),
-    ("ring", include_str!("../../../lib/std/ring.hthr")),
-    ("relation", include_str!("../../../lib/std/relation.hthr")),
+    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+    ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+    ("list", include_str!("../../../lib/std/data/list.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("int", include_str!("../../../lib/std/num/int.hthr")),
+    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
+    ("ring", include_str!("../../../lib/std/tactic/ring.hthr")),
+    ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
     (
         "relation_props",
-        include_str!("../../../lib/std/relation_props.hthr"),
+        include_str!("../../../lib/std/relation/relation_props.hthr"),
     ),
     (
         "algebra_rel",
-        include_str!("../../../lib/std/algebra_rel.hthr"),
+        include_str!("../../../lib/std/algebra/algebra_rel.hthr"),
     ),
-    ("order", include_str!("../../../lib/std/order.hthr")),
-    ("semiring", include_str!("../../../lib/std/semiring.hthr")),
+    ("order", include_str!("../../../lib/std/algebra/order.hthr")),
+    ("semiring", include_str!("../../../lib/std/algebra/semiring.hthr")),
     (
         "ordered_field",
-        include_str!("../../../lib/std/ordered_field.hthr"),
+        include_str!("../../../lib/std/algebra/ordered_field.hthr"),
     ),
-    ("rat", include_str!("../../../lib/std/rat.hthr")),
-    ("dyadic", include_str!("../../../lib/std/float/dyadic.hthr")),
-    ("float", include_str!("../../../lib/std/float/float.hthr")),
-    ("round", include_str!("../../../lib/std/float/round.hthr")),
-    ("error", include_str!("../../../lib/std/float/error.hthr")),
-    ("arith", include_str!("../../../lib/std/float/arith.hthr")),
+    ("rat", include_str!("../../../lib/std/num/rat.hthr")),
+    ("dyadic", include_str!("../../../lib/std/num/float/dyadic.hthr")),
+    ("float", include_str!("../../../lib/std/num/float/float.hthr")),
+    ("round", include_str!("../../../lib/std/num/float/round.hthr")),
+    ("error", include_str!("../../../lib/std/num/float/error.hthr")),
+    ("arith", include_str!("../../../lib/std/num/float/arith.hthr")),
 ];
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();

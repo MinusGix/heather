@@ -83,7 +83,7 @@ machine-specific `PUSH` theorem can reuse generic LIFO and capacity results.
   combinator polish is owned by [[squash-library-api]] and does not prevent
   implementing the container with `squash_ind` directly.
 - 2026-08-25: The BOUNDED-CONTAINER ROUND is complete in
-  `lib/std/bounded_list.hthr`: `BoundedList<A>` stores capacity, `List<A>`
+  `lib/std/data/bounded_list.hthr`: `BoundedList<A>` stores capacity, `List<A>`
   contents, and a squashed fit proof; `Outcome` distinguishes success,
   underflow, and overflow while carrying the unchanged state on rejection;
   empty/size/capacity/peek/push/pop, stack operations, and a sequential runner

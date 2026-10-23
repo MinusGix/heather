@@ -22,7 +22,7 @@ an expression omega could read. Separately, a fact built as
 `Int::cong(λ (t: Int) => e * t, p)` is skipped as "could not spell", while
 the same fact written `let f: (e * a = e * b) = cong(p);` is used.
 
-Workaround everywhere in `lib/std/pos.hthr` and `lib/std/rat.hthr`: restate the
+Workaround everywhere in `lib/std/pos.hthr` and `lib/std/num/rat.hthr`: restate the
 goal or hypothesis unfolded with a typed `let`, then call omega.
 
 Wanted: before giving up on a hypothesis or goal, whnf it (delta on transparent
@@ -38,7 +38,7 @@ unfolding) proposition is still skipped.
   computing to `Succ(…)`/`OfNat(…)`, a field of a call that unfolds to a
   constructor, a factor computing to a numeral, and a `cong` of a function
   literal; design in docs/omega-measure-reduction-design.md §11. Acceptance: the
-  typed restatements in `lib/std/pos.hthr` and `lib/std/rat.hthr` are gone
+  typed restatements in `lib/std/pos.hthr` and `lib/std/num/rat.hthr` are gone
   (`Pos::mul_val` keeps its two product facts, which are not restatements), and
   `crates/elab/tests/omega_defined_propositions.rs` covers the rows plus three
   controls: a proposition stuck on a match is still skipped, a false claim

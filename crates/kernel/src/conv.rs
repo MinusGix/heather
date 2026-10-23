@@ -491,7 +491,7 @@ struct Env<'v> {
     arena: &'v ValueArena<'v>,
     /// Shared, not cloned: a binder push clones the whole scope, and Ψ's
     /// bindings each carry a local context of their own — copying them per
-    /// push was ~3% of a routine `lib/ir_v1.hthr` check. Only `push_tele`
+    /// push was ~3% of a routine `lib/certgen/ir_v1.hthr` check. Only `push_tele`
     /// changes Ψ, and it is a layer-m path.
     psi: Rc<GlobalCtx>,
     /// Rescoped definition bodies and binding signatures for **this** Ψ
@@ -502,7 +502,7 @@ struct Env<'v> {
     /// [`crate::term::CtxEntries`] is a spine, so extending Γ costs one cell
     /// and cloning this field costs a refcount bump. It was a `Vec`, and
     /// copying it per push was the #1 self line of a release
-    /// `lib/ir_v1.hthr` check (issues/context-representation-clones.md).
+    /// `lib/certgen/ir_v1.hthr` check (issues/context-representation-clones.md).
     gamma: LocalCtx,
     layer: Layer,
     /// The local environment of the value domain: entry `j` from the outer

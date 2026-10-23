@@ -15,7 +15,7 @@ Two halves:
    `append`/`map`/`filter`/`rev` interactions. `Mem` needs only `=`, so it is
    polymorphic, unlike anything that has to *decide* membership.
 2. **The permutation half of `insert`/`isort` correctness.** `Sorted` and the
-   sortedness half landed 2026-08-17 in `lib/list_algos.hthr`; "sorts" is half
+   sortedness half landed 2026-08-17 in `lib/lang/list_algos.hthr`; "sorts" is half
    a specification, and the missing half is that the output is a rearrangement
    of the input.
 
@@ -30,21 +30,21 @@ round picks and records; it does not open L4.
 
 - **[[std-api-waves]]** owns sequencing. Assumed here: only that L3 is
   **unblocked** — state the relation by recursion and reach its decider by
-  resolution or by name, as `lib/list_algos.hthr` already does.
+  resolution or by name, as `lib/lang/list_algos.hthr` already does.
 - **[[decidable-equation-carrier]]** owns the missing (class, carrier-syntax)
   key that would let `Decide` reach an equation. Assumed here: only that
   `nat::eq_dec` is called by name today.
 
 ## What landed (2026-08-17)
 
-**`Mem` and its kit, in `lib/std/list.hthr`** — a recursion into `Type` beside
+**`Mem` and its kit, in `lib/std/data/list.hthr`** — a recursion into `Type` beside
 `nat::Le` and `list_algos`'s `Sorted`, plus `not_mem_nil`, `mem_head`,
 `mem_cons`, `mem_append_l`, `mem_append_r`, `mem_append`, `mem_append_iff`,
 `mem_map`, `mem_filter`, `mem_rev`. `std/list` gained `import logic;` to hold
 it: the module had never needed `Or`/`False`/`Iff` before, which is one measure
 of how much of a list API can exist with no relation in it.
 
-**The permutation half, in `lib/list_algos.hthr`** (136 lines → 319) — `count`,
+**The permutation half, in `lib/lang/list_algos.hthr`** (136 lines → 319) — `count`,
 `pick_succ_comm`,
 `count_insert`, `count_isort`, `len_insert`, `len_isort`, `mem_insert`,
 `mem_isort`, and `isort_correct`, which is the library's first specification
@@ -112,4 +112,4 @@ the two `cong_fn` contexts).
 
 ## Log
 
-- 2026-08-17: LANDED (2026-08-17): Mem and its ten-lemma kit in lib/std/list.hthr, count/count_isort/isort_correct in lib/list_algos.hthr, two new tests in crates/elab/tests/lib_list_algos.rs including the count negative control. See §What landed above, which records the fork as taken (count, not Perm) and the argument it leaves L4. Residue has owners: the polymorphic count is [[decidable-equation-carrier]] (ranked #2), the Nat negative control is [[absurd-at-nat-numerals]] (filed), the transportable permutation relation is wave L4 behind [[indexed-families]] and its row on [[std-api-waves]].
+- 2026-08-17: LANDED (2026-08-17): Mem and its ten-lemma kit in lib/std/data/list.hthr, count/count_isort/isort_correct in lib/lang/list_algos.hthr, two new tests in crates/elab/tests/lib_list_algos.rs including the count negative control. See §What landed above, which records the fork as taken (count, not Perm) and the argument it leaves L4. Residue has owners: the polymorphic count is [[decidable-equation-carrier]] (ranked #2), the Nat negative control is [[absurd-at-nat-numerals]] (filed), the transportable permutation relation is wave L4 behind [[indexed-families]] and its row on [[std-api-waves]].

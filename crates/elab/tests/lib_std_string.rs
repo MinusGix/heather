@@ -1,4 +1,4 @@
-//! `lib/std/char.hthr` and `lib/std/string.hthr` — Unicode scalar values and
+//! `lib/std/text/char.hthr` and `lib/std/text/string.hthr` — Unicode scalar values and
 //! sequences of them as *specification* types (docs/string-char-design.md).
 //!
 //! The acceptance shape is `docs/testing-generated-terms.md`'s: every law is
@@ -9,14 +9,14 @@
 use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const CHAR: &str = include_str!("../../../lib/std/char.hthr");
-const STRING: &str = include_str!("../../../lib/std/string.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const CHAR: &str = include_str!("../../../lib/std/text/char.hthr");
+const STRING: &str = include_str!("../../../lib/std/text/string.hthr");
 
 const PREAMBLE: &str = "import logic;\nimport bool;\nimport nat;\nimport list;\nimport char;\nimport string;\n";
 

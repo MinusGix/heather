@@ -2272,7 +2272,7 @@ theorem bt_computes(): bt_head(BCons(T1(3, T0), BNil)) = T1(3, T0) { refl }
     /// respelled statement now spells `El (T#tycode^δ)`. Before the fix the
     /// δ-stuck type sent both literals into the neutral-type arm and the
     /// hole went unsolved — every `{}` over a coded declaration's result
-    /// type, `lib/list_algos.hthr`'s shape.
+    /// type, `lib/lang/list_algos.hthr`'s shape.
     #[test]
     fn an_auto_refl_hole_solves_at_a_respelled_result_type() {
         let mut e = env();

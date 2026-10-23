@@ -32,7 +32,7 @@ arms (docs/ih-generalization-design.md); here it was not
 Writing the arm as `{ let ih: Le(k, k) = f(k, k, refl); j(e, λ y q => Le(Succ(k), y), ih) }`
 checks. So the call *is* in the arm; the scan that decides generalization does
 not see it in that position. Every congruence proof over a relation read off
-one side (`ITree::same_sym`, `same_bind` in `lib/std/itree.hthr`) has this
+one side (`ITree::same_sym`, `same_bind` in `lib/std/itree/itree.hthr`) has this
 shape: rewrite the other side with `j`, then recurse.
 
 ## Done when

@@ -24,13 +24,13 @@ pub fn families() -> Vec<Family> {
     ]
 }
 
-const LOGIC: &str = include_str!("../../../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../../../lib/std/list.hthr");
-const CERTIFIED_LOOKUP: &str = include_str!("../../../../../lib/std/certified_lookup.hthr");
+const LOGIC: &str = include_str!("../../../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../../../lib/std/data/list.hthr");
+const CERTIFIED_LOOKUP: &str = include_str!("../../../../../lib/std/data/certified_lookup.hthr");
 
 /// `n` independent declarations, each a small `fn` plus the `theorem` that
 /// runs it. Every one of them looks the same to the elaborator; what grows

@@ -8,10 +8,10 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalCtx, LocalCtx, Term, Type};
 use heather_kernel::typing::{check_term, DEFAULT_FUEL};
 
-const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
 
 const PROBE: &str = r#"
 import logic;

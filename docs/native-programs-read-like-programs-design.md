@@ -90,7 +90,7 @@ Probe files are in `probes/ergo/`; byte-path costing is logged on
   - The frontend's only Bool producer is `unsigned_lt_bit`, and a literal
     must be literally `ofNat(w, k)`.
   - Helpers with literal-width parameters are expanded structurally, so
-    `&&`, `||` and `!` (`lib/std/bool.hthr`) *should* already work. This is
+    `&&`, `||` and `!` (`lib/std/core/bool.hthr`) *should* already work. This is
     untested (V1).
   - There is no equality node in the IR and no SETE in the x86 model. CMP's
     `zf` is `is_zero_bits(sub)`, with no law relating it to equality.
@@ -107,7 +107,7 @@ required (§4.1, V1); S5 rides along only if small.
 
 Issues: `fold-count-lemmas`, `filter-computes-from-count-facts`.
 
-- **Per-count lemmas next to `fold_bytes`** (`lib/function_ir_loop.hthr`):
+- **Per-count lemmas next to `fold_bytes`** (`lib/native/function_ir/function_ir_loop.hthr`):
   - `counts_filtered`: if `f(g(s, b)) = f(s) + bit(p(b))`, then
     `f(fold_bytes(g, bytes, s)) = f(s) + bytes.filter(p).len()`.
   - `counts_len`: if `f(g(s, b)) = Succ(f(s))`, then the fold adds
@@ -145,7 +145,7 @@ counts and a swapped spec for wc.
 
 ### S2. `List::split_by`
 
-Issue: `list-split-by`. It goes in `lib/std/list.hthr`, with `non_empty` and
+Issue: `list-split-by`. It goes in `lib/std/data/list.hthr`, with `non_empty` and
 the lemmas `counts_runs` needs (the cons equations, and the count of pieces).
 Its definition is the obvious recursion: `n` separators make `n + 1` pieces.
 
@@ -161,14 +161,14 @@ Issue: `byte-vocabulary-for-native-programs`. The shape depends on decision
 §5.1. In both options:
 
 - **An `Equal` node in FunctionIR.** It needs the Rust IR and its roughly 8
-  certificate match sites, `lib/function_ir.hthr`, exec, and the x86 lowering
+  certificate match sites, `lib/native/function_ir/function_ir.hthr`, exec, and the x86 lowering
   arms in `function_ir_x86_lower.rs` and `structured_cert.rs`. Branches
   lower to `CMP` + `JE`/`JNE`, whose Jcc forms already decode; a
   materialised Bool uses a new SETE step form. The new law is
   `is_zero_bits(w, a.sub(b)) = a.eq_bit(b)`, plus an `eq_bit` zero-extend
   law for narrow operands. Equality as two comparisons is not kept: that is
   a defect, not a design.
-- **`BitVec::eq_bit`** in `lib/std/bitvec.hthr`, with `toNat` lemmas so
+- **`BitVec::eq_bit`** in `lib/std/bitvec/bitvec.hthr`, with `toNat` lemmas so
   `bv_omega` reads it.
 - **Literals at `BitVec(8)`.** `Numeral<BitVec(n)>` and
   `CharLiteral<BitVec(8)>` instances. The elaborator reduces a closed

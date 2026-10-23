@@ -23,7 +23,7 @@ elaborated it:
 
 Out of 524 s of test time in the fast lane, and 406 s inside declarations.
 A replayed image leaves no declaration rows, so these are genuine
-re-elaborations: `include_str!` of `lib/std/list.hthr` into
+re-elaborations: `include_str!` of `lib/std/data/list.hthr` into
 `elab_module_source` per test (e.g. `lib_std_string` 6 tests / 10.5 s,
 `lib_std_list` 10 / 8.0 s, `char_string_literals` 5 / 5.8 s, `nat_order`
 17 / 4.6 s), and the `function_ir_*` binaries elaborating

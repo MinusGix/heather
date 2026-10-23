@@ -16,7 +16,7 @@ theorem fuel_monotone(…, h: eval(n, prog)(env, ir) = Out(vs), hle: n <= m)
     : eval(m, prog)(env, ir) = Out(vs)
 ```
 
-`n <= m` is `Le(n, m)` — the **proposition** from `lib/std/nat.hthr`. It is
+`n <= m` is `Le(n, m)` — the **proposition** from `lib/std/num/nat.hthr`. It is
 not the boolean and it is not context-sensitive: a computational position
 calls `leb` by name, which is exactly the split
 `issues/le-named-proposition.md` landed. `>=` and `>` are not added; an
@@ -139,7 +139,7 @@ and `operators::generics_and_le_share_a_file` — a generic record, a generic
 
 ## 5. What it bought
 
-`lib/ir_v1.hthr` restates its ordering statements: `fuel_monotone`'s `hle`,
+`lib/certgen/ir_v1.hthr` restates its ordering statements: `fuel_monotone`'s `hle`,
 `conv_loosen`'s, `add_equiv_at`'s, and the results of `le_refl`, `le_succ_r`,
 `le_add`, `le_add_l`, `le_add_r`. Doc §6's `simulate(…) = Out(vs) -> n <= m ->
 simulate(…) = Out(vs)` is now verbatim in both shape and spelling.

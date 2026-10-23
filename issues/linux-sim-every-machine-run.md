@@ -8,14 +8,14 @@ created: 2026-10-21
 updated: 2026-10-21
 ---
 
-`Sim(t)(s)` (`lib/linux_x86_64_sim.hthr`) says every Linux-valid trace of `t`
+`Sim(t)(s)` (`lib/std/os/linux/linux_x86_64_sim.hthr`) says every Linux-valid trace of `t`
 runs as `s`. That is the direction a compiler proves. The milestone wants
 "exactly": every `LinuxRuns(io, events, s)` of a machine that `SimProgram`s a
 tree is the events of some returned trace of the tree.
 
 ## Shape
 
-- By determinism (`linux_runs_determine` in `lib/linux_x86_64_determinism.hthr`):
+- By determinism (`linux_runs_determine` in `lib/std/os/linux/linux_x86_64_determinism.hthr`):
   walk the run's events against `p.at(n)`. At a call, the tree's call and the
   machine's request meet (`call_determines`), so the answer is one the tree
   takes. A step where the tree is cut is covered by a larger `n`.

@@ -7,7 +7,7 @@ created: 2026-08-20
 updated: 2026-08-20
 ---
 
-`lib/std/tree.hthr` began as the branching control for the algebra and
+`lib/std/data/tree.hthr` began as the branching control for the algebra and
 certified-pass experiments. It now exposes a useful binary `Tree<A>`, but the
 file is dominated by `TreeAlg`, `TreeElim`, pass-law records, fusion, rebuild,
 and the historical explanation of why each probe existed. A user opening a

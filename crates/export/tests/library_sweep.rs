@@ -1,5 +1,5 @@
 //! The library sweep (`issues/export-library-sweep.md`): export the closure
-//! of `lib/std/list.hthr` (list, nat, bool, logic, option, pair) and report
+//! of `lib/std/data/list.hthr` (list, nat, bool, logic, option, pair) and report
 //! every refusal by cause. With `HEATHER_EXPORT_OUT` set it writes
 //! `Sweep.lean`, the same split one file per module under `Sweep/` (listed
 //! in dependency order in `Sweep/order`), the kernel-route twin

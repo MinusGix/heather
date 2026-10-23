@@ -22,7 +22,7 @@ as a prefix only where it opens an operand. The reformat that follows is
 whitespace only and reviewable in bulk, as the first one was.
 
 Found when `scripts/test`'s format gate rewrote
-`lib/function_ir_lower_calls.hthr` (S4 round 3,
+`lib/native/function_ir/function_ir_lower_calls.hthr` (S4 round 3,
 [[function-ir-verified-lowering]]).
 
 ## Log

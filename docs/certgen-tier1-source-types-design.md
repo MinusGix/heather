@@ -31,7 +31,7 @@ supported answer and negative controls are mandatory.
 ## 1. The finding that sizes the round: the proof schema needs NOTHING new
 
 Before any machinery was designed, the target emission was written **by
-hand** and kernel-checked against the *unchanged* `lib/ir_v1.hthr` — the same
+hand** and kernel-checked against the *unchanged* `lib/certgen/ir_v1.hthr` — the same
 method that started the whole generator (the `add` hand-run). Two hand-runs,
 both green on the first attempt:
 
@@ -42,7 +42,7 @@ both green on the first attempt:
 
 What that establishes, item by item:
 
-- **`lib/ir_v1.hthr` grows nothing.** `Val` is untyped constructor trees, so
+- **`lib/certgen/ir_v1.hthr` grows nothing.** `Val` is untyped constructor trees, so
   a recursive `embed_T` is just a *recursive generated `fn`*
   (`VCon(i, ⟨fields, children embedded at `embed_T` itself⟩)`); `LetMatch`
   scrutinizes any tag with any arm count; the ∃-composition kit is
@@ -181,7 +181,7 @@ unobservable at layer m), and everything structural stays in-language:
 
 ## 4. The walker's widening (in-language)
 
-`lib/certgen_code.hthr`. The environment story first, because it is the whole
+`lib/certgen/certgen_code.hthr`. The environment story first, because it is the whole
 trick: in the IR, a `LetMatch` arm sees the matched `VCon`'s fields prepended
 in slot order, so **field `t` is at distance `t` from the arm's base** — a
 constant the depth never moves — while a parameter's *level* (`arity−1−i`)
@@ -246,7 +246,7 @@ Verdict: **true, on `CertOut` exactly** — `Cert` itself is untouched (a
 gathered args, and *which child* an ih is about is derivable from the
 gathered recursion-slot reference, so no constructor needs a child index).
 
-`lib/certgen_cert.hthr` gains:
+`lib/certgen/certgen_cert.hthr` gains:
 
 ```heather
 inductive CArms { CANil, CACons(c: Cert, rest: CArms) }

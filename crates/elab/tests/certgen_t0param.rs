@@ -32,12 +32,12 @@ use heather_syntax::parse_file;
 
 use crate::support;
 
-const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
-const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
+const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const CODE: &str = include_str!("../../../lib/certgen/certgen_code.hthr");
+const CERT: &str = include_str!("../../../lib/certgen/certgen_cert.hthr");
 
 /// Items a generated emission needs beyond the declarations prefix, in
 /// dependency (file-consistent) order — `certgen_emissions.rs`'s list.
@@ -178,8 +178,8 @@ fn t0param_emissions_and_declines() {
     let sup = support_prelude();
     support::with_decl_cache(&mut e, |e| {
         elab(e, &sup, "support prelude");
-        elab(e, CODE, "lib/certgen_code.hthr");
-        elab(e, CERT, "lib/certgen_cert.hthr");
+        elab(e, CODE, "lib/certgen/certgen_code.hthr");
+        elab(e, CERT, "lib/certgen/certgen_cert.hthr");
     });
     for (src, what) in [
         (TYPES, "the tier-0 parameter types"),
@@ -319,8 +319,8 @@ fn a_perturbed_t0_dispatch_slot_is_refused_by_the_kernel() {
     let mut bad = base();
     let sup = support_prelude();
     support::with_decl_cache(&mut bad, |e| elab(e, &sup, "support prelude"));
-    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
-    elab(&mut bad, CERT, "lib/certgen_cert.hthr");
+    elab(&mut bad, &stripped, "mutated lib/certgen/certgen_code.hthr");
+    elab(&mut bad, CERT, "lib/certgen/certgen_cert.hthr");
     elab(&mut bad, "inductive Flag { Off, On }", "inductive Flag");
     elab(&mut bad, PICK, "fn pick");
     let em = generate_in_language(&bad, &decl_of(PICK), &GenCtx::new())

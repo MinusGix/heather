@@ -1,4 +1,4 @@
-//! `lib/std/nat.hthr`'s parity section — `half`, `Even`, `Odd` and their kit
+//! `lib/std/num/nat.hthr`'s parity section — `half`, `Even`, `Odd` and their kit
 //! (`issues/nat-parity-and-half.md`).
 //!
 //! These are the library's first declarations whose recursion reads two past
@@ -21,9 +21,9 @@
 use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = support::library(&[("logic", LOGIC), ("bool", BOOL), ("nat", NAT)]);

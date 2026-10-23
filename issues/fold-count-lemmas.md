@@ -23,7 +23,7 @@ which `split_all; all_goals { bv_omega }` closes for wc's step (probe
 2026-10-02: lines, bytes, words and the in-run flag each went in one line,
 with no `wc_next` copy of the step and no `newline_is_space`).
 
-Where: next to `fold_bytes` (lib/function_ir_loop.hthr), or `stream_filter`.
+Where: next to `fold_bytes` (lib/native/function_ir/function_ir_loop.hthr), or `stream_filter`.
 
 Related: [[native-programs-read-like-programs]], [[filter-computes-from-count-facts]].
 

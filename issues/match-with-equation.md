@@ -7,7 +7,7 @@ updated: 2026-08-05
 ---
 
 The `fuel_monotone` round's only proof device is the "remember" idiom, and
-it is the scariest thing in `lib/ir_v1.hthr` (`step_mono`, four times):
+it is the scariest thing in `lib/certgen/ir_v1.hthr` (`step_mono`, four times):
 
 ```heather
 match ev1(cs, find_fun(prog)(callee)) as λ r =>
@@ -55,7 +55,7 @@ not what it costs; the cost lever is separate.
   landed value parameters, and with them `BindInv` — an inversion record for
   `k_bind` proved *once* and consumed by `let { ws, hr, hk } = …`. That retires
   **three of the four** remember-idiom convoys this issue was filed against
-  (`lib/ir_v1.hthr`'s `LetMatch`, `LetLoop`, `LetCall` arms), and it does so
+  (`lib/certgen/ir_v1.hthr`'s `LetMatch`, `LetLoop`, `LetCall` arms), and it does so
   without any syntax change: the inversion lemma's own proof cases on the
   answer with the *target* varying in the motive, so it does not need the
   idiom either.

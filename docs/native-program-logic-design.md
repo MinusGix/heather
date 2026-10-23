@@ -121,7 +121,7 @@ hand. Nothing else depends on them, and the rebuild does not reuse them.
 
 **Salvaged, not burned:** the pure specs. `decimal`, `decimal_line`,
 `pad_left`, `places` and their lemmas, and `three_fields_line` (`wc`'s line on
-a pipe) are `lib/std/decimal.hthr`; the counting folds' lemmas
+a pipe) are `lib/std/text/decimal.hthr`; the counting folds' lemmas
 (`fold_counts_filtered`, `fold_counts_len`, `fold_counts_runs`) moved into
 `stream_filter`, which already held the filter's fold `filter_state`.
 `stream_filter` and `filter_step_piece` stay (the structured generator's
@@ -287,7 +287,7 @@ Views: the page (`Stretch`'s) and the frame of slots (`Straight`'s) are two
 `View<M, V>` records. A view over `hih-memory-model`'s byte memory is a third,
 with its access outcomes in the arms; a separation-style footprint is that
 milestone's to add, and the view interface should not preclude it. The third
-is `DataRegion::buffer_view` (`lib/linux_x86_64_byte_memory.hthr`): a
+is `DataRegion::buffer_view` (`lib/std/os/linux/linux_x86_64_byte_memory.hthr`): a
 buffer in a data region of an `X86Profile`, its arms reading and
 storing at an index into the buffer.
 
@@ -333,9 +333,9 @@ the computed type structural"):
 
 ### 6.4 As built (round S2)
 
-`lib/linux_x86_64_wp.hthr`; the views it was built with now live on the byte
-memory model (`lib/linux_x86_64_byte_memory.hthr`,
-`lib/linux_x86_64_image.hthr`); the controls are `crates/elab/tests/linux_wp.rs`. Where the build differs from §6.1–6.2:
+`lib/std/os/linux/linux_x86_64_wp.hthr`; the views it was built with now live on the byte
+memory model (`lib/std/os/linux/linux_x86_64_byte_memory.hthr`,
+`lib/std/os/linux/linux_x86_64_image.hthr`); the controls are `crates/elab/tests/linux_wp.rs`. Where the build differs from §6.1–6.2:
 
 - **`Proved(index, bytes, len, measured)` names its contract in a table**
   (`contracts: Nat → Contract`, a parameter of `Wp`), not by a field. A

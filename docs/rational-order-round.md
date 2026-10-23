@@ -4,7 +4,7 @@ Date: 2026-10-14. Follows [setoid-rationals-round](setoid-rationals-round.md),
 which left `Rat` with `≤`, its preorder laws modulo `≈`, right addition
 monotonicity and non-negative products. This round adds what the
 real-number probes ([regular-cauchy-reals](../issues/regular-cauchy-reals.md))
-reach for first, in [`lib/std/rat.hthr`](../lib/std/rat.hthr):
+reach for first, in [`lib/std/num/rat.hthr`](../lib/std/num/rat.hthr):
 
 - strict `<`, its agreement with `¬ ≤`, mixed transitivity, trichotomy,
   cotransitivity and tightness;

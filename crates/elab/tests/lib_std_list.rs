@@ -1,7 +1,7 @@
-//! `lib/std/list.hthr` — the list module's own closure, checked on its own.
+//! `lib/std/data/list.hthr` — the list module's own closure, checked on its own.
 //!
 //! `tests/lib_list_algos.rs` already elaborates this file, but only on the way
-//! to `lib/list_algos.hthr`, so a break in `std/list` was reported as the
+//! to `lib/lang/list_algos.hthr`, so a break in `std/list` was reported as the
 //! algorithm file's problem. That mattered little when the module was three
 //! functions; the L1/L2 waves (`issues/std-list-api.md`, 2026-08-17) made it
 //! the library's second-largest, and it is now the thing under test rather
@@ -14,12 +14,12 @@
 use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
 
 fn elaborated() -> Elaborator {
     let mut e = support::library(&[
@@ -424,7 +424,7 @@ theorem c_not_mem(): ¬ Mem(7, Cons(1, Cons(2, Nil))) {
 /// endpoints or merely wrong there.
 ///
 /// The `Decide<xs = ys>` bridge is at `List<Nat>` and not at an open element
-/// type: see the note in `lib/std/list.hthr` and
+/// type: see the note in `lib/std/data/list.hthr` and
 /// `issues/instance-binder-occurrence-through-binder-types.md`.
 #[test]
 fn list_equality_decides_at_a_literal_and_resolves_at_open_endpoints() {

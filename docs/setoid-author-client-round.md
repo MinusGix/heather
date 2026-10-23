@@ -2,8 +2,8 @@
 
 This round builds a substantial connected setoid experience:
 
-- [`finite_set.hthr`](../lib/std/finite_set.hthr) is the author-facing semantic interface.
-- [`list_finite_set.hthr`](../lib/std/list_finite_set.hthr) supplies its list implementation.
+- [`finite_set.hthr`](../lib/std/data/set/finite_set.hthr) is the author-facing semantic interface.
+- [`list_finite_set.hthr`](../lib/std/data/set/list_finite_set.hthr) supplies its list implementation.
 - [`finite_set_client.hthr`](showcase/finite_set_client.hthr) develops the abstract mathematics.
 - [`finite_set_list_client.hthr`](showcase/finite_set_list_client.hthr) applies that mathematics to lists and checks the representation boundary.
 

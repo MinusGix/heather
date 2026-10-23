@@ -1,7 +1,7 @@
 # Deep patterns and the `_` arm
 
 Design document for `issues/nested-match-patterns.md`: two sugarings over
-`match`, both motivated by hand-written towers in `lib/ir_v1.hthr`.
+`match`, both motivated by hand-written towers in `lib/certgen/ir_v1.hthr`.
 
 **Status: no kernel change is required, and none is proposed.** Both features
 are a small grammar extension in `crates/syntax` plus one *preprocessing* pass
@@ -533,7 +533,7 @@ context-keying. Refused with a message that says which arm and why, instead of
   **exactly one** goal and is discharged by one `on ?g := …`. Nothing is
   `Debug`-formatted.
 - **The library**: `pick_arm`, `step_letmatch` and `step_loopiter` in
-  `lib/ir_v1.hthr` rewritten, under the full `scripts/test` (§13.1).
+  `lib/certgen/ir_v1.hthr` rewritten, under the full `scripts/test` (§13.1).
 
 26 tests, all passing.
 
@@ -545,7 +545,7 @@ context-keying. Refused with a message that says which arm and why, instead of
 
 **The acceptance demonstration went further than `pick_arm`.** All three
 hand-written towers named in the issue were rewritten, and all of
-`lib/ir_v1.hthr`'s downstream proofs — `step_letmatch_unfolds`,
+`lib/certgen/ir_v1.hthr`'s downstream proofs — `step_letmatch_unfolds`,
 `step_loopiter_unfolds`, `k_bind_inv`, `step_mono`'s convoy — still check
 against them unchanged:
 
@@ -555,7 +555,7 @@ against them unchanged:
 | `step_letmatch` | 2 nested `match`es, 5 arms | 1 deep row + `_` |
 | `step_loopiter` | 4 nested `match`es, 11 arms | 3 rows + `_` |
 
-`lib/ir_v1.hthr` is 58 lines changed, net −11. Capped release checks
+`lib/certgen/ir_v1.hthr` is 58 lines changed, net −11. Capped release checks
 (`ulimit -v 8388608 -t 300`):
 
 | | run 1 | run 2 |

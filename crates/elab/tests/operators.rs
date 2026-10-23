@@ -149,9 +149,9 @@ fn prefix_negation_is_carrier_directed() {
 #[test]
 fn boolean_not_symbol_uses_the_bool_designation() {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_module_source("logic", include_str!("../../../lib/std/logic.hthr"))
+    e.elab_module_source("logic", include_str!("../../../lib/std/core/logic.hthr"))
         .expect("logic");
-    e.elab_module_source("bool", include_str!("../../../lib/std/bool.hthr"))
+    e.elab_module_source("bool", include_str!("../../../lib/std/core/bool.hthr"))
         .expect("bool");
     e.elab_module_source(
         "probe",
@@ -170,9 +170,9 @@ fn boolean_not_symbol_uses_the_bool_designation() {
 #[test]
 fn semantic_brackets_reflect_bool_into_type() {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_module_source("logic", include_str!("../../../lib/std/logic.hthr"))
+    e.elab_module_source("logic", include_str!("../../../lib/std/core/logic.hthr"))
         .expect("logic");
-    e.elab_module_source("bool", include_str!("../../../lib/std/bool.hthr"))
+    e.elab_module_source("bool", include_str!("../../../lib/std/core/bool.hthr"))
         .expect("bool");
     e.elab_module_source(
         "probe",
@@ -237,7 +237,7 @@ fn a_missing_numeral_instance_names_the_carrier_goal() {
 
 // The order kit, cut down to what a comparison test needs: the boolean
 // decision, the *proposition* named over it, and enough of the kit to prove
-// something with. Lifted from lib/ir_v1.hthr, which is where the real ones
+// something with. Lifted from lib/certgen/ir_v1.hthr, which is where the real ones
 // live; the elaborator has no `Le` of its own and `<=` names one by ordinary
 // global lookup, exactly like `+` names `add`.
 const ORDER_KIT: &str = r#"

@@ -149,7 +149,7 @@ in from the start but layered (§7.2), so mathematics never sees them.
 
 ## 3. Formats and values
 
-As landed in round 1 (`lib/std/float/float.hthr`; §10 records what changed
+As landed in round 1 (`lib/std/num/float/float.hthr`; §10 records what changed
 from the first sketch):
 
 ```heather
@@ -533,7 +533,7 @@ the `NarrowingContext`/`WideContext` machinery disappear.
 - **Encoding** is one pair `encode: Float(F) → BitVec(F.width())`,
   `decode` back, with width, bias and field positions computed from the
   `Format`, and the round trip proved once for every `Format` with a
-  standard layout. It uses `lib/std/bitvec.hthr`, so the native lane can
+  standard layout. It uses `lib/std/bitvec/bitvec.hthr`, so the native lane can
   use the same definitions.
 - **NaN payloads** live at the bits layer, not in `Float(F)`: the semantic
   `NaN` is one value, and a *platform policy* (a record) says which bit
@@ -555,7 +555,7 @@ support lists and is out of scope here.
 
 ## 8. Rounds and submilestones
 
-One PR per round. Each lands its own modules under a new `lib/std/float/`
+One PR per round. Each lands its own modules under a new `lib/std/float/` (now `lib/std/num/float/`)
 directory (the mathematics lane), and none touches the shared hotspots.
 `math-float` is done when rounds 1–5 have landed (Minus, 2026-10-20). The
 later work is submilestones of it that do not block it. The ids are the
@@ -618,7 +618,7 @@ Still open, for review on this design:
 
 ## 10. Round 1 as landed (`float-values`)
 
-Modules: `lib/std/float/dyadic.hthr` and `lib/std/float/float.hthr`, with
+Modules: `lib/std/num/float/dyadic.hthr` and `lib/std/num/float/float.hthr`, with
 three general facts added to their home files: `Nat::pow_pos` (an evidence
 rule, so `Rat(n, Nat::pow(2, k))` finds its denominator's positivity) and
 `Nat::le_pow_self` in `nat.hthr`, and `Nat::int_pow_add` and
@@ -673,7 +673,7 @@ Observations for later rounds:
 
 ## 11. Round 2 as landed, part A (`float-rounding`)
 
-Module: `lib/std/float/round.hthr`, with general facts added to their home
+Module: `lib/std/num/float/round.hthr`, with general facts added to their home
 files: `Nat::shr` and its floor bounds, `pow_le_pow_r`,
 `lt_of_mul_lt_mul_r` and the parity steps in `nat.hthr`; the midpoint and
 subtraction-order lemmas in `rat.hthr`; `Option::none_ne_some` in
@@ -756,7 +756,7 @@ Observations for later rounds:
 
 ## 12. Round 2 as landed, part B (`float-rounding`)
 
-Same module, `lib/std/float/round.hthr`; new general facts went home too:
+Same module, `lib/std/num/float/round.hthr`; new general facts went home too:
 `Nat::not_even_succ_of_even` in `nat.hthr`, and the distance-to-midpoint
 lemmas (`mid_le_of_dist`, `le_mid_of_dist`, `le_of_double_le` and their
 subtraction forms) in `rat.hthr`.
@@ -819,7 +819,7 @@ Observations:
 
 ## 13. Round 3 as landed (`float-error`)
 
-One module, `lib/std/float/error.hthr`, over round 2's internals. Two
+One module, `lib/std/num/float/error.hthr`, over round 2's internals. Two
 general facts went home: `Rat::le_div_of_mul_le` and `Rat::rel_of_abs_le`
 (an absolute bound `|y - x| <= u·|x|` at a nonzero `x` as a relative error
 `y ≈ x·(1 + e)`, `|e| <= u`) in `rat.hthr`, and the evidence rules
@@ -894,7 +894,7 @@ Observations:
 
 ## 14. Round 4 as landed (`float-arith`)
 
-Module: `lib/std/float/arith.hthr`. General facts went home: binary long
+Module: `lib/std/num/float/arith.hthr`. General facts went home: binary long
 division `Nat::ldiv` with `ldiv_div`/`ldiv_mod` in `nat.hthr`; the sign rules
 for products and reciprocals (`Rat::mul_nonpos_l`/`_r`,
 `mul_nonneg_of_nonpos`, `recip_nonneg`/`nonpos`) in `rat.hthr`;

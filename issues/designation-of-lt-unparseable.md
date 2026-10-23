@@ -19,7 +19,7 @@ designation < at Int := Lt
 parses `<` as the start of a type-parameter list and dies at
 `expected `>` to close the type parameters, found Ident("Int")`. `<=` is a
 distinct token and is unaffected: `designation <= at Int := Le` works, and
-`lib/std/int.hthr` has it.
+`lib/std/num/int.hthr` has it.
 
 The parser's own message for a bad symbol lists `<` as designable
 ("the symbols are `+`, `++`, `*`, `&&`, `||`, `<=` and `<`"), so this is a
@@ -47,7 +47,7 @@ here is a single keyword.
 
 ## Log
 
-- 2026-08-17: Filed by the `Int` round; ranked last of six. `lib/std/int.hthr` carries a comment where the row would be.
+- 2026-08-17: Filed by the `Int` round; ranked last of six. `lib/std/num/int.hthr` carries a comment where the row would be.
 - 2026-08-19: LANDED and closed. `designation_decl` now recognizes `< at` as
   the operator before attempting the optional type-parameter list; the follow
   token is exact because `at` cannot begin a type parameter, while

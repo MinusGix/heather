@@ -33,13 +33,13 @@ closing.
 
 ## Acceptance
 
-The names above exist in `lib/std/nat.hthr` with proofs, `pow(2, 5) = 32` and
+The names above exist in `lib/std/num/nat.hthr` with proofs, `pow(2, 5) = 32` and
 `fact(5) = 120` are `refl`, and the laws are exercised at **open** arguments
 with negative controls that they are not definitional there.
 
 ## Log
 
-- 2026-08-17: LANDED, in one pass. `lib/std/nat.hthr` gained a closing section: `pow`, `fact`,
+- 2026-08-17: LANDED, in one pass. `lib/std/num/nat.hthr` gained a closing section: `pow`, `fact`,
 seven laws and three order facts.
 
 `pow` recurses on the exponent and puts the recursive result on the LEFT of the

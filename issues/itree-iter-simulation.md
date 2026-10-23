@@ -9,7 +9,7 @@ updated: 2026-10-22
 ---
 
 A compiled program meets its source's tree; the facts users care about are
-proved against a size-free spec (`lib/stream_filter_spec.hthr`'s
+proved against a size-free spec (`lib/native/stream_filter_spec.hthr`'s
 `tr_spec`), so each program also needs `Program::Implements(source, spec)`.
 For `tr` that relates two `iter`s with different state shapes: the
 source's environment (buffer, offsets) against the spec's `FilterAt`. The
@@ -36,4 +36,4 @@ induction over traces by hand. Found while writing
 
 ## Log
 
-- 2026-10-22: Done (`lib/std/itree_sim.hthr`, `docs/itree-simulation-design.md`). `ITree::Sim` is read off the source through a `TraceMap` (forward, source to spec) and a `Contract` (valid answers, owed debts); `sim_bind`, `sim_below` and `sim_trace` are its laws, and `sim_iter` is the loop rule: a pass from related states is simulated by one spec pass, or is silent and lands related to the spec's unchanged state, and the loops simulate each other at the same fuel. `Program::Refines` and Linux's `Program::Implements` are both instances (`refines_of_simulates`; `lib/linux_trees_sim.hthr`'s `implements_iter`). A source pass that is several spec passes (cat's write loop) is not covered; that is [[native-source-cat-implements]]'s to state.
+- 2026-10-22: Done (`lib/std/itree/itree_sim.hthr`, `docs/itree-simulation-design.md`). `ITree::Sim` is read off the source through a `TraceMap` (forward, source to spec) and a `Contract` (valid answers, owed debts); `sim_bind`, `sim_below` and `sim_trace` are its laws, and `sim_iter` is the loop rule: a pass from related states is simulated by one spec pass, or is silent and lands related to the spec's unchanged state, and the loops simulate each other at the same fuel. `Program::Refines` and Linux's `Program::Implements` are both instances (`refines_of_simulates`; `lib/std/os/linux/linux_trees_sim.hthr`'s `implements_iter`). A source pass that is several spec passes (cat's write loop) is not covered; that is [[native-source-cat-implements]]'s to state.

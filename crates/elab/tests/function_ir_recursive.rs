@@ -56,15 +56,15 @@ fn wrong_condition(a, b: BitVec(64)) → BitVec(64) {
 
 fn source_elaborator() -> heather_elab::Elaborator {
     let modules = [
-        ("logic", include_str!("../../../lib/std/logic.hthr")),
-        ("bool", include_str!("../../../lib/std/bool.hthr")),
-        ("nat", include_str!("../../../lib/std/nat.hthr")),
-        ("option", include_str!("../../../lib/std/option.hthr")),
-        ("pair", include_str!("../../../lib/std/pair.hthr")),
-        ("list", include_str!("../../../lib/std/list.hthr")),
-        ("algebra", include_str!("../../../lib/std/algebra.hthr")),
-        ("int", include_str!("../../../lib/std/int.hthr")),
-        ("bitvec", include_str!("../../../lib/std/bitvec.hthr")),
+        ("logic", include_str!("../../../lib/std/core/logic.hthr")),
+        ("bool", include_str!("../../../lib/std/core/bool.hthr")),
+        ("nat", include_str!("../../../lib/std/num/nat.hthr")),
+        ("option", include_str!("../../../lib/std/core/option.hthr")),
+        ("pair", include_str!("../../../lib/std/core/pair.hthr")),
+        ("list", include_str!("../../../lib/std/data/list.hthr")),
+        ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+        ("int", include_str!("../../../lib/std/num/int.hthr")),
+        ("bitvec", include_str!("../../../lib/std/bitvec/bitvec.hthr")),
     ];
     let mut elab = support::semantic_test_base(&modules);
     elab.elab_module_source("recursive_source", SOURCE).unwrap();
@@ -368,7 +368,7 @@ fn typed_structured_interfaces_and_source_agreement() {
 fn loop_byte_predicate_uses_shared_structured_frontend() {
     use heather_elab::function_ir_source::StructuredSourceType::{Boolean, Word};
     let mut elab = source_elaborator();
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
     elab.elab_module_source("readonly_loops", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
@@ -475,7 +475,7 @@ fn reject_structured(image: &heather_elab::SemanticImage, name: &str, source: &s
 #[test]
 fn structured_composition_model_checks_open_contracts() {
     let mut elab = source_elaborator();
-    let model = include_str!("../../../lib/function_ir.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir.hthr");
     elab.elab_module_source("function_ir", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let positive = r#"
 import function_ir; import list; import logic;
@@ -559,7 +559,7 @@ fn composed_branch_preserves_an_inherited_selector() {
 fn search_body_selects_byte_comparisons_and_boolean_results() {
     use heather_elab::function_ir_x86_lower::lower_structured_results;
     let mut elab = source_elaborator();
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap();
     let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
     elab.elab_module_source("readonly_loops", source).unwrap();

@@ -1,5 +1,5 @@
 //! The fourth in-language derived artifact (issues/quotation-stage-artifacts.md):
-//! `lib/vec_code.hthr`'s `nth_code` kernel-checks at `Layer::Meta`, the
+//! `lib/lang/vec_code.hthr`'s `nth_code` kernel-checks at `Layer::Meta`, the
 //! evaluation hook routes `xs[i]` through it, and the emitted terms are
 //! convertible with the oracle's — adequacy, not just typing.
 //!
@@ -25,7 +25,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
 
-const LIB: &str = include_str!("../../../lib/vec_code.hthr");
+const LIB: &str = include_str!("../../../lib/lang/vec_code.hthr");
 
 fn elab(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");

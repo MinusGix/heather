@@ -1344,7 +1344,7 @@ pub struct CtxEntry {
 ///
 /// Binder descent extends Γ by one entry while keeping the parent Γ alive,
 /// which a `Vec` can only serve by copying the whole context. That copy was
-/// the #1 self line of a release `heather check lib/ir_v1.hthr`
+/// the #1 self line of a release `heather check lib/certgen/ir_v1.hthr`
 /// (`Vec<CtxEntry>::clone` 5.3%, its drop 2.6%, essentially all of it
 /// `Env::push_entry` at a binder — issues/context-representation-clones.md).
 /// Here extending is one allocation shared with the context it extends, and

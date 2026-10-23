@@ -1,7 +1,7 @@
 //! The simulate-shaped fixture ([[ir-simulate-design]] §11 item 5): what a
 //! `Compile` equiv certificate costs to discharge, isolated to its two axes.
 //!
-//! The real object — `lib/ir_v1.hthr`'s `eval` run by conversion — cannot
+//! The real object — `lib/certgen/ir_v1.hthr`'s `eval` run by conversion — cannot
 //! live in this suite: it exists only as elaborator output, and the kernel
 //! (dev-dependencies included) stays at zero dependencies. What CAN live
 //! here is the cost mechanism, hand-built: a fuel-indexed evaluator is an

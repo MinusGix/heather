@@ -12,7 +12,7 @@ the kind that fails silently.
 The one-line summary: `heather check --cache` keys each declaration by a
 content hash of its elaborated form with global references replaced by the
 hashes of their referents, and skips the kernel gate — and only the kernel gate
-— for keys a previous run recorded as accepted. On `lib/ir_v1.hthr` the kernel
+— for keys a previous run recorded as accepted. On `lib/certgen/ir_v1.hthr` the kernel
 gate is 94% of the run (`crates/elab/benches/baseline.tsv`), so this is most of
 the wall clock.
 
@@ -48,7 +48,7 @@ finished `(ctx = ·, ty, level, body)`:
   `Layer::Meta`. *(Added 2026-08-13,
   `issues/elaborator-snapshot-across-test-binaries.md`: measurement found the
   `match code` shells' meta checks dominating warm elaborations of
-  `lib/certgen_code.hthr` — the seam's original "two sites" left the file's
+  `lib/certgen/certgen_code.hthr` — the seam's original "two sites" left the file's
   single most expensive gate uncovered.)* Two things distinguish the site, and
   `GateItem` carries both: the **layer** is part of the item's identity (the
   same `(ty, body)` at two layers is two kernel questions; the hashed binding's
@@ -70,7 +70,7 @@ A hit skips both calls. It does **not** skip:
 
 So the honest claim is "a warm run pays parse, elaborate, and its own hashing,
 and nothing else". It is not a no-op re-check and must never be described as
-one. On `lib/ir_v1.hthr` that is 7.5 s against a 46.3 s check, of which
+one. On `lib/certgen/ir_v1.hthr` that is 7.5 s against a 46.3 s check, of which
 elaboration is about 1 s and the hashing is the rest — the cache's own cost is
 the larger half of a warm run, which is where the next round of work on this
 went (§10, spent in §12: 2.2 s, still ~57% hashing). A cache that also skipped
@@ -364,7 +364,7 @@ smaller promise.
 whenever `--cache` is on, whether or not anything was cached:
 
 ```
-lib/ir_v1.hthr: ok (cache) — 4 declarations kernel-checked, 130 accepted from cache
+lib/certgen/ir_v1.hthr: ok (cache) — 4 declarations kernel-checked, 130 accepted from cache
 ```
 
 The bare `path: ok` is reserved for a full check and is unreachable under
@@ -421,7 +421,7 @@ against referents that are not there.
 ## 10. Where the remaining cost is *(as of v1; §12 spent it)*
 
 The cache's own work is one `write_exact` rendering of every declaration, fed
-through the rewriting sink into SHA-256. On `lib/ir_v1.hthr` that is ~7 s: 15%
+through the rewriting sink into SHA-256. On `lib/certgen/ir_v1.hthr` that is ~7 s: 15%
 on top of a cold check, and ~90% of a warm one. Two things it is *not*: it is
 not double work (§5 removed that) and it is not the hash (SHA-256 at these
 sizes is a fraction of it) — it is `std::fmt`, formatting tens of megabytes of

@@ -1,5 +1,5 @@
 //! Restricted ELF layout producer. Header bytes and code spans are checked
-//! against lib/elf64.hthr and the canonical x86 model before publication.
+//! against lib/std/os/linux/elf64.hthr and the canonical x86 model before publication.
 use heather_elab::function_ir_cert::{Node, Region};
 use heather_elab::function_ir_source::SourceX86Emission;
 use heather_elab::function_ir_x86_lower::{Gpr, Instruction};

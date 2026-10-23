@@ -240,7 +240,7 @@ same base restrictions as the byte store (no RSP, R12, RBP or R13, which
 need a SIB byte or mean RIP-relative), so code that reads through RSP copies
 it to another register first.
 
-### 4.3 Three new events (`lib/linux_x86_64_io.hthr`)
+### 4.3 Three new events (`lib/std/os/linux/linux_x86_64_io.hthr`)
 
 ```heather
 inductive OpenResult  { Opened(fd: Nat), OpenFailed(errno: Nat) }
@@ -609,7 +609,7 @@ process checks with its trace unchanged. Where it differs from §4 and §6.1:
   `word_load_form_complete` keeps determinism's one-fetch-one-form argument
   whole. `word_load_ran` (`elf64_read_pieces`) runs one at an offset from a
   `WordAt` fact.
-- **`ArgvAt`** (`lib/linux_x86_64_io.hthr`) names the k-th stack word by
+- **`ArgvAt`** (`lib/std/os/linux/linux_x86_64_io.hthr`) names the k-th stack word by
   value, `argv_slot(rsp, k) = rsp + 8k`, so a program that adds to RSP meets
   it through `toNat`. Each argument is a `CStringAt`: its bytes, then a NUL,
   with no NUL before it, all below the canonical boundary.

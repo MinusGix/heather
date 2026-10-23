@@ -1,4 +1,4 @@
-//! `lib/std/int.hthr` — the integer module, checked on its own
+//! `lib/std/num/int.hthr` — the integer module, checked on its own
 //! (`issues/std-int-encoding.md` and `issues/std-int-order-completion.md`,
 //! waves I and I-prime of `issues/std-api-waves.md`).
 //!
@@ -22,14 +22,14 @@ use heather_elab::{ElabError, Elaborator, Lint};
 
 use crate::support;
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
-const INT: &str = include_str!("../../../lib/std/int.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra/algebra.hthr");
+const INT: &str = include_str!("../../../lib/std/num/int.hthr");
 
 fn elaborated(cached: bool) -> Elaborator {
     if cached {

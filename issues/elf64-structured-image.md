@@ -9,7 +9,7 @@ updated: 2026-09-07
 
 ## Scope
 
-Replace the large literal header array in `lib/elf64.hthr` with explicit ELF
+Replace the large literal header array in `lib/std/os/linux/elf64.hthr` with explicit ELF
 header, program-header, and image records plus wire encoders. Keep both the inline and owned-stack call executable profiles and their exact
 emitted-byte certificates.
 

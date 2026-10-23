@@ -91,7 +91,7 @@ time is made of**:
 
 | file | before CPU-s | after CPU-s | | what dominates it |
 |---|---:|---:|---|---|
-| `lib/ir_v1.hthr` | 3.94 | 5.26 | **+33 %** | many small declarations — inference per node |
+| `lib/certgen/ir_v1.hthr` | 3.94 | 5.26 | **+33 %** | many small declarations — inference per node |
 | `probes/t_cp9.hthr` | 34.07 | 41.13 | **+21 %** | ditto, with a record tower |
 | `probes/t_qt3.hthr` | 49.75 | 62.72 | **+26 %** | ditto, deeper |
 | `probes/str/p10.hthr` | 118.75 | 113.65 | **−4 %** | 42 M conversion queries |
@@ -264,7 +264,7 @@ file agree to within a per cent):
 
 | file | median wall | verdict | stage 1b had it at |
 |---|---:|---|---:|
-| `lib/ir_v1.hthr` | −0.9 % | **no change** | +33 % |
+| `lib/certgen/ir_v1.hthr` | −0.9 % | **no change** | +33 % |
 | `probes/t_cp9.hthr` | +0.2 % | **no change** | +21 % |
 | `probes/t_qt3.hthr` | −0.7 % | **no change** | +26 % |
 | `probes/str/p10.hthr` | +0.3 % | **no change** | −4 % |

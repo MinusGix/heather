@@ -3,7 +3,7 @@
 Status: **living design and implementation record** (2026-08-31).
 
 This document records the intended direction for the FunctionIR that replaces
-the bootstrap constructor-tree IR in `lib/ir_v1.hthr`. It is deliberately not
+the bootstrap constructor-tree IR in `lib/certgen/ir_v1.hthr`. It is deliberately not
 a promise that the first implementation is permanent. The first version
 should be good, but its more important job is to expose the next design
 questions under real use.
@@ -493,7 +493,7 @@ first convenient encoding as settled architecture.
 
 ### 2026-08-30: first pure region and x86 lowering slice
 
-The first implementation lands in `lib/function_ir.hthr`:
+The first implementation lands in `lib/native/function_ir/function_ir.hthr`:
 
 - `Port`, the purpose-built `Ports` environment, stable Nat IDs, `Node::Add`,
   and `Region` are raw data; `Ports` owns lookup, freshness, uniqueness, and
@@ -508,7 +508,7 @@ The first implementation lands in `lib/function_ir.hthr`:
 
 `lib/std/arch/x86_64/x86_64_block.hthr` adds concatenated canonical bytes, placed
 canonical decoding, functional normal block execution, and authoritative
-relational block execution. `lib/function_ir_x86.hthr` selects
+relational block execution. `lib/native/function_ir/function_ir_x86.hthr` selects
 `MOV RAX,RDI; ADD RAX,RSI`, proves its six-byte canonical layout, decoding,
 allowed relational execution, result refinement, memory and protected-GPR
 frames, and RIP advance, and packages those facts into one placed-block
@@ -654,7 +654,7 @@ that reconstructs their proof trees.
 
 The compact emitter now owns the plain `generate` name. Add64 and both sum4
 schedules retain public validity theorems and checked-region constructors in
-`lib/function_ir_certificates.hthr`. That module is generated from the same
+`lib/native/function_ir/function_ir_certificates.hthr`. That module is generated from the same
 untrusted concrete models used by the compiler path; a focused golden test
 regenerates it on request and otherwise detects drift. Consumers import the
 certificate module only when they need packaged validity, while

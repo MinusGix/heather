@@ -1,5 +1,5 @@
 //! The second in-language derived artifact (issues/quotation-stage-artifacts.md):
-//! `lib/vec_code.hthr`'s `fold_code` kernel-checks at `Layer::Meta`, the
+//! `lib/lang/vec_code.hthr`'s `fold_code` kernel-checks at `Layer::Meta`, the
 //! evaluation hook routes `.fold` through it, and the emitted terms are
 //! convertible with the Rust `vec::fold` oracle's — adequacy, not just typing.
 //!
@@ -25,7 +25,7 @@ use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
 #[cfg(feature = "value-metrics")]
 use heather_kernel::value::ValueMetrics;
 
-const LIB: &str = include_str!("../../../lib/vec_code.hthr");
+const LIB: &str = include_str!("../../../lib/lang/vec_code.hthr");
 
 fn elab(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");

@@ -37,7 +37,7 @@ declarations a human wrote by hand in the milestone round —
 
 — such that the whole emission checks with `heather check` appended to the
 IR library. The milestone instance is the worked example the generator
-generalizes: `lib/ir_v1.hthr`'s cross-IR section is, deliberately, a
+generalizes: `lib/certgen/ir_v1.hthr`'s cross-IR section is, deliberately, a
 hand-run of this generator on `add` (the recursive-`Apply` transcription,
 `add_rec_runs`, `add_rec_converges`), and the implementing round's first
 acceptance item is reproducing it mechanically.
@@ -84,7 +84,7 @@ is local.
 **Where the output lands.** There is no module system, so the emission
 cannot be a sibling file importing the IR (`compile-typeclass-design` §3
 already hit this). v1: the generator produces a text fragment; the harness
-checks `lib/ir_v1.hthr` + fragment as one concatenated file. Generated
+checks `lib/certgen/ir_v1.hthr` + fragment as one concatenated file. Generated
 names are prefixed with the spec function's name (`mul_ir_body`,
 `mul_runs`), and the generator refuses a name that collides. A generated
 section committed into the library (the way `add`'s hand-run is) is a
@@ -225,7 +225,7 @@ Per generated function, three statements, each schematic in the source:
    record with `K` argument slots.
 
 What makes this schema credible rather than hopeful: every line of it has
-a checked instance in `lib/ir_v1.hthr` today (`add_rec_body`,
+a checked instance in `lib/certgen/ir_v1.hthr` today (`add_rec_body`,
 `dbl`-as-bound, `add_rec_runs`, `add_rec_converges`, `add_instance`), and
 the generator's job is precisely to re-derive that section from `add`'s
 source text. Divergence between the two is a test failure with a diff.
@@ -275,7 +275,7 @@ The four axes, instantiated for this generator:
    function). So v2 retires §5's bounded schema wholesale: the invariant is
    stated in the ∃-form (`Converges`), proved by folding the
    **∃-composition kit** — `ret_conv` / `letcon_conv` / `letcall_conv` /
-   `letmatch_conv`, proved once in `lib/ir_v1.hthr` — over the instruction
+   `letmatch_conv`, proved once in `lib/certgen/ir_v1.hthr` — over the instruction
    chain. Each kit lemma takes its `gather`/`lookup` facts as equation
    premises (all `refl` on the concrete-spine environments) and glues
    sub-certificates by raising their hidden fuels to the sum via
@@ -302,11 +302,11 @@ The four axes, instantiated for this generator:
    a fragment fn's **result** type may be a tier-0 *enumeration* — non-
    recursive, unindexed, unparameterized, no constructor fields — with
    `{T}_gen_embed` emitted per type and `CompileNatK{T}` per signature.
-   `lib/ir_v1.hthr` did not change at all: `Val` is untyped constructor trees,
+   `lib/certgen/ir_v1.hthr` did not change at all: `Val` is untyped constructor trees,
    so `embed_nat` was already one instance of the scheme rather than a
-   primitive. The widening is in-language (`lib/certgen_code.hthr`: four
+   primitive. The widening is in-language (`lib/certgen/certgen_code.hthr`: four
    walker arms, three signature arms), per the frozen-walker rule, and
-   `lib/certgen_cert.hthr` needed **zero** edits. Three stages remain, in the
+   `lib/certgen/certgen_cert.hthr` needed **zero** edits. Three stages remain, in the
    order that doc's §8 argues for: constructor **fields**, non-`Nat`
    **parameters** (blocked on `Term::Case`'s lowering, not on effort), and
    **tier-1** source types (whose `Converges` induction is over `T`, not over
@@ -331,7 +331,7 @@ The four axes, instantiated for this generator:
    structurally recurse over one unparameterized tier-1 inductive parameter —
    any constructor arities, `Nat` payload fields, cross-function calls
    included, so the showcase's `eval` shape is in the fragment end to end.
-   `lib/ir_v1.hthr` again grew nothing (the kit is tag- and
+   `lib/certgen/ir_v1.hthr` again grew nothing (the kit is tag- and
    arm-count-generic; a recursive `embed_T` is an ordinary generated
    recursive fn), and the whole proof schema was validated as a hand-run
    before any machinery. The predicted `CertOut` widening is exactly one
@@ -347,8 +347,8 @@ The four axes, instantiated for this generator:
    pass re-packages the case tree exactly as it does the tier-1 recursor's,
    minus the generalization skeleton) and passed to callees — the
    callee-marker rule widens to tier-0 domains, with per-slot embeddings
-   checked at the renderer. `lib/ir_v1.hthr` again grew nothing, and
-   `lib/certgen_cert.hthr` took zero edits: the tier-1 fold at the
+   checked at the renderer. `lib/certgen/ir_v1.hthr` again grew nothing, and
+   `lib/certgen/certgen_cert.hthr` took zero edits: the tier-1 fold at the
    all-childless `kids` mask *is* the tier-0 certificate. What remains of
    item 2 is the parameterized instantiations only.
 3. **Loopification as a refinement-certified pass**, hand-run first on one
@@ -382,7 +382,7 @@ The four axes, instantiated for this generator:
    `generate`, `generate_forced` (the §6 honesty hook), and
    `compile_record(k)` for the per-arity `CompileNatK` records. *Superseded
    2026-08-12* (`issues/retire-rust-transcriber.md` stage 2): the fragment
-   check and transcription now live in `lib/certgen_code.hthr`, and the public
+   check and transcription now live in `lib/certgen/certgen_code.hthr`, and the public
    API is `generate_in_language` + `compile_record(k)`; `generate` and
    `generate_forced` are deleted, the honesty hook replaced by the controls
    named in docs/certgen-transcriber-in-language-design.md §5's addendum.
@@ -432,7 +432,7 @@ wrong; the hand-run always had it right.
   item 2 forces them to agree); leaning: the code comments own the layout,
   this doc owns only the lexical/closed asymmetry it must respect.
   *(Corrected 2026-08-11: with two transcribers the layout is an
-  **interface**, not a comment — `lib/certgen_code.hthr`'s header states the
+  **interface**, not a comment — `lib/certgen/certgen_code.hthr`'s header states the
   two conventions and their meeting point, and the byte-identical-emission
   cross-check is what enforces agreement.
   `docs/certgen-transcriber-in-language-design.md` §§4–5.)*

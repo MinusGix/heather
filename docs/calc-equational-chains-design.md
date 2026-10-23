@@ -210,9 +210,9 @@ Unchanged, restated as commitments because §1 leans on them:
 Representative towers rewritten as calc chains, statements untouched —
 chosen where the form pays and left alone where it does not:
 
-- `lib/std/nat.hthr`: `mul_succ_left`, `mul_comm`, `mul_shuffle` (the
+- `lib/std/num/nat.hthr`: `mul_succ_left`, `mul_comm`, `mul_shuffle` (the
   4-deep pure-monoid tower; the poster child), `pow_mul`.
-- `lib/std/int.hthr`: `neg_add`'s `isucc` arm (the file's deepest
+- `lib/std/num/int.hthr`: `neg_add`'s `isucc` arm (the file's deepest
   single-arm tower), `mul_neg_l`, and `mul_assoc`'s two worst sign cases
   (the `sym(trans(…))` towers, which a chain states forward instead of
   composing backwards).

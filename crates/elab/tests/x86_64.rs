@@ -5,18 +5,18 @@ use crate::support;
 
 use heather_elab::{ElabError, Elaborator, stats};
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
-const INT: &str = include_str!("../../../lib/std/int.hthr");
-const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
-const RELATION: &str = include_str!("../../../lib/std/relation.hthr");
-const LOCATION: &str = include_str!("../../../lib/std/location.hthr");
-const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/certified_lookup.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const ALGEBRA: &str = include_str!("../../../lib/std/algebra/algebra.hthr");
+const INT: &str = include_str!("../../../lib/std/num/int.hthr");
+const BITVEC: &str = include_str!("../../../lib/std/bitvec/bitvec.hthr");
+const RELATION: &str = include_str!("../../../lib/std/relation/relation.hthr");
+const LOCATION: &str = include_str!("../../../lib/std/machine/location.hthr");
+const CERTIFIED_LOOKUP: &str = include_str!("../../../lib/std/data/certified_lookup.hthr");
 const X86_64: &str = include_str!("../../../lib/std/arch/x86_64/x86_64.hthr");
 
 const X86_MODULES: &[(&str, &str)] = &[
@@ -30,7 +30,7 @@ const X86_MODULES: &[(&str, &str)] = &[
     ("int", INT),
     ("bitvec", BITVEC),
     ("relation", RELATION),
-    ("relation_props", include_str!("../../../lib/std/relation_props.hthr")),
+    ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
     ("location", LOCATION),
     ("certified_lookup", CERTIFIED_LOOKUP),
     ("x86_64", X86_64),

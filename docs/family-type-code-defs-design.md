@@ -574,7 +574,7 @@ No kernel flag is needed at any phase — phase 1 having no emission is the
 - `forded/occurrences`, **~28 ms per use**: each mention emits an O(1)
   family type instead of Θ(n); predicted direction: down severalfold, slope
   ~1.0 unchanged.
-- `forded/declared-index-branching` (1.53) and `lib/ir_v1.hthr` (budget
+- `forded/declared-index-branching` (1.53) and `lib/certgen/ir_v1.hthr` (budget
   150 s): must not regress; no claim of improvement.
 - Re-record on a quiet machine per the noise warning; slopes are the
   headline, absolutes are context.

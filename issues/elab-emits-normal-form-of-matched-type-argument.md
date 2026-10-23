@@ -498,7 +498,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
   | file | misses Δ | queries Δ | steps Δ | peak RSS before → after |
   |---|---|---|---|---|
-  | `lib/ir_v1.hthr` (18 items) | **+0.0 %** | **+0.0 %** | **+0.0 %** | — |
+  | `lib/certgen/ir_v1.hthr` (18 items) | **+0.0 %** | **+0.0 %** | **+0.0 %** | — |
   | `probes/t_cp9.hthr` | **+0.0 %** | **+0.0 %** | **+0.0 %** | 2 234 → 2 244 MB (+0.4 %) |
   | `probes/t_qt3.hthr` | **+0.0 %** | **+0.0 %** | **+0.0 %** | 4 003 → 4 058 MB (+1.4 %) |
   | `probes/str/p10.hthr` | **+0.0 %** | **+0.0 %** | **+0.0 %** | 5 709 → 5 842 MB (+2.3 %) |
@@ -643,7 +643,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
   | file | items | queries Δ | misses Δ | steps Δ | shortcut Δ | memo Δ |
   |---|---:|---|---|---|---|---|
-  | `lib/ir_v1.hthr` | 374 rows | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** |
+  | `lib/certgen/ir_v1.hthr` | 374 rows | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** |
   | `probes/t_cp9.hthr` | all rows | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** | **+0.0 %** |
 
   Not one row of either file has a non-zero count delta. So the `Env` merge,
@@ -656,7 +656,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
   | file | before | after | |
   |---|---:|---:|---|
-  | `lib/ir_v1.hthr` | 631 MB | 637 MB | +1 % |
+  | `lib/certgen/ir_v1.hthr` | 631 MB | 637 MB | +1 % |
   | `probes/t_cp9.hthr` | 2 201 MB | 3 315 MB | **+51 %** |
   | `probes/str/p10.hthr` | 5 733 MB | 15 076 MB | **×2.63** |
 
@@ -802,7 +802,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
   | file | before | after | |
   |---|---:|---:|---|
-  | `lib/ir_v1.hthr` | 631 MB | 637 MB | +1 % |
+  | `lib/certgen/ir_v1.hthr` | 631 MB | 637 MB | +1 % |
   | `docs/showcase/calc_text.hthr` | 9.8 GiB | **12.5 GiB** | +28 % |
   | `probes/t_cp9.hthr` | 2 201 MB | 3 315 MB | +51 % |
   | `probes/str/p10.hthr` | 5 733 MB | **15 076 MB** | **×2.63** |
@@ -964,7 +964,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
   | file | rows | count columns that moved |
   |---|---:|---|
-  | `lib/ir_v1.hthr` | 353 | **none** |
+  | `lib/certgen/ir_v1.hthr` | 353 | **none** |
   | `probes/t_cp9.hthr` | 716 | **none** |
   | `probes/t_qt3.hthr` | 716 | **none** |
   | `probes/str/p10.hthr` | 745 | **none** |
@@ -981,7 +981,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
   | file | before #1 | before #2 | after | after vs. the before range |
   |---|---:|---:|---:|---|
-  | `lib/ir_v1.hthr` | 634 380 | 628 948 | 629 496 | inside |
+  | `lib/certgen/ir_v1.hthr` | 634 380 | 628 948 | 629 496 | inside |
   | `probes/t_cp9.hthr` | 2 210 196 | 2 262 780 | 2 212 764 | inside |
   | `probes/t_qt3.hthr` | 4 003 044 | 4 120 576 | 4 039 464 | inside |
   | `probes/str/p10.hthr` | 5 751 100 | 5 842 132 | **5 739 708** | below both |
@@ -1004,7 +1004,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
   | file | before #1 CPU-s | before #2 CPU-s | after CPU-s |
   |---|---:|---:|---:|
-  | `lib/ir_v1.hthr` | 4.87 | 7.36 | 5.57 |
+  | `lib/certgen/ir_v1.hthr` | 4.87 | 7.36 | 5.57 |
   | `probes/t_cp9.hthr` | 48.19 | 66.09 | 54.81 |
   | `probes/t_qt3.hthr` | 75.77 | 95.81 | 71.60 |
   | `probes/str/p10.hthr` | 137.70 | 185.57 | 129.41 |
@@ -1150,7 +1150,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
     | file | rows | moved |
     |---|---:|---|
-    | `lib/ir_v1.hthr` | 353 | none |
+    | `lib/certgen/ir_v1.hthr` | 353 | none |
     | `probes/t_cp9.hthr` | 716 | none |
     | `probes/t_qt3.hthr` | 716 | none |
     | `probes/str/p10.hthr` | 745 | none |
@@ -1181,7 +1181,7 @@ The fix is the elaborator's, at the boundary between normalizing to decide and e
 
   | file | before CPU-s | after CPU-s | | |
   |---|---:|---:|---|---|
-  | `lib/ir_v1.hthr` | 3.94 | 5.26 | **+33 %** | many small declarations |
+  | `lib/certgen/ir_v1.hthr` | 3.94 | 5.26 | **+33 %** | many small declarations |
   | `probes/t_cp9.hthr` | 34.07 | 41.13 | **+21 %** | " |
   | `probes/t_qt3.hthr` | 49.75 | 62.72 | **+26 %** | " |
   | `probes/str/p10.hthr` | 118.75 | 113.65 | **−4 %** | 42 M conversion queries |
@@ -1240,7 +1240,7 @@ on every file and every sample:
 
 | file | stage 1b | now |
 |---|---:|---|
-| `lib/ir_v1.hthr` | +33 % | **−0.9 %, no change** |
+| `lib/certgen/ir_v1.hthr` | +33 % | **−0.9 %, no change** |
 | `probes/t_cp9.hthr` | +21 % | **+0.2 %, no change** |
 | `probes/t_qt3.hthr` | +26 % | **−0.7 %, no change** |
 | `probes/str/p10.hthr` | −4 % | **+0.3 %, no change** |
@@ -1304,7 +1304,7 @@ Nothing committed. `crates/kernel/benches/baseline.tsv` is still the
   $ HEATHER_AT_SPIKE=1 heather check -L lib/std probes/tiny.hthr
   error: the kernel rejected `mk`: LayerMismatch
     --> probes/tiny.hthr:6:1
-  lib/std/pair.hthr: 2 errors
+  lib/std/core/pair.hthr: 2 errors
   ```
 
   ### Where the layer comes from, and why it is not an oversight
@@ -1546,9 +1546,9 @@ Nothing committed. `crates/kernel/benches/baseline.tsv` is still the
 
   ```
   error: `absurd` needs both sides of the equation to be constructor applications
-    --> lib/std/list.hthr:840:35
+    --> lib/std/data/list.hthr:840:35
   error: `omega` got stuck: Omega could not spell an integer expression
-    --> lib/std/omega.hthr:1009:5   (and ~30 more)
+    --> lib/std/tactic/omega.hthr:1009:5   (and ~30 more)
   ```
 
   - **`inductive.rs` `read_ctor` (~4564)** — §4.2 lists it as "shape-only, add

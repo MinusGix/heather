@@ -3,8 +3,8 @@
 Date: 2026-10-21. Questions 2 (second half) and 3 of
 [interaction-trees-container-model](../issues/interaction-trees-container-model.md),
 on top of the core library of [the first round](itree-core-round.md). The
-code is [`lib/std/itree_trace.hthr`](../lib/std/itree_trace.hthr) and
-[`lib/std/itree_state.hthr`](../lib/std/itree_state.hthr), the client is
+code is [`lib/std/itree/itree_trace.hthr`](../lib/std/itree/itree_trace.hthr) and
+[`lib/std/itree/itree_state.hthr`](../lib/std/itree/itree_state.hthr), the client is
 [`docs/showcase/itree_refinement_client.hthr`](showcase/itree_refinement_client.hthr),
 and the tests are `crates/elab/tests/lib_std_itree_trace.rs`.
 

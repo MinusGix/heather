@@ -425,7 +425,7 @@ fn positivity_param(name: &str, span: Span) -> Param {
 }
 
 /// A binary connective: `P ∧ Q` is `And<P, Q>`, the declared record applied to
-/// its two **type** arguments (`lib/std/logic.hthr`).
+/// its two **type** arguments (`lib/std/core/logic.hthr`).
 ///
 /// The target name is fixed here rather than emitted as a symbol for
 /// resolution to place, which is the opposite of what `+` does — and the test
@@ -3460,7 +3460,7 @@ impl Parser {
     /// - `a ≠ b`, direct notation for `¬(a = b)`, desugared here to the
     ///   same `Not` application and equality node as that longer spelling;
     /// - `a <= b`, which falls back to `Le(a, b)`, the *proposition* from
-    ///   lib/ir_v1.hthr, never the boolean `leb`; a computational position
+    ///   lib/certgen/ir_v1.hthr, never the boolean `leb`; a computational position
     ///   calls `leb` by name (issues/comparison-operators.md);
     /// - `a < b`, whose fallback `lt` has no lib target yet — it stays here so
     ///   `<` cannot chain either, and so the speculative type-argument parse

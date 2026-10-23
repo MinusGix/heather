@@ -4,26 +4,26 @@
 //! Since `issues/retire-rust-transcriber.md` stage 2 (2026-08-12) there is
 //! exactly ONE generator: `generate_in_language`. The Rust walker that served
 //! as its byte-identity oracle is deleted, so what that comparison pinned is
-//! carried by four covers — `lib/certgen_code.hthr`'s own `refl` theorems, the
+//! carried by four covers — `lib/certgen/certgen_code.hthr`'s own `refl` theorems, the
 //! positive fixtures below (a silent decline is a panic), the exactness
 //! fixtures inside every emission (different-but-converging output is `Stuck`
 //! at a concrete run), and the kernel judging the rest. Where a property had no
 //! cover left, the expected text is pinned as a LITERAL here: the `IR_*`
 //! constants are the emitted-layout interface, whose sole normative statement
-//! is now `lib/certgen_code.hthr`'s four-conventions header plus the emitters
+//! is now `lib/certgen/certgen_code.hthr`'s four-conventions header plus the emitters
 //! in `crates/elab/src/certgen.rs`.
 //!
 //! BUDGET. This binary holds ONE test — the transcriptions and the declines,
-//! which need only the declarations prefix, `lib/certgen_code.hthr` and
-//! `lib/certgen_cert.hthr`. The end-to-end emissions and their mutation
+//! which need only the declarations prefix, `lib/certgen/certgen_code.hthr` and
+//! `lib/certgen/certgen_cert.hthr`. The end-to-end emissions and their mutation
 //! controls moved to `certgen_emissions.rs` on 2026-08-12 (the non-`Nat`
 //! embeddings round), because `ulimit -t` is per *process* and the two
 //! together no longer fit one 300-second rail: each pays a ~40 s elaboration
-//! of `lib/certgen_code.hthr` on top of its own work, and the rest of that
+//! of `lib/certgen/certgen_code.hthr` on top of its own work, and the rest of that
 //! test is a ~50 s support prelude plus five emissions.
 //!
 //! The fold that turns a transcription into a certificate is a library file
-//! too now (`lib/certgen_cert.hthr`, docs/certgen-cert-expression-design.md):
+//! too now (`lib/certgen/certgen_cert.hthr`, docs/certgen-cert-expression-design.md):
 //! elaborating it is ~1 s, but *running* it costs ~3.5 CPU-s per generated
 //! function on top of the transcriber, which every generating test here pays.
 //! Its perturbation control lives in `certgen_cert.rs` — a binary of its own,
@@ -31,7 +31,7 @@
 //!
 //! STACK: checking one `match code` shell means checking 52 branch telescopes
 //! against a library-inductive motive, and two elaborations of
-//! `lib/certgen_code.hthr` in one test thread overflow the 8 MiB
+//! `lib/certgen/certgen_code.hthr` in one test thread overflow the 8 MiB
 //! `scripts/test` gives it. One copy of the file per test, therefore.
 //!
 //! And one *rail* per binary: `ulimit -t` is per process, so the
@@ -49,27 +49,27 @@ use heather_syntax::parse_file;
 
 use crate::support;
 
-const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
+const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
 /// The library's one import (docs/modules-design.md §7). Elaborated whole,
 /// which is why the arithmetic and order kit is no longer sliced out of
 /// `LIB` item by item below — `import nat;` in the declarations prefix brings
 /// all of it into scope.
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
 /// The transcriber: the data and helpers, plus the two `match code` shells
 /// claiming `certgen.transcribe` and `certgen.check_sig`
 /// (docs/certgen-transcriber-in-language-design.md,
 /// docs/fn-signature-reflection-design.md). This file IS the fragment's
 /// definition — signature rule and body rule both — and nothing in Rust
 /// decides it.
-const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
+const CODE: &str = include_str!("../../../lib/certgen/certgen_code.hthr");
 /// The certificate fold: the `Cert`/`CertOut` data and the `fn`s that fold an
 /// `Ir` into a chain of ∃-kit applications
 /// (docs/certgen-cert-expression-design.md). Ordinary program-layer code — no
 /// `match code`, so no 52-branch gate — and the emitters read its answer back
 /// instead of deciding the fold in Rust.
-const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
+const CERT: &str = include_str!("../../../lib/certgen/certgen_cert.hthr");
 
 /// One library item's source text, by name — the same span slice `support`
 /// uses, for the tests that need a single declaration rather than the prelude.
@@ -123,8 +123,8 @@ const THIRD3: &str =
 ///
 /// **Named `viaadd`, and until 2026-08-13 named `mul`** — every design doc
 /// that predates that date calls this fixture `mul`, and
-/// `lib/certgen_code.hthr`'s `viaadd_transcribes` was `mul_transcribes`. The
-/// rename is `issues/std-nat-multiplication.md`'s: `lib/std/nat.hthr` now owns
+/// `lib/certgen/certgen_code.hthr`'s `viaadd_transcribes` was `mul_transcribes`. The
+/// rename is `issues/std-nat-multiplication.md`'s: `lib/std/num/nat.hthr` now owns
 /// `mul`, spelled `add(mul(a, k), a)` for its lemma kit's sake, and a byte pin
 /// must not be readable as a claim about a *library* function it does not
 /// share a body with. (It would not have errored: a module-local `fn` shadows
@@ -148,7 +148,7 @@ const VIAADD: &str =
 // independent implementations (the Rust walker and the in-language one). With
 // the oracle retired these literals ARE that pin: the instruction chain, the
 // slot numbering, the arm split, and the closure's callee indices, per
-// function. `lib/certgen_code.hthr`'s `add_transcribes`, `dbl_transcribes` and
+// function. `lib/certgen/certgen_code.hthr`'s `add_transcribes`, `dbl_transcribes` and
 // `viaadd_transcribes` pin the same three transcriptions *in-language* — before
 // the readback and before the closure renumbering — so a divergence between a
 // literal here and a theorem there is localized to the readback or to the
@@ -212,7 +212,7 @@ fn refuted(e: &mut Elaborator, src: &str, what: &str) {
 }
 
 /// A prelude'd elaborator with `nat` in it — the closure `heather check
-/// lib/ir_v1.hthr` walks, minus the root.
+/// lib/certgen/ir_v1.hthr` walks, minus the root.
 fn base() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_module_source("logic", LOGIC).unwrap_or_else(|err| panic!("{}", err.render(LOGIC)));
@@ -235,8 +235,8 @@ fn in_language_transcriber() {
     // after the closing brace faces the kernel unconditionally.
     support::with_decl_cache(&mut e, |e| {
         elab(e, &LIB[..cut], "declarations prefix");
-        elab(e, CODE, "lib/certgen_code.hthr");
-        elab(e, CERT, "lib/certgen_cert.hthr");
+        elab(e, CODE, "lib/certgen/certgen_code.hthr");
+        elab(e, CERT, "lib/certgen/certgen_cert.hthr");
     });
     // `dbl` lives past the declarations cut, and the generator reads the
     // *elaborated* body: a fn the elaborator has not seen has nothing to
@@ -309,7 +309,7 @@ fn in_language_transcriber() {
 
     // The body-less policy pin (docs/opaque-globals-analysis-design.md §2): a
     // theorem's proof is deliberately opaque, so body reflection declines by
-    // saying so. The name is one of `lib/certgen_code.hthr`'s own theorems,
+    // saying so. The name is one of `lib/certgen/certgen_code.hthr`'s own theorems,
     // elaborated above.
     let Err(msg) = e.fn_body_code("sig_dbl") else {
         panic!("a theorem has no body to reflect")
@@ -318,7 +318,7 @@ fn in_language_transcriber() {
 
     // A body decline, from the WALKER: a nested `match` binds at level
     // `arity + 2`, which convention 1 says is outside the fragment
-    // (`lib/certgen_code.hthr`'s `nested_binder_declines` pins the same fact
+    // (`lib/certgen/certgen_code.hthr`'s `nested_binder_declines` pins the same fact
     // one layer down).
     {
         let src = "fn nest2(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => match k { Zero => 1, Succ(j) => j } } }";

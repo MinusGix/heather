@@ -56,7 +56,7 @@ normal-access theorems.
 - 2026-08-25: Filed from the requirement that omitted page tables and
   privilege checks remain visible as assumptions rather than becoming total
   loads/stores by accident.
-- 2026-10-21: Landed as `lib/std/memory.hthr`, with `lib/std/vector.hthr` (`snoc`,
+- 2026-10-21: Landed as `lib/std/machine/memory.hthr`, with `lib/std/data/vector.hthr` (`snoc`,
   `reverse`) and `lib/std/bitvec/bitvec_bytes.hthr` (packing). The design is in
   `docs/byte-memory-design.md`, which says where the model sits in the
   program-logic redesign. The showcase is `docs/showcase/memory_client.hthr`

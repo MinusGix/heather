@@ -9,7 +9,7 @@ updated: 2026-08-17
 The half of [[nat-order-kit]]'s round that was deferred by charter rather than
 by any obstacle, given an owner of its own so that the order issue can close.
 
-`lib/std/nat.hthr` states the order in full and proves its kit. What it does
+`lib/std/num/nat.hthr` states the order in full and proves its kit. What it does
 not have is the *arithmetic* that reads the order:
 
 - **`min`/`max` at `Nat`** — plain structural recursions, no decider needed.
@@ -39,13 +39,13 @@ This issue is the answer to "who owns it": here.
 
 ## Acceptance
 
-The names above exist in `lib/std/nat.hthr` with proofs, and `min`/`max`
+The names above exist in `lib/std/num/nat.hthr` with proofs, and `min`/`max`
 **reduce** at closed arguments (`max(2, 5)` is `refl`-provably `5`), which is
 the property every recursion in that file is written to keep.
 
 ## Log
 
-- 2026-08-17: LANDED, in one pass and with nothing refuted. `lib/std/nat.hthr` gained three
+- 2026-08-17: LANDED, in one pass and with nothing refuted. `lib/std/num/nat.hthr` gained three
 sections at the end, all after the order kit because all of them read it:
 
 - **the `sub` kit** — `sub_self`, `add_sub_cancel`, `sub_add_cancel`,

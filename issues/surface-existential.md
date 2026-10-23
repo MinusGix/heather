@@ -69,7 +69,7 @@ Two candidate routes, neither costed:
   instantiating an open type family at the witness and transporting along
   the equation with `J`, has Σ-η at a neutral pair, and rejects a witness
   for a different parameter); and, at the surface, the **real** `Converges`
-  over `lib/ir_v1.hthr`'s `eval`/`Prog`/`Ir`/`Val`/`Res` at concrete
+  over `lib/certgen/ir_v1.hthr`'s `eval`/`Prog`/`Ir`/`Val`/`Res` at concrete
   arguments — it declares, is introduced by a computed bound with the
   equation closed by conversion, and its projections feed `fuel_monotone`.
   So everything except *writing the parameters as parameters* already works.
@@ -129,7 +129,7 @@ Two candidate routes, neither costed:
   record at level 1, observed as a `LevelMismatch` against the prelude's
   level-0 `sym`, with the level-0 case passing beside it.
 
-  **Both consumers landed in `lib/ir_v1.hthr`** (see [[ir-simulate-design]]):
+  **Both consumers landed in `lib/certgen/ir_v1.hthr`** (see [[ir-simulate-design]]):
   `Converges(p, env, ir, vs)` with `refines` restated through it (fuel maps
   gone, composition is implication chaining), `refines_of_bounded` proving the
   ∃-closure rather than asserting it, `add_converges` /
@@ -153,6 +153,6 @@ Two candidate routes, neither costed:
 - **[[indexed-families]]** owns whether declared families come from indexed W
   or ford over `Wf`. Assumed here: only that the surface has no syntax for
   declaring one today.
-- 2026-08-01: Stale-fact correction: this issue's note that '`->` in an expression body still fails (`fn Q(n: Nat) -> Type { Nat -> Nat }` is a parse error), which is why the forall-shaped half of an interface still cannot be NAMED' is false as of 2026-08-01. [[type-definitions]] landed types-as-expressions (docs/types-as-expressions.md): `->` and `(x: A) ->` are admitted in expression position, that exact spelling checks, and `Refines` is a declaration in lib/ir_v1.hthr. Nothing else here moves — this issue's own subject (the existential/Sigma half) landed with value parameters and stays as recorded.
+- 2026-08-01: Stale-fact correction: this issue's note that '`->` in an expression body still fails (`fn Q(n: Nat) -> Type { Nat -> Nat }` is a parse error), which is why the forall-shaped half of an interface still cannot be NAMED' is false as of 2026-08-01. [[type-definitions]] landed types-as-expressions (docs/types-as-expressions.md): `->` and `(x: A) ->` are admitted in expression position, that exact spelling checks, and `Refines` is a declaration in lib/certgen/ir_v1.hthr. Nothing else here moves — this issue's own subject (the existential/Sigma half) landed with value parameters and stays as recorded.
 - 2026-08-02: Correction to this issue's closing log (2026-08-02): the 'unrelated defect found and not fixed' recorded there — the annotated `let x: T = e;` failing for ANY `T` — is filed and FIXED ([[annotated-let-swallows-the-equals]], closed 2026-08-02 by docs/let-and-blocks-design.md §3). Worth recording because this entry was RIGHT about the thing that issue had wrong: it says 'does not parse for any T', while [[annotated-let-swallows-the-equals]] itself framed the bug as `ty()`'s equality case eating the first `=`, i.e. as being about annotations that LOOK like equations. The real cause is `expr()`'s comparison rung under `ty_atom`'s fall-through, so the gap was every annotation that reaches it — exactly the 'any T' this entry observed. The wide reading sat here, in a closed issue's log, for a month while the owning issue carried the narrow one; that is the argument for the sweep that found it. This round's diagnostics naming a declared result type rather than an annotation (the consequence recorded above) can now be revisited if anyone wants: the annotation is a working checking position.
 - 2026-10-21: The follow-up recorded above (value parameters on `inductive`) landed: docs/surface-value-parameters.md §6, closing [[tier2-value-parameters]]. Uniformity across constructors is the classifier's uniform-occurrence check; value parameters beside an index stay refused.

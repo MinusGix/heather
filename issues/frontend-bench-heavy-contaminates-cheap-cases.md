@@ -16,7 +16,7 @@ Same code, same baseline (re-recorded that day from a full run), four measuremen
 - --check --no-heavy (everything except the three ir_v1 corpus cases): OK, 50 comparisons within thresholds, in the same minute as a red full run.
 - and two earlier full runs the same evening (the --check before the re-record and the --save itself) read the cheap families FAST, matching --no-heavy.
 
-So a family reads 1.3-1.5x higher when the heavy `lib/ir_v1.hthr` corpus cases have run before it in the same process, and whether it does appears to depend on the machine's memory state at the time: this machine had 800 MB free with 37 GB in page cache and 10.5 GB of swap in use, and the ir_v1 closure allocates on the order of 100 MB per round (peak RSS ~106 MiB for the run). Reclaim/fragmentation is the obvious suspect; nothing here proves which.
+So a family reads 1.3-1.5x higher when the heavy `lib/certgen/ir_v1.hthr` corpus cases have run before it in the same process, and whether it does appears to depend on the machine's memory state at the time: this machine had 800 MB free with 37 GB in page cache and 10.5 GB of swap in use, and the ir_v1 closure allocates on the order of 100 MB per round (peak RSS ~106 MiB for the run). Reclaim/fragmentation is the obvious suspect; nothing here proves which.
 
 Why it matters: --check's threshold for 'a case is slower' is 1.25x, i.e. BELOW the contamination. So on a full run the time half produces flags that no round can act on, which is exactly the failure [[frontend-benchmarks]]'s bands were just fixed for. Note this was invisible until 2026-08-17 for an unrelated reason -- [[frontend-bench-baseline-host-string]]: the recorded baseline's host string did not match this machine, so the time half was not being compared at all.
 

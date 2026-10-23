@@ -413,6 +413,6 @@ whose §8 lists what it hands to layer 2.
 Layer 1's acceptance corpus, named now: the prelude types
 (Option/Result/List) for ordinary classes; a small
 `AddMonoid → AddCommGroup` hierarchy as the `extends`/canonical-value/
-override-agreement test; and `lib/ir_v1.hthr`'s `Compile` instances as the
+override-agreement test; and `lib/certgen/ir_v1.hthr`'s `Compile` instances as the
 pre-existing client that must not break. The operator migration (§12) gets
 its own round after layer 2 exists to resolve for it.

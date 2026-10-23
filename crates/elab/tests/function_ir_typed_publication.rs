@@ -11,7 +11,7 @@ fn checker() -> heather_elab::Elaborator {
 fn typed_search_publication_checks() {
     use heather_elab::function_ir_source::generate_elaborated_typed_x86;
     let mut elab = checker();
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
     elab.elab_module_source("readonly_loops", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
@@ -90,7 +90,7 @@ fn wc_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), s: WcState) → Loop
 fn record_state_step_publication_checks() {
     use heather_elab::function_ir_source::generate_elaborated_typed_x86;
     let mut elab = checker();
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let nat = include_str!("../../../lib/std/bitvec/bitvec_nat.hthr");
     elab.elab_module_source("bitvec_nat", nat).unwrap_or_else(|e| panic!("{}", e.render(nat)));
@@ -117,7 +117,7 @@ fn record_state_step_certificate_refuses_other_sources() {
     use heather_elab::function_ir_source::generate_elaborated_typed_x86;
     let build = |source: &str| {
         let mut elab = checker();
-        let model = include_str!("../../../lib/function_ir_loop.hthr");
+        let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
         elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
         let nat = include_str!("../../../lib/std/bitvec/bitvec_nat.hthr");
         elab.elab_module_source("bitvec_nat", nat).unwrap_or_else(|e| panic!("{}", e.render(nat)));
@@ -147,7 +147,7 @@ fn record_state_step_certificate_refuses_other_sources() {
 fn record_state_fields_publish_alone() {
     use heather_elab::function_ir_source::{generate_elaborated_typed_fields_x86, FieldPiece};
     let mut elab = checker();
-    let model = include_str!("../../../lib/function_ir_loop.hthr");
+    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
     elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
     let nat = include_str!("../../../lib/std/bitvec/bitvec_nat.hthr");
     elab.elab_module_source("bitvec_nat", nat).unwrap_or_else(|e| panic!("{}", e.render(nat)));

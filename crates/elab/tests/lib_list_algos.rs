@@ -1,10 +1,10 @@
-//! `lib/list_algos.hthr` — the list-algorithm exercise file
+//! `lib/lang/list_algos.hthr` — the list-algorithm exercise file
 //! (`issues/list-algorithms-exercise.md`), checked as a module closure.
 //!
 //! Written when the traits adoption round (2026-08-07) moved `cong_cons`,
-//! `append_nil` and `append_assoc` out of it and into `lib/std/list.hthr`, and
+//! `append_nil` and `append_assoc` out of it and into `lib/std/data/list.hthr`, and
 //! found that nothing in the suite would have noticed if the move had broken
-//! the file: `lib/std/list.hthr`, `lib/std/option.hthr` and `lib/list_algos.hthr`
+//! the file: `lib/std/data/list.hthr`, `lib/std/core/option.hthr` and `lib/lang/list_algos.hthr`
 //! had no Rust coverage at all — only `nat` and `bool` did, through
 //! `tests/ir_v1.rs`. The CLI's fixture tests exercise the *loader*, not these
 //! files.
@@ -17,13 +17,13 @@
 use crate::support;
 use heather_elab::{ElabError, Elaborator};
 
-const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
-const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-const NAT: &str = include_str!("../../../lib/std/nat.hthr");
-const OPTION: &str = include_str!("../../../lib/std/option.hthr");
-const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
-const LIST: &str = include_str!("../../../lib/std/list.hthr");
-const ALGOS: &str = include_str!("../../../lib/list_algos.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/core/logic.hthr");
+const BOOL: &str = include_str!("../../../lib/std/core/bool.hthr");
+const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
+const OPTION: &str = include_str!("../../../lib/std/core/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/core/pair.hthr");
+const LIST: &str = include_str!("../../../lib/std/data/list.hthr");
+const ALGOS: &str = include_str!("../../../lib/lang/list_algos.hthr");
 
 #[test]
 fn the_list_algorithms_check() {

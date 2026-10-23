@@ -31,7 +31,7 @@ Each has a recommendation; the rest of the document argues for it.
    opaque handle the tactic can pass back.
 3. **Shape of the request type** (§3.2). An interaction tree over a
    container, `Ask(r: Req, k: Resp(r) -> Tac<A>)`, declared locally in
-   `lib/std/tactic.hthr` now, so that when `it-core` lands `Tac<A>` becomes
+   `lib/std/tactic/tactic.hthr` now, so that when `it-core` lands `Tac<A>` becomes
    that library's tree over a `Host` event container with no client change.
    Not blocked on the parallel interaction-tree thread.
 4. **Invocation surface** (§7). A tactic is an ordinary `fn … → Tac<Proof>`
@@ -67,7 +67,7 @@ Four mechanisms, each the nearest prior art for one part of the interface.
   tried") and `SearchMark` rollback are a failure report with structure, and
   the backtracking primitive a tactic needs.
 - **The elaborator can run Heather programs.** In-language analyzers
-  (`lib/certgen_code.hthr`) are evaluated in the kernel's value domain by
+  (`lib/certgen/certgen_code.hthr`) are evaluated in the kernel's value domain by
   `Eval::force`, and `certgen.rs`'s `Reader` decodes the lowered constructor
   values back into Rust data under a fuel and a read budget. Tier-2 inductives
   (PR #88) made function-typed recursive fields writable, so a value can now
@@ -141,7 +141,7 @@ independently of fuel.
 ### 3.2 The request type is a container
 
 ```heather
-// lib/std/tactic.hthr (round 1 subset)
+// lib/std/tactic/tactic.hthr (round 1 subset)
 inductive Req {
     Goal,                         // the goal and its local context
     View(e: Expr),                // one layer of a term (§4)
@@ -441,7 +441,7 @@ the generalisation.
 
 | round | builds | done when |
 |---|---|---|
-| R1 (landed) | `lib/std/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`Defeq`/`Fail`, the Rust protocol-speaker trait (§8a) | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
+| R1 (landed) | `lib/std/tactic/tactic.hthr` (protocol, `bind`, helpers), `host.rs` loop, `by`, requests `Goal`/`Defeq`/`Fail`, the Rust protocol-speaker trait (§8a) | `by assumption` closes goals at open types and neutral hypotheses, and its failure lists every hypothesis tried |
 | R2 (landed) | `Open` (the design's `Intro`), `Infer`, `Resolve`, `Lam` in `Expr`, binder scopes in the host; quoting the goal's terms into `Expr` arguments; `focus`, `attempt`, `first_of`, `exact`, `intro`, `apply` in Heather (§13) | a Heather `apply` closes an implication chain; a failed `first_of` reports each branch |
 | R2½ (landed) | `View` on the speller's recognisers (moved from R1 and R2), `Whnf`, `Match`; `apply` solves what its conclusion determines (§14) | a Heather tactic dispatches on the goal's head; `apply(sym, assumption())` closes `b = a` |
 | R2¾ (landed) | `Hole` with `Mark`/`Restore`, `GlobalRef` (`Lookup`, `Global`, `HGlobal`'s reference), `At` notes rendered by the host (§15) | `apply(trans, assumption())` closes `a = c`; a failed alternative's solutions are forgotten |
@@ -679,7 +679,7 @@ Recorded after building it, as the inductive-tier designs do.
 ## 16. What round 3 changed
 
 - **`split_all` is a Heather tactic; the case split is the host's.**
-  `lib/std/tactic.hthr`'s `split_all(leaf)` closes the ten goals of
+  `lib/std/tactic/tactic.hthr`'s `split_all(leaf)` closes the ten goals of
   `crates/elab/tests/goal_combinators.rs` (`tactic_split_all.rs`, with
   `reflexivity()` as the leaf). The strategy is Heather: split every local
   of a finite type, introduce binders and split the finite ones, prove `And`

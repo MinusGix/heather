@@ -3,8 +3,8 @@
 Date: 2026-10-16. Starts [regular-cauchy-reals](../issues/regular-cauchy-reals.md)
 on top of the completed rational order ([rational-order-round](rational-order-round.md))
 and `calc` over order relations ([calc-order-chains](calc-order-chains.md)).
-New module [`lib/std/creal.hthr`](../lib/std/creal.hthr); the rational facts
-it chains are added to [`lib/std/rat.hthr`](../lib/std/rat.hthr); the client
+New module [`lib/std/num/creal.hthr`](../lib/std/num/creal.hthr); the rational facts
+it chains are added to [`lib/std/num/rat.hthr`](../lib/std/num/rat.hthr); the client
 is [`docs/showcase/creal_client.hthr`](showcase/creal_client.hthr); the tests
 are `crates/elab/tests/lib_std_creal.rs`.
 

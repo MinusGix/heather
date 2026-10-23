@@ -24,7 +24,7 @@ fn Lt(n, m: Nat) -> Type { Le(Succ(n), m) }
 ```
 
 Route (a) of the issue's three, and the three properties that chose it are all
-visible in `lib/std/nat.hthr`'s bodies rather than argued for:
+visible in `lib/std/num/nat.hthr`'s bodies rather than argued for:
 
 - **It reduces.** `Le(3, 10)` normalises to `True`, so `zero_le` is `trivial`
   and a closed comparison is proved by the kernel computing rather than by
@@ -52,7 +52,7 @@ functions.
 `n <= m ↔ ∃ k, n + k = m` as a *view*, so a proof that is shorter in the
 additive presentation can be written there. That is what makes the definition
 swappable: the discipline is that **downstream never unfolds `Le`**, and
-`lib/ir_v1.hthr` — the largest consumer, with eight uses — went through this
+`lib/certgen/ir_v1.hthr` — the largest consumer, with eight uses — went through this
 round **unmodified**, which is the evidence the discipline was already held.
 Route (b), the indexed family, is still the right technique for relations `Le`
 cannot express and is unaffected by any of this.
@@ -124,8 +124,8 @@ than a fact about having run a decision procedure.
 `leb` and `bool`'s Boolean decision **stay**, as decision procedures. (The
 latter was `leb_bool` until 2026-08-17 and is `bool::leb` now: the module is
 the namespace, and the suffix existed only because the instance registry keyed
-on written names — `docs/instance-resolved-key-design.md` §6.) `lib/list_algos.hthr`'s
-`sortedb`/`insert` kit and `lib/certgen_code.hthr` are written against them and
+on written names — `docs/instance-resolved-key-design.md` §6.) `lib/lang/list_algos.hthr`'s
+`sortedb`/`insert` kit and `lib/certgen/certgen_code.hthr` are written against them and
 are not this round's to restate (`issues/std-api-waves.md` L3 owns that, behind
 `Decide`). What changed is their standing: nothing in a *specification* names
 them, and `Cmp` no longer does.
@@ -181,7 +181,7 @@ fine; the notation gap is filed.
 The round is the first evidence for `issues/class-ops-prop-vs-bool.md`'s
 direction, so the bill is worth stating plainly.
 
-- **Downstream migration: zero.** `lib/ir_v1.hthr` and `lib/list_algos.hthr`
+- **Downstream migration: zero.** `lib/certgen/ir_v1.hthr` and `lib/lang/list_algos.hthr`
   both check unmodified. The definition of `Le` changed underneath eight uses
   and none of them noticed, because all eight go through the lemma kit.
 - **The `Cmp` conversion: three field spellings and two instances**, plus one

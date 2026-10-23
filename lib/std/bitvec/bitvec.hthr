@@ -205,7 +205,7 @@ fn BitVec::toNat({n: Nat}, self x: BitVec(n)) → Nat {
 // every `x` by construction, as `mul` and the module header require — no
 // reduction below `2^n` first, and so no `2^n` built at all.
 
-// The low bit of `x`. Its window is `half`'s (`lib/std/nat.hthr`), which is
+// The low bit of `x`. Its window is `half`'s (`lib/std/num/nat.hthr`), which is
 // what keeps `ofNat` bounded by the width; a one-successor parity recursion
 // through `Bool::not` would not be.
 fn BitVec::odd_bit(x: Nat) → Bool {

@@ -371,7 +371,7 @@ it changed or added the following.
 
 Added 2026-10-21 (`issues/tier2-fragment-extensions.md`, generated
 definitions), measured first on the library that made it matter,
-`lib/std/itree.hthr`.
+`lib/std/itree/itree.hthr`.
 
 **Why this one.** `canon` (§5) is a large elimination whose step is a case
 tree carrying, per constructor, the children's type, the ih's type and, at a
@@ -423,7 +423,7 @@ every site that builds a tier-2 annotation shrinks without being touched.
 `WParts::read` accepts either spelling of the second component (an `elim_W`,
 or an application spine headed by a global), and neither is read further.
 
-**Effect.** On `lib/std/itree.hthr` the gate of each law proved by induction
+**Effect.** On `lib/std/itree/itree.hthr` the gate of each law proved by induction
 fell by an order of magnitude and more, with the query, miss and step counts
 falling in step; the shape is the per-copy cost of a predicate the terms now
 mention once per annotation instead of spelling.
