@@ -422,7 +422,7 @@ theorem cat_write_answer(call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7
                         cat_spec_wrote(st, pending, f1, Wrote(count))) {
                 Zero => λ done => cat_wrote_done(call, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
                     st, pending, owed, count, wrote, done, f1, enough),
-                Succ(d) => λ more => cat_wrote_more(call, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
+                Succ(_) => λ more => cat_wrote_more(call, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
                     st, pending, owed, f1, enough, count, wrote, j(sym(more), λ x _ => 0 < x, trivial)),
             })(refl)
         },

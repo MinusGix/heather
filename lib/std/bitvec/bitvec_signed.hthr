@@ -9,12 +9,12 @@ import nat;
 import omega;
 
 theorem BitVec::of_bit_le_one(b: Bool): Nat::of_bit(b) <= 1 {
-    match b as λ c => Nat::of_bit(c) <= 1 { False => { omega }, True => { omega } }
+    match b { False => { omega }, True => { omega } }
 }
 
 // The sign bit is set exactly in the top half of the unsigned range.
 theorem BitVec::sign_bit_small(k: Nat): (x: BitVec(Succ(k))) → x.toNat() < Nat::pow(2, k) → x.sign_bit() = False {
-    match k as λ j => (x: BitVec(Succ(j))) → x.toNat() < Nat::pow(2, j) → x.sign_bit() = False {
+    match k {
         Zero => λ x => match x.head_bit() as λ h => Nat::of_bit(h) + 0 < 1 → h = False {
             False => λ _ => refl,
             True => λ over => false_elim({ let one: (1 + 0 < 1) = over; omega }),
@@ -31,7 +31,7 @@ theorem BitVec::sign_bit_small(k: Nat): (x: BitVec(Succ(k))) → x.toNat() < Nat
     }
 }
 theorem BitVec::sign_bit_large(k: Nat): (x: BitVec(Succ(k))) → Nat::pow(2, k) <= x.toNat() → x.sign_bit() = True {
-    match k as λ j => (x: BitVec(Succ(j))) → Nat::pow(2, j) <= x.toNat() → x.sign_bit() = True {
+    match k {
         Zero => λ x => match x.head_bit() as λ h => 1 <= Nat::of_bit(h) + 0 → h = True {
             True => λ _ => refl,
             False => λ under => false_elim({ let zero: (1 <= 0 + 0) = under; omega }),
@@ -70,7 +70,7 @@ theorem BitVec::signed_lt_zero(a: BitVec(64)): a.signed_lt_bit(BitVec::ofNat(0))
     let same: (a.sub(z) = a) = j(sym(BitVec::ofNat_zero(64)), λ y _ => a.sub(y) = a, BitVec::sub_zero(64, a));
     let at_a: (a.sign_bit().xor(!BitVec::bool_eq(a.sign_bit(), z.sign_bit()) && !BitVec::bool_eq(a.sign_bit(), a.sign_bit()))
             = a.sign_bit()) =
-        match a.sign_bit() as λ s => s.xor(!BitVec::bool_eq(s, z.sign_bit()) && !BitVec::bool_eq(s, s)) = s {
+        match a.sign_bit() {
             False => refl,
             True => refl,
         };

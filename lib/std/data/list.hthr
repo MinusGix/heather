@@ -369,8 +369,8 @@ theorem List::drop_zero<A>(self xs: List<A>): xs.drop(0) = xs { match xs { Nil =
 // As many as asked for, when there are that many.
 theorem List::len_take<A>(self xs: List<A>): (n: Nat) → n <= xs.len() → xs.take(n).len() = n {
     match xs {
-        Nil => λ n => match n as λ k => k <= 0 → 0 = k { Zero => λ _ => refl, Succ(_) => λ (h: False) => false_elim(h) },
-        Cons(_, t) => λ n => match n as λ k => k <= Succ(t.len()) → (Cons(_, t)).take(k).len() = k {
+        Nil => λ n => match n { Zero => λ _ => refl, Succ(_) => λ (h: False) => false_elim(h) },
+        Cons(_, t) => λ n => match n {
             Zero => λ _ => refl,
             Succ(k) => λ h => Nat::cong(λ m => Succ(m), t.len_take(k, h)),
         },
@@ -413,9 +413,9 @@ theorem List::drop_drop<A>(self xs: List<A>): (j, k: Nat) → xs.drop(j).drop(k)
 theorem List::take_take<A>(self xs: List<A>): (n, m: Nat) → m <= n → xs.take(n).take(m) = xs.take(m) {
     match xs {
         Nil => λ n m h => refl,
-        Cons(h, t) => λ n m => match m as λ i => i <= n → (Cons(h, t)).take(n).take(i) = (Cons(h, t)).take(i) {
+        Cons(h, t) => λ n m => match m {
             Zero => λ _ => (Cons(h, t)).take(n).take_zero(),
-            Succ(i) => match n as λ l => Succ(i) <= l → (Cons(h, t)).take(l).take(Succ(i)) = (Cons(h, t)).take(Succ(i)) {
+            Succ(i) => match n {
                 Zero => λ (no: False) => false_elim(no),
                 Succ(l) => λ le => List::cong_cons(h, t.take_take(l, i, le)),
             },
