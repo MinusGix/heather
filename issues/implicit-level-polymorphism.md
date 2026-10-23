@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,design]
 area: language
 created: 2026-07-27
-updated: 2026-07-27
+updated: 2026-10-23
 ---
 
 Deferred from [[surface-universe]], which makes `<A: Type<n>>` spellable with `Type<0>` as the default.
@@ -30,3 +30,6 @@ without it, a level-generic library is n written copies or an explicit
 generator, and the "90% automation" framing of [[surface-universe]] §7 is
 exactly this feature.
 
+## Log
+
+- 2026-10-23: Evidence from Arend (docs/arend-survey.md §4): Arend removed its explicit level-declaration syntax (\plevels, \levels) in favour of per-definition implicit level parameters with inference, and a definition (NatTrans) that once needed four explicitly ordered levels needs none. Supports the 90% claim; does not change the layer-m blocker.
