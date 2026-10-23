@@ -78,6 +78,7 @@ impl Elaborator {
                 ty: arg.ty.clone(),
                 level: arg.level.clone(),
                 skel: params[j].skel.clone(),
+                spliced: None,
             }));
         }
         let _scope = self.use_scope(&default.scope);

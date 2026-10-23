@@ -973,3 +973,53 @@ statement walk and a block's were two copies of the same `match` over `Stmt`.
 They are now one `stmts` helper called from both, for the same reason
 `elab_stmts` exists: a nested block cannot be walked differently from a
 top-level one if there is only one walk.
+
+## 11. Addendum: an unused value still faces the kernel, 2026-10-23
+
+§4.4's first consequence of aliasing has a second edge. With no kernel
+binder, a value is in the kernel's input only where a use splices it, and the
+elaborator does not decide well-typedness on its own: it leaves conversions,
+a `refl`'s two sides or a constructor's field types, to the gate. So an
+*unused* value was never checked at all, and `let p = P(2, refl); 0` (with
+`P { a: Nat, h: a = 3 }`) elaborated (spotted on PR #102;
+issues/unused-let-value-unchecked.md).
+
+**The rule.** A block ends by wrapping each value that no use spliced around
+its result as a redex that discards it, `(λ _: T. body)(v)`
+(`statements::LetValue::discard_around`). The block's type is unchanged, the
+redex computes away, and a used `let` keeps the term it always had. That is
+every written form: a plain `let`, `let _`, a record `let` (one value shared
+by its fields), the statements before and after a `have`, and a `meta fn`
+body's aliases.
+
+**A renaming `let` has no value of its own.** `let y = x;` with `x` a local
+or an alias, unannotated, is what `match` desugaring writes for every pattern
+variable (`patterns::let_alias`). A local is well-typed by construction and
+an alias's value belongs to its own `let`, so the rename binds `y` with
+`x`'s splice record and no value to discard; a use of `y` records `x`'s
+splice. Without this every unused pattern variable of a nested `match`
+would add a redex.
+
+**Why not check every value.** Discarding every value around its block, used
+or not, was measured on `lib/std`: it re-checks each value once more besides
+its uses, and the heaviest items' kernel work grew by up to an order of
+magnitude. Only 21 blocks in `lib/std` have an unspliced value, so the rule
+costs nothing measurable.
+
+**What "spliced" means.** `Alias::splice` records it, and it has exactly one
+caller: `resolve`, a name elaborated as the expression being built. A caller
+that only reads a type or builds a candidate it may drop (instance search,
+`omega`'s view of the context, shape probes) reads the alias's term without
+recording, through `resolve_reading` or `Alias::term`. A missed record costs
+one redundant check; a false one would be the original hole, which is why
+the recording side is the narrow one. The residual trust is that an
+expression elaborated by `resolve` and then thrown away by its caller is
+rare and visible: `omega(h, …)` threw a bare `let` name's elaboration away,
+and now skips it instead.
+
+The same hole had two other owners, fixed alongside: `omega(e, …)` binds each
+fact as an alias the certificate cites only if it needs it, and `ring(h, …)`
+binds only the hypotheses its combination uses. Both now discard their
+uncited arguments around the proof. Parameter defaults are the one sibling
+left, since a default is checked only at a call that uses it
+(issues/parameter-default-unchecked-at-declaration.md).

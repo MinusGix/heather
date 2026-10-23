@@ -997,6 +997,14 @@ impl statements::StatementElab for Elaborator {
         self.elab_infer(cx, expression)
     }
 
+    fn read_local(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
+        self.resolve_reading(cx, name, span)
+    }
+
+    fn annotation(&self, cx: &Cx, ty: &Type) -> Type {
+        self.annotation_type(cx, ty, 0)
+    }
+
     fn infer_let_lambda(
         &self,
         cx: &Cx,
@@ -5256,8 +5264,9 @@ impl Elaborator {
                 if !named.is_empty() {
                     return err("`omega` takes its facts positionally", e.span);
                 }
-                let cx = self.omega_fact_context(cx, args)?;
-                self.elab_omega(&cx, "omega", expected, lvl, e.span)
+                let (cx, facts) = self.omega_fact_context(cx, args)?;
+                let proof = self.elab_omega(&cx, "omega", expected, lvl, e.span)?;
+                Ok(statements::LetValue::discard_around(self, &cx, facts, proof, expected, lvl))
             }
             // `bv_omega` lifts word arithmetic to Nat (docs/bv-omega-design.md):
             // it writes a proof from the bridge lemmas and `omega`, and this
@@ -5663,17 +5672,21 @@ impl Elaborator {
     /// `cx` with each of `omega(h, …)`'s arguments bound as a fact. Each is
     /// elaborated where it was written and named by an alias the user cannot
     /// spell, so the certificate can cite it; a bare local is in scope
-    /// already and is only checked.
-    fn omega_fact_context(&self, cx: &Cx, facts: &[Expr]) -> R<Cx> {
+    /// already. The certificate cites only the facts it needs, so the bound
+    /// values are returned too, for the caller to discard around the proof:
+    /// a fact no certificate cites still faces the kernel, as a `let` does
+    /// (`statements.rs`).
+    fn omega_fact_context(&self, cx: &Cx, facts: &[Expr]) -> R<(Cx, Vec<statements::LetValue>)> {
         let mut inner = cx.clone();
+        let mut values = Vec::new();
         let mut next = 0;
         for fact in facts {
-            let (term, ty, level) = self.elab_infer(cx, fact)?;
             if let ExprKind::Var(name) = &fact.kind {
                 if cx.names.contains(name) || cx.aliases.iter().any(|alias| alias.name == *name) {
                     continue;
                 }
             }
+            let (term, ty, level) = self.elab_infer(cx, fact)?;
             let name = loop {
                 let name = format!("__omega_fact_{next}");
                 next += 1;
@@ -5681,16 +5694,11 @@ impl Elaborator {
                     break name;
                 }
             };
-            inner.aliases.push(Rc::new(Alias {
-                name,
-                depth: cx.names.len(),
-                term: Rc::new(term),
-                ty,
-                level,
-                skel: None,
-            }));
+            let value = statements::LetValue::new(Rc::new(term), ty, level);
+            inner.aliases.push(Rc::new(value.alias(name, cx.names.len(), None)));
+            values.push(value);
         }
-        Ok(inner)
+        Ok((inner, values))
     }
 
     /// `omega` at `expected`, reading its facts from `cx`: reconstruction
@@ -5770,6 +5778,7 @@ impl Elaborator {
                     ty,
                     level,
                     skel: None,
+                    spliced: None,
                 }));
                 named = inner;
                 &named
@@ -8951,7 +8960,20 @@ impl Elaborator {
 
     // -- names --------------------------------------------------------------
 
+    /// `name` as the expression being elaborated: its term goes into the
+    /// result, so a `let` alias it names is spliced ([`Alias::splice`]).
     fn resolve(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
+        self.resolve_at(cx, name, span, true)
+    }
+
+    /// [`Self::resolve`] for a caller that reads the type, or builds a
+    /// candidate it may drop: a `let` alias it names is not recorded as
+    /// spliced, so its value still reaches the kernel if no use puts it there.
+    pub(crate) fn resolve_reading(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
+        self.resolve_at(cx, name, span, false)
+    }
+
+    fn resolve_at(&self, cx: &Cx, name: &str, span: Span, splice: bool) -> R<(Term, Type, Level)> {
         if name == "Zero" {
             return Ok((Term::Zero, Type::Nat, Level::Zero));
         }
@@ -8994,7 +9016,7 @@ impl Elaborator {
                 // since it was bound (same as a `fn` definition's globals).
                 let by = (cx.names.len() - a.depth) as u32;
                 return Ok((
-                    (*a.term).shift_local(by),
+                    if splice { a.splice(by) } else { a.term.shift_local(by) },
                     a.ty.shift_local(by),
                     a.level.clone(),
                 ));

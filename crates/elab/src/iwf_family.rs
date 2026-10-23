@@ -332,6 +332,7 @@ impl Elaborator {
                     term,
                     ty,
                     level,
+                    spliced: None,
                 }));
             }
             p += 1;
@@ -439,6 +440,7 @@ impl Elaborator {
                     term: Rc::clone(term),
                     ty: ty.clone(),
                     level: level.clone(),
+                    spliced: None,
                 }));
             } else if crate::inductive::expr_mentions(e, &name) {
                 let (term, ty, level) = self.elab_infer(cx, args[k].borrow())?;
@@ -449,6 +451,7 @@ impl Elaborator {
                     term: Rc::new(term),
                     ty,
                     level,
+                    spliced: None,
                 }));
             }
         }
@@ -1103,6 +1106,7 @@ impl Elaborator {
                 term: Rc::new(child.clone()),
                 ty: sig_here.at(Rc::new(at.clone())),
                 level: fl.clone(),
+                spliced: None,
             }));
             children.push((Rc::new(child), Rc::new(ih), ih_ty, mlvl.clone()));
             rebind.push(Rc::new(at));

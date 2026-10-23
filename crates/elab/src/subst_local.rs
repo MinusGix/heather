@@ -234,6 +234,7 @@ impl Elaborator {
                 ty: ty.shift_local(k as u32),
                 level: level.clone(),
                 skel: None,
+                spliced: None,
             });
         }
         if let Some(p) = pos_h.filter(|p| !reverted.contains(p) && visible(cx, *p)) {
@@ -245,6 +246,7 @@ impl Elaborator {
                     .shift_local(k as u32),
                 level: level.clone(),
                 skel: None,
+                spliced: None,
             });
         }
         for (i, a) in cx.aliases.iter().enumerate() {
@@ -265,6 +267,7 @@ impl Elaborator {
                 ty: ty.apply_local(&tau),
                 level: a.level.clone(),
                 skel: a.skel.clone(),
+                spliced: None,
             });
         }
         ccx.aliases.extend(aliases.into_iter().map(Rc::new));

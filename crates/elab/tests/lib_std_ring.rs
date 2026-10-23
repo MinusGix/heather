@@ -182,6 +182,23 @@ fn ring_facts_compose_with_omega() {
     );
 }
 
+/// A written hypothesis the combination does not use is in no term the
+/// kernel sees; it is discarded around the proof instead, as an unused
+/// `let` is, so a wrong one is refused even where `ring` did not need it.
+#[test]
+fn an_unused_hypothesis_still_faces_the_kernel() {
+    let record = "record Q { a: Int, h: a = OfNat(3) }\n";
+    refused(
+        "ring_unused_wrong",
+        &format!("{IMPORTS}{record} theorem t(a, b: Int): a * b = b * a {{ ring(Q(OfNat(2), refl).h) }}"),
+        "NotConvertible",
+    );
+    check(
+        "ring_unused_right",
+        &format!("{IMPORTS}{record} theorem t(a, b: Int): a * b = b * a {{ ring(Q(OfNat(3), refl).h) }}"),
+    );
+}
+
 #[test]
 fn a_non_identity_is_refused_with_its_residual() {
     refused(

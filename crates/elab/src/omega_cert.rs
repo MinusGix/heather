@@ -836,7 +836,7 @@ pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
         .filter(|name| !name.starts_with('#'))
         .filter(|name| seen.insert((*name).clone()))
         .filter_map(|name| {
-            elab.resolve(cx, name, heather_syntax::Span { start: 0, end: 0 })
+            elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 })
                 .ok()
                 .map(|(_, ty, _)| (name.clone(), ty))
         })

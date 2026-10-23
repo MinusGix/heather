@@ -123,7 +123,7 @@ impl Elaborator {
             if dlvl != clvl || !self.conv_types(cx, &dc, &carrier, &clvl) {
                 continue;
             }
-            let Ok((dict, goal, _)) = self.resolve(cx, &d.name, span) else {
+            let Ok((dict, goal, _)) = self.resolve_reading(cx, &d.name, span) else {
                 continue;
             };
             let Some(root) = self.lookup_inductive(&dinfo.name).cloned() else {
@@ -348,7 +348,7 @@ impl Elaborator {
         // This is a shape probe used only to decide whether two surface
         // readings are ambiguous. Its hypothetical callee is not a body edge.
         let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
-        let resolved = self.resolve(cx, name, span);
+        let resolved = self.resolve_reading(cx, name, span);
         *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
         let Ok((_, ty, _)) = resolved else {
             return true;

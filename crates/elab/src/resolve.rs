@@ -360,6 +360,9 @@ impl Elaborator {
             let ty = a.ty.shift_local(by);
             if self.conv_here(cx, &ty, goal, &a.level) {
                 tr.push(line(depth, "local", format!("{} (a `let`)", a.name)));
+                // Read, not spliced (`Alias::splice`): a search's answer can
+                // still be dropped by its caller, so a `let` found here is
+                // left for its block to discard if nothing else uses it.
                 return Some((*a.term).shift_local(by));
             }
         }
@@ -879,6 +882,7 @@ impl Elaborator {
             ty: dict_ty.clone(),
             level: dict_lvl.clone(),
             skel: None,
+            spliced: None,
         }));
         // A class may now contain the same ancestor at several tagged fibers.
         // Try each matching path; the expected goal (including its index)

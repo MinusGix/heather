@@ -25,6 +25,7 @@ use heather_kernel::term::{Term, Type};
 use heather_syntax::{Expr, Item, Span, parse_file};
 
 use crate::context::Alias;
+use crate::statements::LetValue;
 use crate::omega_cert::{integer_source, named_args};
 use crate::{Cx, ElabError, Elaborator, R};
 
@@ -960,6 +961,7 @@ impl Elaborator {
             ty,
             level,
             skel: None,
+            spliced: None,
         }));
         for &i in &cert.used {
             let (term, ty, level) = &written[i];
@@ -970,16 +972,27 @@ impl Elaborator {
                 ty: ty.clone(),
                 level: level.clone(),
                 skel: None,
+                spliced: None,
             }));
         }
         let expr = parse_expr(&cert.source)
             .map_err(|detail| err(format!("`ring` wrote a certificate that does not parse: {detail}\n  generated: {}", cert.source)))?;
-        self.generated_scope(|me| me.elab_check(&inner, &expr, goal, lvl)).map_err(|error| {
+        let proof = self.generated_scope(|me| me.elab_check(&inner, &expr, goal, lvl)).map_err(|error| {
             err(format!(
                 "{error}\n  generated `ring` certificate: {}\n  where {ATOMS} = {}",
                 cert.source, cert.atoms
             ))
-        })
+        })?;
+        // A written hypothesis the combination does not use is in no term
+        // the kernel sees; it still faces the kernel, as an unused `let`
+        // does (`statements.rs`).
+        let unused = written
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !cert.used.contains(i))
+            .map(|(_, (term, ty, level))| LetValue::new(Rc::new(term), ty, level))
+            .collect();
+        Ok(LetValue::discard_around(self, cx, unused, proof, goal, lvl))
     }
 }
 

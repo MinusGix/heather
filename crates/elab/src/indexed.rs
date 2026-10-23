@@ -908,6 +908,7 @@ impl Elaborator {
                         term,
                         ty,
                         level,
+                        spliced: None,
                     }));
                 }
                 FieldKind::Plain => {
@@ -1797,6 +1798,7 @@ impl Elaborator {
                     term: Rc::new(term.shift_local(by(env))),
                     ty: ty.shift_local(by(env)),
                     level: level.clone(),
+                    spliced: None,
                 }));
                 continue;
             }
@@ -1859,6 +1861,7 @@ impl Elaborator {
                 term: proj,
                 ty: (*fst).clone(),
                 level: fst_level,
+                spliced: None,
             }));
         }
         if let Some(env) = env

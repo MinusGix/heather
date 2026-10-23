@@ -3,6 +3,7 @@
 use std::sync::Arc as Rc;
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::borrow::Cow;
 
 use heather_kernel::level::Level;
@@ -154,6 +155,9 @@ pub(crate) struct TyVar {
 pub(crate) struct Alias {
     pub(crate) name: String,
     pub(crate) depth: usize,
+    /// The value, for reading only. A use that puts it into the term being
+    /// built goes through [`Alias::splice`] instead, so a written `let` knows
+    /// whether its value ever reaches the kernel.
     pub(crate) term: Rc<Term>,
     pub(crate) ty: Type,
     pub(crate) level: Level,
@@ -161,6 +165,27 @@ pub(crate) struct Alias {
     /// RHS lambda's written marks, or the record field it projects carried
     /// one (docs/implicit-binders-design.md §3.1). `None` everywhere else.
     pub(crate) skel: Option<Rc<Skel>>,
+    /// Set by [`Alias::splice`] for a written `let` (shared by every field
+    /// of a record `let`); `None` for the elaborator's own aliases, whose
+    /// values it built rather than read from the source.
+    /// Read once the block is built (`statements::LetValue::discard_around`):
+    /// a value no use spliced is still handed to the kernel there, since an
+    /// alias is not a kernel binder and the elaborator leaves conversions (a
+    /// `refl`, a constructor's field types) to the kernel's gate.
+    pub(crate) spliced: Option<Rc<AtomicBool>>,
+}
+
+impl Alias {
+    /// The value at a use `by` binders past the binding, recorded as having
+    /// reached the term being built. Only a use whose result goes into that
+    /// term may call this: recording a value the term never contains would
+    /// let a `let` the kernel never saw pass unchecked.
+    pub(crate) fn splice(&self, by: u32) -> Term {
+        if let Some(spliced) = &self.spliced {
+            spliced.store(true, Ordering::Relaxed);
+        }
+        self.term.shift_local(by)
+    }
 }
 
 impl Cx {
@@ -222,6 +247,7 @@ impl Cx {
                 .iter()
                 .map(|a| {
                     Rc::new(Alias {
+                        spliced: a.spliced.clone(),
                         name: hide(&a.name),
                         depth: a.depth,
                         term: Rc::clone(&a.term),
@@ -361,6 +387,7 @@ mod tests {
         changed.aliases.push(Rc::new(Alias {
             name: "x".into(), depth: 1, term: Rc::new(Term::Zero),
             ty: Type::Nat, level: Level::Zero, skel: None,
+            spliced: None,
         }));
         assert!(receivers.inference(&changed, &recv).is_none());
         changed = scoped.clone();

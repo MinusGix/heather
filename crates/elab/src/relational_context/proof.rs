@@ -120,6 +120,7 @@ impl Builder<'_> {
             ty,
             level,
             skel: None,
+            spliced: None,
         }));
         name
     }
@@ -209,7 +210,7 @@ impl Builder<'_> {
     }
 
     fn project_fields(&self, name: &str, class: &str) -> Vec<Field> {
-        let Ok((dict, ty, _)) = self.e.resolve(&self.cx, name, self.span) else {
+        let Ok((dict, ty, _)) = self.e.resolve_reading(&self.cx, name, self.span) else {
             return Vec::new();
         };
         let Some(ind) = self.e.display_tag_of(&ty) else {
