@@ -1,0 +1,132 @@
+// What `compile-x86` states about a program (issues/function-ir-verified-
+// lowering.md, round 4): the planner's placement lowers it, its functions
+// evaluate to their sources by `refl`, and `compiled_returns` turns the two
+// into the returns claim. The planner's cases: a value live across a call
+// kept out of RAX, arguments passed swapped, a three-way rotation that
+// needs a staging register, and calls in a conditional's arms.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import function_ir_compile;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn bit(id: Nat) → Port { Port(id := id, width := 1) }
+fn data(inputs: List<Port>, nodes: List<Node>, outputs: List<Port>) → StructuredRegion {
+    Dataflow(Region(inputs := Ports(inputs), nodes := nodes, outputs := Ports(outputs)))
+}
+
+// leaf(left, right) = left - right, function 0.
+fn leaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) { left.sub(right) }
+fn leaf_ir() → Function {
+    Function(parameters := [0, 1], body := data([word(0), word(1)], [Sub(width := 64, output := 2, left := 0, right := 1)], [word(2)]),
+        result := 2)
+}
+
+// A value (`saved`) live across two calls, the first passed its arguments
+// swapped.
+fn caller(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    let saved = left.bor(right);
+    let first = leaf(right, left);
+    let second = leaf(first.add(right), BitVec::ofNat(3));
+    saved.bxor(second)
+}
+fn caller_ir() → Function {
+    Function(parameters := [0, 1],
+        body := Compose(data([word(0), word(1)], [BitOr(width := 64, output := 2, left := 0, right := 1)], [word(2)]),
+            Compose(Call(0, [1, 0], 3),
+                Compose(data([word(3), word(1)], [Add(width := 64, output := 4, left := 3, right := 1),
+                        Const(width := 64, output := 5, value := 3)], [word(4), word(5)]),
+                    Compose(Call(0, [4, 5], 6),
+                        data([word(2), word(6)], [BitXor(width := 64, output := 7, left := 2, right := 6)], [word(7)]))))),
+        result := 7)
+}
+fn calls() → List<Function> { [caller_ir(), leaf_ir()] }
+
+theorem calls_planned(): lower_program_planned(calls()).is_some() = True { refl }
+theorem calls_evaluable(): program_evaluable(calls()).IsTrue() { trivial }
+theorem caller_agrees(a, b: BitVec(64)): program_eval(calls(), 1, [a, b]) = caller(a, b) { refl }
+
+// The returns claim: the code named once (the CLI states it as a literal;
+// here `some_get` names it), its equation, and the theorem.
+theorem calls_present(): lower_program_planned(calls()).is_some().IsTrue() { trivial }
+fn calls_code() → Prog { lower_program_planned(calls()).get(calls_present()) }
+theorem calls_lowers(): lower_program(calls(), plan_program(calls())) = Some(calls_code()) {
+    Option::some_get(lower_program_planned(calls()), calls_present())
+}
+theorem caller_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), a, b: BitVec(64)):
+    Site<M>(fetch, data, calls_code(), last, origin).Returns(stack, asm_labels(calls_code())(2),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn([a, b], argument_registers(), s.gprs) ∧ 72 * 2 <= i,
+        stack.CalleePost(caller(a, b))) {
+    compiled_returns<M>(calls(), plan_program(calls()), calls_code(), calls_lowers(), calls_evaluable(),
+        fetch, data, last, origin, stack, 1, trivial, [a, b], trivial, caller(a, b), caller_agrees(a, b))
+}
+
+// The arguments rotated, a cycle no order of moves completes without a
+// third register: (x, y, z) passed as (y, z, x).
+fn spin_ir() → Function {
+    Function(parameters := [0, 1, 2],
+        body := data([word(0), word(1), word(2)], [Sub(width := 64, output := 3, left := 0, right := 1),
+            Add(width := 64, output := 4, left := 3, right := 2)], [word(4)]),
+        result := 4)
+}
+fn rotate_ir() → Function {
+    Function(parameters := [0, 1, 2], body := Call(0, [1, 2, 0], 3), result := 3)
+}
+fn rotation() → List<Function> { [rotate_ir(), spin_ir()] }
+theorem rotation_planned(): lower_program_planned(rotation()).is_some() = True { refl }
+theorem rotation_agrees(x, y, z: BitVec(64)): program_eval(rotation(), 1, [x, y, z]) = y.sub(z).add(x) { refl }
+
+// The schedule: the rotation's moves wait on their sources, and one is
+// staged. The file holds x, y, z in RDI, RSI, RDX.
+fn rotation_file() → File {
+    File::empty().write(Rdi, Some(Held(0, Word))).write(Rsi, Some(Held(1, Word))).write(Rdx, Some(Held(2, Word)))
+}
+theorem rotation_scheduled(): ArgumentMove::registers(rotation_file().call_moves([1, 2, 0])).len() = 4 { refl }
+
+// Calls in both arms of a branch, three levels deep.
+fn twist(a, b: BitVec(64)) → BitVec(64) { a.sub(b).bxor(b) }
+fn middle(a, b: BitVec(64)) → BitVec(64) {
+    match a.unsigned_lt_bit(b) {
+        False => twist(b, a),
+        True => twist(a, b).add(a),
+    }
+}
+fn twist_ir() → Function {
+    Function(parameters := [0, 1], body := data([word(0), word(1)], [Sub(width := 64, output := 2, left := 0, right := 1),
+        BitXor(width := 64, output := 3, left := 2, right := 1)], [word(3)]), result := 3)
+}
+fn middle_ir() → Function {
+    Function(parameters := [0, 1],
+        body := Compose(data([word(0), word(1)], [UnsignedLessThan(width := 64, output := 2, left := 0, right := 1)], [bit(2)]),
+            Conditional(Ports([word(0), word(1), bit(2)]), 2, Ports([word(0), word(1)]), Ports([word(3)]),
+                Compose(Call(0, [0, 1], 4),
+                    data([word(4), word(0)], [Add(width := 64, output := 3, left := 4, right := 0)], [word(3)])),
+                Compose(Call(0, [1, 0], 5), data([word(5)], [Move(width := 64, output := 3, source := 5)], [word(3)])))),
+        result := 3)
+}
+fn outer_ir() → Function {
+    Function(parameters := [0, 1], body := Compose(Call(1, [1, 0], 2), Call(1, [2, 0], 3)), result := 3)
+}
+fn branches() → List<Function> { [outer_ir(), middle_ir(), twist_ir()] }
+theorem branches_planned(): lower_program_planned(branches()).is_some() = True { refl }
+theorem middle_agrees(a, b: BitVec(64)): program_eval(branches(), 1, [a, b]) = middle(a, b) { refl }
+theorem outer_agrees(a, b: BitVec(64)): program_eval(branches(), 2, [a, b]) = middle(middle(b, a), a) { refl }

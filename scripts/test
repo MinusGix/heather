@@ -90,6 +90,7 @@ if [[ "${1:-}" == --fast ]]; then
         # cannot iterate on. Acceptance-class; the full lane runs them.
         --skip source_composed_helper_executes
         --skip source_nested_conditionals_execute
+        --skip programs_with_calls_execute
         --skip source_to_native_binary
         --skip source_to_standalone_elf_without_a_toolchain
         --skip nested_calls_return_the_source_result

@@ -19,6 +19,7 @@ mod order;
 
 mod support;
 use support::SUPPORT;
+mod verified;
 
 pub fn run(args: &[String]) -> ExitCode {
     report(compile(args, false))
@@ -225,6 +226,20 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         }
     }
     let prefix = format!("{symbol}_native");
+    // The verified lowering first: a word function and the word functions it
+    // calls, compiled by `lower_program` and certified by its theorem. A
+    // source outside the reflected fragment still takes the per-function
+    // certificates, until burn B2 (docs/native-program-logic-design.md §3.2).
+    let certified = if executable || callee.is_some() { None } else {
+        match verified::reflect(&elab, &format!("{root_name}::{symbol}")) {
+            Err(why) => { eprintln!("verified lowering: {why}; using the per-function certificate"); None }
+            // A program in the fragment that the lowering then refuses is
+            // a defect of the lowering or its planner, never a reason to
+            // certify it another way.
+            Ok(program) => Some(verified::compile(&elab, &prefix, &format!("{prefix}_certificate"), &program)
+                .map_err(|why| format!("verified lowering: {why}"))?),
+        }
+    };
     let mut proof = Module::default();
     for name in ["function_ir_x86_support", "function_ir", "x86_64", "x86_64_block",
         "x86_64_control_block", "x86_64_control_flow", "x86_64_structured_block", "bitvec", "list", "logic", "elf64", "linux_x86_64_entry", "x86_64_fetch", "x86_64_fetch_block", "elf64_load", "linux_x86_64_fetch", "bool", "option", "nat"] {
@@ -237,7 +252,14 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
     let probe_inputs = [[!input(0), !input(1)],
         [input(0).wrapping_add(0x9e37_79b9_7f4a_7c15), input(1).wrapping_add(0x6a09_e667_f3bc_c909)]];
     let mut probes = Some(Vec::new());
-    let (image, body_bytes) = if let Some(callee) = callee {
+    let mut entry = None;
+    let (image, body_bytes) = if let Some(compiled) = certified {
+        proof = Module::default();
+        proof.raw(compiled.text);
+        probes = None;
+        entry = Some(compiled.entry);
+        (None, Some(compiled.bytes))
+    } else if let Some(callee) = callee {
         if !symbol_ok(&callee) { return Err("callee must be a source identifier".into()); }
         let generate = |module: &mut Module, inputs: [u64; 2]| calls::generate(&elab, module, &prefix,
             &format!("{root_name}::{symbol}"), &format!("{root_name}::{callee}"), inputs, callable_caller);
@@ -346,8 +368,16 @@ fn compile(args: &[String], executable: bool) -> Result<(), String> {
         println!("Linux loading and syscall delivery remain environment assumptions");
     } else {
         let bytes = body_bytes.expect("assembly path has a certified body");
-        write_new(&output, assembly(symbol, &bytes).as_bytes())?;
-        println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());
+        match entry {
+            Some(entry) => {
+                write_new(&output, program_assembly(symbol, &bytes, entry).as_bytes())?;
+                println!("{}: {} certified program bytes, `{symbol}` at offset {entry}, its RET included", output.display(), bytes.len());
+            }
+            None => {
+                write_new(&output, assembly(symbol, &bytes).as_bytes())?;
+                println!("{}: {} certified body bytes; SysV ret shim outside the proof", output.display(), bytes.len());
+            }
+        }
     }
     println!("certificate: {}", certificate.display());
     Ok(())
@@ -413,6 +443,20 @@ fn write_new(path: &Path, contents: &[u8]) -> Result<(), String> {
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     file.write_all(contents).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+// A whole program from the verified lowering: every function's code, its
+// own frames and RETs included, the exported symbol at its function's label.
+fn program_assembly(symbol: &str, bytes: &[u8], entry: usize) -> String {
+    let mut out = format!("# Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.\n.text\n.globl {symbol}\n.type {symbol}, @function\n{symbol}_program:\n");
+    for (start, chunk) in [(0, &bytes[..entry]), (entry, &bytes[entry..])] {
+        if start == entry { writeln!(out, "{symbol}:").unwrap(); }
+        for line in chunk.chunks(12) {
+            writeln!(out, "    .byte {}", line.iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ")).unwrap();
+        }
+    }
+    writeln!(out, ".size {symbol}, .-{symbol}\n.section .note.GNU-stack,\"\",@progbits").unwrap();
+    out
 }
 
 fn assembly(symbol: &str, bytes: &[u8]) -> String {

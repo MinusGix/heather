@@ -1,0 +1,112 @@
+// What `compile-x86` instantiates (issues/function-ir-verified-lowering.md,
+// round 4): a program lowered by `lower_program`, its functions evaluable,
+// returns at each function's label what the evaluator says that function
+// computes. The compiler adds one equation, that the evaluation is the
+// source function, which it proves by `refl`: the evaluator keeps words
+// exact at width 64 and branches at each value it reads, so a reflected
+// function evaluated over open words is its source by conversion.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// Called at function `f`'s label with its arguments in their registers and
+// its frame's room on the stack, the code returns `answer` in RAX, keeps
+// the callee-saved registers and the stack above its return address,
+// whenever the program evaluates `f` at those arguments to `answer`.
+theorem compiled_returns<M>(functions: List<Function>, placement: List<Gpr>, program: Prog,
+    lowered: lower_program(functions, placement) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
+    fits: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
+    evaluates: program_eval(functions, f, arguments) = answer):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        stack.CalleePost(answer)) {
+    let site = Site<M>(fetch, data, program, last, origin);
+    let calls = lower_program_correct<M>(functions, placement, program, lowered, fetch, data, last, origin, stack);
+    let computed = program_eval_computes(functions, evaluable, f, arguments, fits);
+    let returns = site.returns_weaken(stack, asm_labels(program)(Succ(f)),
+        CalleePre<M>(program_callees(functions), f, arguments, program_eval(functions, f, arguments)),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        stack.CalleePost(program_eval(functions, f, arguments)),
+        calls(f, below, arguments, program_eval(functions, f, arguments)),
+        λ i s held => ⟨held.left, ⟨computed, held.right⟩⟩);
+    j(evaluates, λ x _ => site.Returns(stack, asm_labels(program)(Succ(f)),
+        λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
+        stack.CalleePost(x)), returns)
+}
+
+// ---------------------------------------------------------------------------
+// The lowered code as numbers, for the compiler to read back and state as a
+// literal: every later statement about the code then evaluates the literal,
+// not the lowering again (a declaration's fuel is its own). Nothing proved
+// reads these; the certificate's `lower_program(…) = Some(literal)` is what
+// checks the literal.
+
+fn ConditionCode::number(self cc: ConditionCode) → Nat {
+    match cc { O => 0, NO => 1, B => 2, AE => 3, E => 4, NE => 5, BE => 6, A => 7, S => 8, NS => 9, P => 10, NP => 11, L => 12, GE => 13, LE => 14, G => 15 }
+}
+
+// An instruction's tag, then its fields: registers by `Gpr::index` (a low
+// byte by its register's), immediates by value.
+fn Instruction::numbers(self instruction: Instruction) → List<Nat> {
+    match instruction {
+        MovRR(d, s) => [0, d.index(), s.index()],
+        MovRI(d, immediate) => [1, d.index(), immediate.toNat()],
+        AddRR(d, s) => [2, d.index(), s.index()],
+        SubRR(d, s) => [3, d.index(), s.index()],
+        AndRR(d, s) => [4, d.index(), s.index()],
+        OrRR(d, s) => [5, d.index(), s.index()],
+        XorRR(d, s) => [6, d.index(), s.index()],
+        CmpRR(l, r) => [7, l.index(), r.index()],
+        SetBelow(d) => [8, low_byte_gpr(d).index()],
+        SetLess(d) => [9, low_byte_gpr(d).index()],
+        SetEqual(d) => [10, low_byte_gpr(d).index()],
+        TestRR(l, r) => [11, l.index(), r.index()],
+        AddRI8(d, immediate) => [12, d.index(), immediate.toNat()],
+        AddRI32(d, immediate) => [13, d.index(), immediate.toNat()],
+    }
+}
+
+fn instructions_numbers(instructions: List<Instruction>) → List<Nat> {
+    match instructions { Nil => [], Cons(first, rest) => first.numbers() ++ instructions_numbers(rest) }
+}
+
+// An item's tag, then its fields; a block's instruction count before them.
+// The items the lowering does not emit are tag 7, which the compiler refuses.
+fn Asm::numbers(self item: Asm) → List<Nat> {
+    match item {
+        Block(instructions) => Cons(0, Cons(instructions.len(), instructions_numbers(instructions))),
+        Jcc(cc, target) => [1, cc.number(), target],
+        Jmp(target) => [2, target],
+        CallTo(target) => [3, target],
+        Ret => [4],
+        Spill(store) => [5, store.source.index(), store.offset.toNat()],
+        Reload(load) => [6, load.destination.index(), load.offset.toNat()],
+        Code(_) => [7], Load(_) => [7], Store(_) => [7], LoadByte(_) => [7], StoreByte(_) => [7], Syscall => [7],
+        Proved(_, _, _, _) => [7], Piece(_, _, _) => [7], Refer(_, _, _) => [7], Hole(_, _) => [7],
+    }
+}
+
+// The items from the first, each its name and then itself.
+fn Prog::numbers(self p: Prog) → List<Nat> {
+    match p { Start => [], At(before, name, item) => Prog::numbers(before) ++ Cons(name, item.numbers()) }
+}

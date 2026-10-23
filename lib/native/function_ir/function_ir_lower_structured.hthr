@@ -541,17 +541,17 @@ fn StructuredRegion::reads(self region: StructuredRegion) → List<Nat> {
 
 record Planned { placement: List<Gpr>, file: File }
 
-// The nodes' registers, `after` live once they are done and `entries`
-// wanted in `registers`.
-fn plan_block(nodes: List<Node>, file: File, after: List<Nat>, entries: List<Port>, registers: List<Gpr>) → Planned {
+// The nodes' registers, from `pool`, `after` live once they are done and
+// `entries` wanted in `registers`.
+fn plan_block(nodes: List<Node>, file: File, after: List<Nat>, entries: List<Port>, registers, pool: List<Gpr>) → Planned {
     match nodes {
         Nil => Planned([], file),
         Cons(node, rest) => {
-            let destination = node.choose(file, reads_of(rest, after), entries, registers);
+            let destination = node.choose_from(file, reads_of(rest, after), entries, registers, pool);
             match node.lower(destination, file) {
                 None => Planned([destination], file),
                 Some(step) => {
-                    let tail = plan_block(rest, step.file, after, entries, registers);
+                    let tail = plan_block(rest, step.file, after, entries, registers, pool);
                     Planned(Cons(destination, tail.placement), tail.file)
                 },
             }
@@ -561,41 +561,43 @@ fn plan_block(nodes: List<Node>, file: File, after: List<Nat>, entries: List<Por
 
 // Where a conditional's outputs meet: the register the region wants an
 // output in, else one nothing live holds.
-fn pick_targets(entries: List<Port>, file: File, live: List<Nat>, wanted: List<Port>, registers: List<Gpr>) → List<Gpr> {
+fn pick_targets(entries: List<Port>, file: File, live: List<Nat>, wanted: List<Port>, registers, pool: List<Gpr>) → List<Gpr> {
     match entries {
         Nil => [],
         Cons(port, rest) => {
             let register: Gpr = match target_of(port.id, wanted, registers) {
                 Some(target) => target,
-                None => match file.first_free(live, scratch_pool()) { None => Rax, Some(free) => free },
+                None => match file.first_free(live, pool) { None => Rax, Some(free) => free },
             };
-            Cons(register, pick_targets(rest, file.write(register, Some(Held(port.id, Word))), live, wanted, registers))
+            Cons(register, pick_targets(rest, file.write(register, Some(Held(port.id, Word))), live, wanted, registers, pool))
         },
     }
 }
 
+// Registers from `pool`. A call's result is in RAX after it
+// (`function_ir_lower_calls`); a loop is not planned.
 fn StructuredRegion::plan_from(self region: StructuredRegion, file: File, after: List<Nat>, entries: List<Port>,
-    registers: List<Gpr>) → Planned {
+    registers, pool: List<Gpr>) → Planned {
     match region {
-        Dataflow(body) => plan_block(body.nodes, file, after, entries, registers),
+        Dataflow(body) => plan_block(body.nodes, file, after, entries, registers, pool),
         Sequence(prefix, continuation) => {
-            let first = plan_block(prefix.nodes, file, continuation.reads() ++ after, entries, registers);
-            let rest = continuation.plan_from(first.file, after, entries, registers);
+            let first = plan_block(prefix.nodes, file, continuation.reads() ++ after, entries, registers, pool);
+            let rest = continuation.plan_from(first.file, after, entries, registers, pool);
             Planned(first.placement ++ rest.placement, rest.file)
         },
         Compose(prefix, continuation) => {
-            let first = prefix.plan_from(file, continuation.reads() ++ after, entries, registers);
-            let rest = continuation.plan_from(first.file, after, entries, registers);
+            let first = prefix.plan_from(file, continuation.reads() ++ after, entries, registers, pool);
+            let rest = continuation.plan_from(first.file, after, entries, registers, pool);
             Planned(first.placement ++ rest.placement, rest.file)
         },
         Conditional(_, _, _, outputs, when_true, when_false) => {
             let live = when_true.reads() ++ (when_false.reads() ++ (port_ids(outputs.entries) ++ after));
-            let targets = pick_targets(outputs.entries, file, live, entries, registers);
-            let yes = when_true.plan_from(file, after, outputs.entries ++ entries, targets ++ registers);
-            let no = when_false.plan_from(file, after, outputs.entries ++ entries, targets ++ registers);
+            let targets = pick_targets(outputs.entries, file, live, entries, registers, pool);
+            let yes = when_true.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool);
+            let no = when_false.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool);
             Planned(yes.placement ++ no.placement, yes.file.meet(no.file))
         },
-        Call(_, _, _) => Planned([], file),
+        Call(_, _, result) => Planned([], file.write(Rax, Some(Held(result, Word)))),
         Loop(_, _, _, _, _, _, _, _, _) => Planned([], file),
     }
 }
@@ -604,7 +606,7 @@ fn StructuredRegion::plan(self region: StructuredRegion, inputs, outputs: List<G
     match input_file(structured_inputs(region).entries, inputs) {
         None => [],
         Some(file) => region.plan_from(file, port_ids(structured_outputs(region).entries),
-            structured_outputs(region).entries, outputs).placement,
+            structured_outputs(region).entries, outputs, scratch_pool()).placement,
     }
 }
 

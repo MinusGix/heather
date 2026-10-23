@@ -26,35 +26,46 @@ outputs deliberately before rebuilding, or choose a fresh output name.
 constant, and XORs the results. The C file supplies `main` and checks boundary values and
 10,000 deterministic pseudorandom pairs against unsigned C arithmetic.
 
-The initial command accepts a transparent function with two `BitVec(64)`
-parameters and a supported binary expression as its result. The existing
-elaborated-source reflector supports shared/nested Add, Sub, AND, OR, XOR,
-and literal `bitvec::ofNat` constants within these expressions. Unsupported
-operations and exhausted registers produce errors. Literals of any magnitude
-below `2^64` check in work bounded by the width (`bitvec::ofNat` reads bits
-from the top against run-compressed powers of two; see
-[the closed issue](../../issues/bitvec-ofnat-large-literals.md)), and the
-example's own constant is a full-width asymmetric one so that every immediate
-byte is distinct. Loops, calls, memory, other signatures, and spilling are
-not part of this command.
+## What `compile-x86` certifies
 
-Arguments arrive in RDI/RSI and the result leaves in RAX. Temporaries use only
-SysV caller-saved registers. The assembly consists of literal `.byte`
-directives for the body and one `ret`; the system assembler and linker
-supply ELF packaging. No assembler instruction selection changes the body.
+`compile-x86` compiles a function with `BitVec(64)` parameters (at most six)
+and a `BitVec(64)` result, together with the word functions it calls,
+through the verified lowering ([round 4 of the issue](../../issues/function-ir-verified-lowering.md)).
+The body may use Add, Sub, AND, OR, XOR, `bitvec::ofNat` literals of any
+size, `let`, calls, and tail-position matches on `unsigned_lt_bit`,
+`signed_lt_bit` or `eq_bit` of words. A source outside that fragment, such
+as a `Bool` helper or `||`, still takes the per-function certificate
+described in the sections below, and the command prints a note on stderr
+when it does.
 
-Before writing output, Heather checks the source, the generated source-to-IR
-and IR-to-x86 certificates, and an additional theorem equating the exported
-literal bytes with the canonical encoding of the lowered instructions. A
-wrong Rust encoding therefore fails certificate checking. The companion
-`mix.certificate.hthr` records these declarations for inspection. Checking
-it independently requires the same source and proof modules under the names
-used by the native driver (including the x86 module aliases).
+The certificate does not reason about this particular program's
+instructions. It reflects the source into a FunctionIR program and states:
 
-The proof covers the selected body under the existing machine model.
-The `ret`, calling convention, C wrapper, loader, executable-memory setup,
-and external assembler/linker remain outside the formal claim. Native tests
-exercise that platform boundary; they are not proofs of it.
+- the program's lowering by `lower_program`, with the planner's placement,
+  as a literal (`_lowers`, checked by evaluation);
+- that the program evaluates to the source function at any arguments
+  (`_agrees`, by `refl`);
+- the published bytes, a piece at a time (`_bytes`), and the exported
+  function's offset (`_entry_at`);
+- and `_returns`, which instantiates the theorem `compiled_returns`. Called
+  at its label with its arguments in RDI, RSI, …, a return address at RSP
+  and room on the stack below it, the code returns the source's value in
+  RAX, keeps the callee-saved registers and RSP, and leaves the stack above
+  the return address as it was.
+
+The assembly is the whole program: each function's frame, body and RET,
+with the exported symbol at its function's label. The platform ABI around
+it (stack alignment, the C caller, the loader) is outside the proof.
+`program.hthr` is a three-level example with calls in both arms of a
+branch:
+
+```sh
+(ulimit -v 8388608 -t 300; target/debug/heather compile-x86 \
+  examples/x86-native/program.hthr program -o target/x86-native/program.s \
+  --cache-dir target/native-images)
+```
+
+Arguments arrive in RDI/RSI and the result leaves in RAX.
 
 Proof support modules are bundled into the compiler. Source imports use the
 normal loader with `lib/std`, `lib`, and additional `-L` directories. A source
@@ -63,6 +74,10 @@ module with a bundled library name must have identical contents. Optional
 it does not enable the trusted declaration cache or stale-image replay.
 
 ## Nested source conditionals
+
+*The per-function certificate.* `branches.hthr`'s word-only shapes now
+take the verified path above. This section describes the certificate that
+a source outside its fragment still gets, such as `composed` below.
 
 Ordinary `compile-x86` also accepts tail-position matches on
 `bitvec::unsigned_lt_bit(64, ...)`, including nested matches in either arm.

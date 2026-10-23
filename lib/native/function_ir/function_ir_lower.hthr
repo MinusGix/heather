@@ -186,6 +186,12 @@ fn Option::get<A>(self o: Option<A>) → o.is_some().IsTrue() → A {
     match o { None => λ absent => false_elim(absent), Some(v) => λ _ => v }
 }
 
+// An option known to be `Some` is `Some` of what it holds: how a value is
+// named once and its equation had without evaluating it twice.
+theorem Option::some_get<A>(self o: Option<A>): (present: o.is_some().IsTrue()) → o = Some(o.get(present)) {
+    match o { None => λ absent => false_elim(absent), Some(v) => λ _ => refl }
+}
+
 theorem Option::all_some<A>(self o: Option<A>, P: A → Type, a: A,
     some: o = Some(a), all: o.All(P)): P(a)
 {
@@ -1198,6 +1204,10 @@ fn slot_free(slot: Option<Held>, live: List<Nat>) → Bool {
 // The SysV caller-saved registers, the only ones the heuristic writes.
 fn scratch_pool() → List<Gpr> { [Rax, Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
 
+fn Gpr::listed(self register: Gpr, pool: List<Gpr>) → Bool {
+    match pool { Nil => False, Cons(other, rest) => register.same(other) || register.listed(rest) }
+}
+
 fn File::first_free(self file: File, live: List<Nat>, pool: List<Gpr>) → Option<Gpr> {
     match pool {
         Nil => None,
@@ -1244,21 +1254,30 @@ fn is_binary(node: Node) → Bool {
 }
 
 // The output's own register if it is free; else, for arithmetic, the left
-// operand's register when the operand dies here; else the first free
-// scratch register.
-fn Node::choose(self node: Node, file: File, later: List<Nat>, entries: List<Port>,
-    registers: List<Gpr>) → Gpr
+// operand's register when the operand dies here and it is in `pool`; else
+// the first free register of `pool`.
+fn Node::choose_from(self node: Node, file: File, later: List<Nat>, entries: List<Port>,
+    registers, pool: List<Gpr>) → Gpr
 {
     let live = node.reads() ++ later;
-    let fresh = match file.first_free(live, scratch_pool()) { None => Rax, Some(r) => r };
+    let fresh = match file.first_free(live, pool) { None => Rax, Some(r) => r };
     let reuse = match is_binary(node) {
         False => fresh,
-        True => match node.in_place(file, later) { None => fresh, Some(r) => r },
+        True => match node.in_place(file, later) {
+            None => fresh,
+            Some(r) => match r.listed(pool) { True => r, False => fresh },
+        },
     };
     match target_of(node.output_id(), entries, registers) {
         None => reuse,
         Some(target) => match slot_free(file.at(target), live) { True => target, False => reuse },
     }
+}
+
+fn Node::choose(self node: Node, file: File, later: List<Nat>, entries: List<Port>,
+    registers: List<Gpr>) → Gpr
+{
+    node.choose_from(file, later, entries, registers, scratch_pool())
 }
 
 fn plan_nodes(nodes: List<Node>, file: File, entries: List<Port>, registers: List<Gpr>) → List<Gpr> {

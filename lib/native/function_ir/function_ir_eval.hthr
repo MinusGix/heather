@@ -137,10 +137,17 @@ theorem Valuation::set_other(values: Valuation(), id: Nat, value: (w: Nat) → B
 
 fn Valuation::zero() → Valuation() { λ w id => BitVec::zero() }
 
-// A word at every width: itself at 64.
-fn word_value(word: BitVec(64)) → (w: Nat) → BitVec(w) { λ w => BitVec::ofNat(word.toNat()) }
+// A word at every width: itself at 64, by evaluation, so that a function
+// evaluated over open words is its source by conversion; its low bits at
+// any other width.
+fn word_value(word: BitVec(64)) → (w: Nat) → BitVec(w) {
+    λ w => match Nat::equation(64, w) {
+        Inl(e) => j(e, λ v _ => BitVec(v), word),
+        Inr(_) => BitVec::ofNat(word.toNat()),
+    }
+}
 
-theorem word_value_word(word: BitVec(64)): word_value(word, 64) = word { BitVec::ofNat_toNat(64, word) }
+theorem word_value_word(word: BitVec(64)): word_value(word, 64) = word { refl }
 
 // A one-bit result at every width: the bit, then zeroes.
 fn bit_value(b: Bool) → (w: Nat) → BitVec(w) {
@@ -468,9 +475,12 @@ fn StructuredRegion::eval(self region: StructuredRegion, call: Answers(), values
         Dataflow(body) => body.eval(values),
         Sequence(prefix, continuation) => continuation.eval(call, prefix.eval(values)),
         Compose(prefix, continuation) => continuation.eval(call, prefix.eval(call, values)),
-        Conditional(_, condition, _, _, when_true, when_false) => match values(1, condition).head_bit() {
-            False => when_false.eval(call, values),
-            True => when_true.eval(call, values),
+        // Branched at each value read, so a value read from a conditional is
+        // a match on the condition with each arm's value, as a source `match`
+        // spells it.
+        Conditional(_, condition, _, _, when_true, when_false) => λ w id => match values(1, condition).head_bit() {
+            False => when_false.eval(call, values)(w, id),
+            True => when_true.eval(call, values)(w, id),
         },
         Call(callee, arguments, result) => Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
@@ -544,7 +554,7 @@ theorem StructuredRegion::eval_frame(self region: StructuredRegion, call: Answer
         Conditional(_, condition, _, _, when_true, when_false) => λ values w id h => {
             let parts = absent_append(id, when_true.writes(), when_false.writes(), h);
             match values(1, condition).head_bit() as λ b =>
-                (match b { False => when_false.eval(call, values), True => when_true.eval(call, values) })(w, id) = values(w, id) {
+                (match b { False => when_false.eval(call, values)(w, id), True => when_true.eval(call, values)(w, id) }) = values(w, id) {
                 False => when_false.eval_frame(call, values, w, id, parts.right),
                 True => when_true.eval_frame(call, values, w, id, parts.left),
             }
@@ -606,7 +616,7 @@ theorem StructuredRegion::eval_holds_in(self region: StructuredRegion, callees: 
                 Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval_frame(call, values, 1, condition, parts.left));
             let chosen = (match values(1, condition).head_bit() as λ b =>
                     ((w: Nat) → (id: Nat) → Mem(id, Cons(condition, when_true.mentions() ++ when_false.mentions())) →
-                        after(w, id) = (match b { False => when_false.eval(call, values), True => when_true.eval(call, values) })(w, id)) →
+                        after(w, id) = (match b { False => when_false.eval(call, values)(w, id), True => when_true.eval(call, values)(w, id) })) →
                     (match b {
                         False => StructuredRegionHoldsIn(callees, after, when_false),
                         True => StructuredRegionHoldsIn(callees, after, when_true),

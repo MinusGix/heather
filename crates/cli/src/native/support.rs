@@ -30,4 +30,23 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("elf64_calls", include_str!("../../../../lib/std/os/linux/elf64_calls.hthr")),
     ("linux_x86_64_fetch", include_str!("../../../../lib/std/os/linux/linux_x86_64_fetch.hthr")),
     ("x86_64_structured_block", include_str!("../../../../lib/std/arch/x86_64/x86_64_structured_block.hthr")),
+    // The verified lowering and what `compile-x86` instantiates of it
+    // (issues/function-ir-verified-lowering.md, round 4).
+    ("function_ir_eval", include_str!("../../../../lib/native/function_ir/function_ir_eval.hthr")),
+    ("function_ir_lower", include_str!("../../../../lib/native/function_ir/function_ir_lower.hthr")),
+    ("x86_64_data_read", include_str!("../../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
+    ("x86_64_access_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
+    ("x86_64_access_memory", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
+    ("omega", include_str!("../../../../lib/std/tactic/omega.hthr")),
+    ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),
+    ("x86_64_layout", include_str!("../../../../lib/std/arch/x86_64/x86_64_layout.hthr")),
+    ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),
+    ("x86_64_stack", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
+    ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
+    ("x86_64_asm_runs", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
+    ("function_ir_lower_structured", include_str!("../../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
+    ("x86_64_kept", include_str!("../../../../lib/std/arch/x86_64/x86_64_kept.hthr")),
+    ("x86_64_stack_runs", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
+    ("function_ir_lower_calls", include_str!("../../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
+    ("function_ir_compile", include_str!("../../../../lib/native/function_ir/function_ir_compile.hthr")),
 ];

@@ -5,7 +5,7 @@ labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-23
 ---
 
 Round S4 of `docs/native-program-logic-design.md` (§3.2, §9): lower
@@ -249,6 +249,69 @@ costs a refusal, never a wrong program.
    function; the immediate forms (`AddRI8`/`AddRI32`, CMP-and-Jcc without a
    materialised bit) come back as selection rules with their own cases in
    the theorem. Then B2 can start.
+
+   *Round 4 as built:* `compile-x86` compiles a word function and the
+   functions it calls through `lower_program` (Minus, 2026-10-23: the CLI
+   and the planner's calls first; the selection rules are
+   [[function-ir-verified-selection-rules]]).
+   - **Source to IR by `refl`.** The Rust reflector
+     (`crates/elab/src/function_ir_source/program.rs`, untrusted) turns the
+     source function and its callees into a program, last function first.
+     The certificate states `program_eval(program, f, [a0, a1]) =
+     source(a0, a1)` over open words and proves it by `refl`, calls
+     included. Two evaluator changes make that convert: `word_value` at
+     width 64 is the word itself (transport along `Nat::equation`, a data
+     decision, where `eq_dec`'s proof would not unfold), and a
+     `Conditional` evaluates by branching at each read of its bit, since
+     the kernel has no commuting conversion from an application into a
+     match. No per-function source-to-IR theorem is generated.
+   - **The planner places calls.** `Function::plan` plans a body without
+     calls toward RAX from the scratch pool, and one with calls from
+     `call_pool()` (no RAX, which a call's result lands in), with a call's
+     result held in RAX in the planner's file. `plan_program` plans every
+     function. A call's argument moves are scheduled (`File::call_moves`):
+     a move waits while its target holds a source another move still
+     needs, and a cycle goes through a free staging register. The
+     emitter still checks the outputs, so a bad schedule is a refusal.
+   - **The theorem.** `function_ir_compile`'s `compiled_returns`:
+     lowered, evaluable, and evaluating to `answer` gives function `f`'s
+     returns claim with `answer` in RAX, from `lower_program_correct` and
+     `program_eval_computes`.
+   - **The certificate** (`crates/cli/src/native/verified.rs`). Each
+     statement is its own declaration with its own fuel, and the lowering
+     is most of what one spends, so it is evaluated once: the compiler
+     reads the code back (`Prog::numbers`, untrusted) and states it as a
+     literal, `lower_program(p, plan_program(p)) = Some(code)` by `refl`
+     checks it, and everything after evaluates the literal. The bytes go
+     a piece of about 256 at a time (`asm_code_after` by `refl`, glued by
+     `asm_code_back`): checking a byte has a large constant cost, so one
+     equation over a whole program's bytes runs out. Then the
+     entry offset, and `{p}_returns` instantiating `compiled_returns`.
+   - **The CLI.** Ordinary `compile-x86` tries this first. A source outside
+     the reflected fragment (a `Bool` helper, `||`, a loop) still takes the
+     per-function certificate, with a note on stderr; a program in the
+     fragment that the lowering refuses is an error, never a fallback. The
+     assembly is the whole program, each function's frame and RET in it,
+     the symbol at the function's label. `build-x86` and the `--callee`
+     path are unchanged.
+   - Tests: `fixtures/function_ir_compile_examples.hthr`
+     (`function_ir_compile.rs`: a value live across calls, swapped and
+     rotated arguments, calls in a branch's arms, three levels; controls: a
+     wrong source and a rotation without its staging move are refused) and
+     `crates/cli/tests/native_program.rs`, which links
+     `examples/x86-native/program.hthr` and `sharing.hthr` against C and
+     runs them. `native.rs` and `native_branches.rs` now check the verified
+     certificate.
+
+   Left for later:
+   - The selection rules: [[function-ir-verified-selection-rules]].
+   - `lowers` is one declaration over the whole program's lowering;
+     larger programs need it per function
+     ([[function-ir-verified-compile-cost]]).
+   - Loops: neither the reflector nor the planner has them
+     ([[function-ir-verified-loop-planning]]).
+   - `Bool` helpers and connectives in the reflector, and `build-x86`
+     through this path; the old generators retire with B2.
 5. **The bounded loop** (`docs/native-effect-source-design.md` §5.4, L3):
    FunctionIR's loop of at most `bound` passes with an explicit `Exhausted`
    outcome, lowered and proved inside `emit_calls`.
