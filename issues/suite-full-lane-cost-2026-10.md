@@ -4,7 +4,7 @@ status: open
 labels: [testing,performance,tooling]
 area: infrastructure
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-23
 ---
 
 The full lane is what most pull requests wait on, on a 4-CPU cloud container
@@ -133,3 +133,6 @@ and summing module rows gives image replays per test. The runner's
 - 2026-10-22: The fresh-container compile item is
   [[fresh-container-compile-cost]] (libraries split into `-lib` packages so
   integration tests build at O0): cold compile 279 → 216 s on this box.
+- 2026-10-23: Re-measured fresh / warm / elab-edit after #130 and #145 in
+  [[testing-architecture]], which takes the suite-wide direction (post-merge
+  sentinel, affected-target selection, single-flight image builds).
