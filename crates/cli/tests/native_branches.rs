@@ -15,13 +15,14 @@ fn source_nested_conditionals_execute() {
             .output().unwrap();
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         let certificate = std::fs::read_to_string(dir.join(format!("{name}.certificate.hthr"))).unwrap();
-        for claim in ["_source_artifact", "_source_correct", "_layout", "_span", "_exported_bytes", "StructuredArtifact"] {
-            assert!(certificate.contains(claim), "missing {claim}");
+        // Each shape goes through the verified lowering: the certificate
+        // instantiates `compiled_returns`, and nothing in it is generated
+        // per instruction.
+        for claim in ["_lowers()", "_agrees(", "_bytes()", "_entry_at()", "_returns<M>", "compiled_returns<M>("] {
+            assert!(certificate.contains(claim), "missing {claim}: {}", String::from_utf8_lossy(&result.stderr));
         }
-        assert!(certificate.contains(&format!("branches::{name}")));
-        if name == "nudged" {
-            assert!(certificate.contains("AddRI8(") && certificate.contains("AddRI32("), "nudged adds its small constants as immediates");
-        }
+        assert!(certificate.contains(&format!("branches::{name}(")));
+        assert!(!certificate.contains("StructuredArtifact"), "no per-function artifact");
     }
     let driver = dir.join("main.c");
     std::fs::write(&driver, r#"

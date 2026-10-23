@@ -14,6 +14,9 @@ pub use readonly_loop::{LoopCarry, ReflectedReadonlyLoop, reflect_elaborated_rea
 mod loop_native;
 pub use loop_native::{generate_elaborated_loop_x86, LoopX86Emission, NativeLoopPlacement};
 
+mod program;
+pub use program::{reflect_program, evaluate_numbers, evaluate_number, ProgramFunction, ProgramRegion, ReflectedProgram};
+
 mod structured;
 pub use structured::{generate_elaborated_read_x86, ReadX86Emission, generate_elaborated_typed_x86, generate_elaborated_typed_consuming_x86, generate_elaborated_piece_x86, generate_elaborated_typed_fields_x86, FieldPiece, FieldEmission, generate_elaborated_structured_x86, generate_structured_source_expansion, reflect_elaborated_structured, ReflectedStructuredFunction, StructuredSourceType, StructuredSourceChoice, StructuredSourceRecord};
 

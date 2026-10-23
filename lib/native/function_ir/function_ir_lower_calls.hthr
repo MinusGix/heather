@@ -438,13 +438,112 @@ theorem call_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
      }⟩
 }
 
+// A call's argument moves, ordered (round 4). A move goes once its target
+// holds nothing another pending move reads, or holds it in some other
+// register too. When every pending move waits on another (a cycle, as
+// `f(b, a)` with `a` in RDI and `b` in RSI), the first one's blocker is
+// copied into a register no argument goes to and nothing pending needs:
+// RAX, which the call clobbers anyway, else R10 or R11, both saved around
+// the call. Untrusted: `outputs_check` judges where the moves end.
+record ArgumentMove { port: Port, register: Gpr }
+
+fn argument_moves(ports: List<Port>, registers: List<Gpr>) → List<ArgumentMove> {
+    match ports {
+        Nil => [],
+        Cons(port, rest) => match registers {
+            Nil => [],
+            Cons(register, later) => Cons(ArgumentMove(port, register), argument_moves(rest, later)),
+        },
+    }
+}
+
+fn ArgumentMove::ports(self moves: List<ArgumentMove>) → List<Port> {
+    match moves { Nil => [], Cons(m, rest) => Cons(m.port, ArgumentMove::ports(rest)) }
+}
+
+fn ArgumentMove::registers(self moves: List<ArgumentMove>) → List<Gpr> {
+    match moves { Nil => [], Cons(m, rest) => Cons(m.register, ArgumentMove::registers(rest)) }
+}
+
+// Some pending move reads `id` into a register other than `register`.
+fn ArgumentMove::reads(self pending: List<ArgumentMove>, id: Nat, register: Gpr) → Bool {
+    match pending {
+        Nil => False,
+        Cons(m, rest) => (m.port.id.same(id) && !m.register.same(register)) || ArgumentMove::reads(rest, id, register),
+    }
+}
+
+// Some register of `pool` other than `register` holds `id`.
+fn File::holds_elsewhere(self file: File, id: Nat, register: Gpr, pool: List<Gpr>) → Bool {
+    match pool {
+        Nil => False,
+        Cons(other, rest) => (!other.same(register) && match file.at(other) { None => False, Some(held) => held.id.same(id) })
+            || file.holds_elsewhere(id, register, rest),
+    }
+}
+
+// Writing `register` would lose a value a pending move still reads.
+fn File::blocked(self file: File, register: Gpr, pending: List<ArgumentMove>) → Bool {
+    match file.at(register) {
+        None => False,
+        Some(held) => ArgumentMove::reads(pending, held.id, register) && !file.holds_elsewhere(held.id, register, scratch_pool()),
+    }
+}
+
+fn File::first_ready(self file: File, candidates, pending: List<ArgumentMove>) → Option<ArgumentMove> {
+    match candidates {
+        Nil => None,
+        Cons(m, rest) => match file.blocked(m.register, pending) { False => Some(m), True => file.first_ready(rest, pending) },
+    }
+}
+
+fn ArgumentMove::without(self pending: List<ArgumentMove>, register: Gpr) → List<ArgumentMove> {
+    match pending {
+        Nil => [],
+        Cons(m, rest) => match m.register.same(register) { True => rest, False => Cons(m, ArgumentMove::without(rest, register)) },
+    }
+}
+
+fn File::staging(self file: File, pending: List<ArgumentMove>, pool: List<Gpr>) → Option<Gpr> {
+    match pool {
+        Nil => None,
+        Cons(register, rest) => match file.blocked(register, pending) { False => Some(register), True => file.staging(pending, rest) },
+    }
+}
+
+fn schedule_moves(fuel: Nat) → File → List<ArgumentMove> → List<ArgumentMove> {
+    match fuel {
+        Zero => λ file pending => pending,
+        Succ(more) => λ file pending => match pending {
+            Nil => [],
+            Cons(first, others) => match file.first_ready(Cons(first, others), Cons(first, others)) {
+                Some(m) => Cons(m, schedule_moves(more, file.write(m.register, Some(Held(m.port.id, Word))),
+                    ArgumentMove::without(Cons(first, others), m.register))),
+                None => match file.at(first.register) {
+                    None => Cons(first, others),
+                    Some(held) => match file.staging(Cons(first, others), [Rax, R10, R11]) {
+                        None => Cons(first, others),
+                        Some(stage) => Cons(ArgumentMove(Port(id := held.id, width := 64), stage),
+                            schedule_moves(more, file.write(stage, Some(held)), Cons(first, others))),
+                    },
+                },
+            },
+        },
+    }
+}
+
+// The moves a call makes, in order.
+fn File::call_moves(self file: File, arguments: List<Nat>) → List<ArgumentMove> {
+    schedule_moves(3 * arguments.len() + 3, file, argument_moves(word_ports(arguments), argument_registers()))
+}
+
 // The call, refused where the callee is not below `bound` or the
 // arguments do not all reach their registers.
 fn File::emit_call(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>,
     names, bound: Nat) → Option<Emitted> {
     match Succ(callee).leb(bound) {
         False => None,
-        True => match file.move_outputs(word_ports(arguments), argument_registers()) {
+        True => match file.move_outputs(ArgumentMove::ports(file.call_moves(arguments)), ArgumentMove::registers(file.call_moves(arguments))) {
             None => None,
             Some(moves) => match moves.file.outputs_check(word_ports(arguments), argument_registers()) &&
                 leaves_all(moves.code, callee_saved()) {
@@ -842,11 +941,12 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
         file.emit_call(prog, callee, arguments, result, placement, names, bound)) {
     let facts = StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result));
     let ports = word_ports(arguments);
+    let order = file.call_moves(arguments);
     let out_file = file.write(Rax, Some(Held(result, Word)));
     (match Succ(callee).leb(bound) as λ b => Succ(callee).leb(bound) = b →
         MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match b {
             False => None,
-            True => match file.move_outputs(ports, argument_registers()) {
+            True => match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
                 None => None,
                 Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
                     False => None,
@@ -856,7 +956,7 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
         }) {
         False => λ _ => trivial,
         True => λ under =>
-            (match file.move_outputs(ports, argument_registers()) as λ moved =>
+            (match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved =>
                 MayKeep<M>(values, file, True, moved) →
                 MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match moved {
                     None => None,
@@ -885,7 +985,7 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
                                 moves, keeps, both.left, both.right)
                         },
                     })(refl),
-            })(move_outputs_keeps<M>(values, ports, file, argument_registers())),
+            })(move_outputs_keeps<M>(values, ArgumentMove::ports(order), file, ArgumentMove::registers(order))),
     })(refl)
 }
 
@@ -2047,10 +2147,11 @@ theorem emit_kept_nodes_grows(prog: Prog, file: File, nodes: List<Node>, placeme
 theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>,
     names, bound: Nat): Grows(prog, file.emit_call(prog, callee, arguments, result, placement, names, bound)) {
     let ports = word_ports(arguments);
+    let order = file.call_moves(arguments);
     let out_file = file.write(Rax, Some(Held(result, Word)));
     match Succ(callee).leb(bound) as λ b => Grows(prog, match b {
         False => None,
-        True => match file.move_outputs(ports, argument_registers()) {
+        True => match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
             None => None,
             Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
                 False => None,
@@ -2059,7 +2160,7 @@ theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, argument
         },
     }) {
         False => trivial,
-        True => match file.move_outputs(ports, argument_registers()) as λ moved => Grows(prog, match moved {
+        True => match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved => Grows(prog, match moved {
             None => None,
             Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
                 False => None,
@@ -2336,6 +2437,47 @@ fn lower_program(functions: List<Function>, placement: List<Gpr>) → Option<Pro
         Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) },
     }
 }
+
+// ---------------------------------------------------------------------------
+// The placement heuristic over programs (round 4). Untrusted like any
+// placement: `lower_program_correct` holds whatever it returns.
+
+fn StructuredRegion::calls(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(_) => False,
+        Sequence(_, continuation) => continuation.calls(),
+        Compose(prefix, continuation) => prefix.calls() || continuation.calls(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.calls() || when_false.calls(),
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls(),
+    }
+}
+
+// The registers a value may take: not RAX in a body that calls, where each
+// call's result lands there.
+fn call_pool() → List<Gpr> { [Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
+
+// A function's placement: its arguments where they arrive, and its result
+// wanted in RAX when no call follows that could take it.
+fn Function::plan(self function: Function) → List<Gpr> {
+    match input_file(word_ports(function.parameters), argument_registers()) {
+        None => [],
+        Some(file) => match function.body.calls() {
+            False => function.body.plan_from(file, [function.result], [Port(id := function.result, width := 64)], [Rax],
+                scratch_pool()).placement,
+            True => function.body.plan_from(file, [function.result], [], [], call_pool()).placement,
+        },
+    }
+}
+
+// A program's placement, in the order `emit_functions` takes it: the first
+// function's first.
+fn plan_program(functions: List<Function>) → List<Gpr> {
+    match functions { Nil => [], Cons(last, earlier) => plan_program(earlier) ++ last.plan() }
+}
+
+// The program lowered with the heuristic's placement.
+fn lower_program_planned(functions: List<Function>) → Option<Prog> { lower_program(functions, plan_program(functions)) }
 
 // The last function answers the calls of it.
 theorem program_callees_last(last: Function, earlier: List<Function>, arguments: List<BitVec(64)>, result: BitVec(64)):

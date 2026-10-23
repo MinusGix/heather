@@ -84,7 +84,7 @@ fn item_timings_cover_the_certificate(tsv: &std::path::Path, certificate: &std::
         imports.insert(module);
     }
     assert!(rows.len() >= declarations + imports.len(), "{} rows for {declarations} declarations", rows.len());
-    assert!(rows.iter().any(|name| name == "mix_native_exported_bytes"));
+    assert!(rows.iter().any(|name| name == "mix_native_bytes"));
 }
 
 #[test]

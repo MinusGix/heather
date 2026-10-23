@@ -817,6 +817,19 @@ fn Nat::eq_dec(self n: Nat) → (m: Nat) → n = m ∨ n ≠ m {
     }
 }
 
+// The equation when `n` and `m` are equal, as data: at two numerals
+// it evaluates to `refl`, so a transport along it computes (`eq_dec`'s
+// proofs are theorems and never unfold).
+fn Nat::equation(self n: Nat) → (m: Nat) → (n = m) ∨ True {
+    match n {
+        Zero => λ m => match m { Zero => Inl(refl), Succ(_) => Inr(trivial) },
+        Succ(k, ih) => λ m => match m {
+            Zero => Inr(trivial),
+            Succ(m2) => match ih(m2) { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => Succ(k) = Succ(x), refl)) },
+        },
+    }
+}
+
 instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m), bit := or_bit(Nat::eq_dec(n, m)), reflects := or_bit_reflects(Nat::eq_dec(n, m)) }
 
 // The same decision as a property of the carrier, which is what a polymorphic
