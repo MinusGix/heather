@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Find and rewrite stale `lib/…/<stem>.hthr` paths.
+
+Module names are file stems and the loader searches every folder below the
+library (docs/modules-design.md §3.2), so moving a module between folders
+changes no `import`, but every place that cites the file by *path* goes
+stale: a Rust `include_str!` stops building, a doc link dies
+(docs/lib-layout-design.md). This finds each cited path that no longer
+exists, in tracked files, and rewrites it to the stem's one file under
+`lib/`. A branch that predates a move runs `scripts/lib-paths --fix` after
+rebasing.
+
+    scripts/lib-paths            # list stale paths it can rewrite; exit 1 if any
+    scripts/lib-paths --fix      # rewrite them in place
+
+Left alone: `probes/` and `perf/snapshots/` (frozen history of older trees)
+and citations of modules that no longer exist anywhere (deleted modules
+stay cited as history). Stdlib only, like `scripts/issue`.
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+SKIP = ("probes/", "perf/snapshots/")
+SUFFIXES = (".rs", ".md", ".hthr", ".py", ".mjs", ".js", ".toml", ".sh", ".json", ".tsv")
+# An optional run of `../` (a relative include_str!), then a path below lib/.
+PATH = re.compile(r"((?:\.\./)*)lib/((?:[A-Za-z0-9_]+/)*)([A-Za-z0-9_]+)\.hthr")
+
+
+def library_files():
+    where = {}
+    for dirpath, dirnames, filenames in os.walk(ROOT / "lib"):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for f in filenames:
+            if f.endswith(".hthr"):
+                where.setdefault(f[: -len(".hthr")], []).append(
+                    Path(dirpath, f).relative_to(ROOT).as_posix())
+    return where
+
+
+def tracked():
+    out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=True)
+    for rel in out.stdout.decode().split("\0"):
+        if not rel or rel.startswith(SKIP):
+            continue
+        name = os.path.basename(rel)
+        if name.endswith(SUFFIXES) or "." not in name:
+            yield rel
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--fix", action="store_true", help="rewrite the stale paths in place")
+    args = ap.parse_args()
+    where = library_files()
+    stale = 0
+    for rel in tracked():
+        path = ROOT / rel
+        try:
+            src = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+            continue
+        hits = []
+
+        def rewrite(m):
+            ups, folders, stem = m.groups()
+            cited = f"lib/{folders}{stem}.hthr"
+            if (ROOT / cited).exists():
+                return m.group(0)
+            homes = where.get(stem, [])
+            if len(homes) != 1:
+                return m.group(0)
+            hits.append((cited, homes[0]))
+            return ups + homes[0]
+
+        out = PATH.sub(rewrite, src)
+        if not hits:
+            continue
+        stale += len(hits)
+        if args.fix:
+            path.write_text(out, encoding="utf-8")
+        else:
+            for cited, home in sorted(set(hits)):
+                print(f"{rel}: {cited} -> {home}")
+    verb = "rewrote" if args.fix else "found"
+    print(f"lib-paths: {verb} {stale} stale path(s)", file=sys.stderr)
+    return 1 if stale and not args.fix else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

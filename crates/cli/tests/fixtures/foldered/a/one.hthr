@@ -1,0 +1,3 @@
+import two;
+
+fn one() -> Nat { two::two() }

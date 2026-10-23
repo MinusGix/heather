@@ -7,8 +7,8 @@ updated: 2026-09-29
 ---
 
 The native builder bundles its proof library under harness names that are not
-file stems: `bitvec_omega` is `lib/std/bitvec/omega.hthr`, `bitvec_nat` is
-`lib/std/bitvec/nat.hthr`, and the x86 modules have their own aliases. Since
+file stems: `bitvec_omega` was `omega.hthr` in `lib/std/bitvec/`, `bitvec_nat` was
+`nat.hthr` there, and the x86 modules have their own aliases. Since
 2026-09-29 `build-x86` lets a program import them
 ([[load-providing-swallows-resolve-errors]] has the mechanism), but `heather
 check examples/x86-native/wc.hthr` still fails with "cannot find module
