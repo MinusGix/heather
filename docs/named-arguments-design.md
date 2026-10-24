@@ -768,8 +768,16 @@ mechanism 1 — so the declaration check is a check, not a lowering; storing
 the term would also let a value default mention a type parameter
 (issues/parameter-defaults-mention-type-parameters.md).
 
-Record field defaults (§9.5) are checked only at a construction still
-(issues/field-default-unchecked-at-declaration.md).
+**Record fields** (2026-10-24, issues/field-default-unchecked-at-declaration.md)
+follow the same rule, at the record (`check_field_defaults_at_declaration`,
+`crates/elab/src/inductive.rs`). The telescope is the record at its own
+parameters — each type parameter a binder at `Type` (level 0), each value
+parameter a binder of its declared type — then the tag and the fields before
+the default, lowered by the walk a construction's field types take. It is
+made `Cx::hygienic`, because a construction runs the default with the
+earlier fields in its context but none of them nameable (§9.5): `y: Nat :=
+x` is refused at the record now, rather than at every construction, while
+`same: value = value := refl` reads `value` by type at each construction.
 
 ## 10. Out of scope, with homes
 

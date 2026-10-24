@@ -447,6 +447,64 @@ fn two() -> Three { Three(1, 2, 3, 4) }
     assert!(error.contains("by position"), "{error}");
 }
 
+/// A field's default is checked at the record, used or not (§9.7), by the
+/// parameter rule: a value is kernel-checked in the field telescope, a
+/// discharge waits for a construction. The axes: no construction at all, a
+/// type parameter, a value parameter, a fit only some constructions make,
+/// a fixed misfit, and a positive control beside each refusal.
+#[test]
+fn a_field_default_no_construction_uses_is_still_checked() {
+    let p = "record P { a: Nat, h: a = 3 }\n";
+    let error = bad(&format!("{p}record Q {{ x: Nat, y: Nat := P(2, refl).a }}\n"));
+    assert!(error.starts_with("2:") && error.contains("rejected `Q`"), "{error}");
+    ok(&format!("{p}record Q {{ x: Nat, y: Nat := P(3, refl).a }}\ntheorem three(): Q(1).y = 3 {{ refl }}\n"));
+    let error = bad("record Q { x: Nat, y: Nat := missing() }");
+    assert!(error.contains("`y`'s default does not check where it is written") && error.contains("missing"), "{error}");
+    let error = bad("inductive Bool { False, True }\nrecord Q { x: Nat, b: Bool := 5 }");
+    assert!(error.contains("`b`'s default does not check where it is written"), "{error}");
+}
+
+/// At a type or value parameter the default is checked with the parameter
+/// abstract, and a fit only some constructions make stays legal (a
+/// construction refuses a misfit: `a_default_that_fails_is_refused_at_the_construction`).
+#[test]
+fn a_field_default_under_parameters() {
+    ok("
+inductive List<A> { Nil, Cons(h: A, t: List<A>) }
+record Bag<A> { first: A, rest: List<A> := Nil }
+fn one() -> Bag<Nat> { Bag(1) }
+theorem empty(): one().rest = Nil<Nat> { refl }
+record Sized(n: Nat) { x: Nat, k: Nat := 7 }
+inductive Yes { Holds }
+inductive No { Fails }
+fn IsZero(n: Nat) -> Type { match n { Zero => Yes, Succ(_) => No } }
+record Zeroed { value: Nat, zero: IsZero(value) := Holds }
+");
+    // A `List<Bool>` fits exactly the `Bag<Bool>` constructions, so its fit
+    // is theirs; a `Succ(True)` is ill-typed at every one, and refused here.
+    ok("
+inductive Bool { False, True }
+inductive List<A> { Nil, Cons(h: A, t: List<A>) }
+record Bag<A> { first: A, rest: List<A> := Cons(True, Nil) }
+");
+    let error = bad("
+inductive Bool { False, True }
+record Sized(n: Nat) { x: Nat, k: Nat := Succ(True) }
+");
+    assert!(error.contains("`k`'s default does not check where it is written"), "{error}");
+}
+
+/// A field default may not name an earlier field: a construction runs it
+/// with the field in its context but not by name, and the record says so
+/// rather than every construction.
+#[test]
+fn a_field_default_cannot_name_an_earlier_field() {
+    let error = bad("record Q { x: Nat, y: Nat := x }");
+    assert!(error.contains("`y`'s default does not check where it is written"), "{error}");
+    // A discharge reads the earlier field by type, as at a construction.
+    ok("record Pinned { value: Nat, same: value = value := refl }");
+}
+
 // -- parameter defaults (§9.6) -----------------------------------------------
 
 const SECOND: &str = "

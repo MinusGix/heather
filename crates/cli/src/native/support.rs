@@ -38,6 +38,9 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_access_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
     ("x86_64_access_memory", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
     ("omega", include_str!("../../../../lib/std/tactic/omega.hthr")),
+    // `x86_64_fetched_code`'s sign-bit lemmas, moved out of it by #150.
+    ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
+    ("bitvec_signed", include_str!("../../../../lib/std/bitvec/bitvec_signed.hthr")),
     ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),
     ("x86_64_layout", include_str!("../../../../lib/std/arch/x86_64/x86_64_layout.hthr")),
     ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),

@@ -1,11 +1,11 @@
 ---
 title: Check a record field's default at the record, not only at a construction
-status: open
+status: closed
 labels: [frontend,elaboration,defaults]
 area: language
-code: crates/elab/src/constructor.rs
+code: crates/elab/src/inductive.rs
 created: 2026-10-23
-updated: 2026-10-23
+updated: 2026-10-24
 ---
 
 A record field's default (`name: T := e`, docs/named-arguments-design.md
@@ -29,3 +29,18 @@ could still change the fit. The work is finding that telescope: fields are
 lowered in `inductive.rs` far from where a `Cx` with the earlier fields as
 binders exists, and the hidden `Pos<A>` search default
 (`is_pos_search`) is a discharge.
+
+## Resolution (2026-10-24)
+
+docs/named-arguments-design.md §9.7, "Record fields".
+`Elaborator::check_field_defaults_at_declaration` builds the record's field
+telescope at its own parameters (type parameters as binders at `Type`,
+value parameters as binders of their declared types, then the tag and the
+earlier fields) and runs `check_default_at_declaration` on each default in
+it, made hygienic: a construction cannot name an earlier field either, so a
+default that does (`y: Nat := x`) is refused at the record.
+
+Tests: `crates/elab/tests/named_arguments.rs`
+(`a_field_default_no_construction_uses_is_still_checked`,
+`a_field_default_under_parameters`,
+`a_field_default_cannot_name_an_earlier_field`).

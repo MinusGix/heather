@@ -1274,6 +1274,10 @@ impl Elaborator {
                 return Err(e);
             }
         }
+        // A field's default is checked here, used or not (§9.7 of
+        // docs/named-arguments-design.md), as a parameter's is at its
+        // declaration.
+        self.check_field_defaults_at_declaration(&ind)?;
         // From here on registration is infallible. The type registry installs
         // all nominal views together; the ambiguity index then exposes the
         // same declarations to surface resolution.
@@ -2117,6 +2121,87 @@ impl Elaborator {
             }));
         }
         fcx
+    }
+
+    /// A record's field defaults, checked where they are written
+    /// (docs/named-arguments-design.md §9.7), by the rule a parameter's
+    /// default is: a discharge is left to each construction, a value is
+    /// elaborated and kernel-checked in the field telescope
+    /// ([`Elaborator::check_default_at_declaration`]).
+    ///
+    /// The telescope is the declaration at its own parameters: each type
+    /// parameter a binder at `Type` (level 0), each value parameter a binder
+    /// of its declared type, then the tag and the fields before the default,
+    /// lowered by the walk [`Self::lower_ctor_with_domains_at`] does. It is
+    /// made [`Cx::hygienic`], since a construction runs the default with the
+    /// earlier fields and the parameters in its context but none of them
+    /// nameable; a default that names one is refused at every construction,
+    /// and is here too.
+    pub(crate) fn check_field_defaults_at_declaration(&self, ind: &Inductive) -> R<()> {
+        if ind.ctors.iter().all(|c| c.defaults.iter().all(Option::is_none)) {
+            return Ok(());
+        }
+        let _scope = self.use_inductive_scope(ind);
+        let mut tcx = Cx::empty();
+        for (j, _) in ind.params.iter().enumerate() {
+            tcx.push(format!("#t{j}"), Type::Ty(Level::Zero), Level::constant(1));
+        }
+        let t = ind.params.len() as u32;
+        let targs: Vec<(Type, Level)> = (0..t)
+            .map(|j| (Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(t - 1 - j))) }, Level::Zero))
+            .collect();
+        tcx.tyvars.extend(ind.params.iter().zip(&targs).map(|(name, (ty, level))| TyVar {
+            name: name.clone(),
+            ty: ty.clone(),
+            level: level.clone(),
+            depth: t as usize,
+        }));
+        let n = ind.valparams.len() as u32;
+        let mut decls: Vec<(Type, Level)> = Vec::with_capacity(n as usize);
+        for (j, (pname, pty)) in ind.valparams.iter().enumerate() {
+            let (ty, level) = self.elab_ty(&tcx, pty)?;
+            tcx.push(format!("#v{j}"), ty.clone(), level.clone());
+            tcx.aliases.push(Rc::new(Alias {
+                skel: None,
+                name: pname.clone(),
+                depth: tcx.names.len(),
+                term: Rc::new(Term::Var(LocalVar(0))),
+                ty: ty.shift_local(1),
+                level: level.clone(),
+                spliced: None,
+            }));
+            decls.push((ty, level));
+        }
+        let targs: Vec<(Type, Level)> = targs.iter().map(|(ty, l)| (ty.shift_local(n), l.clone())).collect();
+        let vargs: Vec<(Term, Type, Level)> = decls
+            .iter()
+            .enumerate()
+            .map(|(j, (ty, l))| (Term::Var(LocalVar(n - 1 - j as u32)), ty.shift_local(n - j as u32), l.clone()))
+            .collect();
+        for ctor in ind.ctors.iter().filter(|c| c.defaults.iter().any(Option::is_some)) {
+            let mut fcx = self.field_scope_cx(&tcx, ind, &targs, &vargs);
+            fcx.push("#tag".into(), tag_type(ind.tag), Level::Zero);
+            for (k, (name, ty)) in ctor.fields.iter().enumerate() {
+                if ctor.kind[k] != FieldKind::Payload {
+                    continue;
+                }
+                let (fty, flvl) = self.elab_ty(&fcx, ty)?;
+                let fname = name.clone().unwrap_or_else(|| "#field".into());
+                if let Some(default) = &ctor.defaults[k] {
+                    self.check_default_at_declaration(&fcx.hygienic(), &ind.name, &fname, default, &fty, &flvl)?;
+                }
+                fcx.push(fname.clone(), fty.clone(), flvl);
+                if let Type::Ty(level) = fty {
+                    fcx.tyvars.push(TyVar {
+                        name: fname,
+                        ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                        level,
+                        depth: fcx.names.len(),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// [`Self::lower_ctor_with_domain`] for every recursive function field of
