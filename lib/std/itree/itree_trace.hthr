@@ -228,23 +228,30 @@ fn ITree::iter_next<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), x
     }
 }
 
+// What is left of a pass, `t`, followed by the loop grows with one more unit
+// of fuel, when the loop does from every state.
+theorem ITree::iter_pass_grows<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E),
+    ih: (a2: A) → ITree::Below(E, ITree::iter(E, n, body, a2), ITree::iter(E, Succ(n), body, a2)),
+    t: ITree<Step<A, B>>(E)):
+    ITree::Below<B>(E, ITree::bind<Step<A, B>, B>(E, t, λ x => ITree::iter_next(E, n, body, x)),
+        ITree::bind<Step<A, B>, B>(E, t, λ x => ITree::iter_next(E, Succ(n), body, x)))
+{
+    let step: (x: Step<A, B>) → ITree::Below(E, ITree::iter_next(E, n, body, x), ITree::iter_next(E, Succ(n), body, x)) =
+        λ x => match x {
+            Continue(a2) => SameTau(ITree::iter(E, Succ(n), body, a2), refl, ih(a2)),
+            Break(_) => refl,
+        };
+    ITree::below_bind(E, t, t, λ x => ITree::iter_next(E, n, body, x),
+        λ x => ITree::iter_next(E, Succ(n), body, x), ITree::below_refl(E, t), step)
+}
+
 // One more unit of fuel grows a loop.
 theorem ITree::iter_grows<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A):
     ITree::Below(E, ITree::iter(E, n, body, a), ITree::iter(E, Succ(n), body, a))
 {
     match n {
         Zero => trivial,
-        Succ(m) => {
-            let ih: (a2: A) → ITree::Below(E, ITree::iter(E, m, body, a2), ITree::iter(E, Succ(m), body, a2)) =
-                λ a2 => ITree::iter_grows(E, m, body, a2);
-            let step: (x: Step<A, B>) → ITree::Below(E, ITree::iter_next(E, m, body, x), ITree::iter_next(E, Succ(m), body, x)) =
-                λ x => match x {
-                    Continue(a2) => SameTau(ITree::iter(E, Succ(m), body, a2), refl, ih(a2)),
-                    Break(_) => refl,
-                };
-            ITree::below_bind(E, body(a), body(a), λ x => ITree::iter_next(E, m, body, x),
-                λ x => ITree::iter_next(E, Succ(m), body, x), ITree::below_refl(E, body(a)), step)
-        },
+        Succ(m) => ITree::iter_pass_grows(E, m, body, λ a2 => ITree::iter_grows(E, m, body, a2), body(a)),
     }
 }
 

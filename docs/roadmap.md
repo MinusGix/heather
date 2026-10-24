@@ -107,6 +107,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `it-coinductive` | interaction-trees | open | Interaction trees diverge for real: a coinductive tree over container events with `bind` and `iter`, `approx` into the finite tree, and bisimilarity and eutt as `M` instances, bridged to the finite library's `Same` (`docs/kernel-coinduction-design.md` §6). |  |
 | `it-cotree` | interaction-trees | done | `CoTree<R>(E)` with `bind`, `map`, `translate` and fuel-free `iter`, its approximations as a `Program` (`spin` diverges with no fuel), and strong bisimilarity as indexed codata with reflexivity, symmetry, transitivity, the monad laws, a `bind` congruence and the bridge to `Same` (`docs/coitree-design.md`). | it-coinductive |
 | `it-eutt` | interaction-trees | done | Equivalence up to taus on `CoTree` as indexed codata with drop counts: reflexivity, symmetry, transitivity, `CTau(t) ≈ t`, the monad laws, and equivalent trees giving programs that refine each other (`docs/coitree-design.md` §7). | it-coinductive |
+| `it-program-bridge` | interaction-trees | done | The fuel-free loop over a finite body and `Program::iter` refine each other, as do `program(bind(t, h))` and `Program::bind` of the programs; finite trees embed with exactly their traces (`docs/coitree-design.md` §8). | it-coinductive |
 | `it-codata` | interaction-trees | done | A surface `codata` declaration lowers onto the kernel's `M`, with constructors, `match` through `out`, and guarded corecursive functions compiled into one `corec` (`docs/codata-elaborator-design.md`). | it-coinductive |
 | `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |  |
 | `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |  |
@@ -566,6 +567,10 @@ separate machines do not slow each other's tests.
   (`issues/coitree-program-bridge.md`). Simulation between finite trees over
   different events, with the loop rule `cat` needs, landed in the same round
   under `it-library` (`docs/itree-simulation-design.md`).
+- 2026-10-24: `it-program-bridge` added and done
+  (`lib/std/itree/coitree_bridge.hthr`): the coinductive loop and `bind`
+  against the fuelled programs, both directions, closing
+  `issues/coitree-program-bridge.md`.
 - 2026-10-24: `hih-kernel-model` proposed, with `hih-km-probe` done and
   `hih-km-runs` next, for Minus's review. Minus asked for a Heather-in-Heather
   step as the way to let optimisations of the core be proven rather than
