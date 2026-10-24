@@ -35,7 +35,11 @@ for the image cache's sake). See `docs/test-value-audit.md` §3.3, §4.2, §4.3.
 
 ## Open question for Minus
 
-Whether to add an in-language `failing "fragment" { … }` block later, as
-Idris 2 has. It would let checker refusals sit in the library next to the
-theorem they guard, and it could reuse the corpus runner's matcher. Decide
-after the corpus shows how often the directive is used.
+Whether to add an in-language `failing "fragment" guards Name { … }` block later, as
+Idris 2 has (without the `guards`). Minus (2026-10-24) likes it but worries about
+noise next to theorems. Proposed answer (doc §4.3): blocks live in
+`lib/_tests` by convention, `guards` gives the LSP a link from the theorem to
+its controls, and editors fold the few that stay inline. If `guards` is all
+a block adds, the comment directive can carry it instead. Either way it
+reuses the corpus runner's matcher. Decide after the corpus shows how often
+the directive is used.

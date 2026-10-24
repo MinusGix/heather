@@ -26,9 +26,12 @@ library lines again as test lines over the last forty merges.
 
 ## Proposal (per module, when the module is next touched, or as one sweep)
 
-- Computation examples and the headline contract restatements move to an
-  examples module beside the library module (`…/arith_examples.hthr`).
-  Nothing imports it; the library gate checks it as a root.
+- A theorem a client would cite goes in the module. Probes at specific
+  values (checking the concept at particular cases) and headline contract
+  restatements go to `lib/_tests`, which mirrors `lib/` with `_tests` stems
+  (`lib/_tests/std/num/float/arith_tests.hthr`). Nothing outside it may
+  import from it, and its names stay out of the library and the export
+  (Minus, 2026-10-24; doc §4.5).
 - False-claim refusals become `¬` theorems, in the module or its examples
   module.
 - Kit lists go. Module-check tests go once the gate lands.
@@ -39,4 +42,5 @@ library lines again as test lines over the last forty merges.
 ## What it assumes from elsewhere
 
 - **[[library-whole-check-gate]]** owns checking every module. Assumed here:
-  only that an examples module named as a root gets checked.
+  only that every `lib/_tests` module is checked as a root, and that
+  importing from `lib/_tests` outside it is refused by a lint.

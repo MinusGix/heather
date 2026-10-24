@@ -173,9 +173,12 @@ Two shapes recur. `lib_std_float_arith.rs` has both side by side:
   headline theorems whose statement is the contract, such as
   `add_correct`. For the rest it is a second copy.
 
-**Verdict.** Computation examples go in an examples module next to the
-library module (§4.5), checked by the library gate. Keep restatements only
-for headline contract theorems, in the same examples module. Drop the rest.
+**Verdict.** Ask whether a client would cite it. If yes, it is a library
+theorem and goes in the module. Most of these are probes instead: they
+check that the concept is pinned down right at particular values, and no
+client would cite them. Those go in `lib/_tests` (§4.5), checked by the
+library gate. Keep restatements only for headline contract theorems, in the
+same place. Drop the rest.
 
 ### 3.5 Negative controls (about 260 bare refusals, plus most of the "accept + bare" tests)
 
@@ -328,11 +331,26 @@ matching first error, and every other declaration must pass. Precedents:
 rustc's UI tests (`//~ ERROR`), Lean 4's `#guard_msgs`, and Idris 2's
 `failing "msg"` blocks.
 
-The in-language version is a `failing "fragment" { … }` block. It is worth
-designing because it would let kind (c) refusals sit **in the library, next
-to the theorem they guard**, as they do in Idris. Corpus-first is cheaper
-and doesn't touch the language. The block can come later and use the same
-matcher.
+The in-language version is a `failing "fragment" { … }` block, which would
+put refusals in the language itself. Its cost (Minus, 2026-10-24) is noise:
+the common case, reading a theorem, gets refusals next to it. The answer is
+to separate *where* a refusal lives from *what it is attached to*:
+
+- **The block is legal anywhere, but by convention it lives in
+  `lib/_tests`.** The library itself carries only `¬` theorems worth citing.
+  A refusal sits next to a theorem only when it *is* the documentation (for
+  example, that `≈` is deliberately not `=`).
+- **The test names the theorem it guards**: `failing "msg" guards
+  Rat::inv_mul { … }`. The LSP shows "2 negative controls" over `inv_mul`
+  and jumps to them, so the theorem is still connected to its tests without
+  them being next to it in the file.
+- **Editors fold failing blocks by default, and doc output skips them**, for
+  the few that stay inline.
+
+Corpus first is cheaper and doesn't touch the language. If `guards` turns
+out to be the only thing a block adds over a comment directive, the
+directive can carry it (`// expect-error(guards Rat::inv_mul): …`) and the
+language does not change.
 
 ### 4.4 Refusals carry a reason
 
@@ -341,16 +359,36 @@ generalising `linux_wp::assert_refused`. `check-elab-test-families.mjs`
 already walks every elab test file, so it can also flag a bare `is_err()` or
 `unwrap_err()` whose result goes unread, as a warning list to start with.
 
-### 4.5 Examples modules
+### 4.5 `lib/_tests`: theorems that are tests, not library
 
-`lib/std/num/float/arith_examples.hthr` and similar: a module that imports
-its subject and holds the computation examples (§3.4), the headline contract
-restatements, and the `¬` theorems for kind (a) negatives that read better
-apart from the library (or put those in the module itself). Nothing in
-`lib/` imports an examples module. The library gate (§4.1) checks it as a
-root. Opaque proofs don't invalidate dependents (`crates/cli/tests/check.rs`,
-`opaque_proof_edits_do_not_invalidate_dependent_module_images`), so examples
-cost importers nothing.
+Minus (2026-10-24): some test theorems about very specific values don't
+belong in the mainline library. They are probes that check the concept is
+pinned down right in particular cases. They are still useful, even though a
+better method would be nicer and isn't always available. So they get a tree
+of their own, and the rule for which side a theorem goes on is: **would a
+client cite it?** If yes, it is a library theorem, and ideally most tests
+end up there. If not, it goes in `lib/_tests`:
+
+- **Layout.** `lib/_tests` mirrors `lib/`, for example
+  `lib/_tests/std/num/float/arith_tests.hthr`. Module names are stems and
+  the loader searches every folder below `-L` (`docs/lib-layout-design.md`),
+  so test modules take a distinct stem (`_tests` suffix) rather than their
+  subject's name.
+- **Content.** Probes at specific values (§3.4's computation examples), the
+  headline contract restatements, refusals and later `failing` blocks
+  (§4.3), and `¬` theorems that read better apart from the module.
+- **Rules.** Nothing outside `lib/_tests` imports from it (a lint, beside the
+  orphan lint of §4.1). The library gate checks each of its modules as a
+  root. Its names never reach the library's namespace or the export.
+- **Cost.** Opaque proofs don't invalidate dependents
+  (`crates/cli/tests/check.rs`,
+  `opaque_proof_edits_do_not_invalidate_dependent_module_images`), and
+  nothing depends on a test module anyway, so the tree costs importers
+  nothing.
+
+`lib/_tests` holds library probes that need the library. `tests/hthr`
+(§4.3) holds elaborator behaviour that mostly needs only the prelude. One
+runner serves both.
 
 ### 4.6 Label incompleteness pins
 
@@ -362,7 +400,7 @@ gets stronger should be a choice, not an accident.
 
 | the PR changes | add | do not add |
 |---|---|---|
-| **a library module** (`lib/` only) | Theorems in the module. Examples and contract restatements in its examples module. `¬` theorems for false claims a reader might expect. A showcase client when the module is meant for clients. | A Rust test file. Specifically: a "module checks" test (once §4.1 lands), a kit list, `refl` examples in Rust strings, refusals of false claims. |
+| **a library module** (`lib/` only) | Theorems in the module when a client would cite them. Probes at specific values and contract restatements in `lib/_tests`. `¬` theorems for false claims a reader might expect. A showcase client when the module is meant for clients. | A Rust test file. Specifically: a "module checks" test (once §4.1 lands), a kit list, `refl` examples in Rust strings, refusals of false claims. |
 | **elaborator behaviour** (a feature, a lowering, a resolution rule) | Positive cases as `.hthr` (Rust `ok(…)` until §4.3 exists, grouped into one source per behaviour). Refusals with their reason. The generated-term axes. | Bare `is_err()`. A positive case per Rust fn when one source can hold several declarations. |
 | **a tactic or automation** | Corpus cases for what it proves. Refusals with reasons for what it must not. Structural assertions when the route matters (which rule fired, what term was emitted). | A refusal that only shows the tactic failed on a false goal: that is a `¬` theorem, or nothing. |
 | **the kernel** | Property and differential tests in Rust, citing the lemma. Later, theorems about the kernel model. | — |
@@ -388,8 +426,9 @@ In order of value per effort:
    importer.
 2. **The refusal helper and the bare-refusal warning list** (§4.4). Small.
    Then fix refusals file by file as they are touched.
-3. **The library tests**, one module at a time. Move examples and
-   restatements to examples modules, turn kind (a) refusals into `¬`
+3. **The library tests**, one module at a time. Move probes and
+   restatements to `lib/_tests`, promote any a client would cite into the
+   module, turn kind (a) refusals into `¬`
    theorems, drop kit lists and module-check tests. On the census, about 85
    computation and restatement tests, 13 kit tests, 25 module checks and most
    of the 94 bare refusals in the library area move into Heather or go. The
@@ -398,8 +437,9 @@ In order of value per effort:
 4. **`library_for`** (§4.2). Medium. It touches the image keys, so the
    sentinel's exact lane should see one run of it.
 5. **The `.hthr` corpus runner** (§4.3). Medium. Then migrate lazily.
-6. **`failing` blocks in the language.** A design question for Minus, after
-   the corpus shows how often the directive is used.
+6. **`failing … guards` blocks in the language**, living in `lib/_tests`
+   by convention (§4.3). Decide after the corpus shows how often the
+   directive is used, and whether a `guards` directive is enough.
 
 None of this cuts elaboration work much. The suite's time is the tests' own
 modules and the library prefix (#151 §1), and moving a program from a Rust
@@ -412,5 +452,5 @@ the library.
 
 - `issues/library-whole-check-gate.md`: §4.1, with `elf64_load`.
 - `issues/refusal-tests-pin-their-reason.md`: §3.6, §4.4.
-- `issues/library-tests-as-theorems.md`: §3.2–3.5, §4.5, step 3 of §6.
+- `issues/library-tests-as-theorems.md`: §3.2–3.5, §4.5 (`lib/_tests`), step 3 of §6.
 - `issues/hthr-test-corpus.md`: §3.3, §4.2, §4.3, the `failing` question.

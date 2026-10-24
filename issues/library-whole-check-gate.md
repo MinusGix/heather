@@ -24,9 +24,10 @@ nothing would notice if it stopped.
    (images replay warm; cold it is one library elaboration, which a fresh
    box's suite already pays more than once, `docs/testing-architecture-design.md` §1).
 2. A lint: every `lib/` module is imported by another module or named as a
-   root (an examples module, a showcase dependency). An orphan fails until
+   root (a `lib/_tests` module, a showcase dependency). An orphan fails until
    it says which.
-3. Decide `elf64_load`: delete it as burn residue, or give it an importer.
+3. A second lint: nothing outside `lib/_tests` imports a module in it.
+4. Decide `elf64_load`: delete it as burn residue, or give it an importer.
 
 With (1) in place, the "the X module checks" tests in
 `crates/elab/tests/lib_*.rs` are redundant
