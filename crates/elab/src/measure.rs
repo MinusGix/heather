@@ -2177,7 +2177,7 @@ fn pattern_expr(a: &Arm, span: Span) -> Option<Expr> {
 }
 
 /// Does `e` mention the free variable `v`? Over the forms `subst` walks.
-fn mentions(e: &Expr, v: &str) -> bool {
+pub(crate) fn mentions(e: &Expr, v: &str) -> bool {
     let mut found = false;
     crate::surface::walk_expr(e, &mut |x| {
         if matches!(&x.kind, ExprKind::Var(n) if n == v) {
@@ -2209,7 +2209,7 @@ pub(crate) fn mentions_context(e: &Expr, name: &str) -> bool {
     found
 }
 
-fn mentions_ty(t: &Ty, name: &str) -> bool {
+pub(crate) fn mentions_ty(t: &Ty, name: &str) -> bool {
     match &t.kind {
         TyKind::Named { name: n, args } => n == name || args.iter().any(|t| mentions_ty(t, name)),
         TyKind::OfExpr(e) | TyKind::Fin(e) => mentions_context(e, name),
@@ -2222,7 +2222,7 @@ fn mentions_ty(t: &Ty, name: &str) -> bool {
     }
 }
 
-fn pat_names(p: &Pat, out: &mut Vec<String>) {
+pub(crate) fn pat_names(p: &Pat, out: &mut Vec<String>) {
     match p {
         Pat::Var { name, .. } => out.push(name.clone()),
         Pat::Ctor { args, .. } => args.iter().for_each(|a| pat_names(a, out)),
@@ -2235,7 +2235,7 @@ fn pat_names(p: &Pat, out: &mut Vec<String>) {
 /// other way — an argument mentioning a name the measure binds — is not
 /// avoided; a measure is a small expression over the parameters, and a
 /// wrong substitution here yields an obligation the ih's domain refuses.
-fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) -> Expr {
+pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) -> Expr {
     let span = e.span;
     let go = |x: &Expr, bound: &mut Vec<String>| subst(x, map, bound);
     let kind = match &e.kind {

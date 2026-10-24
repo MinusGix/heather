@@ -548,11 +548,29 @@ impl Elaborator {
             )
             .is_err()
         {
+            // A mutual group's constructor at another member is a different
+            // type, not a different index (docs/mutual-inductive-design.md §3).
+            if !ind.members.is_empty()
+                && let Some(want) = self.iwf_member_at(cx, ind, &fam.idx, span)
+                && ind.member_of_ctor(i) != Some(want)
+            {
+                return err(
+                    format!(
+                        "`{}` is a constructor of `{}`, and a `{}` is expected here",
+                        ctor.name,
+                        Self::member_name_of(ind, i),
+                        ind.members[want].name
+                    ),
+                    span,
+                );
+            }
             return err(
                 format!(
                     "`{}` constructs `{}` at its written result index, which is not the \
-                     expected index",
-                    ctor.name, ind.name
+                     expected `{}`",
+                    ctor.name,
+                    self.display_type(cx, &fam.ty_at(target, 0)),
+                    self.display_type(cx, expected)
                 ),
                 span,
             );
@@ -690,6 +708,16 @@ impl Elaborator {
     /// Tier 1's motive, or `None` where inversion does not apply: the index
     /// or some constructor's output index is not constructor-headed, or `M`
     /// has no code to case into.
+    ///
+    /// Inversion is **per level** (docs/mutual-inductive-design.md §4): in
+    /// the branch at the scrutinee's index constructor, each argument of it
+    /// is, in turn, abstracted (a variable), inverted again by its own type's
+    /// eliminator (constructor-headed, and so is the argument at that
+    /// position of every constructor still possible there), or — open and
+    /// neither — abstracted where written, tier 2's move one level down. A
+    /// mutual group's `match` needs the second level whenever a member's own
+    /// index is constructor-headed (`Even(Succ(n))`), and a single family
+    /// gains the same depth.
     fn iwf_inverted_motive(
         &self,
         cx: &Cx,
@@ -705,9 +733,12 @@ impl Elaborator {
         let Some((j, args)) = self.index_head(cx, ity, &fam.idx, span) else {
             return Ok(None);
         };
-        // Every constructor's output index, at a generic payload.
+        // Every constructor's output index, at a generic payload, read to its
+        // head.
         let n = ind.ctors.len();
         let spine = self.spine(&fam.sig.shape, &fam.sig.level, n, span)?;
+        let mut outs: Vec<Cx> = Vec::with_capacity(n);
+        let mut live: Vec<(usize, Vec<Rc<Term>>)> = Vec::new();
         for k in 0..n {
             let mut pcx = cx.clone();
             pcx.push("#p".into(), (*spine.ctors[k].0).clone(), spine.ctors[k].1.clone());
@@ -716,12 +747,16 @@ impl Elaborator {
                 let _scope = self.use_inductive_scope(ind);
                 self.elab_check(&dcx, res_expr(ind, k), &fam.ity.shift_local(1), &fam.ilvl)?
             };
-            if self.index_head(&dcx, ity, &res, span).is_none() {
+            let Some((h, sub)) = self.index_head(&dcx, ity, &res, span) else {
                 return Ok(None);
+            };
+            if h == j {
+                live.push((k, sub));
             }
+            outs.push(dcx);
         }
-        // `Π(z : D(e)). M`, in Γ: what the branch at `e`'s constructor
-        // re-spells with the constructor's arguments abstracted.
+        // `Π(z : D(e)). M`, in Γ: what the innermost branch re-spells with
+        // the index's arguments abstracted.
         let fl = fam.lvl();
         let whole = Type::Pi {
             dom_level: fl.clone(),
@@ -730,46 +765,35 @@ impl Elaborator {
             cod: Rc::new(motive.clone()),
         };
         let code_lvl = Level::succ(mlvl.clone());
-        let missing_code = std::cell::Cell::new(false);
+        let inv = Inversion {
+            base: cx.names.len(),
+            whole: &whole,
+            outs: &outs,
+            fl: fl.clone(),
+            mlvl: mlvl.clone(),
+            code_lvl: code_lvl.clone(),
+            case_lvl: Level::max(fl.clone(), code_lvl.clone()),
+            missing_code: std::cell::Cell::new(false),
+            span,
+        };
         let body = |bcx: &Cx, k: usize, branch: &crate::indexed::IdxBranch, e: &Type| -> R<Term> {
-            let Type::Pi { dom, .. } = e else {
-                return err("internal: the inversion's motive is not a Π", span);
-            };
+            if k != j {
+                return inv.unit(e);
+            }
             let d = (bcx.names.len() - cx.names.len()) as u32;
-            let code = if k == j {
-                // Only a *variable* argument is abstracted: a closed one
-                // (the `0` of `V(1)`) would also be found inside the family's
-                // signature, whose case trees spell their own literals.
-                let pairs: Vec<(Term, Term)> = args
-                    .iter()
-                    .zip(&branch.pat)
-                    .filter(|(a, _)| matches!(&***a, Term::Var(_)))
-                    .map(|(a, (p, _, _))| (a.shift_local(d), p.shift_local(1)))
-                    .collect();
-                let here = whole.shift_local(d);
-                let here = match here.abstract_local_with_all(&pairs) {
-                    Some(t) => t.apply_local(&LocalSubst::id(&bcx.gamma).extended(Rc::new(Term::Zero))),
-                    None => here,
-                };
-                let Type::Pi { cod, .. } = here else {
-                    return err("internal: the inversion's branch is not a Π", span);
-                };
-                match crate::code::code_of(&cod) {
-                    Some(c) => c,
-                    None => {
-                        missing_code.set(true);
-                        Term::TmUnit { level: mlvl.clone() }
-                    }
-                }
-            } else {
-                Term::TmUnit { level: mlvl.clone() }
-            };
-            Ok(Term::Lam {
-                dom_level: fl.clone(),
-                cod_level: code_lvl.clone(),
-                dom: Rc::clone(dom),
-                body: Rc::new(code),
-            })
+            let items: Vec<InvItem> = args
+                .iter()
+                .zip(&branch.pat)
+                .enumerate()
+                .map(|(i, (a, (p, pty, _)))| InvItem {
+                    arg: Rc::new(a.shift_local(d)),
+                    pat: Rc::clone(p),
+                    ty: pty.clone(),
+                    subs: live.iter().map(|(c, sub)| (*c, Rc::clone(&sub[i]))).collect(),
+                    value: branch.value.clone(),
+                })
+                .collect();
+            self.inverted_level(bcx, &inv, e, items, Vec::new())
         };
         // The case's motive over (Γ, j, j'): `Π(z : D(j')). Ty mlvl`.
         let case_motive = Type::Pi {
@@ -784,12 +808,12 @@ impl Elaborator {
             &hcx,
             ity,
             case_motive,
-            &Level::max(fl.clone(), code_lvl.clone()),
+            &inv.case_lvl,
             Term::Var(LocalVar(0)),
             span,
             &body,
         )?;
-        if missing_code.get() {
+        if inv.missing_code.get() {
             return Ok(None);
         }
         Ok(Some(Type::El {
@@ -799,6 +823,128 @@ impl Elaborator {
                 arg: Rc::new(Term::Var(LocalVar(0))),
             }),
         }))
+    }
+
+    /// One level of [`Self::iwf_inverted_motive`]'s branch at the scrutinee's
+    /// index: `e` is the branch's expected `Π(z : D(…)). Ty`, `items` the
+    /// index-constructor arguments still to treat, `pairs` the abstractions
+    /// so far (argument, pattern), all scoped in `bcx`.
+    fn inverted_level(
+        &self,
+        bcx: &Cx,
+        inv: &Inversion,
+        e: &Type,
+        items: Vec<InvItem>,
+        mut pairs: Vec<(Term, Term)>,
+    ) -> R<Term> {
+        let span = inv.span;
+        let Some((item, rest)) = items.split_first() else {
+            return inv.leaf(bcx, e, &pairs);
+        };
+        let rest = rest.to_vec();
+        // A variable is abstracted: every arm sees its own index there.
+        if matches!(&*item.arg, Term::Var(_)) {
+            pairs.push(((*item.arg).clone(), (*item.pat).clone()));
+            return self.inverted_level(bcx, inv, e, rest, pairs);
+        }
+        // Constructor-headed, and so is every still-possible constructor's
+        // output at this position: invert again.
+        if let Some(nity) = self.index_ty_of(&item.ty)
+            && let Some((h, inner)) = self.index_head(bcx, &nity, &item.arg, span)
+            && let Some(heads) = item
+                .subs
+                .iter()
+                .map(|(c, sub)| {
+                    self.index_head(&inv.outs[*c], &nity, sub, span)
+                        .map(|(hc, args)| (*c, hc, args))
+                })
+                .collect::<Option<Vec<_>>>()
+            && let Some(motive) = rebuilt_goal(bcx, e, item.value.as_ref()).abstract_local(&item.pat)
+        {
+            let survivors: Vec<(usize, Vec<Rc<Term>>)> = heads
+                .into_iter()
+                .filter(|(_, hc, _)| *hc == h)
+                .map(|(c, _, args)| (c, args))
+                .collect();
+            let alive: Vec<usize> = survivors.iter().map(|(c, _)| *c).collect();
+            let nested = |ncx: &Cx, kk: usize, branch: &crate::indexed::IdxBranch, ne: &Type| -> R<Term> {
+                if kk != h {
+                    return inv.unit(ne);
+                }
+                let dd = (ncx.names.len() - bcx.names.len()) as u32;
+                let mut next: Vec<InvItem> = inner
+                    .iter()
+                    .zip(&branch.pat)
+                    .enumerate()
+                    .map(|(i, (a, (p, pty, _)))| InvItem {
+                        arg: Rc::new(a.shift_local(dd)),
+                        pat: Rc::clone(p),
+                        ty: pty.clone(),
+                        subs: survivors.iter().map(|(c, args)| (*c, Rc::clone(&args[i]))).collect(),
+                        value: branch.value.clone(),
+                    })
+                    .collect();
+                next.extend(rest.iter().map(|it| InvItem {
+                    arg: Rc::new(it.arg.shift_local(dd)),
+                    pat: Rc::new(it.pat.shift_local(dd)),
+                    ty: it.ty.shift_local(dd),
+                    subs: it.subs.iter().filter(|(c, _)| alive.contains(c)).cloned().collect(),
+                    value: it.value.as_ref().map(|(v, r)| {
+                        (Rc::new(v.shift_local(dd)), Rc::new(r.shift_local(dd)))
+                    }),
+                }));
+                let pairs = pairs
+                    .iter()
+                    .map(|(a, p)| (a.shift_local(dd), p.shift_local(dd)))
+                    .collect();
+                self.inverted_level(ncx, inv, ne, next, pairs)
+            };
+            return self.index_case(
+                bcx,
+                &nity,
+                motive,
+                &inv.case_lvl,
+                (*item.pat).clone(),
+                span,
+                &nested,
+            );
+        }
+        // Open and neither: abstracted where the motive writes it. A closed
+        // one is not — its literals also spell the signature.
+        if item.arg.shift_local(1) != *item.arg {
+            pairs.push(((*item.arg).clone(), (*item.pat).clone()));
+        }
+        self.inverted_level(bcx, inv, e, rest, pairs)
+    }
+
+    /// What an index argument of type `ty` is inverted by, if anything: `Nat`,
+    /// or a declared inductive that could itself be an index type.
+    fn index_ty_of(&self, ty: &Type) -> Option<crate::inductive::IdxTy> {
+        if matches!(ty, Type::Nat) {
+            return Some(crate::inductive::IdxTy::Nat);
+        }
+        let ind = self.tag_of(ty)?;
+        let usable = ind.params.is_empty()
+            && ind.valparams.is_empty()
+            && ind.index.is_none()
+            && ind.members.is_empty()
+            && !ind.codata
+            && !ind.infinitary()
+            && ind.ctors.iter().all(|c| c.container().is_none());
+        usable.then_some(crate::inductive::IdxTy::Decl(ind))
+    }
+
+    /// Which member of a mutual group's family an index selects
+    /// (docs/mutual-inductive-design.md §2), if its weak head says.
+    pub(crate) fn iwf_member_at(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        idx: &Term,
+        span: Span,
+    ) -> Option<usize> {
+        let ity = ind.index_ty.as_ref()?;
+        self.index_head(cx, ity, idx, span).map(|(k, _)| k)
     }
 
     /// The index constructor heading `t` and its arguments, if `t`'s weak
@@ -850,14 +996,36 @@ impl Elaborator {
     ) -> R<Term> {
         let inverted = how != IndexMotive::Plain;
         let n = ind.ctors.len();
+        // A mutual group's `match` is on one member, and only that member's
+        // constructors have arms (docs/mutual-inductive-design.md §4).
+        let member = if ind.members.is_empty() {
+            None
+        } else {
+            self.iwf_member_at(cx, ind, &fam.idx, span)
+        };
+        let shown = member.map_or(ind.name.as_str(), |m| ind.members[m].name.as_str());
         let mut ordered: Vec<Option<&Arm>> = vec![None; n];
         for a in arms {
             let Some(i) = crate::inductive::arm_ctor_index(ind, &a.ctor) else {
                 return err(
-                    format!("`{}` is not a constructor of `{}`", a.ctor, ind.name),
+                    format!("`{}` is not a constructor of `{shown}`", a.ctor),
                     a.span,
                 );
             };
+            if let Some(m) = member
+                && ind.member_of_ctor(i) != Some(m)
+            {
+                return err(
+                    format!(
+                        "`{}` is a constructor of `{}`, not of `{shown}`: a `{}` on a \
+                         `{shown}` has an arm for each of `{shown}`'s constructors",
+                        a.ctor,
+                        Self::member_name_of(ind, i),
+                        form.keyword()
+                    ),
+                    a.span,
+                );
+            }
             if ordered[i].replace(a).is_some() {
                 return err(format!("duplicate arm for `{}`", a.ctor), a.span);
             }
@@ -881,6 +1049,19 @@ impl Elaborator {
             .collect();
         // Under index inversion an arm may be left out; whether it could be
         // is decided per arm, by its goal (`Self::iwf_arm`).
+        if !missing.is_empty() && !inverted && member.is_some() {
+            // The other members' constructors are told apart only by the
+            // inverted motive, which cases into the result type's code.
+            return err(
+                format!(
+                    "this `{}` on a `{shown}` cannot set the rest of its mutual group \
+                     aside: that takes its result type as a code, and this one has none \
+                     (docs/mutual-inductive-design.md §4)",
+                    form.keyword()
+                ),
+                span,
+            );
+        }
         if !missing.is_empty() && !inverted {
             return err(
                 format!(
@@ -911,8 +1092,11 @@ impl Elaborator {
             }),
         };
         let dec = crate::recursion::descends_on_param(cx, &scrut);
-        let idx_param = match (&dec, &*fam.idx) {
-            (Some(_), Term::Var(LocalVar(i))) => {
+        // The index a recursion may vary: the family's own when it is a
+        // parameter, or a member's, under its member constructor
+        // (docs/mutual-inductive-design.md §5).
+        let param_at = |t: &Term| match t {
+            Term::Var(LocalVar(i)) => {
                 let pos = cx.names.len() - 1 - *i as usize;
                 cx.selfref
                     .as_ref()
@@ -920,6 +1104,18 @@ impl Elaborator {
                     .map(|_| pos)
             }
             _ => None,
+        };
+        let member_index = member.and_then(|_| {
+            let (_, args) = self.index_head(cx, ind.index_ty.as_ref()?, &fam.idx, span)?;
+            match args.as_slice() {
+                [arg] => Some(Rc::clone(arg)),
+                _ => None,
+            }
+        });
+        let (idx_param, rebind_inner) = match (&dec, &member_index) {
+            (Some(_), Some(arg)) => (param_at(arg), true),
+            (Some(_), None) => (param_at(&fam.idx), false),
+            _ => (None, false),
         };
         let env = ArmEnv {
             ind,
@@ -931,6 +1127,7 @@ impl Elaborator {
             mlvl: &mlvl,
             dec,
             idx_param,
+            rebind_inner,
             outer_guard: cx.guard.clone(),
             keyword: form.keyword(),
             span,
@@ -1109,6 +1306,15 @@ impl Elaborator {
                 spliced: None,
             }));
             children.push((Rc::new(child), Rc::new(ih), ih_ty, mlvl.clone()));
+            // Under a member constructor the varying index is the member's
+            // own, the constructor's one argument.
+            let at = if env.rebind_inner {
+                self.index_head(&acx, ind.index_ty.as_ref().expect("a member's family is indexed"), &at, span)
+                    .and_then(|(_, args)| args.first().map(|a| (**a).clone()))
+                    .unwrap_or(at)
+            } else {
+                at
+            };
             rebind.push(Rc::new(at));
             t += 1;
         }
@@ -1197,6 +1403,9 @@ struct ArmEnv<'a> {
     mlvl: &'a Level,
     dec: Option<usize>,
     idx_param: Option<usize>,
+    /// The varying index is the member constructor's argument, not the
+    /// family's index itself (docs/mutual-inductive-design.md §5).
+    rebind_inner: bool,
     outer_guard: Option<Rc<Guard>>,
     keyword: &'static str,
     span: Span,
@@ -1226,5 +1435,95 @@ impl ArmEnv<'_> {
                 .extended(Rc::new(m))
                 .extended(Rc::new(z)),
         )
+    }
+}
+
+/// The fixed part of one inverted motive ([`Elaborator::iwf_inverted_motive`]).
+struct Inversion<'a> {
+    /// `cx.names.len()` of the ambient context, Γ.
+    base: usize,
+    /// `Π(z : D(e)). M`, scoped in Γ.
+    whole: &'a Type,
+    /// Per family constructor: the context its generic output index is
+    /// scoped in.
+    outs: &'a [Cx],
+    fl: Level,
+    mlvl: Level,
+    code_lvl: Level,
+    /// The level of a case's motive, `Π(z : D(…)). Ty mlvl`.
+    case_lvl: Level,
+    missing_code: std::cell::Cell<bool>,
+    span: Span,
+}
+
+impl Inversion<'_> {
+    /// `λ(z : D(…)). code`, at the branch's expected `Π`.
+    fn lam(&self, e: &Type, code: Term) -> R<Term> {
+        let Type::Pi { dom, .. } = e else {
+            return err("internal: the inversion's motive is not a Π", self.span);
+        };
+        Ok(Term::Lam {
+            dom_level: self.fl.clone(),
+            cod_level: self.code_lvl.clone(),
+            dom: Rc::clone(dom),
+            body: Rc::new(code),
+        })
+    }
+
+    /// A branch no constructor reaches: `Unit`.
+    fn unit(&self, e: &Type) -> R<Term> {
+        self.lam(e, Term::TmUnit { level: self.mlvl.clone() })
+    }
+
+    /// The innermost branch: `M` with every abstraction made, as a code.
+    fn leaf(&self, bcx: &Cx, e: &Type, pairs: &[(Term, Term)]) -> R<Term> {
+        let d = (bcx.names.len() - self.base) as u32;
+        let here = self.whole.shift_local(d);
+        let shifted: Vec<(Term, Term)> =
+            pairs.iter().map(|(a, p)| (a.clone(), p.shift_local(1))).collect();
+        let here = match here.abstract_local_with_all(&shifted) {
+            Some(t) => t.apply_local(&LocalSubst::id(&bcx.gamma).extended(Rc::new(Term::Zero))),
+            None => here,
+        };
+        let Type::Pi { cod, .. } = here else {
+            return err("internal: the inversion's branch is not a Π", self.span);
+        };
+        let code = match crate::code::code_of(&cod) {
+            Some(c) => c,
+            None => {
+                self.missing_code.set(true);
+                Term::TmUnit { level: self.mlvl.clone() }
+            }
+        };
+        self.lam(e, code)
+    }
+}
+
+/// One index-constructor argument still to treat at a level of the inverted
+/// motive: the scrutinee's argument and the branch's pattern for it (both in
+/// the branch's context), the pattern's type, and each still-possible
+/// constructor's output at this position (in that constructor's context).
+#[derive(Clone)]
+struct InvItem {
+    arg: Rc<Term>,
+    pat: Rc<Term>,
+    ty: Type,
+    subs: Vec<(usize, Rc<Term>)>,
+    /// The branch's payload value and its rebuilt spelling
+    /// ([`crate::indexed::IdxBranch::value`]), for a pattern projected out
+    /// of one.
+    value: Option<(Rc<Term>, Rc<Term>)>,
+}
+
+/// The branch's goal with its payload value spelled by its projections, so
+/// that a pattern projected out of it occurs in the goal and can be
+/// abstracted. Equal to `e` by η; unchanged where the pattern is a binder.
+fn rebuilt_goal(cx: &Cx, e: &Type, value: Option<&(Rc<Term>, Rc<Term>)>) -> Type {
+    let Some((v, r)) = value else {
+        return e.clone();
+    };
+    match e.abstract_local_with(v, &r.shift_local(1)) {
+        Some(t) => t.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero))),
+        None => e.clone(),
     }
 }

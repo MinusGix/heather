@@ -137,6 +137,33 @@ pub(crate) struct Inductive {
     /// other declaration. Kept apart from [`Self::index`], which routes an
     /// *inductive* family onto route 1 or 2b and which codata never takes.
     pub co_index: Vec<(String, Ty)>,
+    /// A **mutual group**'s family (docs/mutual-inductive-design.md §2): the
+    /// members it is the union of, in declaration order. Member `k` is the
+    /// view at index constructor `k` of the family's index type, the group's
+    /// generated `D#member`. Empty for every other declaration.
+    pub members: Vec<Member>,
+}
+
+/// One member of a mutual group (docs/mutual-inductive-design.md §2): a
+/// surface type that is a view of the group's family at the member's index
+/// constructor. It has no lowering of its own and no nominal tag; the index
+/// constructor, which belongs to the group's index type alone, is what
+/// identifies it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Member {
+    pub name: String,
+    /// The member's own index binder (`Tm : (n: Nat) -> Type`), for an
+    /// indexed member. Its type is the index constructor's one field.
+    pub index: Option<String>,
+    /// The family's constructors that are this member's, in written order.
+    pub ctors: Vec<usize>,
+}
+
+impl Inductive {
+    /// The member constructor `k` belongs to, for a group's family.
+    pub fn member_of_ctor(&self, k: usize) -> Option<usize> {
+        self.members.iter().position(|m| m.ctors.contains(&k))
+    }
 }
 
 /// The type an indexed declaration is indexed **by**
@@ -815,6 +842,17 @@ impl Elaborator {
     /// and assign its nominal tag. Nothing is emitted here — an inductive has
     /// no kernel counterpart of its own; it is lowered at each use (§2).
     pub(crate) fn elab_inductive(&mut self, d: &InductiveDecl) -> R<()> {
+        self.elab_inductive_members(d, Vec::new())
+    }
+
+    /// [`Self::elab_inductive`] for a mutual group's family, which carries
+    /// its members (docs/mutual-inductive-design.md §2). Empty `members` is
+    /// an ordinary declaration.
+    pub(crate) fn elab_inductive_members(
+        &mut self,
+        d: &InductiveDecl,
+        members: Vec<Member>,
+    ) -> R<()> {
         if self.own_declares(&d.name, &[NameKind::Inductive, NameKind::Global]) {
             return err(format!("duplicate name `{}`", d.name), d.span);
         }
@@ -1243,6 +1281,7 @@ impl Elaborator {
             index_ty,
             skel,
             co_index,
+            members,
         });
         // A tier-2 declaration's lowering can fail on what the declaration
         // *says* — a function domain with no code, domains at two levels
@@ -1317,7 +1356,7 @@ impl Elaborator {
     /// not a policy — a parameterized index would need its arguments at every
     /// use, an indexed index would need a two-level family, and a
     /// single-constructor index has one closed value and so indexes nothing.
-    fn index_type(&self, dom: &Ty, name: &str) -> R<IdxTy> {
+    pub(crate) fn index_type(&self, dom: &Ty, name: &str) -> R<IdxTy> {
         if matches!(dom.kind, TyKind::Nat) {
             return Ok(IdxTy::Nat);
         }
@@ -1457,6 +1496,14 @@ impl Elaborator {
                     .to_string(),
                 span,
             );
+        }
+        // A mutual group's member is a view of its family
+        // (docs/mutual-inductive-design.md §2); an indexed one is written
+        // applied, and reaches `try_indexed_ty` instead.
+        if self.lookup_inductive(name).is_none()
+            && let Some((fam, k)) = self.lookup_member(name)
+        {
+            return self.lower_member(cx, &fam, k, args, None, span);
         }
         let Some(ind) = self.lookup_inductive(name) else {
             if name == "True" && args.is_empty() {
@@ -4755,6 +4802,7 @@ fn shape_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) -> In
         index_ty: None,
         skel: None,
         co_index: Vec::new(),
+        members: Vec::new(),
     }
 }
 
@@ -5029,7 +5077,7 @@ fn is_pos_search(f: &heather_syntax::FieldDecl) -> bool {
     matches!(f.default.as_deref(), Some(Expr { kind: ExprKind::Var(v), .. }) if v == heather_syntax::POS_SEARCH)
 }
 
-fn occurs(t: &Ty, name: &str) -> Option<Span> {
+pub(crate) fn occurs(t: &Ty, name: &str) -> Option<Span> {
     match &t.kind {
         TyKind::Nat | TyKind::Univ { .. } => None,
         // A decoded expression (`m.carrier`). Scanned by *name*, conservatively:

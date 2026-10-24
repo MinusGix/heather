@@ -5,6 +5,9 @@
 //! (docs/elab-test-families-design.md).
 
 
+#[path = "../support/mod.rs"]
+mod support;
+
 #[path = "../indexed_declared_families.rs"]
 mod indexed_declared_families;
 #[path = "../indexed_declared_index.rs"]
@@ -31,3 +34,5 @@ mod container_fields;
 mod container_proofs;
 #[path = "../container_recursion.rs"]
 mod container_recursion;
+#[path = "../mutual_inductive.rs"]
+mod mutual_inductive;

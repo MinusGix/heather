@@ -23,6 +23,9 @@ struct TypeLayer {
     by_tag: HashMap<u32, Rc<Inductive>>,
     iwf_by_shape: HashMap<u32, Rc<Inductive>>,
     constructors: HashMap<String, (Rc<Inductive>, usize)>,
+    /// A mutual group's members (docs/mutual-inductive-design.md §2): each
+    /// member's qualified name to its family and its position there.
+    members: HashMap<String, (Rc<Inductive>, usize)>,
     record_fields: HashSet<String>,
 }
 
@@ -50,6 +53,7 @@ impl Types {
             && self.current.by_tag.is_empty()
             && self.current.iwf_by_shape.is_empty()
             && self.current.constructors.is_empty()
+            && self.current.members.is_empty()
             && self.current.record_fields.is_empty();
         if empty {
             return;
@@ -81,6 +85,12 @@ impl Types {
 
     pub(crate) fn constructor(&self, key: &str) -> Option<&(Rc<Inductive>, usize)> {
         self.layers().find_map(|layer| layer.constructors.get(key))
+    }
+
+    /// A mutual group's member: its family and its position among the
+    /// family's members.
+    pub(crate) fn member(&self, key: &str) -> Option<&(Rc<Inductive>, usize)> {
+        self.layers().find_map(|layer| layer.members.get(key))
     }
 
     pub(crate) fn has_record_field(&self, name: &str) -> bool {
@@ -125,6 +135,10 @@ impl Types {
         for (index, ctor) in ind.ctors.iter().enumerate() {
             layer.constructors
                 .insert(qkey(module, &ctor.name), (Rc::clone(&ind), index));
+        }
+        for (index, member) in ind.members.iter().enumerate() {
+            layer.members
+                .insert(qkey(module, &member.name), (Rc::clone(&ind), index));
         }
         if ind.is_record {
             for (name, _) in &ind.ctors[0].fields {
