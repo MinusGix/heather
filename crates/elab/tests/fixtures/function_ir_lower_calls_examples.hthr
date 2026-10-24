@@ -65,7 +65,7 @@ fn pair_program() → Prog {
         .put(Block([])).put(Block([frame_free()])).put(Ret)
 }
 
-theorem pair_lowers(): lower_program(pair(), [Rax, Rax]) = Some(pair_program()) { refl }
+theorem pair_lowers(): lower_program(pair(), [Into(Rax), Into(Rax)]) = Some(pair_program()) { refl }
 
 // add_double's code starts where double's ends.
 theorem add_double_at(): asm_labels(pair_program())(2) = 15 { refl }
@@ -74,7 +74,7 @@ theorem add_double_at(): asm_labels(pair_program())(2) = 15 { refl }
 theorem pair_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
     Site<M>(fetch, data, pair_program(), last, origin).Calls(stack, program_callees(pair()), 2) {
-    lower_program_correct<M>(pair(), [Rax, Rax], pair_program(), pair_lowers(), fetch, data, last, origin, stack)
+    lower_program_correct<M>(pair(), [Into(Rax), Into(Rax)], pair_program(), pair_lowers(), fetch, data, last, origin, stack)
 }
 
 // add_double's, at its offset: called with `a` and `b` in RDI and RSI on
@@ -115,12 +115,12 @@ fn three_program() → Prog {
         .put(Block([])).put(Block([frame_free()])).put(Ret)
 }
 
-theorem three_lowers(): lower_program(three(), [Rax, Rax, Rax, Rax]) = Some(three_program()) { refl }
+theorem three_lowers(): lower_program(three(), [Into(Rax), Into(Rax), Into(Rax), Into(Rax)]) = Some(three_program()) { refl }
 
 theorem three_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data)):
     Site<M>(fetch, data, three_program(), last, origin).Calls(stack, program_callees(three()), 3) {
-    lower_program_correct<M>(three(), [Rax, Rax, Rax, Rax], three_program(), three_lowers(), fetch, data, last, origin, stack)
+    lower_program_correct<M>(three(), [Into(Rax), Into(Rax), Into(Rax), Into(Rax)], three_program(), three_lowers(), fetch, data, last, origin, stack)
 }
 
 // sum_double(a, b) = (a + b) + double(a), function 1: the sum lives across
@@ -137,14 +137,14 @@ fn sum_double() → Function {
         result := 4)
 }
 
-theorem sum_kept_in_rcx(): lower_program([sum_double(), double()], [Rax, Rcx, Rax]).is_some() = True { refl }
-theorem sum_lost_in_rax(): lower_program([sum_double(), double()], [Rax, Rax, Rax]) = None { refl }
+theorem sum_kept_in_rcx(): lower_program([sum_double(), double()], [Into(Rax), Into(Rcx), Into(Rax)]).is_some() = True { refl }
+theorem sum_lost_in_rax(): lower_program([sum_double(), double()], [Into(Rax), Into(Rax), Into(Rax)]) = None { refl }
 
 // A function may call only those before it: no recursion, no forward call.
 fn calls_itself() → Function { Function(parameters := [0], body := Call(0, [0], 1), result := 1) }
 theorem recursion_refused(): lower_program([calls_itself()], []) = None { refl }
-theorem forward_call_refused(): lower_program([double(), calls_itself()], [Rax]) = None { refl }
+theorem forward_call_refused(): lower_program([double(), calls_itself()], [Into(Rax)]) = None { refl }
 
 // Seven arguments do not fit the six registers.
 fn wide() → Function { Function(parameters := [0], body := Call(0, [0, 0, 0, 0, 0, 0, 0], 1), result := 1) }
-theorem seven_arguments_refused(): lower_program([wide(), double()], [Rax]) = None { refl }
+theorem seven_arguments_refused(): lower_program([wide(), double()], [Into(Rax)]) = None { refl }

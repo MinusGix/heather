@@ -31,7 +31,7 @@ import option;
 // its frame's room on the stack, the code returns `answer` in RAX, keeps
 // the callee-saved registers and the stack above its return address,
 // whenever the program evaluates `f` at those arguments to `answer`.
-theorem compiled_returns<M>(functions: List<Function>, placement: List<Gpr>, program: Prog,
+theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, program: Prog,
     lowered: lower_program(functions, placement) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,

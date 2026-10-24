@@ -304,7 +304,9 @@ costs a refusal, never a wrong program.
      certificate.
 
    Left for later:
-   - The selection rules: [[function-ir-verified-selection-rules]].
+   - The selection rules: [[function-ir-verified-selection-rules]] (done
+     2026-10-24; placement entries are `Place`, and the file knows constants
+     and comparisons).
    - `lowers` is one declaration over the whole program's lowering;
      larger programs need it per function
      ([[function-ir-verified-compile-cost]]).
