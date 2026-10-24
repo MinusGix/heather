@@ -90,17 +90,15 @@ fn main() -> ExitCode {
         },
         Some((cmd, rest)) if cmd == "fmt" => fmt::run(rest),
         Some((cmd, rest)) if cmd == "compile-x86" => native::run(rest),
-        Some((cmd, rest)) if cmd == "build-x86" => native::build(rest),
         _ => usage(),
     }
 }
 
-const USAGE: &str = "usage: heather build-x86 <file.hthr> <function> --arg <u64> --arg <u64> -o <executable> [--callee <function> [--callable-caller]] [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
-                     usage: heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
-                     usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
-                     \x20      heather fmt [--check] <file-or-dir>...";
+                     \x20      heather fmt [--check] <file-or-dir>...\n\
+                     \x20      heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -223,7 +221,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             opts.only.get_or_insert_with(Vec::new).extend(names);
             continue;
         }
-        // `--item-timings` is the spelling `build-x86`/`compile-x86` grew
+        // `--item-timings` is the spelling the native commands grew
         // first; it is the same flag and writes the same table.
         if let Some(rest) = a.strip_prefix("--timings").or_else(|| a.strip_prefix("--item-timings"))
         {

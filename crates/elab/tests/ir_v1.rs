@@ -1,83 +1,35 @@
-//! `lib/certgen/ir_v1.hthr` — FunctionIR v1, `simulate`, and the fuel interface —
-//! under `scripts/test`.
+//! FunctionIR v1, `simulate`, and the fuel interface, kept as a **frozen
+//! corpus** (`crates/elab/tests/fixtures/ir_v1.hthr`). The library file
+//! `lib/certgen/ir_v1.hthr` was the source IR of the per-function certificate
+//! path, which burn B2 retired (docs/native-program-logic-design.md §3.2); the
+//! verified compiler's source is `function_ir_source` instead. The copy stays
+//! because it is still the elaborator's heaviest single file of deep proofs
+//! over `nat` alone (`step_mono`'s explicit motives, the ∃-composition kit's
+//! double-`j` lemmas), the frontend bench's heavy case
+//! (`crates/elab/benches/frontend/fixtures/corpus.rs`), and the corpus the
+//! emission walker's residue is recorded against
+//! (`issues/emission-walker-residual-sites.md`). Frozen means nothing here is
+//! edited to follow the library: a change that breaks it is a change to the
+//! elaborator, which is the point.
 //!
-//! The library file is the deliverable of docs/ir-simulate-design.md §11
-//! items 1–4 and 6. The release check went 107s → 13.6s (closed subtrees) →
-//! ~2.4s (definitions, issues/simulate-conversion-cost.md) → **1.25s** (the
-//! value domain, issues/nbe-conversion-round.md) → **27s** once the fuel
-//! interface landed: `step_mono`'s IH-generalizing motive is ~18s of that on
-//! its own, which is the measured cost of the manual explicit-motive route
-//! (issues/ih-generalization.md) → **34s** with the ∃-form of the fuel
-//! interface (`Converges`, `BindInv`, issues/surface-existential.md).
-//!
-//! That last step is worth reading as two numbers, not one. The `BindInv`
-//! inversion record **retired three of `step_mono`'s four convoy motives**, and
-//! against the same file with the convoys restored that is **38.5s → 33.7s,
-//! −12.6%**. The net +6.2s is the *added surface* — two records and nine
-//! theorems, `Converges`/`refines` in ∃-form and the certificate exported
-//! through them — and not the rewrite.
-//!
-//! The split is kept, and now earns its keep twice over: the declarations are
-//! ~1.1s of the 34s, so the first test is a fast gate on everything that is
-//! *not* a proof, and the second is the whole acceptance.
-//!
-//! Then **~194s** once `Refines` became a *name* rather than a statement shape
-//! spelled out six times (`docs/types-as-expressions.md`,
-//! `issues/type-definitions.md`): release 35.96s → 32.90s, −8.5%. Naming a
-//! shape is a saving, not a cost — the statement is elaborated once, and
-//! conversion compares a δ-stuck head instead of what it unfolds to.
-//!
-//! Then **~203s** with `Compile` v1 (docs/compile-typeclass-design.md):
-//! `CompileNat2`, the milestone `add_instance`, the second instance through
-//! the loop body, and two coupling controls — +5s debug, +0.35s release
-//! (34.1s), all of it repackaging landed theorems.
-//!
-//! Then **~56s** with the cross-IR refinement round
-//! (`issues/cross-ir-refinement.md`): a recursive-`Apply` `add`, its
-//! env-independent invariant, `eval_functional`, and `RefinesNat2` between the
-//! two structurally unrelated IRs — release 32.9s → 40.4s. The added time is
-//! new surface (one more fuel-indexed induction and three concrete fixtures),
-//! not a slowdown of anything landed.
-//!
-//! Then release **51s → 70s** with the ∃-COMPOSITION KIT (certifying-
-//! generator v2, docs/certifying-generator-design.md §8 item 1): `k_ret`
-//! plus `ret_conv`/`letcon_conv`/`letcall_conv`/`letmatch_conv` after
-//! `conv_functional`. Nearly all of the +19s is the two double-`j` lemmas
-//! (~9s each) — the same term-size price `step_mono` pays, two interpreters
-//! in scope under a rewritten scrutinee. Measured worth it: the kit is
-//! proved once and every *generated* certificate is a cheap fold over it
-//! (`crates/elab/tests/certgen.rs`).
-//!
-//! BUDGET. The full-library test alone is **120 CPU-seconds** (measured
-//! 2026-08-05, dev profile with the overrides; the release CLI check of the
-//! same closure is 80.6s) against `scripts/test`'s 300-second `ulimit -t` —
-//! up from ~75s on 2026-08-02, growth tracking the library and the std
-//! modules, not a regression (issues/suite-wall-time-two-tests.md: the
-//! "~15 min" recorded there was a loaded-machine wall-clock artifact).
-//! `scripts/test --fast` skips this test by name for the inner loop; a
-//! round's final verification runs it. It was ~203s (after 9.2s, 165s, 194s) until 2026-08-01, when the
-//! workspace `[profile.dev.package.*]` overrides landed: the kernel/elab/
-//! syntax crates now build at `opt-level = 3` even for dev test runs
-//! (debug-assertions stay on), which bought back the ~6x a debug-built
-//! kernel was paying on this file's conversion work. The old discipline
-//! still applies at the new scale — weigh any theorem whose motive forces a
-//! case tree over `Ir`, and if the file grows another `step_mono` the answer
-//! is to make the elaborator compute generalized motives
-//! (`issues/ih-generalization.md`) rather than to raise the limit — but a
-//! second full-library elaboration now fits again if a round truly needs
-//! one.
+//! BUDGET. The full-library test is the suite's heaviest elaboration;
+//! `scripts/test --fast` skips it by name and a round's final verification
+//! runs it. If it outgrows the rail the answer is to make the elaborator
+//! compute generalized motives (`issues/ih-generalization.md`), not to raise
+//! the limit.
 //!
 //! - the first elaborates every DECLARATION (datatypes, helpers, the
 //!   interpreter, the continuation helpers, the add programs) and runs the
 //!   negative controls the file cannot state about itself — a wrong simulate
 //!   claim, a false `<=` witness under `fuel_monotone`, and a wrong-result
 //!   `equiv` — at the cheapest possible depth;
-//! - the second is the full acceptance, the file's own theorems.
+//! - the second is the full acceptance, the file's own theorems, with the
+//!   emission walk on.
 
 use heather_elab::Elaborator;
 
-const LIB: &str = include_str!("../../../lib/certgen/ir_v1.hthr");
-/// `lib/certgen/ir_v1.hthr`'s one import: the Nat kit it used to declare itself
+const LIB: &str = include_str!("fixtures/ir_v1.hthr");
+/// The corpus's one import: the Nat kit it used to declare itself
 /// (docs/modules-design.md §7). The test elaborates the **closure**, in the
 /// order the CLI's loader would — dependencies first — into one accumulator.
 const NAT: &str = include_str!("../../../lib/std/num/nat.hthr");
@@ -341,11 +293,9 @@ fn the_full_ir_library_checks() {
 
     // The route-1 spike's item (c), against the REAL kit
     // (issues/in-language-certificate-emission.md; the memo is
-    // docs/certgen-emission-route1-spike.md). It rides here rather than in
-    // crates/elab/tests/certgen_route1_spike.rs for this test's own stated
-    // reason: a suite of its own would re-elaborate the whole library, and two
-    // full elaborations do not fit the 300-second rail. The miniature version
-    // lives in that file; this is the sentence itself.
+    // docs/certgen-emission-route1-spike.md). It rides here because a suite
+    // of its own would re-elaborate the whole corpus: a staged meta fn whose
+    // `code` block cites the kit's own `ret_conv`.
     //
     // What it pins: a `Converges` statement over Ψ-resident *globals* is a
     // legal code-type index (ch. 04 CAPP — a contextual type may mention

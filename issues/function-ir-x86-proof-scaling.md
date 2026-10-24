@@ -1,10 +1,10 @@
 ---
 title: Make generated FunctionIR x86 refinement scale past small DAGs
-status: open
+status: closed
 labels: [compiler,function-ir,x86,proofs,performance]
 area: heather-in-heather
 created: 2026-09-01
-updated: 2026-09-23
+updated: 2026-10-24
 ---
 
 The binary-ALU expansion probed the generated x86 refinement at 20 FunctionIR
@@ -154,3 +154,4 @@ fixture when diagnosing this path.
 - 2026-09-13: 2026-09-13 attribution after the type-code quote fix (release, --features value-metrics, W=1, reused_callee --callee leaf, fresh furnace instance, cold library so wall 102 s is not comparable): certificate item total 38.16 s, kernel_gate 27.82 s, 16.07 M steps, 237,888 misses (identical). The table is flat now: no family above 5 s. Kernel by family: byte (the per-instruction fetch chains, 36 items) 4.09, byte_page 2.18, byte_wrap 2.04, successor 1.81, stack_allowed 1.57, step 1.20, store_offset 0.90, store_equal 0.87, byte_present 0.72, write_literal 0.62, read_literal 0.58, read_address 0.52, leaf_source_artifact 0.47, file_correct 0.34, dead_frame_byte 0.23. The closed-refl families (byte_page, byte_wrap, stack_allowed, store_offset, write_literal, read_address, file_correct, dead_frame_byte) sum to 8.4 s = 30% of the gate at 13–44 ms per item and 9–34 k steps each, near-zero misses: K1's shape ([[kernel-native-bitvector-values]]), the largest coherent constituent. File walks are gone from the contract route (read_literal 4.55 → 0.58 s); only dead_frame_byte and file_correct remain ([[call-memory-read-file-walk]]). Link evaluation (store_equal, read_literal) is under 1.5 s together. The sidecar's top-3 listing cannot split the run-wide Id/Id bucket (13.05 s) by module; the per-item TSV columns did the attribution instead. Next after K1's shape: the byte fetch chains (0.26 s per 8-byte instruction, 167 k steps and 89 k shortcut hits each, misses cheap at 0.03 s).
 - 2026-09-13: 2026-09-13 checkpoint (is the perf detour over?): the 20-node rail does NOT pass — OutOfFuel at 20/50/100 nodes since 9ae0855 (2026-09-10), bisected; filed as [[x86-scaling-rail-out-of-fuel]]. Under lifted budgets it passes in 22 s (dev) with the artifact item at 3.94 s / 1.06 M steps, 89× its five-node steps. Fresh reused_callee table on 71f4797 (release, cold, W=1): item total 92.4 s, gate 64.1 s, 46.6 M steps, 361,641 misses; top rows call_run_checked 23.4 s ([[call-run-checked-theorem-cost]]), byte 4.0 s, call_trace_append 2.9 s, successor 1.8 s; the closed-refl families are 0.4–0.5 s each after K1. The rail regression is the next target ahead of the byte fetch chains.
 - 2026-09-23: 2026-09-23 corpus view of this workload after K1/K2/app@ (reused_callee joined perf/snapshots): the certificate is now a flat per-declaration constant, half of it the frontend — [[x86-certificate-per-declaration-constant]]; the library's two heaviest items are [[x86-block-linked-conditional-evaluation-cost]].
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

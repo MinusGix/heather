@@ -1,31 +1,78 @@
 //! Whole programs through `compile-x86`'s verified lowering: a function and
 //! the functions it calls, compiled by `lower_program` and certified by
-//! `compiled_returns`, linked against C references and run.
+//! `compiled_returns`, linked against C references and run. The call
+//! examples the per-function path built as executables before burn B2 are
+//! here too (docs/native-program-logic-design.md §3.2).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::process::Command;
 
-#[test]
-fn programs_with_calls_execute() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = root.join(format!("target/native-program-{}-{nonce}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    // Three levels, a call in each arm of a branch, arguments swapped; and
-    // values live across two calls of a two-argument leaf.
-    let cases = [
-        ("program", "program", r#"
+type Case = (&'static str, &'static str, &'static str);
+
+// Three levels, a call in each arm of a branch, arguments swapped; values
+// live across two calls of a two-argument leaf; one call.
+const LEVELS: [Case; 3] = [
+    ("program", "program", r#"
 static uint64_t twist(uint64_t a, uint64_t b) { return (a - b) ^ b; }
 static uint64_t middle(uint64_t a, uint64_t b) { return a < b ? twist(a, b) + a : twist(b, a); }
 static uint64_t reference(uint64_t a, uint64_t b) { uint64_t m = middle(b, a); return middle(m, a + b) | twist(a, m); }
 "#),
-        ("sharing", "caller", r#"
+    ("sharing", "caller", r#"
 static uint64_t reference(uint64_t left, uint64_t right) {
     uint64_t saved = left | right, first = right - left, second = left - right, shared = first + saved;
     return (shared + shared) + (first + (first + second));
 }
 "#),
-    ];
-    for (file, symbol, reference) in cases {
+    ("calls", "caller", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { return (a + b) ^ UINT64_C(0x0123456789abcdef); }
+"#),
+];
+// A call's result as the next call's argument, and leaves that write
+// several registers.
+const COMPOSED: [Case; 3] = [
+    ("composition", "caller", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { uint64_t first = b - a; return (a | b) ^ (first + b - 3); }
+"#),
+    ("multi_register", "caller", r#"
+static uint64_t leaf(uint64_t a, uint64_t b) { return (a + b) ^ (a - b); }
+static uint64_t reference(uint64_t a, uint64_t b) { uint64_t first = leaf(b, a); return (a | b) ^ leaf(first + b, 3); }
+"#),
+    ("reused_callee", "caller", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { return (a + b + b) ^ (a ^ b); }
+"#),
+];
+// Values live across calls, saved by the caller.
+const SAVED: [Case; 3] = [
+    ("multi_stack_save", "caller", r#"
+static uint64_t leaf(uint64_t a, uint64_t b) { return (a ^ b) | ((a & b) ^ (a | b)); }
+static uint64_t reference(uint64_t a, uint64_t b) { return (a | b) - ((a & b) + ((a - b) ^ leaf(a + b, a))); }
+"#),
+    ("stack_local", "caller", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { return (a + b) ^ (a ^ b); }
+"#),
+    ("stack_save", "caller", r#"
+static uint64_t leaf(uint64_t a, uint64_t b) { return (a + b) ^ (a - b); }
+static uint64_t reference(uint64_t a, uint64_t b) {
+    uint64_t first = leaf(a + b, a), updated = (a | b) ^ first;
+    return updated - ((a & b) + ((a - b) ^ leaf(first, b)));
+}
+"#),
+];
+
+#[test]
+fn programs_with_calls_execute_levels() { execute("levels", &LEVELS); }
+
+#[test]
+fn programs_with_calls_execute_composed() { execute("composed", &COMPOSED); }
+
+#[test]
+fn programs_with_calls_execute_saved() { execute("saved", &SAVED); }
+
+fn execute(group: &str, cases: &[Case]) {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-program-{group}-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for &(file, symbol, reference) in cases {
         let assembly = dir.join(format!("{file}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .args(["compile-x86", &format!("examples/x86-native/{file}.hthr"), symbol, "-o"]).arg(&assembly)

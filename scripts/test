@@ -81,35 +81,15 @@ if [[ "${1:-}" == --fast ]]; then
   # By exact test-fn name; `cargo test -- --skip` applies the filter in
   # every test binary, where these names are unique. If the caller already
   # passed a `--`, don't add a second one.
-  SKIP=(--skip the_full_ir_library_checks --skip emissions_check_and_controls
-        --skip slow_acceptance_
-        --skip nonnat_emissions_and_controls
-        --skip tier1_emissions_and_declines
-        --skip a_perturbed_tier1_ih_value_is_refused_by_the_kernel
-        --skip t0param_emissions_and_declines
-        --skip a_perturbed_t0_dispatch_slot_is_refused_by_the_kernel
-        --skip a_perturbed_transcriber_is_refused_by_the_kernel
-        --skip a_perturbed_signature_checker_is_a_loud_disagreement
-        --skip a_perturbed_fold_is_refused_by_the_kernel
-        --skip a_perturbed_field_merge_is_refused_by_the_kernel
-        # The native x86 certificate gates (crates/cli/tests/native*.rs and
-        # the four certificate-bearing unit tests in crates/cli/src/native):
-        # each spawns a whole `build-x86` and kernel-checks the generated
-        # certificate, ~150-300 CPU-s apiece and ~1200 CPU-s together
-        # (2026-09-09), which an elaborator or kernel edit's inner loop
+  SKIP=(--skip the_full_ir_library_checks --skip slow_acceptance_
+        # The native x86 certificate gates (crates/cli/tests/native*.rs):
+        # each spawns a whole `compile-x86` and kernel-checks the generated
+        # certificate, which an elaborator or kernel edit's inner loop
         # cannot iterate on. Acceptance-class; the full lane runs them.
         --skip source_nested_conditionals_execute
         --skip a_call_of_a_deciding_function_is_refused
         --skip programs_with_calls_execute
-        --skip source_to_native_binary
-        --skip source_to_standalone_elf_without_a_toolchain
-        --skip nested_calls_return_the_source_result
-        --skip caller_reloads_its_live_stack_local
-        --skip two_placed_calls_share_one_summary
-        --skip native_encoder_is_checked_and_corruption_is_rejected
-        --skip loaded_mapping_and_fetch_refusals
-        --skip elf_header_mutations_are_rejected_by_heather
-        --skip call_stack_semantics_and_refusals)
+        --skip source_to_native_binary)
 elif [[ "${1:-}" == --pr ]]; then
   shift
   TEST_LANE=pr
@@ -211,7 +191,7 @@ native_warmup() {
   # Native certificates use a separate SemanticSession cache. Populate its
   # exact-build prefix before a child spends its budget on the generated
   # certificate; replay still kernel-checks every cached declaration.
-  native_bin_warmup native_encoder_is_checked_and_corruption_is_rejected
+  native_bin_warmup the_bundled_library_checks
 }
 
 if (( $# == 0 )); then

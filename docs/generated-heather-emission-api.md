@@ -1,5 +1,10 @@
 # Generated Heather construction API
 
+> **Partly burned in B2 (2026-10-24).** The declaration, block and module builders served the
+> per-function certificate generators and were deleted with them
+> (`docs/native-program-logic-design.md` §3.2). `heather_emit::Expr` stays, for the
+> relational-context reports. The last commit with the rest is `82521eab`.
+
 ## Purpose
 
 Compiler and certificate generators need to construct substantial Heather

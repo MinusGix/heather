@@ -1,5 +1,11 @@
 # The certificate expression, and its fold, in the language
 
+> **Burned in B2 (2026-10-24).** `ir_v1` and the certifying generator over it were deleted
+> (`docs/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
+> the source IR the verified compiler reads. The document stays for its reasoning. The last
+> commit with the code is `82521eab`; a frozen copy of `ir_v1.hthr` is the frontend bench's
+> heavy corpus case (`crates/elab/benches/frontend/fixtures/`).
+
 Design for **Round A** of `issues/in-language-certificate-emission.md`, as
 scheduled by `docs/certgen-emission-route1-spike.md` §7: the ∃-composition
 kit's fold stops being Rust string assembly and becomes an ordinary

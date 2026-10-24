@@ -1,10 +1,10 @@
 ---
 title: Program extension preserves convergence (the linking lemma)
-status: open
+status: closed
 labels: [ir,stdlib,compiler,design]
 area: heather-in-heather
 created: 2026-08-02
-updated: 2026-08-11
+updated: 2026-10-24
 ---
 
 Filed off the certifying-generator v2 design discussion (2026-08-02): a
@@ -42,3 +42,4 @@ and its \`Converges\`-level corollary. Notes:
 ## Log
 
 - 2026-08-11: Cross-reference (2026-08-11): the transcriber re-homing round named the fold-as-a-lemma route — one Converges theorem in lib/certgen/ir_v1.hthr by induction over Ir, of which the per-function kit folds are instances — as the alternative future for in-language certificate emission (certgen-transcriber-in-language-design sec. 5). It would retire this workaround too, but it changes the trust story from certifying to verified, so it must be argued on certifying-generator's charter, not assumed.
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

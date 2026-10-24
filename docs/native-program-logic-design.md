@@ -140,6 +140,18 @@ Before the burn, the last commit with the stack is tagged (`native-v0`, at
 
 ### 3.2 Burn when the compiler replaces it (B2): per-function certificates
 
+**Done 2026-10-24.** Everything below is deleted; the last commit with it is
+`82521ea` (worth tagging `native-v1`). Two departures from the list: the
+`ExecuteBlock` family is cut back to what `x86_64_fetched_code` and the
+verified path use, and `ir_v1` survives as a frozen elaborator corpus
+(`crates/elab/tests/fixtures/ir_v1.hthr`), not as a library. Loops went
+before their replacement was wired up: the verified lowering proves `Loop`
+(round 5), and reflecting and planning one is
+`issues/function-ir-verified-loop-planning.md`. `build-x86` went with the
+call generator; a direct executable comes back as the compiled program in a
+proved process image (`issues/native-first-compiled-program.md`).
+
+
 The pure-function path (FunctionIR → x86 with a certificate per function,
 `examples/x86-native/{branches,calls,…}`) still works and still exercises the
 ISA model. It burns when the verified pure lowering (§9, S4) compiles the same
@@ -424,7 +436,8 @@ B1 needs nothing and is independent of all of it.
 | S2 | `hih-pl-wp` | `native-one-wp`, `native-loop-rule` | `Wp` with `Syscall`, `Proved` and views; `wp_sound`; `loop_at`; probed for elaborator cost. |
 | S3 | `hih-pl-source` | `native-effect-source-compiler` | The effectful source, `denote`, `compile` in Heather, and the correctness theorem proved once. |
 | S4 | (`hih-passes`) | `function-ir-verified-lowering` | FunctionIR's pure regions lowered by a Heather function with its theorem proved once; B2 can start. |
-| S5 | `hih-pl-first-program` | `native-first-compiled-program` | `tr` built from its source through the compiler, its claim from the theorem, its stdout fact from its tree; then B2. |
+| B2 | (none) | `native-first-compiled-program` | §3.2 deleted, the examples through `compile-x86`; done 2026-10-24, ahead of S5. |
+| S5 | `hih-pl-first-program` | `native-first-compiled-program` | `tr` built from its source through the compiler, its claim from the theorem, its stdout fact from its tree. |
 
 `wp-obligation-tactic` follows S2's obligations; with the compiler proof
 over abstract inputs it matters less than in the first draft, and may not be

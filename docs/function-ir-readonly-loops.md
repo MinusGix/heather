@@ -1,5 +1,11 @@
 # Bounded read-only loop contract
 
+> **Partly burned in B2 (2026-10-24).** The loop contract (`function_ir_loop`) stays; the
+> source reflector and the native loop certificates this document refers to were deleted
+> with the per-function certificate path (`docs/native-program-logic-design.md` §3.2).
+> Loops reach the verified lowering through `issues/function-ir-verified-loop-planning.md`.
+> The last commit with the code is `82521eab`.
+
 The source/IR contract lives in `lib/native/function_ir/function_ir_loop.hthr`. It is a semantic
 interface for a bounded loop region, before physical selection. Source programs
 use `bounded_readonly`; the elaborated-body reflector recognizes that resolved

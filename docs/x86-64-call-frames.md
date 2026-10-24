@@ -1,5 +1,10 @@
 # Call memory effects and a live stack local
 
+> **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
+> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
+> The document stays for its reasoning. The last commit with the code is `82521eab`.
+
 The internal integer call contract now carries `WritesOnly(read, writes,
 before, after)`: at every address outside the declared write footprint, the
 observable read result is preserved. The read carrier is generic; the ELF

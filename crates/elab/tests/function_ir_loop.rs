@@ -19,58 +19,6 @@ fn bounded_readonly_semantics_checks() {
     elab.elab_module_source("function_ir_loop", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
 }
 
-#[test]
-fn readonly_loop_source_reflection_checks() {
-    use heather_elab::function_ir_source::{reflect_elaborated_readonly_loop, generate_readonly_loop_certificate};
-    let mut elab = support::semantic_test_base(MODULES);
-    let model = include_str!("../../../lib/native/function_ir/function_ir_loop.hthr");
-    elab.elab_module_source("function_ir_loop", model).unwrap_or_else(|e| panic!("{}", e.render(model)));
-    let source = include_str!("../../../examples/function-ir/readonly-loops.hthr");
-    elab.elab_module_source("readonly_loops", source).unwrap_or_else(|e| panic!("{}", e.render(source)));
-    let extra = r#"
-import function_ir_loop; import readonly_loops; import bitvec; import bool; import nat;
-fn unchanged_body(needle: BitVec(8), cursor: Nat, byte: BitVec(8), count: Nat) → LoopStep<Nat> { Continue(count) }
-fn changed_source(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, count: Nat) → LoopOutcome<Nat> {
-    bounded_readonly<Nat>(buffer, needle, budget, cursor, count, unchanged_body)
-}
-fn swapped(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, count: Nat) → LoopOutcome<Nat> {
-    bounded_readonly<Nat>(buffer, needle, cursor, budget, count, count_body)
-}
-fn closure(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, count: Nat) → LoopOutcome<Nat> {
-    bounded_readonly<Nat>(buffer, needle, budget, cursor, count, λ needle index byte count => Continue(count))
-}
-fn fake_bounded_readonly(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, count: Nat) → LoopOutcome<Nat> { Exhausted(cursor, count) }
-fn wrong_operation(buffer: ReadonlyBytes, needle: BitVec(8), budget: Nat, cursor: Nat, count: Nat) → LoopOutcome<Nat> {
-    fake_bounded_readonly(buffer, needle, budget, cursor, count)
-}
-"#;
-    elab.elab_module_source("loop_controls", extra).unwrap_or_else(|e| panic!("{}", e.render(extra)));
-    for name in ["swapped", "closure", "wrong_operation", "count_body"] {
-        assert!(reflect_elaborated_readonly_loop(&elab, name).is_err(), "must decline {name}");
-    }
-    for name in ["count_occurrences", "first_match"] {
-        let reflected = reflect_elaborated_readonly_loop(&elab, name).unwrap();
-        assert_eq!(reflected.source_name, format!("readonly_loops::{name}"));
-        let certificate = generate_readonly_loop_certificate(name, &reflected);
-        elab.elab_module_source(&format!("{name}_certificate"), &certificate)
-            .unwrap_or_else(|e| panic!("{}", e.render(&certificate)));
-    }
-    let image = elab.semantic_image();
-    let reflected = reflect_elaborated_readonly_loop(&elab, "count_occurrences").unwrap();
-    let mut stale = reflected.clone();
-    stale.source_name = "loop_controls::changed_source".into();
-    reject(&image, "stale_source", &generate_readonly_loop_certificate("stale", &stale));
-    stale = reflected.clone();
-    stale.body_name = "loop_controls::unchanged_body".into();
-    reject(&image, "wrong_body", &generate_readonly_loop_certificate("stale", &stale));
-    let certificate = generate_readonly_loop_certificate("swapped", &reflected);
-    let mutant = certificate.replace("readonly_loops::count_occurrences(buffer, needle, budget, cursor, carry)",
-        "readonly_loops::count_occurrences(buffer, needle, cursor, budget, carry)");
-    assert_ne!(mutant, certificate);
-    reject(&image, "wrong_binding", &mutant);
-
-}
-
 const LAWS: &str = r#"
 import function_ir_loop;
 import bitvec;

@@ -1,5 +1,11 @@
 # Re-homing the certifying generator's transcriber into the language
 
+> **Burned in B2 (2026-10-24).** `ir_v1` and the certifying generator over it were deleted
+> (`docs/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
+> the source IR the verified compiler reads. The document stays for its reasoning. The last
+> commit with the code is `82521eab`; a frozen copy of `ir_v1.hthr` is the frontend bench's
+> heavy corpus case (`crates/elab/benches/frontend/fixtures/`).
+
 Design sketch for the migration step named by `issues/generators-in-the-language.md`
 (2026-08-02 verdict, migration order) and staged as item 4 of
 `docs/certifying-generator-design.md` §8: the certifying generator's *fragment

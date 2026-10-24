@@ -1,5 +1,10 @@
 # One loop generator, one image-facts path — design
 
+> **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
+> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
+> The document stays for its reasoning. The last commit with the code is `82521eab`.
+
 Status: **agreed and landed 2026-09-30 (the round after the structured-lowering
 round); probe V1 §2, as landed §3.5.** Owners: `issues/nat-loop-generator-as-record.md` and
 `issues/read-loop-code-length-by-evaluation.md`. Builds on

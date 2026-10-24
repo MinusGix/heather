@@ -1,5 +1,11 @@
 # Tier-0 (non-`Nat`) parameters for the certifying generator
 
+> **Burned in B2 (2026-10-24).** `ir_v1` and the certifying generator over it were deleted
+> (`docs/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
+> the source IR the verified compiler reads. The document stays for its reasoning. The last
+> commit with the code is `82521eab`; a frozen copy of `ir_v1.hthr` is the frontend bench's
+> heavy corpus case (`crates/elab/benches/frontend/fixtures/`).
+
 > **Status, 2026-08-14: LANDED**, same round as the design. A file of its own
 > rather than a section of the tier-1 doc because the issue's staging names it
 > as a stage of its own and every previous stage got one document; §1's

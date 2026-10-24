@@ -8,7 +8,7 @@ created: 2026-09-21
 updated: 2026-09-21
 ---
 
-The native commands compile 29 Heather library modules into the `heather`
+The native commands compile 34 Heather library modules (the closure of `function_ir_compile` since B2) into the `heather`
 binary with `include_str!`. This makes their source bytes part of the Rust
 compilation unit: editing any bundled file under `lib/` recompiles
 `heather-cli` and relinks the core `heather` executable before Heather can

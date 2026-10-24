@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,representation,performance]
 area: language
 created: 2026-09-06
-updated: 2026-09-23
+updated: 2026-10-24
 ---
 
 Filed from [[emission-spelling-chokepoint]]'s round (2026-09-06), which landed
@@ -83,3 +83,4 @@ rows 1–2.
 - 2026-09-16: The quote residue this table lists as not its own has been attributed to an item: `complete_post`'s 5.73 M conversion queries are the quote layer's inline component lowerings (docs/complete-post-attribution-design.md §4). Verification item for the slice: this walker's `WALK_RESIDUE` list may only shrink (design §8 item 4).
 - 2026-09-16: Re-list after the quote-layer slice (docs/complete-post-attribution-design.md §10.6): `App.dom`/`App.cod` and `Pair.fst_ty`/`snd_ty` were the slots the raw quote fed, so the five-node residue table above is stale until re-run.
 - 2026-09-23: Item 2 (`elab_arm`'s alias projections) landed 2026-09-23 in this issue's fix shape — each link's `fst`/`snd` through `emit_ty` at depth 0 / 1, `cur` kept structural — as part of [[elaborator-canonical-type-spelling]]'s constructor-value round (numbers there: a `match` on an `Instruction`-field declaration 13.5 K kernel steps → 21). The unannotated `FstAt`/`SndAt` `project_field` writes were tried first and refused: the elaborator's reducts substitute a constructor literal for the scrutinee, and the kernel cannot infer a projection of an unannotated tuple (`NotInferable` on two `x86_64` model declarations).
+- 2026-10-24: B2 (2026-10-24) deleted `lib/certgen/ir_v1.hthr`; the guard now runs over its frozen copy `crates/elab/tests/fixtures/ir_v1.hthr`, so `WALK_RESIDUE` still measures the same corpus. The five-node FunctionIR/x86 module and `mixed_binary_alu_raw` are deleted too.

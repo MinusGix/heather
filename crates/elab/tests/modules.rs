@@ -776,16 +776,16 @@ fn reflection_in_a_named_module_scope_preserves_visibility_and_import_choices() 
         ("ambiguous", "import a; import b;"),
         ("unrelated", "fn f(n: Nat) -> Nat { 0 }"),
     ]);
-    let body = |module: &str, name: &str| e.with_module_scope(module, |e| e.fn_body_code(name).map(|b| b.code)).unwrap();
+    let body = |module: &str, name: &str| e.with_module_scope(module, |e| e.qualified_global(name)).unwrap();
     let a = body("a", "f").unwrap();
     let b = body("b", "f").unwrap();
     assert_ne!(a, b);
     assert_eq!(body("a", "a::f").unwrap(), a);
     assert_eq!(body("chosen", "f").unwrap(), b);
-    assert!(body("a", "b::f").is_err(), "qualified names still require an import");
-    assert!(body("ambiguous", "f").is_err(), "bare names remain ambiguous");
+    assert!(body("a", "b::f").is_none(), "qualified names still require an import");
+    assert!(body("ambiguous", "f").is_none(), "bare names remain ambiguous");
     assert!(e.with_module_scope("missing", |_| panic!("an unknown scope must not run the callback")).is_err());
-    assert!(e.fn_body_code("a::f").is_err(), "the caller's imports must not change");
+    assert!(e.qualified_global("a::f").is_none(), "the caller's imports must not change");
 }
 
 #[test]
@@ -795,19 +795,20 @@ fn named_reflection_scopes_nest_and_restore_on_error_and_panic() {
         ("b", "fn f(n: Nat) -> Nat { Succ(n) }"),
         ("unrelated", "fn f(n: Nat) -> Nat { 0 }"),
     ]);
-    let original = e.fn_body_code("f").unwrap().code;
+    let body = |e: &heather_elab::Elaborator| e.qualified_global("f").unwrap();
+    let original = body(&e);
     e.with_module_scope("a", |e| {
-        let a = e.fn_body_code("f").unwrap().code;
-        let b = e.with_module_scope("b", |e| e.fn_body_code("f").unwrap().code).unwrap();
+        let a = body(e);
+        let b = e.with_module_scope("b", body).unwrap();
         assert_ne!(a, b);
-        assert_eq!(e.fn_body_code("f").unwrap().code, a);
-        assert!(e.with_module_scope("b", |e| e.fn_body_code("missing")).unwrap().is_err());
-        assert_eq!(e.fn_body_code("f").unwrap().code, a);
+        assert_eq!(body(e), a);
+        assert!(e.with_module_scope("b", |e| e.qualified_global("missing")).unwrap().is_none());
+        assert_eq!(body(e), a);
     }).unwrap();
-    assert_eq!(e.fn_body_code("f").unwrap().code, original);
+    assert_eq!(body(&e), original);
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         e.with_module_scope("a", |_| panic!("scope restoration probe")).unwrap();
     }));
     assert!(panic.is_err());
-    assert_eq!(e.fn_body_code("f").unwrap().code, original);
+    assert_eq!(body(&e), original);
 }

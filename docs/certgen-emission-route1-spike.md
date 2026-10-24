@@ -1,5 +1,11 @@
 # Route 1 (Ψ-staging) for in-language certificate emission — verification spike
 
+> **Burned in B2 (2026-10-24).** `ir_v1` and the certifying generator over it were deleted
+> (`docs/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
+> the source IR the verified compiler reads. The document stays for its reasoning. The last
+> commit with the code is `82521eab`; a frozen copy of `ir_v1.hthr` is the frontend bench's
+> heavy corpus case (`crates/elab/benches/frontend/fixtures/`).
+
 Run 2026-08-12 against `issues/in-language-certificate-emission.md`. The issue
 names three verification items for whoever opens route 1; this is those three,
 each pinned by a test, plus a fourth the list did not name and which is the

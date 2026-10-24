@@ -1,10 +1,10 @@
 ---
 title: x86_64_block's LinkedConditionalDecodes/Layout are a million evaluator steps each, the corpus's heaviest declarations
-status: open
+status: closed
 labels: [x86,performance,kernel]
 area: heather-in-heather
 created: 2026-09-23
-updated: 2026-09-23
+updated: 2026-10-24
 ---
 
 The two heaviest declarations in the whole perf corpus are x86 library
@@ -37,3 +37,4 @@ Not worth a round by itself today.
 ## Log
 
 - 2026-09-23: 2026-09-23: the fast lane's critical path is the same shape in the guarded-read test — [[fast-lane-heaviest-declarations]].
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

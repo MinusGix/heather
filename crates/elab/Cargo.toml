@@ -37,12 +37,12 @@ heather-syntax = { path = "../syntax" }
 #
 # `heather-cache` is the workspace's own crate (the cache depends on the
 # library's `gate` seam, and this package's *tests* install it there; a
-# dev-dependency cycle before the library moved to `heather-elab-lib`): the certgen test family gates its shared library
-# prefix through the declaration cache so six binaries stop re-checking
-# identical work (issues/elaborator-snapshot-across-test-binaries.md; the
-# helper is `with_decl_cache` in tests/support/mod.rs).
+# dev-dependency cycle before the library moved to `heather-elab-lib`): tests
+# gate their shared library prefix through the declaration cache so binaries
+# stop re-checking identical work (issues/elaborator-snapshot-across-test-binaries.md;
+# the helper is `with_decl_cache` in tests/support/mod.rs).
 #
-# `heather-cli` is here for the same kind of reason: the frontend bench corpus computes `lib/certgen/ir_v1.hthr`'s import closure
+# `heather-cli` is here for the same kind of reason: the frontend bench computes its corpus's import closures
 # with the CLI's own loader instead of a hand-written list of module names,
 # which is what went stale in issues/frontend-bench-ir-closure-stale.md.
 [dev-dependencies]
@@ -57,8 +57,8 @@ harness = false
 # of its own (docs/elab-test-families-design.md). The families mount their
 # members from tests/*.rs, so every file keeps its path.
 [[test]]
-name = "family_certgen"
-path = "tests/families/certgen.rs"
+name = "family_inductive"
+path = "tests/families/inductive.rs"
 [[test]]
 name = "family_function_ir"
 path = "tests/families/function_ir.rs"

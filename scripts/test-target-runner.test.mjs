@@ -12,9 +12,9 @@ test("artifact discovery keeps test-profile executables once", () => {
   const found = parseArtifacts(`${JSON.stringify(artifact)}\n${JSON.stringify(artifact)}\nnot json`, "/work");
   assert.deepEqual(found, [{ executable: "/tmp/example", name: "surface",
     label: "crates/elab/tests/surface.rs", exclusive: false }]);
-  const summary = { ...artifact, executable: "/tmp/summary",
-    target: { name: "native_summary", kind: ["test"], src_path: "/work/crates/cli/tests/native_summary.rs" } };
-  assert.equal(parseArtifacts(JSON.stringify(summary), "/work")[0].exclusive, true);
+  const smoke = { ...artifact, executable: "/tmp/smoke",
+    target: { name: "frontend_bench_smoke", kind: ["test"], src_path: "/work/crates/elab/tests/frontend_bench_smoke.rs" } };
+  assert.equal(parseArtifacts(JSON.stringify(smoke), "/work")[0].exclusive, true);
   // The kernel's unit tests build in `heather-kernel-lib` and keep their label.
   const unit = { ...artifact, executable: "/tmp/kernel-unit",
     package_id: "path+file:///work/crates/kernel-lib#heather-kernel-lib@0.0.1",

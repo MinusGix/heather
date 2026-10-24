@@ -1,5 +1,10 @@
 # A tighter structured x86 lowering — design
 
+> **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
+> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
+> The document stays for its reasoning. The last commit with the code is `82521eab`.
+
 Status: **decisions taken 2026-09-29 (§6, all as recommended); probes V2–V5 done 2026-09-29 (§7.1); slices landed 2026-09-30: F (§2.4), F′ (§2.5), P's in-place results (§3.1) and `Move` node (§3.2), and I (§4.1). `CodeWhen` (§2.3) landed 2026-10-13 (§2.6).** Owner:
 `issues/structured-lowering-code-size.md`. Also lands
 `issues/function-ir-x86-fused-compare-branch.md`. Builds on

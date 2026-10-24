@@ -2,11 +2,16 @@
 //! (fresh prelude'd elaborator per file, `crates/cli/src/main.rs`).
 //!
 //! No exponent is claimed here. The x-axis is source bytes across unrelated
-//! files, and `lib/certgen/ir_v1.hthr` is not "a bigger `lib/lang/vec_code.hthr`" — it is
+//! files, and `ir_v1.hthr` is not "a bigger `lib/lang/vec_code.hthr`" — it is
 //! a file of deep proofs whose cost is conversion, not size. What the corpus
 //! reports is absolute latency and the **phase split**: how much of the wait
 //! is parsing, how much is the elaborator, how much is the kernel gate
 //! re-checking what the elaborator built.
+//!
+//! `ir_v1.hthr` is `crates/elab/tests/fixtures/ir_v1.hthr`, a frozen copy of `lib/certgen/ir_v1.hthr`, the source
+//! IR that burn B2 retired from the library (docs/native-program-logic-design.md
+//! §3.2), shared with `crates/elab/tests/ir_v1.rs`. It stays the corpus's heavy case so the baseline keeps measuring the
+//! same work: a file of deep proofs over `nat` alone.
 
 use std::path::{Path, PathBuf};
 
@@ -17,10 +22,14 @@ use crate::harness::{Case, Family};
 use super::{fresh_closure_runner, validate_closure};
 
 const VEC_CODE: &str = include_str!("../../../../../lib/lang/vec_code.hthr");
-const IR_V1: &str = include_str!("../../../../../lib/certgen/ir_v1.hthr");
+const IR_V1: &str = include_str!("../../../tests/fixtures/ir_v1.hthr");
 
 fn lib_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib")
+}
+
+fn ir_v1() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ir_v1.hthr")
 }
 
 /// The import closure of a library file, in loader order (dependencies first,
@@ -37,11 +46,11 @@ fn lib_dir() -> PathBuf {
 /// it is read from the library.
 ///
 /// `-L lib/std` matches `crates/cli/src/main.rs`'s `DEFAULT_LIB`.
-fn closure(file: &str) -> Vec<(String, String)> {
-    let root = lib_dir().join(file);
+fn closure(file: &Path) -> Vec<(String, String)> {
+    let root = file;
     let search = [lib_dir().join("std")];
-    let modules = heather_cli::loader::load(&root, &search)
-        .unwrap_or_else(|e| panic!("corpus fixture `{file}`: {}", e.msg));
+    let modules = heather_cli::loader::load(root, &search)
+        .unwrap_or_else(|e| panic!("corpus fixture `{}`: {}", file.display(), e.msg));
     modules.into_iter().map(|m| (m.name, m.src)).collect()
 }
 
@@ -64,7 +73,7 @@ pub fn families() -> Vec<Family> {
 /// module deltas while rechecking every stored kernel binding. Both paths
 /// start from a fresh checked prelude; delta extraction is setup, not timing.
 fn module_replay_family() -> Family {
-    let modules = closure("std/core/logic.hthr");
+    let modules = closure(&lib_dir().join("std/core/logic.hthr"));
     let identity = |n: usize| {
         ModuleDependencyIdentity::new((0..n).map(|i| [i as u8; 32]).collect())
     };
@@ -164,8 +173,8 @@ fn check_file() -> Family {
         // question is "still tolerable?") of what it measured on
         // 2026-08-04. The gate against a 30% drift is the baseline
         // comparison; these fire when a file stops being usable at all.
-        ("vec_code.hthr", "lang/vec_code.hthr", false, false, 100_000_000u64),
-        ("ir_v1.hthr:decls", "certgen/ir_v1.hthr", true, true, 8_000_000_000),
+        ("vec_code.hthr", lib_dir().join("lang/vec_code.hthr"), false, false, 100_000_000u64),
+        ("ir_v1.hthr:decls", ir_v1(), true, true, 8_000_000_000),
         // The latency budget, and the suite's alarm bell. Measured
         // 2026-08-04: **59 s** through the release CLI on a quiet machine,
         // 84–88 s from this harness while the machine carried a load
@@ -175,10 +184,10 @@ fn check_file() -> Family {
         // and what it is for is "the library file now takes five minutes".
         // It is deliberately *not* derived from the baseline: a budget that
         // moves with the recording is not a budget.
-        ("ir_v1.hthr", "certgen/ir_v1.hthr", false, true, 150_000_000_000),
+        ("ir_v1.hthr", ir_v1(), false, true, 150_000_000_000),
     ] {
         // Heavy cases were *unvalidated* for as long as validating one meant
-        // ~90 s of `lib/certgen/ir_v1.hthr`; it is seconds now, so every corpus case
+        // ~90 s of `ir_v1.hthr`; it is seconds now, so every corpus case
         // is validated again and its checksum is the Ψ-binding count that
         // validation returned — a count of declarations landed, not of errors
         // raised. That is what makes "the fixture is doing the same work"
@@ -193,7 +202,7 @@ fn check_file() -> Family {
         // imports nothing and is a one-module closure, so both go through
         // the same loader and the same runner, and the corpus keeps timing
         // what the CLI does.
-        let mut modules = closure(file);
+        let mut modules = closure(&file);
         let root = &mut modules.last_mut().expect("a closure has a root").1;
         if decls_only {
             *root = decls_prefix(root);
