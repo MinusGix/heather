@@ -299,6 +299,53 @@ pub fn process_base(
         .map_err(Clone::clone)
 }
 
+/// What a refusal test expects to be refused for (`docs/test-value-audit.md`
+/// §3.6, `issues/refusal-tests-pin-their-reason.md`). A test that only asks
+/// for *an* error passes when its source fails for any reason, a renamed
+/// lemma or a missing import included, and keeps passing while it tests
+/// nothing; every refusal names one of these instead.
+pub enum Refusal<'a> {
+    /// The kernel rejected an elaborated declaration.
+    Kernel,
+    /// A checking mismatch: a term whose type is not the one expected at its
+    /// position (`… is expected here`). What a lemma cited at the wrong
+    /// statement, or a wrong literal, is refused with.
+    Mismatch,
+    /// The rendered error says this.
+    Says(&'a str),
+}
+
+/// Elaborate `src` as module `name` and assert it is refused for `why`;
+/// returns the rendered error. Besides the reason, the error must not be one
+/// that an incidental slip produces: a parse error, an unbound name or an
+/// unresolved import is accepted only when `Says` asks for it by name.
+pub fn assert_refused(e: &mut heather_elab::Elaborator, name: &str, src: &str, why: Refusal) -> String {
+    let err = match e.elab_module_source(name, src) {
+        Ok(()) => panic!("{name}: expected a refusal, but it elaborated:\n{src}"),
+        Err(err) => err,
+    };
+    let rendered = err.render(src);
+    let incidental = matches!(err, heather_elab::ElabError::Parse(_))
+        || ["unbound name", "cannot find module", "neither an imported module", "is ambiguous"]
+            .iter()
+            .any(|slip| rendered.contains(slip));
+    match why {
+        Refusal::Kernel => assert!(
+            matches!(err, heather_elab::ElabError::Kernel { .. }),
+            "{name}: expected the kernel's refusal, got:\n{rendered}"
+        ),
+        Refusal::Mismatch => assert!(
+            !incidental && rendered.contains("is expected here"),
+            "{name}: expected a checking mismatch, got:\n{rendered}"
+        ),
+        Refusal::Says(fragment) => assert!(
+            rendered.contains(fragment) && (!incidental || ["unbound", "module", "ambiguous", "parse"].iter().any(|s| fragment.contains(s))),
+            "{name}: expected an error saying `{fragment}`, got:\n{rendered}"
+        ),
+    }
+    rendered
+}
+
 /// `modules` elaborated from source on top of the prelude **once per test
 /// process**, and every call a fork of that checked state
 /// (`issues/suite-tests-reelaborate-library-modules.md`).
