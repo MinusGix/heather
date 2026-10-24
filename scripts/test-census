@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""What the suite's tests assert, counted by kind (docs/test-value-audit.md).
+
+    scripts/test-census                # the table: area x kind
+    scripts/test-census --list KIND    # every test of one kind, file and name
+    scripts/test-census --json FILE    # one row per test
+
+A static read of every `#[test]` fn under crates/*/tests and crates/*/src, no
+build. Each test is put in the first kind that fits:
+
+  structural            asserts on Rust values: kernel terms, counters,
+                        lengths, `assert_eq!` on something other than an error
+  refusal_with_reason   expects a failure and checks what it says or which
+                        error it is (message fragment, `ElabError::` variant)
+  accept_and_bare       accepts some source and expects other source to fail,
+                        without checking why it failed
+  bare_refusal          only expects failure, without checking why
+  accept_lib_file       only checks a lib/ or docs/showcase file
+  accept_only           only hands Heather source to something that must
+                        accept it: a Heather program in a Rust wrapper
+  other                 none of the above was recognised
+
+A file's helpers are classified first (a helper that matches `Ok(..) =>
+panic`, `unwrap_err`, `is_err()` or `expect_err` is a refusal helper; one that
+panics on `Err` is an acceptance helper), so `bad(src)` and `ok(src)` count as
+what they do. It is a heuristic: expect a few percent of rows in the wrong
+kind. The audit quotes its counts as approximate for that reason.
+"""
+
+import argparse
+import collections
+import glob
+import json
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+NEG = re.compile(
+    r"is_err\(\)|expect_err|unwrap_err|Ok\(\(?\)?\)?\s*=>\s*panic|Ok\(_\)\s*=>\s*panic"
+    r"|Ok\([^)]*\)\)?\s*=>\s*\{?\s*panic|assert!\(\s*!|\.is_none\(\)|should_panic"
+    r"|Err\(\w+\)\s*=>\s*\w+(?:\.render)?")
+POS = re.compile(r"if let Err|unwrap\(\)|expect\(|is_ok\(\)|Err\(\w+\)\s*=>\s*panic")
+REASON = re.compile(
+    r"\.contains\(|starts_with\(|ends_with\(|matches!\(|ElabError::"
+    r"|assert_eq!\(\s*\w*(err|msg|message|diag|rendered|e)\b")
+STRUCT = re.compile(
+    r"assert_eq!|assert_ne!|assert!\(\s*\w+\s*[<>]=?|heather_kernel::|Term::|Val::|\.whnf"
+    r"|normali[sz]e|psi_hash|\.lookup|stats::|counter|timings|\.len\(\)\s*[<>=]")
+ERROR_EQ = re.compile(r"assert_eq!\([^;]*?(err|msg|message|rendered|diag)[^;]*;")
+
+KINDS = ["accept_only", "accept_lib_file", "accept_and_bare", "bare_refusal",
+         "refusal_with_reason", "structural", "other"]
+
+
+def strip(s):
+    """Rust source with string literals and line comments blanked."""
+    s = re.sub(r'r#+"(.*?)"#+', '""', s, flags=re.S)
+    s = re.sub(r'r"(.*?)"', '""', s, flags=re.S)
+    s = re.sub(r'"(?:\\.|[^"\\])*"', '""', s)
+    return re.sub(r"//[^\n]*", "", s)
+
+
+def bodies(text, header):
+    for m in re.finditer(header, text):
+        start = i = m.end()
+        depth = 1
+        while i < len(text) and depth:
+            depth += (text[i] == "{") - (text[i] == "}")
+            i += 1
+        yield m.group(1), text[start:i]
+
+
+def helper_kinds(code):
+    found = dict(bodies("\n" + code, r"\n\s*(?:pub(?:\(crate\))? )?fn (\w+)\s*(?:<[^>]*>)?\([^)]*\)[^{]*\{"))
+    kind = {}
+    for name, body in found.items():
+        if NEG.search(body):
+            kind[name] = "neg"
+        elif re.search(r"elab|check|Elaborator|run\(|heather\(", body) and POS.search(body):
+            kind[name] = "pos"
+    for _ in range(2):
+        for name, body in found.items():
+            if name not in kind:
+                called = {kind.get(c) for c in re.findall(r"\b(\w+)\(", body) if c != name}
+                if "neg" in called:
+                    kind[name] = "neg"
+                elif "pos" in called:
+                    kind[name] = "pos"
+    return kind
+
+
+def classify(path):
+    raw = open(path, encoding="utf-8").read()
+    kind = helper_kinds(strip(raw))
+    for name, body in bodies(raw, r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*(?:pub )?fn (\w+)[^{]*\{"):
+        code = strip(body)
+        calls = re.findall(r"\b(\w+)\(", code)
+        neg = bool(NEG.search(code)) or any(kind.get(c) == "neg" for c in calls) \
+            or name.startswith(("refus", "reject"))
+        pos = bool(POS.search(code)) or any(kind.get(c) == "pos" for c in calls)
+        inline = bool(re.search(r'r#+"|"import |"theorem |"fn ', body))
+        lib_file = bool(re.search(r'include_str!\("[^"]*(lib|showcase)/[^"]*\.hthr"\)', body))
+        if STRUCT.search(ERROR_EQ.sub("", code)):
+            k = "structural"
+        elif neg and REASON.search(code):
+            k = "refusal_with_reason"
+        elif neg and pos:
+            k = "accept_and_bare"
+        elif neg:
+            k = "bare_refusal"
+        elif lib_file and not inline:
+            k = "accept_lib_file"
+        elif pos or inline:
+            k = "accept_only"
+        else:
+            k = "other"
+        yield {"file": os.path.relpath(path, ROOT), "test": name, "kind": k,
+               "theorems": len(re.findall(r"\btheorem\b", body))}
+
+
+LIBRARY = ("lib_", "nat_", "tier1_list", "showcase", "parser_library", "container_proofs")
+TACTICS = ("omega", "bv_omega", "positivity", "tactic")
+NATIVE = ("linux", "native", "x86", "function_ir", "ir_v1", "in_language")
+
+
+def area(f):
+    base = os.path.basename(f)
+    if f.startswith("crates/elab/tests"):
+        if base.startswith(LIBRARY):
+            return "elab: library modules"
+        if base.startswith(TACTICS):
+            return "elab: tactics"
+        if base.startswith(NATIVE):
+            return "elab: native/os"
+        return "elab: language"
+    crate = f.split("/")[1]
+    return f"{crate} unit" if "/src/" in f else f"{crate} integration"
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--list", metavar="KIND", choices=KINDS)
+    ap.add_argument("--json", metavar="FILE")
+    args = ap.parse_args()
+    paths = sorted({p for g in ("crates/*/tests/*.rs", "crates/*/tests/*/*.rs", "crates/*/src/**/*.rs")
+                    for p in glob.glob(os.path.join(ROOT, g), recursive=True)})
+    rows = [r for p in paths for r in classify(p)]
+    if args.json:
+        with open(args.json, "w") as out:
+            json.dump(rows, out, indent=0)
+    if args.list:
+        for r in rows:
+            if r["kind"] == args.list:
+                print(f"{r['file']}\t{r['test']}")
+        return
+    table = collections.defaultdict(collections.Counter)
+    for r in rows:
+        table[area(r["file"])][r["kind"]] += 1
+    widths = [max(len(k), 5) for k in KINDS]
+    print(f"{'area':<26}{'total':>6}  " + "  ".join(f"{k:>{w}}" for k, w in zip(KINDS, widths)))
+    total = collections.Counter()
+    for a in sorted(table):
+        total.update(table[a])
+        print(f"{a:<26}{sum(table[a].values()):>6}  "
+              + "  ".join(f"{table[a][k]:>{w}}" for k, w in zip(KINDS, widths)))
+    print(f"{'all':<26}{sum(total.values()):>6}  " + "  ".join(f"{total[k]:>{w}}" for k, w in zip(KINDS, widths)))
+    in_tests = sum(r["theorems"] for r in rows if "/tests/" in r["file"])
+    print(f"\n`theorem` occurrences inside test fns: {in_tests}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
