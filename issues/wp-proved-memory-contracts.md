@@ -5,7 +5,7 @@ labels: [native,x86,proofs]
 area: heather-in-heather
 milestone: [hih-pl-wp, hih-pl-source]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-24
 ---
 
 `Contract` is `pre`/`post` over `Gprs`, and `Contract::Runs` requires
@@ -32,3 +32,7 @@ that design (§2.4).
 - **[[wp-stack-items]]** owns `CallTo`/`Spill` as `Wp` items; the two
   should share the footprint notion.
 - **[[byte-memory-access-model]]** owns the memory a footprint is over.
+
+## Log
+
+- 2026-10-24: 2026-10-24: [[wp-stack-items]] landed calls as a second table, `Callee`: pre/post over the view and the state (given the return address), honesty in continuation form so a body is proved by `Wp` (`Callee::returns_by`). Its footprint is whatever the view says after the call, not a range. A `Proved` contract with memory could take the same shape (view-relative, the view after as an output), and the two tables may then be one.

@@ -43,6 +43,8 @@ mod linux_spec;
 mod linux_wp;
 #[path = "../linux_wp_count.rs"]
 mod linux_wp_count;
+#[path = "../linux_wp_call.rs"]
+mod linux_wp_call;
 #[path = "../x86_64_stack_runs.rs"]
 mod x86_64_stack_runs;
 #[path = "../x86_64_byte_memory.rs"]

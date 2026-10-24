@@ -1,7 +1,8 @@
 use crate::{common, support};
 
 // What the native tests stand on past the x86 prefix: FunctionIR's loops,
-// fetched execution, the stack and store forms, and the Linux I/O model.
+// fetched execution, the store and stack forms, and the Linux I/O model
+// (whose steps are both).
 pub const READ_LOOP: &[(&str, &str)] = &[
     ("x86_64_data_read", include_str!("../../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
     ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
@@ -14,6 +15,7 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("elf64", include_str!("../../../../lib/std/os/linux/elf64.hthr")),
     ("linux_x86_64_entry", include_str!("../../../../lib/std/os/linux/linux_x86_64_entry.hthr")),
     ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),
+    ("x86_64_stack", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
     ("linux_calls", include_str!("../../../../lib/std/os/linux/linux_calls.hthr")),
     ("linux_x86_64_io", include_str!("../../../../lib/std/os/linux/linux_x86_64_io.hthr")),
 ];

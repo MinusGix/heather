@@ -392,6 +392,35 @@ whnf: the respelling `issues/elab-whnf-copies-straight-continuations.md`
 names, now on `Wp`. So no monomorphic specialisation; the lever is that
 issue's, and `drain_pass` is its workload now that `Straight` is gone.
 
+### 6.5 As built: stack items (`issues/wp-stack-items.md`)
+
+- **Linux's step is the machine's.** `LinuxStep` was a fetched step or a
+  store, so no run under Linux could execute S4 round 3's stack forms. It is
+  now `MachineStep` (`x86_64_stack`: fetched, store, or stack form) at the
+  profile's accesses, and determinism carries over: the step-form decoder
+  reads a frame slot (ModRM mod 01, r/m 100, which no other form uses), RET
+  (one byte, `c3`) and CALL (`e8` rel32), and a stack form's normal path is
+  a function of the defined state (`StackForm::executes_respects_defined`).
+- **A frame slot is a store or a load at its address**, through the view's
+  `Stores` and `Word` arms at `stack_address`; there is no stack arm, so what
+  a view knows of the stack is what it knows of those addresses. `ViewSound`'s
+  store arm now also says a store lands below the canonical boundary, which
+  the stack forms ask (`WordCanonical`) and plain stores do not.
+- **A CALL is a store of its return address, then the callee's contract.**
+  Contracts are a second table beside `Proved`'s, keyed by the target label:
+  `Callee` is a pre and post over the view and the state, given the return
+  address, since a call changes memory (the push, the callee's frame) and a
+  register contract cannot say so. `Callee::Returns` states a function's
+  honesty in continuation form (from its entry the machine runs as a trace,
+  given it does from every return), so a function's body is proved with `Wp`
+  itself (`Callee::returns_by`, its RET's leaf at the return address), and
+  steps to a return, as `Site::Returns` gives them, are one
+  (`Callee::returns_of_steps`, `linux_steps_of_machine`).
+- **A RET is a leaf** at the word it pops.
+
+The control is `crates/elab/tests/linux_wp_call.rs`: a program whose stack is
+the I/O frame calls a function that spills and reloads a slot and returns.
+
 ## 7. The source and its compiler
 
 Decided in round S3; the constraints the rest of the design puts on it:

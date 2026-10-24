@@ -16,6 +16,7 @@ import x86_64_fetch;
 import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_store;
+import x86_64_stack;
 import option;
 import bitvec;
 import bitvec_nat;
@@ -222,11 +223,10 @@ fn LinuxSyscallAt<M>(io: LinuxIo<M>, state: MachineState<M>) → Type {
 
 fn linux_writes<M>(io: LinuxIo<M>) → ByteWrites<M> { ByteWrites(io.writable, io.store) }
 
-// x86_64_step_forms's `FetchedOrStore` at the profile's accesses, spelled
-// again because neither module imports the other; the determinism proof
-// meets one as the other by conversion.
+// A step of the machine (x86_64_stack's `MachineStep`: a fetched step, a
+// store, or a stack form) at the profile's accesses.
 fn LinuxStep<M>(io: LinuxIo<M>, before, after: MachineState<M>) → Type {
-    FetchedStep(io.fetch, io.data, before, after) ∨ StoreStep(io.fetch, linux_writes(io), before, after)
+    MachineStep(io.fetch, io.data, linux_writes(io), before, after)
 }
 fn LinuxStepsN<M>(io: LinuxIo<M>, n: Nat) → MachineState<M> → MachineState<M> → Type {
     match n {
@@ -276,7 +276,25 @@ theorem linux_steps_of_fetched<M>(io: LinuxIo<M>, before, after: MachineState<M>
 
 theorem linux_steps_store<M>(io: LinuxIo<M>, before, after: MachineState<M>,
     stored: StoreStep(io.fetch, linux_writes(io), before, after)): LinuxSteps(io, before, after) {
-    Exists(Succ(Zero), Exists(after, ⟨Inr(stored), refl⟩))
+    Exists(Succ(Zero), Exists(after, ⟨Inr(Inl(stored)), refl⟩))
+}
+
+// A run of the machine at the profile's accesses is a run of the profile.
+theorem machine_runs_linux<M>(io: LinuxIo<M>, n: Nat): (before, after: MachineState<M>) →
+    MachineRuns(io.fetch, io.data, linux_writes(io), n, before, after) → LinuxStepsN(io, n, before, after) {
+    match n {
+        Zero => λ before after same => same,
+        Succ(k, ih) => λ before after runs => Exists(runs.witness, ⟨runs.proof.left, ih(runs.witness, after, runs.proof.right)⟩),
+    }
+}
+theorem linux_steps_of_machine<M>(io: LinuxIo<M>, before, after: MachineState<M>,
+    steps: MachineSteps(io.fetch, io.data, linux_writes(io), before, after)): LinuxSteps(io, before, after) {
+    Exists(steps.witness, machine_runs_linux(io, steps.witness, before, after, steps.proof))
+}
+
+theorem linux_steps_stack<M>(io: LinuxIo<M>, before, after: MachineState<M>,
+    stepped: StackStep(io.fetch, io.data, linux_writes(io), before, after)): LinuxSteps(io, before, after) {
+    Exists(Succ(Zero), Exists(after, ⟨Inr(Inr(stepped)), refl⟩))
 }
 
 // ---------------------------------------------------------------------------
