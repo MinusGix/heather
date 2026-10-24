@@ -61,4 +61,4 @@ bad subterm, a `refl` discharge, an open type), `positivity_tactic.rs`
 (`a_tactic_inside_a_value_default_runs_at_the_declaration`; its `DEFAULTS`
 are the uncalled `omega`/`positivity` discharges).
 
-Left open: record field defaults, [[field-default-unchecked-at-declaration]].
+Record field defaults followed on 2026-10-24: [[field-default-unchecked-at-declaration]].
