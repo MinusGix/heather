@@ -513,10 +513,17 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 // can mechanically demand the absence of `(cache)`.
                 (Some(c), Some(before)) => {
                     let n = c.counts().since(&before);
+                    // Modules moved onto a changed world are replays too,
+                    // and said so only when there are any
+                    // (`docs/module-interface-cutoff-design.md`).
+                    let relocated = match semantic.relocated() {
+                        0 => String::new(),
+                        k => format!(" ({k} moved onto a changed dependency world)"),
+                    };
                     println!(
                         "{path}: {} (cache) — {} declaration{} kernel-checked, {} accepted \
-                         from cache, {} semantic module{} replayed, {} declaration{} replayed \
-                         after an edit",
+                         from cache, {} semantic module{} replayed{relocated}, {} declaration{} \
+                         replayed after an edit",
                         color::success("ok", stdout_color),
                         n.checked,
                         if n.checked == 1 { "" } else { "s" },

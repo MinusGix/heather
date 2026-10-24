@@ -134,6 +134,10 @@ impl Provenance {
         );
     }
 
+    pub(crate) fn is_axiom(&self, key: &str) -> bool {
+        self.entry(key).is_some_and(|entry| entry.is_axiom)
+    }
+
     pub(crate) fn report(&self, key: &str) -> Option<AxiomReport> {
         let entry = self.entry(key)?;
         Some(AxiomReport {

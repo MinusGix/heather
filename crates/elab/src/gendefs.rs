@@ -1211,6 +1211,11 @@ impl Elaborator {
         let Ok((d_ty, l)) = self.lower_instance(&cx, ind, &[], &[], span) else {
             return;
         };
+        // The Ψ length `d_ty` counts its globals from, and so do the guard
+        // copies cut from it below, though they are committed after more
+        // definitions land: recorded with them for relocation
+        // (`docs/module-interface-cutoff-design.md` §3).
+        let at = self.lowering_scope();
         // The recognizer's own precondition, checked here rather than assumed:
         // `respell_ty` finds this code by running `tag_of` over a type and
         // looking the answer up, so a lowering `tag_of` does not route back to
@@ -1240,7 +1245,7 @@ impl Elaborator {
             // `Wf(El (D#shape^δ); app(D#arity^δ; x))` and one δ of this code
             // then exposes exactly that, where the literal body made the
             // kernel walk the inline shape against the reference.
-            self.register_wf_slots(ind, &d_ty, &l, span);
+            self.register_wf_slots(ind, &d_ty, &l, at, span);
             let named = match &d_ty {
                 Type::Wf { level, shape, arity } => self
                     .wf_slot_refs(&cx, shape, arity)
@@ -1255,7 +1260,7 @@ impl Elaborator {
                 .and_then(|t| crate::code::code_of(&t))
                 .unwrap_or(inline_body)
         } else {
-            match self.register_spine_codes(ind, &d_ty, &l, span) {
+            match self.register_spine_codes(ind, &d_ty, &l, at, span) {
                 Some(named) => named,
                 // One constructor (every record) has no spine to name, but
                 // its field types still do: the emission spelling, as a
@@ -1273,7 +1278,7 @@ impl Elaborator {
             .push_gen_def(key, &ind.name, ty, Level::succ(l.clone()), body, span)
             .is_ok()
         {
-            self.semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone());
+            self.semantic_commit_gen_ty_code(ind.tag, Rc::new(d_ty.clone()), l.clone(), at);
         }
     }
 
@@ -1300,6 +1305,7 @@ impl Elaborator {
         let Some(CodeFnAt { template, l, targs, ty, ty_level, body }) = self.tycode_fn_at_profile(ind, &profile, span) else {
             return;
         };
+        let at = self.lowering_scope();
         if self
             .push_gen_def(key, &ind.name, ty.clone(), ty_level, body, span)
             .is_ok()
@@ -1312,6 +1318,7 @@ impl Elaborator {
                     param_levels: targs.iter().map(|(_, l)| l.clone()).collect(),
                     level: l,
                 },
+                at,
             );
         }
     }
@@ -1554,6 +1561,7 @@ impl Elaborator {
         ind: &Rc<Inductive>,
         d_ty: &Type,
         l: &Level,
+        at: u32,
         span: Span,
     ) -> Option<Term> {
         let n = ind.ctors.len();
@@ -1612,6 +1620,7 @@ impl Elaborator {
                 ctors: spine.ctors,
                 tails: spine.tails,
             },
+            at,
         );
         Some(whole)
     }
@@ -2220,7 +2229,7 @@ impl Elaborator {
     /// Best-effort like every other piece here, and **all-or-nothing**: the
     /// guard entry is written only when both definitions passed the gate, so a
     /// half-registered pair can never hand out half a spelling.
-    fn register_wf_slots(&mut self, ind: &Rc<Inductive>, d_ty: &Type, l: &Level, span: Span) {
+    fn register_wf_slots(&mut self, ind: &Rc<Inductive>, d_ty: &Type, l: &Level, at: u32, span: Span) {
         let Type::Wf { shape, arity, .. } = d_ty else {
             // Non-recursive: a sum-of-Σs has no slots to name. `TyCode` is the
             // whole story there.
@@ -2251,7 +2260,7 @@ impl Elaborator {
         // moved no miss and cost evaluator steps (the δs are paid wherever
         // the arity is *computed*, not only where it is compared).
         // Measured on `lib/certgen/ir_v1.hthr` + `lib/certgen/certgen_code.hthr`, 2026-10-03.
-        let scode = match self.register_spine_codes(ind, d_ty, l, span) {
+        let scode = match self.register_spine_codes(ind, d_ty, l, at, span) {
             Some(named) => named,
             None => {
                 let emitted = self.respell_ty_deep(&cx, shape, 0);
@@ -2308,6 +2317,7 @@ impl Elaborator {
                     arity: Rc::clone(arity),
                     level: l.clone(),
                 },
+                at,
             );
         }
     }
@@ -3770,6 +3780,13 @@ impl Elaborator {
 
     /// How far a `meta fn`'s Ψ-extending binders push the committed bindings
     /// out, mirroring `resolve`'s `meta_off` (`lib.rs`). Zero everywhere else.
+    /// The Ψ length a term built here counts its globals from, padding and
+    /// a `meta fn`'s pushed binders included: what a guard copy records as
+    /// its scope.
+    fn lowering_scope(&self) -> u32 {
+        self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset()
+    }
+
     fn meta_offset(&self) -> u32 {
         self.meta_pushed.borrow().len() as u32
     }

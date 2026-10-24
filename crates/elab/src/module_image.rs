@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x15";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x13";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x16";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x14";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1829,12 +1829,12 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             }
         }
         DeltaEvent::GenDef { key, abs } => { w.byte(2); put_gen_def(w, *key); w.u32(*abs); }
-        DeltaEvent::GenTyCode { tag, inline, level } => {
-            w.byte(3); w.u32(*tag); put_type(w, inline); put_level(w, level);
+        DeltaEvent::GenTyCode { tag, inline, level, at } => {
+            w.byte(3); w.u32(*tag); put_type(w, inline); put_level(w, level); w.u32(*at);
         }
-        DeltaEvent::GenWfSlots { tag, slots } => {
+        DeltaEvent::GenWfSlots { tag, slots, at } => {
             w.byte(4); w.u32(*tag); put_type(w, &slots.shape); put_type(w, &slots.shape_decoded);
-            put_term(w, &slots.arity); put_level(w, &slots.level);
+            put_term(w, &slots.arity); put_level(w, &slots.level); w.u32(*at);
         }
         DeltaEvent::GenFamLevels { tag, level, index_level } => {
             w.byte(5); w.u32(*tag); put_level(w, level); put_level(w, index_level);
@@ -1870,14 +1870,15 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             w.byte(15); w.string(module); w.string(name); w.option(slot.as_ref(), |w, slot| put_slot(w, *slot));
             put_meta(w, definition);
         }
-        DeltaEvent::GenTyCodeFn { tag, entry } => {
+        DeltaEvent::GenTyCodeFn { tag, entry, at } => {
             w.byte(17); w.u32(*tag); put_type(w, &entry.template); put_type(w, &entry.stmt);
-            w.vec(&entry.param_levels, put_level); put_level(w, &entry.level);
+            w.vec(&entry.param_levels, put_level); put_level(w, &entry.level); w.u32(*at);
         }
-        DeltaEvent::GenSpineCodes { tag, codes } => {
+        DeltaEvent::GenSpineCodes { tag, codes, at } => {
             w.byte(16); w.u32(*tag);
             w.vec(&codes.ctors, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
             w.vec(&codes.tails, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
+            w.u32(*at);
         }
     }
 }
@@ -1890,11 +1891,11 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
             direct_dependencies: r.vec(Reader::string)?,
         },
         2 => DeltaEvent::GenDef { key: get_gen_def(r)?, abs: r.u32()? },
-        3 => DeltaEvent::GenTyCode { tag: r.u32()?, inline: type_rc(r)?, level: get_level(r)? },
+        3 => DeltaEvent::GenTyCode { tag: r.u32()?, inline: type_rc(r)?, level: get_level(r)?, at: r.u32()? },
         4 => DeltaEvent::GenWfSlots { tag: r.u32()?, slots: WfSlots {
             shape: type_rc(r)?, shape_decoded: type_rc(r)?,
             arity: term_rc(r)?, level: get_level(r)?,
-        } },
+        }, at: r.u32()? },
         5 => DeltaEvent::GenFamLevels { tag: r.u32()?, level: get_level(r)?, index_level: get_level(r)? },
         6 => DeltaEvent::Inductive { module: r.string()?, info: Rc::new(get_inductive(r)?) },
         7 => DeltaEvent::Class { key: r.string()?, info: get_class(r)? },
@@ -1925,11 +1926,11 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         17 => DeltaEvent::GenTyCodeFn { tag: r.u32()?, entry: TyCodeFn {
             template: type_rc(r)?, stmt: type_rc(r)?,
             param_levels: r.vec(get_level)?, level: get_level(r)?,
-        } },
+        }, at: r.u32()? },
         16 => DeltaEvent::GenSpineCodes { tag: r.u32()?, codes: SpineCodes {
             ctors: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
             tails: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
-        } },
+        }, at: r.u32()? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "module event", tag }),
     })
 }
@@ -2014,7 +2015,7 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
             DeltaEvent::GenWfSlots { tag, .. } if !wf_slots.insert(*tag) => {
                 return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated Wf-slot guard"));
             }
-            DeltaEvent::GenSpineCodes { tag, codes } => {
+            DeltaEvent::GenSpineCodes { tag, codes, .. } => {
                 if !spine_codes.insert(*tag) {
                     return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated spine-code guard"));
                 }
@@ -2090,6 +2091,24 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
         }
     }
     Ok(())
+}
+
+/// A scope's interface encoding, for a registry projection
+/// (`module_relocate::RegistryPart`).
+pub(crate) fn encode_interface_scope(scope: &Scope) -> Vec<u8> {
+    let mut w = Writer { interface: true, ..Writer::default() };
+    put_scope(&mut w, scope);
+    w.bytes
+}
+
+/// A global's surface signature — its parameter metadata and declaration,
+/// spans zeroed — for a name observation
+/// (`NameWorld::observations`).
+pub(crate) fn encode_interface_signature(params: &[ParamMeta], surface: Option<&Decl>) -> Vec<u8> {
+    let mut w = Writer { interface: true, ..Writer::default() };
+    w.vec(params, put_param_meta);
+    w.option(surface, put_decl);
+    w.bytes
 }
 
 pub(crate) fn encode_delta(delta: &ModuleDelta) -> Vec<u8> {

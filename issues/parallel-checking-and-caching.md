@@ -4,7 +4,7 @@ status: open
 labels: [tooling, design, performance, cli, meta]
 area: infrastructure
 created: 2026-08-06
-updated: 2026-09-11
+updated: 2026-10-24
 ---
 
 Design sketch (discussion 2026-08-06; first slice implemented the same day —
@@ -352,3 +352,4 @@ agent daemon exists.
 - 2026-09-04: Architecture step-back (discussion 2026-09-04): should the frontend go Salsa-shaped? Verdict recorded as the new 'Granularity' section: the design already IS red-green at declaration granularity; the query framework is not imported (kernel stays a memoized leaf; ambient CommittedWorld reads make declaration-level dependency recording expensive and instance resolution is the sore spot; agent batch-check load wants coarse units). Order: module-image Stage 4 first (the '99% kernel' ratio is stale — warm path is elaborator-dominated), access-point discipline for committed-state reads as room-leaving, dependency recording deferred to the bootstrap. Intra-module parallelism = proof bodies farmed out, blocked on Rc/RefCell (not Send). New subsection 'Doing better than Lean on the inner loop': closed subgoals as cache-identified aux facts + goal-keyed traces + [[persistent-certified-fact-cache]] + O(1) resident forks, so an edit costs the changed subgoal only; owes its own design round before code.
 - 2026-09-11: 2026-09-11: the representation half of intra-module parallel checking (the Rc blocker) is now [[kernel-arena-terms-frozen-prefix]], filed to evaluate arena-indexed terms over a frozen prefix against the Arc-alias control.
 - 2026-09-11: 2026-09-11: in-process kernel parallelism is now its own round, [[parallel-kernel-gate]] (deferred gate behind the KernelGate seam, Arc by alias, worker pool, scaling measured 1/2/4/8).
+- 2026-10-24: 2026-10-24: Early cutoff across upstream edits landed in the stale lanes, audited by the exact lane: [[relocatable-semantic-module-images]], docs/module-interface-cutoff-design.md.

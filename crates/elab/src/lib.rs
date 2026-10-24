@@ -137,6 +137,9 @@ mod measure_context;
 mod metaprograms;
 mod module_delta;
 mod module_image;
+mod module_relocate;
+pub use module_relocate::{NameObservations, NameWorld, RegistryPart, RelocationRefusal, RelocationTarget, WorldHasher, source_identifiers};
+pub use names::{record_name_lookups, take_name_lookups};
 mod quote;
 mod sealing;
 // The projected-tuple-tower round's two instruments
@@ -3019,6 +3022,15 @@ impl Elaborator {
         self.provenance
             .report(&key)
             .ok_or_else(|| format!("`{name}` has no provenance record"))
+    }
+
+    /// Whether the global at Ψ position `abs` is a declared assumption: the
+    /// kernel binding has a theorem's shape, so only the elaborator knows.
+    pub fn is_assumption_at(&self, abs: usize) -> bool {
+        u32::try_from(abs)
+            .ok()
+            .and_then(|abs| self.names.global_name_at(abs))
+            .is_some_and(|key| self.provenance.is_axiom(key))
     }
 
     /// Every non-axiom declaration whose proof or body reaches an axiom.

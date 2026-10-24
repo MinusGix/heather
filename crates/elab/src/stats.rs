@@ -116,6 +116,7 @@ registry! {
         ImageDecode = "image_decode_ns",
         ImageRecheck = "image_recheck_ns",
         ImagePublish = "image_publish_ns",
+        ImageRelocate = "image_relocate_ns",
         CacheHash = "cache_hash_ns",
         MerkleWalk = "merkle_walk_ns",
         Cow = "cow_ns",

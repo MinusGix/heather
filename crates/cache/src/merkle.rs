@@ -1358,10 +1358,20 @@ pub fn check_key(prefix: &Prefix, body: &Term, opaque: bool, iface: &Hash) -> Op
 /// one *exactly* where it means to and ask whether the hash moved. Wrapping
 /// each fixture in a `GlobalBinding` would work but would test the wrapper.
 ///
-/// Uses the interface domain; it is not a key of anything.
-#[doc(hidden)]
+/// Uses the interface domain; it is not a key of anything. Since 2026-10-24
+/// also the content identity of a scoped registry payload in a module's
+/// registry projection (`docs/module-interface-cutoff-design.md` §4).
 pub fn term_hash(prefix: &Prefix, len: u32, t: &Term) -> Option<Hash> {
     let mut w = Walk::new(DOMAIN_IFACE, prefix, len);
     w.term(t);
+    w.finish()
+}
+
+/// [`term_hash`] for a type: the content identity of a registry payload
+/// scoped at Ψ length `len`, for a module's position-independent registry
+/// projection (`docs/module-interface-cutoff-design.md` §4).
+pub fn type_hash(prefix: &Prefix, len: u32, t: &Type) -> Option<Hash> {
+    let mut w = Walk::new(DOMAIN_IFACE, prefix, len);
+    w.ty(t);
     w.finish()
 }

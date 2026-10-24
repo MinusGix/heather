@@ -309,22 +309,32 @@ pub(crate) enum DeltaEvent {
         direct_dependencies: Vec<String>,
     },
     GenDef { key: GenDef, abs: u32 },
+    /// The four guard-copy events carry `at`: the Ψ length their kernel
+    /// payloads were built at, which their free globals count from. The
+    /// registry ignores it (a guard copy is compared raw); relocating a
+    /// module onto another world needs it
+    /// (`docs/module-interface-cutoff-design.md` §3). `GenWfSlots`'s
+    /// decoded copy is the exception, scoped at `D#shape`'s own position.
     GenTyCode {
         tag: u32,
         inline: Rc<Type>,
         level: Level,
+        at: u32,
     },
     GenTyCodeFn {
         tag: u32,
         entry: TyCodeFn,
+        at: u32,
     },
     GenWfSlots {
         tag: u32,
         slots: WfSlots,
+        at: u32,
     },
     GenSpineCodes {
         tag: u32,
         codes: SpineCodes,
+        at: u32,
     },
     GenFamLevels {
         tag: u32,
@@ -492,35 +502,40 @@ impl Elaborator {
         tag: u32,
         inline: Rc<Type>,
         level: Level,
+        at: u32,
     ) {
         self.record_module_event(|| DeltaEvent::GenTyCode {
             tag,
             inline: Rc::clone(&inline),
             level: level.clone(),
+            at,
         });
         self.types.gdefs_mut().insert_ty_code(tag, (inline, level));
     }
 
-    pub(crate) fn semantic_commit_gen_ty_code_fn(&mut self, tag: u32, entry: TyCodeFn) {
+    pub(crate) fn semantic_commit_gen_ty_code_fn(&mut self, tag: u32, entry: TyCodeFn, at: u32) {
         self.record_module_event(|| DeltaEvent::GenTyCodeFn {
             tag,
             entry: entry.clone(),
+            at,
         });
         self.types.gdefs_mut().insert_ty_code_fn(tag, entry);
     }
 
-    pub(crate) fn semantic_commit_gen_wf_slots(&mut self, tag: u32, slots: WfSlots) {
+    pub(crate) fn semantic_commit_gen_wf_slots(&mut self, tag: u32, slots: WfSlots, at: u32) {
         self.record_module_event(|| DeltaEvent::GenWfSlots {
             tag,
             slots: slots.clone(),
+            at,
         });
         self.types.gdefs_mut().insert_wf_slots(tag, slots);
     }
 
-    pub(crate) fn semantic_commit_gen_spine_codes(&mut self, tag: u32, codes: SpineCodes) {
+    pub(crate) fn semantic_commit_gen_spine_codes(&mut self, tag: u32, codes: SpineCodes, at: u32) {
         self.record_module_event(|| DeltaEvent::GenSpineCodes {
             tag,
             codes: codes.clone(),
+            at,
         });
         self.types.gdefs_mut().insert_spine_codes(tag, codes);
     }
@@ -1263,17 +1278,17 @@ impl Elaborator {
                 self.semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
             }
             DeltaEvent::GenDef { key, abs } => self.semantic_commit_gen_def(key, abs),
-            DeltaEvent::GenTyCode { tag, inline, level } => {
-                self.semantic_commit_gen_ty_code(tag, inline, level);
+            DeltaEvent::GenTyCode { tag, inline, level, at } => {
+                self.semantic_commit_gen_ty_code(tag, inline, level, at);
             }
-            DeltaEvent::GenTyCodeFn { tag, entry } => {
-                self.semantic_commit_gen_ty_code_fn(tag, entry);
+            DeltaEvent::GenTyCodeFn { tag, entry, at } => {
+                self.semantic_commit_gen_ty_code_fn(tag, entry, at);
             }
-            DeltaEvent::GenWfSlots { tag, slots } => {
-                self.semantic_commit_gen_wf_slots(tag, slots);
+            DeltaEvent::GenWfSlots { tag, slots, at } => {
+                self.semantic_commit_gen_wf_slots(tag, slots, at);
             }
-            DeltaEvent::GenSpineCodes { tag, codes } => {
-                self.semantic_commit_gen_spine_codes(tag, codes);
+            DeltaEvent::GenSpineCodes { tag, codes, at } => {
+                self.semantic_commit_gen_spine_codes(tag, codes, at);
             }
             DeltaEvent::GenFamLevels { tag, level, index_level } => {
                 self.semantic_commit_gen_fam_levels(tag, level, index_level);

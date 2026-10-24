@@ -18,13 +18,16 @@ use heather_kernel::term::GlobalCtx;
 use crate::sha256::{Sha256, hex, sha256};
 use crate::{ELABORATOR_SEMANTICS, KERNEL_SEMANTICS};
 
-const MAGIC: &[u8; 8] = b"HTHCACH\x04";
+const MAGIC: &[u8; 8] = b"HTHCACH\x05";
 const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/3\0";
 const DOMAIN_INTERFACE: &[u8] = b"heather/module-interface/1\0";
 const DOMAIN_SEMANTICS: &[u8] = b"heather/module-semantics/1\0";
+const DOMAIN_RELOCATED: &[u8] = b"heather/module-relocated/1\0";
+const DOMAIN_SOURCE: &[u8] = b"heather/module-source/1\0";
 /// magic, cache key, producing semantics, interface hash, semantic length,
-/// warning count.
-const HEADER: usize = 8 + 32 + 32 + 32 + 8 + 8;
+/// warning count, world-record length. The first 104 bytes are what
+/// `scripts/sentinel` reads; they keep their places across format versions.
+const HEADER: usize = 8 + 32 + 32 + 32 + 8 + 8 + 8;
 const CHECKSUM: usize = 32;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -60,6 +63,19 @@ impl SemanticsIdentity {
 
     pub fn bytes(self) -> [u8; 32] {
         self.0
+    }
+
+    /// The identity an image carries when it was not elaborated but
+    /// **relocated** by this build from an image of the same source over
+    /// another dependency world (`docs/module-interface-cutoff-design.md`).
+    /// It is not [`Self::current`], so [`ImageFreshness::Exact`] never
+    /// replays one: the exact lane keeps elaborating every module it
+    /// misses, and stays the reference the relocation is compared against.
+    pub fn relocated() -> Self {
+        let mut h = Sha256::new();
+        h.update(DOMAIN_RELOCATED);
+        h.update(&Self::current().0);
+        Self(h.finish())
     }
 
     /// A short rendering for notices.
@@ -119,6 +135,159 @@ impl ModuleCacheKey {
     }
 }
 
+/// The identity of a module's source alone — name, text, lint profile — with
+/// no dependency world: what finds a relocation candidate, an image of the
+/// same text over another world (`docs/module-interface-cutoff-design.md`
+/// §2). Never a cache key: what the candidate is accepted on is its world
+/// record, checked against the world it is moved onto.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceKey([u8; 32]);
+
+impl SourceKey {
+    pub fn for_source(module: &str, source: &str, lint_profile: LintProfile) -> Self {
+        let mut h = Sha256::new();
+        h.update(DOMAIN_SOURCE);
+        put_bytes(&mut h, module.as_bytes());
+        h.update(&sha256(source.as_bytes()));
+        h.update(&[match lint_profile {
+            LintProfile::Default => 0,
+            LintProfile::Stdlib => 1,
+        }]);
+        Self(h.finish())
+    }
+}
+
+/// What an image records about the dependency world it was elaborated over,
+/// so it can be moved onto another world that differs only in what the
+/// module never observed (`docs/module-interface-cutoff-design.md` §2).
+/// Advisory: a wrong record can make a relocation fail its replay or be
+/// refused, and the relocated delta is kernel-rechecked like any image.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorldRecord {
+    /// The dependency prefix's length: the base the image's positions count
+    /// from.
+    pub base: u64,
+    /// The world's modules, in load order.
+    pub modules: Vec<String>,
+    /// Every dependency binding the image refers to, by content.
+    pub references: Vec<WorldReference>,
+    /// Digest of the world's registries: every module with registry events,
+    /// its projection with positions replaced by content.
+    pub registry: [u8; 32],
+    /// Names the elaboration looked up that its source does not spell (an
+    /// operator's fallback name, a tactic's lemma), by last `::` segment.
+    pub lookups: Vec<String>,
+    /// Digest of what the module's identifiers and [`Self::lookups`] resolve
+    /// to in the world.
+    pub names: [u8; 32],
+}
+
+/// One dependency binding an image refers to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorldReference {
+    /// Its position in the old world.
+    pub abs: u64,
+    /// Its module, an index into [`WorldRecord::modules`].
+    pub module: u32,
+    /// Its content identity (`merkle::interface_hash`).
+    pub hash: [u8; 32],
+    /// Which of the module's bindings with this identity it is, counting
+    /// from the first; and how many there were.
+    pub rank: u32,
+    pub count: u32,
+}
+
+impl WorldRecord {
+    fn encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.base.to_le_bytes());
+        out.extend_from_slice(&(self.modules.len() as u64).to_le_bytes());
+        for module in &self.modules {
+            out.extend_from_slice(&(module.len() as u64).to_le_bytes());
+            out.extend_from_slice(module.as_bytes());
+        }
+        out.extend_from_slice(&(self.references.len() as u64).to_le_bytes());
+        for r in &self.references {
+            out.extend_from_slice(&r.abs.to_le_bytes());
+            out.extend_from_slice(&r.module.to_le_bytes());
+            out.extend_from_slice(&r.hash);
+            out.extend_from_slice(&r.rank.to_le_bytes());
+            out.extend_from_slice(&r.count.to_le_bytes());
+        }
+        out.extend_from_slice(&(self.lookups.len() as u64).to_le_bytes());
+        for name in &self.lookups {
+            out.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+        }
+        out.extend_from_slice(&self.registry);
+        out.extend_from_slice(&self.names);
+    }
+
+    fn decode(bytes: &[u8], limits: ModuleImageLimits) -> Result<Self, ModuleCacheError> {
+        let corrupt = ModuleCacheError::Corrupt("module world record is malformed");
+        let mut at = 0;
+        let mut take = |n: usize| -> Result<&[u8], ModuleCacheError> {
+            let end = at + n;
+            if end > bytes.len() {
+                return Err(ModuleCacheError::Corrupt("module world record is malformed"));
+            }
+            let out = &bytes[at..end];
+            at = end;
+            Ok(out)
+        };
+        let base = u64::from_le_bytes(take(8)?.try_into().unwrap());
+        let count = u64::from_le_bytes(take(8)?.try_into().unwrap()) as usize;
+        if count > limits.max_sequence {
+            return Err(corrupt);
+        }
+        let mut modules = Vec::with_capacity(count);
+        for _ in 0..count {
+            let len = u64::from_le_bytes(take(8)?.try_into().unwrap()) as usize;
+            if len > limits.max_string_bytes {
+                return Err(ModuleCacheError::Corrupt("module world record is malformed"));
+            }
+            let name = std::str::from_utf8(take(len)?)
+                .map_err(|_| ModuleCacheError::Corrupt("module world record is malformed"))?;
+            modules.push(name.to_string());
+        }
+        let count = u64::from_le_bytes(take(8)?.try_into().unwrap()) as usize;
+        if count > limits.max_sequence {
+            return Err(ModuleCacheError::Corrupt("module world record is malformed"));
+        }
+        let mut references = Vec::with_capacity(count);
+        for _ in 0..count {
+            let abs = u64::from_le_bytes(take(8)?.try_into().unwrap());
+            let module = u32::from_le_bytes(take(4)?.try_into().unwrap());
+            let hash: [u8; 32] = take(32)?.try_into().unwrap();
+            let rank = u32::from_le_bytes(take(4)?.try_into().unwrap());
+            let count = u32::from_le_bytes(take(4)?.try_into().unwrap());
+            if module as usize >= modules.len() || rank >= count || abs >= base {
+                return Err(ModuleCacheError::Corrupt("module world record is malformed"));
+            }
+            references.push(WorldReference { abs, module, hash, rank, count });
+        }
+        let count = u64::from_le_bytes(take(8)?.try_into().unwrap()) as usize;
+        if count > limits.max_sequence {
+            return Err(ModuleCacheError::Corrupt("module world record is malformed"));
+        }
+        let mut lookups = Vec::with_capacity(count);
+        for _ in 0..count {
+            let len = u64::from_le_bytes(take(8)?.try_into().unwrap()) as usize;
+            if len > limits.max_string_bytes {
+                return Err(ModuleCacheError::Corrupt("module world record is malformed"));
+            }
+            let name = std::str::from_utf8(take(len)?)
+                .map_err(|_| ModuleCacheError::Corrupt("module world record is malformed"))?;
+            lookups.push(name.to_string());
+        }
+        let registry: [u8; 32] = take(32)?.try_into().unwrap();
+        let names: [u8; 32] = take(32)?.try_into().unwrap();
+        if at != bytes.len() {
+            return Err(ModuleCacheError::Corrupt("module world record has trailing bytes"));
+        }
+        Ok(Self { base, modules, references, lookups, registry, names })
+    }
+}
+
 fn put_bytes(h: &mut Sha256, bytes: &[u8]) {
     h.update(&(bytes.len() as u64).to_le_bytes());
     h.update(bytes);
@@ -135,6 +304,9 @@ pub struct LoadedModule {
     /// interface projection can stop proof-only edits invalidating consumers
     /// without changing the loader/storage boundary.
     pub interface_hash: [u8; 32],
+    /// What the image recorded about its dependency world, when its writer
+    /// could say (`docs/module-interface-cutoff-design.md` §2).
+    pub world: Option<WorldRecord>,
 }
 
 #[derive(Debug)]
@@ -354,6 +526,72 @@ impl ModuleImageCache {
         self.dir.join(format!("{}.refused", self.world_key(module, dependencies)))
     }
 
+    /// The pointer to the newest image published for a module's exact source
+    /// over any dependency world: a relocation candidate
+    /// (`docs/module-interface-cutoff-design.md` §2). Like `.latest`, one
+    /// small file holding a cache key; unlike it, never a pin.
+    fn source_path(&self, source: SourceKey) -> PathBuf {
+        self.dir.join(format!("{}.src", hex(&source.0)))
+    }
+
+    /// The newest image of this exact source over whatever world it was
+    /// elaborated over, decoded against a stand-in prefix of the right
+    /// length (relocation replaces it), under the same freshness policy as
+    /// [`Self::load`]. `None` when there is none, or it carries no world
+    /// record. The stand-in means the delta is only good for
+    /// `ModuleDelta::relocate`: replaying it as it is would fail the
+    /// dependency checks, as it should.
+    pub fn load_candidate(
+        &self,
+        source: SourceKey,
+        source_len: usize,
+        freshness: ImageFreshness,
+    ) -> Result<Option<LoadedModule>, ModuleCacheError> {
+        let pointer = match std::fs::read(self.source_path(source)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let Ok(key) = <[u8; 32]>::try_from(pointer.as_slice()) else {
+            return Err(ModuleCacheError::Corrupt("module source pointer has the wrong length"));
+        };
+        let Some(base) = self.peek_world_base(ModuleCacheKey(key))? else {
+            return Ok(None);
+        };
+        let base = usize::try_from(base)
+            .ok()
+            .filter(|base| *base <= self.limits.max_sequence.saturating_mul(64))
+            .ok_or(ModuleCacheError::Corrupt("module world record base is implausible"))?;
+        let stand_in = GlobalCtx::new(vec![heather_kernel::term::GlobalBinding::Ctx; base]);
+        self.load(ModuleCacheKey(key), stand_in, source_len, freshness)
+    }
+
+    /// The world record's base, read without decoding the image: what the
+    /// stand-in prefix of [`Self::load_candidate`] must be as long as.
+    fn peek_world_base(&self, key: ModuleCacheKey) -> Result<Option<u64>, ModuleCacheError> {
+        let mut head = [0u8; HEADER + 9];
+        let mut file = match std::fs::File::open(self.path(key)) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        use std::io::{Seek, SeekFrom};
+        if file.read_exact(&mut head[..HEADER]).is_err() || &head[..8] != MAGIC {
+            return Ok(None);
+        }
+        let semantic_len = u64::from_le_bytes(head[104..112].try_into().unwrap());
+        let world_len = u64::from_le_bytes(head[120..128].try_into().unwrap());
+        if world_len < 9 {
+            return Ok(None);
+        }
+        file.seek(SeekFrom::Start(HEADER as u64 + semantic_len))?;
+        let mut flag_and_base = [0u8; 9];
+        if file.read_exact(&mut flag_and_base).is_err() || flag_and_base[0] != 1 {
+            return Ok(None);
+        }
+        Ok(Some(u64::from_le_bytes(flag_and_base[1..9].try_into().unwrap())))
+    }
+
     fn world_key(&self, module: &str, dependencies: &ModuleDependencyIdentity) -> String {
         let mut h = Sha256::new();
         h.update(b"heather-module-latest-v1\0");
@@ -502,13 +740,19 @@ impl ModuleImageCache {
         if warning_count > self.limits.max_sequence {
             return Err(ModuleCacheError::Corrupt("module warning count exceeds the limit"));
         }
+        let world_len = u64::from_le_bytes(bytes[120..128].try_into().unwrap());
+        let world_len = usize::try_from(world_len)
+            .map_err(|_| ModuleCacheError::Corrupt("module world record length overflows"))?;
         let semantic_end = HEADER
             .checked_add(semantic_len)
             .ok_or(ModuleCacheError::Corrupt(
                 "module cache artifact length overflows",
             ))?;
+        let world_end = semantic_end
+            .checked_add(world_len)
+            .ok_or(ModuleCacheError::Corrupt("module cache artifact length overflows"))?;
         let checksum_at = bytes.len() - CHECKSUM;
-        if semantic_end > checksum_at {
+        if world_end > checksum_at {
             return Err(ModuleCacheError::Corrupt(
                 "module cache artifact length does not match",
             ));
@@ -535,8 +779,14 @@ impl ModuleImageCache {
             }
             interface_hash = projected;
         }
+        let world = match bytes.get(semantic_end) {
+            Some(1) if world_len > 0 => {
+                Some(WorldRecord::decode(&bytes[semantic_end + 1..world_end], self.limits)?)
+            }
+            _ => None,
+        };
         let warnings = decode_warnings(
-            &bytes[semantic_end..checksum_at],
+            &bytes[world_end..checksum_at],
             warning_count,
             source_len,
             self.limits,
@@ -546,6 +796,7 @@ impl ModuleImageCache {
             warnings,
             stale,
             interface_hash,
+            world,
         }))
     }
 
@@ -595,6 +846,22 @@ impl ModuleImageCache {
         warnings: &[Warning],
         semantics: SemanticsIdentity,
     ) -> Result<[u8; 32], ModuleCacheError> {
+        self.publish_world(key, delta, warnings, semantics, None)
+    }
+
+    /// [`Self::publish_as`] with the module's world record and source key,
+    /// so a later run over another world can find the image by its source and
+    /// move it (`docs/module-interface-cutoff-design.md` §2). The source
+    /// pointer is written only with a record: an image without one cannot be
+    /// moved.
+    pub fn publish_world(
+        &self,
+        key: ModuleCacheKey,
+        delta: &ModuleDelta,
+        warnings: &[Warning],
+        semantics: SemanticsIdentity,
+        world: Option<(SourceKey, &WorldRecord)>,
+    ) -> Result<[u8; 32], ModuleCacheError> {
         let (semantic, nodes) = delta.to_image();
         if nodes > self.limits.max_nodes {
             self.note_refusal(
@@ -621,14 +888,21 @@ impl ModuleImageCache {
         if warnings.len() > self.limits.max_sequence {
             return Err(ModuleCacheError::Corrupt("module warning count exceeds the limit"));
         }
-        let mut bytes = Vec::with_capacity(HEADER + semantic.len() + CHECKSUM);
+        let mut record = Vec::new();
+        if let Some((_, world)) = world {
+            record.push(1);
+            world.encode(&mut record);
+        }
+        let mut bytes = Vec::with_capacity(HEADER + semantic.len() + record.len() + CHECKSUM);
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&key.0);
         bytes.extend_from_slice(&semantics.0);
         bytes.extend_from_slice(&interface_hash);
         bytes.extend_from_slice(&(semantic.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&(warnings.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&(record.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&semantic);
+        bytes.extend_from_slice(&record);
         encode_warnings(&mut bytes, warnings, self.limits)?;
         if bytes.len() > HEADER.saturating_add(self.limits.max_bytes) {
             return Err(ModuleCacheError::Corrupt("module cache artifact exceeds the byte limit"));
@@ -655,6 +929,15 @@ impl ModuleImageCache {
         {
             let _ = std::fs::remove_file(&temp_latest);
             return Err(error.into());
+        }
+        // The source pointer, for a relocation from another world. Best
+        // effort like the rest: a lost pointer is one more elaboration.
+        if let Some((source, _)) = world {
+            let pointer = self.source_path(source);
+            let temp = temporary_sibling(&pointer);
+            if std::fs::write(&temp, key.0).and_then(|()| std::fs::rename(&temp, &pointer)).is_err() {
+                let _ = std::fs::remove_file(&temp);
+            }
         }
         // A world that now has a pointer has no refusal: an image that fits
         // must not leave a stale marker behind to mislead the next `--only`.
