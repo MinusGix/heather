@@ -623,6 +623,7 @@ three general facts added to their home files: `Nat::pow_pos` (an evidence
 rule, so `Rat(n, Nat::pow(2, k))` finds its denominator's positivity) and
 `Nat::le_pow_self` in `nat.hthr`, and `Nat::int_pow_add` and
 `Int::pos_part`/`neg_part`/`pos_sub_neg` in `int.hthr`. Tests are in
+`lib/_tests/std/num/float/float_tests.hthr`, the refusals in
 `crates/elab/tests/lib_std_float.rs`.
 
 What changed from the sketch in §3, and why:
@@ -680,7 +681,8 @@ subtraction-order lemmas in `rat.hthr`; `Option::none_ne_some` in
 `option.hthr`; `Dyadic::le_of_mant_le` and its converses in `dyadic.hthr`;
 `Specials::inf_free`, `Format::canonical_elim`, `Format::max_mag_bounds`
 and `Float::neg` (prefix `-`) in `float.hthr`. Tests are in
-`crates/elab/tests/lib_std_float_round.rs`.
+`lib/_tests/std/num/float/round_tests.hthr`, the refusals in
+`crates/elab/tests/lib_std_float.rs`.
 
 **The relation.** `RoundsTo(F, mode, x, r)` is stated at `Rat` by cases on
 the result and the mode. A finite result is the greatest float at or below
@@ -900,7 +902,9 @@ for products and reciprocals (`Rat::mul_nonpos_l`/`_r`,
 `mul_nonneg_of_nonpos`, `recip_nonneg`/`nonpos`) in `rat.hthr`;
 `Dyadic::mant_zero` and `Dyadic::sign_or` in `dyadic.hthr`;
 `Specials::nan_of_inf` in `float.hthr`; and the rounding-side pieces in
-`round.hthr` (below). Tests are in `crates/elab/tests/lib_std_float_arith.rs`.
+`round.hthr` (below). Tests are in
+`lib/_tests/std/num/float/arith_tests.hthr`, the refusals in
+`crates/elab/tests/lib_std_float.rs`.
 
 **One signed rounding.** Every operation computes a sign bit, a magnitude in
 half-units and a sticky bit, and calls `Format::round_signed` once. The sign

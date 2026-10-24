@@ -44,3 +44,7 @@ library lines again as test lines over the last forty merges.
 - **[[library-whole-check-gate]]** owns checking every module. Assumed here:
   only that every `lib/_tests` module is checked as a root, and that
   importing from `lib/_tests` outside it is refused by a lint.
+
+## Log
+
+- 2026-10-24: Float modules done: four `lib/_tests/std/num/float/*_tests.hthr` probe modules, `Finite::zeros_differ` in float.hthr, and one Rust file (`lib_std_float.rs`) of vacuity refusals with reasons, in place of four Rust files. Closed-value refusals dropped where a probe pins the right value.

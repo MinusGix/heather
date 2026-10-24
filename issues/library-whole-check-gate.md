@@ -1,6 +1,6 @@
 ---
 title: Check every lib/ module in the suite, and flag orphans
-status: open
+status: closed
 labels: [testing,library,tooling]
 area: infrastructure
 created: 2026-10-24
@@ -32,3 +32,7 @@ nothing would notice if it stopped.
 With (1) in place, the "the X module checks" tests in
 `crates/elab/tests/lib_*.rs` are redundant
 ([[library-tests-as-theorems]]).
+
+## Log
+
+- 2026-10-24: Implemented: `crates/cli/tests/library.rs` checks every `lib/` folder through the CLI (one child per folder, three at a time: one process for all of `lib/` takes about the whole CPU rail cold), and lints that every module is reached and nothing outside `lib/_tests` imports a test module. `elf64_load` stays as a kept root: `docs/native-program-logic-design.md` §3 keeps it for the native rebuild.

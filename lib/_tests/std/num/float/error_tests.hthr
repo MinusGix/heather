@@ -1,0 +1,55 @@
+// Probes of `lib/std/num/float/error.hthr`: theorems that pin the concept
+// down at specific values and restate the contract at open ones. Tests,
+// not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+// Moved from crates/elab/tests/lib_std_float_error.rs; the refusals that need
+// the checker stay in lib_std_float.rs.
+import logic; import bool; import nat; import option; import list; import int; import omega; import rat;
+import dyadic; import float; import round; import error; import relation_props; import algebra_rel; import ordered_field;
+
+theorem u_near(): Rat::Same(e2m1().u(NearestEven), Rat(1, 4)) { refl }
+theorem u_dir(): Rat::Same(e2m1().u(TowardZero), Rat(1, 2)) { refl }
+theorem u_half(): Rat::Same(binary16().u(NearestAway), Rat(1, 2048)) { refl }
+theorem u_single(): Rat::Same(binary32().u(NearestEven), Rat(1, 16777216)) { refl }
+theorem eta_near(): Rat::Same(e2m1().eta(NearestEven), Rat(1, 4)) { refl }
+theorem eta_dir(): Rat::Same(e2m1().eta(TowardPos), Rat(1, 2)) { refl }
+theorem gamma_two(): Rat::Same(e2m1().gamma(NearestEven, 2), 1) { refl }
+theorem gamma_half(): Rat::Same(binary16().gamma(NearestEven, 3), Rat(3, 2045)) { refl }
+theorem ulp_sub(): Rat::Same(e2m1().ulp_at(Rat(1, 4)), Rat(1, 2)) { refl }
+theorem ulp_mid(): Rat::Same(e2m1().ulp_at(Rat(5, 2)), 1) { refl }
+theorem ulp_neg(): Rat::Same(e2m1().ulp_at(Rat(-5, 2)), 1) { refl }
+theorem ulp_top(): Rat::Same(e2m1().ulp_at(5), 2) { refl }
+theorem err_mid(): Rat::Same(e2m1().err_at(NearestEven, Rat(5, 2)), Rat(1, 2)) { refl }
+theorem err_dir(): Rat::Same(e2m1().err_at(TowardNeg, Rat(5, 2)), 1) { refl }
+
+theorem err({F: Format}, mode: Mode, x: Rat, r: Finite(F), range: x.abs() <= (Finite::max_finite(F)).val(), hr: RoundsTo(F, mode, x, Fin(r))):
+    (r.val() - x).abs() <= F.err_at(mode, x) { F.rounding_error(mode, x, r, range, hr) }
+theorem in_ulps({F: Format}, mode: Mode, x: Rat, r: Finite(F), range: x.abs() <= (Finite::max_finite(F)).val(), hr: RoundsTo(F, mode, x, Fin(r))):
+    (r.val() - x).abs() <= F.ulp_at(x) { Rat::le_trans(F.rounding_error(mode, x, r, range, hr), F.err_le_ulp(mode, x)) }
+theorem half_ulp(F: Format, x: Rat): F.err_at(NearestEven, x) + F.err_at(NearestEven, x) ≈ F.ulp_at(x) { F.err_half_ulp(True, x) }
+theorem at_round_rat(F: Format, x: Rat, r: Finite(F), range: x.abs() <= (Finite::max_finite(F)).val(),
+    normal: (Finite::min_normal(F)).val() <= x.abs(), is: F.round_rat(NearestEven, x) = Fin(r)): ∃ d: Rat, d.abs() <= F.u(NearestEven) ∧ r.val() ≈ x * (1 + d)
+{
+    F.standard_model(NearestEven, x, r, range, normal, j(is, λ v _ => RoundsTo(F, NearestEven, x, v), F.round_rat_correct(NearestEven, x)))
+}
+theorem unfolds(F: Format): F.u(NearestEven) ≈ Rat(1, F.top()) {
+    let h: (F.u(NearestEven) ≈ Rat(1, F.top())) = refl;
+    h
+}
+theorem rel({F: Format}, mode: Mode, x: Rat, r: Finite(F), range: x.abs() <= (Finite::max_finite(F)).val(),
+    normal: (Finite::min_normal(F)).val() <= x.abs(), hr: RoundsTo(F, mode, x, Fin(r))): (r.val() - x).abs() <= F.u(mode) * x.abs()
+{
+    F.relative_error(mode, x, r, range, normal, hr)
+}
+theorem sub({F: Format}, mode: Mode, x: Rat, r: Finite(F), small: x.abs() <= (Finite::min_normal(F)).val(), hr: RoundsTo(F, mode, x, Fin(r))):
+    (r.val() - x).abs() <= F.eta(mode) { F.subnormal_error(mode, x, r, small, hr) }
+theorem both({F: Format}, mode: Mode, x: Rat, r: Finite(F), range: x.abs() <= (Finite::max_finite(F)).val(), hr: RoundsTo(F, mode, x, Fin(r))):
+    (r.val() - x).abs() <= F.u(mode) * x.abs() + F.eta(mode) { F.error_bound(mode, x, r, range, hr) }
+theorem compose(F: Format, mode: Mode, a, b: Rat, m, n: Nat, ok: m + n < F.u_den(mode), ha: a.abs() <= F.gamma(mode, m), hb: b.abs() <= F.gamma(mode, n)):
+    ((1 + a) * (1 + b) - 1).abs() <= F.gamma(mode, m + n) { F.theta_mul(mode, m, n, ok, ha, hb) }
+theorem grows(F: Format, mode: Mode, m, n: Nat, mn: m <= n, ok: n < F.u_den(mode)): F.gamma(mode, m) <= F.gamma(mode, n) { F.gamma_mono(mode, m, n, mn, ok) }
+theorem three(d1, d2, d3: Rat, h1: d1.abs() <= e5m2().u(NearestEven), h2: d2.abs() <= e5m2().u(NearestEven), h3: d3.abs() <= e5m2().u(NearestEven)):
+    (List::prod_one_add([d1, d2, d3]) - 1).abs() <= e5m2().gamma(NearestEven, 3)
+{
+    e5m2().gamma_prod(NearestEven, [d1, d2, d3], And(h1, And(h2, And(h3, trivial))), trivial)
+}

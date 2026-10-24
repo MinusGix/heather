@@ -1,7 +1,10 @@
 # Which tests are worth having: tests versus theorems
 
-Status: audit 2026-10-24, master 87348e3. Recommendations only. Nothing here
-has been migrated; the proposals are filed as issues (§7). Counts come from
+Status: audit 2026-10-24, master 87348e3. Minus took the policy the same
+day, with `lib/_tests` for probes (§4.5). Implemented since: the
+whole-library gate and its lints (§4.1), the refusal helper (§4.4), and the
+float modules migrated as the first library family (§6). The rest are filed
+as issues (§7). Counts come from
 `scripts/test-census`, a static read of every `#[test]` fn, so they are
 approximate: a few percent of tests land in the wrong kind.
 
@@ -291,6 +294,16 @@ helper (§4.4).
 
 ### 4.1 A whole-library gate
 
+Implemented: `crates/cli/tests/library.rs`. One measurement shaped it: a
+cold `heather check lib` in one process at width one takes about the whole
+300 CPU-s rail, so the gate runs one `heather check` per folder of `lib/std`
+and `lib/` (three at a time, one image store, single-flight builds); the
+largest folder cold is under half the rail, and a warm run replays in
+seconds. `elf64_load` stays: `docs/native-program-logic-design.md` §3 keeps
+it for the native rebuild, so it is listed as a kept root with that reason.
+
+The proposal as written:
+
 Add one test that checks every module under `lib/` through the CLI with
 `--cache` (as `showcase.rs` does per row), plus a lint that fails when a
 `lib/` module is neither imported by another module nor named as a root.
@@ -353,6 +366,14 @@ directive can carry it (`// expect-error(guards Rat::inv_mul): …`) and the
 language does not change.
 
 ### 4.4 Refusals carry a reason
+
+Implemented: `support::assert_refused(e, name, src, Refusal::Kernel |
+Refusal::Mismatch | Refusal::Says("…"))` in `crates/elab/tests/support`. It
+also refuses an incidental slip (a parse error, an unbound name, an
+unresolved import) unless `Says` asks for it by name. The census lists what
+is left (`scripts/test-census --list bare_refusal`).
+
+The proposal as written:
 
 Add `support::refused(src, Reason::Kernel | Reason::Elab("fragment") | …)`,
 generalising `linux_wp::assert_refused`. `check-elab-test-families.mjs`
@@ -417,7 +438,18 @@ When a negative control is needed, choose its form in this order:
    proved artifact is really checked.
 4. **Bare refusal: never.**
 
-## 6. Migration, proposed and not done
+## 6. Migration
+
+Done so far: steps 1 and 2, and step 3 for the float modules
+(`lib/std/num/float/`). Their four Rust files became four `lib/_tests`
+modules of probes, one library theorem (`Finite::zeros_differ`), and one Rust
+file of fifteen vacuity refusals, each refused as a checking mismatch or for
+a named reason. The closed-value refusals went: a probe at the right value
+already pins each wrong one, given that `Rat::Same` tells the two values
+apart. A probe was added where none existed (`e2m1_carry_away`,
+`e2m1_third_up`, `zero_zero_not_finite`).
+
+The plan, in order of value per effort:
 
 In order of value per effort:
 

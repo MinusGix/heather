@@ -30,3 +30,7 @@ unbound name or a parse. Only that one file uses it.
 - Fix refusals file by file as they are touched. A refusal of a false
   *mathematical* claim usually becomes a `¬` theorem instead
   ([[library-tests-as-theorems]]).
+
+## Log
+
+- 2026-10-24: The helper exists: `support::assert_refused` with `Refusal::{Kernel, Mismatch, Says}` (crates/elab/tests/support). The float refusals use it. The rest migrate as their files are touched; `scripts/test-census --list bare_refusal` is the list. The lint in check-elab-test-families.mjs is not done.

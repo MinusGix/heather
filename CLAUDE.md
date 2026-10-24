@@ -126,6 +126,14 @@
   `docs/testing-generated-terms.md` — vary all four axes (literal *and*
   neutral scrutinee, an **open** element type, a *checking* position and not
   only computation, and a negative control); defects have hidden behind each.
+- **Rust test or theorem: `docs/test-value-audit.md` §5.** If Heather can
+  state a claim, write it in Heather. A library PR adds theorems to its module
+  (a client would cite them) or probes to `lib/_tests` (mirrors `lib/`,
+  `<subject>_tests` stems, never imported from outside), not a Rust test: the
+  whole-library gate (`crates/cli/tests/library.rs`) checks every module. A
+  false mathematical claim is a `¬` theorem, not a refusal. A refusal test
+  names its reason (`support::assert_refused` with a `Refusal`); never a bare
+  `is_err()`.
 - **Areas and importance: `docs/roadmap.md`** owns the project's areas, their
   priority, the milestones effort goes toward; read it before choosing what
   a round works on. Every open issue carries `area:` (and `milestone:` when it
