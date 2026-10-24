@@ -58,7 +58,7 @@ if [ -n "$lean" ]; then
   # Import.lean's findSysroot runs `lean` from PATH.
   export PATH="$(dirname "$lean"):$PATH"
   if (ulimit -v 8388608 -t 300 -c 0; "$lean" -o Hx.olean Hx.lean) >lean.log 2>&1; then
-    for f in Exported Sweep; do
+    for f in Exported Sweep KernelModel; do
       if (ulimit -v 8388608 -t 300 -c 0; LEAN_PATH="$out" "$lean" --run Import.lean "$f.hxk") >"kernel-$f.log" 2>&1; then
         echo "lean kernel, $f: $(tail -1 "kernel-$f.log")"
       else

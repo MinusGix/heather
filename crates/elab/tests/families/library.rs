@@ -16,6 +16,8 @@ mod codata;
 mod codata_indexed;
 #[path = "../lib_algebra.rs"]
 mod lib_algebra;
+#[path = "../lib_kernel_model_reduction.rs"]
+mod lib_kernel_model_reduction;
 #[path = "../lib_list_algos.rs"]
 mod lib_list_algos;
 #[path = "../lib_setoid_mergeable.rs"]

@@ -21,6 +21,13 @@
 //! written — `nat::Nat::sub`'s spelling never matched the old syntactic pattern
 //! and classifies here by what it does.
 //!
+//! That property, and the fuel claim below, are proved for ch. 06's
+//! weak-head reduction on a λ + `Nat` fragment in
+//! `lib/kernel_model/kernel_reduction.hthr` (`Tm::whnf_inst_settled`:
+//! an unblocked run is, at the same fuel, the run of every instance;
+//! `docs/kernel-model-design.md`). What is not proved is that this evaluator
+//! implements that reduction.
+//!
 //! Each reading is tried **uniformly** (`k` neutral: the class holds at every
 //! step) and, if that is stuck on `k`, **peeled** (`k := Succ x`: the class
 //! holds at every step but the innermost, which the fold takes ordinarily —

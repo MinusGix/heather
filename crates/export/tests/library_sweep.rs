@@ -71,6 +71,41 @@ fn std_list_closure_exports() {
     }
 }
 
+/// The kernel model (`lib/kernel_model/kernel_reduction.hthr`,
+/// `docs/kernel-model-design.md` §5) exports whole: its proofs are meant to
+/// be rechecked by Lean's kernel as well as Heather's, since what they
+/// justify is an optimisation in Heather's own kernel.
+#[test]
+fn kernel_model_exports() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib");
+    let modules = loader::load(&root.join("kernel_model/kernel_reduction.hthr"), &[root.join("std")])
+        .map_err(|e| e.msg)
+        .expect("load");
+    let mut e = Elaborator::with_prelude_for_export().expect("prelude");
+    for m in &modules {
+        e.elab_module_source(&m.name, &m.src).unwrap_or_else(|err| panic!("{}: {err}", m.name));
+    }
+    let decls = export(&Source {
+        psi: e.psi(),
+        proof: &|abs| e.export_proof(abs).cloned(),
+        name: &|abs| e.global_key_at(abs).map(str::to_string).or_else(|| e.generated_key_at(abs)),
+        ctors: &|tag| e.constructor_names(tag as u32),
+        tycode_at: &|tag, levels| e.tycode_fn_at(tag as u32, levels),
+    });
+    let refused: Vec<String> = decls
+        .iter()
+        .filter_map(|d| d.decl.as_ref().err().map(|r| format!("{}: {}", d.name.as_deref().unwrap_or("?"), r.0)))
+        .collect();
+    assert!(refused.is_empty(), "refused:\n{}", refused.join("\n"));
+    let kernel = print_kernel(&decls);
+    let holes: Vec<&str> = kernel.lines().filter(|l| l.starts_with("x\t")).collect();
+    assert!(holes.is_empty(), "skipped by the kernel route:\n{}", holes.join("\n"));
+    assert!(decls.iter().any(|d| d.name.as_deref() == Some("kernel_reduction::Tm::whnf_inst")), "the probe lemma is exported");
+    if let Some(dir) = std::env::var_os("HEATHER_EXPORT_OUT") {
+        std::fs::write(PathBuf::from(dir).join("KernelModel.hxk"), kernel).unwrap();
+    }
+}
+
 /// The negative control for the realisation's side condition (design §5.1):
 /// a declaration that uses `elim_Wf`'s β at an **open** tag. Heather's
 /// kernel accepts it; the native recursor cannot reduce there, so Lean must
