@@ -183,7 +183,11 @@ about half of item time is outside the kernel gate.
    distinct test module list. The prefix duplication measured here is
    modest (images on disk outnumber distinct modules by about a third), so
    this matters mainly for edit invalidation (`nat` edited invalidates
-   everything after it). It is not the first lever.
+   everything after it). It is not the first lever. The edit-invalidation
+   half has since landed as the early cutoff
+   (`docs/module-interface-cutoff-design.md`): in the stale lanes, an
+   unchanged module's image is moved across an upstream edit it did not
+   observe, and the sentinel audits those moves against elaboration.
 4. **Caching the elaborator's search across runs.** Omega/CutSat results,
    instance resolutions, and tactic scripts' successful paths, keyed by
    their canonical goal ([[persistent-certified-fact-cache]]). A hit is

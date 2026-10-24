@@ -9,6 +9,7 @@ image store, a cold verdict store, a cold target directory.
 
     scripts/sentinel run          # suite, then publish (green) or bisect (red)
     scripts/sentinel seed DIR     # unpack the latest published image stores
+    scripts/sentinel audit [REV]  # the early cutoff's audit from REV's library
 
 `run` writes target/sentinel/report.md and exits 0 green, 1 red, 2 when the
 suite was INCOMPLETE (a binary died; the bisect still runs on what failed).
@@ -21,11 +22,19 @@ reader's kernel, so a seeded image can only ever be a miss, never a wrong
 answer. The verdict store is not published: a vouched verdict skips the
 kernel. The report lists targets whose CPU grew past the last green run's.
 
+Either way, the library is checked once at the last green run's commit and
+once here, by this commit's compiler and into one image store, with the
+relocation audit on (docs/module-interface-cutoff-design.md §5): every
+module the stale lanes would have moved onto the new world rather than
+elaborated is moved and compared with its elaboration. A `diverged` module is
+one the early cutoff let through wrongly; the report names it.
+
 Red: the failing targets are bisected over the first-parent merges since the
 last green run, rerunning only those targets at each step, and the report
 names the first merge at which each fails.
 """
 
+import io
 import json
 import os
 import re
@@ -210,6 +219,64 @@ def bisect(failing, last_green, head):
     return blame
 
 
+AUDIT_VERDICTS = ("same", "same-interface", "refused", "diverged")
+
+
+def relocation_audit(base):
+    """Check `lib/std` as of commit `base`, then as of the working tree, into
+    one fresh image store with the relocation audit on; returns the verdict
+    counts and the diverged modules, or None when a check failed. The second
+    check runs the exact policy: each module is elaborated, and the audit
+    also moves the first check's image of the same source onto the new
+    world, when the cutoff lets it, and compares the two."""
+    work = OUT / "relocation-audit"
+    shutil.rmtree(work, ignore_errors=True)
+    (work / "old").mkdir(parents=True)
+    archive = subprocess.run(["git", "archive", base, "lib"], cwd=ROOT, stdout=subprocess.PIPE)
+    if archive.returncode != 0:
+        return None
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+        tar.extractall(work / "old")
+    if subprocess.run(["cargo", "build", "--quiet", "--release", "-p", "heather-cli"], cwd=ROOT).returncode != 0:
+        return None
+    audit = work / "audit.tsv"
+    # Capped like every heather run (CLAUDE.md); the CPU rail counts all
+    # eight kernel workers.
+    def check(lib, env):
+        cmd = (f"ulimit -v 8388608 -t 7200 -c 0; exec target/release/heather check --cache "
+               f"--cache-dir {work / 'images'} {lib}")
+        with open(work / "check.log", "a") as log:
+            return subprocess.run(["bash", "-c", cmd], cwd=ROOT, env=env, stdout=log,
+                                  stderr=subprocess.STDOUT).returncode == 0
+    env = {k: v for k, v in os.environ.items() if k != "HEATHER_RELOCATION_AUDIT"}
+    if not check(work / "old" / "lib" / "std", env):
+        return None
+    if not check(ROOT / "lib" / "std", dict(env, HEATHER_RELOCATION_AUDIT=str(audit))):
+        return None
+    counts = {v: 0 for v in AUDIT_VERDICTS}
+    diverged = []
+    for line in audit.read_text().splitlines() if audit.exists() else []:
+        module, verdict, _ = (line.split("\t") + ["", ""])[:3]
+        counts[verdict] = counts.get(verdict, 0) + 1
+        if verdict == "diverged":
+            diverged.append(module)
+    return counts, diverged
+
+
+def audit_report(base):
+    result = relocation_audit(base)
+    if result is None:
+        return [f"Relocation audit from {base[:12]}: a library check failed (`target/sentinel/relocation-audit/check.log`)."]
+    counts, diverged = result
+    line = (f"Relocation audit from {base[:12]}: "
+            + ", ".join(f"{counts[v]} {v}" for v in AUDIT_VERDICTS) + ".")
+    if diverged:
+        line += (f" **The early cutoff moved {len(diverged)} module(s) its elaboration does not reproduce:** "
+                 + ", ".join(f"`{m}`" for m in diverged)
+                 + ". The stale lanes replay a wrong world for these; see `target/sentinel/relocation-audit/audit.tsv`.")
+    return [line]
+
+
 def run():
     OUT.mkdir(parents=True, exist_ok=True)
     head = git("rev-parse", "HEAD")
@@ -258,6 +325,8 @@ def run():
             report += ["", f"The last green run ({previous['commit'][:12]}) is not an ancestor of this commit; no bisect."]
         else:
             report += ["", "No earlier green run on record; no bisect."]
+    if previous is not None:
+        report += [""] + audit_report(previous["commit"])
     (OUT / "report.md").write_text("\n".join(report) + "\n")
     print("\n".join(report))
     return status
@@ -297,6 +366,15 @@ def main(argv):
         return run()
     if argv[:1] == ["seed"] and len(argv) == 2:
         return seed(argv[1])
+    if argv[:1] == ["audit"] and len(argv) <= 2:
+        base = argv[1] if len(argv) == 2 else (fetch_manifest() or {}).get("commit")
+        if base is None:
+            print("sentinel: no green run on record; name a commit", file=sys.stderr)
+            return 64
+        OUT.mkdir(parents=True, exist_ok=True)
+        lines = audit_report(git("rev-parse", base))
+        print("\n".join(lines))
+        return 1 if "**" in lines[0] else 0
     print(__doc__, file=sys.stderr)
     return 64
 

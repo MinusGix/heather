@@ -109,7 +109,7 @@ use std::sync::Arc as Rc;
 use crate::bounds;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
+    Branches, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
     SubstTail, Term, Type,
 };
 
@@ -1168,6 +1168,104 @@ impl Mapper for ShiftGlobal {
     }
 }
 
+/// Rename every free global variable through a caller's map: the rescoping a
+/// module image needs when the Ψ prefix it was elaborated over is replaced by
+/// one in which its referents sit elsewhere
+/// (`docs/module-interface-cutoff-design.md` §3). The map sees and returns a
+/// free index as counted from the outside of the term, binders crossed
+/// already subtracted; `None` from it marks the result unusable rather than
+/// guessing, and the whole operation returns `None`.
+///
+/// Not used by the kernel's own judgements. Its output is untrusted like any
+/// other elaborator product, and is checked before it reaches Ψ.
+struct ReindexGlobal<'a> {
+    map: &'a mut dyn FnMut(u32) -> Option<u32>,
+    failed: bool,
+    changes: u64,
+}
+
+impl ReindexGlobal<'_> {
+    fn var(&mut self, v: GlobalVar, at: Depths) -> GlobalVar {
+        if v.0 < at.global {
+            return v;
+        }
+        match (self.map)(v.0 - at.global) {
+            Some(free) => {
+                let moved = GlobalVar(free + at.global);
+                if moved != v {
+                    self.note();
+                }
+                moved
+            }
+            None => {
+                self.failed = true;
+                v
+            }
+        }
+    }
+}
+
+impl Mapper for ReindexGlobal<'_> {
+    const LOCAL_OP: bool = false;
+    const NAME: &'static str = "reindex_global";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
+
+    fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
+        Type::GlobalTy { var: self.var(var, at), subst }
+    }
+
+    fn global_tm(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Term {
+        Term::GlobalTm { var: self.var(var, at), subst }
+    }
+
+    fn ctx_base(&mut self, base: CtxBase, at: Depths) -> (CtxBase, CtxEntries) {
+        let b = match base {
+            CtxBase::Nil => CtxBase::Nil,
+            CtxBase::Var(g) => CtxBase::Var(self.var(g, at)),
+        };
+        (b, CtxEntries::empty())
+    }
+
+    fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        let t = match tail {
+            SubstTail::Empty { len, base: CtxBase::Var(g) } => {
+                SubstTail::Empty { len, base: CtxBase::Var(self.var(g, at)) }
+            }
+            SubstTail::Empty { .. } => tail,
+            SubstTail::Wk { len, ctx_var } => {
+                SubstTail::Wk { len, ctx_var: self.var(ctx_var, at) }
+            }
+        };
+        (t, Vec::new())
+    }
+}
+
+impl GlobalBinding {
+    /// [`Type::reindex_global`] over a whole binding: its context, statement
+    /// and body share one global scope (the binding's prefix of Ψ).
+    pub fn reindex_global(&self, map: &mut dyn FnMut(u32) -> Option<u32>) -> Option<GlobalBinding> {
+        let mut m = ReindexGlobal { map, failed: false, changes: 0 };
+        let at = Depths::default();
+        let out = match self {
+            GlobalBinding::Ctx => GlobalBinding::Ctx,
+            GlobalBinding::Ty { ctx, layer, level } => {
+                GlobalBinding::Ty { ctx: map_ctx(ctx, &mut m, at), layer: *layer, level: level.clone() }
+            }
+            GlobalBinding::Tm { ctx, layer, ty, level, body } => GlobalBinding::Tm {
+                ctx: map_ctx(ctx, &mut m, at),
+                layer: *layer,
+                ty: sub_ty(ty, &mut m, at),
+                level: level.clone(),
+                body: body.as_ref().map(|b| sub_tm(b, &mut m, at)),
+            },
+        };
+        (!m.failed).then_some(out)
+    }
+}
+
 /// The recursor's motive and branch telescopes, weakened by `by` global
 /// bindings. The value machine's one materialization site that is a
 /// telescope table rather than a term (`docs/lazy-global-offset-design.md`
@@ -1809,6 +1907,15 @@ macro_rules! ops {
                 }
                 $map(self, &mut ShiftGlobal { by, changes: 0 }, Depths { global: cutoff, ..Depths::default() })
             }
+
+            /// Rename every free global variable through `map`, which sees
+            /// and returns indices counted from outside the term; `None` when
+            /// the map refused one. See [`ReindexGlobal`].
+            pub fn reindex_global(&self, map: &mut dyn FnMut(u32) -> Option<u32>) -> Option<$ty> {
+                let mut m = ReindexGlobal { map, failed: false, changes: 0 };
+                let out = $map(self, &mut m, Depths::default());
+                (!m.failed).then_some(out)
+            }
         }
     };
 }
@@ -2148,6 +2255,51 @@ mod tests {
             ],
         };
         assert_eq!(t2.apply_global(&sigma2), Term::Var(LocalVar(2)));
+    }
+
+    #[test]
+    fn reindex_global_maps_free_and_keeps_bound() {
+        // □(g' ⊢ Ty 0) → Πg. □(g ⊢ Ty 0): the bound g (Var 0 under its
+        // binder) stays, the free g' goes through the map, which sees it
+        // counted from outside the term.
+        let ty = |bound: u32, free: u32| Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar(free)), level: Level::Zero }),
+            cod: Rc::new(Type::CtxPi {
+                level: Level::Zero,
+                body: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar(bound)), level: Level::Zero }),
+            }),
+        };
+        let t = ty(0, 0);
+        let mut seen = Vec::new();
+        let out = t.reindex_global(&mut |i| {
+            seen.push(i);
+            Some(i + 3)
+        });
+        assert_eq!(seen, vec![0], "the bound variable is not the map's");
+        assert_eq!(out, Some(ty(0, 3)));
+        // Under the binder the free index is GlobalVar(1), seen as 0.
+        let under = |g: u32| Type::CtxPi {
+            level: Level::Zero,
+            body: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar(g)), level: Level::Zero }),
+        };
+        assert_eq!(under(1).reindex_global(&mut |i| Some(i)), Some(under(1)));
+        assert_eq!(under(1).reindex_global(&mut |i| Some(i + 2)), Some(under(3)));
+        // A refusal anywhere refuses the whole term.
+        assert_eq!(t.reindex_global(&mut |_| None), None);
+    }
+
+    #[test]
+    fn reindex_global_reaches_substitution_tails() {
+        // u^{wk¹_g}: both the head and the weakening's context variable are
+        // free globals.
+        let t = |u: u32, g: u32| Term::GlobalTm {
+            var: GlobalVar(u),
+            subst: LocalSubst { tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar(g) }, terms: vec![] },
+        };
+        assert_eq!(t(0, 1).reindex_global(&mut |i| Some(i * 10)), Some(t(0, 10)));
+        assert_eq!(t(0, 1).reindex_global(&mut |i| (i == 0).then_some(5)), None);
     }
 }
 

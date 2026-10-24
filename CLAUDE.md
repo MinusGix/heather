@@ -8,7 +8,9 @@
     x86 certificate gates (`crates/cli/tests/native*.rs`), and replays semantic
     test images an earlier compiler build wrote (vouched for by the verdict
     store at `target/decl-cache` or kernel-rechecked; the current frontend is
-    not re-run on unchanged library modules). What it skips and what dominates
+    not re-run on unchanged library modules, and a module whose dependency
+    changed in a way it did not observe has its image moved instead,
+    `docs/module-interface-cutoff-design.md`). What it skips and what dominates
     the rest: `issues/certgen-harness-cost.md`,
     `issues/native-summary-test-cpu-margin.md`.
   - A round's **final** verification, and any change touching `lib/`, the kit

@@ -24,6 +24,38 @@ use heather_syntax::Decl;
 
 use super::ParamMeta;
 
+thread_local! {
+    /// While recording: the last `::` segment of every name and module this
+    /// thread looked up, the early cutoff's account of what an elaboration
+    /// could have observed of the world's names beyond what its source
+    /// spells — an operator's fallback name, a tactic's lemma
+    /// (`docs/module-interface-cutoff-design.md` §2).
+    static QUERIED: std::cell::RefCell<Option<std::collections::BTreeSet<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn note(name: &str) {
+    QUERIED.with(|q| {
+        if let Some(set) = q.borrow_mut().as_mut() {
+            let last = name.rsplit("::").next().unwrap_or(name);
+            if !set.contains(last) {
+                set.insert(last.to_string());
+            }
+        }
+    });
+}
+
+/// Start recording this thread's name lookups, dropping any earlier record.
+pub fn record_name_lookups() {
+    QUERIED.with(|q| *q.borrow_mut() = Some(Default::default()));
+}
+
+/// Stop recording and return what was looked up since
+/// [`record_name_lookups`]; `None` when nothing was recording.
+pub fn take_name_lookups() -> Option<std::collections::BTreeSet<String>> {
+    QUERIED.with(|q| q.borrow_mut().take())
+}
+
 /// Which table a name lives in. Resolution is by name first and kind second —
 /// two modules that declare the same name are ambiguous whatever the two
 /// declarations *are*, and a module never declares one name twice — so this
@@ -232,6 +264,7 @@ impl Names {
     }
 
     pub(crate) fn module_scope(&self, module: &str) -> Option<&Scope> {
+        note(module);
         self.current.module_scopes.get(module).or_else(|| {
             self.sealed
                 .iter()
@@ -296,6 +329,7 @@ impl Names {
     }
 
     fn entries<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a NameEntry> + 'a {
+        note(name);
         self.sealed
             .iter()
             .flat_map(move |layer| layer.index.entries(name))
@@ -308,6 +342,7 @@ impl Names {
 
     /// Original owner of a public name, including a transitive reexport.
     pub(crate) fn origin(&self, module: &str, name: &str) -> Option<&str> {
+        note(name);
         self.layers().find_map(|layer| layer.index.entries(name).iter()
             .find(|e| e.module == module).map(|e| e.origin.as_str()))
     }
@@ -380,7 +415,40 @@ impl Names {
         resolve_kinds(self, scope, name, kinds, is_ctor_of)
     }
 
+    /// Every name `wanted` accepts, with its entries as `(module, origin,
+    /// kind)`, sorted and deduplicated: what a lookup of that name could see
+    /// (`NameWorld::observations`).
+    pub(crate) fn observe(
+        &self,
+        wanted: &dyn Fn(&str) -> bool,
+    ) -> std::collections::BTreeMap<String, Vec<(String, String, u8)>> {
+        let mut out: std::collections::BTreeMap<String, Vec<(String, String, u8)>> = Default::default();
+        for layer in self.layers() {
+            for (name, entries) in &layer.index.by_name {
+                if !wanted(name) {
+                    continue;
+                }
+                let seen = out.entry(name.clone()).or_default();
+                for e in entries {
+                    let kind = match e.kind {
+                        NameKind::Global => 0,
+                        NameKind::Inductive => 1,
+                        NameKind::Ctor => 2,
+                        NameKind::Meta => 3,
+                    };
+                    seen.push((e.module.clone(), e.origin.clone(), kind));
+                }
+            }
+        }
+        for entries in out.values_mut() {
+            entries.sort();
+            entries.dedup();
+        }
+        out
+    }
+
     pub(crate) fn global(&self, key: &str) -> Option<&GlobalInfo> {
+        note(key);
         self.layers().find_map(|layer| layer.globals.get(key))
     }
 
@@ -395,10 +463,12 @@ impl Names {
     }
 
     pub(crate) fn has_member_base(&self, name: &str) -> bool {
+        note(name);
         self.layers().any(|layer| layer.member_bases.contains(name))
     }
 
     pub(crate) fn surface_decl(&self, name: &str) -> Option<&Decl> {
+        note(name);
         self.layers()
             .find_map(|layer| layer.surface_decls.get(name))
     }
