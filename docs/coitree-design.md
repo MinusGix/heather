@@ -3,7 +3,9 @@
 Status: round 1 implemented, 2026-10-22 (`lib/std/itree/coitree.hthr`,
 `crates/elab/tests/lib_std_coitree.rs`); eutt and the bridge to programs
 (§7) implemented the same day (`lib/std/itree/coitree_eutt.hthr`,
-`crates/elab/tests/lib_std_coitree_eutt.rs`). Milestone `it-coinductive`
+`crates/elab/tests/lib_std_coitree_eutt.rs`); loops and binds against the
+fuelled programs (§8) on 2026-10-24 (`lib/std/itree/coitree_bridge.hthr`,
+`crates/elab/tests/lib_std_coitree_bridge.rs`). Milestone `it-coinductive`
 (`docs/roadmap.md`); issue `issues/coitree-library.md`. It builds on the
 `codata` surface (`docs/codata-elaborator-design.md`,
 `docs/codata-indexed-design.md`) over the kernel's `M`
@@ -108,9 +110,8 @@ the equations are what tie it to the two trees, as indexed §1 prescribes.
 - **eutt** (weak bisimilarity, finitely many `CTau`s peeled on either side):
   §7.
 - **The bridge to the fuelled programs**: bisimilar and eutt-related trees
-  give programs that refine each other (§7.4). That
-  `CoTree::program(iter(…))` and `Program::iter` refine each other is still
-  open (`issues/coitree-program-bridge.md`).
+  give programs that refine each other (§7.4), and `CoTree::program(iter(…))`
+  and `Program::iter` refine each other (§8).
 - **Certgen and export** refuse codata (codata §7), so nothing here is
   exported yet.
 
@@ -265,3 +266,82 @@ proportion to its size.
   leaves, are refused by conversion;
 - the bridge used at `CTau(CTau(t))` and at `bind(t, CRet)`, and a goal over
   `Eutt` names it with its trees.
+
+---
+
+## 8. Against the fuelled programs
+
+`lib/std/itree/coitree_bridge.hthr`; issue
+`issues/coitree-program-bridge.md`. The finite library builds programs out
+of fuel (`Program::iter`, `Program::bind`), and a coinductive tree is a
+program through its approximations. The two produce the same traces, so
+each refines the other, and a theorem proved on one side carries to the
+other with no fuel in its statement.
+
+### 8.1 The embedding
+
+`CoTree::of_tree(t)` copies a finite tree constructor for constructor, with
+`Cut` as `spin`. It is a corecursive function whose seed is the finite tree
+(the `match` is on an inductive, so nothing about codata is new), and
+`spin` at the `Cut` is an existing tree returned whole. Neither a `Cut` nor
+`spin` produces anything past the empty trace, so the embedding has exactly
+the tree's traces: `of_tree_traces` by induction on the depth,
+`of_tree_converges` by induction on the tree, and `of_tree_refines` /
+`of_tree_refined` against `Program::tree(t)`, the tree at every fuel.
+
+Approximation is not a left inverse of the embedding at any fixed depth (a
+tree with an infinitely branching call has no depth bound), which is why the
+statements are about traces and not `Same`.
+
+### 8.2 Loops
+
+`CoTree::iter_refines` and `iter_refined`: for a finite body,
+`CoTree::program(CoTree::iter(of_tree ∘ body, a))` and
+`Program::iter(body, a)` refine each other. Both loops are read from the
+middle of a pass: `ITree::iter_rest(n, body, t)` is what is left of a pass,
+`t`, followed by `n` more passes, and `CoTree::iter_rest(body, t)` the same
+with no fuel. A whole loop is the pass `body(a)`, by `δβ`.
+
+- **Depth to fuel** (`iter_traces`, induction on the depth `n`): fuel counts
+  passes and depth counts constructors, and every pass costs at least one
+  constructor (the `CTau` before the next pass), so depth `n` is within `n`
+  more passes. A silent step or a call of the pass spends depth and no fuel;
+  the fuel left over is grown back by `ITree::iter_pass_grows` (in
+  `itree_trace.hthr`, beside `iter_grows`, which now uses it). The whole
+  loop then takes fuel `n + 1`, the pass itself being the first.
+- **Fuel to depth** (`iter_converges`, induction on the fuel, and inside it
+  `iter_pass_converges`, induction on what is left of the pass): the depth is
+  read off the trace's derivation, one more for each constructor it goes
+  through, the passes after the current one handed in as `IterFrom(n)`.
+  This is the only place the proof needs two inductions, and it keeps them
+  apart (`IterFrom` is the outer one's hypothesis) because recursion is
+  structural on one argument.
+
+### 8.3 Sequencing
+
+`CoTree::bind_refines` and `bind_refined`: for any coinductive `t` and `h`,
+`CoTree::program(bind(t, h))` and
+`Program::bind(CoTree::program(t), CoTree::program ∘ h)` refine each other.
+This is stronger than the issue asked (a finite tree embedded), and the
+finite case follows through §8.1.
+
+- `bind_traces`: depth `n` of the bind is within depth `n` of each side.
+  The continuation is reached one constructor later on the bind's side than
+  the shared fuel allows, so it is grown back along `approx_grows`.
+- `bind_converges`: depth `n` of `t` and `k` of `h` is within `k + n` of the
+  bind (`k + Succ(m)` is `Succ(k + m)` by computation, so the induction is on
+  `n`); a leaf of `t` raises `h`'s depth with `IsTrace::up`.
+
+Both are written as the eutt bridge is (§7.4): one level at an observation
+`o` with `obs(t) = o` as a hypothesis, the recursion's hypothesis named as a
+type (`BindTracesAt`, `BindConvergesAt`), and `obs_bind_at` moving the
+bind's observation.
+
+### 8.4 Testing
+
+`crates/elab/tests/lib_std_coitree_bridge.rs` (the `family_library`
+binary): the kit; the embedding's observations at a literal and an open tree
+and at `Cut`, by `refl`, and a wrong leaf refused; a literal loop that
+returns at fuel 3 and depth 5, carried across both ways and for an open
+body, with too little fuel and too little depth refused; an embedded `Cut`
+claiming nothing, and a bind's return carried from the bound programs.

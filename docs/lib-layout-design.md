@@ -121,6 +121,7 @@ lib/
     parser/      parser (the facade, moved in) parser_core parser_contracts …
     tactic/      tactic omega ring bitvec_omega relation_context
     itree/       itree itree_trace itree_sim itree_state coitree coitree_eutt
+                 coitree_bridge
     machine/     memory location
     arch/
       x86_64/    unchanged (24 modules)
