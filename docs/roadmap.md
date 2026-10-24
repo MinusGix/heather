@@ -340,7 +340,11 @@ road to measure. (5) Asymptotics and transseries, on the reals and orders.
 (6) The metatheory needed to restate heather-coq (`math-metatheory`):
 syntax with binders, substitution lemmas, logical relations. The IWf former
 landing in the kernel (`docs/iwf-former-design.md`) is what makes its
-inductive families writable.
+inductive families writable. `docs/heather-coq-port-assessment.md` gives the
+blockers for a Heather copy of heather-coq and proposes rungs
+([heather-coq-port](../issues/heather-coq-port.md)). By predicativity and
+Gödel, the copy carries the logical relation only for fragments weaker than
+Heather.
 
 **Constructive design** (a principle across this area, see
 [Design principles](#design-principles)). The kernel is predicative and has no axioms by default
@@ -572,3 +576,8 @@ separate machines do not slow each other's tests.
   checked nightly (`docs/testing-architecture-design.md` §5), and none of the
   area's milestones modelled the kernel. The first round proves the fold
   classifier's probe argument (`docs/kernel-model-design.md`).
+- 2026-10-24: The heather-coq port is assessed
+  (`docs/heather-coq-port-assessment.md`, issue `heather-coq-port`), with
+  rungs under `math-metatheory` proposed for Minus's review. Two language
+  blockers are filed: `mutual-inductive-declarations` and
+  `indexed-infinitary-families`.
