@@ -156,6 +156,9 @@ way ("the metatheory of the calculus itself … stays heather-coq's job").
 The copy makes that sentence formal: there is a Heather definition of the
 reference relation, and it is checked against the Coq one (§7.3).
 
+How close Heather can get to the full result anyway (a reflection schema, a
+tracked axiom, a reparametrized heather-coq) is §11.
+
 ## 4. Language blockers (fixable)
 
 Each item says what heather-coq needs, where Heather stands, and who owns it.
@@ -413,3 +416,161 @@ branches.
   translate once (§8), or migrate the model to the copy's syntax.
 - Choose the infinitary option for §4.2 (indexed `W` in the kernel, a
   tier-2 lowering, or a finitary redesign probed in heather-coq first).
+
+## 11. Follow-up: how close to "the full thing" Heather can get
+
+This section answers Minus's follow-up (2026-10-24). His preference is to
+have the whole result available inside Heather, to prove against and to
+trust, and not to rely on heather-coq as a separate repository.
+
+### 11.1 What Gödel actually connects
+
+Gödel's second theorem is about a proof system as a mathematical object. It
+is not about the Rust program. If the copy's object theory `S` is a faithful
+presentation of Heather's rules, then the statement "`S` is consistent" is
+one way of writing Heather's consistency. Heather can show internally that
+every one of its derivations is an `S`-derivation, since that is the
+identity on a faithful embedding, and the derivability conditions hold for
+any reasonable deep embedding. So the connection is automatic, and it does
+not depend on how the Rust kernel works.
+
+Trust in the kernel we actually run splits into two claims:
+
+1. **The checker accepts only derivable judgments.** This means the Rust
+   kernel is contained in `S`. It is a statement about an algorithm and a
+   relation, and Gödel says nothing against it. This is the
+   `hih-kernel-model` ladder: rung 5 is an evaluator proved to compute what
+   the model's reduction computes. Heather can prove all of this.
+2. **`S` is consistent and normalizing.** Only this claim hits the limit.
+
+So the gap is narrower than "heather-coq is a separate world". The
+implementation half can be fully internal. Only the consistency of the rule
+set needs something stronger than Heather. The converse also holds. If
+Heather ever proved claim 2 for its full kernel, then either the
+formalization differs from the kernel, or Heather is inconsistent. That is
+the one place where the connection matters, and Gödel guarantees it there.
+
+### 11.2 Three ways to have it inside, with the gap made explicit
+
+1. **The reflection schema (no axioms).** Write the relation once,
+   parametric in a bound `n` on the object theory's universes and on the
+   valuations of its level variables. Then Heather proves
+   `Con(Heather≤n)` for each concrete `n`, at a meta level about `n` plus a
+   constant. Every closed derivation names finitely many levels, so every
+   theorem anyone actually proves lives in some `Heather≤n`, and you choose
+   `n` after the fact. What Heather can never have is the single statement
+   "for all `n`". This is the type-theoretic analogue of ZFC proving the
+   consistency of each of its finite fragments (reflection). That MLTT with
+   one more universe proves normalization of MLTT with fewer is the expected
+   outcome, and it is what the stage-by-stage construction of §3.2 does. It
+   should still be checked for this rule set, with `W`, `IWf`, `M` and the
+   code recursor included, not assumed.
+2. **A tracked axiom.** State the full fundamental theorem as an explicit
+   axiom with provenance (`docs/axiom-provenance-design.md`), discharged by
+   heather-coq. Theorems that depend on it carry the tag. This makes the
+   separation visible inside Heather instead of hiding it in a convention.
+   Heather plus that axiom is consistent whenever Heather is sound, so the
+   axiom is an honest assumption, not a contradiction.
+3. **A stronger meta universe.** Add one universe that is closed under
+   everything the object theory has. It could be a super-universe, a
+   Mahlo-style universe, or induction-recursion. Heather plus that universe
+   proves the full fundamental theorem for Heather without it. The gap
+   moves up one level and never closes, and the stronger universe is now
+   the thing whose soundness is trusted.
+
+**Recommendation:** combine 1 and 2. The schema covers every concrete
+theorem with no axiom. The tracked axiom covers statements that really
+quantify over all levels, and it marks which theorems those are.
+
+### 11.3 Changing heather-coq so the two match
+
+The impredicativity in heather-coq (§3.1) sits in a few places: the sort of
+the term relations, the universe case's `∃R`, and the uniform sort across
+stages. A refactor could make the relation parametric in a *tower of
+semantic sorts*, `Sem 0 ⊆ Sem 1 ⊆ …`, where `Sem (n+1)` is closed under
+`∃` over relations into `Sem n`. Coq instantiates every `Sem n` as `Prop`
+and gets today's full theorem. Heather instantiates `Sem n` as `Ty n`,
+bounded by the reflection schema (§11.2). One proof gives two instances,
+and the Heather copy then follows heather-coq's structure.
+Saturation needs only `↔`, so it survives in `Type`. Level variables need
+valuations bounded by the tower's height. This is worth a probe in
+heather-coq before anything else in §9 is built. It decides whether
+"closer copy" and "full thing inside" are one project or two.
+
+## 12. Follow-up: tools that suit type theory better than Coq's
+
+Coq is not designed for metatheory of type theories. heather-coq's
+`docs/gotchas.md` is largely a list of workarounds: generated push tables,
+hand-ordered dispatchers, raw fixpoints exposed by `cbn`, quadratic former
+splits, and section-splitting classes. Heather can treat these as features.
+Each item below names what it replaces.
+
+**Syntax and substitution.**
+- **A syntax declaration.** It generates multi-sort syntax with several
+  binder kinds (local, global and universe variables, as heather-coq has),
+  all the renaming and substitution operations, and their laws with proofs.
+  This replaces the hand-written `Term.v`/`Subst.v`/`Commute.v` and
+  `SYNTAX_SPIKE.md`'s reasons for not using Autosubst.
+- **A σ-calculus normalizer as a certified tactic** (Autosubst's `asimpl`,
+  with the decidable σ-calculus behind it). It replaces the `push_*` tables
+  and `tools/gen_push.py`.
+- **Definitional substitution laws, if Heather gets local computation
+  rules** (rewrite rules, in the spirit of heather-coq's "Encode the Cake"
+  agenda). Then commutation lemmas disappear into conversion. This is a
+  kernel question with soundness obligations of its own, and it should be
+  probed in heather-coq first.
+
+**Declarations.**
+- **Mutual inductive families** (`mutual-inductive-declarations`).
+- **Indexed families with infinitary premises**
+  (`indexed-infinitary-families`).
+- **Induction-recursion.** The Abel–Öhman–Vezzosi relation is naturally
+  inductive-recursive: type reducibility is inductive, and term reducibility
+  is defined by recursion on it. That removes the relation index and the
+  saturation device. Induction-recursion adds proof-theoretic strength,
+  which also makes it one form of §11.2's option 3.
+- **Modular signatures.** A former is a module that contributes
+  constructors, rules, recursor branches and proof cases. The closed syntax
+  and judgments are generated from the modules that are present, in the
+  style of "Meta-Theory à la Carte" or second-order generalized algebraic
+  theories. One heather-coq milestone would be one module, which keeps a
+  copy close milestone by milestone and makes a new former cost a module,
+  not edits across 200 files.
+
+**Proof automation for metatheory.**
+- **Generated generation lemmas.** These are inversion up to conversion, per
+  former, derived from the rule table. They replace 425 `inversion`s and
+  the manual `Inversion.v`/`InvAny.v`.
+- **A rule dispatcher indexed by the conclusion's head**, using a
+  discrimination tree instead of hand-ordered `first [...]`. It replaces the
+  "dispatcher order" and "failing apply on every case" gotchas.
+- **A "for each former" proof combinator.** Most metatheory lemmas are one
+  case per constructor, each the same shape. One combinator states the
+  case pattern once, and the per-former residue is all that is written.
+- **Head discrimination as a primitive.** A tag per constructor, compared as
+  a `Nat`, so mismatched former pairs close by conversion. This removes the
+  quadratic-split gotcha, and Heather's kernel already accelerates `Nat`.
+- **A level-algebra decision procedure.** The max-plus algebra with
+  semantic equivalence, certified. It replaces `LevelEq*`.
+- **Mutual induction with bundled motives**, generated from the family
+  declaration. It replaces the 16 `Scheme`s and selecting hypotheses by
+  shape.
+
+**Reflection, which Heather has and Coq does not.** DeLaM's code layer
+gives Heather quoted types and a recursor over them (`elim_Typ`/`elim_Trm`).
+A `Tac<A>` metaprogram, or a code-layer function, could generate per-former
+lemma statements from a signature by recursion over codes. That is the
+mechanism behind most of the items above, built into the language.
+
+**Further out: synthetic Tait computability** (Sterling and Harper).
+Normalization is proved internally to a modal type theory, so the logical
+relation is a construction rather than a hand-built inductive. Heather
+already has modalities (DeLaM's layers and `□`). The missing pieces would be
+extension or realignment types and a strict gluing modality. This is the
+"idealized formalization" direction at its furthest, and it is not a
+near-term rung.
+
+Rungs 1 and 2 of §9 are the place to try the syntax declaration, the σ
+normalizer and generated inversion. A copy that uses them is less literal,
+but each choice can be recorded the way heather-coq records its deviations
+from the paper.
