@@ -12,8 +12,13 @@
     the rest: `issues/certgen-harness-cost.md`,
     `issues/native-summary-test-cpu-margin.md`.
   - A round's **final** verification, and any change touching `lib/`, the kit
-    or the generators, runs the plain full `scripts/test`, which rebuilds those
-    images. Docs-only or issue-only changes need no suite at all.
+    or the generators, runs `scripts/test --pr`: every test, over the same
+    replayed images. The exact image policy (plain `scripts/test`, which
+    re-elaborates every library module after a compiler edit) is the nightly
+    master sentinel's lane; run it yourself only when the round changes the
+    image format, the caches or the loader (`crates/cache`,
+    `crates/cli/src/semantic.rs`). Why: `docs/testing-architecture-design.md`.
+    Docs-only or issue-only changes need no suite at all.
   - `scripts/test --long` (own target dir) also runs every slow kernel
     self-check every time (`crates/kernel/src/checks.rs`; the default samples
     one in sixteen) — a sweep for rounds touching the kernel's traversals or
