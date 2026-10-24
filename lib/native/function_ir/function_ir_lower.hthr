@@ -735,6 +735,141 @@ theorem File::binary_keeps<M>(self file: File, values: Valuation(), op: BinaryOp
 }
 
 // ---------------------------------------------------------------------------
+// One-bit AND, OR and XOR: the 64-bit instruction on two zero-extended bits
+// leaves their result zero-extended (`BitVec::bor_zero_extend` and its
+// siblings), so the operands and the result are held as bits.
+
+fn BinaryOp::BitHolds(self op: BinaryOp, values: Valuation(), output, left, right: Nat) → Type {
+    match op {
+        OpAdd => False,
+        OpSub => False,
+        OpAnd => values(1, output) = values(1, left).band(values(1, right)),
+        OpOr => values(1, output) = values(1, left).bor(values(1, right)),
+        OpXor => values(1, output) = values(1, left).bxor(values(1, right)),
+    }
+}
+
+theorem rewrite_both(g: BitVec(64) → BitVec(64) → BitVec(64), {x, y, a, b: BitVec(64)}, p: x = a, q: y = b): g(x, y) = g(a, b) {
+    j(p, λ u _ => g(x, y) = g(u, b), j(q, λ v _ => g(x, y) = g(x, v), refl))
+}
+
+theorem BinaryOp::bit_written(self op: BinaryOp, values: Valuation(), output, left, right: Nat,
+    a, b: BitVec(64), holds: op.BitHolds(values, output, left, right),
+    left_rep: values(1, left).zero_extend(63) = a, right_rep: values(1, right).zero_extend(63) = b):
+    values(1, output).zero_extend(63) = op.apply(a, b)
+{
+    let x = values(1, left);
+    let y = values(1, right);
+    let extended = λ (c: BitVec(1)) => c.zero_extend(63);
+    (match op as λ o => o.BitHolds(values, output, left, right) → values(1, output).zero_extend(63) = o.apply(a, b) {
+        OpAdd => λ never => false_elim(never),
+        OpSub => λ never => false_elim(never),
+        OpAnd => λ held => trans(cong_fn(extended, held), trans(sym(BitVec::band_zero_extend(1, 63, x, y)),
+            rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.band(q), left_rep, right_rep))),
+        OpOr => λ held => trans(cong_fn(extended, held), trans(sym(BitVec::bor_zero_extend(1, 63, x, y)),
+            rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.bor(q), left_rep, right_rep))),
+        OpXor => λ held => trans(cong_fn(extended, held), trans(sym(BitVec::bxor_zero_extend(1, 63, x, y)),
+            rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.bxor(q), left_rep, right_rep))),
+    })(holds)
+}
+
+fn bits_after(op: BinaryOp, moved: Lowered, destination: Gpr, output, left, right: Nat,
+    at: Option<FoundAt(moved.file, Held(left, Bit), destination)>,
+    other: Option<Found(moved.file, Held(right, Bit))>) → Option<Lowered>
+{
+    match at {
+        None => None,
+        Some(_) => match other {
+            None => None,
+            Some(found) => Some(Lowered(
+                [op.instruction(destination, found.register)],
+                moved.file.write(destination, Some(Held(output, Bit))))),
+        },
+    }
+}
+
+theorem bits_after_keeps<M>(values: Valuation(), op: BinaryOp, moved: Lowered,
+    destination: Gpr, output, left, right: Nat,
+    at: Option<FoundAt(moved.file, Held(left, Bit), destination)>,
+    other: Option<Found(moved.file, Held(right, Bit))>):
+    MayKeep<M>(values, moved.file, op.BitHolds(values, output, left, right),
+        bits_after(op, moved, destination, output, left, right, at, other))
+{
+    match at {
+        None => trivial,
+        Some(here) => match other {
+            None => trivial,
+            Some(found) => λ s represents holds =>
+                j(sym(op.executes<M>(destination, found.register, s)),
+                    λ gprs _ => moved.file.write(destination, Some(Held(output, Bit))).Represents(values, gprs),
+                    moved.file.represents_write(values, s.gprs, destination,
+                        Some(Held(output, Bit)),
+                        op.apply(read_gpr(destination, s.gprs),
+                            read_gpr(found.register, s.gprs)),
+                        represents,
+                        op.bit_written(values, output, left, right,
+                            read_gpr(destination, s.gprs), read_gpr(found.register, s.gprs),
+                            holds,
+                            here.rep(values, s.gprs, represents),
+                            found.at.rep(values, s.gprs, represents)))),
+        },
+    }
+}
+
+// The left bit moved to the destination, then `OP destination, right`.
+fn File::bits(self file: File, op: BinaryOp, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
+    match file.place(Held(left, Bit), destination) {
+        None => None,
+        Some(moved) => moved.then_option(bits_after(op, moved, destination, output, left, right,
+                moved.file.found_at(Held(left, Bit), destination),
+                moved.file.find(Held(right, Bit)))),
+    }
+}
+
+theorem File::bits_keeps<M>(self file: File, values: Valuation(), op: BinaryOp,
+    destination: Gpr, output, left, right: Nat):
+    MayKeep<M>(values, file, op.BitHolds(values, output, left, right),
+        file.bits(op, destination, output, left, right))
+{
+    (match file.place(Held(left, Bit), destination) as λ placed =>
+        MayKeep<M>(values, file, True, placed) →
+        MayKeep<M>(values, file, op.BitHolds(values, output, left, right), match placed {
+            None => None,
+            Some(moved) => moved.then_option(bits_after(op, moved, destination, output, left, right,
+                    moved.file.found_at(Held(left, Bit), destination),
+                    moved.file.find(Held(right, Bit)))),
+        }) {
+        None => λ _ => trivial,
+        Some(moved) => λ moved_keeps =>
+            then_option_keeps<M>(values, file, op.BitHolds(values, output, left, right),
+                moved, moved_keeps,
+                bits_after(op, moved, destination, output, left, right,
+                    moved.file.found_at(Held(left, Bit), destination),
+                    moved.file.find(Held(right, Bit))),
+                bits_after_keeps<M>(values, op, moved, destination, output, left, right,
+                    moved.file.found_at(Held(left, Bit), destination),
+                    moved.file.find(Held(right, Bit)))),
+    })(file.place_keeps<M>(values, Held(left, Bit), destination))
+}
+
+// A one-bit constant, zero-extended.
+fn File::bit_constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
+    Some(Lowered([MovRI(destination, BitVec::ofNat(value, n := 1).zero_extend(63))],
+        file.write(destination, Some(Held(output, Bit)))))
+}
+
+theorem File::bit_constant_keeps<M>(self file: File, values: Valuation(), destination: Gpr,
+    output, value: Nat):
+    MayKeep<M>(values, file, values(1, output) = BitVec::ofNat(value),
+        file.bit_constant(destination, output, value))
+{
+    λ s represents holds =>
+        file.represents_write(values, s.gprs, destination, Some(Held(output, Bit)),
+            BitVec::ofNat(value, n := 1).zero_extend(63), represents,
+            cong_fn(λ (c: BitVec(1)) => c.zero_extend(63), holds))
+}
+
+// ---------------------------------------------------------------------------
 // Constants and copies
 
 fn File::constant(self file: File, destination: Gpr, output, value: Nat) → Option<Lowered> {
@@ -1189,24 +1324,47 @@ theorem word_only_keeps<M>(values: Valuation(), file: File, width: Nat,
     }
 }
 
+// Arithmetic at 64 bits, and what one-bit forms there are; any other width
+// is refused.
+fn word_or_bit(width: Nat, word: width = 64 ∨ width ≠ 64, bit: width = 1 ∨ width ≠ 1,
+    word_step, bit_step: Option<Lowered>) → Option<Lowered> {
+    match word { Inl(_) => word_step, Inr(_) => match bit { Inl(_) => bit_step, Inr(_) => None } }
+}
+
+theorem word_or_bit_keeps<M>(values: Valuation(), file: File, width: Nat,
+    facts: Nat → Type, word: width = 64 ∨ width ≠ 64, bit: width = 1 ∨ width ≠ 1,
+    word_step, bit_step: Option<Lowered>,
+    word_keeps: MayKeep<M>(values, file, facts(64), word_step),
+    bit_keeps: MayKeep<M>(values, file, facts(1), bit_step)):
+    MayKeep<M>(values, file, facts(width), word_or_bit(width, word, bit, word_step, bit_step))
+{
+    match word {
+        Inl(wide) => j(sym(wide), λ w _ => MayKeep<M>(values, file, facts(w), word_step), word_keeps),
+        Inr(_) => match bit {
+            Inl(narrow) => j(sym(narrow), λ w _ => MayKeep<M>(values, file, facts(w), bit_step), bit_keeps),
+            Inr(_) => trivial,
+        },
+    }
+}
+
 // One node, its result in `destination` (the placement's choice). Shifts
 // wait for shift instructions in the ISA model.
 fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered> {
     match node {
-        Const(width, output, value) => word_only(width, width.eq_dec(64),
-            file.constant(destination, output, value)),
+        Const(width, output, value) => word_or_bit(width, width.eq_dec(64), width.eq_dec(1),
+            file.constant(destination, output, value), file.bit_constant(destination, output, value)),
         Move(width, output, source) => word_only(width, width.eq_dec(64),
             file.copy(destination, output, source)),
         Add(width, output, left, right) => word_only(width, width.eq_dec(64),
             file.add(destination, output, left, right)),
         Sub(width, output, left, right) => word_only(width, width.eq_dec(64),
             file.binary(OpSub, destination, output, left, right)),
-        BitAnd(width, output, left, right) => word_only(width, width.eq_dec(64),
-            file.binary(OpAnd, destination, output, left, right)),
-        BitOr(width, output, left, right) => word_only(width, width.eq_dec(64),
-            file.binary(OpOr, destination, output, left, right)),
-        BitXor(width, output, left, right) => word_only(width, width.eq_dec(64),
-            file.binary(OpXor, destination, output, left, right)),
+        BitAnd(width, output, left, right) => word_or_bit(width, width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpAnd, destination, output, left, right), file.bits(OpAnd, destination, output, left, right)),
+        BitOr(width, output, left, right) => word_or_bit(width, width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpOr, destination, output, left, right), file.bits(OpOr, destination, output, left, right)),
+        BitXor(width, output, left, right) => word_or_bit(width, width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpXor, destination, output, left, right), file.bits(OpXor, destination, output, left, right)),
         ShiftLeft(_, _, _, _) => None,
         LogicalShiftRight(_, _, _, _) => None,
         ArithmeticShiftRight(_, _, _, _) => None,
@@ -1223,10 +1381,11 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
     MayKeep<M>(values, file, NodeHolds(values, node), node.lower(destination, file))
 {
     match node {
-        Const(width, output, value) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, Const(w, output, value)), width.eq_dec(64),
-            file.constant(destination, output, value),
-            file.constant_keeps<M>(values, destination, output, value)),
+        Const(width, output, value) => word_or_bit_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, Const(w, output, value)), width.eq_dec(64), width.eq_dec(1),
+            file.constant(destination, output, value), file.bit_constant(destination, output, value),
+            file.constant_keeps<M>(values, destination, output, value),
+            file.bit_constant_keeps<M>(values, destination, output, value)),
         Move(width, output, source) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Move(w, output, source)), width.eq_dec(64),
             file.copy(destination, output, source),
@@ -1239,18 +1398,21 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
             λ w => NodeHolds(values, Sub(w, output, left, right)), width.eq_dec(64),
             file.binary(OpSub, destination, output, left, right),
             file.binary_keeps<M>(values, OpSub, destination, output, left, right)),
-        BitAnd(width, output, left, right) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, BitAnd(w, output, left, right)), width.eq_dec(64),
-            file.binary(OpAnd, destination, output, left, right),
-            file.binary_keeps<M>(values, OpAnd, destination, output, left, right)),
-        BitOr(width, output, left, right) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, BitOr(w, output, left, right)), width.eq_dec(64),
-            file.binary(OpOr, destination, output, left, right),
-            file.binary_keeps<M>(values, OpOr, destination, output, left, right)),
-        BitXor(width, output, left, right) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, BitXor(w, output, left, right)), width.eq_dec(64),
-            file.binary(OpXor, destination, output, left, right),
-            file.binary_keeps<M>(values, OpXor, destination, output, left, right)),
+        BitAnd(width, output, left, right) => word_or_bit_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, BitAnd(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpAnd, destination, output, left, right), file.bits(OpAnd, destination, output, left, right),
+            file.binary_keeps<M>(values, OpAnd, destination, output, left, right),
+            file.bits_keeps<M>(values, OpAnd, destination, output, left, right)),
+        BitOr(width, output, left, right) => word_or_bit_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, BitOr(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpOr, destination, output, left, right), file.bits(OpOr, destination, output, left, right),
+            file.binary_keeps<M>(values, OpOr, destination, output, left, right),
+            file.bits_keeps<M>(values, OpOr, destination, output, left, right)),
+        BitXor(width, output, left, right) => word_or_bit_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, BitXor(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpXor, destination, output, left, right), file.bits(OpXor, destination, output, left, right),
+            file.binary_keeps<M>(values, OpXor, destination, output, left, right),
+            file.bits_keeps<M>(values, OpXor, destination, output, left, right)),
         ShiftLeft(_, _, _, _) => trivial,
         LogicalShiftRight(_, _, _, _) => trivial,
         ArithmeticShiftRight(_, _, _, _) => trivial,
