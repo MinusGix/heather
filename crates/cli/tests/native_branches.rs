@@ -28,6 +28,14 @@ fn source_nested_conditionals_execute() {
         assert_eq!(certificate.contains("_expands("), decides, "{name}: expansion route");
         assert!(certificate.contains(&format!("branches::{name}(")));
         assert!(!certificate.contains("StructuredArtifact"), "no per-function artifact");
+        // A comparison only the branch reads is a CMP and a Jcc on its
+        // flags, no SETcc bit; nudged's small constants are ADD immediates.
+        if matches!(name, "unsigned_threshold" | "take_threshold" | "nudged") {
+            assert!(certificate.contains("CmpRR(") && !certificate.contains("SetBelow("), "{name}: compare-and-jump");
+        }
+        if name == "nudged" {
+            assert!(certificate.contains("AddRI32(Rdi"), "nudged: imm32 add");
+        }
     }
     let driver = dir.join("main.c");
     std::fs::write(&driver, r#"

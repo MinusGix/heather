@@ -114,17 +114,32 @@ theorem below_computes<M>(values: Valuation(), s: MachineState<M>,
         below_lowers(), ⟨left, ⟨right, trivial⟩⟩, graph).left
 }
 
-// Negative controls. A placement that writes x's copy over y before the
-// ADD reads y is refused, not lowered wrong.
+// A placement that puts x + y over y: ADD commutes, so the sum is taken
+// into y's register in place instead of copying x over y first.
+theorem commuted_into_right(): add64_raw().lower([Rdi, Rsi], [Rax], [Into(Rsi)]) =
+    Some([AddRR(Rsi, Rdi), MovRR(Rax, Rsi)])
+{
+    refl
+}
+
+// Negative controls. SUB does not commute: a placement that writes x's
+// copy over y before the SUB reads y is refused, not lowered wrong.
+fn sub64_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)]),
+        nodes := [Sub(width := 64, output := 2, left := 0, right := 1)],
+        outputs := Ports([Port(id := 2, width := 64)]))
+}
+
 theorem clobbering_placement_refused():
-    add64_raw().lower([Rdi, Rsi], [Rax], [Rsi]) = None
+    sub64_region().lower([Rdi, Rsi], [Rax], [Into(Rsi)]) = None
 {
     refl
 }
 
 // The comparison's XOR would clear an operand.
 theorem cleared_operand_refused():
-    below_region().lower([Rdi, Rsi], [Rax], [Rsi]) = None
+    below_region().lower([Rdi, Rsi], [Rax], [Into(Rsi)]) = None
 {
     refl
 }
