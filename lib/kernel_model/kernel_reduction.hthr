@@ -1,0 +1,547 @@
+// A reference model of the kernel's weak-head reduction, and the
+// substitution property its fold classifier relies on
+// (docs/kernel-model-design.md, milestone `hih-kernel-model`).
+//
+// The kernel classifies a `Nat` fold's step by evaluating it on fresh
+// neutral probe variables (crates/kernel/src/eval/probe.rs) and iterates
+// the class over a run instead of taking the fold one step at a time. Its
+// soundness argument is a sentence in that file: "a value with no stuck
+// case split on the probe variables was reached by a reduction that holds
+// for every instantiation of them", and "a probe never manufactures a
+// verdict fuel would have refused". This module states both as one theorem
+// over ch. 06's untyped weak-head reduction and proves it:
+// `Tm::whnf_inst` below.
+//
+// Terms are locally nameless. Bound variables are de Bruijn indices; the
+// probe variables are free atoms `Fv(a)`, which no binder captures. An
+// instantiation replaces atoms by closed values, so it never shifts, and
+// opening a binder with a locally closed argument never shifts either.
+
+import logic;
+import bool;
+import nat;
+import option;
+
+// The fragment: functions and `Nat` with its eliminator, which is what a
+// `Nat` fold's step is made of. `NRec(z, s, n)` is `elim_Nat` with base `z`
+// and step `s`, applied as `s(k, ih)`.
+inductive Tm {
+    Bv(index: Nat),
+    Fv(atom: Nat),
+    Lam(body: Tm),
+    App(head: Tm, arg: Tm),
+    NZero,
+    NSucc(pred: Tm),
+    NRec(base: Tm, step: Tm, scrut: Tm),
+}
+
+// ---------------------------------------------------------------------------
+// Opening a binder.
+
+fn Tm::bv_or(hit: Bool, u: Tm, i: Nat) → Tm {
+    match hit { True => u, False => Bv(i) }
+}
+
+// `t.open_at(k, u)` replaces the bound variable `k` by `u`. The argument is
+// locally closed wherever reduction opens a binder, so it is not shifted.
+fn Tm::open_at(self t: Tm, k: Nat, u: Tm) → Tm {
+    match t {
+        Bv(i) => Tm::bv_or(i.same(k), u, i),
+        Fv(a) => Fv(a),
+        Lam(b) => Lam(b.open_at(Succ(k), u)),
+        App(f, a) => App(f.open_at(k, u), a.open_at(k, u)),
+        NZero => NZero,
+        NSucc(p) => NSucc(p.open_at(k, u)),
+        NRec(z, s, n) => NRec(z.open_at(k, u), s.open_at(k, u), n.open_at(k, u)),
+    }
+}
+
+fn Tm::open(self body: Tm, u: Tm) → Tm { body.open_at(0, u) }
+
+// Every bound variable of `t` is below `d`.
+fn Tm::Lc(self t: Tm, d: Nat) → Type {
+    match t {
+        Bv(i) => i < d,
+        Fv(_) => True,
+        Lam(b) => b.Lc(Succ(d)),
+        App(f, a) => f.Lc(d) ∧ a.Lc(d),
+        NZero => True,
+        NSucc(p) => p.Lc(d),
+        NRec(z, s, n) => z.Lc(d) ∧ (s.Lc(d) ∧ n.Lc(d)),
+    }
+}
+
+theorem same_false_of_lt(i, k: Nat, h: i < k): i.same(k) = False {
+    match i.same(k) as λ b => (b = i.same(k)) → b = False {
+        True => λ eq => false_elim(k.lt_irrefl()(j(i.same_sound(k, sym(eq)), λ y p => y < k, h))),
+        False => λ eq => refl,
+    }(refl)
+}
+
+theorem Tm::cong_lam({a, b: Tm}, p: a = b): Lam(a) = Lam(b) { rewrite(p, refl) }
+theorem Tm::cong_succ({a, b: Tm}, p: a = b): NSucc(a) = NSucc(b) { rewrite(p, refl) }
+theorem Tm::cong_app({f, g, a, b: Tm}, p: f = g, q: a = b): App(f, a) = App(g, b) {
+    rewrite(p, rewrite(q, refl))
+}
+theorem Tm::cong_rec({z, z2, s, s2, n, n2: Tm}, p: z = z2, q: s = s2, r: n = n2):
+        NRec(z, s, n) = NRec(z2, s2, n2) {
+    rewrite(p, rewrite(q, rewrite(r, refl)))
+}
+
+// Opening above a term's depth changes nothing.
+theorem Tm::open_lc(self t: Tm): (d, k: Nat) → t.Lc(d) → d <= k → (u: Tm) → t.open_at(k, u) = t {
+    match t {
+        Bv(i) => λ d k h le u =>
+            j(sym(same_false_of_lt(i, k, Succ(i).le_trans(d, k, h, le))),
+              λ y p => Tm::bv_or(y, u, i) = Bv(i), refl),
+        Fv(_) => λ d k h le u => refl,
+        Lam(b) => λ d k h le u => Tm::cong_lam(b.open_lc(Succ(d), Succ(k), h, le, u)),
+        App(f, a) => λ d k h le u =>
+            Tm::cong_app(f.open_lc(d, k, h.left, le, u), a.open_lc(d, k, h.right, le, u)),
+        NZero => λ d k h le u => refl,
+        NSucc(p) => λ d k h le u => Tm::cong_succ(p.open_lc(d, k, h, le, u)),
+        NRec(z, s, n) => λ d k h le u =>
+            Tm::cong_rec(z.open_lc(d, k, h.left, le, u), s.open_lc(d, k, h.right.left, le, u),
+                         n.open_lc(d, k, h.right.right, le, u)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Instantiating atoms.
+
+fn Tm::inst(self t: Tm, sub: Nat → Tm) → Tm {
+    match t {
+        Bv(i) => Bv(i),
+        Fv(a) => sub(a),
+        Lam(b) => Lam(b.inst(sub)),
+        App(f, a) => App(f.inst(sub), a.inst(sub)),
+        NZero => NZero,
+        NSucc(p) => NSucc(p.inst(sub)),
+        NRec(z, s, n) => NRec(z.inst(sub), s.inst(sub), n.inst(sub)),
+    }
+}
+
+theorem Tm::inst_bv_or(hit: Bool, u: Tm, i: Nat, sub: Nat → Tm):
+        Tm::bv_or(hit, u, i).inst(sub) = Tm::bv_or(hit, u.inst(sub), i) {
+    match hit { True => refl, False => refl }
+}
+
+// Instantiation commutes with opening, when every atom's image is closed.
+theorem Tm::inst_open_at(self t: Tm, sub: Nat → Tm, closed: (a: Nat) → sub(a).Lc(0)):
+        (k: Nat) → (u: Tm) → t.open_at(k, u).inst(sub) = t.inst(sub).open_at(k, u.inst(sub)) {
+    match t {
+        Bv(i) => λ k u => Tm::inst_bv_or(i.same(k), u, i, sub),
+        Fv(a) => λ k u => sym(sub(a).open_lc(0, k, closed(a), k.nonneg(), u.inst(sub))),
+        Lam(b) => λ k u => Tm::cong_lam(b.inst_open_at(sub, closed, Succ(k), u)),
+        App(f, a) => λ k u =>
+            Tm::cong_app(f.inst_open_at(sub, closed, k, u), a.inst_open_at(sub, closed, k, u)),
+        NZero => λ k u => refl,
+        NSucc(p) => λ k u => Tm::cong_succ(p.inst_open_at(sub, closed, k, u)),
+        NRec(z, s, n) => λ k u =>
+            Tm::cong_rec(z.inst_open_at(sub, closed, k, u), s.inst_open_at(sub, closed, k, u),
+                         n.inst_open_at(sub, closed, k, u)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Weak-head reduction (ch. 06), call by name, with fuel. One unit of fuel
+// is one call of `step`; `None` is out of fuel. A stuck elimination is a
+// value: its head did not reduce to the eliminator's introduction form.
+
+fn Tm::app_head(ev: Tm → Option<Tm>, a: Tm, h: Tm) → Option<Tm> {
+    match h {
+        Bv(i) => Some(App(Bv(i), a)),
+        Fv(x) => Some(App(Fv(x), a)),
+        Lam(b) => ev(b.open(a)),
+        App(f, b) => Some(App(App(f, b), a)),
+        NZero => Some(App(NZero, a)),
+        NSucc(p) => Some(App(NSucc(p), a)),
+        NRec(z, s, n) => Some(App(NRec(z, s, n), a)),
+    }
+}
+
+fn Tm::app_k(ev: Tm → Option<Tm>, a: Tm, r: Option<Tm>) → Option<Tm> {
+    match r { None => None, Some(h) => Tm::app_head(ev, a, h) }
+}
+
+fn Tm::rec_head(ev: Tm → Option<Tm>, z: Tm, s: Tm, h: Tm) → Option<Tm> {
+    match h {
+        Bv(i) => Some(NRec(z, s, Bv(i))),
+        Fv(x) => Some(NRec(z, s, Fv(x))),
+        Lam(b) => Some(NRec(z, s, Lam(b))),
+        App(f, b) => Some(NRec(z, s, App(f, b))),
+        NZero => ev(z),
+        NSucc(m) => ev(App(App(s, m), NRec(z, s, m))),
+        NRec(z2, s2, n2) => Some(NRec(z, s, NRec(z2, s2, n2))),
+    }
+}
+
+fn Tm::rec_k(ev: Tm → Option<Tm>, z: Tm, s: Tm, r: Option<Tm>) → Option<Tm> {
+    match r { None => None, Some(h) => Tm::rec_head(ev, z, s, h) }
+}
+
+fn Tm::step(ev: Tm → Option<Tm>, t: Tm) → Option<Tm> {
+    match t {
+        Bv(i) => Some(Bv(i)),
+        Fv(a) => Some(Fv(a)),
+        Lam(b) => Some(Lam(b)),
+        App(f, a) => Tm::app_k(ev, a, ev(f)),
+        NZero => Some(NZero),
+        NSucc(p) => Some(NSucc(p)),
+        NRec(z, s, n) => Tm::rec_k(ev, z, s, ev(n)),
+    }
+}
+
+fn Tm::whnf(fuel: Nat) → Tm → Option<Tm> {
+    match fuel {
+        Zero => λ (t: Tm) => None,
+        Succ(g) => λ (t: Tm) => Tm::step(Tm::whnf(g), t),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blocked results. `t.rigid()` says the elimination spine of `t` is headed
+// by an atom; a result is blocked when it is an elimination stuck on such a
+// spine, which is the "stuck case split on a probe variable" of probe.rs.
+// An out-of-fuel run is not blocked: a blocked sub-result ends the run with
+// `Some`, so a run that ran out never met one.
+
+fn Tm::rigid(self t: Tm) → Bool {
+    match t {
+        Bv(_) => False,
+        Fv(_) => True,
+        Lam(_) => False,
+        App(f, _) => f.rigid(),
+        NZero => False,
+        NSucc(_) => False,
+        NRec(_, _, n) => n.rigid(),
+    }
+}
+
+fn Tm::blocked(self t: Tm) → Bool {
+    match t {
+        Bv(_) => False,
+        Fv(_) => False,
+        Lam(_) => False,
+        App(f, _) => f.rigid(),
+        NZero => False,
+        NSucc(_) => False,
+        NRec(_, _, n) => n.rigid(),
+    }
+}
+
+fn Tm::Unblocked(r: Option<Tm>) → Type {
+    match r { None => True, Some(v) => v.blocked() = False }
+}
+
+// What a run of `app_k`/`rec_k` being unblocked says about the head's run.
+theorem Tm::app_k_unblocked(ev: Tm → Option<Tm>, a: Tm, r: Option<Tm>,
+        h: Tm::Unblocked(Tm::app_k(ev, a, r))): Tm::Unblocked(r) {
+    match r as λ y => Tm::Unblocked(Tm::app_k(ev, a, y)) → Tm::Unblocked(y) {
+        None => λ q => trivial,
+        Some(v) => match v as λ y => Tm::Unblocked(Tm::app_head(ev, a, y)) → Tm::Unblocked(Some(y)) {
+            Bv(_) => λ q => refl,
+            Fv(_) => λ q => absurd(q),
+            Lam(_) => λ q => refl,
+            App(_, _) => λ q => q,
+            NZero => λ q => refl,
+            NSucc(_) => λ q => refl,
+            NRec(_, _, _) => λ q => q,
+        },
+    }(h)
+}
+
+theorem Tm::rec_k_unblocked(ev: Tm → Option<Tm>, z, s: Tm, r: Option<Tm>,
+        h: Tm::Unblocked(Tm::rec_k(ev, z, s, r))): Tm::Unblocked(r) {
+    match r as λ y => Tm::Unblocked(Tm::rec_k(ev, z, s, y)) → Tm::Unblocked(y) {
+        None => λ q => trivial,
+        Some(v) => match v as λ y => Tm::Unblocked(Tm::rec_head(ev, z, s, y)) → Tm::Unblocked(Some(y)) {
+            Bv(_) => λ q => refl,
+            Fv(_) => λ q => absurd(q),
+            Lam(_) => λ q => refl,
+            App(_, _) => λ q => q,
+            NZero => λ q => refl,
+            NSucc(_) => λ q => refl,
+            NRec(_, _, _) => λ q => q,
+        },
+    }(h)
+}
+
+// ---------------------------------------------------------------------------
+// The substitution property.
+
+// What an atom may be instantiated by: a value `step` returns as it is.
+fn Tm::Value(self t: Tm) → Type {
+    match t {
+        Bv(_) => False,
+        Fv(_) => True,
+        Lam(_) => True,
+        App(_, _) => False,
+        NZero => True,
+        NSucc(_) => True,
+        NRec(_, _, _) => False,
+    }
+}
+
+theorem Tm::step_value(ev: Tm → Option<Tm>, self w: Tm, hv: w.Value()): Tm::step(ev, w) = Some(w) {
+    match w as λ y => y.Value() → Tm::step(ev, y) = Some(y) {
+        Bv(_) => λ q => false_elim(q),
+        Fv(_) => λ q => refl,
+        Lam(_) => λ q => refl,
+        App(_, _) => λ q => false_elim(q),
+        NZero => λ q => refl,
+        NSucc(_) => λ q => refl,
+        NRec(_, _, _) => λ q => false_elim(q),
+    }(hv)
+}
+
+// The hypothesis the induction on fuel carries from one unit to the next:
+// on runs that `P` admits, `ev` commutes with instantiation.
+fn Tm::CommutesOn(P: Option<Tm> → Type, ev: Tm → Option<Tm>, sub: Nat → Tm) → Type {
+    (t: Tm) → P(ev(t)) → ev(t.inst(sub)) = ev(t).map(λ (v: Tm) => v.inst(sub))
+}
+
+// The continuations after a head's run commute, for any `P` that refuses a
+// result stuck on an atom (the one place an instance could take another
+// path: the atom's image may be the introduction form the eliminator wants).
+theorem Tm::app_k_inst(P: Option<Tm> → Type, stuck: (x: Nat) → (a: Tm) → P(Some(App(Fv(x), a))) → False,
+        ev: Tm → Option<Tm>, sub: Nat → Tm, closed: (a: Nat) → sub(a).Lc(0),
+        ih: Tm::CommutesOn(P, ev, sub), a: Tm, r: Option<Tm>, h: P(Tm::app_k(ev, a, r))):
+        Tm::app_k(ev, a.inst(sub), r.map(λ (v: Tm) => v.inst(sub)))
+            = Tm::app_k(ev, a, r).map(λ (v: Tm) => v.inst(sub)) {
+    match r as λ y => P(Tm::app_k(ev, a, y)) →
+            Tm::app_k(ev, a.inst(sub), y.map(λ (v: Tm) => v.inst(sub)))
+                = Tm::app_k(ev, a, y).map(λ (v: Tm) => v.inst(sub)) {
+        None => λ q => refl,
+        Some(v) => match v as λ y => P(Tm::app_head(ev, a, y)) →
+                Tm::app_head(ev, a.inst(sub), y.inst(sub))
+                    = Tm::app_head(ev, a, y).map(λ (w: Tm) => w.inst(sub)) {
+            Bv(_) => λ q => refl,
+            Fv(x) => λ q => false_elim(stuck(x, a, q)),
+            Lam(b) => λ q => j(b.inst_open_at(sub, closed, 0, a),
+                               λ y p => ev(y) = ev(b.open(a)).map(λ (w: Tm) => w.inst(sub)),
+                               ih(b.open(a), q)),
+            App(_, _) => λ q => refl,
+            NZero => λ q => refl,
+            NSucc(_) => λ q => refl,
+            NRec(_, _, _) => λ q => refl,
+        },
+    }(h)
+}
+
+theorem Tm::rec_k_inst(P: Option<Tm> → Type, stuck: (x: Nat) → (z, s: Tm) → P(Some(NRec(z, s, Fv(x)))) → False,
+        ev: Tm → Option<Tm>, sub: Nat → Tm,
+        ih: Tm::CommutesOn(P, ev, sub), z, s: Tm, r: Option<Tm>, h: P(Tm::rec_k(ev, z, s, r))):
+        Tm::rec_k(ev, z.inst(sub), s.inst(sub), r.map(λ (v: Tm) => v.inst(sub)))
+            = Tm::rec_k(ev, z, s, r).map(λ (v: Tm) => v.inst(sub)) {
+    match r as λ y => P(Tm::rec_k(ev, z, s, y)) →
+            Tm::rec_k(ev, z.inst(sub), s.inst(sub), y.map(λ (v: Tm) => v.inst(sub)))
+                = Tm::rec_k(ev, z, s, y).map(λ (v: Tm) => v.inst(sub)) {
+        None => λ q => refl,
+        Some(v) => match v as λ y => P(Tm::rec_head(ev, z, s, y)) →
+                Tm::rec_head(ev, z.inst(sub), s.inst(sub), y.inst(sub))
+                    = Tm::rec_head(ev, z, s, y).map(λ (w: Tm) => w.inst(sub)) {
+            Bv(_) => λ q => refl,
+            Fv(x) => λ q => false_elim(stuck(x, z, s, q)),
+            Lam(_) => λ q => refl,
+            App(_, _) => λ q => refl,
+            NZero => λ q => ih(z, q),
+            NSucc(m) => λ q => ih(App(App(s, m), NRec(z, s, m)), q),
+            NRec(_, _, _) => λ q => refl,
+        },
+    }(h)
+}
+
+// For values: runs that are not blocked.
+fn Tm::Commutes(ev: Tm → Option<Tm>, sub: Nat → Tm) → Type { Tm::CommutesOn(Tm::Unblocked, ev, sub) }
+
+// One unit of fuel: if the recursive calls commute, `step` does.
+theorem Tm::step_inst(ev: Tm → Option<Tm>, sub: Nat → Tm,
+        closed: (a: Nat) → sub(a).Lc(0), value: (a: Nat) → sub(a).Value(),
+        ih: Tm::Commutes(ev, sub)): Tm::Commutes(Tm::step(ev), sub) {
+    λ t => match t as λ y => Tm::Unblocked(Tm::step(ev, y)) →
+            Tm::step(ev, y.inst(sub)) = Tm::step(ev, y).map(λ (v: Tm) => v.inst(sub)) {
+        Bv(_) => λ q => refl,
+        Fv(a) => λ q => Tm::step_value(ev, sub(a), value(a)),
+        Lam(_) => λ q => refl,
+        App(f, a) => λ q =>
+            j(sym(ih(f, Tm::app_k_unblocked(ev, a, ev(f), q))),
+              λ y p => Tm::app_k(ev, a.inst(sub), y)
+                  = Tm::app_k(ev, a, ev(f)).map(λ (v: Tm) => v.inst(sub)),
+              Tm::app_k_inst(Tm::Unblocked, λ x b q2 => absurd(q2), ev, sub, closed, ih, a, ev(f), q)),
+        NZero => λ q => refl,
+        NSucc(_) => λ q => refl,
+        NRec(z, s, n) => λ q =>
+            j(sym(ih(n, Tm::rec_k_unblocked(ev, z, s, ev(n), q))),
+              λ y p => Tm::rec_k(ev, z.inst(sub), s.inst(sub), y)
+                  = Tm::rec_k(ev, z, s, ev(n)).map(λ (v: Tm) => v.inst(sub)),
+              Tm::rec_k_inst(Tm::Unblocked, λ x z2 s2 q2 => absurd(q2), ev, sub, ih, z, s, ev(n), q)),
+    }
+}
+
+// The probe lemma. A run that is not blocked on an atom is a run of every
+// instance: at the same fuel, the instance reduces to the instance of the
+// result, and an instance runs out of fuel exactly where the probe did.
+theorem Tm::whnf_inst(sub: Nat → Tm, closed: (a: Nat) → sub(a).Lc(0),
+        value: (a: Nat) → sub(a).Value(), fuel: Nat): Tm::Commutes(Tm::whnf(fuel), sub) {
+    match fuel as λ z => Tm::Commutes(Tm::whnf(z), sub) {
+        Zero => λ t q => refl,
+        Succ(g, ih) => Tm::step_inst(Tm::whnf(g), sub, closed, value, ih),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Instantiating by any closed term. The kernel's `ih` is a thunk of the
+// fold's recursive call, not a value, and `whnf_inst` needs values only
+// where a run *ends* at a bare atom (the instance would go on to reduce the
+// atom's image). A run that is settled (neither blocked nor a bare atom)
+// commutes with every closed instantiation.
+
+fn Tm::settled(self t: Tm) → Bool {
+    match t {
+        Bv(_) => True,
+        Fv(_) => False,
+        Lam(_) => True,
+        App(f, _) => !f.rigid(),
+        NZero => True,
+        NSucc(_) => True,
+        NRec(_, _, n) => !n.rigid(),
+    }
+}
+
+fn Tm::Settled(r: Option<Tm>) → Type {
+    match r { None => True, Some(v) => v.settled() = True }
+}
+
+theorem Tm::app_k_settled(ev: Tm → Option<Tm>, a: Tm, r: Option<Tm>,
+        h: Tm::Settled(Tm::app_k(ev, a, r))): Tm::Settled(r) {
+    match r as λ y => Tm::Settled(Tm::app_k(ev, a, y)) → Tm::Settled(y) {
+        None => λ q => trivial,
+        Some(v) => match v as λ y => Tm::Settled(Tm::app_head(ev, a, y)) → Tm::Settled(Some(y)) {
+            Bv(_) => λ q => refl,
+            Fv(_) => λ q => absurd(q),
+            Lam(_) => λ q => refl,
+            App(_, _) => λ q => q,
+            NZero => λ q => refl,
+            NSucc(_) => λ q => refl,
+            NRec(_, _, _) => λ q => q,
+        },
+    }(h)
+}
+
+theorem Tm::rec_k_settled(ev: Tm → Option<Tm>, z, s: Tm, r: Option<Tm>,
+        h: Tm::Settled(Tm::rec_k(ev, z, s, r))): Tm::Settled(r) {
+    match r as λ y => Tm::Settled(Tm::rec_k(ev, z, s, y)) → Tm::Settled(y) {
+        None => λ q => trivial,
+        Some(v) => match v as λ y => Tm::Settled(Tm::rec_head(ev, z, s, y)) → Tm::Settled(Some(y)) {
+            Bv(_) => λ q => refl,
+            Fv(_) => λ q => absurd(q),
+            Lam(_) => λ q => refl,
+            App(_, _) => λ q => q,
+            NZero => λ q => refl,
+            NSucc(_) => λ q => refl,
+            NRec(_, _, _) => λ q => q,
+        },
+    }(h)
+}
+
+theorem Tm::step_inst_settled(ev: Tm → Option<Tm>, sub: Nat → Tm,
+        closed: (a: Nat) → sub(a).Lc(0),
+        ih: Tm::CommutesOn(Tm::Settled, ev, sub)): Tm::CommutesOn(Tm::Settled, Tm::step(ev), sub) {
+    λ t => match t as λ y => Tm::Settled(Tm::step(ev, y)) →
+            Tm::step(ev, y.inst(sub)) = Tm::step(ev, y).map(λ (v: Tm) => v.inst(sub)) {
+        Bv(_) => λ q => refl,
+        Fv(_) => λ q => absurd(q),
+        Lam(_) => λ q => refl,
+        App(f, a) => λ q =>
+            j(sym(ih(f, Tm::app_k_settled(ev, a, ev(f), q))),
+              λ y p => Tm::app_k(ev, a.inst(sub), y)
+                  = Tm::app_k(ev, a, ev(f)).map(λ (v: Tm) => v.inst(sub)),
+              Tm::app_k_inst(Tm::Settled, λ x b q2 => absurd(q2), ev, sub, closed, ih, a, ev(f), q)),
+        NZero => λ q => refl,
+        NSucc(_) => λ q => refl,
+        NRec(z, s, n) => λ q =>
+            j(sym(ih(n, Tm::rec_k_settled(ev, z, s, ev(n), q))),
+              λ y p => Tm::rec_k(ev, z.inst(sub), s.inst(sub), y)
+                  = Tm::rec_k(ev, z, s, ev(n)).map(λ (v: Tm) => v.inst(sub)),
+              Tm::rec_k_inst(Tm::Settled, λ x z2 s2 q2 => absurd(q2), ev, sub, ih, z, s, ev(n), q)),
+    }
+}
+
+// The probe lemma for any closed instantiation, on settled runs.
+theorem Tm::whnf_inst_settled(sub: Nat → Tm, closed: (a: Nat) → sub(a).Lc(0), fuel: Nat):
+        Tm::CommutesOn(Tm::Settled, Tm::whnf(fuel), sub) {
+    match fuel as λ z => Tm::CommutesOn(Tm::Settled, Tm::whnf(z), sub) {
+        Zero => λ t q => refl,
+        Succ(g, ih) => Tm::step_inst_settled(Tm::whnf(g), sub, closed, ih),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The probe, as the kernel runs it: a closed step applied to the atoms `0`
+// (`k`) and `1` (`ih`). Whatever the probe reduces to without blocking on
+// either is, at the same fuel, what the step reduces to at any values of
+// them.
+
+// `t` mentions no atom.
+fn Tm::Ground(self t: Tm) → Type {
+    match t {
+        Bv(_) => True,
+        Fv(_) => False,
+        Lam(b) => b.Ground(),
+        App(f, a) => f.Ground() ∧ a.Ground(),
+        NZero => True,
+        NSucc(p) => p.Ground(),
+        NRec(z, s, n) => z.Ground() ∧ (s.Ground() ∧ n.Ground()),
+    }
+}
+
+theorem Tm::inst_ground(self t: Tm, sub: Nat → Tm): t.Ground() → t.inst(sub) = t {
+    match t {
+        Bv(_) => λ q => refl,
+        Fv(_) => λ q => false_elim(q),
+        Lam(b) => λ q => Tm::cong_lam(b.inst_ground(sub, q)),
+        App(f, a) => λ q => Tm::cong_app(f.inst_ground(sub, q.left), a.inst_ground(sub, q.right)),
+        NZero => λ q => refl,
+        NSucc(p) => λ q => Tm::cong_succ(p.inst_ground(sub, q)),
+        NRec(z, s, n) => λ q =>
+            Tm::cong_rec(z.inst_ground(sub, q.left), s.inst_ground(sub, q.right.left),
+                         n.inst_ground(sub, q.right.right)),
+    }
+}
+
+fn Tm::probe_sub(kv, ihv: Tm) → Nat → Tm {
+    λ (a: Nat) => match a { Zero => kv, Succ(_) => ihv }
+}
+
+fn Tm::probe(s: Tm) → Tm { App(App(s, Fv(0)), Fv(1)) }
+
+theorem Tm::probe_step(s: Tm, ground: s.Ground(), fuel: Nat,
+        kv: Tm, k_closed: kv.Lc(0), k_value: kv.Value(),
+        ihv: Tm, ih_closed: ihv.Lc(0), ih_value: ihv.Value(),
+        unblocked: Tm::Unblocked(Tm::whnf(fuel, Tm::probe(s)))):
+        Tm::whnf(fuel, App(App(s, kv), ihv))
+            = Tm::whnf(fuel, Tm::probe(s)).map(λ (v: Tm) => v.inst(Tm::probe_sub(kv, ihv))) {
+    j(s.inst_ground(Tm::probe_sub(kv, ihv), ground),
+      λ y p => Tm::whnf(fuel, App(App(y, kv), ihv))
+          = Tm::whnf(fuel, Tm::probe(s)).map(λ (v: Tm) => v.inst(Tm::probe_sub(kv, ihv))),
+      Tm::whnf_inst(Tm::probe_sub(kv, ihv),
+          λ a => match a as λ b => Tm::probe_sub(kv, ihv, b).Lc(0) { Zero => k_closed, Succ(_) => ih_closed },
+          λ a => match a as λ b => Tm::probe_sub(kv, ihv, b).Value() { Zero => k_value, Succ(_) => ih_value },
+          fuel, Tm::probe(s), unblocked))
+}
+
+// The same for the kernel's own instantiation, where `ih` is a thunk of the
+// recursive call (any closed term) and the probe's run is settled.
+theorem Tm::probe_step_settled(s: Tm, ground: s.Ground(), fuel: Nat,
+        kv: Tm, k_closed: kv.Lc(0), ihv: Tm, ih_closed: ihv.Lc(0),
+        settled: Tm::Settled(Tm::whnf(fuel, Tm::probe(s)))):
+        Tm::whnf(fuel, App(App(s, kv), ihv))
+            = Tm::whnf(fuel, Tm::probe(s)).map(λ (v: Tm) => v.inst(Tm::probe_sub(kv, ihv))) {
+    j(s.inst_ground(Tm::probe_sub(kv, ihv), ground),
+      λ y p => Tm::whnf(fuel, App(App(y, kv), ihv))
+          = Tm::whnf(fuel, Tm::probe(s)).map(λ (v: Tm) => v.inst(Tm::probe_sub(kv, ihv))),
+      Tm::whnf_inst_settled(Tm::probe_sub(kv, ihv),
+          λ a => match a as λ b => Tm::probe_sub(kv, ihv, b).Lc(0) { Zero => k_closed, Succ(_) => ih_closed },
+          fuel, Tm::probe(s), settled))
+}

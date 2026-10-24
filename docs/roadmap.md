@@ -91,6 +91,9 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `hih-first-alloc` | heather-in-heather | open | One native program allocates, frees or bounds its heap, and its theorem says so. | hih-memory |
 | `hih-passes` | heather-in-heather | open | A compiler pass (certificate emission or an optimisation) is a Heather metaprogram with its proof, and Rust only moves its output around. |  |
 | `hih-self` | heather-in-heather | open | A first component of Heather itself (candidate: the lexer, on the parser library) is written in Heather and compiled natively. |  |
+| `hih-kernel-model` | heather-in-heather | open | A model of the kernel's reduction in Heather states the facts its accelerations rely on, and proves them, so that an optimisation checked nightly can be promoted to proven (`docs/kernel-model-design.md`). |  |
+| `hih-km-probe` | heather-in-heather | done | The fold classifier's probe is sound: a run that is not blocked on a probe variable is, at the same fuel, the run of every instance (`Tm::whnf_inst`, `Tm::whnf_inst_settled`). | hih-kernel-model |
+| `hih-km-runs` | heather-in-heather | open | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs. | hih-kernel-model |
 | `tac-in-heather` | tactics | open | A tactic is written in Heather through a host elaboration interface, and one tactic that lives in Rust today has a Heather counterpart. |  |
 | `tac-host-interface` | tactics | open | Heather code can read a goal, build a checked term, and report failure with its search state, through one scoped host interface. | tac-in-heather |
 | `tac-first-port` | tactics | done | One tactic that lives in Rust today (candidate: `split_all` or `monoid` normalisation) has a Heather implementation that closes the same goals. | tac-in-heather |
@@ -230,6 +233,10 @@ process stack first), then `hih-memory` (submilestones `hih-memory-model`,
 `hih-alloc-metering`, `hih-first-alloc`). `hih-passes` can proceed in parallel
 because it is meta-layer work. `hih-self` comes after both
 ([self-hosting-first-component](../issues/self-hosting-first-component.md)).
+`hih-kernel-model` is independent of all of them: it models the kernel's
+reduction in Heather so that the kernel's own accelerations, and later the
+caches, can be proved rather than checked nightly
+([kernel-model](../issues/kernel-model.md)).
 
 ### Tactics (`tactics`)
 
@@ -478,6 +485,7 @@ submilestone.
 |---|---|
 | Native code (`heather-in-heather`) | `crates/cli/src/native*`, `crates/elab/src/function_ir*`, `heather_emit.rs`, `lib/native/`, `lib/certgen/`, `lib/std/arch/`, `lib/std/os/` |
 | Tactics | `crates/elab/src/{omega,omega_cert,cutsat,ring,bv_omega,goal_combinators,relational_context}*`, `lib/std/tactic/`; later the meta layer |
+| Kernel model (`heather-in-heather`) | `lib/kernel_model/`; it reads `crates/kernel/src/eval/` and changes it at most in comments |
 | Interaction trees | `lib/std/itree/`; `crates/elab/src/inductive.rs` and the W lowering for `it-function-fields`, shared with `language` |
 | Mathematics | `lib/std/{num,algebra,relation,data}/`, `docs/showcase/` |
 | Export, ML, GPU, Rust, Lean | new crates or scripts and design notes; nearly disjoint from everything |
@@ -558,3 +566,9 @@ separate machines do not slow each other's tests.
   (`issues/coitree-program-bridge.md`). Simulation between finite trees over
   different events, with the loop rule `cat` needs, landed in the same round
   under `it-library` (`docs/itree-simulation-design.md`).
+- 2026-10-24: `hih-kernel-model` proposed, with `hih-km-probe` done and
+  `hih-km-runs` next, for Minus's review. Minus asked for a Heather-in-Heather
+  step as the way to let optimisations of the core be proven rather than
+  checked nightly (`docs/testing-architecture-design.md` §5), and none of the
+  area's milestones modelled the kernel. The first round proves the fold
+  classifier's probe argument (`docs/kernel-model-design.md`).
