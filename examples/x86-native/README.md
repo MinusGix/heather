@@ -32,11 +32,14 @@ constant, and XORs the results. The C file supplies `main` and checks boundary v
 and a `BitVec(64)` result, together with the word functions it calls,
 through the verified lowering ([round 4 of the issue](../../issues/function-ir-verified-lowering.md)).
 The body may use Add, Sub, AND, OR, XOR, `bitvec::ofNat` literals of any
-size, `let`, calls, and tail-position matches on `unsigned_lt_bit`,
-`signed_lt_bit` or `eq_bit` of words. A source outside that fragment, such
-as a `Bool` helper or `||`, still takes the per-function certificate
-described in the sections below, and the command prints a note on stderr
-when it does.
+size, `let`, calls, and tail-position matches on a test. A test is
+`unsigned_lt_bit`, `signed_lt_bit` or `eq_bit` of words, `||`, `&&` and `!`
+of tests, or a call of a `Bool` helper of words whose body is a test
+(`branches.hthr`'s `composed` and `either`). Connectives and helpers become
+conditionals on plain comparisons, each operand tested only where its
+connective needs it. A source outside that fragment still takes the
+per-function certificate described in the sections below, and the command
+prints a note on stderr when it does.
 
 The certificate does not reason about this particular program's
 instructions. It reflects the source into a FunctionIR program and states:
@@ -44,7 +47,13 @@ instructions. It reflects the source into a FunctionIR program and states:
 - the program's lowering by `lower_program`, with the planner's placement,
   as a literal (`_lowers`, checked by evaluation);
 - that the program evaluates to the source function at any arguments
-  (`_agrees`, by `refl`);
+  (`_agrees`). It is by `refl` when every match is on a comparison. A test
+  through a connective or a helper has no conversion that commutes the
+  source's `match` with the program's conditionals, so the certificate
+  states the program's decision tree in source operations (`_expansion`),
+  equal to the program by `refl` (`_expanded`) and to the source by
+  `split_all` (`_expands`). Such a function cannot yet be called by another
+  ([the issue](../../issues/function-ir-verified-decided-callees.md));
 - the published bytes, a piece at a time (`_bytes`), and the exported
   function's offset (`_entry_at`);
 - and `_returns`, which instantiates the theorem `compiled_returns`. Called
@@ -75,9 +84,9 @@ it does not enable the trusted declaration cache or stale-image replay.
 
 ## Nested source conditionals
 
-*The per-function certificate.* `branches.hthr`'s word-only shapes now
-take the verified path above. This section describes the certificate that
-a source outside its fragment still gets, such as `composed` below.
+*The per-function certificate.* `branches.hthr`'s shapes now take the
+verified path above. This section describes the certificate that a source
+outside its fragment still gets.
 
 Ordinary `compile-x86` also accepts tail-position matches on
 `bitvec::unsigned_lt_bit(64, ...)`, including nested matches in either arm.
@@ -98,11 +107,6 @@ with the actual source, preserved memory/registers, and the common exit address.
 The public source artifact has no unresolved graph assumptions. A separate
 checked equality ties the published literal bytes to this same code tree.
 The `ret`, ABI, instruction fetch/loading, and host integration remain external.
-
-The same file also supplies `composed`, whose Boolean helper `unequal` contains
-a conditional. Compile it by replacing `nested_true` with `composed` in the
-command above. Its helper and continuation use shared physical composition;
-the generated artifact names the actual source function.
 
 The native source adapter accepts two word inputs and one word result. The
 underlying structured backend additionally supports multiple prefix/results

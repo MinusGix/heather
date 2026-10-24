@@ -65,3 +65,11 @@ fn nudged(a, b: BitVec(64)) → BitVec(64) {
         False => a.add(BitVec::ofNat(65536)).add(BitVec::ofNat(2147483648)),
     }
 }
+// Connectives: each operand is tested only where the connective needs it,
+// and `!` swaps the arms.
+fn either(a, b: BitVec(64)) → BitVec(64) {
+    match a.unsigned_lt_bit(b) || (b.eq_bit(BitVec::ofNat(7)) && !a.signed_lt_bit(b)) {
+        False => a.bxor(b),
+        True => match unequal(b, a.add(b)) { False => a, True => b.sub(a) },
+    }
+}

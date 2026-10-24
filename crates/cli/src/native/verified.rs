@@ -80,6 +80,32 @@ fn {prefix}_entry() → Nat {{ asm_labels({prefix}_code())({}) }}
     let typed = if parameters.is_empty() { String::new() } else { format!("{}: BitVec(64)", parameters.join(", ")) };
     let list = format!("[{}]", parameters.join(", "));
     let call = format!("{source}({})", parameters.join(", "));
+    // A source that decides a connective or a helper is its expansion by
+    // case analysis; the program is the expansion by conversion.
+    let agreement = if root.decided {
+        format!("// The program's function {f} evaluates to the decision tree it compiles,
+// spelled in the source's operations, and that is the source function by
+// case analysis on its comparisons.
+fn {prefix}_expansion({typed}) → BitVec(64) {{
+    {expansion}
+}}
+
+theorem {prefix}_expanded({typed}): program_eval({prefix}_program(), {f}, {list}) = {prefix}_expansion({arguments}) {{ refl }}
+
+theorem {prefix}_expands({typed}): {prefix}_expansion({arguments}) = {call} {{
+    split_all;
+    all_goals {{ refl }}
+}}
+
+theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {list}) = {call} {{
+    trans({prefix}_expanded({arguments}), {prefix}_expands({arguments}))
+}}
+", expansion = root.expansion, arguments = parameters.join(", "))
+    } else {
+        format!("// The program's function {f} evaluates to the source function.
+theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {list}) = {call} {{ refl }}
+")
+    };
     let mut code = "Start".to_string();
     for (name, item) in &items { code = format!("At({code},\n    {name}, {item})"); }
     let mut text = definitions;
@@ -96,9 +122,7 @@ theorem {prefix}_lowers(): lower_program({prefix}_program(), plan_program({prefi
 
 theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{ trivial }}
 
-// The program's function {f} evaluates to the source function.
-theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {list}) = {call} {{ refl }}
-
+{agreement}
 // The published bytes, a piece at a time from the last item: no one
 // statement evaluates more of the code than a piece.
 "));

@@ -98,8 +98,8 @@ if [[ "${1:-}" == --fast ]]; then
         # certificate, ~150-300 CPU-s apiece and ~1200 CPU-s together
         # (2026-09-09), which an elaborator or kernel edit's inner loop
         # cannot iterate on. Acceptance-class; the full lane runs them.
-        --skip source_composed_helper_executes
         --skip source_nested_conditionals_execute
+        --skip a_call_of_a_deciding_function_is_refused
         --skip programs_with_calls_execute
         --skip source_to_native_binary
         --skip source_to_standalone_elf_without_a_toolchain
