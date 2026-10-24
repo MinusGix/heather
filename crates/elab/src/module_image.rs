@@ -25,7 +25,7 @@ use heather_syntax::{
 use crate::application::{ParamDefault, ParamMeta, Skel, SkelBinder};
 use crate::datarepr::{CtorView, DatareprInfo, FieldView, ImplEntry, Obligation, Provenance};
 use crate::gendefs::{GenDef, SpineCodes, TyCodeFn, WfSlots};
-use crate::inductive::{Ctor, FieldKind, IdxPat, IdxTy, Inductive};
+use crate::inductive::{Ctor, FieldKind, IdxPat, IdxTy, Inductive, Member};
 use crate::metaprograms::MetaDef;
 use crate::module_delta::{DeltaEvent, ModuleDelta, ModuleDependencyIdentity};
 use crate::names::{GlobalRegistration, ImportSpec, NameKind, Scope};
@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x16";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x14";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x17";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x15";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1619,6 +1619,11 @@ fn put_inductive(w: &mut Writer, info: &Inductive) {
     });
     w.option(info.skel.as_deref(), put_inductive);
     w.vec(&info.co_index, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
+    w.vec(&info.members, |w, m| {
+        w.string(&m.name);
+        w.option(m.index.as_ref(), |w, index| w.string(index));
+        w.vec(&m.ctors, |w, k| w.u32(*k as u32));
+    });
 }
 
 fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError> {
@@ -1635,6 +1640,11 @@ fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError
         })?,
         skel: r.option(|r| Ok(Rc::new(get_inductive(r)?)))?,
         co_index: r.vec(|r| Ok((r.string()?, get_ty(r)?)))?,
+        members: r.vec(|r| Ok(Member {
+            name: r.string()?,
+            index: r.option(Reader::string)?,
+            ctors: r.vec(|r| Ok(r.u32()? as usize))?,
+        }))?,
     }))
 }
 
@@ -1953,6 +1963,24 @@ fn validate_inductive(info: &Inductive) -> Result<(), ModuleImageDecodeError> {
     }
     if let Some(IdxTy::Decl(index)) = &info.index_ty { validate_inductive(index)?; }
     if let Some(skel) = &info.skel { validate_inductive(skel)?; }
+    // A group's members partition its family's constructors, one member per
+    // constructor of the family's index type.
+    if !info.members.is_empty() {
+        let Some(IdxTy::Decl(index)) = &info.index_ty else {
+            return Err(ModuleImageDecodeError::InvalidStructure("a mutual family has no member index"));
+        };
+        let mut seen = vec![false; info.ctors.len()];
+        for m in &info.members {
+            for &k in &m.ctors {
+                if k >= seen.len() || std::mem::replace(&mut seen[k], true) {
+                    return Err(ModuleImageDecodeError::InvalidStructure("mutual members do not partition the constructors"));
+                }
+            }
+        }
+        if info.members.len() != index.ctors.len() || seen.contains(&false) {
+            return Err(ModuleImageDecodeError::InvalidStructure("mutual members do not partition the constructors"));
+        }
+    }
     Ok(())
 }
 

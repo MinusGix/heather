@@ -269,6 +269,14 @@ pub(crate) struct IdxBranch {
     /// Per index-constructor argument: the `rec` at a recursive one — the
     /// family's *code* (`Ty l`-valued) or the eliminator's ih function.
     pub(crate) rec: Vec<Option<Rc<Term>>>,
+    /// A flat declared index's branch: the branch's payload value and the
+    /// same value rebuilt as a tuple of [`Self::pat`]'s projections (tag
+    /// first), equal to it by Σ- and `Unit`-η. A caller that cases again on
+    /// a pattern rewrites the branch's goal through it, so that the goal
+    /// mentions the pattern (docs/mutual-inductive-design.md §4). `None` at
+    /// `Nat`, whose pattern is the branch's own binder, and at a recursive
+    /// declared index.
+    pub(crate) value: Option<(Rc<Term>, Rc<Term>)>,
 }
 
 /// Everything an indexed `match` arm needs beyond what a tier-0 arm does: what
@@ -511,6 +519,18 @@ impl Elaborator {
             return Ok(None);
         };
         let Some(ind) = self.lookup_inductive(name).cloned() else {
+            // A mutual group's member at an index
+            // (docs/mutual-inductive-design.md §2).
+            if let Some((fam, k)) = self.lookup_member(name) {
+                let idx = match args.as_slice() {
+                    [idx] => Some(idx),
+                    _ if fam.members[k].index.is_none() => {
+                        return err(format!("`{name}` is not indexed"), span);
+                    }
+                    _ => return err(format!("`{name}` takes exactly one index"), span),
+                };
+                return self.lower_member(cx, &fam, k, targs, idx, span).map(Some);
+            }
             return Ok(None);
         };
         if ind.index.is_none() {
@@ -644,6 +664,72 @@ impl Elaborator {
     /// family (at the constant motive `Ty l`) and by an `IWf` `match`'s index
     /// inversion (`docs/iwf-former-design.md` §8.3).
     #[allow(clippy::too_many_arguments)]
+    /// `value` rebuilt from its projections: `⟨fst v, ⟨fst (snd v), … ⟨⟩⟩⟩`
+    /// along the constructor's Σ spine, each projection spelled exactly as
+    /// [`Elaborator::projection`] spells it, so a pattern term occurs in it
+    /// verbatim. Equal to `value` by Σ- and `Unit`-η.
+    pub(crate) fn rebuild_payload(
+        &self,
+        cx: &Cx,
+        ctor_ty: &Type,
+        value: &Rc<Term>,
+        span: Span,
+    ) -> R<Term> {
+        let mut cur = ctor_ty.clone();
+        let mut pair = Rc::clone(value);
+        let mut steps = Vec::new();
+        loop {
+            match self.whnf(cx, &cur, span)? {
+                Type::Sigma {
+                    fst_level,
+                    snd_level,
+                    fst,
+                    snd,
+                } => {
+                    let fst_e = match self.emit_ty(cx, &fst, 0) {
+                        Some(r) => Rc::new(r),
+                        None => Rc::clone(&fst),
+                    };
+                    let snd_e = match self.emit_ty(cx, &snd, 1) {
+                        Some(r) => Rc::new(r),
+                        None => Rc::clone(&snd),
+                    };
+                    let proj = Rc::new(Term::Fst {
+                        fst_level: fst_level.clone(),
+                        snd_level: snd_level.clone(),
+                        fst_ty: Rc::clone(&fst_e),
+                        snd_ty: Rc::clone(&snd_e),
+                        pair: Rc::clone(&pair),
+                    });
+                    pair = Rc::new(Term::Snd {
+                        fst_level: fst_level.clone(),
+                        snd_level: snd_level.clone(),
+                        fst_ty: Rc::clone(&fst_e),
+                        snd_ty: Rc::clone(&snd_e),
+                        pair: Rc::clone(&pair),
+                    });
+                    cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&proj)));
+                    steps.push((fst_level, snd_level, fst_e, snd_e, proj));
+                }
+                Type::Unit { level } => {
+                    let mut acc = Term::Triv { level };
+                    for (fst_level, snd_level, fst_ty, snd_ty, proj) in steps.into_iter().rev() {
+                        acc = Term::Pair {
+                            fst_level,
+                            snd_level,
+                            fst_ty,
+                            snd_ty,
+                            fst: proj,
+                            snd: Rc::new(acc),
+                        };
+                    }
+                    return Ok(acc);
+                }
+                _ => return err("internal: malformed constructor encoding", span),
+            }
+        }
+    }
+
     pub(crate) fn index_case(
         &self,
         cx: &Cx,
@@ -667,6 +753,7 @@ impl Elaborator {
                     &IdxBranch {
                         pat: vec![],
                         rec: vec![],
+                        value: None,
                     },
                     &base_e,
                 )?;
@@ -680,6 +767,7 @@ impl Elaborator {
                     &IdxBranch {
                         pat: vec![(Rc::new(Term::Var(LocalVar(1))), Type::Nat, Level::Zero)],
                         rec: vec![Some(Rc::new(Term::Var(LocalVar(0))))],
+                        value: None,
                     },
                     &step_e,
                 )?;
@@ -705,7 +793,9 @@ impl Elaborator {
                         pat.push(self.projection(bcx, &ctor_ty, value, a, span)?);
                     }
                     let rec = vec![None; pat.len()];
-                    body(bcx, k, &IdxBranch { pat, rec }, e)
+                    let rebuilt = self.rebuild_payload(bcx, &ctor_ty, value, span)?;
+                    let value = Some((Rc::clone(value), Rc::new(rebuilt)));
+                    body(bcx, k, &IdxBranch { pat, rec, value }, e)
                 };
                 self.idx_case_tree(
                     cx,
@@ -805,7 +895,7 @@ impl Elaborator {
                 }
             }
         }
-        Ok(IdxBranch { pat, rec })
+        Ok(IdxBranch { pat, rec, value: None })
     }
 
     /// One class's branch as a **type**: the tag spine of its members (tier 0

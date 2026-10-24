@@ -132,6 +132,8 @@ mod matching;
 mod measure;
 mod measure_context;
 mod metaprograms;
+mod mutual_family;
+mod mutual_rec;
 mod module_delta;
 mod module_image;
 mod module_relocate;
@@ -884,6 +886,12 @@ impl expr::UniverseElab for Elaborator {
     fn visible_type_former(&self, cx: &Cx, name: &str) -> Option<expr::TypeFormerShape> {
         if self.shadowed(cx, name) {
             return None;
+        }
+        if let Some((fam, k)) = self.lookup_member(name) {
+            return Some(expr::TypeFormerShape {
+                indexed: fam.members[k].index.is_some(),
+                value_parameters: 0,
+            });
         }
         let ind = self.lookup_inductive(name)?;
         Some(expr::TypeFormerShape {
@@ -2165,7 +2173,31 @@ impl Elaborator {
     /// groups of `docs/mutual-recursion-design.md` §1, and the declaration
     /// names §8's forward-reference message reads.
     fn begin_container(&mut self, file: &heather_syntax::File) -> ItemPlan {
-        let groups = measure_groups(&file.items);
+        let mut groups = measure_groups(&file.items);
+        let mut kinds = vec![GroupKind::Measure; groups.len()];
+        // Mutual `inductive` groups (docs/mutual-inductive-design.md §1).
+        for g in mutual_family::inductive_groups(&file.items) {
+            groups.push(g);
+            kinds.push(GroupKind::Inductive);
+        }
+        // Mutual structural recursion over a mutual family (§6 there): a
+        // member is one of this container's groups', or an imported one.
+        let local_members: Vec<&str> = groups
+            .iter()
+            .zip(&kinds)
+            .filter(|(_, k)| **k == GroupKind::Inductive)
+            .flat_map(|(g, _)| g.iter())
+            .filter_map(|&i| match &file.items[i] {
+                Item::Inductive(d) => Some(d.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let is_member = |n: &str| local_members.contains(&n) || self.lookup_member(n).is_some();
+        let structural = mutual_rec::structural_groups(&file.items, &is_member);
+        for g in structural {
+            groups.push(g);
+            kinds.push(GroupKind::Structural);
+        }
         let mut in_group: HashMap<usize, usize> = HashMap::new();
         for (g, members) in groups.iter().enumerate() {
             for &idx in members {
@@ -2184,7 +2216,7 @@ impl Elaborator {
             })
             .collect();
         self.container_at.set(0);
-        ItemPlan { groups, in_group }
+        ItemPlan { groups, kinds, in_group }
     }
 
     /// One item, with a mutual group elaborated at its *first* member and the
@@ -2207,7 +2239,12 @@ impl Elaborator {
                             _ => unreachable!("a group holds declarations"),
                         })
                         .collect();
-                    self.session_transaction(|me| me.elab_measure_group(&members))
+                    match plan.kinds[g] {
+                        GroupKind::Structural => {
+                            self.session_transaction(|me| me.elab_structural_group(&members))
+                        }
+                        _ => self.session_transaction(|me| me.elab_measure_group(&members)),
+                    }
                 }
                 Some(_) => Ok(()),
                 None => self.elab_decl(d),
@@ -2218,7 +2255,22 @@ impl Elaborator {
             // an `inductive`'s or an `instance`'s own work has a column
             // instead of landing in `other`
             // (`docs/instrumentation-design.md` §5).
-            Item::Inductive(i) => stats::timed(stats::Timer::Lower, || self.elab_inductive(i)),
+            Item::Inductive(i) => match plan.in_group.get(&idx) {
+                Some(&g) if plan.groups[g][0] == idx => {
+                    let members: Vec<&heather_syntax::InductiveDecl> = plan.groups[g]
+                        .iter()
+                        .map(|&k| match &file.items[k] {
+                            Item::Inductive(d) => d,
+                            _ => unreachable!("an inductive group holds inductives"),
+                        })
+                        .collect();
+                    stats::timed(stats::Timer::Lower, || {
+                        self.session_transaction(|me| me.elab_mutual_inductives(&members))
+                    })
+                }
+                Some(_) => Ok(()),
+                None => stats::timed(stats::Timer::Lower, || self.elab_inductive(i)),
+            },
             Item::Class(c) => stats::timed(stats::Timer::Lower, || self.elab_class(c)),
             Item::Instance(i) => stats::timed(stats::Timer::Lower, || self.elab_instance(i)),
             Item::Designation(d) => stats::timed(stats::Timer::Lower, || self.elab_designation(d)),
@@ -2668,6 +2720,18 @@ impl Elaborator {
     pub(crate) fn lookup_inductive(&self, name: &str) -> Option<&Rc<Inductive>> {
         self.types
             .inductive(&self.key_of_kinds(name, &[NameKind::Inductive])?)
+    }
+
+    /// The mutual group member a name denotes in type position
+    /// (docs/mutual-inductive-design.md §2): its family and its position
+    /// among the family's members. A member is declared as an `Inductive`
+    /// name, so it resolves, shadows and is imported exactly as a type does;
+    /// it is found here and not by [`Self::lookup_inductive`] because it has
+    /// no declaration of its own.
+    pub(crate) fn lookup_member(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
+        self.types
+            .member(&self.key_of_kinds(name, &[NameKind::Inductive])?)
+            .map(|(i, k)| (Rc::clone(i), *k))
     }
 
     pub(crate) fn lookup_ctor(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
@@ -9310,5 +9374,20 @@ fn measure_groups(items: &[Item]) -> Vec<Vec<usize>> {
 /// The per-container facts the item loops share (`begin_container`).
 struct ItemPlan {
     groups: Vec<Vec<usize>>,
+    /// Parallel to `groups`: what each group is a group of.
+    kinds: Vec<GroupKind>,
     in_group: HashMap<usize, usize>,
+}
+
+/// What a group of items is (`ItemPlan::groups`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GroupKind {
+    /// `decreases` declarations under one measure
+    /// (docs/mutual-recursion-design.md §1).
+    Measure,
+    /// Mutual `inductive` declarations (docs/mutual-inductive-design.md §1).
+    Inductive,
+    /// Declarations without a measure that call one another, one of them
+    /// recursing over a mutual family (docs/mutual-inductive-design.md §6).
+    Structural,
 }
