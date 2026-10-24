@@ -167,8 +167,11 @@ theorem DataRegion::buffer_view_sound(self r: DataRegion):
             let writable: r.profile.at(m).Allows(Perm::writes, next_rip(r.low, q), bytes.len()) =
                 r.allows(Perm::writes, refl, m, q, bytes.len(), fits);
             let held: r.Holds(w, r.profile.store(m, next_rip(r.low, q), bytes)) = r.store_holds(v, m, holds, q, bytes, fits);
+            let value = r.toNat_at(q, omega(fits));
+            let low: (next_rip(r.low, q).toNat() + bytes.len() <= Nat::pow(2, 47)) = omega(value, fits, r.canonical);
             ⟨j(sym(at), λ y _ => r.profile.at(m).Allows(Perm::writes, y, bytes.len()), writable),
-             Exists(w, ⟨j(sym(at), λ y _ => r.Holds(w, r.profile.store(m, y, bytes)), held), place.proof.right.right⟩)⟩
+             ⟨j(sym(at), λ y _ => y.toNat() + bytes.len() <= Nat::pow(2, 47), low),
+              Exists(w, ⟨j(sym(at), λ y _ => r.Holds(w, r.profile.store(m, y, bytes)), held), place.proof.right.right⟩)⟩⟩
         },
         asks := λ v state c holds asked => asked(state.memory, holds))
 }
@@ -225,7 +228,7 @@ theorem X86Profile::with_code_sound<V>(self x: X86Profile, view: View<X86Memory(
             let done = sound.stores(v, m, a, bytes, then, holds.left, place);
             let kept: CodeResident(x.fetch(), x.store(m, a, bytes), code, at) =
                 x.store_keeps_code(m, a, bytes, data(v, m, a, bytes, then, place), code, at, holds.right);
-            ⟨done.left, Exists(done.right.witness, ⟨⟨done.right.proof.left, kept⟩, done.right.proof.right⟩)⟩
+            ⟨done.left, ⟨done.right.left, Exists(done.right.right.witness, ⟨⟨done.right.right.proof.left, kept⟩, done.right.right.proof.right⟩)⟩⟩
         },
         asks := λ v state c holds asked => sound.asks(v, state, c, holds.left, asked))
 }

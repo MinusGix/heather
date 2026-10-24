@@ -15,8 +15,9 @@ fn claimed_runs_are_every_run() {
 // Each change is refused where it is wrong, not by a missing name: a decoder
 // that reads ADD as SUB, takes a store for a register form, drops an ADD's
 // immediate, looks for SYSCALL at another opcode, or reads a byte store's
-// opcode as the word store's, or misses the word load's opcode, is not
-// complete on the forms; a run in which a failed read or stat may leave more
+// opcode as the word store's, or misses the word load's opcode, or reads no
+// frame slot, looks for RET at another opcode, or reads CALL as a jump, is
+// not complete on the forms; a run in which a failed read or stat may leave more
 // junk than Linux may (`LinuxLeaves`), or whose answers are compared by kind
 // alone, is not the claimed run.
 #[test]
@@ -29,6 +30,9 @@ fn determinism_refusals() {
         ("syscall_elsewhere", "match opcode.eq_dec(BitVec::ofNat(0x05)) {", "match opcode.eq_dec(BitVec::ofNat(0x06)) {"),
         ("byte_store_read_as_word", "match opcode.eq_dec(BitVec::ofNat(0x88)) {", "match opcode.eq_dec(BitVec::ofNat(0x89)) {"),
         ("word_load_read_as_store", "match opcode.eq_dec(BitVec::ofNat(0x8b)) {", "match opcode.eq_dec(BitVec::ofNat(0x8a)) {"),
+        ("slot_unread", "True => decode_slot_form(rex, opcode, modrm, tail),", "True => None,"),
+        ("ret_elsewhere", "match first.eq_dec(BitVec::ofNat(0xc3)) {", "match first.eq_dec(BitVec::ofNat(0xc2)) {"),
+        ("call_read_as_jump", "Some(displacement) => Some(FormStack(CallNear(displacement)))", "Some(displacement) => near_form(JumpNear(displacement))"),
     ] {
         let bad = FORMS.replacen(from, to, 1);
         assert_ne!(bad, FORMS, "{name}");

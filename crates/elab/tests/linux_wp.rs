@@ -29,7 +29,6 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("itree_trace", include_str!("../../../lib/std/itree/itree_trace.hthr")),
     ("linux_trees", include_str!("../../../lib/std/os/linux/linux_trees.hthr")),
     ("linux_x86_64_sim", include_str!("../../../lib/std/os/linux/linux_x86_64_sim.hthr")),
-    ("x86_64_stack", include_str!("../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
     ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
     ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
     ("linux_x86_64_wp", include_str!("../../../lib/std/os/linux/linux_x86_64_wp.hthr")),

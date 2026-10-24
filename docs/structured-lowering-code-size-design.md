@@ -110,7 +110,7 @@ NearControl::JumpIfNear(cc, displacement: BitVec(32)) // 0F 80+cc rel32
 There is one rip lemma per width (`jump_if_taken_rip`/`not_taken`, taking
 `condition_holds`) and one AF-commute lemma, since no condition code reads
 AF. The step-form decoder gains two byte ranges, not sixteen cases:
-`decode_plain_form` for `0x70–0x7F` and `decode_two_byte_form` for
+`decode_plain_pair` for `0x70–0x7F` and `decode_two_byte_form` for
 `0x80–0x8F`.
 
 `JumpZero`, `JumpZeroNear` and `JumpSignNear` stop being constructors and

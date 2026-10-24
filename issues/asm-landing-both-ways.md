@@ -5,7 +5,7 @@ labels: [native,x86,proofs]
 area: heather-in-heather
 milestone: [hih-pl-wp]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-24
 ---
 
 `Prog::laid_out` (`lib/std/arch/x86_64/x86_64_asm_runs.hthr`) asks every
@@ -26,3 +26,7 @@ this in after it merges, so there is one landing notion for jumps and calls.
 - **[[native-one-wp]]** owns `wp_reach` and `wp_lands`.
 - **[[function-ir-verified-lowering]]** owns `laid_out` and the structured
   lowering's use of it.
+
+## Log
+
+- 2026-10-24: 2026-10-24: `wp_reaches` now also lands `CallTo` on its label, both ways ([[wp-stack-items]]); the one landing check this issue makes covers calls too.

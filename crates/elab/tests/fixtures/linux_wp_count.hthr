@@ -46,6 +46,7 @@ fn count_prog() → Prog {
 }
 fn count_labels() → Nat → Nat { asm_labels(count_prog()) }
 fn count_contracts() → Nat → Contract { λ _ => Contract(λ _ => True, λ _ _ => True) }
+fn no_callees() → Nat → Callee<X86Memory(X86Profile::io()), Nat → BitVec(8)> { λ _ => Callee(λ _ _ _ => True, λ _ _ _ _ _ => True) }
 fn count_code() → List<BitVec(8)> { asm_code(no_fills(), count_labels(), count_prog()) }
 fn count_view(origin: BitVec(64)) → View<X86Memory(X86Profile::io()), Nat → BitVec(8)> {
     DataRegion::io_frame().program_view(count_code(), next_rip(origin, 0))
@@ -62,7 +63,7 @@ theorem count_exit_reach(): wp_reach(count_labels(), count_prog(), 2).IsTrue() {
 theorem count_exit(origin: BitVec(64), frame: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>,
     rip: state.rip = next_rip(origin, prog_len(count_loop())),
     holds: count_view(origin).Holds(frame, state.memory)): Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(0)), state) {
-    wp_sound(X86Profile::io().linux(), count_view(origin), count_sound(origin), origin, no_fills(), count_labels(), count_contracts(), count_prog(), 2,
+    wp_sound(X86Profile::io().linux(), count_view(origin), count_sound(origin), origin, no_fills(), count_labels(), count_contracts(), no_callees(), count_prog(), 2,
         λ _ _ _ _ => False, trivial, Nil,
         λ v m h => j(sym(List::append_nil(count_code())), λ c _ => CodeResident(X86Profile::io().fetch(), m, c, next_rip(origin, 0)), h.right),
         count_exit_reach(), ⟨trivial, ⟨trivial, trivial⟩⟩,
@@ -98,7 +99,7 @@ theorem count_stored(frame: Nat → BitVec(8), m: Nat, at: count_slot(frame).toN
 theorem count_pass(origin: BitVec(64), w: Nat):
     (t: ITree<BitVec(64)>(Events::linux())) → (frame: Nat → BitVec(8)) → (state: MachineState<X86Memory(X86Profile::io())>) →
     count_inv(w, t, frame, state) →
-    Wp(X86Profile::io().linux(), count_view(origin), origin, count_labels(), count_contracts(), count_loop(), 7,
+    Wp(X86Profile::io().linux(), count_view(origin), origin, count_labels(), count_contracts(), no_callees(), count_loop(), 7,
         LoopPost(X86Profile::io().linux(), count_view(origin), origin, prog_len(asm_back(count_loop(), 7)), count_inv(), w), t, frame, state) {
     match w {
         Zero => λ t frame state held => Exists(0, ⟨count_room(), ⟨refl,
@@ -116,7 +117,7 @@ theorem count_pass(origin: BitVec(64), w: Nat):
 theorem count_runs(origin: BitVec(64), frame: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>,
     rip: state.rip = next_rip(origin, 0),
     holds: count_view(origin).Holds(frame, state.memory)): Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(0)), state) {
-    loop_at(X86Profile::io().linux(), count_view(origin), count_sound(origin), origin, no_fills(), count_labels(), count_contracts(), count_loop(), 7,
+    loop_at(X86Profile::io().linux(), count_view(origin), count_sound(origin), origin, no_fills(), count_labels(), count_contracts(), no_callees(), count_loop(), 7,
         trivial, asm_code_after(no_fills(), count_labels(), count_prog(), 2) ++ Nil,
         λ v m h => wp_code_at(X86Profile::io().fetch(), m, origin, no_fills(), count_labels(), count_prog(), 2, Nil,
             j(sym(List::append_nil(count_code())), λ c _ => CodeResident(X86Profile::io().fetch(), m, c, next_rip(origin, 0)), h.right)),
