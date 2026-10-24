@@ -1,0 +1,35 @@
+// Probes of `lib/std/algebra/order.hthr`: linear instances supply every
+// weaker layer, products stop at a partial order, and a pullback is a
+// partial order only along an injective map. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+// Moved from crates/elab/tests/lib_std_order.rs.
+import order; import int; import logic; import nat; import pair; import omega; import relation; import relation_props;
+
+fn preorder_refl<A: Preorder(R)>(R: A → A → Type, x: A) → R(x, x) { A.rel_refl(x) }
+fn partial_antisym<A: PartialOrder(R)>(R: A → A → Type, x, y: A, hxy: R(x, y), hyx: R(y, x)) → x = y {
+    A.rel_antisym(x, y, hxy, hyx)
+}
+fn linear_total<A: LinearOrder(R)>(R: A → A → Type, x, y: A) → R(x, y) ∨ R(y, x) { A.rel_total(x, y) }
+theorem nat_parent(n: Nat): nat::Nat::Le(n, n) { preorder_refl(nat::Nat::Le, n) }
+theorem int_parent(n: Int): int::Int::Le(n, n) { preorder_refl(int::Int::Le, n) }
+theorem nat_child(n, m: Nat): nat::Nat::Le(n, m) ∨ nat::Nat::Le(m, n) { linear_total(nat::Nat::Le, n, m) }
+
+// Products stop at a partial order.
+fn nat_int_product_order() → PartialOrder<Pair<Nat, Int>>(ProductOrder(nat::Nat::Le, int::Int::Le)) {
+    product_partial_order(nat::Nat::Le, int::Int::Le)
+}
+theorem product_refl(x: Pair<Nat, Int>): ProductOrder(nat::Nat::Le, int::Int::Le, x, x) { nat_int_product_order().rel_refl(x) }
+
+// A pullback along an injective map is a partial order ...
+fn SuccOrder(a, b: Nat) → Type { Pullback(Succ, nat::Nat::Le, a, b) }
+fn succ_injective(x, y: Nat, h: Succ(x) = Succ(y)) → x = y { nat::Nat::succ_inj(x, y, h) }
+fn succ_partial_order() → PartialOrder<Nat>(SuccOrder) { pullback_partial_order(Succ, nat::Nat::Le, succ_injective) }
+theorem succ_order_antisym(x, y: Nat, hxy: SuccOrder(x, y), hyx: SuccOrder(y, x)): x = y {
+    succ_partial_order().rel_antisym(x, y, hxy, hyx)
+}
+// ... and along a constant map it is not antisymmetric, which is why
+// `pullback_partial_order` takes the injectivity evidence.
+fn constant(n: Nat) → Nat { 0 }
+theorem constant_pullback_not_antisymmetric(): ¬((x, y: Nat) → Pullback(constant, nat::Nat::Le, x, y) → Pullback(constant, nat::Nat::Le, y, x) → x = y) {
+    λ h => omega(h(0, 1, trivial, trivial))
+}

@@ -1,0 +1,59 @@
+// Probes of `lib/std/algebra/semiring.hthr` at `Nat` and `Int` under
+// identity and at `Rat` under `≈` (`issues/semiring-ring-structure-api.md`):
+// every structure resolves, the units under the tags are the carriers' own,
+// and each layer's theorems apply at their own layer. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5). Moved from crates/elab/tests/lib_std_semiring.rs; the refusals that
+// need the checker stay there.
+import logic; import nat; import int; import list; import relation;
+import relation_props; import algebra_rel; import semiring; import rat;
+
+fn nat_layers() → Nat {
+    let a = Nat::CommSemiring(RelId, Nat::add, Nat::mul);
+    let b = Nat::Semiring(RelId, Nat::add, Nat::mul);
+    let c = Nat::Distributes(RelId, Nat::add, Nat::mul);
+    let d = Nat::MonoidRel(RelId, Nat::mul);
+    0
+}
+fn int_layers() → Nat {
+    let a = Int::CommRing(RelId, Int::add, Int::mul);
+    let b = Int::Ring(RelId, Int::add, Int::mul);
+    let c = Int::GroupRel(RelId, Int::add);
+    0
+}
+fn rat_layers() → Nat {
+    let a = Rat::CommRing(Rat::Same, Rat::add, Rat::mul);
+    let b = Rat::Ring(Rat::Same, Rat::add, Rat::mul);
+    let c = Rat::CommSemiring(Rat::Same, Rat::add, Rat::mul);
+    0
+}
+theorem nat_zero(): Nat::Semiring(RelId, Nat::add, Nat::mul).unit = 0 { refl }
+theorem nat_one(): Nat::Semiring(RelId, Nat::add, Nat::mul).multiplicative.unit = 1 { refl }
+theorem int_neg(x: Int): Int::Ring(RelId, Int::add, Int::mul).inv(x) = -x { refl }
+theorem rat_one(): Rat::Ring(Rat::Same, Rat::add, Rat::mul).multiplicative.unit = 1 { refl }
+theorem rat_neg(x: Rat): Rat::Ring(Rat::Same, Rat::add, Rat::mul).inv(x) = -x { refl }
+// The `≈` of the identity carriers is `=`.
+theorem nat_same_is_eq(x, y: Nat, h: x ≈ y): x = y { h }
+theorem int_same_is_eq(x, y: Int, h: x = y): x ≈ y { h }
+
+// Each layer's theorems at their own layer: signs at a ring, a split product
+// at a commutative semiring, a split sum at any semiring, and a constant
+// factor out of a sum at a semiring.
+theorem signs<A: Ring(≈, +, *)>(x, y: A): A.inv(x) * y ≈ A.inv(x * y) { Ring::neg_mul(x, y) }
+theorem split<A: CommSemiring(≈, +, *), B>(xs: List<B>, f, g: B → A):
+    MonoidRel::fold(*, xs.map(λ x => f(x) * g(x))) ≈ MonoidRel::fold(*, xs.map(f)) * MonoidRel::fold(*, xs.map(g))
+{
+    CommMonoidRel::fold_map_op(≈, *, xs, f, g)
+}
+theorem split_sum<A: Semiring(≈, +, *), B>(xs: List<B>, f, g: B → A):
+    MonoidRel::fold(+, xs.map(λ x => f(x) + g(x))) ≈ MonoidRel::fold(+, xs.map(f)) + MonoidRel::fold(+, xs.map(g))
+{
+    CommMonoidRel::fold_map_op(≈, +, xs, f, g)
+}
+theorem sum_distribution<A: Semiring(≈, +, *)>(x: A, ys: List<A>): x ≈ x {
+    let s = Semiring::mul_sum_l<A>(x, ys);
+    A.rel_refl(x)
+}
+
+// At `Rat` a ring law holds modulo `≈`.
+theorem rat_signs(x, y: Rat): -x * -y ≈ x * y { Ring::neg_mul_neg(x, y) }

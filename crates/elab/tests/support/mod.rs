@@ -304,6 +304,7 @@ pub fn process_base(
 /// for *an* error passes when its source fails for any reason, a renamed
 /// lemma or a missing import included, and keeps passing while it tests
 /// nothing; every refusal names one of these instead.
+#[derive(Clone, Copy)]
 pub enum Refusal<'a> {
     /// The kernel rejected an elaborated declaration.
     Kernel,
@@ -325,10 +326,13 @@ pub fn assert_refused(e: &mut heather_elab::Elaborator, name: &str, src: &str, w
         Err(err) => err,
     };
     let rendered = err.render(src);
+    // A slip is judged on the headline only: an instance search's trace can
+    // quote a candidate rejected for an unimported qualifier.
+    let headline = rendered.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
     let incidental = matches!(err, heather_elab::ElabError::Parse(_))
         || ["unbound name", "cannot find module", "neither an imported module", "is ambiguous"]
             .iter()
-            .any(|slip| rendered.contains(slip));
+            .any(|slip| headline.contains(slip));
     match why {
         Refusal::Kernel => assert!(
             matches!(err, heather_elab::ElabError::Kernel { .. }),

@@ -17,7 +17,7 @@
 //!     that must not have moved.
 //!
 //! Synthetic modules rather than `lib/std`: the library carries the same three
-//! `Le`s and is checked by `lib_std_int.rs`, but the *key* is what is under
+//! `Le`s and is probed by `lib/_tests/std/num/int_tests.hthr`, but the *key* is what is under
 //! test here and a two-declaration program says it in ten lines.
 
 use heather_elab::{ElabError, Elaborator};

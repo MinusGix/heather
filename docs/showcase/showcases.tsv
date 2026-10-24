@@ -57,11 +57,11 @@ finite_set_tree_client	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 finite_set_backend_transfer	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 derive_set_functions	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
 derive_set_function_clients	lib/std	test	crates/elab/tests/lib_setoid_mergeable.rs.
-rat_client	lib/std	test	crates/elab/tests/lib_std_rat.rs.
-creal_client	lib/std	test	crates/elab/tests/lib_std_creal.rs.
+rat_client	lib/std	cli	The rationals' client: `calc` over `≈`, `rel_cong` through `+`, `*` and `-`; probes and refusals are lib/_tests/std/num/rat_tests.hthr and crates/elab/tests/lib_std_rat.rs.
+creal_client	lib/std	cli	The reals' client: `calc` over `≈` and `<`, and evaluated terms, moduli and gaps; probes and refusals are lib/_tests/std/num/creal_tests.hthr and crates/elab/tests/lib_std_creal.rs.
 itree_client	lib/std	test	crates/elab/tests/lib_std_itree.rs.
 itree_refinement_client	lib/std	test	crates/elab/tests/lib_std_itree_trace.rs.
-ordered_field_client	lib/std	test	crates/elab/tests/lib_std_ordered_field.rs.
-semiring_client	lib/std	test	crates/elab/tests/lib_std_semiring.rs.
+ordered_field_client	lib/std	cli	Generic theorems proved once over the ordered-field interface and called at `Rat` and `CReal`; probes and refusals are lib/_tests/std/algebra/ordered_field_tests.hthr and crates/elab/tests/lib_std_ordered_field.rs.
+semiring_client	lib/std	cli	Generic semiring and ring theorems stated at `Nat`, `Int` and `Rat`; probes and refusals are lib/_tests/std/algebra/semiring_tests.hthr and crates/elab/tests/lib_std_semiring.rs.
 linux_spec_client	lib/std,lib	test	crates/elab/tests/linux_spec.rs: tr's spec run on one byte, sized reads, and stdout read off a machine's run.
 memory_client	lib/std	test	crates/elab/tests/lib_std_memory.rs.

@@ -1,0 +1,175 @@
+// Probes of `lib/std/num/int.hthr`: theorems that pin the concept down at
+// specific values and restate the contract at open ones. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5). Moved from crates/elab/tests/lib_std_int.rs.
+//
+// The file imports `nat` and `bool` beside `int` on purpose: `int::Int::add`
+// and `nat::Nat::add` are then ambiguous by name, while `x + y` is not, since
+// the operand's carrier picks the designation
+// (`docs/operators-onto-classes-design.md`).
+import int; import nat; import list; import logic; import bool; import algebra;
+
+// The API computes, in both signs on both sides of every operation (a
+// sign-blind bug survives any probe that stays non-negative), and the
+// operators and instances resolve at `Int` in a file that imports `nat` too.
+theorem c_add_pp(): int::Int::add(OfNat(2), OfNat(3)) = OfNat(5) { refl }
+theorem c_add_pn(): int::Int::add(OfNat(2), NegSucc(4)) = NegSucc(2) { refl }
+theorem c_add_np(): int::Int::add(NegSucc(1), OfNat(5)) = OfNat(3) { refl }
+theorem c_add_nn(): int::Int::add(NegSucc(1), NegSucc(2)) = NegSucc(4) { refl }
+theorem c_sub_under(): int::Int::sub(OfNat(3), OfNat(8)) = NegSucc(4) { refl }
+theorem c_sub_over(): int::Int::sub(OfNat(8), OfNat(3)) = OfNat(5) { refl }
+theorem c_neg_p(): int::Int::neg(OfNat(4)) = NegSucc(3) { refl }
+theorem c_neg_n(): int::Int::neg(NegSucc(3)) = OfNat(4) { refl }
+theorem c_neg_zero(): int::Int::neg(OfNat(0)) = OfNat(0) { refl }
+fn c_positive_numeral() -> Int { 4 }
+fn c_negative_numeral() -> Int { -4 }
+fn c_as_int(a: Int) -> Int { a }
+fn c_negative_argument() -> Int { c_as_int(-1) }
+fn c_nested_negative_argument() -> Int { c_as_int(--1) }
+fn c_nested_numeral_anchor(a: Int) -> Int { let b = -(1 + a); b }
+fn c_generic_numeral<A: Numeral>() -> A { 1 }
+fn c_literal_left_infers_from_sibling(a: Int) -> Int { let x = 3 + a; x }
+theorem c_positive_numeral_computes(): c_positive_numeral() = OfNat(4) { refl }
+theorem c_negative_numeral_computes(): c_negative_numeral() = NegSucc(3) { refl }
+theorem c_negative_argument_computes(): c_negative_argument() = NegSucc(0) { refl }
+theorem c_negative_zero_literal(): c_as_int(-0) = OfNat(0) { refl }
+theorem c_negative_radix_literal(): c_as_int(-0x10) = NegSucc(15) { refl }
+theorem c_nested_negative_argument_computes(): c_nested_negative_argument() = OfNat(1) { refl }
+theorem c_nested_numeral_anchor_open(a: Int):
+    c_nested_numeral_anchor(a) = int::Int::neg(int::Int::add(OfNat(1), a)) { refl }
+theorem c_generic_int_numeral(): c_generic_numeral<Int>() = OfNat(1) { refl }
+theorem c_generic_nat_numeral(): c_generic_numeral<Nat>() = 1 { refl }
+theorem c_positive_literal_equation(): 4 = OfNat(4) { refl }
+theorem c_negative_literal_equation(): -4 = NegSucc(3) { refl }
+theorem c_literal_arithmetic_equation(): 2 + 3 = OfNat(5) { refl }
+theorem c_literal_left_computes(): c_literal_left_infers_from_sibling(OfNat(2)) = OfNat(5) { refl }
+theorem c_prefix_neg_open(a: Int): -a = int::Int::neg(a) { refl }
+theorem c_prefix_neg_positive(): -OfNat(4) = NegSucc(3) { refl }
+theorem c_prefix_neg_negative(): -NegSucc(3) = OfNat(4) { refl }
+theorem c_prefix_neg_nested(a: Int): --a = a { int::Int::neg_neg(a) }
+theorem c_prefix_neg_precedence(a, b: Int): -a * b = int::Int::mul(int::Int::neg(a), b) { refl }
+theorem c_mul_pp(): int::Int::mul(OfNat(2), OfNat(3)) = OfNat(6) { refl }
+theorem c_mul_pn(): int::Int::mul(OfNat(2), NegSucc(2)) = NegSucc(5) { refl }
+theorem c_mul_np(): int::Int::mul(NegSucc(1), OfNat(3)) = NegSucc(5) { refl }
+theorem c_mul_nn(): int::Int::mul(NegSucc(1), NegSucc(2)) = OfNat(6) { refl }
+theorem c_mul_zero(): int::Int::mul(NegSucc(7), OfNat(0)) = OfNat(0) { refl }
+theorem c_toNat(): int::Int::toNat(NegSucc(3)) = 0 { refl }
+
+// the order decides by computing, in all four sign combinations
+theorem c_le_pp(): OfNat(2) <= OfNat(7) { trivial }
+theorem c_le_nn(): NegSucc(9) <= NegSucc(0) { trivial }
+theorem c_le_np(): NegSucc(9) <= OfNat(0) { trivial }
+theorem c_not_le_pn(): ¬(OfNat(0) <= NegSucc(0)) { λ (h: OfNat(0) <= NegSucc(0)) => h }
+theorem c_lt(): int::Int::Lt(NegSucc(0), OfNat(0)) { trivial }
+theorem c_max_mixed(): int::Int::max(NegSucc(2), OfNat(1)) = OfNat(1) { refl }
+theorem c_max_negative(): int::Int::max(NegSucc(2), NegSucc(5)) = NegSucc(2) { refl }
+theorem c_min_mixed(): int::Int::min(OfNat(3), NegSucc(1)) = NegSucc(1) { refl }
+theorem c_min_positive(): int::Int::min(OfNat(3), OfNat(7)) = OfNat(3) { refl }
+
+// the operators at BOTH carriers, in one file, with neither qualified
+theorem c_op_int(a, b: Int): a + b = b + a { int::Int::add_comm(a, b) }
+theorem c_op_nat(m, n: Nat): m + n = n + m { nat::Nat::add_comm(m, n) }
+theorem c_op_int_mul(a, b: Int): a * b = b * a { int::Int::mul_comm(a, b) }
+theorem c_op_le_int(a: Int): a <= a { int::Int::le_refl(a) }
+theorem c_op_lt_int(a: Int): a < int::Int::isucc(a) { int::Int::lt_isucc_self(a) }
+theorem c_op_lt_nat(n: Nat): n < Succ(n) { nat::Nat::lt_succ_self(n) }
+
+// the instances, reached by resolution: the commutative monoid's generic law,
+// the monoid fold at `List<Int>`, the group's inverse-uniqueness, and `Cmp`
+theorem c_unit(a: Int): a + OfNat(0) = a { op_unit_of_comm(a) }
+theorem c_sum(): sum_all([OfNat(2), NegSucc(0)]) = OfNat(1) { refl }
+theorem c_inv(x, y: Int, h: int::Int::add(x, y) = OfNat(0)): y = int::Int::neg(x) {
+    op_inv_unique(x, y, h)
+}
+
+theorem c_max(a: Int): max_of(a, a) = a { max_of_self(a) }
+theorem c_max_computes(): max_of(NegSucc(2), OfNat(1)) = OfNat(1) { refl }
+
+// Multiplication monotonicity fails at a negative factor, which is why
+// `mul_le_mono_r` takes evidence of `0 <= k` rather than a guard.
+theorem mul_le_mono_not_at_negative(): ¬((a, b: Int) → a <= b → a * NegSucc(0) <= b * NegSucc(0)) {
+    λ h => h(OfNat(0), OfNat(1), trivial)
+}
+
+// Cancellation by a positive factor: the side condition is found by
+// computation.
+theorem cancel_two(x, y: Int, h: x * OfNat(2) = y * OfNat(2)): x = y { x.mul_cancel_pos_r(y, OfNat(2), h) }
+
+// A closed sum costs one `Nat` operation on the payloads, not the magnitude
+// (issues/int-arithmetic-over-nat-primitives.md): every quadrant at
+// `2^63`/`2^64`, including the mixed ones that used to peel one `ipred` per
+// unit, and `sub` through `neg`.
+theorem big_sub(): int::Int::sub(OfNat(nat::Nat::pow(2, 63)), OfNat(nat::Nat::pow(2, 64))) = NegSucc(nat::Nat::sub(nat::Nat::pow(2, 63), 1)) { refl }
+theorem big_sub_over(): int::Int::sub(OfNat(nat::Nat::pow(2, 64)), OfNat(nat::Nat::pow(2, 63))) = OfNat(nat::Nat::pow(2, 63)) { refl }
+theorem big_add(): int::Int::add(OfNat(nat::Nat::pow(2, 63)), OfNat(nat::Nat::pow(2, 63))) = OfNat(nat::Nat::pow(2, 64)) { refl }
+theorem big_neg_neg(): int::Int::add(NegSucc(nat::Nat::pow(2, 63)), NegSucc(nat::Nat::pow(2, 63))) = NegSucc(nat::Nat::add(nat::Nat::pow(2, 64), 1)) { refl }
+theorem big_mixed(): int::Int::add(NegSucc(nat::Nat::pow(2, 63)), OfNat(nat::Nat::pow(2, 64))) = OfNat(nat::Nat::sub(nat::Nat::pow(2, 63), 1)) { refl }
+theorem big_mixed_under(): int::Int::add(OfNat(nat::Nat::pow(2, 63)), NegSucc(nat::Nat::pow(2, 64))) = NegSucc(nat::Nat::pow(2, 63)) { refl }
+theorem big_cancel(): int::Int::sub(OfNat(nat::Nat::pow(2, 64)), OfNat(nat::Nat::pow(2, 64))) = OfNat(0) { refl }
+
+// Euclidean division in every sign quadrant, and its contract at open
+// integers.
+theorem div_pp(): int::Int::div(OfNat(7), OfNat(3)) = OfNat(2) { refl }
+theorem mod_pp(): int::Int::mod(OfNat(7), OfNat(3)) = OfNat(1) { refl }
+theorem div_np(): int::Int::div(NegSucc(6), OfNat(3)) = NegSucc(2) { refl }
+theorem mod_np(): int::Int::mod(NegSucc(6), OfNat(3)) = OfNat(2) { refl }
+theorem div_pn(): int::Int::div(OfNat(7), NegSucc(2)) = NegSucc(1) { refl }
+theorem mod_pn(): int::Int::mod(OfNat(7), NegSucc(2)) = OfNat(1) { refl }
+theorem div_nn(): int::Int::div(NegSucc(6), NegSucc(2)) = OfNat(3) { refl }
+theorem mod_nn(): int::Int::mod(NegSucc(6), NegSucc(2)) = OfNat(2) { refl }
+theorem div_exact_negative(): int::Int::div(NegSucc(5), OfNat(3)) = NegSucc(1) { refl }
+theorem mod_exact_negative(): int::Int::mod(NegSucc(5), OfNat(3)) = OfNat(0) { refl }
+theorem div_zero(): int::Int::div(NegSucc(4), OfNat(0)) = OfNat(0) { refl }
+theorem mod_zero(): int::Int::mod(NegSucc(4), OfNat(0)) = NegSucc(4) { refl }
+theorem reconstruct(a, b: Int):
+    int::Int::div(a, b) * b + int::Int::mod(a, b) = a
+{
+    int::Int::div_mul_add_mod(a, b)
+}
+theorem remainder_nonnegative(a, b: Int, h: b ≠ OfNat(0)):
+    OfNat(0) <= int::Int::mod(a, b)
+{
+    int::Int::mod_nonneg(a, b, h)
+}
+theorem remainder_bounded(a, b: Int, h: b ≠ OfNat(0)):
+    int::Int::mod(a, b) < int::Int::abs(b)
+{
+    int::Int::mod_lt_abs(a, b, h)
+}
+theorem quotient_at_zero(a: Int): int::Int::div(a, OfNat(0)) = OfNat(0) {
+    int::Int::div_zero(a)
+}
+theorem remainder_at_zero(a: Int): int::Int::mod(a, OfNat(0)) = a {
+    int::mod_zero(a)
+}
+
+// `Decide` at three orders that are all written `Le`
+// (`docs/instance-resolved-key-design.md`): `<=` reads its carrier off the
+// operand, and the resolver hands each goal the instance at its own carrier.
+// Open operands answered by the registry, closed ones that must compute to
+// the right branch, and the canonical names written verbatim.
+// `<=` at three carriers in one file, none of them qualified: the designation
+// at the operand's carrier is what picks the order (`nat`, `int` and `bool`
+// each declare their own row).
+theorem o_nat(m: Nat): m <= m { nat::Nat::le_refl(m) }
+theorem o_int(a: Int): a <= a { int::Int::le_refl(a) }
+theorem o_bool(p: Bool): p <= p { bool::Bool::le_refl(p) }
+
+// The same three, decided through the class rather than by naming a decider —
+// at OPEN operands, so each is answered by the registry and not by reduction.
+fn d_nat_open(m, n: Nat) -> Or<nat::Nat::Le(m, n), ¬nat::Nat::Le(m, n)> { decide<nat::Nat::Le(m, n)>() }
+fn d_int_open(a, b: Int) -> Or<int::Int::Le(a, b), ¬int::Int::Le(a, b)> { decide<int::Int::Le(a, b)>() }
+fn d_bool_open(p, q: Bool) -> Or<bool::Bool::Le(p, q), ¬bool::Bool::Le(p, q)> { decide<bool::Bool::Le(p, q)>() }
+
+// And they COMPUTE, which is what says the answer was the right instance and
+// not merely one of the right type: a decider that unfolds picks a branch.
+theorem d_nat_computes(): decide_pick<nat::Nat::Le(2, 5), Nat>(7, 9) = 9 { refl }
+theorem d_int_computes(): decide_pick<int::Int::Le(OfNat(2), NegSucc(0)), Nat>(7, 9) = 7 { refl }
+theorem d_bool_computes(): decide_pick<bool::Bool::Le(True, False), Nat>(7, 9) = 7 { refl }
+
+// The canonical names, written: three modules, three declarations, one spelling
+// `Le::Decide` each. This is the string the registry hands out and it is now
+// writable verbatim.
+fn k_nat(m, n: Nat) -> Decide<nat::Nat::Le(m, n)> { nat::Nat::Le::Decide() }
+fn k_int(a, b: Int) -> Decide<int::Int::Le(a, b)> { int::Int::Le::Decide() }
+fn k_bool(p, q: Bool) -> Decide<bool::Bool::Le(p, q)> { bool::Bool::Le::Decide() }
