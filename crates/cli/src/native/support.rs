@@ -1,4 +1,6 @@
-// Bundled model sources shared by native compilation and certificate controls.
+// The proof library bundled into `compile-x86`: the verified lowering's
+// theorem, `function_ir_compile`, and everything it imports, in import
+// order (issues/function-ir-verified-lowering.md, round 4).
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../../lib/std/core/bool.hthr")),
@@ -9,37 +11,19 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("algebra", include_str!("../../../../lib/std/algebra/algebra.hthr")),
     ("int", include_str!("../../../../lib/std/num/int.hthr")),
     ("bitvec", include_str!("../../../../lib/std/bitvec/bitvec.hthr")),
+    ("function_ir", include_str!("../../../../lib/native/function_ir/function_ir.hthr")),
+    ("function_ir_eval", include_str!("../../../../lib/native/function_ir/function_ir_eval.hthr")),
     ("relation", include_str!("../../../../lib/std/relation/relation.hthr")),
     ("relation_props", include_str!("../../../../lib/std/relation/relation_props.hthr")),
     ("location", include_str!("../../../../lib/std/machine/location.hthr")),
     ("certified_lookup", include_str!("../../../../lib/std/data/certified_lookup.hthr")),
     ("x86_64", include_str!("../../../../lib/std/arch/x86_64/x86_64.hthr")),
     ("x86_64_block", include_str!("../../../../lib/std/arch/x86_64/x86_64_block.hthr")),
-    ("x86_64_control_block", include_str!("../../../../lib/std/arch/x86_64/x86_64_control_block.hthr")),
-    ("x86_64_control_flow", include_str!("../../../../lib/std/arch/x86_64/x86_64_control_flow.hthr")),
-    ("function_ir", include_str!("../../../../lib/native/function_ir/function_ir.hthr")),
-    ("function_ir_x86_support", include_str!("../../../../lib/native/function_ir/function_ir_x86_support.hthr")),
-    ("elf64", include_str!("../../../../lib/std/os/linux/elf64.hthr")),
-    ("linux_x86_64_entry", include_str!("../../../../lib/std/os/linux/linux_x86_64_entry.hthr")),
-    ("x86_64_fetch", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetch.hthr")),
-    ("x86_64_fetch_block", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetch_block.hthr")),
-    ("elf64_load", include_str!("../../../../lib/std/os/linux/elf64_load.hthr")),
-    ("x86_64_calls", include_str!("../../../../lib/std/arch/x86_64/x86_64_calls.hthr")),
-    ("x86_64_call_frame", include_str!("../../../../lib/std/arch/x86_64/x86_64_call_frame.hthr")),
-    ("x86_64_call_summary", include_str!("../../../../lib/std/arch/x86_64/x86_64_call_summary.hthr")),
-    ("elf64_calls", include_str!("../../../../lib/std/os/linux/elf64_calls.hthr")),
-    ("linux_x86_64_fetch", include_str!("../../../../lib/std/os/linux/linux_x86_64_fetch.hthr")),
-    ("x86_64_structured_block", include_str!("../../../../lib/std/arch/x86_64/x86_64_structured_block.hthr")),
-    // The verified lowering and what `compile-x86` instantiates of it
-    // (issues/function-ir-verified-lowering.md, round 4).
-    ("function_ir_eval", include_str!("../../../../lib/native/function_ir/function_ir_eval.hthr")),
     ("function_ir_lower", include_str!("../../../../lib/native/function_ir/function_ir_lower.hthr")),
+    ("x86_64_fetch", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetch.hthr")),
     ("x86_64_data_read", include_str!("../../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
-    ("x86_64_access_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
-    ("x86_64_access_memory", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
-    ("omega", include_str!("../../../../lib/std/tactic/omega.hthr")),
-    // `x86_64_fetched_code`'s sign-bit lemmas, moved out of it by #150.
     ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
+    ("omega", include_str!("../../../../lib/std/tactic/omega.hthr")),
     ("bitvec_signed", include_str!("../../../../lib/std/bitvec/bitvec_signed.hthr")),
     ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),
     ("x86_64_layout", include_str!("../../../../lib/std/arch/x86_64/x86_64_layout.hthr")),

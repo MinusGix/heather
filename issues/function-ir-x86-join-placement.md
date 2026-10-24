@@ -1,11 +1,11 @@
 ---
 title: Reconcile FunctionIR branch result placements at machine joins
-status: open
+status: closed
 labels: [compiler,function-ir,x86,register-allocation,control-flow]
 area: heather-in-heather
 blocked-by: [function-ir-conditional-regions]
 created: 2026-09-01
-updated: 2026-09-20
+updated: 2026-10-24
 ---
 
 The first conditional allocator requests the same output register from both
@@ -31,3 +31,4 @@ registers, and multiple yielded ports may require parallel edge moves.
   parallel edge moves/cycles, spills, and their local certificates remain the
   scope of this issue. [[function-ir-shared-multi-result-dag]] separately tracks
   sharing work across multiple DAG results.
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

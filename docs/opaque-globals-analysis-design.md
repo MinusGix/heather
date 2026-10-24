@@ -1,5 +1,10 @@
 # Opaque globals for analysis: the pull API's body half, and callee markers
 
+> **Partly burned in B2 (2026-10-24).** The pull API's body half (`fn_body_code`, the marked
+> boxed body) had certgen as its only consumer and was deleted with it
+> (`docs/native-program-logic-design.md` §3.2); `fn_type_code` stays. The last commit with
+> the body half is `82521eab`.
+
 Design for `issues/opaque-globals-analysis.md` — blocker (1) of the
 2026-08-02 expressiveness verdict, scheduled as its own round: let
 in-language code analysis see through global references (`u^δ`), behind the

@@ -11,7 +11,6 @@ fn the_kept_foundation_checks() {
         ("x86_64_stack", include_str!("../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
         ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
         ("stream_filter", include_str!("../../../lib/native/stream_filter.hthr")),
-        ("filter_step_piece", include_str!("../../../lib/native/filter_step_piece.hthr")),
         ("decimal", include_str!("../../../lib/std/text/decimal.hthr")),
     ]);
 }

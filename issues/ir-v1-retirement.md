@@ -1,11 +1,11 @@
 ---
 title: Retire ir_v1 and certgen onto FunctionIR, or keep it as the source IR
-status: open
+status: closed
 labels: [ir,design]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-24
 ---
 
 Whether `ir_v1` and the certifying generator over it (`lib/certgen/ir_v1.hthr`,
@@ -24,3 +24,7 @@ frozen until then, because the certgen tests are its only users.
 
 - **[[certifying-generator]]** owns certgen.
 - **[[in-language-certificate-emission]]** owns moving emission into Heather.
+
+## Log
+
+- 2026-10-24: Done in B2 (2026-10-24): retired. `lib/certgen/ir_v1.hthr` and certgen are deleted; FunctionIR is the one source IR. A frozen copy stays as an elaborator corpus, `crates/elab/tests/fixtures/ir_v1.hthr`, used by `crates/elab/tests/ir_v1.rs` (its acceptance and the emission-walk guard) and the frontend bench.

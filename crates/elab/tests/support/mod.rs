@@ -16,10 +16,8 @@
 //! - **Harness helpers** (`ok`/`bad`/`bare`, and per-file variants) are
 //!   local `fn`s at the top of each test file, not shared here — each file
 //!   pins its own prelude-plus-fixture combination on purpose.
-//! - **The whole-library acceptance tests** (`lib/std`, `lib/certgen/ir_v1.hthr`)
-//!   live in `lib_algebra.rs` / `lib_list_algos.rs` / `ir_v1.rs` /
-//!   `certgen.rs`; the two expensive ones — the `--fast` skips named in
-//!   `scripts/test` — are in `ir_v1.rs` and `certgen.rs`.
+//! - **The whole-library acceptance tests** (`lib/std`) live in
+//!   `lib_algebra.rs` / `lib_list_algos.rs`.
 //! - **What a generated-term test must vary**: docs/testing-generated-terms.md.
 #![allow(dead_code)]
 
@@ -224,18 +222,14 @@ theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c))
 }
 "#;
 
-/// The certgen family's shared declaration cache
-/// (`issues/elaborator-snapshot-across-test-binaries.md`).
-///
-/// Five certgen test binaries each elaborate the same checked-in prefix —
-/// `lib/certgen/ir_v1.hthr`'s declarations (or the support-prelude slice of it),
-/// `lib/certgen/certgen_code.hthr`, `lib/certgen/certgen_cert.hthr` — before their own
-/// content starts: identical work, re-kernel-checked once per binary. The CLI
-/// already owns the mechanism that makes paying it once sound — the
-/// content-addressed declaration cache behind `heather check --cache`
-/// (docs/cache-v1-design.md) — and the elaborator already exposes the seam it
-/// installs through (`Elaborator::set_gate`). This helper wires the tests to
-/// the same store shape, at `target/decl-cache`.
+/// The checked-in library prefix of a test, gated through the shared
+/// declaration cache at `target/decl-cache`
+/// (`issues/elaborator-snapshot-across-test-binaries.md`): identical prefix
+/// work, re-kernel-checked once per binary otherwise. The CLI already owns
+/// the mechanism that makes paying it once sound — the content-addressed
+/// declaration cache behind `heather check --cache` (docs/cache-v1-design.md)
+/// — and the elaborator exposes the seam it installs through
+/// (`Elaborator::set_gate`).
 ///
 /// The trust argument is the cache's own (design doc §6): an entry is
 /// recorded only when *this* kernel — the `KERNEL_SEMANTICS` fingerprint,
@@ -248,16 +242,11 @@ theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c))
 /// `issues/cache-verdicts-omit-check-settings.md` is covered by the
 /// fingerprint for as long as fuel stays one.
 ///
-/// Two rules keep the suite meaning what it meant:
-///
-/// - **The gate never covers generated or mutated content.** Callers wrap
-///   exactly the checked-in prefix elaborations; on return the gate is
-///   `NoGate` again, so every generated emission, fixture `fn` and
-///   perturbed-library mutant is kernel-checked in full on every run
-///   (docs/testing-generated-terms.md keeps its teeth).
-/// - **One binary takes no gate at all**: `certgen_emissions.rs` elaborates
-///   the whole prefix front-to-back against the real kernel every full-suite
-///   run, as the backstop against a defect in the cache mechanism itself.
+/// **The gate never covers generated or mutated content.** Callers wrap
+/// exactly the checked-in prefix elaborations; on return the gate is `NoGate`
+/// again, so every generated emission, fixture `fn` and mutant is
+/// kernel-checked in full on every run (docs/testing-generated-terms.md keeps
+/// its teeth).
 ///
 /// Cold path: nothing to pre-run — a fresh checkout (or `cargo clean`)
 /// simply records on first use and reuses after. Concurrent tests race the
@@ -341,33 +330,6 @@ pub fn library(modules: &[(&str, &str)]) -> heather_elab::Elaborator {
     let fork = image.elaborator();
     built.push((key, image));
     fork
-}
-
-/// A mutated emission (or mutated-library emission) elaborated into the
-/// `ir_v1` module, required to be **refused, and refused by the kernel**.
-///
-/// Shared by the six `certgen_*` test binaries, which is a departure from this
-/// file's usual rule that harness helpers stay file-local: the six had
-/// byte-identical private copies, and the guard below is exactly the kind of
-/// thing that gets added to one copy and not the other five.
-///
-/// The guard (`issues/certgen-emission-idiomatic-style.md`, inherited from the
-/// datarepr round's `refused`): a control mutates generated source with a
-/// string edit, so a pattern that has drifted away from the emission can leave
-/// the text **unparseable** — and then the control is green for a reason that
-/// has nothing to do with the property it names. A `ParseError` is therefore a
-/// failure here, not a pass. `assert_ne!` on the mutation catches a pattern
-/// that matched *nothing*; this catches a pattern that matched and cut.
-pub fn refuted_by_the_kernel(e: &mut heather_elab::Elaborator, src: &str, what: &str) {
-    match e.elab_module_source("ir_v1", src) {
-        Ok(()) => panic!("{what} elaborated, but it must fail"),
-        Err(heather_elab::ElabError::Parse(p)) => panic!(
-            "{what} was refused by the PARSER, so this control proves nothing \
-             about the mutation: {}\n{src}",
-            p.msg
-        ),
-        Err(_) => {}
-    }
 }
 
 /// A 64-bit FNV-1a over an exact rendering of Ψ.

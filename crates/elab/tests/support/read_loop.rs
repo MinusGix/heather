@@ -1,17 +1,11 @@
 use crate::{common, support};
 
-// The read-once process shape and what it stands on
-// (docs/native-first-program-design.md): fetched execution, the basic Linux
-// trace, the profile's memory view, and the process theorem itself.
+// What the native tests stand on past the x86 prefix: FunctionIR's loops,
+// fetched execution, the stack and store forms, and the Linux I/O model.
 pub const READ_LOOP: &[(&str, &str)] = &[
-    ("x86_64_structured_block", include_str!("../../../../lib/std/arch/x86_64/x86_64_structured_block.hthr")),
     ("x86_64_data_read", include_str!("../../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
-    ("x86_64_access_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_code.hthr")),
-    ("x86_64_access_memory", include_str!("../../../../lib/std/arch/x86_64/x86_64_access_memory.hthr")),
     ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
     ("function_ir_loop", include_str!("../../../../lib/native/function_ir/function_ir_loop.hthr")),
-    ("function_ir_loop_x86", include_str!("../../../../lib/native/function_ir/function_ir_loop_x86.hthr")),
-    ("function_ir_loop_trace", include_str!("../../../../lib/native/function_ir/function_ir_loop_trace.hthr")),
     ("omega", include_str!("../../../../lib/std/tactic/omega.hthr")),
     ("bitvec_signed", include_str!("../../../../lib/std/bitvec/bitvec_signed.hthr")),
     ("x86_64_fetch", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetch.hthr")),

@@ -11,7 +11,7 @@
 //! - [`cloned_runner`] clones a prelude'd elaborator instead. Measured
 //!   2026-08-04: building the prelude is ~100 µs, cloning one is ~104 ns —
 //!   a thousandfold, and both numbers are in the report (`corpus/prelude`
-//!   has a case for each). 100 µs is nothing against `lib/certgen/ir_v1.hthr` and
+//!   has a case for each). 100 µs is nothing against `ir_v1.hthr` and
 //!   everything against a generated fixture at its smallest size, and a
 //!   fixed cost under a log-log fit does not merely add noise, it
 //!   *flattens the exponent* — which is the number this suite reports.
@@ -110,7 +110,7 @@ fn measure_phases(src: &str, cell: &Rc<Cell<Phases>>, total_ns: u64) {
 
 /// A run over a whole **import closure**, in the order the CLI's loader
 /// produces (docs/modules-design.md §3.2): dependencies first, root last, one
-/// shared elaborator. `lib/certgen/ir_v1.hthr` became multi-file when the Nat kit
+/// shared elaborator. `ir_v1.hthr` became multi-file when the Nat kit
 /// moved to `lib/std/num/nat.hthr`, so the number a user waits for is the closure
 /// and not the root — timing the root alone would time a file that no longer
 /// checks, and a fixture that stops working gets *faster*.
@@ -171,7 +171,7 @@ pub type Diagnosis = Rc<RefCell<Option<String>>>;
 /// closure's Ψ-binding count — the checksum the timed runs must reproduce.
 ///
 /// The heavy corpus cases used to skip this, because validating one meant
-/// checking `lib/certgen/ir_v1.hthr` and that was ~90 s. It is seconds now (the
+/// checking `ir_v1.hthr` and that was ~90 s. It is seconds now (the
 /// kernel-side rounds of early August), so the suite's own fixture rule — *a
 /// fixture validates before it is timed* — is affordable again, and the
 /// exception that let issues/frontend-bench-ir-closure-stale.md's closure fail

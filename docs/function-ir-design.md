@@ -3,7 +3,7 @@
 Status: **living design and implementation record** (2026-08-31).
 
 This document records the intended direction for the FunctionIR that replaces
-the bootstrap constructor-tree IR in `lib/certgen/ir_v1.hthr`. It is deliberately not
+the bootstrap constructor-tree IR in `lib/certgen/ir_v1.hthr` (retired in B2). It is deliberately not
 a promise that the first implementation is permanent. The first version
 should be good, but its more important job is to expose the next design
 questions under real use.

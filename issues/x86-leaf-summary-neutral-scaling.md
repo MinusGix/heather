@@ -1,10 +1,10 @@
 ---
 title: Stage generic leaf summaries for larger arithmetic bodies
-status: open
+status: closed
 labels: [compiler,x86,proofs]
 area: heather-in-heather
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-10-24
 ---
 
 ## Finding
@@ -40,3 +40,7 @@ uses the already accepted two-register leaf instead. No budget was increased.
 - [[x86-reusable-callee-certificates]] supplies the generic leaf-summary boundary.
 - [[function-ir-x86-proof-scaling]] owns source-to-IR/body proof scaling.
 - [[x86-composed-caller-register-saves]] owns the checked save/restore customer.
+
+## Log
+
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

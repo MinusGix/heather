@@ -1,9 +1,10 @@
-//! Rust-side construction API for generated Heather source.
+//! Rust-side construction API for generated Heather expressions.
 //!
 //! This is an emission IR, not a second Heather frontend. It represents the
-//! stable syntactic structure generators need—expressions, binders, blocks,
-//! and declarations—then serializes once at the checker boundary. The emitted
-//! module is still parsed, elaborated, and kernel-checked normally.
+//! stable syntactic structure of an expression, then serializes once at the
+//! checker boundary; what is emitted is still parsed, elaborated, and
+//! kernel-checked normally. The relational-context reports
+//! (`relational_context`) spell their goals with it.
 
 use std::fmt::Write;
 
@@ -267,227 +268,9 @@ impl From<String> for Expr {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Parameter {
-    name: String,
-    ty: Expr,
-}
-
-impl Parameter {
-    pub fn explicit(name: impl Into<String>, ty: Expr) -> Self {
-        Self {
-            name: name.into(),
-            ty,
-        }
-    }
-
-    pub fn ty(&self) -> &Expr { &self.ty }
-
-    fn render(&self, indent: usize) -> String {
-        format!(
-            "{}: {}",
-            self.name,
-            self.ty.render_at(indent + self.name.len() + 2)
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Statement {
-    Let { name: String, value: Expr },
-    Expression(Expr),
-}
-
-impl Statement {
-    pub fn let_value(name: impl Into<String>, value: Expr) -> Self {
-        Self::Let {
-            name: name.into(),
-            value,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Block {
-    statements: Vec<Statement>,
-    result: Expr,
-}
-
-impl Block {
-    pub fn expression(result: Expr) -> Self {
-        Self {
-            statements: Vec::new(),
-            result,
-        }
-    }
-
-    pub fn new(statements: impl IntoIterator<Item = Statement>, result: Expr) -> Self {
-        Self {
-            statements: statements.into_iter().collect(),
-            result,
-        }
-    }
-
-    fn render(&self, out: &mut String) {
-        for statement in &self.statements {
-            match statement {
-                Statement::Let { name, value } => {
-                    writeln!(
-                        out,
-                        "    let {name} = {};",
-                        value.render_at(4 + name.len() + 7)
-                    )
-                    .unwrap();
-                }
-                Statement::Expression(expression) => {
-                    writeln!(out, "    {};", expression.render_at(4)).unwrap();
-                }
-            }
-        }
-        for line in self.result.render_at(4).lines() {
-            writeln!(out, "    {line}").unwrap();
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeclarationKind {
-    Function,
-    Theorem,
-}
-
-impl DeclarationKind {
-    fn keyword(self) -> &'static str {
-        match self {
-            Self::Function => "fn",
-            Self::Theorem => "theorem",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Declaration {
-    kind: DeclarationKind,
-    name: String,
-    generics: Vec<String>,
-    parameters: Vec<Parameter>,
-    result: Expr,
-    body: Block,
-}
-
-impl Declaration {
-    pub fn function(name: impl Into<String>, result: Expr, body: Block) -> Self {
-        Self::new(DeclarationKind::Function, name, result, body)
-    }
-
-    pub fn theorem(name: impl Into<String>, result: Expr, body: Block) -> Self {
-        Self::new(DeclarationKind::Theorem, name, result, body)
-    }
-
-    fn new(kind: DeclarationKind, name: impl Into<String>, result: Expr, body: Block) -> Self {
-        Self {
-            kind,
-            name: name.into(),
-            generics: Vec::new(),
-            parameters: Vec::new(),
-            result,
-            body,
-        }
-    }
-
-    pub fn generic(mut self, generic: impl Into<String>) -> Self {
-        self.generics.push(generic.into());
-        self
-    }
-
-    pub fn parameter(mut self, parameter: Parameter) -> Self {
-        self.parameters.push(parameter);
-        self
-    }
-
-    pub fn parameters(mut self, parameters: impl IntoIterator<Item = Parameter>) -> Self {
-        self.parameters.extend(parameters);
-        self
-    }
-
-    fn render(&self, out: &mut String) {
-        write!(out, "{} {}", self.kind.keyword(), self.name).unwrap();
-        if !self.generics.is_empty() {
-            write!(out, "<{}>", self.generics.join(", ")).unwrap();
-        }
-        out.push('(');
-        if !self.parameters.is_empty() {
-            let rendered = self
-                .parameters
-                .iter()
-                .map(|parameter| parameter.render(4))
-                .collect::<Vec<_>>();
-            out.push_str(&rendered.join(",\n    "));
-        }
-        out.push(')');
-        match self.kind {
-            DeclarationKind::Function => {
-                write!(out, " → {}", self.result.render_at(4)).unwrap();
-            }
-            DeclarationKind::Theorem => {
-                write!(out, ":\n    {}", self.result.render_at(4)).unwrap();
-            }
-        }
-        out.push_str("\n{\n");
-        self.body.render(out);
-        out.push('}');
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Module {
-    items: Vec<ModuleItem>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ModuleItem {
-    Declaration(Declaration),
-    Raw(String),
-}
-
-impl Module {
-    /// Compose structured fragments without rendering either one to raw text.
-    pub fn extend(&mut self, other: Module) {
-        self.items.extend(other.items);
-    }
-
-    pub fn declaration(&mut self, declaration: Declaration) {
-        self.items.push(ModuleItem::Declaration(declaration));
-    }
-
-    /// Preserve a legacy generated fragment while it is migrated. New code
-    /// should construct declarations and expressions instead.
-    pub fn raw(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        if !text.trim().is_empty() {
-            self.items.push(ModuleItem::Raw(text));
-        }
-    }
-
-    pub fn render(&self) -> String {
-        let mut out = String::new();
-        for (index, item) in self.items.iter().enumerate() {
-            if index > 0 {
-                out.push_str("\n\n");
-            }
-            match item {
-                ModuleItem::Declaration(declaration) => declaration.render(&mut out),
-                ModuleItem::Raw(text) => out.push_str(text.trim()),
-            }
-        }
-        out.push('\n');
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Block, Declaration, Expr, Module, Parameter, Statement};
+    use super::Expr;
 
     #[test]
     fn constructs_calls_projections_and_named_records() {
@@ -504,35 +287,6 @@ mod tests {
         assert_eq!(
             artifact.render(),
             "Artifact(after := prior.after, proof := trans(left, right))",
-        );
-    }
-
-    #[test]
-    fn renders_structured_declarations_and_blocks() {
-        let mut module = Module::default();
-        module.declaration(Declaration::function(
-            "answer",
-            Expr::name("Nat"),
-            Block::expression(Expr::nat(42)),
-        ));
-        let mut suffix = Module::default();
-        suffix.declaration(
-            Declaration::theorem(
-                "answer_is_answer",
-                Expr::equal(Expr::nullary("answer"), Expr::nullary("answer")),
-                Block::new(
-                    [Statement::let_value("proof", Expr::name("refl"))],
-                    Expr::name("proof"),
-                ),
-            )
-            .parameter(Parameter::explicit("unused", Expr::name("True"))),
-        );
-        module.extend(suffix);
-        assert_eq!(
-            module.render(),
-            "fn answer() → Nat\n{\n    42\n}\n\n\
-             theorem answer_is_answer(unused: True):\n    answer() = answer()\n{\n\
-             \x20   let proof = refl;\n    proof\n}\n",
         );
     }
 

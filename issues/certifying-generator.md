@@ -1,11 +1,11 @@
 ---
 title: Certifying generator for Compile instances (runtime_func)
-status: open
+status: closed
 labels: [compiler, metaprogramming]
 area: heather-in-heather
 blocked-by: [end-to-end-compile-instance]
 created: 2026-07-22
-updated: 2026-08-15
+updated: 2026-10-24
 ---
 
 The `runtime_func`-style generator: intensionally analyze boxed function code
@@ -72,3 +72,4 @@ and the curried higher-order result ([[ih-generalization]]'s row).
 - 2026-08-14: Status line: parameter-position staging of §8 item 2 is complete (Nat, tier-0 enums, one tier-1 inductive). The issue stays open for parameterized instantiations (with [[datarepr-separation]]), loopification, and [[prog-extension-lemma]]. See "Current state" above.
 - 2026-08-14: The parameterized-instantiations path is designed (docs/datarepr-design.md §1.4 gap 2, §3.4, §5.1): the `datarepr` form is the minting site for the monomorph's name (`datarepr ListTok for List<Tok>`), from whose naive-repr images `embed_ListTok` generates like every embed_T — deliberately the entire v1 coupling; the decline flips by the established fixture-flip discipline when datarepr's v1 lands.
 - 2026-08-15: Cross-pollination note (2026-08-15): the obligation-records round (docs/obligation-records-design.md) landed the pattern certgen's own surface gap should reuse — ':= derive()' as a declaration-position route that runs a generator and fails with its decline reason verbatim, plus registry provenance (recorded, never consulted by certificates). When certgen gets a surface form, it is this shape with certgen behind it; the two-surfaces-one-design intent is recorded on the closed [[impl-declaration-surface]].
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

@@ -10,9 +10,8 @@
     store at `target/decl-cache` or kernel-rechecked; the current frontend is
     not re-run on unchanged library modules, and a module whose dependency
     changed in a way it did not observe has its image moved instead,
-    `docs/module-interface-cutoff-design.md`). What it skips and what dominates
-    the rest: `issues/certgen-harness-cost.md`,
-    `issues/native-summary-test-cpu-margin.md`.
+    `docs/module-interface-cutoff-design.md`). What it skips is the `SKIP`
+    list in `scripts/test`.
   - A round's **final** verification, and any change touching `lib/`, the kit
     or the generators, runs `scripts/test --pr`: every test, over the same
     replayed images. The exact image policy (plain `scripts/test`, which
@@ -54,7 +53,7 @@
     refuses to diff it against a whole run).
   - **A run killed at the rail still leaves its attribution**: a `--timings`
     table is appended as scopes close, and `<stem>.open.tsv` beside it names
-    the declaration that was running; `build-x86`/`compile-x86` leave the
+    the declaration that was running; `compile-x86` leaves the
     certificate being checked as `<out>.certificate.unchecked.hthr`.
   - After editing the compiler's Rust, `--cache --accept-stale-images` replays
     the library's module images instead of re-elaborating them (the fast

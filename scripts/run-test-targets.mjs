@@ -52,17 +52,14 @@ export function parseArtifacts(text, root = process.cwd()) {
       name: msg.target.name,
       label: msg.target.kind.includes("test") ? src : `${packageName} (${src})`,
       // Exclusive targets run alone, after the parallel phase: the bench
-      // smoke needs a quiet box to time, and the two-placement native
-      // summary gate sits within 25% of the 300 s CPU rail when run alone
-      // and tips over it under suite contention
-      // (issues/native-summary-test-cpu-margin.md).
+      // smoke needs a quiet box to time.
       exclusive: EXCLUSIVE_TARGETS.has(msg.target.name),
     });
   }
   return artifacts;
 }
 
-export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke", "native_summary"]);
+export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 
 // A family binary (`family_*`, crates/elab/Cargo.toml) links several test
 // files into one executable to save the links, not to share a process: it

@@ -1,10 +1,10 @@
 ---
 title: Certgen harness and kit costs: recorded levers if either grows
-status: open
+status: closed
 labels: [elaboration,performance,compiler,testing]
 area: heather-in-heather
 created: 2026-08-02
-updated: 2026-09-20
+updated: 2026-10-24
 ---
 
 Accumulator issue (perf convention: observations filed small and triggered,
@@ -88,3 +88,4 @@ NO NEW ISSUE FILED, deliberately: both cost centres have live owners ([[conversi
 - 2026-09-20: [[function-ir-narrow-certificate-test-margin]] is closed: the existing primitive
   and complete-body checks now run in separate processes, retaining all coverage
   and unchanged limits. The final plain full suite passes.
+- 2026-10-24: Not planned: what this issue is about was deleted in burn B2 (docs/native-program-logic-design.md §3.2). The verified `compile-x86` path (`function_ir_compile`, `compiled_returns`) replaces it; the last commit with the old code is `82521ea`.

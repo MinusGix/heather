@@ -5,7 +5,7 @@ labels: [compiler,function-ir,metaprogramming,proofs,codegen]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-09-01
-updated: 2026-09-02
+updated: 2026-10-24
 ---
 
 Grow the first source-to-FunctionIR frontend from one binary operation over
@@ -58,3 +58,7 @@ in [[generated-source-semantic-term-sharing]]. Remaining acceptance work here
 is a focused kernel negative control for a stale internal operand edge.
 Unsupported-call decline, repeated-reflection determinism, constants, sharing,
 and the 20/100-node source-to-x86 path are covered.
+
+## Log
+
+- 2026-10-24: B2 (2026-10-24): the staged source-denotation publication is deleted; the reflector is `function_ir_source/program.rs` and agreement is one `refl` equation per function (see [[function-ir-source-denotation-after-b2]]).

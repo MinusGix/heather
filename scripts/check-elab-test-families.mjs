@@ -24,7 +24,7 @@ const TESTS = `${CRATE}/tests`;
 // tests/*.rs files that are shared modules, not tests: a family mounts them
 // once and its members `use crate::<name>`. The support/ and omega_cases/
 // directories are shared modules too, but they are not tests/*.rs files.
-export const SHARED_MODULES = new Set(["function_ir_x86.rs"]);
+export const SHARED_MODULES = new Set([]);
 
 // `[[test]]` entries of a Cargo.toml, as { name, path }. The manifest is
 // ours and written one key per line, so this is a line reader, not TOML.

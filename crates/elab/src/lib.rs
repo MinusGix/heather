@@ -69,7 +69,7 @@ use heather_kernel::term::{
     GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
 use heather_kernel::typing::{self, DEFAULT_FUEL, TypeError};
-use heather_kernel::value::{ValueArena, ValueMetrics, ValueMetricsSnapshot};
+use heather_kernel::value::{ValueMetrics, ValueMetricsSnapshot};
 use heather_syntax::{
     Arm, Decl, DeclKind, Expr, ExprKind, InstanceDecl, Item, LamBinder, MatchForm, NamedArg,
     OnStmt, OnTarget, ParseError, Ty, TyKind, parse_file,
@@ -87,11 +87,8 @@ mod ring;
 mod rewrite;
 mod subst_local;
 pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
-pub mod certgen;
 pub mod function_ir_cert;
-pub mod function_ir_exec;
 pub mod function_ir_source;
-pub mod function_ir_x86_lower;
 mod code;
 mod codata;
 mod constructor;
@@ -2082,12 +2079,6 @@ impl Elaborator {
         self.omega_failure_reports.borrow_mut().drain(..).collect()
     }
 
-    pub(crate) fn profiled_value_arena(&self) -> ValueArena<'_> {
-        self.value_metrics
-            .as_deref()
-            .map_or_else(ValueArena::new, ValueArena::profiled)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn kernel_check_type(
         &self,
@@ -3059,35 +3050,6 @@ impl Elaborator {
         }
     }
 
-    /// [`Self::global_body`] with the body's checked spellings in component
-    /// form, for code that is going to be boxed (certgen's marking). `None`
-    /// where the translation is refused, which the caller reports as having
-    /// no body to analyse. Keyed on the Ψ coordinate: certgen resolves a
-    /// declaration's name once and reads everything after that by index
-    /// (docs/certgen-global-identity-design.md §1).
-    pub(crate) fn global_body_in_code_form_at(&self, abs: usize) -> Option<(Rc<Type>, Rc<Term>)> {
-        let GlobalBinding::Tm { ctx, ty, level, body: Some(body), .. } = self.psi.bindings.get(abs)?
-        else {
-            return None;
-        };
-        if !heather_kernel::subst::holds_checked_spelling(body) {
-            return Some((Rc::clone(ty), Rc::clone(body)));
-        }
-        let world = self.prefix_world(abs);
-        let body = typing::spell_checked_in_code(
-            &world,
-            0,
-            Layer::Code,
-            ctx,
-            Rc::clone(body),
-            ty,
-            level,
-            self.fuel,
-        )
-        .ok()?;
-        Some((Rc::clone(ty), body))
-    }
-
     pub(crate) fn global_body(&self, name: &str) -> Option<(Rc<Type>, Rc<Term>)> {
         self.global_body_at(self.lookup_global(name)?.abs as usize)
     }
@@ -3156,29 +3118,6 @@ impl Elaborator {
             None => ty,
         };
         Some(Term::BoxTy(Rc::new(ty)))
-    }
-
-    /// The pull reflection API's **body half**
-    /// (docs/opaque-globals-analysis-design.md §2, the primitive the
-    /// fn-reflection round left "to be named with the opaque-globals
-    /// round"): a declared fn's elaborated body as *marked, closed code* —
-    /// every bound-variable occurrence a level marker, every cross-function
-    /// call head a callee marker, boxed — with the arity and the
-    /// tag→Ψ-index table the markers are read against. Pull like
-    /// [`Self::fn_type_code`]: nothing stored per declaration, the body read
-    /// out of Ψ per invocation (`GlobalBinding::Tm`'s `body`, the
-    /// definitions round's field).
-    ///
-    /// Marked code IS the reflection contract: a raw body is exactly what an
-    /// analyzer cannot use (variables are opaque to `tm_var`, globals are
-    /// neutral to `elim^Trm`), so the primitive hands over the analyzable
-    /// coordinate system and the key to read it. A body-less global —
-    /// theorems' proofs are deliberately opaque — declines.
-    pub fn fn_body_code(&self, name: &str) -> Result<certgen::BodyCode, String> {
-        let abs = self
-            .global_abs(name)
-            .ok_or_else(|| format!("`{name}` is not a declared global"))?;
-        certgen::body_code(self, abs)
     }
 
     /// A global's binding index by written name — the Ψ coordinate
@@ -3258,16 +3197,6 @@ impl Elaborator {
         self.names
             .params_at(abs as u32)
             .unwrap_or_else(|| Rc::new(Vec::new()))
-    }
-
-    /// The `meta fn` claiming an analyzer slot, with the arity of its Π spine
-    /// fixed by the slot's own signature
-    /// (docs/certgen-transcriber-in-language-design.md §6). `None` is the
-    /// honest decline every caller falls back from: no template claimed it.
-    pub(crate) fn analyzer_def(&self, slot: Slot) -> Option<&MetaDef> {
-        self.meta_programs
-            .for_slot(slot)
-            .map(|(_, definition)| definition)
     }
 
     /// The accumulated global context (theorem statements).

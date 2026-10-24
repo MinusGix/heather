@@ -1,5 +1,10 @@
 # Reusable composed-function summaries
 
+> **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
+> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
+> The document stays for its reasoning. The last commit with the code is `82521eab`.
+
 `build-x86 --callable-caller` adds a reusable native summary for a composed
 source function. The executable entry calls that function, which calls the
 explicitly selected arithmetic leaf. The outer entry consumes the composed

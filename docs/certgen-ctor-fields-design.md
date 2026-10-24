@@ -1,5 +1,11 @@
 # Constructor fields for the certifying generator — design, a measured deferral, and the round that landed it
 
+> **Burned in B2 (2026-10-24).** `ir_v1` and the certifying generator over it were deleted
+> (`docs/native-program-logic-design.md` §3.2, `issues/ir-v1-retirement.md`); FunctionIR is
+> the source IR the verified compiler reads. The document stays for its reasoning. The last
+> commit with the code is `82521eab`; a frozen copy of `ir_v1.hthr` is the frontend bench's
+> heavy corpus case (`crates/elab/benches/frontend/fixtures/`).
+
 > **Status, 2026-08-13 (second round): LANDED.** §§2–7 are the shipped
 > design, unchanged from the deferral round — not one line of the walker or
 > the rim was redesigned. What changed is the cost §8 measured, which

@@ -1,10 +1,9 @@
-// Normal-path MOVZX r64, byte [base], followed by existing structured code.
+// Normal-path MOVZX r64, byte [base], and MOV r64, [base].
 // Intel SDM Vol. 2B, MOVZX: REX.W + 0F B6 /r. The canonical subset uses
 // zero displacement, no index/segment override, and low canonical addresses.
 // A Some result grants an actual byte read; absent/denied accesses have no
 // normal step. This is neither a page-table model nor an instruction fetch.
 import x86_64;
-import x86_64_structured_block;
 import bitvec;
 import bool;
 import list;
@@ -198,30 +197,4 @@ theorem word_load_preserves<M>(load: WordLoad, word: BitVec(64), before: Machine
     cong_fn<Bool, BitVec(64)>(λ same => match same {
         False => read_gpr(register, before.gprs), True => word,
     }, distinct)
-}
-fn ReadThenProtected(load: ByteLoad, protected: Gpr → Type, register: Gpr) → Type {
-    (load.destination.same(register) = False) ∧ protected(register)
-}
-record ReadThenArtifact<M>(access: ByteReadAccess<M>, load: ByteLoad, byte: BitVec(8),
-    code: StructuredCode, bytes: List<BitVec(8)>, before: MachineState<M>,
-    output: Gpr, result: BitVec(64), protected: Gpr → Type) {
-    load_step: ByteLoadStep<M>(access, load, byte, before, byte_load_after(load, byte, before)),
-    encoding: bytes = byte_load_bytes(load) ++ structured_bytes(code),
-    continuation: StructuredArtifact<M>(code, byte_load_after(load, byte, before), output, result, protected),
-    memory_preserved: continuation.after.memory = before.memory,
-    rip_correct: continuation.after.rip = next_rip(before.rip, byte_load_bytes(load).len() + structured_bytes(code).len()),
-    registers_preserved: (register: Gpr) → ReadThenProtected(load, protected, register) →
-        read_gpr(register, continuation.after.gprs) = read_gpr(register, before.gprs),
-}
-theorem read_then_artifact<M>(access: ByteReadAccess<M>, load: ByteLoad, byte: BitVec(8),
-    code: StructuredCode, before: MachineState<M>, output: Gpr, result: BitVec(64), protected: Gpr → Type,
-    step: ByteLoadStep<M>(access, load, byte, before, byte_load_after(load, byte, before)),
-    body: StructuredArtifact<M>(code, byte_load_after(load, byte, before), output, result, protected)):
-    ReadThenArtifact<M>(access, load, byte, code, byte_load_bytes(load) ++ structured_bytes(code), before, output, result, protected) {
-    ReadThenArtifact(load_step := step, encoding := refl, continuation := body,
-        memory_preserved := body.memory_preserved,
-        rip_correct := trans(body.rip_correct, BitVec::iterate_increment_compose(64, before.rip,
-            byte_load_bytes(load).len(), structured_bytes(code).len())),
-        registers_preserved := λ register preserved => trans(body.registers_preserved(register, preserved.right),
-            byte_load_preserves(load, byte, before, register, preserved.left)))
 }

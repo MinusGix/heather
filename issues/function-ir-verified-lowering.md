@@ -5,7 +5,7 @@ labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-21
-updated: 2026-10-23
+updated: 2026-10-24
 ---
 
 Round S4 of `docs/native-program-logic-design.md` (§3.2, §9): lower
@@ -312,6 +312,21 @@ costs a refusal, never a wrong program.
      ([[function-ir-verified-loop-planning]]).
    - `Bool` helpers and connectives in the reflector, and `build-x86`
      through this path; the old generators retire with B2.
+
+   *B2's first step, as built (2026-10-24):* the reflector takes `||`,
+   `&&`, `!`, `Bool` literals, a `match` whose arms are tests, and calls of
+   `Bool` helpers of words (inlined, their parameters bound to the
+   argument ports). Each becomes a tree of `Conditional`s on plain
+   comparisons that tests an operand only where its connective needs it.
+   Agreement can't be `refl` there: the source matches on `a || b`, and
+   no conversion commutes that with nested conditionals. So the reflector
+   also spells the tree in source operations, an *expansion*. The
+   certificate proves `program_eval = expansion` by `refl` and
+   `expansion = source` by `split_all; all_goals { refl }`. A call of such
+   a function is refused ([[function-ir-verified-decided-callees]]).
+   `branches.hthr`'s `composed` and the new `either` take this route.
+   `native_structured_composition.rs` is gone, and `native_branches.rs`
+   now runs both against C, with a refusal control.
 5. **The bounded loop** (`docs/native-effect-source-design.md` §5.4, L3):
    FunctionIR's loop of at most `bound` passes with an explicit `Exhausted`
    outcome, lowered and proved inside `emit_calls`.

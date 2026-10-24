@@ -5,7 +5,7 @@ labels: [native,x86,proofs]
 area: heather-in-heather
 blocked-by: [native-effect-source-compiler]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-24
 milestone: [hih-pl-first-program]
 ---
 
@@ -28,3 +28,7 @@ built through the verified compiler.
   theorem.
 - **[[function-ir-verified-lowering]]** owns the pure lowering B2 replaces
   the old path with.
+
+## Log
+
+- 2026-10-24: B2 landed ahead of `tr` (2026-10-24, Minus's call): the per-function path is gone and the examples compile through the verified path. This issue keeps `tr`.

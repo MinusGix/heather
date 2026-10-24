@@ -1,11 +1,11 @@
 ---
 title: What proves a FunctionIR region means its source function after B2
-status: open
+status: closed
 labels: [native,ir,proofs,metaprogramming,design]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-21
-updated: 2026-10-23
+updated: 2026-10-24
 ---
 
 Today a Heather function reaches native code through
@@ -54,3 +54,4 @@ That should be decided before B2 starts, not discovered during it.
 
 - 2026-10-21: From `docs/native-effect-source-design.md` §9: for effectful programs the answer is option 3 (the program is the effectful source, written or elaborated; nothing is reflected). For pure functions, the bounded loop proposed there for FunctionIR is what lets reflected structural recursion stay total; "1 now, 2 when the host `View` exists" stands.
 - 2026-10-23: Option 1 got cheaper in [[function-ir-verified-lowering]] round 4. On the verified path the reflected program is tied to its source by one equation, `program_eval(program, f, args) = source(args)` over open words, proved by `refl` against the total evaluator. No per-function source-to-IR certificate is generated. The reflector stays untrusted Rust. Option 2 would build the same program in Heather and keep the same `refl` equation.
+- 2026-10-24: Decided and done in B2 (2026-10-24): option 1 in its round-4 form. The `function_ir_source` publication is deleted; the reflector (`function_ir_source/program.rs`) stays untrusted Rust and each compiled function is tied to its source by `_agrees`, by `refl` or, through a connective or helper, by the expansion route (`_expanded`/`_expands`). Option 2 stays [[generators-in-the-language]]'s.

@@ -76,17 +76,18 @@ def showcase(name):
     sys.exit(f"error: no `{name}` row in {manifest}")
 
 
-# The x86 line's certificate workload: `build-x86` generates a refinement and
-# execution certificate for the caller and its reused callee and checks it
-# against the bundled proof library. It is the recipe the K1/K2 rounds and
-# their design docs were measured on (docs/native-bitvector-values-design.md),
-# and the corpus files above say nothing about it — the native test binaries
-# are the heaviest rows of the suite. A path here is run through `build-x86`
-# with these arguments instead of `check`; everything else about the entry
-# (modes, cache, `--timings`, the report) is the same.
-X86_CERTIFICATE = ("examples/x86-native/reused_callee.hthr", [])
-BUILD_X86 = {
-    X86_CERTIFICATE[0]: ["caller", "--callee", "leaf", "--arg", "21", "--arg", "1"],
+# The x86 line's certificate workload: `compile-x86` lowers a three-level
+# program through the verified lowering and checks its certificate (the
+# lowering, source agreement, bytes, `compiled_returns`) against the bundled
+# proof library. The corpus files above say nothing about it — the native
+# test binaries are among the heaviest rows of the suite. A path here is run
+# through `compile-x86` with these arguments instead of `check`; everything
+# else about the entry (modes, cache, `--timings`, the report) is the same.
+# Until burn B2 this was `build-x86` on `reused_callee.hthr`'s per-function
+# certificate (docs/native-program-logic-design.md §3.2).
+X86_CERTIFICATE = ("examples/x86-native/program.hthr", [])
+COMPILE_X86 = {
+    X86_CERTIFICATE[0]: ["program"],
 }
 
 # The corpus: (path, search dirs). `quick` is the inner-loop set; `full` is
@@ -461,21 +462,22 @@ def summarize(tsv: Path):
 
 
 def run_check(args, heather: Path, file: str, search, cache: Path, tsv: Path, workers: int, root: Path = ROOT):
-    """One capped release `heather check` (or `build-x86`, for a BUILD_X86
-    path) over the sources at `root`; wall, CPU and peak RSS from wait4."""
-    if file in BUILD_X86:
-        # build-x86 refuses an output that exists, and writes the certificate
-        # beside it; both are scratch.
-        elf = tsv.with_suffix(".elf")
-        for p in (elf, Path(str(elf) + ".certificate.hthr")):
+    """One capped release `heather check` (or `compile-x86`, for a
+    COMPILE_X86 path) over the sources at `root`; wall, CPU and peak RSS
+    from wait4."""
+    if file in COMPILE_X86:
+        # compile-x86 refuses an output that exists, and writes the
+        # certificate beside it; both are scratch.
+        assembly = tsv.with_suffix(".s")
+        for p in (assembly, assembly.with_suffix(".certificate.hthr")):
             p.unlink(missing_ok=True)
-        cmd = [str(heather), "build-x86", file, *BUILD_X86[file], "-o", str(elf)]
+        cmd = [str(heather), "compile-x86", file, *COMPILE_X86[file], "-o", str(assembly)]
     else:
         cmd = [str(heather), "check"]
     for d in search:
         cmd += ["-L", d]
     cmd += ["--cache-dir", str(cache), "--kernel-workers", str(workers), "--timings", str(tsv)]
-    if file not in BUILD_X86:
+    if file not in COMPILE_X86:
         cmd.append(file)
 
     def limits():

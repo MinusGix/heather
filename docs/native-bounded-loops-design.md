@@ -1,5 +1,10 @@
 # Native bounded-loop certificates — design
 
+> **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
+> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
+> The document stays for its reasoning. The last commit with the code is `82521eab`.
+
 Status: **design agreed 2026-09-24; probes done (§8); slices A0, A, B and C landed (§9)**. Owner:
 `issues/native-bounded-loop-certificates.md`, step 3 of
 `issues/native-shared-lowering-milestone.md`. Implementation state is in §9.

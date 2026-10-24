@@ -612,20 +612,6 @@ impl Node {
         }
     }
 
-    /// The node reading `to` wherever it read `from`.
-    pub(crate) fn renamed(mut self, from: u64, to: u64) -> Node {
-        let rename = |id: &mut u64| if *id == from { *id = to };
-        match &mut self {
-            Node::Const { .. } => {}
-            Node::Move { source, .. } => rename(source),
-            Node::ShiftLeft { value, .. } | Node::LogicalShiftRight { value, .. } | Node::ArithmeticShiftRight { value, .. } => rename(value),
-            Node::Add { left, right, .. } | Node::Sub { left, right, .. } | Node::BitAnd { left, right, .. }
-            | Node::BitOr { left, right, .. } | Node::BitXor { left, right, .. }
-            | Node::UnsignedLessThan { left, right, .. } | Node::SignedLessThan { left, right, .. }
-            | Node::Equal { left, right, .. } => { rename(left); rename(right); }
-        }
-        self
-    }
 }
 
 #[derive(Debug)]
@@ -1124,15 +1110,6 @@ pub(crate) fn render_node(node: Node) -> String {
             right,
         } => render_binary("Equal", width, output, left, right),
     }
-}
-
-/// `node` with its width spelled `width`, a variable, and the width it has:
-/// for a node equation proved once at a neutral width and used at its own.
-pub(crate) fn render_node_at(node: Node, width: &str) -> (String, String) {
-    let rendered = render_node(node);
-    let (name, rest) = rendered.split_once("(width := ").expect("a node renders its width first");
-    let (own, rest) = rest.split_once(", ").expect("a node has fields after its width");
-    (format!("{name}(width := {width}, {rest}"), own.to_string())
 }
 
 fn render_binary(name: &str, width: u64, output: u64, left: u64, right: u64) -> String {

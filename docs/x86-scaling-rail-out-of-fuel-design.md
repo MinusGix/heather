@@ -1,5 +1,10 @@
 # The 20-node x86 scaling rail: attribution and the boundary it found
 
+> **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
+> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
+> The document stays for its reasoning. The last commit with the code is `82521eab`.
+
 Owner issue: `issues/x86-scaling-rail-out-of-fuel.md`. Written after the
 measurement, as §13 of `docs/per-instantiation-type-codes-design.md` was.
 

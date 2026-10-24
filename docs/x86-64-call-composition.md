@@ -1,5 +1,10 @@
 # Straight-line source-call composition
 
+> **Burned in B2 (2026-10-24).** The code this document describes was deleted with the
+> per-function certificate path (`docs/native-program-logic-design.md` §3.2); `compile-x86`
+> compiles through the verified lowering instead (`issues/function-ir-verified-lowering.md`).
+> The document stays for its reasoning. The last commit with the code is `82521eab`.
+
 `build-x86 file.hthr caller --callee leaf --arg A --arg B -o program`
 accepts a bounded straight-line caller over two `BitVec(64)` inputs. The caller
 can use `let` bindings, Add/Sub/AND/OR/XOR, `bitvec::ofNat(64, literal)`, and

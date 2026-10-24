@@ -44,7 +44,7 @@
 //! **Reading the tree.** The host never decodes `Tac`'s lowered encoding by
 //! hand. Each question it asks is an application of one of the library's
 //! `host_*` functions to the current tree, evaluated to a numeral, an `Expr`
-//! or a `String` in the kernel's value domain (`certgen::Reader`, the
+//! or a `String` in the kernel's value domain ([`Reader`], the
 //! analyzer path of docs/analyzer-evaluation-design.md), and an answer is
 //! built from the library's builders the same way. Each step is a pending
 //! application over the previous tree's closure, so nothing is read back into
@@ -59,13 +59,89 @@ use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalS
 use std::cell::{Cell, RefCell};
 use heather_kernel::layer::Layer;
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
+use heather_kernel::eval::Eval;
+use heather_kernel::reduce::{self, Defs};
+use heather_kernel::term::CtxBase;
 use heather_kernel::value::{Elim, Env, PiAnn, TmClo, TyClo, Val, ValueArena};
+use heather_kernel::value::program::ContextProgram;
 use heather_syntax::ast::{Expr, Span};
 
-use crate::certgen::Reader;
 use crate::context::Cx;
 use crate::unification::Sol;
 use crate::{err, Elaborator, R};
+
+/// Fuel for **one force** of the tree's value graph — the kernel's own
+/// default, deliberately not a bespoke larger one. Each force runs on the
+/// **shared** graph, where the bounded cache avoids recent repeated work, so
+/// running out is a decline like any other
+/// (docs/analyzer-evaluation-design.md §2).
+const READ_FUEL: u64 = heather_kernel::typing::DEFAULT_FUEL;
+
+/// Reads library answers in the kernel's **value domain**: every
+/// sub-structure it holds is a [`TmClo`], forced on demand and shared through
+/// the arena's cache (docs/analyzer-evaluation-design.md).
+pub(crate) struct Reader<'a, 'v> {
+    psi: &'a GlobalCtx,
+    arena: &'v ValueArena<'v>,
+    /// Rescoped definition bodies, memoized for the duration of one read.
+    /// Every δ-unfold rescopes the callee's whole body with `shift_global`,
+    /// and one query unfolds the same handful of library globals many
+    /// times; the cache is owned beside the Ψ it belongs to and dies with the
+    /// read, which is the soundness condition `GlobalCache` states for
+    /// itself.
+    cache: reduce::GlobalCache,
+}
+
+impl<'a, 'v> Reader<'a, 'v> {
+    pub(crate) fn new(psi: &'a GlobalCtx, arena: &'v ValueArena<'v>) -> Reader<'a, 'v> {
+        Reader { psi, arena, cache: reduce::GlobalCache::new() }
+    }
+
+    /// A closed term as a sub-structure of the value graph — the root a read
+    /// starts from. The empty environment is the identity environment of the
+    /// empty Γ, which is the context every application is built at.
+    pub(crate) fn root(&self, t: Term) -> &'v TmClo<'v> {
+        self.arena.tm(TmClo::syn(Env::empty(), Rc::new(t)))
+    }
+
+    /// The δ-transparent weak head **value** of a sub-structure. The arena's
+    /// bounded cache shares recent forces while allowing values the walk has
+    /// left behind to be reclaimed.
+    pub(crate) fn force(&self, c: &'v TmClo<'v>) -> Result<Rc<Val<'v>>, String> {
+        let mut ev = Eval::new(READ_FUEL, Defs::transparent_cached(self.psi, &self.cache), CtxBase::Nil, self.arena);
+        ev.force(c).and_then(|v| ev.delta_whnf(v)).map_err(|_| "the host query ran out of fuel".to_string())
+    }
+
+    /// A numeral's value, a run of successors at a time; past a million it
+    /// declines.
+    pub(crate) fn nat(&self, c: &'v TmClo<'v>) -> Result<u64, String> {
+        let mut v = self.force(c)?;
+        let mut n = 0u64;
+        loop {
+            let next = match &*v {
+                Val::Zero => return Ok(n),
+                Val::Succ(p) => {
+                    n += 1;
+                    if n > 1_000_000 {
+                        return Err("an implausible numeral".into());
+                    }
+                    *p
+                }
+                Val::NatRun { program, tail } => {
+                    let remaining = 1_000_000 - n;
+                    let Some(count) = ContextProgram::repetition_count_up_to(program, remaining)
+                    else {
+                        return Err("an implausible numeral".into());
+                    };
+                    n += count;
+                    *tail
+                }
+                other => return Err(format!("a Nat that is not a numeral: {other:?}")),
+            };
+            v = self.force(next)?;
+        }
+    }
+}
 
 /// Requests one run may make before it is stopped. A tactic is library code
 /// and may loop; fuel bounds each evaluation, this bounds the conversation.
