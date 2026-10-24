@@ -60,11 +60,12 @@ fn three() → Tm { NSucc(NSucc(NSucc(NZero))) }
 const KIT: &[&str] = &[
     // Syntax, opening, instantiation.
     "Tm::open_at", "Tm::open", "Tm::Lc", "Tm::open_lc", "Tm::inst", "Tm::inst_open_at",
-    "Tm::Ground", "Tm::inst_ground",
+    "Tm::Ground", "Tm::inst_ground", "Proj::pick", "Proj::inst_pick",
     // Reduction.
     "Tm::step", "Tm::whnf", "Tm::rigid", "Tm::blocked", "Tm::Unblocked", "Tm::Value",
     // The substitution property and the probe.
-    "Tm::CommutesOn", "Tm::Commutes", "Tm::app_k_inst", "Tm::rec_k_inst", "Tm::step_inst", "Tm::whnf_inst",
+    "Tm::CommutesOn", "Tm::Commutes", "Tm::app_k_inst", "Tm::rec_k_inst", "Tm::proj_k_inst", "Tm::run_step_inst",
+    "Tm::step_inst", "Tm::whnf_inst",
     "Tm::probe", "Tm::probe_sub", "Tm::probe_step",
     // Instantiating by thunks: settled runs.
     "Tm::settled", "Tm::Settled", "Tm::step_inst_settled", "Tm::whnf_inst_settled", "Tm::probe_step_settled",

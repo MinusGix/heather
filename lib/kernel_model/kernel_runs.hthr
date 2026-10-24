@@ -1,0 +1,1030 @@
+// Folds over runs, against the reference model (docs/kernel-model-design.md
+// §7, milestone `hih-km-runs`).
+//
+// The kernel folds over a run `Succ^c(x)` by its step's class
+// (crates/kernel/src/eval/runs.rs): an affine step's tree is iterated over
+// the run and built at the fold over the tail, and a synchronous fold
+// applied to a run cancels the two runs' common prefix. This module proves
+// that what it builds is convertible with the unary fold, which takes one
+// successor at a time: `Tm::fold_affine`, `Tm::fold_affine_peeled` and
+// `Tm::fold_sync` below.
+//
+// The probe lemma of kernel_reduction is about weak head values, and needs
+// its runs unblocked. A run fold is about deep values, so everything here
+// is stated with one-step reduction as a relation, which is closed under
+// instantiation without that hypothesis: a reduction says where a term
+// goes, not that it stops there.
+
+import logic;
+import bool;
+import nat;
+import option;
+import kernel_reduction;
+
+// ---------------------------------------------------------------------------
+// One step of reduction.
+
+fn Tm::Beta(f, a, u: Tm) → Type {
+    match f { Lam(b) => u = b.open(a), _ => False }
+}
+
+fn Tm::Iota(z, s, n, u: Tm) → Type {
+    match n {
+        NZero => u = z,
+        NSucc(m) => u = App(App(s, m), NRec(z, s, m)),
+        _ => False,
+    }
+}
+
+fn Tm::ProjBeta(p: Proj, w, u: Tm) → Type {
+    match w { SPair(a, b) => u = p.pick(a, b), _ => False }
+}
+
+fn Tm::Unpack(c: Nat, w, u: Tm) → Type {
+    match c { Zero => u = w, Succ(m) => u = NSucc(NRun(m, w)) }
+}
+
+fn Tm::Red(self t: Tm) → Tm → Type {
+    match t {
+        Bv(_) => λ u => False,
+        Fv(_) => λ u => False,
+        Lam(_) => λ u => False,
+        App(f, a) => λ u => Tm::Beta(f, a, u)
+            ∨ ((∃ g: Tm, f.Red(g) ∧ u = App(g, a)) ∨ (∃ b: Tm, a.Red(b) ∧ u = App(f, b))),
+        NZero => λ u => False,
+        NSucc(p) => λ u => ∃ q: Tm, p.Red(q) ∧ u = NSucc(q),
+        NRec(z, s, n) => λ u => Tm::Iota(z, s, n, u) ∨ (∃ m: Tm, n.Red(m) ∧ u = NRec(z, s, m)),
+        SPair(a, b) => λ u => (∃ c: Tm, a.Red(c) ∧ u = SPair(c, b)) ∨ (∃ d: Tm, b.Red(d) ∧ u = SPair(a, d)),
+        SProj(p, w) => λ u => Tm::ProjBeta(p, w, u) ∨ (∃ v: Tm, w.Red(v) ∧ u = SProj(p, v)),
+        NRun(c, w) => λ u => Tm::Unpack(c, w, u),
+    }
+}
+
+// The rules, one by one.
+theorem Tm::red_beta(b, a: Tm): App(Lam(b), a).Red(b.open(a)) { Inl(refl) }
+theorem Tm::red_iota_zero(z, s: Tm): NRec(z, s, NZero).Red(z) { Inl(refl) }
+theorem Tm::red_iota_succ(z, s, m: Tm): NRec(z, s, NSucc(m)).Red(App(App(s, m), NRec(z, s, m))) { Inl(refl) }
+theorem Tm::red_proj(p: Proj, a, b: Tm): SProj(p, SPair(a, b)).Red(p.pick(a, b)) { Inl(refl) }
+theorem Tm::red_unpack_zero(w: Tm): NRun(0, w).Red(w) { refl }
+theorem Tm::red_unpack_succ(m: Nat, w: Tm): NRun(Succ(m), w).Red(NSucc(NRun(m, w))) { refl }
+
+// A context that steps whenever its hole does.
+fn Tm::Context(C: Tm → Tm) → Type { (a, b: Tm) → a.Red(b) → C(a).Red(C(b)) }
+
+theorem Tm::ctx_app_head(a: Tm): Tm::Context(λ (f: Tm) => App(f, a)) {
+    λ f g h => Inr(Inl(Exists(g, And(h, refl))))
+}
+theorem Tm::ctx_app_arg(f: Tm): Tm::Context(λ (a: Tm) => App(f, a)) {
+    λ a b h => Inr(Inr(Exists(b, And(h, refl))))
+}
+theorem Tm::ctx_succ(): Tm::Context(λ (p: Tm) => NSucc(p)) { λ p q h => Exists(q, And(h, refl)) }
+theorem Tm::ctx_rec(z, s: Tm): Tm::Context(λ (n: Tm) => NRec(z, s, n)) {
+    λ n m h => Inr(Exists(m, And(h, refl)))
+}
+theorem Tm::ctx_pair_fst(b: Tm): Tm::Context(λ (a: Tm) => SPair(a, b)) {
+    λ a c h => Inl(Exists(c, And(h, refl)))
+}
+theorem Tm::ctx_pair_snd(a: Tm): Tm::Context(λ (b: Tm) => SPair(a, b)) {
+    λ b d h => Inr(Exists(d, And(h, refl)))
+}
+theorem Tm::ctx_proj(p: Proj): Tm::Context(λ (w: Tm) => SProj(p, w)) {
+    λ w v h => Inr(Exists(v, And(h, refl)))
+}
+theorem Tm::ctx_comp(C, D: Tm → Tm, hc: Tm::Context(C), hd: Tm::Context(D)):
+        Tm::Context(λ (x: Tm) => C(D(x))) {
+    λ a b h => hc(D(a), D(b), hd(a, b, h))
+}
+
+// ---------------------------------------------------------------------------
+// Many steps.
+
+fn Tm::Reds(n: Nat) → Tm → Tm → Type {
+    match n {
+        Zero => λ (t: Tm) (u: Tm) => t = u,
+        Succ(m) => λ (t: Tm) (u: Tm) => ∃ v: Tm, t.Red(v) ∧ Tm::Reds(m, v, u),
+    }
+}
+
+fn Tm::Reduces(self t: Tm, u: Tm) → Type { ∃ n: Nat, Tm::Reds(n, t, u) }
+
+theorem Tm::reduces_refl(self t: Tm): t.Reduces(t) { Exists(0, refl) }
+
+theorem Tm::reduces_eq({t, u: Tm}, e: t = u): t.Reduces(u) {
+    j(e, λ y p => t.Reduces(y), t.reduces_refl())
+}
+
+theorem Tm::reduces_some({t, u: Tm}, e: Some(t) = Some(u)): t.Reduces(u) {
+    Tm::reduces_eq(Option::some_inj(t, u, e))
+}
+
+theorem Tm::reduces_one({t, u: Tm}, h: t.Red(u)): t.Reduces(u) { Exists(1, Exists(u, And(h, refl))) }
+
+theorem Tm::reds_trans(n: Nat): (m: Nat) → (a, b, c: Tm) → Tm::Reds(n, a, b) → Tm::Reds(m, b, c) →
+        Tm::Reds(m + n, a, c) {
+    match n {
+        Zero => λ m a b c ab bc => j(sym(ab), λ y p => Tm::Reds(m, y, c), bc),
+        Succ(_, ih) => λ m a b c ab bc =>
+            Exists(ab.witness, And(ab.proof.left, ih(m, ab.witness, b, c, ab.proof.right, bc))),
+    }
+}
+
+theorem Tm::reduces_trans({a, b, c: Tm}, ab: a.Reduces(b), bc: b.Reduces(c)): a.Reduces(c) {
+    Exists(bc.witness + ab.witness, Tm::reds_trans(ab.witness, bc.witness, a, b, c, ab.proof, bc.proof))
+}
+
+theorem Tm::reduces_step({a, b, c: Tm}, ab: a.Red(b), bc: b.Reduces(c)): a.Reduces(c) {
+    Tm::reduces_trans(Tm::reduces_one(ab), bc)
+}
+
+theorem Tm::reds_map(C: Tm → Tm, hc: Tm::Context(C), n: Nat):
+        (a, b: Tm) → Tm::Reds(n, a, b) → Tm::Reds(n, C(a), C(b)) {
+    match n {
+        Zero => λ a b ab => j(ab, λ y p => C(a) = C(y), refl),
+        Succ(_, ih) => λ a b ab =>
+            Exists(C(ab.witness), And(hc(a, ab.witness, ab.proof.left), ih(ab.witness, b, ab.proof.right))),
+    }
+}
+
+theorem Tm::reduces_map(C: Tm → Tm, hc: Tm::Context(C), {a, b: Tm}, ab: a.Reduces(b)): C(a).Reduces(C(b)) {
+    Exists(ab.witness, Tm::reds_map(C, hc, ab.witness, a, b, ab.proof))
+}
+
+theorem Tm::reduces_pair({a, a2, b, b2: Tm}, ha: a.Reduces(a2), hb: b.Reduces(b2)):
+        SPair(a, b).Reduces(SPair(a2, b2)) {
+    Tm::reduces_trans(Tm::reduces_map(λ (x: Tm) => SPair(x, b), Tm::ctx_pair_fst(b), ha),
+                      Tm::reduces_map(λ (y: Tm) => SPair(a2, y), Tm::ctx_pair_snd(a2), hb))
+}
+
+// ---------------------------------------------------------------------------
+// The evaluator reduces: whatever `Tm::whnf` returns is a reduct.
+
+fn Tm::Sound(ev: Tm → Option<Tm>) → Type { (t, v: Tm) → ev(t) = Some(v) → t.Reduces(v) }
+
+theorem Tm::app_head_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev), a, h, v: Tm,
+        e: Tm::app_head(ev, a, h) = Some(v)): App(h, a).Reduces(v) {
+    match h as λ y => Tm::app_head(ev, a, y) = Some(v) → App(y, a).Reduces(v) {
+        Lam(b) => λ q => Tm::reduces_step(Tm::red_beta(b, a), ih(b.open(a), v, q)),
+        _ => λ q => Tm::reduces_some(q),
+    }(e)
+}
+
+theorem Tm::rec_head_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev), z, s, h, v: Tm,
+        e: Tm::rec_head(ev, z, s, h) = Some(v)): NRec(z, s, h).Reduces(v) {
+    match h as λ y => Tm::rec_head(ev, z, s, y) = Some(v) → NRec(z, s, y).Reduces(v) {
+        NZero => λ q => Tm::reduces_step(Tm::red_iota_zero(z, s), ih(z, v, q)),
+        NSucc(m) => λ q => Tm::reduces_step(Tm::red_iota_succ(z, s, m), ih(App(App(s, m), NRec(z, s, m)), v, q)),
+        _ => λ q => Tm::reduces_some(q),
+    }(e)
+}
+
+theorem Tm::proj_head_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev), p: Proj, h, v: Tm,
+        e: Tm::proj_head(ev, p, h) = Some(v)): SProj(p, h).Reduces(v) {
+    match h as λ y => Tm::proj_head(ev, p, y) = Some(v) → SProj(p, y).Reduces(v) {
+        SPair(a, b) => λ q => Tm::reduces_step(Tm::red_proj(p, a, b), ih(p.pick(a, b), v, q)),
+        _ => λ q => Tm::reduces_some(q),
+    }(e)
+}
+
+// The head's run, then what follows it. `fr` says the head reduces to
+// whatever its run returned.
+theorem Tm::app_k_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev), f, a, v: Tm, r: Option<Tm>,
+        fr: (w: Tm) → r = Some(w) → f.Reduces(w), e: Tm::app_k(ev, a, r) = Some(v)): App(f, a).Reduces(v) {
+    match r as λ y => ((w: Tm) → y = Some(w) → f.Reduces(w)) → Tm::app_k(ev, a, y) = Some(v) →
+            App(f, a).Reduces(v) {
+        None => λ fr2 q => absurd(q),
+        Some(w) => λ fr2 q => Tm::reduces_trans(
+            Tm::reduces_map(λ (x: Tm) => App(x, a), Tm::ctx_app_head(a), fr2(w, refl)),
+            Tm::app_head_sound(ev, ih, a, w, v, q)),
+    }(fr, e)
+}
+
+theorem Tm::rec_k_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev), z, s, n, v: Tm, r: Option<Tm>,
+        fr: (w: Tm) → r = Some(w) → n.Reduces(w), e: Tm::rec_k(ev, z, s, r) = Some(v)): NRec(z, s, n).Reduces(v) {
+    match r as λ y => ((w: Tm) → y = Some(w) → n.Reduces(w)) → Tm::rec_k(ev, z, s, y) = Some(v) →
+            NRec(z, s, n).Reduces(v) {
+        None => λ fr2 q => absurd(q),
+        Some(w) => λ fr2 q => Tm::reduces_trans(
+            Tm::reduces_map(λ (x: Tm) => NRec(z, s, x), Tm::ctx_rec(z, s), fr2(w, refl)),
+            Tm::rec_head_sound(ev, ih, z, s, w, v, q)),
+    }(fr, e)
+}
+
+theorem Tm::proj_k_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev), p: Proj, t, v: Tm, r: Option<Tm>,
+        fr: (w: Tm) → r = Some(w) → t.Reduces(w), e: Tm::proj_k(ev, p, r) = Some(v)): SProj(p, t).Reduces(v) {
+    match r as λ y => ((w: Tm) → y = Some(w) → t.Reduces(w)) → Tm::proj_k(ev, p, y) = Some(v) →
+            SProj(p, t).Reduces(v) {
+        None => λ fr2 q => absurd(q),
+        Some(w) => λ fr2 q => Tm::reduces_trans(
+            Tm::reduces_map(λ (x: Tm) => SProj(p, x), Tm::ctx_proj(p), fr2(w, refl)),
+            Tm::proj_head_sound(ev, ih, p, w, v, q)),
+    }(fr, e)
+}
+
+theorem Tm::run_step_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev), c: Nat, w, v: Tm,
+        e: Tm::run_step(ev, c, w) = Some(v)): NRun(c, w).Reduces(v) {
+    match c as λ y => Tm::run_step(ev, y, w) = Some(v) → NRun(y, w).Reduces(v) {
+        Zero => λ q => Tm::reduces_step(Tm::red_unpack_zero(w), ih(w, v, q)),
+        Succ(m) => λ q => Tm::reduces_step(Tm::red_unpack_succ(m, w), Tm::reduces_some(q)),
+    }(e)
+}
+
+theorem Tm::step_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev)): Tm::Sound(Tm::step(ev)) {
+    λ t v => match t {
+        App(f, a) => λ q => Tm::app_k_sound(ev, ih, f, a, v, ev(f), λ w q2 => ih(f, w, q2), q),
+        NRec(z, s, n) => λ q => Tm::rec_k_sound(ev, ih, z, s, n, v, ev(n), λ w q2 => ih(n, w, q2), q),
+        SProj(p, w) => λ q => Tm::proj_k_sound(ev, ih, p, w, v, ev(w), λ w2 q2 => ih(w, w2, q2), q),
+        NRun(c, w) => λ q => Tm::run_step_sound(ev, ih, c, w, v, q),
+        _ => λ q => Tm::reduces_some(q),
+    }
+}
+
+theorem Tm::whnf_sound(fuel: Nat): Tm::Sound(Tm::whnf(fuel)) {
+    match fuel as λ f => Tm::Sound(Tm::whnf(f)) {
+        Zero => λ t v q => absurd(q),
+        Succ(g, ih) => Tm::step_sound(Tm::whnf(g), ih),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reduction is closed under instantiation by closed terms. Unlike the probe
+// lemma (`Tm::whnf_inst`), this needs no "unblocked" hypothesis: a
+// reduction says where a term goes, not that it stops there, and an
+// instance may go further.
+
+theorem Tm::cong_inst(sub: Nat → Tm, {u, v: Tm}, e: u = v): u.inst(sub) = v.inst(sub) {
+    j(e, λ y p => u.inst(sub) = y.inst(sub), refl)
+}
+
+theorem Tm::beta_inst(f, a, u: Tm, sub: Nat → Tm, closed: (x: Nat) → sub(x).Lc(0), h: Tm::Beta(f, a, u)):
+        Tm::Beta(f.inst(sub), a.inst(sub), u.inst(sub)) {
+    match f as λ y => Tm::Beta(y, a, u) → Tm::Beta(y.inst(sub), a.inst(sub), u.inst(sub)) {
+        Lam(b) => λ q => trans(Tm::cong_inst(sub, q), b.inst_open_at(sub, closed, 0, a)),
+        _ => λ q => false_elim(q),
+    }(h)
+}
+
+theorem Tm::iota_inst(z, s, n, u: Tm, sub: Nat → Tm, h: Tm::Iota(z, s, n, u)):
+        Tm::Iota(z.inst(sub), s.inst(sub), n.inst(sub), u.inst(sub)) {
+    match n as λ y => Tm::Iota(z, s, y, u) → Tm::Iota(z.inst(sub), s.inst(sub), y.inst(sub), u.inst(sub)) {
+        NZero => λ q => Tm::cong_inst(sub, q),
+        NSucc(_) => λ q => Tm::cong_inst(sub, q),
+        _ => λ q => false_elim(q),
+    }(h)
+}
+
+theorem Tm::proj_beta_inst(p: Proj, w, u: Tm, sub: Nat → Tm, h: Tm::ProjBeta(p, w, u)):
+        Tm::ProjBeta(p, w.inst(sub), u.inst(sub)) {
+    match w as λ y => Tm::ProjBeta(p, y, u) → Tm::ProjBeta(p, y.inst(sub), u.inst(sub)) {
+        SPair(a, b) => λ q => trans(Tm::cong_inst(sub, q), p.inst_pick(a, b, sub)),
+        _ => λ q => false_elim(q),
+    }(h)
+}
+
+theorem Tm::unpack_inst(c: Nat, w, u: Tm, sub: Nat → Tm, h: Tm::Unpack(c, w, u)):
+        Tm::Unpack(c, w.inst(sub), u.inst(sub)) {
+    match c as λ y => Tm::Unpack(y, w, u) → Tm::Unpack(y, w.inst(sub), u.inst(sub)) {
+        Zero => λ q => Tm::cong_inst(sub, q),
+        Succ(_) => λ q => Tm::cong_inst(sub, q),
+    }(h)
+}
+
+theorem Tm::red_inst(self t: Tm, sub: Nat → Tm, closed: (x: Nat) → sub(x).Lc(0)):
+        (u: Tm) → t.Red(u) → t.inst(sub).Red(u.inst(sub)) {
+    match t {
+        Bv(_) => λ u h => false_elim(h),
+        Fv(_) => λ u h => false_elim(h),
+        Lam(_) => λ u h => false_elim(h),
+        App(f, a) => λ u h => match h {
+            Inl(q) => Inl(Tm::beta_inst(f, a, u, sub, closed, q)),
+            Inr(q) => Inr(match q {
+                Inl(e) => Inl(Exists(e.witness.inst(sub),
+                    And(f.red_inst(sub, closed, e.witness, e.proof.left), Tm::cong_inst(sub, e.proof.right)))),
+                Inr(e) => Inr(Exists(e.witness.inst(sub),
+                    And(a.red_inst(sub, closed, e.witness, e.proof.left), Tm::cong_inst(sub, e.proof.right)))),
+            }),
+        },
+        NZero => λ u h => false_elim(h),
+        NSucc(p) => λ u h => Exists(h.witness.inst(sub),
+            And(p.red_inst(sub, closed, h.witness, h.proof.left), Tm::cong_inst(sub, h.proof.right))),
+        NRec(z, s, n) => λ u h => match h {
+            Inl(q) => Inl(Tm::iota_inst(z, s, n, u, sub, q)),
+            Inr(e) => Inr(Exists(e.witness.inst(sub),
+                And(n.red_inst(sub, closed, e.witness, e.proof.left), Tm::cong_inst(sub, e.proof.right)))),
+        },
+        SPair(a, b) => λ u h => match h {
+            Inl(e) => Inl(Exists(e.witness.inst(sub),
+                And(a.red_inst(sub, closed, e.witness, e.proof.left), Tm::cong_inst(sub, e.proof.right)))),
+            Inr(e) => Inr(Exists(e.witness.inst(sub),
+                And(b.red_inst(sub, closed, e.witness, e.proof.left), Tm::cong_inst(sub, e.proof.right)))),
+        },
+        SProj(p, w) => λ u h => match h {
+            Inl(q) => Inl(Tm::proj_beta_inst(p, w, u, sub, q)),
+            Inr(e) => Inr(Exists(e.witness.inst(sub),
+                And(w.red_inst(sub, closed, e.witness, e.proof.left), Tm::cong_inst(sub, e.proof.right)))),
+        },
+        NRun(c, w) => λ u h => Tm::unpack_inst(c, w, u, sub, h),
+    }
+}
+
+theorem Tm::reds_inst(sub: Nat → Tm, closed: (x: Nat) → sub(x).Lc(0), n: Nat):
+        (a, b: Tm) → Tm::Reds(n, a, b) → Tm::Reds(n, a.inst(sub), b.inst(sub)) {
+    match n {
+        Zero => λ a b ab => Tm::cong_inst(sub, ab),
+        Succ(_, ih) => λ a b ab => Exists(ab.witness.inst(sub),
+            And(a.red_inst(sub, closed, ab.witness, ab.proof.left), ih(ab.witness, b, ab.proof.right))),
+    }
+}
+
+theorem Tm::reduces_inst(sub: Nat → Tm, closed: (x: Nat) → sub(x).Lc(0), {a, b: Tm}, ab: a.Reduces(b)):
+        a.inst(sub).Reduces(b.inst(sub)) {
+    Exists(ab.witness, Tm::reds_inst(sub, closed, ab.witness, a, b, ab.proof))
+}
+
+// ---------------------------------------------------------------------------
+// Projection paths and successors.
+
+// A projection path out of the induction hypothesis, in the order the
+// projections are applied: `PThen(p, rest)` takes `p` first.
+inductive Path { PHere, PThen(proj: Proj, rest: Path) }
+
+fn Path::apply(self path: Path) → Tm → Tm {
+    match path {
+        PHere => λ (u: Tm) => u,
+        PThen(p, rest) => λ (u: Tm) => rest.apply(SProj(p, u)),
+    }
+}
+
+// `a.then(b)` takes `a`'s projections, then `b`'s.
+fn Path::then(self a: Path, b: Path) → Path {
+    match a { PHere => b, PThen(p, rest) => PThen(p, rest.then(b)) }
+}
+
+theorem Path::then_apply(self a: Path, b: Path): (u: Tm) → a.then(b).apply(u) = b.apply(a.apply(u)) {
+    match a {
+        PHere => λ u => refl,
+        PThen(p, rest) => λ u => rest.then_apply(b, SProj(p, u)),
+    }
+}
+
+theorem Path::apply_inst(self path: Path, sub: Nat → Tm): (u: Tm) → path.apply(u).inst(sub) = path.apply(u.inst(sub)) {
+    match path {
+        PHere => λ u => refl,
+        PThen(p, rest) => λ u => rest.apply_inst(sub, SProj(p, u)),
+    }
+}
+
+theorem Path::ctx(self path: Path): Tm::Context(λ (u: Tm) => path.apply(u)) {
+    match path {
+        PHere => λ a b h => h,
+        PThen(p, rest) => λ a b h => rest.ctx()(SProj(p, a), SProj(p, b), Tm::ctx_proj(p, a, b, h)),
+    }
+}
+
+// `Succ^n(t)`, spelled out.
+fn Tm::succs(n: Nat, t: Tm) → Tm {
+    match n { Zero => t, Succ(m) => NSucc(Tm::succs(m, t)) }
+}
+
+theorem Tm::succs_succs(q, q2: Nat, x: Tm): Tm::succs(q, Tm::succs(q2, x)) = Tm::succs(q2 + q, x) {
+    match q { Zero => refl, Succ(k) => Tm::cong_succ(Tm::succs_succs(k, q2, x)) }
+}
+
+theorem Tm::succs_inst(n: Nat, t: Tm, sub: Nat → Tm): Tm::succs(n, t).inst(sub) = Tm::succs(n, t.inst(sub)) {
+    match n { Zero => refl, Succ(m) => Tm::cong_succ(Tm::succs_inst(m, t, sub)) }
+}
+
+theorem Tm::ctx_succs(n: Nat): Tm::Context(λ (t: Tm) => Tm::succs(n, t)) {
+    match n {
+        Zero => λ a b h => h,
+        Succ(m) => λ a b h => Tm::ctx_succ()(Tm::succs(m, a), Tm::succs(m, b), Tm::ctx_succs(m, a, b, h)),
+    }
+}
+
+// A run unpacks to its successors.
+theorem Tm::run_unpacks(c: Nat, w: Tm): NRun(c, w).Reduces(Tm::succs(c, w)) {
+    match c {
+        Zero => Tm::reduces_one(Tm::red_unpack_zero(w)),
+        Succ(m) => Tm::reduces_step(Tm::red_unpack_succ(m, w),
+            Tm::reduces_map(λ (y: Tm) => NSucc(y), Tm::ctx_succ(), Tm::run_unpacks(m, w))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Affine trees (crates/kernel/src/value/algebra.rs), with increments as
+// counts: what a run's program denotes. That the kernel's programs, its
+// binary powering and its identity short cuts compute the counts below is
+// algebra.rs's own reference test, not modelled here.
+
+inductive Aff {
+    // `Succ^inc(ih.path)`.
+    Leaf(inc: Nat, path: Path),
+    // `Succ^inc(Zero)`.
+    Lit(inc: Nat),
+    Branch(fst: Aff, snd: Aff),
+}
+
+fn Aff::identity() → Aff { Leaf(0, PHere) }
+
+// The tree at `u`, with its successors spelled out: what the unary fold
+// reduces to.
+fn Aff::term(self t: Aff, u: Tm) → Tm {
+    match t {
+        Leaf(q, path) => Tm::succs(q, path.apply(u)),
+        Lit(q) => Tm::succs(q, NZero),
+        Branch(a, b) => SPair(a.term(u), b.term(u)),
+    }
+}
+
+// The tree at `u` as the kernel builds it (`eval/runs.rs`, `build`): every
+// increment a run.
+fn Aff::build(self t: Aff, u: Tm) → Tm {
+    match t {
+        Leaf(q, path) => NRun(q, path.apply(u)),
+        Lit(q) => NRun(q, NZero),
+        Branch(a, b) => SPair(a.build(u), b.build(u)),
+    }
+}
+
+// The sub-tree at `path` (algebra.rs `at`). Descending through a leaf with
+// no successors extends its path; through anything else it is ill-typed
+// and declined.
+fn Path::at(self path: Path) → Aff → Option<Aff> {
+    match path {
+        PHere => λ (t: Aff) => Some(t),
+        PThen(p, rest) => λ (t: Aff) => match t {
+            Leaf(q, own) => match q { Zero => Some(Leaf(0, own.then(PThen(p, rest)))), Succ(_) => None },
+            Lit(_) => None,
+            Branch(a, b) => rest.at(p.pick(a, b)),
+        },
+    }
+}
+
+fn Aff::both(a, b: Option<Aff>) → Option<Aff> {
+    match a { None => None, Some(x) => match b { None => None, Some(y) => Some(Branch(x, y)) } }
+}
+
+// `q` more successors on a sub-tree; a pair has none to take.
+fn Aff::graft(q: Nat, r: Option<Aff>) → Option<Aff> {
+    match r {
+        None => None,
+        Some(x) => match x {
+            Leaf(q2, p2) => Some(Leaf(q2 + q, p2)),
+            Lit(q2) => Some(Lit(q2 + q)),
+            Branch(a, b) => match q { Zero => Some(Branch(a, b)), Succ(_) => None },
+        },
+    }
+}
+
+// `outer ∘ inner`: two steps, the inner first (algebra.rs `compose`).
+fn Aff::compose(self outer: Aff, inner: Aff) → Option<Aff> {
+    match outer {
+        Leaf(q, path) => Aff::graft(q, path.at(inner)),
+        Lit(q) => Some(Lit(q)),
+        Branch(a, b) => Aff::both(a.compose(inner), b.compose(inner)),
+    }
+}
+
+fn Aff::then_compose(t: Aff, r: Option<Aff>) → Option<Aff> {
+    match r { None => None, Some(x) => t.compose(x) }
+}
+
+// `t^c`, one composition per step.
+fn Aff::iter(self t: Aff, c: Nat) → Option<Aff> {
+    match c { Zero => Some(Aff::identity()), Succ(m) => Aff::then_compose(t, t.iter(m)) }
+}
+
+// Inverting `both`.
+theorem Aff::both_inv(P: Aff → Type, ra, rb: Option<Aff>, x: Aff, e: Aff::both(ra, rb) = Some(x),
+        k: (xa, xb: Aff) → ra = Some(xa) → rb = Some(xb) → P(Branch(xa, xb))): P(x) {
+    match ra as λ y => Aff::both(y, rb) = Some(x) → ((xa, xb: Aff) → y = Some(xa) → rb = Some(xb) → P(Branch(xa, xb))) → P(x) {
+        None => λ q k2 => absurd(q),
+        Some(xa) => match rb as λ y => Aff::both(Some(xa), y) = Some(x) →
+                ((xa2, xb: Aff) → Some(xa) = Some(xa2) → y = Some(xb) → P(Branch(xa2, xb))) → P(x) {
+            None => λ q2 k3 => absurd(q2),
+            Some(xb) => λ q2 k3 => j(Option::some_inj(Branch(xa, xb), x, q2), λ y p => P(y), k3(xa, xb, refl, refl)),
+        },
+    }(e, k)
+}
+
+theorem Aff::pick_term(p: Proj, a, b: Aff, u: Tm): p.pick(a.term(u), b.term(u)) = p.pick(a, b).term(u) {
+    match p { PFst => refl, PSnd => refl }
+}
+
+theorem Aff::term_inst(self t: Aff, u: Tm, sub: Nat → Tm): t.term(u).inst(sub) = t.term(u.inst(sub)) {
+    match t {
+        Leaf(q, path) => trans(Tm::succs_inst(q, path.apply(u), sub),
+            j(path.apply_inst(sub, u), λ y p => Tm::succs(q, path.apply(u).inst(sub)) = Tm::succs(q, y), refl)),
+        Lit(q) => Tm::succs_inst(q, NZero, sub),
+        Branch(a, b) => Tm::cong_pair(a.term_inst(u, sub), b.term_inst(u, sub)),
+    }
+}
+
+// A tree is a context: its hole is `ih`.
+theorem Aff::term_map(self t: Aff, {u, u2: Tm}, h: u.Reduces(u2)): t.term(u).Reduces(t.term(u2)) {
+    match t {
+        Leaf(q, path) => Tm::reduces_map(λ (x: Tm) => Tm::succs(q, path.apply(x)),
+            Tm::ctx_comp(λ (y: Tm) => Tm::succs(q, y), λ (x: Tm) => path.apply(x), Tm::ctx_succs(q), path.ctx()), h),
+        Lit(q) => Tm::reduces_refl(Tm::succs(q, NZero)),
+        Branch(a, b) => Tm::reduces_pair(a.term_map(h), b.term_map(h)),
+    }
+}
+
+// What the kernel builds unpacks to the unary reading.
+theorem Aff::build_unpacks(self t: Aff, u: Tm): t.build(u).Reduces(t.term(u)) {
+    match t {
+        Leaf(q, path) => Tm::run_unpacks(q, path.apply(u)),
+        Lit(q) => Tm::run_unpacks(q, NZero),
+        Branch(a, b) => Tm::reduces_pair(a.build_unpacks(u), b.build_unpacks(u)),
+    }
+}
+
+// Projecting a tree's term along `path` reduces to the sub-tree there.
+theorem Path::at_sound(self path: Path): (inner, x: Aff) → (u: Tm) → path.at(inner) = Some(x) →
+        path.apply(inner.term(u)).Reduces(x.term(u)) {
+    match path {
+        PHere => λ inner x u e =>
+            j(Option::some_inj(inner, x, e), λ y p => inner.term(u).Reduces(y.term(u)), Tm::reduces_refl(inner.term(u))),
+        PThen(p, rest) => λ inner x u => match inner as λ y => PThen(p, rest).at(y) = Some(x) →
+                PThen(p, rest).apply(y.term(u)).Reduces(x.term(u)) {
+            Leaf(q, own) => match q as λ y => PThen(p, rest).at(Leaf(y, own)) = Some(x) →
+                    PThen(p, rest).apply(Leaf(y, own).term(u)).Reduces(x.term(u)) {
+                Zero => λ e => j(Option::some_inj(Leaf(0, own.then(PThen(p, rest))), x, e),
+                    λ y pp => PThen(p, rest).apply(own.apply(u)).Reduces(y.term(u)),
+                    Tm::reduces_eq(sym(own.then_apply(PThen(p, rest), u)))),
+                Succ(_) => λ e => absurd(e),
+            },
+            Lit(_) => λ e => absurd(e),
+            Branch(a, b) => λ e => Tm::reduces_step(
+                rest.ctx()(SProj(p, SPair(a.term(u), b.term(u))), p.pick(a.term(u), b.term(u)),
+                           Tm::red_proj(p, a.term(u), b.term(u))),
+                j(sym(Aff::pick_term(p, a, b, u)), λ y pp => rest.apply(y).Reduces(x.term(u)),
+                  rest.at_sound(p.pick(a, b), x, u, e))),
+        },
+    }
+}
+
+theorem Aff::graft_sound(q: Nat, x, r: Aff, u: Tm, e: Aff::graft(q, Some(x)) = Some(r)):
+        Tm::succs(q, x.term(u)).Reduces(r.term(u)) {
+    match x as λ y => Aff::graft(q, Some(y)) = Some(r) → Tm::succs(q, y.term(u)).Reduces(r.term(u)) {
+        Leaf(q2, p2) => λ e2 => j(Option::some_inj(Leaf(q2 + q, p2), r, e2),
+            λ y p => Tm::succs(q, Tm::succs(q2, p2.apply(u))).Reduces(y.term(u)),
+            Tm::reduces_eq(Tm::succs_succs(q, q2, p2.apply(u)))),
+        Lit(q2) => λ e2 => j(Option::some_inj(Lit(q2 + q), r, e2),
+            λ y p => Tm::succs(q, Tm::succs(q2, NZero)).Reduces(y.term(u)),
+            Tm::reduces_eq(Tm::succs_succs(q, q2, NZero))),
+        Branch(a, b) => match q as λ y => Aff::graft(y, Some(Branch(a, b))) = Some(r) →
+                Tm::succs(y, Branch(a, b).term(u)).Reduces(r.term(u)) {
+            Zero => λ e2 => j(Option::some_inj(Branch(a, b), r, e2),
+                λ y p => Branch(a, b).term(u).Reduces(y.term(u)), Tm::reduces_refl(Branch(a, b).term(u))),
+            Succ(_) => λ e2 => absurd(e2),
+        },
+    }(e)
+}
+
+// Composition is substitution: the outer tree at the inner tree's term
+// reduces to the composite's term.
+theorem Aff::compose_sound(self outer: Aff): (inner, r: Aff) → (u: Tm) → outer.compose(inner) = Some(r) →
+        outer.term(inner.term(u)).Reduces(r.term(u)) {
+    match outer {
+        Leaf(q, path) => λ inner r u e =>
+            match path.at(inner) as λ o => (path.at(inner) = o) → Aff::graft(q, o) = Some(r) →
+                    Tm::succs(q, path.apply(inner.term(u))).Reduces(r.term(u)) {
+                None => λ ex e2 => absurd(e2),
+                Some(x) => λ ex e2 => Tm::reduces_trans(
+                    Tm::reduces_map(λ (y: Tm) => Tm::succs(q, y), Tm::ctx_succs(q), path.at_sound(inner, x, u, ex)),
+                    Aff::graft_sound(q, x, r, u, e2)),
+            }(refl, e),
+        Lit(q) => λ inner r u e => j(Option::some_inj(Lit(q), r, e),
+            λ y p => Tm::succs(q, NZero).Reduces(y.term(u)), Tm::reduces_refl(Tm::succs(q, NZero))),
+        Branch(a, b) => λ inner r u e => Aff::both_inv(
+            λ (y: Aff) => SPair(a.term(inner.term(u)), b.term(inner.term(u))).Reduces(y.term(u)),
+            a.compose(inner), b.compose(inner), r, e,
+            λ xa xb ea eb => Tm::reduces_pair(a.compose_sound(inner, xa, u, ea), b.compose_sound(inner, xb, u, eb))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reading a probe as a tree (eval/probe.rs `read_affine`): a pair reads as
+// a pair of its components' readings, successors are stripped, and what
+// they sit on is `Zero` or the probe's `ih` (atom 1) under projections. Each
+// sub-term is driven to its weak head first, as the kernel forces it.
+
+// `t` as `ih` under projections, the ones already peeled off (`acc`)
+// applied after.
+fn Tm::ih_path(self t: Tm) → Path → Option<Path> {
+    match t {
+        Fv(a) => λ (acc: Path) => match a { Zero => None, Succ(b) => match b { Zero => Some(acc), Succ(_) => None } },
+        SProj(p, w) => λ (acc: Path) => w.ih_path(PThen(p, acc)),
+        _ => λ (acc: Path) => None,
+    }
+}
+
+theorem Tm::ih_path_sound(self t: Tm): (acc, l: Path) → t.ih_path(acc) = Some(l) → l.apply(Fv(1)) = acc.apply(t) {
+    match t {
+        Fv(a) => λ acc l => match a as λ y => Fv(y).ih_path(acc) = Some(l) → l.apply(Fv(1)) = acc.apply(Fv(y)) {
+            Zero => λ e => absurd(e),
+            Succ(b) => match b as λ y => Fv(Succ(y)).ih_path(acc) = Some(l) → l.apply(Fv(1)) = acc.apply(Fv(Succ(y))) {
+                Zero => λ e => j(Option::some_inj(acc, l, e), λ y p => y.apply(Fv(1)) = acc.apply(Fv(1)), refl),
+                Succ(_) => λ e => absurd(e),
+            },
+        },
+        SProj(p, w) => λ acc l e => w.ih_path_sound(PThen(p, acc), l, e),
+        _ => λ acc l e => absurd(e),
+    }
+}
+
+fn Aff::leaf_of(r: Option<Path>) → Option<Aff> {
+    match r { None => None, Some(l) => Some(Leaf(0, l)) }
+}
+
+fn Aff::bump(r: Option<Aff>) → Option<Aff> {
+    match r {
+        None => None,
+        Some(x) => match x { Leaf(q, l) => Some(Leaf(Succ(q), l)), Lit(q) => Some(Lit(Succ(q))), Branch(_, _) => None },
+    }
+}
+
+// One weak head value, its sub-terms read by `rd`.
+fn Tm::read_value(rd: Tm → Option<Aff>, v: Tm) → Option<Aff> {
+    match v {
+        SPair(a, b) => Aff::both(rd(a), rd(b)),
+        NSucc(p) => Aff::bump(rd(p)),
+        NZero => Some(Lit(0)),
+        Fv(a) => Aff::leaf_of(Fv(a).ih_path(PHere)),
+        SProj(p, w) => Aff::leaf_of(SProj(p, w).ih_path(PHere)),
+        _ => None,
+    }
+}
+
+fn Tm::read_head(rd: Tm → Option<Aff>, r: Option<Tm>) → Option<Aff> {
+    match r { None => None, Some(v) => Tm::read_value(rd, v) }
+}
+
+fn Tm::read(fuel: Nat) → Tm → Option<Aff> {
+    match fuel {
+        Zero => λ (t: Tm) => None,
+        Succ(g) => λ (t: Tm) => Tm::read_head(Tm::read(g), Tm::whnf(g, t)),
+    }
+}
+
+// A reader is sound when what it reads a term as, with `ih` in the hole,
+// is a reduct of the term.
+fn Tm::Reads(rd: Tm → Option<Aff>) → Type { (t: Tm) → (x: Aff) → rd(t) = Some(x) → t.Reduces(x.term(Fv(1))) }
+
+theorem Tm::leaf_sound(v: Tm, x: Aff, e: Aff::leaf_of(v.ih_path(PHere)) = Some(x)): v.Reduces(x.term(Fv(1))) {
+    match v.ih_path(PHere) as λ o => (v.ih_path(PHere) = o) → Aff::leaf_of(o) = Some(x) → v.Reduces(x.term(Fv(1))) {
+        None => λ ep q => absurd(q),
+        Some(l) => λ ep q => j(Option::some_inj(Leaf(0, l), x, q), λ y p => v.Reduces(y.term(Fv(1))),
+            Tm::reduces_eq(sym(v.ih_path_sound(PHere, l, ep)))),
+    }(refl, e)
+}
+
+theorem Tm::bump_sound(rd: Tm → Option<Aff>, ih: Tm::Reads(rd), p: Tm, x: Aff, e: Aff::bump(rd(p)) = Some(x)):
+        NSucc(p).Reduces(x.term(Fv(1))) {
+    match rd(p) as λ o => (rd(p) = o) → Aff::bump(o) = Some(x) → NSucc(p).Reduces(x.term(Fv(1))) {
+        None => λ ep q => absurd(q),
+        Some(y) => match y as λ w => (rd(p) = Some(w)) → Aff::bump(Some(w)) = Some(x) → NSucc(p).Reduces(x.term(Fv(1))) {
+            Leaf(q, l) => λ ep e2 => j(Option::some_inj(Leaf(Succ(q), l), x, e2), λ w pp => NSucc(p).Reduces(w.term(Fv(1))),
+                Tm::reduces_map(λ (t: Tm) => NSucc(t), Tm::ctx_succ(), ih(p, Leaf(q, l), ep))),
+            Lit(q) => λ ep e2 => j(Option::some_inj(Lit(Succ(q)), x, e2), λ w pp => NSucc(p).Reduces(w.term(Fv(1))),
+                Tm::reduces_map(λ (t: Tm) => NSucc(t), Tm::ctx_succ(), ih(p, Lit(q), ep))),
+            Branch(_, _) => λ ep e2 => absurd(e2),
+        },
+    }(refl, e)
+}
+
+theorem Tm::read_value_sound(rd: Tm → Option<Aff>, ih: Tm::Reads(rd), v: Tm, x: Aff,
+        e: Tm::read_value(rd, v) = Some(x)): v.Reduces(x.term(Fv(1))) {
+    match v as λ y => Tm::read_value(rd, y) = Some(x) → y.Reduces(x.term(Fv(1))) {
+        SPair(a, b) => λ q => Aff::both_inv(λ (y: Aff) => SPair(a, b).Reduces(y.term(Fv(1))), rd(a), rd(b), x, q,
+            λ xa xb ea eb => Tm::reduces_pair(ih(a, xa, ea), ih(b, xb, eb))),
+        NSucc(p) => λ q => Tm::bump_sound(rd, ih, p, x, q),
+        NZero => λ q => j(Option::some_inj(Lit(0), x, q), λ y p => NZero.Reduces(y.term(Fv(1))), Tm::reduces_refl(NZero)),
+        Fv(a) => λ q => Tm::leaf_sound(Fv(a), x, q),
+        SProj(p, w) => λ q => Tm::leaf_sound(SProj(p, w), x, q),
+        _ => λ q => absurd(q),
+    }(e)
+}
+
+theorem Tm::read_sound(fuel: Nat): Tm::Reads(Tm::read(fuel)) {
+    match fuel as λ f => Tm::Reads(Tm::read(f)) {
+        Zero => λ t x q => absurd(q),
+        Succ(g, ih) => λ t x e =>
+            match Tm::whnf(g, t) as λ o => (Tm::whnf(g, t) = o) → Tm::read_head(Tm::read(g), o) = Some(x) →
+                    t.Reduces(x.term(Fv(1))) {
+                None => λ ew q => absurd(q),
+                Some(v) => λ ew q => Tm::reduces_trans(Tm::whnf_sound(g, t, v, ew),
+                    Tm::read_value_sound(Tm::read(g), ih, v, x, q)),
+            }(refl, e),
+    }
+}
+
+// A term read as a tree reduces, at every closed instantiation, to the tree
+// at the image of `ih`.
+theorem Tm::read_inst(fuel: Nat, t: Tm, tree: Aff, read: Tm::read(fuel, t) = Some(tree),
+        sub: Nat → Tm, closed: (a: Nat) → sub(a).Lc(0)): t.inst(sub).Reduces(tree.term(sub(1))) {
+    j(tree.term_inst(Fv(1), sub), λ y p => t.inst(sub).Reduces(y),
+      Tm::reduces_inst(sub, closed, Tm::read_sound(fuel, t, tree, read)))
+}
+
+// ---------------------------------------------------------------------------
+// The probe's instances. The uniform probe is `s(k, ih)` at atoms `0` and
+// `1` (`Tm::probe`); the peeled one (`k := Succ x`) and the synchronous one
+// (applied to `Succ x`) also use atom `2` for `x`.
+
+fn Tm::sub3(kv, ihv, xv: Tm) → Nat → Tm {
+    λ (a: Nat) => match a { Zero => kv, Succ(b) => match b { Zero => ihv, Succ(_) => xv } }
+}
+
+theorem Tm::sub3_closed(kv, ihv, xv: Tm, kc: kv.Lc(0), ihc: ihv.Lc(0), xc: xv.Lc(0)):
+        (a: Nat) → Tm::sub3(kv, ihv, xv, a).Lc(0) {
+    λ a => match a as λ y => Tm::sub3(kv, ihv, xv, y).Lc(0) {
+        Zero => kc,
+        Succ(b) => match b as λ y => Tm::sub3(kv, ihv, xv, Succ(y)).Lc(0) { Zero => ihc, Succ(_) => xc },
+    }
+}
+
+fn Tm::probe_peeled(s: Tm) → Tm { App(App(s, NSucc(Fv(2))), Fv(1)) }
+
+theorem Tm::probe_affine(s: Tm, ground: s.Ground(), fuel: Nat, tree: Aff,
+        read: Tm::read(fuel, Tm::probe(s)) = Some(tree),
+        kv, ihv: Tm, kc: kv.Lc(0), ihc: ihv.Lc(0)): App(App(s, kv), ihv).Reduces(tree.term(ihv)) {
+    j(s.inst_ground(Tm::probe_sub(kv, ihv), ground), λ y p => App(App(y, kv), ihv).Reduces(tree.term(ihv)),
+      Tm::read_inst(fuel, Tm::probe(s), tree, read, Tm::probe_sub(kv, ihv),
+          λ a => match a as λ b => Tm::probe_sub(kv, ihv, b).Lc(0) { Zero => kc, Succ(_) => ihc }))
+}
+
+theorem Tm::probe_peeled_affine(s: Tm, ground: s.Ground(), fuel: Nat, tree: Aff,
+        read: Tm::read(fuel, Tm::probe_peeled(s)) = Some(tree),
+        xv, ihv: Tm, xc: xv.Lc(0), ihc: ihv.Lc(0)): App(App(s, NSucc(xv)), ihv).Reduces(tree.term(ihv)) {
+    j(s.inst_ground(Tm::sub3(NZero, ihv, xv), ground), λ y p => App(App(y, NSucc(xv)), ihv).Reduces(tree.term(ihv)),
+      Tm::read_inst(fuel, Tm::probe_peeled(s), tree, read, Tm::sub3(NZero, ihv, xv),
+          Tm::sub3_closed(NZero, ihv, xv, trivial, ihc, xc)))
+}
+
+// ---------------------------------------------------------------------------
+// Run-fold adequacy, affine class (eval/runs.rs `fold_affine`). A step whose
+// probe reads as `tree` folds over a run of `c` successors to `tree^c` at
+// the fold over the tail. The unary fold reduces to the tree's term; what
+// the kernel builds (`Aff::build`, increments as runs) reduces to the same
+// term, so the two are convertible.
+
+fn Tm::Joins(self a: Tm, b: Tm) → Type { ∃ v: Tm, a.Reduces(v) ∧ b.Reduces(v) }
+
+theorem Tm::fold_affine_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, tree: Aff,
+        read: Tm::read(fuel, Tm::probe(s)) = Some(tree), z, x: Tm, z_closed: z.Lc(0), x_closed: x.Lc(0),
+        c: Nat): (r: Aff) → tree.iter(c) = Some(r) → NRec(z, s, NRun(c, x)).Reduces(r.term(NRec(z, s, x))) {
+    match c as λ n => (r: Aff) → tree.iter(n) = Some(r) → NRec(z, s, NRun(n, x)).Reduces(r.term(NRec(z, s, x))) {
+        Zero => λ r e => j(Option::some_inj(Aff::identity(), r, e),
+            λ y p => NRec(z, s, NRun(0, x)).Reduces(y.term(NRec(z, s, x))),
+            Tm::reduces_one(Tm::ctx_rec(z, s, NRun(0, x), x, Tm::red_unpack_zero(x)))),
+        Succ(m, ih) => λ r e =>
+            match tree.iter(m) as λ o => (tree.iter(m) = o) → Aff::then_compose(tree, o) = Some(r) →
+                    NRec(z, s, NRun(Succ(m), x)).Reduces(r.term(NRec(z, s, x))) {
+                None => λ ei q => absurd(q),
+                Some(r2) => λ ei q => Tm::reduces_step(
+                    Tm::ctx_rec(z, s, NRun(Succ(m), x), NSucc(NRun(m, x)), Tm::red_unpack_succ(m, x)),
+                    Tm::reduces_step(Tm::red_iota_succ(z, s, NRun(m, x)),
+                    Tm::reduces_trans(
+                        Tm::probe_affine(s, ground, fuel, tree, read, NRun(m, x), NRec(z, s, NRun(m, x)),
+                            x_closed, And(z_closed, And(s_closed, x_closed))),
+                    Tm::reduces_trans(tree.term_map(ih(r2, ei)), tree.compose_sound(r2, r, NRec(z, s, x), q))))),
+            }(refl, e),
+    }
+}
+
+theorem Tm::fold_affine(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, tree: Aff,
+        read: Tm::read(fuel, Tm::probe(s)) = Some(tree), z, x: Tm, z_closed: z.Lc(0), x_closed: x.Lc(0),
+        c: Nat, r: Aff, iterated: tree.iter(c) = Some(r)):
+        NRec(z, s, NRun(c, x)).Joins(r.build(NRec(z, s, x))) {
+    Exists(r.term(NRec(z, s, x)), And(
+        Tm::fold_affine_unary(s, ground, s_closed, fuel, tree, read, z, x, z_closed, x_closed, c, r, iterated),
+        r.build_unpacks(NRec(z, s, x))))
+}
+
+// Peeled: the class holds at successor `k` only, so the innermost step is
+// taken as written and the tree iterated over the rest of the run.
+theorem Tm::fold_affine_peeled_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, tree: Aff,
+        read: Tm::read(fuel, Tm::probe_peeled(s)) = Some(tree), z, x: Tm, z_closed: z.Lc(0), x_closed: x.Lc(0),
+        c: Nat): (r: Aff) → tree.iter(c) = Some(r) →
+        NRec(z, s, NRun(Succ(c), x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
+    match c as λ n => (r: Aff) → tree.iter(n) = Some(r) →
+            NRec(z, s, NRun(Succ(n), x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
+        Zero => λ r e => j(Option::some_inj(Aff::identity(), r, e),
+            λ y p => NRec(z, s, NRun(1, x)).Reduces(y.term(App(App(s, x), NRec(z, s, x)))),
+            Tm::reduces_step(Tm::ctx_rec(z, s, NRun(1, x), NSucc(NRun(0, x)), Tm::red_unpack_succ(0, x)),
+            Tm::reduces_step(Tm::red_iota_succ(z, s, NRun(0, x)),
+            Tm::reduces_step(
+                Tm::ctx_comp(λ (y: Tm) => App(y, NRec(z, s, NRun(0, x))), λ (y: Tm) => App(s, y),
+                    Tm::ctx_app_head(NRec(z, s, NRun(0, x))), Tm::ctx_app_arg(s), NRun(0, x), x, Tm::red_unpack_zero(x)),
+            Tm::reduces_one(
+                Tm::ctx_comp(λ (y: Tm) => App(App(s, x), y), λ (y: Tm) => NRec(z, s, y),
+                    Tm::ctx_app_arg(App(s, x)), Tm::ctx_rec(z, s), NRun(0, x), x, Tm::red_unpack_zero(x))))))),
+        Succ(m, ih) => λ r e =>
+            match tree.iter(m) as λ o => (tree.iter(m) = o) → Aff::then_compose(tree, o) = Some(r) →
+                    NRec(z, s, NRun(Succ(Succ(m)), x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
+                None => λ ei q => absurd(q),
+                Some(r2) => λ ei q => Tm::reduces_step(
+                    Tm::ctx_rec(z, s, NRun(Succ(Succ(m)), x), NSucc(NRun(Succ(m), x)), Tm::red_unpack_succ(Succ(m), x)),
+                    Tm::reduces_step(Tm::red_iota_succ(z, s, NRun(Succ(m), x)),
+                    Tm::reduces_step(
+                        Tm::ctx_comp(λ (y: Tm) => App(y, NRec(z, s, NRun(Succ(m), x))), λ (y: Tm) => App(s, y),
+                            Tm::ctx_app_head(NRec(z, s, NRun(Succ(m), x))), Tm::ctx_app_arg(s),
+                            NRun(Succ(m), x), NSucc(NRun(m, x)), Tm::red_unpack_succ(m, x)),
+                    Tm::reduces_trans(
+                        Tm::probe_peeled_affine(s, ground, fuel, tree, read, NRun(m, x), NRec(z, s, NRun(Succ(m), x)),
+                            x_closed, And(z_closed, And(s_closed, x_closed))),
+                    Tm::reduces_trans(tree.term_map(ih(r2, ei)),
+                        tree.compose_sound(r2, r, App(App(s, x), NRec(z, s, x)), q)))))),
+            }(refl, e),
+    }
+}
+
+theorem Tm::fold_affine_peeled(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, tree: Aff,
+        read: Tm::read(fuel, Tm::probe_peeled(s)) = Some(tree), z, x: Tm, z_closed: z.Lc(0), x_closed: x.Lc(0),
+        c: Nat, r: Aff, iterated: tree.iter(c) = Some(r)):
+        NRec(z, s, NRun(Succ(c), x)).Joins(r.build(App(App(s, x), NRec(z, s, x)))) {
+    Exists(r.term(App(App(s, x), NRec(z, s, x))), And(
+        Tm::fold_affine_peeled_unary(s, ground, s_closed, fuel, tree, read, z, x, z_closed, x_closed, c, r, iterated),
+        r.build_unpacks(App(App(s, x), NRec(z, s, x)))))
+}
+
+// ---------------------------------------------------------------------------
+// The synchronous class (eval/probe.rs `probe_sync`): the step at probes is
+// a function which, applied to `Succ x`, reduces to `Succ^q(ih x)`.
+
+fn Tm::is_atom(self t: Tm, n: Nat) → Bool {
+    match t { Fv(a) => a.same(n), _ => False }
+}
+
+theorem Tm::is_atom_sound(self t: Tm, n: Nat, h: t.is_atom(n) = True): t = Fv(n) {
+    match t as λ y => y.is_atom(n) = True → y = Fv(n) {
+        Fv(a) => λ q => j(a.same_sound(n, q), λ y p => Fv(a) = Fv(y), refl),
+        _ => λ q => absurd(q),
+    }(h)
+}
+
+fn Tm::zero_if(b: Bool) → Option<Nat> { match b { True => Some(0), False => None } }
+
+// The tail after the successors: `ih` applied to exactly `x`.
+fn Tm::sync_tail(head_ih: Bool, arg: Option<Tm>) → Option<Nat> {
+    match head_ih {
+        False => None,
+        True => match arg { None => None, Some(w) => Tm::zero_if(w.is_atom(2)) },
+    }
+}
+
+fn Tm::succ_of(r: Option<Nat>) → Option<Nat> {
+    match r { None => None, Some(q) => Some(Succ(q)) }
+}
+
+fn Tm::strip_value(st: Tm → Option<Nat>, g: Nat, v: Tm) → Option<Nat> {
+    match v {
+        NSucc(p) => Tm::succ_of(st(p)),
+        App(h, a) => Tm::sync_tail(h.is_atom(1), Tm::whnf(g, a)),
+        _ => None,
+    }
+}
+
+fn Tm::strip_head(st: Tm → Option<Nat>, g: Nat, r: Option<Tm>) → Option<Nat> {
+    match r { None => None, Some(v) => Tm::strip_value(st, g, v) }
+}
+
+fn Tm::strip(fuel: Nat) → Tm → Option<Nat> {
+    match fuel {
+        Zero => λ (t: Tm) => None,
+        Succ(g) => λ (t: Tm) => Tm::strip_head(Tm::strip(g), g, Tm::whnf(g, t)),
+    }
+}
+
+fn Tm::sync_lam(fuel: Nat, v: Tm) → Option<Nat> {
+    match v { Lam(b) => Tm::strip(fuel, App(Lam(b), NSucc(Fv(2)))), _ => None }
+}
+
+fn Tm::sync_fun(fuel: Nat, r: Option<Tm>) → Option<Nat> {
+    match r { None => None, Some(v) => Tm::sync_lam(fuel, v) }
+}
+
+// The class: the probe's weak head is a function, and that function at
+// `Succ x` strips to `q` successors on `ih x`.
+fn Tm::read_sync(fuel: Nat, s: Tm) → Option<Nat> { Tm::sync_fun(fuel, Tm::whnf(fuel, Tm::probe(s))) }
+
+fn Tm::Strips(st: Tm → Option<Nat>) → Type {
+    (t: Tm) → (q: Nat) → st(t) = Some(q) → t.Reduces(Tm::succs(q, App(Fv(1), Fv(2))))
+}
+
+theorem Tm::sync_tail_sound(g: Nat, h, a: Tm, q: Nat, e: Tm::sync_tail(h.is_atom(1), Tm::whnf(g, a)) = Some(q)):
+        App(h, a).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+    match h.is_atom(1) as λ b => (h.is_atom(1) = b) → Tm::sync_tail(b, Tm::whnf(g, a)) = Some(q) →
+            App(h, a).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+        False => λ eh e2 => absurd(e2),
+        True => λ eh e2 => match Tm::whnf(g, a) as λ o => (Tm::whnf(g, a) = o) → Tm::sync_tail(True, o) = Some(q) →
+                App(h, a).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+            None => λ ew e3 => absurd(e3),
+            Some(w) => λ ew e3 => match w.is_atom(2) as λ b => (w.is_atom(2) = b) → Tm::zero_if(b) = Some(q) →
+                    App(h, a).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+                True => λ ea e4 => j(Option::some_inj(0, q, e4),
+                    λ y p => App(h, a).Reduces(Tm::succs(y, App(Fv(1), Fv(2)))),
+                    Tm::reduces_trans(
+                        Tm::reduces_map(λ (y: Tm) => App(h, y), Tm::ctx_app_arg(h), Tm::whnf_sound(g, a, w, ew)),
+                        Tm::reduces_eq(Tm::cong_app(h.is_atom_sound(1, eh), w.is_atom_sound(2, ea))))),
+                False => λ ea e4 => absurd(e4),
+            }(refl, e3),
+        }(refl, e2),
+    }(refl, e)
+}
+
+theorem Tm::strip_value_sound(st: Tm → Option<Nat>, ih: Tm::Strips(st), g: Nat, v: Tm, q: Nat,
+        e: Tm::strip_value(st, g, v) = Some(q)): v.Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+    match v as λ y => Tm::strip_value(st, g, y) = Some(q) → y.Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+        NSucc(p) => λ e2 => match st(p) as λ o => (st(p) = o) → Tm::succ_of(o) = Some(q) →
+                NSucc(p).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+            None => λ ep e3 => absurd(e3),
+            Some(q2) => λ ep e3 => j(Option::some_inj(Succ(q2), q, e3),
+                λ y pp => NSucc(p).Reduces(Tm::succs(y, App(Fv(1), Fv(2)))),
+                Tm::reduces_map(λ (t: Tm) => NSucc(t), Tm::ctx_succ(), ih(p, q2, ep))),
+        }(refl, e2),
+        App(h, a) => λ e2 => Tm::sync_tail_sound(g, h, a, q, e2),
+        _ => λ e2 => absurd(e2),
+    }(e)
+}
+
+theorem Tm::strip_sound(fuel: Nat): Tm::Strips(Tm::strip(fuel)) {
+    match fuel as λ f => Tm::Strips(Tm::strip(f)) {
+        Zero => λ t q e => absurd(e),
+        Succ(g, ih) => λ t q e =>
+            match Tm::whnf(g, t) as λ o => (Tm::whnf(g, t) = o) → Tm::strip_head(Tm::strip(g), g, o) = Some(q) →
+                    t.Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+                None => λ ew e2 => absurd(e2),
+                Some(v) => λ ew e2 => Tm::reduces_trans(Tm::whnf_sound(g, t, v, ew),
+                    Tm::strip_value_sound(Tm::strip(g), ih, g, v, q, e2)),
+            }(refl, e),
+    }
+}
+
+theorem Tm::read_sync_sound(fuel: Nat, s: Tm, q: Nat, e: Tm::read_sync(fuel, s) = Some(q)):
+        App(Tm::probe(s), NSucc(Fv(2))).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+    match Tm::whnf(fuel, Tm::probe(s)) as λ o => (Tm::whnf(fuel, Tm::probe(s)) = o) → Tm::sync_fun(fuel, o) = Some(q) →
+            App(Tm::probe(s), NSucc(Fv(2))).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+        None => λ ew e2 => absurd(e2),
+        Some(v) => match v as λ y => (Tm::whnf(fuel, Tm::probe(s)) = Some(y)) → Tm::sync_lam(fuel, y) = Some(q) →
+                App(Tm::probe(s), NSucc(Fv(2))).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+            Lam(b) => λ ew2 e2 => Tm::reduces_trans(
+                Tm::reduces_map(λ (f: Tm) => App(f, NSucc(Fv(2))), Tm::ctx_app_head(NSucc(Fv(2))),
+                    Tm::whnf_sound(fuel, Tm::probe(s), Lam(b), ew2)),
+                Tm::strip_sound(fuel, App(Lam(b), NSucc(Fv(2))), q, e2)),
+            _ => λ ew2 e2 => absurd(e2),
+        },
+    }(refl, e)
+}
+
+theorem Tm::probe_sync(s: Tm, ground: s.Ground(), fuel: Nat, q: Nat, read: Tm::read_sync(fuel, s) = Some(q),
+        kv, ihv, xv: Tm, kc: kv.Lc(0), ihc: ihv.Lc(0), xc: xv.Lc(0)):
+        App(App(App(s, kv), ihv), NSucc(xv)).Reduces(Tm::succs(q, App(ihv, xv))) {
+    j(s.inst_ground(Tm::sub3(kv, ihv, xv), ground),
+      λ y p => App(App(App(y, kv), ihv), NSucc(xv)).Reduces(Tm::succs(q, App(ihv, xv))),
+      j(Tm::succs_inst(q, App(Fv(1), Fv(2)), Tm::sub3(kv, ihv, xv)),
+        λ y p => App(App(App(s.inst(Tm::sub3(kv, ihv, xv)), kv), ihv), NSucc(xv)).Reduces(y),
+        Tm::reduces_inst(Tm::sub3(kv, ihv, xv), Tm::sub3_closed(kv, ihv, xv, kc, ihc, xc),
+            Tm::read_sync_sound(fuel, s, q, read))))
+}
+
+// Run-fold adequacy, synchronous class (eval.rs, `Val::NatSync` applied to
+// a run): a fold over `a + m` successors applied to `b + m` successors
+// cancels the common `m`, under `q` successors per cancelled pair.
+theorem Tm::fold_sync_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, q: Nat,
+        read: Tm::read_sync(fuel, s) = Some(q), z, t, x: Tm, z_closed: z.Lc(0), t_closed: t.Lc(0), x_closed: x.Lc(0),
+        m: Nat): (a, b: Nat) → App(NRec(z, s, NRun(a + m, t)), NRun(b + m, x))
+            .Reduces(Tm::succs(q * m, App(NRec(z, s, NRun(a, t)), NRun(b, x)))) {
+    match m as λ n => (a, b: Nat) → App(NRec(z, s, NRun(a + n, t)), NRun(b + n, x))
+            .Reduces(Tm::succs(q * n, App(NRec(z, s, NRun(a, t)), NRun(b, x)))) {
+        Zero => λ a b => Tm::reduces_refl(App(NRec(z, s, NRun(a, t)), NRun(b, x))),
+        Succ(n, ih) => λ a b => j(Tm::succs_succs(q, q * n, App(NRec(z, s, NRun(a, t)), NRun(b, x))),
+            λ y p => App(NRec(z, s, NRun(Succ(a + n), t)), NRun(Succ(b + n), x)).Reduces(y),
+            Tm::reduces_step(
+                Tm::ctx_comp(λ (y: Tm) => App(y, NRun(Succ(b + n), x)), λ (y: Tm) => NRec(z, s, y),
+                    Tm::ctx_app_head(NRun(Succ(b + n), x)), Tm::ctx_rec(z, s),
+                    NRun(Succ(a + n), t), NSucc(NRun(a + n, t)), Tm::red_unpack_succ(a + n, t)),
+            Tm::reduces_step(
+                Tm::ctx_app_head(NRun(Succ(b + n), x), NRec(z, s, NSucc(NRun(a + n, t))),
+                    App(App(s, NRun(a + n, t)), NRec(z, s, NRun(a + n, t))), Tm::red_iota_succ(z, s, NRun(a + n, t))),
+            Tm::reduces_step(
+                Tm::ctx_app_arg(App(App(s, NRun(a + n, t)), NRec(z, s, NRun(a + n, t))),
+                    NRun(Succ(b + n), x), NSucc(NRun(b + n, x)), Tm::red_unpack_succ(b + n, x)),
+            Tm::reduces_trans(
+                Tm::probe_sync(s, ground, fuel, q, read, NRun(a + n, t), NRec(z, s, NRun(a + n, t)), NRun(b + n, x),
+                    t_closed, And(z_closed, And(s_closed, t_closed)), x_closed),
+                Tm::reduces_map(λ (y: Tm) => Tm::succs(q, y), Tm::ctx_succs(q), ih(a, b))))))),
+    }
+}
+
+// What the kernel builds: the residual fold applied to the residual run,
+// under one run of `q · m` successors.
+theorem Tm::fold_sync(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, q: Nat,
+        read: Tm::read_sync(fuel, s) = Some(q), z, t, x: Tm, z_closed: z.Lc(0), t_closed: t.Lc(0), x_closed: x.Lc(0),
+        m, a, b: Nat): App(NRec(z, s, NRun(a + m, t)), NRun(b + m, x))
+            .Joins(NRun(q * m, App(NRec(z, s, NRun(a, t)), NRun(b, x)))) {
+    Exists(Tm::succs(q * m, App(NRec(z, s, NRun(a, t)), NRun(b, x))), And(
+        Tm::fold_sync_unary(s, ground, s_closed, fuel, q, read, z, t, x, z_closed, t_closed, x_closed, m, a, b),
+        Tm::run_unpacks(q * m, App(NRec(z, s, NRun(a, t)), NRun(b, x)))))
+}

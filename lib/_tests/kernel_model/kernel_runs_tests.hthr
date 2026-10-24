@@ -1,0 +1,92 @@
+// Probes of `lib/kernel_model/kernel_runs.hthr`: the model's readings at the
+// kernel's own example steps, and the run-fold theorems applied to them at
+// open runs and tails. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import kernel_reduction; import kernel_runs;
+
+// `add`'s step, `λ k ih. Succ(ih)`: the successor algebra.
+fn add_step() → Tm { Lam(Lam(NSucc(Bv(0)))) }
+// `half`'s course-of-values window, `λ k ih. ⟨Succ(ih.2), ih.1⟩`.
+fn window_step() → Tm { Lam(Lam(SPair(NSucc(SProj(PSnd, Bv(0))), SProj(PFst, Bv(0))))) }
+// A step that cases on `k` before it adds one: `λ k ih. elim_Nat(0, λ _ _. Succ(ih), k)`.
+// Blocked at a neutral `k`, affine at `k := Succ x`.
+fn split_step() → Tm { Lam(Lam(NRec(NZero, Lam(Lam(NSucc(Bv(2)))), Bv(1)))) }
+// `min`'s step, `λ k ih m. elim_Nat(0, λ m' _. Succ(ih(m')), m)`: synchronous, one
+// successor per cancelled pair.
+fn min_step() → Tm { Lam(Lam(Lam(NRec(NZero, Lam(Lam(NSucc(App(Bv(3), Bv(1))))), Bv(0))))) }
+// The same counter without the successor: it cancels to no successors.
+fn drop_step() → Tm { Lam(Lam(Lam(NRec(NZero, Lam(Lam(App(Bv(3), Bv(1)))), Bv(0))))) }
+
+fn path1(p: Proj) → Path { PThen(p, PHere) }
+
+// The readings, by evaluation.
+theorem add_reads(): Tm::read(8, Tm::probe(add_step())) = Some(Leaf(1, PHere)) { refl }
+theorem window_reads(): Tm::read(8, Tm::probe(window_step()))
+        = Some(Branch(Leaf(1, path1(PSnd)), Leaf(0, path1(PFst)))) { refl }
+theorem split_does_not_read(): Tm::read(8, Tm::probe(split_step())) = None { refl }
+theorem split_reads_peeled(): Tm::read(8, Tm::probe_peeled(split_step())) = Some(Leaf(1, PHere)) { refl }
+theorem min_reads_sync(): Tm::read_sync(8, min_step()) = Some(1) { refl }
+theorem drop_reads_sync(): Tm::read_sync(8, drop_step()) = Some(0) { refl }
+theorem add_is_not_sync(): Tm::read_sync(8, add_step()) = None { refl }
+// Too little fuel reads nothing: a reading is never manufactured.
+theorem add_short(): Tm::read(3, Tm::probe(add_step())) = None { refl }
+
+// Iteration, by evaluation: the window's square swaps back.
+theorem window_twice(): Branch(Leaf(1, path1(PSnd)), Leaf(0, path1(PFst))).iter(2)
+        = Some(Branch(Leaf(1, path1(PFst)), Leaf(1, path1(PSnd)))) { refl }
+// Successors under a pair are ill-typed and declined, as the kernel does.
+theorem graft_declines(): Leaf(1, PHere).compose(Branch(Lit(0), Lit(0))) = None { refl }
+
+// The successor algebra iterated over an open count is the count.
+theorem add_iter(c: Nat): Leaf(1, PHere).iter(c) = Some(Leaf(c, PHere)) {
+    match c {
+        Zero => refl,
+        Succ(m) => j(sym(add_iter(m)), λ y p => Aff::then_compose(Leaf(1, PHere), y) = Some(Leaf(Succ(m), PHere)), refl),
+    }
+}
+
+// `add` over any run: the fold is the run around the fold at its tail, the
+// kernel's cheapest case (eval/runs.rs, the successor algebra).
+theorem add_over_run(z, x: Tm, zc: z.Lc(0), xc: x.Lc(0), c: Nat):
+        NRec(z, add_step(), NRun(c, x)).Joins(NRun(c, NRec(z, add_step(), x))) {
+    Tm::fold_affine(add_step(), trivial, trivial, 8, Leaf(1, PHere), refl, z, x, zc, xc, c, Leaf(c, PHere), add_iter(c))
+}
+
+// The window over two successors, at an open base and tail.
+theorem window_over_two(z, x: Tm, zc: z.Lc(0), xc: x.Lc(0)):
+        NRec(z, window_step(), NRun(2, x)).Joins(SPair(NRun(1, SProj(PFst, NRec(z, window_step(), x))),
+                                                       NRun(1, SProj(PSnd, NRec(z, window_step(), x))))) {
+    Tm::fold_affine(window_step(), And(trivial, trivial), And(trivial, trivial), 8, Branch(Leaf(1, path1(PSnd)), Leaf(0, path1(PFst))), refl,
+        z, x, zc, xc, 2, Branch(Leaf(1, path1(PFst)), Leaf(1, path1(PSnd))), refl)
+}
+
+// Peeled: the innermost step is taken as written.
+theorem split_over_run(z, x: Tm, zc: z.Lc(0), xc: x.Lc(0), c: Nat):
+        NRec(z, split_step(), NRun(Succ(c), x))
+            .Joins(NRun(c, App(App(split_step(), x), NRec(z, split_step(), x)))) {
+    Tm::fold_affine_peeled(split_step(), And(trivial, And(trivial, trivial)), And(trivial, And(trivial, trivial)),
+        8, Leaf(1, PHere), refl, z, x, zc, xc, c, Leaf(c, PHere), add_iter(c))
+}
+
+// Synchronous: `min` cancels the common prefix of two runs, one successor
+// per pair; the counter without successors cancels to nothing.
+theorem min_over_runs(z, t, x: Tm, zc: z.Lc(0), tc: t.Lc(0), xc: x.Lc(0), m, a, b: Nat):
+        App(NRec(z, min_step(), NRun(a + m, t)), NRun(b + m, x))
+            .Joins(NRun(1 * m, App(NRec(z, min_step(), NRun(a, t)), NRun(b, x)))) {
+    Tm::fold_sync(min_step(), And(trivial, And(And(trivial, trivial), trivial)),
+        And(trivial, And(And(trivial, trivial), trivial)),
+        8, 1, refl, z, t, x, zc, tc, xc, m, a, b)
+}
+
+theorem drop_over_runs(z, t, x: Tm, zc: z.Lc(0), tc: t.Lc(0), xc: x.Lc(0), m, a, b: Nat):
+        App(NRec(z, drop_step(), NRun(a + m, t)), NRun(b + m, x))
+            .Joins(NRun(0 * m, App(NRec(z, drop_step(), NRun(a, t)), NRun(b, x)))) {
+    Tm::fold_sync(drop_step(), And(trivial, And(And(trivial, trivial), trivial)),
+        And(trivial, And(And(trivial, trivial), trivial)),
+        8, 0, refl, z, t, x, zc, tc, xc, m, a, b)
+}
+
+// The model's own evaluator agrees at literals: the unary fold of `add`
+// over a run of three at zero is three successors.
+theorem add_run_literal(): Tm::whnf(12, NRec(NZero, add_step(), NRun(3, NZero)))
+        = Some(NSucc(NRec(NZero, add_step(), NRun(2, NZero)))) { refl }

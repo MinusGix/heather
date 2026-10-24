@@ -93,7 +93,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `hih-self` | heather-in-heather | open | A first component of Heather itself (candidate: the lexer, on the parser library) is written in Heather and compiled natively. |  |
 | `hih-kernel-model` | heather-in-heather | open | A model of the kernel's reduction in Heather states the facts its accelerations rely on, and proves them, so that an optimisation checked nightly can be promoted to proven (`docs/kernel-model-design.md`). |  |
 | `hih-km-probe` | heather-in-heather | done | The fold classifier's probe is sound: a run that is not blocked on a probe variable is, at the same fuel, the run of every instance (`Tm::whnf_inst`, `Tm::whnf_inst_settled`). | hih-kernel-model |
-| `hih-km-runs` | heather-in-heather | open | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs. | hih-kernel-model |
+| `hih-km-runs` | heather-in-heather | done | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs (`Tm::fold_affine`, `Tm::fold_affine_peeled`, `Tm::fold_sync`). | hih-kernel-model |
 | `tac-in-heather` | tactics | open | A tactic is written in Heather through a host elaboration interface, and one tactic that lives in Rust today has a Heather counterpart. |  |
 | `tac-host-interface` | tactics | open | Heather code can read a goal, build a checked term, and report failure with its search state, through one scoped host interface. | tac-in-heather |
 | `tac-first-port` | tactics | done | One tactic that lives in Rust today (candidate: `split_all` or `monoid` normalisation) has a Heather implementation that closes the same goals. | tac-in-heather |
@@ -577,3 +577,6 @@ separate machines do not slow each other's tests.
   checked nightly (`docs/testing-architecture-design.md` §5), and none of the
   area's milestones modelled the kernel. The first round proves the fold
   classifier's probe argument (`docs/kernel-model-design.md`).
+- 2026-10-24: `hih-km-runs` done (`lib/kernel_model/kernel_runs.hthr`): the
+  affine and synchronous run folds join the unary fold in the model with
+  pairs, projections and runs (`docs/kernel-model-design.md` §7).
