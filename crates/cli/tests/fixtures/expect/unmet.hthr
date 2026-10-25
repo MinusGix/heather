@@ -1,0 +1,24 @@
+// Every way a directive goes unmet, each reported where it is.
+// expect-error(kernel)
+theorem checks(n: Nat): n = n { refl }
+
+// expect-error: something else entirely
+theorem wrong_reason(n: Nat): n = Succ(n) { refl }
+
+// expect-error(mismatch)
+fn a_slip() -> Nat { missing }
+
+// expect-error
+theorem reasonless(n: Nat): n = n { refl }
+
+// expect-error(typo)
+theorem unknown_kind(n: Nat): n = n { refl }
+
+theorem unmarked(n: Nat): n = Succ(n) { refl }
+
+fn holds_one() -> Nat {
+    // expect-error: inside
+    0
+}
+
+// expect-error(kernel)

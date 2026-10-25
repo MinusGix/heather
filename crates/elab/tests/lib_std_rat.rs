@@ -73,15 +73,16 @@ fn lemmas_are_cited_at_their_own_statements() {
     }
 }
 
-/// Scaling preserves order only by a non-negative factor. The elaborator
-/// lets this citation through and the kernel refuses it
-/// (`issues/library-tests-as-theorems.md` logs the gap).
+/// Scaling preserves order only by a non-negative factor: `z.le_refl()` is
+/// `z <= z`, not `0 <= z`. The parameter's type mentions the implicit `z`,
+/// which the expected type solves; the argument's own type is still compared
+/// with it (`issues/implicit-argument-mismatch-reaches-kernel.md`).
 #[test]
 fn scaling_needs_a_sign() {
     refused(
         "rat_scale_without_sign",
         "theorem bad(x, y, z: Rat, h: x <= y): x * z <= y * z { Rat::mul_le_mono_r(h, z.le_refl()) }",
-        Refusal::Kernel,
+        Refusal::Mismatch,
     );
 }
 

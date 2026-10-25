@@ -117,6 +117,20 @@ pub struct ImportItem {
 }
 
 impl Item {
+    /// The item's source extent, from its keyword to its closing token.
+    pub fn span(&self) -> Span {
+        match self {
+            Item::Decl(x) => x.span,
+            Item::Inductive(x) => x.span,
+            Item::Class(x) => x.span,
+            Item::Instance(x) => x.span,
+            Item::Designation(x) => x.span,
+            Item::Datarepr(x) => x.span,
+            Item::Impl(x) => x.span,
+            Item::Import(x) => x.span,
+        }
+    }
+
     /// The `fn`/`theorem` declaration, panicking otherwise. For tests and
     /// callers that have just constructed the item.
     pub fn into_decl(self) -> Decl {

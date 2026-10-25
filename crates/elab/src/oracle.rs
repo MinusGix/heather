@@ -161,7 +161,21 @@ impl SemanticOracle {
                 Ok(Val::TmEmpty { level }) => return Ok(Term::TmEmpty { level: level.clone() }),
                 Ok(Val::TmSEmpty { level }) => return Ok(Term::TmSEmpty { level: level.clone() }),
                 Err(OutOfFuel) => return Err(OutOfFuel),
-                Ok(_) => false,
+                // A constructor with fields: read its top layer off the
+                // value, as `whnf_type` reads a former's. A reduct through a
+                // family's transports (`J` along a stored-children equation,
+                // docs/iwf-infinitary-design.md §7) is a constructor whose
+                // fields the reducer would reach only by copying those
+                // transports' motives at every step
+                // (issues/elab-whnf-family-transport-cost.md).
+                Ok(canonical) => match Readback::new(gamma).term_head(canonical) {
+                    Some(read) => {
+                        #[cfg(debug_assertions)]
+                        crate::readback::verify_term(term, gamma, defs, self.fuel, &read);
+                        return Ok(read);
+                    }
+                    None => false,
+                },
             };
             if stuck {
                 let budget = self.fuel.min(STUCK_SPELLING_STEPS);

@@ -5905,6 +5905,17 @@ impl Elaborator {
     /// machine: one evaluation per side, sharing what it computes, where
     /// spelling the side's constructor by reduction copies every intermediate
     /// term.
+    /// Whether `equation`, a proof of an `=` at a declared inductive, relates
+    /// two different constructors by computation: the sides' tags read off
+    /// their values, as `absurd` reads them. `split_all` closes a case whose
+    /// equation this refutes rather than hand its leaf a goal that no run of
+    /// the program reaches (issues/split-all-nested-scrutinee-kernel-reject.md).
+    pub(crate) fn refuted_by_computation(&self, cx: &Cx, equation: &Expr) -> bool {
+        let Ok(written) = self.equation_as_written(cx, equation, "absurd") else { return false };
+        let Some(ind) = self.tag_of(&written.1) else { return false };
+        matches!(self.ctor_indices(cx, &ind, &written, equation.span), Ok(Some((i, j))) if i != j)
+    }
+
     fn ctor_indices(&self, cx: &Cx, ind: &Inductive, equation: &Equation, span: Span) -> R<Option<(usize, usize)>> {
         let (_, sty, slvl, lhs, rhs) = equation;
         let mut mcx = cx.clone();
@@ -5950,6 +5961,11 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let written = self.equation_as_written(cx, arg, "absurd")?;
+        // An `IWf`-route family, either form: its tag is in the label, under
+        // the family's own eliminator (docs/iwf-infinitary-design.md §13).
+        if let Some((ind, fam)) = self.iwf_of_at(cx, &written.1) {
+            return self.fam_absurd(cx, &ind, &fam, written, expected, expected_lvl, span);
+        }
         if matches!(written.1, Type::Nat) {
             let (proof, _, _, lhs, rhs) = written;
             let (lhs, rhs) = (self.whnf_tm(cx, &lhs, arg.span)?, self.whnf_tm(cx, &rhs, arg.span)?);
@@ -6055,6 +6071,9 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let equation = self.equation(cx, arg, "inj")?;
+        if let Some((ind, fam)) = self.iwf_of_at(cx, &equation.1) {
+            return self.fam_inj(cx, &ind, &fam, k, equation, span);
+        }
         let (proof, ind, sty, slvl, lhs, rhs, (i, la), (j, rb)) =
             self.declared_equation(cx, equation, "inj", true, arg.span)?;
         if i != j {

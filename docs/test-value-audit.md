@@ -365,6 +365,43 @@ out to be the only thing a block adds over a comment directive, the
 directive can carry it (`// expect-error(guards Rat::inv_mul): …`) and the
 language does not change.
 
+**As built (2026-10-25).** The runner is the checker: `heather check
+--expectations` (`crates/cli/src/expect.rs`). A directive line directly
+above a declaration (doc comments may sit between) names the reason:
+
+```heather
+// expect-error: already has an instance   (the error's text contains it)
+// expect-error(kernel)                    (the kernel refused it)
+// expect-error(mismatch)                  (`… is expected here`)
+// expect-error(kernel): NotConvertible    (both)
+```
+
+The vocabulary is §4.4's, with the same guard: an incidental slip (an
+unbound name, a missing module, an ambiguity) meets a directive only when a
+fragment names it. Several lines above one declaration must all hold of its
+one error. A bare `// expect-error`, an unknown kind, or a directive inside
+a declaration or with nothing below it is itself an error. The checker
+already recovers per declaration (a refused one registers nothing), so a
+corpus file is one ordinary check, and each error is attributed to the
+declaration whose span holds it. A declaration is refused at most once, so
+a second error inside one, or an error outside every declaration, is never
+taken as a directive's answer.
+
+Plain `heather check` does not read directives: an unflagged check keeps
+meaning that every declaration checks, as it does beside `--cache`. A file
+with directives fails it and says how many it holds and which flag reads
+them. A green flagged line counts what it matched (`ok — 16 expected
+refusals matched`).
+
+The corpus lives in `lib/_tests`, beside the probes of the module a refusal
+is about, so the whole-library gate is the runner and passes the flag. A
+module with directives always re-elaborates, since only an error-free module
+is imaged; that is also right, as a refusal must be re-derived by the
+compiler under test. `tests/hthr/<area>/` stays the home for elaborator
+behaviour that is about no library module, created when its first test
+moves. `failing` blocks are [[failing-blocks-in-language]]; `library_for`
+(§4.2) is [[test-closures-by-import]].
+
 ### 4.4 Refusals carry a reason
 
 Implemented: `support::assert_refused(e, name, src, Refusal::Kernel |
@@ -422,7 +459,7 @@ gets stronger should be a choice, not an accident.
 | the PR changes | add | do not add |
 |---|---|---|
 | **a library module** (`lib/` only) | Theorems in the module when a client would cite them. Probes at specific values and contract restatements in `lib/_tests`. `¬` theorems for false claims a reader might expect. A showcase client when the module is meant for clients. | A Rust test file. Specifically: a "module checks" test (once §4.1 lands), a kit list, `refl` examples in Rust strings, refusals of false claims. |
-| **elaborator behaviour** (a feature, a lowering, a resolution rule) | Positive cases as `.hthr` (Rust `ok(…)` until §4.3 exists, grouped into one source per behaviour). Refusals with their reason. The generated-term axes. | Bare `is_err()`. A positive case per Rust fn when one source can hold several declarations. |
+| **elaborator behaviour** (a feature, a lowering, a resolution rule) | Positive cases as `.hthr`, and refusals as `// expect-error` declarations beside them (§4.3): in `lib/_tests` when the behaviour is about a library module, else one source per behaviour. The generated-term axes. | Bare `is_err()`. A positive case per Rust fn when one source can hold several declarations. |
 | **a tactic or automation** | Corpus cases for what it proves. Refusals with reasons for what it must not. Structural assertions when the route matters (which rule fired, what term was emitted). | A refusal that only shows the tactic failed on a false goal: that is a `¬` theorem, or nothing. |
 | **the kernel** | Property and differential tests in Rust, citing the lemma. Later, theorems about the kernel model. | — |
 | **a generator or pipeline** (certgen, compile-x86, export) | Mutation controls that go *through* the proof and are refused by the kernel. A determinism or uniqueness theorem where one exists. | A refusal of the same term at a changed statement presented as non-vacuity. |
@@ -469,14 +506,48 @@ is what one layer down produces. A bare ordered-field "`≤` is not `<`"
 refusal is a failed instance search, not a mismatch. And several vacuity
 controls are refused by the kernel, not the elaborator: most of `CReal`'s
 (its conversion leaves sequence comparisons to the kernel), and three whose
-argument mismatches a parameter that mentions an implicit, which is an
-elaborator gap
-(`issues/implicit-argument-mismatch-reaches-kernel.md`).
+argument mismatches a parameter that mentions an implicit, which was an
+elaborator gap, since closed: two now pin the mismatch and the `CReal` one a
+located note (`issues/implicit-argument-mismatch-reaches-kernel.md`).
 
-Still to do: the interaction-tree, list, tree, bitvec, text, memory and
-setoid families. `lib_algebra.rs` is the traits feature's corpus over the
-library rather than a library test, so it waits for the `.hthr` corpus
-(§4.3); its refusals already carry reasons.
+Round three did step 3 for the remaining library families: the
+interaction trees (`itree`, its traces and simulations, the coinductive
+trees, their bridge and `Eutt`), `list`, `list_algos`, `bounded_list`,
+`certified_lookup`, `tree`, `bitvec`, `string`, `utf8`, `memory`,
+`location`, `nat`'s evidence rules and the kernel model's reduction. Their
+probes are eighteen `lib/_tests` modules. `lib_list_algos.rs`,
+`lib_std_certified_lookup.rs` and `lib_std_location.rs` went entirely; the
+rest keep refusals with reasons, incompleteness pins (each labelled, §4.6),
+mutation controls that need a proof to mutate, diagnostics that name a goal,
+and the structural and cost tests (`list`'s literal lowering, `bitvec`'s
+machine-width costs and depth budget). Three more client showcases
+(`itree_client`, `itree_refinement_client`, `memory_client`) moved to the
+CLI tier. The wrong values became `¬` theorems, told apart where the type
+has no `Decide` instance by a function into `Nat` and `omega`
+(`mirror_moves`, `overlap_does_not_read_back`, `le_is_not_be`,
+`x80_is_two_bytes`, `refused_is_not_ok`). Pinning reasons found one
+refusal passing for an incidental reason: `bitvec`'s "the value's bound is
+not `trivial`" control wrote an unqualified `toNat`, so `<` had no meaning
+at its carrier and the refusal never reached the claim. And a `decide`
+refusal at a string goal spells the literal's kernel encoding
+(`issues/decide-refusal-spells-string-literal-encoding.md`).
+`lib_setoid_mergeable.rs` stays a Rust file: it tests the relational-context
+generator through its Rust API and the elaborator's subtype and `calc`
+routes, not the library's facts. Its eighteen bare refusals now name their
+reasons.
+
+Then step 5, the corpus (§4.3), and with it `lib_algebra.rs`, the traits
+feature's corpus over the library: `lib/_tests/std/algebra/algebra_tests.hthr`
+holds its probes (96 declarations that check) and its 16 refusals as `// expect-error` declarations,
+each beside the positive it controls, and the Rust file keeps the two tests
+of the derived-instance table, which Heather cannot state. Pinning the bare
+refusals found two reasons that differ from what the comments said:
+`sum_all` at `Bool` is refused by implicit inference (its `Monoid<A>(+)`
+constraint is not solved from the argument), not by "`+` means nothing",
+which `x + y` at `Bool` does say; and a carrier with no `Monoid` reports the
+class lemma's own goal `Monoid<A>(op)`, not `Monoid<Colour>(first)`. The
+library Rust files' other refusals can move to directives as their files are
+touched.
 
 In order of value per effort:
 
@@ -496,6 +567,7 @@ In order of value per effort:
 4. **`library_for`** (§4.2). Medium. It touches the image keys, so the
    sentinel's exact lane should see one run of it.
 5. **The `.hthr` corpus runner** (§4.3). Medium. Then migrate lazily.
+   Done 2026-10-25.
 6. **`failing … guards` blocks in the language**, living in `lib/_tests`
    by convention (§4.3). Decide after the corpus shows how often the
    directive is used, and whether a `guards` directive is enough.
@@ -512,4 +584,6 @@ the library.
 - `issues/library-whole-check-gate.md`: §4.1, with `elf64_load`.
 - `issues/refusal-tests-pin-their-reason.md`: §3.6, §4.4.
 - `issues/library-tests-as-theorems.md`: §3.2–3.5, §4.5 (`lib/_tests`), step 3 of §6.
-- `issues/hthr-test-corpus.md`: §3.3, §4.2, §4.3, the `failing` question.
+- `issues/hthr-test-corpus.md`: §3.3, §4.3 (closed 2026-10-25).
+- `issues/test-closures-by-import.md`: §4.2.
+- `issues/failing-blocks-in-language.md`: the `failing` question of §4.3.

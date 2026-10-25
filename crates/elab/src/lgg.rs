@@ -76,9 +76,9 @@ pub(crate) struct Mismatch {
     /// *type* position, where a caller that wants to spell them has a `Type`
     /// and not a `Term`.
     pub at: Option<(Term, Term)>,
-    /// Binders between the goal's root and the stopping node, plus the
-    /// abstraction's own `z` — what [`crate::strengthen_tm`] must drop for
-    /// [`Self::at`] to be readable in the goal's own context.
+    /// Binders between the goal's root and the stopping node — what
+    /// [`crate::strengthen_tm`] must drop for [`Self::at`] (scoped in `Γ`
+    /// plus those binders) to be readable in the goal's own context.
     pub depth: u32,
     /// The degenerate case: the proof's endpoints are the same term, so the
     /// only congruence is the constant one and the goal's sides had to agree
@@ -162,14 +162,52 @@ pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, M
         s: s.clone(),
         t: t.clone(),
         match_witness: true,
+        conv: None,
         witness: Vec::new(),
         path: Vec::new(),
     };
-    // Both sides are weakened into `Γ, z` *first*, so every subterm the walk
-    // meets is already in the body's scope and the pieces it keeps need no
-    // renumbering. The witness for depth `k` is correspondingly `s` weakened
-    // by `k + 1`.
-    lgg.tm(&x.shift_local(1), &y.shift_local(1), 0)
+    // The sides stay in `Γ` and only what the walk *keeps* is weakened into
+    // `Γ, z`: a goal's reduct can be a large tree over a shared graph, and
+    // weakening it whole up front cost more than the rest of `cong`
+    // (issues/elab-whnf-family-transport-cost.md), where the walk itself
+    // stops at the first difference.
+    lgg.tm(x, y, 0)
+}
+
+/// [`lgg_body`] with the witness tested up to conversion: at a node where
+/// the two sides differ and are not syntactically `(s, t)`, `conv` may still
+/// make it the hole, if the node is under none of the walk's binders and the
+/// sides convert to `(s, t)` there (in `Γ`, where the sides are scoped: they
+/// are reducts that can be very large, and are never weakened or
+/// strengthened to be compared). A difference anywhere else still stops the
+/// walk.
+///
+/// What it is for: a goal reduced through two functions' eliminators has, in
+/// place of the endpoints' calls, their reducts — and on a family a value
+/// built by one function and taken apart by another carries annotations
+/// spelled with the constructor's pieces as each function wrote them, so the
+/// reducts are convertible to the endpoints and never syntactically equal to
+/// them (`issues/cong-inference-through-iwf-w-children.md`). `conv` is asked
+/// only at differing nodes, top-down, so in the common case once per side.
+pub(crate) fn lgg_body_up_to_conversion(
+    x: &Term,
+    y: &Term,
+    s: &Term,
+    t: &Term,
+    conv: &dyn Fn(&Term, &Term) -> bool,
+) -> Result<Term, Mismatch> {
+    if s == t {
+        return lgg_body(x, y, s, t);
+    }
+    let mut lgg = Lgg {
+        s: s.clone(),
+        t: t.clone(),
+        match_witness: true,
+        conv: Some(conv),
+        witness: Vec::new(),
+        path: Vec::new(),
+    };
+    lgg.tm(x, y, 0)
 }
 
 /// The first position at which two terms differ **structurally** — implicit
@@ -186,31 +224,35 @@ pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, M
 /// is a contradiction on its face without this
 /// (issues/lgg-error-hides-the-implicit.md).
 ///
-/// Only [`Mismatch::path`] and [`Mismatch::sides`] mean anything here — the
-/// `{:#}` rendering is exactly those two. [`Mismatch::depth`] and
-/// [`Mismatch::at`] are scoped for [`lgg_body`]'s `Γ, z`, which this walk does
-/// not build (there is no abstraction and so no weakening), so a caller that
-/// reads them gets a term scoped for a context that does not exist.
+/// [`Mismatch::path`] and [`Mismatch::sides`] are what the `{:#}` rendering
+/// reads; [`Mismatch::at`] and [`Mismatch::depth`] are scoped as for
+/// [`lgg_body`], in `Γ` plus the binders walked.
 pub(crate) fn first_difference(x: &Term, y: &Term) -> Option<Mismatch> {
     let mut lgg = Lgg {
         s: Term::Zero,
         t: Term::Zero,
         match_witness: false,
+        conv: None,
         witness: Vec::new(),
         path: Vec::new(),
     };
     lgg.tm(x, y, 0).err()
 }
 
-struct Lgg {
+struct Lgg<'c> {
     s: Term,
     t: Term,
     /// Whether [`Self::is_hole`] may answer `true`. Off in
     /// [`first_difference`], where there is no witness pair and every
     /// difference is meant to stop the walk.
     match_witness: bool,
-    /// `witness[k]` is `(s, t)` weakened into `Γ, z` plus `k` further
-    /// binders. Memoized because the walk asks for it at every node.
+    /// [`lgg_body_up_to_conversion`]'s witness test: given the two sides at
+    /// a node under none of the walk's binders (scoped in `Γ`), whether they
+    /// are `(s, t)` up to conversion there.
+    conv: Option<&'c dyn Fn(&Term, &Term) -> bool>,
+    /// `witness[k]` is `(s, t)` weakened past the `k` binders walked, the
+    /// sides' scope there. Memoized because the walk asks for it at every
+    /// node.
     witness: Vec<(Term, Term)>,
     /// The formers of the nodes currently being walked, outermost first —
     /// pushed on the way down and popped only on *success*, so at a failure it
@@ -291,7 +333,7 @@ fn former_ty(t: &Type) -> &'static str {
     }
 }
 
-impl Lgg {
+impl Lgg<'_> {
     fn is_hole(&mut self, x: &Term, y: &Term, k: u32) -> bool {
         if !self.match_witness {
             return false;
@@ -299,7 +341,7 @@ impl Lgg {
         while self.witness.len() as u32 <= k {
             let i = self.witness.len() as u32;
             self.witness
-                .push((self.s.shift_local(i + 1), self.t.shift_local(i + 1)));
+                .push((self.s.shift_local(i), self.t.shift_local(i)));
         }
         let (sw, tw) = &self.witness[k as usize];
         x == sw && y == tw
@@ -318,7 +360,7 @@ impl Lgg {
             path: self.ancestors(),
             sides: (former_tm(x), former_tm(y)),
             at: Some((x.clone(), y.clone())),
-            depth: k + 1,
+            depth: k,
             endpoints_agree: false,
         })
     }
@@ -328,7 +370,7 @@ impl Lgg {
             path: self.ancestors(),
             sides: (former_ty(x), former_ty(y)),
             at: None,
-            depth: k + 1,
+            depth: k,
             endpoints_agree: false,
         })
     }
@@ -355,7 +397,7 @@ impl Lgg {
     ) -> Result<Option<Rc<Type>>, Mismatch> {
         match (x, y) {
             (Some(x), Some(y)) => Ok(Some(Rc::new(self.ty(x, y, k)?))),
-            (Some(t), None) | (None, Some(t)) => Ok(Some(Rc::clone(t))),
+            (Some(t), None) | (None, Some(t)) => Ok(Some(kept_ty(t, k))),
             (None, None) => Ok(None),
         }
     }
@@ -369,16 +411,17 @@ impl Lgg {
         r
     }
 
-    /// One term node. `x`/`y` are scoped in `Γ, z` plus `k` binders; the
-    /// result is in the same scope, with `Var(k)` wherever the abstraction
-    /// variable was placed.
+    /// One term node. `x`/`y` are scoped in `Γ` plus `k` binders; the
+    /// result is in `Γ, z` plus the same `k`, with `Var(k)` wherever the
+    /// abstraction variable was placed. Every piece kept from a side is
+    /// weakened past `z` as it is kept (agreement, [`kept_ty`]).
     fn tm_at(&mut self, x: &Term, y: &Term, k: u32) -> Result<Term, Mismatch> {
         // Agreement: keep it whole. Nothing inside can need a hole — a hole
         // needs a *difference*, and these subtrees are identical.
         if x == y {
-            return Ok(x.clone());
+            return Ok(x.shift_local_above(1, k));
         }
-        if self.is_hole(x, y, k) {
+        if self.is_hole(x, y, k) || (k == 0 && self.conv.is_some_and(|conv| conv(x, y))) {
             return Ok(Term::Var(LocalVar(k)));
         }
         match (x, y) {
@@ -714,8 +757,8 @@ impl Lgg {
             ) => Ok(Term::Inl {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
-                lhs: Rc::clone(lhs),
-                rhs: Rc::clone(rhs),
+                lhs: kept_ty(lhs, k),
+                rhs: kept_ty(rhs, k),
                 val: Rc::new(self.tm(v1, v2, k)?),
             }),
             (
@@ -724,8 +767,8 @@ impl Lgg {
             ) => Ok(Term::Inl {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
-                lhs: Rc::clone(lhs),
-                rhs: Rc::clone(rhs),
+                lhs: kept_ty(lhs, k),
+                rhs: kept_ty(rhs, k),
                 val: Rc::new(self.tm(v1, v2, k)?),
             }),
             (
@@ -734,8 +777,8 @@ impl Lgg {
             ) => Ok(Term::Inr {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
-                lhs: Rc::clone(lhs),
-                rhs: Rc::clone(rhs),
+                lhs: kept_ty(lhs, k),
+                rhs: kept_ty(rhs, k),
                 val: Rc::new(self.tm(v1, v2, k)?),
             }),
             (
@@ -744,8 +787,8 @@ impl Lgg {
             ) => Ok(Term::Inr {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
-                lhs: Rc::clone(lhs),
-                rhs: Rc::clone(rhs),
+                lhs: kept_ty(lhs, k),
+                rhs: kept_ty(rhs, k),
                 val: Rc::new(self.tm(v1, v2, k)?),
             }),
             (
@@ -754,8 +797,8 @@ impl Lgg {
             ) => Ok(Term::Pair {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
-                fst_ty: Rc::clone(fst_ty),
-                snd_ty: Rc::clone(snd_ty),
+                fst_ty: kept_ty(fst_ty, k),
+                snd_ty: kept_ty(snd_ty, k + 1),
                 fst: Rc::new(self.tm(a1, a2, k)?),
                 snd: Rc::new(self.tm(b1, b2, k)?),
             }),
@@ -765,8 +808,8 @@ impl Lgg {
             ) => Ok(Term::Pair {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
-                fst_ty: Rc::clone(fst_ty),
-                snd_ty: Rc::clone(snd_ty),
+                fst_ty: kept_ty(fst_ty, k),
+                snd_ty: kept_ty(snd_ty, k + 1),
                 fst: Rc::new(self.tm(a1, a2, k)?),
                 snd: Rc::new(self.tm(b1, b2, k)?),
             }),
@@ -780,8 +823,8 @@ impl Lgg {
             ) => Ok(Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
-                fst_ty: Rc::clone(fst_ty),
-                snd_ty: Rc::clone(snd_ty),
+                fst_ty: kept_ty(fst_ty, k),
+                snd_ty: kept_ty(snd_ty, k + 1),
                 pair: Rc::new(self.tm(p1, p2, k)?),
             }),
             (
@@ -794,8 +837,8 @@ impl Lgg {
             ) => Ok(Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
-                fst_ty: Rc::clone(fst_ty),
-                snd_ty: Rc::clone(snd_ty),
+                fst_ty: kept_ty(fst_ty, k),
+                snd_ty: kept_ty(snd_ty, k + 1),
                 pair: Rc::new(self.tm(p1, p2, k)?),
             }),
             // An annotated intro against an unannotated one keeps the
@@ -1136,12 +1179,12 @@ impl Lgg {
             (Term::App { fun: f1, dom_level, cod_level, dom, cod, arg: a1 }, Term::AppAt { fun: f2, arg: a2 }) => {
                 let fun = Rc::new(self.tm(f1, f2, k)?);
                 let arg = Rc::new(self.tm(a1, a2, k)?);
-                Ok(mixed_app(fun, dom_level, cod_level, dom, cod, arg))
+                Ok(mixed_app(fun, dom_level, cod_level, dom, cod, arg, k))
             }
             (Term::AppAt { fun: f1, arg: a1 }, Term::App { fun: f2, dom_level, cod_level, dom, cod, arg: a2 }) => {
                 let fun = Rc::new(self.tm(f1, f2, k)?);
                 let arg = Rc::new(self.tm(a1, a2, k)?);
-                Ok(mixed_app(fun, dom_level, cod_level, dom, cod, arg))
+                Ok(mixed_app(fun, dom_level, cod_level, dom, cod, arg, k))
             }
             // Everything else — mismatched heads, differing level or context
             // annotations, and the layer-m code formers this module declines
@@ -1155,7 +1198,7 @@ impl Lgg {
     /// difference in a term it contains.
     fn ty_at(&mut self, x: &Type, y: &Type, k: u32) -> Result<Type, Mismatch> {
         if x == y {
-            return Ok(x.clone());
+            return Ok(x.shift_local_above(1, k));
         }
         match (x, y) {
             (
@@ -1318,8 +1361,15 @@ impl Lgg {
     }
 }
 
+/// A side's annotation kept in the generalization: scoped in `Γ` plus `k`
+/// binders, weakened past `z` under them.
+fn kept_ty(t: &Rc<Type>, k: u32) -> Rc<Type> {
+    Rc::new(t.shift_local_above(1, k))
+}
+
 /// The generalization of an `app` against an `app@`: `app@` unless the
-/// generalized head is a λ, which would not infer.
+/// generalized head is a λ, which would not infer. The annotation is the
+/// `app` side's, at `k` binders.
 fn mixed_app(
     fun: Rc<Term>,
     dom_level: &Level,
@@ -1327,14 +1377,15 @@ fn mixed_app(
     dom: &Rc<Type>,
     cod: &Rc<Type>,
     arg: Rc<Term>,
+    k: u32,
 ) -> Term {
     if matches!(&*fun, Term::Lam { .. }) {
         Term::App {
             fun,
             dom_level: dom_level.clone(),
             cod_level: cod_level.clone(),
-            dom: Rc::clone(dom),
-            cod: Rc::clone(cod),
+            dom: kept_ty(dom, k),
+            cod: kept_ty(cod, k + 1),
             arg,
         }
     } else {
@@ -1486,9 +1537,9 @@ mod tests {
         let e = lgg_body(&lam(var(0)), &lam(var(1)), &var(1), &var(0)).expect_err("no congruence");
         assert_eq!(e.path, vec!["λ", "numeral"]);
         assert_eq!(e.sides, ("variable", "variable"));
-        // Two binders between the goal's root and the stopping node: the
-        // abstraction's own `z` and the λ's.
-        assert_eq!(e.depth, 2);
+        // One binder between the goal's root and the stopping node, the λ's:
+        // the sides are walked in `Γ`, and `z` exists only in the result.
+        assert_eq!(e.depth, 1);
         assert!(e.at.is_some(), "a term position carries its two sides");
         assert!(e.to_string().contains("`λ ▸ numeral`"), "{e}");
     }

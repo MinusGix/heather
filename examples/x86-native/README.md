@@ -46,13 +46,17 @@ instructions. It reflects the source into a FunctionIR program and states:
 - the program's lowering by `lower_program`, with the planner's placement,
   as a literal (`_lowers`, checked by evaluation);
 - that the program evaluates to the source function at any arguments
-  (`_agrees`). It is by `refl` when every match is on a comparison. A test
+  (`_agrees`), proved a function at a time: each function's region,
+  evaluated with its calls answered by the source functions called, is its
+  own source function, and `program_eval_sources` composes them. A
+  function's agreement is by `refl` when every match is on a comparison and
+  it calls nothing. Otherwise the certificate states the function's
+  decision tree in source operations, each call spelled as the call it
+  answers (`_expansion`), equal to the function's region by `refl`
+  (`_expanded`) and to the source by `split_all` (`_expands`): a test
   through a connective or a helper has no conversion that commutes the
-  source's `match` with the program's conditionals, so the certificate
-  states the program's decision tree in source operations (`_expansion`),
-  equal to the program by `refl` (`_expanded`) and to the source by
-  `split_all` (`_expands`). Such a function cannot yet be called by another
-  ([the issue](../../issues/function-ir-verified-decided-callees.md));
+  source's `match` with the program's conditionals, and a callee's source
+  is never unfolded into its caller's proof;
 - the published bytes, a piece at a time (`_bytes`), and the exported
   function's offset (`_entry_at`);
 - and `_returns`, which instantiates the theorem `compiled_returns`. Called
@@ -85,7 +89,7 @@ it does not enable the trusted declaration cache or stale-image replay.
 
 Every `.hthr` here compiles the same way. `branches.hthr` holds nested
 comparisons (`nested_true`, `nested_false`), connectives (`composed`) and a
-`Bool` helper (`either`); the rest are call shapes: a call's result as the
+`Bool` helper (`either`), called by `calls_either`; the rest are call shapes: a call's result as the
 next call's argument (`composition.hthr`), values live across calls
 (`sharing.hthr`, `stack_save.hthr`, `multi_stack_save.hthr`,
 `stack_local.hthr`), a leaf that writes several registers
@@ -96,23 +100,33 @@ inputs.
 
 ## Loops
 
-A recursion on a fuel compiles to a verified loop when it is the exported
-function's result. The helper is `h(fuel: Nat, x…: BitVec(64)) →
-BitVec(64)` with one to four words, matching its fuel `Zero`/`Succ(k)`;
-the `Succ` arm's tail positions either return a word or recurse as
-`after(k, …)`, and the root calls it last as `h(w.toNat(), e…)`. The loop
-runs at most `w` passes; out of fuel it computes the `Zero` arm. The arm
-may not read `k` or the recursion as a value, and a loop under a branch or
-in a called function is refused (`issues/function-ir-loops-anywhere.md`).
+A recursion on a fuel compiles to a verified loop. The helper is
+`h(fuel: Nat, x…: BitVec(64)) → BitVec(64)` with one to four words,
+matching its fuel `Zero`/`Succ(k)`; the `Succ` arm's tail positions either
+return a word or recurse as `after(k, …)`. Each such helper becomes a native
+function of its own, its body the loop, and every call `h(w.toNat(), e…)`
+calls it — under a branch, followed by more work, in a called function, or
+inside another loop's pass. The loop runs at most `w` passes; out of fuel it
+computes the `Zero` arm. The arm may not read `k` or the recursion as a
+value, and a fuel that is no word's `toNat` is refused.
 `loop_triangle.hthr` counts down, `loop_multiply.hthr` keeps an invariant
-word out of the recursion, and `loop_settle.hthr` calls a function in each
-pass and decides on several comparisons.
+word out of the recursion, `loop_settle.hthr` calls a function in each
+pass and decides on several comparisons, and `loop_anywhere.hthr` puts
+loops in each of those places.
 
-The certificate's `_agrees` is no longer one `refl`: `_pass_agrees` states
-that one pass is one unfolding of the source's step (split over the pass's
+The certificate proves the program a function at a time. Each function's
+`_agrees` says that its region, evaluated with every call answered by the
+source function called (`_sources`), is its source function, and the
+library's `program_eval_sources` composes them into the program's. A
+loop's `_agrees` is no longer one `refl`: `_pass_agrees` states that one
+pass is one unfolding of the source's step (split over the pass's
 comparisons by `_pass_cased`), `_base` that the exhausted branch is the
 `Zero` arm, and the library's `loop_eval_agrees_from` lifts both to the
-loop by induction on the fuel.
+loop by induction on the fuel. A function that calls another agrees
+through an *expansion* that spells each call as the call it answers, so its
+proof never unfolds a callee; that is also what lets a caller call a
+function deciding through a connective (`calls_either` in
+`branches.hthr`).
 
 ## Per-function certificates and `build-x86`: burned
 

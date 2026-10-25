@@ -1,0 +1,15 @@
+// Probes of `lib/std/data/bounded_list.hthr`: the stack API computes at
+// closed lists, to a success, an underflow and an overflow. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_bounded_list.rs; the refusal stays there.
+import bounded_list; import list; import logic;
+
+theorem empty_underflows(): pop(empty<Nat>(2)) = Underflow(empty<Nat>(2)) { refl }
+theorem one_push_runs():
+    run([Push(7)], empty<Nat>(1)) = Success(BoundedList(capacity := 1, contents := [7], fit := squash(trivial)))
+{ refl }
+theorem second_push_overflows():
+    run([Push(7), Push(8)], empty<Nat>(1)) = Overflow(BoundedList(capacity := 1, contents := [7], fit := squash(trivial)))
+{ refl }
+theorem receiver_len<A>(xs: BoundedList<A>): xs.len() = bounded_len(xs) { refl }

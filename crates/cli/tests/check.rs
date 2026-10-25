@@ -593,3 +593,48 @@ fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
     assert!(err.contains("--only named `good::nope` that no module of the closure declares"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn expectations_turn_named_refusals_into_a_green_check() {
+    let out = heather(&["check", "--expectations", "expect/met.hthr"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    // The green line counts what it leaned on, so it never reads like a file
+    // where every declaration checked.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "expect/met.hthr: ok — 4 expected refusals matched\n");
+}
+
+#[test]
+fn without_expectations_a_refusal_file_fails_and_says_why() {
+    let out = heather(&["check", "expect/met.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("expect/met.hthr: 4 errors"), "{err}");
+    assert!(
+        err.contains("5 `// expect-error` directives here; `heather check --expectations` reads them"),
+        "{err}"
+    );
+}
+
+#[test]
+fn every_unmet_expectation_is_an_error_where_it_is() {
+    let out = heather(&["check", "--expectations", "expect/unmet.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    for (said, at) in [
+        ("this declaration checks, but `expect-error(kernel)` says it is refused", "unmet.hthr:3:1"),
+        ("not as `expect-error: something else entirely` says; the refusal was:", "unmet.hthr:6:45"),
+        ("(an incidental slip satisfies a directive only when a fragment names it)", "unmet.hthr:9:22"),
+        ("an expectation names its reason", "unmet.hthr:11:1"),
+        ("`typo` is not a refusal kind", "unmet.hthr:14:1"),
+        ("the kernel rejected `unmarked`", "unmet.hthr:17:41"),
+        ("not inside it", "unmet.hthr:20:5"),
+        ("no declaration follows this expectation", "unmet.hthr:24:1"),
+    ] {
+        let found = err.find(said).unwrap_or_else(|| panic!("missing `{said}`:\n{err}"));
+        // The first location after a message is its own.
+        let loc = err[found..].split("--> ").nth(1).unwrap_or("");
+        assert!(loc.starts_with(&format!("expect/{at}\n")), "`{said}` not at {at}:\n{err}");
+    }
+    assert!(err.contains("expect/unmet.hthr: 8 errors"), "{err}");
+}

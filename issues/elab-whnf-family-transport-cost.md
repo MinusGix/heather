@@ -1,0 +1,68 @@
+---
+title: Elaborator whnf through a W-form family's stored-children transport is slow
+status: closed
+labels: [elaboration,performance,indexed-families]
+area: language
+milestone: [math-metatheory]
+created: 2026-10-25
+updated: 2026-10-25
+---
+
+On the `IWf`-on-`W` route (`docs/iwf-infinitary-design.md`), a constructor
+with two or more recursive fields stores its children's trees `k̄` and an
+equation `Id(ρ(k̄); f)`. A `match` arm on it transports along that equation
+(§7, `J₂`), and along the index equation (`J₁`). On a literal constructor
+both proofs are `refl` and the `J`s compute.
+
+`SemanticOracle::whnf_term` reaches the head of such a reduct quickly with
+the value probe. When the head is a constructor, it then respells the
+reduct with the substitution reducer (`reduce::whnf_term_delta`) at full
+fuel, copying the transports' annotation-heavy terms at each step. This is
+the residual [[elab-whnf-copies-straight-continuations]] names for types,
+here for terms.
+
+Measured once, as a shape: a plain `cong` in the `k̄` arm of
+`cp_size`-style induction (`sz(n, cp(n, t)) = sz(n, t)`,
+`crates/elab/tests/iwf_no_confusion.rs`) spends nearly all its time in the
+two whnfs of `cong`'s second attempt, enough to dominate the test binary.
+The same arm with the endpoints stated (`succ_eq(…, cs(m, l))`) needs no
+whnf of the goal. One-child arms are cheaper by more than an order of
+magnitude but are still dominated by the same whnf.
+
+Options:
+
+1. Respell from the value graph rather than re-reducing by substitution
+   (the general fix both issues point at).
+2. Make the transports cheaper to reduce: `J₂` generalizes `CH(g)` and the
+   ih along `Id(ρ(k̄); f)`, so its motive is large. An encoding whose arm
+   reads the children from `k̄` directly would shrink what is copied.
+
+## Log
+
+- 2026-10-25: Filed from the inversion round
+  ([[cong-inference-through-iwf-w-children]]).
+- 2026-10-25: Done, by option 1 and two costs behind it. Measured as
+  shapes on the `RC` arm of `iwf_no_confusion.rs`'s `cs` with plain `cong`
+  (`--timings`, one run each, cold): the item went from tens of seconds to
+  about twice the endpoint-stated proof's time.
+  1. `SemanticOracle::whnf_term` reads a constructor at the probe's head
+     back from the value (`Readback::term_head`, beside the former readback
+     of [[elab-whnf-copies-straight-continuations]]): `Succ`, `refl`,
+     unannotated pairs and injections, `sup`/`sup_f`/`sup_i`, λ. An
+     annotated pair or injection declines (its value does not say which
+     spelling it came from), as does a literal run. A sweep over every
+     `lib/` directory compared each readback with the reducer's reduct:
+     no mismatch; debug builds keep the comparison, sampled
+     (`readback::verify_term`). The goal's whnf fell by more than an order
+     of magnitude.
+  2. Anti-unification weakened both whole sides into `Γ, z` before walking
+     them, a tree-sized copy of a reduct that is a shared graph; it now
+     walks the sides in `Γ` and weakens only what it keeps (`lgg.rs`), and
+     `cong`'s conversion witness compares in `Γ` without shifting anything.
+     `Mismatch::depth` no longer counts `z`.
+  3. The readback's substitution lifted an environment entry once per
+     occurrence under binders; `SubstLocal` now lifts each payload once per
+     depth and shares it.
+  `plain_cong_inside_arms_on_the_w_form` uses plain `cong` in the `k̄` arm.
+  The two-holes `Two` arm of `iwf_infinitary.rs` keeps `add_eq`: one `cong`
+  has one hole.

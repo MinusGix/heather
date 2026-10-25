@@ -1,15 +1,20 @@
-//! Public fixed-width bitvectors and their generic arithmetic/bit-operation
-//! kit. The carrier is exercised at closed and open widths; closed numerals
-//! alone would miss an index or motive that was accidentally specialized.
+//! Public fixed-width bitvectors (`lib/std/bitvec/bitvec.hthr`): the tests
+//! that need the checker. Closed computations, the laws at open values and
+//! widths, the ripple operations against `add`/`sub`/`neg`, and the `¬`
+//! theorems for the wrong values are `lib/_tests/std/bitvec/bitvec_tests.hthr`,
+//! which the whole-library gate checks (`crates/cli/tests/library.rs`;
+//! docs/test-value-audit.md §3.4).
 //!
-//! The fast lane keeps the ungated module check, the width/open-carrier
-//! probe, and the open law kit. The three closed computational cross-products
-//! are stable exhaustive acceptance and use the `slow_acceptance_` prefix.
+//! What is left: costs at machine width (the width, not the magnitude, and
+//! not the result type), whose controls must be refused by conversion and not
+//! by exhausted fuel; the depth budget's refusal; laws cited at statements
+//! they do not prove; and incompleteness pins (§4.6) showing the open laws
+//! are the lemmas' work and not conversion's.
 
-use heather_elab::{ElabError, Elaborator, SemanticImage};
+use heather_elab::{ElabError, SemanticImage};
 use std::sync::{Mutex, OnceLock};
 
-use crate::support;
+use crate::support::{self, Refusal};
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
 
@@ -35,18 +40,6 @@ const MODULES: &[(&str, &str)] = &[
 
 fn run(extra: &str) -> Result<(), String> {
     let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    if extra.is_empty() {
-        // The ungated front-to-back check of the module itself: deliberately
-        // source-only, so the full suite still checks this exact prefix
-        // against the real kernel once.
-        let mut e = Elaborator::with_prelude().expect("prelude");
-        for &(name, src) in MODULES {
-            if let Err(err) = e.elab_module_source(name, src) {
-                return Err(format!("{name}: {}", err.render(src)));
-            }
-        }
-        return Ok(());
-    }
     // Every probe forks a fresh elaborator from one kernel-checked semantic
     // image of the prefix instead of re-elaborating nine modules per case.
     let mut e = BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator();
@@ -69,12 +62,11 @@ fn run(extra: &str) -> Result<(), String> {
 
 fn ok(src: &str) { run(src).unwrap_or_else(|e| panic!("expected this to check: {e}")); }
 
-fn bad(src: &str) {
-    assert!(run(src).is_err(), "expected this to be refused:\n{src}");
+fn refused(src: &str, why: Refusal) {
+    let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut e = BASE.get_or_init(|| support::semantic_test_base(MODULES).semantic_image()).elaborator();
+    support::assert_refused(&mut e, "probe", &format!("import bitvec;\nimport bool;\nimport logic;\n{src}"), why);
 }
-
-#[test]
-fn the_bitvec_module_checks() { ok(""); }
 
 /// Use the public record and its generated type code too: a synthetic Vec
 /// alone misses the cost of unfolding library result types during probing.
@@ -114,7 +106,7 @@ fn valuation_lookup_dispatch_cost_does_not_follow_result_width() {
         assert_eq!(count(201), count(250), "the default arm must stop dispatch");
     }
     let refusal = "import bitvec; import lookup_setup; theorem wrong(values: (width: Nat) -> Nat -> BitVec(width)): lookup(values)(64, 51) = values(64, 50) { refl }";
-    assert!(e.elab_module_source("lookup_wrong", refusal).is_err(), "wrong port accepted");
+    support::assert_refused(&mut e, "lookup_wrong", refusal, Refusal::Kernel);
 }
 
 /// `from_bits(64, [...])` spelling `value`, least-significant bit first — an
@@ -208,190 +200,40 @@ theorem open_low_bit(x: Nat): @BitVec::head_bit(7, @BitVec::ofNat(8, Succ(Succ(x
     assert!(msg.contains("NotConvertible"), "{msg}");
 }
 
+/// Incompleteness pins: at an open vector, `x ⊕ x = 0` and the `ofNat ∘ toNat`
+/// section are theorems (`xor_self`, `ofNat_toNat`), not conversions, and the
+/// two definitions of `add` meet only through `iter_add_eq_add`.
 #[test]
-fn widths_include_zero_machine_sizes_and_a_neutral() {
-    ok(r#"
-fn w0() -> BitVec(0) { @BitVec::zero(0) }
-fn w1() -> BitVec(1) { @BitVec::one(1) }
-fn w8() -> BitVec(8) { @BitVec::zero(8) }
-fn w16() -> BitVec(16) { @BitVec::all_ones(16) }
-fn w32() -> BitVec(32) { @BitVec::complement(32, @BitVec::zero(32)) }
-fn w64() -> BitVec(64) { @BitVec::shift_left(64, @BitVec::one(64), 63) }
-fn neutral(n: Nat, x, y: BitVec(n)) -> BitVec(n) {
-    @BitVec::bxor(n, @BitVec::add(n, x, y), @BitVec::shift_right(n, @BitVec::band(n, x, y), n))
-}
-theorem z0(): w0() = @BitVec::from_bits(0, []) { refl }
-theorem z1(): @BitVec::toNat(1, w1()) = 1 { refl }
-"#);
+fn the_open_laws_are_not_refl() {
+    refused("theorem fake(n: Nat, x: BitVec(n)): @BitVec::bxor(n, x, x) = @BitVec::zero(n) { refl }", Refusal::Kernel);
+    refused("theorem fake(n: Nat, x: BitVec(n)): @BitVec::ofNat(n, @BitVec::toNat(n, x)) = x { refl }", Refusal::Kernel);
+    refused(
+        "theorem not_by_computation(n: Nat, x, y: BitVec(n)): @BitVec::iter_add(n, x, y) = @bitvec::BitVec::add(n, x, y) { refl }",
+        Refusal::Kernel,
+    );
 }
 
+/// Laws cited at statements they do not prove: the value's bound is not
+/// `True` at an open width, commutativity is not absorption, and the ripple's
+/// equation keeps its operands in order.
 #[test]
-fn slow_acceptance_bitwise_shape_and_conversion_compute() {
-    ok(r#"
-fn five() -> BitVec(3) { @BitVec::from_bits(3, [True, False, True]) }
-theorem value(): @BitVec::toNat(3, five()) = 5 { refl }
-theorem not5(): @BitVec::complement(3, five()) = @BitVec::from_bits(3, [False, True, False]) { refl }
-theorem and5(): @BitVec::band(3, five(), @BitVec::from_bits(3, [True, True, False])) =
-                @BitVec::from_bits(3, [True, False, False]) { refl }
-theorem or5(): @BitVec::bor(3, five(), @BitVec::from_bits(3, [False, True, False])) =
-               @BitVec::from_bits(3, [True, True, True]) { refl }
-theorem xor5(): @BitVec::bxor(3, five(), @BitVec::from_bits(3, [True, True, False])) =
-                @BitVec::from_bits(3, [False, True, True]) { refl }
-theorem wraps_construct(): @BitVec::toNat(8, @BitVec::ofNat(8, 300)) = 44 { refl }
-theorem signed_minus_one(): @BitVec::toInt(4, @BitVec::ofNat(4, 15)) = NegSucc(0) { refl }
-fn equal_byte(a, b: BitVec(8)) -> Bool {
-    match @bitvec::BitVec::eq_dec(8, a, b) { Inl(_) => True, Inr(_) => False }
-}
-theorem byte_eq_yes(): equal_byte(@BitVec::ofNat(8, 137), @BitVec::ofNat(8, 137)) = True { refl }
-theorem byte_eq_no(): equal_byte(@BitVec::ofNat(8, 137), @BitVec::ofNat(8, 139)) = False { refl }
-"#);
-    bad("theorem wrong(): @BitVec::toNat(3, @BitVec::from_bits(3, [True, False, True])) = 6 { refl }");
-}
-
-#[test]
-fn slow_acceptance_arithmetic_is_modulo_the_width_and_reports_alu_conditions() {
-    if std::env::var_os("HEATHER_VALUE_METRICS").is_some() {
-        ok(r#"
-theorem carry_bit_machine_width_only():
-    @BitVec::carry_add_bit(64, @BitVec::all_ones(64), @BitVec::one(64)) = True { refl }
-"#);
-    }
-    ok(r#"
-theorem add_wrap(): @BitVec::toNat(4, @BitVec::add(4, @BitVec::ofNat(4, 14), @BitVec::ofNat(4, 3))) = 1 { refl }
-theorem sub_wrap(): @BitVec::toNat(4, @BitVec::sub(4, @BitVec::ofNat(4, 3), @BitVec::ofNat(4, 5))) = 14 { refl }
-theorem neg_wrap(): @BitVec::toNat(4, @BitVec::neg(4, @BitVec::ofNat(4, 1))) = 15 { refl }
-theorem mul_wrap(): @BitVec::toNat(4, @BitVec::mul(4, @BitVec::ofNat(4, 4), @BitVec::ofNat(4, 5))) = 4 { refl }
-theorem carry(): @BitVec::carry_add(4, @BitVec::ofNat(4, 14), @BitVec::ofNat(4, 3)) { trivial }
-theorem borrow(): @BitVec::borrow_sub(4, @BitVec::ofNat(4, 3), @BitVec::ofNat(4, 5)) { trivial }
-theorem ov_add(): @BitVec::signed_overflow_add(4, @BitVec::ofNat(4, 7), @BitVec::ofNat(4, 1)) = True { refl }
-theorem ov_sub(): @BitVec::signed_overflow_sub(4, @BitVec::ofNat(4, 8), @BitVec::ofNat(4, 1)) = True { refl }
-theorem width_zero_add(): @BitVec::add(0, @BitVec::zero(0), @BitVec::zero(0)) = @BitVec::zero(0) { refl }
-theorem carry_bit_yes(): @BitVec::carry_add_bit(4, @BitVec::ofNat(4, 14), @BitVec::ofNat(4, 3)) = True { refl }
-theorem carry_bit_no(): @BitVec::carry_add_bit(4, @BitVec::ofNat(4, 1), @BitVec::ofNat(4, 1)) = False { refl }
-theorem borrow_bit_yes(): @BitVec::borrow_sub_bit(4, @BitVec::ofNat(4, 3), @BitVec::ofNat(4, 5)) = True { refl }
-theorem borrow_bit_no(): @BitVec::borrow_sub_bit(4, @BitVec::ofNat(4, 5), @BitVec::ofNat(4, 3)) = False { refl }
-theorem borrow_bit_machine_width():
-    @BitVec::borrow_sub_bit(64, @BitVec::zero(64), @BitVec::one(64)) = True { refl }
-theorem carry_bit_machine_width():
-    @BitVec::carry_add_bit(64, @BitVec::all_ones(64), @BitVec::one(64)) = True { refl }
-"#);
-    bad("theorem no_carry(): @BitVec::carry_add(4, @BitVec::ofNat(4, 1), @BitVec::ofNat(4, 1)) { trivial }");
-}
-
-#[test]
-fn slow_acceptance_slicing_extension_concat_and_shifts_compute() {
-    ok(r#"
-fn lo() -> BitVec(3) { @BitVec::from_bits(3, [True, False, True]) }
-fn hi() -> BitVec(2) { @BitVec::from_bits(2, [False, True]) }
-theorem cat(): @BitVec::concat(3, 2, lo(), hi()) =
-               @BitVec::from_bits(5, [True, False, True, False, True]) { refl }
-theorem cut(): (@BitVec::concat(3, 2, lo(), hi())).slice(1, 3, 1) =
-               @BitVec::from_bits(3, [False, True, False]) { refl }
-theorem zext(): @BitVec::zero_extend(3, 2, lo()) =
-                @BitVec::from_bits(5, [True, False, True, False, False]) { refl }
-theorem sext(): @BitVec::sign_extend(2, 2, lo()) =
-                @BitVec::from_bits(5, [True, False, True, True, True]) { refl }
-theorem shl(): @BitVec::shift_left(4, @BitVec::ofNat(4, 3), 2) = @BitVec::ofNat(4, 12) { refl }
-theorem shr(): @BitVec::shift_right(4, @BitVec::ofNat(4, 12), 2) = @BitVec::ofNat(4, 3) { refl }
-theorem ashr(): @BitVec::arithmetic_shift_right(4, @BitVec::ofNat(4, 12), 2) = @BitVec::ofNat(4, 15) { refl }
-"#);
-}
-
-#[test]
-fn laws_hold_at_open_values_and_widths() {
-    ok(r#"
-theorem xself(n: Nat, x: BitVec(n)): @BitVec::bxor(n, x, x) = @BitVec::zero(n) { BitVec::xor_self(n, x) }
-theorem add_is_commutative(n: Nat, x, y: BitVec(n)): @BitVec::add(n, x, y) = @BitVec::add(n, y, x) {
-    BitVec::add_comm(n, x, y)
-}
-theorem cancel(n: Nat, x, y: BitVec(n)): @BitVec::sub(n, @BitVec::add(n, x, y), y) = x {
-    BitVec::add_sub_cancel(n, x, y)
-}
-theorem updated(n: Nat, x: BitVec(n), i: Fin(n), b: Bool):
-    @BitVec::get(n, @BitVec::set(n, x, i, b), i) = b { BitVec::get_set_same(n, x, i, b) }
-theorem low(n, m: Nat, x: BitVec(n), y: BitVec(m)):
-    (@BitVec::concat(n, m, x, y)).take_low(n, m) = x { BitVec::split_concat_low(n, m, x, y) }
-theorem high(n, m: Nat, x: BitVec(n), y: BitVec(m)):
-    (@BitVec::concat(n, m, x, y)).drop_low(n, m) = y { BitVec::split_concat_high(n, m, x, y) }
-theorem zround(n, m: Nat, x: BitVec(n)):
-    (@BitVec::zero_extend(n, m, x)).truncate(n, m) = x { BitVec::truncate_zero_extend(n, m, x) }
-theorem sround(n, m: Nat, x: BitVec(Succ(n))):
-    (@BitVec::sign_extend(n, m, x)).truncate(Succ(n), m) = x { BitVec::truncate_sign_extend(n, m, x) }
-theorem ext(n: Nat, x, y: BitVec(n), at: (i: Fin(n)) -> @BitVec::get(n, x, i) = @BitVec::get(n, y, i)):
-    x = y { BitVec::extensionality(n, x, y, at) }
-theorem equality_is_decidable(n: Nat, x, y: BitVec(n)): x = y ∨ x ≠ y {
-    @bitvec::BitVec::eq_dec(n, x, y)
-}
-theorem value_round_trip(n: Nat, x: BitVec(n)): @BitVec::ofNat(n, @BitVec::toNat(n, x)) = x { BitVec::ofNat_toNat(n, x) }
-
-theorem carry_equiv(n: Nat, x, y: BitVec(n)):
-    (@BitVec::carry_add_bit(n, x, y) = True) ↔ @BitVec::carry_add(n, x, y)
-{ BitVec::carry_add_bit_true_iff(n, x, y) }
-
-theorem carry_forward(n: Nat, x, y: BitVec(n),
-    h: @BitVec::carry_add_bit(n, x, y) = True): @BitVec::carry_add(n, x, y)
-{ BitVec::carry_add_of_bit_true(n, x, y, h) }
-
-theorem carry_backward64(x, y: BitVec(64), h: @BitVec::carry_add(64, x, y)):
-    @BitVec::carry_add_bit(64, x, y) = True
-{ BitVec::carry_add_bit_of_carry(64, x, y, h) }
-
-theorem borrow_equiv(n: Nat, x, y: BitVec(n)):
-    (@BitVec::borrow_sub_bit(n, x, y) = True) ↔ @BitVec::borrow_sub(n, x, y)
-{ BitVec::borrow_sub_bit_true_iff(n, x, y) }
-
-theorem borrow_forward(n: Nat, x, y: BitVec(n),
-    h: @BitVec::borrow_sub_bit(n, x, y) = True): @BitVec::borrow_sub(n, x, y)
-{ BitVec::borrow_sub_of_bit_true(n, x, y, h) }
-
-theorem borrow_backward64(x, y: BitVec(64), h: @BitVec::borrow_sub(64, x, y)):
-    @BitVec::borrow_sub_bit(64, x, y) = True
-{ BitVec::borrow_sub_bit_of_borrow(64, x, y, h) }
-"#);
-    bad("theorem fake(n: Nat, x: BitVec(n)): @BitVec::bxor(n, x, x) = @BitVec::zero(n) { refl }");
-    // The section is not `refl` at an open vector.
-    bad("theorem fake(n: Nat, x: BitVec(n)): @BitVec::ofNat(n, @BitVec::toNat(n, x)) = x { refl }");
-    // The value's bound and the number's round trip below it; `<` is `nat`'s,
-    // so these import it (nothing here says `add`).
-    ok(r#"
-import nat;
-theorem value_bounded(n: Nat, x: BitVec(n)): @BitVec::toNat(n, x) < nat::Nat::pow(2, n) { BitVec::toNat_lt_pow(n, x) }
-theorem number_round_trip(n, k: Nat, h: k < nat::Nat::pow(2, n)): @BitVec::toNat(n, @BitVec::ofNat(n, k)) = k {
-    BitVec::toNat_ofNat(n, k, h)
-}
-"#);
-    bad("import nat;\ntheorem fake(n: Nat, x: BitVec(n)): toNat(n, x) < nat::Nat::pow(2, n) { trivial }");
-}
-
-#[test]
-fn add_commutativity_covers_width_and_carry_boundaries() {
-    ok(r#"
-theorem width_zero(): @BitVec::add(0, @BitVec::zero(0), @BitVec::zero(0)) = @BitVec::add(0, @BitVec::zero(0), @BitVec::zero(0)) {
-    BitVec::add_comm(0, @BitVec::zero(0), @BitVec::zero(0))
-}
-theorem width_one(): @BitVec::add(1, @BitVec::zero(1), @BitVec::one(1)) = @BitVec::add(1, @BitVec::one(1), @BitVec::zero(1)) {
-    BitVec::add_comm(1, @BitVec::zero(1), @BitVec::one(1))
-}
-theorem machine_width(left, right: BitVec(64)):
-    @BitVec::add(64, left, right) = @BitVec::add(64, right, left) {
-    BitVec::add_comm(64, left, right)
-}
-theorem carry_out():
-    @BitVec::add(8, @BitVec::all_ones(8), @BitVec::one(8)) = @BitVec::add(8, @BitVec::one(8), @BitVec::all_ones(8)) {
-    BitVec::add_comm(8, @BitVec::all_ones(8), @BitVec::one(8))
-}
-theorem unequal_high_bits():
-    @BitVec::add(8, @BitVec::ofNat(8, 128), @BitVec::ofNat(8, 3)) =
-    @BitVec::add(8, @BitVec::ofNat(8, 3), @BitVec::ofNat(8, 128)) {
-    BitVec::add_comm(8, @BitVec::ofNat(8, 128), @BitVec::ofNat(8, 3))
-}
-"#);
-    bad(r#"
-theorem commutativity_is_not_absorption(n: Nat, left, right: BitVec(n)):
-    @BitVec::add(n, left, right) = left {
-    BitVec::add_comm(n, left, right)
-}
-"#);
+fn laws_are_cited_at_their_own_statements() {
+    refused(
+        "import nat;\ntheorem fake(n: Nat, x: BitVec(n)): @BitVec::toNat(n, x) < nat::Nat::pow(2, n) { trivial }",
+        Refusal::Says("`trivial` proves `True`"),
+    );
+    refused(
+        "theorem commutativity_is_not_absorption(n: Nat, left, right: BitVec(n)): @BitVec::add(n, left, right) = left {
+            BitVec::add_comm(n, left, right)
+        }",
+        Refusal::Mismatch,
+    );
+    refused(
+        "theorem misstated(n: Nat, x, y: BitVec(n)): @BitVec::ripple_add(n, x, y) = @bitvec::BitVec::add(n, y, x) {
+            BitVec::ripple_add_eq_add(n, x, y)
+        }",
+        Refusal::Mismatch,
+    );
 }
 
 /// `from_bits(width, [...])` spelling the low `width` bits of `value`,
@@ -401,79 +243,6 @@ fn bit_vector_literal_at(width: u32, value: u128) -> String {
         .map(|i| if (value >> i) & 1 == 1 { "True" } else { "False" })
         .collect();
     format!("@BitVec::from_bits({width}, [{}])", bits.join(", "))
-}
-
-/// The ripple operations are equal to `add`/`sub`/`neg` at an open width and
-/// open operands (issues/bitvec-bounded-add-sub.md), the incoming carry and
-/// borrow mean the extra unit they add or remove, and the transport lemmas
-/// move a fact between the two spellings in both directions. The controls
-/// are a misstated theorem and a bare `refl` between the two definitions at
-/// open operands: the equation is a theorem, not a computation.
-#[test]
-fn ripple_arithmetic_equals_add_and_sub_at_open_widths_and_operands() {
-    ok(r#"
-import nat;
-theorem ripple_add_is_add(n: Nat, x, y: BitVec(n)):
-    @BitVec::ripple_add(n, x, y) = @bitvec::BitVec::add(n, x, y) { BitVec::ripple_add_eq_add(n, x, y) }
-theorem ripple_sub_is_sub(n: Nat, x, y: BitVec(n)):
-    @BitVec::ripple_sub(n, x, y) = @bitvec::BitVec::sub(n, x, y) { BitVec::ripple_sub_eq_sub(n, x, y) }
-theorem ripple_neg_is_neg(n: Nat, x: BitVec(n)):
-    @BitVec::ripple_neg(n, x) = @bitvec::BitVec::neg(n, x) { BitVec::ripple_neg_eq_neg(n, x) }
-theorem iter_add_is_add(n: Nat, x, y: BitVec(n)):
-    @BitVec::iter_add(n, x, y) = @bitvec::BitVec::add(n, x, y) { BitVec::iter_add_eq_add(n, x, y) }
-theorem iter_sub_is_sub(n: Nat, x, y: BitVec(n)):
-    @BitVec::iter_sub(n, x, y) = @bitvec::BitVec::sub(n, x, y) { BitVec::iter_sub_eq_sub(n, x, y) }
-theorem iter_neg_is_neg(n: Nat, x: BitVec(n)):
-    @BitVec::iter_neg(n, x) = @bitvec::BitVec::neg(n, x) { BitVec::iter_neg_eq_neg(n, x) }
-theorem iter_transport_forward(n: Nat, x, y, r: BitVec(n), h: @BitVec::iter_add(n, x, y) = r):
-    @bitvec::BitVec::add(n, x, y) = r { BitVec::add_eq_of_iter_add(n, x, y, r, h) }
-theorem iter_transport_backward(n: Nat, x, y, r: BitVec(n), h: @bitvec::BitVec::sub(n, x, y) = r):
-    @BitVec::iter_sub(n, x, y) = r { BitVec::iter_sub_eq_of_sub(n, x, y, r, h) }
-theorem iter_transport_neg(n: Nat, x, r: BitVec(n), h: @BitVec::iter_neg(n, x) = r):
-    @bitvec::BitVec::neg(n, x) = r { BitVec::neg_eq_of_iter_neg(n, x, r, h) }
-theorem zero_offset_is_not_computation(n: Nat, x, y: BitVec(n), h: @BitVec::toNat(n, y) = 0):
-    @bitvec::BitVec::add(n, x, y) = x { BitVec::add_of_toNat_zero(n, x, y, h) }
-theorem carry_in_meaning(n: Nat, x, y: BitVec(n), c: Bool):
-    @BitVec::add_bits(n, x, y, c) = @BitVec::iterate_increment(n, x, @BitVec::toNat(n, y) + Nat::of_bit(c))
-{ BitVec::add_bits_spec(n, x, y, c) }
-theorem borrow_in_meaning(n: Nat, x, y: BitVec(n), c: Bool):
-    @BitVec::sub_bits(n, x, y, c) = @BitVec::iterate_decrement(n, @BitVec::toNat(n, y) + Nat::of_bit(c), x)
-{ BitVec::sub_bits_spec(n, x, y, c) }
-theorem machine_width_add(x, y: BitVec(64)):
-    @BitVec::ripple_add(64, x, y) = @bitvec::BitVec::add(64, x, y) { BitVec::ripple_add_eq_add(64, x, y) }
-theorem machine_width_sub(x, y: BitVec(64)):
-    @BitVec::ripple_sub(64, x, y) = @bitvec::BitVec::sub(64, x, y) { BitVec::ripple_sub_eq_sub(64, x, y) }
-theorem width_zero_carry(x, y: BitVec(0), c: Bool): @BitVec::add_bits(0, x, y, c) = @BitVec::zero(0) { refl }
-theorem transport_forward(n: Nat, x, y, r: BitVec(n), h: @BitVec::ripple_add(n, x, y) = r):
-    @bitvec::BitVec::add(n, x, y) = r { BitVec::add_eq_of_ripple_add(n, x, y, r, h) }
-theorem transport_backward(n: Nat, x, y, r: BitVec(n), h: @bitvec::BitVec::sub(n, x, y) = r):
-    @BitVec::ripple_sub(n, x, y) = r { BitVec::ripple_sub_eq_of_sub(n, x, y, r, h) }
-theorem transport_neg(n: Nat, x, r: BitVec(n), h: @BitVec::ripple_neg(n, x) = r):
-    @bitvec::BitVec::neg(n, x) = r { BitVec::neg_eq_of_ripple_neg(n, x, r, h) }
-theorem inherited_comm(n: Nat, x, y: BitVec(n)):
-    @BitVec::ripple_add(n, x, y) = @BitVec::ripple_add(n, y, x) { BitVec::ripple_add_comm(n, x, y) }
-theorem inherited_cancel(n: Nat, x, y: BitVec(n)):
-    @BitVec::ripple_sub(n, @BitVec::ripple_add(n, x, y), y) = x { BitVec::ripple_add_sub_cancel(n, x, y) }
-theorem congruence(n: Nat, x, y, z: BitVec(n), p: x = y):
-    @BitVec::ripple_add(n, x, z) = @BitVec::ripple_add(n, y, z) { BitVec::cong_ripple_add(n, p, refl) }
-theorem consumer_transport(n: Nat, x, y: BitVec(n)):
-    @BitVec::sign_bit(n, @BitVec::ripple_add(n, x, y)) = @BitVec::sign_bit(n, @bitvec::BitVec::add(n, x, y))
-{ j(BitVec::ripple_add_eq_add(n, x, y), λ z q => @BitVec::sign_bit(n, @BitVec::ripple_add(n, x, y)) = @BitVec::sign_bit(n, z), refl) }
-"#);
-    bad(r#"
-theorem misstated(n: Nat, x, y: BitVec(n)):
-    @BitVec::ripple_add(n, x, y) = @bitvec::BitVec::add(n, y, x) { BitVec::ripple_add_eq_add(n, x, y) }
-"#);
-    let msg = run(r#"
-theorem not_by_computation(n: Nat, x, y: BitVec(n)):
-    @BitVec::iter_add(n, x, y) = @bitvec::BitVec::add(n, x, y) { refl }
-"#)
-    .expect_err("the two definitions are not convertible at open operands");
-    assert!(msg.contains("NotConvertible"), "{msg}");
-    ok(r#"
-theorem ripple_is_add_by_definition(n: Nat, x, y: BitVec(n)):
-    @BitVec::ripple_add(n, x, y) = @bitvec::BitVec::add(n, x, y) { refl }
-"#);
 }
 
 /// `add` and `sub` are distinct, and how the kernel says so depends on the

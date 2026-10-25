@@ -250,6 +250,13 @@ theorem Nat::leb_refl(self n: Nat): n.leb(n) = True {
 }
 
 // truncated subtraction; both arguments descend together, `n` generalized
+// Whether `n` is zero. A test on a name spelled `match n.is_zero() { … }`
+// keeps the arms out of the `Nat` fold over `n`: the kernel classifies a
+// fold over a literal by evaluating its step, and a step that recurses
+// elsewhere (a walk over a program, matching each item's name) would be
+// evaluated once more per item, exponentially in the walk.
+fn Nat::is_zero(self n: Nat) → Bool { match n { Zero => True, Succ(_) => False } }
+
 // Equality as a `Bool`.
 fn Nat::same(self n, m: Nat) → Bool {
     match n {

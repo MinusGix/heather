@@ -1,0 +1,20 @@
+// Refusals as `heather check --expectations` reads them: each declaration
+// under a directive is refused for the reason it names, and the rest check.
+theorem fine(n: Nat): n = n { refl }
+
+// expect-error(kernel)
+theorem broken(n: Nat): n = Succ(n) { refl }
+
+// expect-error(mismatch)
+theorem cited_wrong(n: Nat): n = Succ(n) { fine(n) }
+
+/// A doc comment above a directive is prose, and the directive still
+/// describes the declaration below it.
+// expect-error(kernel): NotConvertible
+// expect-error: `also_broken`
+theorem also_broken(n: Nat): Succ(n) = n { refl }
+
+// A refused declaration registers nothing, so a use of it is refused too: an
+// unbound name, which a directive accepts only when it says so.
+// expect-error: unbound name `broken`
+theorem uses_broken(n: Nat): n = Succ(n) { broken(n) }
