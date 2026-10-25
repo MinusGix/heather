@@ -36,38 +36,14 @@ import list;
 import logic;
 import nat;
 import option;
-import omega;
 
 // ---------------------------------------------------------------------------
 // Clamps as `min`
 
-theorem Nat::min_eq_r(a, b: Nat, below: b <= a): a.min(b) = b {
-    let low: (a.min(b) <= b) = a.min_le_r(b);
-    let high: (b <= a.min(b)) = Nat::le_min(a, b, b, below, b.le_refl());
-    omega(low, high)
-}
-
-theorem Nat::sub_zero_of_le(self m: Nat): (n: Nat) → m <= n → m - n = 0 {
-    match m {
-        Zero => λ n _ => refl,
-        Succ(_, ih) => λ n => match n { Zero => λ no => false_elim(omega(no)), Succ(l) => λ below => ih(l, omega(below)) },
-    }
-}
-
-// Clamping to a bound and then counting what is left of it: the same as
-// not clamping.
-theorem Nat::sub_min(c, f: Nat): c - f.min(c) = c - f {
-    match f.le_total(c) {
-        Inl(below) => cong_fn<Nat, Nat>(λ x => c - x, Nat::min_eq_l(f, c, below)),
-        Inr(above) => trans(cong_fn<Nat, Nat>(λ x => c - x, Nat::min_eq_r(f, c, above)),
-            trans(c.sub_self(), sym(c.sub_zero_of_le(f, above)))),
-    }
-}
-
 // CMP and a JB: kept where it is below the bound, the bound where not.
 theorem BitVec::clamp_kept(v, b: BitVec(64), borrow: v.borrow_sub_bit(b) = True): v.toNat().min(b.toNat()) = v.toNat() {
     let below: (v.toNat() < b.toNat()) = BitVec::borrow_sub_of_bit_true(64, v, b, borrow);
-    Nat::min_eq_l(v.toNat(), b.toNat(), omega(below))
+    Nat::min_eq_l(v.toNat(), b.toNat(), Nat::le_of_lt(v.toNat(), b.toNat(), below))
 }
 
 theorem BitVec::clamp_bound(v, b: BitVec(64), no: v.borrow_sub_bit(b) = False): v.toNat().min(b.toNat()) = b.toNat() {
@@ -81,10 +57,22 @@ theorem Target::word_number(self t: Target, env: Env, m: X86Memory(t.r.profile),
     BitVec::toNat_ofNat(64, env.number(i), t.layout().keeps_number_fits(env, placed.witness, placed.proof.right, i, inside))
 }
 
+// A number below the canonical boundary is below a word's and a signed
+// word's bounds.
+theorem canonical_lt_word(n: Nat, below: n <= Nat::pow(2, 47)): n < Nat::pow(2, 64) {
+    Nat::le_trans(Succ(n), Succ(Nat::pow(2, 47)), Nat::pow(2, 64), Nat::le_succ_succ(n, Nat::pow(2, 47), below), canonical_below_top())
+}
+
+theorem canonical_lt_signed(n: Nat, below: n <= Nat::pow(2, 47)): n < Nat::pow(2, 63) {
+    Nat::le_trans(Succ(n), Succ(Nat::pow(2, 47)), Nat::pow(2, 63), Nat::le_succ_succ(n, Nat::pow(2, 47), below),
+        Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 63), trivial))
+}
+
 // A number below the canonical boundary as a word.
 theorem canonical_word(n: Nat, below: n <= Nat::pow(2, 47)): BitVec::ofNat(n, n := 64).toNat() = n {
-    BitVec::toNat_ofNat(64, n, omega(below, canonical_below_top()))
+    BitVec::toNat_ofNat(64, n, canonical_lt_word(n, below))
 }
+
 
 // ---------------------------------------------------------------------------
 // A buffer in place
@@ -92,13 +80,18 @@ theorem canonical_word(n: Nat, below: n <= Nat::pow(2, 47)): BitVec::ofNat(n, n 
 // A buffer and what lies past it fit below the canonical boundary.
 theorem Target::buffer_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap)):
     t.r.low.toNat() + (t.layout().buffer_offset(buf) + cap) <= Nat::pow(2, 47) {
-    omega(t.layout().buffer_end(buf, cap, found), t.scratch_fits(), t.r.canonical)
+    let bo = t.layout().buffer_offset(buf);
+    let inside: (bo + cap <= t.r.size) = Nat::le_trans(bo + cap, t.layout().scratch_offset(), t.r.size, t.layout().buffer_end(buf, cap, found), t.scratch_fits());
+    Nat::le_trans(t.r.low.toNat() + (bo + cap), t.r.low.toNat() + t.r.size, Nat::pow(2, 47),
+        t.r.low.toNat().add_le_mono_l(bo + cap, t.r.size, inside), t.r.canonical)
 }
 
 // A buffer's address, as a number.
 theorem Target::buffer_toNat(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap)):
     t.layout().buffer_at(buf).toNat() = t.r.low.toNat() + t.layout().buffer_offset(buf) {
-    t.r.toNat_at(t.layout().buffer_offset(buf), omega(t.layout().buffer_end(buf, cap, found), t.scratch_fits()))
+    let bo = t.layout().buffer_offset(buf);
+    t.r.toNat_at(bo, Nat::le_trans(bo, t.layout().scratch_offset(), t.r.size,
+        bo.le_of_add_le(cap, t.layout().scratch_offset(), t.layout().buffer_end(buf, cap, found)), t.scratch_fits()))
 }
 
 // An address counted by value is the region's own spelling of it.
@@ -136,27 +129,37 @@ theorem Target::writes_from(self t: Target, env: Env, m: X86Memory(t.r.profile),
     λ i byte got => {
         let found_cell: (cells_at(v, o + from, k).nth(i) = Some(byte)) = j(cells, λ bytes _ => bytes.nth(i) = Some(byte), got);
         let below: (i < k) = j(cells_len(v, k, o + from), λ n _ => i < n, cells_at(v, o + from, k).nth_some_below(i, byte, found_cell));
-        let short: (k <= cap - from) = len.min_le_r(cap - from);
-        let ahead: (from + i < cap) = match from.le_total(cap) {
-            Inl(fits) => omega(below, short, from.sub_add_cancel(cap, fits)),
-            Inr(past) => omega(below, short, cap.sub_zero_of_le(from, past)),
-        };
-        let clamped: (from.min(cap) = from) = Nat::min_eq_l(from, cap, omega(ahead));
+        let ahead: (from + i < cap) = from.add_lt_of_lt_sub(i, cap, Nat::le_trans(Succ(i), k, cap - from, below, len.min_le_r(cap - from)));
+        let clamped: (from.min(cap) = from) = Nat::min_eq_l(from, cap, Nat::le_of_lt(from, cap, from.lt_of_add_lt(i, cap, ahead)));
         let is: (byte = v(o + from + i)) = Option::some_inj(byte, v(o + from + i),
             trans(sym(found_cell), cells_nth(v, k, o + from, i, below)));
         let q = o + from + i;
-        let inside: (q < t.r.size) = omega(ahead, t.layout().buffer_end(buf, cap, found), t.scratch_fits());
+        let in_buffer: (o + (from + i) < o + cap) = o.add_le_mono_l(Succ(from + i), cap, ahead);
+        let inside: (q < t.r.size) = j(sym(o.add_assoc(from, i)), λ x _ => x < t.r.size,
+            Nat::le_trans(Succ(o + (from + i)), o + cap, t.r.size, in_buffer,
+                Nat::le_trans(o + cap, t.layout().scratch_offset(), t.r.size, t.layout().buffer_end(buf, cap, found), t.scratch_fits())));
+        let summed: (base.toNat() + i = t.r.low.toNat() + q) = trans(
+            cong_fn<Nat, Nat>(λ x => x + i, trans(at, cong_fn<Nat, Nat>(λ x => t.r.low.toNat() + (o + x), clamped))),
+            t.r.low.toNat().add_assoc(o + from, i));
         let address: (word_of_nat(64, base.toNat() + i) = next_rip(t.r.low, q)) = trans(
-            cong_fn<Nat, BitVec(64)>(λ n => word_of_nat(64, n), omega(at, clamped)), t.cell_address(q, omega(inside)));
+            cong_fn<Nat, BitVec(64)>(λ n => word_of_nat(64, n), summed), t.cell_address(q, Nat::le_of_lt(q, t.r.size, inside)));
         let cell = t.read_cell(v, m, placed.proof.left, q, inside).right;
         trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => t.r.profile.read(m, a), address),
             trans(cell, cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), sym(is))))
     }
 }
 
-// A buffer's capacity is a count a word holds.
+// A buffer's capacity is below the canonical boundary…
+theorem Target::cap_canonical(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap)): cap <= Nat::pow(2, 47) {
+    let bo = t.layout().buffer_offset(buf);
+    Nat::le_trans(cap, t.r.low.toNat() + (bo + cap), Nat::pow(2, 47),
+        Nat::le_trans(cap, bo + cap, t.r.low.toNat() + (bo + cap), bo.le_add_r(cap), t.r.low.toNat().le_add_r(bo + cap)),
+        t.buffer_fits(buf, cap, found))
+}
+
+// … so a count a word holds.
 theorem Target::cap_small(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap)): cap < Nat::pow(2, 64) {
-    omega(t.buffer_fits(buf, cap, found), canonical_below_top())
+    canonical_lt_word(cap, t.cap_canonical(buf, cap, found))
 }
 
 // At the request: RDX the span's length, RSI where it sits, and the span
@@ -170,23 +173,29 @@ theorem Target::writes_request(self t: Target, env: Env, m: X86Memory(t.r.profil
     let layout = t.layout();
     let base = layout.buffer_at(buf).add(r8);
     let fits = t.buffer_fits(buf, cap, found);
-    let top = canonical_below_top();
     let short: (from.min(cap) <= cap) = from.min_le_r(cap);
     let summed: (base.toNat() = (t.r.low.toNat() + layout.buffer_offset(buf)) + from.min(cap)) =
         add_words(64, layout.buffer_at(buf), r8, t.r.low.toNat() + layout.buffer_offset(buf), from.min(cap),
-            t.buffer_toNat(buf, cap, found), at_r8, omega(fits, short, top));
-    let base_at: (base.toNat() = t.r.low.toNat() + (layout.buffer_offset(buf) + from.min(cap))) = omega(summed);
+            t.buffer_toNat(buf, cap, found), at_r8, canonical_lt_word((t.r.low.toNat() + layout.buffer_offset(buf)) + from.min(cap),
+                j(sym(t.r.low.toNat().add_assoc(layout.buffer_offset(buf), from.min(cap))), λ x _ => x <= Nat::pow(2, 47),
+                    Nat::le_trans(t.r.low.toNat() + (layout.buffer_offset(buf) + from.min(cap)), t.r.low.toNat() + (layout.buffer_offset(buf) + cap),
+                        Nat::pow(2, 47), t.r.low.toNat().add_le_mono_l(layout.buffer_offset(buf) + from.min(cap), layout.buffer_offset(buf) + cap,
+                            layout.buffer_offset(buf).add_le_mono_l(from.min(cap), cap, short)), fits))));
+    let base_at: (base.toNat() = t.r.low.toNat() + (layout.buffer_offset(buf) + from.min(cap))) =
+        trans(summed, t.r.low.toNat().add_assoc(layout.buffer_offset(buf), from.min(cap)));
     let long = t.span_len(env, m, placed, buf, cap, found, from, len);
     let counted: (rdx.toNat() = span(env.buffer(buf), from, len).len()) = trans(at_rdx,
         trans(cong_fn<Nat, Nat>(λ x => len.min(x), Nat::sub_min(cap, from)), sym(long)));
-    let sent: (span(env.buffer(buf), from, len).len() <= cap) = omega(len.min_le_r(cap - from), cap.sub_le(from), long);
+    let sent: (span(env.buffer(buf), from, len).len() <= cap) = j(sym(long), λ x _ => x <= cap,
+        Nat::le_trans(len.min(cap - from), cap - from, cap, len.min_le_r(cap - from), cap.sub_le(from)));
     ⟨counted, ⟨t.writes_from(env, m, placed, buf, cap, found, from, len, base, base_at), sent⟩⟩
 }
 
 // A count no longer than what the buffer sent is a word.
 theorem Target::count_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), count, n: Nat,
     le: count <= n, sent: n <= cap): count < Nat::pow(2, 64) {
-    omega(le, sent, t.cap_small(buf, cap, found))
+    Nat::le_trans(Succ(count), Succ(cap), Nat::pow(2, 64), Nat::le_succ_succ(count, cap, Nat::le_trans(count, n, cap, le, sent)),
+        t.cap_small(buf, cap, found))
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +368,14 @@ fn Target::Stored(self t: Target, v: Nat → BitVec(8), buf: Nat, bytes: List<Bi
             byte_store_after(t.writes(), ByteStore(Rdi, Rdx), s)).memory)))
 }
 
+// The byte the copy stores lies inside the region.
+theorem Target::byte_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), bytes: List<BitVec(8)>, short: bytes.len() <= cap,
+    i: Nat, below: i < bytes.len()): (t.layout().buffer_offset(buf) + i) + 1 <= t.r.size {
+    let bo = t.layout().buffer_offset(buf);
+    Nat::le_trans(bo + Succ(i), bo + cap, t.r.size, bo.add_le_mono_l(Succ(i), cap, Nat::le_trans(Succ(i), bytes.len(), cap, below, short)),
+        Nat::le_trans(bo + cap, t.layout().scratch_offset(), t.r.size, t.layout().buffer_end(buf, cap, found), t.scratch_fits()))
+}
+
 // The invariant one byte further, over the cells and registers the byte's
 // load, store and adds leave.
 theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, found: t.caps.nth(buf) = Some(cap),
@@ -383,30 +400,30 @@ theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, 
     let stored_byte = imm_byte0(byte.zero_extend(56));
     let byte_back: (stored_byte = byte) = BitVec::truncate_zero_extend(8, 56, byte);
     let one: List<BitVec(8)> = [stored_byte];
-    let fits_one: ((bo + i) + 1 <= t.r.size) = omega(below, short, ends, fits);
+    let fits_one: ((bo + i) + 1 <= t.r.size) = t.byte_fits(buf, cap, found, bytes, short, i, below);
     let w2 = t.r.buffer(w).set_span(bo + i, one.to_vector()).cells;
-    let from_scratch: (byte = v(so + i)) = outside(so + i, Inr(omega(ends, fits)));
-    ⟨omega(below),
+    let from_scratch: (byte = v(so + i)) = outside(so + i, Inr(i.add_le_mono_r(bo, so, bo.le_of_add_le(cap, so, ends))));
+    ⟨below,
         ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), r8), sym(word_of_nat_succ(i))),
         ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), rsi), sym(next_rip_succ(t.r.low, so + i))),
         ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), rdi), sym(next_rip_succ(t.r.low, bo + i))),
         ⟨rax,
          Exists(w2, ⟨t.r.store_holds(w, m, holds, bo + i, one, fits_one),
             ⟨λ q away => trans(t.r.cells_outside(w, bo + i, one, q, match away {
-                    Inl(under) => Inl(omega(under)),
+                    Inl(under) => Inl(Nat::le_trans(Succ(q), bo, bo + i, under, bo.le_add_l(i))),
                     Inr(over) => {
-                        let past: ((bo + i) + 1 <= q) = omega(over);
+                        let past: ((bo + i) + 1 <= q) = over;
                         Inr(past)
                     },
                 }), outside(q, match away {
                     Inl(under) => Inl(under),
-                    Inr(over) => Inr(omega(over)),
+                    Inr(over) => Inr(Nat::le_trans(bo + i, Succ(bo + i), q, Nat::le_succ_r(bo + i, bo + i, (bo + i).le_refl()), over)),
                 })),
              λ k c early got => match k.lt_or_ge(i) {
-                Inl(before) => trans(t.r.cells_outside(w, bo + i, one, bo + k, Inl(omega(before))),
+                Inl(before) => trans(t.r.cells_outside(w, bo + i, one, bo + k, Inl(bo.add_le_mono_l(Succ(k), i, before))),
                     inside(k, c, before, got)),
                 Inr(late) => {
-                    let here_k: (i = k) = omega(late, early);
+                    let here_k: (i = k) = Nat::le_antisym(i, k, late, Nat::le_of_succ_succ(k, i, early));
                     let got_i: (bytes.nth(i) = Some(c)) = j(sym(here_k), λ x _ => bytes.nth(x) = Some(c), got);
                     let at_i: (w2(bo + i) = c) = trans(t.r.cells_inside(w, bo + i, one, 0, stored_byte, refl),
                         trans(byte_back, trans(from_scratch, landed(i, c, got_i))));
@@ -438,12 +455,14 @@ theorem Target::copy_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, f
     let fits = t.scratch_fits();
     let sizes: (layout.size() <= t.r.size) = t.fits;
     let byte = w(so + i);
-    let cell = t.read_cell(w, m, holds, so + i, omega(below, short, room, sizes));
+    let cell = t.read_cell(w, m, holds, so + i, Nat::le_trans(Succ(so + i), so + cap, t.r.size,
+        so.add_le_mono_l(Succ(i), cap, Nat::le_trans(Succ(i), bytes.len(), cap, below, short)),
+        Nat::le_trans(so + cap, layout.size(), t.r.size, room, sizes)));
     let rsi = at.right.right.left;
     let rdi = at.right.right.right.left;
     let one: List<BitVec(8)> = [imm_byte0(byte.zero_extend(56))];
     let g1 = write_gpr(Rdx, byte.zero_extend(56), g);
-    let fits_one: ((bo + i) + 1 <= t.r.size) = omega(below, short, ends, fits);
+    let fits_one: ((bo + i) + 1 <= t.r.size) = t.byte_fits(buf, cap, found, bytes, short, i, below);
     let rip2 = next_rip(next_rip(u.rip, byte_load_bytes(ByteLoad(Rdx, Rsi)).len()), 3);
     let again = t.copy_again(v, buf, cap, found, bytes, short, landed, i, below, g, u.flags, rip2, m, w, holds,
         copying.proof.right.left, copying.proof.right.right, at.right.left, rsi, rdi, at.right.right.right.right.left);
@@ -468,8 +487,8 @@ theorem Target::copy_filled(self t: Target, env: Env, v: Nat → BitVec(8), keep
     let copying = at.right.right.right.right.right;
     let w = copying.witness;
     Exists(w, ⟨copying.proof.left, t.layout().keeps_fill(env, v, w, keeps, buf, cap, found, bytes, short,
-        λ q away => copying.proof.right.left(q, match away { Inl(under) => Inl(under), Inr(over) => Inr(omega(over, all)) }),
-        λ k c got => copying.proof.right.right(k, c, omega(bytes.nth_some_below(k, c, got), all), got))⟩)
+        λ q away => copying.proof.right.left(q, match away { Inl(under) => Inl(under), Inr(over) => Inr(j(sym(all), λ x _ => t.layout().buffer_offset(buf) + x <= q, over)) }),
+        λ k c got => copying.proof.right.right(k, c, j(sym(all), λ x _ => k < x, bytes.nth_some_below(k, c, got)), got))⟩)
 }
 
 // With every byte copied, R8 equals RAX, so the JE is taken.
@@ -490,12 +509,13 @@ theorem Target::copy_goes_on(self t: Target, v: Nat → BitVec(8), buf, cap: Nat
     g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, g, m), zf: Bool,
     is: zf = is_zero_bits(64, read_gpr(R8, g).sub(read_gpr(Rax, g))), set: zf = True): False {
     let n = bytes.len();
-    let n_small: (n < Nat::pow(2, 64)) = omega(short, t.cap_small(buf, cap, found));
+    let n_small: (n < Nat::pow(2, 64)) = Nat::le_trans(Succ(n), Succ(cap), Nat::pow(2, 64), Nat::le_succ_succ(n, cap, short),
+        t.cap_small(buf, cap, found));
     let equal: (read_gpr(R8, g) = read_gpr(Rax, g)) = eq_of_zero_bits_sub(64, read_gpr(R8, g), read_gpr(Rax, g), trans(sym(is), set));
     let words: (word_of_nat(64, i) = word_of_nat(64, n)) = trans(sym(at.right.left), trans(equal, at.right.right.right.right.left));
-    let counts: (i = n) = trans(sym(toNat_word_of_nat(64, i, omega(below, n_small))),
+    let counts: (i = n) = trans(sym(toNat_word_of_nat(64, i, Nat::lt_trans(i, n, Nat::pow(2, 64), below, n_small))),
         trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), words), toNat_word_of_nat(64, n, n_small)));
-    false_elim(omega(counts, below))
+    false_elim(Nat::lt_irrefl(n, j(counts, λ x _ => x < n, below)))
 }
 
 // The head: CMP R8, RAX and a JE out, each way on from the invariant.
@@ -578,10 +598,13 @@ theorem Target::goes_copy_loop(self t: Target, env: Env, p: Prog, buf, cap: Nat,
                 t.copy_filled(env, v, keeps, buf, cap, found, bytes, short, i, all, u.gprs, u.memory, held.left.left)),
             λ u here resident held => false_elim(t.copy_ends(v, buf, bytes, i, all, u.gprs, u.memory, held.left.left, u.flags.zf,
                 held.left.right, held.right))),
-        Succ(_, ih) => λ i all => t.goes_copy_head(v, p, buf, h, d, bytes, i, within, done_k, done_before, done_item, done_at, tree,
-            λ u here resident held => false_elim(t.copy_goes_on(v, buf, cap, found, bytes, short, i, omega(all), u.gprs, u.memory,
-                held.left.left, u.flags.zf, held.left.right, held.right)),
-            t.goes_copy_body(v, p, buf, cap, found, h, d, within, bytes, short, landed, tree, i, omega(all), ih(Succ(i), omega(all)))),
+        Succ(l, ih) => λ i all => {
+            let ahead: (i < bytes.len()) = j(all, λ x _ => Succ(i) <= x, Nat::le_succ_succ(i, i + l, i.le_add_l(l)));
+            t.goes_copy_head(v, p, buf, h, d, bytes, i, within, done_k, done_before, done_item, done_at, tree,
+                λ u here resident held => false_elim(t.copy_goes_on(v, buf, cap, found, bytes, short, i, ahead, u.gprs, u.memory,
+                    held.left.left, u.flags.zf, held.left.right, held.right)),
+                t.goes_copy_body(v, p, buf, cap, found, h, d, within, bytes, short, landed, tree, i, ahead, ih(Succ(i), trans(i.add_succ_left(l), all))))
+        },
     }
 }
 
@@ -605,7 +628,8 @@ theorem Target::landed_store(self t: Target, env: Env, m: X86Memory(t.r.profile)
     let v = placed.witness;
     let so = t.layout().scratch_offset();
     let sizes: (so + t.caps.largest() <= t.r.size) = t.fits;
-    let fits: (so + bytes.len() <= t.r.size) = omega(short, sizes);
+    let fits: (so + bytes.len() <= t.r.size) = Nat::le_trans(so + bytes.len(), so + t.caps.largest(), t.r.size,
+        so.add_le_mono_l(bytes.len(), t.caps.largest(), short), sizes);
     Exists(t.r.buffer(v).set_span(so, bytes.to_vector()).cells, ⟨t.r.store_holds(v, m, placed.proof.left, so, bytes, fits),
         ⟨t.layout().keeps_agree(env, v, t.r.buffer(v).set_span(so, bytes.to_vector()).cells, placed.proof.right,
             λ q below => t.r.cells_outside(v, so, bytes, q, Inl(below))),
@@ -622,7 +646,9 @@ theorem Target::landed_word(self t: Target, env: Env, bytes: List<BitVec(8)>, m:
     Exists(w, ⟨t.r.store_holds(v, m, landed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
         ⟨t.layout().keeps_word(t.r, env, v, landed.proof.right.left, i, inside, word),
          λ k c got => {
-            let past: (8 * i + 8 <= so + k) = omega(t.layout().word_below_buffers(i, 7, inside, trivial), t.layout().scratch_after_words());
+            let words: (8 * i + 8 <= 8 * word_slots()) = t.layout().word_below_buffers(i, 7, inside, trivial);
+            let past: (8 * i + 8 <= so + k) = Nat::le_trans(8 * i + 8, so, so + k,
+                Nat::le_trans(8 * i + 8, 8 * word_slots(), so, words, t.layout().scratch_after_words()), so.le_add_l(k));
             trans(t.r.cells_outside(v, 8 * i, word_bytes(word), so + k, Inr(past)), landed.proof.right.right(k, c, got))
          }⟩⟩)
 }
@@ -672,8 +698,9 @@ theorem Target::goes_read_back_ok(self t: Target, env: Env, asked: Prog, buf, ca
     let w_tested = tested.within_before(0, Block(init), t.program, w_set0);
     let w_tested0 = tested0.within_before(0, Jcc(S, done), t.program, w_tested);
     let w_stored = stored.within_before(0, Block([TestRR(Rax, Rax)]), t.program, w_tested0);
-    let small: (n < Nat::pow(2, 63)) = omega(short, t.buffer_fits(buf, cap, found));
-    let n_small: (n < Nat::pow(2, 64)) = omega(short, t.cap_small(buf, cap, found));
+    let canonical: (n <= Nat::pow(2, 47)) = Nat::le_trans(n, cap, Nat::pow(2, 47), short, t.cap_canonical(buf, cap, found));
+    let small: (n < Nat::pow(2, 63)) = canonical_lt_signed(n, canonical);
+    let n_small: (n < Nat::pow(2, 64)) = canonical_lt_word(n, canonical);
     let env1 = env.set_word(result, word_of_nat(64, n));
     let filled = env1.set_buffer(buf, fill(env1.buffer(buf), bytes));
     let next1 = t.at_same(prog_len(copied), tree, filled, env.set_buffer(buf, fill(env.buffer(buf), bytes)).set_word(result, count_word(n)),
@@ -692,14 +719,14 @@ theorem Target::goes_read_back_ok(self t: Target, env: Env, asked: Prog, buf, ca
         λ u here resident held => {
             let rax = held.left.left.right;
             let value: (read_gpr(Rax, u.gprs).toNat() = n) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), rax), toNat_word_of_nat(64, n, n_small));
-            let clear = test_self_nonnegative(read_gpr(Rax, u.gprs), omega(value, small));
+            let clear = test_self_nonnegative(read_gpr(Rax, u.gprs), j(sym(value), λ x _ => x < Nat::pow(2, 63), small));
             absurd(trans(sym(clear), trans(sym(held.left.right), held.right)))
         },
         λ u here resident held => at_tested(u, here, resident, {
             let landed = held.left.left.left;
             Exists(landed.witness, ⟨landed.proof.right.left, ⟨landed.proof.right.right,
                 ⟨trivial, ⟨refl, ⟨refl, ⟨refl, ⟨held.left.left.right, Exists(landed.witness, ⟨landed.proof.left,
-                    ⟨λ q _ => refl, λ k c early _ => false_elim(omega(early))⟩⟩)⟩⟩⟩⟩⟩⟩⟩)
+                    ⟨λ q _ => refl, λ k c early _ => false_elim(k.not_succ_le_zero(early))⟩⟩)⟩⟩⟩⟩⟩⟩⟩)
         }));
     let at_stored = t.goes_weaken(prog_len(stored), tree,
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(execute_block_normal([TestRR(Rax, Rax)], u).gprs,
@@ -779,13 +806,14 @@ theorem Target::reads_most(self t: Target, env: Env, m: X86Memory(t.r.profile), 
 // A count within a buffer's capacity fits the scratch range.
 theorem Target::under_largest(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), k, n: Nat,
     le: k <= n, below: n <= cap): k <= t.caps.largest() {
-    omega(le, below, t.caps.largest_nth(buf, cap, found))
+    Nat::le_trans(k, cap, t.caps.largest(), Nat::le_trans(k, n, cap, le, below), t.caps.largest_nth(buf, cap, found))
 }
 
 // And what the scratch range holds lies inside the region.
 theorem Target::scratch_inside(self t: Target, k: Nat, short: k <= t.caps.largest()): t.layout().scratch_offset() + k <= t.r.size {
     let sizes: (t.layout().scratch_offset() + t.caps.largest() <= t.r.size) = t.fits;
-    omega(short, sizes)
+    Nat::le_trans(t.layout().scratch_offset() + k, t.layout().scratch_offset() + t.caps.largest(), t.r.size,
+        t.layout().scratch_offset().add_le_mono_l(k, t.caps.largest(), short), sizes)
 }
 
 // What a read's code claims: from the statement's start, read(fd, scratch,
