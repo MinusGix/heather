@@ -244,13 +244,19 @@ fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Pr
     then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
 }
 
+// After the read: the result stored, and the bytes copied in unless it
+// failed (RAX negative).
+fn Prog::read_back(self asked: Prog, layout: Layout, buf, result, names: Nat) → Prog {
+    let tested = then(then(asked.word_from(layout, result, Rax), Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names)))));
+    tested.copy_in(layout, buf, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names))))
+}
+
 // read(fd, scratch, min(len, capacity)); the result stored; on success the
 // bytes copied into the buffer.
 fn Prog::reads(self p: Prog, layout: Layout, fd, buf, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
     let clamped = then(p.word_to(layout, len, Rdx), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rdx, R9, Succ(names));
     let asked = then(then(clamped, Block([MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))])).word_to(layout, fd, Rdi), Syscall);
-    let tested = then(then(asked.word_from(layout, result, Rax), Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names)))));
-    Compiled(tested.copy_in(layout, buf, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names)))), Succ(Succ(Succ(names))))
+    Compiled(asked.read_back(layout, buf, result, names), Succ(Succ(Succ(names))))
 }
 
 // write(fd, buffer + min(from, capacity), min(len, capacity - that)); the
