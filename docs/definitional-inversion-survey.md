@@ -170,10 +170,25 @@ Two consequences for the ladders:
   are inversions: that two Π-types the algorithm compared componentwise were
   convertible componentwise, and that a reduct keeps its type. The paper
   lists kernel verification (Lennon-Bertrand 2025) among its consequences.
-  Whether every lemma `AlgSound.v` draws from `Reducible` is an inversion is
-  the thing to check in heather-coq; if so, `hih-kernel-model`'s rung 4
+  The port thread checked this against heather-coq (port assessment §6, PR
+  #158). It looked at every use `AlgSound.v` makes of the
+  `DeclConsequences*` lemmas, and they fall into three groups:
+  1. Injectivity of each former the algorithm compares, `cpi`/`tpi`/`upi` at
+     M included.
+  2. Weak-head normalisation, only inside `red_ty_sound`/`red_tm_sound`.
+     There it shows that an untyped reduction of a well-typed term is a
+     declarative equality, and subject reduction plus soundness of each
+     typed step can replace it.
+  3. Four layer-M equations: `declM_inst_c_eq`, `declM_inst_t_eq`,
+     `declM_motT_eq` and `declM_mott_eq`. These are the CΠ/TΠ instances and
+     the recursor's motives at D-convertible arguments.
+
+  `AlgPrereq` itself uses only `gid`/`gsub_wf_gid` from those files. So
+  **for the negative core, soundness of algorithmic conversion needs nothing
+  the domain model does not give**, and `hih-kernel-model`'s rung 4
   (strategy changes against algorithmic conversion) can be proved sound
-  against the declarative rules entirely inside Heather.
+  against the declarative rules entirely inside Heather. Group 3 is the
+  layer and code-recursor part flagged as open in §4.
 - **The reflection schema (§11.2 there) is still needed, but for less.** It
   remains the way to get consistency and normalisation for `Heather≤n`. The
   inversion results need no bound on universes at all, since the model
@@ -260,10 +275,11 @@ a puller, with three rungs:
 3. **Positive formers and the code layer**, after the heather-coq probe
    answers whether the domain model extends to `□` and the code recursor.
 
-And one question for heather-coq: does the domain model extend to DeLaM's
-code layer (§4, first item), and does `AlgSound.v` use anything from
-`Reducible` beyond inversions (§3)? Both are probe-sized there, and both
-decide how far rung 3 can go.
+That leaves one question for heather-coq: does the domain model extend to
+DeLaM's code layer (§4, first item)? It is probe-sized there, and it decides
+how far rung 3 can go. Its answer also covers group 3 of `AlgSound.v`'s
+needs (§3). The other question, whether `AlgSound.v` needs more than
+inversions, is answered: for the negative core it does not.
 
 ## 7. Follow-up
 

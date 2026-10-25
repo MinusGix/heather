@@ -39,8 +39,10 @@ over relations, so predicativity is no obstacle.
 - Does the domain model extend to `□`, boxed-code syntactic comparison and
   the code recursor? The paper gives no evidence for layers.
 - Does `AlgSound.v` use anything from `Validity/Reducible*` beyond
-  inversions? If not, soundness of algorithmic conversion is provable inside
-  Heather for the full kernel, which `hih-kernel-model` rung 4 wants.
+  inversions? Answered on 2026-10-25 (survey §3; port assessment §6): for
+  the negative core it uses only injectivity, plus whnf inside
+  `red_ty_sound`/`red_tm_sound`, which subject reduction replaces. The rest
+  is four layer-M equations, which wait on the code-layer question above.
 
 **Not given by the technique:** normalisation, canonicity, consistency,
 decidability of conversion, inversion for neutrals. Those keep the port
