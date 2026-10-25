@@ -549,15 +549,24 @@ pub(crate) fn elab_self_call(
                 };
                 is_original_binder(position)
                     || guard.rebind.as_ref().is_some_and(|(rebound, terms)| {
-                        let depth = match &guard.kind {
-                            GuardKind::Wf { depth, .. } => *depth,
+                        let (depth, fn_children) = match &guard.kind {
+                            GuardKind::Wf { depth, fn_children, .. } => (*depth, fn_children),
                             GuardKind::Nat { .. } => return false,
                         };
                         let shift = (cx.names.len() - depth) as u32;
-                        *rebound == position
-                            && terms
-                                .get(descendant)
-                                .is_some_and(|term| term.shift_local(shift) == argument_term)
+                        if *rebound != position {
+                            return false;
+                        }
+                        // Through a function child, the index is the one
+                        // written for it, at the argument the call passed.
+                        if let Some((at, arg)) = &through_fn {
+                            return fn_children[*at].rebind.as_ref().is_some_and(|term| {
+                                term.shift_local_above(shift, 1).inst_top(0, arg) == argument_term
+                            });
+                        }
+                        terms
+                            .get(descendant)
+                            .is_some_and(|term| term.shift_local(shift) == argument_term)
                     })
             }
         };
@@ -1025,6 +1034,12 @@ pub(crate) struct FnChildIh {
     /// Its type, `Π(y : A). M[k y]`, kept whole so that a call site shifts it
     /// like any other type and reads the codomain under its own binder.
     pub(crate) ih_ty: Type,
+    /// In an indexed family (docs/iwf-infinitary-design.md §8), the child's
+    /// written index as a term under the field's one binder `y`, scoped like
+    /// the rest at `depth + 1`: what a self-call through `k e` must pass at
+    /// [`Guard::rebind`]'s parameter, instantiated at its `e`. `None` on
+    /// tier 2, which has no index.
+    pub(crate) rebind: Option<Rc<Term>>,
 }
 
 /// The window of past values a course-of-values `Wf` arm carries

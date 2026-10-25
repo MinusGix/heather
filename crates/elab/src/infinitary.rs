@@ -981,7 +981,7 @@ impl Elaborator {
                                 dom: Rc::clone(&dom),
                                 cod: Rc::new(motive.apply_local(&embed(g, db + 1).extended(Rc::new(at_y)))),
                             };
-                            fn_children.push(FnChildIh { fun: Rc::clone(&k_term), ih, ih_ty });
+                            fn_children.push(FnChildIh { fun: Rc::clone(&k_term), ih, ih_ty, rebind: None });
                             let ty = Type::Pi {
                                 dom_level: p.lp.clone(),
                                 cod_level: p.lw.clone(),

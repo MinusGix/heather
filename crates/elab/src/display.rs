@@ -473,7 +473,14 @@ impl Speller<'_> {
         if let Type::IWf { sig, index } = ty
             && let Some((ind, _)) = self.el.iwf_of(ty)
         {
-            return self.iwf_instance(&ind, sig, index, d);
+            return self.iwf_instance(&ind, &sig.shape, index, d);
+        }
+        // …and its `W` encoding, for a family with a function field
+        // (docs/iwf-infinitary-design.md §5).
+        if matches!(ty, Type::Sigma { .. })
+            && let Some((ind, fam)) = self.el.iwf_of(ty)
+        {
+            return self.iwf_instance(&ind, fam.shape().0, &fam.idx, d);
         }
         // An inductive instance is its declaration's name, wherever its
         // lowering is what we are looking at.
@@ -647,7 +654,7 @@ impl Speller<'_> {
     fn iwf_instance(
         &self,
         ind: &crate::inductive::Inductive,
-        sig: &heather_kernel::term::IWfSig,
+        shape: &Type,
         index: &Term,
         d: u32,
     ) -> String {
@@ -655,7 +662,7 @@ impl Speller<'_> {
             String::new()
         } else {
             match ind.skel.as_ref().and_then(|skel| {
-                self.el.display_targs(self.cx, &sig.shape, skel, self.binders())
+                self.el.display_targs(self.cx, shape, skel, self.binders())
             }) {
                 Some(args) => {
                     let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>();

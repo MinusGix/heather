@@ -138,6 +138,10 @@ enum Occurrence<'a> {
     /// The field's whole type is member `k`, at the index `e` for an indexed
     /// member.
     Child { member: usize, index: Option<&'a Expr> },
+    /// The field is `(y: A) -> E(e)`, `A` free of the group: a function
+    /// child, lowered on the family's `W` form
+    /// (docs/iwf-infinitary-design.md §1), `e` read under `y`.
+    FnChild { member: usize, index: Option<&'a Expr> },
 }
 
 impl Elaborator {
@@ -436,9 +440,52 @@ fn occurrence<'a>(
     c: &CtorDecl,
     f: &'a FieldDecl,
 ) -> R<Occurrence<'a>> {
+    if let Some((member, index)) = whole_occurrence(heads, d, c, &f.ty)? {
+        return Ok(Occurrence::Child { member, index });
+    }
+    // `(y: A) -> E(e)`: the codomain is a whole occurrence, the domain names
+    // no member (a mention there is not strictly positive, refused below).
+    if let TyKind::Fn { dom, cod, implicit: false, .. } = &f.ty.kind
+        && heads.iter().all(|h| occurs(dom, &h.decl.name).is_none())
+        && let Some((member, index)) = whole_occurrence(heads, d, c, cod)?
+    {
+        return Ok(Occurrence::FnChild { member, index });
+    }
+    if let Some(h) = heads.iter().find(|h| occurs(&f.ty, &h.decl.name).is_some()) {
+        let why = match &f.ty.kind {
+            TyKind::Fn { .. } => {
+                "a member occurs in a function field only as its codomain, `(y: A) -> E(e)` \
+                 with `A` free of the group (docs/iwf-infinitary-design.md §1)"
+            }
+            TyKind::Vec { .. } => {
+                "a container field of a member is not lowered on the family's route; \
+                 write the children as fields"
+            }
+            _ => "a member occurs in a field only as the field's whole type",
+        };
+        return err(
+            format!(
+                "field of `{}` mentions the mutual member `{}` inside another type: {why} \
+                 (docs/mutual-inductive-design.md §1)",
+                c.name, h.decl.name
+            ),
+            f.ty.span,
+        );
+    }
+    Ok(Occurrence::None)
+}
+
+/// `ty` as a whole member occurrence, `E<p̄>` or `E<p̄>(e)`: the member and
+/// its index, after the checks that it is one the family can carry.
+fn whole_occurrence<'a>(
+    heads: &[MemberHead],
+    d: &InductiveDecl,
+    c: &CtorDecl,
+    ty: &'a Ty,
+) -> R<Option<(usize, Option<&'a Expr>)>> {
     let member_of = |n: &str| heads.iter().position(|h| h.decl.name == n);
     // The whole field: `E<p̄>` or `E<p̄>(e)`.
-    let whole: Option<(usize, &[Ty], Option<&'a [Expr]>)> = match &f.ty.kind {
+    let whole: Option<(usize, &[Ty], Option<&'a [Expr]>)> = match &ty.kind {
         TyKind::Named { name, args } => member_of(name).map(|k| (k, args.as_slice(), None)),
         TyKind::OfExpr(e) => match &e.kind {
             ExprKind::App { head, args, .. } => named_head(head)
@@ -457,7 +504,7 @@ fn occurrence<'a>(
                      must be uniform",
                     c.name, e.name
                 ),
-                f.ty.span,
+                ty.span,
             );
         }
         let index = match (vals, &heads[k].index) {
@@ -470,13 +517,13 @@ fn occurrence<'a>(
                          a child is `{}(e)`",
                         c.name, e.name, e.name, e.name
                     ),
-                    f.ty.span,
+                    ty.span,
                 );
             }
             (Some(_), Some(_)) => {
                 return err(
                     format!("a child of `{}` states one index: `{}(i)`", c.name, e.name),
-                    f.ty.span,
+                    ty.span,
                 );
             }
             (Some(_), None) => {
@@ -485,7 +532,7 @@ fn occurrence<'a>(
                         "field of `{}` applies `{}` to an index, but `{}` is not indexed",
                         c.name, e.name, e.name
                     ),
-                    f.ty.span,
+                    ty.span,
                 );
             }
         };
@@ -501,30 +548,9 @@ fn occurrence<'a>(
                 i.span,
             );
         }
-        return Ok(Occurrence::Child { member: k, index });
+        return Ok(Some((k, index)));
     }
-    if let Some(h) = heads.iter().find(|h| occurs(&f.ty, &h.decl.name).is_some()) {
-        let why = match &f.ty.kind {
-            TyKind::Fn { .. } => {
-                "a recursive function field is the infinitary tier, which is unindexed \
-                 (docs/inductive-tier2-w-lowering.md §1)"
-            }
-            TyKind::Vec { .. } => {
-                "a container field of a member is not lowered on the family's route; \
-                 write the children as fields"
-            }
-            _ => "a member occurs in a field only as the field's whole type",
-        };
-        return err(
-            format!(
-                "field of `{}` mentions the mutual member `{}` inside another type: {why} \
-                 (docs/mutual-inductive-design.md §1)",
-                c.name, h.decl.name
-            ),
-            f.ty.span,
-        );
-    }
-    Ok(Occurrence::None)
+    Ok(None)
 }
 
 /// `inductive D_1#members { D_t#member(n: I_t) | D_t#member, … }` (§2).
@@ -606,6 +632,23 @@ fn family_decl(first: &str, heads: &[MemberHead]) -> R<(InductiveDecl, Vec<Membe
                         kind: TyKind::OfExpr(Box::new(at(member, index, f.ty.span))),
                         span: f.ty.span,
                     },
+                    Occurrence::FnChild { member, index } => {
+                        let TyKind::Fn { binder, implicit, dom, cod } = &f.ty.kind else {
+                            unreachable!("classified by `occurrence`");
+                        };
+                        Ty {
+                            kind: TyKind::Fn {
+                                binder: binder.clone(),
+                                implicit: *implicit,
+                                dom: dom.clone(),
+                                cod: Box::new(Ty {
+                                    kind: TyKind::OfExpr(Box::new(at(member, index, cod.span))),
+                                    span: cod.span,
+                                }),
+                            },
+                            span: f.ty.span,
+                        }
+                    }
                 };
                 fields.push(FieldDecl { ty, ..f.clone() });
             }
