@@ -823,6 +823,17 @@ theorem List::nth_present<A>(self xs: List<A>): (i: Nat) → i < xs.len() → Ex
     }
 }
 
+// The element at an index of a list mapped is the element there, mapped.
+theorem List::nth_map_some<A, B>(self xs: List<A>, f: A → B): (i: Nat) → (x: A) → xs.nth(i) = Some(x) → xs.map(f).nth(i) = Some(f(x)) {
+    match xs {
+        Nil => λ i x none => absurd(none),
+        Cons(h, t) => λ i => match i {
+            Zero => λ x some => cong_fn<A, Option<B>>(λ a => Some(f(a)), Option::some_inj(h, x, some)),
+            Succ(k) => λ x some => t.nth_map_some(f, k, x, some),
+        },
+    }
+}
+
 // The list as a vector of its length, in order: what a store of a list's
 // bytes stores (`Memory::set_span`, lib/std/machine/memory.hthr).
 fn List::to_vector<A>(self xs: List<A>) → [A; xs.len()] {

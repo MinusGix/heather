@@ -476,3 +476,52 @@ theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers()): (p: Prog) →
         })(refl),
     }
 }
+
+// ---------------------------------------------------------------------------
+// The program
+
+// A region of zeros holds the start: every word zero, every buffer its
+// capacity of zero bytes.
+theorem Target::placed_zero(self t: Target, m: X86Memory(t.r.profile), zero: t.r.Holds(λ _ => zero_byte(), m)):
+    t.Placed(Env(Nil, t.caps.map(λ size => List::replicate(zero_byte(), size))), m) {
+    let v = λ (_: Nat) => zero_byte();
+    let env = Env(Nil, t.caps.map(λ size => List::replicate(zero_byte(), size)));
+    Exists(v, ⟨zero, ⟨λ i _ => refl,
+        λ b cap found => trans(cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(λ o => match o { None => Nil, Some(bytes) => bytes },
+                t.caps.nth_map_some<Nat, List<BitVec(8)>>(λ size => List::replicate(zero_byte(), size), b, cap, found)),
+            sym(cells_replicate(v, zero_byte(), cap, t.layout().buffer_offset(b), λ i _ => refl)))⟩⟩)
+}
+
+// The compiled program, from its first byte with its code resident and its
+// region zero, simulates the source at every fuel.
+theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, src.buffers).size() <= r.size, program: Prog,
+    compiled: src.compile(r.low) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
+    here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
+    zero: r.Holds(λ _ => zero_byte(), s.memory)): SimProgram(r.profile.linux(), src.denote(), s) {
+    let call = program_eval(src.functions);
+    let layout = src.layout(r.low);
+    (match src.main.emit(Start, layout, 0) as λ o => src.main.emit(Start, layout, 0) = o →
+            (match o { None => None, Some(c) => c.prog.finish() }) = Some(program) → SimProgram(r.profile.linux(), src.denote(), s) {
+        None => λ _ none => absurd(none),
+        Some(c) => λ emitted => {
+            let whole = then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
+            (match whole.laid_out() as λ b => whole.laid_out() = b →
+                    (match b { False => None, True => Some(whole) }) = Some(program) → SimProgram(r.profile.linux(), src.denote(), s) {
+                False => λ _ none => absurd(none),
+                True => λ laid same => (j(Option::some_inj(whole, program, same),
+                    λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimProgram(r.profile.linux(), src.denote(), s),
+                    λ at_whole => {
+                        let t = Target(r, src.buffers, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial));
+                        let runs = src.main.emit_runs(t, call, Start, 0, c, emitted, Exists(2, refl));
+                        let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
+                            sim_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
+                        let after = λ (end: Env) => t.goes_finish(c.prog, whole.within_self(), Ret(BitVec::zero()),
+                            λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(end, u.memory),
+                            λ u at exited => sim_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
+                        λ n => runs(n, src.start(), λ (flow: Flow) => Ret(flow.status()), exits, after, s, here, at_whole,
+                            t.placed_zero(s.memory, zero))
+                    }))(resident),
+            })(refl)
+        },
+    })(refl, compiled)
+}
