@@ -6,10 +6,10 @@
 // region, word `i` at offset `8 i` (`word_slots` of them). Each buffer has a
 // range after the words, at its capacity, and past them all a scratch range
 // as large as the largest buffer. So the invariant between statements is the
-// memory alone: the region holds the environment (`native_compile_correct`'s
-// `Placed`), and no register carries anything from one statement to the
-// next. A statement loads what it reads into registers and stores what it
-// writes back; RBX holds each slot's address on the way.
+// memory alone: the region holds the environment (`Target::Placed`,
+// native_compile_region), and no register carries anything from one
+// statement to the next. A statement loads what it reads into registers and
+// stores what it writes back; RBX holds each slot's address on the way.
 //
 // - A `Compute` leaf loads its inputs (the ids its nodes read and do not
 //   write), runs S4's `Region::lower` over them, and stores each node's

@@ -492,6 +492,24 @@ theorem Target::placed_zero(self t: Target, m: X86Memory(t.r.profile), zero: t.r
             sym(cells_replicate(v, zero_byte(), cap, t.layout().buffer_offset(b), λ i _ => refl)))⟩⟩)
 }
 
+// What `compile` builds is laid out: read off the check it made, so a
+// client need not evaluate it again.
+theorem Source::compile_laid(self src: Source, low: BitVec(64), program: Prog, compiled: src.compile(low) = Some(program)):
+    program.laid_out().IsTrue() {
+    (match src.main.emit(Start, src.layout(low), 0) as λ o =>
+            (match o { None => None, Some(c) => c.prog.finish() }) = Some(program) → program.laid_out().IsTrue() {
+        None => λ none => absurd(none),
+        Some(c) => {
+            let whole = then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
+            (match whole.laid_out() as λ b => whole.laid_out() = b →
+                    (match b { False => None, True => Some(whole) }) = Some(program) → program.laid_out().IsTrue() {
+                False => λ _ none => absurd(none),
+                True => λ laid same => j(Option::some_inj(whole, program, same), λ x _ => x.laid_out().IsTrue(), j(sym(laid), λ b _ => b.IsTrue(), trivial)),
+            })(refl)
+        },
+    })(compiled)
+}
+
 // The compiled program, from its first byte with its code resident and its
 // region zero, simulates the source at every fuel.
 theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, src.buffers).size() <= r.size, program: Prog,
