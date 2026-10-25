@@ -8824,17 +8824,14 @@ impl Elaborator {
                             typing::check_term(&self.goal_psi(), 0, Layer::Prog, &cx.gamma, &f, &dom_ty, &fl, self.fuel)
                                 .is_ok()
                         };
-                        // `(a, b)`, scoped in `Γ, z`: `(s, t)` up to conversion
-                        // there. `z` is `?f`'s parameter, at the domain.
+                        // `(a, b)`, scoped in `Γ`: `(s, t)` up to conversion
+                        // there, at `?f`'s domain.
                         let oracle = self.goal_oracle();
-                        let mut zcx = cx.clone();
-                        zcx.push("#z".into(), (*dom).clone(), dom_level.clone());
-                        let (sz, tz, dz) = (s.shift_local(1), t.shift_local(1), dom.shift_local(1));
                         let witness = |a: &Term, b: &Term| {
                             let conv = |l: &Term, r: &Term| {
-                                oracle.convert_term(&zcx.gamma, Layer::Prog, l, r, &dz, &dom_level).is_ok()
+                                oracle.convert_term(&cx.gamma, Layer::Prog, l, r, &dom, &dom_level).is_ok()
                             };
-                            conv(a, &sz) && conv(b, &tz)
+                            conv(a, &s) && conv(b, &t)
                         };
                         match lgg::lgg_body_up_to_conversion(&rx, &ry, &s, &t, &witness).ok().filter(|body| fits(body)) {
                             Some(body) => body,

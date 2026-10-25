@@ -1,6 +1,6 @@
 ---
 title: Elaborator whnf through a W-form family's stored-children transport is slow
-status: open
+status: closed
 labels: [elaboration,performance,indexed-families]
 area: language
 milestone: [math-metatheory]
@@ -41,3 +41,28 @@ Options:
 
 - 2026-10-25: Filed from the inversion round
   ([[cong-inference-through-iwf-w-children]]).
+- 2026-10-25: Done, by option 1 and two costs behind it. Measured as
+  shapes on the `RC` arm of `iwf_no_confusion.rs`'s `cs` with plain `cong`
+  (`--timings`, one run each, cold): the item went from tens of seconds to
+  about twice the endpoint-stated proof's time.
+  1. `SemanticOracle::whnf_term` reads a constructor at the probe's head
+     back from the value (`Readback::term_head`, beside the former readback
+     of [[elab-whnf-copies-straight-continuations]]): `Succ`, `refl`,
+     unannotated pairs and injections, `sup`/`sup_f`/`sup_i`, λ. An
+     annotated pair or injection declines (its value does not say which
+     spelling it came from), as does a literal run. A sweep over every
+     `lib/` directory compared each readback with the reducer's reduct:
+     no mismatch; debug builds keep the comparison, sampled
+     (`readback::verify_term`). The goal's whnf fell by more than an order
+     of magnitude.
+  2. Anti-unification weakened both whole sides into `Γ, z` before walking
+     them, a tree-sized copy of a reduct that is a shared graph; it now
+     walks the sides in `Γ` and weakens only what it keeps (`lgg.rs`), and
+     `cong`'s conversion witness compares in `Γ` without shifting anything.
+     `Mismatch::depth` no longer counts `z`.
+  3. The readback's substitution lifted an environment entry once per
+     occurrence under binders; `SubstLocal` now lifts each payload once per
+     depth and shares it.
+  `plain_cong_inside_arms_on_the_w_form` uses plain `cong` in the `k̄` arm.
+  The two-holes `Two` arm of `iwf_infinitary.rs` keeps `add_eq`: one `cong`
+  has one hole.

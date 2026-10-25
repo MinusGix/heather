@@ -201,18 +201,16 @@ fn plain_cong_inside_arms_on_the_iwf_form() {
 
 #[test]
 fn plain_cong_inside_arms_on_the_w_form() {
-    // Through a function child at its rebound index (`RB`). The `k̄` arm
-    // (`RC`) states its endpoints: `cong` would find the congruence there too,
-    // but the goal's whnf through the stored-children transport is slow
-    // (issues/elab-whnf-family-transport-cost.md).
+    // Through a function child at its rebound index (`RB`), and through the
+    // stored children `k̄` (`RC`), whose goal reduces through the
+    // stored-children transport (issues/elab-whnf-family-transport-cost.md).
     elab(&format!(
         "{ADD}{RT}{SZ_W}
-         theorem succ_eq(a: Nat, b: Nat, p: a = b): Succ(a) = Succ(b) {{ rewrite(p, refl) }}
          theorem cs(n: Nat, t: Rt(n)): sz(n, cp(n, t)) = sz(n, t) {{
              match t {{
                  RL(x) => refl,
                  RB(m, x, k) => cong(cs(add(0, m), k(0))),
-                 RC(m, k, l) => succ_eq(sz(m, cp(m, l)), sz(m, l), cs(m, l)),
+                 RC(m, k, l) => cong(cs(m, l)),
              }}
          }}"
     ));
