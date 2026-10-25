@@ -227,10 +227,6 @@ fn Option::All<A>(self o: Option<A>, P: A → Type) → Type {
     match o { None => True, Some(a) => P(a) }
 }
 
-fn Option::is_some<A>(self o: Option<A>) → Bool {
-    match o { None => False, Some(_) => True }
-}
-
 // The value an option known to be `Some` holds.
 fn Option::get<A>(self o: Option<A>) → o.is_some().IsTrue() → A {
     match o { None => λ absent => false_elim(absent), Some(v) => λ _ => v }

@@ -32,7 +32,9 @@ theorem Option::none_ne_some<A>(a: A, p: None<A>() = Some(a), T: Type): T {
 }
 
 // Whether an option holds a value.
-fn Option::is_some<A>(self o: Option<A>) → Bool { if let Some(_) = o { True } else { False } }
+fn Option::is_some<A>(self o: Option<A>) → Bool {
+    match o { None => False, Some(_) => True }
+}
 
 // An option that holds a value holds what it unwraps to: a computed option
 // named by its unwrapping, with only `is_some` evaluated.
