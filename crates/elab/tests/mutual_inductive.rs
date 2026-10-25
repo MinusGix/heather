@@ -241,12 +241,15 @@ fn a_nested_occurrence_of_a_member_is_refused() {
 }
 
 #[test]
-fn a_function_field_naming_a_member_is_refused() {
+fn a_member_in_a_function_fields_domain_is_refused() {
+    // A member as the codomain is a function child
+    // (docs/iwf-infinitary-design.md §12, `iwf_infinitary.rs`); in the domain
+    // it is not strictly positive.
     let m = elab_err(
         "inductive T { L, N(f: F) }
-         inductive F { E, C(k: Nat -> T) }",
+         inductive F { E, C(k: T -> Nat) }",
     );
-    assert!(m.contains("infinitary"), "{m}");
+    assert!(m.contains("only as its codomain"), "{m}");
 }
 
 #[test]
