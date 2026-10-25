@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,diagnostics]
 area: language
 created: 2026-10-04
-updated: 2026-10-04
+updated: 2026-10-25
 ---
 
 Found while proving the stat pass (`lib/elf64_stat_width.hthr`, 2026-10-04).
@@ -41,3 +41,4 @@ The counting that produced the bad projection is [[conjunction-facts-read-by-cou
 ## Log
 
 - 2026-10-04: A second shape of the same gap, in `lib/elf64_row_fields.hthr`'s `row_selected`: inside a `match first as λ f => … → RowAt(…, f, …) → …` whose arm bound the refined record as `head1`, a record built from `page := head.page` and `holds := head1.holds` elaborated, and the kernel refused it (`PageNext` "where a type that displays the same is expected"). Here the kernel's message did carry a span. The elaborator treated `head1.page` and `head.page` as the same; they are different variables.
+- 2026-10-25: Another mismatch only the kernel refuses, under a let-bound or β-redex head: [[elab-accepts-mismatch-under-redex-head]].

@@ -1,11 +1,11 @@
 ---
 title: An effectful source denoting Linux trees, and its compiler proved correct once
-status: open
+status: closed
 labels: [native,x86,ir,proofs,design]
 area: heather-in-heather
 blocked-by: [native-loop-rule, function-ir-verified-lowering]
 created: 2026-10-21
-updated: 2026-10-23
+updated: 2026-10-25
 milestone: [hih-pl-source]
 ---
 
@@ -42,3 +42,4 @@ Heather, and the compiler's correctness theorem proved once.
 - 2026-10-22: S3.1, the layer: `lib/native/native_source.hthr`. It has `Env` (word and buffer files, kept as data so each value is computed once), calls that clamp to their buffers, `Stmt`/`Flow`, `denote` (`Ret`/`Vis`/`bind`/`iter`), `Stmt::grows` and `Source::denote → Program`. `cat` is written in it and run against a scripted world by `refl` (`crates/elab/tests/fixtures/native_source_cat.hthr`). Longer runs hit the kernel's bounded value cache ([[kernel-value-cache-evaluation-thrash]]). cat's `Implements` against `tr_spec` is [[native-source-cat-implements]]. Next: S3.2 (compile the layer and its theorem).
 - 2026-10-22: 2026-10-22: Runs by refl no longer meet a bounded value cache: the kernel keeps what a query forced, and cat copying three bytes one at a time checks ([[kernel-value-cache-evaluation-thrash]]).
 - 2026-10-23: 2026-10-23: S3.1's done-when holds: cat's source implements `tr_spec(λ b => b)` at every capacity `0 < c < 2^63` ([[native-source-cat-implements]], closed; `lib/native/native_cat_spec.hthr`). Source proofs go statement by statement through `lib/native/native_source_sim.hthr` (simulation up to a continuation, docs/itree-simulation-design.md §6). cat now lives in `lib/native/native_cat.hthr`.
+- 2026-10-25: S3.2 landed: the compiler (`lib/native/native_compile.hthr`) and its theorem, `native_compile_correct` (`lib/native/native_compile_correct.hthr`): a program `Source::compile` builds, run from its first byte with its code resident and its data region zero, simulates `src.denote()` at every fuel. The shape differs from design §7.4–7.5 in three ways. The environment lives wholly in one data region (words in slots, buffers after them, a scratch range for reads), so the invariant between statements is memory alone (`Target::Placed`, `native_compile_region.hthr`) and no placement is threaded. The construct lemmas are proved directly over the code's `Goes` claim, one rule per instruction form (`native_compile_steps`/`segments`), not through `Wp`. And a `Compute` leaf is a register-only dataflow region lowered by S4 (`Region::lower_correct`), so no `Proved` contract with memory was needed ([[wp-proved-memory-contracts]] stays for leaves that spill or call). The statement induction is `Stmt::emit_runs` (a continuation-form claim, `Target::Runs`; `Repeat` by induction on the loop's fuel). cat compiled at the I/O image's page and loaded past a 232-byte header sends to stdout what it read (`cat_native_sends`, `lib/native/native_cat_compiled.hthr`), with only the compile and its length evaluated. Refused for now, each filed: other region shapes as leaves ([[native-compile-wider-leaves]]), open/close/stat ([[native-compile-other-calls]]), and the code's shape ([[native-compiled-code-shape]]).
