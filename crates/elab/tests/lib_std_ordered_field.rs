@@ -142,7 +142,7 @@ fn the_inverse_wants_its_own_argument_apart() {
         "theorem bad<A: OrderedField(≈, <, <=, +, *)>(x: A, hx: x < A.unit): A.unit < A.recip(x, Inl(hx)) {
             OrderedField::recip_pos(x, Inl(hx), hx)
         }",
-        Refusal::Kernel,
+        Refusal::Mismatch,
     );
     // The reciprocal is `recip`: `inv` is the additive group's negation, one
     // argument and no apartness.

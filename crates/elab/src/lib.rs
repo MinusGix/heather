@@ -1368,6 +1368,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         self.unify_arg_ty(cx, parameter, argument, n, sols, span)
     }
 
+    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span) {
+        self.note_check_mismatch(cx, got, expected, level, span)
+    }
+
     fn solve_application_from_expected(
         &self,
         cx: &Cx,
