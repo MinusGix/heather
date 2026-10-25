@@ -69,6 +69,23 @@ theorem Prog::lands_jmp(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, befor
 // ---------------------------------------------------------------------------
 // Straight runs: the memory forms
 
+// A block at a label, onto whatever holds of the state it computes.
+theorem Site::moves_exec<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Block(instructions)),
+    post: MachineState<M> → Type):
+    site.Moves(writes, prog_len(before), prog_len(before) + block_length(instructions),
+        λ (s: MachineState<M>) => post(execute_block_normal(instructions, s)), post) {
+    λ s here resident holds => {
+        let item = site.item_resident(fits, s.memory, resident, k, before, name, Block(instructions), at);
+        let ran = block_steps(site.fetch, site.data, instructions, s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes(instructions), address), item));
+        let u = execute_block_normal(instructions, s);
+        Exists(u, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, u, ran.left),
+            ⟨trans(ran.right.left, site.rip_after(s, prog_len(before), block_length(instructions), here)),
+             ⟨j(sym(ran.right.right), λ memory _ => site.Resident(memory), resident), holds⟩⟩⟩)
+    }
+}
+
 // A word loaded at a label, from a canonical address that reads one.
 theorem Site::moves_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
     before: Prog, name: Nat, load: WordLoad, at: asm_back(site.program, k) = At(before, name, Load(load)),
@@ -257,19 +274,19 @@ theorem LinuxIo::goes_jmp<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(
 
 // A SYSCALL making the tree's call: Linux is asked it, and from every state
 // it may resume in after each answer it may give, the code goes on as the
-// tree goes on at that answer.
+// tree goes on at that answer (where the code was resident when asked).
 theorem LinuxIo::goes_call<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), fits: FillsFit(program, no_fills()), k: Nat,
     before: Prog, name: Nat, at: asm_back(program, k) = At(before, name, Syscall),
     c: LinuxCmd<Nat>, next: c.Resp() → ITree<BitVec(64)>(Events::linux()), after: c.Resp() → MachineState<M> → Type,
     goes: (a: c.Resp()) → io.site(program, origin).Goes(io, prog_len(before) + 2, next(a), after(a))):
     io.site(program, origin).Goes(io, prog_len(before), Vis(c, next), λ (s: MachineState<M>) => LinuxRequests(io, s, c) ∧
-        ((a: c.Resp()) → c.Answers(a) → LinuxResumes(io, s, c, a, λ (u: MachineState<M>) =>
+        (io.site(program, origin).Resident(s.memory) → (a: c.Resp()) → c.Answers(a) → LinuxResumes(io, s, c, a, λ (u: MachineState<M>) =>
             io.site(program, origin).Resident(u.memory) ∧ after(a, u)))) {
     let site = io.site(program, origin);
     λ s here resident holds => sim_vis(io, c, next, s, s, Exists(Zero, refl),
         site.item_fetched(fits, s, resident, k, before, name, Syscall, at, here), holds.left,
         λ a answers junk leaves rcx r11 => {
-            let resumed = holds.right(a, answers, junk, leaves, rcx, r11);
+            let resumed = holds.right(resident, a, answers, junk, leaves, rcx, r11);
             goes(a, linux_answered(io, s, c, a, junk, rcx, r11),
                 trans(linux_answered_rip(io, s, c, a, junk, rcx, r11), site.rip_after(s, prog_len(before), 2, here)),
                 resumed.left, resumed.right)

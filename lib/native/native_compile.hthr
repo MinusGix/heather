@@ -230,10 +230,15 @@ fn Prog::clamp(self p: Prog, value, bound: Gpr, skip: Nat) → Prog {
     then(then(then(p, Block([CmpRR(value, bound)])), Jcc(B, skip)), Block([MovRR(value, bound)])).label(skip)
 }
 
+// The copy's counter and its two walks set, and its loop's label.
+fn Prog::copy_head(self p: Prog, layout: Layout, buf: Nat, head: Nat) → Prog {
+    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))])).label(head)
+}
+
 // The `count` bytes in RAX copied from the scratch range to the buffer's: R8
 // counts up to RAX, RSI and RDI walk the two ranges, RDX carries each byte.
 fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Prog {
-    let set = then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))])).label(head);
+    let set = p.copy_head(layout, buf, head);
     let tested = then(then(set, Block([CmpRR(R8, Rax)])), Jcc(E, done));
     let moved = then(then(tested, LoadByte(ByteLoad(Rdx, Rsi))), StoreByte(ByteStore(Rdi, Rdx)));
     then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
