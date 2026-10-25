@@ -18,6 +18,11 @@
 //! what was trusted: a green partial check must never read like a green full
 //! check (the Coq `vos` scar, issues/parallel-checking-and-caching.md).
 //!
+//! `--expectations` reads `// expect-error…` directives (`expect.rs`): a
+//! declaration under one must be refused for the reason it names, and is
+//! then not an error. Opt-in for the same reason as `--cache`, and its green
+//! line counts the refusals it matched.
+//!
 //! The import closure is one elaboration into one shared Ψ
 //! (docs/modules-design.md §3.2): the loader orders the modules, this file
 //! feeds them in that order, and each module's diagnostics are rendered
@@ -42,7 +47,7 @@ use heather_elab::{Elaborator, LintProfile, stats};
 // The loader lives in this crate's `lib` target so that the frontend bench
 // corpus computes its import closure with the *same* code the CLI does
 // (see `lib.rs`, issues/frontend-bench-ir-closure-stale.md).
-use heather_cli::{loader, semantic::SemanticSession};
+use heather_cli::{expect, loader, semantic::SemanticSession};
 
 mod color;
 mod fmt;
@@ -94,7 +99,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
@@ -140,6 +145,10 @@ struct Opts {
     /// proofs on N kernel worker threads, joined before the module is accepted
     /// (`docs/parallel-kernel-gate-design.md`). 1 is exactly the serial gate.
     kernel_workers: Option<usize>,
+    /// `--expectations`: read `// expect-error…` directives, so a declaration
+    /// they mark must be refused for the reason they name, and is then not
+    /// an error (`expect.rs`). Off, a directive is a comment.
+    expectations: bool,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -157,6 +166,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         timings: stats::Dest::from_env(),
         images: ImageFreshness::Exact,
         kernel_workers: None,
+        expectations: false,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -206,6 +216,10 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         }
         if a == "--review" {
             opts.review = true;
+            continue;
+        }
+        if a == "--expectations" {
+            opts.expectations = true;
             continue;
         }
         if let Some(rest) = a.strip_prefix("--only") {
@@ -376,6 +390,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             .with_freshness(opts.images)
             .with_only(only);
         let mut forced_items = 0;
+        let mut refusals_matched = 0;
         // `HEATHER_VALUE_METRICS`: print the kernel's value-machine counters
         // per module (meaningful with the `value-metrics` feature; zeros
         // otherwise). Observational only — it cannot change a verdict.
@@ -412,7 +427,18 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 eprintln!("{notice}");
             }
             forced_items += outcome.forced_items;
-            let errs = outcome.errors;
+            let mut hint = None;
+            let errs = if opts.expectations {
+                let verdict = expect::judge(&m.src, outcome.errors);
+                refusals_matched += verdict.matched;
+                verdict.errors
+            } else {
+                let n = expect::count(&m.src);
+                if n > 0 && !outcome.errors.is_empty() {
+                    hint = Some(n);
+                }
+                outcome.errors
+            };
             // Warnings are drained per module, before the next one is checked:
             // a span indexes into the source it came from
             // (docs/diagnostic-warnings-design.md §3). They do not fail the
@@ -460,6 +486,12 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             let n = errs.len();
             let count = format!("{n} error{}", if n == 1 { "" } else { "s" });
             eprintln!("\n{shown}: {}", color::error_count(&count, stderr_color));
+            if let Some(n) = hint {
+                eprintln!(
+                    "{shown}: {n} `// expect-error` directive{} here; `heather check --expectations` reads them",
+                    if n == 1 { "" } else { "s" },
+                );
+            }
         }
         if root_ok && opts.only.is_some() {
             let unmet = semantic.only_unmet();
@@ -494,11 +526,17 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 }
             }
         }
+        // A green line that leaned on directives says how many refusals it
+        // matched, so it never reads like a file where everything checked.
+        let refusals = match refusals_matched {
+            0 => String::new(),
+            n => format!(", {n} expected refusal{} matched", if n == 1 { "" } else { "s" }),
+        };
         if root_ok && opts.only.is_some() {
             // Reserved wording, like `(cache)`: a `--only` run never reads
             // as a check of the module (`docs/check-only-design.md` §3).
             println!(
-                "{path}: {} (only) — {} declaration{} elaborated for --only, {} replayed",
+                "{path}: {} (only) — {} declaration{} elaborated for --only, {} replayed{refusals}",
                 color::success("ok", stdout_color),
                 forced_items,
                 if forced_items == 1 { "" } else { "s" },
@@ -521,7 +559,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                     println!(
                         "{path}: {} (cache) — {} declaration{} kernel-checked, {} accepted \
                          from cache, {} semantic module{} replayed{relocated}, {} declaration{} \
-                         replayed after an edit",
+                         replayed after an edit{refusals}",
                         color::success("ok", stdout_color),
                         n.checked,
                         if n.checked == 1 { "" } else { "s" },
@@ -532,6 +570,11 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                         if semantic.replayed_items() == 1 { "" } else { "s" },
                     );
                 }
+                _ if refusals_matched > 0 => println!(
+                    "{path}: {} — {}",
+                    color::success("ok", stdout_color),
+                    &refusals[2..],
+                ),
                 _ => println!("{path}: {}", color::success("ok", stdout_color)),
             }
         }

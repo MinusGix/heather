@@ -1,10 +1,10 @@
 ---
 title: A .hthr test corpus with inline expectations, and tests that name imports
-status: open
+status: closed
 labels: [testing,tooling,design]
 area: infrastructure
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 ---
 
 About 1000 of the 2528 elab integration tests are a Heather program in a
@@ -43,3 +43,7 @@ its controls, and editors fold the few that stay inline. If `guards` is all
 a block adds, the comment directive can carry it instead. Either way it
 reuses the corpus runner's matcher. Decide after the corpus shows how often
 the directive is used.
+
+## Log
+
+- 2026-10-25: Built as `heather check --expectations` (`crates/cli/src/expect.rs`). A declaration under `// expect-error: <fragment>`, `(kernel)` or `(mismatch)` must be refused for that reason (all of a declaration's directives hold of its one error, slips count only when named, a reasonless or misplaced directive is an error); everything else must check. Errors are attributed by span, at most one per declaration. Plain `check` ignores directives and prints a hint. The corpus lives in `lib/_tests` beside the probes, so the whole-library gate is the runner: it passes the flag. `lib_algebra.rs` moved: `lib/_tests/std/algebra/algebra_tests.hthr` holds its probes (96 declarations that check) and 16 refusals; the Rust file keeps the two derived-instance-table tests. Pinning showed two reasons that differ from the old comments: `sum_all` at `Bool` is an implicit-inference refusal, not "`+` means nothing", and the no-`Monoid` refusal names the class lemma's own `Monoid<A>(op)`, not `Colour`. Residue: `library_for` is [[test-closures-by-import]], the `failing` question is [[failing-blocks-in-language]], and migration stays lazy (§5): no `tests/hthr` tree until the first elaborator-behaviour test moves.

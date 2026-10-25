@@ -7,7 +7,8 @@
 //! last test went (`elf64_load`, at #156) was checked by nothing. Here the
 //! library is checked as a whole, through the CLI, and two lints keep the
 //! tree honest: every module is reached from somewhere, and nothing outside
-//! `lib/_tests` imports a test module (§4.5).
+//! `lib/_tests` imports a test module (§4.5). Refusals live in `lib/_tests`
+//! too, as declarations under `// expect-error` directives (§4.3).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -217,6 +218,12 @@ fn gate_folders() -> Vec<PathBuf> {
 /// module replays; a changed module or compiler re-elaborates what changed.
 /// The fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`) replays
 /// images an earlier build wrote, as the showcase gate does.
+///
+/// The check reads `// expect-error` directives (`--expectations`,
+/// `crates/cli/src/expect.rs`): a refusal in `lib/_tests` must be refused for
+/// the reason its directive names, and anything a directive does not mark
+/// must check. A module with no directives is checked exactly as without
+/// the flag.
 #[test]
 fn every_library_module_checks() {
     let root = root();
@@ -233,6 +240,7 @@ fn every_library_module_checks() {
                 cmd.current_dir(&root).arg("check");
                 cmd.env("HEATHER_KERNEL_WORKERS", "1");
                 cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+                cmd.arg("--expectations");
                 if stale {
                     cmd.arg("--accept-stale-images");
                 }
