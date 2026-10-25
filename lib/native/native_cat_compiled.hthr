@@ -12,6 +12,7 @@ import native_compile;
 import native_compile_region;
 import native_compile_steps;
 import native_compile_correct;
+import function_ir_lower;
 import stream_filter_spec;
 import linux_calls;
 import linux_trees;
@@ -38,10 +39,16 @@ import option;
 // cat's buffer, its environment and the scratch range all fit the page.
 fn cat_capacity() → Nat { 1024 }
 
-fn cat_code() → Prog { cat(cat_capacity()).compile(DataRegion::io_page().low).unwrap_or(Start) }
+// The compile succeeds: evaluated once, as a `Bool`.
+theorem cat_compiled(): cat(cat_capacity()).compile(DataRegion::io_page().low).is_some() = True { refl }
+theorem cat_present(): cat(cat_capacity()).compile(DataRegion::io_page().low).is_some().IsTrue() {
+    j(sym(cat_compiled()), λ b _ => b.IsTrue(), trivial)
+}
+
+fn cat_code() → Prog { cat(cat_capacity()).compile(DataRegion::io_page().low).get(cat_present()) }
 
 theorem cat_compiles(): cat(cat_capacity()).compile(DataRegion::io_page().low) = Some(cat_code()) {
-    cat(cat_capacity()).compile(DataRegion::io_page().low).some_unwrap(Start, refl)
+    cat(cat_capacity()).compile(DataRegion::io_page().low).some_get(cat_present())
 }
 
 theorem cat_fits(): Layout(DataRegion::io_page().low, cat(cat_capacity()).buffers).size() <= DataRegion::io_page().size {

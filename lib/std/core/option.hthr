@@ -1,7 +1,5 @@
 // `Option<A>` and its basic transformation, chaining, and fallback operations.
 
-import bool;
-
 inductive Option<A> { None, Some(v: A) }
 
 fn Option::map<A, B>(self o: Option<A>, f: A → B) → Option<B> {
@@ -29,18 +27,4 @@ theorem Option::some_inj<A>(a, b: A, p: Some(a) = Some(b)): a = b {
 // `None` is not `Some`: from such an equation anything follows.
 theorem Option::none_ne_some<A>(a: A, p: None<A>() = Some(a), T: Type): T {
     j(sym(p), λ y q => match y as λ _ => Type { None => T, Some(_) => A }, a)
-}
-
-// Whether an option holds a value.
-fn Option::is_some<A>(self o: Option<A>) → Bool {
-    match o { None => False, Some(_) => True }
-}
-
-// An option that holds a value holds what it unwraps to: a computed option
-// named by its unwrapping, with only `is_some` evaluated.
-theorem Option::some_unwrap<A>(self o: Option<A>, d: A, some: o.is_some() = True): o = Some(o.unwrap_or(d)) {
-    (match o as λ x => x.is_some() = True → x = Some(x.unwrap_or(d)) {
-        None => λ no => absurd(no),
-        Some(a) => λ _ => refl,
-    })(some)
 }

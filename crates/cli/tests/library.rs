@@ -34,6 +34,10 @@ const KEPT_ROOTS: &[(&str, &str)] = &[
     // native rebuild; nothing has consumed them since B2 (#156) burned the
     // per-function path.
     ("elf64_load", "kept for the native rebuild (native-program-logic-design §3)"),
+    // The effectful source compiler's end-to-end corollary: cat compiled,
+    // loaded and its stdout fact. A result for a reader, not a lemma for
+    // another module (issues/native-effect-source-compiler.md).
+    ("native_cat_compiled", "cat end to end through the compiler's theorem"),
 ];
 
 fn hthr_files(dir: &Path, out: &mut Vec<PathBuf>) {
