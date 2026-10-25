@@ -4909,19 +4909,32 @@ impl Elaborator {
                 let [body] = args.as_slice() else {
                     return err("internal case splitter has the wrong arity", e.span);
                 };
+                // Every goal the splitter hands on is checked to restate the
+                // one it stands for before anything is built at it: a motive
+                // instance or a simplified goal that is not the goal would
+                // otherwise surface only as the kernel's verdict on the whole
+                // declaration, with `split_all` having reported success.
                 match goal_combinators::next_step(self, cx, expected, body, e.span) {
-                    goal_combinators::Step::Intro(expr) | goal_combinators::Step::Conjoin(expr) => {
+                    goal_combinators::Step::Refuted(expr)
+                    | goal_combinators::Step::Intro(expr)
+                    | goal_combinators::Step::Conjoin(expr) => {
                         self.elab_check_skel_slots(cx, &expr, expected, lvl, hint, skel, capture_slots)
                     }
                     goal_combinators::Step::Split(split) => {
                         let goal = goal_combinators::simplify_goal(self, cx, &inductive::decoded(expected));
+                        goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
                         let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
+                        goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &goal, lvl, "case split's motive, at its scrutinee,", e.span)?;
                         self.elab_convoy(
                             cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
                             scrut, &ty, &level, split.motive, lvl, &goal, e.span,
                         )
                     }
-                    goal_combinators::Step::Leaf(goal) => self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots),
+                    goal_combinators::Step::Leaf(goal) => {
+                        goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
+                        goal_combinators::check_refl_leaf(self, cx, body, &goal, e.span)?;
+                        self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots)
+                    }
                 }
             }
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a

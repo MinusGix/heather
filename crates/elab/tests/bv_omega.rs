@@ -74,6 +74,7 @@ fn bv_omega_suite() {
     splits_through_definitions();
     byte_tests_read_as_written();
     splits_decided_predicates();
+    splits_comparisons_a_split_decides();
 }
 
 /// Byte tests as a program writes them (S3 of
@@ -277,6 +278,54 @@ fn splits_stuck_comparisons() {
         }
     "#);
     assert!(error.contains("may overflow 8 bits"), "{error}");
+}
+
+/// A comparison that computation decides, or that a later split decides
+/// (issues/split-all-nested-scrutinee-kernel-reject.md): the case it
+/// contradicts is closed by `absurd`, never handed to the leaf, and a
+/// comparison over a match is split after the match, at the operand each
+/// case has. The axes: closed comparisons under a finite local, open words on
+/// either side of the equation, a checking position, a leaf other than `refl`,
+/// and the negative control, a false statement whose `refl` leaf is refused
+/// by the splitter itself, naming the case.
+fn splits_comparisons_a_split_decides() {
+    let decided = r#"
+        fn zero() → BitVec(64) { BitVec::ofNat(0) }
+        fn f(c: Bool) → Nat {
+            match (match c { False => zero().unsigned_lt_bit(zero()), True => zero().eq_bit(zero()) }) {
+                False => 0,
+                True => 1,
+            }
+        }
+        fn g(c: Bool) → Nat { match c { False => 0, True => 1 } }
+    "#;
+    checks("closed comparisons under a split", &format!("{decided}
+        theorem f_g(c: Bool): f(c) = g(c) {{ split_all; all_goals {{ refl }} }}
+        theorem f_g_omega(c: Bool): f(c) = g(c) {{ split_all; all_goals {{ omega }} }}
+        theorem f_g_checking(c: Bool): f(c) = g(c) {{
+            let p: (f(c) = g(c)) = {{ split_all; all_goals {{ refl }} }};
+            p
+        }}
+    "));
+    checks("a comparison over a match on open words", r#"
+        fn one() → BitVec(64) { BitVec::ofNat(1) }
+        fn h(c: Bool, x, y: BitVec(64)) → Nat {
+            match (match c { False => x, True => y }).eq_bit(one()) { False => 0, True => 1 }
+        }
+        fn k(c: Bool, x, y: BitVec(64)) → Nat {
+            match c {
+                False => match x.eq_bit(one()) { False => 0, True => 1 },
+                True => match y.eq_bit(one()) { False => 0, True => 1 },
+            }
+        }
+        theorem h_k(c: Bool, x, y: BitVec(64)): h(c, x, y) = k(c, x, y) { split_all; all_goals { refl } }
+        theorem k_h(c: Bool, x, y: BitVec(64)): k(c, x, y) = h(c, x, y) { split_all; all_goals { refl } }
+        theorem bounded(c: Bool, x, y: BitVec(64)): h(c, x, y) <= 1 { split_all; all_goals { omega } }
+    "#);
+    let error = refused("a false value in a case the program reaches", &format!("{decided}
+        theorem wrong(c: Bool): f(c) = 1 {{ split_all; all_goals {{ refl }} }}
+    "));
+    assert!(error.contains("`split_all` leaves the goal `0 = 1` in the case") && error.contains("which `refl` does not prove"), "{error}");
 }
 
 /// The respelling issue's acceptance: an atom whose implicit nothing written

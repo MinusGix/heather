@@ -59,8 +59,11 @@ matching its fuel `Zero`/`Succ(k)` and called as the root's result
   the loop agrees with the source's recursion at any fuel.
   The certificate states one pass's obligation with the tree's comparisons
   abstracted as `Bool`s and splits them by explicit convoys (`_pass_cased`):
-  `split_all` builds a term the kernel rejects there
-  ([[split-all-nested-scrutinee-kernel-reject]]). The root is then met by a
+  `split_all` built a term the kernel rejected there
+  ([[split-all-nested-scrutinee-kernel-reject]]). Since that fix,
+  `split_all` there is refused by the splitter itself, at a leaf whose pass
+  side is still a raw recursor (`later(Cons(fst(… elimNat …)))`), so the
+  convoys stay. The root is then met by a
   chain of generic lemma instances (`program_eval_last`,
   `function_eval_body`, `compose_eval`, `loop_then_eval`) whose stated types
   are syntactic, never by a conversion: at a literal fuel that conversion
