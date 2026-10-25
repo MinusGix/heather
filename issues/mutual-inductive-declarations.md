@@ -1,6 +1,6 @@
 ---
 title: Mutual inductive declarations at the surface, lowered to one tagged IWf
-status: open
+status: closed
 labels: [frontend,inductives,indexed-families]
 area: language
 milestone: [math-metatheory]
@@ -30,3 +30,14 @@ apply, and one test should use a tag-dependent index type.
 ## Log
 
 - 2026-10-24: Filed from the heather-coq port assessment.
+- 2026-10-24: Done, design in `docs/mutual-inductive-design.md`. A run of
+  `inductive`s that mention one another is a group, lowered to one `IWf`
+  indexed by a generated sum of the members' indices (`D#members`), not
+  `Σ(tag). I_tag`: the sum says the tag dependence by construction, so the
+  index types need no codes (§2 there). Each member is a view: `match` on it
+  inverts on the member, per level, so other members' arms and impossible
+  arms are neither written nor accepted. A cycle of measure-free `fn`s or
+  `theorem`s over the members is one structural recursion, one `elim_IWf`
+  (§6). Tests: `crates/elab/tests/mutual_inductive.rs`, including members
+  indexed by a declared type and by `Nat`. Follow-up:
+  [[rewrite-by-ih-after-unfolding]].

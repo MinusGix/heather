@@ -5,13 +5,16 @@
 // one address are the same form even when their lengths differ: the shorter
 // fetch is a prefix of the longer, and the decoder answers alike on both.
 // The decoder is complete on the forms and claims nothing else; soundness
-// on other bytes is not needed and not stated.
+// on other bytes is not needed and not stated. The forms are the emitted
+// instructions, the stores, SYSCALL, and the stack's (x86_64_stack): a word
+// spilled to and reloaded from a frame slot, CALL and RET.
 import x86_64;
 import x86_64_block;
 import x86_64_fetch;
 import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_store;
+import x86_64_stack;
 import bitvec;
 import bool;
 import list;
@@ -22,18 +25,20 @@ inductive StepForm {
     FormEmitted(emitted: EmittedInstruction),
     FormStore(store: MemoryStore),
     FormSyscall,
+    FormStack(form: StackForm),
 }
 fn step_form_bytes(form: StepForm) → List<BitVec(8)> {
     match form {
         FormEmitted(emitted) => emitted_bytes(emitted),
         FormStore(store) => memory_store_bytes(store),
         FormSyscall => syscall_bytes(),
+        FormStack(form) => form.bytes(),
     }
 }
 
 // ---------------------------------------------------------------------------
 // The decoder. A REX prefix is 0100WRXB; every other first byte the forms
-// use (0F, 74, E9, EB) differs from it in bits 4 to 7.
+// use (0F, 7x, C3, E8, E9, EB) differs from it in bits 4 to 7.
 
 fn rex_like(byte: BitVec(8)) → Bool {
     match byte_bit7(byte) {
@@ -111,20 +116,50 @@ fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) 
     }
 }
 
+// mod 01 with r/m 100: a SIB byte, then a byte displacement, which only the
+// stack forms use (the word load's displaced bases are r/m 101).
+fn stack_slot(modrm: BitVec(8)) → Bool {
+    match byte_bit6(modrm) {
+        False => False,
+        True => match byte_bit0(modrm) {
+            True => False,
+            False => match byte_bit1(modrm) { True => False, False => byte_bit2(modrm) },
+        },
+    }
+}
+
+// After a stack form's ModRM: the SIB byte, then the slot's displacement. A
+// word spilled (89 /r) or reloaded (8B /r).
+fn decode_slot_form(rex, opcode, modrm: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match rest {
+        Nil => None,
+        Cons(_, t1) => match t1 {
+            Nil => None,
+            Cons(offset, _) => match opcode.eq_dec(BitVec::ofNat(0x89)) {
+                Inl(_) => Some(FormStack(SpillWord(StackStore(source := reg_of(rex, modrm), offset := offset)))),
+                Inr(_) => Some(FormStack(ReloadWord(StackLoad(destination := reg_of(rex, modrm), offset := offset)))),
+            },
+        },
+    }
+}
+
 // After REX and an opcode that is not 0F or B8+r: mod 11 is a register form,
-// mod 00 a store into [base], of a byte (88 /r) or a word (89 /r), or the
-// word load from [base] (8B /r), whose SIB or displacement byte, if any, the
-// decoder never reads.
+// a frame slot a stack form, and otherwise a store into [base], of a byte
+// (88 /r) or a word (89 /r), or the word load from [base] (8B /r), whose SIB
+// or displacement byte, if any, the decoder never reads.
 fn decode_modrm_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match rest {
         Nil => None,
         Cons(modrm, tail) => match byte_bit7(modrm) {
             True => decode_register_form(opcode, rm_of(rex, modrm), reg_of(rex, modrm), tail),
-            False => match opcode.eq_dec(BitVec::ofNat(0x88)) {
-                Inl(_) => Some(FormStore(StoreByte(ByteStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
-                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x8b)) {
-                    Inl(_) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
-                    Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+            False => match stack_slot(modrm) {
+                True => decode_slot_form(rex, opcode, modrm, tail),
+                False => match opcode.eq_dec(BitVec::ofNat(0x88)) {
+                    Inl(_) => Some(FormStore(StoreByte(ByteStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                    Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x8b)) {
+                        Inl(_) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
+                        Inr(_) => Some(FormStore(StoreWord(WordStore(base := rm_of(rex, modrm), source := reg_of(rex, modrm))))),
+                    },
                 },
             },
         },
@@ -260,8 +295,9 @@ fn decode_two_byte_form(opcode: BitVec(8), rest: List<BitVec(8)>) → Option<Ste
     }
 }
 
-// No REX: 0F-prefixed forms, E9 rel32, EB rel8 and the short Jcc 70–7F rel8.
-fn decode_plain_form(first, second: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+// No REX, two bytes or more: 0F-prefixed forms, E9 rel32, EB rel8 and the
+// short Jcc 70–7F rel8.
+fn decode_plain_pair(first, second: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match first.eq_dec(BitVec::ofNat(0x0f)) {
         Inl(_) => decode_two_byte_form(second, rest),
         Inr(_) => match first.eq_dec(BitVec::ofNat(0xe9)) {
@@ -277,15 +313,23 @@ fn decode_plain_form(first, second: BitVec(8), rest: List<BitVec(8)>) → Option
     }
 }
 
+// No REX: RET (C3) is one byte, CALL (E8) its rel32; the rest are pairs.
+fn decode_plain_form(first: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
+    match first.eq_dec(BitVec::ofNat(0xc3)) {
+        Inl(_) => Some(FormStack(ReturnNear)),
+        Inr(_) => match first.eq_dec(BitVec::ofNat(0xe8)) {
+            Inl(_) => match decode_rel32(rest) { None => None, Some(displacement) => Some(FormStack(CallNear(displacement))) },
+            Inr(_) => match rest { Nil => None, Cons(second, tail) => decode_plain_pair(first, second, tail) },
+        },
+    }
+}
+
 fn decode_step_form(bytes: List<BitVec(8)>) → Option<StepForm> {
     match bytes {
         Nil => None,
-        Cons(first, t1) => match t1 {
-            Nil => None,
-            Cons(second, rest) => match rex_like(first) {
-                True => decode_rex_form(first, second, rest),
-                False => decode_plain_form(first, second, rest),
-            },
+        Cons(first, rest) => match rex_like(first) {
+            True => match rest { Nil => None, Cons(second, tail) => decode_rex_form(first, second, tail) },
+            False => decode_plain_form(first, rest),
         },
     }
 }
@@ -385,16 +429,31 @@ theorem load_form_complete(load: ByteLoad, rest: List<BitVec(8)>):
             rm_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)))
 }
 
+// The word load's ModRM is never a frame slot's, base by base: its
+// displaced bases (RBP, R13) are r/m 101.
+fn word_load_form(destination, base: Gpr) → Option<StepForm> { Some(FormEmitted(EmitWordLoad(WordLoad(destination := destination, base := base)))) }
+theorem word_load_reg_back(base, destination: Gpr):
+    word_load_form(reg_of(rex_w_rr(base, destination), byte_from_fields(gpr_bit0(base), gpr_bit1(base), gpr_bit2(base),
+        gpr_bit0(destination), gpr_bit1(destination), gpr_bit2(destination), byte_load_displaced(base), False)), base) =
+        word_load_form(destination, base) {
+    cong_fn(λ (d: Gpr) => word_load_form(d, base), reg_of_fields(base, destination, byte_load_displaced(base), False))
+}
+theorem word_load_form_at(destination, base: Gpr, rest: List<BitVec(8)>):
+    decode_step_form(word_load_bytes(WordLoad(destination := destination, base := base)) ++ rest) = word_load_form(destination, base) {
+    match base as λ b => decode_step_form(word_load_bytes(WordLoad(destination := destination, base := b)) ++ rest) = word_load_form(destination, b) {
+        Rax => word_load_reg_back(Rax, destination), Rcx => word_load_reg_back(Rcx, destination),
+        Rdx => word_load_reg_back(Rdx, destination), Rbx => word_load_reg_back(Rbx, destination),
+        Rsp => word_load_reg_back(Rsp, destination), Rbp => word_load_reg_back(Rbp, destination),
+        Rsi => word_load_reg_back(Rsi, destination), Rdi => word_load_reg_back(Rdi, destination),
+        R8 => word_load_reg_back(R8, destination), R9 => word_load_reg_back(R9, destination),
+        R10 => word_load_reg_back(R10, destination), R11 => word_load_reg_back(R11, destination),
+        R12 => word_load_reg_back(R12, destination), R13 => word_load_reg_back(R13, destination),
+        R14 => word_load_reg_back(R14, destination), R15 => word_load_reg_back(R15, destination),
+    }
+}
 theorem word_load_form_complete(load: WordLoad, rest: List<BitVec(8)>):
     decode_step_form(word_load_bytes(load) ++ rest) = Some(FormEmitted(EmitWordLoad(load))) {
-    let modrm = byte_from_fields(gpr_bit0(load.base), gpr_bit1(load.base), gpr_bit2(load.base),
-        gpr_bit0(load.destination), gpr_bit1(load.destination), gpr_bit2(load.destination),
-        byte_load_displaced(load.base), False);
-    let rex = rex_w_rr(load.base, load.destination);
-    trans(cong_fn(λ (d: Gpr) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := d, base := rm_of(rex, modrm))))),
-            reg_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)),
-        cong_fn(λ (b: Gpr) => Some(FormEmitted(EmitWordLoad(WordLoad(destination := load.destination, base := b)))),
-            rm_of_fields(load.base, load.destination, byte_load_displaced(load.base), False)))
+    word_load_form_at(load.destination, load.base, rest)
 }
 
 theorem word_store_form_complete(store: WordStore, rest: List<BitVec(8)>):
@@ -475,6 +534,19 @@ theorem near_form_complete(control: NearControl, rest: List<BitVec(8)>):
     }
 }
 
+// The stack forms: a slot's register is in reg, its base RSP.
+theorem stack_form_complete(form: StackForm, rest: List<BitVec(8)>):
+    decode_step_form(form.bytes() ++ rest) = Some(FormStack(form)) {
+    match form as λ f => decode_step_form(f.bytes() ++ rest) = Some(FormStack(f)) {
+        SpillWord(store) => cong_fn(λ (s: Gpr) => Some(FormStack(SpillWord(StackStore(source := s, offset := store.offset)))),
+            reg_of_fields(Rsp, store.source, True, False)),
+        ReloadWord(load) => cong_fn(λ (d: Gpr) => Some(FormStack(ReloadWord(StackLoad(destination := d, offset := load.offset)))),
+            reg_of_fields(Rsp, load.destination, True, False)),
+        CallNear(displacement) => cong_fn(λ (d: BitVec(32)) => Some(FormStack(CallNear(d))), rel32_round_trip(displacement)),
+        ReturnNear => refl,
+    }
+}
+
 theorem step_form_complete(form: StepForm, rest: List<BitVec(8)>):
     decode_step_form(step_form_bytes(form) ++ rest) = Some(form) {
     match form {
@@ -487,6 +559,7 @@ theorem step_form_complete(form: StepForm, rest: List<BitVec(8)>):
         },
         FormStore(store) => store_form_complete(store, rest),
         FormSyscall => refl,
+        FormStack(stack) => stack_form_complete(stack, rest),
     }
 }
 
@@ -554,34 +627,36 @@ fn emitted_of(form: StepForm, fallback: EmittedInstruction) → EmittedInstructi
 fn store_of(form: StepForm, fallback: MemoryStore) → MemoryStore {
     match form { FormStore(store) => store, _ => fallback }
 }
+fn stack_of(form: StepForm, fallback: StackForm) → StackForm {
+    match form { FormStack(stack) => stack, _ => fallback }
+}
 fn IsEmitted(form: StepForm) → Type { match form { FormEmitted(_) => True, _ => False } }
 fn IsStore(form: StepForm) → Type { match form { FormStore(_) => True, _ => False } }
 fn IsSyscall(form: StepForm) → Type { match form { FormSyscall => True, _ => False } }
+fn IsStack(form: StepForm) → Type { match form { FormStack(_) => True, _ => False } }
 
 // ---------------------------------------------------------------------------
 // A step is a function of the defined state: two steps from related states
 // reach related states, whichever relation each came by.
 
-fn FetchedOrStore<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
-    before, after: MachineState<M>) → Type {
-    FetchedStep(fetch, data, before, after) ∨ StoreStep(fetch, writes, before, after)
-}
-
-theorem fetched_or_store_form<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
-    before, after: MachineState<M>, step: FetchedOrStore(fetch, data, writes, before, after)):
+theorem machine_step_form<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
+    before, after: MachineState<M>, step: MachineStep(fetch, data, writes, before, after)):
     Exists<StepForm>(λ form => FetchedFrom(fetch, before.memory, InstructionBytes(before.rip, step_form_bytes(form))) ∧
         Not(IsSyscall(form))) {
     match step {
         Inl(fetched) => Exists(FormEmitted(fetched.witness), ⟨fetched.proof.left, λ never => never⟩),
-        Inr(stored) => Exists(FormStore(stored.witness), ⟨stored.proof.right.left, λ never => never⟩),
+        Inr(other) => match other {
+            Inl(stored) => Exists(FormStore(stored.witness), ⟨stored.proof.right.left, λ never => never⟩),
+            Inr(stack) => Exists(FormStack(stack.witness), ⟨stack.proof.left, λ never => never⟩),
+        },
     }
 }
 
 theorem step_respects_defined<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
     before_left, before_right, after_left, after_right: MachineState<M>,
     same: SameDefinedState<M>(before_left, before_right),
-    left: FetchedOrStore(fetch, data, writes, before_left, after_left),
-    right: FetchedOrStore(fetch, data, writes, before_right, after_right)):
+    left: MachineStep(fetch, data, writes, before_left, after_left),
+    right: MachineStep(fetch, data, writes, before_right, after_right)):
     SameDefinedState<M>(after_left, after_right) {
     let agree: (a, b: StepForm) →
         FetchedFrom(fetch, before_left.memory, InstructionBytes(before_left.rip, step_form_bytes(a))) →
@@ -593,15 +668,36 @@ theorem step_respects_defined<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>,
             Inl(fr) => fetched_step_respects_same_witness(fetch, data, before_left, before_right, after_left, after_right,
                 same, fl, fr, cong_fn(λ form => emitted_of(form, fl.witness),
                     agree(FormEmitted(fl.witness), FormEmitted(fr.witness), fl.proof.left, fr.proof.left))),
-            Inr(sr) => false_elim(j(agree(FormEmitted(fl.witness), FormStore(sr.witness), fl.proof.left, sr.proof.right.left),
-                λ form _ => IsEmitted(form), trivial)),
+            Inr(other) => match other {
+                Inl(sr) => false_elim(j(agree(FormEmitted(fl.witness), FormStore(sr.witness), fl.proof.left, sr.proof.right.left),
+                    λ form _ => IsEmitted(form), trivial)),
+                Inr(kr) => false_elim(j(agree(FormEmitted(fl.witness), FormStack(kr.witness), fl.proof.left, kr.proof.left),
+                    λ form _ => IsEmitted(form), trivial)),
+            },
         },
-        Inr(sl) => match right {
-            Inl(fr) => false_elim(j(agree(FormStore(sl.witness), FormEmitted(fr.witness), sl.proof.right.left, fr.proof.left),
-                λ form _ => IsStore(form), trivial)),
-            Inr(sr) => store_step_respects_same_witness(fetch, writes, before_left, before_right, after_left, after_right,
-                same, sl, sr, cong_fn(λ form => store_of(form, sl.witness),
-                    agree(FormStore(sl.witness), FormStore(sr.witness), sl.proof.right.left, sr.proof.right.left))),
+        Inr(left_other) => match left_other {
+            Inl(sl) => match right {
+                Inl(fr) => false_elim(j(agree(FormStore(sl.witness), FormEmitted(fr.witness), sl.proof.right.left, fr.proof.left),
+                    λ form _ => IsStore(form), trivial)),
+                Inr(other) => match other {
+                    Inl(sr) => store_step_respects_same_witness(fetch, writes, before_left, before_right, after_left, after_right,
+                        same, sl, sr, cong_fn(λ form => store_of(form, sl.witness),
+                            agree(FormStore(sl.witness), FormStore(sr.witness), sl.proof.right.left, sr.proof.right.left))),
+                    Inr(kr) => false_elim(j(agree(FormStore(sl.witness), FormStack(kr.witness), sl.proof.right.left, kr.proof.left),
+                        λ form _ => IsStore(form), trivial)),
+                },
+            },
+            Inr(kl) => match right {
+                Inl(fr) => false_elim(j(agree(FormStack(kl.witness), FormEmitted(fr.witness), kl.proof.left, fr.proof.left),
+                    λ form _ => IsStack(form), trivial)),
+                Inr(other) => match other {
+                    Inl(sr) => false_elim(j(agree(FormStack(kl.witness), FormStore(sr.witness), kl.proof.left, sr.proof.right.left),
+                        λ form _ => IsStack(form), trivial)),
+                    Inr(kr) => stack_step_respects_same_witness(fetch, data, writes, before_left, before_right, after_left, after_right,
+                        same, kl, kr, cong_fn(λ form => stack_of(form, kl.witness),
+                            agree(FormStack(kl.witness), FormStack(kr.witness), kl.proof.left, kr.proof.left))),
+                },
+            },
         },
     }
 }
@@ -610,8 +706,8 @@ theorem step_respects_defined<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>,
 theorem syscall_excludes_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>,
     at, before, after: MachineState<M>, same: SameDefinedState<M>(at, before),
     syscall: FetchedFrom(fetch, at.memory, InstructionBytes(at.rip, syscall_bytes())),
-    step: FetchedOrStore(fetch, data, writes, before, after)): False {
-    let found = fetched_or_store_form(fetch, data, writes, before, after, step);
+    step: MachineStep(fetch, data, writes, before, after)): False {
+    let found = machine_step_form(fetch, data, writes, before, after, step);
     let equal: (FormSyscall = found.witness) = fetched_forms_equal(fetch, at.memory, at.rip, FormSyscall, found.witness,
         syscall, fetched_from_related(fetch, at, before, same, step_form_bytes(found.witness), found.proof.left));
     found.proof.right(j(equal, λ form _ => IsSyscall(form), trivial))

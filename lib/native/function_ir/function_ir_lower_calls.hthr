@@ -255,19 +255,19 @@ theorem call_restores(values: Valuation(), file: File, result: Nat, before, afte
     represents: file.Represents(values, before), rax: read_gpr(Rax, after) = values(64, result),
     kept: Kept(callee_kept(), before, after), rsp: read_gpr(Rsp, after) = read_gpr(Rsp, before)):
     file.write(Rax, Some(Held(result, Word))).Represents(values, restore(saved_registers(), before, after)) {
-    λ query => match query as λ q => SlotRep(values, file.write(Rax, Some(Held(result, Word))).at(q), read_gpr(q, restore(saved_registers(), before, after))) {
+    ⟨λ query => match query as λ q => SlotRep(values, file.write(Rax, Some(Held(result, Word))).at(q), read_gpr(q, restore(saved_registers(), before, after))) {
         Rax => sym(rax),
-        Rcx => represents(Rcx), Rdx => represents(Rdx),
-        Rbx => j(sym(kept.left), λ w _ => SlotRep(values, file.at(Rbx), w), represents(Rbx)),
-        Rsp => j(sym(rsp), λ w _ => SlotRep(values, file.at(Rsp), w), represents(Rsp)),
-        Rbp => j(sym(kept.right.left), λ w _ => SlotRep(values, file.at(Rbp), w), represents(Rbp)),
-        Rsi => represents(Rsi), Rdi => represents(Rdi), R8 => represents(R8), R9 => represents(R9),
-        R10 => represents(R10), R11 => represents(R11),
-        R12 => j(sym(kept.right.right.left), λ w _ => SlotRep(values, file.at(R12), w), represents(R12)),
-        R13 => j(sym(kept.right.right.right.left), λ w _ => SlotRep(values, file.at(R13), w), represents(R13)),
-        R14 => j(sym(kept.right.right.right.right.left), λ w _ => SlotRep(values, file.at(R14), w), represents(R14)),
-        R15 => j(sym(kept.right.right.right.right.right.left), λ w _ => SlotRep(values, file.at(R15), w), represents(R15)),
-    }
+        Rcx => represents.left(Rcx), Rdx => represents.left(Rdx),
+        Rbx => j(sym(kept.left), λ w _ => SlotRep(values, file.at(Rbx), w), represents.left(Rbx)),
+        Rsp => j(sym(rsp), λ w _ => SlotRep(values, file.at(Rsp), w), represents.left(Rsp)),
+        Rbp => j(sym(kept.right.left), λ w _ => SlotRep(values, file.at(Rbp), w), represents.left(Rbp)),
+        Rsi => represents.left(Rsi), Rdi => represents.left(Rdi), R8 => represents.left(R8), R9 => represents.left(R9),
+        R10 => represents.left(R10), R11 => represents.left(R11),
+        R12 => j(sym(kept.right.right.left), λ w _ => SlotRep(values, file.at(R12), w), represents.left(R12)),
+        R13 => j(sym(kept.right.right.right.left), λ w _ => SlotRep(values, file.at(R13), w), represents.left(R13)),
+        R14 => j(sym(kept.right.right.right.right.left), λ w _ => SlotRep(values, file.at(R14), w), represents.left(R14)),
+        R15 => j(sym(kept.right.right.right.right.right.left), λ w _ => SlotRep(values, file.at(R15), w), represents.left(R15)),
+    }, represents.right⟩
 }
 
 // A word in the slots lies below the frame's top.
@@ -413,7 +413,7 @@ theorem call_finishes<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
 theorem call_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound), values: Valuation(), d: Nat, s0: MachineState<M>,
     rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d, fits: d + 64 <= stack.size,
-    prog: Prog, file: File, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>, names: Nat,
+    prog: Prog, file: File, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>, names: Nat,
     below: Succ(callee) <= bound, moves: Lowered, moves_keeps: Keeps<M>(values, file, True, moves),
     placed: moves.file.outputs_check(word_ports(arguments), argument_registers()).IsTrue(),
     leaves: leaves_all(moves.code, callee_saved()).IsTrue()):
@@ -539,7 +539,7 @@ fn File::call_moves(self file: File, arguments: List<Nat>) → List<ArgumentMove
 
 // The call, refused where the callee is not below `bound` or the
 // arguments do not all reach their registers.
-fn File::emit_call(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>,
+fn File::emit_call(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
     names, bound: Nat) → Option<Emitted> {
     match Succ(callee).leb(bound) {
         False => None,
@@ -555,7 +555,7 @@ fn File::emit_call(self file: File, prog: Prog, callee: Nat, arguments: List<Nat
 }
 
 // A dataflow leaf, its code keeping the callee-saved registers.
-fn emit_kept_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+fn emit_kept_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat) → Option<Emitted> {
     match lower_nodes(nodes, placement, file) {
         None => None,
         Some(lowered) => match leaves_all(lowered.code, callee_saved()) {
@@ -592,22 +592,28 @@ fn emit_kept_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Gp
 
 // One register per parameter, then the counter and the flag; the rest
 // place the body.
-record LoopRegisters { state: List<Gpr>, counter: Gpr, flag: Gpr, rest: List<Gpr> }
+record LoopRegisters { state: List<Gpr>, counter: Gpr, flag: Gpr, rest: List<Place> }
 
-fn loop_registers(n: Nat, placement: List<Gpr>) → Option<LoopRegisters> {
+fn loop_registers(n: Nat, placement: List<Place>) → Option<LoopRegisters> {
     match n {
         Zero => match placement {
             Nil => None,
             Cons(counter, after) => match after {
                 Nil => None,
-                Cons(flag, rest) => Some(LoopRegisters([], counter, flag, rest)),
+                Cons(flag, rest) => match counter {
+                    Folded => None,
+                    Into(c) => match flag { Folded => None, Into(f) => Some(LoopRegisters([], c, f, rest)) },
+                },
             },
         },
         Succ(m) => match placement {
             Nil => None,
-            Cons(register, after) => match loop_registers(m, after) {
-                None => None,
-                Some(registers) => Some(LoopRegisters(Cons(register, registers.state), registers.counter, registers.flag, registers.rest)),
+            Cons(place, after) => match place {
+                Folded => None,
+                Into(register) => match loop_registers(m, after) {
+                    None => None,
+                    Some(registers) => Some(LoopRegisters(Cons(register, registers.state), registers.counter, registers.flag, registers.rest)),
+                },
             },
         },
     }
@@ -649,7 +655,7 @@ fn File::loop_entry_at(self file: File, registers: LoopRegisters, inputs: List<N
     }
 }
 
-fn File::loop_entry(self file: File, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat, placement: List<Gpr>) →
+fn File::loop_entry(self file: File, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat, placement: List<Place>) →
     Option<LoopEntry> {
     match loop_registers(parameters.len(), placement) {
         None => None,
@@ -722,8 +728,63 @@ fn Emitted::loop_close(self pass: Emitted, registers: LoopRegisters, count, exit
     }
 }
 
+// What a conditional tests: its bit where a register holds it (TEST, the
+// second arm where it is zero), else the comparison the file knows it to be
+// from a folded node (CMP of its operands' registers, the second arm where
+// the comparison fails), the bit never materialised.
+record Tested(file: File, condition: Nat) {
+    test: Test,
+    selects: (values: Valuation()) → (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, condition).head_bit(),
+}
+
+fn CompareOp::fails(self op: CompareOp) → ConditionCode { match op { Below => AE, Less => GE, Same => NE } }
+
+theorem CompareOp::fails_holds(self op: CompareOp, flags: Flags): condition_holds(op.fails(), flags) = !op.flag(flags) {
+    match op { Below => refl, Less => refl, Same => refl }
+}
+
+theorem compare_selects(values: Valuation(), g: Gprs, op: CompareOp, condition, left, right: Nat, a, b: Gpr,
+    left_rep: values(64, left) = read_gpr(a, g), right_rep: values(64, right) = read_gpr(b, g),
+    holds: op.Holds(values, condition, left, right)):
+    Compare(op.fails(), a, b).taken(g) = !values(1, condition).head_bit()
+{
+    let x = read_gpr(a, g);
+    let y = read_gpr(b, g);
+    trans(op.fails_holds(sub_flags(x, y)),
+        trans(cong_fn<Bool, Bool>(λ c => !c, op.flag_sub(x, y)),
+            trans(j(left_rep, λ v _ => !op.apply(v, y) = !op.apply(values(64, left), y), refl),
+                trans(j(right_rep, λ v _ => !op.apply(values(64, left), v) = !op.apply(values(64, left), values(64, right)), refl),
+                    j(sym(holds), λ w _ => !op.apply(values(64, left), values(64, right)) = !w.head_bit(), refl)))))
+}
+
+fn File::compare_test(self file: File, condition: Nat, compared: Comparison,
+    known: known_comparison(file.known, condition) = Some(compared)) → Option<Tested(file, condition)> {
+    match file.find(Held(compared.left, Word)) {
+        None => None,
+        Some(a) => match file.find(Held(compared.right, Word)) {
+            None => None,
+            Some(b) => Some(Tested(Compare(compared.op.fails(), a.register, b.register),
+                λ values g represents => compare_selects(values, g, compared.op, condition, compared.left, compared.right,
+                    a.register, b.register, a.at.rep(values, g, represents), b.at.rep(values, g, represents),
+                    known_comparison_holds(values, condition, compared, file.known, known, represents.right)))),
+        },
+    }
+}
+
+fn File::branch_test(self file: File, condition: Nat) → Option<Tested(file, condition)> {
+    match file.find(Held(condition, Bit)) {
+        Some(found) => Some(Tested(Nonzero(found.register),
+            λ values g represents => found.register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents)))),
+        None => (match known_comparison(file.known, condition) as λ o =>
+            known_comparison(file.known, condition) = o → Option<Tested(file, condition)> {
+            None => λ _ => None,
+            Some(compared) => λ known => file.compare_test(condition, compared, known),
+        })(refl),
+    }
+}
+
 // Round 2's `emit` with calls of the functions below `bound`.
-fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file: File, placement: List<Gpr>, names, bound: Nat) →
+fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file: File, placement: List<Place>, names, bound: Nat) →
     Option<Emitted> {
     match region {
         Dataflow(body) => emit_kept_nodes(prog, file, body.nodes, placement, names),
@@ -735,13 +796,13 @@ fn StructuredRegion::emit_calls(self region: StructuredRegion, prog: Prog, file:
             None => None,
             Some(first) => continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
         },
-        Conditional(_, condition, _, _, when_true, when_false) => match file.find(Held(condition, Bit)) {
+        Conditional(_, condition, _, _, when_true, when_false) => match file.branch_test(condition) {
             None => None,
-            Some(found) => match when_true.emit_calls(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+            Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) {
                 None => None,
                 Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
                     None => None,
-                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                 },
             },
         },
@@ -798,7 +859,7 @@ theorem may_emit_in_seq<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data)
 theorem kept_block_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, facts: Type, lowered: Lowered,
     keeps: Keeps<M>(values, file, facts, lowered), leaves: leaves_all(lowered.code, callee_saved()).IsTrue(),
-    placement: List<Gpr>, names: Nat):
+    placement: List<Place>, names: Nat):
     EmitsIn<M>(site, stack, values, d, s0, prog, file, facts, Emitted(At(prog, 0, Block(lowered.code)), lowered.file, placement, names)) {
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
         (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
@@ -816,7 +877,7 @@ theorem kept_block_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(
 theorem is_true_of_eq(b: Bool, same: b = True): b.IsTrue() { j(sym(same), λ c _ => c.IsTrue(), trivial) }
 
 theorem emit_kept_nodes_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat):
+    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat):
     MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHold(values, nodes), emit_kept_nodes(prog, file, nodes, placement, names)) {
     (match lower_nodes(nodes, placement, file) as λ lowered =>
         MayKeep<M>(values, file, NodesHold(values, nodes), lowered) →
@@ -868,26 +929,27 @@ theorem when_zero_in(callees: Callees(), values: Valuation(), inputs: Ports, con
 theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     callees: Callees(), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
     inputs: Ports, condition: Nat, arguments, outputs: Ports, when_true, when_false: StructuredRegion,
-    found: Found(file, Held(condition, Bit)), names: Nat, yes, no: Emitted,
-    yes_emits: EmitsIn<M>(site, stack, values, d, s0, prog.branch_label(found.register, Succ(names)), file, StructuredRegionHoldsIn(callees, values, when_true), yes),
+    tested: Tested(file, condition), names: Nat, yes, no: Emitted,
+    yes_emits: EmitsIn<M>(site, stack, values, d, s0, prog.branched(tested.test, Succ(names)), file, StructuredRegionHoldsIn(callees, values, when_true), yes),
     no_emits: EmitsIn<M>(site, stack, values, d, s0, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, StructuredRegionHoldsIn(callees, values, when_false), no)):
     EmitsIn<M>(site, stack, values, d, s0, prog, file,
         StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
-        Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)) {
-    let register = found.register;
+        Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)) {
+    let test = tested.test;
     let else_name = Succ(names);
     let join_name = Succ(Succ(names));
-    let branched = prog.branch_label(register, else_name);
+    let branched = prog.branched(test, else_name);
     let jumped = At(yes.prog, 0, Jmp(join_name));
     let second = yes.prog.else_label(else_name, join_name);
-    let to_branch = prog.within_step(prog.test_label(register), 0, Jcc(E, else_name),
-        prog.within_then(0, Block([TestRR(register, register)])));
+    let to_branch = prog.within_step(prog.tested(test), 0, Jcc(test.cc(), else_name),
+        prog.within_then(0, Block([test.instruction()])));
     let to_second = prog.within_step(jumped, else_name, Block([]),
         prog.within_step(yes.prog, 0, Jmp(join_name), prog.within_trans(branched, yes.prog, to_branch, yes_emits.left)));
     let holds = StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false));
     let framed = λ (g: Gprs) (m: M) => Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m);
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧ framed(g, m);
-    let post = λ (g: Gprs) (m: M) => yes.file.meet(no.file).Represents(values, g) ∧ framed(g, m);
+    let post = λ (g: Gprs) (m: M) => yes.file.meet(no.file, file.known).Represents(values, g) ∧ framed(g, m);
+    let known = KnownHold(values, file.known);
     ⟨prog.within_step(no.prog, join_name, Block([]), prog.within_trans(second, no.prog, to_second, no_emits.left)),
      λ within => {
         let program = site.program;
@@ -899,44 +961,49 @@ theorem branch_emits_in<M>(site: Site<M>, laid: site.program.laid_out().IsTrue()
         let jumped_in = jumped.within_before(else_name, Block([]), program, second_in);
         let yes_in = yes.prog.within_before(0, Jmp(join_name), program, jumped_in);
         let branched_in = branched.within_trans(yes.prog, program, yes_emits.left, yes_in);
-        let tested_in = prog.test_label(register).within_before(0, Jcc(E, else_name), program, branched_in);
+        let tested_in = prog.tested(test).within_before(0, Jcc(test.cc(), else_name), program, branched_in);
         let else_lands = j(label_target(second_in.witness, program, jumped, names, Block([]), unique, second_in.proof),
-            λ to _ => JumpsForward(prog_len(prog.test_label(register)), 6,
-                asm_jump_of(labels, prog_len(prog.test_label(register)), Jcc(E, else_name)), to),
-            jcc_lands(labels, branched_in.witness, program, prog.test_label(register), 0, E, else_name, lands, branched_in.proof));
+            λ to _ => JumpsForward(prog_len(prog.tested(test)), 6,
+                asm_jump_of(labels, prog_len(prog.tested(test)), Jcc(test.cc(), else_name)), to),
+            jcc_lands(labels, branched_in.witness, program, prog.tested(test), 0, test.cc(), else_name, lands, branched_in.proof));
         let join_lands = j(label_target(within.witness, program, no.prog, Succ(names), Block([]), unique, within.proof),
             λ to _ => NearLands(prog_len(yes.prog), asm_jump_of(labels, prog_len(yes.prog), Jmp(join_name)), to),
             jmp_lands(labels, jumped_in.witness, program, yes.prog, 0, join_name, lands, jumped_in.proof));
-        let selects = λ (g: Gprs) (represents: file.Represents(values, g)) =>
-            register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents));
-        site.moves_branch(stack.writes, program.laid_out_fits(laid), prog, register, else_name, join_name, yes.prog, no.prog,
+        let selects = tested.selects(values);
+        site.moves_branch_on(stack.writes, program.laid_out_fits(laid), prog, test, else_name, join_name, yes.prog, no.prog,
             tested_in.witness, tested_in.proof, branched_in.witness, branched_in.proof, jumped_in.witness, jumped_in.proof,
             else_lands, join_lands, pre, post,
             site.moves_weaken(stack.writes, prog_len(branched), prog_len(yes.prog),
-                λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_true)) ∧ stack.Framed(d, s0, s),
-                λ (t: MachineState<M>) => yes.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
-                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ register.tests_zero(s.gprs) = False,
+                λ (s: MachineState<M>) => ((file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_true)) ∧ stack.Framed(d, s0, s)) ∧ known,
+                λ (t: MachineState<M>) => (yes.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t)) ∧ known,
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = False,
                 λ (t: MachineState<M>) => post(t.gprs, t.memory),
-                yes_emits.right(yes_in),
-                λ s held => ⟨⟨held.left.left.left, when_nonzero_in(callees, values, inputs, condition, arguments, outputs, when_true, when_false,
+                site.moves_carry(stack.writes, prog_len(branched), prog_len(yes.prog),
+                    λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_true)) ∧ stack.Framed(d, s0, s),
+                    λ (t: MachineState<M>) => yes.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t), known, yes_emits.right(yes_in)),
+                λ s held => ⟨⟨⟨held.left.left.left, when_nonzero_in(callees, values, inputs, condition, arguments, outputs, when_true, when_false,
                     trans(sym(selects(s.gprs, held.left.left.left)), held.right), held.left.left.right)⟩, held.left.right⟩,
-                λ t held => ⟨yes.file.meet_left(values, t.gprs, no.file, held.left), held.right⟩),
+                    held.left.left.left.right⟩,
+                λ t held => ⟨yes.file.meet_left(values, t.gprs, no.file, file.known, held.left.left, held.right), held.left.right⟩),
             site.moves_weaken(stack.writes, prog_len(second), prog_len(no.prog),
-                λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_false)) ∧ stack.Framed(d, s0, s),
-                λ (t: MachineState<M>) => no.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t),
-                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ register.tests_zero(s.gprs) = True,
+                λ (s: MachineState<M>) => ((file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_false)) ∧ stack.Framed(d, s0, s)) ∧ known,
+                λ (t: MachineState<M>) => (no.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t)) ∧ known,
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = True,
                 λ (t: MachineState<M>) => post(t.gprs, t.memory),
-                no_emits.right(no_in),
-                λ s held => ⟨⟨held.left.left.left, when_zero_in(callees, values, inputs, condition, arguments, outputs, when_true, when_false,
+                site.moves_carry(stack.writes, prog_len(second), prog_len(no.prog),
+                    λ (s: MachineState<M>) => (file.Represents(values, s.gprs) ∧ StructuredRegionHoldsIn(callees, values, when_false)) ∧ stack.Framed(d, s0, s),
+                    λ (t: MachineState<M>) => no.file.Represents(values, t.gprs) ∧ stack.Framed(d, s0, t), known, no_emits.right(no_in)),
+                λ s held => ⟨⟨⟨held.left.left.left, when_zero_in(callees, values, inputs, condition, arguments, outputs, when_true, when_false,
                     trans(sym(selects(s.gprs, held.left.left.left)), held.right), held.left.left.right)⟩, held.left.right⟩,
-                λ t held => ⟨yes.file.meet_right(values, t.gprs, no.file, held.left), held.right⟩))
+                    held.left.left.left.right⟩,
+                λ t held => ⟨yes.file.meet_right(values, t.gprs, no.file, file.known, held.left.left, held.right), held.left.right⟩))
      }⟩
 }
 
 theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound),
     values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
-    fits: d + 64 <= stack.size, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>, names: Nat):
+    fits: d + 64 <= stack.size, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>, names: Nat):
     MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result)),
         file.emit_call(prog, callee, arguments, result, placement, names, bound)) {
     let facts = StructuredRegionHoldsIn(callees, values, Call(callee, arguments, result));
@@ -1094,7 +1161,7 @@ theorem loop_entry_at_sound<M>(values: Valuation(), file: File, registers: LoopR
 }
 
 theorem loop_entry_sound<M>(values: Valuation(), file: File, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat,
-    placement: List<Gpr>):
+    placement: List<Place>):
     MayLoopEntry<M>(values, file, inputs, limit, parameters, count, file.loop_entry(inputs, limit, parameters, count, placement)) {
     match loop_registers(parameters.len(), placement) as λ o =>
         MayLoopEntry<M>(values, file, inputs, limit, parameters, count, match o {
@@ -1704,7 +1771,7 @@ theorem loop_close_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(
 theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), callees: Callees(), bound: Nat, calls: site.Calls(stack, callees, bound),
     values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: 72 * bound + 8 <= d,
-    fits: d + 64 <= stack.size): (prog: Prog) → (file: File) → (placement: List<Gpr>) → (names: Nat) →
+    fits: d + 64 <= stack.size): (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) →
     MayEmitIn<M>(site, stack, values, d, s0, prog, file, StructuredRegionHoldsIn(callees, values, region),
         region.emit_calls(prog, file, placement, names, bound)) {
     match region {
@@ -1736,30 +1803,30 @@ theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, sit
                     continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, first.prog, first.file, first.placement, first.names)),
             })(prefix.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, file, placement, names)),
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ prog file placement names =>
-            match file.find(Held(condition, Bit)) as λ located =>
+            match file.branch_test(condition) as λ located =>
                 MayEmitIn<M>(site, stack, values, d, s0, prog, file,
                     StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
                     match located {
                         None => None,
-                        Some(found) => match when_true.emit_calls(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+                        Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) {
                             None => None,
                             Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
                                 None => None,
-                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                             },
                         },
                     }) {
                 None => trivial,
-                Some(found) =>
-                    (match when_true.emit_calls(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names)), bound) as λ y =>
-                        MayEmitIn<M>(site, stack, values, d, s0, prog.branch_label(found.register, Succ(names)), file, StructuredRegionHoldsIn(callees, values, when_true), y) →
+                Some(tested) =>
+                    (match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) as λ y =>
+                        MayEmitIn<M>(site, stack, values, d, s0, prog.branched(tested.test, Succ(names)), file, StructuredRegionHoldsIn(callees, values, when_true), y) →
                         MayEmitIn<M>(site, stack, values, d, s0, prog, file,
                             StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
                             match y {
                                 None => None,
                                 Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
                                     None => None,
-                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                 },
                             }) {
                         None => λ _ => trivial,
@@ -1771,14 +1838,14 @@ theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, sit
                                     StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
                                     match n {
                                         None => None,
-                                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                     }) {
                                 None => λ _ => trivial,
                                 Some(no) => λ no_emits => branch_emits_in<M>(site, laid, stack, callees, values, d, s0, prog, file, inputs, condition, arguments, outputs,
-                                    when_true, when_false, found, names, yes, no, yes_emits, no_emits),
+                                    when_true, when_false, tested, names, yes, no, yes_emits, no_emits),
                             })(when_false.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, yes.prog.else_label(Succ(names), Succ(Succ(names))), file,
                                 yes.placement, yes.names)),
-                    })(when_true.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog.branch_label(found.register, Succ(names)), file, placement,
+                    })(when_true.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog.branched(tested.test, Succ(names)), file, placement,
                         Succ(Succ(names)))),
             },
         Call(callee, arguments, result) => λ prog file placement names =>
@@ -1970,7 +2037,7 @@ fn Stack::Closed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self sta
 
 theorem function_runs<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     callees: Callees(), k: Nat, calls: site.Calls(stack, callees, k), function: Function, prog: Prog, file: File,
-    placement: List<Gpr>, names: Nat, body: Emitted,
+    placement: List<Place>, names: Nat, body: Emitted,
     emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -2038,7 +2105,7 @@ theorem frame_room(k, i, size: Nat, deep: 72 * Succ(k) <= i, room: i + 8 <= size
 // says.
 theorem function_body<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     callees: Callees(), k: Nat, calls: site.Calls(stack, callees, k), function: Function, prog: Prog, file: File,
-    placement: List<Gpr>, names: Nat, body: Emitted,
+    placement: List<Place>, names: Nat, body: Emitted,
     emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -2089,7 +2156,7 @@ theorem function_body<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), 
 // bound to the arguments, its body holding, it returns its result.
 theorem function_returns<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     callees: Callees(), k: Nat, calls: site.Calls(stack, callees, k), function: Function, prog: Prog, file: File,
-    placement: List<Gpr>, names: Nat, body: Emitted,
+    placement: List<Place>, names: Nat, body: Emitted,
     emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
     placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
@@ -2124,7 +2191,7 @@ theorem grows_trans(prog: Prog, first: Emitted, within: prog.Within(first.prog),
     }
 }
 
-theorem emit_kept_nodes_grows(prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat):
+theorem emit_kept_nodes_grows(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat):
     Grows(prog, emit_kept_nodes(prog, file, nodes, placement, names)) {
     match lower_nodes(nodes, placement, file) as λ lowered => Grows(prog, match lowered {
         None => None,
@@ -2144,7 +2211,7 @@ theorem emit_kept_nodes_grows(prog: Prog, file: File, nodes: List<Node>, placeme
     }
 }
 
-theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Gpr>,
+theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, placement: List<Place>,
     names, bound: Nat): Grows(prog, file.emit_call(prog, callee, arguments, result, placement, names, bound)) {
     let ports = word_ports(arguments);
     let order = file.call_moves(arguments);
@@ -2196,7 +2263,7 @@ theorem loop_close_grows(prog: Prog, entry: LoopEntry, names: Nat, pass: Emitted
 }
 
 theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound: Nat):
-    (prog: Prog) → (file: File) → (placement: List<Gpr>) → (names: Nat) → Grows(prog, region.emit_calls(prog, file, placement, names, bound)) {
+    (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) → Grows(prog, region.emit_calls(prog, file, placement, names, bound)) {
     match region {
         Dataflow(body) => λ prog file placement names => emit_kept_nodes_grows(prog, file, body.nodes, placement, names),
         Sequence(prefix, continuation) => λ prog file placement names =>
@@ -2220,26 +2287,26 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
                     continuation.emit_calls_grows(bound, first.prog, first.file, first.placement, first.names)),
             })(prefix.emit_calls_grows(bound, prog, file, placement, names)),
         Conditional(_, condition, _, _, when_true, when_false) => λ prog file placement names =>
-            match file.find(Held(condition, Bit)) as λ located => Grows(prog, match located {
+            match file.branch_test(condition) as λ located => Grows(prog, match located {
                 None => None,
-                Some(found) => match when_true.emit_calls(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+                Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) {
                     None => None,
                     Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
                         None => None,
-                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                     },
                 },
             }) {
                 None => trivial,
-                Some(found) => {
-                    let register = found.register;
-                    let branched = prog.branch_label(register, Succ(names));
+                Some(tested) => {
+                    let test = tested.test;
+                    let branched = prog.branched(test, Succ(names));
                     (match when_true.emit_calls(branched, file, placement, Succ(Succ(names)), bound) as λ y =>
                         Grows(branched, y) → Grows(prog, match y {
                             None => None,
                             Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
                                 None => None,
-                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                             },
                         }) {
                         None => λ _ => trivial,
@@ -2248,12 +2315,12 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
                             (match when_false.emit_calls(second, file, yes.placement, yes.names, bound) as λ n =>
                                 Grows(second, n) → Grows(prog, match n {
                                     None => None,
-                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                 }) {
                                 None => λ _ => trivial,
                                 Some(no) => λ no_grown => {
-                                    let to_branch = prog.within_step(prog.test_label(register), 0, Jcc(E, Succ(names)),
-                                        prog.within_then(0, Block([TestRR(register, register)])));
+                                    let to_branch = prog.within_step(prog.tested(test), 0, Jcc(test.cc(), Succ(names)),
+                                        prog.within_then(0, Block([test.instruction()])));
                                     let to_second = prog.within_step(At(yes.prog, 0, Jmp(Succ(Succ(names)))), Succ(names), Block([]),
                                         prog.within_step(yes.prog, 0, Jmp(Succ(Succ(names))), prog.within_trans(branched, yes.prog, to_branch, yes_grown)));
                                     prog.within_step(no.prog, Succ(Succ(names)), Block([]), prog.within_trans(second, no.prog, to_second, no_grown))
@@ -2305,7 +2372,7 @@ fn Function::closing(self function: Function, body: Emitted) → Option<Emitted>
     }
 }
 
-fn Function::emit_body(self function: Function, prog: Prog, k: Nat, file: File, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+fn Function::emit_body(self function: Function, prog: Prog, k: Nat, file: File, placement: List<Place>, names: Nat) → Option<Emitted> {
     match function.body.emit_calls(function_opened(prog, k), file, placement, names, k) {
         None => None,
         Some(body) => function.closing(body),
@@ -2314,7 +2381,7 @@ fn Function::emit_body(self function: Function, prog: Prog, k: Nat, file: File, 
 
 // Function `k`'s code after `prog`: its label, its frame, its body calling
 // the functions below `k`, its result into RAX, RET.
-fn Function::emit(self function: Function, prog: Prog, k: Nat, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+fn Function::emit(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat) → Option<Emitted> {
     match input_file(word_ports(function.parameters), argument_registers()) {
         None => None,
         Some(file) => function.emit_body(prog, k, file, placement, names),
@@ -2339,7 +2406,7 @@ theorem closed_within(body: Prog, moves: List<Instruction>): body.Within(At(func
 }
 
 theorem Function::closing_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, file: File, placement: List<Gpr>, names: Nat,
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat,
     body: Emitted, emitted: function.body.emit_calls(function_opened(prog, k), file, placement, names, k) = Some(body),
     grown: At(prog, Succ(k), Block([])).Within(body.prog),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) →
@@ -2379,7 +2446,7 @@ theorem label_opened(prog: Prog, k: Nat): At(prog, Succ(k), Block([])).Within(fu
 }
 
 theorem Function::emit_body_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, file: File, placement: List<Gpr>, names: Nat,
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat,
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), argument_registers(), g) →
         file.Represents(values, g)):
     MayReturn<M>(site, stack, callees, k, function, prog, function.emit_body(prog, k, file, placement, names)) {
@@ -2398,7 +2465,7 @@ theorem Function::emit_body_returns<M>(self function: Function, site: Site<M>, l
 // `emit` returns meets the function's contract wherever it is resident,
 // given its callees meet theirs.
 theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, placement: List<Gpr>, names: Nat):
+    stack: Stack<M>(site.fetch, site.data), callees: Callees(), k: Nat, prog: Prog, placement: List<Place>, names: Nat):
     MayReturn<M>(site, stack, callees, k, function, prog, function.emit(prog, k, placement, names)) {
     let ins = word_ports(function.parameters);
     (match input_file(ins, argument_registers()) as λ entry =>
@@ -2418,7 +2485,7 @@ theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: 
 
 // The program's functions, first to last, after `Start`: each `emit` of
 // function `k` calls only the ones before it in the code.
-fn emit_functions(functions: List<Function>, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+fn emit_functions(functions: List<Function>, placement: List<Place>, names: Nat) → Option<Emitted> {
     match functions {
         Nil => Some(Emitted(Start, File::empty(), placement, names)),
         Cons(last, earlier) => match emit_functions(earlier, placement, names) {
@@ -2431,7 +2498,7 @@ fn emit_functions(functions: List<Function>, placement: List<Gpr>, names: Nat) �
 // The program's code: function `f` at the label `Succ(f)`, the
 // conditionals' labels after every function's. `None` is a refusal, as
 // round 2's `lower`.
-fn lower_program(functions: List<Function>, placement: List<Gpr>) → Option<Prog> {
+fn lower_program(functions: List<Function>, placement: List<Place>) → Option<Prog> {
     match emit_functions(functions, placement, functions.len()) {
         None => None,
         Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) },
@@ -2442,37 +2509,28 @@ fn lower_program(functions: List<Function>, placement: List<Gpr>) → Option<Pro
 // The placement heuristic over programs (round 4). Untrusted like any
 // placement: `lower_program_correct` holds whatever it returns.
 
-fn StructuredRegion::calls(self region: StructuredRegion) → Bool {
-    match region {
-        Dataflow(_) => False,
-        Sequence(_, continuation) => continuation.calls(),
-        Compose(prefix, continuation) => prefix.calls() || continuation.calls(),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.calls() || when_false.calls(),
-        Call(_, _, _) => True,
-        Loop(_, _, _, _, body, _, _, _, _) => body.calls(),
-    }
-}
-
 // The registers a value may take: not RAX in a body that calls, where each
 // call's result lands there.
 fn call_pool() → List<Gpr> { [Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
 
-// A function's placement: its arguments where they arrive, and its result
-// wanted in RAX when no call follows that could take it.
-fn Function::plan(self function: Function) → List<Gpr> {
+// A function's placement: its arguments where they arrive, its result
+// wanted in RAX when no call follows that could take it, and what its whole
+// body lets fold.
+fn Function::plan(self function: Function) → List<Place> {
+    let folds = function.body.folds([function.result]);
     match input_file(word_ports(function.parameters), argument_registers()) {
         None => [],
         Some(file) => match function.body.calls() {
             False => function.body.plan_from(file, [function.result], [Port(id := function.result, width := 64)], [Rax],
-                scratch_pool()).placement,
-            True => function.body.plan_from(file, [function.result], [], [], call_pool()).placement,
+                scratch_pool(), folds, []).placement,
+            True => function.body.plan_from(file, [function.result], [], [], call_pool(), folds, []).placement,
         },
     }
 }
 
 // A program's placement, in the order `emit_functions` takes it: the first
 // function's first.
-fn plan_program(functions: List<Function>) → List<Gpr> {
+fn plan_program(functions: List<Function>) → List<Place> {
     match functions { Nil => [], Cons(last, earlier) => plan_program(earlier) ++ last.plan() }
 }
 
@@ -2559,7 +2617,7 @@ theorem program_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
 }
 
 theorem emit_functions_calls<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    placement: List<Gpr>, names: Nat, functions: List<Function>):
+    placement: List<Place>, names: Nat, functions: List<Function>):
     MayCall<M>(site, stack, functions, emit_functions(functions, placement, names)) {
     match functions {
         Nil => λ _ f below words result => false_elim(nothing_below_zero(f, below)),
@@ -2585,7 +2643,7 @@ fn ProgramCalls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<Bi
 }
 
 theorem lower_program_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
-    stack: Stack<M>(fetch, data), functions: List<Function>, placement: List<Gpr>):
+    stack: Stack<M>(fetch, data), functions: List<Function>, placement: List<Place>):
     lower_program(functions, placement).All(λ (p: Prog) => ProgramCalls<M>(fetch, data, last, origin, stack, functions, p)) {
     (match emit_functions(functions, placement, functions.len()) as λ e =>
         ((site: Site<M>) → site.program.laid_out().IsTrue() → (stack: Stack<M>(site.fetch, site.data)) → MayCall<M>(site, stack, functions, e)) →
@@ -2610,7 +2668,7 @@ theorem lower_program_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, l
 // arguments its functions say may give `result`, with room on the stack,
 // it returns `result` in RAX, the callee-saved registers and its caller's
 // stack as they were.
-theorem lower_program_correct<M>(functions: List<Function>, placement: List<Gpr>, program: Prog,
+theorem lower_program_correct<M>(functions: List<Function>, placement: List<Place>, program: Prog,
     lowered: lower_program(functions, placement) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data)):
     Site<M>(fetch, data, program, last, origin).Calls(stack, program_callees(functions), functions.len()) {

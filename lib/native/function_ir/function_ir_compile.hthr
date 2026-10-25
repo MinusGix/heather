@@ -31,7 +31,7 @@ import option;
 // its frame's room on the stack, the code returns `answer` in RAX, keeps
 // the callee-saved registers and the stack above its return address,
 // whenever the program evaluates `f` at those arguments to `answer`.
-theorem compiled_returns<M>(functions: List<Function>, placement: List<Gpr>, program: Prog,
+theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, program: Prog,
     lowered: lower_program(functions, placement) = Some(program), evaluable: program_evaluable(functions).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     f: Nat, below: Succ(f) <= functions.len(), arguments: List<BitVec(64)>,
@@ -52,6 +52,229 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Gpr>, pro
     j(evaluates, λ x _ => site.Returns(stack, asm_labels(program)(Succ(f)),
         λ (i: Nat) (s: MachineState<M>) => ArgsIn(arguments, argument_registers(), s.gprs) ∧ 72 * Succ(f) <= i,
         stack.CalleePost(x)), returns)
+}
+
+// ---------------------------------------------------------------------------
+// A function at a time. The compiler proves each function of a program
+// against a `sources` that answers every call with the callee's source
+// function, so no function's proof unfolds another's: a callee that decides
+// a connective, or runs a loop, is one call in its caller's conversion. The
+// program's own answers, each function's evaluation, are then those sources
+// by induction along the program (`program_eval_sources`).
+
+// Every function of the program, its calls answered by `sources`, returns
+// `sources` at its own index.
+fn program_sourced(functions: List<Function>, sources: Answers()) → Type {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) =>
+            ((words: List<BitVec(64)>) → words.len() = last.parameters.len() → last.eval(sources, words) = sources(earlier.len(), words))
+            ∧ program_sourced(earlier, sources),
+    }
+}
+
+theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(functions).IsTrue(), sources: Answers(),
+    sourced: program_sourced(functions, sources)):
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
+        program_eval(functions, f, words) = sources(f, words) {
+    match functions {
+        Nil => λ f words never => false_elim(never),
+        Cons(last, earlier) => λ f words => {
+            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
+            let ih = program_eval_sources(earlier, parts.right, sources, sourced.right);
+            (match f.eq_dec(earlier.len()) as λ d =>
+                arity_fits(match d as λ _ => Option<Nat> { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
+                    words.len()).IsTrue() →
+                (match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }) =
+                    sources(f, words) {
+                Inl(e) => λ fits => trans(last.eval_answers(sources, program_eval(earlier), program_arity(earlier), ih, parts.left, words),
+                    j(sym(e), λ g _ => last.eval(sources, words) = sources(g, words),
+                        sourced.left(words, sym(last.parameters.len().matches_eq(words.len(), fits))))),
+                Inr(_) => λ fits => ih(f, words, fits),
+            })
+        },
+    }
+}
+
+// What holds of every list of `n` words, stated at `n` open words.
+fn Spread(n: Nat) → (List<BitVec(64)> → Type) → Type {
+    match n {
+        Zero => λ P => P([]),
+        Succ(m) => λ P => (a: BitVec(64)) → Spread(m, λ (ws: List<BitVec(64)>) => P(Cons(a, ws))),
+    }
+}
+
+theorem spread(n: Nat): (P: List<BitVec(64)> → Type) → Spread(n, P) → (words: List<BitVec(64)>) → words.len() = n → P(words) {
+    match n {
+        Zero => λ P at words => match words {
+            Nil => λ _ => at,
+            Cons(_, more) => λ (bad: Succ(more.len()) = 0) => false_elim(more.len().succ_ne_zero(bad)),
+        },
+        Succ(m) => λ P at words => match words {
+            Nil => λ (bad: 0 = Succ(m)) => false_elim(m.zero_ne_succ(bad)),
+            Cons(a, more) => λ (same: Succ(more.len()) = Succ(m)) =>
+                spread(m, λ (ws: List<BitVec(64)>) => P(Cons(a, ws)), at(a), more, Nat::succ_inj(more.len(), m, same)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops (issues/function-ir-verified-loop-planning.md). A source function
+// that recurses on its fuel, `h(fuel, x…)` matching `Zero` and `Succ(k)`
+// and calling `h(k, …)` only in tail position, compiles to a loop of as
+// many passes as the fuel, called as `h(w.toNat(), …)`. The loop's
+// evaluation is not the source's recursion by conversion: the two are
+// stuck on the same open fuel with different steps. They agree by
+// induction on the fuel, each pass by case analysis on its comparisons,
+// which the compiler proves once per loop with the source's recursion
+// abstracted (`later`).
+
+// What a function computes when `post` follows the loop: run on the loop's
+// end, read at `result`.
+fn loop_finish(post: StructuredRegion, call: Answers(), values: Valuation(), outputs: List<Nat>, exhausted, result: Nat) →
+    LoopEnd → BitVec(64) {
+    λ end => post.eval(call, Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)))(64, result)
+}
+
+theorem function_eval_body(parameters: List<Nat>, body: StructuredRegion, result: Nat, call: Answers(), arguments: List<BitVec(64)>):
+    Function(parameters := parameters, body := body, result := result).eval(call, arguments) =
+        body.eval(call, Valuation::bind(Valuation::zero(), parameters, arguments))(64, result) { refl }
+
+// A loop and what follows it, evaluated: stated over any regions, so that
+// a program's instance is this statement and no conversion runs its loop
+// (a constant fuel would unfold it pass by pass).
+theorem loop_then_eval(inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat,
+    next, outputs: List<Nat>, exhausted: Nat, post: StructuredRegion, call: Answers(), values: Valuation(), result: Nat):
+    Compose(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), post).eval(call, values)(64, result) =
+        loop_finish(post, call, values, outputs, exhausted, result)(loop_eval(λ (pass: Valuation()) => body.eval(call, pass), parameters,
+            count, exit, next, values(64, bound).toNat(), words_of(values, inputs))) { refl }
+
+// One pass from the state `words_of(v, parameters)` with `Succ(r)` passes
+// left: leaving, what `finish` makes of the next state; going round,
+// `later` of it.
+fn loop_pass(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>, finish: LoopEnd → BitVec(64),
+    later: List<BitVec(64)> → BitVec(64), r: Nat, v: Valuation()) → BitVec(64) {
+    let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)));
+    match after(1, exit).head_bit() {
+        False => later(words_of(after, next)),
+        True => finish(LoopEnd(words_of(after, next), False)),
+    }
+}
+
+// A loop agrees with `run`, a recursion on its fuel, when it does with no
+// passes left, and each pass does with the recursion on the passes after
+// it.
+theorem loop_eval_agrees(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    apart: distinct(parameters).IsTrue(), lengths: next.len() = parameters.len(), finish: LoopEnd → BitVec(64),
+    run: Nat → List<BitVec(64)> → BitVec(64),
+    at_zero: (v: Valuation()) → finish(LoopEnd(words_of(v, parameters), True)) = run(0, words_of(v, parameters)),
+    at_pass: (r: Nat) → (v: Valuation()) →
+        loop_pass(step, parameters, count, exit, next, finish, λ (state: List<BitVec(64)>) => run(r, state), r, v) =
+            run(Succ(r), words_of(v, parameters)),
+    remaining: Nat):
+    (v: Valuation()) → finish(loop_eval(step, parameters, count, exit, next, remaining, words_of(v, parameters))) =
+        run(remaining, words_of(v, parameters)) {
+    match remaining {
+        Zero => λ v => at_zero(v),
+        Succ(r) => λ v => {
+            let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)));
+            let state = words_of(after, next);
+            let rebound: (words_of(Valuation::bind(Valuation::zero(), parameters, state), parameters) = state) =
+                words_of_bind(Valuation::zero(), parameters, apart, state, sym(trans(words_of_len(after, next), lengths)));
+            let earlier = loop_eval_agrees(step, parameters, count, exit, next, apart, lengths, finish, run, at_zero, at_pass, r,
+                Valuation::bind(Valuation::zero(), parameters, state));
+            let later: (finish(loop_eval(step, parameters, count, exit, next, r, state)) = run(r, state)) =
+                j(rebound, λ st _ => finish(loop_eval(step, parameters, count, exit, next, r, st)) = run(r, st), earlier);
+            (match after(1, exit).head_bit() as λ b =>
+                (match b { False => run(r, state), True => finish(LoopEnd(state, False)) }) = run(Succ(r), words_of(v, parameters)) →
+                finish(match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, r, state),
+                    True => LoopEnd(state, False) }) = run(Succ(r), words_of(v, parameters)) {
+                False => λ passed => trans(later, passed),
+                True => λ passed => passed,
+            })(at_pass(r, v))
+        },
+    }
+}
+
+// The same from the loop's inputs, read at the valuation before it.
+theorem loop_eval_agrees_from(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    apart: distinct(parameters).IsTrue(), lengths: next.len() = parameters.len(), finish: LoopEnd → BitVec(64),
+    run: Nat → List<BitVec(64)> → BitVec(64),
+    at_zero: (v: Valuation()) → finish(LoopEnd(words_of(v, parameters), True)) = run(0, words_of(v, parameters)),
+    at_pass: (r: Nat) → (v: Valuation()) →
+        loop_pass(step, parameters, count, exit, next, finish, λ (state: List<BitVec(64)>) => run(r, state), r, v) =
+            run(Succ(r), words_of(v, parameters)),
+    remaining: Nat, values: Valuation(), inputs: List<Nat>, fits: inputs.len() = parameters.len()):
+    finish(loop_eval(step, parameters, count, exit, next, remaining, words_of(values, inputs))) = run(remaining, words_of(values, inputs)) {
+    let v = Valuation::bind(Valuation::zero(), parameters, words_of(values, inputs));
+    let rebound: (words_of(v, parameters) = words_of(values, inputs)) =
+        words_of_bind(Valuation::zero(), parameters, apart, words_of(values, inputs), sym(trans(words_of_len(values, inputs), fits)));
+    j(rebound, λ st _ => finish(loop_eval(step, parameters, count, exit, next, remaining, st)) = run(remaining, st),
+        loop_eval_agrees(step, parameters, count, exit, next, apart, lengths, finish, run, at_zero, at_pass, remaining, v))
+}
+
+// A state's word `i`, zero past its end: how the compiler reads a source
+// recursion's arguments out of a loop's state.
+fn List::word(self state: List<BitVec(64)>, i: Nat) → BitVec(64) {
+    match state {
+        Nil => BitVec::zero(),
+        Cons(first, rest) => match i { Zero => first, Succ(k) => rest.word(k) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The lowering a function at a time (issues/function-ir-verified-compile-cost.md).
+// Every declaration has the same fuel, so `lower_program` evaluated in one
+// would bound the program's size. The compiler instead states what emitting
+// each function leaves, the code so far, the placement not yet taken and the
+// next label, as literals, each from the last's, and glues the steps.
+
+// What an emission left: its code, its placement not taken, its next label.
+// Each read through `map`, so that stating it evaluates the emission and
+// reads back only what it compares.
+fn EmitsAs(out: Option<Emitted>, prog: Prog, rest: List<Place>, names: Nat) → Type {
+    (out.map(λ (e: Emitted) => e.prog) = Some(prog))
+        ∧ ((out.map(λ (e: Emitted) => e.placement) = Some(rest)) ∧ (out.map(λ (e: Emitted) => e.names) = Some(names)))
+}
+
+theorem emit_functions_start(placement: List<Place>, names: Nat): EmitsAs(emit_functions([], placement, names), Start, placement, names) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+theorem emit_functions_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, prog: Prog, rest: List<Place>,
+    labels: Nat, before: EmitsAs(emit_functions(earlier, placement, names), prog, rest, labels), next_prog: Prog, next_rest: List<Place>,
+    next_labels: Nat, emitted: EmitsAs(last.emit(prog, earlier.len(), rest, labels), next_prog, next_rest, next_labels)):
+    EmitsAs(emit_functions(Cons(last, earlier), placement, names), next_prog, next_rest, next_labels) {
+    (match emit_functions(earlier, placement, names) as λ out =>
+        EmitsAs(out, prog, rest, labels) →
+        EmitsAs(match out as λ _ => Option<Emitted> { None => None, Some(b) => last.emit(b.prog, earlier.len(), b.placement, b.names) },
+            next_prog, next_rest, next_labels) {
+        None => λ held => Option::none_ne_some(prog, held.left, EmitsAs(None, next_prog, next_rest, next_labels)),
+        Some(b) => λ held => j(sym(Option::some_inj(b.prog, prog, held.left)),
+            λ x _ => EmitsAs(last.emit(x, earlier.len(), b.placement, b.names), next_prog, next_rest, next_labels),
+            j(sym(Option::some_inj(b.placement, rest, held.right.left)),
+                λ y _ => EmitsAs(last.emit(prog, earlier.len(), y, b.names), next_prog, next_rest, next_labels),
+                j(sym(Option::some_inj(b.names, labels, held.right.right)),
+                    λ z _ => EmitsAs(last.emit(prog, earlier.len(), rest, z), next_prog, next_rest, next_labels), emitted))),
+    })(before)
+}
+
+theorem lower_program_emitted(functions: List<Function>, placement: List<Place>, prog: Prog, rest: List<Place>, labels: Nat,
+    emitted: EmitsAs(emit_functions(functions, placement, functions.len()), prog, rest, labels), laid: prog.laid_out().IsTrue()):
+    lower_program(functions, placement) = Some(prog) {
+    let decided: ((match prog.laid_out() as λ _ => Option<Prog> { False => None, True => Some(prog) }) = Some(prog)) =
+        j(sym(eq_true_of_is_true(prog.laid_out(), laid)), λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(prog) }) = Some(prog),
+            refl);
+    (match emit_functions(functions, placement, functions.len()) as λ out =>
+        EmitsAs(out, prog, rest, labels) →
+        (match out as λ _ => Option<Prog> {
+            None => None,
+            Some(o) => match o.prog.laid_out() as λ _ => Option<Prog> { False => None, True => Some(o.prog) },
+        }) = Some(prog) {
+        None => λ held => Option::none_ne_some(prog, held.left, None<Prog>() = Some(prog)),
+        Some(o) => λ held => j(sym(Option::some_inj(o.prog, prog, held.left)),
+            λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(prog), decided),
+    })(emitted)
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +328,9 @@ fn Asm::numbers(self item: Asm) → List<Nat> {
         Proved(_, _, _, _) => [7], Piece(_, _, _) => [7], Refer(_, _, _) => [7], Hole(_, _) => [7],
     }
 }
+
+// A place: its register's index, or 16 folded.
+fn Place::number(self place: Place) → Nat { match place { Into(register) => register.index(), Folded => 16 } }
 
 // The items from the first, each its name and then itself.
 fn Prog::numbers(self p: Prog) → List<Nat> {

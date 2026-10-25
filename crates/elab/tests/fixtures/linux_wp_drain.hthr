@@ -53,6 +53,7 @@ fn drain_prog() → Prog {
 }
 fn drain_labels() → Nat → Nat { asm_labels(drain_prog()) }
 fn no_contracts() → Nat → Contract { λ _ => Contract(λ _ => True, λ _ _ => True) }
+fn no_callees() → Nat → Callee<X86Memory(X86Profile::io()), Nat → BitVec(8)> { λ _ => Callee(λ _ _ _ => True, λ _ _ _ _ _ => True) }
 fn drain_code() → List<BitVec(8)> { asm_code(no_fills(), drain_labels(), drain_prog()) }
 fn drain_view(origin: BitVec(64)) → View<X86Memory(X86Profile::io()), Nat → BitVec(8)> {
     DataRegion::io_page().program_view(drain_code(), next_rip(origin, 0))
@@ -68,7 +69,7 @@ theorem drain_exit_reach(): wp_reach(drain_labels(), drain_prog(), 2).IsTrue() {
 theorem drain_exit(origin: BitVec(64), page: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>,
     rip: state.rip = next_rip(origin, prog_len(drain_loop())),
     holds: drain_view(origin).Holds(page, state.memory)): Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(0)), state) {
-    wp_sound(X86Profile::io().linux(), drain_view(origin), drain_sound(origin), origin, no_fills(), drain_labels(), no_contracts(), drain_prog(), 2,
+    wp_sound(X86Profile::io().linux(), drain_view(origin), drain_sound(origin), origin, no_fills(), drain_labels(), no_contracts(), no_callees(), drain_prog(), 2,
         λ _ _ _ _ => False, trivial, Nil,
         λ v m h => j(sym(List::append_nil(drain_code())), λ c _ => CodeResident(X86Profile::io().fetch(), m, c, next_rip(origin, 0)), h.right),
         drain_exit_reach(), ⟨trivial, ⟨trivial, trivial⟩⟩,
@@ -110,7 +111,7 @@ theorem drain_writable(m: X86Memory(X86Profile::io())):
 
 // One pass of the loop: a read, then back to the head, or out at the end.
 theorem drain_pass(origin: BitVec(64), w: Nat, page: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>):
-    Wp(X86Profile::io().linux(), drain_view(origin), origin, drain_labels(), no_contracts(), drain_loop(), 5,
+    Wp(X86Profile::io().linux(), drain_view(origin), origin, drain_labels(), no_contracts(), no_callees(), drain_loop(), 5,
         LoopPost(X86Profile::io().linux(), drain_view(origin), origin, prog_len(asm_back(drain_loop(), 5)), drain_inv(), w), drain(w), page, state) {
     match w {
         Zero => trivial,
@@ -136,13 +137,13 @@ theorem drain_pass(origin: BitVec(64), w: Nat, page: Nat → BitVec(8), state: M
 // every fuel.
 theorem drain_runs(origin: BitVec(64), n: Nat, page: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>,
     rip: state.rip = next_rip(origin, 0), holds: drain_view(origin).Holds(page, state.memory)): Sim(X86Profile::io().linux(), drain(n), state) {
-    loop_at(X86Profile::io().linux(), drain_view(origin), drain_sound(origin), origin, no_fills(), drain_labels(), no_contracts(), drain_loop(), 5,
+    loop_at(X86Profile::io().linux(), drain_view(origin), drain_sound(origin), origin, no_fills(), drain_labels(), no_contracts(), no_callees(), drain_loop(), 5,
         trivial, asm_code_after(no_fills(), drain_labels(), drain_prog(), 2) ++ Nil,
         λ v m h => wp_code_at(X86Profile::io().fetch(), m, origin, no_fills(), drain_labels(), drain_prog(), 2, Nil,
             j(sym(List::append_nil(drain_code())), λ c _ => CodeResident(X86Profile::io().fetch(), m, c, next_rip(origin, 0)), h.right)),
         drain_reach(), ⟨trivial, ⟨trivial, ⟨trivial, ⟨trivial, ⟨trivial, trivial⟩⟩⟩⟩⟩,
         drain_inv(),
-        λ w t v s at h same => j(sym(same), λ x _ => Wp(X86Profile::io().linux(), drain_view(origin), origin, drain_labels(), no_contracts(), drain_loop(), 5,
+        λ w t v s at h same => j(sym(same), λ x _ => Wp(X86Profile::io().linux(), drain_view(origin), origin, drain_labels(), no_contracts(), no_callees(), drain_loop(), 5,
             LoopPost(X86Profile::io().linux(), drain_view(origin), origin, prog_len(asm_back(drain_loop(), 5)), drain_inv(), w), x, v, s),
             drain_pass(origin, w, v, s)),
         n, drain(n), page, state, rip, holds, refl)

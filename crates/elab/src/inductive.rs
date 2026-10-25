@@ -137,6 +137,33 @@ pub(crate) struct Inductive {
     /// other declaration. Kept apart from [`Self::index`], which routes an
     /// *inductive* family onto route 1 or 2b and which codata never takes.
     pub co_index: Vec<(String, Ty)>,
+    /// A **mutual group**'s family (docs/mutual-inductive-design.md §2): the
+    /// members it is the union of, in declaration order. Member `k` is the
+    /// view at index constructor `k` of the family's index type, the group's
+    /// generated `D#member`. Empty for every other declaration.
+    pub members: Vec<Member>,
+}
+
+/// One member of a mutual group (docs/mutual-inductive-design.md §2): a
+/// surface type that is a view of the group's family at the member's index
+/// constructor. It has no lowering of its own and no nominal tag; the index
+/// constructor, which belongs to the group's index type alone, is what
+/// identifies it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Member {
+    pub name: String,
+    /// The member's own index binder (`Tm : (n: Nat) -> Type`), for an
+    /// indexed member. Its type is the index constructor's one field.
+    pub index: Option<String>,
+    /// The family's constructors that are this member's, in written order.
+    pub ctors: Vec<usize>,
+}
+
+impl Inductive {
+    /// The member constructor `k` belongs to, for a group's family.
+    pub fn member_of_ctor(&self, k: usize) -> Option<usize> {
+        self.members.iter().position(|m| m.ctors.contains(&k))
+    }
 }
 
 /// The type an indexed declaration is indexed **by**
@@ -196,12 +223,25 @@ impl IdxTy {
 }
 
 impl Inductive {
-    /// Tier 2: some constructor has a recursive function field, so the
+    /// Tier 2: an unindexed declaration where some constructor has a recursive function field, so the
     /// lowering is `Σ(t : W₀). El(canon t)` (docs/inductive-tier2-w-lowering.md
     /// §5) and [`Self::recursive`] — which means "lowered onto `Wf`" — is false.
     /// Derived from the field kinds, so it needs no storage of its own.
     pub fn infinitary(&self) -> bool {
         !self.codata
+            && self.index.is_none()
+            && self
+                .ctors
+                .iter()
+                .any(|c| c.kind.contains(&FieldKind::FnChild))
+    }
+
+    /// An indexed family on the `IWf` route with a recursive function field:
+    /// lowered on `W` with its index and children equations
+    /// (docs/iwf-infinitary-design.md), not on the kernel's `IWf`.
+    pub fn iwf_infinitary(&self) -> bool {
+        self.index.is_some()
+            && self.skel.is_some()
             && self
                 .ctors
                 .iter()
@@ -815,6 +855,17 @@ impl Elaborator {
     /// and assign its nominal tag. Nothing is emitted here — an inductive has
     /// no kernel counterpart of its own; it is lowered at each use (§2).
     pub(crate) fn elab_inductive(&mut self, d: &InductiveDecl) -> R<()> {
+        self.elab_inductive_members(d, Vec::new())
+    }
+
+    /// [`Self::elab_inductive`] for a mutual group's family, which carries
+    /// its members (docs/mutual-inductive-design.md §2). Empty `members` is
+    /// an ordinary declaration.
+    pub(crate) fn elab_inductive_members(
+        &mut self,
+        d: &InductiveDecl,
+        members: Vec<Member>,
+    ) -> R<()> {
         if self.own_declares(&d.name, &[NameKind::Inductive, NameKind::Global]) {
             return err(format!("duplicate name `{}`", d.name), d.span);
         }
@@ -1121,7 +1172,11 @@ impl Elaborator {
         // Tier 2 (docs/inductive-tier2-w-lowering.md §1): a recursive function
         // field anywhere puts the whole declaration on `W`, and `recursive`
         // keeps meaning "lowered onto `Wf`".
-        let infinitary = ctors.iter().any(|c| c.kind.contains(&FieldKind::FnChild));
+        //
+        // An indexed family's function fields stay on the `IWf` route, which
+        // lowers them on `W` itself (docs/iwf-infinitary-design.md): tier 2's
+        // restrictions below are about one children function with no index.
+        let infinitary = index.is_none() && ctors.iter().any(|c| c.kind.contains(&FieldKind::FnChild));
         // Codata (docs/codata-elaborator-design.md §2): any number of plain
         // and function children per constructor, since a `match` on a value of
         // `M` never has to rebuild the children function — its motive does
@@ -1243,6 +1298,7 @@ impl Elaborator {
             index_ty,
             skel,
             co_index,
+            members,
         });
         // A tier-2 declaration's lowering can fail on what the declaration
         // *says* — a function domain with no code, domains at two levels
@@ -1269,7 +1325,11 @@ impl Elaborator {
         // probed, since no gate runs on it.
         if ind.skel.is_some() && ind.params.is_empty() && ind.valparams.is_empty() {
             let from = self.attempt.check_notes.borrow().len();
-            self.iwf_sig(&Cx::empty(), &ind, &[], d.span)?;
+            if ind.iwf_infinitary() {
+                self.iw_sig(&Cx::empty(), &ind, &[], d.span)?;
+            } else {
+                self.iwf_sig(&Cx::empty(), &ind, &[], d.span)?;
+            }
             if let Some(e) = self.mismatch_since(from) {
                 return Err(e);
             }
@@ -1317,7 +1377,7 @@ impl Elaborator {
     /// not a policy — a parameterized index would need its arguments at every
     /// use, an indexed index would need a two-level family, and a
     /// single-constructor index has one closed value and so indexes nothing.
-    fn index_type(&self, dom: &Ty, name: &str) -> R<IdxTy> {
+    pub(crate) fn index_type(&self, dom: &Ty, name: &str) -> R<IdxTy> {
         if matches!(dom.kind, TyKind::Nat) {
             return Ok(IdxTy::Nat);
         }
@@ -1457,6 +1517,14 @@ impl Elaborator {
                     .to_string(),
                 span,
             );
+        }
+        // A mutual group's member is a view of its family
+        // (docs/mutual-inductive-design.md §2); an indexed one is written
+        // applied, and reaches `try_indexed_ty` instead.
+        if self.lookup_inductive(name).is_none()
+            && let Some((fam, k)) = self.lookup_member(name)
+        {
+            return self.lower_member(cx, &fam, k, args, None, span);
         }
         let Some(ind) = self.lookup_inductive(name) else {
             if name == "True" && args.is_empty() {
@@ -4532,9 +4600,17 @@ fn classify_iwf(
     let mut kinds = vec![FieldKind::Payload; c.fields.len()];
     let mut child_idx: Vec<Option<Expr>> = vec![None; c.fields.len()];
     for (k, f) in c.fields.iter().enumerate() {
+        // A recursive function field, `(y: A) -> D<params>(e)`
+        // (docs/iwf-infinitary-design.md §1): a child per inhabitant of `A`,
+        // its index `e` over the stored fields and `y`. The declaration then
+        // lowers on `W` rather than the kernel's `IWf`.
+        let (child_ty, fn_child) = match &f.ty.kind {
+            TyKind::Fn { dom, cod, .. } if occurs(dom, name).is_none() => (&**cod, true),
+            _ => (&f.ty, false),
+        };
         // A child: `D<params>(e)`, which the parser delivers as an expression
         // in type position.
-        if let TyKind::OfExpr(e) = &f.ty.kind
+        if let TyKind::OfExpr(e) = &child_ty.kind
             && let ExprKind::App { head, args, .. } = &e.kind
             && let Some((rname, targs)) = named_head(head)
             && rname == name
@@ -4561,7 +4637,7 @@ fn classify_iwf(
                     f.ty.span,
                 );
             };
-            kinds[k] = FieldKind::Plain;
+            kinds[k] = if fn_child { FieldKind::FnChild } else { FieldKind::Plain };
             child_idx[k] = Some(e.clone());
             continue;
         }
@@ -4584,7 +4660,7 @@ fn classify_iwf(
         .fields
         .iter()
         .zip(&kinds)
-        .filter(|(_, k)| **k == FieldKind::Plain)
+        .filter(|(_, k)| matches!(k, FieldKind::Plain | FieldKind::FnChild))
         .filter_map(|(f, _)| f.name.as_deref())
         .collect();
     for child in &children {
@@ -4599,9 +4675,12 @@ fn classify_iwf(
             );
         }
         for (k, f) in c.fields.iter().enumerate() {
-            let mentions = match &child_idx[k] {
-                Some(e) => expr_mentions(e, child),
-                None => ty_mentions(&f.ty, child),
+            let mentions = match (&child_idx[k], &f.ty.kind) {
+                // A function child's domain is part of the label too: it is
+                // the positions at this constructor.
+                (Some(e), TyKind::Fn { dom, .. }) => expr_mentions(e, child) || ty_mentions(dom, child),
+                (Some(e), _) => expr_mentions(e, child),
+                (None, _) => ty_mentions(&f.ty, child),
             };
             if mentions {
                 let what = if child_idx[k].is_some() { "index" } else { "type" };
@@ -4755,6 +4834,7 @@ fn shape_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) -> In
         index_ty: None,
         skel: None,
         co_index: Vec::new(),
+        members: Vec::new(),
     }
 }
 
@@ -5029,7 +5109,7 @@ fn is_pos_search(f: &heather_syntax::FieldDecl) -> bool {
     matches!(f.default.as_deref(), Some(Expr { kind: ExprKind::Var(v), .. }) if v == heather_syntax::POS_SEARCH)
 }
 
-fn occurs(t: &Ty, name: &str) -> Option<Span> {
+pub(crate) fn occurs(t: &Ty, name: &str) -> Option<Span> {
     match &t.kind {
         TyKind::Nat | TyKind::Univ { .. } => None,
         // A decoded expression (`m.carrier`). Scanned by *name*, conservatively:
@@ -5145,19 +5225,9 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                 if *implicit {
                     return fail(crate::IMPLICIT_MARK_REFUSED.to_string(), f.ty.span);
                 }
-                if d.index.is_some() && !d.is_codata {
-                    return fail(
-                        format!(
-                            "field of `{}` is a function into `{}`, and `{}` is an indexed \
-                             family: the infinitary tier lowers unindexed declarations only \
-                             this round (docs/inductive-tier2-w-lowering.md §1)",
-                            c.name, d.name, d.name
-                        ),
-                        f.ty.span,
-                    );
-                }
-                // `A -> D<…>` itself: classified by `classify_fields`, which
-                // also checks that the occurrence is the uniform one.
+                // `A -> D<…>` itself: classified by `classify_fields` (or, in
+                // an indexed family, `classify_iwf`, docs/iwf-infinitary-design.md
+                // §1), which also checks that the occurrence is the uniform one.
                 if self_head(cod, &d.name).is_some() {
                     continue;
                 }
@@ -5835,6 +5905,17 @@ impl Elaborator {
     /// machine: one evaluation per side, sharing what it computes, where
     /// spelling the side's constructor by reduction copies every intermediate
     /// term.
+    /// Whether `equation`, a proof of an `=` at a declared inductive, relates
+    /// two different constructors by computation: the sides' tags read off
+    /// their values, as `absurd` reads them. `split_all` closes a case whose
+    /// equation this refutes rather than hand its leaf a goal that no run of
+    /// the program reaches (issues/split-all-nested-scrutinee-kernel-reject.md).
+    pub(crate) fn refuted_by_computation(&self, cx: &Cx, equation: &Expr) -> bool {
+        let Ok(written) = self.equation_as_written(cx, equation, "absurd") else { return false };
+        let Some(ind) = self.tag_of(&written.1) else { return false };
+        matches!(self.ctor_indices(cx, &ind, &written, equation.span), Ok(Some((i, j))) if i != j)
+    }
+
     fn ctor_indices(&self, cx: &Cx, ind: &Inductive, equation: &Equation, span: Span) -> R<Option<(usize, usize)>> {
         let (_, sty, slvl, lhs, rhs) = equation;
         let mut mcx = cx.clone();
@@ -5880,6 +5961,11 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let written = self.equation_as_written(cx, arg, "absurd")?;
+        // An `IWf`-route family, either form: its tag is in the label, under
+        // the family's own eliminator (docs/iwf-infinitary-design.md §13).
+        if let Some((ind, fam)) = self.iwf_of_at(cx, &written.1) {
+            return self.fam_absurd(cx, &ind, &fam, written, expected, expected_lvl, span);
+        }
         if matches!(written.1, Type::Nat) {
             let (proof, _, _, lhs, rhs) = written;
             let (lhs, rhs) = (self.whnf_tm(cx, &lhs, arg.span)?, self.whnf_tm(cx, &rhs, arg.span)?);
@@ -5985,6 +6071,9 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let equation = self.equation(cx, arg, "inj")?;
+        if let Some((ind, fam)) = self.iwf_of_at(cx, &equation.1) {
+            return self.fam_inj(cx, &ind, &fam, k, equation, span);
+        }
         let (proof, ind, sty, slvl, lhs, rhs, (i, la), (j, rb)) =
             self.declared_equation(cx, equation, "inj", true, arg.span)?;
         if i != j {

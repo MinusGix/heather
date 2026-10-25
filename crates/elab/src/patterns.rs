@@ -1104,7 +1104,21 @@ impl Elaborator {
                 .map(|c| (c.name.clone(), c.fields.len()))
                 .collect::<Vec<_>>()
         };
-        if let Some((ind, _)) = self.iwf_of_at(cx, scrut_ty) {
+        if let Some((ind, fam)) = self.iwf_of_at(cx, scrut_ty) {
+            // A mutual group's member: its own constructors, the only ones a
+            // `match` on it has arms for (docs/mutual-inductive-design.md §4).
+            if let Some(m) = (!ind.members.is_empty())
+                .then(|| self.iwf_member_at(cx, &ind, &fam.idx, span))
+                .flatten()
+            {
+                return Some(
+                    ind.members[m]
+                        .ctors
+                        .iter()
+                        .map(|&k| (ind.ctors[k].name.clone(), ind.ctors[k].fields.len()))
+                        .collect(),
+                );
+            }
             return Some(named(&ind));
         }
         let head = self.whnf(cx, scrut_ty, span).ok()?;

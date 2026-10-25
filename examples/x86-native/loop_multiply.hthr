@@ -1,0 +1,21 @@
+import bitvec;
+
+// Multiplication by shifts and adds, a pass per bit of `b`: the loop
+// leaves when the mask has shifted out, and a pass's tree adds or not.
+
+fn shift_add(fuel: Nat, a, mask, acc, b: BitVec(64)) → BitVec(64) {
+    match fuel {
+        Zero => acc,
+        Succ(k) => match mask.eq_bit(BitVec::ofNat(0)) {
+            True => acc,
+            False => match b.band(mask).eq_bit(BitVec::ofNat(0)) {
+                True => shift_add(k, a.add(a), mask.add(mask), acc, b),
+                False => shift_add(k, a.add(a), mask.add(mask), acc.add(a), b),
+            },
+        },
+    }
+}
+
+fn multiply(a, b: BitVec(64)) → BitVec(64) {
+    shift_add(BitVec::ofNat(65, n := 64).toNat(), a, BitVec::ofNat(1), BitVec::ofNat(0), b)
+}

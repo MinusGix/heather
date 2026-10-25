@@ -196,7 +196,11 @@ fn comparison_of(elab: &Elaborator, cx: &Cx, scrut: &Term) -> Option<Rc<Term>> {
 /// A comparison with each projected operand read off the pair it projects: a
 /// recursive definition unfolded at `Cons(b, rest)` reaches its head as a
 /// projection of the constructor's encoding, which the goal's other side
-/// spells `b`. The split abstracts the comparison as the source spells it.
+/// spells `b`. Likewise an operand that is a match an earlier split decided
+/// (`eq_bit(match False { False => x, True => y }, 1)` is `eq_bit(x, 1)`),
+/// or the goal's other side, which reaches `eq_bit(x, 1)` directly, would
+/// keep a comparison this split does not abstract. The split abstracts the
+/// comparison as the source spells it.
 fn settled(elab: &Elaborator, cx: &Cx, term: &Term) -> Term {
     let mut output = term.clone();
     if let Term::App { fun, arg, .. } | Term::AppAt { fun, arg } = &mut output {
@@ -206,6 +210,11 @@ fn settled(elab: &Elaborator, cx: &Cx, term: &Term) -> Term {
             && crate::spelling::proj_of(&whnf).is_none()
         {
             *arg = Rc::new(whnf);
+        } else if eliminator_headed(arg)
+            && let Ok(selected) = elab.goal_oracle().bounded(64).whnf_term_opaque(&cx.gamma, arg)
+            && !eliminator_headed(&selected)
+        {
+            *arg = Rc::new(selected);
         }
     }
     output
@@ -296,6 +305,14 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
         let abstracted = |original: &Term, replacement: &Rc<Term>| {
             Some(payload(term_type(Rc::new(reduct.clone())).abstract_local_with(original, replacement)?))
         };
+        // Deeper first: a comparison whose operand is itself a stuck match
+        // (`eq_bit(64, match c { … }, 1)`) is split after that match, so the
+        // comparison is cased on at each operand it actually has. Cased on
+        // first, the inner split would then decide it, leaving one of its
+        // cases a goal no run reaches.
+        if let Some(found) = stuck_scrutinee(elab, cx, scrut, budget) {
+            return Some(Blocked { original: term.clone(), replacement: abstracted(&found.original, &found.replacement)?, ..found });
+        }
         if let Some(inductive) = &domain
             && let Some(comparison) = comparison_of(elab, cx, scrut)
         {
@@ -306,9 +323,6 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
                 constructors: constructors(inductive),
                 comparison: Some(comparison),
             });
-        }
-        if let Some(found) = stuck_scrutinee(elab, cx, scrut, budget) {
-            return Some(Blocked { original: term.clone(), replacement: abstracted(&found.original, &found.replacement)?, ..found });
         }
         // A scrutinee that computes to a constructor reduces the match at a
         // later step; keep stepping.
@@ -394,14 +408,52 @@ pub(crate) struct StuckSplit {
     pub arms: Vec<Arm>,
 }
 
-/// What a `split_all` leaf does with the goal in hand: introduce a binder,
-/// prove a conjunction's two sides, split the match blocking it, or hand it
-/// to the body.
+/// What a `split_all` leaf does with the goal in hand: close a case that
+/// computation refutes, introduce a binder, prove a conjunction's two sides,
+/// split the match blocking it, or hand it to the body.
 pub(crate) enum Step {
+    Refuted(Expr),
     Intro(Expr),
     Conjoin(Expr),
     Split(StuckSplit),
     Leaf(Type),
+}
+
+/// A split's case equation (`__split_case`, made unique by trailing `_`s):
+/// not its fields (`__split_case_0_1_0`) or its Nat reading (`…_nat`).
+fn case_equation(name: &str) -> bool {
+    name.strip_prefix("__split_case").is_some_and(|rest| rest.bytes().all(|b| b == b'_'))
+}
+
+/// `absurd(h)` for the innermost enclosing case equation `h` whose two sides
+/// compute to different constructors. A split is taken on what blocks the
+/// goal *then*; a later split can decide an earlier one's scrutinee (or the
+/// scrutinee was a closed comparison all along, `unsigned_lt_bit(64, 0, 0)`),
+/// and the case it contradicts is then no case of the program at all — its
+/// goal can be false (`1 = 0`), and a leaf handed it is handed a goal it
+/// cannot prove. Closing the case here is what keeps every goal a leaf sees
+/// one that some run reaches (issues/split-all-nested-scrutinee-kernel-reject.md).
+fn refuted_case(elab: &Elaborator, cx: &Cx, span: Span) -> Option<Expr> {
+    if elab.shadowed(cx, "absurd") || cx.names.iter().any(|name| name == "absurd") {
+        return None;
+    }
+    let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
+    let name = cx
+        .names
+        .iter()
+        .rev()
+        .filter(|name| case_equation(name))
+        .find(|name| elab.refuted_by_computation(cx, &var(name)))?;
+    Some(Expr {
+        kind: ExprKind::App {
+            head: Box::new(var("absurd")),
+            args: vec![var(name)],
+            named: vec![],
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    })
 }
 
 /// A name no local and no global in scope has, from `base`.
@@ -414,6 +466,9 @@ pub(crate) fn fresh(elab: &Elaborator, cx: &Cx, base: String) -> String {
 }
 
 pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr, span: Span) -> Step {
+    if let Some(absurd) = refuted_case(elab, cx, span) {
+        return Step::Refuted(absurd);
+    }
     let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
     let whnf = elab.goal_oracle().bounded(256).whnf_type(&cx.gamma, expected);
     match whnf {
@@ -471,6 +526,71 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
     match split_stuck(elab, cx, &goal, leaf, span) {
         Some(split) => Step::Split(split),
         None => Step::Leaf(goal),
+    }
+}
+
+/// Fail unless `ty`, a goal the splitter built, is convertible to `goal`, the
+/// one it stands for: the splitter's own check of its output, at each node,
+/// so that a defect in its abstraction or simplification is reported as one
+/// rather than as the kernel's rejection of the declaration after `split_all`
+/// claimed the split. A conversion that runs out of fuel is left to the
+/// kernel, which has the declaration's own budget.
+pub(crate) fn restates(elab: &Elaborator, cx: &Cx, ty: &Type, goal: &Type, level: &Level, what: &str, span: Span) -> crate::R<()> {
+    if ty == goal {
+        return Ok(());
+    }
+    match elab.goal_oracle().convert_type(&cx.gamma, heather_kernel::layer::Layer::Prog, ty, goal, level) {
+        Err(heather_kernel::conv::ConvError::NotConvertible) => crate::err(
+            format!(
+                "internal error: `split_all`'s {what} `{}` is not the goal `{}` it stands for (please report this)",
+                elab.display_type(cx, ty),
+                elab.display_type(cx, goal),
+            ),
+            span,
+        ),
+        Ok(()) | Err(heather_kernel::conv::ConvError::OutOfFuel) => Ok(()),
+    }
+}
+
+/// A `refl` leaf, checked where it stands. Everywhere else `refl` is a note
+/// for the gate, not a check; under `split_all` that let a leaf the split
+/// left unprovable read as a finished split until the kernel rejected the
+/// whole declaration. A leaf whose sides do not convert is reported here,
+/// with the cases that led to it. Out of fuel, the kernel decides.
+pub(crate) fn check_refl_leaf(elab: &Elaborator, cx: &Cx, leaf: &Expr, goal: &Type, span: Span) -> crate::R<()> {
+    let mut leaf = leaf;
+    while let ExprKind::Block(block) = &leaf.kind
+        && block.stmts.is_empty()
+    {
+        leaf = &block.result;
+    }
+    if !matches!(leaf.kind, ExprKind::Refl) || elab.shadowed(cx, "refl") {
+        return Ok(());
+    }
+    let Ok(Type::Id { level, ty, lhs, rhs }) = elab.goal_oracle().whnf_type(&cx.gamma, goal) else {
+        return Ok(());
+    };
+    match elab.goal_oracle().convert_term(&cx.gamma, heather_kernel::layer::Layer::Prog, &lhs, &rhs, &ty, &level) {
+        Err(heather_kernel::conv::ConvError::NotConvertible) => {
+            let cases: Vec<String> = cx
+                .names
+                .iter()
+                .filter(|name| case_equation(name))
+                .filter_map(|name| {
+                    let (_, ty, _) = elab.elab_infer(cx, &Expr { kind: ExprKind::Var(name.clone()), span }).ok()?;
+                    Some(format!("`{}`", elab.display_type(cx, &ty)))
+                })
+                .collect();
+            let when = if cases.is_empty() { String::new() } else { format!(" in the case {}", cases.join(", ")) };
+            crate::err(
+                format!(
+                    "`split_all` leaves the goal `{}`{when}, which `refl` does not prove: its sides are not definitionally equal",
+                    elab.display_type(cx, goal),
+                ),
+                span,
+            )
+        }
+        Ok(()) | Err(heather_kernel::conv::ConvError::OutOfFuel) => Ok(()),
     }
 }
 

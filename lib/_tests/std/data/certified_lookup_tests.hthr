@@ -1,0 +1,25 @@
+// Probes of `lib/std/data/certified_lookup.hthr`: a lookup over certified
+// rows finds the head and the tail, misses an absent key, and what it finds
+// carries the rows' validity. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_certified_lookup.rs.
+import certified_lookup; import nat; import list; import option;
+
+fn IsSuccess(key, value: Nat) → Type { key = value }
+
+fn rows() → List<CertifiedEntry<Nat, Nat>(IsSuccess)> {
+    [CertifiedEntry(key := 3, value := 3, valid := refl), CertifiedEntry(key := 7, value := 7, valid := refl)]
+}
+
+// A field's type names the entry's other fields, which infer the implicits.
+theorem retain_valid<K, V>(Valid: K → V → Type, {key: K}, {value: V}, valid: Valid(key, value)): Valid(key, value) { valid }
+theorem field_type_infers_hidden_values<K, V>(Valid: K → V → Type, entry: CertifiedEntry<K, V>(Valid)):
+    Valid(entry.key, entry.value)
+{ retain_valid(Valid, entry.valid) }
+
+theorem finds_head(): lookup(IsSuccess, nat::Nat::eq_dec, 3, rows()) = Some(3) {}
+theorem finds_tail(): lookup(IsSuccess, nat::Nat::eq_dec, 7, rows()) = Some(7) {}
+theorem misses(): lookup(IsSuccess, nat::Nat::eq_dec, 5, rows()) = None {}
+theorem found_is_valid(value: Nat, success: lookup(IsSuccess, nat::Nat::eq_dec, 7, rows()) = Some(value)): IsSuccess(7, value) {
+    lookup_sound(IsSuccess, nat::Nat::eq_dec, 7, rows(), value, success)
+}

@@ -167,9 +167,11 @@ fn twiddle<A: Mag + Pt>(x: A) -> A {{ x.op(x) }}
 theorem by_hand(z: Z): @twiddle(Z::Pt, Z::Mag, z) = twiddle(z) {{ refl }}
 "
     ));
-    // The dictionaries are swapped, so the term the caller wrote is not the
-    // term resolution builds, and the kernel says so at the declaration gate.
-    assert!(e.contains("NotConvertible"), "{e}");
+    // The dictionaries are swapped, so the first one is at the wrong class.
+    // It is inferred, its parameter mentions the implicit `A`, and its type is
+    // compared with the parameter's at the call
+    // (issues/implicit-argument-mismatch-reaches-kernel.md).
+    assert!(e.contains("this has type `Pt<Z>`, but `Mag<"), "{e}");
 }
 
 #[test]

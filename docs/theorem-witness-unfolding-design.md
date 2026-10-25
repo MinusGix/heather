@@ -5,8 +5,8 @@ Status: landed 2026-10-16. Owner: `issues/theorem-witness-unfolding.md`
 checking position, the negative controls), `crates/elab/tests/slice_replay.rs`
 (the edit firewall, in a module and across a module image),
 `crates/cache/tests/end_to_end.rs` (the verdict store),
-`crates/elab/tests/lib_std_creal.rs::witnesses_compute` and the `creal`
-showcase (the client).
+`lib/_tests/std/num/creal_tests.hthr` (`modulus`, `trans_start`) and the
+`creal` showcase (the client).
 
 ## 1. What a client sees
 

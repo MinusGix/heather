@@ -287,13 +287,14 @@ what is under test, and two declarations say it in ten lines):
 5. the lexer joins a chain, `m::{a, b}` and `Impl(…)::member` are where they
    were.
 
-`crates/elab/tests/lib_std_int.rs` (the library win, at the real carriers):
+`lib/_tests/std/num/int_tests.hthr` (the library win, at the real carriers):
 
 6. `<=` and `decide` at **all three** orders from one downstream file that
    imports `nat`, `int` and `bool`, with nothing qualified at the operators;
    open operands for the resolution claim, closed ones for the computation
-   claim, the three canonical names written verbatim, and a false decision
-   refused as the control.
+   claim, and the three canonical names written verbatim; the closed
+   decisions take different branches, so a decider stuck on one branch fails
+   a probe.
 
 Plus: the full suite green, `lib/certgen/ir_v1.hthr` unchanged,
 `scripts/bench --check` in band.

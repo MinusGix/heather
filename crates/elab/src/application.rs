@@ -87,6 +87,53 @@ pub(crate) enum ObligationProgress {
     Solved,
 }
 
+/// The comparisons one implicit-inserting call owes the gate
+/// (`issues/implicit-argument-mismatch-reaches-kernel.md`).
+///
+/// A checked argument was compared with its domain when it was checked. An
+/// *inferred* one only taught the call's metas from its type, and that
+/// unification is learn-only: `f(a.le_refl())` at `hz: 0 <= ?a` learns
+/// nothing from `Le(a, a)`, the expected type then solves `?a := a`, and
+/// `Le(a, a)` against `Le(0, a)` was compared by nobody before the kernel,
+/// which refused the declaration with no site. Every inferred argument's
+/// learning goes through [`Self::learn`], which keeps the pair; the discharge
+/// hands each one, under the call's final solutions, to
+/// [`ImplicitApplicationElab::note_argument_mismatch`]. A call abandoned
+/// before its discharge (a re-plan, an error) records nothing.
+#[derive(Default)]
+pub(crate) struct OwedChecks {
+    owed: Vec<(Type, Type, Level, Span)>,
+}
+
+impl OwedChecks {
+    /// Learn from an inferred argument's type `got` at the scratch-world
+    /// parameter type `dom`, and owe their comparison, reported at the
+    /// argument's own span `at` (`span` is the learning's, as before).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn learn(
+        &mut self,
+        elab: &impl ImplicitApplicationElab,
+        cx: &Cx,
+        dom: &Type,
+        level: &Level,
+        got: Type,
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+        at: Span,
+    ) {
+        elab.unify_application_argument_type(cx, dom, &got, n, sols, span);
+        self.owed.push((dom.clone(), got, level.clone(), at));
+    }
+
+    /// Record every owed comparison, each domain under the call's solutions.
+    fn discharge(self, elab: &impl ImplicitApplicationElab, cx: &Cx, substitution: &GlobalSubst) {
+        for (dom, got, level, span) in self.owed {
+            elab.note_argument_mismatch(cx, &got, &dom.apply_global(substitution), &level, span);
+        }
+    }
+}
+
 /// Semantic capabilities used by the otherwise mechanical obligation queue.
 ///
 /// The application module owns retry order and fixpoint termination. The
@@ -117,6 +164,12 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         &self, _cx: &Cx, _argument: &Expr, _parameter: &Type, _n: u32, _sols: &[Sol],
     ) -> Option<R<(Term, Type, Level)>> { None }
 
+    /// Learn this call's metas from an argument's type against its
+    /// parameter's. **Learn-only**: a failure is silent and decides nothing,
+    /// so an inferred argument placed after this has not been compared with
+    /// its domain at all. Reach it through [`OwedChecks::learn`], which
+    /// records that comparison for the gate; the one direct call teaches a
+    /// literal's counted length before the literal itself is checked.
     fn unify_application_argument_type(
         &self,
         cx: &Cx,
@@ -126,6 +179,13 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         sols: &mut [Sol],
         span: Span,
     );
+
+    /// Record that the argument at `span`, of type `got`, sits at a parameter
+    /// of type `expected` (both in the committed world) with nothing in the
+    /// elaborator having compared the two: the gate compares them, and this is
+    /// the site its refusal is reported at. Recording, not probing — the
+    /// checking forms' [`crate::Elaborator::note_check_mismatch`].
+    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span);
 
     #[allow(clippy::too_many_arguments)]
     fn solve_application_from_expected(
@@ -220,6 +280,7 @@ pub(crate) fn retry_obligations(
     sols: &mut [Sol],
     resolves: &[ResolveOb],
     deferred: &[DeferredArg<'_>],
+    owed: &mut OwedChecks,
     allow_fallback: bool,
     span: Span,
 ) -> R<()> {
@@ -280,7 +341,7 @@ pub(crate) fn retry_obligations(
                         .or_else(|| elab.infer_propagation_callback(cx,obligation.expr,&obligation.dom,n,sols));
                     if let Some(inferred) = inferred {
                         let (term,ty,_) = inferred?;
-                        elab.unify_application_argument_type(cx,&obligation.dom,&ty,n,sols,obligation.expr.span);
+                        owed.learn(elab,cx,&obligation.dom,&obligation.dom_level,ty,n,sols,obligation.expr.span,obligation.expr.span);
                         sols[obligation.slot] = Sol::Solved(Rc::new(term));
                         progressed = true;
                         break;
@@ -307,7 +368,7 @@ pub(crate) fn retry_obligations(
                     }
                     other => other?,
                 };
-                elab.unify_application_argument_type(cx, &obligation.dom, &ty, n, sols, span);
+                owed.learn(elab, cx, &obligation.dom, &obligation.dom_level, ty, n, sols, span, obligation.expr.span);
                 sols[obligation.slot] = Sol::Solved(Rc::new(term));
                 continue;
             }
@@ -853,6 +914,7 @@ fn apply_implicit_planned(
     let mut explicit_doms = Vec::new();
     let mut deferred = Vec::new();
     let mut resolves = Vec::new();
+    let mut owed = OwedChecks::default();
     let mut next_meta = 0u32;
     let mut arguments = args.iter();
     // The spine so far, scratch world, kept only for a call that leaves a
@@ -1029,14 +1091,7 @@ fn apply_implicit_planned(
                         }
                         other => other?,
                     };
-                    elab.unify_application_argument_type(
-                        cx,
-                        &dom,
-                        &inferred_ty,
-                        n,
-                        &mut sols,
-                        span,
-                    );
+                    owed.learn(elab, cx, &dom, &dom_level, inferred_ty, n, &mut sols, span, argument.span);
                     Rc::new(inferred.shift_global(n))
                 }
             }
@@ -1074,7 +1129,7 @@ fn apply_implicit_planned(
                 break;
             }
             let (inferred, inferred_ty, _) = elab.infer_application_argument(cx, argument)?;
-            elab.unify_application_argument_type(cx, &dom, &inferred_ty, n, &mut sols, span);
+            owed.learn(elab, cx, &dom, &dom_level, inferred_ty, n, &mut sols, span, argument.span);
             let argument = Rc::new(inferred.shift_global(n));
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
             level = cod_level.clone();
@@ -1101,6 +1156,7 @@ fn apply_implicit_planned(
         &mut sols,
         &resolves,
         &deferred,
+        &mut owed,
         true,
         span,
     )?;
@@ -1127,6 +1183,7 @@ fn apply_implicit_planned(
             &mut sols,
             &resolves,
             &deferred,
+            &mut owed,
             false,
             span,
         )?;
@@ -1205,6 +1262,7 @@ fn apply_implicit_planned(
         entries.push(GlobalEntry::Tm(solution));
     }
     let substitution = GlobalSubst { entries };
+    owed.discharge(elab, cx, &substitution);
     let (term, ty) = (
         term.apply_global(&substitution),
         ty.apply_global(&substitution),
@@ -1267,6 +1325,10 @@ mod tests {
     #[derive(Default)]
     struct FakeImplicitElab {
         events: RefCell<Vec<&'static str>>,
+        /// The type every explicit argument infers at, when the fixture has
+        /// an inferred argument at all.
+        inferred: Option<Type>,
+        notes: RefCell<Vec<(Type, Type)>>,
     }
 
     impl ExplicitArgElab for FakeExprElab {
@@ -1316,7 +1378,9 @@ mod tests {
         }
 
         fn infer_application_argument(&self, _cx: &Cx, _argument: &Expr) -> R<(Term, Type, Level)> {
-            panic!("the fixture has no inference obligation")
+            let ty = self.inferred.clone().expect("the fixture has no inference obligation");
+            self.events.borrow_mut().push("infer");
+            Ok((Term::Zero, ty, Level::Zero))
         }
 
         fn unify_application_argument_type(
@@ -1328,7 +1392,14 @@ mod tests {
             _sols: &mut [Sol],
             _span: Span,
         ) {
-            panic!("the fixture has no inferred argument")
+            assert!(self.inferred.is_some(), "the fixture has no inferred argument");
+            // Learns nothing, as a failed unification does.
+            self.events.borrow_mut().push("unify");
+        }
+
+        fn note_argument_mismatch(&self, _cx: &Cx, got: &Type, expected: &Type, _level: &Level, _span: Span) {
+            self.events.borrow_mut().push("note");
+            self.notes.borrow_mut().push((got.clone(), expected.clone()));
         }
 
         fn solve_application_from_expected(
@@ -1522,6 +1593,7 @@ mod tests {
             &mut sols,
             &resolves,
             &deferred,
+            &mut OwedChecks::default(),
             true,
             Span { start: 0, end: 1 },
         )
@@ -1594,5 +1666,80 @@ mod tests {
         assert_eq!(result, Type::Nat);
         assert_eq!(level, zero);
         assert_eq!(&*elab.events.borrow(), &["check", "expected"]);
+    }
+
+    /// An inferred argument that taught nothing, at a domain the expected
+    /// type then solved, still owes its comparison: one note, of its own type
+    /// against the domain under the final solution, made at the discharge
+    /// (`issues/implicit-argument-mismatch-reaches-kernel.md`).
+    #[test]
+    fn an_inferred_argument_owes_its_comparison_at_the_discharge() {
+        let zero = Level::Zero;
+        let id_at = |rhs: Term| Type::Id {
+            level: zero.clone(),
+            ty: Rc::new(Type::Nat),
+            lhs: Rc::new(Term::Zero),
+            rhs: Rc::new(rhs),
+        };
+        // `f : Π(a: Nat). Π(h: 0 = a). Nat`, applied as `f(h)` with `a`
+        // implicit and `h` inferring at `1 = 1`.
+        let one = Term::Succ(Rc::new(Term::Zero));
+        let got = Type::Id {
+            level: zero.clone(),
+            ty: Rc::new(Type::Nat),
+            lhs: Rc::new(one.clone()),
+            rhs: Rc::new(one),
+        };
+        let ty = Type::Pi {
+            dom_level: zero.clone(),
+            cod_level: zero.clone(),
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Pi {
+                dom_level: zero.clone(),
+                cod_level: zero.clone(),
+                dom: Rc::new(id_at(Term::Var(heather_kernel::term::LocalVar(0)))),
+                cod: Rc::new(Type::Nat),
+            }),
+        };
+        let meta = |name: &str, implicit| ParamMeta {
+            name: name.into(),
+            implicit,
+            is_type: false,
+            is_self: false,
+            skel: None,
+            solver: None,
+            default: None,
+        };
+        let params = Rc::new(vec![meta("a", true), meta("h", false)]);
+        let argument = Expr {
+            kind: ExprKind::Var("h".into()),
+            span: Span { start: 2, end: 3 },
+        };
+        let elab = FakeImplicitElab {
+            inferred: Some(got.clone()),
+            ..FakeImplicitElab::default()
+        };
+
+        apply_implicit(
+            &elab,
+            &Cx::empty(),
+            "f",
+            params,
+            false,
+            0,
+            false,
+            Term::Zero,
+            ty,
+            zero.clone(),
+            &[argument],
+            &[true, false],
+            Some(&Type::Nat),
+            false,
+            Span { start: 0, end: 4 },
+        )
+        .expect("implicit application");
+
+        assert_eq!(&*elab.events.borrow(), &["infer", "unify", "expected", "note"]);
+        assert_eq!(&*elab.notes.borrow(), &[(got, id_at(Term::Zero))]);
     }
 }

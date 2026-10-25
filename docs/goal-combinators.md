@@ -36,11 +36,16 @@ Then, at each leaf, the goal is taken apart until nothing finite is left
 - **a stuck match** is split. A bounded search looks through application
   arguments, projections and transparent definition heads, and the arguments
   of a call a definition unfolds to, without entering unselected match arms.
-  It prefers, in order: a comparison (`BitVec::unsigned_lt_bit` or
-  `BitVec::eq_bit`), the scrutinee itself or a helper the scrutinee unfolds
-  to (`low(x)`, `newline(b) = decide_bit<b = '\n'>()`); something deeper
-  inside the scrutinee; and the scrutinee itself, when it is a neutral of a
-  finite type that the source can spell (`s.inside`). A helper that is a
+  It prefers, in order: something deeper inside the scrutinee; a comparison
+  (`BitVec::unsigned_lt_bit` or `BitVec::eq_bit`), the scrutinee itself or a
+  helper the scrutinee unfolds to (`low(x)`, `newline(b) = decide_bit<b =
+  '\n'>()`); and the scrutinee itself, when it is a neutral of a finite type
+  that the source can spell (`s.inside`). Deeper first is what splits
+  `eq_bit(match c { False => x, True => y }, 1)` at `c` before the
+  comparison, which is then split at `x` and at `y`: cased on first, the
+  comparison would be decided by the split under it. An operand a split has
+  already decided is read as the arm it selects (`eq_bit(x, 1)`), so the
+  occurrence the other side spells is the same split. A helper that is a
   comparison is split at the comparison, not at its call: the split then
   spells only names any scope can see (a bundle's default runs in the
   library's), and the search never unfolds past it into the comparison's
@@ -93,6 +98,29 @@ again in each specialized branch, so nested comparisons are split as they
 become visible. The leaf remains independent of the splitter: `refl` and other
 checking expressions work too. A match the bounded search cannot expose
 leaves the goal to the written leaf.
+
+The splitter checks its own output, so that it never reports a split the
+kernel then rejects (issues/split-all-nested-scrutinee-kernel-reject.md):
+
+- **A case computation refutes is closed, not handed on.** A split is taken
+  on what blocks the goal at the time; the scrutinee may compute all along
+  (`zero().unsigned_lt_bit(zero())`), or a later split may decide an earlier
+  one's. The case whose equation then relates two different constructors by
+  computation is no case of the program, and its goal can be false (`1 =
+  0`). At every step, before anything else, the innermost such equation
+  closes the case with `absurd`.
+- **Every goal it builds restates the one it stands for.** A split's motive
+  at its scrutinee, and the simplified goal handed to a split or a leaf, must
+  convert to the goal; a failure is reported as an internal error of the
+  splitter, at the split, rather than surfacing as the kernel's verdict on
+  the declaration. (A conversion that runs out of fuel is left to the
+  kernel.)
+- **A `refl` leaf is checked where it stands.** Elsewhere `refl` is a note
+  for the gate, not a check; at a `split_all` leaf it is converted on the
+  spot, and a leaf whose sides differ is refused with its goal and the case
+  equations that led to it (`` `split_all` leaves the goal `0 = 1` in the case
+  `unsigned_lt_bit(ofNat(0), ofNat(0)) = False` ``). Other leaves check
+  themselves as they always do.
 
 What it does not do yet: split a hypothesis, or revise one already in
 context when a split substitutes into it (only binders introduced after the

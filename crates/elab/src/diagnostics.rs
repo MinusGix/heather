@@ -87,6 +87,9 @@ pub enum IndexedRoute {
     One,
     /// The `IWf` route (`docs/iwf-former-design.md` §8).
     Iwf,
+    /// The `IWf` route with a recursive function field, lowered on `W`
+    /// (`docs/iwf-infinitary-design.md`).
+    IwfW,
 }
 
 #[derive(Debug, Clone)]

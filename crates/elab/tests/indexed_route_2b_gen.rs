@@ -404,14 +404,16 @@ fn conflicting_children_are_rejected() {
     // Axis 4 for the read-back: the instance comes from the *first* child, and
     // every other argument is then checked against it — so two children at
     // different instantiations reject rather than the second one being
-    // silently coerced into the first.
+    // silently coerced into the first. The elaborator reports it, naming
+    // both instances, now that a family instance has a surface spelling
+    // (docs/mutual-inductive-design.md §4); it used to reach the kernel.
     let m = elab_err(&format!(
         "{ADD}{TREE}
          inductive Col {{ CA, CB }}
          theorem t(n: Nat, m: Nat, l: Tree<Nat>(n), r: Tree<Col>(m)):
              count(Succ(add(n, m)), Node(n, m, l, r)) = 0 {{ refl }}"
     ));
-    assert!(m.contains("NotConvertible"), "{m}");
+    assert!(m.contains("`Tree<Col>(m)`") && m.contains("`Tree<Nat>(m)`"), "{m}");
 }
 
 #[test]

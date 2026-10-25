@@ -122,7 +122,7 @@ fn subject_position_and_declaring_type_identity_are_preserved() {
 #[test]
 fn failures_report_the_selected_operation_and_bare_calls_stay_ambiguous() {
     for (body, expected) in [
-        ("fn wrong(r: Result<Nat,Nat>, f: Option<Nat> → Nat) -> Result<Nat,Nat> { r.map(f) }", "NotConvertible"),
+        ("fn wrong(r: Result<Nat,Nat>, f: Option<Nat> → Nat) -> Result<Nat,Nat> { r.map(f) }", "this has type `Option<Nat> -> Nat`, but `Nat -> Nat` is expected here"),
         ("fn wrong(n: Nat) -> Result<Nat,Nat> { (match n { Zero => Ok(0), Succ(k) => Ok(k) }).map(Succ) }", "infer"),
         ("fn wrong(v: [Nat;2]) -> [Nat;2] { map(v,Succ) }", "ambiguous"),
         ("theorem wrong(): (Ok<Nat,Nat>(2)).map(Succ) = Ok(9) { refl }", "NotConvertible"),

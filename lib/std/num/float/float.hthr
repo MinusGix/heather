@@ -419,6 +419,12 @@ fn Finite::zero(F: Format, neg: Bool) → Finite(F) {
         λ _ _ => Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top())))
 }
 
+// The two zeros are value-same (`zero_dyadic`) but not equal: they differ in
+// the sign bit.
+theorem Finite::zeros_differ(F: Format): ¬(Finite::zero(F, False) = Finite::zero(F, True)) {
+    λ h => j(h, λ z _ => ¬(z.neg.IsTrue()), λ no => no)(trivial)
+}
+
 // The least positive subnormal, `2^qmin`.
 fn Finite::min_subnormal(F: Format) → Finite(F) {
     Finite(False, 1, 0, F.canonical_intro(1, 0, Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top()), trivial, Inl(refl),

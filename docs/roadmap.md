@@ -93,7 +93,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `hih-self` | heather-in-heather | open | A first component of Heather itself (candidate: the lexer, on the parser library) is written in Heather and compiled natively. |  |
 | `hih-kernel-model` | heather-in-heather | open | A model of the kernel's reduction in Heather states the facts its accelerations rely on, and proves them, so that an optimisation checked nightly can be promoted to proven (`docs/kernel-model-design.md`). |  |
 | `hih-km-probe` | heather-in-heather | done | The fold classifier's probe is sound: a run that is not blocked on a probe variable is, at the same fuel, the run of every instance (`Tm::whnf_inst`, `Tm::whnf_inst_settled`). | hih-kernel-model |
-| `hih-km-runs` | heather-in-heather | open | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs. | hih-kernel-model |
+| `hih-km-runs` | heather-in-heather | done | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs (`Tm::fold_affine`, `Tm::fold_affine_peeled`, `Tm::fold_sync`). | hih-kernel-model |
 | `tac-in-heather` | tactics | open | A tactic is written in Heather through a host elaboration interface, and one tactic that lives in Rust today has a Heather counterpart. |  |
 | `tac-host-interface` | tactics | open | Heather code can read a goal, build a checked term, and report failure with its search state, through one scoped host interface. | tac-in-heather |
 | `tac-first-port` | tactics | done | One tactic that lives in Rust today (candidate: `split_all` or `monoid` normalisation) has a Heather implementation that closes the same goals. | tac-in-heather |
@@ -107,6 +107,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `it-coinductive` | interaction-trees | open | Interaction trees diverge for real: a coinductive tree over container events with `bind` and `iter`, `approx` into the finite tree, and bisimilarity and eutt as `M` instances, bridged to the finite library's `Same` (`docs/kernel-coinduction-design.md` §6). |  |
 | `it-cotree` | interaction-trees | done | `CoTree<R>(E)` with `bind`, `map`, `translate` and fuel-free `iter`, its approximations as a `Program` (`spin` diverges with no fuel), and strong bisimilarity as indexed codata with reflexivity, symmetry, transitivity, the monad laws, a `bind` congruence and the bridge to `Same` (`docs/coitree-design.md`). | it-coinductive |
 | `it-eutt` | interaction-trees | done | Equivalence up to taus on `CoTree` as indexed codata with drop counts: reflexivity, symmetry, transitivity, `CTau(t) ≈ t`, the monad laws, and equivalent trees giving programs that refine each other (`docs/coitree-design.md` §7). | it-coinductive |
+| `it-program-bridge` | interaction-trees | done | The fuel-free loop over a finite body and `Program::iter` refine each other, as do `program(bind(t, h))` and `Program::bind` of the programs; finite trees embed with exactly their traces (`docs/coitree-design.md` §8). | it-coinductive |
 | `it-codata` | interaction-trees | done | A surface `codata` declaration lowers onto the kernel's `M`, with constructors, `match` through `out`, and guarded corecursive functions compiled into one `corec` (`docs/codata-elaborator-design.md`). | it-coinductive |
 | `math-classes` | mathematics | open | The algebra and order class hierarchy (semiring to ordered field, lattices) is settled, with a documented API that clients use without restating laws. |  |
 | `math-reals` | mathematics | open | Reals have their completeness interfaces and basic analysis (sequences, limits, continuity) on top of the regular Cauchy reals. |  |
@@ -340,11 +341,16 @@ road to measure. (5) Asymptotics and transseries, on the reals and orders.
 (6) The metatheory needed to restate heather-coq (`math-metatheory`):
 syntax with binders, substitution lemmas, logical relations. The IWf former
 landing in the kernel (`docs/iwf-former-design.md`) is what makes its
-inductive families writable. `docs/heather-coq-port-assessment.md` gives the
-blockers for a Heather copy of heather-coq and proposes rungs
+inductive families writable; mutual families
+(`docs/mutual-inductive-design.md`) and families whose premises quantify
+over an argument (`docs/iwf-infinitary-design.md`, a logical relation's
+shape) lower onto it or onto `W` without a kernel change.
+`docs/heather-coq-port-assessment.md` gives the blockers for a Heather copy
+of heather-coq and proposes rungs
 ([heather-coq-port](../issues/heather-coq-port.md)). By predicativity and
-Gödel, the copy carries the logical relation only for fragments weaker than
-Heather.
+Gödel, the copy carries normalisation, canonicity and consistency only for
+fragments weaker than Heather. Inversion and subject reduction are not
+behind that limit (`docs/definitional-inversion-survey.md`, PR #173).
 
 **Constructive design** (a principle across this area, see
 [Design principles](#design-principles)). The kernel is predicative and has no axioms by default
@@ -570,14 +576,21 @@ separate machines do not slow each other's tests.
   (`issues/coitree-program-bridge.md`). Simulation between finite trees over
   different events, with the loop rule `cat` needs, landed in the same round
   under `it-library` (`docs/itree-simulation-design.md`).
+- 2026-10-24: `it-program-bridge` added and done
+  (`lib/std/itree/coitree_bridge.hthr`): the coinductive loop and `bind`
+  against the fuelled programs, both directions, closing
+  `issues/coitree-program-bridge.md`.
 - 2026-10-24: `hih-kernel-model` proposed, with `hih-km-probe` done and
   `hih-km-runs` next, for Minus's review. Minus asked for a Heather-in-Heather
   step as the way to let optimisations of the core be proven rather than
   checked nightly (`docs/testing-architecture-design.md` §5), and none of the
   area's milestones modelled the kernel. The first round proves the fold
   classifier's probe argument (`docs/kernel-model-design.md`).
+- 2026-10-24: `hih-km-runs` done (`lib/kernel_model/kernel_runs.hthr`): the
+  affine and synchronous run folds join the unary fold in the model with
+  pairs, projections and runs (`docs/kernel-model-design.md` §7).
 - 2026-10-24: The heather-coq port is assessed
   (`docs/heather-coq-port-assessment.md`, issue `heather-coq-port`), with
   rungs under `math-metatheory` proposed for Minus's review. Two language
-  blockers are filed: `mutual-inductive-declarations` and
-  `indexed-infinitary-families`.
+  blockers were filed and have since landed: `mutual-inductive-declarations`
+  and `indexed-infinitary-families`.

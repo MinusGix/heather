@@ -71,14 +71,14 @@ fn std_list_closure_exports() {
     }
 }
 
-/// The kernel model (`lib/kernel_model/kernel_reduction.hthr`,
-/// `docs/kernel-model-design.md` §5) exports whole: its proofs are meant to
-/// be rechecked by Lean's kernel as well as Heather's, since what they
-/// justify is an optimisation in Heather's own kernel.
+/// The kernel model (`lib/kernel_model/kernel_reduction.hthr` and
+/// `kernel_runs.hthr`, `docs/kernel-model-design.md` §5) exports whole: its
+/// proofs are meant to be rechecked by Lean's kernel as well as Heather's,
+/// since what they justify is an optimisation in Heather's own kernel.
 #[test]
 fn kernel_model_exports() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib");
-    let modules = loader::load(&root.join("kernel_model/kernel_reduction.hthr"), &[root.join("std")])
+    let modules = loader::load(&root.join("kernel_model/kernel_runs.hthr"), &[root.join("std")])
         .map_err(|e| e.msg)
         .expect("load");
     let mut e = Elaborator::with_prelude_for_export().expect("prelude");
@@ -100,7 +100,9 @@ fn kernel_model_exports() {
     let kernel = print_kernel(&decls);
     let holes: Vec<&str> = kernel.lines().filter(|l| l.starts_with("x\t")).collect();
     assert!(holes.is_empty(), "skipped by the kernel route:\n{}", holes.join("\n"));
-    assert!(decls.iter().any(|d| d.name.as_deref() == Some("kernel_reduction::Tm::whnf_inst")), "the probe lemma is exported");
+    for lemma in ["kernel_reduction::Tm::whnf_inst", "kernel_runs::Tm::fold_affine", "kernel_runs::Tm::fold_affine_peeled", "kernel_runs::Tm::fold_sync"] {
+        assert!(decls.iter().any(|d| d.name.as_deref() == Some(lemma)), "{lemma} is exported");
+    }
     if let Some(dir) = std::env::var_os("HEATHER_EXPORT_OUT") {
         std::fs::write(PathBuf::from(dir).join("KernelModel.hxk"), kernel).unwrap();
     }

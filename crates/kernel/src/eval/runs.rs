@@ -16,6 +16,13 @@
 //! the annotations the calculus gives them, read from the motive at the
 //! tail and at the scrutinee respectively, so a value built here is one the
 //! fold would have built; nothing from the probe survives into it.
+//!
+//! That each value built here is convertible with the unary fold is proved
+//! against the reference model, with increments as counts and iteration one
+//! composition per step: `lib/kernel_model/kernel_runs.hthr`
+//! (`Tm::fold_affine`, `Tm::fold_affine_peeled`, `Tm::fold_sync`;
+//! `docs/kernel-model-design.md` §7). Programs and binary powering against
+//! that iteration rest on `value/algebra.rs`'s reference test.
 
 use std::sync::Arc as Rc;
 

@@ -1,0 +1,61 @@
+// Probes of `lib/std/itree/coitree_bridge.hthr`: the embedding of fuelled
+// trees into coinductive ones observes as the tree, and loops, cuts and binds
+// carry traces both ways. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_coitree_bridge.rs; the refusals stay there.
+import logic; import nat; import itree; import itree_trace; import coitree; import coitree_eutt; import coitree_bridge;
+
+// The embedding observes as the tree, at a literal and an open tree, and a
+// `Cut` as `spin`.
+theorem obs_ret(E: Events): CoTree::obs<Nat>(E, CoTree::of_tree<Nat>(E, Ret(1))) = ORet(1) { refl }
+theorem obs_tau(E: Events): CoTree::obs<Nat>(E, CoTree::of_tree<Nat>(E, Tau(Ret(1)))) = OTau(CoTree::of_tree(E, Ret(1))) { refl }
+theorem obs_open<R>(E: Events, t: ITree<R>(E)): CoTree::obs(E, CoTree::of_tree(E, Tau(t))) = OTau(CoTree::of_tree(E, t)) { refl }
+theorem obs_vis<R>(E: Events, c: E.Cmd, k: E.Resp(c) → ITree<R>(E)):
+    CoTree::obs(E, CoTree::of_tree(E, Vis(c, k))) = OVis(c, λ a => CoTree::of_tree(E, k(a))) { refl }
+theorem obs_cut<R>(E: Events): CoTree::obs(E, CoTree::of_tree<R>(E, Cut)) = OTau(CoTree::spin(E)) { refl }
+
+// A literal loop: each pass is a silent step and then a `Continue`, so two
+// passes and the `Break` take fuel 3 and depth 5 (four silent steps, then the
+// leaf). The return carries over in both directions.
+fn down(E: Events, a: Nat) → ITree<Step<Nat, Nat>>(E) {
+    match a { Zero => Ret(Break(0)), Succ(m) => Tau(Ret(Continue(m))) }
+}
+fn co_down(E: Events, a: Nat) → CoTree<Nat>(E) { CoTree::iter(E, λ x => CoTree::of_tree(E, down(E, x)), a) }
+theorem fuelled(E: Events): Program::Produces<Nat>(E, Program::iter<Nat, Nat>(E, λ x => down(E, x), 2), TRet(0)) {
+    Converges(3, Returned(refl))
+}
+theorem fuel_free(E: Events): Program::Produces<Nat>(E, CoTree::program(E, co_down(E, 2)), TRet(0)) {
+    Converges(5, Returned(refl))
+}
+theorem carried(E: Events): Program::Produces<Nat>(E, CoTree::program(E, co_down(E, 2)), TRet(0)) {
+    CoTree::iter_refined<Nat, Nat>(E, λ x => down(E, x), 2, TRet(0), fuelled(E))
+}
+theorem carried_back(E: Events): Program::Produces<Nat>(E, Program::iter<Nat, Nat>(E, λ x => down(E, x), 2), TRet(0)) {
+    CoTree::iter_refines<Nat, Nat>(E, λ x => down(E, x), 2, TRet(0), fuel_free(E))
+}
+theorem back<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A, b: B,
+    p: Program::Produces<B>(E, CoTree::program<B>(E, CoTree::iter<A, B>(E, λ x => CoTree::of_tree(E, body(x)), a)), TRet(b))):
+    Program::Produces(E, Program::iter(E, body, a), TRet(b))
+{
+    CoTree::iter_refines(E, body, a, TRet(b), p)
+}
+
+// An embedded `Cut` returns nothing, and a bind's return carries over from the
+// programs it binds.
+theorem cut_claims_nothing<R>(E: Events, r: R,
+    p: Program::Produces(E, CoTree::program(E, CoTree::of_tree<R>(E, Cut)), TRet(r))): False
+{
+    let c: Program::Produces<R>(E, Program::tree<R>(E, Cut), TRet(r)) = CoTree::of_tree_refines<R>(E, Cut, TRet(r), p);
+    absurd(CutTrace::ended<R>(E, TRet(r), c.h))
+}
+theorem bound(E: Events):
+    Program::Produces<Nat>(E, CoTree::program<Nat>(E, CoTree::bind<Nat, Nat>(E, CRet(1), λ r => CTau(CRet(r + 1)))), TRet(2))
+{
+    CoTree::bind_refined<Nat, Nat>(E, CRet(1), λ r => CTau(CRet(r + 1)), TRet(2), Converges(2, Returned(refl)))
+}
+theorem bind_open<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E), tr: Trace<B>(E),
+    p: Program::Produces(E, CoTree::program(E, CoTree::bind(E, t, h)), tr)):
+    Program::Produces(E, Program::bind(E, CoTree::program(E, t), λ r => CoTree::program(E, h(r))), tr)
+{
+    CoTree::bind_refines(E, t, h, tr, p)
+}

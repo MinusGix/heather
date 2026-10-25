@@ -467,6 +467,21 @@ impl Speller<'_> {
             let shown = format!("{}{targs}{vargs}{idx}", ind.name);
             return if targs == "<…>" || !vargs.is_empty() { self.elided(shown) } else { shown };
         }
+        // An `IWf`-route family at an index (docs/iwf-former-design.md §8):
+        // `D<ā>(e)`, or for a mutual group's family the member the index
+        // selects, `Tm(e)` (docs/mutual-inductive-design.md §2).
+        if let Type::IWf { sig, index } = ty
+            && let Some((ind, _)) = self.el.iwf_of(ty)
+        {
+            return self.iwf_instance(&ind, &sig.shape, index, d);
+        }
+        // …and its `W` encoding, for a family with a function field
+        // (docs/iwf-infinitary-design.md §5).
+        if matches!(ty, Type::Sigma { .. })
+            && let Some((ind, fam)) = self.el.iwf_of(ty)
+        {
+            return self.iwf_instance(&ind, fam.shape().0, &fam.idx, d);
+        }
         // An inductive instance is its declaration's name, wherever its
         // lowering is what we are looking at.
         if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })
@@ -614,6 +629,7 @@ impl Speller<'_> {
             Term::TmSquash { ty, .. } => format!("∥{}∥", self.tm(ty, d + 1)),
             Term::Squash { tm, .. } => format!("squash({})", self.tm(tm, d + 1)),
             Term::Supf { .. }
+            | Term::Supi { .. }
             | Term::Inl { .. }
             | Term::Inr { .. }
             | Term::InlAt { .. }
@@ -629,6 +645,66 @@ impl Speller<'_> {
                 .map(|(n, _)| n)
                 .unwrap_or_else(|| self.raw_tm(t)),
             _ => self.raw_tm(t),
+        }
+    }
+
+    /// `D<ā>(e)` for an `IWf`-route family, the type arguments read off the
+    /// shape (the family's shape declaration is an ordinary unindexed one),
+    /// and a mutual group's family as the member its index selects.
+    fn iwf_instance(
+        &self,
+        ind: &crate::inductive::Inductive,
+        shape: &Type,
+        index: &Term,
+        d: u32,
+    ) -> String {
+        let targs = if ind.params.is_empty() {
+            String::new()
+        } else {
+            match ind.skel.as_ref().and_then(|skel| {
+                self.el.display_targs(self.cx, shape, skel, self.binders())
+            }) {
+                Some(args) => {
+                    let shown = args.iter().map(|(arg, _)| self.ty(arg, d + 1)).collect::<Vec<_>>();
+                    format!("<{}>", shown.join(", "))
+                }
+                None => self.elided("<…>".to_string()),
+            }
+        };
+        if ind.members.is_empty() {
+            return format!("{}{targs}({})", ind.name, self.tm(index, d + 1));
+        }
+        let Some(crate::inductive::IdxTy::Decl(mi)) = &ind.index_ty else {
+            return self.raw_tm(index);
+        };
+        let (k, payload) = self.inj_path(index, mi.ctors.len());
+        let Some(member) = ind.members.get(k) else {
+            return self.raw_tm(index);
+        };
+        if member.index.is_none() {
+            return format!("{}{targs}", member.name);
+        }
+        match crate::spelling::tuple_fields(self.el, self.cx, payload, 1, 1, self.binders()) {
+            Some(fields) => format!("{}{targs}({})", member.name, self.tm(&fields[0], d + 1)),
+            None => self.elided(format!("{}{targs}(…)", member.name)),
+        }
+    }
+
+    /// Walk a tier-0 value's injection path over `n` constructors: `Inr`
+    /// steps past a constructor, `Inl` selects one. The constructor's number
+    /// and its payload tuple.
+    fn inj_path<'t>(&self, label: &'t Term, n: usize) -> (usize, &'t Term) {
+        let mut i = 0usize;
+        let mut cur = label;
+        loop {
+            match crate::spelling::inj_of(cur) {
+                Some((false, val)) if i + 1 < n => {
+                    i += 1;
+                    cur = val;
+                }
+                Some((true, val)) => return (i, val),
+                _ => return (i, cur),
+            }
         }
     }
 
@@ -649,6 +725,14 @@ impl Speller<'_> {
                 children,
                 ..
             } => (&**label, Some(&**children), self.el.display_tag_of(shape)?),
+            // An `IWf`-route family's value: the label is the shape
+            // declaration's injection, whose constructors are the family's
+            // in order, and the children are the `DVec` tuple.
+            Term::Supi { sig, label, children } => {
+                let skel = self.el.tag_of(&sig.shape)?;
+                let fam = Rc::clone(self.el.types.iwf_by_shape(skel.tag)?);
+                (&**label, Some(&**children), fam)
+            }
             // Tier 0: the value *is* the injection, and either summand type
             // carries the nominal tag — behind a spine-code reference for a
             // flat declaration, which the display lookup sees through.
@@ -678,22 +762,7 @@ impl Speller<'_> {
         };
         // Walk the injection path: `Inr` steps past a constructor, `Inl`
         // selects one.
-        let n = ind.ctors.len();
-        let mut i = 0usize;
-        let mut cur = label;
-        loop {
-            match crate::spelling::inj_of(cur) {
-                Some((false, val)) if i + 1 < n => {
-                    i += 1;
-                    cur = val;
-                }
-                Some((true, val)) => {
-                    cur = val;
-                    break;
-                }
-                _ => break,
-            }
-        }
+        let (i, cur) = self.inj_path(label, ind.ctors.len());
         let ctor = ind.ctors.get(i)?;
         // A container field is neither payload nor a plain child, and reading
         // it back means reading a vector: out of scope for a display.

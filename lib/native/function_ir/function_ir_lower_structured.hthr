@@ -42,8 +42,10 @@ fn slot_meet(left, right: Option<Held>) → Option<Held> {
     }
 }
 
-fn File::meet(self left: File, right: File) → File {
-    File(at := λ (register: Gpr) => slot_meet(left.at(register), right.at(register)))
+// The registers both arms agree on, and what was known before them (what
+// an arm learns holds only on its path).
+fn File::meet(self left: File, right: File, known: List<Known>) → File {
+    File(at := λ (register: Gpr) => slot_meet(left.at(register), right.at(register)), known := known)
 }
 
 theorem slot_meet_left(values: Valuation(), word: BitVec(64), left, right: Option<Held>):
@@ -74,14 +76,16 @@ theorem slot_meet_right(values: Valuation(), word: BitVec(64), left, right: Opti
     }
 }
 
-theorem File::meet_left(self left: File, values: Valuation(), gprs: Gprs, right: File,
-    represents: left.Represents(values, gprs)): left.meet(right).Represents(values, gprs) {
-    λ register => slot_meet_left(values, read_gpr(register, gprs), left.at(register), right.at(register), represents(register))
+theorem File::meet_left(self left: File, values: Valuation(), gprs: Gprs, right: File, known: List<Known>,
+    represents: left.Represents(values, gprs), holds: KnownHold(values, known)): left.meet(right, known).Represents(values, gprs) {
+    ⟨λ register => slot_meet_left(values, read_gpr(register, gprs), left.at(register), right.at(register), represents.left(register)),
+     holds⟩
 }
 
-theorem File::meet_right(self left: File, values: Valuation(), gprs: Gprs, right: File,
-    represents: right.Represents(values, gprs)): left.meet(right).Represents(values, gprs) {
-    λ register => slot_meet_right(values, read_gpr(register, gprs), left.at(register), right.at(register), represents(register))
+theorem File::meet_right(self left: File, values: Valuation(), gprs: Gprs, right: File, known: List<Known>,
+    represents: right.Represents(values, gprs), holds: KnownHold(values, known)): left.meet(right, known).Represents(values, gprs) {
+    ⟨λ register => slot_meet_right(values, read_gpr(register, gprs), left.at(register), right.at(register), represents.left(register)),
+     holds⟩
 }
 
 // ---------------------------------------------------------------------------
@@ -89,10 +93,10 @@ theorem File::meet_right(self left: File, values: Valuation(), gprs: Gprs, right
 
 // What emitting leaves: the program so far, the file, the placement not
 // yet used, and the label names used.
-record Emitted { prog: Prog, file: File, placement: List<Gpr>, names: Nat }
+record Emitted { prog: Prog, file: File, placement: List<Place>, names: Nat }
 
 // The placement after `nodes` took theirs, one each.
-fn skip_nodes(nodes: List<Node>, placement: List<Gpr>) → List<Gpr> {
+fn skip_nodes(nodes: List<Node>, placement: List<Place>) → List<Place> {
     match nodes {
         Nil => placement,
         Cons(_, rest) => match placement { Nil => Nil, Cons(_, later) => skip_nodes(rest, later) },
@@ -100,7 +104,7 @@ fn skip_nodes(nodes: List<Node>, placement: List<Gpr>) → List<Gpr> {
 }
 
 // A dataflow leaf: its nodes as one block.
-fn emit_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+fn emit_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat) → Option<Emitted> {
     match lower_nodes(nodes, placement, file) {
         None => None,
         Some(lowered) => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
@@ -109,7 +113,7 @@ fn emit_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Gpr>, n
 
 // The region after `prog`. A conditional's labels are named `names + 1`
 // (its second arm) and `names + 2` (the join).
-fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File, placement: List<Gpr>, names: Nat) → Option<Emitted> {
+fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File, placement: List<Place>, names: Nat) → Option<Emitted> {
     match region {
         Dataflow(body) => emit_nodes(prog, file, body.nodes, placement, names),
         Sequence(prefix, continuation) => match emit_nodes(prog, file, prefix.nodes, placement, names) {
@@ -126,7 +130,7 @@ fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File,
                 None => None,
                 Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
                     None => None,
-                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                 },
             },
         },
@@ -188,7 +192,7 @@ theorem may_emit_seq<M>(site: Site<M>, values: Valuation(), prog: Prog, file: Fi
 }
 
 theorem emit_nodes_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), values: Valuation(), prog: Prog,
-    file: File, nodes: List<Node>, placement: List<Gpr>, names: Nat):
+    file: File, nodes: List<Node>, placement: List<Place>, names: Nat):
     MayEmit<M>(site, values, prog, file, NodesHold(values, nodes), emit_nodes(prog, file, nodes, placement, names)) {
     (match lower_nodes(nodes, placement, file) as λ lowered =>
         MayKeep<M>(values, file, NodesHold(values, nodes), lowered) →
@@ -240,7 +244,7 @@ theorem branch_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), v
     no_emits: Emits<M>(site, values, yes.prog.else_label(Succ(names), Succ(Succ(names))), file, StructuredRegionHolds(values, when_false), no)):
     Emits<M>(site, values, prog, file,
         StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
-        Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)) {
+        Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)) {
     let register = found.register;
     let else_name = Succ(names);
     let join_name = Succ(Succ(names));
@@ -253,7 +257,8 @@ theorem branch_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), v
         prog.within_step(yes.prog, 0, Jmp(join_name), prog.within_trans(branched, yes.prog, to_branch, yes_emits.left)));
     let holds = StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false));
     let pre = λ (g: Gprs) => file.Represents(values, g) ∧ holds;
-    let post = λ (g: Gprs) => yes.file.meet(no.file).Represents(values, g);
+    let post = λ (g: Gprs) => yes.file.meet(no.file, file.known).Represents(values, g);
+    let known = KnownHold(values, file.known);
     ⟨prog.within_step(no.prog, join_name, Block([]), prog.within_trans(second, no.prog, to_second, no_emits.left)),
      λ within => {
         let program = site.program;
@@ -279,26 +284,30 @@ theorem branch_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), v
             tested_in.witness, tested_in.proof, branched_in.witness, branched_in.proof, jumped_in.witness, jumped_in.proof,
             else_lands, join_lands, pre, post,
             site.runs_weaken(prog_len(branched), prog_len(yes.prog),
-                λ (g: Gprs) => file.Represents(values, g) ∧ StructuredRegionHolds(values, when_true),
-                λ (g: Gprs) => yes.file.Represents(values, g),
+                λ (g: Gprs) => (file.Represents(values, g) ∧ StructuredRegionHolds(values, when_true)) ∧ known,
+                λ (g: Gprs) => yes.file.Represents(values, g) ∧ known,
                 λ (g: Gprs) => pre(g) ∧ register.tests_zero(g) = False, post,
-                yes_emits.right(yes_in),
-                λ g held => ⟨held.left.left, when_nonzero(values, inputs, condition, arguments, outputs, when_true, when_false,
-                    trans(sym(selects(g, held.left.left)), held.right), held.left.right)⟩,
-                λ g represents => yes.file.meet_left(values, g, no.file, represents)),
+                site.runs_frame(prog_len(branched), prog_len(yes.prog),
+                    λ (g: Gprs) => file.Represents(values, g) ∧ StructuredRegionHolds(values, when_true),
+                    λ (g: Gprs) => yes.file.Represents(values, g), known, yes_emits.right(yes_in)),
+                λ g held => ⟨⟨held.left.left, when_nonzero(values, inputs, condition, arguments, outputs, when_true, when_false,
+                    trans(sym(selects(g, held.left.left)), held.right), held.left.right)⟩, held.left.left.right⟩,
+                λ g held => yes.file.meet_left(values, g, no.file, file.known, held.left, held.right)),
             site.runs_weaken(prog_len(second), prog_len(no.prog),
-                λ (g: Gprs) => file.Represents(values, g) ∧ StructuredRegionHolds(values, when_false),
-                λ (g: Gprs) => no.file.Represents(values, g),
+                λ (g: Gprs) => (file.Represents(values, g) ∧ StructuredRegionHolds(values, when_false)) ∧ known,
+                λ (g: Gprs) => no.file.Represents(values, g) ∧ known,
                 λ (g: Gprs) => pre(g) ∧ register.tests_zero(g) = True, post,
-                no_emits.right(no_in),
-                λ g held => ⟨held.left.left, when_zero(values, inputs, condition, arguments, outputs, when_true, when_false,
-                    trans(sym(selects(g, held.left.left)), held.right), held.left.right)⟩,
-                λ g represents => yes.file.meet_right(values, g, no.file, represents)))
+                site.runs_frame(prog_len(second), prog_len(no.prog),
+                    λ (g: Gprs) => file.Represents(values, g) ∧ StructuredRegionHolds(values, when_false),
+                    λ (g: Gprs) => no.file.Represents(values, g), known, no_emits.right(no_in)),
+                λ g held => ⟨⟨held.left.left, when_zero(values, inputs, condition, arguments, outputs, when_true, when_false,
+                    trans(sym(selects(g, held.left.left)), held.right), held.left.right)⟩, held.left.left.right⟩,
+                λ g held => yes.file.meet_right(values, g, no.file, file.known, held.left, held.right)))
      }⟩
 }
 
 theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Site<M>, laid: site.program.laid_out().IsTrue(),
-    values: Valuation()): (prog: Prog) → (file: File) → (placement: List<Gpr>) → (names: Nat) →
+    values: Valuation()): (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) →
     MayEmit<M>(site, values, prog, file, StructuredRegionHolds(values, region), region.emit(prog, file, placement, names)) {
     match region {
         Dataflow(body) => λ prog file placement names => emit_nodes_emits<M>(site, laid, values, prog, file, body.nodes, placement, names),
@@ -338,7 +347,7 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
                             None => None,
                             Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
                                 None => None,
-                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                             },
                         },
                     }) {
@@ -352,7 +361,7 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
                                 None => None,
                                 Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
                                     None => None,
-                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                    Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                 },
                             }) {
                         None => λ _ => trivial,
@@ -364,7 +373,7 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
                                     StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
                                     match n {
                                         None => None,
-                                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file), no.placement, no.names)),
+                                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
                                     }) {
                                 None => λ _ => trivial,
                                 Some(no) => λ no_emits => branch_emits<M>(site, laid, values, prog, file, inputs, condition, arguments, outputs,
@@ -391,7 +400,7 @@ fn finish_prog(program: Prog, checked: Bool) → Option<Prog> {
 // `None` is a refusal: an unsupported node, a placement that overwrote a
 // value still needed or left the arms' values apart, or a program that is
 // not laid out.
-fn StructuredRegion::lower(self region: StructuredRegion, inputs, outputs, placement: List<Gpr>) → Option<Prog> {
+fn StructuredRegion::lower(self region: StructuredRegion, inputs, outputs: List<Gpr>, placement: List<Place>) → Option<Prog> {
     match input_file(structured_inputs(region).entries, inputs) {
         None => None,
         Some(file) => match region.emit(Start, file, placement, 0) {
@@ -456,7 +465,7 @@ theorem finish_lowers<M>(region: StructuredRegion, inputs, outputs: List<Gpr>, v
     }
 }
 
-theorem StructuredRegion::lower_lowers<M>(self region: StructuredRegion, values: Valuation(), inputs, outputs, placement: List<Gpr>):
+theorem StructuredRegion::lower_lowers<M>(self region: StructuredRegion, values: Valuation(), inputs, outputs: List<Gpr>, placement: List<Place>):
     MayLower<M>(region, inputs, outputs, values, region.lower(inputs, outputs, placement)) {
     let ins = structured_inputs(region).entries;
     let outs = structured_outputs(region).entries;
@@ -510,7 +519,7 @@ theorem StructuredRegion::lower_lowers<M>(self region: StructuredRegion, values:
 // The theorem, proved once: whatever the placement, a program `lower`
 // returns, resident at any origin, runs fetched from its start to its end
 // and computes the region.
-theorem StructuredRegion::lower_correct<M>(self region: StructuredRegion, inputs, outputs, placement: List<Gpr>,
+theorem StructuredRegion::lower_correct<M>(self region: StructuredRegion, inputs, outputs: List<Gpr>, placement: List<Place>,
     program: Prog, values: Valuation(), lowered: region.lower(inputs, outputs, placement) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), s: MachineState<M>,
     at: s.rip = next_rip(origin, 0),
@@ -539,20 +548,158 @@ fn StructuredRegion::reads(self region: StructuredRegion) → List<Nat> {
     }
 }
 
-record Planned { placement: List<Gpr>, file: File }
+fn StructuredRegion::calls(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(_) => False,
+        Sequence(_, continuation) => continuation.calls(),
+        Compose(prefix, continuation) => prefix.calls() || continuation.calls(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.calls() || when_false.calls(),
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls(),
+    }
+}
 
-// The nodes' registers, from `pool`, `after` live once they are done and
-// `entries` wanted in `registers`.
-fn plan_block(nodes: List<Node>, file: File, after: List<Nat>, entries: List<Port>, registers, pool: List<Gpr>) → Planned {
+// Ids the region reads after a call in it, on some path: a call's
+// arguments are read before it, and a loop's body reads only its own ids.
+fn StructuredRegion::read_past_call(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(_) => [],
+        Sequence(_, continuation) => continuation.read_past_call(),
+        Compose(prefix, continuation) => match prefix.calls() {
+            True => prefix.read_past_call() ++ continuation.reads(),
+            False => continuation.read_past_call(),
+        },
+        Conditional(_, _, _, _, when_true, when_false) => when_true.read_past_call() ++ when_false.read_past_call(),
+        Call(_, _, _) => [],
+        Loop(_, _, _, _, _, _, _, _, _) => [],
+    }
+}
+
+// What is read after a call that comes in or after `region`: `after` is
+// read after it, `crossed` after a call that follows it.
+fn StructuredRegion::crossing(self region: StructuredRegion, after, crossed: List<Nat>) → List<Nat> {
+    match region.calls() { True => region.read_past_call() ++ after, False => crossed }
+}
+
+// What the planner folds (`Folded` placements): a constant every read of
+// which is an ADD's operand, when an immediate holds it, and a comparison
+// read once, as a branch's condition, and last in its block (its operands
+// are still in their registers at the branch). Ids are a function's own,
+// so one list over the whole body serves; the lowering refuses where it is
+// wrong, never computes wrongly.
+
+// Ids the nodes read where a register must hold them: an ADD's operands may
+// be immediates instead.
+fn Node::register_reads(self node: Node) → List<Nat> {
+    match node { Add(_, _, _, _) => [], _ => node.reads() }
+}
+
+fn register_reads_of(nodes: List<Node>, after: List<Nat>) → List<Nat> {
+    match nodes { Nil => after, Cons(node, rest) => node.register_reads() ++ register_reads_of(rest, after) }
+}
+
+fn StructuredRegion::register_reads(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => register_reads_of(body.nodes, []),
+        Sequence(prefix, continuation) => register_reads_of(prefix.nodes, continuation.register_reads()),
+        Compose(prefix, continuation) => prefix.register_reads() ++ continuation.register_reads(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.register_reads() ++ when_false.register_reads(),
+        Call(_, arguments, _) => arguments,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            Cons(bound, inputs ++ (Cons(exit, next) ++ body.register_reads())),
+    }
+}
+
+// The conditions the region's branches test.
+fn StructuredRegion::conditions(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(_) => [],
+        Sequence(_, continuation) => continuation.conditions(),
+        Compose(prefix, continuation) => prefix.conditions() ++ continuation.conditions(),
+        Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.conditions() ++ when_false.conditions()),
+        Call(_, _, _) => [],
+        Loop(_, _, _, _, body, _, _, _, _) => body.conditions(),
+    }
+}
+
+fn count_of(ids: List<Nat>, id: Nat) → Nat {
+    match ids { Nil => 0, Cons(here, rest) => match here.same(id) { False => count_of(rest, id), True => Succ(count_of(rest, id)) } }
+}
+
+fn node_folds(nodes: List<Node>, reads, conditions: List<Nat>) → List<Nat> {
+    match nodes {
+        Nil => [],
+        Cons(node, rest) => {
+            let later = node_folds(rest, reads, conditions);
+            let compared = λ (output: Nat) => match !mentions(reads, output) && count_of(conditions, output).same(1) {
+                False => later,
+                True => Cons(output, later),
+            };
+            match node {
+                Const(_, output, value) => match !mentions(reads ++ conditions, output) && add_immediate(Rax, value).is_some() {
+                    False => later,
+                    True => Cons(output, later),
+                },
+                UnsignedLessThan(_, output, _, _) => compared(output),
+                SignedLessThan(_, output, _, _) => compared(output),
+                Equal(_, output, _, _) => compared(output),
+                _ => later,
+            }
+        },
+    }
+}
+
+// The candidates in the region's blocks, given what reads what in the whole
+// function (`reads`, `conditions`).
+fn StructuredRegion::folds_in(self region: StructuredRegion, reads, conditions: List<Nat>) → List<Nat> {
+    match region {
+        Dataflow(body) => node_folds(body.nodes, reads, conditions),
+        Sequence(prefix, continuation) => node_folds(prefix.nodes, reads, conditions) ++ continuation.folds_in(reads, conditions),
+        Compose(prefix, continuation) => prefix.folds_in(reads, conditions) ++ continuation.folds_in(reads, conditions),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.folds_in(reads, conditions) ++ when_false.folds_in(reads, conditions),
+        Call(_, _, _) => [],
+        Loop(_, _, _, _, body, _, _, _, _) => body.folds_in(reads, conditions),
+    }
+}
+
+// What to fold in `region`, `outputs` read after it.
+fn StructuredRegion::folds(self region: StructuredRegion, outputs: List<Nat>) → List<Nat> {
+    region.folds_in(region.register_reads() ++ outputs, region.conditions())
+}
+
+// A node's placement entry: folded where the planner chose to (a
+// comparison only last in its block), else the register `choose_from`
+// gives.
+fn Node::folded(self node: Node, folds: List<Nat>, last: Bool) → Bool {
+    match node {
+        Const(_, output, _) => mentions(folds, output),
+        UnsignedLessThan(_, output, _, _) => last && mentions(folds, output),
+        SignedLessThan(_, output, _, _) => last && mentions(folds, output),
+        Equal(_, output, _, _) => last && mentions(folds, output),
+        _ => False,
+    }
+}
+
+record Planned { placement: List<Place>, file: File }
+
+fn List::is_empty<A>(self list: List<A>) → Bool { match list { Nil => True, Cons(_, _) => False } }
+
+// The nodes' places: folded as `folds` says, else registers from `pool`,
+// `after` live once they are done and `entries` wanted in `registers`.
+fn plan_block(nodes: List<Node>, file: File, after: List<Nat>, entries: List<Port>, registers, pool: List<Gpr>,
+    folds, crossed: List<Nat>) → Planned {
     match nodes {
         Nil => Planned([], file),
         Cons(node, rest) => {
-            let destination = node.choose_from(file, reads_of(rest, after), entries, registers, pool);
-            match node.lower(destination, file) {
-                None => Planned([destination], file),
+            let place = match node.folded(folds, rest.is_empty()) {
+                True => Folded,
+                False => Into(node.choose_from(file, reads_of(rest, after), entries, registers, pool, crossed)),
+            };
+            match node.lower_at(place, file) {
+                None => Planned([place], file),
                 Some(step) => {
-                    let tail = plan_block(rest, step.file, after, entries, registers, pool);
-                    Planned(Cons(destination, tail.placement), tail.file)
+                    let tail = plan_block(rest, step.file, after, entries, registers, pool, folds, crossed);
+                    Planned(Cons(place, tail.placement), tail.file)
                 },
             }
         },
@@ -574,39 +721,100 @@ fn pick_targets(entries: List<Port>, file: File, live: List<Nat>, wanted: List<P
     }
 }
 
-// Registers from `pool`. A call's result is in RAX after it
-// (`function_ir_lower_calls`); a loop is not planned.
+// A register of `pool`, none of `taken`, that holds nothing `live`.
+fn File::free_apart(self file: File, live: List<Nat>, pool, taken: List<Gpr>) → Option<Gpr> {
+    match pool {
+        Nil => None,
+        Cons(register, rest) => match !register.listed(taken) && slot_free(file.at(register), live) {
+            True => Some(register),
+            False => file.free_apart(live, rest, taken),
+        },
+    }
+}
+
+fn File::free_or_rax(self file: File, live: List<Nat>, pool, taken: List<Gpr>) → Gpr {
+    match file.free_apart(live, pool, taken) { None => Rax, Some(register) => register }
+}
+
+// A loop's state registers (issues/function-ir-verified-loop-planning.md):
+// each where its input already is, when that is a register of `pool` not
+// taken yet, so the move into the loop is none; else a free one.
+fn File::loop_state(self file: File, inputs, live: List<Nat>, pool, taken: List<Gpr>) → List<Gpr> {
+    match inputs {
+        Nil => [],
+        Cons(input, rest) => {
+            let register: Gpr = match file.find(Held(input, Word)) {
+                None => file.free_or_rax(live, pool, taken),
+                Some(found) => match found.register.listed(pool) && !found.register.listed(taken) {
+                    True => found.register,
+                    False => file.free_or_rax(live, pool, taken),
+                },
+            };
+            Cons(register, file.loop_state(rest, live, pool, Cons(register, taken)))
+        },
+    }
+}
+
+fn into_all(registers: List<Gpr>) → List<Place> {
+    match registers { Nil => [], Cons(register, rest) => Cons(Into(register), into_all(rest)) }
+}
+
+// Places from `pool` and `folds`; `crossed` is read after a call that
+// follows the region. A call's result is in RAX after it
+// (`function_ir_lower_calls`). A loop's state, counter and flag are
+// registers of `pool`, pairwise apart and none holding the bound or an
+// input still to move (`LoopRegisters::Apart`); its body is planned from
+// the head's file, the count, the exit bit and the next state live after
+// it and the next state wanted in the state's registers. The loop is a
+// barrier: the file after it is the outputs' and the exhausted bit's.
 fn StructuredRegion::plan_from(self region: StructuredRegion, file: File, after: List<Nat>, entries: List<Port>,
-    registers, pool: List<Gpr>) → Planned {
+    registers, pool: List<Gpr>, folds, crossed: List<Nat>) → Planned {
     match region {
-        Dataflow(body) => plan_block(body.nodes, file, after, entries, registers, pool),
+        Dataflow(body) => plan_block(body.nodes, file, after, entries, registers, pool, folds, crossed),
         Sequence(prefix, continuation) => {
-            let first = plan_block(prefix.nodes, file, continuation.reads() ++ after, entries, registers, pool);
-            let rest = continuation.plan_from(first.file, after, entries, registers, pool);
+            let first = plan_block(prefix.nodes, file, continuation.reads() ++ after, entries, registers, pool, folds,
+                continuation.crossing(after, crossed));
+            let rest = continuation.plan_from(first.file, after, entries, registers, pool, folds, crossed);
             Planned(first.placement ++ rest.placement, rest.file)
         },
         Compose(prefix, continuation) => {
-            let first = prefix.plan_from(file, continuation.reads() ++ after, entries, registers, pool);
-            let rest = continuation.plan_from(first.file, after, entries, registers, pool);
+            let first = prefix.plan_from(file, continuation.reads() ++ after, entries, registers, pool, folds,
+                continuation.crossing(after, crossed));
+            let rest = continuation.plan_from(first.file, after, entries, registers, pool, folds, crossed);
             Planned(first.placement ++ rest.placement, rest.file)
         },
         Conditional(_, _, _, outputs, when_true, when_false) => {
             let live = when_true.reads() ++ (when_false.reads() ++ (port_ids(outputs.entries) ++ after));
             let targets = pick_targets(outputs.entries, file, live, entries, registers, pool);
-            let yes = when_true.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool);
-            let no = when_false.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool);
-            Planned(yes.placement ++ no.placement, yes.file.meet(no.file))
+            let yes = when_true.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed);
+            let no = when_false.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed);
+            Planned(yes.placement ++ no.placement, yes.file.meet(no.file, file.known))
         },
         Call(_, _, result) => Planned([], file.write(Rax, Some(Held(result, Word)))),
-        Loop(_, _, _, _, _, _, _, _, _) => Planned([], file),
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => {
+            let live = Cons(limit, inputs);
+            let state = file.loop_state(inputs, live, pool, []);
+            let counter = file.free_or_rax(live, pool, state);
+            let flag = file.free_or_rax(live, pool, Cons(counter, state));
+            let head = match input_file(word_ports(Cons(count, parameters)), Cons(counter, state)) { None => File::empty(), Some(h) => h };
+            let read = Cons(count, Cons(exit, next));
+            let pass = body.plan_from(head, read, word_ports(next), state, pool, folds, body.crossing(read, crossed));
+            let out = match input_file(Cons(Port(id := exhausted, width := 1), word_ports(outputs)), Cons(flag, state)) {
+                None => File::empty(),
+                Some(o) => o,
+            };
+            Planned(into_all(state) ++ Cons(Into(counter), Cons(Into(flag), pass.placement)), out)
+        },
     }
 }
 
-fn StructuredRegion::plan(self region: StructuredRegion, inputs, outputs: List<Gpr>) → List<Gpr> {
+// Round 2's branch tests a bit in a register, so only constants fold here.
+fn StructuredRegion::plan(self region: StructuredRegion, inputs, outputs: List<Gpr>) → List<Place> {
+    let outs = port_ids(structured_outputs(region).entries);
     match input_file(structured_inputs(region).entries, inputs) {
         None => [],
-        Some(file) => region.plan_from(file, port_ids(structured_outputs(region).entries),
-            structured_outputs(region).entries, outputs, scratch_pool()).placement,
+        Some(file) => region.plan_from(file, outs, structured_outputs(region).entries, outputs, scratch_pool(),
+            region.folds_in(region.register_reads() ++ (outs ++ region.conditions()), []), []).placement,
     }
 }
 

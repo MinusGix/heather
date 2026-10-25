@@ -8,6 +8,13 @@ roadmap milestone `math-metatheory` and relates it to `hih-kernel-model`
 Surveyed at heather-coq `bb9dd75` (M18a, 2026-10-24) and Heather master
 `87348e3`.
 
+Revised 2026-10-25, with two corrections:
+- §3.2 and §6 now follow `docs/definitional-inversion-survey.md` (PR #173).
+  Injectivity of formers, subject reduction and progress are not behind the
+  Gödel limit, and the limit is narrower than the first version said.
+- §4.1 and §4.2 have landed: mutual families in PR #163, and indexed
+  families with function-typed premises in PR #166.
+
 ## 1. The question
 
 Minus asked (2026-10-24) what stands in the way of a copy of heather-coq
@@ -22,16 +29,19 @@ away, and a list of language and tooling gaps that can be:
 
 - **The limit (§3).** heather-coq's headline results (normalization,
   canonicity, consistency, decidability of conversion and of type checking)
-  are, in substance, a consistency proof for Heather's own kernel. By
+  are, in substance, a consistency proof for Heather's own kernel.
+  Injectivity, subject reduction and progress are not part of the limit
+  (§3.2). By
   Gödel's second incompleteness theorem, Heather cannot prove that about
   itself. heather-coq gets around this because Coq's impredicative `Prop`
   makes Coq stronger than Heather, and the logical relation leans on exactly
   that impredicativity. So a Heather copy can define everything and prove
   the syntactic metatheory, but it can carry the semantic half only for
   fragments that are strictly weaker than Heather.
-- **The gaps (§4, §5).** Heather has no surface form for mutual inductive
-  families. It has no indexed families with infinitary premises. `match`
-  does not invert at a recursive index type. There is no proof search, no
+- **The gaps (§4, §5).** At first writing, Heather had no surface form for
+  mutual inductive families and no indexed families with infinitary
+  premises. Both have since landed (§4.1, §4.2). `match` does not invert at
+  a recursive index type. There is no proof search, no
   `inversion`, no rewrite sets, no sections and no user notation. And the
   copy would be about twice the size of the whole of `lib/` today, in a
   style that relies on automation.
@@ -138,13 +148,30 @@ Here that means fewer universes than the meta level uses:
   `UΠ` and level variables ranging over all levels, is out of reach, because
   it needs a meta universe above every finite one.
 
-The results that come out of the relation are the ones that inherit the
-limit. They are normalization, injectivity of formers, canonicity,
-consistency, and completeness and decidability of conversion and of type
-checking. They also include anything that uses them: heather-coq's typed
-reduction notes that the β case of preservation needs Π-injectivity, which
-only the relation gives (`M1_DESIGN.md`, "Typed reduction includes its
-equation").
+The results that inherit the limit are those that imply consistency:
+normalization, canonicity, consistency itself, and completeness and
+decidability of conversion and of type checking.
+
+**Correction (2026-10-25).** The first version of this section also listed
+injectivity of formers. Through injectivity it then caught preservation,
+since heather-coq's typed reduction notes that preservation's β case needs
+Π-injectivity, "which only the relation gives" (`M1_DESIGN.md`, "Typed
+reduction includes its equation"). That is true of heather-coq's relation,
+but it is not forced. Carneiro, Coquand et al. (arXiv:2607.13662, surveyed in
+`docs/definitional-inversion-survey.md` §1 and §3) prove injectivity and
+disjointness of formers, subject reduction, progress and uniqueness of types
+without normalization. They use a domain model and a relation that recurses
+on finite witnesses, with nothing beyond `Nat` induction, and the proof
+works even for `𝒰 : 𝒰` with Π-η. None of these results implies
+consistency, because in the model `⊥` inhabits every type, so Gödel does not
+reach them. Their relation lives in `Ty 0`, so predicativity (§3.1) is not
+an obstacle either.
+
+For Heather's full kernel the reach is not proved yet. The paper covers the
+negative core: Π, Σ and unit with η, `Id` without K, `Nat`, the level tower,
+and irrelevant propositions. It does not cover DeLaM's layers, `□`, the code
+recursor, `W`/`IWf`/`M` or level polymorphism (survey §4). Those are the open
+question, not a known obstruction.
 
 ### 3.3 What this means for Heather-in-Heather
 
@@ -165,6 +192,12 @@ Each item says what heather-coq needs, where Heather stands, and who owns it.
 
 ### 4.1 Mutual inductive families
 
+**Landed 2026-10-24** (PR #163, `docs/mutual-inductive-design.md`). A run of
+`inductive`s that mention one another lowers to one `IWf` indexed by a
+generated sum of the members' indices. `match` on a member inverts on that
+member, and a cycle of `fn`s over the members is one structural recursion.
+The text below is the assessment as first written.
+
 The syntax has four mutual sorts and the judgments have seven. Heather's
 kernel route is known: one `IWf` indexed by `Σ(tag). I_tag`, checked in
 heather-coq's own rules, with the tag-dependent case included
@@ -175,6 +208,13 @@ scope. Writing the Σ-tag encoding by hand for 236 rules is not a port.
 Owner: new issue `mutual-inductive-declarations`.
 
 ### 4.2 Indexed families with infinitary premises
+
+**Option 2 landed 2026-10-25** (PR #166, `docs/iwf-infinitary-design.md`).
+Families with recursive function fields lower to `Σ(t : W₀). El(ok t m)`
+with no kernel change. The acceptance suite includes a miniature logical
+relation. Large indices, with a universe in the index as `LR` has, were not
+exercised, and the domain-model relation of §3.2 would not need them. The
+text below is the assessment as first written.
 
 `LR`'s Π, Σ and W cases, and the modal cases at M, have premises quantified
 over Kripke worlds. These are infinitary premises in an *indexed* family,
@@ -292,15 +332,31 @@ gap either:
 - **The declarative judgments and their syntactic metatheory.** Weakening,
   substitution, functionality, presupposition and Static Code. These are
   first-order statements about finitary derivations.
-- **The algorithmic judgments, as definitions.** Their soundness is not on
-  this list. `AlgSound.v` takes the right-hand pieces of the declarative
-  congruences from `AlgPrereq`, which requires `Validity/Reducible*`, so
-  soundness uses the relation's consequences just as completeness does.
-  For a fragment, both come with rung 3 of §9.
+- **Everything in heather-coq's `Typing/`.** No file there imports
+  `LogRel/` or `Validity/`. Preservation is not in it, because it lives in
+  `Validity/` after canonicity.
+- **The algorithmic judgments, as definitions, and probably their
+  soundness.** `AlgSound.v` uses three groups of facts from
+  `DeclConsequences*` (checked 2026-10-25 by grepping its uses of every
+  lemma those files define):
+  1. **Injectivity** of every former it compares (`decl(M)_pi_inj`, `_sig_`,
+     `_sum_`, `_id_`, `_unit_`, `_sq_`, `_W_`, `_Wf_`, `_IWf_`, and at M
+     `_cpi_`, `_tpi_`, `_upi_`).
+  2. **Weak-head normalization**, but only inside `red_ty_sound` and
+     `red_tm_sound`. Those two show that untyped reduction of a well-typed
+     term to a whnf is a declarative equality: normalization supplies some
+     typed reduction to a whnf, and determinism identifies it with the given
+     one. Subject reduction plus soundness of each typed step gives the same
+     lemma with no normalization, so this use is replaceable.
+  3. **Four layer-M equations**: `declM_inst_c_eq`, `declM_inst_t_eq`,
+     `declM_motT_eq` and `declM_mott_eq`. These are instances of `CΠ`/`TΠ`
+     bodies, and the recursor's motives, at D-convertible arguments. They
+     are functionality facts about layers and the code recursor.
 
-Everything in heather-coq's `Typing/` qualifies. No file there imports
-`LogRel/` or `Validity/`. Preservation is not in it, because it lives in
-`Validity/` after canonicity.
+  So for the negative core, algorithmic soundness needs only what the
+  domain-model route of §3.2 provides, which puts it on the provable side of
+  the limit. Group 3 is exactly the part that route does not yet cover
+  (layers and the code recursor). Completeness stays behind the limit.
 - **Probes.** `MCoind.v` and `ItreeDepthBisim.v` map onto Heather's `M`
   former and `lib/std/itree`. The kernel already has the former, and the
   coinductive library has `eutt`.
@@ -389,6 +445,13 @@ proposals for Minus's review and are not in the roadmap yet.
    `mutual-inductive-declarations`, `iwf-inversion-recursive-index`, tier-3
    inversion, and constructor search (`tac-general`). It ends with weakening
    and substitution.
+2b. **Inversion and subject reduction without normalization**, by the
+   domain model of §3.2, for the negative core and then for Heather's full
+   kernel as far as it extends (`docs/definitional-inversion-survey.md` §6
+   proposes these rungs; `issues/definitional-inversion-domain-model.md` in
+   PR #173). It is the first metatheorem Heather can prove about a theory
+   as strong as itself. It also unlocks algorithmic soundness (§6) and the
+   preservation step of rung 3.
 3. **A logical relation with no universe.** Normalization, canonicity and
    consistency of the slice. It forces `indexed-infinitary-families`. This
    is `math-metatheory`'s current "done when".
@@ -396,8 +459,9 @@ proposals for Minus's review and are not in the roadmap yet.
    twice. It is the predicativity experiment (§3.2), and nothing in Heather
    has tried it.
 5. **Algorithmic conversion, and the bridge to the kernel model** (§8).
-   The judgments are definitions. Soundness and completeness are proved for
-   the rung-3 fragment, and cited from Coq for the full kernel. Optionally
+   The judgments are definitions. Soundness follows from rung 2b wherever
+   that reaches, the full kernel included. Completeness is proved for the
+   rung-3 fragment and cited from Coq for the full kernel. Optionally
    the export check of §7.3.
 
 The following stays out of scope, by §3: the full fundamental theorem for
@@ -442,6 +506,11 @@ Trust in the kernel we actually run splits into two claims:
    `hih-kernel-model` ladder: rung 5 is an evaluator proved to compute what
    the model's reduction computes. Heather can prove all of this.
 2. **`S` is consistent and normalizing.** Only this claim hits the limit.
+   Injectivity, subject reduction, progress and (for the negative core)
+   algorithmic soundness are statements about `S` that do not imply
+   consistency. The domain-model route proves them inside Heather for the
+   full rule set wherever it extends (§3.2, §6, rung 2b). What is left
+   behind the line is normalization and what follows from it.
 
 So the gap is narrower than "heather-coq is a separate world". The
 implementation half can be fully internal. Only the consistency of the rule

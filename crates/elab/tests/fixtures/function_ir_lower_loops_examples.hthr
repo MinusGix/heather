@@ -68,7 +68,7 @@ theorem triangle_exhausted():
 
 // The state in R8, the counter in RCX, the flag in RDX; the body's sum
 // lands in the state's register, so neither way out moves anything.
-fn triangle_placement() → List<Gpr> { [Rax, R8, Rcx, Rdx, R8, R9] }
+fn triangle_placement() → List<Place> { [Into(Rax), Into(R8), Into(Rcx), Into(Rdx), Into(R8), Into(R9)] }
 
 fn triangle_program() → Prog {
     Start
@@ -128,7 +128,7 @@ theorem gcd_not_exhausted():
     gcd().body.eval(program_eval([gcd()]), Valuation::bind(Valuation::zero(), [0, 1], [w(12), w(18)]))(1, 5) = BitVec::ofBool(False) { refl }
 
 // Both arms leave the new state in R8 and R9, where the loop keeps it.
-fn gcd_placement() → List<Gpr> { [Rax, R8, R9, Rcx, Rdx, R10, R11, R8, R9, R9, R8] }
+fn gcd_placement() → List<Place> { [Into(Rax), Into(R8), Into(R9), Into(Rcx), Into(Rdx), Into(R10), Into(R11), Into(R8), Into(R9), Into(R9), Into(R8)] }
 
 fn gcd_program() → Prog {
     Start
@@ -138,8 +138,8 @@ fn gcd_program() → Prog {
         .label(2).put(Block([TestRR(Rcx, Rcx)])).put(Jcc(E, 4))
         .put(Block([XorRR(R10, R10), CmpRR(R8, R9), SetEqual(R10b), XorRR(R11, R11), CmpRR(R9, R8), SetBelow(R11b)]))
         .put(Block([TestRR(R11, R11)])).put(Jcc(E, 6))
-        .put(Block([SubRR(R8, R9), MovRR(R9, R9)])).put(Jmp(7))
-        .label(6).put(Block([SubRR(R9, R8), MovRR(R8, R8)]))
+        .put(Block([SubRR(R8, R9)])).put(Jmp(7))
+        .label(6).put(Block([SubRR(R9, R8)]))
         .label(7)
         .put(Block([TestRR(R10, R10)])).put(Jcc(E, 3))
         .put(Block([])).put(Block([MovRI(Rdx, w(0))])).put(Jmp(5))
@@ -186,7 +186,7 @@ fn scaled() → List<Function> { [scale(), double()] }
 theorem scaled_evaluable(): program_evaluable(scaled()).IsTrue() { trivial }
 theorem scale_runs(): program_eval(scaled(), 1, [w(3), w(4)]) = w(48) { refl }
 
-fn scale_placement() → List<Gpr> { [Rax, R8, Rcx, Rdx, R9] }
+fn scale_placement() → List<Place> { [Into(Rax), Into(R8), Into(Rcx), Into(Rdx), Into(R9)] }
 
 fn scaled_program() → Prog {
     Start
@@ -218,15 +218,15 @@ theorem scaled_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
 // Refusals
 
 // The flag shares the state's register.
-theorem flag_on_state_refused(): lower_program([triangle()], [Rax, R8, Rcx, R8, R8, R9]) = None { refl }
+theorem flag_on_state_refused(): lower_program([triangle()], [Into(Rax), Into(R8), Into(Rcx), Into(R8), Into(R8), Into(R9)]) = None { refl }
 // The counter shares the state's register.
-theorem counter_on_state_refused(): lower_program([triangle()], [Rax, R8, R8, Rdx, R8, R9]) = None { refl }
+theorem counter_on_state_refused(): lower_program([triangle()], [Into(Rax), Into(R8), Into(R8), Into(Rdx), Into(R8), Into(R9)]) = None { refl }
 // The body writes the counter's register while the count is still read.
-theorem counter_clobbered_refused(): lower_program([triangle()], [Rax, R8, Rcx, Rdx, Rcx, R9]) = None { refl }
+theorem counter_clobbered_refused(): lower_program([triangle()], [Into(Rax), Into(R8), Into(Rcx), Into(Rdx), Into(Rcx), Into(R9)]) = None { refl }
 // Too few registers for the state, the counter and the flag.
-theorem placement_short_refused(): lower_program([triangle()], [Rax, R8, Rcx]) = None { refl }
+theorem placement_short_refused(): lower_program([triangle()], [Into(Rax), Into(R8), Into(Rcx)]) = None { refl }
 // The flag in a callee-saved register: its MOVs would not keep it.
-theorem flag_callee_saved_refused(): lower_program([triangle()], [Rax, R8, Rcx, Rbx, R8, R9]) = None { refl }
+theorem flag_callee_saved_refused(): lower_program([triangle()], [Into(Rax), Into(R8), Into(Rcx), Into(Rbx), Into(R8), Into(R9)]) = None { refl }
 
 // ---------------------------------------------------------------------------
 // Well-founded recursion: the measure is the bound
@@ -260,7 +260,7 @@ fn twice() → Function {
 
 theorem twice_evaluable(): program_evaluable([twice()]).IsTrue() { trivial }
 theorem twice_runs(): program_eval([twice()], 0, [w(21)]) = w(42) { refl }
-theorem twice_lowers(): lower_program([twice()], [Rax, R8, R9, Rcx, Rdx, R10, R8, R11, R9, Rsi, R10]).is_some() = True { refl }
+theorem twice_lowers(): lower_program([twice()], [Into(Rax), Into(R8), Into(R9), Into(Rcx), Into(Rdx), Into(R10), Into(R8), Into(R11), Into(R9), Into(Rsi), Into(R10)]).is_some() = True { refl }
 
 fn countdown_head(state: List<BitVec(64)>) → BitVec(64) { match state { Nil => BitVec::zero(), Cons(x, _) => x } }
 fn CountdownLive(state: List<BitVec(64)>) → Type { 0 < countdown_head(state).toNat() }

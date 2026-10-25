@@ -1,11 +1,11 @@
 ---
 title: Indexed families with infinitary premises (logical relations)
-status: open
+status: closed
 labels: [inductives,indexed-families,design]
 area: language
 milestone: [math-metatheory]
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 ---
 
 A logical relation in logrel-coq's style is an indexed family with
@@ -37,3 +37,16 @@ Option 2 is the recommended first probe. The customer is
 ## Log
 
 - 2026-10-24: Filed from the heather-coq port assessment.
+- 2026-10-25: Option 2 landed (`docs/iwf-infinitary-design.md`,
+  `crates/elab/src/iwf_w.rs`). An indexed family with recursive function
+  fields `k: (y: A) -> D(e)`, any number of recursive fields per
+  constructor, lowers to `Σ(t : W₀). El(ok t m)` with no kernel change;
+  constructors, `match` (with index inversion), recursion through function
+  children at the rebound index, and induction all check. Mutual groups
+  carry function fields too. The acceptance suite
+  (`crates/elab/tests/iwf_infinitary.rs`) includes the logical-relation
+  miniature: a relation indexed by a type, with its arrow case's premise
+  quantified over arguments, and a lemma by induction over it. Large
+  indices (a universe in the index, as heather-coq's `LR` has) were not
+  exercised: the port's third rung is a relation with no universe. Follow-ups:
+  [[cong-inference-through-iwf-w-children]], [[iwf-w-no-confusion]].

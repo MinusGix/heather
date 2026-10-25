@@ -178,10 +178,10 @@ theorem select_memory<M>(values: Valuation(), fetch: FetchAccess<M>, data: ByteR
 
 // Refusals. The arms leave the result in different registers: the join
 // keeps neither, and the output is nowhere.
-theorem select_arms_apart(): select_region().lower([Rdi, Rsi], [Rax], [Rax, Rax, Rcx]) = None { refl }
+theorem select_arms_apart(): select_region().lower([Rdi, Rsi], [Rax], [Into(Rax), Into(Rax), Into(Rcx)]) = None { refl }
 
 // The same placement with the arms agreeing is a program.
-theorem select_arms_together(): select_region().lower([Rdi, Rsi], [Rax], [Rcx, Rax, Rax]).is_some() = True { refl }
+theorem select_arms_together(): select_region().lower([Rdi, Rsi], [Rax], [Into(Rcx), Into(Rax), Into(Rax)]).is_some() = True { refl }
 
 // A condition that is not a bit in a register: a 64-bit input.
 fn word_condition_region() → StructuredRegion {
@@ -205,7 +205,7 @@ fn clobbered_region() → StructuredRegion {
             arm(Sub(width := 64, output := 2, left := 0, right := 1))))
 }
 
-theorem clobbered_refused(): clobbered_region().lower([Rdi, Rsi], [Rax], [Rax, Rax, Rax, Rax]) = None { refl }
+theorem clobbered_refused(): clobbered_region().lower([Rdi, Rsi], [Rax], [Into(Rax), Into(Rax), Into(Rax), Into(Rax)]) = None { refl }
 
 // The check `lower` makes is not vacuous: a jump to a label no item has,
 // and a name given twice, are not laid out.

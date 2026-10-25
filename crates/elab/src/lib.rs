@@ -114,7 +114,9 @@ pub mod reprgen;
 pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod emission_walk;
 pub use emission_walk::EmissionFinding;
+mod iwf_confusion;
 mod iwf_family;
+mod iwf_w;
 mod gendefs;
 mod generalize;
 mod goal_combinators;
@@ -132,6 +134,8 @@ mod matching;
 mod measure;
 mod measure_context;
 mod metaprograms;
+mod mutual_family;
+mod mutual_rec;
 mod module_delta;
 mod module_image;
 mod module_relocate;
@@ -885,6 +889,12 @@ impl expr::UniverseElab for Elaborator {
         if self.shadowed(cx, name) {
             return None;
         }
+        if let Some((fam, k)) = self.lookup_member(name) {
+            return Some(expr::TypeFormerShape {
+                indexed: fam.members[k].index.is_some(),
+                value_parameters: 0,
+            });
+        }
         let ind = self.lookup_inductive(name)?;
         Some(expr::TypeFormerShape {
             indexed: ind.index.is_some() || !ind.co_index.is_empty(),
@@ -1356,6 +1366,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         span: Span,
     ) {
         self.unify_arg_ty(cx, parameter, argument, n, sols, span)
+    }
+
+    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span) {
+        self.note_check_mismatch(cx, got, expected, level, span)
     }
 
     fn solve_application_from_expected(
@@ -2165,7 +2179,31 @@ impl Elaborator {
     /// groups of `docs/mutual-recursion-design.md` §1, and the declaration
     /// names §8's forward-reference message reads.
     fn begin_container(&mut self, file: &heather_syntax::File) -> ItemPlan {
-        let groups = measure_groups(&file.items);
+        let mut groups = measure_groups(&file.items);
+        let mut kinds = vec![GroupKind::Measure; groups.len()];
+        // Mutual `inductive` groups (docs/mutual-inductive-design.md §1).
+        for g in mutual_family::inductive_groups(&file.items) {
+            groups.push(g);
+            kinds.push(GroupKind::Inductive);
+        }
+        // Mutual structural recursion over a mutual family (§6 there): a
+        // member is one of this container's groups', or an imported one.
+        let local_members: Vec<&str> = groups
+            .iter()
+            .zip(&kinds)
+            .filter(|(_, k)| **k == GroupKind::Inductive)
+            .flat_map(|(g, _)| g.iter())
+            .filter_map(|&i| match &file.items[i] {
+                Item::Inductive(d) => Some(d.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let is_member = |n: &str| local_members.contains(&n) || self.lookup_member(n).is_some();
+        let structural = mutual_rec::structural_groups(&file.items, &is_member);
+        for g in structural {
+            groups.push(g);
+            kinds.push(GroupKind::Structural);
+        }
         let mut in_group: HashMap<usize, usize> = HashMap::new();
         for (g, members) in groups.iter().enumerate() {
             for &idx in members {
@@ -2184,7 +2222,7 @@ impl Elaborator {
             })
             .collect();
         self.container_at.set(0);
-        ItemPlan { groups, in_group }
+        ItemPlan { groups, kinds, in_group }
     }
 
     /// One item, with a mutual group elaborated at its *first* member and the
@@ -2207,7 +2245,12 @@ impl Elaborator {
                             _ => unreachable!("a group holds declarations"),
                         })
                         .collect();
-                    self.session_transaction(|me| me.elab_measure_group(&members))
+                    match plan.kinds[g] {
+                        GroupKind::Structural => {
+                            self.session_transaction(|me| me.elab_structural_group(&members))
+                        }
+                        _ => self.session_transaction(|me| me.elab_measure_group(&members)),
+                    }
                 }
                 Some(_) => Ok(()),
                 None => self.elab_decl(d),
@@ -2218,7 +2261,22 @@ impl Elaborator {
             // an `inductive`'s or an `instance`'s own work has a column
             // instead of landing in `other`
             // (`docs/instrumentation-design.md` §5).
-            Item::Inductive(i) => stats::timed(stats::Timer::Lower, || self.elab_inductive(i)),
+            Item::Inductive(i) => match plan.in_group.get(&idx) {
+                Some(&g) if plan.groups[g][0] == idx => {
+                    let members: Vec<&heather_syntax::InductiveDecl> = plan.groups[g]
+                        .iter()
+                        .map(|&k| match &file.items[k] {
+                            Item::Inductive(d) => d,
+                            _ => unreachable!("an inductive group holds inductives"),
+                        })
+                        .collect();
+                    stats::timed(stats::Timer::Lower, || {
+                        self.session_transaction(|me| me.elab_mutual_inductives(&members))
+                    })
+                }
+                Some(_) => Ok(()),
+                None => stats::timed(stats::Timer::Lower, || self.elab_inductive(i)),
+            },
             Item::Class(c) => stats::timed(stats::Timer::Lower, || self.elab_class(c)),
             Item::Instance(i) => stats::timed(stats::Timer::Lower, || self.elab_instance(i)),
             Item::Designation(d) => stats::timed(stats::Timer::Lower, || self.elab_designation(d)),
@@ -2668,6 +2726,18 @@ impl Elaborator {
     pub(crate) fn lookup_inductive(&self, name: &str) -> Option<&Rc<Inductive>> {
         self.types
             .inductive(&self.key_of_kinds(name, &[NameKind::Inductive])?)
+    }
+
+    /// The mutual group member a name denotes in type position
+    /// (docs/mutual-inductive-design.md §2): its family and its position
+    /// among the family's members. A member is declared as an `Inductive`
+    /// name, so it resolves, shadows and is imported exactly as a type does;
+    /// it is found here and not by [`Self::lookup_inductive`] because it has
+    /// no declaration of its own.
+    pub(crate) fn lookup_member(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
+        self.types
+            .member(&self.key_of_kinds(name, &[NameKind::Inductive])?)
+            .map(|(i, k)| (Rc::clone(i), *k))
     }
 
     pub(crate) fn lookup_ctor(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
@@ -3214,7 +3284,9 @@ impl Elaborator {
         };
         let ind = self.types.inductive(&key)?;
         ind.index.as_ref()?;
-        Some(if ind.skel.is_some() {
+        Some(if ind.iwf_infinitary() {
+            IndexedRoute::IwfW
+        } else if ind.skel.is_some() {
             IndexedRoute::Iwf
         } else {
             IndexedRoute::One
@@ -4842,19 +4914,32 @@ impl Elaborator {
                 let [body] = args.as_slice() else {
                     return err("internal case splitter has the wrong arity", e.span);
                 };
+                // Every goal the splitter hands on is checked to restate the
+                // one it stands for before anything is built at it: a motive
+                // instance or a simplified goal that is not the goal would
+                // otherwise surface only as the kernel's verdict on the whole
+                // declaration, with `split_all` having reported success.
                 match goal_combinators::next_step(self, cx, expected, body, e.span) {
-                    goal_combinators::Step::Intro(expr) | goal_combinators::Step::Conjoin(expr) => {
+                    goal_combinators::Step::Refuted(expr)
+                    | goal_combinators::Step::Intro(expr)
+                    | goal_combinators::Step::Conjoin(expr) => {
                         self.elab_check_skel_slots(cx, &expr, expected, lvl, hint, skel, capture_slots)
                     }
                     goal_combinators::Step::Split(split) => {
                         let goal = goal_combinators::simplify_goal(self, cx, &inductive::decoded(expected));
+                        goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
                         let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
+                        goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &goal, lvl, "case split's motive, at its scrutinee,", e.span)?;
                         self.elab_convoy(
                             cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
                             scrut, &ty, &level, split.motive, lvl, &goal, e.span,
                         )
                     }
-                    goal_combinators::Step::Leaf(goal) => self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots),
+                    goal_combinators::Step::Leaf(goal) => {
+                        goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
+                        goal_combinators::check_refl_leaf(self, cx, body, &goal, e.span)?;
+                        self.elab_check_skel_slots(cx, body, &goal, lvl, hint, skel, capture_slots)
+                    }
                 }
             }
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
@@ -8707,19 +8792,59 @@ impl Elaborator {
         // elaborator, and it would also make failure quiet. Two whnfs are
         // linear and terminating, which is the property §3 of the issue
         // claims for this solver.
+        //
+        // 3. The reduced goal again with the **witness up to conversion**
+        //    (`lgg::lgg_body_up_to_conversion`), only after both of the above
+        //    failed: at a differing node that mentions none of the walk's
+        //    binders, the sides convert to `(s, t)`. Conversion runs only
+        //    there, top-down, so typically once per side, and the abstraction
+        //    is kept only if it kernel-checks at `?f`'s type. A failure
+        //    reports attempt 2's mismatch, so the message is the one it always
+        //    was. A goal on a family reaches this: its reduct carries the
+        //    constructor's pieces as each function spelled them
+        //    (issues/cong-inference-through-iwf-w-children.md).
         let body = match lgg::lgg_body(&x, &y, &s, &t) {
             Ok(body) => body,
-            Err(m) => {
+            Err(first) => {
                 let rx = self.whnf_tm(cx, &x, span)?;
                 let ry = self.whnf_tm(cx, &y, span)?;
-                if *rx == *x && *ry == *y {
-                    let msg = self.cong_mismatch(cx, &m, expected, &s, &t);
-                    return Err(ElabError::Elab { msg, span });
+                let reduced = *rx != *x || *ry != *y;
+                let second = if reduced { lgg::lgg_body(&rx, &ry, &s, &t) } else { Err(first) };
+                match second {
+                    Ok(body) => body,
+                    Err(mismatch) => {
+                        let fits = |body: &Term| {
+                            let f = Term::Lam {
+                                dom_level: dom_level.clone(),
+                                cod_level: cod_level.clone(),
+                                dom: Rc::clone(&dom),
+                                body: Rc::new(body.clone()),
+                            };
+                            let fl = Level::join(dom_level.clone(), cod_level.clone());
+                            typing::check_term(&self.goal_psi(), 0, Layer::Prog, &cx.gamma, &f, &dom_ty, &fl, self.fuel)
+                                .is_ok()
+                        };
+                        // `(a, b)`, scoped in `Γ, z`: `(s, t)` up to conversion
+                        // there. `z` is `?f`'s parameter, at the domain.
+                        let oracle = self.goal_oracle();
+                        let mut zcx = cx.clone();
+                        zcx.push("#z".into(), (*dom).clone(), dom_level.clone());
+                        let (sz, tz, dz) = (s.shift_local(1), t.shift_local(1), dom.shift_local(1));
+                        let witness = |a: &Term, b: &Term| {
+                            let conv = |l: &Term, r: &Term| {
+                                oracle.convert_term(&zcx.gamma, Layer::Prog, l, r, &dz, &dom_level).is_ok()
+                            };
+                            conv(a, &sz) && conv(b, &tz)
+                        };
+                        match lgg::lgg_body_up_to_conversion(&rx, &ry, &s, &t, &witness).ok().filter(|body| fits(body)) {
+                            Some(body) => body,
+                            None => {
+                                let msg = self.cong_mismatch(cx, &mismatch, expected, &s, &t);
+                                return Err(ElabError::Elab { msg, span });
+                            }
+                        }
+                    }
                 }
-                lgg::lgg_body(&rx, &ry, &s, &t).map_err(|m| ElabError::Elab {
-                    msg: self.cong_mismatch(cx, &m, expected, &s, &t),
-                    span,
-                })?
             }
         };
         sols[m] = Sol::Solved(Rc::new(Term::Lam {
@@ -9310,5 +9435,20 @@ fn measure_groups(items: &[Item]) -> Vec<Vec<usize>> {
 /// The per-container facts the item loops share (`begin_container`).
 struct ItemPlan {
     groups: Vec<Vec<usize>>,
+    /// Parallel to `groups`: what each group is a group of.
+    kinds: Vec<GroupKind>,
     in_group: HashMap<usize, usize>,
+}
+
+/// What a group of items is (`ItemPlan::groups`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GroupKind {
+    /// `decreases` declarations under one measure
+    /// (docs/mutual-recursion-design.md §1).
+    Measure,
+    /// Mutual `inductive` declarations (docs/mutual-inductive-design.md §1).
+    Inductive,
+    /// Declarations without a measure that call one another, one of them
+    /// recursing over a mutual family (docs/mutual-inductive-design.md §6).
+    Structural,
 }

@@ -1,0 +1,94 @@
+// Probes of `lib/std/data/list.hthr`: the API computes at closed arguments,
+// decidable equality decides at a literal and resolves at open endpoints, and
+// a closed length compares by `refl` past the conversion depth budget. Tests,
+// not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5). Moved from crates/elab/tests/lib_std_list.rs.
+import list; import nat; import bool; import option; import pair; import logic;
+
+// The API computes, by `refl` alone: these pin the programs, which the laws
+// at open lists would not (a `filter` that kept everything has no law to
+// break).
+fn three() → List<Nat> { [1, 2, 3] }
+fn four() → List<Nat> { [4] }
+
+theorem c_len(): three().len() = 3 { refl }
+theorem c_take(): three().take(2) = [1, 2] { refl }
+theorem c_drop(): three().drop(2) = [3] { refl }
+theorem c_rev(): three().rev() = [3, 2, 1] { refl }
+theorem c_foldr(): three().foldr(λ (a: Nat) (b: Nat) => a.add(b), 0) = 6 { refl }
+theorem c_foldl(): three().foldl(λ (a: Nat) (b: Nat) => a.add(b), 0) = 6 { refl }
+theorem c_list_fold():
+    (ListAlg<Nat, Nat> { nil: 0, cons: λ (a: Nat) (b: Nat) => a.add(b) }).list_fold(three()) = 6
+{ refl }
+theorem c_filter(): three().filter(λ (n: Nat) => nat::Nat::leb(2, n)) = [2, 3] { refl }
+theorem c_replicate(): List::replicate(7, 2) = [7, 7] { refl }
+theorem c_head(): three().head() = Some(1) { refl }
+theorem c_last(): three().last() = Some(3) { refl }
+theorem c_receiver_len(): three().len() = 3 { refl }
+theorem c_zip(): three().zip(four()) = [Pair(1, 4)] { refl }
+
+theorem receiver_len_open<A>(xs: List<A>): xs.len() = xs.len() { refl }
+
+// L2′/L3. `c_mem` is the one that says `Mem` is a *computing* relation and not
+// a derivation to search: the proof is the position, written out.
+theorem c_len_zip(): three().zip(four()).len() = 1 { refl }
+// `list::List::map` and not `map`: this probe imports `option` too, and a bare `map`
+// with both in scope resolves to NEITHER — it reaches the prelude's vector `map`
+// and fails asking for a vector. `issues/list-algorithms-exercise.md` predicted
+// exactly this in 2026-08-05 and wave L2′ is its first real customer;
+// `issues/type-owned-namespaces.md` owns the fix (`List::map`).
+theorem c_zip_swap(): list::List::map(three().zip(four()),
+                                Pair::swap)
+    = four().zip(three()) { refl }
+theorem c_filter_filter(): three().filter(λ (n: Nat) => nat::Nat::leb(2, n)).filter(
+                                  λ (n: Nat) => nat::Nat::leb(2, n)) = [2, 3] { refl }
+theorem c_foldl_rev(): three().rev().foldl(λ (b: Nat) (a: Nat) => b.add(a), 0) = 6 { refl }
+theorem c_mem(): Mem(2, three()) { Inr(Inl(refl)) }
+
+// The negative control for `Mem` can now use kernel Nat directly: `absurd`
+// peels matching Succ layers internally until each equation exposes the
+// Zero/Succ mismatch (`issues/absurd-at-nat-numerals.md`).
+theorem c_not_mem(): ¬Mem(7, [1, 2]) {
+    λ (m: Mem(7, [1, 2])) => match m {
+        Inl(e) => absurd(e),
+        Inr(Inl(e)) => absurd(e),
+        Inr(Inr(bad)) => bad,
+    }
+}
+
+// Decidable equality, the generic one: `logic::DecEq<A>` is the premise and
+// `list_eq_dec` the decision, so a list decides exactly when its element type
+// does. A literal and a neutral list, and a checking position.
+fn other() → List<Nat> { [1, 2, 4] }
+
+// Closed: the decision runs, both ways round, in a checking position.
+theorem agree(): three() = three() { decide }
+theorem differ(): ¬(three() = other()) { decide }
+theorem shorter(): ¬(three() = [1]) { decide }
+theorem empty_differs(): ¬(Nil<Nat> = [1]) { decide }
+
+// Neutral: the instance is the declared decider at open endpoints, which is
+// what a literal-only test cannot see.
+theorem neutral_instance(xs, ys: List<Nat>, a, b: Nat):
+    decide_pick<xs = ys, Nat>(a, b) = or_pick(xs.list_eq_dec(ys), a, b) { refl }
+
+// The element decision is the class's, at an OPEN element type: this is the
+// half that makes the decider generic rather than a second `Nat` program.
+// A `Cons` is never `Nil`, at an open element type and by computation: the
+// decider reduces past the element decision it never has to make.
+theorem open_element<A: DecEq>(x: A, xs: List<A>, a, b: A):
+    or_pick(Cons(x, xs).list_eq_dec(Nil<A>), a, b) = a { refl }
+theorem open_cons_head<A: DecEq>(x: A, xs: List<A>): ¬(Nil<A> = Cons(x, xs)) {
+    List::nil_ne_cons(xs, x)
+}
+fn one() → List<Nat> { [1] }
+fn two() → List<Nat> { [2] }
+theorem one_not_two(): ¬(one() = two()) { decide }
+
+// A closed list's length compares by `refl` without one conversion frame per
+// successor (closed-nat-equality-depth-budget), with the element type open
+// too.
+fn bytes<A>(x: A) → List<A> { List::replicate(x, 20000) }
+fn size16(lo: Nat, hi: Nat) → Nat { lo + 256 * hi }
+theorem closed_size(): 232 + bytes(0).len() = size16(8, 79) { refl }
+theorem open_element_size<A>(x: A): 232 + bytes(x).len() = size16(8, 79) { refl }

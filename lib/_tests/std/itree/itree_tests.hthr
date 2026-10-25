@@ -1,0 +1,69 @@
+// Probes of `lib/std/itree/itree.hthr` (`docs/itree-core-round.md`): the
+// definitional laws at a literal and at a neutral fuel, an open element type
+// and open events, a law used in a checking position, and `¬` theorems for
+// the false claims (no fuel returns, `Same` relates different trees). Tests,
+// not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_itree.rs; the refusals stay there.
+import logic; import nat; import list; import omega; import itree;
+
+// Which constructor a tree is, to tell trees apart.
+fn shape<R>(E: Events, t: ITree<R>(E)) → Nat { match t { Ret(_) => 0, Tau(_) => 1, Vis(_, _) => 2, Cut => 3 } }
+
+// The loop unrolls at a literal fuel and at a successor of a variable.
+theorem two<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), a: A):
+    ITree::iter(E, 2, body, a) = ITree::bind(E, body(a), λ x => match x {
+        Continue(a2) => Tau(ITree::iter(E, 1, body, a2)),
+        Break(b) => Ret(b),
+    }) { refl }
+theorem open_succ<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A):
+    ITree::iter(E, Succ(Succ(n)), body, a) = ITree::bind(E, body(a), λ x => match x {
+        Continue(a2) => Tau(ITree::iter(E, Succ(n), body, a2)),
+        Break(b) => Ret(b),
+    }) { refl }
+
+// No fuel is a cut, not a return; one step of fuel returns.
+fn stop<A>(E: Events, x: A) → ITree<Step<A, A>>(E) { Ret(Break(x)) }
+fn done<A>(E: Events, x: A) → ITree<A>(E) { Ret(x) }
+theorem one_fuel_returns<A>(E: Events, a: A): ITree::iter(E, 1, λ x => stop(E, x), a) = done(E, a) { refl }
+theorem no_fuel_cuts<A>(E: Events, a: A): ITree::iter<A, A>(E, 0, λ x => stop(E, x), a) = Cut { refl }
+theorem no_fuel_does_not_return<A>(E: Events, a: A): ¬(ITree::iter(E, 0, λ x => stop(E, x), a) = done(E, a)) {
+    λ h => {
+        let shapes: (3 = 0) = cong_fn(λ (t: ITree<A>(E)) => shape(E, t), h);
+        omega(shapes)
+    }
+}
+
+// Right identity holds up to `Same`, in a checking position, and composes
+// through its symmetric form.
+theorem roundtrip<R>(E: Events, t: ITree<R>(E)): ITree::Same(E, t, t) {
+    let there: ITree::Same(E, ITree::bind(E, t, λ r => Ret(r)), t) = ITree::bind_ret_r(E, t);
+    let back: ITree::Same(E, t, ITree::bind(E, t, λ r => Ret(r))) = ITree::same_sym(E, ITree::bind(E, t, λ r => Ret(r)), t, there);
+    ITree::same_trans(E, t, ITree::bind(E, t, λ r => Ret(r)), t, back, there)
+}
+theorem vis_ret_r<R>(E: Events, c: E.Cmd, k: E.Resp(c) → ITree<R>(E)): ITree::Same(E, ITree::bind<R, R>(E, Vis(c, k), λ r => Ret(r)), Vis(c, k)) {
+    ITree::bind_ret_r(E, Vis(c, k))
+}
+
+// `Same` relates equal shapes with equal leaves, and tells different leaves
+// and different shapes apart.
+theorem same_leaf(E: Events): ITree::Same<Nat>(E, Ret(1), Ret(1)) { refl }
+theorem same_tau(E: Events): ITree::Same<Nat>(E, Tau(Ret(1)), Tau(Ret(1))) { SameTau(Ret(1), refl, refl) }
+theorem different_leaves(E: Events): ¬(ITree::Same<Nat>(E, Ret(1), Ret(2))) {
+    λ h => {
+        let values: (2 = 1) = cong_fn(λ (t: ITree<Nat>(E)) => match t { Ret(r) => r, Tau(_) => 0, Vis(_, _) => 0, Cut => 0 }, h);
+        omega(values)
+    }
+}
+theorem leaf_not_cut(E: Events): ¬(ITree::Same<Nat>(E, Ret(1), Cut)) {
+    λ h => {
+        let shapes: (3 = 0) = cong_fn(λ (t: ITree<Nat>(E)) => shape(E, t), h);
+        omega(shapes)
+    }
+}
+theorem tau_not_leaf(E: Events): ¬(ITree::Same<Nat>(E, Tau(Ret(1)), Ret(1))) {
+    λ h => {
+        let shapes: (0 = 1) = cong_fn(λ (t: ITree<Nat>(E)) => shape(E, t), h.at);
+        omega(shapes)
+    }
+}
