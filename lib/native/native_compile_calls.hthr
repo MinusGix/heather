@@ -73,7 +73,6 @@ theorem canonical_word(n: Nat, below: n <= Nat::pow(2, 47)): BitVec::ofNat(n, n 
     BitVec::toNat_ofNat(64, n, canonical_lt_word(n, below))
 }
 
-
 // ---------------------------------------------------------------------------
 // A buffer in place
 
