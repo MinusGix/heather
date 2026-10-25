@@ -469,9 +469,9 @@ is what one layer down produces. A bare ordered-field "`≤` is not `<`"
 refusal is a failed instance search, not a mismatch. And several vacuity
 controls are refused by the kernel, not the elaborator: most of `CReal`'s
 (its conversion leaves sequence comparisons to the kernel), and three whose
-argument mismatches a parameter that mentions an implicit, which is an
-elaborator gap
-(`issues/implicit-argument-mismatch-reaches-kernel.md`).
+argument mismatches a parameter that mentions an implicit, which was an
+elaborator gap, since closed: two now pin the mismatch and the `CReal` one a
+located note (`issues/implicit-argument-mismatch-reaches-kernel.md`).
 
 Still to do: the interaction-tree, list, tree, bitvec, text, memory and
 setoid families. `lib_algebra.rs` is the traits feature's corpus over the

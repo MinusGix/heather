@@ -425,3 +425,65 @@ fn a_refl_through_a_fn_is_accepted_and_names_no_opaque_global() {
     assert!(rendered.contains("`refl` needs both sides to be definitionally equal"), "{rendered}");
     assert!(!rendered.contains("never unfolds") && !rendered.contains("axiom"), "{rendered}");
 }
+
+/// Callees for the inferred-argument cases: `a` is implicit and appears in
+/// the explicit parameter's type, at a closed `Nat` (`f`), as a curried
+/// parameter after the implicit telescope (`k`), at an open element type
+/// (`g`), and in a value-parameterised constructor's field (`Q`).
+const OWED: &str = "
+theorem f({a: Nat}, h: 0 = a): a = a { refl }
+theorem k({a: Nat}): (0 = a) -> a = a { λ h => refl }
+theorem g<A>({a: A}, z: A, h: z = a): a = a { refl }
+theorem same(x: Nat): x = x { refl }
+inductive Q(n: Nat) { MkQ(e: 0 = n) }
+";
+
+/// An inferred argument whose parameter type mentions an implicit
+/// (`issues/implicit-argument-mismatch-reaches-kernel.md`). Its type only
+/// *teaches* the call's implicits, and that unification is learn-only, so
+/// `h: a = a` at `0 = ?a` was compared with its parameter by nobody before
+/// the kernel, which refused the declaration as a bare `NotConvertible`.
+/// Now the call owes that comparison and records it at its discharge. Each
+/// case was the kernel's refusal before: whether the expected type or the
+/// argument itself solves `a` (`let`, no expected type), whether the
+/// argument is a variable or a call, a curried parameter, an `@` call, a
+/// receiver, a named argument, a constructor field, and an open type.
+#[test]
+fn an_inferred_argument_at_an_implicit_bearing_parameter_reports_at_the_argument() {
+    let cases = [
+        ("theorem bad(a: Nat, h: a = a): a = a { f(h) }", "h", "`a = a`, but `0 = a`"),
+        ("theorem bad(a: Nat): a = a { f(same(a)) }", "same(a)", "`a = a`, but `0 = a`"),
+        ("theorem bad(a: Nat, h: a = a): a = a { let r = f(h); r }", "h", "`a = a`, but `0 = a`"),
+        ("theorem bad(a: Nat, h: a = a): a = a { k(h) }", "h", "`a = a`, but `0 = a`"),
+        ("theorem bad(a: Nat, h: a = a): a = a { @f(a, h) }", "h", "`a = a`, but `0 = a`"),
+        ("theorem bad(a: Nat, h: a = a): a = a { h.f() }", "h", "`a = a`, but `0 = a`"),
+        ("theorem bad(a: Nat, h: a = a): a = a { f(h := h) }", "h", "`a = a`, but `0 = a`"),
+        ("theorem bad(a: Nat, h: a = a): Q(a) { let q = Q::MkQ(h); q }", "h", "`a = a`, but `0 = a`"),
+        ("theorem bad<A>(x, y: A, h: x = x): x = x { g(y, h) }", "h", "`x = x`, but `y = x`"),
+    ];
+    for (case, at, types) in cases {
+        let src = format!("{OWED}{case}\n");
+        let r = reject(&src);
+        let rendered = r.render(&src);
+        assert!(rendered.contains(&format!("this has type {types} is expected here")), "{case}\n{rendered}");
+        assert!(!rendered.contains("the kernel rejected"), "{case}\n{rendered}");
+        let ElabError::Elab { span, .. } = r else { panic!("{case}: expected an elaborator error: {r}") };
+        let start = src.rfind(case).unwrap() + case.find('{').unwrap();
+        assert!(span.start as usize > start, "{case}: reported outside the body\n{rendered}");
+        assert_eq!(&src[span.start as usize..span.end as usize], at, "{case}\n{rendered}");
+    }
+}
+
+/// **Control for the owed comparison.** The same calls with arguments of the
+/// right type are accepted: the note is recorded, never probed, on a
+/// declaration the gate accepts.
+#[test]
+fn an_inferred_argument_of_the_right_type_is_accepted() {
+    ok(&format!(
+        "{OWED}theorem good(a: Nat, h: 0 = a): a = a {{ f(h) }}\n\
+         theorem good_let(a: Nat, h: 0 = a): a = a {{ let r = f(h); r }}\n\
+         theorem good_curried(a: Nat, h: 0 = a): a = a {{ k(h) }}\n\
+         theorem good_field(a: Nat, h: 0 = a): Q(a) {{ let q = Q::MkQ(h); q }}\n\
+         theorem good_open<A>(x, y: A, h: y = x): x = x {{ g(y, h) }}\n"
+    ));
+}
