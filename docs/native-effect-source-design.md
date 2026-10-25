@@ -535,6 +535,28 @@ program, which is the cost argument of the program-logic design (§6.3). The
 theorem is the `main` case at `K := λ o => Ret(status(o))`, from the
 loader's initial state, for every page, register file and flags.
 
+*As landed (S3.2, `lib/native/native_compile*.hthr`):* the shape above with
+three simplifications. The layout is fixed rather than threaded: every word
+has an eight-byte slot in one data region, each buffer a range after the
+words at its capacity, and a scratch range past them, so the invariant is
+the memory alone (`Target::Placed`: the region holds cells that keep the
+environment) and no register carries a value between statements. The
+construct lemmas are proved over the code's claim `Target::Goes` (every
+state at an offset, its code resident, meeting a condition, runs as a tree)
+with one rule per instruction form, not through `Wp`; a statement's claim is
+`Target::Runs`, the continuation form above with `Inv` as `Placed`. And a
+`Pure` leaf is a register-only dataflow region, so it enters by S4's
+`Region::lower_correct` with memory untouched and needed no footprint (§2.4
+stays open as `wp-proved-memory-contracts`, for leaves that spill or call).
+A read lands in the scratch range and is copied into its buffer only when it
+succeeds, since Linux may leave the range written after a failure. `Loop` is
+an induction on the loop's fuel, the body run with the test and a JMP back
+as its continuation. The theorem is `native_compile_correct`; cat compiled
+at the I/O image's page sends what it read (`cat_native_sends`,
+`native_cat_compiled.hthr`). Other region shapes, other calls and the code's
+shape are `native-compile-wider-leaves`, `native-compile-other-calls` and
+`native-compiled-code-shape`.
+
 ## 8. Per-program cost, and one gap
 
 A program is built by evaluating `compile`, and it inherits the theorem: it

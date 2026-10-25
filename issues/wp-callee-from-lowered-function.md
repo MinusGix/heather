@@ -5,7 +5,7 @@ labels: [native,x86,proofs]
 area: heather-in-heather
 milestone: [hih-pl-wp]
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 ---
 
 `Wp`'s `CallTo` enters a function by its `Callee` contract
@@ -37,3 +37,7 @@ so a compiled function cannot be the callee of a `Wp` program.
   theorem.
 - **[[io-image-process-stack]]** owns the process's stack region; until it
   lands, a control may use the frame as its stack, as `linux_wp_call` does.
+
+## Log
+
+- 2026-10-25: S3.2's compiler did not need this ([[native-effect-source-compiler]], closed): it refuses `Call` regions and proves its code without `Wp`. A leaf that calls a lowered function would, so this is on [[native-compile-wider-leaves]]'s path.
