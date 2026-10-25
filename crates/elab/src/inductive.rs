@@ -223,12 +223,25 @@ impl IdxTy {
 }
 
 impl Inductive {
-    /// Tier 2: some constructor has a recursive function field, so the
+    /// Tier 2: an unindexed declaration where some constructor has a recursive function field, so the
     /// lowering is `Σ(t : W₀). El(canon t)` (docs/inductive-tier2-w-lowering.md
     /// §5) and [`Self::recursive`] — which means "lowered onto `Wf`" — is false.
     /// Derived from the field kinds, so it needs no storage of its own.
     pub fn infinitary(&self) -> bool {
         !self.codata
+            && self.index.is_none()
+            && self
+                .ctors
+                .iter()
+                .any(|c| c.kind.contains(&FieldKind::FnChild))
+    }
+
+    /// An indexed family on the `IWf` route with a recursive function field:
+    /// lowered on `W` with its index and children equations
+    /// (docs/iwf-infinitary-design.md), not on the kernel's `IWf`.
+    pub fn iwf_infinitary(&self) -> bool {
+        self.index.is_some()
+            && self.skel.is_some()
             && self
                 .ctors
                 .iter()
@@ -1159,7 +1172,11 @@ impl Elaborator {
         // Tier 2 (docs/inductive-tier2-w-lowering.md §1): a recursive function
         // field anywhere puts the whole declaration on `W`, and `recursive`
         // keeps meaning "lowered onto `Wf`".
-        let infinitary = ctors.iter().any(|c| c.kind.contains(&FieldKind::FnChild));
+        //
+        // An indexed family's function fields stay on the `IWf` route, which
+        // lowers them on `W` itself (docs/iwf-infinitary-design.md): tier 2's
+        // restrictions below are about one children function with no index.
+        let infinitary = index.is_none() && ctors.iter().any(|c| c.kind.contains(&FieldKind::FnChild));
         // Codata (docs/codata-elaborator-design.md §2): any number of plain
         // and function children per constructor, since a `match` on a value of
         // `M` never has to rebuild the children function — its motive does
@@ -1308,7 +1325,11 @@ impl Elaborator {
         // probed, since no gate runs on it.
         if ind.skel.is_some() && ind.params.is_empty() && ind.valparams.is_empty() {
             let from = self.attempt.check_notes.borrow().len();
-            self.iwf_sig(&Cx::empty(), &ind, &[], d.span)?;
+            if ind.iwf_infinitary() {
+                self.iw_sig(&Cx::empty(), &ind, &[], d.span)?;
+            } else {
+                self.iwf_sig(&Cx::empty(), &ind, &[], d.span)?;
+            }
             if let Some(e) = self.mismatch_since(from) {
                 return Err(e);
             }
@@ -4579,9 +4600,17 @@ fn classify_iwf(
     let mut kinds = vec![FieldKind::Payload; c.fields.len()];
     let mut child_idx: Vec<Option<Expr>> = vec![None; c.fields.len()];
     for (k, f) in c.fields.iter().enumerate() {
+        // A recursive function field, `(y: A) -> D<params>(e)`
+        // (docs/iwf-infinitary-design.md §1): a child per inhabitant of `A`,
+        // its index `e` over the stored fields and `y`. The declaration then
+        // lowers on `W` rather than the kernel's `IWf`.
+        let (child_ty, fn_child) = match &f.ty.kind {
+            TyKind::Fn { dom, cod, .. } if occurs(dom, name).is_none() => (&**cod, true),
+            _ => (&f.ty, false),
+        };
         // A child: `D<params>(e)`, which the parser delivers as an expression
         // in type position.
-        if let TyKind::OfExpr(e) = &f.ty.kind
+        if let TyKind::OfExpr(e) = &child_ty.kind
             && let ExprKind::App { head, args, .. } = &e.kind
             && let Some((rname, targs)) = named_head(head)
             && rname == name
@@ -4608,7 +4637,7 @@ fn classify_iwf(
                     f.ty.span,
                 );
             };
-            kinds[k] = FieldKind::Plain;
+            kinds[k] = if fn_child { FieldKind::FnChild } else { FieldKind::Plain };
             child_idx[k] = Some(e.clone());
             continue;
         }
@@ -4631,7 +4660,7 @@ fn classify_iwf(
         .fields
         .iter()
         .zip(&kinds)
-        .filter(|(_, k)| **k == FieldKind::Plain)
+        .filter(|(_, k)| matches!(k, FieldKind::Plain | FieldKind::FnChild))
         .filter_map(|(f, _)| f.name.as_deref())
         .collect();
     for child in &children {
@@ -4646,9 +4675,12 @@ fn classify_iwf(
             );
         }
         for (k, f) in c.fields.iter().enumerate() {
-            let mentions = match &child_idx[k] {
-                Some(e) => expr_mentions(e, child),
-                None => ty_mentions(&f.ty, child),
+            let mentions = match (&child_idx[k], &f.ty.kind) {
+                // A function child's domain is part of the label too: it is
+                // the positions at this constructor.
+                (Some(e), TyKind::Fn { dom, .. }) => expr_mentions(e, child) || ty_mentions(dom, child),
+                (Some(e), _) => expr_mentions(e, child),
+                (None, _) => ty_mentions(&f.ty, child),
             };
             if mentions {
                 let what = if child_idx[k].is_some() { "index" } else { "type" };
@@ -5193,19 +5225,9 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
                 if *implicit {
                     return fail(crate::IMPLICIT_MARK_REFUSED.to_string(), f.ty.span);
                 }
-                if d.index.is_some() && !d.is_codata {
-                    return fail(
-                        format!(
-                            "field of `{}` is a function into `{}`, and `{}` is an indexed \
-                             family: the infinitary tier lowers unindexed declarations only \
-                             this round (docs/inductive-tier2-w-lowering.md §1)",
-                            c.name, d.name, d.name
-                        ),
-                        f.ty.span,
-                    );
-                }
-                // `A -> D<…>` itself: classified by `classify_fields`, which
-                // also checks that the occurrence is the uniform one.
+                // `A -> D<…>` itself: classified by `classify_fields` (or, in
+                // an indexed family, `classify_iwf`, docs/iwf-infinitary-design.md
+                // §1), which also checks that the occurrence is the uniform one.
                 if self_head(cod, &d.name).is_some() {
                     continue;
                 }

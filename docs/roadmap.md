@@ -341,7 +341,10 @@ road to measure. (5) Asymptotics and transseries, on the reals and orders.
 (6) The metatheory needed to restate heather-coq (`math-metatheory`):
 syntax with binders, substitution lemmas, logical relations. The IWf former
 landing in the kernel (`docs/iwf-former-design.md`) is what makes its
-inductive families writable.
+inductive families writable; mutual families
+(`docs/mutual-inductive-design.md`) and families whose premises quantify
+over an argument (`docs/iwf-infinitary-design.md`, a logical relation's
+shape) lower onto it or onto `W` without a kernel change.
 
 **Constructive design** (a principle across this area, see
 [Design principles](#design-principles)). The kernel is predicative and has no axioms by default

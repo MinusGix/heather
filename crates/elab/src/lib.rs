@@ -115,6 +115,7 @@ pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod emission_walk;
 pub use emission_walk::EmissionFinding;
 mod iwf_family;
+mod iwf_w;
 mod gendefs;
 mod generalize;
 mod goal_combinators;
@@ -3278,7 +3279,9 @@ impl Elaborator {
         };
         let ind = self.types.inductive(&key)?;
         ind.index.as_ref()?;
-        Some(if ind.skel.is_some() {
+        Some(if ind.iwf_infinitary() {
+            IndexedRoute::IwfW
+        } else if ind.skel.is_some() {
             IndexedRoute::Iwf
         } else {
             IndexedRoute::One

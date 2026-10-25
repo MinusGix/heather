@@ -274,8 +274,9 @@ fn the_restrictions_are_diagnosed() {
         ("inductive T { L, F(k: Nat -> T), G(k: Type -> T) }", "different universe levels"),
         // §1.3: no container beside it.
         ("inductive T { L, C(n: Nat, xs: [T; n]), F(k: Nat -> T) }", "container"),
-        // §1.1: no indexed family.
-        ("inductive T : (n: Nat) -> Type { L : T(0), F(k: Nat -> T(0)) : T(1) }", "indexed family"),
+        // §1.1's "no indexed family" is lifted: an indexed family with a
+        // function field lowers on the IWf-on-W route
+        // (docs/iwf-infinitary-design.md, crates/elab/tests/iwf_infinitary.rs).
     ];
     for (src, needle) in cases {
         let msg = elab_err(src);

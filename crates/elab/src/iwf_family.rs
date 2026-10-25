@@ -42,11 +42,19 @@ use crate::recursion::{Guard, GuardKind};
 use crate::wf::fin_index;
 use crate::{Alias, Cx, Elaborator, R, embed, err};
 
+/// The two spellings of an `IWf`-route family: the kernel's finitary
+/// `IWf(sig)(m)`, or, for a family with a recursive function field, the
+/// `W`-encoded `Σ(t : W₀). El(ok t m)` (docs/iwf-infinitary-design.md §5).
+pub(crate) enum FamForm {
+    IWf(Rc<IWfSig>),
+    W(Rc<crate::iwf_w::IwSig>),
+}
+
 /// A type in `IWf` family form, read back: the signature, the index it is
 /// applied at, and the index type (the signature's, kept apart for the
 /// callers that build motives over it).
 pub(crate) struct IwfFam {
-    pub sig: Rc<IWfSig>,
+    pub form: FamForm,
     /// The index the family is applied at.
     pub idx: Rc<Term>,
     /// `I`, scoped in the ambient context.
@@ -59,18 +67,39 @@ impl IwfFam {
     fn new(sig: Rc<IWfSig>, idx: Rc<Term>) -> IwfFam {
         let ity = (*sig.idx).clone();
         let ilvl = sig.idx_level.clone();
-        IwfFam { sig, idx, ity, ilvl }
+        IwfFam { form: FamForm::IWf(sig), idx, ity, ilvl }
     }
 
-    /// `l ⊔ li` — the family's own level.
+    fn new_w(sig: Rc<crate::iwf_w::IwSig>, idx: Rc<Term>) -> IwfFam {
+        let ity = (*sig.ity).clone();
+        let ilvl = sig.ilvl.clone();
+        IwfFam { form: FamForm::W(sig), idx, ity, ilvl }
+    }
+
+    /// The family's own level: `l ⊔ li` on `IWf`, `lw ⊔ lk` on `W`.
     pub fn lvl(&self) -> Level {
-        self.sig.family_level()
+        match &self.form {
+            FamForm::IWf(sig) => sig.family_level(),
+            FamForm::W(sig) => sig.lvl(),
+        }
     }
 
-    /// `IWf(…)(m)` with `m` and the result scoped `by` binders past the
-    /// ambient context.
+    /// The family at `m`, with `m` and the result scoped `by` binders past
+    /// the ambient context.
     pub fn ty_at(&self, m: Term, by: u32) -> Type {
-        self.sig.shift_local(by).at(Rc::new(m))
+        match &self.form {
+            FamForm::IWf(sig) => sig.shift_local(by).at(Rc::new(m)),
+            FamForm::W(sig) => sig.fam(by, &m),
+        }
+    }
+
+    /// The shape declaration's lowering and its level, which both forms
+    /// share: the constructors' payloads, read by the same spine.
+    pub fn shape(&self) -> (&Type, &Level) {
+        match &self.form {
+            FamForm::IWf(sig) => (&sig.shape, &sig.level),
+            FamForm::W(sig) => (&sig.shape, &sig.ls),
+        }
     }
 }
 
@@ -81,7 +110,7 @@ fn children_of(ind: &Inductive, k: usize) -> usize {
 
 /// The written result index (design §8.1). Present on every constructor of an
 /// `IWf`-route declaration, by construction.
-fn res_expr(ind: &Inductive, k: usize) -> &Expr {
+pub(crate) fn res_expr(ind: &Inductive, k: usize) -> &Expr {
     ind.ctors[k]
         .res_expr
         .as_ref()
@@ -101,7 +130,7 @@ fn child_exprs(ind: &Inductive, k: usize) -> Vec<&Expr> {
 
 /// The index an `IWf`-route constructor writes for its child at field `j`:
 /// the route has one index binder, so the entry is a singleton.
-fn child_index(ctor: &Ctor, j: usize) -> &Expr {
+pub(crate) fn child_index(ctor: &Ctor, j: usize) -> &Expr {
     match ctor.child_index.get(j) {
         Some(Some(es)) if es.len() == 1 => &es[0],
         _ => panic!("an IWf-route child carries its index"),
@@ -118,7 +147,15 @@ impl Elaborator {
     pub(crate) fn iwf_of(&self, ty: &Type) -> Option<(Rc<Inductive>, IwfFam)> {
         let d = crate::inductive::decoded(ty);
         let Type::IWf { sig, index } = &*d else {
-            return None;
+            // The `W` encoding of a family with a function field
+            // (docs/iwf-infinitary-design.md §5), found by the same shape.
+            let (sig, idx) = crate::iwf_w::IwSig::read(&d)?;
+            let shape = self.tag_of(&sig.shape)?;
+            let ind = Rc::clone(self.types.iwf_by_shape(shape.tag)?);
+            if !ind.iwf_infinitary() {
+                return None;
+            }
+            return Some((ind, IwfFam::new_w(Rc::new(sig), idx)));
         };
         let shape = self.tag_of(&sig.shape)?;
         let ind = Rc::clone(self.types.iwf_by_shape(shape.tag)?);
@@ -160,6 +197,10 @@ impl Elaborator {
         idx: Term,
         span: Span,
     ) -> R<(Type, Level)> {
+        if ind.iwf_infinitary() {
+            let sig = self.iw_sig(cx, ind, args, span)?;
+            return Ok((sig.fam(0, &idx), sig.lvl()));
+        }
         let sig = self.iwf_sig(cx, ind, args, span)?;
         let lvl = sig.family_level();
         Ok((sig.at(Rc::new(idx)), lvl))
@@ -282,7 +323,7 @@ impl Elaborator {
     /// to its projection out of the branch's value. `d` counts the binders
     /// pushed since `spine` was read back.
     #[allow(clippy::too_many_arguments)]
-    fn decl_payload_cx(
+    pub(crate) fn decl_payload_cx(
         &self,
         bcx: &Cx,
         ind: &Inductive,
@@ -304,7 +345,7 @@ impl Elaborator {
     /// its projection out of `value` (the shape branch's tuple, scoped in
     /// `acx`, `d` binders past where `spine` was read back).
     #[allow(clippy::too_many_arguments)]
-    fn payload_aliases(
+    pub(crate) fn payload_aliases(
         &self,
         acx: &mut Cx,
         ind: &Inductive,
@@ -492,9 +533,9 @@ impl Elaborator {
             );
         }
         let _ = expected_lvl;
-        let sig = &fam.sig;
         let n = ind.ctors.len();
-        let spine = self.spine(&sig.shape, &sig.level, n, span)?;
+        let (shape, slvl) = fam.shape();
+        let spine = self.spine(shape, slvl, n, span)?;
         // The label: the tag and the stored arguments, tier 0 verbatim — with
         // the field values kept, because the indices may mention them.
         let payload: Vec<&Expr> = args
@@ -517,20 +558,26 @@ impl Elaborator {
             .map(|(k, (t, ty, lv))| (k, t, ty, lv))
             .collect();
         let acx = self.res_arg_cx(cx, ind, i, args, &pays)?;
-        // The children, each at the index written for it.
-        let mut kids: Vec<Term> = Vec::new();
-        for (k, kind) in ctor.kind.iter().enumerate() {
-            if *kind != FieldKind::Plain {
-                continue;
+        // The children, each at the index written for it. On the `W`
+        // encoding they are checked after the index, by `build_iw_ctor`.
+        let children = match &fam.form {
+            FamForm::IWf(sig) => {
+                let mut kids: Vec<Term> = Vec::new();
+                for (k, kind) in ctor.kind.iter().enumerate() {
+                    if *kind != FieldKind::Plain {
+                        continue;
+                    }
+                    let e = child_index(ctor, k);
+                    let x = {
+                        let _scope = self.use_inductive_scope(ind);
+                        self.elab_check(&acx, e, &fam.ity, &fam.ilvl)?
+                    };
+                    kids.push(self.elab_check(cx, args[k].borrow(), &fam.ty_at(x, 0), &fam.lvl())?);
+                }
+                Some(dvec_tuple(sig, &label, kids))
             }
-            let e = child_index(ctor, k);
-            let x = {
-                let _scope = self.use_inductive_scope(ind);
-                self.elab_check(&acx, e, &fam.ity, &fam.ilvl)?
-            };
-            kids.push(self.elab_check(cx, args[k].borrow(), &fam.ty_at(x, 0), &fam.lvl())?);
-        }
-        let children = dvec_tuple(sig, &label, kids);
+            FamForm::W(_) => None,
+        };
         // The index check, one conversion, exactly as route 1 does.
         let target = {
             let _scope = self.use_inductive_scope(ind);
@@ -575,7 +622,14 @@ impl Elaborator {
                 span,
             );
         }
-        Ok(sig.supi(Rc::new(label), Rc::new(children)))
+        match (&fam.form, children) {
+            (FamForm::IWf(sig), Some(children)) => Ok(sig.supi(Rc::new(label), Rc::new(children))),
+            (FamForm::W(sig), _) => {
+                let args: Vec<&Expr> = args.iter().map(|a| a.borrow()).collect();
+                self.build_iw_ctor(cx, &acx, ind, i, &args, sig, label, &target, &fam.idx, span)
+            }
+            (FamForm::IWf(_), None) => err("internal: an IWf constructor built no children", span),
+        }
     }
 
     /// [`Elaborator::build_fields`], keeping each field's value: the payload
@@ -736,7 +790,8 @@ impl Elaborator {
         // Every constructor's output index, at a generic payload, read to its
         // head.
         let n = ind.ctors.len();
-        let spine = self.spine(&fam.sig.shape, &fam.sig.level, n, span)?;
+        let (shape, slvl) = fam.shape();
+        let spine = self.spine(shape, slvl, n, span)?;
         let mut outs: Vec<Cx> = Vec::with_capacity(n);
         let mut live: Vec<(usize, Vec<Rc<Term>>)> = Vec::new();
         for k in 0..n {
@@ -949,7 +1004,7 @@ impl Elaborator {
 
     /// The index constructor heading `t` and its arguments, if `t`'s weak
     /// head is one.
-    fn index_head(
+    pub(crate) fn index_head(
         &self,
         cx: &Cx,
         ity: &crate::inductive::IdxTy,
@@ -1073,24 +1128,8 @@ impl Elaborator {
             );
         }
 
-        let sig = &fam.sig;
-        let fl = sig.family_level();
-        let spine = self.spine(&sig.shape, &sig.level, n, span)?;
-        // The step telescope, `cs` in (Γ, a), `ih` in (Γ, a, cs), the step's
-        // type in (Γ, a, cs, ih).
-        let (cs_ty, ih_ty, st_ty) = iwf_step_telescope(sig, &mlvl, &motive);
-        // The convoy's motive over (Γ, a, x): the three re-abstracted at `x`.
-        let convoy = Type::Pi {
-            dom_level: fl.clone(),
-            cod_level: mlvl.clone(),
-            dom: Rc::new(cs_ty.shift_local_above(1, 1)),
-            cod: Rc::new(Type::Pi {
-                dom_level: mlvl.clone(),
-                cod_level: mlvl.clone(),
-                dom: Rc::new(ih_ty.shift_local_above(1, 2)),
-                cod: Rc::new(st_ty.shift_local_above(1, 3)),
-            }),
-        };
+        let (shape, slvl) = fam.shape();
+        let spine = self.spine(shape, slvl, n, span)?;
         let dec = crate::recursion::descends_on_param(cx, &scrut);
         // The index a recursion may vary: the family's own when it is a
         // parameter, or a member's, under its member constructor
@@ -1133,6 +1172,28 @@ impl Elaborator {
             span,
             inverted,
             motive_unit: how == IndexMotive::Inverted { unit: true },
+        };
+        let sig = match &fam.form {
+            FamForm::IWf(sig) => sig,
+            // A family with a function field eliminates by `elim_W` and
+            // carries its equations by `J` (docs/iwf-infinitary-design.md §7).
+            FamForm::W(sig) => return self.iw_match(cx, &env, sig, scrut),
+        };
+        let fl = sig.family_level();
+        // The step telescope, `cs` in (Γ, a), `ih` in (Γ, a, cs), the step's
+        // type in (Γ, a, cs, ih).
+        let (cs_ty, ih_ty, st_ty) = iwf_step_telescope(sig, &mlvl, &motive);
+        // The convoy's motive over (Γ, a, x): the three re-abstracted at `x`.
+        let convoy = Type::Pi {
+            dom_level: fl.clone(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(cs_ty.shift_local_above(1, 1)),
+            cod: Rc::new(Type::Pi {
+                dom_level: mlvl.clone(),
+                cod_level: mlvl.clone(),
+                dom: Rc::new(ih_ty.shift_local_above(1, 2)),
+                cod: Rc::new(st_ty.shift_local_above(1, 3)),
+            }),
         };
         let mut acx = cx.clone();
         acx.push("#a".into(), (*sig.shape).clone(), sig.level.clone());
@@ -1210,7 +1271,10 @@ impl Elaborator {
         ccx.push("#ih".into(), (**ih_dom).clone(), mlvl.clone());
         let dd = d + 2;
         let value_here = Rc::new(value.shift_local(2));
-        let sig_here = fam.sig.shift_local(dd);
+        let FamForm::IWf(sig) = &fam.form else {
+            return err("internal: an IWf arm on the W encoding", span);
+        };
+        let sig_here = sig.shift_local(dd);
         let ity_here = fam.ity.shift_local(dd);
         let label = inject(env.spine, k, ind.ctors.len(), (*value_here).clone(), dd);
         // The declaration's own index expressions, at this shape.
@@ -1392,28 +1456,28 @@ fn dvec_tuple(sig: &Rc<IWfSig>, label: &Term, kids: Vec<Term>) -> Term {
 }
 
 /// Everything an arm needs beyond its own binders, gathered once.
-struct ArmEnv<'a> {
-    ind: &'a Inductive,
-    fam: &'a IwfFam,
-    spine: &'a Spine,
-    ordered: &'a [Option<&'a Arm>],
+pub(crate) struct ArmEnv<'a> {
+    pub(crate) ind: &'a Inductive,
+    pub(crate) fam: &'a IwfFam,
+    pub(crate) spine: &'a Spine,
+    pub(crate) ordered: &'a [Option<&'a Arm>],
     /// `M`, over `(Γ, j, z)`.
-    motive: &'a Type,
-    gamma0: &'a LocalCtx,
-    mlvl: &'a Level,
-    dec: Option<usize>,
-    idx_param: Option<usize>,
+    pub(crate) motive: &'a Type,
+    pub(crate) gamma0: &'a LocalCtx,
+    pub(crate) mlvl: &'a Level,
+    pub(crate) dec: Option<usize>,
+    pub(crate) idx_param: Option<usize>,
     /// The varying index is the member constructor's argument, not the
     /// family's index itself (docs/mutual-inductive-design.md §5).
-    rebind_inner: bool,
-    outer_guard: Option<Rc<Guard>>,
-    keyword: &'static str,
-    span: Span,
+    pub(crate) rebind_inner: bool,
+    pub(crate) outer_guard: Option<Rc<Guard>>,
+    pub(crate) keyword: &'static str,
+    pub(crate) span: Span,
     /// The motive inverts the scrutinee's index (design §8.3, tier 1).
-    inverted: bool,
+    pub(crate) inverted: bool,
     /// The written motive is itself `Unit`, so a `Unit` goal says nothing
     /// about whether an arm is reachable.
-    motive_unit: bool,
+    pub(crate) motive_unit: bool,
 }
 
 /// How a `match`'s motive treats the scrutinee's index
@@ -1429,7 +1493,7 @@ pub(crate) enum IndexMotive {
 
 impl ArmEnv<'_> {
     /// `M[m, z]`, with `m`/`z` scoped `extra` binders past Γ.
-    fn mot_at(&self, m: Term, z: Term, extra: u32) -> Type {
+    pub(crate) fn mot_at(&self, m: Term, z: Term, extra: u32) -> Type {
         self.motive.apply_local(
             &embed(self.gamma0, extra)
                 .extended(Rc::new(m))

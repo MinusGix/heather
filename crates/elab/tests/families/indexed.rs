@@ -22,6 +22,8 @@ mod indexed_route_2b_declared;
 mod indexed_route_2b_gen;
 #[path = "../iwf_match_tiers.rs"]
 mod iwf_match_tiers;
+#[path = "../iwf_infinitary.rs"]
+mod iwf_infinitary;
 #[path = "../branching_route_a.rs"]
 mod branching_route_a;
 #[path = "../branching_route_c.rs"]
