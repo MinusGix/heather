@@ -94,6 +94,26 @@ next call's argument (`composition.hthr`), values live across calls
 link it against a C reference and compare them on boundary and pseudorandom
 inputs.
 
+## Loops
+
+A recursion on a fuel compiles to a verified loop when it is the exported
+function's result. The helper is `h(fuel: Nat, x…: BitVec(64)) →
+BitVec(64)` with one to four words, matching its fuel `Zero`/`Succ(k)`;
+the `Succ` arm's tail positions either return a word or recurse as
+`after(k, …)`, and the root calls it last as `h(w.toNat(), e…)`. The loop
+runs at most `w` passes; out of fuel it computes the `Zero` arm. The arm
+may not read `k` or the recursion as a value, and a loop under a branch or
+in a called function is refused (`issues/function-ir-loops-anywhere.md`).
+`loop_triangle.hthr` counts down, `loop_multiply.hthr` keeps an invariant
+word out of the recursion, and `loop_settle.hthr` calls a function in each
+pass and decides on several comparisons.
+
+The certificate's `_agrees` is no longer one `refl`: `_pass_agrees` states
+that one pass is one unfolding of the source's step (split over the pass's
+comparisons by `_pass_cased`), `_base` that the exhausted branch is the
+`Zero` arm, and the library's `loop_eval_agrees_from` lifts both to the
+loop by induction on the fuel.
+
 ## Per-function certificates and `build-x86`: burned
 
 Before the verified lowering, each function got a certificate generated for

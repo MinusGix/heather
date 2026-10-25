@@ -1,0 +1,20 @@
+import bitvec;
+
+// A loop that runs out: `sum_down` recurses on its fuel, and `triangle`
+// gives it as many passes as `n`, so the passes run out as `n` reaches
+// zero and the fuel's `Zero` arm answers (examples/x86-native/README.md).
+
+fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
+    match fuel {
+        Zero => acc,
+        Succ(k) => match n.eq_bit(BitVec::ofNat(0)) {
+            False => sum_down(k, n.sub(BitVec::ofNat(1)), acc.add(n)),
+            True => acc,
+        },
+    }
+}
+
+fn triangle(a, b: BitVec(64)) → BitVec(64) {
+    let n = a.band(BitVec::ofNat(1023));
+    sum_down(n.toNat(), n, b)
+}

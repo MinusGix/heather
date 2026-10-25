@@ -18,6 +18,19 @@
 //! test: each compiles to conditionals on comparisons, an operand tested
 //! only where the connective needs it.
 //!
+//! The exported function may instead end in a loop
+//! (issues/function-ir-verified-loop-planning.md): its body calls, in tail
+//! position, `h(w.toNat(), e…)`, where `h(fuel, x…)` matches its fuel,
+//! `Zero` to a result of its words and `Succ(k)` to a tree of tests whose
+//! leaves are results or `h(k, …)`. The call becomes a `Loop` of at most `w`
+//! passes, each the tree, with the state's words in `x…`; a leaf that
+//! recurses gives the next state, and one that returns gives the result as
+//! the next state's first word and leaves. A conditional on the exhausted
+//! bit then computes the `Zero` result from the final state, or reads the
+//! first word. The certificate proves the agreement by induction on the
+//! fuel (`function_ir_compile::loop_eval_agrees`), each pass by cases on its
+//! comparisons, which a loop's pass spells as Bool variables (`ReflectedLoop`).
+//!
 //! A function whose matches are all on comparisons evaluates to its source
 //! by conversion. One that decides a connective or a helper (`decided`) is
 //! its *expansion* by conversion, the same decision tree spelled with the
@@ -34,6 +47,8 @@ pub enum ProgramRegion {
     Conditional { inputs: Vec<Port>, condition: u64, arguments: Vec<Port>, outputs: Vec<Port>,
         when_true: Box<ProgramRegion>, when_false: Box<ProgramRegion> },
     Call { callee: usize, arguments: Vec<u64>, result: u64 },
+    Loop { inputs: Vec<u64>, bound: u64, parameters: Vec<u64>, count: u64, body: Box<ProgramRegion>, exit: u64,
+        next: Vec<u64>, outputs: Vec<u64>, exhausted: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +63,58 @@ pub struct ProgramFunction {
     /// A match decided a connective or a helper: the expansion is the
     /// source only by case analysis.
     pub decided: bool,
+    /// The loop the body ends in, when it does.
+    pub looped: Option<ReflectedLoop>,
+}
+
+/// How a pass branches: on condition `k` (`ReflectedLoop::conditions`), its
+/// false subtree first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Split {
+    Leaf,
+    Node(usize, Box<Split>, Box<Split>),
+}
+
+impl Split {
+    pub fn leaves(&self) -> usize {
+        match self { Self::Leaf => 1, Self::Node(_, no, yes) => no.leaves() + yes.leaves() }
+    }
+}
+
+/// A loop a function's body ends in, and what its certificate states about
+/// it. Spellings are in the source's operations over the state's words
+/// `x0, x1, …`; a pass's comparisons are the Bool variables `c0, c1, …`,
+/// `conditions` their spellings, and `later` the recursion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReflectedLoop {
+    /// The recursion on the fuel, and its words.
+    pub source_name: String,
+    pub arity: usize,
+    pub inputs: Vec<u64>,
+    pub bound: u64,
+    pub parameters: Vec<u64>,
+    pub count: u64,
+    pub exit: u64,
+    pub next: Vec<u64>,
+    pub outputs: Vec<u64>,
+    pub exhausted: u64,
+    /// The body's steps before the loop, when there are any.
+    pub prefix: Option<ProgramRegion>,
+    pub body: ProgramRegion,
+    pub post: ProgramRegion,
+    pub conditions: Vec<String>,
+    /// A pass as the program evaluates it: the exit test, the next state
+    /// going round, the result leaving.
+    pub pass: String,
+    /// A pass as the source's tree: leaves are results or `later([…])`.
+    pub tree: String,
+    pub split: Split,
+    /// The tree decided a connective or a helper: it is the source's step
+    /// only by case analysis.
+    pub decided: bool,
+    /// The result with no fuel left, and whether it decided.
+    pub base: String,
+    pub base_decided: bool,
 }
 
 /// Function `k` is `functions[k]`, and calls only functions below it.
@@ -66,10 +133,14 @@ impl ReflectedProgram {
 }
 
 impl ProgramFunction {
-    fn render(&self) -> String {
+    pub fn render(&self) -> String {
         let parameters: Vec<String> = (0..self.arity).map(|id| id.to_string()).collect();
         format!("Function(parameters := [{}], body := {}, result := {})", parameters.join(", "), self.body.render(), self.result)
     }
+}
+
+pub fn ids(ids: &[u64]) -> String {
+    ids.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")
 }
 
 fn ports(ports: &[Port]) -> String {
@@ -87,10 +158,10 @@ impl ProgramRegion {
             Self::Compose(prefix, continuation) => format!("Compose({}, {})", prefix.render(), continuation.render()),
             Self::Conditional { inputs, condition, arguments, outputs, when_true, when_false } => format!("Conditional({}, {condition}, {}, {}, {}, {})",
                 ports(inputs), ports(arguments), ports(outputs), when_true.render(), when_false.render()),
-            Self::Call { callee, arguments, result } => {
-                let arguments: Vec<String> = arguments.iter().map(u64::to_string).collect();
-                format!("Call({callee}, [{}], {result})", arguments.join(", "))
-            }
+            Self::Call { callee, arguments, result } => format!("Call({callee}, [{}], {result})", ids(arguments)),
+            Self::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } =>
+                format!("Loop([{}], {bound}, [{}], {count}, {}, {exit}, [{}], [{}], {exhausted})", ids(inputs), ids(parameters),
+                    body.render(), ids(next), ids(outputs)),
         }
     }
 }
@@ -101,7 +172,7 @@ pub fn reflect_program(elaborator: &Elaborator, source_name: &str) -> Result<Ref
     let root = elaborator.global_abs(source_name).ok_or_else(|| SourceError::Unsupported(format!("unknown source function `{source_name}`")))?;
     let globals = Globals::resolve(elaborator)?;
     let mut program = Program { elaborator, globals, functions: Vec::new(), index: BTreeMap::new(), stack: Vec::new() };
-    let root = program.function(root)?;
+    let root = program.function(root, true)?;
     Ok(ReflectedProgram { functions: program.functions, root })
 }
 
@@ -111,6 +182,7 @@ struct Globals {
     signed_less: usize,
     equal: usize,
     word: usize,
+    to_nat: usize,
     /// Absent when the source does not import `bool`: then nothing tests one.
     boolean: Option<usize>,
     and: Option<usize>,
@@ -126,6 +198,7 @@ impl Globals {
         let boolean = elaborator.lookup_inductive("bool::Bool").map(|ind| ind.tag as usize);
         Ok(Self { operations: OperationGlobals::resolve(elaborator)?, unsigned_less: abs("bitvec::BitVec::unsigned_lt_bit")?,
             signed_less: abs("bitvec::BitVec::signed_lt_bit")?, equal: abs("bitvec::BitVec::eq_bit")?, word: word as usize,
+            to_nat: abs("bitvec::BitVec::toNat")?,
             boolean, and: elaborator.global_abs("bool::Bool::and"), or: elaborator.global_abs("bool::Bool::or"),
             not: elaborator.global_abs("bool::Bool::not") })
     }
@@ -175,6 +248,23 @@ impl Program<'_> {
         (arity <= 6).then(|| (arity, current.clone()))
     }
 
+    /// The global's word parameter count, when it recurses on a fuel: a
+    /// `Nat`, then words, returning a word.
+    fn loop_signature(&self, at: usize) -> Option<usize> {
+        let name = self.elaborator.global_qualified_name_at(at)?;
+        let (ty, _) = self.elaborator.global_body(&name)?;
+        let Type::Pi { dom, cod, .. } = &*ty else { return None; };
+        if !matches!(&**dom, Type::Nat) { return None; }
+        let mut arity = 0;
+        let mut current = &**cod;
+        while let Type::Pi { dom, cod, .. } = current {
+            if !self.is_word(at, dom) { return None; }
+            arity += 1;
+            current = cod;
+        }
+        (1..=4).contains(&arity).then_some(()).filter(|_| self.is_word(at, current)).map(|_| arity)
+    }
+
     /// The global's parameter count, when it is a word function this
     /// fragment can call.
     fn word_signature(&self, at: usize) -> Option<usize> {
@@ -199,7 +289,7 @@ impl Program<'_> {
     }
 
     /// The function at global `at`, reflected once.
-    fn function(&mut self, at: usize) -> Result<usize, SourceError> {
+    fn function(&mut self, at: usize, root: bool) -> Result<usize, SourceError> {
         if let Some(index) = self.index.get(&at) { return Ok(*index); }
         if self.stack.contains(&at) { return unsupported("a recursive function is not compiled: a program's functions call only those below them"); }
         let name = self.elaborator.global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
@@ -209,14 +299,16 @@ impl Program<'_> {
         self.stack.push(at);
         let parameters: Vec<Port> = (0..arity as u64).map(|id| Port { id, width: 64 }).collect();
         let spell = (0..arity as u64).map(|id| (id, format!("a{id}"))).collect();
-        let mut body = Body { arity, next_id: arity as u64 + 1, scope: Scope::default(), steps: Vec::new(), spell, decided: false, helpers: Vec::new() };
+        let mut body = Body::new(parameters.clone(), arity as u64 + 1, spell);
+        body.loop_ok = root;
         let result = arity as u64;
         let cx = Rc::new(Cx { at, parameters });
-        let region = body.tail(self, &term, &cx, 0, result);
+        let region = body.tail(self, &term, &cx, 0, &Target::Word(result));
         self.stack.pop();
         let (region, expansion) = region?;
         let index = self.functions.len();
-        self.functions.push(ProgramFunction { source_name: name, arity, body: region, result, expansion, decided: body.decided });
+        self.functions.push(ProgramFunction { source_name: name, arity, body: region, result, expansion, decided: body.decided,
+            looped: body.looped });
         self.index.insert(at, index);
         Ok(index)
     }
@@ -253,7 +345,9 @@ struct Scope { values: BTreeMap<Key, Port>, ports: Vec<Port> }
 /// One function's body as it is reflected: finished regions, and the nodes
 /// of the dataflow region being built.
 struct Body {
-    arity: usize,
+    /// The words the body's names start from: a function's parameters, or a
+    /// loop's state.
+    parameters: Vec<Port>,
     next_id: u64,
     scope: Scope,
     steps: Vec<ProgramRegion>,
@@ -262,12 +356,49 @@ struct Body {
     decided: bool,
     /// The helpers being inlined, to refuse recursion.
     helpers: Vec<usize>,
+    /// A loop's pass spells its comparisons as Bool variables, named by
+    /// port; `conditions` spells each in full, in name order.
+    cases: bool,
+    case_names: BTreeMap<u64, usize>,
+    conditions: Vec<String>,
+    /// The body may end in a loop: an exported function's, outside any
+    /// branch.
+    loop_ok: bool,
+    looped: Option<ReflectedLoop>,
 }
+
+/// Where a tail's value goes: a word, or a loop pass's next state, the
+/// first word the result when it leaves, and its tag (one leaving, zero
+/// going round). `words` are the pass's state, and `recursed` the words the
+/// recursion passes, by position: the others it passes on unchanged.
+#[derive(Clone)]
+enum Target {
+    Word(u64),
+    Pass { state: Vec<u64>, tag: u64, words: Vec<Port>, recursed: Vec<usize> },
+}
+
+impl Target {
+    fn ids(&self) -> Vec<u64> {
+        match self {
+            Self::Word(id) => vec![*id],
+            Self::Pass { state, tag, .. } => state.iter().copied().chain([*tag]).collect(),
+        }
+    }
+}
+
+/// What a step's names hold that is no word: its fuel, `k` and the
+/// recursion.
+const UNREAD: Port = Port { id: u64::MAX, width: 0 };
 
 #[derive(Default)]
 struct Pending { nodes: Vec<Node>, inputs: Vec<Port>, outputs: Vec<Port> }
 
 impl Body {
+    fn new(parameters: Vec<Port>, next_id: u64, spell: BTreeMap<u64, String>) -> Self {
+        Body { parameters, next_id, scope: Scope::default(), steps: Vec::new(), spell, decided: false, helpers: Vec::new(), cases: false,
+            case_names: BTreeMap::new(), conditions: Vec::new(), loop_ok: false, looped: None }
+    }
+
     fn fresh(&mut self) -> Result<u64, SourceError> {
         if self.next_id >= 16384 { return unsupported("the function exceeds its value budget"); }
         let id = self.next_id;
@@ -276,7 +407,7 @@ impl Body {
     }
 
     fn inputs(&self) -> Vec<Port> {
-        let mut inputs: Vec<Port> = (0..self.arity as u64).map(|id| Port { id, width: 64 }).collect();
+        let mut inputs = self.parameters.clone();
         inputs.extend(self.scope.ports.iter().copied());
         inputs
     }
@@ -310,7 +441,8 @@ impl Body {
         let Term::Var(LocalVar(index)) = term else { return None; };
         Some(index.checked_sub(depth).and_then(|index| cx.parameters.len().checked_sub(index as usize + 1))
             .map(|slot| cx.parameters[slot])
-            .ok_or_else(|| SourceError::Unsupported("a value reads a match payload or something outside the function".into())))
+            .ok_or_else(|| SourceError::Unsupported("a value reads a match payload or something outside the function".into()))
+            .and_then(|port| if port == UNREAD { unsupported("a loop's step reads its fuel, or its recursion as a value") } else { Ok(port) }))
     }
 
     /// A word value.
@@ -320,6 +452,7 @@ impl Body {
             return unsupported("a match is compiled only in tail position, as a function's result or a branch's");
         }
         let (head, args) = application_spine(term);
+        if let Some(Err(error)) = self.parameter(cx, head, depth) { return Err(error); }
         let at = absolute(head, cx.at).ok_or_else(|| SourceError::Unsupported("a value must apply a resolved function".into()))?;
         let globals = &program.globals;
         if at == globals.operations.of_nat && args.len() == 2 && nat_literal(args[0]) == Some(64) {
@@ -336,12 +469,17 @@ impl Body {
             let (left, right) = (left.id, right.id);
             return self.node(pending, Some(Key::Binary(operation, left, right)), 64, None, spelling, |output| operation.node_at_width(64, output, left, right));
         }
+        if program.loop_signature(at).is_some() {
+            let name = program.elaborator.global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
+            return unsupported(&format!("`{name}` recurses on a fuel, and such a call is compiled only as the exported function's result, \
+                outside any branch, as `{name}(w.toNat(), …)` (issues/function-ir-loops-anywhere.md)"));
+        }
         let Some(arity) = program.word_signature(at) else {
             let name = program.elaborator.global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
             return unsupported(&format!("`{name}` is not an operation this compiler lowers, nor a function of BitVec(64) words it can call"));
         };
         if args.len() != arity { return unsupported("a call must apply every parameter"); }
-        let callee = program.function(at)?;
+        let callee = program.function(at, false)?;
         if program.functions[callee].decided {
             return unsupported(&format!("`{}` decides a connective or a Bool helper, and a call of such a function is not compiled yet (issues/function-ir-verified-decided-callees.md)",
                 program.functions[callee].source_name));
@@ -383,18 +521,28 @@ impl Body {
         let right = self.value(program, pending, args[2], cx, depth)?;
         let spelling = format!("@bitvec::BitVec::{name}(64, {}, {})", self.spelling(left), self.spelling(right));
         let (left, right) = (left.id, right.id);
-        Ok(Some(match comparison {
+        let port = match comparison {
             0 => self.node(pending, Some(Key::UnsignedLess(left, right)), 1, None, spelling, |output| Node::UnsignedLessThan { width: 64, output, left, right })?,
             1 => self.node(pending, Some(Key::SignedLess(left, right)), 1, None, spelling, |output| Node::SignedLessThan { width: 64, output, left, right })?,
             _ => self.node(pending, Some(Key::Equal(left, right)), 1, None, spelling, |output| Node::Equal { width: 64, output, left, right })?,
-        }))
+        };
+        if self.cases && !self.case_names.contains_key(&port.id) {
+            let index = self.conditions.len();
+            self.conditions.push(self.spelling(port));
+            self.case_names.insert(port.id, index);
+            self.spell.insert(port.id, format!("c{index}"));
+        }
+        Ok(Some(port))
     }
 
     /// The regions deciding `test` and then running `yes` where it holds and
     /// `no` where it does not, pushed onto the steps; and their expansion.
-    fn branch(&mut self, program: &mut Program, test: &Term, cx: &Rc<Cx>, depth: u32, yes: &Arm, no: &Arm, target: u64)
+    fn branch(&mut self, program: &mut Program, test: &Term, cx: &Rc<Cx>, depth: u32, yes: &Arm, no: &Arm, target: &Target)
         -> Result<String, SourceError>
     {
+        // A loop is a barrier for the whole function; under a branch the
+        // rest of the function would be lost to it.
+        self.loop_ok = false;
         // A literal outcome takes its arm.
         match crate::spelling::inj_of(test) {
             Some((true, _)) => { self.decided = true; return self.arm(program, no, target); }
@@ -450,15 +598,24 @@ impl Body {
         };
         self.flush(&mut pending);
         let inputs = self.inputs();
-        let outputs = vec![Port { id: target, width: 64 }];
+        let targets = target.ids();
+        let outputs: Vec<Port> = targets.iter().map(|&id| Port { id, width: 64 }).collect();
         let steps = std::mem::take(&mut self.steps);
         let scope = self.scope.clone();
+        let spelled = |body: &Self| -> Vec<String> { targets.iter().map(|id| body.spell.get(id).cloned().unwrap_or_default()).collect() };
         let when_true = self.arm(program, yes, target).map(|expansion| (self.close(), expansion));
+        let yes_values = spelled(self);
         self.scope = scope.clone();
         let when_false = self.arm(program, no, target).map(|expansion| (self.close(), expansion));
+        let no_values = spelled(self);
         self.scope = scope;
         self.steps = steps;
         let ((when_true, yes), (when_false, no)) = (when_true?, when_false?);
+        // An output read after the conditional is a match on its condition
+        // with each arm's value, as the evaluator branches at each read.
+        for ((id, yes_value), no_value) in targets.iter().zip(yes_values).zip(no_values) {
+            self.spell.insert(*id, format!("match {} {{ False => {no_value}, True => {yes_value} }}", self.spelling(condition)));
+        }
         let arguments = inputs.iter().copied().filter(|port| port.width == 64).collect();
         self.steps.push(ProgramRegion::Conditional { inputs, condition: condition.id, arguments, outputs,
             when_true: Box::new(when_true?), when_false: Box::new(when_false?) });
@@ -466,7 +623,7 @@ impl Body {
     }
 
     /// An arm's regions, pushed onto the steps, and its expansion.
-    fn arm(&mut self, program: &mut Program, arm: &Arm, target: u64) -> Result<String, SourceError> {
+    fn arm(&mut self, program: &mut Program, arm: &Arm, target: &Target) -> Result<String, SourceError> {
         match arm {
             Arm::Tail(term, cx, depth) => self.compute(program, term, cx, *depth, target),
             Arm::Decide(test, cx, depth, yes, no) => self.branch(program, test, cx, *depth, yes, no, target),
@@ -481,27 +638,189 @@ impl Body {
     }
 
     /// The steps computing `term` into `target`, pushed; and its expansion.
-    fn compute(&mut self, program: &mut Program, term: &Term, cx: &Rc<Cx>, depth: u32, target: u64) -> Result<String, SourceError> {
+    fn compute(&mut self, program: &mut Program, term: &Term, cx: &Rc<Cx>, depth: u32, target: &Target) -> Result<String, SourceError> {
         if let Term::Case { scrut, case_l, case_r, .. } = term {
             let yes = Arm::Tail(Rc::clone(case_r), Rc::clone(cx), depth + 1);
             let no = Arm::Tail(Rc::clone(case_l), Rc::clone(cx), depth + 1);
             return self.branch(program, scrut, cx, depth, &yes, &no, target);
         }
         let mut pending = Pending::default();
-        let value = self.value(program, &mut pending, term, cx, depth)?;
-        let spelling = self.spelling(value);
-        if value.id != target {
-            self.node(&mut pending, None, 64, Some(target), spelling.clone(), |output| Node::Move { width: 64, output, source: value.id })?;
-        }
+        let expansion = match target {
+            Target::Word(target) => {
+                if self.loop_ok && let Some(expansion) = self.ends_in_loop(program, &mut pending, term, cx, depth, *target)? {
+                    return Ok(expansion);
+                }
+                let value = self.value(program, &mut pending, term, cx, depth)?;
+                self.put(&mut pending, value, *target)?;
+                self.spelling(value)
+            }
+            Target::Pass { state, tag, words, recursed } => {
+                let (head, args) = application_spine(term);
+                let recurs = matches!(head, Term::Var(LocalVar(index)) if *index == recursed.len() as u32 + depth);
+                let mut values = words.clone();
+                let leaving = if recurs {
+                    if args.len() != recursed.len() { return unsupported("the recursion's call must apply every word it varies"); }
+                    for (argument, position) in args.iter().zip(recursed) { values[*position] = self.value(program, &mut pending, argument, cx, depth)?; }
+                    0
+                } else {
+                    // Leaving: the result as the first word, the others
+                    // as they were.
+                    values[0] = self.value(program, &mut pending, term, cx, depth)?;
+                    1
+                };
+                let spelled: Vec<String> = values.iter().map(|value| self.spelling(*value)).collect();
+                for (value, id) in values.iter().zip(state) { self.put(&mut pending, *value, *id)?; }
+                self.node(&mut pending, None, 64, Some(*tag), format!("@bitvec::BitVec::ofNat(64, {leaving})"),
+                    |output| Node::Const { width: 64, output, value: leaving })?;
+                if recurs { format!("later([{}])", spelled.join(", ")) } else { spelled[0].clone() }
+            }
+        };
         self.flush(&mut pending);
-        Ok(spelling)
+        Ok(expansion)
+    }
+
+    /// `h(w.toNat(), e…)` where `h` recurses on its fuel: the loop it is and
+    /// the conditional after it, pushed after the steps so far, which become
+    /// the body's prefix; and its expansion. `None` when `term` is no such
+    /// call.
+    fn ends_in_loop(&mut self, program: &mut Program, pending: &mut Pending, term: &Term, cx: &Rc<Cx>, depth: u32, result: u64)
+        -> Result<Option<String>, SourceError>
+    {
+        let (head, args) = application_spine(term);
+        let Some(at) = absolute(head, cx.at) else { return Ok(None); };
+        let Some(n) = program.loop_signature(at) else { return Ok(None); };
+        let name = program.elaborator.global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
+        if args.len() != n + 1 { return unsupported(&format!("a call of `{name}` must apply its fuel and every word")); }
+        let (fuel, fuel_args) = application_spine(args[0]);
+        if absolute(fuel, cx.at) != Some(program.globals.to_nat) || fuel_args.len() != 2 || nat_literal(fuel_args[0]) != Some(64) {
+            return unsupported(&format!("`{name}`'s fuel is compiled only as `w.toNat()` of a word `w`, the loop's bound"));
+        }
+        let (_, body) = program.body_of(at, n + 1)?;
+        // `elim(fuel)` applied to the words the recursion varies; the others
+        // its arms read from the function's parameters.
+        let (elim, applied) = application_spine(&body);
+        let Term::ElimNat { base, step, scrut, .. } = elim else {
+            return unsupported(&format!("`{name}` must match its fuel, `Zero` and `Succ(k)`, and recurse only on `k`"));
+        };
+        let mut recursed = Vec::new();
+        for argument in &applied {
+            match argument {
+                Term::Var(LocalVar(v)) if (*v as usize) < n && !recursed.contains(&(n - 1 - *v as usize)) => recursed.push(n - 1 - *v as usize),
+                _ => return unsupported(&format!("`{name}` must recurse on its fuel with its words passed on")),
+            }
+        }
+        if !matches!(&**scrut, Term::Var(LocalVar(v)) if *v as usize == n) {
+            return unsupported(&format!("`{name}` must match its fuel, its first parameter"));
+        }
+        let m = recursed.len();
+        let under = |term: &Rc<Term>| -> Result<Rc<Term>, SourceError> {
+            let mut term = Rc::clone(term);
+            for _ in 0..m {
+                let Term::Lam { body, .. } = &*term else { return unsupported("a fuel's arms must take the words as λs"); };
+                term = Rc::clone(body);
+            }
+            Ok(term)
+        };
+        let bound = self.value(program, pending, fuel_args[1], cx, depth)?;
+        let mut inputs = Vec::new();
+        for argument in &args[1..] { inputs.push(self.value(program, pending, argument, cx, depth)?); }
+        let expansion = format!("{name}(@bitvec::BitVec::toNat(64, {}), {})", self.spelling(bound),
+            inputs.iter().map(|port| self.spelling(*port)).collect::<Vec<_>>().join(", "));
+        self.flush(pending);
+        let prefix = if self.steps.is_empty() { None } else { Some(self.close()?) };
+        let word = |id: u64| Port { id, width: 64 };
+        let named = |ports: &[Port]| ports.iter().enumerate().map(|(i, port)| (port.id, format!("x{i}"))).collect();
+
+        // A pass: the tree into the next state and the tag, then the exit
+        // bit, the tag one.
+        let mut ids = Vec::new();
+        for _ in 0..=n { ids.push(self.fresh()?); }
+        let (parameters, count) = (ids[..n].to_vec(), ids[n]);
+        let state: Vec<Port> = parameters.iter().copied().map(word).collect();
+        let mut pass = Body::new(state.clone(), self.next_id, named(&state));
+        pass.cases = true;
+        let mut targets = Vec::new();
+        for _ in 0..=n { targets.push(pass.fresh()?); }
+        let (next, tag) = (targets[..n].to_vec(), targets[n]);
+        // A step's names: the function's fuel and words, `k`, the
+        // recursion, then the words it varies.
+        let scope = |words: &[Port], recursion: bool| -> Vec<Port> {
+            let mut names = vec![UNREAD];
+            names.extend(words);
+            if recursion { names.extend([UNREAD, UNREAD]); }
+            names.extend(recursed.iter().map(|&position| words[position]));
+            names
+        };
+        let within = Rc::new(Cx { at, parameters: scope(&state, true) });
+        let tree = pass.compute(program, &*under(step)?, &within, 0,
+            &Target::Pass { state: next.clone(), tag, words: state.clone(), recursed: recursed.clone() })?;
+        let tree_region = pass.close()?;
+        let split = split_of(&tree_region, &pass.case_names)?;
+        if pass.conditions.len() > 16 || split.leaves() > 64 { return unsupported(&format!("`{name}`'s step branches too much for a loop's certificate")); }
+        let mut tail = Pending::default();
+        let one = pass.node(&mut tail, Some(Key::Constant(1)), 64, None, "@bitvec::BitVec::ofNat(64, 1)".into(),
+            |output| Node::Const { width: 64, output, value: 1 })?;
+        let exit = pass.node(&mut tail, None, 1, None, format!("@bitvec::BitVec::eq_bit(64, {}, {})", pass.spelling(word(tag)), pass.spelling(one)),
+            |output| Node::Equal { width: 64, output, left: tag, right: one.id })?;
+        pass.flush(&mut tail);
+        let exit_region = pass.close()?;
+        let spelled: Vec<String> = next.iter().map(|id| pass.spelling(word(*id))).collect();
+        let pass_text = format!("match {} {{ False => later([{}]), True => {} }}", pass.spelling(exit), spelled.join(", "), spelled[0]);
+        self.next_id = pass.next_id;
+
+        // After it: with the passes run out, the fuel's `Zero` arm of the
+        // final state; else the first word.
+        let mut ids = Vec::new();
+        for _ in 0..=n { ids.push(self.fresh()?); }
+        let (outputs, exhausted) = (ids[..n].to_vec(), ids[n]);
+        let words: Vec<Port> = outputs.iter().copied().map(word).collect();
+        let mut zero = Body::new(words.clone(), self.next_id, named(&words));
+        let base_expansion = zero.compute(program, &*under(base)?, &Rc::new(Cx { at, parameters: scope(&words, false) }), 0, &Target::Word(result))?;
+        let when_true = zero.close()?;
+        self.next_id = zero.next_id;
+        let when_false = ProgramRegion::Dataflow(Region { inputs: words.clone(), nodes: vec![Node::Move { width: 64, output: result, source: outputs[0] }],
+            outputs: vec![word(result)] });
+        let post = ProgramRegion::Conditional { inputs: words.iter().copied().chain([Port { id: exhausted, width: 1 }]).collect(), condition: exhausted,
+            arguments: words, outputs: vec![word(result)], when_true: Box::new(when_true), when_false: Box::new(when_false) };
+        let body = ProgramRegion::Compose(Box::new(tree_region), Box::new(exit_region));
+        let input_ids: Vec<u64> = inputs.iter().map(|port| port.id).collect();
+        self.steps.extend(prefix.clone());
+        self.steps.push(ProgramRegion::Loop { inputs: input_ids.clone(), bound: bound.id, parameters: parameters.clone(), count,
+            body: Box::new(body.clone()), exit: exit.id, next: next.clone(), outputs: outputs.clone(), exhausted });
+        self.steps.push(post.clone());
+        self.looped = Some(ReflectedLoop { source_name: name, arity: n, inputs: input_ids, bound: bound.id, parameters, count, exit: exit.id, next,
+            outputs, exhausted, prefix, body, post, conditions: pass.conditions, pass: pass_text, tree, split, decided: pass.decided,
+            base: base_expansion, base_decided: zero.decided });
+        Ok(Some(expansion))
+    }
+
+    /// `value` copied into `target`.
+    fn put(&mut self, pending: &mut Pending, value: Port, target: u64) -> Result<(), SourceError> {
+        if value.id != target {
+            let spelling = self.spelling(value);
+            self.node(pending, None, 64, Some(target), spelling, |output| Node::Move { width: 64, output, source: value.id })?;
+        }
+        Ok(())
     }
 
     /// The region computing `term` into `target`, and everything before it.
-    fn tail(&mut self, program: &mut Program, term: &Term, cx: &Rc<Cx>, depth: u32, target: u64) -> Result<(ProgramRegion, String), SourceError> {
+    fn tail(&mut self, program: &mut Program, term: &Term, cx: &Rc<Cx>, depth: u32, target: &Target) -> Result<(ProgramRegion, String), SourceError> {
         let expansion = self.compute(program, term, cx, depth, target)?;
         Ok((self.close()?, expansion))
     }
+}
+
+/// A pass's branching, from its tree's region: a conditional ends each
+/// branch's steps.
+fn split_of(region: &ProgramRegion, names: &BTreeMap<u64, usize>) -> Result<Split, SourceError> {
+    Ok(match region {
+        ProgramRegion::Compose(_, continuation) => split_of(continuation, names)?,
+        ProgramRegion::Conditional { condition, when_true, when_false, .. } => {
+            let name = names.get(condition).copied().ok_or_else(|| SourceError::Unsupported("a pass tests a bit that is no comparison".into()))?;
+            Split::Node(name, Box::new(split_of(when_false, names)?), Box::new(split_of(when_true, names)?))
+        }
+        _ => Split::Leaf,
+    })
 }
 
 fn absolute(term: &Term, caller: usize) -> Option<usize> {

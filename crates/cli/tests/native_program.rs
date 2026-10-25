@@ -58,16 +58,39 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 "#),
 ];
 
-#[test]
-fn programs_with_calls_execute_levels() { execute("levels", &LEVELS); }
+// Loops (issues/function-ir-verified-loop-planning.md): a recursion on a
+// fuel compiled to a loop. One runs out of passes, one leaves at a test in
+// its pass's tree, and one calls a function in its pass.
+const LOOPS: [Case; 3] = [
+    ("loop_triangle", "triangle", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { for (uint64_t n = a & 1023; n != 0; --n) b += n; return b; }
+"#),
+    ("loop_multiply", "multiply", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { return a * b; }
+"#),
+    ("loop_settle", "settle", r#"
+static uint64_t reference(uint64_t x, uint64_t y) {
+    for (unsigned i = 0; i < 100; ++i) { if ((x & 7) == 0) return x; x = (x + y) ^ (x - y); y += 1; }
+    return x ^ y;
+}
+"#),
+];
+
+const CALLS: &[&str] = &["CallTo("];
 
 #[test]
-fn programs_with_calls_execute_composed() { execute("composed", &COMPOSED); }
+fn programs_with_calls_execute_levels() { execute("levels", &LEVELS, CALLS); }
 
 #[test]
-fn programs_with_calls_execute_saved() { execute("saved", &SAVED); }
+fn programs_with_calls_execute_composed() { execute("composed", &COMPOSED, CALLS); }
 
-fn execute(group: &str, cases: &[Case]) {
+#[test]
+fn programs_with_calls_execute_saved() { execute("saved", &SAVED, CALLS); }
+
+#[test]
+fn programs_with_loops_execute() { execute("loops", &LOOPS, &["Loop(", "loop_eval_agrees_from(", "_pass_cased("]); }
+
+fn execute(group: &str, cases: &[Case], claims: &[&str]) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = root.join(format!("target/native-program-{group}-{}-{nonce}", std::process::id()));
@@ -81,7 +104,7 @@ fn execute(group: &str, cases: &[Case]) {
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         assert!(String::from_utf8_lossy(&result.stdout).contains("certified program bytes"), "{file} took the verified lowering");
         let certificate = std::fs::read_to_string(dir.join(format!("{file}.certificate.hthr"))).unwrap();
-        for claim in ["_lowers()", "_agrees(", "_bytes()", "_entry_at()", "_returns<M>", "compiled_returns<M>(", "CallTo("] {
+        for claim in ["_lowers()", "_agrees(", "_bytes()", "_entry_at()", "_returns<M>", "compiled_returns<M>("].iter().chain(claims) {
             assert!(certificate.contains(claim), "{file}: missing {claim}");
         }
         let driver = dir.join(format!("{file}.c"));
@@ -112,6 +135,37 @@ int main(void) {{
         assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
         let run = Command::new(&binary).output().unwrap();
         assert!(run.status.success(), "{file}: {}", String::from_utf8_lossy(&run.stdout));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// What the loop fragment refuses, each with its reason: a fuel that is no
+// word's `toNat`, a recursion read as a value, and a loop in a function
+// another calls.
+#[test]
+fn loop_sources_are_refused() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-loop-refusals-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let recursion = "fn count(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {\n\
+        match fuel { Zero => acc, Succ(k) => count(k, n.sub(BitVec::ofNat(1)), acc.add(n)) }\n}\n";
+    let cases = [
+        ("literal_fuel", "fn literal_fuel(a, b: BitVec(64)) → BitVec(64) { count(10, a, b) }\n", "as `w.toNat()` of a word"),
+        ("read_recursion", "fn after(fuel: Nat, n: BitVec(64)) → BitVec(64) {\n\
+            match fuel { Zero => n, Succ(k) => after(k, n.add(n)).add(n) }\n}\n\
+            fn read_recursion(a, b: BitVec(64)) → BitVec(64) { after(a.toNat(), b) }\n", "reads its fuel, or its recursion as a value"),
+        ("called_loop", "fn looped(a: BitVec(64)) → BitVec(64) { count(a.toNat(), a, a) }\n\
+            fn called_loop(a, b: BitVec(64)) → BitVec(64) { looped(a).add(b) }\n", "function-ir-loops-anywhere"),
+    ];
+    for (file, body, why) in cases {
+        std::fs::write(dir.join(format!("{file}.hthr")), format!("import bitvec;\n{recursion}{body}")).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+            .arg("compile-x86").arg(dir.join(format!("{file}.hthr"))).args([file, "-o"]).arg(dir.join(format!("{file}.s")))
+            .args(["--cache-dir", "target/native-test-images", "--kernel-workers", "1"])
+            .output().unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success() && stderr.contains(why), "{file}: {stderr}");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

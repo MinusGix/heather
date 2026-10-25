@@ -55,6 +55,127 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
 }
 
 // ---------------------------------------------------------------------------
+// Loops (issues/function-ir-verified-loop-planning.md). A source function
+// that recurses on its fuel, `h(fuel, x…)` matching `Zero` and `Succ(k)`
+// and calling `h(k, …)` only in tail position, compiles to a loop of as
+// many passes as the fuel, called as `h(w.toNat(), …)`. The loop's
+// evaluation is not the source's recursion by conversion: the two are
+// stuck on the same open fuel with different steps. They agree by
+// induction on the fuel, each pass by case analysis on its comparisons,
+// which the compiler proves once per loop with the source's recursion
+// abstracted (`later`).
+
+// What a function computes when `post` follows the loop: run on the loop's
+// end, read at `result`.
+fn loop_finish(post: StructuredRegion, call: Answers(), values: Valuation(), outputs: List<Nat>, exhausted, result: Nat) →
+    LoopEnd → BitVec(64) {
+    λ end => post.eval(call, Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)))(64, result)
+}
+
+// A program's evaluation down to the region before a loop, a step at a
+// time: each instance is its own statement, so no conversion runs into the
+// loop (one comparing a program call with what it computes evaluates both
+// down to the loop's passes).
+theorem program_eval_last(last: Function, earlier: List<Function>, arguments: List<BitVec(64)>):
+    program_eval(Cons(last, earlier), earlier.len(), arguments) = last.eval(program_eval(earlier), arguments) {
+    match earlier.len().eq_dec(earlier.len()) as λ d =>
+        (match d { Inl(_) => last.eval(program_eval(earlier), arguments), Inr(_) => program_eval(earlier, earlier.len(), arguments) }) =
+            last.eval(program_eval(earlier), arguments) {
+        Inl(_) => refl,
+        Inr(ne) => false_elim(ne(refl)),
+    }
+}
+
+theorem function_eval_body(parameters: List<Nat>, body: StructuredRegion, result: Nat, call: Answers(), arguments: List<BitVec(64)>):
+    Function(parameters := parameters, body := body, result := result).eval(call, arguments) =
+        body.eval(call, Valuation::bind(Valuation::zero(), parameters, arguments))(64, result) { refl }
+
+theorem compose_eval(prefix, continuation: StructuredRegion, call: Answers(), values: Valuation(), result: Nat):
+    Compose(prefix, continuation).eval(call, values)(64, result) = continuation.eval(call, prefix.eval(call, values))(64, result) { refl }
+
+// A loop and what follows it, evaluated: stated over any regions, so that
+// a program's instance is this statement and no conversion runs its loop
+// (a constant fuel would unfold it pass by pass).
+theorem loop_then_eval(inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat,
+    next, outputs: List<Nat>, exhausted: Nat, post: StructuredRegion, call: Answers(), values: Valuation(), result: Nat):
+    Compose(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), post).eval(call, values)(64, result) =
+        loop_finish(post, call, values, outputs, exhausted, result)(loop_eval(λ (pass: Valuation()) => body.eval(call, pass), parameters,
+            count, exit, next, values(64, bound).toNat(), words_of(values, inputs))) { refl }
+
+// One pass from the state `words_of(v, parameters)` with `Succ(r)` passes
+// left: leaving, what `finish` makes of the next state; going round,
+// `later` of it.
+fn loop_pass(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>, finish: LoopEnd → BitVec(64),
+    later: List<BitVec(64)> → BitVec(64), r: Nat, v: Valuation()) → BitVec(64) {
+    let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)));
+    match after(1, exit).head_bit() {
+        False => later(words_of(after, next)),
+        True => finish(LoopEnd(words_of(after, next), False)),
+    }
+}
+
+// A loop agrees with `run`, a recursion on its fuel, when it does with no
+// passes left, and each pass does with the recursion on the passes after
+// it.
+theorem loop_eval_agrees(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    apart: distinct(parameters).IsTrue(), lengths: next.len() = parameters.len(), finish: LoopEnd → BitVec(64),
+    run: Nat → List<BitVec(64)> → BitVec(64),
+    at_zero: (v: Valuation()) → finish(LoopEnd(words_of(v, parameters), True)) = run(0, words_of(v, parameters)),
+    at_pass: (r: Nat) → (v: Valuation()) →
+        loop_pass(step, parameters, count, exit, next, finish, λ (state: List<BitVec(64)>) => run(r, state), r, v) =
+            run(Succ(r), words_of(v, parameters)),
+    remaining: Nat):
+    (v: Valuation()) → finish(loop_eval(step, parameters, count, exit, next, remaining, words_of(v, parameters))) =
+        run(remaining, words_of(v, parameters)) {
+    match remaining {
+        Zero => λ v => at_zero(v),
+        Succ(r) => λ v => {
+            let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)));
+            let state = words_of(after, next);
+            let rebound: (words_of(Valuation::bind(Valuation::zero(), parameters, state), parameters) = state) =
+                words_of_bind(Valuation::zero(), parameters, apart, state, sym(trans(words_of_len(after, next), lengths)));
+            let earlier = loop_eval_agrees(step, parameters, count, exit, next, apart, lengths, finish, run, at_zero, at_pass, r,
+                Valuation::bind(Valuation::zero(), parameters, state));
+            let later: (finish(loop_eval(step, parameters, count, exit, next, r, state)) = run(r, state)) =
+                j(rebound, λ st _ => finish(loop_eval(step, parameters, count, exit, next, r, st)) = run(r, st), earlier);
+            (match after(1, exit).head_bit() as λ b =>
+                (match b { False => run(r, state), True => finish(LoopEnd(state, False)) }) = run(Succ(r), words_of(v, parameters)) →
+                finish(match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, r, state),
+                    True => LoopEnd(state, False) }) = run(Succ(r), words_of(v, parameters)) {
+                False => λ passed => trans(later, passed),
+                True => λ passed => passed,
+            })(at_pass(r, v))
+        },
+    }
+}
+
+// The same from the loop's inputs, read at the valuation before it.
+theorem loop_eval_agrees_from(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    apart: distinct(parameters).IsTrue(), lengths: next.len() = parameters.len(), finish: LoopEnd → BitVec(64),
+    run: Nat → List<BitVec(64)> → BitVec(64),
+    at_zero: (v: Valuation()) → finish(LoopEnd(words_of(v, parameters), True)) = run(0, words_of(v, parameters)),
+    at_pass: (r: Nat) → (v: Valuation()) →
+        loop_pass(step, parameters, count, exit, next, finish, λ (state: List<BitVec(64)>) => run(r, state), r, v) =
+            run(Succ(r), words_of(v, parameters)),
+    remaining: Nat, values: Valuation(), inputs: List<Nat>, fits: inputs.len() = parameters.len()):
+    finish(loop_eval(step, parameters, count, exit, next, remaining, words_of(values, inputs))) = run(remaining, words_of(values, inputs)) {
+    let v = Valuation::bind(Valuation::zero(), parameters, words_of(values, inputs));
+    let rebound: (words_of(v, parameters) = words_of(values, inputs)) =
+        words_of_bind(Valuation::zero(), parameters, apart, words_of(values, inputs), sym(trans(words_of_len(values, inputs), fits)));
+    j(rebound, λ st _ => finish(loop_eval(step, parameters, count, exit, next, remaining, st)) = run(remaining, st),
+        loop_eval_agrees(step, parameters, count, exit, next, apart, lengths, finish, run, at_zero, at_pass, remaining, v))
+}
+
+// A state's word `i`, zero past its end: how the compiler reads a source
+// recursion's arguments out of a loop's state.
+fn List::word(self state: List<BitVec(64)>, i: Nat) → BitVec(64) {
+    match state {
+        Nil => BitVec::zero(),
+        Cons(first, rest) => match i { Zero => first, Succ(k) => rest.word(k) },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The lowered code as numbers, for the compiler to read back and state as a
 // literal: every later statement about the code then evaluates the literal,
 // not the lowering again (a declaration's fuel is its own). Nothing proved

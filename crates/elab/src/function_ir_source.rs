@@ -13,7 +13,7 @@ use crate::Elaborator;
 use crate::function_ir_cert::{self as cert, Node, Port, Region};
 
 mod program;
-pub use program::{reflect_program, evaluate_numbers, evaluate_number, ProgramFunction, ProgramRegion, ReflectedProgram};
+pub use program::{reflect_program, evaluate_numbers, evaluate_number, ids, ProgramFunction, ProgramRegion, ReflectedLoop, ReflectedProgram, Split};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceError {
