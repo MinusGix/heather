@@ -1,0 +1,62 @@
+// Probes of `lib/std/itree/itree_trace.hthr` and `itree_state.hthr`
+// (`docs/itree-refinement-round.md`): traces in checking position, cuts,
+// threading a state at a literal and an open start, and programs that grow
+// with fuel. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_itree_trace.rs; the refusals stay there.
+import logic; import nat; import option; import pair; import list; import omega; import itree; import itree_trace; import itree_state;
+
+// A console with one command, so traces are short to spell.
+inductive Cmd { Ask, Say(n: Nat) }
+fn Resp(c: Cmd) → Type { match c { Ask => Nat, Say(_) => True } }
+fn C() → Events { Events(Cmd, λ c => Resp(c)) }
+fn ask() → ITree<Nat>(C()) { ITree::trigger(C(), Ask) }
+
+// A trace the tree can produce, and a prefix.
+theorem answered(): IsTrace<Nat>(C(), ask(), TAns(Ask, 4, TRet(4))) { Answered(4, TRet(4), refl, Returned(refl)) }
+theorem prefix(): IsTrace<Nat>(C(), ask(), TEnd) { IsTrace::nil(C(), ask()) }
+
+// A cut claims only the empty prefix and is below every tree; no tree but a
+// cut is below a cut.
+fn trace_shape<R>(E: Events, tr: Trace<R>(E)) → Nat { match tr { TEnd => 0, TRet(_) => 1, TCall(_) => 2, TAns(_, _, _) => 3 } }
+fn tree_shape<R>(E: Events, t: ITree<R>(E)) → Nat { match t { Ret(_) => 0, Tau(_) => 1, Vis(_, _) => 2, Cut => 3 } }
+theorem cut_empty(E: Events): IsTrace<Nat>(E, Cut, TEnd) { Ended(refl) }
+theorem cut_below<R>(E: Events, t: ITree<R>(E)): ITree::Below(E, Cut, t) { trivial }
+theorem cut_does_not_return(E: Events): ¬(IsTrace<Nat>(E, Cut, TRet(1))) {
+    λ h => {
+        let shapes: (1 = 0) = cong_fn(λ (tr: Trace<Nat>(E)) => trace_shape(E, tr), CutTrace::ended<Nat>(E, TRet(1), h));
+        omega(shapes)
+    }
+}
+theorem leaf_not_below_cut(E: Events): ¬(ITree::Below<Nat>(E, Ret(1), Cut)) {
+    λ h => {
+        let shapes: (3 = 0) = cong_fn(λ (t: ITree<Nat>(E)) => tree_shape(E, t), h);
+        omega(shapes)
+    }
+}
+
+// Threading computes at a literal and at an open state. Binds nested to the
+// left thread in time quadratic in their depth, not `2^d`
+// (issues/tier2-left-nested-bind-cost.md): every `Vis` a `bind` builds reads
+// its child once for the tree and once for the proof, and those two reads
+// share one evaluation.
+fn Counter() → Events { Events::sum(Events::state<Nat>(), Events::none()) }
+fn tick() → ITree<Nat>(Counter()) {
+    ITree::bind(Counter(), ITree::trigger(Counter(), Inl(Get)), λ n =>
+        ITree::bind(Counter(), ITree::trigger(Counter(), Inl(Put(Succ(n)))), λ u => Ret(n)))
+}
+fn lticks(k: Nat) → ITree<Nat>(Counter()) {
+    match k { Zero => Ret(0), Succ(j) => ITree::bind(Counter(), lticks(j), λ n => tick()) }
+}
+theorem thread_literal(): ITree::thread(tick(), 2) = Some(Pair(3, 2)) { refl }
+theorem thread_open(s: Nat): ITree::thread(tick(), s) = Some(Pair(Succ(s), s)) { refl }
+theorem thread_deep(): ITree::thread(lticks(24), 0) = Some(Pair(24, 23)) { refl }
+
+// A program built by `rec` grows with fuel, produces its value, and binds.
+fn body(c: Cmd) → ITree<Resp(c)>(Events::sum(C(), C())) { match c { Ask => Ret(7), Say(_) => Ret(trivial) } }
+fn asks() → Program<Nat>(C()) { Program::rec(C(), C(), λ c => body(c), Ask) }
+theorem asks_grows(n: Nat): ITree::Below(C(), asks().at(n), asks().at(Succ(n))) { asks().grows(n) }
+theorem asks_seven(): Program::Produces<Nat>(C(), asks(), TRet(7)) { Converges(1, Returned(refl)) }
+theorem twice(): Program::Produces<Nat>(C(), Program::bind(C(), asks(), λ a => Program::pure(C(), a + a)), TRet(14)) {
+    Converges(1, Returned(refl))
+}

@@ -473,10 +473,35 @@ argument mismatches a parameter that mentions an implicit, which is an
 elaborator gap
 (`issues/implicit-argument-mismatch-reaches-kernel.md`).
 
-Still to do: the interaction-tree, list, tree, bitvec, text, memory and
-setoid families. `lib_algebra.rs` is the traits feature's corpus over the
-library rather than a library test, so it waits for the `.hthr` corpus
-(§4.3); its refusals already carry reasons.
+Round three did step 3 for the remaining library families: the
+interaction trees (`itree`, its traces and simulations, the coinductive
+trees, their bridge and `Eutt`), `list`, `list_algos`, `bounded_list`,
+`certified_lookup`, `tree`, `bitvec`, `string`, `utf8`, `memory`,
+`location`, `nat`'s evidence rules and the kernel model's reduction. Their
+probes are eighteen `lib/_tests` modules. `lib_list_algos.rs`,
+`lib_std_certified_lookup.rs` and `lib_std_location.rs` went entirely; the
+rest keep refusals with reasons, incompleteness pins (each labelled, §4.6),
+mutation controls that need a proof to mutate, diagnostics that name a goal,
+and the structural and cost tests (`list`'s literal lowering, `bitvec`'s
+machine-width costs and depth budget). Three more client showcases
+(`itree_client`, `itree_refinement_client`, `memory_client`) moved to the
+CLI tier. The wrong values became `¬` theorems, told apart where the type
+has no `Decide` instance by a function into `Nat` and `omega`
+(`mirror_moves`, `overlap_does_not_read_back`, `le_is_not_be`,
+`x80_is_two_bytes`, `refused_is_not_ok`). Pinning reasons found one
+refusal passing for an incidental reason: `bitvec`'s "the value's bound is
+not `trivial`" control wrote an unqualified `toNat`, so `<` had no meaning
+at its carrier and the refusal never reached the claim. And a `decide`
+refusal at a string goal spells the literal's kernel encoding
+(`issues/decide-refusal-spells-string-literal-encoding.md`).
+`lib_setoid_mergeable.rs` stays a Rust file: it tests the relational-context
+generator through its Rust API and the elaborator's subtype and `calc`
+routes, not the library's facts. Its eighteen bare refusals now name their
+reasons.
+
+`lib_algebra.rs` is the traits feature's corpus over the library rather
+than a library test, so it waits for the `.hthr` corpus (§4.3); its
+refusals already carry reasons.
 
 In order of value per effort:
 

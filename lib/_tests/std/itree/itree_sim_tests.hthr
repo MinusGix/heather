@@ -1,0 +1,134 @@
+// Probes of `lib/std/itree/itree_sim.hthr` (`docs/itree-simulation-design.md`):
+// loops at a literal and an open state, generic events throughout, each pass's
+// simulation in checking position. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_itree_sim.rs, whose refusals include a mutation
+// of this file's `twice_second`.
+import logic; import nat; import itree; import itree_trace; import itree_sim;
+
+// A countdown whose passes make no call, against a loop that leaves at once
+// from a state of another type. Silent passes are simulated by the spec
+// staying where it is, at an open state and so at every literal one; the
+// whole loop then refines the spec's.
+fn down_body(E: Events, a: Nat) → ITree<Step<Nat, Nat>>(E) {
+    match a { Zero => Ret(Break(0)), Succ(m) => Ret(Continue(m)) }
+}
+fn now_body(E: Events, u: True) → ITree<Step<True, Nat>>(E) { Ret(Break(0)) }
+theorem down_pass(E: Events, a: Nat, u: True):
+    ITree::PassSim<Nat, True, Nat>(E, E, TraceMap::id(E), Contract::none(E), λ x y => True,
+        λ x => down_body(E, x), λ y => now_body(E, y), a, u)
+{
+    match a {
+        Zero => Inl(SimRet(Break(0), refl, refl)),
+        Succ(_) => Inr(SimRet(Continue(u), refl, trivial)),
+    }
+}
+theorem down_refines(E: Events, a: Nat):
+    Program::Refines<Nat>(E, Program::iter<Nat, Nat>(E, λ x => down_body(E, x), a),
+        Program::iter<True, Nat>(E, λ y => now_body(E, y), trivial))
+{
+    Program::refines_of_simulates(E, Program::iter<Nat, Nat>(E, λ x => down_body(E, x), a),
+        Program::iter<True, Nat>(E, λ y => now_body(E, y), trivial),
+        Program::simulates_iter(E, E, TraceMap::id(E), Contract::none(E), λ x y => True,
+            λ x => down_body(E, x), λ y => now_body(E, y), λ x y r => down_pass(E, x, y), a, trivial, trivial))
+}
+theorem down_three(E: Events):
+    Program::Refines<Nat>(E, Program::iter<Nat, Nat>(E, λ x => down_body(E, x), 3),
+        Program::iter<True, Nat>(E, λ y => now_body(E, y), trivial))
+{
+    down_refines(E, 3)
+}
+
+// One call and then a break with the state, on both sides; the states are
+// related by equality. The spec makes the same call, and every answer leaves
+// with related values.
+fn call_body(E: Events, c: E.Cmd, a: Nat) → ITree<Step<Nat, Nat>>(E) {
+    ITree::bind(E, ITree::trigger(E, c), λ x => Ret(Break(a)))
+}
+theorem call_pass(E: Events, c: E.Cmd, a: Nat, a2: Nat, r: a = a2):
+    ITree::PassSim<Nat, Nat, Nat>(E, E, TraceMap::id(E), Contract::none(E), λ x y => x = y,
+        λ x => call_body(E, c, x), λ y => call_body(E, c, y), a, a2)
+{
+    Inl(SimVis(trivial, λ x => Ret(Break(a2)), refl, λ x v => SimRet(Break(a2), refl, r)))
+}
+theorem call_simulates(E: Events, c: E.Cmd, a: Nat):
+    Program::Simulates<Nat>(E, E, TraceMap::id(E), Contract::none(E),
+        Program::iter<Nat, Nat>(E, λ x => call_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => call_body(E, c, y), a))
+{
+    Program::simulates_iter(E, E, TraceMap::id(E), Contract::none(E), λ x y => x = y,
+        λ x => call_body(E, c, x), λ y => call_body(E, c, y), λ x y r => call_pass(E, c, x, y, r), a, a, refl)
+}
+
+// Up to a continuation (`ITree::SimK`, `ITree::simk_iter`): a countdown whose
+// passes each make two calls is simulated by one whose passes each make one,
+// from twice the state and one more, at twice the fuel (`simulates_at`).
+fn countdown(a: Nat) → Step<Nat, Nat> { match a { Zero => Break(0), Succ(m) => Continue(m) } }
+fn twice_body(E: Events, c: E.Cmd, a: Nat) → ITree<Step<Nat, Nat>>(E) {
+    ITree::bind(E, ITree::trigger(E, c), λ x => ITree::bind(E, ITree::trigger(E, c), λ y => Ret(countdown(a))))
+}
+fn once_body(E: Events, c: E.Cmd, b: Nat) → ITree<Step<Nat, Nat>>(E) {
+    ITree::bind(E, ITree::trigger(E, c), λ x => Ret(countdown(b)))
+}
+fn once_tree(E: Events, c: E.Cmd, fuel, b: Nat) → ITree<Nat>(E) { ITree::iter(E, fuel, λ y => once_body(E, c, y), b) }
+
+// `k` passes of two calls left: the spec one call per pass, two passes
+// behind each of the source's, with the fuel for them.
+record TwiceAt(E: Events, c: E.Cmd, k, a: Nat, v: ITree<Nat>(E)) {
+    fuel: Nat,
+    enough: k.twice() <= fuel,
+    at: ITree::next(E, v) = ITree::next(E, once_tree(E, c, fuel, Succ(a.twice()))),
+}
+
+fn twice_after(E: Events, c: E.Cmd, k: Nat) → Step<Nat, Nat> → ITree<Nat>(E) → Type {
+    λ x w => ITree::StepK(E, λ a v => TwiceAt(E, c, k, a, v), λ r v => SimRet<Nat>(E, v, λ y => r = y), x, w)
+}
+theorem twice_second(E: Events, c: E.Cmd, k, a: Nat, f1: Nat, x: E.Resp(c)): Succ(k.twice()) <= f1 →
+    ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k),
+        ITree::bind(E, ITree::trigger(E, c), λ y => Ret(countdown(a))), Tau(once_tree(E, c, f1, a.twice())))
+{
+    match f1 {
+        Zero => λ (no: False) => false_elim(no),
+        Succ(f2) => λ enough => match a {
+            Zero => SimVis(trivial, λ y => Ret(0), refl, λ y v => SimRet(0, refl, refl)),
+            Succ(m) => SimVis(trivial, λ y => Tau(once_tree(E, c, f2, Succ(m.twice()))), refl,
+                λ y v => TwiceAt(f2, enough, refl)),
+        },
+    }
+}
+
+theorem twice_pass(E: Events, c: E.Cmd, k, a: Nat, v: ITree<Nat>(E), i: TwiceAt(E, c, Succ(k), a, v)):
+    ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k), twice_body(E, c, a), v)
+{
+    (match i.fuel as λ f => Succ(k).twice() <= f → ITree::next(E, v) = ITree::next(E, once_tree(E, c, f, Succ(a.twice()))) →
+            ITree::SimK(E, E, TraceMap::id(E), Contract::none(E), twice_after(E, c, k), twice_body(E, c, a), v) {
+        Zero => λ (no: False) at => false_elim(no),
+        Succ(f1) => λ enough at => SimVis(trivial, λ x => Tau(once_tree(E, c, f1, a.twice())), at,
+            λ x valid => twice_second(E, c, k, a, f1, x, enough)),
+    })(i.enough, i.at)
+}
+
+theorem twice_sim(E: Events, c: E.Cmd, n, a: Nat):
+    ITree::Sim<Nat, Nat>(E, E, TraceMap::id(E), Contract::none(E), λ x y => x = y,
+        ITree::iter(E, n, λ x => twice_body(E, c, x), a), once_tree(E, c, n.twice(), Succ(a.twice())))
+{
+    let head: TwiceAt(E, c, n, a, once_tree(E, c, n.twice(), Succ(a.twice()))) = TwiceAt(n.twice(), n.twice().le_refl(), refl);
+    ITree::simk_iter(E, E, TraceMap::id(E), Contract::none(E), λ x => twice_body(E, c, x), λ k x w => TwiceAt(E, c, k, x, w),
+        λ r w => SimRet<Nat>(E, w, λ y => r = y), λ k x w i => twice_pass(E, c, k, x, w, i), n, a,
+        once_tree(E, c, n.twice(), Succ(a.twice())), head)
+}
+
+theorem twice_simulates(E: Events, c: E.Cmd, a: Nat):
+    Program::Simulates<Nat>(E, E, TraceMap::id(E), Contract::none(E),
+        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), Succ(a.twice())))
+{
+    Program::simulates_at(E, E, TraceMap::id(E), Contract::none(E),
+        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), a), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), Succ(a.twice())),
+        λ n => n.twice(), λ n => twice_sim(E, c, n, a))
+}
+
+theorem twice_three(E: Events, c: E.Cmd):
+    Program::Simulates<Nat>(E, E, TraceMap::id(E), Contract::none(E),
+        Program::iter<Nat, Nat>(E, λ x => twice_body(E, c, x), 3), Program::iter<Nat, Nat>(E, λ y => once_body(E, c, y), 7))
+{
+    twice_simulates(E, c, 3)
+}

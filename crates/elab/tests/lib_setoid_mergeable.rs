@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use heather_elab::{Elaborator, SemanticImage};
 
-use crate::support;
+use crate::support::{self, Refusal};
 
 const MODULES: &[(&str, &str)] = &[
     ("logic", include_str!("../../../lib/std/core/logic.hthr")),
@@ -79,10 +79,7 @@ fn explicit_subtype_template_builds_positive_addition() {
         "λ n p => PositiveNat(n, p)",
         "λ n p => PositiveNat(1, trivial)",
     );
-    assert!(
-        e.elab_module_source("invalid_projection", &changes_value)
-            .is_err()
-    );
+    support::assert_refused(&mut e, "invalid_projection", &changes_value, Refusal::Kernel);
 }
 
 #[test]
@@ -117,9 +114,9 @@ fn lifted(x, y: PositiveNat) -> PositiveNat {
     );
     check(&mut e, "repaired_lift", &repair);
     let wrong = repair.replace("add_positive(a.value, b.value, a.valid)", "a.valid");
-    assert!(e.elab_module_source("wrong_lift", &wrong).is_err());
+    support::assert_refused(&mut e, "wrong_lift", &wrong, Refusal::Kernel);
     let zero = repair.replace(", Nat::add,", ", λ a b => 0,");
-    assert!(e.elab_module_source("zero_lift", &zero).is_err());
+    support::assert_refused(&mut e, "zero_lift", &zero, Refusal::Mismatch);
 }
 
 #[test]
@@ -148,10 +145,7 @@ fn omega_proves_positive_subtype_closure() {
     );
     let false_goal = "import nat; import logic; import int; import list; import omega;
         theorem impossible(): 0 < 0 { omega }";
-    assert!(
-        e.elab_module_source("omega_positive_zero", false_goal)
-            .is_err()
-    );
+    support::assert_refused(&mut e, "omega_positive_zero", false_goal, Refusal::Says("`omega` got stuck"));
     check(
         &mut e,
         "omega_aliases",
@@ -188,10 +182,7 @@ theorem collisions(n, OfNat, Cons, Nil: Nat, Not: Nat, h: 0 < n):
     check(&mut e, "omega_shadowed", shadowed);
     let irrelevant = "import nat; import omega;
         theorem bad(n: Nat, h: n = n): 0 < n { let irrelevant = h; omega }";
-    assert!(
-        e.elab_module_source("omega_irrelevant", irrelevant)
-            .is_err()
-    );
+    support::assert_refused(&mut e, "omega_irrelevant", irrelevant, Refusal::Says("`omega` got stuck"));
     let hidden = "fn hidden(x: int::Int) → int::Int { x }";
     let error = e.elab_module_source("omega_aliases", hidden).unwrap_err();
     assert!(error.render(hidden).contains("neither an imported module"));
@@ -1093,7 +1084,7 @@ fn proof_position_bad_resumption_does_not_register_a_theorem() {
     let source = PROOF_OBSERVER
         .replace(", certificate: PreservesRelation(same, same, observe)", "")
         .replace("rel_cong(h)", "rel_cong(h)\n    on ?compatibility := h;");
-    assert!(e.elab_module_source("bad_resumption", &source).is_err());
+    support::assert_refused(&mut e, "bad_resumption", &source, Refusal::Kernel);
     // The same module/declaration can be checked afterward with valid evidence.
     check(&mut e, "bad_resumption", PROOF_OBSERVER);
 }
@@ -1342,7 +1333,7 @@ fn add_missing(x, y: PositiveNat) -> PositiveNat {
     );
     check(&mut e, "repaired_closure", &repaired);
     let wrong = repaired.replace("add_positive(x.value, y.value, x.valid)", "x.valid");
-    assert!(e.elab_module_source("wrong_closure", &wrong).is_err());
+    support::assert_refused(&mut e, "wrong_closure", &wrong, Refusal::Mismatch);
 }
 
 #[test]
@@ -1364,7 +1355,7 @@ fn zero_unit() -> PositiveNat { PositiveNat(value := 0, valid := ?valid) }
         "{message}"
     );
     let wrong = source.replace("?valid", "trivial");
-    assert!(e.elab_module_source("invalid_zero", &wrong).is_err());
+    support::assert_refused(&mut e, "invalid_zero", &wrong, Refusal::Says("`trivial` proves `True`, but `False` is expected here"));
 }
 
 #[test]
@@ -1376,7 +1367,7 @@ import positive_subtype;
 theorem proof_identity(n: Nat, p, q: 0 < n):
     PositiveNat(n, p) = PositiveNat(n, q) { refl }
 "#;
-    assert!(e.elab_module_source("proof_identity", source).is_err());
+    support::assert_refused(&mut e, "proof_identity", source, Refusal::Kernel);
 }
 
 #[test]
@@ -1412,17 +1403,11 @@ fn witness_dependent_subtype_retains_computation_and_limits_transfer() {
     let observation = "import witness_subtype;
         theorem invalid(x, y: WitnessedNat, same: SameNumber(x, y)):
             chosen_bound(x) = chosen_bound(y) { same }";
-    assert!(
-        e.elab_module_source("invalid_bound_observation", observation)
-            .is_err()
-    );
+    support::assert_refused(&mut e, "invalid_bound_observation", observation, Refusal::Mismatch);
     let dependent = "import nat; import witness_subtype;
         fn invalid(x, y: WitnessedNat, same: SameNumber(x, y),
             index: Fin(Succ(chosen_bound(x)))) → Fin(Succ(chosen_bound(y))) { index }";
-    assert!(
-        e.elab_module_source("invalid_bound_transport", dependent)
-            .is_err()
-    );
+    support::assert_refused(&mut e, "invalid_bound_transport", dependent, Refusal::Kernel);
     check(
         &mut e,
         "fresh_bound_index",
@@ -1452,7 +1437,7 @@ fn dependent_element_transport_preserves_values_but_retains_membership() {
     );
     let reuse = "import list; import list_setoid; import element_transport;
         fn invalid<A>(xs, ys: List<A>, h: SameMembers(xs, ys), e: Element<A>(xs)) → Element<A>(ys) { e }";
-    assert!(e.elab_module_source("invalid_fiber_reuse", reuse).is_err());
+    support::assert_refused(&mut e, "invalid_fiber_reuse", reuse, Refusal::Mismatch);
     check(
         &mut e,
         "explicit_fiber_move",
@@ -1460,25 +1445,17 @@ fn dependent_element_transport_preserves_values_but_retains_membership() {
     );
     let identity = "import list; import element_transport;
         theorem invalid(): first_zero() = second_zero() { refl }";
-    assert!(
-        e.elab_module_source("invalid_membership_identity", identity)
-            .is_err()
-    );
+    support::assert_refused(&mut e, "invalid_membership_identity", identity, Refusal::Kernel);
     let premise = "import list; import list_setoid; import element_transport;
         theorem preserved<A>(xs, ys: List<A>, h: SameMembers(xs, ys), e: Element<A>(xs),
             P: A → Type, proof: P(e.value)): P(move_element(xs, ys, h, e).value) {
             move_property(xs, ys, h, e, P, proof)
         }";
     check(&mut e, "preserved_element_property", premise);
-    assert!(
-        e.elab_module_source(
-            "missing_element_property",
+    support::assert_refused(&mut e, "missing_element_property",
             &premise
                 .replace(", proof: P(e.value)", "")
-                .replace("P, proof)", "P, refl)")
-        )
-        .is_err()
-    );
+                .replace("P, proof)", "P, refl)"), Refusal::Says("`refl` needs an `=` expected type"));
 }
 
 #[test]
@@ -1526,14 +1503,12 @@ theorem one<A>(same as ≈: A → A → Type, a, b: A, h: a ≈ b): a ≈ b {
         theorem wrong<A>(same as ≈: A → A → Type, a, b, c: A, h: a ≈ b): a ≈ b {
             calc { a ≈ c := h }
         }";
-    assert!(e.elab_module_source("wrong_calc_endpoint", wrong).is_err());
+    support::assert_refused(&mut e, "wrong_calc_endpoint", wrong, Refusal::Mismatch);
     let missing = "import relation_props;
         theorem missing<A>(same as ≈: A → A → Type, a, b, c: A, h: a ≈ b, k: b ≈ c): a ≈ c {
             calc { a ≈ b := h, ≈ c := k }
         }";
-    assert!(e
-        .elab_module_source("missing_calc_transitivity", missing)
-        .is_err());
+    support::assert_refused(&mut e, "missing_calc_transitivity", missing, Refusal::Says("no instance for `Transitive<A>(R)`"));
     // An `=` step beside `≈` transports and needs no class
     // (issues/calc-over-order-relations.md) ...
     check(
@@ -1551,7 +1526,7 @@ theorem one<A>(same as ≈: A → A → Type, a, b: A, h: a ≈ b): a ≈ b {
             a, b, c: A, h: a ≈ b, k: b <= c): a <= c {
             calc { a ≈ b := h, <= c := k }
         }";
-    assert!(e.elab_module_source("mixed_calc_without_trans", mixed).is_err());
+    support::assert_refused(&mut e, "mixed_calc_without_trans", mixed, Refusal::Says("no instance for `Trans<A>(R, S, T)`"));
 }
 
 #[test]
@@ -1779,7 +1754,7 @@ theorem certified<A: Reflexive(same)>(same: A → A → Type, test: A → Bool, 
         "{ rel_derive }",
         "{ rel_derive on ?branch_choice := compatible; }",
     );
-    assert!(e.elab_module_source("wrong_branch", &wrong).is_err());
+    support::assert_refused(&mut e, "wrong_branch", &wrong, Refusal::Kernel);
 }
 
 #[test]

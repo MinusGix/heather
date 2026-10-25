@@ -18,8 +18,6 @@ mod codata_indexed;
 mod lib_algebra;
 #[path = "../lib_kernel_model_reduction.rs"]
 mod lib_kernel_model_reduction;
-#[path = "../lib_list_algos.rs"]
-mod lib_list_algos;
 #[path = "../lib_setoid_mergeable.rs"]
 mod lib_setoid_mergeable;
 #[path = "../lib_std_bitvec.rs"]
@@ -34,8 +32,6 @@ mod lib_std_coitree_bridge;
 mod lib_std_coitree_eutt;
 #[path = "../lib_std_creal.rs"]
 mod lib_std_creal;
-#[path = "../lib_std_certified_lookup.rs"]
-mod lib_std_certified_lookup;
 #[path = "../lib_std_evidence.rs"]
 mod lib_std_evidence;
 #[path = "../lib_std_float.rs"]
@@ -50,8 +46,6 @@ mod lib_std_itree_sim;
 mod lib_std_int;
 #[path = "../lib_std_list.rs"]
 mod lib_std_list;
-#[path = "../lib_std_location.rs"]
-mod lib_std_location;
 #[path = "../lib_std_memory.rs"]
 mod lib_std_memory;
 #[path = "../lib_std_ordered_field.rs"]

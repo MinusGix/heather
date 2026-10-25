@@ -1,0 +1,41 @@
+// Probes of `lib/std/data/tree.hthr`, the branching half of the explicit
+// recursion-algebra experiment (`issues/datatype-container-algebras.md`):
+// fusion through a fold that uses both `Node` results at an open leaf type
+// and a neutral tree, which a linear list fold cannot exercise; the fold and
+// the mirror pass computing at a closed tree; and the `¬` theorem that the
+// mirror moves leaves. Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_tree.rs; the refusals stay there.
+import list; import nat; import tree; import logic; import omega;
+
+fn leaves_alg<A>() → TreeAlg<A, List<A>> { TreeAlg<A, List<A>> { leaf: λ (a: A) => [a], node: List::append } }
+fn leaf_count_alg<A>() → TreeAlg<A, Nat> { TreeAlg<A, Nat> { leaf: λ (a: A) => 1, node: Nat::add } }
+
+theorem leaf_count_fusion<A>(tree: Tree<A>): tree_fold(leaves_alg<A>(), tree).len() = tree_fold(leaf_count_alg<A>(), tree) {
+    tree_fold_fusion(
+        leaves_alg<A>(), leaf_count_alg<A>(), λ (xs: List<A>) => xs.len(),
+        λ (a: A) => refl,
+        λ (left: List<A>) (right: List<A>) => left.len_append(right), tree)
+}
+
+fn sample() → Tree<Nat> { Node(Leaf(2), Node(Leaf(3), Leaf(5))) }
+
+theorem leaves_compute(): tree_fold(leaves_alg<Nat>(), sample()) = [2, 3, 5] { refl }
+// Three leaves plus two internal nodes.
+theorem size_computes(): tree_size(sample()) = 5 { refl }
+theorem rebuild_computes(): tree_fold(tree_rebuild_alg<Nat>(), sample()) = sample() { tree_rebuild_id(sample()) }
+
+theorem mirror_computes(): tree_mirror(sample()) = Node(Node(Leaf(5), Leaf(3)), Leaf(2)) { refl }
+theorem mirror_keeps_size(): tree_size(tree_mirror(sample())) = tree_size(sample()) { tree_mirror_size(sample()) }
+theorem mirror_certificate_is_generic<A>(tree: Tree<A>):
+    TreeSameSize<A>(tree, run_tree_pass(TreeSameSize<A>, mirror_pass<A>(), tree))
+{ tree_pass_sound(TreeSameSize<A>, mirror_pass<A>(), tree) }
+
+// The mirror keeps the size and still changes the tree: its leftmost leaf.
+fn leftmost() → TreeAlg<Nat, Nat> { TreeAlg<Nat, Nat> { leaf: λ (n: Nat) => n, node: λ (l: Nat) (r: Nat) => l } }
+theorem mirror_moves(): ¬(tree_mirror(sample()) = sample()) {
+    λ h => {
+        let s: (5 = 2) = cong_fn(λ (t: Tree<Nat>) => tree_fold(leftmost(), t), h);
+        omega(s)
+    }
+}
