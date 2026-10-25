@@ -5,7 +5,7 @@ labels: [metatheory,design]
 area: mathematics
 milestone: [math-metatheory]
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 ---
 
 heather-coq is the primary formalization of Heather's metatheory. Minus
@@ -38,3 +38,10 @@ bridge to `hih-kernel-model`.
 
 - 2026-10-24: Opened with the assessment. Nothing is ported. The doc's §10
   lists the decisions that are Minus's.
+- 2026-10-25: Two blockers landed: [[mutual-inductive-declarations]] (#163)
+  and [[indexed-infinitary-families]] (#166). The assessment is revised
+  after `docs/definitional-inversion-survey.md` (PR #173). Injectivity,
+  subject reduction and progress have a proof without normalization, so
+  they are not behind the Gödel limit. The doc's new rung 2b is that proof.
+  Algorithmic soundness needs only injectivity, subject reduction and four
+  layer-M equations (doc §6).
