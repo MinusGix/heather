@@ -1,6 +1,6 @@
 ---
 title: Inferred cong does not see through the IWf-on-W route's rebuilt children
-status: open
+status: closed
 labels: [elaborator,indexed-families,ergonomics]
 area: language
 milestone: [math-metatheory]
@@ -40,3 +40,12 @@ a constructor of a logical relation.
 
 - 2026-10-25: Filed from the IWf-on-W round
   ([[indexed-infinitary-families]]).
+- 2026-10-25: Done, generally rather than by Σ-η contraction (option 1 alone did not
+  suffice: the annotations differ too): `cong` gets a third attempt that
+  anti-unifies the whnf'd sides with the hole allowed at any outermost pair
+  of subterms converting to the endpoints, checked in `Γ, z` and then by the
+  kernel at `?f`'s type (`lgg_body_up_to_conversion`, design §13).
+  `cp_size` in `iwf_infinitary.rs` now uses plain `cong` in its one-child
+  arms. The `k̄` arms still state endpoints for cost:
+  [[elab-whnf-family-transport-cost]]. `rewrite` still finds occurrences by
+  head, which a rebuilt child's reduct lacks (the `Two` arm keeps `add_eq`).

@@ -162,6 +162,7 @@ pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, M
         s: s.clone(),
         t: t.clone(),
         match_witness: true,
+        conv: None,
         witness: Vec::new(),
         path: Vec::new(),
     };
@@ -169,6 +170,41 @@ pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, M
     // meets is already in the body's scope and the pieces it keeps need no
     // renumbering. The witness for depth `k` is correspondingly `s` weakened
     // by `k + 1`.
+    lgg.tm(&x.shift_local(1), &y.shift_local(1), 0)
+}
+
+/// [`lgg_body`] with the witness tested up to conversion: at a node where
+/// the two sides differ and are not syntactically `(s, t)`, `conv` may still
+/// make it the hole, if the node is under none of the walk's binders and the
+/// sides convert to `(s, t)` there (in `Γ, z`, so nothing is strengthened:
+/// the sides are reducts that can be very large, and only the endpoints are
+/// weakened). A difference anywhere else still stops the walk.
+///
+/// What it is for: a goal reduced through two functions' eliminators has, in
+/// place of the endpoints' calls, their reducts — and on a family a value
+/// built by one function and taken apart by another carries annotations
+/// spelled with the constructor's pieces as each function wrote them, so the
+/// reducts are convertible to the endpoints and never syntactically equal to
+/// them (`issues/cong-inference-through-iwf-w-children.md`). `conv` is asked
+/// only at differing nodes, top-down, so in the common case once per side.
+pub(crate) fn lgg_body_up_to_conversion(
+    x: &Term,
+    y: &Term,
+    s: &Term,
+    t: &Term,
+    conv: &dyn Fn(&Term, &Term) -> bool,
+) -> Result<Term, Mismatch> {
+    if s == t {
+        return lgg_body(x, y, s, t);
+    }
+    let mut lgg = Lgg {
+        s: s.clone(),
+        t: t.clone(),
+        match_witness: true,
+        conv: Some(conv),
+        witness: Vec::new(),
+        path: Vec::new(),
+    };
     lgg.tm(&x.shift_local(1), &y.shift_local(1), 0)
 }
 
@@ -196,19 +232,24 @@ pub(crate) fn first_difference(x: &Term, y: &Term) -> Option<Mismatch> {
         s: Term::Zero,
         t: Term::Zero,
         match_witness: false,
+        conv: None,
         witness: Vec::new(),
         path: Vec::new(),
     };
     lgg.tm(x, y, 0).err()
 }
 
-struct Lgg {
+struct Lgg<'c> {
     s: Term,
     t: Term,
     /// Whether [`Self::is_hole`] may answer `true`. Off in
     /// [`first_difference`], where there is no witness pair and every
     /// difference is meant to stop the walk.
     match_witness: bool,
+    /// [`lgg_body_up_to_conversion`]'s witness test: given the two sides at
+    /// a node directly below the abstraction (scoped in `Γ, z`), whether they
+    /// are `(s, t)` up to conversion there.
+    conv: Option<&'c dyn Fn(&Term, &Term) -> bool>,
     /// `witness[k]` is `(s, t)` weakened into `Γ, z` plus `k` further
     /// binders. Memoized because the walk asks for it at every node.
     witness: Vec<(Term, Term)>,
@@ -291,7 +332,7 @@ fn former_ty(t: &Type) -> &'static str {
     }
 }
 
-impl Lgg {
+impl Lgg<'_> {
     fn is_hole(&mut self, x: &Term, y: &Term, k: u32) -> bool {
         if !self.match_witness {
             return false;
@@ -378,7 +419,7 @@ impl Lgg {
         if x == y {
             return Ok(x.clone());
         }
-        if self.is_hole(x, y, k) {
+        if self.is_hole(x, y, k) || (k == 0 && self.conv.is_some_and(|conv| conv(x, y))) {
             return Ok(Term::Var(LocalVar(k)));
         }
         match (x, y) {

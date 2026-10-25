@@ -1,6 +1,7 @@
 # Indexed families with infinitary premises: the `IWf` route on `W`
 
-Status: **landed** (2026-10-25); the scheme was written before the code (2026-10-24), for
+Status: **landed** (2026-10-25), no-confusion and `cong` up to conversion
+added the same day (§13); the scheme was written before the code (2026-10-24), for
 `issues/indexed-infinitary-families.md`, option 2 ("a tier-2 lowering for
 indexed families: `W` plus an index well-formedness predicate, no kernel
 change"). §12 records what writing the code changed.
@@ -291,8 +292,9 @@ Values carry proofs, which the `IWf` route was designed to avoid
 
 Curried function fields (`(y: A) -> (z: B) -> D(e)`); container fields;
 `inj` at a recursive field (tier 2 §9's reason, unchanged); no-confusion
-(`absurd`, payload `inj`) on this route (the `IWf` route's own `absurd`
-reads `Supi`, so each needs its `W` twin); generated-definition naming of
+(`absurd`, payload `inj`) on this route (this said the `IWf` route's own
+`absurd` reads `Supi`; in fact neither form had `absurd` or `inj` until §13,
+which adds them to both); generated-definition naming of
 `ok` (tier 2 §13's lever, to pull when a measured profile asks); native and
 certificate generators, which keep refusing.
 
@@ -378,4 +380,58 @@ around it (the motive, inversion, the arm environment) is shared;
    mutual groups (unindexed, and an indexed member whose function child
    varies its index).
 7. No-confusion on this route stays out (§10):
-   [[iwf-w-no-confusion]].
+   [[iwf-w-no-confusion]]. Landed in §13, with item 5's `cong`.
+
+## 13. No-confusion and `cong` up to conversion
+
+The round after §12, for [[iwf-w-no-confusion]] and
+[[cong-inference-through-iwf-w-children]].
+
+**No-confusion on both forms.** `absurd` and `inj` had no case for an
+indexed family on either route: `build_absurd`/`build_inj` read a tier-0
+declaration's `Sup`, and an `IWf`-route family (kernel `IWf` or the `W`
+form) fell through to "not an inductive". `crates/elab/src/iwf_confusion.rs`
+adds the tier-0 §6 scheme for a family handle, so both forms share it:
+
+- *Reading a side.* Each side is whnf'd and read as a constructor: the label
+  of a `Supi` (kernel form) or of the `Sup` under the pair's `fst` (`W`
+  form), then the label's injection path picks the constructor and its
+  payload tuple. A neutral side is refused, as on tier 0.
+- *The constant-motive function.* `absurd` transports along `p : l = r`
+  with motive `y ↦ El⁰(tag_i(y))`, where `tag_i` is an `elim_IWf` (kernel
+  form) or an `elim_W` on `fst y` (`W` form) whose step ignores its
+  children and answers `Unit` at constructor `i`, `Empty` elsewhere; the
+  case is `⋆` and the result is eliminated with `elim_Empty`. `inj` at
+  payload field `k` uses the same eliminator with a step that projects field
+  `k` of the label (the field's own default elsewhere), and answers
+  `Id(A_k; a_k; b_k)`. Neither motive ever inspects the index, so both are
+  correct at any index and need no inversion.
+- *What stays out.* `inj` at a recursive field is refused with tier 2 §9's
+  reason: the children are the tree's subtrees, not fields of the label. A
+  dependent payload field (`A_k` mentioning earlier fields) is accepted when
+  its type at both sides converts. The reported endpoints are the written
+  tuple's components, so a wrong `inj` claim fails as a mismatch at the
+  surface rather than as an unspellable kernel term.
+
+**`cong` up to conversion.** §12 item 5's failure was anti-unification
+being syntactic: the reduct of `f(C(…, g(x)))` mentions `⟨fst X, snd X⟩`
+and arm-spelled annotations where the other side has `X`. The fix is general
+(`lgg.rs`, `lgg_body_up_to_conversion`), not route-specific: when the
+syntactic and the whnf'd attempts both fail, a third pass anti-unifies the
+whnf'd sides again, but at the outermost binder level (no bound variables
+of the term in scope) it may also put the hole at any pair of subterms that
+convert to the equation's endpoints `s` and `t`. Conversion runs in `Γ, z`
+against `s↑` and `t↑`, so no subterm is strengthened out of the extended
+context (strengthening the large reducts was the first attempt's cost).
+The generalized body is accepted only if `λz.body` kernel-checks at
+`?f`'s type; otherwise the second attempt's mismatch is reported, so a goal
+that is not a congruence keeps its old diagnostic.
+
+Costs, as shapes: the third pass converts at most each subterm pair the
+syntactic walk reaches against two fixed terms, and runs only when the
+first two fail. What dominates on this route is not the pass but the second
+attempt's whnf of the goal, which respells the reduct by substitution
+through the `J` transports (§7); on a `k̄` arm that is large enough that the
+suite states endpoints there instead:
+[[elab-whnf-family-transport-cost]]. `rewrite` is unchanged: it finds an
+occurrence by head, which a rebuilt child's reduct lacks.
