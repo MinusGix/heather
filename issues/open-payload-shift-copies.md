@@ -4,7 +4,7 @@ status: open
 labels: [kernel,performance]
 area: kernel
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-10-25
 ---
 
 The residue `subst.rs`'s module docs have flagged since
@@ -36,3 +36,4 @@ dominate a real workload.
 
 - 2026-07-31: Definitions landed ([[simulate-conversion-cost]]) and the prediction in the body held in the direction that matters: the inlined interpreter is gone from statements and ih terms, and heather check lib/certgen/ir_v1.hthr went 13.6s -> 2.1s without touching payload copying. The post-definitions profile this issue's trigger asks for has NOT been taken, so whether ShiftLocal payload copies still dominate anything real is open -- that measurement is the next thing this issue wants, and it is cheap.
 - 2026-07-31: The cheap measurement the last entry asked for is taken: post-definitions perf profile of release heather check lib/certgen/ir_v1.hthr shows local substitution (sub_tm/sub_ty/ShiftLocal) at ~4.4% total, no payload-copy line above noise. Trigger NOT fired; the representation change stays deferred. Dominant costs are Psi cloning ([[context-representation-clones]], ~16%) and level normalization (new issue [[level-normalization-allocation]], ~14%).
+- 2026-10-25: Pottier's *Fast thinnings via segment maps* (docs/segmap-survey.md, §3) is the reference for the shift annotation's data structure if this representation change is ever taken: composing one binder's weight-1 shift onto an accumulated annotation is O(log W), lookup is O(log W), and `prune` against the memoized max free index keeps annotations proportional to the variables used. It does not lower the risk this issue names: segment maps need the §3.5 variant to be canonical, and even canonical annotations need a push-to-leaves normalization before every `==` (□ conversion, the elaborator's strengthening and zonking tests, the bounds memo). Trigger unchanged. The survey's one value-machine idea, a random-access-list environment, is [[env-lookup-depth]].
