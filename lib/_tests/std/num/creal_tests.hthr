@@ -1,0 +1,96 @@
+// Probes of `lib/std/num/creal.hthr`: theorems that pin the concept down at
+// specific values and restate the contract at open ones. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5). Moved from crates/elab/tests/lib_std_creal.rs; the refusals that
+// need the checker stay there.
+import logic; import bool; import nat; import list; import int; import algebra; import omega; import rat;
+import creal; import relation_props; import algebra_rel;
+
+// Instance resolution finds the equivalence, the strict and non-strict
+// orders' transitivity, and `+` and `*`'s compatibility with `≈`.
+theorem resolved(x, y, z: CReal, a: x ≈ y, b: y ≈ z): x ≈ z { relation_step(CReal::Same, x, y, z, a, b) }
+theorem resolved_lt(x, y, z: CReal, a: x < y, b: y < z): x < z { relation_step(CReal::Lt, x, y, z, a, b) }
+theorem resolved_cong(x, y, z: CReal, a: y ≈ z): x + y ≈ x + z { rel_cong(a) }
+theorem resolved_mul_cong(x, y, z: CReal, a: y ≈ z): x * y ≈ x * z { rel_cong(a) }
+theorem resolved_le(x, y, z: CReal, a: x <= y, b: y <= z): x <= z { relation_step(CReal::Le, x, y, z, a, b) }
+
+// A constant sequence is regular; n ↦ n is not, since it moves by more than
+// 1/(m+1) + 1/(n+1).
+fn constant(q: Rat) → CReal { CReal(λ n => q, λ m n => CReal::const_regular(q, m, n)) }
+theorem identity_not_regular(): ¬((m, n: Nat) → (Rat::ofInt(OfNat(m)) - Rat::ofInt(OfNat(n))).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n)) {
+    λ h => omega(h(0, 3))
+}
+
+// `≈` is not identity: 1/2 and 2/4 embed as different sequences that are
+// the same real, and distinct rationals embed as distinct reals.
+theorem half_same(): CReal::ofRat(Rat(OfNat(1), 2)) ≈ CReal::ofRat(Rat(OfNat(2), 4)) { CReal::ofRat_respects(refl) }
+theorem half_not_equal(): ¬(CReal::ofRat(Rat(OfNat(1), 2)) = CReal::ofRat(Rat(OfNat(2), 4))) {
+    λ h => {
+        let nums: (Int::OfNat(1) = Int::OfNat(2)) = cong_fn(λ (x: CReal) => x.seq(0).num, h);
+        omega(nums)
+    }
+}
+theorem zero_not_one(): ¬(CReal::Same(0, 1)) { λ h => omega(CReal::ofRat_inj(h)) }
+
+// A sum reads its summands at index 2n+1, so `x + 0` is not `x` term by
+// term; it is only close from index 2k+1 on (`CReal::add_zero`).
+theorem sum_index(x, y: CReal, n: Nat): (x + y).seq(n) = x.seq(n + n + 1) + y.seq(n + n + 1) { refl }
+
+// A product reads both factors at an index that depends on their bounds.
+theorem product_index(x, y: CReal, n: Nat): (x * y).seq(n) = x.seq(x.mul_at(y, n)) * y.seq(x.mul_at(y, n)) { refl }
+theorem bound(): CReal::ofRat(Rat(-OfNat(7), 2)).bound() = 9 { refl }
+
+// `<` is strict, and `≤` is a refutation that carries no gap: 0 < 1, so
+// 1 ≤ 0 is refuted, and 0 < 0 fails.
+theorem zero_lt_one(): CReal::Lt(0, 1) {
+    let gap: (Rat::Lt(0, 1)) = omega;
+    CReal::ofRat_lt(gap)
+}
+theorem one_not_le_zero(): ¬(CReal::Le(1, 0)) { λ h => h(zero_lt_one()) }
+theorem lt_irreflexive(x: CReal): ¬(x < x) { λ h => CReal::lt_irrefl(x, h) }
+theorem le_is_not_lt(): ¬((x: CReal) → x <= x → x < x) { λ h => CReal::lt_irrefl(0, h(0, CReal::le_refl(0))) }
+
+// The moduli and gaps are theorems whose statements carry data, so their
+// sealed proofs open where a projection is stuck on them and the witnesses
+// evaluate (`issues/theorem-witness-unfolding.md`). A product law's modulus
+// opens `mul_close`, which opens `same_close_far`: 1 · 1 has bound 3 on each
+// side, so the factors must be within 1/14, which regularity grants from
+// index 55 on.
+theorem modulus(): (CReal::add_zero(0, 2)).witness = 5 { refl }
+theorem trans_start(x: CReal): (CReal::same_trans(x.same_refl(), x.same_refl(), 4)).witness = 0 { refl }
+theorem product_modulus(): (CReal::mul_comm(1, 1, 0)).witness = 55 { refl }
+
+// The inverse: zero has none (an apartness at zero is absurd), it reads past
+// the gap's start and far enough out to pay for the reciprocal's (k+1)², and
+// it computes: 1/1 has gap 1/2 (k = 1), 1⁻¹ reads 1, and the reciprocal of -2
+// reads -1/2.
+fn inv_one() → CReal {
+    let above: (0 + Rat::inv_succ(0) <= 1) = omega;
+    CReal::inv(1, h := Inr(Exists(0, Exists(0, λ n from => above))))
+}
+theorem zero_absurd(h: CReal::Apart(0, 0)): False { CReal::apart_irrefl(0, h) }
+theorem inv_index(x: CReal, k, s: Nat, gap: x.Away(k, s), n: Nat): x.inv_gap(k, s, gap).seq(n) = x.seq(CReal::inv_at(k, s, n)).recip() { refl }
+theorem one_apart(): CReal::Apart(1, 0) { Inr(zero_lt_one()) }
+theorem gap_size(): (CReal::away_of_apart(1, one_apart())).witness = 1 { refl }
+theorem inv_one_term(): CReal::inv(1, h := one_apart()).seq(3) = 1 { refl }
+theorem neg_two_apart(): CReal::ofRat(Rat(-OfNat(2), 1)).Apart(0) {
+    let gap: (Rat(-OfNat(2), 1) < 0) = omega;
+    Inl(CReal::ofRat_lt(gap))
+}
+theorem inv_neg_two_term(): CReal::ofRat(Rat(-OfNat(2), 1)).inv(h := neg_two_apart()).seq(5) = Rat(-OfNat(1), 2) { refl }
+
+// Order and addition: the shifted gap is data, the same 1/(k+1) from the
+// same start, and it evaluates.
+theorem shifted(z: CReal): CReal::add_lt_mono_r(0, 1, z, zero_lt_one()).witness = 1 { refl }
+
+// `x⁻¹` and `x ^ n` (docs/inverse-power-notation-design.md): the apartness
+// is searched from a local apartness or sign, or from an embedded
+// rational's sign; a negative power needs it and a natural one does not.
+theorem from_apart(x: CReal, h: x.Apart(0)): x * x⁻¹ ≈ 1 { x.mul_inv() }
+theorem from_negative(x: CReal, h: x < 0): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one() }
+theorem square(x: CReal): x ^ 2 ≈ x * x { x.pow_two() }
+theorem embedded(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat(Rat(OfNat(2), 1)⁻¹) { CReal::ofRat_inv(Rat(OfNat(2), 1)) }
+
+// Order and multiplication: the product's gap is the product of the gaps,
+// as data. 0 < 1 has the gap 1/2, so 1 · 1 clears zero by 1/4 (k = 3).
+theorem squared(): CReal::mul_pos(zero_lt_one(), zero_lt_one()).witness = 3 { refl }

@@ -40,11 +40,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NEG = re.compile(
     r"is_err\(\)|expect_err|unwrap_err|Ok\(\(?\)?\)?\s*=>\s*panic|Ok\(_\)\s*=>\s*panic"
     r"|Ok\([^)]*\)\)?\s*=>\s*\{?\s*panic|assert!\(\s*!|\.is_none\(\)|should_panic"
-    r"|Err\(\w+\)\s*=>\s*\w+(?:\.render)?")
+    r"|Err\(\w+\)\s*=>\s*\w+(?:\.render)?|assert_refused\(|Refusal::")
 POS = re.compile(r"if let Err|unwrap\(\)|expect\(|is_ok\(\)|Err\(\w+\)\s*=>\s*panic")
 REASON = re.compile(
     r"\.contains\(|starts_with\(|ends_with\(|matches!\(|ElabError::"
-    r"|assert_eq!\(\s*\w*(err|msg|message|diag|rendered|e)\b")
+    r"|assert_eq!\(\s*\w*(err|msg|message|diag|rendered|e)\b|Refusal::")
 STRUCT = re.compile(
     r"assert_eq!|assert_ne!|assert!\(\s*\w+\s*[<>]=?|heather_kernel::|Term::|Val::|\.whnf"
     r"|normali[sz]e|psi_hash|\.lookup|stats::|counter|timings|\.len\(\)\s*[<>=]")
@@ -77,14 +77,17 @@ def helper_kinds(code):
     kind = {}
     for name, body in found.items():
         if NEG.search(body):
-            kind[name] = "neg"
+            # A helper that checks what the refusal says passes its reason on.
+            kind[name] = "neg_reason" if REASON.search(body) else "neg"
         elif re.search(r"elab|check|Elaborator|run\(|heather\(", body) and POS.search(body):
             kind[name] = "pos"
     for _ in range(2):
         for name, body in found.items():
             if name not in kind:
                 called = {kind.get(c) for c in re.findall(r"\b(\w+)\(", body) if c != name}
-                if "neg" in called:
+                if "neg_reason" in called:
+                    kind[name] = "neg_reason"
+                elif "neg" in called:
                     kind[name] = "neg"
                 elif "pos" in called:
                     kind[name] = "pos"
@@ -97,14 +100,15 @@ def classify(path):
     for name, body in bodies(raw, r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*(?:pub )?fn (\w+)[^{]*\{"):
         code = strip(body)
         calls = re.findall(r"\b(\w+)\(", code)
-        neg = bool(NEG.search(code)) or any(kind.get(c) == "neg" for c in calls) \
+        neg = bool(NEG.search(code)) or any(kind.get(c) in ("neg", "neg_reason") for c in calls) \
             or name.startswith(("refus", "reject"))
+        reason = bool(REASON.search(code)) or any(kind.get(c) == "neg_reason" for c in calls)
         pos = bool(POS.search(code)) or any(kind.get(c) == "pos" for c in calls)
         inline = bool(re.search(r'r#+"|"import |"theorem |"fn ', body))
         lib_file = bool(re.search(r'include_str!\("[^"]*(lib|showcase)/[^"]*\.hthr"\)', body))
         if STRUCT.search(ERROR_EQ.sub("", code)):
             k = "structural"
-        elif neg and REASON.search(code):
+        elif neg and reason:
             k = "refusal_with_reason"
         elif neg and pos:
             k = "accept_and_bare"

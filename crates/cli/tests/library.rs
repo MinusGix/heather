@@ -211,8 +211,9 @@ fn gate_folders() -> Vec<PathBuf> {
 /// Every module under `lib/` checks, `lib/_tests` included: one `heather
 /// check` per folder ([`gate_folders`]), three side by side, through one semantic
 /// cache at width one as `scripts/test` runs every child. Folders share
-/// modules; the image store's single-flight build makes the second asker
-/// wait for the first's image rather than elaborate it again. Warm, every
+/// modules, and the store is the showcase gate's too
+/// ([`showcase::CLI_CHECK_IMAGES`]); its single-flight build makes the second
+/// asker wait for the first's image rather than elaborate it again. Warm, every
 /// module replays; a changed module or compiler re-elaborates what changed.
 /// The fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`) replays
 /// images an earlier build wrote, as the showcase gate does.
@@ -231,7 +232,7 @@ fn every_library_module_checks() {
                 let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
                 cmd.current_dir(&root).arg("check");
                 cmd.env("HEATHER_KERNEL_WORKERS", "1");
-                cmd.arg("--cache").arg("--cache-dir").arg("target/library-gate-images");
+                cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
                 if stale {
                     cmd.arg("--accept-stale-images");
                 }

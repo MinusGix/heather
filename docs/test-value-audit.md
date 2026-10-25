@@ -3,7 +3,7 @@
 Status: audit 2026-10-24, master 87348e3. Minus took the policy the same
 day, with `lib/_tests` for probes (§4.5). Implemented since: the
 whole-library gate and its lints (§4.1), the refusal helper (§4.4), and the
-float modules migrated as the first library family (§6). The rest are filed
+float, number, algebra and relation modules migrated (§6). The rest are filed
 as issues (§7). Counts come from
 `scripts/test-census`, a static read of every `#[test]` fn, so they are
 approximate: a few percent of tests land in the wrong kind.
@@ -449,7 +449,34 @@ already pins each wrong one, given that `Rat::Same` tells the two values
 apart. A probe was added where none existed (`e2m1_carry_away`,
 `e2m1_third_up`, `zero_zero_not_finite`).
 
-The plan, in order of value per effort:
+Round two did step 3 for the number and algebra stack: `rat`, `creal`,
+`int`, `ordered_field`, `semiring`, `order`, `relation`, and the `ring`
+tactic's positive cases. Their eight Rust files held 72 tests and about 490
+`theorem`s; now seven files hold 27 tests (refusals with reasons, `ring`'s
+and the tactics' record-field checks, and one review-lint check), and eight
+`lib/_tests` modules hold the probes. `lib_std_order.rs` went entirely: its one
+refusal became a `¬` theorem. Kit lists went, the four client showcases moved
+to the CLI tier of the showcase gate (so nothing checks a client twice), and
+the false claims a reader might expect became `¬` theorems
+(`half_not_equal`, `abs_not_identity`, `le_is_not_lt`, `identity_not_regular`,
+`mul_le_mono_not_at_negative`, `constant_pullback_not_antisymmetric`).
+Pinning reasons showed several refusals failing differently from what
+their comments said. Four layer-down refusals (two semiring, two ordered
+field) matched `Ring<A>` or `PseudoOrder<A>` inside an implicit-inference
+error ("cannot infer the implicit arguments needed for …"), not the missing
+instance their comments describe; they now pin the inference error, which
+is what one layer down produces. A bare ordered-field "`≤` is not `<`"
+refusal is a failed instance search, not a mismatch. And several vacuity
+controls are refused by the kernel, not the elaborator: most of `CReal`'s
+(its conversion leaves sequence comparisons to the kernel), and three whose
+argument mismatches a parameter that mentions an implicit, which is an
+elaborator gap
+(`issues/implicit-argument-mismatch-reaches-kernel.md`).
+
+Still to do: the interaction-tree, list, tree, bitvec, text, memory and
+setoid families. `lib_algebra.rs` is the traits feature's corpus over the
+library rather than a library test, so it waits for the `.hthr` corpus
+(§4.3); its refusals already carry reasons.
 
 In order of value per effort:
 

@@ -61,6 +61,13 @@ pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("repo root")
 }
 
+/// The semantic image store the CLI's check gates share, repo-relative: the
+/// showcase rows (`tests/showcase.rs`) and the whole-library gate
+/// (`tests/library.rs`) check the same library prefix, so one store lets
+/// either replay what the other built. The store's single-flight build makes
+/// concurrent askers wait rather than elaborate a module twice.
+pub const CLI_CHECK_IMAGES: &str = "target/cli-check-images";
+
 pub fn manifest_path() -> PathBuf {
     repo_root().join("docs/showcase/showcases.tsv")
 }

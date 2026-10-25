@@ -32,11 +32,14 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
     // Through the semantic session, like the native certificates: a run at
     // an unchanged compiler replays the row's image (its kernel verdicts
     // vouched for by the store), and a changed compiler or source checks
-    // from source again. One directory per row, since the rows run side by
-    // side and share the library prefix. The fast lane's trade
-    // (`HEATHER_SEMANTIC_IMAGES=accept-stale`, set by scripts/test) replays
-    // an image an earlier build wrote, as crates/elab/tests/support does.
-    cmd.arg("--cache").arg("--cache-dir").arg(format!("target/showcase-test-images/{}", row.name));
+    // from source again. One store for every row and for the whole-library
+    // gate (`tests/library.rs`), which share the library prefix: rows run
+    // side by side, and the store's single-flight build makes a second
+    // asker wait for the first's image rather than elaborate it again. The
+    // fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`, set by
+    // scripts/test) replays an image an earlier build wrote, as
+    // crates/elab/tests/support does.
+    cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }
@@ -52,7 +55,7 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
 /// [`cli_tier_rows_each_have_a_test`] keeps this list and the manifest equal,
 /// so a new CLI row fails until it has its own test.
 const CLI_ROWS: &[&str] = &["calc_text", "contextual_rewrite_generated", "relational_generator_generated",
-    "result_parser", "relational_contexts"];
+    "result_parser", "relational_contexts", "rat_client", "creal_client", "ordered_field_client", "semiring_client"];
 
 fn check_row(name: &str) {
     let rows = showcase::at_tier(Tier::Cli);
@@ -133,7 +136,10 @@ fn every_search_directory_exists_and_is_not_the_showcase_directory() {
 /// and is an ordinary row since `docs/app-by-head-type-design.md` (16 s,
 /// 0.3 GiB at width one, 2026-09-22).
 /// The result parser and relational contexts also run here so their standalone
-/// module paths stay covered alongside their in-process tests.
+/// module paths stay covered alongside their in-process tests. The library
+/// clients run here and nowhere else: their modules' probes are `lib/_tests`
+/// theorems and their refusals Rust tests, so a client is only a client
+/// (docs/test-value-audit.md §3.1).
 #[test]
 fn cli_tier_rows_each_have_a_test() {
     let mut manifest: Vec<String> = showcase::at_tier(Tier::Cli).into_iter().map(|r| r.name).collect();
@@ -166,4 +172,24 @@ fn cli_showcase_result_parser() {
 #[test]
 fn cli_showcase_relational_contexts() {
     check_row("relational_contexts");
+}
+
+#[test]
+fn cli_showcase_rat_client() {
+    check_row("rat_client");
+}
+
+#[test]
+fn cli_showcase_creal_client() {
+    check_row("creal_client");
+}
+
+#[test]
+fn cli_showcase_ordered_field_client() {
+    check_row("ordered_field_client");
+}
+
+#[test]
+fn cli_showcase_semiring_client() {
+    check_row("semiring_client");
 }

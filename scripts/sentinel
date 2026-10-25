@@ -49,7 +49,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "target" / "sentinel"
 BRANCH = "claude/sentinel-images"
-STORES = ["semantic-test-images", "native-test-images", "showcase-test-images"]
+STORES = ["semantic-test-images", "native-test-images", "cli-check-images"]
 # A target is reported as grown when its CPU rose by this factor and by at
 # least this many seconds over the last green run's.
 GROWTH_FACTOR = 1.25

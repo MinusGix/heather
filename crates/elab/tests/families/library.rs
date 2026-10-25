@@ -56,8 +56,6 @@ mod lib_std_location;
 mod lib_std_memory;
 #[path = "../lib_std_ordered_field.rs"]
 mod lib_std_ordered_field;
-#[path = "../lib_std_order.rs"]
-mod lib_std_order;
 #[path = "../lib_std_rat.rs"]
 mod lib_std_rat;
 #[path = "../lib_std_relation.rs"]

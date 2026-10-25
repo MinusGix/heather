@@ -1,0 +1,84 @@
+// Probes of `lib/std/num/rat.hthr`: theorems that pin the concept down at
+// specific values and restate the contract at open ones. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5). Moved from crates/elab/tests/lib_std_rat.rs; the refusals that need
+// the checker stay there.
+import logic; import bool; import nat; import list; import int; import algebra; import omega; import ring;
+import rat; import order; import relation_props; import algebra_rel;
+
+// Instance resolution finds the registered dictionaries at `Rat`: the
+// equivalence, the strict order's transitivity, and `Decide` for `if`.
+theorem resolved(x, y, z: Rat, a: x ≈ y, b: y ≈ z): x ≈ z { relation_step(Rat::Same, x, y, z, a, b) }
+theorem resolved_lt(x, y, z: Rat, a: x < y, b: y < z): x < z { relation_step(Rat::Lt, x, y, z, a, b) }
+fn larger(x, y: Rat) → Rat { if x <= y { y } else { x } }
+
+// `≈` is not identity: 1/2 and 2/4 are the same number, and different pairs.
+theorem half_same(): Rat(OfNat(1), 2) ≈ Rat(OfNat(2), 4) { refl }
+theorem half_not_equal(): ¬(Rat(OfNat(1), 2) = Rat(OfNat(2), 4)) {
+    λ h => {
+        let nums: (Int::OfNat(1) = Int::OfNat(2)) = cong_fn(λ (x: Rat) => x.num, h);
+        omega(nums)
+    }
+}
+theorem half_not_two_thirds(): ¬(Rat(OfNat(1), 2) ≈ Rat(OfNat(2), 3)) { λ h => omega(h) }
+
+// The raw reciprocal sends 0 to 0, so 0 · recip(0) is 0, not 1.
+theorem zero_recip_not_one(): ¬(0 * Rat::recip(0) ≈ 1) { λ h => omega(h) }
+
+// `x⁻¹` and `x ^ n` (docs/inverse-power-notation-design.md): the hypothesis
+// is searched at the call, from a local apartness, a local sign, a product or
+// power of those, or a literal; the integer power's side condition computes
+// from the exponent's sign. A neutral and a literal base, a neutral and a
+// literal exponent, inference and checking positions.
+theorem from_apart(x: Rat, h: x.Apart(0)): x * x⁻¹ ≈ 1 { x.mul_inv() }
+theorem from_positive(x: Rat, h: 0 < x): x⁻¹ * x ≈ 1 { x.inv_mul() }
+theorem from_negative(x: Rat, h: x < 0): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one() }
+theorem of_product(x, y: Rat, hx: x.Apart(0), hy: 0 < y): (x * y) * (x * y)⁻¹ ≈ 1 { (x * y).mul_inv() }
+theorem of_inverse(x: Rat, h: x.Apart(0)): x⁻¹ * x⁻¹⁻¹ ≈ 1 { x⁻¹.mul_inv() }
+theorem of_power(x: Rat, h: x.Apart(0), k: Nat): (x ^ NegSucc(k)).Apart(0) { Rat::apart_pow() }
+fn half() → Rat { 2⁻¹ }
+theorem half_value(): half() ≈ Rat(OfNat(1), 2) { refl }
+theorem neg_third(): (-3)⁻¹ ≈ Rat(-OfNat(1), 3) { refl }
+theorem quarter(): Rat::Same(2 ^ (-2) * 4, 1) { refl }
+theorem square(x: Rat): x ^ 2 ≈ x * x { x.pow_two() }
+theorem nat_exponent(x: Rat, n: Nat): x ^ OfNat(n) = x.npow(n) { refl }
+theorem neutral_negative(x: Rat, h: x.Apart(0), k: Nat): x ^ NegSucc(k) ≈ (x ^ OfNat(Succ(k)))⁻¹ { x.pow_negSucc_inv(k) }
+// `^` binds tighter than negation.
+theorem precedence(x: Rat): -x ^ 2 = -(x ^ 2) { refl }
+theorem any_proof(x: Rat, h, h2: x.Apart(0)): x.inv(h := h) = x.inv(h := h2) { refl }
+theorem checked(x: Rat, h: 0 < x): 1 ≈ x * x⁻¹ { Rat::same_sym(x.mul_inv()) }
+
+// A denominator carries its positivity: a local fact or a product of
+// denominators is found, and the fact reads back through `den_positive`.
+fn local(k: Nat, h: 0 < k) → Rat { Rat(OfNat(1), k) }
+fn product(x, y: Rat) → Rat { Rat(x.num, x.den * y.den) }
+theorem positive(x: Rat): 0 < x.den { Rat::den_positive() }
+
+// `<` is strict: 1/2 is not below 2/4, but is below 3/4; and `≤` is not `<`.
+theorem half_lt_three_quarters(): Rat(OfNat(1), 2) < Rat(OfNat(3), 4) { omega }
+theorem half_not_lt_two_quarters(): ¬(Rat(OfNat(1), 2) < Rat(OfNat(2), 4)) { λ h => omega(h) }
+theorem le_is_not_lt(): ¬((x, y: Rat) → x <= y → x < y) { λ h => Rat::lt_irrefl(0, h(0, 0, Rat::le_refl(0))) }
+
+// Equal fractions share a numerator sign: at a neutral pair, and the inverse
+// it feeds at a literal negative pair (-1/2 ≈ -2/4, so their inverses agree).
+theorem num_neg(x, y: Rat, h: x ≈ y, hx: x.num < OfNat(0)): y.num < OfNat(0) { Rat::num_neg_of_same(h, hx) }
+theorem recip(): Rat(NegSucc(0), 2).recip() ≈ Rat(NegSucc(1), 4).recip() {
+    Rat::recip_parts_respects(NegSucc(0), 2, NegSucc(1), 4, refl)
+}
+
+// `calc` over `<=` and `<` (`issues/calc-over-order-relations.md`): each
+// adjacent pair composes by its own lemma, so a chain may mix `=`, `≈`, `<=`
+// and `<`, and proves the strongest relation it used.
+theorem le3(x, y, z, w: Rat, a: x <= y, b: y <= z, c: z <= w): x <= w { calc { x <= y := a, <= z := b, <= w := c } }
+theorem lt3(x, y, z, w: Rat, a: x < y, b: y < z, c: z < w): x < w { calc { x < y := a, < z := b, < w := c } }
+theorem mixed(x, y, z, w: Rat, a: x ≈ y, b: y < z, c: z <= w): x < w { calc { x ≈ y := a, < z := b, <= w := c } }
+theorem same_last(x, y, z: Rat, a: x <= y, b: y ≈ z): x <= z { calc { x <= y := a, ≈ z := b } }
+theorem eqs(x, y, z, w: Rat, a: x = y, b: y < z, c: z = w): x < w { calc { x = y := a, < z := b, = w := c } }
+theorem refl_step(x, y: Rat, a: x + 0 <= y): x + 0 <= y { calc { x + 0 = x + 0 := refl, <= y := a } }
+theorem one(x, y: Rat, a: x < y): x < y { calc { x < y := a } }
+theorem nat_mixed(x, y, z, w: Nat, a: x < y, b: y <= z, c: z < w): x < w { calc { x < y := a, <= z := b, < w := c } }
+theorem int_mixed(x, y, z: Int, a: x <= y, b: y < z): x < z { calc { x <= y := a, < z := b } }
+
+// |x| is not x: -1/2 has absolute value 1/2.
+theorem abs_neg_half(): Rat(NegSucc(0), 2).abs() ≈ Rat(OfNat(1), 2) { refl }
+theorem abs_not_identity(): ¬((x: Rat) → x.abs() ≈ x) { λ h => omega(h(Rat(NegSucc(0), 2))) }
