@@ -123,13 +123,15 @@ fn cp(n: Nat, t: Tr(n)) -> Tr(n) {
 fn induction_through_function_children_at_the_rebound_index() {
     elab(&format!(
         "{ADD}{TR}{CP}
-         theorem succ_eq(a: Nat, b: Nat, p: a = b): Succ(a) = Succ(b) {{ rewrite(p, refl) }}
          theorem add_eq(a: Nat, b: Nat, c: Nat, d: Nat, p: a = c, q: b = d): add(a, b) = add(c, d) {{ rewrite(p, q, refl) }}
          theorem cp_size(n: Nat, t: Tr(n)): size(n, cp(n, t)) = size(n, t) {{
              match t {{
                  Lf => refl,
-                 One(m, s) => succ_eq(size(m, cp(m, s)), size(m, s), cp_size(m, s)),
-                 Br(m, k) => succ_eq(size(add(2, m), cp(add(2, m), k(2))), size(add(2, m), k(2)), cp_size(add(2, m), k(2))),
+                 One(m, s) => cong(cp_size(m, s)),
+                 Br(m, k) => cong(cp_size(add(2, m), k(2))),
+                 // Two holes, so not one `cong`; and `rewrite` looks for an
+                 // occurrence by `size`'s head, which the reduct does not
+                 // have (issues/cong-inference-through-iwf-w-children.md).
                  Two(m, k, l) => add_eq(size(m, cp(m, k(1))), size(0, cp(0, l)), size(m, k(1)), size(0, l),
                                         cp_size(m, k(1)), cp_size(0, l)),
              }}

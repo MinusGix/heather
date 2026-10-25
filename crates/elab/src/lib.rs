@@ -114,6 +114,7 @@ pub mod reprgen;
 pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod emission_walk;
 pub use emission_walk::EmissionFinding;
+mod iwf_confusion;
 mod iwf_family;
 mod iwf_w;
 mod gendefs;
@@ -8774,19 +8775,59 @@ impl Elaborator {
         // elaborator, and it would also make failure quiet. Two whnfs are
         // linear and terminating, which is the property §3 of the issue
         // claims for this solver.
+        //
+        // 3. The reduced goal again with the **witness up to conversion**
+        //    (`lgg::lgg_body_up_to_conversion`), only after both of the above
+        //    failed: at a differing node that mentions none of the walk's
+        //    binders, the sides convert to `(s, t)`. Conversion runs only
+        //    there, top-down, so typically once per side, and the abstraction
+        //    is kept only if it kernel-checks at `?f`'s type. A failure
+        //    reports attempt 2's mismatch, so the message is the one it always
+        //    was. A goal on a family reaches this: its reduct carries the
+        //    constructor's pieces as each function spelled them
+        //    (issues/cong-inference-through-iwf-w-children.md).
         let body = match lgg::lgg_body(&x, &y, &s, &t) {
             Ok(body) => body,
-            Err(m) => {
+            Err(first) => {
                 let rx = self.whnf_tm(cx, &x, span)?;
                 let ry = self.whnf_tm(cx, &y, span)?;
-                if *rx == *x && *ry == *y {
-                    let msg = self.cong_mismatch(cx, &m, expected, &s, &t);
-                    return Err(ElabError::Elab { msg, span });
+                let reduced = *rx != *x || *ry != *y;
+                let second = if reduced { lgg::lgg_body(&rx, &ry, &s, &t) } else { Err(first) };
+                match second {
+                    Ok(body) => body,
+                    Err(mismatch) => {
+                        let fits = |body: &Term| {
+                            let f = Term::Lam {
+                                dom_level: dom_level.clone(),
+                                cod_level: cod_level.clone(),
+                                dom: Rc::clone(&dom),
+                                body: Rc::new(body.clone()),
+                            };
+                            let fl = Level::join(dom_level.clone(), cod_level.clone());
+                            typing::check_term(&self.goal_psi(), 0, Layer::Prog, &cx.gamma, &f, &dom_ty, &fl, self.fuel)
+                                .is_ok()
+                        };
+                        // `(a, b)`, scoped in `Γ, z`: `(s, t)` up to conversion
+                        // there. `z` is `?f`'s parameter, at the domain.
+                        let oracle = self.goal_oracle();
+                        let mut zcx = cx.clone();
+                        zcx.push("#z".into(), (*dom).clone(), dom_level.clone());
+                        let (sz, tz, dz) = (s.shift_local(1), t.shift_local(1), dom.shift_local(1));
+                        let witness = |a: &Term, b: &Term| {
+                            let conv = |l: &Term, r: &Term| {
+                                oracle.convert_term(&zcx.gamma, Layer::Prog, l, r, &dz, &dom_level).is_ok()
+                            };
+                            conv(a, &sz) && conv(b, &tz)
+                        };
+                        match lgg::lgg_body_up_to_conversion(&rx, &ry, &s, &t, &witness).ok().filter(|body| fits(body)) {
+                            Some(body) => body,
+                            None => {
+                                let msg = self.cong_mismatch(cx, &mismatch, expected, &s, &t);
+                                return Err(ElabError::Elab { msg, span });
+                            }
+                        }
+                    }
                 }
-                lgg::lgg_body(&rx, &ry, &s, &t).map_err(|m| ElabError::Elab {
-                    msg: self.cong_mismatch(cx, &m, expected, &s, &t),
-                    span,
-                })?
             }
         };
         sols[m] = Sol::Solved(Rc::new(Term::Lam {

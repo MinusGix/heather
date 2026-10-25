@@ -1,6 +1,6 @@
 ---
 title: absurd and payload inj on the IWf-on-W route
-status: open
+status: closed
 labels: [elaborator,indexed-families]
 area: language
 milestone: [math-metatheory]
@@ -24,3 +24,9 @@ cannot apply when they are not omitted by index inversion.
 
 - 2026-10-25: Filed from the IWf-on-W round, §10 of the design
   ([[indexed-infinitary-families]]).
+- 2026-10-25: Done on both forms of the `IWf` route (the kernel `IWf` form had no
+  `absurd`/`inj` either, contrary to the design's §10), in
+  `crates/elab/src/iwf_confusion.rs`: `absurd` between constructors, `inj`
+  at a payload field (dependent fields included); `inj` at a recursive field
+  refused with tier 2 §9's reason. Design §13, tests
+  `crates/elab/tests/iwf_no_confusion.rs`.
