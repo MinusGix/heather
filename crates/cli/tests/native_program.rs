@@ -60,8 +60,10 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 
 // Loops (issues/function-ir-verified-loop-planning.md): a recursion on a
 // fuel compiled to a loop. One runs out of passes, one leaves at a test in
-// its pass's tree, and one calls a function in its pass.
-const LOOPS: [Case; 3] = [
+// its pass's tree, one calls a function in its pass, and one has loops
+// under a branch, followed by more work, in a callee, and in a loop's pass
+// (issues/function-ir-loops-anywhere.md).
+const LOOPS: [Case; 4] = [
     ("loop_triangle", "triangle", r#"
 static uint64_t reference(uint64_t a, uint64_t b) { for (uint64_t n = a & 1023; n != 0; --n) b += n; return b; }
 "#),
@@ -72,6 +74,27 @@ static uint64_t reference(uint64_t a, uint64_t b) { return a * b; }
 static uint64_t reference(uint64_t x, uint64_t y) {
     for (unsigned i = 0; i < 100; ++i) { if ((x & 7) == 0) return x; x = (x + y) ^ (x - y); y += 1; }
     return x ^ y;
+}
+"#),
+    ("loop_anywhere", "anywhere", r#"
+static uint64_t sum_down(uint64_t fuel, uint64_t n, uint64_t acc) {
+    for (; fuel != 0; --fuel) { if (n == 0) return acc; acc += n; n -= 1; }
+    return acc;
+}
+static uint64_t settling(unsigned fuel, uint64_t x, uint64_t y) {
+    for (; fuel != 0; --fuel) { if ((x & 7) == 0) return x; x = (x + y) ^ (x - y); y += 1; }
+    return x ^ y;
+}
+static uint64_t triangle(uint64_t a) { uint64_t n = a & 255; return sum_down(n, n, 0); }
+static uint64_t nested(uint64_t fuel, uint64_t n, uint64_t acc) {
+    for (; fuel != 0; --fuel) { if (n == 0) return acc; acc += triangle(n); n -= 1; }
+    return acc;
+}
+static uint64_t either(uint64_t a, uint64_t b) { return a < b || a == 5 ? a : b; }
+static uint64_t reference(uint64_t a, uint64_t b) {
+    uint64_t m = a & 63;
+    if (a < b) { uint64_t t = sum_down(m, m, b); return settling(100, t, a) + t + triangle(b); }
+    return either(nested(m, m, b), a);
 }
 "#),
 ];
@@ -140,8 +163,7 @@ int main(void) {{
 }
 
 // What the loop fragment refuses, each with its reason: a fuel that is no
-// word's `toNat`, a recursion read as a value, and a loop in a function
-// another calls.
+// word's `toNat`, and a recursion read as a value.
 #[test]
 fn loop_sources_are_refused() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -155,8 +177,6 @@ fn loop_sources_are_refused() {
         ("read_recursion", "fn after(fuel: Nat, n: BitVec(64)) → BitVec(64) {\n\
             match fuel { Zero => n, Succ(k) => after(k, n.add(n)).add(n) }\n}\n\
             fn read_recursion(a, b: BitVec(64)) → BitVec(64) { after(a.toNat(), b) }\n", "reads its fuel, or its recursion as a value"),
-        ("called_loop", "fn looped(a: BitVec(64)) → BitVec(64) { count(a.toNat(), a, a) }\n\
-            fn called_loop(a, b: BitVec(64)) → BitVec(64) { looped(a).add(b) }\n", "function-ir-loops-anywhere"),
     ];
     for (file, body, why) in cases {
         std::fs::write(dir.join(format!("{file}.hthr")), format!("import bitvec;\n{recursion}{body}")).unwrap();

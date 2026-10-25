@@ -713,6 +713,173 @@ theorem StructuredRegion::eval_holds_in(self region: StructuredRegion, callees: 
 }
 
 // ---------------------------------------------------------------------------
+// Evaluation reads its valuation only pointwise, and its calls only at the
+// calls it makes: from valuations that agree, with calls answered alike, a
+// region evaluates alike. This is what lets a program's functions be proved
+// one at a time, each call answered by its callee's meaning rather than its
+// evaluation (`function_ir_compile::program_eval_sources`).
+
+// `other` agrees with `values` at every width and id.
+fn Valuation::Same(values, other: Valuation()) → Type { (w: Nat) → (id: Nat) → other(w, id) = values(w, id) }
+
+theorem Valuation::set_same(values, other: Valuation(), same: Valuation::Same(values, other), id: Nat,
+    value, value2: (w: Nat) → BitVec(w), at: (w: Nat) → value2(w) = value(w)):
+    Valuation::Same(Valuation::set(values, id, value), Valuation::set(other, id, value2)) {
+    λ w query => match query.eq_dec(id) as λ d =>
+        (match d as λ _ => BitVec(w) { Inl(_) => value2(w), Inr(_) => other(w, query) }) =
+            (match d as λ _ => BitVec(w) { Inl(_) => value(w), Inr(_) => values(w, query) }) {
+        Inl(_) => at(w),
+        Inr(_) => same(w, query),
+    }
+}
+
+theorem Valuation::bind_same(values, other: Valuation(), same: Valuation::Same(values, other), ids: List<Nat>):
+    (words: List<BitVec(64)>) → Valuation::Same(Valuation::bind(values, ids, words), Valuation::bind(other, ids, words)) {
+    match ids {
+        Nil => λ words => same,
+        Cons(id, rest) => λ words => match words {
+            Nil => same,
+            Cons(word, more) => Valuation::set_same(Valuation::bind(values, rest, more), Valuation::bind(other, rest, more),
+                Valuation::bind_same(values, other, same, rest, more), id, word_value(word), word_value(word), λ w => refl),
+        },
+    }
+}
+
+theorem Node::value_same(self node: Node, values, other: Valuation(), same: Valuation::Same(values, other)):
+    (w: Nat) → node.value(other)(w) = node.value(values)(w) {
+    match node {
+        Const(_, _, _) => λ w => refl,
+        Move(_, _, source) => λ w => same(w, source),
+        Add(_, _, left, right) => λ w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.add(y), same(w, left), same(w, right)),
+        Sub(_, _, left, right) => λ w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.sub(y), same(w, left), same(w, right)),
+        BitAnd(_, _, left, right) => λ w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.band(y), same(w, left), same(w, right)),
+        BitOr(_, _, left, right) => λ w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.bor(y), same(w, left), same(w, right)),
+        BitXor(_, _, left, right) => λ w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => x.bxor(y), same(w, left), same(w, right)),
+        ShiftLeft(_, _, value, amount) => λ w => cong_fn(λ (x: BitVec(w)) => x.shift_left(amount), same(w, value)),
+        LogicalShiftRight(_, _, value, amount) => λ w => cong_fn(λ (x: BitVec(w)) => x.shift_right(amount), same(w, value)),
+        ArithmeticShiftRight(_, _, value, amount) => λ w => cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(amount), same(w, value)),
+        UnsignedLessThan(width, _, left, right) => λ w => cong_fn(λ (b: Bool) => bit_value(b, w),
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.unsigned_lt_bit(y), same(width, left), same(width, right))),
+        SignedLessThan(width, _, left, right) => λ w => cong_fn(λ (b: Bool) => bit_value(b, w),
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.signed_lt_bit(y), same(width, left), same(width, right))),
+        Equal(width, _, left, right) => λ w => cong_fn(λ (b: Bool) => bit_value(b, w),
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.eq_bit(y), same(width, left), same(width, right))),
+    }
+}
+
+theorem eval_nodes_same(nodes: List<Node>): (values, other: Valuation()) → Valuation::Same(values, other) →
+    Valuation::Same(eval_nodes(nodes, values), eval_nodes(nodes, other)) {
+    match nodes {
+        Nil => λ values other same => same,
+        Cons(node, rest) => λ values other same => eval_nodes_same(rest, node.step(values), node.step(other),
+            Valuation::set_same(values, other, same, node_output(node).id, node.value(values), node.value(other), node.value_same(values, other, same))),
+    }
+}
+
+// Loops whose passes agree run alike.
+theorem loop_eval_same(step, other_step: Valuation() → Valuation(), same: (v: Valuation()) → Valuation::Same(step(v), other_step(v)),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat):
+    (state: List<BitVec(64)>) → loop_eval(other_step, parameters, count, exit, next, remaining, state) =
+        loop_eval(step, parameters, count, exit, next, remaining, state) {
+    match remaining {
+        Zero => λ state => refl,
+        Succ(rest) => λ state => {
+            let entry = pass_valuation(parameters, count, Succ(rest), state);
+            let after = step(entry);
+            let bit: (other_step(entry, 1, exit).head_bit() = after(1, exit).head_bit()) =
+                cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(entry, 1, exit));
+            let words: (words_of(other_step(entry), next) = words_of(after, next)) =
+                words_agree(next, after, other_step(entry), λ id _ => same(entry, 64, id));
+            let moved = eq2(λ (b: Bool) (ws: List<BitVec(64)>) => match b {
+                    False => loop_eval(other_step, parameters, count, exit, next, rest, ws),
+                    True => LoopEnd(ws, False),
+                }, bit, words);
+            trans(moved, match after(1, exit).head_bit() as λ b =>
+                (match b { False => loop_eval(other_step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False) }) =
+                (match b { False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False) }) {
+                False => loop_eval_same(step, other_step, same, parameters, count, exit, next, rest, words_of(after, next)),
+                True => refl,
+            })
+        },
+    }
+}
+
+// The theorem: an evaluable region, its calls answered alike wherever the
+// arities fit, evaluates alike from agreeing valuations.
+theorem StructuredRegion::eval_answers(self region: StructuredRegion, call, other: Answers(), arity: Nat → Option<Nat>,
+    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → other(f, words) = call(f, words)):
+    region.evaluable(arity).IsTrue() → (values, others: Valuation()) → Valuation::Same(values, others) →
+    Valuation::Same(region.eval(call, values), region.eval(other, others)) {
+    match region {
+        Dataflow(body) => λ ok values others same => eval_nodes_same(body.nodes, values, others, same),
+        Sequence(prefix, continuation) => λ ok values others same => {
+            let parts = Bool::is_true_and(nodes_evaluable(prefix.nodes),
+                disjoint(continuation.writes(), nodes_mentions(prefix.nodes)) && continuation.evaluable(arity), ok);
+            let later = Bool::is_true_and(disjoint(continuation.writes(), nodes_mentions(prefix.nodes)), continuation.evaluable(arity), parts.right);
+            continuation.eval_answers(call, other, arity, answers, later.right, prefix.eval(values), prefix.eval(others),
+                eval_nodes_same(prefix.nodes, values, others, same))
+        },
+        Compose(prefix, continuation) => λ ok values others same => {
+            let parts = Bool::is_true_and(prefix.evaluable(arity),
+                disjoint(continuation.writes(), prefix.mentions()) && continuation.evaluable(arity), ok);
+            let later = Bool::is_true_and(disjoint(continuation.writes(), prefix.mentions()), continuation.evaluable(arity), parts.right);
+            continuation.eval_answers(call, other, arity, answers, later.right, prefix.eval(call, values), prefix.eval(other, others),
+                prefix.eval_answers(call, other, arity, answers, parts.left, values, others, same))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ ok values others same => λ w id => {
+            let parts = Bool::is_true_and(absent(condition, when_true.writes() ++ when_false.writes()),
+                when_true.evaluable(arity) && when_false.evaluable(arity), ok);
+            let arms = Bool::is_true_and(when_true.evaluable(arity), when_false.evaluable(arity), parts.right);
+            let bit: (values(1, condition).head_bit() = others(1, condition).head_bit()) =
+                sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(1, condition)));
+            let aligned = match values(1, condition).head_bit() as λ b =>
+                (match b { False => when_false.eval(other, others)(w, id), True => when_true.eval(other, others)(w, id) }) =
+                (match b { False => when_false.eval(call, values)(w, id), True => when_true.eval(call, values)(w, id) }) {
+                False => when_false.eval_answers(call, other, arity, answers, arms.right, values, others, same, w, id),
+                True => when_true.eval_answers(call, other, arity, answers, arms.left, values, others, same, w, id),
+            };
+            j(bit, λ b _ => (match b { False => when_false.eval(other, others)(w, id), True => when_true.eval(other, others)(w, id) }) =
+                (match values(1, condition).head_bit() {
+                    False => when_false.eval(call, values)(w, id),
+                    True => when_true.eval(call, values)(w, id),
+                }), aligned)
+        },
+        Call(callee, arguments, result) => λ ok values others same => {
+            let parts = Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()), ok);
+            let words = words_of(values, arguments);
+            let read: (words_of(others, arguments) = words) = words_agree(arguments, values, others, λ id _ => same(64, id));
+            let fits: arity_fits(arity(callee), words.len()).IsTrue() =
+                j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), parts.right);
+            let answered: (other(callee, words_of(others, arguments)) = call(callee, words)) =
+                trans(cong_fn(λ (ws: List<BitVec(64)>) => other(callee, ws), read), answers(callee, words, fits));
+            Valuation::set_same(values, others, same, result, word_value(call(callee, words)), word_value(other(callee, words_of(others, arguments))),
+                λ w => cong_fn(λ (x: BitVec(64)) => word_value(x, w), answered))
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok values others same => {
+            let passes = Bool::is_true_and(body.evaluable(arity), distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
+                && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len())))))), ok);
+            let step = λ (pass: Valuation()) => body.eval(call, pass);
+            let other_step = λ (pass: Valuation()) => body.eval(other, pass);
+            let end = loop_eval(step, parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs));
+            let ran: (loop_eval(other_step, parameters, count, exit, next, others(64, bound).toNat(), words_of(others, inputs)) = end) =
+                trans(loop_eval_same(step, other_step, λ v => body.eval_answers(call, other, arity, answers, passes.left, v, v, λ w id => refl),
+                        parameters, count, exit, next, others(64, bound).toNat(), words_of(others, inputs)),
+                    eq2(λ (n: Nat) (s: List<BitVec(64)>) => loop_eval(step, parameters, count, exit, next, n, s),
+                        cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64, bound)), words_agree(inputs, values, others, λ id _ => same(64, id))));
+            j(sym(ran), λ e _ => Valuation::Same(Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)),
+                    Valuation::set(Valuation::bind(others, outputs, e.state), exhausted, bit_value(e.exhausted))),
+                Valuation::set_same(Valuation::bind(values, outputs, end.state), Valuation::bind(others, outputs, end.state),
+                    Valuation::bind_same(values, others, same, outputs, end.state), exhausted, bit_value(end.exhausted), bit_value(end.exhausted),
+                    λ w => refl))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Functions and programs
 
 // Called on `arguments`: the parameters bound, the body evaluated, the
@@ -723,6 +890,17 @@ fn Function::eval(self function: Function, call: Answers(), arguments: List<BitV
 
 fn Function::evaluable(self function: Function, arity: Nat → Option<Nat>) → Bool {
     function.body.evaluable(arity) && (distinct(function.parameters) && disjoint(function.body.writes(), function.parameters))
+}
+
+// An evaluable function, its calls answered alike wherever the arities
+// fit, returns alike.
+theorem Function::eval_answers(self function: Function, call, other: Answers(), arity: Nat → Option<Nat>,
+    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → other(f, words) = call(f, words),
+    ok: function.evaluable(arity).IsTrue(), arguments: List<BitVec(64)>): function.eval(other, arguments) = function.eval(call, arguments) {
+    let parts = Bool::is_true_and(function.body.evaluable(arity),
+        distinct(function.parameters) && disjoint(function.body.writes(), function.parameters), ok);
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    StructuredRegion::eval_answers(function.body, call, other, arity, answers, parts.left, bound, bound, λ w id => refl, 64, function.result)
 }
 
 // A program's functions, each answering its calls by the functions after

@@ -1,6 +1,6 @@
 ---
 title: Compile a loop anywhere in a function, and in a called function
-status: open
+status: closed
 labels: [native,ir]
 area: heather-in-heather
 milestone: [hih-passes]
@@ -32,3 +32,7 @@ The agreement proof (`function_ir_compile::loop_eval_agrees_from`) is
 already stated over any valuation before the loop and any `post`; what is
 missing is the certificate meeting the program at a loop that is not the
 body's tail (`loop_then_eval` covers `Compose(Loop, post)` only).
+
+## Log
+
+- 2026-10-25: Done. The reflector outlines every fuelled recursion into a FunctionIR function of its own (parameters: the bound, then the state words; body `Compose(Loop(…), post)`), and each call `h(w.toNat(), e…)` anywhere is a `Call` of it: under a branch, followed by more work, in a called function, two in one function, and inside another loop's pass (`examples/x86-native/loop_anywhere.hthr`, run against a C reference in `native_program.rs`). Nothing is carried through a loop as state: the call boundary saves what the caller still needs, as for any call. Outlining costs a call per loop (a CALL/RET and a frame) where the old root-tail loop was inline. The certificate proves the program a function at a time (`function_ir_compile::program_eval_sources` over a `sources` table answering each function by its source; `StructuredRegion::eval_answers` is the congruence that swaps the table), so a caller's proof never unfolds a callee: a function calling another agrees through an expansion that spells each call as `call(k, [..])` (`_expanded`, by `refl` at any `call`) and then `_expands` at the source table. Lowering and layout are stated a function and a stretch at a time (`emit_functions_next`, `names_unique_back`, `jumps_land_back`, `targets_named_back`) so no declaration's fuel bounds the program. Found on the way: [[kernel-fold-probe-evaluates-recursive-arms]] (an exponential in `names_unique`, respelled around).

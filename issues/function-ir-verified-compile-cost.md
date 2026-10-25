@@ -1,11 +1,11 @@
 ---
 title: State the verified lowering's equation per function as programs grow
-status: open
+status: closed
 labels: [native,ir,proofs,perf]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-23
-updated: 2026-10-23
+updated: 2026-10-25
 ---
 
 `compile-x86`'s certificate ([[function-ir-verified-lowering]] round 4)
@@ -27,3 +27,7 @@ stated as a literal placement, since the theorem holds for every
 placement.
 
 Not urgent: no program the CLI compiles today is near the limit.
+
+## Log
+
+- 2026-10-25: Done in the loops-anywhere round ([[function-ir-loops-anywhere]]): `lowers` is now a chain of per-function statements (`_emits_k` by `refl` over the literal code of functions before `k`, glued by `emit_functions_next` into `_emitted_k`, then `lower_program_emitted`), the placement is a literal (`compiled_returns` holds for any), and the layout check `laid_out` is split into stretches of items each its own declaration, sized so its items times the program stay inside a declaration's fuel. Two loop functions and a deciding callee in one program (`loop_anywhere.hthr`) certify; each per-function statement grows with its own function, the layout stretches with the program.

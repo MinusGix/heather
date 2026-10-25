@@ -18,24 +18,32 @@
 //! test: each compiles to conditionals on comparisons, an operand tested
 //! only where the connective needs it.
 //!
-//! The exported function may instead end in a loop
-//! (issues/function-ir-verified-loop-planning.md): its body calls, in tail
-//! position, `h(w.toNat(), e…)`, where `h(fuel, x…)` matches its fuel,
-//! `Zero` to a result of its words and `Succ(k)` to a tree of tests whose
-//! leaves are results or `h(k, …)`. The call becomes a `Loop` of at most `w`
-//! passes, each the tree, with the state's words in `x…`; a leaf that
-//! recurses gives the next state, and one that returns gives the result as
-//! the next state's first word and leaves. A conditional on the exhausted
-//! bit then computes the `Zero` result from the final state, or reads the
-//! first word. The certificate proves the agreement by induction on the
-//! fuel (`function_ir_compile::loop_eval_agrees`), each pass by cases on its
-//! comparisons, which a loop's pass spells as Bool variables (`ReflectedLoop`).
+//! A value may also be a recursion on a fuel
+//! (issues/function-ir-verified-loop-planning.md,
+//! issues/function-ir-loops-anywhere.md): `h(w.toNat(), e…)`, where
+//! `h(fuel, x…)` matches its fuel, `Zero` to a result of its words and
+//! `Succ(k)` to a tree of tests whose leaves are results or `h(k, …)`. `h`
+//! becomes a function of the program of its own, taking the bound `w` and
+//! the words, and the value a call of it: wherever the value is, under a
+//! branch, before more work, in a callee or in another loop's pass. Its
+//! body is a `Loop` of at most `w` passes, each the tree, with the state's
+//! words in `x…`; a leaf that recurses gives the next state, and one that
+//! returns gives the result as the next state's first word and leaves. A
+//! conditional on the exhausted bit then computes the `Zero` result from the
+//! final state, or reads the first word. The certificate proves the
+//! agreement by induction on the fuel (`function_ir_compile::loop_eval_agrees`),
+//! each pass by cases on its comparisons, which a loop's pass spells as Bool
+//! variables (`ReflectedLoop`).
 //!
-//! A function whose matches are all on comparisons evaluates to its source
-//! by conversion. One that decides a connective or a helper (`decided`) is
-//! its *expansion* by conversion, the same decision tree spelled with the
-//! source's own operations, and the expansion is the source by case
-//! analysis on its comparisons (`split_all`).
+//! Each function is proved on its own, its calls answered by its callees'
+//! sources (`function_ir_compile::program_eval_sources`), so a proof never
+//! unfolds a callee. A function evaluates, its calls answered by any
+//! `call`, to its *expansion* by conversion: the decision tree it compiles,
+//! spelled with the source's own operations and `call` (`expansion`). With
+//! the callees' sources for `call`, a function whose matches are all on
+//! comparisons is its expansion by conversion, and one that decides a
+//! connective or a helper (`decided`) by case analysis on its comparisons
+//! (`split_all`).
 use super::*;
 use std::sync::Arc as Rc;
 
@@ -58,12 +66,14 @@ pub struct ProgramFunction {
     pub body: ProgramRegion,
     pub result: u64,
     /// The body as the decision tree the program evaluates to, in the
-    /// source's operations over parameters `a0, a1, …`.
+    /// source's operations over parameters `a0, a1, …`, with function `k`'s
+    /// calls answered by `call(k, [b0, …])`.
     pub expansion: String,
     /// A match decided a connective or a helper: the expansion is the
     /// source only by case analysis.
     pub decided: bool,
-    /// The loop the body ends in, when it does.
+    /// The function is a recursion on a fuel: its parameters are the bound
+    /// and the words, and its body the loop and what follows it.
     pub looped: Option<ReflectedLoop>,
 }
 
@@ -81,14 +91,14 @@ impl Split {
     }
 }
 
-/// A loop a function's body ends in, and what its certificate states about
-/// it. Spellings are in the source's operations over the state's words
-/// `x0, x1, …`; a pass's comparisons are the Bool variables `c0, c1, …`,
-/// `conditions` their spellings, and `later` the recursion.
+/// A function that is a loop, and what its certificate states about it: its
+/// parameters are the bound `0` and the words `1, …, arity`, which are the
+/// loop's inputs. Spellings are in the source's operations over the state's
+/// words `x0, x1, …`; a pass's comparisons are the Bool variables
+/// `c0, c1, …`, `conditions` their spellings, and `later` the recursion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReflectedLoop {
-    /// The recursion on the fuel, and its words.
-    pub source_name: String,
+    /// The recursion's words.
     pub arity: usize,
     pub inputs: Vec<u64>,
     pub bound: u64,
@@ -98,8 +108,6 @@ pub struct ReflectedLoop {
     pub next: Vec<u64>,
     pub outputs: Vec<u64>,
     pub exhausted: u64,
-    /// The body's steps before the loop, when there are any.
-    pub prefix: Option<ProgramRegion>,
     pub body: ProgramRegion,
     pub post: ProgramRegion,
     pub conditions: Vec<String>,
@@ -133,6 +141,16 @@ impl ReflectedProgram {
 }
 
 impl ProgramFunction {
+    /// What the function computes at `arguments`, in the source's
+    /// operations: its source applied, a loop's bound made its fuel.
+    pub fn answer(&self, arguments: &[String]) -> String {
+        match (&self.looped, arguments.split_first()) {
+            (Some(_), Some((bound, words))) => format!("{}(@bitvec::BitVec::toNat(64, {bound}){})", self.source_name,
+                words.iter().map(|word| format!(", {word}")).collect::<String>()),
+            _ => format!("{}({})", self.source_name, arguments.join(", ")),
+        }
+    }
+
     pub fn render(&self) -> String {
         let parameters: Vec<String> = (0..self.arity).map(|id| id.to_string()).collect();
         format!("Function(parameters := [{}], body := {}, result := {})", parameters.join(", "), self.body.render(), self.result)
@@ -172,7 +190,7 @@ pub fn reflect_program(elaborator: &Elaborator, source_name: &str) -> Result<Ref
     let root = elaborator.global_abs(source_name).ok_or_else(|| SourceError::Unsupported(format!("unknown source function `{source_name}`")))?;
     let globals = Globals::resolve(elaborator)?;
     let mut program = Program { elaborator, globals, functions: Vec::new(), index: BTreeMap::new(), stack: Vec::new() };
-    let root = program.function(root, true)?;
+    let root = program.function(root)?;
     Ok(ReflectedProgram { functions: program.functions, root })
 }
 
@@ -208,7 +226,8 @@ struct Program<'a> {
     elaborator: &'a Elaborator,
     globals: Globals,
     functions: Vec<ProgramFunction>,
-    /// Each reflected function's index, by its global.
+    /// Each reflected function's index, by its global: a loop's by its
+    /// recursion's.
     index: BTreeMap<usize, usize>,
     /// The functions being reflected, to refuse recursion.
     stack: Vec<usize>,
@@ -289,7 +308,7 @@ impl Program<'_> {
     }
 
     /// The function at global `at`, reflected once.
-    fn function(&mut self, at: usize, root: bool) -> Result<usize, SourceError> {
+    fn function(&mut self, at: usize) -> Result<usize, SourceError> {
         if let Some(index) = self.index.get(&at) { return Ok(*index); }
         if self.stack.contains(&at) { return unsupported("a recursive function is not compiled: a program's functions call only those below them"); }
         let name = self.elaborator.global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
@@ -300,17 +319,133 @@ impl Program<'_> {
         let parameters: Vec<Port> = (0..arity as u64).map(|id| Port { id, width: 64 }).collect();
         let spell = (0..arity as u64).map(|id| (id, format!("a{id}"))).collect();
         let mut body = Body::new(parameters.clone(), arity as u64 + 1, spell);
-        body.loop_ok = root;
+        body.called = true;
         let result = arity as u64;
         let cx = Rc::new(Cx { at, parameters });
         let region = body.tail(self, &term, &cx, 0, &Target::Word(result));
         self.stack.pop();
         let (region, expansion) = region?;
         let index = self.functions.len();
-        self.functions.push(ProgramFunction { source_name: name, arity, body: region, result, expansion, decided: body.decided,
-            looped: body.looped });
+        self.functions.push(ProgramFunction { source_name: name, arity, body: region, result, expansion, decided: body.decided, looped: None });
         self.index.insert(at, index);
         Ok(index)
+    }
+}
+
+impl Program<'_> {
+    /// The function computing `h(w.toNat(), x…)` from `w` and `x…`, where
+    /// `h`, the global at `at`, recurses on its fuel with `n` words:
+    /// reflected once, a loop and the conditional after it.
+    fn loop_function(&mut self, at: usize, n: usize) -> Result<usize, SourceError> {
+        if let Some(index) = self.index.get(&at) { return Ok(*index); }
+        let name = self.elaborator.global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
+        if self.stack.contains(&at) { return unsupported(&format!("`{name}` is reached again from its own step")); }
+        let (_, body) = self.body_of(at, n + 1)?;
+        // `elim(fuel)` applied to the words the recursion varies; the others
+        // its arms read from the function's parameters.
+        let (elim, applied) = application_spine(&body);
+        let Term::ElimNat { base, step, scrut, .. } = elim else {
+            return unsupported(&format!("`{name}` must match its fuel, `Zero` and `Succ(k)`, and recurse only on `k`"));
+        };
+        let mut recursed = Vec::new();
+        for argument in &applied {
+            match argument {
+                Term::Var(LocalVar(v)) if (*v as usize) < n && !recursed.contains(&(n - 1 - *v as usize)) => recursed.push(n - 1 - *v as usize),
+                _ => return unsupported(&format!("`{name}` must recurse on its fuel with its words passed on")),
+            }
+        }
+        if !matches!(&**scrut, Term::Var(LocalVar(v)) if *v as usize == n) {
+            return unsupported(&format!("`{name}` must match its fuel, its first parameter"));
+        }
+        let m = recursed.len();
+        let under = |term: &Rc<Term>| -> Result<Rc<Term>, SourceError> {
+            let mut term = Rc::clone(term);
+            for _ in 0..m {
+                let Term::Lam { body, .. } = &*term else { return unsupported("a fuel's arms must take the words as λs"); };
+                term = Rc::clone(body);
+            }
+            Ok(term)
+        };
+        self.stack.push(at);
+        let reflected = self.reflect_loop(at, &name, n, &*under(step)?, &*under(base)?, &recursed);
+        self.stack.pop();
+        let (body, looped) = reflected?;
+        let index = self.functions.len();
+        let arguments: Vec<String> = (0..=n).map(|i| format!("a{i}")).collect();
+        let mut function = ProgramFunction { source_name: name, arity: n + 1, body, result: n as u64 + 1, expansion: String::new(), decided: false,
+            looped: Some(looped) };
+        function.expansion = function.answer(&arguments);
+        self.functions.push(function);
+        self.index.insert(at, index);
+        Ok(index)
+    }
+
+    /// The loop function's body and what its certificate states: parameters
+    /// `0` the bound and `1, …, n` the words, the result `n + 1`.
+    fn reflect_loop(&mut self, at: usize, name: &str, n: usize, step: &Term, base: &Term, recursed: &[usize])
+        -> Result<(ProgramRegion, ReflectedLoop), SourceError>
+    {
+        let word = |id: u64| Port { id, width: 64 };
+        let named = |ports: &[Port]| ports.iter().enumerate().map(|(i, port)| (port.id, format!("x{i}"))).collect();
+        let result = n as u64 + 1;
+        let inputs: Vec<u64> = (1..=n as u64).collect();
+        let mut ids = Body::new(Vec::new(), n as u64 + 2, BTreeMap::new());
+        // A step's names: the function's fuel and words, `k`, the
+        // recursion, then the words it varies.
+        let scope = |words: &[Port], recursion: bool| -> Vec<Port> {
+            let mut names = vec![UNREAD];
+            names.extend(words);
+            if recursion { names.extend([UNREAD, UNREAD]); }
+            names.extend(recursed.iter().map(|&position| words[position]));
+            names
+        };
+
+        // A pass: the tree into the next state and the tag, then the exit
+        // bit, the tag one.
+        let mut fresh = Vec::new();
+        for _ in 0..=n { fresh.push(ids.fresh()?); }
+        let (parameters, count) = (fresh[..n].to_vec(), fresh[n]);
+        let state: Vec<Port> = parameters.iter().copied().map(word).collect();
+        let mut pass = Body::new(state.clone(), ids.next_id, named(&state));
+        pass.cases = true;
+        let mut targets = Vec::new();
+        for _ in 0..=n { targets.push(pass.fresh()?); }
+        let (next, tag) = (targets[..n].to_vec(), targets[n]);
+        let within = Rc::new(Cx { at, parameters: scope(&state, true) });
+        let tree = pass.compute(self, step, &within, 0,
+            &Target::Pass { state: next.clone(), tag, words: state.clone(), recursed: recursed.to_vec() })?;
+        let tree_region = pass.close()?;
+        let split = split_of(&tree_region, &pass.case_names)?;
+        if pass.conditions.len() > 16 || split.leaves() > 64 { return unsupported(&format!("`{name}`'s step branches too much for a loop's certificate")); }
+        let mut tail = Pending::default();
+        let one = pass.node(&mut tail, Some(Key::Constant(1)), 64, None, "@bitvec::BitVec::ofNat(64, 1)".into(),
+            |output| Node::Const { width: 64, output, value: 1 })?;
+        let exit = pass.node(&mut tail, None, 1, None, format!("@bitvec::BitVec::eq_bit(64, {}, {})", pass.spelling(word(tag)), pass.spelling(one)),
+            |output| Node::Equal { width: 64, output, left: tag, right: one.id })?;
+        pass.flush(&mut tail);
+        let exit_region = pass.close()?;
+        let spelled: Vec<String> = next.iter().map(|id| pass.spelling(word(*id))).collect();
+        let pass_text = format!("match {} {{ False => later([{}]), True => {} }}", pass.spelling(exit), spelled.join(", "), spelled[0]);
+        ids.next_id = pass.next_id;
+
+        // After it: with the passes run out, the fuel's `Zero` arm of the
+        // final state; else the first word.
+        let mut fresh = Vec::new();
+        for _ in 0..=n { fresh.push(ids.fresh()?); }
+        let (outputs, exhausted) = (fresh[..n].to_vec(), fresh[n]);
+        let words: Vec<Port> = outputs.iter().copied().map(word).collect();
+        let mut zero = Body::new(words.clone(), ids.next_id, named(&words));
+        let base_expansion = zero.compute(self, base, &Rc::new(Cx { at, parameters: scope(&words, false) }), 0, &Target::Word(result))?;
+        let when_true = zero.close()?;
+        let when_false = ProgramRegion::Dataflow(Region { inputs: words.clone(), nodes: vec![Node::Move { width: 64, output: result, source: outputs[0] }],
+            outputs: vec![word(result)] });
+        let post = ProgramRegion::Conditional { inputs: words.iter().copied().chain([Port { id: exhausted, width: 1 }]).collect(), condition: exhausted,
+            arguments: words, outputs: vec![word(result)], when_true: Box::new(when_true), when_false: Box::new(when_false) };
+        let body = ProgramRegion::Compose(Box::new(tree_region), Box::new(exit_region));
+        let region = ProgramRegion::Compose(Box::new(ProgramRegion::Loop { inputs: inputs.clone(), bound: 0, parameters: parameters.clone(), count,
+            body: Box::new(body.clone()), exit: exit.id, next: next.clone(), outputs: outputs.clone(), exhausted }), Box::new(post.clone()));
+        Ok((region, ReflectedLoop { arity: n, inputs, bound: 0, parameters, count, exit: exit.id, next, outputs, exhausted, body, post,
+            conditions: pass.conditions, pass: pass_text, tree, split, decided: pass.decided, base: base_expansion, base_decided: zero.decided }))
     }
 }
 
@@ -361,10 +496,9 @@ struct Body {
     cases: bool,
     case_names: BTreeMap<u64, usize>,
     conditions: Vec<String>,
-    /// The body may end in a loop: an exported function's, outside any
-    /// branch.
-    loop_ok: bool,
-    looped: Option<ReflectedLoop>,
+    /// A function's body spells a call by the answers `call`; a loop's pass
+    /// by the callee's source.
+    called: bool,
 }
 
 /// Where a tail's value goes: a word, or a loop pass's next state, the
@@ -396,7 +530,7 @@ struct Pending { nodes: Vec<Node>, inputs: Vec<Port>, outputs: Vec<Port> }
 impl Body {
     fn new(parameters: Vec<Port>, next_id: u64, spell: BTreeMap<u64, String>) -> Self {
         Body { parameters, next_id, scope: Scope::default(), steps: Vec::new(), spell, decided: false, helpers: Vec::new(), cases: false,
-            case_names: BTreeMap::new(), conditions: Vec::new(), loop_ok: false, looped: None }
+            case_names: BTreeMap::new(), conditions: Vec::new(), called: false }
     }
 
     fn fresh(&mut self) -> Result<u64, SourceError> {
@@ -469,33 +603,42 @@ impl Body {
             let (left, right) = (left.id, right.id);
             return self.node(pending, Some(Key::Binary(operation, left, right)), 64, None, spelling, |output| operation.node_at_width(64, output, left, right));
         }
-        if program.loop_signature(at).is_some() {
+        if let Some(n) = program.loop_signature(at) {
             let name = program.elaborator.global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
-            return unsupported(&format!("`{name}` recurses on a fuel, and such a call is compiled only as the exported function's result, \
-                outside any branch, as `{name}(w.toNat(), …)` (issues/function-ir-loops-anywhere.md)"));
+            if args.len() != n + 1 { return unsupported(&format!("a call of `{name}` must apply its fuel and every word")); }
+            let (fuel, fuel_args) = application_spine(args[0]);
+            if absolute(fuel, cx.at) != Some(program.globals.to_nat) || fuel_args.len() != 2 || nat_literal(fuel_args[0]) != Some(64) {
+                return unsupported(&format!("`{name}`'s fuel is compiled only as `w.toNat()` of a word `w`, the loop's bound"));
+            }
+            let callee = program.loop_function(at, n)?;
+            let mut arguments = vec![fuel_args[1]];
+            arguments.extend(&args[1..]);
+            return self.call(program, pending, callee, &arguments, cx, depth);
         }
         let Some(arity) = program.word_signature(at) else {
             let name = program.elaborator.global_qualified_name_at(at).unwrap_or_else(|| "a global".into());
             return unsupported(&format!("`{name}` is not an operation this compiler lowers, nor a function of BitVec(64) words it can call"));
         };
         if args.len() != arity { return unsupported("a call must apply every parameter"); }
-        let callee = program.function(at, false)?;
-        if program.functions[callee].decided {
-            return unsupported(&format!("`{}` decides a connective or a Bool helper, and a call of such a function is not compiled yet (issues/function-ir-verified-decided-callees.md)",
-                program.functions[callee].source_name));
-        }
+        let callee = program.function(at)?;
+        self.call(program, pending, callee, &args, cx, depth)
+    }
+
+    /// A call of function `callee` of the program on `args`' values.
+    fn call(&mut self, program: &mut Program, pending: &mut Pending, callee: usize, args: &[&Term], cx: &Cx, depth: u32) -> Result<Port, SourceError> {
         let mut arguments = [0u64; 6];
         let mut spelled = Vec::new();
-        for (slot, argument) in arguments.iter_mut().zip(&args) {
+        for (slot, argument) in arguments.iter_mut().zip(args) {
             let port = self.value(program, pending, argument, cx, depth)?;
             spelled.push(self.spelling(port));
             *slot = port.id;
         }
+        let arity = args.len();
         let key = Key::Call(callee, arguments, arity);
         if let Some(port) = self.scope.values.get(&key) { return Ok(*port); }
         self.flush(pending);
         let result = self.fresh()?;
-        let spelling = format!("{}({})", program.functions[callee].source_name, spelled.join(", "));
+        let spelling = if self.called { format!("call({callee}, [{}])", spelled.join(", ")) } else { program.functions[callee].answer(&spelled) };
         self.steps.push(ProgramRegion::Call { callee, arguments: arguments[..arity].to_vec(), result });
         self.spell.insert(result, spelling.clone());
         // The result arrives in RAX, which the next call takes: it moves to
@@ -540,9 +683,6 @@ impl Body {
     fn branch(&mut self, program: &mut Program, test: &Term, cx: &Rc<Cx>, depth: u32, yes: &Arm, no: &Arm, target: &Target)
         -> Result<String, SourceError>
     {
-        // A loop is a barrier for the whole function; under a branch the
-        // rest of the function would be lost to it.
-        self.loop_ok = false;
         // A literal outcome takes its arm.
         match crate::spelling::inj_of(test) {
             Some((true, _)) => { self.decided = true; return self.arm(program, no, target); }
@@ -647,9 +787,6 @@ impl Body {
         let mut pending = Pending::default();
         let expansion = match target {
             Target::Word(target) => {
-                if self.loop_ok && let Some(expansion) = self.ends_in_loop(program, &mut pending, term, cx, depth, *target)? {
-                    return Ok(expansion);
-                }
                 let value = self.value(program, &mut pending, term, cx, depth)?;
                 self.put(&mut pending, value, *target)?;
                 self.spelling(value)
@@ -677,121 +814,6 @@ impl Body {
         };
         self.flush(&mut pending);
         Ok(expansion)
-    }
-
-    /// `h(w.toNat(), e…)` where `h` recurses on its fuel: the loop it is and
-    /// the conditional after it, pushed after the steps so far, which become
-    /// the body's prefix; and its expansion. `None` when `term` is no such
-    /// call.
-    fn ends_in_loop(&mut self, program: &mut Program, pending: &mut Pending, term: &Term, cx: &Rc<Cx>, depth: u32, result: u64)
-        -> Result<Option<String>, SourceError>
-    {
-        let (head, args) = application_spine(term);
-        let Some(at) = absolute(head, cx.at) else { return Ok(None); };
-        let Some(n) = program.loop_signature(at) else { return Ok(None); };
-        let name = program.elaborator.global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
-        if args.len() != n + 1 { return unsupported(&format!("a call of `{name}` must apply its fuel and every word")); }
-        let (fuel, fuel_args) = application_spine(args[0]);
-        if absolute(fuel, cx.at) != Some(program.globals.to_nat) || fuel_args.len() != 2 || nat_literal(fuel_args[0]) != Some(64) {
-            return unsupported(&format!("`{name}`'s fuel is compiled only as `w.toNat()` of a word `w`, the loop's bound"));
-        }
-        let (_, body) = program.body_of(at, n + 1)?;
-        // `elim(fuel)` applied to the words the recursion varies; the others
-        // its arms read from the function's parameters.
-        let (elim, applied) = application_spine(&body);
-        let Term::ElimNat { base, step, scrut, .. } = elim else {
-            return unsupported(&format!("`{name}` must match its fuel, `Zero` and `Succ(k)`, and recurse only on `k`"));
-        };
-        let mut recursed = Vec::new();
-        for argument in &applied {
-            match argument {
-                Term::Var(LocalVar(v)) if (*v as usize) < n && !recursed.contains(&(n - 1 - *v as usize)) => recursed.push(n - 1 - *v as usize),
-                _ => return unsupported(&format!("`{name}` must recurse on its fuel with its words passed on")),
-            }
-        }
-        if !matches!(&**scrut, Term::Var(LocalVar(v)) if *v as usize == n) {
-            return unsupported(&format!("`{name}` must match its fuel, its first parameter"));
-        }
-        let m = recursed.len();
-        let under = |term: &Rc<Term>| -> Result<Rc<Term>, SourceError> {
-            let mut term = Rc::clone(term);
-            for _ in 0..m {
-                let Term::Lam { body, .. } = &*term else { return unsupported("a fuel's arms must take the words as λs"); };
-                term = Rc::clone(body);
-            }
-            Ok(term)
-        };
-        let bound = self.value(program, pending, fuel_args[1], cx, depth)?;
-        let mut inputs = Vec::new();
-        for argument in &args[1..] { inputs.push(self.value(program, pending, argument, cx, depth)?); }
-        let expansion = format!("{name}(@bitvec::BitVec::toNat(64, {}), {})", self.spelling(bound),
-            inputs.iter().map(|port| self.spelling(*port)).collect::<Vec<_>>().join(", "));
-        self.flush(pending);
-        let prefix = if self.steps.is_empty() { None } else { Some(self.close()?) };
-        let word = |id: u64| Port { id, width: 64 };
-        let named = |ports: &[Port]| ports.iter().enumerate().map(|(i, port)| (port.id, format!("x{i}"))).collect();
-
-        // A pass: the tree into the next state and the tag, then the exit
-        // bit, the tag one.
-        let mut ids = Vec::new();
-        for _ in 0..=n { ids.push(self.fresh()?); }
-        let (parameters, count) = (ids[..n].to_vec(), ids[n]);
-        let state: Vec<Port> = parameters.iter().copied().map(word).collect();
-        let mut pass = Body::new(state.clone(), self.next_id, named(&state));
-        pass.cases = true;
-        let mut targets = Vec::new();
-        for _ in 0..=n { targets.push(pass.fresh()?); }
-        let (next, tag) = (targets[..n].to_vec(), targets[n]);
-        // A step's names: the function's fuel and words, `k`, the
-        // recursion, then the words it varies.
-        let scope = |words: &[Port], recursion: bool| -> Vec<Port> {
-            let mut names = vec![UNREAD];
-            names.extend(words);
-            if recursion { names.extend([UNREAD, UNREAD]); }
-            names.extend(recursed.iter().map(|&position| words[position]));
-            names
-        };
-        let within = Rc::new(Cx { at, parameters: scope(&state, true) });
-        let tree = pass.compute(program, &*under(step)?, &within, 0,
-            &Target::Pass { state: next.clone(), tag, words: state.clone(), recursed: recursed.clone() })?;
-        let tree_region = pass.close()?;
-        let split = split_of(&tree_region, &pass.case_names)?;
-        if pass.conditions.len() > 16 || split.leaves() > 64 { return unsupported(&format!("`{name}`'s step branches too much for a loop's certificate")); }
-        let mut tail = Pending::default();
-        let one = pass.node(&mut tail, Some(Key::Constant(1)), 64, None, "@bitvec::BitVec::ofNat(64, 1)".into(),
-            |output| Node::Const { width: 64, output, value: 1 })?;
-        let exit = pass.node(&mut tail, None, 1, None, format!("@bitvec::BitVec::eq_bit(64, {}, {})", pass.spelling(word(tag)), pass.spelling(one)),
-            |output| Node::Equal { width: 64, output, left: tag, right: one.id })?;
-        pass.flush(&mut tail);
-        let exit_region = pass.close()?;
-        let spelled: Vec<String> = next.iter().map(|id| pass.spelling(word(*id))).collect();
-        let pass_text = format!("match {} {{ False => later([{}]), True => {} }}", pass.spelling(exit), spelled.join(", "), spelled[0]);
-        self.next_id = pass.next_id;
-
-        // After it: with the passes run out, the fuel's `Zero` arm of the
-        // final state; else the first word.
-        let mut ids = Vec::new();
-        for _ in 0..=n { ids.push(self.fresh()?); }
-        let (outputs, exhausted) = (ids[..n].to_vec(), ids[n]);
-        let words: Vec<Port> = outputs.iter().copied().map(word).collect();
-        let mut zero = Body::new(words.clone(), self.next_id, named(&words));
-        let base_expansion = zero.compute(program, &*under(base)?, &Rc::new(Cx { at, parameters: scope(&words, false) }), 0, &Target::Word(result))?;
-        let when_true = zero.close()?;
-        self.next_id = zero.next_id;
-        let when_false = ProgramRegion::Dataflow(Region { inputs: words.clone(), nodes: vec![Node::Move { width: 64, output: result, source: outputs[0] }],
-            outputs: vec![word(result)] });
-        let post = ProgramRegion::Conditional { inputs: words.iter().copied().chain([Port { id: exhausted, width: 1 }]).collect(), condition: exhausted,
-            arguments: words, outputs: vec![word(result)], when_true: Box::new(when_true), when_false: Box::new(when_false) };
-        let body = ProgramRegion::Compose(Box::new(tree_region), Box::new(exit_region));
-        let input_ids: Vec<u64> = inputs.iter().map(|port| port.id).collect();
-        self.steps.extend(prefix.clone());
-        self.steps.push(ProgramRegion::Loop { inputs: input_ids.clone(), bound: bound.id, parameters: parameters.clone(), count,
-            body: Box::new(body.clone()), exit: exit.id, next: next.clone(), outputs: outputs.clone(), exhausted });
-        self.steps.push(post.clone());
-        self.looped = Some(ReflectedLoop { source_name: name, arity: n, inputs: input_ids, bound: bound.id, parameters, count, exit: exit.id, next,
-            outputs, exhausted, prefix, body, post, conditions: pass.conditions, pass: pass_text, tree, split, decided: pass.decided,
-            base: base_expansion, base_decided: zero.decided });
-        Ok(Some(expansion))
     }
 
     /// `value` copied into `target`.
@@ -859,6 +881,11 @@ pub fn evaluate_number(elaborator: &Elaborator, name: &str) -> Result<u64, Sourc
 
 use heather_kernel::value::{Env, TmClo, Val, ValueArena};
 
+/// What one read may spend: more than a declaration, since a read evaluates
+/// a whole program's lowering, which the certificate states a function at a
+/// time. A read is untrusted; this only bounds a runaway.
+const READ_FUEL: u64 = heather_kernel::typing::DEFAULT_FUEL << 6;
+
 struct Reader<'a, 'v> {
     psi: &'a heather_kernel::term::GlobalCtx,
     arena: &'v ValueArena<'v>,
@@ -879,7 +906,7 @@ impl<'a, 'v> Reader<'a, 'v> {
     }
 
     fn force(&self, c: &'v TmClo<'v>) -> Result<std::sync::Arc<Val<'v>>, SourceError> {
-        let mut eval = heather_kernel::eval::Eval::new(heather_kernel::typing::DEFAULT_FUEL,
+        let mut eval = heather_kernel::eval::Eval::new(READ_FUEL,
             heather_kernel::reduce::Defs::transparent_cached(self.psi, &self.cache), heather_kernel::term::CtxBase::Nil, self.arena);
         eval.force(c).and_then(|v| eval.delta_whnf(v)).map_err(|_| SourceError::Unsupported("evaluation ran out of fuel".into()))
     }
