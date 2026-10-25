@@ -5,7 +5,7 @@ labels: [kernel,semantics,proofs,design,metatheory]
 area: heather-in-heather
 milestone: [hih-kernel-model]
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 ---
 
 Model the kernel's reduction in Heather and prove, against the model, the
@@ -58,3 +58,10 @@ ladder: `docs/kernel-model-design.md`.
   cancels the common prefix under `q` successors per pair. Open: the Lean
   recheck of the new module, and (design §7.4) programs and binary
   powering against unary iteration, and the `WfIh`/`WIh` synchronous heads.
+- 2026-10-25: From `docs/definitional-inversion-survey.md` §3: injectivity
+  of formers and subject reduction are provable without normalisation
+  (arXiv:2607.13662), so they are not behind the Gödel limit. If the
+  inversions are all that heather-coq's `AlgSound.v` takes from the
+  relation, rung 4's strategy changes can be proved sound against the
+  declarative rules inside Heather. Owned by
+  `definitional-inversion-domain-model`.
