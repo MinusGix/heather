@@ -1,0 +1,35 @@
+// Probes of `lib/std/itree/coitree_eutt.hthr`: counts that drop silent
+// steps at literal trees in checking position, and a client composing
+// equivalences by its own corecursion, through transitivity, and into
+// refinement. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_coitree_eutt.rs; the refusals stay there.
+import logic; import nat; import itree; import itree_trace; import coitree; import coitree_eutt;
+
+fn two_taus(E: Events) → Eutt<Nat>(E, CTau(CTau(CRet(1))), CRet(1)) { ERet(2, 0, 1, refl, refl) }
+fn more_than_enough(E: Events) → Eutt<Nat>(E, CRet(1), CTau(CRet(1))) { ERet(5, 7, 1, refl, refl) }
+theorem after_open<R>(E: Events, n: Nat, t: CoTree<R>(E)):
+    CoTree::after(E, Succ(n), CTau(t)) = CoTree::after(E, n, t) { refl }
+
+fn spin_self<R>(E: Events) → Eutt<R>(E, CoTree::spin(E), CoTree::spin(E)) {
+    ETau(3, 1, CoTree::spin(E), CoTree::spin(E), refl, refl, spin_self(E))
+}
+fn spin_tau<R>(E: Events) → Eutt<R>(E, CoTree::spin(E), CTau(CoTree::spin(E))) {
+    ETau(0, 1, CoTree::spin(E), CoTree::spin(E), refl, refl, spin_self(E))
+}
+fn two_off<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, CTau(CTau(t)), t) {
+    Eutt::trans(E, CTau(CTau(t)), CTau(t), t, Eutt::tau_l(E, CTau(t)), Eutt::tau_l(E, t))
+}
+fn moved<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, CTau(t), CTau(CTau(t))) {
+    Eutt::trans(E, CTau(t), t, CTau(CTau(t)), Eutt::tau_l(E, t), Eutt::sym(E, CTau(CTau(t)), t, two_off(E, t)))
+}
+theorem two_off_refines<R>(E: Events, t: CoTree<R>(E)):
+    Program::Refines(E, CoTree::program(E, CTau(CTau(t))), CoTree::program(E, t))
+{
+    Eutt::refines(E, CTau(CTau(t)), t, two_off(E, t))
+}
+theorem ret_r_refined<R>(E: Events, t: CoTree<R>(E)):
+    Program::Refines(E, CoTree::program(E, t), CoTree::program(E, CoTree::bind(E, t, λ r => CRet(r))))
+{
+    Eutt::refined(E, CoTree::bind(E, t, λ r => CRet(r)), t, Eutt::bind_ret_r(E, t))
+}

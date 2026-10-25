@@ -1,0 +1,68 @@
+// Probes of `lib/std/machine/memory.hthr` (`docs/byte-memory-design.md`),
+// with `lib/std/data/vector.hthr` and the byte packing in
+// `lib/std/bitvec/bitvec_bytes.hthr`: the model's choices at a literal memory
+// and at an open one (a refused span stores nothing at any refusal position;
+// the endianness is the packing's, not memory's), and the `¬` theorems for
+// the readings a client might expect (a self-overlapping span reads back, a
+// refused write is `Ok`, the two packings agree). Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+// Moved from crates/elab/tests/lib_std_memory.rs; the client showcase is a
+// CLI-tier row of docs/showcase/showcases.tsv.
+import logic; import algebra; import nat; import omega; import option; import result;
+import bitvec; import bitvec_bytes; import vector; import memory; import list;
+
+// A four-byte memory over 2-bit addresses: address 2 refuses writes.
+fn perms4(a: BitVec(2)) → Perm { match a.eq_bit(2) { True => Perm(True, False, False), False => Perm::data() } }
+fn zeros4() → Memory<BitVec(2), BitVec(8)> {
+    Memory<BitVec(2), BitVec(8)>(BitVec::space(2), λ (a: BitVec(2)) => BitVec::zero(), perms4)
+}
+fn byte(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// The refusal at the first, middle and last index of a span.
+theorem refused_first(): zeros4().write_span(2, [byte(1), byte(2)]) = Err(WriteFault(BitVec::ofNat(2))) { refl }
+theorem refused_middle(): zeros4().write_span(1, [byte(1), byte(2), byte(3)]) = Err(WriteFault(BitVec::ofNat(2))) { refl }
+theorem refused_last(): zeros4().write_span(0, [byte(1), byte(2), byte(3)]) = Err(WriteFault(BitVec::ofNat(2))) { refl }
+// The same span wrapping past 3 refuses at 2, its third address.
+theorem refused_after_wrap(): zeros4().write_span(0, [byte(1), byte(2), byte(3), byte(4)]) = Err(WriteFault(BitVec::ofNat(2))) { refl }
+// At an open memory: a refusal is exactly an `Err` carrying the first refused
+// address, and that address is in the span with its bit clear.
+theorem open_refusal<A, C>(m: Memory<A, C>, a: A, cs: [C; 3], x: A, r: m.refused(Perm::writes, a, 3) = Some(x)):
+    m.write_span(a, cs) = Err(WriteFault(x))
+{ m.write_span_refused(a, cs, x, r) }
+theorem open_refusal_exact<A, C>(m: Memory<A, C>, a: A, x: A, r: m.refused(Perm::writes, a, 3) = Some(x)):
+    Perm::writes(m.perms(x)) = False
+{ m.refused_some(Perm::writes, a, 3, x, r).clear }
+// A read-only address reads.
+theorem read_only_reads(): zeros4().read_span(1, 2) = Ok([byte(0), byte(0)]) { refl }
+// A refused write has no `Ok`.
+fn is_ok<A, E>(r: Result<A, E>) → Nat { match r { Ok(_) => 1, Err(_) => 0 } }
+theorem refused_is_not_ok(): ¬(zeros4().write_span(1, [byte(1), byte(2)]) = Ok(zeros4().set_span(1, [byte(1), byte(2)]))) {
+    λ h => { let s: (0 = 1) = cong_fn(is_ok, h); omega(s) }
+}
+
+// Endianness is the packing, at open words.
+theorem le_round_trip(w: BitVec(32)): BitVec::of_bytes_le(w.bytes_le(4)) = w { BitVec::of_bytes_le_bytes_le(4, w) }
+theorem be_round_trip(bytes: [BitVec(8); 8]): BitVec::of_bytes_be(bytes).bytes_be(8) = bytes { BitVec::bytes_be_of_bytes_be(8, bytes) }
+theorem be_is_reversed_le(bytes: [BitVec(8); 2]): BitVec::of_bytes_be(bytes) = BitVec::of_bytes_le(reverse(bytes)) { refl }
+// The two packings differ.
+theorem le_is_not_be(): ¬(BitVec::of_bytes_le([byte(1), byte(2)]) = BitVec::of_bytes_be([byte(1), byte(2)])) {
+    λ h => { let s: (513 = 258) = cong_fn(λ (w: BitVec(16)) => w.toNat(), h); omega(s) }
+}
+// The open read-back, at a buffer of any capacity.
+theorem open_buffer<C>(cap: Nat, cells: Nat → C, i: Nat, cs: [C; 3], fits: i + 3 <= cap):
+    Memory<Nat, C>(Nat::space(), cells, Perm::below(cap)).write_span(i, cs) =
+        Ok(Memory<Nat, C>(Nat::space(), cells, Perm::below(cap)).set_span(i, cs))
+{
+    Memory<Nat, C>(Nat::space(), cells, Perm::below(cap)).write_span_allowed(i, cs, Memory::buffer_writes(cap, cells, i, 3, fits))
+}
+
+// Five bytes in a four-byte space: index 4 lands on index 0, and the later
+// write wins, so the span does not read back.
+theorem overlap_later_wins(): zeros4().set_span(0, [byte(1), byte(2), byte(3), byte(4), byte(5)]).get_span(0, 5) =
+    [byte(5), byte(2), byte(3), byte(4), byte(5)]
+{ refl }
+theorem overlap_does_not_read_back():
+    ¬(zeros4().set_span(0, [byte(1), byte(2), byte(3), byte(4), byte(5)]).get_span(0, 5) = [byte(1), byte(2), byte(3), byte(4), byte(5)])
+{
+    λ h => { let s: (5 = 1) = cong_fn(λ (v: [BitVec(8); 5]) => head(v).toNat(), h); omega(s) }
+}

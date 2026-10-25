@@ -4,7 +4,7 @@ status: open
 labels: [testing,tooling]
 area: infrastructure
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 ---
 
 About 260 tests only assert that elaboration fails (`is_err()`,
@@ -35,3 +35,4 @@ unbound name or a parse. Only that one file uses it.
 
 - 2026-10-24: The helper exists: `support::assert_refused` with `Refusal::{Kernel, Mismatch, Says}` (crates/elab/tests/support). The float refusals use it. The rest migrate as their files are touched; `scripts/test-census --list bare_refusal` is the list. The lint in check-elab-test-families.mjs is not done.
 - 2026-10-24: The census counts a test whose body or helper names a `Refusal::` as refusal-with-reason. The number, algebra and relation files now use `support::assert_refused` throughout ([[library-tests-as-theorems]]).
+- 2026-10-25: Round 3 of the library migration gave every remaining library-family refusal a reason, `lib_setoid_mergeable.rs`'s eighteen included. One control was passing for an incidental reason: `bitvec`'s value-bound refusal wrote an unqualified `toNat`, so `<` had no meaning at its carrier. A `decide` refusal at a string goal spells the literal's kernel encoding ([[decide-refusal-spells-string-literal-encoding]]).

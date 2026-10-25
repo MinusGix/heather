@@ -1,0 +1,16 @@
+// Probes of `lib/std/machine/location.hthr`: composition reads through both
+// locations by computation, and the get-put and disjointness laws apply at
+// open carriers. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_location.rs.
+import logic; import location;
+
+theorem composed_read<S, A, B>(outer: Location<S, A>, inner: Location<A, B>, state: S):
+    compose_location(outer, inner).read(state) = inner.read(outer.read(state))
+{ refl }
+theorem certified_get_put<S, A>(location: Location<S, A>, laws: LocationLaws<S, A>(location), state: S):
+    location.write(state, location.read(state)) = state
+{ lawful_get_put(location, laws, state) }
+theorem framed<S, A, B>(left: Location<S, A>, right: Location<S, B>, apart: Disjoint<S, A, B>(left, right), state: S, value: B):
+    left.read(right.write(state, value)) = left.read(state)
+{ disjoint_read_left(left, right, apart, state, value) }

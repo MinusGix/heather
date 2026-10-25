@@ -55,7 +55,8 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
 /// [`cli_tier_rows_each_have_a_test`] keeps this list and the manifest equal,
 /// so a new CLI row fails until it has its own test.
 const CLI_ROWS: &[&str] = &["calc_text", "contextual_rewrite_generated", "relational_generator_generated",
-    "result_parser", "relational_contexts", "rat_client", "creal_client", "ordered_field_client", "semiring_client"];
+    "result_parser", "relational_contexts", "rat_client", "creal_client", "ordered_field_client", "semiring_client",
+    "itree_client", "itree_refinement_client", "memory_client"];
 
 fn check_row(name: &str) {
     let rows = showcase::at_tier(Tier::Cli);
@@ -192,4 +193,19 @@ fn cli_showcase_ordered_field_client() {
 #[test]
 fn cli_showcase_semiring_client() {
     check_row("semiring_client");
+}
+
+#[test]
+fn cli_showcase_itree_client() {
+    check_row("itree_client");
+}
+
+#[test]
+fn cli_showcase_itree_refinement_client() {
+    check_row("itree_refinement_client");
+}
+
+#[test]
+fn cli_showcase_memory_client() {
+    check_row("memory_client");
 }

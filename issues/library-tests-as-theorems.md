@@ -4,7 +4,7 @@ status: open
 labels: [testing,library]
 area: infrastructure
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 ---
 
 The library-module test files (`crates/elab/tests/lib_*.rs`, `nat_*.rs`; 377
@@ -49,3 +49,4 @@ library lines again as test lines over the last forty merges.
 
 - 2026-10-24: Float modules done: four `lib/_tests/std/num/float/*_tests.hthr` probe modules, `Finite::zeros_differ` in float.hthr, and one Rust file (`lib_std_float.rs`) of vacuity refusals with reasons, in place of four Rust files. Closed-value refusals dropped where a probe pins the right value.
 - 2026-10-24: Number, algebra and relation stack done (rat, creal, int, ordered_field, semiring, order, relation, ring tactic): eight `lib/_tests` probe modules with `¬` theorems for the expected false claims; 72 Rust tests became 27, all refusals with reasons bar one lint check; `lib_std_order.rs` gone; the four library clients moved to the showcase gate's CLI tier. Kernel-refused vacuity controls filed as [[implicit-argument-mismatch-reaches-kernel]]. Left: itree, coitree, list, tree, bitvec, text, memory, setoid families; `lib_algebra.rs` waits for the corpus.
+- 2026-10-25: Round 3: the remaining library families moved (interaction trees, list, list_algos, bounded_list, certified_lookup, tree, bitvec, string, utf8, memory, location, nat's evidence rules, the kernel model's reduction): eighteen `lib/_tests` modules of probes and `¬` theorems; three Rust files deleted; `itree_client`, `itree_refinement_client` and `memory_client` moved to the CLI showcase tier. `lib_setoid_mergeable.rs` stays Rust (generator API) with its refusals reasoned. Left: `lib_algebra.rs`, waiting for the `.hthr` corpus. docs/test-value-audit.md §6 has the details.

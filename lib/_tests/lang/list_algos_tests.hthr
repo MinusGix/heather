@@ -1,0 +1,22 @@
+// Probes of `lib/lang/list_algos.hthr` (`issues/list-algorithms-exercise.md`):
+// `count` and `isort` compute at a closed list with a duplicate, and `count`
+// counts multiplicity, which the permutation theorems about open lists would
+// not see (a `count` that always answered `0` satisfies them). Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5). Moved from crates/elab/tests/lib_list_algos.rs.
+import list_algos; import list; import nat; import bool; import logic;
+
+fn dup() → List<Nat> { [2, 1, 2] }
+
+theorem c_isort(): isort(dup()) = [1, 2, 2] { refl }
+theorem c_count(): count(2, dup()) = 2 { refl }
+theorem c_count_absent(): count(7, dup()) = 0 { refl }
+theorem c_perm(): count(2, isort(dup())) = count(2, dup()) { refl }
+theorem c_len(): isort(dup()).len() = 3 { refl }
+// Two occurrences are not three.
+theorem c_not_three(): ¬(count(2, dup()) = 3) { decide }
+
+// The specification is both halves: sortedness and the permutation fact,
+// each read from `isort_correct`.
+theorem both(xs: List<Nat>, a: Nat): count(a, isort(xs)) = count(a, xs) { isort_correct(xs).right(a) }
+theorem sorted(xs: List<Nat>): Sorted(isort(xs)) { isort_correct(xs).left }

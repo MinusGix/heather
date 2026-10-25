@@ -1,0 +1,39 @@
+// Probes of `lib/std/itree/coitree.hthr` (`docs/coitree-design.md`):
+// observations at a literal and an open depth, generic results and events,
+// and a client's own corecursive bisimilarity with its observation equations
+// in checking position. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_coitree.rs; the refusals stay there.
+import logic; import nat; import itree; import itree_trace; import coitree;
+
+// A counter loop with no fuel: `iter` goes round until the counter is zero.
+fn down_body(E: Events, a: Nat) → CoTree<Step<Nat, Nat>>(E) {
+    match a { Zero => CRet(Break(0)), Succ(m) => CRet(Continue(m)) }
+}
+fn down(E: Events, a: Nat) → CoTree<Nat>(E) { CoTree::iter(E, λ x => down_body(E, x), a) }
+
+// Observations compute at a literal depth and at an open one, for `spin` and
+// for a loop.
+theorem spin_two<R>(E: Events): CoTree::approx(E, 2, CoTree::spin<R>(E)) = Tau(Tau(Cut)) { refl }
+theorem spin_open<R>(E: Events, n: Nat): CoTree::approx(E, Succ(n), CoTree::spin<R>(E)) = Tau(CoTree::approx(E, n, CoTree::spin<R>(E))) { refl }
+theorem down_obs(E: Events): CoTree::obs(E, down(E, 2)) = OTau(down(E, 1)) { refl }
+theorem down_one(E: Events): CoTree::approx(E, 2, down(E, 1)) = Tau(Ret(0)) { refl }
+theorem down_cont(E: Events, n: Nat): CoTree::obs(E, down(E, Succ(n))) = OTau(down(E, n)) {
+    CoTree::iter_continue(E, λ x => down_body(E, x), Succ(n), n, refl)
+}
+
+// A client's own coinduction, and a bisimilarity used through the bridge to
+// approximations and through transitivity.
+fn spin_self<R>(E: Events) → Bisim<R>(E, CoTree::spin(E), CoTree::spin(E)) {
+    BTau(CoTree::spin(E), CoTree::spin(E), refl, refl, spin_self(E))
+}
+theorem ret_r_approx<R>(E: Events, n: Nat, t: CoTree<R>(E)):
+    ITree::Same(E, CoTree::approx(E, n, CoTree::bind(E, t, λ r => CRet(r))), CoTree::approx(E, n, t))
+{
+    Bisim::approx(E, n, CoTree::bind(E, t, λ r => CRet(r)), t, CoTree::bind_ret_r(E, t))
+}
+fn ret_r_twice<R>(E: Events, t: CoTree<R>(E)) → Bisim<R>(E, CoTree::bind<R, R>(E, CoTree::bind<R, R>(E, t, λ r => CRet(r)), λ r => CRet(r)), t) {
+    Bisim::trans(E, CoTree::bind<R, R>(E, CoTree::bind<R, R>(E, t, λ r => CRet(r)), λ r => CRet(r)),
+        CoTree::bind<R, R>(E, t, λ r => CRet(r)), t,
+        CoTree::bind_ret_r(E, CoTree::bind(E, t, λ r => CRet(r))), CoTree::bind_ret_r(E, t))
+}

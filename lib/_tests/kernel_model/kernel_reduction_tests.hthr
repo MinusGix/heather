@@ -1,0 +1,71 @@
+// Probes of `lib/kernel_model/kernel_reduction.hthr`, the reference model of
+// the kernel's weak-head reduction and the substitution property the fold
+// classifier relies on (`docs/kernel-model-design.md`): the model run at
+// literal terms by `refl`, the probe lemma applied at open values in checking
+// position, out of fuel exactly where the probe was, and the `¬` theorems
+// that each hypothesis is needed. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_kernel_model_reduction.rs; the refusal stays there.
+import logic; import bool; import nat; import option; import kernel_reduction;
+
+// `add`'s step, `λ k ih. Succ(ih)`.
+fn add_step() → Tm { Lam(Lam(NSucc(Bv(0)))) }
+// A step that cases on `k`: `λ k ih. elim_Nat(0, λ _ _. 0, k)`.
+fn split_step() → Tm { Lam(Lam(NRec(NZero, Lam(Lam(NZero)), Bv(1)))) }
+// A step that returns `k`.
+fn k_step() → Tm { Lam(Lam(Bv(1))) }
+fn three() → Tm { NSucc(NSucc(NSucc(NZero))) }
+
+// The model runs by kernel evaluation: the probe of `add`'s step, the step at
+// literals, and a run cut short by fuel. The probe names the `ih` atom, not
+// the `k` one.
+theorem add_probe(): Tm::whnf(4, Tm::probe(add_step())) = Some(NSucc(Fv(1))) { refl }
+theorem add_probe_is_not_k(): Tm::whnf(4, Tm::probe(add_step())) ≠ Some(NSucc(Fv(0))) {
+    λ h => {
+        let same: (NSucc(Fv(1)) = NSucc(Fv(0))) = Option::some_inj(NSucc(Fv(1)), NSucc(Fv(0)), h);
+        let atom: (Fv(1) = Fv(0)) = inj(same);
+        let index: (1 = 0) = inj(atom);
+        absurd(index)
+    }
+}
+theorem add_at_three(): Tm::whnf(4, App(App(add_step(), three()), three())) = Some(NSucc(three())) { refl }
+theorem add_short(): Tm::whnf(2, Tm::probe(add_step())) = None { refl }
+theorem split_probe_blocked(): Tm::whnf(4, Tm::probe(split_step())).map(λ (t: Tm) => t.blocked()) = Some(True) { refl }
+
+// The probe lemma at an open `ih`, in checking position: what the probe
+// reduced to is what the step reduces to at any closed value, at the same
+// fuel, and an instance runs out of fuel where the probe did.
+theorem add_open(ihv: Tm, c: ihv.Lc(0), v: ihv.Value()):
+    Tm::whnf(4, App(App(add_step(), NZero), ihv)) = Some(NSucc(ihv))
+{ Tm::probe_step(add_step(), trivial, 4, NZero, trivial, trivial, ihv, c, v, refl) }
+theorem add_open_short(kv, ihv: Tm, kc: kv.Lc(0), kvv: kv.Value(), c: ihv.Lc(0), v: ihv.Value()):
+    Tm::whnf(2, App(App(add_step(), kv), ihv)) = None
+{ Tm::probe_step(add_step(), trivial, 2, kv, kc, kvv, ihv, c, v, trivial) }
+// `ih` as the kernel holds it: an unevaluated thunk, left as it is.
+theorem add_thunk(kv, ihv: Tm, kc: kv.Lc(0), c: ihv.Lc(0)):
+    Tm::whnf(4, App(App(add_step(), kv), ihv)) = Some(NSucc(ihv))
+{ Tm::probe_step_settled(add_step(), trivial, 4, kv, kc, ihv, c, refl) }
+theorem add_thunk_literal():
+    Tm::whnf(4, App(App(add_step(), NZero), App(Lam(Bv(0)), NZero))) = Some(NSucc(App(Lam(Bv(0)), NZero)))
+{ add_thunk(NZero, App(Lam(Bv(0)), NZero), trivial, And(trivial, trivial)) }
+// The peeled reading (`k := Succ x`) is an instantiation whose image mentions
+// another atom: `split_step` settles there.
+theorem split_peeled_probe(): Tm::whnf(5, App(App(split_step(), NSucc(Fv(2))), Fv(1))) = Some(NZero) { refl }
+theorem split_peeled(x: Tm, c: x.Lc(0)): Tm::whnf(5, App(App(split_step(), NSucc(x)), x)) = Some(NZero) {
+    j(split_step().inst_ground(λ (a: Nat) => x, And(trivial, And(trivial, trivial))),
+      λ y p => Tm::whnf(5, App(App(y, NSucc(x)), x)) = Some(NZero),
+      Tm::whnf_inst_settled(λ (a: Nat) => x, λ a => c, 5,
+          App(App(split_step(), NSucc(Fv(2))), Fv(1)), refl))
+}
+
+// Each hypothesis is needed. A step that cases on `k` is blocked, and its
+// instance at `k := 0` is not the instance of its probe; an instance by a
+// non-value is not the instance of the probe either.
+theorem split_differs():
+    Tm::whnf(4, App(App(split_step(), NZero), NZero))
+        ≠ Tm::whnf(4, Tm::probe(split_step())).map(λ (v: Tm) => v.inst(Tm::probe_sub(NZero, NZero)))
+{ λ h => absurd(Option::some_inj(NZero, NRec(NZero, Lam(Lam(NZero)), NZero), h)) }
+theorem non_value_differs():
+    Tm::whnf(4, App(App(k_step(), App(Lam(Bv(0)), NZero)), NZero))
+        ≠ Tm::whnf(4, Tm::probe(k_step())).map(λ (v: Tm) => v.inst(Tm::probe_sub(App(Lam(Bv(0)), NZero), NZero)))
+{ λ h => absurd(Option::some_inj(NZero, App(Lam(Bv(0)), NZero), h)) }
