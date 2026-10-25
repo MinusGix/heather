@@ -90,6 +90,7 @@ fn main() -> ExitCode {
         },
         Some((cmd, rest)) if cmd == "fmt" => fmt::run(rest),
         Some((cmd, rest)) if cmd == "compile-x86" => native::run(rest),
+        Some((cmd, rest)) if cmd == "write-elf" => native::write_elf(rest),
         _ => usage(),
     }
 }
@@ -98,7 +99,8 @@ const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
-                     \x20      heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]";
+                     \x20      heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
+                     \x20      heather write-elf <file.hthr> <program> -o <output> [-L <dir>]... [--cache-dir <dir>]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");

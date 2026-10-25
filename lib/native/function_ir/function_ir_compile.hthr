@@ -278,61 +278,8 @@ theorem lower_program_emitted(functions: List<Function>, placement: List<Place>,
 }
 
 // ---------------------------------------------------------------------------
-// The lowered code as numbers, for the compiler to read back and state as a
-// literal: every later statement about the code then evaluates the literal,
-// not the lowering again (a declaration's fuel is its own). Nothing proved
-// reads these; the certificate's `lower_program(…) = Some(literal)` is what
-// checks the literal.
-
-fn ConditionCode::number(self cc: ConditionCode) → Nat {
-    match cc { O => 0, NO => 1, B => 2, AE => 3, E => 4, NE => 5, BE => 6, A => 7, S => 8, NS => 9, P => 10, NP => 11, L => 12, GE => 13, LE => 14, G => 15 }
-}
-
-// An instruction's tag, then its fields: registers by `Gpr::index` (a low
-// byte by its register's), immediates by value.
-fn Instruction::numbers(self instruction: Instruction) → List<Nat> {
-    match instruction {
-        MovRR(d, s) => [0, d.index(), s.index()],
-        MovRI(d, immediate) => [1, d.index(), immediate.toNat()],
-        AddRR(d, s) => [2, d.index(), s.index()],
-        SubRR(d, s) => [3, d.index(), s.index()],
-        AndRR(d, s) => [4, d.index(), s.index()],
-        OrRR(d, s) => [5, d.index(), s.index()],
-        XorRR(d, s) => [6, d.index(), s.index()],
-        CmpRR(l, r) => [7, l.index(), r.index()],
-        SetBelow(d) => [8, low_byte_gpr(d).index()],
-        SetLess(d) => [9, low_byte_gpr(d).index()],
-        SetEqual(d) => [10, low_byte_gpr(d).index()],
-        TestRR(l, r) => [11, l.index(), r.index()],
-        AddRI8(d, immediate) => [12, d.index(), immediate.toNat()],
-        AddRI32(d, immediate) => [13, d.index(), immediate.toNat()],
-    }
-}
-
-fn instructions_numbers(instructions: List<Instruction>) → List<Nat> {
-    match instructions { Nil => [], Cons(first, rest) => first.numbers() ++ instructions_numbers(rest) }
-}
-
-// An item's tag, then its fields; a block's instruction count before them.
-// The items the lowering does not emit are tag 7, which the compiler refuses.
-fn Asm::numbers(self item: Asm) → List<Nat> {
-    match item {
-        Block(instructions) => Cons(0, Cons(instructions.len(), instructions_numbers(instructions))),
-        Jcc(cc, target) => [1, cc.number(), target],
-        Jmp(target) => [2, target],
-        CallTo(target) => [3, target],
-        Ret => [4],
-        Spill(store) => [5, store.source.index(), store.offset.toNat()],
-        Reload(load) => [6, load.destination.index(), load.offset.toNat()],
-        Code(_) => [7], Load(_) => [7], Store(_) => [7], LoadByte(_) => [7], StoreByte(_) => [7], Syscall => [7],
-        Proved(_, _, _, _) => [7], Piece(_, _, _) => [7], Refer(_, _, _) => [7], Hole(_, _) => [7],
-    }
-}
+// The lowered code as numbers (`Prog::numbers`, x86_64_asm), for the
+// compiler to read back and state as a literal; the placement's here.
 
 // A place: its register's index, or 16 folded.
 fn Place::number(self place: Place) → Nat { match place { Into(register) => register.index(), Folded => 16 } }
-
-// The items from the first, each its name and then itself.
-fn Prog::numbers(self p: Prog) → List<Nat> {
-    match p { Start => [], At(before, name, item) => Prog::numbers(before) ++ Cons(name, item.numbers()) }
-}

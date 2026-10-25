@@ -91,6 +91,7 @@ if [[ "${1:-}" == --fast ]]; then
         --skip programs_with_calls_execute
         --skip programs_with_loops_execute
         --skip loop_sources_are_refused
+        --skip compiled_cat_runs_as_cat
         --skip source_to_native_binary)
 elif [[ "${1:-}" == --pr ]]; then
   shift

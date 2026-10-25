@@ -11,12 +11,18 @@ use std::sync::Arc as Rc;
 use heather_elab::{Elaborator, LintProfile};
 use heather_cli::{loader, semantic::SemanticSession};
 
+mod elf;
 mod support;
 use support::SUPPORT;
 mod verified;
 
 pub fn run(args: &[String]) -> ExitCode {
     report(compile(args))
+}
+
+/// `write-elf` (`native/elf.rs`).
+pub fn write_elf(args: &[String]) -> ExitCode {
+    report(elf::write(args))
 }
 
 fn report(result: Result<(), String>) -> ExitCode {
