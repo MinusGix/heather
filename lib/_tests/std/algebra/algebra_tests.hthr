@@ -1,0 +1,392 @@
+// Probes of `lib/std/algebra/algebra.hthr`, the library's classes and
+// instances (`docs/traits-design.md` §13, `issues/traits.md`): which instance
+// is registered at each carrier, that the extends chain reaches one value
+// from every direction, that the generic instance answers at an element type
+// nobody enumerated, and the refusals that keep the policy honest. Tests,
+// not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5). Moved from crates/elab/tests/lib_algebra.rs,
+// which keeps the two facts about the derived-instance table that Heather
+// cannot state.
+//
+// Everything an instance produces is a generated term
+// (`docs/testing-generated-terms.md`), so the axes are varied deliberately: an
+// open element type (`concat<A>` at a type parameter, not only at `Nat`), a
+// neutral receiver beside the computing cases, a checking position (each
+// `refl` compares a resolved dictionary against a written one), and a
+// negative control beside each positive. The refusals are checked by `heather
+// check --expectations` (the library gate passes it): a declaration under an
+// `// expect-error` line must be refused for the reason the line names.
+import bool; import nat; import option; import list; import algebra;
+
+// ---------------------------------------------------------------------------
+// Which instance is registered, and that it is the one the library's header
+// says it is. Each of these computes, which is the only thing that tells a
+// resolved dictionary from some other resolved dictionary.
+
+theorem nat_is_addition(): sum([2, 3]) = 5 { refl }
+theorem bool_is_conjunction(): all_of([True, False]) = False { refl }
+theorem empty_fold_is_the_unit(): sum(Nil) = 0 { refl }
+theorem empty_bool_fold_is_True(): all_of(Nil) = True { refl }
+// Neutral, not literal: the fold on a parameter reduces one step and stops at
+// the element, which is where a wrong `unit` would still be visible.
+theorem neutral_singleton(n: Nat): sum([n]) = n { sum_single(n) }
+
+// The monoid consumer is recovered from the first-class list algebra, at
+// distinct structures and at a neutral list.
+theorem alg_nat(xs: List<Nat>): monoid_list_alg<Nat>(Nat::add).list_fold(xs) = xs.mconcat(Nat::add) {
+    list_fold_monoid(Nat::add, xs)
+}
+theorem alg_bool(xs: List<Bool>): monoid_list_alg<Bool>(Bool::and).list_fold(xs) = xs.mconcat(Bool::and) {
+    list_fold_monoid(Bool::and, xs)
+}
+theorem alg_open<A>(xs, ys: List<A>): (monoid_list_alg<List<A>>(++)).list_fold([xs, ys]) = xs.append(ys) {
+    trans(list_fold_monoid(++, [xs, ys]), trans(sym(xs.append_assoc(ys, Nil)), xs.append(ys).append_nil()))
+}
+
+// Two structures on one carrier, both registered, as equals
+// (`docs/operation-indexed-classes-design.md` §3). `all_of` and `any_of` are
+// one generic fold at one carrier under two operations, and they compute
+// differently because the operation is part of the goal's type: no local
+// binding, no shadowing, and nothing nominates one of them.
+theorem any_is_disjunction(): any_of([True, False]) = True { refl }
+theorem empty_any_is_False(): any_of(Nil) = False { refl }
+theorem the_two_folds_disagree(): all_of([True, False]) = False { refl }
+// Each ground goal finds its own, by the index and nothing else.
+theorem and_unit(): Bool::Monoid(Bool::and).unit = True { refl }
+theorem or_unit(): Bool::Monoid(Bool::or).unit = False { refl }
+
+// The negative control for the pair above: `any_of` is not `all_of`. A
+// positive alone cannot tell one Bool monoid from the other, since both are
+// registered and both type-check.
+// expect-error(kernel): the kernel rejected `any_is_not_all`: NotConvertible
+theorem any_is_not_all(): any_of([True, False]) = False { refl }
+// expect-error(kernel): `(Monoid#bool#Bool#or).unit` and `True` are not
+theorem or_unit_is_not_True(): Bool::Monoid(Bool::or).unit = True { refl }
+
+// The library's Boolean spelling is `&&`/`||`, not the semiring's `+`/`*`
+// (issues/bool-operator-designations.md): the doubled symbols resolve by the
+// library's designations, and the library's own corollaries are stated in
+// this notation (`bool_and_true`/`bool_or_false`).
+theorem and_notated(x: Bool, y: Bool): x && y = x.and(y) { refl }
+theorem or_notated(x: Bool, y: Bool): x || y = x.or(y) { refl }
+theorem or_false_consumed(x: Bool): x.or(False) = x { bool_or_false(x) }
+// `+` at `Bool` is refused, because it means nothing there any more. The
+// refusal is the review's content, so it is pinned beside the spelling that
+// replaced it.
+// expect-error: nothing designates `+` at `Bool`
+theorem bool_plus(x: Bool, y: Bool): x + y = x.or(y) { refl }
+// `sum_all`, a `+`-fold, is refused at `Bool` too, though not yet by name:
+// its `Monoid<A>(+)` constraint is not solved from the argument's type.
+// expect-error: cannot infer the implicit arguments needed for `Monoid<A>(+)`
+fn any_by_sum(bs: List<Bool>) → Bool { sum_all(bs) }
+
+// ---------------------------------------------------------------------------
+// The generic instance, at an element type nobody enumerated.
+
+// Open element type: the goal is `Monoid<List<A>>(append)` with `A` the
+// probe's own type parameter, so only backchaining through
+// `instance<A> Monoid<List<A>>(append)` answers it, with the index
+// instantiated together with the carrier.
+fn join<A>(xss: List<List<A>>) → List<A> { concat(xss) }
+// Checking position, at the open type: the result is used where `List<A>` is
+// expected and the dictionary is never named.
+fn join_then_append<A>(xss: List<List<A>>, ys: List<A>) → List<A> { join(xss).append(ys) }
+
+// …and it computes at a closed one, which is what says the resolved
+// dictionary's `op` is `append` and not something else of the same type.
+theorem flattens(): concat<Nat>([[1], [2]]) = [1, 2] { refl }
+// Neutral: two parameters, nothing reduces past the first `append`.
+theorem concat_neutral(xs: List<Nat>, ys: List<Nat>): concat([xs, ys]) = xs.append(ys.append(Nil)) { refl }
+// A generic class lemma, instantiated at a well-founded carrier.
+theorem neutral_concat_single<A>(xs: List<A>): concat([xs]) = xs { concat_single(xs) }
+
+// The library spelling for list concatenation is `++`, not arithmetic `+`
+// (issues/list-append-symbol.md). The generic designation works at an open
+// element type, and the literal control computes.
+theorem append_neutral<A>(xs: List<A>, ys: List<A>): xs ++ ys = xs.append(ys) { refl }
+fn just_one() → List<Nat> { [1] }
+theorem append_literal(): just_one() ++ [2] = [1, 2] { refl }
+theorem concat_is_positional<A>(xss: List<List<A>>): concat(xss) = xss.mconcat(List::append) { refl }
+// expect-error: nothing designates `+` at `List`
+// expect-error: fallback name `add`
+theorem list_plus<A>(xs: List<A>, ys: List<A>): xs + ys = xs.append(ys) { refl }
+
+// ---------------------------------------------------------------------------
+// `extends`: the canonical value and the chain.
+
+// Every carrier declares its chain child-first: one `CommMonoid` declaration,
+// two ancestors synthesized as its own projections. The index rides along:
+// the synthesized `Monoid<Bool>(Bool::or)` is keyed at `or` and
+// `Monoid<Bool>(Bool::and)` at `and`, so one carrier carries two whole chains
+// that never meet.
+theorem nat_up(): Nat::CommMonoid(Nat::add).unit = Nat::Monoid(Nat::add).unit { refl }
+theorem bool_and_up(): Bool::CommMonoid(Bool::and).unit = Bool::Monoid(Bool::and).unit { refl }
+theorem bool_or_up(): Bool::CommMonoid(Bool::or).unit = Bool::Monoid(Bool::or).unit { refl }
+// The negative control for the whole `extends` story: the two Bool chains do
+// not leak into each other. Without it, a synthesized parent that silently
+// took the wrong components would pass every probe above.
+theorem or_zero_is_False(): Bool::Monoid(Bool::or).unit = False { refl }
+// expect-error(kernel): `(Monoid#bool#Bool#or).unit` and `True` are not
+theorem or_zero_is_True(): Bool::Monoid(Bool::or).unit = True { refl }
+
+// The headline (`docs/operation-indexed-classes-design.md` §13 item 1): one
+// generic law, proved once against `CommMonoid`, spent at three structures,
+// two of them on one carrier. Each corollary's goal names its operation, so
+// the index is pinned by unification alone (§4.2's equal-arity flex-rigid
+// rule) and the ground goal hits the registry key.
+theorem at_add(x: Nat): x.add(0) = x { op_unit_of_comm(x) }
+theorem at_and(x: Bool): x.and(True) = x { op_unit_of_comm(x) }
+theorem at_or(x: Bool): x.or(False) = x { op_unit_of_comm(x) }
+// The law is about the registered unit, so a wrong one is refused rather than
+// derived, in the checking position where the law's instance meets the
+// stated goal: the instance's type mentions the registered unit and the
+// stated one is the wrong literal.
+// expect-error(mismatch): .unit
+// expect-error: or(x, True) = x
+theorem at_or_wrong_unit(x: Bool): x.or(True) = x { op_unit_of_comm(x) }
+
+// ---------------------------------------------------------------------------
+// The class lemmas, and the consumers that never name a dictionary.
+
+// One statement, two carriers, no re-proof, in checking position: the class
+// lemma's instantiated type has to converge with each goal.
+theorem single_at_nat(n: Nat): sum([n]) = n { n.mconcat_single(Nat::add) }
+theorem single_at_and(b: Bool): all_of([b]) = b { b.mconcat_single(Bool::and) }
+theorem single_at_or(b: Bool): any_of([b]) = b { b.mconcat_single(Bool::or) }
+
+// Receiver dispatch in library code: `max_of` is written `x.le(y)` and the
+// dictionary comes from its own `requires` binder. At a concrete carrier the
+// registry answers instead, and the result computes.
+theorem picks_the_larger(): max_of(2, 5) = 5 { refl }
+theorem picks_the_larger_the_other_way(): max_of(5, 2) = 5 { refl }
+theorem max_on_bools(): max_of(False, True) = True { refl }
+// Neutral receiver, through the class lemma rather than by computation.
+theorem max_idempotent(n: Nat): max_of(n, n) = n { max_of_self(n) }
+
+// `:= infer` on an ordinary (non-`requires`) binder: the caller of
+// `or_default` names neither the dictionary nor the fallback.
+fn no_nat() → Option<Nat> { None }
+fn no_list() → Option<List<Nat>> { None }
+theorem nat_default(): or_default(no_nat()) = 0 { refl }
+theorem list_default(): or_default(no_list()) = Nil { refl }
+theorem some_wins(n: Nat): or_default(Some(n)) = n { refl }
+// Open element type: the dictionary is resolved at the probe's own parameter.
+fn head_or_default<A: Default>(o: Option<A>) → A { or_default(o) }
+
+// `Numeral` resolves generically and keeps `Nat` as the default.
+fn one<A: Numeral>() → A { 1 }
+fn three() → Nat { 3 }
+theorem generic_nat(): one<Nat>() = 1 { refl }
+theorem ordinary_nat(): three() = 3 { refl }
+
+// ---------------------------------------------------------------------------
+// The policy, enforced.
+
+// One instance per (class, carrier head, index): a second `Monoid<Bool>` at an
+// index already registered is refused, and the message names the index that
+// collided (`docs/operation-indexed-classes-design.md` §3.1, §11).
+// expect-error: already has an instance
+// expect-error: index
+instance Monoid<Bool>(Bool::or) {
+    unit := False,
+    assoc := Bool::or_assoc,
+    unit_l := Bool::or_false_l,
+    unit_r := Bool::or_false_r,
+}
+// …and the positive control beside it: a third structure at one carrier is an
+// ordinary declaration, because the key distinguishes it.
+fn andnot(a: Bool, b: Bool) → Bool { a.and(b.not()) }
+class Mag<A>(op: A → A → A) { pt: A, fixes: op(pt, pt) = pt }
+instance Mag<Bool>(andnot) { pt := False, fixes := refl }
+instance Mag<Bool>(Bool::and) { pt := True, fixes := refl }
+instance Mag<Bool>(Bool::or) { pt := False, fixes := refl }
+
+// An instance head whose index is not spellable is refused at the
+// declaration, with the scope alternative stated (§3.1).
+// expect-error: spellable
+instance Monoid<Bool>(λ (a: Bool) (b: Bool) => a) {
+    unit := True,
+    assoc := Bool::and_assoc,
+    unit_l := Bool::and_true_l,
+    unit_r := Bool::and_true_r,
+}
+
+// A carrier with no instance is a resolution failure with a trace, not a
+// silent wrong answer. The goal is named, though with the class lemma's own
+// binders rather than `Colour` and `first`.
+inductive Colour { Red, Green }
+fn first(a: Colour, b: Colour) → Colour { a }
+// expect-error: no instance for `Monoid<A>(op)` — the search
+fn fold_colours(cs: List<Colour>) → Colour { cs.mconcat(first) }
+
+// The naming constraint the library discovered: a class field that shares
+// its spelling with a global in scope can never be reached by a receiver.
+// `Cmp`'s field is `le` for this reason: `leb` would have collided with
+// `std/nat`'s function, and the elaborator names both readings rather than
+// choosing. Pinned so the rename is not undone by accident.
+//
+// The shadowed global is `sub`, which only `std/nat` declares: a name two
+// modules declare (`leb`, since `std/bool` dropped its `_bool` suffixes) is
+// ambiguous at the value, a different refusal that would pass this control
+// for the wrong reason. The refusal is for readings that differ
+// (issues/receiver-dispatch-coinciding-readings.md).
+class CmpConst<A> { sub: A → A → A }
+instance CmpConst<Nat> { sub := fun (x: Nat) => fun (y: Nat) => x }
+// expect-error: write one of them
+fn sub_by_receiver(a: Nat, b: Nat) → Nat { a.sub(b) }
+// …and the positive control: a field filled with the global the bare reading
+// calls (here `mul`, also `std/nat`'s alone) is one reading, and checks.
+class CmpSame<A> { mul: A → A → A }
+instance CmpSame<Nat> { mul := Nat::mul }
+fn mul_by_receiver(a: Nat, b: Nat) → Nat { a.mul(b) }
+theorem mul_by_receiver_is_mul(a: Nat, b: Nat): mul_by_receiver(a, b) = a.mul(b) { refl }
+
+// ---------------------------------------------------------------------------
+// Owner-keyed dispatch and the upcast.
+
+// Owner-keyed dispatch (`docs/traits-owner-dispatch-design.md` §2) builds the
+// goal at the class that declares the member, and at an indexed class the
+// index comes from the binder in scope: `x.assoc(y, z)` inside a `Monoid`
+// binder is a `Semigroup` goal at that binder's own operation, answered by
+// upcast. The two that merely inherit `assoc` are not candidates at all.
+theorem assoc_from_a_monoid<A: Monoid(o)>(o: A → A → A, x: A, y: A, z: A): o(o(x, y), z) = o(x, o(y, z)) {
+    x.assoc(y, z)
+}
+// Two hops: `CommMonoid` inherits `assoc` from `Semigroup` through `Monoid`.
+theorem assoc_from_a_comm_monoid<A: CommMonoid(o)>(o: A → A → A, x: A, y: A, z: A): o(o(x, y), z) = o(x, o(y, z)) {
+    x.assoc(y, z)
+}
+
+// The negative control the index adds: at a concrete carrier a receiver fixes
+// the carrier and nothing fixes the operation, so the dispatch is refused by
+// name with both Bool monoids listed
+// (`docs/operation-indexed-classes-design.md` §5.1). Scope, then refuse, and
+// here there is no scope.
+// expect-error: not pinned
+// expect-error: Semigroup<Bool>(Bool::and)
+// expect-error: Semigroup<Bool>(Bool::or)
+theorem concrete_dispatch(a: Bool, b: Bool, c: Bool): a.and(b).and(c) = a.and(b.and(c)) { a.assoc(b, c) }
+// …and the spelling that works instead, which is what the refusal names.
+theorem concrete_named(a: Bool, b: Bool, c: Bool): a.and(b).and(c) = a.and(b.and(c)) {
+    Bool::Semigroup(Bool::and).assoc(a, b, c)
+}
+
+// The open carrier, which is what the upcast exists for: the dictionary in
+// scope is `CommMonoid<G>` and the dispatched goal is an ancestor's, two
+// records that no conversion relates. Nothing here is concrete, so no
+// registry entry and no synthesized parent global can be the one answering.
+theorem unit_r_from_a_comm_monoid<G> requires m: CommMonoid<G>(o) (o: G → G → G, x: G): o(x, m.unit) = x {
+    x.unit_r()
+}
+// Checking position at the open carrier: the dispatched projection is the
+// proof a stated equation wants, and the dictionary is never named.
+theorem two_hops<G> requires m: CommMonoid<G>(o) (o: G → G → G, x: G, y: G, z: G): o(o(x, y), z) = o(x, o(y, z)) {
+    x.assoc(y, z)
+}
+
+// The upcast as a resolution rule rather than a dispatch one: a lemma stated
+// at `Monoid<G>` is discharged from a `CommMonoid<G>` binder, at an open `G`,
+// with the dictionary never written at the use site.
+theorem left_unit<G> requires m: Monoid<G>(o) (o: G → G → G, x: G): o(m.unit, x) = x { m.unit_l(x) }
+// `use_it` has only the child; the goal `Monoid<G>(o)` is answered by upcast,
+// and the index travels with it.
+theorem use_it<G> requires m: CommMonoid<G>(o) (o: G → G → G, x: G): o(m.unit, x) = x { left_unit(o, x) }
+// Two steps up the chain, and the grandparent is one hop (`ancestors` is
+// transitive), still at an open carrier.
+fn assoc_of<G> requires m: Semigroup<G>(o) (o: G → G → G, x: G) → G { o(x, o(x, x)) }
+fn use_grandparent<G> requires m: CommMonoid<G>(o) (o: G → G → G, x: G) → G { assoc_of(o, x) }
+
+// A dispatched projection reads through the upcast
+// (`docs/traits-named-upcast-design.md`), so the anonymous spelling and the
+// named-dictionary one are one term. This is the pin that retired
+// `issues/upcast-assembly-cost-at-open-carriers.md`: the two spellings stopped
+// being two terms.
+fn anon<G: CommMonoid(o)>(o: G → G → G, x: G) → G { o(x, G.unit) }
+theorem anon_is_the_dictionary<G> requires a: CommMonoid<G>(o) (o: G → G → G, x: G): anon(o, x) = o(x, a.unit) { refl }
+// Two hops up the chain, at an open carrier, in one expression.
+fn deep<G: CommMonoid(o)>(o: G → G → G, x: G) → G { o(o(x, G.unit), x) }
+theorem deep_is_the_dictionary<G> requires a: CommMonoid<G>(o) (o: G → G → G, x: G):
+    deep(o, x) = o(o(x, a.unit), x)
+{
+    refl
+}
+// …and it still computes at the concrete carriers the generic proof never
+// mentioned, which the library's `nat_add_zero`/`bool_or_false` consume.
+theorem anon_at_nat(a: Nat): anon(Nat::add, a) = a.add(0) { refl }
+theorem anon_at_bool(a: Bool): anon(Bool::or, a) = a.or(False) { refl }
+
+// An override with an agreement certificate, dispatched through an upcast.
+// Reading through takes the child's field, which for an overriding instance
+// is the override; layer 1 §4.5's certificate is what makes that
+// indistinguishable from the ancestor's value. Both halves are pinned: the
+// dispatch lands on the child's field, and the certificate holds.
+class Sg<A> { sop: A → A → A }
+class Mn<A> extends Sg<A> { munit: A }
+instance Sg<Nat> { sop := Nat::add }
+// The child re-states the inherited field: an override, which owes `refl`
+// against the registered `Nat::Sg.sop` and gets it.
+instance Mn<Nat> { munit := 0, sop := Nat::add }
+// Open carrier, dispatched at the owner `Sg` and answered by upcast from `Mn`.
+fn twice_over<G> requires m: Mn<G> (x: G) → G { x.sop(x) }
+theorem twice_over_is_the_child<G> requires m: Mn<G> (x: G): twice_over(x) = m.sop(x, x) { refl }
+// …and the child's field is the ancestor's, which is what the certificate says.
+theorem the_override_agrees(a: Nat, b: Nat): Nat::Mn.sop(a, b) = Nat::Sg.sop(a, b) { refl }
+theorem twice_over_at_nat(a: Nat, b: Nat): twice_over(a) = a.add(a) { refl }
+
+// The negative control for the upcast: it fires between a class and its
+// ancestors and nowhere else. `Cmp<A>` and `Monoid<A>` are unrelated, so a
+// `Cmp` binder answers no `Monoid` goal: the goal reports its search rather
+// than quietly building a record out of the wrong dictionary. The statement
+// mentions no dictionary, so resolution is the only thing that can fail.
+fn dbl<G> requires m: Monoid<G>(o) (o: G → G → G, x: G) → G { o(m.unit, x) }
+// expect-error: no instance for `Monoid<G>(o)`
+fn dbl_from_cmp<G> requires c: Cmp<G> (o: G → G → G, x: G) → G { dbl(o, x) }
+// …and the positive control beside it: the same call with an
+// ancestor-related binder resolves.
+fn dbl_from_comm<G> requires m: CommMonoid<G>(o) (o: G → G → G, x: G) → G { dbl(o, x) }
+
+// Owner-keying is not a tiebreak: two unrelated classes each declaring `le`
+// at one carrier are two owners, and the receiver still refuses to choose,
+// naming both (`docs/traits-receiver-dispatch-design.md` §4 rule 3).
+class Ordish<A> { le: A → A → Bool }
+instance Ordish<Nat> { le := nat::Nat::leb }
+// expect-error: Cmp<Nat>
+// expect-error: Ordish<Nat>
+fn two_owners(a: Nat, b: Nat) → Bool { a.le(b) }
+
+// A member of exactly one class dispatches, generically and concretely, and
+// `Monoid` is the hierarchy it always wanted to be, with `op` declared by
+// `Semigroup` and reached through the child dictionary by upcast.
+fn generic<A: Monoid(o)>(o: A → A → A, x: A, y: A) → A { o(x, y) }
+theorem generic_agrees(a: Nat, b: Nat): generic(Nat::add, a, b) = a.add(b) { refl }
+// The whole chain is synthesized from one `CommMonoid` declaration and every
+// class in it is keyed at the same index.
+theorem one_unit(): Nat::Monoid(Nat::add).unit = Nat::CommMonoid(Nat::add).unit { refl }
+
+// The library's own type projections (`docs/traits-type-projection-design.md`),
+// where the file uses them: at an open carrier inside `mconcat` and
+// `mconcat_single`, and at a concrete one in the hierarchy lemmas. The
+// load-bearing claim is that the projection is the very term the dictionary
+// field is, so the migration moved a spelling and not a value.
+//
+// Open, which is where `A.unit` lives in the library: the binder in scope pins
+// the index and the projection is an ordinary field read.
+theorem the_empty_fold_is_the_projected_unit<A: Monoid(o)>(o: A → A → A): mconcat(Nil, o) = A.unit { refl }
+// Concrete, through the index-bearing spelling `T::C(args)`: an indexed class
+// has no shorter one at a carrier with two structures.
+theorem the_unit_is_the_same_value(): Nat::Monoid(Nat::add).unit = 0 { refl }
+theorem the_bool_unit_too(): Bool::Monoid(Bool::and).unit = True { refl }
+// …and it computes: the empty fold at a carrier is that carrier's unit.
+theorem the_empty_nat_fold(): sum(Nil) = Nat::Monoid(Nat::add).unit { refl }
+// The negative control: a type parameter with no constraint providing the
+// field reports the value slot, with every registered instance listed, which
+// is the diagnosis a reader needs in order to know which structure was wanted
+// (`docs/operation-indexed-classes-design.md` §11).
+// expect-error: not pinned
+// expect-error: Monoid<Nat>(Nat::add)
+// expect-error: Monoid<Bool>(Bool::or)
+fn unconstrained_unit<A>() → A { A.unit }
+// …and the unindexed classes still report the search.
+// expect-error: Default<A>
+// expect-error: binder(s) consulted
+fn unconstrained_default<A>() → A { A.default }

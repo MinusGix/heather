@@ -223,6 +223,22 @@ impl ElabError {
         }
     }
 
+    /// Where the error points, when it points anywhere: an unsolved-goal
+    /// listing points at its first goal. A declaration's errors point
+    /// inside it, which is how `heather check --expectations` attributes
+    /// them to the declarations that expect them; one that points elsewhere
+    /// is reported as it stands, never taken as an expected refusal.
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            ElabError::Parse(e) => Some(e.span),
+            ElabError::Elab { span, .. }
+            | ElabError::Kernel { span, .. }
+            | ElabError::Resolution { span, .. }
+            | ElabError::ArgSlotEscape { span } => Some(*span),
+            ElabError::UnsolvedGoals { goals, .. } => goals.first().map(|g| g.span),
+        }
+    }
+
     /// The error with source positions resolved — what a front-end should
     /// print. [`std::fmt::Display`] gives the same text without them, for
     /// where the source is no longer at hand.

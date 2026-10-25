@@ -16,6 +16,8 @@
 //! bench links it. That is why this crate has a `lib` target at all; nothing
 //! else here is meant to be a public API.
 
+// `check --expectations`' reader, here so its unit tests run with the lib.
+pub mod expect;
 pub mod loader;
 pub mod semantic;
 // The showcase manifest is here for the same reason the loader is: four

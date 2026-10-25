@@ -7,7 +7,8 @@
 //! last test went (`elf64_load`, at #156) was checked by nothing. Here the
 //! library is checked as a whole, through the CLI, and two lints keep the
 //! tree honest: every module is reached from somewhere, and nothing outside
-//! `lib/_tests` imports a test module (§4.5).
+//! `lib/_tests` imports a test module (§4.5). Refusals live in `lib/_tests`
+//! too, as declarations under `// expect-error` directives (§4.3).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -179,12 +180,13 @@ fn imports_are_read_by_name() {
 }
 
 /// The folders the gate checks, one `heather check` each: every folder of
-/// `lib/std`, then every other folder of `lib/`. One process for all of
+/// `lib/std` and of its mirror `lib/_tests/std`, then every other folder of
+/// `lib/` and of `lib/_tests`. One process for all of
 /// `lib/` would be one elaboration of the whole library under a single CPU
 /// rail, which a cold image store (a fresh box, a kernel edit) takes nearly
 /// all of; a folder at a time keeps each child well inside it. A module file
-/// directly in `lib/` or `lib/std` would belong to no folder, so there are
-/// none.
+/// directly in one of the split directories would belong to no folder, so
+/// there are none.
 fn gate_folders() -> Vec<PathBuf> {
     let root = root();
     let dirs = |dir: &Path| -> Vec<PathBuf> {
@@ -196,15 +198,21 @@ fn gate_folders() -> Vec<PathBuf> {
         out.sort();
         out
     };
-    for dir in [root.join("lib"), root.join("lib/std")] {
-        let loose: Vec<PathBuf> = std::fs::read_dir(&dir).expect("read lib")
+    // `lib/_tests` mirrors `lib/`, and its closure is most of the library,
+    // so it splits the same way: one cold process for all of it ran into the
+    // rail on a fresh box (2026-10-25).
+    let split = ["lib", "lib/std", TESTS_DIR, "lib/_tests/std"];
+    for dir in split {
+        let loose: Vec<PathBuf> = std::fs::read_dir(root.join(dir)).expect("read lib")
             .map(|e| e.expect("entry").path())
             .filter(|p| p.extension().is_some_and(|x| x == "hthr"))
             .collect();
-        assert!(loose.is_empty(), "modules directly in {}: {loose:?}; give them a folder", dir.display());
+        assert!(loose.is_empty(), "modules directly in {dir}: {loose:?}; give them a folder");
     }
-    let mut folders = dirs(&root.join("lib/std"));
-    folders.extend(dirs(&root.join("lib")).into_iter().filter(|p| !p.ends_with("std")));
+    let mut folders = Vec::new();
+    for dir in split {
+        folders.extend(dirs(&root.join(dir)).into_iter().filter(|p| !split.iter().any(|s| p.ends_with(s))));
+    }
     folders.into_iter().map(|p| p.strip_prefix(&root).expect("under the root").to_path_buf()).collect()
 }
 
@@ -217,6 +225,12 @@ fn gate_folders() -> Vec<PathBuf> {
 /// module replays; a changed module or compiler re-elaborates what changed.
 /// The fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`) replays
 /// images an earlier build wrote, as the showcase gate does.
+///
+/// The check reads `// expect-error` directives (`--expectations`,
+/// `crates/cli/src/expect.rs`): a refusal in `lib/_tests` must be refused for
+/// the reason its directive names, and anything a directive does not mark
+/// must check. A module with no directives is checked exactly as without
+/// the flag.
 #[test]
 fn every_library_module_checks() {
     let root = root();
@@ -233,6 +247,7 @@ fn every_library_module_checks() {
                 cmd.current_dir(&root).arg("check");
                 cmd.env("HEATHER_KERNEL_WORKERS", "1");
                 cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+                cmd.arg("--expectations");
                 if stale {
                     cmd.arg("--accept-stale-images");
                 }
