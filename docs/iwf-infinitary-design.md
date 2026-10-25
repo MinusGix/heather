@@ -420,18 +420,21 @@ and arm-spelled annotations where the other side has `X`. The fix is general
 syntactic and the whnf'd attempts both fail, a third pass anti-unifies the
 whnf'd sides again, but at the outermost binder level (no bound variables
 of the term in scope) it may also put the hole at any pair of subterms that
-convert to the equation's endpoints `s` and `t`. Conversion runs in `Γ, z`
-against `s↑` and `t↑`, so no subterm is strengthened out of the extended
-context (strengthening the large reducts was the first attempt's cost).
+convert to the equation's endpoints `s` and `t`. Conversion runs in `Γ`,
+where the sides are scoped: the walk never weakens a side into `Γ, z`, only
+the pieces it keeps, so no large reduct is shifted or strengthened
+(strengthening them was the first attempt's cost, weakening them whole the
+second's).
 The generalized body is accepted only if `λz.body` kernel-checks at
 `?f`'s type; otherwise the second attempt's mismatch is reported, so a goal
 that is not a congruence keeps its old diagnostic.
 
 Costs, as shapes: the third pass converts at most each subterm pair the
 syntactic walk reaches against two fixed terms, and runs only when the
-first two fail. What dominates on this route is not the pass but the second
-attempt's whnf of the goal, which respells the reduct by substitution
-through the `J` transports (§7); on a `k̄` arm that is large enough that the
-suite states endpoints there instead:
-[[elab-whnf-family-transport-cost]]. `rewrite` is unchanged: it finds an
-occurrence by head, which a rebuilt child's reduct lacks.
+first two fail. The second attempt's whnf of the goal reads the reduct's
+constructor off the value (`readback.rs`, `Readback::term_head`) instead of
+respelling it by substitution through the `J` transports (§7), so its cost
+is one evaluation plus one substitution per field closure, not one copy of
+the transports' motives per reduction step; plain `cong` closes the `k̄`
+arms too ([[elab-whnf-family-transport-cost]]). `rewrite` is unchanged: it
+finds an occurrence by head, which a rebuilt child's reduct lacks.

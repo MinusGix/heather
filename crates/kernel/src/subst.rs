@@ -114,7 +114,7 @@ use crate::term::{
 };
 
 /// Binder depths for the three namespaces at the current traversal point.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Depths {
     pub univ: u32,
     pub global: u32,
@@ -1383,6 +1383,12 @@ impl Mapper for InstUniv<'_> {
 struct SubstLocal<'a> {
     delta: &'a LocalSubst,
     changes: u64,
+    /// Each payload lifted to a binder depth, once per depth: a variable
+    /// that occurs many times under the same binders (a readback's
+    /// environment entry, `issues/elab-whnf-family-transport-cost.md`)
+    /// shares one lifted copy instead of rewalking the payload per
+    /// occurrence. Allocated at the first occurrence under a binder.
+    lifted: Option<std::collections::HashMap<(usize, Depths), Term>>,
 }
 
 impl Mapper for SubstLocal<'_> {
@@ -1407,10 +1413,18 @@ impl Mapper for SubstLocal<'_> {
         );
         // terms[0] substitutes the outermost entry; index from the innermost.
         let payload = &self.delta.terms[n - 1 - i];
-        let out = payload
-            .shift_local(at.local)
-            .shift_global(at.global)
-            .shift_univ(at.univ);
+        let out = if at == Depths::default() {
+            (**payload).clone()
+        } else if let Some(hit) = self.lifted.as_ref().and_then(|m| m.get(&(i, at))) {
+            hit.clone()
+        } else {
+            let out = payload
+                .shift_local(at.local)
+                .shift_global(at.global)
+                .shift_univ(at.univ);
+            self.lifted.get_or_insert_with(Default::default).insert((i, at), out.clone());
+            out
+        };
         // An *identity* substitution sends this variable to itself, and that
         // is common enough to be worth the O(1) test: `t[id]` should share all
         // of `t`, not rebuild it. Any other payload is a change.
@@ -1808,7 +1822,7 @@ macro_rules! ops {
 
             /// Apply a local substitution `δ` (`self` scoped in δ's target).
             pub fn apply_local(&self, delta: &LocalSubst) -> $ty {
-                $map(self, &mut SubstLocal { delta, changes: 0 }, Depths::default())
+                $map(self, &mut SubstLocal { delta, changes: 0, lifted: None }, Depths::default())
             }
 
             /// Apply a global substitution `σ`.
@@ -2079,7 +2093,7 @@ impl LocalSubst {
 
     /// Composition `self ∘ other`: `t[self][other] == t[self.compose(other)]`.
     pub fn compose(&self, other: &LocalSubst) -> LocalSubst {
-        map_subst(self, &mut SubstLocal { delta: other, changes: 0 }, Depths::default())
+        map_subst(self, &mut SubstLocal { delta: other, changes: 0, lifted: None }, Depths::default())
     }
 
     pub fn apply_univ(&self, phi: &[Level]) -> LocalSubst {
