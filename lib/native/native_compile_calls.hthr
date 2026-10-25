@@ -154,6 +154,41 @@ theorem Target::writes_from(self t: Target, env: Env, m: X86Memory(t.r.profile),
     }
 }
 
+// A buffer's capacity is a count a word holds.
+theorem Target::cap_small(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap)): cap < Nat::pow(2, 64) {
+    omega(t.buffer_fits(buf, cap, found), canonical_below_top())
+}
+
+// At the request: RDX the span's length, RSI where it sits, and the span
+// no longer than the buffer.
+theorem Target::writes_request(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), buf, cap: Nat,
+    found: t.caps.nth(buf) = Some(cap), from, len: Nat, r8, rdx: BitVec(64),
+    at_r8: r8.toNat() = from.min(cap), at_rdx: rdx.toNat() = len.min(cap - from.min(cap))):
+    (rdx.toNat() = span(env.buffer(buf), from, len).len()) ∧
+    (LinuxWritesFrom(t.io(), m, t.layout().buffer_at(buf).add(r8), span(env.buffer(buf), from, len)) ∧
+     (span(env.buffer(buf), from, len).len() <= cap)) {
+    let layout = t.layout();
+    let base = layout.buffer_at(buf).add(r8);
+    let fits = t.buffer_fits(buf, cap, found);
+    let top = canonical_below_top();
+    let short: (from.min(cap) <= cap) = from.min_le_r(cap);
+    let summed: (base.toNat() = (t.r.low.toNat() + layout.buffer_offset(buf)) + from.min(cap)) =
+        add_words(64, layout.buffer_at(buf), r8, t.r.low.toNat() + layout.buffer_offset(buf), from.min(cap),
+            t.buffer_toNat(buf, cap, found), at_r8, omega(fits, short, top));
+    let base_at: (base.toNat() = t.r.low.toNat() + (layout.buffer_offset(buf) + from.min(cap))) = omega(summed);
+    let long = t.span_len(env, m, placed, buf, cap, found, from, len);
+    let counted: (rdx.toNat() = span(env.buffer(buf), from, len).len()) = trans(at_rdx,
+        trans(cong_fn<Nat, Nat>(λ x => len.min(x), Nat::sub_min(cap, from)), sym(long)));
+    let sent: (span(env.buffer(buf), from, len).len() <= cap) = omega(len.min_le_r(cap - from), cap.sub_le(from), long);
+    ⟨counted, ⟨t.writes_from(env, m, placed, buf, cap, found, from, len, base, base_at), sent⟩⟩
+}
+
+// A count no longer than what the buffer sent is a word.
+theorem Target::count_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), count, n: Nat,
+    le: count <= n, sent: n <= cap): count < Nat::pow(2, 64) {
+    omega(le, sent, t.cap_small(buf, cap, found))
+}
+
 // ---------------------------------------------------------------------------
 // A write
 
@@ -192,8 +227,7 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
     let w_start = start.within_before(0, Block([SubRR(R9, R8)]), t.program, w_w2);
     let w_w1 = w1.clamp_within(R8, R9, Succ(names), t.program, w_start);
     let w_w0 = w0.within_before(0, Block([MovRI(R9, BitVec::ofNat(cap))]), t.program, w_w1);
-    let top = canonical_below_top();
-    let room_cap: (cap < Nat::pow(2, 64)) = omega(t.buffer_fits(buf, cap, found), top);
+    let room_cap: (cap < Nat::pow(2, 64)) = t.cap_small(buf, cap, found);
     // The SYSCALL, each answer stored to its word.
     let after = λ (a: WriteResult) (u: MachineState<X86Memory(t.r.profile)>) => LinuxCmd::Answers(c, a) ∧
         (t.Placed(env, u.memory) ∧ (env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(env, a)));
@@ -215,25 +249,14 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
         ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(Rdx, g).toNat() = env.number(len).min(cap - clamped)));
     let at_room = t.goes_weaken(prog_len(room), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => post4(execute_block_normal(asking, s)),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_room(s.gprs, s.memory), at_room0, λ s held => {
-            let m = s.memory;
             let placed = held.left;
-            let r8 = read_gpr(R8, s.gprs);
-            let base = layout.buffer_at(buf).add(r8);
-            let fits = t.buffer_fits(buf, cap, found);
-            let short: (clamped <= cap) = env.number(from).min_le_r(cap);
-            let summed: (base.toNat() = (t.r.low.toNat() + layout.buffer_offset(buf)) + clamped) =
-                add_words(64, layout.buffer_at(buf), r8, t.r.low.toNat() + layout.buffer_offset(buf), clamped,
-                    t.buffer_toNat(buf, cap, found), held.right.left, omega(fits, short, top));
-            let base_at: (base.toNat() = t.r.low.toNat() + (layout.buffer_offset(buf) + clamped)) = omega(summed);
-            let counted: (read_gpr(Rdx, s.gprs).toNat() = bytes.len()) = trans(held.right.right,
-                trans(cong_fn<Nat, Nat>(λ x => env.number(len).min(x), Nat::sub_min(cap, env.number(from))),
-                    sym(t.span_len(env, m, placed, buf, cap, found, env.number(from), env.number(len)))));
-            let sent: (bytes.len() <= cap) = omega(env.number(len).min_le_r(cap - env.number(from)), cap.sub_le(env.number(from)),
-                t.span_len(env, m, placed, buf, cap, found, env.number(from), env.number(len)));
-            ⟨placed, λ f rip => ⟨⟨⟨refl, ⟨refl, ⟨counted, t.writes_from(env, m, placed, buf, cap, found, env.number(from), env.number(len), base, base_at)⟩⟩⟩, trivial⟩,
+            let asked = t.writes_request(env, s.memory, placed, buf, cap, found, env.number(from), env.number(len),
+                read_gpr(R8, s.gprs), read_gpr(Rdx, s.gprs), held.right.left, held.right.right);
+            ⟨placed, λ f rip => ⟨⟨⟨refl, ⟨refl, ⟨asked.left, asked.right.left⟩⟩⟩, trivial⟩,
                 λ resident a => match a {
                     Wrote(count) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨placed,
-                        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), word_of_nat_ofNat(count, omega(answers, sent, room_cap)))⟩⟩⟩,
+                        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w),
+                            word_of_nat_ofNat(count, t.count_fits(buf, cap, found, count, bytes.len(), answers, asked.right.right)))⟩⟩⟩,
                     WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨placed,
                         cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
                 }⟩⟩
@@ -267,7 +290,8 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
             let r8 = read_gpr(R8, s.gprs);
             let r9 = read_gpr(R9, s.gprs);
             let short: (clamped <= cap) = env.number(from).min_le_r(cap);
-            let order: (r8.toNat() <= r9.toNat()) = omega(held.right.left, held.right.right, short);
+            let order: (r8.toNat() <= r9.toNat()) = j(sym(held.right.right), λ n _ => r8.toNat() <= n,
+                j(sym(held.right.left), λ n _ => n <= cap, short));
             ⟨held.left, ⟨held.right.left, trans(toNat_sub(64, r9, r8, order), eq2(λ (x: Nat) (y: Nat) => x - y, held.right.right, held.right.left))⟩⟩
         });
     // The offset clamped to the capacity.
@@ -303,11 +327,6 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
 
 theorem next_rip_succ(x: BitVec(64), k: Nat): next_rip(x, Succ(k)) = next_rip(x, k).add(BitVec::ofNat(1)) {
     BitVec::iter_add_eq_add(64, next_rip(x, k), BitVec::ofNat(1))
-}
-
-// A buffer's capacity is a count a word holds.
-theorem Target::cap_small(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap)): cap < Nat::pow(2, 64) {
-    omega(t.buffer_fits(buf, cap, found), canonical_below_top())
 }
 
 // Where the copy has got to: `i` bytes copied from the scratch range, the
@@ -748,6 +767,27 @@ theorem Target::goes_read_back_failed(self t: Target, env: Env, asked: Prog, buf
             t.placed_word(env, s.memory, held.left, result, in_result, read_gpr(Rax, s.gprs))), held.right⟩)
 }
 
+// A read asks for at most its buffer, which is its capacity.
+theorem Target::reads_most(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), buf, cap: Nat,
+    found: t.caps.nth(buf) = Some(cap), n: Nat):
+    (n.min(env.buffer(buf).len()) = n.min(cap)) ∧ (n.min(env.buffer(buf).len()) <= cap) {
+    let buffer_len = t.layout().keeps_buffer_len(env, placed.witness, placed.proof.right, buf, cap, found);
+    let asked: (n.min(env.buffer(buf).len()) = n.min(cap)) = cong_fn<Nat, Nat>(λ x => n.min(x), buffer_len);
+    ⟨asked, j(sym(asked), λ x _ => x <= cap, n.min_le_r(cap))⟩
+}
+
+// A count within a buffer's capacity fits the scratch range.
+theorem Target::under_largest(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), k, n: Nat,
+    le: k <= n, below: n <= cap): k <= t.caps.largest() {
+    omega(le, below, t.caps.largest_nth(buf, cap, found))
+}
+
+// And what the scratch range holds lies inside the region.
+theorem Target::scratch_inside(self t: Target, k: Nat, short: k <= t.caps.largest()): t.layout().scratch_offset() + k <= t.r.size {
+    let sizes: (t.layout().scratch_offset() + t.caps.largest() <= t.r.size) = t.fits;
+    omega(short, sizes)
+}
+
 // What a read's code claims: from the statement's start, read(fd, scratch,
 // min(len, capacity)), and on from its end with each answer decoded into
 // the environment.
@@ -797,8 +837,8 @@ theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, resu
         λ a => match a {
             ReadBytes(bytes) => λ u here resident held => {
                 let placed = t.landed_placed(env, bytes, u.memory, held.right.left);
-                let buffer_len = t.layout().keeps_buffer_len(env, placed.witness, placed.proof.right, buf, cap, found);
-                let short: (bytes.len() <= cap) = omega(held.left, env.number(len).min_le_r(env.buffer(buf).len()), buffer_len);
+                let short: (bytes.len() <= cap) = Nat::le_trans(bytes.len(), most, cap, held.left,
+                    t.reads_most(env, u.memory, placed, buf, cap, found, env.number(len)).right);
                 t.goes_read_back_ok(env, asked, buf, cap, found, result, in_result, names, within, bytes, short, tree(ReadBytes(bytes)),
                     next(ReadBytes(bytes), held.left), u, here, resident, held.right)
             },
@@ -822,22 +862,19 @@ theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, resu
             let m = s.memory;
             let placed = held.left;
             let so = layout.scratch_offset();
-            let buffer_len = layout.keeps_buffer_len(env, placed.witness, placed.proof.right, buf, cap, found);
-            let asked_most: (most = env.number(len).min(cap)) = cong_fn<Nat, Nat>(λ x => env.number(len).min(x), buffer_len);
-            let most_cap: (most <= cap) = omega(env.number(len).min_le_r(cap), asked_most);
-            let largest = t.caps.largest_nth(buf, cap, found);
-            let room = layout.scratch_holds(buf, cap, found);
-            let sizes: (layout.size() <= t.r.size) = t.fits;
-            ⟨placed, λ f rip => ⟨⟨⟨refl, ⟨refl, trans(held.right, sym(asked_most))⟩⟩, t.writable(m, so, most, omega(most_cap, room, sizes))⟩,
+            let most_is = t.reads_most(env, m, placed, buf, cap, found, env.number(len));
+            let most_cap = most_is.right;
+            ⟨placed, λ f rip => ⟨⟨⟨refl, ⟨refl, trans(held.right, sym(most_is.left))⟩⟩,
+                    t.writable(m, so, most, t.scratch_inside(most, t.under_largest(buf, cap, found, most, most, most.le_refl(), most_cap)))⟩,
                 λ resident a => match a {
                     ReadBytes(bytes) => λ answers junk leaves rcx r11 => {
-                        let short: (bytes.len() <= t.caps.largest()) = omega(answers, most_cap, largest);
-                        ⟨t.store_resident(m, so, bytes, omega(short, sizes), resident),
+                        let short = t.under_largest(buf, cap, found, bytes.len(), most, answers, most_cap);
+                        ⟨t.store_resident(m, so, bytes, t.scratch_inside(bytes.len(), short), resident),
                             ⟨answers, ⟨t.landed_store(env, m, placed, bytes, short), refl⟩⟩⟩
                     },
                     ReadFailed(_) => λ answers junk leaves rcx r11 => {
-                        let short: (junk.len() <= t.caps.largest()) = omega(leaves, most_cap, largest);
-                        ⟨t.store_resident(m, so, junk, omega(short, sizes), resident),
+                        let short = t.under_largest(buf, cap, found, junk.len(), most, leaves, most_cap);
+                        ⟨t.store_resident(m, so, junk, t.scratch_inside(junk.len(), short), resident),
                             ⟨answers, ⟨t.landed_placed(env, junk, t.r.profile.store(m, layout.scratch_at(), junk), t.landed_store(env, m, placed, junk, short)), refl⟩⟩⟩
                     },
                 }⟩⟩
