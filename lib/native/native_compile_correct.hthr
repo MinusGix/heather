@@ -1,0 +1,478 @@
+// The effectful source's compiler proved once (issues/native-effect-source-compiler.md,
+// round S3.2): every statement `Stmt::emit` compiles runs as its tree
+// (`Stmt::emit_runs`, by induction on the statement), and so every program
+// `Source::compile` builds simulates the source's denotation from a region
+// holding its start (`native_compile_correct`).
+//
+// A statement's claim (`Target::Runs`) is over a continuation: from every
+// environment placed at the statement's start, the code runs as the
+// statement's tree bound to `k`, wherever `k` goes on from the statement's
+// end with each environment it may finish in, and meets every exit with
+// its status. `Then` is `bind_assoc`; `Branch` is the test's two ways and a
+// JMP over the second arm; `Repeat` is an induction on the loop's fuel, the
+// body run each round with the test and a JMP back as its continuation.
+import native_source;
+import native_compile;
+import native_compile_facts;
+import native_compile_region;
+import native_compile_steps;
+import native_compile_segments;
+import native_compile_calls;
+import native_compile_leaf;
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import linux_trees;
+import linux_x86_64_io;
+import linux_x86_64_sim;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_byte_memory;
+import linux_x86_64_byte_memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Where each piece starts, inside what it builds
+
+theorem Prog::within_label(self p: Prog, name: Nat): p.Within(p.label(name)) { Exists(1, refl) }
+
+theorem Prog::within_tests(self p: Prog, layout: Layout, condition, else_name: Nat): p.Within(p.tests(layout, condition, else_name)) {
+    Exists(5, refl)
+}
+
+theorem Prog::within_exits(self p: Prog, layout: Layout, status: Nat): p.Within(p.exits(layout, status)) { Exists(4, refl) }
+
+theorem Prog::within_reads(self p: Prog, layout: Layout, fd, buf, len, result, capacity, names: Nat):
+    p.Within(p.reads(layout, fd, buf, len, result, capacity, names).prog) {
+    Exists(24, refl)
+}
+
+theorem Prog::within_writes(self p: Prog, layout: Layout, fd, buf, from, len, result, capacity, names: Nat):
+    p.Within(p.writes(layout, fd, buf, from, len, result, capacity, names).prog) {
+    Exists(20, refl)
+}
+
+theorem Prog::within_leaf(self p: Prog, layout: Layout, nodes: List<Node>, q: Prog, emitted: p.leaf(layout, nodes) = Some(q)): p.Within(q) {
+    let ins = leaf_inputs(nodes);
+    let outs = leaf_outputs(nodes);
+    let inputs = nodes_inputs(nodes);
+    let region = leaf_region(nodes);
+    (match leaf_checks(nodes, ins, outs) as λ b => (match b { False => None, True => match p.ports_to(layout, inputs, ins) {
+            None => None,
+            Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))),
+        } }) = Some(q) → p.Within(q) {
+        False => λ none => absurd(none),
+        True => (match p.ports_to(layout, inputs, ins) as λ o => p.ports_to(layout, inputs, ins) = o →
+                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
+                p.Within(q) {
+            None => λ _ none => absurd(none),
+            Some(loaded) => λ loaded_is => (match region.lower(ins, outs, place_into(outs)) {
+                None => λ none => absurd(none),
+                Some(code) => λ stored => p.within_trans(loaded, q, Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
+                    loaded.within_trans(then(loaded, Block(code)), q, loaded.within_then(0, Block(code)),
+                        Prog::ports_from_within(layout, nodes_write_ports(nodes), outs, then(loaded, Block(code)), q, stored))),
+            }),
+        })(refl),
+    })(emitted)
+}
+
+// What a statement compiles to starts where it was given its start.
+theorem Stmt::emit_extends(self s: Stmt, layout: Layout): (p: Prog) → (names: Nat) → (c: Compiled) →
+    s.emit(p, layout, names) = Some(c) → p.Within(c.prog) {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => λ p names c => (match p.leaf(layout, body.nodes) as λ o => p.leaf(layout, body.nodes) = o →
+                    (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → p.Within(c.prog) {
+                None => λ _ none => absurd(none),
+                Some(q) => λ leafed same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog),
+                    p.within_leaf(layout, body.nodes, q, leafed)),
+            })(refl),
+            Sequence(_, _) => λ p names c none => absurd(none),
+            Compose(_, _) => λ p names c none => absurd(none),
+            Conditional(_, _, _, _, _, _) => λ p names c none => absurd(none),
+            Call(_, _, _) => λ p names c none => absurd(none),
+            Loop(_, _, _, _, _, _, _, _, _) => λ p names c none => absurd(none),
+        },
+        Invoke(shape) => λ p names c => match shape {
+            Reads(fd, buf, len, result) => match words_fit([fd, len, result]) {
+                False => λ none => absurd(none),
+                True => match layout.capacities.nth(buf) {
+                    None => λ none => absurd(none),
+                    Some(capacity) => λ same => j(Option::some_inj(p.reads(layout, fd, buf, len, result, capacity, names), c, same),
+                        λ x _ => p.Within(x.prog), p.within_reads(layout, fd, buf, len, result, capacity, names)),
+                },
+            },
+            Writes(fd, buf, from, len, result) => match words_fit([fd, from, len, result]) {
+                False => λ none => absurd(none),
+                True => match layout.capacities.nth(buf) {
+                    None => λ none => absurd(none),
+                    Some(capacity) => λ same => j(Option::some_inj(p.writes(layout, fd, buf, from, len, result, capacity, names), c, same),
+                        λ x _ => p.Within(x.prog), p.within_writes(layout, fd, buf, from, len, result, capacity, names)),
+                },
+            },
+            Opens(_, _, _) => λ none => absurd(none),
+            Closes(_, _) => λ none => absurd(none),
+            StatsPath(_, _, _, _) => λ none => absurd(none),
+            StatsFd(_, _, _) => λ none => absurd(none),
+        },
+        Then(first, rest) => λ p names c => (match first.emit(p, layout, names) as λ o => first.emit(p, layout, names) = o →
+                (match o { None => None, Some(c1) => rest.emit(c1.prog, layout, c1.names) }) = Some(c) → p.Within(c.prog) {
+            None => λ _ none => absurd(none),
+            Some(c1) => λ one two => p.within_trans(c1.prog, c.prog, first.emit_extends(layout, p, names, c1, one),
+                rest.emit_extends(layout, c1.prog, c1.names, c, two)),
+        })(refl),
+        Branch(condition, yes, no) => λ p names c => {
+            let tested = p.tests(layout, condition, Succ(names));
+            match word_fits(condition) {
+                False => λ none => absurd(none),
+                True => (match yes.emit(tested, layout, Succ(Succ(names))) as λ o => yes.emit(tested, layout, Succ(Succ(names))) = o →
+                        (match o {
+                            None => None,
+                            Some(y) => match no.emit(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, y.names) {
+                                None => None,
+                                Some(n) => Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)),
+                            },
+                        }) = Some(c) → p.Within(c.prog) {
+                    None => λ _ none => absurd(none),
+                    Some(y) => λ y_is => {
+                        let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
+                        (match no.emit(other, layout, y.names) as λ o => no.emit(other, layout, y.names) = o →
+                                (match o { None => None, Some(n) => Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)) }) = Some(c) →
+                                p.Within(c.prog) {
+                            None => λ _ none => absurd(none),
+                            Some(n) => λ n_is same => j(Option::some_inj(Compiled(n.prog.join_label(Succ(Succ(names))), n.names), c, same),
+                                λ x _ => p.Within(x.prog),
+                                p.within_trans(tested, n.prog.join_label(Succ(Succ(names))), p.within_tests(layout, condition, Succ(names)),
+                                    tested.within_trans(y.prog, n.prog.join_label(Succ(Succ(names))), yes.emit_extends(layout, tested, Succ(Succ(names)), y, y_is),
+                                        y.prog.within_trans(other, n.prog.join_label(Succ(Succ(names))), Exists(2, refl),
+                                            other.within_trans(n.prog, n.prog.join_label(Succ(Succ(names))), no.emit_extends(layout, other, y.names, n, n_is),
+                                                n.prog.within_label(Succ(Succ(names)))))))),
+                        })(refl)
+                    },
+                })(refl),
+            }
+        },
+        Repeat(body, again) => λ p names c => {
+            let head = p.label(Succ(names));
+            match word_fits(again) {
+                False => λ none => absurd(none),
+                True => (match body.emit(head, layout, Succ(Succ(names))) as λ o => body.emit(head, layout, Succ(Succ(names))) = o →
+                        (match o {
+                            None => None,
+                            Some(b) => Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)),
+                        }) = Some(c) → p.Within(c.prog) {
+                    None => λ _ none => absurd(none),
+                    Some(b) => λ b_is same => {
+                        let out = then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names)));
+                        j(Option::some_inj(Compiled(out, b.names), c, same), λ x _ => p.Within(x.prog),
+                            p.within_trans(head, out, p.within_label(Succ(names)),
+                                head.within_trans(b.prog, out, body.emit_extends(layout, head, Succ(Succ(names)), b, b_is),
+                                    b.prog.within_trans(b.prog.tests(layout, again, Succ(Succ(names))), out, b.prog.within_tests(layout, again, Succ(Succ(names))),
+                                        Exists(2, refl)))))
+                    },
+                })(refl),
+            }
+        },
+        Exit(status) => λ p names c => match word_fits(status) {
+            False => λ none => absurd(none),
+            True => λ same => j(Option::some_inj(Compiled(p.exits(layout, status), names), c, same), λ x _ => p.Within(x.prog),
+                p.within_exits(layout, status)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A statement's claim
+
+// Every exit, with its status, meets the continuation's tree there.
+fn Target::Exiting(self t: Target, k: Flow → ITree<BitVec(64)>(Events::linux())) → Type {
+    (status: BitVec(64)) → (u: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), u) → LinuxExits(u, status) →
+        Sim(t.io(), k(Exited(status)), u)
+}
+
+// The code from `p` to `q` runs as the statement, then `k`: wherever `k`
+// goes on from `q` with every environment the statement may finish in.
+fn Target::Runs(self t: Target, s: Stmt, call: Answers(), p, q: Prog) → Type {
+    (n: Nat) → (env: Env) → (k: Flow → ITree<BitVec(64)>(Events::linux())) → t.Exiting(k) →
+        ((after: Env) → t.At(prog_len(q), k(Onward(after)), after)) →
+        t.At(prog_len(p), ITree::bind(Events::linux(), s.denote(call, n, env), k), env)
+}
+
+// A tree the same as one the code runs as.
+theorem Target::at_similar(self t: Target, at: Nat, tree, other: ITree<BitVec(64)>(Events::linux()), env: Env,
+    same: ITree::Same(Events::linux(), tree, other), goes: t.At(at, other, env)): t.At(at, tree, env) {
+    t.site().goes_same(t.io(), at, tree, other, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory), same, goes)
+}
+
+// A JMP to a label ahead or behind, the environment placed.
+theorem Target::at_jmp(self t: Target, before: Prog, n: Nat, within: then(before, Jmp(Succ(n))).Within(t.program),
+    label: Prog, item: Asm, label_within: At(label, Succ(n), item).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()), env: Env,
+    goes: t.At(prog_len(label), tree, env)): t.At(prog_len(before), tree, env) {
+    t.io().goes_jmp(t.program, t.origin, t.code_fits(), within.witness, before, 0, Succ(n), within.proof, prog_len(label),
+        t.program.lands_jmp(t.laid, within.witness, before, 0, n, within.proof, label_within.witness, label, item, label_within.proof),
+        tree, λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.Placed(env, m), goes)
+}
+
+// A loop of `m` more rounds: the body from its head label, the test after
+// it, a JMP back while the bit is set, and out past the loop's label when
+// it is clear.
+theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Answers(), n: Nat, p: Prog, names: Nat, b: Prog,
+    inside: again < word_slots(),
+    within: then(b.tests(t.layout(), again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))).Within(t.program),
+    head_within: p.label(Succ(names)).Within(t.program),
+    runs: t.Runs(body, call, p.label(Succ(names)), b),
+    k: Flow → ITree<BitVec(64)>(Events::linux()), exits: t.Exiting(k),
+    next: (after: Env) → t.At(prog_len(then(b.tests(t.layout(), again, Succ(Succ(names))), Jmp(Succ(names)))), k(Onward(after)), after),
+    m: Nat): (env: Env) → t.At(prog_len(p), ITree::bind(Events::linux(),
+        ITree::iter(Events::linux(), m, λ e => ITree::map(Events::linux(), body.denote(call, n, e), λ flow => flow.pass(again)), env), k), env) {
+    let f = λ (e: Env) => ITree::map(Events::linux(), body.denote(call, n, e), λ (flow: Flow) => flow.pass(again));
+    let tested = b.tests(t.layout(), again, Succ(Succ(names)));
+    let jumped = then(tested, Jmp(Succ(names)));
+    let w_jumped = jumped.within_before(Succ(Succ(names)), Block([]), t.program, within);
+    let w_tested = tested.within_before(0, Jmp(Succ(names)), t.program, w_jumped);
+    match m {
+        Zero => λ env => λ s here resident held => sim_cut(t.io(), s),
+        Succ(m2) => λ env => {
+            let rest = λ (x: Step<Env, Flow>) => match x as λ _ => ITree<Flow>(Events::linux()) {
+                Continue(a2) => Tau(ITree::iter(Events::linux(), m2, f, a2)),
+                Break(out) => Ret(out),
+            };
+            let after_pass = λ (x: Step<Env, Flow>) => ITree::bind(Events::linux(), rest(x), k);
+            let k2 = λ (flow: Flow) => after_pass(flow.pass(again));
+            let d = body.denote(call, n, env);
+            let same = ITree::same_trans(Events::linux(),
+                ITree::bind(Events::linux(), ITree::bind(Events::linux(), ITree::map(Events::linux(), d, λ (flow: Flow) => flow.pass(again)), rest), k),
+                ITree::bind(Events::linux(), ITree::map(Events::linux(), d, λ (flow: Flow) => flow.pass(again)), after_pass),
+                ITree::bind(Events::linux(), d, k2),
+                ITree::bind_assoc(Events::linux(), ITree::map(Events::linux(), d, λ (flow: Flow) => flow.pass(again)), rest, k),
+                ITree::bind_assoc(Events::linux(), d, λ (flow: Flow) => Ret(flow.pass(again)), after_pass));
+            let looped = λ (after: Env) => t.goes_tests(after, b, again, Succ(names), inside, w_tested, within.witness, jumped, Block([]), within.proof,
+                k2(Onward(after)),
+                λ (set: after.bit(again) = True) => j(sym(set), λ bit _ => t.At(prog_len(tested),
+                        after_pass(match bit { True => Continue(after), False => Break(Onward(after)) }), after),
+                    t.at_jmp(tested, names, w_jumped, p, Block([]), head_within, Tau(ITree::bind(Events::linux(), ITree::iter(Events::linux(), m2, f, after), k)), after,
+                        λ s here resident held => sim_tau(t.io(), ITree::bind(Events::linux(), ITree::iter(Events::linux(), m2, f, after), k), s,
+                            t.goes_repeat(body, again, call, n, p, names, b, inside, within, head_within, runs, k, exits, next, m2, after, s, here, resident, held)))),
+                λ (clear: after.bit(again) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped),
+                        after_pass(match bit { True => Continue(after), False => Break(Onward(after)) }), after),
+                    next(after)));
+            t.at_similar(prog_len(p), ITree::bind(Events::linux(), ITree::iter(Events::linux(), Succ(m2), f, env), k), ITree::bind(Events::linux(), d, k2), env,
+                same, runs(n, env, k2, exits, looped))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Every statement compiled runs as its tree
+
+theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers()): (p: Prog) → (names: Nat) → (c: Compiled) →
+    s.emit(p, t.layout(), names) = Some(c) → c.prog.Within(t.program) → t.Runs(s, call, p, c.prog) {
+    let layout = t.layout();
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => λ p names c => (match p.leaf(layout, body.nodes) as λ o => p.leaf(layout, body.nodes) = o →
+                    (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → c.prog.Within(t.program) →
+                    t.Runs(Compute(Dataflow(body)), call, p, c.prog) {
+                None => λ _ none => absurd(none),
+                Some(q) => λ leafed same => j(Option::some_inj(Compiled(q, names), c, same),
+                    λ x _ => x.prog.Within(t.program) → t.Runs(Compute(Dataflow(body)), call, p, x.prog),
+                    λ within n env k exits next => t.goes_leaf(env, p, q, body.nodes, leafed, within,
+                        k(Onward(env.compute(call, Dataflow(body)))), next(env.compute(call, Dataflow(body))))),
+            })(refl),
+            Sequence(_, _) => λ p names c none => absurd(none),
+            Compose(_, _) => λ p names c none => absurd(none),
+            Conditional(_, _, _, _, _, _) => λ p names c none => absurd(none),
+            Call(_, _, _) => λ p names c none => absurd(none),
+            Loop(_, _, _, _, _, _, _, _, _) => λ p names c none => absurd(none),
+        },
+        Invoke(shape) => λ p names c => match shape {
+            Reads(fd, buf, len, result) => (match words_fit([fd, len, result]) as λ b => words_fit([fd, len, result]) = b → (match b {
+                    False => None,
+                    True => match layout.capacities.nth(buf) { None => None, Some(capacity) => Some(p.reads(layout, fd, buf, len, result, capacity, names)) },
+                }) = Some(c) → c.prog.Within(t.program) → t.Runs(Invoke(Reads(fd, buf, len, result)), call, p, c.prog) {
+                False => λ _ none => absurd(none),
+                True => λ fit => {
+                    let ok = Bool::is_true_and(word_fits(fd), word_fits(len) && (word_fits(result) && True), j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::is_true_and(word_fits(len), word_fits(result) && True, ok.right);
+                    let ok3 = Bool::is_true_and(word_fits(result), True, ok2.right);
+                    (match t.caps.nth(buf) as λ o => t.caps.nth(buf) = o →
+                            (match o { None => None, Some(capacity) => Some(p.reads(layout, fd, buf, len, result, capacity, names)) }) = Some(c) →
+                            c.prog.Within(t.program) → t.Runs(Invoke(Reads(fd, buf, len, result)), call, p, c.prog) {
+                        None => λ _ none => absurd(none),
+                        Some(capacity) => λ found same => j(Option::some_inj(p.reads(layout, fd, buf, len, result, capacity, names), c, same),
+                            λ x _ => x.prog.Within(t.program) → t.Runs(Invoke(Reads(fd, buf, len, result)), call, p, x.prog),
+                            λ within n env k exits next => t.goes_reads(env, p, fd, buf, len, result, capacity, names,
+                                word_fits_inside(fd, ok.left), word_fits_inside(len, ok2.left), word_fits_inside(result, ok3.left), found, within,
+                                λ a => k(Onward(Reads(fd, buf, len, result).answer(env, a))),
+                                λ a answers => next(Reads(fd, buf, len, result).answer(env, a)))),
+                    })(refl)
+                },
+            })(refl),
+            Writes(fd, buf, from, len, result) => (match words_fit([fd, from, len, result]) as λ b => words_fit([fd, from, len, result]) = b → (match b {
+                    False => None,
+                    True => match layout.capacities.nth(buf) { None => None, Some(capacity) => Some(p.writes(layout, fd, buf, from, len, result, capacity, names)) },
+                }) = Some(c) → c.prog.Within(t.program) → t.Runs(Invoke(Writes(fd, buf, from, len, result)), call, p, c.prog) {
+                False => λ _ none => absurd(none),
+                True => λ fit => {
+                    let ok = Bool::is_true_and(word_fits(fd), word_fits(from) && (word_fits(len) && (word_fits(result) && True)),
+                        j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::is_true_and(word_fits(from), word_fits(len) && (word_fits(result) && True), ok.right);
+                    let ok3 = Bool::is_true_and(word_fits(len), word_fits(result) && True, ok2.right);
+                    let ok4 = Bool::is_true_and(word_fits(result), True, ok3.right);
+                    (match t.caps.nth(buf) as λ o => t.caps.nth(buf) = o →
+                            (match o { None => None, Some(capacity) => Some(p.writes(layout, fd, buf, from, len, result, capacity, names)) }) = Some(c) →
+                            c.prog.Within(t.program) → t.Runs(Invoke(Writes(fd, buf, from, len, result)), call, p, c.prog) {
+                        None => λ _ none => absurd(none),
+                        Some(capacity) => λ found same => j(Option::some_inj(p.writes(layout, fd, buf, from, len, result, capacity, names), c, same),
+                            λ x _ => x.prog.Within(t.program) → t.Runs(Invoke(Writes(fd, buf, from, len, result)), call, p, x.prog),
+                            λ within n env k exits next => t.goes_writes(env, p, fd, buf, from, len, result, capacity, names,
+                                word_fits_inside(fd, ok.left), word_fits_inside(from, ok2.left), word_fits_inside(len, ok3.left),
+                                word_fits_inside(result, ok4.left), found, within,
+                                λ a => k(Onward(Writes(fd, buf, from, len, result).answer(env, a))),
+                                λ a answers => next(Writes(fd, buf, from, len, result).answer(env, a)))),
+                    })(refl)
+                },
+            })(refl),
+            Opens(_, _, _) => λ none => absurd(none),
+            Closes(_, _) => λ none => absurd(none),
+            StatsPath(_, _, _, _) => λ none => absurd(none),
+            StatsFd(_, _, _) => λ none => absurd(none),
+        },
+        Then(first, rest) => λ p names c => (match first.emit(p, layout, names) as λ o => first.emit(p, layout, names) = o →
+                (match o { None => None, Some(c1) => rest.emit(c1.prog, layout, c1.names) }) = Some(c) → c.prog.Within(t.program) →
+                t.Runs(Then(first, rest), call, p, c.prog) {
+            None => λ _ none => absurd(none),
+            Some(c1) => λ one two within => {
+                let w_first = c1.prog.within_trans(c.prog, t.program, rest.emit_extends(layout, c1.prog, c1.names, c, two), within);
+                let run_first = first.emit_runs(t, call, p, names, c1, one, w_first);
+                let run_rest = rest.emit_runs(t, call, c1.prog, c1.names, c, two, within);
+                λ n env k exits next => {
+                    let h = λ (flow: Flow) => match flow as λ _ => ITree<Flow>(Events::linux()) {
+                        Onward(after) => rest.denote(call, n, after),
+                        Exited(status) => Ret(Exited(status)),
+                    };
+                    let k2 = λ (flow: Flow) => ITree::bind(Events::linux(), h(flow), k);
+                    t.at_similar(prog_len(p), ITree::bind(Events::linux(), ITree::bind(Events::linux(), first.denote(call, n, env), h), k),
+                        ITree::bind(Events::linux(), first.denote(call, n, env), k2), env,
+                        ITree::bind_assoc(Events::linux(), first.denote(call, n, env), h, k),
+                        run_first(n, env, k2, exits, λ after => run_rest(n, after, k, exits, next)))
+                }
+            },
+        })(refl),
+        Branch(condition, yes, no) => λ p names c => {
+            let tested = p.tests(layout, condition, Succ(names));
+            (match word_fits(condition) as λ b => word_fits(condition) = b → (match b {
+                    False => None,
+                    True => match yes.emit(tested, layout, Succ(Succ(names))) {
+                        None => None,
+                        Some(y) => match no.emit(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, y.names) {
+                            None => None,
+                            Some(n) => Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)),
+                        },
+                    },
+                }) = Some(c) → c.prog.Within(t.program) → t.Runs(Branch(condition, yes, no), call, p, c.prog) {
+                False => λ _ none => absurd(none),
+                True => λ fit => (match yes.emit(tested, layout, Succ(Succ(names))) as λ o => yes.emit(tested, layout, Succ(Succ(names))) = o →
+                        (match o {
+                            None => None,
+                            Some(y) => match no.emit(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, y.names) {
+                                None => None,
+                                Some(n) => Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)),
+                            },
+                        }) = Some(c) → c.prog.Within(t.program) → t.Runs(Branch(condition, yes, no), call, p, c.prog) {
+                    None => λ _ none => absurd(none),
+                    Some(y) => λ y_is => {
+                        let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
+                        (match no.emit(other, layout, y.names) as λ o => no.emit(other, layout, y.names) = o →
+                                (match o { None => None, Some(n) => Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)) }) = Some(c) →
+                                c.prog.Within(t.program) → t.Runs(Branch(condition, yes, no), call, p, c.prog) {
+                            None => λ _ none => absurd(none),
+                            Some(nc) => λ n_is same => j(Option::some_inj(Compiled(nc.prog.join_label(Succ(Succ(names))), nc.names), c, same),
+                                λ x _ => x.prog.Within(t.program) → t.Runs(Branch(condition, yes, no), call, p, x.prog),
+                                λ within => {
+                                    let jumped = then(y.prog, Jmp(Succ(Succ(names))));
+                                    let w_no = nc.prog.within_before(Succ(Succ(names)), Block([]), t.program, within);
+                                    let w_other = other.within_trans(nc.prog, t.program, no.emit_extends(layout, other, y.names, nc, n_is), w_no);
+                                    let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
+                                    let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
+                                    let w_tested = tested.within_trans(y.prog, t.program, yes.emit_extends(layout, tested, Succ(Succ(names)), y, y_is), w_yes);
+                                    let run_yes = yes.emit_runs(t, call, tested, Succ(Succ(names)), y, y_is, w_yes);
+                                    let run_no = no.emit_runs(t, call, other, y.names, nc, n_is, w_no);
+                                    let inside = word_fits_inside(condition, j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                                    λ n env k exits next => t.goes_tests(env, p, condition, names, inside, w_tested, w_other.witness, jumped, Block([]), w_other.proof,
+                                        ITree::bind(Events::linux(), match env.bit(condition) as λ _ => ITree<Flow>(Events::linux()) {
+                                            True => yes.denote(call, n, env),
+                                            False => no.denote(call, n, env),
+                                        }, k),
+                                        λ (set: env.bit(condition) = True) => j(sym(set), λ bit _ => t.At(prog_len(tested),
+                                                ITree::bind(Events::linux(), match bit as λ _ => ITree<Flow>(Events::linux()) {
+                                                    True => yes.denote(call, n, env),
+                                                    False => no.denote(call, n, env),
+                                                }, k), env),
+                                            run_yes(n, env, k, exits, λ after => t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), within,
+                                                k(Onward(after)), after, next(after)))),
+                                        λ (clear: env.bit(condition) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped),
+                                                ITree::bind(Events::linux(), match bit as λ _ => ITree<Flow>(Events::linux()) {
+                                                    True => yes.denote(call, n, env),
+                                                    False => no.denote(call, n, env),
+                                                }, k), env),
+                                            run_no(n, env, k, exits, next)))
+                                }),
+                        })(refl)
+                    },
+                })(refl),
+            })(refl)
+        },
+        Repeat(body, again) => λ p names c => {
+            let head = p.label(Succ(names));
+            (match word_fits(again) as λ b => word_fits(again) = b → (match b {
+                    False => None,
+                    True => match body.emit(head, layout, Succ(Succ(names))) {
+                        None => None,
+                        Some(b) => Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)),
+                    },
+                }) = Some(c) → c.prog.Within(t.program) → t.Runs(Repeat(body, again), call, p, c.prog) {
+                False => λ _ none => absurd(none),
+                True => λ fit => (match body.emit(head, layout, Succ(Succ(names))) as λ o => body.emit(head, layout, Succ(Succ(names))) = o →
+                        (match o {
+                            None => None,
+                            Some(b) => Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)),
+                        }) = Some(c) → c.prog.Within(t.program) → t.Runs(Repeat(body, again), call, p, c.prog) {
+                    None => λ _ none => absurd(none),
+                    Some(cb) => λ b_is same => {
+                        let tested = cb.prog.tests(layout, again, Succ(Succ(names)));
+                        let out = then(tested, Jmp(Succ(names))).label(Succ(Succ(names)));
+                        j(Option::some_inj(Compiled(out, cb.names), c, same),
+                            λ x _ => x.prog.Within(t.program) → t.Runs(Repeat(body, again), call, p, x.prog),
+                            λ within => {
+                                let w_jumped = then(tested, Jmp(Succ(names))).within_before(Succ(Succ(names)), Block([]), t.program, within);
+                                let w_tested = tested.within_before(0, Jmp(Succ(names)), t.program, w_jumped);
+                                let w_body = cb.prog.within_trans(tested, t.program, cb.prog.within_tests(layout, again, Succ(Succ(names))), w_tested);
+                                let w_head = head.within_trans(cb.prog, t.program, body.emit_extends(layout, head, Succ(Succ(names)), cb, b_is), w_body);
+                                let runs = body.emit_runs(t, call, head, Succ(Succ(names)), cb, b_is, w_body);
+                                let inside = word_fits_inside(again, j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                                λ n env k exits next => t.goes_repeat(body, again, call, n, p, names, cb.prog, inside, within, w_head, runs, k, exits, next, n, env)
+                            })
+                    },
+                })(refl),
+            })(refl)
+        },
+        Exit(status) => λ p names c => (match word_fits(status) as λ b => word_fits(status) = b →
+                (match b { False => None, True => Some(Compiled(p.exits(layout, status), names)) }) = Some(c) → c.prog.Within(t.program) →
+                t.Runs(Exit(status), call, p, c.prog) {
+            False => λ _ none => absurd(none),
+            True => λ fit same => j(Option::some_inj(Compiled(p.exits(layout, status), names), c, same),
+                λ x _ => x.prog.Within(t.program) → t.Runs(Exit(status), call, p, x.prog),
+                λ within n env k exits next => t.goes_exits(env, p, status, word_fits_inside(status, j(sym(fit), λ v _ => v.IsTrue(), trivial)), within,
+                    k(Exited(env.word(status))), λ u at exited => exits(env.word(status), u, at, exited))),
+        })(refl),
+    }
+}
