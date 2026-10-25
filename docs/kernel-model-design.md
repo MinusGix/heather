@@ -1,10 +1,14 @@
 # A model of the kernel in Heather
 
-Status: first round 2026-10-24 (milestone `hih-kernel-model`, submilestone
-`hih-km-probe`, `issues/kernel-model.md`). The module is
-`lib/kernel_model/kernel_reduction.hthr`, its tests are
-`crates/elab/tests/lib_kernel_model_reduction.rs`, and its export test is
-`kernel_model_exports` in `crates/export/tests/library_sweep.rs`.
+Status: two rounds, both 2026-10-24 (milestone `hih-kernel-model`,
+submilestones `hih-km-probe` and `hih-km-runs`, `issues/kernel-model.md`).
+The modules are `lib/kernel_model/kernel_reduction.hthr` (the model and the
+probe lemma) and `lib/kernel_model/kernel_runs.hthr` (reduction as a
+relation and the run folds, §7). Their tests are
+`crates/elab/tests/lib_kernel_model_reduction.rs` (the probe lemma's, and
+its refusals) and `lib/_tests/kernel_model/kernel_runs_tests.hthr` (the run
+folds'), and their export test is `kernel_model_exports` in
+`crates/export/tests/library_sweep.rs`.
 
 ## 1. Why
 
@@ -48,7 +52,15 @@ what a fold's step is made of:
 
 ```
 Tm ::= Bv(i) | Fv(a) | Lam(b) | App(f, a) | NZero | NSucc(t) | NRec(z, s, n)
+     | SPair(a, b) | SProj(p, t) | NRun(c, t)          (p ::= PFst | PSnd)
 ```
+
+The second round added the last line: pairs and their projections, which
+the affine class's course-of-values windows are made of, and runs.
+`NRun(c, t)` is `Val::NatRun`, `Succ^c(t)` held as one node. It means what
+its unpacking says: `NRun(c+1, t)` reduces to `NSucc(NRun(c, t))` and
+`NRun(0, t)` to `t`, so a run is never a weak head value of the model, and
+the model's unary fold over a run takes one successor at a time.
 
 **Locally nameless.** Bound variables are de Bruijn indices. The probe
 variables are free atoms `Fv(a)`, which no binder captures. This matches the
@@ -128,16 +140,13 @@ the rest of the milestone (§6).
   classifier's step is sound" now rests on "the kernel implements ch. 06 on
   this fragment", which is the differential suites' job, and no longer on an
   unproved sentence.
-- **The fragment is small.** There is no Σ or projections (the affine tree
-  reads `ih.π`), no globals (δ), no types or levels, and no `Vec`/`W`
-  eliminators. Extending the syntax is mechanical. Every lemma here is one
-  arm per constructor.
-- **Classification is not iteration.** This round proves that a class read
-  off a probe holds at every instance. It does not yet prove that iterating
-  the class over a run computes the unary fold: `NRec(z, s, Succ^c(x))` ⇝
-  `Succ^{q·c}(NRec(z, s, x))` for the affine class. That needs a deep reading
-  (normalising under `NSucc`), fuel additivity and monotonicity, and a model
-  of runs. It is the next submilestone.
+- **The fragment is small.** There are no globals (δ), no types or levels,
+  and no `Vec`/`W` eliminators (Σ, projections and runs came with the
+  second round, §7). Extending the syntax is mechanical. Every lemma here is
+  one arm per constructor.
+- **Classification is not iteration.** This section's lemma proves that a
+  class read off a probe holds at every instance. That iterating the class
+  over a run computes the unary fold is the second round's (§7).
 
 ## 5. Who checks the checker
 
@@ -165,11 +174,12 @@ Each rung is a fact some part of the kernel or the caches relies on, stated
 against this model, in roughly increasing cost. The first one is this round.
 
 1. **Probe soundness** (`hih-km-probe`, done here).
-2. **Run-fold adequacy** (`hih-km-runs`): iterating an affine or synchronous
-   class over a run is the unary fold. It needs a deep reading, fuel
-   additivity, Σ and projections, and runs as a value representation with
-   their unpacking. With it, `Val::NatRun`'s acceleration is proved rather
-   than argued.
+2. **Run-fold adequacy** (`hih-km-runs`, done in the second round, §7):
+   iterating an affine or synchronous class over a run is the unary fold.
+   It needed a deep reading, Σ and projections, and runs as a value
+   representation with their unpacking; reduction as a relation took the
+   place of fuel additivity. With it, `Val::NatRun`'s acceleration is
+   proved rather than argued, up to the gaps in §7.4.
 3. **Bit transducers**: rung 1, plus a finite enumeration of head bits and
    state.
 4. **Strategy changes**: two evaluation strategies (δ-lazy unfolding,
@@ -187,3 +197,112 @@ against this model, in roughly increasing cost. The first one is this round.
    kernel reaches that until the loader is itself the modelled code. So this
    rung waits for rung 5, and until then the sentinel's comparison is the
    guard.
+
+## 7. Run-fold adequacy (second round)
+
+`eval/runs.rs` folds over a run by the class of its step. An affine step's
+tree is iterated over the run's program and built at the fold over the tail;
+a synchronous fold applied to a run cancels the two runs' common prefix.
+This round proves both against the model: what the kernel builds is
+convertible with the fold the reference reduction takes one successor at a
+time.
+
+### 7.1 Reduction as a relation
+
+The probe lemma is about `Tm::whnf` and needs its runs unblocked, because it
+claims that a probe's weak head value *is* the instance's. A run fold is a
+statement about deep values: the kernel reads a tree by forcing a probe's
+components, and builds its answer under pairs and successors. So this round
+states everything with one-step reduction `t.Red(u)`: β, `elim_Nat`'s two ι
+rules, a projection out of a pair, a run's unpacking, and their congruences
+in head position, under `NSucc` and `SPair`, and in an application's
+argument. `t.Reduces(u)` is its reflexive-transitive closure (a count of
+steps and an existential), and `a.Joins(b)` says both reduce to one term.
+Every step of `Red` is a conversion of the calculus, so joinable terms are
+convertible; no confluence is needed for that direction, which is the one
+soundness wants.
+
+Two facts connect the relation to round 1's evaluator and probe:
+
+- **`Tm::whnf_sound`**: whatever `whnf` returns is a reduct of its input.
+- **`Tm::reduces_inst`**: reduction is closed under instantiating atoms by
+  closed terms. Unlike `whnf_inst` this needs no unblocked or settled
+  hypothesis. A reduction says where a term goes, not that it stops there,
+  and an instance may go on further.
+
+### 7.2 The readings
+
+The kernel reads a probe value as an affine tree (`read_affine`) or a
+synchronous increment (`probe_sync`). The model's readers do the same over
+`whnf`, sub-term by sub-term:
+
+- **`Tm::read`**: a pair reads as a pair of readings, successors are
+  stripped, and what they sit on must be `NZero` or atom `1` (`ih`) under
+  projections. The tree is `Aff` (`Leaf(inc, path)`, `Lit(inc)`,
+  `Branch`), with increments as counts. Run against the uniform probe
+  `s(k, ih)` or the peeled one `s(Succ x, ih)`.
+- **`Tm::read_sync`**: the probe's weak head is a `Lam`, and applied to
+  `Succ x` it strips to `q` successors on `ih x` exactly.
+
+Their soundness (`Tm::read_sound`, `Tm::read_sync_sound`) says that a term
+read as a tree reduces to the tree's term at `ih`. Instantiated, a ground
+step at any closed `k` and `ih` reduces to the tree at `ih`
+(`Tm::probe_affine`, `Tm::probe_peeled_affine`, `Tm::probe_sync`).
+
+The tree arithmetic follows `value/algebra.rs`: `Path::at` (descending
+through a successor-free leaf extends its path, anything else ill-typed is
+declined), `Aff::compose` (outer at inner, increments added, successors on a
+pair declined), and `Aff::iter`. `Aff::compose_sound` is the substitution
+lemma: the outer tree's term at the inner tree's term reduces to the
+composite's term.
+
+### 7.3 What is proved
+
+With `s` ground and closed, `z` and the tails closed, and `Aff::term` the
+tree with its successors spelled out (`Aff::build` is the same tree with
+every increment a run, as `eval/runs.rs` builds it):
+
+- **`Tm::fold_affine`** (uniform): if the probe reads as `tree` and
+  `tree.iter(c) = Some(r)`, then `NRec(z, s, NRun(c, x))` joins
+  `r.build(NRec(z, s, x))`.
+- **`Tm::fold_affine_peeled`**: if the peeled probe reads as `tree` and
+  `tree.iter(c) = Some(r)`, then `NRec(z, s, NRun(c+1, x))` joins
+  `r.build(s(x, NRec(z, s, x)))`: the innermost step is taken as written.
+- **`Tm::fold_sync`**: if `read_sync` gives `q`, then
+  `NRec(z, s, NRun(a+m, t))` applied to `NRun(b+m, x)` joins
+  `NRun(q·m, NRec(z, s, NRun(a, t)) applied to NRun(b, x))`: the common `m`
+  cancelled, `q` successors per pair, residuals as runs.
+
+Each has a `_unary` form that is the induction: the fold reduces to `r`'s
+term. The kernel's value reduces to the same term by unpacking its runs
+(`Aff::build_unpacks`, `Tm::run_unpacks`).
+
+The probes in `lib/_tests/kernel_model/kernel_runs_tests.hthr` evaluate the
+readings at the kernel's own example steps (`add`, `half`'s window, a step
+that matches on `k`, `min`, and a counter that cancels without
+successors), check that too little fuel reads nothing and that successors under
+a pair are declined, and apply each theorem at an open run and tail. During
+the round, six hand mutations of `kernel_runs.hthr` were each rejected: an
+extra successor in `graft`, `at` extending a path in the wrong order or
+ignoring the projection, a reader that drops a successor or accepts any
+atom as `ih`, and a synchronous reader that accepts any argument.
+
+The module exports to Lean with no refusals (`kernel_model_exports` loads
+it, and `kernel_reduction` with it). The Lean recheck itself
+(`scripts/export-recheck`) did not run in the cloud box that did the
+round, which has no Lean and cannot fetch one.
+
+### 7.4 What it does not prove, yet
+
+- **Programs and powering.** Increments are counts. The kernel's increments
+  are `ContextProgram`s, its `iterate` is binary powering over a program's
+  DAG with identity short cuts and compaction, and the model's `iter` is
+  one composition per step. That they compute the same tree is
+  `value/algebra.rs`'s randomized reference test. A proof needs
+  composition's associativity and identity laws; it is model arithmetic,
+  with no reduction in it.
+- **The kernel's other synchronous heads.** `probe_sync` also accepts a
+  `WfIh` or `WIh` probe value (a fold whose motive's functions come from
+  the W route); the model reads only a `Lam`.
+- **The evaluator.** As in §4, these are facts about the reference relation
+  that the kernel claims to implement, not about the kernel's machine.

@@ -413,7 +413,9 @@ The class is a fact about the algebra as a function on runs — the
 substitution property of reduction is the adequacy argument: a probe value
 with no case split on the probe variables was reached by a reduction that
 holds at every instantiation (proved for ch. 06's reduction on a λ + `Nat`
-fragment, `docs/kernel-model-design.md`) — so `mul` of two runs is one multiplication,
+fragment, `docs/kernel-model-design.md`; that iterating an affine or
+synchronous class over a run is convertible with the unary fold is proved
+there too, with pairs and runs in the fragment, §7) — so `mul` of two runs is one multiplication,
 `sub`/`leb`/`min`/`max` cancel run against run however they are spelled,
 and `half`'s course-of-values window is a permutation iterated by
 exponentiation. A cost the calculus itself charges that no class covers

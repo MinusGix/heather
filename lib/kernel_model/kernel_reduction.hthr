@@ -22,9 +22,20 @@ import bool;
 import nat;
 import option;
 
-// The fragment: functions and `Nat` with its eliminator, which is what a
-// `Nat` fold's step is made of. `NRec(z, s, n)` is `elim_Nat` with base `z`
-// and step `s`, applied as `s(k, ih)`.
+// The two projections out of a pair.
+inductive Proj { PFst, PSnd }
+
+fn Proj::pick<A>(self p: Proj, a, b: A) → A {
+    match p { PFst => a, PSnd => b }
+}
+
+// The fragment: functions, `Nat` with its eliminator, which is what a
+// `Nat` fold's step is made of, pairs with their projections, which is what
+// a course-of-values window is made of, and runs. `NRec(z, s, n)` is
+// `elim_Nat` with base `z` and step `s`, applied as `s(k, ih)`.
+// `NRun(c, t)` is the kernel's `Val::NatRun`, `Succ^c(t)` held as one node:
+// it means what its unpacking says (`Succ^(c+1)(t)` is `Succ(Succ^c(t))`,
+// `Succ^0(t)` is `t`), and reduction unpacks it one successor at a time.
 inductive Tm {
     Bv(index: Nat),
     Fv(atom: Nat),
@@ -33,6 +44,9 @@ inductive Tm {
     NZero,
     NSucc(pred: Tm),
     NRec(base: Tm, step: Tm, scrut: Tm),
+    SPair(fst: Tm, snd: Tm),
+    SProj(proj: Proj, pair: Tm),
+    NRun(count: Nat, tail: Tm),
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +67,9 @@ fn Tm::open_at(self t: Tm, k: Nat, u: Tm) → Tm {
         NZero => NZero,
         NSucc(p) => NSucc(p.open_at(k, u)),
         NRec(z, s, n) => NRec(z.open_at(k, u), s.open_at(k, u), n.open_at(k, u)),
+        SPair(a, b) => SPair(a.open_at(k, u), b.open_at(k, u)),
+        SProj(p, w) => SProj(p, w.open_at(k, u)),
+        NRun(c, w) => NRun(c, w.open_at(k, u)),
     }
 }
 
@@ -68,6 +85,9 @@ fn Tm::Lc(self t: Tm, d: Nat) → Type {
         NZero => True,
         NSucc(p) => p.Lc(d),
         NRec(z, s, n) => z.Lc(d) ∧ (s.Lc(d) ∧ n.Lc(d)),
+        SPair(a, b) => a.Lc(d) ∧ b.Lc(d),
+        SProj(_, w) => w.Lc(d),
+        NRun(_, w) => w.Lc(d),
     }
 }
 
@@ -87,6 +107,11 @@ theorem Tm::cong_rec({z, z2, s, s2, n, n2: Tm}, p: z = z2, q: s = s2, r: n = n2)
         NRec(z, s, n) = NRec(z2, s2, n2) {
     rewrite(p, rewrite(q, rewrite(r, refl)))
 }
+theorem Tm::cong_pair({a, b, c, d: Tm}, p: a = b, q: c = d): SPair(a, c) = SPair(b, d) {
+    rewrite(p, rewrite(q, refl))
+}
+theorem Tm::cong_proj(pr: Proj, {a, b: Tm}, p: a = b): SProj(pr, a) = SProj(pr, b) { rewrite(p, refl) }
+theorem Tm::cong_run(c: Nat, {a, b: Tm}, p: a = b): NRun(c, a) = NRun(c, b) { rewrite(p, refl) }
 
 // Opening above a term's depth changes nothing.
 theorem Tm::open_lc(self t: Tm): (d, k: Nat) → t.Lc(d) → d <= k → (u: Tm) → t.open_at(k, u) = t {
@@ -103,6 +128,9 @@ theorem Tm::open_lc(self t: Tm): (d, k: Nat) → t.Lc(d) → d <= k → (u: Tm) 
         NRec(z, s, n) => λ d k h le u =>
             Tm::cong_rec(z.open_lc(d, k, h.left, le, u), s.open_lc(d, k, h.right.left, le, u),
                          n.open_lc(d, k, h.right.right, le, u)),
+        SPair(a, b) => λ d k h le u => Tm::cong_pair(a.open_lc(d, k, h.left, le, u), b.open_lc(d, k, h.right, le, u)),
+        SProj(p, w) => λ d k h le u => Tm::cong_proj(p, w.open_lc(d, k, h, le, u)),
+        NRun(c, w) => λ d k h le u => Tm::cong_run(c, w.open_lc(d, k, h, le, u)),
     }
 }
 
@@ -118,12 +146,20 @@ fn Tm::inst(self t: Tm, sub: Nat → Tm) → Tm {
         NZero => NZero,
         NSucc(p) => NSucc(p.inst(sub)),
         NRec(z, s, n) => NRec(z.inst(sub), s.inst(sub), n.inst(sub)),
+        SPair(a, b) => SPair(a.inst(sub), b.inst(sub)),
+        SProj(p, w) => SProj(p, w.inst(sub)),
+        NRun(c, w) => NRun(c, w.inst(sub)),
     }
 }
 
 theorem Tm::inst_bv_or(hit: Bool, u: Tm, i: Nat, sub: Nat → Tm):
         Tm::bv_or(hit, u, i).inst(sub) = Tm::bv_or(hit, u.inst(sub), i) {
     match hit { True => refl, False => refl }
+}
+
+theorem Proj::inst_pick(self p: Proj, a, b: Tm, sub: Nat → Tm):
+        p.pick(a, b).inst(sub) = p.pick(a.inst(sub), b.inst(sub)) {
+    match p { PFst => refl, PSnd => refl }
 }
 
 // Instantiation commutes with opening, when every atom's image is closed.
@@ -140,6 +176,10 @@ theorem Tm::inst_open_at(self t: Tm, sub: Nat → Tm, closed: (a: Nat) → sub(a
         NRec(z, s, n) => λ k u =>
             Tm::cong_rec(z.inst_open_at(sub, closed, k, u), s.inst_open_at(sub, closed, k, u),
                          n.inst_open_at(sub, closed, k, u)),
+        SPair(a, b) => λ k u =>
+            Tm::cong_pair(a.inst_open_at(sub, closed, k, u), b.inst_open_at(sub, closed, k, u)),
+        SProj(p, w) => λ k u => Tm::cong_proj(p, w.inst_open_at(sub, closed, k, u)),
+        NRun(c, w) => λ k u => Tm::cong_run(c, w.inst_open_at(sub, closed, k, u)),
     }
 }
 
@@ -157,6 +197,9 @@ fn Tm::app_head(ev: Tm → Option<Tm>, a: Tm, h: Tm) → Option<Tm> {
         NZero => Some(App(NZero, a)),
         NSucc(p) => Some(App(NSucc(p), a)),
         NRec(z, s, n) => Some(App(NRec(z, s, n), a)),
+        SPair(c, d) => Some(App(SPair(c, d), a)),
+        SProj(p, w) => Some(App(SProj(p, w), a)),
+        NRun(c, w) => Some(App(NRun(c, w), a)),
     }
 }
 
@@ -173,11 +216,38 @@ fn Tm::rec_head(ev: Tm → Option<Tm>, z: Tm, s: Tm, h: Tm) → Option<Tm> {
         NZero => ev(z),
         NSucc(m) => ev(App(App(s, m), NRec(z, s, m))),
         NRec(z2, s2, n2) => Some(NRec(z, s, NRec(z2, s2, n2))),
+        SPair(a, b) => Some(NRec(z, s, SPair(a, b))),
+        SProj(p, w) => Some(NRec(z, s, SProj(p, w))),
+        NRun(c, w) => Some(NRec(z, s, NRun(c, w))),
     }
 }
 
 fn Tm::rec_k(ev: Tm → Option<Tm>, z: Tm, s: Tm, r: Option<Tm>) → Option<Tm> {
     match r { None => None, Some(h) => Tm::rec_head(ev, z, s, h) }
+}
+
+fn Tm::proj_head(ev: Tm → Option<Tm>, p: Proj, h: Tm) → Option<Tm> {
+    match h {
+        Bv(i) => Some(SProj(p, Bv(i))),
+        Fv(x) => Some(SProj(p, Fv(x))),
+        Lam(b) => Some(SProj(p, Lam(b))),
+        App(f, b) => Some(SProj(p, App(f, b))),
+        NZero => Some(SProj(p, NZero)),
+        NSucc(m) => Some(SProj(p, NSucc(m))),
+        NRec(z, s, n) => Some(SProj(p, NRec(z, s, n))),
+        SPair(a, b) => ev(p.pick(a, b)),
+        SProj(p2, w) => Some(SProj(p, SProj(p2, w))),
+        NRun(c, w) => Some(SProj(p, NRun(c, w))),
+    }
+}
+
+fn Tm::proj_k(ev: Tm → Option<Tm>, p: Proj, r: Option<Tm>) → Option<Tm> {
+    match r { None => None, Some(h) => Tm::proj_head(ev, p, h) }
+}
+
+// A run unpacks one successor; an empty run is its tail.
+fn Tm::run_step(ev: Tm → Option<Tm>, c: Nat, t: Tm) → Option<Tm> {
+    match c { Zero => ev(t), Succ(m) => Some(NSucc(NRun(m, t))) }
 }
 
 fn Tm::step(ev: Tm → Option<Tm>, t: Tm) → Option<Tm> {
@@ -189,6 +259,9 @@ fn Tm::step(ev: Tm → Option<Tm>, t: Tm) → Option<Tm> {
         NZero => Some(NZero),
         NSucc(p) => Some(NSucc(p)),
         NRec(z, s, n) => Tm::rec_k(ev, z, s, ev(n)),
+        SPair(a, b) => Some(SPair(a, b)),
+        SProj(p, w) => Tm::proj_k(ev, p, ev(w)),
+        NRun(c, w) => Tm::run_step(ev, c, w),
     }
 }
 
@@ -215,6 +288,9 @@ fn Tm::rigid(self t: Tm) → Bool {
         NZero => False,
         NSucc(_) => False,
         NRec(_, _, n) => n.rigid(),
+        SPair(_, _) => False,
+        SProj(_, w) => w.rigid(),
+        NRun(_, _) => False,
     }
 }
 
@@ -227,6 +303,9 @@ fn Tm::blocked(self t: Tm) → Bool {
         NZero => False,
         NSucc(_) => False,
         NRec(_, _, n) => n.rigid(),
+        SPair(_, _) => False,
+        SProj(_, w) => w.rigid(),
+        NRun(_, _) => False,
     }
 }
 
@@ -247,6 +326,9 @@ theorem Tm::app_k_unblocked(ev: Tm → Option<Tm>, a: Tm, r: Option<Tm>,
             NZero => λ q => refl,
             NSucc(_) => λ q => refl,
             NRec(_, _, _) => λ q => q,
+            SPair(_, _) => λ q => refl,
+            SProj(_, _) => λ q => q,
+            NRun(_, _) => λ q => refl,
         },
     }(h)
 }
@@ -263,6 +345,28 @@ theorem Tm::rec_k_unblocked(ev: Tm → Option<Tm>, z, s: Tm, r: Option<Tm>,
             NZero => λ q => refl,
             NSucc(_) => λ q => refl,
             NRec(_, _, _) => λ q => q,
+            SPair(_, _) => λ q => refl,
+            SProj(_, _) => λ q => q,
+            NRun(_, _) => λ q => refl,
+        },
+    }(h)
+}
+
+theorem Tm::proj_k_unblocked(ev: Tm → Option<Tm>, p: Proj, r: Option<Tm>,
+        h: Tm::Unblocked(Tm::proj_k(ev, p, r))): Tm::Unblocked(r) {
+    match r as λ y => Tm::Unblocked(Tm::proj_k(ev, p, y)) → Tm::Unblocked(y) {
+        None => λ q => trivial,
+        Some(v) => match v as λ y => Tm::Unblocked(Tm::proj_head(ev, p, y)) → Tm::Unblocked(Some(y)) {
+            Bv(_) => λ q => refl,
+            Fv(_) => λ q => absurd(q),
+            Lam(_) => λ q => refl,
+            App(_, _) => λ q => q,
+            NZero => λ q => refl,
+            NSucc(_) => λ q => refl,
+            NRec(_, _, _) => λ q => q,
+            SPair(_, _) => λ q => refl,
+            SProj(_, _) => λ q => q,
+            NRun(_, _) => λ q => refl,
         },
     }(h)
 }
@@ -280,6 +384,9 @@ fn Tm::Value(self t: Tm) → Type {
         NZero => True,
         NSucc(_) => True,
         NRec(_, _, _) => False,
+        SPair(_, _) => True,
+        SProj(_, _) => False,
+        NRun(_, _) => False,
     }
 }
 
@@ -292,6 +399,9 @@ theorem Tm::step_value(ev: Tm → Option<Tm>, self w: Tm, hv: w.Value()): Tm::st
         NZero => λ q => refl,
         NSucc(_) => λ q => refl,
         NRec(_, _, _) => λ q => false_elim(q),
+        SPair(_, _) => λ q => refl,
+        SProj(_, _) => λ q => false_elim(q),
+        NRun(_, _) => λ q => false_elim(q),
     }(hv)
 }
 
@@ -325,6 +435,9 @@ theorem Tm::app_k_inst(P: Option<Tm> → Type, stuck: (x: Nat) → (a: Tm) → P
             NZero => λ q => refl,
             NSucc(_) => λ q => refl,
             NRec(_, _, _) => λ q => refl,
+            SPair(_, _) => λ q => refl,
+            SProj(_, _) => λ q => refl,
+            NRun(_, _) => λ q => refl,
         },
     }(h)
 }
@@ -348,7 +461,49 @@ theorem Tm::rec_k_inst(P: Option<Tm> → Type, stuck: (x: Nat) → (z, s: Tm) �
             NZero => λ q => ih(z, q),
             NSucc(m) => λ q => ih(App(App(s, m), NRec(z, s, m)), q),
             NRec(_, _, _) => λ q => refl,
+            SPair(_, _) => λ q => refl,
+            SProj(_, _) => λ q => refl,
+            NRun(_, _) => λ q => refl,
         },
+    }(h)
+}
+
+theorem Tm::proj_k_inst(P: Option<Tm> → Type, stuck: (x: Nat) → (p: Proj) → P(Some(SProj(p, Fv(x)))) → False,
+        ev: Tm → Option<Tm>, sub: Nat → Tm,
+        ih: Tm::CommutesOn(P, ev, sub), p: Proj, r: Option<Tm>, h: P(Tm::proj_k(ev, p, r))):
+        Tm::proj_k(ev, p, r.map(λ (v: Tm) => v.inst(sub)))
+            = Tm::proj_k(ev, p, r).map(λ (v: Tm) => v.inst(sub)) {
+    match r as λ y => P(Tm::proj_k(ev, p, y)) →
+            Tm::proj_k(ev, p, y.map(λ (v: Tm) => v.inst(sub)))
+                = Tm::proj_k(ev, p, y).map(λ (v: Tm) => v.inst(sub)) {
+        None => λ q => refl,
+        Some(v) => match v as λ y => P(Tm::proj_head(ev, p, y)) →
+                Tm::proj_head(ev, p, y.inst(sub))
+                    = Tm::proj_head(ev, p, y).map(λ (w: Tm) => w.inst(sub)) {
+            Bv(_) => λ q => refl,
+            Fv(x) => λ q => false_elim(stuck(x, p, q)),
+            Lam(_) => λ q => refl,
+            App(_, _) => λ q => refl,
+            NZero => λ q => refl,
+            NSucc(_) => λ q => refl,
+            NRec(_, _, _) => λ q => refl,
+            SPair(a, b) => λ q => j(p.inst_pick(a, b, sub),
+                                    λ y e => ev(y) = ev(p.pick(a, b)).map(λ (w: Tm) => w.inst(sub)),
+                                    ih(p.pick(a, b), q)),
+            SProj(_, _) => λ q => refl,
+            NRun(_, _) => λ q => refl,
+        },
+    }(h)
+}
+
+// What an instance of a run's unpacking does, given the tail's run commutes.
+theorem Tm::run_step_inst(P: Option<Tm> → Type, ev: Tm → Option<Tm>, sub: Nat → Tm,
+        ih: Tm::CommutesOn(P, ev, sub), c: Nat, w: Tm, h: P(Tm::run_step(ev, c, w))):
+        Tm::run_step(ev, c, w.inst(sub)) = Tm::run_step(ev, c, w).map(λ (v: Tm) => v.inst(sub)) {
+    match c as λ y => P(Tm::run_step(ev, y, w)) →
+            Tm::run_step(ev, y, w.inst(sub)) = Tm::run_step(ev, y, w).map(λ (v: Tm) => v.inst(sub)) {
+        Zero => λ q => ih(w, q),
+        Succ(_) => λ q => refl,
     }(h)
 }
 
@@ -376,6 +531,12 @@ theorem Tm::step_inst(ev: Tm → Option<Tm>, sub: Nat → Tm,
               λ y p => Tm::rec_k(ev, z.inst(sub), s.inst(sub), y)
                   = Tm::rec_k(ev, z, s, ev(n)).map(λ (v: Tm) => v.inst(sub)),
               Tm::rec_k_inst(Tm::Unblocked, λ x z2 s2 q2 => absurd(q2), ev, sub, ih, z, s, ev(n), q)),
+        SPair(_, _) => λ q => refl,
+        SProj(p, w) => λ q =>
+            j(sym(ih(w, Tm::proj_k_unblocked(ev, p, ev(w), q))),
+              λ y e => Tm::proj_k(ev, p, y) = Tm::proj_k(ev, p, ev(w)).map(λ (v: Tm) => v.inst(sub)),
+              Tm::proj_k_inst(Tm::Unblocked, λ x p2 q2 => absurd(q2), ev, sub, ih, p, ev(w), q)),
+        NRun(c, w) => λ q => Tm::run_step_inst(Tm::Unblocked, ev, sub, ih, c, w, q),
     }
 }
 
@@ -406,6 +567,9 @@ fn Tm::settled(self t: Tm) → Bool {
         NZero => True,
         NSucc(_) => True,
         NRec(_, _, n) => !n.rigid(),
+        SPair(_, _) => True,
+        SProj(_, w) => !w.rigid(),
+        NRun(_, _) => True,
     }
 }
 
@@ -425,6 +589,9 @@ theorem Tm::app_k_settled(ev: Tm → Option<Tm>, a: Tm, r: Option<Tm>,
             NZero => λ q => refl,
             NSucc(_) => λ q => refl,
             NRec(_, _, _) => λ q => q,
+            SPair(_, _) => λ q => refl,
+            SProj(_, _) => λ q => q,
+            NRun(_, _) => λ q => refl,
         },
     }(h)
 }
@@ -441,6 +608,28 @@ theorem Tm::rec_k_settled(ev: Tm → Option<Tm>, z, s: Tm, r: Option<Tm>,
             NZero => λ q => refl,
             NSucc(_) => λ q => refl,
             NRec(_, _, _) => λ q => q,
+            SPair(_, _) => λ q => refl,
+            SProj(_, _) => λ q => q,
+            NRun(_, _) => λ q => refl,
+        },
+    }(h)
+}
+
+theorem Tm::proj_k_settled(ev: Tm → Option<Tm>, p: Proj, r: Option<Tm>,
+        h: Tm::Settled(Tm::proj_k(ev, p, r))): Tm::Settled(r) {
+    match r as λ y => Tm::Settled(Tm::proj_k(ev, p, y)) → Tm::Settled(y) {
+        None => λ q => trivial,
+        Some(v) => match v as λ y => Tm::Settled(Tm::proj_head(ev, p, y)) → Tm::Settled(Some(y)) {
+            Bv(_) => λ q => refl,
+            Fv(_) => λ q => absurd(q),
+            Lam(_) => λ q => refl,
+            App(_, _) => λ q => q,
+            NZero => λ q => refl,
+            NSucc(_) => λ q => refl,
+            NRec(_, _, _) => λ q => q,
+            SPair(_, _) => λ q => refl,
+            SProj(_, _) => λ q => q,
+            NRun(_, _) => λ q => refl,
         },
     }(h)
 }
@@ -465,6 +654,12 @@ theorem Tm::step_inst_settled(ev: Tm → Option<Tm>, sub: Nat → Tm,
               λ y p => Tm::rec_k(ev, z.inst(sub), s.inst(sub), y)
                   = Tm::rec_k(ev, z, s, ev(n)).map(λ (v: Tm) => v.inst(sub)),
               Tm::rec_k_inst(Tm::Settled, λ x z2 s2 q2 => absurd(q2), ev, sub, ih, z, s, ev(n), q)),
+        SPair(_, _) => λ q => refl,
+        SProj(p, w) => λ q =>
+            j(sym(ih(w, Tm::proj_k_settled(ev, p, ev(w), q))),
+              λ y e => Tm::proj_k(ev, p, y) = Tm::proj_k(ev, p, ev(w)).map(λ (v: Tm) => v.inst(sub)),
+              Tm::proj_k_inst(Tm::Settled, λ x p2 q2 => absurd(q2), ev, sub, ih, p, ev(w), q)),
+        NRun(c, w) => λ q => Tm::run_step_inst(Tm::Settled, ev, sub, ih, c, w, q),
     }
 }
 
@@ -493,6 +688,9 @@ fn Tm::Ground(self t: Tm) → Type {
         NZero => True,
         NSucc(p) => p.Ground(),
         NRec(z, s, n) => z.Ground() ∧ (s.Ground() ∧ n.Ground()),
+        SPair(a, b) => a.Ground() ∧ b.Ground(),
+        SProj(_, w) => w.Ground(),
+        NRun(_, w) => w.Ground(),
     }
 }
 
@@ -507,6 +705,9 @@ theorem Tm::inst_ground(self t: Tm, sub: Nat → Tm): t.Ground() → t.inst(sub)
         NRec(z, s, n) => λ q =>
             Tm::cong_rec(z.inst_ground(sub, q.left), s.inst_ground(sub, q.right.left),
                          n.inst_ground(sub, q.right.right)),
+        SPair(a, b) => λ q => Tm::cong_pair(a.inst_ground(sub, q.left), b.inst_ground(sub, q.right)),
+        SProj(p, w) => λ q => Tm::cong_proj(p, w.inst_ground(sub, q)),
+        NRun(c, w) => λ q => Tm::cong_run(c, w.inst_ground(sub, q)),
     }
 }
 
