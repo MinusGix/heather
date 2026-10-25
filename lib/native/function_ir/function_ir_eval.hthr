@@ -903,7 +903,6 @@ theorem Function::eval_answers(self function: Function, call, other: Answers(), 
     StructuredRegion::eval_answers(function.body, call, other, arity, answers, parts.left, bound, bound, λ w id => refl, 64, function.result)
 }
 
-
 // A program's functions, each answering its calls by the functions after
 // it, as `program_callees` orders them.
 fn program_eval(functions: List<Function>) → Answers() {
