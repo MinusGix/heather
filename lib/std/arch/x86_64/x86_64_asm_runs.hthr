@@ -100,11 +100,44 @@ fn Prog::lacks(self p: Prog, name: Nat) → Bool {
     match p { Start => True, At(before, m, _) => !(name.leb(m) && m.leb(name)) && before.lacks(name) }
 }
 
-// Every nonzero name names one label, so a jump to it lands there.
+// Every nonzero name names one label, so a jump to it lands there. The test
+// is on `name.is_zero()`, not a match on `name` (`Nat::is_zero` says why).
 fn Prog::names_unique(self p: Prog) → Bool {
     match p {
         Start => True,
-        At(before, name, _) => match name { Zero => before.names_unique(), Succ(_) => before.lacks(name) && before.names_unique() },
+        At(before, name, _) => match name.is_zero() { True => before.names_unique(), False => before.lacks(name) && before.names_unique() },
+    }
+}
+
+// The names of the last `k` items, each absent from the items before it.
+fn Prog::fresh_names(self p: Prog, k: Nat) → Bool {
+    match k {
+        Zero => True,
+        Succ(j) => match p {
+            Start => True,
+            At(before, name, _) => match name.is_zero() { True => before.fresh_names(j), False => before.lacks(name) && before.fresh_names(j) },
+        },
+    }
+}
+
+// Unique names checked a stretch at a time: the last `k` items' against
+// everything before them, then the items before.
+theorem names_unique_back(k: Nat): (p: Prog) → p.fresh_names(k).IsTrue() → asm_back(p, k).names_unique().IsTrue() →
+    p.names_unique().IsTrue() {
+    match k {
+        Zero => λ p _ rest => rest,
+        Succ(j) => λ p => match p {
+            Start => λ _ rest => rest,
+            At(before, name, item) => match name as λ nm =>
+                At(before, nm, item).fresh_names(Succ(j)).IsTrue() → asm_back(before, j).names_unique().IsTrue() →
+                At(before, nm, item).names_unique().IsTrue() {
+                Zero => λ fresh rest => names_unique_back(j, before, fresh, rest),
+                Succ(n) => λ fresh rest => {
+                    let parts = Bool::is_true_and(before.lacks(Succ(n)), before.fresh_names(j), fresh);
+                    Bool::is_true_and_intro(before.lacks(Succ(n)), before.names_unique(), parts.left, names_unique_back(j, before, parts.right, rest))
+                },
+            },
+        },
     }
 }
 
@@ -260,21 +293,76 @@ theorem jmp_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat
 // Every jump's and call's target is a name `whole` gives. A missing name
 // sits at offset 0, which a JMP or CALL can reach backwards, so landing
 // alone does not refuse it.
-fn targets_named_in(whole: Prog, p: Prog) → Bool {
-    match p {
-        Start => True,
-        At(before, _, item) => (match item {
-            Jcc(_, target) => !whole.lacks(target),
-            Jmp(target) => !whole.lacks(target),
-            CallTo(target) => !whole.lacks(target),
-            _ => True,
-        }) && targets_named_in(whole, before),
+fn item_named(whole: Prog, item: Asm) → Bool {
+    match item {
+        Jcc(_, target) => !whole.lacks(target),
+        Jmp(target) => !whole.lacks(target),
+        CallTo(target) => !whole.lacks(target),
+        _ => True,
     }
+}
+fn targets_named_in(whole: Prog, p: Prog) → Bool {
+    match p { Start => True, At(before, _, item) => item_named(whole, item) && targets_named_in(whole, before) }
 }
 fn Prog::targets_named(self p: Prog) → Bool { targets_named_in(p, p) }
 
+// Landing and naming checked a stretch at a time, as `names_unique_back`
+// does names: the last `k` items, then the items before them. Each jump's
+// check reads the whole program's labels, so one statement over every
+// item is quadratic in the program; a stretch is its own statement.
+fn jumps_land_last(labels: Nat → Nat, p: Prog, k: Nat) → Bool {
+    match k {
+        Zero => True,
+        Succ(j) => match p { Start => True, At(before, _, item) => item_lands(labels, prog_len(before), item) && jumps_land_last(labels, before, j) },
+    }
+}
+
+theorem jumps_land_back(labels: Nat → Nat, k: Nat): (p: Prog) → jumps_land_last(labels, p, k).IsTrue() →
+    jumps_land_in(labels, asm_back(p, k)).IsTrue() → jumps_land_in(labels, p).IsTrue() {
+    match k {
+        Zero => λ p _ rest => rest,
+        Succ(j) => λ p => match p {
+            Start => λ _ rest => rest,
+            At(before, name, item) => λ last rest => {
+                let parts = Bool::is_true_and(item_lands(labels, prog_len(before), item), jumps_land_last(labels, before, j), last);
+                Bool::is_true_and_intro(item_lands(labels, prog_len(before), item), jumps_land_in(labels, before), parts.left,
+                    jumps_land_back(labels, j, before, parts.right, rest))
+            },
+        },
+    }
+}
+
+fn targets_named_last(whole: Prog, p: Prog, k: Nat) → Bool {
+    match k {
+        Zero => True,
+        Succ(j) => match p { Start => True, At(before, _, item) => item_named(whole, item) && targets_named_last(whole, before, j) },
+    }
+}
+
+theorem targets_named_back(whole: Prog, k: Nat): (p: Prog) → targets_named_last(whole, p, k).IsTrue() →
+    targets_named_in(whole, asm_back(p, k)).IsTrue() → targets_named_in(whole, p).IsTrue() {
+    match k {
+        Zero => λ p _ rest => rest,
+        Succ(j) => λ p => match p {
+            Start => λ _ rest => rest,
+            At(before, name, item) => λ last rest => {
+                let parts = Bool::is_true_and(item_named(whole, item), targets_named_last(whole, before, j), last);
+                Bool::is_true_and_intro(item_named(whole, item), targets_named_in(whole, before), parts.left,
+                    targets_named_back(whole, j, before, parts.right, rest))
+            },
+        },
+    }
+}
+
 // The one check: what a producer evaluates before it hands a program out.
 fn Prog::laid_out(self p: Prog) → Bool { p.no_holes() && (p.names_unique() && (p.jumps_land() && p.targets_named())) }
+
+theorem Prog::laid_out_intro(self p: Prog, holes: p.no_holes().IsTrue(), unique: p.names_unique().IsTrue(), lands: p.jumps_land().IsTrue(),
+    named: p.targets_named().IsTrue()): p.laid_out().IsTrue() {
+    Bool::is_true_and_intro(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), holes,
+        Bool::is_true_and_intro(p.names_unique(), p.jumps_land() && p.targets_named(), unique,
+            Bool::is_true_and_intro(p.jumps_land(), p.targets_named(), lands, named)))
+}
 
 theorem Prog::laid_out_fits(self p: Prog, laid: p.laid_out().IsTrue()): FillsFit(p, no_fills()) {
     p.no_holes_fit(Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), laid).left)

@@ -73,3 +73,7 @@ fn either(a, b: BitVec(64)) → BitVec(64) {
         True => match unequal(b, a.add(b)) { False => a, True => b.sub(a) },
     }
 }
+
+// A call of a deciding function: its agreement is its own, and the caller's
+// answers the call with it (issues/function-ir-verified-decided-callees.md).
+fn calls_either(a, b: BitVec(64)) → BitVec(64) { either(b, a).add(a) }
