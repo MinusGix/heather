@@ -1,0 +1,479 @@
+// A dataflow leaf compiled (issues/native-effect-source-compiler.md, round
+// S3.2): its inputs loaded from their slots, S4's lowering run over them
+// (`Region::lower_correct`, proved once), and each result stored back, so
+// the environment after is the source's `Env::compute`.
+//
+// The inputs are read as the region's valuation after the nodes
+// (`eval_nodes`): an input no node writes reads there as it read before
+// (`eval_nodes_frame`), and that valuation satisfies the nodes
+// (`eval_nodes_holds`), which is what the lowering asks.
+import native_source;
+import native_compile;
+import native_compile_facts;
+import native_compile_region;
+import native_compile_steps;
+import native_compile_segments;
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import linux_trees;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_byte_memory;
+import x86_64_store;
+import x86_64_kept;
+import linux_x86_64_byte_memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Registers apart
+
+theorem Nat::same_comm(self n: Nat): (m: Nat) → n.same(m) = m.same(n) {
+    match n {
+        Zero => λ m => match m { Zero => refl, Succ(_) => refl },
+        Succ(_, ih) => λ m => match m { Zero => refl, Succ(l) => ih(l) },
+    }
+}
+
+theorem Gpr::same_comm(self a: Gpr, b: Gpr): a.same(b) = b.same(a) { a.index().same_comm(b.index()) }
+
+theorem Bool::false_of_not(b: Bool, no: (!b).IsTrue()): b = False { not_true_false(b, no) }
+
+// A register absent from a list is apart from its head, and from the rest.
+theorem Gpr::absent_head(self register: Gpr, other: Gpr, rest: List<Gpr>, absent: register.absent_from(Cons(other, rest)).IsTrue()):
+    other.same(register) = False {
+    let parts = Bool::is_true_and(!register.same(other), register.absent_from(rest), absent);
+    trans(other.same_comm(register), Bool::false_of_not(register.same(other), parts.left))
+}
+
+theorem Gpr::absent_rest(self register: Gpr, other: Gpr, rest: List<Gpr>, absent: register.absent_from(Cons(other, rest)).IsTrue()):
+    register.absent_from(rest).IsTrue() {
+    Bool::is_true_and(!register.same(other), register.absent_from(rest), absent).right
+}
+
+// Ports in their registers stay there when another register is written.
+theorem ports_at_frame(values: Valuation(), ports: List<Port>): (registers: List<Gpr>) → (g: Gprs) → (register: Gpr) → (value: BitVec(64)) →
+    register.absent_from(registers).IsTrue() → PortsAt(values, ports, registers, g) → PortsAt(values, ports, registers, write_gpr(register, value, g)) {
+    match ports {
+        Nil => λ registers g register value _ _ => trivial,
+        Cons(port, rest) => λ registers => match registers {
+            Nil => λ g register value _ no => no,
+            Cons(other, later) => λ g register value absent at => {
+                let apart: (register.same(other) = False) = trans(register.same_comm(other), register.absent_head(other, later, absent));
+                ⟨j(sym(read_gpr_other(register, other, value, g, apart)), λ x _ => port.Rep(values, x), at.left),
+                 ports_at_frame(values, rest, later, g, register, value, register.absent_rest(other, later, absent), at.right)⟩
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Inputs in
+
+theorem word_fits_inside(id: Nat, fits: word_fits(id).IsTrue()): id < word_slots() { Nat::leb_sound(Succ(id), word_slots(), fits) }
+
+// The registers after a port is loaded, by its kind.
+fn Target::kind_gprs(self t: Target, env: Env, kind: Option<Kind>, id: Nat, register: Gpr, g: Gprs) → Gprs {
+    let a = t.layout().word_at(id);
+    match kind {
+        None => g,
+        Some(k) => match k {
+            Word => write_gpr(register, env.word(id), write_gpr(Rbx, a, g)),
+            Bit => {
+                let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, a, g)));
+                write_gpr(register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded)
+            },
+        },
+    }
+}
+
+fn Target::port_gprs(self t: Target, env: Env, port: Port, register: Gpr, g: Gprs) → Gprs {
+    t.kind_gprs(env, Kind::of_width(port.width), port.id, register, g)
+}
+
+fn Target::ports_gprs(self t: Target, env: Env, ports: List<Port>, registers: List<Gpr>, g: Gprs) → Gprs {
+    match ports {
+        Nil => g,
+        Cons(port, rest) => match registers { Nil => g, Cons(register, later) => t.ports_gprs(env, rest, later, t.port_gprs(env, port, register, g)) },
+    }
+}
+
+// A port's code goes as the claim after it, from the registers it leaves.
+theorem Target::goes_port_to(self t: Target, env: Env, p, q: Prog, port: Port, register: Gpr,
+    loaded: p.port_to(t.layout(), port, register) = Some(q), within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    post: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(q), tree, post)):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ post(t.port_gprs(env, port, register, g), m)) {
+    (match word_fits(port.id) as λ fits => word_fits(port.id) = fits →
+        (match fits { False => None, True => match Kind::of_width(port.width) {
+            None => None,
+            Some(kind) => match kind { Word => Some(p.word_to(t.layout(), port.id, register)), Bit => Some(p.bit_to(t.layout(), port.id, register)) },
+        } }) = Some(q) →
+        t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ post(t.port_gprs(env, port, register, g), m)) {
+        False => λ _ none => absurd(none),
+        True => λ fits => {
+            let inside = word_fits_inside(port.id, j(sym(fits), λ b _ => b.IsTrue(), trivial));
+            (match Kind::of_width(port.width) as λ k => Kind::of_width(port.width) = k →
+                (match k { None => None, Some(kind) => match kind { Word => Some(p.word_to(t.layout(), port.id, register)), Bit => Some(p.bit_to(t.layout(), port.id, register)) } }) = Some(q) →
+                t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ post(t.port_gprs(env, port, register, g), m)) {
+                None => λ _ none => absurd(none),
+                Some(kind) => match kind {
+                    Word => λ kind_is some => {
+                        let same: (p.word_to(t.layout(), port.id, register) = q) = Option::some_inj(p.word_to(t.layout(), port.id, register), q, some);
+                        let w = j(sym(same), λ x _ => x.Within(t.program), within);
+                        let goes = t.goes_word_to(env, p, port.id, register, inside, w, tree, post,
+                            j(sym(same), λ x _ => t.GoesR(prog_len(x), tree, post), next));
+                        j(sym(kind_is), λ k _ => t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧
+                            post(t.kind_gprs(env, k, port.id, register, g), m)), goes)
+                    },
+                    Bit => λ kind_is some => {
+                        let same: (p.bit_to(t.layout(), port.id, register) = q) = Option::some_inj(p.bit_to(t.layout(), port.id, register), q, some);
+                        let w = j(sym(same), λ x _ => x.Within(t.program), within);
+                        let goes = t.goes_bit_to(env, p, port.id, register, inside, w, tree, post,
+                            j(sym(same), λ x _ => t.GoesR(prog_len(x), tree, post), next));
+                        j(sym(kind_is), λ k _ => t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧
+                            post(t.kind_gprs(env, k, port.id, register, g), m)), goes)
+                    },
+                },
+            })(refl)
+        },
+    })(refl, loaded)
+}
+
+// Where a piece's start sits within the piece.
+theorem Prog::within_word_to(self p: Prog, layout: Layout, id: Nat, register: Gpr): p.Within(p.word_to(layout, id, register)) {
+    p.within_step(then(p, Block([MovRI(Rbx, layout.word_at(id))])), 0, Load(WordLoad(register, Rbx)), p.within_then(0, Block([MovRI(Rbx, layout.word_at(id))])))
+}
+
+theorem Prog::within_bit_to(self p: Prog, layout: Layout, id: Nat, register: Gpr): p.Within(p.bit_to(layout, id, register)) {
+    p.within_step(p.word_to(layout, id, register), 0, Block([MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)]), p.within_word_to(layout, id, register))
+}
+
+theorem Prog::within_word_from(self p: Prog, layout: Layout, id: Nat, register: Gpr): p.Within(p.word_from(layout, id, register)) {
+    p.within_step(then(p, Block([MovRI(Rbx, layout.word_at(id))])), 0, Store(WordStore(Rbx, register)), p.within_then(0, Block([MovRI(Rbx, layout.word_at(id))])))
+}
+
+// A port loaded: its width is a kind, and its code extends the program.
+theorem Prog::port_to_kind(self p: Prog, layout: Layout, port: Port, register: Gpr, q: Prog, loaded: p.port_to(layout, port, register) = Some(q)):
+    Exists<Kind>(λ kind => Kind::of_width(port.width) = Some(kind)) ∧ p.Within(q) {
+    (match word_fits(port.id) as λ fits => word_fits(port.id) = fits →
+        (match fits { False => None, True => match Kind::of_width(port.width) {
+            None => None,
+            Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)) },
+        } }) = Some(q) → Exists<Kind>(λ kind => Kind::of_width(port.width) = Some(kind)) ∧ p.Within(q) {
+        False => λ _ none => absurd(none),
+        True => λ _ => (match Kind::of_width(port.width) as λ k => Kind::of_width(port.width) = k →
+                (match k { None => None, Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)) } }) = Some(q) →
+                Exists<Kind>(λ kind => Kind::of_width(port.width) = Some(kind)) ∧ p.Within(q) {
+            None => λ _ none => absurd(none),
+            Some(kind) => match kind {
+                Word => λ kind_is some => ⟨Exists(Word, kind_is), j(Option::some_inj(p.word_to(layout, port.id, register), q, some), λ x _ => p.Within(x),
+                    p.within_word_to(layout, port.id, register))⟩,
+                Bit => λ kind_is some => ⟨Exists(Bit, kind_is), j(Option::some_inj(p.bit_to(layout, port.id, register), q, some), λ x _ => p.Within(x),
+                    p.within_bit_to(layout, port.id, register))⟩,
+            },
+        })(refl),
+    })(refl, loaded)
+}
+
+theorem Prog::ports_to_within(layout: Layout, ports: List<Port>): (registers: List<Gpr>) → (p, q: Prog) →
+    p.ports_to(layout, ports, registers) = Some(q) → p.Within(q) {
+    match ports {
+        Nil => λ registers p q some => j(Option::some_inj(p, q, some), λ x _ => p.Within(x), p.within_self()),
+        Cons(port, rest) => λ registers => match registers {
+            Nil => λ p q none => absurd(none),
+            Cons(register, later) => λ p q => (match p.port_to(layout, port, register) as λ o => p.port_to(layout, port, register) = o →
+                (match o { None => None, Some(r) => r.ports_to(layout, rest, later) }) = Some(q) → p.Within(q) {
+                None => λ _ none => absurd(none),
+                Some(r) => λ one more => p.within_trans(r, q, p.port_to_kind(layout, port, register, r, one).right,
+                    Prog::ports_to_within(layout, rest, later, r, q, more)),
+            })(refl),
+        },
+    }
+}
+
+theorem Prog::ports_from_within(layout: Layout, ports: List<Port>): (registers: List<Gpr>) → (p, q: Prog) →
+    p.ports_from(layout, ports, registers) = Some(q) → p.Within(q) {
+    match ports {
+        Nil => λ registers p q some => j(Option::some_inj(p, q, some), λ x _ => p.Within(x), p.within_self()),
+        Cons(port, rest) => λ registers => match registers {
+            Nil => λ p q none => absurd(none),
+            Cons(register, later) => λ p q => (match word_fits(port.id) as λ fits => word_fits(port.id) = fits →
+                (match fits { False => None, True => p.word_from(layout, port.id, register).ports_from(layout, rest, later) }) = Some(q) → p.Within(q) {
+                False => λ _ none => absurd(none),
+                True => λ _ more => p.within_trans(p.word_from(layout, port.id, register), q, p.within_word_from(layout, port.id, register),
+                    Prog::ports_from_within(layout, rest, later, p.word_from(layout, port.id, register), q, more)),
+            })(refl),
+        },
+    }
+}
+
+// The inputs' code, as the claim after it from the registers it leaves.
+theorem Target::goes_ports_to(self t: Target, env: Env, tree: ITree<BitVec(64)>(Events::linux()), ports: List<Port>): (registers: List<Gpr>) → (p, q: Prog) →
+    p.ports_to(t.layout(), ports, registers) = Some(q) → q.Within(t.program) → (post: Gprs → X86Memory(t.r.profile) → Type) →
+    t.GoesR(prog_len(q), tree, post) →
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ post(t.ports_gprs(env, ports, registers, g), m)) {
+    match ports {
+        Nil => λ registers p q some within post next => {
+            let same: (p = q) = Option::some_inj(p, q, some);
+            t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => post(s.gprs, s.memory),
+                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ post(s.gprs, s.memory),
+                j(sym(same), λ x _ => t.GoesR(prog_len(x), tree, post), next), λ s held => held.right)
+        },
+        Cons(port, rest) => λ registers => match registers {
+            Nil => λ p q none => absurd(none),
+            Cons(register, later) => λ p q => (match p.port_to(t.layout(), port, register) as λ o => p.port_to(t.layout(), port, register) = o →
+                (match o { None => None, Some(r) => r.ports_to(t.layout(), rest, later) }) = Some(q) → q.Within(t.program) →
+                (post: Gprs → X86Memory(t.r.profile) → Type) → t.GoesR(prog_len(q), tree, post) →
+                t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ post(t.ports_gprs(env, rest, later, t.port_gprs(env, port, register, g)), m)) {
+                None => λ _ none => absurd(none),
+                Some(r) => λ one more within post next => {
+                    let w_r = r.within_trans(q, t.program, Prog::ports_to_within(t.layout(), rest, later, r, q, more), within);
+                    let after = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ post(t.ports_gprs(env, rest, later, g), m);
+                    let head = t.goes_port_to(env, p, r, port, register, one, w_r, tree, after,
+                        t.goes_ports_to(env, tree, rest, later, r, q, more, within, post, next));
+                    t.goes_weaken(prog_len(p), tree,
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ after(t.port_gprs(env, port, register, s.gprs), s.memory),
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧
+                            post(t.ports_gprs(env, rest, later, t.port_gprs(env, port, register, s.gprs)), s.memory),
+                        head, λ s held => ⟨held.left, held⟩)
+                },
+            })(refl),
+        },
+    }
+}
+
+// A register neither the port's nor RBX reads as it did.
+theorem Target::kind_gprs_frame(self t: Target, env: Env, kind: Option<Kind>, id: Nat, register: Gpr, g: Gprs, query: Gpr,
+    apart: register.same(query) = False, from_rbx: Rbx.same(query) = False):
+    read_gpr(query, t.kind_gprs(env, kind, id, register, g)) = read_gpr(query, g) {
+    let a = t.layout().word_at(id);
+    match kind {
+        None => refl,
+        Some(k) => match k {
+            Word => trans(read_gpr_other(register, query, env.word(id), write_gpr(Rbx, a, g), apart), read_gpr_other(Rbx, query, a, g, from_rbx)),
+            Bit => {
+                let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, a, g)));
+                trans(read_gpr_other(register, query, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded, apart),
+                    trans(read_gpr_other(Rbx, query, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, a, g)), from_rbx),
+                        trans(read_gpr_other(register, query, env.word(id), write_gpr(Rbx, a, g), apart), read_gpr_other(Rbx, query, a, g, from_rbx))))
+            },
+        },
+    }
+}
+
+theorem Target::ports_gprs_frame(self t: Target, env: Env, ports: List<Port>): (registers: List<Gpr>) → (g: Gprs) → (query: Gpr) →
+    query.absent_from(registers).IsTrue() → Rbx.same(query) = False →
+    read_gpr(query, t.ports_gprs(env, ports, registers, g)) = read_gpr(query, g) {
+    match ports {
+        Nil => λ registers g query _ _ => refl,
+        Cons(port, rest) => λ registers => match registers {
+            Nil => λ g query _ _ => refl,
+            Cons(register, later) => λ g query absent from_rbx =>
+                trans(t.ports_gprs_frame(env, rest, later, t.port_gprs(env, port, register, g), query, query.absent_rest(register, later, absent), from_rbx),
+                    t.kind_gprs_frame(env, Kind::of_width(port.width), port.id, register, g, query, query.absent_head(register, later, absent), from_rbx)),
+        },
+    }
+}
+
+// A port read off its slot is what a valuation that agrees with the
+// environment there gives it.
+theorem Target::kind_rep(self t: Target, env: Env, values: Valuation(), id: Nat, register: Gpr, g: Gprs, kind: Kind,
+    apart: Rbx.same(register) = False, agree: (w: Nat) → values(w, id) = BitVec::ofNat(env.number(id))):
+    KindRep(values, id, Some(kind), read_gpr(register, t.kind_gprs(env, Some(kind), id, register, g))) {
+    let a = t.layout().word_at(id);
+    match kind {
+        Word => trans(agree(64), sym(read_gpr_after_write(register, env.word(id), write_gpr(Rbx, a, g)))),
+        Bit => {
+            let inner = write_gpr(register, env.word(id), write_gpr(Rbx, a, g));
+            let loaded = write_gpr(Rbx, BitVec::ofNat(1), inner);
+            let masked: (read_gpr(register, loaded).band(read_gpr(Rbx, loaded)) = env.word(id).band(BitVec::ofNat(1))) =
+                eq2(λ (x: BitVec(64)) (y: BitVec(64)) => x.band(y),
+                    trans(read_gpr_other(Rbx, register, BitVec::ofNat(1), inner, apart), read_gpr_after_write(register, env.word(id), write_gpr(Rbx, a, g))),
+                    read_gpr_after_write(Rbx, BitVec::ofNat(1), inner));
+            trans(cong_fn<BitVec(1), BitVec(64)>(λ x => x.zero_extend(63), agree(1)),
+                trans(sym(mask_low_bit(env.number(id))), sym(trans(read_gpr_after_write(register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded), masked))))
+        },
+    }
+}
+
+theorem Gpr::absent_first(self register: Gpr, other: Gpr, rest: List<Gpr>, absent: register.absent_from(Cons(other, rest)).IsTrue()):
+    register.same(other) = False {
+    Bool::false_of_not(register.same(other), Bool::is_true_and(!register.same(other), register.absent_from(rest), absent).left)
+}
+
+// The inputs in their registers, as the valuation reads them.
+theorem Target::inputs_at(self t: Target, env: Env, values: Valuation(), written: List<Nat>,
+    agree: (w: Nat) → (id: Nat) → absent(id, written).IsTrue() → values(w, id) = BitVec::ofNat(env.number(id)), ports: List<Port>):
+    (registers: List<Gpr>) → (p, q: Prog) → p.ports_to(t.layout(), ports, registers) = Some(q) → ports_absent(ports, written).IsTrue() →
+    Rbx.absent_from(registers).IsTrue() → gprs_distinct(registers).IsTrue() → (g: Gprs) →
+    PortsAt(values, ports, registers, t.ports_gprs(env, ports, registers, g)) {
+    match ports {
+        Nil => λ registers p q _ _ _ _ g => trivial,
+        Cons(port, rest) => λ registers => match registers {
+            Nil => λ p q none => absurd(none),
+            Cons(register, later) => λ p q => (match p.port_to(t.layout(), port, register) as λ o => p.port_to(t.layout(), port, register) = o →
+                (match o { None => None, Some(r) => r.ports_to(t.layout(), rest, later) }) = Some(q) →
+                ports_absent(Cons(port, rest), written).IsTrue() → Rbx.absent_from(Cons(register, later)).IsTrue() →
+                gprs_distinct(Cons(register, later)).IsTrue() → (g: Gprs) →
+                PortsAt(values, Cons(port, rest), Cons(register, later), t.ports_gprs(env, Cons(port, rest), Cons(register, later), g)) {
+                None => λ _ none => absurd(none),
+                Some(r) => λ one more absents rbx distinct g => {
+                    let kinds = p.port_to_kind(t.layout(), port, register, r, one).left;
+                    let absent_parts = Bool::is_true_and(absent(port.id, written), ports_absent(rest, written), absents);
+                    let distinct_parts = Bool::is_true_and(register.absent_from(later), gprs_distinct(later), distinct);
+                    let loaded = t.port_gprs(env, port, register, g);
+                    let kept: (read_gpr(register, t.ports_gprs(env, rest, later, loaded)) = read_gpr(register, loaded)) =
+                        t.ports_gprs_frame(env, rest, later, loaded, register, distinct_parts.left,
+                            Rbx.absent_first(register, later, rbx));
+                    let rep: KindRep(values, port.id, Some(kinds.witness), read_gpr(register, t.kind_gprs(env, Some(kinds.witness), port.id, register, g))) =
+                        t.kind_rep(env, values, port.id, register, g, kinds.witness, Rbx.absent_first(register, later, rbx),
+                            λ w => agree(w, port.id, absent_parts.left));
+                    let head: port.Rep(values, read_gpr(register, loaded)) =
+                        j(sym(kinds.proof), λ k _ => KindRep(values, port.id, k, read_gpr(register, t.kind_gprs(env, k, port.id, register, g))), rep);
+                    ⟨j(sym(kept), λ x _ => port.Rep(values, x), head),
+                     t.inputs_at(env, values, written, agree, rest, later, r, q, more, absent_parts.right, Rbx.absent_rest(register, later, rbx),
+                        distinct_parts.right, loaded)⟩
+                },
+            })(refl),
+        },
+    }
+}
+
+// A port's register read back as the number the source keeps.
+theorem port_rep_number(values: Valuation(), port: Port, word: BitVec(64), rep: port.Rep(values, word)):
+    word.toNat() = values(port.width, port.id).toNat() {
+    (match port.width.eq_dec(64) as λ d => KindRep(values, port.id, match d {
+            Inl(_) => Some(Word),
+            Inr(_) => match port.width.eq_dec(1) { Inl(_) => Some(Bit), Inr(_) => None },
+        }, word) → word.toNat() = values(port.width, port.id).toNat() {
+        Inl(wide) => λ (held: values(64, port.id) = word) =>
+            j(sym(wide), λ w _ => word.toNat() = values(w, port.id).toNat(), cong_fn<BitVec(64), Nat>(λ x => x.toNat(), sym(held))),
+        Inr(_) => (match port.width.eq_dec(1) {
+            Inl(one) => λ (held: values(1, port.id).zero_extend(63) = word) =>
+                j(sym(one), λ w _ => word.toNat() = values(w, port.id).toNat(),
+                    trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), sym(held)), BitVec::concat_zero_toNat(1, 63, values(1, port.id)))),
+            Inr(_) => λ (none: False) => false_elim(none),
+        }),
+    })(rep)
+}
+
+// The outputs' code: each result stored to its slot, so the environment
+// after is the one the source settles.
+theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree<BitVec(64)>(Events::linux()), ports: List<Port>):
+    (registers: List<Gpr>) → (p, q: Prog) → (env: Env) → p.ports_from(t.layout(), ports, registers) = Some(q) → q.Within(t.program) →
+    Rbx.absent_from(registers).IsTrue() → t.At(prog_len(q), tree, env.settle(values, ports)) →
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ PortsAt(values, ports, registers, g)) {
+    match ports {
+        Nil => λ registers p q env some within _ next => {
+            let same: (p = q) = Option::some_inj(p, q, some);
+            t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory),
+                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ PortsAt(values, Nil, registers, s.gprs),
+                j(sym(same), λ x _ => t.At(prog_len(x), tree, env), next), λ s held => held.left)
+        },
+        Cons(port, rest) => λ registers => match registers {
+            Nil => λ p q env none => absurd(none),
+            Cons(register, later) => λ p q env => (match word_fits(port.id) as λ fits => word_fits(port.id) = fits →
+                (match fits { False => None, True => p.word_from(t.layout(), port.id, register).ports_from(t.layout(), rest, later) }) = Some(q) →
+                q.Within(t.program) → Rbx.absent_from(Cons(register, later)).IsTrue() → t.At(prog_len(q), tree, env.settle(values, Cons(port, rest))) →
+                t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ PortsAt(values, Cons(port, rest), Cons(register, later), g)) {
+                False => λ _ none => absurd(none),
+                True => λ fits more within rbx next => {
+                    let inside = word_fits_inside(port.id, j(sym(fits), λ b _ => b.IsTrue(), trivial));
+                    let layout = t.layout();
+                    let stored = p.word_from(layout, port.id, register);
+                    let a = layout.word_at(port.id);
+                    let settled = Env(env.words.put(port.id, values(port.width, port.id).toNat(), 0), env.buffers);
+                    let w_stored = stored.within_trans(q, t.program, Prog::ports_from_within(layout, rest, later, stored, q, more), within);
+                    let after = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(settled, m) ∧ PortsAt(values, rest, later, g);
+                    let head = t.goes_word_from(p, port.id, register, inside, w_stored, tree, after,
+                        t.goes_ports_from(values, tree, rest, later, stored, q, settled, more, within, Rbx.absent_rest(register, later, rbx), next));
+                    let apart = Rbx.absent_first(register, later, rbx);
+                    t.goes_weaken(prog_len(p), tree,
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => after(write_gpr(Rbx, a, s.gprs),
+                            t.r.profile.store(s.memory, a, word_bytes(read_gpr(register, write_gpr(Rbx, a, s.gprs))))),
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ PortsAt(values, Cons(port, rest), Cons(register, later), s.gprs),
+                        head, λ s held => {
+                            let word = read_gpr(register, write_gpr(Rbx, a, s.gprs));
+                            let same_word: (word = read_gpr(register, s.gprs)) = read_gpr_other(Rbx, register, a, s.gprs, apart);
+                            let number: (word.toNat() = values(port.width, port.id).toNat()) =
+                                port_rep_number(values, port, word, j(sym(same_word), λ x _ => port.Rep(values, x), held.right.left));
+                            ⟨t.placed_same(env.set_word(port.id, word), settled, t.r.profile.store(s.memory, a, word_bytes(word)),
+                                t.placed_word(env, s.memory, held.left, port.id, inside, word),
+                                cong_fn<Nat, Env>(λ k => Env(env.words.put(port.id, k, 0), env.buffers), number)),
+                             ports_at_frame(values, rest, later, s.gprs, Rbx, a, Rbx.absent_rest(register, later, rbx), held.right.right)⟩
+                        })
+                },
+            })(refl),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The leaf
+
+// What a dataflow leaf's code claims: from the statement's start, on from
+// its end with the environment the source computes.
+theorem Target::goes_leaf(self t: Target, env: Env, p, q: Prog, nodes: List<Node>, emitted: p.leaf(t.layout(), nodes) = Some(q),
+    within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(q), tree, env.settle(eval_nodes(nodes, env.valuation()), nodes_write_ports(nodes)))): t.At(prog_len(p), tree, env) {
+    let layout = t.layout();
+    let ins = leaf_inputs(nodes);
+    let outs = leaf_outputs(nodes);
+    let inputs = nodes_inputs(nodes);
+    let outputs = nodes_write_ports(nodes);
+    let values = eval_nodes(nodes, env.valuation());
+    let region = leaf_region(nodes);
+    (match leaf_checks(nodes, ins, outs) as λ b => leaf_checks(nodes, ins, outs) = b →
+        (match b { False => None, True => match p.ports_to(layout, inputs, ins) {
+            None => None,
+            Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))),
+        } }) = Some(q) → t.At(prog_len(p), tree, env) {
+        False => λ _ none => absurd(none),
+        True => λ checked => {
+            let ok = j(sym(checked), λ b _ => b.IsTrue(), trivial);
+            let parts = Bool::is_true_and(nodes_evaluable(nodes), ports_absent(inputs, nodes_writes(nodes)) &&
+                (gprs_distinct(Cons(Rbx, ins)) && Rbx.absent_from(outs)), ok);
+            let parts2 = Bool::is_true_and(ports_absent(inputs, nodes_writes(nodes)), gprs_distinct(Cons(Rbx, ins)) && Rbx.absent_from(outs), parts.right);
+            let parts3 = Bool::is_true_and(gprs_distinct(Cons(Rbx, ins)), Rbx.absent_from(outs), parts2.right);
+            let distinct = Bool::is_true_and(Rbx.absent_from(ins), gprs_distinct(ins), parts3.left);
+            (match p.ports_to(layout, inputs, ins) as λ o => p.ports_to(layout, inputs, ins) = o →
+                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
+                t.At(prog_len(p), tree, env) {
+                None => λ _ none => absurd(none),
+                Some(loaded) => λ loaded_is => (match region.lower(ins, outs, place_into(outs)) as λ c => region.lower(ins, outs, place_into(outs)) = c →
+                    loaded.leaf_lowered(layout, nodes, c) = Some(q) → t.At(prog_len(p), tree, env) {
+                    None => λ _ none => absurd(none),
+                    Some(code) => λ lowered stored => {
+                        let body = then(loaded, Block(code));
+                        let w_body = body.within_trans(q, t.program, Prog::ports_from_within(layout, outputs, outs, body, q, stored), within);
+                        let w_loaded = loaded.within_before(0, Block(code), t.program, w_body);
+                        let at_body = t.goes_ports_from(values, tree, outputs, outs, body, q, env, stored, within, parts3.right, next);
+                        let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, u.memory) ∧ PortsAt(values, outputs, outs, u.gprs);
+                        let at_loaded = t.goes_block(loaded, 0, code, w_body, tree, post, at_body);
+                        let holds: RegionHolds(region, values) = eval_nodes_holds(nodes, parts.left, env.valuation(), values, λ w id _ => refl);
+                        let q_in = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ PortsAt(values, inputs, ins, g);
+                        let entered = t.goes_weaken(prog_len(loaded), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => post(execute_block_normal(code, s)),
+                            λ (s: MachineState<X86Memory(t.r.profile)>) => q_in(s.gprs, s.memory), at_loaded,
+                            λ s held => ⟨j(sym(execute_block_memory<X86Memory(t.r.profile)>(code, s)), λ m _ => t.Placed(env, m), held.left), region.lower_correct<X86Memory(t.r.profile)>(ins, outs, place_into(outs), code, values, s, lowered, held.right, holds)⟩);
+                        let at_p = t.goes_ports_to(env, tree, inputs, ins, p, loaded, loaded_is, w_loaded, q_in, entered);
+                        t.goes_weaken(prog_len(p), tree,
+                            λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ q_in(t.ports_gprs(env, inputs, ins, s.gprs), s.memory),
+                            λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory), at_p,
+                            λ s held => ⟨held, ⟨held, t.inputs_at(env, values, nodes_writes(nodes),
+                                λ w id absent => eval_nodes_frame(nodes, env.valuation(), w, id, absent), inputs, ins, p, loaded, loaded_is,
+                                parts2.left, distinct.left, distinct.right, s.gprs)⟩⟩)
+                    },
+                })(refl),
+            })(refl)
+        },
+    })(refl, emitted)
+}
