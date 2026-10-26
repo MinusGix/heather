@@ -2,7 +2,7 @@
 // issues/native-source-bytes.md): `tr a-z A-Z` and `yes`, which look at
 // and choose bytes. Each is a `Source` that `heather write-elf` compiles;
 // `native_compile_correct` is the proof of every one, so neither has a
-// theorem of its own.
+// theorem of its own (`write-elf`'s certificate states `<s>_elf_simulates`).
 //
 // Words below 20 are cat's (`native_cat`): 0 stdin, 1 stdout, 2 the
 // buffer's capacity, 3 what a read returned, 4 how much of it is sent, 5 how

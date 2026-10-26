@@ -29,7 +29,7 @@ fn head_pass() → Stmt {
 }
 
 fn head_c(n: Nat) → Source {
-    Source(functions := [], buffers := [512], main := Then(Then(cat_setup(512), ops([Const(64, 2, n)])), Repeat(head_pass(), 15)))
+    Source(functions := [], buffers := [Buffer(512)], main := Then(Then(cat_setup(512), ops([Const(64, 2, n)])), Repeat(head_pass(), 15)))
 }
 fn head10() → Source { head_c(10) }
 
@@ -37,11 +37,11 @@ fn head10() → Source { head_c(10) }
 // compiles, but no theorem covers it.
 fn big_cat() → Source { cat(2048) }
 
-theorem big_cat_too_big(): Layout(low(), big_cat().buffers).size().leb(DataRegion::io_page().size) = False { refl }
-theorem cat_fits_the_page(): Layout(low(), cat(1024).buffers).size().leb(DataRegion::io_page().size) = True { refl }
+theorem big_cat_too_big(): Layout(low(), big_cat().capacities()).size().leb(DataRegion::io_page().size) = False { refl }
+theorem cat_fits_the_page(): Layout(low(), cat(1024).capacities()).size().leb(DataRegion::io_page().size) = True { refl }
 
 // An `open`: the compiler makes only reads and writes.
-fn opens() → Source { Source(functions := [], buffers := [16], main := Invoke(Opens(0, 1, 2))) }
+fn opens() → Source { Source(functions := [], buffers := [Buffer(16)], main := Invoke(Opens(0, 1, 2))) }
 
 theorem opens_refused(): opens().refusal(low()) = [1, 1, 7, 2, 0] { refl }
 
@@ -58,7 +58,7 @@ theorem wide_leaf_refused(): wide_leaf().refusal(low()) = [1, 0, 1, 15, 14] { re
 // tests one; a write names a buffer the source does not have.
 fn far_exit() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Then(Exit(0), Exit(64)))) }
 fn far_again() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Repeat(Exit(0), 99))) }
-fn no_buffer() → Source { Source(functions := [], buffers := [8], main := Invoke(Writes(0, 1, 2, 3, 4))) }
+fn no_buffer() → Source { Source(functions := [], buffers := [Buffer(8)], main := Invoke(Writes(0, 1, 2, 3, 4))) }
 
 theorem far_exit_refused(): far_exit().refusal(low()) = [3, 4, 4, 64, 64] { refl }
 theorem far_again_refused(): far_again().refusal(low()) = [2, 3, 4, 99, 64] { refl }
@@ -68,6 +68,15 @@ theorem no_buffer_refused(): no_buffer().refusal(low()) = [1, 1, 8, 1, 1] { refl
 fn writes_input() → Source { Source(functions := [], buffers := [], main := ops([Add(64, 0, 0, 1)])) }
 
 theorem writes_input_refused(): writes_input().refusal(low()) = [1, 0, 2, 0, 0] { refl }
+
+// A byte node compiles only alone in its leaf.
+fn mixed_leaf() → Source { Source(functions := [], buffers := [Buffer(4)], main := ops([Const(64, 0, 0), BufferLoad(1, 0, 0)])) }
+fn byte_leaves() → Source {
+    Source(functions := [], buffers := [Buffer(4, [BitVec::ofNat(7)])], main := Then(ops([Const(64, 0, 0)]), ops([BufferLoad(1, 0, 0)])))
+}
+
+theorem mixed_leaf_refused(): mixed_leaf().refusal(low()) = [1, 0, 10, 2, 0] { refl }
+theorem byte_leaves_compile(): byte_leaves().refusal(low()) = [] { refl }
 
 // A source that compiles has no refusal.
 fn exit3() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Exit(0))) }
