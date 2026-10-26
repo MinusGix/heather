@@ -487,3 +487,69 @@ fn an_inferred_argument_of_the_right_type_is_accepted() {
          theorem good_open<A>(x, y: A, h: y = x): x = x {{ g(y, h) }}\n"
     ));
 }
+
+const REDEX: &str = "
+record And<P, Q> { left: P, right: Q }
+theorem weaken_like(pre, entry: Nat → Type, into: (s: Nat) → entry(s) → pre(s)): True { trivial }
+";
+
+/// A mismatch whose type has a β-redex in it
+/// (`issues/elab-accepts-mismatch-under-redex-head.md`). A `let`-bound λ at
+/// the head of an annotation, or a binder whose type is an instantiated λ
+/// parameter (`entry(s)` with `entry := λ s => P(s)`), leaves a redex in the
+/// type the note holds. The note was recorded and the gate refused at the
+/// right expression, but a redex has no surface spelling, so the report was
+/// the kernel's `NotConvertible` with one side unspelled. The display now
+/// spells a redex as its contractum, at the head and inside an argument, and
+/// through a curried spine.
+#[test]
+fn a_mismatch_under_a_redex_head_is_spelled_at_the_expression() {
+    let cases = [
+        (
+            "theorem bad(f: Nat → Nat, P: Nat → Type, n: Nat, h: P(n)): True { \
+             let post = λ (u: Nat) => P(u); let x: post(f(n)) = h; trivial }",
+            "h",
+            "`P(n)`, but `P(f(n))`",
+        ),
+        (
+            "theorem bad(f: Nat → Nat, P: Nat → Type, n: Nat, h: P(n)): True { \
+             let post = λ (u: Nat) (v: Nat) => P(v); let x: post(n, f(n)) = h; trivial }",
+            "h",
+            "`P(n)`, but `P(f(n))`",
+        ),
+        (
+            "theorem bad(f: Nat → Nat, P: Nat → Type, n: Nat, h: P(n) ∧ True): True { \
+             let post = λ (u: Nat) => P(u); let x: post(f(n)) ∧ True = h; trivial }",
+            "h",
+            "`And<P(n), True>`, but `And<P(f(n)), True>`",
+        ),
+        (
+            "theorem bad(f: Nat → Nat, P: Nat → Type, Q: Type, q: Q): True { \
+             weaken_like(λ (s: Nat) => P(f(s)) ∧ Q, λ (s: Nat) => P(s), λ s held => ⟨held, q⟩) }",
+            "held",
+            "`P(s)`, but `P(f(s))`",
+        ),
+    ];
+    for (case, at, types) in cases {
+        let src = format!("{REDEX}{case}\n");
+        let r = reject(&src);
+        let rendered = r.render(&src);
+        assert!(rendered.contains(&format!("this has type {types} is expected here")), "{case}\n{rendered}");
+        assert!(!rendered.contains("the kernel rejected"), "{case}\n{rendered}");
+        let ElabError::Elab { span, .. } = r else { panic!("{case}: expected an elaborator error: {r}") };
+        let start = src.rfind(case).unwrap() + case.find('{').unwrap();
+        assert!(span.start as usize > start, "{case}: reported outside the body\n{rendered}");
+        assert_eq!(&src[span.start as usize..span.end as usize], at, "{case}\n{rendered}");
+    }
+}
+
+/// **Control for the redex spelling.** The same shapes at the right type are
+/// accepted: the contraction is the display's, and checking never sees it.
+#[test]
+fn a_redex_head_of_the_right_type_is_accepted() {
+    ok(&format!("{REDEX}\
+        theorem good(f: Nat → Nat, P: Nat → Type, n: Nat, h: P(f(n))): True {{ \
+        let post = λ (u: Nat) => P(u); let x: post(f(n)) = h; trivial }}\n\
+        theorem good_binder(P: Nat → Type, Q: Type, q: Q): True {{ \
+        weaken_like(λ (s: Nat) => P(s) ∧ Q, λ (s: Nat) => P(s), λ s held => ⟨held, q⟩) }}\n"));
+}

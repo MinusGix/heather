@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,diagnostics]
 area: language
 created: 2026-10-04
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 Found while proving the stat pass (`lib/elf64_stat_width.hthr`, 2026-10-04).
@@ -42,3 +42,4 @@ The counting that produced the bad projection is [[conjunction-facts-read-by-cou
 
 - 2026-10-04: A second shape of the same gap, in `lib/elf64_row_fields.hthr`'s `row_selected`: inside a `match first as λ f => … → RowAt(…, f, …) → …` whose arm bound the refined record as `head1`, a record built from `page := head.page` and `holds := head1.holds` elaborated, and the kernel refused it (`PageNext` "where a type that displays the same is expected"). Here the kernel's message did carry a span. The elaborator treated `head1.page` and `head.page` as the same; they are different variables.
 - 2026-10-25: Another mismatch only the kernel refuses, under a let-bound or β-redex head: [[elab-accepts-mismatch-under-redex-head]].
+- 2026-10-26: The filed `bad4`/`bad2` are now reported by the elaborator at `p` (`this has type `And<a = b, b = b>`, but `a = b` is expected here`), since `OwedChecks` (#168): `sym`/`trans`'s equation sides are implicit, so `p` was an inferred argument. The redex-head case is closed. The second shape in the log (a refined record's `head1.page` taken for `head.page`) is not rechecked.
