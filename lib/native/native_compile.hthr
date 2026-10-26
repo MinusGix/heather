@@ -544,9 +544,18 @@ fn leaf_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
     }
 }
 
+// A leaf with a byte node compiles only as that node alone
+// (`Prog::single`).
+fn computes_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
+    match nodes_pure(nodes) {
+        True => leaf_refusal(layout, nodes),
+        False => match Start.single(layout, nodes, 0) { Some(_) => [], None => [10, nodes.len(), 0] },
+    }
+}
+
 fn region_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
     match region {
-        Dataflow(body) => leaf_refusal(layout, body.nodes),
+        Dataflow(body) => computes_refusal(layout, body.nodes),
         Sequence(_, _) => [0, 1, 0],
         Compose(_, _) => [0, 2, 0],
         Conditional(_, _, _, _, _, _) => [0, 3, 0],

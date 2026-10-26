@@ -33,7 +33,7 @@ import option;
 // The process Linux makes of a 232-byte header and the program's bytes, at
 // its entry, simulates the source.
 theorem Source::elf_simulates(self src: Source, program: Prog, compiled: src.compile(DataRegion::io_page().low) = Some(program),
-    fits: Layout(DataRegion::io_page().low, src.buffers).size() <= DataRegion::io_page().size,
+    fits: Layout(DataRegion::io_page().low, src.capacities()).size() <= DataRegion::io_page().size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io())>,
     entry: s.rip = io_entry(), loaded: s.memory = X86Memory::io_load(header ++ assemble(no_fills(), program, Nil))):
@@ -51,7 +51,7 @@ theorem Source::elf_simulates(self src: Source, program: Prog, compiled: src.com
 // The same, of the file `write-elf` writes: the I/O profile's ELF of the
 // program's bytes, whose header is 232 bytes whatever their length.
 theorem Source::elf_file_simulates(self src: Source, program: Prog, compiled: src.compile(DataRegion::io_page().low) = Some(program),
-    fits: Layout(DataRegion::io_page().low, src.buffers).size() <= DataRegion::io_page().size,
+    fits: Layout(DataRegion::io_page().low, src.capacities()).size() <= DataRegion::io_page().size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     s: MachineState<X86Memory(X86Profile::io())>,
     entry: s.rip = io_entry(), loaded: s.memory = X86Memory::io_load(io_elf_file(assemble(no_fills(), program, Nil)))):

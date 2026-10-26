@@ -123,7 +123,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
 fn {p}_program() → Prog {{ match {symbol}().compile({LOW}) {{ None => Start, Some(program) => program }} }}
 fn {p}_numbers() → List<Nat> {{ {p}_program().numbers() }}
 fn {p}_lens() → List<Nat> {{ asm_lens({p}_program()) }}
-fn {p}_room() → List<Nat> {{ [Layout({LOW}, {symbol}().buffers).size(), DataRegion::io_page().size] }}
+fn {p}_room() → List<Nat> {{ [Layout({LOW}, {symbol}().capacities()).size(), DataRegion::io_page().size] }}
 fn {p}_refusal() → List<Nat> {{ {symbol}().refusal({LOW}) }}
 ");
     let mut fork = elab.fork();
@@ -213,8 +213,8 @@ theorem {p}_compiles(): {symbol}().compile({LOW}) = Some({p}_code()) {{
 }}
 
 // Its words, buffers and scratch range fit the page.
-theorem {p}_fits(): Layout({LOW}, {symbol}().buffers).size() <= DataRegion::io_page().size {{
-    Nat::leb_sound(Layout({LOW}, {symbol}().buffers).size(), DataRegion::io_page().size, trivial)
+theorem {p}_fits(): Layout({LOW}, {symbol}().capacities()).size() <= DataRegion::io_page().size {{
+    Nat::leb_sound(Layout({LOW}, {symbol}().capacities()).size(), DataRegion::io_page().size, trivial)
 }}
 
 // The bytes, a piece at a time from the last item.
@@ -303,6 +303,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
             ["", "", "open", "close", "stat", "fstat"].get(first as usize).unwrap_or(&"the call")),
         8 => format!("buffer {first} does not exist: the source has {second}"),
         9 => "the program's labels did not lay out".into(),
+        10 => format!("a leaf with a byte node compiles only as that one node, its words in the slots and its buffer present ({first} nodes)"),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }
