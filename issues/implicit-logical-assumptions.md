@@ -5,7 +5,7 @@ labels: [frontend,syntax,elaboration,traits,logic,proofs,design,ergonomics,tooli
 area: language
 milestone: [math-specific-choice]
 created: 2026-08-24
-updated: 2026-08-25
+updated: 2026-10-26
 ---
 
 Make a hypothetical logical context almost as comfortable as an ambient
@@ -469,3 +469,13 @@ types and constructors. Profiles, file scope, section-level type parameters,
   resolver controls demonstrate conditional backchaining. Also replaced the
   per-group anonymous-name index with a file-wide hygienic supply, preventing
   collisions when nested groups flatten.
+- 2026-10-26: Refinement of "an opaque classical provider remains stuck": being stuck only
+  costs computation when the axiom's type is relevant. An axiom whose type is
+  squash-headed, such as `∥A + (A → Empty)∥`, is a stuck neutral that can only
+  be eliminated into another squash. It should therefore leave closed
+  canonicity at relevant types intact, and closed programs keep computing.
+  This is a conjecture, proposed for checking in heather-coq. Felicissimo et
+  al., LICS 2026 (`docs/LIPIcs.LICS.2026.41.pdf`) prove the analogous result
+  for irrelevant axioms that hold in a set model. For a classical profile, it
+  argues for stating providers squashed whenever a squashed statement serves the
+  consumer.
