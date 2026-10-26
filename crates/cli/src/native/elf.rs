@@ -32,10 +32,13 @@ const MAX_FILE: usize = 65535;
 const HEADER: usize = 232;
 /// Items in each definition of the program's literal.
 const STRETCH: usize = 32;
-/// Bytes a piece of the code is cut at, at least: smaller than
-/// `compile-x86`'s, since a piece's addresses are `next_rip` chains whose
-/// bits each cost a good share of a declaration's fuel to evaluate.
-const PIECE: usize = 48;
+/// Bytes a piece of the code is cut at, at least. A piece's statement costs
+/// about its bytes' assembly, linear in them (its addresses are `add_nat`
+/// from the page, which compare by their arguments), so the pieces together
+/// cost about the same at any size; this one is the cheapest of a sweep over
+/// cat, and a piece a long last item stretches well past it still fits a
+/// declaration's fuel, which eight times this size does not.
+const PIECE: usize = 96;
 /// Where the region is, and the window an address in it is spelled from.
 const LOW: &str = "DataRegion::io_page().low";
 const REGION: std::ops::Range<u64> = 0x410000..0x412000;
