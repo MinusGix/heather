@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,reals,analysis,design]
 area: mathematics
 milestone: [math-reals]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-10-26
 ---
 
 Design completeness capabilities only after writing their quantified data
@@ -27,3 +27,4 @@ constructively.
 ## Log
 
 - 2026-09-02: Filed to keep the Cauchy/Dedekind split visible in interfaces.
+- 2026-10-26: `CReal` now inhabits regular-sequence completeness with the rate fixed at 1/(n+1) (`CReal::complete`, docs/creal-completeness-round.md), with uniqueness and the rationals dense as limits. A Cauchy-completeness capability can take its statement from there; `Rat` is the carrier expected not to inhabit it.

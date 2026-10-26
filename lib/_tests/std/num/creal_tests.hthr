@@ -94,3 +94,31 @@ theorem embedded(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat(Rat(OfN
 // Order and multiplication: the product's gap is the product of the gaps,
 // as data. 0 < 1 has the gap 1/2, so 1 · 1 clears zero by 1/4 (k = 3).
 theorem squared(): CReal::mul_pos(zero_lt_one(), zero_lt_one()).witness = 3 { refl }
+
+// Completeness. The diagonal limit's n-th term is the (2n+1)-th term of the
+// (2n+1)-th real, and `complete`'s witness opens to it, at an open sequence
+// as at a literal one.
+theorem lim_index(xs: Nat → CReal, h: CReal::Regular(xs), n: Nat): (CReal::lim(xs, h)).seq(n) = xs(n + n + 1).seq(n + n + 1) { refl }
+theorem complete_witness(xs: Nat → CReal, h: CReal::Regular(xs)): (CReal::complete(xs, h)).witness = CReal::lim(xs, h) { refl }
+fn half() → Rat { Rat(OfNat(1), 2) }
+theorem lim_term(): (CReal::lim(λ n => CReal::ofRat(half()), CReal::ofRat(half()).regular_const())).seq(3) = half() { refl }
+
+// A real is the limit of its embedded terms, and so is any `≈` real; the
+// limit of a constant sequence is its value, at an open real.
+theorem lim_of_terms(x, y: CReal, h: x ≈ y): CReal::Limit(λ n => CReal::ofRat(x.seq(n)), y) {
+    CReal::limit_respects(λ n => CReal::ofRat(x.seq(n)).same_refl(), h, x.terms_converge())
+}
+theorem lim_const(x: CReal): CReal::lim(λ n => x, x.regular_const()) ≈ x {
+    CReal::limit_unique(CReal::lim_converges(λ n => x, x.regular_const()), x.limit_const())
+}
+
+// Negative controls: the naturals are not a regular sequence of reals, and
+// a sequence has no second limit.
+theorem naturals_not_regular(): ¬(CReal::Regular(λ n => CReal::ofRat(Rat::ofInt(OfNat(n))))) {
+    λ h => {
+        let le = CReal::le_of_ofRat_le(CReal::le_respects(CReal::dist_ofRat(Rat::ofInt(OfNat(0)), Rat::ofInt(OfNat(3))),
+            CReal::ofRat(Rat::inv_succ(0) + Rat::inv_succ(3)).same_refl(), h(0, 3)));
+        omega(le)
+    }
+}
+theorem zeros_not_to_one(): ¬(CReal::Limit(λ n => 0, 1)) { λ h => zero_not_one(CReal::limit_unique(CReal::limit_const(0), h)) }
