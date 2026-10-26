@@ -125,7 +125,9 @@ pub(crate) mod ity;
 
 use ity::{ITy, ITyRef, Sel, SndOf, TyForm};
 
-use crate::conv::{conv_ity_cached, head_ity_cached, projection_heads_cached, ConvError, ITyHead};
+use crate::conv::{
+    conv_ity_cached, head_ity_cached, injection_heads_cached, projection_heads_cached, ConvError, ITyHead,
+};
 #[cfg(not(feature = "value-metrics"))]
 use crate::conv::{conv_local_ctx_cached, conv_type_cached};
 #[cfg(feature = "value-metrics")]
@@ -2755,6 +2757,11 @@ impl Tc {
                 crate::stats::intro_at_nodes(1);
                 Ok(())
             }
+            Term::InlAt { ty: None, .. } | Term::InrAt { ty: None, .. }
+                if !self.materialize_eagerly && self.spellings.is_none() =>
+            {
+                self.injection_at_spine(env, t, ty, l)
+            }
             Term::InlAt { ty: None, val } | Term::InrAt { ty: None, val } => {
                 let form = self.view_expected_v(env, ty)?;
                 self.record(env, t, &form);
@@ -2773,6 +2780,49 @@ impl Tc {
             }
             _ => unreachable!("tm_check_at is reached only for an unannotated intro"),
         }
+    }
+
+    /// A contiguous chain of unannotated injections checked against `ty`,
+    /// its layers viewed in one arena ([`injection_heads_cached`]) — the intro
+    /// twin of [`Tc::projection_at_spine`]. Per node, layer `j`'s type is a
+    /// selection `j` deep and its view replays all `j`: a constructor value
+    /// of an `n`-constructor declaration is up to `n − 1` injections deep, so
+    /// that was Θ(k²) evaluation for the `k`-th constructor
+    /// (`issues/wide-inductive-constructor-mention-cost.md`). The rules and
+    /// the descriptions are the per-node ones; the eager oracle and the
+    /// recording translator keep the per-node path.
+    fn injection_at_spine(&self, env: &Env, t: &Term, ty: ITyRef, l: &Level) -> R {
+        let layer = |t: &Term| match t {
+            Term::InlAt { ty: None, val } => Some((Sel::Lhs, Rc::clone(val))),
+            Term::InrAt { ty: None, val } => Some((Sel::Rhs, Rc::clone(val))),
+            _ => None,
+        };
+        let (sel, mut val) = layer(t).expect("injection_at_spine is reached only for an injection");
+        let mut selections = vec![sel];
+        while let Some((sel, inner)) = layer(&val) {
+            selections.push(sel);
+            val = inner;
+        }
+        let mut expected = match ty.as_ity() {
+            Some(t) => t.clone(),
+            None => ITy::Owned(ty.as_syn().expect("not a selection").clone()),
+        };
+        let levels = injection_heads_cached(
+            &env.psi, &env.gamma, env.layer.type_layer(), &expected, &selections, self.fuel,
+            #[cfg(feature = "value-metrics")]
+            env.value_metrics.as_ref(),
+            Rc::clone(&env.cache),
+        )?;
+        let levels = levels.ok_or(TypeError::HeadMismatch)?;
+        let depth = env.gamma.entries.len() as u32;
+        let mut level = l.clone();
+        for (sel, (lhs_level, rhs_level)) in selections.into_iter().zip(levels) {
+            self.lev_eq(&level, &Level::join(lhs_level.clone(), rhs_level.clone()))?;
+            level = match sel { Sel::Lhs => lhs_level, _ => rhs_level };
+            expected = ITy::Sel { of: Rc::new(expected), sel, at_depth: depth };
+            crate::stats::intro_at_nodes(1);
+        }
+        self.tm_check(env, &val, expected.as_ref(), &level)
     }
 
     fn tm_infer_inner(&self, env: &Env, t: &Term) -> R<(Type, Level)> {
