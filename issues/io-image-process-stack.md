@@ -3,9 +3,9 @@ title: Map the process stack (RSP, argv) in the I/O image's profile
 status: open
 labels: [native,x86,memory]
 created: 2026-10-22
-updated: 2026-10-24
+updated: 2026-10-26
 area: heather-in-heather
-milestone: [hih-memory-model]
+milestone: [hih-memory-model, hih-tools]
 ---
 
 The process image (`X86Memory::io_load`, `lib/std/os/linux/linux_x86_64_image.hthr`)
@@ -36,3 +36,4 @@ from the entry.
 ## Log
 
 - 2026-10-24: 2026-10-24: Wp runs stack items now ([[wp-stack-items]]); its call control (crates/elab/tests/fixtures/linux_wp_call.hthr) uses the I/O frame as the stack until this lands, and [[wp-callee-from-lowered-function]] needs the region for a compiled callee.
+- 2026-10-26: Taken up by [[native-source-argv]] (round 6 of `docs/native-real-programs-plan.md`), which finishes it: argv is the first client of the stack region.
