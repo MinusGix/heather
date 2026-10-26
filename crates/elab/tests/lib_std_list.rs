@@ -89,6 +89,29 @@ fn decide_needs_closed_endpoints() {
     );
 }
 
+/// A list literal in a refused goal is spelled as the literal: it elaborates
+/// to its `Cons` spine, not to the protocol's fold over its vector, which
+/// printed as the kernel encoding
+/// (issues/decide-refusal-spells-string-literal-encoding.md). An open
+/// element and an open tail spell too, the tail as the call it is.
+#[test]
+fn a_refused_goal_spells_its_list_literal() {
+    for (goal, shown) in [
+        ("xs = [1, 2]", "`Decide<xs = [1, 2]>`"),
+        ("xs = []", "`Decide<xs = []>`"),
+        ("xs = [x, 1]", "`Decide<xs = [x, 1]>`"),
+        ("xs = Cons(1, xs)", "`Decide<xs = Cons(1, xs)>`"),
+    ] {
+        support::assert_refused(
+            &mut elaborated(),
+            "literal_decide",
+            &format!("import list; import nat; import logic; import bool;
+            theorem bad(x: Nat, xs: List<Nat>): {goal} {{ decide }}"),
+            Refusal::Says(shown),
+        );
+    }
+}
+
 /// Incompleteness pin (§4.6): a length at a neutral list does not compute,
 /// so the closed size fact is not `refl` there.
 #[test]

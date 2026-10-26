@@ -7955,7 +7955,8 @@ impl Elaborator {
             Rc::new(expected.shift_local(1)),
             vector,
         );
-        Ok((*self.whnf_tm(cx, &converted, span)?).clone())
+        let value = (*self.whnf_tm(cx, &converted, span)?).clone();
+        Ok(self.collection_literal_spine(cx, value, elems.len()))
     }
 
     /// A local variable by absolute position (outermost first), as

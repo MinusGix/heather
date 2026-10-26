@@ -46,11 +46,29 @@ fn an_index_past_the_end_is_unwritable() {
 }
 
 /// `decide` builds no witness for a code outside `scalar`, and has no closed
-/// decision for an equation at a neutral string.
+/// decision for an equation at a neutral string. The refusal names the goal
+/// with its literals as they were written, not the kernel encoding a
+/// character's `scalar` witness and the list literal's vector used to leak
+/// into it (issues/decide-refusal-spells-string-literal-encoding.md).
 #[test]
 fn decide_proves_only_closed_true_goals() {
     let why = Refusal::Says("whose decision here is not `Inl`");
     refused("theorem bad(): scalar(55296) { decide }\n", why);
     refused("theorem bad(): scalar(1114112) { decide }\n", why);
-    refused("theorem bad(s: String): s = \"hi\" { decide }\n", why);
+    refused("theorem bad(s: String): s = \"hi\" { decide }\n", Refusal::Says("resolved `Decide<s = \"hi\">`"));
+    refused("theorem bad(c: Char): c = 'h' { decide }\n", Refusal::Says("resolved `Decide<c = 'h'>`"));
+    refused("theorem bad(s: String): s = \"\" { decide }\n", Refusal::Says("resolved `Decide<s = \"\">`"));
+    refused("theorem bad(xs: List<Char>): xs = ['a', 'b'] { decide }\n", Refusal::Says("resolved `Decide<xs = ['a', 'b']>`"));
+}
+
+/// A literal is spelled back with the lexer's escapes: the delimiter, the
+/// backslash and the named control characters escaped, anything else as
+/// itself.
+#[test]
+fn a_spelled_literal_keeps_its_escapes() {
+    refused(
+        "theorem bad(s: String): s = \"a\\nb\\\"c\\\\d'é\" { decide }\n",
+        Refusal::Says(r#"resolved `Decide<s = "a\nb\"c\\d'é">`"#),
+    );
+    refused("theorem bad(c: Char): c = '\\'' { decide }\n", Refusal::Says(r"resolved `Decide<c = '\''>`"));
 }
