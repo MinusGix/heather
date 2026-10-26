@@ -1112,6 +1112,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// binders (`zero`, `all_ones`: a word from a closed width alone) fires
     /// at once, because there is nothing to wait for and a value that is not
     /// a function must not be left opaque.
+    #[inline(never)]
     pub(super) fn fold_transduce(
         &mut self,
         program: &Rc<ContextProgram<()>>,
@@ -1149,6 +1150,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// One application of a waiting fold: collect it, and fire at arity.
+    #[inline(never)]
     pub(super) fn bit_fold_app(&mut self, head: &Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
         let Val::BitFold { program, tail, elim, class, apps } = &**head else {
             unreachable!("bit_fold_app is given a waiting fold")

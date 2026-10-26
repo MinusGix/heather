@@ -97,12 +97,14 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// `step k ih`, driven to its δ-transparent weak head value.
+    #[inline(never)]
     fn probe_apply(&mut self, step: &'v TmClo<'v>, k: &'v TmClo<'v>) -> Res<Rc<Val<'v>>> {
         let ih = self.probe_var(PROBE_IH);
         let v = self.drive(Work::Apply(step, vec![k, ih]))?;
         self.delta_whnf(v)
     }
 
+    #[inline(never)]
     fn probe_step(&mut self, step: &'v TmClo<'v>) -> Res<FoldClass> {
         let value = self.probe_apply(step, self.probe_var(PROBE_K))?;
         if let Val::Lam { .. } | Val::WfIh { .. } | Val::WIh { .. } = &*value {
@@ -122,6 +124,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// The function-valued algebra applied to `Succ x`: synchronous when
     /// that is `Succ^q(ih x)`. The application's annotations are dummies —
     /// the result is read for its head and spine and never kept.
+    #[inline(never)]
     fn probe_sync(&mut self, fun: Rc<Val<'v>>) -> Res<FoldClass> {
         let nat = self.arena.ty(TyClo::new(Env::empty(), Rc::new(Type::Nat)));
         let arg = self.vclo(Rc::new(Val::Succ(self.probe_var(PROBE_X))));
@@ -153,6 +156,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// Read a probe value as an affine tree; `None` is "not one".
+    #[inline(never)]
     fn read_affine(&mut self, value: &Rc<Val<'v>>) -> Res<Option<AffineTree>> {
         if let Val::Pair { fst, snd, .. } = &**value {
             let fst = self.force(fst)?;

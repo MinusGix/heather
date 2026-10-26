@@ -1605,46 +1605,13 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         let vw = D::view_ty(self, env, w);
         let result = match &vw {
             // η: Γ, x : S ⊢ app(w↑; l,l'; x:S↑.T↑; x) ≈ app(w'↑; …; x) : T
-            TyView::Pi { dom_level, cod_level, dom, cod } => {
-                let e = D::push_entry(env, dom, dom_level);
-                let (x, y) =
-                    D::eta_app(self, env, &e, a, b, dom_level, cod_level, dom, cod)?;
-                self.tm(&e, &x, &y, cod, cod_level)
-            }
+            TyView::Pi { .. } => self.tm_nf_pi(env, a, b, &vw),
             // η: L, ℓ⃗ ⊢ w↑ $ ℓ⃗ ≈ w'↑ $ ℓ⃗ : T
-            TyView::UPi { num_vars, level, body } => {
-                if env.layer != Layer::Meta {
-                    return Err(NC);
-                }
-                let e = env.push_univs(*num_vars);
-                let (x, y) = D::eta_uapp(self, env, &e, a, b, *num_vars)?;
-                let t = D::under_tele_ty(self, &e, body, *num_vars, 0)?;
-                self.tm(&e, &x, &y, &t, level)
-            }
+            TyView::UPi { .. } => self.tm_nf_u_pi(env, a, b, &vw),
             // η: Ψ, g : Ctx ⊢ w↑ @ g ≈ w'↑ @ g : T
-            TyView::CtxPi { level, body } => {
-                if env.layer != Layer::Meta {
-                    return Err(NC);
-                }
-                let e = env.push_global(GlobalBinding::Ctx);
-                let (x, y) = D::eta_ctxapp(self, env, &e, a, b)?;
-                let t = D::under_tele_ty(self, &e, body, 0, 1)?;
-                self.tm(&e, &x, &y, &t, level)
-            }
+            TyView::CtxPi { .. } => self.tm_nf_ctx_pi(env, a, b, &vw),
             // η: Ψ, U : Typ_p(Δ, l) ⊢ w↑ @ U^{id_Δ} ≈ w'↑ @ U^{id_Δ} : T
-            TyView::TyPi { ctx, arg_level, body_level, body } => {
-                if env.layer != Layer::Meta {
-                    return Err(NC);
-                }
-                let e = env.push_global(GlobalBinding::Ty {
-                    ctx: (*ctx).clone(),
-                    layer: Layer::Prog,
-                    level: (*arg_level).clone(),
-                });
-                let (x, y) = D::eta_tyapp(self, env, &e, a, b, ctx)?;
-                let t = D::under_tele_ty(self, &e, body, 0, 1)?;
-                self.tm(&e, &x, &y, &t, body_level)
-            }
+            TyView::TyPi { .. } => self.tm_nf_ty_pi(env, a, b, &vw),
             // Code compares syntactically — *modulo level equivalence*, which
             // is the quotient ch. 05's Static Code lemma (`lem:dt:static`)
             // takes: at layers v/c equivalence is equality, "quotient over
@@ -1654,252 +1621,18 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // against ch. 08's Convertibility theorem, not unsoundness, but a
             // spurious error for any universe-polymorphic metaprogram.
             // Neutrals still compare structurally.
-            TyView::CodeTy { .. } => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                (TmView::BoxTy(t1), TmView::BoxTy(t2)) => {
-                    if code_eq(&***t1, &***t2) { Ok(()) } else { Err(NC) }
-                }
-                (TmView::BoxTy(_), _) | (_, TmView::BoxTy(_)) => Err(NC),
-                _ => self.tm_nee(env, a, b).map(drop),
-            },
-            TyView::CodeTm { .. } => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                (TmView::BoxTm(t1), TmView::BoxTm(t2)) => {
-                    if code_eq(&***t1, &***t2) { Ok(()) } else { Err(NC) }
-                }
-                (TmView::BoxTm(_), _) | (_, TmView::BoxTm(_)) => Err(NC),
-                _ => self.tm_nee(env, a, b).map(drop),
-            },
-            TyView::Nat => {
-                if let Some((x, y)) = D::cancel_nat_prefix(self, env, a, b)? {
-                    return Ok(TmProgress::Nat(x, y));
-                }
-                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                    (TmView::Zero, TmView::Zero) => Ok(()),
-                    (TmView::Succ(x), TmView::Succ(y)) => {
-                        return Ok(TmProgress::Nat(x.clone(), y.clone()));
-                    }
-                    (x, y) if x.is_nat_data() || y.is_nat_data() => Err(NC),
-                    _ => self.tm_nee(env, a, b).map(drop),
-                }
-            }
-            TyView::Ty(_) => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                (TmView::TmNat, TmView::TmNat) => Ok(()),
-                (TmView::TmTy(x), TmView::TmTy(y)) => self.lev_eq(x, y),
-                (
-                    TmView::TmPi { dom_level: dl1, cod_level: cl1, dom: s1, cod: t1 },
-                    TmView::TmPi { dom_level: dl2, cod_level: cl2, dom: s2, cod: t2 },
-                ) => {
-                    self.lev_eq(dl1, dl2)?;
-                    self.lev_eq(cl1, cl2)?;
-                    self.tm_at_univ(env, s1, s2, dl1)?;
-                    let e = self.push_el(env, dl1, s1)?;
-                    self.tm_at_univ(&e, t1, t2, cl1)
-                }
-                // TmId congruence (extension).
-                (
-                    TmView::TmId { level: l1, ty: s1, lhs: t1, rhs: u1 },
-                    TmView::TmId { level: l2, ty: s2, lhs: t2, rhs: u2 },
-                ) => {
-                    self.lev_eq(l1, l2)?;
-                    self.tm_at_univ(env, s1, s2, l1)?;
-                    let el = D::el(self, env, l1, s1)?;
-                    self.tm(env, t1, t2, &el, l1)?;
-                    self.tm(env, u1, u2, &el, l1)
-                }
-                // TmSEq congruence (extension; mirrors TmId — the
-                // *encoding* compares structurally like any code; only
-                // terms AT sEq type are irrelevant).
-                (
-                    TmView::TmSEq { level: l1, ty: s1, lhs: t1, rhs: u1 },
-                    TmView::TmSEq { level: l2, ty: s2, lhs: t2, rhs: u2 },
-                ) => {
-                    self.lev_eq(l1, l2)?;
-                    self.tm_at_univ(env, s1, s2, l1)?;
-                    let el = D::el(self, env, l1, s1)?;
-                    self.tm(env, t1, t2, &el, l1)?;
-                    self.tm(env, u1, u2, &el, l1)
-                }
-                (
-                    TmView::TmSquash { level: l1, ty: t1 },
-                    TmView::TmSquash { level: l2, ty: t2 },
-                ) => {
-                    self.lev_eq(l1, l2)?;
-                    self.tm_at_univ(env, t1, t2, l1)
-                }
-                // TmSigma congruence (extension; mirrors TmPi).
-                (
-                    TmView::TmSigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
-                    TmView::TmSigma { fst_level: dl2, snd_level: cl2, fst: s2, snd: t2 },
-                ) => {
-                    self.lev_eq(dl1, dl2)?;
-                    self.lev_eq(cl1, cl2)?;
-                    self.tm_at_univ(env, s1, s2, dl1)?;
-                    let e = self.push_el(env, dl1, s1)?;
-                    self.tm_at_univ(&e, t1, t2, cl1)
-                }
-                // TmUnit/TmEmpty/TmsEmpty congruence (extension; nullary
-                // encodings).
-                (TmView::TmUnit { level: l1 }, TmView::TmUnit { level: l2 })
-                | (TmView::TmEmpty { level: l1 }, TmView::TmEmpty { level: l2 })
-                | (TmView::TmSEmpty { level: l1 }, TmView::TmSEmpty { level: l2 }) => {
-                    self.lev_eq(l1, l2)
-                }
-                // TmSum congruence (extension; non-dependent, mirrors TmSigma).
-                (
-                    TmView::TmSum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
-                    TmView::TmSum { lhs_level: dl2, rhs_level: cl2, lhs: s2, rhs: t2 },
-                ) => {
-                    self.lev_eq(dl1, dl2)?;
-                    self.lev_eq(cl1, cl2)?;
-                    self.tm_at_univ(env, s1, s2, dl1)?;
-                    self.tm_at_univ(env, t1, t2, cl1)
-                }
-                // TmW congruence (extension; mirrors TmPi/TmSigma).
-                (
-                    TmView::TmW { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
-                    TmView::TmW { shape_level: dl2, pos_level: cl2, shape: s2, pos: t2 },
-                ) => {
-                    self.lev_eq(dl1, dl2)?;
-                    self.lev_eq(cl1, cl2)?;
-                    self.tm_at_univ(env, s1, s2, dl1)?;
-                    let e = self.push_el(env, dl1, s1)?;
-                    self.tm_at_univ(&e, t1, t2, cl1)
-                }
-                // TmVec/TmFin congruence (extension): the length is compared
-                // at Nat in the ambient scope — no binder, unlike TmWf.
-                (
-                    TmView::TmVec { level: l1, elem: s1, len: k1 },
-                    TmView::TmVec { level: l2, elem: s2, len: k2 },
-                ) => {
-                    self.lev_eq(l1, l2)?;
-                    self.tm_at_univ(env, s1, s2, l1)?;
-                    self.tm_at_nat(env, k1, k2)
-                }
-                (TmView::TmFin { len: k1 }, TmView::TmFin { len: k2 }) => {
-                    self.tm_at_nat(env, k1, k2)
-                }
-                // TmWf congruence (extension): the arity is compared at Nat
-                // under the shape binder, mirroring TmW's positions.
-                (
-                    TmView::TmWf { level: l1, shape: s1, arity: n1 },
-                    TmView::TmWf { level: l2, shape: s2, arity: n2 },
-                ) => {
-                    self.lev_eq(l1, l2)?;
-                    self.tm_at_univ(env, s1, s2, l1)?;
-                    let e = self.push_el(env, l1, s1)?;
-                    self.tm_at_nat(&e, n1, n2)
-                }
-                // TmM congruence (docs/kernel-m-codes-design.md §1): the
-                // type former's comparison read through `El` — the shape
-                // under the index, the positions under both, the child index
-                // under all three at the index type, and the index there.
-                (
-                    TmView::TmM { level: l1, pos_level: p1, idx_level: i1, idx: x1, shape: s1, pos: q1, next: o1, index: j1 },
-                    TmView::TmM { level: l2, pos_level: p2, idx_level: i2, idx: x2, shape: s2, pos: q2, next: o2, index: j2 },
-                ) => {
-                    self.lev_eq(l1, l2)?;
-                    self.lev_eq(p1, p2)?;
-                    self.lev_eq(i1, i2)?;
-                    self.tm_at_univ(env, x1, x2, i1)?;
-                    let el_i = D::el(self, env, i1, x1)?;
-                    let e_i = D::push_entry(env, &el_i, i1);
-                    self.tm_at_univ(&e_i, s1, s2, l1)?;
-                    let e_is = self.push_el(&e_i, l1, s1)?;
-                    self.tm_at_univ(&e_is, q1, q2, p1)?;
-                    let e_isp = self.push_el(&e_is, p1, q1)?;
-                    self.tm(&e_isp, o1, o2, &D::weaken_ty(env, &el_i, 3), i1)?;
-                    self.tm(env, j1, j2, &el_i, i1)
-                }
-                // TmDVec congruence (docs/iwf-former-design.md §6): the type
-                // former's comparison read through `El`, the family under
-                // `i : Fin k` at the left length.
-                (
-                    TmView::TmDVec { level: l1, len: k1, fam: f1 },
-                    TmView::TmDVec { level: l2, len: k2, fam: f2 },
-                ) => {
-                    self.lev_eq(l1, l2)?;
-                    self.tm_at_nat(env, k1, k2)?;
-                    let fin = D::fin(self, env, k1)?;
-                    let e_i = D::push_entry(env, &fin, &Level::Zero);
-                    self.tm_at_univ(&e_i, f1, f2, l1)
-                }
-                // TmIWf congruence (design §6): `IWf`'s structural
-                // comparison read through `El` — the index type and shapes as
-                // encodings, the arity and output index under `x : El shape`,
-                // the child index under `x, i : Fin n`, the index at `El idx`.
-                (
-                    TmView::TmIWf { level: l1, idx_level: i1, idx: x1, shape: s1, arity: n1, out: o1, child: c1, index: m1 },
-                    TmView::TmIWf { level: l2, idx_level: i2, idx: x2, shape: s2, arity: n2, out: o2, child: c2, index: m2 },
-                ) => {
-                    self.lev_eq(l1, l2)?;
-                    self.lev_eq(i1, i2)?;
-                    self.tm_at_univ(env, x1, x2, i1)?;
-                    self.tm_at_univ(env, s1, s2, l1)?;
-                    let el_i = D::el(self, env, i1, x1)?;
-                    let e_x = self.push_el(env, l1, s1)?;
-                    self.tm_at_nat(&e_x, n1, n2)?;
-                    self.tm(&e_x, o1, o2, &D::weaken_ty(env, &el_i, 1), i1)?;
-                    let fin = D::fin(self, &e_x, n1)?;
-                    let e_xi = D::push_entry(&e_x, &fin, &Level::Zero);
-                    self.tm(&e_xi, c1, c2, &D::weaken_ty(env, &el_i, 2), i1)?;
-                    self.tm(env, m1, m2, &el_i, i1)
-                }
-                (x, y) if x.is_encoding() || y.is_encoding() => Err(NC),
-                _ => self.tm_nee(env, a, b).map(drop),
-            },
+            TyView::CodeTy { .. } => self.tm_nf_code_ty(env, a, b, &vw),
+            TyView::CodeTm { .. } => self.tm_nf_code_tm(env, a, b, &vw),
+            TyView::Nat => return self.tm_nf_nat(env, a, b, &vw),
+            TyView::Ty(..) => self.tm_nf_ty(env, a, b, &vw),
             // Id (extension): refl congruence on the point; else neutral.
             // The refl annotations are forced by well-typedness at this Id
             // type, so only the point is compared.
-            TyView::Id { level, ty, .. } => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b))
-            {
-                (TmView::Refl { tm: x }, TmView::Refl { tm: y }) => {
-                    self.tm(env, x, y, ty, level)
-                }
-                (TmView::Refl { .. }, _) | (_, TmView::Refl { .. }) => Err(NC),
-                _ => self.tm_nee(env, a, b).map(drop),
-            },
+            TyView::Id { .. } => self.tm_nf_id(env, a, b, &vw),
             // Σ η (extension): surjective pairing — type-directed like the Π
             // η arm, so it fires on literal pairs, neutrals, or mixtures.
             // Compare `fst a ≈ fst b : S` and `snd a ≈ snd b : T[fst a/x]`.
-            TyView::Sigma { fst_level, snd_level, fst, snd } => {
-                // Native bitvector words (extension;
-                // `docs/native-bitvector-values-design.md` §7), ahead of the
-                // guard below and for the same observation carried one step
-                // further: a `Vec` is a right-nested Σ, and when its element
-                // type has exactly two canonical inhabitants the whole chain
-                // is a machine word. Comparing two *canonical* 64-bit
-                // vectors component by component costs ~59 evaluator steps
-                // per bit before any operation has been performed at all
-                // (the design's §2 A3 floor); packing performs the same
-                // projections η would have performed and then compares in
-                // one instruction. Anything that does not pack falls through
-                // to η unchanged.
-                if D::bit_vec_eq(self, env, a, b, fst, snd, snd_level)?.is_some() {
-                    return Ok(TmProgress::Done);
-                }
-                // Neutral-first (extension): two stuck terms whose spines
-                // agree are convertible by congruence, and deciding that on
-                // the spines costs the spines. Projecting first instead
-                // costs the *type*: a `Vec` is a right-nested Σ, so η on two
-                // neutral 64-bit vectors compares 64 components, each a
-                // `fst (snd^k …)` whose own neutral comparison walks its k
-                // projections — quadratic in the length, and a machine word
-                // is the common case. A failed attempt falls through to η,
-                // which is what decides the η-equal-but-not-spine-equal
-                // pairs; the guard semantics are [`Conv::delta_lazy`]'s.
-                if D::view_tm(self, env, a).is_neutral()
-                    && D::view_tm(self, env, b).is_neutral()
-                    && self.delta_lazy(|c| c.tm_nee(env, a, b).map(drop))?.is_some()
-                {
-                    return Ok(TmProgress::Done);
-                }
-                let (fa, fb) =
-                    D::eta_proj(self, env, true, a, b, fst_level, snd_level, fst, snd)?;
-                self.tm(env, &fa, &fb, fst, fst_level)?;
-                let snd_ty = D::inst_ty(self, env, env, snd, &[fa])?;
-                let (sa, sb) =
-                    D::eta_proj(self, env, false, a, b, fst_level, snd_level, fst, snd)?;
-                self.tm(env, &sa, &sb, &snd_ty, snd_level)
-            }
+            TyView::Sigma { .. } => return self.tm_nf_sigma(env, a, b, &vw),
             // Unit η (extension): proof irrelevance — every term of Unit type
             // is convertible to ⟨⟩, hence to each other. Type-directed like Σ
             // η, so it fires on ⟨⟩, neutrals, or mixtures without inspecting
@@ -1935,66 +1668,20 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // value is compared; a tag mismatch is `NotConvertible`; neutrals
             // (a stuck `case`, a variable) fall through to structural
             // comparison.
-            TyView::Sum { lhs_level, rhs_level, lhs, rhs } => {
-                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                    (TmView::Inl { val: x }, TmView::Inl { val: y }) => {
-                        self.tm(env, x, y, lhs, lhs_level)
-                    }
-                    (TmView::Inr { val: x }, TmView::Inr { val: y }) => {
-                        self.tm(env, x, y, rhs, rhs_level)
-                    }
-                    (TmView::Inl { .. } | TmView::Inr { .. }, _)
-                    | (_, TmView::Inl { .. } | TmView::Inr { .. }) => Err(NC),
-                    _ => self.tm_nee(env, a, b).map(drop),
-                }
-            }
+            TyView::Sum { .. } => self.tm_nf_sum(env, a, b, &vw),
             // W (extension): a positive type — `sup` matches like the sum
             // constructors. The annotations on sup are forced by
             // well-typedness at this W type, so only the label and the
             // subtree function are compared (the latter at the left label's
             // instantiated Π type, left-biased); neutrals (a stuck elim_W, a
             // variable) fall through to structural comparison.
-            TyView::W { shape_level, pos_level, shape, pos } => {
-                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                    (
-                        TmView::Sup { label: a1, children: f1 },
-                        TmView::Sup { label: a2, children: f2 },
-                    ) => {
-                        self.tm(env, a1, a2, shape, shape_level)?;
-                        let lmax = Level::max((*shape_level).clone(), (*pos_level).clone());
-                        let pos_at = D::inst_ty(self, env, env, pos, std::slice::from_ref(a1))?;
-                        let w_c = D::as_child_ty(self, env, w)?;
-                        let cod = D::weaken_ty(env, &w_c, 1);
-                        let f_ty = D::pi(self, env, pos_level, &lmax, &pos_at, &cod)?;
-                        let f_l = Level::max((*pos_level).clone(), lmax);
-                        self.tm(env, f1, f2, &f_ty, &f_l)
-                    }
-                    (TmView::Sup { .. }, _) | (_, TmView::Sup { .. }) => Err(NC),
-                    _ => self.tm_nee(env, a, b).map(drop),
-                }
-            }
+            TyView::W { .. } => self.tm_nf_w(env, a, b, w, &vw),
             // Wf (extension): positive, like W — but the children compare at
             // a `Vec`, so the comparison descends through `Σ`-η and bottoms
             // out in `Unit`'s proof irrelevance. That is the whole reason
             // this former exists (docs/wf-former-design.md §5): no funext is
             // reachable from here, because there is no function to compare.
-            TyView::Wf { level, shape, arity } => {
-                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                    (
-                        TmView::Supf { label: a1, children: c1 },
-                        TmView::Supf { label: a2, children: c2 },
-                    ) => {
-                        self.tm(env, a1, a2, shape, level)?;
-                        // Children at Vec(Wf; n[a₁/x]), left-biased like W's.
-                        let arity_at = D::inst_tm(self, env, env, arity, std::slice::from_ref(a1))?;
-                        let w_c = D::as_child_ty(self, env, w)?;
-                        let cs_ty = D::vec(self, env, level, &w_c, &arity_at)?;
-                        self.tm(env, c1, c2, &cs_ty, level)
-                    }
-                    (TmView::Supf { .. }, _) | (_, TmView::Supf { .. }) => Err(NC),
-                    _ => self.tm_nee(env, a, b).map(drop),
-                }
-            }
+            TyView::Wf { .. } => self.tm_nf_wf(env, a, b, w, &vw),
             // IWf (extension; docs/iwf-former-design.md §5): positive, like
             // Wf, and `sup_i` stores nothing but its shape and its children —
             // the constructor is at its output index — so two of them are
@@ -2002,21 +1689,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // children at the left shape's `DVec`, which reduces to Σ/Unit and
             // takes their η. No irrelevance arm is involved. The annotations
             // are forced by the type, as `sup_f`'s (heather-coq `actmnf_supi`).
-            TyView::IWf { level, idx_level, shape, .. } => {
-                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                    (
-                        TmView::Supi { label: a1, children: c1 },
-                        TmView::Supi { label: a2, children: c2 },
-                    ) => {
-                        self.tm(env, a1, a2, shape, level)?;
-                        let cs_ty = D::iwf_children(self, env, w, a1)?;
-                        let fl = Level::join((*level).clone(), (*idx_level).clone());
-                        self.tm(env, c1, c2, &cs_ty, &fl)
-                    }
-                    (TmView::Supi { .. }, _) | (_, TmView::Supi { .. }) => Err(NC),
-                    _ => self.tm_nee(env, a, b).map(drop),
-                }
-            }
+            TyView::IWf { .. } => self.tm_nf_i_wf(env, a, b, w, &vw),
             // M (extension; docs/kernel-coinduction-design.md §2.1): no η.
             // Two `corec`s compare by their coalgebras: the carrier's level,
             // the carrier in (Γ, i : I), the step in (Γ, i, x : X) at the
@@ -2027,29 +1700,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // `corec` against anything else is not convertible, as `sup`
             // against a neutral is at W: no rule unfolds a `corec` outside
             // an `out`, so two descriptions of one tree stay distinct.
-            TyView::M { sig, index } => {
-                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
-                    (
-                        TmView::Corec { sig: g1, carrier_level: k1, carrier: c1, step: t1, seed: x1 },
-                        TmView::Corec { carrier_level: k2, carrier: c2, step: t2, seed: x2, .. },
-                    ) => {
-                        self.lev_eq(k1, k2)?;
-                        let e_i = D::push_entry(env, &sig.idx, sig.idx_level);
-                        self.ty(&e_i, c1, c2, k1)?;
-                        let step_ty = D::m_step_ty(self, env, g1, k1, c1)?;
-                        let step_level = Level::join(
-                            (*g1.level).clone(),
-                            Level::join((*k1).clone(), g1.family_level()),
-                        );
-                        let e_ix = D::push_entry(&e_i, c1, k1);
-                        self.tm(&e_ix, t1, t2, &step_ty, &step_level)?;
-                        let seed_ty = D::inst_ty(self, env, env, c1, std::slice::from_ref(index))?;
-                        self.tm(env, x1, x2, &seed_ty, k1)
-                    }
-                    (TmView::Corec { .. }, _) | (_, TmView::Corec { .. }) => Err(NC),
-                    _ => self.tm_nee(env, a, b).map(drop),
-                }
-            }
+            TyView::M { .. } => self.tm_nf_m(env, a, b, &vw),
             // Neutral type: only neutral terms inhabit it. `Vec`/`Fin` reach
             // here only at a neutral length (a canonical one reduces to
             // Σ/Unit resp. Sum/Empty first, and those arms then supply the
@@ -2061,6 +1712,489 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             | TyView::DVec { .. } => self.tm_nee(env, a, b).map(drop),
         };
         result.map(|()| TmProgress::Done)
+    }
+
+    /// [`Conv::tm_nf`] at `Pi`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::Pi { dom_level, cod_level, dom, cod } = vw else {
+            unreachable!("tm_nf_pi is given its own arm")
+        };
+        let e = D::push_entry(env, dom, dom_level);
+        let (x, y) =
+            D::eta_app(self, env, &e, a, b, dom_level, cod_level, dom, cod)?;
+        self.tm(&e, &x, &y, cod, cod_level)
+    }
+
+    /// [`Conv::tm_nf`] at `UPi`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_u_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::UPi { num_vars, level, body } = vw else {
+            unreachable!("tm_nf_u_pi is given its own arm")
+        };
+        if env.layer != Layer::Meta {
+            return Err(NC);
+        }
+        let e = env.push_univs(*num_vars);
+        let (x, y) = D::eta_uapp(self, env, &e, a, b, *num_vars)?;
+        let t = D::under_tele_ty(self, &e, body, *num_vars, 0)?;
+        self.tm(&e, &x, &y, &t, level)
+    }
+
+    /// [`Conv::tm_nf`] at `CtxPi`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_ctx_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::CtxPi { level, body } = vw else {
+            unreachable!("tm_nf_ctx_pi is given its own arm")
+        };
+        if env.layer != Layer::Meta {
+            return Err(NC);
+        }
+        let e = env.push_global(GlobalBinding::Ctx);
+        let (x, y) = D::eta_ctxapp(self, env, &e, a, b)?;
+        let t = D::under_tele_ty(self, &e, body, 0, 1)?;
+        self.tm(&e, &x, &y, &t, level)
+    }
+
+    /// [`Conv::tm_nf`] at `TyPi`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_ty_pi(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::TyPi { ctx, arg_level, body_level, body } = vw else {
+            unreachable!("tm_nf_ty_pi is given its own arm")
+        };
+        if env.layer != Layer::Meta {
+            return Err(NC);
+        }
+        let e = env.push_global(GlobalBinding::Ty {
+            ctx: (*ctx).clone(),
+            layer: Layer::Prog,
+            level: (*arg_level).clone(),
+        });
+        let (x, y) = D::eta_tyapp(self, env, &e, a, b, ctx)?;
+        let t = D::under_tele_ty(self, &e, body, 0, 1)?;
+        self.tm(&e, &x, &y, &t, body_level)
+    }
+
+    /// [`Conv::tm_nf`] at `CodeTy`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_code_ty(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::CodeTy { .. } = vw else {
+            unreachable!("tm_nf_code_ty is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+            (TmView::BoxTy(t1), TmView::BoxTy(t2)) => {
+                if code_eq(&***t1, &***t2) { Ok(()) } else { Err(NC) }
+            }
+            (TmView::BoxTy(_), _) | (_, TmView::BoxTy(_)) => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
+    }
+
+    /// [`Conv::tm_nf`] at `CodeTm`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_code_tm(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::CodeTm { .. } = vw else {
+            unreachable!("tm_nf_code_tm is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+            (TmView::BoxTm(t1), TmView::BoxTm(t2)) => {
+                if code_eq(&***t1, &***t2) { Ok(()) } else { Err(NC) }
+            }
+            (TmView::BoxTm(_), _) | (_, TmView::BoxTm(_)) => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
+    }
+
+    /// [`Conv::tm_nf`] at `Nat`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_nat(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R<TmProgress<D::TmC>> {
+        let TyView::Nat = vw else {
+            unreachable!("tm_nf_nat is given its own arm")
+        };
+        let result: R = {
+            if let Some((x, y)) = D::cancel_nat_prefix(self, env, a, b)? {
+                return Ok(TmProgress::Nat(x, y));
+            }
+            match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+                (TmView::Zero, TmView::Zero) => Ok(()),
+                (TmView::Succ(x), TmView::Succ(y)) => {
+                    return Ok(TmProgress::Nat(x.clone(), y.clone()));
+                }
+                (x, y) if x.is_nat_data() || y.is_nat_data() => Err(NC),
+                _ => self.tm_nee(env, a, b).map(drop),
+            }
+        };
+        result.map(|()| TmProgress::Done)
+    }
+
+    /// [`Conv::tm_nf`] at `Ty`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_ty(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::Ty(_) = vw else {
+            unreachable!("tm_nf_ty is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+            (TmView::TmNat, TmView::TmNat) => Ok(()),
+            (TmView::TmTy(x), TmView::TmTy(y)) => self.lev_eq(x, y),
+            (
+                TmView::TmPi { dom_level: dl1, cod_level: cl1, dom: s1, cod: t1 },
+                TmView::TmPi { dom_level: dl2, cod_level: cl2, dom: s2, cod: t2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.tm_at_univ(env, s1, s2, dl1)?;
+                let e = self.push_el(env, dl1, s1)?;
+                self.tm_at_univ(&e, t1, t2, cl1)
+            }
+            // TmId congruence (extension).
+            (
+                TmView::TmId { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                TmView::TmId { level: l2, ty: s2, lhs: t2, rhs: u2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.tm_at_univ(env, s1, s2, l1)?;
+                let el = D::el(self, env, l1, s1)?;
+                self.tm(env, t1, t2, &el, l1)?;
+                self.tm(env, u1, u2, &el, l1)
+            }
+            // TmSEq congruence (extension; mirrors TmId — the
+            // *encoding* compares structurally like any code; only
+            // terms AT sEq type are irrelevant).
+            (
+                TmView::TmSEq { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                TmView::TmSEq { level: l2, ty: s2, lhs: t2, rhs: u2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.tm_at_univ(env, s1, s2, l1)?;
+                let el = D::el(self, env, l1, s1)?;
+                self.tm(env, t1, t2, &el, l1)?;
+                self.tm(env, u1, u2, &el, l1)
+            }
+            (
+                TmView::TmSquash { level: l1, ty: t1 },
+                TmView::TmSquash { level: l2, ty: t2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.tm_at_univ(env, t1, t2, l1)
+            }
+            // TmSigma congruence (extension; mirrors TmPi).
+            (
+                TmView::TmSigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
+                TmView::TmSigma { fst_level: dl2, snd_level: cl2, fst: s2, snd: t2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.tm_at_univ(env, s1, s2, dl1)?;
+                let e = self.push_el(env, dl1, s1)?;
+                self.tm_at_univ(&e, t1, t2, cl1)
+            }
+            // TmUnit/TmEmpty/TmsEmpty congruence (extension; nullary
+            // encodings).
+            (TmView::TmUnit { level: l1 }, TmView::TmUnit { level: l2 })
+            | (TmView::TmEmpty { level: l1 }, TmView::TmEmpty { level: l2 })
+            | (TmView::TmSEmpty { level: l1 }, TmView::TmSEmpty { level: l2 }) => {
+                self.lev_eq(l1, l2)
+            }
+            // TmSum congruence (extension; non-dependent, mirrors TmSigma).
+            (
+                TmView::TmSum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
+                TmView::TmSum { lhs_level: dl2, rhs_level: cl2, lhs: s2, rhs: t2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.tm_at_univ(env, s1, s2, dl1)?;
+                self.tm_at_univ(env, t1, t2, cl1)
+            }
+            // TmW congruence (extension; mirrors TmPi/TmSigma).
+            (
+                TmView::TmW { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
+                TmView::TmW { shape_level: dl2, pos_level: cl2, shape: s2, pos: t2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.tm_at_univ(env, s1, s2, dl1)?;
+                let e = self.push_el(env, dl1, s1)?;
+                self.tm_at_univ(&e, t1, t2, cl1)
+            }
+            // TmVec/TmFin congruence (extension): the length is compared
+            // at Nat in the ambient scope — no binder, unlike TmWf.
+            (
+                TmView::TmVec { level: l1, elem: s1, len: k1 },
+                TmView::TmVec { level: l2, elem: s2, len: k2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.tm_at_univ(env, s1, s2, l1)?;
+                self.tm_at_nat(env, k1, k2)
+            }
+            (TmView::TmFin { len: k1 }, TmView::TmFin { len: k2 }) => {
+                self.tm_at_nat(env, k1, k2)
+            }
+            // TmWf congruence (extension): the arity is compared at Nat
+            // under the shape binder, mirroring TmW's positions.
+            (
+                TmView::TmWf { level: l1, shape: s1, arity: n1 },
+                TmView::TmWf { level: l2, shape: s2, arity: n2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.tm_at_univ(env, s1, s2, l1)?;
+                let e = self.push_el(env, l1, s1)?;
+                self.tm_at_nat(&e, n1, n2)
+            }
+            // TmM congruence (docs/kernel-m-codes-design.md §1): the
+            // type former's comparison read through `El` — the shape
+            // under the index, the positions under both, the child index
+            // under all three at the index type, and the index there.
+            (
+                TmView::TmM { level: l1, pos_level: p1, idx_level: i1, idx: x1, shape: s1, pos: q1, next: o1, index: j1 },
+                TmView::TmM { level: l2, pos_level: p2, idx_level: i2, idx: x2, shape: s2, pos: q2, next: o2, index: j2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.lev_eq(p1, p2)?;
+                self.lev_eq(i1, i2)?;
+                self.tm_at_univ(env, x1, x2, i1)?;
+                let el_i = D::el(self, env, i1, x1)?;
+                let e_i = D::push_entry(env, &el_i, i1);
+                self.tm_at_univ(&e_i, s1, s2, l1)?;
+                let e_is = self.push_el(&e_i, l1, s1)?;
+                self.tm_at_univ(&e_is, q1, q2, p1)?;
+                let e_isp = self.push_el(&e_is, p1, q1)?;
+                self.tm(&e_isp, o1, o2, &D::weaken_ty(env, &el_i, 3), i1)?;
+                self.tm(env, j1, j2, &el_i, i1)
+            }
+            // TmDVec congruence (docs/iwf-former-design.md §6): the type
+            // former's comparison read through `El`, the family under
+            // `i : Fin k` at the left length.
+            (
+                TmView::TmDVec { level: l1, len: k1, fam: f1 },
+                TmView::TmDVec { level: l2, len: k2, fam: f2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.tm_at_nat(env, k1, k2)?;
+                let fin = D::fin(self, env, k1)?;
+                let e_i = D::push_entry(env, &fin, &Level::Zero);
+                self.tm_at_univ(&e_i, f1, f2, l1)
+            }
+            // TmIWf congruence (design §6): `IWf`'s structural
+            // comparison read through `El` — the index type and shapes as
+            // encodings, the arity and output index under `x : El shape`,
+            // the child index under `x, i : Fin n`, the index at `El idx`.
+            (
+                TmView::TmIWf { level: l1, idx_level: i1, idx: x1, shape: s1, arity: n1, out: o1, child: c1, index: m1 },
+                TmView::TmIWf { level: l2, idx_level: i2, idx: x2, shape: s2, arity: n2, out: o2, child: c2, index: m2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.lev_eq(i1, i2)?;
+                self.tm_at_univ(env, x1, x2, i1)?;
+                self.tm_at_univ(env, s1, s2, l1)?;
+                let el_i = D::el(self, env, i1, x1)?;
+                let e_x = self.push_el(env, l1, s1)?;
+                self.tm_at_nat(&e_x, n1, n2)?;
+                self.tm(&e_x, o1, o2, &D::weaken_ty(env, &el_i, 1), i1)?;
+                let fin = D::fin(self, &e_x, n1)?;
+                let e_xi = D::push_entry(&e_x, &fin, &Level::Zero);
+                self.tm(&e_xi, c1, c2, &D::weaken_ty(env, &el_i, 2), i1)?;
+                self.tm(env, m1, m2, &el_i, i1)
+            }
+            (x, y) if x.is_encoding() || y.is_encoding() => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
+    }
+
+    /// [`Conv::tm_nf`] at `Id`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_id(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::Id { level, ty, .. } = vw else {
+            unreachable!("tm_nf_id is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b))
+        {
+            (TmView::Refl { tm: x }, TmView::Refl { tm: y }) => {
+                self.tm(env, x, y, ty, level)
+            }
+            (TmView::Refl { .. }, _) | (_, TmView::Refl { .. }) => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
+    }
+
+    /// [`Conv::tm_nf`] at `Sigma`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_sigma(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R<TmProgress<D::TmC>> {
+        let TyView::Sigma { fst_level, snd_level, fst, snd } = vw else {
+            unreachable!("tm_nf_sigma is given its own arm")
+        };
+        let result: R = {
+            // Native bitvector words (extension;
+            // `docs/native-bitvector-values-design.md` §7), ahead of the
+            // guard below and for the same observation carried one step
+            // further: a `Vec` is a right-nested Σ, and when its element
+            // type has exactly two canonical inhabitants the whole chain
+            // is a machine word. Comparing two *canonical* 64-bit
+            // vectors component by component costs ~59 evaluator steps
+            // per bit before any operation has been performed at all
+            // (the design's §2 A3 floor); packing performs the same
+            // projections η would have performed and then compares in
+            // one instruction. Anything that does not pack falls through
+            // to η unchanged.
+            if D::bit_vec_eq(self, env, a, b, fst, snd, snd_level)?.is_some() {
+                return Ok(TmProgress::Done);
+            }
+            // Neutral-first (extension): two stuck terms whose spines
+            // agree are convertible by congruence, and deciding that on
+            // the spines costs the spines. Projecting first instead
+            // costs the *type*: a `Vec` is a right-nested Σ, so η on two
+            // neutral 64-bit vectors compares 64 components, each a
+            // `fst (snd^k …)` whose own neutral comparison walks its k
+            // projections — quadratic in the length, and a machine word
+            // is the common case. A failed attempt falls through to η,
+            // which is what decides the η-equal-but-not-spine-equal
+            // pairs; the guard semantics are [`Conv::delta_lazy`]'s.
+            if D::view_tm(self, env, a).is_neutral()
+                && D::view_tm(self, env, b).is_neutral()
+                && self.delta_lazy(|c| c.tm_nee(env, a, b).map(drop))?.is_some()
+            {
+                return Ok(TmProgress::Done);
+            }
+            let (fa, fb) =
+                D::eta_proj(self, env, true, a, b, fst_level, snd_level, fst, snd)?;
+            self.tm(env, &fa, &fb, fst, fst_level)?;
+            let snd_ty = D::inst_ty(self, env, env, snd, &[fa])?;
+            let (sa, sb) =
+                D::eta_proj(self, env, false, a, b, fst_level, snd_level, fst, snd)?;
+            self.tm(env, &sa, &sb, &snd_ty, snd_level)
+        };
+        result.map(|()| TmProgress::Done)
+    }
+
+    /// [`Conv::tm_nf`] at `Sum`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_sum(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::Sum { lhs_level, rhs_level, lhs, rhs } = vw else {
+            unreachable!("tm_nf_sum is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+            (TmView::Inl { val: x }, TmView::Inl { val: y }) => {
+                self.tm(env, x, y, lhs, lhs_level)
+            }
+            (TmView::Inr { val: x }, TmView::Inr { val: y }) => {
+                self.tm(env, x, y, rhs, rhs_level)
+            }
+            (TmView::Inl { .. } | TmView::Inr { .. }, _)
+            | (_, TmView::Inl { .. } | TmView::Inr { .. }) => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
+    }
+
+    /// [`Conv::tm_nf`] at `W`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_w(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::W { shape_level, pos_level, shape, pos } = vw else {
+            unreachable!("tm_nf_w is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+            (
+                TmView::Sup { label: a1, children: f1 },
+                TmView::Sup { label: a2, children: f2 },
+            ) => {
+                self.tm(env, a1, a2, shape, shape_level)?;
+                let lmax = Level::max((*shape_level).clone(), (*pos_level).clone());
+                let pos_at = D::inst_ty(self, env, env, pos, std::slice::from_ref(a1))?;
+                let w_c = D::as_child_ty(self, env, w)?;
+                let cod = D::weaken_ty(env, &w_c, 1);
+                let f_ty = D::pi(self, env, pos_level, &lmax, &pos_at, &cod)?;
+                let f_l = Level::max((*pos_level).clone(), lmax);
+                self.tm(env, f1, f2, &f_ty, &f_l)
+            }
+            (TmView::Sup { .. }, _) | (_, TmView::Sup { .. }) => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
+    }
+
+    /// [`Conv::tm_nf`] at `Wf`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_wf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::Wf { level, shape, arity } = vw else {
+            unreachable!("tm_nf_wf is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+            (
+                TmView::Supf { label: a1, children: c1 },
+                TmView::Supf { label: a2, children: c2 },
+            ) => {
+                self.tm(env, a1, a2, shape, level)?;
+                // Children at Vec(Wf; n[a₁/x]), left-biased like W's.
+                let arity_at = D::inst_tm(self, env, env, arity, std::slice::from_ref(a1))?;
+                let w_c = D::as_child_ty(self, env, w)?;
+                let cs_ty = D::vec(self, env, level, &w_c, &arity_at)?;
+                self.tm(env, c1, c2, &cs_ty, level)
+            }
+            (TmView::Supf { .. }, _) | (_, TmView::Supf { .. }) => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
+    }
+
+    /// [`Conv::tm_nf`] at `IWf`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_i_wf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::IWf { level, idx_level, shape, .. } = vw else {
+            unreachable!("tm_nf_i_wf is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+            (
+                TmView::Supi { label: a1, children: c1 },
+                TmView::Supi { label: a2, children: c2 },
+            ) => {
+                self.tm(env, a1, a2, shape, level)?;
+                let cs_ty = D::iwf_children(self, env, w, a1)?;
+                let fl = Level::join((*level).clone(), (*idx_level).clone());
+                self.tm(env, c1, c2, &cs_ty, &fl)
+            }
+            (TmView::Supi { .. }, _) | (_, TmView::Supi { .. }) => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
+    }
+
+    /// [`Conv::tm_nf`] at `M`; out of line so that only this arm's
+    /// locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_nf_m(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, vw: &TyView<'_, 'v, D>) -> R {
+        let TyView::M { sig, index } = vw else {
+            unreachable!("tm_nf_m is given its own arm")
+        };
+        match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
+            (
+                TmView::Corec { sig: g1, carrier_level: k1, carrier: c1, step: t1, seed: x1 },
+                TmView::Corec { carrier_level: k2, carrier: c2, step: t2, seed: x2, .. },
+            ) => {
+                self.lev_eq(k1, k2)?;
+                let e_i = D::push_entry(env, &sig.idx, sig.idx_level);
+                self.ty(&e_i, c1, c2, k1)?;
+                let step_ty = D::m_step_ty(self, env, g1, k1, c1)?;
+                let step_level = Level::join(
+                    (*g1.level).clone(),
+                    Level::join((*k1).clone(), g1.family_level()),
+                );
+                let e_ix = D::push_entry(&e_i, c1, k1);
+                self.tm(&e_ix, t1, t2, &step_ty, &step_level)?;
+                let seed_ty = D::inst_ty(self, env, env, c1, std::slice::from_ref(index))?;
+                self.tm(env, x1, x2, &seed_ty, k1)
+            }
+            (TmView::Corec { .. }, _) | (_, TmView::Corec { .. }) => Err(NC),
+            _ => self.tm_nee(env, a, b).map(drop),
+        }
     }
 
     /// Neutral comparison with the inferred type reduced to WHNF.
@@ -2095,112 +2229,22 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 }
                 D::var_type(self, env, *x)
             }
-            (
-                TmView::GlobalTm { var: u1, subst: d1 },
-                TmView::GlobalTm { var: u2, subst: d2 },
-            ) => {
-                if u1 != u2 {
-                    return Err(NC);
-                }
-                let Some(GlobalBinding::Tm { ctx, layer, ty, level, .. }) =
-                    lookup(&env.psi, *u1)
-                else {
-                    return Err(NC);
-                };
-                // i' ∈ {v, c} is forced by the binding form; i' ≤ i:
-                if *layer > env.layer {
-                    return Err(NC);
-                }
-                let level = level.clone();
-                crate::stats::global_ref_rescopes(1);
-                let sig = env.cache.sig_or_insert(*u1, || Sig {
-                    ctx: ctx.shift_global(u1.0 + 1),
-                    ty: Some(Rc::new(ty.shift_global(u1.0 + 1))),
-                });
-                // The binding form fixes the kind at this index, so a `Tm`
-                // lookup always finds the `Tm` signature; the guard is a
-                // kernel that reports rather than panics on a broken Ψ.
-                let Some(ty) = sig.ty.as_ref() else { return Err(NC) };
-                self.subst(env, d1, d2, &sig.ctx)?;
-                let n = D::subst_len(d1);
-                Ok((D::apply_subst_ty(self, env, d1, n, ty)?, level))
-            }
-            (
-                TmView::ElimNat { level: v1, motive: m1, base: z1, step: s1, scrut: n1 },
-                TmView::ElimNat { level: v2, motive: m2, base: z2, step: s2, scrut: n2 },
-            ) => {
-                self.lev_eq(v1, v2)?;
-                let e_x = D::push_entry(env, &D::nat(env), &Level::Zero);
-                self.ty(&e_x, m1, m2, v1)?;
-                let base_ty = D::inst_ty(self, env, env, m1, &[D::zero(env)])?;
-                self.tm(env, z1, z2, &base_ty, v1)?;
-                // M[su x/x] scoped in (Γ, x : Nat, y : M), as in reduce.rs.
-                let e_xy = D::push_entry(&e_x, m1, v1);
-                let x1 = D::local(&e_xy, LocalVar(1));
-                let su_x = D::succ(self, &e_xy, &x1)?;
-                let step_ty = D::inst_ty(self, env, &e_xy, m1, std::slice::from_ref(&su_x))?;
-                self.tm(&e_xy, s1, s2, &step_ty, v1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred Nat: redundant, ignored
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
-            }
+            (TmView::GlobalTm { .. }, TmView::GlobalTm { .. },) => self.tm_ne_global_tm(env, &va, &vb),
+            (TmView::ElimNat { .. }, TmView::ElimNat { .. },) => self.tm_ne_elim_nat(env, &va, &vb),
             // elim_Empty neutral congruence (extension) — the scrutinees are
             // *skipped*, as elim_sEmpty's below: they sit at Empty, whose
             // irrelevance arm accepts any two terms, so congruence makes
             // the two eliminations equal whatever the scrutinees. Comparing
             // them would reject a pair the rule accepts. The motive
             // instances agree for the same reason.
-            (
-                TmView::ElimEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
-                TmView::ElimEmpty { level: v2, scrut_level: s2, motive: m2, scrut: _ },
-            ) => {
-                self.lev_eq(v1, v2)?;
-                self.lev_eq(s1, s2)?;
-                let em = D::empty(env, s1);
-                let e_x = D::push_entry(env, &em, s1);
-                self.ty(&e_x, m1, m2, v1)?;
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
-            }
+            (TmView::ElimEmpty { .. }, TmView::ElimEmpty { .. },) => self.tm_ne_elim_empty(env, &va, &vb),
             // elim_sEmpty neutral congruence (extension) — ElimEmpty's arm
             // with the scrutinees *skipped*: they sit at sEmpty, whose
             // irrelevance arm accepts any two terms, so comparing them
             // would be that arm anyway (docs/sprop-design.md §5.3). The
             // motive instances agree for the same reason.
-            (
-                TmView::ElimSEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
-                TmView::ElimSEmpty { level: v2, scrut_level: s2, motive: m2, scrut: _ },
-            ) => {
-                self.lev_eq(v1, v2)?;
-                self.lev_eq(s1, s2)?;
-                let em = D::sempty(env, s1);
-                let e_x = D::push_entry(env, &em, s1);
-                self.ty(&e_x, m1, m2, v1)?;
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
-            }
-            (
-                TmView::ElimSquash {
-                    src_level: s1,
-                    dst_level: d1,
-                    src_ty: a1,
-                    motive: m1,
-                    scrut: n1,
-                },
-                TmView::ElimSquash {
-                    src_level: s2,
-                    dst_level: d2,
-                    src_ty: a2,
-                    motive: m2,
-                    scrut: _,
-                },
-            ) => {
-                self.lev_eq(s1, s2)?;
-                self.lev_eq(d1, d2)?;
-                self.ty(env, a1, a2, s1)?;
-                let sq_a = D::squash(env, s1, a1);
-                let e_z = D::push_entry(env, &sq_a, s1);
-                self.ty(&e_z, m1, m2, d1)?;
-                let inner = D::inst_ty(self, &e_z, env, m1, std::slice::from_ref(n1))?;
-                Ok((D::squash(env, d1, &inner), (*d1).clone()))
-            }
+            (TmView::ElimSEmpty { .. }, TmView::ElimSEmpty { .. },) => self.tm_ne_elim_s_empty(env, &va, &vb),
+            (TmView::ElimSquash { .. }, TmView::ElimSquash { .. },) => self.tm_ne_elim_squash(env, &va, &vb),
             // case neutral congruence (extension); typed like ElimNat — the
             // motive's level, the motive, the branches (at M[inl x/z] /
             // M[inr y/z]) and then the scrutinees via tm_nee; result
@@ -2220,52 +2264,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // (heather-coq `ELIM_CONGRUENCE.md`, which re-proves the
             // algorithm's soundness and completeness with exactly these
             // premises; issues/conversion-typed-eliminator-congruence.md).
-            (
-                TmView::Case {
-                    lhs_level: dl1,
-                    rhs_level: cl1,
-                    motive_level: ml1,
-                    lhs: s1,
-                    rhs: t1,
-                    motive: m1,
-                    case_l: l1,
-                    case_r: r1,
-                    scrut: n1,
-                },
-                TmView::Case {
-                    motive_level: ml2,
-                    motive: m2,
-                    case_l: l2,
-                    case_r: r2,
-                    scrut: n2,
-                    ..
-                },
-            ) => {
-                self.lev_eq(ml1, ml2)?;
-                let lmax = Level::max((*dl1).clone(), (*cl1).clone());
-                let sum = D::sum(self, env, dl1, cl1, s1, t1)?;
-                // M scoped in (Γ, z : A + B), as in typing.rs.
-                let e_z = D::push_entry(env, &sum, &lmax);
-                self.ty(&e_z, m1, m2, ml1)?;
-                let s1_up = D::weaken_ty(env, s1, 1);
-                let t1_up = D::weaken_ty(env, t1, 1);
-                // c_l at M[inl x/z] in (Γ, x : A).
-                let e_x = D::push_entry(env, s1, dl1);
-                let x0 = D::local(&e_x, LocalVar(0));
-                let inl_x =
-                    D::inj(self, &e_x, true, dl1, cl1, &s1_up, &t1_up, &x0)?;
-                let left_ty = D::inst_ty(self, env, &e_x, m1, std::slice::from_ref(&inl_x))?;
-                self.tm(&e_x, l1, l2, &left_ty, ml1)?;
-                // c_r at M[inr y/z] in (Γ, y : B).
-                let e_y = D::push_entry(env, t1, cl1);
-                let y0 = D::local(&e_y, LocalVar(0));
-                let inr_y =
-                    D::inj(self, &e_y, false, dl1, cl1, &s1_up, &t1_up, &y0)?;
-                let right_ty = D::inst_ty(self, env, &e_y, m1, std::slice::from_ref(&inr_y))?;
-                self.tm(&e_y, r1, r2, &right_ty, ml1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred A + B: forces A, B
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
-            }
+            (TmView::Case { .. }, TmView::Case { .. },) => self.tm_ne_case(env, &va, &vb),
             // elim_W neutral congruence (extension); typed like Case — the
             // motive's level, the motive, the step (at M[sup(a,f)/z] under
             // the (a, f, ih) telescope, as in typing.rs) and then the
@@ -2273,70 +2272,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // positions and their levels are forced by the scrutinees' W
             // type and not compared (Case's argument). Fires only on a
             // neutral scrutinee (a canonical sup β-fired in reduce).
-            (
-                TmView::ElimW {
-                    shape_level: dl1,
-                    pos_level: cl1,
-                    motive_level: ml1,
-                    shape: s1,
-                    pos: t1,
-                    motive: m1,
-                    step: st1,
-                    scrut: n1,
-                },
-                TmView::ElimW { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
-            ) => {
-                self.lev_eq(ml1, ml2)?;
-                let lmax = Level::max((*dl1).clone(), (*cl1).clone());
-                let w_ty = D::w(self, env, dl1, cl1, s1, t1)?;
-                // M scoped in (Γ, z : W).
-                let e_z = D::push_entry(env, &w_ty, &lmax);
-                self.ty(&e_z, m1, m2, ml1)?;
-                // Steps under (Γ, a : S, f : Π(y:T[a/x]). W,
-                // ih : Π(y:T[a/x]). M[f y/z]) at M[sup(a, f)/z] — the same
-                // construction as the typing rule.
-                let e_a = D::push_entry(env, s1, dl1);
-                let a_var = D::local(&e_a, LocalVar(0));
-                // T[a/x] in (Γ, a): the positions are a *body* under the
-                // shape binder, so this is instantiation, not weakening.
-                let t_at_a = D::inst_ty(self, env, &e_a, t1, &[a_var])?;
-                let f_ty =
-                    D::pi(self, &e_a, cl1, &lmax, &t_at_a, &D::weaken_ty(&e_a, &w_ty, 2))?;
-                let e_af =
-                    D::push_entry(&e_a, &f_ty, &Level::max((*cl1).clone(), lmax.clone()));
-                let a_var2 = D::local(&e_af, LocalVar(1));
-                let t_at_a_af = D::inst_ty(self, env, &e_af, t1, &[a_var2])?;
-                let e_afy = D::push_entry(&e_af, &t_at_a_af, cl1);
-                let a_var3 = D::local(&e_afy, LocalVar(2));
-                let t_at_a_afy = D::inst_ty(self, env, &e_afy, t1, &[a_var3])?;
-                let f_y = D::app(
-                    self,
-                    &e_afy,
-                    cl1,
-                    &lmax,
-                    &t_at_a_afy,
-                    &D::weaken_ty(&e_afy, &w_ty, 4),
-                    &D::local(&e_afy, LocalVar(1)),
-                    &D::local(&e_afy, LocalVar(0)),
-                )?;
-                let ih_cod = D::inst_ty(self, env, &e_afy, m1, std::slice::from_ref(&f_y))?;
-                let ih_ty = D::pi(self, &e_af, cl1, ml1, &t_at_a_af, &ih_cod)?;
-                let e_step =
-                    D::push_entry(&e_af, &ih_ty, &Level::max((*cl1).clone(), (*ml1).clone()));
-                let sup_af = D::sup_at(
-                    self,
-                    &e_af,
-                    &w_ty,
-                    2,
-                    &D::local(&e_af, LocalVar(1)),
-                    &D::local(&e_af, LocalVar(0)),
-                )?;
-                let step_ty =
-                    D::inst_ty(self, env, &e_step, m1, &[D::weaken_tm(&e_step, &sup_af, 1)])?;
-                self.tm(&e_step, st1, st2, &step_ty, ml1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred W: forces S, T
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
-            }
+            (TmView::ElimW { .. }, TmView::ElimW { .. },) => self.tm_ne_elim_w(env, &va, &vb),
             // elim_Wf neutral congruence (extension): same shape as elim_W's,
             // with the step telescope taken from `wf_step_telescope` — the
             // single source shared with typing.rs, so the two cannot drift.
@@ -2346,31 +2282,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // type and not compared (Case's argument) — on a Wf-lowered
             // inductive the shape is the sum-of-Σs, so that comparison was
             // the size of the declaration at every meeting of two matches.
-            (
-                TmView::ElimWf {
-                    level: l1,
-                    motive_level: ml1,
-                    shape: s1,
-                    arity: k1,
-                    motive: m1,
-                    step: st1,
-                    scrut: n1,
-                },
-                TmView::ElimWf { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
-            ) => {
-                self.lev_eq(ml1, ml2)?;
-                let wf = D::wf(self, env, l1, s1, k1)?;
-                let e_z = D::push_entry(env, &wf, l1);
-                self.ty(&e_z, m1, m2, ml1)?;
-                let (cs_ty, ih_ty, step_ty) =
-                    D::wf_step_telescope(self, env, l1, ml1, s1, k1, m1)?;
-                let e_a = D::push_entry(env, s1, l1);
-                let e_cs = D::push_entry(&e_a, &cs_ty, l1);
-                let e_step = D::push_entry(&e_cs, &ih_ty, ml1);
-                self.tm(&e_step, st1, st2, &step_ty, ml1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred Wf: forces S, n
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
-            }
+            (TmView::ElimWf { .. }, TmView::ElimWf { .. },) => self.tm_ne_elim_wf(env, &va, &vb),
             // elim_IWf neutral congruence (extension), **typed** from the
             // start (heather-coq ELIM_CONGRUENCE.md, `actmne_elimIWf`): the
             // motive's level, the motive and the step, both in the *left*
@@ -2384,477 +2296,867 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // signatures and equal motives force too (heather-coq#24,
             // `IWf_ihty_eq`). The motive's level stays: it is the one premise
             // the algorithm's soundness argument needs.
-            (
-                TmView::ElimIWf {
-                    level: l1,
-                    idx_level: li1,
-                    motive_level: ml1,
-                    idx: x1,
-                    shape: s1,
-                    arity: k1,
-                    out: o1,
-                    child: c1,
-                    motive: m1,
-                    step: st1,
-                    index: i1,
-                    scrut: n1,
-                },
-                TmView::ElimIWf { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
-            ) => {
-                self.lev_eq(ml1, ml2)?;
-                let sig = IWfSigC {
-                    level: l1,
-                    idx_level: li1,
-                    idx: x1,
-                    shape: s1,
-                    arity: k1,
-                    out: o1,
-                    child: c1,
-                };
-                let (mot, cs_ty, ih_ty, step_ty) = D::iwf_telescope(self, env, &sig, ml1, m1)?;
-                let fl = Level::join((*l1).clone(), (*li1).clone());
-                // M in (Γ, j : I, z : IWf(…)(j)).
-                let e_j = D::push_entry(env, x1, li1);
-                let e_jz = D::push_entry(&e_j, &mot, &fl);
-                self.ty(&e_jz, m1, m2, ml1)?;
-                // The step in (Γ, a : S, cs, ih).
-                let e_a = D::push_entry(env, s1, l1);
-                let e_cs = D::push_entry(&e_a, &cs_ty, &fl);
-                let e_step = D::push_entry(&e_cs, &ih_ty, ml1);
-                self.tm(&e_step, st1, st2, &step_ty, ml1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred IWf: forced, not read
-                Ok((D::inst_ty(self, env, env, m1, &[i1.clone(), n1.clone()])?, (*ml1).clone()))
-            }
+            (TmView::ElimIWf { .. }, TmView::ElimIWf { .. },) => self.tm_ne_elim_i_wf(env, &va, &vb),
             // out neutral congruence (extension; docs/kernel-coinduction-
             // design.md §2.1): the scrutinees as neutrals and nothing else —
             // the signature and the index are forced by their inferred type
             // `M(…)(j)`. The result type is built from the left `out`'s
             // annotations; its Σ is where η then projects the two sides.
-            (
-                TmView::Out { sig: g1, index: i1, scrut: n1 },
-                TmView::Out { scrut: n2, .. },
-            ) => {
-                self.tm_nee_c(env, n1, n2)?; // inferred M: forced, not read
-                let ty = D::m_out_ty(self, env, g1, i1)?;
-                Ok((ty, Level::join((*g1.level).clone(), g1.family_level())))
-            }
+            (TmView::Out { .. }, TmView::Out { .. },) => self.tm_ne_out(env, &va, &vb),
             // J neutral congruence (extension beyond ch. 04); typed like
             // Case — the motive's level, the motive, the refl case and then
             // the proofs via tm_nee. `A`, `a`, the right endpoint `u` and
             // `A`'s level are forced by the proofs' type `Id(A; a; u)` and
             // not compared (Case's argument).
-            (
-                TmView::J {
-                    ty_level: al1,
-                    motive_level: ml1,
-                    ty: s1,
-                    lhs: a1,
-                    motive: m1,
-                    case: c1,
-                    rhs: r1,
-                    proof: p1,
-                },
-                TmView::J { motive_level: ml2, motive: m2, case: c2, proof: p2, .. },
-            ) => {
-                self.lev_eq(ml1, ml2)?;
-                // M scoped in (Γ, y : S, p : Id^l(S; a; y)), as in typing.rs.
-                let e_y = D::push_entry(env, s1, al1);
-                let p_ty = D::id(
-                    self,
-                    &e_y,
-                    al1,
-                    &D::weaken_ty(&e_y, s1, 1),
-                    &D::weaken_tm(&e_y, a1, 1),
-                    &D::local(&e_y, LocalVar(0)),
-                )?;
-                let e_yp = D::push_entry(&e_y, &p_ty, al1);
-                self.ty(&e_yp, m1, m2, ml1)?;
-                let refl_a = D::refl(self, env, al1, s1, a1)?;
-                let case_ty = D::inst_ty(self, env, env, m1, &[a1.clone(), refl_a])?;
-                self.tm(env, c1, c2, &case_ty, ml1)?;
-                self.tm_nee_c(env, p1, p2)?; // inferred Id(A; a; u): forces A, a, u
-                Ok((D::inst_ty(self, env, env, m1, &[r1.clone(), p1.clone()])?, (*ml1).clone()))
-            }
-            (
-                TmView::App { levels: ls1, fun: f1, arg: a1 },
-                TmView::App { levels: ls2, fun: f2, arg: a2 },
-            ) => {
-                // Levels as the `Fst` arm below: compared when both sides
-                // store them, and otherwise the inferred Π's are the answer
-                // (`app@`, docs/app-by-head-type-design.md §4).
-                if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
-                    self.lev_eq(dl1, dl2)?;
-                    self.lev_eq(cl1, cl2)?;
-                }
-                // Typed application rule (extension; the mirror image of the
-                // ch. 06 note below its application rule). The paper compares
-                // the two stored `x:S.T` annotations and *ignores* the type
-                // inferred for the heads, "because we already know ν and ν'
-                // are well-typed so the type annotations must be
-                // equivalent". That well-typedness runs the other way just
-                // as well: each annotation converts with the Π inferred for
-                // its own head, the heads convert, and convertible neutrals
-                // infer convertible types (ch. 08) — so relating the two
-                // annotations to each other adds nothing on the well-typed
-                // inputs conversion presupposes. What it *costs* is the
-                // whole per-node price of a spine: at every application node
-                // the codomain annotation is the entire remaining Π, whose
-                // domains are themselves neutral applications with their own
-                // annotations, so one n-ary spine compared n annotation
-                // suffixes and recursed into each — the `ty_nf`/`ty_w` stacks
-                // and the tens of millions of type closures of
-                // issues/application-annotation-sharing-cost.md.
-                //
-                // So: compare the heads, read the Π they infer, compare the
-                // arguments at *its* domain and return *its* codomain. The
-                // inferred type is fully δ-reduced ([`Conv::tm_nee`]) and
-                // then driven to its head ([`Conv::delta_to_head_ty`]) —
-                // the 2026-08-27 attempt viewed it as it came, which is what
-                // refused the dependent fold/tabulate instances
-                // (issues/generated-term-oracle-controls-not-convertible.md).
-                // The stored annotations are ignored here exactly as the
-                // inferred type was before; the typing seam still checks
-                // every annotation against its head's type once, at the
-                // term's own check.
-                let (w, _) = self.tm_nee_c(env, f1, f2)?;
-                let w = self.delta_to_head_ty(env, w)?;
-                let TyView::Pi { dom_level, cod_level, dom, cod } = D::view_ty(self, env, &w)
-                else {
-                    return Err(NC);
-                };
-                let (dom_level, cod_level) = (dom_level.clone(), cod_level.clone());
-                self.tm(env, a1, a2, &dom, &dom_level)?;
-                Ok((D::inst_ty(self, env, env, &cod, std::slice::from_ref(a1))?, cod_level))
-            }
+            (TmView::J { .. }, TmView::J { .. },) => self.tm_ne_j(env, &va, &vb),
+            (TmView::App { .. }, TmView::App { .. },) => self.tm_ne_app(env, &va, &vb),
             // fst/snd neutral congruence (extension; mirrors App — typed, at
             // the Σ inferred for the pair). These arms fire only when the
             // projected pair is itself neutral (η already handled non-neutral
             // pairs in tm_nf).
-            (
-                TmView::Fst { levels: ls1, pair: p1 },
-                TmView::Fst { levels: ls2, pair: p2 },
-            ) => {
-                // Both stored: the redundant cross-check the component
-                // spelling affords. Either side a checked spelling: no
-                // stored levels to compare, and the inferred Σ below is the
-                // answer either way.
-                if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
-                    self.lev_eq(dl1, dl2)?;
-                    self.lev_eq(cl1, cl2)?;
-                }
-                // Typed projection rule — the App arm's argument, verbatim:
-                // on well-typed inputs each stored Σ annotation converts with
-                // the Σ inferred for its own pair, so relating the two
-                // annotations to each other adds nothing, and costs the size
-                // of the remaining tuple type at *every* node of a projection
-                // chain (a Wf record's children tuple is exactly such a chain,
-                // and its annotations carry the whole shape).
-                let (w, _) = self.tm_nee_c(env, p1, p2)?;
-                let w = self.delta_to_head_ty(env, w)?;
-                let TyView::Sigma { fst_level, fst, .. } = D::view_ty(self, env, &w) else {
-                    return Err(NC);
-                };
-                Ok((fst, fst_level.clone()))
-            }
-            (
-                TmView::Snd { levels: ls1, pair: p1 },
-                TmView::Snd { levels: ls2, pair: p2 },
-            ) => {
-                if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
-                    self.lev_eq(dl1, dl2)?;
-                    self.lev_eq(cl1, cl2)?;
-                }
-                // As for `fst`: the inferred Σ, not the stored annotations.
-                let (w, _) = self.tm_nee_c(env, p1, p2)?;
-                let w = self.delta_to_head_ty(env, w)?;
-                let TyView::Sigma { fst_level, snd_level, fst, snd } = D::view_ty(self, env, &w)
-                else {
-                    return Err(NC);
-                };
-                let (fst_level, snd_level) = (fst_level.clone(), snd_level.clone());
-                let fst_p = D::proj(self, env, true, &fst_level, &snd_level, &fst, &snd, p1)?;
-                Ok((D::inst_ty(self, env, env, &snd, std::slice::from_ref(&fst_p))?, snd_level))
-            }
-            (
-                TmView::UApp { levels: ls1, fun: f1 },
-                TmView::UApp { levels: ls2, fun: f2 },
-            ) => {
-                let env = &env.with_layer(Layer::Meta);
-                let (w, _) = self.tm_nee_c(env, f1, f2)?;
-                let TyView::UPi { num_vars, level, body } = D::view_ty(self, env, &w) else {
-                    return Err(NC);
-                };
-                if ls1.len() != ls2.len() || ls1.len() != num_vars as usize || ls1.is_empty()
-                {
-                    return Err(NC);
-                }
-                for (x, y) in ls1.iter().zip(*ls2) {
-                    self.lev_eq(x, y)?;
-                }
-                // Written vectors are outermost-first; instantiation wants
-                // innermost-first (as in reduce.rs).
-                let phi: Vec<Level> = ls1.iter().rev().cloned().collect();
-                let l = level.inst_at(&phi, 0);
-                Ok((D::inst_univ_ty(self, env, &body, &phi)?, l))
-            }
-            (
-                TmView::CtxApp { ctx: c1, fun: f1 },
-                TmView::CtxApp { ctx: c2, fun: f2 },
-            ) => {
-                let env = &env.with_layer(Layer::Meta);
-                let (w, _) = self.tm_nee_c(env, f1, f2)?;
-                let TyView::CtxPi { level, body } = D::view_ty(self, env, &w) else {
-                    return Err(NC);
-                };
-                let level = level.clone();
-                self.ctx(env, Layer::Prog, c1, c2)?;
-                Ok((D::inst_ctx_ty(self, env, &body, c1)?, level))
-            }
-            (
-                TmView::TyApp { arg: t1, fun: f1 },
-                TmView::TyApp { arg: t2, fun: f2 },
-            ) => {
-                let env = &env.with_layer(Layer::Meta);
-                let (w, _) = self.tm_nee_c(env, f1, f2)?;
-                let TyView::TyPi { ctx, arg_level, body_level, body } = D::view_ty(self, env, &w)
-                else {
-                    return Err(NC);
-                };
-                let body_level = body_level.clone();
-                let e_d = env.in_ctx(ctx.clone(), Layer::Prog);
-                let (x, y) =
-                    (D::embed_ty(&e_d, Rc::clone(t1)), D::embed_ty(&e_d, Rc::clone(t2)));
-                self.ty(&e_d, &x, &y, arg_level)?;
-                Ok((D::inst_tyarg_ty(self, env, &body, t1)?, body_level))
-            }
-            (
-                TmView::LetBoxTy {
-                    motive_level: ml1,
-                    code_level: cl1,
-                    ctx: d1,
-                    motive: m1,
-                    body: b1,
-                    scrut: n1,
-                },
-                TmView::LetBoxTy {
-                    motive_level: ml2,
-                    code_level: cl2,
-                    ctx: d2,
-                    motive: m2,
-                    body: b2,
-                    scrut: n2,
-                },
-            ) => {
-                let env = &env.with_layer(Layer::Meta);
-                self.lev_eq(ml1, ml2)?;
-                self.lev_eq(cl1, cl2)?;
-                self.ctx(env, Layer::Prog, d1, d2)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred □(Δ ⊢ Ty l): ignored
-                let code_ty = D::code_ty(env, d1, cl1);
-                let e_x = D::push_entry(env, &code_ty, &Level::Zero);
-                self.ty(&e_x, m1, m2, ml1)?;
-                // Bodies under Ψ, U : Typ_c(Δ, l) at M[box U/x_T].
-                let e_u = env.push_global(GlobalBinding::Ty {
-                    ctx: (*d1).clone(),
-                    layer: Layer::Code,
-                    level: (*cl1).clone(),
-                });
-                let box_u = D::box_ty(&e_u, Rc::new(gty(0, &d1.shift_global(1))));
-                let m_u = D::shift_global_ty(self, &e_u, m1, 1)?;
-                let body_ty = D::inst_ty(self, &e_u, &e_u, &m_u, std::slice::from_ref(&box_u))?;
-                // The bodies are under `Ψ, U`; their captured scopes are not.
-                let x = D::under_tele_tm(self, &e_u, b1, 0, 1)?;
-                let y = D::under_tele_tm(self, &e_u, b2, 0, 1)?;
-                self.tm(&e_u, &x, &y, &body_ty, ml1)?;
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
-            }
-            (
-                TmView::LetBoxTm {
-                    motive_level: ml1,
-                    code_level: cl1,
-                    ctx: d1,
-                    ty: t1,
-                    motive: m1,
-                    body: b1,
-                    scrut: n1,
-                },
-                TmView::LetBoxTm {
-                    motive_level: ml2,
-                    code_level: cl2,
-                    ctx: d2,
-                    ty: t2,
-                    motive: m2,
-                    body: b2,
-                    scrut: n2,
-                },
-            ) => {
-                let env = &env.with_layer(Layer::Meta);
-                self.lev_eq(ml1, ml2)?;
-                self.lev_eq(cl1, cl2)?;
-                self.ctx(env, Layer::Prog, d1, d2)?;
-                let e_d = env.in_ctx((*d1).clone(), Layer::Prog);
-                let (x, y) =
-                    (D::embed_ty(&e_d, Rc::clone(t1)), D::embed_ty(&e_d, Rc::clone(t2)));
-                self.ty(&e_d, &x, &y, cl1)?;
-                self.tm_nee_c(env, n1, n2)?; // inferred □(Δ ⊢ T @ l): ignored
-                let code_ty = D::code_tm(env, d1, t1, cl1);
-                let e_x = D::push_entry(env, &code_ty, &Level::Zero);
-                self.ty(&e_x, m1, m2, ml1)?;
-                // Bodies under Ψ, u : Trm_c(Δ ⊢ T @ l) at M[box u/x_t].
-                let e_u = env.push_global(GlobalBinding::Tm {
-                    ctx: (*d1).clone(),
-                    layer: Layer::Code,
-                    ty: Rc::clone(t1),
-                    level: (*cl1).clone(),
-                    body: None,
-                });
-                let box_u = D::box_tm(&e_u, Rc::new(gtm(0, &d1.shift_global(1))));
-                let m_u = D::shift_global_ty(self, &e_u, m1, 1)?;
-                let body_ty = D::inst_ty(self, &e_u, &e_u, &m_u, std::slice::from_ref(&box_u))?;
-                let x = D::under_tele_tm(self, &e_u, b1, 0, 1)?;
-                let y = D::under_tele_tm(self, &e_u, b2, 0, 1)?;
-                self.tm(&e_u, &x, &y, &body_ty, ml1)?;
-                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
-            }
-            (
-                TmView::ElimCodeTy {
-                    ty_motive_level: al1,
-                    tm_motive_level: al2,
-                    motives: am,
-                    branches: ab,
-                    code_level: acl,
-                    ctx: actx,
-                    scrut: an,
-                    rec: arec,
-                },
-                TmView::ElimCodeTy {
-                    ty_motive_level: bl1,
-                    tm_motive_level: bl2,
-                    motives: bm,
-                    branches: bb,
-                    code_level: bcl,
-                    ctx: bctx,
-                    scrut: bn,
-                    rec: brec,
-                },
-            ) => {
-                let env = &env.with_layer(Layer::Meta);
-                self.rec_ca(
-                    env,
-                    &RecSide {
-                        l1: al1,
-                        l2: al2,
-                        motives: Rc::clone(am),
-                        branches: Rc::clone(ab),
-                        rec: arec.clone(),
-                    },
-                    &RecSide {
-                        l1: bl1,
-                        l2: bl2,
-                        motives: Rc::clone(bm),
-                        branches: Rc::clone(bb),
-                        rec: brec.clone(),
-                    },
-                )?;
-                self.lev_eq(acl, bcl)?;
-                self.ctx(env, Layer::Prog, actx, bctx)?;
-                // Blocked on box (U^δ): compared syntactically. Otherwise the
-                // scrutinees are neutral.
-                match (
-                    D::box_ty_payload(self, env, an)?,
-                    D::box_ty_payload(self, env, bn)?,
-                ) {
-                    (Some(c1), Some(c2)) => match (&*c1, &*c2) {
-                        (Type::GlobalTy { .. }, Type::GlobalTy { .. }) if c1 == c2 => {}
-                        _ => return Err(NC),
-                    },
-                    (Some(_), None) | (None, Some(_)) => return Err(NC),
-                    (None, None) => {
-                        self.tm_nee_c(env, an, bn)?; // inferred □(Δ ⊢ Ty l): ignored
-                    }
-                }
-                let t = D::inst_ty_motive(self, env, arec, &am.ty_motive, acl, actx, an)?;
-                Ok((t, (*al1).clone()))
-            }
-            (
-                TmView::ElimCodeTm {
-                    ty_motive_level: al1,
-                    tm_motive_level: al2,
-                    motives: am,
-                    branches: ab,
-                    code_level: acl,
-                    ctx: actx,
-                    ty: aty,
-                    scrut: an,
-                    rec: arec,
-                },
-                TmView::ElimCodeTm {
-                    ty_motive_level: bl1,
-                    tm_motive_level: bl2,
-                    motives: bm,
-                    branches: bb,
-                    code_level: bcl,
-                    ctx: bctx,
-                    ty: bty,
-                    scrut: bn,
-                    rec: brec,
-                },
-            ) => {
-                let env = &env.with_layer(Layer::Meta);
-                self.rec_ca(
-                    env,
-                    &RecSide {
-                        l1: al1,
-                        l2: al2,
-                        motives: Rc::clone(am),
-                        branches: Rc::clone(ab),
-                        rec: arec.clone(),
-                    },
-                    &RecSide {
-                        l1: bl1,
-                        l2: bl2,
-                        motives: Rc::clone(bm),
-                        branches: Rc::clone(bb),
-                        rec: brec.clone(),
-                    },
-                )?;
-                self.lev_eq(acl, bcl)?;
-                self.ctx(env, Layer::Prog, actx, bctx)?;
-                let e_d = env.in_ctx((*actx).clone(), Layer::Prog);
-                let (x, y) = (
-                    D::embed_ty(&e_d, Rc::clone(aty)),
-                    D::embed_ty(&e_d, Rc::clone(bty)),
-                );
-                self.ty(&e_d, &x, &y, &Level::succ((*acl).clone()))?;
-                match (
-                    D::box_tm_payload(self, env, an)?,
-                    D::box_tm_payload(self, env, bn)?,
-                ) {
-                    (Some(c1), Some(c2)) => match (&*c1, &*c2) {
-                        (Term::GlobalTm { .. }, Term::GlobalTm { .. }) if c1 == c2 => {}
-                        _ => return Err(NC),
-                    },
-                    (Some(_), None) | (None, Some(_)) => return Err(NC),
-                    (None, None) => {
-                        self.tm_nee_c(env, an, bn)?; // inferred □(Δ ⊢ T @ l): ignored
-                    }
-                }
-                // Conclusion at l₂ (the ch. 04 typing rule; the ch. 06 rule
-                // writes l₁, a typo).
-                let t = D::inst_tm_motive(
-                    self,
-                    env,
-                    arec,
-                    &am.tm_motive,
-                    acl,
-                    actx,
-                    aty,
-                    an,
-                )?;
-                Ok((t, (*al2).clone()))
-            }
+            (TmView::Fst { .. }, TmView::Fst { .. },) => self.tm_ne_fst(env, &va, &vb),
+            (TmView::Snd { .. }, TmView::Snd { .. },) => self.tm_ne_snd(env, &va, &vb),
+            (TmView::UApp { .. }, TmView::UApp { .. },) => self.tm_ne_u_app(env, &va, &vb),
+            (TmView::CtxApp { .. }, TmView::CtxApp { .. },) => self.tm_ne_ctx_app(env, &va, &vb),
+            (TmView::TyApp { .. }, TmView::TyApp { .. },) => self.tm_ne_ty_app(env, &va, &vb),
+            (TmView::LetBoxTy { .. }, TmView::LetBoxTy { .. },) => self.tm_ne_let_box_ty(env, &va, &vb),
+            (TmView::LetBoxTm { .. }, TmView::LetBoxTm { .. },) => self.tm_ne_let_box_tm(env, &va, &vb),
+            (TmView::ElimCodeTy { .. }, TmView::ElimCodeTy { .. },) => self.tm_ne_elim_code_ty(env, &va, &vb),
+            (TmView::ElimCodeTm { .. }, TmView::ElimCodeTm { .. },) => self.tm_ne_elim_code_tm(env, &va, &vb),
             _ => Err(NC),
         }
+    }
+
+    /// [`Conv::tm_ne`] at two `GlobalTm` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_global_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::GlobalTm { var: u1, subst: d1 },
+            TmView::GlobalTm { var: u2, subst: d2 },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_global_tm is given its own arm")
+        };
+        if u1 != u2 {
+            return Err(NC);
+        }
+        let Some(GlobalBinding::Tm { ctx, layer, ty, level, .. }) =
+            lookup(&env.psi, *u1)
+        else {
+            return Err(NC);
+        };
+        // i' ∈ {v, c} is forced by the binding form; i' ≤ i:
+        if *layer > env.layer {
+            return Err(NC);
+        }
+        let level = level.clone();
+        crate::stats::global_ref_rescopes(1);
+        let sig = env.cache.sig_or_insert(*u1, || Sig {
+            ctx: ctx.shift_global(u1.0 + 1),
+            ty: Some(Rc::new(ty.shift_global(u1.0 + 1))),
+        });
+        // The binding form fixes the kind at this index, so a `Tm`
+        // lookup always finds the `Tm` signature; the guard is a
+        // kernel that reports rather than panics on a broken Ψ.
+        let Some(ty) = sig.ty.as_ref() else { return Err(NC) };
+        self.subst(env, d1, d2, &sig.ctx)?;
+        let n = D::subst_len(d1);
+        Ok((D::apply_subst_ty(self, env, d1, n, ty)?, level))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimNat` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_nat(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimNat { level: v1, motive: m1, base: z1, step: s1, scrut: n1 },
+            TmView::ElimNat { level: v2, motive: m2, base: z2, step: s2, scrut: n2 },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_nat is given its own arm")
+        };
+        self.lev_eq(v1, v2)?;
+        let e_x = D::push_entry(env, &D::nat(env), &Level::Zero);
+        self.ty(&e_x, m1, m2, v1)?;
+        let base_ty = D::inst_ty(self, env, env, m1, &[D::zero(env)])?;
+        self.tm(env, z1, z2, &base_ty, v1)?;
+        // M[su x/x] scoped in (Γ, x : Nat, y : M), as in reduce.rs.
+        let e_xy = D::push_entry(&e_x, m1, v1);
+        let x1 = D::local(&e_xy, LocalVar(1));
+        let su_x = D::succ(self, &e_xy, &x1)?;
+        let step_ty = D::inst_ty(self, env, &e_xy, m1, std::slice::from_ref(&su_x))?;
+        self.tm(&e_xy, s1, s2, &step_ty, v1)?;
+        self.tm_nee_c(env, n1, n2)?; // inferred Nat: redundant, ignored
+        Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimEmpty` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_empty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
+            TmView::ElimEmpty { level: v2, scrut_level: s2, motive: m2, scrut: _ },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_empty is given its own arm")
+        };
+        self.lev_eq(v1, v2)?;
+        self.lev_eq(s1, s2)?;
+        let em = D::empty(env, s1);
+        let e_x = D::push_entry(env, &em, s1);
+        self.ty(&e_x, m1, m2, v1)?;
+        Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimSEmpty` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_s_empty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimSEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
+            TmView::ElimSEmpty { level: v2, scrut_level: s2, motive: m2, scrut: _ },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_s_empty is given its own arm")
+        };
+        self.lev_eq(v1, v2)?;
+        self.lev_eq(s1, s2)?;
+        let em = D::sempty(env, s1);
+        let e_x = D::push_entry(env, &em, s1);
+        self.ty(&e_x, m1, m2, v1)?;
+        Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimSquash` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_squash(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimSquash {
+                src_level: s1,
+                dst_level: d1,
+                src_ty: a1,
+                motive: m1,
+                scrut: n1,
+            },
+            TmView::ElimSquash {
+                src_level: s2,
+                dst_level: d2,
+                src_ty: a2,
+                motive: m2,
+                scrut: _,
+            },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_squash is given its own arm")
+        };
+        self.lev_eq(s1, s2)?;
+        self.lev_eq(d1, d2)?;
+        self.ty(env, a1, a2, s1)?;
+        let sq_a = D::squash(env, s1, a1);
+        let e_z = D::push_entry(env, &sq_a, s1);
+        self.ty(&e_z, m1, m2, d1)?;
+        let inner = D::inst_ty(self, &e_z, env, m1, std::slice::from_ref(n1))?;
+        Ok((D::squash(env, d1, &inner), (*d1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `Case` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_case(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::Case {
+                lhs_level: dl1,
+                rhs_level: cl1,
+                motive_level: ml1,
+                lhs: s1,
+                rhs: t1,
+                motive: m1,
+                case_l: l1,
+                case_r: r1,
+                scrut: n1,
+            },
+            TmView::Case {
+                motive_level: ml2,
+                motive: m2,
+                case_l: l2,
+                case_r: r2,
+                scrut: n2,
+                ..
+            },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_case is given its own arm")
+        };
+        self.lev_eq(ml1, ml2)?;
+        let lmax = Level::max((*dl1).clone(), (*cl1).clone());
+        let sum = D::sum(self, env, dl1, cl1, s1, t1)?;
+        // M scoped in (Γ, z : A + B), as in typing.rs.
+        let e_z = D::push_entry(env, &sum, &lmax);
+        self.ty(&e_z, m1, m2, ml1)?;
+        let s1_up = D::weaken_ty(env, s1, 1);
+        let t1_up = D::weaken_ty(env, t1, 1);
+        // c_l at M[inl x/z] in (Γ, x : A).
+        let e_x = D::push_entry(env, s1, dl1);
+        let x0 = D::local(&e_x, LocalVar(0));
+        let inl_x =
+            D::inj(self, &e_x, true, dl1, cl1, &s1_up, &t1_up, &x0)?;
+        let left_ty = D::inst_ty(self, env, &e_x, m1, std::slice::from_ref(&inl_x))?;
+        self.tm(&e_x, l1, l2, &left_ty, ml1)?;
+        // c_r at M[inr y/z] in (Γ, y : B).
+        let e_y = D::push_entry(env, t1, cl1);
+        let y0 = D::local(&e_y, LocalVar(0));
+        let inr_y =
+            D::inj(self, &e_y, false, dl1, cl1, &s1_up, &t1_up, &y0)?;
+        let right_ty = D::inst_ty(self, env, &e_y, m1, std::slice::from_ref(&inr_y))?;
+        self.tm(&e_y, r1, r2, &right_ty, ml1)?;
+        self.tm_nee_c(env, n1, n2)?; // inferred A + B: forces A, B
+        Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimW` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_w(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimW {
+                shape_level: dl1,
+                pos_level: cl1,
+                motive_level: ml1,
+                shape: s1,
+                pos: t1,
+                motive: m1,
+                step: st1,
+                scrut: n1,
+            },
+            TmView::ElimW { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_w is given its own arm")
+        };
+        self.lev_eq(ml1, ml2)?;
+        let lmax = Level::max((*dl1).clone(), (*cl1).clone());
+        let w_ty = D::w(self, env, dl1, cl1, s1, t1)?;
+        // M scoped in (Γ, z : W).
+        let e_z = D::push_entry(env, &w_ty, &lmax);
+        self.ty(&e_z, m1, m2, ml1)?;
+        // Steps under (Γ, a : S, f : Π(y:T[a/x]). W,
+        // ih : Π(y:T[a/x]). M[f y/z]) at M[sup(a, f)/z] — the same
+        // construction as the typing rule.
+        let e_a = D::push_entry(env, s1, dl1);
+        let a_var = D::local(&e_a, LocalVar(0));
+        // T[a/x] in (Γ, a): the positions are a *body* under the
+        // shape binder, so this is instantiation, not weakening.
+        let t_at_a = D::inst_ty(self, env, &e_a, t1, &[a_var])?;
+        let f_ty =
+            D::pi(self, &e_a, cl1, &lmax, &t_at_a, &D::weaken_ty(&e_a, &w_ty, 2))?;
+        let e_af =
+            D::push_entry(&e_a, &f_ty, &Level::max((*cl1).clone(), lmax.clone()));
+        let a_var2 = D::local(&e_af, LocalVar(1));
+        let t_at_a_af = D::inst_ty(self, env, &e_af, t1, &[a_var2])?;
+        let e_afy = D::push_entry(&e_af, &t_at_a_af, cl1);
+        let a_var3 = D::local(&e_afy, LocalVar(2));
+        let t_at_a_afy = D::inst_ty(self, env, &e_afy, t1, &[a_var3])?;
+        let f_y = D::app(
+            self,
+            &e_afy,
+            cl1,
+            &lmax,
+            &t_at_a_afy,
+            &D::weaken_ty(&e_afy, &w_ty, 4),
+            &D::local(&e_afy, LocalVar(1)),
+            &D::local(&e_afy, LocalVar(0)),
+        )?;
+        let ih_cod = D::inst_ty(self, env, &e_afy, m1, std::slice::from_ref(&f_y))?;
+        let ih_ty = D::pi(self, &e_af, cl1, ml1, &t_at_a_af, &ih_cod)?;
+        let e_step =
+            D::push_entry(&e_af, &ih_ty, &Level::max((*cl1).clone(), (*ml1).clone()));
+        let sup_af = D::sup_at(
+            self,
+            &e_af,
+            &w_ty,
+            2,
+            &D::local(&e_af, LocalVar(1)),
+            &D::local(&e_af, LocalVar(0)),
+        )?;
+        let step_ty =
+            D::inst_ty(self, env, &e_step, m1, &[D::weaken_tm(&e_step, &sup_af, 1)])?;
+        self.tm(&e_step, st1, st2, &step_ty, ml1)?;
+        self.tm_nee_c(env, n1, n2)?; // inferred W: forces S, T
+        Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimWf` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_wf(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimWf {
+                level: l1,
+                motive_level: ml1,
+                shape: s1,
+                arity: k1,
+                motive: m1,
+                step: st1,
+                scrut: n1,
+            },
+            TmView::ElimWf { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_wf is given its own arm")
+        };
+        self.lev_eq(ml1, ml2)?;
+        let wf = D::wf(self, env, l1, s1, k1)?;
+        let e_z = D::push_entry(env, &wf, l1);
+        self.ty(&e_z, m1, m2, ml1)?;
+        let (cs_ty, ih_ty, step_ty) =
+            D::wf_step_telescope(self, env, l1, ml1, s1, k1, m1)?;
+        let e_a = D::push_entry(env, s1, l1);
+        let e_cs = D::push_entry(&e_a, &cs_ty, l1);
+        let e_step = D::push_entry(&e_cs, &ih_ty, ml1);
+        self.tm(&e_step, st1, st2, &step_ty, ml1)?;
+        self.tm_nee_c(env, n1, n2)?; // inferred Wf: forces S, n
+        Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimIWf` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_i_wf(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimIWf {
+                level: l1,
+                idx_level: li1,
+                motive_level: ml1,
+                idx: x1,
+                shape: s1,
+                arity: k1,
+                out: o1,
+                child: c1,
+                motive: m1,
+                step: st1,
+                index: i1,
+                scrut: n1,
+            },
+            TmView::ElimIWf { motive_level: ml2, motive: m2, step: st2, scrut: n2, .. },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_i_wf is given its own arm")
+        };
+        self.lev_eq(ml1, ml2)?;
+        let sig = IWfSigC {
+            level: l1,
+            idx_level: li1,
+            idx: x1,
+            shape: s1,
+            arity: k1,
+            out: o1,
+            child: c1,
+        };
+        let (mot, cs_ty, ih_ty, step_ty) = D::iwf_telescope(self, env, &sig, ml1, m1)?;
+        let fl = Level::join((*l1).clone(), (*li1).clone());
+        // M in (Γ, j : I, z : IWf(…)(j)).
+        let e_j = D::push_entry(env, x1, li1);
+        let e_jz = D::push_entry(&e_j, &mot, &fl);
+        self.ty(&e_jz, m1, m2, ml1)?;
+        // The step in (Γ, a : S, cs, ih).
+        let e_a = D::push_entry(env, s1, l1);
+        let e_cs = D::push_entry(&e_a, &cs_ty, &fl);
+        let e_step = D::push_entry(&e_cs, &ih_ty, ml1);
+        self.tm(&e_step, st1, st2, &step_ty, ml1)?;
+        self.tm_nee_c(env, n1, n2)?; // inferred IWf: forced, not read
+        Ok((D::inst_ty(self, env, env, m1, &[i1.clone(), n1.clone()])?, (*ml1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `Out` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_out(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::Out { sig: g1, index: i1, scrut: n1 },
+            TmView::Out { scrut: n2, .. },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_out is given its own arm")
+        };
+        self.tm_nee_c(env, n1, n2)?; // inferred M: forced, not read
+        let ty = D::m_out_ty(self, env, g1, i1)?;
+        Ok((ty, Level::join((*g1.level).clone(), g1.family_level())))
+    }
+
+    /// [`Conv::tm_ne`] at two `J` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_j(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::J {
+                ty_level: al1,
+                motive_level: ml1,
+                ty: s1,
+                lhs: a1,
+                motive: m1,
+                case: c1,
+                rhs: r1,
+                proof: p1,
+            },
+            TmView::J { motive_level: ml2, motive: m2, case: c2, proof: p2, .. },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_j is given its own arm")
+        };
+        self.lev_eq(ml1, ml2)?;
+        // M scoped in (Γ, y : S, p : Id^l(S; a; y)), as in typing.rs.
+        let e_y = D::push_entry(env, s1, al1);
+        let p_ty = D::id(
+            self,
+            &e_y,
+            al1,
+            &D::weaken_ty(&e_y, s1, 1),
+            &D::weaken_tm(&e_y, a1, 1),
+            &D::local(&e_y, LocalVar(0)),
+        )?;
+        let e_yp = D::push_entry(&e_y, &p_ty, al1);
+        self.ty(&e_yp, m1, m2, ml1)?;
+        let refl_a = D::refl(self, env, al1, s1, a1)?;
+        let case_ty = D::inst_ty(self, env, env, m1, &[a1.clone(), refl_a])?;
+        self.tm(env, c1, c2, &case_ty, ml1)?;
+        self.tm_nee_c(env, p1, p2)?; // inferred Id(A; a; u): forces A, a, u
+        Ok((D::inst_ty(self, env, env, m1, &[r1.clone(), p1.clone()])?, (*ml1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `App` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::App { levels: ls1, fun: f1, arg: a1 },
+            TmView::App { levels: ls2, fun: f2, arg: a2 },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_app is given its own arm")
+        };
+        // Levels as the `Fst` arm below: compared when both sides
+        // store them, and otherwise the inferred Π's are the answer
+        // (`app@`, docs/app-by-head-type-design.md §4).
+        if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
+            self.lev_eq(dl1, dl2)?;
+            self.lev_eq(cl1, cl2)?;
+        }
+        // Typed application rule (extension; the mirror image of the
+        // ch. 06 note below its application rule). The paper compares
+        // the two stored `x:S.T` annotations and *ignores* the type
+        // inferred for the heads, "because we already know ν and ν'
+        // are well-typed so the type annotations must be
+        // equivalent". That well-typedness runs the other way just
+        // as well: each annotation converts with the Π inferred for
+        // its own head, the heads convert, and convertible neutrals
+        // infer convertible types (ch. 08) — so relating the two
+        // annotations to each other adds nothing on the well-typed
+        // inputs conversion presupposes. What it *costs* is the
+        // whole per-node price of a spine: at every application node
+        // the codomain annotation is the entire remaining Π, whose
+        // domains are themselves neutral applications with their own
+        // annotations, so one n-ary spine compared n annotation
+        // suffixes and recursed into each — the `ty_nf`/`ty_w` stacks
+        // and the tens of millions of type closures of
+        // issues/application-annotation-sharing-cost.md.
+        //
+        // So: compare the heads, read the Π they infer, compare the
+        // arguments at *its* domain and return *its* codomain. The
+        // inferred type is fully δ-reduced ([`Conv::tm_nee`]) and
+        // then driven to its head ([`Conv::delta_to_head_ty`]) —
+        // the 2026-08-27 attempt viewed it as it came, which is what
+        // refused the dependent fold/tabulate instances
+        // (issues/generated-term-oracle-controls-not-convertible.md).
+        // The stored annotations are ignored here exactly as the
+        // inferred type was before; the typing seam still checks
+        // every annotation against its head's type once, at the
+        // term's own check.
+        let (w, _) = self.tm_nee_c(env, f1, f2)?;
+        let w = self.delta_to_head_ty(env, w)?;
+        let TyView::Pi { dom_level, cod_level, dom, cod } = D::view_ty(self, env, &w)
+        else {
+            return Err(NC);
+        };
+        let (dom_level, cod_level) = (dom_level.clone(), cod_level.clone());
+        self.tm(env, a1, a2, &dom, &dom_level)?;
+        Ok((D::inst_ty(self, env, env, &cod, std::slice::from_ref(a1))?, cod_level))
+    }
+
+    /// [`Conv::tm_ne`] at two `Fst` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_fst(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::Fst { levels: ls1, pair: p1 },
+            TmView::Fst { levels: ls2, pair: p2 },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_fst is given its own arm")
+        };
+        // Both stored: the redundant cross-check the component
+        // spelling affords. Either side a checked spelling: no
+        // stored levels to compare, and the inferred Σ below is the
+        // answer either way.
+        if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
+            self.lev_eq(dl1, dl2)?;
+            self.lev_eq(cl1, cl2)?;
+        }
+        // Typed projection rule — the App arm's argument, verbatim:
+        // on well-typed inputs each stored Σ annotation converts with
+        // the Σ inferred for its own pair, so relating the two
+        // annotations to each other adds nothing, and costs the size
+        // of the remaining tuple type at *every* node of a projection
+        // chain (a Wf record's children tuple is exactly such a chain,
+        // and its annotations carry the whole shape).
+        let (w, _) = self.tm_nee_c(env, p1, p2)?;
+        let w = self.delta_to_head_ty(env, w)?;
+        let TyView::Sigma { fst_level, fst, .. } = D::view_ty(self, env, &w) else {
+            return Err(NC);
+        };
+        Ok((fst, fst_level.clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `Snd` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_snd(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::Snd { levels: ls1, pair: p1 },
+            TmView::Snd { levels: ls2, pair: p2 },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_snd is given its own arm")
+        };
+        if let (Some((dl1, cl1)), Some((dl2, cl2))) = (ls1, ls2) {
+            self.lev_eq(dl1, dl2)?;
+            self.lev_eq(cl1, cl2)?;
+        }
+        // As for `fst`: the inferred Σ, not the stored annotations.
+        let (w, _) = self.tm_nee_c(env, p1, p2)?;
+        let w = self.delta_to_head_ty(env, w)?;
+        let TyView::Sigma { fst_level, snd_level, fst, snd } = D::view_ty(self, env, &w)
+        else {
+            return Err(NC);
+        };
+        let (fst_level, snd_level) = (fst_level.clone(), snd_level.clone());
+        let fst_p = D::proj(self, env, true, &fst_level, &snd_level, &fst, &snd, p1)?;
+        Ok((D::inst_ty(self, env, env, &snd, std::slice::from_ref(&fst_p))?, snd_level))
+    }
+
+    /// [`Conv::tm_ne`] at two `UApp` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_u_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::UApp { levels: ls1, fun: f1 },
+            TmView::UApp { levels: ls2, fun: f2 },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_u_app is given its own arm")
+        };
+        let env = &env.with_layer(Layer::Meta);
+        let (w, _) = self.tm_nee_c(env, f1, f2)?;
+        let TyView::UPi { num_vars, level, body } = D::view_ty(self, env, &w) else {
+            return Err(NC);
+        };
+        if ls1.len() != ls2.len() || ls1.len() != num_vars as usize || ls1.is_empty()
+        {
+            return Err(NC);
+        }
+        for (x, y) in ls1.iter().zip(*ls2) {
+            self.lev_eq(x, y)?;
+        }
+        // Written vectors are outermost-first; instantiation wants
+        // innermost-first (as in reduce.rs).
+        let phi: Vec<Level> = ls1.iter().rev().cloned().collect();
+        let l = level.inst_at(&phi, 0);
+        Ok((D::inst_univ_ty(self, env, &body, &phi)?, l))
+    }
+
+    /// [`Conv::tm_ne`] at two `CtxApp` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_ctx_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::CtxApp { ctx: c1, fun: f1 },
+            TmView::CtxApp { ctx: c2, fun: f2 },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_ctx_app is given its own arm")
+        };
+        let env = &env.with_layer(Layer::Meta);
+        let (w, _) = self.tm_nee_c(env, f1, f2)?;
+        let TyView::CtxPi { level, body } = D::view_ty(self, env, &w) else {
+            return Err(NC);
+        };
+        let level = level.clone();
+        self.ctx(env, Layer::Prog, c1, c2)?;
+        Ok((D::inst_ctx_ty(self, env, &body, c1)?, level))
+    }
+
+    /// [`Conv::tm_ne`] at two `TyApp` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_ty_app(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::TyApp { arg: t1, fun: f1 },
+            TmView::TyApp { arg: t2, fun: f2 },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_ty_app is given its own arm")
+        };
+        let env = &env.with_layer(Layer::Meta);
+        let (w, _) = self.tm_nee_c(env, f1, f2)?;
+        let TyView::TyPi { ctx, arg_level, body_level, body } = D::view_ty(self, env, &w)
+        else {
+            return Err(NC);
+        };
+        let body_level = body_level.clone();
+        let e_d = env.in_ctx(ctx.clone(), Layer::Prog);
+        let (x, y) =
+            (D::embed_ty(&e_d, Rc::clone(t1)), D::embed_ty(&e_d, Rc::clone(t2)));
+        self.ty(&e_d, &x, &y, arg_level)?;
+        Ok((D::inst_tyarg_ty(self, env, &body, t1)?, body_level))
+    }
+
+    /// [`Conv::tm_ne`] at two `LetBoxTy` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_let_box_ty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::LetBoxTy {
+                motive_level: ml1,
+                code_level: cl1,
+                ctx: d1,
+                motive: m1,
+                body: b1,
+                scrut: n1,
+            },
+            TmView::LetBoxTy {
+                motive_level: ml2,
+                code_level: cl2,
+                ctx: d2,
+                motive: m2,
+                body: b2,
+                scrut: n2,
+            },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_let_box_ty is given its own arm")
+        };
+        let env = &env.with_layer(Layer::Meta);
+        self.lev_eq(ml1, ml2)?;
+        self.lev_eq(cl1, cl2)?;
+        self.ctx(env, Layer::Prog, d1, d2)?;
+        self.tm_nee_c(env, n1, n2)?; // inferred □(Δ ⊢ Ty l): ignored
+        let code_ty = D::code_ty(env, d1, cl1);
+        let e_x = D::push_entry(env, &code_ty, &Level::Zero);
+        self.ty(&e_x, m1, m2, ml1)?;
+        // Bodies under Ψ, U : Typ_c(Δ, l) at M[box U/x_T].
+        let e_u = env.push_global(GlobalBinding::Ty {
+            ctx: (*d1).clone(),
+            layer: Layer::Code,
+            level: (*cl1).clone(),
+        });
+        let box_u = D::box_ty(&e_u, Rc::new(gty(0, &d1.shift_global(1))));
+        let m_u = D::shift_global_ty(self, &e_u, m1, 1)?;
+        let body_ty = D::inst_ty(self, &e_u, &e_u, &m_u, std::slice::from_ref(&box_u))?;
+        // The bodies are under `Ψ, U`; their captured scopes are not.
+        let x = D::under_tele_tm(self, &e_u, b1, 0, 1)?;
+        let y = D::under_tele_tm(self, &e_u, b2, 0, 1)?;
+        self.tm(&e_u, &x, &y, &body_ty, ml1)?;
+        Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `LetBoxTm` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_let_box_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::LetBoxTm {
+                motive_level: ml1,
+                code_level: cl1,
+                ctx: d1,
+                ty: t1,
+                motive: m1,
+                body: b1,
+                scrut: n1,
+            },
+            TmView::LetBoxTm {
+                motive_level: ml2,
+                code_level: cl2,
+                ctx: d2,
+                ty: t2,
+                motive: m2,
+                body: b2,
+                scrut: n2,
+            },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_let_box_tm is given its own arm")
+        };
+        let env = &env.with_layer(Layer::Meta);
+        self.lev_eq(ml1, ml2)?;
+        self.lev_eq(cl1, cl2)?;
+        self.ctx(env, Layer::Prog, d1, d2)?;
+        let e_d = env.in_ctx((*d1).clone(), Layer::Prog);
+        let (x, y) =
+            (D::embed_ty(&e_d, Rc::clone(t1)), D::embed_ty(&e_d, Rc::clone(t2)));
+        self.ty(&e_d, &x, &y, cl1)?;
+        self.tm_nee_c(env, n1, n2)?; // inferred □(Δ ⊢ T @ l): ignored
+        let code_ty = D::code_tm(env, d1, t1, cl1);
+        let e_x = D::push_entry(env, &code_ty, &Level::Zero);
+        self.ty(&e_x, m1, m2, ml1)?;
+        // Bodies under Ψ, u : Trm_c(Δ ⊢ T @ l) at M[box u/x_t].
+        let e_u = env.push_global(GlobalBinding::Tm {
+            ctx: (*d1).clone(),
+            layer: Layer::Code,
+            ty: Rc::clone(t1),
+            level: (*cl1).clone(),
+            body: None,
+        });
+        let box_u = D::box_tm(&e_u, Rc::new(gtm(0, &d1.shift_global(1))));
+        let m_u = D::shift_global_ty(self, &e_u, m1, 1)?;
+        let body_ty = D::inst_ty(self, &e_u, &e_u, &m_u, std::slice::from_ref(&box_u))?;
+        let x = D::under_tele_tm(self, &e_u, b1, 0, 1)?;
+        let y = D::under_tele_tm(self, &e_u, b2, 0, 1)?;
+        self.tm(&e_u, &x, &y, &body_ty, ml1)?;
+        Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimCodeTy` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_code_ty(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimCodeTy {
+                ty_motive_level: al1,
+                tm_motive_level: al2,
+                motives: am,
+                branches: ab,
+                code_level: acl,
+                ctx: actx,
+                scrut: an,
+                rec: arec,
+            },
+            TmView::ElimCodeTy {
+                ty_motive_level: bl1,
+                tm_motive_level: bl2,
+                motives: bm,
+                branches: bb,
+                code_level: bcl,
+                ctx: bctx,
+                scrut: bn,
+                rec: brec,
+            },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_code_ty is given its own arm")
+        };
+        let env = &env.with_layer(Layer::Meta);
+        self.rec_ca(
+            env,
+            &RecSide {
+                l1: al1,
+                l2: al2,
+                motives: Rc::clone(am),
+                branches: Rc::clone(ab),
+                rec: arec.clone(),
+            },
+            &RecSide {
+                l1: bl1,
+                l2: bl2,
+                motives: Rc::clone(bm),
+                branches: Rc::clone(bb),
+                rec: brec.clone(),
+            },
+        )?;
+        self.lev_eq(acl, bcl)?;
+        self.ctx(env, Layer::Prog, actx, bctx)?;
+        // Blocked on box (U^δ): compared syntactically. Otherwise the
+        // scrutinees are neutral.
+        match (
+            D::box_ty_payload(self, env, an)?,
+            D::box_ty_payload(self, env, bn)?,
+        ) {
+            (Some(c1), Some(c2)) => match (&*c1, &*c2) {
+                (Type::GlobalTy { .. }, Type::GlobalTy { .. }) if c1 == c2 => {}
+                _ => return Err(NC),
+            },
+            (Some(_), None) | (None, Some(_)) => return Err(NC),
+            (None, None) => {
+                self.tm_nee_c(env, an, bn)?; // inferred □(Δ ⊢ Ty l): ignored
+            }
+        }
+        let t = D::inst_ty_motive(self, env, arec, &am.ty_motive, acl, actx, an)?;
+        Ok((t, (*al1).clone()))
+    }
+
+    /// [`Conv::tm_ne`] at two `ElimCodeTm` neutrals; out of line so that only this
+    /// arm's locals stand under its recursion (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn tm_ne_elim_code_tm(&mut self, env: &Env<'v>, va: &TmView<'_, 'v, D>, vb: &TmView<'_, 'v, D>) -> R<(D::TyC, Level)> {
+        let (
+            TmView::ElimCodeTm {
+                ty_motive_level: al1,
+                tm_motive_level: al2,
+                motives: am,
+                branches: ab,
+                code_level: acl,
+                ctx: actx,
+                ty: aty,
+                scrut: an,
+                rec: arec,
+            },
+            TmView::ElimCodeTm {
+                ty_motive_level: bl1,
+                tm_motive_level: bl2,
+                motives: bm,
+                branches: bb,
+                code_level: bcl,
+                ctx: bctx,
+                ty: bty,
+                scrut: bn,
+                rec: brec,
+            },
+        ) = (va, vb) else {
+            unreachable!("tm_ne_elim_code_tm is given its own arm")
+        };
+        let env = &env.with_layer(Layer::Meta);
+        self.rec_ca(
+            env,
+            &RecSide {
+                l1: al1,
+                l2: al2,
+                motives: Rc::clone(am),
+                branches: Rc::clone(ab),
+                rec: arec.clone(),
+            },
+            &RecSide {
+                l1: bl1,
+                l2: bl2,
+                motives: Rc::clone(bm),
+                branches: Rc::clone(bb),
+                rec: brec.clone(),
+            },
+        )?;
+        self.lev_eq(acl, bcl)?;
+        self.ctx(env, Layer::Prog, actx, bctx)?;
+        let e_d = env.in_ctx((*actx).clone(), Layer::Prog);
+        let (x, y) = (
+            D::embed_ty(&e_d, Rc::clone(aty)),
+            D::embed_ty(&e_d, Rc::clone(bty)),
+        );
+        self.ty(&e_d, &x, &y, &Level::succ((*acl).clone()))?;
+        match (
+            D::box_tm_payload(self, env, an)?,
+            D::box_tm_payload(self, env, bn)?,
+        ) {
+            (Some(c1), Some(c2)) => match (&*c1, &*c2) {
+                (Term::GlobalTm { .. }, Term::GlobalTm { .. }) if c1 == c2 => {}
+                _ => return Err(NC),
+            },
+            (Some(_), None) | (None, Some(_)) => return Err(NC),
+            (None, None) => {
+                self.tm_nee_c(env, an, bn)?; // inferred □(Δ ⊢ T @ l): ignored
+            }
+        }
+        // Conclusion at l₂ (the ch. 04 typing rule; the ch. 06 rule
+        // writes l₁, a typo).
+        let t = D::inst_tm_motive(
+            self,
+            env,
+            arec,
+            &am.tm_motive,
+            acl,
+            actx,
+            aty,
+            an,
+        )?;
+        Ok((t, (*al2).clone()))
     }
 
     // -- the C_A bundle for neutral recursors -------------------------------
@@ -2891,18 +3193,33 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
 
         // G_Typ G_Trm: the 65 branches, each at its instantiated motive
         // type under its telescope.
-        let branch_specs = rec::branch_specs(&a.motives, a.l1, a.l2, &env.gamma);
-        let ba = rec::branch_terms(&a.branches);
-        let bb = rec::branch_terms(&b.branches);
-        for (spec, (x, y)) in branch_specs.iter().zip(ba.into_iter().zip(bb)) {
+        for (spec, x, y) in branch_table(a, b, &env.gamma) {
             let e = D::push_spec(env, &spec.tele);
-            let x = D::embed_tm_at(&a.rec, &e, Rc::clone(x));
-            let y = D::embed_tm_at(&b.rec, &e, Rc::clone(y));
+            let x = D::embed_tm_at(&a.rec, &e, x);
+            let y = D::embed_tm_at(&b.rec, &e, y);
             let ty = D::embed_ty_at(&a.rec, &e, Rc::clone(&spec.ty));
             self.tm(&e, &x, &y, &ty, &spec.level)?;
         }
         Ok(())
     }
+}
+
+/// [`Conv::rec_ca`]'s 65 branch rows — the spec from the left side, and both
+/// sides' branch terms — on the heap. The tables are arrays of 65, and built
+/// in `rec_ca`'s own frame they made it the fattest frame in conversion,
+/// standing under every branch comparison's recursion; built here, the
+/// frame that holds them returns before the first comparison
+/// (docs/native-depth-budget-design.md §8).
+#[inline(never)]
+fn branch_table<'v, D: Dom<'v>>(
+    a: &RecSide<'_, 'v, D>,
+    b: &RecSide<'_, 'v, D>,
+    gamma: &LocalCtx,
+) -> Vec<(rec::BranchSpec, Rc<Term>, Rc<Term>)> {
+    let specs = rec::branch_specs(&a.motives, a.l1, a.l2, gamma);
+    let ba = rec::branch_terms(&a.branches);
+    let bb = rec::branch_terms(&b.branches);
+    specs.into_iter().zip(ba.into_iter().zip(bb)).map(|(spec, (x, y))| (spec, Rc::clone(x), Rc::clone(y))).collect()
 }
 
 impl<'v> Conv<'v, Values> {

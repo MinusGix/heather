@@ -127,7 +127,9 @@ refunds it.
 
 ## 4. The bound
 
-`NATIVE_DEPTH_LIMIT = 1024`.
+`NATIVE_DEPTH_LIMIT = 2048` since 2026-10-26 (§8). It was 1024, and the
+rest of this section is the argument that chose 1024 — kept because §8 moves
+the number by the same rule: double the bound only after halving the frame.
 
 The rail is 8 MiB — `RUST_MIN_STACK=8388608` in `scripts/test`, which is also a
 main thread's default, so it is what a `heather check` gets too. That leaves
@@ -148,7 +150,7 @@ workload needs, ≈ 2× under what the stack physically holds, ≈ 4 MiB of the
 than a tuning failure: at ≈ 4 KB of stack per re-entry there is only about one
 decade between "answers" and "aborts", and the way to widen it is to make the
 frame smaller, not to move the bound. That is `issues/eval-native-frame-size.md`,
-filed out of this round, and it is the same complaint
+filed out of this round (and done in §8), and it is the same complaint
 `issues/numeral-stack-depth.md` makes about a different walk.
 
 Against the workloads at 1024: the reproducer is refused, `lib/std` checks, the
@@ -210,8 +212,8 @@ oracle's step budget could not stop it (`SemanticOracle::whnf_type`, where
 the value machine had answered "stuck" and the reducer was only asked to spell
 it), because fuel counts steps and this was one step.
 
-The reducer now keeps its own account against the same
-`NATIVE_DEPTH_LIMIT`. It is private to `reduce.rs`: a `Frames` cell per public
+The reducer now keeps its own account, against its own bound
+`REDUCER_DEPTH_LIMIT` (equal to the shared one until §8 doubled that). It is private to `reduce.rs`: a `Frames` cell per public
 step, taken on entry to each recursive step and given back on the way out.
 Past the bound a step returns `None` upward, marks itself exhausted, and the
 public entry points answer `Err(OutOfFuel)`. So every answer given past
@@ -226,3 +228,54 @@ The account is per step and not shared with `Eval::depth`. The one place the
 reducer runs inside the machine, `elim^Trm`'s Δ-scoped annotation, can in
 principle stand on both budgets at once. That annotation is small syntax, the
 same argument §6 makes, and it is not what aborted.
+
+## 8. The frame (2026-10-26)
+
+`issues/eval-native-frame-size.md`. §4's margin was thin because a counted
+level was fat, and a level was fat for a reason optimization cannot remove:
+LLVM gives a function one frame for the union of its arms' locals, and the
+machine's recursion ran *through* its widest functions. `drive_from` had
+`step_elim` inlined, every β arm with it; `step_eval` built every former's
+value and every eliminator in one match; `fold_run` held the transducer and
+affine paths. A re-entry that needed one arm's locals stood on all of them.
+
+The rule the round applied, and the one to keep: **a function a counted
+recursion passes through is a dispatcher, and an arm that can re-enter has a
+function of its own.** Then what stands on the stack during a re-entry is the
+dispatchers' small frames and the one arm's, and an arm that never re-enters
+can be as wide as it likes, because its frame is popped before anything
+recurses.
+
+- **The machine.** `drive_from` is the loop and nothing else (`step_force`,
+  `step_apply`, `step_return` out of line, one `next` slot for every arm's
+  result). `step_elim` dispatches: `step_neutral` (the glued-fold unfolding,
+  which classifies the fold), `fire_nat_run`, `fire_nat_sync`,
+  `bit_fold_app` and the ih applications are the arms that re-enter;
+  `step_fire` keeps the β arms that never do. `step_eval` evaluates an
+  elimination's head and leaves the eliminator to `elim_of`; the other
+  formers are `step_intro`'s. Fold classification (`classify_step` →
+  `probe_step` → `probe_apply`) and `fold_run` → `fold_by_class` are split
+  the same way.
+- **Conversion**, which shares the account. `tm_ne` and `tm_nf` dispatch to
+  one function per arm (`tm_ne_app`, `tm_nf_nat`, …). `rec_ca` built its
+  65-row branch tables in its own frame, under every branch comparison; they
+  are built by `branch_table`, which returns first.
+- **The reducer** (§7) was not split: `step_term_frame` is one match over
+  every rule with the congruence calls inside it, and it still costs several
+  times a counted machine level. It keeps the old bound as
+  `REDUCER_DEPTH_LIMIT`; splitting it the same way (rules out of line, the
+  recursive congruence in a small frame) would let it share the new one (`issues/reducer-step-frame-size.md`).
+
+What it bought, as shapes (the issue log has the measurements): the
+value-nested chains — the `pow` chain through fold classification, the
+nested-scrutinee chain of §1, conversion's neutral spines — each cost under
+half of what a level of the fattest of them cost before, and conversion's
+code-recursor chain lost most of its frame. So 2048 levels stand on less of
+the 8 MiB rail than 1024 did, which is §4's margin kept while the bound
+doubled. The checking walk of `issues/numeral-stack-depth.md` is unchanged
+(a different walk; its probe did not move).
+
+The evaluator's chain is now measured where the checking walk's is:
+`stack/eval-nested-scrutinee` in `crates/kernel/benches/kernel/stack.rs`,
+which bisects §1's nested-scrutinee value on a thread of known size (small
+enough that the stack runs out before the budget does).

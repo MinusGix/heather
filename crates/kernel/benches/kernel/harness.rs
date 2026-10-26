@@ -265,7 +265,7 @@ impl Baseline {
     pub fn render(
         env: &[(String, String)],
         reports: &[Report],
-        probe: Option<&crate::stack::Probe>,
+        probes: &[crate::stack::Probe],
     ) -> String {
         let mut out = String::new();
         out.push_str(
@@ -285,7 +285,7 @@ impl Baseline {
                 let _ = writeln!(out, "slope\t{}\t{:.3}", r.name, s);
             }
         }
-        if let Some(p) = probe {
+        for p in probes {
             let _ = writeln!(out, "stack\t{}\t{}\t{}", p.name, p.stack_bytes, p.max_levels);
         }
         out
@@ -376,7 +376,7 @@ pub struct Diff {
 
 pub fn compare(
     reports: &[Report],
-    probe: Option<&crate::stack::Probe>,
+    probes: &[crate::stack::Probe],
     base: &Baseline,
     th: &Thresholds,
 ) -> Vec<Diff> {
@@ -431,7 +431,7 @@ pub fn compare(
     }
 
     // Stack: fewer levels in the same stack means fatter frames.
-    if let Some(p) = probe {
+    for p in probes {
         match base.stack(p.name, p.stack_bytes) {
             Some(b) if th.compare_stack => {
                 let ratio = p.max_levels as f64 / b as f64;
@@ -439,9 +439,9 @@ pub fn compare(
                     label: format!("{} depth", p.name),
                     verdict: if ratio < th.stack_regress { Verdict::Regressed } else { Verdict::Ok },
                     detail: format!(
-                        "{b} → {} levels in {} MiB ({:.0} B/level)",
+                        "{b} → {} levels in {} KiB ({:.0} B/level)",
                         p.max_levels,
-                        p.stack_bytes >> 20,
+                        p.stack_bytes >> 10,
                         p.bytes_per_level(),
                     ),
                 });

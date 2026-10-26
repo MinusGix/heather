@@ -64,10 +64,23 @@ pub struct OutOfFuel;
 /// a cost model — an answer given under it agrees with the answer the deeper
 /// stack gives. The value sits between what the deepest known good workload
 /// needs and what the 8 MiB rail (`RUST_MIN_STACK` in `scripts/test`)
-/// measurably holds — a narrower gap than it sounds, because a re-entry costs
-/// kilobytes of stack. Both ends are measured in the design doc, and moving
-/// this number without re-reading them will break one end or the other.
-pub const NATIVE_DEPTH_LIMIT: u32 = 1024;
+/// measurably holds. What a counted level costs is a property of the frames
+/// the recursion passes through, which are kept small on purpose (design
+/// §8: a function a counted recursion passes through is a dispatcher), so
+/// moving this number needs both the design doc's ends re-read and the
+/// `stack/eval-nested-scrutinee` probe re-run.
+pub const NATIVE_DEPTH_LIMIT: u32 = 2048;
+
+/// [`NATIVE_DEPTH_LIMIT`] for the small-step reducer's own account
+/// (`Frames`, docs/native-depth-budget-design.md §7).
+///
+/// Separate because the reducer's frame is separate: a counted step stands
+/// on `step_term_frame`, whose one match holds every rule's temporaries and
+/// costs several times what a counted evaluator or conversion level does
+/// since those were split (design §8). The reducer is not on the checking
+/// path's hot side — it spells, and it is the oracle's — so it keeps the
+/// bound its frame was measured at rather than holding the shared one back.
+pub const REDUCER_DEPTH_LIMIT: u32 = 1024;
 
 /// The native stack [`NATIVE_DEPTH_LIMIT`] was measured against, for a thread
 /// that runs the kernel. A thread with less aborts on a stack overflow where
@@ -346,7 +359,7 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Result<Opt
 /// it is blocked on first, so its recursion is as deep as the nesting of
 /// blocked heads, and fuel, which counts steps, never sees it: the first step
 /// of `x < pow(3, 5000)` stands on thousands of frames. Past
-/// [`NATIVE_DEPTH_LIMIT`] a step gives up; every `None` above it is then
+/// [`REDUCER_DEPTH_LIMIT`] a step gives up; every `None` above it is then
 /// discarded, and the step answers [`OutOfFuel`] rather than "no rule
 /// applies".
 #[derive(Default)]
@@ -358,7 +371,7 @@ struct Frames {
 impl Frames {
     fn enter(&self) -> bool {
         let depth = self.depth.get();
-        if depth >= NATIVE_DEPTH_LIMIT {
+        if depth >= REDUCER_DEPTH_LIMIT {
             self.exhausted.set(true);
             return false;
         }
