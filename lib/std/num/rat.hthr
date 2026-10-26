@@ -1540,6 +1540,36 @@ theorem Rat::abs_of_nonpos(self a: Rat, h: a <= 0): a.abs() ≈ -a {
     Rat::same_trans(Rat::same_sym(a.abs_neg()), (-a).abs_of_nonneg(neg))
 }
 
+// On one side of `x`, a point nearer `x` is no farther from it.
+theorem Rat::dist_le_of_below(self x, a, b: Rat, ab: a <= b, bx: b <= x): (b - x).abs() <= (a - x).abs() {
+    let ax: (a <= x) = Rat::le_trans(ab, bx);
+    let db = Rat::same_trans(b.abs_sub_comm(x), (x - b).abs_of_nonneg(Rat::sub_nonneg(x := x, y := b, h := bx)));
+    let da = Rat::same_trans(a.abs_sub_comm(x), (x - a).abs_of_nonneg(Rat::sub_nonneg(x := x, y := a, h := ax)));
+    Rat::le_respects(Rat::same_sym(db), Rat::same_sym(da), x.sub_le_sub_l(a, b, ab))
+}
+
+theorem Rat::dist_le_of_above(self x, a, b: Rat, xb: x <= b, ba: b <= a): (b - x).abs() <= (a - x).abs() {
+    let xa: (x <= a) = Rat::le_trans(xb, ba);
+    let db = (b - x).abs_of_nonneg(Rat::sub_nonneg(x := b, y := x, h := xb));
+    let da = (a - x).abs_of_nonneg(Rat::sub_nonneg(x := a, y := x, h := xa));
+    Rat::le_respects(Rat::same_sym(db), Rat::same_sym(da), x.sub_le_sub_r(b, a, ba))
+}
+
+// And at no greater distance it is the same point.
+theorem Rat::same_of_dist_below(self x, a, b: Rat, ab: a <= b, bx: b <= x, d: (a - x).abs() <= (b - x).abs()): a ≈ b {
+    let ax: (a <= x) = Rat::le_trans(ab, bx);
+    let db = Rat::same_trans(b.abs_sub_comm(x), (x - b).abs_of_nonneg(Rat::sub_nonneg(x := x, y := b, h := bx)));
+    let da = Rat::same_trans(a.abs_sub_comm(x), (x - a).abs_of_nonneg(Rat::sub_nonneg(x := x, y := a, h := ax)));
+    Rat::le_antisymm(ab, x.le_of_sub_le_sub_l(b, a, Rat::le_respects(da, db, d)))
+}
+
+theorem Rat::same_of_dist_above(self x, a, b: Rat, xb: x <= b, ba: b <= a, d: (a - x).abs() <= (b - x).abs()): a ≈ b {
+    let xa: (x <= a) = Rat::le_trans(xb, ba);
+    let db = (b - x).abs_of_nonneg(Rat::sub_nonneg(x := b, y := x, h := xb));
+    let da = (a - x).abs_of_nonneg(Rat::sub_nonneg(x := a, y := x, h := xa));
+    Rat::le_antisymm(x.le_of_sub_le_sub_r(a, b, Rat::le_respects(da, db, d)), ba)
+}
+
 theorem Rat::lt_of_add_lt_add_r(self x, y, z: Rat, h: x + z < y + z): x < y {
     match y.le_dec(x) as λ _ => x < y {
         Inl(le) => false_elim(Rat::not_le_of_lt(x := x + z, y := y + z, h := h)(y.add_le_mono_r(x, z, le))),
