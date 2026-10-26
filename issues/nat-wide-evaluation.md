@@ -45,3 +45,12 @@ exponential `ldiv`); fixing those makes the library respellings optional.
 (`claude/project-thread-vja39m`) already has `Nat::pow_sq` with
 `pow_sq_eq` and the quotient-width `Nat::ldiv_fuel` with
 `ldiv_fuel_bounded`, checked.
+
+## Log
+
+- 2026-10-26: after the kernel fixes (#185, #187) `pow(2, 1075)` evaluates,
+  but `pow(2, 2046)` and a full-width `ldiv` of a 1076-bit numerator still
+  stop, so `round_rat` at binary64 still does not. [[float-literal-entry]]
+  landed `Nat::pow_sq` (`pow_sq_eq`) and the quotient-width `ldiv_fuel`
+  (`ldiv_fuel_bounded`) and routes literals through windows instead;
+  `round_rat` itself is unchanged ([[float-round-rat-division-cost]]).

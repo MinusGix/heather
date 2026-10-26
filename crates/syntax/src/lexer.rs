@@ -741,6 +741,48 @@ mod tests {
         n.as_u64().expect("a numeral that fits in 64 bits")
     }
 
+    fn scaled(src: &str) -> (u64, i64, bool) {
+        let toks = lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        assert_eq!(toks.len(), 2, "{src}: one literal then Eof, got {toks:?}");
+        let TokKind::Scaled(lit) = &toks[0].kind else { panic!("{src}: not a scaled literal: {:?}", toks[0]) };
+        (lit.mant.as_u64().expect("a mantissa that fits in 64 bits"), lit.exp, lit.hex)
+    }
+
+    fn kinds(src: &str) -> Vec<TokKind> {
+        lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)).into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn decimal_and_hex_floats_lex_to_their_values() {
+        assert_eq!(scaled("1.5"), (15, -1, false));
+        assert_eq!(scaled("0.1"), (1, -1, false));
+        assert_eq!(scaled("1e-3"), (1, -3, false));
+        assert_eq!(scaled("1E+3"), (1, 3, false));
+        assert_eq!(scaled("12.345e-6"), (12345, -9, false));
+        assert_eq!(scaled("1_000.000_1"), (10000001, -4, false));
+        assert_eq!(scaled("0x1.8p3"), (0x18, -1, true));
+        assert_eq!(scaled("0x1p-1074"), (1, -1074, true));
+        assert_eq!(scaled("0xA.Bp0"), (0xAB, -4, true));
+    }
+
+    #[test]
+    fn a_point_needs_a_digit_after_it_to_start_a_fraction() {
+        // A method call, a range and a projection keep their meaning.
+        assert!(matches!(kinds("1.foo")[..], [TokKind::Num(_), TokKind::Dot, TokKind::Ident(_), TokKind::Eof]));
+        assert!(matches!(kinds("1..2")[0], TokKind::Num(_)));
+        // A hex point is a fraction only when a `p` exponent follows.
+        assert!(matches!(kinds("0xff.f")[..], [TokKind::Num(_), TokKind::Dot, TokKind::Ident(_), TokKind::Eof]));
+        assert_eq!(num("0xe"), 14);
+    }
+
+    #[test]
+    fn a_malformed_float_is_refused() {
+        assert!(refused("1e").contains("invalid digit `e`"));
+        assert!(refused("1.5e").contains("after the literal"));
+        assert!(refused("1.5x").contains("after the literal"));
+        assert!(refused("1e99999999999").contains("out of range"));
+    }
+
     fn refused(src: &str) -> String {
         match lex(src) {
             Ok(toks) => panic!("{src} lexed: {toks:?}"),
