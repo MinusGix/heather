@@ -354,7 +354,7 @@ pub(crate) fn retry_obligations(
             // domain (`first_then(Nil, 3)`), where the earlier one alone
             // would only fail.
             let waiting = |obligation: &&DeferredArg<'_>| obligation.fallback_infer && matches!(sols[obligation.slot], Sol::Withheld);
-            let literal = |obligation: &&DeferredArg<'_>| matches!(obligation.expr.kind, ExprKind::Num(_) | ExprKind::Char(_));
+            let literal = |obligation: &&DeferredArg<'_>| matches!(obligation.expr.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_));
             if allow_fallback
                 && blocked
                 && let Some(obligation) = deferred.iter().filter(waiting).find(literal).or_else(|| deferred.iter().find(waiting))

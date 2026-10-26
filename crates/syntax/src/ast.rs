@@ -1,6 +1,17 @@
 //! The surface AST. Names, not de Bruijn; nothing here is trusted.
 pub use heather_numeral::Numeral;
 
+/// The value of a decimal or hex float literal: `mant · base^exp`, with
+/// `base` 10 for a decimal spelling and 2 for a hex float. Like a numeral's
+/// token it holds the value, not the spelling: `1.50` and `15e-1` are the
+/// same literal.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScaledLit {
+    pub mant: Numeral,
+    pub exp: i64,
+    pub hex: bool,
+}
+
 /// Byte range into the source, for diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
@@ -903,6 +914,11 @@ pub enum ExprKind {
     Univ { level: u64 },
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(Numeral),
+    /// A numeral with a point or an exponent: `1.5`, `1e-3`, `0x1.8p3`
+    /// (docs/floating-point-design.md §15). At `Decimal`/`HexFloat` it is the
+    /// record of its parts; at another carrier it resolves `DecimalLiteral`
+    /// or `HexLiteral` the way a numeral resolves `Numeral`.
+    Scaled(ScaledLit),
     /// `'x'` — a character literal, carrying the scalar value the lexer read
     /// (docs/string-char-design.md §3). At `Char` it elaborates to
     /// `char::ofNat(code, decide)`; at another carrier it resolves

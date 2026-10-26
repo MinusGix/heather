@@ -963,6 +963,7 @@ fn encode_warnings(
             Lint::RedundantMatchMotive => 7,
             Lint::ManualListConstruction => 8,
             Lint::RecursionByMeasure => 9,
+            Lint::InexactLiteral => 10,
         });
         put_warning_string(out, &warning.msg, limits)?;
         put_span(out, warning.span);
@@ -1015,6 +1016,7 @@ fn decode_warnings(
             7 => Lint::RedundantMatchMotive,
             8 => Lint::ManualListConstruction,
             9 => Lint::RecursionByMeasure,
+            10 => Lint::InexactLiteral,
             _ => return Err(ModuleCacheError::Corrupt("module warning has an invalid lint tag")),
         };
         let msg = reader.string()?;

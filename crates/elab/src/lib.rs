@@ -1342,7 +1342,7 @@ impl application::ImplicitApplicationElab for Elaborator {
         // its carrier, and falls back to its own type (`Nat`, `Char`) when
         // nothing does: in `unsigned_le(9, b)` the width comes from `b`, so
         // `9` is a byte (docs/native-programs-read-like-programs-design.md S3).
-        let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Char(_));
+        let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_));
         application::ArgumentClass {
             checking_only: annotated_lambda || literal || self.is_checking_only(cx, argument),
             fallback_infer: annotated_lambda || literal || self.deferral_can_fall_back(cx, argument),
@@ -5436,6 +5436,7 @@ impl Elaborator {
             // `String`, and `CharLiteral` / `StringLiteral` at every other
             // carrier.
             ExprKind::Char(c) => self.elab_char_check(cx, *c, e, expected, lvl),
+            ExprKind::Scaled(lit) => self.elab_scaled_check(cx, lit, e, expected, lvl),
             ExprKind::Str(text) => self.elab_string_check(cx, text, e, expected, lvl),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
@@ -6638,6 +6639,7 @@ impl Elaborator {
             // the block contributes no term of its own, because a `let` is an
             // alias.
             ExprKind::Char(c) => self.elab_char_infer(cx, *c, e),
+            ExprKind::Scaled(lit) => self.elab_scaled_infer(cx, lit, e),
             ExprKind::Str(text) => self.elab_string_infer(cx, text, e),
             ExprKind::Block(block) => statements::infer_block(self, cx, block),
             ExprKind::RecordUpdate { base, fields } => {

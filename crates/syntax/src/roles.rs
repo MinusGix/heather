@@ -270,6 +270,7 @@ impl<'a> Walk<'a> {
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
+            | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)

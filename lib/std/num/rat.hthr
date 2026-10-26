@@ -82,6 +82,49 @@ fn Rat::ofInt(n: Int) → Rat { Rat(n, 1) }
 // client of `rat` writes numerals without importing `algebra`.
 instance Numeral<Rat> { ofNat := λ (n: Nat) => Rat::ofInt(OfNat(n)) }
 
+// ---------------------------------------------------------------------------
+// Literals with a point or an exponent (docs/floating-point-design.md §15):
+// `1.5` and `1e-3` are `Decimal`s, `0x1.8p3` a `HexFloat`, each its
+// mantissa and exponent as written. At another carrier a literal resolves
+// `DecimalLiteral` or `HexLiteral`, the way a numeral resolves `Numeral`; in
+// inference position it is the `Rat` it denotes.
+
+// `mant · base^exp`.
+fn Rat::scaled(base: Nat, bp: 1 <= base, mant: Nat, exp: Int) → Rat {
+    Rat((mant * Nat::pow(base, exp.pos_part())).int(), Nat::pow(base, exp.neg_part()))
+}
+
+record Decimal { mant: Nat, exp: Int }
+
+// The literal's parts as the elaborator writes them: the exponent is
+// `up - down`, one of them zero.
+fn Decimal::lit(mant, up, down: Nat) → Decimal { Decimal(mant, up.int() - down.int()) }
+
+fn Decimal::rat(self d: Decimal) → Rat { Rat::scaled(10, trivial, d.mant, d.exp) }
+
+record HexFloat { mant: Nat, exp: Int }
+
+fn HexFloat::lit(mant, up, down: Nat) → HexFloat { HexFloat(mant, up.int() - down.int()) }
+
+fn HexFloat::rat(self h: HexFloat) → Rat { Rat::scaled(2, trivial, h.mant, h.exp) }
+
+// A carrier of decimal literals. `exact` says whether the carrier holds the
+// literal's value; the elaborator runs it and warns when it says `False`.
+class DecimalLiteral<A> { ofDecimal: Decimal → A, exact: Decimal → Bool }
+
+// The `exact` bit of a rounded literal, which the elaborator compares
+// against: named here so a client needs no `import bool;` to be warned.
+fn Decimal::inexact() → Bool { False }
+
+// A carrier of hex float literals, which must be exact: `ofHex` takes a proof
+// of `Ok`, which the elaborator writes as `trivial`, so a hex float the
+// carrier cannot hold is refused.
+class HexLiteral<A> { Ok: HexFloat → Type, ofHex: (h: HexFloat) → Ok(h) → A }
+
+instance DecimalLiteral<Rat> { ofDecimal := Decimal::rat, exact := λ (_: Decimal) => True }
+
+instance HexLiteral<Rat> { Ok := λ (_: HexFloat) => True, ofHex := λ (h: HexFloat) (_: True) => h.rat() }
+
 fn Rat::add(self x, y: Rat) → Rat {
     Rat(x.num * y.den.int() + y.num * x.den.int(), x.den * y.den)
 }

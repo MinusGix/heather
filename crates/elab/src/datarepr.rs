@@ -1422,6 +1422,7 @@ pub(crate) fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>)
         ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::ArgSlot(_)

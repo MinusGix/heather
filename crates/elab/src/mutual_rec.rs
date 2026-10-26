@@ -1124,6 +1124,7 @@ impl<'a, 'g> Calls<'a, 'g> {
             other @ (ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
             | ExprKind::Num(_)
+            | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)

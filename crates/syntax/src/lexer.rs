@@ -2,12 +2,15 @@
 //! fixed punctuation set of the stage-1 grammar.
 
 use heather_numeral::Numeral;
-use crate::ast::Span;
+use crate::ast::{ScaledLit, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokKind {
     Ident(String),
     Num(Numeral),
+    /// `1.5`, `1e-3`, `0x1.8p3`: a numeral with a point or an exponent
+    /// (docs/floating-point-design.md §15), held as its value.
+    Scaled(ScaledLit),
     /// `'x'` — one Unicode scalar value (docs/string-char-design.md §3). The
     /// payload is Rust's `char`, which *is* the scalar-value type: the lexer
     /// refuses a surrogate escape, so nothing downstream has to re-check that
@@ -169,7 +172,7 @@ pub struct LexError {
 /// and `1_` are all refused with the offending character named. The
 /// value has no bound (docs/wide-numerals-design.md): a position that needs
 /// a machine integer refuses a larger numeral itself, where it knows why.
-fn lex_numeral(src: &str, start: usize) -> Result<(Numeral, usize), LexError> {
+fn lex_numeral(src: &str, start: usize) -> Result<(Lexed, usize), LexError> {
     let bytes = src.as_bytes();
     let (radix, name, mut i) = match (bytes[start], bytes.get(start + 1)) {
         (b'0', Some(b'x')) => (16u32, "hexadecimal", start + 2),
@@ -202,6 +205,9 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Numeral, usize), LexError> {
         if !(b.is_ascii_alphanumeric()) {
             break;
         }
+        if digits > 0 && exponent_marker(bytes, i, radix) {
+            break;
+        }
         let digit = match (b as char).to_digit(36) {
             Some(d) if d < radix => u64::from(d),
             _ => {
@@ -230,7 +236,100 @@ fn lex_numeral(src: &str, start: usize) -> Result<(Numeral, usize), LexError> {
             span: Span { start, end: digits_start },
         });
     }
-    Ok((value, i))
+    let scaled = (radix == 10 || radix == 16)
+        && ((bytes.get(i) == Some(&b'.') && fraction_follows(bytes, i, radix)) || exponent_marker(bytes, i, radix));
+    if !scaled {
+        return Ok((Lexed::Num(value), i));
+    }
+    // The fraction's digits extend the mantissa; each moves the point one
+    // digit, a decimal place or four bits.
+    let mut shift: i64 = 0;
+    if bytes.get(i) == Some(&b'.') {
+        i += 1;
+        let mut previous_was_separator = true;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'_' && !previous_was_separator && bytes.get(i + 1).is_some_and(|c| (*c as char).is_digit(radix)) {
+                previous_was_separator = true;
+                i += 1;
+                continue;
+            }
+            if exponent_marker(bytes, i, radix) {
+                break;
+            }
+            let Some(d) = (b as char).to_digit(radix) else { break };
+            value = value.mul_add(u64::from(radix), u64::from(d));
+            shift -= if radix == 16 { 4 } else { 1 };
+            previous_was_separator = false;
+            i += 1;
+        }
+    }
+    let mut exp: i64 = 0;
+    if exponent_marker(bytes, i, radix) {
+        i += 1;
+        let negative = bytes[i] == b'-';
+        if matches!(bytes[i], b'-' | b'+') {
+            i += 1;
+        }
+        let exp_start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_digit() || (bytes[i] == b'_' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit))) {
+            if bytes[i] != b'_' {
+                exp = exp.saturating_mul(10).saturating_add(i64::from(bytes[i] - b'0'));
+            }
+            i += 1;
+        }
+        if exp > i64::from(i32::MAX) {
+            return Err(LexError {
+                msg: format!("the exponent of `{}` is out of range", &src[start..i]),
+                span: Span { start: exp_start, end: i },
+            });
+        }
+        if negative {
+            exp = -exp;
+        }
+    }
+    if i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        return Err(LexError {
+            msg: format!("invalid character `{}` after the literal `{}`", bytes[i] as char, &src[start..i]),
+            span: Span { start: i, end: i + 1 },
+        });
+    }
+    Ok((Lexed::Scaled(ScaledLit { mant: value, exp: exp + shift, hex: radix == 16 }), i))
+}
+
+/// What a numeral lexed to: a whole number, or one with a point or an
+/// exponent.
+enum Lexed {
+    Num(Numeral),
+    Scaled(ScaledLit),
+}
+
+/// An exponent starts at `i`: `e`/`E` in a decimal numeral, `p`/`P` in a hex
+/// one, followed by a digit or a signed digit. Anything else is not one, so
+/// `1e` is still a bad digit and `1.e5` is not a literal.
+fn exponent_marker(bytes: &[u8], i: usize, radix: u32) -> bool {
+    let marker = match radix {
+        10 => matches!(bytes.get(i), Some(b'e' | b'E')),
+        16 => matches!(bytes.get(i), Some(b'p' | b'P')),
+        _ => false,
+    };
+    let digit_at = |j: usize| bytes.get(j).is_some_and(u8::is_ascii_digit);
+    marker && (digit_at(i + 1) || (matches!(bytes.get(i + 1), Some(b'+' | b'-')) && digit_at(i + 2)))
+}
+
+/// A point at `i` begins a fraction: a decimal point needs a digit after it
+/// (so `1.method()` and `1..2` keep their meaning), and a hex point needs hex
+/// digits and then a `p` exponent (so `0xff.f()` stays a method call).
+fn fraction_follows(bytes: &[u8], i: usize, radix: u32) -> bool {
+    let first = bytes.get(i + 1).is_some_and(|c| (*c as char).is_digit(radix));
+    if radix == 10 || !first {
+        return first;
+    }
+    let mut j = i + 1;
+    while j < bytes.len() && ((bytes[j] as char).is_digit(16) || bytes[j] == b'_') {
+        j += 1;
+    }
+    exponent_marker(bytes, j, 16)
 }
 
 /// One escape body, `i` pointing just past the `\`. Returns the scalar value
@@ -422,7 +521,11 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
         if c.is_ascii_digit() {
             let (n, end) = lex_numeral(src, start)?;
             i = end;
-            toks.push(Tok { kind: TokKind::Num(n), span: Span { start, end: i } });
+            let kind = match n {
+                Lexed::Num(n) => TokKind::Num(n),
+                Lexed::Scaled(s) => TokKind::Scaled(s),
+            };
+            toks.push(Tok { kind, span: Span { start, end: i } });
             continue;
         }
         // character and string literals (docs/string-char-design.md §3). One

@@ -75,7 +75,7 @@ pub(crate) fn expression_left_leaf_is_numeral(mut e: &Expr) -> bool {
     }
     // A character literal is as flexible as a numeral: `'\t' <= b` at a
     // byte takes its carrier from `b`, through `CharLiteral`.
-    matches!(e.kind, ExprKind::Num(_) | ExprKind::Char(_))
+    matches!(e.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_))
 }
 
 /// Read an expression as type syntax when its shape has that second reading.
@@ -216,6 +216,7 @@ pub(super) fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::TyLit(_)
@@ -398,6 +399,7 @@ fn replace_free_slots(e: &mut Expr, style: SlotStyle, next: &mut usize, excluded
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::TyLit(_)
@@ -469,6 +471,7 @@ mod count_holes_impl {
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
+            | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)
@@ -800,6 +803,7 @@ pub(super) fn for_each_child(e: &Expr, go: &mut impl FnMut(&Expr)) {
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::ArgSlot(_)

@@ -49,6 +49,10 @@ pub enum Lint {
     /// A `fn`'s recursive `match` reads its own parameter, so the `fn` is
     /// compiled by measure (issues/fn-recursion-means-the-function.md).
     RecursionByMeasure,
+    /// A decimal literal at a carrier that does not hold its value exactly
+    /// (`0.1` at a binary float), decided by the carrier's `DecimalLiteral`
+    /// instance (docs/floating-point-design.md §15).
+    InexactLiteral,
 }
 
 impl Lint {
@@ -65,6 +69,7 @@ impl Lint {
             Self::RedundantMatchMotive => "redundant-match-motive",
             Self::ManualListConstruction => "manual-list-construction",
             Self::RecursionByMeasure => "recursion-by-measure",
+            Self::InexactLiteral => "inexact-literal",
         }
     }
 }
@@ -280,6 +285,7 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::ArgSlot(_)
@@ -667,6 +673,7 @@ impl BinderUses {
             ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
             | ExprKind::Num(_)
+            | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)

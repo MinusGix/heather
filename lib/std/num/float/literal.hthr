@@ -33,6 +33,8 @@ import float;
 import round;
 import window;
 
+export rat::{Decimal, HexFloat, DecimalLiteral, HexLiteral};
+
 // ---------------------------------------------------------------------------
 // Past the largest float and the overflow threshold, every value rounds the
 // same way.
@@ -107,18 +109,6 @@ theorem Format::rounds_beyond(self F: Format, mode: Mode, y, x: Rat, yx: y <= x,
         NaN(_) => λ no => false_elim(no),
     }(hr)
 }
-
-// ---------------------------------------------------------------------------
-// The value.
-
-// `mant · base^exp`.
-fn Rat::scaled(base: Nat, bp: 1 <= base, mant: Nat, exp: Int) → Rat {
-    Rat((mant * Nat::pow(base, exp.pos_part())).int(), Nat::pow(base, exp.neg_part()))
-}
-
-record Decimal { mant: Nat, exp: Int }
-
-fn Decimal::rat(self d: Decimal) → Rat { Rat::scaled(10, trivial, d.mant, d.exp) }
 
 // ---------------------------------------------------------------------------
 // Where the window goes.
@@ -546,4 +536,18 @@ theorem Format::hex_exact_reflects(self F: Format, mant: Nat, exp: Int):
     Reflects((F.round_hex(NearestEven, mant, exp)).Denotes(Rat::scaled(2, trivial, mant, exp)), F.hex_exact(mant, exp))
 {
     Float::exact_scaled_reflects(F.round_hex(NearestEven, mant, exp), 2, trivial, mant, exp)
+}
+
+// ---------------------------------------------------------------------------
+// The literals at a float: a decimal rounds to nearest, ties to even, and is
+// inexact when the rounding is not its value; a hex float must be exact.
+
+instance(F: Format) DecimalLiteral<Float(F)> {
+    ofDecimal := λ (d: Decimal) => F.round_decimal(NearestEven, d),
+    exact := λ (d: Decimal) => F.decimal_exact(d),
+}
+
+instance(F: Format) HexLiteral<Float(F)> {
+    Ok := λ (h: HexFloat) => (F.hex_exact(h.mant, h.exp)).IsTrue(),
+    ofHex := λ (h: HexFloat) (_: (F.hex_exact(h.mant, h.exp)).IsTrue()) => F.round_hex(NearestEven, h.mant, h.exp),
 }

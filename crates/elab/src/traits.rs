@@ -810,6 +810,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         },
         Univ { level } => Univ { level: *level },
         Num(n) => Num(n.clone()),
+        Scaled(lit) => Scaled(lit.clone()),
         Char(c) => Char(*c),
         Str(text) => Str(text.clone()),
         ArgSlot(index) => ArgSlot(*index),

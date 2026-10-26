@@ -1239,6 +1239,9 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
                 w.string(&field.name); put_expr(w, &field.expr); put_span(w, field.span);
             });
         }
+        ExprKind::Scaled(lit) => {
+            w.byte(26); w.numeral(&lit.mant); w.u64(lit.exp as u64); w.bool(lit.hex);
+        }
     }
 }
 
@@ -1303,6 +1306,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
                     name: r.string()?, expr: get_expr(r)?, span: get_span(r)?,
                 }))?,
             },
+            26 => ExprKind::Scaled(heather_syntax::ScaledLit { mant: r.numeral()?, exp: r.u64()? as i64, hex: r.bool()? }),
             tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "expression", tag }),
         };
         Ok(Expr { kind, span })
