@@ -4,7 +4,7 @@ status: open
 labels: [frontend, syntax, elaboration, design, modules]
 area: language
 created: 2026-08-05
-updated: 2026-09-24
+updated: 2026-10-26
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 namespace
@@ -187,3 +187,4 @@ the prelude layer-2 round or the first file that wants two order kits.
 - 2026-09-24: 2026-09-24: Namespace round (#1a) chartered from the refactor's residue. Probe of the 80 remaining lib `@` sites (all BitVec) found [[receiver-with-unsolved-implicit-unbound]]: member lookup refuses any receiver whose type carries a meta (`R::mk().get()`, `Nil.len()`), with a false "declared below" hint. It joins the facade re-export of members, `x.f()` vs a bare `f` in scope, [[type-member-missing-self-diagnostic]] and [[receiver-member-ih-generalization]].
 - 2026-09-24: 2026-09-24: #1a design: docs/receiver-member-resolution-design.md. It covers owner-by-head for uninferable receivers, dropping ambient readings that cannot take the receiver (a non-function local like `let len = …`, or a disjoint subject carrier), the declared-below and missing-self diagnostics, and the lib `@` sweep. The facade re-export of members already works (`Cursor::start` through `import parser`).
 - 2026-09-24: 2026-09-24: #1a landed (docs/receiver-member-resolution-design.md §7): an uninferable receiver names its owner by its head; ambient readings that cannot take the receiver no longer block the member; the declared-below and missing-self diagnostics are fixed; lib `@` lines went 90 → 42; calc_text's `spell` is a member. Residue: [[nested-uninferable-argument-under-checking]] (chains headed by an uninferable call) and [[method-chain-receiver-reinference]] (2^depth).
+- 2026-10-26: The non-receiver reach inside an owner is filed as [[owner-sibling-names]] (docs/sections-design.md §6): inside a member of `T`, `T`'s members are bare-name candidates at ambiguity rank, no precedence. The library writes `Owner::x` inside `Owner`'s own members 3,409 times. Owner blocks were weighed and not recommended (doc §5.4): owners stay on heads for grep.
