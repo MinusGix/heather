@@ -1380,7 +1380,8 @@ impl Tc {
     /// **descriptions** (`docs/intro-by-type-design.md` §3.3).
     ///
     /// The reflexivity shortcut is structural `==` on [`ITy`]: on two `Syn`s
-    /// it is the α-test it has always been, and two equal selections are the
+    /// it is the α-test it has always been (in the shared size of the two
+    /// sides, `syntax_eq.rs`), and two equal selections are the
     /// same type by Determinacy. A query with a selection on either side
     /// skips the cross-head memo — the memo's bucket key is built from a
     /// `Type`'s outer constructor and anchor, a selection has neither, and

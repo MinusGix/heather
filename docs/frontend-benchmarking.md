@@ -254,7 +254,7 @@ loads, which is the honest width of an absolute time here.
 | `rewrite/let-nary` | three lets `xᵢ = f(xᵢ₋₁, …)` of arity *n*, rewritten to `x₀` (mengine `rewrite_nm`). **Lower bound linear** in n·m | debt: tree-sized in elaboration |
 | `let/fan` | *k* lets each using the last twice, as a `fn` body. **Lower bound linear** | met |
 | `let/dep` | `fan` with an unused `refl` proof let per link. **Lower bound linear** | met (it was above quadratic while each unused value was discarded one binder deeper) |
-| `let/stmt` | `let-addr0`'s chain stated equal to itself, by `refl`. **Lower bound linear** | debt: 2^k (two equal DAGs compared as trees) |
+| `let/stmt` | `let-addr0`'s chain stated equal to itself, by `refl`. **Lower bound linear** | met (was 2^k: two equal DAGs compared as trees) |
 | `inductive/isa-declaration` | an *n*-form instruction type with register/immediate/memory operand fields, declared. **Lower bound linear** | met (~1.0) |
 | `inductive/isa-constructor-use` | four constructor values of that type. **Lower bound linear** (the declaration) | debt: ~1.7, Θ(n²) elaboration per mention |
 | `inductive/isa-opcode-match` | an *n*-arm `match` into `Nat`, payloads ignored. **Lower bound linear** | debt: ~1.6, mostly elaboration |
@@ -521,13 +521,17 @@ absorbing.
 `issues/proof-let-substitution-cost.md`. Every one has a **linear lower
 bound**, so on these families the bands are a record of debt rather than of
 a design's claim: a slope above 1 is the distance to the lower bound, and the
-round that closes it re-records the band from below. Only `let/fan` sits at
-its lower bound today, since the kernel's typing memo.
+round that closes it re-records the band from below. `let/fan` sits at its
+lower bound since the kernel's typing memo, `let/dep` since unused values
+are discarded at the block's depth, and `let/stmt` since `==` on terms
+compares a pair of shared nodes once
+(`issues/kernel-equality-walks-dags-as-trees.md`), which re-swept it over
+32..256.
 
 Three things differ from the older families:
 
 - **Some are exponential.** A log-log fit of 2^k is not a constant, so the
-  band of `rewrite/let-addr0` and `let/stmt` is the fit over exactly the
+  band of `rewrite/let-addr0` (and `let/stmt`'s, before its fix) is the fit over exactly the
   sizes swept, and is wider than ±0.35, because the steeper the curve, the
   more a fixed cost at the small end moves the fit. Their band's job is to
   notice the fix, which drops the slope to about 1.
@@ -541,7 +545,8 @@ Three things differ from the older families:
   the gate dominates `rewrite/fa` and `rewrite/repeat-mod` (consistent with n
   nested `J`s, each over an O(n) motive), elaboration dominates
   `rewrite/let-nary` (and dominated `let/dep` until its fix), and `let/stmt`
-  splits about evenly between the gate and elaboration. The issue's log has the numbers.
+  split about evenly between the gate and elaboration while it was 2^k. The
+  issue's log has the numbers.
 
 Two Heather limits shape the fixtures. `rewrite` rewrites one instance per
 equation (`docs/equation-rewrite-design.md` §6.1), so a family is *n*
