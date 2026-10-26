@@ -248,6 +248,13 @@ loads, which is the honest width of an absolute time here.
 | `forded/declared-index-tags` | form A swept along the *index* type's constructor count | slope 2.62 (unmoved by two rounds — see below) |
 | `forded/declared-index-branching` | the same at a **branching** index constructor | slope 1.57 (was 1.53) |
 | `meta/nested-inference` | *d* nested implicit instantiations, built and projected back | slope 1.84 (1.84–1.90) |
+| `rewrite/fa` | `g(f^n(a)) = g(a)` by *n* `rewrite`s with `h: f(x) = x` (mengine `rewrite_fa`). **Lower bound linear** | debt: about n² (n rewrites of an O(n) goal) |
+| `rewrite/repeat-mod` | `(…(b mod p)…) mod p = b mod p` by *n* − 1 rewrites, `mod` opaque (mengine `repeat_mod`). **Lower bound linear** | debt: about n² |
+| `rewrite/let-addr0` | a *k*-let chain `vᵢ = vᵢ₋₁ + vᵢ₋₁ + 0`, every `+ 0` rewritten away (mengine `addr0_let_in`). **Lower bound linear** | debt: 2^k |
+| `rewrite/let-nary` | three lets `xᵢ = f(xᵢ₋₁, …)` of arity *n*, rewritten to `x₀` (mengine `rewrite_nm`). **Lower bound linear** in n·m | debt: tree-sized in elaboration |
+| `let/fan` | *k* lets each using the last twice, as a `fn` body. **Lower bound linear** | met |
+| `let/dep` | `fan` with an unused `refl` proof let per link. **Lower bound linear** | debt: above quadratic, mostly elaboration |
+| `let/stmt` | `let-addr0`'s chain stated equal to itself, by `refl`. **Lower bound linear** | debt: 2^k (two equal DAGs compared as trees) |
 
 The spread is the point of the noise warning above, and it is also the
 argument for the slope being the headline: the times moved by up to 1.5×
@@ -495,3 +502,41 @@ belongs on a quiet machine. So: bands updated in the fixture sources
 **1.90–2.60**), baseline file untouched, `indexed/arms` still `untracked`
 until someone re-records. That is the deviation this round is flagging, not
 absorbing.
+
+## The rewriting and let fan-out families (2026-10-26)
+
+`issues/tactic-scaling-bench-families.md` added seven families
+(`fixtures/rewriting.rs`): mengine's four rewriting benchmarks
+(`docs/mengine-survey.md` §7) and three let chains from
+`issues/proof-let-substitution-cost.md`. Every one has a **linear lower
+bound**, so on these families the bands are a record of debt rather than of
+a design's claim: a slope above 1 is the distance to the lower bound, and the
+round that closes it re-records the band from below. Only `let/fan` sits at
+its lower bound today, since the kernel's typing memo.
+
+Three things differ from the older families:
+
+- **Some are exponential.** A log-log fit of 2^k is not a constant, so the
+  band of `rewrite/let-addr0` and `let/stmt` is the fit over exactly the
+  sizes swept, and is wider than ±0.35, because the steeper the curve, the
+  more a fixed cost at the small end moves the fit. Their band's job is to
+  notice the fix, which drops the slope to about 1.
+- **The bands were recorded on a 4-core cloud box** (four runs each; the
+  band is the mean ±0.35 or the four-run range, whichever is wider), and only
+  their `slope` rows are in the baseline. Times recorded there would sit
+  under another machine's `env` rows, so the `case` and `split` rows wait for
+  the next `--save` on the recording machine, and until then the cases read
+  `untracked`.
+- **The phase split is the point.** Where the cost sits differs by family:
+  the gate dominates `rewrite/fa` and `rewrite/repeat-mod` (consistent with n
+  nested `J`s, each over an O(n) motive), elaboration dominates
+  `rewrite/let-nary` and `let/dep`, and `let/stmt` splits about evenly
+  between the gate and elaboration. The issue's log has the numbers.
+
+Two Heather limits shape the fixtures. `rewrite` rewrites one instance per
+equation (`docs/equation-rewrite-design.md` §6.1), so a family is *n*
+equations in one `rewrite(h, …, h, refl)`. And the goal `f(f(…f(a)))` is *n*
+nested calls, which at n = 256 exceeds the elaborator's expression depth
+limit (512), so `rewrite/fa` and `rewrite/repeat-mod` stop at 128. And the opaque operations
+and lemmas are theorem parameters, so that no conversion can close a goal
+the rewrite was meant to close.

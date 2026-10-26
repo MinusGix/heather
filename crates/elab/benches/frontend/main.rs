@@ -290,6 +290,13 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         ("forded/declared-index-branching", "the same at a branching index — §14.9's cliff"),
         ("indexed/arms", "route 1 with n constructors — §10.3's per-occurrence family"),
         ("meta/nested-inference", "d nested implicit instantiations"),
+        ("rewrite/fa", "g(f^n(a)) = g(a) by n rewrites — mengine rewrite_fa"),
+        ("rewrite/repeat-mod", "(…(b mod p)…) mod p by n−1 rewrites — mengine repeat_mod"),
+        ("rewrite/let-addr0", "every + 0 out of a k-let chain — mengine addr0_let_in"),
+        ("rewrite/let-nary", "3 lets of arity n rewritten away — mengine rewrite_nm"),
+        ("let/fan", "k lets each using the last twice"),
+        ("let/dep", "fan with an unused refl proof let per link"),
+        ("let/stmt", "a k-let chain equal to itself by refl"),
     ]
 }
 

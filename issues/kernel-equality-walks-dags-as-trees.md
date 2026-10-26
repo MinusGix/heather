@@ -54,3 +54,7 @@ Whether any library item pays for it today is not measured.
   adds one.
 - `scripts/bench --check` shows no regression on the conversion and checking
   rows: the shortcut is on every query's path.
+
+## Log
+
+- 2026-10-26: `stmt` is now the frontend bench family `let/stmt` (k = 14..20, [[tactic-scaling-bench-families]]). Its elaboration is 2^k as well, about half the time at every size (probe-run split at k = 20: elab 46 ms, kernel 45 ms). Not attributed; the elaborator's own `refl` check reaches the same shortcut, so a fix here may move both halves.

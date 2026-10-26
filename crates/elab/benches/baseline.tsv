@@ -175,3 +175,10 @@ slope	forded/declared-index-tags	1.077
 slope	forded/declared-index-branching	1.313
 slope	indexed/arms	1.953
 slope	meta/nested-inference	1.797
+slope	rewrite/fa	1.440
+slope	rewrite/repeat-mod	1.820
+slope	rewrite/let-addr0	5.600
+slope	rewrite/let-nary	2.045
+slope	let/fan	1.103
+slope	let/dep	2.553
+slope	let/stmt	9.578
