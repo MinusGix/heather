@@ -3,9 +3,9 @@ title: Compile every structured region as a leaf of the effectful source
 status: open
 labels: [native,x86,proofs]
 area: heather-in-heather
-milestone: [hih-pl-source]
+milestone: [hih-pl-source, hih-tools]
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 `Stmt::emit` (`lib/native/native_compile.hthr`) compiles a `Compute` leaf
@@ -32,3 +32,7 @@ while proving S3.2 ([[native-effect-source-compiler]], 2026-10-25).
 
 - **[[function-ir-verified-lowering]]** owns the lowerings and their
   theorems; this issue only plugs them into the statement induction.
+
+## Log
+
+- 2026-10-26: Re-scoped by `docs/native-real-programs-plan.md` (§3.4, round 4): compile every region form memory-resident, as S3.2 compiles statements (each node loads its operands from slots, computes, stores), with no register-pool limit; S4's `Region::lower` stays as the better lowering where a dataflow leaf fits. `Call` regions stay refused (the builder, [[native-source-builder]], inlines). Done when `tr`'s byte map lowers as a bounded FunctionIR loop and a 40-node leaf compiles. Probe: a 15-node leaf is refused today with no reason given.

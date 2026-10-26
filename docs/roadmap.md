@@ -85,6 +85,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item (syscalls and proved pieces included) and one loop rule are sound once, probed for elaborator cost. | hih-program-logic |
 | `hih-pl-source` | heather-in-heather | open | An effectful source denotes Linux trees, compiles to x86-64 by a Heather function, and the compiler's correctness theorem is proved once. | hih-program-logic |
 | `hih-pl-first-program` | heather-in-heather | open | `tr` is built through the verified compiler with no per-program proof (the per-function certificate path was retired in B2, 2026-10-24). | hih-program-logic |
+| `hih-tools` | heather-in-heather | open | A dozen small GNU-compatible tools (`echo`, `cat FILE…`, `head -n`, `tr`, `wc`, `grep -F`, `cmp`, `sort` and the rest of `docs/native-real-programs-plan.md` §2) are built by `write-elf` through the verified compiler with no per-program proof, and pass tests against GNU under `LC_ALL=C`. | hih-program-logic |
 | `hih-memory` | heather-in-heather | open | A native program allocates on the heap, under a byte-addressed memory model whose certificates bound and track the allocation. |  |
 | `hih-memory-model` | heather-in-heather | open | Byte-addressed memory with explicit access outcomes is a library model that the native machine model and the program logic both use. | hih-memory |
 | `hih-alloc-metering` | heather-in-heather | open | Certificates state an allocation bound, over a platform model that meters allocation. | hih-memory |
@@ -230,7 +231,8 @@ and above all a way to track allocations.
 **Milestones.** `hih-program-logic` first, since every later program is
 written on it (submilestones `hih-pl-spec`, `hih-pl-wp`, `hih-pl-source`,
 `hih-pl-first-program`; it waits on `it-core` and burns the hand-proved
-process stack first), then `hih-memory` (submilestones `hih-memory-model`,
+process stack first; its `hih-tools` is where native programs become
+real tools, `docs/native-real-programs-plan.md`), then `hih-memory` (submilestones `hih-memory-model`,
 `hih-alloc-metering`, `hih-first-alloc`). `hih-passes` can proceed in parallel
 because it is meta-layer work. `hih-self` comes after both
 ([self-hosting-first-component](../issues/self-hosting-first-component.md)).
@@ -583,3 +585,7 @@ separate machines do not slow each other's tests.
 - 2026-10-24: `hih-km-runs` done (`lib/kernel_model/kernel_runs.hthr`): the
   affine and synchronous run folds join the unary fold in the model with
   pairs, projections and runs (`docs/kernel-model-design.md` §7).
+- 2026-10-26: `hih-tools` added under `hih-program-logic`, at Minus's request
+  to get from cat to real programs. It is the plan in
+  `docs/native-real-programs-plan.md`: bytes, compile capacity, a program
+  builder, then argv, `open`, data size and decimal I/O, then the tool suite.

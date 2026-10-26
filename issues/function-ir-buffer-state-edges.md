@@ -6,7 +6,7 @@ area: heather-in-heather
 milestone: [hih-pl-source, hih-memory-model]
 blocked-by: [byte-memory-access-model, wp-proved-memory-contracts]
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-26
 ---
 
 Internal effects belong in FunctionIR as state edges, never as tree events
@@ -38,3 +38,4 @@ Linux read's answer fills a buffer value, and a write's argument reads one.
 ## Log
 
 - 2026-10-22: The buffer view these edges need exists: `DataRegion::buffer_view` (`lib/std/os/linux/linux_x86_64_byte_memory.hthr`, [[memory-model-machine-instances]]) relates a buffer's cells to a data region of an `X86Profile`, loads and stores at a named index, sound against the profile's `LinuxIo`.
+- 2026-10-26: [[native-source-bytes]] (round 1 of `docs/native-real-programs-plan.md`) builds this issue's nodes and `eval` first, compiled memory-resident by the statement compiler under S3.2's `Target::Placed`. That needs no `Proved` footprint, so its blocked-by on [[wp-proved-memory-contracts]] does not apply to it. What stays here is S4's register lowering of the nodes, with its footprint.
