@@ -180,5 +180,5 @@ slope	rewrite/repeat-mod	1.820
 slope	rewrite/let-addr0	5.600
 slope	rewrite/let-nary	2.045
 slope	let/fan	1.103
-slope	let/dep	2.553
+slope	let/dep	1.098
 slope	let/stmt	9.578

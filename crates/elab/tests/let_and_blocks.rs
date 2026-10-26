@@ -443,7 +443,7 @@ fn an_unused_let_value_is_checked_at_every_axis() {
 }
 
 /// How the value reaches the kernel: an unused value is discarded around the
-/// block as `(λ _: T. body)(v)`, which changes no meaning — the function
+/// block as `(λ _: T. λ b: B. b)(v)(body)`, which changes no meaning — the function
 /// still computes, at a literal and at a neutral argument — while a used
 /// `let` keeps the term it always had, the value inlined at the use and no
 /// redex added.
@@ -457,9 +457,13 @@ fn a_discarded_value_changes_no_term_a_use_reaches() {
     let (plain, ..) = last_body(&elab("fn f() -> Nat { 1 }"));
     assert!(used == plain, "a used `let` must not add a redex");
     let (unused, ..) = last_body(&elab("fn f() -> Nat { let x = 1; 0 }"));
+    let (zero, ..) = last_body(&elab("fn f() -> Nat { 0 }"));
     assert!(
-        matches!(&unused, Term::App { fun, arg, .. } if matches!(**fun, Term::Lam { .. }) && **arg == plain),
-        "an unused value is discarded around the body"
+        matches!(&unused, Term::App { fun, arg, .. }
+            if **arg == zero
+                && matches!(&**fun, Term::App { fun, arg, .. }
+                    if **arg == plain && matches!(**fun, Term::Lam { .. }))),
+        "an unused value is discarded around the body, which stays unshifted"
     );
 }
 
@@ -548,12 +552,15 @@ fn a_shared_let_chain_stays_shared_under_binders() {
 /// the chains above check in gate queries linear in `k` where they were
 /// 2^k. Four shapes: the plain chain (`fan`), the chain under one `λ`, a
 /// binder between every link, and the transparent shape whose proof `let`
-/// needs the chain's value (`refl : sₖ = mix(sₖ₋₁, sₖ₋₁)`). Then the
-/// issue's `dep`, a proof `let` at every link, which ran out of fuel at
-/// k = 16: it checks. It is not linear: each unused proof is checked around
-/// the rest of the block under a binder of its own
-/// (`docs/let-and-blocks-design.md` §11), so the chain reaches the gate once
-/// per depth as a separately shifted copy, each judged once.
+/// needs the chain's value (`refl : sₖ = mix(sₖ₋₁, sₖ₋₁)`). And the
+/// issue's `dep`, a proof `let` at every link, none used, which ran out of
+/// fuel at k = 16 and was then quadratic in the gate and worse in
+/// elaboration: each unused proof was discarded around the rest of the
+/// block under a binder of its own, so the body was shifted once per proof
+/// and the chain reached the gate at `k` depths
+/// (`issues/discarded-let-values-nest-binders.md`). Every discarded value
+/// now stays at the block's depth (`docs/let-and-blocks-design.md` §11), so
+/// `dep` is linear in gate queries and in elaboration's substitution work.
 #[test]
 fn a_shared_let_chain_is_checked_once_per_link() {
     use heather_kernel::stats as kstats;
@@ -612,12 +619,22 @@ fn a_shared_let_chain_is_checked_once_per_link() {
         ("under", under),
         ("interleaved", interleaved),
         ("transparent", transparent),
+        ("dep", dep),
     ] {
         let (q16, hits) = gate(&src(16));
         let (q32, _) = gate(&src(32));
         assert!(hits >= 16, "{shape}: {hits} memo hits for 16 links");
         assert!(q32 < 3 * q16, "{shape}: gate queries grew {q16} → {q32} for k = 16 → 32");
     }
-    let (q, _) = gate(&dep(16));
-    assert!(q < 1 << 12, "dep at k = 16 took {q} gate queries");
+    /// Elaboration's local substitution node visits, under a gate that
+    /// admits everything.
+    fn elaboration(src: &str) -> u64 {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_gate(std::sync::Arc::new(AdmitAll));
+        let before = kstats::snapshot();
+        e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+        kstats::snapshot().since(&before).local_subst_nodes
+    }
+    let (e16, e32) = (elaboration(&dep(16)), elaboration(&dep(32)));
+    assert!(e32 < 3 * e16, "dep: elaboration's shifts grew {e16} → {e32} for k = 16 → 32");
 }

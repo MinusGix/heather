@@ -237,9 +237,11 @@ fn let_fan() -> Family {
 /// `dep`: `fan` with a transparent proof `let pᵢ: (sᵢ = mix(sᵢ₋₁, sᵢ₋₁)) =
 /// refl` after every link, none of them used.
 ///
-/// **Lower bound: linear in k.** Quadratic today: each unused proof let is
-/// checked around the rest of the block under a binder of its own, so the
-/// chain reaches the gate at k depths ([[discarded-let-values-nest-binders]]).
+/// **Lower bound: linear in k.** Every unused proof let is discarded at the
+/// block's own depth, so the chain reaches the gate once; it was quadratic in
+/// the gate and worse in elaboration while each was discarded around the
+/// rest of the block under a binder of its own
+/// ([[discarded-let-values-nest-binders]]).
 fn let_dep() -> Family {
     let src = |k: u64| {
         format!("{MIX}fn chain(a: Nat) -> Nat {{\n{}    s{k}\n}}\n", mix_links(k, true))
@@ -248,12 +250,11 @@ fn let_dep() -> Family {
         name: "let/dep",
         what: "fan with an unused refl proof let per link (lower bound: linear)",
         unit: "lets",
-        // Recorded, not claimed: 2.55 over 8..64 (four runs, 2.53-2.59 on the
-        // cloud box, 2026-10-26), rising with size. The gate is the quadratic
-        // the issue names, but ~90% is elaboration, which grows faster still
-        // (×6.7 from 32 to 64).
-        expect_slope: Some((2.20, 2.90)),
-        cases: sweep("let/dep", &[8, 16, 32, 64], src),
+        // Recorded, not claimed: 1.10 over 32..256 (four runs, 1.05-1.15 on the
+        // cloud box, 2026-10-26): the lower bound, met. It was 2.55 over 8..64
+        // and rising before the discarded values stopped nesting.
+        expect_slope: Some((0.75, 1.45)),
+        cases: sweep("let/dep", &[32, 64, 128, 256], src),
     }
 }
 
