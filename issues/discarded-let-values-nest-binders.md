@@ -41,3 +41,7 @@ at the end is linear (148 / 276 / 532). Before the typing memo, `dep` was
   (`crates/elab/tests/let_and_blocks.rs::a_shared_let_chain_is_checked_once_per_link`
   tightens from "checks" to linear), with the unused-value refusals of
   [[unused-let-value-unchecked]] still refused.
+
+## Log
+
+- 2026-10-26: The `dep` family is now the frontend bench family `let/dep` ([[tactic-scaling-bench-families]]). Its time is about 90% elaboration, which grows faster than the gate's quadratic: `heather check --timings`, release, width one, total against gate ms: 28 / 3.8 at k = 32, 293 / 21 at 64, 2,246 / 122 at 128, 26,788 / 1,518 at 256 (×8 to ×12 per doubling). Not attributed; it is plausibly the same nesting (each discarded value elaborated or shifted under one more binder), so a fix should be measured on the whole time, not on gate queries alone.

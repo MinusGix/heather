@@ -34,6 +34,7 @@ pub mod corpus;
 pub mod forded;
 pub mod indexed;
 pub mod meta;
+pub mod rewriting;
 pub mod scale;
 
 /// Every family, in report order. Constructing them does all the setup —
@@ -47,6 +48,7 @@ pub fn all() -> Vec<Family> {
     v.extend(forded::families());
     v.extend(indexed::families());
     v.extend(meta::families());
+    v.extend(rewriting::families());
     v
 }
 
