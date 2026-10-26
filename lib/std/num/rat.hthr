@@ -12,7 +12,8 @@
 // 2/4 are `≈` but not `=`; it also compares the denominators' positivity
 // proofs). Every operation is defined on representatives and
 // then proved to respect `≈`, and every law is stated modulo `≈`, so clients
-// rewrite with `calc { … ≈ … }` and `rel_cong` exactly as over finite sets.
+// rewrite with `calc { … ≈ … }` and `rel_cong` exactly as over finite sets,
+// or with `rewrite(h, …)` along `≈` itself (docs/equation-rewrite-design.md §9).
 //
 // Calling convention: a lemma whose every `Rat` is named by one of its
 // hypotheses takes those endpoints implicitly (`Rat::le_trans(h1, h2)`); any
@@ -558,11 +559,7 @@ theorem Rat::neg_add(self x, y: Rat): -(x + y) ≈ -x + -y {
 }
 
 theorem Rat::add_neg_cancel_r(self x, y: Rat): (x + y) + -y ≈ x {
-    calc {
-        (x + y) + -y ≈ x + (y + -y) := x.add_assoc(y, -y),
-        ≈ x + 0 := rel_cong(y.add_neg()),
-        ≈ x := x.add_zero(),
-    }
+    rewrite(x.add_assoc(y, -y), y.add_neg(), x.add_zero(), refl)
 }
 
 theorem Rat::neg_le({x, y: Rat}, h: x <= y): -y <= -x {

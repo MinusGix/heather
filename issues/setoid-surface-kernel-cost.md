@@ -4,7 +4,7 @@ status: open
 labels: [setoids,relations,elaborator,performance]
 area: tactics
 created: 2026-10-13
-updated: 2026-10-13
+updated: 2026-10-26
 ---
 
 Measured cold (`heather check --timings`: `eval_steps`, `decls_gated`) while
@@ -41,3 +41,10 @@ factor of the explicit `trans`.
 Related: [[relational-derivation-cost]] owns the search side of `rel_derive`
 (certificate probes, family searches); this is the emitted term's cost at an
 ordinary `rel_cong`/`calc` use with nothing to search.
+- 2026-10-26: `rewrite(h, e)` along a relation ([[rewrite-setoid-relations]])
+  emits its congruence and transitivity terms directly as kernel terms (no
+  generated declarations). On one `Rat` calc step it sits between rel_cong
+  and the explicit term: a few times rel_cong's eval steps per step (the
+  extra is the occurrence conversion and the gate checking `app@` spines),
+  well under the generated-source overhead this issue measured. rel_cong's
+  own cost is unchanged.
