@@ -166,10 +166,12 @@ fn the_have_refusals_carry_their_messages() {
 }
 
 /// The acceptance family of `issues/proof-let-substitution-cost.md`: a chain
-/// in which each binding uses the previous one twice. As `let`s its kernel
-/// cost is the number of paths, 2^k; as `have`s it is linear. The counters
-/// are exact, so the assertion is on them and not on time. The `let` side at
-/// a small `k` is the control that the counter sees the difference at all.
+/// in which each binding uses the previous one twice. As `have`s its kernel
+/// cost is linear. The counters are exact, so the assertion is on them and
+/// not on time. As `let`s it was 2^k (the number of paths) until the
+/// kernel's typing memo (`issues/kernel-typing-memo-on-node-identity.md`)
+/// judged each shared link once; it is linear too now, and `let_and_blocks.rs`
+/// holds that side.
 #[test]
 fn a_fan_out_chain_of_haves_checks_in_linear_time() {
     fn chain(keyword: &str, k: usize) -> String {
@@ -191,10 +193,7 @@ fn a_fan_out_chain_of_haves_checks_in_linear_time() {
         let d = kstats::snapshot().since(&before);
         d.conv_shortcut_hits + d.conv_memo_hits + d.conv_misses
     }
-    let lets = queries(&chain("let", 10));
     let short = queries(&chain("have", 10));
     let long = queries(&chain("have", 40));
-    assert!(lets > 1 << 10, "the `let` control no longer fans out: {lets} queries");
-    assert!(short < lets / 8, "`have` at k = 10 ({short}) is not far below `let` ({lets})");
     assert!(long < 6 * short, "k = 10 → 40 grew {short} → {long}: not linear");
 }
