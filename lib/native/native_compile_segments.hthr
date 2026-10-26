@@ -204,9 +204,12 @@ theorem Target::goes_word_from(self t: Target, p: Prog, id: Nat, register: Gpr, 
         let bytes = word_bytes(read_gpr(register, write_gpr(Rbx, a, s.gprs)));
         let fits = t.slot_fits(id, inside);
         let after: X86Memory(t.r.profile) = t.r.profile.store(s.memory, a, bytes);
-        let kept: t.site().Resident(after) = t.store_resident(s.memory, 8 * id, bytes, fits, resident);
+        let rip = sym(t.word_rip(id, inside));
+        let kept: t.site().Resident(after) = j(rip, λ x _ => t.site().Resident(t.r.profile.store(s.memory, x, bytes)),
+            t.store_resident(s.memory, 8 * id, bytes, fits, resident));
+        let writable = j(rip, λ x _ => t.io().writable(s.memory, x, 8), t.writable(s.memory, 8 * id, 8, fits));
         let ok: q(write_gpr(Rbx, a, s.gprs), after) = held;
-        moved(s, here, resident, ⟨refl, ⟨t.writable(s.memory, 8 * id, 8, fits), ⟨kept, ok⟩⟩⟩)
+        moved(s, here, resident, ⟨refl, ⟨writable, ⟨kept, ok⟩⟩⟩)
     }
 }
 

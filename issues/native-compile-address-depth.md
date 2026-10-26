@@ -1,11 +1,11 @@
 ---
 title: Let compiled programs' region addresses evaluate past the kernel's depth limit
-status: open
+status: closed
 labels: [native,x86,kernel,performance]
 area: heather-in-heather
 milestone: [hih-pl-first-program]
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 `native_compile` spells every address in its region as `next_rip(low,
@@ -36,3 +36,7 @@ words, buffers and scratch range pass ~1000 bytes cannot be written.
   cost out of `write-elf`'s byte pieces.
 
 Found 2026-10-25 writing cat's executable.
+
+## Log
+
+- 2026-10-26: Fixed by the first route. `BitVec::add_nat(a, o)` (bitvec.hthr) is `a.add(BitVec::ofNat(o))`, a ripple add whose bits evaluate in frames bounded by the width, and `BitVec::add_nat_iterate` proves it `a.iterate_increment(o)` below the period. `Layout::word_at`/`buffer_at`/`scratch_at` now spell their addresses with it; the region lemmas stay over `next_rip`, and `Target::at_rip` (with `word_rip`, `buffer_rip`, `scratch_rip`) carries a statement across in the six places that leaned on the two being one term (read_slot, placed_word, goes_word_from, buffer_toNat, landed_store/landed_word, goes_read_back_ok's loop entry, goes_reads). `write-elf`'s literal spells region addresses `add_nat` too, so the emission check still compares by arguments. `cat_capacity()` is 1024: all of lib/native checks, and `write-elf` writes cat with its scratch range at offset 1536 (0x410600), which copies 5000 random bytes intact and exits 1 on a full stdout. Not done: `PIECE` in elf.rs is still 48 bytes, sized for `next_rip` addresses; it could likely grow now.
