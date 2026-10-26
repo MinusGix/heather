@@ -1,5 +1,5 @@
-// The process Linux makes of the I/O profile's ELF (`io_elf_header` in
-// elf64_calls), as a memory of the byte model (x86_64_byte_memory;
+// The process Linux makes of the I/O profile's ELF (`io_elf_file`, below),
+// as a memory of the byte model (x86_64_byte_memory;
 // issues/io-image-on-byte-model.md): the file's bytes at 0x400000, readable
 // and executable, in a 64-KiB window; the RW segment's eight zero-filled KiB
 // at 0x410000, the page a program reads into and then the frame it keeps
@@ -21,6 +21,8 @@ import x86_64;
 import x86_64_fetch;
 import x86_64_fetched_code;
 import x86_64_byte_memory;
+import x86_64_store;
+import elf64;
 import linux_x86_64_byte_memory;
 import memory;
 import bitvec;
@@ -58,6 +60,35 @@ fn DataRegion::io_frame() → DataRegion {
     DataRegion(profile := X86Profile::io(), low := BitVec::ofNat(0x411000), size := 4096,
         canonical := Nat::leb_sound(BitVec::ofNat(0x411000, n := 64).toNat() + 4096, Nat::pow(2, 47), trivial),
         data := λ perms relied => relied.right)
+}
+
+// ---------------------------------------------------------------------------
+// The file
+
+// The profile's ELF: `static_elf64_header` with its entry at 0x4000e8, past a
+// third program header, and that header a PT_LOAD of the RW segment: eight
+// zero-filled KiB at 0x410000 (p_offset 0x1000, nothing from the file),
+// readable and writable. `low` and `high` are the file's size, the header
+// included; the RX mapping is the whole file at 0x400000, as before. That
+// Linux maps these headers as `X86Memory::io_load` says is the environment's
+// assumption, not a theorem.
+fn io_elf_header(low, high: BitVec(8)) → List<BitVec(8)> {
+    let base = static_elf64_header(low, high);
+    let segment: List<BitVec(8)> = List::append([elf_byte(1), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(6), elf_byte(0), elf_byte(0), elf_byte(0)],
+        List::append(word_bytes(BitVec::ofNat(0x1000)), List::append(word_bytes(BitVec::ofNat(0x410000)), List::append(word_bytes(BitVec::ofNat(0x410000)),
+        List::append(word_bytes(BitVec::ofNat(0)), List::append(word_bytes(BitVec::ofNat(0x2000)), word_bytes(BitVec::ofNat(0x1000))))))));
+    List::append(base.take(24), List::append(word_bytes(io_entry()), List::append(base.drop(32).take(24),
+        List::append([elf_byte(3), elf_byte(0)], List::append(base.drop(58), segment)))))
+}
+
+theorem io_elf_header_length(low, high: BitVec(8)): io_elf_header(low, high).len() = 232 { refl }
+
+// The file of `code`: the header, its size read off the code's length, then
+// the code. The size is sixteen bits, so a file is at most 65535 bytes; the
+// loader's window (`X86Memory::io_load_entry`'s `fits`) asks the same.
+fn io_elf_file(code: List<BitVec(8)>) → List<BitVec(8)> {
+    let size = 232 + code.len();
+    List::append(io_elf_header(BitVec::ofNat(size), BitVec::ofNat(size.shr(8))), code)
 }
 
 // ---------------------------------------------------------------------------

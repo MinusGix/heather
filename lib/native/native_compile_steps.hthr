@@ -1,0 +1,303 @@
+// The steps `native_compile_correct` is made of (issues/native-effect-source-compiler.md,
+// round S3.2): the forms the compiler emits, each run over any program at a
+// label, and the claim a statement's code makes of a tree.
+//
+// Two judgments. `Site::Moves` (x86_64_stack_runs) is a straight run: from
+// one offset to another, machine steps, no syscall; here it gains the
+// memory forms (a word or a byte loaded or stored) and the conditional jump
+// that falls through or lands ahead. `Site::Goes` is what a statement's
+// code claims: every state at an offset that meets a condition runs as the
+// tree (`Sim`). A run before it is part of it (`goes_after`), a jump picks
+// one of two (`goes_jcc`, `goes_jmp`), and a SYSCALL is where the tree's
+// next move is read: a call answered every way Linux may answer it
+// (`goes_call`), or the exit (`goes_exit`).
+//
+// A jump's landing is read off the finished program's one check
+// (`Prog::laid_out`) and the label it names (`Prog::lands_jcc`,
+// `Prog::lands_jmp`), so no lemma here does arithmetic on an offset.
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_sim;
+import linux_trees;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_layout;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// Where a program runs under Linux: its code from `origin`, nothing after.
+fn LinuxIo::site<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64)) → Site<M> {
+    Site(io.fetch, io.data, program, Nil, origin)
+}
+
+// ---------------------------------------------------------------------------
+// Jumps land on their labels
+
+// A JCC to label `Succ(n)` lands where that label's item starts.
+theorem Prog::lands_jcc(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat, cc: ConditionCode, n: Nat,
+    at: asm_back(p, k) = At(before, name, Jcc(cc, Succ(n))), label_k: Nat, label: Prog, item: Asm,
+    label_at: asm_back(p, label_k) = At(label, Succ(n), item)):
+    JumpsForward(prog_len(before), 6, asm_jump_of(asm_labels(p), prog_len(before), Jcc(cc, Succ(n))), prog_len(label)) {
+    let lands = jcc_lands(asm_labels(p), k, p, before, name, cc, Succ(n), p.laid_out_lands(laid), at);
+    j(label_target(label_k, p, label, n, item, p.laid_out_unique(laid), label_at),
+        λ to _ => JumpsForward(prog_len(before), 6, asm_jump_of(asm_labels(p), prog_len(before), Jcc(cc, Succ(n))), to), lands)
+}
+
+// A JMP to label `Succ(n)`, ahead or behind.
+theorem Prog::lands_jmp(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat, n: Nat,
+    at: asm_back(p, k) = At(before, name, Jmp(Succ(n))), label_k: Nat, label: Prog, item: Asm,
+    label_at: asm_back(p, label_k) = At(label, Succ(n), item)):
+    NearLands(prog_len(before), asm_jump_of(asm_labels(p), prog_len(before), Jmp(Succ(n))), prog_len(label)) {
+    let lands = jmp_lands(asm_labels(p), k, p, before, name, Succ(n), p.laid_out_lands(laid), at);
+    j(label_target(label_k, p, label, n, item, p.laid_out_unique(laid), label_at),
+        λ to _ => NearLands(prog_len(before), asm_jump_of(asm_labels(p), prog_len(before), Jmp(Succ(n))), to), lands)
+}
+
+// ---------------------------------------------------------------------------
+// Straight runs: the memory forms
+
+// A block at a label, onto whatever holds of the state it computes.
+theorem Site::moves_exec<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Block(instructions)),
+    post: MachineState<M> → Type):
+    site.Moves(writes, prog_len(before), prog_len(before) + block_length(instructions),
+        λ (s: MachineState<M>) => post(execute_block_normal(instructions, s)), post) {
+    λ s here resident holds => {
+        let item = site.item_resident(fits, s.memory, resident, k, before, name, Block(instructions), at);
+        let ran = block_steps(site.fetch, site.data, instructions, s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes(instructions), address), item));
+        let u = execute_block_normal(instructions, s);
+        Exists(u, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, u, ran.left),
+            ⟨trans(ran.right.left, site.rip_after(s, prog_len(before), block_length(instructions), here)),
+             ⟨j(sym(ran.right.right), λ memory _ => site.Resident(memory), resident), holds⟩⟩⟩)
+    }
+}
+
+// A word loaded at a label, from a canonical address that reads one.
+theorem Site::moves_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, load: WordLoad, at: asm_back(site.program, k) = At(before, name, Load(load)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(64)>(λ word =>
+        (read_gpr(load.base, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        ((read_word(site.data, s.memory, read_gpr(load.base, s.gprs)) = Some(word)) ∧ post(word_load_after(load, word, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + word_load_bytes(load).len(), pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let after = word_load_after(load, found.witness, s);
+        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitWordLoad(load),
+            ⟨site.item_fetched(fits, s, resident, k, before, name, Load(load), at, here),
+             Exists(found.witness, WordLoadStep(canonical := found.proof.left, present := found.proof.right.left, execution := refl))⟩);
+        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
+            ⟨site.rip_after(s, prog_len(before), word_load_bytes(load).len(), here), ⟨resident, found.proof.right.right⟩⟩⟩)
+    }
+}
+
+// A byte loaded at a label, zero-extended, from a canonical address that
+// reads one.
+theorem Site::moves_load_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, load: ByteLoad, at: asm_back(site.program, k) = At(before, name, LoadByte(load)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(8)>(λ byte =>
+        (read_gpr(load.base, s.gprs).toNat() < Nat::pow(2, 47)) ∧
+        ((site.data.read(s.memory, read_gpr(load.base, s.gprs)) = Some(byte)) ∧ post(byte_load_after(load, byte, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + byte_load_bytes(load).len(), pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let after = byte_load_after(load, found.witness, s);
+        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitLoad(load),
+            ⟨site.item_fetched(fits, s, resident, k, before, name, LoadByte(load), at, here),
+             Exists(found.witness, ByteLoadStep(canonical := BitVec::drop_low_zero_of_lt(47, 17, read_gpr(load.base, s.gprs), found.proof.left),
+                present := found.proof.right.left, execution := refl))⟩);
+        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
+            ⟨site.rip_after(s, prog_len(before), byte_load_bytes(load).len(), here), ⟨resident, found.proof.right.right⟩⟩⟩)
+    }
+}
+
+// A word stored at a label, through a plain base, to a writable span that
+// keeps the code.
+theorem Site::moves_store<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, store: WordStore, at: asm_back(site.program, k) = At(before, name, Store(store)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → (store_base_plain(store.base) = True) ∧
+        (writes.writable(s.memory, read_gpr(store.base, s.gprs), 8) ∧
+        (site.Resident(word_store_after(writes, store, s).memory) ∧ post(word_store_after(writes, store, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + 3, pre, post) {
+    λ s here resident holds => {
+        let got = step(s, holds);
+        let after = word_store_after(writes, store, s);
+        Exists(after, ⟨machine_steps_one(site.fetch, site.data, writes, s, after, Inr(Inl(store_step(site.fetch, writes, store, s, got.left,
+                site.item_fetched(fits, s, resident, k, before, name, Store(store), at, here), got.right.left)))),
+            ⟨site.rip_after(s, prog_len(before), 3, here), got.right.right⟩⟩)
+    }
+}
+
+// A register's low byte stored at a label, likewise.
+theorem Site::moves_store_byte<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, store: ByteStore, at: asm_back(site.program, k) = At(before, name, StoreByte(store)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → (store_base_plain(store.base) = True) ∧
+        (writes.writable(s.memory, read_gpr(store.base, s.gprs), 1) ∧
+        (site.Resident(byte_store_after(writes, store, s).memory) ∧ post(byte_store_after(writes, store, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + 3, pre, post) {
+    λ s here resident holds => {
+        let got = step(s, holds);
+        let after = byte_store_after(writes, store, s);
+        Exists(after, ⟨machine_steps_one(site.fetch, site.data, writes, s, after, Inr(Inl(byte_store_step(site.fetch, writes, store, s, got.left,
+                site.item_fetched(fits, s, resident, k, before, name, StoreByte(store), at, here), got.right.left)))),
+            ⟨site.rip_after(s, prog_len(before), 3, here), got.right.right⟩⟩)
+    }
+}
+
+// A JCC at a label that lands ahead: on to `to` either way, from where it
+// lands when its condition holds and from past it when not. The condition
+// reads the registers, flags and memory, which the jump keeps.
+theorem Site::moves_jcc<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, cc: ConditionCode, target: Nat, at: asm_back(site.program, k) = At(before, name, Jcc(cc, target)),
+    landing: Nat, lands: JumpsForward(prog_len(before), 6, asm_jump_of(asm_labels(site.program), prog_len(before), Jcc(cc, target)), landing),
+    to: Nat, pre: Gprs → Flags → M → Type, post: MachineState<M> → Type,
+    taken: site.Moves(writes, landing, to, λ (t: MachineState<M>) => pre(t.gprs, t.flags, t.memory) ∧ condition_holds(cc, t.flags) = True, post),
+    fall: site.Moves(writes, prog_len(before) + 6, to, λ (t: MachineState<M>) => pre(t.gprs, t.flags, t.memory) ∧ condition_holds(cc, t.flags) = False, post)):
+    site.Moves(writes, prog_len(before), to, λ (s: MachineState<M>) => pre(s.gprs, s.flags, s.memory), post) {
+    λ s here resident holds => {
+        let displacement = asm_jump_of(asm_labels(site.program), prog_len(before), Jcc(cc, target));
+        let control = JumpIfNear(cc, displacement);
+        let u = execute_near_control(control, s);
+        let jumped = machine_steps_of_fetched(site.fetch, site.data, writes, s, u, fetched_steps_one(site.fetch, site.data, s, u,
+            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), refl⟩)));
+        (match condition_holds(cc, s.flags) as λ b => condition_holds(cc, s.flags) = b → site.Arrives(writes, s, to, post) {
+            True => λ yes => site.arrives_after(writes, s, u, to, post, jumped, taken(u,
+                trans(near_if_taken_rip(cc, displacement, s, yes),
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), here),
+                        jumps_forward(site.origin, prog_len(before), 6, displacement, landing, lands))),
+                resident, ⟨holds, yes⟩)),
+            False => λ no => site.arrives_after(writes, s, u, to, post, jumped, fall(u,
+                trans(near_if_not_taken_rip(cc, displacement, s, no), site.rip_after(s, prog_len(before), 6, here)),
+                resident, ⟨holds, no⟩)),
+        })(refl)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The claim of code: every state at an offset meeting a condition runs as
+// the tree
+
+fn Site::Goes<M>(self site: Site<M>, io: LinuxIo<M>, at: Nat, t: ITree<BitVec(64)>(Events::linux()), pre: MachineState<M> → Type) → Type {
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, at) → site.Resident(s.memory) → pre(s) → Sim(io, t, s)
+}
+
+theorem Site::goes_weaken<M>(self site: Site<M>, io: LinuxIo<M>, at: Nat, t: ITree<BitVec(64)>(Events::linux()), pre, entry: MachineState<M> → Type,
+    goes: site.Goes(io, at, t, pre), into: (s: MachineState<M>) → entry(s) → pre(s)): site.Goes(io, at, t, entry) {
+    λ s here resident holds => goes(s, here, resident, into(s, holds))
+}
+
+// A tree the same as one the code runs as.
+theorem Site::goes_same<M>(self site: Site<M>, io: LinuxIo<M>, at: Nat, t, u: ITree<BitVec(64)>(Events::linux()), pre: MachineState<M> → Type,
+    same: ITree::Same(Events::linux(), t, u), goes: site.Goes(io, at, u, pre)): site.Goes(io, at, t, pre) {
+    λ s here resident holds => sim_of_same(io, t, u, same, s, goes(s, here, resident, holds))
+}
+
+// A straight run, then what goes from where it ends.
+theorem LinuxIo::goes_after<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), from, to: Nat, t: ITree<BitVec(64)>(Events::linux()),
+    pre, between: MachineState<M> → Type,
+    moves: io.site(program, origin).Moves(linux_writes(io), from, to, pre, between),
+    goes: io.site(program, origin).Goes(io, to, t, between)): io.site(program, origin).Goes(io, from, t, pre) {
+    λ s here resident holds => {
+        let arrived = moves(s, here, resident, holds);
+        sim_back(io, t, s, arrived.witness, linux_steps_of_machine(io, s, arrived.witness, arrived.proof.left),
+            goes(arrived.witness, arrived.proof.right.left, arrived.proof.right.right.left, arrived.proof.right.right.right))
+    }
+}
+
+// A JCC that lands ahead, each way to what goes from there.
+theorem LinuxIo::goes_jcc<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), fits: FillsFit(program, no_fills()), k: Nat,
+    before: Prog, name: Nat, cc: ConditionCode, target: Nat, at: asm_back(program, k) = At(before, name, Jcc(cc, target)),
+    landing: Nat, lands: JumpsForward(prog_len(before), 6, asm_jump_of(asm_labels(program), prog_len(before), Jcc(cc, target)), landing),
+    t: ITree<BitVec(64)>(Events::linux()), pre: Gprs → Flags → M → Type,
+    taken: io.site(program, origin).Goes(io, landing, t,
+        λ (u: MachineState<M>) => pre(u.gprs, u.flags, u.memory) ∧ condition_holds(cc, u.flags) = True),
+    fall: io.site(program, origin).Goes(io, prog_len(before) + 6, t,
+        λ (u: MachineState<M>) => pre(u.gprs, u.flags, u.memory) ∧ condition_holds(cc, u.flags) = False)):
+    io.site(program, origin).Goes(io, prog_len(before), t, λ (s: MachineState<M>) => pre(s.gprs, s.flags, s.memory)) {
+    let site = io.site(program, origin);
+    λ s here resident holds => {
+        let displacement = asm_jump_of(asm_labels(program), prog_len(before), Jcc(cc, target));
+        let control = JumpIfNear(cc, displacement);
+        let u = execute_near_control(control, s);
+        let jumped = linux_steps_of_fetched(io, s, u, fetched_steps_one(io.fetch, io.data, s, u,
+            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), refl⟩)));
+        sim_back(io, t, s, u, jumped,
+            (match condition_holds(cc, s.flags) as λ b => condition_holds(cc, s.flags) = b → Sim(io, t, u) {
+                True => λ yes => taken(u,
+                    trans(near_if_taken_rip(cc, displacement, s, yes),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), here),
+                            jumps_forward(origin, prog_len(before), 6, displacement, landing, lands))),
+                    resident, ⟨holds, yes⟩),
+                False => λ no => fall(u, trans(near_if_not_taken_rip(cc, displacement, s, no), site.rip_after(s, prog_len(before), 6, here)),
+                    resident, ⟨holds, no⟩),
+            })(refl))
+    }
+}
+
+// A JMP, to what goes from where it lands.
+theorem LinuxIo::goes_jmp<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), fits: FillsFit(program, no_fills()), k: Nat,
+    before: Prog, name: Nat, target: Nat, at: asm_back(program, k) = At(before, name, Jmp(target)),
+    landing: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(program), prog_len(before), Jmp(target)), landing),
+    t: ITree<BitVec(64)>(Events::linux()), pre: Gprs → Flags → M → Type,
+    goes: io.site(program, origin).Goes(io, landing, t, λ (u: MachineState<M>) => pre(u.gprs, u.flags, u.memory))):
+    io.site(program, origin).Goes(io, prog_len(before), t, λ (s: MachineState<M>) => pre(s.gprs, s.flags, s.memory)) {
+    let site = io.site(program, origin);
+    λ s here resident holds => {
+        let displacement = asm_jump_of(asm_labels(program), prog_len(before), Jmp(target));
+        let control = JumpNear(displacement);
+        let u = execute_near_control(control, s);
+        let jumped = linux_steps_of_fetched(io, s, u, fetched_steps_one(io.fetch, io.data, s, u,
+            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jmp(target), at, here), refl⟩)));
+        sim_back(io, t, s, u, jumped, goes(u,
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, displacement), here),
+                near_lands_target(origin, prog_len(before), displacement, landing, lands)),
+            resident, holds))
+    }
+}
+
+// A SYSCALL making the tree's call: Linux is asked it, and from every state
+// it may resume in after each answer it may give, the code goes on as the
+// tree goes on at that answer (where the code was resident when asked).
+theorem LinuxIo::goes_call<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), fits: FillsFit(program, no_fills()), k: Nat,
+    before: Prog, name: Nat, at: asm_back(program, k) = At(before, name, Syscall),
+    c: LinuxCmd<Nat>, next: c.Resp() → ITree<BitVec(64)>(Events::linux()), after: c.Resp() → MachineState<M> → Type,
+    goes: (a: c.Resp()) → io.site(program, origin).Goes(io, prog_len(before) + 2, next(a), after(a))):
+    io.site(program, origin).Goes(io, prog_len(before), Vis(c, next), λ (s: MachineState<M>) => LinuxRequests(io, s, c) ∧
+        (io.site(program, origin).Resident(s.memory) → (a: c.Resp()) → c.Answers(a) → LinuxResumes(io, s, c, a, λ (u: MachineState<M>) =>
+            io.site(program, origin).Resident(u.memory) ∧ after(a, u)))) {
+    let site = io.site(program, origin);
+    λ s here resident holds => sim_vis(io, c, next, s, s, Exists(Zero, refl),
+        site.item_fetched(fits, s, resident, k, before, name, Syscall, at, here), holds.left,
+        λ a answers junk leaves rcx r11 => {
+            let resumed = holds.right(resident, a, answers, junk, leaves, rcx, r11);
+            goes(a, linux_answered(io, s, c, a, junk, rcx, r11),
+                trans(linux_answered_rip(io, s, c, a, junk, rcx, r11), site.rip_after(s, prog_len(before), 2, here)),
+                resumed.left, resumed.right)
+        })
+}
+
+// A SYSCALL that exits with `status`, where every exit with it meets the
+// tree.
+theorem LinuxIo::goes_exit<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), fits: FillsFit(program, no_fills()), k: Nat,
+    before: Prog, name: Nat, at: asm_back(program, k) = At(before, name, Syscall), t: ITree<BitVec(64)>(Events::linux()), status: BitVec(64),
+    exits: (s: MachineState<M>) → LinuxSyscallAt(io, s) → LinuxExits(s, status) → Sim(io, t, s)):
+    io.site(program, origin).Goes(io, prog_len(before), t, λ (s: MachineState<M>) => LinuxExits(s, status)) {
+    λ s here resident holds => exits(s, io.site(program, origin).item_fetched(fits, s, resident, k, before, name, Syscall, at, here), holds)
+}

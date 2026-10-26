@@ -1,0 +1,56 @@
+---
+title: A mismatch under a let-bound or β-redex head is refused only by the kernel
+status: open
+labels: [frontend,elaboration,diagnostics]
+area: language
+created: 2026-10-25
+updated: 2026-10-25
+---
+
+Found while proving S3.2's dataflow leaf (`Target::goes_leaf`,
+`lib/native/native_compile_leaf.hthr`, 2026-10-25). A proof of `P(s.memory)`
+passed where `P(execute_block_normal(code, s).memory)` is expected gets past
+the elaborator when the expected type's head is a let-bound lambda or a
+β-redex, and only the kernel refuses it, with a type that "has no surface
+spelling". Passed as a plain argument the elaborator refuses it at the span.
+Reproduced against master on 2026-10-25:
+
+```heather
+import x86_64;
+import x86_64_block;
+import logic;
+import list;
+
+theorem weaken_like<M>(pre, entry: MachineState<M> → Type, into: (s: MachineState<M>) → entry(s) → pre(s)): True { trivial }
+
+// Refused by the kernel only: the binders take their types from `entry`, the
+// pair is checked against `pre(s)`, a β-redex.
+theorem probe_inline<M>(code: List<Instruction>, P: M → Type, Q: Type, q: Q): True {
+    weaken_like<M>(λ (s: MachineState<M>) => P(execute_block_normal(code, s).memory) ∧ Q, λ (s: MachineState<M>) => P(s.memory),
+        λ s held => ⟨held, q⟩)
+}
+
+// Refused by the kernel only: the expected type's head is a let-bound lambda.
+theorem probe_let_plain<M>(code: List<Instruction>, P: M → Type, s: MachineState<M>, h: P(s.memory)): True {
+    let post = λ (u: MachineState<M>) => P(u.memory);
+    let x: post(execute_block_normal(code, s)) = h;
+    trivial
+}
+```
+
+The same mismatch with the binders annotated (`λ (s: …) (held: P(s.memory))`),
+or with a pair under the let-bound head, is refused by the elaborator with
+the usual "this has type … but … is expected" at the span. So the check is
+skipped on some path that both cases share, likely a comparison that gives
+up on a stuck head (`execute_block_normal` of an open list) under a redex and
+accepts rather than refusing or deferring with a span.
+
+## Scope
+
+- Find the path that accepts, and make it refuse at the span (or report the
+  kernel's refusal at the argument with both types spelled).
+- The two probes as refusal tests that name their reason.
+
+Related: [[elab-accepts-conjunction-for-equation]] (another mismatch only the
+kernel refuses), [[check-fallback-discards-expected-type]] (closed; the same
+symptom from the check fallback).

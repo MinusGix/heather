@@ -1,0 +1,257 @@
+// The arithmetic and list facts `native_compile_correct` reads the compiler
+// with (issues/native-effect-source-compiler.md, round S3.2): an
+// environment's words and buffers after a write, a region's bytes as a list,
+// where the layout puts each buffer, and the bit and errno words the machine
+// and the source each spell their own way.
+import native_source;
+import native_compile;
+import function_ir;
+import function_ir_eval;
+import linux_calls;
+import linux_x86_64_io;
+import x86_64;
+import bitvec;
+import bitvec_nat;
+import bitvec_signed;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// A list entry, or a default past the end
+
+fn List::get_or<A>(self xs: List<A>, j: Nat, d: A) → A { match xs.nth(j) { None => d, Some(x) => x } }
+
+theorem List::put_here<A>(i: Nat): (xs: List<A>) → (x, pad: A) → xs.put(i, x, pad).nth(i) = Some(x) {
+    match i {
+        Zero => λ xs x pad => match xs { Nil => refl, Cons(_, _) => refl },
+        Succ(_, ih) => λ xs x pad => match xs { Nil => ih(Nil, x, pad), Cons(_, rest) => ih(rest, x, pad) },
+    }
+}
+
+// Every other entry reads as it did, the pad standing in for one past the
+// end.
+theorem List::put_other<A>(i: Nat): (xs: List<A>) → (x, pad: A) → (j: Nat) → j ≠ i →
+    xs.put(i, x, pad).get_or(j, pad) = xs.get_or(j, pad) {
+    match i {
+        Zero => λ xs x pad j => match j {
+            Zero => λ ne => false_elim(ne(refl)),
+            Succ(_) => λ _ => match xs {
+                Nil => refl,
+                Cons(_, _) => refl,
+            },
+        },
+        Succ(_, ih) => λ xs x pad j => match j {
+            Zero => λ _ => match xs { Nil => refl, Cons(_, _) => refl },
+            Succ(l) => λ ne => match xs {
+                Nil => ih(Nil, x, pad, l, λ e => ne(Nat::cong_succ(e))),
+                Cons(_, rest) => ih(rest, x, pad, l, λ e => ne(Nat::cong_succ(e))),
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The environment after a write
+
+theorem Env::number_set_here(self env: Env, id: Nat, word: BitVec(64)): env.set_word(id, word).number(id) = word.toNat() {
+    j(sym(List::put_here(id, env.words, word.toNat(), 0)), λ o _ => (match o { None => 0, Some(n) => n }) = word.toNat(), refl)
+}
+
+theorem Env::number_set_other(self env: Env, id: Nat, word: BitVec(64), query: Nat, ne: query ≠ id):
+    env.set_word(id, word).number(query) = env.number(query) {
+    List::put_other(id, env.words, word.toNat(), 0, query, ne)
+}
+
+theorem Env::buffer_set_here(self env: Env, id: Nat, bytes: List<BitVec(8)>): env.set_buffer(id, bytes).buffer(id) = bytes {
+    j(sym(List::put_here(id, env.buffers, bytes, Nil)), λ o _ => (match o { None => Nil, Some(b) => b }) = bytes, refl)
+}
+
+theorem Env::buffer_set_other(self env: Env, id: Nat, bytes: List<BitVec(8)>, query: Nat, ne: query ≠ id):
+    env.set_buffer(id, bytes).buffer(query) = env.buffer(query) {
+    List::put_other(id, env.buffers, bytes, Nil, query, ne)
+}
+
+// ---------------------------------------------------------------------------
+// A region's bytes as a list
+
+// The `n` cells of `v` from `o`.
+fn cells_at(v: Nat → BitVec(8), o, n: Nat) → List<BitVec(8)> {
+    match n { Zero => Nil, Succ(k) => Cons(v(o), cells_at(v, Succ(o), k)) }
+}
+
+theorem cells_len(v: Nat → BitVec(8), n: Nat): (o: Nat) → cells_at(v, o, n).len() = n {
+    match n { Zero => λ o => refl, Succ(_, ih) => λ o => Nat::cong_succ(ih(Succ(o))) }
+}
+
+theorem cells_nth(v: Nat → BitVec(8), n: Nat): (o, i: Nat) → i < n → cells_at(v, o, n).nth(i) = Some(v(o + i)) {
+    match n {
+        Zero => λ o i below => false_elim(omega(below)),
+        Succ(_, ih) => λ o i => match i {
+            Zero => λ _ => refl,
+            Succ(l) => λ below => trans(ih(Succ(o), l, below), cong_fn<Nat, Option<BitVec(8)>>(λ p => Some(v(p)), Nat::add_succ_left(o, l))),
+        },
+    }
+}
+
+// Cells that agree make the same list.
+theorem cells_agree(v, w: Nat → BitVec(8), n: Nat): (o: Nat) → ((i: Nat) → i < n → v(o + i) = w(o + i)) →
+    cells_at(v, o, n) = cells_at(w, o, n) {
+    match n {
+        Zero => λ o _ => refl,
+        Succ(_, ih) => λ o same => eq2(λ (x: BitVec(8)) (t: List<BitVec(8)>) => Cons(x, t), same(0, trivial),
+            ih(Succ(o), λ i below => j(sym(Nat::add_succ_left(o, i)), λ p _ => v(p) = w(p), same(Succ(i), below)))),
+    }
+}
+
+theorem cells_split(v: Nat → BitVec(8), c: Nat): (o, n: Nat) → c <= n →
+    cells_at(v, o, n) = cells_at(v, o, c) ++ cells_at(v, o + c, n - c) {
+    match c {
+        Zero => λ o n _ => cong_fn<Nat, List<BitVec(8)>>(λ k => cells_at(v, o, k), sym(Nat::sub_add_cancel(0, n, trivial))),
+        Succ(d, ih) => λ o n => match n {
+            Zero => λ bad => false_elim(bad),
+            Succ(m) => λ le => List::cong_cons(v(o), trans(ih(Succ(o), m, le),
+                cong_fn<Nat, List<BitVec(8)>>(λ p => cells_at(v, Succ(o), d) ++ cells_at(v, p, m - d), Nat::add_succ_left(o, d)))),
+        },
+    }
+}
+
+theorem cells_drop(v: Nat → BitVec(8), n: Nat): (o, d: Nat) → cells_at(v, o, n).drop(d) = cells_at(v, o + d, n - d) {
+    match n {
+        Zero => λ o d => refl,
+        Succ(k, ih) => λ o d => match d {
+            Zero => refl,
+            Succ(e) => trans(ih(Succ(o), e), cong_fn<Nat, List<BitVec(8)>>(λ p => cells_at(v, p, k - e), Nat::add_succ_left(o, e))),
+        },
+    }
+}
+
+theorem cells_take(v: Nat → BitVec(8), n: Nat): (o, t: Nat) → cells_at(v, o, n).take(t) = cells_at(v, o, t.min(n)) {
+    match n {
+        Zero => λ o t => match t { Zero => refl, Succ(_) => refl },
+        Succ(_, ih) => λ o t => match t { Zero => refl, Succ(s) => List::cong_cons(v(o), ih(Succ(o), s)) },
+    }
+}
+
+// Cells that read as a list are that list.
+theorem cells_of(v: Nat → BitVec(8), bytes: List<BitVec(8)>): (o: Nat) →
+    ((i: Nat) → (b: BitVec(8)) → bytes.nth(i) = Some(b) → v(o + i) = b) → cells_at(v, o, bytes.len()) = bytes {
+    match bytes {
+        Nil => λ o _ => refl,
+        Cons(b, rest) => λ o at => eq2(λ (x: BitVec(8)) (t: List<BitVec(8)>) => Cons(x, t), at(0, b, refl),
+            cells_of(v, rest, Succ(o), λ i c found => trans(cong_fn<Nat, BitVec(8)>(v, Nat::add_succ_left(o, i)), at(Succ(i), c, found)))),
+    }
+}
+
+theorem cells_replicate(v: Nat → BitVec(8), z: BitVec(8), n: Nat): (o: Nat) → ((i: Nat) → i < n → v(o + i) = z) →
+    cells_at(v, o, n) = List::replicate(z, n) {
+    match n {
+        Zero => λ o _ => refl,
+        Succ(_, ih) => λ o same => eq2(λ (x: BitVec(8)) (t: List<BitVec(8)>) => Cons(x, t), same(0, trivial),
+            ih(Succ(o), λ i below => trans(cong_fn<Nat, BitVec(8)>(v, Nat::add_succ_left(o, i)), same(Succ(i), below)))),
+    }
+}
+
+// A list no longer than the count is its own prefix.
+theorem List::take_long<A>(self xs: List<A>): (k: Nat) → xs.len() <= k → xs.take(k) = xs {
+    match xs {
+        Nil => λ k _ => refl,
+        Cons(h, t) => λ k => match k {
+            Zero => λ bad => false_elim(bad),
+            Succ(l) => λ le => List::cong_cons(h, t.take_long(l, le)),
+        },
+    }
+}
+
+// Bytes landed at a buffer's start no longer than it: the bytes, then the
+// rest of the buffer.
+theorem fill_short(buffer, bytes: List<BitVec(8)>, short: bytes.len() <= buffer.len()):
+    fill(buffer, bytes) = bytes ++ buffer.drop(bytes.len()) {
+    let whole: ((bytes ++ buffer.drop(bytes.len())).len() <= buffer.len()) =
+        j(sym(bytes.len_append(buffer.drop(bytes.len()))), λ n _ => n <= buffer.len(),
+            j(sym(buffer.len_drop(bytes.len())), λ d _ => bytes.len() + d <= buffer.len(), omega(short, Nat::sub_add_cancel(bytes.len(), buffer.len(), short))));
+    (bytes ++ buffer.drop(bytes.len())).take_long(buffer.len(), whole)
+}
+
+// ---------------------------------------------------------------------------
+// Where the layout puts each buffer
+
+// A buffer ends before the scratch range starts…
+theorem List::total_take_nth(self caps: List<Nat>): (b, cap: Nat) → caps.nth(b) = Some(cap) → caps.take(b).total() + cap <= caps.total() {
+    match caps {
+        Nil => λ b cap found => absurd(found),
+        Cons(size, rest) => λ b cap => match b {
+            Zero => λ found => { let fits: (0 + cap <= size + rest.total()) = omega(Option::some_inj(size, cap, found)); fits },
+            Succ(k) => λ found => {
+                let fits: ((size + rest.take(k).total()) + cap <= size + rest.total()) = omega(rest.total_take_nth(k, cap, found));
+                fits
+            },
+        },
+    }
+}
+
+// …and before any later one starts…
+theorem List::total_take_apart(self caps: List<Nat>): (b, cap, other: Nat) → caps.nth(b) = Some(cap) → b < other →
+    caps.take(b).total() + cap <= caps.take(other).total() {
+    match caps {
+        Nil => λ b cap other found => absurd(found),
+        Cons(size, rest) => λ b cap other => match other {
+            Zero => λ found bad => false_elim(omega(bad)),
+            Succ(o) => match b {
+                Zero => λ found _ => { let fits: (0 + cap <= size + rest.take(o).total()) = omega(Option::some_inj(size, cap, found)); fits },
+                Succ(k) => λ found below => {
+                    let fits: ((size + rest.take(k).total()) + cap <= size + rest.take(o).total()) = omega(rest.total_take_apart(k, cap, o, found, below));
+                    fits
+                },
+            },
+        },
+    }
+}
+
+// …and the scratch range holds any of them.
+theorem List::largest_nth(self caps: List<Nat>): (b, cap: Nat) → caps.nth(b) = Some(cap) → cap <= caps.largest() {
+    match caps {
+        Nil => λ b cap found => absurd(found),
+        Cons(size, rest) => λ b cap => match b {
+            Zero => λ found => j(Option::some_inj(size, cap, found), λ c _ => c <= size.max(rest.largest()), size.le_max_l(rest.largest())),
+            Succ(k) => λ found => Nat::le_trans(cap, rest.largest(), size.max(rest.largest()), rest.largest_nth(k, cap, found),
+                size.le_max_r(rest.largest())),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Words the machine and the source spell differently
+
+theorem Bool::and_true(self b: Bool): (b && True) = b { match b { False => refl, True => refl } }
+
+// The low bit of a word, masked, is the bit zero-extended: how a one-bit
+// port is loaded (`Prog::bit_to`).
+theorem mask_low_bit(n: Nat): BitVec::ofNat(n, n := 64).band(BitVec::ofNat(1)) = BitVec::ofNat(n, n := 1).zero_extend(63) {
+    eq2(λ (rest: BitVec(63)) (b: Bool) => rest.cons_bit(b), BitVec::band_zero_r(63, BitVec::ofNat(n.half(), n := 63)), BitVec::odd_bit(n).and_true())
+}
+
+// A count Linux returns, as the source keeps it.
+theorem word_of_nat_ofNat(c: Nat, fits: c < Nat::pow(2, 64)): word_of_nat(64, c) = BitVec::ofNat(c) {
+    trans(sym(BitVec::ofNat_toNat(64, word_of_nat(64, c))), cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), toNat_word_of_nat(64, c, fits)))
+}
+
+// The negated errno: the source negates it, Linux counts down from the top.
+theorem source_errno_word(e: Nat, error: Errno(e)): native_source::errno_word(e) = linux_x86_64_io::errno_word(e) {
+    let b = BitVec::ofNat(e, n := 64);
+    let y = linux_x86_64_io::errno_word(e);
+    let top = Nat::pow(2, 64);
+    let fits: (e < top) = omega(error.right);
+    let y_is: (BitVec::zero(n := 64).iterate_increment(top - e) = y) =
+        trans(BitVec::cong_iterate_increment_count(64, BitVec::zero(), sym(errno_value(e, error))), BitVec::iterate_increment_toNat(64, y));
+    let below: (e <= top) = omega(fits);
+    let sum: (y.add(b) = BitVec::zero()) = trans(sym(BitVec::iter_add_eq_add(64, y, b)),
+        trans(BitVec::cong_iterate_increment_count(64, y, BitVec::toNat_ofNat(64, e, fits)),
+        trans(BitVec::cong_iterate_increment(64, e, sym(y_is)),
+        trans(BitVec::iterate_increment_compose(64, BitVec::zero(), top - e, e),
+        trans(BitVec::cong_iterate_increment_count(64, BitVec::zero(), Nat::sub_add_cancel(e, top, below)), BitVec::zero_iterate_period(64))))));
+    trans(sym(cong_fn<BitVec(64), BitVec(64)>(λ x => x.sub(b), sum)), BitVec::add_sub_cancel(64, y, b))
+}
