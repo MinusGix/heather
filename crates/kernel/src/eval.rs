@@ -1916,7 +1916,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             // literal; probing every glued-scrutinee fold for a transducer
             // costs a motive walk per occurrence and buys nothing.
             if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
-                if !matches!(&*self.classify_step(step)?, FoldClass::Opaque) {
+                if matches!(&*self.classify_step(step)?, FoldClass::Affine { .. } | FoldClass::Sync { .. }) {
                     self.spend()?;
                     self.frames.push(Frame::Elim(Rc::new(e)));
                     return Ok(Work::Force(unfold));
@@ -3075,8 +3075,9 @@ mod tests {
         let mut step = synchronous_step();
         let Term::Lam { body, .. } = &mut step else { unreachable!() };
         let Term::ElimNat { step: inner, .. } = Rc::make_mut(body) else { unreachable!() };
-        let Term::App { fun, .. } = Rc::make_mut(inner) else { unreachable!() };
-        *fun = Rc::new(Term::Var(LocalVar(0)));
+        // `ih` applied to the λ's own argument rather than its predecessor.
+        let Term::App { arg, .. } = Rc::make_mut(inner) else { unreachable!() };
+        *arg = Rc::new(Term::Var(LocalVar(2)));
         let arena = ValueArena::new();
         let closure = arena.tm(TmClo::syn(env, Rc::new(step)));
         let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
@@ -3141,19 +3142,66 @@ mod tests {
         assert_eq!(nat_value(&mut ev, result), 1u128 << 64);
     }
 
-    /// A step whose result sits on `k` rather than `ih` is not affine.
+    /// A step that reads only `k` folds directly, and so does a constant
+    /// one: neither is probed, the one ordinary step being the whole fold.
     #[test]
-    fn a_step_returning_the_predecessor_is_opaque() {
+    fn steps_that_ignore_ih_fold_directly() {
         let arena = ValueArena::new();
         let env = Env::empty();
         let step = arena.tm(TmClo::syn(env, Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))))));
         let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
-        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Opaque));
-        // A constant step is affine (a literal at every step): the fold is
-        // that literal in one step.
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Direct));
         let step = arena.tm(TmClo::syn(env, Rc::new(Term::Succ(Rc::new(Term::Zero)))));
-        assert!(matches!(&*ev.classify_step(step).unwrap(),
-            FoldClass::Affine { tree: crate::value::algebra::AffineTree::Lit { .. }, uniform: true }));
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Direct));
+        // `(λ_. Succ(k)) ih` reads `ih` and drops it: probed, its result
+        // sits on `k` rather than `ih`, and it is not affine.
+        let drops_ih = Term::App {
+            fun: Rc::new(dummy_lam(Term::Succ(Rc::new(Term::Var(LocalVar(2)))))),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+            arg: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let step = arena.tm(TmClo::syn(env, Rc::new(drops_ih)));
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Opaque));
+    }
+
+    /// `(λx. x x)(λx. x x)` as a step body, applied to `ih` when `reads_ih`:
+    /// it never reaches a weak head value.
+    fn divergent_step(reads_ih: bool) -> Term {
+        let app = |f: Term, a: Term| Term::App {
+            fun: Rc::new(f),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+            arg: Rc::new(a),
+        };
+        let omega = dummy_lam(app(Term::Var(LocalVar(0)), Term::Var(LocalVar(0))));
+        let diverge = app(omega.clone(), omega);
+        if reads_ih { app(diverge, Term::Var(LocalVar(0))) } else { diverge }
+    }
+
+    /// A step that never reads `ih` is not probed
+    /// (`issues/kernel-fold-probe-evaluates-recursive-arms.md`): classifying
+    /// even a divergent one spends nothing, where a step that reads `ih` is
+    /// probed and runs the fuel out.
+    #[test]
+    fn a_step_that_never_reads_ih_is_not_probed() {
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(1 << 20, Defs::opaque(), CtxBase::Nil, &arena);
+        let step = arena.tm(TmClo::syn(Env::empty(), Rc::new(divergent_step(false))));
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Direct));
+        assert_eq!(ev.fuel(), 1 << 20);
+        let step = arena.tm(TmClo::syn(Env::empty(), Rc::new(divergent_step(true))));
+        assert_eq!(ev.classify_step(step).unwrap_err(), OutOfFuel);
+        // The fold over a long run is the one ordinary step: a constant
+        // step, `Succ(Zero)`, folds over `2^32` successors in one.
+        let elim = nat_elim(&arena, Env::empty(), Term::Succ(Rc::new(Term::Zero)));
+        let mut ev = Eval::new(8, Defs::opaque(), CtxBase::Nil, &arena);
+        let result = ev.elim(run_over_zero(&arena, 1 << 32), elim).unwrap();
+        assert_eq!(nat_value(&mut ev, result), 1);
     }
 
     fn pair_nat_ty() -> Type {

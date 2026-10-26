@@ -66,18 +66,24 @@ use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, Term, Type};
 pub(crate) struct LocalUse {
     pub bound: u32,
     pub has_tail: bool,
+    /// Bit `i` set when the free index `i` occurs, for `i < 64` (larger
+    /// indices are counted by `bound` alone). No substitution reads it: it
+    /// answers [`ignores_innermost`], a question about cost.
+    pub uses: u64,
 }
 
 impl LocalUse {
     const CLOSED: LocalUse = LocalUse {
         bound: 0,
         has_tail: false,
+        uses: 0,
     };
 
     fn join(self, o: LocalUse) -> LocalUse {
         LocalUse {
             bound: self.bound.max(o.bound),
             has_tail: self.has_tail || o.has_tail,
+            uses: self.uses | o.uses,
         }
     }
 
@@ -86,6 +92,7 @@ impl LocalUse {
     fn under(self, k: u32) -> LocalUse {
         LocalUse {
             bound: self.bound.saturating_sub(k),
+            uses: self.uses.checked_shr(k).unwrap_or(0),
             ..self
         }
     }
@@ -148,6 +155,7 @@ impl Cache {
                 return LocalUse {
                     bound: v.0.saturating_add(1),
                     has_tail: false,
+                    uses: var_bit(v.0),
                 }
             }
             Term::TmNat
@@ -243,6 +251,11 @@ impl Cache {
     }
 }
 
+/// Bit `i` of [`LocalUse::uses`].
+fn var_bit(i: u32) -> u64 {
+    1u64.checked_shl(i).unwrap_or(0)
+}
+
 thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(Cache::new());
 }
@@ -255,6 +268,14 @@ pub(crate) fn term_captures(t: &Rc<Term>) -> u32 {
 
 pub(crate) fn type_captures(t: &Rc<Type>) -> u32 {
     CACHE.with(|c| c.borrow_mut().type_use(t).bound)
+}
+
+/// Whether evaluating `t` reads none of its innermost `n` (< 64) local
+/// variables: no free index below `n` occurs. A wrong answer costs time,
+/// never a verdict (`eval/probe.rs`, the one reader).
+pub(crate) fn ignores_innermost(t: &Rc<Term>, n: u32) -> bool {
+    debug_assert!(n < 64);
+    CACHE.with(|c| c.borrow_mut().term_use(t).uses & (var_bit(n) - 1) == 0)
 }
 
 /// Should a local-namespace operation at binder depth `d` skip this subtree?
@@ -320,6 +341,7 @@ impl Cache {
             LocalUse {
                 bound: 0,
                 has_tail: true,
+                uses: 0,
             },
             |a, t| a.join(self.term_use(t)),
         )
@@ -370,6 +392,7 @@ impl Cache {
             Term::Var(v) => LocalUse {
                 bound: v.0.saturating_add(1),
                 has_tail: false,
+                uses: var_bit(v.0),
             },
             Term::TmNat
             | Term::TmTy(_)
@@ -726,14 +749,16 @@ mod tests {
             term_use(&v(0)),
             LocalUse {
                 bound: 1,
-                has_tail: false
+                has_tail: false,
+                uses: 1
             }
         );
         assert_eq!(
             term_use(&v(4)),
             LocalUse {
                 bound: 5,
-                has_tail: false
+                has_tail: false,
+                uses: 1 << 4
             }
         );
         assert_eq!(term_use(&rt(Term::Zero)), LocalUse::CLOSED);
@@ -756,7 +781,8 @@ mod tests {
             term_use(&lam(v(1))),
             LocalUse {
                 bound: 1,
-                has_tail: false
+                has_tail: false,
+                uses: 1
             }
         );
 
@@ -775,7 +801,8 @@ mod tests {
             term_use(&elim(v(2))),
             LocalUse {
                 bound: 1,
-                has_tail: false
+                has_tail: false,
+                uses: 1
             }
         );
     }
@@ -794,9 +821,32 @@ mod tests {
             type_use(&wf(v(1))),
             LocalUse {
                 bound: 1,
-                has_tail: false
+                has_tail: false,
+                uses: 1
             }
         );
+    }
+
+    #[test]
+    fn uses_names_the_innermost_indices() {
+        // elim_Nat's step over `k, ih` reading an outer variable only:
+        // neither binder occurs, though `bound` counts past both.
+        let outer = rt(Term::Succ(v(2)));
+        assert!(term_use(&outer).bound == 3 && term_use(&outer).uses == 1 << 2);
+        assert!(ignores_innermost(&outer, 2));
+        // Reading `k` (index 1) but not `ih` (index 0).
+        let k_only = rt(Term::Succ(v(1)));
+        assert!(ignores_innermost(&k_only, 1) && !ignores_innermost(&k_only, 2));
+        // Under a binder the indices move down by one.
+        let lam = rt(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: v(1),
+        });
+        assert!(!ignores_innermost(&lam, 1));
+        // Past 64 an index is counted by `bound` alone.
+        assert_eq!(term_use(&v(70)).uses, 0);
     }
 
     #[test]
@@ -820,7 +870,8 @@ mod tests {
             term_use(&g),
             LocalUse {
                 bound: 3,
-                has_tail: true
+                has_tail: true,
+                uses: 1 << 2
             }
         );
     }
@@ -833,7 +884,8 @@ mod tests {
             term_use(&t),
             LocalUse {
                 bound: 4,
-                has_tail: false
+                has_tail: false,
+                uses: 1 << 3
             }
         );
     }

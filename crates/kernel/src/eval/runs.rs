@@ -9,7 +9,9 @@
 //!   the innermost step taken as written.
 //! - **synchronous**: a [`Val::NatSync`], which cancels its run against the
 //!   run it is applied to (`eval.rs`, the application case).
-//! - **opaque**: `None` — the ordinary one-step path.
+//! - **opaque**: `None` — the ordinary one-step path, after the
+//!   bit-transducer class is asked; **direct** (`ih` does not occur in the
+//!   step): `None` straight away, the one step being the whole fold.
 //!
 //! An affine result is a value shaped like the tree: successors on a
 //! projection of the base, or pairs of those. Projections and pairs carry
@@ -52,6 +54,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             // (`eval/transduce.rs`) is asked next, and `None` from it is the
             // ordinary one-step path as before.
             FoldClass::Opaque => self.fold_transduce(program, tail, e),
+            FoldClass::Direct => Ok(None),
             FoldClass::Sync { .. } => Ok(Some(Work::Val(Rc::new(Val::NatSync {
                 program: Rc::clone(program),
                 tail,
