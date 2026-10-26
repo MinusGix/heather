@@ -40,6 +40,20 @@
 //! reductions charge the ordinary fuel — they are the ones the fold's own
 //! first step would perform — so a probe never manufactures a verdict fuel
 //! would have refused.
+//!
+//! ## Steps that never read `ih`
+//!
+//! A step in which `ih` does not occur is not probed
+//! (`issues/kernel-fold-probe-evaluates-recursive-arms.md`): the fold's one
+//! ordinary step is then the whole fold at any run, so no class could do
+//! better, and the probes would only evaluate the step again. That is the
+//! shape of a `match` on a literal inside an enclosing recursion,
+//! `At(before, name) => match name { Zero => walk(before), Succ(_) => … }`,
+//! whose arms are the enclosing recursion's calls: probing it evaluated each
+//! level's call once per probe as well as once for the fold, exponentially
+//! in the walk's depth. The test is on syntax (`bounds::ignores_innermost`),
+//! but it decides only whether to probe, never a class's verdict: the
+//! ordinary step is the fold's definition.
 
 use std::sync::Arc as Rc;
 
@@ -63,6 +77,15 @@ impl<'a, 'v> Eval<'a, 'v> {
     pub(super) fn classify_step(&mut self, step: &'v TmClo<'v>) -> Res<Rc<FoldClass>> {
         if let Some(class) = self.arena.fold_class(step) {
             return Ok(class);
+        }
+        // `ih` is the step's innermost binder (the module doc's last
+        // section).
+        if let Some((_, body)) = step.as_syn() {
+            if crate::bounds::ignores_innermost(body, 1) {
+                let class = Rc::new(FoldClass::Direct);
+                self.arena.cache_fold_class(step, Rc::clone(&class));
+                return Ok(class);
+            }
         }
         let class = Rc::new(self.probe_step(step)?);
         self.arena.cache_fold_class(step, Rc::clone(&class));

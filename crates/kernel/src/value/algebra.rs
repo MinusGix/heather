@@ -53,6 +53,10 @@ pub enum AffineTree {
 pub enum FoldClass {
     /// Folds one step at a time.
     Opaque,
+    /// `ih` does not occur in the step: one ordinary step is the whole
+    /// fold, whatever the run, so the step is not probed
+    /// (`eval/probe.rs`).
+    Direct,
     /// One application of the step is `tree[ih]`. `uniform` means at every
     /// step; otherwise at every step but the innermost, whose `k` is the
     /// run's tail and was matched on.

@@ -100,7 +100,9 @@ fn valuation_lookup_dispatch_cost_does_not_follow_result_width() {
         let counts: Vec<_> = [0, 8, 51, 200, 201, 250].into_iter().map(count).collect();
         eprintln!("BitVec lookup width {width}, ids 0/8/51/200/201/250: {counts:?}");
         for id in [8, 51, 200] {
-            assert_eq!(count(id) - count(0), 2 * id as u64,
+            // One step per successor: the arms never read the fold's ih,
+            // so no level is probed (issues/kernel-fold-probe-evaluates-recursive-arms.md).
+            assert_eq!(count(id) - count(0), id as u64,
                 "result type preparation leaked into case dispatch: {counts:?}");
         }
         assert_eq!(count(201), count(250), "the default arm must stop dispatch");
