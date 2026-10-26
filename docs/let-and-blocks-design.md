@@ -985,9 +985,20 @@ a `refl`'s two sides or a constructor's field types, to the gate. So an
 issues/unused-let-value-unchecked.md).
 
 **The rule.** A block ends by wrapping each value that no use spliced around
-its result as a redex that discards it, `(λ _: T. body)(v)`
+its result as a redex that discards it, `(λ _: T. λ b: B. b)(v)(body)`
 (`statements::LetValue::discard_around`). The block's type is unchanged, the
-redex computes away, and a used `let` keeps the term it always had. That is
+redex computes away, and a used `let` keeps the term it always had.
+
+**At the block's depth.** The first spelling was `(λ _: T. body)(v)`, which
+put the rest of the block one binder deeper per discarded value: `k` unused
+proof lets about a shared chain shifted the body `k` times (each a walk of
+everything already wrapped) and handed the gate the chain at `k` depths,
+which its typing memo judges once per scope, so once per depth. A chain with
+a proof `let` per link took tens of seconds at a few hundred links, nearly all
+of it in those shifts (issues/discarded-let-values-nest-binders.md). In the
+spelling above only `B` crosses the discarding binder, shifted once per block
+and shared by every redex; each value, its type and the body stay at the
+block's own depth, where the chain is the node it is everywhere else. That is
 every written form: a plain `let`, `let _`, a record `let` (one value shared
 by its fields), the statements before and after a `have`, and a `meta fn`
 body's aliases.

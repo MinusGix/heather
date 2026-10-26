@@ -1,6 +1,6 @@
 ---
 title: Bench rewriting and let fan-out at growing size, with recorded exponents
-status: open
+status: closed
 labels: [tactics,performance,benchmarks,proofs]
 area: tactics
 milestone: [tac-general]
@@ -57,3 +57,23 @@ themselves, checked by `refl`), which isolate the gate's share.
 - **[[kernel-typing-memo-on-node-identity]]** and
   **[[subst-shared-node-memo]]** own the let fan-out costs. These families
   are their measurements, not their fixes.
+
+## Log
+
+- 2026-10-26: LANDED: seven families in `crates/elab/benches/frontend/fixtures/rewriting.rs`, run by `scripts/bench-frontend --filter rewrite/` and `--filter let/`. Each family's doc comment and its row in `docs/frontend-benchmarking.md` states its lower bound (all linear); the bands record today's slope. Slope rows are in `baseline.tsv`; case and split rows wait for a `--save` on the recording machine (the bands come from a 4-core cloud box, and its times would sit under the baseline's other `env`). Release, cloud box, one run's min times and its probe-run phase split at the largest size; slope as the mean of four runs (range):
+
+    | family | sizes | largest | elab / kernel at largest | slope (range) |
+    |---|---|---|---|---|
+    | `rewrite/fa` | n = 16..128 | 62 ms | 28% / 72% | 1.44 (1.33-1.53) |
+    | `rewrite/repeat-mod` | n = 16..128 | 120 ms | 34% / 66% | 1.82 (1.75-1.87) |
+    | `rewrite/let-addr0` | k = 6..12 | 157 ms | 69% / 31% | 5.60 (5.40-5.73), ×4 per two lets |
+    | `rewrite/let-nary` (3 lets) | arity 4..32 | 51 ms | 90% / 9% | 2.05 (1.89-2.20) |
+    | `let/fan` | k = 32..256 | 12 ms | 64% / 13% | 1.10 (1.00-1.17) |
+    | `let/dep` | k = 8..64 | 336 ms | 91% / 9% | 2.55 (2.53-2.59) |
+    | `let/stmt` | k = 14..20 | 93 ms | 50% / 49% | 9.58 (8.78-9.99), ×4 per two lets |
+
+    - **What the split says.** `rewrite/fa` and `repeat-mod` are gate-dominated at size: n rewrites nest n `J`s, each over an O(n) motive, which fits about n². `rewrite/let-nary`'s gate stays small (the typing memo shares it), and its elaboration grows with the n³ tree, which is survey §4.2's abstraction walk or occurrence matching (not split). `let-addr0` is 2^k in both halves.
+    - **`let/dep` is mostly elaboration now**, and the elaboration grows faster than the gate's quadratic: ×6.7 from k = 32 to 64 (`heather check --timings`, width one: 28 / 293 / 2,246 / 26,788 ms total against 3.8 / 21 / 122 / 1,518 ms gate at k = 32 / 64 / 128 / 256). Logged on [[discarded-let-values-nest-binders]], whose acceptance counts gate queries only.
+    - **`let/stmt`'s elaboration is 2^k too**, alongside the gate's `Term::eq` walk. Logged on [[kernel-equality-walks-dags-as-trees]].
+    - **Limits met on the way.** `rewrite` rewrites one instance per equation, so a family is n equations in one `rewrite(h, …, h, refl)` (a control with n − 1 fails at `refl`). The goal `f^256(a)` exceeds the expression depth limit (512), so `fa` and `repeat-mod` stop at 128.
+    - **Bands** are the mean ±0.35, or the four-run range where that is wider (`let-addr0` 5.00-6.20, `stmt` 8.40-10.80): on an exponential curve a fixed cost at the small end moves the fit, and the band only needs to notice a fix, which drops the slope to about 1.

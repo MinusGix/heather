@@ -114,6 +114,16 @@ word out of the recursion, `loop_settle.hthr` calls a function in each
 pass and decides on several comparisons, and `loop_anywhere.hthr` puts
 loops in each of those places.
 
+A function that `decreases` a measure `w.toNat()` of a word `w` compiles to
+a loop too, with no fuel to write: its native function takes the words
+only, computes `w`, and runs at most `w` passes of its step, a recursion
+going round and an answer leaving. The passes cannot run out before the
+recursion does, since each pass lowers the measure; the branch after the
+loop runs the step once more for the answer, a recursion there taking a
+value no run reaches. `loop_measure.hthr` counts a word down, `decreases
+n.toNat()`, and `loop_climb.hthr` climbs to a bound, `decreases
+hi.sub(lo).toNat()`, its loop's bound computed first.
+
 The certificate proves the program a function at a time. Each function's
 `_agrees` says that its region, evaluated with every call answered by the
 source function called (`_sources`), is its source function, and the
@@ -122,7 +132,13 @@ loop's `_agrees` is no longer one `refl`: `_pass_agrees` states that one
 pass is one unfolding of the source's step (split over the pass's
 comparisons by `_pass_cased`), `_base` that the exhausted branch is the
 `Zero` arm, and the library's `loop_eval_agrees_from` lifts both to the
-loop by induction on the fuel. A function that calls another agrees
+loop by induction on the fuel. A measured loop's `_agrees` is stated
+against the source's recursor `f::rec` at a bound on its measure (the
+bound's proof carried along): `_body_tree` proves by `split_all` that the
+source's step `f::body` is the pass's tree with its recursion abstracted,
+`_pass_measured` and `_base` meet the passes left and the run out, and the
+library's `loop_eval_agrees_measured` lifts them by induction on the
+passes left. A function that calls another agrees
 through an *expansion* that spells each call as the call it answers, so its
 proof never unfolds a callee; that is also what lets a caller call a
 function deciding through a connective (`calls_either` in

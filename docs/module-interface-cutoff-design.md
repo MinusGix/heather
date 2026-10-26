@@ -106,7 +106,12 @@ Conservative refusals, all of which cost an elaboration and nothing else: any
 registry change anywhere upstream; a changed module order or set; a
 dependency theorem the module opened whose proof changed
 (`OpenedProofChanged`, which the slice path already handles); any name
-collision with an identifier the module wrote.
+collision with an identifier the module wrote. A world with more inductives
+before the module is a registry change and has to be: nominal tags count the
+inductives before them, so the module's kernel terms differ there
+(`issues/nominal-tags-from-declaration-identity.md`). The library gate
+therefore gives every process one prefix (`docs/library-world-design.md`)
+rather than relying on moves between folders.
 
 ## 4. Trust
 

@@ -99,6 +99,22 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 "#),
 ];
 
+// Loops bounded by a measure (issues/function-ir-loop-measure-recursion.md):
+// a `decreases` function compiled to a loop of at most its measure's
+// passes, the bound a parameter or computed first.
+const MEASURED: [Case; 2] = [
+    ("loop_measure", "triangle", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { for (uint64_t n = a & 1023; n != 0; --n) b += n; return b; }
+"#),
+    ("loop_climb", "climbing", r#"
+static uint64_t reference(uint64_t a, uint64_t b) {
+    uint64_t lo = a & 255, hi = b & 1023, acc = b;
+    for (; lo < hi; ++lo) acc = acc + acc + lo;
+    return acc ^ lo;
+}
+"#),
+];
+
 const CALLS: &[&str] = &["CallTo("];
 
 #[test]
@@ -112,6 +128,9 @@ fn programs_with_calls_execute_saved() { execute("saved", &SAVED, CALLS); }
 
 #[test]
 fn programs_with_loops_execute() { execute("loops", &LOOPS, &["Loop(", "loop_eval_agrees_from(", "_pass_cased("]); }
+
+#[test]
+fn programs_with_measured_loops_execute() { execute("measured", &MEASURED, &["Loop(", "loop_eval_agrees_measured(", "_body_tree(", "split_all;"]); }
 
 fn execute(group: &str, cases: &[Case], claims: &[&str]) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

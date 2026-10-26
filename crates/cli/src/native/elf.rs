@@ -22,6 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use heather_elab::{function_ir_source, Elaborator};
+use heather_cache::module_image::ImageFreshness;
 use heather_cli::{loader, semantic::SemanticSession};
 
 use super::{check_file, symbol_ok, verified, write_new};
@@ -50,10 +51,14 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut output = None;
     let mut cache = None;
+    let mut freshness = ImageFreshness::Exact;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            // `check`'s flag: replay images an earlier build wrote, as the
+            // suite's stale lanes do everywhere else.
+            "--accept-stale-images" => freshness = ImageFreshness::AcceptStale,
             "-o" | "-L" | "--cache-dir" => {
                 let value = PathBuf::from(args.next().ok_or_else(|| format!("{arg} needs a path"))?);
                 match arg.as_str() {
@@ -67,7 +72,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         }
     }
     if positional.len() != 2 || output.is_none() {
-        return Err("usage: heather write-elf <file.hthr> <source> -o <output> [-L <dir>]... [--cache-dir <dir>]".into());
+        return Err("usage: heather write-elf <file.hthr> <source> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images]".into());
     }
     let (source, symbol, output) = (Path::new(positional[0]), positional[1], output.unwrap());
     if !symbol_ok(symbol) {
@@ -92,7 +97,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     if let Some(store) = &verdicts {
         elab.set_gate(std::sync::Arc::clone(store) as std::sync::Arc<dyn heather_elab::gate::KernelGate>);
     }
-    let mut session = SemanticSession::new(cache);
+    let mut session = SemanticSession::new(cache).with_freshness(freshness);
     for module in &sources {
         check_file(&mut elab, &mut session, module)?;
     }

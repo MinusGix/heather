@@ -115,6 +115,24 @@ kernel then rejects (issues/split-all-nested-scrutinee-kernel-reject.md):
   splitter, at the split, rather than surfacing as the kernel's verdict on
   the declaration. (A conversion that runs out of fuel is left to the
   kernel.)
+- **A goal the split has proved is closed, not handed on.** An equation
+  whose two sides the split and simplification made the same term closes
+  with `refl`. The leaf is written for the cases still open, and a step
+  that answers a value in some arms and recurs in others meets a leaf
+  written for its recursions (`all_goals { hg }`, a hypothesis stating
+  them) at its answers as `acc = acc`, which only `refl` proves. The sides
+  are compared as terms: a goal that holds only by computation is still the
+  leaf's.
+- **A convoy keeps its equation.** `match h: c { … }` elaborates to a match
+  on `c` whose motive is `λ z => (c = z) → T`, applied to `refl`; an arm
+  that uses `h` (an obligation, a recursion's bound) is typed by it. Split
+  at `c`, only the convoy's match moves to the split's `z`; its motive, arms
+  and `refl` keep `c`, and the split's motive takes the case's equation `q
+  : c = z` as a second binder, the convoy applied to `q` in place of `refl`.
+  In each case the convoy then takes its arm with the case's equation, the
+  type the arm was written at. Abstracted whole, the arm was handed an
+  equation about `z` and the kernel refused the split
+  (issues/split-all-convoy-equation.md).
 - **A `refl` leaf is checked where it stands.** Elsewhere `refl` is a note
   for the gate, not a check; at a `split_all` leaf it is converted on the
   spot, and a leaf whose sides differ is refused with its goal and the case

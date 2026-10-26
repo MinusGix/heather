@@ -1,6 +1,6 @@
 ---
 title: Check a block's unused let values at the block's depth, not one binder deeper each
-status: open
+status: closed
 labels: [elaboration,performance,proofs]
 area: language
 created: 2026-10-26
@@ -26,6 +26,8 @@ at the end is linear (148 / 276 / 532). Before the typing memo, `dep` was
 
 ## Options
 
+- **Taken:** no binder over the body at all, `(λ _: T. λ b: B. b)(v)(body)`
+  per value, so only `B` is shifted (once per block).
 - Check all of a block's unspliced values under **one** binder: a single
   redex whose argument carries every discarded value (a Σ of them, or one
   application of a `k`-ary λ), so each value and its type is judged at the
@@ -41,3 +43,8 @@ at the end is linear (148 / 276 / 532). Before the typing memo, `dep` was
   (`crates/elab/tests/let_and_blocks.rs::a_shared_let_chain_is_checked_once_per_link`
   tightens from "checks" to linear), with the unused-value refusals of
   [[unused-let-value-unchecked]] still refused.
+
+## Log
+
+- 2026-10-26: The `dep` family is now the frontend bench family `let/dep` ([[tactic-scaling-bench-families]]). Its time is about 90% elaboration, which grows faster than the gate's quadratic: `heather check --timings`, release, width one, total against gate ms: 28 / 3.8 at k = 32, 293 / 21 at 64, 2,246 / 122 at 128, 26,788 / 1,518 at 256 (×8 to ×12 per doubling). Not attributed; it is plausibly the same nesting (each discarded value elaborated or shifted under one more binder), so a fix should be measured on the whole time, not on gate queries alone.
+- 2026-10-26: FIXED: stack samples of `let/dep` at k = 256 (gdb, release, 14 of 14) were all in `LetValue::discard_around`'s `body.shift_local(1)`: each discarded value shifted everything already wrapped, so the elaboration was the shifts, not checking. Each value is now discarded as `(λ _: T. λ b: B. b)(v)(body)`: the value, its type and the body stay at the block's depth, and `B` is shifted once per block and shared by every redex (`docs/let-and-blocks-design.md` §11). `heather check --timings`, release, width one, total / gate ms / queries at k = 32, 64, 128, 256: 1.3 / 0.4 / 740, 2.4 / 0.8 / 1,476, 6.4 / 1.7 / 2,948, 14.8 / 5.2 / 5,892 (was 28, 293, 2,246, 26,788 ms total). `let/dep` slope 1.10 over k = 32..256 (four runs, 1.05-1.15), from 2.55 over 8..64. `a_shared_let_chain_is_checked_once_per_link` now holds `dep` to the linear gate-query bound with the other shapes, and its elaboration's substitution visits too; both fail on the old spelling.

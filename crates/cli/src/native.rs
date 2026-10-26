@@ -269,7 +269,7 @@ fn check_module(elab: &mut Elaborator, session: &mut SemanticSession, module: &l
 /// [`check_module`] for a module that is a file on disk: its diagnostics
 /// name the file, with the offending line quoted.
 fn check_file(elab: &mut Elaborator, session: &mut SemanticSession, module: &loader::Module) -> Result<(), String> {
-    let outcome = session.check(elab, module, LintProfile::Default);
+    let outcome = session.check(elab, module, module.lint_profile());
     for notice in outcome.notices { eprintln!("{notice}"); }
     if outcome.errors.is_empty() { Ok(()) } else {
         let file = module.path.display().to_string();
