@@ -1664,8 +1664,7 @@ fn Nat::low_bit(self n: Nat) → Nat { n - n.half() * 2 }
 
 // The remainder is doubled as `r * 2`, never `r + r`: a sum of a value with
 // itself stays a composed run whose later comparison walks every fragment,
-// which ran a 1050-bit division out of fuel. The recursion tests
-// `n.is_zero()` rather than matching `n` (issues/nat-wide-evaluation.md).
+// which ran a 1050-bit division out of fuel (issues/nat-wide-evaluation.md).
 fn Nat::ldiv_step(n, d: Nat, s: DivMod) → DivMod {
     match s {
         MkDivMod(q, r) => Nat::ldiv_pick(d, q, r * 2 + n.low_bit(), d.le_dec(r * 2 + n.low_bit())),
@@ -1675,9 +1674,9 @@ fn Nat::ldiv_step(n, d: Nat, s: DivMod) → DivMod {
 fn Nat::ldiv_fuel(self n, d, fuel: Nat) → DivMod {
     match fuel {
         Zero => MkDivMod(0, n),
-        Succ(f) => match n.is_zero() {
-            True => MkDivMod(0, 0),
-            False => Nat::ldiv_step(n, d, n.half().ldiv_fuel(d, f)),
+        Succ(f) => match n {
+            Zero => MkDivMod(0, 0),
+            Succ(k) => Nat::ldiv_step(Succ(k), d, Succ(k).half().ldiv_fuel(d, f)),
         },
     }
 }
@@ -1823,9 +1822,9 @@ fn Nat::pow_sq_step(a, s, b: Nat) → Nat { match b { Zero => s * s, Succ(_) => 
 fn Nat::pow_sq_fuel(a, n, fuel: Nat) → Nat {
     match fuel {
         Zero => 1,
-        Succ(f) => match n.is_zero() {
-            True => 1,
-            False => Nat::pow_sq_step(a, Nat::pow_sq_fuel(a, n.half(), f), n.low_bit()),
+        Succ(f) => match n {
+            Zero => 1,
+            Succ(k) => Nat::pow_sq_step(a, Nat::pow_sq_fuel(a, Succ(k).half(), f), Succ(k).low_bit()),
         },
     }
 }
