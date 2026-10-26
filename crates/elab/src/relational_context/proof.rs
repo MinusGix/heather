@@ -121,6 +121,7 @@ impl Builder<'_> {
             level,
             skel: None,
             spliced: None,
+            shifted: Default::default(),
         }));
         name
     }

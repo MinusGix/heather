@@ -5827,6 +5827,7 @@ impl Elaborator {
                     level,
                     skel: None,
                     spliced: None,
+                    shifted: Default::default(),
                 }));
                 named = inner;
                 &named
@@ -9101,11 +9102,8 @@ impl Elaborator {
                 // Inlined at the use site, shifted across the binders pushed
                 // since it was bound (same as a `fn` definition's globals).
                 let by = (cx.names.len() - a.depth) as u32;
-                return Ok((
-                    if splice { a.splice(by) } else { a.term.shift_local(by) },
-                    a.ty.shift_local(by),
-                    a.level.clone(),
-                ));
+                let (term, ty) = if splice { a.splice(by) } else { a.at(by) };
+                return Ok((term, ty, a.level.clone()));
             }
             (Some(pos), None) => return Ok(self.local(cx, pos)),
             (None, None) => {}

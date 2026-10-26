@@ -1540,6 +1540,7 @@ impl Elaborator {
                 ty,
                 level,
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         if !children.is_empty() || !fn_children.is_empty() {

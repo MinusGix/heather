@@ -631,7 +631,7 @@ impl ValueMetricsSnapshot {
 /// and an order of magnitude cheaper (it was ~7% of a generated x86 module's
 /// profile as `hash_one` + `DefaultHasher::write`).
 #[derive(Default, Clone, Copy)]
-struct PtrHasher(u64);
+pub(crate) struct PtrHasher(u64);
 
 impl std::hash::Hasher for PtrHasher {
     #[inline]
@@ -660,7 +660,7 @@ impl std::hash::Hasher for PtrHasher {
     }
 }
 
-type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
+pub(crate) type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
 
 /// A memo from an arena's own closures (or pairs of them) to the values
 /// they forced to. It keeps every entry for as long as the arena lives: see

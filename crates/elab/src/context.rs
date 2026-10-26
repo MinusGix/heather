@@ -3,6 +3,7 @@
 use std::sync::Arc as Rc;
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::borrow::Cow;
 
@@ -173,18 +174,42 @@ pub(crate) struct Alias {
     /// alias is not a kernel binder and the elaborator leaves conversions (a
     /// `refl`, a constructor's field types) to the kernel's gate.
     pub(crate) spliced: Option<Rc<AtomicBool>>,
+    /// The value and type at each depth a use has shifted them to so far.
+    /// Every use at one depth gets the same shifted value, so a later alias
+    /// built from two uses of this one holds one copy, not two: without it,
+    /// a chain of lets each bound one binder deeper and using the previous
+    /// twice doubled per link (`issues/subst-shared-node-memo.md`). The
+    /// shift itself keeps a shared value's own sharing
+    /// (`heather_kernel::subst`, §Keeping a shared DAG shared).
+    pub(crate) shifted: Mutex<Vec<(u32, Term, Type)>>,
 }
 
 impl Alias {
-    /// The value at a use `by` binders past the binding, recorded as having
-    /// reached the term being built. Only a use whose result goes into that
-    /// term may call this: recording a value the term never contains would
-    /// let a `let` the kernel never saw pass unchecked.
-    pub(crate) fn splice(&self, by: u32) -> Term {
+    /// The value and type at a use `by` binders past the binding, the value
+    /// recorded as having reached the term being built. Only a use whose
+    /// result goes into that term may call this: recording a value the term
+    /// never contains would let a `let` the kernel never saw pass unchecked.
+    pub(crate) fn splice(&self, by: u32) -> (Term, Type) {
         if let Some(spliced) = &self.spliced {
             spliced.store(true, Ordering::Relaxed);
         }
-        self.term.shift_local(by)
+        self.at(by)
+    }
+
+    /// The value and type at a use `by` binders past the binding, for
+    /// reading. Shifted once per depth (see [`Alias::shifted`]); a clone of
+    /// either is a clone of its root node.
+    pub(crate) fn at(&self, by: u32) -> (Term, Type) {
+        if by == 0 {
+            return ((*self.term).clone(), self.ty.clone());
+        }
+        let mut shifted = self.shifted.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, term, ty)) = shifted.iter().find(|(at, _, _)| *at == by) {
+            return (term.clone(), ty.clone());
+        }
+        let (term, ty) = (self.term.shift_local(by), self.ty.shift_local(by));
+        shifted.push((by, term.clone(), ty.clone()));
+        (term, ty)
     }
 }
 
@@ -254,6 +279,7 @@ impl Cx {
                         ty: a.ty.clone(),
                         level: a.level.clone(),
                         skel: a.skel.clone(),
+                        shifted: Default::default(),
                     })
                 })
                 .collect(),
@@ -388,6 +414,7 @@ mod tests {
             name: "x".into(), depth: 1, term: Rc::new(Term::Zero),
             ty: Type::Nat, level: Level::Zero, skel: None,
             spliced: None,
+            shifted: Default::default(),
         }));
         assert!(receivers.inference(&changed, &recv).is_none());
         changed = scoped.clone();

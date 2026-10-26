@@ -1501,6 +1501,7 @@ impl Elaborator {
                 ty,
                 level,
                 spliced: None,
+                shifted: Default::default(),
             }));
             if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
                 cx.op_locals.push((sym.clone(), pname.clone()));

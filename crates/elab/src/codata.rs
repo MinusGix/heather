@@ -1225,7 +1225,7 @@ impl Elaborator {
                 FieldKind::Payload => {
                     if let Some(name) = &ctor.fields[k].0 {
                         let (term, ty, level) = self.projection(&lcx, &ctor_ty, &here, payload_k, span)?;
-                        lcx.aliases.push(Rc::new(Alias { skel: None, name: name.clone(), depth: at, term, ty, level, spliced: None }));
+                        lcx.aliases.push(Rc::new(Alias { skel: None, name: name.clone(), depth: at, term, ty, level, spliced: None, shifted: Default::default() }));
                     }
                     payload_k += 1;
                 }
@@ -1253,6 +1253,7 @@ impl Elaborator {
                 ty: comps[r].shift_local(at as u32 - base_len as u32),
                 level: lp.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         let Some(Some(exprs)) = ctor.child_index.get(k) else {
@@ -1308,7 +1309,7 @@ impl Elaborator {
         let mut tm = var(0);
         for (k, (name, _)) in ind.co_index.iter().enumerate() {
             if k + 1 == n {
-                out.push(Rc::new(Alias { skel: None, name: name.clone(), depth, term: tm, ty, level: lvl, spliced: None }));
+                out.push(Rc::new(Alias { skel: None, name: name.clone(), depth, term: tm, ty, level: lvl, spliced: None, shifted: Default::default() }));
                 break;
             }
             let Type::Sigma { fst_level, snd_level, fst, snd } = ty else {
@@ -1329,6 +1330,7 @@ impl Elaborator {
                 ty: (*fst).clone(),
                 level: fst_level.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
             tm = Rc::new(Term::Snd {
                 fst_level: fst_level.clone(),
@@ -1863,6 +1865,7 @@ impl Elaborator {
                         ty,
                         level,
                         spliced: None,
+                        shifted: Default::default(),
                     }));
                 }
                 let body = self.elab_check(&acx, &arm.body, &result.shift_local(db), &mlvl)?;
