@@ -489,3 +489,24 @@ unfolded spelling now meets the call. The negative controls are in
 `crates/elab/tests/omega_defined_propositions.rs`: a proposition stuck on a
 match is still skipped, a false claim through a defined fact is refused, and a
 stuck call stays an atom.
+
+## 12. Fields of fields, and fields put as atoms (2026-10-26)
+
+`issues/omega-nested-projection-of-call.md`. §11's `field_as_put` unfolded
+one receiver and gave up when the projected field was itself a projection,
+and the Nat side kept the field only on an arithmetic head. So
+`R::at(n).inner.den.pred` (each field put by a call) stayed one atom, and so
+did `P::of(n).pred`, whose field is put as the variable `n`: neither met the
+goal's `n`. Two changes, both in `crates/elab/src/omega_cert.rs`:
+
+- **A field that is again a field read is read on** (`field_as_put_within`),
+  up to `FIELD_NESTING_DEPTH` receivers, each unfolded only as far as its pair
+  and projected without δ, as before.
+- **On `Nat`, a field put as an atom is that atom** (`projection_reduct`): a
+  variable or an applied global that spells. A stuck eliminator put there
+  still leaves the projection an atom. `Int` already kept any field that
+  spells.
+
+§5's hazard is as in §11: every occurrence of such a field takes the same
+route, so no atom splits, and a field read off a neutral record (`q.den.pred`)
+is untouched. Probes and controls: `lib/_tests/std/tactic/omega_tests.hthr`.

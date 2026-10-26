@@ -1218,8 +1218,19 @@ fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> O
     if matches!(&*reduct, Term::NatLit(_)) {
         return Some(reduct);
     }
-    named_arithmetic_shape(elab, cx, &reduct, &[], depth)
-        .or_else(|| named_arithmetic_shape(elab, cx, &field_as_put(elab, cx, tm)?, &[], depth))
+    if let Some(shaped) = named_arithmetic_shape(elab, cx, &reduct, &[], depth) {
+        return Some(shaped);
+    }
+    let field = field_as_put(elab, cx, tm)?;
+    named_arithmetic_shape(elab, cx, &field, &[], depth).or_else(|| {
+        // A field put as a plain atom (`P::of(n).pred` is `n`) is read as
+        // that atom, so that it meets the goal's other mentions of it; a
+        // stuck eliminator put there stays behind its projection
+        // (issues/omega-nested-projection-of-call.md).
+        let (head, _) = app_spine(&field);
+        (matches!(head, Term::Var(_) | Term::GlobalTm { .. }) && nat_term_source(elab, cx, &field).is_ok())
+            .then_some(field)
+    })
 }
 
 /// A field of a call that unfolds to a constructor, read as what was put
@@ -1227,8 +1238,17 @@ fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> O
 /// `x.den * y.den`. The weak head of the whole read would
 /// unfold that sum on into its recursor, so the receiver is unfolded only as
 /// far as the constructor and the field projected without δ, as
-/// `simplify_goal` does for a goal's fields.
+/// `simplify_goal` does for a goal's fields. A field that is itself a
+/// field of such a call (`Q::at(n).den.pred`, where `den` is put as
+/// `P::of(n)`) is read on, up to [`FIELD_NESTING_DEPTH`] receivers deep.
 fn field_as_put(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
+    field_as_put_within(elab, cx, tm, FIELD_NESTING_DEPTH)
+}
+
+/// The most receivers [`field_as_put`] unfolds for one read.
+const FIELD_NESTING_DEPTH: u32 = 8;
+
+fn field_as_put_within(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Option<Rc<Term>> {
     fn with_receiver(tm: &Rc<Term>, receiver: &Rc<Term>) -> Rc<Term> {
         let mut out = (**tm).clone();
         match &mut out {
@@ -1258,8 +1278,8 @@ fn field_as_put(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
         None => with_receiver(tm, &unfolded),
     };
     let field = Rc::new(oracle.bounded(64).whnf_term_opaque(&cx.gamma, &read).ok()?);
-    if crate::spelling::proj_of(&field).is_some() {
-        return None;
+    if is_field_read(elab, &field) {
+        return field_as_put_within(elab, cx, &field, depth.checked_sub(1)?);
     }
     Some(field)
 }

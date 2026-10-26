@@ -1,0 +1,45 @@
+// Probes of the `omega` tactic (`lib/std/tactic/omega.hthr`,
+// `docs/omega-measure-reduction-design.md`). Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import omega;
+
+// A field of a call that unfolds to a constructor is read as what was put
+// there, through any number of record fields
+// (issues/omega-nested-projection-of-call.md, §11 of the design).
+record P { pred: Nat }
+fn P::of(n: Nat) → P { P(n) }
+record Q { num: Int, den: P }
+fn Q::at(n: Nat) → Q { Q(OfNat(n), P::of(n)) }
+fn Q::twice(n: Nat) → Q { Q(OfNat(n), P::of(n + n)) }
+record R { inner: Q, tag: Nat }
+fn R::at(n: Nat) → R { R(Q::at(n), n) }
+fn bump(b: Bool, n: Nat) → Nat { match b { True => Succ(n), False => n } }
+fn Q::bumped(b: Bool, n: Nat) → Q { Q(OfNat(n), P(bump(b, n))) }
+
+// One field put as a variable, then two and three receivers deep.
+theorem field_put_as_variable(n: Nat): P::of(n).pred = n { omega }
+theorem field_of_field(n: Nat): Q::at(n).den.pred = n { omega }
+theorem three_deep(n: Nat): R::at(n).inner.den.pred = n { omega }
+// The inner receiver's field is arithmetic.
+theorem field_of_field_sum(n: Nat): Q::twice(n).den.pred = n + n { omega }
+// At `Int`, in a goal and in a fact.
+theorem int_field_of_field(n: Nat): R::at(n).inner.num = OfNat(n) { omega }
+theorem int_fact(n: Nat, x: Int, h: x < R::at(n).inner.num): x < OfNat(n) + OfNat(1) { omega }
+// In a checking position.
+theorem checking(n, m: Nat, h: m < n): m < R::at(n).inner.den.pred {
+    let k: (m < R::at(n).inner.den.pred) = omega;
+    k
+}
+// A field put as a call stuck on a match is that call, so it meets the
+// call's other mentions.
+theorem stuck_call_put(b: Bool, n: Nat): Q::bumped(b, n).den.pred = bump(b, n) { omega }
+
+// Controls. A field put as a stuck call is not unfolded past the call, a
+// false claim through a nested field is refused, and a field of a neutral
+// record stays an atom.
+// expect-error: `omega` got stuck
+theorem stuck_call_opaque(b: Bool, n: Nat): Q::bumped(b, n).den.pred <= n { omega }
+// expect-error: `omega` got stuck
+theorem false_through_fields(n: Nat): R::at(n).inner.den.pred = n + 1 { omega }
+// expect-error: `omega` got stuck
+theorem neutral_receiver(q: Q, n: Nat): q.den.pred = n { omega }
