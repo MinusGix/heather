@@ -1,9 +1,10 @@
 // cat compiled, end to end (issues/native-effect-source-compiler.md, round
 // S3.2): `cat(1024)` compiled by `Source::compile` with its region at the
 // I/O image's page, its code loaded past a 232-byte header, simulates cat's
-// source (`native_compile_correct`), and so every run of the machine Linux
-// can give it that exits 0 sends to stdout exactly what it read from stdin
-// (`cat_sends`, from `cat_implements`). Only the compile, its layout and
+// source (`Source::elf_simulates`, which `write-elf` states of every
+// program, from `native_compile_correct`), and so every run of the machine
+// Linux can give it that exits 0 sends to stdout exactly what it read from
+// stdin (`cat_sends`, from `cat_implements`). Only the compile, its layout and
 // the code's length are evaluated; nothing about the run is.
 import native_cat;
 import native_cat_spec;
@@ -12,6 +13,7 @@ import native_compile;
 import native_compile_region;
 import native_compile_steps;
 import native_compile_correct;
+import native_compile_elf;
 import function_ir_lower;
 import stream_filter_spec;
 import linux_calls;
@@ -71,14 +73,7 @@ theorem cat_bytes_fit(): 232 + cat_bytes().len() <= 65536 {
 theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io())>,
     entry: s.rip = io_entry(), loaded: s.memory = X86Memory::io_load(header ++ cat_bytes())):
     SimProgram(X86Profile::io().linux(), cat(cat_capacity()).denote(), s) {
-    let r = DataRegion::io_page();
-    let start: (io_entry() = next_rip(io_entry(), 0)) = BitVec::eq_of_eq_bit(64, io_entry(), next_rip(io_entry(), 0), refl);
-    let resident = j(start, λ y _ => CodeResident(X86Profile::io().fetch(), X86Memory::io_load(header ++ cat_bytes()), cat_bytes(), y),
-        X86Memory::io_load_entry(header, cat_bytes(), long, cat_bytes_fit()));
-    let at_s = j(sym(loaded), λ m _ => r.profile.linux().site(cat_code(), io_entry()).Resident(m), resident);
-    let zero = j(sym(loaded), λ m _ => r.Holds(λ _ => zero_byte(), m), X86Memory::io_load_page(header ++ cat_bytes()));
-    native_compile_correct(cat(cat_capacity()), r, cat_fits(), cat_code(), cat_compiles(), io_entry(), s,
-        trans(entry, start), at_s, zero)
+    cat(cat_capacity()).elf_simulates(cat_code(), cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, s, entry, loaded)
 }
 
 // So every run of that process that Linux can give cat's answers, along a
