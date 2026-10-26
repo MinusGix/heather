@@ -42,12 +42,12 @@ use std::sync::Arc as Rc;
 
 use heather_cache::Cache;
 use heather_cache::module_image::ImageFreshness;
-use heather_elab::{Elaborator, LintProfile, stats};
+use heather_elab::{Elaborator, stats};
 
 // The loader lives in this crate's `lib` target so that the frontend bench
 // corpus computes its import closure with the *same* code the CLI does
 // (see `lib.rs`, issues/frontend-bench-ir-closure-stale.md).
-use heather_cli::{expect, loader, semantic::SemanticSession};
+use heather_cli::{expect, loader, semantic::SemanticSession, world::World};
 
 mod color;
 mod fmt;
@@ -56,7 +56,7 @@ mod native;
 /// Where the standard library lives when nobody says otherwise
 /// (docs/modules-design.md §3.2). Defaulted only if it exists, so a run from
 /// a directory without one behaves exactly as it did before modules.
-const DEFAULT_LIB: &str = "lib/std";
+const DEFAULT_LIB: &str = loader::STDLIB_DIR;
 const DEFAULT_LIB_ROOT: &str = "lib";
 
 fn main() -> ExitCode {
@@ -100,12 +100,12 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
                      \x20      heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
-                     \x20      heather write-elf <file.hthr> <program> -o <output> [-L <dir>]... [--cache-dir <dir>]";
+                     \x20      heather write-elf <file.hthr> <program> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images]";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -151,6 +151,10 @@ struct Opts {
     /// they mark must be refused for the reason they name, and is then not
     /// an error (`expect.rs`). Off, a directive is a comment.
     expectations: bool,
+    /// `--world <dir>`: load the library under `dir`'s shared modules in its
+    /// canonical order before each root's own (`world.rs`), so the library
+    /// gate's processes share one image per module.
+    world: Option<PathBuf>,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -169,6 +173,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         images: ImageFreshness::Exact,
         kernel_workers: None,
         expectations: false,
+        world: None,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -218,6 +223,15 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         }
         if a == "--review" {
             opts.review = true;
+            continue;
+        }
+        if let Some(rest) = a.strip_prefix("--world") {
+            let dir = match rest.strip_prefix('=') {
+                Some(d) if !d.is_empty() => d.to_string(),
+                _ if rest.is_empty() => it.next().ok_or("`--world` needs a directory")?.clone(),
+                _ => return Err(format!("unknown option `{a}`")),
+            };
+            opts.world = Some(PathBuf::from(dir));
             continue;
         }
         if a == "--expectations" {
@@ -313,6 +327,16 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         }
         Rc::new(c)
     });
+    let world = match &opts.world {
+        Some(dir) => match World::of(dir, &search_for_path(dir, &opts.search)) {
+            Ok(world) => Some(world),
+            Err(e) => {
+                eprintln!("{}: --world {}: {}", color::error_label(stderr_color), dir.display(), e.msg);
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
     let mut failed = false;
     for path in files {
         // A fresh elaborator per **path**: two file paths re-elaborate a shared
@@ -328,8 +352,6 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let lint_profile = lint_profile_for_path(Path::new(path));
-        elab.set_lint_profile(lint_profile);
         elab.set_review_lints(opts.review);
         elab.set_kernel_workers(
             opts.kernel_workers
@@ -366,7 +388,18 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
         };
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-        let modules = match loader::load_many(&root_refs, &search) {
+        let loaded = loader::load_many(&root_refs, &search).and_then(|modules| match &world {
+            // The world's prefix first, then the roots: the prefix is closed
+            // under imports and in load order already, so the loader keeps it
+            // as it is and appends what the roots need beyond it.
+            Some(world) if !world.prefix(&modules).is_empty() => {
+                let mut all: Vec<&Path> = world.prefix(&modules).iter().map(PathBuf::as_path).collect();
+                all.extend(&root_refs);
+                loader::load_many(&all, &search)
+            }
+            _ => Ok(modules),
+        });
+        let modules = match loaded {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("{}: {}", color::error_label(stderr_color), e.msg);
@@ -412,7 +445,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         }
         for m in &modules {
             elab.reset_value_metrics();
-            let outcome = semantic.check(&mut elab, m, lint_profile);
+            let outcome = semantic.check(&mut elab, m, m.lint_profile());
             if report_metrics {
                 if let Some(snapshot) = elab.value_metrics() {
                     eprintln!("value metrics {}: {snapshot:?}", display_path(&m.path, path));
@@ -472,20 +505,29 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             // Rendered against the module's own source and its own path: an
             // error in an imported file is that file's error.
             let shown = display_path(&m.path, path);
-            for (i, e) in errs.iter().enumerate() {
+            // One source span elaborated for several declarations reports its
+            // error once per declaration: a `section` head binder is spliced
+            // into every member (docs/sections-design.md §5.3), a class field's
+            // type into every projection. Identical renderings are shown once,
+            // with their count.
+            let mut distinct: Vec<(String, usize)> = Vec::new();
+            for e in &errs {
+                let text = e.render_snippet(&m.src, &shown);
+                match distinct.iter_mut().find(|(t, _)| *t == text) {
+                    Some((_, k)) => *k += 1,
+                    None => distinct.push((text, 1)),
+                }
+            }
+            for (i, (text, k)) in distinct.iter().enumerate() {
                 if i > 0 {
                     eprintln!();
                 }
-                eprint!(
-                    "{}",
-                    color::diagnostic(
-                        &e.render_snippet(&m.src, &shown),
-                        color::Severity::Error,
-                        stderr_color,
-                    )
-                );
+                eprint!("{}", color::diagnostic(text, color::Severity::Error, stderr_color));
+                if *k > 1 {
+                    eprintln!("  = this error was reported {k} times at this span, once per declaration elaborating it");
+                }
             }
-            let n = errs.len();
+            let n = distinct.len();
             let count = format!("{n} error{}", if n == 1 { "" } else { "s" });
             eprintln!("\n{shown}: {}", color::error_count(&count, stderr_color));
             if let Some(n) = hint {
@@ -609,12 +651,11 @@ fn check_inspection_modules(
     opts: &Opts,
     elab: &mut Elaborator,
     modules: &[loader::Module],
-    lint_profile: LintProfile,
 ) -> Result<(), (usize, Vec<heather_elab::ElabError>)> {
     let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()))
         .with_freshness(opts.images);
     for (i, m) in modules.iter().enumerate() {
-        let outcome = semantic.check(elab, m, lint_profile);
+        let outcome = semantic.check(elab, m, m.lint_profile());
         for notice in &outcome.notices {
             eprintln!("{notice}");
         }
@@ -642,8 +683,6 @@ fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let lint_profile = lint_profile_for_path(Path::new(path));
-        elab.set_lint_profile(lint_profile);
         let root_path = Path::new(path);
         let search = search_for_path(root_path, &opts.search);
         let roots = match roots_for_path(root_path, &search) {
@@ -662,7 +701,7 @@ fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
             }
         };
         if let Err((module, errs)) =
-            check_inspection_modules(opts, &mut elab, &modules, lint_profile)
+            check_inspection_modules(opts, &mut elab, &modules)
         {
             let m = &modules[module];
             let shown = display_path(&m.path, path);
@@ -743,8 +782,6 @@ fn obligations(opts: &Opts, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let lint_profile = lint_profile_for_path(Path::new(path));
-        elab.set_lint_profile(lint_profile);
         let modules = match loader::load(Path::new(path), &opts.search) {
             Ok(m) => m,
             Err(e) => {
@@ -753,7 +790,7 @@ fn obligations(opts: &Opts, files: &[String]) -> ExitCode {
             }
         };
         if let Err((module, errs)) =
-            check_inspection_modules(opts, &mut elab, &modules, lint_profile)
+            check_inspection_modules(opts, &mut elab, &modules)
         {
             let m = &modules[module];
             let shown = display_path(&m.path, path);
@@ -847,20 +884,6 @@ fn display_path(module_path: &Path, root_arg: &str) -> String {
             Err(_) => module_path.display().to_string(),
         },
         _ => module_path.display().to_string(),
-    }
-}
-
-/// Heather's own library has a house style; accepting the ASCII aliases is a
-/// language promise and warning about them is not. Canonical paths make this
-/// depend on the actual `lib/std` tree rather than a coincidental directory
-/// name, and selecting one file inside it behaves like selecting the tree.
-fn lint_profile_for_path(path: &Path) -> LintProfile {
-    let Ok(stdlib) = Path::new(DEFAULT_LIB).canonicalize() else {
-        return LintProfile::Default;
-    };
-    match path.canonicalize() {
-        Ok(path) if path.starts_with(stdlib) => LintProfile::Stdlib,
-        _ => LintProfile::Default,
     }
 }
 

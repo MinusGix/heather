@@ -374,9 +374,9 @@ theorem Int::neg_add(self a, b: Int): -(a + b) = -a + -b {
                 -(a + OfNat(Succ(k)))
                     = -(a + OfNat(k)).isucc()      := Int::cong(Int::neg, a.add_isucc(OfNat(k))),
                     = (-(a + OfNat(k))).ipred()      := (a + OfNat(k)).neg_isucc(),
-                    = (-a + -OfNat(k)).ipred() := cong(ih),
+                    = (-a + -OfNat(k)).ipred() := prelude::cong(ih),
                     = -a + Int::negOfNat(k).ipred()   := sym((-a).add_ipred(Int::negOfNat(k))),
-                    = -a + NegSucc(k)           := cong(Int::ipred_negOfNat(k)),
+                    = -a + NegSucc(k)           := prelude::cong(Int::ipred_negOfNat(k)),
             },
         apply trans;
         give Int::cong(Int::neg, a.add_neg_one());
@@ -544,7 +544,7 @@ theorem Int::mul_neg_l(self a, b: Int): -a * b = -(a * b) {
         -a * b
             = b * -a := (-a).mul_comm(b),
             = -(b * a) := b.mul_neg_r(a),
-            = -(a * b) := cong(b.mul_comm(a)),
+            = -(a * b) := prelude::cong(b.mul_comm(a)),
     }
 }
 
@@ -617,7 +617,7 @@ theorem Int::mul_right_comm(self a, b, c: Int): (a * b) * c = (a * c) * b {
     calc {
         (a * b) * c
             = a * (b * c) := a.mul_assoc(b, c),
-            = a * (c * b) := cong(b.mul_comm(c)),
+            = a * (c * b) := prelude::cong(b.mul_comm(c)),
             = (a * c) * b := sym(a.mul_assoc(c, b)),
     }
 }
@@ -626,9 +626,9 @@ theorem Int::mul_shuffle(self a, b, c, d: Int): (a * b) * (c * d) = (a * c) * (b
     calc {
         (a * b) * (c * d)
             = a * (b * (c * d)) := a.mul_assoc(b, c * d),
-            = a * ((b * c) * d) := cong(sym(b.mul_assoc(c, d))),
-            = a * ((c * b) * d) := cong(b.mul_comm(c)),
-            = a * (c * (b * d)) := cong(c.mul_assoc(b, d)),
+            = a * ((b * c) * d) := prelude::cong(sym(b.mul_assoc(c, d))),
+            = a * ((c * b) * d) := prelude::cong(b.mul_comm(c)),
+            = a * (c * (b * d)) := prelude::cong(c.mul_assoc(b, d)),
             = (a * c) * (b * d) := sym(a.mul_assoc(c, b * d)),
     }
 }
@@ -660,7 +660,7 @@ theorem Int::pos_sub_neg(self a: Int): a = a.pos_part().int() - a.neg_part().int
 theorem Int::mul_neg_one(self a: Int): a * NegSucc(0) = -a {
     apply trans;
     give a.mul_neg_r(OfNat(1));
-    cong(a.mul_one())
+    prelude::cong(a.mul_one())
 }
 
 theorem Int::add_neg_cancel_r(self x, y: Int): (x + y) + -y = x {
@@ -1114,7 +1114,7 @@ theorem Int::mul_lt_mono_r(self a, b, k: Int, h: a < b, hk: OfNat(0) < k): a * k
     let grown = a.isucc().mul_le_mono_r(b, k, h, OfNat(0).le_of_lt(k, hk));
     let expand = calc {
         a * k + k
-            = k * a + k := cong(a.mul_comm(k)),
+            = k * a + k := prelude::cong(a.mul_comm(k)),
             = k * a.isucc() := sym(k.mul_isucc(a)),
             = a.isucc() * k := k.mul_comm(a.isucc()),
     };

@@ -26,6 +26,7 @@ item          ::= fn name type-params? requires? params -> type decreases? block
                 | impl operation for representation { clauses }
                 | impl operation for representation := route() ;
                 | assuming params { item* }
+                | section type-params? requires? params? { (fn | theorem | section)* }
 ```
 
 `fn` uses `->`; theorem-like statements use `:`. A declaration body is a

@@ -933,6 +933,58 @@ pub(crate) struct SpineCodes {
     pub(crate) tails: Vec<(Rc<Type>, Level)>,
 }
 
+/// Per component, whether `spine`'s is structurally the registered one —
+/// [`Elaborator::spine_refs_by_position`]'s guard, at the cost of the
+/// payloads rather than of the tails.
+///
+/// `tails[k]` is `ctors[k+1] + tails[k+1]`, and [`Elaborator::spine`] reads
+/// both off that `+` without copying, so on either side the node's children
+/// *are* the next components. Compared deeply, the tails alone are Θ(n²)
+/// nodes per mention (the suffix sums of the payloads), and a spine rebuilt
+/// from a whnf shares no `Rc` with the registered copy for `==` to stop at.
+/// Walked from the right instead, a tail whose `+` links its own spine's
+/// next components on both sides is equal exactly when its two levels are and
+/// those components were — `==` on the node, with the children's answers
+/// already in hand. A tail that does not link that way (a code, a re-spelled
+/// copy) is compared deeply as before.
+fn spine_agreement(spine: &crate::inductive::Spine, codes: &SpineCodes) -> (Vec<bool>, Vec<bool>) {
+    let ctors: Vec<bool> = spine
+        .ctors
+        .iter()
+        .zip(&codes.ctors)
+        .map(|((c, _), (reg, _))| *c == *reg)
+        .collect();
+    // The `+` node of `tails[k]`, if its children are `ctors[k+1]` and
+    // `tails[k+1]` themselves.
+    fn link<'a>(cs: &[(Rc<Type>, Level)], ts: &'a [(Rc<Type>, Level)], k: usize) -> Option<(&'a Level, &'a Level)> {
+        match &*ts[k].0 {
+            Type::Sum {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+            } if k + 1 < ts.len()
+                && Rc::ptr_eq(lhs, &cs[k + 1].0)
+                && Rc::ptr_eq(rhs, &ts[k + 1].0) =>
+            {
+                Some((lhs_level, rhs_level))
+            }
+            _ => None,
+        }
+    }
+    let mut tails = vec![false; spine.tails.len()];
+    for k in (0..tails.len()).rev() {
+        tails[k] = match (
+            link(&spine.ctors, &spine.tails, k),
+            link(&codes.ctors, &codes.tails, k),
+        ) {
+            (Some(a), Some(b)) => a == b && ctors[k + 1] && tails[k + 1],
+            _ => spine.tails[k].0 == codes.tails[k].0,
+        };
+    }
+    (ctors, tails)
+}
+
 /// One append-only generated-definition delta. Its lookup views are sealed
 /// together at the semantic-image boundary.
 #[derive(Clone, Default)]
@@ -1501,6 +1553,7 @@ impl Elaborator {
                 ty,
                 level,
                 spliced: None,
+                shifted: Default::default(),
             }));
             if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
                 cx.op_locals.push((sym.clone(), pname.clone()));
@@ -2396,6 +2449,26 @@ impl Elaborator {
         self.gen_type_ref(cx, GenDef::TyCode(tag), level)
     }
 
+    /// `lowered` spelled with the **registered** lowering's own nodes when it
+    /// is that lowering ([`Self::register_ty_code`]'s guard copy), else as it
+    /// came.
+    ///
+    /// Every guard that decides whether a reference may stand for a
+    /// declaration's type or one of its spine components (`closed_type_ref`,
+    /// [`Self::spine_refs_by_position`]) is a structural `==` against that
+    /// copy, and a freshly lowered type shares no `Rc` with it, so each
+    /// constructor value of an `n`-form declaration walked the whole `⟦D⟧`
+    /// again (`issues/wide-inductive-constructor-mention-cost.md`). Paid once
+    /// here per mention of the type's name, the same order as the lowering
+    /// itself, those `==`s then stop at the first shared child. The two are
+    /// equal, so which copy stands is a matter of sharing only.
+    pub(crate) fn share_registered_lowering(&self, tag: u32, lowered: (Type, Level)) -> (Type, Level) {
+        match self.types.gdefs().ty_code(&tag) {
+            Some((registered, _)) if **registered == lowered.0 => ((**registered).clone(), lowered.1),
+            _ => lowered,
+        }
+    }
+
     /// [`Self::closed_type_ref`] with the tag read out of the type instead of
     /// supplied: `Some(El (D#tycode^δ))` when `ty` **is** some declaration's
     /// registered lowering, `None` otherwise.
@@ -2765,25 +2838,22 @@ impl Elaborator {
         if spine.ctors.len() != n || spine.tails.len() != codes.tails.len() {
             return None;
         }
-        let ctors = spine
-            .ctors
+        let (ctor_same, tail_same) = spine_agreement(spine, codes);
+        let ctors = ctor_same
             .iter()
             .zip(&codes.ctors)
             .enumerate()
-            .map(|(k, ((c, _), (reg, l)))| {
-                (*c == *reg)
-                    .then(|| self.gen_type_ref(cx, GenDef::PayloadCode(tag, k), l))
+            .map(|(k, (same, (_, l)))| {
+                same.then(|| self.gen_type_ref(cx, GenDef::PayloadCode(tag, k), l))
                     .flatten()
             })
             .collect();
-        let tails = spine
-            .tails
+        let tails = tail_same
             .iter()
             .zip(&codes.tails)
             .enumerate()
-            .map(|(k, ((t, _), (reg, l)))| {
-                (*t == *reg)
-                    .then(|| self.spine_tail_ref(cx, tag, n, k, l))
+            .map(|(k, (same, (_, l)))| {
+                same.then(|| self.spine_tail_ref(cx, tag, n, k, l))
                     .flatten()
             })
             .collect();

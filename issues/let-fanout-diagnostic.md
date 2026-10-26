@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,diagnostics,proofs,performance]
 area: language
 created: 2026-09-25
-updated: 2026-09-28
+updated: 2026-10-26
 ---
 
 When a proof checks slowly because a shared `let` is traversed along many
@@ -213,3 +213,6 @@ within its 300-second rail. `git diff --check` and `scripts/issue check`
 passed (the tracker reports one unrelated pre-existing status warning).
 This is a manual library improvement, not an implementation of the diagnostic
 or a library-wide precision sweep.
+- 2026-10-26: The kernel half of this issue's premise moved: [[kernel-typing-memo-on-node-identity]] (2026-10-26) judges a shared let value once per scope, so a fan-out chain of transparent `let`s is linear in gate queries (`fan` at k = 64: 260 queries, was 2^k). What can still make a fan-out `let` expensive: an unused proof `let` per link ([[discarded-let-values-nest-binders]], quadratic), a value elaborated twice and compared ([[kernel-equality-walks-dags-as-trees]], 2^k in time), the frontend's own walks, and module images (`put_term` writes trees). A report that ranks lets by tree-versus-shared size would now over-report; rank by what still multiplies, or re-measure the print proof unsplit before building it.
+- 2026-10-26: The unused-proof-`let`-per-link cost above is gone: [[discarded-let-values-nest-binders]] discards each unused value at the block's depth, so `let/dep` is linear (k = 256: 14.8 ms total, was 26.8 s). Of the multipliers listed, `kernel-equality-walks-dags-as-trees` (a value elaborated twice and compared) and module images remain.
+- 2026-10-26: [[kernel-equality-walks-dags-as-trees]] closed: `==` on terms compares a pair of shared nodes once, so a let value elaborated twice and compared (the statement and its `refl`, two sides of an equation) is linear in the shared size, in the elaborator's `refl` test and the gate's conversion shortcut alike. Of the multipliers listed, module images remain.

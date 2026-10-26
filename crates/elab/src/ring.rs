@@ -962,6 +962,7 @@ impl Elaborator {
             level,
             skel: None,
             spliced: None,
+            shifted: Default::default(),
         }));
         for &i in &cert.used {
             let (term, ty, level) = &written[i];
@@ -973,6 +974,7 @@ impl Elaborator {
                 level: level.clone(),
                 skel: None,
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         let expr = parse_expr(&cert.source)

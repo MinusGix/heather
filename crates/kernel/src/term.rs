@@ -31,7 +31,7 @@ pub struct LocalVar(pub u32);
 pub struct GlobalVar(pub u32);
 
 /// Types `S, T` (sort `Typ`).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub enum Type {
     /// `Nat`.
     Nat,
@@ -260,7 +260,7 @@ pub enum Type {
 }
 
 /// Terms `s, t` (sort `Exp`).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub enum Term {
     /// Local variable `x`.
     Var(LocalVar),
@@ -919,7 +919,7 @@ pub enum Term {
 /// - `tm_motive` = `(ℓ, g, U_T, x_t. M_Trm)`: under 1 universe variable, 2
 ///   global variables (`g : Ctx`, `U_T : Typ_p(g, ℓ)`), and 1 local variable
 ///   `x_t : □(g ⊢ U_T^id @ ℓ)`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct Motives {
     pub ty_motive: Rc<Type>,
     pub tm_motive: Rc<Type>,
@@ -932,7 +932,7 @@ pub struct Motives {
 /// global variables (`g`, `U_…`, `u_…`) extend Ψ innermost-last in the order
 /// written in the paper, and recursive-call variables (`x_…`) extend Γ in the
 /// order written. The comment on each field lists that telescope.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct Branches {
     // -- branches for code of types (b_Typ) --
     /// `(g. t_Nat)` — globals: g.
@@ -1289,7 +1289,7 @@ pub enum CtxBase {
 ///
 /// `entries[0]` is the *outermost* binding; [`LocalVar`] 0 refers to the
 /// last entry. Each entry's type is scoped over the entries before it.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct LocalCtx {
     pub base: CtxBase,
     pub entries: CtxEntries,
@@ -1333,7 +1333,7 @@ impl LocalCtx {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct CtxEntry {
     pub ty: Rc<Type>,
     pub level: Level,
@@ -1425,6 +1425,12 @@ impl CtxEntries {
     /// An owning identity token for this persistent context spine.
     pub(crate) fn identity(&self) -> CtxEntriesIdentity {
         CtxEntriesIdentity(self.0.clone())
+    }
+
+    /// [`CtxEntries::identity`]'s address, without the token: 0 for the
+    /// empty spine. A key built from it must hold the token alongside.
+    pub(crate) fn identity_addr(&self) -> usize {
+        self.0.as_ref().map_or(0, |n| Rc::as_ptr(n) as usize)
     }
 
     /// `self, entry` — O(1), sharing `self`.
@@ -1590,9 +1596,11 @@ impl Default for CtxEntries {
 /// spine (the common case when conversion compares two scopes derived from
 /// one) settle in O(1), and a length mismatch settles in O(1) either way.
 /// `PartialEq` on `LocalCtx` is on the conversion path — boxed types compare
-/// their Γ (ch. 06).
-impl PartialEq for CtxEntries {
-    fn eq(&self, other: &CtxEntries) -> bool {
+/// their Γ (ch. 06). The entries' types compare inside the caller's
+/// comparison (`crate::syntax_eq`), so a type two entries share is compared
+/// once.
+impl crate::syntax_eq::SharedEq for CtxEntries {
+    fn shared_eq(&self, other: &CtxEntries, m: &mut crate::syntax_eq::PairMemo) -> bool {
         let mut a = self;
         let mut b = other;
         loop {
@@ -1602,7 +1610,7 @@ impl PartialEq for CtxEntries {
                     if Rc::ptr_eq(x, y) {
                         return true;
                     }
-                    if x.len != y.len || x.entry != y.entry {
+                    if x.len != y.len || !x.entry.shared_eq(&y.entry, m) {
                         return false;
                     }
                     a = &x.rest;
@@ -1621,7 +1629,7 @@ impl Eq for CtxEntries {}
 /// The tail is the paper's `·^k_{g?}` / `wk^k_g`; `terms[0]` substitutes the
 /// *outermost* entry of the target context Δ. The query operations δ̂ and δ̌
 /// (used by composition) read the tail's length and base.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct LocalSubst {
     pub tail: SubstTail,
     pub terms: Vec<Rc<Term>>,
@@ -2005,6 +2013,12 @@ impl GlobalBindings {
 
     pub(crate) fn identity(&self) -> Rc<()> {
         Rc::clone(&self.identity)
+    }
+
+    /// [`GlobalBindings::identity`]'s address, without the token. A key
+    /// built from it must hold the token alongside.
+    pub(crate) fn identity_addr(&self) -> usize {
+        Rc::as_ptr(&self.identity) as usize
     }
 
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
@@ -2583,7 +2597,7 @@ pub fn dnth(level: &Level, len: &Rc<Term>, fam: &Rc<Type>, cs: Rc<Term>, idx: Rc
 /// [`Term::ElimIWf`] share it behind one pointer, and the schemas below are
 /// written over it. Its `Debug` is [`Type::IWf`]'s budgeted one, through
 /// `fmt.rs`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct IWfSig {
     pub level: Level,
     pub idx_level: Level,
@@ -2743,7 +2757,7 @@ pub fn iwf_ih(
 /// (see [`Type::M`]). [`Type::M`], [`Term::Corec`] and [`Term::Out`] share it
 /// behind one pointer. Its `Debug` is [`Type::M`]'s budgeted one, through
 /// `fmt.rs`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct MSig {
     pub level: Level,
     pub pos_level: Level,

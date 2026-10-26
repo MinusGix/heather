@@ -402,3 +402,27 @@ checking position inside a larger goal.
   (`must decrease the measure`, the refined-statement message, the
   `omega`-less unsolved goal) all still read at the call, since a lifted
   obligation the checker refuses re-lowers un-lifted and reports there.
+
+## 11. Designed spellings for the recursor and its step (2026-10-26)
+
+`f#rec` and `f#body` have designed spellings, `f::rec` and `f::body`
+(`docs/repr-access-spellings-design.md`), and the minted names leave the
+surface as any designated name does. They are for a proof that cannot go
+through `f_unfold`, which is not generated where the body matches on a
+computed scrutinee (§3; every word loop decides on a comparison):
+
+- `f::rec(z, x̄, h)` is `f` at a bound `z` on its measure, `h : e < z`;
+  `f(x̄)` is `f::rec(Succ(e), x̄, nat::Nat::lt_succ_self(e))` by `refl`.
+- `f::body(k, g, x̄, h)` is one step, its recursion any `g`, and
+  `f::rec(Succ(k), x̄, h)` is `f::body(k, λ ȳ p => f::rec(k, ȳ, p), x̄, h)`
+  by `refl` (§2).
+
+A claim about `f` at an open argument is then a claim about `f::rec` by
+`Nat` induction on the bound, each step a claim about `f::body` with `g`
+abstracted, which `split_all` proves when the step is a tree of `match h:`
+convoys (`docs/goal-combinators.md`). The verified native compiler states
+its loop agreement this way (issues/function-ir-loop-measure-recursion.md).
+The spellings are designated after the companions are generated, which are
+spelled with the minted names; another module writes them under the
+declaring module's name, `m::f::rec`.
+

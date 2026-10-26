@@ -634,6 +634,10 @@ pub struct Elaborator {
     /// members use earlier members by name" (docs/traits-layer1-design.md
     /// §4.2). Empty outside a block, which makes the mechanism inert.
     instance_scope: Vec<(String, String)>,
+    /// The owner of the declaration being elaborated (`List` while checking
+    /// `List::append`), whose other members a bare name may name
+    /// ([`Self::owner_member`]).
+    member_owner: Option<String>,
     /// Goals this item's elaboration derived and that deserve a canonical
     /// global. Ψ must not grow mid-declaration, so minting is a **restart**:
     /// the item is rolled back, the queue drained, the item elaborated again
@@ -1723,6 +1727,7 @@ impl Elaborator {
             impl_provenance: None,
             attempt: DeclAttempt::default(),
             instance_scope: Vec::new(),
+            member_owner: None,
             pending_derived: RefCell::new(Vec::new()),
             warnings: RefCell::new(Vec::new()),
             lint_profile: LintProfile::Default,
@@ -2680,7 +2685,14 @@ impl Elaborator {
         // The alias, strictly as a fallback. Its target is resolved through
         // `key_of_declared` and not `key_of`, because the target's own name is
         // the one the surface refuses — that is what the alias is for.
-        self.key_of_declared_kinds(self.access_alias(name)?, kinds)
+        if let Some(target) = self.access_alias(name) {
+            return self.key_of_declared_kinds(target, kinds);
+        }
+        // A designed path under its module's name, `m::f::rec`: `m`'s own
+        // `f::rec`, as `m::f` is `m`'s `f`.
+        let (module, path) = name.split_once("::")?;
+        let target = self.access_alias(path)?;
+        self.key_of_declared_kinds(&format!("{module}::{target}"), kinds)
     }
 
     fn key_of_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> Option<String> {
@@ -2704,6 +2716,82 @@ impl Elaborator {
 
     fn lookup_global(&self, name: &str) -> Option<&GlobalInfo> {
         self.names.global(&self.key_of(self.instance_alias(name))?)
+    }
+
+    /// Inside a member of `T` (`fn T::f`), a bare name may name `T`'s other
+    /// members: `cong_cons` for `List::cong_cons` inside `List::append_assoc`
+    /// (docs/sections-design.md §6). The member joins the candidate set with
+    /// the same rank as every other reading, so when the bare name also
+    /// resolves on its own the two are ambiguous (`Err`, the message): a
+    /// precedence either way would let a library's growth reinterpret checked
+    /// text (docs/modules-design.md §8). Only a declared member counts, never
+    /// the constructor reading of `T::C`. It is consulted only where a written
+    /// expression enters elaboration ([`Self::owner_rewrite`]), so the
+    /// elaborator's own lookups of library names, and receiver dispatch's
+    /// ambient readings, are untouched.
+    fn owner_member(&self, name: &str) -> Result<Option<String>, String> {
+        let Some(owner) = self.member_owner.as_deref() else { return Ok(None) };
+        if name.contains("::") || self.instance_scope.iter().any(|(base, _)| base == name) {
+            return Ok(None);
+        }
+        let full = format!("{owner}::{name}");
+        let NameRes::Found(m) = self.resolve_declared(&full) else { return Ok(None) };
+        if !self.names.declares(&m, &full) {
+            return Ok(None);
+        }
+        match self.resolve_declared(name) {
+            NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => Ok(Some(full)),
+            NameRes::Found(other) => Err(format!(
+                "`{name}` is ambiguous here: inside a member of `{owner}` it can name \
+                 `{owner}::{name}` (`{m}`) or `{name}` (`{other}`). Write `{owner}::{name}` \
+                 for the member, or qualify the other (`{other}::{name}`) \
+                 (docs/sections-design.md §6)"
+            )),
+            NameRes::Ambiguous(origins) => Err(format!(
+                "`{name}` is ambiguous here: inside a member of `{owner}` it can name \
+                 `{owner}::{name}` (`{m}`), and it is also declared in {}. Qualify it \
+                 (docs/sections-design.md §6)",
+                origins.iter().map(|o| format!("`{o}`")).collect::<Vec<_>>().join(" and ")
+            )),
+        }
+    }
+
+    /// A bare written name, or the bare head of a written call, that names a
+    /// sibling member ([`Self::owner_member`]) is rewritten to its qualified
+    /// spelling before the expression is elaborated, so every route after it
+    /// (implicit masks, receivers, deferral) sees the declaration's own name.
+    /// Locals, aliases and the declaration's own name shadow it, as they
+    /// shadow every global.
+    fn owner_rewrite(&self, cx: &Cx, e: &Expr) -> R<Option<Expr>> {
+        if self.member_owner.is_none() {
+            return Ok(None);
+        }
+        let (name, span) = match &e.kind {
+            ExprKind::Var(n) => (n, e.span),
+            ExprKind::App { head, .. } => match &head.kind {
+                ExprKind::Var(n) => (n, head.span),
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        if cx.names.iter().any(|n| n == name)
+            || cx.aliases.iter().any(|a| a.name == *name)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
+        {
+            return Ok(None);
+        }
+        let full = match self.owner_member(name) {
+            Ok(Some(full)) => full,
+            Ok(None) => return Ok(None),
+            Err(msg) => return err(msg, span),
+        };
+        let mut out = e.clone();
+        match &mut out.kind {
+            ExprKind::Var(n) => *n = full,
+            ExprKind::App { head, .. } => head.kind = ExprKind::Var(full),
+            _ => unreachable!(),
+        }
+        Ok(Some(out))
     }
 
     /// Inside an `instance` block, an unqualified name that is an *earlier*
@@ -3315,6 +3403,25 @@ impl Elaborator {
     /// `Elaborator` outlives a declaration (and an `elab_source` call), so a
     /// stale `goal_base` would silently corrupt the next one.
     fn elab_decl(&mut self, decl: &Decl) -> R<()> {
+        let owner = decl.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
+        self.elab_decl_as(decl, owner)
+    }
+
+    /// A declaration an `instance` synthesizes: its qualified name is the
+    /// instance's, not a member of a type or function, so its body names no
+    /// siblings (docs/sections-design.md §6).
+    pub(crate) fn elab_decl_unowned(&mut self, decl: &Decl) -> R<()> {
+        self.elab_decl_as(decl, None)
+    }
+
+    fn elab_decl_as(&mut self, decl: &Decl, owner: Option<String>) -> R<()> {
+        let saved = std::mem::replace(&mut self.member_owner, owner);
+        let result = self.elab_decl_owned(decl);
+        self.member_owner = saved;
+        result
+    }
+
+    fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
         // A `meta fn` is a different declaration form: modal signature,
         // quotation body, `Layer::Meta` check, elaborator-side registration
         // (docs/in-language-map-design.md §3–4).
@@ -3570,24 +3677,32 @@ impl Elaborator {
         // term it got wrong must not take `f` down with it. The recorded
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
-        if !lifted {
-            return Ok(());
-        }
-        match measure::companions(decl, &self_name, &measure, omega_available, self) {
-            Err(why) => {
-                self.unfold_refusals.borrow_mut().insert(unfold, why);
-            }
-            Ok(parts) => {
-                for part in parts {
-                    if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
-                        self.unfold_refusals
-                            .borrow_mut()
-                            .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
-                        break;
+        if lifted {
+            match measure::companions(decl, &self_name, &measure, omega_available, self) {
+                Err(why) => {
+                    self.unfold_refusals.borrow_mut().insert(unfold, why);
+                }
+                Ok(parts) => {
+                    for part in parts {
+                        if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
+                            self.unfold_refusals
+                                .borrow_mut()
+                                .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
+                            break;
+                        }
                     }
                 }
             }
         }
+        // The recursor and its step have designed spellings, `f::rec` and
+        // `f::body`: `f` at a bound on its measure, and one step of it with
+        // its recursion any function, which a proof by induction on the
+        // bound states its claims about where no `f_unfold` exists
+        // (docs/decreases-unfolding-design.md §11). Designated last: the
+        // companions above are spelled with the minted names, which a
+        // designation takes out of the surface.
+        self.designate_access(&format!("{}::rec", decl.name), &measure::rec_name(&decl.name));
+        self.designate_access(&format!("{}::body", decl.name), &measure::body_name(&decl.name));
         Ok(())
     }
 
@@ -4858,6 +4973,9 @@ impl Elaborator {
         // (docs/bare-symbol-checking-carrier-design.md §3.1). The expected type
         // is already in hand one line above the rewrite, and has been since the
         // operators round — nothing is plumbed from a call site.
+        if let Some(rewritten) = self.owner_rewrite(cx, e)? {
+            return self.elab_check_skel_slots(cx, &rewritten, expected, lvl, hint, skel, capture_slots);
+        }
         if let Some(rewritten) = self.op_rewrite(cx, e, Some(expected))? {
             return self.elab_check_skel_slots(
                 cx,
@@ -4937,6 +5055,7 @@ impl Elaborator {
                 // declaration, with `split_all` having reported success.
                 match goal_combinators::next_step(self, cx, expected, body, e.span) {
                     goal_combinators::Step::Refuted(expr)
+                    | goal_combinators::Step::Closed(expr)
                     | goal_combinators::Step::Intro(expr)
                     | goal_combinators::Step::Conjoin(expr) => {
                         self.elab_check_skel_slots(cx, &expr, expected, lvl, hint, skel, capture_slots)
@@ -4946,10 +5065,20 @@ impl Elaborator {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
                         let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
                         goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &goal, lvl, "case split's motive, at its scrutinee,", e.span)?;
-                        self.elab_convoy(
-                            cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
-                            scrut, &ty, &level, split.motive, lvl, &goal, e.span,
-                        )
+                        match split.dependent {
+                            None => self.elab_convoy(
+                                cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
+                                scrut, &ty, &level, split.motive, lvl, &goal, e.span,
+                            ),
+                            Some(dependent) => {
+                                let refl = Term::Refl { level: level.clone(), ty: Rc::new(ty.clone()), tm: Rc::new(scrut.clone()) };
+                                let at = dependent.inst_top_above(0, 1, &scrut).inst_top(0, &refl);
+                                goal_combinators::restates(self, cx, &at, &goal, lvl, "case split's motive, at its scrutinee and `refl`,", e.span)?;
+                                self.elab_convoy_dependent(
+                                    cx, &split.equation, &split.arms, scrut, &ty, &level, split.motive, dependent, lvl, &goal, e.span,
+                                )
+                            }
+                        }
                     }
                     goal_combinators::Step::Leaf(goal) => {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
@@ -5827,6 +5956,7 @@ impl Elaborator {
                     level,
                     skel: None,
                     spliced: None,
+                    shifted: Default::default(),
                 }));
                 named = inner;
                 &named
@@ -6513,6 +6643,9 @@ impl Elaborator {
         // which is the whole of what "a bare symbol has no carrier" still means
         // (docs/bare-symbol-checking-carrier-design.md §5).
         if let Some(rewritten) = self.op_rewrite(cx, e, None)? {
+            return self.elab_infer_at(cx, &rewritten, expected);
+        }
+        if let Some(rewritten) = self.owner_rewrite(cx, e)? {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         if let ExprKind::App {
@@ -7748,6 +7881,48 @@ impl Elaborator {
             cx,
             form,
             generated,
+            &plan.arms,
+            scrut_t.clone(),
+            scrut_ty,
+            scrut_lvl,
+            plan.motive,
+            plan.level,
+            span,
+        )?;
+        Ok(matching::finish_convoy(
+            elim, scrut_t, scrut_ty, scrut_lvl, mlvl, result,
+        ))
+    }
+
+    /// [`Self::elab_convoy`] at a motive that reads the equation as well:
+    /// `dependent` is scoped under the scrutinee's binder and then the
+    /// equation's, and `motive` is it with the equation unused, as the other
+    /// readers of a motive expect it. `split_all` builds one where a convoy
+    /// in the goal takes the case's equation for its own `refl`
+    /// (`goal_combinators::dependent_motive`).
+    #[allow(clippy::too_many_arguments)]
+    fn elab_convoy_dependent(
+        &self,
+        cx: &Cx,
+        h: &str,
+        arms: &[Arm],
+        scrut_t: Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+        motive: Type,
+        dependent: Type,
+        mlvl: &Level,
+        result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        let mut plan = matching::plan_convoy(h, arms, &scrut_t, scrut_ty, scrut_lvl, &motive, mlvl);
+        if let Type::Pi { cod, .. } = &mut plan.motive {
+            *cod = Rc::new(dependent);
+        }
+        let elim = self.elab_match(
+            cx,
+            heather_syntax::MatchForm::Match,
+            true,
             &plan.arms,
             scrut_t.clone(),
             scrut_ty,
@@ -9101,11 +9276,8 @@ impl Elaborator {
                 // Inlined at the use site, shifted across the binders pushed
                 // since it was bound (same as a `fn` definition's globals).
                 let by = (cx.names.len() - a.depth) as u32;
-                return Ok((
-                    if splice { a.splice(by) } else { a.term.shift_local(by) },
-                    a.ty.shift_local(by),
-                    a.level.clone(),
-                ));
+                let (term, ty) = if splice { a.splice(by) } else { a.at(by) };
+                return Ok((term, ty, a.level.clone()));
             }
             (Some(pos), None) => return Ok(self.local(cx, pos)),
             (None, None) => {}

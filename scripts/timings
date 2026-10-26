@@ -47,6 +47,18 @@ COLUMNS = {
     # how much Ψ-multiplicity is left to attack
     # (issues/global-ref-rescope-per-occurrence.md).
     "sigs":      (["global_sig_rescopes"], 1),
+    # Local shift and substitution (issues/subst-shared-node-memo.md): nodes
+    # visited, and second paths into a shared node answered by the per-call
+    # memo. `local` growing with the paths through a let chain, not its
+    # links, is a shared value copied apart into a tree.
+    "local":     (["local_subst_nodes"], 1),
+    "subst memo": (["subst_memo_hits"], 1),
+    # Structural `==` on terms and types (issues/kernel-equality-walks-dags-
+    # as-trees.md): node pairs compared, and second paths into a pair of
+    # shared nodes answered by the comparison's memo. `eq` growing with paths
+    # rather than nodes is two equal DAGs compared as trees.
+    "eq":        (["syntax_eq_nodes"], 1),
+    "eq memo":   (["syntax_eq_memo_hits"], 1),
     # The checked spellings (docs/intro-by-type-design.md): `@` forms the
     # checker judged, `ITy::Sel` descriptions the value machine evaluated, and
     # descriptions the rewriter had to *spell*. All three are zero until the

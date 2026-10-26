@@ -1603,10 +1603,11 @@ impl Elaborator {
         if memo {
             let hit = self.named_type_memo.borrow().get(&key).map(|(_, at, hit)| (*at, hit.clone()));
             if let Some((at, (ty, level))) = hit.filter(|(at, _)| *at <= psi) {
-                let out = (if at == psi { ty } else { ty.shift_global((psi - at) as u32) }, level);
-                if at != psi {
-                    self.named_type_memo.borrow_mut().insert(key, (Rc::clone(ind), psi, out.clone()));
+                if at == psi {
+                    return Ok((ty, level));
                 }
+                let out = self.share_registered_lowering(ind.tag, (ty.shift_global((psi - at) as u32), level));
+                self.named_type_memo.borrow_mut().insert(key, (Rc::clone(ind), psi, out.clone()));
                 return Ok(out);
             }
         }
@@ -1616,6 +1617,7 @@ impl Elaborator {
             lowered.push(self.elab_ty(cx, a)?);
         }
         let out = self.lower_instance(cx, &ind, &lowered, &[], span)?;
+        let out = if args.is_empty() { self.share_registered_lowering(ind.tag, out) } else { out };
         // Kept only when closed over the locals, so a hit is the same type at
         // any depth. Hiding the use site's binders should make every bare
         // lowering closed; this is the backstop, paid once per miss.
@@ -1933,6 +1935,7 @@ impl Elaborator {
                 ty: ty.clone(),
                 level: level.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
             if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
                 tcx.op_locals.push((sym.clone(), pname.clone()));
@@ -2186,6 +2189,7 @@ impl Elaborator {
                 ty: ty.clone(),
                 level: level.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         fcx
@@ -2237,6 +2241,7 @@ impl Elaborator {
                 ty: ty.shift_local(1),
                 level: level.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
             decls.push((ty, level));
         }
@@ -3521,6 +3526,7 @@ impl Elaborator {
                 ty: (*fst).clone(),
                 level: fst_level,
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         self.elab_check(&acx, &arm.body, expected, mlvl)

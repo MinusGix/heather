@@ -248,6 +248,23 @@ loads, which is the honest width of an absolute time here.
 | `forded/declared-index-tags` | form A swept along the *index* type's constructor count | slope 2.62 (unmoved by two rounds — see below) |
 | `forded/declared-index-branching` | the same at a **branching** index constructor | slope 1.57 (was 1.53) |
 | `meta/nested-inference` | *d* nested implicit instantiations, built and projected back | slope 1.84 (1.84–1.90) |
+| `rewrite/fa` | `g(f^n(a)) = g(a)` by *n* `rewrite`s with `h: f(x) = x` (mengine `rewrite_fa`). **Lower bound linear** | debt: about n² (n rewrites of an O(n) goal) |
+| `rewrite/repeat-mod` | `(…(b mod p)…) mod p = b mod p` by *n* − 1 rewrites, `mod` opaque (mengine `repeat_mod`). **Lower bound linear** | debt: about n² |
+| `rewrite/let-addr0` | a *k*-let chain `vᵢ = vᵢ₋₁ + vᵢ₋₁ + 0`, every `+ 0` rewritten away (mengine `addr0_let_in`). **Lower bound linear** | debt: 2^k |
+| `rewrite/let-nary` | three lets `xᵢ = f(xᵢ₋₁, …)` of arity *n*, rewritten to `x₀` (mengine `rewrite_nm`). **Lower bound linear** in n·m | debt: tree-sized in elaboration |
+| `let/fan` | *k* lets each using the last twice, as a `fn` body. **Lower bound linear** | met |
+| `let/dep` | `fan` with an unused `refl` proof let per link. **Lower bound linear** | met (it was above quadratic while each unused value was discarded one binder deeper) |
+| `let/stmt` | `let-addr0`'s chain stated equal to itself, by `refl`. **Lower bound linear** | met (was 2^k: two equal DAGs compared as trees) |
+| `inductive/isa-declaration` | an *n*-form instruction type with register/immediate/memory operand fields, declared. **Lower bound linear** | met (~1.0) |
+| `inductive/isa-constructor-use` | four constructor values of that type. **Lower bound linear** (the declaration) | debt: ~1.7, Θ(n²) elaboration per mention |
+| `inductive/isa-opcode-match` | an *n*-arm `match` into `Nat`, payloads ignored. **Lower bound linear** | debt: ~1.6, mostly elaboration |
+| `inductive/isa-roundtrip` | an *n*-arm rebuild and its identity theorem (one `refl` per arm). **Lower bound linear** | debt: ~2.2, mostly gate |
+| `inductive/enum-equality` | *n*²-arm decidable equality on an *n*-constructor enum, and its `refl` theorem. **Lower bound quadratic** | debt: ~2.5 |
+| `inductive/record-fields` | a *k*-field record: literal, projection, rebuild, frame theorem. **Lower bound linear** | debt: ~1.4 |
+| `inductive/mutual-declaration` | a ring of *m* mutual sorts, declared. **Lower bound linear** | debt: ~1.5, small |
+| `inductive/mutual-recursion` | structural recursion over that group, and one `refl` unfolding. **Lower bound linear** | debt: ~2.8, all gate; out of fuel at *m* = 8 |
+| `inductive/typed-syntax` | intrinsically typed terms `Tm(J(Γ, A))`, *n* constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.8 over 5..8, and a large constant |
+| `inductive/function-fields` | an `IWf`-on-`W` family of *n* function-field constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.7 over 2..8, ~3.4 past it |
 
 The spread is the point of the noise warning above, and it is also the
 argument for the slope being the headline: the times moved by up to 1.5×
@@ -495,3 +512,92 @@ belongs on a quiet machine. So: bands updated in the fixture sources
 **1.90–2.60**), baseline file untouched, `indexed/arms` still `untracked`
 until someone re-records. That is the deviation this round is flagging, not
 absorbing.
+
+## The rewriting and let fan-out families (2026-10-26)
+
+`issues/tactic-scaling-bench-families.md` added seven families
+(`fixtures/rewriting.rs`): mengine's four rewriting benchmarks
+(`docs/mengine-survey.md` §7) and three let chains from
+`issues/proof-let-substitution-cost.md`. Every one has a **linear lower
+bound**, so on these families the bands are a record of debt rather than of
+a design's claim: a slope above 1 is the distance to the lower bound, and the
+round that closes it re-records the band from below. `let/fan` sits at its
+lower bound since the kernel's typing memo, `let/dep` since unused values
+are discarded at the block's depth, and `let/stmt` since `==` on terms
+compares a pair of shared nodes once
+(`issues/kernel-equality-walks-dags-as-trees.md`), which re-swept it over
+32..256.
+
+Three things differ from the older families:
+
+- **Some are exponential.** A log-log fit of 2^k is not a constant, so the
+  band of `rewrite/let-addr0` (and `let/stmt`'s, before its fix) is the fit over exactly the
+  sizes swept, and is wider than ±0.35, because the steeper the curve, the
+  more a fixed cost at the small end moves the fit. Their band's job is to
+  notice the fix, which drops the slope to about 1.
+- **The bands were recorded on a 4-core cloud box** (four runs each; the
+  band is the mean ±0.35 or the four-run range, whichever is wider), and only
+  their `slope` rows are in the baseline. Times recorded there would sit
+  under another machine's `env` rows, so the `case` and `split` rows wait for
+  the next `--save` on the recording machine, and until then the cases read
+  `untracked`.
+- **The phase split is the point.** Where the cost sits differs by family:
+  the gate dominates `rewrite/fa` and `rewrite/repeat-mod` (consistent with n
+  nested `J`s, each over an O(n) motive), elaboration dominates
+  `rewrite/let-nary` (and dominated `let/dep` until its fix), and `let/stmt`
+  split about evenly between the gate and elaboration while it was 2^k. The
+  issue's log has the numbers.
+
+Two Heather limits shape the fixtures. `rewrite` rewrites one instance per
+equation (`docs/equation-rewrite-design.md` §6.1), so a family is *n*
+equations in one `rewrite(h, …, h, refl)`. And the goal `f(f(…f(a)))` is *n*
+nested calls, which at n = 256 exceeds the elaborator's expression depth
+limit (512), so `rewrite/fa` and `rewrite/repeat-mod` stop at 128. And the opaque operations
+and lemmas are theorem parameters, so that no conversion can close a goal
+the rewrite was meant to close.
+
+## The large and intricate inductive families (2026-10-26)
+
+`issues/intricate-inductive-bench-families.md` added ten families
+(`fixtures/intricate.rs`) for the two ways a declaration gets big. **Wide**:
+an instruction-set-shaped type, hundreds of forms with operand fields of
+other declared types, split into the phases of its life so a slope names
+the phase that grows — declaring it, mentioning a constructor, an opcode
+`match`, a rebuild-and-identity roundtrip, an *n*²-arm decidable equality,
+and a wide state record. **Intricate**: few constructors, but the lowering
+multiplies them — a mutual group of syntax sorts (declared, then recursed
+over), intrinsically typed terms indexed by a judgment, and a family with
+function-field children.
+
+The conventions are the rewriting families': each family states its lower
+bound (all linear but `enum-equality`'s, which is the arm count), the bands
+are the mean of three cloud-box runs ±0.35 and record debt, and only `slope`
+rows go into the baseline, so the cases read `untracked` until a `--save`
+on the recording machine.
+
+What the round found, each with a cheap control that does not pay it, and
+each filed:
+
+- **A constructor value costs Θ(n²) in the type's constructor count**, in
+  elaboration, whichever constructor: `respell_spine` compares every
+  component of the spine against the registered one by deep equality
+  (`issues/wide-inductive-constructor-mention-cost.md`). The gate adds
+  Θ(k·n) for the *k*-th constructor.
+- **Mutual recursion is ~m^2.8, nearly all gate**, and an eight-member
+  group's one-step `refl` runs out of fuel; the same constructors as one
+  inductive are three orders of magnitude cheaper
+  (`issues/mutual-group-recursion-gate-cost.md`).
+- **Typed-syntax and function-field recursion are superlinear and gate
+  bound**, with a large constant even for a `refl` of a three-node closed
+  term; a plain child instead of a function field is well over an order of
+  magnitude cheaper
+  (`issues/indexed-family-recursion-gate-cost.md`).
+
+The sizes stop where a family costs a few seconds per run, which on the
+intricate families is early — five members, eight constructors — so their
+fitted slopes understate the curve past the sweep (the issues carry the
+larger CLI points). One language limit shapes a fixture: a family takes one
+index (`docs/inductive-indexed-lowering.md` §8.4), so typed terms are
+indexed by a declared judgment type `J(Γ, A)` (with a second constructor,
+since an index type needs two).
+

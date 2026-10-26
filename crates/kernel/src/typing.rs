@@ -83,6 +83,37 @@
 //! fixed fuel value, so reuse cannot change a verdict. Exhaustion surfaces as
 //! [`TypeError::OutOfFuel`], distinct from a mismatch. On well-typed input it
 //! means the budget was too small; [`DEFAULT_FUEL`] is a generous default.
+//!
+//! **The typing memo** (`issues/kernel-typing-memo-on-node-identity.md`).
+//! A term node reachable along two paths (a `let` alias's value used twice)
+//! is one allocation, and the rules would judge it once per path: a chain of
+//! `k` lets, each using the last twice, is `k` nodes and `2^k` paths. So one
+//! public checking gate keeps, per node *and scope*, what the node was
+//! judged to be ([`Judged`]): its inferred type and level, for the
+//! elimination forms (the ones checking reaches only through inference),
+//! and the expected types it was checked against, for the intro forms that
+//! check structurally. A later path into the same node in the same scope is
+//! answered from the memo, and so is everything beneath it.
+//!
+//! - **The key is identity, never structure**: the node's allocation, Ψ's
+//!   and Γ's identity tokens, Γ's base, the layer, `|L|` and the `box` bit
+//!   ([`Scope`]). Those are everything a rule reads besides the node, so a
+//!   hit is the judgment the rules would make again. Each entry holds the
+//!   node and both tokens, so no address in a live key is ever reused; the
+//!   memo is dropped with the checker when the gate returns.
+//! - **Deterministic, so a hit may skip fuel.** Whether a lookup hits
+//!   depends only on which node and scope objects the rules pass along,
+//!   which the term's sharing decides, not on addresses or reference counts
+//!   (a count would be perturbed by the bounds cache's keep-alives). Every
+//!   eligible node gets an entry, chosen by its kind, and nothing is evicted.
+//!   So `--timings` counts and `OutOfFuel` verdicts stay functions of the
+//!   input, at any worker count.
+//! - **Successes only.** A failure propagates and records nothing.
+//! - **Off under the spelling record** ([`spell_checked_in_code`]), whose
+//!   point is to visit every checked spelling.
+//! - Debug builds re-judge a sample of hits (`crate::checks`) and assert the
+//!   memo's answer, out of the counters' sight (`crate::stats::unobserved`),
+//!   so debug and release builds count alike.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -94,7 +125,9 @@ pub(crate) mod ity;
 
 use ity::{ITy, ITyRef, Sel, SndOf, TyForm};
 
-use crate::conv::{conv_ity_cached, head_ity_cached, projection_heads_cached, ConvError, ITyHead};
+use crate::conv::{
+    conv_ity_cached, head_ity_cached, injection_heads_cached, projection_heads_cached, ConvError, ITyHead,
+};
 #[cfg(not(feature = "value-metrics"))]
 use crate::conv::{conv_local_ctx_cached, conv_type_cached};
 #[cfg(feature = "value-metrics")]
@@ -109,7 +142,7 @@ use crate::term::{
     CtxBase, IWfSig, MSig, CtxEntries, CtxEntriesIdentity, CtxEntry, GlobalBinding,
     GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
-use crate::value::ValueMetrics;
+use crate::value::{PtrMap, ValueMetrics};
 
 /// A generous per-conversion fuel budget for callers without an opinion.
 pub const DEFAULT_FUEL: u64 = 1 << 20;
@@ -394,7 +427,7 @@ pub fn check_term(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc::new(fuel).tm_check_ty(&env, t, ty, level)
+    Tc::new(fuel).tm_check_ty(&env, &Rc::new(t.clone()), ty, level)
 }
 
 /// [`check_term`] while accumulating value-machine activity in `metrics`.
@@ -417,7 +450,7 @@ pub fn check_term_profiled(
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
-    Tc::new(fuel).tm_check_ty(&env, t, ty, level)
+    Tc::new(fuel).tm_check_ty(&env, &Rc::new(t.clone()), ty, level)
 }
 
 /// `⊢_i t : ? @ ?` — infer the canonical type and level of `t`.
@@ -436,7 +469,7 @@ pub fn infer_term(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    let (ty, l) = Tc::new(fuel).tm_infer_syn(&env, t)?;
+    let (ty, l) = Tc::new(fuel).tm_infer_syn(&env, &Rc::new(t.clone()))?;
     Ok(((*ty).clone(), l))
 }
 
@@ -704,7 +737,7 @@ pub mod oracle {
         level: &Level,
         fuel: u64,
     ) -> R {
-        Tc::eager(fuel).tm_check_ty(&oracle_env(psi, univs, layer, gamma), t, ty, level)
+        Tc::eager(fuel).tm_check_ty(&oracle_env(psi, univs, layer, gamma), &Rc::new(t.clone()), ty, level)
     }
 
     /// [`super::infer_term`] with every selection spelled.
@@ -717,7 +750,7 @@ pub mod oracle {
         fuel: u64,
     ) -> R<(Type, Level)> {
         let (ty, l) =
-            Tc::eager(fuel).tm_infer_syn(&oracle_env(psi, univs, layer, gamma), t)?;
+            Tc::eager(fuel).tm_infer_syn(&oracle_env(psi, univs, layer, gamma), &Rc::new(t.clone()))?;
         Ok(((*ty).clone(), l))
     }
 
@@ -956,6 +989,9 @@ struct Tc {
     /// they identify, so allocator reuse cannot create an aliasing key.
     conv_memo: RefCell<HashMap<ConvMemoBucket, Vec<ConvMemo>>>,
     conv_memo_entries: Cell<usize>,
+    /// The typing memo (module docs, §The typing memo): per node and scope,
+    /// for this gate.
+    judged: RefCell<PtrMap<Scope, Judged>>,
     /// The miss sampler's *site* columns (issues/perf-profile-build-target.md):
     /// the variant names of the terms on the checker's own stack, innermost
     /// last, and the innermost term whose type is being compared. Both are
@@ -1079,6 +1115,134 @@ struct ConvMemo {
     level: Level,
 }
 
+/// A [`Judged`] entry's key: the node and its scope, by identity (module
+/// docs, §The typing memo). The addresses are kept valid by the entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Scope {
+    node: usize,
+    psi: usize,
+    gamma: usize,
+    gamma_base: Option<u32>,
+    univs: u32,
+    layer: Layer,
+    under_box: bool,
+}
+
+impl Scope {
+    fn of(env: &Env, t: &Rc<Term>) -> Scope {
+        Scope {
+            node: Rc::as_ptr(t) as usize,
+            psi: env.psi.bindings.identity_addr(),
+            gamma: env.gamma.entries.identity_addr(),
+            gamma_base: match env.gamma.base {
+                CtxBase::Nil => None,
+                CtxBase::Var(g) => Some(g.0),
+            },
+            univs: env.univs,
+            layer: env.layer,
+            under_box: env.under_box,
+        }
+    }
+}
+
+/// What one node was judged to be in one [`Scope`]: its inferred type, and
+/// the expected types it checked against. The first three fields are the
+/// keep-alives for the key's addresses.
+struct Judged {
+    _node: Rc<Term>,
+    _psi: Rc<()>,
+    _gamma: CtxEntriesIdentity,
+    inferred: Option<(ITy, Level)>,
+    checked: Vec<(ITy, Level)>,
+}
+
+impl Judged {
+    fn new(env: &Env, t: &Rc<Term>) -> Judged {
+        Judged {
+            _node: Rc::clone(t),
+            _psi: env.psi.bindings.identity(),
+            _gamma: env.gamma.entries.identity(),
+            inferred: None,
+            checked: Vec::new(),
+        }
+    }
+}
+
+/// The forms whose inference the memo keeps: the eliminations, the only
+/// forms whose cost is not their own syntax (an application checks its
+/// argument and instantiates a codomain, a projection views its receiver's
+/// type, a recursor checks its motives and branches). They are also how
+/// checking reaches a shared value, since checking an elimination is
+/// inferring it. Kind, never count: see §The typing memo.
+fn infer_memoized(t: &Term) -> bool {
+    matches!(
+        t,
+        Term::App { .. }
+            | Term::AppAt { .. }
+            | Term::Fst { .. }
+            | Term::Snd { .. }
+            | Term::FstAt { .. }
+            | Term::SndAt { .. }
+            | Term::ElimNat { .. }
+            | Term::J { .. }
+            | Term::ElimSEmpty { .. }
+            | Term::ElimSquash { .. }
+            | Term::ElimEmpty { .. }
+            | Term::Case { .. }
+            | Term::ElimW { .. }
+            | Term::ElimWf { .. }
+            | Term::ElimIWf { .. }
+            | Term::Out { .. }
+            | Term::UApp { .. }
+            | Term::CtxApp { .. }
+            | Term::TyApp { .. }
+            | Term::LetBoxTy { .. }
+            | Term::LetBoxTm { .. }
+            | Term::ElimCodeTy { .. }
+            | Term::ElimCodeTm { .. }
+    )
+}
+
+/// The forms the checker descends through in checking position, whose
+/// check the memo keeps against each expected type: everything
+/// [`Tc::tm_check_inner`] does not hand to inference.
+fn check_memoized(t: &Term) -> bool {
+    matches!(
+        t,
+        Term::Lam { .. }
+            | Term::ULam { .. }
+            | Term::CtxLam { .. }
+            | Term::TyLam { .. }
+            | Term::BoxTy(_)
+            | Term::BoxTm(_)
+            | Term::PairAt { ty: None, .. }
+            | Term::InlAt { ty: None, .. }
+            | Term::InrAt { ty: None, .. }
+    )
+}
+
+/// Whether `held` is the expected type `ty`: [`ITy`]'s equality, the
+/// conversion rule's reflexivity test, through the borrow.
+fn same_expected(held: &ITy, ty: ITyRef) -> bool {
+    match ty {
+        ITyRef::Syn(t) => held.as_syn().is_some_and(|h| std::ptr::eq(h, t) || h == t),
+        ITyRef::Ity(t) => held == t,
+    }
+}
+
+fn owned_expected(ty: ITyRef) -> ITy {
+    match ty {
+        ITyRef::Syn(t) => ITy::Owned(t.clone()),
+        ITyRef::Ity(t) => t.clone(),
+    }
+}
+
+/// How many expected types one node keeps per scope. A node checked
+/// against more distinct types than this in one scope pays from then on, as
+/// it did before the memo; the bound is a count, so which checks hit stays
+/// deterministic.
+const CHECKED_PER_SCOPE: usize = 4;
+
 impl Tc {
     fn new(fuel: u64) -> Tc {
         Tc::with_mode(fuel, false)
@@ -1097,6 +1261,7 @@ impl Tc {
             spell_all: true,
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
+            judged: RefCell::new(PtrMap::default()),
             #[cfg(feature = "value-metrics")]
             diag_stack: RefCell::new(Vec::new()),
             #[cfg(feature = "value-metrics")]
@@ -1215,7 +1380,8 @@ impl Tc {
     /// **descriptions** (`docs/intro-by-type-design.md` §3.3).
     ///
     /// The reflexivity shortcut is structural `==` on [`ITy`]: on two `Syn`s
-    /// it is the α-test it has always been, and two equal selections are the
+    /// it is the α-test it has always been (in the shared size of the two
+    /// sides, `syntax_eq.rs`), and two equal selections are the
     /// same type by Determinacy. A query with a selection on either side
     /// skips the cross-head memo — the memo's bucket key is built from a
     /// `Type`'s outer constructor and anchor, a selection has neither, and
@@ -2011,10 +2177,43 @@ impl Tc {
     /// `⊢_i t : T @ l` for a given type and level: structural on `box` and
     /// the function intro forms (so checking-only `box` bodies work), else
     /// infer + conversion at `typeof(i)`.
-    fn tm_check(&self, env: &Env, t: &Term, ty: ITyRef, l: &Level) -> R {
+    fn tm_check(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "check");
+        if self.spellings.is_none() && check_memoized(t) {
+            return self.tm_check_memo(env, t, ty, l);
+        }
         self.tm_check_inner(env, t, ty, l)
+    }
+
+    /// [`Tc::tm_check`] through the typing memo, for [`check_memoized`]
+    /// forms. Outlined: the lookup's temporaries stay off the recursion
+    /// cycle every other node goes through.
+    #[inline(never)]
+    fn tm_check_memo(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
+        let scope = Scope::of(env, t);
+        let hit = self.judged.borrow().get(&scope).is_some_and(|j| {
+            j.checked.iter().any(|(held, level)| level == l && same_expected(held, ty))
+        });
+        if hit {
+            crate::stats::typing_memo_hits(1);
+            #[cfg(debug_assertions)]
+            if crate::checks::verify_this_skip() {
+                assert!(
+                    crate::stats::unobserved(|| self.tm_check_inner(env, t, ty, l)).is_ok(),
+                    "the typing memo kept a check that judging the node again refuses \
+                     (term output suppressed: see CLAUDE.md)"
+                );
+            }
+            return Ok(());
+        }
+        self.tm_check_inner(env, t, ty, l)?;
+        let mut judged = self.judged.borrow_mut();
+        let entry = judged.entry(scope).or_insert_with(|| Judged::new(env, t));
+        if entry.checked.len() < CHECKED_PER_SCOPE {
+            entry.checked.push((owned_expected(ty), l.clone()));
+        }
+        Ok(())
     }
 
     /// [`Tc::tm_check`] where the caller already holds the expected type as
@@ -2028,14 +2227,14 @@ impl Tc {
     /// this one also paid an `Arc` increment and decrement per checked
     /// subterm.
     #[inline(always)]
-    fn tm_check_rc(&self, env: &Env, t: &Term, ty: &Rc<Type>, l: &Level) -> R {
+    fn tm_check_rc(&self, env: &Env, t: &Rc<Term>, ty: &Rc<Type>, l: &Level) -> R {
         self.tm_check(env, t, ITyRef::Syn(ty), l)
     }
 
     /// [`Tc::tm_check`] where the rule built the expected type itself and
     /// still owns it — see [`Tc::tm_check_rc`] for why neither copies it.
     #[inline(always)]
-    fn tm_check_ty(&self, env: &Env, t: &Term, ty: &Type, l: &Level) -> R {
+    fn tm_check_ty(&self, env: &Env, t: &Rc<Term>, ty: &Type, l: &Level) -> R {
         self.tm_check(env, t, ITyRef::Syn(ty), l)
     }
 
@@ -2080,8 +2279,8 @@ impl Tc {
         self.tm_check(&e, body, pt.as_ref(), cod_level)
     }
 
-    fn tm_check_inner(&self, env: &Env, t: &Term, ty: ITyRef, l: &Level) -> R {
-        match t {
+    fn tm_check_inner(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
+        match &**t {
             // box T : □(Δ ⊢ Ty l) @ 0 ⟸ Ψ; Δ ⊢_c T @ l
             Term::BoxTy(code) => {
                 self.meta_layer(env)?;
@@ -2174,7 +2373,7 @@ impl Tc {
                 // term, for the site excerpt.
                 #[cfg(feature = "value-metrics")]
                 {
-                    *self.diag_term.borrow_mut() = Some(t.clone());
+                    *self.diag_term.borrow_mut() = Some((**t).clone());
                 }
                 self.conv_ty(env, ty, inferred.as_ref(), l)
             }
@@ -2193,16 +2392,52 @@ impl Tc {
     /// free: `ITy` is 72 bytes, exactly `Type`'s, because the tag rides in a
     /// niche.
     #[inline(always)]
-    fn tm_infer(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
+    fn tm_infer(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "infer");
+        if self.spellings.is_none() && infer_memoized(t) {
+            return self.tm_infer_memo(env, t);
+        }
+        self.tm_infer_fresh(env, t)
+    }
+
+    /// [`Tc::tm_infer`] through the typing memo, for [`infer_memoized`]
+    /// forms; outlined as [`Tc::tm_check_memo`] is.
+    #[inline(never)]
+    fn tm_infer_memo(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
+        let scope = Scope::of(env, t);
+        let hit = self.judged.borrow().get(&scope).and_then(|j| j.inferred.clone());
+        if let Some(judged) = hit {
+            crate::stats::typing_memo_hits(1);
+            #[cfg(debug_assertions)]
+            if crate::checks::verify_this_skip() {
+                assert!(
+                    crate::stats::unobserved(|| self.tm_infer_fresh(env, t)).is_ok_and(|again| again == judged),
+                    "the typing memo kept an inferred type that judging the node again does \
+                     not give (term output suppressed: see CLAUDE.md)"
+                );
+            }
+            return Ok(judged);
+        }
+        let judged = self.tm_infer_fresh(env, t)?;
+        self.judged
+            .borrow_mut()
+            .entry(scope)
+            .or_insert_with(|| Judged::new(env, t))
+            .inferred = Some(judged.clone());
+        Ok(judged)
+    }
+
+    /// [`Tc::tm_infer`] past the memo: the rules themselves.
+    #[inline(always)]
+    fn tm_infer_fresh(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         // The checked spellings are the only rules whose inferred type may
         // be a *description* (`docs/intro-by-type-design.md` §3.2), so they
         // have their own dispatch and every other rule keeps returning
         // syntax — which is the sentence "no existing rule constructs a
         // `Sel`" made true by construction rather than by review.
         if matches!(
-            t,
+            &**t,
             Term::PairAt { .. }
                 | Term::InlAt { .. }
                 | Term::InrAt { .. }
@@ -2219,7 +2454,7 @@ impl Tc {
     /// [`Tc::tm_infer`] with the inferred type **spelled**: the four λ
     /// inference arms, which have to put it inside a syntactic former, and
     /// the public [`infer_term`]. See [`Tc::materialize`].
-    fn tm_infer_syn(&self, env: &Env, t: &Term) -> R<(Rc<Type>, Level)> {
+    fn tm_infer_syn(&self, env: &Env, t: &Rc<Term>) -> R<(Rc<Type>, Level)> {
         let (ty, l) = self.tm_infer(env, t)?;
         Ok((self.materialize(env, &ty)?, l))
     }
@@ -2231,8 +2466,8 @@ impl Tc {
     /// "no existing rule constructs a `Sel`" a property of the code rather
     /// than of a review: every other arm returns a `Type` and
     /// [`Tc::tm_infer`] wraps it.
-    fn tm_infer_at(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
-        match t {
+    fn tm_infer_at(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
+        match &**t {
             // -- checked spellings (extension; docs/intro-by-type-design.md)
             //
             // `pair@`, `inl@`, `inr@` with an annotation: one whole-type
@@ -2283,7 +2518,7 @@ impl Tc {
                 let TyForm::Sum { lhs_level, rhs_level, lhs, rhs } = form else {
                     return Err(TypeError::HeadMismatch);
                 };
-                let (summand, summand_level) = if matches!(t, Term::InrAt { .. }) {
+                let (summand, summand_level) = if matches!(&**t, Term::InrAt { .. }) {
                     (rhs, rhs_level)
                 } else {
                     (lhs, lhs_level)
@@ -2364,12 +2599,12 @@ impl Tc {
     /// Infer the head once and view the projection receivers in one arena.
     /// The returned type remains an arena-free selection description; the
     /// eager oracle and quote translator keep the original per-node rules.
-    fn projection_at_spine(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
+    fn projection_at_spine(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         self.checked_spelling_admitted(env)?;
         let mut selections = Vec::new();
         let mut head = t;
         loop {
-            match head {
+            match &**head {
                 Term::FstAt { pair } => {
                     selections.push(Sel::Fst);
                     head = pair;
@@ -2406,11 +2641,11 @@ impl Tc {
     /// A node whose Π is not syntax, and every node while the checked
     /// spellings are recorded (each node's Π is recorded as it is met), is
     /// typed alone by [`Tc::app_at_node`].
-    fn app_at_spine(&self, env: &Env, t: &Term) -> R<(ITy, Level)> {
+    fn app_at_spine(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         let mut spine = Vec::new();
         let mut head = t;
-        while let Term::AppAt { fun, arg } = head {
-            spine.push((head, arg));
+        while let Term::AppAt { fun, arg } = &**head {
+            spine.push((&**head, arg));
             head = fun;
         }
         let (mut ty, mut level) = self.tm_infer(env, head)?;
@@ -2523,6 +2758,11 @@ impl Tc {
                 crate::stats::intro_at_nodes(1);
                 Ok(())
             }
+            Term::InlAt { ty: None, .. } | Term::InrAt { ty: None, .. }
+                if !self.materialize_eagerly && self.spellings.is_none() =>
+            {
+                self.injection_at_spine(env, t, ty, l)
+            }
             Term::InlAt { ty: None, val } | Term::InrAt { ty: None, val } => {
                 let form = self.view_expected_v(env, ty)?;
                 self.record(env, t, &form);
@@ -2541,6 +2781,49 @@ impl Tc {
             }
             _ => unreachable!("tm_check_at is reached only for an unannotated intro"),
         }
+    }
+
+    /// A contiguous chain of unannotated injections checked against `ty`,
+    /// its layers viewed in one arena ([`injection_heads_cached`]) — the intro
+    /// twin of [`Tc::projection_at_spine`]. Per node, layer `j`'s type is a
+    /// selection `j` deep and its view replays all `j`: a constructor value
+    /// of an `n`-constructor declaration is up to `n − 1` injections deep, so
+    /// that was Θ(k²) evaluation for the `k`-th constructor
+    /// (`issues/wide-inductive-constructor-mention-cost.md`). The rules and
+    /// the descriptions are the per-node ones; the eager oracle and the
+    /// recording translator keep the per-node path.
+    fn injection_at_spine(&self, env: &Env, t: &Term, ty: ITyRef, l: &Level) -> R {
+        let layer = |t: &Term| match t {
+            Term::InlAt { ty: None, val } => Some((Sel::Lhs, Rc::clone(val))),
+            Term::InrAt { ty: None, val } => Some((Sel::Rhs, Rc::clone(val))),
+            _ => None,
+        };
+        let (sel, mut val) = layer(t).expect("injection_at_spine is reached only for an injection");
+        let mut selections = vec![sel];
+        while let Some((sel, inner)) = layer(&val) {
+            selections.push(sel);
+            val = inner;
+        }
+        let mut expected = match ty.as_ity() {
+            Some(t) => t.clone(),
+            None => ITy::Owned(ty.as_syn().expect("not a selection").clone()),
+        };
+        let levels = injection_heads_cached(
+            &env.psi, &env.gamma, env.layer.type_layer(), &expected, &selections, self.fuel,
+            #[cfg(feature = "value-metrics")]
+            env.value_metrics.as_ref(),
+            Rc::clone(&env.cache),
+        )?;
+        let levels = levels.ok_or(TypeError::HeadMismatch)?;
+        let depth = env.gamma.entries.len() as u32;
+        let mut level = l.clone();
+        for (sel, (lhs_level, rhs_level)) in selections.into_iter().zip(levels) {
+            self.lev_eq(&level, &Level::join(lhs_level.clone(), rhs_level.clone()))?;
+            level = match sel { Sel::Lhs => lhs_level, _ => rhs_level };
+            expected = ITy::Sel { of: Rc::new(expected), sel, at_depth: depth };
+            crate::stats::intro_at_nodes(1);
+        }
+        self.tm_check(env, &val, expected.as_ref(), &level)
     }
 
     fn tm_infer_inner(&self, env: &Env, t: &Term) -> R<(Type, Level)> {
@@ -4093,7 +4376,7 @@ mod memo_tests {
             decl(LocalCtx::nil(), Type::Nat),
             decl(LocalCtx::nil(), Type::Unit { level: Level::Zero }),
         ]));
-        let u1 = global_tm(1);
+        let u1 = Rc::new(global_tm(1));
         assert_eq!(tc.tm_infer_syn(&outer, &u1).map(|(t, _)| (*t).clone()), Ok(Type::Nat));
         let pushed = outer.push_global(GlobalBinding::Ctx);
         assert_eq!(
@@ -4102,7 +4385,7 @@ mod memo_tests {
             "the signature cache survived a telescope push",
         );
         // And index 2 is the outer binding again, now needing `shift_global(3)`.
-        assert_eq!(tc.tm_infer_syn(&pushed, &global_tm(2)).map(|(t, _)| (*t).clone()), Ok(Type::Nat));
+        assert_eq!(tc.tm_infer_syn(&pushed, &Rc::new(global_tm(2))).map(|(t, _)| (*t).clone()), Ok(Type::Nat));
 
         // The declared *context*, the other field of the signature: `·` at
         // index 1 before the push and `(·, x : Nat)` after, so the length-zero
@@ -4164,5 +4447,153 @@ mod memo_tests {
             ),
             Err(TypeError::NotConvertible),
         );
+    }
+}
+
+/// The typing memo (module docs, §The typing memo), on a chain whose every
+/// link uses the last one twice: `s₀ = 0`, `sᵢ = f(sᵢ₋₁, sᵢ₋₁)`, for a local
+/// `f : Nat → Nat → Nat`. As a DAG it is `k` links; as a tree, `2^k` leaves.
+#[cfg(test)]
+mod typing_memo_tests {
+    use super::*;
+    use crate::stats;
+
+    fn nat() -> Rc<Type> {
+        Rc::new(Type::Nat)
+    }
+
+    fn arrow(dom: Rc<Type>, cod: Rc<Type>) -> Type {
+        Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom, cod }
+    }
+
+    /// `f(a, b)` with `f` the innermost local, both applications annotated.
+    fn f_of(a: &Rc<Term>, b: &Rc<Term>, result: &Rc<Type>) -> Rc<Term> {
+        let partial = Rc::new(Term::App {
+            fun: Rc::new(Term::Var(LocalVar(0))),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: nat(),
+            cod: Rc::new(arrow(nat(), Rc::clone(result))),
+            arg: Rc::clone(a),
+        });
+        Rc::new(Term::App {
+            fun: partial,
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: nat(),
+            cod: Rc::clone(result),
+            arg: Rc::clone(b),
+        })
+    }
+
+    /// Every link of the chain, `s₀` first.
+    fn chain(k: usize) -> Vec<Rc<Term>> {
+        let mut links = vec![Rc::new(Term::Zero)];
+        for _ in 0..k {
+            let last = Rc::clone(links.last().unwrap());
+            links.push(f_of(&last, &last, &nat()));
+        }
+        links
+    }
+
+    /// Γ = `f : Nat → Nat → result`.
+    fn env_with_f(result: Rc<Type>) -> Env {
+        Env {
+            psi: GlobalCtx::default(),
+            cache: Rc::new(GlobalCache::new()),
+            gamma: LocalCtx::nil(),
+            layer: Layer::Prog,
+            univs: 0,
+            under_box: false,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: None,
+        }
+        .push_entry(Rc::new(arrow(nat(), Rc::new(arrow(nat(), result)))), Level::Zero)
+    }
+
+    fn queries(d: &stats::Snapshot) -> u64 {
+        d.conv_shortcut_hits + d.conv_memo_hits + d.conv_misses
+    }
+
+    /// The acceptance shape: 40 links would be 2^40 paths, and checking the
+    /// chain costs a constant number of judgments per link.
+    #[test]
+    fn a_shared_chain_is_judged_once_per_link() {
+        let k = 40;
+        let links = chain(k);
+        let env = env_with_f(nat());
+        let before = stats::snapshot();
+        Tc::new(DEFAULT_FUEL).tm_check_ty(&env, &links[k], &Type::Nat, &Level::Zero).unwrap();
+        let d = stats::snapshot().since(&before);
+        // Every link but `s₀` (a literal) and `sₖ` (reached once) is reached
+        // twice, and the second path is the hit.
+        assert_eq!(d.typing_memo_hits, k as u64 - 1);
+        assert!(queries(&d) <= 8 * k as u64, "{} conversion queries for {k} links", queries(&d));
+    }
+
+    /// A hit needs the same node in the same scope. The same node judged
+    /// where `f` means something else is judged again, and refused, and a
+    /// structurally equal but separately built Γ is a different scope.
+    #[test]
+    fn the_memo_answers_only_in_the_scope_it_was_filled() {
+        let links = chain(6);
+        let top = &links[6];
+        let tc = Tc::new(DEFAULT_FUEL);
+        let first = env_with_f(nat());
+        tc.tm_check_ty(&first, top, &Type::Nat, &Level::Zero).unwrap();
+
+        let unit = Rc::new(Type::Unit { level: Level::Zero });
+        let other = env_with_f(Rc::clone(&unit));
+        assert!(
+            tc.tm_check_ty(&other, top, &Type::Nat, &Level::Zero).is_err(),
+            "the memo answered for a Γ in which `f` returns Unit",
+        );
+
+        let before = stats::snapshot();
+        tc.tm_check_ty(&env_with_f(nat()), top, &Type::Nat, &Level::Zero).unwrap();
+        let fresh = stats::snapshot().since(&before);
+        let before = stats::snapshot();
+        tc.tm_check_ty(&first, top, &Type::Nat, &Level::Zero).unwrap();
+        let again = stats::snapshot().since(&before);
+        assert!(again.typing_memo_hits > 0, "the same node in the same Γ missed");
+        assert!(
+            queries(&fresh) > queries(&again),
+            "an equal but separately built Γ was answered from the memo",
+        );
+    }
+
+    /// Failures are not kept: a refused check leaves nothing that a later,
+    /// correct check of the same node could hit, nor a stale success that a
+    /// wrong one could.
+    #[test]
+    fn a_refusal_is_not_memoized() {
+        let links = chain(4);
+        let tc = Tc::new(DEFAULT_FUEL);
+        let env = env_with_f(nat());
+        let unit = Type::Unit { level: Level::Zero };
+        assert!(tc.tm_check_ty(&env, &links[4], &unit, &Level::Zero).is_err());
+        assert!(tc.judged.borrow().values().all(|j| j.checked.is_empty()));
+        tc.tm_check_ty(&env, &links[4], &Type::Nat, &Level::Zero).unwrap();
+        assert!(tc.tm_check_ty(&env, &links[4], &unit, &Level::Zero).is_err());
+    }
+
+    /// Kind, never count: holding an extra reference to every node (what the
+    /// bounds cache's keep-alives do to an arbitrary subset) changes no
+    /// counter, so which lookups hit does not depend on reference counts.
+    #[test]
+    fn reference_counts_do_not_move_the_counters() {
+        let links = chain(12);
+        let run = || {
+            let before = stats::snapshot();
+            Tc::new(DEFAULT_FUEL)
+                .tm_check_ty(&env_with_f(nat()), &links[12], &Type::Nat, &Level::Zero)
+                .unwrap();
+            stats::snapshot().since(&before)
+        };
+        let plain = run();
+        let held: Vec<Rc<Term>> = links.iter().flat_map(|l| [Rc::clone(l), Rc::clone(l)]).collect();
+        let perturbed = run();
+        drop(held);
+        assert_eq!(plain, perturbed);
     }
 }

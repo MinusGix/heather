@@ -102,6 +102,28 @@ assuming h: P {
 It is parser sugar for ordinary implicit evidence parameters on each enclosed
 declaration.
 
+## Sections
+
+A `section` writes a declaration head once for a run of declarations. Its
+type parameters and parameters are put in front of each enclosed `fn` and
+`theorem`'s own, in order, exactly as if they were written there:
+
+```text
+section<A: StrictOrder(≈, <, <=)> {
+    theorem StrictOrder::le_refl(x: A): x <= x { ... }
+    theorem StrictOrder::le_of_lt(x, y: A, h: x < y): x <= y { ... }
+}
+```
+
+means `theorem StrictOrder::le_refl<A: StrictOrder(≈, <, <=)>(x: A): ...`
+and so on. Callers, inside the section and outside, pass the same arguments
+they would to the written-out declaration. Sections nest, outermost head
+first. Every member gets every binder, so a member cannot rebind a section's
+name, and a section type parameter or `{}` implicit that a member's head does
+not mention is refused at that member (no call could infer it). Only `fn`,
+`theorem` and nested sections may be inside. Members are conventionally not
+indented. See `docs/sections-design.md`.
+
 ## Modules and names
 
 ```heather

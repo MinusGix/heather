@@ -1936,7 +1936,7 @@ fn Node::output_id(self node: Node) → Nat { node_output(node).id }
 fn Node::in_place(self node: Node, file: File, later: List<Nat>) → Option<Gpr> {
     match node.reads() {
         Nil => None,
-        Cons(left, _) => match mentions(later, left) {
+        Cons(left, _) => match function_ir_lower::mentions(later, left) {
             True => None,
             False => match file.find(Held(left, Word)) {
                 None => None,
@@ -1970,7 +1970,7 @@ fn Node::choose_from(self node: Node, file: File, later: List<Nat>, entries: Lis
         False => fresh,
         True => match node.in_place(file, later) {
             None => fresh,
-            Some(r) => match r.listed(pool) || (r.same(Rax) && !mentions(crossed, node.output_id())) {
+            Some(r) => match r.listed(pool) || (r.same(Rax) && !function_ir_lower::mentions(crossed, node.output_id())) {
                 True => r,
                 False => fresh,
             },

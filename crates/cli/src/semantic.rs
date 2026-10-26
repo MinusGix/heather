@@ -328,6 +328,9 @@ impl SemanticSession {
         // imports, decode, replay, publication
         // (`docs/instrumentation-design.md` §3).
         let _module = stats::scope(stats::ScopeKind::Module, &module.name, "");
+        // The profile is part of the image key, so the lints the module is
+        // elaborated under are the ones it is keyed by.
+        elab.set_lint_profile(lint_profile);
         if !self.images_usable {
             return ModuleOutcome {
                 errors: elab.check_module_source(&module.name, &module.src),
@@ -503,7 +506,11 @@ impl SemanticSession {
                                 error: error.to_string(),
                             }),
                         },
-                        Relocation::NoCandidate => {}
+                        Relocation::NoCandidate => {
+                            if std::env::var_os("HEATHER_RELOCATION_DEBUG").is_some() {
+                                eprintln!("relocation-debug {}: no candidate", module.name);
+                            }
+                        }
                         Relocation::Refused(why) => {
                             if std::env::var_os("HEATHER_RELOCATION_DEBUG").is_some() {
                                 eprintln!("relocation-debug {}: refused: {why}", module.name);

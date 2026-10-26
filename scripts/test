@@ -195,14 +195,17 @@ native_bin_warmup() {
 # `write-elf` of cat elaborates its whole closure (std's x86 and Linux
 # modules, lib/native's compiler and proofs) and then checks the compile's
 # certificate, and the sum passes the rail where each half fits. Build the
-# closure here first, in a bounded process of its own, as current-build
-# images every reader accepts.
+# closure here first, in a bounded process of its own, in `write-elf`'s load
+# order (not over the gate's world: docs/library-world-design.md §3), and in
+# the stale lanes with their trade, as `write-elf` then replays it.
 cli_images_warmup() {
+  local stale=()
+  [[ "${HEATHER_SEMANTIC_IMAGES:-}" == accept-stale ]] && stale=(--accept-stale-images)
   (
     ulimit -v 6291456
     ulimit -t 300
     HEATHER_KERNEL_WORKERS=1 "${CARGO_TARGET_DIR:-target}/debug/heather" check --cache --cache-dir target/cli-check-images \
-      lib/native/native_cat_executable.hthr > /dev/null
+      "${stale[@]}" lib/native/native_cat_executable.hthr > /dev/null
   ) || echo "cli image warmup did not finish; the library gate and native_cat.rs report why"
 }
 

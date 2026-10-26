@@ -2188,6 +2188,65 @@ fn checked_spellings_infer_their_annotation() {
     }
 }
 
+/// A chain of unannotated injections is checked as one spine, its layers
+/// viewed in one arena (`Tc::injection_at_spine`,
+/// `issues/wide-inductive-constructor-mention-cost.md`) — and still layer by
+/// layer: every depth of `Nat + (Unit + (Nat + Unit))` takes its own
+/// summand's inhabitant and refuses the neighbouring one, against the code
+/// and against the syntax, and a chain one layer past the last `+` is
+/// refused. The summands alternate so that a layer read one off in either
+/// direction is caught.
+#[test]
+fn an_injection_chain_checks_every_layer() {
+    let z = Level::Zero;
+    let tm_sum = |lhs: Term, rhs: Term| Term::TmSum {
+        lhs_level: z.clone(),
+        rhs_level: z.clone(),
+        lhs: rt(lhs),
+        rhs: rt(rhs),
+    };
+    let unit = || Term::TmUnit { level: Level::Zero };
+    let code = tm_sum(Term::TmNat, tm_sum(unit(), tm_sum(Term::TmNat, unit())));
+    let coded = Type::El { level: z.clone(), tm: rt(code) };
+    let ty_sum = |lhs: Type, rhs: Type| Type::Sum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(lhs),
+        rhs: rty(rhs),
+    };
+    let unit_ty = || Type::Unit { level: Level::Zero };
+    let syntax = ty_sum(Type::Nat, ty_sum(unit_ty(), ty_sum(Type::Nat, unit_ty())));
+    let zero = || rt(Term::Zero);
+    let triv = || rt(Term::Triv { level: Level::Zero });
+    // `inr@ʲ(inl@(v))`, or `inr@ʲ(v)` for the last summand.
+    let chain = |depth: usize, last: bool, v: Rc<Term>| {
+        let mut t = if last { v } else { rt(Term::InlAt { ty: None, val: v }) };
+        for _ in 0..depth {
+            t = rt(Term::InrAt { ty: None, val: t });
+        }
+        t
+    };
+    // (depth, last summand?, its inhabitant, the neighbour's)
+    let cases = [
+        (0, false, zero(), triv()),
+        (1, false, triv(), zero()),
+        (2, false, zero(), triv()),
+        (3, true, triv(), zero()),
+    ];
+    for expected in [&coded, &syntax] {
+        for (depth, last, good, bad) in cases.clone() {
+            check_closed(Layer::Prog, &chain(depth, last, good), expected, &z).unwrap();
+            assert!(
+                check_closed(Layer::Prog, &chain(depth, last, bad), expected, &z).is_err(),
+                "depth {depth}: the neighbouring summand's inhabitant must be refused"
+            );
+        }
+        // Past the last `+`: `Unit` is not a sum.
+        let over = chain(4, true, triv());
+        assert!(check_closed(Layer::Prog, &over, expected, &z).is_err());
+    }
+}
+
 /// `app@(f; a)` (`docs/app-by-head-type-design.md` §3.1, §9's golden tests):
 ///
 /// 1. a head whose type is syntactically a Π — a local here, as a global's
