@@ -306,6 +306,7 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         ("rewrite/let-nary", "3 lets of arity n rewritten away — mengine rewrite_nm"),
         ("let/fan", "k lets each using the last twice"),
         ("let/dep", "fan with an unused refl proof let per link"),
+        ("let/under", "fan with a λ between every link"),
         ("let/stmt", "a k-let chain equal to itself by refl"),
     ]
 }
