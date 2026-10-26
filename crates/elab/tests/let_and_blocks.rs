@@ -638,3 +638,35 @@ fn a_shared_let_chain_is_checked_once_per_link() {
     let (e16, e32) = (elaboration(&dep(16)), elaboration(&dep(32)));
     assert!(e32 < 3 * e16, "dep: elaboration's shifts grew {e16} → {e32} for k = 16 → 32");
 }
+
+/// The comparison's half (`issues/kernel-equality-walks-dags-as-trees.md`):
+/// a let chain stated equal to itself and closed by `refl`. The two sides
+/// are elaborated separately, so the elaborator's `refl` test and the
+/// gate's conversion shortcut each compare two equal DAGs that share no
+/// node, and `==` on terms used to walk them as trees (2^k node pairs).
+/// It compares each pair of shared nodes once (`syntax_eq.rs`), so the
+/// pairs compared for the whole source are linear in `k`.
+#[test]
+fn two_equal_let_chains_compare_once_per_link() {
+    use heather_kernel::stats as kstats;
+    fn stmt(k: usize) -> String {
+        let mut chain = String::from("{ ");
+        for i in 1..=k {
+            chain.push_str(&format!("let v{i} = g(g(v{j}, v{j}), 0); ", j = i - 1));
+        }
+        chain.push_str(&format!("v{k} }}"));
+        format!("theorem st(g: Nat → Nat → Nat, v0: Nat):\n    {chain}\n    = {chain}\n{{ refl }}\n")
+    }
+    fn compared(src: &str) -> (u64, u64) {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        let before = kstats::snapshot();
+        e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+        let d = kstats::snapshot().since(&before);
+        (d.syntax_eq_nodes, d.syntax_eq_memo_hits)
+    }
+    // Doubling k: a linear count doubles; a tree's is 65,536 times larger.
+    let (n16, hits) = compared(&stmt(16));
+    let (n32, _) = compared(&stmt(32));
+    assert!(hits >= 16, "{hits} memo hits for 16 links");
+    assert!(n32 < 3 * n16, "node pairs compared grew {n16} → {n32} for k = 16 → 32");
+}

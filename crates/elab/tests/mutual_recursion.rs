@@ -126,6 +126,21 @@ theorem ev7(): ev(7) = 0 { refl }
 "#);
 }
 
+/// Members of one type that call each other by their bare names
+/// (docs/sections-design.md §6) are the same group their qualified spellings
+/// make: the group is found by base name, and the sibling reading reaches the
+/// recursion inside it.
+#[test]
+fn members_calling_each_other_bare_are_one_group() {
+    ok(r#"
+fn Nat::ev(n: Nat) -> Nat decreases n { match n { Zero => 1, Succ(k) => od(k) } }
+fn Nat::od(n: Nat) -> Nat decreases n { match n { Zero => 0, Succ(k) => ev(k) } }
+
+theorem Nat::ev4(): ev(4) = 1 { refl }
+theorem od7(): Nat::od(7) = 1 { refl }
+"#);
+}
+
 /// The customer's three members, at **literal** arguments. `parse_expr` calls
 /// `parse_factor` on the same token list; the rank makes that legal and the
 /// writer pays nothing for it — there is no `on` for that site.

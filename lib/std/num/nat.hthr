@@ -150,8 +150,8 @@ theorem Nat::mul_succ_left(self a, b: Nat): Succ(a) * b = b + a * b {
         Succ(k) => calc {
             Succ(a) * Succ(k)
                 = Succ(Succ(a) * k + a)   := refl,
-                = Succ((k + a * k) + a)   := cong(a.mul_succ_left(k)),
-                = Succ(k + (a * k + a))   := cong(k.add_assoc(a * k, a)),
+                = Succ((k + a * k) + a)   := prelude::cong(a.mul_succ_left(k)),
+                = Succ(k + (a * k + a))   := prelude::cong(k.add_assoc(a * k, a)),
                 = Succ(k) + a * Succ(k)   := sym(k.add_succ_left(a * k + a)),
         },
     }
@@ -190,7 +190,7 @@ theorem Nat::mul_comm(self x, y: Nat): x * y = y * x {
         Succ(k) => calc {
             x * Succ(k)
                 = x * k + x := refl,
-                = k * x + x := cong(x.mul_comm(k)),
+                = k * x + x := prelude::cong(x.mul_comm(k)),
                 = x + k * x := (k * x).add_comm(x),
                 = Succ(k) * x := sym(k.mul_succ_left(x)),
         },
@@ -1006,8 +1006,8 @@ theorem Nat::add_mul_distr(self a, b, c: Nat): (a + b) * c = a * c + b * c {
         (a + b) * c
             = c * (a + b)   := (a + b).mul_comm(c),
             = c * a + c * b := c.mul_add_distr(a, b),
-            = a * c + c * b := cong(c.mul_comm(a)),
-            = a * c + b * c := cong(c.mul_comm(b)),
+            = a * c + c * b := prelude::cong(c.mul_comm(a)),
+            = a * c + b * c := prelude::cong(c.mul_comm(b)),
     }
 }
 
@@ -1089,12 +1089,12 @@ theorem Nat::div_mul_parts(self n: Nat, a, b: Pos<Nat>):
             n.div(a).div(b) * (a * b) + (n.div(a).mod(b) * a + n.mod(a))
                 = (n.div(a).div(b) * (a * b) + n.div(a).mod(b) * a) + n.mod(a) :=
                     sym((n.div(a).div(b) * (a * b)).add_assoc(n.div(a).mod(b) * a, n.mod(a))),
-                = (n.div(a).div(b) * (b * a) + n.div(a).mod(b) * a) + n.mod(a) := cong(a.mul_comm(b)),
+                = (n.div(a).div(b) * (b * a) + n.div(a).mod(b) * a) + n.mod(a) := prelude::cong(a.mul_comm(b)),
                 = ((n.div(a).div(b) * b) * a + n.div(a).mod(b) * a) + n.mod(a) :=
-                    cong(sym(n.div(a).div(b).mul_assoc(b, a))),
+                    prelude::cong(sym(n.div(a).div(b).mul_assoc(b, a))),
                 = (n.div(a).div(b) * b + n.div(a).mod(b)) * a + n.mod(a) :=
-                    cong(sym((n.div(a).div(b) * b).add_mul_distr(n.div(a).mod(b), a))),
-                = n.div(a) * a + n.mod(a) := cong(n.div(a).div_mul_add_mod(b)),
+                    prelude::cong(sym((n.div(a).div(b) * b).add_mul_distr(n.div(a).mod(b), a))),
+                = n.div(a) * a + n.mod(a) := prelude::cong(n.div(a).div_mul_add_mod(b)),
                 = n := n.div_mul_add_mod(a),
         },
         Nat::lt_congr_iff(n.div(a).mod(b) * a + n.mod(a), n.div(a).mod(b) * a + n.mod(a), b * a + 0, a * b,
@@ -1124,8 +1124,8 @@ theorem Nat::div_split(self n: Nat, c, k: Pos<Nat>): n.div(c) = n.div(c * k) * k
     calc {
         n.div(c)
             = n.div(c).div(k) * k + n.div(c).mod(k) := sym(n.div(c).div_mul_add_mod(k)),
-            = n.div(c * k) * k + n.div(c).mod(k) := cong(n.div_div(c, k)),
-            = n.div(c * k) * k + n.mod(c * k).div(c) := cong(n.div_mod_eq_mod_div(c, k)),
+            = n.div(c * k) * k + n.div(c).mod(k) := prelude::cong(n.div_div(c, k)),
+            = n.div(c * k) * k + n.mod(c * k).div(c) := prelude::cong(n.div_mod_eq_mod_div(c, k)),
     }
 }
 
@@ -1320,7 +1320,7 @@ theorem Nat::pow_mul(self a: Nat, b, c: Nat): a.pow(b * c) = a.pow(b).pow(c) {
         Succ(k) => calc {
             a.pow(b * Succ(k))
                 = a.pow(b * k) * a.pow(b) := a.pow_add(b * k, b),
-                = a.pow(b).pow(k) * a.pow(b) := cong(a.pow_mul(b, k)),
+                = a.pow(b).pow(k) * a.pow(b) := prelude::cong(a.pow_mul(b, k)),
                 = a.pow(b).pow(Succ(k))           := refl,
         },
     }
@@ -1330,9 +1330,9 @@ theorem Nat::mul_shuffle(x, y, z, w: Nat): (x * y) * (z * w) = (x * z) * (y * w)
     calc {
         (x * y) * (z * w)
             = (x * (y * (z * w))) := x.mul_assoc(y, z * w),
-            = (x * ((y * z) * w)) := cong(sym(y.mul_assoc(z, w))),
-            = (x * ((z * y) * w)) := cong(y.mul_comm(z)),
-            = (x * (z * (y * w))) := cong(z.mul_assoc(y, w)),
+            = (x * ((y * z) * w)) := prelude::cong(sym(y.mul_assoc(z, w))),
+            = (x * ((z * y) * w)) := prelude::cong(y.mul_comm(z)),
+            = (x * (z * (y * w))) := prelude::cong(z.mul_assoc(y, w)),
             = ((x * z) * (y * w)) := sym(x.mul_assoc(z, y * w)),
     }
 }

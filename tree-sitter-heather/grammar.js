@@ -62,6 +62,7 @@ module.exports = grammar({
       $.datarepr_declaration,
       $.impl_declaration,
       $.assuming_declaration,
+      $.section_declaration,
     ),
 
     import_declaration: $ => seq(
@@ -147,6 +148,13 @@ module.exports = grammar({
     assuming_declaration: $ => seq(
       'assuming', commaSep1($.assumption),
       field('body', seq('{', repeat($._item), '}')),
+    ),
+    // `section<A: C>(x: A) { fn … theorem … }` — a head spliced into every
+    // member's (docs/sections-design.md).
+    section_declaration: $ => seq(
+      'section', optional($.type_parameters), optional($.requires_clause),
+      optional(field('parameters', $.parameter_list)),
+      field('body', seq('{', repeat(choice($.function_declaration, $.theorem_declaration, $.section_declaration)), '}')),
     ),
     assumption: $ => choice(
       seq(field('name', $.identifier), ':', field('type', $._declaration_type)),

@@ -672,10 +672,10 @@ fn StructuredRegion::folds(self region: StructuredRegion, outputs: List<Nat>) â†
 // gives.
 fn Node::folded(self node: Node, folds: List<Nat>, last: Bool) â†’ Bool {
     match node {
-        Const(_, output, _) => mentions(folds, output),
-        UnsignedLessThan(_, output, _, _) => last && mentions(folds, output),
-        SignedLessThan(_, output, _, _) => last && mentions(folds, output),
-        Equal(_, output, _, _) => last && mentions(folds, output),
+        Const(_, output, _) => function_ir_lower::mentions(folds, output),
+        UnsignedLessThan(_, output, _, _) => last && function_ir_lower::mentions(folds, output),
+        SignedLessThan(_, output, _, _) => last && function_ir_lower::mentions(folds, output),
+        Equal(_, output, _, _) => last && function_ir_lower::mentions(folds, output),
         _ => False,
     }
 }

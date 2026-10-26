@@ -130,8 +130,8 @@ fn rewrite_repeat_mod() -> Family {
 /// so any walk that does not share nodes is exponential, and today three
 /// do: the abstraction walk (`AbstractLocal` memoizes no result per node,
 /// survey §4.2), the motive and transport the gate checks, and the final
-/// `refl`'s equality of two separately built DAGs
-/// ([[kernel-equality-walks-dags-as-trees]], which `let/stmt` isolates).
+/// `refl`'s equality of two separately built DAGs, linear since
+/// [[kernel-equality-walks-dags-as-trees]] (which `let/stmt` isolates).
 fn rewrite_let_addr0() -> Family {
     let src = |k: u64| {
         let zeros = let_chain(k, |j| format!("g(g(v{j}, v{j}), 0)"));
@@ -262,10 +262,11 @@ fn let_dep() -> Family {
 /// `refl`, with no rewrite. The two sides are elaborated separately, so
 /// `refl` compares two equal DAGs.
 ///
-/// **Lower bound: linear in k.** The gate's queries are linear since the
-/// typing memo, but its time is 2^k: the conversion shortcut's derived
-/// `Term::eq` walks the two DAGs as trees
-/// ([[kernel-equality-walks-dags-as-trees]]).
+/// **Lower bound: linear in k**, and met since `==` on terms compares a
+/// pair of shared nodes once ([[kernel-equality-walks-dags-as-trees]]):
+/// before it, the elaborator's `refl` test and the gate's conversion
+/// shortcut each walked the two DAGs as trees, 2^k. Pinned on the exact
+/// counter by `crates/elab/tests/let_and_blocks.rs`; this is its time.
 fn let_stmt() -> Family {
     let src = |k: u64| {
         let chain = let_chain(k, |j| format!("g(g(v{j}, v{j}), 0)"));
@@ -277,10 +278,10 @@ fn let_stmt() -> Family {
         name: "let/stmt",
         what: "a k-let chain stated equal to itself, by refl (lower bound: linear)",
         unit: "lets",
-        // Recorded, not claimed: 9.58 over 14..20 (four runs, 8.78-9.99 on the
-        // cloud box, 2026-10-26): ×4 per two lets, 2^k, split about evenly
-        // between the gate (`Term::eq`) and elaboration.
-        expect_slope: Some((8.40, 10.80)),
-        cases: sweep("let/stmt", &[14, 16, 18, 20], src),
+        // Recorded, not claimed: 1.04 over 32..256 (four runs, 0.90-1.11 on the
+        // cloud box, 2026-10-26): the lower bound, met. Before the pair memo
+        // it was 9.58 over 14..20, ×4 per two lets.
+        expect_slope: Some((0.75, 1.45)),
+        cases: sweep("let/stmt", &[32, 64, 128, 256], src),
     }
 }

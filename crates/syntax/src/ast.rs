@@ -36,6 +36,11 @@ impl Span {
 #[derive(Debug, Clone)]
 pub struct File {
     pub items: Vec<Item>,
+    /// The `<…>` list of each `section` head, as (the head's span, its first
+    /// type parameter's, its last's). The parser splices those parameters
+    /// into every member (docs/sections-design.md §5.2), so no item's span
+    /// holds the list they were written in; `roles` locates it from here.
+    pub section_typarams: Vec<(Span, Span, Span)>,
 }
 
 #[derive(Debug, Clone)]

@@ -152,6 +152,16 @@ counters! {
     /// (`subst.rs` §Keeping a shared DAG shared): one per second (or later)
     /// path into the same node at the same depths.
     subst_memo_hits,
+    /// Pairs of distinct nodes that `==` on `Term`/`Type` compared
+    /// (`syntax_eq.rs`): the structural equality behind the conversion
+    /// shortcut and the elaborator's `refl` test, pointer-equal children
+    /// not counted. Its growth against the shared size of the two sides is
+    /// the tree/DAG gap `issues/kernel-equality-walks-dags-as-trees.md`
+    /// closes.
+    syntax_eq_nodes,
+    /// Second (or later) paths into a pair of shared nodes that one `==`
+    /// call had already found equal, answered from its memo (`syntax_eq.rs`).
+    syntax_eq_memo_hits,
     /// Judgments the kernel checker answered from its typing memo
     /// (`typing.rs` §The typing memo): one per second (or later) path into
     /// the same node in the same scope, the node's whole subtree unvisited.

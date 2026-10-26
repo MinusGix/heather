@@ -634,6 +634,10 @@ pub struct Elaborator {
     /// members use earlier members by name" (docs/traits-layer1-design.md
     /// §4.2). Empty outside a block, which makes the mechanism inert.
     instance_scope: Vec<(String, String)>,
+    /// The owner of the declaration being elaborated (`List` while checking
+    /// `List::append`), whose other members a bare name may name
+    /// ([`Self::owner_member`]).
+    member_owner: Option<String>,
     /// Goals this item's elaboration derived and that deserve a canonical
     /// global. Ψ must not grow mid-declaration, so minting is a **restart**:
     /// the item is rolled back, the queue drained, the item elaborated again
@@ -1723,6 +1727,7 @@ impl Elaborator {
             impl_provenance: None,
             attempt: DeclAttempt::default(),
             instance_scope: Vec::new(),
+            member_owner: None,
             pending_derived: RefCell::new(Vec::new()),
             warnings: RefCell::new(Vec::new()),
             lint_profile: LintProfile::Default,
@@ -2713,6 +2718,82 @@ impl Elaborator {
         self.names.global(&self.key_of(self.instance_alias(name))?)
     }
 
+    /// Inside a member of `T` (`fn T::f`), a bare name may name `T`'s other
+    /// members: `cong_cons` for `List::cong_cons` inside `List::append_assoc`
+    /// (docs/sections-design.md §6). The member joins the candidate set with
+    /// the same rank as every other reading, so when the bare name also
+    /// resolves on its own the two are ambiguous (`Err`, the message): a
+    /// precedence either way would let a library's growth reinterpret checked
+    /// text (docs/modules-design.md §8). Only a declared member counts, never
+    /// the constructor reading of `T::C`. It is consulted only where a written
+    /// expression enters elaboration ([`Self::owner_rewrite`]), so the
+    /// elaborator's own lookups of library names, and receiver dispatch's
+    /// ambient readings, are untouched.
+    fn owner_member(&self, name: &str) -> Result<Option<String>, String> {
+        let Some(owner) = self.member_owner.as_deref() else { return Ok(None) };
+        if name.contains("::") || self.instance_scope.iter().any(|(base, _)| base == name) {
+            return Ok(None);
+        }
+        let full = format!("{owner}::{name}");
+        let NameRes::Found(m) = self.resolve_declared(&full) else { return Ok(None) };
+        if !self.names.declares(&m, &full) {
+            return Ok(None);
+        }
+        match self.resolve_declared(name) {
+            NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => Ok(Some(full)),
+            NameRes::Found(other) => Err(format!(
+                "`{name}` is ambiguous here: inside a member of `{owner}` it can name \
+                 `{owner}::{name}` (`{m}`) or `{name}` (`{other}`). Write `{owner}::{name}` \
+                 for the member, or qualify the other (`{other}::{name}`) \
+                 (docs/sections-design.md §6)"
+            )),
+            NameRes::Ambiguous(origins) => Err(format!(
+                "`{name}` is ambiguous here: inside a member of `{owner}` it can name \
+                 `{owner}::{name}` (`{m}`), and it is also declared in {}. Qualify it \
+                 (docs/sections-design.md §6)",
+                origins.iter().map(|o| format!("`{o}`")).collect::<Vec<_>>().join(" and ")
+            )),
+        }
+    }
+
+    /// A bare written name, or the bare head of a written call, that names a
+    /// sibling member ([`Self::owner_member`]) is rewritten to its qualified
+    /// spelling before the expression is elaborated, so every route after it
+    /// (implicit masks, receivers, deferral) sees the declaration's own name.
+    /// Locals, aliases and the declaration's own name shadow it, as they
+    /// shadow every global.
+    fn owner_rewrite(&self, cx: &Cx, e: &Expr) -> R<Option<Expr>> {
+        if self.member_owner.is_none() {
+            return Ok(None);
+        }
+        let (name, span) = match &e.kind {
+            ExprKind::Var(n) => (n, e.span),
+            ExprKind::App { head, .. } => match &head.kind {
+                ExprKind::Var(n) => (n, head.span),
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        if cx.names.iter().any(|n| n == name)
+            || cx.aliases.iter().any(|a| a.name == *name)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
+        {
+            return Ok(None);
+        }
+        let full = match self.owner_member(name) {
+            Ok(Some(full)) => full,
+            Ok(None) => return Ok(None),
+            Err(msg) => return err(msg, span),
+        };
+        let mut out = e.clone();
+        match &mut out.kind {
+            ExprKind::Var(n) => *n = full,
+            ExprKind::App { head, .. } => head.kind = ExprKind::Var(full),
+            _ => unreachable!(),
+        }
+        Ok(Some(out))
+    }
+
     /// Inside an `instance` block, an unqualified name that is an *earlier*
     /// member of this block names that member's global
     /// (docs/traits-layer1-design.md §4.2). A name rewrite and nothing more:
@@ -3322,6 +3403,25 @@ impl Elaborator {
     /// `Elaborator` outlives a declaration (and an `elab_source` call), so a
     /// stale `goal_base` would silently corrupt the next one.
     fn elab_decl(&mut self, decl: &Decl) -> R<()> {
+        let owner = decl.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
+        self.elab_decl_as(decl, owner)
+    }
+
+    /// A declaration an `instance` synthesizes: its qualified name is the
+    /// instance's, not a member of a type or function, so its body names no
+    /// siblings (docs/sections-design.md §6).
+    pub(crate) fn elab_decl_unowned(&mut self, decl: &Decl) -> R<()> {
+        self.elab_decl_as(decl, None)
+    }
+
+    fn elab_decl_as(&mut self, decl: &Decl, owner: Option<String>) -> R<()> {
+        let saved = std::mem::replace(&mut self.member_owner, owner);
+        let result = self.elab_decl_owned(decl);
+        self.member_owner = saved;
+        result
+    }
+
+    fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
         // A `meta fn` is a different declaration form: modal signature,
         // quotation body, `Layer::Meta` check, elaborator-side registration
         // (docs/in-language-map-design.md §3–4).
@@ -4873,6 +4973,9 @@ impl Elaborator {
         // (docs/bare-symbol-checking-carrier-design.md §3.1). The expected type
         // is already in hand one line above the rewrite, and has been since the
         // operators round — nothing is plumbed from a call site.
+        if let Some(rewritten) = self.owner_rewrite(cx, e)? {
+            return self.elab_check_skel_slots(cx, &rewritten, expected, lvl, hint, skel, capture_slots);
+        }
         if let Some(rewritten) = self.op_rewrite(cx, e, Some(expected))? {
             return self.elab_check_skel_slots(
                 cx,
@@ -6541,6 +6644,9 @@ impl Elaborator {
         // which is the whole of what "a bare symbol has no carrier" still means
         // (docs/bare-symbol-checking-carrier-design.md §5).
         if let Some(rewritten) = self.op_rewrite(cx, e, None)? {
+            return self.elab_infer_at(cx, &rewritten, expected);
+        }
+        if let Some(rewritten) = self.owner_rewrite(cx, e)? {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         if let ExprKind::App {

@@ -87,6 +87,9 @@ fn walk<'a>(toks: &'a [Tok], file: &File) -> Walk<'a> {
     for it in &file.items {
         w.item(it);
     }
+    for &(head, first, last) in &file.section_typarams {
+        w.list_spanned("section-tyvars", head, first, last);
+    }
     w
 }
 
@@ -450,13 +453,11 @@ impl<'a> Walk<'a> {
     }
 
     fn decl(&mut self, d: &Decl) {
-        if !d.tyvars.is_empty() {
-            self.list_spanned(
-                "decl-tyvars",
-                d.span,
-                d.tyvars[0].span,
-                d.tyvars[d.tyvars.len() - 1].span,
-            );
+        // A section's type parameters lead a member's list but were written
+        // in the section's head, before the member (`walk` locates that list).
+        let own: Vec<&TyParam> = d.tyvars.iter().filter(|t| t.span.start >= d.span.start).collect();
+        if let (Some(first), Some(last)) = (own.first(), own.last()) {
+            self.list_spanned("decl-tyvars", d.span, first.span, last.span);
         }
         for p in &d.params {
             self.param(p);

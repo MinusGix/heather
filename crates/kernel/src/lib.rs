@@ -17,6 +17,7 @@ pub mod rec;
 pub mod reduce;
 pub mod stats;
 pub mod subst;
+mod syntax_eq;
 pub mod term;
 pub mod typing;
 pub mod unseal;

@@ -2570,7 +2570,7 @@ impl Elaborator {
                     body: m.body.clone(),
                     span: m.span,
                 };
-                self.elab_decl(&decl)?;
+                self.elab_decl_unowned(&decl)?;
                 // Only *after* it lands does the name become visible to the
                 // members after it (design §4.2): a member cannot reference
                 // itself or a later one by short name.
@@ -3407,6 +3407,6 @@ impl Elaborator {
             body: body_of(body),
             span,
         };
-        self.elab_decl(&decl)
+        self.elab_decl_unowned(&decl)
     }
 }

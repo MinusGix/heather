@@ -401,6 +401,53 @@ pub(crate) fn projection_heads_cached(
     Ok(Some(levels))
 }
 
+/// View every layer of a contiguous chain of unannotated injections in one
+/// short-lived arena: `t` is the type the outermost is checked against, and
+/// `selections[i]` is [`Sel::Lhs`] or [`Sel::Rhs`], the summand layer `i`
+/// descends into. Each layer's type must expose a sum; `None` reports one
+/// that does not. The `+`'s two levels are returned per layer, and no value
+/// escapes this call — the twin of [`projection_heads_cached`] for the intro
+/// side, so a value `k` injections deep views `k` layers once each instead
+/// of replaying the selection prefix at every layer.
+///
+/// [`Sel::Lhs`]: crate::typing::ity::Sel::Lhs
+/// [`Sel::Rhs`]: crate::typing::ity::Sel::Rhs
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn injection_heads_cached(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    t: &ITy,
+    selections: &[crate::typing::ity::Sel],
+    fuel: u64,
+    #[cfg(feature = "value-metrics")] metrics: Option<&ValueMetrics>,
+    cache: Rc<GlobalCache>,
+) -> R<Option<Vec<(Level, Level)>>> {
+    debug_assert!(layer.computes());
+    #[cfg(feature = "value-metrics")]
+    let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
+    #[cfg(not(feature = "value-metrics"))]
+    let arena = ValueArena::new();
+    let env = Env::new_with(&arena, psi, gamma, layer, cache);
+    let mut cv = Conv::<Values>::new(fuel, psi);
+    let depth = gamma.entries.len() as u32;
+    let mut w = dom::values::eval_ity(&mut cv, &env, t, depth, true)?;
+    let mut levels = Vec::with_capacity(selections.len());
+    for (i, sel) in selections.iter().enumerate() {
+        let VTy::Sum { lhs_level, rhs_level, .. } = &*w else {
+            return Ok(None);
+        };
+        levels.push((lhs_level.clone(), rhs_level.clone()));
+        if i + 1 < selections.len() {
+            // Fuel per view, as for a projection spine.
+            cv.fuel = fuel;
+            crate::stats::sel_evals(1);
+            w = dom::values::select_ity(&mut cv, &env, w, sel, depth, true)?;
+        }
+    }
+    Ok(Some(levels))
+}
+
 
 /// The **differential oracle**: conversion decided by the `reduce.rs` term
 /// rewriter instead of by the value machine.
