@@ -1936,6 +1936,18 @@ theorem BitVec::zero_iterate_increment(n, m: Nat, lt: m < Nat::pow(2, n)):
         BitVec::iterate_increment_toNat(n, BitVec::ofNat(m, n := n)))
 }
 
+// `offset` past `a`, as a ripple add of the literal. It is `iterate_increment`
+// below the period (`add_nat_iterate`), but its bits evaluate in frames bounded
+// by the width: forcing an iterated increment's bit re-enters the evaluator once
+// per unit of the count (issues/native-compile-address-depth.md).
+fn BitVec::add_nat({n: Nat}, self a: BitVec(n), offset: Nat) → BitVec(n) { a.add(BitVec::ofNat(offset)) }
+
+theorem BitVec::add_nat_iterate(n: Nat, a: BitVec(n), offset: Nat, lt: offset < Nat::pow(2, n)):
+    a.add_nat(offset) = a.iterate_increment(offset) {
+    trans(sym(BitVec::iter_add_eq_add(n, a, BitVec::ofNat(offset, n := n))),
+        BitVec::cong_iterate_increment_count(n, a, BitVec::toNat_ofNat(n, offset, lt)))
+}
+
 // A nonzero vector is one past its decrement.
 theorem BitVec::toNat_decrement(n: Nat, x: BitVec(n), nonzero: 0 < x.toNat()): Succ(x.decrement().toNat()) = x.toNat() {
     let y = x.decrement();

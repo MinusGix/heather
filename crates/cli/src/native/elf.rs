@@ -17,7 +17,7 @@
 //! evaluation; the layout check `Source::compile` makes is proved a stretch
 //! at a time over the literal (as `compile-x86` does); the bytes a piece at
 //! a time. The literal spells each address in the region as the compiler
-//! does, `next_rip` from the page's start, so the emission's check compares
+//! does, `add_nat` from the page's start, so the emission's check compares
 //! the two by their arguments instead of evaluating each one's bits.
 use std::path::{Path, PathBuf};
 
@@ -110,7 +110,7 @@ fn {p}_lens() → List<Nat> {{ asm_lens({p}_program()) }}
     let numbers = |fork: &Elaborator, module: &str, item: &str| function_ir_source::evaluate_numbers(fork, &format!("{module}::{p}_{item}"))
         .map_err(|e| format!("`{symbol}` ({item}): {e}"));
     let address = |width: u32, n: u64| {
-        if width == 64 && REGION.contains(&n) { format!("next_rip({LOW}, {})", n - REGION.start) }
+        if width == 64 && REGION.contains(&n) { format!("{LOW}.add_nat({})", n - REGION.start) }
         else { format!("@bitvec::BitVec::ofNat({width}, {n})") }
     };
     let items = verified::read_items_with(&numbers(&fork, &probe, "numbers")?, &address)?;

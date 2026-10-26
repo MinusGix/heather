@@ -89,8 +89,9 @@ theorem Target::buffer_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf
 theorem Target::buffer_toNat(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap)):
     t.layout().buffer_at(buf).toNat() = t.r.low.toNat() + t.layout().buffer_offset(buf) {
     let bo = t.layout().buffer_offset(buf);
-    t.r.toNat_at(bo, Nat::le_trans(bo, t.layout().scratch_offset(), t.r.size,
-        bo.le_of_add_le(cap, t.layout().scratch_offset(), t.layout().buffer_end(buf, cap, found)), t.scratch_fits()))
+    trans(cong_fn<BitVec(64), Nat>(λ a => a.toNat(), t.buffer_rip(buf, cap, found)),
+        t.r.toNat_at(bo, Nat::le_trans(bo, t.layout().scratch_offset(), t.r.size,
+            bo.le_of_add_le(cap, t.layout().scratch_offset(), t.layout().buffer_end(buf, cap, found)), t.scratch_fits())))
 }
 
 // An address counted by value is the region's own spelling of it.
@@ -629,10 +630,11 @@ theorem Target::landed_store(self t: Target, env: Env, m: X86Memory(t.r.profile)
     let sizes: (so + t.caps.largest() <= t.r.size) = t.fits;
     let fits: (so + bytes.len() <= t.r.size) = Nat::le_trans(so + bytes.len(), so + t.caps.largest(), t.r.size,
         so.add_le_mono_l(bytes.len(), t.caps.largest(), short), sizes);
-    Exists(t.r.buffer(v).set_span(so, bytes.to_vector()).cells, ⟨t.r.store_holds(v, m, placed.proof.left, so, bytes, fits),
-        ⟨t.layout().keeps_agree(env, v, t.r.buffer(v).set_span(so, bytes.to_vector()).cells, placed.proof.right,
-            λ q below => t.r.cells_outside(v, so, bytes, q, Inl(below))),
-         λ k c got => t.r.cells_inside(v, so, bytes, k, c, got)⟩⟩)
+    j(sym(t.scratch_rip()), λ x _ => t.Landed(env, bytes, t.r.profile.store(m, x, bytes)),
+        Exists(t.r.buffer(v).set_span(so, bytes.to_vector()).cells, ⟨t.r.store_holds(v, m, placed.proof.left, so, bytes, fits),
+            ⟨t.layout().keeps_agree(env, v, t.r.buffer(v).set_span(so, bytes.to_vector()).cells, placed.proof.right,
+                λ q below => t.r.cells_outside(v, so, bytes, q, Inl(below))),
+             λ k c got => t.r.cells_inside(v, so, bytes, k, c, got)⟩⟩))
 }
 
 // A word stored to its slot keeps the landed bytes.
@@ -642,14 +644,15 @@ theorem Target::landed_word(self t: Target, env: Env, bytes: List<BitVec(8)>, m:
     let v = landed.witness;
     let so = t.layout().scratch_offset();
     let w = t.r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells;
-    Exists(w, ⟨t.r.store_holds(v, m, landed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
-        ⟨t.layout().keeps_word(t.r, env, v, landed.proof.right.left, i, inside, word),
-         λ k c got => {
-            let words: (8 * i + 8 <= 8 * word_slots()) = t.layout().word_below_buffers(i, 7, inside, trivial);
-            let past: (8 * i + 8 <= so + k) = Nat::le_trans(8 * i + 8, so, so + k,
-                Nat::le_trans(8 * i + 8, 8 * word_slots(), so, words, t.layout().scratch_after_words()), so.le_add_l(k));
-            trans(t.r.cells_outside(v, 8 * i, word_bytes(word), so + k, Inr(past)), landed.proof.right.right(k, c, got))
-         }⟩⟩)
+    j(sym(t.word_rip(i, inside)), λ x _ => t.Landed(env.set_word(i, word), bytes, t.r.profile.store(m, x, word_bytes(word))),
+        Exists(w, ⟨t.r.store_holds(v, m, landed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
+            ⟨t.layout().keeps_word(t.r, env, v, landed.proof.right.left, i, inside, word),
+             λ k c got => {
+                let words: (8 * i + 8 <= 8 * word_slots()) = t.layout().word_below_buffers(i, 7, inside, trivial);
+                let past: (8 * i + 8 <= so + k) = Nat::le_trans(8 * i + 8, so, so + k,
+                    Nat::le_trans(8 * i + 8, 8 * word_slots(), so, words, t.layout().scratch_after_words()), so.le_add_l(k));
+                trans(t.r.cells_outside(v, 8 * i, word_bytes(word), so + k, Inr(past)), landed.proof.right.right(k, c, got))
+             }⟩⟩))
 }
 
 // The same environment, so the same claim.
@@ -724,7 +727,7 @@ theorem Target::goes_read_back_ok(self t: Target, env: Env, asked: Prog, buf, ca
         λ u here resident held => at_tested(u, here, resident, {
             let landed = held.left.left.left;
             Exists(landed.witness, ⟨landed.proof.right.left, ⟨landed.proof.right.right,
-                ⟨trivial, ⟨refl, ⟨refl, ⟨refl, ⟨held.left.left.right, Exists(landed.witness, ⟨landed.proof.left,
+                ⟨trivial, ⟨refl, ⟨t.scratch_rip(), ⟨t.buffer_rip(buf, cap, found), ⟨held.left.left.right, Exists(landed.witness, ⟨landed.proof.left,
                     ⟨λ q _ => refl, λ k c early _ => false_elim(k.not_succ_le_zero(early))⟩⟩)⟩⟩⟩⟩⟩⟩⟩)
         }));
     let at_stored = t.goes_weaken(prog_len(stored), tree,
@@ -891,17 +894,21 @@ theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, resu
             let so = layout.scratch_offset();
             let most_is = t.reads_most(env, m, placed, buf, cap, found, env.number(len));
             let most_cap = most_is.right;
+            let at = sym(t.scratch_rip());
+            let kept = λ (bytes: List<BitVec(8)>) (fits: so + bytes.len() <= t.r.size) (resident: t.site().Resident(m)) =>
+                j(at, λ x _ => t.site().Resident(t.r.profile.store(m, x, bytes)), t.store_resident(m, so, bytes, fits, resident));
             ⟨placed, λ f rip => ⟨⟨⟨refl, ⟨refl, trans(held.right, sym(most_is.left))⟩⟩,
-                    t.writable(m, so, most, t.scratch_inside(most, t.under_largest(buf, cap, found, most, most, most.le_refl(), most_cap)))⟩,
+                    j(at, λ x _ => t.io().writable(m, x, most),
+                        t.writable(m, so, most, t.scratch_inside(most, t.under_largest(buf, cap, found, most, most, most.le_refl(), most_cap))))⟩,
                 λ resident a => match a {
                     ReadBytes(bytes) => λ answers junk leaves rcx r11 => {
                         let short = t.under_largest(buf, cap, found, bytes.len(), most, answers, most_cap);
-                        ⟨t.store_resident(m, so, bytes, t.scratch_inside(bytes.len(), short), resident),
+                        ⟨kept(bytes, t.scratch_inside(bytes.len(), short), resident),
                             ⟨answers, ⟨t.landed_store(env, m, placed, bytes, short), refl⟩⟩⟩
                     },
                     ReadFailed(_) => λ answers junk leaves rcx r11 => {
                         let short = t.under_largest(buf, cap, found, junk.len(), most, leaves, most_cap);
-                        ⟨t.store_resident(m, so, junk, t.scratch_inside(junk.len(), short), resident),
+                        ⟨kept(junk, t.scratch_inside(junk.len(), short), resident),
                             ⟨answers, ⟨t.landed_placed(env, junk, t.r.profile.store(m, layout.scratch_at(), junk), t.landed_store(env, m, placed, junk, short)), refl⟩⟩⟩
                     },
                 }⟩⟩
