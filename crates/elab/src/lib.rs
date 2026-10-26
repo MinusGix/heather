@@ -2680,7 +2680,14 @@ impl Elaborator {
         // The alias, strictly as a fallback. Its target is resolved through
         // `key_of_declared` and not `key_of`, because the target's own name is
         // the one the surface refuses — that is what the alias is for.
-        self.key_of_declared_kinds(self.access_alias(name)?, kinds)
+        if let Some(target) = self.access_alias(name) {
+            return self.key_of_declared_kinds(target, kinds);
+        }
+        // A designed path under its module's name, `m::f::rec`: `m`'s own
+        // `f::rec`, as `m::f` is `m`'s `f`.
+        let (module, path) = name.split_once("::")?;
+        let target = self.access_alias(path)?;
+        self.key_of_declared_kinds(&format!("{module}::{target}"), kinds)
     }
 
     fn key_of_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> Option<String> {
@@ -3570,24 +3577,32 @@ impl Elaborator {
         // term it got wrong must not take `f` down with it. The recorded
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
-        if !lifted {
-            return Ok(());
-        }
-        match measure::companions(decl, &self_name, &measure, omega_available, self) {
-            Err(why) => {
-                self.unfold_refusals.borrow_mut().insert(unfold, why);
-            }
-            Ok(parts) => {
-                for part in parts {
-                    if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
-                        self.unfold_refusals
-                            .borrow_mut()
-                            .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
-                        break;
+        if lifted {
+            match measure::companions(decl, &self_name, &measure, omega_available, self) {
+                Err(why) => {
+                    self.unfold_refusals.borrow_mut().insert(unfold, why);
+                }
+                Ok(parts) => {
+                    for part in parts {
+                        if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
+                            self.unfold_refusals
+                                .borrow_mut()
+                                .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
+                            break;
+                        }
                     }
                 }
             }
         }
+        // The recursor and its step have designed spellings, `f::rec` and
+        // `f::body`: `f` at a bound on its measure, and one step of it with
+        // its recursion any function, which a proof by induction on the
+        // bound states its claims about where no `f_unfold` exists
+        // (docs/decreases-unfolding-design.md §11). Designated last: the
+        // companions above are spelled with the minted names, which a
+        // designation takes out of the surface.
+        self.designate_access(&format!("{}::rec", decl.name), &measure::rec_name(&decl.name));
+        self.designate_access(&format!("{}::body", decl.name), &measure::body_name(&decl.name));
         Ok(())
     }
 
@@ -4937,6 +4952,7 @@ impl Elaborator {
                 // declaration, with `split_all` having reported success.
                 match goal_combinators::next_step(self, cx, expected, body, e.span) {
                     goal_combinators::Step::Refuted(expr)
+                    | goal_combinators::Step::Closed(expr)
                     | goal_combinators::Step::Intro(expr)
                     | goal_combinators::Step::Conjoin(expr) => {
                         self.elab_check_skel_slots(cx, &expr, expected, lvl, hint, skel, capture_slots)
@@ -4946,10 +4962,20 @@ impl Elaborator {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
                         let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
                         goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &goal, lvl, "case split's motive, at its scrutinee,", e.span)?;
-                        self.elab_convoy(
-                            cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
-                            scrut, &ty, &level, split.motive, lvl, &goal, e.span,
-                        )
+                        match split.dependent {
+                            None => self.elab_convoy(
+                                cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
+                                scrut, &ty, &level, split.motive, lvl, &goal, e.span,
+                            ),
+                            Some(dependent) => {
+                                let refl = Term::Refl { level: level.clone(), ty: Rc::new(ty.clone()), tm: Rc::new(scrut.clone()) };
+                                let at = dependent.inst_top_above(0, 1, &scrut).inst_top(0, &refl);
+                                goal_combinators::restates(self, cx, &at, &goal, lvl, "case split's motive, at its scrutinee and `refl`,", e.span)?;
+                                self.elab_convoy_dependent(
+                                    cx, &split.equation, &split.arms, scrut, &ty, &level, split.motive, dependent, lvl, &goal, e.span,
+                                )
+                            }
+                        }
                     }
                     goal_combinators::Step::Leaf(goal) => {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
@@ -7749,6 +7775,48 @@ impl Elaborator {
             cx,
             form,
             generated,
+            &plan.arms,
+            scrut_t.clone(),
+            scrut_ty,
+            scrut_lvl,
+            plan.motive,
+            plan.level,
+            span,
+        )?;
+        Ok(matching::finish_convoy(
+            elim, scrut_t, scrut_ty, scrut_lvl, mlvl, result,
+        ))
+    }
+
+    /// [`Self::elab_convoy`] at a motive that reads the equation as well:
+    /// `dependent` is scoped under the scrutinee's binder and then the
+    /// equation's, and `motive` is it with the equation unused, as the other
+    /// readers of a motive expect it. `split_all` builds one where a convoy
+    /// in the goal takes the case's equation for its own `refl`
+    /// (`goal_combinators::dependent_motive`).
+    #[allow(clippy::too_many_arguments)]
+    fn elab_convoy_dependent(
+        &self,
+        cx: &Cx,
+        h: &str,
+        arms: &[Arm],
+        scrut_t: Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+        motive: Type,
+        dependent: Type,
+        mlvl: &Level,
+        result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        let mut plan = matching::plan_convoy(h, arms, &scrut_t, scrut_ty, scrut_lvl, &motive, mlvl);
+        if let Type::Pi { cod, .. } = &mut plan.motive {
+            *cod = Rc::new(dependent);
+        }
+        let elim = self.elab_match(
+            cx,
+            heather_syntax::MatchForm::Match,
+            true,
             &plan.arms,
             scrut_t.clone(),
             scrut_ty,
