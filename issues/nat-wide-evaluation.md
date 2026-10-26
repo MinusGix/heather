@@ -38,5 +38,10 @@ at all (`rat_q` is `pow(2, 1075)`, `limit_h` is `pow(2, 2046)·…`, and
 - `ldiv`'s recursion respelled as above, keeping `ldiv_div`/`ldiv_mod`;
   plus a quotient-width-fuelled variant whose spec assumes `n < d · 2^k`.
 
-The float-literal round ([[float-literal-entry]]) needs both and adds what
-it uses; the rest of the library's call sites are this issue.
+The underlying kernel limits are [[eval-native-frame-size]] (the depth
+budget `pow` meets) and [[kernel-fold-probe-evaluates-recursive-arms]] (the
+exponential `ldiv`); fixing those makes the library respellings optional.
+[[float-literal-entry]] is paused on this. Its branch
+(`claude/project-thread-vja39m`) already has `Nat::pow_sq` with
+`pow_sq_eq` and the quotient-width `Nat::ldiv_fuel` with
+`ldiv_fuel_bounded`, checked.
