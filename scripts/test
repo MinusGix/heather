@@ -94,6 +94,8 @@ if [[ "${1:-}" == --fast ]]; then
         --skip compiled_cat_runs_as_cat
         --skip every_written_program_gets_its_theorem
         --skip refused_programs_name_their_reason
+        --skip compiled_tr_runs_as_gnu_tr
+        --skip compiled_yes_runs_as_gnu_yes
         --skip source_to_native_binary)
 elif [[ "${1:-}" == --pr ]]; then
   shift
@@ -231,7 +233,7 @@ else
   if [[ "$requested" == *"--test native"* ]]; then
     native_warmup
   fi
-  if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test library"* ]]; then
+  if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]] || [[ "$requested" == *"--test library"* ]]; then
     cli_images_warmup
   fi
   whole_elab=false

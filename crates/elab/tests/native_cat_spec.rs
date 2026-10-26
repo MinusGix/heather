@@ -23,6 +23,7 @@ const PREFIX: &[(&str, &str)] = &[
     ("stream_filter", include_str!("../../../lib/native/stream_filter.hthr")),
     ("stream_filter_spec", include_str!("../../../lib/native/stream_filter_spec.hthr")),
     ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
+    ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
     ("native_source", include_str!("../../../lib/native/native_source.hthr")),
     ("native_source_sim", include_str!("../../../lib/native/native_source_sim.hthr")),
 ];

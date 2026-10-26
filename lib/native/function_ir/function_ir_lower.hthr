@@ -1374,6 +1374,9 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
             file.compare(Less, destination, output, left, right)),
         Equal(width, output, left, right) => word_only(width, width.eq_dec(64),
             file.compare(Same, destination, output, left, right)),
+        // Registers only: a buffer is memory.
+        BufferLoad(_, _, _) => None,
+        BufferStore(_, _, _, _) => None,
     }
 }
 
@@ -1428,6 +1431,8 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
             λ w => NodeHolds(values, Equal(w, output, left, right)), width.eq_dec(64),
             file.compare(Same, destination, output, left, right),
             file.compare_keeps<M>(values, Same, destination, output, left, right)),
+        BufferLoad(_, _, _) => trivial,
+        BufferStore(_, _, _, _) => trivial,
     }
 }
 
@@ -1486,6 +1491,8 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
             λ w => NodeHolds(values, Equal(w, output, left, right)), width.eq_dec(64),
             Some(Lowered([], file.know(Compared(output, Same, left, right)))),
             file.know_keeps<M>(values, Compared(output, Same, left, right))),
+        BufferLoad(_, _, _) => trivial,
+        BufferStore(_, _, _, _) => trivial,
     }
 }
 
@@ -1881,6 +1888,8 @@ fn Node::reads(self node: Node) → List<Nat> {
         UnsignedLessThan(_, _, left, right) => [left, right],
         SignedLessThan(_, _, left, right) => [left, right],
         Equal(_, _, left, right) => [left, right],
+        BufferLoad(_, _, index) => [index],
+        BufferStore(_, _, index, value) => [index, value],
     }
 }
 

@@ -194,8 +194,16 @@ fn a_goal_that_mentions_neither_side_gives_no_hint() {
 
 #[test]
 fn a_proof_of_a_non_equation_is_refused() {
+    let e = bad("theorem t(a, p: Nat, q: a <= 3): a <= 3 { rewrite(p, q) }");
+    assert!(e.contains("rewrites along an equation `a = b` or a relation `R(a, b)`"), "{e}");
+}
+
+#[test]
+fn a_relation_step_without_its_evidence_modules_names_them() {
+    // `<=` is a relation, so this is a setoid step (design §9), whose
+    // evidence is stated in modules this base does not load.
     let e = bad("theorem t(a, b: Nat, p: a <= b, q: b <= 3): a <= 3 { rewrite(p, q) }");
-    assert!(e.contains("rewrites along an equation"), "{e}");
+    assert!(e.contains("`relation_props` is not in this run's import closure"), "{e}");
 }
 
 #[test]

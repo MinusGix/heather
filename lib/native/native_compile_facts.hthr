@@ -25,6 +25,14 @@ import omega;
 
 fn List::get_or<A>(self xs: List<A>, j: Nat, d: A) → A { match xs.nth(j) { None => d, Some(x) => x } }
 
+theorem List::get_or_some<A>(self xs: List<A>, i: Nat, d, x: A, found: xs.nth(i) = Some(x)): xs.get_or(i, d) = x {
+    j(sym(found), λ o _ => (match o as λ _ => A { None => d, Some(y) => y }) = x, refl)
+}
+
+theorem List::get_or_none<A>(self xs: List<A>, i: Nat, d: A, none: xs.nth(i) = None): xs.get_or(i, d) = d {
+    j(sym(none), λ o _ => (match o as λ _ => A { None => d, Some(y) => y }) = d, refl)
+}
+
 theorem List::put_here<A>(i: Nat): (xs: List<A>) → (x, pad: A) → xs.put(i, x, pad).nth(i) = Some(x) {
     match i {
         Zero => λ xs x pad => match xs { Nil => refl, Cons(_, _) => refl },

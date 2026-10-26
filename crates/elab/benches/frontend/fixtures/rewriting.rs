@@ -28,9 +28,12 @@
 //! rewrite lemmas are hypotheses of telescope type (`h: (x: Nat) -> f(x) =
 //! x`) for the same reason, and so that the fixture needs no import.
 
-use crate::harness::Family;
+use heather_elab::Elaborator;
+
+use crate::harness::{Case, Family};
 
 use super::scale::sweep;
+use super::{cloned_runner, prelude};
 
 pub fn families() -> Vec<Family> {
     vec![
@@ -38,6 +41,7 @@ pub fn families() -> Vec<Family> {
         rewrite_repeat_mod(),
         rewrite_let_addr0(),
         rewrite_let_nary(),
+        rewrite_setoid_let_addr0(),
         let_fan(),
         let_dep(),
         let_under(),
@@ -128,11 +132,15 @@ fn rewrite_repeat_mod() -> Family {
 /// at every path to it) and `refl` close it.
 ///
 /// **Lower bound: linear in k** (mengine's is). The sites are 2^k as a tree,
-/// so any walk that does not share nodes is exponential, and today three
-/// do: the abstraction walk (`AbstractLocal` memoizes no result per node,
-/// survey §4.2), the motive and transport the gate checks, and the final
-/// `refl`'s equality of two separately built DAGs, linear since
-/// [[kernel-equality-walks-dags-as-trees]] (which `let/stmt` isolates).
+/// so any walk that does not share nodes is exponential. Three did: the
+/// abstraction walk, the motive and transport the gate checks, and the final
+/// `refl`'s equality of two separately built DAGs. The `refl` is linear since
+/// [[kernel-equality-walks-dags-as-trees]] (which `let/stmt` isolates), and
+/// the other two since the abstraction keeps one result per shared node
+/// (`docs/equation-rewrite-design.md` §9.5), so the motive is a DAG the
+/// typing memo shares. What is left is the spelling: `k` rewrites, each a
+/// walk of the O(k) goal, so k², as `rewrite/fa`. One rewrite of every
+/// instance would meet the bound ([[rewrite-every-instance]]).
 fn rewrite_let_addr0() -> Family {
     let src = |k: u64| {
         let zeros = let_chain(k, |j| format!("g(g(v{j}, v{j}), 0)"));
@@ -147,12 +155,13 @@ fn rewrite_let_addr0() -> Family {
         name: "rewrite/let-addr0",
         what: "k-let chain v_i = v_{i-1} + v_{i-1} + 0, every + 0 removed (lower bound: linear)",
         unit: "lets",
-        // Recorded, not claimed: 5.60 over 6..12 lets (four runs, 5.40-5.73 on
-        // the cloud box, 2026-10-26): ×4 per two lets, 2^k. Elaboration ~70%
-        // (not yet split between the abstraction walk and occurrence matching),
-        // the gate ~30%.
-        expect_slope: Some((5.00, 6.20)),
-        cases: sweep("rewrite/let-addr0", &[6, 8, 10, 12], src),
+        // Recorded, not claimed: 2.74 over 16..128 lets (two runs, 2.69-2.78 on
+        // the cloud box, 2026-10-26), elaboration and gate about even. It was
+        // 5.60 over 6..12 (2^k) while the abstraction walked the goal as a
+        // tree; what remains is the k rewrites, each over the whole goal and
+        // each leaving a motive the gate checks, rising past k² at 128.
+        expect_slope: Some((2.38, 3.09)),
+        cases: sweep("rewrite/let-addr0", &[16, 32, 64, 128], src),
     }
 }
 
@@ -165,7 +174,8 @@ const NARY_LETS: u64 = 3;
 /// lets), rewritten to `x₀` by `h: f(x, …, x) = x`, one rewrite per let.
 ///
 /// **Lower bound: linear in n·m** (here, with m fixed, linear in n). As a
-/// tree the chain is n^m nodes.
+/// tree the chain is n^m nodes, which the abstraction walked until it kept
+/// one result per shared node (`docs/equation-rewrite-design.md` §9.5).
 fn rewrite_let_nary() -> Family {
     let src = |n: u64| {
         let args = |x: &str| vec![x; n as usize].join(", ");
@@ -189,13 +199,89 @@ fn rewrite_let_nary() -> Family {
         name: "rewrite/let-nary",
         what: "3 lets x_i = f(x_{i-1}, …) of arity n, rewritten away (lower bound: linear)",
         unit: "arity",
-        // Recorded, not claimed: 2.05 over arity 4..32 (four runs, 1.89-2.20 on
-        // the cloud box, 2026-10-26), rising with size (the tree is n³): the
-        // gate stays small (it shares since the typing memo), elaboration is 90%
-        // at 32.
-        expect_slope: Some((1.70, 2.40)),
+        // Recorded, not claimed: 1.12 over arity 4..32 (two runs, 1.10-1.13 on
+        // the cloud box, 2026-10-26): the lower bound, met. It was 2.05 and
+        // rising with size while the abstraction walked the n³ tree.
+        expect_slope: Some((0.77, 1.47)),
         cases: sweep("rewrite/let-nary", &[4, 8, 16, 32], src),
     }
+}
+
+/// `rewrite/let-addr0`'s chain along a relation, rewritten once at its
+/// bottom: `R(g(v₀, v₀) ∙ z, v₀)`-style, `h: (x: A) -> R(g(x, z), x)` applied
+/// at the first link, so every link above it changes and gets one congruence
+/// step (`docs/equation-rewrite-design.md` §9). `R`, `g` and the evidence are
+/// parameters, an `Equivalence` and a `Respects2`, so the family measures the
+/// rewrite and not instance search.
+///
+/// **Lower bound: linear in k**, and met: the walk keeps one result per
+/// node, so the 2^k paths to the first link cost one step each link.
+fn rewrite_setoid_let_addr0() -> Family {
+    let src = |k: u64| {
+        let chain = |first: &str| {
+            let mut s = format!("{{ let v1 = {first}; ");
+            for i in 2..=k {
+                s.push_str(&format!("let v{i} = g(v{j}, v{j}); ", j = i - 1));
+            }
+            s.push_str(&format!("v{k} }}"));
+            s
+        };
+        let plain = chain("g(v0, v0)");
+        format!(
+            "import relation_props;\nimport algebra_rel;\n\
+             theorem rw<A: Equivalence(R)>(R: A → A → Type, g: A → A → A, z, v0: A,\n    \
+             cg: Respects2<A, A, A>(R, R, R, g), h: (x: A) -> R(g(x, z), x)):\n    \
+             R({}, {plain})\n{{ rewrite(h, A.rel_refl({plain})) }}\n",
+            chain("g(g(v0, v0), z)")
+        )
+    };
+    let base = relation_base();
+    let sizes = [16, 32, 64, 128];
+    let sizes = if crate::harness::smoke() { &sizes[..1] } else { &sizes[..] };
+    let cases = sizes
+        .iter()
+        .map(|&k| {
+            let text = src(k);
+            let errors = base.clone().check_source(&text);
+            assert!(
+                errors.is_empty(),
+                "fixture `rewrite/setoid-let-addr0:{k}` does not check ({} error(s)); first:\n{}",
+                errors.len(),
+                errors[0].render(&text)
+            );
+            let (run, cell) = cloned_runner(base.clone(), text);
+            Case::new(k, 0, run).with_phases(cell)
+        })
+        .collect();
+    Family {
+        name: "rewrite/setoid-let-addr0",
+        what: "k-let chain along a relation, its bottom link rewritten once (lower bound: linear)",
+        unit: "lets",
+        // Recorded: 0.90 over 16..128 lets (three runs, 0.87-0.92 on the cloud
+        // box, 2026-10-26), the gate 80-90% of it: the lower bound, met.
+        expect_slope: Some((0.55, 1.25)),
+        cases,
+    }
+}
+
+/// The prelude with the modules a relation rewrite states its evidence in.
+fn relation_base() -> Elaborator {
+    let mut e = prelude();
+    for (name, src) in [
+        ("logic", include_str!("../../../../../lib/std/core/logic.hthr")),
+        ("bool", include_str!("../../../../../lib/std/core/bool.hthr")),
+        ("nat", include_str!("../../../../../lib/std/num/nat.hthr")),
+        ("option", include_str!("../../../../../lib/std/core/option.hthr")),
+        ("pair", include_str!("../../../../../lib/std/core/pair.hthr")),
+        ("list", include_str!("../../../../../lib/std/data/list.hthr")),
+        ("relation", include_str!("../../../../../lib/std/relation/relation.hthr")),
+        ("relation_props", include_str!("../../../../../lib/std/relation/relation_props.hthr")),
+        ("algebra_rel", include_str!("../../../../../lib/std/algebra/algebra_rel.hthr")),
+    ] {
+        e.elab_module_source(name, src)
+            .unwrap_or_else(|err| panic!("benchmark base module `{name}`: {}", err.render(src)));
+    }
+    e
 }
 
 const MIX: &str = "fn mix(x, y: Nat) -> Nat { x }\n";

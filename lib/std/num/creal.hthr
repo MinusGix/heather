@@ -21,7 +21,9 @@
 // (2n+1)-th terms, each within 1/(2n+2), and the halves add to 1/(n+1).
 // A product reads further out still, by its factors' canonical bounds
 // (docs/creal-multiplication-round.md), and an inverse by the size of its
-// argument's gap from zero (docs/creal-inverse-round.md).
+// argument's gap from zero (docs/creal-inverse-round.md). The reals are
+// complete: a regular sequence of reals converges to its diagonal, a limit
+// given as data (docs/creal-completeness-round.md).
 //
 // Calling convention: as at `Rat`, a lemma whose every `CReal` is named by
 // one of its hypotheses takes them implicitly; any other takes the first as
@@ -1670,4 +1672,293 @@ instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CRea
     of_nat_zero := CReal::same_refl(0),
     of_nat_succ := CReal::ofNat_succ,
     archimedean := CReal::archimedean,
+}
+
+// ---------------------------------------------------------------------------
+// Completeness (docs/creal-completeness-round.md). A sequence of reals is
+// regular when its m-th and n-th reals are within 1/(m+1) + 1/(n+1), the
+// rate a real's own terms keep, and it converges to y at the same rate. Every
+// regular sequence of reals has a limit, read off the diagonal: the limit's
+// n-th term is the (2n+1)-th term of the (2n+1)-th real. Nothing is chosen;
+// the limit is a function of the sequence, and its terms evaluate.
+//
+// Every estimate below is about terms. A bound `d.abs() <= ofRat(r)` between
+// reals reads, at index i, as Bishop's: the terms at 2i+1 are within r plus
+// 2/(i+1) (`dist_terms`). Back the other way, a real is below another when its
+// terms are eventually below the other's plus any 1/(j+1) (`le_of_close`),
+// which leaves the room every diagonal estimate needs.
+
+theorem CReal::abs_regular(self x: CReal, m, n: Nat):
+    (x.seq(m).abs() - x.seq(n).abs()).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n)
+{
+    Rat::le_trans(x.seq(m).abs_sub_abs_le(x.seq(n)), x.regular(m, n))
+}
+
+fn CReal::abs(self x: CReal) → CReal { CReal(λ n => x.seq(n).abs(), λ m n => x.abs_regular(m, n)) }
+
+theorem CReal::abs_respects({x, x2: CReal}, hx: x ≈ x2): x.abs() ≈ x2.abs() {
+    λ k => match hx(k) {
+        Exists(start, close) => Exists(start, λ n from => Rat::le_trans(x.seq(n).abs_sub_abs_le(x2.seq(n)), close(n, from))),
+    }
+}
+
+// x ≤ y when, for every j, x's terms are eventually below y's plus 1/(j+1):
+// a gap of 1/(k+1) with y below x is refuted at 1/(2k+2).
+theorem CReal::le_of_close({x, y: CReal},
+    close: (j: Nat) → ∃ start: Nat, (n: Nat) → start <= n → x.seq(n) <= y.seq(n) + Rat::inv_succ(j)): x <= y
+{
+    λ back => match back {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => match close(k + k + 1) {
+                Exists(t, near) => {
+                    let n = s.max(t);
+                    let a = y.seq(n);
+                    let step = Rat::inv_succ(k);
+                    let small = Rat::inv_succ(k + k + 1);
+                    let strict: (small < step) = Rat::inv_succ_half_lt(k);
+                    let swapped = calc {
+                        step + a ≈ a + step := step.add_comm(a),
+                        <= x.seq(n) := gap(n, s.le_max_l(t)),
+                        <= a + small := near(n, s.le_max_r(t)),
+                        ≈ small + a := a.add_comm(small),
+                    };
+                    Rat::not_le_of_lt(strict, step.add_le_cancel_r(small, a, swapped))
+                },
+            },
+        },
+    }
+}
+
+// A distance bound between reals, read at index i: the terms at 2i+1 are
+// within the bound plus Bishop's 2/(i+1).
+theorem CReal::dist_terms(self x, y: CReal, r: Rat, h: (x - y).abs() <= CReal::ofRat(r), i: Nat):
+    (x.seq(i + i + 1) - y.seq(i + i + 1)).abs() <= r + (Rat::inv_succ(i) + Rat::inv_succ(i))
+{
+    CReal::bishop_of_le(h, i)
+}
+
+fn CReal::Regular(xs: Nat → CReal) → Type {
+    (m, n: Nat) → (xs(m) - xs(n)).abs() <= CReal::ofRat(Rat::inv_succ(m) + Rat::inv_succ(n))
+}
+
+fn CReal::Limit(xs: Nat → CReal, y: CReal) → Type {
+    (n: Nat) → (xs(n) - y).abs() <= CReal::ofRat(Rat::inv_succ(n))
+}
+
+// The diagonal's terms are regular. Between the (2m+1)-th term of the
+// (2m+1)-th real and the (2n+1)-th of the (2n+1)-th, pass through both reals'
+// terms at a far index p = 2i+1: regularity of each real moves by
+// 1/(2m+2) + 1/(p+1) and 1/(2n+2) + 1/(p+1), the sequence's regularity
+// crosses at p for 1/(2m+2) + 1/(2n+2) + 2/(i+1), and the halves make
+// 1/(m+1) + 1/(n+1) plus a slack of four 1/(i+1) at most, below any 1/(j+1)
+// once i is 4j+3.
+theorem CReal::lim_regular(xs: Nat → CReal, h: CReal::Regular(xs), m, n: Nat):
+    (xs(m + m + 1).seq(m + m + 1) - xs(n + n + 1).seq(n + n + 1)).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n)
+{
+    let mm = m + m + 1;
+    let nn = n + n + 1;
+    let x = xs(mm);
+    let z = xs(nn);
+    let a = Rat::inv_succ(mm);
+    let b = Rat::inv_succ(nn);
+    Rat::le_of_le_add_inv_succ(λ j => {
+        let j2 = j + j + 1;
+        let i = j2 + j2 + 1;
+        let p = i + i + 1;
+        let at_p: (i <= p) = i.le_add_l(i + 1);
+        let e = Rat::inv_succ(p);
+        let f = Rat::inv_succ(i);
+        let he: (e <= f) = Rat::inv_succ_antitone(i, p, at_p);
+        let d1: ((x.seq(mm) - x.seq(p)).abs() <= a + e) = x.regular(mm, p);
+        let d2: ((x.seq(p) - z.seq(p)).abs() <= (a + b) + (f + f)) = x.dist_terms(z, a + b, h(mm, nn), i);
+        let d3: ((z.seq(p) - z.seq(nn)).abs() <= b + e) = calc {
+            (z.seq(p) - z.seq(nn)).abs() ≈ (z.seq(nn) - z.seq(p)).abs() := z.seq(p).abs_sub_comm(z.seq(nn)),
+            <= b + e := z.regular(nn, p),
+        };
+        let slack: ((e + (f + f)) + e <= Rat::inv_succ(j)) =
+            Rat::le_trans(Rat::add_le_mono(Rat::add_le_mono(he, (f + f).le_refl()), he), Rat::quarters_le(j, f.le_refl()));
+        let main = calc {
+            (a + (a + b)) + b ≈ ((a + a) + b) + b := Rat::add_respects(Rat::same_sym(a.add_assoc(a, b)), b.same_refl()),
+            ≈ (a + a) + (b + b) := (a + a).add_assoc(b, b),
+            ≈ Rat::inv_succ(m) + Rat::inv_succ(n) := Rat::add_respects(Rat::inv_succ_half(m), Rat::inv_succ_half(n)),
+        };
+        let u = x.seq(mm);
+        let v = x.seq(p);
+        let w = z.seq(p);
+        let t = z.seq(nn);
+        calc {
+            (u - t).abs() <= (u - w).abs() + (w - t).abs() := u.dist_triangle(w, t),
+            <= ((u - v).abs() + (v - w).abs()) + (w - t).abs() := (u - w).abs().add_le_mono_r((u - v).abs() + (v - w).abs(), (w - t).abs(), u.dist_triangle(v, w)),
+            <= ((a + e) + ((a + b) + (f + f))) + (b + e) := Rat::add_le_mono(Rat::add_le_mono(d1, d2), d3),
+            ≈ ((a + (a + b)) + b) + ((e + (f + f)) + e) := a.add_add_add_comm3(e, a + b, f + f, b, e),
+            ≈ (Rat::inv_succ(m) + Rat::inv_succ(n)) + ((e + (f + f)) + e) := Rat::add_respects(main, ((e + (f + f)) + e).same_refl()),
+            <= (Rat::inv_succ(m) + Rat::inv_succ(n)) + Rat::inv_succ(j) := ((e + (f + f)) + e).add_le_mono_l(Rat::inv_succ(j), Rat::inv_succ(m) + Rat::inv_succ(n), slack),
+        }
+    })
+}
+
+fn CReal::lim(xs: Nat → CReal, h: CReal::Regular(xs)) → CReal {
+    CReal(λ n => xs(n + n + 1).seq(n + n + 1), λ m n => CReal::lim_regular(xs, h, m, n))
+}
+
+// The n-th real is within 1/(n+1) of the limit. At index i the limit's term
+// at p = 2i+1 is the q-th term of the q-th real, q = 2p+1: the sequence's
+// regularity crosses from the n-th real to the q-th at p for
+// 1/(n+1) + 1/(q+1) + 2/(i+1), and the q-th real's regularity moves from p
+// to q for 1/(p+1) + 1/(q+1) more, which with the first 1/(q+1) is 1/(i+1).
+// The slack is four 1/(i+1) at most, below 1/(j+1) from i = 4j+3 on.
+theorem CReal::lim_converges(xs: Nat → CReal, h: CReal::Regular(xs)): CReal::Limit(xs, CReal::lim(xs, h)) {
+    λ n => {
+        let c = Rat::inv_succ(n);
+        CReal::le_of_close(λ j => {
+            let j2 = j + j + 1;
+            let j4 = j2 + j2 + 1;
+            Exists(j4, λ i from => {
+                let p = i + i + 1;
+                let q = p + p + 1;
+                let at_p: (i <= p) = i.le_add_l(i + 1);
+                let at_q: (p <= q) = p.le_add_l(p + 1);
+                let fq = Rat::inv_succ(q);
+                let e = Rat::inv_succ(p);
+                let f = Rat::inv_succ(i);
+                let hf: (f <= Rat::inv_succ(j4)) = Rat::inv_succ_antitone(j4, i, from);
+                let he: (e <= f) = Rat::inv_succ_antitone(i, p, at_p);
+                let hq: (fq <= e) = Rat::inv_succ_antitone(p, q, at_q);
+                let x = xs(n);
+                let z = xs(q);
+                let d2: ((x.seq(p) - z.seq(p)).abs() <= (c + fq) + (f + f)) = x.dist_terms(z, c + fq, h(n, q), i);
+                let d3: ((z.seq(p) - z.seq(q)).abs() <= e + fq) = z.regular(p, q);
+                let tail = calc {
+                    e + fq <= e + e := fq.add_le_mono_l(e, e, hq),
+                    ≈ f := Rat::inv_succ_half(i),
+                };
+                let slack: ((fq + (f + f)) + (e + fq) <= Rat::inv_succ(j)) =
+                    Rat::le_trans(Rat::add_le_mono(Rat::add_le_mono(Rat::le_trans(hq, he), (f + f).le_refl()), tail), Rat::quarters_le(j, hf));
+                let u = x.seq(p);
+                let w = z.seq(p);
+                let t = z.seq(q);
+                calc {
+                    (u - t).abs() <= (u - w).abs() + (w - t).abs() := u.dist_triangle(w, t),
+                    <= ((c + fq) + (f + f)) + (e + fq) := Rat::add_le_mono(d2, d3),
+                    ≈ (c + (fq + (f + f))) + (e + fq) := Rat::add_respects(c.add_assoc(fq, f + f), (e + fq).same_refl()),
+                    ≈ c + ((fq + (f + f)) + (e + fq)) := c.add_assoc(fq + (f + f), e + fq),
+                    <= c + Rat::inv_succ(j) := ((fq + (f + f)) + (e + fq)).add_le_mono_l(Rat::inv_succ(j), c, slack),
+                }
+            })
+        })
+    }
+}
+
+// Cauchy completeness with the modulus written in: every regular sequence of
+// reals converges, to a limit given as data.
+theorem CReal::complete(xs: Nat → CReal, h: CReal::Regular(xs)): ∃ y: CReal, CReal::Limit(xs, y) {
+    Exists(CReal::lim(xs, h), CReal::lim_converges(xs, h))
+}
+
+// Limits respect `≈`, of the reals in the sequence and of the limit.
+theorem CReal::limit_respects({xs, ys: Nat → CReal}, {y, y2: CReal}, hs: (n: Nat) → xs(n) ≈ ys(n), hy: y ≈ y2,
+    h: CReal::Limit(xs, y)): CReal::Limit(ys, y2)
+{
+    λ n => CReal::le_respects(CReal::abs_respects(CReal::sub_respects(hs(n), hy)), CReal::ofRat(Rat::inv_succ(n)).same_refl(), h(n))
+}
+
+// Two limits of one sequence are the same. Were z below y by 1/(k+1), take
+// the i-th real far out: at index i its terms at p = 2i+1 are within
+// 3/(i+1) of both limits' (`dist_terms`), and twice that is under the gap.
+theorem CReal::limit_le({xs: Nat → CReal}, {y, z: CReal}, hy: CReal::Limit(xs, y), hz: CReal::Limit(xs, z)): y <= z {
+    λ back => match back {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => {
+                let k2 = k + k + 1;
+                let k4 = k2 + k2 + 1;
+                let far = (k4 + k4 + 1) + (k4 + k4 + 1) + 1;
+                let i = s.max(far);
+                let p = i + i + 1;
+                let at_p: (i <= p) = i.le_add_l(i + 1);
+                let at_s: (s <= p) = s.le_trans(i, p, s.le_max_l(far), at_p);
+                let step = Rat::inv_succ(k);
+                let strict: (Rat::inv_succ(k2) < step) = Rat::inv_succ_half_lt(k);
+                let f = Rat::inv_succ(i);
+                let hf: (f <= Rat::inv_succ(far)) = Rat::inv_succ_antitone(far, i, s.le_max_r(far));
+                let a = f + (f + f);
+                let x = xs(i);
+                let u = x.seq(p);
+                let dy: ((u - y.seq(p)).abs() <= a) = x.dist_terms(y, f, hy(i), i);
+                let dz: ((u - z.seq(p)).abs() <= a) = x.dist_terms(z, f, hz(i), i);
+                let q = Rat::inv_succ(k4);
+                let half: (a <= q) = Rat::le_trans(a.le_add_nonneg(f, Rat::le_of_lt(Rat::inv_succ_pos(i))), Rat::quarters_le(k4, hf));
+                let small = calc {
+                    a + a <= q + q := Rat::add_le_mono(half, half),
+                    ≈ Rat::inv_succ(k2) := Rat::inv_succ_half(k2),
+                    < step := strict,
+                };
+                let b = z.seq(p);
+                let swapped = calc {
+                    step + b ≈ b + step := step.add_comm(b),
+                    <= y.seq(p) := gap(p, at_s),
+                    <= u + a := Rat::le_add_of_dist(calc {
+                        (y.seq(p) - u).abs() ≈ (u - y.seq(p)).abs() := y.seq(p).abs_sub_comm(u),
+                        <= a := dy,
+                    }),
+                    <= (b + a) + a := u.add_le_mono_r(b + a, a, Rat::le_add_of_dist(dz)),
+                    ≈ b + (a + a) := b.add_assoc(a, a),
+                    ≈ (a + a) + b := b.add_comm(a + a),
+                };
+                Rat::not_le_of_lt(small, step.add_le_cancel_r(a + a, b, swapped))
+            },
+        },
+    }
+}
+
+theorem CReal::limit_unique({xs: Nat → CReal}, {y, z: CReal}, hy: CReal::Limit(xs, y), hz: CReal::Limit(xs, z)): y ≈ z {
+    CReal::le_antisymm(CReal::limit_le(hy, hz), CReal::limit_le(hz, hy))
+}
+
+// So the diagonal limit does not depend on the representation: sequences
+// of `≈` reals have `≈` limits.
+theorem CReal::lim_respects({xs, ys: Nat → CReal}, hx: CReal::Regular(xs), hy: CReal::Regular(ys), hs: (n: Nat) → xs(n) ≈ ys(n)):
+    CReal::lim(xs, hx) ≈ CReal::lim(ys, hy)
+{
+    CReal::limit_unique(CReal::limit_respects(hs, CReal::lim(xs, hx).same_refl(), CReal::lim_converges(xs, hx)), CReal::lim_converges(ys, hy))
+}
+
+// A constant sequence is regular and converges to its value.
+theorem CReal::abs_sub_self(self x: CReal): (x - x).abs() ≈ 0 {
+    (x - x).abs().same_of_terms(0, λ n => x.seq(n + n + 1).abs_sub_self())
+}
+
+theorem CReal::regular_const(self x: CReal): CReal::Regular(λ n => x) {
+    λ m n => {
+        let rate: (0 <= Rat::inv_succ(m) + Rat::inv_succ(n)) = omega;
+        CReal::le_respects(CReal::same_sym(x.abs_sub_self()), CReal::ofRat(Rat::inv_succ(m) + Rat::inv_succ(n)).same_refl(), CReal::ofRat_le(rate))
+    }
+}
+
+theorem CReal::limit_const(self x: CReal): CReal::Limit(λ n => x, x) {
+    λ n => CReal::le_respects(CReal::same_sym(x.abs_sub_self()), CReal::ofRat(Rat::inv_succ(n)).same_refl(),
+        CReal::ofRat_le(Rat::le_of_lt(Rat::inv_succ_pos(n))))
+}
+
+// The reals are the limits of rationals: a real's terms, embedded, form a
+// regular sequence converging to it. At index i the n-th term is within
+// 1/(n+1) + 1/(2i+2) of the real's term at 2i+1, by regularity alone.
+theorem CReal::dist_ofRat(p, q: Rat): (CReal::ofRat(p) - CReal::ofRat(q)).abs() ≈ CReal::ofRat((p - q).abs()) {
+    (CReal::ofRat(p) - CReal::ofRat(q)).abs().same_of_terms(CReal::ofRat((p - q).abs()), λ n => (p - q).abs().same_refl())
+}
+
+theorem CReal::terms_regular(self x: CReal): CReal::Regular(λ n => CReal::ofRat(x.seq(n))) {
+    λ m n => CReal::le_respects(CReal::same_sym(CReal::dist_ofRat(x.seq(m), x.seq(n))),
+        CReal::ofRat(Rat::inv_succ(m) + Rat::inv_succ(n)).same_refl(), CReal::ofRat_le(x.regular(m, n)))
+}
+
+theorem CReal::terms_converge(self x: CReal): CReal::Limit(λ n => CReal::ofRat(x.seq(n)), x) {
+    λ n => CReal::le_of_close(λ j => Exists(j, λ i from => {
+        let p = i + i + 1;
+        let at_p: (j <= p) = omega;
+        Rat::le_trans(x.regular(n, p), Rat::inv_succ(p).add_le_mono_l(Rat::inv_succ(j), Rat::inv_succ(n), Rat::inv_succ_antitone(j, p, at_p)))
+    }))
+}
+
+theorem CReal::lim_terms(self x: CReal): CReal::lim(λ n => CReal::ofRat(x.seq(n)), x.terms_regular()) ≈ x {
+    CReal::limit_unique(CReal::lim_converges(λ n => CReal::ofRat(x.seq(n)), x.terms_regular()), x.terms_converge())
 }

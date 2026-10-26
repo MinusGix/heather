@@ -216,6 +216,31 @@ theorem Prog::ports_from_within(layout: Layout, ports: List<Port>): (registers: 
     }
 }
 
+// Where a leaf's start sits within its code.
+theorem Prog::within_leaf(self p: Prog, layout: Layout, nodes: List<Node>, q: Prog, emitted: p.leaf(layout, nodes) = Some(q)): p.Within(q) {
+    let ins = leaf_inputs(nodes);
+    let outs = leaf_outputs(nodes);
+    let inputs = nodes_inputs(nodes);
+    let region = leaf_region(nodes);
+    (match leaf_checks(nodes, ins, outs) as λ b => (match b { False => None, True => match p.ports_to(layout, inputs, ins) {
+            None => None,
+            Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))),
+        } }) = Some(q) → p.Within(q) {
+        False => λ none => absurd(none),
+        True => (match p.ports_to(layout, inputs, ins) as λ o => p.ports_to(layout, inputs, ins) = o →
+                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
+                p.Within(q) {
+            None => λ _ none => absurd(none),
+            Some(loaded) => λ loaded_is => (match region.lower(ins, outs, place_into(outs)) {
+                None => λ none => absurd(none),
+                Some(code) => λ stored => p.within_trans(loaded, q, Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
+                    loaded.within_trans(then(loaded, Block(code)), q, loaded.within_then(0, Block(code)),
+                        Prog::ports_from_within(layout, nodes_write_ports(nodes), outs, then(loaded, Block(code)), q, stored))),
+            }),
+        })(refl),
+    })(emitted)
+}
+
 // The inputs' code, as the claim after it from the registers it leaves.
 theorem Target::goes_ports_to(self t: Target, env: Env, tree: ITree<BitVec(64)>(Events::linux()), ports: List<Port>): (registers: List<Gpr>) → (p, q: Prog) →
     p.ports_to(t.layout(), ports, registers) = Some(q) → q.Within(t.program) → (post: Gprs → X86Memory(t.r.profile) → Type) →

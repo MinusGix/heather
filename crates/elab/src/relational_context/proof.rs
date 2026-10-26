@@ -19,19 +19,23 @@ fn expression(text: &str, span: Span) -> R<Expr> {
     Ok(*d.body.result)
 }
 
-struct Relation {
-    head: Rc<Term>,
-    left: Rc<Term>,
-    right: Rc<Term>,
-    carrier: Rc<Type>,
-    level: Level,
+/// A homogeneous binary relation applied to two terms, `R(left, right)`:
+/// the relation term, the two sides, and their common carrier.
+pub(crate) struct Relation {
+    pub(crate) head: Rc<Term>,
+    pub(crate) left: Rc<Term>,
+    pub(crate) right: Rc<Term>,
+    pub(crate) carrier: Rc<Type>,
+    pub(crate) level: Level,
 }
 
-fn relation(e: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> R<Relation> {
-    if let Type::El { tm, .. } = ty
-        && let Some((fun, right)) = crate::spelling::app_of(tm)
-        && let Some((head, left)) = crate::spelling::app_of(fun)
-    {
+impl Relation {
+    /// `ty` read as written as `R(left, right)` with both domains of `R` the
+    /// same carrier; `None` for anything else, an `=` among them.
+    pub(crate) fn of_type(e: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Relation> {
+        let Type::El { tm, .. } = ty else { return None };
+        let (fun, right) = crate::spelling::app_of(tm)?;
+        let (head, left) = crate::spelling::app_of(fun)?;
         // The two domains: stated by an `app` node, the head's for an
         // `app@` one (`docs/app-by-head-type-design.md` §6.2).
         let (first, dom) = match (fun.as_ref(), tm.as_ref()) {
@@ -42,28 +46,28 @@ fn relation(e: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> R<Relation> {
             _ => {
                 let doms = e.app_domains(cx, tm, span).unwrap_or_default();
                 let [.., first, dom] = doms.as_slice() else {
-                    return relation_err(span);
+                    return None;
                 };
                 (first.clone(), dom.clone())
             }
         };
-        if first.0 == dom.0 {
-            return Ok(Relation {
-                head: head.clone(),
-                left: left.clone(),
-                right: right.clone(),
-                carrier: dom.0,
-                level: dom.1,
-            });
-        }
+        (first.0 == dom.0).then(|| Relation {
+            head: head.clone(),
+            left: left.clone(),
+            right: right.clone(),
+            carrier: dom.0,
+            level: dom.1,
+        })
     }
-    relation_err(span)
 }
 
-fn relation_err(span: Span) -> R<Relation> {
-    err(
-        "`rel_cong` needs a homogeneous binary relation application; native identity and dependent relations are outside this first fragment",
-        span,
+fn relation(e: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> R<Relation> {
+    Relation::of_type(e, cx, ty, span).map_or_else(
+        || err(
+            "`rel_cong` needs a homogeneous binary relation application; native identity and dependent relations are outside this first fragment",
+            span,
+        ),
+        Ok,
     )
 }
 
@@ -305,42 +309,13 @@ impl Builder<'_> {
         let term = if let Some(term) = self.resolve(&ty, &level) {
             term
         } else {
-            match self.e.attempt.goal_arena.reserve_promoted(1) {
-                goals::PromotionCapacity::Ready => {}
-                goals::PromotionCapacity::Restart => {
-                    return err(
-                        "internal: restarting declaration to reserve relational congruence goals",
-                        self.span,
-                    );
-                }
-                goals::PromotionCapacity::Disabled => {
-                    return err("`rel_cong` cannot create an obligation here", self.span);
-                }
-            }
             let tactic = if self.derive {
                 "rel_derive"
             } else {
                 "rel_cong"
             };
-            let key = format!("{tactic}:{}", self.goals);
             self.goals += 1;
-            let term = self.e.new_goal_key(
-                self.original,
-                None,
-                Some((tactic, label)),
-                ty.clone(),
-                level.clone(),
-                self.span,
-                Some(&key),
-                None,
-            )?;
-            if let Some(spelling) = self.e.spell_type_clean(self.original, &ty) {
-                self.e
-                    .attempt
-                    .goal_arena
-                    .set_statement_spelling(self.span, &key, spelling);
-            }
-            term
+            self.e.relation_obligation(self.original, tactic, label, self.goals - 1, ty.clone(), level.clone(), self.span)?
         };
         Ok(self.alias(Rc::new(term), ty, level))
     }
@@ -555,6 +530,44 @@ impl Builder<'_> {
             "`rel_cong` context mismatch: the supplied proof does not explain this change (only homogeneous unary/binary contexts are supported)",
             self.span,
         )
+    }
+}
+
+impl Elaborator {
+    /// A goal for evidence a relational tactic needs and resolution did not
+    /// find: `ty` in `cx`, labelled for an `on ?label := …` in the block and
+    /// reported with its statement when nothing discharges it. `serial`
+    /// tells one tactic's goals at one site apart.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn relation_obligation(
+        &self,
+        cx: &Cx,
+        tactic: &str,
+        label: &str,
+        serial: usize,
+        ty: Type,
+        level: Level,
+        span: Span,
+    ) -> R<Term> {
+        match self.attempt.goal_arena.reserve_promoted(1) {
+            goals::PromotionCapacity::Ready => {}
+            goals::PromotionCapacity::Restart => {
+                return err(
+                    "internal: restarting declaration to reserve relational congruence goals",
+                    span,
+                );
+            }
+            goals::PromotionCapacity::Disabled => {
+                return err(format!("`{tactic}` cannot create an obligation here"), span);
+            }
+        }
+        let key = format!("{tactic}:{serial}");
+        let spelling = self.spell_type_clean(cx, &ty);
+        let term = self.new_goal_key(cx, None, Some((tactic, label)), ty, level, span, Some(&key), None)?;
+        if let Some(spelling) = spelling {
+            self.attempt.goal_arena.set_statement_spelling(span, &key, spelling);
+        }
+        Ok(term)
     }
 }
 
