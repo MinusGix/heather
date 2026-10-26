@@ -1,0 +1,52 @@
+// cat as a Linux executable (issues/native-cat-executable.md): the I/O
+// profile's ELF of cat's compiled bytes (`io_elf_file`), which `heather
+// write-elf lib/native/native_cat_executable.hthr cat_source -o cat` writes
+// once the kernel checks the file equal to it (`cat_source_elf_written`,
+// applied to `cat_compiles`). The
+// process Linux makes of that file sends to stdout what it read from stdin
+// along every run that exits 0 (`cat_file_sends`, from `cat_native_sends`):
+// the file's header is 232 bytes, whatever the code's length.
+//
+// Outside the proof: that Linux maps the file as `X86Memory::io_load` says
+// (the RX file at 0x400000, eight zero KiB at 0x410000) and starts it at
+// `io_entry()`, and that its system calls answer as `LinuxRun` allows.
+import native_cat;
+import native_cat_spec;
+import native_cat_compiled;
+import native_source;
+import stream_filter_spec;
+import linux_calls;
+import linux_trees;
+import linux_x86_64_io;
+import linux_x86_64_byte_memory;
+import linux_x86_64_determinism;
+import linux_x86_64_image;
+import linux_x86_64_sim;
+import itree;
+import itree_trace;
+import x86_64;
+import x86_64_asm;
+import x86_64_byte_memory;
+import bitvec;
+import list;
+import nat;
+
+// The source `write-elf` compiles, and the file: the header, then cat's
+// bytes.
+fn cat_source() → Source { cat(cat_capacity()) }
+fn cat_file() → List<BitVec(8)> { io_elf_file(cat_bytes()) }
+
+fn cat_file_header() → List<BitVec(8)> {
+    io_elf_header(BitVec::ofNat(232 + cat_bytes().len()), BitVec::ofNat((232 + cat_bytes().len()).shr(8)))
+}
+
+theorem cat_file_sends(s: MachineState<X86Memory(X86Profile::io())>,
+    entry: s.rip = io_entry(), loaded: s.memory = X86Memory::io_load(cat_file()),
+    tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(cat_capacity()).denote(), tr),
+    valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok()),
+    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::io().linux(), run, s), responses: SameResponses(Trace::linux_events(tr), run)):
+    sent_to(BitVec::ofNat(1), run) = Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr) {
+    cat_native_sends(cat_file_header(),
+        io_elf_header_length(BitVec::ofNat(232 + cat_bytes().len()), BitVec::ofNat((232 + cat_bytes().len()).shr(8))),
+        s, entry, loaded, tr, produces, valid, returns, run, ran, responses)
+}

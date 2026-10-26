@@ -510,6 +510,28 @@ theorem Source::compile_laid(self src: Source, low: BitVec(64), program: Prog, c
     })(compiled)
 }
 
+// The converse, for a reader that has the program: an emission that
+// finishes as `program`, laid out, is the compile. `heather write-elf`
+// proves the compile this way, the emission by evaluation and the layout a
+// stretch at a time, since the two at once overrun one declaration's fuel.
+theorem Source::compile_of(self src: Source, low: BitVec(64), program: Prog,
+    emitted: src.main.emit(Start, src.layout(low), 0).map(λ (c: Compiled) => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)) = Some(program),
+    laid: program.laid_out().IsTrue()):
+    src.compile(low) = Some(program) {
+    let finished = j(sym(eq_true_of_is_true(program.laid_out(), laid)),
+        λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(program) }) = Some(program), refl);
+    (match src.main.emit(Start, src.layout(low), 0) as λ o =>
+            o.map(λ (c: Compiled) => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)) = Some(program) →
+            (match o { None => None, Some(c) => c.prog.finish() }) = Some(program) {
+        None => λ none => absurd(none),
+        Some(c) => λ same => {
+            let whole = then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
+            j(sym(Option::some_inj(whole, program, same)),
+                λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(program), finished)
+        },
+    })(emitted)
+}
+
 // The compiled program, from its first byte with its code resident and its
 // region zero, simulates the source at every fuel.
 theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, src.buffers).size() <= r.size, program: Prog,

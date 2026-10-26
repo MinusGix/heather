@@ -223,51 +223,8 @@ theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{ 
 // The published bytes, a piece at a time from the last item: no one
 // statement evaluates more of the code than a piece.
 "));
-    // Pieces of whole items, about `PIECE` bytes each, from the end.
-    let mut at = bytes.len();
-    let mut back = 0;
-    let mut pieces: Vec<(usize, usize, usize)> = Vec::new(); // (back offset, items, start byte)
-    let mut items_in = 0;
-    let mut start = at;
-    for len in lens.iter().rev() {
-        start -= *len as usize;
-        items_in += 1;
-        if at - start >= PIECE {
-            pieces.push((back, items_in, start));
-            back += items_in;
-            items_in = 0;
-            at = start;
-        }
-    }
-    if items_in > 0 { pieces.push((back, items_in, start)); back += items_in; }
-    let mut end = bytes.len();
-    for (c, (back, count, start)) in pieces.iter().enumerate() {
-        let literal: Vec<String> = bytes[*start..end].iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
-        end = *start;
-        text.push_str(&format!("fn {prefix}_piece_{c}() → List<BitVec(8)> {{ [{}] }}\n", literal.join(", ")));
-        text.push_str(&format!("theorem {prefix}_piece_{c}_is(): asm_code_after(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back}), {count}) = {prefix}_piece_{c}() {{ refl }}\n"));
-    }
-    let m = pieces.len();
+    text.push_str(&byte_pieces(prefix, &cut_pieces(&lens, PIECE), &bytes));
     text.push_str(&format!("
-// The code up to each piece's start, from the program's.
-fn {prefix}_upto_{m}() → List<BitVec(8)> {{ [] }}
-theorem {prefix}_upto_{m}_is(): asm_code(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back})) = {prefix}_upto_{m}() {{ refl }}
-"));
-    for (c, (back, count, _)) in pieces.iter().enumerate().rev() {
-        let next = c + 1;
-        text.push_str(&format!("fn {prefix}_upto_{c}() → List<BitVec(8)> {{ {prefix}_upto_{next}() ++ {prefix}_piece_{c}() }}
-theorem {prefix}_upto_{c}_is(): asm_code(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back})) = {prefix}_upto_{c}() {{
-    trans(asm_code_back(no_fills(), asm_labels({prefix}_code()), {count}, asm_back({prefix}_code(), {back})),
-        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ asm_code_after(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back}), {count}), {prefix}_upto_{next}_is()),
-            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => {prefix}_upto_{next}() ++ x, {prefix}_piece_{c}_is())))
-}}
-"));
-    }
-    text.push_str(&format!("
-theorem {prefix}_bytes(): assemble(no_fills(), {prefix}_code(), []) = {prefix}_upto_0() {{
-    trans(List::append_nil(asm_code(no_fills(), asm_labels({prefix}_code()), {prefix}_code())), {prefix}_upto_0_is())
-}}
-
 theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ refl }}
 
 // Called at its label with its arguments in RDI, RSI, …, a return address
@@ -484,7 +441,7 @@ fn parameters(arity: usize) -> String { (0..arity).map(|i| i.to_string()).collec
 /// code's labels. Each check reads the whole code per item, so one
 /// statement over all of it would be quadratic in the program; a stretch
 /// is short enough that its items times the program stay under `READS`.
-fn layout(prefix: &str, total: usize) -> String {
+pub(super) fn layout(prefix: &str, total: usize) -> String {
     let stretch = (READS / total.max(1)).clamp(1, 16);
     let mut text = String::new();
     let mut back = total - total % stretch;
@@ -536,6 +493,68 @@ fn typed(arguments: &[String]) -> String {
 /// quarter of a declaration's fuel at the cost of an assembled byte.
 const PIECE: usize = 256;
 
+/// A piece of the published code: how many items from the end it starts,
+/// how many items it has, and the byte it starts at.
+pub(super) struct Piece { pub back: usize, pub count: usize, pub start: usize }
+
+/// Pieces of whole items, about `size` bytes each, from the end.
+pub(super) fn cut_pieces(lens: &[u64], size: usize) -> Vec<Piece> {
+    let mut at: usize = lens.iter().sum::<u64>() as usize;
+    let mut back = 0;
+    let mut pieces = Vec::new();
+    let mut items_in = 0;
+    let mut start = at;
+    for len in lens.iter().rev() {
+        start -= *len as usize;
+        items_in += 1;
+        if at - start >= size {
+            pieces.push(Piece { back, count: items_in, start });
+            back += items_in;
+            items_in = 0;
+            at = start;
+        }
+    }
+    if items_in > 0 { pieces.push(Piece { back, count: items_in, start }); }
+    pieces
+}
+
+/// `{prefix}_code()`'s bytes stated a piece at a time, from the last item,
+/// so no one statement evaluates more of the code than a piece; then
+/// `{prefix}_bytes`, the whole assembly as the pieces' concatenation.
+pub(super) fn byte_pieces(prefix: &str, pieces: &[Piece], bytes: &[u8]) -> String {
+    let mut text = String::new();
+    let mut end = bytes.len();
+    for (c, Piece { back, count, start }) in pieces.iter().enumerate() {
+        let literal: Vec<String> = bytes[*start..end].iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
+        end = *start;
+        text.push_str(&format!("fn {prefix}_piece_{c}() → List<BitVec(8)> {{ [{}] }}\n", literal.join(", ")));
+        text.push_str(&format!("theorem {prefix}_piece_{c}_is(): asm_code_after(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back}), {count}) = {prefix}_piece_{c}() {{ refl }}\n"));
+    }
+    let m = pieces.len();
+    let back: usize = pieces.iter().map(|piece| piece.count).sum();
+    text.push_str(&format!("
+// The code up to each piece's start, from the program's.
+fn {prefix}_upto_{m}() → List<BitVec(8)> {{ [] }}
+theorem {prefix}_upto_{m}_is(): asm_code(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back})) = {prefix}_upto_{m}() {{ refl }}
+"));
+    for (c, Piece { back, count, .. }) in pieces.iter().enumerate().rev() {
+        let next = c + 1;
+        text.push_str(&format!("fn {prefix}_upto_{c}() → List<BitVec(8)> {{ {prefix}_upto_{next}() ++ {prefix}_piece_{c}() }}
+theorem {prefix}_upto_{c}_is(): asm_code(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back})) = {prefix}_upto_{c}() {{
+    trans(asm_code_back(no_fills(), asm_labels({prefix}_code()), {count}, asm_back({prefix}_code(), {back})),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ asm_code_after(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back}), {count}), {prefix}_upto_{next}_is()),
+            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => {prefix}_upto_{next}() ++ x, {prefix}_piece_{c}_is())))
+}}
+"));
+    }
+    text.push_str(&format!("
+theorem {prefix}_bytes(): assemble(no_fills(), {prefix}_code(), []) = {prefix}_upto_0() {{
+    trans(List::append_nil(asm_code(no_fills(), asm_labels({prefix}_code()), {prefix}_code())), {prefix}_upto_0_is())
+}}
+"));
+    text
+}
+
 const GPRS: [&str; 16] = ["Rax", "Rcx", "Rdx", "Rbx", "Rsp", "Rbp", "Rsi", "Rdi", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15"];
 const LOW_BYTES: [Option<&str>; 16] = [Some("Al"), Some("Cl"), Some("Dl"), Some("Bl"), None, Some("Bpl"), Some("Sil"), Some("Dil"),
     Some("R8b"), Some("R9b"), Some("R10b"), Some("R11b"), Some("R12b"), Some("R13b"), Some("R14b"), Some("R15b")];
@@ -545,12 +564,16 @@ const CONDITIONS: [&str; 16] = ["O", "NO", "B", "AE", "E", "NE", "BE", "A", "S",
 /// and the item. A misreading is no hazard to the proof, which checks the
 /// literal against the lowering; it is a refusal the compiler reports.
 fn read_items(numbers: &[u64]) -> Result<Vec<(u64, String)>, String> {
+    read_items_with(numbers, &|width, n| format!("@bitvec::BitVec::ofNat({width}, {n})"))
+}
+
+/// [`read_items`], each immediate spelled by `word` from its width and value.
+pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String) -> Result<Vec<(u64, String)>, String> {
     let mut at = numbers.iter().copied();
     let mut next = || at.next().ok_or_else(|| "the code's numbers end early".to_string());
     let bad = || "the code's numbers are malformed".to_string();
     let gpr = |n: u64| GPRS.get(n as usize).copied().ok_or_else(bad);
     let low = |n: u64| LOW_BYTES.get(n as usize).copied().flatten().ok_or_else(bad);
-    let word = |width: u32, n: u64| format!("@bitvec::BitVec::ofNat({width}, {n})");
     let mut items = Vec::new();
     let total = numbers.len();
     let mut used = 0;
@@ -583,6 +606,11 @@ fn read_items(numbers: &[u64]) -> Result<Vec<(u64, String)>, String> {
             4 => "Ret".to_string(),
             5 => format!("Spill(StackStore(source := {}, offset := {}))", gpr(take()?)?, word(8, take()?)),
             6 => format!("Reload(StackLoad(destination := {}, offset := {}))", gpr(take()?)?, word(8, take()?)),
+            8 => format!("Load(WordLoad({}, {}))", gpr(take()?)?, gpr(take()?)?),
+            9 => format!("Store(WordStore({}, {}))", gpr(take()?)?, gpr(take()?)?),
+            10 => format!("LoadByte(ByteLoad({}, {}))", gpr(take()?)?, gpr(take()?)?),
+            11 => format!("StoreByte(ByteStore({}, {}))", gpr(take()?)?, gpr(take()?)?),
+            12 => "Syscall".to_string(),
             _ => return Err("the lowering emitted an item the compiler does not state".into()),
         };
         items.push((name, item));
