@@ -1301,6 +1301,7 @@ impl Elaborator {
                             },
                             level: tel.level.clone(),
                             spliced: None,
+                            shifted: Default::default(),
                         }));
                         // What a self-call over this binder needs (§4.2). The
                         // motive is strengthened here rather than at the call:
@@ -1410,6 +1411,7 @@ impl Elaborator {
                             ty: d_inline_here.clone(),
                             level: tel.level.clone(),
                             spliced: None,
+                            shifted: Default::default(),
                         }));
                         children.push((c, ih_at, ih_ty, tel.mlvl.clone()));
                         rec_t += 1;
@@ -1424,6 +1426,7 @@ impl Elaborator {
                             ty,
                             level,
                             spliced: None,
+                            shifted: Default::default(),
                         }));
                         payload_k += 1;
                     }

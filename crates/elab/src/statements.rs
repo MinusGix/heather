@@ -161,6 +161,7 @@ impl LetValue {
             level: self.level.clone(),
             skel,
             spliced: Some(Rc::clone(&self.spliced)),
+            shifted: Default::default(),
         }
     }
 
@@ -371,6 +372,7 @@ fn elaborate_let(
             ty,
             level,
             spliced: splice,
+            shifted: Default::default(),
         }));
         return Ok(None);
     }
@@ -504,6 +506,7 @@ fn elaborate_record_let(
             term: Rc::new(term),
             ty,
             level,
+            shifted: Default::default(),
         }));
     }
     Ok(whole)

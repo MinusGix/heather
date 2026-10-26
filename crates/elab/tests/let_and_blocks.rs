@@ -470,3 +470,76 @@ fn an_unused_meta_let_value_still_faces_the_kernel() {
     assert!(m.contains("NotConvertible"), "{m}");
     ok(&format!("{P}meta fn q(g: Ctx) -> Code(g |- Nat) {{ let p = P(3, refl); code {{ 0 }} }}"));
 }
+
+/// A gate that admits everything, so a test's counters see elaboration
+/// alone. Test-only: the claim below is about the term the elaborator
+/// builds, and the kernel's own walk of a let chain is still one per path
+/// until `issues/kernel-typing-memo-on-node-identity.md` lands.
+struct AdmitAll;
+
+impl heather_elab::gate::KernelGate for AdmitAll {
+    fn admits(&self, _psi: &GlobalCtx, _item: &heather_elab::gate::GateItem<'_>) -> bool {
+        true
+    }
+    fn accepted(&self, _psi: &GlobalCtx, _item: &heather_elab::gate::GateItem<'_>, _unsealed: &[usize]) {}
+}
+
+/// A chain of `k` lets, each using the previous twice, is a shared value of
+/// `k` links (`issues/proof-let-substitution-cost.md`'s `fan`), and it stays
+/// one under binders (`issues/subst-shared-node-memo.md`). Two shapes: the
+/// whole chain used once under a `λ` (one shift of a shared value, which the
+/// kernel's per-call memo keeps shared), and a binder between every link
+/// (a shift per use, which each alias's per-depth cache makes one shift per
+/// depth, so a later link holds one copy of the last and not two). Both are counted on the exact `local_subst_nodes` counter, for
+/// the elaboration and for shifting the finished body once more; a tree
+/// would be 2^k on either, and `subst_memo_hits` says the memo saw the
+/// sharing at all.
+#[test]
+fn a_shared_let_chain_stays_shared_under_binders() {
+    use heather_kernel::stats as kstats;
+    fn under(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        format!(
+            "fn mix(x, y: Nat) -> Nat {{ x }}\n\
+             fn chain(a: Nat) -> Nat → Nat {{\n{body}    λ (y: Nat) => mix(s{k}, y)\n}}\n"
+        )
+    }
+    fn interleaved(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    λ (y{i}: Nat) => {{\n    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        body.push_str(&format!("    s{k}\n"));
+        body.push_str(&"    }\n".repeat(k));
+        let ty = vec!["Nat"; k + 1].join(" → ");
+        format!("fn mix(x, y: Nat) -> Nat {{ x }}\nfn chain(a: Nat) -> {ty} {{\n{body}}}\n")
+    }
+    /// (elaboration's local node visits, one more shift's, its memo hits).
+    fn visits(src: &str) -> (u64, u64, u64) {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_gate(std::sync::Arc::new(AdmitAll));
+        let before = kstats::snapshot();
+        e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+        let elab = kstats::snapshot().since(&before).local_subst_nodes;
+        let (body, ..) = last_body(&e);
+        let Term::Lam { body: open, .. } = body else { panic!("`chain` is not a λ") };
+        let before = kstats::snapshot();
+        let _ = open.shift_local(1);
+        let shift = kstats::snapshot().since(&before);
+        (elab, shift.local_subst_nodes, shift.subst_memo_hits)
+    }
+    // Doubling k: a linear count doubles, a quadratic one quadruples, and a
+    // tree's is 256 times larger. `interleaved`'s elaboration is quadratic:
+    // each link shifts the previous link's value, whose size is its depth,
+    // and a shift of a shift is a fresh copy (`issues/open-payload-shift-copies.md`).
+    for (shape, src, grows) in [("under", under as fn(usize) -> String, 3), ("interleaved", interleaved, 5)] {
+        let (e8, s8, hits) = visits(&src(8));
+        let (e16, s16, _) = visits(&src(16));
+        assert!(hits > 0, "{shape}: the shift met no shared node twice");
+        assert!(e16 < grows * e8, "{shape}: elaboration's shifts grew {e8} → {e16} for k = 8 → 16");
+        assert!(s16 < 3 * s8, "{shape}: shifting the body grew {s8} → {s16} for k = 8 → 16");
+    }
+}

@@ -707,6 +707,7 @@ impl Elaborator {
                             ty: result.clone(),
                             level: mlvl.clone(),
                             spliced: None,
+                            shifted: Default::default(),
                         }));
                         // The placeholder already *is* a reference to it.
                         continue;

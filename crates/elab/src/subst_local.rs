@@ -235,6 +235,7 @@ impl Elaborator {
                 level: level.clone(),
                 skel: None,
                 spliced: None,
+                shifted: Default::default(),
             });
         }
         if let Some(p) = pos_h.filter(|p| !reverted.contains(p) && visible(cx, *p)) {
@@ -247,12 +248,13 @@ impl Elaborator {
                 level: level.clone(),
                 skel: None,
                 spliced: None,
+                shifted: Default::default(),
             });
         }
         for (i, a) in cx.aliases.iter().enumerate() {
             let later = cx.aliases[i + 1..].iter().any(|b| b.name == a.name);
             let by = (n - a.depth) as u32;
-            let (term, ty) = (a.term.shift_local(by), a.ty.shift_local(by));
+            let (term, ty) = a.at(by);
             if a.depth <= pos_x
                 || later
                 || cx.names[a.depth..].contains(&a.name)
@@ -268,6 +270,7 @@ impl Elaborator {
                 level: a.level.clone(),
                 skel: a.skel.clone(),
                 spliced: None,
+                shifted: Default::default(),
             });
         }
         ccx.aliases.extend(aliases.into_iter().map(Rc::new));

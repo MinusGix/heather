@@ -128,6 +128,15 @@ counters! {
     /// (`issues/refl-theorem-step-cost.md`: the copying a fuel pin cannot
     /// see).
     shift_global_nodes,
+    /// Nodes the local shift and the local substitutions (`shift_local`,
+    /// `apply_local`, `inst_top`) visited, skipped and memoized ones
+    /// included. Its growth against the shared size of what they were given
+    /// is the tree/DAG gap `issues/subst-shared-node-memo.md` closes.
+    local_subst_nodes,
+    /// Shared nodes a substitution traversal answered from its per-call memo
+    /// (`subst.rs` §Keeping a shared DAG shared): one per second (or later)
+    /// path into the same node at the same depths.
+    subst_memo_hits,
     /// Definition bodies rescoped by `Defs::body` — one per `GlobalCache`
     /// body fill, i.e. per (definition, gate call) pair that unfolded it.
     delta_body_rescopes,

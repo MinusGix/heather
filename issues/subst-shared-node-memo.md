@@ -1,6 +1,6 @@
 ---
 title: Keep a shifted DAG a DAG: memoize shared nodes within one local traversal
-status: open
+status: closed
 labels: [kernel,performance,proofs]
 area: kernel
 created: 2026-10-26
@@ -65,3 +65,15 @@ measured an image as tree-blown since `have` removed let fan-out from the
 library; the trigger is an image whose node count far exceeds the term's
 shared size, which [[let-fanout-diagnostic]]'s tree-versus-shared count
 would show.
+
+## Log
+
+- 2026-10-26: LANDED. Three places lost the sharing, not one.
+    - **The kernel traversal** (`subst.rs` §Keeping a shared DAG shared): a per-call `NodeMemo` keyed by node address and `Depths`, consulted only for `Rc::strong_count > 1`, with a keep-alive per entry and the change counter replayed on a hit. Every pure mapper opts in: the local shift and substitutions (`ShiftLocal`, `SubstLocal`, `InstTop`) and also the global and universe ones. The global ones turned out to matter: with only the local memo, the elaborated body of the `fan`-under-`λ` probe was a DAG, but `commit` rescopes every body with `shift_global_above(..).apply_global(σ)`, and that walk handed Ψ a tree again (shifting the committed body at k = 16 visited 524,290 nodes). `AbstractLocal` (occurrence numbering), `ReindexGlobal` (a callback per variable), `RootTerms` and `RebuildChecked` stay out. Debug builds re-walk behind a sample of hits, on the skip sampler.
+    - **The alias** (`elab` `context.rs`): an alias used at several deeper binders was shifted per use, so a later `let` built from two uses held two separate copies, and a chain with a binder between every link doubled per link even with the memo. `Alias::at(by)` now shifts the value and type once per depth (`Alias::shifted`); `splice`, `resolve_at` and `subst_local` go through it.
+    - **Counters**: `local_subst_nodes` (nodes the local shift/substitutions visited) and `subst_memo_hits`; `scripts/timings` columns `local` and `subst memo`.
+    - **Acceptance 1**: `crates/elab/tests/let_and_blocks.rs::a_shared_let_chain_stays_shared_under_binders`, with a test gate that admits everything so the counter sees elaboration alone. Chain under one `λ`: elaboration and a further shift of the committed body are linear in k. A binder between every link: elaboration is **quadratic** (each link shifts the previous link's value, whose size is its depth; a shift of a shift is a fresh copy, which is [[open-payload-shift-copies]]'s representation question), the committed body is linear to shift; both were 2^k. The kernel unit test `a_shared_chain_stays_shared_through_shift_and_substitution` pins `shift_local`/`apply_local` on a 24-link chain: ≤ 8k visits and every output link's two children `ptr_eq`.
+    - **End to end** (release, width one, `--timings`, whole `chain` item including the gate): the interleaved probe at k = 8/12 went 5,058 → 1,242 and 81,834 → 16,854 local visits. What is left is the gate's own walk, one per path: `queries` are unchanged (1,032 / 16,396), as they must be until [[kernel-typing-memo-on-node-identity]] lands. That issue's Reach now holds: aliases used under binders reach the gate as shared nodes.
+    - **On a real workload**: `heather check lib/native/native_cat_executable.hthr --cache`, master's binary against this one (release, width one, cold verdicts): `queries` identical on every item, and no item's count goes up. `shift_global_nodes` fell 1.12G → 274M summed over items (the global rescoping's own share of shared nodes), and 428 items trade a few `conv_misses` and eval steps for `conv_memo_hits`, since more of what reaches the gate is shared. Seconds are not measured here (one cold sample each on the cloud box).
+  - **Acceptance 2/3**: `scripts/bench --check --filter subst` and `--filter nat` pass shape-only on the cloud box (the baseline is another CPU and toolchain, so no time verdict); the 300-seed substitution laws pass in the suite unchanged.
+  - Not done, with owners: `rewrite`'s abstraction walk (`AbstractLocal`) is still a tree walk; a memo for it must number occurrences of a shared subterm, which is the bottom-up design of `docs/mengine-survey.md` §4.3. Module images (`put_term`) still write trees; nothing has measured one as tree-blown (this issue's Reach).

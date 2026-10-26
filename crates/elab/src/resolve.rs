@@ -883,6 +883,7 @@ impl Elaborator {
             level: dict_lvl.clone(),
             skel: None,
             spliced: None,
+            shifted: Default::default(),
         }));
         // A class may now contain the same ancestor at several tagged fibers.
         // Try each matching path; the expected goal (including its index)

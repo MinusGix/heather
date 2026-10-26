@@ -1369,6 +1369,7 @@ fn shift_cx(cx: &Cx, univs: u32, globals: u32) -> Cx {
                 term: Rc::new(a.term.shift_univ(univs).shift_global(globals)),
                 ty: a.ty.shift_univ(univs).shift_global(globals),
                 level: a.level.clone(),
+                shifted: Default::default(),
             })
         })
         .collect();

@@ -1004,6 +1004,7 @@ impl Elaborator {
                         ty,
                         level,
                         spliced: None,
+                        shifted: Default::default(),
                     }));
                 }
                 acx.guard = dec

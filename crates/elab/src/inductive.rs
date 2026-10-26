@@ -1933,6 +1933,7 @@ impl Elaborator {
                 ty: ty.clone(),
                 level: level.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
             if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
                 tcx.op_locals.push((sym.clone(), pname.clone()));
@@ -2186,6 +2187,7 @@ impl Elaborator {
                 ty: ty.clone(),
                 level: level.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         fcx
@@ -2237,6 +2239,7 @@ impl Elaborator {
                 ty: ty.shift_local(1),
                 level: level.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
             decls.push((ty, level));
         }
@@ -3521,6 +3524,7 @@ impl Elaborator {
                 ty: (*fst).clone(),
                 level: fst_level,
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         self.elab_check(&acx, &arm.body, expected, mlvl)
