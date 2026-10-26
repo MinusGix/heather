@@ -360,3 +360,140 @@ fn Prog::finish(self p: Prog) → Option<Prog> {
 fn Source::compile(self src: Source, low: BitVec(64)) → Option<Prog> {
     match src.main.emit(Start, src.layout(low), 0) { None => None, Some(c) => c.prog.finish() }
 }
+
+// ---------------------------------------------------------------------------
+// Why a source is refused
+
+// What `write-elf` says when `Source::compile` is `None`: the first statement
+// the compile refuses, in source order, and why. Nothing proves it agrees
+// with the compile, so it is only a message; at a statement it asks the
+// compile's own pieces (`Prog::leaf`, `Prog::call`, `word_fits`) and names
+// the reason only when they refuse.
+//
+// A refusal is `[at, kind, reason, first, second]`: `at` numbers every
+// statement but `Then` from 1, in source order (a `Branch` or `Repeat`
+// before its arms); `kind` is 0 a computation, 1 a call, 2 a branch, 3 a
+// loop, 4 an exit, 5 the program as a whole; the reasons, with what
+// `first` and `second` hold:
+//
+//   0  a region other than a dataflow leaf (1 Sequence, 2 Compose,
+//      3 Conditional, 4 Call, 5 Loop)
+//   1  a leaf needs more registers than the pool holds (needed, the pool)
+//   2  a leaf's nodes are not in evaluation order
+//   3  a leaf writes one of its own inputs
+//   4  a word past the slots (the word, the slots)
+//   5  an input neither a word nor a bit (its width)
+//   6  S4's lowering refused the leaf
+//   7  a call the compiler does not make (2 open, 3 close, 4 stat of a
+//      path, 5 stat of a descriptor)
+//   8  a buffer the source does not have (the buffer, how many it has)
+//   9  the program's labels did not lay out
+//
+// `Nil` when the compile succeeds.
+inductive CompileScan { Passed(next: Nat), Refused(why: List<Nat>) }
+
+fn CompileScan::of(at, kind: Nat, why: List<Nat>) → CompileScan {
+    match why { Nil => Passed(Succ(at)), Cons(reason, details) => Refused(Cons(at, Cons(kind, Cons(reason, details)))) }
+}
+
+// The first id at or past the slots.
+fn ids_refusal(ids: List<Nat>) → List<Nat> {
+    match ids {
+        Nil => [],
+        Cons(id, rest) => match word_fits(id) { False => [4, id, word_slots()], True => ids_refusal(rest) },
+    }
+}
+
+// The first input at or past the slots, or neither a word nor a bit.
+fn inputs_refusal(ports: List<Port>) → List<Nat> {
+    match ports {
+        Nil => [],
+        Cons(port, rest) => match word_fits(port.id) {
+            False => [4, port.id, word_slots()],
+            True => match Kind::of_width(port.width) { None => [5, port.width, 0], Some(_) => inputs_refusal(rest) },
+        },
+    }
+}
+
+fn outputs_refusal(ports: List<Port>) → List<Nat> {
+    match ports {
+        Nil => [],
+        Cons(port, rest) => match word_fits(port.id) { False => [4, port.id, word_slots()], True => outputs_refusal(rest) },
+    }
+}
+
+fn leaf_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
+    let needed = nodes_inputs(nodes).len() + nodes.len();
+    match Start.leaf(layout, nodes) {
+        Some(_) => [],
+        None => match needed.leb(register_pool().len()) {
+            False => [1, needed, register_pool().len()],
+            True => match nodes_evaluable(nodes) {
+                False => [2, 0, 0],
+                True => match ports_absent(nodes_inputs(nodes), nodes_writes(nodes)) {
+                    False => [3, 0, 0],
+                    True => match inputs_refusal(nodes_inputs(nodes)) {
+                        Cons(reason, details) => Cons(reason, details),
+                        Nil => match outputs_refusal(nodes_write_ports(nodes)) {
+                            Cons(reason, details) => Cons(reason, details),
+                            Nil => [6, 0, 0],
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn region_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => leaf_refusal(layout, body.nodes),
+        Sequence(_, _) => [0, 1, 0],
+        Compose(_, _) => [0, 2, 0],
+        Conditional(_, _, _, _, _, _) => [0, 3, 0],
+        Call(_, _, _) => [0, 4, 0],
+        Loop(_, _, _, _, _, _, _, _, _) => [0, 5, 0],
+    }
+}
+
+fn buffer_refusal(layout: Layout, ids: List<Nat>, buf: Nat) → List<Nat> {
+    match ids_refusal(ids) {
+        Cons(reason, details) => Cons(reason, details),
+        Nil => match layout.capacities.nth(buf) { None => [8, buf, layout.capacities.len()], Some(_) => [] },
+    }
+}
+
+fn call_refusal(layout: Layout, shape: CallShape) → List<Nat> {
+    match shape {
+        Reads(fd, buf, len, result) => buffer_refusal(layout, [fd, len, result], buf),
+        Writes(fd, buf, from, len, result) => buffer_refusal(layout, [fd, from, len, result], buf),
+        Opens(_, _, _) => [7, 2, 0],
+        Closes(_, _) => [7, 3, 0],
+        StatsPath(_, _, _, _) => [7, 4, 0],
+        StatsFd(_, _, _) => [7, 5, 0],
+    }
+}
+
+fn Stmt::scan(self s: Stmt, layout: Layout, at: Nat) → CompileScan {
+    match s {
+        Compute(region) => CompileScan::of(at, 0, region_refusal(layout, region)),
+        Invoke(shape) => CompileScan::of(at, 1, call_refusal(layout, shape)),
+        Then(first, rest) => match first.scan(layout, at) { Passed(next) => rest.scan(layout, next), Refused(why) => Refused(why) },
+        Branch(condition, yes, no) => match CompileScan::of(at, 2, ids_refusal([condition])) {
+            Passed(next) => match yes.scan(layout, next) { Passed(after) => no.scan(layout, after), Refused(why) => Refused(why) },
+            Refused(why) => Refused(why),
+        },
+        Repeat(body, again) => match CompileScan::of(at, 3, ids_refusal([again])) {
+            Passed(next) => body.scan(layout, next),
+            Refused(why) => Refused(why),
+        },
+        Exit(status) => CompileScan::of(at, 4, ids_refusal([status])),
+    }
+}
+
+fn Source::refusal(self src: Source, low: BitVec(64)) → List<Nat> {
+    match src.main.scan(src.layout(low), 1) {
+        Refused(why) => why,
+        Passed(_) => match src.compile(low) { None => [0, 5, 9, 0, 0], Some(_) => [] },
+    }
+}

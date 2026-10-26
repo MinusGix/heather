@@ -105,6 +105,26 @@ pub fn load_providing(root: &Path, search: &[PathBuf], provided: &[&str]) -> Res
     Ok(w.out)
 }
 
+/// Load `root`'s closure, then the modules named by `extra` (resolved as
+/// imports of `root` would be) and theirs: a tool that writes modules of its
+/// own over the root (`write-elf`'s probes and certificate) imports them
+/// without the root's author having to. The root's closure keeps
+/// [`load`]'s order, so its images are the ones a `check` of it wrote.
+pub fn load_with(root: &Path, search: &[PathBuf], extra: &[&str]) -> Result<Vec<Module>, LoadError> {
+    let none = HashMap::new();
+    let mut w = load_many_inner(std::slice::from_ref(&root), search, &none)?;
+    let from = root
+        .canonicalize()
+        .map_err(|e| LoadError::at(format!("cannot read `{}`: {e}", root.display()), root))?;
+    for module in extra {
+        match w.resolve(module, &from) {
+            Ok(path) => w.visit(&path)?,
+            Err(Unresolved::Missing(e) | Unresolved::Refused(e)) => return Err(e),
+        }
+    }
+    Ok(w.out)
+}
+
 /// Load one root from an in-memory source buffer while reading its imports
 /// from disk. Resident editor clients use this so diagnostics describe the
 /// text the user can see, including changes that have not been saved yet.

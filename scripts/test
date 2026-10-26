@@ -92,6 +92,8 @@ if [[ "${1:-}" == --fast ]]; then
         --skip programs_with_loops_execute
         --skip loop_sources_are_refused
         --skip compiled_cat_runs_as_cat
+        --skip every_written_program_gets_its_theorem
+        --skip refused_programs_name_their_reason
         --skip source_to_native_binary)
 elif [[ "${1:-}" == --pr ]]; then
   shift

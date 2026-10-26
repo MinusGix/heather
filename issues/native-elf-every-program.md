@@ -1,6 +1,6 @@
 ---
 title: Give every written ELF its theorem, its fits check and its refusal reason
-status: open
+status: closed
 labels: [native,cli,proofs,ergonomics]
 area: heather-in-heather
 milestone: [hih-tools]
@@ -46,3 +46,20 @@ is refused for not fitting, and `opens` is refused with a reason.
 
 - **[[native-effect-source-compiler]]** owns `native_compile_correct`.
 - **[[native-cat-executable]]** owns `write-elf`.
+
+## Resolution (2026-10-26)
+
+- `Source::elf_simulates` and `Source::elf_file_simulates`
+  (`lib/native/native_compile_elf.hthr`) are the generic form of cat's
+  proof; `cat_native_simulates` is now one call of the first. Every
+  certificate states `<s>_elf_fits` (by evaluation), `<s>_elf_short` and
+  `<s>_elf_simulates` over the file written.
+- A source past the page is refused on the fork, before the kernel.
+- `Source::refusal` (end of `lib/native/native_compile.hthr`, untrusted)
+  names the statement and reason; `write-elf` renders it. Its reason table
+  has to grow with `Stmt::emit` when the compiler gains forms.
+- `loader::load_with` loads the certificate's modules, so a program file
+  imports only what it uses.
+- Probes: `lib/_tests/native/native_compile_tests.hthr`; CLI tests
+  `every_written_program_gets_its_theorem` and
+  `refused_programs_name_their_reason` in `crates/cli/tests/native_cat.rs`.

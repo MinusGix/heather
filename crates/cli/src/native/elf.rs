@@ -7,10 +7,16 @@
 //! untrusted, and then stated as literals the kernel checks: that the source
 //! compiles to the literal program (`<source>_elf_compiles`), and that the
 //! file of any program it compiles to is the bytes written
-//! (`<source>_elf_written`). So a theorem about that file
-//! (`native_cat_executable`'s, for cat) is about the one written. That Linux
-//! loads the file as the theorem's loader says is outside the proof.
-//! Nothing is written unless the kernel accepts every statement.
+//! (`<source>_elf_written`). From those, its layout's fit to the page
+//! (`<source>_elf_fits`, by evaluation) and the code's length, every
+//! certificate states the once-proved compiler's theorem of the file
+//! (`<source>_elf_simulates`, by `Source::elf_file_simulates`,
+//! native_compile_elf): the process Linux makes of it simulates the source.
+//! So a theorem about the source's tree (cat's `cat_implements`) is about
+//! the file written. That Linux loads the file as the theorem's loader says
+//! is outside the proof. Nothing is written unless the kernel accepts every
+//! statement, and a source that does not fit the page, or that the compiler
+//! refuses, is refused with its reason (`Source::refusal`, untrusted).
 //!
 //! A compile is most of what one declaration's fuel buys, so no statement
 //! repeats it: the emission is checked against the literal once, by
@@ -44,8 +50,12 @@ const PIECE: usize = 96;
 const LOW: &str = "DataRegion::io_page().low";
 const REGION: std::ops::Range<u64> = 0x410000..0x412000;
 
-const IMPORTS: &[&str] = &["native_source", "native_compile", "native_compile_correct", "linux_x86_64_image", "x86_64",
-    "x86_64_asm", "x86_64_asm_runs", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
+/// The modules the probes and the certificate import besides the source's
+/// own; `write-elf` loads them itself, so a program file imports only what
+/// it uses.
+const IMPORTS: &[&str] = &["native_source", "native_compile", "native_compile_correct", "native_compile_elf",
+    "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
+    "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
 
 pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut positional = Vec::new();
@@ -84,8 +94,9 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    let sources = loader::load(source, &search).map_err(|e| e.msg)?;
-    let root = sources.last().ok_or("empty source closure")?.name.clone();
+    let sources = loader::load_with(source, &search, IMPORTS).map_err(|e| e.msg)?;
+    let canonical = source.canonicalize().map_err(|e| format!("{}: {e}", source.display()))?;
+    let root = sources.iter().find(|m| m.path == canonical).ok_or("the source is not in its own closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
     let verdicts = cache.as_ref().map(|dir| {
         let (store, rejected) = heather_cache::Cache::open(dir.clone());
@@ -112,6 +123,8 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
 fn {p}_program() → Prog {{ match {symbol}().compile({LOW}) {{ None => Start, Some(program) => program }} }}
 fn {p}_numbers() → List<Nat> {{ {p}_program().numbers() }}
 fn {p}_lens() → List<Nat> {{ asm_lens({p}_program()) }}
+fn {p}_room() → List<Nat> {{ [Layout({LOW}, {symbol}().buffers).size(), DataRegion::io_page().size] }}
+fn {p}_refusal() → List<Nat> {{ {symbol}().refusal({LOW}) }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -121,11 +134,20 @@ fn {p}_lens() → List<Nat> {{ asm_lens({p}_program()) }}
         if width == 64 && REGION.contains(&n) { format!("{LOW}.add_nat({})", n - REGION.start) }
         else { format!("@bitvec::BitVec::ofNat({width}, {n})") }
     };
+    // The theorem takes the fit as a hypothesis, so a program past the page
+    // would be written with nothing said of it.
+    if let [size, page] = numbers(&fork, &probe, "room")?[..] && size > page {
+        return Err(format!("`{symbol}` does not fit the I/O page: its words, buffers and scratch range take {size} bytes \
+            and the page holds {page}, so `Source::elf_file_simulates` would not cover it"));
+    }
     let items = verified::read_items_with(&numbers(&fork, &probe, "numbers")?, &address)?;
+    if items.is_empty() {
+        return Err(refused(symbol, &numbers(&fork, &probe, "refusal")?));
+    }
     let lens = numbers(&fork, &probe, "lens")?;
     drop(fork);
-    if items.is_empty() || lens.len() != items.len() {
-        return Err(format!("`{symbol}` did not compile, or its items' lengths did not read back"));
+    if lens.len() != items.len() {
+        return Err(format!("`{symbol}`'s items' lengths did not read back"));
     }
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
@@ -190,6 +212,11 @@ theorem {p}_compiles(): {symbol}().compile({LOW}) = Some({p}_code()) {{
     {symbol}().compile_of({LOW}, {p}_code(), {p}_emitted(), {p}_laid())
 }}
 
+// Its words, buffers and scratch range fit the page.
+theorem {p}_fits(): Layout({LOW}, {symbol}().buffers).size() <= DataRegion::io_page().size {{
+    Nat::leb_sound(Layout({LOW}, {symbol}().buffers).size(), DataRegion::io_page().size, trivial)
+}}
+
 // The bytes, a piece at a time from the last item.
 ", layout = verified::layout(p, items.len()));
     text.push_str(&verified::byte_pieces(p, &pieces, &bytes));
@@ -212,6 +239,20 @@ theorem {p}_written(program: Prog, compiled: {symbol}().compile({LOW}) = Some(pr
     let same: ({p}_code() = program) = Option::some_inj({p}_code(), program, trans(sym({p}_compiles()), compiled));
     j(same, λ q _ => io_elf_file(assemble(no_fills(), q, [])) = {p}_file(),
         trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(x), {p}_bytes()), {p}_file_is()))
+}}
+
+theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {{
+    j(sym({p}_bytes()), λ b _ => 232 + b.len() <= 65536,
+        j(sym({p}_length()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {length}, 65536, trivial)))
+}}
+
+// The process Linux makes of the file written, at its entry, simulates
+// `{symbol}`'s tree (`Source::elf_file_simulates`, from
+// `native_compile_correct`).
+theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io())>, entry: s.rip = io_entry(),
+    loaded: s.memory = X86Memory::io_load({p}_file())): SimProgram(X86Profile::io().linux(), {symbol}().denote(), s) {{
+    {symbol}().elf_file_simulates({p}_code(), {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory = X86Memory::io_load(f), loaded))
 }}
 ", header_literal.join(", ")));
     let mut file = head;
@@ -240,6 +281,32 @@ theorem {p}_written(program: Prog, compiled: {symbol}().compile({LOW}) = Some(pr
     println!("{}: {} bytes, `{symbol}` compiled into the I/O profile's ELF as the kernel checked it", output.display(), file.len());
     println!("certificate: {}", certificate.display());
     Ok(())
+}
+
+/// The message for a compile `Source::refusal` explains
+/// (native_compile.hthr): the statement and the reason it was refused.
+fn refused(symbol: &str, why: &[u64]) -> String {
+    let [at, kind, reason, first, second] = *why else {
+        return format!("`{symbol}` did not compile, and `Source::refusal` names no reason");
+    };
+    let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", _ => "the program" };
+    let reason = match reason {
+        0 => format!("a {} region; only a dataflow leaf compiles (issues/native-compile-wider-leaves.md)",
+            ["", "sequence", "compose", "conditional", "call", "loop"].get(first as usize).unwrap_or(&"structured")),
+        1 => format!("the leaf needs {first} registers, one per input and per node, and the pool holds {second}"),
+        2 => "the leaf's nodes are not in evaluation order".into(),
+        3 => "the leaf writes one of its own inputs".into(),
+        4 => format!("word {first} is past the {second} word slots"),
+        5 => format!("an input of width {first}: only words (64) and bits (1) load"),
+        6 => "S4's lowering refused the leaf".into(),
+        7 => format!("`{}` is not compiled yet (issues/native-compile-other-calls.md)",
+            ["", "", "open", "close", "stat", "fstat"].get(first as usize).unwrap_or(&"the call")),
+        8 => format!("buffer {first} does not exist: the source has {second}"),
+        9 => "the program's labels did not lay out".into(),
+        _ => format!("reason {reason} ({first}, {second})"),
+    };
+    if kind == "the program" { format!("`{symbol}` is refused: {reason}") }
+    else { format!("`{symbol}` is refused at statement {at}, {kind}: {reason}") }
 }
 
 fn write_executable(path: &Path, bytes: &[u8]) -> Result<(), String> {

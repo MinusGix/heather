@@ -1,0 +1,75 @@
+// Sources `write-elf` writes or refuses (issues/native-elf-every-program.md),
+// and why `Source::refusal` says the compile refuses the refused ones. The
+// CLI's test (crates/cli/tests/native_cat.rs) writes `head10` and asks for
+// the others; this file imports only what it uses, and `write-elf` brings
+// in the modules its certificate needs.
+import native_source;
+import native_cat;
+import native_compile;
+import function_ir;
+import linux_x86_64_image;
+import bitvec;
+import list;
+import nat;
+
+fn low() → BitVec(64) { DataRegion::io_page().low }
+
+// `head -c 10`: cat whose read length is a countdown word. Words as cat's;
+// 2 the bytes still to copy, 20 and 21 scratch.
+fn head_pass() → Stmt {
+    Then(Invoke(Reads(0, 0, 2, 3)),
+        Then(ops([SignedLessThan(64, 7, 3, 16), Equal(64, 8, 3, 16)]),
+            Branch(7, Exit(10),
+                Branch(8, Exit(11),
+                    Then(ops([Const(64, 4, 0), Move(64, 5, 3)]),
+                        Then(Repeat(cat_write(), 14),
+                            Branch(12, Exit(10),
+                                Then(ops([Sub(64, 21, 2, 3)]),
+                                    ops([Move(64, 2, 21), Equal(64, 20, 21, 16), BitXor(1, 15, 20, 19)])))))))))
+}
+
+fn head_c(n: Nat) → Source {
+    Source(functions := [], buffers := [512], main := Then(Then(cat_setup(512), ops([Const(64, 2, n)])), Repeat(head_pass(), 15)))
+}
+fn head10() → Source { head_c(10) }
+
+// cat whose buffer, and so its scratch range, runs past the 4 KiB page: it
+// compiles, but no theorem covers it.
+fn big_cat() → Source { cat(2048) }
+
+theorem big_cat_too_big(): Layout(low(), big_cat().buffers).size().leb(DataRegion::io_page().size) = False { refl }
+theorem cat_fits_the_page(): Layout(low(), cat(1024).buffers).size().leb(DataRegion::io_page().size) = True { refl }
+
+// An `open`: the compiler makes only reads and writes.
+fn opens() → Source { Source(functions := [], buffers := [16], main := Invoke(Opens(0, 1, 2))) }
+
+theorem opens_refused(): opens().refusal(low()) = [1, 1, 7, 2, 0] { refl }
+
+// Fifteen constants: one register each, and the pool holds fourteen.
+fn wide_leaf() → Source {
+    Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 0), Const(64, 1, 1), Const(64, 2, 2), Const(64, 3, 3),
+        Const(64, 4, 4), Const(64, 5, 5), Const(64, 6, 6), Const(64, 7, 7), Const(64, 8, 8), Const(64, 9, 9), Const(64, 10, 10),
+        Const(64, 11, 11), Const(64, 12, 12), Const(64, 13, 13), Const(64, 14, 14)]), Exit(14)))
+}
+
+theorem wide_leaf_refused(): wide_leaf().refusal(low()) = [1, 0, 1, 15, 14] { refl }
+
+// The third statement exits with a word past the slots; the second, a loop,
+// tests one; a write names a buffer the source does not have.
+fn far_exit() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Then(Exit(0), Exit(64)))) }
+fn far_again() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Repeat(Exit(0), 99))) }
+fn no_buffer() → Source { Source(functions := [], buffers := [8], main := Invoke(Writes(0, 1, 2, 3, 4))) }
+
+theorem far_exit_refused(): far_exit().refusal(low()) = [3, 4, 4, 64, 64] { refl }
+theorem far_again_refused(): far_again().refusal(low()) = [2, 3, 4, 99, 64] { refl }
+theorem no_buffer_refused(): no_buffer().refusal(low()) = [1, 1, 8, 1, 1] { refl }
+
+// A node that writes a word it reads is out of S3.0's evaluation order.
+fn writes_input() → Source { Source(functions := [], buffers := [], main := ops([Add(64, 0, 0, 1)])) }
+
+theorem writes_input_refused(): writes_input().refusal(low()) = [1, 0, 2, 0, 0] { refl }
+
+// A source that compiles has no refusal.
+fn exit3() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Exit(0))) }
+
+theorem exit3_compiles(): exit3().refusal(low()) = [] { refl }

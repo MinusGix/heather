@@ -1,0 +1,62 @@
+// What `heather write-elf` states of every program it writes
+// (issues/native-elf-every-program.md): a source whose compile at the I/O
+// page is `program`, and whose layout fits the page, simulates its tree
+// once Linux has loaded the program's bytes past a 232-byte header and
+// started it at the entry (`native_compile_correct`). Nothing here is about
+// one program: the certificate `write-elf` checks supplies the compile, the
+// fit and the bytes' length, each evaluated once, and `Source::elf_file_simulates`
+// then reads its theorem off the file it wrote.
+//
+// Outside the proof, as for cat (native_cat_executable): that Linux maps
+// the file as `X86Memory::io_load` says and starts it at `io_entry()`.
+import native_source;
+import native_compile;
+import native_compile_region;
+import native_compile_steps;
+import native_compile_correct;
+import linux_x86_64_io;
+import linux_x86_64_byte_memory;
+import linux_x86_64_image;
+import linux_x86_64_sim;
+import x86_64;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_byte_memory;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import bitvec;
+import list;
+import logic;
+import nat;
+import option;
+
+// The process Linux makes of a 232-byte header and the program's bytes, at
+// its entry, simulates the source.
+theorem Source::elf_simulates(self src: Source, program: Prog, compiled: src.compile(DataRegion::io_page().low) = Some(program),
+    fits: Layout(DataRegion::io_page().low, src.buffers).size() <= DataRegion::io_page().size,
+    short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
+    header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io())>,
+    entry: s.rip = io_entry(), loaded: s.memory = X86Memory::io_load(header ++ assemble(no_fills(), program, Nil))):
+    SimProgram(X86Profile::io().linux(), src.denote(), s) {
+    let r = DataRegion::io_page();
+    let bytes = assemble(no_fills(), program, Nil);
+    let start: (io_entry() = next_rip(io_entry(), 0)) = BitVec::eq_of_eq_bit(64, io_entry(), next_rip(io_entry(), 0), refl);
+    let resident = j(start, λ y _ => CodeResident(X86Profile::io().fetch(), X86Memory::io_load(header ++ bytes), bytes, y),
+        X86Memory::io_load_entry(header, bytes, long, short));
+    let at_s = j(sym(loaded), λ m _ => r.profile.linux().site(program, io_entry()).Resident(m), resident);
+    let zero = j(sym(loaded), λ m _ => r.Holds(λ _ => zero_byte(), m), X86Memory::io_load_page(header ++ bytes));
+    native_compile_correct(src, r, fits, program, compiled, io_entry(), s, trans(entry, start), at_s, zero)
+}
+
+// The same, of the file `write-elf` writes: the I/O profile's ELF of the
+// program's bytes, whose header is 232 bytes whatever their length.
+theorem Source::elf_file_simulates(self src: Source, program: Prog, compiled: src.compile(DataRegion::io_page().low) = Some(program),
+    fits: Layout(DataRegion::io_page().low, src.buffers).size() <= DataRegion::io_page().size,
+    short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
+    s: MachineState<X86Memory(X86Profile::io())>,
+    entry: s.rip = io_entry(), loaded: s.memory = X86Memory::io_load(io_elf_file(assemble(no_fills(), program, Nil)))):
+    SimProgram(X86Profile::io().linux(), src.denote(), s) {
+    let size = 232 + assemble(no_fills(), program, Nil).len();
+    src.elf_simulates(program, compiled, fits, short, io_elf_header(BitVec::ofNat(size), BitVec::ofNat(size.shr(8))),
+        io_elf_header_length(BitVec::ofNat(size), BitVec::ofNat(size.shr(8))), s, entry, loaded)
+}
