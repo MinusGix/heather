@@ -769,6 +769,16 @@ impl<'a> RelationRewrite<'a> {
     /// A type written as text in `cx`: an evidence statement over the
     /// carrier and aliases.
     fn statement(&self, text: &str) -> R<(Type, Level)> {
+        if let Some(module) = ["relation_props", "algebra_rel"].into_iter().find(|m| !self.e.names.has_module(m)) {
+            return Err(ElabError::Elab {
+                msg: format!(
+                    "`rewrite` along a relation states its evidence with `relation_props` and \
+                     `algebra_rel`, and `{module}` is not in this run's import closure\n  \
+                     hint: import both modules"
+                ),
+                span: self.span,
+            });
+        }
         let source = format!("fn generated(x: {text}) -> Type {{ Type }}");
         let mut file = parse_file(&source).map_err(|e| ElabError::Elab { msg: e.msg, span: self.span })?;
         let Some(Item::Decl(d)) = file.items.pop() else { unreachable!("one declaration") };
