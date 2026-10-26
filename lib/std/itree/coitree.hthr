@@ -264,9 +264,9 @@ fn Bisim::of_obs<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: CoTree::obs(
     Bisim<R>(E, t, u)
 {
     match h: CoTree::obs(E, u) {
-        ORet(r) => BRet(r, trans(e, h), h),
-        OTau(s) => BTau(s, s, trans(e, h), h, Bisim::refl(E, s)),
-        OVis(c, k) => BVis(c, k, k, trans(e, h), h, λ a => Bisim::refl(E, k(a))),
+        ORet(r) => BRet(r, prelude::trans(e, h), h),
+        OTau(s) => BTau(s, s, prelude::trans(e, h), h, Bisim::refl(E, s)),
+        OVis(c, k) => BVis(c, k, k, prelude::trans(e, h), h, λ a => Bisim::refl(E, k(a))),
     }
 }
 
@@ -355,9 +355,9 @@ fn Bisim::step<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Bisim<R>(E, u,
     Obs::BisimTo(E, CoTree::obs(E, u), v)
 {
     match b {
-        BRet(_, hu, hv) => j(sym(hu), λ y q => Obs::BisimTo(E, y, v), hv),
-        BTau(_, v2, hu, hv, n) => j(sym(hu), λ y q => Obs::BisimTo(E, y, v), TauTo(v2, hv, n)),
-        BVis(_, _, k2, hu, hv, n) => j(sym(hu), λ y q => Obs::BisimTo(E, y, v), VisTo(k2, hv, n)),
+        BRet(_, hu, hv) => j(prelude::sym(hu), λ y q => Obs::BisimTo(E, y, v), hv),
+        BTau(_, v2, hu, hv, n) => j(prelude::sym(hu), λ y q => Obs::BisimTo(E, y, v), TauTo(v2, hv, n)),
+        BVis(_, _, k2, hu, hv, n) => j(prelude::sym(hu), λ y q => Obs::BisimTo(E, y, v), VisTo(k2, hv, n)),
     }
 }
 
@@ -387,15 +387,15 @@ theorem Bisim::approx<R>(E: Events, n: Nat, t: CoTree<R>(E), u: CoTree<R>(E), b:
         Zero => refl,
         Succ(m) => match b {
             BRet(r, ht, hu) =>
-                j(sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
-                    j(sym(hu), λ y q => ITree::Same(E, Ret(r), CoTree::approx_obs(E, Succ(m), y)), refl)),
+                j(prelude::sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
+                    j(prelude::sym(hu), λ y q => ITree::Same(E, Ret(r), CoTree::approx_obs(E, Succ(m), y)), refl)),
             BTau(t2, u2, ht, hu, nx) =>
-                j(sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
-                    j(sym(hu), λ y q => ITree::Same(E, Tau(CoTree::approx(E, m, t2)), CoTree::approx_obs(E, Succ(m), y)),
+                j(prelude::sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
+                    j(prelude::sym(hu), λ y q => ITree::Same(E, Tau(CoTree::approx(E, m, t2)), CoTree::approx_obs(E, Succ(m), y)),
                         SameTau(CoTree::approx(E, m, u2), refl, Bisim::approx(E, m, t2, u2, nx)))),
             BVis(c, k1, k2, ht, hu, nx) =>
-                j(sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
-                    j(sym(hu), λ y q => ITree::Same(E, Vis(c, λ a => CoTree::approx(E, m, k1(a))),
+                j(prelude::sym(ht), λ y q => ITree::Same(E, CoTree::approx_obs(E, Succ(m), y), CoTree::approx(E, Succ(m), u)),
+                    j(prelude::sym(hu), λ y q => ITree::Same(E, Vis(c, λ a => CoTree::approx(E, m, k1(a))),
                             CoTree::approx_obs(E, Succ(m), y)),
                         SameVis(λ a => CoTree::approx(E, m, k2(a)), refl, λ a => Bisim::approx(E, m, k1(a), k2(a), nx(a))))),
         },

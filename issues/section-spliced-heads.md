@@ -1,6 +1,6 @@
 ---
 title: Sections whose head is spliced into every member
-status: open
+status: closed
 labels: [frontend,syntax,ergonomics]
 area: language
 created: 2026-10-26
@@ -44,3 +44,19 @@ it splices rather than using Lean's mention rule: docs/sections-design.md §4–
 - **[[requires-placement-syntax]]** owns `given`, bundles and the constraint
   clause. Assumed here: only that a section's `<…>` list is the declaration
   grammar it already decided (`<A: Monoid>`, `+`).
+
+## Log
+
+- 2026-10-26: Built (PR #191, 2026-10-26). `section<…>(…) { fn … theorem … section … }` is a
+  parser splice (`section_items`, `splice_sections` in
+  `crates/syntax/src/parser.rs`): type parameters section-then-member; values as
+  section solver params, member solver params, section written params, member
+  written params; nesting concatenates outermost first. Refused: a generic or
+  `{}` binder the member's head does not determine (token scan of explicit
+  parameter types and the result, closed through determined implicits' types),
+  a member binder rebinding a section name, two `self`s, an empty head, and any
+  item but `fn`/`theorem`/`section`. Tests `crates/elab/tests/sections.rs`
+  (refl twins at an open carrier and at `Nat`), parser unit test, tree-sitter
+  `section_declaration` with a corpus case, book chapter. CLI prints identical
+  errors once with a count. `ordered_field.hthr` migrated into five sections
+  with `scripts/timings --diff` count columns identical.

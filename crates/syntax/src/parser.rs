@@ -2,8 +2,9 @@
 //!
 //! ```text
 //! file    := item*
-//! item    := decl | inductive | record | class | instance | assuming
+//! item    := decl | inductive | record | class | instance | assuming | section
 //! assuming := "assuming" requirement ("," requirement)* "{" item* "}"
+//! section := "section" typarams? requires? params? "{" (fn | theorem | section)* "}"
 //! requirement := (name ":")? type
 //! decl    := "fn" name tyvars? "(" params? ")" "->" type block
 //!          | "theorem" name tyvars? "(" params? ")" ":" type block
@@ -150,6 +151,8 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
         Parser {
             toks,
             pos: 0,
+            sections: Vec::new(),
+            section_typarams: Vec::new(),
             no_record_lit: false,
             no_eq: false,
             no_iff: false,
@@ -180,12 +183,24 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             items.push(item);
         }
     }
-    Ok(File { items })
+    Ok(File { items, section_typarams: p.section_typarams })
+}
+
+/// One `section`'s head, split as [`Parser::splice_sections`] splices it.
+struct SectionHead {
+    tyvars: Vec<TyParam>,
+    solver: Vec<Param>,
+    written: Vec<Param>,
 }
 
 struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    /// The heads of the `section`s enclosing the current position, outermost
+    /// first ([`Parser::section_items`]).
+    sections: Vec<SectionHead>,
+    /// [`File::section_typarams`], as each section head is parsed.
+    section_typarams: Vec<(Span, Span, Span)>,
     /// The evidence rules a record's `Pos<A>` fields declare, emitted as the
     /// items after the record ([`Parser::record`]).
     record_facts: Vec<Decl>,
@@ -756,6 +771,8 @@ impl Parser {
     fn items(&mut self) -> R<Vec<Item>> {
         if self.at_kw("assuming") {
             self.assuming_items()
+        } else if self.at_kw("section") {
+            self.section_items()
         } else {
             match self.item()? {
                 Item::Decl(mut d) => {
@@ -889,6 +906,226 @@ impl Parser {
             body,
             span,
         }))
+    }
+
+    /// `section<A: C>(x: A, …) { fn … theorem … }` — a head written once for
+    /// a run of declarations (docs/sections-design.md §5). Surface-only, like
+    /// `assuming`: the head is pushed for the group's extent and
+    /// [`Parser::splice_sections`] prepends it to each member's own head as
+    /// the member is read, so the elaborator sees ordinary declarations.
+    fn section_items(&mut self) -> R<Vec<Item>> {
+        let start = self.bump().span; // `section`
+        let (tyvars, constraints) = self.typaram_list()?;
+        let mut solver = constraints;
+        solver.extend(self.requires_list()?);
+        let written =
+            if matches!(self.peek(), TokKind::LParen) { self.param_list(Vec::new())? } else { Vec::new() };
+        let head = start.join(self.toks[self.pos.saturating_sub(1)].span);
+        if tyvars.is_empty() && solver.is_empty() && written.is_empty() {
+            return Err(ParseError {
+                msg: "a section's head is what it writes once for its members: give it \
+                      type parameters `section<A> { … }`, parameters `section(x: A) { … }`, \
+                      or both (docs/sections-design.md §5.1)"
+                    .into(),
+                span: head,
+            });
+        }
+        if let Some(p) = written.iter().find(|p| p.is_self)
+            && let Some(outer) = self.sections.iter().flat_map(|s| &s.written).find(|q| q.is_self)
+        {
+            return Err(ParseError {
+                msg: format!(
+                    "a declaration has at most one `self`, and the enclosing section's `{}` \
+                     is already it",
+                    outer.name
+                ),
+                span: p.span,
+            });
+        }
+        self.check_section_names(
+            tyvars.iter().map(|t| (t.name.as_str(), t.span)).chain(
+                solver.iter().chain(&written).map(|p| (p.name.as_str(), p.span)),
+            ),
+            "an enclosing section",
+        )?;
+        if let (Some(first), Some(last)) = (tyvars.first(), tyvars.last()) {
+            self.section_typarams.push((head, first.span, last.span));
+        }
+        self.sections.push(SectionHead { tyvars, solver, written });
+        self.expect(&TokKind::LBrace, "`{` to open the section's declarations")?;
+        let mut items = Vec::new();
+        while !matches!(self.peek(), TokKind::RBrace) {
+            if self.at_eof() {
+                return Err(ParseError {
+                    msg: "expected `}` to close the section".into(),
+                    span: start.join(self.peek_span()),
+                });
+            }
+            for item in self.items()? {
+                let refuse = |what: &str, span: Span| {
+                    Err(ParseError {
+                        msg: format!(
+                            "{what} cannot be in a section: a section's head is spliced into \
+                             the head of each `fn` and `theorem` in it, and nothing else has \
+                             a head to splice into (docs/sections-design.md §5.2)"
+                        ),
+                        span,
+                    })
+                };
+                match &item {
+                    Item::Decl(d) if d.is_meta => return refuse("a `meta fn`", d.span),
+                    Item::Decl(d) if d.kind == DeclKind::Axiom => return refuse("an `axiom`", d.span),
+                    Item::Decl(_) => {}
+                    Item::Import(i) => return refuse("an `import`", i.span),
+                    Item::Inductive(i) => return refuse("an `inductive` or `record`", i.span),
+                    Item::Class(c) => return refuse("a `class`", c.span),
+                    Item::Instance(i) => return refuse("an `instance`", i.span),
+                    Item::Designation(d) => return refuse("a `designation`", d.span),
+                    Item::Datarepr(d) => return refuse("a `datarepr`", d.span),
+                    Item::Impl(i) => return refuse("an `impl`", i.span),
+                }
+                items.push(item);
+            }
+        }
+        self.bump(); // `}`
+        self.sections.pop();
+        Ok(items)
+    }
+
+    /// Refuse a binder that rebinds a name an enclosing section's head binds.
+    /// A repeated value parameter otherwise shadows the earlier one silently,
+    /// which inside a section would hide the head's binder from the member.
+    fn check_section_names<'a>(
+        &self,
+        names: impl Iterator<Item = (&'a str, Span)>,
+        whose: &str,
+    ) -> R<()> {
+        for (name, span) in names {
+            if name.starts_with('#') {
+                continue;
+            }
+            let bound = self.sections.iter().any(|s| {
+                s.tyvars.iter().any(|t| t.name == name)
+                    || s.solver.iter().chain(&s.written).any(|p| p.name == name)
+            });
+            if bound {
+                return Err(ParseError {
+                    msg: format!(
+                        "`{name}` is already bound by {whose}'s head: a section's binders \
+                         are every member's, so a member cannot rebind one (move the \
+                         declaration out of the section, or rename)"
+                    ),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Prepend the enclosing sections' heads to a declaration's own
+    /// (docs/sections-design.md §5.2), outermost first: type parameters before
+    /// the member's, solver parameters before its solver parameters (the first
+    /// `leading` of `params`), written parameters before its written ones. The
+    /// result is the head the member would have if written out by hand.
+    ///
+    /// A section type parameter or `{}` implicit that nothing in the spliced
+    /// head determines is refused: no call could infer it. "Determines" is
+    /// read off the tokens of the head: a name written in an explicit
+    /// parameter's type or the result type, or in the type of a binder so
+    /// determined. That over-approximates (a name bound inside a type also
+    /// counts), so the check can miss a case, which then fails at the call as
+    /// it would without a section; it never refuses a member that could be
+    /// called.
+    fn splice_sections(
+        &self,
+        member: &str,
+        member_span: Span,
+        tyvars: Vec<TyParam>,
+        params: Vec<Param>,
+        leading: usize,
+        result: &Ty,
+    ) -> R<(Vec<TyParam>, Vec<Param>)> {
+        if self.sections.is_empty() {
+            return Ok((tyvars, params));
+        }
+        self.check_section_names(
+            tyvars.iter().map(|t| (t.name.as_str(), t.span)).chain(params.iter().map(|p| (p.name.as_str(), p.span))),
+            "the enclosing section",
+        )?;
+        if let Some(p) = params.iter().find(|p| p.is_self)
+            && let Some(outer) = self.sections.iter().flat_map(|s| &s.written).find(|q| q.is_self)
+        {
+            return Err(ParseError {
+                msg: format!(
+                    "a declaration has at most one `self`, and the enclosing section's `{}` \
+                     is already it",
+                    outer.name
+                ),
+                span: p.span,
+            });
+        }
+        let mut all_tyvars: Vec<TyParam> = self.sections.iter().flat_map(|s| s.tyvars.clone()).collect();
+        all_tyvars.extend(tyvars);
+        let mut own = params;
+        let own_written = own.split_off(leading.min(own.len()));
+        let mut all: Vec<Param> = self.sections.iter().flat_map(|s| s.solver.clone()).collect();
+        all.extend(own);
+        all.extend(self.sections.iter().flat_map(|s| s.written.clone()));
+        all.extend(own_written);
+
+        let mut determined = std::collections::HashSet::new();
+        self.idents_in(result.span, &mut determined);
+        for p in all.iter().filter(|p| !p.implicit) {
+            self.idents_in(p.ty.span, &mut determined);
+        }
+        let unification = |p: &Param| p.implicit && p.solver.is_none() && p.default.is_none();
+        loop {
+            let before = determined.len();
+            let reached: Vec<Span> = all
+                .iter()
+                .filter(|p| unification(p) && determined.contains(&p.name))
+                .map(|p| p.ty.span)
+                .collect();
+            for span in reached {
+                self.idents_in(span, &mut determined);
+            }
+            if determined.len() == before {
+                break;
+            }
+        }
+        let section_binder = |name: &str| {
+            self.sections.iter().any(|s| {
+                s.tyvars.iter().any(|t| t.name == name) || s.written.iter().any(|p| p.name == name && unification(p))
+            })
+        };
+        let undetermined = all_tyvars
+            .iter()
+            .map(|t| t.name.as_str())
+            .chain(all.iter().filter(|p| unification(p)).map(|p| p.name.as_str()))
+            .find(|n| section_binder(n) && !determined.contains(*n));
+        if let Some(n) = undetermined {
+            return Err(ParseError {
+                msg: format!(
+                    "`{member}` does not determine the section's `{n}`: nothing in its head \
+                     mentions it, so no call could infer it. Move `{member}` out of the \
+                     section, or mention `{n}` in its parameters or result \
+                     (docs/sections-design.md §4.1)"
+                ),
+                span: member_span,
+            });
+        }
+        Ok((all_tyvars, all))
+    }
+
+    /// Every identifier token inside `span` (the tokens are sorted by
+    /// position, so this is a binary search and a slice).
+    fn idents_in(&self, span: Span, out: &mut std::collections::HashSet<String>) {
+        let first = self.toks.partition_point(|t| t.span.start < span.start);
+        for t in self.toks[first..].iter().take_while(|t| t.span.end <= span.end) {
+            if let TokKind::Ident(n) = &t.kind {
+                out.insert(n.clone());
+            }
+        }
     }
 
     fn assuming_items(&mut self) -> R<Vec<Item>> {
@@ -1033,17 +1270,19 @@ impl Parser {
         if self.at_kw("impl") {
             return Ok(Item::Impl(self.impl_decl()?));
         }
-        // Section variables and constraint bundles are the two ways round 2
-        // sketched of writing a constraint ONCE for many declarations. Neither
-        // is decided (issues/requires-placement-syntax.md, log 2026-08-07), and
-        // both are words a reader who met `<A: Monoid>` will reach for, so they
-        // are refused by name rather than by "expected `fn`".
-        if self.at_kw("section") || self.at_kw("given") || self.at_kw("context") {
+        // `given` section variables and `context` constraint bundles are the
+        // two other ways round 2 sketched of writing a constraint ONCE for many
+        // declarations. Neither is decided (issues/requires-placement-syntax.md;
+        // `section` heads are docs/sections-design.md), and both are words a
+        // reader who met `<A: Monoid>` will reach for, so they are refused by
+        // name rather than by "expected `fn`".
+        if self.at_kw("given") || self.at_kw("context") {
             let TokKind::Ident(w) = self.peek() else { unreachable!() };
             let w = w.clone();
             return self.err(&format!(
                 "`{w}` is not implemented: a constraint is written on the declaration \
-                 that needs it, inline as `<A: Monoid>` or as a `requires` binder. \
+                 that needs it, inline as `<A: Monoid>` or as a `requires` binder, or \
+                 once for a run of declarations in a `section<A: Monoid> {{ … }}` head. \
                  Section variables and named bundles are open design \
                  (issues/requires-placement-syntax.md)"
             ));
@@ -2080,75 +2319,11 @@ impl Parser {
         Ok(FieldDecl { name, ty, default, span })
     }
 
-    fn decl(&mut self) -> R<Decl> {
-        let propagation_start = self.propagation_count;
-        let start = self.peek_span();
-        // `meta fn` — a layer-m declaration (docs/in-language-map-design.md
-        // §3). Only `fn`: a theorem is an opaque Ψ-global, and meta
-        // definitions never reach Ψ, so `meta theorem` has no meaning.
-        let is_meta = self.eat_kw("meta");
-        // `evidence theorem` — contextual, like every keyword here: only the
-        // word directly before `theorem` is the modifier, so a field or
-        // binder named `evidence` elsewhere is untouched.
-        let is_evidence = !is_meta
-            && self.at_kw("evidence")
-            && matches!(self.nth(1), TokKind::Ident(s) if s == "theorem");
-        if is_evidence {
-            self.bump();
-        } else if self.at_kw("evidence")
-            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn" || s == "axiom" || s == "meta")
-        {
-            return self.err(
-                "`evidence` marks a `theorem`: a rule is a proof `:= infer` applies \
-                 (docs/positivity-evidence-design.md §6 A)",
-            );
-        }
-        let kind = if self.eat_kw("fn") {
-            DeclKind::Fn
-        } else if !is_meta && self.eat_kw("theorem") {
-            DeclKind::Theorem
-        } else if !is_meta && self.eat_kw("axiom") {
-            DeclKind::Axiom
-        } else if is_meta {
-            return self.err("`meta` marks a `fn`: write `meta fn name(…)`");
-        } else {
-            return self.err("expected `fn`, `theorem`, `axiom`, or `inductive`");
-        };
-        // A declaration head is the one *binding* position where a qualified
-        // name is legal: `fn List::nth(…)` attaches the declaration to a
-        // type's namespace (issues/type-owned-members-receiver-slice.md).
-        // Whether the qualifier really names a type is the elaborator's to
-        // check — the parser has no name tables — so all that happens here is
-        // that the `::` is let through, with the arity of the path fixed at
-        // one segment of qualifier.
-        let (name, name_span) = self.qual_ident("declaration name")?;
-        if name.matches("::").count() > 1 {
-            return Err(ParseError {
-                msg: format!(
-                    "`{name}` has more than one qualifier: a member is attached to \
-                     exactly one type, `Type::member`"
-                ),
-                span: name_span,
-            });
-        }
-        // `fn map<A, B>(…)` — type parameters (docs/surface-polymorphism.md
-        // §1). Unambiguous here: a declaration's name is always followed by
-        // `(` or `<`, and neither is an expression continuation. `<A: Type<1>>`
-        // annotates the universe the parameter ranges over
-        // (docs/surface-universe.md §2); `<A: Monoid>` constrains what it
-        // carries — one production, shared with the `instance` head.
-        let (tyvars, constraints) = self.typaram_list()?;
-        // `fn sum<A> requires m: Monoid<A> (xs: List<A>) -> A` — solver
-        // parameters, the class spelling (docs/traits-layer2-design.md §1).
-        // They are moved to the front of the parameter list, because they are
-        // what the later parameters' types mention; the same production the
-        // `instance` head uses, and the same desugaring. Inline constraints are
-        // those same parameters, and lead: `<A: Monoid> requires c: Cmp<A>`
-        // binds the monoid first.
-        let mut requires = constraints;
-        requires.extend(self.requires_list()?);
+    /// `(x: A, {n: Nat}, self s: S, h: P := infer, …)` — a declaration's
+    /// value-parameter list, appended to `params` (its solver parameters, which
+    /// lead). A section head reads the same list (docs/sections-design.md §5).
+    fn param_list(&mut self, mut params: Vec<Param>) -> R<Vec<Param>> {
         self.expect(&TokKind::LParen, "`(`")?;
-        let mut params = requires;
         while !matches!(self.peek(), TokKind::RParen) {
             // `{name: T}` marks an implicit parameter (filled by unification);
             // `name: T` is explicit.
@@ -2328,6 +2503,78 @@ impl Parser {
             self.bump();
         }
         self.expect(&TokKind::RParen, "`)`")?;
+        Ok(params)
+    }
+
+    fn decl(&mut self) -> R<Decl> {
+        let propagation_start = self.propagation_count;
+        let start = self.peek_span();
+        // `meta fn` — a layer-m declaration (docs/in-language-map-design.md
+        // §3). Only `fn`: a theorem is an opaque Ψ-global, and meta
+        // definitions never reach Ψ, so `meta theorem` has no meaning.
+        let is_meta = self.eat_kw("meta");
+        // `evidence theorem` — contextual, like every keyword here: only the
+        // word directly before `theorem` is the modifier, so a field or
+        // binder named `evidence` elsewhere is untouched.
+        let is_evidence = !is_meta
+            && self.at_kw("evidence")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "theorem");
+        if is_evidence {
+            self.bump();
+        } else if self.at_kw("evidence")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn" || s == "axiom" || s == "meta")
+        {
+            return self.err(
+                "`evidence` marks a `theorem`: a rule is a proof `:= infer` applies \
+                 (docs/positivity-evidence-design.md §6 A)",
+            );
+        }
+        let kind = if self.eat_kw("fn") {
+            DeclKind::Fn
+        } else if !is_meta && self.eat_kw("theorem") {
+            DeclKind::Theorem
+        } else if !is_meta && self.eat_kw("axiom") {
+            DeclKind::Axiom
+        } else if is_meta {
+            return self.err("`meta` marks a `fn`: write `meta fn name(…)`");
+        } else {
+            return self.err("expected `fn`, `theorem`, `axiom`, or `inductive`");
+        };
+        // A declaration head is the one *binding* position where a qualified
+        // name is legal: `fn List::nth(…)` attaches the declaration to a
+        // type's namespace (issues/type-owned-members-receiver-slice.md).
+        // Whether the qualifier really names a type is the elaborator's to
+        // check — the parser has no name tables — so all that happens here is
+        // that the `::` is let through, with the arity of the path fixed at
+        // one segment of qualifier.
+        let (name, name_span) = self.qual_ident("declaration name")?;
+        if name.matches("::").count() > 1 {
+            return Err(ParseError {
+                msg: format!(
+                    "`{name}` has more than one qualifier: a member is attached to \
+                     exactly one type, `Type::member`"
+                ),
+                span: name_span,
+            });
+        }
+        // `fn map<A, B>(…)` — type parameters (docs/surface-polymorphism.md
+        // §1). Unambiguous here: a declaration's name is always followed by
+        // `(` or `<`, and neither is an expression continuation. `<A: Type<1>>`
+        // annotates the universe the parameter ranges over
+        // (docs/surface-universe.md §2); `<A: Monoid>` constrains what it
+        // carries — one production, shared with the `instance` head.
+        let (tyvars, constraints) = self.typaram_list()?;
+        // `fn sum<A> requires m: Monoid<A> (xs: List<A>) -> A` — solver
+        // parameters, the class spelling (docs/traits-layer2-design.md §1).
+        // They are moved to the front of the parameter list, because they are
+        // what the later parameters' types mention; the same production the
+        // `instance` head uses, and the same desugaring. Inline constraints are
+        // those same parameters, and lead: `<A: Monoid> requires c: Cmp<A>`
+        // binds the monoid first.
+        let mut requires = constraints;
+        requires.extend(self.requires_list()?);
+        let leading = requires.len();
+        let params = self.param_list(requires)?;
         // `for vec.map` — the elaboration slot this template fills
         // (docs/meta-def-registration-design.md §2.1). The parse point is
         // unambiguous: what follows a parameter list is `->` or `:`, never an
@@ -2414,6 +2661,7 @@ impl Parser {
             crate::try_lower::block(body, &mut self.next_hygienic)?
         } else { body };
         crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
+        let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
         Ok(Decl { kind, is_meta, is_evidence, elaborates, name, tyvars, params, result, decreases, body, span })
     }
@@ -7477,6 +7725,34 @@ mod tests {
         );
         assert!(instance.requires[..2].iter().all(|p| p.origin == ParamOrigin::Assuming));
         assert_eq!(instance.requires[2].origin, ParamOrigin::Written);
+    }
+
+    #[test]
+    fn a_section_head_splices_in_the_order_a_hand_written_head_has() {
+        // Type parameters, then solver parameters (the section's before the
+        // member's), then written parameters (likewise): exactly the head the
+        // member would have written out, `fn f<A: C, B: D>(x: A, y: B)`.
+        let f = parse_file(
+            "section<A: C>(x: A) { section(z: A) { fn f<B: D>(y: B) -> A { x } } }",
+        )
+        .unwrap();
+        let [Item::Decl(d)] = &f.items[..] else { panic!("expected one declaration") };
+        let tyvars: Vec<&str> = d.tyvars.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(tyvars, ["A", "B"]);
+        let origins: Vec<(bool, ParamOrigin)> =
+            d.params.iter().map(|p| (p.solver.is_some(), p.origin)).collect();
+        assert_eq!(
+            origins,
+            [
+                (true, ParamOrigin::InlineConstraint),
+                (true, ParamOrigin::InlineConstraint),
+                (false, ParamOrigin::Written),
+                (false, ParamOrigin::Written),
+                (false, ParamOrigin::Written),
+            ]
+        );
+        let written: Vec<&str> = d.params[2..].iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(written, ["x", "z", "y"]);
     }
 
     #[test]

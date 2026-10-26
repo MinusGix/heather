@@ -1,6 +1,6 @@
 ---
 title: Let a member name its owner's other members bare
-status: open
+status: closed
 labels: [frontend,elaboration,modules,ergonomics]
 area: language
 created: 2026-10-26
@@ -42,3 +42,20 @@ Keyed on the declaration's owner, not on any block, so it is independent of
 - **[[type-owned-namespaces]]** owns how subject namespaces are reached.
   Assumed here: only that a non-receiver reach inside the owner is in its
   direction (its 2026-09-18 log names the missing non-receiver reach).
+
+## Log
+
+- 2026-10-26: Built (PR #191, 2026-10-26), at ambiguity rank as proposed. `owner_member` /
+  `owner_rewrite` in `crates/elab/src/lib.rs` rewrite a bare variable or call
+  head inside a member of `T` to `T::x` when `T::x` is a declared member and no
+  binder, alias or the member's own name binds `x`; if `x` also resolves on its
+  own (module-local declarations included) it is an ambiguity naming both.
+  Instance-synthesized declarations have no owner. Mutual groups form by base
+  name, so bare calls between members are one group. Landing made 75 bare names
+  in 10 library files ambiguous (`Nat::cong`/`Int::cong` vs prelude `cong`,
+  `Bisim`/`Eutt` `sym`/`trans` vs equality's, `Node::mentions` vs lowering's
+  `mentions`, `Finite::NearestEven` vs the `Mode` constructor in defaults,
+  `Target::At` vs the `Prog` constructor); each now spells its old reading, so no term changed. Tests
+  `crates/elab/tests/owner_siblings.rs`,
+  `mutual_recursion::members_calling_each_other_bare_are_one_group`. No sweep of
+  the 3,409 qualified references (docs/sections-design.md §9).

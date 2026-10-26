@@ -1,8 +1,10 @@
 # Sections: writing a declaration's context once
 
-Status: assessment and proposal (2026-10-26). Nothing here is built. Tracking
-issues: `issues/section-spliced-heads.md` (the proposal),
-`issues/owner-sibling-names.md` (the separate resolution change in §6).
+Status: built (2026-10-26). Minus took the recommendations of §8 as written:
+the head form, owners on heads, unindented members, and sibling names at
+ambiguity rank. §5 and §6 now describe what the parser and elaborator do;
+§9 records what landing them found. Closed issues:
+`issues/section-spliced-heads.md` (§5), `issues/owner-sibling-names.md` (§6).
 
 The question: should Heather have sections, or some other way to organise
 code, so that a group of declarations stops repeating its context? It is
@@ -105,9 +107,17 @@ these and does not replace any of them.
   and facades re-export names (`docs/modules-design.md`,
   `docs/lib-layout-design.md`).
 
-The parser refuses `section`, `given` and `context` by name and points to the
-open item in `issues/requires-placement-syntax.md`
-(`crates/syntax/src/parser.rs`, the item loop). That issue's round 2
+- **`assuming` groups.** `assuming h: P, … { items }` already splices a
+  requirement telescope into every item of a block, in the parser
+  (`assuming_items` in `crates/syntax/src/parser.rs`). It is the precedent a
+  section follows: a surface-only group whose members are ordinary
+  declarations once parsed. A section generalises the head it carries from
+  requirements to the whole `<…>(…)` head.
+
+Before this round the parser refused `section`, `given` and `context` by name
+and pointed to the open item in `issues/requires-placement-syntax.md`
+(`crates/syntax/src/parser.rs`, the item loop). It now refuses only `given`
+and `context`. That issue's round 2
 recommended `section { given A: Monoid; … }` with a syntactic inclusion rule.
 §4 explains why this document recommends splicing instead.
 
@@ -302,17 +312,20 @@ The desugaring runs in the parser, so everything after it sees ordinary
   members are **not indented**, as in a C++ namespace or a Lean section. Moving
   an existing run into a section is then a diff of its heads alone, and `git
   diff -w` shows nothing else.
+- **The LSP outline** lists members flat, as the declarations they are; a
+  section is not a symbol of its own.
 
 What has to change beyond the parser, so the round is not surprised:
 
 - **Spans.** A spliced binder keeps its span in the section head. A type error
   in a section binder then shows up in every member, so the CLI reports
-  identical (span, message) pairs once, with a count of members.
+  identical rendered errors once, with "reported k times at this span, once
+  per declaration elaborating it" (`crates/cli/src/main.rs`).
 - **Display.** Any diagnostic that prints a member's signature prints the
   spliced one, because that is what the elaborator holds.
-- **Tooling.** `tree-sitter-heather/grammar.js` and the Zed extension need
-  the block, and the LSP's document outline should list members under it.
-  `book/` gets a short section.
+- **Tooling.** `tree-sitter-heather/grammar.js` has `section_declaration`
+  (with a corpus case and the keyword in both highlight queries), and
+  `book/src/language/declarations.md` has a Sections chapter.
 - **The refusal.** `section` stops being refused. `given` and `context` stay
   refused by name, since those decisions belong to
   `issues/requires-placement-syntax.md`.
@@ -364,6 +377,28 @@ It is a separate issue because its risk is resolution-wide, unlike the
 parser-local section. It is the elimination half of
 `issues/type-owned-namespaces.md` reaching non-receiver positions.
 
+**As built** (`owner_member` and `owner_rewrite` in `crates/elab/src/lib.rs`;
+tests `crates/elab/tests/owner_siblings.rs` and
+`members_calling_each_other_bare_are_one_group` in
+`crates/elab/tests/mutual_recursion.rs`):
+
+- The owner is the declaration's name up to its last `::`: a type, a class or
+  a function (`ten::value` names `ten`'s members bare). A declaration an
+  `instance` synthesizes has no owner; its own members already see each other
+  through the instance scope.
+- A bare variable or call head `x` in the member's statement, body or
+  parameter defaults is first what it always was if a binder (parameter, λ,
+  `let`, match arm), an alias or the member's own name binds it. Otherwise,
+  if `T::x` is a declared member, `x` means it, unless `x` also resolves on
+  its own, in which case it is an ambiguity naming both readings and the
+  spelling for each. "On its own" includes the module's own top-level
+  declarations: a local `get` and a sibling `Box::get` are ambiguous, not
+  ranked.
+- Only a declared member counts. A constructor `T::C` is reached bare as a
+  constructor, never as a sibling, and patterns are never rewritten.
+- Mutual groups are found by base name, so members that call each other bare
+  form the same group their qualified spellings do.
+
 ## 7. Not recommended now, and when to look again
 
 - **Lean-style `variable` with a mention rule.** §4.1. Look again if, after
@@ -394,7 +429,7 @@ parser-local section. It is the elimination half of
   interpretation pair (`issues/type-owned-namespaces.md`, "Where typeclasses
   sit").
 
-## 8. Decisions for Minus
+## 8. Decisions (taken 2026-10-26: all as recommended)
 
 1. **Splice (§4.1) rather than the mention rule round 2 recommended.**
    Recommended: splice, because it needs no rule to read and it is a parser
@@ -408,3 +443,31 @@ parser-local section. It is the elimination half of
 4. **Owner-scoped sibling names (§6) at ambiguity rank.** Recommended: build
    it, separately from sections.
 5. **Unindented section bodies** as the house style (§5.3).
+
+## 9. What landing it found (2026-10-26)
+
+- **Sections changed no term.** `ordered_field.hthr` moved its three classes'
+  64 heads into five sections; `scripts/timings --diff` over the file shows
+  every count column identical, as §5.5 requires.
+- **Sibling names made 75 existing bare names ambiguous**, in ten files, and
+  nothing changed meaning silently, which is what ambiguity rank was for.
+  Every one was a member named after a general name its body also uses:
+  `Nat::cong` and `Int::cong` against the prelude's `cong` (24 sites, each the
+  one-argument prelude form), `Bisim::sym`/`trans` and
+  `Eutt::sym`/`trans` against equality's (30), `Node::mentions` against
+  FunctionIR lowering's list `mentions` (6), `Finite::NearestEven` against
+  the rounding-mode constructor in six parameter defaults, and the native
+  compiler's `Target::At` against the `Prog` constructor `At` (9). Each site now
+  spells the reading it always had (`prelude::cong`, `prelude::sym`,
+  `function_ir_lower::mentions`, `Mode::NearestEven`, `Prog::At`), so no
+  term changed.
+  The `prelude::` spelling is new to the library; it is the cost of a type
+  naming a member after a prelude lemma, paid only inside that type's members.
+- **The formatter and the `<` census needed the section's list.** A
+  section's `<…>` belongs to no item once spliced, so `heather fmt` spaced it
+  as a comparison. The parser now records each section head's type-parameter
+  list (`File::section_typarams`), and `crates/syntax/src/roles.rs` derives
+  it from there rather than from the members.
+- **No sweep of the 3,409 qualified sibling references.** They still check,
+  and a file sheds them when it is next edited for its own reasons, as with
+  sections (§5.5).

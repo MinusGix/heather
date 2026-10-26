@@ -101,7 +101,7 @@ theorem Target::goes_weaken(self t: Target, at: Nat, tree: ITree<BitVec(64)>(Eve
 }
 
 theorem Target::goes_block(self t: Target, before: Prog, name: Nat, instructions: List<Instruction>,
-    within: At(before, name, Block(instructions)).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    within: Prog::At(before, name, Block(instructions)).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     post: MachineState<X86Memory(t.r.profile)> → Type, next: t.Goes(prog_len(before) + block_length(instructions), tree, post)):
     t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => post(execute_block_normal(instructions, s))) {
     t.io().goes_after(t.program, t.origin, prog_len(before), prog_len(before) + block_length(instructions), tree,
@@ -109,7 +109,7 @@ theorem Target::goes_block(self t: Target, before: Prog, name: Nat, instructions
         t.site().moves_exec(t.writes(), t.code_fits(), within.witness, before, name, instructions, within.proof, post), next)
 }
 
-theorem Target::goes_load(self t: Target, before: Prog, name: Nat, load: WordLoad, within: At(before, name, Load(load)).Within(t.program),
+theorem Target::goes_load(self t: Target, before: Prog, name: Nat, load: WordLoad, within: Prog::At(before, name, Load(load)).Within(t.program),
     tree: ITree<BitVec(64)>(Events::linux()), post: MachineState<X86Memory(t.r.profile)> → Type,
     next: t.Goes(prog_len(before) + word_load_bytes(load).len(), tree, post)):
     t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<BitVec(64)>(λ word =>
@@ -122,7 +122,7 @@ theorem Target::goes_load(self t: Target, before: Prog, name: Nat, load: WordLoa
         t.site().moves_load(t.writes(), t.code_fits(), within.witness, before, name, load, within.proof, pre, post, λ s held => held), next)
 }
 
-theorem Target::goes_store(self t: Target, before: Prog, name: Nat, store: WordStore, within: At(before, name, Store(store)).Within(t.program),
+theorem Target::goes_store(self t: Target, before: Prog, name: Nat, store: WordStore, within: Prog::At(before, name, Store(store)).Within(t.program),
     tree: ITree<BitVec(64)>(Events::linux()), post: MachineState<X86Memory(t.r.profile)> → Type,
     next: t.Goes(prog_len(before) + 3, tree, post)):
     t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(store.base) = True) ∧
@@ -135,7 +135,7 @@ theorem Target::goes_store(self t: Target, before: Prog, name: Nat, store: WordS
         t.site().moves_store(t.writes(), t.code_fits(), within.witness, before, name, store, within.proof, pre, post, λ s held => held), next)
 }
 
-theorem Target::goes_load_byte(self t: Target, before: Prog, name: Nat, load: ByteLoad, within: At(before, name, LoadByte(load)).Within(t.program),
+theorem Target::goes_load_byte(self t: Target, before: Prog, name: Nat, load: ByteLoad, within: Prog::At(before, name, LoadByte(load)).Within(t.program),
     tree: ITree<BitVec(64)>(Events::linux()), post: MachineState<X86Memory(t.r.profile)> → Type,
     next: t.Goes(prog_len(before) + byte_load_bytes(load).len(), tree, post)):
     t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<BitVec(8)>(λ byte =>
@@ -148,7 +148,7 @@ theorem Target::goes_load_byte(self t: Target, before: Prog, name: Nat, load: By
         t.site().moves_load_byte(t.writes(), t.code_fits(), within.witness, before, name, load, within.proof, pre, post, λ s held => held), next)
 }
 
-theorem Target::goes_store_byte(self t: Target, before: Prog, name: Nat, store: ByteStore, within: At(before, name, StoreByte(store)).Within(t.program),
+theorem Target::goes_store_byte(self t: Target, before: Prog, name: Nat, store: ByteStore, within: Prog::At(before, name, StoreByte(store)).Within(t.program),
     tree: ITree<BitVec(64)>(Events::linux()), post: MachineState<X86Memory(t.r.profile)> → Type,
     next: t.Goes(prog_len(before) + 3, tree, post)):
     t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(store.base) = True) ∧
@@ -298,7 +298,7 @@ theorem Bool::set_of_not(b, z: Bool, is: z = !b, clear: z = False): b = True {
 // it is clear.
 theorem Target::goes_tests(self t: Target, env: Env, p: Prog, condition: Nat, n: Nat, inside: condition < word_slots(),
     within: p.tests(t.layout(), condition, Succ(n)).Within(t.program),
-    else_k: Nat, else_before: Prog, else_item: Asm, else_at: asm_back(t.program, else_k) = At(else_before, Succ(n), else_item),
+    else_k: Nat, else_before: Prog, else_item: Asm, else_at: asm_back(t.program, else_k) = Prog::At(else_before, Succ(n), else_item),
     tree: ITree<BitVec(64)>(Events::linux()),
     yes: env.bit(condition) = True → t.At(prog_len(p.tests(t.layout(), condition, Succ(n))), tree, env),
     no: env.bit(condition) = False → t.At(prog_len(else_before), tree, env)):

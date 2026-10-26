@@ -33,6 +33,8 @@ mod let_and_blocks;
 mod have;
 #[path = "../operators.rs"]
 mod operators;
+#[path = "../sections.rs"]
+mod sections;
 #[path = "../sequent_binders.rs"]
 mod sequent_binders;
 #[path = "../quotation.rs"]

@@ -64,20 +64,20 @@ fn Mode::sum_zero_neg(self m: Mode, a, b: Bool) → Bool {
 // ---------------------------------------------------------------------------
 // Finite operands.
 
-fn Finite::add({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+fn Finite::add({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) {
     F.round_exact(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg))
 }
 
 // `a - b` is `a + (-b)`, as IEEE defines it, so `x - x` is `+0`.
-fn Finite::sub({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) { a.add(-b, mode := mode) }
+fn Finite::sub({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) { a.add(-b, mode := mode) }
 
-fn Finite::mul({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+fn Finite::mul({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) {
     F.round_exact(mode, a.dyadic() * b.dyadic(), a.neg.xor(b.neg))
 }
 
 // `a · b + c` with one rounding. An exact zero takes the sum's rule with the
 // product signed as a product.
-fn Finite::fma({F: Format}, self a, b, c: Finite(F), mode: Mode := NearestEven) → Float(F) {
+fn Finite::fma({F: Format}, self a, b, c: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) {
     F.round_exact(mode, a.dyadic() * b.dyadic() + c.dyadic(), mode.sum_zero_neg(a.neg.xor(b.neg), c.neg))
 }
 
@@ -87,7 +87,7 @@ fn Finite::quot({F: Format}, self a, b: Finite(F)) → Rat { a.val() * b.val().r
 
 // The quotient's magnitude in half-units with its sticky bit, and the
 // exclusive or of the signs.
-fn Finite::div({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+fn Finite::div({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) {
     F.round_signed(mode, a.neg.xor(b.neg), F.rat_h(a.quot(b)), F.rat_st(a.quot(b)))
 }
 
@@ -297,7 +297,7 @@ theorem Finite::mul_comm({F: Format}, a, b: Finite(F), mode: Mode): Float::Same(
 // Format conversion: the source's exact value rounded into the target. A
 // zero keeps its sign.
 
-fn Finite::convert({F: Format}, self f: Finite(F), G: Format, mode: Mode := NearestEven) → Float(G) { G.round_exact(mode, f.dyadic(), f.neg) }
+fn Finite::convert({F: Format}, self f: Finite(F), G: Format, mode: Mode := Mode::NearestEven) → Float(G) { G.round_exact(mode, f.dyadic(), f.neg) }
 
 theorem Finite::convert_correct({F: Format}, f: Finite(F), G: Format, mode: Mode): RoundsTo(G, mode, f.val(), f.convert(G, mode := mode)) {
     G.round_exact_correct(mode, f.dyadic(), f.neg)

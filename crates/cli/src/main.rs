@@ -505,20 +505,29 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             // Rendered against the module's own source and its own path: an
             // error in an imported file is that file's error.
             let shown = display_path(&m.path, path);
-            for (i, e) in errs.iter().enumerate() {
+            // One source span elaborated for several declarations reports its
+            // error once per declaration: a `section` head binder is spliced
+            // into every member (docs/sections-design.md §5.3), a class field's
+            // type into every projection. Identical renderings are shown once,
+            // with their count.
+            let mut distinct: Vec<(String, usize)> = Vec::new();
+            for e in &errs {
+                let text = e.render_snippet(&m.src, &shown);
+                match distinct.iter_mut().find(|(t, _)| *t == text) {
+                    Some((_, k)) => *k += 1,
+                    None => distinct.push((text, 1)),
+                }
+            }
+            for (i, (text, k)) in distinct.iter().enumerate() {
                 if i > 0 {
                     eprintln!();
                 }
-                eprint!(
-                    "{}",
-                    color::diagnostic(
-                        &e.render_snippet(&m.src, &shown),
-                        color::Severity::Error,
-                        stderr_color,
-                    )
-                );
+                eprint!("{}", color::diagnostic(text, color::Severity::Error, stderr_color));
+                if *k > 1 {
+                    eprintln!("  = this error was reported {k} times at this span, once per declaration elaborating it");
+                }
             }
-            let n = errs.len();
+            let n = distinct.len();
             let count = format!("{n} error{}", if n == 1 { "" } else { "s" });
             eprintln!("\n{shown}: {}", color::error_count(&count, stderr_color));
             if let Some(n) = hint {

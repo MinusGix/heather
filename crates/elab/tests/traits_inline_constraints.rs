@@ -349,11 +349,15 @@ fn flatten<A>(x: Box<Box<A>>) -> Box<A> given Box<A>: Mag {{ x.v }}
 
 #[test]
 fn section_variables_and_bundles_are_refused_by_name() {
-    for w in ["section", "given", "context"] {
+    for w in ["given", "context"] {
         let e = bad(&format!("{w} A: Mag;\n"));
         assert!(e.contains("not implemented"), "{w}: {e}");
         assert!(e.contains("requires"), "{w}: {e}");
     }
+    // Round 2's `section` variable is now a section head
+    // (docs/sections-design.md): the old spelling is pointed at the head form.
+    let e = bad("section A: Mag;\n");
+    assert!(e.contains("`section<A> { … }`"), "{e}");
 }
 
 // -- 5: the instance head ---------------------------------------------------
