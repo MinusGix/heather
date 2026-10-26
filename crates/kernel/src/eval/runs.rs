@@ -36,19 +36,39 @@ use super::{Eval, Frame, Res, Work};
 
 impl<'a, 'v> Eval<'a, 'v> {
     /// The fold of `e` (a `Nat` eliminator) over `head = Succ^program(tail)`
-    /// by its step's class; `None` takes the ordinary step.
+    /// by its step's class, or the ordinary step when the class has no
+    /// shortcut.
+    #[inline(never)]
     pub(super) fn fold_run(
         &mut self,
         head: &Rc<Val<'v>>,
         program: &Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
-    ) -> Res<Option<Work<'v>>> {
+    ) -> Res<Work<'v>> {
         let Elim::ElimNat { step, .. } = e else {
             unreachable!("fold_run is given a Nat eliminator")
         };
         let class = self.classify_step(step)?;
-        match &*class {
+        self.fold_by_class(head, program, tail, e, &class)
+    }
+
+    /// [`Eval::fold_run`] once the step is classified: kept apart so the
+    /// classification, which re-enters the machine, stands on a small frame
+    /// (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn fold_by_class(
+        &mut self,
+        head: &Rc<Val<'v>>,
+        program: &Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+        e: &Elim<'v>,
+        class: &FoldClass,
+    ) -> Res<Work<'v>> {
+        let Elim::ElimNat { step, .. } = e else {
+            unreachable!("fold_by_class is given a Nat eliminator")
+        };
+        let work = match class {
             // Not a `Nat` algebra — which is what every fold over a *width*
             // is, its step returning a function. The bit-transducer class
             // (`eval/transduce.rs`) is asked next, and `None` from it is the
@@ -63,9 +83,14 @@ impl<'a, 'v> Eval<'a, 'v> {
             FoldClass::Affine { tree, uniform } => {
                 self.fold_affine(head, program, tail, e, tree, *uniform)
             }
-        }
+        }?;
+        Ok(match work {
+            Some(work) => work,
+            None => self.nat_run_step(program, tail, step, e),
+        })
     }
 
+    #[inline(never)]
     fn fold_affine(
         &mut self,
         head: &Rc<Val<'v>>,

@@ -20,7 +20,7 @@
 //! Everything runs on a worker thread with a deliberately large stack
 //! (`WORKER_STACK`), so that a fixture's depth is bounded by the fixture and
 //! not by whatever `RUST_MIN_STACK` the ambient environment happens to
-//! carry. The one exception is `stack/check-numeral`, which measures stack on
+//! carry. The exceptions are the `stack/*` probes, which measure stack on
 //! purpose, in a child process of exactly known size.
 
 mod harness;
@@ -115,10 +115,10 @@ fn parse_args() -> Args {
 fn main() {
     // The internal probe mode: this process *is* the child (see stack.rs).
     let argv: Vec<String> = std::env::args().collect();
-    if argv.len() == 4 && argv[1] == "--stack-child" {
-        let bytes: usize = argv[2].parse().expect("stack bytes");
-        let levels: u64 = argv[3].parse().expect("levels");
-        std::process::exit(stack::child_main(bytes, levels));
+    if argv.len() == 5 && argv[1] == "--stack-child" {
+        let bytes: usize = argv[3].parse().expect("stack bytes");
+        let levels: u64 = argv[4].parse().expect("levels");
+        std::process::exit(stack::child_main(&argv[2], bytes, levels));
     }
 
     let args = parse_args();
@@ -139,7 +139,9 @@ fn run(args: Args) -> i32 {
         for (k, v) in describe_env() {
             println!("{k:>8}  {v}");
         }
-        print_probe(&stack::probe());
+        for p in &stack::probes() {
+            print_probe(p);
+        }
         return 0;
     }
 
@@ -181,16 +183,18 @@ fn run(args: Args) -> i32 {
         reports.push(r);
     }
 
-    let probe = if args.stack && args.filter.is_none() {
-        let p = stack::probe();
-        print_probe(&p);
-        Some(p)
+    let probes = if args.stack && args.filter.is_none() {
+        let ps = stack::probes();
+        for p in &ps {
+            print_probe(p);
+        }
+        ps
     } else {
-        None
+        Vec::new()
     };
 
     if args.save {
-        let text = Baseline::render(&env, &reports, probe.as_ref());
+        let text = Baseline::render(&env, &reports, &probes);
         std::fs::write(&args.baseline, text).expect("write baseline");
         println!("baseline written to {}", args.baseline);
         if args.filter.is_some() || args.quick {
@@ -202,12 +206,12 @@ fn run(args: Args) -> i32 {
     }
 
     if args.check {
-        return check(&args, &env, &reports, probe.as_ref());
+        return check(&args, &env, &reports, &probes);
     }
     0
 }
 
-fn check(args: &Args, env: &[(String, String)], reports: &[Report], probe: Option<&stack::Probe>) -> i32 {
+fn check(args: &Args, env: &[(String, String)], reports: &[Report], probes: &[stack::Probe]) -> i32 {
     let Ok(text) = std::fs::read_to_string(&args.baseline) else {
         eprintln!("no baseline at {} — record one with `scripts/bench --save`", args.baseline);
         return 2;
@@ -256,7 +260,7 @@ fn check(args: &Args, env: &[(String, String)], reports: &[Report], probe: Optio
         );
     }
 
-    let diffs = harness::compare(reports, probe, &base, &th);
+    let diffs = harness::compare(reports, probes, &base, &th);
     let mut regressed = 0;
     for d in &diffs {
         let tag = match d.verdict {
@@ -276,13 +280,13 @@ fn check(args: &Args, env: &[(String, String)], reports: &[Report], probe: Optio
         // to compare. A run that skipped its time (or stack) half says so in
         // its verdict and its exit code, so a green that checked half the
         // gate cannot be read — or scripted — as the full gate passing.
-        let full = th.compare_times && (probe.is_none() || th.compare_stack);
+        let full = th.compare_times && (probes.is_empty() || th.compare_stack);
         if full {
             println!("ok: {n} comparisons within thresholds");
             0
         } else {
             let skipped = if th.compare_times { 0 } else { reports.iter().map(|r| r.points.len()).sum::<usize>() }
-                + if probe.is_some() && !th.compare_stack { 1 } else { 0 };
+                + if th.compare_stack { 0 } else { probes.len() };
             println!(
                 "shape-only: {n} comparisons within thresholds — {skipped} \
                  skipped for a baseline env mismatch. Not a full pass; \
@@ -341,10 +345,11 @@ fn cmd(prog: &str, args: &[&str]) -> String {
 
 fn print_probe(p: &stack::Probe) {
     println!(
-        "\n{}  — deepest numeral that checks in {} MiB of stack\n  \
+        "\n{}  — {} in {} of stack\n  \
          {:>10} levels   {:>10} per level\n",
         p.name,
-        p.stack_bytes >> 20,
+        p.level,
+        fmt_bytes(p.stack_bytes as f64),
         p.max_levels,
         fmt_bytes(p.bytes_per_level()),
     );
@@ -353,7 +358,9 @@ fn print_probe(p: &stack::Probe) {
 fn fmt_bytes(b: f64) -> String {
     if b < 1024.0 {
         format!("{b:.0} B")
-    } else {
+    } else if b < (1 << 20) as f64 {
         format!("{:.1} KiB", b / 1024.0)
+    } else {
+        format!("{:.1} MiB", b / (1 << 20) as f64)
     }
 }
