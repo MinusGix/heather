@@ -67,6 +67,21 @@ macro_rules! counters {
             CELLS.with(|c| { $(c.$name.set(c.$name.get().wrapping_add(delta.$name));)* });
         }
 
+        /// Run `f` with none of its bumps reaching this thread's counters:
+        /// for the kernel's debug-only re-verification of a memo hit
+        /// (`typing.rs` §The typing memo), which judges again what the hit
+        /// skipped. Without it a debug build would count that work, and
+        /// which hits are sampled (a thread-local stride, `crate::checks`)
+        /// would move the counts. Still inert: the counters are restored,
+        /// never read by a judgment.
+        #[cfg(debug_assertions)]
+        pub(crate) fn unobserved<T>(f: impl FnOnce() -> T) -> T {
+            let saved = snapshot();
+            let out = f();
+            CELLS.with(|c| { $(c.$name.set(saved.$name);)* });
+            out
+        }
+
         impl Snapshot {
             /// The counters' column names, in the order [`Snapshot::values`]
             /// reports them.
@@ -137,6 +152,10 @@ counters! {
     /// (`subst.rs` §Keeping a shared DAG shared): one per second (or later)
     /// path into the same node at the same depths.
     subst_memo_hits,
+    /// Judgments the kernel checker answered from its typing memo
+    /// (`typing.rs` §The typing memo): one per second (or later) path into
+    /// the same node in the same scope, the node's whole subtree unvisited.
+    typing_memo_hits,
     /// Definition bodies rescoped by `Defs::body` — one per `GlobalCache`
     /// body fill, i.e. per (definition, gate call) pair that unfolded it.
     delta_body_rescopes,

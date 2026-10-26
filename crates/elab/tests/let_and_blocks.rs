@@ -473,8 +473,7 @@ fn an_unused_meta_let_value_still_faces_the_kernel() {
 
 /// A gate that admits everything, so a test's counters see elaboration
 /// alone. Test-only: the claim below is about the term the elaborator
-/// builds, and the kernel's own walk of a let chain is still one per path
-/// until `issues/kernel-typing-memo-on-node-identity.md` lands.
+/// builds; the kernel's own walk of it is the next test's.
 struct AdmitAll;
 
 impl heather_elab::gate::KernelGate for AdmitAll {
@@ -542,4 +541,83 @@ fn a_shared_let_chain_stays_shared_under_binders() {
         assert!(e16 < grows * e8, "{shape}: elaboration's shifts grew {e8} → {e16} for k = 8 → 16");
         assert!(s16 < 3 * s8, "{shape}: shifting the body grew {s8} → {s16} for k = 8 → 16");
     }
+}
+
+/// The gate's half (`issues/kernel-typing-memo-on-node-identity.md`): the
+/// kernel judges a shared let value once per scope, not once per path, so
+/// the chains above check in gate queries linear in `k` where they were
+/// 2^k. Four shapes: the plain chain (`fan`), the chain under one `λ`, a
+/// binder between every link, and the transparent shape whose proof `let`
+/// needs the chain's value (`refl : sₖ = mix(sₖ₋₁, sₖ₋₁)`). Then the
+/// issue's `dep`, a proof `let` at every link, which ran out of fuel at
+/// k = 16: it checks. It is not linear: each unused proof is checked around
+/// the rest of the block under a binder of its own
+/// (`docs/let-and-blocks-design.md` §11), so the chain reaches the gate once
+/// per depth as a separately shifted copy, each judged once.
+#[test]
+fn a_shared_let_chain_is_checked_once_per_link() {
+    use heather_kernel::stats as kstats;
+    const MIX: &str = "fn mix(x, y: Nat) -> Nat { x }\n";
+    fn links(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        body
+    }
+    fn fan(k: usize) -> String {
+        format!("{MIX}fn chain(a: Nat) -> Nat {{\n{}    s{k}\n}}\n", links(k))
+    }
+    fn under(k: usize) -> String {
+        format!("{MIX}fn chain(a: Nat) -> Nat → Nat {{\n{}    λ (y: Nat) => mix(s{k}, y)\n}}\n", links(k))
+    }
+    fn interleaved(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    λ (y{i}: Nat) => {{\n    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        body.push_str(&format!("    s{k}\n"));
+        body.push_str(&"    }\n".repeat(k));
+        let ty = vec!["Nat"; k + 1].join(" → ");
+        format!("{MIX}fn chain(a: Nat) -> {ty} {{\n{body}}}\n")
+    }
+    fn transparent(k: usize) -> String {
+        format!(
+            "{MIX}fn chain(a: Nat) -> Nat {{\n{}    let p: (s{k} = mix(s{j}, s{j})) = refl;\n    s{k}\n}}\n",
+            links(k),
+            j = k - 1
+        )
+    }
+    fn dep(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!(
+                "    let s{i} = mix(s{j}, s{j});\n    let p{i}: (s{i} = mix(s{j}, s{j})) = refl;\n",
+                j = i - 1
+            ));
+        }
+        format!("{MIX}fn chain(a: Nat) -> Nat {{\n{body}    s{k}\n}}\n")
+    }
+    /// The gate's conversion queries and memo hits for the whole source.
+    fn gate(src: &str) -> (u64, u64) {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        let before = kstats::snapshot();
+        e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+        let d = kstats::snapshot().since(&before);
+        (d.conv_shortcut_hits + d.conv_memo_hits + d.conv_misses, d.typing_memo_hits)
+    }
+    // Doubling k: a linear count doubles; a tree's is 65,536 times larger.
+    for (shape, src) in [
+        ("fan", fan as fn(usize) -> String),
+        ("under", under),
+        ("interleaved", interleaved),
+        ("transparent", transparent),
+    ] {
+        let (q16, hits) = gate(&src(16));
+        let (q32, _) = gate(&src(32));
+        assert!(hits >= 16, "{shape}: {hits} memo hits for 16 links");
+        assert!(q32 < 3 * q16, "{shape}: gate queries grew {q16} → {q32} for k = 16 → 32");
+    }
+    let (q, _) = gate(&dep(16));
+    assert!(q < 1 << 12, "dep at k = 16 took {q} gate queries");
 }
