@@ -219,7 +219,12 @@ fn gate_folders() -> Vec<PathBuf> {
 /// Every module under `lib/` checks, `lib/_tests` included: one `heather
 /// check` per folder ([`gate_folders`]), three side by side, through one semantic
 /// cache at width one as `scripts/test` runs every child. Folders share
-/// modules, and the store is the showcase gate's too
+/// modules, and every child loads them over one world (`--world lib`,
+/// `docs/library-world-design.md`): the library's shared modules in one order,
+/// up to the last its folder needs, so a shared module has one image key in
+/// every child. Without it each folder's own load order gave the same module
+/// a different prefix, and from a cold store every child rebuilt the part of
+/// `std` it needed. The store is the showcase gate's too
 /// ([`showcase::CLI_CHECK_IMAGES`]); its single-flight build makes the second
 /// asker wait for the first's image rather than elaborate it again. Warm, every
 /// module replays; a changed module or compiler re-elaborates what changed.
@@ -237,10 +242,13 @@ fn every_library_module_checks() {
     let stale = std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale");
     // Three at a time, as the suite runner runs targets: each child may
     // hold a library prefix in memory.
-    // In [`gate_folders`]' order, std first: a later folder that imports a
-    // std module then replays the image an earlier child built rather than
-    // elaborating it under its own rail.
-    let queue = std::sync::Mutex::new(std::collections::VecDeque::from(gate_folders()));
+    // In the order the world placed the folders' modules: a child then finds
+    // the shared modules before its own built by the children before it,
+    // rather than elaborating the world's front under its own rail.
+    let world = heather_cli::world::World::of(&root.join("lib"), &[root.join("lib/std"), root.join("lib")]).unwrap_or_else(|e| panic!("the library's world: {}", e.msg));
+    let mut folders = gate_folders();
+    folders.sort_by_key(|f| world.folders().iter().position(|w| w.starts_with(root.join(f))).unwrap_or(usize::MAX));
+    let queue = std::sync::Mutex::new(std::collections::VecDeque::from(folders));
     let failures = std::sync::Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..3 {
@@ -250,7 +258,7 @@ fn every_library_module_checks() {
                 cmd.current_dir(&root).arg("check");
                 cmd.env("HEATHER_KERNEL_WORKERS", "1");
                 cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
-                cmd.arg("--expectations");
+                cmd.arg("--expectations").arg("--world").arg("lib");
                 if stale {
                     cmd.arg("--accept-stale-images");
                 }

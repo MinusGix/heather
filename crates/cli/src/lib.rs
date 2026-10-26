@@ -25,3 +25,6 @@ pub mod semantic;
 // dirs", and a second implementation is what drifts
 // (issues/showcase-harness.md).
 pub mod showcase;
+// One prefix for every process that checks the library
+// (`docs/library-world-design.md`).
+pub mod world;
