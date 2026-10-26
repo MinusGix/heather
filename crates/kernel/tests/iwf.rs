@@ -31,8 +31,8 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{is_neutral_term, is_whnf_type, whnf_term};
 use heather_kernel::term::{
-    fin_first, fin_next, iwf_children_ty, CtxEntry, GlobalCtx, IWfSig, LocalCtx, LocalVar, Term,
-    Type,
+    dnth, fin_first, fin_next, iwf_children_ty, iwf_fam, CtxEntry, GlobalCtx, IWfSig, LocalCtx,
+    LocalVar, Term, Type,
 };
 use heather_kernel::typing::{self, check_term, check_type, infer_term, TypeError};
 
@@ -710,6 +710,51 @@ fn beta_with_a_motive_that_mentions_the_index() {
     let bad = elim(&tm_fam().sig().shift_local(2), c(0), pos_motive().shift_local_above(2, 2), bad_step.shift_local_above(2, 3), v(1), v(0));
     let bad_ty = sigma(Type::Nat, Type::Id { level: c(0), ty: rty(Type::Nat), lhs: rt(v(2)), rhs: rt(succ(v(0))) });
     not_ck(&gk, &bad, &bad_ty, c(0));
+}
+
+/// `size`'s step with the `App` arm `ih'(j)`, for `j : Fin 2` the last
+/// entry of Γ: the ih applied at whatever index `j` is.
+fn pick_step() -> Term {
+    let sig = tm_fam().sig();
+    let ih_ty = |arity: Term| pi(fin(arity), Type::Nat, c(0));
+    // In (Γ, a, cs, ih, z).
+    let motive = pi(ih_ty(sig.arity.inst_top(4, &v(0))), Type::Nat, c(0));
+    let lit_arm = lam(ih_ty(nat(0)), c(0), nat(1));
+    // In (Γ, a, cs, ih, p, ih'): `j` is five binders out.
+    let app_arm = lam(ih_ty(nat(2)), c(0), app(v(0), fin(nat(2)), Type::Nat, c(0), v(5)));
+    let convoy = case(c(0), unit0(), sigma(Type::Nat, Type::Nat), motive, lit_arm, app_arm, v(2));
+    app(convoy, ih_ty(sig.arity.inst_top(3, &v(2))), Type::Nat, c(0), v(0))
+}
+
+/// `Val::IWfIh` applied at a *neutral* index, where `dnth` stalls on the
+/// index and the recursive call is stuck on that: the λ's meaning again.
+#[test]
+fn the_ih_at_a_neutral_index_is_the_recursive_call_on_dnth() {
+    // Γ = (n m : Nat, f : Tm(n), a : Tm(m), j : Fin 2).
+    let g = ext(&open_app_ctx(), fin(nat(2)), c(0));
+    let sig = tm_fam().sig();
+    let pick = |index: Term, scrut: Term| elim(&sig, c(0), Type::Nat, pick_step(), index, scrut);
+    let t = tm_app(v(4), v(3), v(2), v(1));
+    let lhs = pick(succ(plus(v(4), v(3))), t);
+    let label = tm_app_label(v(4), v(3));
+    let tys = [at(&sig, v(4)), at(&sig, v(3))];
+    let cs = rt(tuple(&tys, &[v(2), v(1)]));
+    let len = rt(sig.arity.inst_top(0, &label));
+    let fam = rty(iwf_fam(&sig, &label));
+    let child_at = |j: Term| sig.child.inst_top_above(0, 1, &label).inst_top(0, &j);
+    let kid = |j: Term| dnth(&sig.family_level(), &len, &fam, Rc::clone(&cs), rt(j));
+    let rhs = pick(child_at(v(0)), kid(v(0)));
+    ck(&g, &lhs, &Type::Nat, c(0));
+    ck(&g, &rhs, &Type::Nat, c(0));
+    conv_tm(&g, &lhs, &rhs, &Type::Nat, c(0));
+    // At a literal index the ih is the recursive call on that child, and
+    // not on the other one.
+    for (p, child, idx) in [(0, v(2), v(4)), (1, v(1), v(3))] {
+        let at_lit = pick(child_at(pos(2, p)), kid(pos(2, p)));
+        conv_tm(&g, &at_lit, &pick(idx.clone(), child.clone()), &Type::Nat, c(0));
+        let other = if p == 0 { (v(3), v(1)) } else { (v(4), v(2)) };
+        not_conv_tm(&g, &at_lit, &pick(other.0, other.1), &Type::Nat, c(0));
+    }
 }
 
 // -------------------------------------------------------------------------

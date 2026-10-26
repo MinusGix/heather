@@ -231,6 +231,18 @@ structural guard's own message, which refuses one in any descending `match`.
 constructor, the eliminator steps, and each recursive position is
 `f#rec(D_u#member(e), c)`, which is what `f_u(e, c)` unfolds to.
 
+**Cost.** The step is a case tree over the shape spine, one arm per
+constructor of every member, and each of its Θ(m) case nodes carries its own
+convoy motive, which spells the signature's arity, output and child trees
+(Θ(m²): the child tree's own convoy motives repeat the arity tree). What
+keeps the gate from paying that per node is that none of it reads Γ: the
+signature's index leaves are unannotated, so the signature and the motives'
+pieces are tail-free, and the kernel's typing memo judges such a node once
+per the entries it reads rather than once per Γ. Checking the group is then
+about quadratic in the members, and one unfolding by `refl` about linear (β
+hands the step its ih as a value, so two unfoldings compare their steps by
+identity); `issues/mutual-group-recursion-gate-cost.md` has the measurements.
+
 ## 7. What stays refused, and where it is owned
 
 - Indexed families with infinitary premises: their own issue (port

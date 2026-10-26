@@ -52,3 +52,53 @@ re-recorded from below, and the m = 8 `refl` checks.
   generated member sum, `crates/elab/src/mutual_family.rs`) and the group
   recursion (`crates/elab/src/mutual_rec.rs`). Assumed here: only that the
   group is one `elim_IWf` with a motive by cases on the member.
+
+## Log
+
+**2026-10-26 — the refl checks, and the group is about quadratic.** On
+master after [[indexed-family-recursion-gate-cost]]'s round (PR #202), plus
+this round. `heather check --timings`, release, width one, cloud box,
+`size0` total / gate, and the `refl`'s gate:
+
+| m | before both | master (#202) | this round | `refl` now |
+|---|---|---|---|---|
+| 4 | 1,475 / 1,427 ms | 1,024 / 986 ms | 46 / 30 ms | 5 ms |
+| 8 | 13,629 / 13,432 ms | 7,470 / 7,321 ms | 135 / 82 ms | 11 ms (was `OutOfFuel`) |
+| 12 | — | 23,439 / 23,012 ms | 371 / 229 ms | — |
+| 16 | — | — | 692 / 395 ms | — |
+
+About m^2.3 in the gate from 8 to 16, against m^2.8 before.
+
+1. **The `refl` ran out of fuel comparing two steps**: the ih β handed the
+   step was `iwf_ih`'s λ, whose body holds a shifted copy of the step, so
+   closure identity missed and conversion unfolded the step's whole case
+   tree. Found here and fixed by `Val::IWfIh`, which PR #202 landed first
+   with the same shape; this round adds its readback (as `iwf_ih`) and a
+   kernel test at a neutral index (`crates/kernel/tests/iwf.rs`).
+2. **The signature was judged at every occurrence.** The typing memo keys
+   on Γ, so an `IWf(sig)(…)` met under each arm's binders re-judged the
+   signature, Θ(m²) apiece. The kernel now keeps locally closed types and
+   signatures in a memo apart from Γ (`ty_check`, `iwf_sig_wf`; closedness
+   decided by the bounds metadata at a node's second sight). It hit nothing
+   at first: the output and child trees' leaves were `inl@`/`inr@`
+   annotated at `El(u^{·^k})`, a global reference whose tail records |Γ|,
+   so no signature was locally closed, and neither were the motives that
+   spell it. The elaborator now leaves an index leaf unannotated (it is
+   checked against the index type anyway). With the leaves tail-free, PR
+   #202's strengthened scopes (a node keyed by the innermost entries it
+   reads) hit on the step's per-level convoy motives too, which is what
+   took the cubic off; with this round's closed memo off the same build
+   asks about 20× the conversion queries at m = 12.
+3. **The `Case`/`elim_Nat` rules instantiated their motives through an
+   identity substitution**; `inst_top` now (counters unchanged).
+4. **λ domains copied from the expected Π were judged and converted
+   again.** The expected type is presupposed well-formed, so a λ whose
+   domain is spelled as the expected domain skips both (`tm_check_lam`),
+   except while recording spellings for an export, which reads the
+   domain's own spellings off that judgment.
+
+What is left is about quadratic: each of the step's Θ(m) arms still meets
+types spelling the Θ(m) member sum. The acceptance's slope "towards 1" is
+not reached; whether quadratic is enough for the heather-coq port (a group
+of seven: about 75 ms of gate) is the question for whoever picks this up
+next, so the issue stays open.

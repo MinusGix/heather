@@ -128,6 +128,25 @@
 //! - Debug builds re-judge a sample of hits (`crate::checks`) and assert the
 //!   memo's answer, out of the counters' sight (`crate::stats::unobserved`),
 //!   so debug and release builds count alike.
+//! - **Locally closed types are kept apart from Γ** ([`TyScope`],
+//!   `issues/mutual-group-recursion-gate-cost.md`). A type with no free
+//!   local variable and no local substitution tail
+//!   (`bounds::type_locally_closed`) reads nothing of Γ but its base, by
+//!   weakening and strengthening, so its level is kept under a key that
+//!   drops Γ's identity and keeps the rest of [`Scope`]. The case on a sum
+//!   checks both summand types and is nested once per summand, so a closed
+//!   sum spelled in an inductive's shape is judged at every case of every
+//!   tree over that shape, in a Γ one binder longer each time: a mutual
+//!   group's signature carries several such trees in every occurrence of the
+//!   family, and judging the shape's tails there was most of the group's
+//!   gate. Substitution shares a closed subtree (`bounds.rs`), so the node
+//!   keeps its identity under every binder. Closedness is decided at a
+//!   node's second judgment, never its first, so one-shot types pay one
+//!   table entry and no bounds walk; the decision is a function of the
+//!   sequence of nodes judged, so counts stay deterministic. An `IWf`
+//!   signature is kept the same way ([`SigScope`]), so a locally closed
+//!   family's signature is judged once per base context however many
+//!   binders its occurrences sit under.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -380,7 +399,7 @@ pub fn check_type(
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    Tc::new(fuel).ty_check(&env, ty, level)
+    Tc::new(fuel).ty_check_syn(&env, ty, level)
 }
 
 /// [`check_type`] while accumulating value-machine activity in `metrics`.
@@ -401,7 +420,7 @@ pub fn check_type_profiled(
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
-    Tc::new(fuel).ty_check(&env, ty, level)
+    Tc::new(fuel).ty_check_syn(&env, ty, level)
 }
 
 /// `⊢_i T @ ?` — infer the canonical level of `T`. Presuppositions as
@@ -780,7 +799,7 @@ pub mod oracle {
         level: &Level,
         fuel: u64,
     ) -> R {
-        Tc::eager(fuel).ty_check(&oracle_env(psi, univs, layer, gamma), ty, level)
+        Tc::eager(fuel).ty_check_syn(&oracle_env(psi, univs, layer, gamma), ty, level)
     }
 
     /// [`super::infer_type`] with every selection spelled.
@@ -1013,6 +1032,12 @@ struct Tc {
     teles: RefCell<HashMap<(usize, usize), Vec<(Level, Rc<Type>, usize)>>>,
     /// The last telescope id handed out.
     tele_ids: Cell<usize>,
+    /// The closed-type memo (module docs, §The typing memo): per shared
+    /// type node and scope less Γ.
+    closed_tys: RefCell<PtrMap<TyScope, ClosedTyEntry>>,
+    /// The locally closed `IWf` signatures judged well-formed, by identity
+    /// and scope less Γ, with their keep-alives.
+    closed_sigs: RefCell<PtrMap<SigScope, (Rc<IWfSig>, Rc<()>)>>,
     /// The miss sampler's *site* columns (issues/perf-profile-build-target.md):
     /// the variant names of the terms on the checker's own stack, innermost
     /// last, and the innermost term whose type is being compared. Both are
@@ -1171,6 +1196,93 @@ impl Scope {
     }
 }
 
+/// A [`Tc::closed_tys`] key: a type node by identity, and everything a rule
+/// reads besides the node and Γ, which a locally closed type does not read
+/// (module docs, §The typing memo).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TyScope {
+    node: usize,
+    psi: usize,
+    gamma_base: Option<u32>,
+    univs: u32,
+    layer: Layer,
+    under_box: bool,
+}
+
+impl TyScope {
+    fn of(env: &Env, t: &Rc<Type>) -> TyScope {
+        TyScope {
+            node: Rc::as_ptr(t) as usize,
+            psi: env.psi.bindings.identity_addr(),
+            gamma_base: match env.gamma.base {
+                CtxBase::Nil => None,
+                CtxBase::Var(g) => Some(g.0),
+            },
+            univs: env.univs,
+            layer: env.layer,
+            under_box: env.under_box,
+        }
+    }
+}
+
+/// A [`Tc::closed_sigs`] key: [`TyScope`]'s, for a signature.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct SigScope {
+    sig: usize,
+    psi: usize,
+    gamma_base: Option<u32>,
+    univs: u32,
+    layer: Layer,
+    under_box: bool,
+}
+
+impl SigScope {
+    fn of(env: &Env, sig: &Rc<IWfSig>) -> SigScope {
+        SigScope {
+            sig: Rc::as_ptr(sig) as usize,
+            psi: env.psi.bindings.identity_addr(),
+            gamma_base: match env.gamma.base {
+                CtxBase::Nil => None,
+                CtxBase::Var(g) => Some(g.0),
+            },
+            univs: env.univs,
+            layer: env.layer,
+            under_box: env.under_box,
+        }
+    }
+}
+
+/// What the closed-type memo knows of one [`TyScope`]: judged once and not
+/// yet asked whether it is closed; open; or closed, at this level.
+#[derive(Clone)]
+enum ClosedTy {
+    Seen,
+    Open,
+    Level(Level),
+}
+
+/// A [`Tc::closed_tys`] entry, with the keep-alives for its key's addresses.
+struct ClosedTyEntry {
+    _ty: Rc<Type>,
+    _psi: Rc<()>,
+    state: ClosedTy,
+}
+
+/// The types the closed-type memo keeps: the formers with children, whose
+/// judgment is a walk. A leaf is cheaper to judge than to look up.
+fn closed_memo_candidate(t: &Type) -> bool {
+    !matches!(
+        t,
+        Type::Nat
+            | Type::Ty(_)
+            | Type::Unit { .. }
+            | Type::Empty { .. }
+            | Type::SEmpty { .. }
+            | Type::CodeTy { .. }
+            | Type::CodeTm { .. }
+    )
+}
+
 /// What one node was judged to be in one [`Scope`]: its inferred type, and
 /// the expected types it checked against. The first three fields are the
 /// keep-alives for the key's addresses.
@@ -1294,6 +1406,8 @@ impl Tc {
             judged: RefCell::new(PtrMap::default()),
             teles: RefCell::new(HashMap::new()),
             tele_ids: Cell::new(0),
+            closed_tys: RefCell::new(PtrMap::default()),
+            closed_sigs: RefCell::new(PtrMap::default()),
             #[cfg(feature = "value-metrics")]
             diag_stack: RefCell::new(Vec::new()),
             #[cfg(feature = "value-metrics")]
@@ -1867,7 +1981,35 @@ impl Tc {
     /// two term formers (heather-coq `wft_iwf`, `wf_supi`, `wf_elimIWf`):
     /// `I @ li`, `S @ l`, `(Γ, x : S) ⊢ n : Nat`, `(Γ, x : S) ⊢ o : I`,
     /// `(Γ, x : S, i : Fin n) ⊢ c : I`.
-    fn iwf_sig_wf(&self, env: &Env, sig: &IWfSig) -> R {
+    ///
+    /// Through the closed-type memo's signature table (module docs, §The
+    /// typing memo) when the signature is locally closed: one signature is
+    /// shared by the family type at every binder depth of an eliminator's
+    /// step, and its premises are judged once per gate, not per occurrence.
+    fn iwf_sig_wf(&self, env: &Env, sig: &Rc<IWfSig>) -> R {
+        if self.spellings.is_some() || !crate::bounds::iwf_sig_locally_closed(sig) {
+            return self.iwf_sig_premises(env, sig);
+        }
+        let key = SigScope::of(env, sig);
+        if self.closed_sigs.borrow().contains_key(&key) {
+            crate::stats::typing_memo_hits(1);
+            #[cfg(debug_assertions)]
+            if crate::checks::verify_this_skip() {
+                assert!(
+                    crate::stats::unobserved(|| self.iwf_sig_premises(env, sig)).is_ok(),
+                    "the signature memo kept a signature that judging it again rejects \
+                     (term output suppressed: see CLAUDE.md)"
+                );
+            }
+            return Ok(());
+        }
+        self.iwf_sig_premises(env, sig)?;
+        self.closed_sigs.borrow_mut().insert(key, (Rc::clone(sig), env.psi.bindings.identity()));
+        Ok(())
+    }
+
+    /// [`Tc::iwf_sig_wf`] past the memo: the premises themselves.
+    fn iwf_sig_premises(&self, env: &Env, sig: &IWfSig) -> R {
         self.level_wf(env, &sig.level)?;
         self.level_wf(env, &sig.idx_level)?;
         self.ty_check(env, &sig.idx, &sig.idx_level)?;
@@ -1984,8 +2126,64 @@ impl Tc {
     /// This is why the obvious repair for the `Vec^l(T;0) ⇝ Unit` level drop
     /// — letting `Unit`/`Empty` check at any level — is **wrong**, and is not
     /// applied here. See `issues/unit-level-and-vec-preservation.md`.
-    fn ty_check(&self, env: &Env, t: &Type, l: &Level) -> R {
+    fn ty_check_syn(&self, env: &Env, t: &Type, l: &Level) -> R {
         let inferred = self.ty_infer(env, t)?;
+        self.lev_eq(l, &inferred)
+    }
+
+    /// [`Tc::ty_check_syn`] for a type held as shared syntax, through the
+    /// closed-type memo (module docs, §The typing memo): a locally closed
+    /// type's level is inferred once per gate, whatever Γ it recurs in.
+    fn ty_check(&self, env: &Env, t: &Rc<Type>, l: &Level) -> R {
+        if self.spellings.is_some() || !closed_memo_candidate(t) {
+            return self.ty_check_syn(env, t, l);
+        }
+        let key = TyScope::of(env, t);
+        let seen = self.closed_tys.borrow().get(&key).map(|e| e.state.clone());
+        let inferred = match seen {
+            Some(ClosedTy::Level(level)) => {
+                crate::stats::typing_memo_hits(1);
+                #[cfg(debug_assertions)]
+                if crate::checks::verify_this_skip() {
+                    assert!(
+                        crate::stats::unobserved(|| self.ty_infer(env, t)).is_ok_and(|again| again == level),
+                        "the closed-type memo kept a level that judging the type again does \
+                         not give (term output suppressed: see CLAUDE.md)"
+                    );
+                }
+                level
+            }
+            Some(ClosedTy::Open) => return self.ty_check_syn(env, t, l),
+            // Met once before: decide whether it is closed, and judge it.
+            Some(ClosedTy::Seen) => {
+                let level = if crate::bounds::type_locally_closed(t) {
+                    let level = self.ty_infer(env, t)?;
+                    ClosedTy::Level(level)
+                } else {
+                    ClosedTy::Open
+                };
+                let next = level.clone();
+                if let Some(e) = self.closed_tys.borrow_mut().get_mut(&key) {
+                    e.state = next;
+                }
+                match level {
+                    ClosedTy::Level(level) => level,
+                    _ => return self.ty_check_syn(env, t, l),
+                }
+            }
+            None => {
+                let level = self.ty_infer(env, t)?;
+                self.closed_tys.borrow_mut().insert(
+                    key,
+                    ClosedTyEntry {
+                        _ty: Rc::clone(t),
+                        _psi: env.psi.bindings.identity(),
+                        state: ClosedTy::Seen,
+                    },
+                );
+                level
+            }
+        };
         self.lev_eq(l, &inferred)
     }
 
@@ -2357,8 +2555,18 @@ impl Tc {
         self.lev_eq(dom_level, &pd)?;
         self.lev_eq(cod_level, &pc)?;
         self.lev_eq(l, &Level::join(dom_level.clone(), cod_level.clone()))?;
-        self.ty_check(env, dom, dom_level)?;
-        self.conv_ty(env, ps.as_ref(), ITyRef::Syn(dom), dom_level)?;
+        // The expected Π is presupposed well-formed, so a domain spelled as
+        // its domain is a well-formed type at `pd` and needs neither the
+        // judgment nor the conversion. An elaborator copies the expected
+        // domain into the λ it builds, and a domain the size of a family's
+        // signature is otherwise judged afresh under every binder it sits
+        // under (`issues/mutual-group-recursion-gate-cost.md`). Not while
+        // recording spellings: the domain's own checked spellings are
+        // recorded by judging it.
+        if self.spellings.is_some() || ps.as_syn().is_none_or(|p| p != &**dom) {
+            self.ty_check(env, dom, dom_level)?;
+            self.conv_ty(env, ps.as_ref(), ITyRef::Syn(dom), dom_level)?;
+        }
         let e = env.push_entry(Rc::clone(dom), dom_level.clone());
         self.tm_check(&e, body, pt.as_ref(), cod_level)
     }
@@ -3149,7 +3357,8 @@ impl Tc {
             Term::TmIWf { level, idx_level, idx, shape, arity, out, child, index } => {
                 self.not_var_layer(env)?;
                 let sig = crate::term::iwf_sig_of_code(level, idx_level, idx, shape, arity, out, child);
-                self.iwf_sig_wf(env, &sig)?;
+                // Decoded afresh here, so there is no shared signature to key on.
+                self.iwf_sig_premises(env, &sig)?;
                 self.tm_check_rc(env, index, &sig.idx, &sig.idx_level)?;
                 let family = sig.family_level();
                 Ok((Type::Ty(family.clone()), Level::succ(family)))
@@ -3180,19 +3389,16 @@ impl Tc {
                 self.level_wf(env, level)?;
                 let e_x = env.push_entry(Rc::new(Type::Nat), Level::Zero);
                 self.ty_check(&e_x, motive, level)?;
-                let base_ty =
-                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(Term::Zero)));
+                let base_ty = motive.inst_top(0, &Term::Zero);
                 self.tm_check_ty(env, base, &base_ty, level)?;
                 // M[su x/x] scoped in (Γ, x : Nat, y : M).
                 let su_x = Term::Succ(Rc::new(Term::Var(LocalVar(1))));
-                let step_ty = motive.apply_local(
-                    &LocalSubst::id(&env.gamma).shift_local(2).extended(Rc::new(su_x)),
-                );
+                let step_ty = motive.inst_top(2, &su_x);
                 let e_xy = e_x.push_entry(Rc::clone(motive), level.clone());
                 self.tm_check_ty(&e_xy, step, &step_ty, level)?;
                 self.tm_check_ty(env, scrut, &Type::Nat, &Level::Zero)?;
                 Ok((
-                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
+                    motive.inst_top(0, scrut),
                     level.clone(),
                 ))
             }
@@ -3523,9 +3729,7 @@ impl Tc {
                     rhs: Rc::new(rhs.shift_local(1)),
                     val: Rc::new(Term::Var(LocalVar(0))),
                 };
-                let left_ty = motive.apply_local(
-                    &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inl_x)),
-                );
+                let left_ty = motive.inst_top(1, &inl_x);
                 self.tm_check_ty(&e_x, case_l, &left_ty, motive_level)?;
                 // c_r : M[inr y/z] scoped in (Γ, y : B).
                 let e_y = env.push_entry(Rc::clone(rhs), rhs_level.clone());
@@ -3536,13 +3740,11 @@ impl Tc {
                     rhs: Rc::new(rhs.shift_local(1)),
                     val: Rc::new(Term::Var(LocalVar(0))),
                 };
-                let right_ty = motive.apply_local(
-                    &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inr_y)),
-                );
+                let right_ty = motive.inst_top(1, &inr_y);
                 self.tm_check_ty(&e_y, case_r, &right_ty, motive_level)?;
                 self.tm_check_ty(env, scrut, &sum, &lmax)?;
                 Ok((
-                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
+                    motive.inst_top(0, scrut),
                     motive_level.clone(),
                 ))
             }
