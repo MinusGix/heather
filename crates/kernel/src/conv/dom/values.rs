@@ -262,6 +262,33 @@ mod tests {
         assert!(!clo_identity(a.clo, mk(rho(same_z, y), 4).clo, 2, &mut 0));
     }
 
+    /// Only the captures a body reads are compared, so two spines of
+    /// different lengths agree on a body that reads none past its pending
+    /// binders — unless the body holds a substitution tail, which the whole
+    /// spine's length rewrites, or reads a capture one side lacks.
+    #[test]
+    fn suspended_identity_ignores_spine_length_past_the_used_captures() {
+        let arena = ValueArena::new();
+        let x = fresh(&arena, 0);
+        let y = fresh(&arena, 1);
+        let short = value::Env::empty().push(&arena, x);
+        let long = value::Env::empty().push(&arena, y).push(&arena, x);
+        let mk = |env, body: &Rc<Term>| TmC { clo: arena.tm(TmClo::syn(env, Rc::clone(body))), home: 1, sat: 2 };
+        // x0 is the pending binder: no capture is read.
+        let pending = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))));
+        assert!(Values::tm_identity_fast(&mk(short, &pending), &mk(long, &pending)));
+        // x1 reads capture 0, the same `x` on both sides.
+        let inner = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))));
+        assert!(Values::tm_identity_fast(&mk(short, &inner), &mk(long, &inner)));
+        // x2 reads capture 1, which only the long spine has.
+        let outer = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(2)))));
+        assert!(!Values::tm_identity_fast(&mk(short, &outer), &mk(long, &outer)));
+        // A tail is rewritten by the spine's length, whatever it reads.
+        let gamma = LocalCtx::nil();
+        let tail = Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: crate::term::LocalSubst::id(&gamma) });
+        assert!(!clo_identity(&TmClo::syn(short, Rc::clone(&tail)), &TmClo::syn(long, tail), 0, &mut 64));
+    }
+
     #[test]
     fn suspended_nat_fold_identity_checks_every_component_without_reducing() {
         let psi = crate::term::GlobalCtx::default();
@@ -585,7 +612,10 @@ fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32
                         clo_identity(&TmClo::syn(*e1, Rc::clone(fun)), &TmClo::syn(*e2, Rc::clone(fun)), pending, budget)
                             && clo_identity(&TmClo::syn(*e1, Rc::clone(arg)), &TmClo::syn(*e2, Rc::clone(arg)), pending, budget)
                     }
-                    _ => env_identity(e1, e2, crate::bounds::term_captures(b1).saturating_sub(pending), budget),
+                    _ => {
+                        let u = crate::bounds::term_local_use(b1);
+                        env_identity(e1, e2, u.bound.saturating_sub(pending), u.has_tail, budget)
+                    }
                 })
         }
         (TmClo::Val(v1), TmClo::Val(v2)) if pending == 0 => Rc::ptr_eq(v1, v2) || match (&**v1, &**v2) {
@@ -615,17 +645,24 @@ fn ty_clo_identity<'v>(a: &TyClo<'v>, b: &TyClo<'v>, pending: u32, budget: &mut 
     match (a.as_syn(), b.as_syn()) {
         (Some((e1, b1)), Some((e2, b2))) => {
             (Rc::ptr_eq(b1, b2) || b1 == b2)
-                && (value::Env::ptr_eq(e1, e2)
-                    || env_identity(e1, e2, crate::bounds::type_captures(b1).saturating_sub(pending), budget))
+                && (value::Env::ptr_eq(e1, e2) || {
+                    let u = crate::bounds::type_local_use(b1);
+                    env_identity(e1, e2, u.bound.saturating_sub(pending), u.has_tail, budget)
+                })
         }
         _ => false,
     }
 }
 
-fn env_identity<'v>(a: &value::Env<'v>, b: &value::Env<'v>, used: u32, budget: &mut u32) -> bool {
-    if a.len() != b.len() || a.gshift() != b.gshift() { return false; }
+// Only the `used` innermost captures are read, so the spines may differ in
+// length past them, unless the body holds a substitution tail: a tail is
+// rewritten by the whole environment's length (`bounds.rs`), so then the
+// lengths must agree too.
+fn env_identity<'v>(a: &value::Env<'v>, b: &value::Env<'v>, used: u32, tail: bool, budget: &mut u32) -> bool {
+    if a.gshift() != b.gshift() { return false; }
+    if a.len() != b.len() && (tail || used > a.len().min(b.len())) { return false; }
     if value::Env::ptr_eq(a, b) { return true; }
-    (0..used.min(a.len())).all(|i| {
+    (0..used.min(a.len()).min(b.len())).all(|i| {
         if *budget == 0 { return false; }
         *budget -= 1;
         match (a.lookup(i), b.lookup(i)) {
@@ -982,6 +1019,7 @@ impl<'v> Dom<'v> for Values {
             Val::Lam { .. }
             | Val::WfIh { .. }
             | Val::WIh { .. }
+            | Val::IWfIh { .. }
             | Val::BitRun { .. }
             | Val::NatSync { .. }
             | Val::BitFold { .. }

@@ -191,5 +191,5 @@ slope	inductive/enum-equality	2.513
 slope	inductive/record-fields	1.423
 slope	inductive/mutual-declaration	1.490
 slope	inductive/mutual-recursion	2.817
-slope	inductive/typed-syntax	1.780
-slope	inductive/function-fields	1.673
+slope	inductive/typed-syntax	1.130
+slope	inductive/function-fields	0.880

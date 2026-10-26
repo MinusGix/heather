@@ -816,7 +816,13 @@ paper too).
   fuel included, so which lookups hit must be a function of the input, and
   is by construction: entries are chosen
   by node kind, never by reference count (the bounds memo's keep-alives
-  perturb counts), nothing is evicted, and failures are not cached.
+  perturb counts), nothing is evicted, and failures are not cached. A
+  tail-free node that reads only Γ's innermost few entries, whose types stay
+  among them, is keyed by those entries instead of by Γ (a *strengthened*
+  scope): its judgment is the same under any Γ ending in them, which is what
+  lets an indexed family's index functions be judged once rather than once
+  per level of every case tree whose motive carries them
+  (`issues/indexed-family-recursion-gate-cost.md`).
 
 ## Representation
 

@@ -270,6 +270,43 @@ pub(crate) fn type_captures(t: &Rc<Type>) -> u32 {
     CACHE.with(|c| c.borrow_mut().type_use(t).bound)
 }
 
+/// `t`'s local footprint: its bound and whether a substitution tail shows
+/// in its local scope, for conversion's closure identity, which reads only
+/// the captures a body uses (`conv/dom/values.rs`).
+pub(crate) fn term_local_use(t: &Rc<Term>) -> LocalUse {
+    CACHE.with(|c| c.borrow_mut().term_use(t))
+}
+
+pub(crate) fn type_local_use(t: &Rc<Type>) -> LocalUse {
+    CACHE.with(|c| c.borrow_mut().type_use(t))
+}
+
+thread_local! {
+    /// The typing memo's own table (`typing.rs` §The typing memo), apart from
+    /// [`CACHE`]: the memo asks about every elimination it judges, and
+    /// answering into the substitutions' table would settle their two-stage
+    /// markers early, so which subtrees a substitution skips (and the
+    /// `local_subst_nodes` it counts) would depend on what was judged
+    /// before. The answers are the same pure function either way.
+    static SCOPE_CACHE: RefCell<Cache> = RefCell::new(Cache::new());
+}
+
+/// [`term_local_use`] for the typing memo's strengthened scope: a tail-free
+/// node of bound `k` is judged by Γ's innermost `k` entries alone.
+pub(crate) fn scope_term_use(t: &Rc<Term>) -> LocalUse {
+    SCOPE_CACHE.with(|c| c.borrow_mut().term_use(t))
+}
+
+pub(crate) fn scope_type_use(t: &Rc<Type>) -> LocalUse {
+    SCOPE_CACHE.with(|c| c.borrow_mut().type_use(t))
+}
+
+/// [`scope_type_use`] for a type the caller holds by reference: the node
+/// itself is walked, its children answered from the table.
+pub(crate) fn scope_type_ref_use(t: &Type) -> LocalUse {
+    SCOPE_CACHE.with(|c| c.borrow_mut().compute_type(t))
+}
+
 /// Whether evaluating `t` reads none of its innermost `n` (< 64) local
 /// variables: no free index below `n` occurs. A wrong answer costs time,
 /// never a verdict (`eval/probe.rs`, the one reader).
@@ -353,8 +390,8 @@ impl Cache {
     // (everything subst.rs routes through other_ty/other_tm/other_ctx) are
     // omitted entirely, matching `LOCAL_OP` scoping.
 
-    fn compute_type(&mut self, t: &Rc<Type>) -> LocalUse {
-        match &**t {
+    fn compute_type(&mut self, t: &Type) -> LocalUse {
+        match t {
             Type::Nat
             | Type::Ty(_)
             | Type::Unit { .. }

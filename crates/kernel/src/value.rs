@@ -1636,6 +1636,26 @@ pub enum Val<'v> {
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
+    /// The induction hypothesis an `elim_IWf` β hands its step,
+    /// `λ i. elim_IWf(e; c[a, i]; dnth(…; cs; i))`, held as the eliminator
+    /// and the label and children it was fired on (`Eval::fire_elim_iwf`),
+    /// for [`Val::WfIh`]'s reason. Here the copy also defeated conversion:
+    /// a recursive call's step was a shifted copy of the step, under a
+    /// longer environment, so comparing it with the same function's step
+    /// reached from anywhere else normalized the whole step, case tree and
+    /// annotations (issues/indexed-family-recursion-gate-cost.md). The
+    /// recursive eliminator is `elim` with its index replaced by the child's,
+    /// `c[a, i]`, so applied to a canonical index over a canonical tuple it
+    /// selects the child and fires that re-indexed eliminator on it, sharing
+    /// `elim`'s motive and step closures; applied to anything else, and
+    /// wherever it is inspected rather than applied, it is first built as the
+    /// λ it stands for (`Eval::iwf_ih_lam`). A strategy change with no
+    /// semantic content.
+    IWfIh {
+        elim: Rc<Elim<'v>>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+    },
     Lam {
         dom_level: Level,
         cod_level: Level,
@@ -2341,6 +2361,7 @@ impl fmt::Debug for Val<'_> {
             Val::Lam { dom, body, .. } => write!(f, "λ({dom:?}). {body:?}"),
             Val::WfIh { children, .. } => write!(f, "ih_Wf({children:?})"),
             Val::WIh { children, .. } => write!(f, "ih_W({children:?})"),
+            Val::IWfIh { children, .. } => write!(f, "ih_IWf({children:?})"),
             Val::ULam { num_vars, body, .. } => write!(f, "Λ[{num_vars}ℓ]. {body:?}"),
             Val::CtxLam { body, .. } => write!(f, "Λ(g). {body:?}"),
             Val::TyLam { body, .. } => write!(f, "Λ(U). {body:?}"),

@@ -108,6 +108,20 @@
 //!   eligible node gets an entry, chosen by its kind, and nothing is evicted.
 //!   So `--timings` counts and `OutOfFuel` verdicts stay functions of the
 //!   input, at any worker count.
+//! - **Strengthened scopes** (issues/indexed-family-recursion-gate-cost.md).
+//!   A node that is free of substitution tails and reads only Γ's innermost
+//!   `k ≤ STRENGTHEN_MAX` entries, whose own types stay inside those `k`, is
+//!   judged by those entries alone; the rules read nothing else of Γ. Its
+//!   scope then names the `k` entries (types by identity, levels by value,
+//!   interned in [`Tc::strengthened`]) instead of Γ, so the same node under
+//!   another Γ ending in the same entries is a hit. That is the shape a
+//!   case tree's inner nodes have inside a motive re-checked at every level
+//!   of a convoy: before, a family's index functions were judged once per
+//!   level and per constructor. A check keeps it only when the expected type
+//!   is syntax inside the same entries, and an inferred type only when it
+//!   is, since a description is relative to Γ's length. The table that
+//!   answers "which entries" is the bounds memo's function on its own
+//!   table (`bounds::scope_term_use`), so it moves no substitution counter.
 //! - **Successes only.** A failure propagates and records nothing.
 //! - **Off under the spelling record** ([`spell_checked_in_code`]), whose
 //!   point is to visit every checked spelling.
@@ -992,6 +1006,13 @@ struct Tc {
     /// The typing memo (module docs, §The typing memo): per node and scope,
     /// for this gate.
     judged: RefCell<PtrMap<Scope, Judged>>,
+    /// The strengthened scopes' telescopes, interned one entry at a time
+    /// from the outermost of the `k` (§The typing memo): `(parent id, entry
+    /// type's address)` to the entry's level, its keep-alive and the
+    /// extended telescope's id. Id 0 is the empty telescope.
+    teles: RefCell<HashMap<(usize, usize), Vec<(Level, Rc<Type>, usize)>>>,
+    /// The last telescope id handed out.
+    tele_ids: Cell<usize>,
     /// The miss sampler's *site* columns (issues/perf-profile-build-target.md):
     /// the variant names of the terms on the checker's own stack, innermost
     /// last, and the innermost term whose type is being compared. Both are
@@ -1121,7 +1142,11 @@ struct ConvMemo {
 struct Scope {
     node: usize,
     psi: usize,
+    /// Γ's identity token, or, in a strengthened scope, the interned id of
+    /// the innermost `k` entries ([`Tc::strengthened`]).
     gamma: usize,
+    /// Whether `gamma` is a telescope id rather than Γ's identity.
+    strengthened: bool,
     gamma_base: Option<u32>,
     univs: u32,
     layer: Layer,
@@ -1134,6 +1159,7 @@ impl Scope {
             node: Rc::as_ptr(t) as usize,
             psi: env.psi.bindings.identity_addr(),
             gamma: env.gamma.entries.identity_addr(),
+            strengthened: false,
             gamma_base: match env.gamma.base {
                 CtxBase::Nil => None,
                 CtxBase::Var(g) => Some(g.0),
@@ -1243,6 +1269,10 @@ fn owned_expected(ty: ITyRef) -> ITy {
 /// deterministic.
 const CHECKED_PER_SCOPE: usize = 4;
 
+/// The most innermost entries a strengthened scope keys on
+/// ([`Tc::strengthened`]). A node with more free locals keeps Γ's identity.
+const STRENGTHEN_MAX: u32 = 8;
+
 impl Tc {
     fn new(fuel: u64) -> Tc {
         Tc::with_mode(fuel, false)
@@ -1262,6 +1292,8 @@ impl Tc {
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
             judged: RefCell::new(PtrMap::default()),
+            teles: RefCell::new(HashMap::new()),
+            tele_ids: Cell::new(0),
             #[cfg(feature = "value-metrics")]
             diag_stack: RefCell::new(Vec::new()),
             #[cfg(feature = "value-metrics")]
@@ -2186,12 +2218,64 @@ impl Tc {
         self.tm_check_inner(env, t, ty, l)
     }
 
+    /// The scope `t` is judged in when only Γ's innermost entries can
+    /// matter (§The typing memo): `t` is free of substitution tails and its
+    /// free locals are the innermost `k`, and those `k` entries' types are
+    /// tail-free and scoped within the `k` themselves. Then every rule
+    /// judging `t` reads those entries and nothing else of Γ, so the
+    /// judgment is the same in any Γ that ends in them. The key is the
+    /// entries' types by identity and their levels, interned; `None` when
+    /// the conditions fail or `k` is past [`STRENGTHEN_MAX`].
+    fn strengthened(&self, env: &Env, t: &Rc<Term>) -> Option<(Scope, u32)> {
+        let u = crate::bounds::scope_term_use(t);
+        let k = u.bound;
+        if u.has_tail || k > STRENGTHEN_MAX || k as usize > env.gamma.entries.len() {
+            return None;
+        }
+        let mut entries: [Option<&CtxEntry>; STRENGTHEN_MAX as usize] = [None; STRENGTHEN_MAX as usize];
+        for j in 0..k {
+            let e = env.gamma.entries.nth_inner(j)?;
+            let eu = crate::bounds::scope_type_use(&e.ty);
+            if eu.has_tail || eu.bound + j + 1 > k {
+                return None;
+            }
+            entries[j as usize] = Some(e);
+        }
+        let mut id = 0usize;
+        let mut teles = self.teles.borrow_mut();
+        for j in (0..k).rev() {
+            let e = entries[j as usize].expect("filled above");
+            let slot = teles.entry((id, Rc::as_ptr(&e.ty) as usize)).or_default();
+            id = match slot.iter().find(|(l, _, _)| *l == e.level) {
+                Some((_, _, child)) => *child,
+                None => {
+                    let child = self.tele_ids.get() + 1;
+                    self.tele_ids.set(child);
+                    slot.push((e.level.clone(), Rc::clone(&e.ty), child));
+                    child
+                }
+            };
+        }
+        let mut scope = Scope::of(env, t);
+        scope.gamma = id;
+        scope.strengthened = true;
+        Some((scope, k))
+    }
+
     /// [`Tc::tm_check`] through the typing memo, for [`check_memoized`]
     /// forms. Outlined: the lookup's temporaries stay off the recursion
     /// cycle every other node goes through.
     #[inline(never)]
     fn tm_check_memo(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
-        let scope = Scope::of(env, t);
+        // A check is strengthened only when the expected type is syntax
+        // within the same `k` entries: it is half the judgment.
+        let strong = self.strengthened(env, t).filter(|(_, k)| {
+            ty.as_syn().is_some_and(|e| {
+                let u = crate::bounds::scope_type_ref_use(e);
+                !u.has_tail && u.bound <= *k
+            })
+        });
+        let scope = strong.map_or_else(|| Scope::of(env, t), |(s, _)| s);
         let hit = self.judged.borrow().get(&scope).is_some_and(|j| {
             j.checked.iter().any(|(held, level)| level == l && same_expected(held, ty))
         });
@@ -2405,8 +2489,14 @@ impl Tc {
     /// forms; outlined as [`Tc::tm_check_memo`] is.
     #[inline(never)]
     fn tm_infer_memo(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
-        let scope = Scope::of(env, t);
-        let hit = self.judged.borrow().get(&scope).and_then(|j| j.inferred.clone());
+        let strong = self.strengthened(env, t);
+        let exact = Scope::of(env, t);
+        let hit = {
+            let judged = self.judged.borrow();
+            strong
+                .and_then(|(s, _)| judged.get(&s).and_then(|j| j.inferred.clone()))
+                .or_else(|| judged.get(&exact).and_then(|j| j.inferred.clone()))
+        };
         if let Some(judged) = hit {
             crate::stats::typing_memo_hits(1);
             #[cfg(debug_assertions)]
@@ -2420,6 +2510,20 @@ impl Tc {
             return Ok(judged);
         }
         let judged = self.tm_infer_fresh(env, t)?;
+        // A description is relative to Γ's length, and syntax outside the
+        // `k` entries would mean something else elsewhere: either keeps the
+        // exact scope.
+        let scope = match strong {
+            Some((s, k))
+                if judged.0.as_syn().is_some_and(|ty| {
+                    let u = crate::bounds::scope_type_ref_use(ty);
+                    !u.has_tail && u.bound <= k
+                }) =>
+            {
+                s
+            }
+            _ => exact,
+        };
         self.judged
             .borrow_mut()
             .entry(scope)
@@ -4575,6 +4679,28 @@ mod typing_memo_tests {
         assert!(tc.judged.borrow().values().all(|j| j.checked.is_empty()));
         tc.tm_check_ty(&env, &links[4], &Type::Nat, &Level::Zero).unwrap();
         assert!(tc.tm_check_ty(&env, &links[4], &unit, &Level::Zero).is_err());
+    }
+
+    /// The strengthened scope: a node that reads only the innermost entries
+    /// is answered from the memo under any Γ ending in those same entries,
+    /// however much lies outside them. A chain checked once under `f` is
+    /// all hits under `u : Unit, f` with the same `f`.
+    #[test]
+    fn a_node_is_judged_once_under_entries_it_cannot_see() {
+        let links = chain(12);
+        let tc = Tc::new(DEFAULT_FUEL);
+        let inner = env_with_f(nat());
+        tc.tm_check_ty(&inner, &links[12], &Type::Nat, &Level::Zero).unwrap();
+        let f = inner.gamma.entries.last().unwrap().clone();
+        let wider = Env { gamma: LocalCtx::nil(), ..inner.clone() }
+            .push_entry(Rc::new(Type::Unit { level: Level::Zero }), Level::Zero)
+            .push_entry(f.ty, f.level);
+        let before = stats::snapshot();
+        tc.tm_check_ty(&wider, &links[12], &Type::Nat, &Level::Zero).unwrap();
+        let d = stats::snapshot().since(&before);
+        assert!(d.typing_memo_hits > 0, "the chain was judged again under an entry it cannot see");
+        // The one query left is the top's inferred type against `Nat`.
+        assert!(queries(&d) <= 1, "the top link was not answered whole");
     }
 
     /// Kind, never count: holding an extra reference to every node (what the
