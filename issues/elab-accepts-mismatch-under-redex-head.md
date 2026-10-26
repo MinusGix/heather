@@ -1,10 +1,10 @@
 ---
 title: A mismatch under a let-bound or β-redex head is refused only by the kernel
-status: open
+status: closed
 labels: [frontend,elaboration,diagnostics]
 area: language
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 Found while proving S3.2's dataflow leaf (`Target::goes_leaf`,
@@ -54,3 +54,49 @@ accepts rather than refusing or deferring with a span.
 Related: [[elab-accepts-conjunction-for-equation]] (another mismatch only the
 kernel refuses), [[check-fallback-discards-expected-type]] (closed; the same
 symptom from the check fallback).
+
+## Resolution (2026-10-26)
+
+**Cause.** Nothing on the checking path skipped the comparison. Both probes
+reach the ordinary checking note (`note_check_mismatch`): the variable `h`
+and the binder `held` are checked against their expected types, the
+candidate is recorded, and when the gate refuses, the probe decides
+`NotConvertible` and reports at the right expression. What failed was the
+spelling. A `let`'s value is substituted where it is used, and an implicit
+λ argument is substituted into the parameter types that mention it, so the
+note's types held a β-redex: `El((λ u. P(u.memory))(execute_block_normal(code, s)))`
+as the let's expected type, `El((λ s. P(s.memory))(s))` as `held`'s own
+type. The display has no surface form for a redex, so one side printed raw,
+the note fell back to the located form ("… has no surface spelling"), and
+the message kept the kernel's `NotConvertible`. Annotating the binders, or
+checking a pair under the let-bound head, avoided it only because those
+routes whnf the type first, which contracts the redex. So "refused only by
+the kernel" was the same as for every checking mismatch (the elaborator
+records, the gate decides); the difference was a message with one type
+missing.
+
+**Fix.** The display contracts a β-redex at any node that would otherwise
+print raw (`Speller::call` in `crates/elab/src/display.rs`, through
+`spelling::beta_head`, moved there from the unifier). It is syntactic
+substitution, charged to the node budget, and only in the reading flavours:
+the source flavours (`spell_term_source`, `spell_type_source`), whose output
+omega, ring and generated annotations re-parse, still decline a redex, so no
+route that decides anything sees a different spelling. Every redex the elaborator leaves in a type now spells as
+its contractum, at the head, under a curried spine, and inside an argument
+(`And<P(n), True>` against `And<P(f(n)), True>`). Both probes now say
+`this has type `P(s.memory)`, but `P(execute_block_normal(code, s).memory)`
+is expected here` at the expression.
+
+**Tests.** `crates/elab/tests/check_reports_mismatch.rs`:
+`a_mismatch_under_a_redex_head_is_spelled_at_the_expression` (the two probes
+at `Nat` with an opaque `f` for `execute_block_normal`, a curried and a
+nested redex, each asserting the spelled message, no kernel prefix and the
+span) and its control `a_redex_head_of_the_right_type_is_accepted`. One pinned kernel
+refusal was this shape and is now `Refusal::Mismatch`:
+`lib_setoid_mergeable.rs`'s `wrong_lift`, a closure goal filled with
+`a.valid` where an instantiated λ predicate was expected.
+
+Not covered: ι-redexes (a projection of a literal pair, a recursor applied to
+a constructor) still print raw when one reaches a note; none has been seen
+in a mismatch yet.
+

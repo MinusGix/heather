@@ -14,10 +14,16 @@
 //!
 //! Three invariants, each against a way this could go wrong:
 //!
-//! - **The diagnostic path never reduces.** No δ, no β, no whnf, no fuel. The one registry
+//! - **The diagnostic path never reduces.** No δ, no whnf, no fuel. The one registry
 //!   consultation is [`Elaborator::unspell_here`], which is a lookup rather
 //!   than a reduction. So this code cannot affect what is checked — a stronger
-//!   guarantee than the reader's, which at least spends steps.
+//!   guarantee than the reader's, which at least spends steps. The one
+//!   contraction is a β-redex's, at a node that would otherwise print raw: a
+//!   redex has no surface form, and a let-bound or instantiated λ at a head
+//!   leaves one in the types a mismatch note holds
+//!   (`issues/elab-accepts-mismatch-under-redex-head.md`). It is syntactic
+//!   substitution, charged to the same node budget, and only in the reading
+//!   flavours: the source flavours, whose output is re-parsed, still decline.
 //! - **Every node either spells or falls back to that node's `{:?}`.** There
 //!   is no whole-type cliff: an unspellable argument prints raw inside a call
 //!   that prints as a call. A raw node is truncated ([`RAW_NODE_CHARS`]) so
@@ -1031,7 +1037,19 @@ impl Speller<'_> {
     fn call(&self, t: &Term, d: u32) -> String {
         let (head, args) = match self.call_parts(t) {
             Some(parts) => parts,
-            None => return self.raw_tm(t),
+            // A β-redex has no surface spelling, and its contractum is the
+            // same type to every reader: a let-bound or instantiated λ at the
+            // head (`post(u)` with `post := λ u => P(u.memory)`) spells as
+            // what it stands for (issues/elab-accepts-mismatch-under-redex-head.md).
+            // Only for a reader: a source flavour's caller re-parses what it
+            // gets (omega's and ring's atoms, generated annotations), and a
+            // declined redex is part of what those routes decide on.
+            None => {
+                return match crate::spelling::beta_head(t).filter(|_| !self.qualified && !self.annotations) {
+                    Some(r) => self.tm(&r, d + 1),
+                    None => self.raw_tm(t),
+                };
+            }
         };
         let (name, implicit) = match head {
             CallHead::Field(name) => {
