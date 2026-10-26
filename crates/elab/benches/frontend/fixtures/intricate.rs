@@ -111,11 +111,12 @@ fn isa_declaration() -> Family {
 /// declaration. Lower bound: linear (the declaration); a mention should cost
 /// a constant, or at worst the depth of its injection.
 ///
-/// Recorded instead (2026-10-26): every mention pays the elaborator's
+/// Recorded first (2026-10-26) at 1.71: every mention paid the elaborator's
 /// `respell_spine` matching each spine component against the registered
-/// codes by deep `Type` equality — Θ(n²) per mention, independent of which
-/// constructor — and the gate pays Θ(k·n) for the k-th
-/// (`issues/wide-inductive-constructor-mention-cost.md`).
+/// codes by deep `Type` equality — Θ(n²) per mention — and the gate Θ(k²)
+/// for the k-th (`issues/wide-inductive-constructor-mention-cost.md`, which
+/// fixed both). What is left per `fn` is lowering `Instr` in its signature,
+/// linear, which a declaring module pays per mention of the name.
 fn isa_constructor_use() -> Family {
     let src = |n: u64| {
         let last = (n as usize - 1) / 6 * 6;
@@ -130,9 +131,9 @@ fn isa_constructor_use() -> Family {
         name: "inductive/isa-constructor-use",
         what: "four constructor values of an n-form instruction type",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 1.71 (1.66-1.79), 93% elab at
-        // 256. Debt.
-        expect_slope: Some((1.36, 2.06)),
+        // 2026-10-26, cloud box, three runs: 0.96 (0.95-0.98), after the
+        // mention-cost round (1.71 before). Met.
+        expect_slope: Some((0.61, 1.31)),
         cases: sweep("inductive/isa-constructor-use", &[32, 64, 128, 256], src),
     }
 }
@@ -153,9 +154,10 @@ fn isa_opcode_match() -> Family {
         name: "inductive/isa-opcode-match",
         what: "an n-arm match from an instruction type into Nat",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 1.62 (1.52-1.70), 88% elab at
-        // 256. Debt, unattributed.
-        expect_slope: Some((1.27, 1.97)),
+        // 2026-10-26, cloud box, three runs: 1.34 (1.31-1.38), after the
+        // mention-cost round shared the registered lowering (1.62 before).
+        // Debt, unattributed.
+        expect_slope: Some((0.99, 1.69)),
         cases: sweep("inductive/isa-opcode-match", &[32, 64, 128, 256], src),
     }
 }
@@ -163,8 +165,9 @@ fn isa_opcode_match() -> Family {
 /// An `n`-arm `match` that rebuilds every form from its operands, and the
 /// theorem, by an `n`-arm `match` of `refl`s, that it is the identity — the
 /// shape of every encode/decode roundtrip. Lower bound: linear in the arms.
-/// The rebuilt constructor values make Θ(n) mentions, so today this carries
-/// `isa-constructor-use`'s per-mention cost n times over.
+/// The rebuilt constructor values make Θ(n) mentions, so this carried
+/// `isa-constructor-use`'s per-mention cost n times over until that was
+/// fixed; the `k`-th is still `k` injections deep.
 fn isa_roundtrip() -> Family {
     let src = |n: u64| {
         let n = n as usize;
@@ -184,9 +187,11 @@ fn isa_roundtrip() -> Family {
         name: "inductive/isa-roundtrip",
         what: "an n-arm rebuild of an instruction type and its identity theorem",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 2.15 (2.14-2.18), 80% gate at
-        // 128 (the CLI reads ~2.8 from 128 to 256). Debt.
-        expect_slope: Some((1.80, 2.50)),
+        // 2026-10-26, cloud box, three runs: 1.96 (1.95-1.97), after the
+        // mention-cost round (2.15 before); the identity theorem is most of
+        // what is left (issues/conv-query-identity-env-per-gamma.md), and
+        // the rebuilt values are Σk injections deep by the encoding. Debt.
+        expect_slope: Some((1.61, 2.31)),
         cases: sweep("inductive/isa-roundtrip", &[16, 32, 64, 128], src),
     }
 }

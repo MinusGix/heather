@@ -1,6 +1,6 @@
 ---
 title: A constructor value of an n-constructor type costs Θ(n²) to elaborate and Θ(k·n) to gate
-status: open
+status: closed
 labels: [elaboration,kernel,inductives,performance,x86]
 area: language
 milestone: [hih-passes]
@@ -75,3 +75,37 @@ from below.
 - **[[emit-ty-rewalks-normalized-type]]** owns the deep `emit_ty` walk under
   the same `respell_spine` call on large *field* types. This is the other
   half of that call: the component count, not the component size.
+
+## Log
+
+- 2026-10-26: fixed in three places; `inductive/isa-constructor-use` 1.71 →
+  0.96 (met), `isa-opcode-match` 1.62 → 1.34, `isa-roundtrip` 2.15 → 1.96
+  (cloud box, three runs each).
+  1. **The positional guard** (`spine_agreement`, `gendefs.rs`) compares
+     the payloads deeply and each tail as its `+` node only: `tails[k]` is
+     `ctors[k+1] + tails[k+1]` by pointer on both sides (`spine` reads them
+     off without copying), so with the right neighbour's answer in hand
+     it is two level comparisons. Θ(n) per mention instead of Θ(n²).
+  2. **Sharing with the registered lowering**
+     (`Elaborator::share_registered_lowering`, called from `lower_named`):
+     a bare named type equal to its `D#tycode` guard copy is returned as
+     that copy's nodes, so every later guard (`closed_type_ref`, the spine
+     guard) stops at `Rc` identity. At 1024 forms the body of
+     `fn mk(a, b) → Instr { I0(a, b) }` is ~2.5 ms; what remains per `fn`
+     is lowering `Instr` in the signature, which a declaring module does
+     per mention ([[named-type-lowering-per-mention]]'s "Left").
+  3. **The gate** was Θ(k²), not Θ(k·n): layer `j` of an unannotated
+     `inr@` chain was checked against a selection `j` deep and every view
+     replayed it from the root. `Tc::injection_at_spine` views a contiguous
+     chain's layers in one arena (`conv::injection_heads_cached`, the
+     intro twin of `projection_at_spine`), and checks only the innermost
+     value against the full description. `I₁₀₂₀(a, b)` at 1024 forms: 1.06 M
+     eval steps → 16 K, gate 473 → 7 ms. Golden test
+     `typing::an_injection_chain_checks_every_layer`; the typing
+     differential already generates mixed chains.
+- Left, not this issue's: the roundtrip's identity theorem, whose gate
+  grows faster than its counters because every conversion query builds
+  Γ's identity environment ([[conv-query-identity-env-per-gamma]]), and the
+  encoding itself — the `k`-th value is still `k` injections deep, so an
+  `n`-arm rebuild is Σk nodes. A balanced sum would make that Θ(n log n);
+  not attempted, as it changes every reader of the spine.
