@@ -1,0 +1,45 @@
+---
+title: A motive-less nested match on a Cons tail does not specialise the arm's binder types
+status: open
+labels: [frontend,elaborator,proofs,ergonomics]
+area: language
+created: 2026-10-26
+updated: 2026-10-26
+---
+
+A `match` with no `as` motive, on the tail binder of a `Cons` arm that sits
+inside a `match` on a function's own Pi binder, does not abstract the tail
+in the binder types it checks against. Found by `native-source-bytes`
+(`Target::goes_single`, `lib/native/native_compile_bytes.hthr`, which now
+writes its motive).
+
+```heather
+fn total(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(x, rest) => x + total(rest) } }
+theorem nested(P: Nat → Type): (xs: List<Nat>) → P(total(xs)) → Nat {
+    λ xs => match xs {
+        Nil => λ _ => 0,
+        Cons(x, rest) => match rest {
+            Nil => λ h => { let k: P(total([x])) = h; 0 },  // h: P(total(Cons(x, rest)))
+            Cons(_, _) => λ _ => 0,
+        },
+    }
+}
+```
+
+`h` keeps the type `P(total(Cons(x, rest)))` in the `Nil` arm, where
+`rest` is `Nil`. With `match rest as λ r => P(total(Cons(x, r))) → Nat`
+it checks. In `goes_single` the same shape first showed as a kernel
+`NotConvertible` at the arm with no surface spelling: the elaborator
+accepted the arm and the kernel refused the declaration.
+
+Close relative: [[nested-match-on-field-binder-motive]] (closed
+2026-08-17), whose fix rebuilt the constructor value around the abstracted
+field for tier-0 arms. `List`'s `Cons` tail is the recursive field, which
+that fix may not cover.
+
+## Done when
+
+The repro checks with no written motive, and `Target::goes_single` drops
+its `as`.
+
+## Log

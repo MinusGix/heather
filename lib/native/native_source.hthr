@@ -15,7 +15,9 @@
 // The environment is a file of 64-bit words and a file of buffers, each a
 // list of bytes: what a uniqueness-threaded buffer denotes. A region sees
 // each word at every width as its low bits, and what it writes goes back
-// into the file zero-extended from the width it was written at. A call reads
+// into the file zero-extended from the width it was written at; its byte
+// nodes read and write the buffers in place (`function_ir_state`'s `run`).
+// A buffer starts as its initial bytes, then zeroes. A call reads
 // and writes buffers whole and never faults: a read asks for at most what
 // its buffer holds and lands at the buffer's start, and a write sends the
 // span its buffer holds. A failed call leaves its errno negated in its
@@ -27,6 +29,7 @@
 
 import function_ir;
 import function_ir_eval;
+import function_ir_state;
 import linux_calls;
 import linux_trees;
 import itree;
@@ -104,7 +107,8 @@ fn Env::settle(self env: Env, after: Valuation(), ports: List<Port>) → Env {
 }
 
 fn Env::compute(self env: Env, call: Answers(), region: StructuredRegion) → Env {
-    env.settle(region.eval(call, env.valuation()), region.write_ports())
+    let after = region.run(call, env.valuation(), env.buffers);
+    Env(env.words, after.buffers).settle(after.values, region.write_ports())
 }
 
 // ---------------------------------------------------------------------------
@@ -257,15 +261,32 @@ theorem Stmt::grows(self s: Stmt, call: Answers(), n: Nat): (env: Env) →
 // ---------------------------------------------------------------------------
 // Programs
 
-// Total functions its regions call, the capacity of each buffer (buffer `b`
-// is the `b`-th), and the statement it runs.
-record Source { functions: List<Function>, buffers: List<Nat>, main: Stmt }
+// A buffer: how many bytes it holds, and the bytes it starts with from
+// index 0; those past its capacity are dropped (`Source::start`).
+record Buffer { capacity: Nat, initial: List<BitVec(8)> := [] }
+
+// Total functions its regions call, its buffers (buffer `b` is the `b`-th),
+// and the statement it runs.
+record Source { functions: List<Function>, buffers: List<Buffer>, main: Stmt }
 
 fn zero_byte() → BitVec(8) { BitVec::zero() }
 
-// Words all zero; each buffer its capacity of zero bytes.
+fn Source::capacities(self src: Source) → List<Nat> { src.buffers.map(λ (b: Buffer) => b.capacity) }
+
+// Bytes stored into buffer `buf` of a file one at a time, from index `i`.
+fn List::stored(self bytes: List<BitVec(8)>, buf, i: Nat, file: Buffers()) → Buffers() {
+    match bytes { Nil => file, Cons(c, rest) => rest.stored(buf, Succ(i), store_byte(file, buf, i, c)) }
+}
+
+// Each buffer's initial bytes stored, buffer `buf` first.
+fn initial_stores(buffers: List<Buffer>, buf: Nat, file: Buffers()) → Buffers() {
+    match buffers { Nil => file, Cons(b, rest) => initial_stores(rest, Succ(buf), b.initial.stored(buf, 0, file)) }
+}
+
+// Words all zero; each buffer its capacity of zero bytes, then its initial
+// bytes stored.
 fn Source::start(self src: Source) → Env {
-    Env(Nil, src.buffers.map(λ size => List::replicate(zero_byte(), size)))
+    Env(Nil, initial_stores(src.buffers, 0, src.capacities().map(λ size => List::replicate(zero_byte(), size))))
 }
 
 // Running off the end exits 0.

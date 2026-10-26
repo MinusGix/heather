@@ -394,6 +394,20 @@ that path.
 The first S3 round does not need this. Its first program is `cat`, whose
 buffer is touched only by calls (§10).
 
+**As built** (`issues/native-source-bytes.md`, 2026-10-26). The first byte
+nodes take a simpler road than the one above, which stays the target. A
+region's buffers are a `List<List<BitVec(8)>>` threaded beside the
+valuation by `StructuredRegion::run` (`lib/native/function_ir/function_ir_state.hthr`),
+not port values; `eval` is unchanged and is `run` from no buffers
+(`run_empty`). `BufferLoad(output, buffer, index)` reads a byte zero-extended,
+and `BufferStore(output, buffer, index, value)` stores a word's low byte and
+reads it back. An index past the buffer's end loads zero and stores nothing,
+so no `Faulted` outcome exists yet. Every buffer already lives in the data
+region under S3.2's `Target::Placed`, so the statement compiler compiles a
+leaf of one byte node there, CMP-guarded against the capacity
+(`lib/native/native_compile_bytes.hthr`), with no footprint and no change to
+S4, which refuses the nodes. Initial bytes are stored at entry.
+
 ---
 
 ## 7. The layer

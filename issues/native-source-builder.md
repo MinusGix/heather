@@ -45,3 +45,7 @@ reports its count as the exit status builds and runs.
   emits only dataflow leaves.
 - **[[effects-direction]]** owns the eventual surface, which elaborates into
   this builder or straight into `Source`.
+
+## Log
+
+- 2026-10-26: [[native-source-bytes]] landed: the nodes are `BufferLoad(output, buffer, index)` and `BufferStore(output, buffer, index, value)`, and until [[native-compile-wider-leaves]] splits leaves, each must be a `Compute` leaf of its own (a leaf mixing them with pure nodes is refused). `lib/native/native_tools.hthr`'s tr is the hand-written shape.

@@ -118,7 +118,8 @@ fn every_written_program_gets_its_theorem() {
 }
 
 /// A program the theorem would not cover is not written, and the refusal
-/// says why: past the page, a call not compiled, a leaf past the registers.
+/// says why: past the page, a call not compiled, a leaf past the registers,
+/// a byte node in a leaf with others.
 #[test]
 fn refused_programs_name_their_reason() {
     let dir = scratch("refused");
@@ -126,6 +127,7 @@ fn refused_programs_name_their_reason() {
         ("big_cat", "`big_cat` does not fit the I/O page: its words, buffers and scratch range take 4608 bytes and the page holds 4096"),
         ("opens", "`opens` is refused at statement 1, a call: `open` is not compiled yet"),
         ("wide_leaf", "`wide_leaf` is refused at statement 1, a computation: the leaf needs 15 registers, one per input and per node, and the pool holds 14"),
+        ("mixed_leaf", "`mixed_leaf` is refused at statement 1, a computation: a leaf with a byte node compiles only as that one node"),
     ] {
         let output = dir.join(source);
         let result = write_elf(PROBES, source, &output);

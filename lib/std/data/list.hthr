@@ -834,6 +834,70 @@ theorem List::nth_map_some<A, B>(self xs: List<A>, f: A → B): (i: Nat) → (x:
     }
 }
 
+// The list with `f` applied to its element at `i`; past its end, the list.
+fn List::update<A>(self xs: List<A>, i: Nat, f: A → A) → List<A> {
+    match xs {
+        Nil => Nil,
+        Cons(h, t) => match i { Zero => Cons(f(h), t), Succ(k) => Cons(h, t.update(k, f)) },
+    }
+}
+
+theorem List::len_update<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.update(i, f).len() = xs.len() {
+    match xs {
+        Nil => λ i f => refl,
+        Cons(_, t) => λ i => match i {
+            Zero => λ f => refl,
+            Succ(k) => λ f => cong_fn<Nat, Nat>(λ n => Succ(n), t.len_update(k, f)),
+        },
+    }
+}
+
+theorem List::nth_update_here<A>(self xs: List<A>): (i: Nat) → (f: A → A) → (x: A) → xs.nth(i) = Some(x) →
+    xs.update(i, f).nth(i) = Some(f(x)) {
+    match xs {
+        Nil => λ i f x none => absurd(none),
+        Cons(h, t) => λ i => match i {
+            Zero => λ f x some => cong_fn<A, Option<A>>(λ a => Some(f(a)), Option::some_inj(h, x, some)),
+            Succ(k) => λ f x some => t.nth_update_here(k, f, x, some),
+        },
+    }
+}
+
+theorem List::nth_update_other<A>(self xs: List<A>): (i: Nat) → (f: A → A) → (k: Nat) → k ≠ i → xs.update(i, f).nth(k) = xs.nth(k) {
+    match xs {
+        Nil => λ i f k _ => refl,
+        Cons(_, t) => λ i => match i {
+            Zero => λ f k => match k { Zero => λ ne => false_elim(ne(refl)), Succ(_) => λ _ => refl },
+            Succ(m) => λ f k => match k {
+                Zero => λ _ => refl,
+                Succ(l) => λ ne => t.nth_update_other(m, f, l, λ same => ne(cong_fn<Nat, Nat>(λ n => Succ(n), same))),
+            },
+        },
+    }
+}
+
+// Where there is no element, there is none after an update either.
+theorem List::nth_update_none<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.nth(i) = None → xs.update(i, f).nth(i) = None {
+    match xs {
+        Nil => λ i f _ => refl,
+        Cons(_, t) => λ i => match i {
+            Zero => λ f some => absurd(some),
+            Succ(k) => λ f none => t.nth_update_none(k, f, none),
+        },
+    }
+}
+
+// Past its end, an update leaves the list as it was.
+theorem List::update_past<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.len() <= i → xs.update(i, f) = xs {
+    match xs {
+        Nil => λ i f _ => refl,
+        Cons(h, t) => λ i => match i {
+            Zero => λ f past => false_elim(past),
+            Succ(k) => λ f past => cong_fn<List<A>, List<A>>(λ r => Cons(h, r), t.update_past(k, f, past)),
+        },
+    }
+}
+
 // The list as a vector of its length, in order: what a store of a list's
 // bytes stores (`Memory::set_span`, lib/std/machine/memory.hthr).
 fn List::to_vector<A>(self xs: List<A>) → [A; xs.len()] {

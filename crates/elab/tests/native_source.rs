@@ -17,6 +17,7 @@ fn checker_over(native_cat: &str) -> heather_elab::Elaborator {
         ("itree_trace", include_str!("../../../lib/std/itree/itree_trace.hthr")),
         ("linux_trees", include_str!("../../../lib/std/os/linux/linux_trees.hthr")),
         ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
+        ("function_ir_state", include_str!("../../../lib/native/function_ir/function_ir_state.hthr")),
         ("native_source", include_str!("../../../lib/native/native_source.hthr")),
         ("native_cat", native_cat),
     ])
