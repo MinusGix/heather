@@ -1,6 +1,6 @@
 ---
 title: A native evaluator re-entry costs kilobytes of stack, leaving one decade between answering and aborting
-status: open
+status: closed
 labels: [kernel,evaluator,performance]
 area: kernel
 created: 2026-09-09
@@ -33,3 +33,4 @@ Halving the frame doubles the headroom at both ends at once, which is worth more
   Fix: a function a counted recursion passes through is a dispatcher; an arm that can re-enter gets a function of its own (`#[inline(never)]`). Boxing cold `Elim` variants was not needed and not done. Conversion shares the account, so it got the same treatment: `tm_ne`/`tm_nf` one function per arm, `rec_ca`'s 65-row tables built by `branch_table`. Measured per counted level (gdb backtrace at a 1 MiB main stack, release, cloud box): pow chain ~4.5 KB -> ~1.7 KB; conversion's neutral spine (`it(f, n, x) = it2(f, n, x)` by refl) ~3.1 KB -> ~1.7 KB; `rec_ca` frame 4144 B -> 616 B. New bench probe `stack/eval-nested-scrutinee` (512 KiB thread): master 134 levels (3.8 KiB/level), now 576 (910 B/level). `stack/check-numeral` unchanged (1462 levels in 4 MiB on both).
 
   `NATIVE_DEPTH_LIMIT` 1024 -> 2048: the worst counted chain now puts 2048 levels on under half the 8 MiB rail, the margin §4 chose. `pow(2, 1075)` checks; `pow(2, 2046)` (about 2050 levels) still refuses — that needs a 16 MiB rail and 4096, put to Minus as a decision. The small-step reducer (`step_term_frame`, ~3.7 KB) was not split and keeps 1024 as `REDUCER_DEPTH_LIMIT`; filed as [[reducer-step-frame-size]].
+- 2026-10-26: Minus decided (2026-10-26) against a 16 MiB rail: the rail stays 8 MiB and `NATIVE_DEPTH_LIMIT` stays 2048, so `pow(2, 2046)` keeps refusing on the depth budget. Float literals no longer need `2^2046`. The frame work shipped in #187. The remaining frame residue, the small-step reducer's `step_term_frame`, is owned by [[reducer-step-frame-size]]. Closing.
