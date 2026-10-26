@@ -1823,7 +1823,7 @@ fn Nat::pow_sq(self a, n: Nat) → Nat { Nat::pow_sq_fuel(a, n, n) }
 theorem Nat::pow_sq_step_eq(a, h, b: Nat, hb: b <= 1): Nat::pow_sq_step(a, a.pow(h), b) = a.pow((h + h) + b) {
     match b as λ c => c <= 1 → Nat::pow_sq_step(a, a.pow(h), c) = a.pow((h + h) + c) {
         Zero => λ _ => sym(a.pow_add(h, h)),
-        Succ(c) => match c as λ c2 => Succ(c2) <= 1 → Nat::pow_sq_step(a, a.pow(h), Succ(c2)) = a.pow((h + h) + Succ(c2)) {
+        Succ(c) => match c {
             Zero => λ _ => Nat::cong(λ (x: Nat) => x * a, sym(a.pow_add(h, h))),
             Succ(_) => λ bad => false_elim(bad),
         },
@@ -1832,8 +1832,8 @@ theorem Nat::pow_sq_step_eq(a, h, b: Nat, hb: b <= 1): Nat::pow_sq_step(a, a.pow
 
 theorem Nat::pow_sq_fuel_eq(self fuel: Nat): (a, n: Nat) → n <= fuel → Nat::pow_sq_fuel(a, n, fuel) = a.pow(n) {
     match fuel {
-        Zero => λ a n => match n as λ m => m <= 0 → Nat::pow_sq_fuel(a, m, 0) = a.pow(m) { Zero => λ _ => refl, Succ(_) => λ bad => false_elim(bad) },
-        Succ(f, ih) => λ a n => match n as λ m => m <= Succ(f) → Nat::pow_sq_fuel(a, m, Succ(f)) = a.pow(m) {
+        Zero => λ a n => match n { Zero => λ _ => refl, Succ(_) => λ bad => false_elim(bad) },
+        Succ(f, ih) => λ a n => match n {
             Zero => λ _ => refl,
             Succ(k) => λ le => {
                 let h = Succ(k).half();
