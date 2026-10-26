@@ -4753,6 +4753,10 @@ impl Parser {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Num(n), span: sp })
             }
+            TokKind::Scaled(s) => {
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::Scaled(s), span: sp })
+            }
             // One atom each, exactly as a numeral is one: the lexer has
             // already decided the payload, so there is no grammar here beyond
             // "a literal is an expression" (docs/string-char-design.md §3).

@@ -1,0 +1,60 @@
+// Probes of `lib/std/num/float/literal.hthr` and the decimal and hex float
+// literals (docs/floating-point-design.md §15): the values literals denote
+// at `Rat` and at formats, the rounding at binary64 where `round_rat` does
+// not evaluate, and the exactness bit the inexact-literal warning reads.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import int; import omega; import rat;
+import dyadic; import float; import round; import window; import literal;
+fn mag_of({F: Format}, r: Float(F)) → Nat { match r { Fin(f) => f.mag, Inf(_, _) => 0, NaN(_) => 0 } }
+fn bexp_of({F: Format}, r: Float(F)) → Nat { match r { Fin(f) => f.bexp, Inf(_, _) => 0, NaN(_) => 0 } }
+fn is_inf({F: Format}, r: Float(F)) → Bool { match r { Fin(_) => False, Inf(_, _) => True, NaN(_) => False } }
+fn b64(x: Float(binary64())) → Float(binary64()) { x }
+fn b32(x: Float(binary32())) → Float(binary32()) { x }
+
+// At `Rat` a literal is its value exactly, decimal or hex, however spelled.
+theorem rat_half(): Rat::Same(0.5, Rat(1, 2)) { refl }
+theorem rat_milli(): Rat::Same(1e-3, Rat(1, 1000)) { refl }
+theorem rat_spellings(): Rat::Same(1.50, 15e-1) { refl }
+theorem rat_big(): Rat::Same(2.5e3, 2500) { refl }
+theorem rat_hex(): Rat::Same(0x1.8p3, 12) { refl }
+theorem rat_hex_small(): Rat::Same(0x1p-2, Rat(1, 4)) { refl }
+// In inference position a literal is a `Rat`.
+theorem rat_inferred(): Rat::Same({ let r = 2.5; r }, Rat(5, 2)) { refl }
+
+// binary64: 0.1 is 7205759403792794 · 2^-56, the double every IEEE parser
+// gives; the bounds of the format and past them.
+theorem b64_tenth(): mag_of(b64(0.1)) = 7205759403792794 { refl }
+theorem b64_tenth_exp(): bexp_of(b64(0.1)) = 1018 { refl }
+theorem b64_max(): mag_of(b64(1.7976931348623157e308)) = 9007199254740991 { refl }
+theorem b64_max_exp(): bexp_of(b64(1.7976931348623157e308)) = 2045 { refl }
+theorem b64_overflow(): is_inf(b64(1e400)) = True { refl }
+theorem b64_least_subnormal(): mag_of(b64(5e-324)) = 1 { refl }
+theorem b64_underflow(): mag_of(b64(1e-400)) = 0 { refl }
+theorem b64_hex(): mag_of(b64(0x1.8p3)) = 6755399441055744 { refl }
+theorem b64_hex_subnormal(): mag_of(b64(0x1p-1074)) = 1 { refl }
+// binary32 and a format without infinities, which saturates.
+theorem b32_tenth(): mag_of(b32(0.1)) = 13421773 { refl }
+theorem b32_tenth_exp(): bexp_of(b32(0.1)) = 122 { refl }
+theorem e2m1_tie(): mag_of(e2m1().round_decimal(NearestEven, Decimal(125, -2))) = 2 { refl }
+theorem e2m1_saturates(): mag_of(e2m1().round_decimal(NearestEven, Decimal(100, 0))) = 3 { refl }
+theorem e2m1_up(): mag_of(e2m1().round_decimal(TowardPos, Decimal(125, -2))) = 3 { refl }
+
+// The exactness bit: the value a format holds, and the one it does not.
+theorem exact_half(): binary64().decimal_exact(Decimal(5, -1)) = True { refl }
+theorem inexact_tenth(): binary64().decimal_exact(Decimal(1, -1)) = False { refl }
+theorem exact_ten_22(): binary64().decimal_exact(Decimal(1, 22)) = True { refl }
+theorem inexact_ten_23(): binary64().decimal_exact(Decimal(1, 23)) = False { refl }
+theorem inexact_overflow(): binary16().decimal_exact(Decimal(1, 5)) = False { refl }
+theorem hex_exact_bound(): binary64().hex_exact(9007199254740991, 0) = True { refl }
+theorem hex_inexact_bit(): binary64().hex_exact(9007199254740993, 0) = False { refl }
+
+// A hex float is accepted at a format only when the format holds it.
+// expect-error: a hex float must be exact
+fn hex_too_precise() → Float(binary64()) { 0x1.00000000000008p0 }
+
+// The contract at an open format, mode and decimal.
+theorem decimal_rounds(F: Format, mode: Mode, d: Decimal): RoundsTo(F, mode, d.rat(), F.round_decimal(mode, d)) { F.round_decimal_correct(mode, d) }
+theorem decimal_exact_means(F: Format, d: Decimal, h: F.decimal_exact(d) = True): (F.round_decimal(NearestEven, d)).Denotes(d.rat()) {
+    (F.decimal_exact_reflects(d)).left(h)
+}

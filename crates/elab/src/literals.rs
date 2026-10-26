@@ -19,7 +19,7 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
-use heather_syntax::{Expr, ExprKind, Span};
+use heather_syntax::{Expr, ExprKind, ScaledLit, Span};
 
 use crate::{application, Cx, ElabError, Elaborator, R};
 
@@ -32,6 +32,18 @@ const CHAR_TYPE: &str = "char::Char";
 const CHAR_INTRO: &str = "char::ofNat";
 const STRING_TYPE: &str = "string::String";
 const DECIDE_YES: &str = "bool::decide_yes";
+const DECIMAL_TYPE: &str = "rat::Decimal";
+const DECIMAL_INTRO: &str = "rat::Decimal::lit";
+const DECIMAL_RAT: &str = "rat::Decimal::rat";
+const HEX_TYPE: &str = "rat::HexFloat";
+const HEX_INTRO: &str = "rat::HexFloat::lit";
+const HEX_RAT: &str = "rat::HexFloat::rat";
+
+/// The spec type, its introduction form and its reading at `Rat`, for a
+/// decimal or a hex float literal.
+fn scaled_names(lit: &ScaledLit) -> (&'static str, &'static str, &'static str) {
+    if lit.hex { (HEX_TYPE, HEX_INTRO, HEX_RAT) } else { (DECIMAL_TYPE, DECIMAL_INTRO, DECIMAL_RAT) }
+}
 
 fn var(name: &str, span: Span) -> Expr {
     Expr {
@@ -275,6 +287,174 @@ impl Elaborator {
             .string_intro(text, e.span)
             .ok_or_else(|| self.literal_needs_module(STRING_TYPE, e.span))?;
         self.elab_infer(cx, &intro)
+    }
+
+    /// `rat::Decimal::lit(mant, up, down)` (or `HexFloat`'s), the exponent
+    /// split into its two signs so the parts are numerals.
+    fn scaled_intro(&self, lit: &ScaledLit, span: Span) -> Option<Expr> {
+        let intro = self.key_of(scaled_names(lit).1)?;
+        let num = |n: heather_syntax::Numeral| Expr { kind: ExprKind::Num(n), span };
+        let up = u64::try_from(lit.exp.max(0)).unwrap_or(0);
+        let down = lit.exp.min(0).unsigned_abs();
+        Some(call(var(&intro, span), vec![num(lit.mant.clone()), num(up.into()), num(down.into())], span))
+    }
+
+    /// A decimal or hex float literal in checking position. At its spec type
+    /// it is the record of its parts; at another carrier it resolves
+    /// `DecimalLiteral` (whose `exact` field, run here, draws the
+    /// inexact-literal warning when it says `False`) or `HexLiteral` (whose
+    /// `ofHex` takes the proof `trivial` that the carrier holds the value, so
+    /// an unrepresentable hex float is refused); with neither, it is a `Rat`.
+    pub(crate) fn elab_scaled_check(
+        &self,
+        cx: &Cx,
+        lit: &ScaledLit,
+        e: &Expr,
+        expected: &Type,
+        lvl: &Level,
+    ) -> R<Term> {
+        let (type_key, _, _) = scaled_names(lit);
+        // Every rung goes through the spec type: the class's field takes a
+        // `Decimal`, and the reading at `Rat` is `Decimal::rat`.
+        if self.key_of(type_key).is_none() {
+            return Err(self.literal_needs_module(type_key, e.span));
+        }
+        if self.expected_is(cx, expected, type_key, e.span) {
+            let intro = self
+                .scaled_intro(lit, e.span)
+                .ok_or_else(|| self.literal_needs_module(type_key, e.span))?;
+            return self.elab_check(cx, &intro, expected, lvl);
+        }
+        let rung = if lit.hex {
+            let proof = var("trivial", e.span);
+            self.literal_class_fields(cx, "HexLiteral", "ofHex", None, &[e.clone(), proof], expected, lvl, e.span)
+        } else {
+            self.literal_class_fields(cx, "DecimalLiteral", "ofDecimal", Some("exact"), std::slice::from_ref(e), expected, lvl, e.span)
+        };
+        if let Some(result) = rung {
+            // The only way `trivial` fails at `HexLiteral`'s `Ok` is a value
+            // the carrier does not hold; say that, not the obligation.
+            let result = match result {
+                Err(err) if lit.hex && !matches!(err, ElabError::Resolution { .. }) => Err(ElabError::Elab {
+                    msg: format!(
+                        "this hex float is not exactly a value of `{}`, and a hex float must be exact: write it with fewer digits, or as a decimal to round it",
+                        self.display_type(cx, expected)
+                    ),
+                    span: e.span,
+                }),
+                other => other,
+            };
+            let (term, exact) = result?;
+            if let Some(exact) = exact
+                && self.literal_bit_false(cx, &exact, e.span)
+            {
+                let carrier = self.display_type(cx, expected);
+                self.emit_lint(
+                    crate::Lint::InexactLiteral,
+                    format!("this literal is not exactly a value of `{carrier}`: it stands for the nearest one"),
+                    e.span,
+                );
+            }
+            return Ok(term);
+        }
+        let (term, ty, _) = self.elab_scaled_infer(cx, lit, e)?;
+        self.note_check_mismatch(cx, &ty, expected, &Level::Zero, e.span);
+        Ok(term)
+    }
+
+    /// Does a literal's `exact` bit compute to `False`? Asked of the kernel's
+    /// conversion, the judgement a `refl` would get at the gate: the bit is
+    /// a closed run of the carrier's rounding, which the evaluator answers
+    /// where the elaborator's own weak-head reduction would spell every step.
+    fn literal_bit_false(&self, cx: &Cx, bit: &Term, span: Span) -> bool {
+        let Some(key) = self.key_of("rat::Decimal::inexact") else {
+            return false;
+        };
+        let Ok((no, ty, level)) = self.elab_infer(cx, &call(var(&key, span), Vec::new(), span)) else {
+            return false;
+        };
+        self.goal_oracle()
+            .convert_term(&cx.gamma, heather_kernel::layer::Layer::Prog, bit, &no, &ty, &level)
+            .is_ok()
+    }
+
+    /// A decimal or hex float literal in inference position: the `Rat` it
+    /// denotes.
+    pub(crate) fn elab_scaled_infer(&self, cx: &Cx, lit: &ScaledLit, e: &Expr) -> R<(Term, Type, Level)> {
+        let (type_key, _, rat_key) = scaled_names(lit);
+        let intro = self
+            .scaled_intro(lit, e.span)
+            .ok_or_else(|| self.literal_needs_module(type_key, e.span))?;
+        let reading = self.key_of(rat_key).ok_or_else(|| self.literal_needs_module(type_key, e.span))?;
+        self.elab_infer(cx, &call(var(&reading, e.span), vec![intro], e.span))
+    }
+
+    /// [`Self::literal_class`] for a class whose embedding takes `args`
+    /// (the literal and anything after it), also applying the field `check`,
+    /// when named, to the literal alone. `None` when the class is not
+    /// visible here.
+    #[allow(clippy::too_many_arguments)]
+    fn literal_class_fields(
+        &self,
+        cx: &Cx,
+        class_name: &str,
+        field_name: &str,
+        check: Option<&str>,
+        args: &[Expr],
+        expected: &Type,
+        expected_level: &Level,
+        span: Span,
+    ) -> Option<R<(Term, Option<Term>)>> {
+        let class = self.lookup_class(class_name)?;
+        if class.params.len() != 1 || !class.valparams.is_empty() {
+            return None;
+        }
+        let ind = self.lookup_inductive(&class.name).cloned()?;
+        let field = ind.field_index(field_name)?;
+        let check = match check {
+            Some(name) => Some((name, ind.field_index(name)?)),
+            None => None,
+        };
+        Some((|| {
+            let targs = [(expected.clone(), expected_level.clone())];
+            let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &[], span)?;
+            let carrier = self
+                .type_namespace(cx, expected, span)
+                .unwrap_or_else(|| "the expected type".to_string());
+            let display = format!("{class_name}<{carrier}>");
+            let mut trace = Vec::new();
+            let Some(dict) =
+                self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
+            else {
+                return Err(ElabError::Resolution {
+                    goal: display,
+                    span,
+                    trace,
+                });
+            };
+            let dict = Rc::new(dict);
+            let apply = |name: &str, index, args: &[Expr]| -> R<Term> {
+                let (embed, embed_ty, embed_level) = self.project_field(cx, &ind, &goal, Rc::clone(&dict), index, span)?;
+                let (out, _, _) = application::apply_explicit(
+                    self,
+                    cx,
+                    Some(name),
+                    Rc::new(Vec::new()),
+                    0,
+                    embed,
+                    embed_ty,
+                    embed_level,
+                    args,
+                )?;
+                Ok(out)
+            };
+            let out = apply(field_name, field, args)?;
+            let checked = match check {
+                Some((name, index)) => Some(apply(name, index, &args[..1])?),
+                None => None,
+            };
+            Ok((self.reduced_embedding(cx, out), checked))
+        })())
     }
 
     fn literal_needs_module(&self, type_key: &str, span: Span) -> ElabError {

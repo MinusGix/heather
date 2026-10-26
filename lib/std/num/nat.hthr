@@ -1658,9 +1658,16 @@ fn Nat::ldiv_pick(d, q, r: Nat, c: d <= r ∨ ¬(d <= r)) → DivMod {
 // The bit halving drops: `n = 2·h + bit` when `h = ⌊n/2⌋`.
 fn Nat::ldiv_bit(n, h: Nat) → Nat { match Succ(h + h).le_dec(n) { Inl(_) => 1, Inr(_) => 0 } }
 
+// The low bit, `n - 2·⌊n/2⌋`: a subtraction and a multiplication by a
+// literal, which evaluate on numerals directly.
+fn Nat::low_bit(self n: Nat) → Nat { n - n.half() * 2 }
+
+// The remainder is doubled as `r * 2`, never `r + r`: a sum of a value with
+// itself stays a composed run whose later comparison walks every fragment,
+// which ran a 1050-bit division out of fuel (issues/nat-wide-evaluation.md).
 fn Nat::ldiv_step(n, d: Nat, s: DivMod) → DivMod {
     match s {
-        MkDivMod(q, r) => Nat::ldiv_pick(d, q, (r + r) + Nat::ldiv_bit(n, n.half()), d.le_dec((r + r) + Nat::ldiv_bit(n, n.half()))),
+        MkDivMod(q, r) => Nat::ldiv_pick(d, q, r * 2 + n.low_bit(), d.le_dec(r * 2 + n.low_bit())),
     }
 }
 
@@ -1682,6 +1689,19 @@ theorem Nat::ldiv_bit_parts(self n: Nat): (n.half() + n.half()) + Nat::ldiv_bit(
     match Succ(n.half() + n.half()).le_dec(n) as λ c => (n.half() + n.half()) + (match c { Inl(_) => 1, Inr(_) => 0 }) = n ∧ Nat::Le(match c { Inl(_) => 1, Inr(_) => 0 }, 1) {
         Inl(le) => And(Succ(n.half() + n.half()).le_antisym(n, le, n.le_succ_half_add()), trivial),
         Inr(nle) => And((n.half() + n.half()).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, Succ(n.half() + n.half()), nle)), trivial),
+    }
+}
+
+theorem Nat::low_bit_eq(self n: Nat): n.low_bit() = Nat::ldiv_bit(n, n.half()) {
+    let parts = n.ldiv_bit_parts();
+    let b = Nat::ldiv_bit(n, n.half());
+    let h2 = n.half() * 2;
+    calc {
+        n - h2
+            = ((n.half() + n.half()) + b) - h2 := Nat::cong(λ (x: Nat) => x - h2, sym(parts.left)),
+            = (h2 + b) - h2 := Nat::cong(λ (x: Nat) => (x + b) - h2, sym(n.half().mul_two())),
+            = (b + h2) - h2 := Nat::cong(λ (x: Nat) => x - h2, h2.add_comm(b)),
+            = b := b.add_sub_cancel(h2),
     }
 }
 
@@ -1737,7 +1757,10 @@ theorem Nat::ldiv_step_spec(n, d: Nat, s: DivMod, h: DivMod::Spec(n.half(), d, s
                     Inr(Succ((r0 + r0) + b).le_trans(Succ(Succ(r0 + r0)), d + d, low, top))
                 },
             };
-            Nat::ldiv_pick_spec(n, d, q, (r0 + r0) + b, d.le_dec((r0 + r0) + b), parts, bound)
+            let e: (r0 * 2 + n.low_bit() = (r0 + r0) + b) =
+                trans(Nat::cong(λ (x: Nat) => x + n.low_bit(), r0.mul_two()), Nat::cong(λ (x: Nat) => (r0 + r0) + x, n.low_bit_eq()));
+            Nat::ldiv_pick_spec(n, d, q, r0 * 2 + n.low_bit(), d.le_dec(r0 * 2 + n.low_bit()),
+                j(sym(e), λ y _ => (q * d + q * d) + y = n, parts), j(sym(e), λ y _ => d <= 0 ∨ y < d + d, bound))
         },
     }(h)
 }
@@ -1758,6 +1781,78 @@ theorem Nat::ldiv_fuel_spec(self fuel: Nat): (n, d: Nat) → n <= fuel → DivMo
 }
 
 theorem Nat::ldiv_spec(self n, d: Nat): DivMod::Spec(n, d, n.ldiv(d)) { n.ldiv_fuel_spec(n, d, n.le_refl()) }
+
+// Fuel bounds the quotient's width, not the numerator's: when `n < d · 2^k`,
+// `k` halvings leave less than `d`, so `k` steps divide. A caller that knows
+// its quotient is narrow divides a wide numerator in that many steps.
+theorem Nat::ldiv_fuel_bounded(self fuel: Nat): (n, d: Nat) → n < d * Nat::pow(2, fuel) → DivMod::Spec(n, d, n.ldiv_fuel(d, fuel)) {
+    match fuel {
+        Zero => λ n d lt => And(trans(Nat::cong(λ (x: Nat) => x + n, d.mul_left_zero()), n.add_left_zero()),
+            Inr(j(d.add_left_zero(), λ y _ => n < y, lt))),
+        Succ(f, ih) => λ n d => match n {
+            Zero => λ _ => And(d.mul_left_zero(), match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) }),
+            Succ(k) => λ lt => {
+                let p = Nat::pow(2, f);
+                let lt2: (Succ(k) < d * p + d * p) = j(trans(sym(d.mul_assoc(p, 2)), (d * p).mul_two()), λ y _ => Succ(k) < y, lt);
+                Nat::ldiv_step_spec(Succ(k), d, Succ(k).half().ldiv_fuel(d, f), ih(Succ(k).half(), d, Succ(k).half_lt_of_lt_double(d * p, lt2)))
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Powers by squaring. `pow` multiplies once per unit of the exponent and
+// re-enters the evaluator each time, so past an exponent of about 1024 it
+// meets the kernel's depth budget; `pow_sq` halves the exponent, squares and
+// multiplies by the low bit, one level per bit of the exponent.
+
+fn Nat::pow_sq_step(a, s, b: Nat) → Nat { match b { Zero => s * s, Succ(_) => (s * s) * a } }
+
+fn Nat::pow_sq_fuel(a, n, fuel: Nat) → Nat {
+    match fuel {
+        Zero => 1,
+        Succ(f) => match n {
+            Zero => 1,
+            Succ(k) => Nat::pow_sq_step(a, Nat::pow_sq_fuel(a, Succ(k).half(), f), Succ(k).low_bit()),
+        },
+    }
+}
+
+fn Nat::pow_sq(self a, n: Nat) → Nat { Nat::pow_sq_fuel(a, n, n) }
+
+theorem Nat::pow_sq_step_eq(a, h, b: Nat, hb: b <= 1): Nat::pow_sq_step(a, a.pow(h), b) = a.pow((h + h) + b) {
+    match b as λ c => c <= 1 → Nat::pow_sq_step(a, a.pow(h), c) = a.pow((h + h) + c) {
+        Zero => λ _ => sym(a.pow_add(h, h)),
+        Succ(c) => match c {
+            Zero => λ _ => Nat::cong(λ (x: Nat) => x * a, sym(a.pow_add(h, h))),
+            Succ(_) => λ bad => false_elim(bad),
+        },
+    }(hb)
+}
+
+theorem Nat::pow_sq_fuel_eq(self fuel: Nat): (a, n: Nat) → n <= fuel → Nat::pow_sq_fuel(a, n, fuel) = a.pow(n) {
+    match fuel {
+        Zero => λ a n => match n { Zero => λ _ => refl, Succ(_) => λ bad => false_elim(bad) },
+        Succ(f, ih) => λ a n => match n {
+            Zero => λ _ => refl,
+            Succ(k) => λ le => {
+                let h = Succ(k).half();
+                let b = Nat::ldiv_bit(Succ(k), h);
+                let parts = Succ(k).ldiv_bit_parts();
+                let s_eq: (Nat::pow_sq_fuel(a, h, f) = a.pow(h)) = ih(a, h, h.le_trans(k, f, k.half_succ_le(), le));
+                calc {
+                    Nat::pow_sq_step(a, Nat::pow_sq_fuel(a, h, f), Succ(k).low_bit())
+                        = Nat::pow_sq_step(a, a.pow(h), Succ(k).low_bit()) := Nat::cong(λ (x: Nat) => Nat::pow_sq_step(a, x, Succ(k).low_bit()), s_eq),
+                        = Nat::pow_sq_step(a, a.pow(h), b) := Nat::cong(λ (x: Nat) => Nat::pow_sq_step(a, a.pow(h), x), Succ(k).low_bit_eq()),
+                        = a.pow((h + h) + b) := Nat::pow_sq_step_eq(a, h, b, parts.right),
+                        = a.pow(Succ(k)) := Nat::cong(λ (x: Nat) => a.pow(x), parts.left),
+                }
+            },
+        },
+    }
+}
+
+theorem Nat::pow_sq_eq(self a, n: Nat): a.pow_sq(n) = a.pow(n) { n.pow_sq_fuel_eq(a, n, n.le_refl()) }
 
 theorem Nat::ldiv_parts(self n, d: Nat): n.ldiv(d).quot() * d + n.ldiv(d).rem() = n {
     match n.ldiv(d) as λ s => DivMod::Spec(n, d, s) → s.quot() * d + s.rem() = n { MkDivMod(_, _) => λ sp => sp.left }(n.ldiv_spec(d))

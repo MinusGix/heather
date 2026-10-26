@@ -1002,3 +1002,110 @@ Observations:
 - `Fin(b)` in a position with no expected type resolves to another
   constructor named `Fin`; the special-value theorems write `Float::Fin`.
 
+
+## 15. Literals (`float-literal-entry`)
+
+Modules: `lib/std/num/float/window.hthr` (rounding in a window of a format)
+and `lib/std/num/float/literal.hthr` (rounding `mant · base^exp`, the
+exactness bit, the float instances); the literal types and classes are in
+`rat.hthr`. Probes are in `lib/_tests/std/num/float/literal_tests.hthr`;
+the inexact warning and the hex refusal are tested in
+`crates/elab/tests/lib_std_float.rs`; the lexer's cases are its own unit
+tests.
+
+**Surface.** A numeral with a point or an exponent is one token,
+`TokKind::Scaled`, holding `mant · base^exp`: `1.5` is `15 · 10^-1`, `1e-3`
+is `1 · 10^-3`, `0x1.8p3` is `0x18 · 2^-1`. A decimal point starts a
+fraction only with a digit after it, so `1.foo()` and `1..2` keep their
+meaning; a hex point only when hex digits and a `p` exponent follow, so
+`0xff.f()` stays a method call. A hex float needs its `p` exponent, as in C.
+The literal elaborates on the numeral's ladder, like the character and string
+literals: at `Decimal` (or `HexFloat`) it is the record of its parts, at any
+other carrier it resolves `DecimalLiteral` (`HexLiteral`), and in inference
+position it is the `Rat` it denotes. A program writing one imports `rat`.
+
+- `DecimalLiteral<A> { ofDecimal, exact }`. `Rat` holds every decimal
+  (`exact` is `True`); `Float(F)` rounds to nearest, ties to even
+  (`F.round_decimal(NearestEven, d)`), and its `exact` is `F.decimal_exact(d)`.
+  The elaborator asks the kernel's conversion whether the bit is
+  `Decimal::inexact()` (`False`), and if so raises the `inexact-literal`
+  warning. Overflow to an infinity counts as inexact.
+- `HexLiteral<A> { Ok, ofHex: (h) → Ok(h) → A }`. The elaborator passes
+  `trivial` as the proof, so a carrier's `Ok` decides acceptance:
+  `Float(F)`'s is `F.hex_exact(…).IsTrue()`, and a hex float with a bit past
+  the format's precision is refused with a message that says so.
+
+**Why a window.** `round_rat` works in half-units of `2^qmin`, which at
+binary64 means a numerator about 1075 bits wide, an exponent search over 2046
+binades, and an overflow limit `2^2046`. With the kernel's depth budget at
+2048 (PR #187) `pow(2, 1075)` evaluates, but `pow(2, 2046)` and a full-width
+`ldiv` (one nested call per numerator bit) still run out, so `round_rat`
+does not evaluate at binary64, and it would be slow if it did.
+`F.window(j, c)` is `F` cut down to `c + 1` binades from `emin + j`: the
+same precision and specials, `emin + j` for `emin`, `c` for `span`. Its
+floats are `F`'s floats of those binades with the exponent field lowered by
+`j` (`win_up`, `win_down`). `Format::window_rounds` proves that a correct
+rounding in the window, read back in `F` (`F.widen`), is a correct rounding
+in `F`, at every format and mode, when the value is `InWindow`: nonnegative,
+at or above the window's least normal unless `j = 0`, and below its top
+binade unless the window reaches `F`'s top. The proof places every float of
+`F` (`win_region`): below the window's least normal or from its top binade
+on, a float is on the far side of some window float, so it neither rounds
+the value nor beats one that does.
+
+**`round_scaled`.** For `x = mant · base^exp`, `win_j` estimates the binary
+exponent from the mantissa's width and `⌊exp · log₂ base⌋`, using
+`lg ≈ 2^16 · log₂ base` (217706 for ten, exact for two), and starts the
+window one binade below it, with `c = min(3, span)`. Then `x / 2^(qmin_W - 1)`
+is the fraction `num / den` (`sc_num`, `sc_den`, with powers by squaring),
+divided by `ldiv_fuel` with `prec + c + 1` quotient bits. The quotient and
+the remainder are the window's half-units and sticky bit (`sc_approx`,
+through `approx_div`). Each of the window's conditions is checked, not
+assumed:
+
+- the division fits the fuel (`num < den · 2^fuel`);
+- the low end: `j = 0` or `top ≤ h`;
+- the high end: the window reaches the top, or `h < top · 2^c`.
+
+When the estimate misses, the fallback is `F.round_rat`, which is correct
+but does not evaluate at binary64. Past the fuel in the top window the value
+is beyond the window's largest float and its overflow threshold, and
+`Format::rounds_beyond` says every such value rounds as `2^fuel` half-units
+does. So `1e400` is `∞` in constant work. `round_scaled_correct` holds for
+every format, mode, base and estimate, and the estimate only decides speed.
+
+**Exactness.** `Float::exact_scaled` compares `±mag · 2^q` and
+`mant · base^exp` by their cross-multiplied numerators, with powers by
+squaring. `Float::exact_scaled_reflects` proves the bit `Reflects` the value
+being exactly the literal (`Float::Denotes`), both ways.
+`F.decimal_exact` and `F.hex_exact` are this bit at the nearest-even
+rounding.
+
+**Costs.** These are shapes, not timings. A literal of ordinary magnitude
+works on numbers of about `prec + c` bits plus the scaling `base^|exp|`.
+The scaling dominates at extreme exponents: `1e-300`, the subnormals, and
+values near the overflow limit divide numbers of about a thousand bits, and
+`ldiv`'s halving of a wide numerator is the cost there.
+
+**What Rust does, and what this is not yet.** Rust's `dec2flt` tries
+Clinger's fast path (an exactly representable mantissa and power of ten
+in one floating multiplication), then Eisel-Lemire (a 128-bit product
+with a table of powers of five, falling back when the product is too close
+to a halfway point), then a big-integer slow path. `round_scaled` is the slow
+path's arithmetic placed so that every number stays narrow. Eisel-Lemire is
+an enclosure test with a fallback, the same shape as the window's checked
+conditions, and is the refinement to make once the rounding runs natively.
+
+Observations:
+
+- `Nat::is_zero` is gone (PR #185 stopped the Nat fold probe from
+  re-evaluating recursive arms), so the fuelled recursions (`ldiv_fuel`,
+  `pow_sq_fuel`, `Nat::width_fuel`) match `n` and name the successor
+  `Succ(k)`.
+- An inexact literal in a test draws the warning even when the test is
+  pinning the rounded value. There is no per-site allow yet.
+- The `rat` import is required because the elaborator names `rat::Decimal`;
+  a float client that forgets it is told to add it.
+- The printer and its round-trip theorem (Lemma 1, nine and seventeen
+  digits) are [[float-printer-round-trip]]: the reading half proved here,
+  `round_decimal_correct`, is what that theorem reads back through.

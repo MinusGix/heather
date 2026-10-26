@@ -1423,6 +1423,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
         ExprKind::Var(_)
         | ExprKind::OpSymbol { .. }
         | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::ArgSlot(_)
