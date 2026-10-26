@@ -261,8 +261,8 @@ theorem Stmt::grows(self s: Stmt, call: Answers(), n: Nat): (env: Env) →
 // ---------------------------------------------------------------------------
 // Programs
 
-// A buffer: how many bytes it holds, and the bytes it starts with, as a
-// string literal spells them. No more of them than it holds.
+// A buffer: how many bytes it holds, and the bytes it starts with from
+// index 0; those past its capacity are dropped (`Source::start`).
 record Buffer { capacity: Nat, initial: List<BitVec(8)> := [] }
 
 // Total functions its regions call, its buffers (buffer `b` is the `b`-th),

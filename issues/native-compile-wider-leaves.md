@@ -36,3 +36,4 @@ while proving S3.2 ([[native-effect-source-compiler]], 2026-10-25).
 ## Log
 
 - 2026-10-26: Re-scoped by `docs/native-real-programs-plan.md` (§3.4, round 4): compile every region form memory-resident, as S3.2 compiles statements (each node loads its operands from slots, computes, stores), with no register-pool limit; S4's `Region::lower` stays as the better lowering where a dataflow leaf fits. `Call` regions stay refused (the builder, [[native-source-builder]], inlines). Done when `tr`'s byte map lowers as a bounded FunctionIR loop and a 40-node leaf compiles. Probe: a 15-node leaf is refused today with no reason given.
+- 2026-10-26: [[native-source-bytes]] compiles a leaf that is all pure or exactly one byte node (`Prog::computes`); a leaf mixing pure nodes with `BufferLoad`/`BufferStore` is refused. Splitting such a leaf at each byte node, as the plan's §3.1 describes, belongs to this round's memory-resident compile.
