@@ -77,3 +77,4 @@ themselves, checked by `refl`), which isolate the gate's share.
     - **`let/stmt`'s elaboration is 2^k too**, alongside the gate's `Term::eq` walk. Logged on [[kernel-equality-walks-dags-as-trees]].
     - **Limits met on the way.** `rewrite` rewrites one instance per equation, so a family is n equations in one `rewrite(h, …, h, refl)` (a control with n − 1 fails at `refl`). The goal `f^256(a)` exceeds the expression depth limit (512), so `fa` and `repeat-mod` stop at 128.
     - **Bands** are the mean ±0.35, or the four-run range where that is wider (`let-addr0` 5.00-6.20, `stmt` 8.40-10.80): on an exponential curve a fixed cost at the small end moves the fit, and the band only needs to notice a fix, which drops the slope to about 1.
+- 2026-10-26: `let/stmt` is linear since [[kernel-equality-walks-dags-as-trees]] (both halves were the same `Term` equality); re-swept over k = 32..256, slope 1.04 (0.90-1.11), band 0.75-1.45, baseline row re-recorded.

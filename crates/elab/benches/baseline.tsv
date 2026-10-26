@@ -181,7 +181,7 @@ slope	rewrite/let-addr0	5.600
 slope	rewrite/let-nary	2.045
 slope	let/fan	1.103
 slope	let/dep	1.098
-slope	let/stmt	9.578
+slope	let/stmt	1.043
 slope	inductive/isa-declaration	0.990
 slope	inductive/isa-constructor-use	1.707
 slope	inductive/isa-opcode-match	1.623
