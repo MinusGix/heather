@@ -177,8 +177,9 @@ slope	indexed/arms	1.953
 slope	meta/nested-inference	1.797
 slope	rewrite/fa	1.440
 slope	rewrite/repeat-mod	1.820
-slope	rewrite/let-addr0	5.600
-slope	rewrite/let-nary	2.045
+slope	rewrite/let-addr0	2.735
+slope	rewrite/let-nary	1.115
+slope	rewrite/setoid-let-addr0	0.900
 slope	let/fan	1.103
 slope	let/dep	1.098
 slope	let/under	1.720

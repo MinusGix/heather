@@ -1724,6 +1724,12 @@ struct AbstractLocal<'a> {
     /// Occurrences met, replaced or not — what a selection is numbered by.
     seen: u32,
     changes: u64,
+    /// The shared-node memo, when nothing is selected: then a node's result
+    /// is a function of the node and the depths, and a goal that shares a
+    /// subterm is abstracted once per depth, not once per path to it
+    /// (`docs/mengine-survey.md` §4.2). A selection numbers occurrences by
+    /// path, so it walks the tree.
+    memo: Option<NodeMemo>,
 }
 
 impl Mapper for AbstractLocal<'_> {
@@ -1732,6 +1738,10 @@ impl Mapper for AbstractLocal<'_> {
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        self.memo.as_mut()
     }
 
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
@@ -1782,6 +1792,9 @@ impl Mapper for AbstractLocal<'_> {
 struct RootTerms {
     out: Vec<Rc<Term>>,
     changes: u64,
+    /// Never changes anything, so its memo only records which shared nodes
+    /// were walked: a second path to one stops there.
+    memo: NodeMemo,
 }
 
 impl Mapper for RootTerms {
@@ -1792,8 +1805,14 @@ impl Mapper for RootTerms {
         &mut self.changes
     }
 
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
+    }
+
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
-        if at == Depths::default() {
+        // `pre_tm` runs before the memo is asked, so a shared node is
+        // listed only the first time it is met.
+        if at == Depths::default() && !self.memo.terms.contains_key(&(Rc::as_ptr(t) as usize, at)) {
             self.out.push(Rc::clone(t));
         }
         None
@@ -2171,6 +2190,7 @@ impl Type {
         let pats: Vec<(Term, Term)> = pats.iter().map(|p| (p.clone(), z.clone())).collect();
         let mut m = AbstractLocal {
             pats: &pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: Some(at), seen: 0, changes: 0,
+            memo: None,
         };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());
         ((m.hits > 0).then_some(out), m.seen)
@@ -2179,9 +2199,10 @@ impl Type {
     /// Every term node of `self` that sits under no binder of any of the
     /// three namespaces — so is scoped in `self`'s own context — in the order
     /// the traversal meets them (the order [`Self::abstract_local_at`]
-    /// numbers by), outermost first. A node's subterms follow it.
+    /// numbers by), outermost first. A node's subterms follow it. A shared
+    /// node is listed, and walked, once: where the traversal first meets it.
     pub fn root_terms(&self) -> Vec<Rc<Term>> {
-        let mut m = RootTerms { out: Vec::new(), changes: 0 };
+        let mut m = RootTerms { out: Vec::new(), changes: 0, memo: NodeMemo::default() };
         map_type(self, &mut m, Depths::default());
         m.out
     }
@@ -2189,6 +2210,7 @@ impl Type {
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {
         let mut m = AbstractLocal {
             pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: None, seen: 0, changes: 0,
+            memo: Some(NodeMemo::default()),
         };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());
         (m.hits > 0).then_some(out)

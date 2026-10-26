@@ -304,6 +304,7 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         ("rewrite/repeat-mod", "(…(b mod p)…) mod p by n−1 rewrites — mengine repeat_mod"),
         ("rewrite/let-addr0", "every + 0 out of a k-let chain — mengine addr0_let_in"),
         ("rewrite/let-nary", "3 lets of arity n rewritten away — mengine rewrite_nm"),
+        ("rewrite/setoid-let-addr0", "a k-let chain along a relation, rewritten once at its bottom"),
         ("let/fan", "k lets each using the last twice"),
         ("let/dep", "fan with an unused refl proof let per link"),
         ("let/under", "fan with a λ between every link"),

@@ -129,11 +129,8 @@ The per-module counts are in the PR description.
 
 ## 5. What it does not do
 
-- **No relations other than `=`.** A proof of `≈`, `<=` or a setoid relation
-  is refused with a pointer to `rel_cong(h)` and `calc`. The maths library's
-  `Rat`/`CReal` rewriting is mostly setoid rewriting, which is
-  `relational_context`'s; this form serves `Nat`, `Int`, lists, bit-vectors,
-  and the interaction-tree laws stated with `=`.
+- **No relations other than `=`** in this first form. Rewriting along `≈`,
+  `<=` or any other relation is §9's, which the same spelling reaches.
 - **No rewriting in hypotheses** in this form. Lean's `rw … at h` is a
   different elaboration — the hypothesis is a term to transport, not a goal
   to prove — and has its own spelling, `rewrite(h, in := hyp)` (§7).
@@ -331,3 +328,150 @@ What it does not do: eliminate a variable bound in the global context or a
 already), or search for which equation to use. It is an elaborator entry
 point recognised by name at a checking position, like `rewrite`; a local or
 declaration named `subst` is an ordinary name.
+
+## 9. Rewriting along a relation
+
+`issues/rewrite-setoid-relations.md`, 2026-10-26. Rocq's `setoid_rewrite`,
+Lean's `grw`: from `h : R(a, b)` for a relation `R` other than `=`, the same
+`rewrite(h, e)` turns `a` into `b` in a goal whose shape says how it respects
+`R`, consuming the compatibility evidence `rel_cong` consumes
+(`docs/proof-position-relational-congruence.md`). Built the way mengine's
+rewriter is (`docs/mengine-survey.md` §4.3): bottom up, one step per changed
+node, one result per node, so it is linear in the goal as a DAG from the
+start. `crates/elab/src/rewrite/relation.rs`.
+
+```heather
+theorem Rat::add_neg_cancel_r(self x, y: Rat): (x + y) + -y ≈ x {
+    rewrite(x.add_assoc(y, -y), y.add_neg(), x.add_zero(), refl)
+}
+```
+
+### 9.1 Which proofs are relation steps
+
+A step's proof is read **as written** below its Π telescope: when that is a
+relation application `R(a, b)` — an `El` of a two-argument application whose
+two domains are one carrier `C` — the step is a relation step. Read up to
+weak head normal form instead, `x ≈ y` at `Rat` is an equation between `Int`
+cross-products, and §1's form would rewrite those; that reading was never what
+a proof of `≈` meant in a goal about rationals.
+
+One exception keeps the equation form wherever it already served: a relation
+that **unfolds to equality of its own two sides** (`RelId(a, b)`,
+`Steps(R, 0, a, b)`) is that equality and rewrites as one, a single
+transport with no evidence. Nothing else is guessed: direction is the written
+one (`issues/relational-rewrite-controls.md`), and an unapplied law is
+instantiated as §6.1 says, the first node the walk meets that matches the
+left side fixing its arguments.
+
+### 9.2 Goals and polarity
+
+The goal is one of:
+
+- a relation application `S(l, r)` at the carrier `C`, `S` the rewrite's
+  `R` or another relation;
+- a non-dependent implication `P → Q` between such goals (so `¬P` too,
+  whose `False` has nothing to rewrite);
+
+and a goal that mentions `a` in any other shape (an `=`, a `↔`, a predicate
+`P(t)`) is refused with what it is: nothing says how it respects `R`. A goal
+that does not mention `a` is refused as in §1, with a hint when it mentions
+`b`.
+
+A goal to prove is reached *from* its rewritten form (`G' → G`), a
+hypothesis (`in := hyp`, §7) is carried *to* it (`G → G'`), and an
+implication's premise is rewritten the other way from its conclusion. The
+walk builds a plan once and emits it at either **polarity**: for `S(l, r)`
+read backward, `e : S(l', r')` becomes `S(l, r)` by
+
+```text
+chain(S, R ⇒ S)(l', r', r, e, sym(R(r, r')))    : S(l', r)
+chain(R, S ⇒ S)(l, l', r, R(l, l'), ·)          : S(l, r)
+```
+
+where `chain` is `Transitive<C>(S)`'s `rel_trans` when all three relations
+are one, else `Trans<C>(…)`'s `rel_chain` — the classes `calc` composes with,
+so `x + z <= z` rewrites along `≈` through `Rat`'s `Trans` pairs. Only a
+changed side takes a step, and only the right side needs `Symmetric<C>(R)`:
+a non-symmetric `R` (monotone rewriting along `<=`) rewrites left sides
+only. `P → Q` read backward is `λ p. Q-back(e(P-forward(p)))`.
+
+### 9.3 The walk
+
+Each node of the goal is rewritten once, children first, and the result is
+kept per node identity:
+
+- an **occurrence** of `a` becomes `b`, with `h` as its proof. An occurrence
+  is `a` itself, or a term with `a`'s global head whose arguments convert to
+  `a`'s one by one. Argument-wise, not §6.2's whole-term conversion: the head
+  is the same operation on both sides, and a miss would unfold it on both
+  (rational arithmetic) only to compare the parts that differ. A respelled
+  implicit argument still matches.
+- an **application** whose arguments changed gets one congruence step, over
+  its last two arguments (`Respects2<C, C, C>(R, R, R, op)`, an unchanged one
+  held by `Reflexive<C>(R)`), its last one (`PreservesRelation(R, R, f)` with
+  `f` the partial application), or any single other one
+  (`PreservesRelation(R, R, λ z. f(…, z, …))`, the λ spelling registrations
+  such as `linux_answered`'s use). A binary operation changed only in its
+  last argument takes unary evidence when only that is registered. Several
+  changed arguments in no such position are refused by name.
+- an **unchanged** node gets nothing, and a node of another kind (a λ, a
+  former that is no application) is left as it is unless it contains `a`,
+  which is refused: half a rewrite is worse than none.
+
+A context that does not map `C` to itself (an argument into `size: A → Nat`)
+cannot state evidence of either shape, and is refused: the rewrite stays in
+`R`'s carrier.
+
+### 9.4 The proof
+
+The proof is kernel terms: each step an `app@` spine over the evidence
+(`docs/app-by-head-type-design.md`), so no argument is spelled again in an
+annotation and every shared node's step is one shared term. Evidence
+statements are the only text the rewrite elaborates — once per operation, not
+per node — and resolution answers them as it answers `rel_cong`'s. What it
+does not find is an **obligation** exactly as `rel_cong` leaves one: a goal
+labelled `?compatibility` (`?fixed` for an unchanged argument without
+`Reflexive`, `?symmetry`, `?transitivity` at the goal), discharged by
+`on ?label := …` in the block or reported with its statement. Nothing is
+trusted; the declaration gate checks the term.
+
+### 9.5 Sharing, and what is still a tree
+
+On `rewrite/setoid-let-addr0`, one relation rewrite at the bottom of a
+k-let chain changes every link, 2^k paths to the occurrence, and costs k
+congruence steps: linear, as the bench family records.
+
+The same round removed §2's tree walks from the equation form. The
+abstraction keeps one result per shared node when no occurrence is selected
+(`AbstractLocal`'s node memo; a selection numbers occurrences by path, so
+`at :=` still walks the tree), and `Type::root_terms` lists and walks each
+shared node once, so the motive is a DAG the kernel's typing memo shares and
+the candidate search is linear. `rewrite/let-addr0` fell from 2^k to about
+k² and `rewrite/let-nary` to its linear bound. What `let-addr0` still pays is
+its spelling: k rewrites, each over the whole goal. One rewrite of every
+instance of an unapplied law would meet the bound
+(`issues/rewrite-every-instance.md`).
+
+There is no memo across steps. mengine keys a persistent one by equation,
+context and node, which pays off when one equation is applied again and
+again; each step here uses a new equation (§1: `rewrite(h₁, …, hₙ, e)` is n
+equations in turn, and an unapplied law is instantiated per step), so its
+results would never be asked for again.
+
+### 9.6 What it does not do
+
+Each is a follow-up issue:
+
+- **Under binders** (`issues/rewrite-setoid-under-binders.md`): rewriting
+  inside a λ needs the pointwise relation and a binder `Respects` instance;
+  mengine uses funext, which Heather does not assume.
+- **`↔` goals** (`issues/rewrite-setoid-iff-goals.md`): `Iff` is a record,
+  so its two directions are projections and a constructor the plan would
+  build around each half.
+- **Leaving the carrier** (`issues/rewrite-setoid-heterogeneous.md`):
+  congruence through a function `C → D` needs a relation at `D`, which the
+  walk would have to infer per node, as Rocq's `Proper` search does.
+- **`at :=`**: refused, with the pointer to
+  `issues/relational-rewrite-controls.md`; a DAG walk has no tree positions to
+  number.
+

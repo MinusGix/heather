@@ -4,7 +4,7 @@ status: open
 labels: [relations,setoids,ergonomics,design]
 area: tactics
 created: 2026-09-05
-updated: 2026-10-21
+updated: 2026-10-26
 ---
 
 Build on [[proof-position-relational-congruence]]: provide an explicit reverse-step spelling, a way to select or explain changed occurrences, and useful mismatch diagnostics. Keep direction and occurrence choices visible; do not silently guess symmetry, unfold operations, or claim a failed derivation proves a goal false. Validate repeated/partial occurrences, equal witness endpoints, and distinct relations on one carrier. Relational calculation chains remain owned by [[setoid-auto-lifting]]; coordinate their step syntax with this issue.
@@ -27,3 +27,7 @@ Build on [[proof-position-relational-congruence]]: provide an explicit reverse-s
   `at := k` / `at := [k, …]`, counted from 1 left to right through the goal
   as written, refused past the last with the count, and refused with several
   equations in one call (nest instead).
+- 2026-10-26: relation steps landed ([[rewrite-setoid-relations]]). They
+  rewrite every occurrence of the left side and refuse `at :=` with a pointer
+  here; direction is the written proof, and a symmetric goal side asks for
+  `Symmetric` evidence (`?symmetry`) rather than assuming it.

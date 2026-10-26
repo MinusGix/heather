@@ -13,6 +13,11 @@
 //!
 //! Direction is the written one, never guessed: a goal that mentions `bᵢ`
 //! and not `aᵢ` is an error whose hint is `sym(hᵢ)`.
+//!
+//! A step whose proof is a relation application `R(a, b)` rather than an
+//! equation is a setoid rewrite (`rewrite/relation.rs`, design §9): the goal
+//! is rebuilt bottom-up, one congruence step per changed node, and the proof
+//! is chained by transitivity instead of `J`.
 
 use std::sync::Arc as Rc;
 
@@ -24,6 +29,10 @@ use heather_syntax::{Expr, ExprKind, NamedArg, Span};
 
 use crate::matching::MotiveSynthesisElab;
 use crate::{Cx, ElabError, Elaborator, R};
+
+mod relation;
+
+use relation::Polarity;
 
 impl Elaborator {
     /// `rewrite(h₁, …, hₙ, e)` at `goal`. `args` is the whole written
@@ -88,6 +97,15 @@ impl Elaborator {
             return self.elab_check(cx, body, goal, lvl);
         };
         let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
+        if let Some(mut step) = self.relation_step(cx, h, &proof, &proof_ty, goal, GOAL)? {
+            if at.is_some() {
+                return Err(relation_at_refused(h.span));
+            }
+            let (next, plan) = step.goal(goal, GOAL)?;
+            step.require_occurrence(goal, GOAL)?;
+            let case = self.rewrite_from(cx, rest, None, body, &next, lvl)?;
+            return Ok(Rc::unwrap_or_clone(step.emit(&plan, Polarity::Backward, Rc::new(case), 0)?));
+        }
         let (proof, Equation { level, ty, lhs, rhs }) = self.rewrite_instance(cx, h, proof, &proof_ty, goal, GOAL)?;
         let motive = self.rewrite_motive(cx, h, at, goal, GOAL, &ty, &level, &lhs, &rhs, lvl)?;
         // The goal after this step: `M[b/y]`.
@@ -173,6 +191,16 @@ impl Elaborator {
         let (mut term, mut ty_now, lvl) = self.elab_infer(cx, &hyp.expr)?;
         for h in args {
             let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
+            if let Some(mut step) = self.relation_step(cx, h, &proof, &proof_ty, &ty_now, HYPOTHESIS)? {
+                if at.is_some() {
+                    return Err(relation_at_refused(h.span));
+                }
+                let (next, plan) = step.goal(&ty_now, HYPOTHESIS)?;
+                step.require_occurrence(&ty_now, HYPOTHESIS)?;
+                term = Rc::unwrap_or_clone(step.emit(&plan, Polarity::Forward, Rc::new(term), 0)?);
+                ty_now = next;
+                continue;
+            }
             let (proof, Equation { level, ty, lhs, rhs }) =
                 self.rewrite_instance(cx, h, proof, &proof_ty, &ty_now, HYPOTHESIS)?;
             let motive =
@@ -296,8 +324,8 @@ impl Elaborator {
     ) -> R<(Term, Equation)> {
         let not_an_equation = |ty: &Type| ElabError::Elab {
             msg: format!(
-                "`rewrite` rewrites along an equation `a = b`, and this proof is of `{}`\n  \
-                 hint: a relation other than `=` rewrites with `rel_cong(h)` or a `calc` step",
+                "`rewrite` rewrites along an equation `a = b` or a relation `R(a, b)`, and \
+                 this proof is of `{}`",
                 self.display_type(cx, ty)
             ),
             span: h.span,
@@ -460,6 +488,18 @@ impl Elaborator {
             return false;
         };
         self.motive_candidate_converts(cx, b, a, &ty, &level)
+    }
+}
+
+/// `at :=` with a relation: occurrence numbers are tree positions, and the
+/// relation walk visits each shared node once.
+fn relation_at_refused(span: Span) -> ElabError {
+    ElabError::Elab {
+        msg: "`at :=` selects occurrences of an equation's left side; a relation rewrite \
+              rewrites every occurrence (issues/relational-rewrite-controls.md)\n  \
+              hint: rewrite with an instance of the lemma that only those occurrences match"
+            .into(),
+        span,
     }
 }
 

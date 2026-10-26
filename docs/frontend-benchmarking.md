@@ -250,8 +250,9 @@ loads, which is the honest width of an absolute time here.
 | `meta/nested-inference` | *d* nested implicit instantiations, built and projected back | slope 1.84 (1.84–1.90) |
 | `rewrite/fa` | `g(f^n(a)) = g(a)` by *n* `rewrite`s with `h: f(x) = x` (mengine `rewrite_fa`). **Lower bound linear** | debt: about n² (n rewrites of an O(n) goal) |
 | `rewrite/repeat-mod` | `(…(b mod p)…) mod p = b mod p` by *n* − 1 rewrites, `mod` opaque (mengine `repeat_mod`). **Lower bound linear** | debt: about n² |
-| `rewrite/let-addr0` | a *k*-let chain `vᵢ = vᵢ₋₁ + vᵢ₋₁ + 0`, every `+ 0` rewritten away (mengine `addr0_let_in`). **Lower bound linear** | debt: 2^k |
-| `rewrite/let-nary` | three lets `xᵢ = f(xᵢ₋₁, …)` of arity *n*, rewritten to `x₀` (mengine `rewrite_nm`). **Lower bound linear** in n·m | debt: tree-sized in elaboration |
+| `rewrite/let-addr0` | a *k*-let chain `vᵢ = vᵢ₋₁ + vᵢ₋₁ + 0`, every `+ 0` rewritten away (mengine `addr0_let_in`). **Lower bound linear** | debt: k rewrites of an O(k) goal, ~2.7 (was 2^k while the abstraction walked a tree) |
+| `rewrite/let-nary` | three lets `xᵢ = f(xᵢ₋₁, …)` of arity *n*, rewritten to `x₀` (mengine `rewrite_nm`). **Lower bound linear** in n·m | met (was tree-sized in elaboration) |
+| `rewrite/setoid-let-addr0` | `let-addr0`'s chain along a relation, its bottom link rewritten once, so every link takes a congruence step (`docs/equation-rewrite-design.md` §9). **Lower bound linear** | met |
 | `let/fan` | *k* lets each using the last twice, as a `fn` body. **Lower bound linear** | met |
 | `let/dep` | `fan` with an unused `refl` proof let per link. **Lower bound linear** | met (it was above quadratic while each unused value was discarded one binder deeper) |
 | `let/under` | `fan` with a `λ` between every link. **Quadratic while shifts are eager**: the values the elaborator holds are Θ(k²) distinct nodes (`issues/open-payload-shift-copies.md`) | at its bound (the representation's, not linear) |
@@ -539,11 +540,12 @@ representation change `issues/open-payload-shift-copies.md` keeps deferred.
 
 Three things differ from the older families:
 
-- **Some are exponential.** A log-log fit of 2^k is not a constant, so the
-  band of `rewrite/let-addr0` (and `let/stmt`'s, before its fix) is the fit over exactly the
-  sizes swept, and is wider than ±0.35, because the steeper the curve, the
-  more a fixed cost at the small end moves the fit. Their band's job is to
-  notice the fix, which drops the slope to about 1.
+- **Some were exponential.** A log-log fit of 2^k is not a constant, so the
+  bands of `rewrite/let-addr0` and `let/stmt`, before their fixes, were the
+  fit over exactly the sizes swept, and wider than ±0.35, because the steeper
+  the curve, the more a fixed cost at the small end moves the fit. A band's
+  job there was to notice the fix; both moved, and `let-addr0` was then
+  re-swept at sizes its new shape reaches.
 - **The bands were recorded on a 4-core cloud box** (four runs each; the
   band is the mean ±0.35 or the four-run range, whichever is wider), and only
   their `slope` rows are in the baseline. Times recorded there would sit
