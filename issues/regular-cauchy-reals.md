@@ -1,11 +1,11 @@
 ---
 title: Probe regular Cauchy reals constructively
-status: open
+status: closed
 labels: [stdlib,mathematics,reals,analysis,setoids]
 area: mathematics
 milestone: [math-reals]
 created: 2026-09-02
-updated: 2026-10-17
+updated: 2026-10-26
 ---
 
 Implement a small executable presentation of regular Cauchy reals over
@@ -32,3 +32,4 @@ core).
 - 2026-10-16: creal's data-carrying proofs are theorems again: [[theorem-witness-unfolding]] landed, so their witnesses compute without being `fn`s.
 - 2026-10-17: Second round: products and `≤` (docs/creal-multiplication-round.md); [[creal-multiplication]] closed, the inverse split to [[creal-inverse]].
 - 2026-10-17: Third round: the inverse of a real apart from zero (docs/creal-inverse-round.md); [[creal-inverse]] closed.
+- 2026-10-26: Fourth round: the diagonal completeness construction (docs/creal-completeness-round.md). `CReal::Regular` and `CReal::Limit` at the representation's rate, stated with the new real distance `CReal::abs`; `CReal::lim` reads the (2n+1)-th term of the (2n+1)-th real, `complete` gives it as data, limits are unique and respect `≈`, and every real is the limit of its embedded terms. No assumption enters. Every item of this probe is done.

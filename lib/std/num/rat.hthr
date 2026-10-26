@@ -755,6 +755,23 @@ theorem Rat::inv_succ_half(n: Nat): Rat::inv_succ(n + n + 1) + Rat::inv_succ(n +
     ring(whole, part, half.int_mul(half))
 }
 
+// Half a step is a smaller step, strictly.
+theorem Rat::inv_succ_half_lt(n: Nat): Rat::inv_succ(n + n + 1) < Rat::inv_succ(n) { omega }
+
+// Four steps of at most 1/(4j+4) are at most 1/(j+1): two halvings. The
+// slack the completeness estimates (std/creal) leave over their main bound.
+theorem Rat::quarters_le({f: Rat}, j: Nat, hf: f <= Rat::inv_succ((j + j + 1) + (j + j + 1) + 1)): (f + (f + f)) + f <= Rat::inv_succ(j) {
+    let j2 = j + j + 1;
+    let h = Rat::inv_succ(j2 + j2 + 1);
+    calc {
+        (f + (f + f)) + f ≈ ((f + f) + f) + f := Rat::add_respects(Rat::same_sym(f.add_assoc(f, f)), f.same_refl()),
+        ≈ (f + f) + (f + f) := (f + f).add_assoc(f, f),
+        <= (h + h) + (h + h) := Rat::add_le_mono(Rat::add_le_mono(hf, hf), Rat::add_le_mono(hf, hf)),
+        ≈ Rat::inv_succ(j2) + Rat::inv_succ(j2) := Rat::add_respects(Rat::inv_succ_half(j2), Rat::inv_succ_half(j2)),
+        ≈ Rat::inv_succ(j) := Rat::inv_succ_half(j),
+    }
+}
+
 // A bound of l+1 against the step 1/((l+1)(k+1)) leaves 1/(k+1): the
 // product reads its factors at index (l+1)(k+1) - 1 to keep the other
 // factor's size inside the rate.
@@ -899,6 +916,15 @@ theorem Rat::add_add_add_comm(self a, b, c, d: Rat): (a + b) + (c + d) ≈ (a + 
 
 theorem Rat::add_left_comm(self a, b, c: Rat): a + (b + c) ≈ b + (a + c) {
     ring(b.den_add(c), a.den_add(b + c), a.den_add(c), b.den_add(a + c))
+}
+
+// Three bounds, each a main part plus slack, regrouped into the main parts
+// plus the slack.
+theorem Rat::add_add_add_comm3(self a, b, c, d, e, f: Rat): ((a + b) + (c + d)) + (e + f) ≈ ((a + c) + e) + ((b + d) + f) {
+    calc {
+        ((a + b) + (c + d)) + (e + f) ≈ ((a + c) + (b + d)) + (e + f) := Rat::add_respects(a.add_add_add_comm(b, c, d), (e + f).same_refl()),
+        ≈ ((a + c) + e) + ((b + d) + f) := (a + c).add_add_add_comm(b + d, e, f),
+    }
 }
 
 theorem Rat::add_sub_add(self a, b, c, d: Rat): (a + b) - (c + d) ≈ (a - c) + (b - d) {
@@ -1142,6 +1168,23 @@ theorem Rat::dist_le_of_le_add({a, b, c: Rat}, h1: a <= b + c, h2: b <= a + c): 
         ≈ a - b := b.neg_sub(a),
     };
     Rat::abs_le(below, Rat::sub_le_of_le_add(h1))
+}
+
+// Sizes are no further apart than the numbers: the reverse triangle
+// inequality, each size within the other's plus the distance.
+theorem Rat::abs_sub_abs_le(self x, y: Rat): (x.abs() - y.abs()).abs() <= (x - y).abs() {
+    let up = calc {
+        x.abs() ≈ ((x - y) + y).abs() := Rat::abs_respects(Rat::same_sym(x.sub_add_cancel(y))),
+        <= (x - y).abs() + y.abs() := (x - y).abs_triangle(y),
+        ≈ y.abs() + (x - y).abs() := (x - y).abs().add_comm(y.abs()),
+    };
+    let down = calc {
+        y.abs() ≈ ((y - x) + x).abs() := Rat::abs_respects(Rat::same_sym(y.sub_add_cancel(x))),
+        <= (y - x).abs() + x.abs() := (y - x).abs_triangle(x),
+        ≈ x.abs() + (y - x).abs() := (y - x).abs().add_comm(x.abs()),
+        ≈ x.abs() + (x - y).abs() := Rat::add_respects(x.abs().same_refl(), y.abs_sub_comm(x)),
+    };
+    Rat::dist_le_of_le_add(up, down)
 }
 
 // A gap of q + 2e between a and b survives moving a up and b down by e
