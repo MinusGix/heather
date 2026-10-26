@@ -213,6 +213,53 @@ theorem loop_eval_agrees_from(step: Valuation() → Valuation(), parameters: Lis
         loop_eval_agrees(step, parameters, count, exit, next, apart, lengths, finish, run, at_zero, at_pass, remaining, v))
 }
 
+// A loop agrees with `run`, a recursion bounded by a measure of its state
+// (a function that `decreases`, at a bound on its measure), when it does
+// with no passes left and each pass does with the recursion on the passes
+// after it, wherever the measure is below the passes left. Proofs of the
+// bound are not compared: each side is stated at the one it is handed.
+theorem loop_eval_agrees_measured(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    apart: distinct(parameters).IsTrue(), finish: LoopEnd → BitVec(64), measure: List<BitVec(64)> → Nat,
+    run: (r: Nat) → (state: List<BitVec(64)>) → Nat::Lt(measure(state), Succ(r)) → BitVec(64),
+    at_zero: (v: Valuation()) → (h: Nat::Lt(measure(words_of(v, parameters)), 1)) →
+        finish(LoopEnd(words_of(v, parameters), True)) = run(0, words_of(v, parameters), h),
+    at_pass: (r: Nat) → (v: Valuation()) → (h: Nat::Lt(measure(words_of(v, parameters)), Succ(Succ(r)))) →
+        ((state: List<BitVec(64)>) → state.len() = parameters.len() → (p: Nat::Lt(measure(state), Succ(r))) →
+            finish(loop_eval(step, parameters, count, exit, next, r, state)) = run(r, state, p)) →
+        loop_pass(step, parameters, count, exit, next, finish,
+            λ (state: List<BitVec(64)>) => finish(loop_eval(step, parameters, count, exit, next, r, state)), r, v) =
+                run(Succ(r), words_of(v, parameters), h),
+    remaining: Nat):
+    (state: List<BitVec(64)>) → state.len() = parameters.len() → (h: Nat::Lt(measure(state), Succ(remaining))) →
+        finish(loop_eval(step, parameters, count, exit, next, remaining, state)) = run(remaining, state, h) {
+    match remaining {
+        Zero => λ state fits => {
+            let v = Valuation::bind(Valuation::zero(), parameters, state);
+            let rebound: (words_of(v, parameters) = state) = words_of_bind(Valuation::zero(), parameters, apart, state, sym(fits));
+            j(rebound, λ st _ => (h: Nat::Lt(measure(st), 1)) → finish(LoopEnd(st, True)) = run(0, st, h), λ h => at_zero(v, h))
+        },
+        Succ(r) => λ state fits => {
+            let v = Valuation::bind(Valuation::zero(), parameters, state);
+            let rebound: (words_of(v, parameters) = state) = words_of_bind(Valuation::zero(), parameters, apart, state, sym(fits));
+            let after = step(pass_valuation(parameters, count, Succ(r), words_of(v, parameters)));
+            let following = words_of(after, next);
+            let earlier = λ (st: List<BitVec(64)>) (st_fits: st.len() = parameters.len()) (p: Nat::Lt(measure(st), Succ(r))) =>
+                loop_eval_agrees_measured(step, parameters, count, exit, next, apart, finish, measure, run, at_zero, at_pass, r, st, st_fits, p);
+            let at_v = λ (h: Nat::Lt(measure(words_of(v, parameters)), Succ(Succ(r)))) =>
+                (match after(1, exit).head_bit() as λ b =>
+                    (match b { False => finish(loop_eval(step, parameters, count, exit, next, r, following)),
+                        True => finish(LoopEnd(following, False)) }) = run(Succ(r), words_of(v, parameters), h) →
+                    finish(match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, r, following),
+                        True => LoopEnd(following, False) }) = run(Succ(r), words_of(v, parameters), h) {
+                    False => λ passed => passed,
+                    True => λ passed => passed,
+                })(at_pass(r, v, h, earlier));
+            j(rebound, λ st _ => (h: Nat::Lt(measure(st), Succ(Succ(r)))) →
+                finish(loop_eval(step, parameters, count, exit, next, Succ(r), st)) = run(Succ(r), st, h), at_v)
+        },
+    }
+}
+
 // A state's word `i`, zero past its end: how the compiler reads a source
 // recursion's arguments out of a loop's state.
 fn List::word(self state: List<BitVec(64)>, i: Nat) → BitVec(64) {
