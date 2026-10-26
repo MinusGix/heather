@@ -19,6 +19,7 @@ import native_compile_steps;
 import native_compile_segments;
 import native_compile_calls;
 import native_compile_leaf;
+import native_compile_bytes;
 import function_ir;
 import function_ir_eval;
 import function_ir_lower;
@@ -38,6 +39,7 @@ import list;
 import logic;
 import nat;
 import option;
+import omega;
 
 // ---------------------------------------------------------------------------
 // Where each piece starts, inside what it builds
@@ -60,41 +62,12 @@ theorem Prog::within_writes(self p: Prog, layout: Layout, fd, buf, from, len, re
     Exists(20, refl)
 }
 
-theorem Prog::within_leaf(self p: Prog, layout: Layout, nodes: List<Node>, q: Prog, emitted: p.leaf(layout, nodes) = Some(q)): p.Within(q) {
-    let ins = leaf_inputs(nodes);
-    let outs = leaf_outputs(nodes);
-    let inputs = nodes_inputs(nodes);
-    let region = leaf_region(nodes);
-    (match leaf_checks(nodes, ins, outs) as λ b => (match b { False => None, True => match p.ports_to(layout, inputs, ins) {
-            None => None,
-            Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))),
-        } }) = Some(q) → p.Within(q) {
-        False => λ none => absurd(none),
-        True => (match p.ports_to(layout, inputs, ins) as λ o => p.ports_to(layout, inputs, ins) = o →
-                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
-                p.Within(q) {
-            None => λ _ none => absurd(none),
-            Some(loaded) => λ loaded_is => (match region.lower(ins, outs, place_into(outs)) {
-                None => λ none => absurd(none),
-                Some(code) => λ stored => p.within_trans(loaded, q, Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
-                    loaded.within_trans(then(loaded, Block(code)), q, loaded.within_then(0, Block(code)),
-                        Prog::ports_from_within(layout, nodes_write_ports(nodes), outs, then(loaded, Block(code)), q, stored))),
-            }),
-        })(refl),
-    })(emitted)
-}
-
 // What a statement compiles to starts where it was given its start.
 theorem Stmt::emit_extends(self s: Stmt, layout: Layout): (p: Prog) → (names: Nat) → (c: Compiled) →
     s.emit(p, layout, names) = Some(c) → p.Within(c.prog) {
     match s {
         Compute(region) => match region {
-            Dataflow(body) => λ p names c => (match p.leaf(layout, body.nodes) as λ o => p.leaf(layout, body.nodes) = o →
-                    (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → p.Within(c.prog) {
-                None => λ _ none => absurd(none),
-                Some(q) => λ leafed same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog),
-                    p.within_leaf(layout, body.nodes, q, leafed)),
-            })(refl),
+            Dataflow(body) => λ p names c emitted => p.within_computes(layout, body.nodes, names, c, emitted),
             Sequence(_, _) => λ p names c none => absurd(none),
             Compose(_, _) => λ p names c none => absurd(none),
             Conditional(_, _, _, _, _, _) => λ p names c none => absurd(none),
@@ -278,15 +251,8 @@ theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers()): (p: Prog) →
     let layout = t.layout();
     match s {
         Compute(region) => match region {
-            Dataflow(body) => λ p names c => (match p.leaf(layout, body.nodes) as λ o => p.leaf(layout, body.nodes) = o →
-                    (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → c.prog.Within(t.program) →
-                    t.Runs(Compute(Dataflow(body)), call, p, c.prog) {
-                None => λ _ none => absurd(none),
-                Some(q) => λ leafed same => j(Option::some_inj(Compiled(q, names), c, same),
-                    λ x _ => x.prog.Within(t.program) → t.Runs(Compute(Dataflow(body)), call, p, x.prog),
-                    λ within n env k exits next => t.goes_leaf(env, p, q, body.nodes, leafed, within,
-                        k(Onward(env.compute(call, Dataflow(body)))), next(env.compute(call, Dataflow(body))))),
-            })(refl),
+            Dataflow(body) => λ p names c emitted within n env k exits next => t.goes_computes(env, p, body.nodes, names, c, emitted, within,
+                k(Onward(env.compute(call, Dataflow(body)))), next(env.compute(call, Dataflow(body)))),
             Sequence(_, _) => λ p names c none => absurd(none),
             Compose(_, _) => λ p names c none => absurd(none),
             Conditional(_, _, _, _, _, _) => λ p names c none => absurd(none),
@@ -496,7 +462,7 @@ theorem Target::placed_zero(self t: Target, m: X86Memory(t.r.profile), zero: t.r
 // client need not evaluate it again.
 theorem Source::compile_laid(self src: Source, low: BitVec(64), program: Prog, compiled: src.compile(low) = Some(program)):
     program.laid_out().IsTrue() {
-    (match src.main.emit(Start, src.layout(low), 0) as λ o =>
+    (match src.main.emit(src.entry(low), src.layout(low), 0) as λ o =>
             (match o { None => None, Some(c) => c.prog.finish() }) = Some(program) → program.laid_out().IsTrue() {
         None => λ none => absurd(none),
         Some(c) => {
@@ -515,12 +481,12 @@ theorem Source::compile_laid(self src: Source, low: BitVec(64), program: Prog, c
 // proves the compile this way, the emission by evaluation and the layout a
 // stretch at a time, since the two at once overrun one declaration's fuel.
 theorem Source::compile_of(self src: Source, low: BitVec(64), program: Prog,
-    emitted: src.main.emit(Start, src.layout(low), 0).map(λ (c: Compiled) => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)) = Some(program),
+    emitted: src.main.emit(src.entry(low), src.layout(low), 0).map(λ (c: Compiled) => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)) = Some(program),
     laid: program.laid_out().IsTrue()):
     src.compile(low) = Some(program) {
     let finished = j(sym(eq_true_of_is_true(program.laid_out(), laid)),
         λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(program) }) = Some(program), refl);
-    (match src.main.emit(Start, src.layout(low), 0) as λ o =>
+    (match src.main.emit(src.entry(low), src.layout(low), 0) as λ o =>
             o.map(λ (c: Compiled) => then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)) = Some(program) →
             (match o { None => None, Some(c) => c.prog.finish() }) = Some(program) {
         None => λ none => absurd(none),
@@ -534,13 +500,13 @@ theorem Source::compile_of(self src: Source, low: BitVec(64), program: Prog,
 
 // The compiled program, from its first byte with its code resident and its
 // region zero, simulates the source at every fuel.
-theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, src.buffers).size() <= r.size, program: Prog,
+theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, src.capacities()).size() <= r.size, program: Prog,
     compiled: src.compile(r.low) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
     here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
     zero: r.Holds(λ _ => zero_byte(), s.memory)): SimProgram(r.profile.linux(), src.denote(), s) {
     let call = program_eval(src.functions);
     let layout = src.layout(r.low);
-    (match src.main.emit(Start, layout, 0) as λ o => src.main.emit(Start, layout, 0) = o →
+    (match src.main.emit(src.entry(r.low), layout, 0) as λ o => src.main.emit(src.entry(r.low), layout, 0) = o →
             (match o { None => None, Some(c) => c.prog.finish() }) = Some(program) → SimProgram(r.profile.linux(), src.denote(), s) {
         None => λ _ none => absurd(none),
         Some(c) => λ emitted => {
@@ -551,15 +517,23 @@ theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, s
                 True => λ laid same => (j(Option::some_inj(whole, program, same),
                     λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimProgram(r.profile.linux(), src.denote(), s),
                     λ at_whole => {
-                        let t = Target(r, src.buffers, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial));
-                        let runs = src.main.emit_runs(t, call, Start, 0, c, emitted, Exists(2, refl));
+                        let t = Target(r, src.capacities(), fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial));
+                        let entry = src.entry(r.low);
+                        let runs = src.main.emit_runs(t, call, entry, 0, c, emitted, Exists(2, refl));
+                        let w_entry = entry.within_trans(c.prog, whole, src.main.emit_extends(layout, entry, 0, c, emitted), Exists(2, refl));
+                        let zeros = Env(Nil, t.caps.map(λ size => List::replicate(zero_byte(), size)));
+                        let caps = λ (k: Nat) => {
+                            let shifted: (0 + k = k) = omega();
+                            cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)
+                        };
                         let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
                             sim_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
                         let after = λ (end: Env) => t.goes_finish(c.prog, whole.within_self(), Ret(BitVec::zero()),
                             λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(end, u.memory),
                             λ u at exited => sim_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
-                        λ n => runs(n, src.start(), λ (flow: Flow) => Ret(flow.status()), exits, after, s, here, at_whole,
-                            t.placed_zero(s.memory, zero))
+                        λ n => t.goes_inits(ITree::bind(Events::linux(), src.main.denote(call, n, src.start()), λ (flow: Flow) => Ret(flow.status())),
+                            src.buffers, 0, Start, zeros, caps, w_entry,
+                            runs(n, src.start(), λ (flow: Flow) => Ret(flow.status()), exits, after), s, here, at_whole, t.placed_zero(s.memory, zero))
                     }))(resident),
             })(refl)
         },

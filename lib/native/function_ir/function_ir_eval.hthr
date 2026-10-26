@@ -225,6 +225,29 @@ theorem Valuation::bind_frame(values: Valuation(), ids: List<Nat>): (words: List
 theorem BitVec::head_bit_ofBool(b: Bool): BitVec::ofBool(b).head_bit() = b { match b { False => refl, True => refl } }
 
 // ---------------------------------------------------------------------------
+// Buffers, as a byte node reads them
+
+// A file of buffers by id, each a list of bytes.
+fn Buffers() → Type { List<List<BitVec(8)>> }
+
+// Byte `index` of buffer `buffer`: zero past the end of either.
+fn buffer_byte(buffers: Buffers(), buffer, index: Nat) → BitVec(8) {
+    match buffers.nth(buffer) {
+        None => BitVec::zero(),
+        Some(bytes) => match bytes.nth(index) { None => BitVec::zero(), Some(byte) => byte },
+    }
+}
+
+// A byte as a word, zero-extended, as a load leaves it in a register.
+fn byte_word(byte: BitVec(8)) → BitVec(64) { byte.zero_extend(56) }
+
+// What a byte node's output holds over `buffers`, the index read off
+// `values`.
+fn load_value(buffers: Buffers(), buffer, index: Nat, values: Valuation()) → (w: Nat) → BitVec(w) {
+    word_value(byte_word(buffer_byte(buffers, buffer, values(64, index).toNat())))
+}
+
+// ---------------------------------------------------------------------------
 // Nodes
 
 fn Node::reads(self node: Node) → List<Nat> {
@@ -242,12 +265,16 @@ fn Node::reads(self node: Node) → List<Nat> {
         UnsignedLessThan(_, _, left, right) => [left, right],
         SignedLessThan(_, _, left, right) => [left, right],
         Equal(_, _, left, right) => [left, right],
+        BufferLoad(_, _, index) => [index],
+        BufferStore(_, _, index, value) => [index, value],
     }
 }
 
 fn Node::mentions(self node: Node) → List<Nat> { Cons(node_output(node).id, node.reads()) }
 
-// The node's equation's right side, at each width.
+// The node's equation's right side, at each width. A byte node's value is
+// the one it takes over no buffers, every byte zero: what
+// `function_ir_state`'s `run` gives it from an empty file.
 fn Node::value(self node: Node, values: Valuation()) → (w: Nat) → BitVec(w) {
     match node {
         Const(_, _, value) => λ w => BitVec::ofNat(value),
@@ -263,6 +290,8 @@ fn Node::value(self node: Node, values: Valuation()) → (w: Nat) → BitVec(w) 
         UnsignedLessThan(width, _, left, right) => bit_value(values(width, left).unsigned_lt_bit(values(width, right))),
         SignedLessThan(width, _, left, right) => bit_value(values(width, left).signed_lt_bit(values(width, right))),
         Equal(width, _, left, right) => bit_value(values(width, left).eq_bit(values(width, right))),
+        BufferLoad(_, buffer, index) => load_value(Nil, buffer, index, values),
+        BufferStore(_, buffer, index, _) => load_value(Nil, buffer, index, values),
     }
 }
 
@@ -304,6 +333,8 @@ theorem Node::holds_of(self node: Node, values, after: Valuation()):
             bit_value_bit(values(width, left).eq_bit(values(width, right))),
             sym(cong_fn(BitVec::ofBool, eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.eq_bit(y),
                 kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))))),
+        BufferLoad(_, _, _) => λ at_output kept => trivial,
+        BufferStore(_, _, _, _) => λ at_output kept => trivial,
     }
 }
 
@@ -764,6 +795,10 @@ theorem Node::value_same(self node: Node, values, other: Valuation(), same: Valu
             eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.signed_lt_bit(y), same(width, left), same(width, right))),
         Equal(width, _, left, right) => λ w => cong_fn(λ (b: Bool) => bit_value(b, w),
             eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.eq_bit(y), same(width, left), same(width, right))),
+        BufferLoad(_, buffer, index) => λ w => cong_fn(λ (x: BitVec(64)) => word_value(byte_word(buffer_byte(Nil, buffer, x.toNat())), w),
+            same(64, index)),
+        BufferStore(_, buffer, index, _) => λ w => cong_fn(λ (x: BitVec(64)) => word_value(byte_word(buffer_byte(Nil, buffer, x.toNat())), w),
+            same(64, index)),
     }
 }
 

@@ -16,6 +16,13 @@
 //   result, zero-extended from its width as `Env::settle` keeps it. Only a
 //   dataflow leaf is compiled; a conditional, loop or call region is
 //   refused for now.
+// - A leaf of one byte node compares its index with its buffer's capacity
+//   (CMP and a JAE past the access), and loads or stores the byte at the
+//   buffer's address plus the index; a store then reads the byte back as a
+//   load does. A leaf mixing byte nodes with others is refused for now: its
+//   pure stretches would go through S4 with their results settled between
+//   them, which needs every value read across a byte node at the width it
+//   was written (issues/native-compile-wider-leaves.md).
 // - A call clamps its length (and a write its offset) to its buffer, as the
 //   source does, then makes the SYSCALL and stores RAX into the result
 //   word. A read lands in the scratch range and is copied into its buffer
@@ -26,6 +33,8 @@
 //   second arm; `Repeat` runs its body from a label, tests `again`, JEs out
 //   and JMPs back; `Exit` makes the exit call with its word. Running off the
 //   end of `main` exits 0.
+// - At entry each buffer's initial bytes are stored, a byte at a time, as
+//   many as it holds.
 //
 // Any id at or past `word_slots` is refused. The program is checked once,
 // by evaluation, for its layout (`Prog::laid_out`).
@@ -33,6 +42,7 @@ import native_source;
 import function_ir;
 import function_ir_eval;
 import function_ir_lower;
+import function_ir_state;
 import x86_64;
 import x86_64_block;
 import x86_64_asm;
@@ -71,6 +81,7 @@ fn Layout::word_offset(self layout: Layout, id: Nat) → Nat { 8 * id }
 fn Layout::word_at(self layout: Layout, id: Nat) → BitVec(64) { layout.low.add_nat(layout.word_offset(id)) }
 fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * word_slots() + layout.capacities.take(buf).total() }
 fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf)) }
+fn Layout::byte_at(self layout: Layout, buf, i: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf) + i) }
 fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * word_slots() + layout.capacities.total() }
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
 fn Layout::size(self layout: Layout) → Nat { layout.scratch_offset() + layout.capacities.largest() }
@@ -150,6 +161,8 @@ fn Node::read_ports(self node: Node) → List<Port> {
         UnsignedLessThan(width, _, left, right) => [Port(left, width), Port(right, width)],
         SignedLessThan(width, _, left, right) => [Port(left, width), Port(right, width)],
         Equal(width, _, left, right) => [Port(left, width), Port(right, width)],
+        BufferLoad(_, _, index) => [Port(index, 64)],
+        BufferStore(_, _, index, value) => [Port(index, 64), Port(value, 64)],
     }
 }
 
@@ -298,6 +311,89 @@ fn Prog::call(self p: Prog, layout: Layout, shape: CallShape, names: Nat) → Op
 }
 
 // ---------------------------------------------------------------------------
+// A byte node
+
+// RAX the byte at the word `index` of buffer `buf`, zero-extended, or zero
+// where the index is not below the capacity `cap`: RCX the index, RDX the
+// capacity, RBX the byte's address.
+fn Prog::byte_to(self p: Prog, layout: Layout, buf, index, cap, skip: Nat) → Prog {
+    let tested = then(then(p.word_to(layout, index, Rcx), Block([MovRI(Rdx, BitVec::ofNat(cap)), MovRI(Rax, BitVec::ofNat(0)), CmpRR(Rcx, Rdx)])),
+        Jcc(AE, skip));
+    then(then(tested, Block([MovRI(Rbx, layout.buffer_at(buf)), AddRR(Rbx, Rcx)])), LoadByte(ByteLoad(Rax, Rbx))).label(skip)
+}
+
+// The word `value`'s low byte stored at the word `index` of buffer `buf`,
+// where the index is below the capacity `cap`.
+fn Prog::byte_from(self p: Prog, layout: Layout, buf, index, value, cap, skip: Nat) → Prog {
+    let tested = then(then(p.word_to(layout, index, Rcx), Block([MovRI(Rdx, BitVec::ofNat(cap)), CmpRR(Rcx, Rdx)])), Jcc(AE, skip));
+    then(then(tested.word_to(layout, value, Rax), Block([MovRI(Rbx, layout.buffer_at(buf)), AddRR(Rbx, Rcx)])), StoreByte(ByteStore(Rbx, Rax))).label(skip)
+}
+
+fn Prog::loads(self p: Prog, layout: Layout, output, buf, index, cap, names: Nat) → Prog {
+    p.byte_to(layout, buf, index, cap, Succ(names)).word_from(layout, output, Rax)
+}
+
+fn Prog::stores(self p: Prog, layout: Layout, output, buf, index, value, cap, names: Nat) → Prog {
+    p.byte_from(layout, buf, index, value, cap, Succ(names)).loads(layout, output, buf, index, cap, Succ(names))
+}
+
+fn Prog::byte_node(self p: Prog, layout: Layout, node: Node, names: Nat) → Option<Compiled> {
+    match node {
+        BufferLoad(output, buf, index) => match words_fit([output, index]) {
+            False => None,
+            True => match layout.capacities.nth(buf) {
+                None => None,
+                Some(cap) => Some(Compiled(p.loads(layout, output, buf, index, cap, names), Succ(names))),
+            },
+        },
+        BufferStore(output, buf, index, value) => match words_fit([output, index, value]) {
+            False => None,
+            True => match layout.capacities.nth(buf) {
+                None => None,
+                Some(cap) => Some(Compiled(p.stores(layout, output, buf, index, value, cap, names), Succ(Succ(names)))),
+            },
+        },
+        _ => None,
+    }
+}
+
+// A leaf of one node: a byte node's code.
+fn Prog::single(self p: Prog, layout: Layout, nodes: List<Node>, names: Nat) → Option<Compiled> {
+    match nodes { Nil => None, Cons(node, rest) => match rest { Nil => p.byte_node(layout, node, names), Cons(_, _) => None } }
+}
+
+// A dataflow leaf: all pure, through S4; or one byte node.
+fn Prog::computes(self p: Prog, layout: Layout, nodes: List<Node>, names: Nat) → Option<Compiled> {
+    match nodes_pure(nodes) {
+        True => match p.leaf(layout, nodes) { None => None, Some(q) => Some(Compiled(q, names)) },
+        False => p.single(layout, nodes, names),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Initial bytes
+
+// Byte `c` stored at index `i` of buffer `buf`.
+fn Prog::byte_init(self p: Prog, layout: Layout, buf, i: Nat, c: BitVec(8)) → Prog {
+    then(then(p, Block([MovRI(Rbx, layout.byte_at(buf, i)), MovRI(Rax, byte_word(c))])), StoreByte(ByteStore(Rbx, Rax)))
+}
+
+// The bytes stored from index `i` of buffer `buf`, while there is room.
+fn Prog::bytes_init(self p: Prog, layout: Layout, bytes: List<BitVec(8)>, room, buf, i: Nat) → Prog {
+    match bytes {
+        Nil => p,
+        Cons(c, rest) => match room { Zero => p, Succ(r) => p.byte_init(layout, buf, i, c).bytes_init(layout, rest, r, buf, Succ(i)) },
+    }
+}
+
+fn Prog::inits(self p: Prog, layout: Layout, buffers: List<Buffer>, buf: Nat) → Prog {
+    match buffers {
+        Nil => p,
+        Cons(b, rest) => p.bytes_init(layout, b.initial, b.capacity, buf, 0).inits(layout, rest, Succ(buf)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Statements
 
 // exit(status).
@@ -313,7 +409,7 @@ fn Prog::tests(self p: Prog, layout: Layout, condition: Nat, else_name: Nat) →
 fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, names: Nat) → Option<Compiled> {
     match s {
         Compute(region) => match region {
-            Dataflow(body) => match p.leaf(layout, body.nodes) { None => None, Some(q) => Some(Compiled(q, names)) },
+            Dataflow(body) => p.computes(layout, body.nodes, names),
             Sequence(_, _) => None,
             Compose(_, _) => None,
             Conditional(_, _, _, _, _, _) => None,
@@ -349,8 +445,11 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, names: Nat) → Option<Comp
     }
 }
 
-// The program: `main`, then exit 0, checked for its layout.
-fn Source::layout(self src: Source, low: BitVec(64)) → Layout { Layout(low, src.buffers) }
+// The program: the initial bytes, `main`, then exit 0, checked for its
+// layout.
+fn Source::layout(self src: Source, low: BitVec(64)) → Layout { Layout(low, src.capacities()) }
+
+fn Source::entry(self src: Source, low: BitVec(64)) → Prog { Start.inits(src.layout(low), src.buffers, 0) }
 
 fn Prog::finish(self p: Prog) → Option<Prog> {
     let whole = then(then(p, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
@@ -358,7 +457,7 @@ fn Prog::finish(self p: Prog) → Option<Prog> {
 }
 
 fn Source::compile(self src: Source, low: BitVec(64)) → Option<Prog> {
-    match src.main.emit(Start, src.layout(low), 0) { None => None, Some(c) => c.prog.finish() }
+    match src.main.emit(src.entry(low), src.layout(low), 0) { None => None, Some(c) => c.prog.finish() }
 }
 
 // ---------------------------------------------------------------------------

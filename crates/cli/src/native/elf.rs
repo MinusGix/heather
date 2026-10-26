@@ -199,7 +199,7 @@ import {root};
 {imports}
 // The program: what `{symbol}().compile` computes.
 {code}
-theorem {p}_emitted(): {symbol}().main.emit(Start, {symbol}().layout({LOW}), 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{ refl }}
+theorem {p}_emitted(): {symbol}().main.emit({symbol}().entry({LOW}), {symbol}().layout({LOW}), 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{ refl }}
 
 {layout}
 theorem {p}_holes(): {p}_code().no_holes().IsTrue() {{ trivial }}

@@ -1,0 +1,80 @@
+// The first tools past cat (docs/native-real-programs-plan.md, round 1;
+// issues/native-source-bytes.md): `tr a-z A-Z` and `yes`, which look at
+// and choose bytes. Each is a `Source` that `heather write-elf` compiles;
+// `native_compile_correct` is the proof of every one, so neither has a
+// theorem of its own.
+//
+// Words below 20 are cat's (`native_cat`): 0 stdin, 1 stdout, 2 the
+// buffer's capacity, 3 what a read returned, 4 how much of it is sent, 5 how
+// much is left, 6 what a write returned, 10 and 11 the statuses 1 and 0, 13
+// the next sent count, 16 zero; bits 7 the read failed, 8 the input ended, 12
+// the write failed, 14 write again, 17 nothing left, 18 stop writing, 19 one.
+import native_cat;
+import native_source;
+// The compiler's theorem and the ELF image: what `write-elf` closes over.
+import native_compile_correct;
+import linux_x86_64_image;
+import function_ir;
+import list;
+import bitvec;
+
+// ---------------------------------------------------------------------------
+// tr a-z A-Z
+
+// tr's words: 20 the index, 21 the byte there, 22 'a', 23 one past 'z', 24
+// the case's distance, 25 one, 26 the byte stored, 31 the byte raised, 32
+// the next index. Its bits: 15 read again, 27 below 'a', 28 below one past
+// 'z', 30 translate again.
+fn tr_setup(capacity: Nat) → Stmt {
+    Then(cat_setup(capacity), ops([Const(64, 22, 97), Const(64, 23, 123), Const(64, 24, 32), Const(64, 25, 1)]))
+}
+
+// The byte at the index raised where it is a lower-case letter, and the
+// index one further.
+fn tr_translate() → Stmt {
+    Then(ops([BufferLoad(21, 0, 20)]),
+        Then(ops([UnsignedLessThan(64, 27, 21, 22), UnsignedLessThan(64, 28, 21, 23)]),
+            Then(Branch(27, ops([]), Branch(28, Then(ops([Sub(64, 31, 21, 24)]), ops([BufferStore(26, 0, 20, 31)])), ops([]))),
+                Then(ops([Add(64, 32, 20, 25)]), ops([Move(64, 20, 32), UnsignedLessThan(64, 30, 32, 3)])))))
+}
+
+// One read, translated, and everything it read written.
+fn tr_pass() → Stmt {
+    Then(Invoke(Reads(0, 0, 2, 3)),
+        Then(ops([SignedLessThan(64, 7, 3, 16), Equal(64, 8, 3, 16)]),
+            Branch(7, Exit(10),
+                Branch(8, Exit(11),
+                    Then(ops([Const(64, 20, 0)]),
+                        Then(Repeat(tr_translate(), 30),
+                            Then(ops([Const(64, 4, 0), Move(64, 5, 3)]),
+                                Then(Repeat(cat_write(), 14),
+                                    Branch(12, Exit(10), ops([]))))))))))
+}
+
+fn tr_upper(capacity: Nat) → Source {
+    Source(functions := [], buffers := [Buffer(capacity)], main := Then(tr_setup(capacity), Repeat(tr_pass(), 15)))
+}
+
+fn tr_upper_source() → Source { tr_upper(256) }
+
+// ---------------------------------------------------------------------------
+// yes
+
+// The line, repeated forever: a buffer holding it from the start, written
+// until all of it is sent, again and again; a failed write exits 1. Word 3
+// the line's length; bit 15 one.
+fn yes(line: List<BitVec(8)>) → Source {
+    let n = line.len();
+    let setup = ops([Const(64, 1, 1), Const(64, 3, n), Const(64, 10, 1), Const(64, 16, 0), Const(1, 15, 1), Const(1, 19, 1)]);
+    let pass = Then(ops([Const(64, 4, 0), Move(64, 5, 3)]),
+        Then(Repeat(cat_write(), 14), Branch(12, Exit(10), ops([]))));
+    Source(functions := [], buffers := [Buffer(n, line)], main := Then(setup, Repeat(pass, 15)))
+}
+
+// Bytes by their codes.
+fn ascii(codes: List<Nat>) → List<BitVec(8)> { codes.map(λ (code: Nat) => BitVec::ofNat(code)) }
+
+// "yes, heather\n".
+fn yes_line() → List<BitVec(8)> { ascii([121, 101, 115, 44, 32, 104, 101, 97, 116, 104, 101, 114, 10]) }
+
+fn yes_source() → Source { yes(yes_line()) }
