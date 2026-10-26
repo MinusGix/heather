@@ -59,3 +59,50 @@ magnitude.
 - **[[indexed-families]]** owns the routes and the one-index limit (§8.4).
   Assumed here: only that `Tm` takes the `IWf` route, which the bench fixture
   asserts.
+
+## Log
+
+- 2026-10-26: Attributed and mostly fixed, three kernel changes, no
+  elaborator change. Stack samples and a per-variant count of the checker's
+  inferences showed the gate re-judging the same few hundred nodes about a
+  thousand times each: the inner nodes of the shape's case trees (`n`, `o`,
+  `c`, and on `W` the `ok`/code trees), reached inside motives that every
+  level of a convoy case tree re-checks, each time under a Γ that differs
+  only in entries those nodes never read. At sixteen function-field
+  constructors the literal `0` alone was inferred 6.3M times.
+  1. **Strengthened typing-memo scopes** (`typing.rs` §The typing memo): a
+     tail-free node that reads only Γ's innermost `k ≤ 8` entries, whose types
+     stay inside them, is keyed by those entries instead of by Γ.
+  2. **Closure identity across spine lengths** (`conv/dom/values.rs`
+     `env_identity`): two closures over one body agree when the captures the
+     body reads agree, whatever the spines' lengths past them (a body with a
+     substitution tail still needs equal lengths).
+  3. **`elim_IWf`'s ih as a value** (`Val::IWfIh`, `eval.rs`), as `elim_Wf`'s
+     and `elim_W`'s already were: the recursive call is the eliminator
+     re-indexed at the child, sharing its step, so conversion compares a
+     recursive call's step with the function's own by identity instead of
+     normalizing the whole case tree.
+
+  `heather check --timings`, release, width one, cloud box, before → after:
+
+  | family | item | before | after |
+  |---|---|---|---|
+  | function fields, 16 | `size` | 7,074 ms | 48 ms |
+  | | closed / open `refl` | 920 / 731 ms | 26 / 50 ms |
+  | typed syntax, 12 | `size` | 6,111 ms | 947 ms |
+  | | open / closed `refl` | 3,345 / 1,886 ms | 448 / 490 ms |
+
+  Bench slopes re-recorded from below: `inductive/typed-syntax` 1.78 → 1.13,
+  `inductive/function-fields` 1.67 → 0.88 (fixed cost dominates that range).
+  The function-field family meets the acceptance; typed syntax does not yet:
+  its `refl`s fell 7× and 4×, not 10×. **What is left**, measured: about half
+  of every typed-syntax item is `iwf_sig_wf`, the family signature checked
+  again at each `IWf(…)` it meets (26 checks for `size` at twelve, ~19 ms
+  each). Its index terms name declared constructors (`J`, `Ext`), and a
+  global reference carries its context's length in its substitution tail,
+  so (a) the strengthened scope cannot apply to them and (b) every shift
+  copies them, the shape [[open-payload-shift-copies]] parks behind a
+  representation change. An elaborator-side alternative that needs no
+  representation change is to emit `n`, `o`, `c` as generated definitions,
+  so a signature is three global references; not attempted here. Left open
+  for that.

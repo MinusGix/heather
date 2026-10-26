@@ -335,9 +335,12 @@ fn mutual_recursion() -> Family {
 /// at the rebound judgment; a `refl` unfolding at an open and at a closed
 /// term. Lower bound: linear in the constructors.
 ///
-/// Recorded instead: superlinear, nearly all gate, and a large constant —
-/// a quarter of a second per `refl` at five constructors
-/// (`issues/indexed-family-recursion-gate-cost.md`).
+/// Recorded first: superlinear, nearly all gate, and a large constant — a
+/// quarter of a second per `refl` at five constructors. Since the kernel
+/// keys its typing memo on the entries a node reads and shares the `elim_IWf`
+/// step with its recursive calls, about linear; the constant left is mostly
+/// the family signature re-checked at every binder, its index terms copied
+/// by each shift (`issues/indexed-family-recursion-gate-cost.md`).
 fn typed_syntax() -> Family {
     let src = |n: u64| {
         let mut ctors = vec![
@@ -379,10 +382,11 @@ fn typed_syntax() -> Family {
         name: "inductive/typed-syntax",
         what: "intrinsically typed terms, n constructors: declaration, size, two refl unfoldings",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 1.78 (1.45-1.99), 95% gate.
-        // Five to eight constructors is the affordable range, and the
-        // constant is most of it; the CLI reads ~3.2 from five to twelve.
-        expect_slope: Some((1.43, 2.13)),
+        // 2026-10-26, cloud box, after the strengthened typing memo and the
+        // shared ih: 1.13, 88% gate (was 1.78, 95%). From five to twelve
+        // constructors the CLI's `size` grows at about the 2.2th power (was
+        // ~3.2) and its `refl`s at about the 1.2th.
+        expect_slope: Some((0.78, 1.48)),
         cases: indexed_sweep(
             "inductive/typed-syntax", &[5, 6, 7, 8], "Tm", IndexedRoute::Iwf, src,
         ),
@@ -392,8 +396,11 @@ fn typed_syntax() -> Family {
 /// An indexed family with `n` branching constructors, each storing a
 /// function child `k: (y: Nat) -> Tr(n)`; a `size` through `k(0)`; a closed
 /// and an open `refl` unfolding. Lower bound: linear in the constructors.
-/// The same family with a plain child `k: Tr(n)` is ~60× cheaper at sixteen
-/// constructors (`issues/indexed-family-recursion-gate-cost.md`).
+/// Recorded first at about the cube, ~60× the same family with a plain
+/// child `k: Tr(n)` at sixteen constructors; since the strengthened typing
+/// memo and closure identity across spine lengths, below linear over this
+/// range, the fixed cost dominating
+/// (`issues/indexed-family-recursion-gate-cost.md`).
 fn function_fields() -> Family {
     let src = |n: u64| {
         let mut ctors = vec!["    Lf : Tr(0),".to_string()];
@@ -415,9 +422,9 @@ fn function_fields() -> Family {
         name: "inductive/function-fields",
         what: "an IWf-on-W family with n function-field constructors: size and two refl unfoldings",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 1.67 (1.63-1.75), 98% gate;
-        // the CLI reads ~3.4 from eight to sixteen.
-        expect_slope: Some((1.32, 2.02)),
+        // 2026-10-26, cloud box, after the round: 0.88, 75% gate (was 1.67,
+        // 98%); the CLI's `size` reads ~1.5 from eight to sixteen (was ~3.4).
+        expect_slope: Some((0.53, 1.23)),
         cases: indexed_sweep(
             "inductive/function-fields", &[2, 4, 6, 8], "Tr", IndexedRoute::IwfW, src,
         ),

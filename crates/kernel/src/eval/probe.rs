@@ -107,7 +107,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     fn probe_step(&mut self, step: &'v TmClo<'v>) -> Res<FoldClass> {
         let value = self.probe_apply(step, self.probe_var(PROBE_K))?;
-        if let Val::Lam { .. } | Val::WfIh { .. } | Val::WIh { .. } = &*value {
+        if let Val::Lam { .. } | Val::WfIh { .. } | Val::WIh { .. } | Val::IWfIh { .. } = &*value {
             return self.probe_sync(value);
         }
         if let Some(tree) = self.read_affine(&value)? {

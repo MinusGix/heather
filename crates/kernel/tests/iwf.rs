@@ -627,6 +627,30 @@ fn beta_on_open_data_at_a_computed_index() {
     assert!(matches!(w, Term::Succ(_)), "expected S(…), got {w:?}");
 }
 
+/// The evaluator holds the ih an `elim_IWf` β hands its step natively
+/// (`Val::IWfIh`): over a canonical tuple it fires the eliminator, re-indexed
+/// at the child, on the component (the test above), and over a *neutral*
+/// tuple it builds the λ it stands for, whose `dnth` projects it. Both must
+/// mean what the λ means. Γ = (n m : Nat, cs : Σ(Tm(n)). Σ(Tm(m)). Unit).
+#[test]
+fn the_ih_over_a_neutral_tuple_is_the_recursive_call_on_its_projections() {
+    let sig = tm_fam().sig();
+    let g = ext(&ext(&nil_ctx(), Type::Nat, c(0)), Type::Nat, c(0));
+    let g = ext(&g, tuple_ty(&[at(&sig, v(1)), at(&sig, v(0))]), c(0));
+    let t = sig.supi(rt(tm_app_label(v(2), v(1))), rt(v(0)));
+    let lhs = size_at(3, succ(plus(v(2), v(1))), t);
+    ck(&g, &lhs, &Type::Nat, c(0));
+    let rest = tuple_ty(&[at(&sig, v(1))]).shift_local(1);
+    let first = fst_of(at(&sig, v(2)), rest.clone(), v(0));
+    let second = fst_of(at(&sig, v(1)), unit0(), snd_of(at(&sig, v(2)), rest, v(0)));
+    let rhs = succ(plus(size_at(3, v(2), first.clone()), size_at(3, v(1), second.clone())));
+    ck(&g, &rhs, &Type::Nat, c(0));
+    conv_tm(&g, &lhs, &rhs, &Type::Nat, c(0));
+    // Negative control: the projections swapped.
+    let swapped = succ(plus(size_at(3, v(1), second), size_at(3, v(2), first)));
+    not_conv_tm(&g, &lhs, &swapped, &Type::Nat, c(0));
+}
+
 #[test]
 fn beta_fires_at_any_index_untyped() {
     // `red_elimIWf_supi` fires at a `sup_i` of any annotations and any

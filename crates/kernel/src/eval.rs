@@ -1995,6 +1995,10 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let (elim, label, children) = (Rc::clone(elim), *label, *children);
                 self.w_ih_apply(&head, &elim, label, children, e)
             }
+            (Val::IWfIh { elim, label, children }, Elim::App { .. }) => {
+                let (elim, label, children) = (Rc::clone(elim), *label, *children);
+                self.iwf_ih_apply(&head, &elim, label, children, e)
+            }
             _ => self.step_fire(head, e),
         }
     }
@@ -2598,12 +2602,10 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// `elim_IWf(…; m; sup_i(…; a; cs)) ⇝ s[a, cs, iwfIH a cs]`, at any
-    /// index (docs/iwf-former-design.md §4). The ih is `reduce.rs`'s, from
-    /// the one schema [`iwf_ih`]: built as syntax in `(Γ, a, cs)` — the
-    /// annotations weakened past the two slots, `a` and `cs` named by them —
-    /// and closed over the environment `ρ, a, cs`, as [`Eval::fire_elim_w`]
-    /// builds `elim_W`'s. No [`Val::WfIh`]-style shortcut: nothing hot runs
-    /// on `IWf` yet.
+    /// index (docs/iwf-former-design.md §4), with the ih held as
+    /// [`Val::IWfIh`] rather than built as that λ's syntax. The syntax
+    /// guards are [`iwf_ih_lam`](Eval::iwf_ih_lam)'s, kept here so the β
+    /// fires exactly when it did while the λ was eager.
     #[inline(never)]
     fn fire_elim_iwf(
         &mut self,
@@ -2611,30 +2613,49 @@ impl<'a, 'v> Eval<'a, 'v> {
         children: &'v TmClo<'v>,
         e: &Elim<'v>,
     ) -> Res<Option<Work<'v>>> {
-        let Elim::ElimIWf { sig, motive_level, motive, step, env, .. } = e else {
+        let Elim::ElimIWf { sig, motive, step, .. } = e else {
             return Ok(None);
+        };
+        let VIWfSig { idx, shape, arity, out, child, .. } = &**sig;
+        if idx.as_syn().is_none()
+            || shape.as_syn().is_none()
+            || arity.as_syn().is_none()
+            || out.as_syn().is_none()
+            || child.as_syn().is_none()
+            || motive.as_syn().is_none()
+            || step.as_syn().is_none()
+        {
+            return Ok(None);
+        }
+        let ih = Rc::new(Val::IWfIh { elim: Rc::new(e.clone()), label, children });
+        let step = *step;
+        Ok(Some(Work::Apply(step, vec![label, children, self.vclo(ih)])))
+    }
+
+    /// The λ a [`Val::IWfIh`] stands for: `reduce.rs`'s ih, from the one
+    /// schema [`iwf_ih`], built as syntax in `(Γ, a, cs)` — the annotations
+    /// weakened past the two slots, `a` and `cs` named by them — and closed
+    /// over the environment `ρ, a, cs`, as [`Eval::w_ih_lam`] builds
+    /// `elim_W`'s. Only the fallback of [`iwf_ih_apply`](Eval::iwf_ih_apply)
+    /// and the readers that inspect a function without applying it pay for
+    /// this.
+    fn iwf_ih_lam(
+        &self,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: &Elim<'v>,
+    ) -> Option<Rc<Val<'v>>> {
+        let Elim::ElimIWf { sig, motive_level, motive, step, env, .. } = e else {
+            return None;
         };
         let VIWfSig { level, idx_level, idx, shape, arity, out, child } = &**sig;
-        let (
-            Some((_, idx_b)),
-            Some((_, shape_b)),
-            Some((_, arity_b)),
-            Some((_, out_b)),
-            Some((_, child_b)),
-            Some((_, motive_b)),
-            Some((_, step_b)),
-        ) = (
-            idx.as_syn(),
-            shape.as_syn(),
-            arity.as_syn(),
-            out.as_syn(),
-            child.as_syn(),
-            motive.as_syn(),
-            step.as_syn(),
-        )
-        else {
-            return Ok(None);
-        };
+        let (_, idx_b) = idx.as_syn()?;
+        let (_, shape_b) = shape.as_syn()?;
+        let (_, arity_b) = arity.as_syn()?;
+        let (_, out_b) = out.as_syn()?;
+        let (_, child_b) = child.as_syn()?;
+        let (_, motive_b) = motive.as_syn()?;
+        let (_, step_b) = step.as_syn()?;
         let sig = Rc::new(IWfSig {
             level: level.clone(),
             idx_level: idx_level.clone(),
@@ -2657,14 +2678,82 @@ impl<'a, 'v> Eval<'a, 'v> {
             unreachable!("iwf_ih builds a λ")
         };
         let rho_acs = env.push(self.arena, label).push(self.arena, children);
-        let ih = Rc::new(Val::Lam {
+        Some(Rc::new(Val::Lam {
             dom_level,
             cod_level,
             dom: self.arena.ty(TyClo::new(rho_acs, dom)),
             body: self.arena.tm(TmClo::syn(rho_acs, body)),
-        });
-        let step = *step;
-        Ok(Some(Work::Apply(step, vec![label, children, self.vclo(ih)])))
+        }))
+    }
+
+    /// `ih i` for a [`Val::IWfIh`]: over a canonical index and a canonical
+    /// tuple, `dnth(…; cs; i)` is a component, and the eliminator fires on it
+    /// at the child's index `c[a, i]` — the λ's body, without its syntax. Over
+    /// anything else it applies the λ itself.
+    #[inline(never)]
+    fn iwf_ih_apply(
+        &mut self,
+        head: &Rc<Val<'v>>,
+        elim: &Rc<Elim<'v>>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: Elim<'v>,
+    ) -> Res<Work<'v>> {
+        let Elim::App { arg, .. } = &e else {
+            return Ok(Work::Val(stuck(self.arena, head, &e)));
+        };
+        let arg = *arg;
+        let mut cs = self.force(children)?;
+        let mut i = self.force(arg)?;
+        loop {
+            let Val::Pair { fst, snd, .. } = &*cs else { break };
+            let (fst, snd) = (*fst, *snd);
+            match &*i {
+                Val::Inl { .. } => {
+                    let Some(rec) = self.iwf_reindexed(elim, label, arg) else { break };
+                    self.spend()?;
+                    self.frames.push(Frame::Elim(rec));
+                    return Ok(Work::Force(fst));
+                }
+                Val::Inr { val, .. } => {
+                    let val = *val;
+                    self.spend()?;
+                    cs = self.force(snd)?;
+                    i = self.force(val)?;
+                }
+                _ => break,
+            }
+        }
+        match self.iwf_ih_lam(label, children, elim).as_deref() {
+            Some(Val::Lam { body, .. }) => {
+                self.spend()?;
+                Ok(Work::Apply1(*body, arg))
+            }
+            _ => Ok(Work::Val(stuck(self.arena, head, &e))),
+        }
+    }
+
+    /// `elim` at the child index `c[a, i]`: the signature's `child` closure
+    /// opened at the label and the position, everything else `elim`'s own.
+    fn iwf_reindexed(
+        &self,
+        elim: &Elim<'v>,
+        label: &'v TmClo<'v>,
+        position: &'v TmClo<'v>,
+    ) -> Option<Rc<Elim<'v>>> {
+        let Elim::ElimIWf { sig, motive_level, motive, step, env, .. } = elim else {
+            return None;
+        };
+        let (rho, child) = sig.child.as_syn()?;
+        let rho = rho.push(self.arena, label).push(self.arena, position);
+        Some(Rc::new(Elim::ElimIWf {
+            sig: Rc::clone(sig),
+            motive_level: motive_level.clone(),
+            motive,
+            step,
+            index: self.arena.tm(TmClo::syn(rho, Rc::clone(child))),
+            env: env.clone(),
+        }))
     }
 
     /// `out(corec^{k}(…; X; c; j; x)) ⇝ m_out_corec(…)`
