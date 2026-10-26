@@ -16,7 +16,7 @@
 //! sides, a constructor's field types — to the gate. So a `let` no use
 //! spliced (`let p = P(2, refl); 0`) would be accepted however wrong its
 //! value. A block therefore ends by wrapping such a value around its result
-//! as a redex that discards it, `(λ _: T. rest)(v)`
+//! as a redex that discards it, `(λ _: T. λ b: B. b)(v)(rest)`
 //! ([`LetValue::discard_around`]); a value some use spliced is already
 //! checked there.
 
@@ -24,7 +24,7 @@ use std::sync::Arc as Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalSubst, Term, Type};
+use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Block, Expr, ExprKind, LamBinder, Pat, Span, Stmt, Ty};
 
 use crate::inductive::Inductive;
@@ -166,10 +166,17 @@ impl LetValue {
     }
 
     /// `body`, of `body_type` at `body_level` in `cx`, the context the values
-    /// were bound in, with every value no use spliced wrapped around it as
-    /// `(λ _: T. body)(v)` — outermost first, so the redexes read in the order
-    /// the `let`s were written. The block's type is unchanged: the binder is
-    /// unused, so the codomain instantiated at `v` is `body_type` again.
+    /// were bound in, with every value no use spliced discarded around it as
+    /// `(λ _: T. λ b: B. b)(v)(body)` — outermost first, so the redexes read
+    /// in the order the `let`s were written. The block's type is unchanged:
+    /// the discarding function is the identity on `B` once `v` is given.
+    ///
+    /// Each value, its type and `body` stay at the block's own depth: only
+    /// `B` goes under the discarding binder, once for the whole block
+    /// ([`Discard`]). Wrapping as `(λ _: T. body)(v)` instead put the rest
+    /// of the block one binder deeper per value, so `k` unused proofs about
+    /// a shared chain shifted the body `k` times and handed the gate the
+    /// chain at `k` depths (`issues/discarded-let-values-nest-binders.md`).
     pub(crate) fn discard_around(
         elab: &impl StatementElab,
         cx: &Cx,
@@ -178,18 +185,70 @@ impl LetValue {
         body_type: &Type,
         body_level: &Level,
     ) -> Term {
-        values
+        let unused: Vec<LetValue> = values
             .into_iter()
-            .rev()
             .filter(|value| !value.spliced.load(Ordering::Relaxed))
-            .fold(body, |body, value| {
-                HaveValue {
-                    term: value.term,
-                    ty: Rc::new(elab.annotation(cx, &value.ty)),
-                    level: value.level,
-                }
-                .redex(body.shift_local(1), body_type.shift_local(1), body_level.clone())
-            })
+            .collect();
+        if unused.is_empty() {
+            return body;
+        }
+        let discard = Discard::new(elab, cx, body_type, body_level);
+        unused.into_iter().rev().fold(body, |body, value| discard.around(elab, cx, value, body))
+    }
+}
+
+/// What every discarding redex of one block shares: the block's type `B`
+/// and the identity on it under the discarded value's binder, built once so
+/// that each redex holds the same nodes.
+struct Discard {
+    level: Level,
+    /// `B`, as an annotation slot.
+    ty: Rc<Type>,
+    /// `B` under one binder: the codomain of `app(…; b: B. B↑)`.
+    ty_under: Rc<Type>,
+    /// `λ b: B↑. b`, under the discarded value's binder.
+    identity: Rc<Term>,
+    /// Its type there, `Π(b: B↑). B↑↑`.
+    identity_ty: Rc<Type>,
+}
+
+impl Discard {
+    fn new(elab: &impl StatementElab, cx: &Cx, body_type: &Type, body_level: &Level) -> Self {
+        let ty = elab.annotation(cx, body_type);
+        let ty_under = Rc::new(ty.shift_local(1));
+        let identity_ty = Rc::new(Type::Pi {
+            dom_level: body_level.clone(),
+            cod_level: body_level.clone(),
+            dom: Rc::clone(&ty_under),
+            cod: Rc::new(ty.shift_local(2)),
+        });
+        let identity = Rc::new(Term::Lam {
+            dom_level: body_level.clone(),
+            cod_level: body_level.clone(),
+            dom: Rc::clone(&ty_under),
+            body: Rc::new(Term::Var(LocalVar(0))),
+        });
+        Discard { level: body_level.clone(), ty: Rc::new(ty), ty_under, identity, identity_ty }
+    }
+
+    /// `app(app(λ(_: T). λ(b: B↑). b; v); body)`, both applications in the
+    /// kernel's annotated form ([`HaveValue::redex`]). `Π(b: B↑). B↑↑` has
+    /// level `l_B ⊔ l_B`, which is `l_B`.
+    fn around(&self, elab: &impl StatementElab, cx: &Cx, value: LetValue, body: Term) -> Term {
+        let keep = HaveValue {
+            term: value.term,
+            ty: Rc::new(elab.annotation(cx, &value.ty)),
+            level: value.level,
+        }
+        .redex_shared(Rc::clone(&self.identity), Rc::clone(&self.identity_ty), self.level.clone());
+        Term::App {
+            fun: Rc::new(keep),
+            dom_level: self.level.clone(),
+            cod_level: self.level.clone(),
+            dom: Rc::clone(&self.ty),
+            cod: Rc::clone(&self.ty_under),
+            arg: Rc::new(body),
+        }
     }
 }
 
@@ -307,17 +366,22 @@ impl HaveValue {
     /// application, not `AppAt`: the unannotated form infers its function,
     /// and a λ whose body only checks does not infer.
     fn redex(self, body: Term, body_type: Type, body_level: Level) -> Term {
+        self.redex_shared(Rc::new(body), Rc::new(body_type), body_level)
+    }
+
+    /// [`Self::redex`] over a body and type already shared.
+    fn redex_shared(self, body: Rc<Term>, body_type: Rc<Type>, body_level: Level) -> Term {
         Term::App {
             fun: Rc::new(Term::Lam {
                 dom_level: self.level.clone(),
                 cod_level: body_level.clone(),
                 dom: Rc::clone(&self.ty),
-                body: Rc::new(body),
+                body,
             }),
             dom_level: self.level,
             cod_level: body_level,
             dom: self.ty,
-            cod: Rc::new(body_type),
+            cod: body_type,
             arg: self.term,
         }
     }
