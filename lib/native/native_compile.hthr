@@ -605,3 +605,60 @@ fn Source::refusal(self src: Source, low: BitVec(64)) → List<Nat> {
         Passed(_) => match src.compile(low) { None => [0, 5, 9, 0, 0], Some(_) => [] },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Reading a program back a part at a time (`heather write-elf`)
+
+// The statement tree in preorder, three numbers a node: its kind (0 a leaf,
+// 1 a `Then`, 2 a `Repeat`, 3 a `Branch`, its children after it), the label
+// name it starts at, and the one its first child starts at, or, for a leaf,
+// the one after it. Consed on as they are met, so the list is the preorder
+// reversed and nothing is appended. A leaf's names are its emission's, but
+// only a call takes any (`Compiled(q, names)` for the others), so no leaf
+// is lowered here: the reader lowers one part at a time
+// (crates/cli/src/native/emission.rs), and nothing is proved of this.
+record Shape { names: Nat, numbers: List<Nat> }
+
+fn Shape::node(self m: Shape, kind, after: Nat) → Shape { Shape(after, Cons(after, Cons(m.names, Cons(kind, m.numbers)))) }
+
+// A leaf's label names, from its emission: a call and a byte node take
+// names, and which leaves do is the compiler's business, not the shape's.
+fn Stmt::leaf_shape(self s: Stmt, layout: Layout, m: Shape) → Shape {
+    match s.emit(Start, layout, m.names) { None => m.node(0, m.names), Some(c) => m.node(0, c.names) }
+}
+
+fn Stmt::shape(self s: Stmt, layout: Layout, m: Shape) → Shape {
+    match s {
+        Then(first, rest) => rest.shape(layout, first.shape(layout, m.node(1, m.names))),
+        Repeat(body, _) => body.shape(layout, m.node(2, Succ(Succ(m.names)))),
+        Branch(_, yes, no) => no.shape(layout, yes.shape(layout, m.node(3, Succ(Succ(m.names))))),
+        Compute(region) => Compute(region).leaf_shape(layout, m),
+        Invoke(shape) => Invoke(shape).leaf_shape(layout, m),
+        Exit(code) => Exit(code).leaf_shape(layout, m),
+    }
+}
+
+fn Source::shape(self src: Source, low: BitVec(64)) → List<Nat> { src.main.shape(src.layout(low), Shape(0, [])).numbers }
+
+// A program as a reader takes it: how many numbers its items are, the items
+// (`Prog::numbers`), then their lengths.
+fn List::reading_of(self numbers: List<Nat>, lens: List<Nat>) → List<Nat> { Cons(numbers.len(), numbers ++ lens) }
+fn Prog::reading(self p: Prog) → List<Nat> { p.numbers().reading_of(asm_lens(p)) }
+
+// A part's emission at `Start`, which `emit` never looks into, read: the
+// label name after it, then its program's reading; nothing if it does not
+// emit.
+fn Stmt::emission_reading(self s: Stmt, layout: Layout, names: Nat) → List<Nat> {
+    match s.emit(Start, layout, names) { None => [], Some(c) => Cons(c.names, c.prog.reading()) }
+}
+
+// A statement's parts, by position, for stating a piece of the tree by its
+// parent's (`Stmt::emit_then_of` and its siblings, native_compile_correct):
+// a `Then`'s two statements, a `Branch`'s two arms, a `Repeat`'s body on the
+// left; and the word a `Branch` or `Repeat` tests. A leaf is its own parts.
+fn Stmt::is_then(self s: Stmt) → Bool { match s { Then(_, _) => True, Compute(_) => False, Invoke(_) => False, Branch(_, _, _) => False, Repeat(_, _) => False, Exit(_) => False } }
+fn Stmt::is_branch(self s: Stmt) → Bool { match s { Branch(_, _, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Repeat(_, _) => False, Exit(_) => False } }
+fn Stmt::is_repeat(self s: Stmt) → Bool { match s { Repeat(_, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Branch(_, _, _) => False, Exit(_) => False } }
+fn Stmt::left(self s: Stmt) → Stmt { match s { Then(first, _) => first, Branch(_, yes, _) => yes, Repeat(body, _) => body, Compute(_) => s, Invoke(_) => s, Exit(_) => s } }
+fn Stmt::right(self s: Stmt) → Stmt { match s { Then(_, rest) => rest, Branch(_, _, no) => no, Repeat(_, _) => s, Compute(_) => s, Invoke(_) => s, Exit(_) => s } }
+fn Stmt::word(self s: Stmt) → Nat { match s { Branch(condition, _, _) => condition, Repeat(_, again) => again, Then(_, _) => 0, Compute(_) => 0, Invoke(_) => 0, Exit(_) => 0 } }

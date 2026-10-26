@@ -269,8 +269,8 @@ fn the_dump_header_names_every_column() {
     }
     assert_eq!(
         columns.len(),
-        5 + Timer::NAMES.len() + Counter::NAMES.len() + kstats::Snapshot::NAMES.len() + 4,
-        "the four value-metric columns close the row",
+        5 + Timer::NAMES.len() + Counter::NAMES.len() + kstats::Snapshot::NAMES.len() + 4 + 1,
+        "the four value-metric columns and the peak growth close the row",
     );
 }
 

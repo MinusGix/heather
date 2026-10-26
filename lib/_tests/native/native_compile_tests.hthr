@@ -6,11 +6,15 @@
 import native_source;
 import native_cat;
 import native_compile;
+import native_compile_correct;
 import function_ir;
 import linux_x86_64_image;
 import bitvec;
 import list;
 import nat;
+import option;
+import x86_64_asm;
+import x86_64_asm_runs;
 
 fn low() → BitVec(64) { DataRegion::io_page().low }
 
@@ -82,3 +86,46 @@ theorem byte_leaves_compile(): byte_leaves().refusal(low()) = [] { refl }
 fn exit3() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Exit(0))) }
 
 theorem exit3_compiles(): exit3().refusal(low()) = [] { refl }
+
+// How `write-elf` reads a program back a part at a time
+// (crates/cli/src/native/emission.rs): the tree's shape, three numbers a
+// node in reversed preorder, kind, label name at its start, and the name its
+// first child starts at or a leaf's after it. A call or a byte node takes
+// names, and a `Repeat` or `Branch` takes two before its children.
+theorem exit3_shape(): exit3().shape(low()) = [0, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
+
+fn read_then_exit() → Source { Source(functions := [], buffers := [Buffer(8)], main := Then(Invoke(Reads(0, 0, 1, 2)), Exit(2))) }
+theorem read_then_exit_shape(): read_then_exit().shape(low()) = [3, 3, 0, 3, 0, 0, 0, 0, 1] { refl }
+
+fn exit_unless() → Source { Source(functions := [], buffers := [], main := Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
+theorem exit_unless_shape(): exit_unless().shape(low()) = [4, 4, 0, 4, 4, 0, 4, 2, 3, 2, 0, 2] { refl }
+
+// A part read back is its emission at `Start`: the label name after it,
+// then how many numbers its items are, the items and their lengths.
+theorem exit3_exit_reading(): Exit(0).emission_reading(exit3().layout(low()), 5) =
+    Cons(5, Start.exits(exit3().layout(low()), 0).reading()) { refl }
+theorem far_exit_reads_nothing(): Exit(64).emission_reading(far_exit().layout(low()), 0) = [] { refl }
+
+// The joins `write-elf` states a long emission with, each at the part it
+// fits, in a checking position over a statement given by its parts' names.
+theorem exit3_by_parts(): exit3().main.emit(Start, exit3().layout(low()), 0) = exit3().main.right().emit(
+        Start.leaf(exit3().layout(low()), [Const(64, 0, 3)]).unwrap_or(Start), exit3().layout(low()), 0) {
+    Stmt::emit_then_of(exit3().main, trivial, Start, exit3().layout(low()), 0,
+        Compiled(Start.leaf(exit3().layout(low()), [Const(64, 0, 3)]).unwrap_or(Start), 0), refl)
+}
+
+// The loop around a branch, from its parts': each arm exits at its own
+// start, and a `Repeat` and a `Branch` take label names 1 to 4.
+fn eu_layout() → Layout { exit_unless().layout(low()) }
+fn eu_yes() → Prog { Start.label(1).tests(eu_layout(), 0, 3).exits(eu_layout(), 1) }
+fn eu_no() → Prog { eu_yes().else_label(3, 4).exits(eu_layout(), 2) }
+theorem exit_unless_by_parts(): exit_unless().main.emit(Start, eu_layout(), 0) =
+    Some(Compiled(then(eu_no().join_label(4).tests(eu_layout(), 0, 2), Jmp(1)).label(2), 4)) {
+    Stmt::emit_repeat_of(exit_unless().main, trivial, trivial, Start, eu_layout(), 0, Compiled(eu_no().join_label(4), 4),
+        Stmt::emit_branch_of(exit_unless().main.left(), trivial, trivial, Start.label(1), eu_layout(), 2,
+            Compiled(eu_yes(), 4), Compiled(eu_no(), 4), refl, refl))
+}
+
+// A byte node takes label names (its bounds check's), so the leaf after it
+// starts past them.
+theorem byte_leaves_shape(): byte_leaves().shape(low()) = [1, 0, 0, 0, 0, 0, 0, 0, 1] { refl }

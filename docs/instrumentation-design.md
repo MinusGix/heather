@@ -128,7 +128,7 @@ drain cannot grow without bound) and the cap is reported in the dump.
 
 `HEATHER_TIMINGS=<path.tsv>` (or `-` for stderr) turns collection on and dumps
 at the end of the run, everywhere: `heather check`, `heather build-x86`,
-`heather compile-x86`, and every test binary that used to print its own
+`heather compile-x86`, `heather write-elf`, and every test binary that used to print its own
 roll-up. `heather check --timings <path.tsv>` is the flag form and is what the
 primary command gained; `--item-timings` on `build-x86`/`compile-x86` is an
 alias for `--timings`, kept because its callers exist.
@@ -176,7 +176,18 @@ item row and empty otherwise. Timer columns are named for their variant in
 snake case (`parse_ns`, `kernel_gate_ns`, `omega_search_ns`, …); counter
 columns carry the kernel's names plus the elaborator's own
 (`decls_gated`, `gendefs_pushed`, `resolve_goals`, `unify_calls`). The four
-`ValueMetrics` cache columns come last and are empty without the feature.
+`ValueMetrics` cache columns come next and are empty without the feature.
+
+`peak_growth_kb`, last (2026-10-26, `issues/native-compile-capacity.md`), is
+how far the process's peak resident set (`VmHWM`) rose while the scope was
+open. Unlike every other column it is not the scope's own use: a scope that
+allocates less than an earlier one freed, or less than the peak already
+reached, reads zero. What it answers is which row *raised* the run's peak:
+sibling rows sum to the rise over their span, and the largest is the one to
+look at. It is process-wide, so it attributes exactly only at
+`HEATHER_KERNEL_WORKERS=1`, and ambient rows (one test thread among many)
+carry zero. `write-elf` wraps each fork read-back in an item row of its own,
+so the reads and the certificate's declarations compare in one table.
 
 Rows are written in completion order, so a module's declarations precede its
 module row and the run row is last.

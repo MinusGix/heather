@@ -448,7 +448,11 @@ fn Asm::numbers(self item: Asm) → List<Nat> {
     }
 }
 
-// The items from the first, each its name and then itself.
-fn Prog::numbers(self p: Prog) → List<Nat> {
-    match p { Start => [], At(before, name, item) => Prog::numbers(before) ++ Cons(name, item.numbers()) }
+// The items from the first, each its name and then itself. Read from the
+// last item back onto what follows it, as `asm_lens` is: a program is a left
+// spine, and appending each item after the numbers of the ones before would
+// copy those again at every item, quadratic in the program.
+fn Prog::numbers_onto(self p: Prog, after: List<Nat>) → List<Nat> {
+    match p { Start => after, At(before, name, item) => before.numbers_onto(Cons(name, item.numbers() ++ after)) }
 }
+fn Prog::numbers(self p: Prog) → List<Nat> { p.numbers_onto([]) }
