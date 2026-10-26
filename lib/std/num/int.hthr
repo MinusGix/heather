@@ -1738,7 +1738,7 @@ theorem Int::negOfNat_le_negsucc(x, n: Nat, h: Succ(n) <= x): Int::negOfNat(x) <
 
 // Shifting down and back up never overshoots: `⌊a / 2^k⌋ · 2^k <= a`.
 theorem Int::shr_mul_le(self a: Int, k: Nat): a.shr(k) * Nat::pow(2, k).int() <= a {
-    match a as λ b => b.shr(k) * Nat::pow(2, k).int() <= b {
+    match a {
         OfNat(n) => Nat::shr_mul_le(k, n),
         NegSucc(n) => Int::negOfNat_le_negsucc(Succ(n.shr(k)) * Nat::pow(2, k), n, Nat::lt_succ_shr_mul(k, n)),
     }
