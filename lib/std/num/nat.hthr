@@ -1785,17 +1785,6 @@ theorem Nat::ldiv_spec(self n, d: Nat): DivMod::Spec(n, d, n.ldiv(d)) { n.ldiv_f
 // Fuel bounds the quotient's width, not the numerator's: when `n < d · 2^k`,
 // `k` halvings leave less than `d`, so `k` steps divide. A caller that knows
 // its quotient is narrow divides a wide numerator in that many steps.
-theorem Nat::half_lt_of_lt_double(self n, m: Nat, h: n < m + m): n.half() < m {
-    match m.le_dec(n.half()) {
-        Inr(nle) => Nat::lt_of_not_le(n.half(), m, nle),
-        Inl(le) => {
-            let two: (m + m <= n.half() + n.half()) = m.add_le_mono(n.half(), m, n.half(), le, le);
-            let le2: (m + m <= n) = (m + m).le_trans(n.half() + n.half(), n, two, n.half_add_le());
-            false_elim(n.lt_irrefl()(Succ(n).le_trans(m + m, n, h, le2)))
-        },
-    }
-}
-
 theorem Nat::ldiv_fuel_bounded(self fuel: Nat): (n, d: Nat) → n < d * Nat::pow(2, fuel) → DivMod::Spec(n, d, n.ldiv_fuel(d, fuel)) {
     match fuel {
         Zero => λ n d lt => And(trans(Nat::cong(λ (x: Nat) => x + n, d.mul_left_zero()), n.add_left_zero()),
@@ -1805,7 +1794,7 @@ theorem Nat::ldiv_fuel_bounded(self fuel: Nat): (n, d: Nat) → n < d * Nat::pow
             Succ(k) => λ lt => {
                 let p = Nat::pow(2, f);
                 let lt2: (Succ(k) < d * p + d * p) = j(trans(sym(d.mul_assoc(p, 2)), (d * p).mul_two()), λ y _ => Succ(k) < y, lt);
-                Nat::ldiv_step_spec(Succ(k), d, Succ(k).half().ldiv_fuel(d, f), ih(Succ(k).half(), d, Nat::half_lt_of_lt_double(Succ(k), d * p, lt2)))
+                Nat::ldiv_step_spec(Succ(k), d, Succ(k).half().ldiv_fuel(d, f), ih(Succ(k).half(), d, Succ(k).half_lt_of_lt_double(d * p, lt2)))
             },
         },
     }
