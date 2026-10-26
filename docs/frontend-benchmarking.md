@@ -254,6 +254,7 @@ loads, which is the honest width of an absolute time here.
 | `rewrite/let-nary` | three lets `xᵢ = f(xᵢ₋₁, …)` of arity *n*, rewritten to `x₀` (mengine `rewrite_nm`). **Lower bound linear** in n·m | debt: tree-sized in elaboration |
 | `let/fan` | *k* lets each using the last twice, as a `fn` body. **Lower bound linear** | met |
 | `let/dep` | `fan` with an unused `refl` proof let per link. **Lower bound linear** | met (it was above quadratic while each unused value was discarded one binder deeper) |
+| `let/under` | `fan` with a `λ` between every link. **Quadratic while shifts are eager**: the values the elaborator holds are Θ(k²) distinct nodes (`issues/open-payload-shift-copies.md`) | at its bound (the representation's, not linear) |
 | `let/stmt` | `let-addr0`'s chain stated equal to itself, by `refl`. **Lower bound linear** | met (was 2^k: two equal DAGs compared as trees) |
 | `inductive/isa-declaration` | an *n*-form instruction type with register/immediate/memory operand fields, declared. **Lower bound linear** | met (~1.0) |
 | `inductive/isa-constructor-use` | four constructor values of that type. **Lower bound linear** (the declaration) | debt: ~1.7, Θ(n²) elaboration per mention |
@@ -527,6 +528,14 @@ are discarded at the block's depth, and `let/stmt` since `==` on terms
 compares a pair of shared nodes once
 (`issues/kernel-equality-walks-dags-as-trees.md`), which re-swept it over
 32..256.
+
+`let/under` (added 2026-10-26) is the exception: its bound is quadratic, not
+linear, for as long as a shift is an eager copy. Each link is elaborated one
+binder deeper than the last, so link `i`'s value holds every earlier link
+shifted by its distance, `i` terms with distinct free indices; summed over
+the chain that is Θ(k²) distinct nodes, and no memo can share nodes that are
+not equal. Its band records the quadratic. Going below it is the
+representation change `issues/open-payload-shift-copies.md` keeps deferred.
 
 Three things differ from the older families:
 

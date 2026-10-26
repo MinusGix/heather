@@ -40,6 +40,7 @@ pub fn families() -> Vec<Family> {
         rewrite_let_nary(),
         let_fan(),
         let_dep(),
+        let_under(),
         let_stmt(),
     ]
 }
@@ -255,6 +256,39 @@ fn let_dep() -> Family {
         // and rising before the discarded values stopped nesting.
         expect_slope: Some((0.75, 1.45)),
         cases: sweep("let/dep", &[32, 64, 128, 256], src),
+    }
+}
+
+/// `under`: `fan` with a `λ` between every link, so each link is elaborated
+/// one binder deeper than the last and its use of the last is a shift.
+///
+/// **Quadratic in k as long as a shift is eager**, the representation's own
+/// bound and not a missing memo: link `i`'s value at its depth holds every
+/// earlier link shifted by its distance, `i` terms that differ in their free
+/// variables, so the values the elaborator holds are Θ(k²) nodes however
+/// they are shared ([[open-payload-shift-copies]]). The finished term is
+/// linear, and so is the gate's work on it.
+fn let_under() -> Family {
+    let src = |k: u64| {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    λ (y{i}: Nat) => {{\n    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        body.push_str(&format!("    s{k}\n"));
+        body.push_str(&"    }\n".repeat(k as usize));
+        let ty = vec!["Nat"; k as usize + 1].join(" → ");
+        format!("{MIX}fn chain(a: Nat) -> {ty} {{\n{body}}}\n")
+    };
+    Family {
+        name: "let/under",
+        what: "fan with a λ between every link (quadratic while shifts are eager)",
+        unit: "lets",
+        // Recorded, not claimed: 1.72 over 16..128 (the cloud box, 2026-10-26),
+        // ×3.7 from 64 to 128 and elaboration 88% there: the quadratic,
+        // approached from below. 128 is as far as it goes: each link is a
+        // nested expression, and elaboration refuses past 512 levels.
+        expect_slope: Some((1.40, 2.10)),
+        cases: sweep("let/under", &[16, 32, 64, 128], src),
     }
 }
 
