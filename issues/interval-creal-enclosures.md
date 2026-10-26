@@ -22,7 +22,7 @@ Scope:
 - `CReal::enclose(x, n, p)` from the sequence, with its containment
   theorem;
 - `x < y` from `enclose(x, n, p).below(enclose(y, n, p)) = True`, with a
-  refinement over `n` as `Expr::lt_search` refines over `p`.
+  refinement over `n` as `IntervalExpr::lt_search` refines over `p`.
 
 `creal.hthr` was being worked on by the Cauchy reals completeness round
 when the intervals landed, so this round was kept out of it.

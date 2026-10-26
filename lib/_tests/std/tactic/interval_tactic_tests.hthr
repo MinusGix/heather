@@ -1,0 +1,27 @@
+// Probes of `lib/std/tactic/interval_tactic.hthr`: the `intervals` tactic on
+// goals written directly, and its refusals. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import dyadic; import interval; import tactic; import interval_tactic;
+
+// Sums, products, reciprocals, negation and powers are read; anything else
+// is a literal that computes when the proof is checked.
+theorem two_thirds(): Rat(1, 3) + Rat(1, 3) < 1 { by intervals() }
+theorem compound_1000(): Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000) { by intervals() }
+theorem compound_100_le(): 2 <= Rat::npow(1 + Rat(1, 100), 100) { by intervals() }
+theorem recip_sub(): Rat(3, 1).recip() - Rat(1, 4) < Rat(1, 10) { by intervals() }
+theorem neg_mul(): -(Rat(7, 3) * Rat(3, 7)) <= Rat(-99, 100) { by intervals() }
+// The precision search refines from a low start.
+theorem refined(): Rat(333, 1000) < Rat(1, 3) { by intervals(p := 4, tries := 3) }
+
+// A false order, and a true one too close for the precisions tried, both
+// fail with the tactic's reason.
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem false_order(): Rat(1, 2) < Rat(1, 3) { by intervals() }
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem too_close(): Rat(333, 1000) < Rat(1, 3) { by intervals(p := 4, tries := 1) }
+// A side that does not compute leaves the verdict stuck.
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem open_side(x: Rat): x < x + 1 { by intervals() }
+// Only orders at `Rat` are read.
+// expect-error: intervals: the goal is not `<` or `<=` at `Rat`
+theorem not_rat(): Rat(1, 2) ≈ Rat(2, 4) { by intervals() }

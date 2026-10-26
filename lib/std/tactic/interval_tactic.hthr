@@ -1,0 +1,158 @@
+// `intervals`: prove an order between rational expressions by evaluating
+// their enclosures (docs/floating-point-design.md §16).
+//
+// The tactic reads the goal `l < r` or `l <= r` at `Rat` into two
+// `IntervalExpr` trees and returns `IntervalExpr::lt_of_search(…, rfl)` (or
+// `le_of_search`). Reading is syntactic and untrusted: it recognises `+`,
+// binary and unary `-`, `*`, `recip` and `npow`, and makes anything else a
+// literal, whose value the enclosure computes when the proof is checked. A
+// literal that does not compute (a variable) leaves the verdict stuck, and
+// the tactic says so. `IntervalExpr::eval` spells each node as the operation
+// it read, so the proof's type converts to the goal as written.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+import rat;
+import dyadic;
+import interval;
+
+// The tree's constructors and the verdict, as globals a tactic can name
+// (`Lookup` names functions and types, not constructors).
+fn interval_lit(q: Rat) → IntervalExpr { ILit(q) }
+fn interval_add(a, b: IntervalExpr) → IntervalExpr { IAdd(a, b) }
+fn interval_sub(a, b: IntervalExpr) → IntervalExpr { ISub(a, b) }
+fn interval_neg(a: IntervalExpr) → IntervalExpr { INeg(a) }
+fn interval_mul(a, b: IntervalExpr) → IntervalExpr { IMul(a, b) }
+fn interval_recip(a: IntervalExpr) → IntervalExpr { IRecip(a) }
+fn interval_pow(a: IntervalExpr, n: Nat) → IntervalExpr { IPow(a, n) }
+fn interval_yes() → Bool { True }
+theorem interval_verdict(): interval_yes() = True { refl }
+
+// The globals the reader compares heads against, looked up once per run.
+record IntervalHeads {
+    add: GlobalRef, sub: GlobalRef, neg: GlobalRef, mul: GlobalRef, recip: GlobalRef, npow: GlobalRef,
+    lit: GlobalRef, iadd: GlobalRef, isub: GlobalRef, ineg: GlobalRef, imul: GlobalRef, irecip: GlobalRef, ipow: GlobalRef,
+}
+
+fn interval_global(name: String) → Tac<GlobalRef> {
+    lookup(name).bind(λ c => match c { Accepted(g) => Pure(g), Refused(why) => fail("intervals: " ++ why, []) })
+}
+
+fn interval_heads() → Tac<IntervalHeads> {
+    interval_global("Rat::add").bind(λ add => interval_global("Rat::sub").bind(λ sub => interval_global("Rat::neg").bind(λ neg =>
+    interval_global("Rat::mul").bind(λ mul => interval_global("Rat::recip").bind(λ recip => interval_global("Rat::npow").bind(λ npow =>
+    interval_global("interval_lit").bind(λ lit => interval_global("interval_add").bind(λ iadd =>
+    interval_global("interval_sub").bind(λ isub => interval_global("interval_neg").bind(λ ineg =>
+    interval_global("interval_mul").bind(λ imul => interval_global("interval_recip").bind(λ irecip =>
+    interval_global("interval_pow").bind(λ ipow =>
+        Pure(IntervalHeads(add, sub, neg, mul, recip, npow, lit, iadd, isub, ineg, imul, irecip, ipow)))))))))))))))
+}
+
+fn interval_app1(c: GlobalRef, a: Expr) → Expr { App(Global(c), a) }
+
+fn interval_app2(c: GlobalRef, a: Expr, b: Expr) → Expr { App(App(Global(c), a), b) }
+
+fn interval_arg(args: List<Handle>, i: Nat) → Option<Handle> {
+    match args { Nil => None, Cons(a, rest) => match i { Zero => Some(a), Succ(j) => interval_arg(rest, j) } }
+}
+
+// What the reader does at a head: one of the operations it knows, or a
+// literal.
+inductive IntervalOp { OLeaf, OAdd, OSub, OMul, ONeg, ORecip, OPow }
+
+fn interval_op(H: IntervalHeads, g: GlobalRef) → IntervalOp {
+    match g.id.same(H.add.id) {
+        True => OAdd,
+        False => match g.id.same(H.sub.id) {
+            True => OSub,
+            False => match g.id.same(H.mul.id) {
+                True => OMul,
+                False => match g.id.same(H.neg.id) {
+                    True => ONeg,
+                    False => match g.id.same(H.recip.id) { True => ORecip, False => match g.id.same(H.npow.id) { True => OPow, False => OLeaf } },
+                },
+            },
+        },
+    }
+}
+
+// The tree for `h`. `fuel` bounds the depth; past it, at a head the reader
+// does not know, and at a call missing an argument, the term is a literal.
+fn interval_reify(H: IntervalHeads, fuel: Nat, h: Handle) → Tac<Expr> {
+    match fuel {
+        Zero => Pure(interval_app1(H.lit, Hd(h))),
+        Succ(f) => view(h).bind(λ v => match v {
+            HGlobal(g, _, args) => match interval_arg(args, 0) {
+                None => Pure(interval_app1(H.lit, Hd(h))),
+                Some(a) => match interval_op(H, g) {
+                    OLeaf => Pure(interval_app1(H.lit, Hd(h))),
+                    ONeg => interval_reify(H, f, a).bind(λ ra => Pure(interval_app1(H.ineg, ra))),
+                    ORecip => interval_reify(H, f, a).bind(λ ra => Pure(interval_app1(H.irecip, ra))),
+                    OPow => match interval_arg(args, 1) {
+                        None => Pure(interval_app1(H.lit, Hd(h))),
+                        Some(n) => interval_reify(H, f, a).bind(λ ra => Pure(interval_app2(H.ipow, ra, Hd(n)))),
+                    },
+                    OAdd => match interval_arg(args, 1) {
+                        None => Pure(interval_app1(H.lit, Hd(h))),
+                        Some(b) => interval_reify(H, f, a).bind(λ ra => interval_reify(H, f, b).bind(λ rb => Pure(interval_app2(H.iadd, ra, rb)))),
+                    },
+                    OSub => match interval_arg(args, 1) {
+                        None => Pure(interval_app1(H.lit, Hd(h))),
+                        Some(b) => interval_reify(H, f, a).bind(λ ra => interval_reify(H, f, b).bind(λ rb => Pure(interval_app2(H.isub, ra, rb)))),
+                    },
+                    OMul => match interval_arg(args, 1) {
+                        None => Pure(interval_app1(H.lit, Hd(h))),
+                        Some(b) => interval_reify(H, f, a).bind(λ ra => interval_reify(H, f, b).bind(λ rb => Pure(interval_app2(H.imul, ra, rb)))),
+                    },
+                },
+            },
+            _ => Pure(interval_app1(H.lit, Hd(h))),
+        }),
+    }
+}
+
+// The verdict asked of the elaborator before the proof is built, so a goal
+// the enclosures cannot separate fails with its reason rather than as a
+// refused `rfl`.
+fn interval_close(H: IntervalHeads, search: String, close: String, l: Handle, r: Handle, p, tries: Nat) → Tac<Expr> {
+    interval_reify(H, 1024, l).bind(λ rl => interval_reify(H, 1024, r).bind(λ rr =>
+    interval_global(search).bind(λ s => interval_global(close).bind(λ c => interval_global("interval_yes").bind(λ yes =>
+    interval_global("interval_verdict").bind(λ proof => {
+        let verdict = App(App(App(App(Global(s), rl), rr), NatLit(p)), NatLit(tries));
+        defeq(verdict, Global(yes)).bind(λ same => match same {
+            True => Pure(App(App(App(App(App(Global(c), rl), rr), NatLit(p)), NatLit(tries)), Global(proof))),
+            False => fail("intervals: the enclosures do not separate the two sides", [
+                Tried("the precision", "tried from the starting precision, doubling, the given number of times"),
+                At(Hd(l), Tried("the left side", "a literal must compute to a rational")),
+                At(Hd(r), Tried("the right side", "a literal must compute to a rational"))]),
+        })
+    }))))))
+}
+
+// `intervals(p, tries)`: prove `l < r` or `l <= r` at `Rat` by enclosures,
+// starting at `p` bits and doubling `tries` times.
+fn intervals(p: Nat := 32, tries: Nat := 4) → Tac<Expr> {
+    goal().bind(λ g => interval_heads().bind(λ H => interval_global("Rat::Lt").bind(λ lt => interval_global("Rat::Le").bind(λ le =>
+    view(g.target).bind(λ v => match v {
+        HGlobal(rel, _, args) => match interval_arg(args, 0) {
+            None => fail("intervals: the goal is not an order at `Rat`", []),
+            Some(l) => match interval_arg(args, 1) {
+                None => fail("intervals: the goal is not an order at `Rat`", []),
+                Some(r) => match rel.id.same(lt.id) {
+                    True => interval_close(H, "IntervalExpr::lt_search", "IntervalExpr::lt_of_search", l, r, p, tries),
+                    False => match rel.id.same(le.id) {
+                        True => interval_close(H, "IntervalExpr::le_search", "IntervalExpr::le_of_search", l, r, p, tries),
+                        False => fail("intervals: the goal is not `<` or `<=` at `Rat`", [At(Hd(g.target), Tried("the goal", "not an order at `Rat`"))]),
+                    },
+                },
+            },
+        },
+        _ => fail("intervals: the goal is not `<` or `<=` at `Rat`", [At(Hd(g.target), Tried("the goal", "not an order at `Rat`"))]),
+    })))))
+}

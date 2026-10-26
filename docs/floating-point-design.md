@@ -1113,7 +1113,8 @@ Observations:
 ## 16. Interval enclosures (`dyadic-interval-enclosures`)
 
 Modules: `lib/std/num/float/interval.hthr` (intervals, their arithmetic, the
-checker) on directed rounding and reciprocal bounds added to
+checker) and `lib/std/tactic/interval_tactic.hthr` (the tactic), on
+directed rounding and reciprocal bounds added to
 `lib/std/num/float/dyadic.hthr`; the arithmetic shift `Int::shr` is in
 `int.hthr`, `Nat::width` moved to `nat.hthr` from `literal.hthr`, and the
 reciprocal-order facts (`le_recip_of_mul_le`, `recip_le_recip`,
@@ -1148,16 +1149,33 @@ negation), constants (`of_rat`: numerator times the denominator's
 reciprocal), and `pow` by squaring. Each has a containment theorem
 (`add_has`, `mul_has`, `recip_has`, `pow_has`, …).
 
-**The checker.** `Expr` names a rational expression (literals, `+`, `-`,
-negation, `*`, `recip`, `npow`). `Expr::eval` spells each node as the
-operation itself, so `a.eval() < b.eval()` converts to the goal written
-directly and nothing reduces the exact value; the probe
-`Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000)` is proved by
-`Expr::lt_of_search(…, 32, 1, refl)`. `lt_search` / `le_search` try a
-precision and double it on a miss, `tries` times; the verdict is a `Bool`
-proved `= True` by `refl`, the evaluation route the library uses for closed
-facts (an `IsTrue` discharged by `trivial` runs out of the elaborator's
-fuel on the same goal).
+**The checker.** `IntervalExpr` names a rational expression (`ILit`,
+`IAdd`, `ISub`, `INeg`, `IMul`, `IRecip`, `IPow`). `IntervalExpr::eval`
+spells each node as the operation itself, so `a.eval() < b.eval()` converts
+to the goal written directly and nothing reduces the exact value.
+`lt_search` / `le_search` try a precision and double it on a miss, `tries`
+times; the verdict is a `Bool` proved `= True`, the evaluation route the
+library uses for closed facts (an `IsTrue` discharged by `trivial` runs out
+of the elaborator's fuel on the same goal), and `lt_of_search` /
+`le_of_search` turn it into the order.
+
+**The tactic.** Clients write `by intervals()` (or `intervals(p := …, tries
+:= …)`; 32 bits and four tries by default), from
+`lib/std/tactic/interval_tactic.hthr`. It is a `Tac<Expr>` in Heather: it
+views the goal as `Rat::Lt` or `Rat::Le` of two sides, reads each side by
+its heads (`Rat::add`, `sub`, `neg`, `mul`, `recip`, `npow`, compared by
+global identity) and makes any other subterm a literal, asks the elaborator
+whether the verdict is `True`, and returns `lt_of_search(l, r, p, tries,
+interval_verdict)`. The reader is untrusted: the proof is checked at the
+goal like any term. Asking for the verdict first is what lets a miss fail
+with the tactic's own reason ("the enclosures do not separate the two
+sides") rather than as a refused proof; a literal that does not compute (a
+variable) fails the same way. `Lookup` names functions and types but not
+constructors, so the tree is built through wrapper functions
+(`interval_lit`, `interval_add`, …) that unfold to the constructors. Probes
+are in `lib/_tests/std/tactic/interval_tactic_tests.hthr`, its refusals
+included; `(1 + 1/1000)^1000 < 2.719` goes through the tactic as it does by
+hand.
 
 **Costs.** These are shapes. An operation at `p` bits costs its roundings,
 each about `p` halvings for the width and `p` for the shift, plus the
@@ -1174,8 +1192,6 @@ never exact, so `3 · (1/3) <= 1` is refused at every precision; the probes
 pin the refusal). Products of an interval with itself are bounded as if
 independent, so a goal that needs the dependency (`x - x`) widens. Left:
 
-- a tactic that reifies a goal into `Expr` and runs the search
-  ([[interval-goal-tactic]]);
 - enclosures of a `CReal` from its regular sequence, containment at
   `CReal`, and deciding `CReal` comparisons at concrete arguments
   ([[interval-creal-enclosures]]);

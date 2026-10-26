@@ -47,28 +47,28 @@ theorem crossed_empty(x: Rat): ¬(Bnd(Dyadic(1, 0), Dyadic(0, 0)).Has(x)) { λ h
 theorem whole_has(x: Rat): Whole.Has(x) { trivial }
 theorem whole_below_nothing(J: Interval): Whole.below(J) = False { refl }
 
-// The checker. A goal written directly converts with its `Expr` form.
-fn third() → Expr { Lit(Rat(1, 3)) }
-fn compound_100() → Expr { Pow(Add(Lit(1), Lit(Rat(1, 100))), 100) }
-fn compound_1000() → Expr { Pow(Add(Lit(1), Lit(Rat(1, 1000))), 1000) }
+// The checker. A goal written directly converts with its `IntervalExpr` form.
+fn third() → IntervalExpr { ILit(Rat(1, 3)) }
+fn compound_100() → IntervalExpr { IPow(IAdd(ILit(1), ILit(Rat(1, 100))), 100) }
+fn compound_1000() → IntervalExpr { IPow(IAdd(ILit(1), ILit(Rat(1, 1000))), 1000) }
 
-theorem two_thirds_lt_one(): Rat(1, 3) + Rat(1, 3) < 1 { Expr::lt_of_search(Add(third(), third()), Lit(1), 8, 1, refl) }
-theorem compound_100_lt_3(): Rat::npow(1 + Rat(1, 100), 100) < 3 { Expr::lt_of_search(compound_100(), Lit(3), 32, 1, refl) }
-theorem two_le_compound_100(): 2 <= Rat::npow(1 + Rat(1, 100), 100) { Expr::le_of_search(Lit(2), compound_100(), 32, 1, refl) }
-theorem compound_1000_lt_e(): Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000) { Expr::lt_of_search(compound_1000(), Lit(Rat(2719, 1000)), 32, 1, refl) }
-theorem e_lt_compound_1000(): Rat(2716, 1000) < Rat::npow(1 + Rat(1, 1000), 1000) { Expr::lt_of_search(Lit(Rat(2716, 1000)), compound_1000(), 32, 1, refl) }
+theorem two_thirds_lt_one(): Rat(1, 3) + Rat(1, 3) < 1 { IntervalExpr::lt_of_search(IAdd(third(), third()), ILit(1), 8, 1, refl) }
+theorem compound_100_lt_3(): Rat::npow(1 + Rat(1, 100), 100) < 3 { IntervalExpr::lt_of_search(compound_100(), ILit(3), 32, 1, refl) }
+theorem two_le_compound_100(): 2 <= Rat::npow(1 + Rat(1, 100), 100) { IntervalExpr::le_of_search(ILit(2), compound_100(), 32, 1, refl) }
+theorem compound_1000_lt_e(): Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000) { IntervalExpr::lt_of_search(compound_1000(), ILit(Rat(2719, 1000)), 32, 1, refl) }
+theorem e_lt_compound_1000(): Rat(2716, 1000) < Rat::npow(1 + Rat(1, 1000), 1000) { IntervalExpr::lt_of_search(ILit(Rat(2716, 1000)), compound_1000(), 32, 1, refl) }
 
 // The search refines: 333/1000 and a third are 1/3000 apart, which four bits
 // cannot separate and sixteen can.
-theorem refined(): Rat(333, 1000) < Rat(1, 3) { Expr::lt_of_search(Lit(Rat(333, 1000)), third(), 4, 3, refl) }
+theorem refined(): Rat(333, 1000) < Rat(1, 3) { IntervalExpr::lt_of_search(ILit(Rat(333, 1000)), third(), 4, 3, refl) }
 // expect-error(kernel): the kernel rejected `unrefined`: NotConvertible
-theorem unrefined(): Rat(333, 1000) < Rat(1, 3) { Expr::lt_of_search(Lit(Rat(333, 1000)), third(), 4, 1, refl) }
+theorem unrefined(): Rat(333, 1000) < Rat(1, 3) { IntervalExpr::lt_of_search(ILit(Rat(333, 1000)), third(), 4, 1, refl) }
 
 // The negative control: an equality is never decided by enclosures, since a
 // third is never exact, so `3 · (1/3) <= 1` is refused at every precision
 // although it is true.
 // expect-error(kernel): the kernel rejected `exact_third`: NotConvertible
-theorem exact_third(): Rat(1, 3) * 3 <= 1 { Expr::le_of_search(Mul(third(), Lit(3)), Lit(1), 8, 4, refl) }
+theorem exact_third(): Rat(1, 3) * 3 <= 1 { IntervalExpr::le_of_search(IMul(third(), ILit(3)), ILit(1), 8, 4, refl) }
 
 // The contract at an open expression and precision.
-theorem encloses(e: Expr, p: Nat): e.enclose(p).Has(e.eval()) { e.enclose_has(p) }
+theorem encloses(e: IntervalExpr, p: Nat): e.enclose(p).Has(e.eval()) { e.enclose_has(p) }

@@ -20,11 +20,13 @@
 // transfer of `float-reals`; the ordered-field reading the issue sketches is
 // the same statement through `CReal::ofRat`.
 //
-// The checker (`Expr`, at the end) is the reflective half. An `Expr` names a
-// rational expression; `Expr::lt_search` evaluates both sides' enclosures at
-// a starting precision and doubles it on a miss, and `Expr::lt_of_search`
-// turns a `True` verdict into the inequality. A goal whose exact evaluation
-// is expensive (a high power of a fraction) is decided at a few dozen bits.
+// The checker (`IntervalExpr`, at the end) is the reflective half. An
+// `IntervalExpr` names a rational expression; `IntervalExpr::lt_search`
+// evaluates both sides' enclosures at a starting precision and doubles it on
+// a miss, and `IntervalExpr::lt_of_search` turns a `True` verdict into the
+// inequality. A goal whose exact evaluation is expensive (a high power of a
+// fraction) is decided at a few dozen bits. Clients do not build the trees
+// by hand: `by intervals()` (`interval_tactic.hthr`) reads them off the goal.
 
 import logic;
 import bool;
@@ -382,84 +384,84 @@ theorem Interval::le_of_below_eq(I, J: Interval, {x, y: Rat}, hx: I.Has(x), hy: 
 }
 
 // ---------------------------------------------------------------------------
-// The checker. `Expr::eval` is the rational an expression names, spelled as
+// The checker. `IntervalExpr::eval` is the rational an expression names, spelled as
 // the operations themselves, so `a.eval() < b.eval()` converts to the goal
 // written directly; `enclose` is its enclosure at `p` bits.
 
-inductive Expr { Lit(q: Rat), Add(a: Expr, b: Expr), Sub(a: Expr, b: Expr), Neg(a: Expr), Mul(a: Expr, b: Expr), Recip(a: Expr), Pow(a: Expr, n: Nat) }
+inductive IntervalExpr { ILit(q: Rat), IAdd(a: IntervalExpr, b: IntervalExpr), ISub(a: IntervalExpr, b: IntervalExpr), INeg(a: IntervalExpr), IMul(a: IntervalExpr, b: IntervalExpr), IRecip(a: IntervalExpr), IPow(a: IntervalExpr, n: Nat) }
 
-fn Expr::eval(self e: Expr) → Rat {
+fn IntervalExpr::eval(self e: IntervalExpr) → Rat {
     match e {
-        Lit(q) => q,
-        Add(a, b) => a.eval() + b.eval(),
-        Sub(a, b) => a.eval() - b.eval(),
-        Neg(a) => -a.eval(),
-        Mul(a, b) => a.eval() * b.eval(),
-        Recip(a) => a.eval().recip(),
-        Pow(a, n) => a.eval().npow(n),
+        ILit(q) => q,
+        IAdd(a, b) => a.eval() + b.eval(),
+        ISub(a, b) => a.eval() - b.eval(),
+        INeg(a) => -a.eval(),
+        IMul(a, b) => a.eval() * b.eval(),
+        IRecip(a) => a.eval().recip(),
+        IPow(a, n) => a.eval().npow(n),
     }
 }
 
-fn Expr::enclose(self e: Expr, p: Nat) → Interval {
+fn IntervalExpr::enclose(self e: IntervalExpr, p: Nat) → Interval {
     match e {
-        Lit(q) => Interval::of_rat(q, p),
-        Add(a, b) => a.enclose(p).add(b.enclose(p), p),
-        Sub(a, b) => a.enclose(p).sub(b.enclose(p), p),
-        Neg(a) => a.enclose(p).neg(),
-        Mul(a, b) => a.enclose(p).mul(b.enclose(p), p),
-        Recip(a) => a.enclose(p).recip(p),
-        Pow(a, n) => a.enclose(p).pow(n, p),
+        ILit(q) => Interval::of_rat(q, p),
+        IAdd(a, b) => a.enclose(p).add(b.enclose(p), p),
+        ISub(a, b) => a.enclose(p).sub(b.enclose(p), p),
+        INeg(a) => a.enclose(p).neg(),
+        IMul(a, b) => a.enclose(p).mul(b.enclose(p), p),
+        IRecip(a) => a.enclose(p).recip(p),
+        IPow(a, n) => a.enclose(p).pow(n, p),
     }
 }
 
-theorem Expr::enclose_has(self e: Expr, p: Nat): e.enclose(p).Has(e.eval()) {
+theorem IntervalExpr::enclose_has(self e: IntervalExpr, p: Nat): e.enclose(p).Has(e.eval()) {
     match e as λ f => f.enclose(p).Has(f.eval()) {
-        Lit(q) => Interval::of_rat_has(q, p),
-        Add(a, b) => Interval::add_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
-        Sub(a, b) => Interval::sub_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
-        Neg(a) => Interval::neg_has(a.enclose(p), a.enclose_has(p)),
-        Mul(a, b) => Interval::mul_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
-        Recip(a) => Interval::recip_has(a.enclose(p), p, a.enclose_has(p)),
-        Pow(a, n) => Interval::pow_has(a.enclose(p), n, p, a.enclose_has(p)),
+        ILit(q) => Interval::of_rat_has(q, p),
+        IAdd(a, b) => Interval::add_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
+        ISub(a, b) => Interval::sub_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
+        INeg(a) => Interval::neg_has(a.enclose(p), a.enclose_has(p)),
+        IMul(a, b) => Interval::mul_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
+        IRecip(a) => Interval::recip_has(a.enclose(p), p, a.enclose_has(p)),
+        IPow(a, n) => Interval::pow_has(a.enclose(p), n, p, a.enclose_has(p)),
     }
 }
 
 // Try precision `p`, then `2p`, and so on, `tries` times: evaluation cost
 // grows with the bits carried, so a search starts low.
-fn Expr::lt_search(self a, b: Expr, p, tries: Nat) → Bool {
+fn IntervalExpr::lt_search(self a, b: IntervalExpr, p, tries: Nat) → Bool {
     match tries { Zero => False, Succ(t) => match a.enclose(p).below(b.enclose(p)) { True => True, False => a.lt_search(b, p + p, t) } }
 }
 
-fn Expr::le_search(self a, b: Expr, p, tries: Nat) → Bool {
+fn IntervalExpr::le_search(self a, b: IntervalExpr, p, tries: Nat) → Bool {
     match tries { Zero => False, Succ(t) => match a.enclose(p).below_eq(b.enclose(p)) { True => True, False => a.le_search(b, p + p, t) } }
 }
 
-theorem Expr::lt_of_search_from(self a, b: Expr, tries: Nat): (p: Nat) → a.lt_search(b, p, tries).IsTrue() → a.eval() < b.eval() {
+theorem IntervalExpr::lt_of_search_from(self a, b: IntervalExpr, tries: Nat): (p: Nat) → a.lt_search(b, p, tries).IsTrue() → a.eval() < b.eval() {
     match tries {
         Zero => λ p no => false_elim(no),
         Succ(t) => λ p => match a.enclose(p).below(b.enclose(p)) as λ v => a.enclose(p).below(b.enclose(p)) = v →
                 Bool::IsTrue(match v { True => True, False => a.lt_search(b, p + p, t) }) → a.eval() < b.eval() {
             True => λ e _ => Interval::lt_of_below(a.enclose(p), b.enclose(p), a.enclose_has(p), b.enclose_has(p), j(sym(e), λ w _ => w.IsTrue(), trivial)),
-            False => λ _ v => Expr::lt_of_search_from(a, b, t, p + p, v),
+            False => λ _ v => IntervalExpr::lt_of_search_from(a, b, t, p + p, v),
         }(refl),
     }
 }
 
-theorem Expr::le_of_search_from(self a, b: Expr, tries: Nat): (p: Nat) → a.le_search(b, p, tries).IsTrue() → a.eval() <= b.eval() {
+theorem IntervalExpr::le_of_search_from(self a, b: IntervalExpr, tries: Nat): (p: Nat) → a.le_search(b, p, tries).IsTrue() → a.eval() <= b.eval() {
     match tries {
         Zero => λ p no => false_elim(no),
         Succ(t) => λ p => match a.enclose(p).below_eq(b.enclose(p)) as λ v => a.enclose(p).below_eq(b.enclose(p)) = v →
                 Bool::IsTrue(match v { True => True, False => a.le_search(b, p + p, t) }) → a.eval() <= b.eval() {
             True => λ e _ => Interval::le_of_below_eq(a.enclose(p), b.enclose(p), a.enclose_has(p), b.enclose_has(p), j(sym(e), λ w _ => w.IsTrue(), trivial)),
-            False => λ _ v => Expr::le_of_search_from(a, b, t, p + p, v),
+            False => λ _ v => IntervalExpr::le_of_search_from(a, b, t, p + p, v),
         }(refl),
     }
 }
 
-theorem Expr::lt_of_search(self a, b: Expr, p, tries: Nat, h: a.lt_search(b, p, tries) = True): a.eval() < b.eval() {
+theorem IntervalExpr::lt_of_search(self a, b: IntervalExpr, p, tries: Nat, h: a.lt_search(b, p, tries) = True): a.eval() < b.eval() {
     a.lt_of_search_from(b, tries, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
 }
 
-theorem Expr::le_of_search(self a, b: Expr, p, tries: Nat, h: a.le_search(b, p, tries) = True): a.eval() <= b.eval() {
+theorem IntervalExpr::le_of_search(self a, b: IntervalExpr, p, tries: Nat, h: a.le_search(b, p, tries) = True): a.eval() <= b.eval() {
     a.le_of_search_from(b, tries, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
 }

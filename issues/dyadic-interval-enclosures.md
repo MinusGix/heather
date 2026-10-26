@@ -53,13 +53,15 @@ design so that whichever of the customers above arrives first starts from it.
   by squaring, each with its containment theorem; rounding at `p` bits is a
   shift on `Dyadic` itself (`Dyadic::down`/`up`), not `Format::round_dyadic`,
   since an enclosure wants no exponent bound and no overflow. The checker is
-  `Expr` with `lt_search`/`le_search` doubling the precision on a miss and
+  `IntervalExpr` with `lt_search`/`le_search` doubling the precision on a miss and
   `lt_of_search`/`le_of_search` turning the verdict into the inequality;
   `Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000)` is proved at 32
   bits. `Dyadic::le_dec` now compares aligned mantissas.
 
-  Residue, each with an owner: the reifying tactic is
-  [[interval-goal-tactic]]; containment at `CReal` and decided `CReal`
+  `by intervals()` (`lib/std/tactic/interval_tactic.hthr`) reads the goal
+  into the trees, so clients never write them.
+
+  Residue, each with an owner: containment at `CReal` and decided `CReal`
   comparisons are [[interval-creal-enclosures]] (the ordered-field statement
   waits on `float-reals`); `exp`/`log`/`sin` by series are
   [[interval-elementary-functions]].
