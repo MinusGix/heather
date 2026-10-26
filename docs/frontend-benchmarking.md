@@ -263,7 +263,7 @@ loads, which is the honest width of an absolute time here.
 | `inductive/enum-equality` | *n*²-arm decidable equality on an *n*-constructor enum, and its `refl` theorem. **Lower bound quadratic** | debt: ~2.5 |
 | `inductive/record-fields` | a *k*-field record: literal, projection, rebuild, frame theorem. **Lower bound linear** | debt: ~1.4 |
 | `inductive/mutual-declaration` | a ring of *m* mutual sorts, declared. **Lower bound linear** | debt: ~1.5, small |
-| `inductive/mutual-recursion` | structural recursion over that group, and one `refl` unfolding. **Lower bound linear** | debt: ~2.8, all gate; out of fuel at *m* = 8 |
+| `inductive/mutual-recursion` | structural recursion over that group, and one `refl` unfolding. **Lower bound linear** | debt: ~1.6 over 2..8, ~2.3 by 16 (was ~2.8 and out of fuel at *m* = 8) |
 | `inductive/typed-syntax` | intrinsically typed terms `Tm(J(Γ, A))`, *n* constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.8 over 5..8, and a large constant |
 | `inductive/function-fields` | an `IWf`-on-`W` family of *n* function-field constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.7 over 2..8, ~3.4 past it |
 

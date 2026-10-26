@@ -35,7 +35,7 @@ use heather_kernel::level::Level;
 #[cfg(debug_assertions)]
 use heather_kernel::reduce::Defs;
 use heather_kernel::subst::{local_bound, local_bound_ty};
-use heather_kernel::term::{nth, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
+use heather_kernel::term::{iwf_ih, nth, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
 use heather_kernel::value::program::ContextProgram;
 use heather_kernel::value::{Elim, Env, Head, TmClo, TyClo, VTail, VTy, Val};
 
@@ -278,6 +278,7 @@ impl<'v, 'g> Readback<'v, 'g> {
             }
             Val::WfIh { elim, label, children } => self.wf_ih(elim, label, children),
             Val::WIh { elim, label, children } => self.w_ih(elim, label, children),
+            Val::IWfIh { elim, label, children } => self.iwf_ih(elim, label, children),
             // An `elim_W` β's induction hypothesis, when the machine built it
             // as a λ over the step's environment (`Eval::w_ih_lam`): its two
             // closures are the syntax the reducer's β substitutes, so it reads
@@ -479,6 +480,30 @@ impl<'v, 'g> Readback<'v, 'g> {
             dom: Rc::new(Type::Fin { len: Rc::new(arity_at) }),
             body: Rc::new(rec),
         })
+    }
+
+    /// `elim_IWf`'s induction hypothesis, which the machine holds as a value
+    /// ([`Val::IWfIh`]): the λ the reducer's β builds around the recursive
+    /// call, from the kernel's one schema ([`iwf_ih`]) over the eliminator's
+    /// and the scrutinee's syntax.
+    fn iwf_ih(&mut self, e: &Elim<'v>, label: &'v TmClo<'v>, children: &'v TmClo<'v>) -> Option<Term> {
+        let Elim::ElimIWf { sig, motive_level, motive, step, .. } = e else {
+            return None;
+        };
+        let sig = Rc::new(IWfSig {
+            level: sig.level.clone(),
+            idx_level: sig.idx_level.clone(),
+            idx: self.ty(&sig.idx, 0)?,
+            shape: self.ty(&sig.shape, 0)?,
+            arity: self.tm(&sig.arity, 1)?,
+            out: self.tm(&sig.out, 1)?,
+            child: self.tm(&sig.child, 2)?,
+        });
+        let motive = self.ty(motive, 2)?;
+        let step = self.tm(step, 3)?;
+        let label = self.tm(label, 0)?;
+        let children = self.tm(children, 0)?;
+        Some(iwf_ih(&sig, motive_level, &motive, &step, &label, &children))
     }
 
     /// The substitution an environment stands for: its entries, outermost

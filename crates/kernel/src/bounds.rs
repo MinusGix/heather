@@ -307,6 +307,28 @@ pub(crate) fn scope_type_ref_use(t: &Type) -> LocalUse {
     SCOPE_CACHE.with(|c| c.borrow_mut().compute_type(t))
 }
 
+/// Whether a type is locally closed: no free local variable and no local
+/// substitution tail. The one reader that is not a traversal is the
+/// closed-type memo in `typing.rs` (`Tc::ty_check`), which judges a locally
+/// closed type once whatever Γ it occurs in — so a wrong answer here is a
+/// soundness bug there, as a wrong skip is in `subst.rs`. Always computed
+/// (never the two-stage marker), so the answer is a function of the type.
+pub(crate) fn type_locally_closed(t: &Rc<Type>) -> bool {
+    CACHE.with(|c| {
+        let u = c.borrow_mut().type_use(t);
+        u.bound == 0 && !u.has_tail
+    })
+}
+
+/// [`type_locally_closed`] for an `IWf` signature, which `Tc::iwf_sig_wf`
+/// judges once whatever Γ it occurs in.
+pub(crate) fn iwf_sig_locally_closed(sig: &IWfSig) -> bool {
+    CACHE.with(|c| {
+        let u = c.borrow_mut().iwf_sig_use(sig);
+        u.bound == 0 && !u.has_tail
+    })
+}
+
 /// Whether evaluating `t` reads none of its innermost `n` (< 64) local
 /// variables: no free index below `n` occurs. A wrong answer costs time,
 /// never a verdict (`eval/probe.rs`, the one reader).

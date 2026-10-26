@@ -247,7 +247,7 @@ impl Elaborator {
         // o(x): the written result index over the stored fields.
         let out_body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, _: &Type| -> R<Term> {
             let acx = self.decl_payload_cx(bcx, ind, &spine, k, value, d, span)?;
-            self.elab_check(&acx, res_expr(ind, k), &ity.shift_local(d), &ilvl)
+            self.elab_check(&acx, res_expr(ind, k), &ity.shift_local(d), &ilvl).map(index_value)
         };
         let out = self.idx_case_tree(
             &xcx,
@@ -411,7 +411,7 @@ impl Elaborator {
         };
         let mut lcx = cx.clone();
         lcx.push("#here".into(), unit.clone(), Level::Zero);
-        let case_l = self.elab_check(&lcx, exprs[t], &ity.shift_local(depth + 1), ilvl)?;
+        let case_l = index_value(self.elab_check(&lcx, exprs[t], &ity.shift_local(depth + 1), ilvl)?);
         let mut rcx = cx.clone();
         rcx.push("#later".into(), rest.clone(), Level::Zero);
         let case_r = self.fin_tree(&rcx, exprs, t + 1, ity, ilvl, depth + 1)?;
@@ -1593,5 +1593,21 @@ fn rebuilt_goal(cx: &Cx, e: &Type, value: Option<&(Rc<Term>, Rc<Term>)>) -> Type
     match e.abstract_local_with(v, &r.shift_local(1)) {
         Some(t) => t.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero))),
         None => e.clone(),
+    }
+}
+
+/// A signature's index value — an arm of `o` or a leaf of `c` — without the
+/// annotation on its outermost injection or tuple. The arm is checked
+/// against the index type, so the annotation is a conversion the kernel pays
+/// at every occurrence of the signature; and it names the index type's code
+/// as a global, whose substitution records Γ's length, so a signature that
+/// keeps it is never locally closed and is rebuilt under every binder
+/// (`issues/mutual-group-recursion-gate-cost.md`).
+fn index_value(t: Term) -> Term {
+    match t {
+        Term::InlAt { ty: Some(_), val } => Term::InlAt { ty: None, val },
+        Term::InrAt { ty: Some(_), val } => Term::InrAt { ty: None, val },
+        Term::PairAt { ty: Some(_), fst, snd } => Term::PairAt { ty: None, fst, snd },
+        t => t,
     }
 }

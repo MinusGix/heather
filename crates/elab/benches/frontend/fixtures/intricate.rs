@@ -322,8 +322,12 @@ fn mutual_recursion() -> Family {
         what: "structural recursion over an m-member mutual group, and one refl unfolding",
         unit: "members",
         // 2026-10-26, cloud box, three runs: 2.82 (2.71-2.95), 96% gate.
-        expect_slope: Some((2.47, 3.17)),
-        cases: sweep("inductive/mutual-recursion", &[2, 3, 4, 5], src),
+        // Re-recorded from below the same day, once the signature was judged
+        // once and the ih held as a value
+        // (issues/mutual-group-recursion-gate-cost.md): 1.63 over 2..8 (about 2.3
+        // from 8 to 16 by hand); the m = 8 `refl` checks.
+        expect_slope: Some((1.28, 1.98)),
+        cases: sweep("inductive/mutual-recursion", &[2, 3, 4, 6, 8], src),
     }
 }
 
