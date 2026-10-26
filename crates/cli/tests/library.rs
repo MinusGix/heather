@@ -237,12 +237,15 @@ fn every_library_module_checks() {
     let stale = std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale");
     // Three at a time, as the suite runner runs targets: each child may
     // hold a library prefix in memory.
-    let queue = std::sync::Mutex::new(gate_folders());
+    // In [`gate_folders`]' order, std first: a later folder that imports a
+    // std module then replays the image an earlier child built rather than
+    // elaborating it under its own rail.
+    let queue = std::sync::Mutex::new(std::collections::VecDeque::from(gate_folders()));
     let failures = std::sync::Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..3 {
             scope.spawn(|| loop {
-                let Some(folder) = queue.lock().expect("queue").pop() else { break };
+                let Some(folder) = queue.lock().expect("queue").pop_front() else { break };
                 let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
                 cmd.current_dir(&root).arg("check");
                 cmd.env("HEATHER_KERNEL_WORKERS", "1");

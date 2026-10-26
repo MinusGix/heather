@@ -60,15 +60,19 @@ fn List::largest(self sizes: List<Nat>) → Nat {
     match sizes { Nil => 0, Cons(size, rest) => size.max(rest.largest()) }
 }
 
-// Where the region starts, and each buffer's capacity.
+// Where the region starts, and each buffer's capacity. An address in the
+// region is a ripple add from its start (`add_nat`), so a program's bytes
+// evaluate however far into the region it reaches; the proofs read it as
+// `next_rip`, the region's spelling, through `Target::at_rip`
+// (issues/native-compile-address-depth.md).
 record Layout { low: BitVec(64), capacities: List<Nat> }
 
 fn Layout::word_offset(self layout: Layout, id: Nat) → Nat { 8 * id }
-fn Layout::word_at(self layout: Layout, id: Nat) → BitVec(64) { next_rip(layout.low, layout.word_offset(id)) }
+fn Layout::word_at(self layout: Layout, id: Nat) → BitVec(64) { layout.low.add_nat(layout.word_offset(id)) }
 fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * word_slots() + layout.capacities.take(buf).total() }
-fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { next_rip(layout.low, layout.buffer_offset(buf)) }
+fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf)) }
 fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * word_slots() + layout.capacities.total() }
-fn Layout::scratch_at(self layout: Layout) → BitVec(64) { next_rip(layout.low, layout.scratch_offset()) }
+fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
 fn Layout::size(self layout: Layout) → Nat { layout.scratch_offset() + layout.capacities.largest() }
 
 // ---------------------------------------------------------------------------

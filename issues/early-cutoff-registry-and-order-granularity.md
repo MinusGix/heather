@@ -4,7 +4,7 @@ status: open
 labels: [tooling,caching,performance]
 area: infrastructure
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-26
 ---
 
 The early cutoff (`docs/module-interface-cutoff-design.md`) moves a module's
@@ -34,3 +34,7 @@ appended moves everything; how often do edits add registry entries?).
 
 - **`docs/module-interface-cutoff-design.md`** owns the digests and the move.
   Assumed here: only that a refusal is always safe.
+
+## Log
+
+- 2026-10-26: Seen 2026-10-26 from the library gate (`crates/cli/tests/library.rs`), not from an edit. With one cache dir, a cold `heather check --expectations lib/std` followed by `check --accept-stale-images --expectations lib/native` re-elaborated most of the x86/Linux std prefix inside the lib/native process, about 150 CPU-s of its 350, and `check lib/std/arch` afterwards still kernel-checked 1124 declarations. A single-file check of `x86_64_asm.hthr` over the same store replayed all 25 modules. So images one folder's process writes are mostly refused by another folder's process, which loads the same modules in a different order, and every gate child pays its prefix cold. On a cold store that puts lib/native (std prefix plus function_ir plus the S3.2 compiler) over the 300 s rail. The suite's `cli_images_warmup` (scripts/test) works around this for native_cat.rs only, because write-elf's single-file closure has the same shape as the warmup's.

@@ -1258,6 +1258,48 @@ theorem Nat::min_eq_l(a: Nat): (b: Nat) → a <= b → a.min(b) = a {
     }
 }
 
+theorem Nat::min_eq_r(a, b: Nat, below: b <= a): a.min(b) = b {
+    Nat::le_antisym(a.min(b), b, a.min_le_r(b), Nat::le_min(a, b, b, below, b.le_refl()))
+}
+
+theorem Nat::sub_zero_of_le(self m: Nat): (n: Nat) → m <= n → m - n = 0 {
+    match m {
+        Zero => λ n _ => refl,
+        Succ(k, ih) => λ n => match n {
+            Zero => λ no => false_elim(k.not_succ_le_zero(no)),
+            Succ(l) => λ below => ih(l, Nat::le_of_succ_succ(k, l, below)),
+        },
+    }
+}
+
+// Clamping to a bound and then counting what is left of it: the same as
+// not clamping.
+theorem Nat::sub_min(c, f: Nat): c - f.min(c) = c - f {
+    match f.le_total(c) {
+        Inl(below) => Nat::cong(λ (x: Nat) => c - x, Nat::min_eq_l(f, c, below)),
+        Inr(above) => trans(Nat::cong(λ (x: Nat) => c - x, Nat::min_eq_r(f, c, above)),
+            trans(c.sub_self(), sym(c.sub_zero_of_le(f, above)))),
+    }
+}
+
+// Order through a sum and a difference, by steps rather than by `omega`:
+// a proof over large closed terms cites these at the cost of a conversion
+// of its own facts, where a decision procedure's certificate unfolds them.
+theorem Nat::lt_of_lt_of_le(self a, b, c: Nat, h1: a < b, h2: b <= c): a < c { Nat::le_trans(Succ(a), b, c, h1, h2) }
+
+theorem Nat::lt_of_add_lt(self a, b, c: Nat, h: a + b < c): a < c {
+    Nat::le_trans(Succ(a), Succ(a + b), c, Nat::le_succ_succ(a, a + b, a.le_add_l(b)), h)
+}
+
+theorem Nat::le_of_add_le(self a, b, c: Nat, h: a + b <= c): a <= c { Nat::le_trans(a, a + b, c, a.le_add_l(b), h) }
+
+theorem Nat::add_lt_of_lt_sub(self a, b, c: Nat, h: b < c - a): a + b < c {
+    match a.le_total(c) {
+        Inl(fits) => j(a.le_add(c, fits), λ x _ => Succ(a + b) <= x, a.add_le_mono_l(Succ(b), c - a, h)),
+        Inr(past) => false_elim(b.not_succ_le_zero(j(c.sub_zero_of_le(a, past), λ x _ => Succ(b) <= x, h))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 fn Nat::pow(self a: Nat, b: Nat) → Nat { match b { Zero => 1, Succ(k) => a.pow(k) * a } }
