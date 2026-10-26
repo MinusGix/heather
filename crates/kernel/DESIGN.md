@@ -804,6 +804,19 @@ paper too).
   for large linear candidate scans. Fuel is constant across a gate, and only
   a judgment already proved successful at that fuel is reused, so the memo
   changes work but not the kernel verdict.
+  The same gate keeps a **typing memo** on node identity
+  (`issues/kernel-typing-memo-on-node-identity.md`; `typing.rs` §The typing
+  memo): per term node and scope, an elimination's inferred type and the
+  expected types an intro form checked against, so a node reached along two
+  paths (a `let` alias used twice) is judged once per scope rather than once
+  per path. The scope is identities only: the node's allocation, Ψ's and Γ's
+  identity tokens, Γ's base, layer, universe count and the `box` bit, which
+  are everything a rule reads besides the node; each entry owns the node and
+  both tokens. A hit skips whole judgments, conversion queries and their
+  fuel included, so which lookups hit must be a function of the input, and
+  is by construction: entries are chosen
+  by node kind, never by reference count (the bounds memo's keep-alives
+  perturb counts), nothing is evicted, and failures are not cached.
 
 ## Representation
 
