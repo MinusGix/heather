@@ -5,7 +5,7 @@ labels: [metaprogramming,elaboration,proofs,design]
 area: tactics
 milestone: [tac-host-interface]
 created: 2026-09-08
-updated: 2026-10-21
+updated: 2026-10-26
 ---
 
 The reusable x86 callee round (`cb877f2`) still assembles scoped names, dependent
@@ -39,3 +39,4 @@ group and publish it in the caller's scope, with useful errors at construction.
 ## Log
 
 - 2026-10-21: Retargeted by docs/host-elaboration-interface-design.md §10: the named customer (crates/cli/src/native/calls.rs) was burned in B1 (PR #90). This issue becomes round R4 of that design: a `Publish(group)` host request that kernel-checks a small declaration group and publishes it in the caller's scope only if every member passes.
+- 2026-10-26: Precedent: mengine's kernel API (docs/mengine-survey.md §1.2, §6) builds terms only through constructors that type-check and return null on failure, each node carrying its type and minimal context, so errors surface at construction. It makes every caller trusted; here the output stays kernel-checked as this issue requires, so take the error-at-construction shape, not the trust model.

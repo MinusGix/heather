@@ -4,7 +4,7 @@ status: open
 labels: [kernel,performance,proofs]
 area: kernel
 created: 2026-09-25
-updated: 2026-09-25
+updated: 2026-10-26
 ---
 
 The kernel re-checks a shared subterm once per path to it: `Tc::tm_infer` and
@@ -58,3 +58,7 @@ later proof needs the value, such as a state `s1 = w.after` that proofs about
   fan-out pays.
 - **[[conjunction-projection-chain-cost]]**: likely a second customer (the
   shared receiver re-inferred per projection).
+
+## Log
+
+- 2026-10-26: mengine (a λ-DAG proof engine, docs/mengine-survey.md §3.1) types every node at construction and stores the type, so a proof costs its distinct nodes: this issue's property across a whole engine. Two transferable details: it caches an application's type by the pair of child pointers (`g_app_type_cache`), so separately built `f a` nodes with shared children share the work; and it has no fuel, which is why it never meets this issue's determinism constraint, and why it offers no help with it. The shift residue named under Reach is filed as [[subst-shared-node-memo]]; the 2026-10-26 probe (survey §4.2) shows a let-shared statement at 2^k gate queries and [[tactic-scaling-bench-families]] asks for it as a bench family.
