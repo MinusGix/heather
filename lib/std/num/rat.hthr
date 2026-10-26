@@ -734,6 +734,66 @@ theorem Rat::pos_of_mul_pos({x, y: Rat}, hx: 0 < x, h: 0 < x * y): 0 < y {
     Rat::lt_of_not_le(λ le => Rat::not_le_of_lt(h, Rat::le_respects(y.mul_comm(x), x.zero_mul(), Rat::mul_le_mono_r(le, Rat::le_of_lt(hx)))))
 }
 
+// A factor at most zero reverses the order: `x ≤ y` gives `y·z ≤ x·z`. It is
+// the nonnegative case at `-z`, with the sign moved out of each product.
+theorem Rat::mul_le_mono_r_nonpos({x, y, z: Rat}, h: x <= y, hz: z <= 0): y * z <= x * z {
+    let a = x.num;
+    let c = y.num;
+    let e = z.num;
+    let flipped = Rat::mul_le_mono_r(x := x, y := y, z := -z, h := h, hz := omega(hz, Int::zero_mul(z.den.int())));
+    let fx: ((x * -z).num * (y * -z).den.int() = (a * -e) * (y * z).den.int()) = refl;
+    let fy: ((y * -z).num * (x * -z).den.int() = (c * -e) * (x * z).den.int()) = refl;
+    let gx: ((x * z).num * (y * z).den.int() = (a * e) * (y * z).den.int()) = refl;
+    let gy: ((y * z).num * (x * z).den.int() = (c * e) * (x * z).den.int()) = refl;
+    let rx: ((a * -e) * (y * z).den.int() = -((a * e) * (y * z).den.int())) = ring;
+    let ry: ((c * -e) * (x * z).den.int() = -((c * e) * (x * z).den.int())) = ring;
+    omega(flipped, fx, fy, gx, gy, rx, ry)
+}
+
+// ---------------------------------------------------------------------------
+// Reciprocals and order. Below a positive `y`, `x ≤ 1/y` is `x·y ≤ 1`: scale
+// by `1/y`, which is nonnegative. The enclosures of `interval.hthr` bound a
+// reciprocal through these two, and order reciprocals by the third.
+
+theorem Rat::nonzero_of_pos({y: Rat}, hy: 0 < y): ¬(y ≈ 0) { λ e => omega(hy, e, Int::zero_mul(y.den.int())) }
+
+theorem Rat::le_recip_of_mul_le({x, y: Rat}, hy: 0 < y, h: x * y <= 1): x <= y.recip() {
+    let r = y.recip();
+    let rn = Rat::recip_nonneg(x := y, h := Rat::le_of_lt(hy));
+    let unit: ((x * y) * r ≈ x) = Rat::same_trans(x.mul_assoc(y, r),
+        Rat::same_trans(Rat::mul_respects(x.same_refl(), y.mul_recip(Rat::nonzero_of_pos(hy))), x.mul_one()));
+    Rat::le_respects(unit, Rat::same_trans(Rat::mul_comm(1, r), r.mul_one()), Rat::mul_le_mono_r(h, rn))
+}
+
+theorem Rat::recip_le_of_one_le_mul({x, y: Rat}, hy: 0 < y, h: 1 <= x * y): y.recip() <= x {
+    let r = y.recip();
+    let rn = Rat::recip_nonneg(x := y, h := Rat::le_of_lt(hy));
+    let unit: ((x * y) * r ≈ x) = Rat::same_trans(x.mul_assoc(y, r),
+        Rat::same_trans(Rat::mul_respects(x.same_refl(), y.mul_recip(Rat::nonzero_of_pos(hy))), x.mul_one()));
+    Rat::le_respects(Rat::same_trans(Rat::mul_comm(1, r), r.mul_one()), unit, Rat::mul_le_mono_r(h, rn))
+}
+
+// On the positives the reciprocal reverses the order.
+theorem Rat::recip_le_recip({x, y: Rat}, hx: 0 < x, h: x <= y): y.recip() <= x.recip() {
+    let hy = Rat::lt_of_lt_of_le(hx, h);
+    let r = y.recip();
+    let rn = Rat::recip_nonneg(x := y, h := Rat::le_of_lt(hy));
+    let scaled: (r * x <= r * y) = Rat::mul_le_mono_l(h, rn);
+    let one: (r * y ≈ 1) = Rat::same_trans(r.mul_comm(y), y.mul_recip(Rat::nonzero_of_pos(hy)));
+    Rat::le_recip_of_mul_le(hx, Rat::le_trans(scaled, Rat::le_of_same(one)))
+}
+
+// The reciprocal is odd: the numerator's sign moves to the new numerator.
+theorem Rat::recip_neg(self x: Rat): (-x).recip() ≈ -x.recip() {
+    match x.num as λ a => Rat::recip_parts(-a, x.den) ≈ -Rat::recip_parts(a, x.den) {
+        OfNat(n) => match n as λ k => Rat::recip_parts(-OfNat(k), x.den) ≈ -Rat::recip_parts(OfNat(k), x.den) {
+            Zero => refl,
+            Succ(_) => refl,
+        },
+        NegSucc(k) => Rat(x.den.int(), Succ(k)).same_of_parts(-Rat(-x.den.int(), Succ(k)), sym(x.den.int().neg_neg()), refl),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Archimedean facts. `inv_succ(n)` is 1/(n+1), the step size the regular
 // Cauchy-sequence probes measure distances in; its denominator is a `Succ`,

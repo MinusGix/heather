@@ -1724,3 +1724,22 @@ theorem Int::neg_of_mul_neg(self a: Int, p: Pos<Int>, h: a * p < OfNat(0)): a < 
     a.lt_of_not_le(OfNat(0), λ le => OfNat(0).not_lt_of_ge(a * p,
         rewrite(sym(p.zero_mul()), OfNat(0).mul_le_mono_r(a, p, le, OfNat(0).le_of_lt(p, p_pos))))(h))
 }
+
+// ---------------------------------------------------------------------------
+// The arithmetic shift: `⌊a / 2^k⌋`, toward `-∞` at either sign. A negative
+// `NegSucc(n)` is `-(n + 1)`, and `⌊-(n + 1) / 2^k⌋ = -(⌊n / 2^k⌋ + 1)`, so
+// the shift moves only the magnitude it stores.
+
+fn Int::shr(self a: Int, k: Nat) → Int { match a { OfNat(n) => OfNat(n.shr(k)), NegSucc(n) => NegSucc(n.shr(k)) } }
+
+theorem Int::negOfNat_le_negsucc(x, n: Nat, h: Succ(n) <= x): Int::negOfNat(x) <= NegSucc(n) {
+    match x as λ y => Succ(n) <= y → Int::negOfNat(y) <= NegSucc(n) { Zero => λ no => false_elim(no), Succ(_) => λ le => le }(h)
+}
+
+// Shifting down and back up never overshoots: `⌊a / 2^k⌋ · 2^k <= a`.
+theorem Int::shr_mul_le(self a: Int, k: Nat): a.shr(k) * Nat::pow(2, k).int() <= a {
+    match a as λ b => b.shr(k) * Nat::pow(2, k).int() <= b {
+        OfNat(n) => Nat::shr_mul_le(k, n),
+        NegSucc(n) => Int::negOfNat_le_negsucc(Succ(n.shr(k)) * Nat::pow(2, k), n, Nat::lt_succ_shr_mul(k, n)),
+    }
+}

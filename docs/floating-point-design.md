@@ -1109,3 +1109,75 @@ Observations:
 - The printer and its round-trip theorem (Lemma 1, nine and seventeen
   digits) are [[float-printer-round-trip]]: the reading half proved here,
   `round_decimal_correct`, is what that theorem reads back through.
+
+## 16. Interval enclosures (`dyadic-interval-enclosures`)
+
+Modules: `lib/std/num/float/interval.hthr` (intervals, their arithmetic, the
+checker) on directed rounding and reciprocal bounds added to
+`lib/std/num/float/dyadic.hthr`; the arithmetic shift `Int::shr` is in
+`int.hthr`, `Nat::width` moved to `nat.hthr` from `literal.hthr`, and the
+reciprocal-order facts (`le_recip_of_mul_le`, `recip_le_recip`,
+`recip_neg`, `mul_le_mono_r_nonpos`) are in `rat.hthr`. Probes are in
+`lib/_tests/std/num/float/interval_tests.hthr`. The design follows
+CoqInterval's original arithmetic (`docs/coq-hardware-floats-survey.md`
+§6.1).
+
+**Rounding at a precision, on `Dyadic` itself.** `d.down(p)` shifts the
+mantissa right until `p` bits are left (`Int::shr` floors at either sign)
+and adds the shift to the exponent; `d.up(p)` is `-((-d).down(p))`. The
+issue sketched `Format::round_dyadic` with a wide format as the precision
+knob. That route carries a bounded exponent span and overflow to infinity
+or saturation, which an enclosure has no use for, and its proofs are a
+rounding relation's; the shift needs one lemma (`Int::shr_mul_le`) and is
+sound at every shift amount, so how many bits `Dyadic::cut` drops is a cost
+choice with no proof attached. A reciprocal of a positive `m · 2^e` is
+`⌊2^K / m⌋ · 2^(-e-K)` below and its successor above, with
+`K = p + width(m)`.
+
+**Intervals.** `inductive Interval { Bnd(lo, hi: Dyadic), Whole }`.
+`I.Has(x)` reads `lo <= x <= hi` at `Rat`, and `Whole` holds everything.
+Every operation is total: a reciprocal of an interval that may hold zero is
+`Whole`, and `Whole` absorbs every operation it meets. A pair with crossed
+bounds holds nothing, so every containment theorem holds of it vacuously,
+which is CoqInterval's reading and needs no well-formedness field. The
+operations are `neg` (exact), `add`/`sub` (bounds rounded outward), `mul`
+(the four corners' least and greatest, rounded outward; two intervals above
+zero skip the search, a sign read off the mantissas), `recip` (positive
+intervals reverse the bounds, negative ones are the positive case under
+negation), constants (`of_rat`: numerator times the denominator's
+reciprocal), and `pow` by squaring. Each has a containment theorem
+(`add_has`, `mul_has`, `recip_has`, `pow_has`, …).
+
+**The checker.** `Expr` names a rational expression (literals, `+`, `-`,
+negation, `*`, `recip`, `npow`). `Expr::eval` spells each node as the
+operation itself, so `a.eval() < b.eval()` converts to the goal written
+directly and nothing reduces the exact value; the probe
+`Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000)` is proved by
+`Expr::lt_of_search(…, 32, 1, refl)`. `lt_search` / `le_search` try a
+precision and double it on a miss, `tries` times; the verdict is a `Bool`
+proved `= True` by `refl`, the evaluation route the library uses for closed
+facts (an `IsTrue` discharged by `trivial` runs out of the elaborator's
+fuel on the same goal).
+
+**Costs.** These are shapes. An operation at `p` bits costs its roundings,
+each about `p` halvings for the width and `p` for the shift, plus the
+exponent alignment of its comparisons. `Dyadic::le_dec` now compares
+mantissas aligned to the smaller exponent (`Dyadic::aligned`), so it
+computes one power of two, of the exponents' gap, where the rationals'
+cross products computed four, of the exponents themselves, and
+`Finite::le_dec` inherits it. With the direct product above zero, that cut
+an interval product by about an order of magnitude. A power costs
+`O(log n)` products.
+
+**What the checker does not do.** An equality is never decided (a third is
+never exact, so `3 · (1/3) <= 1` is refused at every precision; the probes
+pin the refusal). Products of an interval with itself are bounded as if
+independent, so a goal that needs the dependency (`x - x`) widens. Left:
+
+- a tactic that reifies a goal into `Expr` and runs the search
+  ([[interval-goal-tactic]]);
+- enclosures of a `CReal` from its regular sequence, containment at
+  `CReal`, and deciding `CReal` comparisons at concrete arguments
+  ([[interval-creal-enclosures]]);
+- elementary functions by series with remainder bounds, the enclosure
+  `float-transcendental`'s Ziv loop refines ([[interval-elementary-functions]]).

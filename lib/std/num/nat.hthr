@@ -1533,6 +1533,13 @@ theorem Nat::shr_succ_half(self k: Nat): (n: Nat) → n.shr(Succ(k)) = n.shr(k).
     }
 }
 
+// The number of binary digits: the least `w` with `n < 2^w`.
+fn Nat::width_fuel(n, fuel: Nat) → Nat {
+    match fuel { Zero => 0, Succ(f) => match n { Zero => 0, Succ(k) => Succ(Nat::width_fuel(Succ(k).half(), f)) } }
+}
+
+fn Nat::width(self n: Nat) → Nat { Nat::width_fuel(n, n) }
+
 theorem Nat::even_double(self n: Nat): Nat::Even(n + n) {
     match n {
         Zero => trivial,

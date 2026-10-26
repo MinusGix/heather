@@ -5,7 +5,7 @@ labels: [mathematics,floating-point]
 area: mathematics
 milestone: [math-float]
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 `lib/std/num/float/error.hthr` states the error of a correct rounding as
@@ -45,3 +45,7 @@ ValidSDP's specification sharper in three ways, each cheap given design
 Items 1–4 are in `error.hthr` (with `*_model` corollaries in `arith.hthr`
 for `add`/`sub` using item 3), item 5 in `round.hthr`, and literal probes in
 `lib/_tests/std/num/float/`.
+
+## Log
+
+- 2026-10-26: 2026-10-26: [[dyadic-interval-enclosures]] landed with its own outward rounding on Dyadic (a shift, design §16), so it does not cite item 5. Item 5 remains the fact a float-based interval kernel (hardware rounding to nearest, then next_down/next_up) would cite.

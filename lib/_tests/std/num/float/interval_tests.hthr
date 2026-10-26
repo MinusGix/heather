@@ -1,0 +1,74 @@
+// Probes of `lib/std/num/float/interval.hthr` and of the directed rounding
+// and reciprocal bounds in `dyadic.hthr`: theorems that pin the operations
+// down at specific values and restate the contract at open ones. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import omega; import rat; import dyadic; import interval;
+
+// Rounding at a precision keeps the top bits and moves the rest into the
+// exponent: 7 at two bits is 6 below and 8 above, at either sign, and a
+// mantissa that fits is kept.
+theorem down_seven(): Dyadic(7, 0).down(2) = Dyadic(3, 1) { refl }
+theorem up_seven(): Dyadic(7, 0).up(2) = Dyadic(4, 1) { refl }
+theorem down_neg_seven(): Dyadic(-7, 0).down(2) = Dyadic(-4, 1) { refl }
+theorem up_neg_seven(): Dyadic(-7, 0).up(2) = Dyadic(-3, 1) { refl }
+theorem fits(): Dyadic(5, -3).down(8) = Dyadic(5, -3) { refl }
+theorem down_contract(d: Dyadic, p: Nat): d.down(p) <= d ∧ d <= d.up(p) { And(d.down_le(p), d.le_up(p)) }
+
+// The comparison aligns the exponents: equal values at different exponents
+// compare both ways.
+theorem le_across(): Dyadic(6, 0).le_bool(Dyadic(3, 1)) = True { refl }
+theorem not_lt_across(): Dyadic(6, 0).lt_bool(Dyadic(3, 1)) = False { refl }
+theorem lt_close(): Dyadic(3482986923, -31).lt_bool(Dyadic(3482986925, -31)) = True { refl }
+
+// A third at four bits past the divisor's width: 21/64 below, 22/64 above.
+theorem third_down(): Dyadic(3, 0).recip_down(4) = Dyadic(21, -6) { refl }
+theorem third_up(): Dyadic(3, 0).recip_up(4) = Dyadic(22, -6) { refl }
+
+// A constant is its numerator times its denominator's reciprocal, rounded
+// outward once more: a third at eight bits is [170, 171] · 2^-9.
+theorem third_at_8(): Interval::of_rat(Rat(1, 3), 8) = Bnd(Dyadic(170, -9), Dyadic(171, -9)) { refl }
+theorem of_rat_contract(q: Rat, p: Nat): Interval::of_rat(q, p).Has(q) { Interval::of_rat_has(q, p) }
+
+// A negative reciprocal is the positive one negated; around zero there is no
+// bound, and the whole line is the answer.
+theorem recip_neg_three(): Interval::point(Dyadic(-3, 0)).recip(4) = Bnd(Dyadic(-22, -6), Dyadic(-21, -6)) { refl }
+theorem recip_around_zero(): Bnd(Dyadic(-1, 0), Dyadic(1, 0)).recip(8) = Whole { refl }
+theorem whole_absorbs(p: Nat): Whole.add(Interval::of_int(1), p) = Whole { refl }
+
+// Products: the corner search with a negative factor, and the direct form
+// when both are above zero. [-1, 2]·[3, 4] is [-4, 8].
+theorem mixed_product(): Bnd(Dyadic(-1, 0), Dyadic(2, 0)).mul(Bnd(Dyadic(3, 0), Dyadic(4, 0)), 8) = Bnd(Dyadic(-4, 0), Dyadic(8, 0)) { refl }
+theorem positive_product(): Bnd(Dyadic(1, 0), Dyadic(2, 0)).mul(Bnd(Dyadic(3, 0), Dyadic(4, 0)), 8) = Bnd(Dyadic(3, 0), Dyadic(8, 0)) { refl }
+
+// The interpretation is total: a pair with its bounds crossed holds nothing,
+// so containment of it is vacuous, and `Whole` holds everything.
+theorem crossed_empty(x: Rat): ¬(Bnd(Dyadic(1, 0), Dyadic(0, 0)).Has(x)) { λ h => Rat::le_trans(h.left, h.right) }
+theorem whole_has(x: Rat): Whole.Has(x) { trivial }
+theorem whole_below_nothing(J: Interval): Whole.below(J) = False { refl }
+
+// The checker. A goal written directly converts with its `Expr` form.
+fn third() → Expr { Lit(Rat(1, 3)) }
+fn compound_100() → Expr { Pow(Add(Lit(1), Lit(Rat(1, 100))), 100) }
+fn compound_1000() → Expr { Pow(Add(Lit(1), Lit(Rat(1, 1000))), 1000) }
+
+theorem two_thirds_lt_one(): Rat(1, 3) + Rat(1, 3) < 1 { Expr::lt_of_search(Add(third(), third()), Lit(1), 8, 1, refl) }
+theorem compound_100_lt_3(): Rat::npow(1 + Rat(1, 100), 100) < 3 { Expr::lt_of_search(compound_100(), Lit(3), 32, 1, refl) }
+theorem two_le_compound_100(): 2 <= Rat::npow(1 + Rat(1, 100), 100) { Expr::le_of_search(Lit(2), compound_100(), 32, 1, refl) }
+theorem compound_1000_lt_e(): Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000) { Expr::lt_of_search(compound_1000(), Lit(Rat(2719, 1000)), 32, 1, refl) }
+theorem e_lt_compound_1000(): Rat(2716, 1000) < Rat::npow(1 + Rat(1, 1000), 1000) { Expr::lt_of_search(Lit(Rat(2716, 1000)), compound_1000(), 32, 1, refl) }
+
+// The search refines: 333/1000 and a third are 1/3000 apart, which four bits
+// cannot separate and sixteen can.
+theorem refined(): Rat(333, 1000) < Rat(1, 3) { Expr::lt_of_search(Lit(Rat(333, 1000)), third(), 4, 3, refl) }
+// expect-error(kernel): the kernel rejected `unrefined`: NotConvertible
+theorem unrefined(): Rat(333, 1000) < Rat(1, 3) { Expr::lt_of_search(Lit(Rat(333, 1000)), third(), 4, 1, refl) }
+
+// The negative control: an equality is never decided by enclosures, since a
+// third is never exact, so `3 · (1/3) <= 1` is refused at every precision
+// although it is true.
+// expect-error(kernel): the kernel rejected `exact_third`: NotConvertible
+theorem exact_third(): Rat(1, 3) * 3 <= 1 { Expr::le_of_search(Mul(third(), Lit(3)), Lit(1), 8, 4, refl) }
+
+// The contract at an open expression and precision.
+theorem encloses(e: Expr, p: Nat): e.enclose(p).Has(e.eval()) { e.enclose_has(p) }
