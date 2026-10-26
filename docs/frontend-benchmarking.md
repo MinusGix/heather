@@ -255,6 +255,16 @@ loads, which is the honest width of an absolute time here.
 | `let/fan` | *k* lets each using the last twice, as a `fn` body. **Lower bound linear** | met |
 | `let/dep` | `fan` with an unused `refl` proof let per link. **Lower bound linear** | met (it was above quadratic while each unused value was discarded one binder deeper) |
 | `let/stmt` | `let-addr0`'s chain stated equal to itself, by `refl`. **Lower bound linear** | debt: 2^k (two equal DAGs compared as trees) |
+| `inductive/isa-declaration` | an *n*-form instruction type with register/immediate/memory operand fields, declared. **Lower bound linear** | met (~1.0) |
+| `inductive/isa-constructor-use` | four constructor values of that type. **Lower bound linear** (the declaration) | debt: ~1.7, Θ(n²) elaboration per mention |
+| `inductive/isa-opcode-match` | an *n*-arm `match` into `Nat`, payloads ignored. **Lower bound linear** | debt: ~1.6, mostly elaboration |
+| `inductive/isa-roundtrip` | an *n*-arm rebuild and its identity theorem (one `refl` per arm). **Lower bound linear** | debt: ~2.2, mostly gate |
+| `inductive/enum-equality` | *n*²-arm decidable equality on an *n*-constructor enum, and its `refl` theorem. **Lower bound quadratic** | debt: ~2.5 |
+| `inductive/record-fields` | a *k*-field record: literal, projection, rebuild, frame theorem. **Lower bound linear** | debt: ~1.4 |
+| `inductive/mutual-declaration` | a ring of *m* mutual sorts, declared. **Lower bound linear** | debt: ~1.5, small |
+| `inductive/mutual-recursion` | structural recursion over that group, and one `refl` unfolding. **Lower bound linear** | debt: ~2.8, all gate; out of fuel at *m* = 8 |
+| `inductive/typed-syntax` | intrinsically typed terms `Tm(J(Γ, A))`, *n* constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.8 over 5..8, and a large constant |
+| `inductive/function-fields` | an `IWf`-on-`W` family of *n* function-field constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.7 over 2..8, ~3.4 past it |
 
 The spread is the point of the noise warning above, and it is also the
 argument for the slope being the headline: the times moved by up to 1.5×
@@ -540,3 +550,49 @@ nested calls, which at n = 256 exceeds the elaborator's expression depth
 limit (512), so `rewrite/fa` and `rewrite/repeat-mod` stop at 128. And the opaque operations
 and lemmas are theorem parameters, so that no conversion can close a goal
 the rewrite was meant to close.
+
+## The large and intricate inductive families (2026-10-26)
+
+`issues/intricate-inductive-bench-families.md` added ten families
+(`fixtures/intricate.rs`) for the two ways a declaration gets big. **Wide**:
+an instruction-set-shaped type, hundreds of forms with operand fields of
+other declared types, split into the phases of its life so a slope names
+the phase that grows — declaring it, mentioning a constructor, an opcode
+`match`, a rebuild-and-identity roundtrip, an *n*²-arm decidable equality,
+and a wide state record. **Intricate**: few constructors, but the lowering
+multiplies them — a mutual group of syntax sorts (declared, then recursed
+over), intrinsically typed terms indexed by a judgment, and a family with
+function-field children.
+
+The conventions are the rewriting families': each family states its lower
+bound (all linear but `enum-equality`'s, which is the arm count), the bands
+are the mean of three cloud-box runs ±0.35 and record debt, and only `slope`
+rows go into the baseline, so the cases read `untracked` until a `--save`
+on the recording machine.
+
+What the round found, each with a cheap control that does not pay it, and
+each filed:
+
+- **A constructor value costs Θ(n²) in the type's constructor count**, in
+  elaboration, whichever constructor: `respell_spine` compares every
+  component of the spine against the registered one by deep equality
+  (`issues/wide-inductive-constructor-mention-cost.md`). The gate adds
+  Θ(k·n) for the *k*-th constructor.
+- **Mutual recursion is ~m^2.8, nearly all gate**, and an eight-member
+  group's one-step `refl` runs out of fuel; the same constructors as one
+  inductive are three orders of magnitude cheaper
+  (`issues/mutual-group-recursion-gate-cost.md`).
+- **Typed-syntax and function-field recursion are superlinear and gate
+  bound**, with a large constant even for a `refl` of a three-node closed
+  term; a plain child instead of a function field is well over an order of
+  magnitude cheaper
+  (`issues/indexed-family-recursion-gate-cost.md`).
+
+The sizes stop where a family costs a few seconds per run, which on the
+intricate families is early — five members, eight constructors — so their
+fitted slopes understate the curve past the sweep (the issues carry the
+larger CLI points). One language limit shapes a fixture: a family takes one
+index (`docs/inductive-indexed-lowering.md` §8.4), so typed terms are
+indexed by a declared judgment type `J(Γ, A)` (with a second constructor,
+since an index type needs two).
+

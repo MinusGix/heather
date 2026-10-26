@@ -182,3 +182,13 @@ slope	rewrite/let-nary	2.045
 slope	let/fan	1.103
 slope	let/dep	1.098
 slope	let/stmt	9.578
+slope	inductive/isa-declaration	0.990
+slope	inductive/isa-constructor-use	1.707
+slope	inductive/isa-opcode-match	1.623
+slope	inductive/isa-roundtrip	2.153
+slope	inductive/enum-equality	2.513
+slope	inductive/record-fields	1.423
+slope	inductive/mutual-declaration	1.490
+slope	inductive/mutual-recursion	2.817
+slope	inductive/typed-syntax	1.780
+slope	inductive/function-fields	1.673
