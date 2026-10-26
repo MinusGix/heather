@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""How much of lib/'s declaration heads repeat (docs/sections-design.md).
+
+    scripts/signature-census            # totals and the files that repeat most
+    scripts/signature-census --top 40   # more rows
+    scripts/signature-census --runs     # the longest repeated head prefixes
+
+A static read of every top-level `fn` and `theorem` head under lib/ (lib/_tests
+skipped), no build. A head is its name, its `<…>` list and its `(…)` list; the
+result type is not read. Binders are compared as written text, after splitting
+`x, y: A` into `x: A, y: A`, so two heads share a binder only when they spell it
+identically. Four numbers are reported, each the text a mechanism would remove:
+
+  owner      the `Owner::` prefix, over runs of 3 or more consecutive heads with
+             the same owner (an owner block writes it once)
+  prefix     a common leading binder sequence, over runs of 3 or more
+             consecutive heads (a section whose head is spliced in front)
+  inclusion  any binder written identically in 3 or more consecutive heads,
+             wherever it sits (an upper bound for Lean-style `variable`)
+  sibling    `Owner::name` references inside the body of a declaration that
+             Owner also owns (bare sibling names inside an owner's members)
+
+It is a heuristic over text: a run is cut by any other item between two heads,
+and a head the splitter misreads counts as sharing nothing.
+"""
+
+import argparse
+import collections
+import os
+import re
+import sys
+
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+OPEN = {"(": ")", "{": "}", "[": "]"}
+CLOSE = set(OPEN.values())
+ITEM = re.compile(r"^(theorem|fn|instance|designation|record|class|inductive|codata|axiom)\b", re.M)
+RUN = 3
+
+
+def strip_comments(src):
+    return re.sub(r"//[^\n]*", "", src)
+
+
+def matching(s, i):
+    depth = 0
+    for j in range(i, len(s)):
+        if s[j] in OPEN:
+            depth += 1
+        elif s[j] in CLOSE:
+            depth -= 1
+            if depth == 0:
+                return j + 1
+    return None
+
+
+def generics_end(s, i):
+    depth = 0
+    for j in range(i + 1, len(s)):
+        ch = s[j]
+        if ch in OPEN:
+            depth += 1
+        elif ch in CLOSE:
+            depth -= 1
+        elif ch == ">" and depth == 0 and s[j - 1] not in "-=":
+            return j + 1
+    return None
+
+
+def split_top(s):
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch in OPEN:
+            depth += 1
+        elif ch in CLOSE:
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+def norm(t):
+    return re.sub(r"\s+", " ", t.strip())
+
+
+def binders(group, implicit=False):
+    """`self xs, ys: List<A>, {n: Nat}` -> [(implicit, name, type)]."""
+    out, pending = [], []
+    for item in split_top(group):
+        item = item.strip()
+        if not item:
+            continue
+        if item[0] == "{" and item[-1] == "}":
+            out.extend(binders(item[1:-1], True))
+            continue
+        depth, colon = 0, None
+        for k, ch in enumerate(item):
+            if ch in OPEN:
+                depth += 1
+            elif ch in CLOSE:
+                depth -= 1
+            elif ch == ":" and depth == 0 and item[k + 1:k + 2] != ":" and item[k - 1:k] != ":":
+                colon = k
+                break
+        if colon is None:
+            pending.append(item)
+            continue
+        ty = norm(item[colon + 1:])
+        for name in pending + [item[:colon]]:
+            out.append((implicit, norm(name), ty))
+        pending = []
+    out.extend((implicit, norm(p), "") for p in pending)
+    return out
+
+
+def items(path):
+    src = strip_comments(open(path, encoding="utf-8").read())
+    found = list(ITEM.finditer(src))
+    out = []
+    for n, m in enumerate(found):
+        end = found[n + 1].start() if n + 1 < len(found) else len(src)
+        if m.group(1) not in ("theorem", "fn"):
+            out.append(None)
+            continue
+        i = m.end()
+        name = re.match(r"\s*([A-Za-z_0-9:]+)", src[i:])
+        if not name:
+            out.append(None)
+            continue
+        i += name.end()
+        tel = []
+        if src[i:i + 1] == "<":
+            j = generics_end(src, i)
+            tel += [("G",) + b for b in binders(src[i + 1:j - 1])]
+            i = j
+        if src[i:i + 1] == "(":
+            j = matching(src, i)
+            tel += [("P",) + b for b in binders(src[i + 1:j - 1])]
+            i = j
+        full = name.group(1)
+        out.append({
+            "name": full,
+            "owner": full.rsplit("::", 1)[0] if "::" in full else None,
+            "tel": tel,
+            "head": len(norm(src[m.start():i])),
+            "body": src[i:end],
+        })
+    return out
+
+
+def width(b):
+    return len(b[2]) + len(b[3]) + 2
+
+
+def spell(tel):
+    return ", ".join(("{%s: %s}" % (b[2], b[3])) if b[2] and b[1] else
+                     b[2] + (": " + b[3] if b[3] else "") for b in tel)
+
+
+def prefix_len(a, b):
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
+def runs_of(seq, key):
+    """Maximal runs of consecutive non-None heads with equal key (key not None)."""
+    i = 0
+    while i < len(seq):
+        if seq[i] is None or key(seq[i]) is None:
+            i += 1
+            continue
+        j = i
+        while j < len(seq) and seq[j] is not None and key(seq[j]) == key(seq[i]):
+            j += 1
+        yield i, j
+        i = j
+
+
+def census(path):
+    heads = items(path)
+    real = [h for h in heads if h]
+    c = collections.Counter(decls=len(real), head=sum(h["head"] for h in real))
+    c["source"] = len(open(path, encoding="utf-8").read())
+    long_runs = []
+    for i, j in runs_of(heads, lambda h: h["owner"]):
+        if j - i >= RUN:
+            o = heads[i]["owner"]
+            c["owner"] += (j - i) * (len(o) + 2) - (len(o) + 12)
+    # prefix: greedy runs that keep a nonempty prefix common with their first head
+    i = 0
+    while i < len(heads):
+        if heads[i] is None:
+            i += 1
+            continue
+        pre, j = len(heads[i]["tel"]), i + 1
+        while j < len(heads) and heads[j] is not None:
+            k = prefix_len(heads[i]["tel"][:pre], heads[j]["tel"])
+            if k == 0:
+                break
+            pre, j = k, j + 1
+        if j - i >= RUN:
+            w = sum(width(b) for b in heads[i]["tel"][:pre])
+            c["prefix"] += (j - i) * w - (w + 12)
+            c["prefix_decls"] += j - i
+            long_runs.append(((j - i - 1) * w, j - i, path, heads[i]["name"], heads[i]["tel"][:pre]))
+        i = max(j, i + 1)
+    # inclusion: each binder over its own runs, wherever it sits in the head
+    every = set(b for h in real for b in h["tel"])
+    for b in every:
+        for i, j in runs_of(heads, lambda h, b=b: True if b in h["tel"] else None):
+            if j - i >= RUN:
+                c["inclusion"] += max(0, (j - i) * width(b) - (width(b) + 12))
+    # sibling: Owner::name inside the body of one of Owner's own members
+    for h in real:
+        o = h["owner"]
+        if o and "::" not in o:
+            refs = re.findall(r"(?<![A-Za-z_0-9:])" + re.escape(o) + r"::[a-z_]", h["body"])
+            c["sibling"] += len(refs) * (len(o) + 2)
+            c["sibling_refs"] += len(refs)
+    return c, long_runs
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--top", type=int, default=15)
+    ap.add_argument("--runs", action="store_true")
+    a = ap.parse_args()
+    lib = os.path.normpath(os.path.join(ROOT, "lib"))
+    files = sorted(os.path.join(d, f) for d, _, fs in os.walk(lib) for f in fs
+                   if f.endswith(".hthr") and "/_tests" not in d + "/")
+    total, rows, runs = collections.Counter(), [], []
+    for p in files:
+        c, r = census(p)
+        total.update(c)
+        rows.append((os.path.relpath(p, lib), c))
+        runs += r
+    pct = lambda n: "%5.1f%%" % (100.0 * n / total["source"])
+    print("library: %d files, %d chars; %d fn/theorem heads, %d chars of heads (%s)"
+          % (len(files), total["source"], total["decls"], total["head"], pct(total["head"])))
+    print("removable by   chars     of library")
+    for k in ("owner", "prefix", "inclusion", "sibling"):
+        print("  %-10s %8d   %s" % (k, total[k], pct(total[k])))
+    print("prefix runs cover %d heads; sibling references: %d" % (total["prefix_decls"], total["sibling_refs"]))
+    if a.runs:
+        print("\nlongest repeated prefixes (chars saved, heads, file:first head, prefix)")
+        for saved, n, p, name, tel in sorted(runs, key=lambda r: -r[0])[:a.top]:
+            print("%6d %4d  %s:%s  [%s]" % (saved, n, os.path.relpath(p, lib), name, spell(tel)[:120]))
+        return
+    print("\n%-58s %5s %6s %6s %6s %6s" % ("file", "heads", "owner", "prefix", "incl", "sibl"))
+    for p, c in sorted(rows, key=lambda r: -(r[1]["prefix"] + r[1]["owner"] + r[1]["sibling"]))[:a.top]:
+        print("%-58s %5d %6d %6d %6d %6d" % (p, c["decls"], c["owner"], c["prefix"], c["inclusion"], c["sibling"]))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

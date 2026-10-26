@@ -316,6 +316,51 @@ assuming classical: Classical, Extensional {
         (number)))))
 
 ==================
+Section heads
+==================
+
+section<A: Pt>(self x: A) {
+  fn A::twice() -> Nat { 0 }
+  section(n: Nat) {
+    theorem A::same(): Nat { n }
+  }
+}
+
+---
+
+(source_file
+  (section_declaration
+    (type_parameters
+      (type_parameter
+        (identifier)
+        (identifier)))
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (function_declaration
+      (qualified_identifier)
+      (parameter_list)
+      (identifier)
+      (block
+        (number)))
+    (section_declaration
+      (parameter_list
+        (parameter
+          (parameter_run
+            (parameter_name
+              (identifier))
+            (identifier))))
+      (theorem_declaration
+        (qualified_identifier)
+        (parameter_list)
+        (identifier)
+        (block
+          (identifier))))))
+
+==================
 Termination measures
 ==================
 

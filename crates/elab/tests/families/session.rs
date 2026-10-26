@@ -29,6 +29,8 @@ mod axiom_provenance;
 mod template_registration;
 #[path = "../modules.rs"]
 mod modules;
+#[path = "../owner_siblings.rs"]
+mod owner_siblings;
 #[path = "../warnings.rs"]
 mod warnings;
 #[path = "../check_diagnostics.rs"]

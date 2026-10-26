@@ -214,7 +214,7 @@ theorem Target::at_similar(self t: Target, at: Nat, tree, other: ITree<BitVec(64
 
 // A JMP to a label ahead or behind, the environment placed.
 theorem Target::at_jmp(self t: Target, before: Prog, n: Nat, within: then(before, Jmp(Succ(n))).Within(t.program),
-    label: Prog, item: Asm, label_within: At(label, Succ(n), item).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()), env: Env,
+    label: Prog, item: Asm, label_within: Prog::At(label, Succ(n), item).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()), env: Env,
     goes: t.At(prog_len(label), tree, env)): t.At(prog_len(before), tree, env) {
     t.io().goes_jmp(t.program, t.origin, t.code_fits(), within.witness, before, 0, Succ(n), within.proof, prog_len(label),
         t.program.lands_jmp(t.laid, within.witness, before, 0, n, within.proof, label_within.witness, label, item, label_within.proof),

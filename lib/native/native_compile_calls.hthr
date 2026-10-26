@@ -521,7 +521,7 @@ theorem Target::copy_goes_on(self t: Target, v: Nat → BitVec(8), buf, cap: Nat
 // The head: CMP R8, RAX and a JE out, each way on from the invariant.
 theorem Target::goes_copy_head(self t: Target, v: Nat → BitVec(8), p: Prog, buf, h, d: Nat, bytes: List<BitVec(8)>, i: Nat,
     within: p.copy_in(t.layout(), buf, Succ(h), Succ(d)).Within(t.program),
-    done_k: Nat, done_before: Prog, done_item: Asm, done_at: asm_back(t.program, done_k) = At(done_before, Succ(d), done_item),
+    done_k: Nat, done_before: Prog, done_item: Asm, done_at: asm_back(t.program, done_k) = Prog::At(done_before, Succ(d), done_item),
     tree: ITree<BitVec(64)>(Events::linux()),
     taken: t.Goes(prog_len(done_before), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => (t.CopyAt(v, buf, bytes, i, u.gprs, u.memory) ∧
         (u.flags.zf = is_zero_bits(64, read_gpr(R8, u.gprs).sub(read_gpr(Rax, u.gprs))))) ∧ (u.flags.zf = True)),
@@ -585,7 +585,7 @@ theorem Target::goes_copy_body(self t: Target, v: Nat → BitVec(8), p: Prog, bu
 // past it with the buffer filled.
 theorem Target::goes_copy_loop(self t: Target, env: Env, p: Prog, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), h, d: Nat,
     within: p.copy_in(t.layout(), buf, Succ(h), Succ(d)).Within(t.program),
-    done_k: Nat, done_before: Prog, done_item: Asm, done_at: asm_back(t.program, done_k) = At(done_before, Succ(d), done_item),
+    done_k: Nat, done_before: Prog, done_item: Asm, done_at: asm_back(t.program, done_k) = Prog::At(done_before, Succ(d), done_item),
     bytes: List<BitVec(8)>, short: bytes.len() <= cap, tree: ITree<BitVec(64)>(Events::linux()),
     next: t.At(prog_len(done_before), tree, env.set_buffer(buf, fill(env.buffer(buf), bytes))),
     v: Nat → BitVec(8), keeps: t.layout().Keeps(env, v),

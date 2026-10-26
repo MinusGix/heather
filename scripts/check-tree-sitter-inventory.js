@@ -44,7 +44,7 @@ for (const symbol of inventory.rejected_fixed_tokens) {
 const parserKeywords = new Set(
   [...parser.matchAll(/(?:at_kw|eat_kw)\("([A-Za-z_]+)"\)/g)].map(match => match[1])
 );
-for (const ignored of ['_', 'context', 'given', 'section']) parserKeywords.delete(ignored);
+for (const ignored of ['_', 'context', 'given']) parserKeywords.delete(ignored);
 for (const keyword of parserKeywords) {
   if (!inventory.keywords.includes(keyword)) failures.push(`parser keyword is missing from manifest: ${keyword}`);
 }

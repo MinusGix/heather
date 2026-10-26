@@ -167,10 +167,10 @@ fn Eutt::peel_l<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), u: CoTree<R>(E),
     h: CoTree::after(E, k, t) = OTau(s), e: Eutt<R>(E, s, u)) → Eutt<R>(E, t, u)
 {
     match e {
-        ERet(nl, nr, r, hs, hu) => ERet(Succ(nl + k), nr, r, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu),
-        ETau(nl, nr, s2, u2, hs, hu, n) => ETau(Succ(nl + k), nr, s2, u2, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, n),
+        ERet(nl, nr, r, hs, hu) => ERet(Succ(nl + k), nr, r, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu),
+        ETau(nl, nr, s2, u2, hs, hu, n) => ETau(Succ(nl + k), nr, s2, u2, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, n),
         EVis(nl, nr, c, k1, k2, hs, hu, n) =>
-            EVis(Succ(nl + k), nr, c, k1, k2, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, λ a => n(a)),
+            EVis(Succ(nl + k), nr, c, k1, k2, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, λ a => n(a)),
     }
 }
 
@@ -197,8 +197,8 @@ fn Eutt::drop1_tau<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), u: CoTree<R>(
 {
     match nl {
         Zero => λ (ht: CoTree::obs(E, t) = OTau(t2)) =>
-            Eutt::peel_r(E, s, u, u2, nr, hu, j(inj(trans(sym(ht), h0)), λ y q => Eutt<R>(E, y, u2), n)),
-        Succ(k) => λ ht => ETau(k, nr, t2, u2, trans(sym(CoTree::after_succ(E, k, t, s, h0)), ht), hu, n),
+            Eutt::peel_r(E, s, u, u2, nr, hu, j(inj(prelude::trans(prelude::sym(ht), h0)), λ y q => Eutt<R>(E, y, u2), n)),
+        Succ(k) => λ ht => ETau(k, nr, t2, u2, prelude::trans(prelude::sym(CoTree::after_succ(E, k, t, s, h0)), ht), hu, n),
     }
 }
 
@@ -260,12 +260,12 @@ theorem Eutt::to0<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Eutt<R>(E, 
 {
     match b {
         ERet(nl, nr, r, hu, hv) =>
-            j(trans(sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
+            j(prelude::trans(prelude::sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
                 EuttRetAt(nr, hv)),
         ETau(nl, nr, u2, v2, hu, hv, n) =>
-            false_elim(j(trans(sym(CoTree::after_settled(E, nl, u, o, h, so)), hu), λ y q => Obs::Settled(E, y), so)),
+            false_elim(j(prelude::trans(prelude::sym(CoTree::after_settled(E, nl, u, o, h, so)), hu), λ y q => Obs::Settled(E, y), so)),
         EVis(nl, nr, c, k1, k2, hu, hv, n) =>
-            j(trans(sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
+            j(prelude::trans(prelude::sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
                 EuttVisAt(nr, k2, hv, n)),
     }
 }
@@ -277,9 +277,9 @@ theorem Eutt::to<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Eutt<R>(E, u
     match n {
         Zero => λ (h: CoTree::obs(E, u) = o) => Eutt::to0(E, u, v, b, o, so, h),
         Succ(m) => match h0: CoTree::obs(E, u) {
-            ORet(r) => λ h => Eutt::to0(E, u, v, b, o, so, trans(h0, h)),
+            ORet(r) => λ h => Eutt::to0(E, u, v, b, o, so, prelude::trans(h0, h)),
             OTau(u1) => λ h => Eutt::to(E, u1, v, Eutt::drop1(E, u, u1, v, h0, b), o, so, m, h),
-            OVis(c, k) => λ h => Eutt::to0(E, u, v, b, o, so, trans(h0, h)),
+            OVis(c, k) => λ h => Eutt::to0(E, u, v, b, o, so, prelude::trans(h0, h)),
         },
     }
 }
@@ -355,7 +355,7 @@ theorem Eutt::traces_ret<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt
     let w: EuttRetAt<R>(E, u, r) = Eutt::to0(E, t, u, e, ORet(r), trivial, h0);
     match it {
         Stopped(at) => CoTree::converges_nil(E, u, tr, at),
-        Returned(at) => j(sym(at), λ y q => Converges<R>(E, λ k => CoTree::approx(E, k, u), y),
+        Returned(at) => j(prelude::sym(at), λ y q => Converges<R>(E, λ k => CoTree::approx(E, k, u), y),
             CoTree::converges_after(E, u, ORet(r), TRet(r), Converges(Succ(Zero), Returned(refl)), w.m, w.at)),
     }
 }
@@ -375,11 +375,11 @@ theorem Eutt::traces_vis<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt
     let w: EuttVisAt<R>(E, u, c, k) = Eutt::to0(E, t, u, e, OVis(c, k), trivial, h0);
     match it {
         Prefix(at) => CoTree::converges_nil(E, u, tr, at),
-        Pending(at) => j(sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
+        Pending(at) => j(prelude::sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
             CoTree::converges_after(E, u, OVis(c, w.k2), TCall(c), Converges(Succ(Zero), Pending(refl)), w.m, w.at)),
         Answered(a, rest, at, sub) => {
             let c1: Converges<R>(E, λ k3 => CoTree::approx(E, k3, w.k2(a)), rest) = ih(k(a), w.k2(a), w.next(a), rest, sub);
-            j(sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
+            j(prelude::sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
                 CoTree::converges_after(E, u, OVis(c, w.k2), TAns(c, a, rest),
                     Converges(Succ(c1.n), Answered(a, rest, refl, c1.h)), w.m, w.at))
         },
