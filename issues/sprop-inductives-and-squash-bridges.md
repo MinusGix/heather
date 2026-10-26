@@ -4,7 +4,7 @@ status: open
 labels: [kernel,delam,design,sprop]
 area: kernel
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-10-26
 ---
 
 The narrow former in [[sprop-squash]] intentionally stopped before a generic
@@ -43,3 +43,8 @@ larger design bill.
 
 - 2026-08-25: Split from [[sprop-squash]] when its implementable narrow slice
   landed. No current customer forces either bridge or general inductives.
+- 2026-10-26: A candidate customer for a third bridge, `∥A∥ → sAcc` (an irrelevant
+  accessibility predicate that eliminates into relevant types), is recorded in
+  [[squashed-termination-evidence]]: constructive epsilon and countable choice
+  types for `math-specific-choice`. It is not a customer for `sEq` or
+  `sEmpty`, and it waits on a CCobs-style `cast` before its β rule is usable.
