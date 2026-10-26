@@ -17,11 +17,12 @@
 //! evaluation; the layout check `Source::compile` makes is proved a stretch
 //! at a time over the literal (as `compile-x86` does); the bytes a piece at
 //! a time. The literal spells each address in the region as the compiler
-//! does, `next_rip` from the page's start, so the emission's check compares
+//! does, `add_nat` from the page's start, so the emission's check compares
 //! the two by their arguments instead of evaluating each one's bits.
 use std::path::{Path, PathBuf};
 
 use heather_elab::{function_ir_source, Elaborator};
+use heather_cache::module_image::ImageFreshness;
 use heather_cli::{loader, semantic::SemanticSession};
 
 use super::{check_file, symbol_ok, verified, write_new};
@@ -32,10 +33,13 @@ const MAX_FILE: usize = 65535;
 const HEADER: usize = 232;
 /// Items in each definition of the program's literal.
 const STRETCH: usize = 32;
-/// Bytes a piece of the code is cut at, at least: smaller than
-/// `compile-x86`'s, since a piece's addresses are `next_rip` chains whose
-/// bits each cost a good share of a declaration's fuel to evaluate.
-const PIECE: usize = 48;
+/// Bytes a piece of the code is cut at, at least. A piece's statement costs
+/// about its bytes' assembly, linear in them (its addresses are `add_nat`
+/// from the page, which compare by their arguments), so the pieces together
+/// cost about the same at any size; this one is the cheapest of a sweep over
+/// cat, and a piece a long last item stretches well past it still fits a
+/// declaration's fuel, which eight times this size does not.
+const PIECE: usize = 96;
 /// Where the region is, and the window an address in it is spelled from.
 const LOW: &str = "DataRegion::io_page().low";
 const REGION: std::ops::Range<u64> = 0x410000..0x412000;
@@ -47,10 +51,14 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut output = None;
     let mut cache = None;
+    let mut freshness = ImageFreshness::Exact;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            // `check`'s flag: replay images an earlier build wrote, as the
+            // suite's stale lanes do everywhere else.
+            "--accept-stale-images" => freshness = ImageFreshness::AcceptStale,
             "-o" | "-L" | "--cache-dir" => {
                 let value = PathBuf::from(args.next().ok_or_else(|| format!("{arg} needs a path"))?);
                 match arg.as_str() {
@@ -64,7 +72,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         }
     }
     if positional.len() != 2 || output.is_none() {
-        return Err("usage: heather write-elf <file.hthr> <source> -o <output> [-L <dir>]... [--cache-dir <dir>]".into());
+        return Err("usage: heather write-elf <file.hthr> <source> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images]".into());
     }
     let (source, symbol, output) = (Path::new(positional[0]), positional[1], output.unwrap());
     if !symbol_ok(symbol) {
@@ -89,7 +97,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     if let Some(store) = &verdicts {
         elab.set_gate(std::sync::Arc::clone(store) as std::sync::Arc<dyn heather_elab::gate::KernelGate>);
     }
-    let mut session = SemanticSession::new(cache);
+    let mut session = SemanticSession::new(cache).with_freshness(freshness);
     for module in &sources {
         check_file(&mut elab, &mut session, module)?;
     }
@@ -110,7 +118,7 @@ fn {p}_lens() → List<Nat> {{ asm_lens({p}_program()) }}
     let numbers = |fork: &Elaborator, module: &str, item: &str| function_ir_source::evaluate_numbers(fork, &format!("{module}::{p}_{item}"))
         .map_err(|e| format!("`{symbol}` ({item}): {e}"));
     let address = |width: u32, n: u64| {
-        if width == 64 && REGION.contains(&n) { format!("next_rip({LOW}, {})", n - REGION.start) }
+        if width == 64 && REGION.contains(&n) { format!("{LOW}.add_nat({})", n - REGION.start) }
         else { format!("@bitvec::BitVec::ofNat({width}, {n})") }
     };
     let items = verified::read_items_with(&numbers(&fork, &probe, "numbers")?, &address)?;

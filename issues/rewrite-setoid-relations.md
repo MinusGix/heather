@@ -5,7 +5,7 @@ labels: [frontend,elaboration,proofs,setoids,relations]
 area: tactics
 milestone: [tac-general]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-26
 ---
 
 `rewrite(h, e)` takes only proofs of `=`; a relation proof is refused with a
@@ -23,3 +23,7 @@ is setoid rewriting (Rocq's `setoid_rewrite`, Lean's `grw`). Direction and
 occurrence controls come from [[relational-rewrite-controls]] and
 [[rewrite-pattern-occurrences]]; a symmetric step still needs explicit
 symmetry evidence.
+
+## Log
+
+- 2026-10-26: Design reference: docs/mengine-survey.md §4.3. mengine (and Gross et al. 2023 before it) makes setoid-style rewriting linear by rewriting bottom-up with one congruence step per changed node, chained by transitivity, and a node memo keyed by (equation, context, node) kept across calls. Today's `rewrite` abstracts the goal by a tree walk and costs 2^k on a let-shared goal (survey §4.2), so build this one bottom-up from the start. Under binders, use the pointwise relation and a binder `Respects` instance; mengine uses funext, which Heather does not assume. Bench families with linear lower bounds: [[tactic-scaling-bench-families]].

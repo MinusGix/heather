@@ -1,0 +1,41 @@
+// Probes of matching on a `Nat` literal inside an enclosing recursion
+// (`issues/kernel-fold-probe-evaluates-recursive-arms.md`). A `match` on a
+// literal is a fold over a run, and the kernel classifies a fold's step by
+// evaluating it; a step that never reads its `ih` is no algebra, so it is
+// not probed and the fold is its one ordinary step. Before, each level of
+// these walks evaluated its arm's recursive call once per probe as well,
+// and every walk below but `count_upto` ran a declaration out of fuel.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat;
+
+inductive Walk { Start, At(before: Walk, name: Nat) }
+
+// Both arms recurse, and the result is a `Bool`.
+fn Walk::all(self p: Walk) → Bool {
+    match p { Start => True, At(before, name) => match name { Zero => before.all(), Succ(_) => before.all() } }
+}
+
+// The arm reads the predecessor after recursing, so a probe would run the
+// whole walk before it got stuck on the predecessor.
+fn Walk::small(self p: Walk) → Bool {
+    match p { Start => True, At(before, name) => match name { Zero => before.small(), Succ(m) => before.small() && m.leb(8) } }
+}
+
+// A control: a `Nat` result, the recursive call under a successor, which
+// read as a literal tree and was cheap before too.
+fn Walk::count(self p: Walk) → Nat {
+    match p { Start => 0, At(before, name) => match name { Zero => before.count(), Succ(_) => Succ(before.count()) } }
+}
+
+fn Walk::named(n, name: Nat) → Walk { match n { Zero => Start, Succ(k) => At(Walk::named(k, name), name) } }
+
+// Names 0, 1, …, n - 1: literals of every length up to `n`, zero included.
+fn Walk::upto(n: Nat) → Walk { match n { Zero => Start, Succ(k) => At(Walk::upto(k), k) } }
+
+theorem all_ones(): Walk::named(64, 1).all() = True { refl }
+theorem all_wide(): Walk::named(64, 1000000).all() = True { refl }
+theorem all_upto(): Walk::upto(64).all() = True { refl }
+theorem small_fives(): Walk::named(64, 5).small() = True { refl }
+theorem not_small(): Walk::upto(64).small() = False { refl }
+theorem count_upto(): Walk::upto(64).count() = 63 { refl }

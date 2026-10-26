@@ -287,3 +287,172 @@ impl Elaborator {
         }
     }
 }
+
+/// One constructor value of a collection literal's spine, opened: the node
+/// with its label's element projections contracted, its children still to
+/// build, and the ones built so far.
+struct SpineFrame {
+    node: Term,
+    pending: Vec<Rc<Term>>,
+    built: Vec<Rc<Term>>,
+}
+
+impl Elaborator {
+    /// A collection literal's value with its **constructor spine built out**:
+    /// `Cons(1, Cons(2, Nil))`, not the weak head the protocol's conversion
+    /// leaves, `Cons(fst(v), fold(snd(v)))` over the literal's vector `v`.
+    ///
+    /// The weak head is a correct term and the kernel builds the rest when
+    /// it needs it, but every reader that *shows* a term met the vector and
+    /// the unreduced fold: a refusal at a goal holding `[1, 2]` or `"hi"`
+    /// printed the kernel encoding
+    /// (issues/decide-refusal-spells-string-literal-encoding.md), and the
+    /// display path may not reduce to recover it. So the literal reduces here,
+    /// once, where reducing is the elaborator's business. Nothing names the
+    /// container: any `Wf` constructor value is opened, each child is
+    /// reduced to its weak head, and a projection out of the literal's own
+    /// vector is read off the vector — which is how an element comes back as
+    /// the term it elaborated to rather than its unfolding. A child that does
+    /// not reduce to a constructor stays as it was, and `budget` (a few nodes
+    /// per element) bounds the walk for a container whose literal is not a
+    /// spine, so the result is always the same value, at worst less built.
+    ///
+    /// Iterative, since a spine is as deep as the literal is long.
+    pub(crate) fn collection_literal_spine(&self, cx: &Cx, value: Term, len: usize) -> Term {
+        let mut budget = 4 * (len + 1);
+        let mut stack: Vec<SpineFrame> = Vec::new();
+        let mut next = Rc::new(value);
+        loop {
+            let mut done = match spine_frame(&next) {
+                Some(frame) if budget > 0 => {
+                    budget -= 1;
+                    stack.push(frame);
+                    None
+                }
+                _ => Some(next),
+            };
+            loop {
+                let Some(top) = stack.last_mut() else {
+                    let done = done.expect("a value or an open frame");
+                    return Rc::unwrap_or_clone(done);
+                };
+                if let Some(value) = done.take() {
+                    top.built.push(value);
+                }
+                if let Some(child) = top.pending.pop() {
+                    next = self.spine_child(cx, child, budget);
+                    break;
+                }
+                let frame = stack.pop().expect("the frame just read");
+                done = Some(Rc::new(rebuilt(frame)));
+            }
+        }
+    }
+
+    /// A child of a literal's constructor value, reduced to its weak head
+    /// when that is another constructor value; otherwise as it was.
+    fn spine_child(&self, cx: &Cx, child: Rc<Term>, budget: usize) -> Rc<Term> {
+        if budget == 0 {
+            return child;
+        }
+        // The fold's step hands the child the vector's tail as `snd(v)`:
+        // read it off `v` first, so each step's projections stay one deep.
+        let mut applied = (*child).clone();
+        if let Term::App { arg, .. } | Term::AppAt { arg, .. } = &mut applied
+            && let Some(tail) = projected(arg)
+        {
+            *arg = tail;
+        }
+        match self.expr_elab().whnf_term(cx, &applied) {
+            Ok(reduct) if matches!(reduct, Term::Supf { .. }) => Rc::new(reduct),
+            _ => child,
+        }
+    }
+}
+
+/// Open a `Wf` constructor value: its label with element projections read
+/// off the literal's vector, and the entries of its children tuple.
+fn spine_frame(t: &Term) -> Option<SpineFrame> {
+    let Term::Supf { level, shape, arity, label, children } = t else {
+        return None;
+    };
+    let mut pending = Vec::new();
+    let mut cur = children;
+    while let Some((fst, snd)) = crate::spelling::pair_of(cur) {
+        pending.push(Rc::clone(fst));
+        cur = snd;
+    }
+    let count = pending.len();
+    // Popped from the back: the first child is built first.
+    pending.reverse();
+    Some(SpineFrame {
+        node: Term::Supf {
+            level: level.clone(),
+            shape: Rc::clone(shape),
+            arity: Rc::clone(arity),
+            label: contracted(label),
+            children: Rc::clone(children),
+        },
+        pending,
+        built: Vec::with_capacity(count),
+    })
+}
+
+/// The frame's node with its children replaced by the built ones, in order.
+fn rebuilt(frame: SpineFrame) -> Term {
+    let SpineFrame { mut node, built, .. } = frame;
+    if let Term::Supf { children, .. } = &mut node {
+        *children = with_items(children, &built);
+    }
+    node
+}
+
+/// `tuple` with its first `items.len()` entries replaced.
+fn with_items(tuple: &Rc<Term>, items: &[Rc<Term>]) -> Rc<Term> {
+    let Some((item, rest)) = items.split_first() else {
+        return Rc::clone(tuple);
+    };
+    let mut out = (**tuple).clone();
+    if let Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } = &mut out {
+        *snd = with_items(snd, rest);
+        *fst = Rc::clone(item);
+    }
+    Rc::new(out)
+}
+
+/// A label with every projection out of a literal pair read off the pair,
+/// through the injections and pairs a constructor label is built of.
+fn contracted(t: &Rc<Term>) -> Rc<Term> {
+    if let Some(field) = projected(t) {
+        return field;
+    }
+    let mut out = (**t).clone();
+    match &mut out {
+        Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
+            let (f, s) = (contracted(fst), contracted(snd));
+            if Rc::ptr_eq(&f, fst) && Rc::ptr_eq(&s, snd) {
+                return Rc::clone(t);
+            }
+            (*fst, *snd) = (f, s);
+        }
+        Term::Inl { val, .. } | Term::Inr { val, .. } | Term::InlAt { val, .. } | Term::InrAt { val, .. } => {
+            let v = contracted(val);
+            if Rc::ptr_eq(&v, val) {
+                return Rc::clone(t);
+            }
+            *val = v;
+        }
+        _ => return Rc::clone(t),
+    }
+    Rc::new(out)
+}
+
+/// `fst`/`snd` of a pair — or of a projection that itself reads off one —
+/// as the component it selects; `None` when the chain bottoms out at
+/// anything but a pair.
+fn projected(t: &Term) -> Option<Rc<Term>> {
+    let (first, inner) = crate::spelling::proj_of(t)?;
+    let inner = projected(inner).unwrap_or_else(|| Rc::clone(inner));
+    let (fst, snd) = crate::spelling::pair_of(&inner)?;
+    Some(Rc::clone(if first { fst } else { snd }))
+}

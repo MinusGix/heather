@@ -9,7 +9,9 @@
 //!   the innermost step taken as written.
 //! - **synchronous**: a [`Val::NatSync`], which cancels its run against the
 //!   run it is applied to (`eval.rs`, the application case).
-//! - **opaque**: `None` — the ordinary one-step path.
+//! - **opaque**: `None` — the ordinary one-step path, after the
+//!   bit-transducer class is asked; **direct** (`ih` does not occur in the
+//!   step): `None` straight away, the one step being the whole fold.
 //!
 //! An affine result is a value shaped like the tree: successors on a
 //! projection of the base, or pairs of those. Projections and pairs carry
@@ -34,24 +36,45 @@ use super::{Eval, Frame, Res, Work};
 
 impl<'a, 'v> Eval<'a, 'v> {
     /// The fold of `e` (a `Nat` eliminator) over `head = Succ^program(tail)`
-    /// by its step's class; `None` takes the ordinary step.
+    /// by its step's class, or the ordinary step when the class has no
+    /// shortcut.
+    #[inline(never)]
     pub(super) fn fold_run(
         &mut self,
         head: &Rc<Val<'v>>,
         program: &Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
-    ) -> Res<Option<Work<'v>>> {
+    ) -> Res<Work<'v>> {
         let Elim::ElimNat { step, .. } = e else {
             unreachable!("fold_run is given a Nat eliminator")
         };
         let class = self.classify_step(step)?;
-        match &*class {
+        self.fold_by_class(head, program, tail, e, &class)
+    }
+
+    /// [`Eval::fold_run`] once the step is classified: kept apart so the
+    /// classification, which re-enters the machine, stands on a small frame
+    /// (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn fold_by_class(
+        &mut self,
+        head: &Rc<Val<'v>>,
+        program: &Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+        e: &Elim<'v>,
+        class: &FoldClass,
+    ) -> Res<Work<'v>> {
+        let Elim::ElimNat { step, .. } = e else {
+            unreachable!("fold_by_class is given a Nat eliminator")
+        };
+        let work = match class {
             // Not a `Nat` algebra — which is what every fold over a *width*
             // is, its step returning a function. The bit-transducer class
             // (`eval/transduce.rs`) is asked next, and `None` from it is the
             // ordinary one-step path as before.
             FoldClass::Opaque => self.fold_transduce(program, tail, e),
+            FoldClass::Direct => Ok(None),
             FoldClass::Sync { .. } => Ok(Some(Work::Val(Rc::new(Val::NatSync {
                 program: Rc::clone(program),
                 tail,
@@ -60,9 +83,14 @@ impl<'a, 'v> Eval<'a, 'v> {
             FoldClass::Affine { tree, uniform } => {
                 self.fold_affine(head, program, tail, e, tree, *uniform)
             }
-        }
+        }?;
+        Ok(match work {
+            Some(work) => work,
+            None => self.nat_run_step(program, tail, step, e),
+        })
     }
 
+    #[inline(never)]
     fn fold_affine(
         &mut self,
         head: &Rc<Val<'v>>,

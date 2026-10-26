@@ -307,17 +307,17 @@ fn beta_app() {
 
 /// A step stands on one native frame per blocked head above its redex, and
 /// fuel never sees those (a closed `pow(3, 5000)` stood on thousands). Past
-/// `NATIVE_DEPTH_LIMIT` the step answers `OutOfFuel`; under it, the same
+/// `REDUCER_DEPTH_LIMIT` the step answers `OutOfFuel`; under it, the same
 /// spine steps as before.
 #[test]
 fn a_step_below_the_frame_budget_is_out_of_fuel() {
-    use heather_kernel::reduce::{OutOfFuel, NATIVE_DEPTH_LIMIT};
+    use heather_kernel::reduce::{OutOfFuel, REDUCER_DEPTH_LIMIT};
     // `((λx. x) (λx. x)) (λx. x) …`: the redex is at the bottom of the spine.
     let spine = |heads: u32| (0..heads).fold(lam(v(0)), |f, _| app2(f, lam(v(0))));
     let gamma = nil_ctx(0);
-    let shallow = spine(NATIVE_DEPTH_LIMIT - 1);
+    let shallow = spine(REDUCER_DEPTH_LIMIT - 1);
     assert!(matches!(heather_kernel::reduce::step_term(&shallow, &gamma), Ok(Some(_))));
-    let deep = spine(NATIVE_DEPTH_LIMIT + 1);
+    let deep = spine(REDUCER_DEPTH_LIMIT + 1);
     assert_eq!(heather_kernel::reduce::step_term(&deep, &gamma), Err(OutOfFuel));
     assert_eq!(whnf_term(&deep, &gamma, 64), Err(OutOfFuel));
 }

@@ -1,5 +1,5 @@
 // cat compiled, end to end (issues/native-effect-source-compiler.md, round
-// S3.2): `cat(256)` compiled by `Source::compile` with its region at the
+// S3.2): `cat(1024)` compiled by `Source::compile` with its region at the
 // I/O image's page, its code loaded past a 232-byte header, simulates cat's
 // source (`native_compile_correct`), and so every run of the machine Linux
 // can give it that exits 0 sends to stdout exactly what it read from stdin
@@ -37,11 +37,7 @@ import nat;
 import option;
 
 // cat's buffer, its environment and the scratch range all fit the page.
-// 256, not more, so the executable's bytes can be evaluated: the scratch
-// range's address is `next_rip` 512 + 256 bytes past the page, and the
-// kernel evaluates an iterated increment only to its native depth limit
-// (1024; issues/native-compile-address-depth.md).
-fn cat_capacity() → Nat { 256 }
+fn cat_capacity() → Nat { 1024 }
 
 // The compile succeeds: evaluated once, as a `Bool`.
 theorem cat_compiled(): cat(cat_capacity()).compile(DataRegion::io_page().low).is_some() = True { refl }

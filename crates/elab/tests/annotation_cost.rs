@@ -47,8 +47,10 @@ fn valuation_lookup_case_step_cost() {
         eprintln!("lookup width {width}, ids 0/8/16/32: {counts:?}");
         assert!(counts[0] > 0);
         for (i, depth) in [0, 8, 16, 32].into_iter().enumerate() {
-            assert_eq!(counts[i] - counts[0], 2 * depth,
-                "case dispatch must cost two steps per successor: {counts:?}");
+            // One step per successor: the arms never read the fold's ih,
+            // so no level is probed (issues/kernel-fold-probe-evaluates-recursive-arms.md).
+            assert_eq!(counts[i] - counts[0], depth,
+                "case dispatch must cost one step per successor: {counts:?}");
         }
         if let Some(ref first) = baseline {
             assert_eq!(&counts, first, "result width leaked into dispatch");

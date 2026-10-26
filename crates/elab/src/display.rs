@@ -14,10 +14,16 @@
 //!
 //! Three invariants, each against a way this could go wrong:
 //!
-//! - **The diagnostic path never reduces.** No δ, no β, no whnf, no fuel. The one registry
+//! - **The diagnostic path never reduces.** No δ, no whnf, no fuel. The one registry
 //!   consultation is [`Elaborator::unspell_here`], which is a lookup rather
 //!   than a reduction. So this code cannot affect what is checked — a stronger
-//!   guarantee than the reader's, which at least spends steps.
+//!   guarantee than the reader's, which at least spends steps. The one
+//!   contraction is a β-redex's, at a node that would otherwise print raw: a
+//!   redex has no surface form, and a let-bound or instantiated λ at a head
+//!   leaves one in the types a mismatch note holds
+//!   (`issues/elab-accepts-mismatch-under-redex-head.md`). It is syntactic
+//!   substitution, charged to the same node budget, and only in the reading
+//!   flavours: the source flavours, whose output is re-parsed, still decline.
 //! - **Every node either spells or falls back to that node's `{:?}`.** There
 //!   is no whole-type cliff: an unspellable argument prints raw inside a call
 //!   that prints as a call. A raw node is truncated ([`RAW_NODE_CHARS`]) so
@@ -596,6 +602,13 @@ impl Speller<'_> {
         if let Some(k) = crate::inductive::nat_numeral(t) {
             return k.to_string();
         }
+        // `'h'`, not `ofNat(104, decide_yes(refl))`.
+        if let Some(c) = self.char_literal(t) {
+            let mut out = String::from("'");
+            escape_into(c, '\'', &mut out);
+            out.push('\'');
+            return out;
+        }
         match t {
             Term::Var(LocalVar(i)) => self.var(*i).unwrap_or_else(|| self.raw_tm(t)),
             Term::Succ(p) => format!("Succ({})", self.tm(p, d + 1)),
@@ -718,6 +731,28 @@ impl Speller<'_> {
     /// can fail, none of which a display path may do. Anything that does not
     /// line up exactly declines, so the worst case is the raw form.
     fn ctor_value(&self, t: &Term, d: u32) -> Option<String> {
+        let (ind, i, fields) = self.ctor_fields(t)?;
+        let ctor = &ind.ctors[i];
+        let Some(fields) = fields else {
+            return Some(self.elided(format!("{}(…)", ctor.name)));
+        };
+        if let Some(literal) = self.literal_value(t, &ind, &fields, d) {
+            return Some(literal);
+        }
+        let shown: Vec<String> = fields.iter().map(|v| self.tm(v, d + 1)).collect();
+        Some(if shown.is_empty() {
+            ctor.name.clone()
+        } else {
+            format!("{}({})", ctor.name, shown.join(", "))
+        })
+    }
+
+    /// A lowered constructor value read back: its declaration, the
+    /// constructor's number, and its fields in declaration order — `None`
+    /// for the fields when the payload tuple does not read. The reading half
+    /// of [`Self::ctor_value`], which [`Self::literal_value`] also walks a
+    /// list's spine with.
+    fn ctor_fields(&self, t: &Term) -> Option<(Rc<crate::inductive::Inductive>, usize, Option<Vec<Rc<Term>>>)> {
         let (label, children, ind) = match t {
             Term::Supf {
                 shape,
@@ -763,6 +798,12 @@ impl Speller<'_> {
         // Walk the injection path: `Inr` steps past a constructor, `Inl`
         // selects one.
         let (i, cur) = self.inj_path(label, ind.ctors.len());
+        let fields = self.ctor_tuple(&ind, i, cur, children)?;
+        Some((ind, i, fields))
+    }
+
+    /// [`Self::ctor_fields`]'s tuples, read for constructor `i`.
+    fn ctor_tuple(&self, ind: &crate::inductive::Inductive, i: usize, cur: &Term, children: Option<&Term>) -> Option<Option<Vec<Rc<Term>>>> {
         let ctor = ind.ctors.get(i)?;
         // A container field is neither payload nor a plain child, and reading
         // it back means reading a vector: out of scope for a display.
@@ -772,7 +813,7 @@ impl Speller<'_> {
         let Some(payload) = crate::spelling::tuple_fields(
             self.el, self.cx, cur, 1, ctor.payload().count(), self.binders(),
         ) else {
-            return Some(self.elided(format!("{}(…)", ctor.name)));
+            return Some(None);
         };
         let kids = match children {
             Some(children) => crate::spelling::tuple_fields(
@@ -784,7 +825,7 @@ impl Speller<'_> {
         // Re-interleave into declaration order, which is the order the surface
         // writes the constructor's arguments in.
         let (mut a, mut b) = (0usize, 0usize);
-        let mut shown = Vec::with_capacity(ctor.fields.len());
+        let mut fields = Vec::with_capacity(ctor.fields.len());
         for k in 0..ctor.fields.len() {
             let v = if ctor.kind[k].is_child() {
                 b += 1;
@@ -793,13 +834,93 @@ impl Speller<'_> {
                 a += 1;
                 payload.get(a - 1)?
             };
-            shown.push(self.tm(v, d + 1));
+            fields.push(Rc::clone(v));
         }
-        Some(if shown.is_empty() {
-            ctor.name.clone()
-        } else {
-            format!("{}({})", ctor.name, shown.join(", "))
-        })
+        Some(Some(fields))
+    }
+
+    /// A value of one of the library's literal types spelled as the literal
+    /// that elaborates to it: `"hi"` for a `string::String` over character
+    /// literals, and `[1, 2]` for a standard `list::List` spine. Keyed on the
+    /// declarations' identities, as the literals themselves are
+    /// (issues/canonical-list-literal-identity.md), so a look-alike
+    /// declaration spells as its constructors, and a list whose tail is not
+    /// a constructor (`Cons(1, xs)`) stays a call. A list is a bracket only
+    /// when the spelling is for reading: `[…]` checks and never infers, so a
+    /// re-parsed `[1, 2] = xs` would not come back, and the source flavour
+    /// keeps `Cons`. A list longer than the walk's budget ends in `…`.
+    fn literal_value(&self, t: &Term, ind: &crate::inductive::Inductive, fields: &[Rc<Term>], d: u32) -> Option<String> {
+        if self.standard(ind, "string", "String") {
+            let [chars] = fields else { return None };
+            let mut out = String::from("\"");
+            for item in self.list_items(chars)? {
+                if !self.charge(d) {
+                    return None;
+                }
+                escape_into(self.char_literal(&item)?, '"', &mut out);
+            }
+            out.push('"');
+            return Some(out);
+        }
+        if self.qualified || !self.standard(ind, "list", "List") {
+            return None;
+        }
+        let mut shown = Vec::new();
+        for item in self.list_items(t)? {
+            if self.nodes.get() == 0 {
+                shown.push(self.elided("…".to_string()));
+                break;
+            }
+            shown.push(self.tm(&item, d + 1));
+        }
+        Some(format!("[{}]", shown.join(", ")))
+    }
+
+    /// Is `ind` the declaration `module::name`?
+    fn standard(&self, ind: &crate::inductive::Inductive, module: &str, name: &str) -> bool {
+        self.el.types.inductive(&crate::names::qkey(module, name)).is_some_and(|it| it.tag == ind.tag)
+    }
+
+    /// The elements of a standard list value spelled out to its `Nil`, or
+    /// `None` when a cell is anything else.
+    fn list_items(&self, t: &Term) -> Option<Vec<Rc<Term>>> {
+        let mut items = Vec::new();
+        let mut cur = Rc::new(t.clone());
+        loop {
+            let (ind, i, fields) = self.ctor_fields(&cur)?;
+            if !self.standard(&ind, "list", "List") {
+                return None;
+            }
+            match (ind.ctors.get(i)?.name.as_str(), fields?.as_slice()) {
+                ("Nil", []) => return Some(items),
+                ("Cons", [head, tail]) => {
+                    items.push(Rc::clone(head));
+                    cur = Rc::clone(tail);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// The character a `char::ofNat(code, bool::decide_yes(…))` call
+    /// builds — exactly the term a character literal elaborates to
+    /// (`literals.rs`). The proof must be that one: a `Char` carries its
+    /// `scalar` proof relevantly, so an `ofNat` at some other proof is not
+    /// the literal and spells as the call it is.
+    fn char_literal(&self, t: &Term) -> Option<char> {
+        let args = self.call_of(t, "char::ofNat")?;
+        let [code, proof] = args.as_slice() else { return None };
+        self.call_of(proof, "bool::decide_yes")?;
+        let code = crate::inductive::nat_numeral(code)?.as_u64()?;
+        char::from_u32(u32::try_from(code).ok()?)
+    }
+
+    /// `t`'s arguments when it is a call of the declaration `key`.
+    fn call_of<'t>(&self, t: &'t Term, key: &str) -> Option<Vec<&'t Rc<Term>>> {
+        let (head, args) = crate::spelling::app_spine(t);
+        let Term::GlobalTm { var, subst } = head else { return None };
+        let abs = self.el.global_abs_of(*var)?;
+        (subst.terms.is_empty() && self.el.global_qualified_name_at(abs)? == key).then_some(args)
     }
 
     /// `r.name` for a field read a record's declaration left inline. A closed
@@ -916,7 +1037,19 @@ impl Speller<'_> {
     fn call(&self, t: &Term, d: u32) -> String {
         let (head, args) = match self.call_parts(t) {
             Some(parts) => parts,
-            None => return self.raw_tm(t),
+            // A β-redex has no surface spelling, and its contractum is the
+            // same type to every reader: a let-bound or instantiated λ at the
+            // head (`post(u)` with `post := λ u => P(u.memory)`) spells as
+            // what it stands for (issues/elab-accepts-mismatch-under-redex-head.md).
+            // Only for a reader: a source flavour's caller re-parses what it
+            // gets (omega's and ring's atoms, generated annotations), and a
+            // declined redex is part of what those routes decide on.
+            None => {
+                return match crate::spelling::beta_head(t).filter(|_| !self.qualified && !self.annotations) {
+                    Some(r) => self.tm(&r, d + 1),
+                    None => self.raw_tm(t),
+                };
+            }
         };
         let (name, implicit) = match head {
             CallHead::Field(name) => {
@@ -988,6 +1121,12 @@ impl Speller<'_> {
         // come back here.
         if self.qualified && !self.el.base_name_resolves_to(&name, abs) {
             name = self.el.global_qualified_name_at(abs)?;
+            // Nor the qualified one, from a module this one does not import:
+            // a spelling that does not re-parse here declines like any
+            // other unspellable node, and `omega` abstracts it.
+            if !self.el.base_name_resolves_to(&name, abs) {
+                return None;
+            }
         }
         let params = self.el.params_at(abs);
         // Spelling for re-parsing keeps an implicit that nothing written
@@ -1086,6 +1225,24 @@ impl Elaborator {
                     })
             })
             .collect()
+    }
+}
+
+/// `c` as it is written between `quote`s: the lexer's named escapes, a
+/// control character as `\u{…}`, and everything else as itself.
+fn escape_into(c: char, quote: char, out: &mut String) {
+    match c {
+        '\n' => out.push_str("\\n"),
+        '\t' => out.push_str("\\t"),
+        '\r' => out.push_str("\\r"),
+        '\0' => out.push_str("\\0"),
+        '\\' => out.push_str("\\\\"),
+        c if c == quote => {
+            out.push('\\');
+            out.push(c);
+        }
+        c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", u32::from(c))),
+        c => out.push(c),
     }
 }
 

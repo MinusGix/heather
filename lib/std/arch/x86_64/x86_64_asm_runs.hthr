@@ -100,12 +100,11 @@ fn Prog::lacks(self p: Prog, name: Nat) → Bool {
     match p { Start => True, At(before, m, _) => !(name.leb(m) && m.leb(name)) && before.lacks(name) }
 }
 
-// Every nonzero name names one label, so a jump to it lands there. The test
-// is on `name.is_zero()`, not a match on `name` (`Nat::is_zero` says why).
+// Every nonzero name names one label, so a jump to it lands there.
 fn Prog::names_unique(self p: Prog) → Bool {
     match p {
         Start => True,
-        At(before, name, _) => match name.is_zero() { True => before.names_unique(), False => before.lacks(name) && before.names_unique() },
+        At(before, name, _) => match name { Zero => before.names_unique(), Succ(_) => before.lacks(name) && before.names_unique() },
     }
 }
 
@@ -115,7 +114,7 @@ fn Prog::fresh_names(self p: Prog, k: Nat) → Bool {
         Zero => True,
         Succ(j) => match p {
             Start => True,
-            At(before, name, _) => match name.is_zero() { True => before.fresh_names(j), False => before.lacks(name) && before.fresh_names(j) },
+            At(before, name, _) => match name { Zero => before.fresh_names(j), Succ(_) => before.lacks(name) && before.fresh_names(j) },
         },
     }
 }

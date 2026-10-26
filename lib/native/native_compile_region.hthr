@@ -59,6 +59,15 @@ fn Target::writes(self t: Target) → ByteWrites<X86Memory(t.r.profile)> { linux
 
 theorem Target::code_fits(self t: Target): FillsFit(t.program, no_fills()) { t.program.laid_out_fits(t.laid) }
 
+// An address the code spells (`Layout::word_at`, `buffer_at`, `scratch_at`)
+// is the region's `next_rip` to it.
+theorem Target::at_rip(self t: Target, q: Nat, inside: q <= t.r.size): t.r.low.add_nat(q) = next_rip(t.r.low, q) {
+    let low = t.r.low.toNat();
+    let below: (q <= Nat::pow(2, 47)) = Nat::le_trans(q, low + t.r.size, Nat::pow(2, 47),
+        Nat::le_trans(q, low + q, low + t.r.size, low.le_add_r(q), low.add_le_mono_l(q, t.r.size, inside)), t.r.canonical);
+    BitVec::add_nat_iterate(64, t.r.low, q, Nat::le_trans(Succ(q), Succ(Nat::pow(2, 47)), Nat::pow(2, 64), below, canonical_below_top()))
+}
+
 // What a statement's code claims, over the region's profile.
 fn Target::Goes(self t: Target, at: Nat, tree: ITree<BitVec(64)>(Events::linux()), pre: MachineState<X86Memory(t.r.profile)> → Type) → Type {
     t.site().Goes(t.io(), at, tree, pre)
@@ -252,11 +261,28 @@ theorem Layout::keeps_fill(self layout: Layout, env: Env, v, w: Nat → BitVec(8
 
 theorem Target::scratch_fits(self t: Target): t.layout().scratch_offset() <= t.r.size {
     let total: (t.layout().scratch_offset() + t.caps.largest() <= t.r.size) = t.fits;
-    omega(total)
+    t.layout().scratch_offset().le_of_add_le(t.caps.largest(), t.r.size, total)
 }
 
 theorem Target::slot_fits(self t: Target, i: Nat, inside: i < word_slots()): 8 * i + 8 <= t.r.size {
-    omega(t.layout().word_below_buffers(i, 7, inside, trivial), t.layout().scratch_after_words(), t.scratch_fits())
+    let words: (8 * i + 8 <= 8 * word_slots()) = t.layout().word_below_buffers(i, 7, inside, trivial);
+    Nat::le_trans(8 * i + 8, t.layout().scratch_offset(), t.r.size,
+        Nat::le_trans(8 * i + 8, 8 * word_slots(), t.layout().scratch_offset(), words, t.layout().scratch_after_words()), t.scratch_fits())
+}
+
+theorem Target::word_rip(self t: Target, i: Nat, inside: i < word_slots()): t.layout().word_at(i) = next_rip(t.r.low, 8 * i) {
+    t.at_rip(8 * i, (8 * i).le_of_add_le(8, t.r.size, t.slot_fits(i, inside)))
+}
+
+theorem Target::buffer_rip(self t: Target, b, cap: Nat, found: t.caps.nth(b) = Some(cap)):
+    t.layout().buffer_at(b) = next_rip(t.r.low, t.layout().buffer_offset(b)) {
+    let bo = t.layout().buffer_offset(b);
+    t.at_rip(bo, Nat::le_trans(bo, t.layout().scratch_offset(), t.r.size,
+        bo.le_of_add_le(cap, t.layout().scratch_offset(), t.layout().buffer_end(b, cap, found)), t.scratch_fits()))
+}
+
+theorem Target::scratch_rip(self t: Target): t.layout().scratch_at() = next_rip(t.r.low, t.layout().scratch_offset()) {
+    t.at_rip(t.layout().scratch_offset(), t.scratch_fits())
 }
 
 // The word in slot `i`, read at its address.
@@ -269,19 +295,26 @@ theorem Target::read_slot(self t: Target, env: Env, v: Nat → BitVec(8), m: X86
     let base = next_rip(t.r.low, q);
     let o = λ (k: Nat) => t.r.profile.read(m, next_rip(base, k));
     let g = λ (k: Nat) => t.r.buffer(v).get(q + k);
-    let b = λ (k: Nat) (short: k < 8) => t.r.buffer_read(v, m, holds, q, k, omega(short, fits));
+    let b = λ (k: Nat) (short: k < 8) => t.r.buffer_read(v, m, holds, q, k, Nat::le_trans(Succ(q + k), q + 8, t.r.size, q.add_le_mono_l(Succ(k), 8, short), fits));
     let read: (read_word(t.r.profile.data(), m, base) = Some(t.r.buffer(v).x86_word(q))) =
         word_of_eight(o(0), o(1), o(2), o(3), o(4), o(5), o(6), o(7), g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7),
             b(0, trivial), b(1, trivial), b(2, trivial), b(3, trivial), b(4, trivial), b(5, trivial), b(6, trivial), b(7, trivial));
-    let value = t.r.toNat_at(q, omega(fits));
-    ⟨omega(value, fits, t.r.canonical),
-     trans(read, cong_fn<BitVec(64), Option<BitVec(64)>>(λ w => Some(w), t.layout().keeps_word_at(env, v, keeps, i, inside)))⟩
+    let value = t.r.toNat_at(q, q.le_of_add_le(8, t.r.size, fits));
+    let low = t.r.low.toNat();
+    let ends: (low + (q + 8) <= Nat::pow(2, 47)) = Nat::le_trans(low + (q + 8), low + t.r.size, Nat::pow(2, 47),
+        low.add_le_mono_l(q + 8, t.r.size, fits), t.r.canonical);
+    j(sym(t.word_rip(i, inside)), λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(t.r.profile.data(), m, a) = Some(env.word(i))),
+        ⟨j(sym(value), λ x _ => x + 8 <= Nat::pow(2, 47), j(sym(low.add_assoc(q, 8)), λ x _ => x <= Nat::pow(2, 47), ends)),
+         trans(read, cong_fn<BitVec(64), Option<BitVec(64)>>(λ w => Some(w), t.layout().keeps_word_at(env, v, keeps, i, inside)))⟩)
 }
 
 // The cell at offset `q`, read at its address.
 theorem Target::read_cell(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile), holds: t.r.Holds(v, m), q: Nat,
     inside: q < t.r.size): (next_rip(t.r.low, q).toNat() < Nat::pow(2, 47)) ∧ (t.r.profile.read(m, next_rip(t.r.low, q)) = Some(v(q))) {
-    ⟨omega(t.r.toNat_at(q, omega(inside)), inside, t.r.canonical), t.r.buffer_read(v, m, holds, q, 0, inside)⟩
+    let low = t.r.low.toNat();
+    let below: (low + q < Nat::pow(2, 47)) = Nat::le_trans(Succ(low + q), low + t.r.size, Nat::pow(2, 47),
+        low.add_le_mono_l(Succ(q), t.r.size, inside), t.r.canonical);
+    ⟨j(sym(t.r.toNat_at(q, Nat::le_of_lt(q, t.r.size, inside))), λ x _ => x < Nat::pow(2, 47), below), t.r.buffer_read(v, m, holds, q, 0, inside)⟩
 }
 
 // A store in the region keeps the code resident…
@@ -303,9 +336,10 @@ theorem Target::placed_word(self t: Target, env: Env, m: X86Memory(t.r.profile),
     inside: i < word_slots(), word: BitVec(64)):
     t.Placed(env.set_word(i, word), t.r.profile.store(m, t.layout().word_at(i), word_bytes(word))) {
     let v = placed.witness;
-    Exists(t.r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells,
-        ⟨t.r.store_holds(v, m, placed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
-         t.layout().keeps_word(t.r, env, v, placed.proof.right, i, inside, word)⟩)
+    j(sym(t.word_rip(i, inside)), λ a _ => t.Placed(env.set_word(i, word), t.r.profile.store(m, a, word_bytes(word))),
+        Exists(t.r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells,
+            ⟨t.r.store_holds(v, m, placed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
+             t.layout().keeps_word(t.r, env, v, placed.proof.right, i, inside, word)⟩))
 }
 
 // The environment is the same, so is where it is placed.

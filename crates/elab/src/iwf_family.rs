@@ -374,6 +374,7 @@ impl Elaborator {
                     ty,
                     level,
                     spliced: None,
+                    shifted: Default::default(),
                 }));
             }
             p += 1;
@@ -482,6 +483,7 @@ impl Elaborator {
                     ty: ty.clone(),
                     level: level.clone(),
                     spliced: None,
+                    shifted: Default::default(),
                 }));
             } else if crate::inductive::expr_mentions(e, &name) {
                 let (term, ty, level) = self.elab_infer(cx, args[k].borrow())?;
@@ -493,6 +495,7 @@ impl Elaborator {
                     ty,
                     level,
                     spliced: None,
+                    shifted: Default::default(),
                 }));
             }
         }
@@ -1368,6 +1371,7 @@ impl Elaborator {
                 ty: sig_here.at(Rc::new(at.clone())),
                 level: fl.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
             children.push((Rc::new(child), Rc::new(ih), ih_ty, mlvl.clone()));
             // Under a member constructor the varying index is the member's

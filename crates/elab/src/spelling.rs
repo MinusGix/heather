@@ -153,6 +153,32 @@ pub(crate) fn app_spine(t: &Term) -> (&Term, Vec<&Rc<Term>>) {
     (head, args)
 }
 
+/// `t` with the β-redexes at the head of its spine contracted, `(λx. b) s ⋯`
+/// to `b[s/x] ⋯`, until the head is no λ; `None` when there was none. Only
+/// the head: an argument's redexes are reached when the congruence gets to
+/// them.
+pub(crate) fn beta_head(t: &Term) -> Option<Term> {
+    let (fun, arg) = app_of(t)?;
+    let r = match &**fun {
+        Term::Lam { body, .. } => body.inst_top(0, arg),
+        _ => {
+            let fun = Rc::new(beta_head(fun)?);
+            match t {
+                Term::App { dom_level, cod_level, dom, cod, arg, .. } => Term::App {
+                    fun,
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: Rc::clone(dom),
+                    cod: Rc::clone(cod),
+                    arg: Rc::clone(arg),
+                },
+                _ => Term::AppAt { fun, arg: Rc::clone(arg) },
+            }
+        }
+    };
+    Some(beta_head(&r).unwrap_or(r))
+}
+
 /// An application the elaborator **constructs** from a Π it holds, outside
 /// the surface-call path (`docs/app-by-head-type-design.md` §6.1, every
 /// emitter switched): `app@(f; a)` unless the head is a λ, which infers only

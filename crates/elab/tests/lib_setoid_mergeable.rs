@@ -114,7 +114,7 @@ fn lifted(x, y: PositiveNat) -> PositiveNat {
     );
     check(&mut e, "repaired_lift", &repair);
     let wrong = repair.replace("add_positive(a.value, b.value, a.valid)", "a.valid");
-    support::assert_refused(&mut e, "wrong_lift", &wrong, Refusal::Kernel);
+    support::assert_refused(&mut e, "wrong_lift", &wrong, Refusal::Mismatch);
     let zero = repair.replace(", Nat::add,", ", λ a b => 0,");
     support::assert_refused(&mut e, "zero_lift", &zero, Refusal::Mismatch);
 }

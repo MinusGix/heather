@@ -245,7 +245,7 @@ pub(super) fn unify_ty(
     // pattern the codes meet in `unify_tm`, which contracts both sides.
     let contracted;
     let subj = match subj {
-        Type::El { level, tm } if !matches!(pat, Type::El { .. }) => match beta_head(tm) {
+        Type::El { level, tm } if !matches!(pat, Type::El { .. }) => match spelling::beta_head(tm) {
             Some(r) => {
                 contracted = Type::El { level: level.clone(), tm: Rc::new(r) };
                 &contracted
@@ -526,7 +526,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
     // one contracted against one not would stop meeting. Contracting head
     // λs is syntactic and needs no context, so it runs before any other
     // rule, on every pairing; a well-typed term's head redexes run out.
-    let (p, s) = (beta_head(pat), beta_head(subj));
+    let (p, s) = (spelling::beta_head(pat), spelling::beta_head(subj));
     if p.is_some() || s.is_some() {
         let pat = p.as_ref().unwrap_or(pat);
         let subj = s.as_ref().unwrap_or(subj);
@@ -806,32 +806,6 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         }
         _ => {}
     }
-}
-
-/// `t` with the β-redexes at the head of its spine contracted, `(λx. b) s ⋯`
-/// to `b[s/x] ⋯`, until the head is no λ; `None` when there was none. Only
-/// the head: an argument's redexes are reached when the congruence gets to
-/// them.
-fn beta_head(t: &Term) -> Option<Term> {
-    let (fun, arg) = spelling::app_of(t)?;
-    let r = match &**fun {
-        Term::Lam { body, .. } => body.inst_top(0, arg),
-        _ => {
-            let fun = Rc::new(beta_head(fun)?);
-            match t {
-                Term::App { dom_level, cod_level, dom, cod, arg, .. } => Term::App {
-                    fun,
-                    dom_level: dom_level.clone(),
-                    cod_level: cod_level.clone(),
-                    dom: Rc::clone(dom),
-                    cod: Rc::clone(cod),
-                    arg: Rc::clone(arg),
-                },
-                _ => Term::AppAt { fun, arg: Rc::clone(arg) },
-            }
-        }
-    };
-    Some(beta_head(&r).unwrap_or(r))
 }
 
 /// A form [`U::canonical_head`] can reduce a subject to.

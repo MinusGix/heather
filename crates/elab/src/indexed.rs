@@ -999,6 +999,7 @@ impl Elaborator {
                         ty,
                         level,
                         spliced: None,
+                        shifted: Default::default(),
                     }));
                 }
                 FieldKind::Plain => {
@@ -1889,6 +1890,7 @@ impl Elaborator {
                     ty: ty.shift_local(by(env)),
                     level: level.clone(),
                     spliced: None,
+                    shifted: Default::default(),
                 }));
                 continue;
             }
@@ -1952,6 +1954,7 @@ impl Elaborator {
                 ty: (*fst).clone(),
                 level: fst_level,
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         if let Some(env) = env

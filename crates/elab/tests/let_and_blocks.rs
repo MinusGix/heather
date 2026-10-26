@@ -443,7 +443,7 @@ fn an_unused_let_value_is_checked_at_every_axis() {
 }
 
 /// How the value reaches the kernel: an unused value is discarded around the
-/// block as `(λ _: T. body)(v)`, which changes no meaning — the function
+/// block as `(λ _: T. λ b: B. b)(v)(body)`, which changes no meaning — the function
 /// still computes, at a literal and at a neutral argument — while a used
 /// `let` keeps the term it always had, the value inlined at the use and no
 /// redex added.
@@ -457,9 +457,13 @@ fn a_discarded_value_changes_no_term_a_use_reaches() {
     let (plain, ..) = last_body(&elab("fn f() -> Nat { 1 }"));
     assert!(used == plain, "a used `let` must not add a redex");
     let (unused, ..) = last_body(&elab("fn f() -> Nat { let x = 1; 0 }"));
+    let (zero, ..) = last_body(&elab("fn f() -> Nat { 0 }"));
     assert!(
-        matches!(&unused, Term::App { fun, arg, .. } if matches!(**fun, Term::Lam { .. }) && **arg == plain),
-        "an unused value is discarded around the body"
+        matches!(&unused, Term::App { fun, arg, .. }
+            if **arg == zero
+                && matches!(&**fun, Term::App { fun, arg, .. }
+                    if **arg == plain && matches!(**fun, Term::Lam { .. }))),
+        "an unused value is discarded around the body, which stays unshifted"
     );
 }
 
@@ -469,4 +473,168 @@ fn an_unused_meta_let_value_still_faces_the_kernel() {
     let m = bad(&format!("{P}meta fn q(g: Ctx) -> Code(g |- Nat) {{ let p = P(2, refl); code {{ 0 }} }}"));
     assert!(m.contains("NotConvertible"), "{m}");
     ok(&format!("{P}meta fn q(g: Ctx) -> Code(g |- Nat) {{ let p = P(3, refl); code {{ 0 }} }}"));
+}
+
+/// A gate that admits everything, so a test's counters see elaboration
+/// alone. Test-only: the claim below is about the term the elaborator
+/// builds; the kernel's own walk of it is the next test's.
+struct AdmitAll;
+
+impl heather_elab::gate::KernelGate for AdmitAll {
+    fn admits(&self, _psi: &GlobalCtx, _item: &heather_elab::gate::GateItem<'_>) -> bool {
+        true
+    }
+    fn accepted(&self, _psi: &GlobalCtx, _item: &heather_elab::gate::GateItem<'_>, _unsealed: &[usize]) {}
+}
+
+/// A chain of `k` lets, each using the previous twice, is a shared value of
+/// `k` links (`issues/proof-let-substitution-cost.md`'s `fan`), and it stays
+/// one under binders (`issues/subst-shared-node-memo.md`). Two shapes: the
+/// whole chain used once under a `λ` (one shift of a shared value, which the
+/// kernel's per-call memo keeps shared), and a binder between every link
+/// (a shift per use, which each alias's per-depth cache makes one shift per
+/// depth, so a later link holds one copy of the last and not two). Both are counted on the exact `local_subst_nodes` counter, for
+/// the elaboration and for shifting the finished body once more; a tree
+/// would be 2^k on either, and `subst_memo_hits` says the memo saw the
+/// sharing at all.
+#[test]
+fn a_shared_let_chain_stays_shared_under_binders() {
+    use heather_kernel::stats as kstats;
+    fn under(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        format!(
+            "fn mix(x, y: Nat) -> Nat {{ x }}\n\
+             fn chain(a: Nat) -> Nat → Nat {{\n{body}    λ (y: Nat) => mix(s{k}, y)\n}}\n"
+        )
+    }
+    fn interleaved(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    λ (y{i}: Nat) => {{\n    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        body.push_str(&format!("    s{k}\n"));
+        body.push_str(&"    }\n".repeat(k));
+        let ty = vec!["Nat"; k + 1].join(" → ");
+        format!("fn mix(x, y: Nat) -> Nat {{ x }}\nfn chain(a: Nat) -> {ty} {{\n{body}}}\n")
+    }
+    /// (elaboration's local node visits, one more shift's, its memo hits).
+    fn visits(src: &str) -> (u64, u64, u64) {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_gate(std::sync::Arc::new(AdmitAll));
+        let before = kstats::snapshot();
+        e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+        let elab = kstats::snapshot().since(&before).local_subst_nodes;
+        let (body, ..) = last_body(&e);
+        let Term::Lam { body: open, .. } = body else { panic!("`chain` is not a λ") };
+        let before = kstats::snapshot();
+        let _ = open.shift_local(1);
+        let shift = kstats::snapshot().since(&before);
+        (elab, shift.local_subst_nodes, shift.subst_memo_hits)
+    }
+    // Doubling k: a linear count doubles, a quadratic one quadruples, and a
+    // tree's is 256 times larger. `interleaved`'s elaboration is quadratic:
+    // each link shifts the previous link's value, whose size is its depth,
+    // and a shift of a shift is a fresh copy (`issues/open-payload-shift-copies.md`).
+    for (shape, src, grows) in [("under", under as fn(usize) -> String, 3), ("interleaved", interleaved, 5)] {
+        let (e8, s8, hits) = visits(&src(8));
+        let (e16, s16, _) = visits(&src(16));
+        assert!(hits > 0, "{shape}: the shift met no shared node twice");
+        assert!(e16 < grows * e8, "{shape}: elaboration's shifts grew {e8} → {e16} for k = 8 → 16");
+        assert!(s16 < 3 * s8, "{shape}: shifting the body grew {s8} → {s16} for k = 8 → 16");
+    }
+}
+
+/// The gate's half (`issues/kernel-typing-memo-on-node-identity.md`): the
+/// kernel judges a shared let value once per scope, not once per path, so
+/// the chains above check in gate queries linear in `k` where they were
+/// 2^k. Four shapes: the plain chain (`fan`), the chain under one `λ`, a
+/// binder between every link, and the transparent shape whose proof `let`
+/// needs the chain's value (`refl : sₖ = mix(sₖ₋₁, sₖ₋₁)`). And the
+/// issue's `dep`, a proof `let` at every link, none used, which ran out of
+/// fuel at k = 16 and was then quadratic in the gate and worse in
+/// elaboration: each unused proof was discarded around the rest of the
+/// block under a binder of its own, so the body was shifted once per proof
+/// and the chain reached the gate at `k` depths
+/// (`issues/discarded-let-values-nest-binders.md`). Every discarded value
+/// now stays at the block's depth (`docs/let-and-blocks-design.md` §11), so
+/// `dep` is linear in gate queries and in elaboration's substitution work.
+#[test]
+fn a_shared_let_chain_is_checked_once_per_link() {
+    use heather_kernel::stats as kstats;
+    const MIX: &str = "fn mix(x, y: Nat) -> Nat { x }\n";
+    fn links(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        body
+    }
+    fn fan(k: usize) -> String {
+        format!("{MIX}fn chain(a: Nat) -> Nat {{\n{}    s{k}\n}}\n", links(k))
+    }
+    fn under(k: usize) -> String {
+        format!("{MIX}fn chain(a: Nat) -> Nat → Nat {{\n{}    λ (y: Nat) => mix(s{k}, y)\n}}\n", links(k))
+    }
+    fn interleaved(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!("    λ (y{i}: Nat) => {{\n    let s{i} = mix(s{j}, s{j});\n", j = i - 1));
+        }
+        body.push_str(&format!("    s{k}\n"));
+        body.push_str(&"    }\n".repeat(k));
+        let ty = vec!["Nat"; k + 1].join(" → ");
+        format!("{MIX}fn chain(a: Nat) -> {ty} {{\n{body}}}\n")
+    }
+    fn transparent(k: usize) -> String {
+        format!(
+            "{MIX}fn chain(a: Nat) -> Nat {{\n{}    let p: (s{k} = mix(s{j}, s{j})) = refl;\n    s{k}\n}}\n",
+            links(k),
+            j = k - 1
+        )
+    }
+    fn dep(k: usize) -> String {
+        let mut body = String::from("    let s0 = mix(a, a);\n");
+        for i in 1..=k {
+            body.push_str(&format!(
+                "    let s{i} = mix(s{j}, s{j});\n    let p{i}: (s{i} = mix(s{j}, s{j})) = refl;\n",
+                j = i - 1
+            ));
+        }
+        format!("{MIX}fn chain(a: Nat) -> Nat {{\n{body}    s{k}\n}}\n")
+    }
+    /// The gate's conversion queries and memo hits for the whole source.
+    fn gate(src: &str) -> (u64, u64) {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        let before = kstats::snapshot();
+        e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+        let d = kstats::snapshot().since(&before);
+        (d.conv_shortcut_hits + d.conv_memo_hits + d.conv_misses, d.typing_memo_hits)
+    }
+    // Doubling k: a linear count doubles; a tree's is 65,536 times larger.
+    for (shape, src) in [
+        ("fan", fan as fn(usize) -> String),
+        ("under", under),
+        ("interleaved", interleaved),
+        ("transparent", transparent),
+        ("dep", dep),
+    ] {
+        let (q16, hits) = gate(&src(16));
+        let (q32, _) = gate(&src(32));
+        assert!(hits >= 16, "{shape}: {hits} memo hits for 16 links");
+        assert!(q32 < 3 * q16, "{shape}: gate queries grew {q16} → {q32} for k = 16 → 32");
+    }
+    /// Elaboration's local substitution node visits, under a gate that
+    /// admits everything.
+    fn elaboration(src: &str) -> u64 {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.set_gate(std::sync::Arc::new(AdmitAll));
+        let before = kstats::snapshot();
+        e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+        kstats::snapshot().since(&before).local_subst_nodes
+    }
+    let (e16, e32) = (elaboration(&dep(16)), elaboration(&dep(32)));
+    assert!(e32 < 3 * e16, "dep: elaboration's shifts grew {e16} → {e32} for k = 16 → 32");
 }

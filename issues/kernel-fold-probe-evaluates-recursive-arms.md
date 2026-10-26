@@ -1,10 +1,10 @@
 ---
 title: Stop the Nat fold probe from re-evaluating recursive match arms
-status: open
+status: closed
 labels: [kernel,perf]
 area: kernel
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 A `match` on a `Nat` whose arms make a recursive call of an *enclosing*
@@ -54,3 +54,42 @@ are unaudited.
   depth where `2^depth` steps would exceed the fuel.
 
 The verdict's soundness is not in question (`hih-km-probe`); this is cost.
+
+## Log
+
+- 2026-10-26: FIXED in the kernel, by the second route generalized: a step in which `ih`
+  does not occur is not probed (`FoldClass::Direct`, `eval/probe.rs`'s last
+  module section). Such a step is no algebra: the fold's one ordinary step is
+  the whole fold at any run, so no class could do better. Every shape this
+  issue names is one: a `match` on a literal inside an enclosing recursion
+  never reads the fold's `ih`, its arms being the *enclosing* recursion's
+  calls. The test is syntax (`bounds::ignores_innermost`, a `uses` bit mask
+  beside `LocalUse::bound`), but it only decides whether to probe; the
+  ordinary step is the fold's definition, so there is nothing for the kernel
+  model to preserve.
+
+  The cost was worse than the issue said: four evaluations of the arm per
+  level, not two (uniform probe, peeled probe, the bit-transducer probe's gate,
+  then the ordinary step), so a walk whose arm recursed before reading the
+  predecessor ran out of fuel at eight items. Probes in
+  `lib/_tests/std/num/nat_tests.hthr`: 64-item walks with names 1, 10^6 and
+  0…63, recursing before or after reading the predecessor, all out of fuel on
+  master and under 2K steps now. Across the library one opaque probe in
+  `lib/_tests` alone had spent ~977K steps on an `ih`-free step.
+
+  The first route (a probe budget) was tried and dropped: it fixes the walks
+  (linear, at the budget per level), but measured across the library, real
+  affine probes cost up to ~32K steps, mostly forcing environment thunks that
+  the fold then reuses (`add(ih, a)` with `a` computed), so any budget small
+  enough to matter declines real algebras into unary folds.
+
+  Workarounds undone: `names_unique`/`fresh_names` match on `name` again and
+  `Nat::is_zero` is gone. `Nat::ldiv` was not this issue: it is linear in the
+  numerator's bits, and its failure past ~700 bits is `NATIVE_DEPTH_LIMIT`
+  (one evaluator re-entry per quotient bit), [[eval-native-frame-size]].
+
+  Behaviour change to watch: an `ih`-free step whose value was a literal used
+  to classify as an affine `Lit`, which also made `step_elim` unfold a glued
+  scrutinee eagerly; `Direct` does not, like `Opaque`. Not exercised: a step
+  that reads `ih` and runs an enclosing recursion before reading it is still
+  probed in full; no library step was seen doing so.

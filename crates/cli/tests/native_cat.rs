@@ -9,8 +9,16 @@ use std::process::{Command, Stdio};
 
 use heather_cli::showcase;
 
-/// One `write-elf` of cat through the library gate's image store, which
-/// shares the library prefix with it.
+/// One `write-elf` of cat through the library gate's image store, its
+/// closure in its own load order, as the suite's CLI image warmup builds it.
+/// In the suite's stale lanes it replays images an earlier build wrote, as
+/// the gate does: without that, every compiler edit made this test rebuild
+/// the whole closure from source.
+///
+/// Not over the gate's world (`docs/library-world-design.md`): the world's
+/// front is most of the library, which one process building it alone (the
+/// warmup, on a cold store) cannot fit under the CPU rail beside cat's
+/// certificate.
 fn write_cat(output: &Path) {
     let root = showcase::repo_root();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
@@ -18,6 +26,9 @@ fn write_cat(output: &Path) {
         .args(["write-elf", "lib/native/native_cat_executable.hthr", "cat_source", "-o"])
         .arg(output)
         .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+    if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
+        cmd.arg("--accept-stale-images");
+    }
     let result = cmd.output().unwrap();
     assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
 }

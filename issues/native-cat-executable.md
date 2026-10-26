@@ -5,7 +5,7 @@ labels: [native,x86,linux,testing]
 area: heather-in-heather
 milestone: [hih-pl-first-program]
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 `cat_native_sends` (`lib/native/native_cat_compiled.hthr`) is about the
@@ -48,4 +48,4 @@ that does not exist. Found while proving S3.2
   and a directory as stdin (exit 1). cat runs at `cat(256)`: at 1024 the
   scratch address is past the kernel's evaluation depth, filed as
   [[native-compile-address-depth]].
-
+- 2026-10-26: cat is back at `cat(1024)`: compiled region addresses are ripple adds (`add_nat`) now, not iterated increments, so their bits evaluate at any offset ([[native-compile-address-depth]], closed).

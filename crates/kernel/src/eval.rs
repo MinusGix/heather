@@ -189,6 +189,13 @@ enum Work<'v> {
     Elim(Rc<Val<'v>>, Elim<'v>),
 }
 
+/// What [`Eval::fire_instantiate`] substitutes into a binder's body.
+enum Instantiate {
+    /// The universe levels, innermost first.
+    Univ(Vec<Level>),
+    Global(GlobalEntry),
+}
+
 /// What a value flows back into: a thunk waiting to memoize it, or an
 /// elimination waiting for its head.
 enum Frame<'v> {
@@ -422,92 +429,112 @@ impl<'a, 'v> Eval<'a, 'v> {
         out
     }
 
+    /// The loop is the machine's whole native frame on a value-nested chain
+    /// (docs/native-depth-budget-design.md §8): every arm but the trivial
+    /// ones is a call to a function kept out of line, so this frame holds
+    /// only `work` and what the next call needs, and a re-entry costs that
+    /// rather than the union of every arm's locals.
     fn drive_from(&mut self, start: Work<'v>, floor: usize) -> Res<Rc<Val<'v>>> {
         let mut work = start;
         loop {
-            work = match work {
-                Work::Eval(t, env) => self.step_eval(&t, &env)?,
-                Work::Elim(head, e) => self.step_elim(head, e)?,
-                Work::Apply1(c, arg) => match c {
-                    TmClo::Syn { env, body, .. } => {
-                        Work::Eval(Rc::clone(body), env.push(self.arena, arg))
-                    }
-                    _ => Work::Force(c),
-                },
-                Work::Apply(c, args) => match c {
-                    TmClo::Syn { env, body, .. } => {
-                        Work::Eval(Rc::clone(body), env.extend(self.arena, &args))
-                    }
-                    // A closure position holding a computed value has no
-                    // pending binders; it ignores them.
-                    _ => Work::Force(c),
-                },
-                Work::Force(c) => {
-                    if let Some(at) = self.arena.sealed_glue(c) {
-                        crate::unseal::note(at);
-                    }
-                    if let Some(v) = self.arena.memo_tm(c) {
-                        Work::Val(v)
-                    } else {
-                        match c {
-                            TmClo::Val(v) => Work::Val(Rc::clone(v)),
-                            TmClo::Syn { env, body, .. } => {
-                                let w = Work::Eval(Rc::clone(body), *env);
-                                self.frames.push(Frame::Memo(c));
-                                w
-                            }
-                            TmClo::Elim { head, elim, .. } => {
-                                let w = Work::Force(head);
-                                self.frames.push(Frame::Memo(c));
-                                self.frames.push(Frame::Elim(Rc::clone(elim)));
-                                w
-                            }
-                        }
-                    }
-                }
+            // Every arm writes the one `next`, so the frame holds one `Work`
+            // in flight rather than a result slot per callee.
+            let next = match work {
+                Work::Eval(t, env) => self.step_eval(&t, &env),
+                Work::Elim(head, e) => self.step_elim(head, e),
+                Work::Apply1(c, arg) => Ok(self.step_apply(c, &[arg])),
+                Work::Apply(c, args) => Ok(self.step_apply(c, &args)),
+                Work::Force(c) => Ok(self.step_force(c)),
                 Work::Val(v) => {
                     if self.frames.len() == floor {
                         return Ok(v);
                     }
                     match self.frames.pop() {
                         None => return Ok(v),
-                        // A thunk records its value only on success.
-                        Some(Frame::Memo(c)) => {
-                            self.arena.cache_tm(c, &v);
-                            Work::Val(v)
-                        }
-                        Some(Frame::Elim(e)) => Work::Elim(v, (*e).clone()),
-                        Some(Frame::SyncArg { head, app }) => {
-                            let Elim::App { ann, .. } = &*app else {
-                                unreachable!("SyncArg stores an application")
-                            };
-                            let app = Elim::App { ann: ann.clone(), arg: self.vclo(v) };
-                            Work::Elim(head, app)
-                        }
-                        Some(Frame::NatRunTail { program, glued }) => match &*v {
-                            Val::NatRun { program: inner, tail } => {
-                                Work::Val(Rc::new(Val::NatRun {
-                                    program: ContextProgram::append(program, Rc::clone(inner)),
-                                    tail: *tail,
-                                }))
-                            }
-                            Val::Neutral(n) if n.unfold.is_some() => {
-                                self.spend()?;
-                                let unfold = n.unfold.unwrap();
-                                let glued = glued.or_else(|| Some(Rc::clone(&v)));
-                                self.frames.push(Frame::NatRunTail { program, glued });
-                                Work::Force(unfold)
-                            }
-                            Val::Neutral(_) => {
-                                let tail = glued.unwrap_or(v);
-                                Work::Val(Rc::new(Val::NatRun { program, tail: self.vclo(tail) }))
-                            }
-                            _ => Work::Val(Rc::new(Val::NatRun { program, tail: self.vclo(v) })),
-                        },
+                        Some(frame) => self.step_return(frame, v),
                     }
                 }
             };
+            work = next?;
         }
+    }
+
+    /// [`Work::Apply`] and [`Work::Apply1`]: the closure's body in its
+    /// environment extended by `args`.
+    #[inline(never)]
+    fn step_apply(&mut self, c: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> Work<'v> {
+        match c {
+            TmClo::Syn { env, body, .. } => Work::Eval(Rc::clone(body), env.extend(self.arena, args)),
+            // A closure position holding a computed value has no pending
+            // binders; it ignores them.
+            _ => Work::Force(c),
+        }
+    }
+
+    /// [`Work::Force`]: a memo hit, a computed value, or the thunk's body
+    /// under a [`Frame::Memo`].
+    #[inline(never)]
+    fn step_force(&mut self, c: &'v TmClo<'v>) -> Work<'v> {
+        if let Some(at) = self.arena.sealed_glue(c) {
+            crate::unseal::note(at);
+        }
+        if let Some(v) = self.arena.memo_tm(c) {
+            return Work::Val(v);
+        }
+        match c {
+            TmClo::Val(v) => Work::Val(Rc::clone(v)),
+            TmClo::Syn { env, body, .. } => {
+                let w = Work::Eval(Rc::clone(body), *env);
+                self.frames.push(Frame::Memo(c));
+                w
+            }
+            TmClo::Elim { head, elim, .. } => {
+                let w = Work::Force(head);
+                self.frames.push(Frame::Memo(c));
+                self.frames.push(Frame::Elim(Rc::clone(elim)));
+                w
+            }
+        }
+    }
+
+    /// A value flowing back into the frame it was popped from.
+    #[inline(never)]
+    fn step_return(&mut self, frame: Frame<'v>, v: Rc<Val<'v>>) -> Res<Work<'v>> {
+        Ok(match frame {
+            // A thunk records its value only on success.
+            Frame::Memo(c) => {
+                self.arena.cache_tm(c, &v);
+                Work::Val(v)
+            }
+            Frame::Elim(e) => Work::Elim(v, (*e).clone()),
+            Frame::SyncArg { head, app } => {
+                let Elim::App { ann, .. } = &*app else {
+                    unreachable!("SyncArg stores an application")
+                };
+                let app = Elim::App { ann: ann.clone(), arg: self.vclo(v) };
+                Work::Elim(head, app)
+            }
+            Frame::NatRunTail { program, glued } => match &*v {
+                Val::NatRun { program: inner, tail } => {
+                    Work::Val(Rc::new(Val::NatRun {
+                        program: ContextProgram::append(program, Rc::clone(inner)),
+                        tail: *tail,
+                    }))
+                }
+                Val::Neutral(n) if n.unfold.is_some() => {
+                    self.spend()?;
+                    let unfold = n.unfold.unwrap();
+                    let glued = glued.or_else(|| Some(Rc::clone(&v)));
+                    self.frames.push(Frame::NatRunTail { program, glued });
+                    Work::Force(unfold)
+                }
+                Val::Neutral(_) => {
+                    let tail = glued.unwrap_or(v);
+                    Work::Val(Rc::new(Val::NatRun { program, tail: self.vclo(tail) }))
+                }
+                _ => Work::Val(Rc::new(Val::NatRun { program, tail: self.vclo(v) })),
+            },
+        })
     }
 
     // -- forcing and application -------------------------------------------
@@ -1227,8 +1254,61 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// One step of [`Eval::eval_tm`], with its **tail positions returned**
-    /// rather than called: see [`Eval::drive`].
+    /// rather than called: see [`Eval::drive`]. An elimination evaluates its
+    /// head here and builds its eliminator in [`Eval::elim_of`]; every other former is
+    /// [`Eval::step_intro`]'s. The split is for the native stack: the head's
+    /// evaluation is the recursion, and only this small frame stands under
+    /// it (docs/native-depth-budget-design.md §8).
     fn step_eval(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
+        let v = match t {
+            Term::Var(x) => match env.lookup(x.0) {
+                Lookup::Bound(c) => return Ok(Work::Force(c)),
+                Lookup::Base(d) => Val::base_var(d),
+            },
+            // -- eliminations: the head here, the eliminator out of line --
+            Term::App { fun, .. }
+            | Term::AppAt { fun, .. }
+            | Term::UApp { fun, .. }
+            | Term::CtxApp { fun, .. }
+            | Term::TyApp { fun, .. } => {
+                let f = self.eval_tm(fun, env)?;
+                return Ok(Work::Elim(f, self.elim_of(t, env)));
+            }
+            Term::Fst { pair, .. }
+            | Term::Snd { pair, .. }
+            | Term::FstAt { pair }
+            | Term::SndAt { pair } => {
+                let p = self.eval_projected(pair, env)?;
+                return Ok(Work::Elim(p, self.elim_of(t, env)));
+            }
+            Term::ElimNat { scrut, .. }
+            | Term::ElimEmpty { scrut, .. }
+            | Term::ElimSEmpty { scrut, .. }
+            | Term::ElimSquash { scrut, .. }
+            | Term::Case { scrut, .. }
+            | Term::ElimW { scrut, .. }
+            | Term::ElimWf { scrut, .. }
+            | Term::ElimIWf { scrut, .. }
+            | Term::Out { scrut, .. }
+            | Term::LetBoxTy { scrut, .. }
+            | Term::LetBoxTm { scrut, .. }
+            | Term::ElimCodeTy { scrut, .. } => {
+                let s = self.eval_tm(scrut, env)?;
+                return Ok(Work::Elim(s, self.elim_of(t, env)));
+            }
+            Term::J { proof, .. } => {
+                let p = self.eval_tm(proof, env)?;
+                return Ok(Work::Elim(p, self.elim_of(t, env)));
+            }
+            Term::ElimCodeTm { .. } => return self.step_elim_code_tm(t, env),
+            _ => return self.step_intro(t, env),
+        };
+        Ok(Work::Val(Rc::new(v)))
+    }
+
+    /// [`Eval::step_eval`] at a former that is not an elimination.
+    #[inline(never)]
+    fn step_intro(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
         let yclo = |env: &Env<'v>, body: &Rc<Type>| {
             self.arena.ty(TyClo::new(*env, Rc::clone(body)))
         };
@@ -1236,10 +1316,6 @@ impl<'a, 'v> Eval<'a, 'v> {
             self.arena.tm(TmClo::syn(*env, Rc::clone(body)))
         };
         let v = match t {
-            Term::Var(x) => match env.lookup(x.0) {
-                Lookup::Bound(c) => return Ok(Work::Force(c)),
-                Lookup::Base(d) => Val::base_var(d),
-            },
 
             // -- encodings --
             Term::TmNat => Val::TmNat,
@@ -1527,9 +1603,23 @@ impl<'a, 'v> Eval<'a, 'v> {
                 return Ok(Work::Val(self.global_tm(var, subst)));
             }
 
-            // -- eliminations --
-            Term::App { fun, dom_level, cod_level, dom, cod, arg } => {
-                let f = self.eval_tm(fun, env)?;
+            _ => unreachable!("step_eval evaluates variables and eliminations itself"),
+        };
+        Ok(Work::Val(Rc::new(v)))
+    }
+
+    /// The eliminator of the elimination `t`, its closures over `env`; the
+    /// head is [`Eval::step_eval`]'s.
+    #[inline(never)]
+    fn elim_of(&self, t: &Term, env: &Env<'v>) -> Elim<'v> {
+        let yclo = |env: &Env<'v>, body: &Rc<Type>| {
+            self.arena.ty(TyClo::new(*env, Rc::clone(body)))
+        };
+        let tclo = |env: &Env<'v>, body: &Rc<Term>| {
+            self.arena.tm(TmClo::syn(*env, Rc::clone(body)))
+        };
+        match t {
+            Term::App { dom_level, cod_level, dom, cod, arg, .. } => {
                 let e = Elim::App {
                     ann: Some(PiAnn {
                         dom_level: dom_level.clone(),
@@ -1539,28 +1629,23 @@ impl<'a, 'v> Eval<'a, 'v> {
                     }),
                     arg: tclo(env, arg),
                 };
-                return Ok(Work::Elim(f, e));
+                e
             }
             // app@ stores no Π, and the evaluator does not view the head's
             // type to invent one (docs/app-by-head-type-design.md §5).
-            Term::AppAt { fun, arg } => {
-                let f = self.eval_tm(fun, env)?;
-                return Ok(Work::Elim(f, Elim::App { ann: None, arg: tclo(env, arg) }));
+            Term::AppAt { arg, .. } => {
+                Elim::App { ann: None, arg: tclo(env, arg) }
             }
-            Term::UApp { fun, levels } => {
-                let f = self.eval_tm(fun, env)?;
-                return Ok(Work::Elim(f, Elim::UApp { levels: levels.clone() }));
+            Term::UApp { levels, .. } => {
+                Elim::UApp { levels: levels.clone() }
             }
-            Term::CtxApp { fun, ctx } => {
-                let f = self.eval_tm(fun, env)?;
-                return Ok(Work::Elim(f, Elim::CtxApp { ctx: amb_ctx(env, ctx) }));
+            Term::CtxApp { ctx, .. } => {
+                Elim::CtxApp { ctx: amb_ctx(env, ctx) }
             }
-            Term::TyApp { fun, arg } => {
-                let f = self.eval_tm(fun, env)?;
-                return Ok(Work::Elim(f, Elim::TyApp { arg: amb_ty(env, arg) }));
+            Term::TyApp { arg, .. } => {
+                Elim::TyApp { arg: amb_ty(env, arg) }
             }
-            Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => {
-                let p = self.eval_projected(pair, env)?;
+            Term::Fst { fst_level, snd_level, fst_ty, snd_ty, .. } => {
                 let e = Elim::Fst {
                     ann: Some(SigAnn {
                         fst_level: fst_level.clone(),
@@ -1569,10 +1654,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                         snd_ty: yclo(env, snd_ty),
                     }),
                 };
-                return Ok(Work::Elim(p, e));
+                e
             }
-            Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => {
-                let p = self.eval_projected(pair, env)?;
+            Term::Snd { fst_level, snd_level, fst_ty, snd_ty, .. } => {
                 let e = Elim::Snd {
                     ann: Some(SigAnn {
                         fst_level: fst_level.clone(),
@@ -1581,7 +1665,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                         snd_ty: yclo(env, snd_ty),
                     }),
                 };
-                return Ok(Work::Elim(p, e));
+                e
             }
             // The checked projections push the *existing* elims with no
             // annotation at all — they carry none (design §2.1). A neutral
@@ -1589,46 +1673,41 @@ impl<'a, 'v> Eval<'a, 'v> {
             // the value domain except for the stored levels, which
             // `conv.rs`'s typed projection arm already treats as optional:
             // it reads the Σ inferred for the pair, never the annotation.
-            Term::FstAt { pair } | Term::SndAt { pair } => {
+            Term::FstAt { .. } | Term::SndAt { .. } => {
                 let second = matches!(t, Term::SndAt { .. });
-                let p = self.eval_projected(pair, env)?;
                 let e = if second {
                     Elim::Snd { ann: None }
                 } else {
                     Elim::Fst { ann: None }
                 };
-                return Ok(Work::Elim(p, e));
+                e
             }
-            Term::ElimNat { level, motive, base, step, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::ElimNat { level, motive, base, step, .. } => {
                 let e = Elim::ElimNat {
                     level: level.clone(),
                     motive: yclo(env, motive),
                     base: tclo(env, base),
                     step: tclo(env, step),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
-            Term::ElimEmpty { level, scrut_level, motive, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::ElimEmpty { level, scrut_level, motive, .. } => {
                 let e = Elim::ElimEmpty {
                     level: level.clone(),
                     scrut_level: scrut_level.clone(),
                     motive: yclo(env, motive),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
-            Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::ElimSEmpty { level, scrut_level, motive, .. } => {
                 let e = Elim::ElimSEmpty {
                     level: level.clone(),
                     scrut_level: scrut_level.clone(),
                     motive: yclo(env, motive),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
-            Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::ElimSquash { src_level, dst_level, src_ty, motive, case, .. } => {
                 let e = Elim::ElimSquash {
                     src_level: src_level.clone(),
                     dst_level: dst_level.clone(),
@@ -1636,7 +1715,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     motive: yclo(env, motive),
                     case: tclo(env, case),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
             Term::Case {
                 lhs_level,
@@ -1647,9 +1726,8 @@ impl<'a, 'v> Eval<'a, 'v> {
                 motive,
                 case_l,
                 case_r,
-                scrut,
+                ..
             } => {
-                let s = self.eval_tm(scrut, env)?;
                 let e = Elim::Case {
                     lhs_level: lhs_level.clone(),
                     rhs_level: rhs_level.clone(),
@@ -1660,7 +1738,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     case_l: tclo(env, case_l),
                     case_r: tclo(env, case_r),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
             Term::ElimW {
                 shape_level,
@@ -1670,9 +1748,8 @@ impl<'a, 'v> Eval<'a, 'v> {
                 pos,
                 motive,
                 step,
-                scrut,
+                ..
             } => {
-                let s = self.eval_tm(scrut, env)?;
                 let e = Elim::ElimW {
                     shape_level: shape_level.clone(),
                     pos_level: pos_level.clone(),
@@ -1683,10 +1760,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                     step: tclo(env, step),
                     env: env.clone(),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
-            Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::ElimWf { level, motive_level, shape, arity, motive, step, .. } => {
                 let e = Elim::ElimWf {
                     level: level.clone(),
                     motive_level: motive_level.clone(),
@@ -1696,10 +1772,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                     step: tclo(env, step),
                     env: env.clone(),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
-            Term::ElimIWf { sig, motive_level, motive, step, index, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::ElimIWf { sig, motive_level, motive, step, index, .. } => {
                 let e = Elim::ElimIWf {
                     sig: Rc::new(VIWfSig {
                         level: sig.level.clone(),
@@ -1716,15 +1791,13 @@ impl<'a, 'v> Eval<'a, 'v> {
                     index: tclo(env, index),
                     env: env.clone(),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
-            Term::Out { sig, index, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::Out { sig, index, .. } => {
                 let e = Elim::Out { sig: vm_sig(self.arena, env, sig), index: tclo(env, index) };
-                return Ok(Work::Elim(s, e));
+                e
             }
-            Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => {
-                let p = self.eval_tm(proof, env)?;
+            Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, .. } => {
                 let e = Elim::J {
                     ty_level: ty_level.clone(),
                     motive_level: motive_level.clone(),
@@ -1734,10 +1807,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                     case: tclo(env, case),
                     rhs: tclo(env, rhs),
                 };
-                return Ok(Work::Elim(p, e));
+                e
             }
-            Term::LetBoxTy { motive_level, code_level, ctx, motive, body, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::LetBoxTy { motive_level, code_level, ctx, motive, body, .. } => {
                 let e = Elim::LetBoxTy {
                     motive_level: motive_level.clone(),
                     code_level: code_level.clone(),
@@ -1745,10 +1817,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                     motive: yclo(env, motive),
                     body: under_binder_tm(self.arena, env, body),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
-            Term::LetBoxTm { motive_level, code_level, ctx, ty, motive, body, scrut } => {
-                let s = self.eval_tm(scrut, env)?;
+            Term::LetBoxTm { motive_level, code_level, ctx, ty, motive, body, .. } => {
                 let e = Elim::LetBoxTm {
                     motive_level: motive_level.clone(),
                     code_level: code_level.clone(),
@@ -1757,7 +1828,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     motive: yclo(env, motive),
                     body: under_binder_tm(self.arena, env, body),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
             Term::ElimCodeTy {
                 ty_motive_level,
@@ -1766,9 +1837,8 @@ impl<'a, 'v> Eval<'a, 'v> {
                 branches,
                 code_level,
                 ctx,
-                scrut,
+                ..
             } => {
-                let s = self.eval_tm(scrut, env)?;
                 let (motives, branches) = amb_tables(env, motives, branches);
                 let e = Elim::ElimCodeTy {
                     ty_motive_level: ty_motive_level.clone(),
@@ -1781,8 +1851,16 @@ impl<'a, 'v> Eval<'a, 'v> {
                     // so the fired branch is too.
                     env: env.with_gshift(0),
                 };
-                return Ok(Work::Elim(s, e));
+                e
             }
+            _ => unreachable!("elim_of is given an elimination"),
+        }
+    }
+
+    /// `elim^Trm`, whose fixed order puts a step before the scrutinee.
+    #[inline(never)]
+    fn step_elim_code_tm(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
+        match t {
             Term::ElimCodeTm {
                 ty_motive_level,
                 tm_motive_level,
@@ -1813,8 +1891,8 @@ impl<'a, 'v> Eval<'a, 'v> {
                 };
                 return Ok(Work::Elim(s, e));
             }
-        };
-        Ok(Work::Val(Rc::new(v)))
+            _ => unreachable!("step_elim_code_tm is given elim^Trm"),
+        }
     }
 
     /// `u^δ` as a glued neutral: `unfold` is `Some` exactly when `Defs` says
@@ -1850,6 +1928,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// the proof of a bare `u a⃗`; and the proof counts as opened only once
     /// the glue is forced ([`ValueArena::mark_sealed`]). `None` when `n` is
     /// not such a neutral.
+    #[inline(never)]
     fn unseal(&mut self, n: &VNeutral<'v>) -> Option<Rc<VNeutral<'v>>> {
         if n.unfold.is_some() {
             return None;
@@ -1892,130 +1971,22 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// One step of [`Eval::elim`]; see [`Eval::drive`].
+    ///
+    /// A dispatcher, and deliberately nothing more: the arms that can
+    /// re-enter the machine natively (a fold classified, a counter forced,
+    /// an ih applied) each have a function of their own, and the β arms
+    /// that never re-enter share [`Eval::step_fire`]. What stands on the
+    /// native stack during a re-entry is then this frame and the one arm's,
+    /// never the union of every arm's locals (design §8).
+    #[inline(never)]
     fn step_elim(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
-        if let Val::Neutral(n) = &*head {
-            let unsealed = if e.unseals() { self.unseal(n) } else { None };
-            let n = unsealed.as_ref().unwrap_or(n);
-            // A Nat fold the run machinery accelerates — one whose step
-            // classifies as an affine or synchronous algebra (`probe.rs`,
-            // memoized per closure) — whose scrutinee
-            // is a *glued* definition unfolds that scrutinee here rather
-            // than stalling as a spine for conversion to δ-step from the
-            // outside one definition at a time (each such step replays the
-            // whole pending spine, so a chain of `p + p` doublings under a
-            // literal consumer was cubic in the chain). Only these folds do
-            // so: their scrutinee is closed arithmetic whenever the fold
-            // can fire at all, and an open one stops at its variable. A
-            // general match or recursor must NOT: the x86 decoder's
-            // open-argument unfolding theorems meet at a *folded* scrutinee
-            // (`match decode_opcode_direct(…)` on both sides), and unfolding
-            // it eagerly exhausts fuel on the dispatch it hides.
-            // Only the `Nat` classes ask this: their scrutinee is closed
-            // arithmetic whenever the fold can fire at all. A width fold's
-            // scrutinee is the *width*, which reaches the eliminator as a
-            // literal; probing every glued-scrutinee fold for a transducer
-            // costs a motive walk per occurrence and buys nothing.
-            if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
-                if !matches!(&*self.classify_step(step)?, FoldClass::Opaque) {
-                    self.spend()?;
-                    self.frames.push(Frame::Elim(Rc::new(e)));
-                    return Ok(Work::Force(unfold));
-                }
-            }
-            // Under a δ-transparent request (`Eval::delta_whnf`) every
-            // eliminator that would be stuck on a glued scrutinee unfolds
-            // it instead. Applications are not stuck — they extend the
-            // spine, keeping the glued `f a⃗` shape — and the transparent
-            // loop unfolds that spine's head next if it has to.
-            if self.transparent && !e.is_application() {
-                if let Some(unfold) = n.unfold {
-                    self.spend()?;
-                    self.frames.push(Frame::Elim(Rc::new(e)));
-                    return Ok(Work::Force(unfold));
-                }
-            }
-            let n = Rc::clone(n);
-            return Ok(Work::Val(self.push_elim(&n, e)));
-        }
         match (&*head, &e) {
+            (Val::Neutral(_), _) => self.step_neutral(head, e),
             // A width fold waiting for the arguments its class fires at
             // (`docs/native-bitvector-values-design.md` §4).
-            (Val::BitFold { .. }, Elim::App { .. }) => {
-                return self.bit_fold_app(&head, e);
-            }
-            (
-                Val::NatSync { program, tail, elim },
-                Elim::App { ann, arg },
-            ) => {
-                let right = self.force(arg)?;
-                if let Val::Neutral(rn) = &*right {
-                    if let Some(unfold) = rn.unfold {
-                        // The counter on the right is a glued definition
-                        // (`sub(x, p)` feeding the next comparison): unfold
-                        // it and retry, for the reason given at the neutral
-                        // scrutinee case above.
-                        self.spend()?;
-                        self.frames.push(Frame::SyncArg {
-                            head: Rc::clone(&head),
-                            app: Rc::new(e.clone()),
-                        });
-                        return Ok(Work::Force(unfold));
-                    }
-                }
-                if let Val::NatRun { program: right_program, tail: right_tail } = &*right {
-                    let cancelled = ContextProgram::cancel_matching_prefix(
-                        Rc::clone(program),
-                        Rc::clone(right_program),
-                        self.fuel.saturating_sub(1),
-                    )
-                    .map_err(|_| {
-                        self.fuel = 0;
-                        OutOfFuel
-                    })?;
-                    self.fuel -= cancelled.inspected;
-                    if cancelled.changed {
-                        self.spend()?;
-                        // `inc` successors per cancelled pair (`max`):
-                        // the successor algebra iterated over the cancelled
-                        // prefix, wrapped around the residual fold.
-                        let Elim::ElimNat { step, .. } = &**elim else {
-                            unreachable!("NatSync stores a Nat eliminator")
-                        };
-                        if let FoldClass::Sync { inc: Some(inc) } = &*self.classify_step(step)? {
-                            let prefix = cancelled.cancelled.as_ref().expect("changed cancels");
-                            let by = AffineTree::Leaf { inc: Some(Rc::clone(inc)), path: Vec::new() };
-                            let Some(AffineTree::Leaf { inc: Some(total), .. }) = by.iterate(prefix)
-                            else {
-                                unreachable!("a successor leaf iterates to one")
-                            };
-                            self.frames.push(Frame::NatRunTail { program: total, glued: None });
-                        }
-                        let left = self.nat_residual(cancelled.left, tail);
-                        let right = self.nat_residual(cancelled.right, right_tail);
-                        let folded = self.arena.tm(TmClo::elim(left, Rc::clone(elim)));
-                        let app = Elim::App { ann: ann.clone(), arg: right };
-                        self.frames.push(Frame::Elim(Rc::new(app)));
-                        return Ok(Work::Force(folded));
-                    }
-                }
-
-                // The right-hand head is not a matching run. Expose exactly
-                // the ordinary outer successor step and retry the application
-                // on its result; no semantic case is guessed here.
-                let pred = Val::nat_run_pred(self.arena, program, tail);
-                let ih = self.arena.tm(TmClo::elim(pred, Rc::clone(elim)));
-                let Elim::ElimNat { step, .. } = &**elim else {
-                    unreachable!("NatSync stores a Nat eliminator")
-                };
-                self.frames.push(Frame::Elim(Rc::new(e)));
-                self.spend()?;
-                Ok(Work::Apply(*step, vec![pred, ih]))
-            }
-            (Val::Lam { body, .. }, Elim::App { arg, .. }) => {
-                self.spend()?;
-                let (body, arg) = (*body, *arg);
-                Ok(Work::Apply1(body, arg))
-            }
+            (Val::BitFold { .. }, Elim::App { .. }) => self.bit_fold_app(&head, e),
+            (Val::NatSync { .. }, Elim::App { .. }) => self.fire_nat_sync(head, e),
+            (Val::NatRun { .. }, Elim::ElimNat { .. }) => self.fire_nat_run(head, e),
             (Val::WfIh { elim, label, children }, Elim::App { .. }) => {
                 let (elim, label, children) = (Rc::clone(elim), *label, *children);
                 self.wf_ih_apply(&head, &elim, label, children, e)
@@ -2024,30 +1995,85 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let (elim, label, children) = (Rc::clone(elim), *label, *children);
                 self.w_ih_apply(&head, &elim, label, children, e)
             }
+            _ => self.step_fire(head, e),
+        }
+    }
+
+    /// [`Eval::step_elim`] at a neutral head: unfold a glued scrutinee the
+    /// fold machinery or a transparent request wants, or extend the spine.
+    #[inline(never)]
+    fn step_neutral(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+        let Val::Neutral(n) = &*head else { unreachable!("step_neutral is given a neutral") };
+        let unsealed = if e.unseals() { self.unseal(n) } else { None };
+        let n = unsealed.as_ref().unwrap_or(n);
+        // A Nat fold the run machinery accelerates — one whose step
+        // classifies as an affine or synchronous algebra (`probe.rs`,
+        // memoized per closure) — whose scrutinee
+        // is a *glued* definition unfolds that scrutinee here rather
+        // than stalling as a spine for conversion to δ-step from the
+        // outside one definition at a time (each such step replays the
+        // whole pending spine, so a chain of `p + p` doublings under a
+        // literal consumer was cubic in the chain). Only these folds do
+        // so: their scrutinee is closed arithmetic whenever the fold
+        // can fire at all, and an open one stops at its variable. A
+        // general match or recursor must NOT: the x86 decoder's
+        // open-argument unfolding theorems meet at a *folded* scrutinee
+        // (`match decode_opcode_direct(…)` on both sides), and unfolding
+        // it eagerly exhausts fuel on the dispatch it hides.
+        // Only the `Nat` classes ask this: their scrutinee is closed
+        // arithmetic whenever the fold can fire at all. A width fold's
+        // scrutinee is the *width*, which reaches the eliminator as a
+        // literal; probing every glued-scrutinee fold for a transducer
+        // costs a motive walk per occurrence and buys nothing.
+        if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
+            if matches!(&*self.classify_step(step)?, FoldClass::Affine { .. } | FoldClass::Sync { .. }) {
+                self.spend()?;
+                self.frames.push(Frame::Elim(Rc::new(e)));
+                return Ok(Work::Force(unfold));
+            }
+        }
+        // Under a δ-transparent request (`Eval::delta_whnf`) every
+        // eliminator that would be stuck on a glued scrutinee unfolds
+        // it instead. Applications are not stuck — they extend the
+        // spine, keeping the glued `f a⃗` shape — and the transparent
+        // loop unfolds that spine's head next if it has to.
+        if self.transparent && !e.is_application() {
+            if let Some(unfold) = n.unfold {
+                self.spend()?;
+                self.frames.push(Frame::Elim(Rc::new(e)));
+                return Ok(Work::Force(unfold));
+            }
+        }
+        let n = Rc::clone(n);
+        Ok(Work::Val(self.push_elim(&n, e)))
+    }
+
+    /// [`Eval::step_elim`] at a canonical head whose β does not re-enter
+    /// the machine: fire it, or be stuck.
+    #[inline(never)]
+    fn step_fire(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+        match (&*head, &e) {
+            (Val::Lam { body, .. }, Elim::App { arg, .. }) => {
+                self.spend()?;
+                let (body, arg) = (*body, *arg);
+                Ok(Work::Apply1(body, arg))
+            }
             (Val::ULam { num_vars, body, .. }, Elim::UApp { levels })
                 if *num_vars as usize == levels.len() =>
             {
-                self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
+                let body = *body;
                 // The written vectors pair positionally (outermost first);
                 // instantiation wants innermost-first.
                 let phi: Vec<Level> = levels.iter().rev().cloned().collect();
-                let (benv, inst) = (benv.clone(), Rc::new(bbody.inst_univ(&phi)));
-                Ok(Work::Eval(inst, benv))
+                self.fire_instantiate(&head, &e, body, Instantiate::Univ(phi))
             }
             (Val::CtxLam { body, .. }, Elim::CtxApp { ctx }) => {
-                self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
-                let sigma = GlobalSubst::single(GlobalEntry::Ctx(ctx.clone()));
-                let (benv, inst) = (benv.clone(), Rc::new(bbody.apply_global(&sigma)));
-                Ok(Work::Eval(inst, benv))
+                let (body, entry) = (*body, GlobalEntry::Ctx(ctx.clone()));
+                self.fire_instantiate(&head, &e, body, Instantiate::Global(entry))
             }
             (Val::TyLam { body, .. }, Elim::TyApp { arg }) => {
-                self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
-                let sigma = GlobalSubst::single(GlobalEntry::Ty(Rc::clone(arg)));
-                let (benv, inst) = (benv.clone(), Rc::new(bbody.apply_global(&sigma)));
-                Ok(Work::Eval(inst, benv))
+                let (body, entry) = (*body, GlobalEntry::Ty(Rc::clone(arg)));
+                self.fire_instantiate(&head, &e, body, Instantiate::Global(entry))
             }
             (Val::Zero, Elim::ElimNat { base, .. }) => {
                 self.spend()?;
@@ -2062,15 +2088,6 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let (pred, step) = (*pred, *step);
                 let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
                 Ok(Work::Apply(step, vec![pred, ih]))
-            }
-            (Val::NatRun { program, tail }, Elim::ElimNat { step, .. }) => {
-                self.spend()?;
-                if let Some(work) = self.fold_run(&head, program, tail, &e)? {
-                    return Ok(work);
-                }
-                let pred = Val::nat_run_pred(self.arena, program, tail);
-                let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
-                Ok(Work::Apply(*step, vec![pred, ih]))
             }
             (Val::Refl { .. }, Elim::J { case, .. }) => {
                 self.spend()?;
@@ -2149,18 +2166,12 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
             }
             (Val::BoxTy(code), Elim::LetBoxTy { body, .. }) => {
-                self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
-                let sigma = GlobalSubst::single(GlobalEntry::Ty(Rc::clone(code)));
-                let (benv, inst) = (benv.clone(), Rc::new(bbody.apply_global(&sigma)));
-                Ok(Work::Eval(inst, benv))
+                let (body, entry) = (*body, GlobalEntry::Ty(Rc::clone(code)));
+                self.fire_instantiate(&head, &e, body, Instantiate::Global(entry))
             }
             (Val::BoxTm(code), Elim::LetBoxTm { body, .. }) => {
-                self.spend()?;
-                let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, &head, &e))) };
-                let sigma = GlobalSubst::single(GlobalEntry::Tm(Rc::clone(code)));
-                let (benv, inst) = (benv.clone(), Rc::new(bbody.apply_global(&sigma)));
-                Ok(Work::Eval(inst, benv))
+                let (body, entry) = (*body, GlobalEntry::Tm(Rc::clone(code)));
+                self.fire_instantiate(&head, &e, body, Instantiate::Global(entry))
             }
             // `box (U^δ)` blocks the recursor: canonical, but neutral as a
             // whole (ch. 06), which is why the box becomes the head.
@@ -2196,9 +2207,130 @@ impl<'a, 'v> Eval<'a, 'v> {
         }
     }
 
+    /// A Nat fold over a run: iterated by its algebra's class when it has
+    /// one (`eval/runs.rs`), otherwise one successor step.
+    #[inline(never)]
+    fn fire_nat_run(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+        let (Val::NatRun { program, tail }, Elim::ElimNat { .. }) = (&*head, &e) else {
+            unreachable!("fire_nat_run is given a Nat fold over a run")
+        };
+        self.spend()?;
+        self.fold_run(&head, program, tail, &e)
+    }
+
+    /// One successor step of a Nat fold over a run: the step applied to the
+    /// run's predecessor and the pending fold over it.
+    #[inline(never)]
+    fn nat_run_step(
+        &mut self,
+        program: &Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+        step: &'v TmClo<'v>,
+        e: &Elim<'v>,
+    ) -> Work<'v> {
+        let pred = Val::nat_run_pred(self.arena, program, tail);
+        let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
+        Work::Apply(step, vec![pred, ih])
+    }
+
+    /// The β of a binder over a universe, a context, a type or a box: the
+    /// body instantiated, then evaluated. Out of line because the
+    /// substitution's temporaries are the largest locals of the β arms
+    /// (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn fire_instantiate(
+        &mut self,
+        head: &Rc<Val<'v>>,
+        e: &Elim<'v>,
+        body: &'v TmClo<'v>,
+        by: Instantiate,
+    ) -> Res<Work<'v>> {
+        self.spend()?;
+        let Some((benv, bbody)) = body.as_syn() else { return Ok(Work::Val(stuck(self.arena, head, e))) };
+        let inst = match by {
+            Instantiate::Univ(phi) => bbody.inst_univ(&phi),
+            Instantiate::Global(entry) => bbody.apply_global(&GlobalSubst::single(entry)),
+        };
+        Ok(Work::Eval(Rc::new(inst), benv.clone()))
+    }
+
+    /// A synchronous fold applied to its right-hand counter
+    /// (`Frame::SyncArg`): cancel the matching prefix of two runs, or
+    /// expose one outer successor step.
+    #[inline(never)]
+    fn fire_nat_sync(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+        let (Val::NatSync { program, tail, elim }, Elim::App { ann, arg }) = (&*head, &e) else {
+            unreachable!("fire_nat_sync is given a synchronous fold's application")
+        };
+        let right = self.force(arg)?;
+        if let Val::Neutral(rn) = &*right {
+            if let Some(unfold) = rn.unfold {
+                // The counter on the right is a glued definition
+                // (`sub(x, p)` feeding the next comparison): unfold
+                // it and retry, for the reason given at the neutral
+                // scrutinee case above.
+                self.spend()?;
+                self.frames.push(Frame::SyncArg {
+                    head: Rc::clone(&head),
+                    app: Rc::new(e.clone()),
+                });
+                return Ok(Work::Force(unfold));
+            }
+        }
+        if let Val::NatRun { program: right_program, tail: right_tail } = &*right {
+            let cancelled = ContextProgram::cancel_matching_prefix(
+                Rc::clone(program),
+                Rc::clone(right_program),
+                self.fuel.saturating_sub(1),
+            )
+            .map_err(|_| {
+                self.fuel = 0;
+                OutOfFuel
+            })?;
+            self.fuel -= cancelled.inspected;
+            if cancelled.changed {
+                self.spend()?;
+                // `inc` successors per cancelled pair (`max`):
+                // the successor algebra iterated over the cancelled
+                // prefix, wrapped around the residual fold.
+                let Elim::ElimNat { step, .. } = &**elim else {
+                    unreachable!("NatSync stores a Nat eliminator")
+                };
+                if let FoldClass::Sync { inc: Some(inc) } = &*self.classify_step(step)? {
+                    let prefix = cancelled.cancelled.as_ref().expect("changed cancels");
+                    let by = AffineTree::Leaf { inc: Some(Rc::clone(inc)), path: Vec::new() };
+                    let Some(AffineTree::Leaf { inc: Some(total), .. }) = by.iterate(prefix)
+                    else {
+                        unreachable!("a successor leaf iterates to one")
+                    };
+                    self.frames.push(Frame::NatRunTail { program: total, glued: None });
+                }
+                let left = self.nat_residual(cancelled.left, tail);
+                let right = self.nat_residual(cancelled.right, right_tail);
+                let folded = self.arena.tm(TmClo::elim(left, Rc::clone(elim)));
+                let app = Elim::App { ann: ann.clone(), arg: right };
+                self.frames.push(Frame::Elim(Rc::new(app)));
+                return Ok(Work::Force(folded));
+            }
+        }
+
+        // The right-hand head is not a matching run. Expose exactly
+        // the ordinary outer successor step and retry the application
+        // on its result; no semantic case is guessed here.
+        let pred = Val::nat_run_pred(self.arena, program, tail);
+        let ih = self.arena.tm(TmClo::elim(pred, Rc::clone(elim)));
+        let Elim::ElimNat { step, .. } = &**elim else {
+            unreachable!("NatSync stores a Nat eliminator")
+        };
+        self.frames.push(Frame::Elim(Rc::new(e)));
+        self.spend()?;
+        Ok(Work::Apply(*step, vec![pred, ih]))
+    }
+
     /// Extend a neutral's spine — and, when it is glued, its pending
     /// unfolding by the same elimination, so that forcing the unfolding
     /// replays the spine (design §5).
+    #[inline(never)]
     fn push_elim(&mut self, n: &Rc<VNeutral<'v>>, e: Elim<'v>) -> Rc<Val<'v>> {
         let unfold = n
             .unfold
@@ -2212,6 +2344,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// with the ih held as [`Val::WIh`] rather than built as that λ's
     /// syntax. The syntax guards are [`w_ih_lam`](Eval::w_ih_lam)'s, kept
     /// here so the β fires exactly when it did while the λ was eager.
+    #[inline(never)]
     fn fire_elim_w(
         &mut self,
         label: &'v TmClo<'v>,
@@ -2340,6 +2473,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// eliminator fires on that, the λ's body without its syntax, charged the
     /// two β the λ's application and its body's `f y` charged. Over any other
     /// `f` it applies the λ itself.
+    #[inline(never)]
     fn w_ih_apply(
         &mut self,
         head: &Rc<Val<'v>>,
@@ -2372,6 +2506,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// with the ih held as [`Val::WfIh`] rather than built as that λ's
     /// syntax. The syntax guards are [`wf_ih_lam`](Eval::wf_ih_lam)'s, kept
     /// here so the β fires exactly when it did while the λ was eager.
+    #[inline(never)]
     fn fire_elim_wf(
         &mut self,
         label: &'v TmClo<'v>,
@@ -2469,6 +2604,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// and closed over the environment `ρ, a, cs`, as [`Eval::fire_elim_w`]
     /// builds `elim_W`'s. No [`Val::WfIh`]-style shortcut: nothing hot runs
     /// on `IWf` yet.
+    #[inline(never)]
     fn fire_elim_iwf(
         &mut self,
         label: &'v TmClo<'v>,
@@ -2538,6 +2674,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// `x` named by them — and evaluated in the coalgebra's environment
     /// extended by the index and the seed, so `c[j, x]` is one closure that
     /// both projections share. `None` when a closure is not syntax.
+    #[inline(never)]
     fn fire_out(
         &mut self,
         sig: &VMSig<'v>,
@@ -2582,6 +2719,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// λ itself, so what `nth` does there (project a neutral tuple, stall on
     /// a neutral index) is exactly what it did. One unit of fuel per
     /// projection, never more than the `nth` reduction charged.
+    #[inline(never)]
     fn wf_ih_apply(
         &mut self,
         head: &Rc<Val<'v>>,
@@ -2627,6 +2765,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// [`beta_elim_ty`] as syntax in the current Γ, and is then evaluated in
     /// the current environment. `None` is `reduce.rs`'s own stuck case (a
     /// layer-m type that cannot be code).
+    #[inline(never)]
     fn fire_code_ty(&mut self, code: &Rc<Type>, e: &Elim<'v>) -> Res<Option<Work<'v>>> {
         let Elim::ElimCodeTy {
             ty_motive_level,
@@ -2651,6 +2790,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// [`fire_code_ty`](Eval::fire_code_ty) for `elim^Trm`; the type
     /// annotation in the elimination is already in WHNF, as its β requires.
+    #[inline(never)]
     fn fire_code_tm(&mut self, code: &Rc<Term>, e: &Elim<'v>) -> Res<Option<Work<'v>>> {
         let Elim::ElimCodeTm {
             ty_motive_level,
@@ -3075,8 +3215,9 @@ mod tests {
         let mut step = synchronous_step();
         let Term::Lam { body, .. } = &mut step else { unreachable!() };
         let Term::ElimNat { step: inner, .. } = Rc::make_mut(body) else { unreachable!() };
-        let Term::App { fun, .. } = Rc::make_mut(inner) else { unreachable!() };
-        *fun = Rc::new(Term::Var(LocalVar(0)));
+        // `ih` applied to the λ's own argument rather than its predecessor.
+        let Term::App { arg, .. } = Rc::make_mut(inner) else { unreachable!() };
+        *arg = Rc::new(Term::Var(LocalVar(2)));
         let arena = ValueArena::new();
         let closure = arena.tm(TmClo::syn(env, Rc::new(step)));
         let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
@@ -3141,19 +3282,66 @@ mod tests {
         assert_eq!(nat_value(&mut ev, result), 1u128 << 64);
     }
 
-    /// A step whose result sits on `k` rather than `ih` is not affine.
+    /// A step that reads only `k` folds directly, and so does a constant
+    /// one: neither is probed, the one ordinary step being the whole fold.
     #[test]
-    fn a_step_returning_the_predecessor_is_opaque() {
+    fn steps_that_ignore_ih_fold_directly() {
         let arena = ValueArena::new();
         let env = Env::empty();
         let step = arena.tm(TmClo::syn(env, Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))))));
         let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
-        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Opaque));
-        // A constant step is affine (a literal at every step): the fold is
-        // that literal in one step.
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Direct));
         let step = arena.tm(TmClo::syn(env, Rc::new(Term::Succ(Rc::new(Term::Zero)))));
-        assert!(matches!(&*ev.classify_step(step).unwrap(),
-            FoldClass::Affine { tree: crate::value::algebra::AffineTree::Lit { .. }, uniform: true }));
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Direct));
+        // `(λ_. Succ(k)) ih` reads `ih` and drops it: probed, its result
+        // sits on `k` rather than `ih`, and it is not affine.
+        let drops_ih = Term::App {
+            fun: Rc::new(dummy_lam(Term::Succ(Rc::new(Term::Var(LocalVar(2)))))),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+            arg: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let step = arena.tm(TmClo::syn(env, Rc::new(drops_ih)));
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Opaque));
+    }
+
+    /// `(λx. x x)(λx. x x)` as a step body, applied to `ih` when `reads_ih`:
+    /// it never reaches a weak head value.
+    fn divergent_step(reads_ih: bool) -> Term {
+        let app = |f: Term, a: Term| Term::App {
+            fun: Rc::new(f),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+            arg: Rc::new(a),
+        };
+        let omega = dummy_lam(app(Term::Var(LocalVar(0)), Term::Var(LocalVar(0))));
+        let diverge = app(omega.clone(), omega);
+        if reads_ih { app(diverge, Term::Var(LocalVar(0))) } else { diverge }
+    }
+
+    /// A step that never reads `ih` is not probed
+    /// (`issues/kernel-fold-probe-evaluates-recursive-arms.md`): classifying
+    /// even a divergent one spends nothing, where a step that reads `ih` is
+    /// probed and runs the fuel out.
+    #[test]
+    fn a_step_that_never_reads_ih_is_not_probed() {
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(1 << 20, Defs::opaque(), CtxBase::Nil, &arena);
+        let step = arena.tm(TmClo::syn(Env::empty(), Rc::new(divergent_step(false))));
+        assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Direct));
+        assert_eq!(ev.fuel(), 1 << 20);
+        let step = arena.tm(TmClo::syn(Env::empty(), Rc::new(divergent_step(true))));
+        assert_eq!(ev.classify_step(step).unwrap_err(), OutOfFuel);
+        // The fold over a long run is the one ordinary step: a constant
+        // step, `Succ(Zero)`, folds over `2^32` successors in one.
+        let elim = nat_elim(&arena, Env::empty(), Term::Succ(Rc::new(Term::Zero)));
+        let mut ev = Eval::new(8, Defs::opaque(), CtxBase::Nil, &arena);
+        let result = ev.elim(run_over_zero(&arena, 1 << 32), elim).unwrap();
+        assert_eq!(nat_value(&mut ev, result), 1);
     }
 
     fn pair_nat_ty() -> Type {

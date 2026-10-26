@@ -1427,6 +1427,12 @@ impl CtxEntries {
         CtxEntriesIdentity(self.0.clone())
     }
 
+    /// [`CtxEntries::identity`]'s address, without the token: 0 for the
+    /// empty spine. A key built from it must hold the token alongside.
+    pub(crate) fn identity_addr(&self) -> usize {
+        self.0.as_ref().map_or(0, |n| Rc::as_ptr(n) as usize)
+    }
+
     /// `self, entry` — O(1), sharing `self`.
     pub fn pushed(&self, entry: CtxEntry) -> CtxEntries {
         let len = self.len() as u32 + 1;
@@ -2005,6 +2011,12 @@ impl GlobalBindings {
 
     pub(crate) fn identity(&self) -> Rc<()> {
         Rc::clone(&self.identity)
+    }
+
+    /// [`GlobalBindings::identity`]'s address, without the token. A key
+    /// built from it must hold the token alongside.
+    pub(crate) fn identity_addr(&self) -> usize {
+        Rc::as_ptr(&self.identity) as usize
     }
 
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
