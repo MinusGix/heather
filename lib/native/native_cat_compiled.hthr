@@ -1,5 +1,5 @@
 // cat compiled, end to end (issues/native-effect-source-compiler.md, round
-// S3.2): `cat(256)` compiled by `Source::compile` with its region at the
+// S3.2): `cat(1024)` compiled by `Source::compile` with its region at the
 // I/O image's page, its code loaded past a 232-byte header, simulates cat's
 // source (`native_compile_correct`), and so every run of the machine Linux
 // can give it that exits 0 sends to stdout exactly what it read from stdin
