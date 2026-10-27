@@ -753,3 +753,50 @@ Recorded after building it, as the inductive-tier designs do.
   only through a handle (an `Infer` of an `Expr` that named it) is not
   recorded, and its block still hands its value to the kernel
   (let-and-blocks-design §11): at worst a redundant check, never a missed one.
+
+## 18. What class carriers changed
+
+`issues/mono-class-laws.md`: a tactic working inside `section<A:
+OrderedField(≈, <, <=, +, *)>` (`mono`, `docs/monotonicity-tactic-design.md`
+§8). Two questions, and what each answer turned out to be.
+
+- **How `View` presents a dictionary's operations.** The class's index
+  operations (`+`, `<=`) are binders of the section, so `x + y` was already
+  `HLocal(+, [x, y])`. Its fields are not: `A.inv(x)` and `A.unit` are
+  projections out of the dictionary local, `fst(snd(…(d)))`, which the
+  speller reads as `d.inv` (`Speller::field_read`, the recogniser now shared
+  as `Elaborator::field_read_parts`) and `View` gave `HOther`. They are now
+  `HField(of, name, args)`: the record, the field's name and the arguments
+  the field is applied to. A field whose record registers a projection
+  definition stays that global's `HGlobal`, as before. The dictionary's own
+  type, a value-parameterized record, was `HOther` too (its arguments are not
+  recoverable from a constructor shape, so `display_targs` declines); it is
+  now `HGlobal(class, name, [carrier, index…])`, read by unifying the type with
+  the declaration's template `C#tycode_fn` at unknown arguments, read inline,
+  and required to convert back. Type arguments are type handles, value
+  arguments term handles.
+- **Whether `Match` fills a class lemma's dictionary.** It did not. A lemma
+  of a section is `Π A ≈ < <= + (c : OrderedAddGroup<A>(≈, <, <=, +)) x y z …`;
+  matching its conclusion `z + x <= z + y` determines `<=`, `+` and the
+  points, but neither the dictionary nor the indices the conclusion does not
+  mention (`≈`, `<`), and `apply` handed the dictionary to the premise
+  tactic, which cannot prove a class. `Match` now fills a parameter whose type
+  is a class the way a call fills its constraint argument
+  (`docs/operation-indexed-classes-design.md` §5): first from the
+  dictionaries in scope, the class's own binder or a descendant's at its
+  carrier and the index it passes up (the value-slot ladder's step 2), which
+  also solves the carrier and the indices by unifying the parameter's type
+  with that instantiation, the parameter being what resolution answers there
+  (an upcast from a descendant's binder); and when that does not match, plainly
+  as before, with a class parameter whose type the match has determined
+  resolved there (instances included). The candidates and resolution's
+  answers are computed once per `Match`, not per parameter count. Nothing
+  here is trusted: the conclusion still has to convert to the goal and the
+  application is checked. A lemma's parameter is the reference spelling
+  `El (app(C#tycode_fn; ā))` and the candidates are lowered inline, so the
+  parameter is read inline (`unspell_here_in` at the match's metavariables)
+  before the two unify.
+- **Rejected: an `Instance(ty)` request.** A tactic asking for a dictionary
+  would have to state the class's type first, and the indices it does not see
+  (`≈`, `<` behind a conclusion about `<=`) are exactly what it cannot state;
+  the call path already knows where they come from.

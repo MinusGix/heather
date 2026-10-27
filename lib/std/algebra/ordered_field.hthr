@@ -400,6 +400,11 @@ theorem OrderedAddGroup::add_le_mono_l(x, y, z: A, h: x <= y): z + x <= z + y {
     A.le_of_not_lt(z + x, z + y, λ back => A.not_lt_of_le(x, y, h, OrderedAddGroup::add_lt_cancel_l(y, x, z, back)))
 }
 
+// A sum of positives is positive.
+theorem OrderedAddGroup::add_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y {
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), OrderedAddGroup::add_lt_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
 // x < y gives -y < -x: add -x + -y to both sides.
 theorem OrderedAddGroup::neg_lt(x, y: A, h: x < y): A.inv(y) < A.inv(x) {
     let shifted: (x + (A.inv(x) + A.inv(y)) < y + (A.inv(x) + A.inv(y))) =
@@ -555,6 +560,20 @@ theorem LocatedAddGroup::neg_le(x, y: A, h: x <= y): A.inv(y) <= A.inv(x) {
     A.le_of_not_lt(A.inv(y), A.inv(x), λ back => A.not_lt_of_le(x, y, h,
         A.lt_respects(A.inv(A.inv(y)), y, A.inv(A.inv(x)), x, GroupRel::inv_inv(+, y), GroupRel::inv_inv(+, x),
             OrderedAddGroup::neg_lt(A.inv(x), A.inv(y), back))))
+}
+
+// A strict bound and a weak one add to a strict one.
+theorem LocatedAddGroup::add_lt_le_mono(x, x2, y, y2: A, hx: x < x2, hy: y <= y2): x + y < x2 + y2 {
+    PseudoOrder::lt_of_lt_of_le(x + y, x2 + y, x2 + y2, A.add_lt_mono_r(x, x2, y, hx), OrderedAddGroup::add_le_mono_l(y, y2, x2, hy))
+}
+
+theorem LocatedAddGroup::add_le_lt_mono(x, x2, y, y2: A, hx: x <= x2, hy: y < y2): x + y < x2 + y2 {
+    PseudoOrder::lt_of_le_of_lt(x + y, x2 + y, x2 + y2, OrderedAddGroup::add_le_mono_r(x, x2, y, hx), OrderedAddGroup::add_lt_mono_l(y, y2, x2, hy))
+}
+
+// A sum of nonnegatives is nonnegative.
+theorem LocatedAddGroup::add_nonneg(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x + y {
+    StrictOrder::le_respects(A.unit + A.unit, A.unit, x + y, x + y, A.unit_r(A.unit), A.rel_refl(x + y), LocatedAddGroup::add_le_mono(A.unit, x, A.unit, y, hx, hy))
 }
 
 theorem LocatedAddGroup::abs_le_of_abs_lt(x, e: A, h: AbsLt(x, e)): AbsLe(x, e) {
@@ -739,6 +758,82 @@ theorem OrderedField::recip_lt_recip(x, y: A, hx: ApartBy(<, x, A.unit), hy: Apa
         ≈ u := A.multiplicative.unit_l(u),
     };
     A.lt_respects(x * w, v, y * w, u, left, right, OrderedField::mul_lt_mono_r(x, y, w, h, pw))
+}
+
+// A product of positives is positive: the class's `mul_pos`, as a theorem a
+// tactic can look up by name (a theorem named `mul_pos` would make every
+// `A.mul_pos` in these sections ambiguous with it).
+theorem OrderedField::mul_pos_of_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x * y {
+    A.mul_pos(x, y, hx, hy)
+}
+
+// A negative product with a positive factor has a negative other factor:
+// divide by it.
+theorem OrderedField::neg_of_mul_neg(z, e: A, he: A.unit < e, h: z * e < A.unit): z < A.unit {
+    let apart: ApartBy(<, e, A.unit) = Inr(he);
+    let divided = calc {
+        (z * e) * A.recip(e, apart) ≈ z * (e * A.recip(e, apart)) := A.multiplicative.assoc(z, e, A.recip(e, apart)),
+        ≈ z * A.multiplicative.unit := OrderedField::mul_respects(z, z, e * A.recip(e, apart), A.multiplicative.unit, A.rel_refl(z), A.mul_recip(e, apart)),
+        ≈ z := A.multiplicative.unit_r(z),
+    };
+    A.lt_respects((z * e) * A.recip(e, apart), z, A.unit * A.recip(e, apart), A.unit, divided, A.zero_mul(A.recip(e, apart)),
+        OrderedField::mul_lt_mono_r(z * e, A.unit, A.recip(e, apart), h, OrderedField::recip_pos(e, apart, he)))
+}
+
+// A nonnegative factor of a positive product makes the other factor
+// positive. `pos_of_mul_pos` asks for a positive factor; a nonnegative one
+// is placed by cotransitivity: either (z + 1)·d is positive too, and z + 1
+// is, or d is negative, and then z·(-d) < 0 puts z below zero.
+theorem OrderedField::pos_of_mul_pos_nonneg(z, d: A, hz: A.unit <= z, h: A.unit < z * d): A.unit < d {
+    match A.rel_cotrans(A.unit, z * d, z * d + d, h) {
+        Inl(above) => {
+            let spread = calc {
+                (z + A.multiplicative.unit) * d ≈ z * d + A.multiplicative.unit * d := A.distrib_r(z, A.multiplicative.unit, d),
+                ≈ z * d + d := OrderedAddGroup::add_respects(z * d, z * d, A.multiplicative.unit * d, d, A.rel_refl(z * d), A.multiplicative.unit_l(d)),
+            };
+            let shifted: (A.unit < z + A.multiplicative.unit) = PseudoOrder::lt_of_lt_of_le(A.unit, A.multiplicative.unit, z + A.multiplicative.unit, A.zero_lt_one,
+                StrictOrder::le_respects(A.unit + A.multiplicative.unit, A.multiplicative.unit, z + A.multiplicative.unit, z + A.multiplicative.unit,
+                    A.unit_l(A.multiplicative.unit), A.rel_refl(z + A.multiplicative.unit), OrderedAddGroup::add_le_mono_r(A.unit, z, A.multiplicative.unit, hz)));
+            A.pos_of_mul_pos(z + A.multiplicative.unit, d, shifted,
+                StrictOrder::lt_respects_r(A.unit, z * d + d, (z + A.multiplicative.unit) * d, A.rel_sym((z + A.multiplicative.unit) * d, z * d + d, spread), above))
+        },
+        Inr(below) => {
+            let negative: (d < A.unit) = OrderedAddGroup::add_lt_cancel_l(d, A.unit, z * d,
+                StrictOrder::lt_respects_r(z * d + d, z * d, z * d + A.unit, A.rel_sym(z * d + A.unit, z * d, A.unit_r(z * d)), below));
+            let flipped: (z * A.inv(d) < A.unit) = StrictOrder::lt_respects_l(A.inv(z * d), z * A.inv(d), A.unit, A.rel_sym(z * A.inv(d), A.inv(z * d), Ring::mul_neg(z, d)),
+                StrictOrder::lt_respects_r(A.inv(z * d), A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(z), OrderedAddGroup::neg_lt(A.unit, z * d, h)));
+            false_elim(A.not_lt_of_le(A.unit, z, hz, OrderedField::neg_of_mul_neg(z, A.inv(d), OrderedAddGroup::neg_pos(d, negative), flipped)))
+        },
+    }
+}
+
+// Multiplying by a nonnegative keeps a weak inequality: a product the other
+// way round would be a positive gap z·(x - y) with z ≥ 0, so x - y > 0.
+theorem OrderedField::mul_le_mono_l(x, y, z: A, h: x <= y, hz: A.unit <= z): z * x <= z * y {
+    A.le_of_not_lt(z * x, z * y, λ back => {
+        let spread = calc {
+            z * x + A.inv(z * y) ≈ z * x + z * A.inv(y) := OrderedAddGroup::add_respects(z * x, z * x, A.inv(z * y), z * A.inv(y), A.rel_refl(z * x),
+                A.rel_sym(z * A.inv(y), A.inv(z * y), Ring::mul_neg(z, y))),
+            ≈ z * (x + A.inv(y)) := A.rel_sym(z * (x + A.inv(y)), z * x + z * A.inv(y), A.distrib_l(z, x, A.inv(y))),
+        };
+        A.not_lt_of_le(x, y, h, OrderedAddGroup::lt_of_sub_pos(y, x, OrderedField::pos_of_mul_pos_nonneg(z, x + A.inv(y), hz,
+            StrictOrder::lt_respects_r(A.unit, z * x + A.inv(z * y), z * (x + A.inv(y)), spread, OrderedAddGroup::sub_pos(z * y, z * x, back)))))
+    })
+}
+
+theorem OrderedField::mul_le_mono_r(x, y, z: A, h: x <= y, hz: A.unit <= z): x * z <= y * z {
+    StrictOrder::le_respects(z * x, x * z, z * y, y * z, A.commutative.comm(z, x), A.commutative.comm(z, y), OrderedField::mul_le_mono_l(x, y, z, h, hz))
+}
+
+// A product of nonnegatives is nonnegative.
+theorem OrderedField::mul_nonneg(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x * y {
+    StrictOrder::le_respects(x * A.unit, A.unit, x * y, x * y, A.mul_zero(x), A.rel_refl(x * y), OrderedField::mul_le_mono_l(A.unit, y, x, hy, hx))
+}
+
+// Both factors moved, both nonnegative below.
+theorem OrderedField::mul_le_mul(a, b, c, d: A, h1: a <= b, h2: c <= d, ha: A.unit <= a, hc: A.unit <= c): a * c <= b * d {
+    PseudoOrder::le_trans(a * c, b * c, b * d, OrderedField::mul_le_mono_r(a, b, c, h1, hc),
+        OrderedField::mul_le_mono_l(c, d, b, h2, PseudoOrder::le_trans(A.unit, a, b, ha, h1)))
 }
 
 // The Archimedean property's inverse form: a positive x is above some

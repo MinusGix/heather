@@ -932,25 +932,7 @@ impl Speller<'_> {
         if self.binders() != 0 {
             return None;
         }
-        let (true, mut pair) = crate::spelling::proj_of(t)? else {
-            return None;
-        };
-        let mut entry = 0usize;
-        while let Some((false, inner)) = crate::spelling::proj_of(pair) {
-            entry += 1;
-            pair = inner;
-        }
-        let idx = entry.checked_sub(1)?;
-        let (head, _) = crate::spelling::app_spine(pair);
-        if !matches!(head, Term::Var(_) | Term::GlobalTm { .. }) && crate::spelling::proj_of(head).is_none() {
-            return None;
-        }
-        let span = heather_syntax::Span { start: 0, end: 0 };
-        let ty = self.el.spine_type(self.cx, pair, span)?;
-        let record = self.el.record_of_at(self.cx, &ty, span)?;
-        let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
-            return None;
-        };
+        let (pair, name) = self.el.field_read_parts(self.cx, t)?;
         let shown = self.tm(pair, d + 1);
         Some(if matches!(&**pair, Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
             || crate::spelling::proj_of(pair).is_some()
@@ -1184,6 +1166,35 @@ impl Elaborator {
         };
         let args = args.iter().enumerate().filter(|(i, _)| written(*i)).map(|(_, a)| Rc::clone(a)).collect();
         Some((head, args))
+    }
+
+    /// A field read a record's declaration left inline, `fst(snd(…(r)))`,
+    /// as the record value `r` and the field's name: the recogniser behind
+    /// the speller's `r.name` (`Speller::field_read`), shared with the tactic
+    /// host's `View`. The record is read off the receiver's spine type, so
+    /// only a receiver whose head is a variable, a global or another field
+    /// read is recognised, and only at `cx`'s own scope.
+    pub(crate) fn field_read_parts<'t>(&self, cx: &Cx, t: &'t Term) -> Option<(&'t Rc<Term>, String)> {
+        let (true, mut pair) = crate::spelling::proj_of(t)? else {
+            return None;
+        };
+        let mut entry = 0usize;
+        while let Some((false, inner)) = crate::spelling::proj_of(pair) {
+            entry += 1;
+            pair = inner;
+        }
+        let idx = entry.checked_sub(1)?;
+        let (head, _) = crate::spelling::app_spine(pair);
+        if !matches!(head, Term::Var(_) | Term::GlobalTm { .. }) && crate::spelling::proj_of(head).is_none() {
+            return None;
+        }
+        let span = heather_syntax::Span { start: 0, end: 0 };
+        let ty = self.spine_type(cx, pair, span)?;
+        let record = self.record_of_at(cx, &ty, span)?;
+        let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
+            return None;
+        };
+        Some((pair, name.clone()))
     }
 
     /// For each of the first `count` parameters of the global at `abs`,

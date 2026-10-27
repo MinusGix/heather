@@ -80,6 +80,11 @@ inductive Head {
     HGlobal(g: GlobalRef, name: String, args: List<Handle>),
     // A local, applied to arguments.
     HLocal(x: LocalRef, args: List<Handle>),
+    // A field read of a record whose declaration registers no projection
+    // definition, applied: a class dictionary's `d.inv(x)` or `d.unit`, by
+    // the record, the field's name and the arguments. (A field with a
+    // projection definition is that global's `HGlobal`.)
+    HField(of: Handle, name: String, args: List<Handle>),
     HLit(n: Nat),
     // A `match` stuck on its scrutinee: a term that only reduces once
     // `scrut` is a constructor.
@@ -531,9 +536,9 @@ fn blocker_among(hs: List<Handle>, blocker: Handle → Tac<Option<Handle>>) → 
     }
 }
 
-// A call's arguments, as `View` lists them.
+// A call's arguments, as `View` lists them; a field read's record first.
 fn head_args(v: Head) → List<Handle> {
-    match v { HGlobal(_, _, args) => args, HLocal(_, args) => args, _ => [] }
+    match v { HGlobal(_, _, args) => args, HLocal(_, args) => args, HField(r, _, args) => Cons(r, args), _ => [] }
 }
 
 // What blocks a term: the scrutinee of the `match` its head normal form is
@@ -828,6 +833,8 @@ fn host_head_global(g: Nat, name: String) → Answer { AHead(HGlobal(GlobalRef(g
 
 fn host_head_local(x: Nat) → Answer { AHead(HLocal(LocalRef(x), [])) }
 
+fn host_head_field(r: Nat, name: String) → Answer { AHead(HField(Handle(r), name, [])) }
+
 fn host_head_lit(n: Nat) → Answer { AHead(HLit(n)) }
 
 fn host_head_match(scrut: Nat) → Answer { AHead(HMatch(Handle(scrut))) }
@@ -836,12 +843,13 @@ fn host_head_hole() → Answer { AHead(HHole) }
 
 fn host_head_other() → Answer { AHead(HOther) }
 
-// One more argument of a `HGlobal` or `HLocal` head.
+// One more argument of a `HGlobal`, `HLocal` or `HField` head.
 fn host_head_arg(a: Answer, h: Nat) → Answer {
     match a {
         AHead(v) => match v {
             HGlobal(g, name, args) => AHead(HGlobal(g, name, args ++ [Handle(h)])),
             HLocal(x, args) => AHead(HLocal(x, args ++ [Handle(h)])),
+            HField(r, name, args) => AHead(HField(r, name, args ++ [Handle(h)])),
             _ => a,
         },
         _ => a,

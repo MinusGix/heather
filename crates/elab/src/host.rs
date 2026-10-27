@@ -155,6 +155,69 @@ const READ_BUDGET: usize = 4096;
 /// Leading parameters `Match` will treat as unknowns before giving up.
 const MATCH_PARAMETERS: usize = 64;
 
+/// What one `Match` learns about class parameters, shared by its attempts at
+/// every parameter count: the goals the dictionaries in scope answer, per
+/// class, and resolution's answer per goal.
+#[derive(Default)]
+struct MatchDicts {
+    classes: RefCell<Vec<Option<Rc<crate::inductive::Inductive>>>>,
+    goals: RefCell<Vec<(u32, Rc<Vec<(Type, Level)>>)>>,
+    resolved: RefCell<Vec<(Type, Option<Term>)>>,
+}
+
+impl MatchDicts {
+    /// The class the `i`-th parameter's type `dom` instantiates, if any, read
+    /// once: a parameter's type is the same at every parameter count.
+    fn class_at(&self, el: &Elaborator, i: usize, dom: &Type) -> Option<Rc<crate::inductive::Inductive>> {
+        if let Some(c) = self.classes.borrow().get(i) {
+            return c.clone();
+        }
+        let class = el.display_tag_of(dom).filter(|ind| {
+            ind.is_record && el.traits.has_class(&crate::names::qkey(&ind.scope.module, &ind.name))
+        });
+        let mut classes = self.classes.borrow_mut();
+        debug_assert_eq!(classes.len(), i, "parameters are read in order");
+        classes.push(class.clone());
+        class
+    }
+
+    /// The class's instantiations the dictionaries in scope answer,
+    /// innermost first: for each binder of the class or a descendant, the
+    /// class at the binder's carrier and at the index the binder passes up
+    /// (`Elaborator::scope_index`, the value-slot ladder's step 2).
+    fn goals(&self, el: &Elaborator, cx: &Cx, ind: &crate::inductive::Inductive, span: Span) -> Rc<Vec<(Type, Level)>> {
+        if let Some((_, g)) = self.goals.borrow().iter().find(|(tag, _)| *tag == ind.tag) {
+            return Rc::clone(g);
+        }
+        let mut out: Vec<(Type, Level)> = Vec::new();
+        if ind.params.len() == 1 {
+            for d in cx.dicts.iter().rev() {
+                let Ok((carrier, clvl)) = el.elab_ty(cx, &d.carrier) else { continue };
+                let Some(index) = el.scope_index(cx, &ind.name, &carrier, &clvl) else { continue };
+                let targs = [(carrier, clvl)];
+                let Ok(vargs) = el.valparam_args(cx, ind, &targs, &index, span) else { continue };
+                let Ok((goal, glvl)) = el.lower_instance(cx, ind, &targs, &vargs, span) else { continue };
+                if !out.iter().any(|(g, _)| *g == goal) {
+                    out.push((goal, glvl));
+                }
+            }
+        }
+        let out = Rc::new(out);
+        self.goals.borrow_mut().push((ind.tag, Rc::clone(&out)));
+        out
+    }
+
+    /// Resolution's dictionary for `goal`, asked once.
+    fn resolved(&self, el: &Elaborator, cx: &Cx, goal: &Type, lvl: &Level, name: &str, span: Span) -> Option<Term> {
+        if let Some((_, t)) = self.resolved.borrow().iter().find(|(g, _)| g == goal) {
+            return t.clone();
+        }
+        let t = el.resolve_goal(cx, goal, lvl, name, None, span, &mut Vec::new());
+        self.resolved.borrow_mut().push((goal.clone(), t.clone()));
+        t
+    }
+}
+
 /// An `Expr`, as the host reads one back from a tactic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RExpr {
@@ -271,6 +334,9 @@ pub enum HeadView {
     /// The global's reference, its name, and the written arguments.
     Global(u64, String, Vec<u64>),
     Local(u64, Vec<u64>),
+    /// A field read a record's declaration left inline: the record, the
+    /// field's name, and the arguments the field is applied to.
+    Field(u64, String, Vec<u64>),
     Lit(u64),
     /// A `match` stuck on the scrutinee.
     Match(u64),
@@ -519,6 +585,9 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                         (self.call("host_head_global", vec![self.lit(*g), self.string_value(name)?])?, args)
                     }
                     HeadView::Local(x, args) => (self.call("host_head_local", vec![self.lit(*x)])?, args),
+                    HeadView::Field(r, name, args) => {
+                        (self.call("host_head_field", vec![self.lit(*r), self.string_value(name)?])?, args)
+                    }
                 };
                 for h in args {
                     out = self.call("host_head_arg", vec![out, self.lit(*h)])?;
@@ -1743,7 +1812,7 @@ impl Elaborator {
     fn view_request(&self, run: &mut Run, h: u64) -> Result<HeadView, Fault> {
         let (at, held) = run.held(h)?;
         let committed = match &held {
-            Held::Type(t, _) => run.committed_ty(t).map(Ok),
+            Held::Type(t, l) => run.committed_ty(t).map(|t| Ok((t, l.clone()))),
             Held::Term(t, ..) => run.committed_tm(t).map(Err),
         };
         if let Some(c) = committed {
@@ -1751,7 +1820,7 @@ impl Elaborator {
                 return Ok(HeadView::Other);
             }
             return Ok(match c {
-                Ok(ty) => self.view_type(run, at, &ty),
+                Ok((ty, level)) => self.view_type(run, at, &ty, &level),
                 Err(t) => self.view_term(run, at, &t),
             });
         }
@@ -1773,9 +1842,12 @@ impl Elaborator {
         })
     }
 
-    fn view_type(&self, run: &mut Run, at: usize, ty: &Type) -> HeadView {
+    fn view_type(&self, run: &mut Run, at: usize, ty: &Type, level: &Level) -> HeadView {
+        if let Some(v) = self.view_instance(run, at, ty, level) {
+            return v;
+        }
         if let Some(inline) = self.unspell_here(ty) {
-            return self.view_type(run, at, &inline);
+            return self.view_type(run, at, &inline, level);
         }
         if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })
             && let Some(ind) = self.display_tag_of(ty)
@@ -1807,6 +1879,62 @@ impl Elaborator {
         }
     }
 
+    /// A value-parameterized declaration's instantiation — a class's
+    /// dictionary type, `OrderedField<A>(≈, <, <=, +, *)` — as the global and
+    /// every argument it is instantiated at, type arguments as types and
+    /// value arguments as terms. The arguments are read by unifying `ty` with
+    /// the declaration's own template at unknown arguments, `C#tycode_fn`
+    /// applied to metavariables and read inline, and the template at what
+    /// was solved must convert to `ty`: a type that is not an instance
+    /// declines.
+    fn view_instance(&self, run: &mut Run, at: usize, ty: &Type, level: &Level) -> Option<HeadView> {
+        let ind = self.display_tag_of(ty)?;
+        if ind.valparams.is_empty() || ind.index.is_some() {
+            return None;
+        }
+        let cx = run.cx(at).ok()?;
+        let m = (ind.params.len() + ind.valparams.len()) as u32;
+        let mut code = self.gen_ref(&cx, crate::gendefs::GenDef::TyCodeFn(ind.tag))?.shift_global(m);
+        for j in 0..m {
+            let meta = Term::GlobalTm { var: GlobalVar(j), subst: LocalSubst::id(&cx.gamma) };
+            code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
+        }
+        let template = Type::El { level: level.clone(), tm: Rc::new(code) };
+        let inline = self.unspell_here_in(&template, m)?;
+        let mut sols = vec![Sol::Unsolved; m as usize];
+        self.unify_root(&cx, &inline, ty, m, &mut sols, Span { start: 0, end: 0 });
+        let solved = crate::unification::zonked(&inline, m, &sols)?;
+        if !self.conv_types(&cx, &solved, ty, level) {
+            return None;
+        }
+        let mut handles = Vec::with_capacity(sols.len());
+        for (i, sol) in sols.iter().enumerate() {
+            let a = sol.solved()?;
+            let (aty, alevel) = self.kernel_type(run, at, a)?;
+            handles.push(if i < ind.params.len() {
+                let Type::Ty(l) = aty else { return None };
+                run.issue(at, Held::Type(Type::El { level: l.clone(), tm: Rc::clone(a) }, l))
+            } else {
+                run.issue(at, Held::Term((**a).clone(), aty, alevel))
+            });
+        }
+        Some(HeadView::Global(run.global_ref(GlobalKey::Type(ind.tag)), ind.name.clone(), handles))
+    }
+
+    /// A field read left inline, `r.name(args…)`, as [`HeadView::Field`].
+    fn view_field(&self, run: &mut Run, at: usize, t: &Term) -> Option<HeadView> {
+        let (fun, args) = crate::spelling::app_spine(t);
+        let (record, name) = self.field_read_parts(&run.scopes[at].cx, fun)?;
+        let (rty, rlevel) = self.kernel_type(run, at, record)?;
+        let r = run.issue(at, Held::Term((**record).clone(), rty, rlevel));
+        let mut handles = Vec::with_capacity(args.len());
+        for a in args {
+            let (ty, level) = self.kernel_type(run, at, a)?;
+            handles.push(run.issue(at, Held::Term((**a).clone(), ty, level)));
+        }
+        Some(HeadView::Field(r, name, handles))
+    }
+
     fn view_term(&self, run: &mut Run, at: usize, t: &Term) -> HeadView {
         if let Some(n) = crate::inductive::nat_value(t) {
             return HeadView::Lit(n as u64);
@@ -1830,7 +1958,7 @@ impl Elaborator {
             };
         }
         let Some((head, args)) = self.view_call(&run.scopes[at].cx, t) else {
-            return HeadView::Other;
+            return self.view_field(run, at, t).unwrap_or(HeadView::Other);
         };
         let mut handles = Vec::with_capacity(args.len());
         for a in &args {
@@ -1883,6 +2011,11 @@ impl Elaborator {
     /// unsolved one is left for the caller, who proves it. Nothing here is
     /// trusted: the caller's application is checked like any other `Expr`.
     /// Both must be free of unsolved holes.
+    ///
+    /// A parameter whose type is a class is filled the way a call's
+    /// constraint argument is ([`Self::match_dictionaries`]): from a
+    /// dictionary in scope, which also fixes the class's index parameters,
+    /// or by resolution once the match has determined its type.
     fn match_request(&self, run: &mut Run, ty: u64, target: u64, span: Span) -> Result<Vec<Option<u64>>, Fault> {
         let unsolved = || Fault::Ill("`Match` needs types that mention no unsolved hole".into());
         let (fs, fty) = match run.held(ty)? {
@@ -1900,8 +2033,10 @@ impl Elaborator {
         let mut inner = cx.clone();
         let shown = fty.clone();
         let mut concl = fty;
-        for k in 0..=MATCH_PARAMETERS {
-            if let Some(sols) = self.match_at(&cx, &concl, &tty, &tlvl, k, span) {
+        let mut doms: Vec<(Type, Level)> = Vec::new();
+        let dicts = MatchDicts::default();
+        for _ in 0..=MATCH_PARAMETERS {
+            if let Some(sols) = self.match_at(&cx, &concl, &tty, &tlvl, &doms, &dicts, span) {
                 let mut slots = Vec::with_capacity(sols.len());
                 for sol in sols {
                     slots.push(match sol.and_then(|t| self.kernel_type(run, at, &t).map(|(ty, l)| (t, ty, l))) {
@@ -1919,6 +2054,7 @@ impl Elaborator {
                 },
             };
             let Type::Pi { dom, dom_level, cod, .. } = pi else { break };
+            doms.push(((*dom).clone(), dom_level.clone()));
             inner.push("_".into(), (*dom).clone(), dom_level);
             concl = (*cod).clone();
         }
@@ -1930,25 +2066,112 @@ impl Elaborator {
     }
 
     /// One attempt of [`Self::match_request`]: `concl` is scoped in `cx`
-    /// plus `k` parameters, which become metavariables `0..k` of a scratch
-    /// world over the committed one, as in implicit application.
-    fn match_at(&self, cx: &Cx, concl: &Type, target: &Type, lvl: &Level, k: usize, span: Span) -> Option<Vec<Option<Term>>> {
+    /// plus the `doms.len()` parameters, which become metavariables `0..k` of
+    /// a scratch world over the committed one, as in implicit application.
+    /// Tried with the class parameters filled from scope first, and plainly
+    /// when that does not match.
+    fn match_at(&self, cx: &Cx, concl: &Type, target: &Type, lvl: &Level, doms: &[(Type, Level)], dicts: &MatchDicts, span: Span) -> Option<Vec<Option<Term>>> {
+        let k = doms.len();
         if k == 0 {
             return self.conv_types(cx, concl, target, lvl).then(Vec::new);
         }
         let n = k as u32;
+        let pat = Self::match_scope(cx, concl, n, n);
+        let attempt = |choice: Option<usize>| -> Result<Vec<Option<Term>>, bool> {
+            let mut sols = vec![Sol::Unsolved; k];
+            if let Some(c) = choice
+                && !self.match_dictionaries(cx, doms, n, &mut sols, dicts, Some(c), span)
+            {
+                return Err(false);
+            }
+            self.unify_root(cx, &pat, target, n, &mut sols, span);
+            self.match_dictionaries(cx, doms, n, &mut sols, dicts, None, span);
+            let solved = crate::unification::zonked(&pat, n, &sols).ok_or(true)?;
+            if !self.conv_types(cx, &solved, target, lvl) {
+                return Err(true);
+            }
+            Ok(sols.iter().map(|s| s.solved().map(|t| (**t).clone())).collect())
+        };
+        // Each dictionary in scope in turn, until one matches or there is
+        // none left to try; then the plain match.
+        for c in 0.. {
+            match attempt(Some(c)) {
+                Ok(sols) => return Some(sols),
+                Err(true) => continue,
+                Err(false) => break,
+            }
+        }
+        attempt(None).ok()
+    }
+
+    /// `ty`, scoped in `cx` plus `i` of a match's `n` parameters, over the
+    /// scratch world: the parameters are metavariables `0..i`.
+    fn match_scope(cx: &Cx, ty: &Type, i: u32, n: u32) -> Type {
         let mut subst = LocalSubst::id(&cx.gamma);
-        for i in 0..n {
-            subst = subst.extended(Rc::new(Term::GlobalTm { var: GlobalVar(i), subst: LocalSubst::id(&cx.gamma) }));
+        for j in 0..i {
+            subst = subst.extended(Rc::new(Term::GlobalTm { var: GlobalVar(j), subst: LocalSubst::id(&cx.gamma) }));
         }
-        let pat = concl.shift_global(n).apply_local(&subst);
-        let mut sols = vec![Sol::Unsolved; k];
-        self.unify_root(cx, &pat, target, n, &mut sols, span);
-        let solved = crate::unification::zonked(&pat, n, &sols)?;
-        if !self.conv_types(cx, &solved, target, lvl) {
-            return None;
+        ty.shift_global(n).apply_local(&subst)
+    }
+
+    /// Fill a match's class parameters as a call fills its constraint
+    /// arguments (`docs/operation-indexed-classes-design.md` §5). With a
+    /// `choice`, each class parameter is matched against the dictionaries in
+    /// scope — the class's own binder or a descendant's, at its carrier, as
+    /// the value-slot ladder reads them — which solves the class's carrier
+    /// and index parameters, and the parameter is the dictionary resolution
+    /// finds there (an upcast from a descendant's binder). The `choice`-th
+    /// that fits is taken; `false` when there is none, or no class parameter
+    /// at all. Without, a class parameter still unsolved whose type the match
+    /// has determined is resolved there, instances included. A wrong guess
+    /// costs the attempt and never a wrong term: the conclusion still has to
+    /// convert, and the application is checked.
+    #[allow(clippy::too_many_arguments)]
+    fn match_dictionaries(&self, cx: &Cx, doms: &[(Type, Level)], n: u32, sols: &mut [Sol], dicts: &MatchDicts, choice: Option<usize>, span: Span) -> bool {
+        let mut any = false;
+        for (i, (dom, dlvl)) in doms.iter().enumerate() {
+            if sols[i].solved().is_some() {
+                continue;
+            }
+            let Some(ind) = dicts.class_at(self, i, dom) else { continue };
+            any = true;
+            let pat = Self::match_scope(cx, dom, i as u32, n);
+            let Some(choice) = choice else {
+                if let Some(goal) = crate::unification::zonked(&pat, n, sols)
+                    && let Some(dict) = dicts.resolved(self, cx, &goal, dlvl, &ind.name, span)
+                {
+                    sols[i] = Sol::Solved(Rc::new(dict));
+                }
+                continue;
+            };
+            // The candidates are lowered inline, and a lemma's parameter is
+            // usually the reference `El (app(C#tycode_fn^δ; ā))`: read it
+            // inline too, so the two unify field by field.
+            let inline = self.unspell_here_in(&pat, n).unwrap_or_else(|| pat.clone());
+            let mut fitting = 0;
+            let mut found = false;
+            for (goal, glvl) in dicts.goals(self, cx, &ind, span).iter() {
+                let mut trial = sols.to_vec();
+                self.unify_root(cx, &inline, goal, n, &mut trial, span);
+                let fits = crate::unification::zonked(&pat, n, &trial).is_some_and(|z| self.conv_types(cx, &z, goal, glvl));
+                if !fits {
+                    continue;
+                }
+                let Some(dict) = dicts.resolved(self, cx, goal, glvl, &ind.name, span) else { continue };
+                fitting += 1;
+                if fitting <= choice {
+                    continue;
+                }
+                trial[i] = Sol::Solved(Rc::new(dict));
+                sols.clone_from_slice(&trial);
+                found = true;
+                break;
+            }
+            if !found {
+                return false;
+            }
         }
-        Some(sols.iter().map(|s| s.solved().map(|t| (**t).clone())).collect())
+        choice.is_none() || any
     }
 
     /// A returned `Expr` as a term of scope `at` in the current world, built
