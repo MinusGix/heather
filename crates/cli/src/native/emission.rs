@@ -48,6 +48,10 @@ fn malformed() -> String { "the statement tree's shape is malformed".into() }
 
 fn out_of_order() -> String { "the program's parts did not read back in order".into() }
 
+/// `Source::shape` counts a leaf's label names without emitting it; a count
+/// the emission does not take is a join the kernel would refuse.
+fn miscounted() -> String { "the statement tree's shape counts label names its emission does not take".into() }
+
 /// How a part is read and stated; the numbers are reads, in program order.
 enum Part {
     Whole { id: usize, names: u64, read: usize },
@@ -60,14 +64,20 @@ impl Part {
     fn id(&self) -> usize {
         match self { Part::Whole { id, .. } | Part::Then { id, .. } | Part::Repeat { id, .. } | Part::Branch { id, .. } => *id }
     }
+
+    /// The label name the shape says it starts at.
+    fn names(&self) -> u64 {
+        match self { Part::Whole { names, .. } | Part::Then { names, .. } | Part::Repeat { names, .. } | Part::Branch { names, .. } => *names }
+    }
 }
 
 /// The reads to make, on a fork that has elaborated `text`: each a nullary
 /// `List<Nat>`, in program order, the first the entry `Source::compile`
 /// emits the main statement after, the last the exit it puts after it. `whole[r]` says whether read `r` is a part's
 /// (`Stmt::emission_reading`, the label name after it first) or the items
-/// around parts (`Prog::reading`).
-pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Vec<bool>, root: Part }
+/// around parts (`Prog::reading`). `programs[r]` spells read `r`'s program,
+/// at `Start`, for reading its bytes once the labels are known (`bytes`).
+pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Vec<bool>, programs: Vec<String>, root: Part }
 
 /// `shape` is `Source::shape`'s list (the preorder reversed, three numbers a
 /// node); `source`, `entry` and `layout` spell the main statement, the
@@ -78,21 +88,27 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
     let mut at = records.iter();
     let tree = Shape::read(&mut at)?;
     if at.next().is_some() || tree.names != 0 { return Err(malformed()); }
-    let mut planner = Planner { p, layout, text: format!("fn {p}_s_0() → Stmt {{ {source} }}\n"), reads: Vec::new(), whole: Vec::new(), parts: 1 };
-    planner.read("entry", false, format!("{entry}.reading()"));
+    let mut planner = Planner { p, layout, text: format!("fn {p}_s_0() → Stmt {{ {source} }}\n"), reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1 };
+    planner.read("entry", entry.to_string());
     let root = planner.part(&tree, 0)?;
-    planner.read("exit", false, "then(then(Start, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).reading()".into());
-    Ok(Plan { text: planner.text, reads: planner.reads, whole: planner.whole, root })
+    planner.read("exit", "then(then(Start, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)".into());
+    Ok(Plan { text: planner.text, reads: planner.reads, whole: planner.whole, programs: planner.programs, root })
 }
 
-struct Planner<'a> { p: &'a str, layout: &'a str, text: String, reads: Vec<String>, whole: Vec<bool>, parts: usize }
+struct Planner<'a> { p: &'a str, layout: &'a str, text: String, reads: Vec<String>, whole: Vec<bool>, programs: Vec<String>, parts: usize }
 
 impl Planner<'_> {
-    fn read(&mut self, what: &str, whole: bool, body: String) -> usize {
+    /// The items around parts, of the program `program` spells.
+    fn read(&mut self, what: &str, program: String) -> usize {
+        self.push(what, false, format!("{program}.reading()"), program)
+    }
+
+    fn push(&mut self, what: &str, whole: bool, body: String, program: String) -> usize {
         let name = format!("{}_read_{}_{what}", self.p, self.reads.len());
         self.text.push_str(&format!("fn {name}() → List<Nat> {{ {body} }}\n"));
         self.reads.push(name);
         self.whole.push(whole);
+        self.programs.push(program);
         self.reads.len() - 1
     }
 
@@ -106,7 +122,8 @@ impl Planner<'_> {
     fn part(&mut self, shape: &Shape, id: usize) -> Result<Part, String> {
         let (p, layout, names) = (self.p, self.layout, shape.names);
         if shape.leaves <= LEAVES {
-            let read = self.read("part", true, format!("{p}_s_{id}().emission_reading({layout}, {names})"));
+            let read = self.push("part", true, format!("{p}_s_{id}().emission_reading({layout}, {names})"),
+                format!("{p}_s_{id}().emit(Start, {layout}, {names}).map(λ (c: Compiled) => c.prog).unwrap_or(Start)"));
             return Ok(Part::Whole { id, names, read });
         }
         let (s, ss) = (names + 1, names + 2);
@@ -118,18 +135,18 @@ impl Planner<'_> {
             }
             (2, [body]) if shape.then == ss => {
                 let b = self.child(id, "left");
-                let open = self.read("open", false, format!("Start.label({s}).reading()"));
+                let open = self.read("open", format!("Start.label({s})"));
                 let body = Box::new(self.part(body, b)?);
-                let close = self.read("close", false, format!("then(Start.tests({layout}, {word}, {ss}), Jmp({s})).label({ss}).reading()"));
+                let close = self.read("close", format!("then(Start.tests({layout}, {word}, {ss}), Jmp({s})).label({ss})"));
                 Part::Repeat { id, names, open, body, close }
             }
             (3, [yes, no]) if shape.then == ss => {
                 let (y, n) = (self.child(id, "left"), self.child(id, "right"));
-                let open = self.read("open", false, format!("Start.tests({layout}, {word}, {s}).reading()"));
+                let open = self.read("open", format!("Start.tests({layout}, {word}, {s})"));
                 let yes = Box::new(self.part(yes, y)?);
-                let middle = self.read("middle", false, format!("Start.else_label({s}, {ss}).reading()"));
+                let middle = self.read("middle", format!("Start.else_label({s}, {ss})"));
                 let no = Box::new(self.part(no, n)?);
-                let close = self.read("close", false, format!("Start.join_label({ss}).reading()"));
+                let close = self.read("close", format!("Start.join_label({ss})"));
                 Part::Branch { id, names, open, yes, middle, no, close }
             }
             _ => return Err(malformed()),
@@ -161,9 +178,14 @@ impl Reading {
 
 /// The statements, ending in `{p}_e_0`, the main statement's emission from
 /// `entry` (`{p}_entry` states the entry's literal); the items and their
-/// lengths; and the item counts the program's literal must be cut at, where
-/// each statement's programs start and end (`code` writes the literal).
-pub(super) struct Stated { pub theorems: String, pub items: Vec<(u64, String)>, pub lens: Vec<u64>, pub cuts: BTreeSet<usize> }
+/// lengths; the item counts the program's literal must be cut at, where
+/// each statement's programs start and end (`code` writes the literal); and
+/// each read's program and items, for reading the bytes (`byte_reads`).
+pub(super) struct Stated { pub theorems: String, pub items: Vec<(u64, String)>, pub lens: Vec<u64>, pub cuts: BTreeSet<usize>, pub spans: Vec<Span> }
+
+/// A read's program, spelled at `Start`, and where its items are in the
+/// whole: the first, and how many.
+pub(super) struct Span { program: String, pub start: usize, pub count: usize }
 
 /// `readings` are `plan`'s reads, read.
 pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Vec<Reading>) -> Result<Stated, String> {
@@ -182,7 +204,30 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
     let (start, end, _) = writer.part(&plan.root)?;
     if start != entered || end != main { return Err(out_of_order()); }
     for k in (0..items.len()).step_by(STRETCH) { writer.cuts.insert(k); }
-    Ok(Stated { theorems: writer.theorems, items, lens, cuts: writer.cuts })
+    let spans = plan.programs.into_iter().zip(&readings).zip(&starts)
+        .map(|((program, reading), &start)| Span { program, start, count: reading.items.len() }).collect();
+    Ok(Stated { theorems: writer.theorems, items, lens, cuts: writer.cuts, spans })
+}
+
+/// The bytes a read at a time, on the fork that read the parts, once the
+/// labels are known: each read's program at `Start` again, encoded with its
+/// offsets carried down from where its items end in the whole
+/// (`asm_code_ending`, x86_64_asm_table) and its jumps by the table
+/// `{p}_table()` the text must also define (`labels::table`). So the fork
+/// needs no literal of the program, and the literal is elaborated once, in
+/// the certificate (issues/write-elf-build-constants.md); bytes read wrong
+/// are a piece the kernel refuses. The reads, named in program order, with
+/// the spans they read.
+pub(super) fn byte_reads<'a>(p: &str, spans: &'a [Span], offsets: &[u64]) -> (String, Vec<(String, &'a Span)>) {
+    let mut text = String::new();
+    let mut reads = Vec::new();
+    for (r, span) in spans.iter().enumerate().filter(|(_, span)| span.count > 0) {
+        let name = format!("{p}_bytes_{r}");
+        text.push_str(&format!("fn {name}() → List<Nat> {{ asm_code_ending(no_fills(), {p}_table().labels(), {}, {}, {}).map(λ (b: BitVec(8)) => b.toNat()) }}\n",
+            span.program, span.count, offsets[span.start + span.count]));
+        reads.push((name, span));
+    }
+    (text, reads)
 }
 
 /// The program's literal: a definition `{p}_at_{k}` of its first `k` items
@@ -234,6 +279,7 @@ impl Writer<'_> {
                 let (start, middle, between) = self.part(first)?;
                 let (rest_start, end, after) = self.part(rest)?;
                 if rest_start != middle { return Err(out_of_order()); }
+                if rest.names() != between { return Err(miscounted()); }
                 let proof = format!("trans(Stmt::emit_then_of({p}_s_{id}(), trivial, {}, {layout}, {names}, Compiled({}, {between}), {p}_e_{}()), {p}_e_{}())",
                     self.program(start), self.program(middle), first.id(), rest.id());
                 (*id, *names, start, end, after, proof)
@@ -249,6 +295,7 @@ impl Writer<'_> {
             Part::Branch { id, names, open, yes, middle, no, close } => {
                 let (yes_start, yes_end, between) = self.part(yes)?;
                 let (no_start, no_end, after) = self.part(no)?;
+                if no.names() != between { return Err(miscounted()); }
                 if self.end(*open) != yes_start || self.starts[*middle] != yes_end || self.end(*middle) != no_start || self.starts[*close] != no_end {
                     return Err(out_of_order());
                 }
