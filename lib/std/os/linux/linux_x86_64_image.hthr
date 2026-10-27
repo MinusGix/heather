@@ -262,3 +262,96 @@ theorem X86Memory::io_load_entry(header, code: List<BitVec(8)>, long: header.len
     j(trans(rip_count(BitVec::ofNat(0x400000), long), io_entry_past_header()),
         λ y _ => CodeResident(X86Profile::io().fetch(), X86Memory::io_load(header ++ code), code, y), resident)
 }
+
+// ---------------------------------------------------------------------------
+// A process loaded from the file, with a stack of its own
+
+// What Linux maps below 0x412000 is the file, its window and the RW
+// segment, as `io_load` says; above it, the stack (and the command line on
+// it, `ArgvAt`) is the process's own, so a process is not `io_load`'s
+// memory but one that agrees with it below there.
+fn X86Memory::LoadedFrom(self m: X86Memory(X86Profile::io()), file: List<BitVec(8)>) → Type {
+    (a: BitVec(64)) → a.toNat() < 0x412000 → (m.cells(a) = io_cell(file, a.toNat())) ∧ (m.perms(a) = io_perm(file.len(), a.toNat()))
+}
+
+// An address's permission and read, from its cell and permission alone.
+fn perm_with(a: BitVec(64), q: Perm) → Perm { match Succ(a.toNat()).leb(Nat::pow(2, 47)) { True => q, False => Perm::none() } }
+fn read_with(a: BitVec(64), c: BitVec(8), q: Perm) → Option<BitVec(8)> {
+    match Memory<BitVec(64), BitVec(8)>(BitVec::space(64), λ _ => c, λ _ => perm_with(a, q)).read(a) { Ok(byte) => Some(byte), Err(_) => None }
+}
+
+// Two memories alike at an address read and fetch alike there.
+theorem X86Profile::alike_perm(self x: X86Profile, m, n: X86Memory(x), a: BitVec(64), perms: m.perms(a) = n.perms(a)): x.perm(m, a) = x.perm(n, a) {
+    cong_fn<Perm, Perm>(λ q => perm_with(a, q), perms)
+}
+
+theorem X86Profile::alike_read(self x: X86Profile, m, n: X86Memory(x), a: BitVec(64), cells: m.cells(a) = n.cells(a),
+    perms: m.perms(a) = n.perms(a)): x.read(m, a) = x.read(n, a) {
+    trans(cong_fn<BitVec(8), Option<BitVec(8)>>(λ c => read_with(a, c, m.perms(a)), cells),
+        cong_fn<Perm, Option<BitVec(8)>>(λ q => read_with(a, n.cells(a), q), perms))
+}
+
+// Code resident in one memory is in another alike wherever the first
+// executes.
+theorem code_resident_alike(x: X86Profile, m, n: X86Memory(x),
+    alike: (a: BitVec(64)) → x.perm(m, a).execute = True → (m.cells(a) = n.cells(a)) ∧ (m.perms(a) = n.perms(a)),
+    bytes: List<BitVec(8)>): (start: BitVec(64)) → CodeResident(x.fetch(), m, bytes, start) → CodeResident(x.fetch(), n, bytes, start) {
+    match bytes {
+        Nil => λ start at => trivial,
+        Cons(byte, rest) => λ start at => {
+            let same = alike(start, at.left);
+            ⟨trans(sym(cong_fn<Perm, Bool>(λ q => q.execute, x.alike_perm(m, n, start, same.right))), at.left),
+             ⟨trans(sym(x.alike_read(m, n, start, same.left, same.right)), at.right.left),
+              ⟨at.right.right.left, code_resident_alike(x, m, n, alike, rest, next_rip(start, 1), at.right.right.right)⟩⟩⟩
+        },
+    }
+}
+
+// Nothing at or past 0x412000 is mapped by the loader…
+theorem io_perm_high(length, n: Nat, high: 0x412000 <= n): io_perm(length, n) = Perm::none() {
+    let low = Nat::leb_true(0x410000, n, omega(high));
+    let over = Nat::leb_false(Succ(n), 0x412000, omega(high));
+    j(sym(low), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(n), False => io_perm_file(length, n) }) = Perm::none(),
+        j(sym(over), λ s _ => (match s as λ _ => Perm { True => Perm::data(), False => Perm::none() }) = Perm::none(), refl))
+}
+
+// …so what it executes lies below.
+theorem io_executable_low(file: List<BitVec(8)>, a: BitVec(64), exec: X86Profile::io().perm(X86Memory::io_load(file), a).execute = True):
+    a.toNat() < 0x412000 {
+    match a.toNat().lt_or_ge(0x412000) {
+        Inl(low) => low,
+        Inr(high) => {
+            let gone: (perm_with(a, Perm::none()).execute = True) =
+                j(io_perm_high(file.len(), a.toNat(), high), λ q _ => perm_with(a, q).execute = True, exec);
+            (match Succ(a.toNat()).leb(Nat::pow(2, 47)) as λ c =>
+                    (match c as λ _ => Perm { True => Perm::none(), False => Perm::none() }).execute = True → a.toNat() < 0x412000 {
+                True => λ no => absurd(no),
+                False => λ no => absurd(no),
+            })(gone)
+        },
+    }
+}
+
+// A process loaded from a 232-byte header and code: the code resident at
+// the entry…
+theorem X86Memory::loaded_entry(self m: X86Memory(X86Profile::io()), header, code: List<BitVec(8)>, long: header.len() = 232,
+    fits: 232 + code.len() <= 65536, loaded: m.LoadedFrom(header ++ code)): CodeResident(X86Profile::io().fetch(), m, code, io_entry()) {
+    code_resident_alike(X86Profile::io(), X86Memory::io_load(header ++ code), m, λ a exec => {
+        let same = loaded(a, io_executable_low(header ++ code, a, exec));
+        ⟨sym(same.left), sym(same.right)⟩
+    }, code, io_entry(), X86Memory::io_load_entry(header, code, long, fits))
+}
+
+// …and the page zero.
+theorem X86Memory::loaded_page(self m: X86Memory(X86Profile::io()), file: List<BitVec(8)>, loaded: m.LoadedFrom(file)):
+    DataRegion::io_page().Holds(io_zero(), m) {
+    let top: (0x412000 <= Nat::pow(2, 64)) = Nat::leb_sound(0x412000, Nat::pow(2, 64), trivial);
+    λ p inside => {
+        let a = next_rip(BitVec::ofNat(0x410000), p);
+        let value: (a.toNat() = 0x410000 + p) = BitVec::ofNat_offset_toNat(64, 0x410000, p, omega(inside, top));
+        trans(loaded(a, j(sym(value), λ k _ => k < 0x412000, omega(inside))).left, X86Memory::io_load_page(file)(p, inside))
+    }
+}
+
+// The loader's own memory is loaded from the file.
+theorem X86Memory::io_load_loaded(file: List<BitVec(8)>): X86Memory::io_load(file).LoadedFrom(file) { λ a _ => ⟨refl, refl⟩ }

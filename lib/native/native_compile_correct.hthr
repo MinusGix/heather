@@ -21,6 +21,7 @@ import native_compile_calls;
 import native_compile_leaf;
 import native_compile_bytes;
 import native_compile_nodes;
+import native_compile_args;
 import function_ir;
 import function_ir_eval;
 import function_ir_lower;
@@ -61,6 +62,11 @@ theorem Prog::within_reads(self p: Prog, layout: Layout, fd, buf, len, result, c
 theorem Prog::within_writes(self p: Prog, layout: Layout, fd, buf, from, len, result, capacity, names: Nat):
     p.Within(p.writes(layout, fd, buf, from, len, result, capacity, names).prog) {
     Exists(20, refl)
+}
+
+theorem Prog::within_args(self p: Prog, layout: Layout, index, buf, len, capacity, names: Nat):
+    p.Within(p.args(layout, index, buf, len, capacity, names).prog) {
+    Exists(28, refl)
 }
 
 // What a statement compiles to starts where it was given its start.
@@ -159,6 +165,14 @@ theorem Stmt::emit_extends(self s: Stmt, layout: Layout): (p: Prog) → (names: 
             False => λ none => absurd(none),
             True => λ same => j(Option::some_inj(Compiled(p.exits(layout, status), names), c, same), λ x _ => p.Within(x.prog),
                 p.within_exits(layout, status)),
+        },
+        Arg(index, buf, len) => λ p names c => match words_fit([index, len]) {
+            False => λ none => absurd(none),
+            True => match layout.capacities.nth(buf) {
+                None => λ none => absurd(none),
+                Some(capacity) => λ same => j(Option::some_inj(p.args(layout, index, buf, len, capacity, names), c, same),
+                    λ x _ => p.Within(x.prog), p.within_args(layout, index, buf, len, capacity, names)),
+            },
         },
     }
 }
@@ -441,23 +455,31 @@ theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers()): (p: Prog) →
                 λ within n env k exits next => t.goes_exits(env, p, status, word_fits_inside(status, j(sym(fit), λ v _ => v.IsTrue(), trivial)), within,
                     k(Exited(env.word(status))), λ u at exited => exits(env.word(status), u, at, exited))),
         })(refl),
+        Arg(index, buf, len) => λ p names c => (match words_fit([index, len]) as λ b => words_fit([index, len]) = b → (match b {
+                False => None,
+                True => match layout.capacities.nth(buf) { None => None, Some(capacity) => Some(p.args(layout, index, buf, len, capacity, names)) },
+            }) = Some(c) → c.prog.Within(t.program) → t.Runs(Arg(index, buf, len), call, p, c.prog) {
+            False => λ _ none => absurd(none),
+            True => λ fit => {
+                let ok = Bool::is_true_and(word_fits(index), word_fits(len) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                let ok2 = Bool::is_true_and(word_fits(len), True, ok.right);
+                (match t.caps.nth(buf) as λ o => t.caps.nth(buf) = o →
+                        (match o { None => None, Some(capacity) => Some(p.args(layout, index, buf, len, capacity, names)) }) = Some(c) →
+                        c.prog.Within(t.program) → t.Runs(Arg(index, buf, len), call, p, c.prog) {
+                    None => λ _ none => absurd(none),
+                    Some(capacity) => λ found same => j(Option::some_inj(p.args(layout, index, buf, len, capacity, names), c, same),
+                        λ x _ => x.prog.Within(t.program) → t.Runs(Arg(index, buf, len), call, p, x.prog),
+                        λ within n env k exits next => t.goes_args(env, p, index, buf, len, capacity, names,
+                            word_fits_inside(index, ok.left), word_fits_inside(len, ok2.left), found, within,
+                            k(Onward(env.arg(env.number(index), buf, len))), next(env.arg(env.number(index), buf, len)))),
+                })(refl)
+            },
+        })(refl),
     }
 }
 
 // ---------------------------------------------------------------------------
 // The program
-
-// A region of zeros holds the start: every word zero, every buffer its
-// capacity of zero bytes.
-theorem Target::placed_zero(self t: Target, m: X86Memory(t.r.profile), zero: t.r.Holds(λ _ => zero_byte(), m)):
-    t.Placed(Env(Nil, t.caps.map(λ size => List::replicate(zero_byte(), size))), m) {
-    let v = λ (_: Nat) => zero_byte();
-    let env = Env(Nil, t.caps.map(λ size => List::replicate(zero_byte(), size)));
-    Exists(v, ⟨zero, ⟨λ i _ => refl,
-        λ b cap found => trans(cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(λ o => match o { None => Nil, Some(bytes) => bytes },
-                t.caps.nth_map_some<Nat, List<BitVec(8)>>(λ size => List::replicate(zero_byte(), size), b, cap, found)),
-            sym(cells_replicate(v, zero_byte(), cap, t.layout().buffer_offset(b), λ i _ => refl)))⟩⟩)
-}
 
 // What `compile` builds is laid out: read off the check it made, so a
 // client need not evaluate it again.
@@ -514,6 +536,7 @@ theorem Stmt::emit_then_of(self s: Stmt, is: s.is_then().IsTrue(), p: Prog, layo
         Branch(_, _, _) => λ no _ => false_elim(no),
         Repeat(_, _) => λ no _ => false_elim(no),
         Exit(_) => λ no _ => false_elim(no),
+        Arg(_, _, _) => λ no _ => false_elim(no),
     })(is, left)
 }
 
@@ -541,6 +564,7 @@ theorem Stmt::emit_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), fits: wor
         Then(_, _) => λ no _ _ => false_elim(no),
         Branch(_, _, _) => λ no _ _ => false_elim(no),
         Exit(_) => λ no _ _ => false_elim(no),
+        Arg(_, _, _) => λ no _ _ => false_elim(no),
     })(is, fits, body)
 }
 
@@ -581,33 +605,38 @@ theorem Stmt::emit_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), fits: wor
         Then(_, _) => λ no _ _ _ => false_elim(no),
         Repeat(_, _) => λ no _ _ _ => false_elim(no),
         Exit(_) => λ no _ _ _ => false_elim(no),
+        Arg(_, _, _) => λ no _ _ _ => false_elim(no),
     })(is, fits, yes, no)
 }
 
-// The compiled program, from its first byte with its code resident and its
-// region zero, simulates the source at every fuel.
+// The compiled program, from its first byte with its code resident, its
+// region zero and the command line `args` at RSP above the region,
+// simulates the source run with `args` at every fuel.
 theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, src.capacities()).size() <= r.size, program: Prog,
     compiled: src.compile(r.low) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
     here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
-    zero: r.Holds(λ _ => zero_byte(), s.memory)): SimProgram(r.profile.linux(), src.denote(), s) {
+    zero: r.Holds(λ _ => zero_byte(), s.memory), args: List<List<BitVec(8)>>,
+    argv: ArgvAt(r.profile.data().above(r.low.toNat() + r.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_eval(src.functions);
     let layout = src.layout(r.low);
     (match src.main.emit(src.entry(r.low), layout, 0) as λ o => src.main.emit(src.entry(r.low), layout, 0) = o →
-            (match o { None => None, Some(c) => c.prog.finish() }) = Some(program) → SimProgram(r.profile.linux(), src.denote(), s) {
+            (match o { None => None, Some(c) => c.prog.finish() }) = Some(program) → SimProgram(r.profile.linux(), src.denote(args), s) {
         None => λ _ none => absurd(none),
         Some(c) => λ emitted => {
             let whole = then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
             (match whole.laid_out() as λ b => whole.laid_out() = b →
-                    (match b { False => None, True => Some(whole) }) = Some(program) → SimProgram(r.profile.linux(), src.denote(), s) {
+                    (match b { False => None, True => Some(whole) }) = Some(program) → SimProgram(r.profile.linux(), src.denote(args), s) {
                 False => λ _ none => absurd(none),
                 True => λ laid same => (j(Option::some_inj(whole, program, same),
-                    λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimProgram(r.profile.linux(), src.denote(), s),
+                    λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimProgram(r.profile.linux(), src.denote(args), s),
                     λ at_whole => {
-                        let t = Target(r, src.capacities(), fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial));
+                        let t = Target(r, src.capacities(), fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args);
                         let entry = src.entry(r.low);
+                        let saved = Start.saves_rsp(layout);
                         let runs = src.main.emit_runs(t, call, entry, 0, c, emitted, Exists(2, refl));
                         let w_entry = entry.within_trans(c.prog, whole, src.main.emit_extends(layout, entry, 0, c, emitted), Exists(2, refl));
-                        let zeros = Env(Nil, t.caps.map(λ size => List::replicate(zero_byte(), size)));
+                        let w_saved = saved.within_trans(entry, whole, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
                         let caps = λ (k: Nat) => {
                             let shifted: (0 + k = k) = omega();
                             cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)
@@ -617,9 +646,11 @@ theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, s
                         let after = λ (end: Env) => t.goes_finish(c.prog, whole.within_self(), Ret(BitVec::zero()),
                             λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(end, u.memory),
                             λ u at exited => sim_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
-                        λ n => t.goes_inits(ITree::bind(Events::linux(), src.main.denote(call, n, src.start()), λ (flow: Flow) => Ret(flow.status())),
-                            src.buffers, 0, Start, zeros, caps, w_entry,
-                            runs(n, src.start(), λ (flow: Flow) => Ret(flow.status()), exits, after), s, here, at_whole, t.placed_zero(s.memory, zero))
+                        λ n => t.goes_start(Start, w_saved, ITree::bind(Events::linux(), src.main.denote(call, n, src.start(args)), λ (flow: Flow) => Ret(flow.status())),
+                            t.goes_inits(ITree::bind(Events::linux(), src.main.denote(call, n, src.start(args)), λ (flow: Flow) => Ret(flow.status())),
+                                src.buffers, 0, saved, t.start_env(), caps, w_entry,
+                                runs(n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
+                            s, here, at_whole, ⟨zero, argv⟩)
                     }))(resident),
             })(refl)
         },

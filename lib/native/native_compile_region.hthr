@@ -1,16 +1,19 @@
 // Where a compiled program keeps the environment (issues/native-effect-source-compiler.md,
 // round S3.2): one data region of the byte model, its first `word_slots`
 // words the environment's words, each buffer after them at its capacity,
-// then the scratch range a read lands in.
+// then the scratch range a read lands in, then the slot RSP is saved to.
 //
 // `Placed(env, m)` is the invariant between statements: the region holds
-// cells `v`, and `v` keeps the environment (`Layout::Keeps`). Every store
+// cells `v`, `v` keeps the environment (`Layout::Keeps`), and the command
+// line is at the saved RSP above the region (`Target::Stacked`). Every store
 // the code makes, and every one Linux makes, lands in the region, which
 // nothing executes, so the program stays resident; and each moves `Keeps`
 // one way: a word stored to its slot keeps the environment with that word
 // set (`keeps_word`), anything written to the scratch range keeps it as it
 // was (`keeps_agree`), and a read's bytes copied to their buffer keep it
-// with that buffer filled (`keeps_fill`).
+// with that buffer filled (`keeps_fill`). No store reaches above the
+// region, so the command line stays where it was (`Target::kept_store`),
+// and none reaches the RSP slot.
 import native_source;
 import native_compile;
 import native_compile_facts;
@@ -50,6 +53,8 @@ record Target {
     program: Prog,
     origin: BitVec(64),
     laid: program.laid_out().IsTrue(),
+    // The command line the process was started with.
+    args: List<List<BitVec(8)>>,
 }
 
 fn Target::layout(self t: Target) → Layout { Layout(t.r.low, t.caps) }
@@ -99,8 +104,22 @@ fn Layout::Keeps(self layout: Layout, env: Env, v: Nat → BitVec(8)) → Type {
     ((b, cap: Nat) → layout.capacities.nth(b) = Some(cap) → env.buffer(b) = cells_at(v, layout.buffer_offset(b), cap))
 }
 
+// The command line read only above the region, which nothing the program
+// does writes.
+fn Target::argv(self t: Target) → ByteReadAccess<X86Memory(t.r.profile)> { t.r.profile.data().above(t.r.low.toNat() + t.r.size) }
+
+// The command line at the RSP its slot holds…
+fn Target::Stacking(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
+    ArgvAt(t.argv(), m, word_in(v, t.layout().stack_offset()), t.args)
+}
+
+// …and it is the environment's.
+fn Target::Stacked(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
+    (env.args = t.args) ∧ t.Stacking(v, m)
+}
+
 fn Target::Placed(self t: Target, env: Env, m: X86Memory(t.r.profile)) → Type {
-    Exists<Nat → BitVec(8)>(λ v => t.r.Holds(v, m) ∧ t.layout().Keeps(env, v))
+    Exists<Nat → BitVec(8)>(λ v => t.r.Holds(v, m) ∧ (t.layout().Keeps(env, v) ∧ t.Stacked(env, v, m)))
 }
 
 // The word in slot `i`, as the environment reads it.
@@ -153,7 +172,7 @@ theorem Layout::buffer_apart(self layout: Layout, b, cap, other: Nat, found: lay
 }
 
 theorem Layout::scratch_holds(self layout: Layout, b, cap: Nat, found: layout.capacities.nth(b) = Some(cap)):
-    layout.scratch_offset() + cap <= layout.size() {
+    layout.scratch_offset() + cap <= layout.stack_offset() {
     let holds: (layout.scratch_offset() + cap <= layout.scratch_offset() + layout.capacities.largest()) =
         omega(layout.capacities.largest_nth(b, cap, found));
     holds
@@ -259,9 +278,16 @@ theorem Layout::keeps_fill(self layout: Layout, env: Env, v, w: Nat → BitVec(8
 // ---------------------------------------------------------------------------
 // The region in memory: reads, stores, and the code kept resident
 
+// The slot RSP is saved to ends inside the region…
+theorem Target::stack_fits(self t: Target): t.layout().stack_offset() + 8 <= t.r.size { t.fits }
+
+// …and the scratch range ends at it.
+theorem Target::scratch_room(self t: Target): t.layout().scratch_offset() + t.caps.largest() <= t.r.size {
+    t.layout().stack_offset().le_of_add_le(8, t.r.size, t.stack_fits())
+}
+
 theorem Target::scratch_fits(self t: Target): t.layout().scratch_offset() <= t.r.size {
-    let total: (t.layout().scratch_offset() + t.caps.largest() <= t.r.size) = t.fits;
-    t.layout().scratch_offset().le_of_add_le(t.caps.largest(), t.r.size, total)
+    t.layout().scratch_offset().le_of_add_le(t.caps.largest(), t.r.size, t.scratch_room())
 }
 
 theorem Target::slot_fits(self t: Target, i: Nat, inside: i < word_slots()): 8 * i + 8 <= t.r.size {
@@ -331,6 +357,57 @@ theorem Target::writable(self t: Target, m: X86Memory(t.r.profile), q, k: Nat, f
     t.r.allows(Perm::writes, refl, m, q, k, fits)
 }
 
+// ---------------------------------------------------------------------------
+// The command line kept
+
+// A store inside the region reads alike above it.
+theorem Target::kept_store(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= t.r.size):
+    ReadsKept(t.argv(), m, t.argv(), t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
+    let floor = t.r.low.toNat() + t.r.size;
+    let after = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
+    λ a byte got => {
+        let found = t.r.profile.data().above_read(floor, m, a, byte, got);
+        let outside: ((p: Nat) → p < bytes.len() → BitVec::space(64).same(next_rip(next_rip(t.r.low, q), p), a) = False) = λ p below =>
+            BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(next_rip(t.r.low, q), p), a, λ same => {
+                let value: (next_rip(next_rip(t.r.low, q), p).toNat() = t.r.low.toNat() + (q + p)) =
+                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), rip_compose(t.r.low, q, p)), t.r.toNat_at(q + p, omega(below, fits)));
+                let at: (a.toNat() = t.r.low.toNat() + (q + p)) = trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), sym(same)), value);
+                false_elim(omega(at, found.left, below, fits))
+            });
+        let read: (t.r.profile.read(after, a) = Some(byte)) =
+            trans(t.r.profile.read_agree(m, after.cells, a, t.r.profile.store_outside(m, next_rip(t.r.low, q), bytes, a, outside)), found.right);
+        let high: (floor.leb(a.toNat()) = True) = Nat::leb_true(floor, a.toNat(), found.left);
+        j(sym(high), λ b _ => (match b { True => t.r.profile.read(after, a), False => None<BitVec(8)> }) = Some(byte), read)
+    }
+}
+
+// A word slot ends below the RSP slot.
+theorem Target::slot_below_stack(self t: Target, i: Nat, inside: i < word_slots()): 8 * i + 8 <= t.layout().stack_offset() {
+    let words: (8 * i + 8 <= 8 * word_slots()) = t.layout().word_below_buffers(i, 7, inside, trivial);
+    let after: (8 * word_slots() <= t.layout().scratch_offset()) = t.layout().scratch_after_words();
+    let below: (t.layout().scratch_offset() <= t.layout().stack_offset()) = t.layout().scratch_offset().le_add_l(t.caps.largest());
+    omega(words, after, below)
+}
+
+// A store below the RSP slot keeps the slot, and the command line above.
+theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,
+    fits: q + bytes.len() <= t.layout().stack_offset(), stacking: t.Stacking(v, m)):
+    t.Stacking(t.r.buffer(v).set_span(q, bytes.to_vector()).cells, t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
+    let so = t.layout().stack_offset();
+    let w = t.r.buffer(v).set_span(q, bytes.to_vector()).cells;
+    let size: (q + bytes.len() <= t.r.size) = omega(fits, t.stack_fits());
+    let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k _ => t.r.cells_outside(v, q, bytes, so + k, Inr(omega(fits))));
+    j(sym(slot), λ rsp _ => ArgvAt(t.argv(), t.r.profile.store(m, next_rip(t.r.low, q), bytes), rsp, t.args),
+        argv_at_kept(t.argv(), m, t.argv(), t.r.profile.store(m, next_rip(t.r.low, q), bytes), t.kept_store(m, q, bytes, size),
+            word_in(v, so), t.args, stacking))
+}
+
+theorem Target::stacked_store(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,
+    fits: q + bytes.len() <= t.layout().stack_offset(), stacked: t.Stacked(env, v, m)):
+    t.Stacked(env, t.r.buffer(v).set_span(q, bytes.to_vector()).cells, t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
+    ⟨stacked.left, t.stacking_store(v, m, q, bytes, fits, stacked.right)⟩
+}
+
 // A word stored to its slot: the environment with it set.
 theorem Target::placed_word(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), i: Nat,
     inside: i < word_slots(), word: BitVec(64)):
@@ -339,7 +416,8 @@ theorem Target::placed_word(self t: Target, env: Env, m: X86Memory(t.r.profile),
     j(sym(t.word_rip(i, inside)), λ a _ => t.Placed(env.set_word(i, word), t.r.profile.store(m, a, word_bytes(word))),
         Exists(t.r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells,
             ⟨t.r.store_holds(v, m, placed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
-             t.layout().keeps_word(t.r, env, v, placed.proof.right, i, inside, word)⟩))
+             ⟨t.layout().keeps_word(t.r, env, v, placed.proof.right.left, i, inside, word),
+              t.stacked_store(env, v, m, 8 * i, word_bytes(word), t.slot_below_stack(i, inside), placed.proof.right.right)⟩⟩))
 }
 
 // The environment is the same, so is where it is placed.

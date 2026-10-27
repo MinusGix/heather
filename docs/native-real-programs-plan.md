@@ -333,6 +333,17 @@ leaf settles as its nodes do one at a time (`Env::steps_settle`). The
 - **Diagnostics** are a `write` to fd 2 from a buffer with constant bytes,
   so they come from §3.1 and need nothing of their own.
 
+**Status.** argv done, 2026-10-27 (`issues/native-source-argv.md`):
+`Source::denote(args)`, `Stmt::Arg` and its compiled copy loop
+(`native_compile_args`), with `echo` and `yes STR` built by `write-elf`
+against GNU. Two departures from the fix above. No word holds `argc`: `Arg`
+past the last argument sets its length to −1, which is how a program
+counts them, so the environment's words all still start at zero. And the
+image maps no stack region yet: the ELF theorem takes the entry memory as
+the loaded file below `0x412000` and `ArgvAt` above it as hypotheses,
+which is what Linux hands a process, and no compiled code uses a stack. The stack region proper stays with `io-image-process-stack`, for a
+compiled callee that spills.
+
 ### 3.6 Room
 
 `write-elf` puts the whole environment in `DataRegion::io_page()`: 4096 bytes

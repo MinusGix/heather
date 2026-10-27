@@ -81,6 +81,7 @@ fn Stmt::spelled_stmt(self s: Stmt) → Option<List<Nat>> {
         Branch(condition, yes, no) => Some([3, condition]).spell_then(yes.spelled_stmt()).spell_then(no.spelled_stmt()),
         Repeat(body, again) => Some([4, again]).spell_then(body.spelled_stmt()),
         Exit(status) => Some([5, status]),
+        Arg(index, buf, len) => Some([6, index, buf, len]),
     }
 }
 

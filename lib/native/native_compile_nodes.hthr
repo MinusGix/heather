@@ -84,21 +84,21 @@ theorem absent_false_mem(id: Nat, ids: List<Nat>): absent(id, ids) = False → M
 
 // A word put before the results settle is put over when a node writes it.
 theorem settle_put_over(nodes: List<Node>): (id: Nat) → Mem(id, nodes_writes(nodes)) → (words: List<Nat>) → (buffers: Buffers()) →
-    (a, c: Nat) → (after: Valuation()) →
-    Env(words.put(id, a, 0), buffers).settle(after, nodes_write_ports(nodes)) = Env(words.put(id, c, 0), buffers).settle(after, nodes_write_ports(nodes)) {
+    (args: List<List<BitVec(8)>>) → (a, c: Nat) → (after: Valuation()) →
+    Env(words.put(id, a, 0), buffers, args).settle(after, nodes_write_ports(nodes)) = Env(words.put(id, c, 0), buffers, args).settle(after, nodes_write_ports(nodes)) {
     match nodes {
         Nil => λ id m => false_elim(m),
-        Cons(node, rest) => λ id m words buffers a c after => {
+        Cons(node, rest) => λ id m words buffers args a c after => {
             let out = node_output(node);
             let k = after(out.width, out.id).toNat();
-            let tail = λ (ws: List<Nat>) => Env(ws, buffers).settle(after, nodes_write_ports(rest));
+            let tail = λ (ws: List<Nat>) => Env(ws, buffers, args).settle(after, nodes_write_ports(rest));
             match id.eq_dec(out.id) {
                 Inl(e) => cong_fn<List<Nat>, Env>(tail, j(e, λ x _ => words.put(id, a, 0).put(x, k, 0) = words.put(id, c, 0).put(x, k, 0),
                     trans(List::put_twice<Nat>(id, words, a, k, 0), sym(List::put_twice<Nat>(id, words, c, k, 0))))),
                 Inr(ne) => match m {
                     Inl(e) => false_elim(ne(e)),
                     Inr(later) => trans(cong_fn<List<Nat>, Env>(tail, List::put_swap<Nat>(id, out.id, ne, words, a, k, 0)),
-                        trans(settle_put_over(rest, id, later, words.put(out.id, k, 0), buffers, a, c, after),
+                        trans(settle_put_over(rest, id, later, words.put(out.id, k, 0), buffers, args, a, c, after),
                             cong_fn<List<Nat>, Env>(tail, sym(List::put_swap<Nat>(id, out.id, ne, words, c, k, 0))))),
                 },
             }
@@ -106,7 +106,7 @@ theorem settle_put_over(nodes: List<Node>): (id: Nat) → Mem(id, nodes_writes(n
     }
 }
 
-theorem Env::number_put(words: List<Nat>, buffers: Buffers(), id, k: Nat): Env(words.put(id, k, 0), buffers).number(id) = k {
+theorem Env::number_put(words: List<Nat>, buffers: Buffers(), args: List<List<BitVec(8)>>, id, k: Nat): Env(words.put(id, k, 0), buffers, args).number(id) = k {
     j(sym(List::put_here(id, words, k, 0)), λ o _ => (match o { None => 0, Some(n) => n }) = k, refl)
 }
 
@@ -264,7 +264,7 @@ fn Env::steps(self env: Env, nodes: List<Node>) → Env {
 // as its nodes do one at a time.
 theorem Env::steps_settle(nodes: List<Node>): nodes_wide(nodes).IsTrue() → (values: Valuation()) → (env: Env) →
     ((x: Nat) → values(64, x) = env.word(x)) →
-    Env(env.words, run_nodes(nodes, values, env.buffers).buffers).settle(run_nodes(nodes, values, env.buffers).values, nodes_write_ports(nodes)) =
+    Env(env.words, run_nodes(nodes, values, env.buffers).buffers, env.args).settle(run_nodes(nodes, values, env.buffers).values, nodes_write_ports(nodes)) =
         env.steps(nodes) {
     match nodes {
         Nil => λ _ values env _ => refl,
@@ -274,23 +274,23 @@ theorem Env::steps_settle(nodes: List<Node>): nodes_wide(nodes).IsTrue() → (va
             let s = node.run(values, env.buffers);
             let after = run_nodes(rest, s.values, s.buffers);
             let ran = node.run_wide(values, env.valuation(), agree, env.buffers, parts.left);
-            let first = Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), s.buffers);
-            let firsts: (first = env.computes([node])) = eq2(λ (k: Nat) (b: Buffers()) => Env(env.words.put(out.id, k, 0), b),
+            let first = Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), s.buffers, env.args);
+            let firsts: (first = env.computes([node])) = eq2(λ (k: Nat) (b: Buffers()) => Env(env.words.put(out.id, k, 0), b, env.args),
                 cong_fn(λ (x: BitVec(out.width)) => x.toNat(), ran.right), ran.left);
             let agree_first = λ (x: Nat) => (match x.eq_dec(out.id) as λ _ => s.values(64, x) = first.word(x) {
                 Inl(e) => j(sym(e), λ y _ => s.values(64, y) = first.word(y),
                     trans(sym(node.run_word(values, env.buffers, parts.left)),
-                        cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), sym(Env::number_put(env.words, s.buffers, out.id, s.values(out.width, out.id).toNat()))))),
+                        cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), sym(Env::number_put(env.words, s.buffers, env.args, out.id, s.values(out.width, out.id).toNat()))))),
                 Inr(ne) => trans(node.run_other(values, env.buffers, 64, x, ne), trans(agree(x),
                     cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), sym(List::put_other(out.id, env.words, s.values(out.width, out.id).toNat(), 0, x, ne))))),
             });
             let over = (match absent(out.id, nodes_writes(rest)) as λ b => absent(out.id, nodes_writes(rest)) = b →
-                Env(env.words.put(out.id, after.values(out.width, out.id).toNat(), 0), after.buffers).settle(after.values, nodes_write_ports(rest)) =
-                    Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), after.buffers).settle(after.values, nodes_write_ports(rest)) {
-                True => λ fresh => cong_fn<Nat, Env>(λ k => Env(env.words.put(out.id, k, 0), after.buffers).settle(after.values, nodes_write_ports(rest)),
+                Env(env.words.put(out.id, after.values(out.width, out.id).toNat(), 0), after.buffers, env.args).settle(after.values, nodes_write_ports(rest)) =
+                    Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), after.buffers, env.args).settle(after.values, nodes_write_ports(rest)) {
+                True => λ fresh => cong_fn<Nat, Env>(λ k => Env(env.words.put(out.id, k, 0), after.buffers, env.args).settle(after.values, nodes_write_ports(rest)),
                     cong_fn(λ (x: BitVec(out.width)) => x.toNat(),
                         run_nodes_frame(rest, s.values, s.buffers, out.width, out.id, j(sym(fresh), λ b _ => b.IsTrue(), trivial)))),
-                False => λ written => settle_put_over(rest, out.id, absent_false_mem(out.id, nodes_writes(rest), written), env.words, after.buffers,
+                False => λ written => settle_put_over(rest, out.id, absent_false_mem(out.id, nodes_writes(rest), written), env.words, after.buffers, env.args,
                     after.values(out.width, out.id).toNat(), s.values(out.width, out.id).toNat(), after.values),
             })(refl);
             trans(over, trans(Env::steps_settle(rest, parts.right, s.values, first, agree_first), cong_fn<Env, Env>(λ e => e.steps(rest), firsts)))
@@ -353,13 +353,13 @@ theorem Target::goes_node_alone(self t: Target, env: Env, p, q: Prog, node: Node
     let renamed = node.renamed(node.spare());
     let v = env.valuation();
     let k = node.value(v)(out.width).toNat();
-    let stored: (Env(env.words.put(out.id, renamed.step(v)(node_output(renamed).width, node_output(renamed).id).toNat(), 0), env.buffers) =
-            Env(env.words.put(out.id, k, 0), env.buffers)) =
-        cong_fn<Nat, Env>(λ n => Env(env.words.put(out.id, n, 0), env.buffers), node.renamed_step(node.spare(), v));
-    let computed: (Env(env.words.put(out.id, k, 0), env.buffers) = env.computes([node])) =
+    let stored: (Env(env.words.put(out.id, renamed.step(v)(node_output(renamed).width, node_output(renamed).id).toNat(), 0), env.buffers, env.args) =
+            Env(env.words.put(out.id, k, 0), env.buffers, env.args)) =
+        cong_fn<Nat, Env>(λ n => Env(env.words.put(out.id, n, 0), env.buffers, env.args), node.renamed_step(node.spare(), v));
+    let computed: (Env(env.words.put(out.id, k, 0), env.buffers, env.args) = env.computes([node])) =
         j(sym(node.run_pure(v, env.buffers, pure)),
-            λ s _ => Env(env.words.put(out.id, k, 0), env.buffers) = Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), s.buffers),
-            cong_fn<Nat, Env>(λ n => Env(env.words.put(out.id, n, 0), env.buffers),
+            λ s _ => Env(env.words.put(out.id, k, 0), env.buffers, env.args) = Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), s.buffers, env.args),
+            cong_fn<Nat, Env>(λ n => Env(env.words.put(out.id, n, 0), env.buffers, env.args),
                 cong_fn(λ (x: BitVec(out.width)) => x.toNat(), sym(Valuation::set_here(v, out.id, node.value(v), out.width)))));
     t.goes_leaf_into(env, p, q, [renamed], [out.id], emitted, within, tree,
         j(sym(trans(stored, computed)), λ e _ => t.At(prog_len(q), tree, e), next))
@@ -482,7 +482,7 @@ theorem Target::goes_computes(self t: Target, env: Env, p: Prog, nodes: List<Nod
             let next_q: t.At(prog_len(q), tree, env.computes(nodes)) = j(sym(c_is), λ x _ => t.At(prog_len(x.prog), tree, env.computes(nodes)), next);
             let ran = run_nodes_pure(nodes, leafed.left, env.valuation(), env.buffers);
             t.goes_leaf(env, p, q, nodes, leafed.right, w_q, tree,
-                j(ran, λ s _ => t.At(prog_len(q), tree, Env(env.words, s.buffers).settle(s.values, nodes_write_ports(nodes))), next_q))
+                j(ran, λ s _ => t.At(prog_len(q), tree, Env(env.words, s.buffers, env.args).settle(s.values, nodes_write_ports(nodes))), next_q))
         },
         None => λ _ => (match nodes_wide(nodes) as λ b => nodes_wide(nodes) = b →
                 (match b { True => p.each_node(layout, nodes, names), False => None }) = Some(c) → t.At(prog_len(p), tree, env) {

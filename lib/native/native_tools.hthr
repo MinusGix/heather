@@ -1,5 +1,6 @@
-// cat and the tools past it (docs/native-real-programs-plan.md, rounds 1
-// and 5): `tr a-z A-Z`, `yes`, `head -c N` and `wc -l`, written with the builder
+// cat and the tools past it (docs/native-real-programs-plan.md, rounds 1,
+// 5 and 6): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, and `echo` and
+// `yes STR` over the command line, written with the builder
 // (`native_build`) and lowered to sources `heather write-elf` compiles.
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
@@ -75,3 +76,51 @@ fn wc_l(capacity: Nat) → Tool {
 }
 
 fn wc_l_source() → Source { wc_l(256).source() }
+
+// ---------------------------------------------------------------------------
+// echo
+
+// The arguments past the program's name, a space between each, then a
+// newline: GNU's `echo` given no flags. An argument longer than the buffer
+// exits 1 where it would be written (the copy keeps only the buffer's
+// worth; issues/native-source-argv.md).
+fn echo(capacity: Nat) → Tool {
+    buffer(capacity, λ text => buffer_of([BitVec::ofNat(32)], λ space => buffer_of([BitVec::ofNat(10)], λ newline =>
+        run(local(num(1), λ k => local(num(0), λ len =>
+            arg(k.get(), text, len)
+            ++ loop_while(len.get().negative().not(),
+                when(num(capacity).below(len.get()), exit(num(1)))
+                ++ write_all(stdout(), text, len.get())
+                ++ k.set(k.get() + num(1))
+                ++ arg(k.get(), text, len)
+                ++ when(len.get().negative().not(), write_all(stdout(), space, num(1))))
+            ++ write_all(stdout(), newline, num(1))))))))
+}
+
+fn echo_source() → Source { echo(1024).source() }
+
+// ---------------------------------------------------------------------------
+// yes STR
+
+// The line of the arguments past the program's name, a space between each,
+// or `y` if there are none, written again and again: GNU's `yes`. A line
+// longer than the buffer exits 1 before anything is written; a failed write
+// exits 1.
+fn yes_args(capacity: Nat) → Tool {
+    buffer(capacity, λ text => buffer(capacity, λ line => run(
+        local(num(1), λ k => local(num(0), λ len => local(num(0), λ at =>
+            arg(k.get(), text, len)
+            ++ branch(len.get().negative(),
+                line.put(num(0), num(121)) ++ at.set(num(1)),
+                loop_while(len.get().negative().not(),
+                    when(num(capacity).below(at.get() + len.get() + num(1)), exit(num(1)))
+                    ++ for_count(len.get(), λ i => line.put(at.get() + i.get(), text.at(i.get())))
+                    ++ at.set(at.get() + len.get())
+                    ++ k.set(k.get() + num(1))
+                    ++ arg(k.get(), text, len)
+                    ++ when(len.get().negative().not(), line.put(at.get(), num(32)) ++ at.set(at.get() + num(1)))))
+            ++ line.put(at.get(), num(10)) ++ at.set(at.get() + num(1))
+            ++ do_while(write_all(stdout(), line, at.get()), num(1))))))))
+}
+
+fn yes_args_source() → Source { yes_args(1024).source() }

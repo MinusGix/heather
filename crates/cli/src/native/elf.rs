@@ -66,7 +66,7 @@ const REGION: std::ops::Range<u64> = 0x410000..0x412000;
 /// own; `write-elf` loads them itself, so a program file imports only what
 /// it uses.
 const IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_compile", "native_compile_correct", "native_compile_elf",
-    "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
+    "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_io", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
     "x86_64_asm_table",
     "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
 
@@ -268,11 +268,11 @@ fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 
     // Of the literal, then of the source by its equation.
     let simulated = format!("{src}().elf_file_simulates({p}_code(), {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory = X86Memory::io_load(f), loaded))");
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom(f), loaded), args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
 {lowered}theorem {p}_lowered_is(): {symbol}() = {src}() {{ refl }}
-"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io().linux(), src.denote(), s),\n        {simulated})"))
+"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io().linux(), src.denote(args), s),\n        {simulated})"))
     };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
@@ -334,11 +334,13 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
         j(sym({p}_length()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {length}, 65536, trivial)))
 }}
 
-// The process Linux makes of the file written, at its entry, simulates
-// `{symbol}`'s tree (`Source::elf_file_simulates`, from
-// `native_compile_correct`).
+// The process Linux makes of the file written, at its entry with the
+// command line `args` on its stack, simulates `{symbol}`'s tree run with
+// `args` (`Source::elf_file_simulates`, from `native_compile_correct`).
 theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io())>, entry: s.rip = io_entry(),
-    loaded: s.memory = X86Memory::io_load({p}_file())): SimProgram(X86Profile::io().linux(), {symbol}().denote(), s) {{
+    loaded: s.memory.LoadedFrom({p}_file()), args: List<List<BitVec(8)>>,
+    argv: ArgvAt(X86Profile::io().data().above(0x412000), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::io().linux(), {symbol}().denote(args), s) {{
     {simulates}
 }}
 ", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));
@@ -386,7 +388,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
     let [at, kind, reason, first, second] = *why else {
         return format!("`{symbol}` did not compile, and `Source::refusal` names no reason");
     };
-    let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", _ => "the program" };
+    let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", 6 => "an argument", _ => "the program" };
     let reason = match reason {
         0 => format!("a {} region; only a dataflow leaf compiles (issues/native-compile-wider-leaves.md)",
             ["", "sequence", "compose", "conditional", "call", "loop"].get(first as usize).unwrap_or(&"structured")),

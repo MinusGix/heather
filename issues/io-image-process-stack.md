@@ -3,7 +3,7 @@ title: Map the process stack (RSP, argv) in the I/O image's profile
 status: open
 labels: [native,x86,memory]
 created: 2026-10-22
-updated: 2026-10-26
+updated: 2026-10-27
 area: heather-in-heather
 milestone: [hih-memory-model, hih-tools]
 ---
@@ -37,3 +37,4 @@ from the entry.
 
 - 2026-10-24: 2026-10-24: Wp runs stack items now ([[wp-stack-items]]); its call control (crates/elab/tests/fixtures/linux_wp_call.hthr) uses the I/O frame as the stack until this lands, and [[wp-callee-from-lowered-function]] needs the region for a compiled callee.
 - 2026-10-26: Taken up by [[native-source-argv]] (round 6 of `docs/native-real-programs-plan.md`), which finishes it: argv is the first client of the stack region.
+- 2026-10-27: [[native-source-argv]] did the argv part without a stack region: the ELF theorem (native_compile_elf) takes the entry memory as `X86Memory::LoadedFrom(file)` below 0x412000 and `ArgvAt` above it, at the entry RSP; compiled code reads argv through RSP saved at entry and pushes nothing. What stays here: the region a compiled callee spills into (`DataRegion::stack` from the entry), its size decision, and the loader mapping it.

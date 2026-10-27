@@ -5,10 +5,11 @@
 //
 // A statement computes a FunctionIR region over the environment's words,
 // asks Linux a call, runs two statements in sequence, branches on a bit,
-// repeats a body while a bit is set, or exits. `denote` maps each to the tree
-// construct of the same shape: a region is `Ret` of its evaluation
-// (`function_ir_eval`), a call is `Vis` with the answer decoded into the
-// environment, sequencing is `bind`, a loop is `iter`, and exit is a leaf.
+// repeats a body while a bit is set, copies a command-line argument into a
+// buffer, or exits. `denote` maps each to the tree construct of the same
+// shape: a region is `Ret` of its evaluation (`function_ir_eval`), a call is
+// `Vis` with the answer decoded into the environment, sequencing is `bind`,
+// a loop is `iter`, and an argument and exit are leaves.
 // Nothing about the machine is here: the compiler and its theorem (S3.2)
 // relate this meaning to code.
 //
@@ -21,7 +22,9 @@
 // and writes buffers whole and never faults: a read asks for at most what
 // its buffer holds and lands at the buffer's start, and a write sends the
 // span its buffer holds. A failed call leaves its errno negated in its
-// result word, as Linux leaves it in RAX.
+// result word, as Linux leaves it in RAX. The command line is part of the
+// environment, read and never written: a program's meaning is a family over
+// its arguments (`Source::denote(args)`).
 //
 // Every loop goes round at most the fuel's number of times, so a program is
 // the family of its trees over fuel (`Source::denote`, a `Program`), and
@@ -55,8 +58,9 @@ fn List::put<A>(self xs: List<A>, i: Nat, x: A, pad: A) → List<A> {
 // A file of words, by id, each kept as the number it reads as unsigned, and
 // of buffers, by id; past its end a file reads zero, or an empty buffer.
 // Both are data, not functions, so a word or a buffer is computed once
-// however often it is read.
-record Env { words: List<Nat>, buffers: List<List<BitVec(8)>> }
+// however often it is read. The command line, `argv` with argv[0] first,
+// is read and never written.
+record Env { words: List<Nat>, buffers: List<List<BitVec(8)>>, args: List<List<BitVec(8)>> }
 
 fn Env::number(self env: Env, id: Nat) → Nat {
     match env.words.nth(id) { None => 0, Some(n) => n }
@@ -74,11 +78,11 @@ fn Env::buffer(self env: Env, id: Nat) → List<BitVec(8)> {
 fn Env::valuation(self env: Env) → Valuation() { λ w id => BitVec::ofNat(env.number(id)) }
 
 fn Env::set_word(self env: Env, id: Nat, word: BitVec(64)) → Env {
-    Env(env.words.put(id, word.toNat(), 0), env.buffers)
+    Env(env.words.put(id, word.toNat(), 0), env.buffers, env.args)
 }
 
 fn Env::set_buffer(self env: Env, id: Nat, bytes: List<BitVec(8)>) → Env {
-    Env(env.words, env.buffers.put(id, bytes, Nil))
+    Env(env.words, env.buffers.put(id, bytes, Nil), env.args)
 }
 
 // The ports a region writes, each at its width; a call's result is a word.
@@ -102,13 +106,13 @@ fn StructuredRegion::write_ports(self region: StructuredRegion) → List<Port> {
 fn Env::settle(self env: Env, after: Valuation(), ports: List<Port>) → Env {
     match ports {
         Nil => env,
-        Cons(port, rest) => Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers).settle(after, rest),
+        Cons(port, rest) => Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers, env.args).settle(after, rest),
     }
 }
 
 fn Env::compute(self env: Env, call: Answers(), region: StructuredRegion) → Env {
     let after = region.run(call, env.valuation(), env.buffers);
-    Env(env.words, after.buffers).settle(after.values, region.write_ports())
+    Env(env.words, after.buffers, env.args).settle(after.values, region.write_ports())
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +183,24 @@ fn CallShape::answer(self shape: CallShape, env: Env) → shape.cmd(env).Resp() 
 }
 
 // ---------------------------------------------------------------------------
+// The command line
+
+// The minus one a word holds for an argument past the last.
+fn missing_word() → BitVec(64) { BitVec::ofNat(1).neg() }
+
+// Argument `k` (argv[k], argv[0] the program's name) copied to the start of
+// buffer `buf`, as much of it as the buffer holds, and its whole length
+// into word `len`; past the last argument, `len` minus one and the buffer
+// as it was. So a program learns how many arguments it has by asking past
+// them, and that an argument was cut by its length.
+fn Env::arg(self env: Env, k, buf, len: Nat) → Env {
+    match env.args.nth(k) {
+        None => env.set_word(len, missing_word()),
+        Some(arg) => env.set_buffer(buf, fill(env.buffer(buf), arg)).set_word(len, count_word(arg.len())),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Statements
 
 inductive Stmt {
@@ -194,6 +216,9 @@ inductive Stmt {
     Repeat(body: Stmt, again: Nat),
     // Exit with a word's status: a leaf.
     Exit(status: Nat),
+    // The argument the word `index` names into buffer `buf`, its length
+    // into word `len` (`Env::arg`).
+    Arg(index: Nat, buf: Nat, len: Nat),
 }
 
 // Where a statement leaves the program: on to the next statement, or out.
@@ -223,6 +248,7 @@ fn Stmt::denote(self s: Stmt, call: Answers(), n: Nat, env: Env) → ITree<Flow>
         Repeat(body, again) => ITree::iter(Events::linux(), n,
             λ e => ITree::map(Events::linux(), body.denote(call, n, e), λ flow => flow.pass(again)), env),
         Exit(status) => Ret(Exited(env.word(status))),
+        Arg(index, buf, len) => Ret(Onward(env.arg(env.number(index), buf, len))),
     }
 }
 
@@ -255,6 +281,7 @@ theorem Stmt::grows(self s: Stmt, call: Answers(), n: Nat): (env: Env) →
                 λ flow => Ret(flow.pass(again)), λ flow => Ret(flow.pass(again)), body.grows(call, n, e), λ flow => refl),
             env),
         Exit(_) => λ env => refl,
+        Arg(_, _, _) => λ env => refl,
     }
 }
 
@@ -284,9 +311,9 @@ fn initial_stores(buffers: List<Buffer>, buf: Nat, file: Buffers()) → Buffers(
 }
 
 // Words all zero; each buffer its capacity of zero bytes, then its initial
-// bytes stored.
-fn Source::start(self src: Source) → Env {
-    Env(Nil, initial_stores(src.buffers, 0, src.capacities().map(λ size => List::replicate(zero_byte(), size))))
+// bytes stored; the command line `args`.
+fn Source::start(self src: Source, args: List<List<BitVec(8)>>) → Env {
+    Env(Nil, initial_stores(src.buffers, 0, src.capacities().map(λ size => List::replicate(zero_byte(), size))), args)
 }
 
 // Running off the end exits 0.
@@ -294,14 +321,15 @@ fn Flow::status(self flow: Flow) → BitVec(64) {
     match flow { Onward(_) => BitVec::zero(), Exited(status) => status }
 }
 
-fn Source::tree(self src: Source, n: Nat) → ITree<BitVec(64)>(Events::linux()) {
-    ITree::map(Events::linux(), src.main.denote(program_eval(src.functions), n, src.start()), λ flow => flow.status())
+fn Source::tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<BitVec(64)>(Events::linux()) {
+    ITree::map(Events::linux(), src.main.denote(program_eval(src.functions), n, src.start(args)), λ flow => flow.status())
 }
 
-fn Source::denote(self src: Source) → Program<BitVec(64)>(Events::linux()) {
-    Program(λ n => src.tree(n), λ n => ITree::below_bind(Events::linux(),
-        src.main.denote(program_eval(src.functions), n, src.start()),
-        src.main.denote(program_eval(src.functions), Succ(n), src.start()),
+// The program run with the command line `args`.
+fn Source::denote(self src: Source, args: List<List<BitVec(8)>>) → Program<BitVec(64)>(Events::linux()) {
+    Program(λ n => src.tree(args, n), λ n => ITree::below_bind(Events::linux(),
+        src.main.denote(program_eval(src.functions), n, src.start(args)),
+        src.main.denote(program_eval(src.functions), Succ(n), src.start(args)),
         λ flow => Ret(flow.status()), λ flow => Ret(flow.status()),
-        src.main.grows(program_eval(src.functions), n, src.start()), λ flow => refl))
+        src.main.grows(program_eval(src.functions), n, src.start(args)), λ flow => refl))
 }

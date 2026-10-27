@@ -33,8 +33,13 @@
 //   second arm; `Repeat` runs its body from a label, tests `again`, JEs out
 //   and JMPs back; `Exit` makes the exit call with its word. Running off the
 //   end of `main` exits 0.
-// - At entry each buffer's initial bytes are stored, a byte at a time, as
-//   many as it holds.
+// - `Arg` reads argc and argv from the initial stack Linux built, through
+//   the RSP saved at entry in a slot past the scratch range. Past argc it
+//   stores minus one into the length word; otherwise it copies the
+//   argument's bytes up to its NUL into the buffer, as many as it holds,
+//   and stores the whole length (native_compile_args).
+// - At entry RSP is saved, then each buffer's initial bytes are stored, a
+//   byte at a time, as many as it holds.
 //
 // Any id at or past `word_slots` is refused. The program is checked once,
 // by evaluation, for its layout (`Prog::laid_out`).
@@ -84,7 +89,9 @@ fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { layout.low.
 fn Layout::byte_at(self layout: Layout, buf, i: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf) + i) }
 fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * word_slots() + layout.capacities.total() }
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
-fn Layout::size(self layout: Layout) → Nat { layout.scratch_offset() + layout.capacities.largest() }
+fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + layout.capacities.largest() }
+fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
+fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 8 }
 
 // ---------------------------------------------------------------------------
 // Words in and out of their slots
@@ -318,6 +325,61 @@ fn Prog::call(self p: Prog, layout: Layout, shape: CallShape, names: Nat) → Op
 }
 
 // ---------------------------------------------------------------------------
+// The command line
+
+// RSP as the process starts, saved to the slot past the scratch range: the
+// command line is above it (`ArgvAt`), and no statement keeps a register.
+fn Prog::saves_rsp(self p: Prog, layout: Layout) → Prog {
+    then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)))
+}
+
+// RDX the saved RSP, R9 argc, RCX the index; past argc a JAE to `past`.
+fn Prog::arg_count(self p: Prog, layout: Layout, index, past: Nat) → Prog {
+    let loaded = then(then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Load(WordLoad(Rdx, Rbx))), Load(WordLoad(R9, Rdx)));
+    then(then(loaded.word_to(layout, index, Rcx), Block([CmpRR(Rcx, R9)])), Jcc(AE, past))
+}
+
+// RSI argv[index], read at RSP + 8 (index + 1); R8 the count from zero, R9
+// the capacity, RDI the buffer.
+fn Prog::arg_pointer(self p: Prog, layout: Layout, buf, cap, head: Nat) → Prog {
+    let slot = then(p, Block([MovRR(Rbx, Rcx), AddRR(Rbx, Rbx), AddRR(Rbx, Rbx), AddRR(Rbx, Rbx), AddRR(Rbx, Rdx), AddRI8(Rbx, BitVec::ofNat(8))]));
+    then(then(slot, Load(WordLoad(Rsi, Rbx))), Block([MovRI(R8, BitVec::ofNat(0)), MovRI(R9, BitVec::ofNat(cap)), MovRI(Rdi, layout.buffer_at(buf))])).label(head)
+}
+
+// The string's bytes up to its NUL: RDX each, stored at RDI while R8 is
+// below the capacity, RSI, RDI and R8 stepped, a JMP back to `head`.
+fn Prog::arg_copy(self p: Prog, head, done, skip: Nat) → Prog {
+    let tested = then(then(then(p, LoadByte(ByteLoad(Rdx, Rsi))), Block([TestRR(Rdx, Rdx)])), Jcc(E, done));
+    let stored = then(then(then(tested, Block([CmpRR(R8, R9)])), Jcc(AE, skip)), StoreByte(ByteStore(Rdi, Rdx))).label(skip);
+    then(then(stored, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
+}
+
+// Argument `index` copied into buffer `buf`, its length or minus one into
+// word `len`: the count tested, the string copied, then the length (R8, or
+// minus one from `past`) stored at `out`.
+fn Prog::args(self p: Prog, layout: Layout, index, buf, len, cap, names: Nat) → Compiled {
+    let head = Succ(names);
+    let skip = Succ(head);
+    let done = Succ(skip);
+    let past = Succ(done);
+    let out = Succ(past);
+    let copied = p.arg_count(layout, index, past).arg_pointer(layout, buf, cap, head).arg_copy(head, done, skip);
+    let found = then(then(copied.label(done), Block([MovRR(Rax, R8)])), Jmp(out));
+    let missing = then(found.label(past), Block([MovRI(Rax, missing_word())])).label(out);
+    Compiled(missing.word_from(layout, len, Rax), out)
+}
+
+fn Prog::arg(self p: Prog, layout: Layout, index, buf, len, names: Nat) → Option<Compiled> {
+    match words_fit([index, len]) {
+        False => None,
+        True => match layout.capacities.nth(buf) {
+            None => None,
+            Some(cap) => Some(p.args(layout, index, buf, len, cap, names)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // A byte node
 
 // RAX the byte at the word `index` of buffer `buf`, zero-extended, or zero
@@ -538,6 +600,7 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, names: Nat) → Option<Comp
             False => None,
             True => Some(Compiled(p.exits(layout, status), names)),
         },
+        Arg(index, buf, len) => p.arg(layout, index, buf, len, names),
     }
 }
 
@@ -545,7 +608,7 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, names: Nat) → Option<Comp
 // layout.
 fn Source::layout(self src: Source, low: BitVec(64)) → Layout { Layout(low, src.capacities()) }
 
-fn Source::entry(self src: Source, low: BitVec(64)) → Prog { Start.inits(src.layout(low), src.buffers, 0) }
+fn Source::entry(self src: Source, low: BitVec(64)) → Prog { Start.saves_rsp(src.layout(low)).inits(src.layout(low), src.buffers, 0) }
 
 fn Prog::finish(self p: Prog) → Option<Prog> {
     let whole = then(then(p, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
@@ -568,7 +631,7 @@ fn Source::compile(self src: Source, low: BitVec(64)) → Option<Prog> {
 // A refusal is `[at, kind, reason, first, second]`: `at` numbers every
 // statement but `Then` from 1, in source order (a `Branch` or `Repeat`
 // before its arms); `kind` is 0 a computation, 1 a call, 2 a branch, 3 a
-// loop, 4 an exit, 5 the program as a whole; the reasons, with what
+// loop, 4 an exit, 5 the program as a whole, 6 an argument; the reasons, with what
 // `first` and `second` hold:
 //
 //   0  a region other than a dataflow leaf (1 Sequence, 2 Compose,
@@ -733,6 +796,7 @@ fn Stmt::scan(self s: Stmt, layout: Layout, at: Nat) → CompileScan {
             Refused(why) => Refused(why),
         },
         Exit(status) => CompileScan::of(at, 4, ids_refusal([status])),
+        Arg(index, buf, len) => CompileScan::of(at, 6, buffer_refusal(layout, [index, len], buf)),
     }
 }
 
@@ -780,6 +844,7 @@ fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
             _ => names,
         },
         Invoke(shape) => match shape { Reads(_, _, _, _) => Succ(Succ(Succ(names))), Writes(_, _, _, _, _) => Succ(Succ(names)), _ => names },
+        Arg(_, _, _) => Succ(Succ(Succ(Succ(Succ(names))))),
         _ => names,
     }
 }
@@ -794,6 +859,7 @@ fn Stmt::shape(self s: Stmt, m: Shape) → Shape {
         Compute(region) => Compute(region).leaf_shape(m),
         Invoke(shape) => Invoke(shape).leaf_shape(m),
         Exit(code) => Exit(code).leaf_shape(m),
+        Arg(index, buf, len) => Arg(index, buf, len).leaf_shape(m),
     }
 }
 
@@ -815,9 +881,9 @@ fn Stmt::emission_reading(self s: Stmt, layout: Layout, names: Nat) → List<Nat
 // parent's (`Stmt::emit_then_of` and its siblings, native_compile_correct):
 // a `Then`'s two statements, a `Branch`'s two arms, a `Repeat`'s body on the
 // left; and the word a `Branch` or `Repeat` tests. A leaf is its own parts.
-fn Stmt::is_then(self s: Stmt) → Bool { match s { Then(_, _) => True, Compute(_) => False, Invoke(_) => False, Branch(_, _, _) => False, Repeat(_, _) => False, Exit(_) => False } }
-fn Stmt::is_branch(self s: Stmt) → Bool { match s { Branch(_, _, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Repeat(_, _) => False, Exit(_) => False } }
-fn Stmt::is_repeat(self s: Stmt) → Bool { match s { Repeat(_, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Branch(_, _, _) => False, Exit(_) => False } }
-fn Stmt::left(self s: Stmt) → Stmt { match s { Then(first, _) => first, Branch(_, yes, _) => yes, Repeat(body, _) => body, Compute(_) => s, Invoke(_) => s, Exit(_) => s } }
-fn Stmt::right(self s: Stmt) → Stmt { match s { Then(_, rest) => rest, Branch(_, _, no) => no, Repeat(_, _) => s, Compute(_) => s, Invoke(_) => s, Exit(_) => s } }
-fn Stmt::word(self s: Stmt) → Nat { match s { Branch(condition, _, _) => condition, Repeat(_, again) => again, Then(_, _) => 0, Compute(_) => 0, Invoke(_) => 0, Exit(_) => 0 } }
+fn Stmt::is_then(self s: Stmt) → Bool { match s { Then(_, _) => True, Compute(_) => False, Invoke(_) => False, Branch(_, _, _) => False, Repeat(_, _) => False, Exit(_) => False, Arg(_, _, _) => False } }
+fn Stmt::is_branch(self s: Stmt) → Bool { match s { Branch(_, _, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Repeat(_, _) => False, Exit(_) => False, Arg(_, _, _) => False } }
+fn Stmt::is_repeat(self s: Stmt) → Bool { match s { Repeat(_, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Branch(_, _, _) => False, Exit(_) => False, Arg(_, _, _) => False } }
+fn Stmt::left(self s: Stmt) → Stmt { match s { Then(first, _) => first, Branch(_, yes, _) => yes, Repeat(body, _) => body, Compute(_) => s, Invoke(_) => s, Exit(_) => s, Arg(_, _, _) => s } }
+fn Stmt::right(self s: Stmt) → Stmt { match s { Then(_, rest) => rest, Branch(_, _, no) => no, Repeat(_, _) => s, Compute(_) => s, Invoke(_) => s, Exit(_) => s, Arg(_, _, _) => s } }
+fn Stmt::word(self s: Stmt) → Nat { match s { Branch(condition, _, _) => condition, Repeat(_, again) => again, Then(_, _) => 0, Compute(_) => 0, Invoke(_) => 0, Exit(_) => 0, Arg(_, _, _) => 0 } }

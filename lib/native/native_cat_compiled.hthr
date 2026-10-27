@@ -69,25 +69,25 @@ theorem cat_bytes_fit(): 232 + cat_bytes().len() <= 65536 {
 }
 
 // The process Linux makes of a 232-byte header and cat's bytes, at its
-// entry, simulates cat.
+// entry with any command line, simulates cat.
 theorem cat_native_simulates(header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io())>,
-    entry: s.rip = io_entry(), loaded: s.memory = X86Memory::io_load(header ++ cat_bytes())):
-    SimProgram(X86Profile::io().linux(), cat(cat_capacity()).denote(), s) {
-    cat(cat_capacity()).elf_simulates(cat_code(), cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, s, entry, loaded)
+    entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(header ++ cat_bytes()), args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io().data().above(0x412000), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::io().linux(), cat(cat_capacity()).denote(args), s) {
+    cat(cat_capacity()).elf_simulates(cat_code(), cat_compiles(), cat_fits(), cat_bytes_fit(), header, long, s, entry, loaded, args, argv)
 }
 
 // So every run of that process that Linux can give cat's answers, along a
 // trace cat produces that exits 0, sends to stdout what it read from stdin.
 theorem cat_native_sends(header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io())>,
-    entry: s.rip = io_entry(), loaded: s.memory = X86Memory::io_load(header ++ cat_bytes()),
-    tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(cat_capacity()).denote(), tr),
+    entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(header ++ cat_bytes()), args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io().data().above(0x412000), s.memory, read_gpr(Rsp, s.gprs), args),
+    tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(cat_capacity()).denote(args), tr),
     valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok()),
     run: List<LinuxEvent>, ran: LinuxRun(X86Profile::io().linux(), run, s), responses: SameResponses(Trace::linux_events(tr), run)):
     sent_to(BitVec::ofNat(1), run) = Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr) {
     let io = X86Profile::io().linux();
-    let program = cat(cat_capacity()).denote();
-    trans(sim_run_sends(io, program.at(produces.n), s, cat_native_simulates(header, long, s, entry, loaded, produces.n), tr, produces.h, valid,
+    let program = cat(cat_capacity()).denote(args);
+    trans(sim_run_sends(io, program.at(produces.n), s, cat_native_simulates(header, long, s, entry, loaded, args, argv, produces.n), tr, produces.h, valid,
             Trace::returns_of_with(Events::linux(), tr, filter_ok(), returns), run, ran, responses, BitVec::ofNat(1)),
-        cat_sends(cat_capacity(), Nat::leb_sound(1, cat_capacity(), trivial), Nat::leb_sound(Succ(cat_capacity()), Nat::pow(2, 63), trivial),
+        cat_sends(args, cat_capacity(), Nat::leb_sound(1, cat_capacity(), trivial), Nat::leb_sound(Succ(cat_capacity()), Nat::pow(2, 63), trivial),
             tr, produces, valid, returns))
 }

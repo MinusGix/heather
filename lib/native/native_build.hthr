@@ -6,8 +6,8 @@
 // only in certain shapes (`Prog::computes`). A `Tool` is written instead:
 // its buffers and words are bound by Heather lambdas (`buffer`, `local`),
 // its values are expressions (`Val`), and its statements (`Act`) assign,
-// store a byte, branch and loop on a value being nonzero, read, write and
-// exit. A procedure is an ordinary Heather function returning an `Act`, so
+// store a byte, branch and loop on a value being nonzero, read, write,
+// copy a command-line argument and exit. A procedure is an ordinary Heather function returning an `Act`, so
 // it is inlined where it is called (`write_all`, `each_read`, `for_count`).
 //
 // `Tool::source` lowers a tool. It numbers the words in the order their
@@ -84,6 +84,10 @@ inductive Act {
     // the negated errno into `result`.
     ReadTo(fd: Val, buf: Buf, len: Val, result: Var),
     WriteFrom(fd: Val, buf: Buf, from: Val, len: Val, result: Var),
+    // Argument `index` (argv[0] the program's name) copied to the buffer's
+    // start, as much as it holds, and its whole length into `len`; past
+    // the last argument, `len` minus one (`Env::arg`).
+    ArgTo(index: Val, buf: Buf, len: Var),
     Quit(status: Val),
 }
 
@@ -175,6 +179,7 @@ fn do_while(body: Act, condition: Val) → Act { DoWhile(body, condition) }
 fn read(fd: Val, buf: Buf, len: Val, result: Var) → Act { ReadTo(fd, buf, len, result) }
 fn write(fd: Val, buf: Buf, from, len: Val, result: Var) → Act { WriteFrom(fd, buf, from, len, result) }
 fn exit(status: Val) → Act { Quit(status) }
+fn arg(index: Val, buf: Buf, len: Var) → Act { ArgTo(index, buf, len) }
 
 fn run(main: Act) → Tool { Run(main) }
 fn buffer(capacity: Nat, body: Buf → Tool) → Tool { WithBuffer(capacity, [], body) }
@@ -433,6 +438,10 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
             let s = from.place(f.next);
             let n = len.place(s.next);
             (f.nodes ++ s.nodes ++ n.nodes).ops() ++ [Do(Invoke(Writes(f.id, buf.id, s.id, n.id, result.id)))]
+        },
+        ArgTo(index, buf, len) => {
+            let k = index.place(next);
+            k.nodes.ops() ++ [Do(Arg(k.id, buf.id, len.id))]
         },
         Quit(status) => {
             let s = status.place(next);
