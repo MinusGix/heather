@@ -924,6 +924,15 @@ fn affine_syntax(
             });
         }
     }
+    // A sum at a successor bound, as at `Nat`.
+    if let Some(peeled) = crate::range_sum::peel(elab, tm)
+        && crate::range_sum::op_is(elab, &peeled.op, "int::Int::add")
+    {
+        return Ok(AffineSyntax::Add {
+            left: Box::new(affine_syntax(elab, cx, &peeled.rest, atoms)?),
+            right: Box::new(affine_syntax(elab, cx, &peeled.last, atoms)?),
+        });
+    }
     if let Some(args) = named_args(elab, tm, "int::Int::sub") {
         if let [left, right] = args.as_slice() {
             return Ok(AffineSyntax::Add {
@@ -1513,6 +1522,21 @@ fn nat_affine_syntax_within(
             );
             return Ok(AffineSyntax::Atom { index, source });
         }
+    }
+    // A sum at a successor bound is its last term added on, by its
+    // definition (`crate::range_sum`); the certificate states the sum, which
+    // converts to the range as written.
+    if let Some(peeled) = crate::range_sum::peel(elab, tm)
+        && crate::range_sum::op_is(elab, &peeled.op, "nat::Nat::add")
+    {
+        let left_nat = nat_term_source(elab, cx, &peeled.rest)?;
+        let right_nat = nat_term_source(elab, cx, &peeled.last)?;
+        return Ok(AffineSyntax::NatAdd {
+            left_nat,
+            right_nat,
+            left: Box::new(nat_affine_syntax_within(elab, cx, &peeled.rest, atoms, depth)?),
+            right: Box::new(nat_affine_syntax_within(elab, cx, &peeled.last, atoms, depth)?),
+        });
     }
     let source = format!("int::OfNat({nat_source})");
     // An atom already met under this spelling was already asked everything

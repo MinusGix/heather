@@ -1121,7 +1121,14 @@ impl Speller<'_> {
                     // determines it, so it is spelled by name in both modes
                     // (docs/named-arguments-design.md §9.6).
                     Shown::Named(p.name.clone())
-                } else if !self.qualified || p.solver.is_some() || determined.get(i).copied().unwrap_or(true) {
+                } else if !self.qualified
+                    || p.solver.is_some()
+                    || determined.get(i).copied().unwrap_or(true)
+                    // A class index a symbol slot introduced (`MonoidRel::range`'s
+                    // `≈`) has a generated name no call can write: a call fills
+                    // it from the symbol's designation, as the source did.
+                    || crate::traits::op_index_symbol(&p.name).is_some()
+                {
                     Shown::Hidden
                 } else {
                     Shown::Named(p.name.clone())

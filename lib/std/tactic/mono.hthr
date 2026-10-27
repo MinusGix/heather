@@ -57,7 +57,10 @@ fn mono_law(strict: Bool, op: String, moves: List<Nat>, lemma: String) → MonoL
 fn mono_sign(strict: Bool, op: String, lemma: String) → SignLaw { SignLaw(strict, op, lemma) }
 
 // The laws, one-sided ones before the two-sided one of the same operation,
-// so a goal that keeps one operand fixed owes no premise about it.
+// so a goal that keeps one operand fixed owes no premise about it. A sum
+// `∑ k < n, f(k)` (`MonoidRel::range(+, n, f)`, its terms at position 2)
+// moves termwise: the premise is `(k: Nat) → k < n → f(k) <= g(k)`, whose
+// binders the search opens.
 fn mono_rat() → MonoCarrier {
     MonoCarrier("Rat::Le", "Rat::Lt", "Rat::le_refl", "Rat::le_of_lt", [
         mono_law(False, "Rat::add", [1], "Rat::add_le_mono_l"),
@@ -80,6 +83,7 @@ fn mono_rat() → MonoCarrier {
         mono_law(True, "Rat::mul", [1], "Rat::mul_lt_mono_l"),
         mono_law(True, "Rat::mul", [0], "Rat::mul_lt_mono_r"),
         mono_law(True, "Rat::neg", [0], "Rat::neg_lt"),
+        mono_law(False, "MonoidRel::range", [2], "Rat::range_le"),
     ], [
         mono_sign(False, "Rat::abs", "Rat::abs_nonneg"),
         mono_sign(False, "Rat::add", "Rat::add_nonneg"),
@@ -90,6 +94,7 @@ fn mono_rat() → MonoCarrier {
         mono_sign(True, "Rat::mul", "Rat::mul_pos"),
         mono_sign(True, "Rat::npow", "Rat::npow_pos"),
         mono_sign(True, "Rat::inv_succ", "Rat::inv_succ_pos"),
+        mono_sign(False, "MonoidRel::range", "Rat::range_nonneg"),
     ])
 }
 
@@ -107,11 +112,13 @@ fn mono_creal() → MonoCarrier {
         mono_law(True, "CReal::add", [0, 1], "CReal::add_lt_mono"),
         mono_law(True, "CReal::mul", [1], "CReal::mul_lt_mono_l"),
         mono_law(True, "CReal::mul", [0], "CReal::mul_lt_mono_r"),
+        mono_law(False, "MonoidRel::range", [2], "CReal::range_le"),
     ], [
         mono_sign(False, "CReal::add", "CReal::add_nonneg"),
         mono_sign(False, "CReal::mul", "CReal::mul_nonneg"),
         mono_sign(True, "CReal::add", "CReal::add_pos"),
         mono_sign(True, "CReal::mul", "CReal::mul_pos"),
+        mono_sign(False, "MonoidRel::range", "CReal::range_nonneg"),
     ])
 }
 
@@ -123,6 +130,7 @@ fn mono_int() → MonoCarrier {
         mono_law(False, "Int::mul", [1], "Int::mul_le_mono_l"),
         mono_law(False, "Int::mul", [0], "Int::mul_le_mono_r"),
         mono_law(True, "Int::mul", [0], "Int::mul_lt_mono_r"),
+        mono_law(False, "MonoidRel::range", [2], "Int::range_le"),
     ], [
         mono_sign(False, "Int::abs", "Int::abs_nonneg"),
     ])
@@ -137,6 +145,7 @@ fn mono_nat() → MonoCarrier {
         mono_law(False, "Nat::mul", [0], "Nat::mul_le_mono_r"),
         mono_law(False, "Nat::mul", [0, 1], "Nat::mul_le_mono"),
         mono_law(False, "Nat::pow", [1], "Nat::pow_le_pow_r"),
+        mono_law(False, "MonoidRel::range", [2], "Nat::range_le"),
     ], [])
 }
 
@@ -144,8 +153,9 @@ fn mono_carriers() → List<MonoCarrier> { [mono_rat(), mono_creal(), mono_int()
 
 // An operation of a class carrier: the dictionary's argument at a position
 // (0 is the carrier, then the class's index: `OrderedField<A>(≈, <, <=, +,
-// *)` has `+` at 4), or a field read off the dictionary (`A.inv`).
-inductive ClassOp { Index(i: Nat), Field(name: String) }
+// *)` has `+` at 4), a field read off the dictionary (`A.inv`), or a global
+// generic over the class (`MonoidRel::range`, a sum).
+inductive ClassOp { Index(i: Nat), Field(name: String), Named(name: String) }
 
 record ClassLaw { strict: Bool, op: ClassOp, moves: List<Nat>, lemma: String }
 
@@ -178,6 +188,7 @@ fn mono_located_laws() → List<ClassLaw> {
         class_law(False, Index(4), [0, 1], "LocatedAddGroup::add_le_mono"),
         class_law(False, Field("inv"), [1], "LocatedAddGroup::neg_le"),
         class_law(True, Index(4), [0, 1], "LocatedAddGroup::add_lt_le_mono"),
+        class_law(False, Named("MonoidRel::range"), [2], "LocatedAddGroup::range_le"),
     ]
 }
 
@@ -197,6 +208,7 @@ fn mono_classes() → List<MonoClass> {
         MonoClass("OrderedField", 2, 3, mono_group_laws() ++ mono_located_laws() ++ mono_field_laws(), [
             class_sign(True, Index(4), "OrderedAddGroup::add_pos"),
             class_sign(False, Index(4), "LocatedAddGroup::add_nonneg"),
+            class_sign(False, Named("MonoidRel::range"), "LocatedAddGroup::range_nonneg"),
             class_sign(False, Index(5), "OrderedField::mul_nonneg"),
             class_sign(True, Index(5), "OrderedField::mul_pos_of_pos"),
             class_sign(True, Field("recip"), "OrderedField::recip_pos"),
@@ -204,6 +216,7 @@ fn mono_classes() → List<MonoClass> {
         MonoClass("LocatedAddGroup", 2, 3, mono_group_laws() ++ mono_located_laws(), [
             class_sign(True, Index(4), "OrderedAddGroup::add_pos"),
             class_sign(False, Index(4), "LocatedAddGroup::add_nonneg"),
+            class_sign(False, Named("MonoidRel::range"), "LocatedAddGroup::range_nonneg"),
         ]),
         MonoClass("OrderedAddGroup", 2, 3, mono_group_laws() ++ [class_law(True, Index(4), [0, 1], "OrderedAddGroup::add_lt_mono")], [
             class_sign(True, Index(4), "OrderedAddGroup::add_pos"),
@@ -329,7 +342,11 @@ fn mono_index_key(args: List<Handle>, i: Nat) → Tac<Option<OpKey>> {
 }
 
 fn mono_class_key(args: List<Handle>, op: ClassOp) → Tac<Option<OpKey>> {
-    match op { Index(i) => mono_index_key(args, i), Field(name) => Pure(Some(KField(name))) }
+    match op {
+        Index(i) => mono_index_key(args, i),
+        Field(name) => Pure(Some(KField(name))),
+        Named(name) => mono_try_global(name).bind(λ o => Pure(match o { None => None, Some(g) => Some(KGlobal(g.id)) })),
+    }
 }
 
 fn mono_class_laws(args: List<Handle>, ls: List<ClassLaw>) → Tac<List<Law>> {
@@ -581,14 +598,33 @@ fn mono_compute(M: Mono, target, l, r: Handle) → Tac<Expr> {
     })
 }
 
+// The hypotheses that are functions, applied: one that states the goal
+// under premises (`h: (k: Nat) → k < n → f(k) <= g(k)` at a sum's term)
+// proves it once the search proves them.
+fn mono_premised_locals(prove: Tac<Expr>, ls: List<LocalInfo>) → Tac<List<Tac<Expr>>> {
+    match ls {
+        Nil => Pure([]),
+        Cons(l, rest) => view(l.ty).bind(λ v => mono_premised_locals(prove, rest).bind(λ more =>
+            Pure(match v { HPi(_) => Cons(apply(Local(l.ref), prove), more), _ => more }))),
+    }
+}
+
+fn mono_premised_given(prove: Tac<Expr>, gs: List<Given>) → Tac<List<Tac<Expr>>> {
+    match gs {
+        Nil => Pure([]),
+        Cons(g, rest) => view(g.ty).bind(λ v => mono_premised_given(prove, rest).bind(λ more =>
+            Pure(match v { HPi(_) => Cons(apply(g.e, prove), more), _ => more }))),
+    }
+}
+
 // A goal whose sides do not split. `prove` proves a premise.
 fn mono_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → Tac<Expr> {
-    view(r).bind(λ vr => {
+    goal().bind(λ g => mono_premised_given(prove, M.given).bind(λ given => mono_premised_locals(prove, g.locals).bind(λ locals => view(r).bind(λ vr => {
         let signs: List<Sign> = match mono_call(vr) { Some(c) => mono_signs_for(M.signs, strict, c.op), None => [] };
         let reflexive: List<Tac<Expr>> = match strict { True => [], False => mono_opt(M.reflexive, λ g => apply(Global(g), fail("mono: reflexivity has no premise", []))) };
         let weakened: List<Tac<Expr>> = match strict { True => [], False => mono_opt(M.weaken, λ g => apply(Global(g), prove)) };
-        mono_first(reflexive ++ mono_sign_tacs(prove, signs) ++ Cons(mono_compute(M, target, l, r), weakened), target, [])
-    })
+        mono_first(reflexive ++ mono_sign_tacs(prove, signs) ++ given ++ locals ++ Cons(mono_compute(M, target, l, r), weakened), target, [])
+    }))))
 }
 
 // Split the goal by the law for its sides' shared operation, or prove it as
@@ -612,30 +648,34 @@ fn mono_split(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) →
     }))
 }
 
-// Prove the current goal: outright, by a law, or as a leaf. A goal that is
-// not one of the carrier's orders (a law's premise of another kind) is
-// proved outright or not at all.
+// Prove the current goal: outright, by a law, or as a leaf. A premise
+// under binders (a sum's termwise order) is proved with them opened. A goal
+// that is not one of the carrier's orders (a law's premise of another kind)
+// is proved outright or not at all.
 fn mono_prove(M: Mono, fuel: Nat) → Tac<Expr> {
     match fuel {
         Zero => goal().bind(λ g => fail("mono: the goal is deeper than the search goes", [At(Hd(g.target), Tried("the goal", "not reached"))])),
-        Succ(f) => goal().bind(λ g => view(g.target).bind(λ v => match mono_call(v) {
-            Some(c) => mono_exact(M, c.op, g).bind(λ o => match o {
-                Some(e) => Pure(e),
-                None => match mono_arg(c.args, 0) {
-                    None => mono_open(g.target, []),
-                    Some(l) => match mono_arg(c.args, 1) {
+        Succ(f) => goal().bind(λ g => view(g.target).bind(λ v => match v {
+            HPi(_) => intro_as("k", mono_prove(M, f)),
+            _ => match mono_call(v) {
+                Some(c) => mono_exact(M, c.op, g).bind(λ o => match o {
+                    Some(e) => Pure(e),
+                    None => match mono_arg(c.args, 0) {
                         None => mono_open(g.target, []),
-                        Some(r) => match c.op.same(M.le) {
-                            True => mono_split(M, mono_prove(M, f), False, g.target, l, r),
-                            False => match c.op.same(M.lt) {
-                                True => mono_split(M, mono_prove(M, f), True, g.target, l, r),
-                                False => mono_open(g.target, []),
+                        Some(l) => match mono_arg(c.args, 1) {
+                            None => mono_open(g.target, []),
+                            Some(r) => match c.op.same(M.le) {
+                                True => mono_split(M, mono_prove(M, f), False, g.target, l, r),
+                                False => match c.op.same(M.lt) {
+                                    True => mono_split(M, mono_prove(M, f), True, g.target, l, r),
+                                    False => mono_open(g.target, []),
+                                },
                             },
                         },
                     },
-                },
-            }),
-            None => mono_open(g.target, []),
+                }),
+                None => mono_open(g.target, []),
+            },
         }))
     }
 }

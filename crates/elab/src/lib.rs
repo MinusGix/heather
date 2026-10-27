@@ -144,6 +144,7 @@ mod module_relocate;
 pub use module_relocate::{NameObservations, NameWorld, RegistryPart, RelocationRefusal, RelocationTarget, WorldHasher, source_identifiers};
 pub use names::{record_name_lookups, take_name_lookups};
 mod quote;
+mod range_sum;
 mod sealing;
 // The projected-tuple-tower round's two instruments
 // (`docs/projected-tuple-tower-design.md` §11, `probes/README.md`): the
