@@ -1,0 +1,56 @@
+// Probes of `lib/std/tactic/mono.hthr`: the `mono` tactic on goals written
+// directly, and its refusals. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import mono;
+
+// One law per layer, chosen by the positions where the two sides differ: a
+// fixed operand owes no premise, a moved one owes its own order.
+theorem add_both(a, b, c, d: Rat, h1: a <= b, h2: c <= d): a + c <= b + d { by mono() }
+theorem add_left(a, b, c: Rat, h: a <= b): c + a <= c + b { by mono() }
+theorem sub_both(a, b, c, d: Rat, h1: a <= b, h2: c <= d): a - d <= b - c { by mono() }
+// A law decides its own variance.
+theorem sub_right(a, b, x: Rat, h: a <= b): x - b <= x - a { by mono() }
+theorem neg_flip(a, b: Rat, h: a <= b): -b <= -a { by mono() }
+theorem recip_flip(a, b: Rat, h: a <= b, ha: 0 < a): b.recip() <= a.recip() { by mono() }
+// Several layers, and a fixed factor whose sign the sign laws prove.
+theorem nested(a, b, c, x, y: Rat, h: x <= y): c + a.abs() * (x + b) <= c + a.abs() * (y + b) { by mono() }
+theorem product_sign(a, b, x, y: Rat, h: x <= y): (a.abs() * b.abs()) * x <= (a.abs() * b.abs()) * y { by mono() }
+theorem inv_succ_sign(a, b: Rat, n: Nat, h: a <= b): a * Rat::inv_succ(n) <= b * Rat::inv_succ(n) { by mono() }
+theorem numeral_sign(a, b: Rat, h: a <= b): a * 2 <= b * 2 { by mono() }
+theorem twice(t, r, h: Rat, hr: r.abs() <= h): t.abs() * r.abs() + t.abs() * r.abs() <= t.abs() * h + t.abs() * h { by mono() }
+theorem both_factors(a, b, c, d: Rat, h1: a <= b, h2: c <= d, ha: 0 <= a, hc: 0 <= c): a * c <= b * d { by mono() }
+theorem power(a, b: Rat, n: Nat, h: a <= b, ha: 0 <= a): a.npow(n) <= b.npow(n) { by mono() }
+// Strict orders, and `<=` from `<`.
+theorem strict_add(a, b, c: Rat, h: a < b): a + c < b + c { by mono() }
+theorem strict_mixed(a, b, c, d: Rat, h1: a < b, h2: c <= d): a + c < b + d { by mono() }
+theorem strict_mul(a, b, c: Rat, h: a < b, hc: 0 < c): c * a < c * b { by mono() }
+theorem weakened(a, b, c: Rat, h: a < b): a + c <= b + c { by mono() }
+// The sign laws on their own.
+theorem sign_sum(a, b: Rat): 0 <= a.abs() + b.abs() * b.abs() { by mono() }
+theorem sign_strict(n, m: Nat): 0 < Rat::inv_succ(n) * Rat::inv_succ(m) + Rat::inv_succ(n) { by mono() }
+theorem sign_weakened(n: Nat): 0 <= Rat::inv_succ(n).npow(3) { by mono() }
+theorem closed_order(): Rat(1, 3) < Rat(1, 2) { by mono() }
+// Facts the leaves need, as terms.
+theorem given(t, r: Rat, f: (k: Nat) → r.abs() <= Rat::inv_succ(k)): t.abs() * r.abs() <= t.abs() * Rat::inv_succ(1) { by mono_with([f(1)]) }
+theorem given_whole(a, b: Rat, f: (k: Nat) → a <= b + Rat::inv_succ(k)): a <= b + Rat::inv_succ(2) { by mono_with([f(2)]) }
+// The other carriers.
+theorem real_add(x, y, z: CReal, h: x <= y): x + z <= y + z { by mono() }
+theorem real_mul(x, y, z, w: CReal, h1: x <= y, h2: z <= w, hz: 0 <= z): z * x + 1 <= z * y + 1 { by mono() }
+theorem real_strict(x, y, z: CReal, h: x < y, hz: 0 < z): x * z < y * z { by mono() }
+theorem real_neg(x, y: CReal, h: x <= y): -y <= -x { by mono() }
+theorem int_add(a, b, c, d: Int, h1: a <= b, h2: c <= d): a + c <= b + d { by mono() }
+theorem int_mul(a, b, c: Int, h: a <= b): a * c.abs() <= b * c.abs() { by mono() }
+theorem nat_mul(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c + 1 <= b * d + 1 { by mono() }
+
+// A fixed factor of unknown sign, and a moved operand with no fact, are
+// reported at the goal left open.
+// expect-error: mono: nothing proves this goal
+theorem no_sign(a, b, c: Rat, h: a <= b): a * c <= b * c { by mono() }
+// expect-error: mono: nothing proves this goal
+theorem no_premise(a, b, c: Rat): a + c <= b + c { by mono() }
+// A strict order is not proved from `<=`.
+// expect-error: mono: nothing proves this goal
+theorem not_strict(a, b, c: Rat, h: a <= b): a + c < b + c { by mono() }
+// Only orders are read.
+// expect-error: mono: the goal is not `<=` or `<` at `Rat`, `CReal`, `Int` or `Nat`
+theorem not_order(a: Rat): a ≈ a { by mono() }

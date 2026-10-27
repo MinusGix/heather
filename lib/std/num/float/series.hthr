@@ -37,6 +37,9 @@ import dyadic;
 import interval;
 import creal_interval;
 import omega;
+import list;
+import tactic;
+import mono;
 
 record Series {
     first: Rat,
@@ -62,10 +65,9 @@ theorem Series::err_step(self s: Series, k: Nat, hk: s.start <= k): s.err(Succ(k
     let t = s.term(k);
     let r = s.ratio(k);
     let h = Rat::inv_succ(1);
-    let one: (t.abs() * r.abs() <= t.abs() * h) = Rat::mul_le_mono_l(s.small(k, hk), t.abs_nonneg());
     calc {
         (t * r).abs() + (t * r).abs() ≈ t.abs() * r.abs() + t.abs() * r.abs() := Rat::add_respects(t.abs_mul(r), t.abs_mul(r)),
-        <= t.abs() * h + t.abs() * h := Rat::add_le_mono(one, one),
+        <= t.abs() * h + t.abs() * h := by mono_with([s.small(k, hk)]),
         ≈ t.abs() * (h + h) := Rat::same_sym(t.abs().mul_add_distr(h, h)),
         ≈ t.abs() * Rat::inv_succ(0) := Rat::mul_respects(t.abs().same_refl(), Rat::inv_succ_half(0)),
         ≈ t.abs() := t.abs().mul_one(),
@@ -93,7 +95,7 @@ theorem Series::tail(self s: Series, n: Nat, hs: s.start <= n, j: Nat): (s.sum(n
             };
             calc {
                 ((b + u) - c).abs() + s.err(Succ(m)) <= (a + u).abs() + u.abs() := Rat::add_le_mono(Rat::le_of_same(Rat::abs_respects(shift)), s.err_step(m, hm)),
-                <= (a.abs() + u.abs()) + u.abs() := (a + u).abs().add_le_mono_r(a.abs() + u.abs(), u.abs(), a.abs_triangle(u)),
+                <= (a.abs() + u.abs()) + u.abs() := by mono_with([a.abs_triangle(u)]),
                 ≈ a.abs() + (u.abs() + u.abs()) := a.abs().add_assoc(u.abs(), u.abs()),
                 <= s.err(n) := s.tail(n, hs, i),
             }
@@ -126,7 +128,7 @@ theorem Series::decay(self s: Series, n: Nat, hs: s.start <= n, j: Nat): s.err(n
                 ≈ x := x.mul_one(),
             };
             let double = calc {
-                e + e <= s.term(m).abs() + s.term(m).abs() := Rat::add_le_mono(step, step),
+                e + e <= s.term(m).abs() + s.term(m).abs() := by mono_with([step]),
                 <= x := s.decay(n, hs, i),
                 ≈ x * h + x * h := Rat::same_sym(halves),
             };
@@ -162,7 +164,7 @@ theorem Series::fine(self s: Series, n: Nat): s.err(s.index(n)) <= Rat::inv_succ
     let q = Rat::inv_succ(w.ones());
     calc {
         s.err(s.start + w) <= s.err(s.start) * q := s.decay(s.start, s.start.le_refl(), w),
-        <= Rat::ofInt(OfNat(s.scale())) * q := Rat::mul_le_mono_r(s.err_start_le(), Rat::le_of_lt(Rat::inv_succ_pos(w.ones()))),
+        <= Rat::ofInt(OfNat(s.scale())) * q := by mono_with([s.err_start_le()]),
         <= Rat::inv_succ(n) := Rat::scale_inv_succ_le(s.scale(), w.ones(), n, far.le_ones_width(), q.le_refl()),
     }
 }
@@ -316,11 +318,11 @@ theorem Interval::widen_has(T, S: Interval, p: Nat, {t, q: Rat}, {x: CReal}, ht:
                 let low = calc {
                     (a - e).down(p).rat() <= (a - e).rat() := (a - e).down_le(p),
                     ≈ a.rat() - e.rat() := a.rat_sub(e),
-                    <= q - e.rat() := e.rat().sub_le_sub_r(a.rat(), q, kq.left),
-                    <= q - (t.abs() + t.abs()) := q.sub_le_sub_l(t.abs() + t.abs(), e.rat(), eb),
+                    <= q - e.rat() := by mono_with([kq.left]),
+                    <= q - (t.abs() + t.abs()) := by mono_with([eb]),
                 };
                 let high = calc {
-                    q + (t.abs() + t.abs()) <= c.rat() + e.rat() := Rat::add_le_mono(kq.right, eb),
+                    q + (t.abs() + t.abs()) <= c.rat() + e.rat() := by mono_with([kq.right, eb]),
                     ≈ (c + e).rat() := Rat::same_sym(c.rat_add(e)),
                     <= (c + e).up(p).rat() := (c + e).le_up(p),
                 };
