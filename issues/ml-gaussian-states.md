@@ -5,7 +5,7 @@ labels: [mathematics,machine-learning]
 area: machine-learning
 milestone: [ml-gaussian-states]
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-27
 ---
 
 The algebraic core of PDLT chapter 1, constructively
@@ -30,3 +30,5 @@ waits for measure theory and nothing here depends on it.
   distributions. Assumed here: only the state interface.
 
 ## Log
+
+- 2026-10-27: Alternative characterisation filed as [[gaussian-state-by-stein]]: the state defined by Stein's identity E[x_i f] = Σ_j C_ij E[∂_j f], with Wick's matching formula as a theorem (docs/analysis-foundations-design.md §13). This issue keeps ownership of Wick's theorem and cumulants.

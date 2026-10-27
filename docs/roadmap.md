@@ -331,6 +331,7 @@ Open design for those that have issues:
 [frame-and-locale-foundations](../issues/frame-and-locale-foundations.md),
 [localic-real-numbers](../issues/localic-real-numbers.md),
 [real-completeness-interfaces](../issues/real-completeness-interfaces.md),
+[analysis foundations](analysis-foundations-design.md) (differential structure and dominance as the core, finite sums, asymptotics and expansions as first instances; its §13 orders the rounds),
 [decidable-relations-and-comparison](../issues/decidable-relations-and-comparison.md).
 
 **Order inside the area (proposal).** (1) Classes and APIs (`math-classes`),

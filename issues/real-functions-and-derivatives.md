@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,constructive]
 area: mathematics
 milestone: [math-reals, ml-descent]
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-27
 ---
 
 Functions on `CReal` with a modulus of continuity, Lipschitz bounds, and a
@@ -26,3 +26,5 @@ can proceed at its own pace.
   functions need them.
 
 ## Log
+
+- 2026-10-27: docs/analysis-foundations-design.md §7.2 proposes Bishop's uniform derivative stated as a uniform first-order expansion ([[certified-expansions]]), with the rules from jet identities ([[formal-power-series]]) plus remainder lemmas ([[asymptotic-relations]]), and the mean value inequality by telescoping. The derivative is the `C¹` instance of the differential-structure interface ([[differential-structures]], §3.1); Lipschitz functions with the Edalat–Lieutier interval derivative are its lax instance.
