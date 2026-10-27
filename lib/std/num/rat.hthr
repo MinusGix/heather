@@ -1625,6 +1625,17 @@ instance CommRing<Rat>(Rat::Same, Rat::add, Rat::mul) {
     mul_zero := Rat::mul_zero,
 }
 
+// The integers in `Rat` are its numerals, so `ring` normalizes a `≈` goal
+// at `Rat` itself (std/ring's `RingExpr::sound_rel`) and its coefficients
+// read back as `Rat` numerals.
+instance CommRingOfInt<Rat>(Rat::Same, Rat::add, Rat::mul) {
+    of_int := Rat::ofInt,
+    of_int_zero := refl,
+    of_int_one := refl,
+    of_int_add := Rat::ofInt_add,
+    of_int_mul := Rat::ofInt_mul,
+}
+
 // ---------------------------------------------------------------------------
 // The ordered-field interface (std/ordered_field). Every layer is filled
 // from the laws above, its algebra from the ring just registered; `≤` is the
@@ -1743,8 +1754,7 @@ theorem Rat::lt_of_add_lt_add_r(self x, y, z: Rat, h: x + z < y + z): x < y {
 // Comparing the distances from `x` to `a` and to `b` is comparing `x` with
 // their midpoint `m`.
 theorem Rat::sub_shift(self x, a, b: Rat): (x - a) + (a + x) ≈ x + x ∧ (b - x) + (a + x) ≈ a + b {
-    And(ring((x - a).den_add(a + x), x.den_add(-a), a.den_add(x), x.den_add(x)),
-        ring((b - x).den_add(a + x), b.den_add(-x), a.den_add(x), a.den_add(b)))
+    And(ring, ring)
 }
 
 theorem Rat::sub_le_sub_of_le_mid({x, m, a, b: Rat}, h: x <= m, e: m + m ≈ a + b): x - a <= b - x {

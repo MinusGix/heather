@@ -5,7 +5,12 @@
 //! reads an equation at `Int` or `Nat` into `RingExpr`/`RingNat` syntax over
 //! an atom list and writes one application of `RingExpr::sound` (or
 //! `RingNat::sound`) whose `refl` the kernel checks by evaluating the
-//! in-language normalizer. With hypotheses `ring(h₁, …, hₖ)` it also searches
+//! in-language normalizer. A `≈` goal at a carrier with a `CommRingOfInt`
+//! instance (`Rat`, `CReal`) is read at that carrier, its operations the
+//! carrier's designations, and gets `RingExpr::sound_rel`
+//! (`issues/ring-modulo-a-relation.md`); when that reading does not prove it
+//! and the relation unfolds to an `Int` equation, the cross-multiplied
+//! reading is tried as before. With hypotheses `ring(h₁, …, hₖ)` it also searches
 //! for polynomial multipliers `cᵢ` with `lhs − rhs = Σ cᵢ·(aᵢ − bᵢ)` and
 //! writes `sound_with`, whose side condition is the same `refl`; the search is
 //! the only thing here that is not checked, and a wrong answer is refused by
@@ -22,11 +27,12 @@ use std::sync::Arc as Rc;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
-use heather_syntax::{Expr, Item, Span, parse_file};
+use heather_syntax::{Expr, Item, OpFixity, Span, parse_file};
 
 use crate::context::Alias;
 use crate::statements::LetValue;
 use crate::omega_cert::{integer_source, named_args};
+use crate::relational_context::proof::Relation;
 use crate::{Cx, ElabError, Elaborator, R};
 
 type Z = i128;
@@ -42,6 +48,10 @@ const STATEMENT_STEPS: u64 = 4096;
 /// of atoms may take to be found convertible.
 const ATOM_STEPS: u64 = 512;
 
+/// Steps a candidate numeral may take to be found the carrier's `of_int` of
+/// its integer: the instance dictionary is unfolded on the way.
+const NUMERAL_STEPS: u64 = 4096;
+
 /// How deep projections are read through (`(x + y).num` reads `x + y`'s
 /// numerator, which may read another).
 const PROJECTION_DEPTH: u32 = 8;
@@ -51,17 +61,32 @@ const PROJECTION_DEPTH: u32 = 8;
 const SEARCH_ROUNDS: usize = 4;
 const SEARCH_CANDIDATES: usize = 240;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Carrier {
     Int,
     Nat,
+    /// A commutative ring modulo its `≈`, with its integers named
+    /// (`CommRingOfInt`).
+    Rel(Rc<RelCarrier>),
+}
+
+/// A `≈` carrier's spelling and its designated operations, as bare global
+/// names. A missing designation is an operation the reifier leaves to atoms.
+#[derive(PartialEq, Eq, Debug)]
+struct RelCarrier {
+    source: String,
+    add: Option<String>,
+    sub: Option<String>,
+    mul: Option<String>,
+    neg: Option<String>,
 }
 
 impl Carrier {
-    fn name(self) -> &'static str {
+    fn name(&self) -> &str {
         match self {
             Carrier::Int => "Int",
             Carrier::Nat => "Nat",
+            Carrier::Rel(rel) => &rel.source,
         }
     }
 }
@@ -124,6 +149,40 @@ fn equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Equation> {
     })
 }
 
+/// `ty` as `x ≈ y` at a carrier whose `≈` it is and which has a
+/// `CommRingOfInt` instance, read as written: the relation is not unfolded.
+fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Equation> {
+    elab.key_of("ring::RingExpr::sound_rel")?;
+    let rel = Relation::of_type(elab, cx, ty, span)?;
+    let carrier = elab.carrier_of_ty(cx, &rel.carrier, span)?;
+    let same = elab.designated("≈", OpFixity::Infix, &carrier.key)?;
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    if named_args(elab, tm, &same)?.len() != 2 {
+        return None;
+    }
+    let class = elab.key_of("semiring::CommRingOfInt")?;
+    if elab.traits.instances_answering(&class, Some(&carrier.key)).is_empty() {
+        return None;
+    }
+    let op = |sym: &str, fixity| elab.designated(sym, fixity, &carrier.key);
+    let ops = RelCarrier {
+        source: elab.spell_type_clean(cx, &rel.carrier)?,
+        add: op("+", OpFixity::Infix),
+        sub: op("-", OpFixity::Infix),
+        mul: op("*", OpFixity::Infix),
+        neg: op("-", OpFixity::Prefix),
+    };
+    Some(Equation {
+        carrier: Carrier::Rel(Rc::new(ops)),
+        ty: (*rel.carrier).clone(),
+        level: rel.level,
+        lhs: rel.left,
+        rhs: rel.right,
+    })
+}
+
 struct Reifier<'a> {
     elab: &'a Elaborator,
     cx: &'a Cx,
@@ -139,9 +198,13 @@ impl Reifier<'_> {
     }
 
     fn reify_within(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Syn, String> {
-        match self.carrier {
+        match &self.carrier {
             Carrier::Int => self.reify_int(tm, depth),
             Carrier::Nat => self.reify_nat(tm, depth),
+            Carrier::Rel(ops) => {
+                let ops = Rc::clone(ops);
+                self.reify_rel(tm, &ops, depth)
+            }
         }
     }
 
@@ -203,6 +266,63 @@ impl Reifier<'_> {
             return Ok(Syn::Mul(Box::new(a), Box::new(b)));
         }
         self.projection_or_atom(tm, depth)
+    }
+
+    /// At a `≈` carrier the operations are its designations and a constant is
+    /// a numeral, which `of_int` reads back to. Everything else is an atom:
+    /// a field read is a value of the carrier, not a computation to look
+    /// through.
+    fn reify_rel(&mut self, tm: &Rc<Term>, ops: &RelCarrier, depth: u32) -> Result<Syn, String> {
+        if let Some(op) = &ops.add
+            && let Some((a, b)) = self.binary(tm, op, depth)?
+        {
+            return Ok(Syn::Add(Box::new(a), Box::new(b)));
+        }
+        if let Some(op) = &ops.sub
+            && let Some((a, b)) = self.binary(tm, op, depth)?
+        {
+            return Ok(Syn::Sub(Box::new(a), Box::new(b)));
+        }
+        if let Some(op) = &ops.mul
+            && let Some((a, b)) = self.binary(tm, op, depth)?
+        {
+            return Ok(Syn::Mul(Box::new(a), Box::new(b)));
+        }
+        if let Some(op) = &ops.neg
+            && let Some(args) = named_args(self.elab, tm, op)
+            && let [inner] = args.as_slice()
+        {
+            let inner = Rc::clone(inner);
+            return Ok(Syn::Neg(Box::new(self.reify_within(&inner, depth)?)));
+        }
+        if let Some(value) = self.rel_numeral(tm, ops) {
+            return Ok(Syn::Const(value));
+        }
+        Ok(Syn::Atom(self.intern(tm)?))
+    }
+
+    /// The integer a carrier's numeral stands for: the one its spelling ends
+    /// in (`Rat::ofInt(OfNat(2))`, `CReal::ofRat(Rat::ofInt(OfNat(2)))`),
+    /// confirmed by converting the term to what the certificate's `RConst`
+    /// evaluates to, so a term that only spells like a numeral stays an atom.
+    fn rel_numeral(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<Z> {
+        let source = self.elab.spell_term_source(self.cx, tm)?;
+        let value = integer_source(&source).or_else(|| trailing_integer(&source))?;
+        let written = format!(
+            "ring::RingExpr::eval_rel<{}>(ring::RConst({}), list::Nil)",
+            ops.source,
+            int_source(value)
+        );
+        let expr = parse_expr(&written).ok()?;
+        let constant = self
+            .elab
+            .generated_scope(|me| me.elab_check(self.cx, &expr, &self.ty, &self.level))
+            .ok()?;
+        let oracle = self.elab.goal_oracle().bounded(NUMERAL_STEPS);
+        oracle
+            .convert_term(&self.cx.gamma, Layer::Prog, tm, &Rc::new(constant), &self.ty, &self.level)
+            .is_ok()
+            .then_some(value)
     }
 
     /// A field read off a value that computes to a constructor is read as the
@@ -294,6 +414,26 @@ impl Reifier<'_> {
                     .is_ok()
         })
     }
+}
+
+/// The integer a spelling ends in, as an `Int` constructor's argument with
+/// only closing parentheses after it: `f(OfNat(2))` is 2, `f(NegSucc(1))` is
+/// −2.
+fn trailing_integer(source: &str) -> Option<Z> {
+    let body = source.trim_end_matches(')');
+    let closed = source.len() - body.len();
+    let digits_at = body.rfind(|c: char| !c.is_ascii_digit())? + 1;
+    let digits: Z = body[digits_at..].parse().ok()?;
+    let head = &body[..digits_at];
+    let value = if head.ends_with("OfNat(") {
+        digits
+    } else if head.ends_with("NegSucc(") {
+        -digits - 1
+    } else {
+        return None;
+    };
+    // `OfNat(2)` closes once, and the call around it at least once more.
+    (closed >= 2).then_some(value)
 }
 
 fn app_spine(tm: &Rc<Term>) -> (&Term, Vec<&Rc<Term>>) {
@@ -679,15 +819,15 @@ fn int_source(value: Z) -> String {
     }
 }
 
-fn syn_source(syn: &Syn, carrier: Carrier) -> String {
+fn syn_source(syn: &Syn, carrier: &Carrier) -> String {
     let (atom, konst, add, mul) = match carrier {
-        Carrier::Int => ("ring::RAtom", "ring::RConst", "ring::RAdd", "ring::RMul"),
+        Carrier::Int | Carrier::Rel(_) => ("ring::RAtom", "ring::RConst", "ring::RAdd", "ring::RMul"),
         Carrier::Nat => ("ring::NAtom", "ring::NConst", "ring::NAdd", "ring::NMul"),
     };
     match syn {
         Syn::Atom(i) => format!("{atom}({i})"),
         Syn::Const(c) => match carrier {
-            Carrier::Int => format!("{konst}({})", int_source(*c)),
+            Carrier::Int | Carrier::Rel(_) => format!("{konst}({})", int_source(*c)),
             Carrier::Nat => format!("{konst}({c})"),
         },
         Syn::Add(a, b) => format!("{add}({}, {})", syn_source(a, carrier), syn_source(b, carrier)),
@@ -744,17 +884,82 @@ fn reconstruct(
     cx: &Cx,
     goal: &Type,
     hyps: &[(String, Type)],
+    span: Span,
 ) -> Result<Certificate, String> {
-    let shown = elab
-        .spell_type_clean(cx, goal)
-        .unwrap_or_else(|| elab.display_type(cx, goal));
-    let Some(goal_eq) = equation(elab, cx, goal) else {
-        return Err(format!("`ring` proves an equation at `Int` or `Nat`; the goal is `{shown}`"));
+    let spell = |ty: &Type| elab.spell_type_clean(cx, ty).unwrap_or_else(|| elab.display_type(cx, ty));
+    let shown = spell(goal);
+    let unfolded = equation(elab, cx, goal);
+    // A `≈` goal at a ring carrier is read there first, with its hypotheses
+    // when every one is a `≈` at the same carrier; the unfolded reading is
+    // the fallback, so a law proved by cross-multiplication with facts about
+    // the representation (`x.den_add(y)`) still is.
+    if let Some(at_ring) = relation_equation(elab, cx, goal, span) {
+        let hyp_eqs: Option<Vec<Equation>> = hyps
+            .iter()
+            .map(|(_, ty)| relation_equation(elab, cx, ty, span).filter(|eq| eq.carrier == at_ring.carrier))
+            .collect();
+        if let Some(hyp_eqs) = hyp_eqs {
+            let names: Vec<&str> = hyps.iter().map(|(name, _)| name.as_str()).collect();
+            let error = match reconstruct_at(elab, cx, &shown, at_ring, &names, hyp_eqs) {
+                Ok(cert) => return Ok(cert),
+                Err(error) => error,
+            };
+            let Some(goal_eq) = unfolded else {
+                return Err(error);
+            };
+            return unfolded_reading(elab, cx, &shown, goal_eq, hyps, &spell).map_err(|_| error);
+        }
+    }
+    let Some(goal_eq) = unfolded else {
+        return Err(format!(
+            "`ring` proves an equation at `Int` or `Nat`, or a `≈` goal at a carrier with a \
+             `CommRingOfInt` instance; the goal is `{shown}`"
+        ));
     };
+    unfolded_reading(elab, cx, &shown, goal_eq, hyps, &spell)
+}
+
+/// The goal as an equation at `Int` or `Nat` (a defined proposition
+/// unfolded), with every hypothesis read the same way.
+fn unfolded_reading(
+    elab: &Elaborator,
+    cx: &Cx,
+    shown: &str,
+    goal_eq: Equation,
+    hyps: &[(String, Type)],
+    spell: &dyn Fn(&Type) -> String,
+) -> Result<Certificate, String> {
+    let mut hyp_eqs = Vec::new();
+    for (name, ty) in hyps {
+        let Some(eq) = equation(elab, cx, ty) else {
+            return Err(format!("`ring` combines equations; `{name}` is `{}`", spell(ty)));
+        };
+        if eq.carrier != goal_eq.carrier {
+            return Err(format!(
+                "`ring`: the goal is at `{}` but `{name}` is an equation at `{}`",
+                goal_eq.carrier.name(),
+                eq.carrier.name()
+            ));
+        }
+        hyp_eqs.push(eq);
+    }
+    let names: Vec<&str> = hyps.iter().map(|(name, _)| name.as_str()).collect();
+    reconstruct_at(elab, cx, shown, goal_eq, &names, hyp_eqs)
+}
+
+fn reconstruct_at(
+    elab: &Elaborator,
+    cx: &Cx,
+    shown: &str,
+    goal_eq: Equation,
+    names: &[&str],
+    hyp_eqs: Vec<Equation>,
+) -> Result<Certificate, String> {
+    let carrier = goal_eq.carrier.clone();
     let mut reifier = Reifier {
         elab,
         cx,
-        carrier: goal_eq.carrier,
+        carrier: carrier.clone(),
         ty: goal_eq.ty.clone(),
         level: goal_eq.level.clone(),
         atoms: Vec::new(),
@@ -764,46 +969,41 @@ fn reconstruct(
         rhs: reifier.reify(&goal_eq.rhs)?,
     };
     let mut hyp_syn = Vec::new();
-    for (name, ty) in hyps {
-        let spelled = elab.spell_type_clean(cx, ty).unwrap_or_else(|| elab.display_type(cx, ty));
-        let Some(eq) = equation(elab, cx, ty) else {
-            return Err(format!("`ring` combines equations; `{name}` is `{spelled}`"));
-        };
-        if eq.carrier != goal_eq.carrier {
-            return Err(format!(
-                "`ring`: the goal is at `{}` but `{name}` is an equation at `{}`",
-                goal_eq.carrier.name(),
-                eq.carrier.name()
-            ));
-        }
+    for eq in &hyp_eqs {
         hyp_syn.push(Written {
             lhs: reifier.reify(&eq.lhs)?,
             rhs: reifier.reify(&eq.rhs)?,
         });
     }
-    let carrier = goal_eq.carrier;
     let atom_sources: Vec<String> = reifier.atoms.iter().map(|a| a.source.clone()).collect();
     let target = poly_of(&goal_syn.lhs)?.sub(&poly_of(&goal_syn.rhs)?)?;
     let atoms = atom_sources
         .iter()
         .rev()
         .fold("list::Nil".to_string(), |tail, atom| format!("list::Cons({atom}, {tail})"));
+    // At a `≈` carrier every lemma is generic and names the carrier, which
+    // fixes the ring's operations through its designations.
+    let at = match &carrier {
+        Carrier::Rel(rel) => format!("<{}>", rel.source),
+        Carrier::Int | Carrier::Nat => String::new(),
+    };
     let (sound, sound_with) = match carrier {
         Carrier::Int => ("ring::RingExpr::sound", "ring::RingExpr::sound_with"),
         Carrier::Nat => ("ring::RingNat::sound", "ring::RingNat::sound_with"),
+        Carrier::Rel(_) => ("ring::RingExpr::sound_rel", "ring::RingExpr::sound_with_rel"),
     };
-    let lhs = syn_source(&goal_syn.lhs, carrier);
-    let rhs = syn_source(&goal_syn.rhs, carrier);
+    let lhs = syn_source(&goal_syn.lhs, &carrier);
+    let rhs = syn_source(&goal_syn.rhs, &carrier);
     if target.is_zero() {
         return Ok(Certificate {
-            source: format!("{sound}({ATOMS}, {lhs}, {rhs}, refl)"),
+            source: format!("{sound}{at}({ATOMS}, {lhs}, {rhs}, refl)"),
             atoms,
             carrier,
             used: Vec::new(),
         });
     }
     let residual = || render_poly(&target, &atom_sources);
-    if hyps.is_empty() {
+    if names.is_empty() {
         return Err(format!(
             "`ring` could not prove `{shown}`: it is not an identity of commutative rings; \
              the two sides differ by `{}`",
@@ -821,14 +1021,19 @@ fn reconstruct(
             residual()
         ));
     };
-    let used: Vec<usize> = (0..hyps.len()).filter(|i| !found[*i].is_zero()).collect();
+    let used: Vec<usize> = (0..names.len()).filter(|i| !found[*i].is_zero()).collect();
     let lift = |syn: &Syn| match carrier {
-        Carrier::Int => syn_source(syn, carrier),
-        Carrier::Nat => format!("ring::RingNat::lift({})", syn_source(syn, carrier)),
+        Carrier::Int | Carrier::Rel(_) => syn_source(syn, &carrier),
+        Carrier::Nat => format!("ring::RingNat::lift({})", syn_source(syn, &carrier)),
     };
     let int_atoms = match carrier {
-        Carrier::Int => ATOMS.to_string(),
+        Carrier::Int | Carrier::Rel(_) => ATOMS.to_string(),
         Carrier::Nat => format!("ring::RingNat::lift_atoms({ATOMS})"),
+    };
+    let (hyp, hyp_add) = match carrier {
+        Carrier::Int => ("ring::RingExpr::hyp", "ring::RingExpr::hyp_add"),
+        Carrier::Nat => ("ring::RingNat::hyp", "ring::RingExpr::hyp_add"),
+        Carrier::Rel(_) => ("ring::RingExpr::hyp_rel", "ring::RingExpr::hyp_add_rel"),
     };
     // One `cᵢ·(aᵢ − bᵢ)` per used hypothesis, summed left to right; the
     // proof that the sum is zero has the same shape.
@@ -836,29 +1041,21 @@ fn reconstruct(
         let c = poly_source(&found[i]);
         let (a, b) = (&hyp_syn[i].lhs, &hyp_syn[i].rhs);
         let expr = format!("ring::RMul({c}, ring::RSub({}, {}))", lift(a), lift(b));
-        let proof = match carrier {
-            Carrier::Int => format!(
-                "ring::RingExpr::hyp({ATOMS}, {c}, {}, {}, {})",
-                syn_source(a, carrier),
-                syn_source(b, carrier),
-                hyp_name(i)
-            ),
-            Carrier::Nat => format!(
-                "ring::RingNat::hyp({ATOMS}, {c}, {}, {}, {})",
-                syn_source(a, carrier),
-                syn_source(b, carrier),
-                hyp_name(i)
-            ),
-        };
+        let proof = format!(
+            "{hyp}{at}({ATOMS}, {c}, {}, {}, {})",
+            syn_source(a, &carrier),
+            syn_source(b, &carrier),
+            hyp_name(i)
+        );
         (expr, proof)
     });
     let (mut d, mut hd) = parts.next().expect("a nonzero target used some hypothesis");
     for (expr, proof) in parts {
-        hd = format!("ring::RingExpr::hyp_add({int_atoms}, {d}, {expr}, {hd}, {proof})");
+        hd = format!("{hyp_add}{at}({int_atoms}, {d}, {expr}, {hd}, {proof})");
         d = format!("ring::RAdd({d}, {expr})");
     }
     Ok(Certificate {
-        source: format!("{sound_with}({ATOMS}, {lhs}, {rhs}, {d}, {hd}, refl)"),
+        source: format!("{sound_with}{at}({ATOMS}, {lhs}, {rhs}, {d}, {hd}, refl)"),
         atoms,
         carrier,
         used,
@@ -878,10 +1075,11 @@ fn parse_expr(source: &str) -> Result<Expr, String> {
     Ok(*decl.body.result)
 }
 
-fn parse_atom_list(literal: &str, carrier: Carrier) -> Result<(heather_syntax::Ty, Expr), String> {
+fn parse_atom_list(literal: &str, carrier: &Carrier) -> Result<(heather_syntax::Ty, Expr), String> {
     let element = match carrier {
         Carrier::Int => "int::Int",
         Carrier::Nat => "Nat",
+        Carrier::Rel(rel) => &rel.source,
     };
     let wrapper = format!("theorem __ring_generated(): list::List<{element}> {{ {literal} }}");
     let mut file = parse_file(&wrapper).map_err(|error| error.msg)?;
@@ -930,10 +1128,10 @@ impl Elaborator {
                 (shown, ty.clone())
             })
             .collect();
-        let cert = reconstruct(self, cx, goal, &named).map_err(err)?;
+        let cert = reconstruct(self, cx, goal, &named, span).map_err(err)?;
         self.ring_depth.set(self.ring_depth.get() + 1);
         let _depth = Depth(&self.ring_depth);
-        let (list_ty, parsed) = parse_atom_list(&cert.atoms, cert.carrier)
+        let (list_ty, parsed) = parse_atom_list(&cert.atoms, &cert.carrier)
             .map_err(|detail| err(format!("`ring` wrote an atom list that does not parse: {detail}\n  generated: {}", cert.atoms)))?;
         let checked = self.generated_scope(|me| {
             let (ty, level) = me.elab_ty(cx, &list_ty)?;

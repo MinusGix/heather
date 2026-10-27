@@ -1,10 +1,13 @@
 // Probes of the `ring` tactic (`lib/std/tactic/ring.hthr`,
 // `docs/ring-normalization-design.md`): identities it proves, at `Int` and
 // `Nat`, in checking positions, and from hypotheses combined with
-// multipliers it finds. Tests, not library: nothing outside lib/_tests
-// imports this module (docs/test-value-audit.md §4.5). Moved from
-// crates/elab/tests/lib_std_ring.rs; the refusals stay there.
+// multipliers it finds, and modulo `≈` at `Rat` and `CReal`. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5). Moved from
+// crates/elab/tests/lib_std_ring.rs; the refusals stay there, except the
+// ones at a `≈` carrier, which are below.
 import logic; import nat; import int; import list; import omega; import ring;
+import relation_props; import semiring; import rat; import creal;
 
 // Identities at `Int`, over neutral atoms and closed numerals.
 theorem squares(a, b: Int): (a + b) * (a - b) = a * a - b * b { ring }
@@ -75,3 +78,46 @@ theorem unused_right(a, b: Int): a * b = b * a { ring(Q(OfNat(3), refl).h) }
 
 // A local named `ring` is the local.
 theorem local_ring(a: Int, ring: a = a): a = a { ring }
+
+// Modulo `≈` (issues/ring-modulo-a-relation.md): a goal at `Rat` is
+// normalized at `Rat`, its atoms `Rat` values and its numerals the
+// coefficients `Rat::ofInt` reads back to; subtraction and negation are the
+// carrier's. No denominator fact is handed in.
+theorem rat_distrib(x, y, z: Rat): x * (y + z) ≈ x * y + x * z { ring }
+theorem rat_square(x, y: Rat): (x + y) * (x + y) ≈ x * x + 2 * x * y + y * y { ring }
+theorem rat_squares(x, y: Rat): (x + y) * (x - y) ≈ x * x - y * y { ring }
+theorem rat_signs(x, y: Rat): -(x - y) * -y ≈ x * y - y * y { ring }
+theorem rat_numerals(x: Rat): 3 * x - x + 0 ≈ 2 * x { ring }
+theorem rat_closed(x: Rat): 2 * 3 - 7 + x ≈ x - 1 { ring }
+// Atoms are whatever is not ring syntax: a call, an application.
+theorem rat_atoms(n: Nat, f: Rat → Rat): (f(1) + Rat::inv_succ(n)) * f(1) ≈ f(1) * f(1) + f(1) * Rat::inv_succ(n) { ring }
+// In a `calc` step.
+theorem rat_by_calc(x, y: Rat): (x + y) * (x + y) - y * y ≈ x * (x + 2 * y) {
+    calc {
+        (x + y) * (x + y) - y * y
+            ≈ x * x + 2 * x * y := ring,
+            ≈ x * (x + 2 * y) := ring,
+    }
+}
+// `ring(h, …)` with `≈` hypotheses at the same carrier: multipliers found as
+// at `Int`, combined in the ring.
+theorem rat_substituted(a, b, c: Rat, h: a ≈ b + c): a * a ≈ b * b + 2 * b * c + c * c { ring(h) }
+theorem rat_chained(s, d, e, p, q, r: Rat, h1: d ≈ p * e, h2: e ≈ q * r): s * d ≈ s * p * q * r { ring(h1, h2) }
+theorem rat_respects(x, x2, y, y2: Rat, hx: x ≈ x2, hy: y ≈ y2): x * y + x ≈ x2 * y2 + x2 { ring(hx, hy) }
+// Hypotheses about the representation are not `≈` at `Rat`, so the goal is
+// read through its cross-multiplication, as before the relation reading.
+theorem rat_unfolded(x, y: Rat): x + y ≈ y + x { ring(x.den_add(y), y.den_add(x)) }
+
+// The same at `CReal`, whose `≈` does not unfold to an equation: only the
+// relation reading proves anything there.
+theorem creal_distrib(x, y, z: CReal): (x + y) * z ≈ x * z + y * z { ring }
+theorem creal_square(x, y: CReal): (x - y) * (x - y) ≈ x * x - 2 * x * y + y * y { ring }
+theorem creal_numerals(x: CReal): (x + 1) * (x + 1) - 1 ≈ x * (x + 2) { ring }
+theorem creal_substituted(x, x2, y: CReal, h: x ≈ x2): x * y + y ≈ (x2 + 1) * y { ring(h) }
+
+// What `ring` refuses modulo `≈`: a non-identity, named by its residual in
+// the carrier's terms; a combination the hypotheses do not give.
+// expect-error: differ by `2 * x * y`
+theorem rat_not_identity(x, y: Rat): (x + y) * (x + y) ≈ x * x + y * y { ring }
+// expect-error: no combination
+theorem creal_no_combination(x, y: CReal, h: x ≈ y): x * x ≈ y { ring(h) }

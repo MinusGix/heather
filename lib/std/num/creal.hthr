@@ -1619,6 +1619,28 @@ instance CommRing<CReal>(CReal::Same, CReal::add, CReal::mul) {
     mul_zero := CReal::mul_zero,
 }
 
+// The integers in `CReal` are its numerals, the rational ones embedded, so
+// `ring` normalizes a `≈` goal at `CReal` (std/ring's `RingExpr::sound_rel`).
+theorem CReal::ofInt_add(a, b: Int):
+    CReal::ofRat(Rat::ofInt(a + b)) ≈ CReal::ofRat(Rat::ofInt(a)) + CReal::ofRat(Rat::ofInt(b))
+{
+    CReal::same_trans(CReal::ofRat_respects(Rat::ofInt_add(a, b)), CReal::ofRat_add(Rat::ofInt(a), Rat::ofInt(b)))
+}
+
+theorem CReal::ofInt_mul(a, b: Int):
+    CReal::ofRat(Rat::ofInt(a * b)) ≈ CReal::ofRat(Rat::ofInt(a)) * CReal::ofRat(Rat::ofInt(b))
+{
+    CReal::same_trans(CReal::ofRat_respects(Rat::ofInt_mul(a, b)), CReal::ofRat_mul(Rat::ofInt(a), Rat::ofInt(b)))
+}
+
+instance CommRingOfInt<CReal>(CReal::Same, CReal::add, CReal::mul) {
+    of_int := λ (n: Int) => CReal::ofRat(Rat::ofInt(n)),
+    of_int_zero := CReal::same_refl(0),
+    of_int_one := CReal::same_refl(1),
+    of_int_add := CReal::ofInt_add,
+    of_int_mul := CReal::ofInt_mul,
+}
+
 // ---------------------------------------------------------------------------
 // The Archimedean property and the ordered-field interface
 // (std/ordered_field). A real is below the natural number one past its
