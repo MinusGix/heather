@@ -11,16 +11,17 @@ use std::process::{Command, Stdio};
 
 use heather_cli::showcase;
 
-/// One `write-elf` of `symbol` through the image store native_cat.rs uses
-/// (its closure is a part of cat's), in the stale lanes replaying images an
-/// earlier build wrote.
+/// One `write-elf` of `symbol` through the image store native_cat.rs uses,
+/// over the gate's world as cat's is (the gate builds it, as the suite's CLI
+/// image warmup), in the stale lanes replaying images an earlier build wrote.
 fn write_tool(symbol: &str, output: &Path) {
     let root = showcase::repo_root();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
     cmd.current_dir(&root)
         .args(["write-elf", "lib/native/native_tools.hthr", symbol, "-o"])
         .arg(output)
-        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES)
+        .args(["--world", "lib"]);
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }

@@ -245,6 +245,11 @@ own: the trigger is an image whose node count is far above the term's
 shared size, which `let-fanout-diagnostic`'s tree-versus-shared count would
 also expose.
 
+Update 2026-10-27: the trigger came from the library itself (the tactic
+modules' images, ~110 MB), and images are now written as DAGs
+(`docs/semantic-module-images-design.md`, Stage 4a). The merkle walk is
+still a tree walk.
+
 ## 4. Rewriting
 
 ### 4.1 What Heather's `rewrite` is

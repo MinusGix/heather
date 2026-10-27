@@ -4,7 +4,7 @@ status: open
 labels: [caching,performance,images]
 area: infrastructure
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 Found while measuring [[rewrite-setoid-relations]]: a theorem whose statement
@@ -26,3 +26,7 @@ per-node memo (the hash of a shared node computed once; a shared node written
 once and referenced), so their cost is the term's shared size. Reproduce with
 the `rewrite/setoid-let-addr0` source at 16 lets under `--cache --timings`
 and read `merkle_walk_ns`, `image_publish_ns`, `image_relocate_ns`.
+
+## Log
+
+- 2026-10-27: Images half done 2026-10-27 ([[library-gate-native-cold-rail]]): `put_term`/`put_type` write each structurally distinct node once and back-reference repeats, and the reader returns the shared `Arc`; relocation goes through the same codec. The merkle walk is still a tree walk.

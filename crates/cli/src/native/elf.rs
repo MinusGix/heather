@@ -77,6 +77,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut freshness = ImageFreshness::Exact;
     let mut timings = None;
     let mut kernel_workers = None;
+    let mut world = None;
     let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -84,12 +85,13 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
             // `check`'s flag: replay images an earlier build wrote, as the
             // suite's stale lanes do everywhere else.
             "--accept-stale-images" => freshness = ImageFreshness::AcceptStale,
-            "-o" | "-L" | "--cache-dir" | "--timings" => {
+            "-o" | "-L" | "--cache-dir" | "--timings" | "--world" => {
                 let value = PathBuf::from(args.next().ok_or_else(|| format!("{arg} needs a path"))?);
                 match arg.as_str() {
                     "-o" => output = Some(value),
                     "-L" => { if !search.contains(&value) { search.push(value); } }
                     "--timings" => timings = Some(value),
+                    "--world" => world = Some(value),
                     _ => cache = Some(value),
                 }
             }
@@ -103,7 +105,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         }
     }
     if positional.len() != 2 || output.is_none() {
-        return Err("usage: heather write-elf <file.hthr> <source> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--timings <file.tsv>] [--kernel-workers <n>]".into());
+        return Err("usage: heather write-elf <file.hthr> <source> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>]".into());
     }
     let (source, symbol, output) = (Path::new(positional[0]), positional[1], output.unwrap());
     if !symbol_ok(symbol) {
@@ -115,7 +117,19 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    let sources = loader::load_with(source, &search, IMPORTS).map_err(|e| e.msg)?;
+    let mut sources = loader::load_with(source, &search, IMPORTS).map_err(|e| e.msg)?;
+    // `check --world`'s order (`world.rs`): the world's prefix first, so the
+    // closure replays the images every other process over that world wrote
+    // (the library gate's, which the suite runs before this).
+    if let Some(dir) = &world {
+        let mut search = search.clone();
+        if !search.contains(dir) { search.push(dir.clone()); }
+        let world = heather_cli::world::World::of(dir, &search).map_err(|e| format!("--world {}: {}", dir.display(), e.msg))?;
+        let prefix: Vec<&Path> = world.prefix(&sources).iter().map(PathBuf::as_path).collect();
+        if !prefix.is_empty() {
+            sources = loader::load_after_with(&prefix, source, &search, IMPORTS).map_err(|e| e.msg)?;
+        }
+    }
     let canonical = source.canonicalize().map_err(|e| format!("{}: {e}", source.display()))?;
     let root = sources.iter().find(|m| m.path == canonical).ok_or("the source is not in its own closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;

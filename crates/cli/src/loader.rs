@@ -111,8 +111,20 @@ pub fn load_providing(root: &Path, search: &[PathBuf], provided: &[&str]) -> Res
 /// without the root's author having to. The root's closure keeps
 /// [`load`]'s order, so its images are the ones a `check` of it wrote.
 pub fn load_with(root: &Path, search: &[PathBuf], extra: &[&str]) -> Result<Vec<Module>, LoadError> {
+    load_after_with(&[], root, search, extra)
+}
+
+/// [`load_with`] after `first`'s closures, in [`load_many`]'s order: a world's
+/// prefix (`world.rs`), which keeps the images a `check --world` wrote.
+pub fn load_after_with(
+    first: &[&Path],
+    root: &Path,
+    search: &[PathBuf],
+    extra: &[&str],
+) -> Result<Vec<Module>, LoadError> {
     let none = HashMap::new();
-    let mut w = load_many_inner(std::slice::from_ref(&root), search, &none)?;
+    let roots: Vec<&Path> = first.iter().copied().chain([root]).collect();
+    let mut w = load_many_inner(&roots, search, &none)?;
     let from = root
         .canonicalize()
         .map_err(|e| LoadError::at(format!("cannot read `{}`: {e}", root.display()), root))?;

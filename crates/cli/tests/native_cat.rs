@@ -12,16 +12,12 @@ use std::process::{Command, Stdio};
 
 use heather_cli::showcase;
 
-/// One `write-elf` of cat through the library gate's image store, its
-/// closure in its own load order, as the suite's CLI image warmup builds it.
-/// In the suite's stale lanes it replays images an earlier build wrote, as
-/// the gate does: without that, every compiler edit made this test rebuild
-/// the whole closure from source.
-///
-/// Not over the gate's world (`docs/library-world-design.md`): the world's
-/// front is most of the library, which one process building it alone (the
-/// warmup, on a cold store) cannot fit under the CPU rail beside cat's
-/// certificate.
+/// One `write-elf` of cat through the library gate's image store, over the
+/// gate's world (`--world lib`, `docs/library-world-design.md` §3), so its
+/// closure replays what the gate built; the suite's CLI image warmup is the
+/// gate, run first. In the suite's stale lanes it replays images an earlier
+/// build wrote, as the gate does: without that, every compiler edit made
+/// this test rebuild the whole closure from source.
 fn write_cat(output: &Path) {
     let result = write_elf("lib/native/native_cat_executable.hthr", "cat_source", output);
     assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
@@ -33,7 +29,8 @@ fn write_elf(file: &str, source: &str, output: &Path) -> std::process::Output {
     cmd.current_dir(&root)
         .args(["write-elf", file, source, "-o"])
         .arg(output)
-        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES)
+        .args(["--world", "lib"]);
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }
