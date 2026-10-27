@@ -1846,3 +1846,32 @@ theorem Rat::rel_of_abs_le({x, y, u: Rat}, nz: ¬(x ≈ 0), h: (y - x).abs() <= 
     };
     Exists((y - x) * r, And(size, back))
 }
+
+// Rearrangements the reals read termwise (std/creal's negation and the
+// distance from a real to its terms).
+theorem Rat::neg_gap({a, b, g: Rat}, h: a + g <= b): -b + g <= -a {
+    calc {
+        -b + g <= -(a + g) + g := (-b).add_le_mono_r(-(a + g), g, Rat::neg_le(h)),
+        ≈ (-a + -g) + g := Rat::add_respects(a.neg_add(g), g.same_refl()),
+        ≈ -a + (-g + g) := (-a).add_assoc(-g, g),
+        ≈ -a + 0 := Rat::add_respects((-a).same_refl(), g.neg_add_self()),
+        ≈ -a := (-a).add_zero(),
+    }
+}
+
+theorem Rat::le_add_shift({a, q, e, r, f: Rat}, d: a <= q + (e + r), s: e <= f): a <= (q + r) + f {
+    calc {
+        a <= q + (e + r) := d,
+        <= q + (f + r) := (e + r).add_le_mono_l(f + r, q, e.add_le_mono_r(f, r, s)),
+        ≈ q + (r + f) := Rat::add_respects(q.same_refl(), f.add_comm(r)),
+        ≈ (q + r) + f := Rat::same_sym(q.add_assoc(r, f)),
+    }
+}
+
+theorem Rat::sub_le_shift({a, q, e, r, f: Rat}, d: q <= a + (r + e), s: e <= f): q - r <= a + f {
+    Rat::sub_le_of_le_add(calc {
+        q <= a + (r + e) := d,
+        <= a + (r + f) := (r + e).add_le_mono_l(r + f, a, e.add_le_mono_l(f, r, s)),
+        ≈ r + (a + f) := a.add_left_comm(r, f),
+    })
+}

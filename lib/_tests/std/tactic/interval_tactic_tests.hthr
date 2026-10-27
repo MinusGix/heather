@@ -23,5 +23,5 @@ theorem too_close(): Rat(333, 1000) < Rat(1, 3) { by intervals(p := 4, tries := 
 // expect-error: intervals: the enclosures do not separate the two sides
 theorem open_side(x: Rat): x < x + 1 { by intervals() }
 // Only orders at `Rat` are read.
-// expect-error: intervals: the goal is not `<` or `<=` at `Rat`
+// expect-error: intervals: the goal is not `<` or `<=` at `Rat` or `CReal`
 theorem not_rat(): Rat(1, 2) ≈ Rat(2, 4) { by intervals() }

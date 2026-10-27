@@ -1177,6 +1177,38 @@ are in `lib/_tests/std/tactic/interval_tactic_tests.hthr`, its refusals
 included; `(1 + 1/1000)^1000 < 2.719` goes through the tactic as it does by
 hand.
 
+**Enclosures of reals** (`interval-creal-enclosures`). Module
+`lib/std/num/float/creal_interval.hthr`, with the order facts it needs in
+`creal.hthr` (`neg_le`, `mul_le_mono_r_nonpos`, `le_by_sign`, and a real's
+distance to its terms, `le_term_add` / `term_sub_le`) and the termwise
+rearrangements behind them in `rat.hthr`. `I.HasReal(x)` is `I.Has` read at
+`CReal`, `lo <= x <= hi` with the bounds embedded by `CReal::ofRat`. Every
+operation but the reciprocal keeps it (`add_has_real`, `mul_has_real`,
+`pow_has_real`, …), by the corner arguments of the rational proofs with
+`CReal`'s monotonicity in place of `Rat`'s. The one step that does not carry
+over is the case split on the other factor's sign in a product: the
+rationals decide it and the reals never do. It is not needed: a `≤` between
+reals is a refutation (`¬(y < x)`), and inside one the excluded middle on
+`y < 0` is free, which is `CReal::le_by_sign`. A real is enclosed from its
+own terms: the n-th is within 1/(n+1) of it, so `x.enclose(n, p)` rounds
+`[x_n - 1/(n+1), x_n + 1/(n+1)]` outward (`Interval::span`), and
+`CReal::lt_of_enclose` decides `x < y` when two enclosures separate.
+`RealExpr` is the checker at `CReal`: `RRat(q)` leaves are enclosed exactly,
+as `IntervalExpr`'s are, and `RReal(x)` leaves from their terms at index `n`;
+`RealExpr::lt_search` reads twice as far out and one bit finer on a miss.
+The tactic reads goals at `CReal::Lt` / `CReal::Le` into it, with
+`CReal::ofRat(q)` an exact leaf and any other real a leaf read from its
+terms, and takes the starting index as `n := …` (1023 by default). It looks
+the `CReal` relations up only when the goal is not at `Rat`, so a client
+that never imports `creal` is unaffected. Reciprocals are left out: a real's
+inverse needs a proof that it is apart from zero, which an expression tree
+does not carry, so `CReal::inv` is a leaf
+([[interval-creal-reciprocal]]: an enclosure above zero can supply the proof). A real leaf costs one term at the
+index read; a real whose terms are expensive far out (a series summed to
+its index) wants a small starting `n` and more tries. Probes are in
+`lib/_tests/std/num/float/creal_interval_tests.hthr` and
+`lib/_tests/std/tactic/interval_tactic_real_tests.hthr`.
+
 **Costs.** These are shapes. An operation at `p` bits costs its roundings,
 each about `p` halvings for the width and `p` for the shift, plus the
 exponent alignment of its comparisons. `Dyadic::le_dec` now compares
@@ -1192,8 +1224,5 @@ never exact, so `3 · (1/3) <= 1` is refused at every precision; the probes
 pin the refusal). Products of an interval with itself are bounded as if
 independent, so a goal that needs the dependency (`x - x`) widens. Left:
 
-- enclosures of a `CReal` from its regular sequence, containment at
-  `CReal`, and deciding `CReal` comparisons at concrete arguments
-  ([[interval-creal-enclosures]]);
 - elementary functions by series with remainder bounds, the enclosure
   `float-transcendental`'s Ziv loop refines ([[interval-elementary-functions]]).

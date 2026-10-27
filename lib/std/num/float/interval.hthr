@@ -16,9 +16,8 @@
 // checker the verdict is the only thing proved, and the vacuous reading
 // costs nothing at run time.
 //
-// Containment is stated at `Rat`. A statement at `CReal` waits for the
-// transfer of `float-reals`; the ordered-field reading the issue sketches is
-// the same statement through `CReal::ofRat`.
+// Containment is stated at `Rat`; `creal_interval.hthr` states it at
+// `CReal` through `CReal::ofRat`, and encloses a real from its terms.
 //
 // The checker (`IntervalExpr`, at the end) is the reflective half. An
 // `IntervalExpr` names a rational expression; `IntervalExpr::lt_search`
