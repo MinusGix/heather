@@ -79,6 +79,8 @@ struct RelCarrier {
     sub: Option<String>,
     mul: Option<String>,
     neg: Option<String>,
+    /// The postfix `⁻¹`, read as a reciprocal (`Reifier::reciprocal`).
+    inv: Option<String>,
 }
 
 impl Carrier {
@@ -173,6 +175,7 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
         sub: op("-", OpFixity::Infix),
         mul: op("*", OpFixity::Infix),
         neg: op("-", OpFixity::Prefix),
+        inv: op("⁻¹", OpFixity::Postfix),
     };
     Some(Equation {
         carrier: Carrier::Rel(Rc::new(ops)),
@@ -186,10 +189,37 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
 struct Reifier<'a> {
     elab: &'a Elaborator,
     cx: &'a Cx,
+    span: Span,
     carrier: Carrier,
     ty: Type,
     level: Level,
     atoms: Vec<Atom>,
+    /// The atoms met so far that come with a fact — reciprocals and casts —
+    /// in the order their facts were read: one inside another's denominator
+    /// or cast comes first.
+    facts: Vec<Fact>,
+    /// Reading a reciprocal's own fact, whose reciprocal is already an atom.
+    in_fact: bool,
+}
+
+/// An atom read together with a fact the library states for it, elaborated,
+/// its two sides in the same atom table. The certificate cites the fact like
+/// a written hypothesis.
+struct Fact {
+    atom: usize,
+    kind: FactKind,
+    term: Term,
+    ty: Type,
+    level: Level,
+    sides: Written,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FactKind {
+    /// `r·d ≈ 1` (`Rat::inv_mul`: `x⁻¹ * x ≈ 1`): `r` is `d`'s reciprocal.
+    Reciprocal,
+    /// `c ≈ e`, `e` free of `c` (`RingExpr::of_nat_add`): `c` stands for `e`.
+    Definition,
 }
 
 impl Reifier<'_> {
@@ -295,10 +325,152 @@ impl Reifier<'_> {
             let inner = Rc::clone(inner);
             return Ok(Syn::Neg(Box::new(self.reify_within(&inner, depth)?)));
         }
+        if !self.in_fact
+            && let Some(atom) = self.reciprocal(tm, ops, depth)?
+        {
+            return Ok(Syn::Atom(atom));
+        }
         if let Some(value) = self.rel_numeral(tm, ops) {
             return Ok(Syn::Const(value));
         }
+        if let Some(atom) = self.cast(tm, ops, depth)? {
+            return Ok(Syn::Atom(atom));
+        }
         Ok(Syn::Atom(self.intern(tm)?))
+    }
+
+    /// A reciprocal is an atom `r` like any other, read together with the
+    /// library's fact `r·d ≈ 1`: `x⁻¹` (the carrier's postfix `⁻¹`, whose
+    /// fact is the lemma beside it, `<op>_mul`: `x⁻¹ * x ≈ 1`) and
+    /// `Rat::inv_succ(n)` (`Rat::inv_succ_cancel`). The facts are what clear
+    /// the denominators (`clear_denominators`). Apartness is already in the
+    /// term — `x⁻¹` was elaborated with it — so clearing owes no side
+    /// condition. A reciprocal whose fact cannot be written stays a plain
+    /// atom.
+    fn reciprocal(&mut self, tm: &Rc<Term>, ops: &RelCarrier, depth: u32) -> Result<Option<usize>, String> {
+        let (lemma, den, args) = if let Some(op) = &ops.inv
+            && let Some(args) = named_args(self.elab, tm, op)
+            && let [x, h] = args.as_slice()
+        {
+            (format!("{op}_mul"), Some(Rc::clone(x)), vec![(None, Rc::clone(x)), (Some("h"), Rc::clone(h))])
+        } else if let Some(args) = named_args(self.elab, tm, "rat::Rat::inv_succ")
+            && let [n] = args.as_slice()
+        {
+            ("rat::Rat::inv_succ_cancel".to_string(), None, vec![(None, Rc::clone(n))])
+        } else {
+            return Ok(None);
+        };
+        let atom = self.intern(tm)?;
+        if self.facts.iter().any(|f| f.atom == atom) {
+            return Ok(Some(atom));
+        }
+        // A reciprocal inside the denominator is met, and its fact read,
+        // before this one's.
+        if let Some(den) = den {
+            self.reify_within(&den, depth)?;
+        }
+        if let Some(fact) = self.reciprocal_fact(&lemma, &args, atom) {
+            self.facts.push(fact);
+        }
+        Ok(Some(atom))
+    }
+
+    fn reciprocal_fact(&mut self, lemma: &str, args: &[(Option<&str>, Rc<Term>)], atom: usize) -> Option<Fact> {
+        self.elab.key_of(lemma)?;
+        let mut written = Vec::new();
+        for (name, arg) in args {
+            let source = self.elab.spell_term_source(self.cx, arg)?;
+            written.push(match name {
+                Some(name) => format!("{name} := {source}"),
+                None => source,
+            });
+        }
+        let expr = parse_expr(&format!("{lemma}({})", written.join(", "))).ok()?;
+        let (term, ty, level) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
+        let eq = relation_equation(self.elab, self.cx, &ty, self.span).filter(|eq| eq.carrier == self.carrier)?;
+        self.in_fact = true;
+        let sides = (|| Ok::<_, String>(Written { lhs: self.reify(&eq.lhs)?, rhs: self.reify(&eq.rhs)? }))();
+        self.in_fact = false;
+        let sides = sides.ok()?;
+        Some(Fact { atom, kind: FactKind::Reciprocal, term, ty, level, sides })
+    }
+
+    /// A cast of a `Nat` sum, product or successor (`Rat::ofInt(OfNat(n + n
+    /// + 1))`, as `inv_succ`'s denominators are) is an atom read with the fact
+    /// that pushes the embedding one level in (`RingExpr::of_nat_add`, …),
+    /// whose right side's casts are read the same way. A cast is recognized
+    /// by its spelling, `…OfNat(e)…`, and confirmed by converting it to the
+    /// fact's left side, which is the instance's `of_int` at the same `e`.
+    fn cast(&mut self, tm: &Rc<Term>, ops: &RelCarrier, depth: u32) -> Result<Option<usize>, String> {
+        let Some(source) = self.elab.spell_term_source(self.cx, tm) else {
+            return Ok(None);
+        };
+        let Some((prefix, inner, suffix)) = cast_parts(&source) else {
+            return Ok(None);
+        };
+        let Some(inner) = parse_expr(inner)
+            .ok()
+            .and_then(|e| self.elab.generated_scope(|me| me.elab_check(self.cx, &e, &Type::Nat, &Level::Zero)).ok())
+        else {
+            return Ok(None);
+        };
+        let inner = Rc::new(inner);
+        let (lemma, parts) = if let Term::Succ(a) = &*inner {
+            ("of_nat_succ", vec![Rc::clone(a)])
+        } else if let Some(args) = named_args(self.elab, &inner, "nat::Nat::add")
+            && let [a, b] = args.as_slice()
+        {
+            ("of_nat_add", vec![Rc::clone(a), Rc::clone(b)])
+        } else if let Some(args) = named_args(self.elab, &inner, "nat::Nat::mul")
+            && let [a, b] = args.as_slice()
+        {
+            ("of_nat_mul", vec![Rc::clone(a), Rc::clone(b)])
+        } else {
+            return Ok(None);
+        };
+        let atom = self.intern(tm)?;
+        if self.facts.iter().any(|f| f.atom == atom) {
+            return Ok(Some(atom));
+        }
+        let mut sources = Vec::new();
+        let mut syns = Vec::new();
+        for part in &parts {
+            let Some(part) = self.elab.spell_term_source(self.cx, part) else {
+                return Ok(Some(atom));
+            };
+            let Some(cast) = parse_expr(&format!("{prefix}OfNat({part}){suffix}"))
+                .ok()
+                .and_then(|e| self.elab.generated_scope(|me| me.elab_check(self.cx, &e, &self.ty, &self.level)).ok())
+            else {
+                return Ok(Some(atom));
+            };
+            syns.push(self.reify_within(&Rc::new(cast), depth)?);
+            sources.push(part);
+        }
+        let rhs = match (lemma, syns.as_slice()) {
+            ("of_nat_succ", [a]) => Syn::Add(Box::new(a.clone()), Box::new(Syn::Const(1))),
+            ("of_nat_add", [a, b]) => Syn::Add(Box::new(a.clone()), Box::new(b.clone())),
+            (_, [a, b]) => Syn::Mul(Box::new(a.clone()), Box::new(b.clone())),
+            _ => return Ok(Some(atom)),
+        };
+        let written = format!("ring::RingExpr::{lemma}<{}>(Nil, {})", ops.source, sources.join(", "));
+        let Some((term, ty, level)) = parse_expr(&written)
+            .ok()
+            .and_then(|e| self.elab.generated_scope(|me| me.elab_infer(self.cx, &e)).ok())
+        else {
+            return Ok(Some(atom));
+        };
+        let oracle = self.elab.goal_oracle().bounded(NUMERAL_STEPS);
+        let confirmed = relation_equation(self.elab, self.cx, &ty, self.span).is_some_and(|eq| {
+            oracle
+                .convert_term(&self.cx.gamma, Layer::Prog, tm, &eq.lhs, &self.ty, &self.level)
+                .is_ok()
+        });
+        if confirmed {
+            let sides = Written { lhs: Syn::Atom(atom), rhs };
+            self.facts.push(Fact { atom, kind: FactKind::Definition, term, ty, level, sides });
+        }
+        Ok(Some(atom))
     }
 
     /// The integer a carrier's numeral stands for: the one its spelling ends
@@ -309,7 +481,7 @@ impl Reifier<'_> {
         let source = self.elab.spell_term_source(self.cx, tm)?;
         let value = integer_source(&source).or_else(|| trailing_integer(&source))?;
         let written = format!(
-            "ring::RingExpr::eval_rel<{}>(ring::RConst({}), list::Nil)",
+            "ring::RingExpr::eval_rel<{}>(ring::RConst({}), Nil)",
             ops.source,
             int_source(value)
         );
@@ -434,6 +606,26 @@ fn trailing_integer(source: &str) -> Option<Z> {
     };
     // `OfNat(2)` closes once, and the call around it at least once more.
     (closed >= 2).then_some(value)
+}
+
+/// A cast's spelling split around its `Nat`: `rat::Rat::ofInt(OfNat(e))` is
+/// `("rat::Rat::ofInt(", "e", ")")` — the first `OfNat(`, with only closing
+/// parentheses after the one that closes it, and at least one.
+fn cast_parts(source: &str) -> Option<(&str, &str, &str)> {
+    let at = source.find("OfNat(")?;
+    let open = at + "OfNat(".len();
+    let mut depth = 1i32;
+    let close = open + source[open..].find(|c: char| {
+        depth += match c {
+            '(' => 1,
+            ')' => -1,
+            _ => 0,
+        };
+        depth == 0
+    })?;
+    let suffix = &source[close + 1..];
+    (close > open && !suffix.is_empty() && suffix.chars().all(|c| c == ')'))
+        .then(|| (&source[..at], &source[open..close], suffix))
 }
 
 fn app_spine(tm: &Rc<Term>) -> (&Term, Vec<&Rc<Term>>) {
@@ -809,6 +1001,151 @@ fn multipliers(target: &Poly, hyps: &[Poly]) -> Result<Option<Vec<Poly>>, String
 }
 
 // ---------------------------------------------------------------------------
+// Clearing denominators: a reciprocal `r` with the fact `r·d − 1 = 0`
+// eliminated exactly, rather than searched for.
+//
+// Write `P = Σₐ pₐ·rᵃ` with the `pₐ` free of `r`, `K` its top power. Then
+// `dᴷ·P = Σ pₐ·dᴷ⁻ᵃ·(rd)ᵃ = P′ + H·M`, where `H = rd − 1`,
+// `P′ = Σ pₐ·dᴷ⁻ᵃ` and `M = Σ pₐ·dᴷ⁻ᵃ·Sₐ` with `Sₐ = Σ_{t<a} (rd)ᵗ` (so that
+// `(rd)ᵃ − 1 = H·Sₐ`). Hence `P = rᴷ·P′ + H·(rᴷ·M − S_K·P)`: `P` is in the
+// ideal exactly when the cleared `P′` is. Eliminating every reciprocal
+// leaves a polynomial with none, which is zero exactly when the goal is an
+// identity of fields at those denominators — the multipliers are computed,
+// not searched for, and a true identity is never missed.
+
+/// `target = scale·cleared + Σⱼ multipliers[j]·facts[j]`.
+struct Cleared {
+    cleared: Poly,
+    scale: Poly,
+    /// The product of the denominators the target was multiplied by, for
+    /// the refusal.
+    denominator: Poly,
+    multipliers: Vec<Poly>,
+}
+
+/// `d` with `fact = r·d − 1` and `d` free of `r`, when the fact has that
+/// shape.
+fn fact_denominator(fact: &Poly, r: usize) -> Result<Option<Poly>, String> {
+    let shifted = fact.add(&Poly::constant(1))?;
+    let mut den = Poly::default();
+    for (m, c) in &shifted.0 {
+        if m.get(r) != Some(&1) {
+            return Ok(None);
+        }
+        let mut m = m.clone();
+        m[r] = 0;
+        den.add_term(trim(m), *c)?;
+    }
+    Ok(Some(den))
+}
+
+/// `p` and `q` with the largest monomial dividing every term of both taken
+/// out, for a refusal: `a·b·(a + b − 1)` over `a²·b²` reads as `a + b − 1`
+/// over `a·b`.
+fn without_common_monomial(p: &Poly, q: &Poly) -> (Poly, Poly) {
+    let mut common: Option<Mono> = None;
+    for m in p.0.keys().chain(q.0.keys()) {
+        common = Some(match common {
+            None => m.clone(),
+            Some(c) => trim(c.iter().zip(m.iter().chain(std::iter::repeat(&0))).map(|(a, b)| *a.min(b)).collect()),
+        });
+    }
+    let common = common.unwrap_or_default();
+    let divide = |p: &Poly| Poly(p.0.iter().filter_map(|(m, c)| Some((mono_div(m, &common)?, *c))).collect());
+    (divide(p), divide(q))
+}
+
+fn power(p: &Poly, k: u32) -> Result<Poly, String> {
+    let mut out = Poly::constant(1);
+    for _ in 0..k {
+        out = out.mul(p)?;
+    }
+    Ok(out)
+}
+
+/// Eliminates the facts' atoms, last met first, so that one inside
+/// another's denominator or cast is still there to eliminate when clearing
+/// the outer one brings it in. A definition `c ≈ e` is a substitution:
+/// `cᵃ − eᵃ = (c − e)·Σ_{t<a} cᵗ·eᵃ⁻¹⁻ᵗ`.
+fn clear_denominators(target: &Poly, facts: &[(usize, Poly, FactKind)]) -> Result<Cleared, String> {
+    let mut out = Cleared {
+        cleared: target.clone(),
+        scale: Poly::constant(1),
+        denominator: Poly::constant(1),
+        multipliers: vec![Poly::default(); facts.len()],
+    };
+    for (j, (r, fact, kind)) in facts.iter().enumerate().rev() {
+        let mut parts: BTreeMap<u32, Poly> = BTreeMap::new();
+        for (m, c) in &out.cleared.0 {
+            let mut m = m.clone();
+            let e = m.get(*r).copied().unwrap_or(0);
+            if e > 0 {
+                m[*r] = 0;
+            }
+            parts.entry(e).or_default().add_term(trim(m), *c)?;
+        }
+        let k = parts.keys().copied().max().unwrap_or(0);
+        if k == 0 {
+            continue;
+        }
+        if *kind == FactKind::Definition {
+            let e = Poly::atom(*r).sub(fact)?;
+            if e.0.keys().any(|m| m.get(*r).is_some_and(|x| *x > 0)) {
+                continue;
+            }
+            let (mut cleared, mut quotient) = (Poly::default(), Poly::default());
+            for (a, p) in &parts {
+                cleared = cleared.add(&p.mul(&power(&e, *a)?)?)?;
+                for t in 0..*a {
+                    let term = p.mul(&power(&Poly::atom(*r), t)?)?.mul(&power(&e, a - 1 - t)?)?;
+                    quotient = quotient.add(&term)?;
+                }
+            }
+            out.multipliers[j] = out.multipliers[j].add(&out.scale.mul(&quotient)?)?;
+            out.cleared = cleared;
+            continue;
+        }
+        let Some(d) = fact_denominator(fact, *r)? else {
+            continue;
+        };
+        let rd = Poly::atom(*r).mul(&d)?;
+        let mut d_pow = vec![Poly::constant(1)];
+        for i in 0..k as usize {
+            d_pow.push(d_pow[i].mul(&d)?);
+        }
+        let (mut cleared, mut m_acc) = (Poly::default(), Poly::default());
+        let (mut s, mut rd_pow) = (Poly::default(), Poly::constant(1));
+        for a in 0..=k {
+            if let Some(p) = parts.get(&a) {
+                let pd = p.mul(&d_pow[(k - a) as usize])?;
+                m_acc = m_acc.add(&pd.mul(&s)?)?;
+                cleared = cleared.add(&pd)?;
+            }
+            if a < k {
+                s = s.add(&rd_pow)?;
+                rd_pow = rd_pow.mul(&rd)?;
+            }
+        }
+        let r_k = power(&Poly::atom(*r), k)?;
+        let e = r_k.mul(&m_acc)?.sub(&s.mul(&out.cleared)?)?;
+        out.multipliers[j] = out.multipliers[j].add(&out.scale.mul(&e)?)?;
+        out.scale = out.scale.mul(&r_k)?;
+        out.denominator = out.denominator.mul(&d_pow[k as usize])?;
+        out.cleared = cleared;
+    }
+    // The kernel checks the combination; checking here turns a mistake into
+    // a diagnostic instead of a `refl` failure.
+    let mut sum = out.scale.mul(&out.cleared)?;
+    for (c, (_, fact, _)) in out.multipliers.iter().zip(facts) {
+        sum = sum.add(&c.mul(fact)?)?;
+    }
+    if sum != *target {
+        return Err("internal: `ring`'s denominator clearing returned a wrong combination".into());
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Rendering the certificate.
 
 fn int_source(value: Z) -> String {
@@ -872,6 +1209,8 @@ pub(crate) struct Certificate {
     carrier: Carrier,
     /// Hypotheses the combination uses, by their index among the written ones.
     used: Vec<usize>,
+    /// The reciprocals' facts the combination uses, by the name it cites.
+    facts: Vec<(String, Term, Type, Level)>,
 }
 
 struct Written {
@@ -900,14 +1239,14 @@ fn reconstruct(
             .collect();
         if let Some(hyp_eqs) = hyp_eqs {
             let names: Vec<&str> = hyps.iter().map(|(name, _)| name.as_str()).collect();
-            let error = match reconstruct_at(elab, cx, &shown, at_ring, &names, hyp_eqs) {
+            let error = match reconstruct_at(elab, cx, &shown, at_ring, &names, hyp_eqs, span) {
                 Ok(cert) => return Ok(cert),
                 Err(error) => error,
             };
             let Some(goal_eq) = unfolded else {
                 return Err(error);
             };
-            return unfolded_reading(elab, cx, &shown, goal_eq, hyps, &spell).map_err(|_| error);
+            return unfolded_reading(elab, cx, &shown, goal_eq, hyps, &spell, span).map_err(|_| error);
         }
     }
     let Some(goal_eq) = unfolded else {
@@ -916,7 +1255,7 @@ fn reconstruct(
              `CommRingOfInt` instance; the goal is `{shown}`"
         ));
     };
-    unfolded_reading(elab, cx, &shown, goal_eq, hyps, &spell)
+    unfolded_reading(elab, cx, &shown, goal_eq, hyps, &spell, span)
 }
 
 /// The goal as an equation at `Int` or `Nat` (a defined proposition
@@ -928,6 +1267,7 @@ fn unfolded_reading(
     goal_eq: Equation,
     hyps: &[(String, Type)],
     spell: &dyn Fn(&Type) -> String,
+    span: Span,
 ) -> Result<Certificate, String> {
     let mut hyp_eqs = Vec::new();
     for (name, ty) in hyps {
@@ -944,7 +1284,7 @@ fn unfolded_reading(
         hyp_eqs.push(eq);
     }
     let names: Vec<&str> = hyps.iter().map(|(name, _)| name.as_str()).collect();
-    reconstruct_at(elab, cx, shown, goal_eq, &names, hyp_eqs)
+    reconstruct_at(elab, cx, shown, goal_eq, &names, hyp_eqs, span)
 }
 
 fn reconstruct_at(
@@ -954,15 +1294,19 @@ fn reconstruct_at(
     goal_eq: Equation,
     names: &[&str],
     hyp_eqs: Vec<Equation>,
+    span: Span,
 ) -> Result<Certificate, String> {
     let carrier = goal_eq.carrier.clone();
     let mut reifier = Reifier {
         elab,
         cx,
+        span,
         carrier: carrier.clone(),
         ty: goal_eq.ty.clone(),
         level: goal_eq.level.clone(),
         atoms: Vec::new(),
+        facts: Vec::new(),
+        in_fact: false,
     };
     let goal_syn = Written {
         lhs: reifier.reify(&goal_eq.lhs)?,
@@ -1000,28 +1344,71 @@ fn reconstruct_at(
             atoms,
             carrier,
             used: Vec::new(),
+            facts: Vec::new(),
         });
     }
-    let residual = || render_poly(&target, &atom_sources);
-    if names.is_empty() {
-        return Err(format!(
-            "`ring` could not prove `{shown}`: it is not an identity of commutative rings; \
-             the two sides differ by `{}`",
-            residual()
-        ));
-    }
-    let hyp_polys = hyp_syn
+    // The rows a combination may use: the written hypotheses, then the
+    // reciprocals' facts.
+    let facts = std::mem::take(&mut reifier.facts);
+    let rows: Vec<(&Written, String)> = hyp_syn
         .iter()
-        .map(|w| poly_of(&w.lhs)?.sub(&poly_of(&w.rhs)?))
+        .enumerate()
+        .map(|(i, w)| (w, hyp_name(i)))
+        .chain(facts.iter().enumerate().map(|(j, f)| (&f.sides, fact_name(j))))
+        .collect();
+    let row_polys = rows
+        .iter()
+        .map(|(w, _)| poly_of(&w.lhs)?.sub(&poly_of(&w.rhs)?))
         .collect::<Result<Vec<_>, String>>()?;
-    let Some(found) = multipliers(&target, &hyp_polys)? else {
-        return Err(format!(
-            "`ring` could not prove `{shown}` from the given equations: no combination of them \
-             (with polynomial multipliers) accounts for the difference `{}`",
-            residual()
-        ));
+    let (hyp_polys, fact_polys) = row_polys.split_at(names.len());
+    let eliminated: Vec<(usize, Poly, FactKind)> =
+        facts.iter().zip(fact_polys).map(|(f, p)| (f.atom, p.clone(), f.kind)).collect();
+    let cleared = clear_denominators(&target, &eliminated)?;
+    let found: Vec<Poly> = if cleared.cleared.is_zero() {
+        vec![Poly::default(); names.len()].into_iter().chain(cleared.multipliers.iter().cloned()).collect()
+    } else {
+        let (left, by) = without_common_monomial(&cleared.cleared, &cleared.denominator);
+        let residual = render_poly(&left, &atom_sources);
+        let cleared_by = (by != Poly::constant(1)).then(|| render_poly(&by, &atom_sources));
+        if names.is_empty() {
+            return Err(match &cleared_by {
+                None => format!(
+                    "`ring` could not prove `{shown}`: it is not an identity of commutative rings; \
+                     the two sides differ by `{residual}`"
+                ),
+                Some(by) => format!(
+                    "`ring` could not prove `{shown}`: it is not an identity of fields; with both \
+                     sides multiplied by `{by}` to clear the denominators, they differ by `{residual}`"
+                ),
+            });
+        }
+        // The written hypotheses account for what clearing left; failing
+        // that, every row is searched together.
+        let from_cleared = multipliers(&cleared.cleared, hyp_polys)?.map(|e| {
+            e.iter()
+                .map(|p| cleared.scale.mul(p))
+                .chain(cleared.multipliers.iter().cloned().map(Ok))
+                .collect::<Result<Vec<_>, String>>()
+        });
+        let found = match from_cleared {
+            Some(found) => Some(found?),
+            None if !facts.is_empty() => multipliers(&target, &row_polys)?,
+            None => None,
+        };
+        let Some(found) = found else {
+            let left = match &cleared_by {
+                None => String::new(),
+                Some(by) => format!(" left once both sides are multiplied by `{by}`"),
+            };
+            return Err(format!(
+                "`ring` could not prove `{shown}` from the given equations: no combination of them \
+                 (with polynomial multipliers) accounts for the difference `{residual}`{left}"
+            ));
+        };
+        found
     };
-    let used: Vec<usize> = (0..names.len()).filter(|i| !found[*i].is_zero()).collect();
+    let used_rows: Vec<usize> = (0..rows.len()).filter(|i| !found[*i].is_zero()).collect();
+    let used: Vec<usize> = used_rows.iter().copied().filter(|&i| i < names.len()).collect();
     let lift = |syn: &Syn| match carrier {
         Carrier::Int | Carrier::Rel(_) => syn_source(syn, &carrier),
         Carrier::Nat => format!("ring::RingNat::lift({})", syn_source(syn, &carrier)),
@@ -1035,35 +1422,47 @@ fn reconstruct_at(
         Carrier::Nat => ("ring::RingNat::hyp", "ring::RingExpr::hyp_add"),
         Carrier::Rel(_) => ("ring::RingExpr::hyp_rel", "ring::RingExpr::hyp_add_rel"),
     };
-    // One `cᵢ·(aᵢ − bᵢ)` per used hypothesis, summed left to right; the
-    // proof that the sum is zero has the same shape.
-    let mut parts = used.iter().map(|&i| {
+    // One `cᵢ·(aᵢ − bᵢ)` per used row, summed left to right; the proof that
+    // the sum is zero has the same shape.
+    let mut parts = used_rows.iter().map(|&i| {
         let c = poly_source(&found[i]);
-        let (a, b) = (&hyp_syn[i].lhs, &hyp_syn[i].rhs);
+        let (written, name) = &rows[i];
+        let (a, b) = (&written.lhs, &written.rhs);
         let expr = format!("ring::RMul({c}, ring::RSub({}, {}))", lift(a), lift(b));
         let proof = format!(
-            "{hyp}{at}({ATOMS}, {c}, {}, {}, {})",
+            "{hyp}{at}({ATOMS}, {c}, {}, {}, {name})",
             syn_source(a, &carrier),
             syn_source(b, &carrier),
-            hyp_name(i)
         );
         (expr, proof)
     });
-    let (mut d, mut hd) = parts.next().expect("a nonzero target used some hypothesis");
+    let (mut d, mut hd) = parts.next().expect("a nonzero target used some row");
     for (expr, proof) in parts {
         hd = format!("{hyp_add}{at}({int_atoms}, {d}, {expr}, {hd}, {proof})");
         d = format!("ring::RAdd({d}, {expr})");
     }
+    let fact_rows = used_rows.iter().filter_map(|&i| i.checked_sub(names.len()));
+    let facts = fact_rows
+        .map(|j| {
+            let f = &facts[j];
+            (fact_name(j), f.term.clone(), f.ty.clone(), f.level.clone())
+        })
+        .collect();
     Ok(Certificate {
         source: format!("{sound_with}{at}({ATOMS}, {lhs}, {rhs}, {d}, {hd}, refl)"),
         atoms,
         carrier,
         used,
+        facts,
     })
 }
 
 fn hyp_name(i: usize) -> String {
     format!("__ring_h{i}")
+}
+
+fn fact_name(j: usize) -> String {
+    format!("__ring_r{j}")
 }
 
 fn parse_expr(source: &str) -> Result<Expr, String> {
@@ -1162,10 +1561,14 @@ impl Elaborator {
             spliced: None,
             shifted: Default::default(),
         }));
-        for &i in &cert.used {
+        let cited = cert.used.iter().map(|&i| {
             let (term, ty, level) = &written[i];
+            (hyp_name(i), term, ty, level)
+        });
+        let facts = cert.facts.iter().map(|(name, term, ty, level)| (name.clone(), term, ty, level));
+        for (name, term, ty, level) in cited.chain(facts) {
             inner.aliases.push(Rc::new(Alias {
-                name: hyp_name(i),
+                name,
                 depth,
                 term: Rc::new(term.clone()),
                 ty: ty.clone(),
@@ -1255,5 +1658,65 @@ mod tests {
         let h = a.sub(&Poly::constant(1)).unwrap();
         // a·b is not a multiple of a − 1.
         assert_eq!(multipliers(&target, &[h]).unwrap(), None);
+    }
+
+    #[test]
+    fn a_cast_splits_around_its_nat() {
+        assert_eq!(
+            cast_parts("rat::Rat::ofInt(OfNat(nat::Nat::add(n, 1)))"),
+            Some(("rat::Rat::ofInt(", "nat::Nat::add(n, 1)", ")"))
+        );
+        assert_eq!(
+            cast_parts("creal::CReal::ofRat(rat::Rat::ofInt(OfNat(Succ(n))))"),
+            Some(("creal::CReal::ofRat(rat::Rat::ofInt(", "Succ(n)", "))"))
+        );
+        // Something after the cast, or no call around it, is no cast.
+        assert_eq!(cast_parts("f(OfNat(n), x)"), None);
+        assert_eq!(cast_parts("OfNat(n)"), None);
+    }
+
+    /// `r·d − 1`, the fact a reciprocal `r` of `d` is read with.
+    fn fact(r: usize, d: &Poly) -> (usize, Poly, FactKind) {
+        (r, x(r).mul(d).unwrap().sub(&Poly::constant(1)).unwrap(), FactKind::Reciprocal)
+    }
+
+    #[test]
+    fn clearing_eliminates_a_sum_of_reciprocals() {
+        // 1/a + 1/b − (a + b)·1/(a·b), with r = 1/a, s = 1/b, t = 1/(a·b).
+        let (a, b, r, s, t) = (x(0), x(1), 2, 3, 4);
+        let m = |l: &Poly, r: &Poly| l.mul(r).unwrap();
+        let target = x(r).add(&x(s)).unwrap().sub(&m(&a.add(&b).unwrap(), &x(t))).unwrap();
+        let recips = [fact(r, &a), fact(s, &b), fact(t, &m(&a, &b))];
+        let out = clear_denominators(&target, &recips).unwrap();
+        assert!(out.cleared.is_zero());
+    }
+
+    #[test]
+    fn clearing_reaches_a_reciprocal_inside_a_denominator() {
+        // 1/(1/a) − a, with r = 1/a met first and s = 1/r after it.
+        let (a, r, s) = (x(0), 1, 2);
+        let target = x(s).sub(&a).unwrap();
+        let recips = [fact(r, &a), fact(s, &x(r))];
+        let out = clear_denominators(&target, &recips).unwrap();
+        assert!(out.cleared.is_zero());
+    }
+
+    #[test]
+    fn clearing_a_non_identity_leaves_its_cleared_difference() {
+        // 1/a + 1/b − 1/(a·b), multiplied by each denominator in turn
+        // (a·b, then b, then a), leaves a·b·(a + b − 1): the product, not
+        // the least common denominator.
+        let (a, b, r, s, t) = (x(0), x(1), 2, 3, 4);
+        let ab = a.mul(&b).unwrap();
+        let target = x(r).add(&x(s)).unwrap().sub(&x(t)).unwrap();
+        let recips = [fact(r, &a), fact(s, &b), fact(t, &ab)];
+        let out = clear_denominators(&target, &recips).unwrap();
+        let left = ab.mul(&a.add(&b).unwrap().sub(&Poly::constant(1)).unwrap()).unwrap();
+        assert_eq!(out.cleared, left);
+        assert_eq!(out.denominator, ab.mul(&ab).unwrap());
+        let (left, by) = without_common_monomial(&out.cleared, &out.denominator);
+        let names: Vec<String> = ["a", "b", "r", "s", "t"].map(String::from).to_vec();
+        assert_eq!(render_poly(&left, &names), "b + a - 1");
+        assert_eq!(render_poly(&by, &names), "a * b");
     }
 }

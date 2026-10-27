@@ -1,6 +1,6 @@
 ---
 title: Clear denominators before ring at fields (field_simp)
-status: open
+status: closed
 labels: [tactics,arith,reals]
 area: tactics
 milestone: [tac-arith]
@@ -33,3 +33,20 @@ Scope:
 ## What it assumes from elsewhere
 - **[[linarith-ordered-fields]]**: the consumer of the cleared inequalities.
 - **[[ring-inequalities]]**: the normaliser it hands off to.
+
+## Log
+
+- 2026-10-27: Done for equations (docs/ring-normalization-design.md §9). It is
+  not a separate step: at a `≈` carrier with `CommRingOfInt` (`Rat`, `CReal`)
+  `ring` reads `x⁻¹` and `Rat::inv_succ(n)` as atoms with the facts that clear
+  them (`<op>_mul`: `x⁻¹ * x ≈ 1`, `Rat::inv_succ_cancel`), and casts of `Nat`
+  sums, products and successors with `RingExpr::of_nat_add` and its kin. The
+  facts' multipliers are computed by eliminating the reciprocals one at a
+  time, so a true field identity is never missed. Side conditions are the
+  apartness `x⁻¹` was elaborated with; nothing more is owed. Five `CReal`
+  calc chains became `ring` steps; probes in
+  `lib/_tests/std/tactic/ring_field_tests.hthr`.
+  Not done, and where it went: the inequality form is
+  [[linarith-ordered-fields]]'s (noted there); generic `A.recip` and total
+  `Rat::recip` stay atoms (§9 "Not in this round"); a field read like
+  `x.seq(n)` refuses the reading, [[ring-field-read-atom-spelling]].

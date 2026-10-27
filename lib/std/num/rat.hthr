@@ -798,6 +798,16 @@ theorem Rat::recip_neg(self x: Rat): (-x).recip() ≈ -x.recip() {
 
 fn Rat::inv_succ(n: Nat) → Rat { Rat(1, Succ(n)) }
 
+// What `ring` clears `inv_succ(n)` with: it is the reciprocal of `n + 1`
+// (docs/ring-normalization-design.md §9).
+theorem Rat::inv_succ_cancel(n: Nat): Rat::inv_succ(n) * (Rat::ofInt(OfNat(n)) + 1) ≈ 1 {
+    let a = Rat::inv_succ(n);
+    let b = Rat::ofInt(OfNat(n)) + 1;
+    let da: (a.den.int() = OfNat(n) + 1) = refl;
+    let db: (b.den.int() = OfNat(1)) = refl;
+    ring(a.den_mul(b), da, db)
+}
+
 theorem Rat::inv_succ_pos(n: Nat): 0 < Rat::inv_succ(n) { omega }
 
 theorem Rat::inv_succ_le_one(n: Nat): Rat::inv_succ(n) <= 1 { omega }

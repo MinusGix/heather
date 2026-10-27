@@ -1051,4 +1051,24 @@ theorem RingExpr::hyp_add_rel(xs: List<A>, u, v: RingExpr, hu: u.eval_rel(xs) �
     }
 }
 
+// What `ring` reads a cast of a `Nat` sum, product or successor with
+// (`Rat::ofInt(OfNat(n + n + 1))`, docs/ring-normalization-design.md §9):
+// the embedding pushed one level in. Each takes the atom list only so that
+// a caller's carrier pins `A`.
+theorem RingExpr::of_nat_add(xs: List<A>, a, b: Nat):
+    A.of_int(OfNat(Nat::add(a, b))) ≈ A.of_int(OfNat(a)) + A.of_int(OfNat(b))
+{
+    A.of_int_add(OfNat(a), OfNat(b))
+}
+
+theorem RingExpr::of_nat_mul(xs: List<A>, a, b: Nat):
+    A.of_int(OfNat(Nat::mul(a, b))) ≈ A.of_int(OfNat(a)) * A.of_int(OfNat(b))
+{
+    A.of_int_mul(OfNat(a), OfNat(b))
+}
+
+theorem RingExpr::of_nat_succ(xs: List<A>, a: Nat): A.of_int(OfNat(Succ(a))) ≈ A.of_int(OfNat(a)) + A.of_int(OfNat(1)) {
+    A.of_int_add(OfNat(a), OfNat(1))
+}
+
 }
