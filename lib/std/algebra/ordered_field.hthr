@@ -46,6 +46,7 @@
 
 import logic;
 import nat;
+import int;
 import relation_props;
 import algebra_rel;
 import semiring;
@@ -857,3 +858,15 @@ theorem OrderedField::archimedean_recip(x: A, hx: A.unit < x):
 }
 
 }
+
+// ---------------------------------------------------------------------------
+// An ordered field with its integers named: `OrderedField` and `semiring`'s
+// `CommRingOfInt` over the same ring. Nothing is added; the class exists so
+// that one constraint names both (two constraints cannot install `≈`, `+`
+// and `*` twice), which is what `linarith`'s certificate lemmas need: the
+// order laws to combine facts, and the carrier's numerals as coefficients
+// (lib/std/tactic/linarith.hthr). `Rat` and `CReal` have it.
+class OrderedFieldOfInt<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
+    add as +: A → A → A, mul as *: A → A → A)
+    extends OrderedField<A>(same, lt, le, add, mul), CommRingOfInt<A>(same, add, mul)
+{}

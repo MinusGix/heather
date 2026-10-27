@@ -84,6 +84,7 @@ pub mod omega;
 mod omega_cert;
 mod bv_omega;
 mod ring;
+mod linarith;
 mod rewrite;
 mod subst_local;
 pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
@@ -2620,7 +2621,7 @@ impl Elaborator {
         // it neither opens bare names nor changes the caller's saved imports.
         if (self.omega_depth.get() > 0 || self.ring_depth.get() > 0)
             && let Some((module, base)) = split_qual(name)
-            && matches!(module, "omega" | "nat" | "int" | "logic" | "list")
+            && matches!(module, "omega" | "nat" | "int" | "logic" | "list" | "ring" | "linarith")
             && self.names.declares(module, base)
         {
             return NameRes::Found(module.to_string());
@@ -5388,6 +5389,30 @@ impl Elaborator {
                     return err("`ring` takes its equations positionally", e.span);
                 }
                 self.elab_ring(cx, args, expected, lvl, e.span)
+            }
+            // `linarith` proves a linear order goal at an ordered field from
+            // the facts, up to its `≈` (docs/linarith-design.md).
+            ExprKind::Var(name)
+                if name == "linarith"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                self.elab_linarith(cx, &[], expected, lvl, e.span)
+            }
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if name == "linarith")
+                && !self.shadowed(cx, "linarith")
+                && self.ctor_here_expected(cx, "linarith", expected).is_none() =>
+            {
+                if !named.is_empty() {
+                    return err("`linarith` takes its facts positionally", e.span);
+                }
+                self.elab_linarith(cx, args, expected, lvl, e.span)
             }
             // `positivity` is `:= infer`'s proposition search run as a tactic,
             // with `omega` as the fallback at every subgoal the evidence rules

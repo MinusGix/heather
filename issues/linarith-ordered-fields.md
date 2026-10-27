@@ -1,6 +1,6 @@
 ---
 title: linarith at ordered fields, up to the field's setoid equality
-status: open
+status: closed
 labels: [tactics,arith,reals]
 area: tactics
 milestone: [tac-arith]
@@ -52,3 +52,4 @@ normaliser.
   left (positive denominators preserve `<=`, so `a * d⁻¹ <= b` becomes
   `a <= b * d` given `0 < d`) belongs here: the cleared polynomial and the
   denominator product are what `clear_denominators` already returns.
+- 2026-10-27: Built (docs/linarith-design.md). `linarith` / `linarith(h, …)` proves `<`, `<=`, `≈` and `¬(a < b)` at a carrier with the new `OrderedFieldOfInt` (`OrderedField` + `CommRingOfInt`; Rat and CReal), and any goal from contradictory facts; written facts first, then the context's. Fourier–Motzkin over `ring`'s reader (`ring::FieldReading`, one atom table); the certificate is the direct form `k·(b − a) ≈ Σ λᵢ·(hiᵢ − loᵢ) + c`, its parts and sums from lib/std/tactic/linarith.hthr's generic lemmas and the identity by `ring`, so no order is decided and `a < b` is provable at CReal. `Rat::neg_gap`, `le_add_shift`, `sub_le_shift` are one call each; two of series.hthr's shift chains too. `ring` now names atoms it cannot spell by alias (closes [[ring-field-read-atom-spelling]]). The denominator form is filed as [[linarith-positive-denominators]].
