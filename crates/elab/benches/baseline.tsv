@@ -186,11 +186,11 @@ slope	let/under	1.720
 slope	let/stmt	1.043
 slope	inductive/isa-declaration	0.990
 slope	inductive/isa-constructor-use	0.963
-slope	inductive/isa-opcode-match	1.343
-slope	inductive/isa-roundtrip	1.963
-slope	inductive/enum-equality	2.513
+slope	inductive/isa-opcode-match	0.940
+slope	inductive/isa-roundtrip	1.130
+slope	inductive/enum-equality	1.960
 slope	inductive/record-fields	1.423
-slope	inductive/mutual-declaration	1.490
+slope	inductive/mutual-declaration	1.150
 slope	inductive/mutual-recursion	1.630
 slope	inductive/typed-syntax	1.130
 slope	inductive/function-fields	0.880

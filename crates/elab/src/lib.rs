@@ -126,6 +126,7 @@ mod indexed;
 mod infinitary;
 mod inductive;
 mod spelling;
+mod sum_layout;
 mod lgg;
 mod lint;
 mod literals;

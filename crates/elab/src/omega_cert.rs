@@ -1743,13 +1743,7 @@ fn recursive_field_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Vec<
         let fields = match &***arg {
             Term::Supf { shape, label, children, .. } => {
                 let Some(ind) = elab.display_tag_of(shape) else { continue };
-                let mut index = 0;
-                let mut cur = &**label;
-                while let Some((left, value)) = crate::spelling::inj_of(cur) {
-                    if left { break; }
-                    index += 1;
-                    cur = value;
-                }
+                let index = crate::spelling::inj_path(label, ind.ctors.len()).ctor;
                 let Some(ctor) = ind.ctors.get(index) else { continue };
                 if ctor.container().is_some() { continue; }
                 let Some(fields) = crate::spelling::tuple_fields(elab, cx, children, 0, ctor.arity(), 0) else {

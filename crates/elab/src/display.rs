@@ -703,22 +703,12 @@ impl Speller<'_> {
         }
     }
 
-    /// Walk a tier-0 value's injection path over `n` constructors: `Inr`
-    /// steps past a constructor, `Inl` selects one. The constructor's number
-    /// and its payload tuple.
+    /// Walk a tier-0 value's injection path over `n` constructors
+    /// ([`crate::spelling::inj_path`]): the constructor's number and its
+    /// payload tuple.
     fn inj_path<'t>(&self, label: &'t Term, n: usize) -> (usize, &'t Term) {
-        let mut i = 0usize;
-        let mut cur = label;
-        loop {
-            match crate::spelling::inj_of(cur) {
-                Some((false, val)) if i + 1 < n => {
-                    i += 1;
-                    cur = val;
-                }
-                Some((true, val)) => return (i, val),
-                _ => return (i, cur),
-            }
-        }
+        let path = crate::spelling::inj_path(label, n);
+        (path.ctor, path.at)
     }
 
     /// A lowered constructor value as `C(f₁, …)` — the shape a `match` arm's

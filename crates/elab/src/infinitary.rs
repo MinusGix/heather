@@ -26,6 +26,7 @@ use heather_syntax::{Arm, Expr, Span};
 
 use crate::gendefs::GenDef;
 use crate::inductive::{FieldKind, Inductive, Spine, decoded, inject, tag_type, tag_value};
+use crate::sum_layout::Child;
 use crate::recursion::{FnChildIh, Guard, GuardKind};
 use crate::spelling::checked_app;
 use crate::{Alias, Cx, Elaborator, R, embed, err};
@@ -325,8 +326,7 @@ impl Elaborator {
         let ptree = self.w_case_tree(
             &xcx,
             &spine,
-            n,
-            0,
+            spine.root(),
             Type::Ty(lp.clone()),
             &Level::succ(lp.clone()),
             var(0),
@@ -415,8 +415,7 @@ impl Elaborator {
         let cased = self.w_case_tree(
             &c3,
             &spine,
-            n,
-            0,
+            spine.root(),
             q(4, var(0)),
             &lq,
             var(2),
@@ -612,13 +611,14 @@ impl Elaborator {
         })
     }
 
-    /// Tier 0 §6.1's right-nested case tree over the shape, the motive
-    /// composed with the injection at each depth — `wf.rs`'s
-    /// `wf_case_tree` with the branch as a parameter, since tier 2 needs it
-    /// three times (positions, leaf predicate, `match`).
+    /// Tier 0 §6.1's case tree over the shape, a `Case` per `+` of the
+    /// layout and the motive composed with the injection at each depth —
+    /// `wf.rs`'s `wf_case_tree` with the branch as a parameter, since tier 2
+    /// needs it three times (positions, leaf predicate, `match`).
     ///
     /// `cx` is the context the tree is built in, `d` binders past the one the
-    /// spine is scoped in, `motive` is over `(cx, z : R_j)`, and `branch` is
+    /// spine is scoped in, `motive` is over `(cx, z : S_at)` for the subtree
+    /// `at` being split (`spine.root()` from a caller), and `branch` is
     /// called with the branch's context, its constructor, its depth and its
     /// value (scoped there).
     #[allow(clippy::too_many_arguments)]
@@ -626,35 +626,43 @@ impl Elaborator {
         &self,
         cx: &Cx,
         spine: &Spine,
-        n: usize,
-        j: usize,
+        at: Child,
         motive: Type,
         plvl: &Level,
         scrut: Rc<Term>,
         d: u32,
         branch: &mut dyn FnMut(&Cx, usize, u32, Rc<Term>) -> R<Term>,
     ) -> R<Term> {
-        if j + 1 == n {
-            return branch(cx, j, d, scrut);
-        }
-        let (ctor_ty, ctor_lvl) = &spine.ctors[j];
-        let (tail_ty, tail_lvl) = &spine.tails[j];
-        let mut lcx = cx.clone();
-        lcx.push("#scrut".into(), ctor_ty.shift_local(d), ctor_lvl.clone());
-        let case_l = branch(&lcx, j, d + 1, var(0))?;
-        let mut rcx = cx.clone();
-        rcx.push("#rest".into(), tail_ty.shift_local(d), tail_lvl.clone());
-        // Two binders past `cx`: the `y` this branch binds and the inner
-        // `Case`'s own motive binder (`wf_case_tree`'s note).
-        let inr = Term::Inr {
-            lhs_level: ctor_lvl.clone(),
-            rhs_level: tail_lvl.clone(),
-            lhs: Rc::new(ctor_ty.shift_local(d + 2)),
-            rhs: Rc::new(tail_ty.shift_local(d + 2)),
-            val: var(0),
+        let j = match at {
+            Child::Leaf(k) => return branch(cx, k, d, scrut),
+            Child::Node(j) => j,
         };
-        let inner = motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(inr)));
-        let case_r = self.w_case_tree(&rcx, spine, n, j + 1, inner, plvl, var(0), d + 1, branch)?;
+        let node = *spine.layout.node(j);
+        let (ctor_ty, ctor_lvl) = spine.lhs(j);
+        let (tail_ty, tail_lvl) = spine.rhs(j);
+        let mut cases = Vec::with_capacity(2);
+        for (right, name, ty, lvl) in [(false, "#scrut", ctor_ty, ctor_lvl), (true, "#rest", tail_ty, tail_lvl)] {
+            let mut scx = cx.clone();
+            scx.push(name.into(), ty.shift_local(d), lvl.clone());
+            cases.push(match node.side(right) {
+                Child::Leaf(k) => branch(&scx, k, d + 1, var(0))?,
+                inner_at @ Child::Node(_) => {
+                    // Two binders past `cx`: the one this side binds and the
+                    // inner `Case`'s own motive binder (`wf_case_tree`'s note).
+                    let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
+                    let (lhs, rhs) = (Rc::new(ctor_ty.shift_local(d + 2)), Rc::new(tail_ty.shift_local(d + 2)));
+                    let inj = if right {
+                        Term::Inr { lhs_level, rhs_level, lhs, rhs, val: var(0) }
+                    } else {
+                        Term::Inl { lhs_level, rhs_level, lhs, rhs, val: var(0) }
+                    };
+                    let inner = motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(inj)));
+                    self.w_case_tree(&scx, spine, inner_at, inner, plvl, var(0), d + 1, branch)?
+                }
+            });
+        }
+        let case_r = cases.pop().expect("two sides");
+        let case_l = cases.pop().expect("two sides");
         Ok(Term::Case {
             lhs_level: ctor_lvl.clone(),
             rhs_level: tail_lvl.clone(),
@@ -681,7 +689,6 @@ impl Elaborator {
     pub(crate) fn const_elim_w(
         &self,
         mcx: &Cx,
-        ind: &Inductive,
         d_ty: &Type,
         spine: &Spine,
         motive: &Type,
@@ -710,12 +717,11 @@ impl Elaborator {
         let step = self.const_case_tree(
             &c3,
             spine,
-            ind.ctors.len(),
             &motive.shift_local(3),
             mlvl,
             var(2),
             body,
-            0,
+            spine.root(),
             5,
             span,
         )?;
@@ -914,8 +920,7 @@ impl Elaborator {
         let cased = self.w_case_tree(
             &c3,
             &spine,
-            n,
-            0,
+            spine.root(),
             q_m(4, var(0)),
             &lqm,
             var(2),

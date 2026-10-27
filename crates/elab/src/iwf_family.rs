@@ -236,8 +236,7 @@ impl Elaborator {
         let arity = self.idx_case_tree(
             &xcx,
             &spine,
-            n,
-            0,
+            spine.root(),
             Type::Nat,
             &Level::Zero,
             Rc::clone(&x),
@@ -252,8 +251,7 @@ impl Elaborator {
         let out = self.idx_case_tree(
             &xcx,
             &spine,
-            n,
-            0,
+            spine.root(),
             ity.shift_local(2),
             &ilvl,
             Rc::clone(&x),
@@ -290,8 +288,7 @@ impl Elaborator {
         let tree = self.idx_case_tree(
             &xcx,
             &spine,
-            n,
-            0,
+            spine.root(),
             child_motive,
             &ilvl,
             x,
@@ -1206,8 +1203,7 @@ impl Elaborator {
         let tree = self.idx_case_tree(
             &acx,
             &spine,
-            n,
-            0,
+            spine.root(),
             convoy,
             &Level::max(fl.clone(), mlvl.clone()),
             Rc::new(Term::Var(LocalVar(0))),

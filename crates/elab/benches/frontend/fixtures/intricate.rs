@@ -154,10 +154,10 @@ fn isa_opcode_match() -> Family {
         name: "inductive/isa-opcode-match",
         what: "an n-arm match from an instruction type into Nat",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 1.34 (1.31-1.38), after the
-        // mention-cost round shared the registered lowering (1.62 before).
-        // Debt, unattributed.
-        expect_slope: Some((0.99, 1.69)),
+        // 2026-10-27, cloud box, three runs: 0.94 (0.84-0.96), once wide
+        // sums are balanced (issues/wide-inductive-balanced-sum.md; 1.34
+        // before, arm k under k `Case`s). Met.
+        expect_slope: Some((0.59, 1.29)),
         cases: sweep("inductive/isa-opcode-match", &[32, 64, 128, 256], src),
     }
 }
@@ -167,7 +167,8 @@ fn isa_opcode_match() -> Family {
 /// shape of every encode/decode roundtrip. Lower bound: linear in the arms.
 /// The rebuilt constructor values make Θ(n) mentions, so this carried
 /// `isa-constructor-use`'s per-mention cost n times over until that was
-/// fixed; the `k`-th is still `k` injections deep.
+/// fixed; the `k`-th was then still `k` injections deep, until wide sums
+/// were balanced.
 fn isa_roundtrip() -> Family {
     let src = |n: u64| {
         let n = n as usize;
@@ -187,11 +188,12 @@ fn isa_roundtrip() -> Family {
         name: "inductive/isa-roundtrip",
         what: "an n-arm rebuild of an instruction type and its identity theorem",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 1.96 (1.95-1.97), after the
-        // mention-cost round (2.15 before); the identity theorem is most of
-        // what is left (issues/conv-query-identity-env-per-gamma.md), and
-        // the rebuilt values are Σk injections deep by the encoding. Debt.
-        expect_slope: Some((1.61, 2.31)),
+        // 2026-10-27, cloud box, three runs: 1.13 (1.08-1.21), once wide
+        // sums are balanced (issues/wide-inductive-balanced-sum.md; 1.96
+        // before, the rebuilt values Σk injections deep and each arm's
+        // queries paying Γ's depth,
+        // issues/conv-query-identity-env-per-gamma.md). Small debt.
+        expect_slope: Some((0.78, 1.48)),
         cases: sweep("inductive/isa-roundtrip", &[16, 32, 64, 128], src),
     }
 }
@@ -220,9 +222,9 @@ fn enum_equality() -> Family {
         name: "inductive/enum-equality",
         what: "n²-arm decidable equality on an n-constructor enum, and its refl theorem",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 2.51 (2.40-2.60), 65% gate at
-        // 64. Half a power over the arm count.
-        expect_slope: Some((2.16, 2.86)),
+        // 2026-10-27, cloud box, three runs: 1.96 (1.95-1.97), once wide
+        // sums are balanced (2.51 before). The arm count itself is n².
+        expect_slope: Some((1.61, 2.31)),
         cases: sweep("inductive/enum-equality", &[8, 16, 32, 64], src),
     }
 }
@@ -284,9 +286,9 @@ fn mutual_declaration() -> Family {
         name: "inductive/mutual-declaration",
         what: "a group of m mutual sorts, declared",
         unit: "members",
-        // 2026-10-26, cloud box, three runs: 1.49 (1.47-1.50), 96% elab at
-        // 16. Debt, small.
-        expect_slope: Some((1.14, 1.84)),
+        // 2026-10-27, cloud box, three runs: 1.15 (1.11-1.18), once wide
+        // sums are balanced (1.49 before; the 16-member group's sum is). Met.
+        expect_slope: Some((0.80, 1.50)),
         cases: sweep("inductive/mutual-declaration", &[2, 4, 8, 16], mutual_group),
     }
 }
