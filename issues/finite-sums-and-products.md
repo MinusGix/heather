@@ -70,3 +70,11 @@ Cauchy-product coefficient identity at `Rat`.
   Side additions: `or_pick_dec_not` (logic), `Nat::sub_succ_lt` and
   `Nat::sub_succ_sub_succ` (nat), `List::range`/`len_range` (list).
 
+
+- 2026-10-27: The `∑`/`∏` binder landed on top of this (logged on
+  [[notation-extensibility]]): `∑ k < n, e` is `MonoidRel::range(+, n, λ (k:
+  Nat) => e)`, and the carrier comes from the body. The per-carrier spellings
+  (`Nat/Int/Rat/CReal::sum`/`prod`) are gone; the library's statements, the
+  probes and `Series::sum_is_range` (`s.sum(k) = ∑ i < k, s.term(i)`) are
+  written in the notation. `Rat::sum_abs_le` stays, as
+  `(∑ k < n, f(k)).abs() <= ∑ k < n, f(k).abs()`.

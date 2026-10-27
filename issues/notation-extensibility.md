@@ -333,3 +333,20 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   `k: Nat`, and take the carrier from the body's type; until then the library
   names a sum per carrier (`Rat::sum(n, f)`).
 
+- 2026-10-27: The big-operator production landed. `∑ k < n, e` and
+  `∏ k < n, e` are two three-byte lexer tokens and one prefix production that
+  desugars at parse time to `MonoidRel::range(+ | *, n, λ (k: Nat) => e)`:
+  no new AST node, as for `∃`. The bound and the body are each one
+  arithmetic expression, so the body runs over `+`/`*`/`&&`/`||` and stops at
+  a relation (`∑ k < n, f(k) ≈ s` compares the sum). The carrier question
+  logged above was not answered in the parser but in the elaborator, and more
+  generally than for sums: a call deferred only for a result-only implicit
+  (`deferral_can_fall_back`) is now probed by inference as a last resort when
+  an operator looks for its carrier, and an `=` whose left side infers that
+  way and whose right side is a bare numeral keeps the written order instead
+  of anchoring at `Nat`. Cost against the curated-addition score: lexer
+  tokens, one parser function, the inventory/tree-sitter rows, and two
+  elaborator rules that any result-only-implicit call benefits from. One edge
+  remains: a nested bare-operator call whose λ binders are unannotated
+  (`MonoidRel::antidiag(+, n, λ i k => …)` inside a `∑`) has no carrier to
+  infer from and needs `λ (i: Nat) (k: Nat) =>`.

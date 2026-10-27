@@ -1974,18 +1974,10 @@ theorem Rat::sub_le_shift({a, q, e, r, f: Rat}, d: q <= a + (r + e), s: e <= f):
 }
 
 // ---------------------------------------------------------------------------
-// Finite sums and products (std/big_operator): the range sum under `Rat`'s
-// own `+` and `*`. Named, so that a sum has its carrier wherever it is
-// written, the left of `≈` included, until the `∑` binder production exists
-// (issues/notation-extensibility.md); every big_operator law applies to it
-// by unfolding.
-
-fn Rat::sum(n: Nat, f: Nat → Rat) → Rat { MonoidRel::range(+, n, f) }
-
-fn Rat::prod(n: Nat, f: Nat → Rat) → Rat { MonoidRel::range(*, n, f) }
+// Finite sums (std/big_operator).
 
 // The triangle inequality, `|∑ f| <= ∑ |f|`.
-theorem Rat::sum_abs_le(n: Nat, f: Nat → Rat): Rat::sum(n, f).abs() <= Rat::sum(n, λ k => f(k).abs()) {
+theorem Rat::sum_abs_le(n: Nat, f: Nat → Rat): (∑ k < n, f(k)).abs() <= ∑ k < n, f(k).abs() {
     let h = LocatedAddGroup::range_abs_le(n, f, λ k => f(k).abs(), λ k hk => And(f(k).neg_abs_le(), f(k).le_abs()));
     Rat::abs_le(h.left, h.right)
 }

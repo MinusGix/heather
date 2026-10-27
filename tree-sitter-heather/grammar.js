@@ -313,6 +313,7 @@ module.exports = grammar({
       $.declaration_function_type,
       $.declaration_binary_type,
       $.declaration_quantified_type,
+      $.declaration_big_operator_type,
       $.declaration_prefix_type,
       $.match_expression,
     ),
@@ -367,6 +368,10 @@ module.exports = grammar({
     declaration_quantified_type: $ => prec.right(seq(
       choice('∀', '∃'), $.identifier, ':', $._declaration_type, ',', $._declaration_type,
     )),
+    declaration_big_operator_type: $ => prec.right(PREC.BOOL_OR, seq(
+      choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._declaration_type),
+      ',', field('body', $._declaration_type),
+    )),
     declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._declaration_type)),
 
     _expression: $ => choice(
@@ -389,6 +394,7 @@ module.exports = grammar({
       $.block_expression,
       $.lambda_expression,
       $.quantified_expression,
+      $.big_operator_expression,
       $.sequent_expression,
       $.if_expression,
       $.if_let_expression,
@@ -443,6 +449,12 @@ module.exports = grammar({
     ),
     quantified_expression: $ => prec.right(seq(
       choice('∀', '∃'), field('name', $.identifier), ':', field('type', $._expression),
+      ',', field('body', $._expression),
+    )),
+    // `∑ k < n, e`: the body runs over arithmetic and stops at a relation,
+    // as in the compiler, so its precedence sits just above COMPARE.
+    big_operator_expression: $ => prec.right(PREC.BOOL_OR, seq(
+      choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._expression),
       ',', field('body', $._expression),
     )),
     sequent_expression: $ => prec.right(seq(repeat1($.lambda_binder), choice('⊢', '|-'), $._expression)),

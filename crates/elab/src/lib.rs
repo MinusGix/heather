@@ -844,6 +844,10 @@ impl expr::StructuralTypeElab for Elaborator {
             && self.clone().elab_infer(cx, expression).is_ok()
     }
 
+    fn type_endpoint_infers_by_fallback(&self, cx: &Cx, expression: &Expr) -> bool {
+        self.deferral_can_fall_back(cx, expression) && self.clone().elab_infer(cx, expression).is_ok()
+    }
+
     fn type_endpoint_may_need_checking(&self, cx: &Cx, expression: &Expr) -> bool {
         // An application's head is not a bare reference: `toNat(w)` fills
         // the implicit a bare `toNat` would leave to checking, and the

@@ -25,15 +25,14 @@
 //   triangle inequality as a bound stated rather than computed (`AbsLe`).
 //   `≤` is added through cotransitivity, which an `OrderedAddGroup` lacks.
 //
-// Spelling. A concrete carrier names its sum (`Nat::sum`, `Int::sum` here,
-// `Rat::sum`, `CReal::sum` in their own files), because a bare
-// `MonoidRel::range(+, n, f)` has no carrier yet where an operator needs one:
-// on the left of `≈`, `=` or `+` it is refused. Inside a generic section the
-// operator is bound and the bare spelling is the one to write.
+// Spelling. `∑ k < n, e` and `∏ k < n, e` are this fold at `+` and `*`
+// (the parser's big-operator production): a sum is the call
+// `MonoidRel::range(+, n, λ (k: Nat) => e)`, its carrier read off the body,
+// so the laws below apply to it as written. The sections over an arbitrary
+// `op` spell the call; the ones over `+` write `∑`.
 
 import logic;
 import nat;
-import int;
 import omega;
 import list;
 import relation;
@@ -298,60 +297,48 @@ theorem CommMonoidRel::range_antidiag(N: Nat, f: Nat → Nat → A):
 
 section<A: Semiring(≈, +, *)> {
 
-theorem Semiring::mul_range_l(c: A, n: Nat, f: Nat → A):
-    c * MonoidRel::range(+, n, f) ≈ MonoidRel::range(+, n, λ k => c * f(k))
-{
+theorem Semiring::mul_range_l(c: A, n: Nat, f: Nat → A): c * ∑ k < n, f(k) ≈ ∑ k < n, c * f(k) {
     match n {
         Zero => A.mul_zero(c),
         Succ(m) => calc {
-            c * (MonoidRel::range(+, m, f) + f(m))
-                ≈ c * MonoidRel::range(+, m, f) + c * f(m) := A.distrib_l(c, MonoidRel::range(+, m, f), f(m)),
-                ≈ MonoidRel::range(+, m, λ k => c * f(k)) + c * f(m) := rel_cong(Semiring::mul_range_l(c, m, f)),
+            c * ((∑ k < m, f(k)) + f(m))
+                ≈ c * (∑ k < m, f(k)) + c * f(m) := A.distrib_l(c, ∑ k < m, f(k), f(m)),
+                ≈ (∑ k < m, c * f(k)) + c * f(m) := rel_cong(Semiring::mul_range_l(c, m, f)),
         },
     }
 }
 
-theorem Semiring::range_mul_r(n: Nat, f: Nat → A, c: A):
-    MonoidRel::range(+, n, f) * c ≈ MonoidRel::range(+, n, λ k => f(k) * c)
-{
+theorem Semiring::range_mul_r(n: Nat, f: Nat → A, c: A): (∑ k < n, f(k)) * c ≈ ∑ k < n, f(k) * c {
     match n {
         Zero => A.zero_mul(c),
         Succ(m) => calc {
-            (MonoidRel::range(+, m, f) + f(m)) * c
-                ≈ MonoidRel::range(+, m, f) * c + f(m) * c := A.distrib_r(MonoidRel::range(+, m, f), f(m), c),
-                ≈ MonoidRel::range(+, m, λ k => f(k) * c) + f(m) * c := rel_cong(Semiring::range_mul_r(m, f, c)),
+            ((∑ k < m, f(k)) + f(m)) * c
+                ≈ (∑ k < m, f(k)) * c + f(m) * c := A.distrib_r(∑ k < m, f(k), f(m), c),
+                ≈ (∑ k < m, f(k) * c) + f(m) * c := rel_cong(Semiring::range_mul_r(m, f, c)),
         },
     }
 }
 
 // Two sums multiply out to the sum over their rectangle.
 theorem Semiring::range_mul_range(m, n: Nat, f, g: Nat → A):
-    MonoidRel::range(+, m, f) * MonoidRel::range(+, n, g)
-        ≈ MonoidRel::range(+, m, λ i => MonoidRel::range(+, n, λ k => f(i) * g(k)))
+    (∑ i < m, f(i)) * (∑ k < n, g(k)) ≈ ∑ i < m, ∑ k < n, f(i) * g(k)
 {
-    A.rel_trans(
-        MonoidRel::range(+, m, f) * MonoidRel::range(+, n, g),
-        MonoidRel::range(+, m, λ i => f(i) * MonoidRel::range(+, n, g)),
-        MonoidRel::range(+, m, λ i => MonoidRel::range(+, n, λ k => f(i) * g(k))),
-        Semiring::range_mul_r(m, f, MonoidRel::range(+, n, g)),
-        MonoidRel::range_cong(+, m, λ i => f(i) * MonoidRel::range(+, n, g), λ i => MonoidRel::range(+, n, λ k => f(i) * g(k)),
+    A.rel_trans((∑ i < m, f(i)) * (∑ k < n, g(k)), ∑ i < m, f(i) * ∑ k < n, g(k), ∑ i < m, ∑ k < n, f(i) * g(k),
+        Semiring::range_mul_r(m, f, ∑ k < n, g(k)),
+        MonoidRel::range_cong(+, m, λ i => f(i) * ∑ k < n, g(k), λ i => ∑ k < n, f(i) * g(k),
             λ i hi => Semiring::mul_range_l(f(i), n, g)))
 }
 
 // The first `N` coefficients of a Cauchy product, `c(n) = ∑_{i+j=n} a(i) b(j)`,
 // sum to the triangle `∑_{i<N} a(i) ∑_{j<N-i} b(j)`.
 theorem Semiring::range_cauchy(N: Nat, a, b: Nat → A):
-    MonoidRel::range(+, N, λ n => MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)))
-        ≈ MonoidRel::range(+, N, λ i => a(i) * MonoidRel::range(+, N - i, b))
+    ∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)) ≈ ∑ i < N, a(i) * ∑ k < N - i, b(k)
 {
-    A.rel_trans(
-        MonoidRel::range(+, N, λ n => MonoidRel::antidiag(+, n, λ i k => a(i) * b(k))),
-        MonoidRel::range(+, N, λ i => MonoidRel::range(+, N - i, λ k => a(i) * b(k))),
-        MonoidRel::range(+, N, λ i => a(i) * MonoidRel::range(+, N - i, b)),
+    A.rel_trans(∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)), ∑ i < N, ∑ k < N - i, a(i) * b(k),
+        ∑ i < N, a(i) * ∑ k < N - i, b(k),
         CommMonoidRel::range_antidiag(≈, +, N, λ i k => a(i) * b(k)),
-        MonoidRel::range_cong(+, N, λ i => MonoidRel::range(+, N - i, λ k => a(i) * b(k)), λ i => a(i) * MonoidRel::range(+, N - i, b),
-            λ i hi => A.rel_sym(a(i) * MonoidRel::range(+, N - i, b), MonoidRel::range(+, N - i, λ k => a(i) * b(k)),
-                Semiring::mul_range_l(a(i), N - i, b))))
+        MonoidRel::range_cong(+, N, λ i => ∑ k < N - i, a(i) * b(k), λ i => a(i) * ∑ k < N - i, b(k),
+            λ i hi => A.rel_sym(a(i) * ∑ k < N - i, b(k), ∑ k < N - i, a(i) * b(k), Semiring::mul_range_l(a(i), N - i, b))))
 }
 
 }
@@ -359,45 +346,33 @@ theorem Semiring::range_cauchy(N: Nat, a, b: Nat → A):
 section<A: LocatedAddGroup(≈, <, <=, +)> {
 
 theorem LocatedAddGroup::range_le(n: Nat, f, g: Nat → A):
-    ((k: Nat) → Nat::Lt(k, n) → f(k) <= g(k)) → MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g)
+    ((k: Nat) → Nat::Lt(k, n) → f(k) <= g(k)) → ∑ k < n, f(k) <= ∑ k < n, g(k)
 {
     match n {
         Zero => λ h => StrictOrder::le_refl(A.unit),
-        Succ(m) => λ h => LocatedAddGroup::add_le_mono(MonoidRel::range(+, m, f), MonoidRel::range(+, m, g), f(m), g(m),
+        Succ(m) => λ h => LocatedAddGroup::add_le_mono(∑ k < m, f(k), ∑ k < m, g(k), f(m), g(m),
             LocatedAddGroup::range_le(m, f, g, λ k hk => h(k, omega(hk))), h(m, m.lt_succ_self())),
     }
 }
 
 theorem LocatedAddGroup::range_nonneg(n: Nat, f: Nat → A):
-    ((k: Nat) → Nat::Lt(k, n) → A.unit <= f(k)) → A.unit <= MonoidRel::range(+, n, f)
+    ((k: Nat) → Nat::Lt(k, n) → A.unit <= f(k)) → A.unit <= ∑ k < n, f(k)
 {
-    λ h => StrictOrder::le_respects(MonoidRel::range(+, n, λ k => A.unit), A.unit, MonoidRel::range(+, n, f), MonoidRel::range(+, n, f),
-        MonoidRel::range_unit(+, n, λ k => A.unit, λ k hk => A.rel_refl(A.unit)), A.rel_refl(MonoidRel::range(+, n, f)),
+    λ h => StrictOrder::le_respects(∑ k < n, A.unit, A.unit, ∑ k < n, f(k), ∑ k < n, f(k),
+        MonoidRel::range_unit(+, n, λ k => A.unit, λ k hk => A.rel_refl(A.unit)), A.rel_refl(∑ k < n, f(k)),
         LocatedAddGroup::range_le(n, λ k => A.unit, f, h))
 }
 
 // The triangle inequality, with the bound stated rather than computed:
 // termwise `|f(k)| <= g(k)` gives `|∑ f| <= ∑ g`.
 theorem LocatedAddGroup::range_abs_le(n: Nat, f, g: Nat → A):
-    ((k: Nat) → Nat::Lt(k, n) → AbsLe(f(k), g(k))) → AbsLe(MonoidRel::range(+, n, f), MonoidRel::range(+, n, g))
+    ((k: Nat) → Nat::Lt(k, n) → AbsLe(f(k), g(k))) → AbsLe(∑ k < n, f(k), ∑ k < n, g(k))
 {
     match n {
         Zero => λ h => And(StrictOrder::le_of_same(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(A.unit)), StrictOrder::le_refl(A.unit)),
-        Succ(m) => λ h => LocatedAddGroup::abs_le_add(MonoidRel::range(+, m, f), f(m), MonoidRel::range(+, m, g), g(m),
+        Succ(m) => λ h => LocatedAddGroup::abs_le_add(∑ k < m, f(k), f(m), ∑ k < m, g(k), g(m),
             LocatedAddGroup::range_abs_le(m, f, g, λ k hk => h(k, omega(hk))), h(m, m.lt_succ_self())),
     }
 }
 
 }
-
-// ---------------------------------------------------------------------------
-// The identity carriers, named as `Rat::sum` is (std/rat): their monoids are
-// registered in `semiring`, so their spellings live here.
-
-fn Nat::sum(n: Nat, f: Nat → Nat) → Nat { MonoidRel::range(+, n, f) }
-
-fn Nat::prod(n: Nat, f: Nat → Nat) → Nat { MonoidRel::range(*, n, f) }
-
-fn Int::sum(n: Nat, f: Nat → Int) → Int { MonoidRel::range(+, n, f) }
-
-fn Int::prod(n: Nat, f: Nat → Int) → Int { MonoidRel::range(*, n, f) }
