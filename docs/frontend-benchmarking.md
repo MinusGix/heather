@@ -263,9 +263,9 @@ loads, which is the honest width of an absolute time here.
 | `inductive/isa-roundtrip` | an *n*-arm rebuild and its identity theorem (one `refl` per arm). **Lower bound linear** | debt: ~2.2, mostly gate |
 | `inductive/enum-equality` | *n*²-arm decidable equality on an *n*-constructor enum, and its `refl` theorem. **Lower bound quadratic** | debt: ~2.5 |
 | `inductive/record-fields` | a *k*-field record: literal, projection, rebuild, frame theorem. **Lower bound linear** | debt: ~1.4 |
-| `inductive/mutual-declaration` | a ring of *m* mutual sorts, declared. **Lower bound linear** | debt: ~1.5, small |
-| `inductive/mutual-recursion` | structural recursion over that group, and one `refl` unfolding. **Lower bound linear** | debt: ~1.6 over 2..8, ~2.3 by 16 (was ~2.8 and out of fuel at *m* = 8) |
-| `inductive/typed-syntax` | intrinsically typed terms `Tm(J(Γ, A))`, *n* constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.8 over 5..8, and a large constant |
+| `inductive/mutual-declaration` | a ring of *m* mutual sorts, declared. **Lower bound linear** | met (~1.0) |
+| `inductive/mutual-recursion` | structural recursion over that group, and one `refl` unfolding. **Lower bound linear** | debt: ~1.3 over 4..32, ~1.6 by 160 |
+| `inductive/typed-syntax` | intrinsically typed terms `Tm(J(Γ, A))`, *n* constructors: `size` and two `refl` unfoldings. **Lower bound linear** | met (~0.75 over 8..64) |
 | `inductive/function-fields` | an `IWf`-on-`W` family of *n* function-field constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.7 over 2..8, ~3.4 past it |
 
 The spread is the point of the noise warning above, and it is also the
@@ -597,12 +597,14 @@ each filed:
 - **Mutual recursion is ~m^2.8, nearly all gate**, and an eight-member
   group's one-step `refl` runs out of fuel; the same constructors as one
   inductive are three orders of magnitude cheaper
-  (`issues/mutual-group-recursion-gate-cost.md`).
+  (`issues/mutual-group-recursion-gate-cost.md`; since fixed, about
+  m^1.8 past the sweep, `docs/iwf-named-signature-design.md`).
 - **Typed-syntax and function-field recursion are superlinear and gate
   bound**, with a large constant even for a `refl` of a three-node closed
   term; a plain child instead of a function field is well over an order of
   magnitude cheaper
-  (`issues/indexed-family-recursion-gate-cost.md`).
+  (`issues/indexed-family-recursion-gate-cost.md`; since fixed, about
+  linear).
 
 The sizes stop where a family costs a few seconds per run, which on the
 intricate families is early — five members, eight constructors — so their

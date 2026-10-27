@@ -242,6 +242,10 @@ per the entries it reads rather than once per Γ. Checking the group is then
 about quadratic in the members, and one unfolding by `refl` about linear (β
 hands the step its ih as a value, so two unfoldings compare their steps by
 identity); `issues/mutual-group-recursion-gate-cost.md` has the measurements.
+Since `docs/iwf-named-signature-design.md` the signature is three references
+to generated definitions and each motive's ih type one more, so a case node
+carries O(1) of it plus the user's motive: about m^1.8, the rest being the
+spine's depth.
 
 ## 7. What stays refused, and where it is owned
 

@@ -190,7 +190,7 @@ slope	inductive/isa-opcode-match	0.940
 slope	inductive/isa-roundtrip	1.130
 slope	inductive/enum-equality	1.960
 slope	inductive/record-fields	1.423
-slope	inductive/mutual-declaration	1.150
-slope	inductive/mutual-recursion	1.630
-slope	inductive/typed-syntax	1.130
+slope	inductive/mutual-declaration	0.840
+slope	inductive/mutual-recursion	1.280
+slope	inductive/typed-syntax	0.750
 slope	inductive/function-fields	0.880

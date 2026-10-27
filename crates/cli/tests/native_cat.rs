@@ -97,6 +97,29 @@ fn compiled_cat_runs_as_cat() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A program eight times cat's code over (`cat_x8`, in the probes below)
+/// builds, its layout and bytes checked by a table of its labels, and runs
+/// as cat: write-elf's build grows with the code, not with its square
+/// (issues/native-compile-linear-layout.md).
+#[test]
+fn larger_program_runs_as_cat() {
+    let dir = scratch("cat_x8");
+    let binary = dir.join("cat_x8");
+    let result = write_elf(PROBES, "cat_x8", &binary);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    let certificate = std::fs::read_to_string(dir.join("cat_x8.certificate.hthr")).unwrap();
+    for by in ["laid_out_of", "piece_by"] {
+        assert!(certificate.contains(by), "the certificate's layout and bytes go by the table (`{by}`)");
+    }
+    let every: Vec<u8> = (0..20000u32).map(|i| (i * 13 % 256) as u8).collect();
+    for input in [&b""[..], b"hello, cat\n", &every] {
+        let (code, out) = run(&binary, input, Stdio::piped());
+        assert_eq!(code, Some(0), "it exits 0 at the end of its input");
+        assert_eq!(out, input, "and has sent what it read");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The probes `lib/_tests/native/native_compile_tests.hthr` holds, which
 /// import none of the certificate's modules.
 const PROBES: &str = "lib/_tests/native/native_compile_tests.hthr";
