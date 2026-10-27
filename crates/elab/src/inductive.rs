@@ -33,6 +33,7 @@ use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, MatchForm, Span, Ty, TyKind};
 
 use crate::names::{NameKind, Scope, qkey};
+use crate::sum_layout::{Child, Layout};
 use crate::stats::decline;
 use crate::{Alias, Cx, Elaborator, R, TyVar, embed, err};
 
@@ -406,15 +407,100 @@ impl Ctor {
     }
 }
 
+/// The constructor sum over `parts` (each payload and its level, in
+/// declaration order), shaped as [`crate::sum_layout`] decides; `None` with
+/// no constructors, the payload itself with one. Every lowering of a
+/// declaration's sum builds it here, so [`Elaborator::spine`] reads back
+/// exactly what was built.
+pub(crate) fn sum_of_payloads(parts: Vec<(Type, Level)>) -> Option<(Type, Level)> {
+    // Canonical, not the raw `Max` tree: each summand's level embeds its
+    // subtree's, so an uncanonicalized join grows a level *tree* quadratic in
+    // the constructor count, mirrored into every `Sum` node's level slots —
+    // measured at ~2/3 of a large lowered type's remaining node mass
+    // (issues/wf-field-conversion-cost.md, 2026-08-13). `canonical` is
+    // `equiv`-preserving by construction, so this is a spelling change only.
+    sum_of_payloads_joined(parts, |l, r| Level::max(l, r).normalize().canonical())
+}
+
+/// [`sum_of_payloads`] with each `+`'s level spelled by `join(lhs, rhs)`.
+pub(crate) fn sum_of_payloads_joined(
+    parts: Vec<(Type, Level)>,
+    join: impl Fn(Level, Level) -> Level,
+) -> Option<(Type, Level)> {
+    let layout = crate::sum_layout::layout(parts.len());
+    let mut parts: Vec<Option<(Type, Level)>> = parts.into_iter().map(Some).collect();
+    layout.fold(
+        |k| parts[k].take().expect("each leaf once"),
+        |_, (lhs, lhs_level), (rhs, rhs_level)| {
+            let level = join(lhs_level.clone(), rhs_level.clone());
+            let sum = Type::Sum { lhs_level, rhs_level, lhs: Rc::new(lhs), rhs: Rc::new(rhs) };
+            (sum, level)
+        },
+    )
+}
+
+/// The payloads of an `n`-constructor sum, read off its `+` nodes as
+/// [`crate::sum_layout`] lays them out (each side taken without copying);
+/// `None` when a node is not a `+`. With no constructors, nothing.
+pub(crate) fn sum_payloads(ty: &Rc<Type>, n: usize) -> Option<Vec<Rc<Type>>> {
+    let layout = crate::sum_layout::layout(n);
+    let mut out: Vec<Option<Rc<Type>>> = vec![None; n];
+    let mut stack = layout.root().map(|root| (root, Rc::clone(ty))).into_iter().collect::<Vec<_>>();
+    while let Some((at, cur)) = stack.pop() {
+        match at {
+            Child::Leaf(k) => out[k] = Some(cur),
+            Child::Node(j) => {
+                let node = layout.node(j);
+                let Type::Sum { lhs, rhs, .. } = &*decoded(&cur) else {
+                    return None;
+                };
+                stack.push((node.rhs, Rc::clone(rhs)));
+                stack.push((node.lhs, Rc::clone(lhs)));
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// A kernel type read back as a tag spine (§3.2). Everything the constructor
 /// and `match` lowerings need is here, taken from the type itself rather than
 /// regenerated, so the annotations cannot drift from what is being eliminated.
+///
+/// The sum is the `+` tree [`crate::sum_layout`] decides; `layout` is that
+/// tree, and every reader walks it rather than assuming a shape.
 pub(crate) struct Spine {
+    pub layout: Rc<Layout>,
     /// `(⟦c_i⟧, its level)` for each constructor.
     pub ctors: Vec<(Rc<Type>, Level)>,
-    /// `(R_{i+1}, its level)` — the right operand of the `i`-th `+`, for
-    /// `i < n-1`.
-    pub tails: Vec<(Rc<Type>, Level)>,
+    /// `(the `+`, its level)` for each node of `layout`, preorder:
+    /// `nodes[0]` is the whole sum.
+    pub nodes: Vec<(Rc<Type>, Level)>,
+}
+
+impl Spine {
+    /// The component a side of a `+` names.
+    pub(crate) fn of(&self, c: Child) -> &(Rc<Type>, Level) {
+        match c {
+            Child::Leaf(k) => &self.ctors[k],
+            Child::Node(j) => &self.nodes[j],
+        }
+    }
+
+    /// Node `j`'s left summand.
+    pub(crate) fn lhs(&self, j: usize) -> &(Rc<Type>, Level) {
+        self.of(self.layout.node(j).lhs)
+    }
+
+    /// Node `j`'s right summand.
+    pub(crate) fn rhs(&self, j: usize) -> &(Rc<Type>, Level) {
+        self.of(self.layout.node(j).rhs)
+    }
+
+    /// The whole sum, for a declaration with constructors (a case tree over
+    /// `Empty` has nothing to split; its callers refuse that first).
+    pub(crate) fn root(&self) -> Child {
+        self.layout.root().expect("a sum with constructors")
+    }
 }
 
 /// The nominal tag *type* for declaration `k` (§3.3): the strict equality
@@ -701,8 +787,8 @@ fn decode_arity_deep(t: &Term) -> Option<Term> {
     }
 }
 
-/// The injection path into a tag spine (§3.2/§4): `Inl` unless this is the
-/// last constructor, under `i` `Inr`s. `d` weakens the spine's components,
+/// The injection path into a tag spine (§3.2/§4): one `Inl`/`Inr` per `+`
+/// on constructor `i`'s path through the layout. `d` weakens the spine's components,
 /// which are scoped where the spine was read back — 0 at a constructor, and
 /// however many binders the step's case tree has pushed inside `match`.
 pub(crate) fn inject(spine: &Spine, i: usize, n: usize, val: Term, d: u32) -> Term {
@@ -729,13 +815,11 @@ pub(crate) fn inject_at(
     d: u32,
     at: Option<Rc<Type>>,
 ) -> Term {
+    debug_assert_eq!(spine.layout.len(), n);
     // The layers, innermost first; the last one applied is the outermost and
     // is the one `at` describes.
-    let mut layers: Vec<(bool, usize)> = Vec::new();
-    if i + 1 < n {
-        layers.push((true, i));
-    }
-    layers.extend((0..i).rev().map(|j| (false, j)));
+    let layers: Vec<(bool, usize)> =
+        spine.layout.path(i).into_iter().rev().map(|(j, right)| (!right, j)).collect();
     let last = layers.len().saturating_sub(1);
     let mut val = val;
     // A single-constructor declaration has no injection layer, so the tuple
@@ -758,17 +842,17 @@ pub(crate) fn inject_at(
                 val: Rc::new(val),
             },
             None if is_inl => Term::Inl {
-                lhs_level: spine.ctors[j].1.clone(),
-                rhs_level: spine.tails[j].1.clone(),
-                lhs: Rc::new(spine.ctors[j].0.shift_local(d)),
-                rhs: Rc::new(spine.tails[j].0.shift_local(d)),
+                lhs_level: spine.lhs(j).1.clone(),
+                rhs_level: spine.rhs(j).1.clone(),
+                lhs: Rc::new(spine.lhs(j).0.shift_local(d)),
+                rhs: Rc::new(spine.rhs(j).0.shift_local(d)),
                 val: Rc::new(val),
             },
             None => Term::Inr {
-                lhs_level: spine.ctors[j].1.clone(),
-                rhs_level: spine.tails[j].1.clone(),
-                lhs: Rc::new(spine.ctors[j].0.shift_local(d)),
-                rhs: Rc::new(spine.tails[j].0.shift_local(d)),
+                lhs_level: spine.lhs(j).1.clone(),
+                rhs_level: spine.rhs(j).1.clone(),
+                lhs: Rc::new(spine.lhs(j).0.shift_local(d)),
+                rhs: Rc::new(spine.rhs(j).0.shift_local(d)),
                 val: Rc::new(val),
             },
         };
@@ -1997,8 +2081,8 @@ impl Elaborator {
         ))
     }
 
-    /// The tag spine (§3.2): `S = ⟦c₁⟧ + (⟦c₂⟧ + …)`, right-nested;
-    /// `Empty` with no constructors, and no `+` at all with one. At tier 1
+    /// The tag spine (§3.2): the constructors' payloads joined by `+` in the
+    /// tree [`crate::sum_layout`] decides; `Empty` with no constructors, and no `+` at all with one. At tier 1
     /// this is the `Wf`'s *shape*, so the recursive fields are already gone
     /// by construction — [`Self::lower_ctor`] skips them.
     pub(crate) fn lower_shape(
@@ -2013,7 +2097,7 @@ impl Elaborator {
         for i in 0..ind.ctors.len() {
             parts.push(self.lower_ctor(cx, ind, i, args, vargs, span)?);
         }
-        let Some((last, last_lvl)) = parts.pop() else {
+        let Some(whole) = sum_of_payloads(parts) else {
             // A declaration with no constructors lowers to `Empty` (§3.3).
             //
             // **This is where the level-0 assumption enters.** `Unit`/`Empty`
@@ -2025,25 +2109,7 @@ impl Elaborator {
             // changes first.
             return Ok((Type::Empty { level: Level::Zero }, Level::Zero));
         };
-        let mut acc = last;
-        let mut acc_lvl = last_lvl;
-        for (ty, lvl) in parts.into_iter().rev() {
-            acc = Type::Sum {
-                lhs_level: lvl.clone(),
-                rhs_level: acc_lvl.clone(),
-                lhs: Rc::new(ty),
-                rhs: Rc::new(acc),
-            };
-            // Canonical, not the raw `Max` tree: each summand's level embeds
-            // the accumulated one, so an uncanonicalized join grows a level
-            // *tree* quadratic in the constructor count, mirrored into every
-            // `Sum` node's level slots — measured at ~2/3 of a large lowered
-            // type's remaining node mass (issues/wf-field-conversion-cost.md,
-            // 2026-08-13). `canonical` is `equiv`-preserving by construction,
-            // so this is a spelling change only.
-            acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
-        }
-        Ok((acc, acc_lvl))
+        Ok(whole)
     }
 
     /// The arity `n` over `(Γ, x : S)` (tier 1 §3): a case on the tag
@@ -2067,12 +2133,11 @@ impl Elaborator {
         self.const_case_tree(
             xcx,
             &spine,
-            ind.ctors.len(),
             &Type::Nat,
             &Level::Zero,
             Rc::new(Term::Var(LocalVar(0))),
             &ConstBody::Arity(counts),
-            0,
+            spine.root(),
             // The spine is scoped in `Γ`; one binder (`x`) has been pushed
             // since.
             1,
@@ -2380,8 +2445,6 @@ impl Elaborator {
     /// is holding. A summand is always a `Σ`, never itself a `Wf`, so this
     /// cannot strip too much.
     pub(crate) fn spine(&self, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
-        let mut ctors = Vec::with_capacity(n);
-        let mut tails = Vec::with_capacity(n.saturating_sub(1));
         let (cur, cur_lvl) = match &*decoded(ty) {
             // `Wf`'s shape lives at the `Wf`'s own level (kernel formation
             // rule), so there is no second level to read off.
@@ -2397,34 +2460,47 @@ impl Elaborator {
                 None => (Rc::new(other.clone()), lvl.clone()),
             },
         };
-        let mut cur = cur;
-        let mut cur_lvl = cur_lvl;
-        for _ in 0..n.saturating_sub(1) {
-            // The inner scope ends `decoded`'s borrow of `cur` before `cur`
-            // is rebound.
-            let step = {
-                let d = decoded(&cur);
-                let Type::Sum {
-                    lhs_level,
-                    rhs_level,
-                    lhs,
-                    rhs,
-                } = &*d
-                else {
-                    return err(
-                        "internal: malformed inductive encoding (expected a `+`)",
-                        span,
-                    );
-                };
-                ctors.push((Rc::clone(lhs), lhs_level.clone()));
-                tails.push((Rc::clone(rhs), rhs_level.clone()));
-                (Rc::clone(rhs), rhs_level.clone())
-            };
-            cur = step.0;
-            cur_lvl = step.1;
+        let layout = crate::sum_layout::layout(n);
+        if n == 0 {
+            // Nothing to split: the one "component" is the type itself, as
+            // the readers of an empty declaration have always been handed.
+            return Ok(Spine { layout, ctors: vec![(cur, cur_lvl)], nodes: Vec::new() });
         }
-        ctors.push((cur, cur_lvl));
-        Ok(Spine { ctors, tails })
+        let mut ctors: Vec<Option<(Rc<Type>, Level)>> = vec![None; n];
+        let mut nodes: Vec<Option<(Rc<Type>, Level)>> = vec![None; layout.nodes().len()];
+        // Each `+` is read off its own node, its two sides taken without
+        // copying, so a side *is* the next component (`spine_agreement`
+        // relies on it).
+        let mut stack = vec![(layout.root(), cur, cur_lvl)];
+        while let Some((child, cur, cur_lvl)) = stack.pop() {
+            match child {
+                None => {}
+                Some(Child::Leaf(k)) => ctors[k] = Some((cur, cur_lvl)),
+                Some(Child::Node(j)) => {
+                    let node = *layout.node(j);
+                    let d = decoded(&cur);
+                    let Type::Sum {
+                        lhs_level,
+                        rhs_level,
+                        lhs,
+                        rhs,
+                    } = &*d
+                    else {
+                        return err(
+                            "internal: malformed inductive encoding (expected a `+`)",
+                            span,
+                        );
+                    };
+                    stack.push((Some(node.rhs), Rc::clone(rhs), rhs_level.clone()));
+                    stack.push((Some(node.lhs), Rc::clone(lhs), lhs_level.clone()));
+                    drop(d);
+                    nodes[j] = Some((cur, cur_lvl));
+                }
+            }
+        }
+        let ctors = ctors.into_iter().map(|c| c.expect("every leaf is reached")).collect();
+        let nodes = nodes.into_iter().map(|c| c.expect("every node is reached")).collect();
+        Ok(Spine { layout, ctors, nodes })
     }
 
     /// [`Self::spine`] of a type scoped in `cx`, a named codata signature
@@ -2449,8 +2525,8 @@ impl Elaborator {
     ///
     /// A **flat** declaration with spine codes registered
     /// (`issues/inductive-spelling-codes-nonrecursive.md`) takes them by
-    /// position first — `El (D#payloadₖ^δ)` for `ctors[k]`, `El (D#suffixₖ^δ)`
-    /// for `tails[k]` — under the same structural guard as every other
+    /// position first — `El (D#payloadₖ^δ)` for `ctors[k]`, `El (D#suffixⱼ₋₁^δ)`
+    /// for `nodes[j]` — under the same structural guard as every other
     /// reference; a component the guard declines (a monomorphized or
     /// otherwise re-spelled copy) falls back to the deep respell as before.
     pub(crate) fn respell_spine(&self, cx: &Cx, spine: &Spine) -> Spine {
@@ -2459,22 +2535,27 @@ impl Elaborator {
             .first()
             .and_then(|(c, _)| self.tag_of(c))
             .and_then(|ind| self.spine_refs_by_position(cx, ind.tag, spine));
-        let (ctor_refs, tail_refs) = match by_position {
+        let (ctor_refs, node_refs) = match by_position {
             Some((c, t)) => (c, t),
-            None => (vec![None; spine.ctors.len()], vec![None; spine.tails.len()]),
+            None => (vec![None; spine.ctors.len()], vec![None; spine.nodes.len()]),
         };
-        let re = |v: &Vec<(Rc<Type>, Level)>, refs: Vec<Option<Type>>| {
+        let re = |v: &[(Rc<Type>, Level)], refs: Vec<Option<Type>>| {
             v.iter()
                 .zip(refs)
                 .map(|((t, l), r)| match r.or_else(|| self.emit_ty(cx, t, 0)) {
                     Some(r) => (Rc::new(r), l.clone()),
                     None => (Rc::clone(t), l.clone()),
                 })
-                .collect()
+                .collect::<Vec<_>>()
         };
+        // The whole sum is never a side of a `+`, so nothing reads its
+        // emission spelling; it keeps its own.
+        let mut nodes = spine.nodes.iter().take(1).cloned().collect::<Vec<_>>();
+        nodes.extend(re(spine.nodes.get(1..).unwrap_or(&[]), node_refs.into_iter().skip(1).collect()));
         Spine {
+            layout: Rc::clone(&spine.layout),
             ctors: re(&spine.ctors, ctor_refs),
-            tails: re(&spine.tails, tail_refs),
+            nodes,
         }
     }
 
@@ -2590,19 +2671,8 @@ impl Elaborator {
 
         let shape = self.display_shape(ty);
         let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
-        let mut summand = Rc::new(shape.clone());
-        for (i, ctor) in ind.ctors.iter().enumerate() {
-            let ctor_ty = if i + 1 < ind.ctors.len() {
-                let d = decoded(&summand);
-                let Type::Sum { lhs, rhs, .. } = &*d else {
-                    return None;
-                };
-                let out = Rc::clone(lhs);
-                summand = Rc::clone(rhs);
-                out
-            } else {
-                Rc::clone(&summand)
-            };
+        let payloads = sum_payloads(&Rc::new(shape.clone()), ind.ctors.len())?;
+        for (ctor, ctor_ty) in ind.ctors.iter().zip(payloads) {
 
             // Entry zero is the nominal tag. Every following Sigma entry is
             // one payload field; recursive children are absent from the shape.
@@ -3308,6 +3378,7 @@ impl Elaborator {
             &arms,
             &spine,
             &spine_e,
+            spine.layout.root().expect("an empty match returned above"),
             0,
             motive,
             &mlvl,
@@ -3315,12 +3386,13 @@ impl Elaborator {
         )
     }
 
-    /// The nested-`Case` recursion of §5.2. At depth `j` the context is `cx` —
-    /// `Γ` plus the `j` `case_r` binders already pushed — `motive` is `M_j`
-    /// over `cx, z : R_j`, and `scrut` is the `R_j`-typed scrutinee.
+    /// The nested-`Case` recursion of §5.2, over the layout's `+` tree. At a
+    /// component `at` reached through `d` `Case`s the context is `cx` — `Γ`
+    /// plus the `d` binders already pushed — `motive` is `M` over `cx, z : R`
+    /// with `R` that component, and `scrut` is the `R`-typed scrutinee.
     ///
     /// `spine`'s components are scoped in the *original* `Γ`, so every use of
-    /// one at depth `j` is weakened by `j` (and by `j+1` under a freshly pushed
+    /// one at depth `d` is weakened by `d` (and by `d+1` under a freshly pushed
     /// binder). The motive needs no such treatment: it is re-scoped by the
     /// substitution that composes it with the injection.
     #[allow(clippy::too_many_arguments)]
@@ -3331,40 +3403,36 @@ impl Elaborator {
         arms: &[&Arm],
         spine: &Spine,
         spine_e: &Spine,
-        j: usize,
+        at: Child,
+        d: u32,
         motive: Type,
         mlvl: &Level,
         scrut: Rc<Term>,
     ) -> R<Term> {
-        let n = arms.len();
-        let d = j as u32;
-        if j + 1 == n {
-            // Last constructor: no `Case` — the arm body itself, checked at
-            // `M_j[scrut/z]`. At `j = 0` that is the whole `match`.
-            let expected =
-                motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut)));
-            let ctor_ty = spine.ctors[j].0.shift_local(d);
-            let skels = arm_field_skels(ind, j);
-            return self.elab_arm(cx, arms[j], &ctor_ty, &scrut, &expected, mlvl, &skels);
-        }
-        let ctor_lvl = spine.ctors[j].1.clone();
-        let tail_lvl = spine.tails[j].1.clone();
+        let j = match at {
+            Child::Leaf(k) => {
+                // A constructor: no `Case` — the arm body itself, checked at
+                // `M[scrut/z]`. At the root that is the whole `match`.
+                let expected =
+                    motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut)));
+                let ctor_ty = spine.ctors[k].0.shift_local(d);
+                let skels = arm_field_skels(ind, k);
+                return self.elab_arm(cx, arms[k], &ctor_ty, &scrut, &expected, mlvl, &skels);
+            }
+            Child::Node(j) => j,
+        };
+        let node = *spine.layout.node(j);
+        let ctor_lvl = spine.lhs(j).1.clone();
+        let tail_lvl = spine.rhs(j).1.clone();
         // Emitted: this `Case`'s two component types and the injections below.
         // The binder types pushed into the elaborator's own context, and every
         // type `elab_arm` reads a field out of, stay inline (§4's line).
-        let ctor_ty = Rc::new(spine_e.ctors[j].0.shift_local(d));
-        let tail_ty = Rc::new(spine_e.tails[j].0.shift_local(d));
-        // case_l: binder `x : ⟦c_j⟧` over Γ_j, body at `M_j[inl x/z]`.
-        let mut lcx = cx.clone();
-        lcx.push(
-            "#scrut".into(),
-            spine.ctors[j].0.shift_local(d),
-            ctor_lvl.clone(),
-        );
+        let ctor_ty = Rc::new(spine_e.lhs(j).0.shift_local(d));
+        let tail_ty = Rc::new(spine_e.rhs(j).0.shift_local(d));
         // The injection's own summand annotations are scoped in the *original*
         // `\u{393}`, so they carry the shift of whatever context the injection
         // is being placed in — which is **not** always `d + 1`. `l_expected`
-        // lands in `lcx` (one binder past `cx`, so `d + 1`); `inner_motive`
+        // lands in `lcx` (one binder past `cx`, so `d + 1`); a side's motive
         // lands in `rcx, z` (two, so `d + 2`), which is what
         // `embed(\u{2026}, 2)` on the same line says. Getting this wrong is
         // invisible at a closed payload type *and* at \u{2264} 2 constructors,
@@ -3375,8 +3443,8 @@ impl Elaborator {
         // substituted away before the kernel sees them.
         let injected = |val: Term, inl: bool, sh: u32| {
             let (lhs, rhs) = (
-                spine_e.ctors[j].0.shift_local(sh),
-                spine_e.tails[j].0.shift_local(sh),
+                spine_e.lhs(j).0.shift_local(sh),
+                spine_e.rhs(j).0.shift_local(sh),
             );
             let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
             let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
@@ -3399,42 +3467,71 @@ impl Elaborator {
                 }
             }
         };
-        let l_expected = motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(
-            Term::Var(LocalVar(0)),
-            true,
-            d + 1,
-        ))));
-        let l_skels = arm_field_skels(ind, j);
-        let case_l = self.elab_arm(
-            &lcx,
-            arms[j],
-            &spine.ctors[j].0.shift_local(d + 1),
-            &Rc::new(Term::Var(LocalVar(0))),
-            &l_expected,
-            mlvl,
-            &l_skels,
-        )?;
-        // case_r: binder `y : R_{j+1}` over Γ_j; inside it, the next `Case` on
-        // `y`, whose motive is `M_j` composed with `inr` and weakened past `y`.
+        // A side's motive: `M` composed with its injection, over the side's
+        // binder and a fresh `z`.
+        let side_motive = |inl: bool| {
+            motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(injected(
+                Term::Var(LocalVar(0)),
+                inl,
+                d + 2,
+            ))))
+        };
+        // case_l: binder `x : A` over Γ_d. A constructor's arm is checked at
+        // `M[inl x/z]` directly; a `+` recurses at the composed motive.
+        let mut lcx = cx.clone();
+        lcx.push(
+            "#scrut".into(),
+            spine.lhs(j).0.shift_local(d),
+            ctor_lvl.clone(),
+        );
+        let case_l = match node.lhs {
+            Child::Leaf(k) => {
+                let l_expected = motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(
+                    Term::Var(LocalVar(0)),
+                    true,
+                    d + 1,
+                ))));
+                let l_skels = arm_field_skels(ind, k);
+                self.elab_arm(
+                    &lcx,
+                    arms[k],
+                    &spine.ctors[k].0.shift_local(d + 1),
+                    &Rc::new(Term::Var(LocalVar(0))),
+                    &l_expected,
+                    mlvl,
+                    &l_skels,
+                )?
+            }
+            lhs @ Child::Node(_) => self.case_tree(
+                &lcx,
+                ind,
+                arms,
+                spine,
+                spine_e,
+                lhs,
+                d + 1,
+                side_motive(true),
+                mlvl,
+                Rc::new(Term::Var(LocalVar(0))),
+            )?,
+        };
+        // case_r: binder `y : B` over Γ_d; inside it, the next `Case` on
+        // `y`, whose motive is `M` composed with `inr` and weakened past `y`.
         let mut rcx = cx.clone();
         rcx.push(
             "#rest".into(),
-            spine.tails[j].0.shift_local(d),
+            spine.rhs(j).0.shift_local(d),
             tail_lvl.clone(),
         );
-        let inner_motive = motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(injected(
-            Term::Var(LocalVar(0)),
-            false,
-            d + 2,
-        ))));
         let case_r = self.case_tree(
             &rcx,
             ind,
             arms,
             spine,
             spine_e,
-            j + 1,
-            inner_motive,
+            node.rhs,
+            d + 1,
+            side_motive(false),
             mlvl,
             Rc::new(Term::Var(LocalVar(0))),
         )?;
@@ -5306,63 +5403,68 @@ impl Elaborator {
     ///
     /// `motive` and `spine` are scoped in the context the caller built them in;
     /// `d` counts the binders pushed since, so a spine component used here is
-    /// weakened by `d` (or `d+1` under a branch binder). `j` is the constructor
-    /// index — *not* the same counter as `d`, since these trees are built
-    /// several binders deep (inside a `J` motive, `d` starts at 2).
+    /// weakened by `d` (or `d+1` under a branch binder). `at` is the subtree
+    /// of the sum being split (`spine.layout.root()` from a caller) — *not*
+    /// tied to `d`, since these trees are built several binders deep (inside
+    /// a `J` motive, `d` starts at 2).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn const_case_tree(
         &self,
         cx: &Cx,
         spine: &Spine,
-        n: usize,
         motive: &Type,
         mlvl: &Level,
         scrut: Rc<Term>,
         body: &ConstBody,
-        j: usize,
+        at: Child,
         d: u32,
         span: Span,
     ) -> R<Term> {
-        if j + 1 == n {
-            // The last constructor: no `Case`, so the branch body is scoped in
-            // `cx` itself with the scrutinee standing in for the binder.
-            return self.const_body(cx, spine, j, &scrut, body, d, span);
-        }
-        let ctor_lvl = spine.ctors[j].1.clone();
-        let tail_lvl = spine.tails[j].1.clone();
-        let ctor_ty = Rc::new(spine.ctors[j].0.shift_local(d));
-        let tail_ty = Rc::new(spine.tails[j].0.shift_local(d));
+        let j = match at {
+            // A payload: no `Case`, so the branch body is scoped in `cx`
+            // itself with the scrutinee standing in for the binder.
+            Child::Leaf(k) => return self.const_body(cx, spine, k, &scrut, body, d, span),
+            Child::Node(j) => j,
+        };
+        let node = *spine.layout.node(j);
+        let (lhs_ty, lhs_lvl) = spine.lhs(j);
+        let (rhs_ty, rhs_lvl) = spine.rhs(j);
+        let lhs_lvl = lhs_lvl.clone();
+        let rhs_lvl = rhs_lvl.clone();
+        let lhs_ty = Rc::new(lhs_ty.shift_local(d));
+        let rhs_ty = Rc::new(rhs_ty.shift_local(d));
         let mut bcx = cx.clone();
-        bcx.push("#c".into(), (*ctor_ty).clone(), ctor_lvl.clone());
-        let case_l = self.const_body(
+        bcx.push("#c".into(), (*lhs_ty).clone(), lhs_lvl.clone());
+        let case_l = self.const_case_tree(
             &bcx,
             spine,
-            j,
-            &Rc::new(Term::Var(LocalVar(0))),
-            body,
-            d + 1,
-            span,
-        )?;
-        let mut rcx = cx.clone();
-        rcx.push("#r".into(), (*tail_ty).clone(), tail_lvl.clone());
-        let case_r = self.const_case_tree(
-            &rcx,
-            spine,
-            n,
             &motive.shift_local(1),
             mlvl,
             Rc::new(Term::Var(LocalVar(0))),
             body,
-            j + 1,
+            node.lhs,
+            d + 1,
+            span,
+        )?;
+        let mut rcx = cx.clone();
+        rcx.push("#r".into(), (*rhs_ty).clone(), rhs_lvl.clone());
+        let case_r = self.const_case_tree(
+            &rcx,
+            spine,
+            &motive.shift_local(1),
+            mlvl,
+            Rc::new(Term::Var(LocalVar(0))),
+            body,
+            node.rhs,
             d + 1,
             span,
         )?;
         Ok(Term::Case {
-            lhs_level: ctor_lvl,
-            rhs_level: tail_lvl,
+            lhs_level: lhs_lvl,
+            rhs_level: rhs_lvl,
             motive_level: mlvl.clone(),
-            lhs: ctor_ty,
-            rhs: tail_ty,
+            lhs: lhs_ty,
+            rhs: rhs_ty,
             // The motive binds `z`, which a constant motive simply ignores.
             motive: Rc::new(motive.shift_local(1)),
             case_l: Rc::new(case_l),
@@ -5582,26 +5684,8 @@ impl Elaborator {
             (false, _) => label,
         };
         let n = ind.ctors.len();
-        let mut i = 0usize;
-        let mut cur = label;
-        let mut injected = false;
-        loop {
-            // Either injection spelling (`crate::spelling`): this walk reads
-            // the *path*, never an annotation, so `inr@` is an `inr`.
-            match crate::spelling::inj_of(cur) {
-                Some((false, val)) if i + 1 < n => {
-                    injected = true;
-                    i += 1;
-                    cur = val;
-                }
-                Some((true, val)) => {
-                    injected = true;
-                    cur = val;
-                    break;
-                }
-                _ => break,
-            }
-        }
+        let path = crate::spelling::inj_path(label, n);
+        let (i, cur, injected) = (path.ctor, path.at, path.injected);
         if i >= n {
             return Ok(None);
         }
@@ -5891,23 +5975,22 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         if ind.recursive {
-            return self.const_elim_wf(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, 2, span);
+            return self.const_elim_wf(mcx, d_ty, spine, motive, mlvl, scrut, body, 2, span);
         }
         if ind.infinitary() {
-            return self.const_elim_w(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, span);
+            return self.const_elim_w(mcx, d_ty, spine, motive, mlvl, scrut, body, span);
         }
         if ind.codata {
-            return self.const_out_m(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, span);
+            return self.const_out_m(mcx, d_ty, spine, motive, mlvl, scrut, body, span);
         }
         self.const_case_tree(
             mcx,
             spine,
-            ind.ctors.len(),
             motive,
             mlvl,
             scrut,
             body,
-            0,
+            spine.root(),
             2,
             span,
         )

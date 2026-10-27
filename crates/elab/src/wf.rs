@@ -29,6 +29,7 @@ use heather_kernel::term::{LocalCtx, LocalVar, Term, Type, nth, wf_step_telescop
 use heather_syntax::{Arm, Expr, Span};
 
 use crate::inductive::{ConstBody, FieldKind, Inductive, Spine, inject};
+use crate::sum_layout::Child;
 use crate::matching::{ChainStep, cov_comps, cov_proj, cov_ty, cov_tuple};
 use crate::recursion::{ContainerIh, EqSplit, Guard, GuardKind, WfCov};
 use crate::{Alias, Cx, Elaborator, R, embed, err};
@@ -964,7 +965,7 @@ impl Elaborator {
             branches,
             &tel,
             dec,
-            0,
+            tel.spine.root(),
             p_motive,
             &plvl,
             var(2),
@@ -1040,14 +1041,15 @@ impl Elaborator {
         )
     }
 
-    /// The step's case tree (§6.2). Structurally tier 0 §5.2's: right-nested
-    /// `Case`, the motive composed with the injection at each depth, no
-    /// `Case` at all at the last constructor. What differs is the branch — it
-    /// is a pair of λs, not the arm body directly.
+    /// The step's case tree (§6.2). Structurally tier 0 §5.2's: a `Case` per
+    /// `+` of the layout, the motive composed with the injection at each
+    /// depth, no `Case` at a constructor's own payload. What differs is the
+    /// branch — it is a pair of λs, not the arm body directly.
     ///
-    /// `cx` is Γ₃ plus the `j` binders this recursion has pushed, `motive` is
-    /// `P_j` over `(cx, z : R_j)`, `scrut` is the `R_j`-typed scrutinee, and
-    /// `d` is how far the spine (scoped in `gamma0`) has to be weakened here.
+    /// `cx` is Γ₃ plus the binders this recursion has pushed, `motive` is the
+    /// motive over `(cx, z : S_at)` for the subtree `at` being split, `scrut`
+    /// is the `S_at`-typed scrutinee, and `d` is how far the spine (scoped in
+    /// `gamma0`) has to be weakened here.
     #[allow(clippy::too_many_arguments)]
     fn wf_case_tree(
         &self,
@@ -1056,49 +1058,36 @@ impl Elaborator {
         branches: &Branches,
         tel: &Tel,
         dec: Option<usize>,
-        j: usize,
+        at: Child,
         motive: Type,
         plvl: &Level,
         scrut: Rc<Term>,
         d: u32,
         span: Span,
     ) -> R<Term> {
-        let n = ind.ctors.len();
-        if j + 1 == n {
-            return self.wf_branch(cx, ind, branches, tel, dec, j, scrut, d, span);
-        }
-        let ctor_lvl = tel.spine.ctors[j].1.clone();
-        let tail_lvl = tel.spine.tails[j].1.clone();
-        // Emitted annotations (this `Case`'s two component types, the `Inr`
-        // below) take the emission spine; the *binder* types pushed into the
-        // elaborator's own context stay inline, so every structural read
-        // inside the branch still sees `⟦T⟧` itself (§4's line).
-        let ctor_ty = Rc::new(tel.spine_emit.ctors[j].0.shift_local(d));
-        let tail_ty = Rc::new(tel.spine_emit.tails[j].0.shift_local(d));
-        let ctor_ty_in = tel.spine.ctors[j].0.shift_local(d);
-        let tail_ty_in = tel.spine.tails[j].0.shift_local(d);
-        // case_l: binder `x : ⟦c_j⟧`, body at `P_j[inl x/z]`.
-        let mut lcx = cx.clone();
-        lcx.push("#scrut".into(), ctor_ty_in, ctor_lvl.clone());
-        let case_l = self.wf_branch(
-            &lcx,
-            ind,
-            branches,
-            tel,
-            dec,
-            j,
-            Rc::new(Term::Var(LocalVar(0))),
-            d + 1,
-            span,
-        )?;
-        // case_r: binder `y : R_{j+1}`; inside it, the next `Case`, whose
-        // motive is `P_j` composed with `inr` and weakened past `y`.
-        let mut rcx = cx.clone();
-        rcx.push("#rest".into(), tail_ty_in, tail_lvl.clone());
-        // `inner = P_j[inr z']` over `(cx, y, z')` — **two** binders past `cx`,
-        // not one: the `y` this branch binds *and* the inner `Case`'s own
-        // motive binder. The substitution's `extra` says 2 and the injection's
-        // annotations have to agree, or the spine's field types address `y`
+        let j = match at {
+            Child::Leaf(k) => return self.wf_branch(cx, ind, branches, tel, dec, k, scrut, d, span),
+            Child::Node(j) => j,
+        };
+        let node = *tel.spine.layout.node(j);
+        let ctor_lvl = tel.spine.lhs(j).1.clone();
+        let tail_lvl = tel.spine.rhs(j).1.clone();
+        // Emitted annotations (this `Case`'s two component types, the
+        // injections below) take the emission spine; the *binder* types pushed
+        // into the elaborator's own context stay inline, so every structural
+        // read inside the branch still sees `⟦T⟧` itself (§4's line).
+        let ctor_ty = Rc::new(tel.spine_emit.lhs(j).0.shift_local(d));
+        let tail_ty = Rc::new(tel.spine_emit.rhs(j).0.shift_local(d));
+        let ctor_ty_in = tel.spine.lhs(j).0.shift_local(d);
+        let tail_ty_in = tel.spine.rhs(j).0.shift_local(d);
+        // One side: binder `x : A` (or `y : B`); a payload is a branch, a `+`
+        // the next `Case` on the binder, whose motive is `P` composed with the
+        // side's injection and weakened past the binder.
+        //
+        // That motive is over `(cx, x, z')` — **two** binders past `cx`, not
+        // one: the binder this side binds *and* the inner `Case`'s own motive
+        // binder. The substitution's `extra` says 2 and the injection's
+        // annotations have to agree, or the spine's field types address `x`
         // where they mean an ambient variable.
         //
         // Invisible at a closed payload type (the annotations then mention no
@@ -1106,27 +1095,30 @@ impl Elaborator {
         // is no inner `Case`); it took three constructors *and* an open payload
         // — `docs/testing-generated-terms.md` axis 2 — to make the index
         // escape, and then it is a kernel `LevelMismatch`, not a wrong answer.
-        let inr = Term::Inr {
-            lhs_level: ctor_lvl.clone(),
-            rhs_level: tail_lvl.clone(),
-            lhs: Rc::new(tel.spine_emit.ctors[j].0.shift_local(d + 2)),
-            rhs: Rc::new(tel.spine_emit.tails[j].0.shift_local(d + 2)),
-            val: Rc::new(Term::Var(LocalVar(0))),
+        let side = |right: bool, name: &str, ty_in: Type, lvl: &Level| -> R<Term> {
+            let mut scx = cx.clone();
+            scx.push(name.into(), ty_in, lvl.clone());
+            let var0 = Rc::new(Term::Var(LocalVar(0)));
+            match node.side(right) {
+                Child::Leaf(k) => self.wf_branch(&scx, ind, branches, tel, dec, k, var0, d + 1, span),
+                inner_at @ Child::Node(_) => {
+                    let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
+                    let lhs = Rc::new(tel.spine_emit.lhs(j).0.shift_local(d + 2));
+                    let rhs = Rc::new(tel.spine_emit.rhs(j).0.shift_local(d + 2));
+                    let val = Rc::new(Term::Var(LocalVar(0)));
+                    let inj = if right {
+                        Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
+                    } else {
+                        Term::Inl { lhs_level, rhs_level, lhs, rhs, val }
+                    };
+                    let inner = motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(inj)));
+                    self.wf_case_tree(&scx, ind, branches, tel, dec, inner_at, inner, plvl, var0, d + 1, span)
+                }
+            }
         };
-        let inner = motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(inr)));
-        let case_r = self.wf_case_tree(
-            &rcx,
-            ind,
-            branches,
-            tel,
-            dec,
-            j + 1,
-            inner,
-            plvl,
-            Rc::new(Term::Var(LocalVar(0))),
-            d + 1,
-            span,
-        )?;
+        // case_l: binder `x : A`; case_r: binder `y : B`.
+        let case_l = side(false, "#scrut", ctor_ty_in, &ctor_lvl)?;
+        let case_r = side(true, "#rest", tail_ty_in, &tail_lvl)?;
         Ok(Term::Case {
             lhs_level: ctor_lvl,
             rhs_level: tail_lvl,
@@ -1680,7 +1672,6 @@ impl Elaborator {
     pub(crate) fn const_elim_wf(
         &self,
         cx: &Cx,
-        ind: &Inductive,
         d_ty: &Type,
         spine: &Spine,
         motive: &Type,
@@ -1713,12 +1704,11 @@ impl Elaborator {
         let step = self.const_case_tree(
             &cx3,
             spine,
-            ind.ctors.len(),
             &motive.shift_local(3),
             mlvl,
             Rc::new(Term::Var(LocalVar(2))),
             body,
-            0,
+            spine.root(),
             d0 + 3,
             span,
         )?;
@@ -2415,7 +2405,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             level: l.clone(),
             tm: Rc::new(Term::TmSum {
                 lhs_level: spine.ctors[0].1.clone(),
-                rhs_level: spine.tails[0].1.clone(),
+                rhs_level: spine.rhs(0).1.clone(),
                 lhs: Rc::new(e.el.gen_ref(&e.cx, GenDef::PayloadCode(tag, 0)).expect("named")),
                 rhs: Rc::new(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).expect("named")),
             }),
@@ -2570,7 +2560,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
                 );
             }
             assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).is_some(), "`{name}`");
-            // `tails[1]` is the last payload itself: no definition of its own.
+            // `rhs(1)` is the last payload itself: no definition of its own.
             assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 1)).is_none(), "`{name}`");
             assert!(e.el.types.gdefs().has_spine_code_entry(tag), "`{name}`");
         }
@@ -2609,17 +2599,17 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
             // position at emission (the tag-type look-alike, below).
             assert!(e.el.respell_ty(&e.cx, inline).is_none());
         }
-        let Type::El { tm, .. } = &*emit.tails[0].0 else {
+        let Type::El { tm, .. } = &*emit.rhs(0).0 else {
             panic!("the first tail takes `El` of a code")
         };
         assert!(e.el.is_gen_ref(tm, GenDef::SuffixCode(flat, 0)));
-        assert!(e.el.conv_types(&e.cx, &emit.tails[0].0, &spine.tails[0].0, &spine.tails[0].1));
-        assert!(e.el.conv_types(&e.cx, &spine.tails[0].0, &emit.tails[0].0, &spine.tails[0].1));
+        assert!(e.el.conv_types(&e.cx, &emit.rhs(0).0, &spine.rhs(0).0, &spine.rhs(0).1));
+        assert!(e.el.conv_types(&e.cx, &spine.rhs(0).0, &emit.rhs(0).0, &spine.rhs(0).1));
         assert_eq!(
-            e.el.spine_type_ref(&e.cx, flat, &spine.tails[0].0).as_ref(),
-            Some(&*emit.tails[0].0)
+            e.el.spine_type_ref(&e.cx, flat, &spine.rhs(0).0).as_ref(),
+            Some(&*emit.rhs(0).0)
         );
-        let Type::El { tm, .. } = &*emit.tails[1].0 else {
+        let Type::El { tm, .. } = &*emit.rhs(1).0 else {
             panic!("the last tail takes `El` of a code")
         };
         assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(flat, 2)));
@@ -2704,7 +2694,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
             assert!(e.el.conv_types(&e.cx, r, inline, lk));
             assert!(e.el.conv_types(&e.cx, inline, r, lk));
         }
-        let Type::El { tm, .. } = &*emit.tails[0].0 else {
+        let Type::El { tm, .. } = &*emit.rhs(0).0 else {
             panic!("the first tail takes `El` of a code")
         };
         assert!(e.el.is_gen_ref(tm, GenDef::SuffixCode(tag, 0)));
@@ -2712,7 +2702,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         let (u_ty, ul) = e.lowered("U");
         let uspine = e.el.spine(&u_ty, &ul, 3, SPAN).expect("a spine");
         assert!(e.el.spine_type_ref(&e.cx, tag, &uspine.ctors[1].0).is_none());
-        assert!(e.el.spine_type_ref(&e.cx, tag, &uspine.tails[0].0).is_none());
+        assert!(e.el.spine_type_ref(&e.cx, tag, &uspine.rhs(0).0).is_none());
     }
 
     /// The four axes over a recursive declaration whose labels and `match`
@@ -2807,7 +2797,7 @@ meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Flat {
         };
         assert!(e.el.is_gen_ref(tm, GenDef::PayloadCode(flat2, 1)));
         assert!(e.el.spine_type_ref(&e.cx, flat, &spine2.ctors[1].0).is_none());
-        assert!(e.el.spine_type_ref(&e.cx, flat, &spine2.tails[0].0).is_none());
+        assert!(e.el.spine_type_ref(&e.cx, flat, &spine2.rhs(0).0).is_none());
         let spine = e.el.spine(&flat_ty, &l, 3, SPAN).expect("a spine");
         // `⟦FB⟧` with its `Nat` field replaced: `Σ(tag). Σ(Unit). Unit`.
         let Type::Sigma { fst_level, snd_level, fst, snd } = &*spine.ctors[1].0 else {
