@@ -1,0 +1,118 @@
+// exp, sin and cos at rational arguments, as the limits of their Taylor
+// series (issues/interval-elementary-functions.md;
+// docs/floating-point-design.md §16, "Series").
+//
+// Each is a `Series` by the ratio of consecutive terms:
+//
+//     exp(a) = Σ a^k / k!                 t_{k+1} = t_k · a / (k+1)
+//     sin(a) = Σ (-1)^k a^{2k+1}/(2k+1)!  t_{k+1} = t_k · -a² / ((2k+2)(2k+3))
+//     cos(a) = Σ (-1)^k a^{2k}/(2k)!      t_{k+1} = t_k · -a² / ((2k+1)(2k+2))
+//
+// and a ratio is at most 1/2 in size once k passes twice `c = ⌊|a|⌋ + 1`
+// for exp and `c` itself for sin and cos (`Rat::abs_le_abs_ceil`).
+// The reals are `CReal::exp_rat`, `CReal::sin_rat`, `CReal::cos_rat`; their
+// enclosures are the series' (`Series::enclose`), and `CReal::exp_box` and
+// the others are the checker's leaves for them, which `by intervals()` reads
+// at the three heads.
+
+import logic;
+import bool;
+import nat;
+import int;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import creal;
+import dyadic;
+import interval;
+import creal_interval;
+import series;
+import omega;
+
+// A rational's size against a step `1/(k+1)` is at most its ceiling's.
+theorem Rat::abs_mul_inv_succ(self a: Rat, k: Nat): (a * Rat::inv_succ(k)).abs() <= Rat::ofInt(OfNat(a.abs_ceil())) * Rat::inv_succ(k) {
+    let f = Rat::inv_succ(k);
+    let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(k));
+    calc {
+        (a * f).abs() ≈ a.abs() * f.abs() := a.abs_mul(f),
+        ≈ a.abs() * f := Rat::mul_respects(a.abs().same_refl(), f.abs_of_nonneg(hf)),
+        <= Rat::ofInt(OfNat(a.abs_ceil())) * f := Rat::mul_le_mono_r(a.abs_le_abs_ceil(), hf),
+    }
+}
+
+// `-a² · 1/(k+1)` is at most `c²/(k+1)` in size.
+theorem Rat::abs_neg_sq_mul_inv_succ(self a: Rat, k: Nat):
+    (-(a * a) * Rat::inv_succ(k)).abs() <= Rat::ofInt(OfNat(a.abs_ceil() * a.abs_ceil())) * Rat::inv_succ(k)
+{
+    let f = Rat::inv_succ(k);
+    let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(k));
+    let b = Rat::ofInt(OfNat(a.abs_ceil()));
+    let ab: (a.abs() <= b) = a.abs_le_abs_ceil();
+    calc {
+        (-(a * a) * f).abs() ≈ (-(a * a)).abs() * f.abs() := (-(a * a)).abs_mul(f),
+        ≈ (a * a).abs() * f := Rat::mul_respects((a * a).abs_neg(), f.abs_of_nonneg(hf)),
+        ≈ (a.abs() * a.abs()) * f := Rat::mul_respects(a.abs_mul(a), f.same_refl()),
+        <= (b * b) * f := Rat::mul_le_mono_r(Rat::mul_le_mul(ab, ab, a.abs_nonneg(), a.abs_nonneg()), hf),
+        ≈ Rat::ofInt(OfNat(a.abs_ceil() * a.abs_ceil())) * f := Rat::mul_respects(Rat::same_sym(Rat::ofInt_mul(OfNat(a.abs_ceil()), OfNat(a.abs_ceil()))), f.same_refl()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// exp
+
+fn Series::exp_ratio(a: Rat, k: Nat) → Rat { a * Rat::inv_succ(k) }
+
+theorem Series::exp_small(a: Rat, k: Nat, hk: a.abs_ceil() + a.abs_ceil() <= k): Series::exp_ratio(a, k).abs() <= Rat::inv_succ(1) {
+    Rat::le_trans(a.abs_mul_inv_succ(k), omega(hk))
+}
+
+fn Series::exp(a: Rat) → Series { Series(1, λ k => Series::exp_ratio(a, k), a.abs_ceil() + a.abs_ceil(), λ k hk => Series::exp_small(a, k, hk)) }
+
+fn CReal::exp_rat(a: Rat) → CReal { Series::exp(a).real() }
+
+fn CReal::exp_box(a: Rat) → Enclosed { Series::exp(a).enclosed() }
+
+// ---------------------------------------------------------------------------
+// sin and cos: one step is two degrees, `(2k+2)(2k+3) = 4k² + 10k + 6` and
+// `(2k+1)(2k+2) = 4k² + 6k + 2`.
+
+fn Series::sin_ratio(a: Rat, k: Nat) → Rat { -(a * a) * Rat::inv_succ(4 * (k * k) + 10 * k + 5) }
+
+fn Series::cos_ratio(a: Rat, k: Nat) → Rat { -(a * a) * Rat::inv_succ(4 * (k * k) + 6 * k + 1) }
+
+theorem Series::sin_small(a: Rat, k: Nat, hk: a.abs_ceil() <= k): Series::sin_ratio(a, k).abs() <= Rat::inv_succ(1) {
+    let m = a.abs_ceil();
+    let sq: (m * m <= k * k) = Nat::mul_le_mono(m, k, m, k, hk, hk);
+    Rat::le_trans(a.abs_neg_sq_mul_inv_succ(4 * (k * k) + 10 * k + 5), omega(sq))
+}
+
+theorem Series::cos_small(a: Rat, k: Nat, hk: a.abs_ceil() <= k): Series::cos_ratio(a, k).abs() <= Rat::inv_succ(1) {
+    let m = a.abs_ceil();
+    let sq: (m * m <= k * k) = Nat::mul_le_mono(m, k, m, k, hk, hk);
+    Rat::le_trans(a.abs_neg_sq_mul_inv_succ(4 * (k * k) + 6 * k + 1), omega(sq))
+}
+
+fn Series::sin(a: Rat) → Series { Series(a, λ k => Series::sin_ratio(a, k), a.abs_ceil(), λ k hk => Series::sin_small(a, k, hk)) }
+
+fn Series::cos(a: Rat) → Series { Series(1, λ k => Series::cos_ratio(a, k), a.abs_ceil(), λ k hk => Series::cos_small(a, k, hk)) }
+
+fn CReal::sin_rat(a: Rat) → CReal { Series::sin(a).real() }
+
+fn CReal::cos_rat(a: Rat) → CReal { Series::cos(a).real() }
+
+fn CReal::sin_box(a: Rat) → Enclosed { Series::sin(a).enclosed() }
+
+fn CReal::cos_box(a: Rat) → Enclosed { Series::cos(a).enclosed() }
+
+// ---------------------------------------------------------------------------
+// At zero each series stops after its first term.
+
+theorem CReal::exp_rat_zero(): CReal::exp_rat(0) ≈ 1 { Series::exp(0).same_of_exact(2, trivial, omega) }
+
+theorem CReal::sin_rat_zero(): CReal::sin_rat(0) ≈ 0 { Series::sin(0).same_of_exact(1, trivial, omega) }
+
+theorem CReal::cos_rat_zero(): CReal::cos_rat(0) ≈ 1 { Series::cos(0).same_of_exact(1, trivial, omega) }

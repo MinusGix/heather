@@ -5,7 +5,7 @@ labels: [mathematics,reals,floating-point,design]
 area: mathematics
 milestone: [math-float]
 created: 2026-10-20
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 Owns the roadmap's `math-float` milestone (`docs/roadmap.md`): binary
@@ -85,3 +85,4 @@ of the area.
   Square root is [[float-sqrt]] (its statement needs the reals or a cut form
   of `RoundsTo`); binary32 literals wait on [[kernel-wide-run-comparison]].
 - 2026-10-25: 2026-10-25: surveyed Coq's hardware floats (Martin-Dorel, Melquiond, Roux, JAR 2023) in `docs/coq-hardware-floats-survey.md`. Conclusion: no primitive floats in the kernel (they are definition-shape cases plus specification axioms, §2); Heather's executable-plus-relation design is the paper's spec stack without the axioms (§3). Native-lane machine assumptions for the round that first lowers a float op are in §4 (MXCSR as step input, SSE2 only, NaN platform policy, compiler identities at Float(F)). Filed [[float-error-sharper-model]], [[float-conformance-vectors]], [[float-literal-entry]], [[dyadic-interval-enclosures]].
+- 2026-10-26: 2026-10-26: interval enclosures over Dyadic and the Expr inequality checker landed, design §16; [[dyadic-interval-enclosures]] closed.

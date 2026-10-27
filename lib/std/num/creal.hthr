@@ -1962,3 +1962,83 @@ theorem CReal::terms_converge(self x: CReal): CReal::Limit(λ n => CReal::ofRat(
 theorem CReal::lim_terms(self x: CReal): CReal::lim(λ n => CReal::ofRat(x.seq(n)), x.terms_regular()) ≈ x {
     CReal::limit_unique(CReal::lim_converges(λ n => CReal::ofRat(x.seq(n)), x.terms_regular()), x.terms_converge())
 }
+
+// ---------------------------------------------------------------------------
+// Negation reverses the order, and a factor at most zero reverses a product's
+// (the enclosures' arithmetic at `CReal`, docs/floating-point-design.md
+// §16). A sign split of a real is never decided, but a `≤` is a
+// refutation, and inside one the excluded middle on `y < 0` is free:
+// `le_by_sign` takes one proof for each side.
+
+theorem CReal::neg_neg(self x: CReal): -(-x) ≈ x { (-(-x)).same_of_terms(x, λ n => x.seq(n).neg_neg()) }
+
+theorem CReal::neg_zero(): CReal::Same(-0, 0) { CReal::same_of_terms(-0, 0, λ n => Rat::same_refl(0)) }
+
+theorem CReal::neg_lt({x, y: CReal}, h: x < y): -y < -x {
+    match h {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => Exists(k, Exists(s, λ n from => {
+                let g: (x.seq(n) + Rat::inv_succ(k) <= y.seq(n)) = gap(n, from);
+                Rat::neg_gap(g)
+            })),
+        },
+    }
+}
+
+theorem CReal::neg_le({x, y: CReal}, h: x <= y): -y <= -x {
+    λ back => h(CReal::lt_respects(y.neg_neg(), x.neg_neg(), CReal::neg_lt(back)))
+}
+
+theorem CReal::le_by_sign({u, v: CReal}, y: CReal, pos: 0 <= y → u <= v, neg: y <= 0 → u <= v): u <= v {
+    λ back => (λ (nonneg: ¬(y < 0)) => pos(nonneg, back))(λ below => neg(CReal::le_of_lt(below), back))
+}
+
+theorem CReal::mul_le_mono_r_nonpos({x, y, z: CReal}, h: x <= y, hz: z <= 0): y * z <= x * z {
+    let nz: (0 <= -z) = CReal::le_respects(CReal::neg_zero(), (-z).same_refl(), CReal::neg_le(hz));
+    let flipped: (-(y * -z) <= -(x * -z)) = CReal::neg_le(CReal::mul_le_mono_r(h, nz));
+    let back = λ (w: CReal) => CReal::same_trans(CReal::neg_respects(Ring::mul_neg(w, z)), (w * z).neg_neg());
+    CReal::le_respects(back(y), back(x), flipped)
+}
+
+theorem CReal::mul_le_mono_l_nonpos({x, y, z: CReal}, h: x <= y, hz: z <= 0): z * y <= z * x {
+    CReal::le_respects(y.mul_comm(z), x.mul_comm(z), CReal::mul_le_mono_r_nonpos(h, hz))
+}
+
+// A real is within 1/(n+1) of its n-th term, on each side: regularity
+// against every later term, with the later term's own 1/(i+1) taken as the
+// slack `le_of_close` allows.
+theorem CReal::le_term_add(self x: CReal, n: Nat): x <= CReal::ofRat(x.seq(n) + Rat::inv_succ(n)) {
+    let q = x.seq(n);
+    let r = Rat::inv_succ(n);
+    CReal::le_of_close(λ j => Exists(j, λ i from => {
+        let d: (x.seq(i) <= q + (Rat::inv_succ(i) + r)) = Rat::le_add_of_dist(x.regular(i, n));
+        Rat::le_add_shift(d, Rat::inv_succ_antitone(j, i, from))
+    }))
+}
+
+theorem CReal::term_sub_le(self x: CReal, n: Nat): CReal::ofRat(x.seq(n) - Rat::inv_succ(n)) <= x {
+    let q = x.seq(n);
+    let r = Rat::inv_succ(n);
+    CReal::le_of_close(λ j => Exists(j, λ i from => {
+        let d: (q <= x.seq(i) + (r + Rat::inv_succ(i))) = Rat::le_add_of_dist(x.regular(n, i));
+        Rat::sub_le_shift(d, Rat::inv_succ_antitone(j, i, from))
+    }))
+}
+
+// Inversion reverses `≤` between positives, at any apartness proofs: a
+// reversal `x⁻¹ < y⁻¹` inverted again is `y < x` (`OrderedField`'s strict
+// form, read at `CReal`). An inverse of a negation is the inverse negated,
+// by uniqueness.
+theorem CReal::inv_le_inv({x, y: CReal}, hx: x.Apart(0), hy: y.Apart(0), px: 0 < x, h: x <= y): y.inv(h := hy) <= x.inv(h := hx) {
+    λ back => {
+        let ux: (x.inv(h := hx).Apart(0)) = Inr(OrderedField::recip_pos(x, hx, px));
+        let uy: (y.inv(h := hy).Apart(0)) = Inr(OrderedField::recip_pos(y, hy, CReal::lt_of_lt_of_le(px, h)));
+        let flipped = OrderedField::recip_lt_recip(x.inv(h := hx), y.inv(h := hy), ux, uy, OrderedField::recip_pos(x, hx, px), back);
+        h(CReal::lt_respects(OrderedField::recip_recip(y, hy, uy), OrderedField::recip_recip(x, hx, ux), flipped))
+    }
+}
+
+theorem CReal::inv_neg({x: CReal}, hx: x.Apart(0), hn: (-x).Apart(0)): (-x).inv(h := hn) ≈ -x.inv(h := hx) {
+    let u = x.inv(h := hx);
+    CReal::same_sym(OrderedField::recip_unique(-x, hn, -u, CReal::same_trans(Ring::neg_mul_neg(x, u), x.mul_inv(h := hx))))
+}

@@ -113,13 +113,6 @@ theorem Format::rounds_beyond(self F: Format, mode: Mode, y, x: Rat, yx: y <= x,
 // ---------------------------------------------------------------------------
 // Where the window goes.
 
-// The number of binary digits.
-fn Nat::width_fuel(n, fuel: Nat) → Nat {
-    match fuel { Zero => 0, Succ(f) => match n { Zero => 0, Succ(k) => Succ(Nat::width_fuel(Succ(k).half(), f)) } }
-}
-
-fn Nat::width(self n: Nat) → Nat { Nat::width_fuel(n, n) }
-
 // `⌊e · lg / 2^16⌋`; with `lg ≈ 2^16 · log₂ base` it is about `⌊e · log₂ base⌋`.
 fn Int::scale_floor(self e: Int, lg: Nat) → Int {
     match e { OfNat(k) => ((k * lg).shr(16)).int(), NegSucc(k) => -((Succ(k) * lg + 65535).shr(16)).int() }

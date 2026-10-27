@@ -1109,3 +1109,182 @@ Observations:
 - The printer and its round-trip theorem (Lemma 1, nine and seventeen
   digits) are [[float-printer-round-trip]]: the reading half proved here,
   `round_decimal_correct`, is what that theorem reads back through.
+
+## 16. Interval enclosures (`dyadic-interval-enclosures`)
+
+Modules: `lib/std/num/float/interval.hthr` (intervals, their arithmetic, the
+checker) and `lib/std/tactic/interval_tactic.hthr` (the tactic), on
+directed rounding and reciprocal bounds added to
+`lib/std/num/float/dyadic.hthr`; the arithmetic shift `Int::shr` is in
+`int.hthr`, `Nat::width` moved to `nat.hthr` from `literal.hthr`, and the
+reciprocal-order facts (`le_recip_of_mul_le`, `recip_le_recip`,
+`recip_neg`, `mul_le_mono_r_nonpos`) are in `rat.hthr`. Probes are in
+`lib/_tests/std/num/float/interval_tests.hthr`. The design follows
+CoqInterval's original arithmetic (`docs/coq-hardware-floats-survey.md`
+§6.1).
+
+**Rounding at a precision, on `Dyadic` itself.** `d.down(p)` shifts the
+mantissa right until `p` bits are left (`Int::shr` floors at either sign)
+and adds the shift to the exponent; `d.up(p)` is `-((-d).down(p))`. The
+issue sketched `Format::round_dyadic` with a wide format as the precision
+knob. That route carries a bounded exponent span and overflow to infinity
+or saturation, which an enclosure has no use for, and its proofs are a
+rounding relation's; the shift needs one lemma (`Int::shr_mul_le`) and is
+sound at every shift amount, so how many bits `Dyadic::cut` drops is a cost
+choice with no proof attached. A reciprocal of a positive `m · 2^e` is
+`⌊2^K / m⌋ · 2^(-e-K)` below and its successor above, with
+`K = p + width(m)`.
+
+**Intervals.** `inductive Interval { Bnd(lo, hi: Dyadic), Whole }`.
+`I.Has(x)` reads `lo <= x <= hi` at `Rat`, and `Whole` holds everything.
+Every operation is total: a reciprocal of an interval that may hold zero is
+`Whole`, and `Whole` absorbs every operation it meets. A pair with crossed
+bounds holds nothing, so every containment theorem holds of it vacuously,
+which is CoqInterval's reading and needs no well-formedness field. The
+operations are `neg` (exact), `add`/`sub` (bounds rounded outward), `mul`
+(the four corners' least and greatest, rounded outward; two intervals above
+zero skip the search, a sign read off the mantissas), `recip` (positive
+intervals reverse the bounds, negative ones are the positive case under
+negation), constants (`of_rat`: numerator times the denominator's
+reciprocal), and `pow` by squaring. Each has a containment theorem
+(`add_has`, `mul_has`, `recip_has`, `pow_has`, …).
+
+**The checker.** `IntervalExpr` names a rational expression (`ILit`,
+`IAdd`, `ISub`, `INeg`, `IMul`, `IRecip`, `IPow`). `IntervalExpr::eval`
+spells each node as the operation itself, so `a.eval() < b.eval()` converts
+to the goal written directly and nothing reduces the exact value.
+`lt_search` / `le_search` try a precision and double it on a miss, `tries`
+times; the verdict is a `Bool` proved `= True`, the evaluation route the
+library uses for closed facts (an `IsTrue` discharged by `trivial` runs out
+of the elaborator's fuel on the same goal), and `lt_of_search` /
+`le_of_search` turn it into the order.
+
+**The tactic.** Clients write `by intervals()` (or `intervals(p := …, tries
+:= …)`; 32 bits and four tries by default), from
+`lib/std/tactic/interval_tactic.hthr`. It is a `Tac<Expr>` in Heather: it
+views the goal as `Rat::Lt` or `Rat::Le` of two sides, reads each side by
+its heads (`Rat::add`, `sub`, `neg`, `mul`, `recip`, `npow`, compared by
+global identity) and makes any other subterm a literal, asks the elaborator
+whether the verdict is `True`, and returns `lt_of_search(l, r, p, tries,
+interval_verdict)`. The reader is untrusted: the proof is checked at the
+goal like any term. Asking for the verdict first is what lets a miss fail
+with the tactic's own reason ("the enclosures do not separate the two
+sides") rather than as a refused proof; a literal that does not compute (a
+variable) fails the same way. `Lookup` names functions and types but not
+constructors, so the tree is built through wrapper functions
+(`interval_lit`, `interval_add`, …) that unfold to the constructors. Probes
+are in `lib/_tests/std/tactic/interval_tactic_tests.hthr`, its refusals
+included; `(1 + 1/1000)^1000 < 2.719` goes through the tactic as it does by
+hand.
+
+**Enclosures of reals** (`interval-creal-enclosures`). Module
+`lib/std/num/float/creal_interval.hthr`, with the order facts it needs in
+`creal.hthr` (`neg_le`, `mul_le_mono_r_nonpos`, `le_by_sign`, and a real's
+distance to its terms, `le_term_add` / `term_sub_le`) and the termwise
+rearrangements behind them in `rat.hthr`. `I.HasReal(x)` is `I.Has` read at
+`CReal`, `lo <= x <= hi` with the bounds embedded by `CReal::ofRat`. Every
+operation keeps it (`add_has_real`, `mul_has_real`, `pow_has_real`, and
+`recip_has_real` at an apartness proof, below), by the corner arguments of the rational proofs with
+`CReal`'s monotonicity in place of `Rat`'s. The one step that does not carry
+over is the case split on the other factor's sign in a product: the
+rationals decide it and the reals never do. It is not needed: a `≤` between
+reals is a refutation (`¬(y < x)`), and inside one the excluded middle on
+`y < 0` is free, which is `CReal::le_by_sign`. A real is enclosed from its
+own terms: the n-th is within 1/(n+1) of it, so `x.enclose(n, p)` rounds
+`[x_n - 1/(n+1), x_n + 1/(n+1)]` outward (`Interval::span`), and
+`CReal::lt_of_enclose` decides `x < y` when two enclosures separate.
+`RealExpr` is the checker at `CReal`: `RRat(q)` leaves are enclosed exactly,
+as `IntervalExpr`'s are, and `RReal(x)` leaves from their terms at index `n`;
+`RealExpr::lt_search` reads twice as far out and one bit finer on a miss.
+The tactic reads goals at `CReal::Lt` / `CReal::Le` into it, with
+`CReal::ofRat(q)` an exact leaf and any other real a leaf read from its
+terms, and takes the starting index as `n := …` (1023 by default). It looks
+the `CReal` relations up only when the goal is not at `Rat`, so a client
+that never imports `creal` is unaffected. A real leaf costs one term at the
+index read; a real whose terms are expensive far out (a series summed to
+its index) wants a small starting `n` and more tries. Probes are in
+`lib/_tests/std/num/float/creal_interval_tests.hthr` and
+`lib/_tests/std/tactic/interval_tactic_real_tests.hthr`.
+
+**Reciprocals of reals** (`interval-creal-reciprocal`). `x.inv(h := h)` takes
+a proof that `x` is apart from zero, and a tree cannot carry a proof about
+its own value (that would be an inductive-recursive definition). So the
+node is `RInv(a, x, h)`: the tree `a` that encloses `x`, the real `x`, and
+`h` about `x`. `RealExpr::Wf` asks that each such `a` denote its `x`, and
+every theorem about a search takes the two sides' witnesses. A tree the
+tactic reads off a goal denotes `x` by conversion, since `eval` spells the
+operations, so its witness at an inverse is `CReal::same_refl(x)`; the
+tactic builds the witness beside the tree, through wrapper theorems
+(`interval_wf_add`, …, `interval_wf_inv`). A tree with no inverse is well
+formed by evaluation (`RealExpr::wf_plain`). The enclosure of `RInv(a, …)`
+is `a`'s reciprocal, and its containment (`Interval::recip_has_real`) is
+the rational proof at `CReal`: inversion reverses `≤` between positives
+(`CReal::inv_le_inv`, from `OrderedField::recip_lt_recip`), and a negative
+interval is the positive case under `CReal::inv_neg`. The value never reads
+the proof's gap, so an inverse whose apartness is a hypothesis is still
+enclosed, where a leaf's terms would be stuck. Apartness comes from
+enclosures as well: one that excludes zero shows its real apart from zero
+(`Interval::apart_of_excludes`), and `RealExpr::apart_of_search` proves
+`a.Apart(b)` by separating the two sides either way. The tactic proves
+`x.Apart(y)` goals at `CReal` with it, which is how `x.inv(h := by
+intervals())` is written.
+
+**Series and elementary functions** (`interval-elementary-functions`).
+Module `lib/std/num/float/series.hthr` sums a `Series`, given by its first
+term, the ratio of each term to the next, and a `start` past which every
+ratio is at most 1/2 in size. Past `start` the tail is dominated by a
+geometric one: with `err(N) = 2|t_N|`, the partial sums move by at most
+what the error falls by (`Series::tail`), and `j` more steps divide the
+error by `2^j` (`Series::decay`, written `1/(ones(j) + 1)` with
+`Nat::ones(j) = 2^j - 1`, so the bound needs no subtraction). The limit is
+the real whose n-th term is the partial sum `width(scale · (n+1) + n)`
+digits past `start` (`Series::index`, with `n <= ones(width n)` from
+`nat.hthr`), and it lies within `err(N)` of every partial sum past `start`
+(`Series::below`, `Series::above`), which is also how a series that stops
+is shown to sum exactly (`Series::same_of_exact`). Its enclosure needs none
+of the real's terms: the last term and the partial sum are carried as
+intervals by `Interval`'s containment at `Rat` (`Series::box`, each ratio
+rounded outward by `of_rat`), the sum is widened by twice the largest
+magnitude in the term's interval (`Interval::widen`), and summing stops once
+that magnitude is below `2^-p` (`Series::settle`, at most `4p` terms; any
+stopping point past `start` encloses the real, so the test is a heuristic
+with no proof). `lib/std/num/float/elementary.hthr` instantiates it:
+`CReal::exp_rat(a)`, `sin_rat`, `cos_rat` at rational arguments, with the
+ratios `a/(k+1)`, `-a²/((2k+2)(2k+3))`, `-a²/((2k+1)(2k+2))` and `start`
+from `c = ⌊|a|⌋ + 1` (`Rat::abs_ceil`; twice it for exp, once for sin and
+cos, where each step is two degrees). Containment is stated against these
+reals, which are the functions' definitions at rationals until
+`real-functions-and-derivatives` gives them at `CReal`; the three are exact
+at zero (`CReal::exp_rat_zero`, …). The checker reads such reals through a
+leaf of their own: `Enclosed` packs a real with enclosures at every index
+and precision and the proof that they contain it, and `RBox(b)` is that
+leaf, so `creal_interval` knows nothing of series. The tactic reads the
+heads `CReal::exp_rat`, `sin_rat`, `cos_rat` as `RBox(CReal::exp_box(q))`
+and so on when they resolve where it runs; `2 < exp(1) < 3`,
+`0.84 < sin(1)`, `23 < exp(355/113)` and `sin(1)² + cos(1)² < 1.001` go
+through `by intervals()` (`lib/_tests/std/num/float/elementary_tests.hthr`).
+A step costs the outward rounding of its ratio, a reciprocal at `p` bits,
+which dominates the product and the sum beside it; a series needs about
+`p` plus the size of its term at `start` in bits of steps.
+
+**Costs.** These are shapes. An operation at `p` bits costs its roundings,
+each about `p` halvings for the width and `p` for the shift, plus the
+exponent alignment of its comparisons. `Dyadic::le_dec` now compares
+mantissas aligned to the smaller exponent (`Dyadic::aligned`), so it
+computes one power of two, of the exponents' gap, where the rationals'
+cross products computed four, of the exponents themselves, and
+`Finite::le_dec` inherits it. With the direct product above zero, that cut
+an interval product by about an order of magnitude. A power costs
+`O(log n)` products.
+
+**What the checker does not do.** An equality is never decided (a third is
+never exact, so `3 · (1/3) <= 1` is refused at every precision; the probes
+pin the refusal). Products of an interval with itself are bounded as if
+independent, so a goal that needs the dependency (`x - x`) widens. Left:
+
+- `log`, by the atanh series after reducing the argument, and argument
+  reduction for `exp`, `sin` and `cos`, whose cost is otherwise linear in
+  the argument ([[interval-log-and-reduction]]);
+- the functions at real arguments, and their laws (`exp(a + b) ≈ exp(a) ·
+  exp(b)`, `sin² + cos² ≈ 1`), which want continuity and `CReal` series
+  ([[elementary-functions-at-reals]]).

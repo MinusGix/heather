@@ -1,0 +1,466 @@
+// Interval enclosures over `Dyadic`, and a checker that proves inequalities
+// between rational expressions by evaluating them
+// (issues/dyadic-interval-enclosures.md; docs/coq-hardware-floats-survey.md
+// §6.1).
+//
+// An `Interval` is a pair of dyadic bounds or the whole line. Its arithmetic
+// is CoqInterval's original one: exact dyadic operations, each result
+// rounded outward to `p` bits of mantissa (`Dyadic::down`, `Dyadic::up`),
+// with an unbounded exponent and no infinities. The `Whole` case is what an
+// operation returns when it cannot bound its result (a reciprocal of an
+// interval around zero), so every operation is total.
+//
+// Interpretation is total too. `I.Has(x)` reads `lo <= x <= hi`, so a pair
+// with `lo > hi` holds nothing, and every containment theorem holds of it
+// vacuously. There is no well-formedness field and no test of one: for a
+// checker the verdict is the only thing proved, and the vacuous reading
+// costs nothing at run time.
+//
+// Containment is stated at `Rat`; `creal_interval.hthr` states it at
+// `CReal` through `CReal::ofRat`, and encloses a real from its terms.
+//
+// The checker (`IntervalExpr`, at the end) is the reflective half. An
+// `IntervalExpr` names a rational expression; `IntervalExpr::lt_search`
+// evaluates both sides' enclosures at a starting precision and doubles it on
+// a miss, and `IntervalExpr::lt_of_search` turns a `True` verdict into the
+// inequality. A goal whose exact evaluation is expensive (a high power of a
+// fraction) is decided at a few dozen bits. Clients do not build the trees
+// by hand: `by intervals()` (`interval_tactic.hthr`) reads them off the goal.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+
+inductive Interval { Bnd(lo: Dyadic, hi: Dyadic), Whole }
+
+fn Interval::Has(self I: Interval, x: Rat) → Type {
+    match I { Bnd(lo, hi) => lo.rat() <= x ∧ x <= hi.rat(), Whole => True }
+}
+
+theorem Interval::has_respects(I: Interval, {x, y: Rat}, e: x ≈ y, h: I.Has(x)): I.Has(y) {
+    match I as λ K => K.Has(x) → K.Has(y) {
+        Bnd(lo, hi) => λ k => And(Rat::le_respects(lo.rat().same_refl(), e, k.left), Rat::le_respects(e, hi.rat().same_refl(), k.right)),
+        Whole => λ _ => trivial,
+    }(h)
+}
+
+fn Interval::point(d: Dyadic) → Interval { Bnd(d, d) }
+
+theorem Interval::point_has(d: Dyadic): Interval::point(d).Has(d.rat()) { And(d.rat().le_refl(), d.rat().le_refl()) }
+
+// ---------------------------------------------------------------------------
+// Negation is exact, and a sum rounds its bounds outward.
+
+fn Interval::neg(self I: Interval) → Interval { match I { Bnd(lo, hi) => Bnd(-hi, -lo), Whole => Whole } }
+
+theorem Interval::neg_has(I: Interval, {x: Rat}, h: I.Has(x)): I.neg().Has(-x) {
+    match I as λ K => K.Has(x) → K.neg().Has(-x) {
+        Bnd(lo, hi) => λ k => And(Rat::le_respects(Rat::same_sym(hi.rat_neg()), (-x).same_refl(), Rat::neg_le(x := x, y := hi.rat(), h := k.right)),
+            Rat::le_respects((-x).same_refl(), Rat::same_sym(lo.rat_neg()), Rat::neg_le(x := lo.rat(), y := x, h := k.left))),
+        Whole => λ _ => trivial,
+    }(h)
+}
+
+fn Interval::add(self I, J: Interval, p: Nat) → Interval {
+    match I {
+        Bnd(a, b) => match J { Bnd(c, d) => Bnd((a + c).down(p), (b + d).up(p)), Whole => Whole },
+        Whole => Whole,
+    }
+}
+
+theorem Interval::add_bnd_has(a, b, c, d: Dyadic, p: Nat, {x, y: Rat}, hx: Bnd(a, b).Has(x), hy: Bnd(c, d).Has(y)):
+    Bnd((a + c).down(p), (b + d).up(p)).Has(x + y)
+{
+    let low: ((a + c).rat() <= x + y) = Rat::le_respects(Rat::same_sym(a.rat_add(c)), (x + y).same_refl(), Rat::add_le_mono(hx.left, hy.left));
+    let high: (x + y <= (b + d).rat()) = Rat::le_respects((x + y).same_refl(), Rat::same_sym(b.rat_add(d)), Rat::add_le_mono(hx.right, hy.right));
+    And(Rat::le_trans(x := ((a + c).down(p)).rat(), y := (a + c).rat(), z := x + y, hxy := (a + c).down_le(p), hyz := low),
+        Rat::le_trans(x := x + y, y := (b + d).rat(), z := ((b + d).up(p)).rat(), hxy := high, hyz := (b + d).le_up(p)))
+}
+
+theorem Interval::add_has(I, J: Interval, p: Nat, {x, y: Rat}, hx: I.Has(x), hy: J.Has(y)): I.add(J, p).Has(x + y) {
+    match I as λ K => K.Has(x) → K.add(J, p).Has(x + y) {
+        Bnd(a, b) => λ kx => match J as λ L => L.Has(y) → Bnd(a, b).add(L, p).Has(x + y) {
+            Bnd(c, d) => λ ky => Interval::add_bnd_has(a, b, c, d, p, kx, ky),
+            Whole => λ _ => trivial,
+        }(hy),
+        Whole => λ _ => trivial,
+    }(hx)
+}
+
+fn Interval::sub(self I, J: Interval, p: Nat) → Interval { I.add(J.neg(), p) }
+
+theorem Interval::sub_has(I, J: Interval, p: Nat, {x, y: Rat}, hx: I.Has(x), hy: J.Has(y)): I.sub(J, p).Has(x - y) {
+    Interval::add_has(I, J.neg(), p, hx, Interval::neg_has(J, hy))
+}
+
+// ---------------------------------------------------------------------------
+// Products. `x·y` over a box is bounded by the four corner products: it is
+// between `a·y` and `b·y` for `x` in `[a, b]`, and each of those is between
+// two corners. The sign of the other factor decides the order, which the
+// rationals decide.
+
+theorem Interval::between_r({A, B, x: Rat}, y: Rat, h: A <= x ∧ x <= B):
+    (A * y <= x * y ∨ B * y <= x * y) ∧ (x * y <= A * y ∨ x * y <= B * y)
+{
+    match Rat::le_total(0, y) {
+        Inl(pos) => And(Inl(Rat::mul_le_mono_r(h.left, pos)), Inr(Rat::mul_le_mono_r(h.right, pos))),
+        Inr(neg) => And(Inr(Rat::mul_le_mono_r_nonpos(h.right, neg)), Inl(Rat::mul_le_mono_r_nonpos(h.left, neg))),
+    }
+}
+
+theorem Interval::between_l({C, D, y: Rat}, z: Rat, h: C <= y ∧ y <= D):
+    (z * C <= z * y ∨ z * D <= z * y) ∧ (z * y <= z * C ∨ z * y <= z * D)
+{
+    let b = Interval::between_r(z, h);
+    let lo: (z * C <= z * y ∨ z * D <= z * y) = match b.left {
+        Inl(l) => Inl(Rat::le_respects(C.mul_comm(z), y.mul_comm(z), l)),
+        Inr(r) => Inr(Rat::le_respects(D.mul_comm(z), y.mul_comm(z), r)),
+    };
+    let hi: (z * y <= z * C ∨ z * y <= z * D) = match b.right {
+        Inl(l) => Inl(Rat::le_respects(y.mul_comm(z), C.mul_comm(z), l)),
+        Inr(r) => Inr(Rat::le_respects(y.mul_comm(z), D.mul_comm(z), r)),
+    };
+    And(lo, hi)
+}
+
+// The two corners on one side, as dyadic products, bound what the rationals'
+// products bound.
+theorem Interval::corner_lo(a, c, d: Dyadic, s: Rat, h: a.rat() * c.rat() <= s ∨ a.rat() * d.rat() <= s): (a * c).min(a * d).rat() <= s {
+    (a * c).min_le_of(a * d, s, match h {
+        Inl(l) => Inl(Rat::le_respects(Rat::same_sym(a.rat_mul(c)), s.same_refl(), l)),
+        Inr(r) => Inr(Rat::le_respects(Rat::same_sym(a.rat_mul(d)), s.same_refl(), r)),
+    })
+}
+
+theorem Interval::corner_hi(a, c, d: Dyadic, s: Rat, h: s <= a.rat() * c.rat() ∨ s <= a.rat() * d.rat()): s <= (a * c).max(a * d).rat() {
+    (a * c).le_max_of(a * d, s, match h {
+        Inl(l) => Inl(Rat::le_respects(s.same_refl(), Rat::same_sym(a.rat_mul(c)), l)),
+        Inr(r) => Inr(Rat::le_respects(s.same_refl(), Rat::same_sym(a.rat_mul(d)), r)),
+    })
+}
+
+fn Interval::mul_lo(a, b, c, d: Dyadic) → Dyadic { (a * c).min(a * d).min((b * c).min(b * d)) }
+
+fn Interval::mul_hi(a, b, c, d: Dyadic) → Dyadic { (a * c).max(a * d).max((b * c).max(b * d)) }
+
+fn Interval::mul_box(a, b, c, d: Dyadic, p: Nat) → Interval { Bnd(Interval::mul_lo(a, b, c, d).down(p), Interval::mul_hi(a, b, c, d).up(p)) }
+
+// Two intervals above zero need no corner search: the product runs from the
+// lower bounds' product to the upper bounds'.
+fn Interval::mul_bnd(a, b, c, d: Dyadic, p: Nat) → Interval {
+    match a.nonneg_dec() {
+        Inl(_) => match c.nonneg_dec() { Inl(_) => Bnd((a * c).down(p), (b * d).up(p)), Inr(_) => Interval::mul_box(a, b, c, d, p) },
+        Inr(_) => Interval::mul_box(a, b, c, d, p),
+    }
+}
+
+fn Interval::mul(self I, J: Interval, p: Nat) → Interval {
+    match I {
+        Bnd(a, b) => match J { Bnd(c, d) => Interval::mul_bnd(a, b, c, d, p), Whole => Whole },
+        Whole => Whole,
+    }
+}
+
+theorem Interval::mul_box_has(a, b, c, d: Dyadic, p: Nat, {x, y: Rat}, hx: Bnd(a, b).Has(x), hy: Bnd(c, d).Has(y)):
+    Interval::mul_box(a, b, c, d, p).Has(x * y)
+{
+    let t = x * y;
+    let bx = Interval::between_r(y, hx);
+    let ba = Interval::between_l(a.rat(), hy);
+    let bb = Interval::between_l(b.rat(), hy);
+    let lo = Interval::mul_lo(a, b, c, d);
+    let hi = Interval::mul_hi(a, b, c, d);
+    let low: (lo.rat() <= t) = (a * c).min(a * d).min_le_of((b * c).min(b * d), t, match bx.left {
+        Inl(ay) => Inl(Rat::le_trans(Interval::corner_lo(a, c, d, a.rat() * y, ba.left), ay)),
+        Inr(by) => Inr(Rat::le_trans(Interval::corner_lo(b, c, d, b.rat() * y, bb.left), by)),
+    });
+    let high: (t <= hi.rat()) = (a * c).max(a * d).le_max_of((b * c).max(b * d), t, match bx.right {
+        Inl(ay) => Inl(Rat::le_trans(ay, Interval::corner_hi(a, c, d, a.rat() * y, ba.right))),
+        Inr(by) => Inr(Rat::le_trans(by, Interval::corner_hi(b, c, d, b.rat() * y, bb.right))),
+    });
+    And(Rat::le_trans(x := (lo.down(p)).rat(), y := lo.rat(), z := t, hxy := lo.down_le(p), hyz := low),
+        Rat::le_trans(x := t, y := hi.rat(), z := (hi.up(p)).rat(), hxy := high, hyz := hi.le_up(p)))
+}
+
+theorem Interval::mul_pos_has(a, b, c, d: Dyadic, p: Nat, ha: 0 <= a, hc: 0 <= c, {x, y: Rat}, hx: Bnd(a, b).Has(x), hy: Bnd(c, d).Has(y)):
+    Bnd((a * c).down(p), (b * d).up(p)).Has(x * y)
+{
+    let ha0: (0 <= a.rat()) = Rat::le_respects(x := Dyadic::rat(0), x2 := 0, y := a.rat(), y2 := a.rat(), hx := Dyadic::rat_zero(), hy := a.rat().same_refl(), h := ha);
+    let hc0: (0 <= c.rat()) = Rat::le_respects(x := Dyadic::rat(0), x2 := 0, y := c.rat(), y2 := c.rat(), hx := Dyadic::rat_zero(), hy := c.rat().same_refl(), h := hc);
+    let low: ((a * c).rat() <= x * y) = Rat::le_respects(Rat::same_sym(a.rat_mul(c)), (x * y).same_refl(), Rat::mul_le_mul(hx.left, hy.left, ha0, hc0));
+    let high: (x * y <= (b * d).rat()) = Rat::le_respects((x * y).same_refl(), Rat::same_sym(b.rat_mul(d)),
+        Rat::mul_le_mul(hx.right, hy.right, Rat::le_trans(ha0, hx.left), Rat::le_trans(hc0, hy.left)));
+    And(Rat::le_trans(x := ((a * c).down(p)).rat(), y := (a * c).rat(), z := x * y, hxy := (a * c).down_le(p), hyz := low),
+        Rat::le_trans(x := x * y, y := (b * d).rat(), z := ((b * d).up(p)).rat(), hxy := high, hyz := (b * d).le_up(p)))
+}
+
+theorem Interval::mul_bnd_has(a, b, c, d: Dyadic, p: Nat, {x, y: Rat}, hx: Bnd(a, b).Has(x), hy: Bnd(c, d).Has(y)): Interval::mul_bnd(a, b, c, d, p).Has(x * y) {
+    match a.nonneg_dec() as λ s => (match s { Inl(_) => match c.nonneg_dec() { Inl(_) => Bnd((a * c).down(p), (b * d).up(p)), Inr(_) => Interval::mul_box(a, b, c, d, p) },
+            Inr(_) => Interval::mul_box(a, b, c, d, p) }).Has(x * y) {
+        Inl(ha) => match c.nonneg_dec() as λ s => (match s { Inl(_) => Bnd((a * c).down(p), (b * d).up(p)), Inr(_) => Interval::mul_box(a, b, c, d, p) }).Has(x * y) {
+            Inl(hc) => Interval::mul_pos_has(a, b, c, d, p, ha, hc, hx, hy),
+            Inr(_) => Interval::mul_box_has(a, b, c, d, p, hx, hy),
+        },
+        Inr(_) => Interval::mul_box_has(a, b, c, d, p, hx, hy),
+    }
+}
+
+theorem Interval::mul_has(I, J: Interval, p: Nat, {x, y: Rat}, hx: I.Has(x), hy: J.Has(y)): I.mul(J, p).Has(x * y) {
+    match I as λ K => K.Has(x) → K.mul(J, p).Has(x * y) {
+        Bnd(a, b) => λ kx => match J as λ L => L.Has(y) → Bnd(a, b).mul(L, p).Has(x * y) {
+            Bnd(c, d) => λ ky => Interval::mul_bnd_has(a, b, c, d, p, kx, ky),
+            Whole => λ _ => trivial,
+        }(hy),
+        Whole => λ _ => trivial,
+    }(hx)
+}
+
+// ---------------------------------------------------------------------------
+// Reciprocals. On a positive interval the reciprocal reverses the bounds; a
+// negative one is the positive case under negation, which is odd; an
+// interval that may hold zero gives the whole line.
+
+fn Interval::recip_pos(lo, hi: Dyadic, p: Nat) → Interval { Bnd(hi.recip_down(p), lo.recip_up(p)) }
+
+fn Interval::recip_bnd(lo, hi: Dyadic, p: Nat) → Interval {
+    match lo.le_dec(0) {
+        Inl(_) => match Dyadic::le_dec(0, hi) { Inl(_) => Whole, Inr(_) => Interval::recip_pos(-hi, -lo, p).neg() },
+        Inr(_) => Interval::recip_pos(lo, hi, p),
+    }
+}
+
+fn Interval::recip(self I: Interval, p: Nat) → Interval { match I { Bnd(lo, hi) => Interval::recip_bnd(lo, hi, p), Whole => Whole } }
+
+theorem Interval::recip_pos_has(lo, hi: Dyadic, p: Nat, pos: 0 < lo, {x: Rat}, h: Bnd(lo, hi).Has(x)): Interval::recip_pos(lo, hi, p).Has(x.recip()) {
+    let lo_pos: (0 < lo.rat()) = Dyadic::rat_pos(pos);
+    let x_pos: (0 < x) = Rat::lt_of_lt_of_le(lo_pos, h.left);
+    let lh: (lo <= hi) = Rat::le_trans(x := lo.rat(), y := x, z := hi.rat(), hxy := h.left, hyz := h.right);
+    let bh = hi.recip_bounds(p, Dyadic::lt_of_lt_of_le(pos, lh));
+    let bl = lo.recip_bounds(p, pos);
+    And(Rat::le_trans(bh.left, Rat::recip_le_recip(x_pos, h.right)), Rat::le_trans(Rat::recip_le_recip(lo_pos, h.left), bl.right))
+}
+
+theorem Interval::recip_bnd_has(lo, hi: Dyadic, p: Nat, {x: Rat}, h: Bnd(lo, hi).Has(x)): Interval::recip_bnd(lo, hi, p).Has(x.recip()) {
+    match lo.le_dec(0) as λ c => (match c { Inl(_) => match Dyadic::le_dec(0, hi) { Inl(_) => Whole, Inr(_) => Interval::recip_pos(-hi, -lo, p).neg() },
+            Inr(_) => Interval::recip_pos(lo, hi, p) }).Has(x.recip()) {
+        Inl(_) => match Dyadic::le_dec(0, hi) as λ c => (match c { Inl(_) => Whole, Inr(_) => Interval::recip_pos(-hi, -lo, p).neg() }).Has(x.recip()) {
+            Inl(_) => trivial,
+            Inr(no) => {
+                let hn: (hi < 0) = Rat::lt_of_not_le(x := hi.rat(), y := Dyadic::rat(0), h := no);
+                let neg_pos: (0 < -hi) = Rat::lt_respects(Rat::same_sym(Dyadic::rat_neg(0)), Rat::same_sym(hi.rat_neg()),
+                    Rat::neg_lt(x := hi.rat(), y := Dyadic::rat(0), h := hn));
+                let flipped: Bnd(-hi, -lo).Has(-x) = Interval::neg_has(Bnd(lo, hi), h);
+                let r = Interval::neg_has(Interval::recip_pos(-hi, -lo, p), Interval::recip_pos_has(-hi, -lo, p, neg_pos, flipped));
+                Interval::has_respects(Interval::recip_pos(-hi, -lo, p).neg(),
+                    Rat::same_trans(Rat::neg_respects(x := (-x).recip(), x2 := -x.recip(), hx := x.recip_neg()), x.recip().neg_neg()), r)
+            },
+        },
+        Inr(no) => Interval::recip_pos_has(lo, hi, p, Rat::lt_of_not_le(x := Dyadic::rat(0), y := lo.rat(), h := no), h),
+    }
+}
+
+theorem Interval::recip_has(I: Interval, p: Nat, {x: Rat}, h: I.Has(x)): I.recip(p).Has(x.recip()) {
+    match I as λ K => K.Has(x) → K.recip(p).Has(x.recip()) {
+        Bnd(lo, hi) => λ k => Interval::recip_bnd_has(lo, hi, p, k),
+        Whole => λ _ => trivial,
+    }(h)
+}
+
+// ---------------------------------------------------------------------------
+// Rational constants, and powers by repeated products.
+
+fn Interval::of_int(n: Int) → Interval { Interval::point(Dyadic(n, 0)) }
+
+fn Interval::of_rat(q: Rat, p: Nat) → Interval { Interval::of_int(q.num).mul(Interval::of_int(q.den.int()).recip(p), p) }
+
+theorem Interval::of_rat_same(q: Rat): Dyadic(q.num, 0).rat() * Dyadic(q.den.int(), 0).rat().recip() ≈ q {
+    let D = Dyadic(q.den.int(), 0).rat();
+    let dz: ¬(D ≈ 0) = λ e => omega(e, q.den_pos, Int::zero_mul(1));
+    let f1: ((q * D).num = q.num * (q.den.int() * 1)) = refl;
+    let f2: ((q * D).den.int() = q.den.int() * 1) = refl;
+    let f3: (Dyadic(q.num, 0).rat().num = q.num * 1) = refl;
+    let f4: (Dyadic(q.num, 0).rat().den.int() = 1) = refl;
+    let qd: (q * D ≈ Dyadic(q.num, 0).rat()) = ring(f1, f2, f3, f4);
+    Rat::same_sym(Rat::same_trans(Rat::same_sym(q.mul_one()), Rat::same_trans(Rat::mul_respects(q.same_refl(), Rat::same_sym(D.mul_recip(dz))),
+        Rat::same_trans(Rat::same_sym(q.mul_assoc(D, D.recip())), Rat::mul_respects(qd, D.recip().same_refl())))))
+}
+
+theorem Interval::of_rat_has(q: Rat, p: Nat): Interval::of_rat(q, p).Has(q) {
+    let num = Interval::point_has(Dyadic(q.num, 0));
+    let den = Interval::recip_has(Interval::of_int(q.den.int()), p, Interval::point_has(Dyadic(q.den.int(), 0)));
+    Interval::has_respects(Interval::of_rat(q, p), Interval::of_rat_same(q), Interval::mul_has(Interval::of_int(q.num), Interval::of_int(q.den.int()).recip(p), p, num, den))
+}
+
+fn Interval::npow(self I: Interval, n, p: Nat) → Interval { match n { Zero => Interval::of_int(1), Succ(k) => I.npow(k, p).mul(I, p) } }
+
+theorem Interval::npow_has(I: Interval, n, p: Nat, {x: Rat}, h: I.Has(x)): I.npow(n, p).Has(x.npow(n)) {
+    match n as λ k => I.npow(k, p).Has(x.npow(k)) {
+        Zero => Interval::point_has(Dyadic(1, 0)),
+        Succ(k) => Interval::mul_has(I.npow(k, p), I, p, Interval::npow_has(I, k, p, h), h),
+    }
+}
+
+// By squaring: `x^n` is `(x^⌊n/2⌋)²`, times `x` when `n` is odd, so a power
+// costs about `2·log₂ n` products. The fuel only bounds the recursion; at
+// zero it falls back to the product chain, which is sound at every `n`.
+fn Interval::pow_step(I: Interval, n: Nat, H: Interval, p: Nat) → Interval {
+    match Succ(n.half() + n.half()).le_dec(n) { Inl(_) => H.mul(H, p).mul(I, p), Inr(_) => H.mul(H, p) }
+}
+
+fn Interval::pow_sq(self I: Interval, n, fuel, p: Nat) → Interval {
+    match fuel {
+        Zero => I.npow(n, p),
+        Succ(f) => match n { Zero => Interval::of_int(1), Succ(k) => Interval::pow_step(I, Succ(k), I.pow_sq(Succ(k).half(), f, p), p) },
+    }
+}
+
+fn Interval::pow(self I: Interval, n, p: Nat) → Interval { I.pow_sq(n, n, p) }
+
+theorem Interval::pow_step_has(I: Interval, n: Nat, H: Interval, p: Nat, {x: Rat}, hx: I.Has(x), hh: H.Has(x.npow(n.half()))):
+    Interval::pow_step(I, n, H, p).Has(x.npow(n))
+{
+    let h = n.half();
+    let sq: (H.mul(H, p).Has(x.npow(h + h))) = Interval::has_respects(H.mul(H, p), Rat::same_sym(x.npow_add(h, h)), Interval::mul_has(H, H, p, hh, hh));
+    match Succ(h + h).le_dec(n) as λ c => (match c { Inl(_) => H.mul(H, p).mul(I, p), Inr(_) => H.mul(H, p) }).Has(x.npow(n)) {
+        Inl(le) => j(Succ(h + h).le_antisym(n, le, n.le_succ_half_add()), λ m _ => H.mul(H, p).mul(I, p).Has(x.npow(m)), Interval::mul_has(H.mul(H, p), I, p, sq, hx)),
+        Inr(nle) => j((h + h).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, Succ(h + h), nle)), λ m _ => H.mul(H, p).Has(x.npow(m)), sq),
+    }
+}
+
+theorem Interval::pow_sq_has(I: Interval, fuel, p: Nat, {x: Rat}, hx: I.Has(x)): (n: Nat) → I.pow_sq(n, fuel, p).Has(x.npow(n)) {
+    match fuel {
+        Zero => λ n => Interval::npow_has(I, n, p, hx),
+        Succ(f) => λ n => match n as λ m => (match m { Zero => Interval::of_int(1), Succ(k) => Interval::pow_step(I, Succ(k), I.pow_sq(Succ(k).half(), f, p), p) }).Has(x.npow(m)) {
+            Zero => Interval::point_has(Dyadic(1, 0)),
+            Succ(k) => Interval::pow_step_has(I, Succ(k), I.pow_sq(Succ(k).half(), f, p), p, hx, Interval::pow_sq_has(I, f, p, hx, Succ(k).half())),
+        },
+    }
+}
+
+theorem Interval::pow_has(I: Interval, n, p: Nat, {x: Rat}, h: I.Has(x)): I.pow(n, p).Has(x.npow(n)) { Interval::pow_sq_has(I, n, p, h, n) }
+
+// ---------------------------------------------------------------------------
+// Verdicts. `I.below(J)` is `True` only when every member of `I` is under
+// every member of `J`; `Whole` is below nothing.
+
+fn Interval::below(self I, J: Interval) → Bool {
+    match I { Bnd(_, b) => match J { Bnd(c, _) => b.lt_bool(c), Whole => False }, Whole => False }
+}
+
+fn Interval::below_eq(self I, J: Interval) → Bool {
+    match I { Bnd(_, b) => match J { Bnd(c, _) => b.le_bool(c), Whole => False }, Whole => False }
+}
+
+theorem Interval::lt_of_below(I, J: Interval, {x, y: Rat}, hx: I.Has(x), hy: J.Has(y), h: I.below(J).IsTrue()): x < y {
+    match I as λ K => K.Has(x) → K.below(J).IsTrue() → x < y {
+        Bnd(a, b) => λ kx => match J as λ L => L.Has(y) → Bnd(a, b).below(L).IsTrue() → x < y {
+            Bnd(c, _) => λ ky v => Rat::lt_of_le_of_lt(kx.right, Rat::lt_of_lt_of_le(x := b.rat(), y := c.rat(), z := y, h1 := b.lt_of_lt_bool(c, v), h2 := ky.left)),
+            Whole => λ _ no => false_elim(no),
+        }(hy),
+        Whole => λ _ no => false_elim(no),
+    }(hx, h)
+}
+
+theorem Interval::le_of_below_eq(I, J: Interval, {x, y: Rat}, hx: I.Has(x), hy: J.Has(y), h: I.below_eq(J).IsTrue()): x <= y {
+    match I as λ K => K.Has(x) → K.below_eq(J).IsTrue() → x <= y {
+        Bnd(a, b) => λ kx => match J as λ L => L.Has(y) → Bnd(a, b).below_eq(L).IsTrue() → x <= y {
+            Bnd(c, _) => λ ky v => Rat::le_trans(kx.right, Rat::le_trans(x := b.rat(), y := c.rat(), z := y, hxy := b.le_of_le_bool(c, v), hyz := ky.left)),
+            Whole => λ _ no => false_elim(no),
+        }(hy),
+        Whole => λ _ no => false_elim(no),
+    }(hx, h)
+}
+
+// ---------------------------------------------------------------------------
+// The checker. `IntervalExpr::eval` is the rational an expression names, spelled as
+// the operations themselves, so `a.eval() < b.eval()` converts to the goal
+// written directly; `enclose` is its enclosure at `p` bits.
+
+inductive IntervalExpr { ILit(q: Rat), IAdd(a: IntervalExpr, b: IntervalExpr), ISub(a: IntervalExpr, b: IntervalExpr), INeg(a: IntervalExpr), IMul(a: IntervalExpr, b: IntervalExpr), IRecip(a: IntervalExpr), IPow(a: IntervalExpr, n: Nat) }
+
+fn IntervalExpr::eval(self e: IntervalExpr) → Rat {
+    match e {
+        ILit(q) => q,
+        IAdd(a, b) => a.eval() + b.eval(),
+        ISub(a, b) => a.eval() - b.eval(),
+        INeg(a) => -a.eval(),
+        IMul(a, b) => a.eval() * b.eval(),
+        IRecip(a) => a.eval().recip(),
+        IPow(a, n) => a.eval().npow(n),
+    }
+}
+
+fn IntervalExpr::enclose(self e: IntervalExpr, p: Nat) → Interval {
+    match e {
+        ILit(q) => Interval::of_rat(q, p),
+        IAdd(a, b) => a.enclose(p).add(b.enclose(p), p),
+        ISub(a, b) => a.enclose(p).sub(b.enclose(p), p),
+        INeg(a) => a.enclose(p).neg(),
+        IMul(a, b) => a.enclose(p).mul(b.enclose(p), p),
+        IRecip(a) => a.enclose(p).recip(p),
+        IPow(a, n) => a.enclose(p).pow(n, p),
+    }
+}
+
+theorem IntervalExpr::enclose_has(self e: IntervalExpr, p: Nat): e.enclose(p).Has(e.eval()) {
+    match e as λ f => f.enclose(p).Has(f.eval()) {
+        ILit(q) => Interval::of_rat_has(q, p),
+        IAdd(a, b) => Interval::add_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
+        ISub(a, b) => Interval::sub_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
+        INeg(a) => Interval::neg_has(a.enclose(p), a.enclose_has(p)),
+        IMul(a, b) => Interval::mul_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
+        IRecip(a) => Interval::recip_has(a.enclose(p), p, a.enclose_has(p)),
+        IPow(a, n) => Interval::pow_has(a.enclose(p), n, p, a.enclose_has(p)),
+    }
+}
+
+// Try precision `p`, then `2p`, and so on, `tries` times: evaluation cost
+// grows with the bits carried, so a search starts low.
+fn IntervalExpr::lt_search(self a, b: IntervalExpr, p, tries: Nat) → Bool {
+    match tries { Zero => False, Succ(t) => match a.enclose(p).below(b.enclose(p)) { True => True, False => a.lt_search(b, p + p, t) } }
+}
+
+fn IntervalExpr::le_search(self a, b: IntervalExpr, p, tries: Nat) → Bool {
+    match tries { Zero => False, Succ(t) => match a.enclose(p).below_eq(b.enclose(p)) { True => True, False => a.le_search(b, p + p, t) } }
+}
+
+theorem IntervalExpr::lt_of_search_from(self a, b: IntervalExpr, tries: Nat): (p: Nat) → a.lt_search(b, p, tries).IsTrue() → a.eval() < b.eval() {
+    match tries {
+        Zero => λ p no => false_elim(no),
+        Succ(t) => λ p => match a.enclose(p).below(b.enclose(p)) as λ v => a.enclose(p).below(b.enclose(p)) = v →
+                Bool::IsTrue(match v { True => True, False => a.lt_search(b, p + p, t) }) → a.eval() < b.eval() {
+            True => λ e _ => Interval::lt_of_below(a.enclose(p), b.enclose(p), a.enclose_has(p), b.enclose_has(p), j(sym(e), λ w _ => w.IsTrue(), trivial)),
+            False => λ _ v => IntervalExpr::lt_of_search_from(a, b, t, p + p, v),
+        }(refl),
+    }
+}
+
+theorem IntervalExpr::le_of_search_from(self a, b: IntervalExpr, tries: Nat): (p: Nat) → a.le_search(b, p, tries).IsTrue() → a.eval() <= b.eval() {
+    match tries {
+        Zero => λ p no => false_elim(no),
+        Succ(t) => λ p => match a.enclose(p).below_eq(b.enclose(p)) as λ v => a.enclose(p).below_eq(b.enclose(p)) = v →
+                Bool::IsTrue(match v { True => True, False => a.le_search(b, p + p, t) }) → a.eval() <= b.eval() {
+            True => λ e _ => Interval::le_of_below_eq(a.enclose(p), b.enclose(p), a.enclose_has(p), b.enclose_has(p), j(sym(e), λ w _ => w.IsTrue(), trivial)),
+            False => λ _ v => IntervalExpr::le_of_search_from(a, b, t, p + p, v),
+        }(refl),
+    }
+}
+
+theorem IntervalExpr::lt_of_search(self a, b: IntervalExpr, p, tries: Nat, h: a.lt_search(b, p, tries) = True): a.eval() < b.eval() {
+    a.lt_of_search_from(b, tries, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+}
+
+theorem IntervalExpr::le_of_search(self a, b: IntervalExpr, p, tries: Nat, h: a.le_search(b, p, tries) = True): a.eval() <= b.eval() {
+    a.le_of_search_from(b, tries, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+}

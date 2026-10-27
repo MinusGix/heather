@@ -731,6 +731,66 @@ theorem Rat::pos_of_mul_pos({x, y: Rat}, hx: 0 < x, h: 0 < x * y): 0 < y {
     Rat::lt_of_not_le(λ le => Rat::not_le_of_lt(h, Rat::le_respects(y.mul_comm(x), x.zero_mul(), Rat::mul_le_mono_r(le, Rat::le_of_lt(hx)))))
 }
 
+// A factor at most zero reverses the order: `x ≤ y` gives `y·z ≤ x·z`. It is
+// the nonnegative case at `-z`, with the sign moved out of each product.
+theorem Rat::mul_le_mono_r_nonpos({x, y, z: Rat}, h: x <= y, hz: z <= 0): y * z <= x * z {
+    let a = x.num;
+    let c = y.num;
+    let e = z.num;
+    let flipped = Rat::mul_le_mono_r(x := x, y := y, z := -z, h := h, hz := omega(hz, Int::zero_mul(z.den.int())));
+    let fx: ((x * -z).num * (y * -z).den.int() = (a * -e) * (y * z).den.int()) = refl;
+    let fy: ((y * -z).num * (x * -z).den.int() = (c * -e) * (x * z).den.int()) = refl;
+    let gx: ((x * z).num * (y * z).den.int() = (a * e) * (y * z).den.int()) = refl;
+    let gy: ((y * z).num * (x * z).den.int() = (c * e) * (x * z).den.int()) = refl;
+    let rx: ((a * -e) * (y * z).den.int() = -((a * e) * (y * z).den.int())) = ring;
+    let ry: ((c * -e) * (x * z).den.int() = -((c * e) * (x * z).den.int())) = ring;
+    omega(flipped, fx, fy, gx, gy, rx, ry)
+}
+
+// ---------------------------------------------------------------------------
+// Reciprocals and order. Below a positive `y`, `x ≤ 1/y` is `x·y ≤ 1`: scale
+// by `1/y`, which is nonnegative. The enclosures of `interval.hthr` bound a
+// reciprocal through these two, and order reciprocals by the third.
+
+theorem Rat::nonzero_of_pos({y: Rat}, hy: 0 < y): ¬(y ≈ 0) { λ e => omega(hy, e, Int::zero_mul(y.den.int())) }
+
+theorem Rat::le_recip_of_mul_le({x, y: Rat}, hy: 0 < y, h: x * y <= 1): x <= y.recip() {
+    let r = y.recip();
+    let rn = Rat::recip_nonneg(x := y, h := Rat::le_of_lt(hy));
+    let unit: ((x * y) * r ≈ x) = Rat::same_trans(x.mul_assoc(y, r),
+        Rat::same_trans(Rat::mul_respects(x.same_refl(), y.mul_recip(Rat::nonzero_of_pos(hy))), x.mul_one()));
+    Rat::le_respects(unit, Rat::same_trans(Rat::mul_comm(1, r), r.mul_one()), Rat::mul_le_mono_r(h, rn))
+}
+
+theorem Rat::recip_le_of_one_le_mul({x, y: Rat}, hy: 0 < y, h: 1 <= x * y): y.recip() <= x {
+    let r = y.recip();
+    let rn = Rat::recip_nonneg(x := y, h := Rat::le_of_lt(hy));
+    let unit: ((x * y) * r ≈ x) = Rat::same_trans(x.mul_assoc(y, r),
+        Rat::same_trans(Rat::mul_respects(x.same_refl(), y.mul_recip(Rat::nonzero_of_pos(hy))), x.mul_one()));
+    Rat::le_respects(Rat::same_trans(Rat::mul_comm(1, r), r.mul_one()), unit, Rat::mul_le_mono_r(h, rn))
+}
+
+// On the positives the reciprocal reverses the order.
+theorem Rat::recip_le_recip({x, y: Rat}, hx: 0 < x, h: x <= y): y.recip() <= x.recip() {
+    let hy = Rat::lt_of_lt_of_le(hx, h);
+    let r = y.recip();
+    let rn = Rat::recip_nonneg(x := y, h := Rat::le_of_lt(hy));
+    let scaled: (r * x <= r * y) = Rat::mul_le_mono_l(h, rn);
+    let one: (r * y ≈ 1) = Rat::same_trans(r.mul_comm(y), y.mul_recip(Rat::nonzero_of_pos(hy)));
+    Rat::le_recip_of_mul_le(hx, Rat::le_trans(scaled, Rat::le_of_same(one)))
+}
+
+// The reciprocal is odd: the numerator's sign moves to the new numerator.
+theorem Rat::recip_neg(self x: Rat): (-x).recip() ≈ -x.recip() {
+    match x.num as λ a => Rat::recip_parts(-a, x.den) ≈ -Rat::recip_parts(a, x.den) {
+        OfNat(n) => match n as λ k => Rat::recip_parts(-OfNat(k), x.den) ≈ -Rat::recip_parts(OfNat(k), x.den) {
+            Zero => refl,
+            Succ(_) => refl,
+        },
+        NegSucc(k) => Rat(x.den.int(), Succ(k)).same_of_parts(-Rat(-x.den.int(), Succ(k)), sym(x.den.int().neg_neg()), refl),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Archimedean facts. `inv_succ(n)` is 1/(n+1), the step size the regular
 // Cauchy-sequence probes measure distances in; its denominator is a `Succ`,
@@ -844,6 +904,26 @@ theorem Rat::archimedean_inv(self eps: Rat, h: 0 < eps): ∃ n: Nat, Rat::inv_su
 theorem Rat::abs_le_natAbs(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.num.natAbs())) {
     let scaled = Int::mul_le_mono_l(1, x.den.int(), OfNat(x.num.natAbs()), omega(x.den_pos), trivial);
     omega(scaled)
+}
+
+// The least whole number above a rational's size, `⌊|num| / den⌋ + 1`: a
+// bound on `|x|` that stays small when the numerator is large.
+fn Rat::abs_ceil(self x: Rat) → Nat { Succ(x.num.natAbs().ldiv(x.den).quot()) }
+
+theorem Rat::abs_le_abs_ceil(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.abs_ceil())) {
+    let n = x.num.natAbs();
+    let d: Nat = x.den;
+    match n.ldiv(d) as λ st => DivMod::Spec(n, d, st) → x.abs() <= Rat::ofInt(OfNat(Succ(st.quot()))) {
+        MkDivMod(q, r) => λ sp => {
+            let parts: (q * d + r = n) = sp.left;
+            let small: (r < d) = match sp.right { Inl(bad) => false_elim(omega(bad, x.den_pos)), Inr(lt) => lt };
+            let succ: (d * Succ(q) = d * q + d) = refl;
+            let comm: (q * d = d * q) = q.mul_comm(d);
+            let flip: (Succ(q) * d = d * Succ(q)) = Succ(q).mul_comm(d);
+            let bound: (x.abs() <= Rat::ofInt(OfNat(Succ(q)))) = omega(parts, small, succ, comm, flip);
+            bound
+        },
+    }(n.ldiv_spec(d))
 }
 
 theorem Rat::two_add_ofNat(n: Nat): (1 + 1) + Rat::ofInt(OfNat(n)) ≈ Rat::ofInt(OfNat(n + 2)) {
@@ -1785,4 +1865,33 @@ theorem Rat::rel_of_abs_le({x, y, u: Rat}, nz: ¬(x ≈ 0), h: (y - x).abs() <= 
         ≈ x * (1 + (y - x) * r) := Rat::same_sym(x.mul_add_distr(1, (y - x) * r)),
     };
     Exists((y - x) * r, And(size, back))
+}
+
+// Rearrangements the reals read termwise (std/creal's negation and the
+// distance from a real to its terms).
+theorem Rat::neg_gap({a, b, g: Rat}, h: a + g <= b): -b + g <= -a {
+    calc {
+        -b + g <= -(a + g) + g := (-b).add_le_mono_r(-(a + g), g, Rat::neg_le(h)),
+        ≈ (-a + -g) + g := Rat::add_respects(a.neg_add(g), g.same_refl()),
+        ≈ -a + (-g + g) := (-a).add_assoc(-g, g),
+        ≈ -a + 0 := Rat::add_respects((-a).same_refl(), g.neg_add_self()),
+        ≈ -a := (-a).add_zero(),
+    }
+}
+
+theorem Rat::le_add_shift({a, q, e, r, f: Rat}, d: a <= q + (e + r), s: e <= f): a <= (q + r) + f {
+    calc {
+        a <= q + (e + r) := d,
+        <= q + (f + r) := (e + r).add_le_mono_l(f + r, q, e.add_le_mono_r(f, r, s)),
+        ≈ q + (r + f) := Rat::add_respects(q.same_refl(), f.add_comm(r)),
+        ≈ (q + r) + f := Rat::same_sym(q.add_assoc(r, f)),
+    }
+}
+
+theorem Rat::sub_le_shift({a, q, e, r, f: Rat}, d: q <= a + (r + e), s: e <= f): q - r <= a + f {
+    Rat::sub_le_of_le_add(calc {
+        q <= a + (r + e) := d,
+        <= a + (r + f) := (r + e).add_le_mono_l(r + f, a, e.add_le_mono_l(f, r, s)),
+        ≈ r + (a + f) := a.add_left_comm(r, f),
+    })
 }

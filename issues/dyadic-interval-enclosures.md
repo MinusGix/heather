@@ -1,10 +1,10 @@
 ---
 title: Interval enclosures over Dyadic and a reflective inequality tactic
-status: open
+status: closed
 labels: [mathematics,tactics,reals]
 area: mathematics
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 CoqInterval proves inequalities about real expressions, integrals included,
@@ -43,3 +43,25 @@ and `Format::round_dyadic` rounds toward `-∞` and `+∞` exactly at any
 
 No customer is pulling yet, so there is no milestone. This issue records the
 design so that whichever of the customers above arrives first starts from it.
+
+## Log
+
+- 2026-10-26: LANDED: `lib/std/num/float/interval.hthr` (design
+  `docs/floating-point-design.md` §16). Intervals of two dyadics or `Whole`,
+  containment at `Rat` with the vacuous reading of crossed bounds; `neg`,
+  `add`, `sub`, `mul`, `recip` (to `Whole` around zero), constants and powers
+  by squaring, each with its containment theorem; rounding at `p` bits is a
+  shift on `Dyadic` itself (`Dyadic::down`/`up`), not `Format::round_dyadic`,
+  since an enclosure wants no exponent bound and no overflow. The checker is
+  `IntervalExpr` with `lt_search`/`le_search` doubling the precision on a miss and
+  `lt_of_search`/`le_of_search` turning the verdict into the inequality;
+  `Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000)` is proved at 32
+  bits. `Dyadic::le_dec` now compares aligned mantissas.
+
+  `by intervals()` (`lib/std/tactic/interval_tactic.hthr`) reads the goal
+  into the trees, so clients never write them.
+
+  Residue, each with an owner: containment at `CReal` and decided `CReal`
+  comparisons are [[interval-creal-enclosures]] (the ordered-field statement
+  waits on `float-reals`); `exp`/`log`/`sin` by series are
+  [[interval-elementary-functions]].
