@@ -203,6 +203,21 @@ domain zonks, and turns the never-zonks case into the §7.2 message instead
 of a junk instantiation. At a meta-free domain it is checked inline like
 every other member, which is the D2 path unchanged.
 
+**Amended 2026-10-27 ([[notation-extensibility]], the `∑` antidiagonal):**
+"cannot contribute a solution in inference mode" was too strong for a `Lam`
+whose unannotated binders' *domains* are meta-free and only the codomain
+waits. `MonoidRel::antidiag(+, n, λ i k => …)` inside a `∑` has `f: Nat →
+Nat → A`, nothing else in the call fixes `A`, and `i`, `k` are `Nat`
+regardless. Such a λ is as inferable as its annotated twin: when the retry
+is blocked, the fallback stage takes each unannotated binder's domain off the
+written parameter Π (one Π per binder, each domain zonked), infers the body
+under them, and the synthesized Π teaches the codomain through
+`OwedChecks::learn`, as an annotated λ's does (`infer_lambda_at_known_domains`,
+which generalizes the `?`-lowering's single `#try` binder). It runs only
+after expected-type solving, so a checking position still decides first. A
+domain that still mentions a meta keeps the §7.2 message; a body that does
+not infer leads with its own error and names the unpinned implicit.
+
 **Amended 2026-09-28 ([[polymorphic-argument-with-unsolved-callee]]):** a
 blocked bare polymorphic argument may also teach the enclosing call. The
 obligation retry instantiates its leading implicit prefix in a separate

@@ -158,9 +158,10 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         &self, _cx: &Cx, _argument: &Expr, _parameter: &Type, _n: u32, _sols: &[Sol],
     ) -> Option<R<(Term, Type, Level)>> { None }
 
-    /// A generated propagation callback may infer its result once its input
-    /// domain is known. Ordinary source lambdas retain the existing policy.
-    fn infer_propagation_callback(
+    /// A λ with unannotated binders may infer its result once the call knows
+    /// their domains — the parameter's leading Π domains are meta-free — as
+    /// an annotated λ would: the body's type is what teaches the codomain.
+    fn infer_lambda_at_known_domains(
         &self, _cx: &Cx, _argument: &Expr, _parameter: &Type, _n: u32, _sols: &[Sol],
     ) -> Option<R<(Term, Type, Level)>> { None }
 
@@ -338,9 +339,20 @@ pub(crate) fn retry_obligations(
                 for obligation in deferred {
                     if !matches!(sols[obligation.slot], Sol::Withheld) { continue; }
                     let inferred = elab.infer_polymorphic_argument(cx, obligation.expr, &obligation.dom, n, sols)
-                        .or_else(|| elab.infer_propagation_callback(cx,obligation.expr,&obligation.dom,n,sols));
+                        .or_else(|| elab.infer_lambda_at_known_domains(cx,obligation.expr,&obligation.dom,n,sols));
                     if let Some(inferred) = inferred {
-                        let (term,ty,_) = inferred?;
+                        // A λ body that does not infer (`λ x => Nil`) is the
+                        // body's error, but the cause the writer can act on is
+                        // still the codomain nothing in the call pins.
+                        let (term,ty,_) = match inferred {
+                            Err(ElabError::Elab { msg, span: at }) if matches!(obligation.expr.kind, ExprKind::Lam { .. }) => {
+                                return Err(ElabError::Elab {
+                                    msg: unpinned_domain_message(name, params, slot_param, sols, obligation.param, &msg),
+                                    span: at,
+                                });
+                            }
+                            other => other?,
+                        };
                         owed.learn(elab,cx,&obligation.dom,&obligation.dom_level,ty,n,sols,obligation.expr.span,obligation.expr.span);
                         sols[obligation.slot] = Sol::Solved(Rc::new(term));
                         progressed = true;

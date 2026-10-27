@@ -350,3 +350,9 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   remains: a nested bare-operator call whose λ binders are unannotated
   (`MonoidRel::antidiag(+, n, λ i k => …)` inside a `∑`) has no carrier to
   infer from and needs `λ (i: Nat) (k: Nat) =>`.
+- 2026-10-27: That edge is closed. An unannotated λ whose binders' domains
+  the call already knows (`f: Nat → Nat → A`) now infers like its annotated
+  twin once nothing else is left to teach the call, and the body's type fixes
+  the carrier (docs/unifier-completeness-design.md, amendment 2026-10-27).
+  `∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k))` checks at
+  `Rat`, `Nat` and an open semiring with no binder annotations.

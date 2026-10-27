@@ -78,3 +78,7 @@ Cauchy-product coefficient identity at `Rat`.
   probes and `Series::sum_is_range` (`s.sum(k) = ∑ i < k, s.term(i)`) are
   written in the notation. `Rat::sum_abs_le` stays, as
   `(∑ k < n, f(k)).abs() <= ∑ k < n, f(k).abs()`.
+- 2026-10-27: Nested calls under `∑` no longer need annotated λ binders:
+  `MonoidRel::antidiag(+, n, λ i k => …)` infers `i`, `k` from `f`'s domain
+  (docs/unifier-completeness-design.md, amendment 2026-10-27); the
+  big_operator probes are written unannotated.

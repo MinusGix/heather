@@ -960,15 +960,29 @@ impl<'a> ExprElab<'a> {
         ))
     }
 
-    /// Infer the result of a propagation callback from its already-known
-    /// input domain. The inferred Pi is subsequently unified and checked by
-    /// the same application machinery as every other argument.
-    pub(crate) fn infer_propagation_callback(
+    /// Infer a λ whose unannotated binders take the domains a call already
+    /// knows (`domains[i]`, `None` where binder `i` is annotated and lowers
+    /// its own), synthesizing the codomain from the body as [`Self::infer_lambda`]
+    /// does. The inferred Π is subsequently unified and checked by the same
+    /// application machinery as every other argument.
+    pub(crate) fn infer_callback_from_domains(
         &self, elab: &impl LambdaInferenceElab, cx: &Cx,
-        binder: &LamBinder, body: &Expr, dom: &Type, dom_level: &Level,
+        binders: &[LamBinder], body: &Expr, domains: &[Option<(Type, Level)>],
     ) -> R<(Term, Type, Level)> {
-        let inner = Self::extend_lambda_context(cx,binder,dom,dom_level,None);
-        let (body,cod,cod_level) = elab.infer_lambda_body(&inner,body)?;
+        let (Some((binder, rest)), Some((known, known_rest))) = (binders.split_first(), domains.split_first()) else {
+            return elab.infer_lambda_body(cx, body);
+        };
+        let (dom, dom_level, skel) = match (known, &binder.ty) {
+            (Some((dom, level)), _) => (dom.clone(), level.clone(), None),
+            (None, Some(annotation)) => {
+                let (dom, level) = elab.lower_lambda_annotation(cx, annotation)?;
+                (dom, level, skel_of_ty(annotation))
+            }
+            (None, None) => return err(format!("this lambda's binder `{}` needs a type annotation", binder.name), binder.span),
+        };
+        let (dom, dom_level) = (&dom, &dom_level);
+        let inner = Self::extend_lambda_context(cx,binder,dom,dom_level,skel);
+        let (body,cod,cod_level) = self.infer_callback_from_domains(elab,&inner,rest,body,known_rest)?;
         let dom_e = elab.emit_ty(cx,dom,0).unwrap_or_else(|| dom.clone());
         Ok((
             Term::Lam { dom_level:dom_level.clone(),cod_level:cod_level.clone(),dom:Rc::new(dom_e),body:Rc::new(body) },
