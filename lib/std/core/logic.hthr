@@ -131,6 +131,15 @@ theorem or_pick_dec<P, A>(d: P ∨ ¬P, x, y: A, p: P): or_pick(d, x, y) = y {
     }
 }
 
+// The refuted side: a decided disjunction whose left side is refuted picks
+// the right value.
+theorem or_pick_dec_not<P, A>(d: P ∨ ¬P, x, y: A, n: ¬P): or_pick(d, x, y) = x {
+    match d {
+        Inl(p) => false_elim(n(p)),
+        Inr(_) => refl,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Bi-implication, as a record with NAMED directions rather than as
 // `And<P → Q, Q → P>`. Two reasons, both about use: `h.mp(p)` and

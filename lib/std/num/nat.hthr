@@ -923,6 +923,17 @@ theorem Nat::sub_lt_of_pos(self m: Nat): (n: Nat) → 0 < n → n <= m → m - n
     }
 }
 
+// Reversal of the indices below `n`, `k ↦ n - 1 - k`: it stays below `n`
+// and is its own inverse (big_operator's `range_reverse`).
+theorem Nat::sub_succ_lt(self n, k: Nat, hk: k < n): n - Succ(k) < n { n.sub_lt_of_pos(Succ(k), trivial, hk) }
+
+theorem Nat::sub_succ_sub_succ(self n, k: Nat): k < n → n - Succ(n - Succ(k)) = k {
+    match n {
+        Zero => λ bad => false_elim(bad),
+        Succ(m) => λ hk => j(k.le_add(m, hk), λ w _ => w - (m - k) = k, k.add_sub_cancel(m - k)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 theorem Nat::add_le_mono_r(self k: Nat): (n: Nat) → (m: Nat) → n <= m → n + k <= m + k {

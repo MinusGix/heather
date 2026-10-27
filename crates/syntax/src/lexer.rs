@@ -122,6 +122,11 @@ pub enum TokKind {
     Vee,       // ∨
     Iff,       // ↔   (and `<->`)
     Exists,    // ∃
+    /// `∑` (U+2211) and `∏` (U+220F) — the big-operator binders, `∑ k < n, e`
+    /// (issues/notation-extensibility.md, the one binder production). Three
+    /// bytes each, matched in the three-byte window beside `∃`.
+    BigSum,    // ∑
+    BigProd,   // ∏
     Forall,    // ∀
     /// `$` — splice, inside a `code { … }` quote (`$x`, `${e}`) and in type
     /// position for a `TyCode` binder (`[$a; $k]`). The splice *form* is
@@ -596,6 +601,8 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "∨" => Some(TokKind::Vee),
             "↔" | "<->" => Some(TokKind::Iff),
             "∃" => Some(TokKind::Exists),
+            "∑" => Some(TokKind::BigSum),
+            "∏" => Some(TokKind::BigProd),
             "∀" => Some(TokKind::Forall),
             "≠" => Some(TokKind::Ne),
             "⊢" => Some(TokKind::Turnstile),

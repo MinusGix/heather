@@ -31,6 +31,7 @@ import order;
 import bool;
 import semiring;
 import ordered_field;
+import big_operator;
 import linarith;
 export algebra::{Numeral};
 
@@ -1955,3 +1956,12 @@ theorem Rat::neg_gap({a, b, g: Rat}, h: a + g <= b): -b + g <= -a { linarith(h) 
 theorem Rat::le_add_shift({a, q, e, r, f: Rat}, d: a <= q + (e + r), s: e <= f): a <= (q + r) + f { linarith(d, s) }
 
 theorem Rat::sub_le_shift({a, q, e, r, f: Rat}, d: q <= a + (r + e), s: e <= f): q - r <= a + f { linarith(d, s) }
+
+// ---------------------------------------------------------------------------
+// Finite sums (std/big_operator).
+
+// The triangle inequality, `|∑ f| <= ∑ |f|`.
+theorem Rat::sum_abs_le(n: Nat, f: Nat → Rat): (∑ k < n, f(k)).abs() <= ∑ k < n, f(k).abs() {
+    let h = LocatedAddGroup::range_abs_le(n, f, λ k => f(k).abs(), λ k hk => And(f(k).neg_abs_le(), f(k).le_abs()));
+    Rat::abs_le(h.left, h.right)
+}

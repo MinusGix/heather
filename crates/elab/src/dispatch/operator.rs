@@ -287,10 +287,29 @@ impl Elaborator {
             false
         });
         if matches!(leaf.kind, ExprKind::Num(_)) {
-            self.carrier_of_ty(cx, &Type::Nat, span)
-        } else {
-            carrier
+            return self.carrier_of_ty(cx, &Type::Nat, span);
         }
+        if carrier.is_some() {
+            return carrier;
+        }
+        // No leaf infers outright. A call deferred only for a **result-only
+        // implicit** can still infer ([`Self::deferral_can_fall_back`]), and
+        // its type is then the operand's carrier: `MonoidRel::range(+, n, f)`
+        // (the `∑` binder's desugaring) holds its relation index only in its
+        // dictionary, yet infers to `f`'s codomain. Second, so an operand that
+        // infers outright still decides first.
+        operator_carrier_leaf(args.first()?, |leaf| {
+            if !self.deferral_can_fall_back(cx, leaf) {
+                return true;
+            }
+            let probe = self.clone();
+            let Ok((_, ty, _)) = probe.elab_infer(cx, leaf) else {
+                return true;
+            };
+            carrier = probe.carrier_of_ty(cx, &ty, span);
+            carrier.is_none()
+        });
+        carrier
     }
 
     /// The head of the carrier a **checking position** is asking for — rung

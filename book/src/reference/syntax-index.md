@@ -69,6 +69,7 @@ expr ::= name | qualified::name | numeral | character | string
        | f(args) | @f(args) | f<types> | receiver.field
        | receiver.method(args) | receiver[index]
        | λ binders => expr | fun binders => expr
+       | ∑ name < expr, expr | ∏ name < expr, expr
        | binders ⊢ expr | binders |- expr
        | apply callee; give expr; ... expr
        | · | ·₀ | ·₁ ...

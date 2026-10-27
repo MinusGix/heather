@@ -32,6 +32,7 @@ import order;
 import ordered_field;
 import semiring;
 import rat;
+import big_operator;
 import creal;
 import dyadic;
 import interval;
@@ -52,6 +53,11 @@ record Series {
 fn Series::term(self s: Series, k: Nat) → Rat { match k { Zero => s.first, Succ(i) => s.term(i) * s.ratio(i) } }
 
 fn Series::sum(self s: Series, k: Nat) → Rat { match k { Zero => 0, Succ(i) => s.sum(i) + s.term(i) } }
+
+// The partial sum is big_operator's range sum of the terms, exactly.
+theorem Series::sum_is_range(self s: Series, k: Nat): s.sum(k) = ∑ i < k, s.term(i) {
+    match k { Zero => refl, Succ(i) => j(s.sum_is_range(i), λ w _ => s.sum(i) + s.term(i) = w + s.term(i), refl) }
+}
 
 fn Series::err(self s: Series, k: Nat) → Rat { s.term(k).abs() + s.term(k).abs() }
 

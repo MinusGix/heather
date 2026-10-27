@@ -3857,6 +3857,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "declaration_big_operator_type"
+        },
+        {
+          "type": "SYMBOL",
           "name": "declaration_prefix_type"
         },
         {
@@ -4796,6 +4800,60 @@
         ]
       }
     },
+    "declaration_big_operator_type": {
+      "type": "PREC_RIGHT",
+      "value": 6,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "∑"
+              },
+              {
+                "type": "STRING",
+                "value": "∏"
+              }
+            ]
+          },
+          {
+            "type": "FIELD",
+            "name": "name",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "<"
+          },
+          {
+            "type": "FIELD",
+            "name": "bound",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_declaration_type"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": ","
+          },
+          {
+            "type": "FIELD",
+            "name": "body",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_declaration_type"
+            }
+          }
+        ]
+      }
+    },
     "declaration_prefix_type": {
       "type": "PREC",
       "value": 10,
@@ -4904,6 +4962,10 @@
         {
           "type": "SYMBOL",
           "name": "quantified_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "big_operator_expression"
         },
         {
           "type": "SYMBOL",
@@ -5489,6 +5551,60 @@
           {
             "type": "FIELD",
             "name": "type",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": ","
+          },
+          {
+            "type": "FIELD",
+            "name": "body",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          }
+        ]
+      }
+    },
+    "big_operator_expression": {
+      "type": "PREC_RIGHT",
+      "value": 6,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "∑"
+              },
+              {
+                "type": "STRING",
+                "value": "∏"
+              }
+            ]
+          },
+          {
+            "type": "FIELD",
+            "name": "name",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "<"
+          },
+          {
+            "type": "FIELD",
+            "name": "bound",
             "content": {
               "type": "SYMBOL",
               "name": "_expression"

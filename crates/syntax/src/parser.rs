@@ -4156,12 +4156,72 @@ impl Parser {
         let symbol = match self.peek() {
             TokKind::Minus => "-",
             TokKind::Bang => "!",
+            TokKind::BigSum | TokKind::BigProd => return self.big_operator(),
             _ => return self.power(),
         };
         let start = self.bump().span;
         let inner = self.prefix()?;
         let span = start.join(inner.span);
         Ok(op_call(symbol, OpFixity::Prefix, vec![inner], span))
+    }
+
+    /// `∑ k < n, e` and `∏ k < n, e` — the big-operator binder
+    /// (issues/notation-extensibility.md; docs/analysis-foundations-design.md
+    /// §4). A **synonym**, as `∀` is: it desugars to the range sum
+    /// `MonoidRel::range(+, n, λ (k: Nat) => e)` (`*` for `∏`) of
+    /// std/big_operator, so a sum is that call and every law about range sums
+    /// applies to it unchanged. The operator is the bare symbol, so it means
+    /// whatever `+` or `*` means at the body's carrier, a constraint binder's
+    /// operation included.
+    ///
+    /// It sits at the **prefix** level, so it is an operand: `x + ∑ k < n, e`
+    /// and `x ≈ ∑ k < n, e` read as written. The body is an *arithmetic*
+    /// expression and runs right as far as one can, so `∑ k < n, f(k) + 1`
+    /// sums `f(k) + 1` (the mathematical reading; narrowing needs
+    /// parentheses) and `∑ k < n, f(k) ≈ s` compares the whole sum with `s`.
+    /// The bound is arithmetic too, and the index is a `Nat` below it.
+    fn big_operator(&mut self) -> R<Expr> {
+        let (glyph, symbol) = match self.peek() {
+            TokKind::BigProd => ("∏", "*"),
+            _ => ("∑", "+"),
+        };
+        let start = self.bump().span;
+        let (name, nsp) = self.ident("index name after a big operator")?;
+        if !matches!(self.peek(), TokKind::Lt) {
+            return self.err(format!(
+                "a big operator ranges below a bound: write `{glyph} {name} < n, e`, \
+                 which reads the indices `0, 1, …, n - 1`"
+            ));
+        }
+        self.bump();
+        let bound = self.expr_bp(0)?;
+        self.expect(&TokKind::Comma, "`,` between a big operator's bound and its body")?;
+        let body = self.expr_bp(0)?;
+        let span = start.join(body.span);
+        let lam = Expr {
+            kind: ExprKind::Lam {
+                binders: vec![LamBinder {
+                    name,
+                    ty: Some(Ty { kind: TyKind::Nat, span: nsp }),
+                    implicit: false,
+                    span: nsp,
+                }],
+                body: Box::new(body),
+            },
+            span,
+        };
+        let op = Expr { kind: ExprKind::OpSymbol { symbol: symbol.to_string(), fixity: OpFixity::Infix }, span: start };
+        let head = Expr { kind: ExprKind::Var("MonoidRel::range".to_string()), span: start };
+        Ok(Expr {
+            kind: ExprKind::App {
+                head: Box::new(head),
+                args: vec![op, bound, lam],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        })
     }
 
     /// `base ^ exponent` (docs/inverse-power-notation-design.md §2): above
@@ -6310,6 +6370,8 @@ mod tests {
         assert_eq!(kinds("a ∧ b")[1], TokKind::Wedge);
         assert_eq!(kinds("a ∨ b")[1], TokKind::Vee);
         assert_eq!(kinds("∃ k")[0], TokKind::Exists);
+        assert_eq!(kinds("∑ k")[0], TokKind::BigSum);
+        assert_eq!(kinds("∏ k")[0], TokKind::BigProd);
         assert_eq!(kinds("∀ k")[0], TokKind::Forall);
         // `λ`, the other two-byte glyph, is unmoved.
         assert_eq!(kinds("λ x")[0], TokKind::Lambda);
@@ -6429,6 +6491,57 @@ mod tests {
         assert!(matches!(&head.kind, ExprKind::Var(n) if n == "Exists"));
         assert!(matches!(&targs[0].kind, TyKind::Nat));
         assert!(matches!(&args[0].kind, ExprKind::Lam { .. }));
+    }
+
+    /// `∑ k < n, e` is the range sum `MonoidRel::range(+, n, λ (k: Nat) => e)`
+    /// and `∏` the same at `*`: a synonym, as `∃` is.
+    #[test]
+    fn big_operators_desugar_to_the_range_sum() {
+        for (src, sym) in [("∑ k < n, f(k)", "+"), ("∏ k < n, f(k)", "*")] {
+            let k = body(src);
+            let (name, args, _) = as_call(&k);
+            assert_eq!(name, "MonoidRel::range");
+            assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == sym));
+            assert!(matches!(&args[1].kind, ExprKind::Var(n) if n == "n"));
+            let ExprKind::Lam { binders, body } = &args[2].kind else { panic!("expected the body's λ") };
+            assert_eq!(binders[0].name, "k");
+            assert!(matches!(binders[0].ty.as_ref().map(|t| &t.kind), Some(TyKind::Nat)));
+            assert_eq!(as_call(&body.kind).0, "f");
+        }
+    }
+
+    /// The big operator is an operand, its body an arithmetic expression that
+    /// runs right as far as one can: `x + ∑ …` adds a sum, `∑ k < n, f(k) + 1`
+    /// sums `f(k) + 1`, and a comparison after the body compares the sum.
+    #[test]
+    fn big_operator_body_stops_at_a_relation() {
+        let k = body("x + ∑ k < n, f(k)");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "+");
+        assert_eq!(as_call(&args[1].kind).0, "MonoidRel::range");
+        let k = body("∑ k < n, f(k) + 1");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "MonoidRel::range");
+        let ExprKind::Lam { body: summand, .. } = &args[2].kind else { panic!("expected the body's λ") };
+        assert_eq!(as_call(&summand.kind).0, "+");
+        let k = body("∑ k < n + 1, f(k) ≈ s");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "≈");
+        let (name, args, _) = as_call(&args[0].kind);
+        assert_eq!(name, "MonoidRel::range");
+        assert_eq!(as_call(&args[1].kind).0, "+");
+        let k = body("∑ i < m, ∑ j < n, f(i, j)");
+        let (_, args, _) = as_call(&k);
+        let ExprKind::Lam { body: summand, .. } = &args[2].kind else { panic!("expected the body's λ") };
+        assert_eq!(as_call(&summand.kind).0, "MonoidRel::range");
+    }
+
+    #[test]
+    fn big_operator_needs_a_bound() {
+        let e = parse_file("fn f(n: Nat) -> Nat { ∑ k <= n, k }").unwrap_err();
+        assert!(e.msg.contains("ranges below a bound"), "{}", e.msg);
+        let e = parse_file("fn f(n: Nat) -> Nat { ∑ k < n k }").unwrap_err();
+        assert!(e.msg.contains("between a big operator's bound and its body"), "{}", e.msg);
     }
 
     // -- the Boolean operators (issues/bool-operator-designations.md) -------
