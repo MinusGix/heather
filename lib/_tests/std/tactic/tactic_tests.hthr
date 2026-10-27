@@ -1,0 +1,42 @@
+// Probes of the tactic host's `Goal` view (`lib/std/tactic/tactic.hthr`,
+// `crates/elab/src/host.rs`). Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import nat; import tactic;
+
+// A block's `let` is one of the goal's locals: a fact it binds is found by a
+// tactic that searches them, without being handed it
+// (issues/tactic-goal-lists-block-lets.md).
+theorem let_fact(n: Nat, h: n = 3): 3 = n {
+    let k: (3 = n) = sym(h);
+    by assumption()
+}
+
+// Bound before a binder the goal is under: its value and statement are
+// weakened past it.
+fn under_binder(n: Nat, h: n = 3) → Nat → 3 = n {
+    let k: (3 = n) = sym(h);
+    λ m => by assumption()
+}
+
+// One `let` built from another, both facts; the later one is the goal.
+theorem chained(n, m: Nat, h: n = m, e: m = 3): 3 = n {
+    let a: (n = 3) = trans(h, e);
+    let b: (3 = n) = sym(a);
+    by assumption()
+}
+
+// A `let` in an enclosing block, seen from an inner one.
+theorem nested_block(n: Nat, h: n = 3): 3 = n {
+    let k: (3 = n) = sym(h);
+    let z: Nat = { let w: Nat = 0; w };
+    { by assumption() }
+}
+
+// A `let` whose name a later `let` binds again is not in scope, so it is not
+// among the goal's locals either.
+// expect-error: no local's type is the goal
+theorem shadowed(n: Nat, h: n = 3): 3 = n {
+    let k: (3 = n) = sym(h);
+    let k: Nat = 0;
+    by assumption()
+}

@@ -59,7 +59,8 @@ inductive Expr {
 }
 
 // One local of the goal's context: how to refer to it, its name for
-// messages, and its type.
+// messages, and its type. A block's `let` is one too, and `Local` of it is
+// its value.
 record LocalInfo { ref: LocalRef, name: String, ty: Handle }
 
 // The goal: its statement, and its locals, the most recent first.

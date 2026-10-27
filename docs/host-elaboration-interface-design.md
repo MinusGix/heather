@@ -730,3 +730,26 @@ Recorded after building it, as the inductive-tier designs do.
   (issues/tactic-strategy-step-cost.md). A `split_all` over two booleans
   makes a few hundred requests.
 
+
+## 17. A block's `let`s are the goal's locals (2026-10-27)
+
+- **What was missing.** `Goal` listed the goal's Γ, and a block `let` is not
+  in Γ: the elaborator keeps it as an alias and inlines its value at every
+  use (`context::Alias`). So a fact bound by `let step: (e <= t) = …;` was
+  no hypothesis to `assumption` or `mono`, which had to be handed it
+  (issues/tactic-goal-lists-block-lets.md).
+- **A `let` is a local with a value.** The run issues each `let` whose name
+  still means it at the goal (no later binder or `let` of that name; written,
+  not a `#` name) as a local, with handles to its value and its statement,
+  both scoped at the goal. `Goal` lists them between the binders they were
+  bound among, most recent first. Their ids follow the goal's binders and
+  precede every local the tactic opens or a split adds.
+- **`Local(x)` of a `let` is its value**, exactly what the name means in
+  source, so conversion sees through it: a goal in which the elaborator has
+  already inlined the `let` still matches. `Lam` refuses one (it bound
+  nothing to abstract).
+- **Splicing.** A `let` the returned `Expr` names outright is recorded as
+  spliced, since its value is then in the proof the kernel checks. One reached
+  only through a handle (an `Infer` of an `Expr` that named it) is not
+  recorded, and its block still hands its value to the kernel
+  (let-and-blocks-design §11): at worst a redundant check, never a missed one.

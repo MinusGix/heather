@@ -66,7 +66,7 @@ use heather_kernel::value::{Elim, Env, PiAnn, TmClo, TyClo, Val, ValueArena};
 use heather_kernel::value::program::ContextProgram;
 use heather_syntax::ast::{Expr, Span};
 
-use crate::context::Cx;
+use crate::context::{Alias, Cx};
 use crate::unification::Sol;
 use crate::{err, Elaborator, R};
 
@@ -160,7 +160,8 @@ const MATCH_PARAMETERS: usize = 64;
 pub enum RExpr {
     /// A handle the host issued.
     Hd(u64),
-    /// A local of the goal's context, by its position from the outermost.
+    /// A local: one of the goal's context by its position from the
+    /// outermost, one of its `let`s, or one the tactic introduced ([`Run`]).
     Local(u64),
     App(Box<RExpr>, Box<RExpr>),
     NatLit(u64),
@@ -168,6 +169,21 @@ pub enum RExpr {
     Lam(u64, Box<RExpr>),
     /// A global the run issued a reference to.
     Global(u64),
+}
+
+impl RExpr {
+    /// Every local this `Expr` names outright, not through a handle.
+    fn locals(&self, out: &mut Vec<u64>) {
+        match self {
+            RExpr::Local(x) => out.push(*x),
+            RExpr::App(f, a) => {
+                f.locals(out);
+                a.locals(out);
+            }
+            RExpr::Lam(_, body) => body.locals(out),
+            RExpr::Hd(_) | RExpr::NatLit(_) | RExpr::Global(_) => {}
+        }
+    }
 }
 
 /// One note of a failure's search state (`tactic::Note`), as the host
@@ -685,11 +701,22 @@ enum GlobalKey {
     Builtin(&'static str),
 }
 
+/// A block `let` in scope at the goal, which a tactic sees as one of the
+/// goal's locals: a handle to its value and one to its type, both scoped in
+/// the goal's context. A `Local` naming it is its value, as a use of the
+/// name in source would be.
+struct LetLocal {
+    alias: Rc<Alias>,
+    value: u64,
+    ty: u64,
+}
+
 /// Everything one run issued: its scopes, its handles (each in a scope),
 /// the locals its scopes introduced, its holes, the global references it
 /// handed out and its splits. Ids of the goal's own locals are their
-/// positions in its context; any other local's id is the goal's length plus
-/// its index in `opened`.
+/// positions in its context; the goal's `let`s come next, by their index in
+/// `lets`; any other local's id is the goal's length plus the number of
+/// `let`s plus its index in `opened`.
 ///
 /// **Holes are metavariables in the elaborator's scratch-world form**
 /// (`unification.rs`): with `m` holes, a term of the run lives in Ψ extended
@@ -703,6 +730,7 @@ enum GlobalKey {
 struct Run {
     scopes: Vec<Scope>,
     held: Vec<Issued>,
+    lets: Vec<LetLocal>,
     /// Each introduced local's scope and position there.
     opened: Vec<(usize, usize)>,
     holes: Vec<Hole>,
@@ -817,14 +845,31 @@ impl Run {
         Ok((issued.scope, held))
     }
 
-    /// The scope a local belongs to and its position in that scope's context.
+    /// The id the next introduced local gets.
+    fn next_id(&self) -> u64 {
+        (self.len(0) + self.lets.len() + self.opened.len()) as u64
+    }
+
+    /// The goal's `let` a local id names, if it names one.
+    fn let_local(&self, id: u64) -> Option<&LetLocal> {
+        self.lets.get((id as usize).checked_sub(self.len(0))?)
+    }
+
+    /// The scope a binder's local belongs to and its position in that
+    /// scope's context. A `let` has no position; its id is refused here.
     fn local(&self, id: u64) -> Result<(usize, usize), Fault> {
         let root = self.len(0);
         let id = id as usize;
         if id < root {
             return Ok((0, id));
         }
-        self.opened.get(id - root).copied().ok_or_else(|| Fault::Protocol(format!("there is no local {id} in this run")))
+        if let Some(l) = self.lets.get(id - root) {
+            return Err(Fault::Protocol(format!("local {id} is the `let` `{}`, which no binder bound", l.alias.name)));
+        }
+        self.opened
+            .get(id - root - self.lets.len())
+            .copied()
+            .ok_or_else(|| Fault::Protocol(format!("there is no local {id} in this run")))
     }
 
     /// The type of position `i` of scope `at`'s context, scoped there, in the
@@ -841,6 +886,7 @@ impl Run {
     fn scope_of(&self, e: &RExpr) -> Result<usize, Fault> {
         match e {
             RExpr::Hd(h) => Ok(self.held(*h)?.0),
+            RExpr::Local(x) if self.let_local(*x).is_some() => Ok(0),
             RExpr::Local(x) => Ok(self.local(*x)?.0),
             RExpr::NatLit(_) | RExpr::Global(_) => Ok(0),
             RExpr::App(f, a) => self.join(self.scope_of(f)?, self.scope_of(a)?),
@@ -1195,6 +1241,7 @@ impl Elaborator {
         let mut run = Run {
             scopes: vec![Scope { parent: None, cx: cx.clone(), world: 0, locals: Vec::new() }],
             held: Vec::new(),
+            lets: Vec::new(),
             opened: Vec::new(),
             holes: Vec::new(),
             trail: Vec::new(),
@@ -1206,6 +1253,7 @@ impl Elaborator {
         for (term, ty, level) in quoted {
             run.issue(0, Held::Term(term, ty, level));
         }
+        self.issue_lets(cx, &mut run);
         let mut step = speaker.start();
         for answered in 0..REQUEST_BUDGET {
             let request = match step {
@@ -1295,20 +1343,72 @@ impl Elaborator {
                 self.display_type(cx, goal)
             ));
         }
-        run.committed_tm(&r.term).ok_or_else(|| {
+        let proof = run.committed_tm(&r.term).ok_or_else(|| {
             format!("the tactic's proof `{}` mentions a hole nothing solved", self.shown_tm(run, 0, &r.term))
-        })
+        })?;
+        // A `let` the result names is in the proof, which the kernel checks;
+        // one only a handle reached may not be, and its block still hands its
+        // value to the kernel (`statements::LetValue::discard_around`).
+        let mut named = Vec::new();
+        e.locals(&mut named);
+        for x in named {
+            if let Some(l) = run.let_local(x) {
+                l.alias.splice(0);
+            }
+        }
+        Ok(proof)
     }
 
+    /// The goal's locals, the most recent first: its binders, and between
+    /// them the `let`s each was followed by ([`Self::issue_lets`]).
     fn goal_view(&self, cx: &Cx, run: &mut Run) -> GoalView {
         let n = cx.gamma.len();
-        let mut locals = Vec::with_capacity(n);
+        let mut lets: Vec<(usize, LocalView)> = run
+            .lets
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(k, l)| (l.alias.depth, LocalView { id: (n + k) as u64, name: l.alias.name.clone(), ty: l.ty }))
+            .collect();
+        lets.sort_by_key(|(depth, _)| std::cmp::Reverse(*depth));
+        let mut lets = lets.into_iter().peekable();
+        let mut locals = Vec::with_capacity(n + run.lets.len());
         for i in (0..n).rev() {
+            while let Some((_, l)) = lets.next_if(|(depth, _)| *depth > i) {
+                locals.push(l);
+            }
             let entry = cx.gamma.entries.get(i).expect("a context entry below its length");
             let ty = run.issue(0, Held::Type(entry.ty.shift_local((n - i) as u32), entry.level.clone()));
             locals.push(LocalView { id: i as u64, name: cx.names.get(i).cloned().unwrap_or_else(|| "_".to_string()), ty });
         }
+        locals.extend(lets.map(|(_, l)| l));
         GoalView { target: 0, locals }
+    }
+
+    /// Make the `let`s in scope at the goal locals of the run: each one whose
+    /// name still means it there (not bound again by a later binder or
+    /// `let`) and was written (not one of the elaborator's `#` names). A
+    /// `let` is not a kernel binder, since its uses inline its value, but a
+    /// fact bound by one is a hypothesis like a parameter is, and a tactic
+    /// that searches the goal's locals (`assumption`, `mono`) should find it
+    /// without being handed it.
+    fn issue_lets(&self, cx: &Cx, run: &mut Run) {
+        let n = cx.names.len();
+        for (k, alias) in cx.aliases.iter().enumerate() {
+            let Some(later) = cx.names.get(alias.depth..) else { continue };
+            let shadowed = later.iter().any(|m| *m == alias.name)
+                || cx.aliases[k + 1..].iter().any(|b| b.name == alias.name);
+            let written = alias.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
+            if shadowed || !written {
+                continue;
+            }
+            // Read, not spliced: whether the value reaches the proof is
+            // known only once the tactic has returned one (`finish`).
+            let (term, ty) = alias.at((n - alias.depth) as u32);
+            let value = run.issue(0, Held::Term(term, ty.clone(), alias.level.clone()));
+            let ty = run.issue(0, Held::Type(ty, alias.level.clone()));
+            run.lets.push(LetLocal { alias: Rc::clone(alias), value, ty });
+        }
     }
 
     /// `Defeq`: types with types and terms with terms, solving the holes
@@ -1536,7 +1636,7 @@ impl Elaborator {
         let mut inner = cx.clone();
         inner.gamma = inner.gamma.shift_global(world as u32);
         inner.push(name.clone(), (*dom).clone(), dom_level.clone());
-        let id = (run.len(0) + run.opened.len()) as u64;
+        let id = run.next_id();
         let position = inner.gamma.len() - 1;
         run.scopes.push(Scope { parent: Some(at), cx: inner, world, locals: vec![id] });
         let scope = run.scopes.len() - 1;
@@ -1871,6 +1971,10 @@ impl Elaborator {
                     level,
                 }),
             },
+            RExpr::Local(x) if run.let_local(*x).is_some() => {
+                let value = run.let_local(*x).expect("a `let` local").value;
+                self.reify(run, &RExpr::Hd(value), at)
+            }
             RExpr::Local(x) => {
                 let (s, i) = run.local(*x)?;
                 if !run.encloses(s, at) {
@@ -2090,7 +2194,7 @@ impl Elaborator {
             let mut locals = Vec::with_capacity(len - base);
             let mut shown = Vec::with_capacity(len - base);
             for p in base..len {
-                let id = (run.len(0) + run.opened.len()) as u64;
+                let id = run.next_id();
                 run.opened.push((scope, p));
                 locals.push(id);
                 let entry = bcx.gamma.entries.get(p).expect("a context entry below its length");
