@@ -212,9 +212,21 @@ pub(crate) type Linear = (BTreeMap<Vec<u32>, Z>, Z);
 /// reading's reifier at a `≈` carrier, every term a polynomial over one
 /// shared atom table, so `linarith` and the `ring` step that checks its
 /// identity agree on what an atom is. A reciprocal is a plain atom here: its
-/// fact is `ring`'s to use when it checks the combination.
+/// fact is `ring`'s to use when it checks the combination; the reading only
+/// records, for each reciprocal it meets, the denominator that fact names,
+/// so `linarith` can clear a positive one (`Reciprocal`).
 pub(crate) struct FieldReading<'a> {
     reifier: Reifier<'a>,
+    reciprocals: Vec<Reciprocal>,
+}
+
+/// A reciprocal atom `r` the reading met with its fact `r·d ≈ 1`: the
+/// denominator `d` as the fact states it, and, when the reciprocal is
+/// positive by construction (`Rat::inv_succ(n)`), the library's `0 < r`.
+pub(crate) struct Reciprocal {
+    pub(crate) atom: usize,
+    pub(crate) den: Rc<Term>,
+    pub(crate) positive: Option<(Term, Type, Level, String)>,
 }
 
 impl<'a> FieldReading<'a> {
@@ -232,7 +244,61 @@ impl<'a> FieldReading<'a> {
                 facts: Vec::new(),
                 in_fact: false,
             },
+            reciprocals: Vec::new(),
         })
+    }
+
+    /// The reciprocals met so far whose fact could be written.
+    pub(crate) fn reciprocals(&self) -> &[Reciprocal] {
+        &self.reciprocals
+    }
+
+    /// The monomial that is atom `atom` alone.
+    pub(crate) fn atom_monomial(atom: usize) -> Vec<u32> {
+        let mut m = vec![0; atom + 1];
+        m[atom] = 1;
+        m
+    }
+
+    /// `a·b` over the reading's monomials.
+    pub(crate) fn monomial_product(a: &[u32], b: &[u32]) -> Result<Vec<u32>, String> {
+        mono_mul(&a.to_vec(), &b.to_vec())
+    }
+
+    /// Records the reciprocal facts read since `from`: the denominator is
+    /// the right factor of the fact's left side, `r * d`.
+    fn record_reciprocals(&mut self, from: usize) {
+        let reifier = &self.reifier;
+        let Carrier::Rel(ops) = &reifier.carrier else { return };
+        let Some(mul) = &ops.mul else { return };
+        for fact in &reifier.facts[from..] {
+            if fact.kind != FactKind::Reciprocal || self.reciprocals.iter().any(|r| r.atom == fact.atom) {
+                continue;
+            }
+            let Some(eq) = relation_equation(reifier.elab, reifier.cx, &fact.ty, reifier.span) else {
+                continue;
+            };
+            let Some(den) = named_args(reifier.elab, &eq.lhs, mul).and_then(|args| match args.as_slice() {
+                [_, den] => Some(Rc::clone(den)),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let term = &reifier.atoms[fact.atom].term;
+            let positive = named_args(reifier.elab, term, "rat::Rat::inv_succ")
+                .and_then(|args| match args.as_slice() {
+                    [n] => reifier.elab.spell_term_source(reifier.cx, n),
+                    _ => None,
+                })
+                .and_then(|n| {
+                    reifier.elab.key_of("rat::Rat::inv_succ_pos")?;
+                    let source = format!("rat::Rat::inv_succ_pos({n})");
+                    let expr = parse_expr(&source).ok()?;
+                    let (term, ty, level) = reifier.elab.generated_scope(|me| me.elab_infer(reifier.cx, &expr)).ok()?;
+                    Some((term, ty, level, source))
+                });
+            self.reciprocals.push(Reciprocal { atom: fact.atom, den, positive });
+        }
     }
 
     /// The carrier as source (`Rat`, `CReal`).
@@ -245,6 +311,9 @@ impl<'a> FieldReading<'a> {
     pub(crate) fn linear(&mut self, tm: &Rc<Term>) -> Result<Linear, String> {
         let (atoms, facts) = (self.reifier.atoms.len(), self.reifier.facts.len());
         let read = self.reifier.reify(tm).and_then(|syn| poly_of(&syn));
+        if read.is_ok() {
+            self.record_reciprocals(facts);
+        }
         self.reifier.facts.truncate(facts);
         let poly = match read {
             Ok(poly) => poly,

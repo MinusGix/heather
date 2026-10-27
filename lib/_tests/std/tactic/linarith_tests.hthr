@@ -47,6 +47,23 @@ theorem creal_let_fact(a, b: CReal, h: a < b): a <= b + 1 {
 theorem rat_not_lt_goal(a, b: Rat, h: b <= a): ¬(a < b) { linarith(h) }
 theorem creal_not_lt_fact(a, b, c: CReal, h: ¬(b < a), hc: b < c): a < c { linarith(h, hc) }
 
+// A reciprocal whose denominator a fact shows positive is cleared: the row
+// is offered multiplied by the denominator, `r·d` read as 1, and `ring`
+// checks the identity with the reciprocal's fact
+// (issues/linarith-positive-denominators.md).
+theorem rat_den_goal(a, b, d: Rat, hd: 0 < d, h: a <= b * d): a * d⁻¹ <= b { linarith(hd, h) }
+theorem rat_den_fact(a, b, d: Rat, hd: 0 < d, h: a * d⁻¹ <= b): a <= b * d { linarith(hd, h) }
+theorem creal_den_fact(a, b, d: CReal, hd: 0 < d, h: a * d⁻¹ < b): a < b * d { linarith(hd, h) }
+theorem creal_den_context(a, b, d: CReal, hd: 0 < d, h: a <= b * d): a * d⁻¹ <= b { linarith }
+theorem rat_den_same(a, b, d: Rat, hd: 0 < d, h: a ≈ b * d): a * d⁻¹ ≈ b { linarith(hd, h) }
+theorem rat_two_dens(a, b, d, e: Rat, hd: 0 < d, he: 0 < e, h: a * d⁻¹ <= b * e⁻¹): a * e <= b * d { linarith(hd, he, h) }
+theorem rat_den_sum(a, b, d: Rat, hd: 0 < d + 1, h: a * (d + 1)⁻¹ <= b): a <= b * d + b { linarith(hd, h) }
+theorem rat_den_absurd(a, d: Rat, hd: 0 < d, h1: 1 < a * d⁻¹, h2: a <= d): False { linarith(hd, h1, h2) }
+// A positive reciprocal has a positive denominator; `Rat::inv_succ(n)` is
+// positive by construction (`Rat::inv_succ_pos`), with no fact written.
+theorem rat_recip_pos(a, b, d: Rat, hx: d.Apart(0), hd: 0 < d⁻¹, h: a * d⁻¹ < b * d⁻¹): a < b { linarith(hd, h) }
+theorem rat_inv_succ(n: Nat, a, b: Rat, h: a <= b * (Rat::ofInt(OfNat(n)) + 1)): a * Rat::inv_succ(n) <= b { linarith(h) }
+
 // Contradictory facts prove anything.
 theorem rat_absurd(x: Rat, h1: x < 0, h2: 0 < x): False { linarith(h1, h2) }
 theorem creal_absurd_goal(x, y: CReal, h1: x < y, h2: y < x): x * x ≈ y { linarith(h1, h2) }
@@ -56,6 +73,11 @@ theorem creal_absurd_goal(x, y: CReal, h1: x < y, h2: y < x): x * x ≈ y { lina
 theorem rat_not_entailed(x, y: Rat, h: x <= y): x < y { linarith(h) }
 // expect-error: `linarith` could not prove
 theorem creal_product_is_not_linear(x: CReal, h: 0 <= x): 0 <= x * x { linarith(h) }
+// A denominator of unknown sign, or a negative one, is not cleared.
+// expect-error: `linarith` could not prove
+theorem rat_den_sign_unknown(a, b, d: Rat, hd: d.Apart(0), h: a <= b * d): a * d⁻¹ <= b { linarith(h) }
+// expect-error: `linarith` could not prove
+theorem rat_den_negative(a, b, d: Rat, hd: d < 0, h: a <= b * d): a * d⁻¹ <= b { linarith(hd, h) }
 // A fact that is not an order at the goal's carrier is named.
 // expect-error: combines `<`, `<=`, `≈` and `¬(x < y)` facts at `Rat`
 theorem rat_wrong_fact(x: Rat, n: Nat, h: n < 3): x <= x { linarith(h) }

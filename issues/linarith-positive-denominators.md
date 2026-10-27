@@ -1,6 +1,6 @@
 ---
 title: linarith: clear positive denominators from facts and goal
-status: open
+status: closed
 labels: [tactics,arith,reals]
 area: tactics
 milestone: [tac-arith]
@@ -27,3 +27,7 @@ scaled the same way.
 - **[[linarith-ordered-fields]]**: the reading and the part lemmas.
 - **[[field-simp]]**: the reciprocal facts `ring` reads (`<op>_mul`,
   `Rat::inv_succ_cancel`).
+
+## Log
+
+- 2026-10-27: Built (docs/linarith-design.md §5). ring's FieldReading keeps each reciprocal's denominator (ring::Reciprocal); a denominator is a factor when a strict fact's difference is d (0 < d) or r (0 < x⁻¹, via lin_den_pos with ring's identity); Rat::inv_succ(n) brings Rat::inv_succ_pos(n) as a fact. Rows mentioning r — facts' and the goal's negation — are also offered multiplied by d with r·d read as 1, up to two denominators per row; the goal's multiplier becomes a positive term K = Σ λⱼ·Pⱼ, and ring checks the identity modulo the reciprocal facts. Probes at Rat and CReal in lib/_tests/std/tactic/linarith_tests.hthr, unknown-sign and negative denominators refused.

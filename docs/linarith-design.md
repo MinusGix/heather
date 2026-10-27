@@ -28,7 +28,8 @@ written facts (`linarith(h₁, …)`, any expression, as `omega(h, …)` takes
 them) are tried first; when they do not suffice, every such fact in the
 context is added, block `let` facts among them. A term that is not linear —
 a product of two non-constants, a reciprocal, a function application, a
-field read — is an atom, so `x * y <= z` is a fact about the atom `x * y`.
+field read — is an atom, so `x * y <= z` is a fact about the atom `x * y`;
+a reciprocal whose denominator a fact shows positive is cleared (§5).
 
 `linarith` follows the bare-form shadowing rule of `omega` and `ring`.
 
@@ -123,16 +124,59 @@ not spell is named in the list by an alias bound to the term (`__ring_a{i}`),
 and the list's value is the term itself. `ring` alone gains the same: a
 `CReal` estimate over `x.seq(n)` is a `ring` goal now.
 
-## 5. Not in this round
+## 5. Positive denominators
 
-- **Denominators.** The inequality form [field-simp](../issues/field-simp.md)
-  left here — multiply a fact by a positive denominator, `a * d⁻¹ <= b` to
-  `a <= b * d` given `0 < d` — is not done: `lin_scale_le` already takes any
-  positive factor, but the search would have to multiply rows by atoms and
-  reduce `r·d` to `1`, which is a nonlinear preprocessing step. A fact that
-  relates reciprocals linearly (`Rat::inv_succ_half`) can be passed as a
-  written fact today. Filed as
-  [linarith-positive-denominators](../issues/linarith-positive-denominators.md).
+[linarith-positive-denominators](../issues/linarith-positive-denominators.md).
+A reciprocal is an atom to the search, so `a * d⁻¹ <= b` was a fact about
+the monomial `a·r`, unrelated to `a`. Given `0 < d` it is `a <= b * d`, and
+`linarith` now reads it that way too:
+
+```heather
+theorem goal(a, b, d: Rat, hd: 0 < d, h: a <= b * d): a * d⁻¹ <= b { linarith(hd, h) }
+theorem fact(a, b, d: CReal, hd: 0 < d, h: a * d⁻¹ < b): a < b * d { linarith(hd, h) }
+theorem built(n: Nat, a, b: Rat, h: a <= b * (Rat::ofInt(OfNat(n)) + 1)): a * Rat::inv_succ(n) <= b { linarith(h) }
+```
+
+**The reading.** `ring`'s reader already meets each reciprocal `r` with
+its fact `r·d ≈ 1` (`<op>_mul`, `Rat::inv_succ_cancel`); `FieldReading`
+now keeps, per reciprocal, the denominator `d` that fact names
+(`ring::Reciprocal`). A denominator is a *factor* when a strict fact shows
+it positive: one whose difference is `d` itself (`0 < d`, written or in
+context), or one whose difference is `r` (`0 < x⁻¹`), and then
+`lin_den_pos` gives `0 < d` from `s·d ≈ 1`, the identity by `ring`.
+`Rat::inv_succ(n)` is positive by construction: the reading hands its
+`Rat::inv_succ_pos(n)` over as a fact, so `inv_succ`'s denominator is a
+factor with nothing written.
+
+**The rows.** Every row that mentions a factor's `r` — the facts', and the
+goal's negation — is offered as well multiplied by `d`, its form reduced by
+`r·d = 1`: a monomial carrying `r` loses one `r`, any other is multiplied by
+`d`'s form. That is exact modulo the reciprocal's fact, so the scaled row is
+the same inequality, and the original stays offered. A row is multiplied
+by at most two denominators (two fractions on one side, as
+`a * d⁻¹ <= b * e⁻¹`), each once. The products the scaling makes
+(`b·d`) are monomials like any other: Fourier–Motzkin treats each as a
+variable, and the facts it is compared with mention the same ones.
+
+**The certificate.** A scaled fact's part is `P·(hi − lo)`, proved by
+`lin_scale_le`/`_lt` with `P` the product of its factors (`lin_scale_lt`
+chains their positivity). A scaled goal row changes the goal's multiplier:
+it is no longer a numeral `k` but `K = Σ λⱼ·Pⱼ` over the goal's uses, each
+term positive (a numeral by `lin_num_pos`, a product by `lin_scale_lt`), the
+sum by `lin_add_lt_lt`. `lin_finish_le`/`_lt` already took any positive
+`k`, so `K·(b − a) ≈ s` is read back as before. The identity now holds only
+modulo `r·d ≈ 1`; `ring` reads the same reciprocals with their facts and
+clears them exactly (docs/ring-normalization-design.md §9), so it checks it
+with no hint. A denominator whose sign is unknown is never a factor, and a
+negative one is not either: `d < 0` reverses the inequality, and the probes
+hold both as refusals.
+
+**Cost.** Nothing changes for a problem with no reciprocal factor. With
+`f` factors a row has at most `1 + f + f²` uses, so the elimination's input
+grows by that factor; the problems this is for have one or two.
+
+## 6. Not in this round
+
 - **A generic carrier.** Inside a `section<A: OrderedField(…)>` the reading
   needs a concrete carrier with designated operations, as `ring`'s relation
   reading does.
@@ -142,7 +186,7 @@ and the list's value is the term itself. `ring` alone gains the same: a
 - **Products of facts** (`nlinarith`), and `¬(x <= y)` facts, which at
   `CReal` do not give `y < x`.
 
-## 6. Cost shape
+## 7. Cost shape
 
 The search is cheap next to the certificate. A certificate is one `ring`
 identity over the atoms the facts mention plus one lemma application per
