@@ -1,5 +1,6 @@
 // Interval enclosures of Cauchy reals, and comparisons of reals decided by
-// evaluating them (issues/interval-creal-enclosures.md;
+// evaluating them (issues/interval-creal-enclosures.md,
+// issues/interval-creal-reciprocal.md;
 // docs/floating-point-design.md §16, "Enclosures of reals").
 //
 // `I.HasReal(x)` is `Interval::Has` read at `CReal` through the embedding:
@@ -14,9 +15,17 @@
 // (`CReal::le_term_add`, `CReal::term_sub_le`), so `x.enclose(n, p)` rounds
 // `[x_n - 1/(n+1), x_n + 1/(n+1)]` outward to `p` bits. A finer enclosure
 // reads further out, and `RealExpr::lt_search` refines over the index as
-// `IntervalExpr::lt_search` refines over the precision. Reciprocals are not
-// here: a real's inverse needs a proof that it is apart from zero, which an
-// expression tree does not carry.
+// `IntervalExpr::lt_search` refines over the precision.
+//
+// A real's inverse takes a proof that it is apart from zero, and its
+// enclosure is the reciprocal of its argument's (`recip_has_real`, at that
+// proof). The checker's inverse node carries the real it inverts and the
+// proof, beside the tree that encloses it; a well-formedness witness
+// (`RealExpr::Wf`) says the tree denotes that real, which for a tree read off
+// a goal is `≈` by reflexivity. The proof can come from an enclosure too: an
+// enclosure that excludes zero shows its real apart from zero
+// (`apart_of_excludes`), and `RealExpr::apart_of_search` decides `x.Apart(y)`
+// by separating the two.
 
 import logic;
 import bool;
@@ -205,6 +214,77 @@ theorem Interval::mul_has_real(I, J: Interval, p: Nat, {x, y: CReal}, hx: I.HasR
     }(hx)
 }
 
+// Reciprocals. A positive interval's reverses its bounds, by inversion's
+// reversal of `≤` between positives; a negative one is the positive case
+// under negation; one that may hold zero is `Whole`.
+
+theorem Interval::recip_pos_has_real(lo, hi: Dyadic, p: Nat, pos: 0 < lo, {x: CReal}, h: x.Apart(0), hx: Bnd(lo, hi).HasReal(x)):
+    Interval::recip_pos(lo, hi, p).HasReal(x.inv(h := h))
+{
+    let L = CReal::ofRat(lo.rat());
+    let H = CReal::ofRat(hi.rat());
+    let lo_pos: (0 < lo.rat()) = Dyadic::rat_pos(pos);
+    let pL: (0 < L) = CReal::ofRat_lt(lo_pos);
+    let px: (0 < x) = CReal::lt_of_lt_of_le(pL, hx.left);
+    let pH: (0 < H) = CReal::lt_of_lt_of_le(px, hx.right);
+    let hi_pos: (0 < hi.rat()) = CReal::lt_of_ofRat_lt(pH);
+    let lh: (lo <= hi) = CReal::le_of_ofRat_le(CReal::le_trans(hx.left, hx.right));
+    let bh = hi.recip_bounds(p, Dyadic::lt_of_lt_of_le(pos, lh));
+    let bl = lo.recip_bounds(p, pos);
+    let at_hi: (H.inv(h := Inr(pH)) ≈ CReal::ofRat(hi.rat().recip())) = CReal::same_trans(
+        CReal::inv_respects(H.same_refl(), h := Inr(pH), h2 := CReal::ofRat_apart(h := Inr(hi_pos))), CReal::ofRat_inv(hi.rat(), h := Inr(hi_pos)));
+    let at_lo: (L.inv(h := Inr(pL)) ≈ CReal::ofRat(lo.rat().recip())) = CReal::same_trans(
+        CReal::inv_respects(L.same_refl(), h := Inr(pL), h2 := CReal::ofRat_apart(h := Inr(lo_pos))), CReal::ofRat_inv(lo.rat(), h := Inr(lo_pos)));
+    let low: (CReal::ofRat(hi.rat().recip()) <= x.inv(h := h)) = CReal::le_respects(at_hi, x.inv(h := h).same_refl(), CReal::inv_le_inv(h, Inr(pH), px, hx.right));
+    let high: (x.inv(h := h) <= CReal::ofRat(lo.rat().recip())) = CReal::le_respects(x.inv(h := h).same_refl(), at_lo, CReal::inv_le_inv(Inr(pL), h, pL, hx.left));
+    And(CReal::le_trans(CReal::ofRat_le(bh.left), low), CReal::le_trans(high, CReal::ofRat_le(bl.right)))
+}
+
+theorem Interval::recip_bnd_has_real(lo, hi: Dyadic, p: Nat, {x: CReal}, h: x.Apart(0), hx: Bnd(lo, hi).HasReal(x)): Interval::recip_bnd(lo, hi, p).HasReal(x.inv(h := h)) {
+    match lo.le_dec(0) as λ c => (match c { Inl(_) => match Dyadic::le_dec(0, hi) { Inl(_) => Whole, Inr(_) => Interval::recip_pos(-hi, -lo, p).neg() },
+            Inr(_) => Interval::recip_pos(lo, hi, p) }).HasReal(x.inv(h := h)) {
+        Inl(_) => match Dyadic::le_dec(0, hi) as λ c => (match c { Inl(_) => Whole, Inr(_) => Interval::recip_pos(-hi, -lo, p).neg() }).HasReal(x.inv(h := h)) {
+            Inl(_) => trivial,
+            Inr(no) => {
+                let hn: (hi < 0) = Rat::lt_of_not_le(x := hi.rat(), y := Dyadic::rat(0), h := no);
+                let neg_pos: (0 < -hi) = Rat::lt_respects(Rat::same_sym(Dyadic::rat_neg(0)), Rat::same_sym(hi.rat_neg()),
+                    Rat::neg_lt(x := hi.rat(), y := Dyadic::rat(0), h := hn));
+                let x_neg: (x < 0) = CReal::lt_of_le_of_lt(hx.right, CReal::lt_respects(CReal::ofRat(hi.rat()).same_refl(), CReal::ofRat_respects(Dyadic::rat_zero()), Dyadic::real_lt(hn)));
+                let hnx: ((-x).Apart(0)) = Inr(CReal::lt_respects(CReal::neg_zero(), (-x).same_refl(), CReal::neg_lt(x_neg)));
+                let flipped: Bnd(-hi, -lo).HasReal(-x) = Interval::neg_has_real(Bnd(lo, hi), hx);
+                let r = Interval::neg_has_real(Interval::recip_pos(-hi, -lo, p), Interval::recip_pos_has_real(-hi, -lo, p, neg_pos, hnx, flipped));
+                Interval::has_real_respects(Interval::recip_pos(-hi, -lo, p).neg(),
+                    CReal::same_trans(CReal::neg_respects(CReal::inv_neg(h, hnx)), x.inv(h := h).neg_neg()), r)
+            },
+        },
+        Inr(no) => Interval::recip_pos_has_real(lo, hi, p, Rat::lt_of_not_le(x := Dyadic::rat(0), y := lo.rat(), h := no), h, hx),
+    }
+}
+
+theorem Interval::recip_has_real(I: Interval, p: Nat, {x: CReal}, h: x.Apart(0), hx: I.HasReal(x)): I.recip(p).HasReal(x.inv(h := h)) {
+    match I as λ K => K.HasReal(x) → K.recip(p).HasReal(x.inv(h := h)) {
+        Bnd(lo, hi) => λ k => Interval::recip_bnd_has_real(lo, hi, p, h, k),
+        Whole => λ _ => trivial,
+    }(hx)
+}
+
+// An enclosure that excludes zero shows its real apart from zero.
+fn Interval::excludes_zero(self I: Interval) → Bool {
+    match I { Bnd(lo, hi) => match Dyadic::lt_bool(0, lo) { True => True, False => hi.lt_bool(0) }, Whole => False }
+}
+
+theorem Interval::apart_of_excludes(I: Interval, {x: CReal}, hx: I.HasReal(x), h: I.excludes_zero().IsTrue()): x.Apart(0) {
+    let zero: (CReal::ofRat(Dyadic::rat(0)) ≈ 0) = CReal::ofRat_respects(Dyadic::rat_zero());
+    match I as λ K => K.HasReal(x) → K.excludes_zero().IsTrue() → x.Apart(0) {
+        Bnd(lo, hi) => λ k => match Dyadic::lt_bool(0, lo) as λ v => Dyadic::lt_bool(0, lo) = v → Bool::IsTrue(match v { True => True, False => hi.lt_bool(0) }) → x.Apart(0) {
+            True => λ e _ => Inr(CReal::lt_of_lt_of_le(CReal::lt_respects(zero, CReal::ofRat(lo.rat()).same_refl(),
+                Dyadic::real_lt(Dyadic::lt_of_lt_bool(0, lo, j(sym(e), λ w _ => w.IsTrue(), trivial)))), k.left)),
+            False => λ _ v => Inl(CReal::lt_of_le_of_lt(k.right, CReal::lt_respects(CReal::ofRat(hi.rat()).same_refl(), zero, Dyadic::real_lt(hi.lt_of_lt_bool(0, v))))),
+        }(refl),
+        Whole => λ _ no => false_elim(no),
+    }(hx, h)
+}
+
 // Powers, by the product chain and by squaring, as at `Rat`.
 
 theorem Interval::one_has_real(): Interval::of_int(1).HasReal(1) {
@@ -301,8 +381,17 @@ theorem CReal::le_of_enclose(self x, y: CReal, n, p: Nat, h: x.enclose(n, p).bel
 // (enclosed from their terms at index `n`). `eval` spells each node as the
 // operation itself, so `a.eval() < b.eval()` converts to the goal written
 // directly.
+//
+// `RInv(a, x, h)` is `x.inv(h := h)` enclosed through `a`: the tree cannot
+// carry a proof about its own value, so the node names the real `x` the proof
+// is about, and `Wf` asks that each such `a` denote its `x`. A tree read off
+// a goal satisfies that by reflexivity (its `a.eval()` is `x` as written);
+// one with no inverse is well formed by evaluation (`wf_plain`).
 
-inductive RealExpr { RRat(q: Rat), RReal(x: CReal), RAdd(a: RealExpr, b: RealExpr), RSub(a: RealExpr, b: RealExpr), RNeg(a: RealExpr), RMul(a: RealExpr, b: RealExpr), RPow(a: RealExpr, n: Nat) }
+inductive RealExpr {
+    RRat(q: Rat), RReal(x: CReal), RAdd(a: RealExpr, b: RealExpr), RSub(a: RealExpr, b: RealExpr), RNeg(a: RealExpr), RMul(a: RealExpr, b: RealExpr),
+    RPow(a: RealExpr, n: Nat), RInv(a: RealExpr, x: CReal, h: x.Apart(0)),
+}
 
 fn RealExpr::eval(self e: RealExpr) → CReal {
     match e {
@@ -313,8 +402,51 @@ fn RealExpr::eval(self e: RealExpr) → CReal {
         RNeg(a) => -a.eval(),
         RMul(a, b) => a.eval() * b.eval(),
         RPow(a, k) => a.eval().npow(k),
+        RInv(_, x, h) => x.inv(h := h),
     }
 }
+
+fn RealExpr::Wf(self e: RealExpr) → Type {
+    match e {
+        RRat(_) => True,
+        RReal(_) => True,
+        RAdd(a, b) => a.Wf() ∧ b.Wf(),
+        RSub(a, b) => a.Wf() ∧ b.Wf(),
+        RNeg(a) => a.Wf(),
+        RMul(a, b) => a.Wf() ∧ b.Wf(),
+        RPow(a, _) => a.Wf(),
+        RInv(a, x, _) => a.eval() ≈ x ∧ a.Wf(),
+    }
+}
+
+// Whether a tree has no inverse node; such a tree is well formed.
+fn RealExpr::plain(self e: RealExpr) → Bool {
+    match e {
+        RRat(_) => True,
+        RReal(_) => True,
+        RAdd(a, b) => a.plain() && b.plain(),
+        RSub(a, b) => a.plain() && b.plain(),
+        RNeg(a) => a.plain(),
+        RMul(a, b) => a.plain() && b.plain(),
+        RPow(a, _) => a.plain(),
+        RInv(_, _, _) => False,
+    }
+}
+
+theorem RealExpr::wf_of_plain(self e: RealExpr): e.plain().IsTrue() → e.Wf() {
+    match e as λ f => f.plain().IsTrue() → f.Wf() {
+        RRat(_) => λ _ => trivial,
+        RReal(_) => λ _ => trivial,
+        RAdd(a, b) => λ h => { let k = a.plain().is_true_and(b.plain(), h); And(a.wf_of_plain(k.left), b.wf_of_plain(k.right)) },
+        RSub(a, b) => λ h => { let k = a.plain().is_true_and(b.plain(), h); And(a.wf_of_plain(k.left), b.wf_of_plain(k.right)) },
+        RNeg(a) => λ h => a.wf_of_plain(h),
+        RMul(a, b) => λ h => { let k = a.plain().is_true_and(b.plain(), h); And(a.wf_of_plain(k.left), b.wf_of_plain(k.right)) },
+        RPow(a, _) => λ h => a.wf_of_plain(h),
+        RInv(_, _, _) => λ no => false_elim(no),
+    }
+}
+
+theorem RealExpr::wf_plain(self e: RealExpr, h: e.plain() = True): e.Wf() { e.wf_of_plain(j(sym(h), λ w _ => w.IsTrue(), trivial)) }
 
 fn RealExpr::enclose(self e: RealExpr, n, p: Nat) → Interval {
     match e {
@@ -325,18 +457,20 @@ fn RealExpr::enclose(self e: RealExpr, n, p: Nat) → Interval {
         RNeg(a) => a.enclose(n, p).neg(),
         RMul(a, b) => a.enclose(n, p).mul(b.enclose(n, p), p),
         RPow(a, k) => a.enclose(n, p).pow(k, p),
+        RInv(a, _, _) => a.enclose(n, p).recip(p),
     }
 }
 
-theorem RealExpr::enclose_has(self e: RealExpr, n, p: Nat): e.enclose(n, p).HasReal(e.eval()) {
-    match e as λ f => f.enclose(n, p).HasReal(f.eval()) {
-        RRat(q) => Interval::of_rat_has_real(q, p),
-        RReal(x) => x.enclose_has(n, p),
-        RAdd(a, b) => Interval::add_has_real(a.enclose(n, p), b.enclose(n, p), p, a.enclose_has(n, p), b.enclose_has(n, p)),
-        RSub(a, b) => Interval::sub_has_real(a.enclose(n, p), b.enclose(n, p), p, a.enclose_has(n, p), b.enclose_has(n, p)),
-        RNeg(a) => Interval::neg_has_real(a.enclose(n, p), a.enclose_has(n, p)),
-        RMul(a, b) => Interval::mul_has_real(a.enclose(n, p), b.enclose(n, p), p, a.enclose_has(n, p), b.enclose_has(n, p)),
-        RPow(a, k) => Interval::pow_has_real(a.enclose(n, p), k, p, a.enclose_has(n, p)),
+theorem RealExpr::enclose_has(self e: RealExpr, n, p: Nat): e.Wf() → e.enclose(n, p).HasReal(e.eval()) {
+    match e as λ f => f.Wf() → f.enclose(n, p).HasReal(f.eval()) {
+        RRat(q) => λ _ => Interval::of_rat_has_real(q, p),
+        RReal(x) => λ _ => x.enclose_has(n, p),
+        RAdd(a, b) => λ k => Interval::add_has_real(a.enclose(n, p), b.enclose(n, p), p, a.enclose_has(n, p, k.left), b.enclose_has(n, p, k.right)),
+        RSub(a, b) => λ k => Interval::sub_has_real(a.enclose(n, p), b.enclose(n, p), p, a.enclose_has(n, p, k.left), b.enclose_has(n, p, k.right)),
+        RNeg(a) => λ k => Interval::neg_has_real(a.enclose(n, p), a.enclose_has(n, p, k)),
+        RMul(a, b) => λ k => Interval::mul_has_real(a.enclose(n, p), b.enclose(n, p), p, a.enclose_has(n, p, k.left), b.enclose_has(n, p, k.right)),
+        RPow(a, k) => λ w2 => Interval::pow_has_real(a.enclose(n, p), k, p, a.enclose_has(n, p, w2)),
+        RInv(a, _, h) => λ k => Interval::recip_has_real(a.enclose(n, p), p, h, Interval::has_real_respects(a.enclose(n, p), k.left, a.enclose_has(n, p, k.right))),
     }
 }
 
@@ -351,32 +485,63 @@ fn RealExpr::le_search(self a, b: RealExpr, n, p, tries: Nat) → Bool {
     match tries { Zero => False, Succ(t) => match a.enclose(n, p).below_eq(b.enclose(n, p)) { True => True, False => a.le_search(b, n + n + 1, Succ(p), t) } }
 }
 
-theorem RealExpr::lt_of_search_from(self a, b: RealExpr, tries: Nat): (n, p: Nat) → a.lt_search(b, n, p, tries).IsTrue() → a.eval() < b.eval() {
+// Apartness: either side below the other.
+fn RealExpr::apart_search(self a, b: RealExpr, n, p, tries: Nat) → Bool {
+    match tries {
+        Zero => False,
+        Succ(t) => match a.enclose(n, p).below(b.enclose(n, p)) {
+            True => True,
+            False => match b.enclose(n, p).below(a.enclose(n, p)) { True => True, False => a.apart_search(b, n + n + 1, Succ(p), t) },
+        },
+    }
+}
+
+theorem RealExpr::lt_of_search_from(self a, b: RealExpr, wa: a.Wf(), wb: b.Wf(), tries: Nat): (n, p: Nat) → a.lt_search(b, n, p, tries).IsTrue() → a.eval() < b.eval() {
     match tries {
         Zero => λ n p no => false_elim(no),
         Succ(t) => λ n p => match a.enclose(n, p).below(b.enclose(n, p)) as λ v => a.enclose(n, p).below(b.enclose(n, p)) = v →
                 Bool::IsTrue(match v { True => True, False => a.lt_search(b, n + n + 1, Succ(p), t) }) → a.eval() < b.eval() {
-            True => λ e _ => Interval::lt_of_below_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p), b.enclose_has(n, p), j(sym(e), λ w _ => w.IsTrue(), trivial)),
-            False => λ _ v => RealExpr::lt_of_search_from(a, b, t, n + n + 1, Succ(p), v),
+            True => λ e _ => Interval::lt_of_below_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), j(sym(e), λ w _ => w.IsTrue(), trivial)),
+            False => λ _ v => RealExpr::lt_of_search_from(a, b, wa, wb, t, n + n + 1, Succ(p), v),
         }(refl),
     }
 }
 
-theorem RealExpr::le_of_search_from(self a, b: RealExpr, tries: Nat): (n, p: Nat) → a.le_search(b, n, p, tries).IsTrue() → a.eval() <= b.eval() {
+theorem RealExpr::le_of_search_from(self a, b: RealExpr, wa: a.Wf(), wb: b.Wf(), tries: Nat): (n, p: Nat) → a.le_search(b, n, p, tries).IsTrue() → a.eval() <= b.eval() {
     match tries {
         Zero => λ n p no => false_elim(no),
         Succ(t) => λ n p => match a.enclose(n, p).below_eq(b.enclose(n, p)) as λ v => a.enclose(n, p).below_eq(b.enclose(n, p)) = v →
                 Bool::IsTrue(match v { True => True, False => a.le_search(b, n + n + 1, Succ(p), t) }) → a.eval() <= b.eval() {
-            True => λ e _ => Interval::le_of_below_eq_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p), b.enclose_has(n, p), j(sym(e), λ w _ => w.IsTrue(), trivial)),
-            False => λ _ v => RealExpr::le_of_search_from(a, b, t, n + n + 1, Succ(p), v),
+            True => λ e _ => Interval::le_of_below_eq_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), j(sym(e), λ w _ => w.IsTrue(), trivial)),
+            False => λ _ v => RealExpr::le_of_search_from(a, b, wa, wb, t, n + n + 1, Succ(p), v),
         }(refl),
     }
 }
 
-theorem RealExpr::lt_of_search(self a, b: RealExpr, n, p, tries: Nat, h: a.lt_search(b, n, p, tries) = True): a.eval() < b.eval() {
-    a.lt_of_search_from(b, tries, n, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+theorem RealExpr::apart_of_search_from(self a, b: RealExpr, wa: a.Wf(), wb: b.Wf(), tries: Nat): (n, p: Nat) → a.apart_search(b, n, p, tries).IsTrue() → a.eval().Apart(b.eval()) {
+    match tries {
+        Zero => λ n p no => false_elim(no),
+        Succ(t) => λ n p => match a.enclose(n, p).below(b.enclose(n, p)) as λ v => a.enclose(n, p).below(b.enclose(n, p)) = v →
+                Bool::IsTrue(match v { True => True, False => match b.enclose(n, p).below(a.enclose(n, p)) { True => True, False => a.apart_search(b, n + n + 1, Succ(p), t) } })
+                → a.eval().Apart(b.eval()) {
+            True => λ e _ => Inl(Interval::lt_of_below_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), j(sym(e), λ w _ => w.IsTrue(), trivial))),
+            False => λ _ => match b.enclose(n, p).below(a.enclose(n, p)) as λ v => b.enclose(n, p).below(a.enclose(n, p)) = v →
+                    Bool::IsTrue(match v { True => True, False => a.apart_search(b, n + n + 1, Succ(p), t) }) → a.eval().Apart(b.eval()) {
+                True => λ e _ => Inr(Interval::lt_of_below_real(b.enclose(n, p), a.enclose(n, p), b.enclose_has(n, p, wb), a.enclose_has(n, p, wa), j(sym(e), λ w _ => w.IsTrue(), trivial))),
+                False => λ _ v => RealExpr::apart_of_search_from(a, b, wa, wb, t, n + n + 1, Succ(p), v),
+            }(refl),
+        }(refl),
+    }
 }
 
-theorem RealExpr::le_of_search(self a, b: RealExpr, n, p, tries: Nat, h: a.le_search(b, n, p, tries) = True): a.eval() <= b.eval() {
-    a.le_of_search_from(b, tries, n, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+theorem RealExpr::lt_of_search(self a, b: RealExpr, n, p, tries: Nat, wa: a.Wf(), wb: b.Wf(), h: a.lt_search(b, n, p, tries) = True): a.eval() < b.eval() {
+    a.lt_of_search_from(b, wa, wb, tries, n, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+}
+
+theorem RealExpr::le_of_search(self a, b: RealExpr, n, p, tries: Nat, wa: a.Wf(), wb: b.Wf(), h: a.le_search(b, n, p, tries) = True): a.eval() <= b.eval() {
+    a.le_of_search_from(b, wa, wb, tries, n, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+}
+
+theorem RealExpr::apart_of_search(self a, b: RealExpr, n, p, tries: Nat, wa: a.Wf(), wb: b.Wf(), h: a.apart_search(b, n, p, tries) = True): a.eval().Apart(b.eval()) {
+    a.apart_of_search_from(b, wa, wb, tries, n, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
 }

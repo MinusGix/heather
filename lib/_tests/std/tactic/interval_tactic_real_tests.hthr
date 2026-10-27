@@ -30,3 +30,26 @@ theorem open_side(x: CReal): x < x + 1 { by intervals() }
 // An equality is never decided by enclosures, even as `<=`.
 // expect-error: intervals: the enclosures do not separate the two sides
 theorem third_le_third(): third() <= third() { by intervals() }
+
+// Inverses. The apartness an inverse needs comes from the tactic too, and
+// the inverse's enclosure is its argument's reciprocal: a twelfth's is
+// between 11 and 13.
+fn twelfth() → CReal { third() - CReal::ofRat(Rat(1, 4)) }
+theorem twelfth_apart(): twelfth().Apart(0) { by intervals() }
+theorem inv_lt(): twelfth().inv(h := twelfth_apart()) < CReal::ofRat(13) { by intervals() }
+theorem lt_inv(): CReal::ofRat(11) < twelfth().inv(h := twelfth_apart()) { by intervals() }
+theorem inline_apart(): (third() - CReal::ofRat(Rat(1, 4))).inv(h := by intervals()) <= CReal::ofRat(13) { by intervals() }
+// A rational's inverse with its apartness searched at the call, read exactly.
+theorem inv_rat(): CReal::ofRat(Rat(1, 3))⁻¹ < CReal::ofRat(4) { by intervals() }
+theorem neg_inv(): (-twelfth()).inv(h := by intervals()) < CReal::ofRat(-11) { by intervals() }
+// The inverse is enclosed through its argument, never through its own terms:
+// with the apartness a hypothesis its terms do not compute, and the goal
+// still goes through.
+theorem inv_open_proof(h: twelfth().Apart(0)): twelfth().inv(h := h) < CReal::ofRat(13) { by intervals() }
+theorem apart_reals(): third().Apart(CReal::ofRat(Rat(1, 4))) { by intervals() }
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem apart_same(): third().Apart(third()) { by intervals() }
+// Read at index 7 the twelfth's enclosure holds zero, and refining once is
+// not enough.
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem apart_near(): twelfth().Apart(0) { by intervals(p := 16, tries := 1, n := 7) }

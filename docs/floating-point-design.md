@@ -1183,8 +1183,8 @@ hand.
 distance to its terms, `le_term_add` / `term_sub_le`) and the termwise
 rearrangements behind them in `rat.hthr`. `I.HasReal(x)` is `I.Has` read at
 `CReal`, `lo <= x <= hi` with the bounds embedded by `CReal::ofRat`. Every
-operation but the reciprocal keeps it (`add_has_real`, `mul_has_real`,
-`pow_has_real`, …), by the corner arguments of the rational proofs with
+operation keeps it (`add_has_real`, `mul_has_real`, `pow_has_real`, and
+`recip_has_real` at an apartness proof, below), by the corner arguments of the rational proofs with
 `CReal`'s monotonicity in place of `Rat`'s. The one step that does not carry
 over is the case split on the other factor's sign in a product: the
 rationals decide it and the reals never do. It is not needed: a `≤` between
@@ -1200,14 +1200,34 @@ The tactic reads goals at `CReal::Lt` / `CReal::Le` into it, with
 `CReal::ofRat(q)` an exact leaf and any other real a leaf read from its
 terms, and takes the starting index as `n := …` (1023 by default). It looks
 the `CReal` relations up only when the goal is not at `Rat`, so a client
-that never imports `creal` is unaffected. Reciprocals are left out: a real's
-inverse needs a proof that it is apart from zero, which an expression tree
-does not carry, so `CReal::inv` is a leaf
-([[interval-creal-reciprocal]]: an enclosure above zero can supply the proof). A real leaf costs one term at the
+that never imports `creal` is unaffected. A real leaf costs one term at the
 index read; a real whose terms are expensive far out (a series summed to
 its index) wants a small starting `n` and more tries. Probes are in
 `lib/_tests/std/num/float/creal_interval_tests.hthr` and
 `lib/_tests/std/tactic/interval_tactic_real_tests.hthr`.
+
+**Reciprocals of reals** (`interval-creal-reciprocal`). `x.inv(h := h)` takes
+a proof that `x` is apart from zero, and a tree cannot carry a proof about
+its own value (that would be an inductive-recursive definition). So the
+node is `RInv(a, x, h)`: the tree `a` that encloses `x`, the real `x`, and
+`h` about `x`. `RealExpr::Wf` asks that each such `a` denote its `x`, and
+every theorem about a search takes the two sides' witnesses. A tree the
+tactic reads off a goal denotes `x` by conversion, since `eval` spells the
+operations, so its witness at an inverse is `CReal::same_refl(x)`; the
+tactic builds the witness beside the tree, through wrapper theorems
+(`interval_wf_add`, …, `interval_wf_inv`). A tree with no inverse is well
+formed by evaluation (`RealExpr::wf_plain`). The enclosure of `RInv(a, …)`
+is `a`'s reciprocal, and its containment (`Interval::recip_has_real`) is
+the rational proof at `CReal`: inversion reverses `≤` between positives
+(`CReal::inv_le_inv`, from `OrderedField::recip_lt_recip`), and a negative
+interval is the positive case under `CReal::inv_neg`. The value never reads
+the proof's gap, so an inverse whose apartness is a hypothesis is still
+enclosed, where a leaf's terms would be stuck. Apartness comes from
+enclosures as well: one that excludes zero shows its real apart from zero
+(`Interval::apart_of_excludes`), and `RealExpr::apart_of_search` proves
+`a.Apart(b)` by separating the two sides either way. The tactic proves
+`x.Apart(y)` goals at `CReal` with it, which is how `x.inv(h := by
+intervals())` is written.
 
 **Costs.** These are shapes. An operation at `p` bits costs its roundings,
 each about `p` halvings for the width and `p` for the shift, plus the
