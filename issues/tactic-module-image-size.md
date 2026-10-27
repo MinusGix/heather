@@ -37,6 +37,15 @@ replaces the per-branch `Pure(False)`. That shrank `mono_same` about
 seventeenfold and `mono`'s decoded image by about a third. It is advice for
 tactic authors, not a fix.
 
+The world amplifies it. A check over `--world lib` loads the world's order
+up to the last shared module its folder needs (`docs/library-world-design.md`
+§2), and `tactic` and `mono` sit early in that order, so folders that import
+neither (`lib/std/arch`, `lib/std/os`) decode them too: on 2026-10-27 every
+measured gate folder's peak was about the same, and adding `mono` (#222 and
+the class round) raised all of them alike. Three such children side by side
+exceed a cloud box's memory cgroup before any reaches its own rail, and the
+kernel's OOM killer, not the rail, ends the gate (`dmesg`).
+
 ## Direction
 
 The owner is [[elaborator-canonical-type-spelling]]: one spelling per type,
