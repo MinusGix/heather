@@ -356,6 +356,10 @@ theorem CReal::ofRat_add(p, q: Rat): CReal::ofRat(p + q) ≈ CReal::ofRat(p) + C
     CReal::ofRat(p + q).same_of_terms(CReal::ofRat(p) + CReal::ofRat(q), λ n => (p + q).same_refl())
 }
 
+theorem CReal::ofRat_sub(p, q: Rat): CReal::ofRat(p - q) ≈ CReal::ofRat(p) - CReal::ofRat(q) {
+    CReal::ofRat(p - q).same_of_terms(CReal::ofRat(p) - CReal::ofRat(q), λ n => (p - q).same_refl())
+}
+
 // ---------------------------------------------------------------------------
 // Multiplication. A product's error is each factor's error weighted by the
 // other factor's size, so a product reads its factors further out the larger
@@ -825,6 +829,17 @@ theorem CReal::apart_sym({x, y: CReal}, h: x.Apart(y)): y.Apart(x) {
         Inl(lt) => Inr(lt),
         Inr(gt) => Inl(gt),
     }
+}
+
+theorem CReal::apart_respects({x, x2, y, y2: CReal}, hx: x ≈ x2, hy: y ≈ y2, h: x.Apart(y)): x2.Apart(y2) {
+    match h {
+        Inl(lt) => Inl(CReal::lt_respects(hx, hy, lt)),
+        Inr(gt) => Inr(CReal::lt_respects(hy, hx, gt)),
+    }
+}
+
+theorem CReal::not_same_of_apart({x, y: CReal}, h: x.Apart(y)): ¬(x ≈ y) {
+    λ same => y.apart_irrefl(CReal::apart_respects(same, y.same_refl(), h))
 }
 
 theorem CReal::apart_cotrans(self x, y, z: CReal, h: x.Apart(y)): x.Apart(z) ∨ z.Apart(y) {
@@ -1350,6 +1365,13 @@ theorem CReal::npow_respects({x, x2: CReal}, hx: x ≈ x2, n: Nat): x.npow(n) �
     }
 }
 
+theorem CReal::ofRat_npow(q: Rat, n: Nat): CReal::ofRat(q).npow(n) ≈ CReal::ofRat(q.npow(n)) {
+    match n {
+        Zero => CReal::same_refl(1),
+        Succ(k) => CReal::same_trans(CReal::mul_respects(CReal::ofRat_npow(q, k), CReal::ofRat(q).same_refl()), CReal::same_sym(CReal::ofRat_mul(q.npow(k), q))),
+    }
+}
+
 theorem CReal::npow_add(self x: CReal, m, n: Nat): x.npow(m + n) ≈ x.npow(m) * x.npow(n) {
     match n {
         Zero => CReal::same_sym(x.npow(m).mul_one()),
@@ -1700,6 +1722,10 @@ theorem CReal::abs_respects({x, x2: CReal}, hx: x ≈ x2): x.abs() ≈ x2.abs() 
     λ k => match hx(k) {
         Exists(start, close) => Exists(start, λ n from => Rat::le_trans(x.seq(n).abs_sub_abs_le(x2.seq(n)), close(n, from))),
     }
+}
+
+theorem CReal::ofRat_abs(q: Rat): CReal::ofRat(q).abs() ≈ CReal::ofRat(q.abs()) {
+    CReal::ofRat(q).abs().same_of_terms(CReal::ofRat(q.abs()), λ n => q.abs().same_refl())
 }
 
 // x ≤ y when, for every j, x's terms are eventually below y's plus 1/(j+1):

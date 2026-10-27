@@ -1,0 +1,496 @@
+// `norm_num`: prove a closed numeric fact by evaluating it
+// (docs/numeral-normalisation-design.md).
+//
+// The goal is `=`, `≈`, `<`, `<=` or `Apart` between two closed numeric
+// expressions, or the negation of one (`≠`, `¬(x < y)`, …), at `Nat`,
+// `Int`, `Rat`, `Dyadic`, a float format (`Finite(F)`) or `CReal`.
+//
+// At every carrier but `CReal` the relation is decidable by computation, and
+// the proof is a `Bool` verdict proved `= True` (or `= False`, for a
+// negation) by evaluation: `Nat::leb` and `Nat::same` at `Nat`, `Int::leb`
+// and `Int::same` at `Int`, and `Rat::same_bool`, `le_bool` and `lt_bool`
+// over the cross products at `Rat`, which `Dyadic` and the floats reach
+// through their value (`Dyadic::rat`, `Finite::val`), since their relations
+// are `Rat`'s of it by definition. Nothing is read off the sides: any
+// closed expression that computes is evaluated whole (`+ - * ⁻¹ ^`,
+// `npow`, `recip`, `inv_succ`, `abs`, `min`, a literal, a defined
+// constant), so a side that does not compute (a variable) leaves the
+// verdict stuck, and the tactic says so.
+//
+// At `CReal` nothing computes a verdict, so the tactic reads each side
+// into a `NumReal` tree (`norm_num_real.hthr`): `+`, binary and unary `-`,
+// `*`, `npow`, `^`, `⁻¹` and `abs` are nodes, and any other real is a leaf
+// when it is `CReal::ofRat(q)` up to unfolding (a numeral, a constant
+// defined as one), read as the embedding of its own first term. The tree's rational
+// value is decided as at `Rat` and carried across the embedding by the
+// carrier's laws (`NumReal::sound`).
+//
+// The verdict is asked of the elaborator before the proof is built, so a
+// false goal fails with "the goal is false" and a stuck one with what did
+// not evaluate, rather than as a refused proof. The proof itself is checked
+// at the goal like any term: the reader is untrusted.
+//
+// Other tactics call `norm_num_at(target)` on a numeral side goal: it is
+// `norm_num` at a given statement rather than the goal's.
+
+import logic;
+import bool;
+import nat;
+import int;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+import rat;
+
+// The verdicts the evaluation is compared against, and their proofs, as
+// globals a tactic can name. A closer takes `norm_num_true()` where its
+// parameter says `verdict = True`, which converts by evaluating the verdict.
+fn norm_num_yes() → Bool { True }
+fn norm_num_no() → Bool { False }
+theorem norm_num_true(): norm_num_yes() = True { refl }
+theorem norm_num_false(): norm_num_no() = False { refl }
+
+// `Lt` at `Nat` and `Int` as one verdict over its two sides, so its
+// closers take the sides as written.
+fn norm_num_nat_ltb(n, m: Nat) → Bool { Succ(n).leb(m) }
+theorem norm_num_nat_lt(n, m: Nat, h: norm_num_nat_ltb(n, m) = True): n < m { Succ(n).le_of_leb(m, h) }
+theorem norm_num_nat_not_lt(n, m: Nat, h: norm_num_nat_ltb(n, m) = False): ¬(n < m) { Succ(n).not_le_of_leb(m, h) }
+fn norm_num_int_ltb(a, b: Int) → Bool { a.isucc().leb(b) }
+theorem norm_num_int_lt(a, b: Int, h: norm_num_int_ltb(a, b) = True): a < b { a.isucc().le_of_leb(b, h) }
+theorem norm_num_int_not_lt(a, b: Int, h: norm_num_int_ltb(a, b) = False): ¬(a < b) { a.isucc().not_le_of_leb(b, h) }
+
+fn norm_num_global(name: String) → Tac<GlobalRef> {
+    lookup(name).bind(λ c => match c { Accepted(g) => Pure(g), Refused(why) => fail("norm_num: " ++ why, []) })
+}
+
+// A global the goal might mention, or `None` where its name does not
+// resolve (a client that does not import `dyadic` has no goals at `Dyadic`).
+fn norm_num_try(name: String) → Tac<Option<GlobalRef>> {
+    lookup(name).bind(λ c => match c { Accepted(g) => Pure(Some(g)), Refused(_) => Pure(None) })
+}
+
+fn norm_num_is(o: Option<GlobalRef>, g: GlobalRef) → Bool { match o { None => False, Some(r) => g.id.same(r.id) } }
+
+fn norm_num_apps(f: Expr, args: List<Expr>) → Expr { match args { Nil => f, Cons(a, rest) => norm_num_apps(App(f, a), rest) } }
+
+fn norm_num_call(name: String, args: List<Expr>) → Tac<Expr> { norm_num_global(name).bind(λ g => Pure(norm_num_apps(Global(g), args))) }
+
+fn norm_num_arg(args: List<Handle>, i: Nat) → Option<Handle> {
+    match args { Nil => None, Cons(a, rest) => match i { Zero => Some(a), Succ(j) => norm_num_arg(rest, j) } }
+}
+
+// ---------------------------------------------------------------------------
+// Checks.
+
+// One way to prove the goal: each verdict must evaluate to `want`, and
+// `close`, applied to one proof per verdict, proves the goal.
+record NormNumCheck { verdicts: List<Expr>, want: Bool, close: Expr }
+
+// Whether every verdict evaluates to the Boolean `c` names.
+fn norm_num_all(vs: List<Expr>, c: Expr) → Tac<Bool> {
+    match vs {
+        Nil => Pure(True),
+        Cons(v, rest) => defeq(v, c).bind(λ same => match same { True => norm_num_all(rest, c), False => Pure(False) }),
+    }
+}
+
+// Whether some verdict evaluates to the Boolean `c` names.
+fn norm_num_any(vs: List<Expr>, c: Expr) → Tac<Bool> {
+    match vs {
+        Nil => Pure(False),
+        Cons(v, rest) => defeq(v, c).bind(λ same => match same { True => Pure(True), False => norm_num_any(rest, c) }),
+    }
+}
+
+fn norm_num_const(b: Bool) → Tac<Expr> {
+    match b { True => norm_num_call("norm_num_yes", []), False => norm_num_call("norm_num_no", []) }
+}
+
+fn norm_num_proof(b: Bool) → Tac<Expr> {
+    match b { True => norm_num_call("norm_num_true", []), False => norm_num_call("norm_num_false", []) }
+}
+
+fn norm_num_proofs(vs: List<Expr>, p: Expr) → List<Expr> { match vs { Nil => Nil, Cons(_, rest) => Cons(p, norm_num_proofs(rest, p)) } }
+
+// Whether every check is refuted: some verdict of each evaluates to the
+// opposite of what it wants. Then the goal is false.
+fn norm_num_refuted(cs: List<NormNumCheck>) → Tac<Bool> {
+    match cs {
+        Nil => Pure(True),
+        Cons(c, rest) => norm_num_const(!c.want).bind(λ k => norm_num_any(c.verdicts, k).bind(λ no => match no {
+            True => norm_num_refuted(rest),
+            False => Pure(False),
+        })),
+    }
+}
+
+fn norm_num_stuck<A>(target: Handle) → Tac<A> {
+    fail("norm_num: the two sides do not evaluate to numbers", [At(Hd(target), Tried("the goal", "every subterm of a side must compute; a variable or an opaque definition does not"))])
+}
+
+// The first check that holds, as the goal's proof. When none does, the
+// goal is either false (every check is refuted) or a side is stuck.
+fn norm_num_first(target: Handle, all: List<NormNumCheck>, cs: List<NormNumCheck>) → Tac<Expr> {
+    match cs {
+        Nil => norm_num_refuted(all).bind(λ no => match no {
+            True => fail("norm_num: the goal is false", [At(Hd(target), Tried("the goal", "its two sides evaluate, and the evaluation refutes it"))]),
+            False => norm_num_stuck(target),
+        }),
+        Cons(c, rest) => norm_num_const(c.want).bind(λ k => norm_num_all(c.verdicts, k).bind(λ yes => match yes {
+            True => norm_num_proof(c.want).bind(λ p => Pure(norm_num_apps(c.close, norm_num_proofs(c.verdicts, p)))),
+            False => norm_num_first(target, all, rest),
+        })),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The relations and their closers.
+
+inductive NormNumRel { NNSame, NNLe, NNLt, NNApart }
+
+// How one carrier decides its relations, by name: the verdicts (each takes
+// the two sides' values) and the closers (each takes `args`, then the
+// verdicts' proofs). `same` decides the carrier's equality, `=` at `Nat`
+// and `Int`, `≈` elsewhere.
+record NormNumNames {
+    vsame: String, vle: String, vlt: String,
+    same: String, not_same: String, le: String, not_le: String, lt: String, not_lt: String,
+    apart_lt: String, apart_gt: String, not_apart: String,
+}
+
+fn norm_num_nat_names() → NormNumNames {
+    NormNumNames("Nat::same", "Nat::leb", "norm_num_nat_ltb", "Nat::same_sound", "Nat::ne_of_same", "Nat::le_of_leb", "Nat::not_le_of_leb",
+        "norm_num_nat_lt", "norm_num_nat_not_lt", "", "", "")
+}
+
+fn norm_num_int_names() → NormNumNames {
+    NormNumNames("Int::same", "Int::leb", "norm_num_int_ltb", "Int::same_sound", "Int::ne_of_same", "Int::le_of_leb", "Int::not_le_of_leb",
+        "norm_num_int_lt", "norm_num_int_not_lt", "", "", "")
+}
+
+fn norm_num_rat_names() → NormNumNames {
+    NormNumNames("Rat::same_bool", "Rat::le_bool", "Rat::lt_bool", "Rat::same_of_bool", "Rat::not_same_of_bool", "Rat::le_of_bool", "Rat::not_le_of_bool",
+        "Rat::lt_of_bool", "Rat::not_lt_of_bool", "Rat::apart_of_lt_bool", "Rat::apart_of_gt_bool", "Rat::not_apart_of_bool")
+}
+
+fn norm_num_real_names() → NormNumNames {
+    NormNumNames("Rat::same_bool", "Rat::le_bool", "Rat::lt_bool", "NumReal::same_of", "NumReal::not_same_of", "NumReal::le_of", "NumReal::not_le_of",
+        "NumReal::lt_of", "NumReal::not_lt_of", "NumReal::apart_of_lt", "NumReal::apart_of_gt", "NumReal::not_apart_of")
+}
+
+fn norm_num_one(verdict: Expr, want: Bool, close: String, args: List<Expr>) → Tac<NormNumCheck> {
+    norm_num_call(close, args).bind(λ c => Pure(NormNumCheck([verdict], want, c)))
+}
+
+// The checks for `rel` between values `l` and `r`, negated or not; `args`
+// are what the closers take before the proofs.
+fn norm_num_checks(N: NormNumNames, rel: NormNumRel, neg: Bool, l, r: Expr, args: List<Expr>) → Tac<List<NormNumCheck>> {
+    match rel {
+        NNSame => norm_num_call(N.vsame, [l, r]).bind(λ v => match neg {
+            False => norm_num_one(v, True, N.same, args).bind(λ c => Pure([c])),
+            True => norm_num_one(v, False, N.not_same, args).bind(λ c => Pure([c])),
+        }),
+        NNLe => norm_num_call(N.vle, [l, r]).bind(λ v => match neg {
+            False => norm_num_one(v, True, N.le, args).bind(λ c => Pure([c])),
+            True => norm_num_one(v, False, N.not_le, args).bind(λ c => Pure([c])),
+        }),
+        NNLt => norm_num_call(N.vlt, [l, r]).bind(λ v => match neg {
+            False => norm_num_one(v, True, N.lt, args).bind(λ c => Pure([c])),
+            True => norm_num_one(v, False, N.not_lt, args).bind(λ c => Pure([c])),
+        }),
+        NNApart => norm_num_call(N.vlt, [l, r]).bind(λ below => norm_num_call(N.vlt, [r, l]).bind(λ above => match neg {
+            False => norm_num_one(below, True, N.apart_lt, args).bind(λ c1 => norm_num_one(above, True, N.apart_gt, args).bind(λ c2 => Pure([c1, c2]))),
+            True => norm_num_call(N.not_apart, args).bind(λ c => Pure([NormNumCheck([below, above], False, c)])),
+        })),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reading `CReal` sides into `NumReal` trees.
+
+// The heads the reader compares against and the constructors it builds
+// with, looked up once per run, at a goal at `CReal`.
+record NormNumRealHeads {
+    add: GlobalRef, sub: GlobalRef, neg: GlobalRef, mul: GlobalRef, npow: GlobalRef, pow: GlobalRef, abs: GlobalRef, inv: GlobalRef, embed: GlobalRef,
+    q: GlobalRef, nadd: GlobalRef, nsub: GlobalRef, nneg: GlobalRef, nmul: GlobalRef, npw: GlobalRef, nabs: GlobalRef, ninv: GlobalRef, nzpow: GlobalRef,
+    wq: GlobalRef, wtwo: GlobalRef, wat: GlobalRef, same: GlobalRef, term: GlobalRef,
+}
+
+fn norm_num_real_global(name: String) → Tac<GlobalRef> {
+    lookup(name).bind(λ c => match c {
+        Accepted(g) => Pure(g),
+        Refused(why) => fail("norm_num: a goal at `CReal` needs `import norm_num_real;`", [Tried(name, why)]),
+    })
+}
+
+fn norm_num_real_heads() → Tac<NormNumRealHeads> {
+    norm_num_global("CReal::add").bind(λ add => norm_num_global("CReal::sub").bind(λ sub => norm_num_global("CReal::neg").bind(λ neg =>
+    norm_num_global("CReal::mul").bind(λ mul => norm_num_global("CReal::npow").bind(λ npow => norm_num_global("CReal::pow").bind(λ pow =>
+    norm_num_global("CReal::abs").bind(λ abs => norm_num_global("CReal::inv").bind(λ inv => norm_num_global("CReal::ofRat").bind(λ embed =>
+    norm_num_real_global("norm_num_q").bind(λ q => norm_num_real_global("norm_num_add").bind(λ nadd => norm_num_real_global("norm_num_sub").bind(λ nsub =>
+    norm_num_real_global("norm_num_neg").bind(λ nneg => norm_num_real_global("norm_num_mul").bind(λ nmul => norm_num_real_global("norm_num_pow").bind(λ npw =>
+    norm_num_real_global("norm_num_abs").bind(λ nabs => norm_num_real_global("norm_num_inv").bind(λ ninv => norm_num_real_global("norm_num_zpow").bind(λ nzpow =>
+    norm_num_real_global("norm_num_wf_q").bind(λ wq => norm_num_real_global("norm_num_wf_two").bind(λ wtwo => norm_num_real_global("norm_num_wf_at").bind(λ wat =>
+    norm_num_global("CReal::same_refl").bind(λ same => norm_num_real_global("norm_num_term").bind(λ term =>
+        Pure(NormNumRealHeads(add, sub, neg, mul, npow, pow, abs, inv, embed, q, nadd, nsub, nneg, nmul, npw, nabs, ninv, nzpow, wq, wtwo, wat, same, term)))))))))))))))))))))))))
+}
+
+// A tree read off a real, with its well-formedness witness.
+record NormNumRead { tree: Expr, wf: Expr }
+
+inductive NormNumOp { NOLeaf, NOAdd, NOSub, NONeg, NOMul, NONpow, NOPow, NOAbs, NOInv, NOEmbed }
+
+fn norm_num_op(H: NormNumRealHeads, g: GlobalRef) → NormNumOp {
+    match g.id.same(H.add.id) { True => NOAdd, False =>
+    match g.id.same(H.sub.id) { True => NOSub, False =>
+    match g.id.same(H.mul.id) { True => NOMul, False =>
+    match g.id.same(H.neg.id) { True => NONeg, False =>
+    match g.id.same(H.npow.id) { True => NONpow, False =>
+    match g.id.same(H.pow.id) { True => NOPow, False =>
+    match g.id.same(H.abs.id) { True => NOAbs, False =>
+    match g.id.same(H.inv.id) { True => NOInv, False =>
+    match g.id.same(H.embed.id) { True => NOEmbed, False => NOLeaf } } } } } } } } }
+}
+
+fn norm_num_exact(H: NormNumRealHeads, q: Expr) → NormNumRead { NormNumRead(App(Global(H.q), q), Global(H.wq)) }
+
+// A real the reader has no node for is a leaf when it is
+// `CReal::ofRat(q)` up to unfolding (a numeral, a constant defined as one):
+// then it is the embedding of its own first term, `norm_num_term(x)`, by
+// conversion, which is asked here so that a real that is not (a variable)
+// fails with its reason.
+fn norm_num_leaf(H: NormNumRealHeads, h: Handle) → Tac<NormNumRead> {
+    let q = App(Global(H.term), Hd(h));
+    defeq(Hd(h), App(Global(H.embed), q)).bind(λ same => match same {
+        True => Pure(norm_num_exact(H, q)),
+        False => fail("norm_num: a side is not a closed real expression", [
+            At(Hd(h), Tried("this real", "not `CReal::ofRat(q)` up to unfolding, nor `+ - * npow ^ ⁻¹ abs` of such"))]),
+    })
+}
+
+// The proof an inverse or a power takes, at `args[i]`: as written, or, when
+// the call left it to be inferred (the view lists only what a call
+// writes), a hole of the type `partial` takes next, solved by comparing
+// `call` applied to it with the node `h` read.
+fn norm_num_proof_arg(args: List<Handle>, i: Nat, partial: Expr, call: Expr, h: Handle) → Tac<Expr> {
+    match norm_num_arg(args, i) {
+        Some(p) => Pure(Hd(p)),
+        None => infer(partial).bind(λ c => match c {
+            Refused(why) => fail("norm_num: " ++ why, []),
+            Accepted(ty) => view(ty).bind(λ v => match v {
+                HPi(dom) => hole(dom).bind(λ hc => match hc {
+                    Refused(why) => fail("norm_num: " ++ why, []),
+                    Accepted(p) => defeq(App(call, Hd(p)), Hd(h)).bind(λ same => match same {
+                        True => Pure(Hd(p)),
+                        False => fail("norm_num: the proof an inverse or a power was given is not found", [At(Hd(h), Tried("this real", "its proof argument"))]),
+                    }),
+                }),
+                _ => fail("norm_num: a tree node does not take a proof", []),
+            }),
+        }),
+    }
+}
+
+fn norm_num_two(H: NormNumRealHeads, c: GlobalRef, ra, rb: NormNumRead) → NormNumRead {
+    NormNumRead(norm_num_apps(Global(c), [ra.tree, rb.tree]), norm_num_apps(Global(H.wtwo), [ra.tree, rb.tree, ra.wf, rb.wf]))
+}
+
+// A node that holds the real `x` it was read from beside its tree.
+fn norm_num_at_real(H: NormNumRealHeads, tree: Expr, ra: NormNumRead, x: Expr) → NormNumRead {
+    NormNumRead(tree, norm_num_apps(Global(H.wat), [ra.tree, x, App(Global(H.same), x), ra.wf]))
+}
+
+// The tree for `h`. `fuel` bounds the depth; past it a term must be a leaf.
+fn norm_num_reify(H: NormNumRealHeads, fuel: Nat, h: Handle) → Tac<NormNumRead> {
+    match fuel {
+        Zero => norm_num_leaf(H, h),
+        Succ(f) => view(h).bind(λ v => match v {
+            HGlobal(g, _, args) => match norm_num_arg(args, 0) {
+                None => norm_num_leaf(H, h),
+                Some(a) => match norm_num_op(H, g) {
+                    NOLeaf => norm_num_leaf(H, h),
+                    NOEmbed => Pure(norm_num_exact(H, Hd(a))),
+                    NONeg => norm_num_reify(H, f, a).bind(λ ra => Pure(NormNumRead(App(Global(H.nneg), ra.tree), ra.wf))),
+                    NOAbs => norm_num_reify(H, f, a).bind(λ ra => Pure(NormNumRead(App(Global(H.nabs), ra.tree), ra.wf))),
+                    NONpow => match norm_num_arg(args, 1) {
+                        None => norm_num_leaf(H, h),
+                        Some(n) => norm_num_reify(H, f, a).bind(λ ra => Pure(NormNumRead(norm_num_apps(Global(H.npw), [ra.tree, Hd(n)]), ra.wf))),
+                    },
+                    NOInv => norm_num_reify(H, f, a).bind(λ ra =>
+                        norm_num_proof_arg(args, 1, norm_num_apps(Global(H.ninv), [ra.tree, Hd(a)]), App(Global(H.inv), Hd(a)), h).bind(λ p =>
+                            Pure(norm_num_at_real(H, norm_num_apps(Global(H.ninv), [ra.tree, Hd(a), p]), ra, Hd(a))))),
+                    NOPow => match norm_num_arg(args, 1) {
+                        None => norm_num_leaf(H, h),
+                        Some(n) => norm_num_reify(H, f, a).bind(λ ra =>
+                            norm_num_proof_arg(args, 2, norm_num_apps(Global(H.nzpow), [ra.tree, Hd(a), Hd(n)]), norm_num_apps(Global(H.pow), [Hd(a), Hd(n)]), h).bind(λ p =>
+                                Pure(norm_num_at_real(H, norm_num_apps(Global(H.nzpow), [ra.tree, Hd(a), Hd(n), p]), ra, Hd(a))))),
+                    },
+                    NOAdd => match norm_num_arg(args, 1) {
+                        None => norm_num_leaf(H, h),
+                        Some(b) => norm_num_reify(H, f, a).bind(λ ra => norm_num_reify(H, f, b).bind(λ rb => Pure(norm_num_two(H, H.nadd, ra, rb)))),
+                    },
+                    NOSub => match norm_num_arg(args, 1) {
+                        None => norm_num_leaf(H, h),
+                        Some(b) => norm_num_reify(H, f, a).bind(λ ra => norm_num_reify(H, f, b).bind(λ rb => Pure(norm_num_two(H, H.nsub, ra, rb)))),
+                    },
+                    NOMul => match norm_num_arg(args, 1) {
+                        None => norm_num_leaf(H, h),
+                        Some(b) => norm_num_reify(H, f, a).bind(λ ra => norm_num_reify(H, f, b).bind(λ rb => Pure(norm_num_two(H, H.nmul, ra, rb)))),
+                    },
+                },
+            },
+            _ => norm_num_leaf(H, h),
+        }),
+    }
+}
+
+fn norm_num_real_checks(rel: NormNumRel, neg: Bool, l, r: Handle) → Tac<List<NormNumCheck>> {
+    norm_num_real_heads().bind(λ H => norm_num_reify(H, 1024, l).bind(λ rl => norm_num_reify(H, 1024, r).bind(λ rr =>
+    norm_num_real_global("NumReal::rat").bind(λ value =>
+        norm_num_checks(norm_num_real_names(), rel, neg, App(Global(value), rl.tree), App(Global(value), rr.tree), [rl.tree, rr.tree, rl.wf, rr.wf])))))
+}
+
+// ---------------------------------------------------------------------------
+// Reading the goal.
+
+fn norm_num_not_fact<A>(target: Handle) → Tac<A> {
+    fail("norm_num: the goal is not `=`, `≈`, `<`, `<=` or `Apart` between numbers, or the negation of one",
+        [At(Hd(target), Tried("the goal", "read at `Nat`, `Int`, `Rat`, `Dyadic`, `Finite(F)` and `CReal`"))])
+}
+
+// Whether `l` is a value of the type `f` takes first: the application is
+// checked like any term, so it is accepted only at that type.
+fn norm_num_takes(f: String, l: Handle) → Tac<Bool> {
+    norm_num_try(f).bind(λ o => match o {
+        None => Pure(False),
+        Some(g) => infer(App(Global(g), Hd(l))).bind(λ c => match c { Accepted(_) => Pure(True), Refused(_) => Pure(False) }),
+    })
+}
+
+// `l = r`: decided at `Nat` and `Int`. Elsewhere `=` is representation
+// identity (`1/2` and `2/4` differ), which the verdicts do not decide.
+fn norm_num_eq(target, l, r: Handle, neg: Bool) → Tac<List<NormNumCheck>> {
+    norm_num_takes("Nat::same", l).bind(λ is_nat => match is_nat {
+        True => norm_num_checks(norm_num_nat_names(), NNSame, neg, Hd(l), Hd(r), [Hd(l), Hd(r)]),
+        False => norm_num_takes("Int::same", l).bind(λ is_int => match is_int {
+            True => norm_num_checks(norm_num_int_names(), NNSame, neg, Hd(l), Hd(r), [Hd(l), Hd(r)]),
+            False => fail("norm_num: `=` is decided at `Nat` and `Int`; at `Rat`, `Dyadic`, the floats and `CReal` state `≈`",
+                [At(Hd(target), Tried("the goal", "an equation at another type"))]),
+        }),
+    })
+}
+
+// The format `F` of the sides at `Finite(F)`, the argument `Finite::val`
+// takes implicitly: a hole, which checking `Finite::val(F, l)` solves.
+fn norm_num_format(value: GlobalRef) → Tac<Handle> {
+    infer(Global(value)).bind(λ c => match c {
+        Refused(why) => fail("norm_num: " ++ why, []),
+        Accepted(ty) => view(ty).bind(λ v => match v {
+            HPi(dom) => hole(dom).bind(λ h => match h { Accepted(F) => Pure(F), Refused(why) => fail("norm_num: " ++ why, []) }),
+            _ => fail("norm_num: `Finite::val` is not a function", []),
+        }),
+    })
+}
+
+// Which carrier, and which relation, `rel` is; `None` when it is none of
+// the ones read. Each carrier's relations are looked up only when the
+// earlier ones did not match.
+inductive NormNumCarrier { NCNat, NCInt, NCRat, NCDyadic, NCFinite, NCReal }
+record NormNumAt { carrier: NormNumCarrier, rel: NormNumRel }
+
+fn norm_num_among(g: GlobalRef, c: NormNumCarrier, names: List<String>, rels: List<NormNumRel>, rest: Tac<Option<NormNumAt>>) → Tac<Option<NormNumAt>> {
+    match names {
+        Nil => rest,
+        Cons(n, ns) => match rels {
+            Nil => rest,
+            Cons(k, ks) => norm_num_try(n).bind(λ o => match norm_num_is(o, g) {
+                True => Pure(Some(NormNumAt(c, k))),
+                False => norm_num_among(g, c, ns, ks, rest),
+            }),
+        },
+    }
+}
+
+fn norm_num_which(g: GlobalRef) → Tac<Option<NormNumAt>> {
+    norm_num_among(g, NCRat, ["Rat::Same", "Rat::Le", "Rat::Lt", "Rat::Apart"], [NNSame, NNLe, NNLt, NNApart],
+    norm_num_among(g, NCNat, ["Nat::Le", "Nat::Lt"], [NNLe, NNLt],
+    norm_num_among(g, NCInt, ["Int::Le", "Int::Lt"], [NNLe, NNLt],
+    norm_num_among(g, NCDyadic, ["Dyadic::Same", "Dyadic::Le", "Dyadic::Lt"], [NNSame, NNLe, NNLt],
+    norm_num_among(g, NCFinite, ["Finite::Same", "Finite::Le", "Finite::Lt"], [NNSame, NNLe, NNLt],
+    norm_num_among(g, NCReal, ["CReal::Same", "CReal::Le", "CReal::Lt", "CReal::Apart"], [NNSame, NNLe, NNLt, NNApart], Pure(None)))))))
+}
+
+fn norm_num_rel(target: Handle, g: GlobalRef, l, r: Handle, neg: Bool) → Tac<List<NormNumCheck>> {
+    norm_num_which(g).bind(λ w => match w {
+        None => norm_num_not_fact(target),
+        Some(at) => match at.carrier {
+            NCNat => norm_num_checks(norm_num_nat_names(), at.rel, neg, Hd(l), Hd(r), [Hd(l), Hd(r)]),
+            NCInt => norm_num_checks(norm_num_int_names(), at.rel, neg, Hd(l), Hd(r), [Hd(l), Hd(r)]),
+            NCRat => norm_num_checks(norm_num_rat_names(), at.rel, neg, Hd(l), Hd(r), [Hd(l), Hd(r)]),
+            NCDyadic => norm_num_global("Dyadic::rat").bind(λ value => {
+                let vl = App(Global(value), Hd(l));
+                let vr = App(Global(value), Hd(r));
+                norm_num_checks(norm_num_rat_names(), at.rel, neg, vl, vr, [vl, vr])
+            }),
+            NCFinite => norm_num_global("Finite::val").bind(λ value => norm_num_format(value).bind(λ F => {
+                let vl = norm_num_apps(Global(value), [Hd(F), Hd(l)]);
+                let vr = norm_num_apps(Global(value), [Hd(F), Hd(r)]);
+                norm_num_checks(norm_num_rat_names(), at.rel, neg, vl, vr, [vl, vr])
+            })),
+            NCReal => norm_num_real_checks(at.rel, neg, l, r),
+        },
+    })
+}
+
+// A relation's two sides, from a view of it.
+fn norm_num_sides(target: Handle, g: GlobalRef, args: List<Handle>, neg: Bool) → Tac<List<NormNumCheck>> {
+    match norm_num_arg(args, 0) {
+        None => norm_num_not_fact(target),
+        Some(l) => match norm_num_arg(args, 1) {
+            None => norm_num_not_fact(target),
+            Some(r) => norm_num_rel(target, g, l, r, neg),
+        },
+    }
+}
+
+// `¬(l = r)`, written `l ≠ r`: an equation under `Not` is held as a code,
+// which the view does not present, so it is read off the negation's binder
+// in head normal form.
+fn norm_num_negated_eq(target: Handle) → Tac<List<NormNumCheck>> {
+    open(target, "h").bind(λ c => match c {
+        Refused(_) => norm_num_not_fact(target),
+        Accepted(o) => whnf(o.local.ty).bind(λ w => match w {
+            Refused(_) => norm_num_not_fact(target),
+            Accepted(p) => view(p).bind(λ pv => match pv { HEq(l, r) => norm_num_eq(target, l, r, True), _ => norm_num_not_fact(target) }),
+        }),
+    })
+}
+
+fn norm_num_plan(target: Handle) → Tac<List<NormNumCheck>> {
+    view(target).bind(λ v => match v {
+        HEq(l, r) => norm_num_eq(target, l, r, False),
+        HGlobal(g, _, args) => norm_num_try("Not").bind(λ not => match norm_num_is(not, g) {
+            False => norm_num_sides(target, g, args, False),
+            True => match norm_num_arg(args, 0) {
+                None => norm_num_not_fact(target),
+                Some(p) => view(p).bind(λ pv => match pv {
+                    HEq(l, r) => norm_num_eq(target, l, r, True),
+                    HGlobal(g2, _, args2) => norm_num_sides(target, g2, args2, True),
+                    _ => norm_num_negated_eq(target),
+                }),
+            },
+        }),
+        _ => norm_num_not_fact(target),
+    })
+}
+
+// `norm_num` at a statement: the step other tactics call on a numeral side
+// goal.
+fn norm_num_at(target: Handle) → Tac<Expr> {
+    norm_num_plan(target).bind(λ cs => norm_num_first(target, cs, cs))
+}
+
+// `norm_num()`: prove the goal by evaluating it.
+fn norm_num() → Tac<Expr> { goal().bind(λ g => norm_num_at(g.target)) }
