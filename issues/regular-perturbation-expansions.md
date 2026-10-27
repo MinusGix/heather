@@ -19,7 +19,7 @@ Scope:
   Newton lemma;
 - instances: a parametrised contraction, and as the first acceptance probe
   the worked example of §10.1: `x² + εx − 1 = 0` near `1`, the truncation
-  `1 − ε/2 + ε²/8` by Newton in `Rat[[ε]]`, its residual `ε⁴/64` by `ring`,
+  `1 − ε/2 + ε²/8` by Newton on series in `ε`, its residual `ε⁴/64` by `ring`,
   and the certified expansion with `|R| ≤ C·|ε|⁴` from Kantorovich;
 - singular perturbation of algebraic equations: Puiseux exponents from the
   Newton polygon;
