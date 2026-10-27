@@ -43,3 +43,12 @@ normaliser.
 ## What it assumes from elsewhere
 - **[[ring-inequalities]]**: the polynomial normaliser.
 - **[[ordered-algebra-api]]**: the class laws a certificate is checked against.
+
+## Log
+
+- 2026-10-27: [[field-simp]] closed for equations: `ring` at a field clears
+  denominators itself (docs/ring-normalization-design.md §9), the
+  reciprocals' multipliers computed by elimination. The inequality form it
+  left (positive denominators preserve `<=`, so `a * d⁻¹ <= b` becomes
+  `a <= b * d` given `0 < d`) belongs here: the cleared polynomial and the
+  denominator product are what `clear_denominators` already returns.

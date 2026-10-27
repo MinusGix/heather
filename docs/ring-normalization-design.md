@@ -277,3 +277,88 @@ conversion that reads `eval_rel` back unfolds the instance dictionary's
 projections once per operation node. The `Int` and `Nat` certificates are
 unchanged.
 
+
+## 9. Clearing denominators
+
+Added 2026-10-27 by [field-simp](../issues/field-simp.md). At a `≈` carrier
+`ring` proves identities of fields, not only of rings:
+
+```heather
+theorem halves(x: Rat): x * Rat::inv_succ(1) + x * Rat::inv_succ(1) ≈ x { ring }
+theorem sum(x, y: CReal, hx: x.Apart(0), hy: y.Apart(0), hxy: (x * y).Apart(0)):
+    x⁻¹ + y⁻¹ ≈ (x + y) * (x * y)⁻¹
+{ ring }
+theorem half_at(n: Nat): Rat::inv_succ(n + n + 1) + Rat::inv_succ(n + n + 1) ≈ Rat::inv_succ(n) { ring }
+```
+
+The issue asked for a `field_simp` step in front of `ring`. It is not a
+separate step: clearing is part of how `ring` reads a field goal, so there is
+no new surface and nothing to chain.
+
+**A reciprocal is an atom with a fact.** `x⁻¹` (the carrier's designated
+postfix `⁻¹`) is an atom `r`, read together with the lemma that sits beside
+the operation, `<op>_mul`: `x⁻¹ * x ≈ 1` (`Rat::inv_mul`, `CReal::inv_mul`).
+`Rat::inv_succ(n)` is read with `Rat::inv_succ_cancel`:
+`inv_succ(n) * (Rat::ofInt(OfNat(n)) + 1) ≈ 1`. Each fact is a polynomial
+`r·d − 1 = 0`, and the certificate cites it the way it cites a written
+hypothesis (`sound_with_rel`, `hyp_rel`), so the soundness proof of §8 is all
+there is. Apartness is the one `x⁻¹` was elaborated with (its `h := infer`
+found it when the goal was written), so clearing owes no side condition; the
+issue's "discharge from `Pos` binders, numerals and hypotheses" is the
+evidence search that already ran. A reciprocal whose fact cannot be written
+stays a plain atom.
+
+**The multipliers are computed, not searched for.** With `H = r·d − 1` and
+`P = Σ pₐ·rᵃ` (the `pₐ` free of `r`, `K` the top power):
+
+```text
+dᴷ·P = Σ pₐ·dᴷ⁻ᵃ·(rd)ᵃ = P′ + H·M      P′ = Σ pₐ·dᴷ⁻ᵃ,  M = Σ pₐ·dᴷ⁻ᵃ·Sₐ,  Sₐ = Σ_{t<a} (rd)ᵗ
+P = rᴷ·P′ + H·(rᴷ·M − S_K·P)
+```
+
+so `P` is a combination of the facts exactly when the cleared `P′` is.
+Eliminating every reciprocal, the last met first (a reciprocal inside
+another's denominator is met first, so it is still there to eliminate when the
+outer one's `d` brings it in), leaves a polynomial free of them that is zero
+exactly when the goal is an identity of fields at those denominators. A true
+identity is never missed, unlike §4's bounded search, and no multiplier has a
+fraction. Written hypotheses are searched for against what clearing leaves;
+failing that, every row is searched together. The Rust side checks its own
+combination before writing it.
+
+**Casts.** `inv_succ(n + n + 1)`'s denominator is `Rat::ofInt(OfNat(n + n +
+1))`, which no ring identity relates to `ofInt(OfNat(n))`. A cast of a `Nat`
+sum, product or successor is therefore an atom `c` read with a definition
+`c ≈ e` that pushes the embedding one level in — `RingExpr::of_nat_add`,
+`of_nat_mul`, `of_nat_succ`, stated once in the `CommRingOfInt` section of
+`ring.hthr` — and `e`'s casts are read the same way down to atoms and
+numerals. A definition is eliminated by substitution
+(`cᵃ − eᵃ = (c − e)·Σ_{t<a} cᵗ·eᵃ⁻¹⁻ᵗ`). A cast is recognized by its spelling,
+`…OfNat(e)…` with only closing parentheses after it, and confirmed by
+converting the atom to the lemma's left side (`of_int` at the same `e`), so
+the same reading serves `CReal::ofRat(Rat::ofInt(OfNat(e)))`.
+
+**Refusals.** A goal that is not an identity is named by what clearing leaves,
+with both it and the product of the denominators divided by the largest
+monomial they share: `x⁻¹ + y⁻¹ ≈ (x * y)⁻¹` reports that, multiplied by
+`x * y`, the sides differ by `y + x - 1`. The product is the denominators'
+product, not their least common multiple; only the message would change.
+
+**Where it is used.** `CReal`'s regularity proofs carried calc chains of
+`inv_succ_half` and `add_respects` / `add_add_add_comm` rearrangements; five
+of them are now one `ring` step each. `Rat::inv_succ_mul` and
+`Rat::inv_succ_half` themselves are now `ring`'s too
+(`lib/_tests/std/tactic/ring_field_tests.hthr`), though they keep their proofs:
+they are stated before `CommRingOfInt<Rat>`.
+
+**Not in this round.**
+
+- The inequality form (positive denominators preserve `≤`), the consumer
+  being [linarith-ordered-fields](../issues/linarith-ordered-fields.md).
+- Reciprocals at a generic `OrderedField` (`A.recip(x, h)`): the relation
+  reading needs a concrete carrier with a `CommRingOfInt` instance.
+- `Rat::recip` (total) and `x ^ n`: atoms. The first needs a searched
+  apartness to state its fact; the second a power reading.
+- A field read such as `x.seq(n)` inside the goal does not spell as source,
+  which refuses the whole reading; the `CReal` proofs above apply `ring`
+  under `add_respects` for that reason.

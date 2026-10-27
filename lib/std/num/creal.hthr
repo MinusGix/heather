@@ -33,6 +33,7 @@ import logic;
 import nat;
 import int;
 import omega;
+import ring;
 import relation_props;
 import algebra;
 import algebra_rel;
@@ -169,12 +170,9 @@ theorem CReal::bishop_of_same({x, y: CReal}, h: x ≈ y): x.BishopSame(y) {
                     calc {
                         (x.seq(n) - y.seq(n)).abs() <= (x.seq(n) - y.seq(m)).abs() + (y.seq(m) - y.seq(n)).abs() := x.seq(n).dist_triangle(y.seq(m), y.seq(n)),
                         <= ((fine + q) + q) + (q + fine) := Rat::add_le_mono(near, dy),
-                        ≈ (fine + (q + q)) + (q + fine) := Rat::add_respects(fine.add_assoc(q, q), (q + fine).same_refl()),
-                        ≈ (fine + (q + q)) + (fine + q) := Rat::add_respects((fine + (q + q)).same_refl(), q.add_comm(fine)),
-                        ≈ (fine + fine) + ((q + q) + q) := fine.add_add_add_comm(q + q, fine, q),
+                        ≈ (fine + fine) + ((q + q) + q) := ring,
                         <= (fine + fine) + ((q + q) + (q + q)) := ((q + q) + q).add_le_mono_l((q + q) + (q + q), fine + fine, q.add_le_mono_l(q + q, q + q, spare)),
-                        ≈ (fine + fine) + (quarter + quarter) := Rat::add_respects((fine + fine).same_refl(), Rat::add_respects(Rat::inv_succ_half(j2), Rat::inv_succ_half(j2))),
-                        ≈ (fine + fine) + Rat::inv_succ(j) := Rat::add_respects((fine + fine).same_refl(), Rat::inv_succ_half(j)),
+                        ≈ (fine + fine) + Rat::inv_succ(j) := ring,
                     }
                 },
             }
@@ -235,8 +233,7 @@ theorem CReal::add_regular(self x, y: CReal, m, n: Nat):
     calc {
         ((x.seq(m + m + 1) + y.seq(m + m + 1)) - (x.seq(n + n + 1) + y.seq(n + n + 1))).abs()
             <= (hm + hn) + (hm + hn) := Rat::dist_add_le(x.regular(m + m + 1, n + n + 1), y.regular(m + m + 1, n + n + 1)),
-            ≈ (hm + hm) + (hn + hn) := hm.add_add_add_comm(hn, hm, hn),
-            ≈ Rat::inv_succ(m) + Rat::inv_succ(n) := Rat::add_respects(Rat::inv_succ_half(m), Rat::inv_succ_half(n)),
+            ≈ Rat::inv_succ(m) + Rat::inv_succ(n) := ring,
     }
 }
 
@@ -678,8 +675,7 @@ theorem CReal::lt_of_term(self x, y: CReal, k, n: Nat, far: 16 * k + 15 <= n,
     let e = Rat::inv_succ(k8);
     let at_n: (k8 + k8 + 1 <= n) = omega;
     let gap = calc {
-        x.seq(n) + (q + (e + e)) ≈ x.seq(n) + (q + q) := Rat::add_respects(x.seq(n).same_refl(), Rat::add_respects(q.same_refl(), Rat::inv_succ_half(k4))),
-        ≈ x.seq(n) + Rat::inv_succ(k2) := Rat::add_respects(x.seq(n).same_refl(), Rat::inv_succ_half(k2)),
+        x.seq(n) + (q + (e + e)) ≈ x.seq(n) + Rat::inv_succ(k2) := Rat::add_respects(x.seq(n).same_refl(), ring),
         <= y.seq(n) := h,
     };
     Exists(k4, Exists(n, λ m from => {
@@ -712,8 +708,7 @@ theorem CReal::lt_respects({x, x2, y, y2: CReal}, hx: x ≈ x2, hy: y ≈ y2, h:
                             };
                             let dy: ((y.seq(n) - y2.seq(n)).abs() <= e) = cy(n, at_j);
                             let wide = calc {
-                                x.seq(n) + (half + (e + e)) ≈ x.seq(n) + (half + half) := Rat::add_respects(x.seq(n).same_refl(), Rat::add_respects(half.same_refl(), Rat::inv_succ_half(k2))),
-                                ≈ x.seq(n) + Rat::inv_succ(k) := Rat::add_respects(x.seq(n).same_refl(), Rat::inv_succ_half(k)),
+                                x.seq(n) + (half + (e + e)) ≈ x.seq(n) + Rat::inv_succ(k) := Rat::add_respects(x.seq(n).same_refl(), ring),
                                 <= y.seq(n) := gap(n, at_s),
                             };
                             Rat::le_of_close_gap(Rat::le_add_of_dist(dx), Rat::le_add_of_dist(dy), wide)
