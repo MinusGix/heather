@@ -29,3 +29,7 @@ Scope:
 - **[[interval-elementary-functions]]** (closed) owns the rational case.
 - **[[real-functions-and-derivatives]]** owns continuity and derivatives at
   `CReal`, which one route to the laws goes through.
+
+## Log
+
+- 2026-10-27: docs/analysis-foundations-design.md §7 proposes the laws as formal identities ([[formal-power-series]]) carried through evaluation as a ring homomorphism ([[power-series-evaluation]]); no real derivatives needed.

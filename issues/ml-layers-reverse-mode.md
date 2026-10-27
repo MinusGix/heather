@@ -5,7 +5,7 @@ labels: [design,machine-learning]
 area: machine-learning
 milestone: [ml-layers]
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-27
 ---
 
 A small layer grammar (linear, pointwise activation, compose, fork,
@@ -32,3 +32,5 @@ values. Longer term this is a compiler pass and belongs with `hih-passes`.
   products and transpose with their basic laws.
 
 ## Log
+
+- 2026-10-27: The formal derivative and dual-number evaluation of polynomial programs are in [[formal-power-series]] (docs/analysis-foundations-design.md §4).
