@@ -36,9 +36,10 @@ theorems, checked at the `by` like any other term.
 - `depth := n` (both forms) bounds how many goals deep it splits; the
   default is 64.
 
-A block's `let` names are not among the goal's hypotheses as a tactic sees
-them (`Goal` lists binders, and a `let` is substituted), so a fact held in a
-`let` is passed with `mono_with([step])`.
+A block's `let` facts are among the goal's hypotheses (`Goal` lists them,
+docs/host-elaboration-interface-design.md §17), so `let step: (e <= …) = …`
+is found like a parameter. A projection of a hypothesis (`kq.left`) is not
+one, and is passed: `mono_with([kq.left])`.
 
 `calc` steps take it as their justification with `by`: `<= … := by mono()`.
 

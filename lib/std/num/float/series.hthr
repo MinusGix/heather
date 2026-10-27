@@ -128,7 +128,7 @@ theorem Series::decay(self s: Series, n: Nat, hs: s.start <= n, j: Nat): s.err(n
                 ≈ x := x.mul_one(),
             };
             let double = calc {
-                e + e <= s.term(m).abs() + s.term(m).abs() := by mono_with([step]),
+                e + e <= s.term(m).abs() + s.term(m).abs() := by mono(),
                 <= x := s.decay(n, hs, i),
                 ≈ x * h + x * h := Rat::same_sym(halves),
             };
@@ -319,10 +319,10 @@ theorem Interval::widen_has(T, S: Interval, p: Nat, {t, q: Rat}, {x: CReal}, ht:
                     (a - e).down(p).rat() <= (a - e).rat() := (a - e).down_le(p),
                     ≈ a.rat() - e.rat() := a.rat_sub(e),
                     <= q - e.rat() := by mono_with([kq.left]),
-                    <= q - (t.abs() + t.abs()) := by mono_with([eb]),
+                    <= q - (t.abs() + t.abs()) := by mono(),
                 };
                 let high = calc {
-                    q + (t.abs() + t.abs()) <= c.rat() + e.rat() := by mono_with([kq.right, eb]),
+                    q + (t.abs() + t.abs()) <= c.rat() + e.rat() := by mono_with([kq.right]),
                     ≈ (c + e).rat() := Rat::same_sym(c.rat_add(e)),
                     <= (c + e).up(p).rat() := (c + e).le_up(p),
                 };
