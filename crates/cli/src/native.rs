@@ -14,6 +14,7 @@ use heather_cli::{loader, semantic::SemanticSession};
 mod elf;
 mod emission;
 mod labels;
+mod lowered;
 mod support;
 use support::SUPPORT;
 mod verified;

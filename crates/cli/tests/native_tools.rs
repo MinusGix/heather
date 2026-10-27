@@ -1,8 +1,9 @@
-//! `tr a-z A-Z` and `yes`, compiled by the effectful source compiler and
-//! written as ELFs by `heather write-elf`, run as Linux processes beside GNU's
-//! (issues/native-source-bytes.md). Neither has a theorem of its own:
-//! `lib/native/native_tools.hthr` holds only the sources, and
-//! `native_compile_correct` is the proof of both.
+//! `tr a-z A-Z`, `yes`, `head -c 10` and `wc -l`, written with the builder
+//! (`native_build`), compiled by the effectful source compiler and written as
+//! ELFs by `heather write-elf`, run as Linux processes beside GNU's
+//! (issues/native-source-bytes.md, issues/native-source-builder.md). None has
+//! a theorem of its own: `lib/native/native_tools.hthr` holds only the
+//! tools, and `native_compile_correct` is the proof of each.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -138,6 +139,51 @@ fn compiled_yes_runs_as_gnu_yes() {
     if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
         let status = Command::new(&binary).stdout(Stdio::from(full)).stderr(Stdio::null()).status().unwrap();
         assert_eq!(status.code(), Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn compiled_head_runs_as_gnu_head() {
+    let dir = scratch("head");
+    let binary = dir.join("head");
+    write_tool("head_c10_source", &binary);
+
+    // Shorter than ten bytes, exactly ten, and longer than a buffer.
+    let mut random = Bytes::seeded("head");
+    let bytes = random.take(70000, |r| r as u8);
+    for input in [&b""[..], b"abc", b"0123456789", b"0123456789abcdef", &bytes] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(Command::new("head").args(["-c", "10"]), input, Stdio::piped());
+        assert_eq!(code, Some(0), "head exits 0");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} bytes in)", input.len());
+    }
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no room\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn compiled_wc_counts_lines_as_gnu_wc() {
+    let dir = scratch("wc");
+    let binary = dir.join("wc");
+    write_tool("wc_l_source", &binary);
+
+    // Its count is its exit status, which Linux keeps the low byte of.
+    let mut random = Bytes::seeded("wc");
+    let lines = random.take(30000, |r| b"ab\n"[(r % 3) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    for input in [&b""[..], b"no newline", b"one\n", b"\n\n\n", &lines, &bytes] {
+        let (code, _) = run(&mut Command::new(&binary), input, Stdio::null());
+        let (_, gnu_out) = run(Command::new("wc").arg("-l"), input, Stdio::piped());
+        let count: u64 = String::from_utf8(gnu_out).unwrap().trim().parse().unwrap();
+        assert_eq!(code, Some((count % 256) as i32), "wc's status is GNU's count ({} bytes in)", input.len());
     }
 
     std::fs::remove_dir_all(dir).unwrap();

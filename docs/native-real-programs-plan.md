@@ -270,6 +270,15 @@ Two pieces make it pleasant:
   `refl`, one cheap declaration), and compiles that literal. The builder's
   evaluation then never adds to the emission check's cost.
 
+**Status.** Done (`issues/native-source-builder.md`), except reflected
+helpers (`issues/native-build-reflected-helpers.md`): a helper is a Heather
+function over the builder's values for now. `lib/native/native_build.hthr`
+binds words and buffers with Heather lambdas and cuts its nodes into leaves
+by a copy of what the compiler takes (`List::fits_leaf`), the one predicate
+round 4 relaxes. cat, tr, yes, `head -c` and `wc -l` are written with it
+(`lib/native/native_tools.hthr`). `write-elf` states every source it reads
+back as a literal, so the lowering is evaluated once.
+
 ### 3.4 Leaves: only small dataflow
 
 `Stmt::emit` compiles `Compute(Dataflow(...))` and refuses `Sequence`,

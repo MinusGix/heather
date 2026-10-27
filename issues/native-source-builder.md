@@ -1,11 +1,11 @@
 ---
 title: A program builder that lowers named, structured programs to the effectful source
-status: open
+status: closed
 labels: [native,frontend,ergonomics]
 area: heather-in-heather
 milestone: [hih-tools]
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 Round 5 of `docs/native-real-programs-plan.md` (§3.3, §5, §6). A `Source`
@@ -49,3 +49,4 @@ reports its count as the exit status builds and runs.
 ## Log
 
 - 2026-10-26: [[native-source-bytes]] landed: the nodes are `BufferLoad(output, buffer, index)` and `BufferStore(output, buffer, index, value)`, and until [[native-compile-wider-leaves]] splits leaves, each must be a `Compute` leaf of its own (a leaf mixing them with pure nodes is refused). `lib/native/native_tools.hthr`'s tr is the hand-written shape.
+- 2026-10-27: Done, with reflected helpers split out to [[native-build-reflected-helpers]]. `lib/native/native_build.hthr`: a `Tool` binds its buffers (`buffer`, `buffer_of`) and words (`local`) with Heather lambdas; values are `Val` (sums, bit operations, shifts, comparisons, `ByteAt`); statements are `Act` (assign, `Poke`, `When`, `While`, `DoWhile`, read, write, exit), sequenced by `++`; procedures are Heather functions returning `Act` (`for_count`, `each_read`, `write_all`). `Act` has a function field, so (docs/inductive-tier2-w-lowering.md §2.2) its two-part constructors hold their parts as `Bool → Act`. `Tool::source` numbers words as binders are met, gives each statement temporaries past them, writes an assignment's last node into its word unless the node reads it, and cuts the nodes into leaves greedily with `List::fits_leaf`, a copy of what `Prog::computes` takes (pure within the pool and `leaf_checks`, in-leaf reads at their written width, or one byte node). That predicate is the one thing [[native-compile-wider-leaves]] should relax. `lib/native/native_tools.hthr` holds cat, tr, yes, `head -c 10` and `wc -l` written this way (`native_cat`'s cat stays the one the spec proofs read); `crates/cli/tests/native_tools.rs` runs tr, yes, head and wc beside GNU's. `lib/_tests/native/native_build_tests.hthr` fixes the lowering of four small tools by `refl`. `write-elf` now reads every source back (`Source::spelled`, crates/cli/src/native/lowered.rs), states it as `<s>_elf_lowered()` (subtrees past 48 statements and nodes as definitions of their own) with `<s>_elf_lowered_is` by `refl`, compiles the literal, and carries `<s>_elf_simulates` back to the source; a source with functions or a region past a dataflow leaf is compiled as it is. On `wc -l` the literal took the build's own declarations from about 6.8M to 4.8M kernel steps, with the same bytes.
