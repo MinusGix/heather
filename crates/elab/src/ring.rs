@@ -106,7 +106,18 @@ enum Syn {
 
 struct Atom {
     term: Rc<Term>,
+    /// How the atom list names it: its spelling, or for a term that has
+    /// none (a field read such as `x.seq(n)`) an alias the certificate binds
+    /// to the term itself (`atom_alias`).
     source: String,
+    /// How a message shows it.
+    shown: String,
+    named: bool,
+}
+
+/// The alias an atom with no source spelling is named by.
+fn atom_alias(index: usize) -> String {
+    format!("__ring_a{index}")
 }
 
 /// An equation's two sides and the carrier's kernel type.
@@ -164,19 +175,7 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
     if named_args(elab, tm, &same)?.len() != 2 {
         return None;
     }
-    let class = elab.key_of("semiring::CommRingOfInt")?;
-    if elab.traits.instances_answering(&class, Some(&carrier.key)).is_empty() {
-        return None;
-    }
-    let op = |sym: &str, fixity| elab.designated(sym, fixity, &carrier.key);
-    let ops = RelCarrier {
-        source: elab.spell_type_clean(cx, &rel.carrier)?,
-        add: op("+", OpFixity::Infix),
-        sub: op("-", OpFixity::Infix),
-        mul: op("*", OpFixity::Infix),
-        neg: op("-", OpFixity::Prefix),
-        inv: op("⁻¹", OpFixity::Postfix),
-    };
+    let ops = rel_carrier(elab, cx, &rel.carrier, span)?;
     Some(Equation {
         carrier: Carrier::Rel(Rc::new(ops)),
         ty: (*rel.carrier).clone(),
@@ -184,6 +183,157 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
         lhs: rel.left,
         rhs: rel.right,
     })
+}
+
+/// A carrier with a `CommRingOfInt` instance, its spelling and designated
+/// operations.
+fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, span: Span) -> Option<RelCarrier> {
+    let carrier = elab.carrier_of_ty(cx, carrier_ty, span)?;
+    let class = elab.key_of("semiring::CommRingOfInt")?;
+    if elab.traits.instances_answering(&class, Some(&carrier.key)).is_empty() {
+        return None;
+    }
+    let op = |sym: &str, fixity| elab.designated(sym, fixity, &carrier.key);
+    Some(RelCarrier {
+        source: elab.spell_type_clean(cx, carrier_ty)?,
+        add: op("+", OpFixity::Infix),
+        sub: op("-", OpFixity::Infix),
+        mul: op("*", OpFixity::Infix),
+        neg: op("-", OpFixity::Prefix),
+        inv: op("⁻¹", OpFixity::Postfix),
+    })
+}
+
+/// A linear form over a reading's monomials: each nonconstant monomial's
+/// coefficient, and the constant.
+pub(crate) type Linear = (BTreeMap<Vec<u32>, Z>, Z);
+
+/// `linarith`'s reading of a field's terms (`crate::linarith`): the relation
+/// reading's reifier at a `≈` carrier, every term a polynomial over one
+/// shared atom table, so `linarith` and the `ring` step that checks its
+/// identity agree on what an atom is. A reciprocal is a plain atom here: its
+/// fact is `ring`'s to use when it checks the combination; the reading only
+/// records, for each reciprocal it meets, the denominator that fact names,
+/// so `linarith` can clear a positive one (`Reciprocal`).
+pub(crate) struct FieldReading<'a> {
+    reifier: Reifier<'a>,
+    reciprocals: Vec<Reciprocal>,
+}
+
+/// A reciprocal atom `r` the reading met with its fact `r·d ≈ 1`: the
+/// denominator `d` as the fact states it, and, when the reciprocal is
+/// positive by construction (`Rat::inv_succ(n)`), the library's `0 < r`.
+pub(crate) struct Reciprocal {
+    pub(crate) atom: usize,
+    pub(crate) den: Rc<Term>,
+    pub(crate) positive: Option<(Term, Type, Level, String)>,
+}
+
+impl<'a> FieldReading<'a> {
+    pub(crate) fn at(elab: &'a Elaborator, cx: &'a Cx, carrier_ty: &Type, level: Level, span: Span) -> Option<Self> {
+        let ops = rel_carrier(elab, cx, carrier_ty, span)?;
+        Some(FieldReading {
+            reifier: Reifier {
+                elab,
+                cx,
+                span,
+                carrier: Carrier::Rel(Rc::new(ops)),
+                ty: carrier_ty.clone(),
+                level,
+                atoms: Vec::new(),
+                facts: Vec::new(),
+                in_fact: false,
+            },
+            reciprocals: Vec::new(),
+        })
+    }
+
+    /// The reciprocals met so far whose fact could be written.
+    pub(crate) fn reciprocals(&self) -> &[Reciprocal] {
+        &self.reciprocals
+    }
+
+    /// The monomial that is atom `atom` alone.
+    pub(crate) fn atom_monomial(atom: usize) -> Vec<u32> {
+        let mut m = vec![0; atom + 1];
+        m[atom] = 1;
+        m
+    }
+
+    /// `a·b` over the reading's monomials.
+    pub(crate) fn monomial_product(a: &[u32], b: &[u32]) -> Result<Vec<u32>, String> {
+        mono_mul(&a.to_vec(), &b.to_vec())
+    }
+
+    /// Records the reciprocal facts read since `from`: the denominator is
+    /// the right factor of the fact's left side, `r * d`.
+    fn record_reciprocals(&mut self, from: usize) {
+        let reifier = &self.reifier;
+        let Carrier::Rel(ops) = &reifier.carrier else { return };
+        let Some(mul) = &ops.mul else { return };
+        for fact in &reifier.facts[from..] {
+            if fact.kind != FactKind::Reciprocal || self.reciprocals.iter().any(|r| r.atom == fact.atom) {
+                continue;
+            }
+            let Some(eq) = relation_equation(reifier.elab, reifier.cx, &fact.ty, reifier.span) else {
+                continue;
+            };
+            let Some(den) = named_args(reifier.elab, &eq.lhs, mul).and_then(|args| match args.as_slice() {
+                [_, den] => Some(Rc::clone(den)),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let term = &reifier.atoms[fact.atom].term;
+            let positive = named_args(reifier.elab, term, "rat::Rat::inv_succ")
+                .and_then(|args| match args.as_slice() {
+                    [n] => reifier.elab.spell_term_source(reifier.cx, n),
+                    _ => None,
+                })
+                .and_then(|n| {
+                    reifier.elab.key_of("rat::Rat::inv_succ_pos")?;
+                    let source = format!("rat::Rat::inv_succ_pos({n})");
+                    let expr = parse_expr(&source).ok()?;
+                    let (term, ty, level) = reifier.elab.generated_scope(|me| me.elab_infer(reifier.cx, &expr)).ok()?;
+                    Some((term, ty, level, source))
+                });
+            self.reciprocals.push(Reciprocal { atom: fact.atom, den, positive });
+        }
+    }
+
+    /// The carrier as source (`Rat`, `CReal`).
+    pub(crate) fn carrier_source(&self) -> &str {
+        self.reifier.carrier.name()
+    }
+
+    /// `tm` as a linear form over the monomials of its normal form. On an
+    /// error the atom table is as it was.
+    pub(crate) fn linear(&mut self, tm: &Rc<Term>) -> Result<Linear, String> {
+        let (atoms, facts) = (self.reifier.atoms.len(), self.reifier.facts.len());
+        let read = self.reifier.reify(tm).and_then(|syn| poly_of(&syn));
+        if read.is_ok() {
+            self.record_reciprocals(facts);
+        }
+        self.reifier.facts.truncate(facts);
+        let poly = match read {
+            Ok(poly) => poly,
+            Err(error) => {
+                self.reifier.atoms.truncate(atoms);
+                return Err(error);
+            }
+        };
+        let mut terms = poly.0;
+        let constant = terms.remove(&Vec::new()).unwrap_or(0);
+        Ok((terms, constant))
+    }
+
+    /// A linear form as source over the atoms' spellings, for messages.
+    pub(crate) fn render(&self, form: &Linear) -> String {
+        let mut poly = Poly(form.0.clone());
+        let _ = poly.add_term(Vec::new(), form.1);
+        let atoms: Vec<String> = self.reifier.atoms.iter().map(|a| a.shown.clone()).collect();
+        render_poly(&poly, &atoms)
+    }
 }
 
 struct Reifier<'a> {
@@ -543,19 +693,28 @@ impl Reifier<'_> {
         if let Some(index) = self.atoms.iter().position(|atom| atom.term == *tm) {
             return Ok(index);
         }
-        let source = self
-            .elab
-            .spell_term_source(self.cx, tm)
-            .ok_or_else(|| format!("`ring` could not spell one of the {} atoms as source", self.carrier.name()))?;
-        if let Some(index) = self.atoms.iter().position(|atom| atom.source == source) {
+        // An atom that does not spell (a field read such as `x.seq(n)`,
+        // issues/ring-field-read-atom-spelling.md) is named by an alias
+        // bound to the term itself when the atom list is elaborated.
+        let spelled = self.elab.spell_term_source(self.cx, tm);
+        if let Some(source) = &spelled
+            && let Some(index) = self.atoms.iter().position(|atom| !atom.named && atom.source == *source)
+        {
             return Ok(index);
         }
         if let Some(index) = self.convertible(tm) {
             return Ok(index);
         }
+        let index = self.atoms.len();
+        let (source, shown, named) = match spelled {
+            Some(source) => (source.clone(), source, false),
+            None => (atom_alias(index), self.elab.display_rough_term(self.cx, tm, &[]), true),
+        };
         self.atoms.push(Atom {
             term: Rc::clone(tm),
             source,
+            shown,
+            named,
         });
         Ok(self.atoms.len() - 1)
     }
@@ -1206,6 +1365,10 @@ fn poly_source(p: &Poly) -> String {
 pub(crate) struct Certificate {
     source: String,
     atoms: String,
+    /// The atoms the list names by alias, with the terms the aliases bind.
+    named_atoms: Vec<(String, Rc<Term>)>,
+    atom_ty: Type,
+    atom_level: Level,
     carrier: Carrier,
     /// Hypotheses the combination uses, by their index among the written ones.
     used: Vec<usize>,
@@ -1320,6 +1483,9 @@ fn reconstruct_at(
         });
     }
     let atom_sources: Vec<String> = reifier.atoms.iter().map(|a| a.source.clone()).collect();
+    let atom_shown: Vec<String> = reifier.atoms.iter().map(|a| a.shown.clone()).collect();
+    let named_atoms: Vec<(String, Rc<Term>)> =
+        reifier.atoms.iter().filter(|a| a.named).map(|a| (a.source.clone(), Rc::clone(&a.term))).collect();
     let target = poly_of(&goal_syn.lhs)?.sub(&poly_of(&goal_syn.rhs)?)?;
     let atoms = atom_sources
         .iter()
@@ -1342,6 +1508,9 @@ fn reconstruct_at(
         return Ok(Certificate {
             source: format!("{sound}{at}({ATOMS}, {lhs}, {rhs}, refl)"),
             atoms,
+            named_atoms,
+            atom_ty: reifier.ty.clone(),
+            atom_level: reifier.level.clone(),
             carrier,
             used: Vec::new(),
             facts: Vec::new(),
@@ -1368,8 +1537,8 @@ fn reconstruct_at(
         vec![Poly::default(); names.len()].into_iter().chain(cleared.multipliers.iter().cloned()).collect()
     } else {
         let (left, by) = without_common_monomial(&cleared.cleared, &cleared.denominator);
-        let residual = render_poly(&left, &atom_sources);
-        let cleared_by = (by != Poly::constant(1)).then(|| render_poly(&by, &atom_sources));
+        let residual = render_poly(&left, &atom_shown);
+        let cleared_by = (by != Poly::constant(1)).then(|| render_poly(&by, &atom_shown));
         if names.is_empty() {
             return Err(match &cleared_by {
                 None => format!(
@@ -1451,6 +1620,9 @@ fn reconstruct_at(
     Ok(Certificate {
         source: format!("{sound_with}{at}({ATOMS}, {lhs}, {rhs}, {d}, {hd}, refl)"),
         atoms,
+        named_atoms,
+        atom_ty: reifier.ty.clone(),
+        atom_level: reifier.level.clone(),
         carrier,
         used,
         facts,
@@ -1532,9 +1704,24 @@ impl Elaborator {
         let _depth = Depth(&self.ring_depth);
         let (list_ty, parsed) = parse_atom_list(&cert.atoms, &cert.carrier)
             .map_err(|detail| err(format!("`ring` wrote an atom list that does not parse: {detail}\n  generated: {}", cert.atoms)))?;
+        // The atoms that do not spell are named by aliases bound to their
+        // terms; the list's value holds the terms themselves.
+        let mut atom_cx = cx.clone();
+        for (name, term) in &cert.named_atoms {
+            atom_cx.aliases.push(Rc::new(Alias {
+                name: name.clone(),
+                depth: cx.names.len(),
+                term: Rc::clone(term),
+                ty: cert.atom_ty.clone(),
+                level: cert.atom_level.clone(),
+                skel: None,
+                spliced: None,
+                shifted: Default::default(),
+            }));
+        }
         let checked = self.generated_scope(|me| {
             let (ty, level) = me.elab_ty(cx, &list_ty)?;
-            let atoms = me.elab_check(cx, &parsed, &ty, &level)?;
+            let atoms = me.elab_check(&atom_cx, &parsed, &ty, &level)?;
             Ok((atoms, ty, level))
         });
         let (atoms, ty, level) = checked.map_err(|error: ElabError| {

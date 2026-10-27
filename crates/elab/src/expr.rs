@@ -73,6 +73,13 @@ pub(crate) trait StructuralTypeElab {
     fn type_endpoint_may_need_checking(&self, _cx: &Cx, _expression: &Expr) -> bool {
         false
     }
+    /// Whether this endpoint is a call deferred only for a result-only
+    /// implicit that nonetheless infers, so it has a carrier of its own and
+    /// a bare numeral on the other side should take it rather than give it
+    /// `Nat`. Probed in isolation, as [`Self::type_endpoint_can_anchor`] is.
+    fn type_endpoint_infers_by_fallback(&self, _cx: &Cx, _expression: &Expr) -> bool {
+        false
+    }
     fn check_type_endpoint(
         &self,
         cx: &Cx,
@@ -358,10 +365,16 @@ impl<'a> ExprElab<'a> {
                 let numeral_flexible = expression_needs_numeral_carrier(lhs, |leaf| {
                     !elab.type_endpoint_can_anchor(cx, leaf)
                 });
+                // A right endpoint that is only a numeral anchors at its
+                // `Nat` default, which is no carrier at all: a left endpoint
+                // that infers by its fallback (`∑ k < n, f(k) = 3`) keeps
+                // the written order instead.
                 let checking_flexible = !numeral_flexible
                     && elab.type_endpoint_may_need_checking(cx, lhs)
                     && !elab.type_endpoint_can_anchor(cx, lhs)
-                    && elab.type_endpoint_can_anchor(cx, rhs);
+                    && elab.type_endpoint_can_anchor(cx, rhs)
+                    && !(expression_needs_numeral_carrier(rhs, |leaf| !elab.type_endpoint_can_anchor(cx, leaf))
+                        && elab.type_endpoint_infers_by_fallback(cx, lhs));
                 let flexible = numeral_flexible || checking_flexible;
                 let (lhs_t, rhs_t, endpoint_ty, level) = if flexible {
                     let (rhs_t, endpoint_ty, level) = elab.infer_type_endpoint(cx, rhs)?;

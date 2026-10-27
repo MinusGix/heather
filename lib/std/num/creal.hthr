@@ -1713,6 +1713,10 @@ instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CRea
     archimedean := CReal::archimedean,
 }
 
+// Its integers named too (std/ordered_field's `OrderedFieldOfInt`), which is
+// what `linarith`'s certificates are checked against.
+instance OrderedFieldOfInt<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {}
+
 // ---------------------------------------------------------------------------
 // Completeness (docs/creal-completeness-round.md). A sequence of reals is
 // regular when its m-th and n-th reals are within 1/(m+1) + 1/(n+1), the

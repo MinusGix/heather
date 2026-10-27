@@ -1,0 +1,22 @@
+// Forms the whole-library parse caught the grammar missing: annotated
+// lets/haves whose type runs up to the binder's `=`, contextual words as
+// binder names, explicit calls in type and scrutinee positions, a record
+// literal inside a parenthesized type, and float literals.
+
+fn f() -> X {
+    let p: A → Type = λ u => u ∧ True;
+    have q: (j: Nat) → ∃ k: Nat, P(j, k) ∧ Q = g;
+    let r: (a = b) = h;
+    p
+}
+
+theorem t(): (j, k: Nat) → j = k { refl }
+
+theorem e(): w() = @BitVec::from_bits(0, []) { refl }
+theorem r(): (Alg<Nat> { nil: 0 }).fold(x) = 6 { refl }
+fn m(a: Nat) -> X { match @eq_dec(a, a) { Inl(_) => 0 } }
+
+fn sum() -> X { 0.1 + 2.5e3 }
+fn hex() -> X { 0x1.8p3 + 0x1p-1074 }
+fn method() -> X { 1.foo() }
+fn hex_method() -> X { 0xff.f() }

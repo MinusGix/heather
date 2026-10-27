@@ -16,6 +16,10 @@
         "named": true
       },
       {
+        "type": "big_operator_expression",
+        "named": true
+      },
+      {
         "type": "binary_expression",
         "named": true
       },
@@ -457,19 +461,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -506,46 +502,6 @@
           },
           {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -589,19 +545,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -639,46 +587,6 @@
           {
             "type": "declaration_type_application",
             "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
-            "named": true
           }
         ]
       }
@@ -696,6 +604,42 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "big_operator_expression",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "bound": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1232,10 +1176,10 @@
     }
   },
   {
-    "type": "declaration_binary_type",
+    "type": "declaration_big_operator_type",
     "named": true,
     "fields": {
-      "left": {
+      "body": {
         "multiple": true,
         "required": true,
         "types": [
@@ -1248,19 +1192,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -1298,45 +1234,137 @@
           {
             "type": "declaration_type_application",
             "named": true
+          }
+        ]
+      },
+      "bound": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
           },
           {
-            "type": "hole",
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "_expression",
             "named": true
           },
+          {
+            "type": "declaration_big_operator_type",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_inverse_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
           {
             "type": "identifier",
             "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "declaration_binary_type",
+    "named": true,
+    "fields": {
+      "left": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
           },
           {
-            "type": "match_expression",
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "number",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
-            "type": "qualified_identifier",
+            "type": "declaration_binary_type",
             "named": true
           },
           {
-            "type": "squash_type",
+            "type": "declaration_call_type",
             "named": true
           },
           {
-            "type": "string",
+            "type": "declaration_function_type",
             "named": true
           },
           {
-            "type": "universe",
+            "type": "declaration_index_type",
             "named": true
           },
           {
-            "type": "vector_expression",
+            "type": "declaration_inverse_type",
             "named": true
           },
           {
-            "type": "vector_type",
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
             "named": true
           }
         ]
@@ -1432,19 +1460,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -1481,46 +1501,6 @@
           },
           {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -1544,31 +1524,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
-            "named": true
-          },
-          {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
-            "named": true
-          },
-          {
-            "type": "declaration_binary_type",
+            "type": "_expression",
             "named": true
           },
           {
             "type": "declaration_call_type",
-            "named": true
-          },
-          {
-            "type": "declaration_function_type",
             "named": true
           },
           {
@@ -1584,55 +1544,7 @@
             "named": true
           },
           {
-            "type": "declaration_prefix_type",
-            "named": true
-          },
-          {
-            "type": "declaration_quantified_type",
-            "named": true
-          },
-          {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -1658,23 +1570,15 @@
       "required": true,
       "types": [
         {
+          "type": "_expression",
+          "named": true
+        },
+        {
           "type": "binder_group",
           "named": true
         },
         {
-          "type": "boolean_reflection_expression",
-          "named": true
-        },
-        {
-          "type": "builtin_type",
-          "named": true
-        },
-        {
-          "type": "character",
-          "named": true
-        },
-        {
-          "type": "contextual_identifier",
+          "type": "declaration_big_operator_type",
           "named": true
         },
         {
@@ -1714,47 +1618,7 @@
           "named": true
         },
         {
-          "type": "hole",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
           "type": "implicit_binder_group",
-          "named": true
-        },
-        {
-          "type": "match_expression",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "qualified_identifier",
-          "named": true
-        },
-        {
-          "type": "squash_type",
-          "named": true
-        },
-        {
-          "type": "string",
-          "named": true
-        },
-        {
-          "type": "universe",
-          "named": true
-        },
-        {
-          "type": "vector_expression",
-          "named": true
-        },
-        {
-          "type": "vector_type",
           "named": true
         }
       ]
@@ -1787,31 +1651,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
-            "named": true
-          },
-          {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
-            "named": true
-          },
-          {
-            "type": "declaration_binary_type",
+            "type": "_expression",
             "named": true
           },
           {
             "type": "declaration_call_type",
-            "named": true
-          },
-          {
-            "type": "declaration_function_type",
             "named": true
           },
           {
@@ -1827,55 +1671,7 @@
             "named": true
           },
           {
-            "type": "declaration_prefix_type",
-            "named": true
-          },
-          {
-            "type": "declaration_quantified_type",
-            "named": true
-          },
-          {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -1899,31 +1695,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
-            "named": true
-          },
-          {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
-            "named": true
-          },
-          {
-            "type": "declaration_binary_type",
+            "type": "_expression",
             "named": true
           },
           {
             "type": "declaration_call_type",
-            "named": true
-          },
-          {
-            "type": "declaration_function_type",
             "named": true
           },
           {
@@ -1939,55 +1715,7 @@
             "named": true
           },
           {
-            "type": "declaration_prefix_type",
-            "named": true
-          },
-          {
-            "type": "declaration_quantified_type",
-            "named": true
-          },
-          {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -2021,31 +1749,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
-            "named": true
-          },
-          {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
-            "named": true
-          },
-          {
-            "type": "declaration_binary_type",
+            "type": "_expression",
             "named": true
           },
           {
             "type": "declaration_call_type",
-            "named": true
-          },
-          {
-            "type": "declaration_function_type",
             "named": true
           },
           {
@@ -2061,55 +1769,7 @@
             "named": true
           },
           {
-            "type": "declaration_prefix_type",
-            "named": true
-          },
-          {
-            "type": "declaration_quantified_type",
-            "named": true
-          },
-          {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -2135,19 +1795,11 @@
       "required": true,
       "types": [
         {
-          "type": "boolean_reflection_expression",
+          "type": "_expression",
           "named": true
         },
         {
-          "type": "builtin_type",
-          "named": true
-        },
-        {
-          "type": "character",
-          "named": true
-        },
-        {
-          "type": "contextual_identifier",
+          "type": "declaration_big_operator_type",
           "named": true
         },
         {
@@ -2184,46 +1836,6 @@
         },
         {
           "type": "declaration_type_application",
-          "named": true
-        },
-        {
-          "type": "hole",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "match_expression",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "qualified_identifier",
-          "named": true
-        },
-        {
-          "type": "squash_type",
-          "named": true
-        },
-        {
-          "type": "string",
-          "named": true
-        },
-        {
-          "type": "universe",
-          "named": true
-        },
-        {
-          "type": "vector_expression",
-          "named": true
-        },
-        {
-          "type": "vector_type",
           "named": true
         }
       ]
@@ -2238,19 +1850,11 @@
       "required": true,
       "types": [
         {
-          "type": "boolean_reflection_expression",
+          "type": "_expression",
           "named": true
         },
         {
-          "type": "builtin_type",
-          "named": true
-        },
-        {
-          "type": "character",
-          "named": true
-        },
-        {
-          "type": "contextual_identifier",
+          "type": "declaration_big_operator_type",
           "named": true
         },
         {
@@ -2287,46 +1891,6 @@
         },
         {
           "type": "declaration_type_application",
-          "named": true
-        },
-        {
-          "type": "hole",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "match_expression",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "qualified_identifier",
-          "named": true
-        },
-        {
-          "type": "squash_type",
-          "named": true
-        },
-        {
-          "type": "string",
-          "named": true
-        },
-        {
-          "type": "universe",
-          "named": true
-        },
-        {
-          "type": "vector_expression",
-          "named": true
-        },
-        {
-          "type": "vector_type",
           "named": true
         }
       ]
@@ -2349,31 +1913,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
-            "named": true
-          },
-          {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
-            "named": true
-          },
-          {
-            "type": "declaration_binary_type",
+            "type": "_expression",
             "named": true
           },
           {
             "type": "declaration_call_type",
-            "named": true
-          },
-          {
-            "type": "declaration_function_type",
             "named": true
           },
           {
@@ -2389,55 +1933,7 @@
             "named": true
           },
           {
-            "type": "declaration_prefix_type",
-            "named": true
-          },
-          {
-            "type": "declaration_quantified_type",
-            "named": true
-          },
-          {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -2463,19 +1959,11 @@
       "required": true,
       "types": [
         {
-          "type": "boolean_reflection_expression",
+          "type": "_expression",
           "named": true
         },
         {
-          "type": "builtin_type",
-          "named": true
-        },
-        {
-          "type": "character",
-          "named": true
-        },
-        {
-          "type": "contextual_identifier",
+          "type": "declaration_big_operator_type",
           "named": true
         },
         {
@@ -2512,46 +2000,6 @@
         },
         {
           "type": "declaration_type_application",
-          "named": true
-        },
-        {
-          "type": "hole",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "match_expression",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "qualified_identifier",
-          "named": true
-        },
-        {
-          "type": "squash_type",
-          "named": true
-        },
-        {
-          "type": "string",
-          "named": true
-        },
-        {
-          "type": "universe",
-          "named": true
-        },
-        {
-          "type": "vector_expression",
-          "named": true
-        },
-        {
-          "type": "vector_type",
           "named": true
         }
       ]
@@ -2810,19 +2258,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -2859,46 +2299,6 @@
           },
           {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -3000,11 +2400,59 @@
         ]
       },
       "type": {
-        "multiple": false,
+        "multiple": true,
         "required": false,
         "types": [
           {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
             "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "declaration_big_operator_type",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_inverse_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
             "named": true
           }
         ]
@@ -3059,6 +2507,10 @@
           },
           {
             "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
             "named": true
           },
           {
@@ -3238,6 +2690,10 @@
             "named": true
           },
           {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
             "type": "head_binary_expression",
             "named": true
           },
@@ -3335,6 +2791,10 @@
         },
         {
           "type": "contextual_identifier",
+          "named": true
+        },
+        {
+          "type": "explicit_call_expression",
           "named": true
         },
         {
@@ -3451,6 +2911,10 @@
             "named": true
           },
           {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
             "type": "head_binary_expression",
             "named": true
           },
@@ -3544,6 +3008,10 @@
         },
         {
           "type": "contextual_identifier",
+          "named": true
+        },
+        {
+          "type": "explicit_call_expression",
           "named": true
         },
         {
@@ -3646,6 +3114,10 @@
           "named": true
         },
         {
+          "type": "explicit_call_expression",
+          "named": true
+        },
+        {
           "type": "head_binary_expression",
           "named": true
         },
@@ -3741,6 +3213,10 @@
           "named": true
         },
         {
+          "type": "explicit_call_expression",
+          "named": true
+        },
+        {
           "type": "head_binary_expression",
           "named": true
         },
@@ -3833,6 +3309,10 @@
         },
         {
           "type": "contextual_identifier",
+          "named": true
+        },
+        {
+          "type": "explicit_call_expression",
           "named": true
         },
         {
@@ -3969,6 +3449,10 @@
           },
           {
             "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
             "named": true
           },
           {
@@ -4133,6 +3617,10 @@
           },
           {
             "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
             "named": true
           },
           {
@@ -4516,11 +4004,59 @@
         ]
       },
       "type": {
-        "multiple": false,
+        "multiple": true,
         "required": false,
         "types": [
           {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
             "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "declaration_big_operator_type",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_inverse_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
             "named": true
           }
         ]
@@ -4615,19 +4151,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -4664,46 +4192,6 @@
           },
           {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -4742,6 +4230,10 @@
           },
           {
             "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
             "named": true
           },
           {
@@ -4869,6 +4361,10 @@
             "named": true
           },
           {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
             "type": "head_binary_expression",
             "named": true
           },
@@ -4968,6 +4464,10 @@
           },
           {
             "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
             "named": true
           },
           {
@@ -5087,19 +4587,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -5136,46 +4628,6 @@
           },
           {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -6007,19 +5459,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -6056,46 +5500,6 @@
           },
           {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -6149,19 +5553,11 @@
             "named": false
           },
           {
-            "type": "boolean_reflection_expression",
+            "type": "_expression",
             "named": true
           },
           {
-            "type": "builtin_type",
-            "named": true
-          },
-          {
-            "type": "character",
-            "named": true
-          },
-          {
-            "type": "contextual_identifier",
+            "type": "declaration_big_operator_type",
             "named": true
           },
           {
@@ -6198,46 +5594,6 @@
           },
           {
             "type": "declaration_type_application",
-            "named": true
-          },
-          {
-            "type": "hole",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "match_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "qualified_identifier",
-            "named": true
-          },
-          {
-            "type": "squash_type",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "universe",
-            "named": true
-          },
-          {
-            "type": "vector_expression",
-            "named": true
-          },
-          {
-            "type": "vector_type",
             "named": true
           }
         ]
@@ -6822,6 +6178,14 @@
   },
   {
     "type": "∃",
+    "named": false
+  },
+  {
+    "type": "∏",
+    "named": false
+  },
+  {
+    "type": "∑",
     "named": false
   },
   {

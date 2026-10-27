@@ -665,7 +665,15 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
         NameRes::Ambiguous(origins) => Some(ambiguity_msg(name, origins)),
         NameRes::NoSuchQualifier(q) => Some(format!(
             "`{name}` is qualified by `{q}`, which is neither an imported module nor a \
-             type or function in scope here with a member by that name"
+             type or function in scope here with a member by that name{}",
+            // The one name the parser writes on the reader's behalf: `∑` and
+            // `∏` desugar to it, so say where it comes from.
+            if name == "MonoidRel::range" {
+                ". A `∑`/`∏` big operator is a call to `MonoidRel::range`: write \
+                 `import big_operator;`"
+            } else {
+                ""
+            }
         )),
         NameRes::Restricted(msg) => Some(msg.clone()),
         NameRes::NotFound => Some(fallback),

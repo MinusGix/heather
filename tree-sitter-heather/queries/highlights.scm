@@ -18,7 +18,7 @@
 (squash_type) @type.builtin
 
 [
-  "λ" "fun" "∀" "∃"
+  "λ" "fun" "∀" "∃" "∑" "∏"
 ] @keyword
 
 [
@@ -59,6 +59,8 @@
 (parameter_name name: (identifier) @variable.parameter)
 (lambda_binder (identifier) @variable.parameter)
 (quantified_expression name: (identifier) @variable.parameter)
+(big_operator_expression name: (identifier) @variable.parameter)
+(declaration_big_operator_type name: (identifier) @variable.parameter)
 (field name: (identifier) @property)
 (record_field name: (identifier) @property)
 (named_argument name: (identifier) @property)
