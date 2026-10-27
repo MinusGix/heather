@@ -2930,18 +2930,6 @@ impl Elaborator {
             }
             _ => None,
         };
-        // …then the injection path — over an **emission** copy of the spine
-        // (`docs/annotation-component-respell-design.md` §2.3): the `Inl`/
-        // `Inr` annotations of a constructor value carry `⟦c_j⟧` and the sum
-        // tails verbatim, and their mass is the embedded field types — a
-        // value of an `⟦Ir⟧`-field declaration writes `⟦Ir⟧` once per payload
-        // *per injection step*. For a **flat** declaration the components
-        // and the tails themselves are named (`D#payloadₖ`/`D#suffixₖ`,
-        // `issues/inductive-spelling-codes-nonrecursive.md`); for a
-        // recursive one the tails stay inline and only their embedded
-        // field types respell. The structural spine above — `build_fields`'
-        // checking, the container projection — is untouched.
-        let spine_e = self.respell_spine(cx, &spine);
         // The `sup_f` slots, computed here rather than below because the
         // checked spelling of a **recursive** declaration's label injection
         // needs the same `shape` the slot takes: the label's type is the
@@ -2983,7 +2971,29 @@ impl Elaborator {
                 None => Rc::new(pre_whnf.clone()),
             })
         };
-        let val = inject_at(&spine_e, i, ind.ctors.len(), fields, 0, at);
+        // …then the injection path. Written with `@` forms, its inner layers
+        // carry no annotation and the outermost carries `at`, so nothing reads
+        // a spine; the component form (under a quotation, or a recursive
+        // declaration whose expected type is not a `Wf`) reads one at every
+        // layer, and only then is the spine respelled, over an **emission** copy
+        // (`docs/annotation-component-respell-design.md` §2.3): the `Inl`/
+        // `Inr` annotations of a constructor value carry `⟦c_j⟧` and the sum
+        // tails verbatim, and their mass is the embedded field types — a
+        // value of an `⟦Ir⟧`-field declaration writes `⟦Ir⟧` once per payload
+        // *per injection step*. For a **flat** declaration the components
+        // and the tails themselves are named (`D#payloadₖ`/`D#suffixₖ`,
+        // `issues/inductive-spelling-codes-nonrecursive.md`); for a
+        // recursive one the tails stay inline and only their embedded
+        // field types respell. The structural spine above — `build_fields`'
+        // checking, the container projection — is untouched.
+        let spine_e;
+        let spine_for = if at.is_some() {
+            &spine
+        } else {
+            spine_e = self.respell_spine(cx, &spine);
+            &spine_e
+        };
+        let val = inject_at(spine_for, i, ind.ctors.len(), fields, 0, at);
         if !ind.recursive {
             return Ok(PreparedCtor { term: val, children: Vec::new(), container: None });
         }
