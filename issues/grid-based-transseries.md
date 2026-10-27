@@ -32,3 +32,7 @@ Questions to settle when it is picked up:
 ## What it assumes from elsewhere
 - **[[formal-power-series]]**: the ℕ case and the `antidiag` hook.
 - **[[regular-perturbation-expansions]]**: the algebraic perturbation customer.
+
+## Log
+
+- 2026-10-27: Divergent series (docs/analysis-foundations-design.md §3.8): resurgence (Borel-transform singularities as the exponentially small terms), the Stokes phenomenon as a jump by such a term, multisummation and Écalle's accelero-summation as the summation methods on transseries. [[borel-laplace-summation]] owns the Gevrey-1 case.
