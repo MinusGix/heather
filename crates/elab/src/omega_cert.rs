@@ -559,7 +559,7 @@ fn nat_divides_args<'a>(elab: &Elaborator, ty: &'a Type) -> Option<(&'a Rc<Term>
     Some((divisor, dividend))
 }
 
-fn negated_domain(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Type> {
+pub(crate) fn negated_domain(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Type> {
     if let Type::El { level, tm } = ty {
         let args = named_args(elab, tm, "logic::Not")?;
         let [domain] = args.as_slice() else {

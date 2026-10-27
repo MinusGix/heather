@@ -221,7 +221,7 @@ pub(crate) fn is_param_default(e: &Expr) -> bool {
 
 /// Is this default a **discharge**: a form whose meaning is the goal it is
 /// checked at, run at each call like `:= infer` (§9.7)? The tactics and the
-/// proof searches (`omega`, `positivity`, `ring`, `bv_omega`, `decide`,
+/// proof searches (`omega`, `positivity`, `ring`, `linarith`, `bv_omega`, `decide`,
 /// `rel_cong`/`rel_derive`, `rewrite`, `subst`, `by t`), `refl`, whose
 /// endpoints the kernel compares at the goal, and any default that contains
 /// a goal `?`, which it poses to the caller. Read off the head, so
@@ -230,8 +230,8 @@ pub(crate) fn is_param_default(e: &Expr) -> bool {
 /// A user declaration that shadows one of these names makes a default that
 /// names it a value no check here reaches; the call still checks it.
 pub(crate) fn is_discharge(e: &Expr) -> bool {
-    const SEARCHES: [&str; 7] = ["omega", "positivity", "ring", "bv_omega", "decide", "rel_derive", heather_syntax::POS_SEARCH];
-    const TACTICS: [&str; 7] = ["omega", "ring", "rewrite", "subst", "rel_cong", "rel_derive", heather_syntax::BY_TACTIC];
+    const SEARCHES: [&str; 8] = ["omega", "positivity", "ring", "linarith", "bv_omega", "decide", "rel_derive", heather_syntax::POS_SEARCH];
+    const TACTICS: [&str; 8] = ["omega", "ring", "linarith", "rewrite", "subst", "rel_cong", "rel_derive", heather_syntax::BY_TACTIC];
     surface::count_holes_expr(e) > 0
         || match &e.kind {
             ExprKind::Refl | ExprKind::AutoRefl | ExprKind::Hole(_) => true,

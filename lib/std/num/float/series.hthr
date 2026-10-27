@@ -40,6 +40,7 @@ import omega;
 import list;
 import tactic;
 import mono;
+import linarith;
 
 record Series {
     first: Rat,
@@ -210,9 +211,8 @@ theorem Series::above(self s: Series, n: Nat, hs: s.start <= n): s.real() <= CRe
                     <= Rat::inv_succ(i) := s.fine(i),
                     <= f := Rat::inv_succ_antitone(k, i, from),
                 };
-                let near: (s.sum(l) <= c + (f + e)) =
-                    Rat::le_trans(Rat::le_add_of_dist(d), Rat::add_le_mono_l(f, f + e, c, f.le_add_nonneg(e, s.err_nonneg(n))));
-                Rat::le_add_shift(d := near, s := f.le_refl())
+                let near: (s.sum(l) <= (c + e) + f) = linarith(Rat::le_add_of_dist(d), s.err_nonneg(n));
+                near
             },
             Inr(h) => Rat::le_trans(Rat::le_add_of_dist(s.sum_close(n, l, hs, h)), (c + e).le_add_nonneg(f, hf)),
         }
@@ -233,21 +233,16 @@ theorem Series::below(self s: Series, n: Nat, hs: s.start <= n): CReal::ofRat(s.
                     <= Rat::inv_succ(i) := s.fine(i),
                     <= f := Rat::inv_succ_antitone(k, i, from),
                 };
-                let wide = calc {
-                    f <= f + e := f.le_add_nonneg(e, s.err_nonneg(n)),
-                    ≈ e + f := f.add_comm(e),
-                };
-                let near: (c <= s.sum(l) + (e + f)) = Rat::le_trans(Rat::le_add_of_dist(d), Rat::add_le_mono_l(f, e + f, s.sum(l), wide));
-                Rat::sub_le_shift(d := near, s := f.le_refl())
+                let near: (c - e <= s.sum(l) + f) = linarith(Rat::le_add_of_dist(d), s.err_nonneg(n));
+                near
             },
             Inr(h) => {
                 let d = calc {
                     (c - s.sum(l)).abs() ≈ (s.sum(l) - c).abs() := c.abs_sub_comm(s.sum(l)),
                     <= e := s.sum_close(n, l, hs, h),
                 };
-                let near: (c <= s.sum(l) + (e + f)) =
-                    Rat::le_trans(Rat::le_add_of_dist(d), Rat::add_le_mono_l(e, e + f, s.sum(l), e.le_add_nonneg(f, hf)));
-                Rat::sub_le_shift(d := near, s := f.le_refl())
+                let near: (c - e <= s.sum(l) + f) = linarith(Rat::le_add_of_dist(d), hf);
+                near
             },
         }
     }))

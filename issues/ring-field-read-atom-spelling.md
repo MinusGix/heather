@@ -1,6 +1,6 @@
 ---
 title: ring refuses a goal whose atom is a field read like x.seq(n)
-status: open
+status: closed
 labels: [tactics,proofs,ergonomics]
 area: tactics
 milestone: [tac-arith]
@@ -31,3 +31,7 @@ the speller.
 Shape of a fix: spell the read the way omega's fix does, or name the atoms
 through aliases (as `ring` already does for hypotheses and reciprocal facts)
 instead of through text.
+
+## Log
+
+- 2026-10-27: Fixed by [[linarith-ordered-fields]]'s round (docs/linarith-design.md §4): an atom with no spelling is named in the atom list by an alias bound to the term (`__ring_a{i}`), so `x.seq(n) + 1 ≈ 1 + x.seq(n)` is `ring`'s (probe in lib/_tests/std/tactic/ring_field_tests.hthr). The `add_respects(x.seq(n).same_refl(), ring)` workarounds in creal.hthr still check and can be simplified when next touched.

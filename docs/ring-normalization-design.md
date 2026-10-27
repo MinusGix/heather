@@ -359,6 +359,8 @@ they are stated before `CommRingOfInt<Rat>`.
   reading needs a concrete carrier with a `CommRingOfInt` instance.
 - `Rat::recip` (total) and `x ^ n`: atoms. The first needs a searched
   apartness to state its fact; the second a power reading.
-- A field read such as `x.seq(n)` inside the goal does not spell as source,
-  which refuses the whole reading; the `CReal` proofs above apply `ring`
-  under `add_respects` for that reason.
+- A field read such as `x.seq(n)` inside the goal did not spell as source,
+  which refused the whole reading; the `CReal` proofs above apply `ring`
+  under `add_respects` for that reason. Since `linarith`'s round such an
+  atom is named in the atom list by an alias bound to its term
+  (docs/linarith-design.md §4).
