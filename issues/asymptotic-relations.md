@@ -24,6 +24,12 @@ Scope:
 - the bridge: `CReal::Same` and `CReal::Limit` restated as `Eventually` /
   `Tendsto` at `n → ∞` (theorems relating the forms; definitions unchanged).
 
+The carrier of the Landau relations is **germs modulo eventual agreement**,
+not functions modulo pointwise `≈`. `f ≼ 0` only says that `f` is eventually
+zero, so the dominance axiom `f ≼ 0 → f ≈ 0` (`valued-rings-and-newton`)
+needs the germ setoid. The germ setoid is also the semantics of an
+Ω-calculus surface (design note §3.6), if one is ever wanted.
+
 Acceptance: probes at sequences `Nat → Rat` (e.g. `1/(n+1) = o(1)`,
 `n = O(n²)`, a composed `o` through the closure lemmas), and the `CReal`
 bridge theorems.

@@ -17,7 +17,10 @@ Scope:
   point (each coefficient computes at `Rat`), and the order-`N` expansion
   of the true solution with a remainder constant from the archimedean
   Newton lemma;
-- instances: a perturbed polynomial root; a parametrised contraction;
+- instances: a parametrised contraction, and as the first acceptance probe
+  the worked example of §10.1: `x² + εx − 1 = 0` near `1`, the truncation
+  `1 − ε/2 + ε²/8` by Newton in `Rat[[ε]]`, its residual `ε⁴/64` by `ring`,
+  and the certified expansion with `|R| ≤ C·|ε|⁴` from Kantorovich;
 - singular perturbation of algebraic equations: Puiseux exponents from the
   Newton polygon;
 - a width-expansion probe in the shape of Roberts–Yaida–Hanin (a statistic

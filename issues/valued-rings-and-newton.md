@@ -25,8 +25,17 @@ Scope:
   `ε`-adic stabilisation as instances;
 - a fixed-point theorem with rates in a complete structure, and from it
   Hensel's lemma (`v(f(a)) > 2·v(f'(a))`) and Newton–Kantorovich at `CReal`;
+- state convergence and the Newton lemma for modules over the ring (vectors
+  of series, `Fin n → CReal`), not only for the ring itself, so that
+  systems of equations and the finite-dimensional Kantorovich theorem are
+  instances; the first customer is a two-equation perturbation;
+- two definitions of `≼` that agree classically: a bounded ratio
+  (`|f| <= C|g|`) and a bounded quotient (`f ≈ g·h` with `h ≼ 1`).
+  Constructively they differ wherever `g` may vanish. Decide which one the
+  interface asks for, and prove that the instances agree where they should;
 - `ℚ_p` as a probe instance only if it costs little.
 
 ## What it assumes from elsewhere
 - **[[asymptotic-relations]]**: approaches and the Landau closure lemmas.
 - **[[formal-power-series]]**: the `ε`-adic instance.
+- **[[finite-linear-algebra]]**: vectors and matrices for the module form.

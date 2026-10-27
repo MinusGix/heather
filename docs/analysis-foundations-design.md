@@ -338,6 +338,16 @@ Codata becomes the better representation once corecursion up to "friendly"
 operations exists (Blanchette and others, 2015). That belongs to
 `codata-nested-guards`. Nothing here waits for it.
 
+**Integration is the inverse of the shift.** Prepending a head, `cons(c,
+f)`, is the antiderivative of `f` with value `c` at the point. The
+fundamental theorem of calculus becomes the stream laws `tail(cons(c, f)) ≈
+f` and `cons(head(f), tail(f)) ≈ f`, which hold by definition. So the
+coinductive representation has integration in it from the start, while
+§3.1's differential structure has none. Calculus categories (Cockett and
+Lemay, 2018) axiomatise an integral beside `D` with exactly these two
+laws, and they are the interface to grow into when a second instance
+(Bishop's integral of §12) needs it.
+
 The coinductive method generalises beyond `ℕ`. Smoothness is coinductive
 (§3.1). For transseries, the supports are not `ℕ`-indexed, and coinduction
 over a well-based order is a research question (§11).
@@ -543,8 +553,20 @@ of the line. Here it lives in a quotient ring, so the "every map on `D` is
 affine" property is a theorem for polynomial maps. For general maps it
 holds up to `o(h)`, which is the definition of differentiability in §7.
 
-Multivariate series (`A[[x, y]]` as `Nat × Nat → A`, or iterated) are
-deferred until a customer needs more than the two-variable `exp` law.
+- **Computing versus reasoning.** A coefficient function shares nothing.
+  Coefficient `n` of a product of `k` series recomputes every factor's
+  coefficients, and a nested product recomputes them again at every level.
+  So the computational representation is `Jet(A, N)` as a finite vector,
+  while the reasoning representation is `Hurwitz<A>`, and the truncation
+  homomorphism links the two. A coefficient checked "by `refl`" is a jet
+  computation.
+
+**Several variables are iterated series.** `Hurwitz<A>` is generic over a
+commutative ring at its relation, so `Hurwitz<Hurwitz<Rat>>` is series in
+`t` whose coefficients are series in `ε`. The first customer is
+perturbation of an ODE (§10.1), so the first round should probe the nesting
+through the class system. A multi-index form (`Nat × Nat → A`) is not
+needed.
 
 ## 6. Layer C: approaches and quantitative asymptotics
 
@@ -835,6 +857,88 @@ constants at the approach `u → 0⁺`. Nothing in `lib/std/num/float/` needs
 restating. Reading "error `= n·u + O(u²)`" as a projection of the existing
 `γ_n` bounds is a good probe that Layer D's records fit a mature customer.
 
+### 10.1 Worked: one algorithm with a certificate
+
+In every case below the pattern is the same:
+
+1. **Search for the expansion** by Newton's method. This step is untrusted.
+2. **Check the residual** by algebra (`ring`, or evaluation).
+3. **Turn the residual into a true solution** with one contraction theorem.
+
+The kinds of perturbation theory differ only in which monomials the
+dominance relation admits.
+
+**Regular: `x² + εx − 1 = 0` near `x₀ = 1`.**
+
+- *Formal.* Put `x = 1 + aε + bε² + …` and match powers of `ε`.
+  - Order `ε` gives `2a + 1 = 0`, so `a = −1/2`.
+  - Order `ε²` gives `a² + 2b + a = 0`, so `b = 1/8`.
+
+  Every order is a linear equation with the same coefficient `F'(x₀) = 2`.
+  That is the implicit function theorem in formal form: the expansion
+  exists to every order exactly when the linearisation is invertible.
+- *Wholesale.* Newton's method in `Rat[[ε]]` doubles the number of correct
+  orders per step. From `x₀ = 1`, one step gives `1 − ε/(2+ε)`, which is
+  right through `ε¹`. Two steps are right through `ε³`. This is Hensel
+  lifting in the `ε`-adic dominance.
+- *Check.* For `x₂ = 1 − ε/2 + ε²/8`, the residual `F(x₂, ε)` is exactly
+  `ε⁴/64`. It is a polynomial identity, so `ring` proves it. The `ε³`
+  coefficient of the true root happens to be zero.
+- *Certify.* Newton–Kantorovich, the archimedean half of §3.2's Newton
+  lemma, combines three facts: the residual is small, the inverse
+  derivative is bounded near `x₂` (by `β`, about `1/2`), and the second
+  derivative is bounded (`F'' = 2`). Together they give a true root within
+  `2β·|ε|⁴/64` of `x₂` for `|ε| ≤ r`. The result is the certified expansion
+  `x(ε) = 1 − ε/2 + ε²/8 + R` with `|R| ≤ C·|ε|⁴`, where `C` and `r` are
+  rationals produced as data (Layer D). This is the shape of validated
+  numerics (Kantorovich, Krawczyk) and of `by intervals()`.
+
+**Singular: the linearisation is not invertible.**
+
+- In `x² − ε = 0` near `0`, `F' = 0`, so Hensel stalls. The Newton polygon
+  has points at (exponent of `x`, valuation of coefficient) `(2, 0)` and
+  `(0, 1)`. Its slope is `1/2`, so `x ~ ε^{1/2}`. Rescaling `x = ε^{1/2}·y`
+  gives `y² − 1 = 0`, which is regular. Singular perturbation is therefore
+  a rescaling chosen by the polygon (the tropicalisation), followed by the
+  regular case, with monomials `ε^ℚ`. The chosen monomial is §3.2's "leading
+  term as data" witness.
+- `εx² + x − 1 = 0` has one tame root near `1` and one that escapes like
+  `−1/ε`. That is slope `−1`, a negative-exponent monomial. The dominance
+  relation handles it because its monomials form a group, not just `ℕ`.
+
+**Differential equations: perturbation meets coinduction.**
+
+- `y' = y + εy²` with `y(0) = 1`. Expand `y = y₀ + εy₁ + …`. Each order
+  solves the same linear operator with a source from lower orders:
+  `yₖ' − yₖ = gₖ`. On Hurwitz series in `t`, solving it with a given
+  initial value is coefficient recursion, which is a definition by ODE
+  (§3.4). Here "the linearisation is invertible" reads as "the linear
+  operator has a coinductive solution".
+- *Secular terms.* For a nonlinear oscillator the naive expansion grows like
+  `εt·sin t`, so the remainder's constant is not uniform in `t`.
+  Poincaré–Lindstedt and multiple scales repair this by changing the scale
+  (a shifted frequency, a slow time `εt`). In this framework that is a
+  different choice of monomials, not a new theory.
+- *Boundary layers.* `εy'' + y' + y = 0` has solutions containing
+  `e^{−t/ε}`. That term is smaller than every power of `ε`, so power series
+  cannot see it. It is a transseries monomial (§11).
+- *Divergent series.* Perturbation series are often Gevrey-divergent. Borel
+  resummation and resurgence sit at the end of the transseries road.
+
+**The ladder.**
+
+| Kind | Monomials | Lifting | Check |
+|---|---|---|---|
+| regular | `ε^ℕ` | Hensel | `ring` on the residual, then Kantorovich |
+| singular algebraic | `ε^ℚ` (and negative exponents) | Newton polygon, then Hensel | the same |
+| secular | a rescaled time or frequency | change of scale | a remainder uniform on the new scale |
+| boundary layer | `e^{−t/ε}` and others | transseries | horizon |
+| resurgent | resummed divergent series | Borel | horizon |
+
+The width expansions of ML theory are the first row with `ε = 1/n`. The
+infinite-width limit is order zero, and the finite-width corrections are
+computed by the same linear-at-each-order scheme.
+
 ## 11. Layer G: differential-valued fields and transseries (horizon)
 
 A transseries is a generalised series `∑ c_𝔪 𝔪` over a totally ordered
@@ -914,8 +1018,8 @@ note.
 | 8 | `power-series-evaluation` | E | 2, 3, 4 | `elementary-functions-at-reals`' laws, real arguments, rebasing `Series` |
 | 9 | `wz-certificates` | §3.5 | 1, 2, `field-simp` | hypergeometric sum identities by certificate |
 | 10 | `holonomic-closure` | §3.5 | 3, 9 | ODE- and recurrence-defined identities by certificate |
-| 11 | `regular-perturbation-expansions` | F | 6, 7 | perturbed roots and fixed points, the float error reading, width expansions |
-| 12 | `taylor-model-enclosures` | D (uniform) | 7, intervals (#208) | tighter `by intervals()` over ranges, `float-transcendental` specs |
+| 11 | `taylor-model-enclosures` | D (uniform) | 7, intervals (#208) | bounds uniform over a range (11 needs them for `|ε| ≤ r`), tighter `by intervals()`, `float-transcendental` specs |
+| 12 | `regular-perturbation-expansions` | F | 6, 7, 11 | perturbed roots and fixed points, the float error reading, width expansions |
 | 13 | `harmonic-and-stirling-asymptotics` | showcase | 7, 8, `log` | the first divergent expansion, and γ |
 | 14 | `grid-based-transseries` | G, meeting point | 5, 6, 11 | research horizon: differential-valued fields, Gruntz |
 
@@ -943,6 +1047,7 @@ Made here. Each is revisable when a customer pushes back.
   as the core. The concrete layers are their first instances (§3).
 - **A derivative is data.** A differentiable map is a map paired with its
   derivative and evidence (§3.1), and smoothness is coinductive.
+- **Several variables are iterated series** (§5).
 - **Smallness is a dominance relation without totality**, with leading
   monomials as data (§3.2). Newton's lemma is one contraction theorem with
   rates.
@@ -970,8 +1075,6 @@ Left open:
   case. Tangent categories need the first.
 - When non-Cartesian (tangent) structure is wanted. Decide at the first
   manifold customer.
-- Multivariate Hurwitz series, iterated or multi-index. Decide at the first
-  two-variable customer.
 - The normed-ring class for generic series carriers (§8). Decide at the
   first non-`Rat` coefficient customer.
 - The surface spelling of `∑` before the binder production lands.
