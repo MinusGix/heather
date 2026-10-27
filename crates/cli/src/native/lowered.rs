@@ -1,4 +1,4 @@
-//! A source read back as a literal (`Source::spelled`, native_build): its
+//! A source read back as a literal (`Source::spelled`, native_source_spelled): its
 //! buffers, and its statement tree with each leaf's nodes. `write-elf`
 //! states the literal, checks it equal to the source by `refl`, and
 //! compiles it, so a source a builder lowers is evaluated once rather than

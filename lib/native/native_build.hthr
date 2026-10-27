@@ -393,7 +393,6 @@ fn List::packed(self items: List<Item>, group: List<Node>) → Stmt {
     }
 }
 
-
 fn Act::items(self a: Act, next: Nat) → List<Item> {
     match a {
         Skip => [],
@@ -455,103 +454,4 @@ fn Tool::opened(self t: Tool, buf: Nat) → Opened {
 fn Tool::source(self t: Tool) → Source {
     let o = t.opened(0);
     Source(functions := [], buffers := o.buffers, main := o.main.items(0).packed([]))
-}
-
-// ---------------------------------------------------------------------------
-// A source spelled as numbers, for `heather write-elf`
-
-// `write-elf` reads a source this way on its fork and states it as a
-// literal the kernel checks equal to the source by `refl`, then compiles
-// the literal, so a tool's lowering is evaluated once and not again in
-// every statement of the certificate (crates/cli/src/native/elf.rs). A
-// region other than a dataflow leaf, or a source with functions, is spelled
-// `[0]`, and `write-elf` then compiles the source as it is. Untrusted: a
-// misspelling is a literal the kernel refuses.
-
-fn List::spell_ports(self ports: List<Port>) → List<Nat> {
-    match ports { Nil => [], Cons(port, rest) => Cons(port.id, Cons(port.width, rest.spell_ports())) }
-}
-
-fn Ports::spelled_ports(self ports: Ports) → List<Nat> { Cons(ports.entries.len(), ports.entries.spell_ports()) }
-
-// A node's tag, then its fields in order.
-fn Node::spelled_node(self node: Node) → List<Nat> {
-    match node {
-        Const(width, output, value) => [0, width, output, value],
-        Move(width, output, source) => [1, width, output, source],
-        Add(width, output, left, right) => [2, width, output, left, right],
-        Sub(width, output, left, right) => [3, width, output, left, right],
-        BitAnd(width, output, left, right) => [4, width, output, left, right],
-        BitOr(width, output, left, right) => [5, width, output, left, right],
-        BitXor(width, output, left, right) => [6, width, output, left, right],
-        ShiftLeft(width, output, value, amount) => [7, width, output, value, amount],
-        LogicalShiftRight(width, output, value, amount) => [8, width, output, value, amount],
-        ArithmeticShiftRight(width, output, value, amount) => [9, width, output, value, amount],
-        UnsignedLessThan(width, output, left, right) => [10, width, output, left, right],
-        SignedLessThan(width, output, left, right) => [11, width, output, left, right],
-        Equal(width, output, left, right) => [12, width, output, left, right],
-        BufferLoad(output, buffer, index) => [13, output, buffer, index],
-        BufferStore(output, buffer, index, value) => [14, output, buffer, index, value],
-    }
-}
-
-fn List::spell_nodes(self nodes: List<Node>) → List<Nat> {
-    match nodes { Nil => [], Cons(node, rest) => node.spelled_node() ++ rest.spell_nodes() }
-}
-
-fn CallShape::spelled_call(self shape: CallShape) → List<Nat> {
-    match shape {
-        Reads(fd, buf, len, result) => [0, fd, buf, len, result],
-        Writes(fd, buf, from, len, result) => [1, fd, buf, from, len, result],
-        Opens(path, len, result) => [2, path, len, result],
-        Closes(fd, result) => [3, fd, result],
-        StatsPath(path, len, out, result) => [4, path, len, out, result],
-        StatsFd(fd, out, result) => [5, fd, out, result],
-    }
-}
-
-// `None` for a region that is not a dataflow leaf.
-fn StructuredRegion::spelled_region(self region: StructuredRegion) → Option<List<Nat>> {
-    match region {
-        Dataflow(body) => Some(List::append(body.inputs.spelled_ports(), Cons(body.nodes.len(), List::append(body.nodes.spell_nodes(), body.outputs.spelled_ports())))),
-        Sequence(_, _) => None,
-        Compose(_, _) => None,
-        Conditional(_, _, _, _, _, _) => None,
-        Call(_, _, _) => None,
-        Loop(_, _, _, _, _, _, _, _, _) => None,
-    }
-}
-
-fn Option::spell_then(self first: Option<List<Nat>>, rest: Option<List<Nat>>) → Option<List<Nat>> {
-    match first { None => None, Some(a) => match rest { None => None, Some(b) => Some(a ++ b) } }
-}
-
-// A statement's tag, then its fields, a statement's in prefix order.
-fn Stmt::spelled_stmt(self s: Stmt) → Option<List<Nat>> {
-    match s {
-        Compute(region) => Some([0]).spell_then(region.spelled_region()),
-        Invoke(shape) => Some(Cons(1, shape.spelled_call())),
-        Then(first, rest) => Some([2]).spell_then(first.spelled_stmt()).spell_then(rest.spelled_stmt()),
-        Branch(condition, yes, no) => Some([3, condition]).spell_then(yes.spelled_stmt()).spell_then(no.spelled_stmt()),
-        Repeat(body, again) => Some([4, again]).spell_then(body.spelled_stmt()),
-        Exit(status) => Some([5, status]),
-    }
-}
-
-fn List::spell_buffers(self buffers: List<Buffer>) → List<Nat> {
-    match buffers {
-        Nil => [],
-        Cons(b, rest) => Cons(b.capacity, Cons(b.initial.len(), List::append(b.initial.map(λ (c: BitVec(8)) => c.toNat()), rest.spell_buffers()))),
-    }
-}
-
-// `[1]`, its buffers' count and each buffer, then `main`; or `[0]`.
-fn Source::spelled(self src: Source) → List<Nat> {
-    match src.functions {
-        Cons(_, _) => [0],
-        Nil => match src.main.spelled_stmt() {
-            None => [0],
-            Some(main) => Cons(1, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), main))),
-        },
-    }
 }
