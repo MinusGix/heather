@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-Layer C of `docs/analysis-foundations-design.md` (§5): countable nested
+Layer C of `docs/analysis-foundations-design.md` (§6): countable nested
 neighbourhood bases ("approaches") and Landau relations whose constants and
 moduli are data, instead of filters.
 

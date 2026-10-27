@@ -27,4 +27,4 @@ can proceed at its own pace.
 
 ## Log
 
-- 2026-10-27: docs/analysis-foundations-design.md §6.2 proposes Bishop's uniform derivative stated as a uniform first-order expansion ([[certified-expansions]]), with the rules from jet identities ([[formal-power-series]]) plus remainder lemmas ([[asymptotic-relations]]), and the mean value inequality by telescoping.
+- 2026-10-27: docs/analysis-foundations-design.md §7.2 proposes Bishop's uniform derivative stated as a uniform first-order expansion ([[certified-expansions]]), with the rules from jet identities ([[formal-power-series]]) plus remainder lemmas ([[asymptotic-relations]]), and the mean value inequality by telescoping. The derivative is the `C¹` instance of the differential-structure interface ([[differential-structures]], §3.1); Lipschitz functions with the Edalat–Lieutier interval derivative are its lax instance.

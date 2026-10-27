@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-Layer D of `docs/analysis-foundations-design.md` (§6): an expansion in a
+Layer D of `docs/analysis-foundations-design.md` (§7): an expansion in a
 scale with a certified remainder, read either uniformly on a neighbourhood or
 asymptotically, and the derivative defined as a uniform first-order expansion.
 

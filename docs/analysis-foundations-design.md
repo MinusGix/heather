@@ -1,65 +1,111 @@
-# Foundations for analysis: finite sums, asymptotics, expansions
+# Foundations for analysis: two structures and where they meet
 
-Status: design and survey, 2026-10-27. No code lands with this note; the
-rounds it orders are filed as issues (§12). It answers part of
-`issues/big-operator-semantics.md` (the finite case, §3) and the design
-question in `issues/real-functions-and-derivatives.md` (which derivative,
-§6), and it proposes a route to the laws in
-`issues/elementary-functions-at-reals.md` (§7).
+Status: design and survey, 2026-10-27, revised the same day after Minus's
+review. No code lands with this note. The rounds it orders are filed as
+issues (§13).
+
+It answers part of `issues/big-operator-semantics.md` (the finite case,
+§4). It answers the design question in
+`issues/real-functions-and-derivatives.md` (which derivative, §3.1 and
+§7). It proposes a route to the laws in
+`issues/elementary-functions-at-reals.md` (§8).
 
 ## 1. The thesis
 
 The usual road through analysis treats Taylor series as the thing the
-library is for. Define limits, then derivatives, then iterated derivatives,
-then Taylor's theorem, and then define `exp`, `sin` and `cos` as their
-series. Every later result goes back through that chain. Heather's current
-`exp`/`sin`/`cos` (`lib/std/num/float/elementary.hthr`) already follow it.
-They are series with a ratio bound, and their laws are stuck because each
-law needs analysis that does not exist yet.
+library is for. Limits come first, then derivatives, then iterated
+derivatives, then Taylor's theorem, and then `exp`, `sin` and `cos` defined
+as their series, with every later result going back through that chain.
+Heather's current `exp`/`sin`/`cos` (`lib/std/num/float/elementary.hthr`)
+already follow it. They are series with a ratio bound, and their laws are
+stuck because each law needs analysis that does not exist yet.
 
-The proposal is to make Taylor series one instance of a more general
-object. Three ingredients are worth founding separately, because each
-already has a good theory of its own:
+The goal is a foundation general enough to reach a list of very different
+places with no change of footing:
 
-1. **Finite algebra.** `∑` and `∏` over finite index sets, difference
-   calculus, polynomials, and truncated and formal power series. All of it
-   computes at `Rat` and all of it is ring identities, so `ring` (and,
-   modulo `≈`, PR #219) does most of the proving.
-2. **A way to say "small", with the witness as data.** These are
-   neighbourhood bases indexed by `Nat`, an "eventually" whose threshold is
-   a value, and Landau's `O`, `o` and `~` with their constants and moduli
-   written in. Heather's reals already use this shape three times without
-   naming it (§2).
-3. **The coupling, which is a certified expansion.** A finite part from (1)
-   plus a remainder bounded by (2): `f = ∑_{k<N} c_k φ_k + O(φ_N)`. An
-   expansion stands to a function germ as an `Interval` stands to a number.
-   It is finite data that encloses the object with a certified error, and
-   arithmetic on expansions is `O`-arithmetic, just as interval arithmetic
-   widens its bounds.
+- perturbation theory, regular and singular;
+- transseries;
+- machine-learning theory (backprop, width expansions);
+- more exotic spaces (manifolds, `p`-adics).
 
-On top of those three, the familiar results become constructions rather
-than foundations:
+The proposal is that analysis rests on **two orthogonal structures and the
+place where they meet**. Taylor series is the most degenerate instance of
+both.
+
+- **A differential structure** (§3.1) says what a derivative is, without
+  saying what the spaces are: a derivative that is linear in the direction,
+  satisfies the chain rule, and has a reverse form. Cartesian differential
+  categories, reverse derivative categories and tangent categories
+  axiomatise it. Its instances include:
+  - jets and polynomials;
+  - coefficient streams;
+  - functions on `CReal` with a uniform or interval derivative;
+  - programs;
+  - parametrised models in ML;
+  - manifolds.
+- **A dominance relation** (§3.2) says what "small" is and how expansions
+  converge: `f ≼ g`, meaning "`f` is `O(g)`", as a relation with axioms,
+  together with completeness and **Newton's lemma**. Its instances include:
+  - `ε`-adic power series, which is regular perturbation;
+  - Puiseux series, which is singular perturbation;
+  - transseries;
+  - `p`-adic numbers;
+  - germs at an approach, which is ordinary asymptotics;
+  - `1/width` expansions.
+- **Where they meet** (§3.3): differential-valued fields, in which the
+  derivative respects the dominance relation. This is the theory that
+  transseries and Hardy fields live in, and it is the long-term target.
+
+Two choices cut across both structures:
+
+- **Representation by calculus in coinductive form** (§3.4). An expansion
+  is its stream of derivatives at a point, differentiation is `tail`, a
+  function is defined by the differential equation it satisfies, and laws
+  are proved by bisimulation.
+- **Automation by decision procedures that emit certificates** (§3.5). WZ
+  pairs handle sums, holonomic closure handles functions defined by linear
+  ODEs, and Gruntz's algorithm handles limits of exp-log expressions. Each
+  is checked the way `omega` and `ring` are.
+
+The concrete layers that the first draft of this note proposed are kept as
+the **first instances** of the core (§4–§12). They are:
+
+- finite sums and difference calculus;
+- Hurwitz series and jets;
+- witnessed asymptotics;
+- certified expansions;
+- series evaluation.
+
+They are what to build first. Each interface is filed early and validated
+by two of them (§3.7).
 
 | Result | How it falls out |
 |---|---|
-| Derivative | the coefficient of `h` in a first-order expansion of `f(x + h)` (uniform: Bishop's derivative) |
-| Sum, product and chain rules, Faà di Bruno | ring identities in the jet algebra (1), plus one remainder lemma per operation (2) |
+| Derivative | a map paired with derivative evidence (§3.1). On `CReal` the evidence is a uniform first-order expansion, which is Bishop's derivative (§7) |
+| Sum, product, chain rules, Faà di Bruno | closure of the differential structure. For each instance, ring identities on jets plus one remainder lemma per operation |
 | Taylor's theorem | relates order-`N` expansions to iterated derivatives. It is a theorem and defines nothing |
-| `exp(a+b) = exp(a)·exp(b)` | the binomial theorem coefficientwise (1), plus "evaluation is a ring homomorphism" on a disc (§7) |
-| `sin² + cos² = 1` | formally, `D(s² + c²) = 0` with constant term 1, so the series is `1` by its coefficients. Then evaluate |
-| Limits, continuity | `f - L = o(1)` at an approach (2) |
-| Stirling, harmonic numbers | divergent asymptotic expansions (3) at `n → ∞`. Here a Taylor-first library has nothing to say (§8) |
-| Float error analysis | first-order perturbation in `u`. `Format::gamma_add` is already `O`-arithmetic (§9) |
-| Perturbation series | formal Newton lifting in `A[[ε]]` (1), justified by a contraction with rates (§9) |
-| Transseries | (1) with the monomial monoid `ℕ` replaced by an ordered group of log-exp monomials (§10) |
+| `exp`, `sin`, `cos` | defined by `exp' = exp` and `sin' = cos`, `cos' = -sin` over any commutative ring (§5) |
+| `sin² + cos² = 1`, `exp(a+b) = exp(a)·exp(b)` | the derivative is zero and the heads agree, so they are equal by coinduction (§3.4), and evaluation carries them to `CReal` (§8) |
+| Limits, continuity | `f - L ≺ 1` at an approach (§6) |
+| Regular perturbation | Hensel lifting in the `ε`-adic dominance (§3.2, §10) |
+| Singular perturbation | the Newton polygon (tropical geometry), giving Puiseux exponents (§10) |
+| Stirling, harmonic numbers | divergent asymptotic expansions at `n → ∞` (§9), which a Taylor-first library cannot state |
+| Float error analysis | first-order perturbation in `u`. `Format::gamma_add` is already `O`-arithmetic (§10) |
+| Backprop, optimisers | a reverse differential structure on parametrised maps (§3.1) |
+| Width expansions (PDLT) | perturbation in `1/n` at `n → ∞` (§10) |
+| Transseries | the meeting point (§3.3) with log-exp monomials (§11) |
+| Sum identities, ODE identities, limits | WZ certificates, holonomic closure, Gruntz (§3.5) |
 
-This is not a new idea in mathematics. It is Bourbaki's and Dieudonné's
-"développements limités", Bishop's moduli, the algebra of Poincaré
-asymptotic expansions, the Taylor models of validated numerics, and the
-grid-based transseries of van der Hoeven. What is particular to Heather is
-that all four can share one set of finite records. In a constructive kernel
-the remainder's constants and thresholds are data, and that collapses the
-difference between "asymptotic" and "validated".
+None of this is new mathematics. What is particular to Heather is that, in
+a constructive kernel, the witnesses are data:
+
+- a derivative is carried, never asserted to exist;
+- a leading monomial is carried, never computed by a zero test;
+- a remainder's constant and threshold are values.
+
+Carrying the witnesses is what lets "asymptotic" and "validated" be one
+record (§7), and it is the same pattern `CReal` already uses for
+positivity.
 
 ## 2. What Heather has to build on
 
@@ -93,28 +139,271 @@ Some observations from that inventory:
 
 1. **`Series::sum` is a hand-rolled finite sum.** It is `match k { Zero =>
    0, Succ(i) => s.sum(i) + s.term(i) }`, which is exactly the range sum of
-   §3. `Series::tail` is a telescoping identity fused with a geometric
+   §4. `Series::tail` is a telescoping identity fused with a geometric
    majorant estimate.
 2. **"Eventually, with the threshold as data" is already written three
    times.** `CReal::Same` is `(k) → ∃ start, (n) → start <= n → |x_n - y_n|
    <= 1/(k+1)`. `regular` is the same bound in uniform form, and `Series`
    has its `start`. Each copy has its own index arithmetic. This is the
-   asymptotic layer of §5, unnamed.
+   asymptotic layer of §6, unnamed.
 3. **The laws of `exp` are blocked on a finite identity.** The `n`-th term
    of the Cauchy product of the `exp` series at `a` and `b` is
    `∑_{i+j=n} a^i/i! · b^j/j! = (a+b)^n/n!`, which is the binomial theorem.
    The only analysis left after that is the tail of a product of two
-   geometrically dominated series.
+   geometrically dominated series. In the Hurwitz convention of §5 even
+   the binomial step disappears: both sides solve `F' = (a+b)·F`.
 4. **Float error analysis already does `O`-arithmetic.** `gamma_add` is the
    statement that `(1+θ_m)(1+θ_n) = 1+θ_{m+n}`, with second-order terms
    absorbed. It is perturbation theory in `u` to first order, with explicit
    constants.
 
-## 3. Layer A: finite sums and products
+## 3. The general core
+
+### 3.1 Axis 1: differential structure
+
+The most general notion of derivative that still has a chain rule comes
+from three axiomatisations:
+
+- **Cartesian differential categories** (Blute, Cockett and Seely, 2009).
+  The maps go between objects that carry commutative-monoid structure. Each
+  map `f: A → B` has a derivative `D[f]: A × A → B`, taking a point and a
+  direction. Seven axioms govern it:
+  - `D` is additive in `f`;
+  - `D[f]` is linear in the direction;
+  - identities and projections are their own derivatives;
+  - `D` respects pairing;
+  - the chain rule holds: `D[g ∘ f](x, v) = D[g](f(x), D[f](x, v))`;
+  - mixed second derivatives are symmetric.
+- **Reverse derivative categories** (Cockett and others, 2020). These add
+  `R[f]: A × B → A`, which takes a point and a cotangent and gives a
+  cotangent. They are reverse-mode AD as an axiom system. Cruttwell,
+  Gavranović, Ghani, Wilson and Zanasi (2022) build gradient-based learning
+  on them: models are parametrised maps, learners are lenses, and
+  optimisers are lens morphisms.
+- **Tangent categories** (Rosický, 1984; Cockett and Cruttwell, 2014). These
+  drop the Cartesian assumption and use a tangent-bundle functor `T`
+  instead, for spaces that are not vector spaces. That covers manifolds,
+  diffeological spaces, models of synthetic differential geometry, and the
+  algebraic case of Kähler differentials.
+
+A **derivation** `∂` on a commutative ring is the one-object algebraic
+shadow of this. The Leibniz rule is the chain rule applied to
+multiplication. A derivation is all that transseries need (§3.3).
+
+**How Heather carries it.** A differentiable map is a map paired with its
+derivative and the evidence that links them. The derivative is never
+asserted to exist. This is how AD works in practice: dual numbers carry
+`(f(x), f'(x))`. It is also the constructive reading of Bishop's derivative.
+
+```heather
+// Sketch. The evidence predicate is what an instance supplies.
+record Diff<A, B> { map: A → B, deriv: A → A → B, ok: Deriv(map, deriv) }
+// id, compose (chain rule), pair, sum: closure theorems per instance,
+// stated once as the interface's laws.
+```
+
+A **smooth** map is a map whose derivative is again differentiable, without
+end. That makes smoothness coinductive: the `C^∞` evidence is a stream of
+derivative evidence, and `C^k` is `k` unrollings. This is the same
+structure as §3.4, one level up.
+
+| Instance | Derivative evidence | Laws proved by |
+|---|---|---|
+| polynomials and jets over a ring | formal derivative, exact | `ring` |
+| Hurwitz series (§5) | the shift | coinduction (induction on the index) |
+| `C¹` functions on `CReal` (§7) | a uniform first-order expansion with its modulus | the asymptotic closure lemmas (§6) |
+| Lipschitz functions on `CReal` | an interval enclosure of slopes (Edalat and Lieutier) | enclosure. The chain rule holds as an inclusion, so this is a *lax* instance |
+| programs | a source transformation | proved once (`ml-layers`, `hih-passes`) |
+| ML models | a reverse structure on parametrised maps | the reverse axioms |
+| manifolds and the like | a tangent structure | later |
+
+The Edalat–Lieutier derivative earns its place. It is defined for every
+Lipschitz function, at a kink like ReLU's it is Clarke's generalised
+gradient, and the fundamental theorem of calculus holds for it. Wick's
+practical backward pass with subgradients is exactly this instance, and its
+enclosures are the interval arithmetic Heather already has.
+
+### 3.2 Axis 2: dominance, convergence, Newton
+
+A **valuation** on a ring `A` is a map `v: A → Γ ∪ {∞}` into an ordered
+group of monomials, with `v(ab) = v(a) + v(b)` and `v(a + b) ≥ min`.
+Computing `v` means finding the first nonzero coefficient, which is
+undecidable for an infinite expansion even over `Rat`. So Heather does not
+take `v` as primitive. It takes the relation that a valuation induces,
+which Aschenbrenner, van den Dries and van der Hoeven also work with
+directly:
+
+- a **dominance relation** `f ≼ g` ("`f` is `O(g)`"), a preorder with
+  `f ≼ 0 → f ≈ 0`, `f ≼ h ∧ g ≼ h → f + g ≼ h`, and `f ≼ g → fh ≼ gh`;
+- `f ≺ g` ("`f` is `o(g)`") with its witness as data;
+- **no totality**, since constructively two germs need not be comparable.
+
+A leading monomial, when one is needed (the sign of a transseries, a
+reciprocal), is carried as data: an index below which the coefficients are
+`≈ 0`, and a coefficient apart from zero at that index. That is how `CReal`
+carries positivity, one level up.
+
+**Landau's `O` at an approach (§6) satisfies these axioms**, so ordinary
+asymptotics is the archimedean instance of this axis. The `ε`-adic order on
+power series, the `p`-adic order and transseries' dominance are the
+non-archimedean instances. One interface covers both.
+
+**Convergence** is Cauchy-ness for the relation, with rates. In the
+`ε`-adic case it means coefficients stabilise. On `CReal` it means
+regularity.
+
+**Newton's lemma is the central theorem.** If an approximate root `a` of
+`f` has `f(a)` small against `f'(a)²`, then `a` lifts to an exact root, and
+the convergence is quadratic. Non-archimedean, this is Hensel's lemma, with
+the condition `v(f(a)) > 2·v(f'(a))`. Archimedean, it is Newton–Kantorovich.
+Both are a contraction with a rate in a complete structure. So Heather
+should prove one fixed-point theorem with rates and get both Newton lemmas
+from it, rather than proving the two lemmas separately.
+
+| Instance | Monomials | What it gives |
+|---|---|---|
+| germs at an approach (§6) | the functions themselves (archimedean) | limits, `O`/`o`, asymptotic expansions |
+| `A[[ε]]`, the `ε`-adic order | `ε^ℕ` | regular perturbation by Hensel lifting (§10) |
+| Puiseux series | `ε^ℚ` | singular perturbation. The Newton polygon is tropical geometry |
+| `1/n` series at `n → ∞` | `n^{-ℕ}` | width expansions in ML theory (§10) |
+| `ℚ_p` | `p^ℤ` | `p`-adic analysis, the exotic instance that comes free |
+| grid-based transseries (§11) | log-exp monomials | the meeting point's main instance |
+
+### 3.3 Where they meet: differential-valued fields
+
+A **differential-valued field** (Rosenlicht, 1980) is a field with both a
+derivation and a dominance relation. The two are compatible: roughly, a
+bounded element's derivative is dominated by the logarithmic derivative of
+any infinitesimal one, so small things have small derivatives on the scale
+the field itself sets.
+
+Aschenbrenner, van den Dries and van der Hoeven add an order (H-fields)
+and a differential Hensel property they call **newtonian**: differential
+polynomials with a suitably simple approximate zero have a true zero. This
+is Newton's lemma of §3.2 lifted to differential equations, and it is what
+asymptotic perturbation of ODEs is.
+
+The instances are:
+
+- Laurent series in `x` with `d/dx`, which compute;
+- Hardy fields, meaning germs at `+∞` of real functions closed under
+  differentiation;
+- the transseries, which form a newtonian H-field with a model-complete,
+  decidable theory.
+
+This is Heather's long-term target for asymptotic analysis. It is stated as
+a class over the two axes once both have instances (§3.7).
+
+### 3.4 Representation: calculus in coinductive form
+
+Pavlović and Escardó (1998) represent an analytic function at a point by
+its stream of derivatives `f(0), f'(0), f''(0), …`, with no factorials.
+Then:
+
+- **Differentiation is `tail`.**
+- **Bisimulation is the proof principle.** `f ≈ g` when `f(0) ≈ g(0)` and
+  `f' ≈ g'`.
+- **A differential equation is a definition.**
+  - `exp` is the stream with head `1` and derivative `exp`.
+  - `sin` and `cos` are the pair with heads `0` and `1` and `sin' = cos`,
+    `cos' = -sin`.
+  - `tan` has `tan' = 1 + tan²`.
+  - The product is defined by the Leibniz rule: `(fg)(0) = f(0)g(0)` and
+    `(fg)' = f'g + fg'`.
+- **Laws are short coinductive proofs.** For `s² + c²`, the derivative is
+  `2sc - 2cs ≈ 0` and the head is `1`, so it is `1`. For `exp(a + b)`, both
+  sides solve `F' = F` with the same head.
+
+Algebraically this is the ring of **Hurwitz series** (Keigher, 1997). The
+product is binomial convolution, `(ab)_n = ∑_{k≤n} C(n,k)·a_k·b_{n-k}`, and
+the derivative is the shift. It works over **any** commutative ring, with no
+`ℚ` needed. So `exp`, `sin`, `cos` and their laws live over `ℤ`, and "the
+derivative is zero, so the series is constant" holds outright, because a
+zero shift means a zero tail, with no `n + 1` to invert. The bridge to
+ordinary power series is `a_n ↦ a_n / n!`, and it is needed only at
+evaluation (§8).
+
+**Heather specifics.** The Leibniz product is corecursion *up to* `+`: its
+tail is `f'g + fg'`, not a direct self-call. Heather's corecursion accepts a
+self-call only as a direct child of the returned constructor
+(`issues/codata-nested-guards.md`), and its bisimilarity is a relation,
+not `=`. So the decision is to **take the method, not the datatype**:
+
+- A series is a coefficient function `Nat → A`.
+- A definition by an ODE `f' = F(f)` is course-of-values recursion, since
+  coefficient `n+1` comes from coefficients `≤ n`.
+- The bisimulation principle is a theorem proved by induction on `n`.
+
+Codata becomes the better representation once corecursion up to "friendly"
+operations exists (Blanchette and others, 2015). That belongs to
+`codata-nested-guards`. Nothing here waits for it.
+
+The coinductive method generalises beyond `ℕ`. Smoothness is coinductive
+(§3.1). For transseries, the supports are not `ℕ`-indexed, and coinduction
+over a well-based order is a research question (§11).
+
+### 3.5 Automation: decision procedures with certificates
+
+Each instance has decision procedures that analysts use by hand. In
+Heather each one should emit a certificate that is checked as `omega` and
+`ring` are checked: the search is untrusted, and the check is a
+kernel-checked identity.
+
+| Procedure | Domain | Certificate | Check |
+|---|---|---|---|
+| Gosper, Zeilberger, WZ pairs (*A = B*) | hypergeometric finite sums (§4): binomial identities, Vandermonde, hundreds more | a rational function `R(n, k)` | a `ring` identity after clearing denominators, then the telescoping lemma of §4 |
+| holonomic closure | sequences and functions given by a linear recurrence or ODE with polynomial coefficients | the annihilating operator and initial terms | an operator identity by `ring`, then uniqueness of solutions by coinduction (§3.4) |
+| Gruntz's algorithm | limits and asymptotics of exp-log expressions | the steps on the most-rapidly-varying set, with sign facts | the dominance closure lemmas (§3.2), with signs by `by intervals()` |
+| `positivity` / `linarith` for `≼` | dominance goals | a combination | the closure lemmas |
+
+The order matters. WZ comes first: it is the smallest and highest-yield of
+these, and its check is an identity of rational functions. Holonomic
+closure comes second, because it gives the elementary functions' identities
+automatically and sits on §3.4. Gruntz belongs to the transseries instance
+and comes last.
+
+### 3.6 What is not the core
+
+- **Synthetic differential geometry.** Its nilpotent infinitesimals make the
+  derivative literally a coefficient, but the Kock–Lawvere axiom contradicts
+  excluded middle and cannot sit on `CReal`. There, `d² ≈ 0` already forces
+  `d ≈ 0`, so the axiom would prove `0 = 1`. It would need its own smooth
+  line with a model behind it. The jets of §5 keep its algebraic content
+  without the axiom. Its models are tangent categories, so they can appear
+  later as instances of §3.1.
+- **Paul Taylor's Abstract Stone Duality and Brouwer's continuity axioms.**
+  These make every definable function continuous, which is beautiful, but
+  they are axioms against excluded middle, and that would block export to
+  Lean (roadmap: export is wanted more than import). They remain research.
+- **Filters** (§6.1).
+- **An infinitesimal surface** (the Ω-calculus of Schmieden and Laugwitz).
+  Its "hyperreals" are sequences up to eventual agreement, which are exactly
+  the germs at `n → ∞` of §6. Writing `ε ≈ 0` and `st(…)` could elaborate to
+  witnessed `≺` statements, so it is a possible notation over this core, not
+  a foundation.
+
+### 3.7 Interfaces and instances
+
+The two axes are filed as interfaces now (`differential-structures`,
+`valued-rings-and-newton`), so that the instance layers are shaped by them.
+Each interface's first round validates it on two instances that differ in
+kind:
+
+- **The differential structure** on jets and Hurwitz series (exact), then
+  on `C¹` functions on `CReal` (with a remainder).
+- **The dominance relation** on germs at `n → ∞` (archimedean) and on
+  `ε`-adic series (non-archimedean).
+
+The meeting-point class waits until Laurent series with `d/dx` exist as an
+instance of both. An interface that two instances do not exercise is cruft,
+and that is the only reason the instances are built in parallel with their
+interfaces rather than after them.
+
+## 4. Layer A: finite sums and products
 
 **Semantics.** This takes route 2 of `big-operator-semantics`: generic
 finite folds over a commutative monoid modulo its relation. Integration is
-separate, and it is defined later as a limit of finite sums (§11) rather
+separate, and it is defined later as a limit of finite sums (§12) rather
 than as integration against counting measure. The counting-measure
 unification stays open for measure theory. A finite sum is what the
 integral of a simple function reduces to, so this layer is a prerequisite
@@ -177,7 +466,7 @@ commutative ring (no division):
 
 - **The fundamental theorem.** `∑_{k<n} Δf(k) ≈ f(n) - f(0)`, which is
   telescoping. Its order form (`Δf <= g` gives `f(n) - f(0) <= ∑ g`) is the
-  discrete mean value inequality that §6 lifts.
+  discrete mean value inequality that §7 lifts.
 - **Summation by parts** (Abel): `∑ f·Δg = [f g] - ∑ Δf · g(·+1)`.
 - **Falling factorials** `x^{\underline m}` are the monomials of Δ:
   `Δ x^{\underline m} = m · x^{\underline{m-1}}`. So `∑_{k<n}
@@ -193,65 +482,73 @@ commutative ring (no division):
   it is a finite-sum identity. The continuous Taylor theorem is its scaling
   limit, and that is the right way round to think about it.
 
-## 4. Layer B: truncated and formal power series
+## 5. Layer B: Hurwitz series and jets
 
-A formal power series over a commutative ring `A` is a coefficient
-function, with `≈` taken coefficientwise:
+This is the representation of §3.4, made concrete. A series over a
+commutative ring `A` is its coefficient function in the Hurwitz convention,
+where `coeff(n)` stands for the `n`-th derivative at the point. `≈` is
+taken coefficientwise.
 
 ```heather
 // Sketch.
-record PowerSeries<A> { coeff: Nat → A }
-fn PowerSeries::Same(f, g) → Type { (n: Nat) → f.coeff(n) ≈ g.coeff(n) }
-fn PowerSeries::mul(f, g) → PowerSeries<A> { PowerSeries(λ n => ∑_{(i,j) ∈ antidiag(n)} f.coeff(i) * g.coeff(j)) }
+record Hurwitz<A> { coeff: Nat → A }
+fn Hurwitz::Same(f, g) → Type { (n: Nat) → f.coeff(n) ≈ g.coeff(n) }
+fn Hurwitz::d(f) → Hurwitz<A> { Hurwitz(λ n => f.coeff(Succ(n))) }        // the derivative is the shift
+fn Hurwitz::mul(f, g) → Hurwitz<A> {
+    Hurwitz(λ n => ∑_{(i,j) ∈ antidiag(n)} C(n, i) * f.coeff(i) * g.coeff(j))
+}
+theorem Hurwitz::coind(f, g, h0: f.coeff(0) ≈ g.coeff(0), hd: f.d() ≈ g.d()): f ≈ g     // bisimulation, by induction
 ```
 
-- **Ring.** Addition is pointwise, and the product is Cauchy convolution,
-  which is a Layer A sum over the antidiagonal. Associativity of the
-  product is the triangle exchange of §3, which makes this the first serious
-  customer of Layer A. The instance is `CommRingOfInt` at the series' `≈`,
-  so `ring` works on series by #219's route.
-- **Polynomials** are series with a degree bound (`∃ d, ∀ n ≥ d, coeff(n) ≈
-  0`, with `d` as data). Jets `Jet(A, N)` are series modulo `x^{N+1}`, that
-  is, `≈` on the coefficients below `N+1` only. That quotient is a ring, and
-  truncation is a ring homomorphism. All three compute at `Rat`, and a
-  coefficient is a finite computation.
-- **The formal derivative** `D` is a derivation (`D(fg) ≈ Df·g + f·Dg`, by
-  reindexing). **Composition** `f ∘ g` is defined when `g.coeff(0) ≈ 0`.
-  Only coefficients up to degree `n` of `f` contribute to coefficient `n` of
-  the composite, so each one is a finite sum. That finiteness property is
-  exactly what transseries generalise (§10).
-- **exp and log** over a `ℚ`-algebra, which needs `1/n!`: an `OrderedField`
-  or a small `RatAlgebra` class with `of_rat`. Formal `exp(a+b) ≈
-  exp(a)·exp(b)` (in `A[[x, y]]`, or at `a = c·x`, `b = d·x` in `A[[x]]`)
-  is the binomial theorem coefficientwise. `D(exp) ≈ exp`, and `D f ≈ 0`
-  implies `f ≈ const`, because `(n+1)·a_{n+1} ≈ 0` gives `a_{n+1} ≈ 0` once
-  `n+1` is invertible. Formal `sin² + cos² ≈ 1` follows: the derivative of
-  the left side is `0` and its constant term is `1`.
-- **Newton iteration** in `A[[x]]` doubles the number of correct
-  coefficients per step. It handles inverses (when `coeff(0)` is a unit),
-  square roots, and roots of a polynomial equation whose derivative is
-  invertible at `x = 0` (Hensel). It is purely algebraic, and §9 needs it.
+- **Ring.** Addition is pointwise, and the product is binomial convolution,
+  a Layer A sum over the antidiagonal with Layer A′'s binomial
+  coefficients. Associativity is the triangle exchange of §4. The instance
+  is `CommRingOfInt` at the series' `≈`, so `ring` works on series by
+  #219's route. The derivative is a derivation: the Leibniz rule
+  `d(fg) ≈ d(f)·g + f·d(g)` is Pascal's rule summed.
+- **Definitions by ODE.** `exp.coeff(n) = 1` for every `n`. `sin` and `cos`
+  have the coefficients `0, 1, 0, -1, …` and `1, 0, -1, 0, …`. A general
+  `f' = F(f)` with a given head is course-of-values recursion on the
+  coefficient index. The laws are coinduction (`Hurwitz::coind`):
+  - `d(s² + c²) ≈ 0` with head `1`, so `s² + c² ≈ 1`, over `ℤ`;
+  - `exp(x + y) ≈ exp(x)·exp(y)` in two variables, or its one-variable
+    shadow `exp(a·t)·exp(b·t) ≈ exp((a+b)·t)`, since both sides satisfy
+    `F' = (a+b)·F` with head `1`.
+- **Polynomials and jets.** A polynomial is a series with a degree bound
+  (`∃ d, ∀ n ≥ d, coeff(n) ≈ 0`, with `d` as data). `Jet(A, N)` is series
+  up to order `N`, meaning `≈` on the coefficients `≤ N` only. That is a
+  ring, and truncation is a ring homomorphism. All three compute at `Rat`
+  and at `Int`.
+- **Composition** `f ∘ g` (Faà di Bruno) is defined when `g.coeff(0) ≈ 0`.
+  Only coefficients up to `n` contribute to coefficient `n` of the
+  composite, so each is a finite sum. That finiteness is what transseries'
+  grid-based supports generalise (§11).
+- **Ordinary power series** over a `ℚ`-algebra are `a_n / n!` of a Hurwitz
+  series. The isomorphism is needed for evaluation (§8) and for Cauchy's
+  majorant estimates, and nowhere else.
+- **Newton iteration** doubles the number of correct coefficients per
+  step. It covers inverses (when `coeff(0)` is a unit), square roots, and
+  simple roots of polynomial equations. It is the `ε`-adic instance of
+  §3.2's Newton lemma, and §10 needs it.
 - **Jets and automatic differentiation.** `Jet(A, 1)` is the dual numbers.
-  Evaluating a polynomial program at `x + ε` gives `f(x) + f'(x)·ε`, where
-  `f'` is the formal derivative. That theorem is forward-mode AD, and the
-  transpose is reverse mode. `issues/ml-layers-reverse-mode.md` asks for "the
-  formal derivative on polynomial layers", and this layer is that.
-  `Jet(A, N)` is Taylor-mode AD.
+  Evaluating a polynomial program at `x + ε` gives `f(x) + f'(x)·ε`, which
+  is the forward-mode AD theorem, and its transpose is reverse mode.
+  `issues/ml-layers-reverse-mode.md` asks for "the formal derivative on
+  polynomial layers", and this layer is that, as the exact instance of
+  §3.1. `Jet(A, N)` is Taylor-mode AD.
 
 This layer is also the algebraic content of synthetic differential
-geometry, without its axiom. SDG's Kock–Lawvere axiom says every map on the
-nilpotent infinitesimals `D = {ε | ε² = 0}` is affine, which contradicts
-excluded middle. Here, `ε` lives in a quotient ring (the jets), so no axiom
-is needed. For polynomial maps the affine property is a theorem of this
-layer. For general maps it holds up to `o(h)`, and that is the definition
-of differentiability in §6.
+geometry, without its axiom (§3.6). There, `ε` with `ε² = 0` is an element
+of the line. Here it lives in a quotient ring, so the "every map on `D` is
+affine" property is a theorem for polynomial maps. For general maps it
+holds up to `o(h)`, which is the definition of differentiability in §7.
 
 Multivariate series (`A[[x, y]]` as `Nat × Nat → A`, or iterated) are
 deferred until a customer needs more than the two-variable `exp` law.
 
-## 5. Layer C: approaches and quantitative asymptotics
+## 6. Layer C: approaches and quantitative asymptotics
 
-### 5.1 Not filters
+### 6.1 Not filters
 
 Mathlib founds limits and Landau notation on filters. A filter on `A` is a
 predicate on predicates, `(A → Type) → Type`, and analysis is
@@ -271,7 +568,7 @@ What analysis on `ℝ` and on sequences uses in practice is a filter
 ∞`, and radii `1/(k+1)` for `y → x`. Both bases are countable and nested.
 So that is the structure to take.
 
-### 5.2 Approaches
+### 6.2 Approaches
 
 ```heather
 // Sketch. A decreasing sequence of neighbourhoods.
@@ -306,7 +603,7 @@ record is the instance at `Nat`.
 theorem relating the two, not by changing the definition) to prove the
 layer fits.
 
-### 5.3 Landau relations with their witnesses
+### 6.3 Landau relations with their witnesses
 
 At an approach `l` on `A` and functions into an ordered field `F` with
 `abs` (`Rat`, `CReal`):
@@ -338,15 +635,18 @@ fn Tendsto(l, f, L) → Type { LittleO(l, λ y => f(y) - L, λ _ => 1) }
 - **Tactic.** `asymp` would normalise `O`-terms the way computer algebra
   truncates series. Its certificate is a chain of closure lemmas, which is
   the same shape as `by intervals()`. It is later, and filed with Layer D.
+- **As a dominance relation.** At a fixed approach, `BigO` satisfies §3.2's
+  axioms, so this layer is the archimedean instance of axis 2. The
+  `ε`-adic and transseries instances share its closure lemmas' statements.
 
 The first customer needs no real functions at all: sequences `Nat → Rat` at
 `n → ∞`. That covers `Series::fine`, the regularity bounds, and statements
 like `cost(n) = O(n log n)` about compiled programs, should
 `heather-in-heather` want to state complexity rather than measure it.
 
-## 6. Layer D: certified expansions and the derivative
+## 7. Layer D: certified expansions and the derivative
 
-### 6.1 The record
+### 7.1 The record
 
 ```heather
 // Sketch. A finite part in a scale and a remainder at the scale's next step.
@@ -367,7 +667,7 @@ The remainder has two readings, and constructively they are one:
   the natural growth path for `by intervals()` once enclosures need to be
   tight over a range, not only at a point.
 - **Asymptotic**: `f - ∑ = O(φ_N)` at `l`. This is a Poincaré expansion.
-  Because `O`'s threshold and constant are data (§5.3), the asymptotic
+  Because `O`'s threshold and constant are data (§6.3), the asymptotic
   reading is the uniform one with the neighbourhood forgotten. One record
   serves both, and the asymptotic statement is a projection of it.
 
@@ -379,7 +679,7 @@ an expansion to its jet is a ring homomorphism into `Jet(F, N)`, and it
 sends composition to jet composition.** Each rule is a ring identity in
 `Jet` plus a bound, proved once and at every order.
 
-### 6.2 The derivative
+### 7.2 The derivative
 
 `f` is **uniformly differentiable on `S` with derivative `g`** when one
 modulus serves every point: for each `k` there is a `δ` such that `x, y ∈
@@ -391,10 +691,14 @@ with the jet as its coefficients.
 
 This settles the design question in `issues/real-functions-and-derivatives.md`.
 Use Bishop's uniform derivative on a set (an interval first), stated as a
-uniform expansion, and let it inherit everything above:
+uniform expansion, and let it inherit everything above. This is the `C¹`
+instance of §3.1's differential structure. The Lipschitz functions with the
+Edalat–Lieutier interval derivative are the lax instance beside it, and
+they are the one ML's subgradients need.
+
 
 - The **rules** (sum, product, chain, quotient where the denominator is
-  apart from zero, and Faà di Bruno at order `N`) come from §6.1.
+  apart from zero, and Faà di Bruno at order `N`) come from §7.1.
 - The **derivative is unique** on a set with no isolated points, which
   needs points apart from `x` arbitrarily close by.
 - The **mean value inequality**: `|g| <= M` on `[a, b]` gives `|f(b) -
@@ -411,7 +715,7 @@ ill-behaved: it does not give a mean value inequality without uniformity.
 It can be defined at a point as a non-uniform expansion if a customer needs
 it, but it is not the default.
 
-## 7. Layer E: series and analytic functions
+## 8. Layer E: series and analytic functions
 
 - **A series** is the range sum of its terms (Layer A) with a tail modulus.
   Convergence is `Tendsto` at `n → ∞` (Layer C), and the limit is a
@@ -423,15 +727,16 @@ it, but it is not the default.
   it is: it is the fast enclosure route (a majorant at ratio `1/2`), and
   `by intervals()` depends on its shape. Rebasing is a refactor that
   changes no statement `elementary.hthr` exports.
-- **Power series with a radius.** A `PowerSeries<Rat>` with a Cauchy
-  majorant `|a_n| <= M / r^n` (with `M` and `r` rational, as data) is an
-  analytic function on `|x| < r`. Evaluation at a `CReal` `x` with `|x| <=
+- **Power series with a radius.** A Hurwitz series over `Rat` whose
+  ordinary coefficients have a Cauchy majorant, `|a_n| / n! <= M / r^n`
+  (with `M` and `r` rational, as data), is an analytic function on
+  `|x| < r`. Evaluation at a `CReal` `x` with `|x| <=
   r' < r` converges at a geometric rate fixed by `r'/r`. **The evaluation
   map is a ring homomorphism on the disc**: sums are immediate, and products
   are the Cauchy product theorem. Majorants multiply, and the product of
-  two geometric tails is bounded through the triangle sums of §3.
+  two geometric tails is bounded through the triangle sums of §4.
 - **The laws of the elementary functions** then need no derivatives of real
-  functions. Each formal law of §4 (`exp(a + b)`, `sin² + cos²`, the
+  functions. Each formal law of §5 (`exp(a + b)`, `sin² + cos²`, the
   addition formulas) maps through the evaluation homomorphism to a law at
   `CReal`. For `elementary-functions-at-reals`, this is the "Cauchy product"
   route, made generic so that it is proved once for every identity rather
@@ -440,7 +745,7 @@ it, but it is not the default.
   `exp(x) = exp(x/2)²` and `exp(h) >= 1 + h` for `h >= 0`. It does not need
   the mean value theorem.
 - **Uniqueness by an equation.** `exp` as the unique solution of `f' = f`,
-  `f(0) = 1`, needs §6. It is a second characterisation, proved after the
+  `f(0) = 1`, needs §7. It is a second characterisation, proved after the
   first, not the definition.
 
 Generic coefficient carriers (complex numbers for `e^{ix}`, matrices for
@@ -450,7 +755,7 @@ That class is deferred until a customer needs one: the first carrier is
 analytic at all, because `ε` is nilpotent: `exp(x + ε) = exp(x)·∑_{k≤N}
 ε^k/k!`. That is how `exp' = exp` appears on the jet side.
 
-## 8. The showcase: Euler–Maclaurin, harmonic numbers, Stirling
+## 9. The showcase: Euler–Maclaurin, harmonic numbers, Stirling
 
 The result that shows why Taylor series should not be the core is an
 expansion that diverges. Stirling's
@@ -478,178 +783,247 @@ Euler–Maclaurin remainder in its summation-by-parts form. Wick's
 `Numerics/Asymptotics` (Gevrey series, Borel summation;
 `docs/wick-survey.md`) is the longer road from here.
 
-## 9. Layer F: perturbation theory
+## 10. Layer F: perturbation theory
 
-**Regular perturbation.** Take an equation `F(x, ε) = 0` with `F(x₀, 0) =
-0` and `∂F/∂x` invertible at `(x₀, 0)`. The formal solution `x(ε) ∈
-A[[ε]]` comes from Newton lifting (Layer B). Each coefficient solves a
-linear equation with the same invertible derivative, so it computes at
-`Rat`. The analytic statement is the order-`N` expansion of the true
-solution (Layer D) with remainder `O(ε^{N+1})`. Its proof is a contraction
-with an explicit rate. Banach's fixed-point theorem is constructive with
-rates, and the rate gives the remainder's constant. The first instances are
-roots of a polynomial with perturbed coefficients, then fixed points of a
-parametrised contraction. Eigenvalue perturbation waits for
-`finite-linear-algebra`, and ODEs in a parameter wait for Picard iteration.
+Every kind of perturbation theory here is Newton's lemma (§3.2) in one
+dominance relation or another.
 
-**Float error analysis is first-order perturbation in `u`.** The standard
+**Regular perturbation.** Take `F(x, ε) = 0` with `F(x₀, 0) = 0` and
+`∂F/∂x` invertible at `(x₀, 0)`. The formal solution `x(ε)` is Hensel
+lifting in the `ε`-adic dominance (Layer B's Newton iteration). Each
+coefficient solves a linear equation with the same invertible derivative,
+so it computes at `Rat`.
+
+The analytic statement is the order-`N` expansion of the true solution
+(Layer D), with remainder `O(ε^{N+1})`. Its proof is the archimedean
+Newton lemma, a contraction with an explicit rate, and the rate gives the
+remainder's constant. One fixed-point theorem with rates serves both sides
+(§3.2). The first instances are a root of a polynomial with perturbed
+coefficients, then fixed points of a parametrised contraction. Eigenvalue
+perturbation waits for `finite-linear-algebra`.
+
+**Singular perturbation.** When the derivative at the base point is not
+invertible, the roots of `F(x, ε) = 0` are Puiseux series in `ε^{1/q}`. The
+exponents are the slopes of the Newton polygon, which is the
+tropicalisation of `F`. This is the dominance relation with monomials
+`ε^ℚ`. Exponentially small terms `e^{-1/ε}` (boundary layers, tunnelling)
+are not Puiseux, and they need transseries (§11).
+
+**Perturbation of differential equations.** An ODE with a small parameter,
+or an asymptotic solution at `x → ∞`, is a newtonian problem: Newton's lemma
+for differential polynomials (§3.3). This is where the meeting point stops
+being abstract.
+
+**Machine-learning theory.** The effective theory of deep networks (Roberts,
+Yaida and Hanin, *The Principles of Deep Learning Theory*; Wick's `PDLT`)
+expands statistics of a network in `1/width`:
+
+- the infinite-width limit (Gaussian process, NTK) is order zero;
+- finite-width corrections are higher orders.
+
+Formally that is a series in `n^{-1}`. Its meaning is a germ statement at
+`n → ∞` with remainder `O(n^{-k-1})`, which is Layers C–D. The lazy-training
+and NTK results are first-order perturbation of the training dynamics
+around initialisation. Heather can state these over `Rat` and `CReal`
+before it has any measure theory, because the expectations involved over a
+finite dataset are finite sums (§4).
+
+**Float error analysis** is first-order perturbation in `u`. The standard
 model `fl(x ∘ y) = (x ∘ y)(1 + δ)` with `|δ| <= u`, and `Format::gamma_add`
 (`γ_m + γ_n + γ_m γ_n <= γ_{m+n}`), is `O`-arithmetic with explicit
 constants at the approach `u → 0⁺`. Nothing in `lib/std/num/float/` needs
-restating. The asymptotic layer should be able to read "error `= n·u +
-O(u²)`" as a projection of the existing `γ_n` bounds, which is a good
-probe that Layer D's records fit a mature existing customer.
+restating. Reading "error `= n·u + O(u²)`" as a projection of the existing
+`γ_n` bounds is a good probe that Layer D's records fit a mature customer.
 
-**Singular perturbation** needs two things that are not power series: the
-fractional powers `ε^{1/q}` of Puiseux series, where the monomial monoid
-becomes `ℚ`, and exponentially small terms `e^{-1/ε}`. Both enter the
-monomial group of §10, which is where transseries come in. Matched
-asymptotics and WKB are out of scope.
+## 11. Layer G: differential-valued fields and transseries (horizon)
 
-## 10. Layer G: transseries (horizon)
-
-A transseries is a generalised power series `∑ c_𝔪 𝔪` over a totally
-ordered monomial group `𝔐` built from `x`, `exp` and `log` (`x^a`, `e^x`,
-`e^{x log x}`, `log log x`, …), whose support is small enough that products
-are defined. The transseries form an ordered differential field closed
-under composition. Aschenbrenner, van den Dries and van der Hoeven show
-that its theory as an ordered differential field is model complete and
-explicitly axiomatised, and so decidable, which makes it a complete theory
-of "asymptotic analysis" in a precise sense. It is the natural end point of Layers B–D, where every
-reasonable germ has an expansion and the expansions form a field.
+A transseries is a generalised series `∑ c_𝔪 𝔪` over a totally ordered
+monomial group `𝔐` built from `x`, `exp` and `log`: `x^a`, `e^x`,
+`e^{x log x}`, `log log x`, and so on. Its support is small enough that
+products are defined. Transseries form a newtonian H-field (§3.3) closed
+under composition. Aschenbrenner, van den Dries and van der Hoeven show that
+its theory as an ordered differential field is model complete and explicitly
+axiomatised, so it is decidable. That makes it a complete theory of
+"asymptotic analysis" in a precise sense. It is the main instance of the
+meeting point. Every reasonable germ has a transseries, and the
+transseries form a field.
 
 Design consequences for Heather:
 
 - **Grid-based, not well-based, supports.** Well-based supports (Hahn
-  series: no infinite ascending chain in the dominance order) need
+  series, with no infinite ascending chain in the dominance order) need
   well-orders, which are constructively delicate. Grid-based supports (van
-  der Hoeven) are contained in `𝔪 · 𝔫₁^ℕ ⋯ 𝔫_k^ℕ` for finitely many
-  infinitesimal monomials. They are finite descriptions, and each
-  coefficient of a product is a finite sum. That is the same finiteness
-  that makes power-series composition work (§4), so this is the
-  computational choice.
-- **The leading term is data.** The order on transseries is the sign of
-  the leading coefficient, which needs to know which coefficients vanish.
-  That is undecidable for an infinite coefficient stream, even over `Rat`,
-  and for `CReal` coefficients it is undecidable outright. So positivity has
-  to be witnessed: an index (monomial) below which coefficients are `≈ 0`
-  and at which the coefficient is positive. This is exactly how `CReal`
-  positivity is witnessed, by an index with a rational gap. The constructive
-  pattern is the one the reals already use, apartness with data, one level
-  up.
-- **Build the tower in steps.** The steps are Laurent series (`𝔐 = ℤ`,
-  which is already an ordered field with witnessed leading terms), then
-  Puiseux (`ℚ`), then `x^a log^b x`, then exponentials, which is the step
-  where closure needs the transfinite tower. Each step is a useful object
-  on its own, and the first two serve singular perturbation (§9).
+  der Hoeven) lie in `𝔪 · 𝔫₁^ℕ ⋯ 𝔫_k^ℕ` for finitely many infinitesimal
+  monomials. They are finite descriptions, and each coefficient of a
+  product is a finite sum. That is the finiteness that makes composition
+  work in Layer B, and it is the computational choice.
+- **The leading term is data** (§3.2). The order is the sign of the leading
+  coefficient, so positivity is witnessed by a monomial below which
+  coefficients are `≈ 0` and a positive coefficient there.
+- **Build the tower in steps.**
+  - Laurent series (`𝔐 = ℤ`) with `d/dx`. These are the first computable
+    differential-valued field and the first instance of both axes at once.
+  - Puiseux series (`ℚ`).
+  - `x^a log^b x`.
+  - Exponentials, where closure needs the transfinite tower.
+
+  Each step has a customer of its own, and the first two serve singular
+  perturbation (§10).
+- **Automation.** Gruntz's algorithm (§3.5) computes limits of exp-log
+  expressions by expanding them in this field. Certifying it is the
+  transseries layer's equivalent of `omega`.
 - **The hook to leave now.** Write Layer B's convolution as a sum over a
   named `antidiag(n)`, the list of factorisations of `n` in the monomial
   monoid. Transseries replace `Nat` and `antidiag` with a grid and its
-  finite factorisation lists. Layer B should not be made generic over the
-  monoid in its first round, which would cost every client for a customer
-  years out, but the name keeps the substitution mechanical.
+  finite factorisation lists. Layer B should not be generic over the monoid
+  in its first round, which would cost every client for a customer years
+  out, but the name keeps the substitution mechanical.
 
-The customers are Wick's asymptotics research, asymptotics of recurrences
-(divide-and-conquer costs), and the ADH theory itself as a long-term
-mathematics showcase. This is research, filed so that the earlier layers
-are shaped by it, not scheduled.
+The customers are Wick's asymptotics research (Gevrey series, Borel
+summation), asymptotics of recurrences, and the ADH theory itself as a
+long-term mathematics showcase. This is research, filed so that the earlier
+layers are shaped by it, not scheduled.
 
-## 11. Integration, briefly
+## 12. Integration, briefly
 
 Integration is not one of these layers, but they decide its first form. A
 uniformly continuous function on `[a, b]` (with its modulus as data) has a
 Riemann integral as the limit of range sums over uniform partitions. The
 tail modulus comes from the continuity modulus, and the limit is a
 `CReal::lim`. That is Bishop's integral. It is Layer A plus Layer C, and it
-gives the fundamental theorem of calculus against §6's derivative by
+gives the fundamental theorem of calculus against §7's derivative by
 telescoping (Layer A′ again). Measure-theoretic integration, and the
 counting-measure view of `∑`, stay with `big-operator-semantics` and the
 measure work (roadmap mathematics item 4). This route does not compete
 with them: Riemann sums are simple-function integrals.
 
-## 12. Order of work
+## 13. Order of work
 
 Each step names what it unblocks. The slugs are the issues filed with this
 note.
 
-| # | Issue | Layer | Needs | Unblocks |
+| # | Issue | Part | Needs | Unblocks |
 |---|---|---|---|---|
 | 1 | `finite-sums-and-products` | A | semiring layers (done) | everything below, plus `finite-linear-algebra`'s `Fin n` sums |
-| 2 | `finite-difference-calculus` | A′ | 1 | binomial theorem (4, 6), geometric tails (6), mean value inequality (5) |
-| 3 | `asymptotic-relations` | C | `CReal` (done), 1 | limits, continuity, `math-reals`' "sequences, limits, continuity" |
-| 4 | `formal-power-series` | B | 1, 2, `ring` at `≈` (#219) | formal laws of `exp`/`sin`/`cos`, the formal derivative for `ml-layers`, Newton lifting |
-| 5 | `certified-expansions` | D | 3, 4 | the derivative (`real-functions-and-derivatives`), Taylor's theorem, `asymp` |
-| 6 | `power-series-evaluation` | E | 2, 3, 4 | `elementary-functions-at-reals`' laws, real arguments, rebasing `Series` |
-| 7 | `taylor-model-enclosures` | D (uniform) | 5, intervals (#208) | tighter `by intervals()` over ranges, `float-transcendental` specs |
-| 8 | `harmonic-and-stirling-asymptotics` | showcase | 5, 6, `log` | the first divergent expansion, and γ |
-| 9 | `regular-perturbation-expansions` | F | 4, 5, contraction with rates | perturbed roots, fixed points, the float error reading |
-| 10 | `grid-based-transseries` | G | 4, 5, 9 | research horizon |
+| 2 | `finite-difference-calculus` | A′ | 1 | binomial convolution (3), geometric tails (8), mean value inequality (7) |
+| 3 | `formal-power-series` | B (Hurwitz) | 1, 2, `ring` at `≈` (#219) | `exp`/`sin`/`cos` and their laws formally, the formal derivative for `ml-layers`, Newton lifting |
+| 4 | `asymptotic-relations` | C | `CReal` (done), 1 | limits, continuity, `math-reals`' "sequences, limits, continuity" |
+| 5 | `differential-structures` | axis 1 | 3, then 7 | one chain rule for every instance; reverse mode for `ml-layers` |
+| 6 | `valued-rings-and-newton` | axis 2 | 3, 4 | one Newton lemma (Hensel and Kantorovich); perturbation (11) |
+| 7 | `certified-expansions` | D | 4, 3 | the `CReal` derivative (`real-functions-and-derivatives`), Taylor's theorem, `asymp` |
+| 8 | `power-series-evaluation` | E | 2, 3, 4 | `elementary-functions-at-reals`' laws, real arguments, rebasing `Series` |
+| 9 | `wz-certificates` | §3.5 | 1, 2, `field-simp` | hypergeometric sum identities by certificate |
+| 10 | `holonomic-closure` | §3.5 | 3, 9 | ODE- and recurrence-defined identities by certificate |
+| 11 | `regular-perturbation-expansions` | F | 6, 7 | perturbed roots and fixed points, the float error reading, width expansions |
+| 12 | `taylor-model-enclosures` | D (uniform) | 7, intervals (#208) | tighter `by intervals()` over ranges, `float-transcendental` specs |
+| 13 | `harmonic-and-stirling-asymptotics` | showcase | 7, 8, `log` | the first divergent expansion, and γ |
+| 14 | `grid-based-transseries` | G, meeting point | 5, 6, 11 | research horizon: differential-valued fields, Gruntz |
 
-Items 1–3 can run in parallel once 1's range sum exists. Item 3 does not
-need 2, and 4 needs only 1's exchange lemmas and 2's binomial theorem. Item
-4 is the one with an outside customer waiting (`ml-layers`). Items 5 and 6
-are what `math-reals` is waiting on in substance.
+Items 1–4 can run in parallel once item 1's range sum exists. Items 5 and 6
+are the interfaces. Each is validated by two instances in its first round
+(§3.7), and that is why each needs item 3 and then a `CReal` instance. Item
+3 has an outside customer waiting (`ml-layers`). Items 7 and 8 are what
+`math-reals` waits on in substance. Item 9 can start as soon as item 2
+lands and does not block anything, which makes it a good parallel lane in
+the `tactics` area.
 
 **On the roadmap.** `docs/roadmap.md` puts "asymptotics and transseries" at
 item (5) of the mathematics order, after measure. This note argues that the
-foundational part of asymptotics (items 3 and 5 above) is what item (2)'s
-`math-reals` milestone ("sequences, limits, continuity") consists of. On
-that reading it moves up beside the reals, and only transseries (item 10)
-stays at (5). That is a ranking change, which is Minus's call, so the
-roadmap's order is not edited here.
+foundational part (items 4–7 above) is what item (2)'s `math-reals`
+milestone, "sequences, limits, continuity", consists of. On that reading it
+moves up beside the reals, and only the transseries horizon (item 14) stays
+at (5). That is a ranking change, which is Minus's call, so the roadmap's
+order is not edited here.
 
-## 13. Decisions this note makes, and the ones it leaves
+## 14. Decisions this note makes, and the ones it leaves
 
-Made here (each is revisable when a customer pushes back):
+Made here. Each is revisable when a customer pushes back.
 
-- **Countable nested approaches**, not filters or directed bases (§5.1–5.2).
-- **Landau constants as `Rat`** and moduli as `Nat → Nat`, so bounds
-  compare by evaluation (§5.3). A `CReal` constant can always be bounded by
-  a rational one first.
-- **No division in asymptotic definitions**: `~` is `f - g = o(g)`.
-- **Bishop's uniform derivative on a set** as the default, stated as a
-  uniform expansion (§6.2).
-- **Formal identities first, then the evaluation homomorphism** as the
-  route to the laws of the elementary functions (§7).
-- **Grid-based supports** for any transseries (§10).
+- **Two axes and a meeting point**, differential structure and dominance,
+  as the core. The concrete layers are their first instances (§3).
+- **A derivative is data.** A differentiable map is a map paired with its
+  derivative and evidence (§3.1), and smoothness is coinductive.
+- **Smallness is a dominance relation without totality**, with leading
+  monomials as data (§3.2). Newton's lemma is one contraction theorem with
+  rates.
+- **Calculus in coinductive form, taken as a method**: the Hurwitz
+  convention, coefficient functions, and bisimulation as a theorem.
+  Codata comes later (§3.4).
+- **Decision procedures emit certificates**, in the order WZ, holonomic,
+  Gruntz (§3.5).
+- **Countable nested approaches**, not filters (§6.1–6.2). Landau constants
+  are `Rat`, moduli are `Nat → Nat`, and there is no division in `~`
+  (§6.3).
+- **Bishop's uniform derivative** is the `CReal` instance (§7.2), and the
+  Edalat–Lieutier interval derivative is the lax Lipschitz instance (§3.1).
+- **Formal identities first, then the evaluation homomorphism**, for the
+  laws of the elementary functions (§8).
+- **Grid-based supports** for transseries (§11).
+- **No synthetic axioms** (SDG, ASD, continuity) in the core (§3.6).
 
 Left open:
 
-- The roadmap move in §12.
-- Whether `PowerSeries` over several variables is an iterated series or a
-  multi-index function. Decide at the first two-variable customer.
-- The normed-ring class for generic series carriers (§7). Decide at the
-  first non-`Rat` coefficient customer (complex `exp`, or matrix `exp` for
-  linear ODEs).
-- The concrete surface spelling of `∑` before the binder production lands.
+- The roadmap move in §13.
+- How the differential-structure interface is encoded: a class over a
+  category record (objects, homs) or over an evidence predicate on plain
+  functions. The second is simpler and probably enough for the Cartesian
+  case. Tangent categories need the first.
+- When non-Cartesian (tangent) structure is wanted. Decide at the first
+  manifold customer.
+- Multivariate Hurwitz series, iterated or multi-index. Decide at the first
+  two-variable customer.
+- The normed-ring class for generic series carriers (§8). Decide at the
+  first non-`Rat` coefficient customer.
+- The surface spelling of `∑` before the binder production lands.
 
-## 14. Non-goals
+## 15. Non-goals
 
 - No change to `CReal`'s representation, to `Series`'s exported statements,
   or to the kernel.
 - No new notation production. `∑ k < n, f(k)` waits for
   `notation-extensibility`.
-- No filters, no ultrafilters, no nonstandard analysis, and no SDG axiom.
-  §4 explains what is kept from SDG without the axiom.
-- No measure theory here. §11 states only the integral that falls out.
+- No filters, no ultrafilters, no nonstandard analysis, and no synthetic
+  axioms (§3.6).
+- No measure theory here. §12 states only the integral that falls out.
 
 ## References
 
 - E. Bishop and D. Bridges, *Constructive Analysis* (1985), ch. 2 (uniform
   derivative, integral) and ch. 5 (moduli).
-- J. Dieudonné, *Calcul infinitésimal* (1968): développements limités and
-  the asymptotic scales of §5.3.
-- R. Graham, D. Knuth and O. Patashnik, *Concrete Mathematics*, ch. 2 and 9
-  (finite calculus; asymptotics with `O`).
-- N. G. de Bruijn, *Asymptotic Methods in Analysis*: Euler–Maclaurin,
-  Stirling.
-- K. Makino and M. Berz, "Taylor models and other validated functional
-  inclusion methods" (2003).
+- R. Blute, R. Cockett and R. Seely, "Cartesian differential categories",
+  *Theory and Applications of Categories* 22 (2009).
+- R. Cockett and G. Cruttwell, "Differential structure, tangent structure,
+  and SDG", *Applied Categorical Structures* 22 (2014).
+- R. Cockett, G. Cruttwell, J. Gallagher, J.-S. P. Lemay, B. MacAdam,
+  G. Plotkin and D. Pronk, "Reverse derivative categories", CSL 2020.
+- G. Cruttwell, B. Gavranović, N. Ghani, P. Wilson and F. Zanasi,
+  "Categorical foundations of gradient-based learning", ESOP 2022.
+- T. Ehrhard and L. Regnier, "The differential lambda-calculus", *TCS* 309
+  (2003).
+- A. Edalat and A. Lieutier, "Domain theory and differential calculus
+  (functions of one variable)", *MSCS* 14 (2004).
+- D. Pavlović and M. Escardó, "Calculus in coinductive form", LICS 1998.
+- W. Keigher, "On the ring of Hurwitz series", *Communications in Algebra*
+  25 (1997).
+- J. Blanchette, A. Popescu and D. Traytel, "Foundational extensible
+  corecursion", ICFP 2015.
+- M. Rosenlicht, "Differential valuations", *Pacific J. Math.* 86 (1980).
 - J. van der Hoeven, *Transseries and Real Differential Algebra*, LNM 1888
   (2006): grid-based transseries.
 - M. Aschenbrenner, L. van den Dries and J. van der Hoeven, *Asymptotic
   Differential Algebra and Model Theory of Transseries* (2017).
+- M. Petkovšek, H. Wilf and D. Zeilberger, *A = B* (1996).
+- D. Gruntz, *On Computing Limits in a Symbolic Manipulation System*, ETH
+  thesis (1996).
+- D. Roberts, S. Yaida and B. Hanin, *The Principles of Deep Learning
+  Theory* (2022).
+- J. Dieudonné, *Calcul infinitésimal* (1968): développements limités and
+  asymptotic scales.
+- R. Graham, D. Knuth and O. Patashnik, *Concrete Mathematics*, ch. 2 and 9.
+- N. G. de Bruijn, *Asymptotic Methods in Analysis*: Euler–Maclaurin,
+  Stirling.
+- K. Makino and M. Berz, "Taylor models and other validated functional
+  inclusion methods" (2003).
 - U. Kohlenbach, *Applied Proof Theory* (2008): moduli and rates as the
   computational content of analytic statements.
-- A. Kock, *Synthetic Differential Geometry* (2nd ed. 2006): the axiom §4
-  does without.
+- A. Kock, *Synthetic Differential Geometry* (2nd ed. 2006).

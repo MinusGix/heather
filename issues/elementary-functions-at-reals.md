@@ -32,4 +32,4 @@ Scope:
 
 ## Log
 
-- 2026-10-27: docs/analysis-foundations-design.md §7 proposes the laws as formal identities ([[formal-power-series]]) carried through evaluation as a ring homomorphism ([[power-series-evaluation]]); no real derivatives needed.
+- 2026-10-27: docs/analysis-foundations-design.md §8 proposes the laws as formal identities proved by coinduction over Hurwitz series ([[formal-power-series]], §3.4) carried through evaluation as a ring homomorphism ([[power-series-evaluation]]); no real derivatives needed.

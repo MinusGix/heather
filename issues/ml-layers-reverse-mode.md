@@ -33,4 +33,4 @@ values. Longer term this is a compiler pass and belongs with `hih-passes`.
 
 ## Log
 
-- 2026-10-27: The formal derivative and dual-number evaluation of polynomial programs are in [[formal-power-series]] (docs/analysis-foundations-design.md §4).
+- 2026-10-27: The formal derivative and dual-number evaluation of polynomial programs are in [[formal-power-series]] (docs/analysis-foundations-design.md §5); reverse mode as an instance of a reverse differential structure is [[differential-structures]] (§3.1).

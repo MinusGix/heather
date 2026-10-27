@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-Layer E of `docs/analysis-foundations-design.md` (§7): series as range sums
+Layer E of `docs/analysis-foundations-design.md` (§8): series as range sums
 with a tail modulus, power series with a Cauchy majorant evaluated at `CReal`,
 and evaluation as a ring homomorphism on the disc of convergence.
 

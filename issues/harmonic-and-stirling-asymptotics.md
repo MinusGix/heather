@@ -7,7 +7,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-The showcase of `docs/analysis-foundations-design.md` §8: expansions at
+The showcase of `docs/analysis-foundations-design.md` §9: expansions at
 `n → ∞` that a Taylor-first library cannot state.
 
 Scope:

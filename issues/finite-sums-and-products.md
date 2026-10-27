@@ -8,7 +8,7 @@ created: 2026-10-27
 updated: 2026-10-27
 ---
 
-Layer A of `docs/analysis-foundations-design.md` (§3): finite sums and
+Layer A of `docs/analysis-foundations-design.md` (§4): finite sums and
 products as folds over a commutative monoid modulo its relation, with one
 theorem serving `∑` and `∏` through the semiring layers' `multiplicative` tag.
 
