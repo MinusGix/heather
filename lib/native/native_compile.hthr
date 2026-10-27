@@ -11,18 +11,18 @@
 // statement to the next. A statement loads what it reads into registers and
 // stores what it writes back; RBX holds each slot's address on the way.
 //
-// - A `Compute` leaf loads its inputs (the ids its nodes read and do not
-//   write), runs S4's `Region::lower` over them, and stores each node's
-//   result, zero-extended from its width as `Env::settle` keeps it. Only a
-//   dataflow leaf is compiled; a conditional, loop or call region is
-//   refused for now.
-// - A leaf of one byte node compares its index with its buffer's capacity
-//   (CMP and a JAE past the access), and loads or stores the byte at the
-//   buffer's address plus the index; a store then reads the byte back as a
-//   load does. A leaf mixing byte nodes with others is refused for now: its
-//   pure stretches would go through S4 with their results settled between
-//   them, which needs every value read across a byte node at the width it
-//   was written (issues/native-compile-wider-leaves.md).
+// - A `Compute` leaf goes through S4 whole where S4 takes it: all pure, its
+//   values fitting the registers. It loads its inputs (the ids its nodes
+//   read and do not write), runs S4's `Region::lower` over them, and stores
+//   each node's result, zero-extended from its width as `Env::settle` keeps
+//   it. Any other leaf whose nodes all work at width 64 compiles a node at a
+//   time, each result stored before the next node reads it: a pure node
+//   through S4 as a region of its own, a byte node by its own code. A
+//   conditional, loop or call region is refused for now.
+// - A byte node compares its index with its buffer's capacity (CMP and a
+//   JAE past the access), and loads or stores the byte at the buffer's
+//   address plus the index; a store then reads the byte back as a load
+//   does.
 // - A call clamps its length (and a write its offset) to its buffer, as the
 //   source does, then makes the SYSCALL and stores RAX into the result
 //   word. A read lands in the scratch range and is copied into its buffer
@@ -129,15 +129,18 @@ fn Prog::ports_to(self p: Prog, layout: Layout, ports: List<Port>, registers: Li
     }
 }
 
-// Each port's register stored to its slot, in order.
-fn Prog::ports_from(self p: Prog, layout: Layout, ports: List<Port>, registers: List<Gpr>) → Option<Prog> {
+// Each port's register stored to its home's slot, in order.
+fn Prog::ports_from(self p: Prog, layout: Layout, ports: List<Port>, homes: List<Nat>, registers: List<Gpr>) → Option<Prog> {
     match ports {
         Nil => Some(p),
         Cons(port, rest) => match registers {
             Nil => None,
-            Cons(register, later) => match word_fits(port.id) {
-                False => None,
-                True => p.word_from(layout, port.id, register).ports_from(layout, rest, later),
+            Cons(register, later) => match homes {
+                Nil => None,
+                Cons(home, others) => match word_fits(home) {
+                    False => None,
+                    True => p.word_from(layout, home, register).ports_from(layout, rest, others, later),
+                },
             },
         },
     }
@@ -215,23 +218,27 @@ fn leaf_checks(nodes: List<Node>, inputs, outputs: List<Gpr>) → Bool {
 fn leaf_inputs(nodes: List<Node>) → List<Gpr> { register_pool().take(nodes_inputs(nodes).len()) }
 fn leaf_outputs(nodes: List<Node>) → List<Gpr> { register_pool().drop(nodes_inputs(nodes).len()).take(nodes.len()) }
 
-fn Prog::leaf_lowered(self loaded: Prog, layout: Layout, nodes: List<Node>, code: Option<List<Instruction>>) → Option<Prog> {
+fn Prog::leaf_lowered(self loaded: Prog, layout: Layout, nodes: List<Node>, homes: List<Nat>, code: Option<List<Instruction>>) → Option<Prog> {
     match code {
         None => None,
-        Some(instructions) => then(loaded, Block(instructions)).ports_from(layout, nodes_write_ports(nodes), leaf_outputs(nodes)),
+        Some(instructions) => then(loaded, Block(instructions)).ports_from(layout, nodes_write_ports(nodes), homes, leaf_outputs(nodes)),
     }
 }
 
-fn Prog::leaf(self p: Prog, layout: Layout, nodes: List<Node>) → Option<Prog> {
+// The leaf through S4, each node's result stored to the slot of its home.
+fn Prog::leaf_into(self p: Prog, layout: Layout, nodes: List<Node>, homes: List<Nat>) → Option<Prog> {
     match leaf_checks(nodes, leaf_inputs(nodes), leaf_outputs(nodes)) {
         False => None,
         True => match p.ports_to(layout, nodes_inputs(nodes), leaf_inputs(nodes)) {
             None => None,
-            Some(loaded) => loaded.leaf_lowered(layout, nodes,
+            Some(loaded) => loaded.leaf_lowered(layout, nodes, homes,
                 leaf_region(nodes).lower(leaf_inputs(nodes), leaf_outputs(nodes), place_into(leaf_outputs(nodes)))),
         },
     }
 }
+
+// Each result stored to its own word.
+fn Prog::leaf(self p: Prog, layout: Layout, nodes: List<Node>) → Option<Prog> { p.leaf_into(layout, nodes, nodes_writes(nodes)) }
 
 // ---------------------------------------------------------------------------
 // Calls
@@ -357,16 +364,105 @@ fn Prog::byte_node(self p: Prog, layout: Layout, node: Node, names: Nat) → Opt
     }
 }
 
-// A leaf of one node: a byte node's code.
-fn Prog::single(self p: Prog, layout: Layout, nodes: List<Node>, names: Nat) → Option<Compiled> {
-    match nodes { Nil => None, Cons(node, rest) => match rest { Nil => p.byte_node(layout, node, names), Cons(_, _) => None } }
+// ---------------------------------------------------------------------------
+// A leaf a node at a time
+
+// A leaf S4 does not take compiles a node at a time, memory-resident: each
+// node loads its operands from their slots, computes, and stores its result
+// to its slot before the next node runs. So no register is held across
+// nodes, a leaf may be as long as it likes, byte nodes mix with the rest,
+// and a node may read what an earlier one wrote, or its own output
+// (`Add(64, x, x, y)`). That is the leaf's meaning only when a word read
+// back from its slot is the word the region would have read: the slot keeps
+// a result at its port's width, the region keeps it at every width. So every
+// node works at width 64 (`Node::wide`; a comparison still writes a bit,
+// which reads back at 64 as the region reads it).
+
+// The node with its result written to `output` instead.
+fn Node::renamed(self node: Node, output: Nat) → Node {
+    match node {
+        Const(width, _, value) => Const(width, output, value),
+        Move(width, _, source) => Move(width, output, source),
+        Add(width, _, left, right) => Add(width, output, left, right),
+        Sub(width, _, left, right) => Sub(width, output, left, right),
+        BitAnd(width, _, left, right) => BitAnd(width, output, left, right),
+        BitOr(width, _, left, right) => BitOr(width, output, left, right),
+        BitXor(width, _, left, right) => BitXor(width, output, left, right),
+        ShiftLeft(width, _, value, amount) => ShiftLeft(width, output, value, amount),
+        LogicalShiftRight(width, _, value, amount) => LogicalShiftRight(width, output, value, amount),
+        ArithmeticShiftRight(width, _, value, amount) => ArithmeticShiftRight(width, output, value, amount),
+        UnsignedLessThan(width, _, left, right) => UnsignedLessThan(width, output, left, right),
+        SignedLessThan(width, _, left, right) => SignedLessThan(width, output, left, right),
+        Equal(width, _, left, right) => Equal(width, output, left, right),
+        BufferLoad(_, buffer, index) => BufferLoad(output, buffer, index),
+        BufferStore(_, buffer, index, value) => BufferStore(output, buffer, index, value),
+    }
 }
 
-// A dataflow leaf: all pure, through S4; or one byte node.
+// An id the node does not read: past their sum.
+fn Node::spare(self node: Node) → Nat { Succ(List::total(function_ir_eval::Node::reads(node))) }
+
+// A node other than a byte node, alone through S4: a region of that one
+// node with its result renamed to an id it does not read, so the region
+// reads every operand as it was, the node's own output too, and the result
+// stored to the node's slot.
+fn Prog::node_alone(self p: Prog, layout: Layout, node: Node) → Option<Prog> {
+    p.leaf_into(layout, [node.renamed(node.spare())], [node_output(node).id])
+}
+
+fn Prog::one_node(self p: Prog, layout: Layout, node: Node, names: Nat) → Option<Compiled> {
+    match node.pure() {
+        True => match p.node_alone(layout, node) { None => None, Some(q) => Some(Compiled(q, names)) },
+        False => p.byte_node(layout, node, names),
+    }
+}
+
+fn Prog::each_node(self p: Prog, layout: Layout, nodes: List<Node>, names: Nat) → Option<Compiled> {
+    match nodes {
+        Nil => Some(Compiled(p, names)),
+        Cons(node, rest) => match p.one_node(layout, node, names) { None => None, Some(c) => c.prog.each_node(layout, rest, c.names) },
+    }
+}
+
+// Whether the node works at width 64; a byte node always does.
+fn Node::wide(self node: Node) → Bool {
+    match node {
+        Const(width, _, _) => width.matches(64),
+        Move(width, _, _) => width.matches(64),
+        Add(width, _, _, _) => width.matches(64),
+        Sub(width, _, _, _) => width.matches(64),
+        BitAnd(width, _, _, _) => width.matches(64),
+        BitOr(width, _, _, _) => width.matches(64),
+        BitXor(width, _, _, _) => width.matches(64),
+        ShiftLeft(width, _, _, _) => width.matches(64),
+        LogicalShiftRight(width, _, _, _) => width.matches(64),
+        ArithmeticShiftRight(width, _, _, _) => width.matches(64),
+        UnsignedLessThan(width, _, _, _) => width.matches(64),
+        SignedLessThan(width, _, _, _) => width.matches(64),
+        Equal(width, _, _, _) => width.matches(64),
+        BufferLoad(_, _, _) => True,
+        BufferStore(_, _, _, _) => True,
+    }
+}
+
+fn nodes_wide(nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => node.wide() && nodes_wide(rest) }
+}
+
+// ---------------------------------------------------------------------------
+// A leaf
+
+// All pure, through S4 whole.
+fn Prog::pure_leaf(self p: Prog, layout: Layout, nodes: List<Node>) → Option<Prog> {
+    match nodes_pure(nodes) { True => p.leaf(layout, nodes), False => None }
+}
+
+// A dataflow leaf: through S4 whole where it takes it, its values held in
+// registers; otherwise a node at a time, if every node is wide.
 fn Prog::computes(self p: Prog, layout: Layout, nodes: List<Node>, names: Nat) → Option<Compiled> {
-    match nodes_pure(nodes) {
-        True => match p.leaf(layout, nodes) { None => None, Some(q) => Some(Compiled(q, names)) },
-        False => p.single(layout, nodes, names),
+    match p.pure_leaf(layout, nodes) {
+        Some(q) => Some(Compiled(q, names)),
+        None => match nodes_wide(nodes) { True => p.each_node(layout, nodes, names), False => None },
     }
 }
 
@@ -487,6 +583,12 @@ fn Source::compile(self src: Source, low: BitVec(64)) → Option<Prog> {
 //      path, 5 stat of a descriptor)
 //   8  a buffer the source does not have (the buffer, how many it has)
 //   9  the program's labels did not lay out
+//  10  a leaf S4 does not take whole, with a node not at width 64 (its
+//      position in the leaf, from 1)
+//  11  S4's lowering refused a node alone (its position in the leaf)
+//
+// Reasons 1, 2, 3 and 6 come only from an all-pure leaf with a node not at
+// width 64: one with every node wide compiles a node at a time.
 //
 // `Nil` when the compile succeeds.
 inductive CompileScan { Passed(next: Nat), Refused(why: List<Nat>) }
@@ -544,12 +646,54 @@ fn leaf_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
     }
 }
 
-// A leaf with a byte node compiles only as that node alone
-// (`Prog::single`).
+fn buffer_refusal(layout: Layout, ids: List<Nat>, buf: Nat) → List<Nat> {
+    match ids_refusal(ids) {
+        Cons(reason, details) => Cons(reason, details),
+        Nil => match layout.capacities.nth(buf) { None => [8, buf, layout.capacities.len()], Some(_) => [] },
+    }
+}
+
+// The first node not at width 64, counted from `at`.
+fn narrow_refusal(nodes: List<Node>, at: Nat) → List<Nat> {
+    match nodes {
+        Nil => [],
+        Cons(node, rest) => match node.wide() { False => [10, at, 0], True => narrow_refusal(rest, Succ(at)) },
+    }
+}
+
+// Why a node does not compile alone (`Prog::one_node`), at position `at`.
+fn node_refusal(layout: Layout, node: Node, at: Nat) → List<Nat> {
+    match node {
+        BufferLoad(output, buf, index) => buffer_refusal(layout, [output, index], buf),
+        BufferStore(output, buf, index, value) => buffer_refusal(layout, [output, index, value], buf),
+        _ => match inputs_refusal(node.read_ports()) {
+            Cons(reason, details) => Cons(reason, details),
+            Nil => match ids_refusal([node_output(node).id]) { Cons(reason, details) => Cons(reason, details), Nil => [11, at, 0] },
+        },
+    }
+}
+
+// The first node, counted from `at`, that does not compile alone.
+fn nodes_refusal(layout: Layout, nodes: List<Node>, at: Nat) → List<Nat> {
+    match nodes {
+        Nil => [],
+        Cons(node, rest) => match Start.one_node(layout, node, 0) {
+            Some(_) => nodes_refusal(layout, rest, Succ(at)),
+            None => node_refusal(layout, node, at),
+        },
+    }
+}
+
+// A leaf S4 does not take whole compiles a node at a time when every node
+// is wide; so a refused leaf names the node that stopped it, or, when it is
+// all pure and not all wide, why S4 did not take it whole.
 fn computes_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
-    match nodes_pure(nodes) {
-        True => leaf_refusal(layout, nodes),
-        False => match Start.single(layout, nodes, 0) { Some(_) => [], None => [10, nodes.len(), 0] },
+    match Start.computes(layout, nodes, 0) {
+        Some(_) => [],
+        None => match nodes_wide(nodes) {
+            True => nodes_refusal(layout, nodes, 1),
+            False => match nodes_pure(nodes) { True => leaf_refusal(layout, nodes), False => narrow_refusal(nodes, 1) },
+        },
     }
 }
 
@@ -561,13 +705,6 @@ fn region_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
         Conditional(_, _, _, _, _, _) => [0, 3, 0],
         Call(_, _, _) => [0, 4, 0],
         Loop(_, _, _, _, _, _, _, _, _) => [0, 5, 0],
-    }
-}
-
-fn buffer_refusal(layout: Layout, ids: List<Nat>, buf: Nat) → List<Nat> {
-    match ids_refusal(ids) {
-        Cons(reason, details) => Cons(reason, details),
-        Nil => match layout.capacities.nth(buf) { None => [8, buf, layout.capacities.len()], Some(_) => [] },
     }
 }
 
@@ -613,32 +750,50 @@ fn Source::refusal(self src: Source, low: BitVec(64)) → List<Nat> {
 // 1 a `Then`, 2 a `Repeat`, 3 a `Branch`, its children after it), the label
 // name it starts at, and the one its first child starts at, or, for a leaf,
 // the one after it. Consed on as they are met, so the list is the preorder
-// reversed and nothing is appended. A leaf's names are its emission's, but
-// only a call takes any (`Compiled(q, names)` for the others), so no leaf
-// is lowered here: the reader lowers one part at a time
-// (crates/cli/src/native/emission.rs), and nothing is proved of this.
+// reversed and nothing is appended. No leaf is emitted here, so the read
+// holds the tree's numbers and none of its code: the reader lowers one part
+// at a time (crates/cli/src/native/emission.rs), and nothing is proved of
+// this.
 record Shape { names: Nat, numbers: List<Nat> }
 
 fn Shape::node(self m: Shape, kind, after: Nat) → Shape { Shape(after, Cons(after, Cons(m.names, Cons(kind, m.numbers)))) }
 
-// A leaf's label names, from its emission: a call and a byte node take
-// names, and which leaves do is the compiler's business, not the shape's.
-fn Stmt::leaf_shape(self s: Stmt, layout: Layout, m: Shape) → Shape {
-    match s.emit(Start, layout, m.names) { None => m.node(0, m.names), Some(c) => m.node(0, c.names) }
+// The label names after a leaf that emits: a call takes them as
+// `Prog::call` does, a leaf of one byte node as `Prog::byte_node`, every
+// other leaf none. Counted without emitting, since emitting every leaf here
+// held the whole program's code in one read
+// (issues/write-elf-build-constants.md). A count that ever disagrees with
+// the emission is a part whose statement the kernel refuses, and the reader
+// says so first; a leaf that does not emit is refused whatever it counts.
+fn Node::names_after(self node: Node, names: Nat) → Nat {
+    match node { BufferLoad(_, _, _) => Succ(names), BufferStore(_, _, _, _) => Succ(Succ(names)), _ => names }
 }
 
-fn Stmt::shape(self s: Stmt, layout: Layout, m: Shape) → Shape {
+fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
     match s {
-        Then(first, rest) => rest.shape(layout, first.shape(layout, m.node(1, m.names))),
-        Repeat(body, _) => body.shape(layout, m.node(2, Succ(Succ(m.names)))),
-        Branch(_, yes, no) => no.shape(layout, yes.shape(layout, m.node(3, Succ(Succ(m.names))))),
-        Compute(region) => Compute(region).leaf_shape(layout, m),
-        Invoke(shape) => Invoke(shape).leaf_shape(layout, m),
-        Exit(code) => Exit(code).leaf_shape(layout, m),
+        Compute(region) => match region {
+            Dataflow(body) => match body.nodes { Nil => names, Cons(node, rest) => match rest { Nil => node.names_after(names), Cons(_, _) => names } },
+            _ => names,
+        },
+        Invoke(shape) => match shape { Reads(_, _, _, _) => Succ(Succ(Succ(names))), Writes(_, _, _, _, _) => Succ(Succ(names)), _ => names },
+        _ => names,
     }
 }
 
-fn Source::shape(self src: Source, low: BitVec(64)) → List<Nat> { src.main.shape(src.layout(low), Shape(0, [])).numbers }
+fn Stmt::leaf_shape(self s: Stmt, m: Shape) → Shape { m.node(0, s.leaf_names(m.names)) }
+
+fn Stmt::shape(self s: Stmt, m: Shape) → Shape {
+    match s {
+        Then(first, rest) => rest.shape(first.shape(m.node(1, m.names))),
+        Repeat(body, _) => body.shape(m.node(2, Succ(Succ(m.names)))),
+        Branch(_, yes, no) => no.shape(yes.shape(m.node(3, Succ(Succ(m.names))))),
+        Compute(region) => Compute(region).leaf_shape(m),
+        Invoke(shape) => Invoke(shape).leaf_shape(m),
+        Exit(code) => Exit(code).leaf_shape(m),
+    }
+}
+
+fn Source::shape(self src: Source) → List<Nat> { src.main.shape(Shape(0, [])).numbers }
 
 // A program as a reader takes it: how many numbers its items are, the items
 // (`Prog::numbers`), then their lengths.

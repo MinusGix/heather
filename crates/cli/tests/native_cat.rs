@@ -145,17 +145,39 @@ fn every_written_program_gets_its_theorem() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Leaves S4 does not take whole compile a node at a time and run: forty
+/// nodes summing twenty constants into one word, read and written over its
+/// own slot; and a leaf that mixes byte loads and stores with arithmetic
+/// (issues/native-compile-wider-leaves.md).
+#[test]
+fn wider_leaves_run() {
+    let dir = scratch("wider");
+    let long = dir.join("long_leaf");
+    let result = write_elf(PROBES, "long_leaf", &long);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    let (code, out) = run(&long, b"", Stdio::piped());
+    assert_eq!((code, out.len()), (Some(210), 0), "the forty-node leaf sums 1 to 20");
+    let mixed = dir.join("mixed_bytes");
+    let result = write_elf(PROBES, "mixed_bytes", &mixed);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    let (code, out) = run(&mixed, b"abcdef", Stdio::piped());
+    assert_eq!(out, b"Abcdef", "the first byte stored back, less 32");
+    assert_eq!(code, Some((97 + 98 + 99 + 100) % 256), "it exits with the first four bytes' sum");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A program the theorem would not cover is not written, and the refusal
-/// says why: past the page, a call not compiled, a leaf past the registers,
-/// a byte node in a leaf with others.
+/// says why: past the page, a call not compiled, a leaf past the registers
+/// with a node too narrow to go a node at a time, a narrow node beside a
+/// byte node.
 #[test]
 fn refused_programs_name_their_reason() {
     let dir = scratch("refused");
     for (source, reason) in [
         ("big_cat", "`big_cat` does not fit the I/O page: its words, buffers and scratch range take 4608 bytes and the page holds 4096"),
         ("opens", "`opens` is refused at statement 1, a call: `open` is not compiled yet"),
-        ("wide_leaf", "`wide_leaf` is refused at statement 1, a computation: the leaf needs 15 registers, one per input and per node, and the pool holds 14"),
-        ("mixed_leaf", "`mixed_leaf` is refused at statement 1, a computation: a leaf with a byte node compiles only as that one node"),
+        ("narrow_long_leaf", "`narrow_long_leaf` is refused at statement 1, a computation: the leaf needs 41 registers, one per input and per node, and the pool holds 14; it does not compile a node at a time because a node is not at width 64"),
+        ("narrow_mixed_leaf", "`narrow_mixed_leaf` is refused at statement 1, a computation: node 2 of the leaf is not at width 64"),
     ] {
         let output = dir.join(source);
         let result = write_elf(PROBES, source, &output);

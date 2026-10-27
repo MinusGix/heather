@@ -1,6 +1,6 @@
 ---
 title: Cut write-elf's linear build constants
-status: open
+status: closed
 labels: [native,cli,performance]
 area: heather-in-heather
 milestone: [hih-tools]
@@ -33,3 +33,41 @@ What is left are constants, in the order the timings rank them:
 
 The literal is elaborated once, and the shape read's peak no longer grows
 with the program.
+
+## Log
+
+- 2026-10-27: done, all three.
+  - **Literal once.** The fork no longer elaborates the literal: once the
+    parts are read and the label table is known, the same fork reads the
+    bytes a read at a time over each read's own program at `Start` (a part's
+    emission again, or the items around parts), by `asm_code_ending` with
+    the read's end offset and the table's labels
+    (`emission::byte_reads`). The cost is each part emitted a second time,
+    a small fraction of what the literal cost. The literal's own constant,
+    about ten `instance_match` calls per `At`, is now
+    [[constructor-literal-respell-cost]].
+  - **Shape.** `Source::shape` counts a leaf's label names
+    (`Stmt::leaf_names`) instead of emitting it, so the read holds the
+    tree's numbers only; it takes no layout any more. Probes in
+    native_compile_tests pin the count to the emission for every leaf kind
+    that takes names, and `emission.rs` refuses a shape whose counts a
+    `Then`'s or `Branch`'s join would not accept, before the kernel does.
+  - **`upto`.** Each piece and each `upto` step is stated over the
+    literal's definition where its window ends (`{p}_at_{top}`), not
+    `asm_back({p}_code(), back)`, so a step walks back over its own piece.
+
+  Width one, cloud box, fresh copy of a warmed cache
+  (perf/fixtures/native_sizes/run.sh), master b08e09d against this:
+
+  | probe  | before | now   |
+  |--------|-------:|------:|
+  | cat_x4 | 76 s   | 56 s  |
+  | cat_x8 | 138 s  | 104 s |
+
+  At cat_x8 the read module's `at_k` (31 s) and piece reads (13 s) are
+  replaced by the byte reads (15 s); the shape read's peak-growth row
+  (343 MB) is gone from the memory table, whose largest row is now the
+  library. Left, in order: the certificate's literal (30 s,
+  [[constructor-literal-respell-cost]]), the pass (19 s), the byte reads
+  and the pieces' kernel evaluation (15 s and 12 s, both mostly encoding
+  the instructions).

@@ -1,5 +1,6 @@
 // Byte nodes and initial bytes compiled (issues/native-source-bytes.md): a
-// leaf of one `BufferLoad` or `BufferStore` runs as `Env::compute` says, and
+// `BufferLoad` or `BufferStore` runs as `Env::compute` says of its leaf of
+// one node (a longer leaf runs a node at a time, native_compile_nodes), and
 // the stores at entry leave the region holding the source's start.
 //
 // A byte the code stores lands in its buffer's range, so the environment
@@ -551,72 +552,6 @@ theorem Target::goes_byte_node(self t: Target, env: Env, p: Prog, names: Nat, c:
         })(refl),
         _ => λ none => absurd(none),
     }
-}
-
-theorem Prog::within_single(self p: Prog, layout: Layout, names: Nat, c: Compiled): (nodes: List<Node>) →
-    p.single(layout, nodes, names) = Some(c) → p.Within(c.prog) {
-    λ nodes => match nodes {
-        Nil => λ none => absurd(none),
-        Cons(node, rest) => match rest {
-            Nil => p.within_byte_node(layout, names, c, node),
-            Cons(_, _) => λ none => absurd(none),
-        },
-    }
-}
-
-theorem Target::goes_single(self t: Target, env: Env, p: Prog, names: Nat, c: Compiled, tree: ITree<BitVec(64)>(Events::linux())): (nodes: List<Node>) →
-    p.single(t.layout(), nodes, names) = Some(c) → c.prog.Within(t.program) → t.At(prog_len(c.prog), tree, env.computes(nodes)) →
-    t.At(prog_len(p), tree, env) {
-    λ nodes => match nodes {
-        Nil => λ none => absurd(none),
-        Cons(node, rest) => match rest as λ r => p.single(t.layout(), Cons(node, r), names) = Some(c) → c.prog.Within(t.program) →
-                t.At(prog_len(c.prog), tree, env.computes(Cons(node, r))) → t.At(prog_len(p), tree, env) {
-            Nil => t.goes_byte_node(env, p, names, c, tree, node),
-            Cons(_, _) => λ none => absurd(none),
-        },
-    }
-}
-
-// Where a leaf's code starts, within it.
-theorem Prog::within_computes(self p: Prog, layout: Layout, nodes: List<Node>, names: Nat, c: Compiled,
-    emitted: p.computes(layout, nodes, names) = Some(c)): p.Within(c.prog) {
-    (match nodes_pure(nodes) as λ b => (match b {
-            True => match p.leaf(layout, nodes) { None => None, Some(q) => Some(Compiled(q, names)) },
-            False => p.single(layout, nodes, names),
-        }) = Some(c) → p.Within(c.prog) {
-        True => (match p.leaf(layout, nodes) as λ o => p.leaf(layout, nodes) = o →
-                (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → p.Within(c.prog) {
-            None => λ _ none => absurd(none),
-            Some(q) => λ leafed same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog), p.within_leaf(layout, nodes, q, leafed)),
-        })(refl),
-        False => p.within_single(layout, names, c, nodes),
-    })(emitted)
-}
-
-// What a leaf's code claims: from its start, on from its end with the
-// environment the source computes.
-theorem Target::goes_computes(self t: Target, env: Env, p: Prog, nodes: List<Node>, names: Nat, c: Compiled,
-    emitted: p.computes(t.layout(), nodes, names) = Some(c), within: c.prog.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(c.prog), tree, env.computes(nodes))): t.At(prog_len(p), tree, env) {
-    let layout = t.layout();
-    (match nodes_pure(nodes) as λ b => nodes_pure(nodes) = b → (match b {
-            True => match p.leaf(layout, nodes) { None => None, Some(q) => Some(Compiled(q, names)) },
-            False => p.single(layout, nodes, names),
-        }) = Some(c) → t.At(prog_len(p), tree, env) {
-        True => λ pure => (match p.leaf(layout, nodes) as λ o => p.leaf(layout, nodes) = o →
-                (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → t.At(prog_len(p), tree, env) {
-            None => λ _ none => absurd(none),
-            Some(q) => λ leafed same => {
-                let c_is = Option::some_inj(Compiled(q, names), c, same);
-                let w_q: q.Within(t.program) = j(sym(c_is), λ x _ => x.prog.Within(t.program), within);
-                let next_q: t.At(prog_len(q), tree, env.computes(nodes)) = j(sym(c_is), λ x _ => t.At(prog_len(x.prog), tree, env.computes(nodes)), next);
-                let ran = run_nodes_pure(nodes, j(sym(pure), λ v _ => v.IsTrue(), trivial), env.valuation(), env.buffers);
-                t.goes_leaf(env, p, q, nodes, leafed, w_q, tree,
-                    j(ran, λ s _ => t.At(prog_len(q), tree, Env(env.words, s.buffers).settle(s.values, nodes_write_ports(nodes))), next_q))
-            },
-        })(refl),
-        False => λ _ single => t.goes_single(env, p, names, c, tree, nodes, single, within, next),
-    })(refl)(emitted)
 }
 
 // ---------------------------------------------------------------------------

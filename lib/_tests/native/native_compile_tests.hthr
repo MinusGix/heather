@@ -49,14 +49,34 @@ fn opens() → Source { Source(functions := [], buffers := [Buffer(16)], main :=
 
 theorem opens_refused(): opens().refusal(low()) = [1, 1, 7, 2, 0] { refl }
 
-// Fifteen constants: one register each, and the pool holds fourteen.
+// Fifteen constants: one register each, more than the pool's fourteen, so
+// S4 does not take the leaf whole and it compiles a node at a time.
 fn wide_leaf() → Source {
     Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 0), Const(64, 1, 1), Const(64, 2, 2), Const(64, 3, 3),
         Const(64, 4, 4), Const(64, 5, 5), Const(64, 6, 6), Const(64, 7, 7), Const(64, 8, 8), Const(64, 9, 9), Const(64, 10, 10),
         Const(64, 11, 11), Const(64, 12, 12), Const(64, 13, 13), Const(64, 14, 14)]), Exit(14)))
 }
 
-theorem wide_leaf_refused(): wide_leaf().refusal(low()) = [1, 0, 1, 15, 14] { refl }
+theorem wide_leaf_compiles(): wide_leaf().refusal(low()) = [] { refl }
+
+// Forty nodes in one leaf: a running sum of twenty constants, each node
+// reading what the one before wrote, and the sum read and written over its
+// own slot (`Add(64, 1, 1, 0)`); it exits with 210.
+fn sum_nodes(k: Nat) → List<Node> {
+    match k { Zero => [], Succ(j) => Cons(Const(64, 0, Succ(j)), Cons(Add(64, 1, 1, 0), sum_nodes(j))) }
+}
+fn long_leaf() → Source { Source(functions := [], buffers := [], main := Then(ops(sum_nodes(20)), Exit(1))) }
+
+theorem long_leaf_forty(): sum_nodes(20).len() = 40 { refl }
+theorem long_leaf_compiles(): long_leaf().refusal(low()) = [] { refl }
+
+// The same narrowed: a node at width 32 keeps the leaf from going a node at
+// a time, and S4 says why it does not take it whole.
+fn narrow_long_leaf() → Source {
+    Source(functions := [], buffers := [], main := Then(ops(Cons(Const(32, 1, 0), sum_nodes(20))), Exit(1)))
+}
+
+theorem narrow_long_leaf_refused(): narrow_long_leaf().refusal(low()) = [1, 0, 1, 41, 14] { refl }
 
 // The third statement exits with a word past the slots; the second, a loop,
 // tests one; a write names a buffer the source does not have.
@@ -68,19 +88,47 @@ theorem far_exit_refused(): far_exit().refusal(low()) = [3, 4, 4, 64, 64] { refl
 theorem far_again_refused(): far_again().refusal(low()) = [2, 3, 4, 99, 64] { refl }
 theorem no_buffer_refused(): no_buffer().refusal(low()) = [1, 1, 8, 1, 1] { refl }
 
-// A node that writes a word it reads is out of S3.0's evaluation order.
+// A node that writes a word it reads: out of S3.0's evaluation order, so
+// not S4's whole, but a node at a time it reads the word before it writes.
 fn writes_input() → Source { Source(functions := [], buffers := [], main := ops([Add(64, 0, 0, 1)])) }
 
-theorem writes_input_refused(): writes_input().refusal(low()) = [1, 0, 2, 0, 0] { refl }
+theorem writes_input_compiles(): writes_input().refusal(low()) = [] { refl }
 
-// A byte node compiles only alone in its leaf.
+// Byte nodes mix with the rest of a leaf, alone in it or not.
 fn mixed_leaf() → Source { Source(functions := [], buffers := [Buffer(4)], main := ops([Const(64, 0, 0), BufferLoad(1, 0, 0)])) }
 fn byte_leaves() → Source {
     Source(functions := [], buffers := [Buffer(4, [BitVec::ofNat(7)])], main := Then(ops([Const(64, 0, 0)]), ops([BufferLoad(1, 0, 0)])))
 }
 
-theorem mixed_leaf_refused(): mixed_leaf().refusal(low()) = [1, 0, 10, 2, 0] { refl }
+theorem mixed_leaf_compiles(): mixed_leaf().refusal(low()) = [] { refl }
+
+// Up to eight bytes read, then one leaf: the first byte less 32 stored back
+// (`a` to `A`) and the first four bytes summed into word 5, each loaded at
+// the index word 3 is set to just before; the bytes read written back, and
+// the sum the exit status. Words: 0 stdin, 1 the length asked for, 2 what
+// the read returned, 3 an index, 4 a byte, 5 the sum, 6 the 32, 7 the byte
+// stored, 8 stdout, 9 where the write starts, 10 what it returned.
+fn mixed_bytes() → Source {
+    Source(functions := [], buffers := [Buffer(8)], main := Then(ops([Const(64, 1, 8), Const(64, 8, 1)]),
+        Then(Invoke(Reads(0, 0, 1, 2)),
+            Then(ops([Const(64, 3, 0), BufferLoad(4, 0, 3), Add(64, 5, 5, 4), Const(64, 6, 32), Sub(64, 4, 4, 6), BufferStore(7, 0, 3, 4),
+                    Const(64, 3, 1), BufferLoad(4, 0, 3), Add(64, 5, 5, 4), Const(64, 3, 2), BufferLoad(4, 0, 3), Add(64, 5, 5, 4),
+                    Const(64, 3, 3), BufferLoad(4, 0, 3), Add(64, 5, 5, 4)]),
+                Then(Invoke(Writes(8, 0, 9, 2, 10)), Exit(5))))))
+}
+
+theorem mixed_bytes_compiles(): mixed_bytes().refusal(low()) = [] { refl }
 theorem byte_leaves_compile(): byte_leaves().refusal(low()) = [] { refl }
+
+// A byte node beside a node at width 1: refused, naming the narrow node; and
+// a byte node whose buffer the source does not have.
+fn narrow_mixed_leaf() → Source {
+    Source(functions := [], buffers := [Buffer(4)], main := ops([BufferLoad(1, 0, 0), BitXor(1, 2, 1, 1)]))
+}
+fn missing_buffer_leaf() → Source { Source(functions := [], buffers := [Buffer(4)], main := ops([Const(64, 0, 0), BufferLoad(1, 3, 0)])) }
+
+theorem narrow_mixed_leaf_refused(): narrow_mixed_leaf().refusal(low()) = [1, 0, 10, 2, 0] { refl }
+theorem missing_buffer_leaf_refused(): missing_buffer_leaf().refusal(low()) = [1, 0, 8, 3, 1] { refl }
 
 // A source that compiles has no refusal.
 fn exit3() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Exit(0))) }
@@ -92,13 +140,13 @@ theorem exit3_compiles(): exit3().refusal(low()) = [] { refl }
 // node in reversed preorder, kind, label name at its start, and the name its
 // first child starts at or a leaf's after it. A call or a byte node takes
 // names, and a `Repeat` or `Branch` takes two before its children.
-theorem exit3_shape(): exit3().shape(low()) = [0, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
+theorem exit3_shape(): exit3().shape() = [0, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
 
 fn read_then_exit() → Source { Source(functions := [], buffers := [Buffer(8)], main := Then(Invoke(Reads(0, 0, 1, 2)), Exit(2))) }
-theorem read_then_exit_shape(): read_then_exit().shape(low()) = [3, 3, 0, 3, 0, 0, 0, 0, 1] { refl }
+theorem read_then_exit_shape(): read_then_exit().shape() = [3, 3, 0, 3, 0, 0, 0, 0, 1] { refl }
 
 fn exit_unless() → Source { Source(functions := [], buffers := [], main := Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
-theorem exit_unless_shape(): exit_unless().shape(low()) = [4, 4, 0, 4, 4, 0, 4, 2, 3, 2, 0, 2] { refl }
+theorem exit_unless_shape(): exit_unless().shape() = [4, 4, 0, 4, 4, 0, 4, 2, 3, 2, 0, 2] { refl }
 
 // A part read back is its emission at `Start`: the label name after it,
 // then how many numbers its items are, the items and their lengths.
@@ -128,7 +176,19 @@ theorem exit_unless_by_parts(): exit_unless().main.emit(Start, eu_layout(), 0) =
 
 // A byte node takes label names (its bounds check's), so the leaf after it
 // starts past them.
-theorem byte_leaves_shape(): byte_leaves().shape(low()) = [1, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
+theorem byte_leaves_shape(): byte_leaves().shape() = [1, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
+
+// The shape counts a leaf's names without emitting it: each kind of leaf
+// that takes names counts what its emission takes, and a pure leaf none.
+fn names_emitted(s: Stmt, names: Nat) → Nat {
+    match s.emit(Start, byte_leaves().layout(low()), names) { None => 0, Some(c) => c.names }
+}
+theorem read_names_counted(): names_emitted(Invoke(Reads(0, 0, 1, 2)), 5) = Invoke(Reads(0, 0, 1, 2)).leaf_names(5) { refl }
+theorem write_names_counted(): names_emitted(Invoke(Writes(0, 0, 1, 2, 3)), 5) = Invoke(Writes(0, 0, 1, 2, 3)).leaf_names(5) { refl }
+theorem load_names_counted(): names_emitted(ops([BufferLoad(1, 0, 0)]), 5) = ops([BufferLoad(1, 0, 0)]).leaf_names(5) { refl }
+theorem store_names_counted(): names_emitted(ops([BufferStore(1, 0, 0, 2)]), 5) = ops([BufferStore(1, 0, 0, 2)]).leaf_names(5) { refl }
+theorem pure_names_counted(): names_emitted(ops([Const(64, 0, 3), Add(64, 1, 0, 0)]), 5) = ops([Const(64, 0, 3), Add(64, 1, 0, 0)]).leaf_names(5) { refl }
+theorem exit_names_counted(): names_emitted(Exit(0), 5) = Exit(0).leaf_names(5) { refl }
 
 // cat with its pass inlined k times in its loop: code grows with k while
 // the tree keeps cat's shape. `cat_x8`, about twice cat's code eight times

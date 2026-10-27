@@ -200,45 +200,53 @@ theorem Prog::ports_to_within(layout: Layout, ports: List<Port>): (registers: Li
     }
 }
 
-theorem Prog::ports_from_within(layout: Layout, ports: List<Port>): (registers: List<Gpr>) → (p, q: Prog) →
-    p.ports_from(layout, ports, registers) = Some(q) → p.Within(q) {
+theorem Prog::ports_from_within(layout: Layout, ports: List<Port>): (homes: List<Nat>) → (registers: List<Gpr>) → (p, q: Prog) →
+    p.ports_from(layout, ports, homes, registers) = Some(q) → p.Within(q) {
     match ports {
-        Nil => λ registers p q some => j(Option::some_inj(p, q, some), λ x _ => p.Within(x), p.within_self()),
-        Cons(port, rest) => λ registers => match registers {
+        Nil => λ homes registers p q some => j(Option::some_inj(p, q, some), λ x _ => p.Within(x), p.within_self()),
+        Cons(_, rest) => λ homes registers => match registers {
             Nil => λ p q none => absurd(none),
-            Cons(register, later) => λ p q => (match word_fits(port.id) as λ fits => word_fits(port.id) = fits →
-                (match fits { False => None, True => p.word_from(layout, port.id, register).ports_from(layout, rest, later) }) = Some(q) → p.Within(q) {
-                False => λ _ none => absurd(none),
-                True => λ _ more => p.within_trans(p.word_from(layout, port.id, register), q, p.within_word_from(layout, port.id, register),
-                    Prog::ports_from_within(layout, rest, later, p.word_from(layout, port.id, register), q, more)),
-            })(refl),
+            Cons(register, later) => match homes {
+                Nil => λ p q none => absurd(none),
+                Cons(home, others) => λ p q => (match word_fits(home) as λ fits => word_fits(home) = fits →
+                    (match fits { False => None, True => p.word_from(layout, home, register).ports_from(layout, rest, others, later) }) = Some(q) → p.Within(q) {
+                    False => λ _ none => absurd(none),
+                    True => λ _ more => p.within_trans(p.word_from(layout, home, register), q, p.within_word_from(layout, home, register),
+                        Prog::ports_from_within(layout, rest, others, later, p.word_from(layout, home, register), q, more)),
+                })(refl),
+            },
         },
     }
 }
 
 // Where a leaf's start sits within its code.
-theorem Prog::within_leaf(self p: Prog, layout: Layout, nodes: List<Node>, q: Prog, emitted: p.leaf(layout, nodes) = Some(q)): p.Within(q) {
+theorem Prog::within_leaf_into(self p: Prog, layout: Layout, nodes: List<Node>, homes: List<Nat>, q: Prog,
+    emitted: p.leaf_into(layout, nodes, homes) = Some(q)): p.Within(q) {
     let ins = leaf_inputs(nodes);
     let outs = leaf_outputs(nodes);
     let inputs = nodes_inputs(nodes);
     let region = leaf_region(nodes);
     (match leaf_checks(nodes, ins, outs) as λ b => (match b { False => None, True => match p.ports_to(layout, inputs, ins) {
             None => None,
-            Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))),
+            Some(loaded) => loaded.leaf_lowered(layout, nodes, homes, region.lower(ins, outs, place_into(outs))),
         } }) = Some(q) → p.Within(q) {
         False => λ none => absurd(none),
         True => (match p.ports_to(layout, inputs, ins) as λ o => p.ports_to(layout, inputs, ins) = o →
-                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
+                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, nodes, homes, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
                 p.Within(q) {
             None => λ _ none => absurd(none),
             Some(loaded) => λ loaded_is => (match region.lower(ins, outs, place_into(outs)) {
                 None => λ none => absurd(none),
                 Some(code) => λ stored => p.within_trans(loaded, q, Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
                     loaded.within_trans(then(loaded, Block(code)), q, loaded.within_then(0, Block(code)),
-                        Prog::ports_from_within(layout, nodes_write_ports(nodes), outs, then(loaded, Block(code)), q, stored))),
+                        Prog::ports_from_within(layout, nodes_write_ports(nodes), homes, outs, then(loaded, Block(code)), q, stored))),
             }),
         })(refl),
     })(emitted)
+}
+
+theorem Prog::within_leaf(self p: Prog, layout: Layout, nodes: List<Node>, q: Prog, emitted: p.leaf(layout, nodes) = Some(q)): p.Within(q) {
+    p.within_leaf_into(layout, nodes, nodes_writes(nodes), q, emitted)
 }
 
 // The inputs' code, as the claim after it from the registers it leaves.
@@ -391,53 +399,79 @@ theorem port_rep_number(values: Valuation(), port: Port, word: BitVec(64), rep: 
     })(rep)
 }
 
-// The outputs' code: each result stored to its slot, so the environment
-// after is the one the source settles.
+// The ports' results stored, each to its home's word.
+fn Env::settle_into(self env: Env, after: Valuation(), ports: List<Port>, homes: List<Nat>) → Env {
+    match ports {
+        Nil => env,
+        Cons(port, rest) => match homes {
+            Nil => env,
+            Cons(home, others) => Env(env.words.put(home, after(port.width, port.id).toNat(), 0), env.buffers).settle_into(after, rest, others),
+        },
+    }
+}
+
+// Each node's result stored to its own word is the environment the source
+// settles.
+theorem Env::settle_into_writes(nodes: List<Node>): (env: Env) → (after: Valuation()) →
+    env.settle_into(after, nodes_write_ports(nodes), nodes_writes(nodes)) = env.settle(after, nodes_write_ports(nodes)) {
+    match nodes {
+        Nil => λ env after => refl,
+        Cons(node, rest) => λ env after =>
+            Env::settle_into_writes(rest, Env(env.words.put(node_output(node).id, after(node_output(node).width, node_output(node).id).toNat(), 0), env.buffers), after),
+    }
+}
+
+// The outputs' code: each result stored to its home's slot, so the
+// environment after is the one with each settled there.
 theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree<BitVec(64)>(Events::linux()), ports: List<Port>):
-    (registers: List<Gpr>) → (p, q: Prog) → (env: Env) → p.ports_from(t.layout(), ports, registers) = Some(q) → q.Within(t.program) →
-    Rbx.absent_from(registers).IsTrue() → t.At(prog_len(q), tree, env.settle(values, ports)) →
+    (homes: List<Nat>) → (registers: List<Gpr>) → (p, q: Prog) → (env: Env) → p.ports_from(t.layout(), ports, homes, registers) = Some(q) →
+    q.Within(t.program) → Rbx.absent_from(registers).IsTrue() → t.At(prog_len(q), tree, env.settle_into(values, ports, homes)) →
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ PortsAt(values, ports, registers, g)) {
     match ports {
-        Nil => λ registers p q env some within _ next => {
+        Nil => λ homes registers p q env some within _ next => {
             let same: (p = q) = Option::some_inj(p, q, some);
             t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory),
                 λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ PortsAt(values, Nil, registers, s.gprs),
                 j(sym(same), λ x _ => t.At(prog_len(x), tree, env), next), λ s held => held.left)
         },
-        Cons(port, rest) => λ registers => match registers {
+        Cons(port, rest) => λ homes registers => match registers {
             Nil => λ p q env none => absurd(none),
-            Cons(register, later) => λ p q env => (match word_fits(port.id) as λ fits => word_fits(port.id) = fits →
-                (match fits { False => None, True => p.word_from(t.layout(), port.id, register).ports_from(t.layout(), rest, later) }) = Some(q) →
-                q.Within(t.program) → Rbx.absent_from(Cons(register, later)).IsTrue() → t.At(prog_len(q), tree, env.settle(values, Cons(port, rest))) →
-                t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ PortsAt(values, Cons(port, rest), Cons(register, later), g)) {
-                False => λ _ none => absurd(none),
-                True => λ fits more within rbx next => {
-                    let inside = word_fits_inside(port.id, j(sym(fits), λ b _ => b.IsTrue(), trivial));
-                    let layout = t.layout();
-                    let stored = p.word_from(layout, port.id, register);
-                    let a = layout.word_at(port.id);
-                    let settled = Env(env.words.put(port.id, values(port.width, port.id).toNat(), 0), env.buffers);
-                    let w_stored = stored.within_trans(q, t.program, Prog::ports_from_within(layout, rest, later, stored, q, more), within);
-                    let after = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(settled, m) ∧ PortsAt(values, rest, later, g);
-                    let head = t.goes_word_from(p, port.id, register, inside, w_stored, tree, after,
-                        t.goes_ports_from(values, tree, rest, later, stored, q, settled, more, within, Rbx.absent_rest(register, later, rbx), next));
-                    let apart = Rbx.absent_first(register, later, rbx);
-                    t.goes_weaken(prog_len(p), tree,
-                        λ (s: MachineState<X86Memory(t.r.profile)>) => after(write_gpr(Rbx, a, s.gprs),
-                            t.r.profile.store(s.memory, a, word_bytes(read_gpr(register, write_gpr(Rbx, a, s.gprs))))),
-                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ PortsAt(values, Cons(port, rest), Cons(register, later), s.gprs),
-                        head, λ s held => {
-                            let word = read_gpr(register, write_gpr(Rbx, a, s.gprs));
-                            let same_word: (word = read_gpr(register, s.gprs)) = read_gpr_other(Rbx, register, a, s.gprs, apart);
-                            let number: (word.toNat() = values(port.width, port.id).toNat()) =
-                                port_rep_number(values, port, word, j(sym(same_word), λ x _ => port.Rep(values, x), held.right.left));
-                            ⟨t.placed_same(env.set_word(port.id, word), settled, t.r.profile.store(s.memory, a, word_bytes(word)),
-                                t.placed_word(env, s.memory, held.left, port.id, inside, word),
-                                cong_fn<Nat, Env>(λ k => Env(env.words.put(port.id, k, 0), env.buffers), number)),
-                             ports_at_frame(values, rest, later, s.gprs, Rbx, a, Rbx.absent_rest(register, later, rbx), held.right.right)⟩
-                        })
-                },
-            })(refl),
+            Cons(register, later) => match homes {
+                Nil => λ p q env none => absurd(none),
+                Cons(home, others) => λ p q env => (match word_fits(home) as λ fits => word_fits(home) = fits →
+                    (match fits { False => None, True => p.word_from(t.layout(), home, register).ports_from(t.layout(), rest, others, later) }) = Some(q) →
+                    q.Within(t.program) → Rbx.absent_from(Cons(register, later)).IsTrue() →
+                    t.At(prog_len(q), tree, env.settle_into(values, Cons(port, rest), Cons(home, others))) →
+                    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ PortsAt(values, Cons(port, rest), Cons(register, later), g)) {
+                    False => λ _ none => absurd(none),
+                    True => λ fits more within rbx next => {
+                        let inside = word_fits_inside(home, j(sym(fits), λ b _ => b.IsTrue(), trivial));
+                        let layout = t.layout();
+                        let stored = p.word_from(layout, home, register);
+                        let a = layout.word_at(home);
+                        let settled = Env(env.words.put(home, values(port.width, port.id).toNat(), 0), env.buffers);
+                        let w_stored = stored.within_trans(q, t.program, Prog::ports_from_within(layout, rest, others, later, stored, q, more), within);
+                        let after = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(settled, m) ∧ PortsAt(values, rest, later, g);
+                        let head = t.goes_word_from(p, home, register, inside, w_stored, tree, after,
+                            t.goes_ports_from(values, tree, rest, others, later, stored, q, settled, more, within, Rbx.absent_rest(register, later, rbx), next));
+                        let apart = Rbx.absent_first(register, later, rbx);
+                        t.goes_weaken(prog_len(p), tree,
+                            λ (s: MachineState<X86Memory(t.r.profile)>) => after(write_gpr(Rbx, a, s.gprs),
+                                t.r.profile.store(s.memory, a, word_bytes(read_gpr(register, write_gpr(Rbx, a, s.gprs))))),
+                            λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ PortsAt(values, Cons(port, rest), Cons(register, later), s.gprs),
+                            head, λ s held => {
+                                let word = read_gpr(register, write_gpr(Rbx, a, s.gprs));
+                                let same_word: (word = read_gpr(register, s.gprs)) = read_gpr_other(Rbx, register, a, s.gprs, apart);
+                                let number: (word.toNat() = values(port.width, port.id).toNat()) =
+                                    port_rep_number(values, port, word, j(sym(same_word), λ x _ => port.Rep(values, x), held.right.left));
+                                ⟨t.placed_same(env.set_word(home, word), settled, t.r.profile.store(s.memory, a, word_bytes(word)),
+                                    t.placed_word(env, s.memory, held.left, home, inside, word),
+                                    cong_fn<Nat, Env>(λ k => Env(env.words.put(home, k, 0), env.buffers), number)),
+                                 ports_at_frame(values, rest, later, s.gprs, Rbx, a, Rbx.absent_rest(register, later, rbx), held.right.right)⟩
+                            })
+                    },
+                })(refl),
+            },
         },
     }
 }
@@ -446,10 +480,10 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
 // The leaf
 
 // What a dataflow leaf's code claims: from the statement's start, on from
-// its end with the environment the source computes.
-theorem Target::goes_leaf(self t: Target, env: Env, p, q: Prog, nodes: List<Node>, emitted: p.leaf(t.layout(), nodes) = Some(q),
-    within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(q), tree, env.settle(eval_nodes(nodes, env.valuation()), nodes_write_ports(nodes)))): t.At(prog_len(p), tree, env) {
+// its end with each result the region computes stored to its home.
+theorem Target::goes_leaf_into(self t: Target, env: Env, p, q: Prog, nodes: List<Node>, homes: List<Nat>,
+    emitted: p.leaf_into(t.layout(), nodes, homes) = Some(q), within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(q), tree, env.settle_into(eval_nodes(nodes, env.valuation()), nodes_write_ports(nodes), homes))): t.At(prog_len(p), tree, env) {
     let layout = t.layout();
     let ins = leaf_inputs(nodes);
     let outs = leaf_outputs(nodes);
@@ -460,7 +494,7 @@ theorem Target::goes_leaf(self t: Target, env: Env, p, q: Prog, nodes: List<Node
     (match leaf_checks(nodes, ins, outs) as λ b => leaf_checks(nodes, ins, outs) = b →
         (match b { False => None, True => match p.ports_to(layout, inputs, ins) {
             None => None,
-            Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))),
+            Some(loaded) => loaded.leaf_lowered(layout, nodes, homes, region.lower(ins, outs, place_into(outs))),
         } }) = Some(q) → t.At(prog_len(p), tree, env) {
         False => λ _ none => absurd(none),
         True => λ checked => {
@@ -471,17 +505,17 @@ theorem Target::goes_leaf(self t: Target, env: Env, p, q: Prog, nodes: List<Node
             let parts3 = Bool::is_true_and(gprs_distinct(Cons(Rbx, ins)), Rbx.absent_from(outs), parts2.right);
             let distinct = Bool::is_true_and(Rbx.absent_from(ins), gprs_distinct(ins), parts3.left);
             (match p.ports_to(layout, inputs, ins) as λ o => p.ports_to(layout, inputs, ins) = o →
-                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, nodes, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
+                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, nodes, homes, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
                 t.At(prog_len(p), tree, env) {
                 None => λ _ none => absurd(none),
                 Some(loaded) => λ loaded_is => (match region.lower(ins, outs, place_into(outs)) as λ c => region.lower(ins, outs, place_into(outs)) = c →
-                    loaded.leaf_lowered(layout, nodes, c) = Some(q) → t.At(prog_len(p), tree, env) {
+                    loaded.leaf_lowered(layout, nodes, homes, c) = Some(q) → t.At(prog_len(p), tree, env) {
                     None => λ _ none => absurd(none),
                     Some(code) => λ lowered stored => {
                         let body = then(loaded, Block(code));
-                        let w_body = body.within_trans(q, t.program, Prog::ports_from_within(layout, outputs, outs, body, q, stored), within);
+                        let w_body = body.within_trans(q, t.program, Prog::ports_from_within(layout, outputs, homes, outs, body, q, stored), within);
                         let w_loaded = loaded.within_before(0, Block(code), t.program, w_body);
-                        let at_body = t.goes_ports_from(values, tree, outputs, outs, body, q, env, stored, within, parts3.right, next);
+                        let at_body = t.goes_ports_from(values, tree, outputs, homes, outs, body, q, env, stored, within, parts3.right, next);
                         let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, u.memory) ∧ PortsAt(values, outputs, outs, u.gprs);
                         let at_loaded = t.goes_block(loaded, 0, code, w_body, tree, post, at_body);
                         let holds: RegionHolds(region, values) = eval_nodes_holds(nodes, parts.left, env.valuation(), values, λ w id _ => refl);
@@ -501,4 +535,12 @@ theorem Target::goes_leaf(self t: Target, env: Env, p, q: Prog, nodes: List<Node
             })(refl)
         },
     })(refl, emitted)
+}
+
+// Each result stored to its own word: the environment the source settles.
+theorem Target::goes_leaf(self t: Target, env: Env, p, q: Prog, nodes: List<Node>, emitted: p.leaf(t.layout(), nodes) = Some(q),
+    within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(q), tree, env.settle(eval_nodes(nodes, env.valuation()), nodes_write_ports(nodes)))): t.At(prog_len(p), tree, env) {
+    t.goes_leaf_into(env, p, q, nodes, nodes_writes(nodes), emitted, within, tree,
+        j(sym(Env::settle_into_writes(nodes, env, eval_nodes(nodes, env.valuation()))), λ e _ => t.At(prog_len(q), tree, e), next))
 }
