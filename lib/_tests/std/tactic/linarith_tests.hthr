@@ -1,0 +1,61 @@
+// Probes of `linarith` (lib/std/tactic/linarith.hthr, docs/linarith-design.md):
+// linear facts at an ordered field, read at its `≈`, the same certificate
+// checked at `Rat` and at `CReal` through the class laws. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+//
+// This module does not import `ring`, on purpose: the reading confirms
+// numerals and the certificate checks its identity through `ring`'s lemmas,
+// which must resolve in a client that imports only `linarith` (once, every
+// numeral here silently became an atom).
+import logic; import nat; import int; import omega; import linarith;
+import relation_props; import semiring; import ordered_field; import rat; import creal;
+
+// The rearrangements issues/linarith-ordered-fields.md names.
+theorem rat_trans(a, b, c: Rat, h1: a <= b, h2: b < c): a < c { linarith(h1, h2) }
+theorem rat_shift(a, q, e, f, r: Rat, h: a <= q + (e + r), ef: e <= f): a <= (q + r) + f { linarith(h, ef) }
+theorem creal_shift(a, q, e, f, r: CReal, h: a <= q + (e + r), ef: e <= f): a <= (q + r) + f { linarith(h, ef) }
+theorem rat_sub_rearrange(b, u, c: Rat): (b + u) - c ≈ (b - c) + u { linarith }
+theorem creal_sub_rearrange(b, u, c: CReal): (b + u) - c ≈ (b - c) + u { linarith }
+
+// Coefficients and constants: the combination is found over the rationals
+// and written with positive integer multipliers.
+theorem rat_scaled(x, y: Rat, h1: 2 * x + y <= 3, h2: x - y <= 0): 3 * x <= 3 { linarith(h1, h2) }
+theorem creal_scaled(x, y: CReal, h1: 2 * x + y < 3, h2: x - y <= 0): x < 1 { linarith(h1, h2) }
+theorem rat_constant(x: Rat): x < x + 1 { linarith }
+theorem creal_constant(x: CReal, h: x <= 0): x < 2 { linarith(h) }
+
+// Equations are used either way round.
+theorem rat_same_hyp(x, y, z: Rat, h: x ≈ y + z, hz: 0 < z): y < x { linarith(h, hz) }
+theorem creal_same_goal(x, y: CReal, h1: x <= y, h2: y <= x): x ≈ y { linarith(h1, h2) }
+
+// Products and other non-linear terms are atoms.
+theorem rat_product_atom(x, y, z: Rat, h: x * y <= z, hz: z < 1): y * x < 1 { linarith(h, hz) }
+theorem creal_reciprocal_atom(x, y: CReal, hx: x.Apart(0), h: x⁻¹ <= y): x⁻¹ - y <= 0 { linarith(h) }
+
+// An atom with no source spelling, a real's term, is named by an alias.
+theorem rat_term_atoms(x: CReal, m, n: Nat, h: x.seq(m) <= x.seq(n) + 1, hn: x.seq(n) < 0): x.seq(m) < 1 { linarith(h, hn) }
+
+// Facts come from the context when the written ones do not suffice.
+theorem rat_from_context(a, b, c: Rat, h1: a < b, h2: b < c): a < c { linarith }
+theorem creal_let_fact(a, b: CReal, h: a < b): a <= b + 1 {
+    let wider: (b <= b + 1) = linarith;
+    linarith(h, wider)
+}
+
+// `¬(a < b)` both as a fact and as a goal, `≤`'s own meaning.
+theorem rat_not_lt_goal(a, b: Rat, h: b <= a): ¬(a < b) { linarith(h) }
+theorem creal_not_lt_fact(a, b, c: CReal, h: ¬(b < a), hc: b < c): a < c { linarith(h, hc) }
+
+// Contradictory facts prove anything.
+theorem rat_absurd(x: Rat, h1: x < 0, h2: 0 < x): False { linarith(h1, h2) }
+theorem creal_absurd_goal(x, y: CReal, h1: x < y, h2: y < x): x * x ≈ y { linarith(h1, h2) }
+
+// A goal that does not follow is refused with the facts it tried.
+// expect-error: `linarith` could not prove
+theorem rat_not_entailed(x, y: Rat, h: x <= y): x < y { linarith(h) }
+// expect-error: `linarith` could not prove
+theorem creal_product_is_not_linear(x: CReal, h: 0 <= x): 0 <= x * x { linarith(h) }
+// A fact that is not an order at the goal's carrier is named.
+// expect-error: combines `<`, `<=`, `≈` and `¬(x < y)` facts at `Rat`
+theorem rat_wrong_fact(x: Rat, n: Nat, h: n < 3): x <= x { linarith(h) }
