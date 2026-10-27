@@ -1692,6 +1692,30 @@ fn Nat::ldiv(self n, d: Nat) → DivMod { n.ldiv_fuel(d, n) }
 
 theorem Nat::half_succ_le(self k: Nat): Succ(k).half() <= k { match k { Zero => trivial, Succ(l) => l.half_le() } }
 
+// `2^j - 1`, the number with `j` one bits. Every `n` is at most the ones of
+// its width, `n < 2^width(n)`, read without a subtraction: a halving loses at
+// most one, and one more digit doubles the ones and adds one.
+fn Nat::ones(self j: Nat) → Nat { match j { Zero => 0, Succ(i) => i.ones() * 2 + 1 } }
+
+theorem Nat::le_ones_width_fuel(self fuel: Nat): (n: Nat) → n <= fuel → n <= Nat::width_fuel(n, fuel).ones() {
+    match fuel {
+        Zero => λ n le => le,
+        Succ(f, ih) => λ n => match n {
+            Zero => λ _ => trivial,
+            Succ(k) => λ le => {
+                let h = Succ(k).half();
+                let w = Nat::width_fuel(h, f);
+                let below: (h <= w.ones()) = ih(h, h.le_trans(k, f, k.half_succ_le(), le));
+                let doubled: (h * 2 <= w.ones() * 2) = Nat::mul_le_mono_r(2, h, w.ones(), below);
+                let halves: (k <= h + h) = Succ(k).le_succ_half_add();
+                k.le_trans(h * 2, w.ones() * 2, j(sym(h.mul_two()), λ y _ => k <= y, halves), doubled)
+            },
+        },
+    }
+}
+
+theorem Nat::le_ones_width(self n: Nat): n <= n.width().ones() { n.le_ones_width_fuel(n, n.le_refl()) }
+
 theorem Nat::ldiv_bit_parts(self n: Nat): (n.half() + n.half()) + Nat::ldiv_bit(n, n.half()) = n ∧ Nat::ldiv_bit(n, n.half()) <= 1 {
     match Succ(n.half() + n.half()).le_dec(n) as λ c => (n.half() + n.half()) + (match c { Inl(_) => 1, Inr(_) => 0 }) = n ∧ Nat::Le(match c { Inl(_) => 1, Inr(_) => 0 }, 1) {
         Inl(le) => And(Succ(n.half() + n.half()).le_antisym(n, le, n.le_succ_half_add()), trivial),

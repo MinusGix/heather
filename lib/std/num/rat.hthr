@@ -906,6 +906,26 @@ theorem Rat::abs_le_natAbs(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.num.natAb
     omega(scaled)
 }
 
+// The least whole number above a rational's size, `⌊|num| / den⌋ + 1`: a
+// bound on `|x|` that stays small when the numerator is large.
+fn Rat::abs_ceil(self x: Rat) → Nat { Succ(x.num.natAbs().ldiv(x.den).quot()) }
+
+theorem Rat::abs_le_abs_ceil(self x: Rat): x.abs() <= Rat::ofInt(OfNat(x.abs_ceil())) {
+    let n = x.num.natAbs();
+    let d: Nat = x.den;
+    match n.ldiv(d) as λ st => DivMod::Spec(n, d, st) → x.abs() <= Rat::ofInt(OfNat(Succ(st.quot()))) {
+        MkDivMod(q, r) => λ sp => {
+            let parts: (q * d + r = n) = sp.left;
+            let small: (r < d) = match sp.right { Inl(bad) => false_elim(omega(bad, x.den_pos)), Inr(lt) => lt };
+            let succ: (d * Succ(q) = d * q + d) = refl;
+            let comm: (q * d = d * q) = q.mul_comm(d);
+            let flip: (Succ(q) * d = d * Succ(q)) = Succ(q).mul_comm(d);
+            let bound: (x.abs() <= Rat::ofInt(OfNat(Succ(q)))) = omega(parts, small, succ, comm, flip);
+            bound
+        },
+    }(n.ldiv_spec(d))
+}
+
 theorem Rat::two_add_ofNat(n: Nat): (1 + 1) + Rat::ofInt(OfNat(n)) ≈ Rat::ofInt(OfNat(n + 2)) {
     omega(Int::ofNat_add(n, 2))
 }

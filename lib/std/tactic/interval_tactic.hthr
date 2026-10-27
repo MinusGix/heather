@@ -10,7 +10,10 @@
 // `CReal::inv` at `CReal`, and makes anything else a leaf. A leaf at `Rat`
 // is a literal, whose value the enclosure computes when the proof is
 // checked; at `CReal` a `CReal::ofRat(q)` is an exact leaf and anything else
-// a real enclosed from its terms. A leaf that does not compute (a variable)
+// a real enclosed from its terms, except that `CReal::exp_rat(q)`,
+// `sin_rat(q)` and `cos_rat(q)` are read as leaves with enclosures of their
+// own (`RBox`, from `elementary`) when those names resolve where the tactic
+// runs. A leaf that does not compute (a variable)
 // leaves the verdict stuck, and the tactic says so. `eval` spells each node
 // as the operation it read, so the proof's type converts to the goal as
 // written.
@@ -51,6 +54,7 @@ fn interval_real_neg(a: RealExpr) → RealExpr { RNeg(a) }
 fn interval_real_mul(a, b: RealExpr) → RealExpr { RMul(a, b) }
 fn interval_real_pow(a: RealExpr, n: Nat) → RealExpr { RPow(a, n) }
 fn interval_real_inv(a: RealExpr, x: CReal, h: x.Apart(0)) → RealExpr { RInv(a, x, h) }
+fn interval_real_box(b: Enclosed) → RealExpr { RBox(b) }
 theorem interval_wf_leaf(): True { trivial }
 theorem interval_wf_add(a, b: RealExpr, wa: a.Wf(), wb: b.Wf()): RAdd(a, b).Wf() { And(wa, wb) }
 theorem interval_wf_sub(a, b: RealExpr, wa: a.Wf(), wb: b.Wf()): RSub(a, b).Wf() { And(wa, wb) }
@@ -66,16 +70,38 @@ theorem interval_verdict(): interval_yes() = True { refl }
 // reciprocal, an inverse or an exact embedding leaves those `None`, and
 // their constructors are never built; `Rat` has no well-formedness to build,
 // and its `w…` heads are never read.
+//
+// `boxes` are the heads of reals with enclosures of their own (`Enclosed`):
+// `head(q)` is read as the leaf `RBox(box(q))`, whose real is `head(q)` by
+// unfolding. Only the heads that resolve where the tactic runs are listed.
+record IntervalBox { head: GlobalRef, box: GlobalRef }
+
 record IntervalHeads {
     add: GlobalRef, sub: GlobalRef, neg: GlobalRef, mul: GlobalRef, npow: GlobalRef,
     recip: Option<GlobalRef>, inv: Option<GlobalRef>, embed: Option<GlobalRef>,
     lit: GlobalRef, iadd: GlobalRef, isub: GlobalRef, ineg: GlobalRef, imul: GlobalRef, ipow: GlobalRef, irecip: GlobalRef, iinv: GlobalRef, iexact: GlobalRef,
     wleaf: GlobalRef, wadd: GlobalRef, wsub: GlobalRef, wneg: GlobalRef, wmul: GlobalRef, wpow: GlobalRef, winv: GlobalRef, same: GlobalRef,
-    wf: Bool,
+    ibox: GlobalRef, boxes: List<IntervalBox>, wf: Bool,
 }
 
 fn interval_global(name: String) → Tac<GlobalRef> {
     lookup(name).bind(λ c => match c { Accepted(g) => Pure(g), Refused(why) => fail("intervals: " ++ why, []) })
+}
+
+// A global the goal might mention, or `None` when its name does not resolve
+// where the tactic runs (a client that does not import `creal` has no goals
+// at `CReal`, one without `elementary` no `exp`).
+fn interval_try_global(name: String) → Tac<Option<GlobalRef>> {
+    lookup(name).bind(λ c => match c { Accepted(g) => Pure(Some(g)), Refused(_) => Pure(None) })
+}
+
+fn interval_try_box(head, box: String, rest: List<IntervalBox>) → Tac<List<IntervalBox>> {
+    interval_try_global(head).bind(λ o => match o { None => Pure(rest), Some(h) => interval_global(box).bind(λ b => Pure(Cons(IntervalBox(h, b), rest))) })
+}
+
+fn interval_boxes() → Tac<List<IntervalBox>> {
+    interval_try_box("CReal::exp_rat", "CReal::exp_box", Nil).bind(λ a => interval_try_box("CReal::sin_rat", "CReal::sin_box", a).bind(λ b =>
+        interval_try_box("CReal::cos_rat", "CReal::cos_box", b)))
 }
 
 fn interval_heads() → Tac<IntervalHeads> {
@@ -86,7 +112,7 @@ fn interval_heads() → Tac<IntervalHeads> {
     interval_global("interval_mul").bind(λ imul => interval_global("interval_recip").bind(λ irecip =>
     interval_global("interval_pow").bind(λ ipow =>
         Pure(IntervalHeads(add, sub, neg, mul, npow, Some(recip), None, None, lit, iadd, isub, ineg, imul, ipow, irecip, lit, lit,
-            lit, lit, lit, lit, lit, lit, lit, lit, False)))))))))))))))
+            lit, lit, lit, lit, lit, lit, lit, lit, lit, Nil, False)))))))))))))))
 }
 
 fn interval_real_heads() → Tac<IntervalHeads> {
@@ -100,9 +126,9 @@ fn interval_real_heads() → Tac<IntervalHeads> {
     interval_global("interval_wf_leaf").bind(λ wleaf => interval_global("interval_wf_add").bind(λ wadd =>
     interval_global("interval_wf_sub").bind(λ wsub => interval_global("interval_wf_neg").bind(λ wneg =>
     interval_global("interval_wf_mul").bind(λ wmul => interval_global("interval_wf_pow").bind(λ wpow =>
-    interval_global("interval_wf_inv").bind(λ winv =>
+    interval_global("interval_wf_inv").bind(λ winv => interval_global("interval_real_box").bind(λ ibox => interval_boxes().bind(λ boxes =>
         Pure(IntervalHeads(add, sub, neg, mul, npow, None, Some(inv), Some(embed), lit, iadd, isub, ineg, imul, ipow, lit, iinv, iexact,
-            wleaf, wadd, wsub, wneg, wmul, wpow, winv, same, True)))))))))))))))))))))))))
+            wleaf, wadd, wsub, wneg, wmul, wpow, winv, same, ibox, boxes, True)))))))))))))))))))))))))))
 }
 
 fn interval_app1(c: GlobalRef, a: Expr) → Expr { App(Global(c), a) }
@@ -116,10 +142,14 @@ fn interval_arg(args: List<Handle>, i: Nat) → Option<Handle> {
 }
 
 // What the reader does at a head: one of the operations it knows, the exact
-// embedding, or a leaf.
-inductive IntervalOp { OLeaf, OAdd, OSub, OMul, ONeg, ORecip, OInv, OPow, OEmbed }
+// embedding, a real with enclosures of its own, or a leaf.
+inductive IntervalOp { OLeaf, OAdd, OSub, OMul, ONeg, ORecip, OInv, OPow, OEmbed, OBox(box: GlobalRef) }
 
 fn interval_is(o: Option<GlobalRef>, g: GlobalRef) → Bool { match o { None => False, Some(r) => g.id.same(r.id) } }
+
+fn interval_box_op(bs: List<IntervalBox>, g: GlobalRef) → IntervalOp {
+    match bs { Nil => OLeaf, Cons(b, rest) => match g.id.same(b.head.id) { True => OBox(b.box), False => interval_box_op(rest, g) } }
+}
 
 fn interval_op(H: IntervalHeads, g: GlobalRef) → IntervalOp {
     match g.id.same(H.add.id) {
@@ -134,7 +164,7 @@ fn interval_op(H: IntervalHeads, g: GlobalRef) → IntervalOp {
                         True => OPow,
                         False => match interval_is(H.recip, g) {
                             True => ORecip,
-                            False => match interval_is(H.inv, g) { True => OInv, False => match interval_is(H.embed, g) { True => OEmbed, False => OLeaf } },
+                            False => match interval_is(H.inv, g) { True => OInv, False => match interval_is(H.embed, g) { True => OEmbed, False => interval_box_op(H.boxes, g) } },
                         },
                     },
                 },
@@ -169,6 +199,7 @@ fn interval_reify(H: IntervalHeads, fuel: Nat, h: Handle) → Tac<IntervalRead> 
                     ONeg => interval_reify(H, f, a).bind(λ ra => Pure(interval_unary(H, H.ineg, H.wneg, ra))),
                     ORecip => interval_reify(H, f, a).bind(λ ra => Pure(IntervalRead(interval_app1(H.irecip, ra.tree), ra.wf))),
                     OEmbed => Pure(IntervalRead(interval_app1(H.iexact, Hd(a)), Global(H.wleaf))),
+                    OBox(b) => Pure(IntervalRead(interval_app1(H.ibox, interval_app1(b, Hd(a))), Global(H.wleaf))),
                     OInv => match interval_arg(args, 1) {
                         None => Pure(interval_leaf(H, h)),
                         Some(p) => interval_reify(H, f, a).bind(λ ra => Pure(IntervalRead(interval_apps(Global(H.iinv), [ra.tree, Hd(a), Hd(p)]),
@@ -220,13 +251,6 @@ fn interval_close(H: IntervalHeads, search: String, close: String, l: Handle, r:
 fn interval_not_order<A>(target: Handle) → Tac<A> {
     fail("intervals: the goal is not `<` or `<=` at `Rat` or `CReal`, or `Apart` at `CReal`",
         [At(Hd(target), Tried("the goal", "not an order at `Rat` or `CReal`, or `Apart` at `CReal`"))])
-}
-
-// A relation the goal might be at, or `None` when its name does not resolve
-// where the tactic runs (a client that does not import `creal` has no goals
-// at `CReal`).
-fn interval_try_global(name: String) → Tac<Option<GlobalRef>> {
-    lookup(name).bind(λ c => match c { Accepted(g) => Pure(Some(g)), Refused(_) => Pure(None) })
 }
 
 fn interval_order(rel: GlobalRef, target, l, r: Handle, p, tries, n: Nat) → Tac<Expr> {

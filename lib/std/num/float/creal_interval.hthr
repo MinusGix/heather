@@ -387,10 +387,16 @@ theorem CReal::le_of_enclose(self x, y: CReal, n, p: Nat, h: x.enclose(n, p).bel
 // is about, and `Wf` asks that each such `a` denote its `x`. A tree read off
 // a goal satisfies that by reflexivity (its `a.eval()` is `x` as written);
 // one with no inverse is well formed by evaluation (`wf_plain`).
+//
+// `RBox(b)` is a real that comes with enclosures of its own (`Enclosed`),
+// such as a series' limit (`Series::enclosed`): the leaf reads them in
+// place of the real's terms.
+
+record Enclosed { x: CReal, at: Nat → Nat → Interval, has: (n, p: Nat) → at(n, p).HasReal(x) }
 
 inductive RealExpr {
     RRat(q: Rat), RReal(x: CReal), RAdd(a: RealExpr, b: RealExpr), RSub(a: RealExpr, b: RealExpr), RNeg(a: RealExpr), RMul(a: RealExpr, b: RealExpr),
-    RPow(a: RealExpr, n: Nat), RInv(a: RealExpr, x: CReal, h: x.Apart(0)),
+    RPow(a: RealExpr, n: Nat), RInv(a: RealExpr, x: CReal, h: x.Apart(0)), RBox(b: Enclosed),
 }
 
 fn RealExpr::eval(self e: RealExpr) → CReal {
@@ -403,6 +409,7 @@ fn RealExpr::eval(self e: RealExpr) → CReal {
         RMul(a, b) => a.eval() * b.eval(),
         RPow(a, k) => a.eval().npow(k),
         RInv(_, x, h) => x.inv(h := h),
+        RBox(b) => b.x,
     }
 }
 
@@ -416,6 +423,7 @@ fn RealExpr::Wf(self e: RealExpr) → Type {
         RMul(a, b) => a.Wf() ∧ b.Wf(),
         RPow(a, _) => a.Wf(),
         RInv(a, x, _) => a.eval() ≈ x ∧ a.Wf(),
+        RBox(_) => True,
     }
 }
 
@@ -430,6 +438,7 @@ fn RealExpr::plain(self e: RealExpr) → Bool {
         RMul(a, b) => a.plain() && b.plain(),
         RPow(a, _) => a.plain(),
         RInv(_, _, _) => False,
+        RBox(_) => True,
     }
 }
 
@@ -443,6 +452,7 @@ theorem RealExpr::wf_of_plain(self e: RealExpr): e.plain().IsTrue() → e.Wf() {
         RMul(a, b) => λ h => { let k = a.plain().is_true_and(b.plain(), h); And(a.wf_of_plain(k.left), b.wf_of_plain(k.right)) },
         RPow(a, _) => λ h => a.wf_of_plain(h),
         RInv(_, _, _) => λ no => false_elim(no),
+        RBox(_) => λ _ => trivial,
     }
 }
 
@@ -458,6 +468,7 @@ fn RealExpr::enclose(self e: RealExpr, n, p: Nat) → Interval {
         RMul(a, b) => a.enclose(n, p).mul(b.enclose(n, p), p),
         RPow(a, k) => a.enclose(n, p).pow(k, p),
         RInv(a, _, _) => a.enclose(n, p).recip(p),
+        RBox(b) => b.at(n, p),
     }
 }
 
@@ -471,6 +482,7 @@ theorem RealExpr::enclose_has(self e: RealExpr, n, p: Nat): e.Wf() → e.enclose
         RMul(a, b) => λ k => Interval::mul_has_real(a.enclose(n, p), b.enclose(n, p), p, a.enclose_has(n, p, k.left), b.enclose_has(n, p, k.right)),
         RPow(a, k) => λ w2 => Interval::pow_has_real(a.enclose(n, p), k, p, a.enclose_has(n, p, w2)),
         RInv(a, _, h) => λ k => Interval::recip_has_real(a.enclose(n, p), p, h, Interval::has_real_respects(a.enclose(n, p), k.left, a.enclose_has(n, p, k.right))),
+        RBox(b) => λ _ => b.has(n, p),
     }
 }
 

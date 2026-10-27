@@ -1229,6 +1229,44 @@ enclosures as well: one that excludes zero shows its real apart from zero
 `x.Apart(y)` goals at `CReal` with it, which is how `x.inv(h := by
 intervals())` is written.
 
+**Series and elementary functions** (`interval-elementary-functions`).
+Module `lib/std/num/float/series.hthr` sums a `Series`, given by its first
+term, the ratio of each term to the next, and a `start` past which every
+ratio is at most 1/2 in size. Past `start` the tail is dominated by a
+geometric one: with `err(N) = 2|t_N|`, the partial sums move by at most
+what the error falls by (`Series::tail`), and `j` more steps divide the
+error by `2^j` (`Series::decay`, written `1/(ones(j) + 1)` with
+`Nat::ones(j) = 2^j - 1`, so the bound needs no subtraction). The limit is
+the real whose n-th term is the partial sum `width(scale · (n+1) + n)`
+digits past `start` (`Series::index`, with `n <= ones(width n)` from
+`nat.hthr`), and it lies within `err(N)` of every partial sum past `start`
+(`Series::below`, `Series::above`), which is also how a series that stops
+is shown to sum exactly (`Series::same_of_exact`). Its enclosure needs none
+of the real's terms: the last term and the partial sum are carried as
+intervals by `Interval`'s containment at `Rat` (`Series::box`, each ratio
+rounded outward by `of_rat`), the sum is widened by twice the largest
+magnitude in the term's interval (`Interval::widen`), and summing stops once
+that magnitude is below `2^-p` (`Series::settle`, at most `4p` terms; any
+stopping point past `start` encloses the real, so the test is a heuristic
+with no proof). `lib/std/num/float/elementary.hthr` instantiates it:
+`CReal::exp_rat(a)`, `sin_rat`, `cos_rat` at rational arguments, with the
+ratios `a/(k+1)`, `-a²/((2k+2)(2k+3))`, `-a²/((2k+1)(2k+2))` and `start`
+from `c = ⌊|a|⌋ + 1` (`Rat::abs_ceil`; twice it for exp, once for sin and
+cos, where each step is two degrees). Containment is stated against these
+reals, which are the functions' definitions at rationals until
+`real-functions-and-derivatives` gives them at `CReal`; the three are exact
+at zero (`CReal::exp_rat_zero`, …). The checker reads such reals through a
+leaf of their own: `Enclosed` packs a real with enclosures at every index
+and precision and the proof that they contain it, and `RBox(b)` is that
+leaf, so `creal_interval` knows nothing of series. The tactic reads the
+heads `CReal::exp_rat`, `sin_rat`, `cos_rat` as `RBox(CReal::exp_box(q))`
+and so on when they resolve where it runs; `2 < exp(1) < 3`,
+`0.84 < sin(1)`, `23 < exp(355/113)` and `sin(1)² + cos(1)² < 1.001` go
+through `by intervals()` (`lib/_tests/std/num/float/elementary_tests.hthr`).
+A step costs the outward rounding of its ratio, a reciprocal at `p` bits,
+which dominates the product and the sum beside it; a series needs about
+`p` plus the size of its term at `start` in bits of steps.
+
 **Costs.** These are shapes. An operation at `p` bits costs its roundings,
 each about `p` halvings for the width and `p` for the shift, plus the
 exponent alignment of its comparisons. `Dyadic::le_dec` now compares
@@ -1244,5 +1282,9 @@ never exact, so `3 · (1/3) <= 1` is refused at every precision; the probes
 pin the refusal). Products of an interval with itself are bounded as if
 independent, so a goal that needs the dependency (`x - x`) widens. Left:
 
-- elementary functions by series with remainder bounds, the enclosure
-  `float-transcendental`'s Ziv loop refines ([[interval-elementary-functions]]).
+- `log`, by the atanh series after reducing the argument, and argument
+  reduction for `exp`, `sin` and `cos`, whose cost is otherwise linear in
+  the argument ([[interval-log-and-reduction]]);
+- the functions at real arguments, and their laws (`exp(a + b) ≈ exp(a) ·
+  exp(b)`, `sin² + cos² ≈ 1`), which want continuity and `CReal` series
+  ([[elementary-functions-at-reals]]).

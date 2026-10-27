@@ -1,0 +1,384 @@
+// Series with a geometric tail, their limits as Cauchy reals, and interval
+// enclosures of those limits (issues/interval-elementary-functions.md;
+// docs/floating-point-design.md §16, "Series").
+//
+// A `Series` is given by its first term and the ratio of each term to the
+// next, with a point from which every ratio is at most 1/2 in size. From
+// there the tail is dominated by a geometric one: with `err(N) = 2|t_N|`,
+//
+//     |S_{N+j} - S_N| + err(N+j) <= err(N)            (`Series::tail`)
+//     err(N+j) <= err(N) / 2^j                        (`Series::decay`)
+//
+// so the partial sums past `start` are within `err` of each other, and
+// `err` falls below any 1/(n+1) a width of digits further on
+// (`Series::fine`). The limit is the real whose n-th term is the partial
+// sum at that index (`Series::real`), and it lies within `err(N)` of every
+// partial sum past `start` (`Series::below`, `Series::above`).
+//
+// Its enclosure needs no term of the real: the partial sum and the last term
+// are carried as intervals (`Series::box`, by the containment theorems of
+// `Interval` at `Rat`), and the interval sum is widened by twice the last
+// term's magnitude (`Interval::widen`). `s.enclosed()` packs the real and
+// its enclosures as an `Enclosed` leaf for the checker at `CReal`.
+
+import logic;
+import bool;
+import nat;
+import int;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import creal;
+import dyadic;
+import interval;
+import creal_interval;
+import omega;
+
+record Series {
+    first: Rat,
+    ratio: Nat → Rat,
+    start: Nat,
+    small: (k: Nat) → start <= k → ratio(k).abs() <= Rat::inv_succ(1),
+}
+
+fn Series::term(self s: Series, k: Nat) → Rat { match k { Zero => s.first, Succ(i) => s.term(i) * s.ratio(i) } }
+
+fn Series::sum(self s: Series, k: Nat) → Rat { match k { Zero => 0, Succ(i) => s.sum(i) + s.term(i) } }
+
+fn Series::err(self s: Series, k: Nat) → Rat { s.term(k).abs() + s.term(k).abs() }
+
+theorem Series::err_nonneg(self s: Series, k: Nat): 0 <= s.err(k) {
+    let a = s.term(k).abs();
+    Rat::le_trans(s.term(k).abs_nonneg(), a.le_add_nonneg(a, s.term(k).abs_nonneg()))
+}
+
+// One step past `start` at most halves a term, so the next error is at most
+// the term itself.
+theorem Series::err_step(self s: Series, k: Nat, hk: s.start <= k): s.err(Succ(k)) <= s.term(k).abs() {
+    let t = s.term(k);
+    let r = s.ratio(k);
+    let h = Rat::inv_succ(1);
+    let one: (t.abs() * r.abs() <= t.abs() * h) = Rat::mul_le_mono_l(s.small(k, hk), t.abs_nonneg());
+    calc {
+        (t * r).abs() + (t * r).abs() ≈ t.abs() * r.abs() + t.abs() * r.abs() := Rat::add_respects(t.abs_mul(r), t.abs_mul(r)),
+        <= t.abs() * h + t.abs() * h := Rat::add_le_mono(one, one),
+        ≈ t.abs() * (h + h) := Rat::same_sym(t.abs().mul_add_distr(h, h)),
+        ≈ t.abs() * Rat::inv_succ(0) := Rat::mul_respects(t.abs().same_refl(), Rat::inv_succ_half(0)),
+        ≈ t.abs() := t.abs().mul_one(),
+    }
+}
+
+// The tail: the partial sums move by at most what the error falls by.
+theorem Series::tail(self s: Series, n: Nat, hs: s.start <= n, j: Nat): (s.sum(n + j) - s.sum(n)).abs() + s.err(n + j) <= s.err(n) {
+    match j {
+        Zero => Rat::le_of_same(calc {
+            (s.sum(n) - s.sum(n)).abs() + s.err(n) ≈ 0 + s.err(n) := Rat::add_respects(s.sum(n).abs_sub_self(), s.err(n).same_refl()),
+            ≈ s.err(n) := s.err(n).zero_add(),
+        }),
+        Succ(i) => {
+            let m = n + i;
+            let hm: (s.start <= m) = s.start.le_trans(n, m, hs, n.le_add_l(i));
+            let b = s.sum(m);
+            let c = s.sum(n);
+            let u = s.term(m);
+            let a = b - c;
+            let shift = calc {
+                (b + u) - c ≈ b + (u + -c) := b.add_assoc(u, -c),
+                ≈ b + (-c + u) := Rat::add_respects(b.same_refl(), u.add_comm(-c)),
+                ≈ a + u := Rat::same_sym(b.add_assoc(-c, u)),
+            };
+            calc {
+                ((b + u) - c).abs() + s.err(Succ(m)) <= (a + u).abs() + u.abs() := Rat::add_le_mono(Rat::le_of_same(Rat::abs_respects(shift)), s.err_step(m, hm)),
+                <= (a.abs() + u.abs()) + u.abs() := (a + u).abs().add_le_mono_r(a.abs() + u.abs(), u.abs(), a.abs_triangle(u)),
+                ≈ a.abs() + (u.abs() + u.abs()) := a.abs().add_assoc(u.abs(), u.abs()),
+                <= s.err(n) := s.tail(n, hs, i),
+            }
+        },
+    }
+}
+
+// Two partial sums past `start` are within the earlier one's error.
+theorem Series::sum_close(self s: Series, n, l: Nat, hs: s.start <= n, h: n <= l): (s.sum(l) - s.sum(n)).abs() <= s.err(n) {
+    let moved: ((s.sum(l) - s.sum(n)).abs() + s.err(l) <= s.err(n)) =
+        j(n.le_add(l, h), λ y _ => (s.sum(y) - s.sum(n)).abs() + s.err(y) <= s.err(n), s.tail(n, hs, l - n));
+    Rat::le_trans((s.sum(l) - s.sum(n)).abs().le_add_nonneg(s.err(l), s.err_nonneg(l)), moved)
+}
+
+// Geometric decay: `j` steps past `start` divide the error by `2^j`, written
+// `1/(ones(j) + 1)`.
+theorem Series::decay(self s: Series, n: Nat, hs: s.start <= n, j: Nat): s.err(n + j) <= s.err(n) * Rat::inv_succ(j.ones()) {
+    match j {
+        Zero => Rat::le_of_same(Rat::same_sym(s.err(n).mul_one())),
+        Succ(i) => {
+            let m = n + i;
+            let hm: (s.start <= m) = s.start.le_trans(n, m, hs, n.le_add_l(i));
+            let x = s.err(n) * Rat::inv_succ(i.ones());
+            let h = Rat::inv_succ(1);
+            let e = s.err(Succ(m));
+            let step: (e <= s.term(m).abs()) = s.err_step(m, hm);
+            let halves = calc {
+                x * h + x * h ≈ x * (h + h) := Rat::same_sym(x.mul_add_distr(h, h)),
+                ≈ x * Rat::inv_succ(0) := Rat::mul_respects(x.same_refl(), Rat::inv_succ_half(0)),
+                ≈ x := x.mul_one(),
+            };
+            let double = calc {
+                e + e <= s.term(m).abs() + s.term(m).abs() := Rat::add_le_mono(step, step),
+                <= x := s.decay(n, hs, i),
+                ≈ x * h + x * h := Rat::same_sym(halves),
+            };
+            calc {
+                e <= x * h := Rat::le_of_double_le(double),
+                ≈ s.err(n) * (Rat::inv_succ(i.ones()) * h) := s.err(n).mul_assoc(Rat::inv_succ(i.ones()), h),
+                ≈ s.err(n) * Rat::inv_succ(Succ(i).ones()) := Rat::mul_respects(s.err(n).same_refl(), Rat::inv_succ_mul(i.ones(), 1)),
+            }
+        },
+    }
+}
+
+// The error at `start` is at most twice its term's numerator.
+fn Series::scale(self s: Series) → Nat { s.term(s.start).num.natAbs() + s.term(s.start).num.natAbs() }
+
+theorem Series::err_start_le(self s: Series): s.err(s.start) <= Rat::ofInt(OfNat(s.scale())) {
+    let t = s.term(s.start);
+    let a = t.num.natAbs();
+    let b: (t.abs() <= Rat::ofInt(OfNat(a))) = t.abs_le_natAbs();
+    let two: (Rat::ofInt(OfNat(a)) + Rat::ofInt(OfNat(a)) ≈ Rat::ofInt(OfNat(a + a))) = omega(Int::ofNat_add(a, a));
+    Rat::le_trans(Rat::add_le_mono(b, b), Rat::le_of_same(two))
+}
+
+// The real's n-th term reads the partial sum a width past `start`: far
+// enough that `scale · 2^-width` is below 1/(n+1).
+fn Series::index(self s: Series, n: Nat) → Nat { s.start + (s.scale() * (n + 1) + n).width() }
+
+theorem Series::index_start(self s: Series, n: Nat): s.start <= s.index(n) { s.start.le_add_l((s.scale() * (n + 1) + n).width()) }
+
+theorem Series::fine(self s: Series, n: Nat): s.err(s.index(n)) <= Rat::inv_succ(n) {
+    let far = s.scale() * (n + 1) + n;
+    let w = far.width();
+    let q = Rat::inv_succ(w.ones());
+    calc {
+        s.err(s.start + w) <= s.err(s.start) * q := s.decay(s.start, s.start.le_refl(), w),
+        <= Rat::ofInt(OfNat(s.scale())) * q := Rat::mul_le_mono_r(s.err_start_le(), Rat::le_of_lt(Rat::inv_succ_pos(w.ones()))),
+        <= Rat::inv_succ(n) := Rat::scale_inv_succ_le(s.scale(), w.ones(), n, far.le_ones_width(), q.le_refl()),
+    }
+}
+
+theorem Series::regular(self s: Series, m, n: Nat): (s.sum(s.index(m)) - s.sum(s.index(n))).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n) {
+    let a = s.index(m);
+    let b = s.index(n);
+    let u = Rat::inv_succ(m);
+    let v = Rat::inv_succ(n);
+    match Nat::le_total(a, b) {
+        Inl(h) => calc {
+            (s.sum(a) - s.sum(b)).abs() ≈ (s.sum(b) - s.sum(a)).abs() := s.sum(a).abs_sub_comm(s.sum(b)),
+            <= s.err(a) := s.sum_close(a, b, s.index_start(m), h),
+            <= u := s.fine(m),
+            <= u + v := u.le_add_nonneg(v, Rat::le_of_lt(Rat::inv_succ_pos(n))),
+        },
+        Inr(h) => calc {
+            (s.sum(a) - s.sum(b)).abs() <= s.err(b) := s.sum_close(b, a, s.index_start(n), h),
+            <= v := s.fine(n),
+            <= v + u := v.le_add_nonneg(u, Rat::le_of_lt(Rat::inv_succ_pos(m))),
+            ≈ u + v := v.add_comm(u),
+        },
+    }
+}
+
+fn Series::real(self s: Series) → CReal { CReal(λ n => s.sum(s.index(n)), λ m n => s.regular(m, n)) }
+
+// The real is within `err(N)` of each partial sum past `start`. Its n-th
+// term is a partial sum too: an earlier one is within its own error, which
+// is below 1/(n+1), and a later one within `err(N)`.
+theorem Series::above(self s: Series, n: Nat, hs: s.start <= n): s.real() <= CReal::ofRat(s.sum(n) + s.err(n)) {
+    let c = s.sum(n);
+    let e = s.err(n);
+    CReal::le_of_close(λ k => Exists(k, λ i from => {
+        let l = s.index(i);
+        let f = Rat::inv_succ(k);
+        let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(k));
+        match Nat::le_total(l, n) {
+            Inl(h) => {
+                let d = calc {
+                    (s.sum(l) - c).abs() ≈ (c - s.sum(l)).abs() := s.sum(l).abs_sub_comm(c),
+                    <= s.err(l) := s.sum_close(l, n, s.index_start(i), h),
+                    <= Rat::inv_succ(i) := s.fine(i),
+                    <= f := Rat::inv_succ_antitone(k, i, from),
+                };
+                let near: (s.sum(l) <= c + (f + e)) =
+                    Rat::le_trans(Rat::le_add_of_dist(d), Rat::add_le_mono_l(f, f + e, c, f.le_add_nonneg(e, s.err_nonneg(n))));
+                Rat::le_add_shift(d := near, s := f.le_refl())
+            },
+            Inr(h) => Rat::le_trans(Rat::le_add_of_dist(s.sum_close(n, l, hs, h)), (c + e).le_add_nonneg(f, hf)),
+        }
+    }))
+}
+
+theorem Series::below(self s: Series, n: Nat, hs: s.start <= n): CReal::ofRat(s.sum(n) - s.err(n)) <= s.real() {
+    let c = s.sum(n);
+    let e = s.err(n);
+    CReal::le_of_close(λ k => Exists(k, λ i from => {
+        let l = s.index(i);
+        let f = Rat::inv_succ(k);
+        let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(k));
+        match Nat::le_total(l, n) {
+            Inl(h) => {
+                let d = calc {
+                    (c - s.sum(l)).abs() <= s.err(l) := s.sum_close(l, n, s.index_start(i), h),
+                    <= Rat::inv_succ(i) := s.fine(i),
+                    <= f := Rat::inv_succ_antitone(k, i, from),
+                };
+                let wide = calc {
+                    f <= f + e := f.le_add_nonneg(e, s.err_nonneg(n)),
+                    ≈ e + f := f.add_comm(e),
+                };
+                let near: (c <= s.sum(l) + (e + f)) = Rat::le_trans(Rat::le_add_of_dist(d), Rat::add_le_mono_l(f, e + f, s.sum(l), wide));
+                Rat::sub_le_shift(d := near, s := f.le_refl())
+            },
+            Inr(h) => {
+                let d = calc {
+                    (c - s.sum(l)).abs() ≈ (s.sum(l) - c).abs() := c.abs_sub_comm(s.sum(l)),
+                    <= e := s.sum_close(n, l, hs, h),
+                };
+                let near: (c <= s.sum(l) + (e + f)) =
+                    Rat::le_trans(Rat::le_add_of_dist(d), Rat::add_le_mono_l(e, e + f, s.sum(l), e.le_add_nonneg(f, hf)));
+                Rat::sub_le_shift(d := near, s := f.le_refl())
+            },
+        }
+    }))
+}
+
+// A series whose error vanishes at some `N` past `start` sums to `S_N`.
+theorem Series::same_of_exact(self s: Series, n: Nat, hs: s.start <= n, h: s.err(n) ≈ 0): s.real() ≈ CReal::ofRat(s.sum(n)) {
+    let c = s.sum(n);
+    let up: (c + s.err(n) ≈ c) = Rat::same_trans(Rat::add_respects(c.same_refl(), h), c.add_zero());
+    let z: Rat = 0;
+    let nz: (-z ≈ z) = omega;
+    let down: (c ≈ c - s.err(n)) = Rat::same_sym(Rat::same_trans(Rat::add_respects(c.same_refl(), Rat::same_trans(Rat::neg_respects(h), nz)), c.add_zero()));
+    CReal::le_antisymm(CReal::le_trans(s.above(n, hs), CReal::ofRat_le(Rat::le_of_same(up))),
+        CReal::le_trans(CReal::ofRat_le(Rat::le_of_same(down)), s.below(n, hs)))
+}
+
+// ---------------------------------------------------------------------------
+// Enclosures. The term and the partial sum are carried as intervals at `p`
+// bits, each ratio rounded outward to an interval of its own.
+
+record SeriesBox { term: Interval, sum: Interval }
+
+fn Series::box_step(self s: Series, b: SeriesBox, i, p: Nat) → SeriesBox {
+    SeriesBox(b.term.mul(Interval::of_rat(s.ratio(i), p), p), b.sum.add(b.term, p))
+}
+
+fn Series::box(self s: Series, k, p: Nat) → SeriesBox {
+    match k { Zero => SeriesBox(Interval::of_rat(s.first, p), Interval::of_rat(0, p)), Succ(i) => s.box_step(s.box(i, p), i, p) }
+}
+
+theorem Series::box_has(self s: Series, p, k: Nat): s.box(k, p).term.Has(s.term(k)) ∧ s.box(k, p).sum.Has(s.sum(k)) {
+    match k {
+        Zero => And(Interval::of_rat_has(s.first, p), Interval::of_rat_has(0, p)),
+        Succ(i) => {
+            let b = s.box(i, p);
+            let ih = s.box_has(p, i);
+            And(Interval::mul_has(b.term, Interval::of_rat(s.ratio(i), p), p, ih.left, Interval::of_rat_has(s.ratio(i), p)),
+                Interval::add_has(b.sum, b.term, p, ih.right, ih.left))
+        },
+    }
+}
+
+// A sum enclosed by `S` with its last term enclosed by `T`, widened by twice
+// the largest magnitude in `T` and rounded outward to `p` bits.
+fn Interval::widen(T, S: Interval, p: Nat) → Interval {
+    match T {
+        Bnd(lo, hi) => match S {
+            Bnd(a, c) => Bnd((a - ((-lo).max(hi) + (-lo).max(hi))).down(p), (c + ((-lo).max(hi) + (-lo).max(hi))).up(p)),
+            Whole => Whole,
+        },
+        Whole => Whole,
+    }
+}
+
+theorem Interval::widen_has(T, S: Interval, p: Nat, {t, q: Rat}, {x: CReal}, ht: T.Has(t), hq: S.Has(q),
+    lo_x: CReal::ofRat(q - (t.abs() + t.abs())) <= x, hi_x: x <= CReal::ofRat(q + (t.abs() + t.abs()))): Interval::widen(T, S, p).HasReal(x)
+{
+    match T as λ K => K.Has(t) → Interval::widen(K, S, p).HasReal(x) {
+        Bnd(lo, hi) => λ kt => match S as λ L => L.Has(q) → Interval::widen(Bnd(lo, hi), L, p).HasReal(x) {
+            Bnd(a, c) => λ kq => {
+                let m = (-lo).max(hi);
+                let e = m + m;
+                let ml: (-lo.rat() <= m.rat()) = Rat::le_respects(lo.rat_neg(), m.rat().same_refl(), (-lo).le_max_of(hi, (-lo).rat(), Inl((-lo).rat().le_refl())));
+                let lower: (-m.rat() <= t) = Rat::le_trans(Rat::le_respects((-m.rat()).same_refl(), lo.rat().neg_neg(), Rat::neg_le(x := -lo.rat(), y := m.rat(), h := ml)), kt.left);
+                let upper: (t <= m.rat()) = Rat::le_trans(kt.right, (-lo).le_max_of(hi, hi.rat(), Inr(hi.rat().le_refl())));
+                let ab: (t.abs() <= m.rat()) = Rat::abs_le(lower, upper);
+                let eb: (t.abs() + t.abs() <= e.rat()) = Rat::le_trans(Rat::add_le_mono(ab, ab), Rat::le_of_same(Rat::same_sym(m.rat_add(m))));
+                let low = calc {
+                    (a - e).down(p).rat() <= (a - e).rat() := (a - e).down_le(p),
+                    ≈ a.rat() - e.rat() := a.rat_sub(e),
+                    <= q - e.rat() := e.rat().sub_le_sub_r(a.rat(), q, kq.left),
+                    <= q - (t.abs() + t.abs()) := q.sub_le_sub_l(t.abs() + t.abs(), e.rat(), eb),
+                };
+                let high = calc {
+                    q + (t.abs() + t.abs()) <= c.rat() + e.rat() := Rat::add_le_mono(kq.right, eb),
+                    ≈ (c + e).rat() := Rat::same_sym(c.rat_add(e)),
+                    <= (c + e).up(p).rat() := (c + e).le_up(p),
+                };
+                And(CReal::le_trans(CReal::ofRat_le(low), lo_x), CReal::le_trans(hi_x, CReal::ofRat_le(high)))
+            },
+            Whole => λ _ => trivial,
+        }(hq),
+        Whole => λ _ => trivial,
+    }(ht)
+}
+
+// The enclosure from `k` terms past `start`, at `p` bits.
+fn Series::enclose(self s: Series, k, p: Nat) → Interval {
+    Interval::widen(s.box(s.start + k, p).term, s.box(s.start + k, p).sum, p)
+}
+
+theorem Series::enclose_has(self s: Series, k, p: Nat): s.enclose(k, p).HasReal(s.real()) {
+    let n = s.start + k;
+    let hs: (s.start <= n) = s.start.le_add_l(k);
+    let b = s.box_has(p, n);
+    Interval::widen_has(s.box(n, p).term, s.box(n, p).sum, p, b.left, b.right, s.below(n, hs), s.above(n, hs))
+}
+
+// Summing until the last term is below `2^-p` in size, at most `fuel` steps
+// on: any stopping point past `start` encloses the real, so the test is
+// only a heuristic and needs no proof.
+fn Interval::small(self T: Interval, p: Nat) → Bool {
+    match T { Bnd(lo, hi) => (-lo).max(hi).shift(p.int()).le_bool(Dyadic::ofInt(1)), Whole => True }
+}
+
+fn Series::settle(self s: Series, b: SeriesBox, k, p, fuel: Nat) → Interval {
+    match fuel {
+        Zero => Interval::widen(b.term, b.sum, p),
+        Succ(f) => match b.term.small(p) { True => Interval::widen(b.term, b.sum, p), False => s.settle(s.box_step(b, k, p), Succ(k), p, f) },
+    }
+}
+
+theorem Series::settle_has(self s: Series, p, fuel: Nat): (b: SeriesBox) → (k: Nat) → s.start <= k → b.term.Has(s.term(k)) → b.sum.Has(s.sum(k)) →
+    s.settle(b, k, p, fuel).HasReal(s.real())
+{
+    match fuel {
+        Zero => λ b k hk ht hq => Interval::widen_has(b.term, b.sum, p, ht, hq, s.below(k, hk), s.above(k, hk)),
+        Succ(f, ih) => λ b k hk ht hq => match b.term.small(p) as λ c => (match c { True => Interval::widen(b.term, b.sum, p), False => s.settle(s.box_step(b, k, p), Succ(k), p, f) }).HasReal(s.real()) {
+            True => Interval::widen_has(b.term, b.sum, p, ht, hq, s.below(k, hk), s.above(k, hk)),
+            False => ih(s.box_step(b, k, p), Succ(k), s.start.le_succ_r(k, hk),
+                Interval::mul_has(b.term, Interval::of_rat(s.ratio(k), p), p, ht, Interval::of_rat_has(s.ratio(k), p)),
+                Interval::add_has(b.sum, b.term, p, hq, ht)),
+        },
+    }
+}
+
+// The checker's leaf: from `start`, at `p` bits, until the last term is
+// below `2^-p` or `4p` terms on.
+fn Series::enclose_auto(self s: Series, p: Nat) → Interval { s.settle(s.box(s.start, p), s.start, p, p * 4) }
+
+theorem Series::enclose_auto_has(self s: Series, p: Nat): s.enclose_auto(p).HasReal(s.real()) {
+    let b = s.box_has(p, s.start);
+    s.settle_has(p, p * 4, s.box(s.start, p), s.start, s.start.le_refl(), b.left, b.right)
+}
+
+fn Series::enclosed(self s: Series) → Enclosed { Enclosed(s.real(), λ _ p => s.enclose_auto(p), λ _ p => s.enclose_auto_has(p)) }
