@@ -292,6 +292,17 @@ plus an allocating one proved once), not a stopgap, and it is what makes
 reflected helpers (§3.3) and bounded byte loops (§3.1) usable. `Call`
 regions stay refused here, because the builder inlines.
 
+**Status.** Leaves done, 2026-10-27 (`issues/native-compile-wider-leaves.md`,
+`lib/native/native_compile_nodes.hthr`). A dataflow leaf S4 does not take
+whole compiles a node at a time when every node works at width 64: each
+node loads its operands from their slots and stores its result before the
+next runs, a pure node through S4 as a region of its own (its output
+renamed, so it may read its own word) and a byte node by its own code. So
+a leaf has no length limit, mixes byte nodes with arithmetic, and reads
+words it writes. `native_compile_correct` covers it through one lemma: the
+leaf settles as its nodes do one at a time (`Env::steps_settle`). The
+`Sequence`, `Compose`, `Conditional` and `Loop` regions are still refused.
+
 ### 3.5 The command line, files, and diagnostics
 
 - **argv.** The machine side states the psABI layout (`ArgvAt`,

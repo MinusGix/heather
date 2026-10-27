@@ -20,6 +20,7 @@ import native_compile_segments;
 import native_compile_calls;
 import native_compile_leaf;
 import native_compile_bytes;
+import native_compile_nodes;
 import function_ir;
 import function_ir_eval;
 import function_ir_lower;

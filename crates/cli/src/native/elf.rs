@@ -335,6 +335,10 @@ theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io())>, entry: s.rip
     Ok(())
 }
 
+/// Said of a leaf S4 does not take whole that cannot go a node at a time
+/// either (`computes_refusal`, native_compile.hthr).
+const NARROW: &str = "; it does not compile a node at a time because a node is not at width 64";
+
 /// The message for a compile `Source::refusal` explains
 /// (native_compile.hthr): the statement and the reason it was refused.
 fn refused(symbol: &str, why: &[u64]) -> String {
@@ -345,17 +349,18 @@ fn refused(symbol: &str, why: &[u64]) -> String {
     let reason = match reason {
         0 => format!("a {} region; only a dataflow leaf compiles (issues/native-compile-wider-leaves.md)",
             ["", "sequence", "compose", "conditional", "call", "loop"].get(first as usize).unwrap_or(&"structured")),
-        1 => format!("the leaf needs {first} registers, one per input and per node, and the pool holds {second}"),
-        2 => "the leaf's nodes are not in evaluation order".into(),
-        3 => "the leaf writes one of its own inputs".into(),
+        1 => format!("the leaf needs {first} registers, one per input and per node, and the pool holds {second}{NARROW}"),
+        2 => format!("the leaf's nodes are not in evaluation order{NARROW}"),
+        3 => format!("the leaf writes one of its own inputs{NARROW}"),
         4 => format!("word {first} is past the {second} word slots"),
         5 => format!("an input of width {first}: only words (64) and bits (1) load"),
-        6 => "S4's lowering refused the leaf".into(),
+        6 => format!("S4's lowering refused the leaf{NARROW}"),
         7 => format!("`{}` is not compiled yet (issues/native-compile-other-calls.md)",
             ["", "", "open", "close", "stat", "fstat"].get(first as usize).unwrap_or(&"the call")),
         8 => format!("buffer {first} does not exist: the source has {second}"),
         9 => "the program's labels did not lay out".into(),
-        10 => format!("a leaf with a byte node compiles only as that one node, its words in the slots and its buffer present ({first} nodes)"),
+        10 => format!("node {first} of the leaf is not at width 64, and a leaf S4 does not take whole compiles a node at a time only when every node is"),
+        11 => format!("S4's lowering refused node {first} of the leaf alone"),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }
