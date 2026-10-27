@@ -1,11 +1,11 @@
 ---
 title: Recursion over typed-syntax and function-field families is superlinear in constructors, nearly all in the gate
-status: open
+status: closed
 labels: [kernel,elaboration,inductives,performance]
 area: language
 milestone: [math-metatheory]
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 Found by the intricate-inductive bench families
@@ -106,3 +106,28 @@ magnitude.
   representation change is to emit `n`, `o`, `c` as generated definitions,
   so a signature is three global references; not attempted here. Left open
   for that.
+- 2026-10-27: The elaborator-side alternative, done, and closed
+  (`docs/iwf-named-signature-design.md`, with
+  [[mutual-group-recursion-gate-cost]]): `n`, `o`, `c` are generated
+  definitions, an instance is three references, and a `match`'s ih type a
+  fourth. For typed syntax it first had no effect: registration, which runs
+  after the index type's code was pushed, built index values from the
+  attempt's shared constructor annotations, keyed without the Ψ scope, so
+  they named every global one too close and the kernel refused `Tm#iout`;
+  the family stayed inline without a word. Those caches are now keyed by
+  `lowering_scope` too, with a unit test whose control fails without it.
+  Release, width one, cloud box, total ms:
+
+  | typed syntax | master | now |
+  |---|---|---|
+  | 12 ctors: `size` | 246 | 11 |
+  | open / closed `refl` | 228 / 231 | 14 / 11 |
+  | whole file | 721 | 87 |
+  | 32 ctors: `size` | 1,981 | 24 |
+  | whole file | 3,537 | 115 |
+
+  The `refl`s fell about 20× at twelve constructors and stay flat with
+  size; `Tm`'s declaration now pays for its definitions (2 → 34 ms at
+  twelve, linear). `inductive/typed-syntax` re-recorded from below at 0.58
+  (the declaration's fixed cost dominating 5..8, each size ~16× cheaper).
+  Both families meet the acceptance.

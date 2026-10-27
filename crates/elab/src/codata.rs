@@ -1029,7 +1029,7 @@ impl Elaborator {
     /// Close `ty`/`body` (scoped over the telescope) over it and push the
     /// definition; whether it was pushed.
     #[allow(clippy::too_many_arguments)]
-    fn push_m_def(&mut self, key: GenDef, ind: &Inductive, tel: &[(Type, Level)], ty: Type, level: Level, body: Term, span: Span) -> bool {
+    pub(crate) fn push_m_def(&mut self, key: GenDef, ind: &Inductive, tel: &[(Type, Level)], ty: Type, level: Level, body: Term, span: Span) -> bool {
         let (mut ty, mut level, mut body) = (ty, level, body);
         for (dom, dom_level) in tel.iter().rev() {
             body = Term::Lam { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::new(dom.clone()), body: Rc::new(body) };
@@ -1041,7 +1041,7 @@ impl Elaborator {
 
     /// The result universe of a registered code function's statement, past its
     /// first `n` binders.
-    fn gen_stmt_level(&self, key: GenDef, n: usize) -> Option<Level> {
+    pub(crate) fn gen_stmt_level(&self, key: GenDef, n: usize) -> Option<Level> {
         let abs = *self.types.gdefs().abs_for(&key)?;
         let GlobalBinding::Tm { ty, .. } = self.psi.bindings.get(abs as usize)? else {
             return None;
@@ -1061,7 +1061,7 @@ impl Elaborator {
 
     /// `app(key^δ; tel, x₁, …, x_k)` `k` binders past `cx`, the binders
     /// applied in order (`tel` is scoped in `cx`).
-    fn m_ref_app(&self, cx: &Cx, key: GenDef, tel: &[Rc<Term>], k: u32) -> Option<Rc<Term>> {
+    pub(crate) fn m_ref_app(&self, cx: &Cx, key: GenDef, tel: &[Rc<Term>], k: u32) -> Option<Rc<Term>> {
         let mut t = Rc::new(self.gen_ref_deeper(cx, key, k)?);
         for a in tel {
             t = app_at(t, Rc::new(a.shift_local(k)));

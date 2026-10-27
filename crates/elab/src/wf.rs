@@ -430,7 +430,7 @@ impl Elaborator {
     /// its repeated conversion queries from its memo (the memo is keyed by
     /// allocation identity).
     fn children_annotation(&self, cx: &Cx, d_ty: &Type) -> (Rc<Type>, Rc<Type>) {
-        let depth = cx.gamma.entries.len();
+        let depth = (cx.gamma.entries.len(), self.lowering_scope());
         let at = self.emits_at_forms(cx);
         if let Some((_, _, _, emit, under)) = self
             .attempt

@@ -285,8 +285,10 @@ fn mutual_declaration() -> Family {
         what: "a group of m mutual sorts, declared",
         unit: "members",
         // 2026-10-26, cloud box, three runs: 1.49 (1.47-1.50), 96% elab at
-        // 16. Debt, small.
-        expect_slope: Some((1.14, 1.84)),
+        // 16. Debt, small. Re-recorded from below 2026-10-27, once the
+        // group's signature was named (docs/iwf-named-signature-design.md):
+        // 1.02 in two runs, about half kernel at 16.
+        expect_slope: Some((0.67, 1.37)),
         cases: sweep("inductive/mutual-declaration", &[2, 4, 8, 16], mutual_group),
     }
 }
@@ -325,8 +327,11 @@ fn mutual_recursion() -> Family {
         // Re-recorded from below the same day, once the signature was judged
         // once and the ih held as a value
         // (issues/mutual-group-recursion-gate-cost.md): 1.63 over 2..8 (about 2.3
-        // from 8 to 16 by hand); the m = 8 `refl` checks.
-        expect_slope: Some((1.28, 1.98)),
+        // from 8 to 16 by hand); the m = 8 `refl` checks. Again 2026-10-27,
+        // with the signature named (docs/iwf-named-signature-design.md):
+        // 0.95 (0.91-0.99, two runs), fixed cost dominating; about 1.8 by
+        // hand from 24 to 160, the shape spine's comb (design §4).
+        expect_slope: Some((0.60, 1.30)),
         cases: sweep("inductive/mutual-recursion", &[2, 3, 4, 6, 8], src),
     }
 }
@@ -389,8 +394,11 @@ fn typed_syntax() -> Family {
         // 2026-10-26, cloud box, after the strengthened typing memo and the
         // shared ih: 1.13, 88% gate (was 1.78, 95%). From five to twelve
         // constructors the CLI's `size` grows at about the 2.2th power (was
-        // ~3.2) and its `refl`s at about the 1.2th.
-        expect_slope: Some((0.78, 1.48)),
+        // ~3.2) and its `refl`s at about the 1.2th. Re-recorded from below
+        // 2026-10-27, the signature named and the attempt's annotation cache
+        // keyed by Ψ scope (docs/iwf-named-signature-design.md): 0.58, the
+        // declaration's fixed cost dominating, each size ~16x cheaper.
+        expect_slope: Some((0.23, 0.93)),
         cases: indexed_sweep(
             "inductive/typed-syntax", &[5, 6, 7, 8], "Tm", IndexedRoute::Iwf, src,
         ),

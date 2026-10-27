@@ -196,6 +196,19 @@ pub(crate) enum GenDef {
     /// `D#mnext : Π…. Π(i : I)(s : …)(p : El(D#mpos ā i s)). I` — the child
     /// index of an indexed declaration (an unindexed one has `⟨⟩`).
     MNext(u32),
+    /// `D#iarity : Π…. Π(x : S). Nat` — an `IWf`-route family's arity, the
+    /// signature's `n` (`docs/iwf-named-signature-design.md`). Like
+    /// [`GenDef::MShape`] the lowering is spelled with it.
+    IArity(u32),
+    /// `D#iout : Π…. Π(x : S). I` — the same family's output index `o`.
+    IOut(u32),
+    /// `D#ichild : Π…. Π(x : S)(i : Fin(D#iarity ā x)). I` — its child
+    /// index `c`.
+    IChild(u32),
+    /// `D#idnth : Π…. Π(a : S)(cs : DVec(…))(i : Fin(D#iarity ā a)).
+    /// IWf(…)(D#ichild ā a i)` — the `i`th child of a children tuple, the
+    /// `dnth` the step telescope's ih type is spelled with.
+    IDnth(u32),
 }
 
 impl GenDef {
@@ -206,7 +219,8 @@ impl GenDef {
             GenDef::IdxCode(t) | GenDef::TyCode(t) | GenDef::TyCodeFn(t) | GenDef::ShapeCode(t)
             | GenDef::ArityFn(t) | GenDef::Fam(t) | GenDef::RecProj(t, _) | GenDef::RecTail(t, _)
             | GenDef::RecFam(t, _) | GenDef::PayloadCode(t, _) | GenDef::SuffixCode(t, _) | GenDef::WCanon(t)
-            | GenDef::MShape(t) | GenDef::MPos(t) | GenDef::MNext(t) => t,
+            | GenDef::MShape(t) | GenDef::MPos(t) | GenDef::MNext(t) | GenDef::IArity(t)
+            | GenDef::IOut(t) | GenDef::IChild(t) | GenDef::IDnth(t) => t,
         }
     }
 
@@ -229,6 +243,10 @@ impl GenDef {
             GenDef::MShape(_) => format!("{owner}#mshape"),
             GenDef::MPos(_) => format!("{owner}#mpos"),
             GenDef::MNext(_) => format!("{owner}#mnext"),
+            GenDef::IArity(_) => format!("{owner}#iarity"),
+            GenDef::IOut(_) => format!("{owner}#iout"),
+            GenDef::IChild(_) => format!("{owner}#ichild"),
+            GenDef::IDnth(_) => format!("{owner}#idnth"),
         }
     }
 }
@@ -1199,12 +1217,14 @@ impl Elaborator {
             self.register_rec_projs(ind, span);
             return;
         }
-        // The `IWf` route (`docs/iwf-former-design.md` §8): the family is
-        // spelled inline, and only the index type's code is named.
+        // The `IWf` route (`docs/iwf-former-design.md` §8): the index type's
+        // code, and the signature's three index functions
+        // (`docs/iwf-named-signature-design.md`).
         if let Some(IdxTy::Decl(iind)) = ind.index_ty.as_ref() {
             let iind = Rc::clone(iind);
             self.register_idx_code(&iind, span);
         }
+        self.register_iwf_sig(ind, span);
     }
 
     /// `I#icode := ⌜⟦I⟧⌝`, the index type's code (design §1.1). Best-effort:
@@ -3853,7 +3873,7 @@ impl Elaborator {
     /// The Ψ length a term built here counts its globals from, padding and
     /// a `meta fn`'s pushed binders included: what a guard copy records as
     /// its scope.
-    fn lowering_scope(&self) -> u32 {
+    pub(crate) fn lowering_scope(&self) -> u32 {
         self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset()
     }
 
