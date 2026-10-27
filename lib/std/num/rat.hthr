@@ -31,6 +31,7 @@ import order;
 import bool;
 import semiring;
 import ordered_field;
+import big_operator;
 export algebra::{Numeral};
 
 record Rat { num: Int, den: Pos<Nat> }
@@ -1936,4 +1937,21 @@ theorem Rat::sub_le_shift({a, q, e, r, f: Rat}, d: q <= a + (r + e), s: e <= f):
         <= a + (r + f) := (r + e).add_le_mono_l(r + f, a, e.add_le_mono_l(f, r, s)),
         ≈ r + (a + f) := a.add_left_comm(r, f),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Finite sums and products (std/big_operator): the range sum under `Rat`'s
+// own `+` and `*`. Named, so that a sum has its carrier wherever it is
+// written, the left of `≈` included, until the `∑` binder production exists
+// (issues/notation-extensibility.md); every big_operator law applies to it
+// by unfolding.
+
+fn Rat::sum(n: Nat, f: Nat → Rat) → Rat { MonoidRel::range(+, n, f) }
+
+fn Rat::prod(n: Nat, f: Nat → Rat) → Rat { MonoidRel::range(*, n, f) }
+
+// The triangle inequality, `|∑ f| <= ∑ |f|`.
+theorem Rat::sum_abs_le(n: Nat, f: Nat → Rat): Rat::sum(n, f).abs() <= Rat::sum(n, λ k => f(k).abs()) {
+    let h = LocatedAddGroup::range_abs_le(n, f, λ k => f(k).abs(), λ k hk => And(f(k).neg_abs_le(), f(k).le_abs()));
+    Rat::abs_le(h.left, h.right)
 }

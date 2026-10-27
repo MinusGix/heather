@@ -569,6 +569,22 @@ theorem List::len_replicate<A>(x: A, n: Nat): List::replicate(x, n).len() = n {
     }
 }
 
+// The indices below `n`, ascending: `[0, 1, …, n - 1]`. Built at the end,
+// as big_operator's range sum is, so the two agree step by step.
+fn List::range(n: Nat) → List<Nat> {
+    match n {
+        Zero => Nil,
+        Succ(k) => List::range(k) ++ Cons(k, Nil),
+    }
+}
+
+theorem List::len_range(n: Nat): List::range(n).len() = n {
+    match n {
+        Zero => {},
+        Succ(k) => trans(List::range(k).len_append(Cons(k, Nil)), Nat::cong_succ(List::len_range(k))),
+    }
+}
+
 fn List::zip<A, B>(self xs: List<A>) → List<B> → List<Pair<A, B>> {
     match xs {
         Nil => λ (ys: List<B>) => Nil,

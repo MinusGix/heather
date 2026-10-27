@@ -323,3 +323,13 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   four small edits, which is still the number a mechanism has to beat.
 - 2026-08-10: The second curated-lexicon data point landed via [[list-append-symbol]]: `++` costs the same lexer/binding-power/op-symbol/designation edits as predicted, shares additive precedence, and has no fallback. The extension-mechanism question remains unchanged.
 - 2026-10-27: docs/analysis-foundations-design.md (PR #220) asks for the big-operator binder production (`∑ k < n, e`, `∏`) ahead of the rest of the notation work: every analysis layer it orders reads through finite sums, and the library spelling `MonoidRel::range(+, n, λ k => …)` does not scale. Customer: [[finite-sums-and-products]].
+- 2026-10-27: [[finite-sums-and-products]] landed the library the `∑` production
+  would elaborate to (`MonoidRel::range(+, n, λ k => e)`), and found the one
+  thing a parse-time desugaring in the style of `∃` cannot do: a bare
+  `MonoidRel::range(+, n, f)` at a concrete carrier is refused on the left of
+  `≈`, `=` or `+`, because the operator's carrier is asked for before the
+  call's `A` is fixed (`MonoidRel::range<Rat>(…)` and the right-hand position
+  both work). So the production should elaborate its body first, under
+  `k: Nat`, and take the carrier from the body's type; until then the library
+  names a sum per carrier (`Rat::sum(n, f)`).
+

@@ -49,6 +49,11 @@ fn Series::term(self s: Series, k: Nat) → Rat { match k { Zero => s.first, Suc
 
 fn Series::sum(self s: Series, k: Nat) → Rat { match k { Zero => 0, Succ(i) => s.sum(i) + s.term(i) } }
 
+// The partial sum is big_operator's range sum of the terms, exactly.
+theorem Series::sum_is_range(self s: Series, k: Nat): s.sum(k) = Rat::sum(k, λ i => s.term(i)) {
+    match k { Zero => refl, Succ(i) => j(s.sum_is_range(i), λ w _ => s.sum(i) + s.term(i) = w + s.term(i), refl) }
+}
+
 fn Series::err(self s: Series, k: Nat) → Rat { s.term(k).abs() + s.term(k).abs() }
 
 theorem Series::err_nonneg(self s: Series, k: Nat): 0 <= s.err(k) {

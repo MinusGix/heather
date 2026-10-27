@@ -41,6 +41,7 @@ import order;
 import semiring;
 import ordered_field;
 import rat;
+import big_operator;
 export algebra::{Numeral};
 
 record CReal {
@@ -2085,3 +2086,11 @@ theorem CReal::inv_neg({x: CReal}, hx: x.Apart(0), hn: (-x).Apart(0)): (-x).inv(
     let u = x.inv(h := hx);
     CReal::same_sym(OrderedField::recip_unique(-x, hn, -u, CReal::same_trans(Ring::neg_mul_neg(x, u), x.mul_inv(h := hx))))
 }
+
+// ---------------------------------------------------------------------------
+// Finite sums and products (std/big_operator), named as at `Rat`
+// (`Rat::sum`): the range sum under `CReal`'s own `+` and `*`.
+
+fn CReal::sum(n: Nat, f: Nat → CReal) → CReal { MonoidRel::range(+, n, f) }
+
+fn CReal::prod(n: Nat, f: Nat → CReal) → CReal { MonoidRel::range(*, n, f) }
