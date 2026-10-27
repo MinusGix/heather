@@ -147,6 +147,15 @@
 //!   signature is kept the same way ([`SigScope`]), so a locally closed
 //!   family's signature is judged once per base context however many
 //!   binders its occurrences sit under.
+//! - **So are conversions between closed sides** ([`ClosedSide`],
+//!   `issues/iwf-shape-spine-comb-depth.md`). A conversion whose two sides
+//!   read nothing of Γ but its base (locally closed types, global references
+//!   at the empty substitution out of Γ, sums of those) is kept under the
+//!   cross-head memo's key less Γ's identity. A type spelled by its
+//!   registered code, `El(D#tycode^δ)`, against its inline lowering is the
+//!   case: a structural recursion's case tree met it once per node, each
+//!   under one more binder, and each decoded the code and walked the sum.
+//!   Successes only, sampled hits re-converted in debug builds.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -1022,6 +1031,10 @@ struct Tc {
     /// they identify, so allocator reuse cannot create an aliasing key.
     conv_memo: RefCell<HashMap<ConvMemoBucket, Vec<ConvMemo>>>,
     conv_memo_entries: Cell<usize>,
+    /// Successful conversions of two [`ClosedSide`]s, kept apart from Γ
+    /// (module docs, §The typing memo): the same pair met under another
+    /// binder is the same judgment.
+    closed_convs: RefCell<HashMap<ClosedConvBucket, Vec<(ClosedSide, ClosedSide, Level)>>>,
     /// The typing memo (module docs, §The typing memo): per node and scope,
     /// for this gate.
     judged: RefCell<PtrMap<Scope, Judged>>,
@@ -1159,6 +1172,66 @@ struct ConvMemo {
     expected: Type,
     inferred: Type,
     level: Level,
+}
+
+/// One side of a conversion that reads nothing of Γ but its base: a locally
+/// closed type (`bounds::type_locally_closed`), a global reference at the
+/// empty substitution out of Γ, `U^δ` or `El^l(u^δ)` with `δ = ·^|Γ|`, or a
+/// sum of those. Every binder rewrites such a reference's tail, so no two
+/// occurrences under different binders share a spelling, but each denotes
+/// the same type: the weakening of the one at `·`. A sum binds nothing, so
+/// its summands are read in the same Γ. Kept by value: a closed type's `==`
+/// stops at its first shared child.
+#[derive(Clone, PartialEq)]
+enum ClosedSide {
+    Ty(Type),
+    Global(GlobalVar),
+    El(Level, GlobalVar),
+    Sum(Level, Level, Box<ClosedSide>, Box<ClosedSide>),
+}
+
+impl ClosedSide {
+    fn of(env: &Env, t: &Type) -> Option<ClosedSide> {
+        let out_of_gamma = |s: &LocalSubst| {
+            s.terms.is_empty()
+                && s.tail == SubstTail::Empty { len: env.gamma.entries.len() as u32, base: env.gamma.base }
+        };
+        match t {
+            Type::GlobalTy { var, subst } if out_of_gamma(subst) => return Some(ClosedSide::Global(*var)),
+            Type::El { level, tm } => {
+                if let Term::GlobalTm { var, subst } = &**tm
+                    && out_of_gamma(subst)
+                {
+                    return Some(ClosedSide::El(level.clone(), *var));
+                }
+            }
+            _ => {}
+        }
+        if crate::bounds::type_ref_locally_closed(t) {
+            return Some(ClosedSide::Ty(t.clone()));
+        }
+        match t {
+            Type::Sum { lhs_level, rhs_level, lhs, rhs } => Some(ClosedSide::Sum(
+                lhs_level.clone(),
+                rhs_level.clone(),
+                Box::new(ClosedSide::of(env, lhs)?),
+                Box::new(ClosedSide::of(env, rhs)?),
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// A [`Tc::closed_convs`] bucket: [`ConvMemoBucket`]'s, less Γ's identity,
+/// which neither side reads.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ClosedConvBucket {
+    expected: Discriminant<Type>,
+    inferred: Discriminant<Type>,
+    psi: RcIdentity<()>,
+    gamma_base: Option<u32>,
+    layer: Layer,
+    univs: u32,
 }
 
 /// A [`Judged`] entry's key: the node and its scope, by identity (module
@@ -1403,6 +1476,7 @@ impl Tc {
             spell_all: true,
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
+            closed_convs: RefCell::new(HashMap::new()),
             judged: RefCell::new(PtrMap::default()),
             teles: RefCell::new(HashMap::new()),
             tele_ids: Cell::new(0),
@@ -1592,6 +1666,43 @@ impl Tc {
             crate::stats::conv_memo_hits(1);
             return Ok(());
         }
+        let closed = match (ClosedSide::of(env, expected), ClosedSide::of(env, inferred)) {
+            (Some(a), Some(b)) => Some((
+                ClosedConvBucket {
+                    expected: expected_head,
+                    inferred: inferred_head,
+                    psi: RcIdentity::new(env.psi.bindings.identity()),
+                    gamma_base: match env.gamma.base {
+                        CtxBase::Nil => None,
+                        CtxBase::Var(g) => Some(g.0),
+                    },
+                    layer: env.layer,
+                    univs: env.univs,
+                },
+                a,
+                b,
+            )),
+            _ => None,
+        };
+        if let Some((key, a, b)) = &closed
+            && self
+                .closed_convs
+                .borrow()
+                .get(key)
+                .is_some_and(|bucket| bucket.iter().any(|(x, y, level)| level == l && x == a && y == b))
+        {
+            crate::stats::conv_memo_hits(1);
+            #[cfg(debug_assertions)]
+            if crate::checks::verify_this_skip() {
+                assert!(
+                    crate::stats::unobserved(|| self.conv_ity(env, ITyRef::Syn(expected), ITyRef::Syn(inferred), l))
+                        .is_ok(),
+                    "the closed-conversion memo kept a pair that converting again rejects \
+                     (term output suppressed: see CLAUDE.md)"
+                );
+            }
+            return Ok(());
+        }
         crate::stats::conv_misses(1);
         let at = env.layer.type_layer();
         #[cfg(feature = "value-metrics")]
@@ -1644,6 +1755,17 @@ impl Tc {
         // A gate-wide cap bounds adversarial all-distinct input. Once full,
         // misses retain the ordinary checker behavior rather than evicting a
         // potentially hot positive judgment.
+        if let Some((key, a, b)) = closed {
+            if self.conv_memo_entries.get() < 4096 {
+                let mut memo = self.closed_convs.borrow_mut();
+                let bucket = memo.entry(key).or_default();
+                if bucket.len() < 4 {
+                    bucket.push((a, b, l.clone()));
+                    self.conv_memo_entries.set(self.conv_memo_entries.get() + 1);
+                }
+            }
+            return Ok(());
+        }
         if let Some(bucket_key) = bucket_key.filter(|_| self.conv_memo_entries.get() < 4096) {
             let mut memo = self.conv_memo.borrow_mut();
             let bucket = memo.entry(bucket_key).or_default();

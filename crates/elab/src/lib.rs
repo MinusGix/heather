@@ -764,6 +764,10 @@ pub struct Elaborator {
     /// was lowered at (a hit is weakened past the globals committed since).
     /// Nothing here is semantic.
     pub(crate) named_type_memo: RefCell<HashMap<(usize, bool), (Rc<Inductive>, usize, (Type, Level))>>,
+    /// The last shape and index type an `IWf` family's signature was built
+    /// with, by tag ([`Elaborator::share_iwf_part`]), so equal ones are one
+    /// allocation. Nothing here is semantic.
+    pub(crate) iwf_part_memo: RefCell<HashMap<(u32, bool), Rc<Type>>>,
     /// The oracle consulted at the kernel gate (`gate.rs`), if any. `None` —
     /// the default, and what every test and the unflagged CLI use — means the
     /// kernel runs on every declaration, exactly as it always has.
@@ -1755,6 +1759,7 @@ impl Elaborator {
             quote_depth: Cell::new(0),
             result_only_memo: RefCell::new(HashMap::new()),
             named_type_memo: RefCell::new(HashMap::new()),
+            iwf_part_memo: RefCell::new(HashMap::new()),
             gate: None,
             kernel_pool: pool::KernelPool::default(),
             kernel_replay: pool::ReplaySlot::default(),
