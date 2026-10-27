@@ -71,10 +71,14 @@ pub(super) struct DeclAttempt {
     /// by every value of the same type, so repeated values carry the same
     /// allocations and the kernel's conversion memo and pointer-equality
     /// shortcuts answer their repeated queries. Keyed by the type (compared
-    /// structurally), the context length and whether code emits `@`-forms.
-    pub(super) children_annotations: RefCell<Vec<(Type, usize, bool, Rc<Type>, Rc<Type>)>>,
+    /// structurally), the context length, the Ψ scope and whether code emits
+    /// `@`-forms. The scope is there because the annotations name generated
+    /// definitions, and a declaration registers its own mid-attempt
+    /// (`register_gen_defs`): an entry minted before a push names every
+    /// global one too close (`docs/iwf-named-signature-design.md` §2).
+    pub(super) children_annotations: RefCell<Vec<(Type, (usize, u32), bool, Rc<Type>, Rc<Type>)>>,
     /// The same for a `sup_f`'s shape and arity slots, keyed by the `Wf`.
-    pub(super) wf_slot_annotations: RefCell<Vec<(Type, usize, (Rc<Type>, Rc<Term>))>>,
+    pub(super) wf_slot_annotations: RefCell<Vec<(Type, (usize, u32), (Rc<Type>, Rc<Term>))>>,
 
     /// Slot retained during an argument-slot ownership probe.
     pub(super) slot_probe_target: Cell<Option<Span>>,

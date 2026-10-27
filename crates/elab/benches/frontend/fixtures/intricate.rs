@@ -286,10 +286,13 @@ fn mutual_declaration() -> Family {
         name: "inductive/mutual-declaration",
         what: "a group of m mutual sorts, declared",
         unit: "members",
-        // 2026-10-27, cloud box, three runs: 1.15 (1.11-1.18), once wide
-        // sums are balanced (1.49 before; the 16-member group's sum is). Met.
-        expect_slope: Some((0.80, 1.50)),
-        cases: sweep("inductive/mutual-declaration", &[2, 4, 8, 16], mutual_group),
+        // 2026-10-26, cloud box, three runs: 1.49 (1.47-1.50), 96% elab at
+        // 16. 2026-10-27: 1.15 (1.11-1.18) once wide sums are balanced, and
+        // re-recorded from below with the group's signature named too
+        // (docs/iwf-named-signature-design.md), the sweep moved to 4..32:
+        // 0.84 (0.82-0.86), fixed cost still showing. Met.
+        expect_slope: Some((0.49, 1.19)),
+        cases: sweep("inductive/mutual-declaration", &[4, 8, 16, 32], mutual_group),
     }
 }
 
@@ -300,8 +303,8 @@ fn mutual_declaration() -> Family {
 ///
 /// Recorded instead (2026-10-26): ~2.7, nearly all kernel gate, and the
 /// one-step `refl` runs the kernel out of fuel at eight members
-/// (`issues/mutual-group-recursion-gate-cost.md`). Hence the sizes stop at
-/// five.
+/// (`issues/mutual-group-recursion-gate-cost.md`). Hence the sizes stopped
+/// at eight until the signature was named; they now run to 32.
 fn mutual_recursion() -> Family {
     let src = |m: u64| {
         let mut s = String::from(
@@ -327,9 +330,14 @@ fn mutual_recursion() -> Family {
         // Re-recorded from below the same day, once the signature was judged
         // once and the ih held as a value
         // (issues/mutual-group-recursion-gate-cost.md): 1.63 over 2..8 (about 2.3
-        // from 8 to 16 by hand); the m = 8 `refl` checks.
-        expect_slope: Some((1.28, 1.98)),
-        cases: sweep("inductive/mutual-recursion", &[2, 3, 4, 6, 8], src),
+        // from 8 to 16 by hand); the m = 8 `refl` checks. Again 2026-10-27,
+        // with the signature named (docs/iwf-named-signature-design.md):
+        // 0.95 (0.91-0.99, two runs) over 2..8, fixed cost dominating, so
+        // the sweep moved to 4..32 with wide sums balanced as well (#214):
+        // 1.28 (1.26-1.30), about 1.5 from 16 to 32 and 1.6 by hand from 80
+        // to 160 (issues/iwf-shape-spine-comb-depth.md).
+        expect_slope: Some((0.93, 1.63)),
+        cases: sweep("inductive/mutual-recursion", &[4, 8, 16, 32], src),
     }
 }
 
@@ -391,10 +399,14 @@ fn typed_syntax() -> Family {
         // 2026-10-26, cloud box, after the strengthened typing memo and the
         // shared ih: 1.13, 88% gate (was 1.78, 95%). From five to twelve
         // constructors the CLI's `size` grows at about the 2.2th power (was
-        // ~3.2) and its `refl`s at about the 1.2th.
-        expect_slope: Some((0.78, 1.48)),
+        // ~3.2) and its `refl`s at about the 1.2th. Re-recorded from below
+        // 2026-10-27, the signature named and the attempt's annotation cache
+        // keyed by Ψ scope (docs/iwf-named-signature-design.md), each size
+        // ~16x cheaper; over 5..8 the slope was fixed cost and noise, so the
+        // sweep moved to 8..64: 0.75 (0.72-0.81). Met.
+        expect_slope: Some((0.40, 1.10)),
         cases: indexed_sweep(
-            "inductive/typed-syntax", &[5, 6, 7, 8], "Tm", IndexedRoute::Iwf, src,
+            "inductive/typed-syntax", &[8, 16, 32, 64], "Tm", IndexedRoute::Iwf, src,
         ),
     }
 }

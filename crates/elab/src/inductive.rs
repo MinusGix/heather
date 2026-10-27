@@ -3007,7 +3007,7 @@ impl Elaborator {
         // what keeps the kernel's `Sum`-against-`Sum` query a `==`.
         let wf_slots = match &expected {
             Type::Wf { shape, arity, .. } if ind.recursive => {
-                let depth = cx.gamma.entries.len();
+                let depth = (cx.gamma.entries.len(), self.lowering_scope());
                 let known = self
                     .attempt
                     .wf_slot_annotations
@@ -3112,7 +3112,7 @@ impl Elaborator {
         // (`wf.rs`'s `children_annotation`): the kernel's memo is keyed by
         // allocation identity.
         let (shape_e, arity_e) = {
-            let depth = cx.gamma.entries.len();
+            let depth = (cx.gamma.entries.len(), self.lowering_scope());
             let mut seen = self.attempt.wf_slot_annotations.borrow_mut();
             match seen.iter().find(|(ty, d, _)| *d == depth && *ty == expected) {
                 Some((_, _, (s, a))) => (Rc::clone(s), Rc::clone(a)),

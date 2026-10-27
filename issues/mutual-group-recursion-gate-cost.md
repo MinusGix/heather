@@ -1,11 +1,11 @@
 ---
 title: Structural recursion over an m-member mutual group costs about m^2.8 in the gate, and runs out of fuel at eight members
-status: open
+status: closed
 labels: [kernel,elaboration,inductives,performance]
 area: language
 milestone: [math-metatheory]
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 Found by the intricate-inductive bench families
@@ -102,3 +102,30 @@ types spelling the Θ(m) member sum. The acceptance's slope "towards 1" is
 not reached; whether quadratic is enough for the heather-coq port (a group
 of seven: about 75 ms of gate) is the question for whoever picks this up
 next, so the issue stays open.
+
+**2026-10-27 — the signature is named; closed.** The signature's index
+functions are generated definitions (`D#iarity`, `D#iout`, `D#ichild`), and
+the step's ih type is spelled with a fourth (`D#idnth`), so a member wrapper
+or a convoy motive carries a handful of references where it carried the
+Θ(m²) trees (`docs/iwf-named-signature-design.md`). `heather check
+--timings`, release, width one, cloud box, `size0` total / gate, and the
+whole file:
+
+| m | master (#205) `size0` | now `size0` | master file | now file |
+|---|---|---|---|---|
+| 4 | 36 / 24 ms | 8 / 5 ms | 49 ms | 24 ms |
+| 8 | 137 / 80 ms | 26 / 16 ms | 154 ms | 55 ms |
+| 16 | 582 / 316 ms | 55 / 35 ms | 604 ms | 93 ms |
+| 24 | 1,653 / 806 ms | 114 / 75 ms | 1,682 ms | 172 ms |
+
+Each member's declaration now pays for the definitions it registers (`M0`
+grows from a few ms to tens, linearly). `inductive/mutual-recursion`
+re-recorded from below at 0.95 over 2..8 (fixed cost dominating);
+`inductive/mutual-declaration` at 1.02. By hand from 24 to 160 members the
+group is about m^1.8: the step's case tree is a comb over the shape spine,
+Θ(m) deep, its motives hold the label as an `inr` chain of that depth, and
+each arm evaluates the definitions down the same chain. That is the
+constructor encoding of every inductive, filed as
+[[iwf-shape-spine-comb-depth]] rather than kept here. (Merged with PR #214's balanced sums the
+same day: 160 members 6.1 s → 4.4 s, still about m^1.6; that issue now
+tracks the residue.)
