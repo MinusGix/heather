@@ -494,6 +494,7 @@ fn view_dispatches_on_the_goal() {
                  HLit(_) => fail(\"a literal\", Nil),
                  HMatch(_) => fail(\"a stuck match\", Nil),
                  HHole => fail(\"a hole\", Nil),
+                 HField(_, name, _) => fail(\"a field \" ++ name, Nil),
                  HOther => fail(\"other\", Nil),
              }
          }
