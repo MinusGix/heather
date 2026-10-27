@@ -152,6 +152,23 @@ class CommRing<A>(same as ≈: A → A → Type, add as +: A → A → A, mul as
     extends Ring<A>(same, add, mul), CommSemiring<A>(same, add, mul)
 {}
 
+// A commutative ring with its integers named (issues/ring-modulo-a-relation.md).
+// Every commutative ring has the integers in it, but `of_int` is a field so
+// that a carrier keeps its own embedding (`Rat::ofInt`, a rational numeral
+// at `CReal`) and a coefficient `ring` writes reads back as the carrier's
+// numeral, as `of_nat` does in `OrderedField`. The laws are the ring
+// homomorphism's; negation follows from them (`ring::RingExpr::of_int_neg`).
+// The integer operations are spelled out: the bound symbols are `A`'s.
+class CommRingOfInt<A>(same as ≈: A → A → Type, add as +: A → A → A, mul as *: A → A → A)
+    extends CommRing<A>(same, add, mul)
+{
+    of_int: Int → A,
+    of_int_zero: of_int(OfNat(0)) ≈ unit,
+    of_int_one: of_int(OfNat(1)) ≈ multiplicative.unit,
+    of_int_add: (a, b: Int) → of_int(Int::add(a, b)) ≈ of_int(a) + of_int(b),
+    of_int_mul: (a, b: Int) → of_int(Int::mul(a, b)) ≈ of_int(a) * of_int(b),
+}
+
 // ---------------------------------------------------------------------------
 // Semiring consequences.
 

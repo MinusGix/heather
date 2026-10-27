@@ -206,12 +206,74 @@ omega atoms is a later integration, not a prerequisite.
   ring-normalized atoms: [ring-inequalities](../issues/ring-inequalities.md).
   The regular-Cauchy estimates the reals need are inequalities, so this is
   the next step toward them.
-- **`ring` modulo a setoid.** A goal `x * (y + z) ≈ x * y + x * z` at `Rat`
-  is proved here through its cross-multiplication, which is the
-  representation. Normalizing at `Rat` itself, modulo `≈`, needs the
-  normalizer over a commutative-ring structure indexed by a relation, which is
-  [semiring-ring-structure-api](../issues/semiring-ring-structure-api.md)'s
-  interface plus `Respects2`; noted there.
+- **`ring` modulo a setoid.** Built later: §8.
 - **Powers, `Nat` subtraction, `OfNat(x + y)` inside an `Int` goal, mixed
   `Nat`/`Int` hypotheses, rational multipliers.** Each is an atom or a
   refusal today; none has a client yet.
+
+## 8. Modulo a relation
+
+Added 2026-10-27 by [ring-modulo-a-relation](../issues/ring-modulo-a-relation.md).
+A `≈` goal at a carrier with a `CommRingOfInt` instance — `Rat` and `CReal`
+today — is normalized at that carrier:
+
+```heather
+theorem square(x, y: Rat): (x + y) * (x + y) ≈ x * x + 2 * x * y + y * y { ring }
+theorem respects(x, x2, y: CReal, h: x ≈ x2): x * y + y ≈ (x2 + 1) * y { ring(h) }
+```
+
+**The interface.** `CommRingOfInt<A>(≈, +, *)` (lib/std/algebra/semiring.hthr)
+is `CommRing` plus `of_int: Int → A` with the ring homomorphism's four laws
+(zero, one, sum, product). Every commutative ring has the integers in it; the
+embedding is a field so that a carrier keeps its own (`Rat::ofInt`, a rational
+numeral embedded at `CReal`), which is what makes a coefficient read back as
+the carrier's numeral, as `of_nat` does in `OrderedField`.
+
+**The library.** The syntax, the normal form, `norm` and the comparison
+lemmas are the `Int` path's, unchanged: coefficients are still `Int` and the
+certificate's `refl` is the same evaluation. What is restated in a
+`section<A: CommRingOfInt(≈, +, *)>` is the meaning — `RingExpr::eval_rel`,
+`RingPoly::eval_rel` — and the soundness proof, over the ring's layers:
+`rel_cong` through the `+`/`*` `Respects2` the layers carry, `inv_respects`,
+`CommMonoidRel::interchange` for the rearrangements, `GroupRel::inv_unique`
+for negation, and `of_int`'s laws for the coefficient arithmetic (negation is
+derived from them, `of_int_neg`). Subtraction evaluates as `a + A.inv(b)`,
+which is what `Rat::sub` and `CReal::sub` unfold to, so the certificate's
+`eval_rel` converts to the goal's spelling. The certificate is
+
+```text
+ring::RingExpr::sound_rel<C>(__ring_atoms, ⟦lhs⟧, ⟦rhs⟧, refl)
+ring::RingExpr::sound_with_rel<C>(__ring_atoms, ⟦lhs⟧, ⟦rhs⟧, D, HD, refl)
+```
+
+with the carrier written: the generic lemmas take only the atom list and
+syntax, and an expected type `x ≈ y` pins the relation but not the
+operations, so the carrier fixes the ring through its designations.
+
+**The tactic.** A goal is read this way when it is the designated `≈` at its
+carrier, the carrier has a `CommRingOfInt` instance in scope, and every
+hypothesis is the same carrier's `≈`. The operations are the carrier's
+designations (`+`, `*`, infix and prefix `-`); anything else is an atom,
+compared as at `Int`; a field read is not looked through, since a value of
+the carrier is not a computation the normal form wants. A numeral is the
+integer its spelling ends in, confirmed by converting the term to what
+`RConst` of that integer evaluates to, so a term that only spells like one is
+an atom. The multiplier search is the `Int` one: hypotheses are combined with
+integer polynomial multipliers, which is valid in any commutative ring.
+
+**The fallback.** When this reading fails and the goal's `≈` unfolds to an
+`Int` equation (`Rat`, not `CReal`), the cross-multiplied reading of §1 is
+tried, and its certificate is used if it succeeds; if both fail the error is
+the relation reading's, which is stated in the goal's terms. So the rational
+laws proved with facts about the representation (`ring(hx, hy,
+x.den_add(y), …)`) are unchanged, and so are the laws stated before the
+`CommRingOfInt<Rat>` instance, which is registered right after `CommRing<Rat>`:
+`Rat`'s own ring laws cannot be proved by a normalizer that assumes them.
+
+**Cost shape.** The atoms are the carrier's values, not their numerators and
+denominators, so a certificate's normalization runs over fewer atoms and
+lower degree than the cross-multiplied one for the same identity; the
+conversion that reads `eval_rel` back unfolds the instance dictionary's
+projections once per operation node. The `Int` and `Nat` certificates are
+unchanged.
+
