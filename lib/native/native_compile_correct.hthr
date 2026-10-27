@@ -498,6 +498,91 @@ theorem Source::compile_of(self src: Source, low: BitVec(64), program: Prog,
     })(emitted)
 }
 
+// A statement's emission from its parts', so a reader can state a long
+// program's a piece at a time (`heather write-elf`): one declaration per
+// leaf, or per part small enough to evaluate whole, and these to join them.
+// Each names its parts by position (`Stmt::left`, `right`, `word`), so no
+// statement spells a part of the tree it does not evaluate.
+theorem Stmt::emit_then_of(self s: Stmt, is: s.is_then().IsTrue(), p: Prog, layout: Layout, names: Nat, c: Compiled,
+    left: s.left().emit(p, layout, names) = Some(c)): s.emit(p, layout, names) = s.right().emit(c.prog, layout, c.names) {
+    (match s as λ t => t.is_then().IsTrue() → t.left().emit(p, layout, names) = Some(c) → t.emit(p, layout, names) = t.right().emit(c.prog, layout, c.names) {
+        Then(_, rest) => λ _ h => j(sym(h), λ o _ => (match o as λ _ => Option<Compiled> { None => None, Some(d) => rest.emit(d.prog, layout, d.names) })
+            = rest.emit(c.prog, layout, c.names), refl),
+        Compute(_) => λ no _ => false_elim(no),
+        Invoke(_) => λ no _ => false_elim(no),
+        Branch(_, _, _) => λ no _ => false_elim(no),
+        Repeat(_, _) => λ no _ => false_elim(no),
+        Exit(_) => λ no _ => false_elim(no),
+    })(is, left)
+}
+
+theorem Stmt::emit_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), fits: word_fits(s.word()).IsTrue(), p: Prog, layout: Layout, names: Nat,
+    b: Compiled, body: s.left().emit(p.label(Succ(names)), layout, Succ(Succ(names))) = Some(b)):
+    s.emit(p, layout, names) = Some(Compiled(then(b.prog.tests(layout, s.word(), Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)) {
+    (match s as λ t => t.is_repeat().IsTrue() → word_fits(t.word()).IsTrue() → t.left().emit(p.label(Succ(names)), layout, Succ(Succ(names))) = Some(b) →
+            t.emit(p, layout, names) = Some(Compiled(then(b.prog.tests(layout, t.word(), Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)) {
+        Repeat(inner, again) => λ _ f h => {
+            let closed = Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names));
+            let ran = j(sym(h), λ o _ => (match o as λ _ => Option<Compiled> {
+                    None => None,
+                    Some(d) => Some(Compiled(then(d.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), d.names)),
+                }) = closed, refl);
+            j(sym(eq_true_of_is_true(word_fits(again), f)), λ w _ => (match w as λ _ => Option<Compiled> {
+                    False => None,
+                    True => match inner.emit(p.label(Succ(names)), layout, Succ(Succ(names))) {
+                        None => None,
+                        Some(d) => Some(Compiled(then(d.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), d.names)),
+                    },
+                }) = closed, ran)
+        },
+        Compute(_) => λ no _ _ => false_elim(no),
+        Invoke(_) => λ no _ _ => false_elim(no),
+        Then(_, _) => λ no _ _ => false_elim(no),
+        Branch(_, _, _) => λ no _ _ => false_elim(no),
+        Exit(_) => λ no _ _ => false_elim(no),
+    })(is, fits, body)
+}
+
+theorem Stmt::emit_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), fits: word_fits(s.word()).IsTrue(), p: Prog, layout: Layout, names: Nat,
+    y, n: Compiled, yes: s.left().emit(p.tests(layout, s.word(), Succ(names)), layout, Succ(Succ(names))) = Some(y),
+    no: s.right().emit(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, y.names) = Some(n)):
+    s.emit(p, layout, names) = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)) {
+    (match s as λ t => t.is_branch().IsTrue() → word_fits(t.word()).IsTrue() →
+            t.left().emit(p.tests(layout, t.word(), Succ(names)), layout, Succ(Succ(names))) = Some(y) →
+            t.right().emit(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, y.names) = Some(n) →
+            t.emit(p, layout, names) = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)) {
+        Branch(condition, first, second) => λ _ f hy hn => {
+            let joined = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names));
+            let second_ran = j(sym(hn), λ o _ => (match o as λ _ => Option<Compiled> {
+                    None => None,
+                    Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
+                }) = joined, refl);
+            let first_ran = j(sym(hy), λ o _ => (match o as λ _ => Option<Compiled> {
+                    None => None,
+                    Some(d) => match second.emit(d.prog.else_label(Succ(names), Succ(Succ(names))), layout, d.names) {
+                        None => None,
+                        Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
+                    },
+                }) = joined, second_ran);
+            j(sym(eq_true_of_is_true(word_fits(condition), f)), λ w _ => (match w as λ _ => Option<Compiled> {
+                    False => None,
+                    True => match first.emit(p.tests(layout, condition, Succ(names)), layout, Succ(Succ(names))) {
+                        None => None,
+                        Some(d) => match second.emit(d.prog.else_label(Succ(names), Succ(Succ(names))), layout, d.names) {
+                            None => None,
+                            Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
+                        },
+                    },
+                }) = joined, first_ran)
+        },
+        Compute(_) => λ no _ _ _ => false_elim(no),
+        Invoke(_) => λ no _ _ _ => false_elim(no),
+        Then(_, _) => λ no _ _ _ => false_elim(no),
+        Repeat(_, _) => λ no _ _ _ => false_elim(no),
+        Exit(_) => λ no _ _ _ => false_elim(no),
+    })(is, fits, yes, no)
+}
+
 // The compiled program, from its first byte with its code resident and its
 // region zero, simulates the source at every fuel.
 theorem native_compile_correct(src: Source, r: DataRegion, fits: Layout(r.low, src.capacities()).size() <= r.size, program: Prog,

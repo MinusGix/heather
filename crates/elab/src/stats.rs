@@ -526,6 +526,13 @@ pub struct ItemTiming {
     /// Value-machine activity attributable to this scope when the opt-in
     /// `value-metrics` collector is enabled.
     pub value_metrics: Option<ValueMetricsSnapshot>,
+    /// How far the process's peak resident set rose while this scope was
+    /// open, in KiB ([`peak_rss_kb`]). Sibling rows sum to the rise over
+    /// their span, so the row that raised a run's peak is the one with the
+    /// largest. Process-wide: exact only when nothing else runs (a kernel
+    /// gate at width one), and zero for ambient rows, whose threads share a
+    /// process with other tests.
+    pub peak_growth_kb: u64,
 }
 
 impl ItemTiming {
@@ -554,6 +561,7 @@ struct Open {
     counters: [u64; COUNTERS],
     kernel: kstats::Snapshot,
     value_metrics: Option<ValueMetricsSnapshot>,
+    peak_kb: u64,
 }
 
 thread_local! {
@@ -601,6 +609,7 @@ impl Drop for ScopeGuard {
             value_metrics: current_value_metrics()
                 .zip(open.value_metrics)
                 .map(|(after, before)| after.saturating_sub(before)),
+            peak_growth_kb: if open.explicit { peak_rss_kb().saturating_sub(open.peak_kb) } else { 0 },
         };
         if open.explicit {
             live_closed(&row);
@@ -678,8 +687,19 @@ pub fn scope(kind: ScopeKind, module: &str, item: &str) -> ScopeGuard {
             counters,
             kernel: kstats::snapshot(),
             value_metrics: current_value_metrics(),
+            peak_kb: if explicit { peak_rss_kb() } else { 0 },
         }),
     }
+}
+
+/// The process's peak resident set so far (`VmHWM`), in KiB; zero where
+/// `/proc/self/status` does not say. Read once at each end of a collected
+/// scope, so it costs nothing when nobody is measuring.
+pub fn peak_rss_kb() -> u64 {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else { return 0 };
+    status.lines().find_map(|line| line.strip_prefix("VmHWM:"))
+        .and_then(|rest| rest.trim().trim_end_matches("kB").trim().parse().ok())
+        .unwrap_or(0)
 }
 
 /// Begin collecting scope rows on this thread.
@@ -766,7 +786,7 @@ pub fn header() -> String {
         out.push('\t');
         out.push_str(name);
     }
-    out.push_str("\tterm_cache_lookups\tterm_cache_hits\ttype_cache_lookups\ttype_cache_hits");
+    out.push_str("\tterm_cache_lookups\tterm_cache_hits\ttype_cache_lookups\ttype_cache_hits\tpeak_growth_kb");
     out.push('\n');
     out
 }
@@ -801,6 +821,7 @@ fn row_line(row: &ItemTiming, out: &mut String) {
         }
         None => out.push_str("\t\t\t\t"),
     }
+    let _ = write!(out, "\t{}", row.peak_growth_kb);
     out.push('\n');
 }
 
