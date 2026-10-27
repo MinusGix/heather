@@ -1,7 +1,9 @@
-//! `tr a-z A-Z`, `yes`, `head -c 10` and `wc -l`, written with the builder
-//! (`native_build`), compiled by the effectful source compiler and written as
-//! ELFs by `heather write-elf`, run as Linux processes beside GNU's
-//! (issues/native-source-bytes.md, issues/native-source-builder.md). None has
+//! `tr a-z A-Z`, `yes`, `head -c 10`, `wc -l`, and `echo` and `yes STR`
+//! over the command line, written with the builder (`native_build`),
+//! compiled by the effectful source compiler and written as ELFs by
+//! `heather write-elf`, run as Linux processes beside GNU's
+//! (issues/native-source-bytes.md, issues/native-source-builder.md,
+//! issues/native-source-argv.md). None has
 //! a theorem of its own: `lib/native/native_tools.hthr` holds only the
 //! tools, and `native_compile_correct` is the proof of each.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -185,6 +187,97 @@ fn compiled_wc_counts_lines_as_gnu_wc() {
         let (_, gnu_out) = run(Command::new("wc").arg("-l"), input, Stdio::piped());
         let count: u64 = String::from_utf8(gnu_out).unwrap().trim().parse().unwrap();
         assert_eq!(code, Some((count % 256) as i32), "wc's status is GNU's count ({} bytes in)", input.len());
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Argument lists GNU's `echo` and `yes` take as text (none starts with
+/// `-`, which GNU's read as flags): none, empty ones, spaces and bytes past
+/// ASCII inside one, many, and random ones.
+fn argument_lists(random: &mut Bytes) -> Vec<Vec<Vec<u8>>> {
+    let mut lists: Vec<Vec<Vec<u8>>> = vec![
+        vec![],
+        vec![b"".to_vec()],
+        vec![b"hello".to_vec()],
+        vec![b"hello,".to_vec(), b"world".to_vec()],
+        vec![b"".to_vec(), b"".to_vec(), b"x".to_vec()],
+        vec![b"two  spaces\tand a tab".to_vec(), "h\u{e9}ather \u{3bb}".as_bytes().to_vec()],
+        (0..200).map(|i| format!("w{i}").into_bytes()).collect(),
+    ];
+    for _ in 0..4 {
+        let count = (random.next() % 12) as usize;
+        lists.push((0..count).map(|_| {
+            let len = (random.next() % 40) as usize;
+            random.take(len, |r| b"az AZ09.,\t\\\"'*?"[(r % 15) as usize])
+        }).collect());
+    }
+    lists
+}
+
+fn with_args(program: impl AsRef<std::ffi::OsStr>, args: &[Vec<u8>]) -> Command {
+    use std::os::unix::ffi::OsStrExt;
+    let mut cmd = Command::new(program);
+    cmd.args(args.iter().map(|a| std::ffi::OsStr::from_bytes(a)));
+    cmd
+}
+
+#[test]
+fn compiled_echo_runs_as_gnu_echo() {
+    let dir = scratch("echo");
+    let binary = dir.join("echo");
+    write_tool("echo_source", &binary);
+
+    let mut random = Bytes::seeded("echo");
+    for args in argument_lists(&mut random) {
+        let (code, out) = run(&mut with_args(&binary, &args), b"", Stdio::piped());
+        let (gnu_code, gnu_out) = run(&mut with_args("echo", &args), b"", Stdio::piped());
+        assert_eq!(code, Some(0), "echo exits 0");
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "and sends what GNU's sends ({} arguments)", args.len());
+    }
+
+    // An argument as long as the buffer is echoed; one byte longer exits 1
+    // where it would be written.
+    let (code, out) = run(&mut with_args(&binary, &[vec![b'a'; 1024]]), b"", Stdio::piped());
+    assert_eq!((code, out.len()), (Some(0), 1025), "an argument the buffer holds is echoed");
+    let (code, out) = run(&mut with_args(&binary, &[b"short".to_vec(), vec![b'a'; 1025]]), b"", Stdio::piped());
+    assert_eq!((code, out), (Some(1), b"short ".to_vec()), "a longer one exits 1");
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut with_args(&binary, &[b"no room".to_vec()]), b"", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn compiled_yes_takes_its_line_as_gnu_yes() {
+    let dir = scratch("yes_args");
+    let binary = dir.join("yes");
+    write_tool("yes_args_source", &binary);
+
+    let mut random = Bytes::seeded("yes STR");
+    for args in argument_lists(&mut random) {
+        let line: usize = args.iter().map(|a| a.len() + 1).sum::<usize>().max(2);
+        if line > 1024 {
+            continue;
+        }
+        for n in [1, line, 3 * line + 1, 5000] {
+            let ours = first_bytes(&mut with_args(&binary, &args), n);
+            let gnu = first_bytes(&mut with_args("yes", &args), n);
+            assert!(ours == gnu, "the first {n} bytes are GNU's ({} arguments)", args.len());
+        }
+    }
+
+    // A line longer than the buffer exits 1 before writing.
+    let (code, out) = run(&mut with_args(&binary, &[vec![b'a'; 600], vec![b'b'; 600]]), b"", Stdio::piped());
+    assert_eq!((code, out.len()), (Some(1), 0), "a line past the buffer exits 1 with nothing sent");
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let status = with_args(&binary, &[b"STR".to_vec()]).stdout(Stdio::from(full)).stderr(Stdio::null()).status().unwrap();
+        assert_eq!(status.code(), Some(1), "a failed write exits 1");
     }
 
     std::fs::remove_dir_all(dir).unwrap();

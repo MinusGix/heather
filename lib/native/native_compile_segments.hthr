@@ -178,7 +178,7 @@ theorem Target::goes_word_to(self t: Target, env: Env, p: Prog, id: Nat, registe
             (read_gpr(Rbx, u.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
             ((read_word(t.site().data, u.memory, read_gpr(Rbx, u.gprs)) = Some(word)) ∧ post(word_load_after(WordLoad(register, Rbx), word, u)))), loaded);
     λ s here resident held => {
-        let read = t.read_slot(env, held.left.witness, s.memory, held.left.proof.left, held.left.proof.right, id, inside);
+        let read = t.read_slot(env, held.left.witness, s.memory, held.left.proof.left, held.left.proof.right.left, id, inside);
         let s1 = execute_block_normal([MovRI(Rbx, t.layout().word_at(id))], s);
         let ok: q(word_load_after(WordLoad(register, Rbx), env.word(id), s1).gprs, word_load_after(WordLoad(register, Rbx), env.word(id), s1).memory) = held.right;
         moved(s, here, resident, Exists(env.word(id), ⟨read.left, ⟨read.right, ok⟩⟩))

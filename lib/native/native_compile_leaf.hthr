@@ -405,7 +405,7 @@ fn Env::settle_into(self env: Env, after: Valuation(), ports: List<Port>, homes:
         Nil => env,
         Cons(port, rest) => match homes {
             Nil => env,
-            Cons(home, others) => Env(env.words.put(home, after(port.width, port.id).toNat(), 0), env.buffers).settle_into(after, rest, others),
+            Cons(home, others) => Env(env.words.put(home, after(port.width, port.id).toNat(), 0), env.buffers, env.args).settle_into(after, rest, others),
         },
     }
 }
@@ -417,7 +417,7 @@ theorem Env::settle_into_writes(nodes: List<Node>): (env: Env) → (after: Valua
     match nodes {
         Nil => λ env after => refl,
         Cons(node, rest) => λ env after =>
-            Env::settle_into_writes(rest, Env(env.words.put(node_output(node).id, after(node_output(node).width, node_output(node).id).toNat(), 0), env.buffers), after),
+            Env::settle_into_writes(rest, Env(env.words.put(node_output(node).id, after(node_output(node).width, node_output(node).id).toNat(), 0), env.buffers, env.args), after),
     }
 }
 
@@ -449,7 +449,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
                         let layout = t.layout();
                         let stored = p.word_from(layout, home, register);
                         let a = layout.word_at(home);
-                        let settled = Env(env.words.put(home, values(port.width, port.id).toNat(), 0), env.buffers);
+                        let settled = Env(env.words.put(home, values(port.width, port.id).toNat(), 0), env.buffers, env.args);
                         let w_stored = stored.within_trans(q, t.program, Prog::ports_from_within(layout, rest, others, later, stored, q, more), within);
                         let after = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(settled, m) ∧ PortsAt(values, rest, later, g);
                         let head = t.goes_word_from(p, home, register, inside, w_stored, tree, after,
@@ -466,7 +466,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
                                     port_rep_number(values, port, word, j(sym(same_word), λ x _ => port.Rep(values, x), held.right.left));
                                 ⟨t.placed_same(env.set_word(home, word), settled, t.r.profile.store(s.memory, a, word_bytes(word)),
                                     t.placed_word(env, s.memory, held.left, home, inside, word),
-                                    cong_fn<Nat, Env>(λ k => Env(env.words.put(home, k, 0), env.buffers), number)),
+                                    cong_fn<Nat, Env>(λ k => Env(env.words.put(home, k, 0), env.buffers, env.args), number)),
                                  ports_at_frame(values, rest, later, s.gprs, Rbx, a, Rbx.absent_rest(register, later, rbx), held.right.right)⟩
                             })
                     },

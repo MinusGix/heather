@@ -38,10 +38,10 @@ fn with_run(program: &str, run: &str) -> String {
     format!("{}\n{}\n", &program[..at], run)
 }
 
-const COPIES_ONE: &str = "theorem cat_copies_one(): world_run(1, False, cat(2).denote().at(6), [byte(7)], Nil)
+const COPIES_ONE: &str = "theorem cat_copies_one(): world_run(1, False, cat(2).denote([]).at(6), [byte(7)], Nil)
     = Finished(BitVec::ofNat(0), [byte(7)]) { refl }";
 
-const WRITE_FAILS: &str = "theorem cat_write_fails(): world_run(2, True, cat(2).denote().at(6), [byte(1)], Nil)
+const WRITE_FAILS: &str = "theorem cat_write_fails(): world_run(2, True, cat(2).denote([]).at(6), [byte(1)], Nil)
     = Finished(BitVec::ofNat(1), Nil) { refl }";
 
 #[test]

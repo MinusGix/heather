@@ -171,7 +171,7 @@ fn wider_leaves_run() {
 fn refused_programs_name_their_reason() {
     let dir = scratch("refused");
     for (source, reason) in [
-        ("big_cat", "`big_cat` does not fit the I/O page: its words, buffers and scratch range take 4608 bytes and the page holds 4096"),
+        ("big_cat", "`big_cat` does not fit the I/O page: its words, buffers, scratch range and saved RSP take 4616 bytes and the page holds 4096"),
         ("opens", "`opens` is refused at statement 1, a call: `open` is not compiled yet"),
         ("narrow_long_leaf", "`narrow_long_leaf` is refused at statement 1, a computation: the leaf needs 41 registers, one per input and per node, and the pool holds 14; it does not compile a node at a time because a node is not at width 64"),
         ("narrow_mixed_leaf", "`narrow_mixed_leaf` is refused at statement 1, a computation: node 2 of the leaf is not at width 64"),

@@ -49,8 +49,8 @@ fn cat_words(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat) → Lis
     [0, 1, c, r, sent, left, w6, w7, w8, 0, 1, 0, w12, w13, w14, 1, 0, w17, w18, 1]
 }
 
-fn cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat, buf: List<BitVec(8)>) → Env {
-    Env(cat_words(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18), [buf])
+fn cat_env(args: List<List<BitVec(8)>>, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat, buf: List<BitVec(8)>) → Env {
+    Env(cat_words(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18), [buf], args)
 }
 
 // The number a one-bit port stores.
@@ -71,8 +71,8 @@ fn wrote_stop(r, sent, w6: Nat) → BitVec(1) {
 }
 
 // The environment after a write and its blocks.
-fn cat_wrote(c, r, sent, w6, w7, w8: Nat, buf: List<BitVec(8)>) → Env {
-    cat_env(c, r, wrote_sent(sent, w6), wrote_left(r, sent, w6), w6, w7, w8, cat_bit(wrote_failed(w6)), wrote_sum(sent, w6),
+fn cat_wrote(args: List<List<BitVec(8)>>, c, r, sent, w6, w7, w8: Nat, buf: List<BitVec(8)>) → Env {
+    cat_env(args, c, r, wrote_sent(sent, w6), wrote_left(r, sent, w6), w6, w7, w8, cat_bit(wrote_failed(w6)), wrote_sum(sent, w6),
         wrote_stop(r, sent, w6).bxor(BitVec::ofNat(1)).toNat(), cat_bit(wrote_all(r, sent, w6)), wrote_stop(r, sent, w6).toNat(), buf)
 }
 
@@ -253,7 +253,7 @@ fn cat_done(flow: Flow, v: ITree<BitVec(64)>(Events::linux_spec())) → Type {
 record CatReading(n, k: Nat, env: Env, v: ITree<BitVec(64)>(Events::linux_spec())) {
     c: Nat, r: Nat, sent: Nat, left: Nat, w6: Nat, w7: Nat, w8: Nat, w12: Nat, w13: Nat, w14: Nat, w17: Nat, w18: Nat,
     buf: List<BitVec(8)>,
-    at: env = cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf),
+    at: env = cat_env(env.args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf),
     size: buf.len() = c,
     pos: 0 < c,
     small: c < Nat::pow(2, 63),
@@ -268,7 +268,7 @@ record CatReading(n, k: Nat, env: Env, v: ITree<BitVec(64)>(Events::linux_spec()
 record CatWriting(n, k, j: Nat, env: Env, v: ITree<BitVec(64)>(Events::linux_spec())) {
     c: Nat, r: Nat, sent: Nat, left: Nat, w6: Nat, w7: Nat, w8: Nat, w12: Nat, w13: Nat, w14: Nat, w17: Nat, w18: Nat,
     buf: List<BitVec(8)>,
-    at: env = cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf),
+    at: env = cat_env(env.args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf),
     size: buf.len() = c,
     pos: 0 < c,
     small: c < Nat::pow(2, 63),
@@ -315,11 +315,11 @@ fn cat_spec_wrote(st: Stateless, pending: List<BitVec(8)>, f1: Nat) → WriteRes
 // One write
 
 // Linux took `count` bytes and some are left: round again.
-theorem cat_wrote_more(call: Answers(), n, k, m: Nat, c, r, sent, left, w7, w8: Nat, buf: List<BitVec(8)>,
+theorem cat_wrote_more(args: List<List<BitVec(8)>>, call: Answers(), n, k, m: Nat, c, r, sent, left, w7, w8: Nat, buf: List<BitVec(8)>,
     size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), sums: sent + left = r, fits: r <= c,
     st: Stateless, pending: List<BitVec(8)>, owed: pending = span(buf, sent, left), f1: Nat,
     enough: Succ(cat_budget(n, k) + m) <= f1, count: Nat, wrote: count <= left, more: 0 < left - count):
-    cat_write_after(call, n, k, m, Onward(cat_wrote(c, r, sent, count_word(count).toNat(), w7, w8, buf)),
+    cat_write_after(call, n, k, m, Onward(cat_wrote(args, c, r, sent, count_word(count).toNat(), w7, w8, buf)),
         cat_spec_wrote(st, pending, f1, Wrote(count)))
 {
     let w6 = count_word(count).toNat();
@@ -329,7 +329,7 @@ theorem cat_wrote_more(call: Answers(), n, k, m: Nat, c, r, sent, left, w7, w8: 
     let hs: (wrote_sent(sent, w6) = sent + count) = cat_wrote_sent(r, sent, left, count, small_r, sums, wrote);
     let hl: (wrote_left(r, sent, w6) = left - count) = cat_wrote_left(r, sent, left, count, small_r, sums, wrote);
     let back: ((left - count) + count = left) = Nat::sub_add_cancel(count, left, wrote);
-    let env = cat_wrote(c, r, sent, w6, w7, w8, buf);
+    let env = cat_wrote(args, c, r, sent, w6, w7, w8, buf);
     let again: (env.bit(14) = True) = trans(cat_stop_again(wrote_failed(w6), wrote_all(r, sent, w6)),
         j(sym(failed), λ b _ => Bool::not(Bool::or(b, wrote_all(r, sent, w6))) = True, j(sym(all), λ b _ => Bool::not(Bool::or(False, b)) = True, refl)));
     let from: (count + sent = wrote_sent(sent, w6)) = { omega };
@@ -348,18 +348,18 @@ theorem cat_wrote_more(call: Answers(), n, k, m: Nat, c, r, sent, left, w7, w8: 
 }
 
 // Linux took all that was left: out of the inner loop, back to reading.
-theorem cat_wrote_done(call: Answers(), n, k, m: Nat, c, r, sent, left, w7, w8: Nat, buf: List<BitVec(8)>,
+theorem cat_wrote_done(args: List<List<BitVec(8)>>, call: Answers(), n, k, m: Nat, c, r, sent, left, w7, w8: Nat, buf: List<BitVec(8)>,
     size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), sums: sent + left = r, fits: r <= c,
     st: Stateless, pending: List<BitVec(8)>, owed: pending = span(buf, sent, left), count: Nat, wrote: count <= left,
     done: left - count = 0, f1: Nat): Succ(cat_budget(n, k) + m) <= f1 →
-    cat_write_after(call, n, k, m, Onward(cat_wrote(c, r, sent, count_word(count).toNat(), w7, w8, buf)),
+    cat_write_after(call, n, k, m, Onward(cat_wrote(args, c, r, sent, count_word(count).toNat(), w7, w8, buf)),
         cat_spec_wrote(st, pending, f1, Wrote(count)))
 {
     let w6 = count_word(count).toNat();
     let small_r: (r < Nat::pow(2, 63)) = { omega };
     let failed: (wrote_failed(w6) = False) = cat_wrote_failed(count, { omega });
     let all: (wrote_all(r, sent, w6) = True) = cat_wrote_all(r, sent, left, count, small_r, sums, wrote, done);
-    let env = cat_wrote(c, r, sent, w6, w7, w8, buf);
+    let env = cat_wrote(args, c, r, sent, w6, w7, w8, buf);
     let stop: (env.bit(14) = False) = trans(cat_stop_again(wrote_failed(w6), wrote_all(r, sent, w6)),
         j(sym(all), λ b _ => Bool::not(Bool::or(wrote_failed(w6), b)) = False,
             j(sym(failed), λ b _ => Bool::not(Bool::or(b, True)) = False, refl)));
@@ -387,14 +387,14 @@ theorem cat_wrote_done(call: Answers(), n, k, m: Nat, c, r, sent, left, w7, w8: 
 }
 
 // Linux failed the write: cat exits 1, as the spec does.
-theorem cat_write_fails(call: Answers(), n, k, m: Nat, c, r, sent, w7, w8: Nat, buf: List<BitVec(8)>,
+theorem cat_write_fails(args: List<List<BitVec(8)>>, call: Answers(), n, k, m: Nat, c, r, sent, w7, w8: Nat, buf: List<BitVec(8)>,
     st: Stateless, pending: List<BitVec(8)>, f1: Nat, e: Nat, valid: Errno(e)):
-    cat_write_after(call, n, k, m, Onward(cat_wrote(c, r, sent, errno_word(e).toNat(), w7, w8, buf)),
+    cat_write_after(call, n, k, m, Onward(cat_wrote(args, c, r, sent, errno_word(e).toNat(), w7, w8, buf)),
         cat_spec_wrote(st, pending, f1, WriteFailed(e)))
 {
     let w6 = errno_word(e).toNat();
     let failed: (wrote_failed(w6) = True) = cat_errno_failed(e, valid);
-    let env = cat_wrote(c, r, sent, w6, w7, w8, buf);
+    let env = cat_wrote(args, c, r, sent, w6, w7, w8, buf);
     let stop: (env.bit(14) = False) = trans(cat_stop_again(wrote_failed(w6), wrote_all(r, sent, w6)),
         j(sym(failed), λ b _ => Bool::not(Bool::or(b, wrote_all(r, sent, w6))) = False, refl));
     let unwritten: (env.bit(12) = True) = trans(cat_bit_read(wrote_failed(w6)), failed);
@@ -405,41 +405,41 @@ theorem cat_write_fails(call: Answers(), n, k, m: Nat, c, r, sent, w7, w8: Nat, 
 }
 
 // Whatever Linux answers the write.
-theorem cat_write_answer(call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
+theorem cat_write_answer(args: List<List<BitVec(8)>>, call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
     buf: List<BitVec(8)>, size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), sums: sent + left = r, fits: r <= c,
     st: Stateless, pending: List<BitVec(8)>, owed: pending = span(buf, sent, left), f1: Nat,
     enough: Succ(cat_budget(n, k) + m) <= f1, a: WriteResult):
     Contract::linux().valid(WriteCmd(BitVec::ofNat(1), span(buf, sent, left)), a) →
     ITree::LinuxSimK<Flow, BitVec(64)>(λ x w => ITree::LinuxSimK(cat_write_after(call, n, k, m), cat_write_tail().then_rest(call, n, x), w),
-        Ret(Onward(Writes(1, 0, 4, 5, 6).answer(cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf), a))),
+        Ret(Onward(Writes(1, 0, 4, 5, 6).answer(cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf), a))),
         cat_spec_wrote(st, pending, f1, a))
 {
     match a {
         Wrote(count) => λ (valid: count <= span(buf, sent, left).len()) => {
             let wrote: (count <= left) = j(cat_span_len(buf, sent, left, { omega }), λ x _ => count <= x, valid);
             (match left - count as λ d => (left - count = d) →
-                    cat_write_after(call, n, k, m, Onward(cat_wrote(c, r, sent, count_word(count).toNat(), w7, w8, buf)),
+                    cat_write_after(call, n, k, m, Onward(cat_wrote(args, c, r, sent, count_word(count).toNat(), w7, w8, buf)),
                         cat_spec_wrote(st, pending, f1, Wrote(count))) {
-                Zero => λ done => cat_wrote_done(call, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
+                Zero => λ done => cat_wrote_done(args, call, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
                     st, pending, owed, count, wrote, done, f1, enough),
-                Succ(_) => λ more => cat_wrote_more(call, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
+                Succ(_) => λ more => cat_wrote_more(args, call, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
                     st, pending, owed, f1, enough, count, wrote, j(sym(more), λ x _ => 0 < x, trivial)),
             })(refl)
         },
-        WriteFailed(e) => λ (valid: Errno(e)) => cat_write_fails(call, n, k, m, c, r, sent, w7, w8, buf, st, pending, f1, e, valid),
+        WriteFailed(e) => λ (valid: Errno(e)) => cat_write_fails(args, call, n, k, m, c, r, sent, w7, w8, buf, st, pending, f1, e, valid),
     }
 }
 
 // The write itself: the spec writes the same bytes.
-theorem cat_write_call(call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
+theorem cat_write_call(args: List<List<BitVec(8)>>, call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
     buf: List<BitVec(8)>, size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), sums: sent + left = r, fits: r <= c,
     st: Stateless, p0: BitVec(8), ps: List<BitVec(8)>, owed: Cons(p0, ps) = span(buf, sent, left), f1: Nat,
     enough: Succ(cat_budget(n, k) + m) <= f1, v: ITree<BitVec(64)>(Events::linux_spec()),
     spec: ITree::next(Events::linux_spec(), v) = ITree::next(Events::linux_spec(), cat_spec(Succ(f1), Writing(st, Cons(p0, ps))))):
     ITree::LinuxSimK(cat_write_after(call, n, k, m), cat_write().denote(call, n,
-        cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
+        cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
 {
-    let env = cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf);
+    let env = cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf);
     let k2 = cat_spec_wrote(st, Cons(p0, ps), f1);
     let at: (ITree::next(Events::linux_spec(), v) = Calls(WriteCmd(BitVec::ofNat(1), span(buf, sent, left)), k2)) =
         trans(spec, @cong<List<BitVec(8)>, Next<BitVec(64)>(Events::linux_spec())>(λ bytes => Calls(WriteCmd(BitVec::ofNat(1), bytes), k2),
@@ -448,19 +448,19 @@ theorem cat_write_call(call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7, 
             WriteCmd(BitVec::ofNat(1), span(buf, sent, left)), v,
             λ a w => ITree::LinuxSimK<Flow, BitVec(64)>(λ x w2 => ITree::LinuxSimK(cat_write_after(call, n, k, m), cat_write_tail().then_rest(call, n, x), w2),
                 Ret(Onward(Writes(1, 0, 4, 5, 6).answer(env, a))), w)) =
-        SimVis(trivial, k2, at, λ a valid => cat_write_answer(call, n, k, m, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
+        SimVis(trivial, k2, at, λ a valid => cat_write_answer(args, call, n, k, m, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
             buf, size, pos, small, sums, fits, st, Cons(p0, ps), owed, f1, enough, a, valid));
     Stmt::sim_then(Invoke(Writes(1, 0, 4, 5, 6)), cat_write_tail(), call, n, env, cat_write_after(call, n, k, m), v, calls)
 }
 
 // From the inner loop's head: something is pending, and the spec has fuel.
-theorem cat_write_head(call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
+theorem cat_write_head(args: List<List<BitVec(8)>>, call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
     buf: List<BitVec(8)>, size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), sums: sent + left = r, fits: r <= c,
     some: 0 < left, st: Stateless, v: ITree<BitVec(64)>(Events::linux_spec()), pending: List<BitVec(8)>):
     pending = span(buf, sent, left) → (fuel: Nat) → Succ(cat_budget(n, k) + Succ(m)) <= fuel →
     ITree::next(Events::linux_spec(), v) = ITree::next(Events::linux_spec(), cat_spec(fuel, Writing(st, pending))) →
     ITree::LinuxSimK(cat_write_after(call, n, k, m), cat_write().denote(call, n,
-        cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
+        cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
 {
     match pending {
         Nil => λ owed fuel enough spec => {
@@ -471,7 +471,7 @@ theorem cat_write_head(call: Answers(), n, k, m: Nat, c, r, sent, left, w6, w7, 
         },
         Cons(p0, ps) => λ owed fuel => match fuel {
             Zero => λ (no: False) spec => false_elim(no),
-            Succ(f1) => λ enough spec => cat_write_call(call, n, k, m, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
+            Succ(f1) => λ enough spec => cat_write_call(args, call, n, k, m, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
                 buf, size, pos, small, sums, fits, st, p0, ps, owed, f1, enough, v, spec),
         },
     }
@@ -481,7 +481,7 @@ theorem cat_write_pass(call: Answers(), n, k, m: Nat, env: Env, v: ITree<BitVec(
     i: CatWriting(n, k, Succ(m), env, v)): ITree::LinuxSimK(cat_write_after(call, n, k, m), cat_write().denote(call, n, env), v)
 {
     j(sym(i.at), λ e _ => ITree::LinuxSimK(cat_write_after(call, n, k, m), cat_write().denote(call, n, e), v),
-        cat_write_head(call, n, k, m, i.c, i.r, i.sent, i.left, i.w6, i.w7, i.w8, i.w12, i.w13, i.w14, i.w17, i.w18,
+        cat_write_head(env.args, call, n, k, m, i.c, i.r, i.sent, i.left, i.w6, i.w7, i.w8, i.w12, i.w13, i.w14, i.w17, i.w18,
             i.buf, i.size, i.pos, i.small, i.sums, i.fits, i.some, i.st, v, i.pending, i.owed, i.fuel, i.enough, i.spec))
 }
 
@@ -495,8 +495,8 @@ fn cat_checked() → Stmt { Branch(7, Exit(10), cat_ended()) }
 fn cat_read_tail() → Stmt { Then(ops([SignedLessThan(64, 7, 3, 16), Equal(64, 8, 3, 16)]), cat_checked()) }
 
 // The environment after a read that returned `w3`, and its test block.
-fn cat_read(c, w3, sent, left, w6, w12, w13, w14, w17, w18: Nat, buf: List<BitVec(8)>) → Env {
-    cat_env(c, w3, sent, left, w6, cat_bit(read_failed(w3)), cat_bit(read_ended(w3)), w12, w13, w14, w17, w18, buf)
+fn cat_read(args: List<List<BitVec(8)>>, c, w3, sent, left, w6, w12, w13, w14, w17, w18: Nat, buf: List<BitVec(8)>) → Env {
+    cat_env(args, c, w3, sent, left, w6, cat_bit(read_failed(w3)), cat_bit(read_ended(w3)), w12, w13, w14, w17, w18, buf)
 }
 
 // The spec after a read it made, at `f1` passes left.
@@ -506,11 +506,11 @@ fn cat_spec_read(st: Stateless, f1: Nat) → ReadResult → ITree<BitVec(64)>(Ev
 }
 
 // A read of some bytes: write them all.
-theorem cat_read_some(call: Answers(), n, k: Nat, c, w6, w12, w13, w14, w17, w18: Nat, buf: List<BitVec(8)>,
+theorem cat_read_some(args: List<List<BitVec(8)>>, call: Answers(), n, k: Nat, c, w6, w12, w13, w14, w17, w18: Nat, buf: List<BitVec(8)>,
     size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), st: Stateless, f1: Nat,
     enough: Succ(Succ(cat_budget(n, k) + n)) <= Succ(f1), b0: BitVec(8), bs: List<BitVec(8)>, fits: Succ(bs.len()) <= c):
     ITree::LinuxSimK(cat_outer_after(n, k), cat_checked().denote(call, n,
-        cat_read(c, count_word(Succ(bs.len())).toNat(), 0, 0, w6, w12, w13, w14, w17, w18, fill(buf, Cons(b0, bs)))),
+        cat_read(args, c, count_word(Succ(bs.len())).toNat(), 0, 0, w6, w12, w13, w14, w17, w18, fill(buf, Cons(b0, bs)))),
         cat_spec_read(st, f1, ReadBytes(Cons(b0, bs))))
 {
     let bytes = Cons(b0, bs);
@@ -523,8 +523,8 @@ theorem cat_read_some(call: Answers(), n, k: Nat, c, w6, w12, w13, w14, w17, w18
     let hl: (left = w3) = cat_word_back(w3, small3);
     let failed: (read_failed(w3) = False) = cat_count_clear(w3, small3);
     let ended: (read_ended(w3) = False) = cat_count_nonzero(w3, { omega }, small3);
-    let env1 = cat_read(c, w3, 0, 0, w6, w12, w13, w14, w17, w18, landed);
-    let env2 = cat_env(c, w3, 0, left, w6, cat_bit(read_failed(w3)), cat_bit(read_ended(w3)), w12, w13, w14, w17, w18, landed);
+    let env1 = cat_read(args, c, w3, 0, 0, w6, w12, w13, w14, w17, w18, landed);
+    let env2 = cat_env(args, c, w3, 0, left, w6, cat_bit(read_failed(w3)), cat_bit(read_ended(w3)), w12, w13, w14, w17, w18, landed);
     let in_buf: (bytes.len() <= buf.len()) = j(sym(size), λ x _ => Succ(bs.len()) <= x, fits);
     let size2: (landed.len() = c) = trans(cat_fill_len(buf, bytes, in_buf), size);
     let st2 = filter_state(mapping(λ (b: BitVec(8)) => b), bytes, st);
@@ -549,12 +549,12 @@ theorem cat_read_some(call: Answers(), n, k: Nat, c, w6, w12, w13, w14, w17, w18
 }
 
 // Whatever Linux answers the read.
-theorem cat_read_answer(call: Answers(), n, k: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
+theorem cat_read_answer(args: List<List<BitVec(8)>>, call: Answers(), n, k: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
     buf: List<BitVec(8)>, size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), st: Stateless, f1: Nat,
     enough: Succ(Succ(cat_budget(n, k) + n)) <= Succ(f1), a: ReadResult):
     Contract::linux().valid(ReadCmd(BitVec::ofNat(0), c.min(buf.len())), a) →
     ITree::LinuxSimK<Flow, BitVec(64)>(λ x w => ITree::LinuxSimK(cat_outer_after(n, k), cat_read_tail().then_rest(call, n, x), w),
-        Ret(Onward(Reads(0, 0, 2, 3).answer(cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf), a))),
+        Ret(Onward(Reads(0, 0, 2, 3).answer(cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf), a))),
         cat_spec_read(st, f1, a))
 {
     match a {
@@ -565,7 +565,7 @@ theorem cat_read_answer(call: Answers(), n, k: Nat, c, r, sent, left, w6, w7, w8
             },
             Cons(b0, bs) => λ (valid: Succ(bs.len()) <= c.min(buf.len())) => {
                 let whole: (c.min(buf.len()) = c) = j(sym(size), λ x _ => c.min(x) = c, Nat::min_eq_l(c, c, c.le_refl()));
-                cat_read_some(call, n, k, c, w6, w12, w13, w14, w17, w18, buf, size, pos, small, st, f1, enough, b0, bs,
+                cat_read_some(args, call, n, k, c, w6, w12, w13, w14, w17, w18, buf, size, pos, small, st, f1, enough, b0, bs,
                     j(whole, λ x _ => Succ(bs.len()) <= x, valid))
             },
         },
@@ -573,42 +573,42 @@ theorem cat_read_answer(call: Answers(), n, k: Nat, c, r, sent, left, w6, w7, w8
             let w3 = errno_word(e).toNat();
             let w0 = cat_spec_read(st, f1, ReadFailed(e));
             let out: cat_done(Exited(BitVec::ofNat(1)), w0) = SimRet(BitVec::ofNat(1), refl, refl);
-            Stmt::sim_branch_true(7, Exit(10), cat_ended(), call, n, cat_read(c, w3, sent, left, w6, w12, w13, w14, w17, w18, buf),
+            Stmt::sim_branch_true(7, Exit(10), cat_ended(), call, n, cat_read(args, c, w3, sent, left, w6, w12, w13, w14, w17, w18, buf),
                 cat_outer_after(n, k), w0, trans(cat_bit_read(read_failed(w3)), cat_errno_negative(e, valid)), out)
         },
     }
 }
 
 // The read itself: the spec reads too, without a size.
-theorem cat_read_call(call: Answers(), n, k: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
+theorem cat_read_call(args: List<List<BitVec(8)>>, call: Answers(), n, k: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
     buf: List<BitVec(8)>, size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), st: Stateless, f1: Nat,
     enough: Succ(Succ(cat_budget(n, k) + n)) <= Succ(f1), v: ITree<BitVec(64)>(Events::linux_spec()),
     spec: ITree::next(Events::linux_spec(), v) = ITree::next(Events::linux_spec(), cat_spec(Succ(f1), Reading(st)))):
     ITree::LinuxSimK(cat_outer_after(n, k), cat_pass().denote(call, n,
-        cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
+        cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
 {
-    let env = cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf);
+    let env = cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf);
     let whole: (c.min(buf.len()) = c) = j(sym(size), λ x _ => c.min(x) = c, Nat::min_eq_l(c, c, c.le_refl()));
     let asks: (0 < c.min(buf.len())) = j(sym(whole), λ x _ => 0 < x, pos);
     let calls: SimVis<BitVec(64)>(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(),
             ReadCmd(BitVec::ofNat(0), c.min(buf.len())), v,
             λ a w => ITree::LinuxSimK<Flow, BitVec(64)>(λ x w2 => ITree::LinuxSimK(cat_outer_after(n, k), cat_read_tail().then_rest(call, n, x), w2),
                 Ret(Onward(Reads(0, 0, 2, 3).answer(env, a))), w)) =
-        SimVis(asks, cat_spec_read(st, f1), spec, λ a valid => cat_read_answer(call, n, k, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
+        SimVis(asks, cat_spec_read(st, f1), spec, λ a valid => cat_read_answer(args, call, n, k, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
             buf, size, pos, small, st, f1, enough, a, valid));
     Stmt::sim_then(Invoke(Reads(0, 0, 2, 3)), cat_read_tail(), call, n, env, cat_outer_after(n, k), v, calls)
 }
 
-theorem cat_read_head(call: Answers(), n, k: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
+theorem cat_read_head(args: List<List<BitVec(8)>>, call: Answers(), n, k: Nat, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18: Nat,
     buf: List<BitVec(8)>, size: buf.len() = c, pos: 0 < c, small: c < Nat::pow(2, 63), st: Stateless,
     v: ITree<BitVec(64)>(Events::linux_spec()), fuel: Nat): cat_budget(n, Succ(k)) <= fuel →
     ITree::next(Events::linux_spec(), v) = ITree::next(Events::linux_spec(), cat_spec(fuel, Reading(st))) →
     ITree::LinuxSimK(cat_outer_after(n, k), cat_pass().denote(call, n,
-        cat_env(c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
+        cat_env(args, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18, buf)), v)
 {
     match fuel {
         Zero => λ (no: False) spec => false_elim(no),
-        Succ(f1) => λ enough spec => cat_read_call(call, n, k, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
+        Succ(f1) => λ enough spec => cat_read_call(args, call, n, k, c, r, sent, left, w6, w7, w8, w12, w13, w14, w17, w18,
             buf, size, pos, small, st, f1, enough, v, spec),
     }
 }
@@ -617,7 +617,7 @@ theorem cat_read_pass(call: Answers(), n, k: Nat, env: Env, v: ITree<BitVec(64)>
     i: CatReading(n, Succ(k), env, v)): ITree::LinuxSimK(cat_outer_after(n, k), cat_pass().denote(call, n, env), v)
 {
     j(sym(i.at), λ e _ => ITree::LinuxSimK(cat_outer_after(n, k), cat_pass().denote(call, n, e), v),
-        cat_read_head(call, n, k, i.c, i.r, i.sent, i.left, i.w6, i.w7, i.w8, i.w12, i.w13, i.w14, i.w17, i.w18,
+        cat_read_head(env.args, call, n, k, i.c, i.r, i.sent, i.left, i.w6, i.w7, i.w8, i.w12, i.w13, i.w14, i.w17, i.w18,
             i.buf, i.size, i.pos, i.small, i.st, v, i.fuel, i.enough, i.spec))
 }
 
@@ -626,15 +626,15 @@ theorem cat_read_pass(call: Answers(), n, k: Nat, env: Env, v: ITree<BitVec(64)>
 
 // At source fuel `n`, the spec at `cat_budget(n, n)` simulates cat: the
 // setup leaves cat at its outer loop's head with all `n` passes to go.
-theorem cat_simulates_at(capacity: Nat, pos: 0 < capacity, small: capacity < Nat::pow(2, 63), n: Nat):
+theorem cat_simulates_at(args: List<List<BitVec(8)>>, capacity: Nat, pos: 0 < capacity, small: capacity < Nat::pow(2, 63), n: Nat):
     ITree::Sim(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(), λ x y => x = y,
-        cat(capacity).denote().at(n), tr_spec(λ (b: BitVec(8)) => b).at(cat_budget(n, n)))
+        cat(capacity).denote(args).at(n), tr_spec(λ (b: BitVec(8)) => b).at(cat_budget(n, n)))
 {
     let call = program_eval(cat(capacity).functions);
     let c = BitVec::ofNat(capacity, n := 64).toNat();
     let hc: (c = capacity) = cat_word_back(capacity, small);
     let buf = List::replicate(zero_byte(), capacity);
-    let env0 = cat_env(c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, buf);
+    let env0 = cat_env(args, c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, buf);
     let v0 = tr_spec(λ (b: BitVec(8)) => b).at(cat_budget(n, n));
     let head: CatReading(n, n, env0, v0) = CatReading(c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, buf, refl,
         trans(List::len_replicate(zero_byte(), capacity), sym(hc)), j(sym(hc), λ x _ => 0 < x, pos),
@@ -647,23 +647,23 @@ theorem cat_simulates_at(capacity: Nat, pos: 0 < capacity, small: capacity < Nat
 }
 
 // cat implements `tr` of the identity, at every capacity it can report.
-theorem cat_implements(capacity: Nat, pos: 0 < capacity, small: capacity < Nat::pow(2, 63)):
-    Program::Implements(cat(capacity).denote(), tr_spec(λ (b: BitVec(8)) => b))
+theorem cat_implements(args: List<List<BitVec(8)>>, capacity: Nat, pos: 0 < capacity, small: capacity < Nat::pow(2, 63)):
+    Program::Implements(cat(capacity).denote(args), tr_spec(λ (b: BitVec(8)) => b))
 {
-    Program::implements_of_simulates(cat(capacity).denote(), tr_spec(λ (b: BitVec(8)) => b),
+    Program::implements_of_simulates(cat(capacity).denote(args), tr_spec(λ (b: BitVec(8)) => b),
         Program::simulates_at(Events::linux(), Events::linux_spec(), TraceMap::linux_forget(), Contract::linux(),
-            cat(capacity).denote(), tr_spec(λ (b: BitVec(8)) => b), λ n => cat_budget(n, n),
-            λ n => cat_simulates_at(capacity, pos, small, n)))
+            cat(capacity).denote(args), tr_spec(λ (b: BitVec(8)) => b), λ n => cat_budget(n, n),
+            λ n => cat_simulates_at(args, capacity, pos, small, n)))
 }
 
 // So what cat sends to stdout, along any run Linux can give it that exits 0,
 // is exactly what it read from stdin.
-theorem cat_sends(capacity: Nat, pos: 0 < capacity, small: capacity < Nat::pow(2, 63), tr: Trace<BitVec(64)>(Events::linux()),
-    produces: Program::Produces(Events::linux(), cat(capacity).denote(), tr), valid: Trace::LinuxValid(tr),
+theorem cat_sends(args: List<List<BitVec(8)>>, capacity: Nat, pos: 0 < capacity, small: capacity < Nat::pow(2, 63), tr: Trace<BitVec(64)>(Events::linux()),
+    produces: Program::Produces(Events::linux(), cat(capacity).denote(args), tr), valid: Trace::LinuxValid(tr),
     returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok())):
     Trace::sent<Nat, BitVec(64)>(BitVec::ofNat(1), tr) = Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr)
 {
     trans(filter_implementation_sends(BitVec::ofNat(0), BitVec::ofNat(1), mapping(λ (b: BitVec(8)) => b), Stateless(),
-            cat(capacity).denote(), cat_implements(capacity, pos, small), tr, produces, valid, returns),
+            cat(capacity).denote(args), cat_implements(args, capacity, pos, small), tr, produces, valid, returns),
         cat_emitted(Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr), Stateless()))
 }

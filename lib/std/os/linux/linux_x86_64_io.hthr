@@ -18,6 +18,7 @@ import x86_64_fetched_code;
 import x86_64_store;
 import x86_64_stack;
 import option;
+import bool;
 import bitvec;
 import bitvec_nat;
 import list;
@@ -158,23 +159,147 @@ fn CStringAt<M>(data: ByteReadAccess<M>, memory: M, address: BitVec(64), path: L
 // initial RSP, argc, then a pointer to each argument (argv[0] included), then
 // a null word, as the x86-64 psABI lays them out; each argument a C string
 // at a pointer that is not null, so the null word is the first null one.
-// The k-th word is at RSP + 8k, by value. Every word and string lies below
-// the canonical boundary, so a word load or a byte load reaches it. Envp and
-// auxv are past the null word and not named.
+// The k-th word is at RSP + 8k, its bytes read low first. The words and
+// every string lie below the canonical boundary, so a word load or a byte
+// load reaches them, and the words' addresses do not wrap. Envp and auxv
+// are past the null word and not named.
 fn WordAt<M>(data: ByteReadAccess<M>, memory: M, address, word: BitVec(64)) → Type {
     (address.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(data, memory, address) = Some(word))
+}
+fn WordBytesAt<M>(data: ByteReadAccess<M>, memory: M, address, word: BitVec(64)) → Type {
+    (address.toNat() + 8 <= Nat::pow(2, 47)) ∧
+    ((t: Nat) → (byte: BitVec(8)) → word_bytes(word).nth(t) = Some(byte) → data.read(memory, next_rip(address, t)) = Some(byte))
 }
 fn argv_slot(rsp: BitVec(64), k: Nat) → BitVec(64) { bitvec_nat::word_of_nat(64, rsp.toNat() + 8 * k) }
 fn ArgvFrom<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), args: List<List<BitVec(8)>>) → Nat → Type {
     match args {
-        Nil => λ k => WordAt(data, memory, argv_slot(rsp, k), BitVec::zero()),
-        Cons(arg, rest) => λ k => Exists<BitVec(64)>(λ pointer => WordAt(data, memory, argv_slot(rsp, k), pointer) ∧
+        Nil => λ k => WordBytesAt(data, memory, argv_slot(rsp, k), BitVec::zero()),
+        Cons(arg, rest) => λ k => Exists<BitVec(64)>(λ pointer => WordBytesAt(data, memory, argv_slot(rsp, k), pointer) ∧
             ((0 < pointer.toNat()) ∧ ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧
             (CStringAt(data, memory, pointer, arg) ∧ ArgvFrom(data, memory, rsp, rest, Succ(k)))))),
     }
 }
 fn ArgvAt<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), args: List<List<BitVec(8)>>) → Type {
-    WordAt(data, memory, rsp, bitvec_nat::word_of_nat(64, args.len())) ∧ ArgvFrom(data, memory, rsp, args, 1)
+    (rsp.toNat() + 8 * (args.len() + 2) <= Nat::pow(2, 47)) ∧
+    (WordBytesAt(data, memory, rsp, bitvec_nat::word_of_nat(64, args.len())) ∧ ArgvFrom(data, memory, rsp, args, 1))
+}
+
+// An access that reads only at or above `floor`: the command line as
+// something above a region a program writes sees it.
+fn ByteReadAccess::above<M>(self data: ByteReadAccess<M>, floor: Nat) → ByteReadAccess<M> {
+    ByteReadAccess(λ (memory: M) (a: BitVec(64)) => match floor.leb(a.toNat()) { True => data.read(memory, a), False => None })
+}
+
+theorem ByteReadAccess::above_read<M>(self data: ByteReadAccess<M>, floor: Nat, memory: M, a: BitVec(64), byte: BitVec(8),
+    got: data.above(floor).read(memory, a) = Some(byte)): (floor <= a.toNat()) ∧ (data.read(memory, a) = Some(byte)) {
+    (match floor.leb(a.toNat()) as λ b => floor.leb(a.toNat()) = b →
+            (match b { True => data.read(memory, a), False => None }) = Some(byte) → (floor <= a.toNat()) ∧ (data.read(memory, a) = Some(byte)) {
+        True => λ low read => ⟨floor.leb_sound(a.toNat(), j(sym(low), λ x _ => x.IsTrue(), trivial)), read⟩,
+        False => λ _ none => absurd(none),
+    })(refl, got)
+}
+
+// Every byte one access reads at one memory, another reads alike at
+// another: the command line read through the first is read through the
+// second.
+fn ReadsKept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M) → Type {
+    (a: BitVec(64)) → (byte: BitVec(8)) → data.read(memory, a) = Some(byte) → other.read(later, a) = Some(byte)
+}
+
+theorem word_bytes_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+    address, word: BitVec(64), at: WordBytesAt(data, memory, address, word)): WordBytesAt(other, later, address, word) {
+    ⟨at.left, λ t byte found => kept(next_rip(address, t), byte, at.right(t, byte, found))⟩
+}
+
+theorem cstring_from_kept(path: List<BitVec(8)>): (source, target: Nat → Option<BitVec(8)>) →
+    ((i: Nat) → (byte: BitVec(8)) → source(i) = Some(byte) → target(i) = Some(byte)) → CStringFrom(path, source) → CStringFrom(path, target) {
+    match path {
+        Nil => λ source target kept at => kept(0, BitVec::ofNat(0), at),
+        Cons(byte, rest) => λ source target kept at => ⟨kept(0, byte, at.left), ⟨at.right.left,
+            cstring_from_kept(rest, λ i => source(Succ(i)), λ i => target(Succ(i)), λ i b got => kept(Succ(i), b, got), at.right.right)⟩⟩,
+    }
+}
+
+theorem cstring_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+    address: BitVec(64), path: List<BitVec(8)>, at: CStringAt(data, memory, address, path)): CStringAt(other, later, address, path) {
+    cstring_from_kept(path, λ i => data.read(memory, bitvec_nat::word_of_nat(64, address.toNat() + i)),
+        λ i => other.read(later, bitvec_nat::word_of_nat(64, address.toNat() + i)),
+        λ i b got => kept(bitvec_nat::word_of_nat(64, address.toNat() + i), b, got), at)
+}
+
+theorem argv_from_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+    rsp: BitVec(64), args: List<List<BitVec(8)>>): (k: Nat) → ArgvFrom(data, memory, rsp, args, k) → ArgvFrom(other, later, rsp, args, k) {
+    match args {
+        Nil => λ k at => word_bytes_at_kept(data, memory, other, later, kept, argv_slot(rsp, k), BitVec::zero(), at),
+        Cons(arg, rest) => λ k at => Exists(at.witness, ⟨word_bytes_at_kept(data, memory, other, later, kept, argv_slot(rsp, k), at.witness, at.proof.left),
+            ⟨at.proof.right.left, ⟨at.proof.right.right.left,
+             ⟨cstring_at_kept(data, memory, other, later, kept, at.witness, arg, at.proof.right.right.right.left),
+              argv_from_kept(data, memory, other, later, kept, rsp, rest, Succ(k), at.proof.right.right.right.right)⟩⟩⟩⟩),
+    }
+}
+
+theorem argv_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+    rsp: BitVec(64), args: List<List<BitVec(8)>>, at: ArgvAt(data, memory, rsp, args)): ArgvAt(other, later, rsp, args) {
+    ⟨at.left, ⟨word_bytes_at_kept(data, memory, other, later, kept, rsp, bitvec_nat::word_of_nat(64, args.len()), at.right.left),
+        argv_from_kept(data, memory, other, later, kept, rsp, args, 1, at.right.right)⟩⟩
+}
+
+// A word's eight bytes read as it.
+theorem word_bytes_at_read<M>(data: ByteReadAccess<M>, memory: M, address, word: BitVec(64), at: WordBytesAt(data, memory, address, word)):
+    WordAt(data, memory, address, word) {
+    let b = λ (t: Nat) (c: BitVec(8)) (found: word_bytes(word).nth(t) = Some(c)) => at.right(t, c, found);
+    ⟨at.left, trans(word_of_eight(data.read(memory, address), data.read(memory, next_rip(address, 1)), data.read(memory, next_rip(address, 2)),
+            data.read(memory, next_rip(address, 3)), data.read(memory, next_rip(address, 4)), data.read(memory, next_rip(address, 5)),
+            data.read(memory, next_rip(address, 6)), data.read(memory, next_rip(address, 7)),
+            imm_byte0(word), imm_byte1(word), imm_byte2(word), imm_byte3(word), imm_byte4(word), imm_byte5(word), imm_byte6(word), imm_byte7(word),
+            b(0, imm_byte0(word), refl),
+            b(1, imm_byte1(word), refl), b(2, imm_byte2(word), refl), b(3, imm_byte3(word), refl),
+            b(4, imm_byte4(word), refl), b(5, imm_byte5(word), refl), b(6, imm_byte6(word), refl), b(7, imm_byte7(word), refl)),
+        cong_fn<BitVec(64), Option<BitVec(64)>>(λ w => Some(w), immediate_bytes_roundtrip(word)))⟩
+}
+
+// Argument `k`, from the slot `from + k`: its pointer, and its string there.
+theorem argv_from_nth<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), args: List<List<BitVec(8)>>): (from, k: Nat) → (arg: List<BitVec(8)>) →
+    args.nth(k) = Some(arg) → ArgvFrom(data, memory, rsp, args, from) →
+    Exists<BitVec(64)>(λ pointer => WordBytesAt(data, memory, argv_slot(rsp, from + k), pointer) ∧
+        ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧ CStringAt(data, memory, pointer, arg))) {
+    match args {
+        Nil => λ from k arg none _ => absurd(none),
+        Cons(first, rest) => λ from k => match k {
+            Zero => λ arg same at => {
+                let is: (first = arg) = Option::some_inj(first, arg, same);
+                j(is, λ x _ => Exists<BitVec(64)>(λ pointer => WordBytesAt(data, memory, argv_slot(rsp, from + 0), pointer) ∧
+                        ((pointer.toNat() + x.len() + 1 <= Nat::pow(2, 47)) ∧ CStringAt(data, memory, pointer, x))),
+                    Exists(at.witness, ⟨at.proof.left, ⟨at.proof.right.right.left, at.proof.right.right.right.left⟩⟩))
+            },
+            Succ(l) => λ arg found at => {
+                let later = argv_from_nth(data, memory, rsp, rest, Succ(from), l, arg, found, at.proof.right.right.right.right);
+                j(Nat::add_succ_left(from, l), λ i _ => Exists<BitVec(64)>(λ pointer => WordBytesAt(data, memory, argv_slot(rsp, i), pointer) ∧
+                        ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧ CStringAt(data, memory, pointer, arg))), later)
+            },
+        },
+    }
+}
+
+// A string's byte `i`, not NUL, and the NUL after its last.
+theorem cstring_byte(path: List<BitVec(8)>): (source: Nat → Option<BitVec(8)>) → CStringFrom(path, source) →
+    (i: Nat) → (byte: BitVec(8)) → path.nth(i) = Some(byte) → (source(i) = Some(byte)) ∧ Not(byte = BitVec::ofNat(0)) {
+    match path {
+        Nil => λ source at i byte none => absurd(none),
+        Cons(first, rest) => λ source at i => match i {
+            Zero => λ byte same => j(Option::some_inj(first, byte, same), λ b _ => (source(0) = Some(b)) ∧ Not(b = BitVec::ofNat(0)),
+                ⟨at.left, at.right.left⟩),
+            Succ(l) => λ byte found => cstring_byte(rest, λ n => source(Succ(n)), at.right.right, l, byte, found),
+        },
+    }
+}
+
+theorem cstring_end(path: List<BitVec(8)>): (source: Nat → Option<BitVec(8)>) → CStringFrom(path, source) →
+    source(path.len()) = Some(BitVec::ofNat(0)) {
+    match path {
+        Nil => λ source at => at,
+        Cons(first, rest) => λ source at => cstring_end(rest, λ n => source(Succ(n)), at.right.right),
+    }
 }
 
 // openat(AT_FDCWD, path, O_RDONLY) and close(fd) return in RAX, as a write

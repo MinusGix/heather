@@ -106,6 +106,7 @@ impl Printer<'_> {
                 (format!("Repeat({body}, {again})"), 1 + a)
             }
             5 => (format!("Exit({})", self.reader.next()?), 1),
+            6 => (format!("Arg({})", join(&self.reader.take(3)?)), 1),
             tag => return Err(format!("statement tag {tag}")),
         };
         if size <= LIMIT { return Ok((text, size)); }

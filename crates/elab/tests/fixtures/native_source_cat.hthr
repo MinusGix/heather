@@ -73,23 +73,23 @@ fn byte(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 // a time used to run out of fuel).
 
 // Nothing in, nothing out.
-theorem cat_empty(): world_run(1, False, cat(2).denote().at(3), Nil, Nil) = Finished(BitVec::ofNat(0), Nil) { refl }
+theorem cat_empty(): world_run(1, False, cat(2).denote([]).at(3), Nil, Nil) = Finished(BitVec::ofNat(0), Nil) { refl }
 
 // One byte, read and written.
-theorem cat_copies_one(): world_run(1, False, cat(2).denote().at(6), [byte(7)], Nil)
+theorem cat_copies_one(): world_run(1, False, cat(2).denote([]).at(6), [byte(7)], Nil)
     = Finished(BitVec::ofNat(0), [byte(7)]) { refl }
 
 // Three bytes, one read and one write each.
-theorem cat_copies_three(): world_run(1, False, cat(2).denote().at(14), [byte(1), byte(2), byte(3)], Nil)
+theorem cat_copies_three(): world_run(1, False, cat(2).denote([]).at(14), [byte(1), byte(2), byte(3)], Nil)
     = Finished(BitVec::ofNat(0), [byte(1), byte(2), byte(3)]) { refl }
 
 // A whole buffer at a time.
-theorem cat_copies_whole(): world_run(2, False, cat(2).denote().at(6), [byte(104), byte(105)], Nil)
+theorem cat_copies_whole(): world_run(2, False, cat(2).denote([]).at(6), [byte(104), byte(105)], Nil)
     = Finished(BitVec::ofNat(0), [byte(104), byte(105)]) { refl }
 
 // A write that fails ends cat with status 1, having sent nothing.
-theorem cat_write_fails(): world_run(2, True, cat(2).denote().at(6), [byte(1)], Nil)
+theorem cat_write_fails(): world_run(2, True, cat(2).denote([]).at(6), [byte(1)], Nil)
     = Finished(BitVec::ofNat(1), Nil) { refl }
 
 // Too little fuel cuts the run.
-theorem cat_cut(): world_run(1, False, cat(2).denote().at(1), [byte(1)], Nil) = RanOut { refl }
+theorem cat_cut(): world_run(1, False, cat(2).denote([]).at(1), [byte(1)], Nil) = RanOut { refl }

@@ -1,11 +1,11 @@
 ---
 title: Give native programs their command line
-status: open
+status: closed
 labels: [native,x86,proofs]
 area: heather-in-heather
 milestone: [hih-tools]
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 Round 6 of `docs/native-real-programs-plan.md` (§3.5, §6). A `Source` has no
@@ -33,3 +33,7 @@ need argv.
 
 - **[[io-image-process-stack]]** owns the profile's stack region.
 - **[[native-source-bytes]]** owns constant bytes (the space and newline).
+
+## Log
+
+- 2026-10-27: Done: `Source::denote(args)` with `Env.args`; `Stmt::Arg(index, buf, len)` copies argv[k]'s prefix that fits and its whole length, or −1 past the last (no argc word: a program counts by asking past the end). Compiled by `Prog::args` (RSP saved at entry past the scratch range, argc/argv read through it, a byte loop to the NUL), proved in native_compile_args; `Placed` carries the command line (`Target::Stacked`). The ELF theorem takes `LoadedFrom(file)` below 0x412000 and `ArgvAt` above it at the entry RSP. Builder `arg(index, buf, len)`; `echo_source` (GNU echo, no flags) and `yes_args_source` (GNU yes) in native_tools.hthr, run against GNU in crates/cli/tests/native_tools.rs. An argument past its buffer exits 1 (Arg has no offset). The stack region itself stays with [[io-image-process-stack]].

@@ -60,7 +60,7 @@ theorem Env::buffer_byte_is(self env: Env, buf, i: Nat): buffer_byte(env.buffers
 }
 
 theorem Env::buffer_stored_here(self env: Env, buf, i: Nat, c: BitVec(8)):
-    Env(env.words, store_byte(env.buffers, buf, i, c)).buffer(buf) = env.buffer(buf).update(i, λ _ => c) {
+    Env(env.words, store_byte(env.buffers, buf, i, c), env.args).buffer(buf) = env.buffer(buf).update(i, λ _ => c) {
     let f = λ (bytes: List<BitVec(8)>) => bytes.update(i, λ _ => c);
     (match env.buffers.nth(buf) as λ o => env.buffers.nth(buf) = o →
             (match env.buffers.update(buf, f).nth(buf) as λ _ => List<BitVec(8)> { None => Nil, Some(bytes) => bytes }) =
@@ -73,7 +73,7 @@ theorem Env::buffer_stored_here(self env: Env, buf, i: Nat, c: BitVec(8)):
 }
 
 theorem Env::buffer_stored_other(self env: Env, buf, i: Nat, c: BitVec(8), b: Nat, ne: b ≠ buf):
-    Env(env.words, store_byte(env.buffers, buf, i, c)).buffer(b) = env.buffer(b) {
+    Env(env.words, store_byte(env.buffers, buf, i, c), env.args).buffer(b) = env.buffer(b) {
     cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(λ o => match o { None => Nil, Some(bytes) => bytes },
         env.buffers.nth_update_other(buf, λ (bytes: List<BitVec(8)>) => bytes.update(i, λ _ => c), b, ne))
 }
@@ -98,12 +98,12 @@ theorem cells_update(v, w: Nat → BitVec(8), c: BitVec(8), n: Nat): (o, i: Nat)
 // A byte stored inside its buffer keeps the environment with that byte set.
 theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat → BitVec(8), keeps: layout.Keeps(env, v),
     buf, cap: Nat, found: layout.capacities.nth(buf) = Some(cap), i: Nat, below: i < cap, c: BitVec(8)):
-    layout.Keeps(Env(env.words, store_byte(env.buffers, buf, i, c)), r.stored_cells(v, layout.buffer_offset(buf) + i, [c])) {
+    layout.Keeps(Env(env.words, store_byte(env.buffers, buf, i, c), env.args), r.stored_cells(v, layout.buffer_offset(buf) + i, [c])) {
     let o = layout.buffer_offset(buf);
     let q = o + i;
     let w = r.stored_cells(v, q, [c]);
     let ends = layout.buffer_end(buf, cap, found);
-    let after = Env(env.words, store_byte(env.buffers, buf, i, c));
+    let after = Env(env.words, store_byte(env.buffers, buf, i, c), env.args);
     let apart = λ (p: Nat) (ne: p ≠ q) => r.cells_outside(v, q, [c], p, match p.lt_or_ge(q) {
         Inl(under) => Inl(under),
         Inr(over) => {
@@ -145,31 +145,34 @@ theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat 
 // The byte stored at its address: the environment placed with it set.
 theorem Target::placed_byte(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), i: Nat, below: i < cap, c: BitVec(8)):
-    t.Placed(Env(env.words, store_byte(env.buffers, buf, i, c)), t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [c])) {
+    t.Placed(Env(env.words, store_byte(env.buffers, buf, i, c), env.args), t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [c])) {
     let v = placed.witness;
     let o = t.layout().buffer_offset(buf);
     let fits: (o + i + 1 <= t.r.size) = omega(t.layout().buffer_end(buf, cap, found), t.scratch_fits(), below);
+    let stack: (t.layout().stack_offset() = t.layout().scratch_offset() + t.caps.largest()) = refl;
+    let under: (o + i + 1 <= t.layout().stack_offset()) = omega(t.layout().buffer_end(buf, cap, found), stack, below);
     Exists(t.r.stored_cells(v, o + i, [c]),
         ⟨t.r.store_holds(v, m, placed.proof.left, o + i, [c], fits),
-         t.layout().keeps_byte(t.r, env, v, placed.proof.right, buf, cap, found, i, below, c)⟩)
+         ⟨t.layout().keeps_byte(t.r, env, v, placed.proof.right.left, buf, cap, found, i, below, c),
+          t.stacked_store(env, v, m, o + i, [c], under, placed.proof.right.right)⟩⟩)
 }
 
 // A store past the buffer's end leaves the environment placed as it was.
 theorem Target::placed_past(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), i: Nat, past: cap <= i, c: BitVec(8)):
-    t.Placed(Env(env.words, store_byte(env.buffers, buf, i, c)), m) {
+    t.Placed(Env(env.words, store_byte(env.buffers, buf, i, c), env.args), m) {
     let v = placed.witness;
-    let keeps = placed.proof.right;
+    let keeps = placed.proof.right.left;
     let layout = t.layout();
-    let after = Env(env.words, store_byte(env.buffers, buf, i, c));
+    let after = Env(env.words, store_byte(env.buffers, buf, i, c), env.args);
     let len = layout.keeps_buffer_len(env, v, keeps, buf, cap, found);
     let same: (after.buffer(buf) = env.buffer(buf)) = trans(env.buffer_stored_here(buf, i, c),
         env.buffer(buf).update_past(i, λ _ => c, j(sym(len), λ n _ => n <= i, past)));
-    Exists(v, ⟨placed.proof.left, ⟨λ k inside => keeps.left(k, inside), λ b cb found_b => match b.eq_dec(buf) {
+    Exists(v, ⟨placed.proof.left, ⟨⟨λ k inside => keeps.left(k, inside), λ b cb found_b => match b.eq_dec(buf) {
         Inl(here) => (j(sym(here), λ x _ => layout.capacities.nth(x) = Some(cb) → after.buffer(x) = cells_at(v, layout.buffer_offset(x), cb),
             λ found_here => trans(same, keeps.right(buf, cb, found_here))))(found_b),
         Inr(other) => trans(env.buffer_stored_other(buf, i, c, b, other), keeps.right(b, cb, found_b)),
-    }⟩⟩)
+    }⟩, placed.proof.right.right⟩⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +249,7 @@ theorem Target::goes_byte_to(self t: Target, env: Env, p: Prog, buf, index, cap,
     let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ ((read_gpr(Rcx, g) = w) ∧
         ((read_gpr(Rax, g) = BitVec::ofNat(0)) ∧ ((f.cf = w.borrow_sub_bit(BitVec::ofNat(cap))) ∧ then_q(m))));
     let cap_is = t.cap_word(buf, cap, found);
-    let len = λ (m: X86Memory(t.r.profile)) (placed: t.Placed(env, m)) => layout.keeps_buffer_len(env, placed.witness, placed.proof.right, buf, cap, found);
+    let len = λ (m: X86Memory(t.r.profile)) (placed: t.Placed(env, m)) => layout.keeps_buffer_len(env, placed.witness, placed.proof.right.left, buf, cap, found);
     let lands = t.program.lands_jcc(t.laid, w_jcc.witness, cmp, 0, AE, n, w_jcc.proof, within.witness, loaded, Block([]), within.proof);
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, cmp, 0, AE, Succ(n), w_jcc.proof, prog_len(loaded), lands, tree, pre,
         λ u here resident held => {
@@ -277,7 +280,7 @@ theorem Target::goes_byte_to(self t: Target, env: Env, p: Prog, buf, index, cap,
             let at: (layout.buffer_at(buf).add(read_gpr(Rcx, u.gprs)) = next_rip(t.r.low, o + i)) =
                 trans(cong_fn<BitVec(64), BitVec(64)>(λ x => layout.buffer_at(buf).add(x), hp.right.left), t.byte_address(buf, cap, found, w, below));
             let byte_is: (buffer_byte(env.buffers, buf, i) = v(o + i)) = trans(env.buffer_byte_is(buf, i),
-                trans(cong_fn<List<BitVec(8)>, BitVec(8)>(λ bytes => bytes.get_or(i, BitVec::zero()), hp.left.proof.right.right(buf, cap, found)),
+                trans(cong_fn<List<BitVec(8)>, BitVec(8)>(λ bytes => bytes.get_or(i, BitVec::zero()), hp.left.proof.right.left.right(buf, cap, found)),
                     cells_at(v, o, cap).get_or_some(i, BitVec::zero(), v(o + i), cells_nth(v, cap, o, i, below))));
             let rax: (byte_word(v(o + i)) = wanted) = cong_fn<BitVec(8), BitVec(64)>(λ c => byte_word(c), sym(byte_is));
             let s1 = execute_block_normal(adds, u);
@@ -320,7 +323,7 @@ theorem Target::goes_loads(self t: Target, env, other: Env, p: Prog, output, buf
 // The environment with the word `value`'s low byte at the word `index` of
 // buffer `buf`, as the source stores it.
 fn Env::store_at(self env: Env, buf, index, value: Nat) → Env {
-    Env(env.words, store_byte(env.buffers, buf, env.word(index).toNat(), low_byte(env.word(value))))
+    Env(env.words, store_byte(env.buffers, buf, env.word(index).toNat(), low_byte(env.word(value))), env.args)
 }
 
 theorem Prog::byte_from_within(self p: Prog, layout: Layout, buf, index, value, cap, skip: Nat, program: Prog,
@@ -452,7 +455,7 @@ theorem Target::goes_stores(self t: Target, env, other: Env, p: Prog, output, bu
 // What a leaf computes, as `Env::compute` runs a `Dataflow` region.
 fn Env::computes(self env: Env, nodes: List<Node>) → Env {
     let after = run_nodes(nodes, env.valuation(), env.buffers);
-    Env(env.words, after.buffers).settle(after.values, nodes_write_ports(nodes))
+    Env(env.words, after.buffers, env.args).settle(after.values, nodes_write_ports(nodes))
 }
 
 theorem Env::computes_load(self env: Env, output, buf, index: Nat):
@@ -588,13 +591,13 @@ theorem Prog::within_inits(layout: Layout, buffers: List<Buffer>): (buf: Nat) �
 // Byte `c` stored at index `i` of buffer `buf`, inside it.
 theorem Target::goes_byte_init(self t: Target, env: Env, p: Prog, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), i: Nat, below: i < cap,
     c: BitVec(8), within: p.byte_init(t.layout(), buf, i, c).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(p.byte_init(t.layout(), buf, i, c)), tree, Env(env.words, store_byte(env.buffers, buf, i, c)))): t.At(prog_len(p), tree, env) {
+    next: t.At(prog_len(p.byte_init(t.layout(), buf, i, c)), tree, Env(env.words, store_byte(env.buffers, buf, i, c), env.args))): t.At(prog_len(p), tree, env) {
     let layout = t.layout();
     let o = layout.buffer_offset(buf);
     let movs: List<Instruction> = [MovRI(Rbx, layout.byte_at(buf, i)), MovRI(Rax, byte_word(c))];
     let moved = then(p, Block(movs));
     let store = ByteStore(Rbx, Rax);
-    let after = Env(env.words, store_byte(env.buffers, buf, i, c));
+    let after = Env(env.words, store_byte(env.buffers, buf, i, c), env.args);
     let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(after, u.memory);
     let wrote = t.goes_store_byte(moved, 0, store, within, tree, post, next);
     let pre_store = λ (u: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(store.base) = True) ∧
@@ -620,11 +623,11 @@ theorem Target::goes_byte_init(self t: Target, env: Env, p: Prog, buf, cap: Nat,
 // Bytes stored past a buffer's end leave the environment placed as it was.
 theorem Target::placed_stored_past(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), bytes: List<BitVec(8)>):
     (i: Nat) → (env: Env) → (m: X86Memory(t.r.profile)) → cap <= i → t.Placed(env, m) →
-    t.Placed(Env(env.words, bytes.stored(buf, i, env.buffers)), m) {
+    t.Placed(Env(env.words, bytes.stored(buf, i, env.buffers), env.args), m) {
     match bytes {
         Nil => λ i env m past placed => placed,
         Cons(c, rest) => λ i env m past placed =>
-            t.placed_stored_past(buf, cap, found, rest, Succ(i), Env(env.words, store_byte(env.buffers, buf, i, c)), m, omega(past), t.placed_past(env, m, placed, buf, cap, found, i, past, c)),
+            t.placed_stored_past(buf, cap, found, rest, Succ(i), Env(env.words, store_byte(env.buffers, buf, i, c), env.args), m, omega(past), t.placed_past(env, m, placed, buf, cap, found, i, past, c)),
     }
 }
 
@@ -633,7 +636,7 @@ theorem Target::placed_stored_past(self t: Target, buf, cap: Nat, found: t.caps.
 theorem Target::goes_bytes_init(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), tree: ITree<BitVec(64)>(Events::linux()),
     bytes: List<BitVec(8)>): (room, i: Nat) → (p: Prog) → (env: Env) → i + room = cap →
     p.bytes_init(t.layout(), bytes, room, buf, i).Within(t.program) →
-    t.At(prog_len(p.bytes_init(t.layout(), bytes, room, buf, i)), tree, Env(env.words, bytes.stored(buf, i, env.buffers))) →
+    t.At(prog_len(p.bytes_init(t.layout(), bytes, room, buf, i)), tree, Env(env.words, bytes.stored(buf, i, env.buffers), env.args)) →
     t.At(prog_len(p), tree, env) {
     let layout = t.layout();
     match bytes {
@@ -641,7 +644,7 @@ theorem Target::goes_bytes_init(self t: Target, buf, cap: Nat, found: t.caps.nth
         Cons(c, rest) => λ room => match room {
             Zero => λ i p env sum within next => {
                 let stored = Cons(c, rest);
-                t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(Env(env.words, stored.stored(buf, i, env.buffers)), u.memory),
+                t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(Env(env.words, stored.stored(buf, i, env.buffers), env.args), u.memory),
                     λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, u.memory), next,
                     λ u placed => t.placed_stored_past(buf, cap, found, stored, i, env, u.memory, omega(sum), placed))
             },
@@ -649,7 +652,7 @@ theorem Target::goes_bytes_init(self t: Target, buf, cap: Nat, found: t.caps.nth
                 let one = p.byte_init(layout, buf, i, c);
                 let w_one = one.within_trans(one.bytes_init(layout, rest, r, buf, Succ(i)), t.program,
                     Prog::within_bytes_init(layout, buf, rest, r, Succ(i), one), within);
-                let rest_goes = t.goes_bytes_init(buf, cap, found, tree, rest, r, Succ(i), one, Env(env.words, store_byte(env.buffers, buf, i, c)), omega(sum), within, next);
+                let rest_goes = t.goes_bytes_init(buf, cap, found, tree, rest, r, Succ(i), one, Env(env.words, store_byte(env.buffers, buf, i, c), env.args), omega(sum), within, next);
                 t.goes_byte_init(env, p, buf, cap, found, i, omega(sum), c, w_one, tree, rest_goes)
             },
         },
@@ -661,7 +664,7 @@ theorem Target::goes_bytes_init(self t: Target, buf, cap: Nat, found: t.caps.nth
 theorem Target::goes_inits(self t: Target, tree: ITree<BitVec(64)>(Events::linux()), buffers: List<Buffer>): (buf: Nat) → (p: Prog) → (env: Env) →
     ((k: Nat) → t.caps.nth(buf + k) = buffers.map(λ (b: Buffer) => b.capacity).nth(k)) →
     p.inits(t.layout(), buffers, buf).Within(t.program) →
-    t.At(prog_len(p.inits(t.layout(), buffers, buf)), tree, Env(env.words, initial_stores(buffers, buf, env.buffers))) →
+    t.At(prog_len(p.inits(t.layout(), buffers, buf)), tree, Env(env.words, initial_stores(buffers, buf, env.buffers), env.args)) →
     t.At(prog_len(p), tree, env) {
     let layout = t.layout();
     match buffers {
@@ -673,7 +676,7 @@ theorem Target::goes_inits(self t: Target, tree: ITree<BitVec(64)>(Events::linux
                 let shifted: (buf + Succ(k) = Succ(buf) + k) = omega();
                 trans(cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), sym(shifted)), caps(Succ(k)))
             };
-            let after = Env(env.words, b.initial.stored(buf, 0, env.buffers));
+            let after = Env(env.words, b.initial.stored(buf, 0, env.buffers), env.args);
             let rest_goes = t.goes_inits(tree, rest, Succ(buf), filled, after, caps_rest, within, next);
             t.goes_bytes_init(buf, b.capacity, caps(0), tree, b.initial, b.capacity, 0, p, env, omega(), w_filled, rest_goes)
         },

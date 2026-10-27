@@ -8,6 +8,8 @@ import native_source;
 import native_compile;
 import function_ir;
 import list;
+import bitvec;
+import itree;
 
 // An exit's status computed into a temporary, the first word.
 theorem exit_three(): run(exit(num(3))).source() = Source(functions := [], buffers := [], main := Then(Stmt::leaf([Const(64, 0, 3)]), Exit(0))) {
@@ -45,3 +47,18 @@ theorem either_lowered(): either().source() = Source(functions := [], buffers :=
         Branch(1, Then(Stmt::leaf([Const(64, 1, 1)]), Exit(1)), Then(Stmt::leaf([Const(64, 1, 2)]), Exit(1))))) {
     refl
 }
+
+// An argument's length as the exit status: the index a constant in the
+// leaf before it, the length into the first word (issues/native-source-argv.md).
+fn arg_length(k: Nat) → Tool { buffer(4, λ b => run(local(num(0), λ n => arg(num(k), b, n) ++ exit(n.get())))) }
+
+theorem arg_length_lowered(): arg_length(1).source() = Source(functions := [], buffers := [Buffer(4, [])],
+    main := Then(Stmt::leaf([Const(64, 0, 0), Const(64, 1, 1)]), Then(Arg(1, 0, 0), Exit(0)))) {
+    refl
+}
+
+fn two_args() → List<List<BitVec(8)>> { [[BitVec::ofNat(116)], [BitVec::ofNat(104), BitVec::ofNat(105)]] }
+
+// argv[1] is two bytes long; past the last argument the length is minus one.
+theorem arg_length_runs(): arg_length(1).source().tree(two_args(), 0) = Ret(BitVec::ofNat(2)) { refl }
+theorem arg_past_last_runs(): arg_length(2).source().tree(two_args(), 0) = Ret(missing_word()) { refl }

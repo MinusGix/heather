@@ -58,18 +58,18 @@ fn cat_implements_tr_and_the_kit_is_there() {
 
 // At an open capacity and at a literal one; and what reaches stdout.
 const CLIENT: &str = "import native_cat; import native_cat_spec; import native_source; import stream_filter_spec; import linux_trees;
-import itree; import itree_trace; import bitvec; import logic; import nat;
+import itree; import itree_trace; import bitvec; import list; import logic; import nat;
 
-theorem cat_two(): Program::Implements(cat(2).denote(), tr_spec(λ (b: BitVec(8)) => b)) { cat_implements(2, trivial, trivial) }
+theorem cat_two(): Program::Implements(cat(2).denote([]), tr_spec(λ (b: BitVec(8)) => b)) { cat_implements([], 2, trivial, trivial) }
 
-theorem cat_open(capacity: Nat, pos: 0 < capacity, small: capacity < Nat::pow(2, 63)):
-    Program::Implements(cat(capacity).denote(), tr_spec(λ (b: BitVec(8)) => b)) { cat_implements(capacity, pos, small) }
+theorem cat_open(args: List<List<BitVec(8)>>, capacity: Nat, pos: 0 < capacity, small: capacity < Nat::pow(2, 63)):
+    Program::Implements(cat(capacity).denote(args), tr_spec(λ (b: BitVec(8)) => b)) { cat_implements(args, capacity, pos, small) }
 
-theorem cat_two_sends(tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(2).denote(), tr),
+theorem cat_two_sends(tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(2).denote([]), tr),
     valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok())):
     Trace::sent<Nat, BitVec(64)>(BitVec::ofNat(1), tr) = Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr)
 {
-    cat_sends(2, trivial, trivial, tr, produces, valid, returns)
+    cat_sends([], 2, trivial, trivial, tr, produces, valid, returns)
 }
 ";
 
