@@ -1,0 +1,66 @@
+// Probes of `lib/std/tactic/norm_num.hthr` at the carriers decided by
+// evaluation: `Nat`, `Int`, `Rat`, `Dyadic` and `Finite(F)`, their
+// refutations, and the tactic's own refusals. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import dyadic; import float; import tactic; import norm_num;
+
+// Nat and Int: `=`, `<`, `<=` and their negations, at numerals far past
+// what a unary conversion could walk.
+theorem nat_sum(): 2 + 3 * 4 = 14 { by norm_num() }
+theorem nat_big(): Nat::pow(2, 64) * Nat::pow(2, 64) = Nat::pow(2, 128) { by norm_num() }
+theorem nat_lt(): 999999999999 < 1000000000000 { by norm_num() }
+theorem nat_le(): Nat::pow(3, 40) <= Nat::pow(2, 64) { by norm_num() }
+theorem nat_ne(): 7 * 6 ≠ 41 { by norm_num() }
+theorem nat_not_lt(): ¬(10 < 10) { by norm_num() }
+theorem nat_not_le(): ¬(Nat::pow(2, 65) <= Nat::pow(3, 40)) { by norm_num() }
+theorem int_sum(): Int::sub(OfNat(3), OfNat(10)) = NegSucc(6) { by norm_num() }
+theorem int_lt(): Int::Lt(NegSucc(99), OfNat(0)) { by norm_num() }
+theorem int_ne(): Int::mul(NegSucc(1), NegSucc(1)) ≠ NegSucc(3) { by norm_num() }
+
+// Rat: `≈` across representations, the orders, apartness, and the closed
+// operations evaluated whole (`inv_succ`, `⁻¹`, `^`, `abs`, `npow`).
+theorem rat_of_int(): Rat::ofInt(OfNat(2)) ≈ 1 + 1 { by norm_num() }
+theorem rat_halves(): Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1 { by norm_num() }
+theorem rat_pi(): Rat(355, 113) < 4 { by norm_num() }
+theorem rat_pi_le(): Rat(22, 7) <= Rat(22, 7) { by norm_num() }
+theorem rat_inv(): Rat(3, 4)⁻¹ ≈ Rat(4, 3) { by norm_num() }
+theorem rat_pow(): Rat(2, 3) ^ 3 ≈ Rat(8, 27) { by norm_num() }
+theorem rat_neg_pow(): Rat(2, 3) ^ (-2) ≈ Rat(9, 4) { by norm_num() }
+theorem rat_abs(): (Rat(1, 3) - Rat(1, 2)).abs() ≈ Rat(1, 6) { by norm_num() }
+theorem rat_compound(): Rat::npow(1 + Rat(1, 100), 100) < 3 { by norm_num() }
+theorem rat_apart(): Rat(1, 3).Apart(Rat(1, 2)) { by norm_num() }
+theorem rat_apart_above(): Rat(1, 2).Apart(Rat(1, 3)) { by norm_num() }
+theorem rat_not_same(): ¬(Rat(1, 3) ≈ Rat(33, 100)) { by norm_num() }
+theorem rat_not_lt(): ¬(Rat(2, 4) < Rat(1, 2)) { by norm_num() }
+theorem rat_not_apart(): ¬(Rat(2, 4).Apart(Rat(1, 2))) { by norm_num() }
+theorem rat_decimal(): Rat::Same(0.1 + 0.2, 0.3) { by norm_num() }
+// The all-numeral relation is spelled at `Rat` explicitly; written bare it
+// would be `Nat`'s (all-numeral-relations-default-to-nat).
+theorem rat_zero_lt_one(): Rat::Lt(0, 1) { by norm_num() }
+
+// Dyadic and the floats are read through their value.
+theorem dyadic_same(): Dyadic(3, -1) ≈ Dyadic(6, -2) { by norm_num() }
+theorem dyadic_sum(): Dyadic(1, -1) + Dyadic(1, -2) < 1 { by norm_num() }
+theorem dyadic_not_le(): ¬(Dyadic(1, 0) <= Dyadic(1, -1)) { by norm_num() }
+fn h16(neg: Bool, m, b: Nat, ok: binary16().canonical(m, b).IsTrue()) → Finite(binary16()) { Finite(neg, m, b, ok) }
+fn one() → Finite(binary16()) { h16(False, 1024, 14, trivial) }
+fn three() → Finite(binary16()) { h16(False, 1536, 15, trivial) }
+theorem float_lt(): one() < three() { by norm_num() }
+theorem float_neg_lt(): -three() < one() { by norm_num() }
+theorem float_zeros(): Finite::zero(binary16(), False) ≈ Finite::zero(binary16(), True) { by norm_num() }
+theorem float_not_same(): ¬(one() ≈ three()) { by norm_num() }
+
+// A false goal is refused as false, a stuck one as not evaluating.
+// expect-error: norm_num: the goal is false
+theorem false_nat(): 2 + 2 = 5 { by norm_num() }
+// expect-error: norm_num: the goal is false
+theorem false_rat(): Rat(1, 2) < Rat(1, 3) { by norm_num() }
+// expect-error: norm_num: the goal is false
+theorem false_apart(): Rat(1, 2).Apart(Rat(2, 4)) { by norm_num() }
+// expect-error: norm_num: the two sides do not evaluate to numbers
+theorem open_side(x: Rat): x < x + 1 { by norm_num() }
+// `=` at `Rat` is representation identity, which is not decided.
+// expect-error: norm_num: `=` is decided at `Nat` and `Int`
+theorem rat_eq(): Rat(1, 2) = Rat(1, 2) { by norm_num() }
+// expect-error: norm_num: the goal is not `=`, `≈`, `<`, `<=` or `Apart` between numbers, or the negation of one
+theorem not_a_fact(): Nat::Even(4) { by norm_num() }

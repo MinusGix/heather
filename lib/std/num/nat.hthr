@@ -1938,6 +1938,16 @@ theorem Nat::leb_false(self n, m: Nat, h: m < n): n.leb(m) = False {
     })(refl)
 }
 
+// Closed facts by evaluation (`norm_num`, docs/numeral-normalisation-design.md):
+// a `Bool` computed to `True` or `False` proves the fact or refutes it, so
+// a comparison of large numerals costs the accelerated `leb` / `same` and
+// never a conversion over the numbers.
+theorem Nat::le_of_leb(self n, m: Nat, h: n.leb(m) = True): n <= m { n.leb_sound(m, j(sym(h), λ d _ => d.IsTrue(), trivial)) }
+
+theorem Nat::not_le_of_leb(self n, m: Nat, h: n.leb(m) = False): ¬(n <= m) { λ le => absurd(trans(sym(h), n.leb_true(m, le))) }
+
+theorem Nat::ne_of_same(self n, m: Nat, h: n.same(m) = False): n ≠ m { λ e => absurd(trans(sym(h), j(e, λ k _ => n.same(k) = True, n.same_self()))) }
+
 theorem Nat::le_of_not_lt(self n, m: Nat, h: ¬(n < m)): m <= n {
     or_resolve(m.le_dec(n), λ (k: ¬(m <= n)) => h(n.lt_of_not_le(m, k)))
 }

@@ -1360,6 +1360,28 @@ theorem Rat::apart_irrefl(self x: Rat): ¬(x.Apart(x)) {
     }
 }
 
+// Closed facts by evaluation (`norm_num`, docs/numeral-normalisation-design.md):
+// `≈` and the orders as `Bool`s over the cross products, through `Int`'s
+// `same` and `leb`. A verdict computed to `True` proves the fact and one
+// computed to `False` refutes it, so a closed comparison costs evaluating
+// the two sides and never a conversion over their representation. `Lt` is
+// `Int`'s, `a.isucc() <= b`, so its verdict is that `leb`.
+fn Rat::same_bool(self x, y: Rat) → Bool { (x.num * y.den.int()).same(y.num * x.den.int()) }
+fn Rat::le_bool(self x, y: Rat) → Bool { (x.num * y.den.int()).leb(y.num * x.den.int()) }
+fn Rat::lt_bool(self x, y: Rat) → Bool { (x.num * y.den.int()).isucc().leb(y.num * x.den.int()) }
+
+theorem Rat::same_of_bool(self x, y: Rat, h: x.same_bool(y) = True): x ≈ y { Int::same_sound(x.num * y.den.int(), y.num * x.den.int(), h) }
+theorem Rat::not_same_of_bool(self x, y: Rat, h: x.same_bool(y) = False): ¬(x ≈ y) { Int::ne_of_same(x.num * y.den.int(), y.num * x.den.int(), h) }
+theorem Rat::le_of_bool(self x, y: Rat, h: x.le_bool(y) = True): x <= y { Int::le_of_leb(x.num * y.den.int(), y.num * x.den.int(), h) }
+theorem Rat::not_le_of_bool(self x, y: Rat, h: x.le_bool(y) = False): ¬(x <= y) { Int::not_le_of_leb(x.num * y.den.int(), y.num * x.den.int(), h) }
+theorem Rat::lt_of_bool(self x, y: Rat, h: x.lt_bool(y) = True): x < y { Int::le_of_leb((x.num * y.den.int()).isucc(), y.num * x.den.int(), h) }
+theorem Rat::not_lt_of_bool(self x, y: Rat, h: x.lt_bool(y) = False): ¬(x < y) { Int::not_le_of_leb((x.num * y.den.int()).isucc(), y.num * x.den.int(), h) }
+theorem Rat::apart_of_lt_bool(self x, y: Rat, h: x.lt_bool(y) = True): x.Apart(y) { Inl(x.lt_of_bool(y, h)) }
+theorem Rat::apart_of_gt_bool(self x, y: Rat, h: y.lt_bool(x) = True): x.Apart(y) { Inr(y.lt_of_bool(x, h)) }
+theorem Rat::not_apart_of_bool(self x, y: Rat, h1: x.lt_bool(y) = False, h2: y.lt_bool(x) = False): ¬(x.Apart(y)) {
+    λ a => match a { Inl(lt) => x.not_lt_of_bool(y, h1, lt), Inr(gt) => y.not_lt_of_bool(x, h2, gt) }
+}
+
 theorem Rat::nonzero_of_apart({x: Rat}, h: x.Apart(0)): ¬(x ≈ 0) {
     λ zero => match h {
         Inl(lt) => Rat::lt_irrefl(0, Rat::lt_respects(zero, Rat::same_refl(0), lt)),

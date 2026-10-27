@@ -872,6 +872,69 @@ fn Int::le_dec(self a, b: Int) → a <= b ∨ ¬(a <= b) {
 
 instance(a, b: Int) Decide<Int::Le(a, b)> { dec := Int::le_dec(a, b), bit := or_bit(Int::le_dec(a, b)), reflects := or_bit_reflects(Int::le_dec(a, b)) }
 
+// Closed facts by evaluation (`norm_num`, docs/numeral-normalisation-design.md):
+// equality and order as `Bool`s through `Nat`'s `same` and `leb`, which the
+// kernel runs on numerals of any size, so a closed comparison is computed
+// rather than converted.
+fn Int::same(self a, b: Int) → Bool {
+    match a {
+        OfNat(m) => match b { OfNat(n) => m.same(n), NegSucc(_) => False },
+        NegSucc(m) => match b { OfNat(_) => False, NegSucc(n) => m.same(n) },
+    }
+}
+
+fn Int::leb(self a, b: Int) → Bool {
+    match a {
+        OfNat(m) => match b { OfNat(n) => m.leb(n), NegSucc(_) => False },
+        NegSucc(m) => match b { OfNat(_) => True, NegSucc(n) => n.leb(m) },
+    }
+}
+
+theorem Int::same_self(self a: Int): a.same(a) = True {
+    match a { OfNat(m) => m.same_self(), NegSucc(m) => m.same_self() }
+}
+
+theorem Int::same_sound(self a: Int): (b: Int) → a.same(b) = True → a = b {
+    match a {
+        OfNat(m) => λ b => match b {
+            OfNat(n) => λ h => Int::cong_ofnat(m.same_sound(n, h)),
+            NegSucc(_) => λ h => absurd(h),
+        },
+        NegSucc(m) => λ b => match b {
+            OfNat(_) => λ h => absurd(h),
+            NegSucc(n) => λ h => j(m.same_sound(n, h), λ k _ => NegSucc(m) = NegSucc(k), refl),
+        },
+    }
+}
+
+theorem Int::ne_of_same(self a, b: Int, h: a.same(b) = False): a ≠ b { λ e => absurd(trans(sym(h), j(e, λ c _ => a.same(c) = True, a.same_self()))) }
+
+theorem Int::le_of_leb(self a: Int): (b: Int) → a.leb(b) = True → a <= b {
+    match a {
+        OfNat(m) => λ b => match b {
+            OfNat(n) => λ h => m.le_of_leb(n, h),
+            NegSucc(_) => λ h => absurd(h),
+        },
+        NegSucc(m) => λ b => match b {
+            OfNat(_) => λ h => trivial,
+            NegSucc(n) => λ h => n.le_of_leb(m, h),
+        },
+    }
+}
+
+theorem Int::not_le_of_leb(self a: Int): (b: Int) → a.leb(b) = False → ¬(a <= b) {
+    match a {
+        OfNat(m) => λ b => match b {
+            OfNat(n) => λ h => m.not_le_of_leb(n, h),
+            NegSucc(_) => λ h le => le,
+        },
+        NegSucc(m) => λ b => match b {
+            OfNat(_) => λ h => absurd(h),
+            NegSucc(n) => λ h => n.not_le_of_leb(m, h),
+        },
+    }
+}
+
 theorem Int::le_of_not_le(self a, b: Int, h: ¬(a <= b)): b <= a {
     or_resolve(or_swap(a.le_total(b)), h)
 }
