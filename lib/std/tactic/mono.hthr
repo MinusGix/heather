@@ -1,0 +1,466 @@
+// `mono`: prove an order between two expressions by monotonicity, reducing
+// it to orders between their parts (Lean's `gcongr`;
+// issues/monotonicity-tactic.md).
+//
+// Given a goal `l <= r` or `l < r` at `Rat`, `CReal`, `Int` or `Nat`, the
+// tactic compares the two sides one layer at a time. Where both are the same
+// operation applied, it finds the argument positions where they differ (the
+// sides' least general generalization, read syntactically; a pair the view
+// does not present is compared by conversion), picks the carrier's first
+// monotonicity law for that operation whose movable positions cover them,
+// and applies it: the law's conclusion is matched against the goal, and its
+// premises become goals of their own, proved by the tactic again. A law
+// decides its own variance, so `-y <= -x` from `x <= y` and `x - b <= x - a`
+// from `a <= b` are laws like any other.
+//
+// Every goal, before it is split, is closed outright by a given term or a
+// hypothesis of exactly its statement. A goal whose sides do not split —
+// different heads, or no law — is a leaf: it is closed by a given term or a
+// hypothesis, by reflexivity, by a sign law when its left side is zero
+// (`0 <= x.abs()`, `0 < x * y` from the signs of the factors, …), by
+// computation when both sides are closed, and at `<=` by proving `<`.
+// Anything else is reported at its statement: the tactic proves the goal or
+// fails, it does not leave goals open.
+//
+// The laws are the carriers' own theorems, named in `mono_carriers`; a name
+// that does not resolve where the tactic runs is skipped, so a client that
+// does not import `creal` pays nothing for it. `mono_with(hs)` takes the
+// facts the leaves need as terms: `by mono_with([s.small(k, hk)])`.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+
+// A monotonicity law: at `<` when `strict`, otherwise at `<=`, a goal whose
+// sides are both `op` applied, differing at most at the argument positions
+// `moves` (as the view lists them), is proved by `lemma` from its premises.
+record MonoLaw { strict: Bool, op: String, moves: List<Nat>, lemma: String }
+
+// A sign law: `0 <= op(…)` (or `0 < op(…)` when `strict`) by `lemma`.
+record SignLaw { strict: Bool, op: String, lemma: String }
+
+// One ordered carrier: its two orders, reflexivity of `<=`, `<` weakened to
+// `<=`, and its laws.
+record MonoCarrier { le: String, lt: String, reflexive: String, weaken: String, laws: List<MonoLaw>, signs: List<SignLaw> }
+
+fn mono_law(strict: Bool, op: String, moves: List<Nat>, lemma: String) → MonoLaw { MonoLaw(strict, op, moves, lemma) }
+
+fn mono_sign(strict: Bool, op: String, lemma: String) → SignLaw { SignLaw(strict, op, lemma) }
+
+// The laws, one-sided ones before the two-sided one of the same operation,
+// so a goal that keeps one operand fixed owes no premise about it.
+fn mono_rat() → MonoCarrier {
+    MonoCarrier("Rat::Le", "Rat::Lt", "Rat::le_refl", "Rat::le_of_lt", [
+        mono_law(False, "Rat::add", [1], "Rat::add_le_mono_l"),
+        mono_law(False, "Rat::add", [0], "Rat::add_le_mono_r"),
+        mono_law(False, "Rat::add", [0, 1], "Rat::add_le_mono"),
+        mono_law(False, "Rat::sub", [1], "Rat::sub_le_sub_l"),
+        mono_law(False, "Rat::sub", [0], "Rat::sub_le_sub_r"),
+        mono_law(False, "Rat::sub", [0, 1], "Rat::sub_le_sub"),
+        mono_law(False, "Rat::mul", [1], "Rat::mul_le_mono_l"),
+        mono_law(False, "Rat::mul", [0], "Rat::mul_le_mono_r"),
+        mono_law(False, "Rat::mul", [0, 1], "Rat::mul_le_mul"),
+        mono_law(False, "Rat::neg", [0], "Rat::neg_le"),
+        mono_law(False, "Rat::recip", [0], "Rat::recip_le_recip"),
+        mono_law(False, "Rat::npow", [0], "Rat::npow_le_mono"),
+        mono_law(True, "Rat::add", [1], "Rat::add_lt_mono_l"),
+        mono_law(True, "Rat::add", [0], "Rat::add_lt_mono_r"),
+        mono_law(True, "Rat::add", [0, 1], "Rat::add_lt_mono"),
+        mono_law(True, "Rat::sub", [1], "Rat::sub_lt_sub_l"),
+        mono_law(True, "Rat::sub", [0], "Rat::sub_lt_sub_r"),
+        mono_law(True, "Rat::mul", [1], "Rat::mul_lt_mono_l"),
+        mono_law(True, "Rat::mul", [0], "Rat::mul_lt_mono_r"),
+        mono_law(True, "Rat::neg", [0], "Rat::neg_lt"),
+    ], [
+        mono_sign(False, "Rat::abs", "Rat::abs_nonneg"),
+        mono_sign(False, "Rat::add", "Rat::add_nonneg"),
+        mono_sign(False, "Rat::mul", "Rat::mul_nonneg"),
+        mono_sign(False, "Rat::npow", "Rat::npow_nonneg"),
+        mono_sign(False, "Rat::recip", "Rat::recip_nonneg"),
+        mono_sign(True, "Rat::add", "Rat::add_pos"),
+        mono_sign(True, "Rat::mul", "Rat::mul_pos"),
+        mono_sign(True, "Rat::npow", "Rat::npow_pos"),
+        mono_sign(True, "Rat::inv_succ", "Rat::inv_succ_pos"),
+    ])
+}
+
+fn mono_creal() → MonoCarrier {
+    MonoCarrier("CReal::Le", "CReal::Lt", "CReal::le_refl", "CReal::le_of_lt", [
+        mono_law(False, "CReal::add", [1], "CReal::add_le_mono_l"),
+        mono_law(False, "CReal::add", [0], "CReal::add_le_mono_r"),
+        mono_law(False, "CReal::add", [0, 1], "CReal::add_le_mono"),
+        mono_law(False, "CReal::mul", [1], "CReal::mul_le_mono_l"),
+        mono_law(False, "CReal::mul", [0], "CReal::mul_le_mono_r"),
+        mono_law(False, "CReal::neg", [0], "CReal::neg_le"),
+        mono_law(False, "CReal::inv", [0, 1], "CReal::inv_le_inv"),
+        mono_law(True, "CReal::add", [1], "CReal::add_lt_mono_l"),
+        mono_law(True, "CReal::add", [0], "CReal::add_lt_mono_r"),
+        mono_law(True, "CReal::add", [0, 1], "CReal::add_lt_mono"),
+        mono_law(True, "CReal::mul", [1], "CReal::mul_lt_mono_l"),
+        mono_law(True, "CReal::mul", [0], "CReal::mul_lt_mono_r"),
+    ], [
+        mono_sign(False, "CReal::add", "CReal::add_nonneg"),
+        mono_sign(False, "CReal::mul", "CReal::mul_nonneg"),
+        mono_sign(True, "CReal::add", "CReal::add_pos"),
+        mono_sign(True, "CReal::mul", "CReal::mul_pos"),
+    ])
+}
+
+fn mono_int() → MonoCarrier {
+    MonoCarrier("Int::Le", "Int::Lt", "Int::le_refl", "Int::le_of_lt", [
+        mono_law(False, "Int::add", [1], "Int::add_le_mono_l"),
+        mono_law(False, "Int::add", [0], "Int::add_le_mono_r"),
+        mono_law(False, "Int::add", [0, 1], "Int::add_le_mono"),
+        mono_law(False, "Int::mul", [1], "Int::mul_le_mono_l"),
+        mono_law(False, "Int::mul", [0], "Int::mul_le_mono_r"),
+        mono_law(True, "Int::mul", [0], "Int::mul_lt_mono_r"),
+    ], [
+        mono_sign(False, "Int::abs", "Int::abs_nonneg"),
+    ])
+}
+
+fn mono_nat() → MonoCarrier {
+    MonoCarrier("Nat::Le", "Nat::Lt", "Nat::le_refl", "Nat::le_of_lt", [
+        mono_law(False, "Nat::add", [1], "Nat::add_le_mono_l"),
+        mono_law(False, "Nat::add", [0], "Nat::add_le_mono_r"),
+        mono_law(False, "Nat::add", [0, 1], "Nat::add_le_mono"),
+        mono_law(False, "Nat::mul", [1], "Nat::mul_le_mono_l"),
+        mono_law(False, "Nat::mul", [0], "Nat::mul_le_mono_r"),
+        mono_law(False, "Nat::mul", [0, 1], "Nat::mul_le_mono"),
+        mono_law(False, "Nat::pow", [1], "Nat::pow_le_pow_r"),
+    ], [])
+}
+
+fn mono_carriers() → List<MonoCarrier> { [mono_rat(), mono_creal(), mono_int(), mono_nat()] }
+
+// ---------------------------------------------------------------------------
+// The carrier, resolved where the tactic runs.
+
+record Law { strict: Bool, op: GlobalRef, moves: List<Nat>, lemma: GlobalRef }
+record Sign { strict: Bool, op: GlobalRef, lemma: GlobalRef }
+
+// A given term and its statement.
+record Given { e: Expr, ty: Handle }
+
+// What a run works with: the goal's carrier, its laws, and the given terms.
+record Mono { le: GlobalRef, lt: GlobalRef, reflexive: Option<GlobalRef>, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, given: List<Given>, truth: Handle, holds: GlobalRef }
+
+fn mono_try_global(name: String) → Tac<Option<GlobalRef>> {
+    lookup(name).bind(λ c => match c { Accepted(g) => Pure(Some(g)), Refused(_) => Pure(None) })
+}
+
+fn mono_global(name: String) → Tac<GlobalRef> {
+    lookup(name).bind(λ c => match c { Accepted(g) => Pure(g), Refused(why) => fail("mono: " ++ why, []) })
+}
+
+// The laws whose operation and lemma both resolve.
+fn mono_laws(ls: List<MonoLaw>) → Tac<List<Law>> {
+    match ls {
+        Nil => Pure([]),
+        Cons(l, rest) => mono_try_global(l.op).bind(λ op => mono_try_global(l.lemma).bind(λ lemma => mono_laws(rest).bind(λ more =>
+            match op {
+                None => Pure(more),
+                Some(o) => match lemma { None => Pure(more), Some(m) => Pure(Cons(Law(l.strict, o, l.moves, m), more)) },
+            }))),
+    }
+}
+
+fn mono_signs(ls: List<SignLaw>) → Tac<List<Sign>> {
+    match ls {
+        Nil => Pure([]),
+        Cons(l, rest) => mono_try_global(l.op).bind(λ op => mono_try_global(l.lemma).bind(λ lemma => mono_signs(rest).bind(λ more =>
+            match op {
+                None => Pure(more),
+                Some(o) => match lemma { None => Pure(more), Some(m) => Pure(Cons(Sign(l.strict, o, m), more)) },
+            }))),
+    }
+}
+
+fn mono_is(o: Option<GlobalRef>, g: GlobalRef) → Bool { match o { None => False, Some(r) => g.id.same(r.id) } }
+
+// The carrier whose `<=` or `<` is `rel`, resolved, or `None`.
+fn mono_carrier(cs: List<MonoCarrier>, rel: GlobalRef, given: List<Given>) → Tac<Option<Mono>> {
+    match cs {
+        Nil => Pure(None),
+        Cons(c, rest) => mono_try_global(c.le).bind(λ le => mono_try_global(c.lt).bind(λ lt =>
+            match mono_is(le, rel) || mono_is(lt, rel) {
+                False => mono_carrier(rest, rel, given),
+                True => match le {
+                    None => Pure(None),
+                    Some(l) => match lt {
+                        None => Pure(None),
+                        Some(s) => mono_try_global(c.reflexive).bind(λ rf => mono_try_global(c.weaken).bind(λ weaken =>
+                            mono_laws(c.laws).bind(λ laws => mono_signs(c.signs).bind(λ signs =>
+                            mono_global("mono_trivial").bind(λ triv => infer(Global(triv)).bind(λ c => match c {
+                                Refused(why) => fail("mono: " ++ why, []),
+                                Accepted(truth) => Pure(Some(Mono(l, s, rf, weaken, laws, signs, given, truth, triv))),
+                            })))))),
+                    },
+                },
+            }))
+    }
+}
+
+theorem mono_trivial(): True { trivial }
+
+// ---------------------------------------------------------------------------
+// Reading the two sides.
+
+fn mono_arg(args: List<Handle>, i: Nat) → Option<Handle> {
+    match args { Nil => None, Cons(a, rest) => match i { Zero => Some(a), Succ(j) => mono_arg(rest, j) } }
+}
+
+fn mono_len(args: List<Handle>) → Nat { match args { Nil => 0, Cons(_, rest) => Succ(mono_len(rest)) } }
+
+fn mono_has(ns: List<Nat>, n: Nat) → Bool { match ns { Nil => False, Cons(m, rest) => match m.same(n) { True => True, False => mono_has(rest, n) } } }
+
+fn mono_covers(moves, diffs: List<Nat>) → Bool { match diffs { Nil => True, Cons(d, rest) => match mono_has(moves, d) { True => mono_covers(moves, rest), False => False } } }
+
+// Are the terms of `as` the same as those of `bs`, pair by pair? Read layer
+// by layer: a head the view presents on both sides is compared by identity
+// and its arguments join the pairs still to compare, two presented heads
+// that differ are different terms, and a pair the view does not present on
+// one side is compared by conversion. `fuel` bounds the layers read; past
+// it the terms count as different, which costs a premise `a <= a` that
+// reflexivity then proves.
+fn mono_same(fuel: Nat, as, bs: List<Handle>) → Tac<Bool> {
+    match fuel {
+        Zero => Pure(False),
+        Succ(f) => match as {
+            Nil => Pure(True),
+            Cons(a, ra) => match bs {
+                Nil => Pure(False),
+                Cons(b, rb) => view(a).bind(λ va => view(b).bind(λ vb => {
+                    let converts: Tac<Bool> = defeq(Hd(a), Hd(b)).bind(λ s => match s { True => mono_same(f, ra, rb), False => Pure(False) });
+                    match va {
+                        HGlobal(g, _, xs) => match vb {
+                            HGlobal(h, _, ys) => match g.id.same(h.id) && mono_len(xs).same(mono_len(ys)) { True => mono_same(f, xs ++ ra, ys ++ rb), False => Pure(False) },
+                            HLocal(_, _) => Pure(False),
+                            HLit(_) => Pure(False),
+                            _ => converts,
+                        },
+                        HLocal(x, xs) => match vb {
+                            HLocal(y, ys) => match x.id.same(y.id) && mono_len(xs).same(mono_len(ys)) { True => mono_same(f, xs ++ ra, ys ++ rb), False => Pure(False) },
+                            HGlobal(_, _, _) => Pure(False),
+                            HLit(_) => Pure(False),
+                            _ => converts,
+                        },
+                        HLit(n) => match vb {
+                            HLit(m) => match n.same(m) { True => mono_same(f, ra, rb), False => Pure(False) },
+                            HGlobal(_, _, _) => Pure(False),
+                            HLocal(_, _) => Pure(False),
+                            _ => converts,
+                        },
+                        _ => converts,
+                    }
+                })),
+            },
+        },
+    }
+}
+
+// The positions, from `i`, at which the two argument lists differ.
+fn mono_diffs(i: Nat, as, bs: List<Handle>) → Tac<List<Nat>> {
+    match as {
+        Nil => Pure([]),
+        Cons(a, ra) => match bs {
+            Nil => Pure([]),
+            Cons(b, rb) => mono_same(4096, [a], [b]).bind(λ s => mono_diffs(Succ(i), ra, rb).bind(λ rest => match s { True => Pure(rest), False => Pure(Cons(i, rest)) })),
+        },
+    }
+}
+
+// Are the terms closed, as far as the view presents them: no local, no
+// stuck `match` and no hole? A form the view does not present (a proof
+// argument) counts as closed; conversion is what decides the order.
+fn mono_closed(fuel: Nat, hs: List<Handle>) → Tac<Bool> {
+    match fuel {
+        Zero => Pure(False),
+        Succ(f) => match hs {
+            Nil => Pure(True),
+            Cons(h, rest) => view(h).bind(λ v => match v {
+                HGlobal(_, _, args) => mono_closed(f, args ++ rest),
+                HLocal(_, _) => Pure(False),
+                HMatch(_) => Pure(False),
+                HHole => Pure(False),
+                _ => mono_closed(f, rest),
+            }),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Closing a goal outright.
+
+// The relation a statement applies, if it is a global's application.
+fn mono_rel_of(h: Handle) → Tac<Option<GlobalRef>> {
+    view(h).bind(λ v => match v { HGlobal(g, _, _) => Pure(Some(g)), _ => Pure(None) })
+}
+
+// A candidate whose statement is the goal, compared by conversion only when
+// it applies the goal's relation.
+fn mono_fits(rel: GlobalRef, target, ty: Handle) → Tac<Bool> {
+    mono_rel_of(ty).bind(λ o => match mono_is(o, rel) { False => Pure(False), True => defeq(Hd(ty), Hd(target)) })
+}
+
+fn mono_given_among(rel: GlobalRef, target: Handle, gs: List<Given>) → Tac<Option<Expr>> {
+    match gs {
+        Nil => Pure(None),
+        Cons(g, rest) => mono_fits(rel, target, g.ty).bind(λ ok => match ok { True => Pure(Some(g.e)), False => mono_given_among(rel, target, rest) }),
+    }
+}
+
+fn mono_local_among(rel: GlobalRef, target: Handle, ls: List<LocalInfo>) → Tac<Option<Expr>> {
+    match ls {
+        Nil => Pure(None),
+        Cons(l, rest) => mono_fits(rel, target, l.ty).bind(λ ok => match ok { True => Pure(Some(Local(l.ref))), False => mono_local_among(rel, target, rest) }),
+    }
+}
+
+// A given term, then a hypothesis, whose statement is the goal.
+fn mono_exact(M: Mono, rel: GlobalRef, g: GoalInfo) → Tac<Option<Expr>> {
+    mono_given_among(rel, g.target, M.given).bind(λ o => match o { Some(e) => Pure(Some(e)), None => mono_local_among(rel, g.target, g.locals) })
+}
+
+// ---------------------------------------------------------------------------
+// The search.
+
+fn mono_law_for(ls: List<Law>, strict: Bool, op: GlobalRef, diffs: List<Nat>) → Option<Law> {
+    match ls {
+        Nil => None,
+        Cons(l, rest) => match !l.strict.xor(strict) && l.op.id.same(op.id) && mono_covers(l.moves, diffs) { True => Some(l), False => mono_law_for(rest, strict, op, diffs) },
+    }
+}
+
+fn mono_signs_for(ls: List<Sign>, strict: Bool, op: GlobalRef) → List<Sign> {
+    match ls {
+        Nil => [],
+        Cons(l, rest) => match !l.strict.xor(strict) && l.op.id.same(op.id) { True => Cons(l, mono_signs_for(rest, strict, op)), False => mono_signs_for(rest, strict, op) },
+    }
+}
+
+fn mono_open<A>(target: Handle, tried: List<Note>) → Tac<A> {
+    fail("mono: nothing proves this goal", Cons(At(Hd(target), Tried("the goal", "no given term or hypothesis states it, its sides share no operation a law moves, and no sign law, reflexivity or computation proves it")), under_all(tried)))
+}
+
+// The alternatives at a leaf, in order, each attempted; the first to succeed
+// is the proof, and a failure lists what each tried.
+fn mono_first(ts: List<Tac<Expr>>, target: Handle, tried: List<Note>) → Tac<Expr> {
+    match ts {
+        Nil => mono_open(target, tried),
+        Cons(t, rest) => attempt(t).bind(λ o => match o {
+            Done(e) => Pure(e),
+            Failed(msg, notes) => {
+                let more: List<Note> = Cons(Tried("an alternative", msg), under_all(notes));
+                mono_first(rest, target, tried ++ more)
+            },
+        }),
+    }
+}
+
+fn mono_sign_tacs(prove: Tac<Expr>, ss: List<Sign>) → List<Tac<Expr>> {
+    match ss { Nil => [], Cons(s, rest) => Cons(apply(Global(s.lemma), prove), mono_sign_tacs(prove, rest)) }
+}
+
+fn mono_opt(o: Option<GlobalRef>, t: GlobalRef → Tac<Expr>) → List<Tac<Expr>> { match o { None => [], Some(g) => [t(g)] } }
+
+// Closed sides: the order computes.
+fn mono_compute(M: Mono, target, l, r: Handle) → Tac<Expr> {
+    mono_closed(4096, [l, r]).bind(λ closed => match closed {
+        False => fail("mono: a side is not closed", []),
+        True => defeq(Hd(target), Hd(M.truth)).bind(λ t => match t { True => Pure(Global(M.holds)), False => fail("mono: the order does not compute to `True`", []) }),
+    })
+}
+
+// A goal whose sides do not split. `prove` proves a premise.
+fn mono_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → Tac<Expr> {
+    view(r).bind(λ vr => {
+        let signs: List<Sign> = match vr { HGlobal(op, _, _) => mono_signs_for(M.signs, strict, op), _ => [] };
+        let reflexive: List<Tac<Expr>> = match strict { True => [], False => mono_opt(M.reflexive, λ g => apply(Global(g), fail("mono: reflexivity has no premise", []))) };
+        let weakened: List<Tac<Expr>> = match strict { True => [], False => mono_opt(M.weaken, λ g => apply(Global(g), prove)) };
+        mono_first(reflexive ++ mono_sign_tacs(prove, signs) ++ Cons(mono_compute(M, target, l, r), weakened), target, [])
+    })
+}
+
+// Split the goal by the law for its sides' shared operation, or prove it as
+// a leaf. `prove` proves the law's premises.
+fn mono_split(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → Tac<Expr> {
+    view(l).bind(λ vl => view(r).bind(λ vr => match vl {
+        HGlobal(gl, _, al) => match vr {
+            HGlobal(gr, _, ar) => match gl.id.same(gr.id) && mono_len(al).same(mono_len(ar)) {
+                False => mono_leaf(M, prove, strict, target, l, r),
+                True => mono_diffs(0, al, ar).bind(λ diffs => match diffs {
+                    Nil => mono_leaf(M, prove, strict, target, l, r),
+                    Cons(_, _) => match mono_law_for(M.laws, strict, gl, diffs) {
+                        None => mono_leaf(M, prove, strict, target, l, r),
+                        Some(law) => apply(Global(law.lemma), prove),
+                    },
+                }),
+            },
+            _ => mono_leaf(M, prove, strict, target, l, r),
+        },
+        _ => mono_leaf(M, prove, strict, target, l, r),
+    }))
+}
+
+// Prove the current goal: outright, by a law, or as a leaf. A goal that is
+// not one of the carrier's orders (a law's premise of another kind) is
+// proved outright or not at all.
+fn mono_prove(M: Mono, fuel: Nat) → Tac<Expr> {
+    match fuel {
+        Zero => goal().bind(λ g => fail("mono: the goal is deeper than the search goes", [At(Hd(g.target), Tried("the goal", "not reached"))])),
+        Succ(f) => goal().bind(λ g => view(g.target).bind(λ v => match v {
+            HGlobal(rel, _, args) => mono_exact(M, rel, g).bind(λ o => match o {
+                Some(e) => Pure(e),
+                None => match mono_arg(args, 0) {
+                    None => mono_open(g.target, []),
+                    Some(l) => match mono_arg(args, 1) {
+                        None => mono_open(g.target, []),
+                        Some(r) => match rel.id.same(M.le.id) {
+                            True => mono_split(M, mono_prove(M, f), False, g.target, l, r),
+                            False => match rel.id.same(M.lt.id) {
+                                True => mono_split(M, mono_prove(M, f), True, g.target, l, r),
+                                False => mono_open(g.target, []),
+                            },
+                        },
+                    },
+                },
+            }),
+            _ => mono_open(g.target, []),
+        }))
+    }
+}
+
+fn mono_given(hs: List<Expr>) → Tac<List<Given>> {
+    match hs {
+        Nil => Pure([]),
+        Cons(h, rest) => infer(h).bind(λ c => match c {
+            Refused(why) => fail("mono: a given term does not check: " ++ why, [At(h, Tried("the given term", "ill-typed"))]),
+            Accepted(ty) => mono_given(rest).bind(λ more => Pure(Cons(Given(h, ty), more))),
+        }),
+    }
+}
+
+fn mono_not_order<A>(target: Handle) → Tac<A> {
+    fail("mono: the goal is not `<=` or `<` at `Rat`, `CReal`, `Int` or `Nat`", [At(Hd(target), Tried("the goal", "not an order the tactic has laws for"))])
+}
+
+// `mono_with(hs, depth)`: prove `l <= r` or `l < r` by monotonicity, with
+// the terms `hs` for the leaves, splitting at most `depth` goals deep.
+fn mono_with(hs: List<Expr>, depth: Nat := 64) → Tac<Expr> {
+    goal().bind(λ g => view(g.target).bind(λ v => match v {
+        HGlobal(rel, _, _) => mono_given(hs).bind(λ given => mono_carrier(mono_carriers(), rel, given).bind(λ c => match c {
+            None => mono_not_order(g.target),
+            Some(M) => mono_prove(M, depth),
+        })),
+        _ => mono_not_order(g.target),
+    }))
+}
+
+// `mono()`: `mono_with` from the goal's hypotheses alone.
+fn mono(depth: Nat := 64) → Tac<Expr> { mono_with([], depth := depth) }
