@@ -112,6 +112,14 @@ one `apply` per split, and conversion only at the outright check and where
 the view does not present a pair. The sign search at a leaf is bounded by
 the leaf's own structure.
 
+The module's own size is the other cost: every mention of `Tac<…>` writes
+its whole lowering (`issues/tactic-module-image-size.md`), so the image grows
+with how often a function's body mentions it. The comparison of two views is
+a plain function (`mono_pair`) with one `match` on its result returning
+`Tac<Bool>`, and the failing branches share `mono_no()`; written as nested
+matches over `Head` returning `Pure(False)` per arm, `mono_same` alone was a
+third of the image.
+
 ## 7. Not done
 
 - **Concrete carriers through their classes.** `Rat` and `CReal` have

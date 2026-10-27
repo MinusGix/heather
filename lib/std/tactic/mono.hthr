@@ -408,6 +408,30 @@ fn mono_has(ns: List<Nat>, n: Nat) → Bool { match ns { Nil => False, Cons(m, r
 
 fn mono_covers(moves, diffs: List<Nat>) → Bool { match diffs { Nil => True, Cons(d, rest) => match mono_has(moves, d) { True => mono_covers(moves, rest), False => False } } }
 
+// What one pair of views says about the two terms: they differ, they agree
+// up to the argument pairs to compare next, or the view does not decide.
+inductive MonoPair { Differ, Queue(xs: List<Handle>, ys: List<Handle>), Convert }
+
+fn mono_pair(va, vb: Head) → MonoPair {
+    match mono_call(va) {
+        Some(x) => match mono_call(vb) {
+            Some(y) => match x.op.same(y.op) && mono_len(x.args).same(mono_len(y.args)) { True => Queue(x.args, y.args), False => Differ },
+            None => match vb { HLit(_) => Differ, _ => Convert },
+        },
+        None => match va {
+            HLit(n) => match vb {
+                HLit(m) => match n.same(m) { True => Queue([], []), False => Differ },
+                _ => match mono_call(vb) { Some(_) => Differ, None => Convert },
+            },
+            _ => Convert,
+        },
+    }
+}
+
+// Every mention of `Tac<…>` spells its whole lowering, so the search's
+// branches share one `Pure(False)` rather than writing their own.
+fn mono_no() → Tac<Bool> { Pure(False) }
+
 // Are the terms of `as` the same as those of `bs`, pair by pair? Read layer
 // by layer: a call the view presents on both sides is compared by its
 // operation and its arguments join the pairs still to compare, two presented
@@ -417,26 +441,15 @@ fn mono_covers(moves, diffs: List<Nat>) → Bool { match diffs { Nil => True, Co
 // that reflexivity then proves.
 fn mono_same(fuel: Nat, as, bs: List<Handle>) → Tac<Bool> {
     match fuel {
-        Zero => Pure(False),
+        Zero => mono_no(),
         Succ(f) => match as {
             Nil => Pure(True),
             Cons(a, ra) => match bs {
-                Nil => Pure(False),
-                Cons(b, rb) => view(a).bind(λ va => view(b).bind(λ vb => {
-                    let converts: Tac<Bool> = defeq(Hd(a), Hd(b)).bind(λ s => match s { True => mono_same(f, ra, rb), False => Pure(False) });
-                    match mono_call(va) {
-                        Some(x) => match mono_call(vb) {
-                            Some(y) => match x.op.same(y.op) && mono_len(x.args).same(mono_len(y.args)) { True => mono_same(f, x.args ++ ra, y.args ++ rb), False => Pure(False) },
-                            None => match vb { HLit(_) => Pure(False), _ => converts },
-                        },
-                        None => match va {
-                            HLit(n) => match vb {
-                                HLit(m) => match n.same(m) { True => mono_same(f, ra, rb), False => Pure(False) },
-                                _ => match mono_call(vb) { Some(_) => Pure(False), None => converts },
-                            },
-                            _ => converts,
-                        },
-                    }
+                Nil => mono_no(),
+                Cons(b, rb) => view(a).bind(λ va => view(b).bind(λ vb => match mono_pair(va, vb) {
+                    Differ => mono_no(),
+                    Queue(xs, ys) => mono_same(f, xs ++ ra, ys ++ rb),
+                    Convert => defeq(Hd(a), Hd(b)).bind(λ s => match s { True => mono_same(f, ra, rb), False => mono_no() }),
                 })),
             },
         },
@@ -449,8 +462,21 @@ fn mono_diffs(i: Nat, as, bs: List<Handle>) → Tac<List<Nat>> {
         Nil => Pure([]),
         Cons(a, ra) => match bs {
             Nil => Pure([]),
-            Cons(b, rb) => mono_same(4096, [a], [b]).bind(λ s => mono_diffs(Succ(i), ra, rb).bind(λ rest => match s { True => Pure(rest), False => Pure(Cons(i, rest)) })),
+            Cons(b, rb) => mono_same(4096, [a], [b]).bind(λ s => mono_diffs(Succ(i), ra, rb).bind(λ rest => Pure(match s { True => rest, False => Cons(i, rest) }))),
         },
+    }
+}
+
+// The parts of a presented form that are still to read for closedness, or
+// `None` at a local, a stuck `match` or a hole.
+fn mono_parts(v: Head) → Option<List<Handle>> {
+    match v {
+        HGlobal(_, _, args) => Some(args),
+        HLocal(_, _) => None,
+        HField(r, _, args) => Some(Cons(r, args)),
+        HMatch(_) => None,
+        HHole => None,
+        _ => Some([]),
     }
 }
 
@@ -459,16 +485,12 @@ fn mono_diffs(i: Nat, as, bs: List<Handle>) → Tac<List<Nat>> {
 // argument) counts as closed; conversion is what decides the order.
 fn mono_closed(fuel: Nat, hs: List<Handle>) → Tac<Bool> {
     match fuel {
-        Zero => Pure(False),
+        Zero => mono_no(),
         Succ(f) => match hs {
             Nil => Pure(True),
-            Cons(h, rest) => view(h).bind(λ v => match v {
-                HGlobal(_, _, args) => mono_closed(f, args ++ rest),
-                HLocal(_, _) => Pure(False),
-                HField(r, _, args) => mono_closed(f, Cons(r, args) ++ rest),
-                HMatch(_) => Pure(False),
-                HHole => Pure(False),
-                _ => mono_closed(f, rest),
+            Cons(h, rest) => view(h).bind(λ v => match mono_parts(v) {
+                Some(parts) => mono_closed(f, parts ++ rest),
+                None => mono_no(),
             }),
         },
     }
