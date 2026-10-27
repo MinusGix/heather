@@ -274,8 +274,8 @@ Two pieces make it pleasant:
 helpers (`issues/native-build-reflected-helpers.md`): a helper is a Heather
 function over the builder's values for now. `lib/native/native_build.hthr`
 binds words and buffers with Heather lambdas and cuts its nodes into leaves
-by a copy of what the compiler takes (`List::fits_leaf`), the one predicate
-round 4 relaxes. cat, tr, yes, `head -c` and `wc -l` are written with it
+as the compiler takes them (`List::takes`): S4's register leaves where they
+fit, round 4's node-at-a-time leaves for byte nodes and in-place updates. cat, tr, yes, `head -c` and `wc -l` are written with it
 (`lib/native/native_tools.hthr`). `write-elf` states every source it reads
 back as a literal, so the lowering is evaluated once.
 

@@ -1,7 +1,7 @@
 // What the builder lowers small tools to (issues/native-source-builder.md):
 // the words numbered as their binders are met, temporaries past them, and
-// leaves cut where the compiler would refuse to go on (`List::fits_leaf`).
-// When wider leaves relax that predicate, these are the sources that change.
+// leaves cut where S4 would stop taking them whole (`List::takes`). When the
+// compiler's leaves change, these are the sources that change.
 import native_build;
 import native_source_spelled;
 import native_source;
@@ -18,21 +18,21 @@ theorem exit_three(): run(exit(num(3))).source() = Source(functions := [], buffe
 // leaf (no ports, one `Const`) and an `Exit`.
 theorem exit_three_spelled(): run(exit(num(3))).source().spelled() = [1, 0, 2, 0, 0, 1, 0, 64, 0, 3, 0, 5, 0] { refl }
 
-// `x := x + 1` reads the word it writes, so its sum goes through a
-// temporary and the move into `x` is a leaf of its own: a leaf may not
-// write a word an earlier node of it reads.
+// `x := x + 1` is one node that reads the word it writes: S4 does not take
+// it, so it is a wide leaf of its own, after the constants' leaf.
 fn bump() → Tool { run(local(num(5), λ x => x.set(x.get() + num(1)) ++ exit(x.get()))) }
 
 theorem bump_lowered(): bump().source() = Source(functions := [], buffers := [],
-    main := Then(Stmt::leaf([Const(64, 0, 5), Const(64, 2, 1), Add(64, 1, 0, 2)]), Then(Stmt::leaf([Move(64, 0, 1)]), Exit(0)))) {
+    main := Then(Stmt::leaf([Const(64, 0, 5), Const(64, 2, 1)]), Then(Stmt::leaf([Add(64, 0, 0, 2)]), Exit(0)))) {
     refl
 }
 
-// A byte node is a leaf alone, the constants before it one leaf.
+// S4 takes the constants whole; the byte nodes it does not, so they are a
+// leaf of their own, compiled a node at a time.
 fn copy_byte() → Tool { buffer(4, λ b => run(b.put(num(0), b.at(num(1))))) }
 
 theorem copy_byte_lowered(): copy_byte().source() = Source(functions := [], buffers := [Buffer(4, [])],
-    main := Then(Stmt::leaf([Const(64, 0, 0), Const(64, 2, 1)]), Then(Stmt::leaf([BufferLoad(1, 0, 2)]), Stmt::leaf([BufferStore(3, 0, 0, 1)])))) {
+    main := Then(Stmt::leaf([Const(64, 0, 0), Const(64, 2, 1)]), Stmt::leaf([BufferLoad(1, 0, 2), BufferStore(3, 0, 0, 1)]))) {
     refl
 }
 

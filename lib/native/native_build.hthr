@@ -14,12 +14,12 @@
 // binders are met, and gives each statement temporaries past them, which are
 // dead once the statement is done; an expression's nodes compute each part
 // into a temporary of its own, and an assignment writes its last node
-// straight into its word unless that node reads it. A condition becomes the
-// one-bit word `Branch`/`Repeat` test. The nodes are then cut into leaves
-// greedily, a leaf taking the next node while the compiler would still take
-// the leaf (`List::fits_leaf`), so nothing the builder writes is refused for
-// its shape. That one predicate is what wider leaves
-// (issues/native-compile-wider-leaves.md) relax.
+// straight into its word. A condition becomes the one-bit word
+// `Branch`/`Repeat` test. The nodes are then cut into leaves greedily as
+// `Prog::computes` takes them (`List::takes`): a leaf goes on while S4 takes
+// it whole, its values in registers, and a node S4 does not take alone (a
+// byte node, `x := x + y`) is a leaf compiled a node at a time. So nothing
+// the builder writes is refused for its shape.
 //
 // Nothing here is proved: a tool's meaning is the `Source` it lowers to,
 // and `native_compile_correct` speaks of that.
@@ -306,12 +306,13 @@ fn Node::output_to(self node: Node, dest: Nat) → Node {
 }
 
 // A placed value's nodes, then the value in `dest`: the last node writes it
-// there unless it reads it, when a move follows.
+// there, reading it or not (`x := x + y` is one wide node, compiled alone),
+// or a word's value is moved.
 fn List::into_dest(self nodes: List<Node>, dest, width, id: Nat) → List<Node> {
     match nodes {
         Nil => match id.differs(dest) { True => [Move(width, dest, id)], False => [] },
         Cons(node, rest) => match rest {
-            Nil => match absent(dest, node.reads()) { True => [node.output_to(dest)], False => [node, Move(width, dest, id)] },
+            Nil => [node.output_to(dest)],
             Cons(_, _) => Cons(node, rest.into_dest(dest, width, id)),
         },
     }
@@ -358,16 +359,24 @@ fn List::widths_agree(self nodes: List<Node>, written: List<Port>) → Bool {
     }
 }
 
-// Whether `Prog::computes` takes the nodes as one leaf: all pure, its
+// Whether S4 takes the nodes whole (`Prog::pure_leaf`): all pure, its
 // inputs and nodes within the register pool, in evaluation order and no
-// input written (`leaf_checks`), values read at their widths; or a single
-// byte node.
-fn List::fits_leaf(self nodes: List<Node>) → Bool {
-    match nodes_pure(nodes) {
-        True => (nodes_inputs(nodes).len() + nodes.len()).leb(register_pool().len())
-            && (leaf_checks(nodes, leaf_inputs(nodes), leaf_outputs(nodes)) && nodes.widths_agree([])),
-        False => nodes.len().leb(1),
-    }
+// input written (`leaf_checks`), values read at their widths. Its values
+// stay in registers, so it is the better leaf.
+fn List::fits_registers(self nodes: List<Node>) → Bool {
+    nodes_pure(nodes) && ((nodes_inputs(nodes).len() + nodes.len()).leb(register_pool().len())
+        && (leaf_checks(nodes, leaf_inputs(nodes), leaf_outputs(nodes)) && nodes.widths_agree([])))
+}
+
+// Whether the leaf so far takes the next node, as `Prog::computes` would.
+// S4 takes a leaf whole while it can, its values in registers; a leaf S4
+// does not take is compiled a node at a time, every node wide
+// (`nodes_wide`), and takes only nodes S4 would not take alone either (byte
+// nodes, `x := x + y`), so a node S4 can hold in registers starts a leaf of
+// its own. A node not taken starts the next leaf.
+fn List::takes(self group: List<Node>, node: Node) → Bool {
+    (group ++ [node]).fits_registers()
+        || (!group.fits_registers() && (![node].fits_registers() && nodes_wide(group ++ [node])))
 }
 
 // A leaf of the group, then the statement.
@@ -381,12 +390,9 @@ fn List::packed(self items: List<Item>, group: List<Node>) → Stmt {
     match items {
         Nil => Stmt::leaf(group),
         Cons(item, rest) => match item {
-            Op(node) => match (group ++ [node]).fits_leaf() {
+            Op(node) => match group.takes(node) {
                 True => rest.packed(group ++ [node]),
-                False => match group {
-                    Nil => Then(Stmt::leaf([node]), rest.packed([])),
-                    Cons(_, _) => Then(Stmt::leaf(group), rest.packed([node])),
-                },
+                False => group.before(rest.packed([node])),
             },
             Do(s) => group.before(match rest { Nil => s, Cons(_, _) => Then(s, rest.packed([])) }),
         },
