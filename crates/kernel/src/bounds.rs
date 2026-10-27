@@ -320,6 +320,16 @@ pub(crate) fn type_locally_closed(t: &Rc<Type>) -> bool {
     })
 }
 
+/// [`type_locally_closed`] for a type the caller holds by reference: the
+/// node itself is walked, its children answered from the table. Read by the
+/// closed-conversion memo (`Tc::conv_ty`), with the same stakes.
+pub(crate) fn type_ref_locally_closed(t: &Type) -> bool {
+    CACHE.with(|c| {
+        let u = c.borrow_mut().compute_type(t);
+        u.bound == 0 && !u.has_tail
+    })
+}
+
 /// [`type_locally_closed`] for an `IWf` signature, which `Tc::iwf_sig_wf`
 /// judges once whatever Γ it occurs in.
 pub(crate) fn iwf_sig_locally_closed(sig: &IWfSig) -> bool {

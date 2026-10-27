@@ -207,6 +207,33 @@ impl Elaborator {
         Ok((sig.at(Rc::new(idx)), lvl))
     }
 
+    /// `fresh`, a family's shape (`index` false, keyed by the shape
+    /// declaration's tag) or index type (`index` true, by the family's), as
+    /// the allocation an earlier signature used when it is that same type.
+    ///
+    /// Each mention of a family lowers both afresh, and they are sums of one
+    /// summand per constructor (per member, for a mutual group's index), so
+    /// two occurrences of the family shared no node below the root: every
+    /// `D#iarity x` the kernel judged compared the shape at `x` with the
+    /// definition's domain node by node, and every conversion of two
+    /// instances walked both shapes in the value domain
+    /// (`issues/iwf-shape-spine-comb-depth.md`). The guard is a structural
+    /// `==`, the order of the lowering itself, so a hit is the same type in
+    /// the same scope and which copy stands is a matter of sharing only, as
+    /// for [`Self::share_registered_lowering`]. A miss (other arguments,
+    /// other globals) replaces the entry.
+    fn share_iwf_part(&self, tag: u32, index: bool, fresh: Type) -> Rc<Type> {
+        let mut memo = self.iwf_part_memo.borrow_mut();
+        match memo.get(&(tag, index)) {
+            Some(kept) if **kept == fresh => Rc::clone(kept),
+            _ => {
+                let fresh = Rc::new(fresh);
+                memo.insert((tag, index), Rc::clone(&fresh));
+                fresh
+            }
+        }
+    }
+
     /// The family's signature at type arguments `args`, scoped in `cx`.
     pub(crate) fn iwf_sig(
         &self,
@@ -223,9 +250,13 @@ impl Elaborator {
         let n = ind.ctors.len();
         let (shape, l) = self.lower_instance(cx, shape_decl, args, &[], span)?;
         let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
-        if let Some(sig) = self.iwf_sig_named(cx, ind, args, &shape, &l, &ity, &ilvl) {
+        let shape_rc = self.share_iwf_part(shape_decl.tag, false, shape);
+        let ity_rc = self.share_iwf_part(ind.tag, true, ity);
+        if let Some(sig) = self.iwf_sig_named(cx, ind, args, &shape_rc, &l, &ity_rc, &ilvl) {
             return Ok(sig);
         }
+        let shape = (*shape_rc).clone();
+        let ity = (*ity_rc).clone();
         let spine = self.spine(&shape, &l, n, span)?;
         let mut xcx = cx.clone();
         xcx.selfref = None;
@@ -311,8 +342,8 @@ impl Elaborator {
         Ok(Rc::new(IWfSig {
             level: l,
             idx_level: ilvl,
-            idx: Rc::new(ity),
-            shape: Rc::new(shape),
+            idx: ity_rc,
+            shape: shape_rc,
             arity: Rc::new(arity),
             out: Rc::new(out),
             child: Rc::new(child),
@@ -490,9 +521,9 @@ impl Elaborator {
         cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
-        shape: &Type,
+        shape: &Rc<Type>,
         l: &Level,
-        ity: &Type,
+        ity: &Rc<Type>,
         ilvl: &Level,
     ) -> Option<Rc<IWfSig>> {
         self.types.gdefs().abs_for(&GenDef::IChild(ind.tag))?;
@@ -506,8 +537,8 @@ impl Elaborator {
         Some(Rc::new(IWfSig {
             level: l.clone(),
             idx_level: ilvl.clone(),
-            idx: Rc::new(ity.clone()),
-            shape: Rc::new(shape.clone()),
+            idx: Rc::clone(ity),
+            shape: Rc::clone(shape),
             arity: self.m_ref_app(cx, GenDef::IArity(ind.tag), &tel, 1)?,
             out: self.m_ref_app(cx, GenDef::IOut(ind.tag), &tel, 1)?,
             child: self.m_ref_app(cx, GenDef::IChild(ind.tag), &tel, 2)?,

@@ -89,5 +89,16 @@ spine itself: the step's case tree is a comb of depth Θ(m), each level's
 motive holds the label as a chain of `inr`s of that depth, and each arm's
 conversion evaluates the definitions at its label down the same chain. Wide
 sums are balanced since PR #214 (`issues/wide-inductive-balanced-sum.md`),
-which makes both logarithmic; with both, the ring is about m^1.6 from 80 to
-160 members, not yet attributed (`issues/iwf-shape-spine-comb-depth.md`).
+which makes both logarithmic. Two costs per arm were left
+(`issues/iwf-shape-spine-comb-depth.md`), both from two spellings of one
+type. Every mention lowered the shape and the index type afresh, so the
+instances shared no node and the kernel compared them node by node; they are
+now one allocation per family (`Elaborator::share_iwf_part`). And the
+recursion's motive names the member index type by its registered code,
+`El(D#members#tycode)`, where `D#iout` returns the inline sum, so the case
+tree converted the two at every node, a Γ one binder longer each time; the
+kernel now keeps a conversion of two sides that read nothing of Γ apart from
+Γ (`ClosedSide` in `typing.rs`). The recursion's gate is about linear in the
+members. What still grows is each member's own statement, which judges the
+inline signature again in its own gate
+(`issues/iwf-member-statement-signature-per-gate.md`).

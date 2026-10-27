@@ -335,7 +335,11 @@ fn mutual_recursion() -> Family {
         // 0.95 (0.91-0.99, two runs) over 2..8, fixed cost dominating, so
         // the sweep moved to 4..32 with wide sums balanced as well (#214):
         // 1.28 (1.26-1.30), about 1.5 from 16 to 32 and 1.6 by hand from 80
-        // to 160 (issues/iwf-shape-spine-comb-depth.md).
+        // to 160 (issues/iwf-shape-spine-comb-depth.md). Then, with the
+        // shape shared across mentions and the index type's two spellings
+        // converted apart from Γ: 1.16 (one run), the recursion's own gate
+        // about linear; the rest is each member's statement re-judging the
+        // signature (issues/iwf-member-statement-signature-per-gate.md).
         expect_slope: Some((0.93, 1.63)),
         cases: sweep("inductive/mutual-recursion", &[4, 8, 16, 32], src),
     }
