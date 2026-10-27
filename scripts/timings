@@ -79,6 +79,10 @@ COLUMNS = {
     "named projections": (["projection_named"], 1),
     "structural projections": (["projection_structural"], 1),
     "instance matches": (["instance_match_calls"], 1),
+    # How far the process's peak memory rose while the row was open
+    # (docs/instrumentation-design.md §4): a rise, not a use, and exact only
+    # at one kernel worker. The row with the largest raised the peak.
+    "peak MB":   (["peak_growth_kb"], 1e3),
 }
 DEFAULT = ["total ms", "gate ms", "misses", "queries", "steps"]
 

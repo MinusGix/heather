@@ -12,6 +12,7 @@ use heather_elab::{Elaborator, LintProfile};
 use heather_cli::{loader, semantic::SemanticSession};
 
 mod elf;
+mod emission;
 mod support;
 use support::SUPPORT;
 mod verified;

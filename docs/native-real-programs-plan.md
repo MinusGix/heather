@@ -219,6 +219,14 @@ its first real program.
   suite's rail, and the shape (code size against peak and time) is recorded
   in `perf/`.
 
+**Status.** Memory and kernel fuel are done
+(`issues/native-compile-capacity.md`): the read-back was the peak, and it now
+reads one part of the statement tree at a time, so the peak no longer grows
+with the code; the emission is stated a part at a time and joined by three
+lemmas proved once. Build time is still quadratic in the code, through the
+layout proof's and the byte pieces' whole-program label lookups:
+`issues/native-compile-linear-layout.md`.
+
 ### 3.3 Writing programs
 
 A `Source` today is written as cat is (`lib/native/native_cat.hthr`):
