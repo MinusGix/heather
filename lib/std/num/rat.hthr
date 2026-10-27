@@ -596,6 +596,14 @@ theorem Rat::add_lt_mono({x, y, z, w: Rat}, h1: x < y, h2: z <= w): x + z < y + 
     Rat::lt_of_lt_of_le(x.add_lt_mono_r(y, z, h1), z.add_le_mono_l(w, y, h2))
 }
 
+theorem Rat::add_nonneg({x, y: Rat}, hx: 0 <= x, hy: 0 <= y): 0 <= x + y {
+    Rat::le_respects(Rat::zero_add(0), (x + y).same_refl(), Rat::add_le_mono(hx, hy))
+}
+
+theorem Rat::add_pos({x, y: Rat}, hx: 0 < x, hy: 0 < y): 0 < x + y {
+    Rat::lt_respects(Rat::zero_add(0), (x + y).same_refl(), Rat::add_lt_mono(hx, Rat::le_of_lt(hy)))
+}
+
 theorem Rat::sub_nonneg({x, y: Rat}, h: y <= x): 0 <= x - y {
     Rat::le_respects(y.add_neg(), (x - y).same_refl(), y.add_le_mono_r(x, -y, h))
 }
@@ -1541,6 +1549,28 @@ evidence theorem Rat::apart_npow({x: Rat}, {n: Nat}, h: x.Apart(0) := infer): x.
     x.npow_apart(n, h)
 }
 
+theorem Rat::npow_nonneg({x: Rat}, n: Nat, hx: 0 <= x): 0 <= x.npow(n) {
+    match n {
+        Zero => trivial,
+        Succ(k) => Rat::mul_nonneg(Rat::npow_nonneg(k, hx), hx),
+    }
+}
+
+theorem Rat::npow_pos({x: Rat}, n: Nat, hx: 0 < x): 0 < x.npow(n) {
+    match n {
+        Zero => trivial,
+        Succ(k) => Rat::mul_pos(Rat::npow_pos(k, hx), hx),
+    }
+}
+
+// A power grows with a nonnegative base.
+theorem Rat::npow_le_mono({x, y: Rat}, n: Nat, h: x <= y, hx: 0 <= x): x.npow(n) <= y.npow(n) {
+    match n {
+        Zero => Rat::le_refl(1),
+        Succ(k) => Rat::mul_le_mul(Rat::npow_le_mono(k, h, hx), h, Rat::npow_nonneg(k, hx), hx),
+    }
+}
+
 // An inverse is apart from zero: were it ≈ 0, x · x⁻¹ would be ≈ 0, not 1.
 evidence theorem Rat::apart_inv({x: Rat}, {h: x.Apart(0)}): x.inv(h := h).Apart(0) {
     Rat::apart_of_nonzero(λ zero => {
@@ -1719,6 +1749,10 @@ theorem Rat::sub_lt_sub_r(self x, a, b: Rat, h: a < b): a - x < b - x { a.add_lt
 theorem Rat::sub_le_sub_l(self x, a, b: Rat, h: a <= b): x - b <= x - a { (-b).add_le_mono_l(-a, x, Rat::neg_le(x := a, y := b, h := h)) }
 
 theorem Rat::sub_lt_sub_l(self x, a, b: Rat, h: a < b): x - b < x - a { (-b).add_lt_mono_l(-a, x, Rat::neg_lt(x := a, y := b, h := h)) }
+
+theorem Rat::sub_le_sub({a, b, c, d: Rat}, h1: a <= b, h2: c <= d): a - d <= b - c {
+    Rat::le_trans(d.sub_le_sub_r(a, b, h1), b.sub_le_sub_l(c, d, h2))
+}
 
 theorem Rat::le_of_sub_le_sub_r(self x, a, b: Rat, h: a - x <= b - x): a <= b {
     match a.le_dec(b) as λ _ => a <= b {

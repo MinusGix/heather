@@ -195,22 +195,21 @@ native_bin_warmup() {
 }
 
 # The CLI image store (crates/cli/src/showcase.rs CLI_CHECK_IMAGES) that the
-# library gate, the showcase gate and native_cat.rs's `write-elf` share. Cold,
-# `write-elf` of cat elaborates its whole closure (std's x86 and Linux
-# modules, lib/native's compiler and proofs) and then checks the compile's
-# certificate, and the sum passes the rail where each half fits. Build the
-# closure here first, in a bounded process of its own, in `write-elf`'s load
-# order (not over the gate's world: docs/library-world-design.md §3), and in
-# the stale lanes with their trade, as `write-elf` then replays it.
+# library gate, the showcase gate and native_cat.rs/native_tools.rs's
+# `write-elf` share. `write-elf` loads its program's closure over the gate's
+# world (`--world lib`, docs/library-world-design.md §3), so it replays what
+# the gate built; cold, it would have to build the world's front itself, most
+# of the library, which no one process does under the rail. So the warmup is
+# the gate: one child per folder, three at a time, each well inside the
+# rail. In the stale lanes the gate replays with their trade, as `write-elf`
+# then does. Warm it is the gate's replays; the parallel phase runs it again
+# as a test.
 cli_images_warmup() {
-  local stale=()
-  [[ "${HEATHER_SEMANTIC_IMAGES:-}" == accept-stale ]] && stale=(--accept-stale-images)
   (
     ulimit -v 6291456
     ulimit -t 300
-    HEATHER_KERNEL_WORKERS=1 "${CARGO_TARGET_DIR:-target}/debug/heather" check --cache --cache-dir target/cli-check-images \
-      "${stale[@]}" lib/native/native_cat_executable.hthr > /dev/null
-  ) || echo "cli image warmup did not finish; the library gate and native_cat.rs report why"
+    cargo test "${CARGO_FLAGS[@]}" -p heather-cli --test library -- --exact every_library_module_checks --format terse > /dev/null
+  ) || echo "cli image warmup did not finish; the library gate reports why"
 }
 
 native_warmup() {
@@ -233,7 +232,7 @@ else
   if [[ "$requested" == *"--test native"* ]]; then
     native_warmup
   fi
-  if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]] || [[ "$requested" == *"--test library"* ]]; then
+  if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]]; then
     cli_images_warmup
   fi
   whole_elab=false

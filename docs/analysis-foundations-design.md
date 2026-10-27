@@ -90,6 +90,7 @@ by two of them (§3.7).
 | Regular perturbation | Hensel lifting in the `ε`-adic dominance (§3.2, §10) |
 | Singular perturbation | the Newton polygon (tropical geometry), giving Puiseux exponents (§10) |
 | Stirling, harmonic numbers | divergent asymptotic expansions at `n → ∞` (§9), which a Taylor-first library cannot state |
+| Divergent sums | a series is formal, and a sum is a summation method with Hardy's laws. Formal identities transfer to sums, `1 + 2 + 4 + … = −1` is a theorem, and `1 + 2 + 3 + … = −1/12` is a ¬ theorem for stable methods (§3.8) |
 | Float error analysis | first-order perturbation in `u`. `Format::gamma_add` is already `O`-arithmetic (§10) |
 | Backprop, optimisers | a reverse differential structure on parametrised maps (§3.1) |
 | Width expansions (PDLT) | perturbation in `1/n` at `n → ∞` (§10) |
@@ -418,6 +419,102 @@ The meeting-point class waits until Laurent series with `d/dx` exist as an
 instance of both. An interface that two instances do not exercise is cruft,
 and that is the only reason the instances are built in parallel with their
 interfaces rather than after them.
+
+### 3.8 Divergent series are first-class: a series is not its sum
+
+Bender and Orszag treat divergent series as ordinary working material, not
+as an edge case to be apologised for. This core can do the same, because
+it already separates the two things that "a series" usually conflates.
+
+**The series is a formal object.** In the Hurwitz representation (§3.4, §5)
+a series is defined by the equation it satisfies, and convergence never
+comes up. Euler's series `E = ∑ (−1)ⁿ n! xⁿ⁺¹` is the unique formal solution
+of `x²·E' + E = x`, and coefficient recursion defines it exactly as it
+defines `exp`. The algebra, coinduction, Newton lifting and certificates
+apply unchanged. Perturbation series (§10) are produced this way whether or
+not they converge, and Bender's anharmonic-oscillator and
+Rayleigh–Schrödinger series usually do not.
+
+**A sum is a separate, partial operation whose laws are tracked.** A
+*summation method* is an interface. It has a domain (the series it sums),
+a value, and capability laws in Hardy's sense (*Divergent Series*, 1949):
+
+- **regular:** it agrees with the ordinary limit on convergent series;
+- **linear;**
+- **stable:** `Σ(a₀, a₁, …) ≈ a₀ + Σ(a₁, …)`;
+- **multiplicative:** it respects the Cauchy product;
+- **differential:** it commutes with `d`, so the sum of a formal ODE
+  solution solves the ODE.
+
+**A transfer theorem carries formal identities to sums.** If a formal
+identity holds between series in a method's domain, and the method has the
+capabilities the identity's operations need, then the identity holds
+between their sums. §8's evaluation homomorphism is the simplest instance,
+with ordinary convergence as the method. Each of Bender's formal
+manipulations is then licensed by a named capability, not by trust.
+
+**The classical "paradoxes" become theorems and ¬ theorems:**
+
+- Any linear stable method that sums `1 + 2 + 4 + …` gives `−1`, because
+  `S = 1 + 2S`.
+- Any linear stable method that sums Grandi's series `1 − 1 + 1 − …` gives
+  `½`.
+- **No** linear stable method sums `1 + 2 + 3 + …`. Subtracting the series
+  from its shift would sum `1 + 1 + …`, and stability then gives `0 = 1`.
+  So `−1/12` is a ¬ theorem about stable methods, and a true theorem about
+  zeta regularisation, which is linear but not stable. The distinction the
+  folklore blurs is a difference of capability records.
+
+**Instances, from computable to horizon:**
+
+| Method | Domain | Capabilities | Needs |
+|---|---|---|---|
+| ordinary convergence | convergent series | all five | Layer E (§8) |
+| Cesàro, Abel | e.g. Grandi | regular, linear, stable | Layers A and C |
+| Stieltjes continued fractions and Padé | Stieltjes series (Euler's, moments `n!`) | regular, linear on the class, two-sided enclosures | Layer B, `by intervals()` |
+| Borel–Laplace | Gevrey-1 series summable in a direction | all five, and composition (a homomorphism of differential algebras) | integration (§12), analytic continuation |
+| multisummation, Écalle's accelero-summation | resurgent transseries | the same, per sector | §11 |
+| zeta regularisation | Dirichlet-type series | linear, **not** stable | analytic continuation, a deliberate contrast |
+
+**The first instance needs no integration.** Euler's series has the
+Stieltjes continued fraction
+`x/(1 + x/(1 + x/(1 + 2x/(1 + 2x/(1 + 3x/…)))))`, with partial numerators
+`⌈k/2⌉·x`. For `x > 0`, its convergents are rational functions computed at
+`Rat`, they alternate around the value, and they nest. So the "sum of a
+divergent series" becomes a `CReal` defined by nested certified
+enclosures, read by `by intervals()`. Two things are owed:
+
+- the alternation and nesting, which follow algebraically from the
+  continued fraction's recurrences;
+- a rate for the widths, which the issue must find. Carleman's condition
+  gives convergence but not a modulus.
+
+The identity with the Borel–Laplace integral `E(x) = x·∫₀^∞ e^{−t}/(1 + xt) dt`
+waits for integration. The Padé brackets are the same objects seen from the
+series side (Bender and Orszag §8.5–8.6; Baker and Graves-Morris).
+
+**Asymptotics, Gevrey classes and the exponentially small.** Several pieces
+connect here:
+
+- The sum of a divergent series still has the series as an asymptotic
+  expansion: a certified expansion (§7) at every order. For a Gevrey-1
+  series the remainder constants grow like `C_N ≈ A·Bᴺ·N!`, and that growth
+  law is the Gevrey class, stated on the record's constants.
+- *Watson's theorem* is the uniqueness that makes the Borel sum canonical:
+  there is exactly one function in a wide enough sector with those
+  Gevrey-controlled remainders.
+- *Optimal truncation*, stopping at the smallest term, leaves an error of
+  order `e^{−1/(Bε)}`. This is superasymptotics, and that error is a
+  transseries monomial.
+- *Resurgence* (Écalle): singularities of the Borel transform correspond to
+  the exponentially small terms.
+- The *Stokes phenomenon*, different sums in different sectors, is a jump by
+  such a term.
+
+So divergent series and their exponentially small companions live together
+in transseries (§11), and Borel–Écalle summation maps transseries to
+functions. Divergence stops being an edge case: it is the generic
+situation, and the meeting point of §3.3 is where it is resolved.
 
 ## 4. Layer A: finite sums and products
 
@@ -1035,6 +1132,9 @@ note.
 | 12 | `regular-perturbation-expansions` | F | 6, 7, 11 | perturbed roots and fixed points, the float error reading, width expansions |
 | 13 | `harmonic-and-stirling-asymptotics` | showcase | 7, 8, `log` | the first divergent expansion, and γ |
 | 14 | `grid-based-transseries` | G, meeting point | 5, 6, 12 | research horizon: differential-valued fields, Gruntz |
+| — | `summation-methods` | §3.8 | 1, 3, 4 | the interface, Hardy's laws, the transfer theorem, the stable-method theorems and ¬ theorems, Cesàro and Abel |
+| — | `stieltjes-pade-enclosures` | §3.8 | 3, `summation-methods`, intervals | Euler's divergent series summed as a `CReal` by nested continued-fraction enclosures, with no integration |
+| — | `borel-laplace-summation` | §3.8 | `summation-methods`, 7, §12's integral | Gevrey classes, Watson uniqueness, the differential-algebra homomorphism |
 | — | `gaussian-state-by-stein` | ML bridge | 3, `ml-gaussian-states` | the Gaussian state defined by `E[x_i f] = ∑_j C_ij E[∂_j f]`, with Wick's matchings as a theorem. This gives expectations to ML theory before measure theory exists |
 
 Item 0 comes first. It builds the minimum of items 1, 3, 6, 7 and 12 in
@@ -1064,6 +1164,8 @@ Made here. Each is revisable when a customer pushes back.
   as the core. The concrete layers are their first instances (§3).
 - **A derivative is data.** A differentiable map is a map paired with its
   derivative and evidence (§3.1), and smoothness is coinductive.
+- **A series is not its sum** (§3.8). Summation methods are partial maps
+  with Hardy's capability laws, and convergent evaluation is one of them.
 - **A vertical slice first** (§13, item 0), then the layers.
 - **Several variables are iterated series** (§5).
 - **Searches by tool:** Newton's in Heather and WZ's as a Rust oracle to
@@ -1142,6 +1244,14 @@ Left open:
   Theory* (2022).
 - J. Dieudonné, *Calcul infinitésimal* (1968): développements limités and
   asymptotic scales.
+- G. H. Hardy, *Divergent Series* (1949): regularity, linearity, stability.
+- C. Bender and S. Orszag, *Advanced Mathematical Methods for Scientists and
+  Engineers* (1978), ch. 8: summation, Padé, Stieltjes series.
+- G. Baker and P. Graves-Morris, *Padé Approximants* (2nd ed. 1996).
+- W. Balser, *Formal Power Series and Linear Systems of Meromorphic Ordinary
+  Differential Equations* (2000): Gevrey classes, Borel and multisummation.
+- O. Costin, *Asymptotics and Borel Summability* (2008).
+- J. Écalle, *Les fonctions résurgentes* (1981–85).
 - R. Graham, D. Knuth and O. Patashnik, *Concrete Mathematics*, ch. 2 and 9.
 - N. G. de Bruijn, *Asymptotic Methods in Analysis*: Euler–Maclaurin,
   Stirling.

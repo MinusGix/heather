@@ -72,13 +72,22 @@ library's files once per process.
 
 A process that needs the world's end and runs alone builds the whole front
 of it alone. The gate's children do not: they run in the world's order, three
-at a time, so the front is built once among them. A lone process does: the
-suite's CLI image warmup and `native_cat.rs`'s `write-elf` of cat, whose
-closure sits at the world's end, would have to elaborate most of the library
-over cat's own modules and its certificate, past the CPU rail on a cold
-store. They stay on their own closure's order, which they share with each
-other; the price is that a cold store elaborates cat's part of `std` once for
-them and once for the gate.
+at a time, so the front is built once among them. A lone process does: a
+`write-elf` of cat, whose closure sits at the world's end, would have to
+elaborate most of the library over cat's own modules and its certificate,
+past the CPU rail on a cold store.
+
+Until 2026-10-27 `write-elf` and the suite's CLI image warmup therefore
+stayed on their own closure's order. That cost a cold store cat's closure
+three times: once for the gate, once in cat's order, and once more in
+`native_tools.hthr`'s, whose closure is cat's in another order, so it shared
+almost no image with either. Each of the last two was one process of about
+250 CPU-s, close to the rail (`issues/library-gate-native-cold-rail.md`).
+Now `write-elf` takes `--world` as `check` does, the native tests pass
+`--world lib`, and the warmup before them is the gate itself
+(`scripts/test`'s `cli_images_warmup`), which builds the front a folder per
+child. Over the gate's store a `write-elf` replays its whole closure; the
+world's prefix costs it a few CPU-seconds of replays beyond its own closure.
 
 ## 4. What it does not do
 

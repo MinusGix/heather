@@ -1,6 +1,6 @@
 ---
 title: A monotonicity tactic that reduces an inequality to its parts (gcongr)
-status: open
+status: closed
 labels: [tactics,reals]
 area: tactics
 milestone: [tac-general]
@@ -35,3 +35,7 @@ Scope:
 ## What it assumes from elsewhere
 - **[[congruence-by-anti-unification]]**: the shared pattern of the two sides.
 - **[[ordered-algebra-api]]**: where the monotonicity laws live as class laws.
+
+## Log
+
+- 2026-10-27: Landed as `mono` / `mono_with(hs)` in `lib/std/tactic/mono.hthr`, a `Tac<Expr>` in Heather (design: docs/monotonicity-tactic-design.md). At a goal `l <= r` or `l < r` at `Rat`, `CReal`, `Int` or `Nat` it closes the goal outright from a given term or hypothesis; else, where both sides apply the same operation, it finds the differing argument positions by a syntactic anti-unification over `View` (conversion only where the view does not present a pair), picks the carrier's first law whose movable positions cover them, and `apply`s it, proving the premises by the same search; else it treats the goal as a leaf (reflexivity, sign laws for `0 <= …`/`0 < …` over abs, products, sums, powers, reciprocals and `inv_succ`, computation at closed sides, `<` for `<=`). Variance is the law's: `neg_le`, `sub_le_sub_l`, `recip_le_recip` are table rows like the others. The registry is per carrier by name, resolved at the `by`, unresolvable names skipped. New `rat` laws: `add_nonneg`, `add_pos`, `sub_le_sub`, `npow_nonneg`, `npow_pos`, `npow_le_mono`. `series.hthr` uses it at seven calc steps. Probes: `lib/_tests/std/tactic/mono_tests.hthr`. `calc` uses it under `by`. With block `let` facts visible to tactics (PR #225), `let` facts are found as hypotheses; projections such as `kq.left` are passed. Class-generic goals left to [[mono-class-laws]].
