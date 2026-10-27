@@ -55,3 +55,23 @@ rail, so [[native-compile-capacity]]'s test can run it.
 - **[[native-cat-executable]]** owns `write-elf`'s certificate shape.
   Assumed here: only that `{p}_laid` may be proved by any route that states
   the same `laid_out`.
+
+## Log
+
+- 2026-10-27: design chosen, a verified label table (the second direction),
+  because the byte pieces need fast lookups whichever way `laid_out` is
+  proved, and one table serves both. Per program, Rust writes two decision
+  trees as Heather functions (comparisons on literals, depth logarithmic in
+  the label count): `slot(name) = (index, offset)` and `name_at(index)`.
+  One pass from the program's end, carrying the item index and the offset
+  (so nothing recomputes `prog_len`), checks at each item that `name_at`
+  gives its name, that a named item's `slot` gives its index and offset,
+  that its jump lands by the table's offsets, and that its target is named
+  (`name_at(slot(t).index) = t`, index in range) and nonzero. Proved once:
+  the pass implies `names_unique`, `asm_target(p, n)` equals the table's
+  offset for every nonzero `n`, and so `jumps_land` and `targets_named`:
+  `laid_out` follows. The pass is stated a stretch at a time over the
+  literal's cut definitions, so a stretch evaluates only its own items.
+  The byte pieces then read labels from the table, through a congruence
+  lemma (`asm_code` with labels that agree on every jump target), over an
+  offset-carrying `asm_code` variant. Cost per item: logarithmic.

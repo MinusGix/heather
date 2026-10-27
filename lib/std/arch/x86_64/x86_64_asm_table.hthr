@@ -1,0 +1,440 @@
+// A program's labels checked in one pass (issues/native-compile-linear-layout.md).
+//
+// `Prog::laid_out` looks every label up by walking the program (`asm_target`,
+// `lacks`), and every item's offset by summing the items before it
+// (`prog_len`), so evaluating it is quadratic in the program. A producer that
+// knows the labels writes them down instead: a `LabelTable` names each
+// label's item index and offset and each index's name, as functions whose
+// bodies are comparisons on literals. One pass from the program's end, the
+// index and offset carried down, checks the table against every item
+// (`LabelTable::checked`), and what is proved here once turns that pass into
+// `laid_out`: the table's offset is `asm_target`'s for every label it
+// names, so jumps checked to land by the table land by the program.
+import x86_64;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_layout;
+import bool;
+import logic;
+import nat;
+
+// `index_of(n)` and `offset_of(n)` are where label `n` is: its item's index
+// from the program's start, and its offset. `name_at(i)` is item `i`'s name.
+// `depth` is the number of items. Nothing here trusts them: `checked` is
+// what makes them the program's.
+record LabelTable { index_of: Nat → Nat, offset_of: Nat → Nat, name_at: Nat → Nat, depth: Nat }
+
+// The jump offsets the table gives.
+fn LabelTable::labels(self t: LabelTable) → Nat → Nat { λ n => t.offset_of(n) }
+
+// `n` names an item: its index is in range and that item is so named.
+fn LabelTable::has(self t: LabelTable, n: Nat) → Bool {
+    Succ(t.index_of(n)).leb(t.depth) && asm_same(t.name_at(t.index_of(n)), n)
+}
+
+// A jump's target is a nonzero label the table has.
+fn LabelTable::target_ok(self t: LabelTable, target: Nat) → Bool {
+    match target { Zero => False, Succ(_) => t.has(target) }
+}
+fn LabelTable::targets_ok(self t: LabelTable, item: Asm) → Bool {
+    match item {
+        Jcc(_, target) => t.target_ok(target),
+        Jmp(target) => t.target_ok(target),
+        CallTo(target) => t.target_ok(target),
+        _ => True,
+    }
+}
+
+// Item `i`, at offset `here`: the table has its name, and a named item's
+// index and offset; its jump lands by the table's offsets, on a label the
+// table has.
+fn LabelTable::item_ok(self t: LabelTable, i, here, name: Nat, item: Asm) → Bool {
+    asm_same(t.name_at(i), name) &&
+        ((match name { Zero => True, Succ(_) => asm_same(t.index_of(name), i) && asm_same(t.offset_of(name), here) }) &&
+            (item_lands(t.labels(), here, item) && t.targets_ok(item)))
+}
+
+// Every item of `p` checked, `p` having `depth` items and ending at `end`.
+fn LabelTable::checked(self t: LabelTable, p: Prog, depth, end: Nat) → Bool {
+    match p {
+        Start => asm_same(depth, 0) && asm_same(end, 0),
+        At(before, name, item) => match depth {
+            Zero => False,
+            Succ(i) => asm_len(item).leb(end) && (t.item_ok(i, end - asm_len(item), name, item) && t.checked(before, i, end - asm_len(item))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the pass proves
+
+// A checked program ends where the pass says: its offsets are the carried ones.
+theorem LabelTable::checked_len(self t: LabelTable, p: Prog): (depth, end: Nat) → t.checked(p, depth, end).IsTrue() → prog_len(p) = end {
+    match p {
+        Start => λ depth end ok =>
+            sym(asm_same_eq(end, 0, eq_true_of_is_true(asm_same(end, 0), Bool::is_true_and(asm_same(depth, 0), asm_same(end, 0), ok).right))),
+        At(before, name, item) => λ depth => match depth as λ d => (end: Nat) → t.checked(At(before, name, item), d, end).IsTrue() →
+                prog_len(At(before, name, item)) = end {
+            Zero => λ end no => false_elim(no),
+            Succ(i) => λ end ok => {
+                let here = end - asm_len(item);
+                let parts = Bool::is_true_and(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checked(before, i, here), ok);
+                let rest = Bool::is_true_and(t.item_ok(i, here, name, item), t.checked(before, i, here), parts.right);
+                trans(cong(t.checked_len(before, i, here, rest.right), f := λ (x: Nat) => x + asm_len(item)),
+                    Nat::sub_add_cancel(asm_len(item), end, Nat::leb_sound(asm_len(item), end, parts.left)))
+            },
+        },
+    }
+}
+
+// Item `i` checked is not named `Succ(k)` if the table puts `Succ(k)` past `i`.
+theorem LabelTable::item_not_named(self t: LabelTable, i, here, k: Nat, name: Nat, item: Asm): t.item_ok(i, here, name, item).IsTrue() →
+    Succ(i).leb(t.index_of(Succ(k))).IsTrue() → (!(Succ(k).leb(name) && name.leb(Succ(k)))).IsTrue() {
+    match name as λ m => t.item_ok(i, here, m, item).IsTrue() → Succ(i).leb(t.index_of(Succ(k))).IsTrue() →
+            (!(Succ(k).leb(m) && m.leb(Succ(k)))).IsTrue() {
+        Zero => λ _ _ => trivial,
+        Succ(l) => λ ok past => (match asm_same(k, l) as λ b => asm_same(k, l) = b → (!b).IsTrue() {
+            True => λ same => {
+                let parts = Bool::is_true_and(asm_same(t.name_at(i), Succ(l)),
+                    (asm_same(t.index_of(Succ(l)), i) && asm_same(t.offset_of(Succ(l)), here)) && (item_lands(t.labels(), here, item) && t.targets_ok(item)), ok);
+                let named = Bool::is_true_and(asm_same(t.index_of(Succ(l)), i) && asm_same(t.offset_of(Succ(l)), here),
+                    item_lands(t.labels(), here, item) && t.targets_ok(item), parts.right).left;
+                let at = Bool::is_true_and(asm_same(t.index_of(Succ(l)), i), asm_same(t.offset_of(Succ(l)), here), named).left;
+                let index = asm_same_eq(t.index_of(Succ(l)), i, eq_true_of_is_true(asm_same(t.index_of(Succ(l)), i), at));
+                let index_k = j(sym(asm_same_eq(k, l, same)), λ x _ => t.index_of(Succ(x)) = i, index);
+                let over = j(index_k, λ x _ => Succ(i).leb(x).IsTrue(), past);
+                false_elim(Nat::leb_lt_le_absurd(i, i, over, j(sym(Nat::leb_refl(i)), λ b _ => b.IsTrue(), trivial)))
+            },
+            False => λ _ => trivial,
+        })(refl),
+    }
+}
+
+// A label the table puts at or past `depth` names no item of a program
+// checked with `depth` items: the names uniquely placed below it.
+theorem LabelTable::lacks_past(self t: LabelTable, q: Prog): (depth, end, k: Nat) → t.checked(q, depth, end).IsTrue() →
+    depth.leb(t.index_of(Succ(k))).IsTrue() → q.lacks(Succ(k)).IsTrue() {
+    match q {
+        Start => λ depth end k _ _ => trivial,
+        At(before, name, item) => λ depth => match depth as λ d => (end, k: Nat) → t.checked(At(before, name, item), d, end).IsTrue() →
+                d.leb(t.index_of(Succ(k))).IsTrue() → At(before, name, item).lacks(Succ(k)).IsTrue() {
+            Zero => λ end k no _ => false_elim(no),
+            Succ(i) => λ end k ok past => {
+                let here = end - asm_len(item);
+                let parts = Bool::is_true_and(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checked(before, i, here), ok);
+                let rest = Bool::is_true_and(t.item_ok(i, here, name, item), t.checked(before, i, here), parts.right);
+                let below = Nat::leb_complete(i, t.index_of(Succ(k)),
+                    Nat::le_trans(i, Succ(i), t.index_of(Succ(k)), Nat::le_succ_r(i, i, Nat::le_refl(i)), Nat::leb_sound(Succ(i), t.index_of(Succ(k)), past)));
+                Bool::is_true_and_intro(!(Succ(k).leb(name) && name.leb(Succ(k))), before.lacks(Succ(k)),
+                    t.item_not_named(i, here, k, name, item, rest.left, past),
+                    t.lacks_past(before, i, here, k, rest.right, below))
+            },
+        },
+    }
+}
+
+// A checked program names every label once.
+theorem LabelTable::checked_unique(self t: LabelTable, p: Prog): (depth, end: Nat) → t.checked(p, depth, end).IsTrue() → p.names_unique().IsTrue() {
+    match p {
+        Start => λ depth end _ => trivial,
+        At(before, name, item) => λ depth => match depth as λ d => (end: Nat) → t.checked(At(before, name, item), d, end).IsTrue() →
+                At(before, name, item).names_unique().IsTrue() {
+            Zero => λ end no => false_elim(no),
+            Succ(i) => λ end ok => {
+                let here = end - asm_len(item);
+                let parts = Bool::is_true_and(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checked(before, i, here), ok);
+                let rest = Bool::is_true_and(t.item_ok(i, here, name, item), t.checked(before, i, here), parts.right);
+                let earlier = t.checked_unique(before, i, here, rest.right);
+                (match name as λ m => t.item_ok(i, here, m, item).IsTrue() → At(before, m, item).names_unique().IsTrue() {
+                    Zero => λ _ => earlier,
+                    Succ(l) => λ named => {
+                        let parts = Bool::is_true_and(asm_same(t.name_at(i), Succ(l)),
+                            (asm_same(t.index_of(Succ(l)), i) && asm_same(t.offset_of(Succ(l)), here)) && (item_lands(t.labels(), here, item) && t.targets_ok(item)), named);
+                        let at = Bool::is_true_and(asm_same(t.index_of(Succ(l)), i), asm_same(t.offset_of(Succ(l)), here),
+                            Bool::is_true_and(asm_same(t.index_of(Succ(l)), i) && asm_same(t.offset_of(Succ(l)), here),
+                                item_lands(t.labels(), here, item) && t.targets_ok(item), parts.right).left).left;
+                        let index = asm_same_eq(t.index_of(Succ(l)), i, eq_true_of_is_true(asm_same(t.index_of(Succ(l)), i), at));
+                        let past = j(sym(index), λ x _ => i.leb(x).IsTrue(), j(sym(Nat::leb_refl(i)), λ b _ => b.IsTrue(), trivial));
+                        Bool::is_true_and_intro(before.lacks(Succ(l)), before.names_unique(), t.lacks_past(before, i, here, l, rest.right, past), earlier)
+                    },
+                })(rest.left)
+            },
+        },
+    }
+}
+
+theorem asm_same_self(n: Nat): asm_same(n, n) = True { j(sym(Nat::leb_refl(n)), λ b _ => (b && b) = True, refl) }
+
+// A label the table has is where the table says: `asm_target` finds it at
+// the table's offset.
+theorem LabelTable::target_at(self t: LabelTable, q: Prog): (depth, end, k: Nat) → t.checked(q, depth, end).IsTrue() →
+    Succ(t.index_of(Succ(k))).leb(depth).IsTrue() → asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)).IsTrue() →
+    asm_target(q, Succ(k)) = t.offset_of(Succ(k)) {
+    match q {
+        Start => λ depth end k ok within _ => false_elim((match depth as λ d => t.checked(Start, d, end).IsTrue() → Succ(t.index_of(Succ(k))).leb(d).IsTrue() → logic::False {
+            Zero => λ _ no => no,
+            Succ(_) => λ bad _ => bad,
+        })(ok, within)),
+        At(before, name, item) => λ depth => match depth as λ d => (end, k: Nat) → t.checked(At(before, name, item), d, end).IsTrue() →
+                Succ(t.index_of(Succ(k))).leb(d).IsTrue() → asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)).IsTrue() →
+                asm_target(At(before, name, item), Succ(k)) = t.offset_of(Succ(k)) {
+            Zero => λ end k no _ _ => false_elim(no),
+            Succ(i) => λ end k ok within names => {
+                let here = end - asm_len(item);
+                let parts = Bool::is_true_and(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checked(before, i, here), ok);
+                let rest = Bool::is_true_and(t.item_ok(i, here, name, item), t.checked(before, i, here), parts.right);
+                let item_parts = Bool::is_true_and(asm_same(t.name_at(i), name),
+                    (match name { Zero => True, Succ(_) => asm_same(t.index_of(name), i) && asm_same(t.offset_of(name), here) }) &&
+                        (item_lands(t.labels(), here, item) && t.targets_ok(item)), rest.left);
+                let name_i = asm_same_eq(t.name_at(i), name, eq_true_of_is_true(asm_same(t.name_at(i), name), item_parts.left));
+                let found = asm_same_eq(t.name_at(t.index_of(Succ(k))), Succ(k), eq_true_of_is_true(asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)), names));
+                (match asm_same(name, Succ(k)) as λ b => asm_same(name, Succ(k)) = b →
+                        (match b { True => prog_len(before), False => asm_target(before, Succ(k)) }) = t.offset_of(Succ(k)) {
+                    True => λ same => {
+                        let is = asm_same_eq(name, Succ(k), same);
+                        let named = j(is, λ x _ => t.item_ok(i, here, x, item).IsTrue(), rest.left);
+                        let named_parts = Bool::is_true_and(asm_same(t.name_at(i), Succ(k)),
+                            (asm_same(t.index_of(Succ(k)), i) && asm_same(t.offset_of(Succ(k)), here)) && (item_lands(t.labels(), here, item) && t.targets_ok(item)), named);
+                        let offset = Bool::is_true_and(asm_same(t.index_of(Succ(k)), i), asm_same(t.offset_of(Succ(k)), here),
+                            Bool::is_true_and(asm_same(t.index_of(Succ(k)), i) && asm_same(t.offset_of(Succ(k)), here),
+                                item_lands(t.labels(), here, item) && t.targets_ok(item), named_parts.right).left).right;
+                        trans(t.checked_len(before, i, here, rest.right),
+                            sym(asm_same_eq(t.offset_of(Succ(k)), here, eq_true_of_is_true(asm_same(t.offset_of(Succ(k)), here), offset))))
+                    },
+                    False => λ differs => (match Succ(t.index_of(Succ(k))).leb(i) as λ b => Succ(t.index_of(Succ(k))).leb(i) = b →
+                            asm_target(before, Succ(k)) = t.offset_of(Succ(k)) {
+                        True => λ below => t.target_at(before, i, here, k, rest.right, j(sym(below), λ b _ => b.IsTrue(), trivial), names),
+                        False => λ not_below => {
+                            let le = Nat::leb_not_lt(t.index_of(Succ(k)), i, j(sym(not_below), λ b _ => b.not().IsTrue(), trivial));
+                            let at_i = asm_same_eq(t.index_of(Succ(k)), i,
+                                eq_true_of_is_true(asm_same(t.index_of(Succ(k)), i), Bool::is_true_and_intro(t.index_of(Succ(k)).leb(i), i.leb(t.index_of(Succ(k))), within, le)));
+                            let same_name = trans(sym(name_i), trans(sym(cong(at_i, f := λ (x: Nat) => t.name_at(x))), found));
+                            absurd(trans(sym(j(same_name, λ x _ => asm_same(name, x) = True, asm_same_self(name))), differs))
+                        },
+                    })(refl),
+                })(refl)
+            },
+        },
+    }
+}
+
+// A label the table has names an item: no checked program lacks it.
+theorem LabelTable::has_named(self t: LabelTable, q: Prog): (depth, end, k: Nat) → t.checked(q, depth, end).IsTrue() →
+    Succ(t.index_of(Succ(k))).leb(depth).IsTrue() → asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)).IsTrue() →
+    (!q.lacks(Succ(k))).IsTrue() {
+    match q {
+        Start => λ depth end k ok within _ => false_elim((match depth as λ d => t.checked(Start, d, end).IsTrue() → Succ(t.index_of(Succ(k))).leb(d).IsTrue() → logic::False {
+            Zero => λ _ no => no,
+            Succ(_) => λ bad _ => bad,
+        })(ok, within)),
+        At(before, name, item) => λ depth => match depth as λ d => (end, k: Nat) → t.checked(At(before, name, item), d, end).IsTrue() →
+                Succ(t.index_of(Succ(k))).leb(d).IsTrue() → asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)).IsTrue() →
+                (!At(before, name, item).lacks(Succ(k))).IsTrue() {
+            Zero => λ end k no _ _ => false_elim(no),
+            Succ(i) => λ end k ok within names => {
+                let here = end - asm_len(item);
+                let parts = Bool::is_true_and(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checked(before, i, here), ok);
+                let rest = Bool::is_true_and(t.item_ok(i, here, name, item), t.checked(before, i, here), parts.right);
+                let item_parts = Bool::is_true_and(asm_same(t.name_at(i), name),
+                    (match name { Zero => True, Succ(_) => asm_same(t.index_of(name), i) && asm_same(t.offset_of(name), here) }) &&
+                        (item_lands(t.labels(), here, item) && t.targets_ok(item)), rest.left);
+                let name_i = asm_same_eq(t.name_at(i), name, eq_true_of_is_true(asm_same(t.name_at(i), name), item_parts.left));
+                let found = asm_same_eq(t.name_at(t.index_of(Succ(k))), Succ(k), eq_true_of_is_true(asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)), names));
+                (match asm_same(Succ(k), name) as λ b => asm_same(Succ(k), name) = b → (!(!b && before.lacks(Succ(k)))).IsTrue() {
+                    True => λ _ => trivial,
+                    False => λ differs => (match Succ(t.index_of(Succ(k))).leb(i) as λ b => Succ(t.index_of(Succ(k))).leb(i) = b →
+                            (!before.lacks(Succ(k))).IsTrue() {
+                        True => λ below => t.has_named(before, i, here, k, rest.right, j(sym(below), λ b _ => b.IsTrue(), trivial), names),
+                        False => λ not_below => {
+                            let le = Nat::leb_not_lt(t.index_of(Succ(k)), i, j(sym(not_below), λ b _ => b.not().IsTrue(), trivial));
+                            let at_i = asm_same_eq(t.index_of(Succ(k)), i,
+                                eq_true_of_is_true(asm_same(t.index_of(Succ(k)), i), Bool::is_true_and_intro(t.index_of(Succ(k)).leb(i), i.leb(t.index_of(Succ(k))), within, le)));
+                            let same_name = trans(sym(found), trans(cong(at_i, f := λ (x: Nat) => t.name_at(x)), name_i));
+                            absurd(trans(sym(j(same_name, λ x _ => asm_same(Succ(k), x) = True, asm_same_self(Succ(k)))), differs))
+                        },
+                    })(refl),
+                })(refl)
+            },
+        },
+    }
+}
+
+// An item whose jump lands by the table's offsets lands by the program's,
+// where the two agree on its target.
+theorem LabelTable::item_lands_by(self t: LabelTable, whole: Prog, here: Nat, item: Asm,
+    at: (k: Nat) → t.has(Succ(k)).IsTrue() → asm_target(whole, Succ(k)) = t.offset_of(Succ(k))):
+    item_lands(t.labels(), here, item).IsTrue() → t.targets_ok(item).IsTrue() → item_lands(asm_labels(whole), here, item).IsTrue() {
+    match item as λ it => item_lands(t.labels(), here, it).IsTrue() → t.targets_ok(it).IsTrue() → item_lands(asm_labels(whole), here, it).IsTrue() {
+        Jcc(cc, target) => match target as λ g => item_lands(t.labels(), here, Jcc(cc, g)).IsTrue() → t.targets_ok(Jcc(cc, g)).IsTrue() →
+                item_lands(asm_labels(whole), here, Jcc(cc, g)).IsTrue() {
+            Zero => λ _ no => false_elim(no),
+            Succ(k) => λ lands has => j(sym(at(k, has)), λ x _ => asm_item_lands(λ _ => x, here, 6, Jcc(cc, Succ(k)), x).IsTrue(), lands),
+        },
+        Jmp(target) => match target as λ g => item_lands(t.labels(), here, Jmp(g)).IsTrue() → t.targets_ok(Jmp(g)).IsTrue() →
+                item_lands(asm_labels(whole), here, Jmp(g)).IsTrue() {
+            Zero => λ _ no => false_elim(no),
+            Succ(k) => λ lands has => j(sym(at(k, has)), λ x _ =>
+                (asm_item_lands(λ _ => x, here, 5, Jmp(Succ(k)), x) || asm_item_lands_back(λ _ => x, here, 5, Jmp(Succ(k)), x)).IsTrue(), lands),
+        },
+        CallTo(target) => match target as λ g => item_lands(t.labels(), here, CallTo(g)).IsTrue() → t.targets_ok(CallTo(g)).IsTrue() →
+                item_lands(asm_labels(whole), here, CallTo(g)).IsTrue() {
+            Zero => λ _ no => false_elim(no),
+            Succ(k) => λ lands has => j(sym(at(k, has)), λ x _ =>
+                (asm_item_lands(λ _ => x, here, 5, CallTo(Succ(k)), x) || asm_item_lands_back(λ _ => x, here, 5, CallTo(Succ(k)), x)).IsTrue(), lands),
+        },
+        Block(_) => λ _ _ => trivial,
+        Code(_) => λ _ _ => trivial,
+        Load(_) => λ _ _ => trivial,
+        Store(_) => λ _ _ => trivial,
+        LoadByte(_) => λ _ _ => trivial,
+        StoreByte(_) => λ _ _ => trivial,
+        Syscall => λ _ _ => trivial,
+        Proved(_, _, _, _) => λ _ _ => trivial,
+        Ret => λ _ _ => trivial,
+        Spill(_) => λ _ _ => trivial,
+        Reload(_) => λ _ _ => trivial,
+        Piece(_, _, _) => λ _ _ => trivial,
+        Refer(_, _, _) => λ _ _ => trivial,
+        Hole(_, _) => λ _ _ => trivial,
+    }
+}
+
+// An item whose target the table has names a label of `whole`.
+theorem LabelTable::item_named_by(self t: LabelTable, whole: Prog, item: Asm,
+    named: (k: Nat) → t.has(Succ(k)).IsTrue() → (!whole.lacks(Succ(k))).IsTrue()): t.targets_ok(item).IsTrue() → item_named(whole, item).IsTrue() {
+    match item as λ it => t.targets_ok(it).IsTrue() → item_named(whole, it).IsTrue() {
+        Jcc(_, target) => match target as λ g => t.target_ok(g).IsTrue() → (!whole.lacks(g)).IsTrue() {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => named(k, has),
+        },
+        Jmp(target) => match target as λ g => t.target_ok(g).IsTrue() → (!whole.lacks(g)).IsTrue() {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => named(k, has),
+        },
+        CallTo(target) => match target as λ g => t.target_ok(g).IsTrue() → (!whole.lacks(g)).IsTrue() {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => named(k, has),
+        },
+        Block(_) => λ _ => trivial,
+        Code(_) => λ _ => trivial,
+        Load(_) => λ _ => trivial,
+        Store(_) => λ _ => trivial,
+        LoadByte(_) => λ _ => trivial,
+        StoreByte(_) => λ _ => trivial,
+        Syscall => λ _ => trivial,
+        Proved(_, _, _, _) => λ _ => trivial,
+        Ret => λ _ => trivial,
+        Spill(_) => λ _ => trivial,
+        Reload(_) => λ _ => trivial,
+        Piece(_, _, _) => λ _ => trivial,
+        Refer(_, _, _) => λ _ => trivial,
+        Hole(_, _) => λ _ => trivial,
+    }
+}
+
+// Every item of a checked suffix lands and names its target, by `whole`.
+theorem LabelTable::checked_lands(self t: LabelTable, whole: Prog,
+    at: (k: Nat) → t.has(Succ(k)).IsTrue() → asm_target(whole, Succ(k)) = t.offset_of(Succ(k)), q: Prog):
+    (depth, end: Nat) → t.checked(q, depth, end).IsTrue() → jumps_land_in(asm_labels(whole), q).IsTrue() {
+    match q {
+        Start => λ depth end _ => trivial,
+        At(before, name, item) => λ depth => match depth as λ d => (end: Nat) → t.checked(At(before, name, item), d, end).IsTrue() →
+                jumps_land_in(asm_labels(whole), At(before, name, item)).IsTrue() {
+            Zero => λ end no => false_elim(no),
+            Succ(i) => λ end ok => {
+                let here = end - asm_len(item);
+                let parts = Bool::is_true_and(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checked(before, i, here), ok);
+                let rest = Bool::is_true_and(t.item_ok(i, here, name, item), t.checked(before, i, here), parts.right);
+                let checks = Bool::is_true_and(item_lands(t.labels(), here, item), t.targets_ok(item),
+                    Bool::is_true_and((match name { Zero => True, Succ(_) => asm_same(t.index_of(name), i) && asm_same(t.offset_of(name), here) }),
+                        item_lands(t.labels(), here, item) && t.targets_ok(item),
+                        Bool::is_true_and(asm_same(t.name_at(i), name),
+                            (match name { Zero => True, Succ(_) => asm_same(t.index_of(name), i) && asm_same(t.offset_of(name), here) }) &&
+                                (item_lands(t.labels(), here, item) && t.targets_ok(item)), rest.left).right).right);
+                let lands = j(sym(t.checked_len(before, i, here, rest.right)), λ x _ => item_lands(asm_labels(whole), x, item).IsTrue(),
+                    t.item_lands_by(whole, here, item, at, checks.left, checks.right));
+                Bool::is_true_and_intro(item_lands(asm_labels(whole), prog_len(before), item), jumps_land_in(asm_labels(whole), before),
+                    lands, t.checked_lands(whole, at, before, i, here, rest.right))
+            },
+        },
+    }
+}
+
+theorem LabelTable::checked_named(self t: LabelTable, whole: Prog,
+    named: (k: Nat) → t.has(Succ(k)).IsTrue() → (!whole.lacks(Succ(k))).IsTrue(), q: Prog):
+    (depth, end: Nat) → t.checked(q, depth, end).IsTrue() → targets_named_in(whole, q).IsTrue() {
+    match q {
+        Start => λ depth end _ => trivial,
+        At(before, name, item) => λ depth => match depth as λ d => (end: Nat) → t.checked(At(before, name, item), d, end).IsTrue() →
+                targets_named_in(whole, At(before, name, item)).IsTrue() {
+            Zero => λ end no => false_elim(no),
+            Succ(i) => λ end ok => {
+                let here = end - asm_len(item);
+                let parts = Bool::is_true_and(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checked(before, i, here), ok);
+                let rest = Bool::is_true_and(t.item_ok(i, here, name, item), t.checked(before, i, here), parts.right);
+                let checks = Bool::is_true_and(item_lands(t.labels(), here, item), t.targets_ok(item),
+                    Bool::is_true_and((match name { Zero => True, Succ(_) => asm_same(t.index_of(name), i) && asm_same(t.offset_of(name), here) }),
+                        item_lands(t.labels(), here, item) && t.targets_ok(item),
+                        Bool::is_true_and(asm_same(t.name_at(i), name),
+                            (match name { Zero => True, Succ(_) => asm_same(t.index_of(name), i) && asm_same(t.offset_of(name), here) }) &&
+                                (item_lands(t.labels(), here, item) && t.targets_ok(item)), rest.left).right).right);
+                Bool::is_true_and_intro(item_named(whole, item), targets_named_in(whole, before),
+                    t.item_named_by(whole, item, named, checks.right), t.checked_named(whole, named, before, i, here, rest.right))
+            },
+        },
+    }
+}
+
+// The pass over the whole program, with the table's depth, is its layout.
+theorem LabelTable::laid_out_of(self t: LabelTable, p: Prog, end: Nat, ok: t.checked(p, t.depth, end).IsTrue(), holes: p.no_holes().IsTrue()):
+    p.laid_out().IsTrue() {
+    let has = λ (k: Nat) (h: t.has(Succ(k)).IsTrue()) => Bool::is_true_and(Succ(t.index_of(Succ(k))).leb(t.depth), asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)), h);
+    p.laid_out_intro(holes, t.checked_unique(p, t.depth, end, ok),
+        t.checked_lands(p, λ k h => t.target_at(p, t.depth, end, k, ok, has(k, h).left, has(k, h).right), p, t.depth, end, ok),
+        t.checked_named(p, λ k h => t.has_named(p, t.depth, end, k, ok, has(k, h).left, has(k, h).right), p, t.depth, end, ok))
+}
+
+// ---------------------------------------------------------------------------
+// The pass a stretch at a time
+
+// The last `k` items checked, and the depth and end the items before them
+// have: each stretch is its own statement, and evaluates its own items only.
+fn LabelTable::checks_last(self t: LabelTable, p: Prog, k, depth, end: Nat) → Bool {
+    match k {
+        Zero => True,
+        Succ(j) => match p {
+            Start => False,
+            At(before, name, item) => match depth {
+                Zero => False,
+                Succ(i) => asm_len(item).leb(end) && (t.item_ok(i, end - asm_len(item), name, item) && t.checks_last(before, j, i, end - asm_len(item))),
+            },
+        },
+    }
+}
+fn depth_after(depth, k: Nat) → Nat { match k { Zero => depth, Succ(j) => match depth { Zero => 0, Succ(i) => depth_after(i, j) } } }
+fn end_after(p: Prog, k, end: Nat) → Nat {
+    match k { Zero => end, Succ(j) => match p { Start => end, At(before, _, item) => end_after(before, j, end - asm_len(item)) } }
+}
+
+theorem LabelTable::checked_back(self t: LabelTable, k: Nat): (p: Prog) → (depth, end: Nat) → t.checks_last(p, k, depth, end).IsTrue() →
+    t.checked(asm_back(p, k), depth_after(depth, k), end_after(p, k, end)).IsTrue() → t.checked(p, depth, end).IsTrue() {
+    match k {
+        Zero => λ p depth end _ rest => rest,
+        Succ(j) => λ p => match p {
+            Start => λ depth end no _ => false_elim(no),
+            At(before, name, item) => λ depth => match depth as λ d => (end: Nat) → t.checks_last(At(before, name, item), Succ(j), d, end).IsTrue() →
+                    t.checked(asm_back(At(before, name, item), Succ(j)), depth_after(d, Succ(j)), end_after(At(before, name, item), Succ(j), end)).IsTrue() →
+                    t.checked(At(before, name, item), d, end).IsTrue() {
+                Zero => λ end no _ => false_elim(no),
+                Succ(i) => λ end last rest => {
+                    let here = end - asm_len(item);
+                    let parts = Bool::is_true_and(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checks_last(before, j, i, here), last);
+                    let more = Bool::is_true_and(t.item_ok(i, here, name, item), t.checks_last(before, j, i, here), parts.right);
+                    Bool::is_true_and_intro(asm_len(item).leb(end), t.item_ok(i, here, name, item) && t.checked(before, i, here), parts.left,
+                        Bool::is_true_and_intro(t.item_ok(i, here, name, item), t.checked(before, i, here), more.left,
+                            t.checked_back(j, before, i, here, more.right, rest)))
+                },
+            },
+        },
+    }
+}
