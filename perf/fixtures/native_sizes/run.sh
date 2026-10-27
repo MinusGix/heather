@@ -1,4 +1,5 @@
-# Build write-elf's size probes (issues/native-compile-capacity.md) one at a
+# Build write-elf's size probes (the `cat_x` sources of lib/_tests/native/native_compile_tests.hthr,
+# issues/native-compile-capacity.md) one at a
 # time at kernel width one, each over a fresh copy of a warmed cache so the
 # verdict store does not hide the certificate's gate. Usage:
 #   perf/fixtures/native_sizes/run.sh [out-dir] [symbols...]
@@ -7,7 +8,7 @@ set -u
 root="$(cd "$(dirname "$0")/../../.." && pwd)"
 out="${1:-$root/target/native-sizes}"; shift || true
 syms="${*:-cat_x2 cat_x4 cat_x8}"
-src="$root/perf/fixtures/native_sizes/cat_sizes.hthr"
+src="$root/lib/_tests/native/native_compile_tests.hthr"
 mkdir -p "$out"
 cd "$root"
 cargo build --release -q -p heather-cli || exit 1

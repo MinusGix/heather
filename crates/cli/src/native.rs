@@ -13,6 +13,7 @@ use heather_cli::{loader, semantic::SemanticSession};
 
 mod elf;
 mod emission;
+mod labels;
 mod support;
 use support::SUPPORT;
 mod verified;
