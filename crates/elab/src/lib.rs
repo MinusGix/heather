@@ -1373,17 +1373,30 @@ impl application::ImplicitApplicationElab for Elaborator {
         self.infer_bare_polymorphic_argument(cx, argument, parameter, n, sols)
     }
 
-    fn infer_propagation_callback(
+    fn infer_lambda_at_known_domains(
         &self, cx: &Cx, argument: &Expr, parameter: &Type, n: u32, sols: &[Sol],
     ) -> Option<R<(Term, Type, Level)>> {
+        // A λ with an unannotated binder whose domain the call already knows
+        // is as inferable as an annotated one: `antidiag(+, n, λ i k => …)`
+        // inside a `∑` has `f: Nat → Nat → A`, so `i` and `k` are `Nat` before
+        // anything fixes `A`, and the body's type is what fixes it. Only the
+        // binders' domains have to be meta-free, read one Π at a time off the
+        // written parameter type; the codomain is the body's to teach. A
+        // domain that still waits on a meta, a binder past the written Π
+        // chain, or an implicit binder keeps the argument blocked.
         let ExprKind::Lam { binders,body } = &argument.kind else { return None; };
-        let [binder] = binders.as_slice() else { return None; };
-        if !binder.name.starts_with("#try") || binder.ty.is_some() || binder.implicit { return None; }
-        // Filter the private syntax before substituting any types: ordinary
-        // deferred source arguments pay no new type traversal here.
-        let Type::Pi { dom,dom_level,.. } = parameter else { return None; };
-        let dom = unification::zonked(dom,n,sols)?;
-        Some(self.expr_elab().infer_propagation_callback(self,cx,binder,body,&dom,dom_level))
+        if binders.iter().all(|b| b.ty.is_some()) || binders.iter().any(|b| b.implicit) { return None; }
+        let mut domains = Vec::with_capacity(binders.len());
+        let mut ty = parameter;
+        for binder in binders {
+            let Type::Pi { dom,dom_level,cod,.. } = ty else { return None; };
+            domains.push(match binder.ty {
+                Some(_) => None,
+                None => Some((zonked(dom,n,sols)?,dom_level.clone())),
+            });
+            ty = cod;
+        }
+        Some(self.expr_elab().infer_callback_from_domains(self,cx,binders,body,&domains))
     }
 
     fn unify_application_argument_type(

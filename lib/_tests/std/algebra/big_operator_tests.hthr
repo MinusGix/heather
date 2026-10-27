@@ -65,17 +65,30 @@ theorem swapped<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A �
 // The Cauchy-product coefficient identity at `Rat`: the first `N`
 // coefficients of `a · b` sum to the triangle, at open sequences, and at
 // `a = b = (1, 2, 3, …)` both sides are 15 for `N = 3` (coefficients 1, 4, 10).
-// The antidiagonal's binders are annotated: it is a bare `+` call too, and
-// with its function's domain open nothing would fix its carrier.
+// The antidiagonal's binders are unannotated: it is a bare `+` call too, so
+// nothing fixes its carrier before the λ, but `f: Nat → Nat → A` already
+// says `i` and `k` are `Nat`, and the body's type is the carrier.
 theorem rat_cauchy(N: Nat, a, b: Nat → Rat):
-    ∑ n < N, MonoidRel::antidiag(+, n, λ (i: Nat) (k: Nat) => a(i) * b(k)) ≈ ∑ i < N, a(i) * ∑ k < N - i, b(k)
+    ∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)) ≈ ∑ i < N, a(i) * ∑ k < N - i, b(k)
 {
     Semiring::range_cauchy(N, a, b)
 }
 fn up(k: Nat) → Rat { Rat::ofInt(OfNat(k + 1)) }
-theorem rat_cauchy_coefficients(): ∑ n < 3, MonoidRel::antidiag(+, n, λ (i: Nat) (k: Nat) => up(i) * up(k)) = 15 { refl }
-theorem rat_cauchy_three(): ∑ n < 3, MonoidRel::antidiag(+, n, λ (i: Nat) (k: Nat) => up(i) * up(k)) ≈ ∑ i < 3, up(i) * ∑ k < 3 - i, up(k) {
+theorem rat_cauchy_coefficients(): ∑ n < 3, MonoidRel::antidiag(+, n, λ i k => up(i) * up(k)) = 15 { refl }
+theorem rat_cauchy_three(): ∑ n < 3, MonoidRel::antidiag(+, n, λ i k => up(i) * up(k)) ≈ ∑ i < 3, up(i) * ∑ k < 3 - i, up(k) {
     rat_cauchy(3, up, up)
+}
+
+// The same unannotated antidiagonal at `Nat`, where it is a plain number
+// in inference position (`fn`'s body is checked, the sum is not), at an open
+// semiring, and a negative control: the triangle `i·k` below 4 sums to 5.
+fn nat_triangle(N: Nat) → Nat { let t = ∑ n < N, MonoidRel::antidiag(+, n, λ i k => i * k); t }
+theorem nat_triangle_four(): nat_triangle(4) = 5 { refl }
+theorem nat_triangle_not_four(): ¬(nat_triangle(4) = 4) { λ h => absurd(h) }
+theorem open_cauchy<A: Semiring(≈, +, *)>(N: Nat, a, b: Nat → A):
+    ∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)) ≈ ∑ i < N, a(i) * ∑ k < N - i, b(k)
+{
+    Semiring::range_cauchy(N, a, b)
 }
 
 // Order: a sum of nonnegative terms is nonnegative, and the triangle

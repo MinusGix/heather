@@ -314,20 +314,49 @@ fn an_unannotated_lambda_argument_is_inferred_from_the_call() {
 }
 
 #[test]
+fn an_unannotated_lambda_at_known_domains_infers_its_result() {
+    // Retired-and-replaced: this was `an_undetermined_unannotated_lambda_is_diagnosed`
+    // on `map(λ x => Succ(x), xs)` in inference position. `xs` solves `A`,
+    // so `x`'s domain is known and the lambda is as inferable as
+    // `λ (x: Nat) => Succ(x)`: its body teaches `B`. Two binders take the
+    // leading two domains of the parameter.
+    ok("inductive List<A> { Nil, Cons(A, List<A>) }
+        fn map<A, B>(f: A -> B, xs: List<A>) -> List<B> {
+            match xs { Nil => Nil, Cons(x, tl) => Cons(f(x), map(f, tl)) }
+        }
+        fn zip_with<A, B, C>(f: A -> B -> C, xs: List<A>, ys: List<B>) -> List<C> {
+            match xs { Nil => Nil, Cons(x, tl) => match ys { Nil => Nil, Cons(y, tr) => Cons(f(x, y), zip_with(f, tl, tr)) } }
+        }
+        fn go(xs: List<Nat>) -> Nat { let ys = map(λ x => Succ(x), xs); 0 }
+        fn go2(xs: List<Nat>) -> Nat { let ys = zip_with(λ x y => Succ(y), xs, xs); 0 }");
+}
+
+#[test]
 fn an_undetermined_unannotated_lambda_is_diagnosed() {
-    // The refusal's new home (design §7.2): in inference position nothing
-    // solves `B`, so the deferred lambda stays blocked and the message names
-    // the argument, the parameter, and both escape hatches.
+    // The refusal's home now: nothing solves `A`, so the binder's domain is
+    // unknown and the deferred lambda stays blocked; the message names the
+    // argument, the parameter, and both escape hatches.
+    let e = bad("fn konst<A, B>(f: A -> B) -> Nat { 0 }
+                 fn go() -> Nat { let z = konst(λ x => Succ(x)); z }");
+    assert!(e.contains("was deferred"), "{e}");
+    assert!(e.contains("`f`"), "the message should name the parameter: {e}");
+    assert!(e.contains("`f: ?A -> ?B`"), "show the unsolved parts: {e}");
+    assert!(e.contains("konst<…>(…)") && e.contains("@konst(…)"), "retain the advice: {e}");
+    assert!(!e.contains("GlobalTm") && !e.contains("LocalSubst"), "{e}");
+}
+
+#[test]
+fn an_unannotated_lambda_whose_body_does_not_infer_names_the_unpinned_codomain() {
+    // The domain is known, so the body is inferred, and `Nil` alone cannot
+    // be: its error leads, and the note names the implicit (`B`) that
+    // nothing in the call determines, with the escape.
     let e = bad("inductive List<A> { Nil, Cons(A, List<A>) }
                  fn map<A, B>(f: A -> B, xs: List<A>) -> List<B> {
                      match xs { Nil => Nil, Cons(x, tl) => Cons(f(x), map(f, tl)) }
                  }
-                 fn go(xs: List<Nat>) -> Nat { let ys = map(λ x => Succ(x), xs); 0 }");
-    assert!(e.contains("was deferred"), "{e}");
-    assert!(e.contains("`f`"), "the message should name the parameter: {e}");
-    assert!(e.contains("`f: Nat -> ?B`"), "show solved and unsolved parts: {e}");
-    assert!(e.contains("map<…>(…)") && e.contains("@map(…)"), "retain the advice: {e}");
-    assert!(!e.contains("GlobalTm") && !e.contains("LocalSubst"), "{e}");
+                 fn go(xs: List<Nat>) -> Nat { let ys = map(λ x => Nil, xs); 0 }");
+    assert!(e.contains("`Nil`"), "the body's own error leads: {e}");
+    assert!(e.contains("the implicit `B`") && e.contains("map<…>(…)"), "{e}");
 }
 
 #[test]
