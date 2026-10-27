@@ -204,7 +204,7 @@ fn {p}_shape() → List<Nat> {{ {src}().shape() }}
     // The theorem takes the fit as a hypothesis, so a program past the page
     // would be written with nothing said of it.
     if let [size, page] = numbers(&fork, &probe, &format!("{p}_room"))?[..] && size > page {
-        return Err(format!("`{symbol}` does not fit the I/O page: its words, buffers and scratch range take {size} bytes \
+        return Err(format!("`{symbol}` does not fit the I/O page: its words, buffers, scratch range and saved RSP take {size} bytes \
             and the page holds {page}, so `Source::elf_file_simulates` would not cover it"));
     }
     // The program a part at a time, each read on its own, so a read holds
