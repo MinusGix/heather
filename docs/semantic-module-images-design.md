@@ -370,6 +370,27 @@ registries, so hostile bytes cannot turn an infallible commit assertion into a
 panic. The decoded delta remains inert; the existing ordered kernel-extension
 judgment and candidate-world swap are still the only publication path.
 
+Kernel terms and types are written as a DAG, not a tree
+(`module_image::Share`). The elaborator's terms share subterms freely, one
+`Arc` under many parents, and a tree encoding wrote and decoded each shared
+subterm once per path to it: on 2026-10-27 the tactic modules' images were
+about 110 MB, `native_build`'s 133 MB, and replaying the tactic family cost
+every library-gate child about 30 CPU-s and 2.4 GB before it reached its
+own modules (`issues/library-gate-native-cold-rail.md`). A term or type is
+now written once; a later occurrence of an equal one is a `SHARED` byte and
+the index the reader gave the first (indices count decoded nodes in the
+order they end, terms and types apart), and the reader hands back the same
+`Arc`. Equal means structurally equal: each node gets a canonical number from
+its shallow encoding with its children as their numbers, so the bytes are a
+function of the terms and not of how one process happened to share memory.
+That is what lets an interface hash, or `same_proof`'s comparison of a kept
+proof's bytes with a fresh encoding, compare encodings made by different
+processes. The writer memoises canonical numbers by allocation, holding the
+`Arc` so no address is reused during the encoding, which keeps it linear in
+the DAG. A sealed proof's bytes are kept and decoded apart from the image,
+so each one is its own sharing scope. The node budget charges a reference as
+one node, so it now bounds the DAG.
+
 The dependency Ψ itself is intentionally absent from the bytes. The envelope
 records its binding count and the ordered loader-supplied interface hashes,
 while decoding requires the caller to provide the already accepted logical
