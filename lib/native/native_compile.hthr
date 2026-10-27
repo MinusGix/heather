@@ -613,32 +613,50 @@ fn Source::refusal(self src: Source, low: BitVec(64)) → List<Nat> {
 // 1 a `Then`, 2 a `Repeat`, 3 a `Branch`, its children after it), the label
 // name it starts at, and the one its first child starts at, or, for a leaf,
 // the one after it. Consed on as they are met, so the list is the preorder
-// reversed and nothing is appended. A leaf's names are its emission's, but
-// only a call takes any (`Compiled(q, names)` for the others), so no leaf
-// is lowered here: the reader lowers one part at a time
-// (crates/cli/src/native/emission.rs), and nothing is proved of this.
+// reversed and nothing is appended. No leaf is emitted here, so the read
+// holds the tree's numbers and none of its code: the reader lowers one part
+// at a time (crates/cli/src/native/emission.rs), and nothing is proved of
+// this.
 record Shape { names: Nat, numbers: List<Nat> }
 
 fn Shape::node(self m: Shape, kind, after: Nat) → Shape { Shape(after, Cons(after, Cons(m.names, Cons(kind, m.numbers)))) }
 
-// A leaf's label names, from its emission: a call and a byte node take
-// names, and which leaves do is the compiler's business, not the shape's.
-fn Stmt::leaf_shape(self s: Stmt, layout: Layout, m: Shape) → Shape {
-    match s.emit(Start, layout, m.names) { None => m.node(0, m.names), Some(c) => m.node(0, c.names) }
+// The label names after a leaf that emits: a call takes them as
+// `Prog::call` does, a leaf of one byte node as `Prog::byte_node`, every
+// other leaf none. Counted without emitting, since emitting every leaf here
+// held the whole program's code in one read
+// (issues/write-elf-build-constants.md). A count that ever disagrees with
+// the emission is a part whose statement the kernel refuses, and the reader
+// says so first; a leaf that does not emit is refused whatever it counts.
+fn Node::names_after(self node: Node, names: Nat) → Nat {
+    match node { BufferLoad(_, _, _) => Succ(names), BufferStore(_, _, _, _) => Succ(Succ(names)), _ => names }
 }
 
-fn Stmt::shape(self s: Stmt, layout: Layout, m: Shape) → Shape {
+fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
     match s {
-        Then(first, rest) => rest.shape(layout, first.shape(layout, m.node(1, m.names))),
-        Repeat(body, _) => body.shape(layout, m.node(2, Succ(Succ(m.names)))),
-        Branch(_, yes, no) => no.shape(layout, yes.shape(layout, m.node(3, Succ(Succ(m.names))))),
-        Compute(region) => Compute(region).leaf_shape(layout, m),
-        Invoke(shape) => Invoke(shape).leaf_shape(layout, m),
-        Exit(code) => Exit(code).leaf_shape(layout, m),
+        Compute(region) => match region {
+            Dataflow(body) => match body.nodes { Nil => names, Cons(node, rest) => match rest { Nil => node.names_after(names), Cons(_, _) => names } },
+            _ => names,
+        },
+        Invoke(shape) => match shape { Reads(_, _, _, _) => Succ(Succ(Succ(names))), Writes(_, _, _, _, _) => Succ(Succ(names)), _ => names },
+        _ => names,
     }
 }
 
-fn Source::shape(self src: Source, low: BitVec(64)) → List<Nat> { src.main.shape(src.layout(low), Shape(0, [])).numbers }
+fn Stmt::leaf_shape(self s: Stmt, m: Shape) → Shape { m.node(0, s.leaf_names(m.names)) }
+
+fn Stmt::shape(self s: Stmt, m: Shape) → Shape {
+    match s {
+        Then(first, rest) => rest.shape(first.shape(m.node(1, m.names))),
+        Repeat(body, _) => body.shape(m.node(2, Succ(Succ(m.names)))),
+        Branch(_, yes, no) => no.shape(yes.shape(m.node(3, Succ(Succ(m.names))))),
+        Compute(region) => Compute(region).leaf_shape(m),
+        Invoke(shape) => Invoke(shape).leaf_shape(m),
+        Exit(code) => Exit(code).leaf_shape(m),
+    }
+}
+
+fn Source::shape(self src: Source) → List<Nat> { src.main.shape(Shape(0, [])).numbers }
 
 // A program as a reader takes it: how many numbers its items are, the items
 // (`Prog::numbers`), then their lengths.

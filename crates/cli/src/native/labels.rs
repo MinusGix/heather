@@ -36,8 +36,8 @@ pub(super) fn offsets(lens: &[u64]) -> Vec<u64> {
     offsets
 }
 
-/// The table, `{p}_table()`: what the fork reads the bytes by, and what the
-/// certificate checks.
+/// The table, `{p}_table()`: what the fork reads the bytes by
+/// (`emission::byte_reads`), and what the certificate checks.
 pub(super) fn table(p: &str, items: &[(u64, String)], offsets: &[u64]) -> String {
     let mut named: Vec<(u64, usize)> = items.iter().enumerate().filter(|(_, (name, _))| *name != 0).map(|(i, (name, _))| (*name, i)).collect();
     named.sort_unstable();
@@ -75,43 +75,43 @@ pub(super) fn piece_cuts(pieces: &[Piece], items: usize) -> impl Iterator<Item =
     pieces.iter().map(move |piece| items - piece.back)
 }
 
-/// A piece's bytes read on the fork, by the table's offsets.
-pub(super) fn piece_read(p: &str, piece: &Piece, items: usize, offsets: &[u64]) -> String {
-    let top = items - piece.back;
-    format!("asm_code_ending(no_fills(), {p}_table().labels(), {p}_at_{top}(), {}, {})", piece.count, offsets[top])
-}
-
 /// The bytes a piece at a time, as `verified::byte_pieces` states them, each
 /// piece by the table (`LabelTable::piece_by`): the window's offsets carried
 /// down from where the pass says it ends, its jumps' targets the table's.
+/// Each window is the literal's definition where it ends, not
+/// `asm_back(code, back)`: walking back from the whole program made every
+/// piece's statement, and the `upto` chain's, convert past every later
+/// piece, more than linear in the program (issues/write-elf-build-constants.md).
 pub(super) fn byte_pieces(p: &str, pieces: &[Piece], bytes: &[u8], items: usize, offsets: &[u64]) -> String {
     let mut text = String::new();
     let mut end = bytes.len();
     let length = offsets[items];
     for (c, piece) in pieces.iter().enumerate() {
-        let (back, count, start) = (piece.back, piece.count, piece.start);
+        let (count, start) = (piece.count, piece.start);
         let literal: Vec<String> = bytes[start..end].iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
         end = start;
-        let top = items - back;
+        let top = items - piece.back;
         text.push_str(&format!("fn {p}_piece_{c}() → List<BitVec(8)> {{ [{}] }}
-theorem {p}_piece_{c}_is(): asm_code_after(no_fills(), asm_labels({p}_code()), asm_back({p}_code(), {back}), {count}) = {p}_piece_{c}() {{
+theorem {p}_piece_{c}_is(): asm_code_after(no_fills(), asm_labels({p}_code()), {p}_at_{top}(), {count}) = {p}_piece_{c}() {{
     trans({p}_table().piece_by({p}_code(), {length}, {p}_checked_{items}(), {p}_at_{top}(), {top}, {}, {count}, {p}_checked_{top}(), trivial), refl)
 }}
 ", literal.join(", "), offsets[top]));
     }
+    // Each piece's code up to its start, over the literal's definition there,
+    // so a step walks back over its own piece only.
     let m = pieces.len();
-    let back: usize = pieces.iter().map(|piece| piece.count).sum();
+    let at = |k: usize| if k == 0 { "Start".to_string() } else { format!("{p}_at_{k}()") };
     text.push_str(&format!("
 // The code up to each piece's start, from the program's.
 fn {p}_upto_{m}() → List<BitVec(8)> {{ [] }}
-theorem {p}_upto_{m}_is(): asm_code(no_fills(), asm_labels({p}_code()), asm_back({p}_code(), {back})) = {p}_upto_{m}() {{ refl }}
+theorem {p}_upto_{m}_is(): asm_code(no_fills(), asm_labels({p}_code()), Start) = {p}_upto_{m}() {{ refl }}
 "));
     for (c, Piece { back, count, .. }) in pieces.iter().enumerate().rev() {
-        let next = c + 1;
+        let (next, top) = (c + 1, at(items - back));
         text.push_str(&format!("fn {p}_upto_{c}() → List<BitVec(8)> {{ {p}_upto_{next}() ++ {p}_piece_{c}() }}
-theorem {p}_upto_{c}_is(): asm_code(no_fills(), asm_labels({p}_code()), asm_back({p}_code(), {back})) = {p}_upto_{c}() {{
-    trans(asm_code_back(no_fills(), asm_labels({p}_code()), {count}, asm_back({p}_code(), {back})),
-        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ asm_code_after(no_fills(), asm_labels({p}_code()), asm_back({p}_code(), {back}), {count}), {p}_upto_{next}_is()),
+theorem {p}_upto_{c}_is(): asm_code(no_fills(), asm_labels({p}_code()), {top}) = {p}_upto_{c}() {{
+    trans(asm_code_back(no_fills(), asm_labels({p}_code()), {count}, {top}),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ asm_code_after(no_fills(), asm_labels({p}_code()), {top}, {count}), {p}_upto_{next}_is()),
             cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => {p}_upto_{next}() ++ x, {p}_piece_{c}_is())))
 }}
 "));

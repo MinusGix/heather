@@ -32,7 +32,11 @@
 //! peak memory grow as the square of the code
 //! (issues/native-compile-capacity.md). The table's pass is that check, and
 //! a program the compile would refuse for its layout is refused by the
-//! kernel at the stretch that fails. The literal spells each address in the region as the compiler
+//! kernel at the stretch that fails. The bytes are read on the same fork, a
+//! read at a time over the parts' own programs and the table
+//! (`emission::byte_reads`), so the program's literal, whose items are most
+//! of what elaborating it costs, is elaborated once, in the certificate
+//! (issues/write-elf-build-constants.md). The literal spells each address in the region as the compiler
 //! does, `add_nat` from the page's start, so the emission's check compares
 //! the two by their arguments instead of evaluating each one's bits.
 use std::path::{Path, PathBuf};
@@ -154,7 +158,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let probes = format!("import {root};\n{imports}
 fn {p}_room() → List<Nat> {{ [Layout({LOW}, {symbol}().capacities()).size(), DataRegion::io_page().size] }}
 fn {p}_refusal() → List<Nat> {{ {symbol}().refusal({LOW}) }}
-fn {p}_shape() → List<Nat> {{ {symbol}().shape({LOW}) }}
+fn {p}_shape() → List<Nat> {{ {symbol}().shape() }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -187,10 +191,9 @@ fn {p}_shape() → List<Nat> {{ {symbol}().shape({LOW}) }}
             None => return Err(refused(symbol, &numbers(&fork, &parts, &format!("{p}_refusal"))?)),
         }
     }
-    drop(fork);
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
-    let emission::Stated { theorems: statements, items, lens, mut cuts } = emission::state(p, &entry, &layout, plan, readings)?;
+    let emission::Stated { theorems: statements, items, lens, mut cuts, spans } = emission::state(p, &entry, &layout, plan, readings)?;
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
         return Err(format!("`{symbol}` compiles to {length} bytes, past the profile's {MAX_FILE} with its header"));
@@ -206,25 +209,24 @@ fn {p}_shape() → List<Nat> {{ {symbol}().shape({LOW}) }}
     let offsets = labels::offsets(&lens);
     let table = labels::table(p, &items, &offsets);
     let header = format!("io_elf_header(BitVec::ofNat(232 + {length}), BitVec::ofNat((232 + {length}).shr(8)))");
-    let mut reads = format!("import {root};\n{imports}\n{code}{table}");
-    for (c, piece) in pieces.iter().enumerate() {
-        reads.push_str(&format!("fn {p}_piece_numbers_{c}() → List<Nat> {{ {}.map(λ (b: BitVec(8)) => b.toNat()) }}\n",
-            labels::piece_read(p, piece, items.len(), &offsets)));
-    }
-    reads.push_str(&format!("fn {p}_header_numbers() → List<Nat> {{ {header}.map(λ (b: BitVec(8)) => b.toNat()) }}\n"));
+    // The bytes on the same fork, a read at a time by the parts' programs
+    // and the table, so only the certificate elaborates the literal.
+    let (byte_text, byte_reads) = emission::byte_reads(p, &spans, &offsets);
+    let reads = format!("import {root};\nimport {parts};\n{imports}\n{table}{byte_text}\
+        fn {p}_header_numbers() → List<Nat> {{ {header}.map(λ (b: BitVec(8)) => b.toNat()) }}\n");
     let read = format!("{p}_read");
-    let mut fork = elab.fork();
     fork.elab_module_source(&read, &reads).map_err(|e| e.render(&reads))?;
     let byte = |n: u64| u8::try_from(n).map_err(|_| "a byte above 255".to_string());
-    let mut bytes = vec![0u8; length];
-    let mut end = length;
-    for (c, piece) in pieces.iter().enumerate() {
-        let read = numbers(&fork, &read, &format!("{p}_piece_numbers_{c}"))?;
-        if read.len() != end - piece.start {
-            return Err(format!("`{symbol}`'s piece {c} is not as long as its items"));
+    let mut bytes = Vec::with_capacity(length);
+    for (name, span) in &byte_reads {
+        let read = numbers(&fork, &read, name)?;
+        if read.len() as u64 != lens[span.start..span.start + span.count].iter().sum::<u64>() {
+            return Err(format!("`{symbol}`'s bytes from item {} are not as long as its items", span.start));
         }
-        for (at, n) in (piece.start..end).zip(read) { bytes[at] = byte(n)?; }
-        end = piece.start;
+        for n in read { bytes.push(byte(n)?); }
+    }
+    if bytes.len() != length {
+        return Err(format!("`{symbol}`'s bytes did not read back"));
     }
     let head = numbers(&fork, &read, &format!("{p}_header_numbers"))?.into_iter().map(byte).collect::<Result<Vec<u8>, String>>()?;
     drop(fork);

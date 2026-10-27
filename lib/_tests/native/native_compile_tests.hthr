@@ -92,13 +92,13 @@ theorem exit3_compiles(): exit3().refusal(low()) = [] { refl }
 // node in reversed preorder, kind, label name at its start, and the name its
 // first child starts at or a leaf's after it. A call or a byte node takes
 // names, and a `Repeat` or `Branch` takes two before its children.
-theorem exit3_shape(): exit3().shape(low()) = [0, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
+theorem exit3_shape(): exit3().shape() = [0, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
 
 fn read_then_exit() → Source { Source(functions := [], buffers := [Buffer(8)], main := Then(Invoke(Reads(0, 0, 1, 2)), Exit(2))) }
-theorem read_then_exit_shape(): read_then_exit().shape(low()) = [3, 3, 0, 3, 0, 0, 0, 0, 1] { refl }
+theorem read_then_exit_shape(): read_then_exit().shape() = [3, 3, 0, 3, 0, 0, 0, 0, 1] { refl }
 
 fn exit_unless() → Source { Source(functions := [], buffers := [], main := Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
-theorem exit_unless_shape(): exit_unless().shape(low()) = [4, 4, 0, 4, 4, 0, 4, 2, 3, 2, 0, 2] { refl }
+theorem exit_unless_shape(): exit_unless().shape() = [4, 4, 0, 4, 4, 0, 4, 2, 3, 2, 0, 2] { refl }
 
 // A part read back is its emission at `Start`: the label name after it,
 // then how many numbers its items are, the items and their lengths.
@@ -128,7 +128,19 @@ theorem exit_unless_by_parts(): exit_unless().main.emit(Start, eu_layout(), 0) =
 
 // A byte node takes label names (its bounds check's), so the leaf after it
 // starts past them.
-theorem byte_leaves_shape(): byte_leaves().shape(low()) = [1, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
+theorem byte_leaves_shape(): byte_leaves().shape() = [1, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
+
+// The shape counts a leaf's names without emitting it: each kind of leaf
+// that takes names counts what its emission takes, and a pure leaf none.
+fn names_emitted(s: Stmt, names: Nat) → Nat {
+    match s.emit(Start, byte_leaves().layout(low()), names) { None => 0, Some(c) => c.names }
+}
+theorem read_names_counted(): names_emitted(Invoke(Reads(0, 0, 1, 2)), 5) = Invoke(Reads(0, 0, 1, 2)).leaf_names(5) { refl }
+theorem write_names_counted(): names_emitted(Invoke(Writes(0, 0, 1, 2, 3)), 5) = Invoke(Writes(0, 0, 1, 2, 3)).leaf_names(5) { refl }
+theorem load_names_counted(): names_emitted(ops([BufferLoad(1, 0, 0)]), 5) = ops([BufferLoad(1, 0, 0)]).leaf_names(5) { refl }
+theorem store_names_counted(): names_emitted(ops([BufferStore(1, 0, 0, 2)]), 5) = ops([BufferStore(1, 0, 0, 2)]).leaf_names(5) { refl }
+theorem pure_names_counted(): names_emitted(ops([Const(64, 0, 3), Add(64, 1, 0, 0)]), 5) = ops([Const(64, 0, 3), Add(64, 1, 0, 0)]).leaf_names(5) { refl }
+theorem exit_names_counted(): names_emitted(Exit(0), 5) = Exit(0).leaf_names(5) { refl }
 
 // cat with its pass inlined k times in its loop: code grows with k while
 // the tree keeps cat's shape. `cat_x8`, about twice cat's code eight times
