@@ -1,6 +1,6 @@
 ---
 title: Tactic modules' images decode to gigabytes because every Tac<…> mention spells its lowering
-status: open
+status: closed
 labels: [elaboration,representation,tactics,images,memory]
 area: language
 created: 2026-10-27
@@ -61,3 +61,14 @@ rail.
 - **[[elaborator-canonical-type-spelling]]** owns the spelling invariant.
   Assumed here: only that a tier-2 family's type can be emitted as its named
   code without the kernel unfolding it at every comparison.
+
+## Log
+
+- 2026-10-27: closed by #227 (module images written as DAGs). On top of it
+  `mono`'s image is about a hundredth of its tree size, and the gate
+  folders measured here (`lib/_tests/std/tactic`, `lib/_tests/std/num`,
+  `lib/std/arch`) peak at a fraction of what they did; the full `--pr` suite
+  passes on a cloud box with no OOM kill. Writing `Tac<A>` inline still costs
+  its nodes where terms are built and checked rather than stored; that is
+  [[elaborator-canonical-type-spelling]]'s, and the classifier shape above
+  remains the cheaper way to write a `Tac` function.

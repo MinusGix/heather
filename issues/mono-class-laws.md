@@ -49,4 +49,5 @@ same question for `≈`.
   `lib/_tests/std/tactic/mono_tests.hthr`, `tactic_tests.hthr`.
   The image of `mono` grew enough to put a gate folder that loads it past the
   6 GiB rail; reshaping `mono_same`/`mono_closed` brought it below its size
-  before this round, and the cause is filed as [[tactic-module-image-size]].
+  before this round, and the cause is filed as [[tactic-module-image-size]], which #227's DAG
+  images then closed.
