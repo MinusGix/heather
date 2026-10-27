@@ -45,7 +45,7 @@ use heather_elab::{function_ir_source, Elaborator};
 use heather_cache::module_image::ImageFreshness;
 use heather_cli::{loader, semantic::SemanticSession};
 
-use super::{check_file, emission, labels, symbol_ok, verified, write_new};
+use super::{check_file, emission, labels, lowered, symbol_ok, verified, write_new};
 
 /// The I/O profile's file is at most this long (`io_elf_file`'s sixteen-bit
 /// size), its header included.
@@ -65,7 +65,7 @@ const REGION: std::ops::Range<u64> = 0x410000..0x412000;
 /// The modules the probes and the certificate import besides the source's
 /// own; `write-elf` loads them itself, so a program file imports only what
 /// it uses.
-const IMPORTS: &[&str] = &["native_source", "native_compile", "native_compile_correct", "native_compile_elf",
+const IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_compile", "native_compile_correct", "native_compile_elf",
     "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
     "x86_64_asm_table",
     "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
@@ -152,13 +152,30 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let p = &prefix;
     let imports = IMPORTS.iter().map(|module| format!("import {module};\n")).collect::<String>();
     let probe = format!("{p}_probe");
+    // The source as a literal, read on a fork, and compiled in its place:
+    // every probe and statement below names the source, and a builder's
+    // lowering would otherwise be evaluated again in each.
+    let spelling = format!("{p}_spelling");
+    let spelling_text = format!("import {root};\n{imports}\nfn {p}_spelled() → List<Nat> {{ {symbol}().spelled() }}\n");
+    let mut fork = elab.fork();
+    fork.elab_module_source(&spelling, &spelling_text).map_err(|e| e.render(&spelling_text))?;
+    let spelled = {
+        let _row = heather_elab::stats::scope(heather_elab::stats::ScopeKind::Item, &spelling, &format!("{p}_spelled"));
+        function_ir_source::evaluate_numbers(&fork, &format!("{spelling}::{p}_spelled")).map_err(|e| format!("`{symbol}` (spelled): {e}"))?
+    };
+    drop(fork);
+    let lowered = lowered::literal(p, &spelled).map_err(|e| format!("`{symbol}` did not read back: {e}"))?;
+    let (src, lowered) = match lowered {
+        Some(text) => (format!("{p}_lowered"), text),
+        None => (symbol.to_string(), String::new()),
+    };
     let finish = "then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)";
-    let layout = format!("{symbol}().layout({LOW})");
-    let entry = format!("{symbol}().entry({LOW})");
-    let probes = format!("import {root};\n{imports}
-fn {p}_room() → List<Nat> {{ [Layout({LOW}, {symbol}().capacities()).size(), DataRegion::io_page().size] }}
-fn {p}_refusal() → List<Nat> {{ {symbol}().refusal({LOW}) }}
-fn {p}_shape() → List<Nat> {{ {symbol}().shape() }}
+    let layout = format!("{src}().layout({LOW})");
+    let entry = format!("{src}().entry({LOW})");
+    let probes = format!("import {root};\n{imports}{lowered}
+fn {p}_room() → List<Nat> {{ [Layout({LOW}, {src}().capacities()).size(), DataRegion::io_page().size] }}
+fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}) }}
+fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -178,11 +195,11 @@ fn {p}_shape() → List<Nat> {{ {symbol}().shape() }}
     }
     // The program a part at a time, each read on its own, so a read holds
     // one part's values and not the program's.
-    let plan = emission::plan(p, &format!("{symbol}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?)?;
+    let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?)?;
     let parts = format!("{p}_parts");
     // The refusal again here: once this module is elaborated, the fork reads
     // only its names.
-    let text = format!("import {root};\n{imports}\n{}fn {p}_refusal() → List<Nat> {{ {symbol}().refusal({LOW}) }}\n", plan.text);
+    let text = format!("import {root};\n{imports}{lowered}\n{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}) }}\n", plan.text);
     fork.elab_module_source(&parts, &text).map_err(|e| e.render(&text))?;
     let mut readings = Vec::with_capacity(plan.reads.len());
     for (name, &whole) in plan.reads.iter().zip(&plan.whole) {
@@ -235,16 +252,25 @@ fn {p}_shape() → List<Nat> {{ {symbol}().shape() }}
     }
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
+    // Of the literal, then of the source by its equation.
+    let simulated = format!("{src}().elf_file_simulates({p}_code(), {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory = X86Memory::io_load(f), loaded))");
+    let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
+        (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
+{lowered}theorem {p}_lowered_is(): {symbol}() = {src}() {{ refl }}
+"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io().linux(), src.denote(), s),\n        {simulated})"))
+    };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
 import {root};
 {imports}
-// The program: what `{symbol}().compile` computes.
+{lowered_is}
+// The program: what `{src}().compile` computes.
 {code}
 // Its emission, a part of the statement tree at a time.
 {statements}
-theorem {p}_emitted(): {symbol}().main.emit({entry}, {symbol}().layout({LOW}), 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
-    j(sym({p}_entry()), λ x _ => {symbol}().main.emit(x, {symbol}().layout({LOW}), 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
+theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}), 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
+    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}), 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
         cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
 }}
 
@@ -256,13 +282,13 @@ theorem {p}_laid(): {p}_code().laid_out().IsTrue() {{
     {p}_table().laid_out_of({p}_code(), {length}, {p}_checked_{count}(), {p}_holes())
 }}
 
-theorem {p}_compiles(): {symbol}().compile({LOW}) = Some({p}_code()) {{
-    {symbol}().compile_of({LOW}, {p}_code(), {p}_emitted(), {p}_laid())
+theorem {p}_compiles(): {src}().compile({LOW}) = Some({p}_code()) {{
+    {src}().compile_of({LOW}, {p}_code(), {p}_emitted(), {p}_laid())
 }}
 
 // Its words, buffers and scratch range fit the page.
-theorem {p}_fits(): Layout({LOW}, {symbol}().capacities()).size() <= DataRegion::io_page().size {{
-    Nat::leb_sound(Layout({LOW}, {symbol}().capacities()).size(), DataRegion::io_page().size, trivial)
+theorem {p}_fits(): Layout({LOW}, {src}().capacities()).size() <= DataRegion::io_page().size {{
+    Nat::leb_sound(Layout({LOW}, {src}().capacities()).size(), DataRegion::io_page().size, trivial)
 }}
 
 // The bytes, a piece at a time from the last item.
@@ -282,7 +308,7 @@ theorem {p}_file_is(): io_elf_file({p}_upto_0()) = {p}_file() {{
 }}
 
 // Whatever names the compile's program, its file is the one written.
-theorem {p}_written(program: Prog, compiled: {symbol}().compile({LOW}) = Some(program)):
+theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}) = Some(program)):
     io_elf_file(assemble(no_fills(), program, [])) = {p}_file() {{
     let same: ({p}_code() = program) = Option::some_inj({p}_code(), program, trans(sym({p}_compiles()), compiled));
     j(same, λ q _ => io_elf_file(assemble(no_fills(), q, [])) = {p}_file(),
@@ -299,8 +325,7 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 // `native_compile_correct`).
 theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io())>, entry: s.rip = io_entry(),
     loaded: s.memory = X86Memory::io_load({p}_file())): SimProgram(X86Profile::io().linux(), {symbol}().denote(), s) {{
-    {symbol}().elf_file_simulates({p}_code(), {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory = X86Memory::io_load(f), loaded))
+    {simulates}
 }}
 ", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));
     let mut file = head;

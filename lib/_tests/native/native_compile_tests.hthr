@@ -189,6 +189,8 @@ theorem load_names_counted(): names_emitted(ops([BufferLoad(1, 0, 0)]), 5) = ops
 theorem store_names_counted(): names_emitted(ops([BufferStore(1, 0, 0, 2)]), 5) = ops([BufferStore(1, 0, 0, 2)]).leaf_names(5) { refl }
 theorem pure_names_counted(): names_emitted(ops([Const(64, 0, 3), Add(64, 1, 0, 0)]), 5) = ops([Const(64, 0, 3), Add(64, 1, 0, 0)]).leaf_names(5) { refl }
 theorem exit_names_counted(): names_emitted(Exit(0), 5) = Exit(0).leaf_names(5) { refl }
+theorem wide_names_counted(): names_emitted(ops([Const(64, 0, 3), BufferLoad(1, 0, 0), Add(64, 2, 1, 0), BufferStore(3, 0, 0, 2)]), 5)
+    = ops([Const(64, 0, 3), BufferLoad(1, 0, 0), Add(64, 2, 1, 0), BufferStore(3, 0, 0, 2)]).leaf_names(5) { refl }
 
 // cat with its pass inlined k times in its loop: code grows with k while
 // the tree keeps cat's shape. `cat_x8`, about twice cat's code eight times

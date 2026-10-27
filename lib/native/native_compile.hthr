@@ -759,8 +759,8 @@ record Shape { names: Nat, numbers: List<Nat> }
 fn Shape::node(self m: Shape, kind, after: Nat) → Shape { Shape(after, Cons(after, Cons(m.names, Cons(kind, m.numbers)))) }
 
 // The label names after a leaf that emits: a call takes them as
-// `Prog::call` does, a leaf of one byte node as `Prog::byte_node`, every
-// other leaf none. Counted without emitting, since emitting every leaf here
+// `Prog::call` does, each byte node of a leaf as `Prog::byte_node` (a leaf
+// of one, or a wide leaf compiled a node at a time), a pure node none. Counted without emitting, since emitting every leaf here
 // held the whole program's code in one read
 // (issues/write-elf-build-constants.md). A count that ever disagrees with
 // the emission is a part whose statement the kernel refuses, and the reader
@@ -769,10 +769,14 @@ fn Node::names_after(self node: Node, names: Nat) → Nat {
     match node { BufferLoad(_, _, _) => Succ(names), BufferStore(_, _, _, _) => Succ(Succ(names)), _ => names }
 }
 
+fn List::names_after(self nodes: List<Node>, names: Nat) → Nat {
+    match nodes { Nil => names, Cons(node, rest) => rest.names_after(node.names_after(names)) }
+}
+
 fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
     match s {
         Compute(region) => match region {
-            Dataflow(body) => match body.nodes { Nil => names, Cons(node, rest) => match rest { Nil => node.names_after(names), Cons(_, _) => names } },
+            Dataflow(body) => body.nodes.names_after(names),
             _ => names,
         },
         Invoke(shape) => match shape { Reads(_, _, _, _) => Succ(Succ(Succ(names))), Writes(_, _, _, _, _) => Succ(Succ(names)), _ => names },
