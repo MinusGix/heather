@@ -692,3 +692,155 @@ fn f(by: Nat -> Nat) -> Nat { by(1) }
           (identifier))
         (argument_list
           (number))))))
+
+==================
+Annotated lets stop at the binder's equals
+==================
+
+fn f() -> X {
+    let p: A → Type = λ u => u ∧ True;
+    have q: (j: Nat) → ∃ k: Nat, P(j, k) ∧ Q = g;
+    let r: (a = b) = h;
+    p
+}
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (let_statement
+        (identifier)
+        (declaration_function_type
+          (identifier)
+          (universe))
+        (lambda_expression
+          (lambda_binder
+            (identifier))
+          (binary_expression
+            (identifier)
+            (identifier))))
+      (have_statement
+        (identifier)
+        (declaration_function_type
+          (binder_group
+            (parameter_run
+              (parameter_name
+                (identifier))
+              (identifier)))
+          (declaration_quantified_type
+            (identifier)
+            (identifier)
+            (declaration_binary_type
+              (declaration_call_type
+                (identifier)
+                (argument_list
+                  (contextual_identifier
+                    (identifier))
+                  (identifier)))
+              (identifier))))
+        (identifier))
+      (let_statement
+        (identifier)
+        (binary_expression
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier))))
+
+==================
+Contextual words as binder names
+==================
+
+theorem t(): (j, k: Nat) → j = k { refl }
+
+---
+
+(source_file
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (declaration_function_type
+      (binder_group
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (declaration_binary_type
+        (contextual_identifier
+          (identifier))
+        (identifier)))
+    (block
+      (refl_expression))))
+
+==================
+Explicit calls and records in types
+==================
+
+theorem e(): w() = @BitVec::from_bits(0, []) { refl }
+theorem r(): (Alg<Nat> { nil: 0 }).fold(x) = 6 { refl }
+fn m(a: Nat) -> X { match @eq_dec(a, a) { Inl(_) => 0 } }
+
+---
+
+(source_file
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (declaration_binary_type
+      (declaration_call_type
+        (identifier)
+        (argument_list))
+      (explicit_call_expression
+        (qualified_identifier)
+        (argument_list
+          (number)
+          (vector_expression))))
+    (block
+      (refl_expression)))
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (declaration_binary_type
+      (declaration_call_type
+        (declaration_member_type
+          (record_expression
+            (identifier)
+            (type_arguments
+              (identifier))
+            (record_field
+              (identifier)
+              (number)))
+          (identifier))
+        (argument_list
+          (identifier)))
+      (number))
+    (block
+      (refl_expression)))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (match_expression
+        (explicit_call_expression
+          (qualified_identifier)
+          (argument_list
+            (identifier)
+            (identifier)))
+        (match_body
+          (match_arm
+            (constructor_pattern
+              (identifier)
+              (identifier))
+            (number)))))))
