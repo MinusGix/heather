@@ -4,7 +4,7 @@ status: open
 labels: [frontend, syntax, design]
 area: language
 created: 2026-07-24
-updated: 2026-08-11
+updated: 2026-10-27
 ---
 
 [[surface-syntax]] states the position as "a **fixed grammar** of common
@@ -322,3 +322,4 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   stands unchanged; the running score is that a curated addition costs three to
   four small edits, which is still the number a mechanism has to beat.
 - 2026-08-10: The second curated-lexicon data point landed via [[list-append-symbol]]: `++` costs the same lexer/binding-power/op-symbol/designation edits as predicted, shares additive precedence, and has no fallback. The extension-mechanism question remains unchanged.
+- 2026-10-27: docs/analysis-foundations-design.md (PR #220) asks for the big-operator binder production (`∑ k < n, e`, `∏`) ahead of the rest of the notation work: every analysis layer it orders reads through finite sums, and the library spelling `MonoidRel::range(+, n, λ k => …)` does not scale. Customer: [[finite-sums-and-products]].

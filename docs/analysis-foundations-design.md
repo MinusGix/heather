@@ -372,6 +372,16 @@ closure comes second, because it gives the elementary functions' identities
 automatically and sits on §3.4. Gruntz belongs to the transseries instance
 and comes last.
 
+**Where the searches run.** The check is always in Heather and kernel-checked.
+The search varies by procedure:
+
+- Newton's search is series arithmetic, so it is a Heather tactic (`Tac`),
+  which dogfoods the tactic language.
+- WZ's search is linear algebra over rational functions in two variables,
+  so it starts as an untrusted Rust oracle and moves into Heather once the
+  tactic step cost allows.
+- Holonomic closure follows WZ.
+
 ### 3.6 What is not the core
 
 - **Synthetic differential geometry.** Its nilpotent infinitesimals make the
@@ -461,7 +471,9 @@ one theorem that serves `∑` and `∏` alike:
 `issues/notation-extensibility.md` and is not implemented. The library does
 not wait for it. It is spelled `MonoidRel::range(+, n, λ k => f(k))` or, at
 a carrier with a designated `+`, a short wrapper such as `Rat::sum(n, f)`.
-When the production lands, it elaborates to the same terms.
+When the production lands, it elaborates to the same terms. Every later layer
+reads through `∑`, so this note asks for that one production ahead of the
+rest of the notation work (logged on `notation-extensibility`).
 
 **Tactics.** `ring` does not see through `∑`. Most sum manipulations here
 are reindexings, which are better as named lemmas than as a normaliser. A
@@ -1008,6 +1020,7 @@ note.
 
 | # | Issue | Part | Needs | Unblocks |
 |---|---|---|---|---|
+| 0 | `analysis-vertical-slice` | all, thinly | `ring` at `≈` (#219) | §10.1's certified root end to end. It tests the interfaces, the class-system nesting and the kernel cost before items 1–14 build on them |
 | 1 | `finite-sums-and-products` | A | semiring layers (done) | everything below, plus `finite-linear-algebra`'s `Fin n` sums |
 | 2 | `finite-difference-calculus` | A′ | 1 | binomial convolution (3), geometric tails (8), mean value inequality (7) |
 | 3 | `formal-power-series` | B (Hurwitz) | 1, 2, `ring` at `≈` (#219) | `exp`/`sin`/`cos` and their laws formally, the formal derivative for `ml-layers`, Newton lifting |
@@ -1021,9 +1034,13 @@ note.
 | 11 | `taylor-model-enclosures` | D (uniform) | 7, intervals (#208) | bounds uniform over a range (11 needs them for `|ε| ≤ r`), tighter `by intervals()`, `float-transcendental` specs |
 | 12 | `regular-perturbation-expansions` | F | 6, 7, 11 | perturbed roots and fixed points, the float error reading, width expansions |
 | 13 | `harmonic-and-stirling-asymptotics` | showcase | 7, 8, `log` | the first divergent expansion, and γ |
-| 14 | `grid-based-transseries` | G, meeting point | 5, 6, 11 | research horizon: differential-valued fields, Gruntz |
+| 14 | `grid-based-transseries` | G, meeting point | 5, 6, 12 | research horizon: differential-valued fields, Gruntz |
+| — | `gaussian-state-by-stein` | ML bridge | 3, `ml-gaussian-states` | the Gaussian state defined by `E[x_i f] = ∑_j C_ij E[∂_j f]`, with Wick's matchings as a theorem. This gives expectations to ML theory before measure theory exists |
 
-Items 1–4 can run in parallel once item 1's range sum exists. Items 5 and 6
+Item 0 comes first. It builds the minimum of items 1, 3, 6, 7 and 12 in
+their own files, and its findings are logged on those issues before their
+full rounds start. After it, items 1–4 can run in parallel once item 1's
+range sum exists. Items 5 and 6
 are the interfaces. Each is validated by two instances in its first round
 (§3.7), and that is why each needs item 3 and then a `CReal` instance. Item
 3 has an outside customer waiting (`ml-layers`). Items 7 and 8 are what
@@ -1047,7 +1064,10 @@ Made here. Each is revisable when a customer pushes back.
   as the core. The concrete layers are their first instances (§3).
 - **A derivative is data.** A differentiable map is a map paired with its
   derivative and evidence (§3.1), and smoothness is coinductive.
+- **A vertical slice first** (§13, item 0), then the layers.
 - **Several variables are iterated series** (§5).
+- **Searches by tool:** Newton's in Heather and WZ's as a Rust oracle to
+  start. The checks are always in Heather (§3.5).
 - **Smallness is a dominance relation without totality**, with leading
   monomials as data (§3.2). Newton's lemma is one contraction theorem with
   rates.

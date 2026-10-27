@@ -21,6 +21,7 @@ Scope:
   the worked example of §10.1: `x² + εx − 1 = 0` near `1`, the truncation
   `1 − ε/2 + ε²/8` by Newton on series in `ε`, its residual `ε⁴/64` by `ring`,
   and the certified expansion with `|R| ≤ C·|ε|⁴` from Kantorovich;
+  [[analysis-vertical-slice]] delivers it first, and this issue generalises it;
 - singular perturbation of algebraic equations: Puiseux exponents from the
   Newton polygon;
 - a width-expansion probe in the shape of Roberts–Yaida–Hanin (a statistic
