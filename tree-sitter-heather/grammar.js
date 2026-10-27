@@ -18,6 +18,10 @@ const PREC = {
   POSTFIX: 12,
 };
 
+// Words that introduce a special form only before their fixed follower
+// (`contextual_identifier` below); elsewhere they are names.
+const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with'];
+
 module.exports = grammar({
   name: 'heather',
 
@@ -193,7 +197,10 @@ module.exports = grammar({
       commaSep1($.parameter_name), ':', field('type', $._expression),
       optional(seq(':=', choice('infer', field('default', $._expression)))),
     ),
-    parameter_name: $ => seq(optional('self'), field('name', $.identifier), optional(seq('as', $.operator))),
+    // A binder's name is a plain identifier even when it is a contextual
+    // word: after `(` in a type, `(j: Nat) →` could still begin `j(…)`, so
+    // the lexer reads the word and the name has to accept it.
+    parameter_name: $ => seq(optional('self'), field('name', choice($.identifier, ...contextualWords($))), optional(seq('as', $.operator))),
     binder_group: $ => seq('(', commaSep1($.parameter_run), ')'),
     implicit_binder_group: $ => seq('{', commaSep1($.parameter_run), '}'),
 
@@ -242,13 +249,13 @@ module.exports = grammar({
     ),
     let_statement: $ => seq(
       'let', choice(field('name', $.identifier), $.destructure_pattern),
-      optional(seq(':', field('type', $._expression))), '=', field('value', $._expression), ';',
+      optional(seq(':', field('type', $._annotation_type))), '=', field('value', $._expression), ';',
     ),
     // `have x = e;` binds opaquely (docs/have-design.md): one name, never a
     // pattern. `have` stays a contextual word, so `have(x)` is still a call.
     have_statement: $ => seq(
       'have', field('name', $.identifier),
-      optional(seq(':', field('type', $._expression))), '=', field('value', $._expression), ';',
+      optional(seq(':', field('type', $._annotation_type))), '=', field('value', $._expression), ';',
     ),
     destructure_pattern: $ => seq(
       '{', commaSep1(choice($.identifier, $.named_destructure_field)), optional(','), '}',
@@ -277,6 +284,7 @@ module.exports = grammar({
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
       $.anonymous_constructor_expression,
       $.boolean_reflection_expression,
+      $.explicit_call_expression,
       $.head_call_expression, $.head_member_expression, $.head_type_application,
       $.head_index_expression,
       $.head_propagation_expression,
@@ -331,12 +339,13 @@ module.exports = grammar({
       $.vector_expression,
       $.squash_type,
       $.boolean_reflection_expression,
-      seq('(', $._declaration_type, ')'),
+      seq('(', $._expression, ')'),
       $.declaration_type_application,
       $.declaration_call_type,
       $.declaration_member_type,
       $.declaration_index_type,
       $.declaration_inverse_type,
+      $.explicit_call_expression,
     ),
     declaration_type_application: $ => prec.dynamic(4, prec.left(PREC.POSTFIX, seq(
       field('value', $._type_atom), $.type_arguments,
@@ -373,6 +382,41 @@ module.exports = grammar({
       ',', field('body', $._declaration_type),
     )),
     declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._declaration_type)),
+
+    // A `let`/`have` annotation runs up to the binder's `=`, so, as in the
+    // compiler (parser.rs `no_eq`), it is a declaration type without the
+    // comparison rung; a parenthesis is the escape hatch. Read as a plain
+    // expression, `let p: A → Type = λ …` gave the codomain the binder's `=`.
+    _annotation_type: $ => choice(
+      $._type_atom,
+      alias($.annotation_function_type, $.declaration_function_type),
+      alias($.annotation_binary_type, $.declaration_binary_type),
+      alias($.annotation_quantified_type, $.declaration_quantified_type),
+      alias($.annotation_big_operator_type, $.declaration_big_operator_type),
+      alias($.annotation_prefix_type, $.declaration_prefix_type),
+      $.match_expression,
+    ),
+    annotation_function_type: $ => prec.right(PREC.ARROW, seq(
+      choice($.binder_group, $.implicit_binder_group, $._type_atom), choice('->', '→'), $._annotation_type,
+    )),
+    annotation_binary_type: $ => choice(
+      ...typeBinary($, ['↔', '<->'], PREC.IFF, 'right', $._annotation_type),
+      ...typeBinary($, ['∨'], PREC.OR, 'right', $._annotation_type),
+      ...typeBinary($, ['∧'], PREC.AND, 'right', $._annotation_type),
+      ...typeBinary($, ['||'], PREC.BOOL_OR, 'left', $._annotation_type),
+      ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left', $._annotation_type),
+      ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left', $._annotation_type),
+      ...typeBinary($, ['*', '∙'], PREC.MUL, 'left', $._annotation_type),
+      ...typeBinary($, ['^'], PREC.POWER, 'right', $._annotation_type),
+    ),
+    annotation_quantified_type: $ => prec.right(seq(
+      choice('∀', '∃'), $.identifier, ':', $._declaration_type, ',', $._annotation_type,
+    )),
+    annotation_big_operator_type: $ => prec.right(PREC.BOOL_OR, seq(
+      choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._annotation_type),
+      ',', field('body', $._annotation_type),
+    )),
+    annotation_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._annotation_type)),
 
     _expression: $ => choice(
       $.identifier,
@@ -587,23 +631,20 @@ module.exports = grammar({
     // These words introduce a special form only with their fixed follower in
     // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.
-    contextual_identifier: $ => choice(
-      alias('j', $.identifier),
-      alias('code', $.identifier),
-      alias('calc', $.identifier),
-      alias('apply', $.identifier),
-      alias('give', $.identifier),
-      alias('refl', $.identifier),
-      alias('by', $.identifier),
-      alias('have', $.identifier),
-      alias('with', $.identifier),
-    ),
+    contextual_identifier: $ => choice(...contextualWords($)),
     // Keep plain and namespace-qualified names lexically disjoint. Declaration
     // name positions alias either spelling to the stable qualified-name node.
     _qualified_name: $ => alias(choice($.identifier, $.qualified_identifier), $.qualified_identifier),
     qualified_identifier: _ => token(/[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+/),
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
-    number: _ => token(/0x[0-9A-Fa-f][0-9A-Fa-f_]*|0o[0-7][0-7_]*|0b[01][01_]*|[0-9][0-9_]*/),
+    // A decimal point starts a fraction only before a digit (`1.foo` and
+    // `1..2` keep their meaning), and a hex point only when a `p` exponent
+    // follows (`0xff.f()` stays a method call): crates/syntax/src/lexer.rs.
+    number: _ => token(choice(
+      /0x[0-9A-Fa-f][0-9A-Fa-f_]*((\.[0-9A-Fa-f][0-9A-Fa-f_]*)?[pP][+-]?[0-9][0-9_]*)?/,
+      /0o[0-7][0-7_]*|0b[01][01_]*/,
+      /[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?/,
+    )),
     // Match the lexer's closed escape set; scalar-value validation stays in
     // the compiler. Tokens keep spaces and comment markers inside literals.
     character: _ => token(seq("'", choice(/[^'\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/), "'")),
@@ -613,6 +654,10 @@ module.exports = grammar({
     comment: _ => token(seq('//', /[^\n]*/)),
   },
 });
+
+function contextualWords($) {
+  return CONTEXTUAL_WORDS.map(word => alias(word, $.identifier));
+}
 
 function commaSep(rule, separator = ',') {
   return optional(commaSep1(rule, separator));
@@ -629,10 +674,10 @@ function binary($, operators, precedence, associativity) {
   )));
 }
 
-function typeBinary($, operators, precedence, associativity) {
+function typeBinary($, operators, precedence, associativity, operand = $._declaration_type) {
   const wrap = associativity === 'right' ? prec.right : prec.left;
   return operators.map(operator => wrap(precedence, seq(
-    field('left', $._declaration_type), field('operator', operator), field('right', $._declaration_type),
+    field('left', operand), field('operator', operator), field('right', operand),
   )));
 }
 
