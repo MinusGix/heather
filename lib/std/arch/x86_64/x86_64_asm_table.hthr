@@ -12,9 +12,13 @@
 // names, so jumps checked to land by the table land by the program.
 import x86_64;
 import x86_64_asm;
+import x86_64_block;
+import x86_64_stack;
 import x86_64_asm_runs;
 import x86_64_layout;
+import bitvec;
 import bool;
+import list;
 import logic;
 import nat;
 
@@ -437,4 +441,126 @@ theorem LabelTable::checked_back(self t: LabelTable, k: Nat): (p: Prog) → (dep
             },
         },
     }
+}
+
+// What `laid_out_of`'s pass gives every label the table has, as one fact.
+theorem LabelTable::target_of(self t: LabelTable, p: Prog, end: Nat, ok: t.checked(p, t.depth, end).IsTrue(), k: Nat, has: t.has(Succ(k)).IsTrue()):
+    asm_target(p, Succ(k)) = t.offset_of(Succ(k)) {
+    let parts = Bool::is_true_and(Succ(t.index_of(Succ(k))).leb(t.depth), asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)), has);
+    t.target_at(p, t.depth, end, k, ok, parts.left, parts.right)
+}
+
+// ---------------------------------------------------------------------------
+// The bytes, by the table's offsets
+
+// The last `k` items jump only to labels the table has, and none refers to
+// labels by a function of its own (`Refer`), so their bytes read the labels
+// at their targets only.
+fn LabelTable::window_ok(self t: LabelTable, p: Prog, k: Nat) → Bool {
+    match k {
+        Zero => True,
+        Succ(j) => match p {
+            Start => True,
+            At(before, _, item) => (match item { Refer(_, _, _) => False, _ => t.targets_ok(item) }) && t.window_ok(before, j),
+        },
+    }
+}
+
+theorem LabelTable::bytes_by(self t: LabelTable, whole: Prog, fills: Nat → List<BitVec(8)>, here: Nat, item: Asm,
+    at: (k: Nat) → t.has(Succ(k)).IsTrue() → asm_target(whole, Succ(k)) = t.offset_of(Succ(k))):
+    (match item { Refer(_, _, _) => False, _ => t.targets_ok(item) }).IsTrue() →
+    asm_bytes(fills, asm_labels(whole), here, item) = asm_bytes(fills, t.labels(), here, item) {
+    match item as λ it => (match it { Refer(_, _, _) => False, _ => t.targets_ok(it) }).IsTrue() →
+            asm_bytes(fills, asm_labels(whole), here, it) = asm_bytes(fills, t.labels(), here, it) {
+        Jcc(cc, target) => match target as λ g => t.target_ok(g).IsTrue() →
+                asm_bytes(fills, asm_labels(whole), here, Jcc(cc, g)) = asm_bytes(fills, t.labels(), here, Jcc(cc, g)) {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => j(at(k, has), λ x _ => asm_bytes(fills, asm_labels(whole), here, Jcc(cc, Succ(k))) =
+                near_control_bytes(JumpIfNear(cc, near_rel(here + 6, x))), refl),
+        },
+        Jmp(target) => match target as λ g => t.target_ok(g).IsTrue() →
+                asm_bytes(fills, asm_labels(whole), here, Jmp(g)) = asm_bytes(fills, t.labels(), here, Jmp(g)) {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => j(at(k, has), λ x _ => asm_bytes(fills, asm_labels(whole), here, Jmp(Succ(k))) =
+                near_control_bytes(JumpNear(near_rel(here + 5, x))), refl),
+        },
+        CallTo(target) => match target as λ g => t.target_ok(g).IsTrue() →
+                asm_bytes(fills, asm_labels(whole), here, CallTo(g)) = asm_bytes(fills, t.labels(), here, CallTo(g)) {
+            Zero => λ no => false_elim(no),
+            Succ(k) => λ has => j(at(k, has), λ x _ => asm_bytes(fills, asm_labels(whole), here, CallTo(Succ(k))) =
+                CallNear(near_rel(here + 5, x)).bytes(), refl),
+        },
+        Refer(_, _, _) => λ no => false_elim(no),
+        Block(_) => λ _ => refl,
+        Code(_) => λ _ => refl,
+        Load(_) => λ _ => refl,
+        Store(_) => λ _ => refl,
+        LoadByte(_) => λ _ => refl,
+        StoreByte(_) => λ _ => refl,
+        Syscall => λ _ => refl,
+        Proved(_, _, _, _) => λ _ => refl,
+        Ret => λ _ => refl,
+        Spill(_) => λ _ => refl,
+        Reload(_) => λ _ => refl,
+        Piece(_, _, _) => λ _ => refl,
+        Hole(_, _) => λ _ => refl,
+    }
+}
+
+// A window's code by the program's labels is its code by the table's.
+theorem LabelTable::code_after_by(self t: LabelTable, whole: Prog, fills: Nat → List<BitVec(8)>,
+    at: (k: Nat) → t.has(Succ(k)).IsTrue() → asm_target(whole, Succ(k)) = t.offset_of(Succ(k)), k: Nat): (q: Prog) → t.window_ok(q, k).IsTrue() →
+    asm_code_after(fills, asm_labels(whole), q, k) = asm_code_after(fills, t.labels(), q, k) {
+    match k {
+        Zero => λ q _ => refl,
+        Succ(j) => λ q => match q {
+            Start => λ _ => refl,
+            At(before, name, item) => λ ok => {
+                let parts = Bool::is_true_and((match item { Refer(_, _, _) => False, _ => t.targets_ok(item) }), t.window_ok(before, j), ok);
+                let earlier = t.code_after_by(whole, fills, at, j, before, parts.right);
+                trans(cong(earlier, f := λ (x: List<BitVec(8)>) => x ++ asm_bytes(fills, asm_labels(whole), prog_len(before), item)),
+                    cong(t.bytes_by(whole, fills, prog_len(before), item, at, parts.left),
+                        f := λ (y: List<BitVec(8)>) => asm_code_after(fills, t.labels(), before, j) ++ y))
+            },
+        },
+    }
+}
+
+// A window's code with each item's offset carried down from where the
+// window ends, as the pass carries it, so nothing sums the items before it.
+fn asm_code_ending(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog, k, end: Nat) → List<BitVec(8)> {
+    match k {
+        Zero => Nil,
+        Succ(j) => match p {
+            Start => Nil,
+            At(before, _, item) => asm_code_ending(fills, labels, before, j, end - asm_len(item)) ++ asm_bytes(fills, labels, end - asm_len(item), item),
+        },
+    }
+}
+
+theorem asm_code_after_ending(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, k: Nat): (p: Prog) →
+    asm_code_after(fills, labels, p, k) = asm_code_ending(fills, labels, p, k, prog_len(p)) {
+    match k {
+        Zero => λ p => refl,
+        Succ(j) => λ p => match p {
+            Start => refl,
+            At(before, name, item) => {
+                let back = sym(Nat::add_sub_cancel(prog_len(before), asm_len(item)));
+                j(back, λ e _ => asm_code_after(fills, labels, before, j) ++ asm_bytes(fills, labels, prog_len(before), item) =
+                        asm_code_ending(fills, labels, before, j, e) ++ asm_bytes(fills, labels, e, item),
+                    cong(asm_code_after_ending(fills, labels, j, before),
+                        f := λ (x: List<BitVec(8)>) => x ++ asm_bytes(fills, labels, prog_len(before), item)))
+            },
+        },
+    }
+}
+
+// A piece of the code checked by evaluation at the table's offsets: the
+// window ends where the pass says it does.
+theorem LabelTable::piece_by(self t: LabelTable, whole: Prog, whole_end: Nat, whole_ok: t.checked(whole, t.depth, whole_end).IsTrue(),
+    q: Prog, depth, end, k: Nat, ok: t.checked(q, depth, end).IsTrue(), window: t.window_ok(q, k).IsTrue()):
+    asm_code_after(no_fills(), asm_labels(whole), q, k) = asm_code_ending(no_fills(), t.labels(), q, k, end) {
+    trans(t.code_after_by(whole, no_fills(), λ n has => t.target_of(whole, whole_end, whole_ok, n, has), k, q, window),
+        j(t.checked_len(q, depth, end, ok), λ e _ => asm_code_after(no_fills(), t.labels(), q, k) = asm_code_ending(no_fills(), t.labels(), q, k, e),
+            asm_code_after_ending(no_fills(), t.labels(), k, q)))
 }

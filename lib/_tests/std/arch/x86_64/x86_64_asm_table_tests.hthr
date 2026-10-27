@@ -3,6 +3,7 @@
 // (comparisons on literals), the pass whole and a stretch at a time, and
 // tables that misplace a label refused.
 import x86_64_asm;
+import list;
 import x86_64_asm_runs;
 import x86_64_asm_table;
 import bool;
@@ -38,3 +39,12 @@ fn stray() → Prog { At(At(Start, 1, Syscall), 0, Jmp(5)) }
 fn stray_table() → LabelTable { LabelTable(λ _ => 0, λ _ => 0, λ i => match i.leb(0) { True => 1, False => 0 }, 2) }
 // expect-error: `trivial` proves `True`, but `IsTrue(checked(stray_table, stray, 2, 7))` is expected here
 theorem stray_checked(): stray_table().checked(stray(), 2, 7).IsTrue() { trivial }
+
+// The bytes by the table's offsets, each item's offset carried down.
+theorem prog_bytes_by_table(): asm_code_after(no_fills(), asm_labels(prog()), prog(), 4) = asm_code_ending(no_fills(), table().labels(), prog(), 4, 14) {
+    table().piece_by(prog(), 14, prog_checked(), prog(), 4, 14, 4, prog_checked(), trivial)
+}
+// The top two items' bytes alone, the window ending at 14.
+theorem prog_last_bytes(): asm_code_after(no_fills(), asm_labels(prog()), prog(), 2) = asm_code_ending(no_fills(), table().labels(), prog(), 2, 14) {
+    table().piece_by(prog(), 14, prog_checked(), prog(), 4, 14, 2, prog_checked(), trivial)
+}
