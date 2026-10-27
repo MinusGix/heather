@@ -170,8 +170,8 @@ impl Mover<'_> {
                         .collect::<Result<Vec<_>, RelocationRefusal>>()
                 };
                 let ctors = moved(&codes.ctors)?;
-                let tails = moved(&codes.tails)?;
-                DeltaEvent::GenSpineCodes { tag: *tag, codes: SpineCodes { ctors, tails }, at: self.scope32(*at)? }
+                let nodes = moved(&codes.nodes)?;
+                DeltaEvent::GenSpineCodes { tag: *tag, codes: SpineCodes { ctors, nodes }, at: self.scope32(*at)? }
             }
             // The inline copy and the arity are cut from the lowering, like
             // the copies above; the decoded copy is `El` of `D#shape`'s body,
@@ -403,12 +403,12 @@ impl RegistryPart {
                     let blank = |parts: &[(Rc<Type>, heather_kernel::level::Level)]| {
                         parts.iter().map(|(_, l)| (Rc::new(Type::Nat), l.clone())).collect::<Vec<_>>()
                     };
-                    for (ty, _) in codes.ctors.iter().chain(&codes.tails) {
+                    for (ty, _) in codes.ctors.iter().chain(&codes.nodes) {
                         hashes.push(h.ty(*at as usize, ty)?);
                     }
                     DeltaEvent::GenSpineCodes {
                         tag: *tag,
-                        codes: SpineCodes { ctors: blank(&codes.ctors), tails: blank(&codes.tails) },
+                        codes: SpineCodes { ctors: blank(&codes.ctors), nodes: blank(&codes.nodes) },
                         at: 0,
                     }
                 }

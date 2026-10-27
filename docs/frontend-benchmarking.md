@@ -264,8 +264,8 @@ loads, which is the honest width of an absolute time here.
 | `inductive/enum-equality` | *n*²-arm decidable equality on an *n*-constructor enum, and its `refl` theorem. **Lower bound quadratic** | debt: ~2.5 |
 | `inductive/record-fields` | a *k*-field record: literal, projection, rebuild, frame theorem. **Lower bound linear** | debt: ~1.4 |
 | `inductive/mutual-declaration` | a ring of *m* mutual sorts, declared. **Lower bound linear** | met (~1.0) |
-| `inductive/mutual-recursion` | structural recursion over that group, and one `refl` unfolding. **Lower bound linear** | ~0.95 over 2..8, fixed cost; debt ~1.8 at larger *m* (the shape spine) |
-| `inductive/typed-syntax` | intrinsically typed terms `Tm(J(Γ, A))`, *n* constructors: `size` and two `refl` unfoldings. **Lower bound linear** | met (~0.6 over 5..8, fixed cost) |
+| `inductive/mutual-recursion` | structural recursion over that group, and one `refl` unfolding. **Lower bound linear** | debt: ~1.3 over 4..32, ~1.6 by 160 |
+| `inductive/typed-syntax` | intrinsically typed terms `Tm(J(Γ, A))`, *n* constructors: `size` and two `refl` unfoldings. **Lower bound linear** | met (~0.75 over 8..64) |
 | `inductive/function-fields` | an `IWf`-on-`W` family of *n* function-field constructors: `size` and two `refl` unfoldings. **Lower bound linear** | debt: ~1.7 over 2..8, ~3.4 past it |
 
 The spread is the point of the noise warning above, and it is also the

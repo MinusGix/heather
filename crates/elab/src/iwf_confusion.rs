@@ -56,7 +56,6 @@ impl Elaborator {
         body: &ConstBody,
         span: Span,
     ) -> R<Term> {
-        let n = spine.ctors.len();
         let m = fam.idx.shift_local(2);
         match &fam.form {
             FamForm::IWf(sig) => {
@@ -68,7 +67,7 @@ impl Elaborator {
                 c3.push("#a".into(), (*sig.shape).clone(), sig.level.clone());
                 c3.push("#cs".into(), cs_ty, sig.family_level());
                 c3.push("#ih".into(), ih_ty, mlvl.clone());
-                let step = self.const_case_tree(&c3, spine, n, &motive.shift_local(3), mlvl, Rc::new(var(2)), body, 0, 5, span)?;
+                let step = self.const_case_tree(&c3, spine, &motive.shift_local(3), mlvl, Rc::new(var(2)), body, spine.root(), 5, span)?;
                 Ok(Term::ElimIWf {
                     sig,
                     motive_level: mlvl.clone(),
@@ -92,7 +91,7 @@ impl Elaborator {
                     },
                     Level::join(sig.lp.clone(), mlvl.clone()),
                 );
-                let step = self.const_case_tree(&c3, spine, n, &motive.shift_local(3), mlvl, Rc::new(var(2)), body, 0, 5, span)?;
+                let step = self.const_case_tree(&c3, spine, &motive.shift_local(3), mlvl, Rc::new(var(2)), body, spine.root(), 5, span)?;
                 Ok(Term::ElimW {
                     shape_level: sig.ls.clone(),
                     pos_level: sig.lp.clone(),
@@ -124,27 +123,12 @@ impl Elaborator {
             _ => return None,
         };
         let n = ind.ctors.len();
-        let (mut i, mut cur, mut injected) = (0usize, label, false);
-        loop {
-            match crate::spelling::inj_of(cur) {
-                Some((false, val)) if i + 1 < n => {
-                    injected = true;
-                    i += 1;
-                    cur = val;
-                }
-                Some((true, val)) => {
-                    injected = true;
-                    cur = val;
-                    break;
-                }
-                _ => break,
-            }
-        }
+        let path = crate::spelling::inj_path(label, n);
         // A bare neutral at a multi-constructor family names no summand.
-        if !injected && n > 1 && !crate::spelling::is_pair(cur) {
+        if !path.injected && n > 1 && !crate::spelling::is_pair(path.at) {
             return None;
         }
-        Some((i, Rc::clone(cur)))
+        Some((path.ctor, Rc::clone(path.val.unwrap_or(label))))
     }
 
     /// Both sides of a family equation read as constructors.

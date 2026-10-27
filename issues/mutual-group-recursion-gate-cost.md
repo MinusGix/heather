@@ -126,4 +126,6 @@ group is about m^1.8: the step's case tree is a comb over the shape spine,
 Θ(m) deep, its motives hold the label as an `inr` chain of that depth, and
 each arm evaluates the definitions down the same chain. That is the
 constructor encoding of every inductive, filed as
-[[iwf-shape-spine-comb-depth]] rather than kept here.
+[[iwf-shape-spine-comb-depth]] rather than kept here. (Merged with PR #214's balanced sums the
+same day: 160 members 6.1 s → 4.4 s, still about m^1.6; that issue now
+tracks the residue.)

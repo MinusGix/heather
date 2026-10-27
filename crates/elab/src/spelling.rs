@@ -32,6 +32,49 @@ pub(crate) fn inj_of(t: &Term) -> Option<(bool, &Rc<Term>)> {
     }
 }
 
+/// Where a constructor value's injection path leads ([`inj_path`]).
+pub(crate) struct InjPath<'t> {
+    /// The constructor the path selects; when it stopped short, the first
+    /// constructor of the `+` it stopped at.
+    pub(crate) ctor: usize,
+    /// The payload, or the term the path stopped at (no injection: a
+    /// neutral, or a value that is not a constructor at all).
+    pub(crate) at: &'t Term,
+    /// Whether the path reached a payload.
+    pub(crate) reached: bool,
+    /// `at` as the last injection's own value, when the path crossed one
+    /// (`at` is the label itself otherwise).
+    pub(crate) val: Option<&'t Rc<Term>>,
+    /// Whether it crossed any injection.
+    pub(crate) injected: bool,
+}
+
+/// Walk a value of an `n`-constructor sum down its injections, the `+` tree
+/// being the one [`crate::sum_layout`] decides: each injection picks a side,
+/// until a payload. Either injection spelling — this reads the *path*, never
+/// an annotation, so `inr@` is an `inr`.
+pub(crate) fn inj_path<'t>(label: &'t Term, n: usize) -> InjPath<'t> {
+    use crate::sum_layout::Child;
+    let layout = crate::sum_layout::layout(n);
+    let (mut at, mut cur, mut last) = (layout.root(), label, None);
+    let path = |ctor, at, reached, val: Option<&'t Rc<Term>>| InjPath { ctor, at, reached, val, injected: val.is_some() };
+    loop {
+        match at {
+            None => return path(0, cur, false, last),
+            Some(Child::Leaf(k)) => return path(k, cur, true, last),
+            Some(Child::Node(j)) => {
+                let node = layout.node(j);
+                let Some((left, val)) = inj_of(cur) else {
+                    return path(node.lo, cur, false, last);
+                };
+                at = Some(node.side(!left));
+                cur = val;
+                last = Some(val);
+            }
+        }
+    }
+}
+
 /// The two components of either pair spelling.
 pub(crate) fn pair_of(t: &Term) -> Option<(&Rc<Term>, &Rc<Term>)> {
     match t {

@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x18";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x16";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x19";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x17";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1897,7 +1897,7 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
         DeltaEvent::GenSpineCodes { tag, codes, at } => {
             w.byte(16); w.u32(*tag);
             w.vec(&codes.ctors, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
-            w.vec(&codes.tails, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
+            w.vec(&codes.nodes, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
             w.u32(*at);
         }
     }
@@ -1949,7 +1949,7 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         }, at: r.u32()? },
         16 => DeltaEvent::GenSpineCodes { tag: r.u32()?, codes: SpineCodes {
             ctors: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
-            tails: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
+            nodes: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
         }, at: r.u32()? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "module event", tag }),
     })
@@ -2057,7 +2057,7 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
                 if !spine_codes.insert(*tag) {
                     return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated spine-code guard"));
                 }
-                if codes.ctors.len() < 2 || codes.tails.len() + 1 != codes.ctors.len() {
+                if codes.ctors.len() < 2 || codes.nodes.len() + 1 != codes.ctors.len() {
                     return Err(ModuleImageDecodeError::InvalidStructure("generated spine-code guard is not a spine"));
                 }
             }

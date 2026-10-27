@@ -161,13 +161,13 @@ pub(crate) enum GenDef {
     /// payloads' field mass, not the `inl`/`inr` suffix sums, which only
     /// these name.)
     PayloadCode(u32, usize),
-    /// `D#suffixₖ : Trm_c(· ⊢ Ty l) := D#payload_{k+1}^δ + D#suffix_{k+1}^δ`
-    /// — the same declaration's **suffix sum** past constructor `k`, the
-    /// right operand of the `k`-th `+` (`Spine::tails[k]`), spelled over the
-    /// names of its own components so that each level of an injection costs
-    /// the kernel one δ and a syntactic comparison. Registered for
-    /// `k < n - 2` only: the last tail *is* the last payload, and takes
-    /// [`GenDef::PayloadCode`]`(tag, n - 1)`.
+    /// `D#suffixₖ : Trm_c(· ⊢ Ty l) := L^δ + R^δ` — the same declaration's
+    /// `+` node `k + 1` (`Spine::nodes[k + 1]`, preorder, `crate::sum_layout`),
+    /// spelled over the names of its own two sides (each a `D#payload` or
+    /// another `D#suffix`) so that each level of an injection costs the
+    /// kernel one δ and a syntactic comparison. One per `+` but the whole
+    /// sum, which is never a side: on the right-nested layout `D#suffixₖ` is
+    /// the suffix sum past constructor `k`, the name's origin.
     SuffixCode(u32, usize),
     /// `D#canon : Π(A₁ : Ty 0)…(v_m : T_m). Π(t : W₀). Ty lw` — a **tier-2**
     /// declaration's leaf predicate (`docs/inductive-tier2-w-lowering.md`
@@ -947,60 +947,72 @@ fn spine_frame(t: &Term) -> Option<SubstTail> {
 pub(crate) struct SpineCodes {
     /// `(⟦cₖ⟧, lₖ)` per constructor.
     pub(crate) ctors: Vec<(Rc<Type>, Level)>,
-    /// `(R_{k+1}, its level)` per `+`; `tails[n-2]` is `ctors[n-1]`.
-    pub(crate) tails: Vec<(Rc<Type>, Level)>,
+    /// `(the sum, its level)` per `+`, in the layout's preorder; `nodes[0]`
+    /// is the whole.
+    pub(crate) nodes: Vec<(Rc<Type>, Level)>,
 }
 
 /// Per component, whether `spine`'s is structurally the registered one —
 /// [`Elaborator::spine_refs_by_position`]'s guard, at the cost of the
-/// payloads rather than of the tails.
+/// payloads rather than of the sums.
 ///
-/// `tails[k]` is `ctors[k+1] + tails[k+1]`, and [`Elaborator::spine`] reads
-/// both off that `+` without copying, so on either side the node's children
-/// *are* the next components. Compared deeply, the tails alone are Θ(n²)
-/// nodes per mention (the suffix sums of the payloads), and a spine rebuilt
-/// from a whnf shares no `Rc` with the registered copy for `==` to stop at.
-/// Walked from the right instead, a tail whose `+` links its own spine's
-/// next components on both sides is equal exactly when its two levels are and
-/// those components were — `==` on the node, with the children's answers
-/// already in hand. A tail that does not link that way (a code, a re-spelled
-/// copy) is compared deeply as before.
+/// [`Elaborator::spine`] reads each `+` node's two sides off it without
+/// copying, so on either side a node's children *are* its sides' components.
+/// Compared deeply, the nodes alone are a node per payload per enclosing `+`
+/// per mention (Θ(n²) right-nested), and a spine rebuilt from a whnf shares no
+/// `Rc` with the registered copy for `==` to stop at. Walked bottom-up
+/// instead (reverse preorder: a node's children number after it), a node
+/// whose `+` links its own spine's side components on both sides is equal
+/// exactly when its two levels are and those components were — `==` on the
+/// node, with the children's answers already in hand. A node that does not
+/// link that way (a code, a re-spelled copy) is compared deeply as before.
 fn spine_agreement(spine: &crate::inductive::Spine, codes: &SpineCodes) -> (Vec<bool>, Vec<bool>) {
+    use crate::sum_layout::{Child, Node};
     let ctors: Vec<bool> = spine
         .ctors
         .iter()
         .zip(&codes.ctors)
         .map(|((c, _), (reg, _))| *c == *reg)
         .collect();
-    // The `+` node of `tails[k]`, if its children are `ctors[k+1]` and
-    // `tails[k+1]` themselves.
-    fn link<'a>(cs: &[(Rc<Type>, Level)], ts: &'a [(Rc<Type>, Level)], k: usize) -> Option<(&'a Level, &'a Level)> {
-        match &*ts[k].0 {
+    // The `+` of `nodes[j]`, if its sides are its children's components
+    // themselves.
+    fn link<'a>(
+        cs: &[(Rc<Type>, Level)],
+        ns: &'a [(Rc<Type>, Level)],
+        node: &Node,
+        j: usize,
+    ) -> Option<(&'a Level, &'a Level)> {
+        let side = |c: Child| match c {
+            Child::Leaf(k) => &cs[k].0,
+            Child::Node(m) => &ns[m].0,
+        };
+        match &*ns[j].0 {
             Type::Sum {
                 lhs_level,
                 rhs_level,
                 lhs,
                 rhs,
-            } if k + 1 < ts.len()
-                && Rc::ptr_eq(lhs, &cs[k + 1].0)
-                && Rc::ptr_eq(rhs, &ts[k + 1].0) =>
-            {
-                Some((lhs_level, rhs_level))
-            }
+            } if Rc::ptr_eq(lhs, side(node.lhs)) && Rc::ptr_eq(rhs, side(node.rhs)) => Some((lhs_level, rhs_level)),
             _ => None,
         }
     }
-    let mut tails = vec![false; spine.tails.len()];
-    for k in (0..tails.len()).rev() {
-        tails[k] = match (
-            link(&spine.ctors, &spine.tails, k),
-            link(&codes.ctors, &codes.tails, k),
-        ) {
-            (Some(a), Some(b)) => a == b && ctors[k + 1] && tails[k + 1],
-            _ => spine.tails[k].0 == codes.tails[k].0,
+    let mut nodes = vec![false; spine.nodes.len()];
+    for j in (0..nodes.len()).rev() {
+        let node = spine.layout.node(j);
+        let agrees = |c: Child| match c {
+            Child::Leaf(k) => ctors[k],
+            Child::Node(m) => nodes[m],
         };
+        let same = match (
+            link(&spine.ctors, &spine.nodes, node, j),
+            link(&codes.ctors, &codes.nodes, node, j),
+        ) {
+            (Some(a), Some(b)) => a == b && agrees(node.lhs) && agrees(node.rhs),
+            _ => spine.nodes[j].0 == codes.nodes[j].0,
+        };
+        nodes[j] = same;
     }
-    (ctors, tails)
+    (ctors, nodes)
 }
 
 /// One append-only generated-definition delta. Its lookup views are sealed
@@ -1656,28 +1668,29 @@ impl Elaborator {
             )
             .ok()?;
         }
-        // `suffix_k` mentions `suffix_{k+1}`, so the walk is from the right;
-        // the last tail is the last payload and gets no definition of its own.
-        let suffix_ref = |me: &Self, k: usize| -> Option<Term> {
-            if k + 2 == n {
-                me.gen_ref(&cx, GenDef::PayloadCode(ind.tag, n - 1))
-            } else {
-                me.gen_ref(&cx, GenDef::SuffixCode(ind.tag, k))
+        // A node's code mentions its sides' codes, so the walk is bottom-up
+        // (reverse preorder); the whole sum is the caller's to register.
+        use crate::sum_layout::Child;
+        let side_ref = |me: &Self, c: Child| -> Option<Term> {
+            match c {
+                Child::Leaf(k) => me.gen_ref(&cx, GenDef::PayloadCode(ind.tag, k)),
+                Child::Node(j) => me.gen_ref(&cx, GenDef::SuffixCode(ind.tag, j - 1)),
             }
         };
-        let sum_body = |me: &Self, k: usize| -> Option<Term> {
+        let sum_body = |me: &Self, j: usize| -> Option<Term> {
+            let node = spine.layout.node(j);
             Some(Term::TmSum {
-                lhs_level: spine.ctors[k].1.clone(),
-                rhs_level: spine.tails[k].1.clone(),
-                lhs: Rc::new(me.gen_ref(&cx, GenDef::PayloadCode(ind.tag, k))?),
-                rhs: Rc::new(suffix_ref(me, k)?),
+                lhs_level: spine.lhs(j).1.clone(),
+                rhs_level: spine.rhs(j).1.clone(),
+                lhs: Rc::new(side_ref(me, node.lhs)?),
+                rhs: Rc::new(side_ref(me, node.rhs)?),
             })
         };
-        for k in (0..n - 2).rev() {
-            let body = sum_body(self, k + 1)?;
-            let lk = &spine.tails[k].1;
+        for j in (1..spine.nodes.len()).rev() {
+            let body = sum_body(self, j)?;
+            let lk = &spine.nodes[j].1;
             self.push_gen_def(
-                GenDef::SuffixCode(ind.tag, k),
+                GenDef::SuffixCode(ind.tag, j - 1),
                 &ind.name,
                 Type::Ty(lk.clone()),
                 Level::succ(lk.clone()),
@@ -1691,7 +1704,7 @@ impl Elaborator {
             ind.tag,
             SpineCodes {
                 ctors: spine.ctors,
-                tails: spine.tails,
+                nodes: spine.nodes,
             },
             at,
         );
@@ -2822,19 +2835,14 @@ impl Elaborator {
         if let Some((k, (_, l))) = codes.ctors.iter().enumerate().find(|(_, (c, _))| **c == *ty) {
             return self.gen_type_ref(cx, GenDef::PayloadCode(tag, k), l);
         }
-        let (k, (_, l)) = codes.tails.iter().enumerate().find(|(_, (t, _))| **t == *ty)?;
-        self.spine_tail_ref(cx, tag, codes.ctors.len(), k, l)
+        let (j, (_, l)) = codes.nodes.iter().enumerate().skip(1).find(|(_, (t, _))| **t == *ty)?;
+        self.spine_node_ref(cx, tag, j, l)
     }
 
-    /// The reference for `Spine::tails[k]` of a declaration with `n`
-    /// constructors: the last tail is the last payload.
-    fn spine_tail_ref(&self, cx: &Cx, tag: u32, n: usize, k: usize, l: &Level) -> Option<Type> {
-        let key = if k + 2 == n {
-            GenDef::PayloadCode(tag, n - 1)
-        } else {
-            GenDef::SuffixCode(tag, k)
-        };
-        self.gen_type_ref(cx, key, l)
+    /// The reference for `Spine::nodes[j]`: `D#suffix_{j-1}`, and none for
+    /// the whole sum, which is never a side of a `+`.
+    fn spine_node_ref(&self, cx: &Cx, tag: u32, j: usize, l: &Level) -> Option<Type> {
+        self.gen_type_ref(cx, GenDef::SuffixCode(tag, j.checked_sub(1)?), l)
     }
 
     /// [`Self::spine_type_ref`] **by position**, for the emission copy of a
@@ -2855,10 +2863,10 @@ impl Elaborator {
         }
         let codes = self.types.gdefs().spine_codes(&tag)?;
         let n = codes.ctors.len();
-        if spine.ctors.len() != n || spine.tails.len() != codes.tails.len() {
+        if spine.ctors.len() != n || spine.nodes.len() != codes.nodes.len() {
             return None;
         }
-        let (ctor_same, tail_same) = spine_agreement(spine, codes);
+        let (ctor_same, node_same) = spine_agreement(spine, codes);
         let ctors = ctor_same
             .iter()
             .zip(&codes.ctors)
@@ -2868,16 +2876,16 @@ impl Elaborator {
                     .flatten()
             })
             .collect();
-        let tails = tail_same
+        let nodes = node_same
             .iter()
-            .zip(&codes.tails)
+            .zip(&codes.nodes)
             .enumerate()
-            .map(|(k, (same, (_, l)))| {
-                same.then(|| self.spine_tail_ref(cx, tag, n, k, l))
+            .map(|(j, (same, (_, l)))| {
+                same.then(|| self.spine_node_ref(cx, tag, j, l))
                     .flatten()
             })
             .collect();
-        Some((ctors, tails))
+        Some((ctors, nodes))
     }
 
     /// The `Wf` slot **pair** in the emission spelling: the two components
@@ -3336,7 +3344,7 @@ impl Elaborator {
                 gdefs.spine_codes(&tag).map(|codes| (*codes.ctors[k].0).clone())
             }
             GenDef::SuffixCode(tag, k) => {
-                gdefs.spine_codes(&tag).map(|codes| (*codes.tails[k].0).clone())
+                gdefs.spine_codes(&tag).map(|codes| (*codes.nodes[k + 1].0).clone())
             }
             _ => None,
         }

@@ -154,10 +154,10 @@ fn isa_opcode_match() -> Family {
         name: "inductive/isa-opcode-match",
         what: "an n-arm match from an instruction type into Nat",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 1.34 (1.31-1.38), after the
-        // mention-cost round shared the registered lowering (1.62 before).
-        // Debt, unattributed.
-        expect_slope: Some((0.99, 1.69)),
+        // 2026-10-27, cloud box, three runs: 0.94 (0.84-0.96), once wide
+        // sums are balanced (issues/wide-inductive-balanced-sum.md; 1.34
+        // before, arm k under k `Case`s). Met.
+        expect_slope: Some((0.59, 1.29)),
         cases: sweep("inductive/isa-opcode-match", &[32, 64, 128, 256], src),
     }
 }
@@ -167,7 +167,8 @@ fn isa_opcode_match() -> Family {
 /// shape of every encode/decode roundtrip. Lower bound: linear in the arms.
 /// The rebuilt constructor values make Θ(n) mentions, so this carried
 /// `isa-constructor-use`'s per-mention cost n times over until that was
-/// fixed; the `k`-th is still `k` injections deep.
+/// fixed; the `k`-th was then still `k` injections deep, until wide sums
+/// were balanced.
 fn isa_roundtrip() -> Family {
     let src = |n: u64| {
         let n = n as usize;
@@ -187,11 +188,12 @@ fn isa_roundtrip() -> Family {
         name: "inductive/isa-roundtrip",
         what: "an n-arm rebuild of an instruction type and its identity theorem",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 1.96 (1.95-1.97), after the
-        // mention-cost round (2.15 before); the identity theorem is most of
-        // what is left (issues/conv-query-identity-env-per-gamma.md), and
-        // the rebuilt values are Σk injections deep by the encoding. Debt.
-        expect_slope: Some((1.61, 2.31)),
+        // 2026-10-27, cloud box, three runs: 1.13 (1.08-1.21), once wide
+        // sums are balanced (issues/wide-inductive-balanced-sum.md; 1.96
+        // before, the rebuilt values Σk injections deep and each arm's
+        // queries paying Γ's depth,
+        // issues/conv-query-identity-env-per-gamma.md). Small debt.
+        expect_slope: Some((0.78, 1.48)),
         cases: sweep("inductive/isa-roundtrip", &[16, 32, 64, 128], src),
     }
 }
@@ -220,9 +222,9 @@ fn enum_equality() -> Family {
         name: "inductive/enum-equality",
         what: "n²-arm decidable equality on an n-constructor enum, and its refl theorem",
         unit: "ctors",
-        // 2026-10-26, cloud box, three runs: 2.51 (2.40-2.60), 65% gate at
-        // 64. Half a power over the arm count.
-        expect_slope: Some((2.16, 2.86)),
+        // 2026-10-27, cloud box, three runs: 1.96 (1.95-1.97), once wide
+        // sums are balanced (2.51 before). The arm count itself is n².
+        expect_slope: Some((1.61, 2.31)),
         cases: sweep("inductive/enum-equality", &[8, 16, 32, 64], src),
     }
 }
@@ -285,11 +287,12 @@ fn mutual_declaration() -> Family {
         what: "a group of m mutual sorts, declared",
         unit: "members",
         // 2026-10-26, cloud box, three runs: 1.49 (1.47-1.50), 96% elab at
-        // 16. Debt, small. Re-recorded from below 2026-10-27, once the
-        // group's signature was named (docs/iwf-named-signature-design.md):
-        // 1.02 in two runs, about half kernel at 16.
-        expect_slope: Some((0.67, 1.37)),
-        cases: sweep("inductive/mutual-declaration", &[2, 4, 8, 16], mutual_group),
+        // 16. 2026-10-27: 1.15 (1.11-1.18) once wide sums are balanced, and
+        // re-recorded from below with the group's signature named too
+        // (docs/iwf-named-signature-design.md), the sweep moved to 4..32:
+        // 0.84 (0.82-0.86), fixed cost still showing. Met.
+        expect_slope: Some((0.49, 1.19)),
+        cases: sweep("inductive/mutual-declaration", &[4, 8, 16, 32], mutual_group),
     }
 }
 
@@ -300,8 +303,8 @@ fn mutual_declaration() -> Family {
 ///
 /// Recorded instead (2026-10-26): ~2.7, nearly all kernel gate, and the
 /// one-step `refl` runs the kernel out of fuel at eight members
-/// (`issues/mutual-group-recursion-gate-cost.md`). Hence the sizes stop at
-/// five.
+/// (`issues/mutual-group-recursion-gate-cost.md`). Hence the sizes stopped
+/// at eight until the signature was named; they now run to 32.
 fn mutual_recursion() -> Family {
     let src = |m: u64| {
         let mut s = String::from(
@@ -329,10 +332,12 @@ fn mutual_recursion() -> Family {
         // (issues/mutual-group-recursion-gate-cost.md): 1.63 over 2..8 (about 2.3
         // from 8 to 16 by hand); the m = 8 `refl` checks. Again 2026-10-27,
         // with the signature named (docs/iwf-named-signature-design.md):
-        // 0.95 (0.91-0.99, two runs), fixed cost dominating; about 1.8 by
-        // hand from 24 to 160, the shape spine's comb (design §4).
-        expect_slope: Some((0.60, 1.30)),
-        cases: sweep("inductive/mutual-recursion", &[2, 3, 4, 6, 8], src),
+        // 0.95 (0.91-0.99, two runs) over 2..8, fixed cost dominating, so
+        // the sweep moved to 4..32 with wide sums balanced as well (#214):
+        // 1.28 (1.26-1.30), about 1.5 from 16 to 32 and 1.6 by hand from 80
+        // to 160 (issues/iwf-shape-spine-comb-depth.md).
+        expect_slope: Some((0.93, 1.63)),
+        cases: sweep("inductive/mutual-recursion", &[4, 8, 16, 32], src),
     }
 }
 
@@ -396,11 +401,12 @@ fn typed_syntax() -> Family {
         // constructors the CLI's `size` grows at about the 2.2th power (was
         // ~3.2) and its `refl`s at about the 1.2th. Re-recorded from below
         // 2026-10-27, the signature named and the attempt's annotation cache
-        // keyed by Ψ scope (docs/iwf-named-signature-design.md): 0.58, the
-        // declaration's fixed cost dominating, each size ~16x cheaper.
-        expect_slope: Some((0.23, 0.93)),
+        // keyed by Ψ scope (docs/iwf-named-signature-design.md), each size
+        // ~16x cheaper; over 5..8 the slope was fixed cost and noise, so the
+        // sweep moved to 8..64: 0.75 (0.72-0.81). Met.
+        expect_slope: Some((0.40, 1.10)),
         cases: indexed_sweep(
-            "inductive/typed-syntax", &[5, 6, 7, 8], "Tm", IndexedRoute::Iwf, src,
+            "inductive/typed-syntax", &[8, 16, 32, 64], "Tm", IndexedRoute::Iwf, src,
         ),
     }
 }

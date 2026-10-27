@@ -716,16 +716,8 @@ impl Elaborator {
             parts.push((t, l));
             all_doms.push(doms);
         }
-        let (shape, ls) = match parts.pop() {
-            None => (Type::Empty { level: Level::Zero }, Level::Zero),
-            Some((mut acc, mut acc_lvl)) => {
-                for (ty, lvl) in parts.into_iter().rev() {
-                    acc = Type::Sum { lhs_level: lvl.clone(), rhs_level: acc_lvl.clone(), lhs: Rc::new(ty), rhs: Rc::new(acc) };
-                    acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
-                }
-                (acc, acc_lvl)
-            }
-        };
+        let (shape, ls) =
+            crate::inductive::sum_of_payloads(parts).unwrap_or((Type::Empty { level: Level::Zero }, Level::Zero));
         let mut kids: Vec<Vec<Kid>> = Vec::with_capacity(n);
         let mut lp: Option<(Level, String)> = None;
         for (ctor, doms) in ind.ctors.iter().zip(all_doms) {
@@ -820,8 +812,7 @@ impl Elaborator {
             self.w_case_tree(
                 &xcx,
                 &spine,
-                n,
-                0,
+                spine.root(),
                 Type::Ty(lp.clone()),
                 &Level::succ(lp.clone()),
                 var(0),
@@ -865,8 +856,7 @@ impl Elaborator {
             let tree = self.w_case_tree(
                 &xcx,
                 &spine,
-                n,
-                0,
+                spine.root(),
                 motive,
                 &Level::join(lp.clone(), li.clone()),
                 var(0),
@@ -1796,8 +1786,7 @@ impl Elaborator {
         let cased = self.w_case_tree(
             &ocx,
             &spine,
-            n,
-            0,
+            spine.root(),
             q(2, var(0)),
             &lq,
             Rc::new(p.out_fst(1, var(0))),
@@ -1911,7 +1900,6 @@ impl Elaborator {
     pub(crate) fn const_out_m(
         &self,
         mcx: &Cx,
-        ind: &Inductive,
         d_ty: &Type,
         spine: &Spine,
         motive: &Type,
@@ -1925,7 +1913,7 @@ impl Elaborator {
             return err("internal: a codata declaration did not lower to its `M` encoding", span);
         };
         let label = Rc::new(p.out_fst(2, Rc::new(p.out(2, scrut))));
-        self.const_case_tree(mcx, spine, ind.ctors.len(), motive, mlvl, label, body, 0, 2, span)
+        self.const_case_tree(mcx, spine, motive, mlvl, label, body, spine.root(), 2, span)
     }
 
     // -- corecursion (§5) -------------------------------------------------------

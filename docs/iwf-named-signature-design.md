@@ -87,6 +87,7 @@ references, checked once in the definitions, which the declaration now pays
 for. What remains is the shape
 spine itself: the step's case tree is a comb of depth Θ(m), each level's
 motive holds the label as a chain of `inr`s of that depth, and each arm's
-conversion evaluates the definitions at its label down the same chain. A
-balanced spine would make both logarithmic; it is the constructor encoding
-of every inductive, so it is its own round.
+conversion evaluates the definitions at its label down the same chain. Wide
+sums are balanced since PR #214 (`issues/wide-inductive-balanced-sum.md`),
+which makes both logarithmic; with both, the ring is about m^1.6 from 80 to
+160 members, not yet attributed (`issues/iwf-shape-spine-comb-depth.md`).

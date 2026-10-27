@@ -43,6 +43,7 @@ use heather_syntax::ast::{Arm, Expr, ExprKind, MatchForm, Span};
 
 use crate::gendefs::GenDef;
 use crate::inductive::{FieldKind, IdxTy, Inductive, Spine, inject, nat_lit};
+use crate::sum_layout::Child;
 use crate::recursion::{Guard, GuardKind};
 use crate::wf::{Branches, Tel};
 use crate::{Alias, Cx, Elaborator, R, code, err};
@@ -800,8 +801,7 @@ impl Elaborator {
                 self.idx_case_tree(
                     cx,
                     &spine,
-                    iind.ctors.len(),
-                    0,
+                    spine.root(),
                     motive,
                     mlvl,
                     Rc::new(idx),
@@ -922,17 +922,7 @@ impl Elaborator {
         for &i in members {
             parts.push(self.lower_indexed_ctor(bcx, ind, i, args, l, gamma_len, branch, span)?);
         }
-        let (mut acc, mut acc_lvl) = parts.pop().expect("non-empty");
-        for (ty, lvl) in parts.into_iter().rev() {
-            acc = Type::Sum {
-                lhs_level: lvl.clone(),
-                rhs_level: acc_lvl.clone(),
-                lhs: Rc::new(ty),
-                rhs: Rc::new(acc),
-            };
-            acc_lvl = Level::max(lvl, acc_lvl);
-        }
-        Ok((acc, acc_lvl))
+        Ok(crate::inductive::sum_of_payloads_joined(parts, Level::max).expect("non-empty"))
     }
 
     /// One indexed constructor's field spine: `lower_ctor` (tier 0 §3.1/§3.3)
@@ -1424,8 +1414,7 @@ impl Elaborator {
                 self.idx_case_tree(
                     cx,
                     &spine,
-                    iind.ctors.len(),
-                    0,
+                    spine.root(),
                     mot_pi,
                     &elim_lvl,
                     Rc::clone(&fam.idx),
@@ -1601,6 +1590,7 @@ impl Elaborator {
             ind,
             &marms,
             &spine,
+            spine.root(),
             0,
             motive_z,
             mlvl,
@@ -1615,101 +1605,25 @@ impl Elaborator {
     /// motive is threaded rather than assumed constant.
     ///
     /// `spine` is scoped where the caller read it back and `d` counts the
-    /// binders pushed since; `motive` is `P_j` over `(cx, z : R_j)`. The body
-    /// is called as `(cx, j, value, d, obligation)`.
+    /// binders pushed since; `motive` is over `(cx, z : S_at)` for the subtree
+    /// `at` being split (`spine.root()` from a caller). The body is called as
+    /// `(cx, k, value, d, obligation)` for constructor `k`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn idx_case_tree(
         &self,
         cx: &Cx,
         spine: &Spine,
-        n: usize,
-        j: usize,
+        at: Child,
         motive: Type,
         mlvl: &Level,
         scrut: Rc<Term>,
         d: u32,
         body: &CaseBody,
     ) -> R<Term> {
-        if j + 1 == n {
-            let expected =
-                motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut)));
-            return body(cx, j, &scrut, d, &expected);
-        }
-        let ctor_lvl = spine.ctors[j].1.clone();
-        let tail_lvl = spine.tails[j].1.clone();
-        let ctor_ty = Rc::new(spine.ctors[j].0.shift_local(d));
-        let tail_ty = Rc::new(spine.tails[j].0.shift_local(d));
-        let injected = |val: Term, inl: bool, by: u32| {
-            let (lhs, rhs) = (
-                spine.ctors[j].0.shift_local(d + by),
-                spine.tails[j].0.shift_local(d + by),
-            );
-            let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
-            let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
-            let val = Rc::new(val);
-            if inl {
-                Term::Inl {
-                    lhs_level,
-                    rhs_level,
-                    lhs,
-                    rhs,
-                    val,
-                }
-            } else {
-                Term::Inr {
-                    lhs_level,
-                    rhs_level,
-                    lhs,
-                    rhs,
-                    val,
-                }
-            }
+        let rec = |cx: &Cx, at: Child, motive: Type, d: u32| {
+            self.idx_case_tree(cx, spine, at, motive, mlvl, Rc::new(Term::Var(LocalVar(0))), d, body)
         };
-        let mut lcx = cx.clone();
-        lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
-        let l_expected =
-            motive.apply_local(&crate::embed(&cx.gamma, 1).extended(Rc::new(injected(
-                Term::Var(LocalVar(0)),
-                true,
-                1,
-            ))));
-        let case_l = body(
-            &lcx,
-            j,
-            &Rc::new(Term::Var(LocalVar(0))),
-            d + 1,
-            &l_expected,
-        )?;
-        let mut rcx = cx.clone();
-        rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
-        let inner_motive =
-            motive.apply_local(&crate::embed(&cx.gamma, 2).extended(Rc::new(injected(
-                Term::Var(LocalVar(0)),
-                false,
-                2,
-            ))));
-        let case_r = self.idx_case_tree(
-            &rcx,
-            spine,
-            n,
-            j + 1,
-            inner_motive,
-            mlvl,
-            Rc::new(Term::Var(LocalVar(0))),
-            d + 1,
-            body,
-        )?;
-        Ok(Term::Case {
-            lhs_level: ctor_lvl,
-            rhs_level: tail_lvl,
-            motive_level: mlvl.clone(),
-            lhs: ctor_ty,
-            rhs: tail_ty,
-            motive: Rc::new(motive),
-            case_l: Rc::new(case_l),
-            case_r: Rc::new(case_r),
-            scrut,
-        })
+        case_split(cx, spine, at, motive, mlvl, scrut, d, body, &rec)
     }
 
     /// `case_tree` (tier 0 §5.2) over one class's members, with
@@ -1724,98 +1638,21 @@ impl Elaborator {
         ind: &Inductive,
         arms: &[(usize, &Arm)],
         spine: &Spine,
-        j: usize,
+        at: Child,
+        d: u32,
         motive: Type,
         mlvl: &Level,
         scrut: Rc<Term>,
         env: Option<&IdxArmEnv>,
     ) -> R<Term> {
-        let n = arms.len();
-        let d = j as u32;
-        if j + 1 == n {
-            let expected =
-                motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut)));
-            let ctor_ty = spine.ctors[j].0.shift_local(d);
-            return self.elab_indexed_arm(cx, ind, arms[j], &ctor_ty, &scrut, &expected, mlvl, env);
-        }
-        let ctor_lvl = spine.ctors[j].1.clone();
-        let tail_lvl = spine.tails[j].1.clone();
-        let ctor_ty = Rc::new(spine.ctors[j].0.shift_local(d));
-        let tail_ty = Rc::new(spine.tails[j].0.shift_local(d));
-        let injected = |val: Term, inl: bool, by: u32| {
-            let (lhs, rhs) = (
-                spine.ctors[j].0.shift_local(d + by),
-                spine.tails[j].0.shift_local(d + by),
-            );
-            let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
-            let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
-            let val = Rc::new(val);
-            if inl {
-                Term::Inl {
-                    lhs_level,
-                    rhs_level,
-                    lhs,
-                    rhs,
-                    val,
-                }
-            } else {
-                Term::Inr {
-                    lhs_level,
-                    rhs_level,
-                    lhs,
-                    rhs,
-                    val,
-                }
-            }
+        let leaf = |cx: &Cx, k: usize, value: &Rc<Term>, d: u32, expected: &Type| {
+            let ctor_ty = spine.ctors[k].0.shift_local(d);
+            self.elab_indexed_arm(cx, ind, arms[k], &ctor_ty, value, expected, mlvl, env)
         };
-        let mut lcx = cx.clone();
-        lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
-        let l_expected =
-            motive.apply_local(&crate::embed(&cx.gamma, 1).extended(Rc::new(injected(
-                Term::Var(LocalVar(0)),
-                true,
-                1,
-            ))));
-        let case_l = self.elab_indexed_arm(
-            &lcx,
-            ind,
-            arms[j],
-            &spine.ctors[j].0.shift_local(d + 1),
-            &Rc::new(Term::Var(LocalVar(0))),
-            &l_expected,
-            mlvl,
-            env,
-        )?;
-        let mut rcx = cx.clone();
-        rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
-        let inner_motive =
-            motive.apply_local(&crate::embed(&cx.gamma, 2).extended(Rc::new(injected(
-                Term::Var(LocalVar(0)),
-                false,
-                2,
-            ))));
-        let case_r = self.indexed_case_tree(
-            &rcx,
-            ind,
-            arms,
-            spine,
-            j + 1,
-            inner_motive,
-            mlvl,
-            Rc::new(Term::Var(LocalVar(0))),
-            env,
-        )?;
-        Ok(Term::Case {
-            lhs_level: ctor_lvl,
-            rhs_level: tail_lvl,
-            motive_level: mlvl.clone(),
-            lhs: ctor_ty,
-            rhs: tail_ty,
-            motive: Rc::new(motive),
-            case_l: Rc::new(case_l),
-            case_r: Rc::new(case_r),
-            scrut,
-        })
+        let rec = |cx: &Cx, at: Child, motive: Type, d: u32| {
+            self.indexed_case_tree(cx, ind, arms, spine, at, d, motive, mlvl, Rc::new(Term::Var(LocalVar(0))), env)
+        };
+        case_split(cx, spine, at, motive, mlvl, scrut, d, &leaf, &rec)
     }
 
     /// One indexed arm (§6's table): a pattern-variable binder aliases what the
@@ -2304,4 +2141,91 @@ inductive Bal : (s: Shape) -> Type {
         )
         .expect("the reference and inline spellings convert");
     }
+}
+
+/// One `Case` per `+` of `spine`'s layout below `at`, the motive composed
+/// with the injection at each depth: the walk [`Elaborator::idx_case_tree`]
+/// and [`Elaborator::indexed_case_tree`] share, with what goes at a payload
+/// (`leaf(cx, k, value, d, expected)`) and how to split a nested `+`
+/// (`rec(cx, at, motive, d)`, its scrutinee the binder just pushed) theirs.
+///
+/// A payload under a `+`'s left side is checked at `M[inl x/z]` directly; any
+/// other subtree is the next `Case` on its binder at `M` composed with its
+/// injection over `(cx, x, z')` — two binders past `cx`, which the
+/// injection's annotations have to agree with (axis 2 of
+/// `docs/testing-generated-terms.md`).
+#[allow(clippy::too_many_arguments)]
+fn case_split(
+    cx: &Cx,
+    spine: &Spine,
+    at: Child,
+    motive: Type,
+    mlvl: &Level,
+    scrut: Rc<Term>,
+    d: u32,
+    leaf: &dyn Fn(&Cx, usize, &Rc<Term>, u32, &Type) -> R<Term>,
+    rec: &dyn Fn(&Cx, Child, Type, u32) -> R<Term>,
+) -> R<Term> {
+    let j = match at {
+        Child::Leaf(k) => {
+            let expected = motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut)));
+            return leaf(cx, k, &scrut, d, &expected);
+        }
+        Child::Node(j) => j,
+    };
+    let node = *spine.layout.node(j);
+    let ctor_lvl = spine.lhs(j).1.clone();
+    let tail_lvl = spine.rhs(j).1.clone();
+    let ctor_ty = Rc::new(spine.lhs(j).0.shift_local(d));
+    let tail_ty = Rc::new(spine.rhs(j).0.shift_local(d));
+    let injected = |val: Term, inl: bool, by: u32| {
+        let (lhs, rhs) = (spine.lhs(j).0.shift_local(d + by), spine.rhs(j).0.shift_local(d + by));
+        let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
+        let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
+        let val = Rc::new(val);
+        if inl {
+            Term::Inl {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+                val,
+            }
+        } else {
+            Term::Inr {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+                val,
+            }
+        }
+    };
+    let side_motive = |inl: bool| {
+        motive.apply_local(&crate::embed(&cx.gamma, 2).extended(Rc::new(injected(Term::Var(LocalVar(0)), inl, 2))))
+    };
+    let mut lcx = cx.clone();
+    lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
+    let case_l = match node.lhs {
+        Child::Leaf(k) => {
+            let l_expected = motive
+                .apply_local(&crate::embed(&cx.gamma, 1).extended(Rc::new(injected(Term::Var(LocalVar(0)), true, 1))));
+            leaf(&lcx, k, &Rc::new(Term::Var(LocalVar(0))), d + 1, &l_expected)?
+        }
+        lhs @ Child::Node(_) => rec(&lcx, lhs, side_motive(true), d + 1)?,
+    };
+    let mut rcx = cx.clone();
+    rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
+    let case_r = rec(&rcx, node.rhs, side_motive(false), d + 1)?;
+    Ok(Term::Case {
+        lhs_level: ctor_lvl,
+        rhs_level: tail_lvl,
+        motive_level: mlvl.clone(),
+        lhs: ctor_ty,
+        rhs: tail_ty,
+        motive: Rc::new(motive),
+        case_l: Rc::new(case_l),
+        case_r: Rc::new(case_r),
+        scrut,
+    })
 }
