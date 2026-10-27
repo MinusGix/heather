@@ -10,20 +10,28 @@
 //!
 //! The tree over the constructor range `[lo, hi)` is a leaf when the range
 //! holds one constructor and otherwise `[lo, mid) + [mid, hi)` with
-//! `mid = split(n, lo, hi)`. [`split`] is the policy; today it is the
-//! right-nested `lo + 1`, so constructor `k` is `k` injections deep.
+//! `mid = split(n, lo, hi)`. [`split`] is the policy: a declaration with at
+//! least [`BALANCED_FROM`] constructors halves every range, so each
+//! constructor is about `log₂ n` injections deep and a `match` arm sits
+//! under as many `Case`s; a narrower one stays right-nested (`lo + 1`,
+//! constructor `k` is `k` deep), which is every small type's spelling from
+//! before the tree existed and costs at most a few layers.
 //!
 //! Internal nodes are numbered in **preorder**: node 0 is the whole sum, and
-//! a node's children come after it. On the right-nested tree node `j` is the
+//! a node's children come after it. On a right-nested tree node `j` is the
 //! range `[j, n)`, which is what `Spine`'s former `tails[j - 1]` named.
 
 use std::sync::Arc as Rc;
 
+/// The constructor count from which a sum is balanced rather than
+/// right-nested.
+pub(crate) const BALANCED_FROM: usize = 8;
+
 /// The policy: where the range `[lo, hi)` of an `n`-constructor sum splits.
 /// Callers never see it, only the tree it produces.
-fn split(_n: usize, lo: usize, hi: usize) -> usize {
+fn split(n: usize, lo: usize, hi: usize) -> usize {
     debug_assert!(hi - lo >= 2);
-    lo + 1
+    if n >= BALANCED_FROM { lo + (hi - lo) / 2 } else { lo + 1 }
 }
 
 /// One side of a `+` node: a constructor's payload, or another `+`.
@@ -207,6 +215,15 @@ mod tests {
             // The fold visits the leaves in declaration order.
             let leaves = l.fold(|k| vec![k], |_, mut a, b| { a.extend(b); a }).unwrap();
             assert_eq!(leaves, (0..n).collect::<Vec<_>>());
+        }
+        // Narrow sums stay right-nested; wide ones are about log₂ n deep.
+        for n in 2..BALANCED_FROM {
+            assert!((0..n).all(|i| Layout::new(n).path(i).len() == i.min(n - 2) + 1), "n = {n}");
+        }
+        for n in [BALANCED_FROM, 100, 1024] {
+            let l = Layout::new(n);
+            let deepest = (0..n).map(|i| l.path(i).len()).max().unwrap();
+            assert_eq!(deepest, n.next_power_of_two().trailing_zeros() as usize, "n = {n}");
         }
         // A path that runs out before a leaf reads nothing.
         assert_eq!(Layout::new(4).index_of([true]), None);
