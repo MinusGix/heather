@@ -1,0 +1,50 @@
+// A program's labels checked by a table (x86_64_asm_table): a small program
+// with a backward and a forward jump, its table as `write-elf` writes one
+// (comparisons on literals), the pass whole and a stretch at a time, and
+// tables that misplace a label refused.
+import x86_64_asm;
+import list;
+import x86_64_asm_runs;
+import x86_64_asm_table;
+import bool;
+import logic;
+import nat;
+
+// Label 1 at 0, a JMP back to it at 2, a JMP ahead at 7, label 3 at 12; 14 bytes.
+fn prog() → Prog { At(At(At(At(Start, 1, Syscall), 0, Jmp(1)), 0, Jmp(3)), 3, Syscall) }
+
+fn table() → LabelTable {
+    LabelTable(
+        λ n => match n.leb(1) { True => 0, False => 3 },
+        λ n => match n.leb(1) { True => 0, False => 12 },
+        λ i => match i.leb(1) { True => match i.leb(0) { True => 1, False => 0 }, False => match i.leb(2) { True => 0, False => 3 } },
+        4)
+}
+
+theorem prog_checked(): table().checked(prog(), table().depth, 14).IsTrue() { trivial }
+theorem prog_laid_out(): prog().laid_out().IsTrue() { table().laid_out_of(prog(), 14, prog_checked(), trivial) }
+
+// The last two items, then the two before them.
+theorem prog_checked_by_stretches(): table().checked(prog(), 4, 14).IsTrue() {
+    table().checked_back(2, prog(), 4, 14, trivial, trivial)
+}
+
+// Label 3 put at the wrong offset: its JMP would land elsewhere.
+fn misplaced() → LabelTable { LabelTable(table().index_of, λ n => match n.leb(1) { True => 0, False => 11 }, table().name_at, 4) }
+// expect-error: `trivial` proves `True`, but `IsTrue(checked(misplaced, prog, 4, 14))` is expected here
+theorem misplaced_checked(): misplaced().checked(prog(), 4, 14).IsTrue() { trivial }
+
+// A target the table does not have: a JMP to label 5, which no item names.
+fn stray() → Prog { At(At(Start, 1, Syscall), 0, Jmp(5)) }
+fn stray_table() → LabelTable { LabelTable(λ _ => 0, λ _ => 0, λ i => match i.leb(0) { True => 1, False => 0 }, 2) }
+// expect-error: `trivial` proves `True`, but `IsTrue(checked(stray_table, stray, 2, 7))` is expected here
+theorem stray_checked(): stray_table().checked(stray(), 2, 7).IsTrue() { trivial }
+
+// The bytes by the table's offsets, each item's offset carried down.
+theorem prog_bytes_by_table(): asm_code_after(no_fills(), asm_labels(prog()), prog(), 4) = asm_code_ending(no_fills(), table().labels(), prog(), 4, 14) {
+    table().piece_by(prog(), 14, prog_checked(), prog(), 4, 14, 4, prog_checked(), trivial)
+}
+// The top two items' bytes alone, the window ending at 14.
+theorem prog_last_bytes(): asm_code_after(no_fills(), asm_labels(prog()), prog(), 2) = asm_code_ending(no_fills(), table().labels(), prog(), 2, 14) {
+    table().piece_by(prog(), 14, prog_checked(), prog(), 4, 14, 2, prog_checked(), trivial)
+}

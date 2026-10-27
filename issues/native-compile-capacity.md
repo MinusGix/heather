@@ -1,11 +1,11 @@
 ---
 title: Build native programs up to the file limit within the suite's memory rail
-status: open
+status: closed
 labels: [native,cli,performance]
 area: heather-in-heather
 milestone: [hih-tools]
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 Round 2 of `docs/native-real-programs-plan.md` (§3.2, §6). Measured on
@@ -91,3 +91,10 @@ A program with 64 KiB of code builds under the suite's 6 GiB rail, and
   suite's 300 CPU-s rail, so its test waits on
   [[native-compile-linear-layout]]; so does anything past about 8 KiB of
   code, since cat_x16's byte pieces run out of fuel.
+- 2026-10-27: done. With [[native-compile-linear-layout]] (layout and
+  bytes by a label table), cat_x60, 58 KB of code (as close to the
+  profile's 64 KiB file limit as cat's passes come), builds under the
+  6 GiB rail at width one in 892 s and runs as cat; cat_x8 builds and runs
+  in `crates/cli/tests/native_cat.rs`. The run's growth is 3.5 GB, most of
+  it the shape read (linear) and the library replay; the constants left
+  are [[write-elf-build-constants]].

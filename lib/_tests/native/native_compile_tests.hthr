@@ -129,3 +129,18 @@ theorem exit_unless_by_parts(): exit_unless().main.emit(Start, eu_layout(), 0) =
 // A byte node takes label names (its bounds check's), so the leaf after it
 // starts past them.
 theorem byte_leaves_shape(): byte_leaves().shape(low()) = [1, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
+
+// cat with its pass inlined k times in its loop: code grows with k while
+// the tree keeps cat's shape. `cat_x8`, about twice cat's code eight times
+// over, is the size the CLI's test builds and runs
+// (issues/native-compile-capacity.md); perf/fixtures/native_sizes builds the
+// others.
+fn passes(k: Nat) → Stmt { match k { Zero => cat_pass(), Succ(j) => Then(cat_pass(), passes(j)) } }
+fn cat_x(k: Nat) → Source {
+    Source(functions := [], buffers := [Buffer(512)], main := Then(cat_setup(512), Repeat(passes(k), 15)))
+}
+fn cat_x2() → Source { cat_x(1) }
+fn cat_x4() → Source { cat_x(3) }
+fn cat_x8() → Source { cat_x(7) }
+fn cat_x16() → Source { cat_x(15) }
+fn cat_x60() → Source { cat_x(59) }

@@ -19,18 +19,20 @@
 //! refuses, is refused with its reason (`Source::refusal`, untrusted).
 //!
 //! A compile is most of what one declaration's fuel buys, so no statement
-//! repeats it: the emission is checked against the literal once, by
-//! evaluation; the layout check `Source::compile` makes is proved a stretch
-//! at a time over the literal (as `compile-x86` does); the bytes a piece at
-//! a time.
+//! repeats it: the emission is checked against the literal a part of the
+//! statement tree at a time; the layout check `Source::compile` makes, and
+//! the bytes, by a table of the program's labels (crates/cli/src/native/labels.rs):
+//! `Prog::laid_out` and `assemble` look each label up by walking the
+//! program, so stating them over the program itself, even a stretch at a
+//! time, was quadratic in it (issues/native-compile-linear-layout.md).
 //!
 //! The read-back evaluates the emission alone, not `Source::compile`: the
-//! layout check is quadratic in the program (each jump's target is found by
-//! walking it), and a read keeps every value it forces until it returns, so
-//! checking the layout there made the read's peak memory grow as the square
-//! of the code (issues/native-compile-capacity.md). The stretches below are
-//! that check, and a program the compile would refuse for its layout is
-//! refused by the kernel at the stretch that fails. The literal spells each address in the region as the compiler
+//! layout check is quadratic in the program, and a read keeps every value it
+//! forces until it returns, so checking the layout there made the read's
+//! peak memory grow as the square of the code
+//! (issues/native-compile-capacity.md). The table's pass is that check, and
+//! a program the compile would refuse for its layout is refused by the
+//! kernel at the stretch that fails. The literal spells each address in the region as the compiler
 //! does, `add_nat` from the page's start, so the emission's check compares
 //! the two by their arguments instead of evaluating each one's bits.
 use std::path::{Path, PathBuf};
@@ -39,7 +41,7 @@ use heather_elab::{function_ir_source, Elaborator};
 use heather_cache::module_image::ImageFreshness;
 use heather_cli::{loader, semantic::SemanticSession};
 
-use super::{check_file, emission, symbol_ok, verified, write_new};
+use super::{check_file, emission, labels, symbol_ok, verified, write_new};
 
 /// The I/O profile's file is at most this long (`io_elf_file`'s sixteen-bit
 /// size), its header included.
@@ -61,6 +63,7 @@ const REGION: std::ops::Range<u64> = 0x410000..0x412000;
 /// it uses.
 const IMPORTS: &[&str] = &["native_source", "native_compile", "native_compile_correct", "native_compile_elf",
     "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
+    "x86_64_asm_table",
     "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
 
 pub(super) fn write(args: &[String]) -> Result<(), String> {
@@ -187,7 +190,7 @@ fn {p}_shape() → List<Nat> {{ {symbol}().shape({LOW}) }}
     drop(fork);
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
-    let emission::Stated { code, theorems: statements, items, lens } = emission::state(p, &entry, &layout, plan, readings)?;
+    let emission::Stated { theorems: statements, items, lens, mut cuts } = emission::state(p, &entry, &layout, plan, readings)?;
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
         return Err(format!("`{symbol}` compiles to {length} bytes, past the profile's {MAX_FILE} with its header"));
@@ -196,10 +199,17 @@ fn {p}_shape() → List<Nat> {{ {symbol}().shape({LOW}) }}
         return Err(format!("`{symbol}` is refused: the program's labels did not lay out ({why})"));
     }
     let pieces = verified::cut_pieces(&lens, PIECE);
+    // The literal cut where each piece's window ends too, so the window and
+    // the pass up to it are definitions.
+    cuts.extend(labels::piece_cuts(&pieces, items.len()));
+    let code = emission::code(p, &items, &cuts);
+    let offsets = labels::offsets(&lens);
+    let table = labels::table(p, &items, &offsets);
     let header = format!("io_elf_header(BitVec::ofNat(232 + {length}), BitVec::ofNat((232 + {length}).shr(8)))");
-    let mut reads = format!("import {root};\n{imports}\n{code}");
-    for (c, verified::Piece { back, count, .. }) in pieces.iter().enumerate() {
-        reads.push_str(&format!("fn {p}_piece_numbers_{c}() → List<Nat> {{ asm_code_after(no_fills(), asm_labels({p}_code()), asm_back({p}_code(), {back}), {count}).map(λ (b: BitVec(8)) => b.toNat()) }}\n"));
+    let mut reads = format!("import {root};\n{imports}\n{code}{table}");
+    for (c, piece) in pieces.iter().enumerate() {
+        reads.push_str(&format!("fn {p}_piece_numbers_{c}() → List<Nat> {{ {}.map(λ (b: BitVec(8)) => b.toNat()) }}\n",
+            labels::piece_read(p, piece, items.len(), &offsets)));
     }
     reads.push_str(&format!("fn {p}_header_numbers() → List<Nat> {{ {header}.map(λ (b: BitVec(8)) => b.toNat()) }}\n"));
     let read = format!("{p}_read");
@@ -236,11 +246,12 @@ theorem {p}_emitted(): {symbol}().main.emit({entry}, {symbol}().layout({LOW}), 0
         cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
 }}
 
-{layout}
+// Its layout, by a table of its labels checked a stretch at a time.
+{table}{layout}
 theorem {p}_holes(): {p}_code().no_holes().IsTrue() {{ trivial }}
 
 theorem {p}_laid(): {p}_code().laid_out().IsTrue() {{
-    {p}_code().laid_out_intro({p}_holes(), {p}_unique_0(), {p}_lands_0(), {p}_named_0())
+    {p}_table().laid_out_of({p}_code(), {length}, {p}_checked_{count}(), {p}_holes())
 }}
 
 theorem {p}_compiles(): {symbol}().compile({LOW}) = Some({p}_code()) {{
@@ -253,8 +264,8 @@ theorem {p}_fits(): Layout({LOW}, {symbol}().capacities()).size() <= DataRegion:
 }}
 
 // The bytes, a piece at a time from the last item.
-", layout = verified::layout(p, items.len()));
-    text.push_str(&verified::byte_pieces(p, &pieces, &bytes));
+", count = items.len(), layout = labels::layout(p, &offsets, &cuts));
+    text.push_str(&labels::byte_pieces(p, &pieces, &bytes, items.len(), &offsets));
     text.push_str(&format!("
 fn {p}_header() → List<BitVec(8)> {{ [{}] }}
 theorem {p}_header_is(): {header} = {p}_header() {{ refl }}

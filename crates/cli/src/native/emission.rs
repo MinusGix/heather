@@ -159,11 +159,11 @@ impl Reading {
     }
 }
 
-/// The program's literal, cut where each statement's programs start and
-/// end, ending in `{p}_code()`; the statements, ending in `{p}_e_0`, the
-/// main statement's emission from `entry` (`{p}_entry` states the entry's
-/// literal); and the items and their lengths.
-pub(super) struct Stated { pub code: String, pub theorems: String, pub items: Vec<(u64, String)>, pub lens: Vec<u64> }
+/// The statements, ending in `{p}_e_0`, the main statement's emission from
+/// `entry` (`{p}_entry` states the entry's literal); the items and their
+/// lengths; and the item counts the program's literal must be cut at, where
+/// each statement's programs start and end (`code` writes the literal).
+pub(super) struct Stated { pub theorems: String, pub items: Vec<(u64, String)>, pub lens: Vec<u64>, pub cuts: BTreeSet<usize> }
 
 /// `readings` are `plan`'s reads, read.
 pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Vec<Reading>) -> Result<Stated, String> {
@@ -182,16 +182,23 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
     let (start, end, _) = writer.part(&plan.root)?;
     if start != entered || end != main { return Err(out_of_order()); }
     for k in (0..items.len()).step_by(STRETCH) { writer.cuts.insert(k); }
+    Ok(Stated { theorems: writer.theorems, items, lens, cuts: writer.cuts })
+}
+
+/// The program's literal: a definition `{p}_at_{k}` of its first `k` items
+/// at each cut, each on the one before, and `{p}_code()`, the whole.
+pub(super) fn code(p: &str, items: &[(u64, String)], cuts: &BTreeSet<usize>) -> String {
+    let program = |k: usize| if k == 0 { "Start".to_string() } else { format!("{p}_at_{k}()") };
     let mut code = String::new();
     let mut earlier = 0;
-    for &cut in writer.cuts.iter().skip(1) {
-        let mut at = writer.program(earlier);
+    for &cut in cuts.iter().filter(|&&cut| cut > 0) {
+        let mut at = program(earlier);
         for (name, item) in &items[earlier..cut] { at = format!("At({at},\n    {name}, {item})"); }
         code.push_str(&format!("fn {p}_at_{cut}() → Prog {{\n    {at}\n}}\n"));
         earlier = cut;
     }
-    code.push_str(&format!("fn {p}_code() → Prog {{ {p}_at_{}() }}\n", items.len()));
-    Ok(Stated { code, theorems: writer.theorems, items, lens })
+    code.push_str(&format!("fn {p}_code() → Prog {{ {} }}\n", program(items.len())));
+    code
 }
 
 struct Writer<'a> {

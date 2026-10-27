@@ -219,13 +219,14 @@ its first real program.
   suite's rail, and the shape (code size against peak and time) is recorded
   in `perf/`.
 
-**Status.** Memory and kernel fuel are done
-(`issues/native-compile-capacity.md`): the read-back was the peak, and it now
-reads one part of the statement tree at a time, so the peak no longer grows
-with the code; the emission is stated a part at a time and joined by three
-lemmas proved once. Build time is still quadratic in the code, through the
-layout proof's and the byte pieces' whole-program label lookups:
-`issues/native-compile-linear-layout.md`.
+**Status.** Done (`issues/native-compile-capacity.md`). The read-back was
+the peak, and it now reads one part of the statement tree at a time; the
+emission is stated a part at a time and joined by three lemmas proved once;
+and the layout and bytes are stated by a table of the program's labels,
+checked in one pass and proved once to give `laid_out`
+(`issues/native-compile-linear-layout.md`), so build time and memory grow
+linearly with the code and a program near the file limit builds under the
+suite's rail. Its constants are `issues/write-elf-build-constants.md`.
 
 ### 3.3 Writing programs
 
