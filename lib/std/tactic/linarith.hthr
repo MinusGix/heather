@@ -84,6 +84,14 @@ theorem lin_scale_le(k, x: A, hk: A.unit < k, hx: A.unit <= x): A.unit <= k * x 
 
 theorem lin_scale_lt(k, x: A, hk: A.unit < k, hx: A.unit < x): A.unit < k * x { A.mul_pos(k, x, hk, hx) }
 
+// A denominator is positive when its reciprocal is: `s·d ≈ 1` with `s`
+// positive (`Rat::inv_succ(n)`, or a fact `0 < x⁻¹`). This is how a row is
+// scaled by the denominator a reciprocal in it clears.
+theorem lin_den_pos(s, d: A, hs: A.unit < s, e: s * d ≈ A.of_int(OfNat(1))): A.unit < d {
+    A.pos_of_mul_pos(s, d, hs, StrictOrder::lt_respects_r(A.unit, A.of_int(OfNat(1)), s * d, A.rel_sym(s * d, A.of_int(OfNat(1)), e),
+        lin_one_pos(s)))
+}
+
 // ---------------------------------------------------------------------------
 // Sums of parts: strict as soon as one summand is.
 

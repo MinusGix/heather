@@ -19,10 +19,13 @@
 //! is in it) from the library's part and sum lemmas, leaves the identity to
 //! `ring`, and reads `a <= b` or `a < b` back with `lin_finish_le`/`_lt`.
 //! When the goal's negation is not needed (`k = 0`) the facts alone are
-//! contradictory and the goal follows from `lin_finish_false`. Every step is
-//! checked through the class laws, so nothing here decides an order, and a
-//! searcher bug can only make `linarith` refuse or write a certificate the
-//! kernel rejects.
+//! contradictory and the goal follows from `lin_finish_false`. A reciprocal
+//! whose denominator `d` a fact shows positive is cleared: every row that
+//! mentions it is offered multiplied by `d` as well (`Factor`, `Use`), and
+//! the goal's multiplier is then a positive term rather than a numeral
+//! (design §5). Every step is checked through the class laws, so nothing
+//! here decides an order, and a searcher bug can only make `linarith`
+//! refuse or write a certificate the kernel rejects.
 
 use std::collections::BTreeMap;
 use std::sync::Arc as Rc;
@@ -287,6 +290,75 @@ struct Fact {
     written: Option<usize>,
 }
 
+/// A positive factor a row may be multiplied by: the denominator `d` of a
+/// reciprocal atom `r`, which some fact shows positive. A row mentioning
+/// `r` times `d` is the row with `r·d` read as `1` — the fact `ring` reads
+/// with the reciprocal — so the scaled row says what the fraction does.
+struct Factor {
+    recip: usize,
+    /// `d`'s linear form.
+    form: Linear,
+    /// How the certificate writes `d`, and a proof of `0 < d` there.
+    source: String,
+    proof: String,
+    /// The fact the proof cites.
+    fact: usize,
+}
+
+/// The most denominators one row is multiplied by.
+const MAX_SCALINGS: usize = 2;
+
+/// A row as the elimination uses it: a fact's row, or the goal's negation
+/// (`row: None`), multiplied by the factors `by`, with its linear form
+/// after the multiplication.
+struct Use {
+    row: Option<usize>,
+    by: Vec<usize>,
+    form: Linear,
+    strict: bool,
+}
+
+/// `form·d` with `r·d` read as `1`: a monomial with `r` loses one `r`, any
+/// other is multiplied by `d`.
+fn scale(form: &Linear, factor: &Factor) -> Result<Linear, String> {
+    let mut out: BTreeMap<Vec<u32>, Z> = BTreeMap::new();
+    let mut add = |m: Vec<u32>, c: Z| -> Result<(), String> {
+        let entry = out.entry(m).or_insert(0);
+        *entry = entry.checked_add(c).ok_or_else(overflow)?;
+        Ok(())
+    };
+    let r = factor.recip;
+    let terms = form.0.iter().map(|(m, c)| (m.clone(), *c)).chain(std::iter::once((Vec::new(), form.1)));
+    let den: Vec<(Vec<u32>, Z)> =
+        factor.form.0.iter().map(|(m, c)| (m.clone(), *c)).chain(std::iter::once((Vec::new(), factor.form.1))).collect();
+    for (m, c) in terms {
+        if c == 0 {
+            continue;
+        }
+        if m.get(r).is_some_and(|e| *e > 0) {
+            let mut m = m;
+            m[r] -= 1;
+            while m.last() == Some(&0) {
+                m.pop();
+            }
+            add(m, c)?;
+        } else {
+            for (dm, dc) in &den {
+                if *dc != 0 {
+                    add(FieldReading::monomial_product(&m, dm)?, c.checked_mul(*dc).ok_or_else(overflow)?)?;
+                }
+            }
+        }
+    }
+    let constant = out.remove(&Vec::new()).unwrap_or(0);
+    out.retain(|_, c| *c != 0);
+    Ok((out, constant))
+}
+
+fn mentions(form: &Linear, atom: usize) -> bool {
+    form.0.keys().any(|m| m.get(atom).is_some_and(|e| *e > 0))
+}
+
 struct Problem<'a> {
     reading: FieldReading<'a>,
     carrier: String,
@@ -296,6 +368,9 @@ struct Problem<'a> {
     forms: Vec<Linear>,
     rows: Vec<Row>,
     facts: Vec<Fact>,
+    factors: Vec<Factor>,
+    /// The reciprocals whose positivity by construction is a fact already.
+    constructed: Vec<usize>,
 }
 
 fn term_alias(i: usize) -> String {
@@ -342,6 +417,61 @@ impl Problem<'_> {
         true
     }
 
+    /// The facts the reading's reciprocals bring: `0 < r` for one positive
+    /// by construction (`Rat::inv_succ_pos`), then each denominator a fact
+    /// shows positive, as a factor rows may be multiplied by.
+    fn add_denominators(&mut self, elab: &Elaborator, cx: &Cx, span: Span) {
+        // A constructed fact's sides can meet another reciprocal.
+        loop {
+            let pending: Vec<(usize, Term, Type, Level, String)> = self
+                .reading
+                .reciprocals()
+                .iter()
+                .filter(|r| !self.constructed.contains(&r.atom))
+                .filter_map(|r| r.positive.clone().map(|(term, ty, level, shown)| (r.atom, term, ty, level, shown)))
+                .collect();
+            if pending.is_empty() {
+                break;
+            }
+            for (atom, term, ty, level, shown) in pending {
+                self.constructed.push(atom);
+                let alias = format!("__lin_h{}", self.facts.len());
+                self.add_fact(elab, cx, Fact { alias, term, ty, level, shown, written: None }, span);
+            }
+        }
+        self.factors.clear();
+        let recips: Vec<(usize, Rc<Term>)> = self.reading.reciprocals().iter().map(|r| (r.atom, Rc::clone(&r.den))).collect();
+        for (recip, den) in recips {
+            let Ok(d) = self.term(&den) else { continue };
+            let form = self.forms[d].clone();
+            if mentions(&form, recip) {
+                continue;
+            }
+            let alone = (BTreeMap::from([(FieldReading::atom_monomial(recip), 1)]), 0);
+            let c = &self.carrier;
+            // A strict fact whose difference is `d` itself, else one whose
+            // difference is `r`: then `d` is positive as `r`'s denominator.
+            let mut found = None;
+            for row in self.rows.iter().filter(|row| row.strict) {
+                let Ok(diff) = self.difference(row.lo, row.hi) else { continue };
+                let source = format!("({} + -{})", term_alias(row.hi), term_alias(row.lo));
+                let base = self.part(row);
+                if diff == form {
+                    found = Some(Factor { recip, form: form.clone(), source, proof: base, fact: row.fact });
+                    break;
+                }
+                if diff == alone && found.is_none() {
+                    let td = term_alias(d);
+                    let proof = format!(
+                        "{{ let __lin_d: ({source} * {td} ≈ 1) = ring; linarith::lin_den_pos<{c}>({source}, {td}, {base}, __lin_d) }}"
+                    );
+                    found = Some(Factor { recip, form: form.clone(), source: td, proof, fact: row.fact });
+                }
+            }
+            self.factors.extend(found);
+        }
+    }
+
     /// `hi − lo` as a linear form.
     fn difference(&self, lo: usize, hi: usize) -> Result<Linear, String> {
         let (mut terms, mut constant) = self.forms[hi].clone();
@@ -354,89 +484,165 @@ impl Problem<'_> {
         Ok((terms, constant))
     }
 
+    /// The proof that a row's difference is on the right side of zero.
+    fn part(&self, row: &Row) -> String {
+        format!(
+            "linarith::{}<{}>({}, {}, {})",
+            row.lemma,
+            self.carrier,
+            term_alias(row.args.0),
+            term_alias(row.args.1),
+            self.facts[row.fact].alias
+        )
+    }
+
+    /// A form and the same form multiplied by each set of at most
+    /// `MAX_SCALINGS` factors whose reciprocals it mentions, one at a time.
+    fn uses(&self, row: Option<usize>, form: Linear, strict: bool) -> Result<Vec<Use>, String> {
+        let mut out = vec![Use { row, by: Vec::new(), form, strict }];
+        let mut next = 0;
+        while next < out.len() {
+            if out[next].by.len() < MAX_SCALINGS {
+                for (j, factor) in self.factors.iter().enumerate() {
+                    if out[next].by.contains(&j) || !mentions(&out[next].form, factor.recip) {
+                        continue;
+                    }
+                    let mut by = out[next].by.clone();
+                    by.push(j);
+                    let mut key = by.clone();
+                    key.sort();
+                    if out.iter().any(|u| {
+                        let mut k = u.by.clone();
+                        k.sort();
+                        k == key
+                    }) {
+                        continue;
+                    }
+                    let form = scale(&out[next].form, factor)?;
+                    out.push(Use { row, by, form, strict });
+                }
+            }
+            next += 1;
+        }
+        Ok(out)
+    }
+
+    /// Every fact's row with its scalings.
+    fn fact_uses(&self) -> Result<Vec<Use>, String> {
+        let mut out = Vec::new();
+        for (i, row) in self.rows.iter().enumerate() {
+            out.extend(self.uses(Some(i), self.difference(row.lo, row.hi)?, row.strict)?);
+        }
+        Ok(out)
+    }
+
+    /// The product of the factors `by` and its positivity proof.
+    fn product(&self, by: &[usize]) -> (String, String) {
+        let c = &self.carrier;
+        let (last, rest) = by.split_last().expect("a scaled row has a factor");
+        let last = &self.factors[*last];
+        rest.iter().rev().fold((last.source.clone(), last.proof.clone()), |(e, p), j| {
+            let f = &self.factors[*j];
+            (format!("({} * {e})", f.source), format!("linarith::lin_scale_lt<{c}>({}, {e}, {}, {p})", f.source, f.proof))
+        })
+    }
+
     /// A certificate for `a <= b` (or `a < b`), with the rows the problem
     /// has: the expression proving it, and the facts it cites.
     fn order(&self, a: usize, b: usize, strict: bool, names: &mut usize) -> Result<Option<(String, Vec<usize>)>, String> {
-        let n = self.rows.len();
-        let mut fm = Vec::new();
-        for (i, row) in self.rows.iter().enumerate() {
-            let (coeffs, constant) = self.difference(row.lo, row.hi)?;
-            let mut origin = vec![0; n + 1];
-            origin[i] = 1;
-            fm.push(FmRow { coeffs, constant, strict: row.strict, origin });
-        }
         // The goal's negation: `b < a` against `a <= b`, `b <= a` against
         // `a < b`, as `a − b` on the right side of zero.
-        let (coeffs, constant) = self.difference(b, a)?;
-        let mut origin = vec![0; n + 1];
-        origin[n] = 1;
-        fm.push(FmRow { coeffs, constant, strict: !strict, origin });
-        let Some(lambda) = eliminate(fm)? else {
+        let mut uses = self.fact_uses()?;
+        uses.extend(self.uses(None, self.difference(b, a)?, !strict)?);
+        let Some(lambda) = eliminate(Self::fm_rows(&uses))? else {
             return Ok(None);
         };
-        self.write(a, b, strict, &lambda, names).map(Some)
+        self.write(a, b, strict, &uses, &lambda, names).map(Some)
     }
 
-    fn write(&self, a: usize, b: usize, strict: bool, lambda: &[Z], names: &mut usize) -> Result<(String, Vec<usize>), String> {
-        let n = self.rows.len();
+    fn fm_rows(uses: &[Use]) -> Vec<FmRow> {
+        uses.iter()
+            .enumerate()
+            .map(|(i, u)| {
+                let mut origin = vec![0; uses.len()];
+                origin[i] = 1;
+                FmRow { coeffs: u.form.0.clone(), constant: u.form.1, strict: u.strict, origin }
+            })
+            .collect()
+    }
+
+    fn write(
+        &self,
+        a: usize,
+        b: usize,
+        strict: bool,
+        uses: &[Use],
+        lambda: &[Z],
+        names: &mut usize,
+    ) -> Result<(String, Vec<usize>), String> {
         // Check the combination before writing it, so a searcher bug is an
         // internal error rather than a `ring` failure.
         let mut sum: Linear = (BTreeMap::new(), 0);
-        let mut add = |form: &Linear, k: Z| -> Result<(), String> {
-            for (m, c) in &form.0 {
+        for (u, k) in uses.iter().zip(lambda) {
+            for (m, c) in &u.form.0 {
                 let entry = sum.0.entry(m.clone()).or_insert(0);
-                *entry = c.checked_mul(k).and_then(|d| entry.checked_add(d)).ok_or_else(overflow)?;
+                *entry = c.checked_mul(*k).and_then(|d| entry.checked_add(d)).ok_or_else(overflow)?;
             }
-            sum.1 = form.1.checked_mul(k).and_then(|d| sum.1.checked_add(d)).ok_or_else(overflow)?;
-            Ok(())
-        };
-        for (i, row) in self.rows.iter().enumerate() {
-            if lambda[i] != 0 {
-                add(&self.difference(row.lo, row.hi)?, lambda[i])?;
-            }
-        }
-        if lambda[n] != 0 {
-            add(&self.difference(b, a)?, lambda[n])?;
+            sum.1 = u.form.1.checked_mul(*k).and_then(|d| sum.1.checked_add(d)).ok_or_else(overflow)?;
         }
         sum.0.retain(|_, c| *c != 0);
-        let strict_rows = (0..n).any(|i| lambda[i] > 0 && self.rows[i].strict) || (lambda[n] > 0 && !strict);
+        let strict_rows = uses.iter().zip(lambda).any(|(u, k)| *k > 0 && u.strict);
         if !sum.0.is_empty() || sum.1 > 0 || (sum.1 == 0 && !strict_rows) || lambda.iter().any(|l| *l < 0) {
             return Err("internal: `linarith`'s elimination returned a combination that is not a contradiction".into());
         }
         let c = &self.carrier;
         let point = term_alias(a);
         let num_pos = |k: Z| format!("linarith::lin_num_pos<{c}>({point}, {})", k - 1);
-        // The parts `λᵢ·(hiᵢ − loᵢ)`, then the constant, each with its proof
-        // and whether it is strict.
-        let mut parts: Vec<(String, String, bool)> = Vec::new();
         let mut cited = Vec::new();
-        for (i, row) in self.rows.iter().enumerate() {
-            let k = lambda[i];
+        let mut cite = |f: usize| {
+            if !cited.contains(&f) {
+                cited.push(f);
+            }
+        };
+        // The parts `λᵢ·Pᵢ·(hiᵢ − loᵢ)`, then the constant, each with its
+        // proof and whether it is strict; and the goal's multiplier
+        // `Σ λⱼ·Pⱼ` over the uses of its negation, with its positivity.
+        let mut parts: Vec<(String, String, bool)> = Vec::new();
+        let mut multiplier: Vec<(String, String)> = Vec::new();
+        for (u, &k) in uses.iter().zip(lambda) {
             if k == 0 {
                 continue;
             }
-            let fact = &self.facts[row.fact];
-            if !cited.contains(&row.fact) {
-                cited.push(row.fact);
+            for j in &u.by {
+                cite(self.factors[*j].fact);
             }
-            let base = format!(
-                "linarith::{}<{c}>({}, {}, {})",
-                row.lemma,
-                term_alias(row.args.0),
-                term_alias(row.args.1),
-                fact.alias
-            );
+            let Some(i) = u.row else {
+                multiplier.push(match (u.by.is_empty(), k) {
+                    (true, _) => (format!("{k}"), num_pos(k)),
+                    (false, 1) => self.product(&u.by),
+                    (false, _) => {
+                        let (e, p) = self.product(&u.by);
+                        (format!("({k} * {e})"), format!("linarith::lin_scale_lt<{c}>({k}, {e}, {}, {p})", num_pos(k)))
+                    }
+                });
+                continue;
+            };
+            let row = &self.rows[i];
+            cite(row.fact);
             // `hi + -lo`, not `hi - lo`: the lemmas state the difference
             // with the group's negation, and the argument must meet their
             // statement before the instance is chosen, so a `sub` that only
             // unfolds to it would not.
-            let diff = format!("({} + -{})", term_alias(row.hi), term_alias(row.lo));
-            parts.push(if k == 1 {
-                (diff, base, row.strict)
-            } else {
-                let scale = if row.strict { "lin_scale_lt" } else { "lin_scale_le" };
-                (format!("{k} * {diff}"), format!("linarith::{scale}<{c}>({k}, {diff}, {}, {base})", num_pos(k)), row.strict)
-            });
+            let scale_lemma = if row.strict { "lin_scale_lt" } else { "lin_scale_le" };
+            let mut part = (format!("({} + -{})", term_alias(row.hi), term_alias(row.lo)), self.part(row));
+            if !u.by.is_empty() {
+                let (e, p) = self.product(&u.by);
+                part = (format!("({e} * {})", part.0), format!("linarith::{scale_lemma}<{c}>({e}, {}, {p}, {})", part.0, part.1));
+            }
+            if k != 1 {
+                part = (format!("{k} * {}", part.0), format!("linarith::{scale_lemma}<{c}>({k}, {}, {}, {})", part.0, num_pos(k), part.1));
+            }
+            parts.push((part.0, part.1, row.strict));
         }
         let constant = -sum.1;
         if constant > 0 {
@@ -456,23 +662,26 @@ impl Problem<'_> {
         };
         let name = format!("__lin_e{names}");
         *names += 1;
-        let k = lambda[n];
         let (ta, tb) = (term_alias(a), term_alias(b));
-        let source = if k == 0 {
-            format!(
+        let source = match multiplier.pop() {
+            None => format!(
                 "logic::false_elim({{ let {name}: ({s} ≈ 0) = ring; linarith::lin_finish_false<{c}>({s}, {hs}, {name}) }})"
-            )
-        } else if strict {
-            format!(
-                "{{ let {name}: ({k} * ({tb} + -{ta}) ≈ {s}) = ring; linarith::lin_finish_lt<{c}>({ta}, {tb}, {k}, {s}, {}, {hs}, {name}) }}",
-                num_pos(k)
-            )
-        } else {
-            let hs = if positive { format!("linarith::lin_weaken<{c}>({s}, {hs})") } else { hs };
-            format!(
-                "{{ let {name}: ({k} * ({tb} + -{ta}) ≈ {s}) = ring; linarith::lin_finish_le<{c}>({ta}, {tb}, {k}, {s}, {}, {hs}, {name}) }}",
-                num_pos(k)
-            )
+            ),
+            Some(last) => {
+                let (k, hk) = multiplier.into_iter().rev().fold(last, |(e, p), (ei, pi)| {
+                    (format!("({ei} + {e})"), format!("linarith::lin_add_lt_lt<{c}>({ei}, {e}, {pi}, {p})"))
+                });
+                let (finish, hs) = if strict {
+                    ("lin_finish_lt", hs)
+                } else if positive {
+                    ("lin_finish_le", format!("linarith::lin_weaken<{c}>({s}, {hs})"))
+                } else {
+                    ("lin_finish_le", hs)
+                };
+                format!(
+                    "{{ let {name}: ({k} * ({tb} + -{ta}) ≈ {s}) = ring; linarith::{finish}<{c}>({ta}, {tb}, {k}, {s}, {hk}, {hs}, {name}) }}"
+                )
+            }
         };
         Ok((source, cited))
     }
@@ -502,16 +711,9 @@ impl Problem<'_> {
                 if self.terms.is_empty() {
                     return Ok(None);
                 }
-                let n = self.rows.len();
-                let mut fm = Vec::new();
-                for (i, row) in self.rows.iter().enumerate() {
-                    let (coeffs, constant) = self.difference(row.lo, row.hi)?;
-                    let mut origin = vec![0; n + 1];
-                    origin[i] = 1;
-                    fm.push(FmRow { coeffs, constant, strict: row.strict, origin });
-                }
-                match eliminate(fm)? {
-                    Some(lambda) => Some(self.write(0, 0, false, &lambda, &mut names)?),
+                let uses = self.fact_uses()?;
+                match eliminate(Self::fm_rows(&uses))? {
+                    Some(lambda) => Some(self.write(0, 0, false, &uses, &lambda, &mut names)?),
                     None => None,
                 }
             }
@@ -608,6 +810,8 @@ impl Elaborator {
             forms: Vec::new(),
             rows: Vec::new(),
             facts: Vec::new(),
+            factors: Vec::new(),
+            constructed: Vec::new(),
         };
         let goal_shape = match &goal_reading {
             Some(r) if spell(&r.stated().carrier) == carrier_shown => {
@@ -640,6 +844,7 @@ impl Elaborator {
                 )));
             }
         }
+        problem.add_denominators(self, cx, span);
         // The written facts first; failing that, every fact in context too.
         let mut found = problem.prove(&goal_shape).map_err(err)?;
         if found.is_none() {
@@ -663,6 +868,7 @@ impl Elaborator {
                 problem.add_fact(self, cx, fact, span);
             }
             if problem.facts.len() > before {
+                problem.add_denominators(self, cx, span);
                 found = problem.prove(&goal_shape).map_err(err)?;
             }
         }
@@ -773,6 +979,18 @@ mod tests {
         // 2x - 1 ≥ 0 and -3x + 1 ≥ 0: 3·first + 2·second is -1 ≥ 0.
         let rows = vec![row(&[(0, 2)], -1, false, 0, 2), row(&[(0, -3)], 1, false, 1, 2)];
         assert_eq!(eliminate(rows).unwrap(), Some(vec![3, 2]));
+    }
+
+    #[test]
+    fn scaling_reads_the_reciprocal_times_its_denominator_as_one() {
+        // Atoms a = 0, b = 1, r = 2, d = 3: (a·r − b)·d is a − b·d.
+        let m = |atoms: &[usize]| atoms.iter().fold(Vec::new(), |acc, a| FieldReading::monomial_product(&acc, &FieldReading::atom_monomial(*a)).unwrap());
+        let form: Linear = (BTreeMap::from([(m(&[0, 2]), 1), (m(&[1]), -1)]), 0);
+        let factor = Factor { recip: 2, form: (BTreeMap::from([(m(&[3]), 1)]), 0), source: String::new(), proof: String::new(), fact: 0 };
+        assert_eq!(scale(&form, &factor).unwrap(), (BTreeMap::from([(m(&[0]), 1), (m(&[1, 3]), -1)]), 0));
+        // A constant is multiplied by the denominator, here d + 1.
+        let factor = Factor { form: (BTreeMap::from([(m(&[3]), 1)]), 1), ..factor };
+        assert_eq!(scale(&(BTreeMap::new(), 2), &factor).unwrap(), (BTreeMap::from([(m(&[3]), 2)]), 2));
     }
 
     #[test]
