@@ -404,9 +404,13 @@ and `BufferStore(output, buffer, index, value)` stores a word's low byte and
 reads it back. An index past the buffer's end loads zero and stores nothing,
 so no `Faulted` outcome exists yet. Every buffer already lives in the data
 region under S3.2's `Target::Placed`, so the statement compiler compiles a
-leaf of one byte node there, CMP-guarded against the capacity
+byte node there, CMP-guarded against the capacity
 (`lib/native/native_compile_bytes.hthr`), with no footprint and no change to
-S4, which refuses the nodes. Initial bytes are stored at entry.
+S4, which refuses the nodes. Initial bytes are stored at entry. A leaf with
+byte nodes in it compiles a node at a time, each result stored to its slot
+before the next node reads it, when every node works at width 64
+(`lib/native/native_compile_nodes.hthr`,
+`issues/native-compile-wider-leaves.md`).
 
 ---
 
