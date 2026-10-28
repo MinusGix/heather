@@ -43,3 +43,102 @@ theorem stuck_call_opaque(b: Bool, n: Nat): Q::bumped(b, n).den.pred <= n { omeg
 theorem false_through_fields(n: Nat): R::at(n).inner.den.pred = n + 1 { omega }
 // expect-error: `omega` got stuck
 theorem neutral_receiver(q: Q, n: Nat): q.den.pred = n { omega }
+
+// Integer-only conflicts the real shadow misses go to CutSat, whose
+// certificate is one `have` per reachable derivation node
+// (docs/certifying-arithmetic-substrate-design.md). The minimal gap: the
+// real relaxation is satisfiable, no integer point is.
+theorem cutsat_real_shadow_gap(x, y: Int,
+    first: NegSucc(1) <= OfNat(2) * x + OfNat(3) * y,
+    second: OfNat(2) * x + OfNat(5) * y <= OfNat(0),
+    third: OfNat(1) <= y): logic::False
+{ omega }
+
+// Pugh's nightmare: a thin real parallelogram holding no integer point. The
+// old nested-omega certificate re-ran itself per Cooper case past the rail.
+theorem cutsat_pughs_nightmare(x, y: Int,
+    a1: OfNat(27) <= OfNat(11) * x + OfNat(13) * y, a2: OfNat(11) * x + OfNat(13) * y <= OfNat(45),
+    b1: NegSucc(9) <= OfNat(7) * x + NegSucc(8) * y, b2: OfNat(7) * x + NegSucc(8) * y <= OfNat(4),
+    c1: NegSucc(15) <= x, c2: x <= OfNat(16), d1: NegSucc(15) <= y, d2: y <= OfNat(16)): logic::False
+{ omega }
+
+// Disequalities go to CutSat whole (`omega::normalized_ne_value`,
+// `Int::ofnat_ne` at Nat), which splits one only where its model sits on
+// the excluded value; eight of them once cost 2⁸ re-runs of Omega.
+theorem cutsat_excludes_every_value(x: Int, low: OfNat(0) <= x, high: x <= OfNat(7),
+    h0: x ≠ OfNat(0), h1: x ≠ OfNat(1), h2: x ≠ OfNat(2), h3: x ≠ OfNat(3),
+    h4: x ≠ OfNat(4), h5: x ≠ OfNat(5), h6: x ≠ OfNat(6), h7: x ≠ OfNat(7)): logic::False
+{ omega }
+
+theorem cutsat_nat_disequalities(m, n: Nat, sum: m + n = 2, apart: m ≠ n, m_pos: m ≠ 0, n_pos: n ≠ 0): logic::False
+{ omega }
+
+theorem cutsat_disequality_pins_an_equation(x: Int, low: OfNat(1) <= x, high: x <= OfNat(3),
+    not_low: x ≠ OfNat(1), not_high: x ≠ OfNat(3)): x = OfNat(2)
+{ omega }
+
+// Nearby satisfiable systems are refused with CutSat's integer point.
+// expect-error: CutSat's integer model [x = 1, y = 2]
+theorem cutsat_pugh_widened(x, y: Int,
+    a1: OfNat(27) <= OfNat(11) * x + OfNat(13) * y, a2: OfNat(11) * x + OfNat(13) * y <= OfNat(45),
+    b1: NegSucc(10) <= OfNat(7) * x + NegSucc(8) * y, b2: OfNat(7) * x + NegSucc(8) * y <= OfNat(4),
+    c1: NegSucc(15) <= x, c2: x <= OfNat(16), d1: NegSucc(15) <= y, d2: y <= OfNat(16)): logic::False
+{ omega }
+// expect-error: CutSat's integer model [x = 7]
+theorem cutsat_one_value_left(x: Int, low: OfNat(0) <= x, high: x <= OfNat(7),
+    h0: x ≠ OfNat(0), h1: x ≠ OfNat(1), h2: x ≠ OfNat(2), h3: x ≠ OfNat(3),
+    h4: x ≠ OfNat(4), h5: x ≠ OfNat(5), h6: x ≠ OfNat(6)): logic::False
+{ omega }
+
+// Three-variable systems from a seeded generator, each the smallest whose
+// certificate uses the named rule; Omega's real shadow refutes none of them.
+
+// A Cooper split under a variable that already carries a divisibility, whose
+// cases close on a constant divisibility (`cut_cooper_left`/`right`,
+// `cut_constant_dvd`).
+theorem cutsat_cooper_carries_a_divisibility(x, y, z: Int,
+    h0: NegSucc(3) * x + NegSucc(3) * y + NegSucc(3) * z ≠ OfNat(5),
+    h1: NegSucc(3) * x + NegSucc(2) * y + OfNat(1) * z <= OfNat(5),
+    h2: OfNat(3) * x + OfNat(2) * y <= NegSucc(5),
+    h3: OfNat(2) * x + OfNat(4) * y + OfNat(2) * z <= NegSucc(4),
+    h4: NegSucc(3) * y + NegSucc(0) * z <= OfNat(0),
+    b0: NegSucc(2) <= x, c0: x <= OfNat(3),
+    b1: NegSucc(2) <= y, c1: y <= OfNat(3),
+    b2: NegSucc(2) <= z, c2: z <= OfNat(3)): logic::False
+{ omega }
+
+// Disequalities split only where the model is cornered (`cut_diseq`).
+theorem cutsat_splits_cornered_disequalities(x, y, z: Int,
+    h0: OfNat(4) * x + NegSucc(2) * y + NegSucc(1) * z ≠ NegSucc(0),
+    h1: OfNat(3) * y + NegSucc(3) * z <= OfNat(2),
+    h2: NegSucc(0) * x + NegSucc(0) * z <= NegSucc(5),
+    h3: OfNat(1) * x ≠ OfNat(3),
+    h4: OfNat(4) * x + OfNat(4) * z ≠ NegSucc(5),
+    b0: NegSucc(2) <= x, c0: x <= OfNat(3),
+    b1: NegSucc(2) <= y, c1: y <= OfNat(3),
+    b2: NegSucc(2) <= z, c2: z <= OfNat(3)): logic::False
+{ omega }
+
+// A divisibility whose variable has no admissible value drops it (`cut_dvd_drop`).
+theorem cutsat_drops_a_divisibility(x, y, z: Int,
+    h0: OfNat(3) * x + NegSucc(2) * y + OfNat(1) * z ≠ NegSucc(1),
+    h1: OfNat(4) * x + OfNat(1) * y + NegSucc(1) * z <= OfNat(4),
+    h2: NegSucc(1) * x + OfNat(3) * y + NegSucc(1) * z <= OfNat(4),
+    h3: OfNat(2) * x + NegSucc(2) * y <= NegSucc(4),
+    h4: NegSucc(2) * x + NegSucc(1) * y + OfNat(4) * z <= NegSucc(1),
+    b0: NegSucc(2) <= x, c0: x <= OfNat(3),
+    b1: NegSucc(2) <= y, c1: y <= OfNat(3),
+    b2: NegSucc(2) <= z, c2: z <= OfNat(3)): logic::False
+{ omega }
+
+// Two divisibilities on one variable combine into solved form (`cut_dvd_combo`).
+theorem cutsat_combines_congruences(x, y, z: Int,
+    h0: OfNat(4) * x + NegSucc(0) * y + NegSucc(3) * z <= NegSucc(5),
+    h1: OfNat(1) * x + NegSucc(3) * y + OfNat(3) * z <= NegSucc(0),
+    h2: NegSucc(1) * x + NegSucc(2) * y + OfNat(1) * z ≠ OfNat(1),
+    h3: OfNat(3) * x + OfNat(4) * y + OfNat(2) * z <= OfNat(1),
+    h4: NegSucc(2) * x + NegSucc(1) * y + NegSucc(1) * z <= OfNat(1),
+    b0: NegSucc(2) <= x, c0: x <= OfNat(3),
+    b1: NegSucc(2) <= y, c1: y <= OfNat(3),
+    b2: NegSucc(2) <= z, c2: z <= OfNat(3)): logic::False
+{ omega }

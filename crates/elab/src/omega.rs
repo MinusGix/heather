@@ -339,6 +339,11 @@ impl Problem {
             Relation::Lt => Interval::upper(add(zero_bound, -1)?),
             Relation::Ge => Interval::lower(zero_bound),
             Relation::Gt => Interval::lower(add(zero_bound, 1)?),
+            Relation::Ne => {
+                return Err(Failure::InvalidConstraint {
+                    detail: "Omega's real shadow has no row for `≠`; CutSat reads it".into(),
+                });
+            }
         };
         self.assume(difference.coeffs.0, interval)
     }
