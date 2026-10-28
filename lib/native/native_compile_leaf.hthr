@@ -166,9 +166,6 @@ theorem Target::goes_port_to(self t: Target, live: List<Nat>, env: Env, p, q: Pr
     })(refl, loaded)
 }
 
-
-
-
 // A port loaded: its width is a kind, and its code extends the program.
 theorem Prog::port_to_kind(self p: Prog, layout: Layout, port: Port, register: Gpr, q: Prog, loaded: p.port_to(layout, port, register) = Some(q)):
     Exists<Kind>(λ kind => Kind::of_width(port.width) = Some(kind)) ∧ p.Within(q) {

@@ -203,7 +203,6 @@ fn Homes::apart(self homes: Homes, id: Nat, out: List<Nat>) → Bool {
     }
 }
 
-
 // Each of `ids` written with `out` live after.
 fn Homes::all_apart(self homes: Homes, ids: List<Nat>, out: List<Nat>) → Bool {
     match ids { Nil => True, Cons(id, rest) => homes.apart(id, out) && homes.all_apart(rest, out) }

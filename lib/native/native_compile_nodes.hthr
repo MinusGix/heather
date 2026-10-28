@@ -73,7 +73,6 @@ theorem List::put_swap<A>(i: Nat): (k: Nat) → i ≠ k → (xs: List<A>) → (x
     }
 }
 
-
 // A word put before the results settle is put over when a node writes it.
 theorem settle_put_over(nodes: List<Node>): (id: Nat) → Mem(id, nodes_writes(nodes)) → (words: List<Nat>) → (buffers: Buffers()) →
     (args: List<List<BitVec(8)>>) → (a, c: Nat) → (after: Valuation()) →
