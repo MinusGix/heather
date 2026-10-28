@@ -4,7 +4,7 @@ status: open
 labels: [native,x86,perf]
 area: heather-in-heather
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-28
 ---
 
 The compiler of S3.2 (`lib/native/native_compile.hthr`,
@@ -25,3 +25,7 @@ soundness. Found while proving S3.2 (2026-10-25).
   into the buffer where the program never reads the buffer after a failure
   (a source-side fact, so a refinement of `CallShape::answer`).
 - Branch tests that jump on the slot's byte without masking it into RAX.
+
+## Log
+
+- 2026-10-28: Keeping words in registers makes the correspondence depend on the program point. Abate et al. (docs/wp-preserving-compilation-survey.md §4) name the same need for register allocation as future work, with a location map per point and a value relation. Target::Placed would grow a per-point register map; Keeps already reads words through a value relation (word_in).
