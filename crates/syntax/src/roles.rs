@@ -472,6 +472,7 @@ impl<'a> Walk<'a> {
     fn item(&mut self, it: &Item) {
         match it {
             Item::Decl(d) => self.decl(d),
+            Item::Generate(g) => self.expr(&g.generator),
             Item::Inductive(i) => {
                 if !i.params.is_empty() {
                     self.list_bare("inductive-params", i.span, &i.name);

@@ -222,6 +222,10 @@
         "named": true
       },
       {
+        "type": "generate_declaration",
+        "named": true
+      },
+      {
         "type": "impl_declaration",
         "named": true
       },
@@ -2348,6 +2352,22 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "generate_declaration",
+    "named": true,
+    "fields": {
+      "generator": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -6010,6 +6030,10 @@
   },
   {
     "type": "fun",
+    "named": false
+  },
+  {
+    "type": "generate",
     "named": false
   },
   {

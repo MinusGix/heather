@@ -68,6 +68,19 @@ pub enum Item {
     /// declaration, so the import DAG is readable without elaborating
     /// anything.
     Import(ImportItem),
+    /// `generate g(args);` — run the Heather generator `g(args)`, a
+    /// `tactic::Tac<List<tactic::Decl>>`, and publish the declarations it
+    /// builds in this module, every one of them or none
+    /// (docs/host-elaboration-interface-design.md §19).
+    Generate(GenerateItem),
+}
+
+/// `generate g(args);` ([`Item::Generate`]). The generator is an expression
+/// like a `by`'s tactic: a name or a call.
+#[derive(Debug, Clone)]
+pub struct GenerateItem {
+    pub generator: Expr,
+    pub span: Span,
 }
 
 /// `designation<A> ++ at List<A> := append`
@@ -144,6 +157,7 @@ impl Item {
             Item::Datarepr(x) => x.span,
             Item::Impl(x) => x.span,
             Item::Import(x) => x.span,
+            Item::Generate(x) => x.span,
         }
     }
 
@@ -167,6 +181,7 @@ impl Item {
             Item::Impl(i) => {
                 panic!("expected a declaration, found `impl {}`", i.op)
             }
+            Item::Generate(_) => panic!("expected a declaration, found `generate`"),
         }
     }
 }

@@ -67,6 +67,7 @@ module.exports = grammar({
       $.impl_declaration,
       $.assuming_declaration,
       $.section_declaration,
+      $.generate_declaration,
     ),
 
     import_declaration: $ => seq(
@@ -148,6 +149,10 @@ module.exports = grammar({
       'impl', field('name', $.identifier), 'for', field('representation', $.identifier),
       choice(seq(':=', field('value', $._expression), optional(';')), $.repr_clause_block),
     ),
+
+    // `generate congruences(Tm);` — a generator's declarations, published
+    // here (docs/host-elaboration-interface-design.md §19).
+    generate_declaration: $ => seq('generate', field('generator', $._expression), ';'),
 
     assuming_declaration: $ => seq(
       'assuming', commaSep1($.assumption),

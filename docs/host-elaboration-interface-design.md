@@ -10,7 +10,7 @@ usual: this document first, the implementing rounds against §10.
 
 Status: **§0 decided by Minus on 2026-10-21** (the request-tree model, with
 native tactics and certificate oracles as §8a describes). **Rounds 1, 2, 2½,
-2¾ and 3 landed**: §12–§16 record what building them changed.
+2¾, 3 and 4 landed**: §12–§16 and §19 record what building them changed.
 
 ---
 
@@ -447,7 +447,7 @@ the generalisation.
 | R2¾ (landed) | `Hole` with `Mark`/`Restore`, `GlobalRef` (`Lookup`, `Global`, `HGlobal`'s reference), `At` notes rendered by the host (§15) | `apply(trans, assumption())` closes `a = c`; a failed alternative's solutions are forgotten |
 | R3 (landed) | `tac-first-port`: `split_all` in Heather on the split requests `Cases`/`Constructor`/`Close` and `View`'s `HMatch`, with `reflexivity` as its leaf (§16) | it closes the same goals as the Rust one on the existing tests |
 | R3½ | `Oracle(name, input)` with one registered native procedure and a reflection-checked certificate (§8a) | a goal closes by native search plus a Heather check whose proof term is small |
-| R4 | publication (`heather-checked-construction-api`, retargeted): a `Publish(group)` request that checks a small declaration group and adds it only if every member passes the kernel | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
+| R4 (landed) | publication (`heather-checked-construction-api`, retargeted): a `generate g(args);` item running a `Tac<List<Decl>>`, requests `Assume`/`Ctors`/`AsType`/`Publish`, `Expr`'s `Blank`/`Pi`/`Equation`; the group is checked and published only if every member passes (§19) | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
 
 R1 tests follow `docs/testing-generated-terms.md`'s axes: a closed and a
 neutral hypothesis, an open element type, a checking position (the goal comes
@@ -800,3 +800,84 @@ OrderedField(≈, <, <=, +, *)>` (`mono`, `docs/monotonicity-tactic-design.md`
   would have to state the class's type first, and the indices it does not see
   (`≈`, `<` behind a conclusion about `<=`) are exactly what it cannot state;
   the call path already knows where they come from.
+
+## 19. What round 4 changed
+
+R4 (`issues/heather-checked-construction-api.md`): a Heather generator
+builds a small declaration group, and the elaborator checks every member and
+publishes all of them where the generator was invoked, or none.
+
+- **Invocation is an item, `generate g(args);`.** The proof-position
+  invocation is `by t`; a generator needs a module-level one. `generate` is a
+  contextual keyword (an item that starts with `generate` followed by a name),
+  so no library name is reserved. `g(args)` is elaborated at
+  `Tac<List<Decl>>` with quoting on, exactly as a tactic's arguments are; a
+  generator runs in the module's empty context, so the only terms it can quote
+  are closed ones, and a type's name in an `Expr` position (`Tm`, a
+  parameterless inductive) is quoted as that type. Inside a `section` or an
+  `assuming` block it is refused by the parser for now: the generator would
+  have to run under the head's binders, and nothing says yet how its
+  declarations would then inherit them.
+- **One request tree for both.** A generator is the same `Tac` as a tactic,
+  run by the same loop (`drive`) in generator mode: it has no goal (`Goal` is
+  refused, and its quoted handles start at 0), and it ends with
+  `Publish(decls)`, whose response type is `Never`, so nothing can follow it.
+  `host_generator(g)` is `g.bind(publish)`. A tactic that sends `Publish` is
+  refused at its `by`.
+- **Building declarations.** `Assume(ty, name, under)` introduces a local of
+  type `ty` in a new scope under `under`'s (or the root); a declaration's
+  parameters are such locals, each introduced under the one before it, and its
+  statement and body are `Expr`s in the last one's scope. `Decl(form, name,
+  params, result, body)` names them; a parameter is implicit when its `Param`
+  says so. The same `Assume` makes a binder the body abstracts with `Lam`
+  (introduced beside the parameters, not under them). `Expr` gains `Pi(x,
+  body)` for a function type over such a local, `Equation(lhs, rhs)` for an
+  identity type, and `Blank`, an argument the application's domain check
+  solves (a run-scoped hole, so a generator writes `cong(_, _, f, _, _, p)`
+  and lets unification find the implicit arguments). `AsType(e)` checks an
+  `Expr` as a type and answers its handle.
+- **Reading a type's shape.** `Ctors(ty)` answers each constructor of an
+  inductive type: its name, its fields (name and type), and the constructor as
+  a function of its fields. It reuses R3's skeleton technique: an anonymous
+  constructor (or `T::C`) with marker leaves is elaborated twice with
+  different placeholders, so a field whose type mentions an earlier field
+  comes back without a type rather than with one stated about a placeholder;
+  such a constructor has no function either. Codata and indexed families are
+  refused.
+- **Checked twice, published once.** When the run ends, each member is read
+  back in the run: its parameters must form the telescope above (a forged
+  local, a `let`, or a parameter that is not under the one before it is
+  refused), its statement and body are reified, the body's type must convert
+  to the statement there, and nothing may mention an unsolved hole. Then each
+  member is elaborated as the same declaration written in source: a surface
+  `theorem`/`fn` whose parameter types, result and body are marker leaves
+  (`Leaves::Member`) filled with the checked terms, so registration,
+  namespacing (`Tm::cong_App` is `Tm`'s member), the kernel gate and the
+  module image are exactly the source path's. All members are published in
+  one `session_transaction`: a member the elaborator refuses (a name already
+  declared, say) rolls back the ones before it, journal included. Errors name
+  the generator and the member.
+- **Names.** A member's name must be a declaration name (`::`-separated
+  identifiers). A parameter keeps its `Assume` name where that is a plain
+  identifier, else it is `x{k}`; the names are what named arguments see
+  (`Tm::cong_App(hf, ha, f1 := f)`).
+- **The customer: `congruences(T)`** (`lib/std/tactic/derive.hthr`), which
+  declares `T::cong_C({x1 … : X}, {x2 …}, x_eq: x1 = x2, …): C(x1, …) = C(x2,
+  …)` for each constructor with fields, proved one field at a time by `cong`
+  and joined by `trans`. Against the hand-written group it would replace
+  (`lib/kernel_model/kernel_reduction.hthr`'s `Tm::cong_lam` … `cong_pair`),
+  the statements are the same up to the names' case; `cong_proj` and
+  `cong_run` differ, since the hand-written ones hold their non-`Tm` field
+  fixed (`cong_proj(pr, p)`) where the generated one varies every field. The
+  library is not migrated in this round: the kernel model would import the
+  tactic protocol for five one-line lemmas, and its 46 call sites cite the
+  hand-written shapes.
+- **Cost.** As for tactics: evaluating the generator between requests
+  dominates, and each member then costs what the same declaration written in
+  source costs. A generator's output is not imaged separately; the module's
+  image holds the published declarations like any others.
+- **Left open.** A member citing an earlier member of its own group (they are
+  published only after the run, so `Lookup` cannot find them); `generate` in a
+  section or under `assuming`; `Ctors` at a parameterized type (quoting finds
+  only parameterless ones) or a dependent field; a field projection in
+  `Expr`; R3½'s oracles.
