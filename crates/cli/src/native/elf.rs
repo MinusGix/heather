@@ -293,9 +293,11 @@ import {root};
 {imports}
 {lowered_is}
 // The words' homes and the loops' sets, as the greedy allocator gave them,
-// and the compile's check of them.
+// and the compile's check of them, by `refl` on the check's value: `trivial`
+// against `IsTrue` of it runs out of memory on a tool of cat FILE's size.
 {homes_def}
-theorem {p}_allocated(): {src}().allocation_ok({homes}).IsTrue() {{ trivial }}
+theorem {p}_allocation_is(): {src}().allocation_ok({homes}) = True {{ refl }}
+theorem {p}_allocated(): {src}().allocation_ok({homes}).IsTrue() {{ j(sym({p}_allocation_is()), λ b _ => b.IsTrue(), trivial) }}
 
 // The program: what `{src}().compile` computes.
 {code}

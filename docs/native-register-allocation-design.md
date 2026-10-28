@@ -156,6 +156,13 @@ with `Held` at `s.live_in(homes, out)` on entry and `out` on exit:
 - `goes_repeat` is generic in the set, with the closure as a hypothesis;
 - `emit_runs` takes `s.checks(t.homes, out)`.
 
+A loop inside a statement's code, such as a read's copy into its buffer or
+an open's path copy into scratch, writes memory and scratch registers. It
+runs over the region as placed with the slots' words, and its invariant
+carries the pool's values unchanged (`home_values(g) = vals` in `CopyAt`
+and `PathAt`). So when the loop ends, the live words are rebuilt as held
+from the same file and the same registers.
+
 Emission (`native_compile.hthr`) reads and writes words through
 `Prog::word_to` and `Prog::word_from`:
 
