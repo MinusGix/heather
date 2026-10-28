@@ -80,18 +80,23 @@ one (empty when absent). Liveness takes the set as given:
 The check asks only that the set is **closed**: what the body needs at its
 head, given that, is within the set. That takes one pass over the body.
 
-The untrusted side computes the least closed set the usual way
-(`loop_grow`, `Stmt::live_least`, `Stmt::loop_sets`). A wrong set cannot
-cause a wrong compile:
+The untrusted side computes the least closed sets the usual way: it starts
+from empty sets and runs a pass of the check's own liveness, joining each
+loop's entry with what its body needs at its head (`Stmt::needs`), until a
+pass adds nothing (`Homes::closed`). A wrong set cannot cause a wrong
+compile:
 
 - a set that is too small is not closed, and the check refuses it;
 - a set that is too large is sound, and only keeps more words alive.
 
-Two loops that test the same word share one entry. The allocator gives that
-entry the union of the two sets, which is closed for both whenever liveness
-is monotone in the set. It is, except where the larger set makes a write
-interfere with a word in a shared register, and then the check refuses
-(`issues/native-loop-sets-by-loop.md`).
+Two loops that test the same word share one entry, so its set must be
+closed for both. Growing all the sets together under the check's liveness
+gives exactly that. A first version grew each loop's least set on its own
+and joined them afterwards. `yes STR` has two loops on one word, and the
+join left a loop nested inside one of them with a set that was not closed:
+its live-out had grown with the joined set. The check refused, as it
+should. A shared entry is still imprecise, because each loop keeps the
+other's words alive (`issues/native-loop-sets-by-loop.md`).
 
 ## 4. The check: the only trusted part
 
@@ -170,12 +175,21 @@ fn Source::homes(self src) → Homes      // what write-elf uses: greedy
 ```
 
 `greedy` first computes `Homes::slots(src)` (least loop sets, everything
-in a slot). It reads every write and the set live after it
-(`Stmt::writes`): two words interfere when one is written while the other is
-live. It weighs each word by its reads and writes, with a loop body counting
-eight times. Then it gives each word, heaviest first, the first pool
+in a slot). One more pass builds the interference graph (`Stmt::graph`): two
+words interfere when one is written while the other is live after the
+write. The graph is a row of flags per word, so adding a write never
+searches a list of ids. The greedy allocator then weighs each word by its
+reads and writes, with a loop body counting seven more per level than what
+holds it. Taking the words heaviest first, it gives each one the first pool
 register that no interfering word already has. A word live at the start
 keeps its slot.
+
+Every table here is built lazily, one `put` at a time. A row read after
+thousands of writes would otherwise force thousands of `put`s nested inside
+each other, and that runs past the evaluator's depth limit. The reader
+reports it as running out of fuel, which is how the 8×-cat probe first
+failed. So each `put` is settled as it is made: its spine and the entry it
+changed are forced by a match.
 
 **Why a record, not a class with proofs yet.** Minus suggested making the
 allocator a type class whose instances prove properties, so that it can be
@@ -184,8 +198,8 @@ allocator, so no instance has to prove that its homes are correct. What an
 instance *could* still prove is **completeness**: its homes never fail the
 check (`∀ src, src.allocation_ok(assign(src))`). Then reason 12 would be
 unreachable for that allocator by proof, not only by testing. `spill_all`
-is the natural first instance, but its proof needs `loop_grow` to reach a
-fixpoint within `loop_fuel`, which is a real lemma about the pass's
+is the natural first instance, but its proof needs `Homes::closed` to
+reach a fixpoint within its fuel, which is a real lemma about the pass's
 monotonicity. The record is the class's data half, and the move is filed as
 `issues/native-allocator-class.md`.
 
@@ -224,9 +238,15 @@ nothing in trust (`issues/native-allocator-cost.md`).
   compile in `native_cat_compiled` close to the kernel's per-declaration
   fuel (`issues/native-leaf-pool-per-leaf.md`). write-elf states emission a
   part at a time, so it is unaffected.
-- **The greedy allocator** is quadratic in the number of words (interference
-  by scanning writes) times the write count. It runs only on write-elf's
-  fork.
+- **The check in the certificate** is one `refl`
+  (`{p}_allocated`). It grows linearly with the program and is the
+  certificate's largest single item at eight times cat
+  (`issues/native-allocator-cost.md`).
+- **The greedy allocator** makes a few liveness passes (one per level of
+  loop-set propagation) and one graph pass. Each is linear in the program,
+  and a write costs its live set times the word count. It runs only on
+  write-elf's fork, and the compile tests check with slot homes for the
+  same reason.
 - **write-elf** gains one `{p}_o_{id}` definition per part (that part's
   live-out). The joins take it, and its cost per part is the live-in of one
   statement.
@@ -267,7 +287,8 @@ and behave as before. Probe sizes for programs without a built binary:
   statement may use. Knowing what each statement clobbers would let the
   pool grow to RSI, RDI, R8 and R9 across statements that don't use them
   (`issues/native-statement-clobbers.md`).
-- **One loop set per loop**, not per tested word
+- **One loop set per loop**, not per tested word, so that loops which
+  share a word stop keeping each other's words alive
   (`issues/native-loop-sets-by-loop.md`).
 - **Completeness by proof**: the allocator class
   (`issues/native-allocator-class.md`).

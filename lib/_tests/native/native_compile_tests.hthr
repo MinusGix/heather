@@ -19,8 +19,11 @@ import x86_64_asm_runs;
 
 fn low() → BitVec(64) { DataRegion::io_page().low }
 
-// Why a source is refused, with the homes the greedy allocator gives it.
-fn refused(src: Source) → List<Nat> { src.refusal(low(), src.homes()) }
+// Why a source is refused, with every word in its slot: the compile is the
+// same for any homes the check passes, and the greedy allocator is
+// `write-elf`'s, evaluated on its fork, too costly beside a compile in one
+// declaration's fuel.
+fn refused(src: Source) → List<Nat> { src.refusal(low(), Homes::slots(src)) }
 
 // A source's layout with every word in its slot.
 fn slotted(src: Source) → Layout { src.layout(low(), Homes::slots(src)) }
@@ -88,7 +91,7 @@ fn narrow_long_leaf() → Source {
     Source(functions := [], buffers := [], main := Then(ops(Cons(Const(32, 1, 0), sum_nodes(20))), Exit(1)))
 }
 
-theorem narrow_long_leaf_refused(): refused(narrow_long_leaf()) = [1, 0, 1, 41, 12] { refl }
+theorem narrow_long_leaf_refused(): narrow_long_leaf().refusal(low(), narrow_long_leaf().homes()) = [1, 0, 1, 41, 12] { refl }
 
 // The third statement exits with a word past the slots; the second, a loop,
 // tests one; a write names a buffer the source does not have.

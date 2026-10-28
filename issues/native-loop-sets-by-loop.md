@@ -9,18 +9,17 @@ updated: 2026-10-28
 
 `Homes.loops` is indexed by the word a `Repeat` tests
 (`docs/native-register-allocation-design.md` §3), so two loops testing one
-word share a set and the allocator gives them the union. The union is closed
-for both unless the larger set makes a write interfere with a word sharing
-its register, and then `Source::allocation_ok` refuses: a refusal no
-allocator can avoid short of moving a word to its slot. The sets may also
-hold an id twice (the union of lists does not dedupe across loops' growth),
-which costs the check list work but not soundness.
+word share a set. The allocator grows all the sets together until each is
+closed (`Homes::closed`), so a shared entry is closed for both loops and the
+check passes. `yes STR` has two such loops. A first version joined
+separately grown sets, and that left a nested loop's set unclosed. The cost
+now is precision: each loop keeps the other's words alive, which can cost
+a register.
 
 ## Scope
 
 - Index loop sets by the loop's position in the statement tree (a pre-order
   count, as `emit` threads labels), or carry the set in the `Repeat` node of
   a checked annotation.
-- Keep each set duplicate-free on the allocator side.
-- A probe in `lib/_tests/native` with two loops on one word whose union
-  interferes, refused today, accepted after.
+- A probe in `lib/_tests/native` with two loops on one word, whose homes
+  improve once each loop has its own set.

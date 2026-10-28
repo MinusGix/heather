@@ -219,8 +219,15 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
     let parts = format!("{p}_parts");
     // The refusal here: once this module is elaborated, the fork reads only
     // its names.
-    let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n", plan.text);
+    let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n\
+        fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n", plan.text);
     fork.elab_module_source(&parts, &text).map_err(|e| e.render(&text))?;
+    // Homes the check refuses are refused here, by reason, and not by the
+    // kernel at the certificate: the parts emit whatever the homes say.
+    let allocation = numbers(&fork, &parts, &format!("{p}_allocation"))?;
+    if !allocation.is_empty() {
+        return Err(refused(symbol, &allocation));
+    }
     let mut readings = Vec::with_capacity(plan.reads.len());
     for (name, &whole) in plan.reads.iter().zip(&plan.whole) {
         match emission::Reading::of(&numbers(&fork, &parts, name)?, whole, &address)? {
