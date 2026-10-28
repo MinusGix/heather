@@ -29,3 +29,4 @@ soundness. Found while proving S3.2 (2026-10-25).
 ## Log
 
 - 2026-10-28: Keeping words in registers makes the correspondence depend on the program point. Abate et al. (docs/wp-preserving-compilation-survey.md §4) name the same need for register allocation as future work, with a location map per point and a value relation. Target::Placed would grow a per-point register map; Keeps already reads words through a value relation (word_in).
+- 2026-10-28: Words in registers landed as [[native-register-allocation]] (`docs/native-register-allocation-design.md`): one home per word for the whole program, checked by evaluation, with no per-point map; `Target::Held` is `Placed` plus `Homes::Agrees` over the live words. What remains here is the word-wise copy and the unmasked branch test. Per-point homes and moves are [[native-register-moves-and-convention]].

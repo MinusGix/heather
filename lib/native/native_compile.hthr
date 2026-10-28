@@ -2,30 +2,37 @@
 // (docs/native-effect-source-design.md §7.4; issues/native-effect-source-compiler.md,
 // round S3.2). `native_compile_correct` proves it once.
 //
-// Every word of the environment has a home: a slot of eight bytes in one data
+// Every word of the environment has a slot of eight bytes in one data
 // region, word `i` at offset `8 i` (`word_slots` of them). Each buffer has a
 // range after the words, at its capacity, and past them all a scratch range
-// one byte longer than the largest buffer (room for a path and its NUL). So the invariant between statements is the
-// memory alone: the region holds the environment (`Target::Placed`,
-// native_compile_region), and no register carries anything from one
-// statement to the next. A statement loads what it reads into registers and
-// stores what it writes back; RBX holds each slot's address on the way.
+// one byte longer than the largest buffer (room for a path and its NUL).
+// Between statements each live word is in
+// its home (native_alloc): its slot, or the register of the home pool the
+// allocator gave it, which no statement's code uses for anything else; a
+// word nothing reads later is anywhere (`Target::Held`,
+// native_compile_homes). A statement loads what it reads from its home and
+// puts what it writes in the word's home, where the word is live after it
+// (`Prog::word_to`, `word_from`); RBX carries a slot's address, or a home
+// register's word, on the way. The homes and each loop's set come with the
+// compile (`Source::compile(low, homes)`), which checks them first
+// (`Source::allocation_ok`), so an allocator is never trusted.
 //
 // - A `Compute` leaf goes through S4 whole where S4 takes it: all pure, its
-//   values fitting the registers. It loads its inputs (the ids its nodes
-//   read and do not write), runs S4's `Region::lower` over them, and stores
-//   each node's result, zero-extended from its width as `Env::settle` keeps
-//   it. Any other leaf whose nodes all work at width 64 compiles a node at a
-//   time, each result stored before the next node reads it: a pure node
-//   through S4 as a region of its own, a byte node by its own code. A
-//   conditional, loop or call region is refused for now.
+//   values fitting the registers no word lives in. It loads its inputs (the
+//   ids its nodes read and do not write), runs S4's `Region::lower` over
+//   them, and puts each node's result in its home, zero-extended from its
+//   width as `Env::settle` keeps it. Any other leaf whose nodes all work at
+//   width 64 compiles a node at a time, each result put before the next
+//   node reads it: a pure node through S4 as a region of its own, a byte
+//   node by its own code. A conditional, loop or call region is refused for
+//   now.
 // - A byte node compares its index with its buffer's capacity (CMP and a
 //   JAE past the access), and loads or stores the byte at the buffer's
 //   address plus the index; a store then reads the byte back as a load
 //   does.
 // - A call clamps its length (and a write its offset) to its buffer, as the
-//   source does, then makes the SYSCALL and stores RAX into the result
-//   word. A read lands in the scratch range and is copied into its buffer
+//   source does, then makes the SYSCALL and puts RAX in the result word's
+//   home. A read lands in the scratch range and is copied into its buffer
 //   only when it succeeds: Linux may leave anything in the range after a
 //   failed read (`LinuxLeaves`), and the source says the buffer is as it
 //   was. An open copies its path into the scratch range up to its clamped
@@ -37,9 +44,9 @@
 //   end of `main` exits 0.
 // - `Arg` reads argc and argv from the initial stack Linux built, through
 //   the RSP saved at entry in a slot past the scratch range. Past argc it
-//   stores minus one into the length word; otherwise it copies the
-//   argument's bytes up to its NUL into the buffer, as many as it holds,
-//   and stores the whole length (native_compile_args).
+//   puts minus one in the length word; otherwise it copies the argument's
+//   bytes up to its NUL into the buffer, as many as it holds, and puts the
+//   whole length (native_compile_args).
 // - At entry RSP is saved, then each buffer's initial bytes are stored, a
 //   byte at a time, as many as it holds.
 //

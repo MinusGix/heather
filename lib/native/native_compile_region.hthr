@@ -3,9 +3,11 @@
 // words the environment's words, each buffer after them at its capacity,
 // then the scratch range a read lands in, then the slot RSP is saved to.
 //
-// `Placed(env, m)` is the invariant between statements: the region holds
-// cells `v`, `v` keeps the environment (`Layout::Keeps`), and the command
-// line is at the saved RSP above the region (`Target::Stacked`). Every store
+// `Placed(env, m)` is the memory's half of the invariant between
+// statements (`Target::Held`, native_compile_homes, adds the registers
+// words live in): the region holds cells `v`, `v` keeps the environment
+// (`Layout::Keeps`), and the command line is at the saved RSP above the
+// region (`Target::Stacked`). Every store
 // the code makes, and every one Linux makes, lands in the region, which
 // nothing executes, so the program stays resident; and each moves `Keeps`
 // one way: a word stored to its slot keeps the environment with that word
