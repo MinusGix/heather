@@ -15,6 +15,7 @@ mod elf;
 mod emission;
 mod labels;
 mod lowered;
+mod parts;
 mod support;
 use support::SUPPORT;
 mod verified;

@@ -19,7 +19,9 @@
 // `Prog::computes` takes them (`List::takes`): a leaf goes on while S4 takes
 // it whole, its values in registers, and a node S4 does not take alone (a
 // byte node, `x := x + y`) is a leaf compiled a node at a time. So nothing
-// the builder writes is refused for its shape.
+// the builder writes is refused for its shape. The cutting is a fold over
+// the items (`List::pack`), so `write-elf` states a tool's lowering a part
+// at a time (native_build_parts).
 //
 // Nothing here is proved: a tool's meaning is the `Source` it lowers to,
 // and `native_compile_correct` speaks of that.
@@ -389,8 +391,7 @@ fn List::widths_agree(self nodes: List<Node>, written: List<Port>) → Bool {
 // values stay in registers, so it is the better leaf. `leaf_checks` less its
 // register checks, which hold of the pool's slices whatever the counts
 // (RBX is not in the pool, and the pool repeats no register), with the
-// inputs found once: a tool's lowering runs this for every node it packs,
-// inside `write-elf`'s one `refl` of the lowering.
+// inputs found once: a tool's lowering runs this for every node it packs.
 fn List::fits_registers(self nodes: List<Node>) → Bool {
     let inputs = nodes_inputs(nodes);
     nodes_pure(nodes) && ((inputs.len() + nodes.len()).leb(scratch_pool().len())
@@ -408,25 +409,45 @@ fn List::takes(self group: List<Node>, node: Node) → Bool {
         || (![node].fits_registers() && (!group.fits_registers() && nodes_wide(group ++ [node])))
 }
 
-// A leaf of the group, then the statement.
-fn List::before(self group: List<Node>, s: Stmt) → Stmt {
-    match group { Nil => s, Cons(_, _) => Then(Stmt::leaf(group), s) }
+// A packing under way: the statements done, the last first, and the
+// leaf being filled. Nothing looks into `done` but `Packing::stmt`, so a
+// packing's steps are the same whatever came before (`write-elf` states
+// them with `done` a variable, native_build_parts).
+record Packing { done: List<Stmt>, group: List<Node> }
+
+fn Packing::start() → Packing { Packing([], []) }
+
+// What is done, with the leaf so far closed if it has nodes.
+fn Packing::closed(self k: Packing) → List<Stmt> {
+    match k.group { Nil => k.done, Cons(_, _) => Cons(Stmt::leaf(k.group), k.done) }
+}
+
+// A node joins the leaf if it takes it, else starts the next one; a
+// statement of the source closes the leaf and is done.
+fn Packing::step(self k: Packing, item: Item) → Packing {
+    match item {
+        Op(node) => match k.group.takes(node) { True => Packing(k.done, k.group ++ [node]), False => Packing(k.closed(), [node]) },
+        Do(s) => Packing(Cons(s, k.closed()), []),
+    }
+}
+
+fn List::pack(self items: List<Item>, k: Packing) → Packing {
+    match items { Nil => k, Cons(item, rest) => rest.pack(k.step(item)) }
+}
+
+// The statements done, the last first, each then the next before `last`.
+fn List::chained(self done: List<Stmt>, last: Stmt) → Stmt {
+    match done { Nil => last, Cons(s, rest) => rest.chained(Then(s, last)) }
+}
+
+// The statement packed: each done, then the next; an empty leaf if none.
+fn Packing::stmt(self k: Packing) → Stmt {
+    match k.closed() { Nil => Stmt::leaf([]), Cons(last, rest) => rest.chained(last) }
 }
 
 // The items as statements: runs of nodes cut into leaves, each taking the
-// next node while it still fits; `group` the nodes of the leaf so far.
-fn List::packed(self items: List<Item>, group: List<Node>) → Stmt {
-    match items {
-        Nil => Stmt::leaf(group),
-        Cons(item, rest) => match item {
-            Op(node) => match group.takes(node) {
-                True => rest.packed(group ++ [node]),
-                False => group.before(rest.packed([node])),
-            },
-            Do(s) => group.before(match rest { Nil => s, Cons(_, _) => Then(s, rest.packed([])) }),
-        },
-    }
-}
+// next node while it still fits.
+fn List::lowered(self items: List<Item>) → Stmt { items.pack(Packing::start()).stmt() }
 
 fn Act::items(self a: Act, next: Nat) → List<Item> {
     match a {
@@ -441,16 +462,16 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
         },
         When(condition, arms) => {
             let t = condition.truth().place(next);
-            t.nodes.ops() ++ [Do(Branch(t.id, arms(True).items(next).packed([]), arms(False).items(next).packed([])))]
+            t.nodes.ops() ++ [Do(Branch(t.id, arms(True).items(next).lowered(), arms(False).items(next).lowered()))]
         },
         While(condition, body) => {
             let t = condition.truth().place(next);
-            let pass = (body.items(Succ(next)) ++ t.nodes.ops()).packed([]);
+            let pass = (body.items(Succ(next)) ++ t.nodes.ops()).lowered();
             t.nodes.ops() ++ [Do(Branch(t.id, Repeat(pass, t.id), Stmt::leaf([])))]
         },
         DoWhile(body, condition) => {
             let t = condition.truth().place(next);
-            [Do(Repeat((body.items(Succ(next)) ++ t.nodes.ops()).packed([]), t.id))]
+            [Do(Repeat((body.items(Succ(next)) ++ t.nodes.ops()).lowered(), t.id))]
         },
         ReadTo(fd, buf, len, result) => {
             let f = fd.place(next);
@@ -500,5 +521,5 @@ fn Tool::opened(self t: Tool, buf: Nat) → Opened {
 
 fn Tool::source(self t: Tool) → Source {
     let o = t.opened(0);
-    Source(functions := [], buffers := o.buffers, main := o.main.items(0).packed([]))
+    Source(functions := [], buffers := o.buffers, main := o.main.items(0).lowered())
 }

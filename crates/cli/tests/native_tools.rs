@@ -87,7 +87,7 @@ fn gnu_tr() -> Command {
 fn compiled_tr_runs_as_gnu_tr() {
     let dir = scratch("tr");
     let binary = dir.join("tr");
-    write_tool("tr_upper_source", &binary);
+    write_tool("tr_upper_tool", &binary);
     let file = std::fs::read(&binary).unwrap();
     assert_eq!(&file[..4], b"\x7fELF");
 
@@ -130,7 +130,7 @@ fn first_bytes(program: &mut Command, n: usize) -> Vec<u8> {
 fn compiled_yes_runs_as_gnu_yes() {
     let dir = scratch("yes");
     let binary = dir.join("yes");
-    write_tool("yes_source", &binary);
+    write_tool("yes_tool", &binary);
 
     // `yes_line()`: what GNU's says given it.
     let mut random = Bytes::seeded("yes");
@@ -152,7 +152,7 @@ fn compiled_yes_runs_as_gnu_yes() {
 fn compiled_head_runs_as_gnu_head() {
     let dir = scratch("head");
     let binary = dir.join("head");
-    write_tool("head_c10_source", &binary);
+    write_tool("head_c10_tool", &binary);
 
     // Shorter than ten bytes, exactly ten, and longer than a buffer.
     let mut random = Bytes::seeded("head");
@@ -177,7 +177,7 @@ fn compiled_head_runs_as_gnu_head() {
 fn compiled_wc_counts_lines_as_gnu_wc() {
     let dir = scratch("wc");
     let binary = dir.join("wc");
-    write_tool("wc_l_source", &binary);
+    write_tool("wc_l_tool", &binary);
 
     // Its count is its exit status, which Linux keeps the low byte of.
     let mut random = Bytes::seeded("wc");
@@ -227,7 +227,7 @@ fn with_args(program: impl AsRef<std::ffi::OsStr>, args: &[Vec<u8>]) -> Command 
 fn compiled_echo_runs_as_gnu_echo() {
     let dir = scratch("echo");
     let binary = dir.join("echo");
-    write_tool("echo_source", &binary);
+    write_tool("echo_tool", &binary);
 
     let mut random = Bytes::seeded("echo");
     for args in argument_lists(&mut random) {
@@ -257,7 +257,7 @@ fn compiled_echo_runs_as_gnu_echo() {
 fn compiled_yes_takes_its_line_as_gnu_yes() {
     let dir = scratch("yes_args");
     let binary = dir.join("yes");
-    write_tool("yes_args_source", &binary);
+    write_tool("yes_args_tool", &binary);
 
     let mut random = Bytes::seeded("yes STR");
     for args in argument_lists(&mut random) {
@@ -300,16 +300,17 @@ fn run_both(program: &mut Command, input: &[u8], stdout: Stdio) -> (Option<i32>,
 fn compiled_cat_files_runs_as_gnu_cat() {
     let dir = scratch("cat_files");
     let binary = dir.join("cat");
-    write_tool("cat_files_source", &binary);
+    write_tool("cat_files_tool", &binary);
 
     // Files run from their folder, so the names are short: random bytes
     // past a buffer, text, an empty file, a folder, a name that is not
-    // there, a name too long for Linux and `-`.
+    // there, a symbolic link to itself, a name too long for Linux and `-`.
     let mut random = Bytes::seeded("cat FILE");
     std::fs::write(dir.join("bytes"), random.take(70000, |r| r as u8)).unwrap();
     std::fs::write(dir.join("text"), random.take(3000, |r| b"ab \n"[(r % 4) as usize])).unwrap();
     std::fs::write(dir.join("empty"), b"").unwrap();
     std::fs::create_dir(dir.join("folder")).unwrap();
+    std::os::unix::fs::symlink("loop", dir.join("loop")).unwrap();
     let long = "n".repeat(300);
     let cases: Vec<Vec<&str>> = vec![
         vec![],
@@ -322,6 +323,7 @@ fn compiled_cat_files_runs_as_gnu_cat() {
         vec!["folder", "text"],
         vec![&long, "text"],
         vec!["missing", "-", "folder", "empty"],
+        vec!["loop", "text"],
     ];
     let input = random.take(5000, |r| r as u8);
     for args in &cases {

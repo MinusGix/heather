@@ -19,8 +19,12 @@
 //! refuses, is refused with its reason (`Source::refusal`, untrusted).
 //!
 //! A compile is most of what one declaration's fuel buys, so no statement
-//! repeats it: the emission is checked against the literal a part of the
-//! statement tree at a time; the layout check `Source::compile` makes, and
+//! repeats it, and nothing that grows with the program is one statement:
+//! a builder's tool is lowered a part of its statement tree at a time
+//! (`parts`); the emission, and the compile's check of the homes, are
+//! checked against the literal a part of the statement tree at a time; the
+//! entry's initial bytes a few dozen at a time (`emission::Inits`,
+//! issues/native-tool-certificate-budget.md); the layout check `Source::compile` makes, and
 //! the bytes, by a table of the program's labels (crates/cli/src/native/labels.rs):
 //! `Prog::laid_out` and `assemble` look each label up by walking the
 //! program, so stating them over the program itself, even a stretch at a
@@ -33,8 +37,8 @@
 //! (issues/native-compile-capacity.md). The table's pass is that check, and
 //! a program the compile would refuse for its layout is refused by the
 //! kernel at the stretch that fails. The bytes are read on the same fork, a
-//! read at a time over the parts' own programs and the table
-//! (`emission::byte_reads`), so the program's literal, whose items are most
+//! read at a time over the parts' own programs (a long one in windows) and
+//! the table (`emission::byte_reads`), so the program's literal, whose items are most
 //! of what elaborating it costs, is elaborated once, in the certificate
 //! (issues/write-elf-build-constants.md). The literal spells each address in the region as the compiler
 //! does, `add_nat` from the page's start, so the emission's check compares
@@ -45,7 +49,7 @@ use heather_elab::{function_ir_source, Elaborator};
 use heather_cache::module_image::ImageFreshness;
 use heather_cli::{loader, semantic::SemanticSession};
 
-use super::{check_file, emission, labels, lowered, symbol_ok, verified, write_new};
+use super::{check_file, emission, labels, lowered, parts, symbol_ok, verified, write_new};
 
 /// The I/O profile's file is at most this long (`io_elf_file`'s sixteen-bit
 /// size), its header included.
@@ -59,13 +63,13 @@ const HEADER: usize = 232;
 /// declaration's fuel, which eight times this size does not.
 const PIECE: usize = 96;
 /// Where the region is, and the window an address in it is spelled from.
-const LOW: &str = "DataRegion::io_page().low";
+pub(super) const LOW: &str = "DataRegion::io_page().low";
 const REGION: std::ops::Range<u64> = 0x410000..0x412000;
 
 /// The modules the probes and the certificate import besides the source's
 /// own; `write-elf` loads them itself, so a program file imports only what
 /// it uses.
-const IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_alloc", "native_compile", "native_compile_correct", "native_compile_elf",
+const IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_build", "native_build_parts", "native_alloc", "native_compile", "native_compile_correct", "native_compile_elf",
     "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_io", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
     "x86_64_asm_table",
     "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
@@ -166,22 +170,35 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let p = &prefix;
     let imports = IMPORTS.iter().map(|module| format!("import {module};\n")).collect::<String>();
     let probe = format!("{p}_probe");
-    // The source as a literal, read on a fork, and compiled in its place:
-    // every probe and statement below names the source, and a builder's
-    // lowering would otherwise be evaluated again in each.
-    let spelling = format!("{p}_spelling");
-    let spelling_text = format!("import {root};\n{imports}\nfn {p}_spelled() → List<Nat> {{ {symbol}().spelled() }}\n");
-    let mut fork = elab.fork();
-    fork.elab_module_source(&spelling, &spelling_text).map_err(|e| e.render(&spelling_text))?;
-    let spelled = {
-        let _row = heather_elab::stats::scope(heather_elab::stats::ScopeKind::Item, &spelling, &format!("{p}_spelled"));
-        function_ir_source::evaluate_numbers(&fork, &format!("{spelling}::{p}_spelled")).map_err(|e| format!("`{symbol}` (spelled): {e}"))?
-    };
-    drop(fork);
-    let lowered = lowered::literal(p, &spelled).map_err(|e| format!("`{symbol}` did not read back: {e}"))?;
-    let (src, lowered) = match lowered {
-        Some(text) => (format!("{p}_lowered"), text),
-        None => (symbol.to_string(), String::new()),
+    // A builder's tool (`Tool`, native_build) is lowered a part at a time
+    // (`parts`); any other source is read as a literal whole.
+    let tool_probe = format!("{p}_tool");
+    let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n");
+    let is_tool = elab.fork().elab_module_source(&tool_probe, &tool_text).is_ok();
+    let source = if is_tool { format!("{symbol}().source()") } else { format!("{symbol}()") };
+    let (src, lowered, lowered_is, shapes) = if is_tool {
+        let stated = tool_parts(&elab, p, symbol, &root, &imports)?;
+        (format!("{p}_lowered"), stated.defs, stated.theorems, Some(stated.shapes))
+    } else {
+        // The source as a literal, read on a fork, and compiled in its place:
+        // every probe and statement below names the source, and a builder's
+        // lowering would otherwise be evaluated again in each.
+        let spelling = format!("{p}_spelling");
+        let spelling_text = format!("import {root};\n{imports}\nfn {p}_spelled() → List<Nat> {{ {symbol}().spelled() }}\n");
+        let mut fork = elab.fork();
+        fork.elab_module_source(&spelling, &spelling_text).map_err(|e| e.render(&spelling_text))?;
+        let spelled = {
+            let _row = heather_elab::stats::scope(heather_elab::stats::ScopeKind::Item, &spelling, &format!("{p}_spelled"));
+            function_ir_source::evaluate_numbers(&fork, &format!("{spelling}::{p}_spelled")).map_err(|e| format!("`{symbol}` (spelled): {e}"))?
+        };
+        drop(fork);
+        match lowered::literal(p, &spelled).map_err(|e| format!("`{symbol}` did not read back: {e}"))? {
+            Some((text, shapes)) => {
+                let theorem = format!("theorem {p}_lowered_is(): {symbol}() = {p}_lowered() {{ refl }}\n");
+                (format!("{p}_lowered"), text, theorem, Some(shapes))
+            }
+            None => (symbol.to_string(), String::new(), String::new(), None),
+        }
     };
     let finish = "then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)";
     let homes = format!("{p}_homes()");
@@ -220,7 +237,8 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
     // The refusal here: once this module is elaborated, the fork reads only
     // its names.
     let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n\
-        fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n", plan.text);
+        fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n\
+        fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n", plan.text);
     fork.elab_module_source(&parts, &text).map_err(|e| e.render(&text))?;
     // Homes the check refuses are refused here, by reason, and not by the
     // kernel at the certificate: the parts emit whatever the homes say.
@@ -228,6 +246,7 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
     if !allocation.is_empty() {
         return Err(refused(symbol, &allocation));
     }
+    let live_sets = numbers(&fork, &parts, &format!("{p}_live_sets"))?;
     let mut readings = Vec::with_capacity(plan.reads.len());
     for (name, &whole) in plan.reads.iter().zip(&plan.whole) {
         match emission::Reading::of(&numbers(&fork, &parts, name)?, whole, &address)? {
@@ -237,7 +256,8 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
     }
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
-    let emission::Stated { theorems: statements, items, lens, mut cuts, spans } = emission::state(p, &entry, &layout, plan, readings)?;
+    let emission::Stated { theorems: statements, items, lens, mut cuts, spans } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
+        Some(emission::Checks { src: &src, homes: &homes, sets: &live_sets }))?;
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
         return Err(format!("`{symbol}` compiles to {length} bytes, past the profile's {MAX_FILE} with its header"));
@@ -262,10 +282,10 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
     fork.elab_module_source(&read, &reads).map_err(|e| e.render(&reads))?;
     let byte = |n: u64| u8::try_from(n).map_err(|_| "a byte above 255".to_string());
     let mut bytes = Vec::with_capacity(length);
-    for (name, span) in &byte_reads {
+    for (name, items) in &byte_reads {
         let read = numbers(&fork, &read, name)?;
-        if read.len() as u64 != lens[span.start..span.start + span.count].iter().sum::<u64>() {
-            return Err(format!("`{symbol}`'s bytes from item {} are not as long as its items", span.start));
+        if read.len() as u64 != lens[items.clone()].iter().sum::<u64>() {
+            return Err(format!("`{symbol}`'s bytes from item {} are not as long as its items", items.start));
         }
         for n in read { bytes.push(byte(n)?); }
     }
@@ -284,25 +304,21 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
         j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom(f), loaded), args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
-{lowered}theorem {p}_lowered_is(): {symbol}() = {src}() {{ refl }}
-"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io().linux(), src.denote(args), s),\n        {simulated})"))
+{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io().linux(), src.denote(args), s),\n        {simulated})"))
     };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
 import {root};
 {imports}
 {lowered_is}
-// The words' homes and the loops' sets, as the greedy allocator gave them,
-// and the compile's check of them, by `refl` on the check's value: `trivial`
-// against `IsTrue` of it runs out of memory on a tool of cat FILE's size.
+// The words' homes and the loops' sets, as the greedy allocator gave them.
 {homes_def}
-theorem {p}_allocation_is(): {src}().allocation_ok({homes}) = True {{ refl }}
-theorem {p}_allocated(): {src}().allocation_ok({homes}).IsTrue() {{ j(sym({p}_allocation_is()), λ b _ => b.IsTrue(), trivial) }}
-
 // The program: what `{src}().compile` computes.
 {code}
-// Its emission, a part of the statement tree at a time.
+// Its emission, and the compile's check of the homes (`{p}_ck_`), a part of
+// the statement tree at a time.
 {statements}
+theorem {p}_allocated(): {src}().allocation_ok({homes}).IsTrue() {{ j(sym({p}_allocation_is()), λ b _ => b.IsTrue(), trivial) }}
 theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
     j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
         cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
@@ -360,7 +376,7 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io())>, entry: s.rip = io_entry(),
     loaded: s.memory.LoadedFrom({p}_file()), args: List<List<BitVec(8)>>,
     argv: ArgvAt(X86Profile::io().data().above(0x412000), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io().linux(), {symbol}().denote(args), s) {{
+    SimProgram(X86Profile::io().linux(), {source}.denote(args), s) {{
     {simulates}
 }}
 ", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));
@@ -396,6 +412,27 @@ theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io())>, entry: s.rip
     println!("{}: {} bytes, `{symbol}` compiled into the I/O profile's ELF as the kernel checked it", output.display(), file.len());
     println!("certificate: {}", certificate.display());
     Ok(())
+}
+
+/// A tool's lowering, read and stated a part at a time (`parts`): the
+/// definitions of `{p}_lowered()` and the theorems that the tool lowers to it.
+fn tool_parts(elab: &Elaborator, p: &str, symbol: &str, root: &str, imports: &str) -> Result<parts::Stated, String> {
+    let numbers = |fork: &Elaborator, module: &str, name: &str| {
+        let _row = heather_elab::stats::scope(heather_elab::stats::ScopeKind::Item, module, name);
+        function_ir_source::evaluate_numbers(fork, &format!("{module}::{name}")).map_err(|e| format!("`{symbol}` ({name}): {e}"))
+    };
+    let tool = format!("{symbol}()");
+    let shape = format!("{p}_shape");
+    let shape_text = format!("import {root};\n{imports}\n{}", parts::shape_text(p, &tool));
+    let mut fork = elab.fork();
+    fork.elab_module_source(&shape, &shape_text).map_err(|e| e.render(&shape_text))?;
+    let plan = parts::plan(p, &numbers(&fork, &shape, &format!("{p}_shape"))?)?;
+    let buffers = numbers(&fork, &shape, &format!("{p}_buffers_spelled"))?;
+    let trace = format!("{p}_trace");
+    let trace_text = format!("import {root};\nimport {shape};\n{imports}\n{}", plan.text);
+    fork.elab_module_source(&trace, &trace_text).map_err(|e| e.render(&trace_text))?;
+    let traced = numbers(&fork, &trace, &format!("{p}_trace"))?;
+    parts::state(p, &tool, plan, &traced, &buffers).map_err(|e| format!("`{symbol}`'s lowering did not read back: {e}"))
 }
 
 /// Said of a leaf S4 does not take whole that cannot go a node at a time

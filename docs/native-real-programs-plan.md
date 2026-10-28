@@ -354,16 +354,20 @@ stops at either and stores the NUL after them in scratch, which is one byte
 longer than the largest buffer for it. Stat is still refused
 (`issues/native-compile-stat.md`). cat's messages are a table scanned at
 run time, so the code that writes a diagnostic exists once; it holds the
-seven errnos a cat mostly meets, and says "Unknown error" past them where
-GNU names the errno or adds its number (decimal output is round 9). The
-table is that short, and cat fits its certificate at all, because two of
-`write-elf`'s statements are one kernel `refl` each under fixed fuel: the
-builder's lowering of the whole tool, and the entry that stores a
-buffer's initial bytes one instruction each
-(`issues/native-tool-certificate-budget.md`, which the larger §2 tools
-need first). The round also made `write-elf`'s byte read linear
-(`asm_code_ending_onto`): it nested its appends to the left, and a long
-entry ran it out of memory.
+messages of twenty-six errnos in glibc's spelling (those an open, read or
+write can return, and EPERM), and says "Unknown error" past them where GNU
+names the errno or adds its number (decimal output is round 9). Round 7
+first held seven, because two of `write-elf`'s statements were one kernel
+`refl` each under fixed fuel: the builder's lowering of the whole tool,
+and the entry that stores a buffer's initial bytes one instruction each.
+Both are now stated by parts (`issues/native-tool-certificate-budget.md`):
+the lowering is a left fold (`List::pack`) whose parts are joined by a
+lemma per `Act` constructor (`lib/native/native_build_parts.hthr`), and
+the entry's bytes go 32 at a time; the allocation check is stated over the
+emission's parts too. The few statements still linear in the tool are
+cheap per unit (the issue's log names them). The round also made
+`write-elf`'s byte read linear (`asm_code_ending_onto`): it nested its
+appends to the left, and a long entry ran it out of memory.
 
 ### 3.6 Room
 
