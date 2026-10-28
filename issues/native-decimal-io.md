@@ -68,7 +68,7 @@ by doubling with `Add`.
   `compiled_decimals_round_trip_the_widest_words` (every power of ten and
   the number below, the signed edges, random words, refusals).
 - **The wall met: write-elf's allocator.** `wc` ran write-elf out of the
-  8 GiB rail in `{p}_homes_spelled`: `Allocator::greedy` evaluated on the
+  8 GiB rail in `{p}_homes_spelled`: `Allocator::greedy` (now `Greedy`) evaluated on the
   fork, whose read keeps everything it forces. It now runs in Rust over the
   read-back source (`crates/cli/src/native/allocator.rs`), the same homes
   ([[native-allocator-cost]]). After it, `wc`'s single-`refl` lowering

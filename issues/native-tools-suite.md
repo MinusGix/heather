@@ -5,7 +5,7 @@ labels: [native,examples,tests]
 area: heather-in-heather
 milestone: [hih-tools]
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-28
 ---
 
 Round 10 of `docs/native-real-programs-plan.md` (§2, §6), and the round that
@@ -36,3 +36,9 @@ Rounds 1–9 of the plan: [[native-source-bytes]], [[native-compile-capacity]],
 [[native-source-builder]], [[native-source-argv]],
 [[native-compile-other-calls]], [[native-data-capacity]],
 [[native-decimal-io]]. And [[native-tool-certificate-budget]] (closed): lowering, initial bytes and the allocation check are stated by parts, so no certificate statement grows with the tool; the fork's allocator is the next wall ([[native-allocator-cost]]).
+
+## Log
+
+- 2026-10-28: cat's test dies at the CPU rail whenever its certificate is
+  checked cold, after any library edit ([[native-tool-test-cold-certificate-rail]]);
+  more tools in `native_tools.rs` meet the same rail.

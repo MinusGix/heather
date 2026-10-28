@@ -235,30 +235,36 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     // runs the fork's too and refuses unless they agree.
     let on_fork = |fork: &Elaborator| numbers(fork, &probe, &format!("{p}_homes_spelled"));
     let in_rust = if lowered.is_empty() { None } else { allocator::homes_spelled(&numbers(&fork, &probe, &format!("{p}_lowered_spelled"))?) };
-    let spelled_homes = match in_rust {
-        Some(ours) => {
-            if std::env::var("HEATHER_ELF_ALLOCATOR").as_deref() == Ok("both") && on_fork(&fork)? != ours {
-                return Err(format!("`{symbol}`'s homes from native_alloc and from write-elf's allocator differ"));
-            }
-            ours
-        }
-        None => on_fork(&fork)?,
-    };
-    let homes_def = format!("fn {homes} → Homes {{ {} }}\n",
-        homes_literal(&spelled_homes).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?);
+    if let Some(ours) = &in_rust && std::env::var("HEATHER_ELF_ALLOCATOR").as_deref() == Ok("both") && on_fork(&fork)? != *ours {
+        return Err(format!("`{symbol}`'s homes from native_alloc and from write-elf's allocator differ"));
+    }
     // The program a part at a time, each read on its own, so a read holds
     // one part's values and not the program's.
     let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?)?;
-    let parts = format!("{p}_parts");
-    // The refusal here: once this module is elaborated, the fork reads only
-    // its names.
-    let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n\
-        fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n\
-        fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n", plan.text);
-    fork.elab_module_source(&parts, &text).map_err(|e| e.render(&text))?;
+    // The parts over the homes, and the check's verdict on them. The refusal
+    // here: once this module is elaborated, the fork reads only its names.
+    let state = |fork: &mut Elaborator, parts: &str, spelled: &[u64]| -> Result<(String, Vec<u64>), String> {
+        let homes_def = format!("fn {homes} → Homes {{ {} }}\n",
+            homes_literal(spelled).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?);
+        let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n\
+            fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n\
+            fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n", plan.text);
+        fork.elab_module_source(parts, &text).map_err(|e| e.render(&text))?;
+        Ok((homes_def, numbers(fork, parts, &format!("{p}_allocation"))?))
+    };
+    let mut parts = format!("{p}_parts");
+    let first = match &in_rust { Some(ours) => ours.clone(), None => on_fork(&fork)? };
+    let (mut homes_def, mut allocation) = state(&mut fork, &parts, &first)?;
+    // `Greedy::assign`'s fallback: a colouring the check refuses gives way
+    // to every word in its slot, which is the fork's answer then
+    // (`Homes::or_else`).
+    if !allocation.is_empty() && in_rust.is_some() {
+        parts = format!("{p}_parts_slotted");
+        let slotted = on_fork(&fork)?;
+        (homes_def, allocation) = state(&mut fork, &parts, &slotted)?;
+    }
     // Homes the check refuses are refused here, by reason, and not by the
     // kernel at the certificate: the parts emit whatever the homes say.
-    let allocation = numbers(&fork, &parts, &format!("{p}_allocation"))?;
     if !allocation.is_empty() {
         return Err(refused(symbol, &allocation));
     }
