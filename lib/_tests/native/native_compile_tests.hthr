@@ -51,8 +51,8 @@ fn head10() → Source { head_c(10) }
 // compiles, but no theorem covers it.
 fn big_cat() → Source { cat(2048) }
 
-theorem big_cat_too_big(): Layout(low(), big_cat().capacities(), Homes([], [])).size().leb(DataRegion::io_page().size) = False { refl }
-theorem cat_fits_the_page(): Layout(low(), cat(1024).capacities(), Homes([], [])).size().leb(DataRegion::io_page().size) = True { refl }
+theorem big_cat_too_big(): Layout::of(low(), big_cat().capacities(), Homes([], [])).size().leb(DataRegion::io_page().size) = False { refl }
+theorem cat_fits_the_page(): Layout::of(low(), cat(1024).capacities(), Homes([], [])).size().leb(DataRegion::io_page().size) = True { refl }
 
 // An `open` and a `close` compile; a `stat` is the call the compiler does
 // not make yet.

@@ -64,8 +64,8 @@ theorem cat_compiles(): cat(cat_capacity()).compile(DataRegion::io_page().low, c
     cat(cat_capacity()).compile(DataRegion::io_page().low, cat_homes()).some_get(cat_present())
 }
 
-theorem cat_fits(): Layout(DataRegion::io_page().low, cat(cat_capacity()).capacities(), cat_homes()).size() <= DataRegion::io_page().size {
-    Nat::leb_sound(Layout(DataRegion::io_page().low, cat(cat_capacity()).capacities(), cat_homes()).size(), DataRegion::io_page().size, trivial)
+theorem cat_fits(): Layout::of(DataRegion::io_page().low, cat(cat_capacity()).capacities(), cat_homes()).size() <= DataRegion::io_page().size {
+    Nat::leb_sound(Layout::of(DataRegion::io_page().low, cat(cat_capacity()).capacities(), cat_homes()).size(), DataRegion::io_page().size, trivial)
 }
 
 // The bytes the program assembles to.

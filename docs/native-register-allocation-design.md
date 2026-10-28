@@ -53,8 +53,8 @@ So a home register changes only when its own word is written. That is why
 the invariant needs no per-statement clobber sets (§8).
 
 A leaf that goes through S4 whole takes its registers from those no word
-lives in (`Layout::leaf_pool`). Every home register a program uses is one
-fewer register for its widest leaf. When a leaf does not fit, the compiler
+lives in (`Layout::leaf_pool`, computed once per compile). Every home
+register a program uses is one fewer register for its widest leaf. When a leaf does not fit, the compiler
 takes it a node at a time, as before.
 
 ## 3. Liveness, and loop sets as part of the allocation
@@ -239,12 +239,13 @@ nothing in trust (`issues/native-allocator-cost.md`).
   work over the live set, and the kernel's unary `Nat` comparisons make
   that the constant factor. The check is linear in program size times live
   set size, with no fixpoint and no nesting factor.
-- **Emission** recomputes `Layout::leaf_pool` (a filter of the pool through
-  `Homes::uses`) at every leaf and node. It dominates the emission's growth
-  over the memory-resident compile, and it takes cat's single-`refl`
-  compile in `native_cat_compiled` close to the kernel's per-declaration
-  fuel (`issues/native-leaf-pool-per-leaf.md`). write-elf states emission a
-  part at a time, so it is unaffected.
+- **Emission** reads the leaf pool and the registers words live in from
+  `Layout`'s fields, which `Layout::of` computes from the homes once per
+  compile (`Layout::of_pool`, `Layout::of_taken` say they are the filters).
+  Recomputing them at every leaf and node had dominated emission's growth
+  over the memory-resident compile and taken cat's single-`refl` compile in
+  `native_cat_compiled` close to the kernel's per-declaration fuel
+  (`issues/native-leaf-pool-per-leaf.md`).
 - **The check in the certificate** is one `refl`
   (`{p}_allocated`). It grows linearly with the program and is the
   certificate's largest single item at eight times cat

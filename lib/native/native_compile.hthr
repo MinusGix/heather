@@ -91,7 +91,12 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // evaluate however far into the region it reaches; the proofs read it as
 // `next_rip`, the region's spelling, through `Target::at_rip`
 // (issues/native-compile-address-depth.md).
-record Layout { low: BitVec(64), capacities: List<Nat>, homes: Homes }
+//
+// The leaf pool and the registers words live in (`taken`) are fields that
+// `Layout::of` computes from the homes once: every leaf reads them several
+// times, and recomputing the two filters there dominated the compile's
+// evaluation (issues/native-leaf-pool-per-leaf.md).
+record Layout { low: BitVec(64), capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr> }
 
 fn Layout::word_offset(self layout: Layout, id: Nat) → Nat { 8 * id }
 fn Layout::word_at(self layout: Layout, id: Nat) → BitVec(64) { layout.low.add_nat(layout.word_offset(id)) }
@@ -229,7 +234,14 @@ fn ports_absent(ports: List<Port>, written: List<Nat>) → Bool {
 fn register_pool() → List<Gpr> { [Rax, Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11, R12, R13, R14, R15, Rbp] }
 
 // Those no word lives in, in order: its inputs', then one per node.
-fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { register_pool().filter(λ (register: Gpr) => !layout.homes.uses(register)) }
+fn Homes::leaf_pool(self homes: Homes) → List<Gpr> { register_pool().filter(λ (register: Gpr) => !homes.uses(register)) }
+
+// A layout with its pools computed from its homes.
+fn Layout::of(low: BitVec(64), capacities: List<Nat>, homes: Homes) → Layout { Layout(low, capacities, homes, homes.leaf_pool(), homes.registers()) }
+fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
+theorem Layout::of_pool(low: BitVec(64), capacities: List<Nat>, homes: Homes):
+    Layout::of(low, capacities, homes).leaf_pool() = register_pool().filter(λ (register: Gpr) => !homes.uses(register)) { refl }
+theorem Layout::of_taken(low: BitVec(64), capacities: List<Nat>, homes: Homes): Layout::of(low, capacities, homes).taken = homes.registers() { refl }
 
 // No register twice.
 fn Gpr::absent_from(self register: Gpr, registers: List<Gpr>) → Bool {
@@ -263,7 +275,7 @@ fn Layout::leaf_outputs(self layout: Layout, nodes: List<Node>) → List<Gpr> { 
 fn Prog::leaf_lowered(self loaded: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, words: List<Nat>, code: Option<List<Instruction>>) → Option<Prog> {
     match code {
         None => None,
-        Some(instructions) => match leaves_all(instructions, layout.homes.registers()) {
+        Some(instructions) => match leaves_all(instructions, layout.taken) {
             False => None,
             True => then(loaded, Block(instructions)).ports_from(layout, out, nodes_write_ports(nodes), words, layout.leaf_outputs(nodes)),
         },
@@ -695,7 +707,7 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
-fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout(low, src.capacities(), homes) }
+fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.capacities(), homes) }
 
 fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
     Start.saves_rsp(src.layout(low, homes)).inits(src.layout(low, homes), src.buffers, 0)

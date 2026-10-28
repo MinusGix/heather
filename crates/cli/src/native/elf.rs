@@ -188,7 +188,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let layout = format!("{src}().layout({LOW}, {homes})");
     let entry = format!("{src}().entry({LOW}, {homes})");
     let probes = format!("import {root};\n{imports}{lowered}
-fn {p}_room() → List<Nat> {{ [Layout({LOW}, {src}().capacities(), Homes([], [])).size(), DataRegion::io_page().size] }}
+fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().capacities(), Homes([], [])).size(), DataRegion::io_page().size] }}
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 ");
@@ -321,8 +321,8 @@ theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{
 }}
 
 // Its words, buffers and scratch range fit the page.
-theorem {p}_fits(): Layout({LOW}, {src}().capacities(), {homes}).size() <= DataRegion::io_page().size {{
-    Nat::leb_sound(Layout({LOW}, {src}().capacities(), {homes}).size(), DataRegion::io_page().size, trivial)
+theorem {p}_fits(): Layout::of({LOW}, {src}().capacities(), {homes}).size() <= DataRegion::io_page().size {{
+    Nat::leb_sound(Layout::of({LOW}, {src}().capacities(), {homes}).size(), DataRegion::io_page().size, trivial)
 }}
 
 // The bytes, a piece at a time from the last item.

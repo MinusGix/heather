@@ -776,7 +776,7 @@ theorem Stmt::emit_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), fits: wor
 // region zero and the command line `args` at RSP above the region,
 // simulates the source run with `args` at every fuel, whatever homes the
 // compile was given: it checked them (`Source::allocation_ok`).
-theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: Layout(r.low, src.capacities(), homes).size() <= r.size, program: Prog,
+theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.capacities(), homes).size() <= r.size, program: Prog,
     compiled: src.compile(r.low, homes) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
     here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
     zero: r.Holds(λ _ => zero_byte(), s.memory), args: List<List<BitVec(8)>>,
