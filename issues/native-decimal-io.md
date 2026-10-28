@@ -71,11 +71,11 @@ by doubling with `Add`.
   8 GiB rail in `{p}_homes_spelled`: `Allocator::greedy` evaluated on the
   fork, whose read keeps everything it forces. It now runs in Rust over the
   read-back source (`crates/cli/src/native/allocator.rs`), the same homes
-  ([[native-allocator-cost]]). After it, `wc`, `head -n` and `decimal_echo`
-  fit the certificate's two single `refl`s (`lowered_is`,
-  `allocation_is`) with little room: `wc`'s lowering is about nine tenths
-  of the per-declaration fuel. [[native-tool-certificate-budget]] splits
-  both.
+  ([[native-allocator-cost]]). After it, `wc`'s single-`refl` lowering
+  took about nine tenths of the per-declaration fuel, which the
+  certificate-budget round's per-part statements
+  ([[native-tool-certificate-budget]]) then removed; the tools are nullary
+  `_tool`s for that.
 - Not here: files (`head -n N FILE`, `wc FILE…`, and the column width GNU
   takes from a regular file's size), `-c` for head, GNU's `+N`/`-N`/suffix
   forms of a count (refused with GNU's invalid-count message), and the
