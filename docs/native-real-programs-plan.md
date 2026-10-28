@@ -504,7 +504,9 @@ leaves and pick up 4's forms as they land. Rounds 6–9 each need only 1 and 5.
 ## 7. Deferred on purpose
 
 - **Register-resident words, word-wise copies**
-  (`native-compiled-code-shape`). Speed, not reach.
+  (`native-compiled-code-shape`). Speed, not reach. Words in registers
+  landed 2026-10-28 (`docs/native-register-allocation-design.md`): checked
+  homes cut about a third of each tool's code.
 - **Procedures that make calls** (design §10 item 2, `mrec`). Inlining
   covers the target set, and procedures come when code size, not capacity,
   is the wall.

@@ -1,0 +1,582 @@
+// Register allocation for the effectful source's compiler
+// (docs/native-register-allocation-design.md; issues/native-register-allocation.md).
+//
+// Every word of the environment has a home between statements: its slot,
+// as the memory-resident compiler gave every word, or a register of the
+// home pool, which no statement's code uses for anything else. Which home
+// each word gets is an allocator's proposal (`Allocator`), and nothing
+// proves an allocator right: the compiler checks what it is given
+// (`Source::allocation_ok`), and `native_compile_correct` holds of every
+// assignment that passes. So an allocator is a heuristic, swapped or tuned
+// freely; a poor one costs slots, a wrong one a refusal.
+//
+// The check is liveness's. A word is live at a point when a later read may
+// see the value it holds there (`Stmt::live_in`, computed backwards over
+// the statement tree). A loop's set is the allocator's as well: it grows
+// the least closed ones (`Homes::closed`), and the check is only that the
+// set it gave is closed, one pass over the body, so the trusted part never
+// iterates and nested loops cost no more than their bodies. Between
+// statements only the live words are where their homes say, so two words
+// may share a register when neither is
+// written while the other is live: every write of a word is apart from
+// what is live after it (`Homes::apart`). A word written where it is dead
+// is not written at all. Words live where the program starts are in their
+// slots, which start zero.
+//
+// With every word in its slot (`Homes::slots`) the compiler emits what the
+// memory-resident compiler did, less the stores of words nothing reads:
+// that path is this one with everything spilled.
+import native_source;
+import function_ir;
+import function_ir_eval;
+import x86_64;
+import bool;
+import list;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Homes
+
+// A word's home: its slot, or register `k` of the pool.
+inductive Home { InSlot, InReg(k: Nat) }
+
+// The registers a word may live in: none of them is a statement's scratch,
+// the leaf's address register RBX, or one Linux's SYSCALL clobbers.
+fn home_pool() → List<Gpr> { [R12, R13, R14, R15, Rbp, R10] }
+
+fn home_register(k: Nat) → Gpr { match home_pool().nth(k) { None => R12, Some(r) => r } }
+
+fn Home::is_register(self home: Home, k: Nat) → Bool {
+    match home { InSlot => False, InReg(j) => j.same(k) }
+}
+
+fn Home::in_pool(self home: Home) → Bool {
+    match home { InSlot => True, InReg(k) => Succ(k).leb(home_pool().len()) }
+}
+
+// Each word's home, by id (past the list, its slot), and each loop's set:
+// the words live at its head, by the word its test reads. The sets are the
+// allocator's too, so the check never iterates a fixpoint: it finds each
+// set closed (`Stmt::checks`), and a loop the list does not reach has none.
+record Homes { of: List<Home>, loops: List<List<Nat>> }
+
+fn Homes::loop_set(self homes: Homes, again: Nat) → List<Nat> {
+    match homes.loops.nth(again) { None => [], Some(set) => set }
+}
+
+fn Homes::home(self homes: Homes, id: Nat) → Home {
+    match homes.of.nth(id) { None => InSlot, Some(home) => home }
+}
+
+// Every register home is in the pool.
+fn List::homes_fit(self of: List<Home>) → Bool {
+    match of { Nil => True, Cons(home, rest) => home.in_pool() && rest.homes_fit() }
+}
+
+fn Homes::fits(self homes: Homes) → Bool { homes.of.homes_fit() }
+
+// Whether some word lives in `register`.
+fn List::homes_use(self of: List<Home>, register: Gpr) → Bool {
+    match of {
+        Nil => False,
+        Cons(home, rest) => match home { InSlot => rest.homes_use(register), InReg(k) => home_register(k).same(register) || rest.homes_use(register) },
+    }
+}
+
+fn Homes::uses(self homes: Homes, register: Gpr) → Bool { homes.of.homes_use(register) }
+
+// The registers some word lives in.
+fn Homes::registers(self homes: Homes) → List<Gpr> { home_pool().filter(λ (register: Gpr) => homes.uses(register)) }
+
+// ---------------------------------------------------------------------------
+// Sets of words, as lists of ids
+
+fn List::holds(self ids: List<Nat>, id: Nat) → Bool { !absent(id, ids) }
+
+// The ids of `a`, then those of `b` it lacks.
+fn List::union(self a: List<Nat>, b: List<Nat>) → List<Nat> { a ++ b.filter(λ (id: Nat) => absent(id, a)) }
+
+// The ids of `a` that `b` lacks.
+fn List::minus(self a: List<Nat>, b: List<Nat>) → List<Nat> { a.filter(λ (id: Nat) => absent(id, b)) }
+
+// Every id of `a` is in `b`.
+fn List::within(self a: List<Nat>, b: List<Nat>) → Bool {
+    match a { Nil => True, Cons(id, rest) => b.holds(id) && rest.within(b) }
+}
+
+// ---------------------------------------------------------------------------
+// Liveness
+
+// What a call reads, and the word it writes.
+fn CallShape::reads(self shape: CallShape) → List<Nat> {
+    match shape {
+        Reads(fd, _, len, _) => [fd, len],
+        Writes(fd, _, from, len, _) => [fd, from, len],
+        Opens(_, len, _) => [len],
+        Closes(fd, _) => [fd],
+        StatsPath(_, len, _, _) => [len],
+        StatsFd(fd, _, _) => [fd],
+    }
+}
+
+fn CallShape::result(self shape: CallShape) → Nat {
+    match shape {
+        Reads(_, _, _, result) => result,
+        Writes(_, _, _, _, result) => result,
+        Opens(_, _, result) => result,
+        Closes(_, result) => result,
+        StatsPath(_, _, _, result) => result,
+        StatsFd(_, _, result) => result,
+    }
+}
+
+// Live before a step that reads `reads` and writes `written`, given what is
+// live after it.
+fn live_before(reads: List<Nat>, written: Nat, out: List<Nat>) → List<Nat> { reads.union(out.minus([written])) }
+
+// Live before each node of a leaf, given what is live after the leaf: a
+// leaf compiled a node at a time keeps a node's result only while a later
+// node or statement reads it.
+fn nodes_live_in(nodes: List<Node>, out: List<Nat>) → List<Nat> {
+    match nodes {
+        Nil => out,
+        Cons(node, rest) => live_before(function_ir_eval::Node::reads(node), node_output(node).id, nodes_live_in(rest, out)),
+    }
+}
+
+// What is live after a loop's body: the bit it tests, the loop's set, and
+// what is live after the loop.
+fn loop_after(again: Nat, set, out: List<Nat>) → List<Nat> { Cons(again, set.union(out)) }
+
+// Live before the statement, given what is live after it; a loop's, its
+// set.
+fn Stmt::live_in(self s: Stmt, homes: Homes, out: List<Nat>) → List<Nat> {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => nodes_live_in(body.nodes, out),
+            // Refused by the compiler; anything is sound here.
+            Sequence(_, _) => out,
+            Compose(_, _) => out,
+            Conditional(_, _, _, _, _, _) => out,
+            Call(_, _, _) => out,
+            Loop(_, _, _, _, _, _, _, _, _) => out,
+        },
+        Invoke(shape) => live_before(shape.reads(), shape.result(), out),
+        Then(first, rest) => first.live_in(homes, rest.live_in(homes, out)),
+        Branch(condition, yes, no) => Cons(condition, yes.live_in(homes, out).union(no.live_in(homes, out))),
+        Repeat(_, again) => homes.loop_set(again),
+        Exit(status) => [status],
+        Arg(index, _, len) => live_before([index], len, out),
+    }
+}
+
+// What is live after a `Repeat`'s body, given what is live after the loop.
+fn Stmt::loop_out(self s: Stmt, homes: Homes, out: List<Nat>) → List<Nat> {
+    match s {
+        Repeat(_, again) => loop_after(again, homes.loop_set(again), out),
+        Compute(_) => out,
+        Invoke(_) => out,
+        Then(_, _) => out,
+        Branch(_, _, _) => out,
+        Exit(_) => out,
+        Arg(_, _, _) => out,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The checks
+
+// A word written where `out` is live after the write misses every other live
+// word's register.
+fn Homes::misses(self homes: Homes, id, k: Nat, out: List<Nat>) → Bool {
+    match out {
+        Nil => True,
+        Cons(other, rest) => (other.same(id) || !homes.home(other).is_register(k)) && homes.misses(id, k, rest),
+    }
+}
+
+fn Homes::apart(self homes: Homes, id: Nat, out: List<Nat>) → Bool {
+    match homes.home(id) {
+        InSlot => True,
+        InReg(k) => homes.misses(id, k, out),
+    }
+}
+
+// Each of `ids` written with `out` live after.
+fn Homes::all_apart(self homes: Homes, ids: List<Nat>, out: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(id, rest) => homes.apart(id, out) && homes.all_apart(rest, out) }
+}
+
+// Each node's result written with what is live after the node.
+fn Homes::nodes_apart(self homes: Homes, nodes: List<Node>, out: List<Nat>) → Bool {
+    match nodes {
+        Nil => True,
+        Cons(node, rest) => homes.apart(node_output(node).id, nodes_live_in(rest, out)) && homes.nodes_apart(rest, out),
+    }
+}
+
+// Every live word of `ids` in its slot.
+fn Homes::slotted(self homes: Homes, ids: List<Nat>) → Bool {
+    match ids {
+        Nil => True,
+        Cons(id, rest) => match homes.home(id) { InSlot => homes.slotted(rest), InReg(_) => False },
+    }
+}
+
+// Every write in the statement apart from what is live after it, and every
+// loop's set closed. A leaf is checked for both ways the compiler may take
+// it: whole (its results written last) and a node at a time.
+fn Stmt::checks(self s: Stmt, homes: Homes, out: List<Nat>) → Bool {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => homes.nodes_apart(body.nodes, out) && homes.all_apart(nodes_writes(body.nodes), out),
+            Sequence(_, _) => True,
+            Compose(_, _) => True,
+            Conditional(_, _, _, _, _, _) => True,
+            Call(_, _, _) => True,
+            Loop(_, _, _, _, _, _, _, _, _) => True,
+        },
+        Invoke(shape) => homes.apart(shape.result(), out),
+        Then(first, rest) => first.checks(homes, rest.live_in(homes, out)) && rest.checks(homes, out),
+        Branch(_, yes, no) => yes.checks(homes, out) && no.checks(homes, out),
+        Repeat(body, again) => {
+            let after = loop_after(again, homes.loop_set(again), out);
+            body.live_in(homes, after).within(homes.loop_set(again)) && body.checks(homes, after)
+        },
+        Exit(_) => True,
+        Arg(_, _, len) => homes.apart(len, out),
+    }
+}
+
+// The same checks with each set computed once (`Stmt::checks` asks a
+// `Then`'s rest for its set at every level): the set live before the
+// statement, where every check passes.
+// `Stmt::checked_sound` (native_compile_homes) proves it is `live_in` and
+// the checks hold; it is what the compile evaluates.
+fn Homes::nodes_checked(self homes: Homes, nodes: List<Node>, out: List<Nat>) → Option<List<Nat>> {
+    match nodes {
+        Nil => Some(out),
+        Cons(node, rest) => match homes.nodes_checked(rest, out) {
+            None => None,
+            Some(after) => match homes.apart(node_output(node).id, after) {
+                False => None,
+                True => Some(live_before(function_ir_eval::Node::reads(node), node_output(node).id, after)),
+            },
+        },
+    }
+}
+
+fn Stmt::checked(self s: Stmt, homes: Homes, out: List<Nat>) → Option<List<Nat>> {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => match homes.nodes_checked(body.nodes, out) {
+                None => None,
+                Some(live) => match homes.all_apart(nodes_writes(body.nodes), out) { False => None, True => Some(live) },
+            },
+            Sequence(_, _) => Some(out),
+            Compose(_, _) => Some(out),
+            Conditional(_, _, _, _, _, _) => Some(out),
+            Call(_, _, _) => Some(out),
+            Loop(_, _, _, _, _, _, _, _, _) => Some(out),
+        },
+        Invoke(shape) => match homes.apart(shape.result(), out) { False => None, True => Some(live_before(shape.reads(), shape.result(), out)) },
+        Then(first, rest) => match rest.checked(homes, out) { None => None, Some(mid) => first.checked(homes, mid) },
+        Branch(condition, yes, no) => match yes.checked(homes, out) {
+            None => None,
+            Some(y) => match no.checked(homes, out) { None => None, Some(n) => Some(Cons(condition, y.union(n))) },
+        },
+        Repeat(body, again) => match body.checked(homes, loop_after(again, homes.loop_set(again), out)) {
+            None => None,
+            Some(b) => match b.within(homes.loop_set(again)) { False => None, True => Some(homes.loop_set(again)) },
+        },
+        Exit(status) => Some([status]),
+        Arg(index, _, len) => match homes.apart(len, out) { False => None, True => Some(live_before([index], len, out)) },
+    }
+}
+
+// What `Source::compile` asks of the homes it is given.
+fn Source::allocation_ok(self src: Source, homes: Homes) → Bool {
+    homes.fits() && match src.main.checked(homes, []) { None => False, Some(live) => homes.slotted(live) }
+}
+
+// ---------------------------------------------------------------------------
+// Allocators. Nothing above depends on what one proposes.
+
+record Allocator { assign: Source → Homes }
+
+// One pass over the statement: the set live before it, under `homes`'s
+// loop sets, and `sets` with each loop's entry joined with what its body
+// needs at its head. A `Then`'s rest is walked once, so a pass is linear.
+record Needs { live: List<Nat>, sets: List<List<Nat>> }
+
+fn Stmt::needs(self s: Stmt, homes: Homes, out: List<Nat>, sets: List<List<Nat>>) → Needs {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => Needs(nodes_live_in(body.nodes, out), sets),
+            Sequence(_, _) => Needs(out, sets),
+            Compose(_, _) => Needs(out, sets),
+            Conditional(_, _, _, _, _, _) => Needs(out, sets),
+            Call(_, _, _) => Needs(out, sets),
+            Loop(_, _, _, _, _, _, _, _, _) => Needs(out, sets),
+        },
+        Invoke(shape) => Needs(live_before(shape.reads(), shape.result(), out), sets),
+        Then(first, rest) => {
+            let after = rest.needs(homes, out, sets);
+            first.needs(homes, after.live, after.sets)
+        },
+        Branch(condition, yes, no) => {
+            let n = no.needs(homes, out, sets);
+            let y = yes.needs(homes, out, n.sets);
+            Needs(Cons(condition, y.live.union(n.live)), y.sets)
+        },
+        Repeat(body, again) => {
+            let b = body.needs(homes, loop_after(again, homes.loop_set(again), out), sets);
+            let had = match b.sets.nth(again) { None => homes.loop_set(again), Some(set) => set };
+            Needs(homes.loop_set(again), b.sets.put(again, had.union(b.live), []))
+        },
+        Exit(status) => Needs([status], sets),
+        Arg(index, _, len) => Needs(live_before([index], len, out), sets),
+    }
+}
+
+// Each set of `a` within the one at its index in `b`.
+fn List::sets_within(self a: List<List<Nat>>, b: List<List<Nat>>) → Bool {
+    match a {
+        Nil => True,
+        Cons(set, rest) => match b {
+            Nil => set.within([]) && rest.sets_within([]),
+            Cons(other, more) => set.within(other) && rest.sets_within(more),
+        },
+    }
+}
+
+// The homes with their loop sets grown until a pass adds nothing: then
+// every loop's set is closed, and the check finds it so. Liveness grows
+// with the sets, so a pass that does not close adds a word to some set,
+// and there are at most the slots' number of words in each of the slots'
+// number of sets. Two loops that test one word share a set, closed for
+// both.
+fn Homes::closed(self homes: Homes, src: Source, fuel: Nat) → Homes {
+    match fuel {
+        Zero => homes,
+        Succ(more) => {
+            let sets = src.main.needs(homes, [], homes.loops).sets;
+            match sets.sets_within(homes.loops) { True => homes, False => Homes(homes.of, sets).closed(src, more) }
+        },
+    }
+}
+
+// More passes than the sets can grow by: 64 words (`word_slots`) in as
+// many sets.
+fn closure_fuel() → Nat { 4096 }
+
+// Every word in its slot (the memory-resident compiler), and the least
+// closed loop sets.
+fn Homes::slots(src: Source) → Homes { Homes([], []).closed(src, closure_fuel()) }
+
+fn Allocator::spill_all() → Allocator { Allocator(λ src => Homes::slots(src)) }
+
+// Two words interfere when one is written while the other is live after
+// the write: then they may not share a register (`Homes::apart`). The
+// graph is a row of flags per word, by id: row `a` flags every word live
+// after some write of `a`, so `a` and `b` interfere when either flags the
+// other. A write puts one row, and nothing searches a list of ids.
+fn List::row(self of: List<List<Bool>>, id: Nat) → List<Bool> { match of.nth(id) { None => [], Some(row) => row } }
+
+fn List::flag(self row: List<Bool>, k: Nat) → Bool { match row.nth(k) { None => False, Some(b) => b } }
+
+// The tables below are built lazily, a `put` at a time, so one read after
+// thousands of writes would force thousands of pending `put`s nested inside
+// each other, past the evaluator's depth. Each `put` is settled as it is
+// made: its spine and the entry it changed.
+fn List::spine_settled<A>(self xs: List<A>) → Bool { match xs { Nil => True, Cons(_, rest) => rest.spine_settled() } }
+
+fn List::flags_settled(self row: List<Bool>) → Bool {
+    match row { Nil => True, Cons(b, rest) => match b { True => rest.flags_settled(), False => rest.flags_settled() } }
+}
+
+fn Nat::settled(self n: Nat) → Bool { match n { Zero => True, Succ(m) => m.settled() } }
+
+fn List::flagged(self row: List<Bool>, ids: List<Nat>) → List<Bool> {
+    match ids { Nil => row, Cons(id, rest) => row.put(id, True, False).flagged(rest) }
+}
+
+// `id` written with `out` live after.
+fn List::written(self of: List<List<Bool>>, id: Nat, out: List<Nat>) → List<List<Bool>> {
+    let row = of.row(id).flagged(out);
+    let put = of.put(id, row, []);
+    match put.spine_settled() && row.flags_settled() { True => put, False => put }
+}
+
+fn List::all_written(self of: List<List<Bool>>, ids: List<Nat>, out: List<Nat>) → List<List<Bool>> {
+    match ids { Nil => of, Cons(id, rest) => of.written(id, out).all_written(rest, out) }
+}
+
+// A leaf's writes both ways the check takes it: a node at a time, and its
+// results last. The set live before the leaf with the graph.
+record Graph { live: List<Nat>, of: List<List<Bool>> }
+
+fn nodes_graph(nodes: List<Node>, out: List<Nat>, of: List<List<Bool>>) → Graph {
+    match nodes {
+        Nil => Graph(out, of),
+        Cons(node, rest) => {
+            let after = nodes_graph(rest, out, of);
+            Graph(live_before(function_ir_eval::Node::reads(node), node_output(node).id, after.live), after.of.written(node_output(node).id, after.live))
+        },
+    }
+}
+
+fn Stmt::graph(self s: Stmt, homes: Homes, out: List<Nat>, of: List<List<Bool>>) → Graph {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => nodes_graph(body.nodes, out, of.all_written(nodes_writes(body.nodes), out)),
+            Sequence(_, _) => Graph(out, of),
+            Compose(_, _) => Graph(out, of),
+            Conditional(_, _, _, _, _, _) => Graph(out, of),
+            Call(_, _, _) => Graph(out, of),
+            Loop(_, _, _, _, _, _, _, _, _) => Graph(out, of),
+        },
+        Invoke(shape) => Graph(live_before(shape.reads(), shape.result(), out), of.written(shape.result(), out)),
+        Then(first, rest) => {
+            let after = rest.graph(homes, out, of);
+            first.graph(homes, after.live, after.of)
+        },
+        Branch(condition, yes, no) => {
+            let n = no.graph(homes, out, of);
+            let y = yes.graph(homes, out, n.of);
+            Graph(Cons(condition, y.live.union(n.live)), y.of)
+        },
+        Repeat(body, again) => Graph(homes.loop_set(again), body.graph(homes, loop_after(again, homes.loop_set(again), out), of).of),
+        Exit(status) => Graph([status], of),
+        Arg(index, _, len) => Graph(live_before([index], len, out), of.written(len, out)),
+    }
+}
+
+// How often each word is read or written, a loop's body counting seven
+// more than what holds it: the greedy allocator's priority. Indexed by id.
+fn List::weight(self weights: List<Nat>, id: Nat) → Nat { match weights.nth(id) { None => 0, Some(w) => w } }
+
+fn List::bump(self weights: List<Nat>, id, by: Nat) → List<Nat> {
+    let bumped = weights.put(id, weights.weight(id) + by, 0);
+    match bumped.spine_settled() && bumped.weight(id).settled() { True => bumped, False => bumped }
+}
+
+fn List::bump_all(self weights: List<Nat>, ids: List<Nat>, by: Nat) → List<Nat> {
+    match ids { Nil => weights, Cons(id, rest) => weights.bump(id, by).bump_all(rest, by) }
+}
+
+fn nodes_weights(nodes: List<Node>, scale: Nat, weights: List<Nat>) → List<Nat> {
+    match nodes {
+        Nil => weights,
+        Cons(node, rest) => nodes_weights(rest, scale,
+            weights.bump_all(Cons(node_output(node).id, function_ir_eval::Node::reads(node)), scale)),
+    }
+}
+
+fn Stmt::weights(self s: Stmt, scale: Nat, weights: List<Nat>) → List<Nat> {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => nodes_weights(body.nodes, scale, weights),
+            Sequence(_, _) => weights,
+            Compose(_, _) => weights,
+            Conditional(_, _, _, _, _, _) => weights,
+            Call(_, _, _) => weights,
+            Loop(_, _, _, _, _, _, _, _, _) => weights,
+        },
+        Invoke(shape) => weights.bump_all(Cons(shape.result(), shape.reads()), scale),
+        Then(first, rest) => rest.weights(scale, first.weights(scale, weights)),
+        Branch(condition, yes, no) => no.weights(scale, yes.weights(scale, weights.bump(condition, scale))),
+        Repeat(body, again) => body.weights(scale + 7, weights.bump(again, scale + 7)),
+        Exit(status) => weights.bump(status, scale),
+        Arg(index, _, len) => weights.bump_all([index, len], scale),
+    }
+}
+
+// The ids with a weight, heaviest first (an insertion sort: there are at
+// most the slots' number).
+
+fn List::insert_by(self ids: List<Nat>, id: Nat, weights: List<Nat>) → List<Nat> {
+    match ids {
+        Nil => [id],
+        Cons(other, rest) => match weights.weight(other).leb(weights.weight(id)) {
+            True => Cons(id, Cons(other, rest)),
+            False => Cons(other, rest.insert_by(id, weights)),
+        },
+    }
+}
+
+// `rest` is `weights` from id `id` on.
+fn List::ranked(self rest: List<Nat>, weights: List<Nat>, id: Nat, sorted: List<Nat>) → List<Nat> {
+    match rest {
+        Nil => sorted,
+        Cons(w, more) => more.ranked(weights, Succ(id), match w { Zero => sorted, Succ(_) => sorted.insert_by(id, weights) }),
+    }
+}
+
+fn List::heaviest(self weights: List<Nat>) → List<Nat> { weights.ranked(weights, 0, []) }
+
+// The registers of the words that interfere with `id`: those its row
+// flags, and those whose row flags it. `rows` is the graph from word `at`
+// on.
+fn Homes::registers_of(self homes: Homes, row: List<Bool>, rows: List<List<Bool>>, id, at: Nat) → List<Nat> {
+    match rows {
+        Nil => [],
+        Cons(other, rest) => match row.flag(at) || other.flag(id) {
+            False => homes.registers_of(row, rest, id, Succ(at)),
+            True => match homes.home(at) {
+                InSlot => homes.registers_of(row, rest, id, Succ(at)),
+                InReg(k) => Cons(k, homes.registers_of(row, rest, id, Succ(at))),
+            },
+        },
+    }
+}
+
+// The first register from `k` not in `used`, or the slot.
+fn List::first_free(self used: List<Nat>, k, left: Nat) → Home {
+    match left {
+        Zero => InSlot,
+        Succ(more) => match used.holds(k) { False => InReg(k), True => used.first_free(Succ(k), more) },
+    }
+}
+
+fn Homes::set(self homes: Homes, id: Nat, home: Home) → Homes { Homes(homes.of.put(id, home, InSlot), homes.loops) }
+
+// Each word in turn, heaviest first, given the first register none of its
+// neighbours has, or its slot; a word live at the start keeps its slot.
+fn List::colour(self order: List<Nat>, entry: List<Nat>, graph: List<List<Bool>>, homes: Homes) → Homes {
+    match order {
+        Nil => homes,
+        Cons(id, rest) => match entry.holds(id) {
+            True => rest.colour(entry, graph, homes),
+            False => rest.colour(entry, graph, homes.set(id, homes.registers_of(graph.row(id), graph, id, 0).first_free(0, home_pool().len()))),
+        },
+    }
+}
+
+fn Allocator::greedy() → Allocator {
+    Allocator(λ src => {
+        let slots = Homes::slots(src);
+        let graph = src.main.graph(slots, [], []);
+        // A row for every word a slot can hold, so `registers_of` meets
+        // each word a row may flag.
+        let rows = graph.of.put(63, graph.of.row(63), []);
+        src.main.weights(1, []).heaviest().colour(graph.live, rows, slots)
+    })
+}
+
+// The homes `write-elf` compiles a source with.
+fn Source::homes(self src: Source) → Homes { Allocator::greedy().assign(src) }
+
+// Homes as numbers, for `write-elf` to read and spell (untrusted, like
+// every read): how many words have a home, each home (0 the slot, `k + 1`
+// register `k`), then each loop's set, its length first.
+fn List::homes_spelled(self of: List<Home>) → List<Nat> {
+    match of { Nil => [], Cons(home, rest) => Cons(match home { InSlot => 0, InReg(k) => Succ(k) }, rest.homes_spelled()) }
+}
+
+fn List::sets_spelled(self sets: List<List<Nat>>) → List<Nat> {
+    match sets { Nil => [], Cons(set, rest) => Cons(set.len(), set ++ rest.sets_spelled()) }
+}
+
+fn Homes::spelled(self homes: Homes) → List<Nat> { Cons(homes.of.len(), homes.of.homes_spelled() ++ homes.loops.sets_spelled()) }

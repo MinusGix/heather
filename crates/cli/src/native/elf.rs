@@ -65,7 +65,7 @@ const REGION: std::ops::Range<u64> = 0x410000..0x412000;
 /// The modules the probes and the certificate import besides the source's
 /// own; `write-elf` loads them itself, so a program file imports only what
 /// it uses.
-const IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_compile", "native_compile_correct", "native_compile_elf",
+const IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_alloc", "native_compile", "native_compile_correct", "native_compile_elf",
     "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_io", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
     "x86_64_asm_table",
     "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
@@ -184,12 +184,13 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         None => (symbol.to_string(), String::new()),
     };
     let finish = "then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)";
-    let layout = format!("{src}().layout({LOW})");
-    let entry = format!("{src}().entry({LOW})");
+    let homes = format!("{p}_homes()");
+    let layout = format!("{src}().layout({LOW}, {homes})");
+    let entry = format!("{src}().entry({LOW}, {homes})");
     let probes = format!("import {root};\n{imports}{lowered}
-fn {p}_room() → List<Nat> {{ [Layout({LOW}, {src}().capacities()).size(), DataRegion::io_page().size] }}
-fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}) }}
+fn {p}_room() → List<Nat> {{ [Layout({LOW}, {src}().capacities(), Homes([], [])).size(), DataRegion::io_page().size] }}
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
+fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -207,14 +208,26 @@ fn {p}_shape() → List<Nat> {{ {src}().shape() }}
         return Err(format!("`{symbol}` does not fit the I/O page: its words, buffers, scratch range and saved RSP take {size} bytes \
             and the page holds {page}, so `Source::elf_file_simulates` would not cover it"));
     }
+    // The words' homes, from the greedy allocator (`Source::homes`,
+    // native_alloc), spelled: the compile checks them, so the allocator is
+    // evaluated once, here, and never by the kernel.
+    let homes_def = format!("fn {homes} → Homes {{ {} }}\n",
+        homes_literal(&numbers(&fork, &probe, &format!("{p}_homes_spelled"))?).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?);
     // The program a part at a time, each read on its own, so a read holds
     // one part's values and not the program's.
     let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?)?;
     let parts = format!("{p}_parts");
-    // The refusal again here: once this module is elaborated, the fork reads
-    // only its names.
-    let text = format!("import {root};\n{imports}{lowered}\n{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}) }}\n", plan.text);
+    // The refusal here: once this module is elaborated, the fork reads only
+    // its names.
+    let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}) }}\n\
+        fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n", plan.text);
     fork.elab_module_source(&parts, &text).map_err(|e| e.render(&text))?;
+    // Homes the check refuses are refused here, by reason, and not by the
+    // kernel at the certificate: the parts emit whatever the homes say.
+    let allocation = numbers(&fork, &parts, &format!("{p}_allocation"))?;
+    if !allocation.is_empty() {
+        return Err(refused(symbol, &allocation));
+    }
     let mut readings = Vec::with_capacity(plan.reads.len());
     for (name, &whole) in plan.reads.iter().zip(&plan.whole) {
         match emission::Reading::of(&numbers(&fork, &parts, name)?, whole, &address)? {
@@ -267,7 +280,7 @@ fn {p}_shape() → List<Nat> {{ {src}().shape() }}
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_code(), {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
+    let simulated = format!("{src}().elf_file_simulates({p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
         j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom(f), loaded), args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
@@ -279,12 +292,19 @@ fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 import {root};
 {imports}
 {lowered_is}
+// The words' homes and the loops' sets, as the greedy allocator gave them,
+// and the compile's check of them, by `refl` on the check's value: `trivial`
+// against `IsTrue` of it runs out of memory on a tool of cat FILE's size.
+{homes_def}
+theorem {p}_allocation_is(): {src}().allocation_ok({homes}) = True {{ refl }}
+theorem {p}_allocated(): {src}().allocation_ok({homes}).IsTrue() {{ j(sym({p}_allocation_is()), λ b _ => b.IsTrue(), trivial) }}
+
 // The program: what `{src}().compile` computes.
 {code}
 // Its emission, a part of the statement tree at a time.
 {statements}
-theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}), 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
-    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}), 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
+theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
+    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
         cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
 }}
 
@@ -296,13 +316,13 @@ theorem {p}_laid(): {p}_code().laid_out().IsTrue() {{
     {p}_table().laid_out_of({p}_code(), {length}, {p}_checked_{count}(), {p}_holes())
 }}
 
-theorem {p}_compiles(): {src}().compile({LOW}) = Some({p}_code()) {{
-    {src}().compile_of({LOW}, {p}_code(), {p}_emitted(), {p}_laid())
+theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{
+    {src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), {p}_emitted(), {p}_laid())
 }}
 
 // Its words, buffers and scratch range fit the page.
-theorem {p}_fits(): Layout({LOW}, {src}().capacities()).size() <= DataRegion::io_page().size {{
-    Nat::leb_sound(Layout({LOW}, {src}().capacities()).size(), DataRegion::io_page().size, trivial)
+theorem {p}_fits(): Layout({LOW}, {src}().capacities(), {homes}).size() <= DataRegion::io_page().size {{
+    Nat::leb_sound(Layout({LOW}, {src}().capacities(), {homes}).size(), DataRegion::io_page().size, trivial)
 }}
 
 // The bytes, a piece at a time from the last item.
@@ -322,7 +342,7 @@ theorem {p}_file_is(): io_elf_file({p}_upto_0()) = {p}_file() {{
 }}
 
 // Whatever names the compile's program, its file is the one written.
-theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}) = Some(program)):
+theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}) = Some(program)):
     io_elf_file(assemble(no_fills(), program, [])) = {p}_file() {{
     let same: ({p}_code() = program) = Option::some_inj({p}_code(), program, trans(sym({p}_compiles()), compiled));
     j(same, λ q _ => io_elf_file(assemble(no_fills(), q, [])) = {p}_file(),
@@ -404,10 +424,28 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         9 => "the program's labels did not lay out".into(),
         10 => format!("node {first} of the leaf is not at width 64, and a leaf S4 does not take whole compiles a node at a time only when every node is"),
         11 => format!("S4's lowering refused node {first} of the leaf alone"),
+        12 => "the words' homes fail the allocation's check (`Source::allocation_ok`): the allocator's proposal is wrong, a bug in it".into(),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }
     else { format!("`{symbol}` is refused at statement {at}, {kind}: {reason}") }
+}
+
+/// The homes `Homes::spelled` (native_alloc) reads back as, spelled: how
+/// many words have one, each (0 the slot, `k + 1` register `k`), then each
+/// loop's set, its length first.
+fn homes_literal(numbers: &[u64]) -> Option<String> {
+    let (&count, rest) = numbers.split_first()?;
+    let count = usize::try_from(count).ok().filter(|&c| c <= rest.len())?;
+    let of: Vec<String> = rest[..count].iter().map(|&h| if h == 0 { "InSlot".into() } else { format!("InReg({})", h - 1) }).collect();
+    let mut sets = Vec::new();
+    let mut at = &rest[count..];
+    while let Some((&len, more)) = at.split_first() {
+        let len = usize::try_from(len).ok().filter(|&l| l <= more.len())?;
+        sets.push(format!("[{}]", more[..len].iter().map(u64::to_string).collect::<Vec<_>>().join(", ")));
+        at = &more[len..];
+    }
+    Some(format!("Homes([{}], [{}])", of.join(", "), sets.join(", ")))
 }
 
 /// `{p}_upto_c()`'s length for each piece `c`, from the program's start:

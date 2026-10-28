@@ -12,9 +12,11 @@
 //! part is one `refl`, and every larger one is joined from its parts'
 //! statements by `Stmt::emit_then_of`, `emit_repeat_of` or `emit_branch_of`
 //! (native_compile_correct). A part is named by its parent's (`Stmt::left`,
-//! `right`), so no statement spells a part of the tree it does not
-//! evaluate, and the program's literal is cut wherever a part starts or
-//! ends, so each statement's programs are definitions.
+//! `right`), and so is what is live after it (`{p}_o_`: the parent's, but
+//! `right().live_in` for a `Then`'s first part and `loop_out` for a loop's
+//! body, as `Stmt::emit` passes them), so no statement spells a part of the
+//! tree it does not evaluate, and the program's literal is cut wherever a
+//! part starts or ends, so each statement's programs are definitions.
 //!
 //! The reads are untrusted, like everything a fork reads: a misreading makes
 //! a statement the kernel refuses, never a wrong one it accepts. The items
@@ -88,7 +90,8 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
     let mut at = records.iter();
     let tree = Shape::read(&mut at)?;
     if at.next().is_some() || tree.names != 0 { return Err(malformed()); }
-    let mut planner = Planner { p, layout, text: format!("fn {p}_s_0() → Stmt {{ {source} }}\n"), reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1 };
+    let text = format!("fn {p}_s_0() → Stmt {{ {source} }}\nfn {p}_o_0() → List<Nat> {{ [] }}\n");
+    let mut planner = Planner { p, layout, text, reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1 };
     planner.read("entry", entry.to_string());
     let root = planner.part(&tree, 0)?;
     planner.read("exit", "then(then(Start, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)".into());
@@ -112,36 +115,39 @@ impl Planner<'_> {
         self.reads.len() - 1
     }
 
-    fn child(&mut self, id: usize, side: &str) -> usize {
+    /// A part of part `id`, and what is live after it (`out`, spelled from
+    /// its parent's).
+    fn child(&mut self, id: usize, side: &str, out: String) -> usize {
         let child = self.parts;
         self.parts += 1;
-        self.text.push_str(&format!("fn {p}_s_{child}() → Stmt {{ {p}_s_{id}().{side}() }}\n", p = self.p));
+        self.text.push_str(&format!("fn {p}_s_{child}() → Stmt {{ {p}_s_{id}().{side}() }}\nfn {p}_o_{child}() → List<Nat> {{ {out} }}\n", p = self.p));
         child
     }
 
     fn part(&mut self, shape: &Shape, id: usize) -> Result<Part, String> {
         let (p, layout, names) = (self.p, self.layout, shape.names);
         if shape.leaves <= LEAVES {
-            let read = self.push("part", true, format!("{p}_s_{id}().emission_reading({layout}, {names})"),
-                format!("{p}_s_{id}().emit(Start, {layout}, {names}).map(λ (c: Compiled) => c.prog).unwrap_or(Start)"));
+            let read = self.push("part", true, format!("{p}_s_{id}().emission_reading({layout}, {p}_o_{id}(), {names})"),
+                format!("{p}_s_{id}().emit(Start, {layout}, {p}_o_{id}(), {names}).map(λ (c: Compiled) => c.prog).unwrap_or(Start)"));
             return Ok(Part::Whole { id, names, read });
         }
         let (s, ss) = (names + 1, names + 2);
         let word = format!("{p}_s_{id}().word()");
         Ok(match (shape.kind, &shape.children[..]) {
             (1, [first, rest]) if shape.then == names => {
-                let (f, r) = (self.child(id, "left"), self.child(id, "right"));
+                let f = self.child(id, "left", format!("{p}_s_{id}().right().live_in({layout}.homes, {p}_o_{id}())"));
+                let r = self.child(id, "right", format!("{p}_o_{id}()"));
                 Part::Then { id, names, first: Box::new(self.part(first, f)?), rest: Box::new(self.part(rest, r)?) }
             }
             (2, [body]) if shape.then == ss => {
-                let b = self.child(id, "left");
+                let b = self.child(id, "left", format!("{p}_s_{id}().loop_out({layout}.homes, {p}_o_{id}())"));
                 let open = self.read("open", format!("Start.label({s})"));
                 let body = Box::new(self.part(body, b)?);
                 let close = self.read("close", format!("then(Start.tests({layout}, {word}, {ss}), Jmp({s})).label({ss})"));
                 Part::Repeat { id, names, open, body, close }
             }
             (3, [yes, no]) if shape.then == ss => {
-                let (y, n) = (self.child(id, "left"), self.child(id, "right"));
+                let (y, n) = (self.child(id, "left", format!("{p}_o_{id}()")), self.child(id, "right", format!("{p}_o_{id}()")));
                 let open = self.read("open", format!("Start.tests({layout}, {word}, {s})"));
                 let yes = Box::new(self.part(yes, y)?);
                 let middle = self.read("middle", format!("Start.else_label({s}, {ss})"));
@@ -198,7 +204,8 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
         lens.extend(reading.lens.iter().copied());
     }
     let (entered, main) = (starts[1], *starts.last().unwrap());
-    let parts: String = plan.text.lines().filter(|line| line.starts_with(&format!("fn {p}_s_"))).map(|line| format!("{line}\n")).collect();
+    let parts: String = plan.text.lines().filter(|line| line.starts_with(&format!("fn {p}_s_")) || line.starts_with(&format!("fn {p}_o_")))
+        .map(|line| format!("{line}\n")).collect();
     let mut writer = Writer { p, layout, readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts };
     writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{ refl }}\n", writer.program(entered)));
     let (start, end, _) = writer.part(&plan.root)?;
@@ -281,7 +288,7 @@ impl Writer<'_> {
                 let (rest_start, end, after) = self.part(rest)?;
                 if rest_start != middle { return Err(out_of_order()); }
                 if rest.names() != between { return Err(miscounted()); }
-                let proof = format!("trans(Stmt::emit_then_of({p}_s_{id}(), trivial, {}, {layout}, {names}, Compiled({}, {between}), {p}_e_{}()), {p}_e_{}())",
+                let proof = format!("trans(Stmt::emit_then_of({p}_s_{id}(), trivial, {}, {layout}, {p}_o_{id}(), {names}, Compiled({}, {between}), {p}_e_{}()), {p}_e_{}())",
                     self.program(start), self.program(middle), first.id(), rest.id());
                 (*id, *names, start, end, after, proof)
             }
@@ -289,7 +296,7 @@ impl Writer<'_> {
                 let (body_start, body_end, after) = self.part(body)?;
                 if self.end(*open) != body_start || self.starts[*close] != body_end { return Err(out_of_order()); }
                 let start = self.starts[*open];
-                let proof = format!("Stmt::emit_repeat_of({p}_s_{id}(), trivial, trivial, {}, {layout}, {names}, Compiled({}, {after}), {p}_e_{}())",
+                let proof = format!("Stmt::emit_repeat_of({p}_s_{id}(), trivial, trivial, {}, {layout}, {p}_o_{id}(), {names}, Compiled({}, {after}), {p}_e_{}())",
                     self.program(start), self.program(body_end), body.id());
                 (*id, *names, start, self.end(*close), after, proof)
             }
@@ -301,7 +308,7 @@ impl Writer<'_> {
                     return Err(out_of_order());
                 }
                 let start = self.starts[*open];
-                let proof = format!("Stmt::emit_branch_of({p}_s_{id}(), trivial, trivial, {}, {layout}, {names}, Compiled({}, {between}), Compiled({}, {after}), {p}_e_{}(), {p}_e_{}())",
+                let proof = format!("Stmt::emit_branch_of({p}_s_{id}(), trivial, trivial, {}, {layout}, {p}_o_{id}(), {names}, Compiled({}, {between}), Compiled({}, {after}), {p}_e_{}(), {p}_e_{}())",
                     self.program(start), self.program(yes_end), self.program(no_end), yes.id(), no.id());
                 (*id, *names, start, self.end(*close), after, proof)
             }
@@ -309,7 +316,7 @@ impl Writer<'_> {
         self.cuts.insert(start);
         self.cuts.insert(end);
         let (from, to) = (self.program(start), self.program(end));
-        self.theorems.push_str(&format!("theorem {p}_e_{id}(): {p}_s_{id}().emit({from}, {layout}, {names}) = Some(Compiled({to}, {after})) {{ {proof} }}\n"));
+        self.theorems.push_str(&format!("theorem {p}_e_{id}(): {p}_s_{id}().emit({from}, {layout}, {p}_o_{id}(), {names}) = Some(Compiled({to}, {after})) {{ {proof} }}\n"));
         Ok((start, end, after))
     }
 }
