@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,inductives,design,mathematics]
 area: mathematics
 created: 2026-08-09
-updated: 2026-08-18
+updated: 2026-10-28
 ---
 
 Long-range mathematical-library direction, not scheduled. Heather's finitary
@@ -281,3 +281,4 @@ surface.
   is refused. [[ir-pass-dependent-fold-fuel]] is closed. The remaining rung-4
   work is semantic—a non-equality execution refinement—not mechanical scale.
   Full `scripts/test`: suite 1925 -> 1926, 0 failed; kernel bench 106/106.
+- 2026-10-28: **Proof repair survey (2026-10-28, `docs/proof-repair-algebra-survey.md`).** Plante et al., *Proof Repair and (Co)algebra Equivalences* (arXiv:2610.36669), is the theory of this issue's design question 2 (law boundary). Pointwise fold uniqueness and fusion need no funext at `Wf`, because each child's hypothesis is an ordinary equation. At `W` the fold of the identity algebra is not provably the identity, so the paper's isomorphism theorem stops at tier 2 (survey §4). Its Lemma 3.10 (a signature as one polynomial: label × non-recursive args, recursive positions) is the public presentation question 1 asks about, and the lowering already builds it. The coinductive dual of `list_fold_unique` holds only up to `Bisim`, since the kernel's `M` has no η (survey §5).
