@@ -1,0 +1,79 @@
+// Decimal output and input for native tools, written with the builder
+// (docs/native-real-programs-plan.md §3.7, round 9;
+// issues/native-decimal-io.md).
+//
+// The ISA model has no multiply, divide or shift, and none is needed. A
+// word is printed most significant digit first by subtracting the digit's
+// power of ten while it fits; the powers are made by multiplying by ten,
+// which is `8x + 2x` by doubling with `Add`, going up to the largest power
+// not past the word, and coming down again from one each time, so no
+// division is ever made. A decimal is read by the same multiplication, with
+// the overflow tested before it against the largest word divided by ten.
+//
+// The bytes a procedure here stores are meant to be `decimal`'s
+// (`lib/std/text/decimal.hthr`), padded by `pad_left` as `printf("%*lu")`
+// pads; `lib/_tests/native/native_decimal_tests.hthr` runs the sources they
+// lower to against those specs.
+import native_build;
+import list;
+import nat;
+
+// The word made ten times itself: `2v` kept, `v` doubled to `4v` and
+// `8v`, and `2v` added. Four nodes, where `10v` as one value is nine.
+fn Var::times_ten(self v: Var) → Act {
+    local(v.get() + v.get(), λ two => v.set(two.get() + two.get()) ++ v.set(v.get() + v.get()) ++ v.set(v.get() + two.get()))
+}
+
+// 10^19, the largest power of ten a word holds, and the largest word
+// divided by ten, past which a tenfold overflows.
+fn largest_power_of_ten() → Val { num(10000000000000000000) }
+fn tenth_of_largest() → Val { num(1844674407370955161) }
+
+// The word `value`, unsigned, as decimal digits into the buffer from
+// `at`, most significant first, after spaces enough to fill `width`
+// columns, and `at` moved past them: `printf("%*lu", width, value)`. A
+// byte past the buffer's end is not stored, but `at` counts it.
+//
+// `p` goes up through the powers of ten while the next (`t`, ten times
+// it) is not past the value, `k` counting the digits; each digit is then
+// how many times `p` comes off, and `p` comes down to the power below the
+// last (`q`) by going up again from one.
+fn put_decimal_padded(buf: Buf, at: Var, value, width: Val) → Act {
+    local(value, λ n => local(num(1), λ p => local(num(10), λ t => local(num(1), λ k =>
+        loop_while(p.get().below(largest_power_of_ten()).and_also(n.get().below(t.get()).not()),
+            p.set(t.get()) ++ t.times_ten() ++ k.set(k.get() + num(1)))
+        ++ loop_while(k.get().below(width), buf.put(at.get(), num(32)) ++ at.set(at.get() + num(1)) ++ k.set(k.get() + num(1)))
+        ++ local(num(0), λ d => local(num(0), λ q => do_while(
+            d.set(num(48))
+            ++ loop_while(n.get().below(p.get()).not(), n.set(n.get() - p.get()) ++ d.set(d.get() + num(1)))
+            ++ buf.put(at.get(), d.get()) ++ at.set(at.get() + num(1))
+            ++ q.set(p.get()) ++ p.set(num(1)) ++ t.set(num(10))
+            ++ loop_while(t.get().below(q.get()), p.set(t.get()) ++ t.times_ten()),
+            q.get().differs(num(1)))))))))
+}
+
+// `printf("%lu", value)`.
+fn put_decimal(buf: Buf, at: Var, value: Val) → Act { put_decimal_padded(buf, at, value, num(0)) }
+
+// `printf("%ld", value)`: the word as two's complement, a minus sign
+// before a negative one.
+fn put_signed_decimal(buf: Buf, at: Var, value: Val) → Act {
+    local(value, λ v =>
+        when(v.get().negative(), buf.put(at.get(), num(45)) ++ at.set(at.get() + num(1)) ++ v.set(num(0) - v.get()))
+        ++ put_decimal(buf, at, v.get()))
+}
+
+// The buffer's decimal digits from `from` on, before `upto`, read into
+// `value` while they last, and `end` set to where they stopped (`from` if
+// there is none). `overflow` is set to one if the digits are a number past
+// the largest word, which `value` then holds only modulo 2^64, else zero.
+fn parse_decimal(buf: Buf, from, upto: Val, value, end, overflow: Var) → Act {
+    value.set(num(0)) ++ overflow.set(num(0)) ++ end.set(from)
+    ++ local(num(0), λ d => loop_while(end.get().below(upto).and_also((buf.at(end.get()) - num(48)).below(num(10))),
+        d.set(buf.at(end.get()) - num(48))
+        ++ when(tenth_of_largest().below(value.get())
+                .or_else(value.get().equals(tenth_of_largest()).and_also(num(5).below(d.get()))),
+            overflow.set(num(1)))
+        ++ value.times_ten() ++ value.set(value.get() + d.get())
+        ++ end.set(end.get() + num(1))))
+}

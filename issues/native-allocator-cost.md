@@ -37,3 +37,15 @@ certificate states the check over the emission's parts
   on master (decimal I/O thread, which takes the interference graph's cost
   in `native_alloc.hthr` next). The fork's evaluation, not the kernel, is
   what needs the cheaper heuristic now.
+- 2026-10-28 (round 9, [[native-decimal-io]]): the fork's cost mattered.
+  `wc [-clw]` ran write-elf out of the 8 GiB rail in `{p}_homes_spelled`
+  (`head -n N`, smaller, already spent ~9M steps and ~2.9 GB there): a
+  fork read keeps every value it forces, so the allocator's memory grew
+  with its work, which is the program's writes times their live sets. The
+  heuristic now runs in Rust (`crates/cli/src/native/allocator.rs`), the
+  Heather allocator step for step over the read-back source, so it proposes
+  the same homes (head -n's bytes are identical either way);
+  `HEATHER_ELF_ALLOCATOR=both` runs both and refuses unless they agree, and
+  `native_tools.rs` builds `tr` that way. The first scope item is done, and
+  the check by parts landed with [[native-tool-certificate-budget]]; the
+  better choices are what is left.

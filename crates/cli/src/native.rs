@@ -11,6 +11,7 @@ use std::sync::Arc as Rc;
 use heather_elab::{Elaborator, LintProfile};
 use heather_cli::{loader, semantic::SemanticSession};
 
+mod allocator;
 mod elf;
 mod emission;
 mod labels;
