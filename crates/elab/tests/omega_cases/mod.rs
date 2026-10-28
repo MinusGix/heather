@@ -180,7 +180,14 @@ theorem seed_680(x, y: Int,
     assert!(
         reports
             .iter()
-            .any(|report| { report.used_lemmas.contains(&"omega::cutsat_with_le") })
+            // CutSat's tightened bounds resolve to a constant conflict here;
+            // Cooper cases are pinned by the library probes (Pugh).
+            .any(|report| {
+                report.used_lemmas.contains(&"omega::cut_resolve")
+                    && report.used_lemmas.contains(&"omega::divide_upper")
+            }),
+        "{:?}",
+        reports.iter().map(|report| &report.used_lemmas).collect::<Vec<_>>()
     );
 }
 

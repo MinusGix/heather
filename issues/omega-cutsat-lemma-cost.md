@@ -1,10 +1,10 @@
 ---
 title: omega's CutSat lemmas lead the corpus after app@: complexity or overhead?
-status: open
+status: closed
 labels: [omega,performance,kernel,elaboration]
 area: tactics
 created: 2026-09-22
-updated: 2026-09-22
+updated: 2026-10-28
 ---
 
 After the app@ round the heaviest items in the perf corpus are `lib/std/tactic/omega.hthr`'s
@@ -46,3 +46,7 @@ computing propositions).
 Priority note (user, 2026-09-22): the biggest single target, but the
 `calc_parser` item ([[measure-obligation-omega-on-a-written-proof]]) comes
 first because it is ordinary code.
+
+## Log
+
+- 2026-10-28: The lemmas this issue measured (`cutsat_*`, `cutsat_cooper_*`) are gone with the nested-continuation certificate. Their replacements (`cut_cooper_core`, `cut_cooper_{left,right}_values`, `cut_dvd_combo`) are proved once over abstract Int values; the Cooper ones are now the costliest items in `omega.hthr`, elaboration-dominated (their `omega` calls over the period arithmetic). Closing: the question is moot for the old lemmas; a cost round on the new ones would be a new issue with a fresh snapshot.
