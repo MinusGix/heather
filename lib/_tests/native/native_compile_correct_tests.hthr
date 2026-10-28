@@ -14,8 +14,8 @@ import option;
 import x86_64_asm;
 import x86_64_asm_runs;
 
-fn low() → BitVec(64) { DataRegion::io_page().low }
-fn exit_unless() → Source { Source(functions := [], buffers := [], main := Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
+fn low() → BitVec(64) { io_data_low() }
+fn exit_unless() → Source { Source::of([], Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
 fn eu_layout() → Layout { exit_unless().layout(low(), Homes::slots(exit_unless())) }
 
 // A `Repeat`'s body is a `Branch`, which no `Then` join fits.

@@ -15,8 +15,8 @@ import nat;
 // cat's write loop alone: words 1 stdout, 4 sent, 5 left, 16 zero; bit 19
 // one, and the loop goes again on bit 14.
 fn writes() → Source {
-    Source(functions := [], buffers := [Buffer(4)],
-        main := Then(ops([Const(64, 1, 1), Const(64, 4, 0), Const(64, 3, 4), Const(64, 5, 4), Const(64, 16, 0), Const(1, 19, 1)]),
+    Source::of([Buffer(4)],
+        Then(ops([Const(64, 1, 1), Const(64, 4, 0), Const(64, 3, 4), Const(64, 5, 4), Const(64, 16, 0), Const(1, 19, 1)]),
             Repeat(cat_write(), 14)))
 }
 

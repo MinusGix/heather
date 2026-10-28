@@ -519,7 +519,9 @@ fn Tool::opened(self t: Tool, buf: Nat) → Opened {
     }
 }
 
+// A tool's source declares the words its lowering names, temporaries
+// included.
 fn Tool::source(self t: Tool) → Source {
     let o = t.opened(0);
-    Source(functions := [], buffers := o.buffers, main := o.main.items(0).lowered())
+    Source::of(o.buffers, o.main.items(0).lowered())
 }

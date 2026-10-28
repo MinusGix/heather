@@ -17,7 +17,7 @@ import option;
 import x86_64_asm;
 import x86_64_asm_runs;
 
-fn low() → BitVec(64) { DataRegion::io_page().low }
+fn low() → BitVec(64) { io_data_low() }
 
 // Why a source is refused, with every word in its slot: the compile is the
 // same for any homes the check passes, and the greedy allocator is
@@ -43,21 +43,28 @@ fn head_pass() → Stmt {
 }
 
 fn head_c(n: Nat) → Source {
-    Source(functions := [], buffers := [Buffer(512)], main := Then(Then(cat_setup(512), ops([Const(64, 2, n)])), Repeat(head_pass(), 15)))
+    Source::of([Buffer(512)], Then(Then(cat_setup(512), ops([Const(64, 2, n)])), Repeat(head_pass(), 15)))
 }
 fn head10() → Source { head_c(10) }
 
-// cat whose buffer, and so its scratch range, runs past the 4 KiB page: it
-// compiles, but no theorem covers it.
-fn big_cat() → Source { cat(2048) }
+// A layout takes a slot for each word the source declares, each buffer at
+// its capacity, a scratch range one byte longer than the largest, and the
+// saved RSP: cat names twenty words.
+theorem cat_words(): cat(1024).words = 20 { refl }
+theorem cat_layout_size(): Layout::of(low(), cat(1024).words, cat(1024).capacities(), Homes([], [])).size() = 160 + 1024 + 1025 + 8 { refl }
 
-theorem big_cat_too_big(): Layout::of(low(), big_cat().capacities(), Homes([], [])).size().leb(DataRegion::io_page().size) = False { refl }
-theorem cat_fits_the_page(): Layout::of(low(), cat(1024).capacities(), Homes([], [])).size().leb(DataRegion::io_page().size) = True { refl }
+// cat with a MiB buffer, and so a MiB scratch range: `write-elf` gives it a
+// data segment of its layout in whole pages. One with a GiB buffer is past
+// the profile's limit (`io_data_limit`), and refused.
+fn mib_cat() → Source { cat(1048576) }
+fn huge_cat() → Source { cat(0x40000000) }
+
+theorem mib_cat_layout_size(): Layout::of(low(), mib_cat().words, mib_cat().capacities(), Homes([], [])).size() = 160 + 1048576 + 1048577 + 8 { refl }
 
 // An `open` and a `close` compile; a `stat` is the call the compiler does
 // not make yet.
-fn opens() → Source { Source(functions := [], buffers := [Buffer(16)], main := Then(Invoke(Opens(0, 1, 2)), Invoke(Closes(2, 3)))) }
-fn stats() → Source { Source(functions := [], buffers := [Buffer(16), Buffer(144)], main := Invoke(StatsPath(0, 1, 1, 2))) }
+fn opens() → Source { Source::of([Buffer(16)], Then(Invoke(Opens(0, 1, 2)), Invoke(Closes(2, 3)))) }
+fn stats() → Source { Source::of([Buffer(16), Buffer(144)], Invoke(StatsPath(0, 1, 1, 2))) }
 
 theorem opens_compiles(): refused(opens()) = [] { refl }
 theorem stats_refused(): refused(stats()) = [1, 1, 7, 4, 0] { refl }
@@ -65,7 +72,7 @@ theorem stats_refused(): refused(stats()) = [1, 1, 7, 4, 0] { refl }
 // Fifteen constants: one register each, more than the pool's fourteen, so
 // S4 does not take the leaf whole and it compiles a node at a time.
 fn wide_leaf() → Source {
-    Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 0), Const(64, 1, 1), Const(64, 2, 2), Const(64, 3, 3),
+    Source::of([], Then(ops([Const(64, 0, 0), Const(64, 1, 1), Const(64, 2, 2), Const(64, 3, 3),
         Const(64, 4, 4), Const(64, 5, 5), Const(64, 6, 6), Const(64, 7, 7), Const(64, 8, 8), Const(64, 9, 9), Const(64, 10, 10),
         Const(64, 11, 11), Const(64, 12, 12), Const(64, 13, 13), Const(64, 14, 14)]), Exit(14)))
 }
@@ -78,7 +85,7 @@ theorem wide_leaf_compiles(): refused(wide_leaf()) = [] { refl }
 fn sum_nodes(k: Nat) → List<Node> {
     match k { Zero => [], Succ(j) => Cons(Const(64, 0, Succ(j)), Cons(Add(64, 1, 1, 0), sum_nodes(j))) }
 }
-fn long_leaf() → Source { Source(functions := [], buffers := [], main := Then(ops(sum_nodes(20)), Exit(1))) }
+fn long_leaf() → Source { Source::of([], Then(ops(sum_nodes(20)), Exit(1))) }
 
 theorem long_leaf_forty(): sum_nodes(20).len() = 40 { refl }
 theorem long_leaf_compiles(): refused(long_leaf()) = [] { refl }
@@ -88,16 +95,16 @@ theorem long_leaf_compiles(): refused(long_leaf()) = [] { refl }
 // against the 12 no word lives in (the allocator gives words 0 and 1 two
 // of the home pool).
 fn narrow_long_leaf() → Source {
-    Source(functions := [], buffers := [], main := Then(ops(Cons(Const(32, 1, 0), sum_nodes(20))), Exit(1)))
+    Source::of([], Then(ops(Cons(Const(32, 1, 0), sum_nodes(20))), Exit(1)))
 }
 
 theorem narrow_long_leaf_refused(): narrow_long_leaf().refusal(low(), narrow_long_leaf().homes()) = [1, 0, 1, 41, 12] { refl }
 
 // The third statement exits with a word past the slots; the second, a loop,
 // tests one; a write names a buffer the source does not have.
-fn far_exit() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Then(Exit(0), Exit(64)))) }
-fn far_again() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Repeat(Exit(0), 99))) }
-fn no_buffer() → Source { Source(functions := [], buffers := [Buffer(8)], main := Invoke(Writes(0, 1, 2, 3, 4))) }
+fn far_exit() → Source { Source(functions := [], buffers := [], words := 64, main := Then(ops([Const(64, 0, 3)]), Then(Exit(0), Exit(64)))) }
+fn far_again() → Source { Source(functions := [], buffers := [], words := 64, main := Then(ops([Const(64, 0, 3)]), Repeat(Exit(0), 99))) }
+fn no_buffer() → Source { Source::of([Buffer(8)], Invoke(Writes(0, 1, 2, 3, 4))) }
 
 theorem far_exit_refused(): refused(far_exit()) = [3, 4, 4, 64, 64] { refl }
 theorem far_again_refused(): refused(far_again()) = [2, 3, 4, 99, 64] { refl }
@@ -105,14 +112,14 @@ theorem no_buffer_refused(): refused(no_buffer()) = [1, 1, 8, 1, 1] { refl }
 
 // A node that writes a word it reads: out of S3.0's evaluation order, so
 // not S4's whole, but a node at a time it reads the word before it writes.
-fn writes_input() → Source { Source(functions := [], buffers := [], main := ops([Add(64, 0, 0, 1)])) }
+fn writes_input() → Source { Source::of([], ops([Add(64, 0, 0, 1)])) }
 
 theorem writes_input_compiles(): refused(writes_input()) = [] { refl }
 
 // Byte nodes mix with the rest of a leaf, alone in it or not.
-fn mixed_leaf() → Source { Source(functions := [], buffers := [Buffer(4)], main := ops([Const(64, 0, 0), BufferLoad(1, 0, 0)])) }
+fn mixed_leaf() → Source { Source::of([Buffer(4)], ops([Const(64, 0, 0), BufferLoad(1, 0, 0)])) }
 fn byte_leaves() → Source {
-    Source(functions := [], buffers := [Buffer(4, [BitVec::ofNat(7)])], main := Then(ops([Const(64, 0, 0)]), ops([BufferLoad(1, 0, 0)])))
+    Source::of([Buffer(4, [BitVec::ofNat(7)])], Then(ops([Const(64, 0, 0)]), ops([BufferLoad(1, 0, 0)])))
 }
 
 theorem mixed_leaf_compiles(): refused(mixed_leaf()) = [] { refl }
@@ -124,7 +131,7 @@ theorem mixed_leaf_compiles(): refused(mixed_leaf()) = [] { refl }
 // the read returned, 3 an index, 4 a byte, 5 the sum, 6 the 32, 7 the byte
 // stored, 8 stdout, 9 where the write starts, 10 what it returned.
 fn mixed_bytes() → Source {
-    Source(functions := [], buffers := [Buffer(8)], main := Then(ops([Const(64, 1, 8), Const(64, 8, 1)]),
+    Source::of([Buffer(8)], Then(ops([Const(64, 1, 8), Const(64, 8, 1)]),
         Then(Invoke(Reads(0, 0, 1, 2)),
             Then(ops([Const(64, 3, 0), BufferLoad(4, 0, 3), Add(64, 5, 5, 4), Const(64, 6, 32), Sub(64, 4, 4, 6), BufferStore(7, 0, 3, 4),
                     Const(64, 3, 1), BufferLoad(4, 0, 3), Add(64, 5, 5, 4), Const(64, 3, 2), BufferLoad(4, 0, 3), Add(64, 5, 5, 4),
@@ -138,15 +145,15 @@ theorem byte_leaves_compile(): refused(byte_leaves()) = [] { refl }
 // A byte node beside a node at width 1: refused, naming the narrow node; and
 // a byte node whose buffer the source does not have.
 fn narrow_mixed_leaf() → Source {
-    Source(functions := [], buffers := [Buffer(4)], main := ops([BufferLoad(1, 0, 0), BitXor(1, 2, 1, 1)]))
+    Source::of([Buffer(4)], ops([BufferLoad(1, 0, 0), BitXor(1, 2, 1, 1)]))
 }
-fn missing_buffer_leaf() → Source { Source(functions := [], buffers := [Buffer(4)], main := ops([Const(64, 0, 0), BufferLoad(1, 3, 0)])) }
+fn missing_buffer_leaf() → Source { Source::of([Buffer(4)], ops([Const(64, 0, 0), BufferLoad(1, 3, 0)])) }
 
 theorem narrow_mixed_leaf_refused(): refused(narrow_mixed_leaf()) = [1, 0, 10, 2, 0] { refl }
 theorem missing_buffer_leaf_refused(): refused(missing_buffer_leaf()) = [1, 0, 8, 3, 1] { refl }
 
 // A source that compiles has no refusal.
-fn exit3() → Source { Source(functions := [], buffers := [], main := Then(ops([Const(64, 0, 3)]), Exit(0))) }
+fn exit3() → Source { Source::of([], Then(ops([Const(64, 0, 3)]), Exit(0))) }
 
 theorem exit3_compiles(): refused(exit3()) = [] { refl }
 
@@ -157,10 +164,10 @@ theorem exit3_compiles(): refused(exit3()) = [] { refl }
 // names, and a `Repeat` or `Branch` takes two before its children.
 theorem exit3_shape(): exit3().shape() = [0, 0, 0, 0, 0, 0, 0, 0, 1] { refl }
 
-fn read_then_exit() → Source { Source(functions := [], buffers := [Buffer(8)], main := Then(Invoke(Reads(0, 0, 1, 2)), Exit(2))) }
+fn read_then_exit() → Source { Source::of([Buffer(8)], Then(Invoke(Reads(0, 0, 1, 2)), Exit(2))) }
 theorem read_then_exit_shape(): read_then_exit().shape() = [3, 3, 0, 3, 0, 0, 0, 0, 1] { refl }
 
-fn exit_unless() → Source { Source(functions := [], buffers := [], main := Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
+fn exit_unless() → Source { Source::of([], Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
 theorem exit_unless_shape(): exit_unless().shape() = [4, 4, 0, 4, 4, 0, 4, 2, 3, 2, 0, 2] { refl }
 
 // A part read back is its emission at `Start`: the label name after it,
@@ -185,8 +192,8 @@ fn eu_yes() → Prog { Start.label(1).tests(eu_layout(), 0, 3).exits(eu_layout()
 fn eu_no() → Prog { eu_yes().else_label(3, 4).exits(eu_layout(), 2) }
 theorem exit_unless_by_parts(): exit_unless().main.emit(Start, eu_layout(), [], 0) =
     Some(Compiled(then(eu_no().join_label(4).tests(eu_layout(), 0, 2), Jmp(1)).label(2), 4)) {
-    Stmt::emit_repeat_of(exit_unless().main, trivial, trivial, Start, eu_layout(), [], 0, Compiled(eu_no().join_label(4), 4),
-        Stmt::emit_branch_of(exit_unless().main.left(), trivial, trivial, Start.label(1), eu_layout(),
+    Stmt::emit_repeat_of(exit_unless().main, trivial, Start, eu_layout(), trivial, [], 0, Compiled(eu_no().join_label(4), 4),
+        Stmt::emit_branch_of(exit_unless().main.left(), trivial, Start.label(1), eu_layout(), trivial,
             exit_unless().main.loop_out(eu_layout().homes, []), 2, Compiled(eu_yes(), 4), Compiled(eu_no(), 4), refl, refl))
 }
 
@@ -196,8 +203,9 @@ theorem byte_leaves_shape(): byte_leaves().shape() = [1, 0, 0, 0, 0, 0, 0, 0, 1]
 
 // The shape counts a leaf's names without emitting it: each kind of leaf
 // that takes names counts what its emission takes, and a pure leaf none.
+// The layout is byte_leaves' buffers with slots for the words below eight.
 fn names_emitted(s: Stmt, names: Nat) → Nat {
-    match s.emit(Start, slotted(byte_leaves()), [], names) { None => 0, Some(c) => c.names }
+    match s.emit(Start, Layout::of(low(), 8, byte_leaves().capacities(), Homes([], [])), [], names) { None => 0, Some(c) => c.names }
 }
 theorem read_names_counted(): names_emitted(Invoke(Reads(0, 0, 1, 2)), 5) = Invoke(Reads(0, 0, 1, 2)).leaf_names(5) { refl }
 theorem write_names_counted(): names_emitted(Invoke(Writes(0, 0, 1, 2, 3)), 5) = Invoke(Writes(0, 0, 1, 2, 3)).leaf_names(5) { refl }
@@ -215,7 +223,7 @@ theorem wide_names_counted(): names_emitted(ops([Const(64, 0, 3), BufferLoad(1, 
 // others.
 fn passes(k: Nat) → Stmt { match k { Zero => cat_pass(), Succ(j) => Then(cat_pass(), passes(j)) } }
 fn cat_x(k: Nat) → Source {
-    Source(functions := [], buffers := [Buffer(512)], main := Then(cat_setup(512), Repeat(passes(k), 15)))
+    Source::of([Buffer(512)], Then(cat_setup(512), Repeat(passes(k), 15)))
 }
 fn cat_x2() → Source { cat_x(1) }
 fn cat_x4() → Source { cat_x(3) }

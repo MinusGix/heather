@@ -8,7 +8,7 @@
 // the file's header is 232 bytes, whatever the code's length.
 //
 // Outside the proof: that Linux maps the file as `X86Memory::io_load` says
-// (the RX file at 0x400000, eight zero KiB at 0x410000) below 0x412000
+// (the RX file at 0x400000, a zero page at 0x410000) below 0x411000
 // (`X86Memory::LoadedFrom`), puts the command line on the stack above it
 // (`ArgvAt`; cat reads none of it), and starts it at `io_entry()`, and that
 // its system calls answer as `LinuxRun` allows.
@@ -36,19 +36,19 @@ import nat;
 // The source `write-elf` compiles, and the file: the header, then cat's
 // bytes.
 fn cat_source() → Source { cat(cat_capacity()) }
-fn cat_file() → List<BitVec(8)> { io_elf_file(cat_bytes()) }
+fn cat_file() → List<BitVec(8)> { io_elf_file(cat_bytes(), cat_size()) }
 
 fn cat_file_header() → List<BitVec(8)> {
-    io_elf_header(BitVec::ofNat(232 + cat_bytes().len()), BitVec::ofNat((232 + cat_bytes().len()).shr(8)))
+    io_elf_header(BitVec::ofNat(232 + cat_bytes().len()), BitVec::ofNat((232 + cat_bytes().len()).shr(8)), cat_size())
 }
 
-theorem cat_file_sends(s: MachineState<X86Memory(X86Profile::io())>,
-    entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(cat_file()), args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io().data().above(0x412000), s.memory, read_gpr(Rsp, s.gprs), args),
+theorem cat_file_sends(s: MachineState<X86Memory(X86Profile::io(cat_size()))>,
+    entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(cat_size(), cat_file()), args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(cat_size()).data().above(io_data_end(cat_size())), s.memory, read_gpr(Rsp, s.gprs), args),
     tr: Trace<BitVec(64)>(Events::linux()), produces: Program::Produces(Events::linux(), cat(cat_capacity()).denote(args), tr),
     valid: Trace::LinuxValid(tr), returns: Trace::ReturnsWith(Events::linux(), tr, filter_ok()),
-    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::io().linux(), run, s), responses: SameResponses(Trace::linux_events(tr), run)):
+    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::io(cat_size()).linux(), run, s), responses: SameResponses(Trace::linux_events(tr), run)):
     sent_to(BitVec::ofNat(1), run) = Trace::received<Nat, BitVec(64)>(BitVec::ofNat(0), tr) {
     cat_native_sends(cat_file_header(),
-        io_elf_header_length(BitVec::ofNat(232 + cat_bytes().len()), BitVec::ofNat((232 + cat_bytes().len()).shr(8))),
+        io_elf_header_length(BitVec::ofNat(232 + cat_bytes().len()), BitVec::ofNat((232 + cat_bytes().len()).shr(8)), cat_size()),
         s, entry, loaded, args, argv, tr, produces, valid, returns, run, ran, responses)
 }

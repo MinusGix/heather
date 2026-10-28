@@ -424,13 +424,13 @@ fn Source::loop_sets(self src: Source, fuel: Nat, loops: List<List<Nat>>) → Li
     }
 }
 
-// More passes than the sets can grow by: 64 words (`word_slots`) in as
-// many sets.
-fn closure_fuel() → Nat { 4096 }
+// More passes than the sets can grow by: the source's words in as many
+// sets.
+fn Source::closure_fuel(self src: Source) → Nat { Succ(src.words * src.words) }
 
 // Every word in its slot (the memory-resident compiler), and the least
 // closed loop sets.
-fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(closure_fuel(), [])) }
+fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(src.closure_fuel(), [])) }
 
 // `homes` when the check passes them, else `fallback`: a heuristic made
 // complete by a complete fallback (`Homes::or_else_ok`).
@@ -634,9 +634,9 @@ fn Greedy::standard() → Greedy { Greedy(7) }
 fn Greedy::colouring(self g: Greedy, src: Source) → Homes {
     let slots = Homes::slots(src);
     let graph = src.main.graph(slots, [], []);
-    // A row for every word a slot can hold, so `registers_of` meets
+    // A row for every word the source declares, so `registers_of` meets
     // each word a row may flag.
-    let rows = graph.of.put(63, graph.of.row(63), []);
+    let rows = graph.of.put(src.words - 1, graph.of.row(src.words - 1), []);
     src.main.weights(g.loop_weight, 1, []).heaviest().colour(graph.live, rows, slots)
 }
 
@@ -894,7 +894,7 @@ theorem Source::loop_sets_ok(self src: Source, fuel: Nat): (loops: List<List<Nat
     }
 }
 
-theorem Homes::slots_ok(src: Source): src.allocation_ok(Homes::slots(src)).IsTrue() { src.loop_sets_ok(closure_fuel(), []) }
+theorem Homes::slots_ok(src: Source): src.allocation_ok(Homes::slots(src)).IsTrue() { src.loop_sets_ok(src.closure_fuel(), []) }
 
 theorem Homes::or_else_ok(self homes: Homes, src: Source, fallback: Homes, ok: src.allocation_ok(fallback).IsTrue()):
     src.allocation_ok(homes.or_else(src, fallback)).IsTrue() {

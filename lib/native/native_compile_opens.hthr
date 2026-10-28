@@ -52,7 +52,7 @@ import omega;
 // What a close's code claims: from the statement's start, close(fd), and on
 // from its end with each answer decoded into the environment.
 theorem Target::goes_closes(self t: Target, out: List<Nat>, env: Env, p: Prog, fd, result: Nat,
-    in_fd: fd < word_slots(), in_result: result < word_slots(), apart: t.homes.apart(result, out).IsTrue(),
+    in_fd: fd < t.words, in_result: result < t.words, apart: t.homes.apart(result, out).IsTrue(),
     within: p.closes(t.layout(), out, fd, result).Within(t.program),
     tree: CloseResult → ITree<BitVec(64)>(Events::linux()),
     next: (a: CloseResult) → LinuxCmd::Answers(Closes(fd, result).cmd(env), a) →
@@ -586,7 +586,7 @@ theorem Target::path_ended(self t: Target, env: Env, name: List<BitVec(8)>, m: X
 // with its NUL and openat(AT_FDCWD, scratch, O_RDONLY), and on from its end
 // with each answer decoded into the environment.
 theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, path, len, result, cap, names: Nat,
-    in_len: len < word_slots(), in_result: result < word_slots(), found: t.caps.nth(path) = Some(cap),
+    in_len: len < t.words, in_result: result < t.words, found: t.caps.nth(path) = Some(cap),
     apart: t.homes.apart(result, out).IsTrue(),
     within: p.opens(t.layout(), out, path, len, result, cap, names).prog.Within(t.program),
     tree: OpenResult → ITree<BitVec(64)>(Events::linux()),

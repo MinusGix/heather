@@ -14,10 +14,6 @@
 
 /// Registers in the home pool (`home_pool`).
 const POOL: u64 = 6;
-/// The rows the graph is padded to (`Greedy::colouring`'s `put(63, …)`).
-const ROWS: usize = 64;
-/// Closure passes (`closure_fuel`).
-const CLOSURE_FUEL: usize = 4096;
 /// What a loop's body weighs more than what holds it (`Greedy::standard`).
 const LOOP_WEIGHT: u64 = 7;
 
@@ -104,18 +100,19 @@ impl Reader<'_> {
     }
 }
 
-/// The statement of a spelled source; `None` for one spelled `[0]` (not a
-/// builder's), or one that does not read back.
-fn main_of(numbers: &[u64]) -> Option<Stmt> {
+/// The words and the statement of a spelled source; `None` for one spelled
+/// `[0]` (not a builder's), or one that does not read back.
+fn main_of(numbers: &[u64]) -> Option<(u64, Stmt)> {
     let mut r = Reader { numbers, at: 0 };
     if r.next()? == 0 { return None; }
+    let words = r.next()?;
     for _ in 0..r.next()? {
         r.next()?;
         let len = r.next()? as usize;
         r.take(len)?;
     }
     let main = r.stmt()?;
-    (r.at == numbers.len()).then_some(main)
+    (r.at == numbers.len()).then_some((words, main))
 }
 
 // Sets of words as lists of ids, in `List::union`'s and `List::minus`'s
@@ -189,12 +186,13 @@ fn sets_within(a: &[Vec<u64>], b: &[Vec<u64>]) -> bool {
 }
 
 /// `Homes::slots`: every word in its slot, the least closed loop sets
-/// (`Source::loop_sets`). Where the growth stops is not checked here, as
-/// `Source::closed_or_wide` checks it: sets the check refuses leave the
-/// colouring refused too, and the fork's homes stand in (`elf`).
-fn slots(main: &Stmt) -> Homes {
+/// (`Source::loop_sets`), in at most `Source::closure_fuel` passes. Where
+/// the growth stops is not checked here, as `Source::closed_or_wide` checks
+/// it: sets the check refuses leave the colouring refused too, and the
+/// fork's homes stand in (`elf`).
+fn slots(words: u64, main: &Stmt) -> Homes {
     let mut homes = Homes { of: vec![], loops: vec![] };
-    for _ in 0..CLOSURE_FUEL {
+    for _ in 0..words * words + 1 {
         let mut sets = homes.loops.clone();
         needs(main, &homes, &[], &mut sets);
         if sets_within(&sets, &homes.loops) { break; }
@@ -306,12 +304,14 @@ fn colour(order: &[u64], entry: &[u64], rows: &[Vec<bool>], homes: &mut Homes) {
 /// `Homes::spelled`; `None` when the source does not read back as a
 /// builder's.
 pub(super) fn homes_spelled(spelled: &[u64]) -> Option<Vec<u64>> {
-    let main = main_of(spelled)?;
-    let mut homes = slots(&main);
+    let (words, main) = main_of(spelled)?;
+    let mut homes = slots(words, &main);
     let mut rows = vec![];
     let entry = graph(&main, &homes, &[], &mut rows);
-    let last = rows.get(ROWS - 1).cloned().unwrap_or_default();
-    put(&mut rows, ROWS - 1, last, vec![]);
+    // A row for every word the source declares (`Greedy::colouring`'s `put`).
+    let top = words.saturating_sub(1) as usize;
+    let last = rows.get(top).cloned().unwrap_or_default();
+    put(&mut rows, top, last, vec![]);
     let mut w = vec![];
     weights(&main, 1, &mut w);
     colour(&heaviest(&w), &entry, &rows, &mut homes);

@@ -304,8 +304,42 @@ theorem Stmt::grows(self s: Stmt, call: Answers(), n: Nat): (env: Env) →
 record Buffer { capacity: Nat, initial: List<BitVec(8)> := [] }
 
 // Total functions its regions call, its buffers (buffer `b` is the `b`-th),
-// and the statement it runs.
-record Source { functions: List<Function>, buffers: List<Buffer>, main: Stmt }
+// how many words it names (word ids below `words`; the compiler gives each
+// a slot and refuses any other), and the statement it runs.
+record Source { functions: List<Function>, buffers: List<Buffer>, words: Nat, main: Stmt }
+
+// The words a call names: every operand but its buffers.
+fn CallShape::words(self shape: CallShape) → List<Nat> {
+    match shape {
+        Reads(fd, _, len, result) => [fd, len, result],
+        Writes(fd, _, from, len, result) => [fd, from, len, result],
+        Opens(_, len, result) => [len, result],
+        Closes(fd, result) => [fd, result],
+        StatsPath(_, len, _, result) => [len, result],
+        StatsFd(fd, _, result) => [fd, result],
+    }
+}
+
+// One past the largest id: the words a statement naming `ids` needs.
+fn List::word_bound(self ids: List<Nat>) → Nat { match ids { Nil => 0, Cons(id, rest) => Succ(id).max(rest.word_bound()) } }
+
+// One past the largest word a statement names: what a source of it
+// declares (`Source::words`, `Source::of`) when every word it names gets a
+// slot.
+fn Stmt::word_bound(self s: Stmt) → Nat {
+    match s {
+        Compute(region) => region.mentions().word_bound(),
+        Invoke(shape) => shape.words().word_bound(),
+        Then(first, rest) => first.word_bound().max(rest.word_bound()),
+        Branch(condition, yes, no) => Succ(condition).max(yes.word_bound().max(no.word_bound())),
+        Repeat(body, again) => Succ(again).max(body.word_bound()),
+        Exit(status) => Succ(status),
+        Arg(index, _, len) => Succ(index).max(Succ(len)),
+    }
+}
+
+// A source with no functions whose words are the ones `main` names.
+fn Source::of(buffers: List<Buffer>, main: Stmt) → Source { Source(functions := [], buffers := buffers, words := main.word_bound(), main := main) }
 
 fn zero_byte() → BitVec(8) { BitVec::zero() }
 

@@ -117,6 +117,45 @@ fn larger_program_runs_as_cat() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A program with a MiB buffer (`mib_cat`: cat reading up to a MiB at a
+/// time) builds, runs as cat, and carries the compiler's theorem: its data
+/// segment is its layout in whole pages, zero-filled, so it takes nothing in
+/// the file (issues/native-data-capacity.md).
+#[test]
+fn mebibyte_buffer_runs_as_cat() {
+    let dir = scratch("mib_cat");
+    let binary = dir.join("mib_cat");
+    let result = write_elf(PROBES, "mib_cat", &binary);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    // Words, the buffer, a scratch range one byte longer and the saved RSP,
+    // 2097321 bytes, in 513 pages.
+    let size = 513 * 4096u64;
+    let certificate = std::fs::read_to_string(dir.join("mib_cat.certificate.hthr")).unwrap();
+    for statement in [&format!("fn mib_cat_elf_size() → Nat {{ {size} }}")[..], "theorem mib_cat_elf_fits()", "theorem mib_cat_elf_simulates("] {
+        assert!(certificate.contains(statement), "the certificate states `{statement}`");
+    }
+    let file = std::fs::read(&binary).unwrap();
+    assert!(file.len() < 4096, "the segment takes nothing in the file, which is {} bytes", file.len());
+    // The RW segment's program header, the third, and its `p_memsz`.
+    let memsz = u64::from_le_bytes(file[64 + 2 * 56 + 40..][..8].try_into().unwrap());
+    assert_eq!(memsz, size, "the segment is the program's size");
+
+    // More than two buffers' worth, through a pipe and from a file, whose
+    // reads fill the buffer whole.
+    let every: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    for input in [&b""[..], b"hello, cat\n", &every] {
+        let (code, out) = run(&binary, input, Stdio::piped());
+        assert_eq!(code, Some(0), "it exits 0 at the end of its input");
+        assert_eq!(out, input, "and has sent what it read");
+    }
+    let path = dir.join("input");
+    std::fs::write(&path, &every).unwrap();
+    let out = Command::new(&binary).stdin(std::fs::File::open(&path).unwrap()).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "it exits 0 at the end of the file");
+    assert!(out.stdout == every, "and has sent the file, a MiB a read");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The probes `lib/_tests/native/native_compile_tests.hthr` holds, which
 /// import none of the certificate's modules.
 const PROBES: &str = "lib/_tests/native/native_compile_tests.hthr";
@@ -164,14 +203,14 @@ fn wider_leaves_run() {
 }
 
 /// A program the theorem would not cover is not written, and the refusal
-/// says why: past the page, a call not compiled, a leaf past the registers
+/// says why: past the profile's data limit, a call not compiled, a leaf past the registers
 /// with a node too narrow to go a node at a time, a narrow node beside a
 /// byte node.
 #[test]
 fn refused_programs_name_their_reason() {
     let dir = scratch("refused");
     for (source, reason) in [
-        ("big_cat", "`big_cat` does not fit the I/O page: its words, buffers, scratch range and saved RSP take 4617 bytes and the page holds 4096"),
+        ("huge_cat", "`huge_cat` needs a data segment of 2147487744 bytes for its words, buffers, scratch range and saved RSP, past the I/O profile's limit of 1073741824 (`io_data_limit`)"),
         ("stats", "`stats` is refused at statement 1, a call: `stat` is not compiled yet"),
         ("narrow_long_leaf", "`narrow_long_leaf` is refused at statement 1, a computation: the leaf needs 41 registers, one per input and per node, and the pool holds 12; it does not compile a node at a time because a node is not at width 64"),
         ("narrow_mixed_leaf", "`narrow_mixed_leaf` is refused at statement 1, a computation: node 2 of the leaf is not at width 64"),

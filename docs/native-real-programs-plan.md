@@ -79,7 +79,7 @@ real inputs (2026-10-26, cloud box). Costs are stated as shapes, per
 | `head10` | `head -c 10`: cat whose read length is a countdown word | builds and runs: 10 bytes from any input, exits 0 |
 | `opens` | one `Invoke(Opens(…))` | refused, with no reason given (`did not compile, or its items' lengths did not read back`) |
 | `wide_leaf` | one leaf of 15 `Const`s | refused, with no reason given. The leaf allocator gives each node its own register from a pool of 14. |
-| `big_cat` | `cat(2048)`: buffer, scratch and words past the 4 KiB page | **builds and runs**, though `native_compile_correct` does not apply to it (§3.6) |
+| `big_cat` | `cat(2048)`: buffer, scratch and words past the 4 KiB page | **builds and runs**, though `native_compile_correct` does not apply to it (§3.6; since round 8 it gets a segment its size, and its theorem) |
 | `cat_x2` | cat's pass inlined twice (≈1.7× cat's bytes) | builds and runs. Peak memory is about a third of the suite's 6 GiB rail. |
 | `cat_x4` | inlined four times (≈3× cat's bytes) | **aborts** under the 8 GiB rail `CLAUDE.md` gives a direct run (`memory allocation … failed`, inside `evaluate_numbers` on write-elf's fork). With the rail raised it builds, peaking at about the suite's whole rail, with roughly twice `cat_x2`'s time. |
 | `cat_x8` | inlined eight times (≈6× cat's bytes) | **killed by the box's OOM killer** with the rail raised past the box's memory, after about as long again as `cat_x4` |
@@ -393,6 +393,18 @@ the file. The loader proof (`io_perm_in_segment`, now `i < 8192`) is stated
 over the parameter. `word_slots` becomes a per-program number in `Layout`.
 Every program then gets the data it declares, up to a fixed bound (a few MiB
 is plenty). True allocation stays deferred (§7).
+
+**Status.** Done (`issues/native-data-capacity.md`). The profile is
+`X86Profile::io(size)`: its RW segment is `size` zero-filled bytes at
+0x410000 (`DataRegion::io_data`), up to `io_data_limit()`, a GiB, and the
+header's `p_memsz` says so. The loader, `LoadedFrom` and the stack's floor
+(`io_data_end(size)`) are stated over the size. A source declares its words
+(`Source::words`; `Source::of` and the builder count them), and `Layout`
+gives exactly those slots. `write-elf` sizes the segment to the layout in
+whole pages and states the fit in the certificate (`<s>_elf_size`,
+`<s>_elf_within`, `<s>_elf_fits`), so a program past the old page, such as
+cat with a MiB buffer, is written with its theorem, and one past the limit
+is refused by reason.
 
 ### 3.7 Numbers
 

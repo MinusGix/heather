@@ -55,7 +55,7 @@ theorem BitVec::clamp_bound(v, b: BitVec(64), no: v.borrow_sub_bit(b) = False): 
 }
 
 // A word's number, as the machine reads the word.
-theorem Target::word_number(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), i: Nat, inside: i < word_slots()):
+theorem Target::word_number(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), i: Nat, inside: i < t.words):
     env.word(i).toNat() = env.number(i) {
     BitVec::toNat_ofNat(64, env.number(i), t.layout().keeps_number_fits(env, placed.witness, placed.proof.right.left, i, inside))
 }
@@ -208,7 +208,7 @@ theorem Target::count_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf)
 // + min(from, capacity), min(len, capacity - that)), and on from its end
 // with each answer decoded into the environment.
 theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, fd, buf, from, len, result, cap, names: Nat,
-    in_fd: fd < word_slots(), in_from: from < word_slots(), in_len: len < word_slots(), in_result: result < word_slots(),
+    in_fd: fd < t.words, in_from: from < t.words, in_len: len < t.words, in_result: result < t.words,
     found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
     within: p.writes(t.layout(), out, fd, buf, from, len, result, cap, names).prog.Within(t.program),
     tree: WriteResult → ITree<BitVec(64)>(Events::linux()),
@@ -698,7 +698,7 @@ theorem Prog::copy_in_within(self p: Prog, layout: Layout, buf, head, done: Nat,
 // After a read that succeeded: TEST finds the count nonnegative, the bytes
 // are copied in, and the count is put in the result's home.
 theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env, asked: Prog, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap),
-    result: Nat, in_result: result < word_slots(), names: Nat,
+    result: Nat, in_result: result < t.words, names: Nat,
     sub: (i: Nat) → Mem(i, out) → i ≠ result → Mem(i, live), apart: t.homes.apart(result, out).IsTrue(),
     within: asked.read_back(t.layout(), out, buf, result, names).Within(t.program),
     bytes: List<BitVec(8)>, short: bytes.len() <= cap, tree: ITree<BitVec(64)>(Events::linux()),
@@ -769,7 +769,7 @@ theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env
 
 // After a read that failed: TEST finds the negated errno negative, the JS
 // skips the copy, and the errno is put in the result's home.
-theorem Target::goes_read_back_failed(self t: Target, live, out: List<Nat>, env: Env, asked: Prog, buf, result: Nat, in_result: result < word_slots(), names: Nat,
+theorem Target::goes_read_back_failed(self t: Target, live, out: List<Nat>, env: Env, asked: Prog, buf, result: Nat, in_result: result < t.words, names: Nat,
     sub: (i: Nat) → Mem(i, out) → i ≠ result → Mem(i, live), apart: t.homes.apart(result, out).IsTrue(),
     within: asked.read_back(t.layout(), out, buf, result, names).Within(t.program),
     e: Nat, error: Errno(e), tree: ITree<BitVec(64)>(Events::linux()),
@@ -839,7 +839,7 @@ theorem Target::scratch_inside(self t: Target, k: Nat, short: k <= t.caps.larges
 // min(len, capacity)), and on from its end with each answer decoded into
 // the environment.
 theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, fd, buf, len, result, cap, names: Nat,
-    in_fd: fd < word_slots(), in_len: len < word_slots(), in_result: result < word_slots(),
+    in_fd: fd < t.words, in_len: len < t.words, in_result: result < t.words,
     found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
     within: p.reads(t.layout(), out, fd, buf, len, result, cap, names).prog.Within(t.program),
     tree: ReadResult → ITree<BitVec(64)>(Events::linux()),

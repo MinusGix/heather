@@ -576,7 +576,7 @@ theorem Target::held_reg_word(self t: Target, live: List<Nat>, env: Env, g: Gprs
 
 // A live word's number fits it.
 theorem Target::held_number(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    id: Nat, holds: Mem(id, live), inside: id < word_slots()): env.word(id).toNat() = env.number(id) {
+    id: Nat, holds: Mem(id, live), inside: id < t.words): env.word(id).toNat() = env.number(id) {
     let words = held.witness;
     let agrees = held.proof.right(id, holds);
     let fits: (env.number(id) < Nat::pow(2, 64)) = (match t.homes.home(id) as λ h => t.homes.home(id) = h →
@@ -614,7 +614,7 @@ theorem Homes::number_put_other(self homes: Homes, i, id: Nat, words: List<Nat>,
 
 // Into its slot: the slot's file entry set.
 theorem Target::held_slot_set(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
-    held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), slot: t.homes.home(id) = InSlot, inside: id < word_slots()):
+    held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), slot: t.homes.home(id) = InSlot, inside: id < t.words):
     t.Held(out, env.set_word(id, w), g, t.r.profile.store(m, t.layout().word_at(id), word_bytes(w))) {
     let words = held.witness;
     let words2 = words.put(id, w.toNat(), 0);

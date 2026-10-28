@@ -101,7 +101,7 @@ pub(super) fn state(p: &str, tool: &str, plan: Plan, trace: &[u64], buffers: &[u
     defs.insert_str(0, &printer.defs);
     defs.insert_str(0, &format!("fn {p}_a_0() → Act {{ {tool}.opened(0).main }}\n"));
     defs.push_str(&buffers.defs);
-    defs.push_str(&format!("fn {p}_lowered() → Source {{ Source(functions := [], buffers := {list}, main := {p}_w_0()) }}\n", list = buffers.list));
+    defs.push_str(&format!("fn {p}_lowered() → Source {{ Source::of({list}, {p}_w_0()) }}\n", list = buffers.list));
     theorems.push_str(&format!("theorem {p}_buffers_is(): {tool}.opened(0).buffers = {list} {{ refl }}\n\
         theorem {p}_lowered_is(): {tool}.source() = {p}_lowered() {{ {tool}.source_of({list}, {p}_w_0(), {p}_buffers_is(), {p}_l_0()) }}\n", list = buffers.list));
     Ok(Stated { defs, theorems, shapes: buffers.shapes })
