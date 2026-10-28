@@ -248,6 +248,56 @@ impl<'a> FieldReading<'a> {
         })
     }
 
+    /// The reading at `Int` (`nat` false) or `Nat`, whose operations are the
+    /// integers' own: `linarith` there names `ring`'s monomials for `omega`
+    /// (`crate::linarith`, docs/linarith-design.md §8).
+    pub(crate) fn integral(elab: &'a Elaborator, cx: &'a Cx, nat: bool, ty: Type, level: Level, span: Span) -> Self {
+        FieldReading {
+            reifier: Reifier {
+                elab,
+                cx,
+                span,
+                carrier: if nat { Carrier::Nat } else { Carrier::Int },
+                ty,
+                level,
+                atoms: Vec::new(),
+                facts: Vec::new(),
+                in_fact: false,
+            },
+            reciprocals: Vec::new(),
+        }
+    }
+
+    /// The atoms read so far, in the order the monomials index them.
+    pub(crate) fn atom_terms(&self) -> Vec<Rc<Term>> {
+        self.reifier.atoms.iter().map(|a| Rc::clone(&a.term)).collect()
+    }
+
+    /// `form` with atom `atom` replaced by `by` throughout.
+    pub(crate) fn substitute(form: &Linear, atom: usize, by: &Linear) -> Result<Linear, String> {
+        let poly = |form: &Linear| {
+            let mut p = Poly(form.0.clone());
+            p.add_term(Vec::new(), form.1).map(|_| p)
+        };
+        let by = poly(by)?;
+        let mut out = Poly::constant(form.1);
+        for (m, c) in &form.0 {
+            let e = m.get(atom).copied().unwrap_or(0);
+            let mut rest = m.clone();
+            if e > 0 {
+                rest[atom] = 0;
+            }
+            let mut term = Poly::monomial(*c, trim(rest));
+            for _ in 0..e {
+                term = term.mul(&by)?;
+            }
+            out = out.add(&term)?;
+        }
+        let mut terms = out.0;
+        let constant = terms.remove(&Vec::new()).unwrap_or(0);
+        Ok((terms, constant))
+    }
+
     /// The reciprocals met so far whose fact could be written.
     pub(crate) fn reciprocals(&self) -> &[Reciprocal] {
         &self.reciprocals
@@ -309,14 +359,23 @@ impl<'a> FieldReading<'a> {
     /// `tm` as a linear form over the monomials of its normal form. On an
     /// error the atom table is as it was.
     pub(crate) fn linear(&mut self, tm: &Rc<Term>) -> Result<Linear, String> {
+        self.read(tm).map(|(form, _)| form)
+    }
+
+    /// `linear`, and whether the term multiplies two parts neither of which
+    /// is a constant: a product `omega` would read as one atom of its own.
+    pub(crate) fn read(&mut self, tm: &Rc<Term>) -> Result<(Linear, bool), String> {
         let (atoms, facts) = (self.reifier.atoms.len(), self.reifier.facts.len());
-        let read = self.reifier.reify(tm).and_then(|syn| poly_of(&syn));
+        let read = self
+            .reifier
+            .reify(tm)
+            .and_then(|syn| Ok((poly_of(&syn)?, multiplies(&syn))));
         if read.is_ok() {
             self.record_reciprocals(facts);
         }
         self.reifier.facts.truncate(facts);
-        let poly = match read {
-            Ok(poly) => poly,
+        let (poly, product) = match read {
+            Ok(read) => read,
             Err(error) => {
                 self.reifier.atoms.truncate(atoms);
                 return Err(error);
@@ -324,7 +383,7 @@ impl<'a> FieldReading<'a> {
         };
         let mut terms = poly.0;
         let constant = terms.remove(&Vec::new()).unwrap_or(0);
-        Ok((terms, constant))
+        Ok(((terms, constant), product))
     }
 
     /// A linear form as source over the atoms' spellings, for messages.
@@ -971,6 +1030,20 @@ fn poly_of(syn: &Syn) -> Result<Poly, String> {
         Syn::Mul(a, b) => poly_of(a)?.mul(&poly_of(b)?)?,
         Syn::Neg(a) => poly_of(a)?.neg()?,
     })
+}
+
+/// Whether `syn` multiplies two parts neither of which is a numeral: a
+/// product `omega` reads as an atom of its own, even one whose normal form
+/// is linear (`x * (y - y)`).
+fn multiplies(syn: &Syn) -> bool {
+    match syn {
+        Syn::Atom(_) | Syn::Const(_) => false,
+        Syn::Add(a, b) | Syn::Sub(a, b) => multiplies(a) || multiplies(b),
+        Syn::Neg(a) => multiplies(a),
+        Syn::Mul(a, b) => {
+            !matches!(**a, Syn::Const(_)) && !matches!(**b, Syn::Const(_)) || multiplies(a) || multiplies(b)
+        }
+    }
 }
 
 fn render_poly(p: &Poly, atoms: &[String]) -> String {
@@ -1841,6 +1914,17 @@ mod tests {
         let square = a.add(&b).unwrap().mul(&a.add(&b).unwrap()).unwrap();
         let residual = square.sub(&a.mul(&a).unwrap().add(&b.mul(&b).unwrap()).unwrap()).unwrap();
         assert_eq!(render_poly(&residual, &["a".into(), "b".into()]), "2 * a * b");
+    }
+
+    #[test]
+    fn substitution_expands_each_power_of_the_atom() {
+        // x0²·x2 with x0 := x1 + 1 is x1²·x2 + 2·x1·x2 + x2.
+        let mono = |m: &[u32]| m.to_vec();
+        let form: Linear = (BTreeMap::from([(mono(&[2, 0, 1]), 1)]), 0);
+        let by: Linear = (BTreeMap::from([(mono(&[0, 1]), 1)]), 1);
+        let out = FieldReading::substitute(&form, 0, &by).unwrap();
+        let want = BTreeMap::from([(mono(&[0, 2, 1]), 1), (mono(&[0, 1, 1]), 2), (mono(&[0, 0, 1]), 1)]);
+        assert_eq!(out, (want, 0));
     }
 
     #[test]

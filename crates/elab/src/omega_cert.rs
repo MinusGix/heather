@@ -590,6 +590,34 @@ fn reads_as_relation(elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
         || nat_equality_args(elab, cx, &decoded).is_some()
 }
 
+/// The two sides of a relation this frontend reflects, as `linarith` at
+/// `Int` and `Nat` reads them (docs/linarith-design.md §8): `<=`, `<` or `=`
+/// at either, its negation, or a defined proposition that unfolds to one;
+/// `true` for `Nat`.
+pub(crate) fn integral_sides(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(bool, Rc<Term>, Rc<Term>)> {
+    let stated = |ty: &Type| {
+        let decoded = crate::inductive::decoded(ty);
+        let int = relation_args(elab, ty)
+            .or_else(|| strict_relation_args(elab, ty))
+            .or_else(|| equality_args(elab, cx, &decoded));
+        let nat = || {
+            nat_relation_args(elab, ty)
+                .or_else(|| nat_strict_relation_args(elab, ty))
+                .or_else(|| nat_equality_args(elab, cx, &decoded))
+        };
+        match int {
+            Some((l, r)) => Some((false, Rc::clone(l), Rc::clone(r))),
+            None => nat().map(|(l, r)| (true, Rc::clone(l), Rc::clone(r))),
+        }
+    };
+    let relation = |ty: &Type| {
+        stated(ty).or_else(|| {
+            unfolded_proposition(elab, cx, ty, |ty| reads_as_relation(elab, cx, ty)).and_then(|ty| stated(&ty))
+        })
+    };
+    relation(ty).or_else(|| relation(&negated_domain(elab, cx, ty)?))
+}
+
 /// Reducts a defined proposition may take to reach a relation: the same
 /// bound the goal side unfolds under.
 const PROPOSITION_UNFOLD_STEPS: u64 = 64;

@@ -27,6 +27,7 @@ import algebra_rel;
 import semiring;
 import ordered_field;
 import ring;
+import omega;
 
 section<A: OrderedFieldOfInt(≈, <, <=, +, *)> {
 

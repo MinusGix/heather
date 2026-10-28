@@ -81,3 +81,48 @@ theorem rat_den_negative(a, b, d: Rat, hd: d < 0, h: a <= b * d): a * d⁻¹ <= 
 // A fact that is not an order at the goal's carrier is named.
 // expect-error: combines `<`, `<=`, `≈` and `¬(x < y)` facts at `Rat`
 theorem rat_wrong_fact(x: Rat, n: Nat, h: n < 3): x <= x { linarith(h) }
+
+// At `Int` and `Nat` `omega` decides, with `ring`'s monomials as its atoms
+// (docs/linarith-design.md §8): a side that multiplies is stated equal to
+// its normal form, so `b * a`, `a * b` and the `a * b` inside `(a + 1) * b`
+// are one atom, and the integers' rounding comes with `omega`.
+theorem int_commuted(a, b, c: Int, h: a * b <= c): b * a + b <= c + b { linarith(h) }
+theorem int_distributed(a, b, c: Int, h: (a + OfNat(1)) * b < c): a * b + b < c { linarith(h) }
+theorem int_rounding(x, y: Int, h: OfNat(2) * (x * y) <= OfNat(1), hp: OfNat(0) < y * x): False { linarith(h, hp) }
+theorem int_identity(a, b: Int): (a + b) * (a + b) - (a - b) * (a - b) = OfNat(4) * (a * b) { linarith }
+theorem int_from_context(a, b, c: Int, h: a * b <= c): b * a <= c { linarith }
+theorem int_negated(a, b: Int, h: ¬(b * a < a * b + OfNat(1))): False { linarith(h) }
+// A numeral factor is `omega`'s own scaling; a product that cancels is still
+// one `omega` would read as an atom.
+theorem int_numeral_factor(x: Int, h: x <= OfNat(1)): OfNat(2) * (OfNat(3) * x) <= OfNat(6) { linarith(h) }
+theorem int_cancelled(x, y, z: Int, h: z <= OfNat(0)): x * (y - y) + z <= OfNat(0) { linarith(h) }
+theorem nat_distributed(a, b, c: Nat, h: (a + 1) * b <= c): b * a + b <= c { linarith(h) }
+theorem nat_succ(n, m, k: Nat, h: Succ(n) * m < k): n * m + m < k { linarith(h) }
+// In checking position inside a block, and at an open atom (a function's
+// value).
+theorem int_let(f: Int → Int, x, y: Int, h: f(x) * f(y) <= y): f(y) * f(x) <= y {
+    let g: (f(y) * f(x) <= y) = linarith(h);
+    g
+}
+// A written equation that defines an atom (`t = e`, `t` not in `e`) is
+// substituted, and `ring` proves the side from it: the multiplier is the
+// rest of the monomial.
+theorem int_defined(s, d, p, e, t: Int, h: d = p * e, k: s * d <= t): s * p * e <= t { linarith(h, k) }
+theorem nat_defined(s, d, p, t: Nat, h: d = p + 1, k: s * d <= t): s * p + s <= t { linarith(h, k) }
+// A rational order unfolds to one at `Int`: when the field reading cannot
+// prove it, the cross-multiplication is read with products as monomials.
+theorem rat_mul_mono({x, y, z: Rat}, h: x <= y, hz: z <= 0): y * z <= x * z {
+    let flipped = Rat::mul_le_mono_r(x := x, y := y, z := -z, h := h, hz := omega(hz, Int::zero_mul(z.den.int())));
+    linarith(flipped)
+}
+
+// Refusals at `Int`: a goal that does not follow, a square's sign (no
+// products of facts), and a fact at another carrier.
+// expect-error: `linarith` could not prove
+theorem int_not_entailed(a, b, c: Int, h: a * b <= c): a * b < c { linarith(h) }
+// expect-error: `linarith` could not prove
+theorem int_square_is_not_linear(x: Int): OfNat(0) <= x * x { linarith }
+// expect-error: combines `<`, `<=` and `=` facts there
+theorem int_wrong_fact(x: Int, h: True): x * x <= x * x { linarith(h) }
+// expect-error: `linarith` could not prove
+theorem nat_not_entailed(a, b: Nat, h: a * b <= 3): b * a < 3 { linarith(h) }

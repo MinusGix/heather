@@ -197,7 +197,9 @@ disagree about what an atom is (to omega a product of two variables is an
 atom, to `ring` it is a monomial) and because
 [omega-unfolds-defined-propositions](../issues/omega-unfolds-defined-propositions.md)
 is changing omega's reflection now. Reading `ring`-normalized products as
-omega atoms is a later integration, not a prerequisite.
+omega atoms is a later integration, not a prerequisite. It was built
+(2026-10-28) as `linarith` at `Int` and `Nat`
+([linarith-design](linarith-design.md) §8): the tactic writes these lets.
 
 ## 7. Not in this round
 

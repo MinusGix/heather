@@ -180,9 +180,7 @@ grows by that factor; the problems this is for have one or two.
 - **A generic carrier.** Inside a `section<A: OrderedField(…)>` the reading
   needs a concrete carrier with designated operations, as `ring`'s relation
   reading does.
-- **`Int`/`Nat`.** `omega` owns them; [ring-inequalities](../issues/ring-inequalities.md)'s
-  Int-atom route stays open, and this file's reader is the normaliser it
-  would share.
+- **`Int`/`Nat`.** Built later: §8.
 - **Products of facts** (`nlinarith`), and `¬(x <= y)` facts, which at
   `CReal` do not give `y < x`.
 
@@ -193,3 +191,79 @@ identity over the atoms the facts mention plus one lemma application per
 used fact, so its gate cost is `ring`'s normalization at degree one —
 linear in the facts' size — and the conversions that read each generic
 lemma at the carrier unfold one instance projection per operation node.
+
+## 8. `Int` and `Nat`: `ring`'s monomials as `omega`'s atoms
+
+Date: 2026-10-28. Owner: [ring-inequalities](../issues/ring-inequalities.md),
+its Int-atom route.
+
+```heather
+theorem commuted(a, b, c: Int, h: a * b <= c): b * a + b <= c + b { linarith(h) }
+theorem rounding(x, y: Int, h: OfNat(2) * (x * y) <= OfNat(1), hp: OfNat(0) < y * x): False { linarith(h, hp) }
+theorem defined(s, d, p, e, t: Int, h: d = p * e, k: s * d <= t): s * p * e <= t { linarith(h, k) }
+theorem Rat::mul_le_mono_r_nonpos({x, y, z: Rat}, h: x <= y, hz: z <= 0): y * z <= x * z {
+    let flipped = Rat::mul_le_mono_r(x := x, y := y, z := -z, h := h, hz := …);
+    linarith(flipped)
+}
+```
+
+At `Int` and `Nat` the decision procedure is `omega`'s, which reads a
+product of two non-numerals as one atom by its spelling: `a * b`, `b * a`
+and the `a * b` inside `(a + 1) * b` are three unrelated atoms to it. That
+was the whole gap. Before this, a client stated the link by hand, one
+`let … = ring` per product, and handed them to `omega`
+(`Rat::mul_le_mono_r` stated two, `mul_le_mono_r_nonpos` six).
+
+**The certificate is those lets, written by the tactic.** Every side of the
+goal and of the written facts — `<=`, `<`, `=` at `Int` or `Nat`, their
+negations, and a defined proposition that unfolds to one, as `omega` reads
+them (`omega_cert::integral_sides`) — is read by `ring`'s reifier at its
+own carrier (`FieldReading::integral`, one atom table per carrier). A side
+that multiplies two non-numerals is stated equal to its normal form, a
+linear form over monomials, each monomial spelled one way (its atoms'
+aliases in atom order), and the statement is proved by `ring`. Then
+
+```text
+{ let __lin_b0: (side₀ = form₀) = ring; …; omega(facts…, __lin_b0, …) }
+```
+
+`omega` meets each monomial as one atom wherever it occurs, and the rest is
+its: the search, strictness as `+ 1`, the integers' rounding (`2·xy ≤ 1`
+and `0 < yx` is a contradiction over `Int`, not over `ℚ`), and its own
+reading of the context. Nothing is decided here; a side `ring` cannot read
+is left to `omega` as written. A side whose normal form is linear still
+gets its statement when its spelling multiplies (`x * (y - y)`), since
+`omega` would read that product as an atom.
+
+**Equations that define an atom.** A written equation `t = e` (or
+`e = t`) whose one side reads as an atom alone, not mentioning `e`, is a
+substitution: every side mentioning `t` is stated equal to its form with
+`e` for `t`, proved by `ring(h)`, whose multiplier search finds the rest of
+the monomial. That is what the rationals' order laws needed:
+`(a * e) * (y * z).den.int()` is the monomial `a·e·q·r` given
+`y.den_mul(z): (y * z).den.int() = y.den.int() * z.den.int()`. Definitions
+are applied to a fixed point; atoms defined in terms of each other are a
+refusal.
+
+**Choosing the route.** An ordered-field goal (`OrderedFieldOfInt`) is read
+at its field first, since its order unfolds to one at `Int`; then an
+integral goal; for any other goal the first written fact (else context
+fact) that reads either way decides. When the field reading finds no
+combination and the goal unfolds to an `Int` relation (`Rat::Le` is a
+cross-multiplication), the integral route is tried, as `ring` falls back to
+the unfolded equation (`Rat::mul_le_mono_r_nonpos` above). The written
+facts' sides are read first; when that certificate fails, the context
+facts' sides are read too, and it is retried only if that added a product
+to state.
+
+**A refusal** shows each side as read (`` `b * a` as `a * b` ``), the line
+`omega` stopped with, and the certificate.
+
+**Not here.** Products of facts (`0 <= x * x` is refused; nlinarith's
+degree-two products would be new rows), and atoms that do not spell, which
+`omega` cannot name (a real's `x.seq(n)` is `Rat`'s, read at the field).
+
+**Cost.** One `ring` normalization per multiplying side, at that side's
+degree, plus `omega` over the facts and those equations; the monomials are
+atoms to it, so its problem is the size the hand-written version had.
+
