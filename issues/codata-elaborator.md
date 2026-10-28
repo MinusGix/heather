@@ -1,11 +1,11 @@
 ---
 title: Codata declarations in the elaborator
-status: open
+status: closed
 labels: [codata,coinduction,elaborator,kernel]
 area: interaction-trees
 milestone: [it-coinductive,it-codata]
 created: 2026-10-22
-updated: 2026-10-22
+updated: 2026-10-28
 ---
 
 `codata` declarations in the elaborator, over the kernel's `M` / `corec` /
@@ -49,3 +49,4 @@ round's record: `docs/codata-elaborator-design.md`.
   binder.
 - 2026-10-22: With [[codata-codes]] done, codata declarations are bound at layer c; §6 rewritten, `layers_follow_codata` became `codata_declarations_are_code`, and codata works as a type argument.
 - 2026-10-22: 2026-10-22: [[codata-indexed]] done: indexed codata reads its index by observation (docs/codata-indexed-design.md).
+- 2026-10-28: Closed (tracker tidy): round 1's scope landed, and the milestone it served (`it-codata`) is done in `docs/roadmap.md`. Of the follow-ups, [[codata-indexed]] and [[codata-codes]] are closed, the library is done ([[coitree-library]], [[coitree-eutt]], [[coitree-program-bridge]]), and the one left, [[codata-nested-guards]], is its own issue.

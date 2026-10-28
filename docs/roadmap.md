@@ -84,7 +84,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `hih-pl-spec` | heather-in-heather | open | Linux's calls and answers are a tree container, and `Sim` (the machine produces exactly a tree's traces) is bridged both ways to `LinuxRuns`, with `tr`'s spec written as a tree. | hih-program-logic |
 | `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item (syscalls and proved pieces included) and one loop rule are sound once, probed for elaborator cost. | hih-program-logic |
 | `hih-pl-source` | heather-in-heather | open | An effectful source denotes Linux trees, compiles to x86-64 by a Heather function, and the compiler's correctness theorem is proved once. | hih-program-logic |
-| `hih-pl-first-program` | heather-in-heather | open | `tr` is built through the verified compiler with no per-program proof (the per-function certificate path was retired in B2, 2026-10-24). | hih-program-logic |
+| `hih-pl-first-program` | heather-in-heather | done | `tr` is built through the verified compiler with no per-program proof (the per-function certificate path was retired in B2, 2026-10-24). | hih-program-logic |
 | `hih-tools` | heather-in-heather | open | A dozen small GNU-compatible tools (`echo`, `cat FILE…`, `head -n`, `tr`, `wc`, `grep -F`, `cmp`, `sort` and the rest of `docs/native-real-programs-plan.md` §2) are built by `write-elf` through the verified compiler with no per-program proof, and pass tests against GNU under `LC_ALL=C`. | hih-program-logic |
 | `hih-memory` | heather-in-heather | open | A native program allocates on the heap, under a byte-addressed memory model whose certificates bound and track the allocation. |  |
 | `hih-memory-model` | heather-in-heather | open | Byte-addressed memory with explicit access outcomes is a library model that the native machine model and the program logic both use. | hih-memory |
@@ -282,8 +282,10 @@ with Heather, and the library itself.
 conjecture was answered yes in heather-coq: depth-indexed bisimilarity
 coincides with the greatest fixed point over container events
 ([interaction-trees-container-model](../issues/interaction-trees-container-model.md)).
-The effects story (uniqueness threading first, interaction trees for trace
-semantics) is open in [effects-direction](../issues/effects-direction.md).
+The effects story is decided (2026-10-21): a uniqueness-threaded surface
+that denotes interaction trees
+([effects-direction](../issues/effects-direction.md)); building that surface
+is [effects-uniqueness-surface](../issues/effects-uniqueness-surface.md).
 
 **First work.** The surface can write a tree: a continuation field
 `k: Resp(c) -> Tree` is a recursive function-typed field, lowered by the
@@ -590,3 +592,6 @@ separate machines do not slow each other's tests.
   to get from cat to real programs. It is the plan in
   `docs/native-real-programs-plan.md`: bytes, compile capacity, a program
   builder, then argv, `open`, data size and decimal I/O, then the tool suite.
+- 2026-10-28: `hih-pl-first-program` marked done: `tr a-z A-Z` is built by
+  `write-elf` through the verified compiler with no per-program proof
+  (PR #210, `issues/native-source-bytes.md`), after B2 (PR #156).
