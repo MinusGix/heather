@@ -90,6 +90,11 @@ pub(super) struct DeclAttempt {
     /// every level doubled the work per level of nesting — `step_mono`'s
     /// three levels cost 8.5x its elaboration (2026-09-17).
     pub(super) motive_redundancy_probe: Cell<bool>,
+    /// The declaration's parameter names, in telescope order: the kernel's
+    /// outermost binders when it locates a refusal no recorded site
+    /// explains, and so the names its note uses for them
+    /// (`Elaborator::refused_site_cx`).
+    pub(super) telescope: RefCell<Vec<String>>,
 }
 
 impl DeclAttempt {
@@ -102,6 +107,7 @@ impl DeclAttempt {
         self.member_receivers.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
+        self.telescope.get_mut().clear();
         self.direct_dependencies.get_mut().clear();
         self.children_annotations.get_mut().clear();
         self.wf_slot_annotations.get_mut().clear();
@@ -124,6 +130,7 @@ impl DeclAttempt {
         self.member_receivers.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
+        self.telescope.get_mut().clear();
     }
 }
 

@@ -410,6 +410,13 @@ also refuses an incidental slip (a parse error, an unbound name, an
 unresolved import) unless `Says` asks for it by name. The census lists what
 is left (`scripts/test-census --list bare_refusal`).
 
+Neither it nor `heather check --expectations` accepts a kernel refusal that
+no recorded elaborator site explains (`KernelSite::Unrecorded`), whatever
+reason is asked for: such a refusal is an elaborator route that placed a
+term without comparing or recording it, not a refusal to keep
+(`issues/elab-accepts-conjunction-for-equation.md`). Its message names the
+term the kernel refused and both types; fix the route, then pin.
+
 The proposal as written:
 
 Add `support::refused(src, Reason::Kernel | Reason::Elab("fragment") | …)`,

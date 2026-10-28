@@ -3717,6 +3717,7 @@ impl Elaborator {
                     span,
                     err,
                     note: None,
+                    site: crate::KernelSite::Other,
                 })?;
                 if self.gate_is_inline() {
                     let item = crate::gate::GateItem {
@@ -3749,6 +3750,7 @@ impl Elaborator {
                         span,
                         err,
                         note: None,
+                        site: crate::KernelSite::Other,
                     })?;
                     let unsealed = recording.finish();
                     if let Some(g) = self.gate.as_ref() {

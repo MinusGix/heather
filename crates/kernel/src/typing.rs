@@ -515,6 +515,82 @@ pub fn infer_term(
     Ok(((*ty).clone(), l))
 }
 
+/// Where a refused [`check_term`] or [`check_type`] failed: the innermost
+/// term whose check did not hold, the type it was checked at, and — when
+/// the check reached the conversion its rule ends in — the type it was
+/// inferred at. What [`locate_refusal`] returns.
+///
+/// **Presentation, never judgement.** The verdict is the gate's; this is the
+/// answer to "where", for a caller that has to say it and recorded no site
+/// of its own (`issues/elab-accepts-conjunction-for-equation.md`). Every
+/// field is kernel syntax scoped where the check ran: `gamma` in full, and Ψ
+/// as long as `psi_len`, which is longer than the gate's own Ψ under a
+/// `letbox` or a meta-function binder.
+#[derive(Clone, Debug)]
+pub struct RefusedSite {
+    pub psi_len: usize,
+    pub layer: Layer,
+    pub gamma: LocalCtx,
+    pub term: Term,
+    /// `None` when the expected type was a selection that did not spell.
+    pub expected: Option<Type>,
+    /// `None` when the check failed before its closing conversion — a λ at a
+    /// non-Π, a domain that disagrees, an error inside inference.
+    pub inferred: Option<Type>,
+    pub level: Level,
+    pub err: TypeError,
+}
+
+/// Run [`check_term`] again, recording where it fails: the innermost
+/// failing check, or `None` when the check passes (or fails only outside
+/// every term check — a level, a context). Costs one more kernel check, so
+/// it belongs on the path of a refusal already decided, never on a gate.
+#[allow(clippy::too_many_arguments)]
+pub fn locate_refusal(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    t: &Term,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+) -> Option<RefusedSite> {
+    let env = Env {
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
+    };
+    let mut tc = Tc::new(fuel);
+    tc.refused = Some(RefCell::new(None));
+    let verdict = tc.tm_check_ty(&env, &Rc::new(t.clone()), ty, level);
+    verdict.err()?;
+    tc.refused.and_then(RefCell::into_inner)
+}
+
+/// [`locate_refusal`] for [`check_type`]: the innermost *term* check under
+/// the type that failed, if the failure was inside one.
+pub fn locate_type_refusal(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+) -> Option<RefusedSite> {
+    let env = Env {
+        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
+    };
+    let mut tc = Tc::new(fuel);
+    tc.refused = Some(RefCell::new(None));
+    let verdict = tc.ty_check_syn(&env, ty, level);
+    verdict.err()?;
+    tc.refused.and_then(RefCell::into_inner)
+}
+
 /// A checked spelling's former, as the eager checker viewed it: what the
 /// translation `⌊·⌋` (`docs/intro-by-type-design.md` §2.4) writes into the
 /// component form in its place.
@@ -1066,6 +1142,12 @@ struct Tc {
     /// the two above (issues/quoted-component-traversal-remainder.md).
     #[cfg(feature = "value-metrics")]
     query_trace_seen: Cell<u64>,
+    /// [`locate_refusal`]'s record: the innermost check that failed, kept
+    /// the first time an error passes through [`Tc::tm_check`]. `None` on
+    /// every checker but that one, so a gate that succeeds — every gate the
+    /// suite runs but its refusals — pays one untaken branch per failing
+    /// check and nothing per passing one.
+    refused: Option<RefCell<Option<RefusedSite>>>,
 }
 
 /// `HEATHER_CONV_QUERY_TRACE`'s parsed setting: the item to trace and the
@@ -1488,7 +1570,48 @@ impl Tc {
             diag_term: RefCell::new(None),
             #[cfg(feature = "value-metrics")]
             query_trace_seen: Cell::new(0),
+            refused: None,
         }
+    }
+
+    /// The fall-through's closing conversion on [`locate_refusal`]'s
+    /// checker, keeping the inferred type when it fails. Outlined for
+    /// [`Tc::tm_check_noting`]'s reason.
+    #[cold]
+    #[inline(never)]
+    fn conv_ty_noting(&self, env: &Env, t: &Term, ty: ITyRef, inferred: &ITy, l: &Level) -> R {
+        let verdict = self.conv_ty(env, ty, inferred.as_ref(), l);
+        if let Err(err) = verdict {
+            self.note_refused(env, t, ty, inferred.as_syn(), l, err);
+        }
+        verdict
+    }
+
+    /// Keep the failing check at `t`, unless an inner one was kept already:
+    /// an error propagates outward through every enclosing check, and the
+    /// first to see it is the innermost. Cold, and out of line, so the
+    /// recursion's frames do not carry it.
+    #[cold]
+    #[inline(never)]
+    fn note_refused(&self, env: &Env, t: &Term, expected: ITyRef, inferred: Option<&Type>, l: &Level, err: TypeError) {
+        let Some(slot) = self.refused.as_ref() else { return };
+        let mut slot = slot.borrow_mut();
+        if slot.is_some() {
+            return;
+        }
+        *slot = Some(RefusedSite {
+            psi_len: env.psi.bindings.len(),
+            layer: env.layer,
+            gamma: env.gamma.clone(),
+            term: t.clone(),
+            expected: match expected.as_syn() {
+                Some(e) => Some(e.clone()),
+                None => expected.as_ity().and_then(|e| self.materialize(env, e).ok()).map(|e| (*e).clone()),
+            },
+            inferred: inferred.cloned(),
+            level: l.clone(),
+            err,
+        });
     }
 
     /// Push `t`'s variant name for the sampler's site column; the frame pops
@@ -2532,10 +2655,30 @@ impl Tc {
     fn tm_check(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "check");
+        if self.refused.is_some() {
+            return self.tm_check_noting(env, t, ty, l);
+        }
         if self.spellings.is_none() && check_memoized(t) {
             return self.tm_check_memo(env, t, ty, l);
         }
         self.tm_check_inner(env, t, ty, l)
+    }
+
+    /// [`Tc::tm_check`] on [`locate_refusal`]'s checker: the same rules,
+    /// keeping the failing check. Outlined, so the recursion every other
+    /// checker goes through keeps its frame (one untaken branch).
+    #[cold]
+    #[inline(never)]
+    fn tm_check_noting(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
+        let verdict = if self.spellings.is_none() && check_memoized(t) {
+            self.tm_check_memo(env, t, ty, l)
+        } else {
+            self.tm_check_inner(env, t, ty, l)
+        };
+        if let Err(err) = verdict {
+            self.note_refused(env, t, ty, None, l, err);
+        }
+        verdict
     }
 
     /// The scope `t` is judged in when only Γ's innermost entries can
@@ -2788,6 +2931,9 @@ impl Tc {
                 #[cfg(feature = "value-metrics")]
                 {
                     *self.diag_term.borrow_mut() = Some((**t).clone());
+                }
+                if self.refused.is_some() {
+                    return self.conv_ty_noting(env, t, ty, &inferred, l);
                 }
                 self.conv_ty(env, ty, inferred.as_ref(), l)
             }

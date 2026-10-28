@@ -333,6 +333,15 @@ pub fn assert_refused(e: &mut heather_elab::Elaborator, name: &str, src: &str, w
         || ["unbound name", "cannot find module", "neither an imported module", "is ambiguous"]
             .iter()
             .any(|slip| headline.contains(slip));
+    // A conversion refusal that no recorded site explains is an elaborator
+    // gap (`KernelSite::Unrecorded`,
+    // issues/elab-accepts-conjunction-for-equation.md), never a refusal to
+    // pin, whatever `why` says of it: the test fails until the route that
+    // placed the term records its site.
+    assert!(
+        !matches!(err, heather_elab::ElabError::Kernel { site: heather_elab::KernelSite::Unrecorded, .. }),
+        "{name}: the kernel's refusal is at no recorded site (an elaborator gap), got:\n{rendered}"
+    );
     match why {
         Refusal::Kernel => assert!(
             matches!(err, heather_elab::ElabError::Kernel { .. }),
