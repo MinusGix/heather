@@ -150,7 +150,7 @@ theorem Target::arg_cells_store(self t: Target, v: Nat → BitVec(8), buf, cap: 
     let w = cells.witness;
     let one: List<BitVec(8)> = [imm_byte0(byte.zero_extend(56))];
     let ends = t.layout().buffer_end(buf, cap, found);
-    let stack: (t.layout().stack_offset() = t.layout().scratch_offset() + t.caps.largest()) = refl;
+    let stack: (t.layout().stack_offset() = t.layout().scratch_offset() + (t.caps.largest() + 1)) = refl;
     let below: ((bo + i) + 1 <= t.layout().stack_offset()) = omega(ends, stack, short);
     let fits: ((bo + i) + 1 <= t.r.size) = omega(below, t.stack_fits());
     let w2 = t.r.buffer(w).set_span(bo + i, one.to_vector()).cells;
@@ -789,7 +789,7 @@ theorem Target::goes_start(self t: Target, p: Prog, within: p.saves_rsp(t.layout
         let bytes = word_bytes(rsp);
         let zero = λ (_: Nat) => zero_byte();
         let fits: (so + 8 <= t.r.size) = t.stack_fits();
-        let stack: (so = layout.scratch_offset() + t.caps.largest()) = refl;
+        let stack: (so = layout.scratch_offset() + (t.caps.largest() + 1)) = refl;
         let w = t.r.buffer(zero).set_span(so, bytes.to_vector()).cells;
         let after = t.r.profile.store(m, next_rip(t.r.low, so), bytes);
         let slot: (word_in(w, so) = rsp) = t.r.x86_word_stored(zero, so, rsp);

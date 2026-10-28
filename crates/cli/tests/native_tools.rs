@@ -1,9 +1,10 @@
-//! `tr a-z A-Z`, `yes`, `head -c 10`, `wc -l`, and `echo` and `yes STR`
-//! over the command line, written with the builder (`native_build`),
+//! `tr a-z A-Z`, `yes`, `head -c 10`, `wc -l`, `echo` and `yes STR` over
+//! the command line, and `cat FILE…` over open and close, written with the builder (`native_build`),
 //! compiled by the effectful source compiler and written as ELFs by
 //! `heather write-elf`, run as Linux processes beside GNU's
 //! (issues/native-source-bytes.md, issues/native-source-builder.md,
-//! issues/native-source-argv.md). None has
+//! issues/native-source-argv.md, issues/native-compile-other-calls.md).
+//! None has
 //! a theorem of its own: `lib/native/native_tools.hthr` holds only the
 //! tools, and `native_compile_correct` is the proof of each.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -278,6 +279,71 @@ fn compiled_yes_takes_its_line_as_gnu_yes() {
     if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
         let status = with_args(&binary, &[b"STR".to_vec()]).stdout(Stdio::from(full)).stderr(Stdio::null()).status().unwrap();
         assert_eq!(status.code(), Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A process on `input`, its exit code and what it wrote to stdout and
+/// stderr.
+fn run_both(program: &mut Command, input: &[u8], stdout: Stdio) -> (Option<i32>, Vec<u8>, Vec<u8>) {
+    let mut child = program.stdin(Stdio::piped()).stdout(stdout).stderr(Stdio::piped()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let input = input.to_vec();
+    let writer = std::thread::spawn(move || { let _ = stdin.write_all(&input); });
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    (out.status.code(), out.stdout, out.stderr)
+}
+
+#[test]
+fn compiled_cat_files_runs_as_gnu_cat() {
+    let dir = scratch("cat_files");
+    let binary = dir.join("cat");
+    write_tool("cat_files_source", &binary);
+
+    // Files run from their folder, so the names are short: random bytes
+    // past a buffer, text, an empty file, a folder, a name that is not
+    // there, a name too long for Linux and `-`.
+    let mut random = Bytes::seeded("cat FILE");
+    std::fs::write(dir.join("bytes"), random.take(70000, |r| r as u8)).unwrap();
+    std::fs::write(dir.join("text"), random.take(3000, |r| b"ab \n"[(r % 4) as usize])).unwrap();
+    std::fs::write(dir.join("empty"), b"").unwrap();
+    std::fs::create_dir(dir.join("folder")).unwrap();
+    let long = "n".repeat(300);
+    let cases: Vec<Vec<&str>> = vec![
+        vec![],
+        vec!["-"],
+        vec!["text"],
+        vec!["bytes", "text", "empty"],
+        vec!["text", "-", "text"],
+        vec!["missing"],
+        vec!["text", "missing", "bytes"],
+        vec!["folder", "text"],
+        vec![&long, "text"],
+        vec!["missing", "-", "folder", "empty"],
+    ];
+    let input = random.take(5000, |r| r as u8);
+    for args in &cases {
+        let ours = run_both(Command::new(&binary).current_dir(&dir).args(args), &input, Stdio::piped());
+        let gnu = run_both(Command::new("cat").env("LC_ALL", "C").current_dir(&dir).args(args), &input, Stdio::piped());
+        assert_eq!(ours.0, gnu.0, "cat {args:?} exits as GNU's does");
+        assert!(ours.1 == gnu.1, "cat {args:?} sends what GNU's sends");
+        assert_eq!(String::from_utf8_lossy(&ours.2), String::from_utf8_lossy(&gnu.2), "cat {args:?} says what GNU's says");
+    }
+
+    // A name longer than the name buffer exits 1 before opening it.
+    let longer = "n".repeat(513);
+    let (code, out, _) = run_both(Command::new(&binary).current_dir(&dir).args(["text", &longer]), b"", Stdio::piped());
+    assert_eq!(code, Some(1), "a name past the buffer exits 1");
+    assert!(out == std::fs::read(dir.join("text")).unwrap(), "after the files before it");
+
+    // A write that fails: both say "cat: write error: …" and exit 1.
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let ours = run_both(Command::new(&binary).current_dir(&dir).arg("text"), b"", Stdio::from(full.try_clone().unwrap()));
+        let gnu = run_both(Command::new("cat").env("LC_ALL", "C").current_dir(&dir).arg("text"), b"", Stdio::from(full));
+        assert_eq!(ours.0, Some(1), "a failed write exits 1");
+        assert_eq!((ours.0, String::from_utf8_lossy(&ours.2)), (gnu.0, String::from_utf8_lossy(&gnu.2)), "as GNU's does, saying what it says");
     }
 
     std::fs::remove_dir_all(dir).unwrap();

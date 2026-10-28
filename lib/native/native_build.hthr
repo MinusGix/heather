@@ -7,7 +7,7 @@
 // its buffers and words are bound by Heather lambdas (`buffer`, `local`),
 // its values are expressions (`Val`), and its statements (`Act`) assign,
 // store a byte, branch and loop on a value being nonzero, read, write,
-// copy a command-line argument and exit. A procedure is an ordinary Heather function returning an `Act`, so
+// open, close, copy a command-line argument and exit. A procedure is an ordinary Heather function returning an `Act`, so
 // it is inlined where it is called (`write_all`, `each_read`, `for_count`).
 //
 // `Tool::source` lowers a tool. It numbers the words in the order their
@@ -84,6 +84,12 @@ inductive Act {
     // the negated errno into `result`.
     ReadTo(fd: Val, buf: Buf, len: Val, result: Var),
     WriteFrom(fd: Val, buf: Buf, from: Val, len: Val, result: Var),
+    // openat(AT_FDCWD, path, O_RDONLY) of the path in the buffer's first
+    // `len` bytes (and its capacity), up to a NUL; the descriptor or the
+    // negated errno into `result`. A close of `fd`, zero or the negated
+    // errno into `result`.
+    OpenOf(path: Buf, len: Val, result: Var),
+    CloseOf(fd: Val, result: Var),
     // Argument `index` (argv[0] the program's name) copied to the buffer's
     // start, as much as it holds, and its whole length into `len`; past
     // the last argument, `len` minus one (`Env::arg`).
@@ -178,6 +184,8 @@ fn loop_while(condition: Val, body: Act) → Act { While(condition, body) }
 fn do_while(body: Act, condition: Val) → Act { DoWhile(body, condition) }
 fn read(fd: Val, buf: Buf, len: Val, result: Var) → Act { ReadTo(fd, buf, len, result) }
 fn write(fd: Val, buf: Buf, from, len: Val, result: Var) → Act { WriteFrom(fd, buf, from, len, result) }
+fn open(path: Buf, len: Val, fd: Var) → Act { OpenOf(path, len, fd) }
+fn close(fd: Val, result: Var) → Act { CloseOf(fd, result) }
 fn exit(status: Val) → Act { Quit(status) }
 fn arg(index: Val, buf: Buf, len: Var) → Act { ArgTo(index, buf, len) }
 
@@ -200,6 +208,16 @@ fn each_read(fd: Val, buf: Buf, body: Var → Act) → Act {
     local(num(0), λ n => do_while(
         read(fd, buf, buf.size(), n) ++ when(n.get().negative(), exit(num(1))) ++ when(n.get(), body(n)),
         n.get()))
+}
+
+// The buffer's `len` bytes from `from` written to `fd`, again for what is
+// left until all are sent; a failed write runs `failed` with the negated
+// errno in `wrote`, and stops.
+fn write_span(fd: Val, buf: Buf, from, len: Val, failed: Var → Act) → Act {
+    local(num(0), λ sent => local(num(0), λ wrote => do_while(
+        write(fd, buf, from + sent.get(), len - sent.get(), wrote)
+            ++ branch(wrote.get().negative(), failed(wrote) ++ sent.set(len), sent.set(sent.get() + wrote.get())),
+        sent.get().below(len))))
 }
 
 // The buffer's first `len` bytes written to `fd`, again for what is left
@@ -367,10 +385,15 @@ fn List::widths_agree(self nodes: List<Node>, written: List<Port>) → Bool {
 // Whether S4 takes the nodes whole (`Prog::pure_leaf`): all pure, its
 // inputs and nodes within the register pool, in evaluation order and no
 // input written (`leaf_checks`), values read at their widths. Its values
-// stay in registers, so it is the better leaf.
+// stay in registers, so it is the better leaf. `leaf_checks` less its
+// register checks, which hold of the pool's slices whatever the counts
+// (RBX is not in the pool, and the pool repeats no register), with the
+// inputs found once: a tool's lowering runs this for every node it packs,
+// inside `write-elf`'s one `refl` of the lowering.
 fn List::fits_registers(self nodes: List<Node>) → Bool {
-    nodes_pure(nodes) && ((nodes_inputs(nodes).len() + nodes.len()).leb(register_pool().len())
-        && (leaf_checks(nodes, leaf_inputs(nodes), leaf_outputs(nodes)) && nodes.widths_agree([])))
+    let inputs = nodes_inputs(nodes);
+    nodes_pure(nodes) && ((inputs.len() + nodes.len()).leb(register_pool().len())
+        && ((nodes_evaluable(nodes) && ports_absent(inputs, nodes_writes(nodes))) && nodes.widths_agree([])))
 }
 
 // Whether the leaf so far takes the next node, as `Prog::computes` would.
@@ -381,7 +404,7 @@ fn List::fits_registers(self nodes: List<Node>) → Bool {
 // its own. A node not taken starts the next leaf.
 fn List::takes(self group: List<Node>, node: Node) → Bool {
     (group ++ [node]).fits_registers()
-        || (!group.fits_registers() && (![node].fits_registers() && nodes_wide(group ++ [node])))
+        || (![node].fits_registers() && (!group.fits_registers() && nodes_wide(group ++ [node])))
 }
 
 // A leaf of the group, then the statement.
@@ -438,6 +461,14 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
             let s = from.place(f.next);
             let n = len.place(s.next);
             (f.nodes ++ s.nodes ++ n.nodes).ops() ++ [Do(Invoke(Writes(f.id, buf.id, s.id, n.id, result.id)))]
+        },
+        OpenOf(path, len, result) => {
+            let n = len.place(next);
+            n.nodes.ops() ++ [Do(Invoke(Opens(path.id, n.id, result.id)))]
+        },
+        CloseOf(fd, result) => {
+            let f = fd.place(next);
+            f.nodes.ops() ++ [Do(Invoke(Closes(f.id, result.id)))]
         },
         ArgTo(index, buf, len) => {
             let k = index.place(next);

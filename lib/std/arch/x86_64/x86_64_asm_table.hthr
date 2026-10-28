@@ -538,6 +538,36 @@ fn asm_code_ending(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog,
     }
 }
 
+// The same code consed from the back onto `rest`: `asm_code_ending` nests
+// its appends to the left, so forcing a long window copies its front once
+// per item, and write-elf's read of a long entry (a buffer's initial bytes)
+// ran out of memory. Linear; `asm_code_ending_onto_is` ties the two.
+fn asm_code_ending_onto(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Prog, k, end: Nat, rest: List<BitVec(8)>) → List<BitVec(8)> {
+    match k {
+        Zero => rest,
+        Succ(j) => match p {
+            Start => rest,
+            At(before, _, item) => asm_code_ending_onto(fills, labels, before, j, end - asm_len(item), asm_bytes(fills, labels, end - asm_len(item), item) ++ rest),
+        },
+    }
+}
+
+theorem asm_code_ending_onto_is(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, k: Nat): (p: Prog) → (end: Nat) → (rest: List<BitVec(8)>) →
+    asm_code_ending_onto(fills, labels, p, k, end, rest) = asm_code_ending(fills, labels, p, k, end) ++ rest {
+    match k {
+        Zero => λ p end rest => refl,
+        Succ(j) => λ p end rest => match p {
+            Start => refl,
+            At(before, _, item) => {
+                let e = end - asm_len(item);
+                let bytes = asm_bytes(fills, labels, e, item);
+                trans(asm_code_ending_onto_is(fills, labels, j, before, e, bytes ++ rest),
+                    sym(asm_code_ending(fills, labels, before, j, e).append_assoc(bytes, rest)))
+            },
+        },
+    }
+}
+
 theorem asm_code_after_ending(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, k: Nat): (p: Prog) →
     asm_code_after(fills, labels, p, k) = asm_code_ending(fills, labels, p, k, prog_len(p)) {
     match k {

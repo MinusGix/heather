@@ -22,6 +22,7 @@ import native_compile_leaf;
 import native_compile_bytes;
 import native_compile_nodes;
 import native_compile_args;
+import native_compile_opens;
 import function_ir;
 import function_ir_eval;
 import function_ir_lower;
@@ -64,6 +65,13 @@ theorem Prog::within_writes(self p: Prog, layout: Layout, fd, buf, from, len, re
     Exists(20, refl)
 }
 
+theorem Prog::within_opens(self p: Prog, layout: Layout, path, len, result, capacity, names: Nat):
+    p.Within(p.opens(layout, path, len, result, capacity, names).prog) {
+    Exists(24, refl)
+}
+
+theorem Prog::within_closes(self p: Prog, layout: Layout, fd, result: Nat): p.Within(p.closes(layout, fd, result)) { Exists(6, refl) }
+
 theorem Prog::within_args(self p: Prog, layout: Layout, index, buf, len, capacity, names: Nat):
     p.Within(p.args(layout, index, buf, len, capacity, names).prog) {
     Exists(28, refl)
@@ -98,8 +106,19 @@ theorem Stmt::emit_extends(self s: Stmt, layout: Layout): (p: Prog) → (names: 
                         λ x _ => p.Within(x.prog), p.within_writes(layout, fd, buf, from, len, result, capacity, names)),
                 },
             },
-            Opens(_, _, _) => λ none => absurd(none),
-            Closes(_, _) => λ none => absurd(none),
+            Opens(path, len, result) => match words_fit([len, result]) {
+                False => λ none => absurd(none),
+                True => match layout.capacities.nth(path) {
+                    None => λ none => absurd(none),
+                    Some(capacity) => λ same => j(Option::some_inj(p.opens(layout, path, len, result, capacity, names), c, same),
+                        λ x _ => p.Within(x.prog), p.within_opens(layout, path, len, result, capacity, names)),
+                },
+            },
+            Closes(fd, result) => match words_fit([fd, result]) {
+                False => λ none => absurd(none),
+                True => λ same => j(Option::some_inj(Compiled(p.closes(layout, fd, result), names), c, same),
+                    λ x _ => p.Within(x.prog), p.within_closes(layout, fd, result)),
+            },
             StatsPath(_, _, _, _) => λ none => absurd(none),
             StatsFd(_, _, _) => λ none => absurd(none),
         },
@@ -322,8 +341,42 @@ theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers()): (p: Prog) →
                     })(refl)
                 },
             })(refl),
-            Opens(_, _, _) => λ none => absurd(none),
-            Closes(_, _) => λ none => absurd(none),
+            Opens(path, len, result) => (match words_fit([len, result]) as λ b => words_fit([len, result]) = b → (match b {
+                    False => None,
+                    True => match layout.capacities.nth(path) { None => None, Some(capacity) => Some(p.opens(layout, path, len, result, capacity, names)) },
+                }) = Some(c) → c.prog.Within(t.program) → t.Runs(Invoke(Opens(path, len, result)), call, p, c.prog) {
+                False => λ _ none => absurd(none),
+                True => λ fit => {
+                    let ok = Bool::is_true_and(word_fits(len), word_fits(result) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::is_true_and(word_fits(result), True, ok.right);
+                    (match t.caps.nth(path) as λ o => t.caps.nth(path) = o →
+                            (match o { None => None, Some(capacity) => Some(p.opens(layout, path, len, result, capacity, names)) }) = Some(c) →
+                            c.prog.Within(t.program) → t.Runs(Invoke(Opens(path, len, result)), call, p, c.prog) {
+                        None => λ _ none => absurd(none),
+                        Some(capacity) => λ found same => j(Option::some_inj(p.opens(layout, path, len, result, capacity, names), c, same),
+                            λ x _ => x.prog.Within(t.program) → t.Runs(Invoke(Opens(path, len, result)), call, p, x.prog),
+                            λ within n env k exits next => t.goes_opens(env, p, path, len, result, capacity, names,
+                                word_fits_inside(len, ok.left), word_fits_inside(result, ok2.left), found, within,
+                                λ a => k(Onward(Opens(path, len, result).answer(env, a))),
+                                λ a answers => next(Opens(path, len, result).answer(env, a)))),
+                    })(refl)
+                },
+            })(refl),
+            Closes(fd, result) => (match words_fit([fd, result]) as λ b => words_fit([fd, result]) = b → (match b {
+                    False => None,
+                    True => Some(Compiled(p.closes(layout, fd, result), names)),
+                }) = Some(c) → c.prog.Within(t.program) → t.Runs(Invoke(Closes(fd, result)), call, p, c.prog) {
+                False => λ _ none => absurd(none),
+                True => λ fit same => {
+                    let ok = Bool::is_true_and(word_fits(fd), word_fits(result) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::is_true_and(word_fits(result), True, ok.right);
+                    j(Option::some_inj(Compiled(p.closes(layout, fd, result), names), c, same),
+                        λ x _ => x.prog.Within(t.program) → t.Runs(Invoke(Closes(fd, result)), call, p, x.prog),
+                        λ within n env k exits next => t.goes_closes(env, p, fd, result, word_fits_inside(fd, ok.left), word_fits_inside(result, ok2.left), within,
+                            λ a => k(Onward(Closes(fd, result).answer(env, a))),
+                            λ a answers => next(Closes(fd, result).answer(env, a))))
+                },
+            })(refl),
             StatsPath(_, _, _, _) => λ none => absurd(none),
             StatsFd(_, _, _) => λ none => absurd(none),
         },

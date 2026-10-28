@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,surface-syntax,ergonomics]
 area: language
 created: 2026-10-02
-updated: 2026-10-21
+updated: 2026-10-28
 ---
 
 To write `10` or `'\n'` at a byte, a program needs `import algebra; import
@@ -31,3 +31,4 @@ a program writes `import bitvec;` and nothing else for byte literals.
 
 - 2026-10-20: `rat` and `creal` now `export algebra::{Numeral}` so their clients write `0` without `import algebra` ([[rat-numerals-and-semigroup-clash]]): a per-carrier workaround; `bitvec` could do the same until this lands.
 - 2026-10-21: (tac-host-interface round 2) a string literal needs `import list; import bool; import char;` besides `string` (the collection literal, `bool::decide_yes` in each character's intro, and `char::ofNat`), and when `bool` is the one missing the error still says `add import char;` (`literals.rs`: `char_intro` returns None for either key). A tactic argument naming a hypothesis by string (`resolve("p")`) is the newest client to hit it.
+- 2026-10-28: (native-compile-other-calls) hit again writing `cat FILE…`'s messages in `lib/native/native_tools.hthr` with `utf8::encode("…")`: `import char` was there, `bool` was the missing one, and the error still said `add import char;`. A one-character string elaborates without `bool`, which makes the message harder to read. Naming the missing key's module in `literal_needs_module` would be the cheap half of the fix.

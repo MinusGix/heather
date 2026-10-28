@@ -5,7 +5,7 @@
 // Every word of the environment has a home: a slot of eight bytes in one data
 // region, word `i` at offset `8 i` (`word_slots` of them). Each buffer has a
 // range after the words, at its capacity, and past them all a scratch range
-// as large as the largest buffer. So the invariant between statements is the
+// one byte longer than the largest buffer (room for a path and its NUL). So the invariant between statements is the
 // memory alone: the region holds the environment (`Target::Placed`,
 // native_compile_region), and no register carries anything from one
 // statement to the next. A statement loads what it reads into registers and
@@ -28,7 +28,9 @@
 //   word. A read lands in the scratch range and is copied into its buffer
 //   only when it succeeds: Linux may leave anything in the range after a
 //   failed read (`LinuxLeaves`), and the source says the buffer is as it
-//   was. Reads and writes are compiled; the other calls are refused.
+//   was. An open copies its path into the scratch range up to its clamped
+//   length or its NUL, ends it with a NUL, and asks openat(AT_FDCWD,
+//   scratch, O_RDONLY); a close asks close(fd). Stats are refused.
 // - `Branch` tests its bit (the word's low bit, masked) and JEs to its
 //   second arm; `Repeat` runs its body from a label, tests `again`, JEs out
 //   and JMPs back; `Exit` makes the exit call with its word. Running off the
@@ -89,7 +91,7 @@ fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { layout.low.
 fn Layout::byte_at(self layout: Layout, buf, i: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf) + i) }
 fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * word_slots() + layout.capacities.total() }
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
-fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + layout.capacities.largest() }
+fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
 fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
 fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 8 }
 
@@ -299,6 +301,41 @@ fn Prog::writes(self p: Prog, layout: Layout, fd, buf, from, len, result: Nat, c
     Compiled(asked.word_from(layout, result, Rax), Succ(Succ(names)))
 }
 
+// close(fd); the result stored.
+fn Prog::closes(self p: Prog, layout: Layout, fd, result: Nat) → Prog {
+    then(then(p, Block([MovRI(Rax, BitVec::ofNat(3))])).word_to(layout, fd, Rdi), Syscall).word_from(layout, result, Rax)
+}
+
+// The path copy's counter and its two walks set, and its loop's label.
+fn Prog::path_head(self p: Prog, layout: Layout, buf, head: Nat) → Prog {
+    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.buffer_at(buf)), MovRI(Rdi, layout.scratch_at())])).label(head)
+}
+
+// The path's bytes copied from its buffer to the scratch range, up to the
+// count in RCX or its first NUL, out to `done` at either: R8 counts, RSI
+// and RDI walk the two ranges, RDX carries each byte.
+fn Prog::path_copy(self p: Prog, layout: Layout, buf, head, done: Nat) → Prog {
+    let set = p.path_head(layout, buf, head);
+    let counted = then(then(set, Block([CmpRR(R8, Rcx)])), Jcc(E, done));
+    let tested = then(then(then(counted, LoadByte(ByteLoad(Rdx, Rsi))), Block([TestRR(Rdx, Rdx)])), Jcc(E, done));
+    let moved = then(tested, StoreByte(ByteStore(Rdi, Rdx)));
+    then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
+}
+
+// AT_FDCWD, minus 100 as a word (`at_fdcwd`, linux_x86_64_io).
+fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
+
+// openat(AT_FDCWD, scratch, O_RDONLY) of the path, its first min(len,
+// capacity) bytes up to its NUL copied to the scratch range and a NUL put
+// after them (RDI is past them); the result stored.
+fn Prog::opens(self p: Prog, layout: Layout, path, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
+    let clamped = then(p.word_to(layout, len, Rcx), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rcx, R9, Succ(names));
+    let copied = clamped.path_copy(layout, path, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names))));
+    let ended = then(then(copied, Block([MovRI(Rdx, BitVec::ofNat(0))])), StoreByte(ByteStore(Rdi, Rdx)));
+    let asking: List<Instruction> = [MovRI(Rax, BitVec::ofNat(257)), MovRI(Rdi, fdcwd_word()), MovRI(Rsi, layout.scratch_at()), MovRI(Rdx, BitVec::ofNat(0))];
+    Compiled(then(then(ended, Block(asking)), Syscall).word_from(layout, result, Rax), Succ(Succ(Succ(names))))
+}
+
 fn words_fit(ids: List<Nat>) → Bool { match ids { Nil => True, Cons(id, rest) => word_fits(id) && words_fit(rest) } }
 
 fn Prog::call(self p: Prog, layout: Layout, shape: CallShape, names: Nat) → Option<Compiled> {
@@ -317,8 +354,17 @@ fn Prog::call(self p: Prog, layout: Layout, shape: CallShape, names: Nat) → Op
                 Some(capacity) => Some(p.writes(layout, fd, buf, from, len, result, capacity, names)),
             },
         },
-        Opens(_, _, _) => None,
-        Closes(_, _) => None,
+        Opens(path, len, result) => match words_fit([len, result]) {
+            False => None,
+            True => match layout.capacities.nth(path) {
+                None => None,
+                Some(capacity) => Some(p.opens(layout, path, len, result, capacity, names)),
+            },
+        },
+        Closes(fd, result) => match words_fit([fd, result]) {
+            False => None,
+            True => Some(Compiled(p.closes(layout, fd, result), names)),
+        },
         StatsPath(_, _, _, _) => None,
         StatsFd(_, _, _) => None,
     }
@@ -642,8 +688,8 @@ fn Source::compile(self src: Source, low: BitVec(64)) → Option<Prog> {
 //   4  a word past the slots (the word, the slots)
 //   5  an input neither a word nor a bit (its width)
 //   6  S4's lowering refused the leaf
-//   7  a call the compiler does not make (2 open, 3 close, 4 stat of a
-//      path, 5 stat of a descriptor)
+//   7  a call the compiler does not make (4 stat of a path, 5 stat of a
+//      descriptor)
 //   8  a buffer the source does not have (the buffer, how many it has)
 //   9  the program's labels did not lay out
 //  10  a leaf S4 does not take whole, with a node not at width 64 (its
@@ -775,8 +821,8 @@ fn call_refusal(layout: Layout, shape: CallShape) → List<Nat> {
     match shape {
         Reads(fd, buf, len, result) => buffer_refusal(layout, [fd, len, result], buf),
         Writes(fd, buf, from, len, result) => buffer_refusal(layout, [fd, from, len, result], buf),
-        Opens(_, _, _) => [7, 2, 0],
-        Closes(_, _) => [7, 3, 0],
+        Opens(path, len, result) => buffer_refusal(layout, [len, result], path),
+        Closes(fd, result) => ids_refusal([fd, result]),
         StatsPath(_, _, _, _) => [7, 4, 0],
         StatsFd(_, _, _) => [7, 5, 0],
     }
@@ -843,7 +889,12 @@ fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
             Dataflow(body) => body.nodes.names_after(names),
             _ => names,
         },
-        Invoke(shape) => match shape { Reads(_, _, _, _) => Succ(Succ(Succ(names))), Writes(_, _, _, _, _) => Succ(Succ(names)), _ => names },
+        Invoke(shape) => match shape {
+            Reads(_, _, _, _) => Succ(Succ(Succ(names))),
+            Writes(_, _, _, _, _) => Succ(Succ(names)),
+            Opens(_, _, _) => Succ(Succ(Succ(names))),
+            _ => names,
+        },
         Arg(_, _, _) => Succ(Succ(Succ(Succ(Succ(names))))),
         _ => names,
     }

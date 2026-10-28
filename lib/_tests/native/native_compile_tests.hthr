@@ -44,10 +44,13 @@ fn big_cat() → Source { cat(2048) }
 theorem big_cat_too_big(): Layout(low(), big_cat().capacities()).size().leb(DataRegion::io_page().size) = False { refl }
 theorem cat_fits_the_page(): Layout(low(), cat(1024).capacities()).size().leb(DataRegion::io_page().size) = True { refl }
 
-// An `open`: the compiler makes only reads and writes.
-fn opens() → Source { Source(functions := [], buffers := [Buffer(16)], main := Invoke(Opens(0, 1, 2))) }
+// An `open` and a `close` compile; a `stat` is the call the compiler does
+// not make yet.
+fn opens() → Source { Source(functions := [], buffers := [Buffer(16)], main := Then(Invoke(Opens(0, 1, 2)), Invoke(Closes(2, 3)))) }
+fn stats() → Source { Source(functions := [], buffers := [Buffer(16), Buffer(144)], main := Invoke(StatsPath(0, 1, 1, 2))) }
 
-theorem opens_refused(): opens().refusal(low()) = [1, 1, 7, 2, 0] { refl }
+theorem opens_compiles(): opens().refusal(low()) = [] { refl }
+theorem stats_refused(): stats().refusal(low()) = [1, 1, 7, 4, 0] { refl }
 
 // Fifteen constants: one register each, more than the pool's fourteen, so
 // S4 does not take the leaf whole and it compiles a node at a time.
