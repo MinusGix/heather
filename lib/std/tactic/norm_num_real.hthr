@@ -171,6 +171,10 @@ fn norm_num_q(q: Rat) → NumReal { NumQ(q) }
 // A leaf's value: a real that is `CReal::ofRat(q)` up to unfolding is the
 // embedding of its first term, which is `q`.
 fn norm_num_term(x: CReal) → Rat { x.seq(0) }
+// The empty sum's and the empty product's values, which a range at the
+// bound zero converts to.
+fn norm_num_sum_unit() → Rat { 0 }
+fn norm_num_prod_unit() → Rat { 1 }
 fn norm_num_add(a, b: NumReal) → NumReal { NumAdd(a, b) }
 fn norm_num_sub(a, b: NumReal) → NumReal { NumSub(a, b) }
 fn norm_num_neg(a: NumReal) → NumReal { NumNeg(a) }

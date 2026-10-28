@@ -40,6 +40,7 @@ import algebra_rel;
 import order;
 import semiring;
 import ordered_field;
+import big_operator;
 import rat;
 export algebra::{Numeral};
 
@@ -1700,6 +1701,15 @@ instance OrderedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {
 }
 
 instance LocatedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {}
+
+// A sum's order and sign, termwise, as at `Rat` (`Rat::range_le`).
+theorem CReal::range_le(n: Nat, f, g: Nat → CReal, h: (k: Nat) → k < n → f(k) <= g(k)): MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g) {
+    LocatedAddGroup::range_le(n, f, g, h)
+}
+
+theorem CReal::range_nonneg(n: Nat, f: Nat → CReal, h: (k: Nat) → k < n → 0 <= f(k)): 0 <= MonoidRel::range(+, n, f) {
+    LocatedAddGroup::range_nonneg(n, f, h)
+}
 
 instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {
     of_nat := λ n => CReal::ofRat(Rat::ofInt(OfNat(n))),

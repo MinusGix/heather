@@ -5,7 +5,7 @@ labels: [setoids,relations,tactics,proofs]
 area: tactics
 milestone: [tac-general]
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 `rewrite(h, e)` along a relation ([[rewrite-setoid-relations]],
@@ -38,3 +38,7 @@ Design questions this owns:
 - **[[rewrite-setoid-relations]]** owns the walk, the plan and the evidence
   lookup. Assumed here: only that a node's result is `(term, proof)` and that
   evidence statements are elaborated as text over aliases.
+
+## Log
+
+- 2026-10-27: A second customer: `∑ k < n, e` / `∏` (MonoidRel::range, big_operator.hthr) is a λ under a call. Its crossing evidence is `MonoidRel::range_cong` (pointwise below the bound, a bounded Pointwise), not plain Pointwise; setoid rewrite and rel_cong refuse inside a sum today ([[tactics-and-big-operators]]).

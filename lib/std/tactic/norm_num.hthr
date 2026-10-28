@@ -216,6 +216,7 @@ record NormNumRealHeads {
     add: GlobalRef, sub: GlobalRef, neg: GlobalRef, mul: GlobalRef, npow: GlobalRef, pow: GlobalRef, abs: GlobalRef, inv: GlobalRef, embed: GlobalRef,
     q: GlobalRef, nadd: GlobalRef, nsub: GlobalRef, nneg: GlobalRef, nmul: GlobalRef, npw: GlobalRef, nabs: GlobalRef, ninv: GlobalRef, nzpow: GlobalRef,
     wq: GlobalRef, wtwo: GlobalRef, wat: GlobalRef, same: GlobalRef, term: GlobalRef,
+    range: Option<GlobalRef>, zero: GlobalRef, one: GlobalRef,
 }
 
 fn norm_num_real_global(name: String) → Tac<GlobalRef> {
@@ -234,13 +235,14 @@ fn norm_num_real_heads() → Tac<NormNumRealHeads> {
     norm_num_real_global("norm_num_abs").bind(λ nabs => norm_num_real_global("norm_num_inv").bind(λ ninv => norm_num_real_global("norm_num_zpow").bind(λ nzpow =>
     norm_num_real_global("norm_num_wf_q").bind(λ wq => norm_num_real_global("norm_num_wf_two").bind(λ wtwo => norm_num_real_global("norm_num_wf_at").bind(λ wat =>
     norm_num_global("CReal::same_refl").bind(λ same => norm_num_real_global("norm_num_term").bind(λ term =>
-        Pure(NormNumRealHeads(add, sub, neg, mul, npow, pow, abs, inv, embed, q, nadd, nsub, nneg, nmul, npw, nabs, ninv, nzpow, wq, wtwo, wat, same, term)))))))))))))))))))))))))
+    norm_num_try("MonoidRel::range").bind(λ range => norm_num_real_global("norm_num_sum_unit").bind(λ zero => norm_num_real_global("norm_num_prod_unit").bind(λ one =>
+        Pure(NormNumRealHeads(add, sub, neg, mul, npow, pow, abs, inv, embed, q, nadd, nsub, nneg, nmul, npw, nabs, ninv, nzpow, wq, wtwo, wat, same, term, range, zero, one))))))))))))))))))))))))))))
 }
 
 // A tree read off a real, with its well-formedness witness.
 record NormNumRead { tree: Expr, wf: Expr }
 
-inductive NormNumOp { NOLeaf, NOAdd, NOSub, NONeg, NOMul, NONpow, NOPow, NOAbs, NOInv, NOEmbed }
+inductive NormNumOp { NOLeaf, NOAdd, NOSub, NONeg, NOMul, NONpow, NOPow, NOAbs, NOInv, NOEmbed, NORange }
 
 fn norm_num_op(H: NormNumRealHeads, g: GlobalRef) → NormNumOp {
     match g.id.same(H.add.id) { True => NOAdd, False =>
@@ -251,7 +253,8 @@ fn norm_num_op(H: NormNumRealHeads, g: GlobalRef) → NormNumOp {
     match g.id.same(H.pow.id) { True => NOPow, False =>
     match g.id.same(H.abs.id) { True => NOAbs, False =>
     match g.id.same(H.inv.id) { True => NOInv, False =>
-    match g.id.same(H.embed.id) { True => NOEmbed, False => NOLeaf } } } } } } } } }
+    match g.id.same(H.embed.id) { True => NOEmbed, False =>
+    match norm_num_is(H.range, g) { True => NORange, False => NOLeaf } } } } } } } } } }
 }
 
 fn norm_num_exact(H: NormNumRealHeads, q: Expr) → NormNumRead { NormNumRead(App(Global(H.q), q), Global(H.wq)) }
@@ -302,6 +305,56 @@ fn norm_num_at_real(H: NormNumRealHeads, tree: Expr, ra: NormNumRead, x: Expr) �
     NormNumRead(tree, norm_num_apps(Global(H.wat), [ra.tree, x, App(Global(H.same), x), ra.wf]))
 }
 
+// A sum or a product at a numeral bound, `∑ k < n, f(k)`, read term by
+// term as its definition unfolds: `(… (0 + f(0)) + …) + f(n - 1)`, its
+// unit a leaf of its own, so the tree's real converts to the range as
+// written. Each term `f(i)` is a hole of the side's type `ty` solved by
+// comparing it with `f` applied to the numeral, then read by `read`;
+// `acc` is the tree of the terms below `i`.
+fn norm_num_terms(H: NormNumRealHeads, read: Handle → Tac<NormNumRead>, node: GlobalRef, ty, f: Handle, i, left: Nat, acc: NormNumRead) → Tac<NormNumRead> {
+    match left {
+        Zero => Pure(acc),
+        Succ(more) => hole(ty).bind(λ hc => match hc {
+            Refused(why) => fail("norm_num: " ++ why, []),
+            Accepted(t) => defeq(Hd(t), App(Hd(f), NatLit(i))).bind(λ same => match same {
+                False => fail("norm_num: a sum's term is not found", [At(Hd(f), Tried("the terms", "applied to a numeral"))]),
+                True => read(t).bind(λ rt => norm_num_terms(H, read, node, ty, f, Succ(i), more, norm_num_two(H, node, acc, rt))),
+            }),
+        }),
+    }
+}
+
+// `∑ k < n, f(k)` and `∏ k < n, f(k)` at `CReal`, written `MonoidRel::range(op,
+// n, f)`: read term by term when `op` is `CReal::add` or `CReal::mul` and
+// `n` is a numeral; anything else is a leaf.
+fn norm_num_range(H: NormNumRealHeads, read: Handle → Tac<NormNumRead>, args: List<Handle>, h: Handle) → Tac<NormNumRead> {
+    match norm_num_arg(args, 0) {
+        None => norm_num_leaf(H, h),
+        Some(op) => match norm_num_arg(args, 1) {
+            None => norm_num_leaf(H, h),
+            Some(n) => match norm_num_arg(args, 2) {
+                None => norm_num_leaf(H, h),
+                Some(f) => view(op).bind(λ vo => view(n).bind(λ vn => infer(Hd(h)).bind(λ c => match c {
+                    Refused(why) => fail("norm_num: " ++ why, []),
+                    Accepted(ty) => match vn {
+                        HLit(k) => match vo {
+                            HGlobal(g, _, _) => match g.id.same(H.add.id) {
+                                True => norm_num_terms(H, read, H.nadd, ty, f, 0, k, norm_num_exact(H, Global(H.zero))),
+                                False => match g.id.same(H.mul.id) {
+                                    True => norm_num_terms(H, read, H.nmul, ty, f, 0, k, norm_num_exact(H, Global(H.one))),
+                                    False => norm_num_leaf(H, h),
+                                },
+                            },
+                            _ => norm_num_leaf(H, h),
+                        },
+                        _ => norm_num_leaf(H, h),
+                    },
+                }))),
+            },
+        },
+    }
+}
+
 // The tree for `h`. `fuel` bounds the depth; past it a term must be a leaf.
 fn norm_num_reify(H: NormNumRealHeads, fuel: Nat, h: Handle) → Tac<NormNumRead> {
     match fuel {
@@ -312,6 +365,7 @@ fn norm_num_reify(H: NormNumRealHeads, fuel: Nat, h: Handle) → Tac<NormNumRead
                 Some(a) => match norm_num_op(H, g) {
                     NOLeaf => norm_num_leaf(H, h),
                     NOEmbed => Pure(norm_num_exact(H, Hd(a))),
+                    NORange => norm_num_range(H, λ t => norm_num_reify(H, f, t), args, h),
                     NONeg => norm_num_reify(H, f, a).bind(λ ra => Pure(NormNumRead(App(Global(H.nneg), ra.tree), ra.wf))),
                     NOAbs => norm_num_reify(H, f, a).bind(λ ra => Pure(NormNumRead(App(Global(H.nabs), ra.tree), ra.wf))),
                     NONpow => match norm_num_arg(args, 1) {

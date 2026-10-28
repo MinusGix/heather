@@ -1965,3 +1965,14 @@ theorem Rat::sum_abs_le(n: Nat, f: Nat → Rat): (∑ k < n, f(k)).abs() <= ∑ 
     let h = LocatedAddGroup::range_abs_le(n, f, λ k => f(k).abs(), λ k hk => And(f(k).neg_abs_le(), f(k).le_abs()));
     Rat::abs_le(h.left, h.right)
 }
+
+// A sum's order and sign, termwise: the class laws at `Rat`, stated here
+// for `mono` (lib/std/tactic/mono.hthr), whose `apply` reads a class
+// lemma's dictionary off the scope, which a concrete carrier has none of.
+theorem Rat::range_le(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) <= g(k)): MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g) {
+    LocatedAddGroup::range_le(n, f, g, h)
+}
+
+theorem Rat::range_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → k < n → 0 <= f(k)): 0 <= MonoidRel::range(+, n, f) {
+    LocatedAddGroup::range_nonneg(n, f, h)
+}

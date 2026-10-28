@@ -486,7 +486,41 @@ impl Reifier<'_> {
         if let Some(atom) = self.cast(tm, ops, depth)? {
             return Ok(Syn::Atom(atom));
         }
+        if let Some(step) = self.range_step(tm, depth)? {
+            return Ok(step);
+        }
         Ok(Syn::Atom(self.intern(tm)?))
+    }
+
+    /// A range sum at a successor bound is its last term added on, a range
+    /// product its last factor multiplied on (`crate::range_sum`); the
+    /// carrier's own `+` or `*` only.
+    fn range_step(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Option<Syn>, String> {
+        let (add, mul) = match &self.carrier {
+            Carrier::Int => (Some("int::Int::add"), Some("int::Int::mul")),
+            Carrier::Nat => (Some("nat::Nat::add"), Some("nat::Nat::mul")),
+            Carrier::Rel(ops) => (ops.add.as_deref(), ops.mul.as_deref()),
+        };
+        let is = |op: &Term, name: Option<&str>| name.is_some_and(|name| crate::range_sum::op_is(self.elab, op, name));
+        if let Some(op) = crate::range_sum::empty(self.elab, tm) {
+            return Ok(if is(&op, add) {
+                Some(Syn::Const(0))
+            } else if is(&op, mul) {
+                Some(Syn::Const(1))
+            } else {
+                None
+            });
+        }
+        let Some(peeled) = crate::range_sum::peel(self.elab, tm) else {
+            return Ok(None);
+        };
+        let (sum, product) = (is(&peeled.op, add), is(&peeled.op, mul));
+        if !sum && !product {
+            return Ok(None);
+        }
+        let rest = self.reify_within(&peeled.rest, depth)?;
+        let last = self.reify_within(&peeled.last, depth)?;
+        Ok(Some(if sum { Syn::Add(Box::new(rest), Box::new(last)) } else { Syn::Mul(Box::new(rest), Box::new(last)) }))
     }
 
     /// A reciprocal is an atom `r` like any other, read together with the
@@ -652,6 +686,9 @@ impl Reifier<'_> {
     /// read is the inline walk or a named projection
     /// ([`Elaborator::named_field_read`]). Anything else is an atom.
     fn projection_or_atom(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Syn, String> {
+        if let Some(step) = self.range_step(tm, depth)? {
+            return Ok(step);
+        }
         if depth > 0
             && let Some(field) = self.project(tm)
         {

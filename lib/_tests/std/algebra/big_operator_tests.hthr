@@ -7,6 +7,7 @@
 import logic; import nat; import int; import list; import relation;
 import relation_props; import algebra_rel; import semiring; import ordered_field;
 import big_operator; import rat; import creal;
+import omega; import ring; import linarith; import tactic; import mono; import norm_num; import norm_num_real;
 
 // Sums compute at literal bounds, at whatever carrier the body has.
 theorem nat_sum_four(): ∑ k < 4, k = 6 { refl }
@@ -108,3 +109,55 @@ theorem factor<A: Semiring(≈, +, *)>(c: A, n: Nat, f: Nat → A): c * ∑ k < 
 theorem creal_rect(m, n: Nat, f, g: Nat → CReal): (∑ i < m, f(i)) * (∑ k < n, g(k)) ≈ ∑ i < m, ∑ k < n, f(i) * g(k) {
     Semiring::range_mul_range(m, n, f, g)
 }
+
+// The tactics on sums (issues/tactics-and-big-operators.md). To `ring`,
+// `linarith` and `omega` a sum is an atom, unfolded only by its definition:
+// the empty sum is the unit, and a sum at a successor bound (or a small
+// numeral) is the sum below it with its last term added on.
+theorem ring_atom(n: Nat, f: Nat → Rat): (∑ k < n, f(k)) * 2 ≈ (∑ k < n, f(k)) + ∑ k < n, f(k) { ring }
+theorem ring_atom_nat(n: Nat, f: Nat → Nat): (∑ k < n, f(k)) * 2 = (∑ k < n, f(k)) + ∑ k < n, f(k) { ring }
+theorem ring_last(n: Nat, f: Nat → Rat): ∑ k < n + 1, f(k) ≈ f(n) + ∑ k < n, f(k) { ring }
+theorem ring_last_two(n: Nat, f: Nat → Int): ∑ k < n + 2, f(k) = f(n + 1) + f(n) + ∑ k < n, f(k) { ring }
+theorem ring_succ_prod(n: Nat, f: Nat → Rat): ∏ k < Succ(n), f(k) ≈ f(n) * ∏ k < n, f(k) { ring }
+theorem ring_numeral(f: Nat → CReal): ∑ k < 3, f(k) ≈ f(0) + f(1) + f(2) { ring }
+theorem ring_empty(f: Nat → Rat): ∏ k < 0, f(k) ≈ 1 { ring }
+// One step of an induction: the hypothesis about the sum below, and `ring`.
+theorem ring_gauss_step(n: Nat, h: (∑ k < n, Rat::ofInt(OfNat(k))) * 2 ≈ Rat::ofInt(OfNat(n)) * (Rat::ofInt(OfNat(n)) - 1)):
+    (∑ k < n + 1, Rat::ofInt(OfNat(k))) * 2 ≈ Rat::ofInt(OfNat(n)) * (Rat::ofInt(OfNat(n)) - 1) + 2 * Rat::ofInt(OfNat(n))
+{ ring(h) }
+// A negative control: the last term is not dropped.
+// expect-error: it is not an identity of commutative rings
+theorem ring_no_drop(n: Nat, f: Nat → Rat): ∑ k < n + 1, f(k) ≈ ∑ k < n, f(k) { ring }
+theorem linarith_step(n: Nat, f: Nat → Rat, h: ∑ k < n, f(k) <= 1, hf: f(n) <= 2): ∑ k < n + 1, f(k) <= 3 { linarith }
+theorem omega_step(n: Nat, f: Nat → Nat, h: (∑ k < n, f(k)) <= n * 3, hf: f(n) <= 3): (∑ k < n + 1, f(k)) <= n * 3 + 3 { omega }
+theorem omega_int_step(n: Nat, f: Nat → Int, h: ∑ k < n, f(k) <= OfNat(3), hf: f(n) <= OfNat(2)): ∑ k < n + 1, f(k) <= OfNat(5) { omega }
+theorem omega_numeral(f: Nat → Nat, h: (k: Nat) → f(k) <= 2): ∑ k < 3, f(k) <= 6 { omega(h(0), h(1), h(2)) }
+
+// `mono` splits an order between two sums termwise, under the index's
+// binders, and proves a sum nonnegative from its terms.
+theorem mono_termwise(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) { by mono() }
+theorem mono_inside(n: Nat, f, g: Nat → Rat, c: Rat, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) + c <= ∑ k < n, g(k) + c { by mono() }
+theorem mono_factor(n: Nat, f: Nat → Rat, a, b: Rat, h: a <= b): ∑ k < n, f(k).abs() * a <= ∑ k < n, f(k).abs() * b { by mono() }
+theorem mono_nonneg(n: Nat, f: Nat → Rat): 0 <= ∑ k < n, f(k).abs() { by mono() }
+theorem mono_real(n: Nat, f, g: Nat → CReal, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) { by mono() }
+theorem mono_nat(n: Nat, f, g: Nat → Nat, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) { by mono() }
+theorem mono_int(n: Nat, f, g: Nat → Int, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) { by mono() }
+theorem mono_class<A: OrderedField(≈, <, <=, +, *)>(n: Nat, f, g: Nat → A, c: A, h: (k: Nat) → Nat::Lt(k, n) → f(k) <= g(k)):
+    ∑ k < n, f(k) + c <= ∑ k < n, g(k) + c
+{ by mono() }
+theorem mono_class_nonneg<A: OrderedField(≈, <, <=, +, *)>(n: Nat, f: Nat → A, h: (k: Nat) → Nat::Lt(k, n) → A.unit <= f(k)): A.unit <= ∑ k < n, f(k) { by mono() }
+// A product is not monotone termwise without signs, and `mono` has no law
+// for one.
+// expect-error: no number of arguments makes the conclusion
+theorem mono_product(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) <= g(k)): ∏ k < n, f(k) <= ∏ k < n, g(k) { by mono() }
+
+// `norm_num` evaluates a closed sum: at `Rat` and below by computing it,
+// at `CReal` by reading it term by term.
+fn rup(k: Nat) → CReal { CReal::ofRat(up(k)) }
+theorem norm_num_nat(): ∑ k < 4, k * k = 14 { by norm_num() }
+theorem norm_num_rat(): ∑ k < 3, up(k) < 7 { by norm_num() }
+theorem norm_num_real(): ∑ k < 3, rup(k) ≈ 6 { by norm_num() }
+theorem norm_num_real_product(): ∏ k < 3, rup(k) ≈ 6 { by norm_num() }
+theorem norm_num_real_body(): ∑ k < 3, (rup(k) * rup(k) - 1) ≈ 11 { by norm_num() }
+theorem norm_num_real_empty(): ∑ k < 0, rup(k) ≈ 0 { by norm_num() }
+theorem norm_num_real_false(): ¬(∑ k < 3, rup(k) ≈ 7) { by norm_num() }

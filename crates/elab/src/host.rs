@@ -1950,6 +1950,12 @@ impl Elaborator {
                 None => HeadView::Other,
             };
         }
+        // A β-redex is shown as its contractum, as the diagnostics spell it:
+        // an instantiated λ (a lemma's `f(k)` at `f := λ x => …`) is a call
+        // like any other.
+        if let Some(r) = crate::spelling::beta_head(t) {
+            return self.view_term(run, at, &r);
+        }
         let n = run.len(at);
         if let Term::Var(LocalVar(i)) = t {
             return match run.local_at(at, n - 1 - *i as usize) {
