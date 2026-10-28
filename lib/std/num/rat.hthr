@@ -694,9 +694,7 @@ theorem Rat::mul_le_mono_r({x, y, z: Rat}, h: x <= y, hz: 0 <= z): x * z <= y * 
     let zr = Int::zero_mul(r);
     let he: (0 <= e) = omega(zr);
     let scaled = (a * q).mul_le_mono_r(c * p, e * r, h, omega(zr, Int::mul_le_mono_r(0, e, r, he, trivial)));
-    let left: ((a * e) * (y * z).den.int() = (a * q) * (e * r)) = ring(y.den_mul(z));
-    let right: ((c * e) * (x * z).den.int() = (c * p) * (e * r)) = ring(x.den_mul(z));
-    omega(scaled, left, right)
+    linarith(scaled, y.den_mul(z), x.den_mul(z))
 }
 
 theorem Rat::mul_lt_mono_r({x, y, z: Rat}, h: x < y, hz: 0 < z): x * z < y * z {
@@ -710,9 +708,7 @@ theorem Rat::mul_lt_mono_r({x, y, z: Rat}, h: x < y, hz: 0 < z): x * z < y * z {
     let he: (0 < e) = omega(zr);
     let her = Int::mul_lt_mono_r(0, e, r, he, omega(z.den_pos));
     let scaled = (a * q).mul_lt_mono_r(c * p, e * r, h, omega(zr, her));
-    let left: ((a * e) * (y * z).den.int() = (a * q) * (e * r)) = ring(y.den_mul(z));
-    let right: ((c * e) * (x * z).den.int() = (c * p) * (e * r)) = ring(x.den_mul(z));
-    omega(scaled, left, right)
+    linarith(scaled, y.den_mul(z), x.den_mul(z))
 }
 
 theorem Rat::mul_le_mono_l({x, y, z: Rat}, h: x <= y, hz: 0 <= z): z * x <= z * y {
@@ -744,17 +740,8 @@ theorem Rat::pos_of_mul_pos({x, y: Rat}, hx: 0 < x, h: 0 < x * y): 0 < y {
 // A factor at most zero reverses the order: `x ≤ y` gives `y·z ≤ x·z`. It is
 // the nonnegative case at `-z`, with the sign moved out of each product.
 theorem Rat::mul_le_mono_r_nonpos({x, y, z: Rat}, h: x <= y, hz: z <= 0): y * z <= x * z {
-    let a = x.num;
-    let c = y.num;
-    let e = z.num;
     let flipped = Rat::mul_le_mono_r(x := x, y := y, z := -z, h := h, hz := omega(hz, Int::zero_mul(z.den.int())));
-    let fx: ((x * -z).num * (y * -z).den.int() = (a * -e) * (y * z).den.int()) = refl;
-    let fy: ((y * -z).num * (x * -z).den.int() = (c * -e) * (x * z).den.int()) = refl;
-    let gx: ((x * z).num * (y * z).den.int() = (a * e) * (y * z).den.int()) = refl;
-    let gy: ((y * z).num * (x * z).den.int() = (c * e) * (x * z).den.int()) = refl;
-    let rx: ((a * -e) * (y * z).den.int() = -((a * e) * (y * z).den.int())) = ring;
-    let ry: ((c * -e) * (x * z).den.int() = -((c * e) * (x * z).den.int())) = ring;
-    omega(flipped, fx, fy, gx, gy, rx, ry)
+    linarith(flipped)
 }
 
 // ---------------------------------------------------------------------------

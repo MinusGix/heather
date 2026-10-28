@@ -20,6 +20,7 @@ import nat;
 import int;
 import omega;
 import ring;
+import linarith;
 import option;
 import relation_props;
 import algebra;
@@ -987,10 +988,8 @@ theorem Format::max_H_lt_ovf(self F: Format, has: F.specials.has_inf().IsTrue())
     let s0: ((F.top() + F.top() - 1) + 1 = F.top() + F.top()) = Nat::sub_add_cancel(1, F.top() + F.top(), omega);
     let s: (F.top() + F.top() - 1 = Succ(F.max_mag() + F.max_mag())) = omega;
     let o2: (F.ovf_h() = Succ(F.max_mag() + F.max_mag()) * ps) = Nat::cong(λ (w: Nat) => w * ps, s);
-    let un: (Succ(F.max_mag() + F.max_mag()) * ps = ps + (F.max_mag() + F.max_mag()) * ps) = (F.max_mag() + F.max_mag()).mul_succ_left(ps);
-    let dd: ((F.max_mag() + F.max_mag()) * ps = (F.max_mag() * ps) * 2) = ring;
     let pp: (0 < ps) = Nat::pow_pos(a := 2, n := F.span);
-    omega
+    linarith(o2)
 }
 
 // Below the overflow threshold `x` fits.

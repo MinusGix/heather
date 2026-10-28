@@ -26,6 +26,11 @@
 //! (design §5). Every step is checked through the class laws, so nothing
 //! here decides an order, and a searcher bug can only make `linarith`
 //! refuse or write a certificate the kernel rejects.
+//!
+//! At `Int` and `Nat` the search is `omega`'s (design §8,
+//! `Elaborator::linarith_integral`): each side that multiplies is stated
+//! equal to its normal form over monomials by `ring`, so `omega`, which reads
+//! a product as an atom by its spelling, meets one monomial as one atom.
 
 use std::collections::BTreeMap;
 use std::sync::Arc as Rc;
@@ -721,6 +726,177 @@ impl Problem<'_> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// `Int` and `Nat`: `ring`'s monomials as `omega`'s atoms (design §8).
+
+/// A product's spelling over the atoms' aliases, factors in atom order, so
+/// one monomial is one term wherever it is written.
+fn monomial_source(m: &[u32], alias: &dyn Fn(usize) -> String) -> String {
+    let factors: Vec<String> = m.iter().enumerate().flat_map(|(i, e)| (0..*e).map(move |_| alias(i))).collect();
+    match factors.len() {
+        1 => factors[0].clone(),
+        _ => format!("({})", factors.join(" * ")),
+    }
+}
+
+/// A linear form over monomials as source at `Int` (`nat` false) or `Nat`:
+/// the positive terms less the negative ones, so no numeral is negative.
+fn integral_form_source(form: &Linear, nat: bool, alias: &dyn Fn(usize) -> String) -> Result<String, String> {
+    let numeral = |c: u128| if nat { c.to_string() } else { format!("int::OfNat({c})") };
+    let term = |m: &[u32], c: u128| match c {
+        1 => monomial_source(m, alias),
+        _ => format!("{} * {}", numeral(c), monomial_source(m, alias)),
+    };
+    let (mut pos, mut neg) = (Vec::new(), Vec::new());
+    for (m, c) in &form.0 {
+        if *c > 0 { &mut pos } else { &mut neg }.push(term(m, c.unsigned_abs()));
+    }
+    if form.1 > 0 {
+        pos.push(numeral(form.1.unsigned_abs()));
+    } else if form.1 < 0 {
+        neg.push(numeral(form.1.unsigned_abs()));
+    }
+    if nat && !neg.is_empty() {
+        return Err("internal: a `Nat` side read with a negative coefficient".into());
+    }
+    let sum = |parts: &[String]| if parts.is_empty() { numeral(0) } else { parts.join(" + ") };
+    Ok(if neg.is_empty() { sum(&pos) } else { format!("({}) - ({})", sum(&pos), sum(&neg)) })
+}
+
+/// What `linarith` reads at `Int` and `Nat`: each side of the goal and of
+/// the facts, at its own carrier, over one atom table per carrier.
+struct Integral<'a> {
+    ints: FieldReading<'a>,
+    nats: FieldReading<'a>,
+    /// Each side once: its term, carrier, form, and whether it multiplies
+    /// (then the certificate states it equal to its form).
+    sides: Vec<(Rc<Term>, bool, Linear, bool)>,
+    facts: Vec<Fact>,
+    /// Written equations that define an atom, `t = e` with `t` not in `e`:
+    /// the carrier, the atom, its definition's form, and the fact's alias.
+    /// A side that mentions `t` is stated equal to its form with `e` for
+    /// `t`, which `ring` proves from the equation (`(y * z).den.int() =
+    /// q * r` makes `(a * e) * (y * z).den.int()` the monomial `a·e·q·r`).
+    defs: Vec<(bool, usize, Linear, String)>,
+}
+
+fn integral_alias(nat: bool, i: usize) -> String {
+    format!("__lin_{}{i}", if nat { 'n' } else { 'i' })
+}
+
+impl Integral<'_> {
+    fn side(&mut self, tm: &Rc<Term>, nat: bool) -> Result<(), String> {
+        if self.sides.iter().any(|(t, n, _, _)| t == tm && *n == nat) {
+            return Ok(());
+        }
+        let (form, product) = if nat { self.nats.read(tm)? } else { self.ints.read(tm)? };
+        self.sides.push((Rc::clone(tm), nat, form, product));
+        Ok(())
+    }
+
+    /// The facts' and the goal's sides; one that does not read is left to
+    /// `omega` as written.
+    fn sides_of(&mut self, elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
+        let Some((nat, left, right)) = crate::omega_cert::integral_sides(elab, cx, ty) else {
+            return false;
+        };
+        let _ = self.side(&left, nat);
+        let _ = self.side(&right, nat);
+        true
+    }
+
+    /// Records a written equation `t = e` (or `e = t`) whose one side is an
+    /// atom alone and whose other does not mention it.
+    fn definition(&mut self, elab: &Elaborator, cx: &Cx, ty: &Type, alias: &str) {
+        let decoded = crate::inductive::decoded(ty);
+        if !matches!(&*decoded, Type::Id { .. }) {
+            return;
+        }
+        let Some((nat, left, right)) = crate::omega_cert::integral_sides(elab, cx, ty) else {
+            return;
+        };
+        let form = |tm: &Rc<Term>| self.sides.iter().find(|(t, n, _, _)| t == tm && *n == nat).map(|side| side.2.clone());
+        let (Some(l), Some(r)) = (form(&left), form(&right)) else {
+            return;
+        };
+        let alone = |f: &Linear| match (f.0.iter().next(), f.0.len(), f.1) {
+            (Some((m, 1)), 1, 0) if m.iter().sum::<u32>() == 1 => m.iter().position(|e| *e == 1),
+            _ => None,
+        };
+        for (atom, by) in [(alone(&l), &r), (alone(&r), &l)] {
+            if let Some(atom) = atom
+                && !mentions(by, atom)
+                && !self.defs.iter().any(|d| d.0 == nat && d.1 == atom)
+            {
+                self.defs.push((nat, atom, by.clone(), alias.to_string()));
+                return;
+            }
+        }
+    }
+
+    /// A side's form with every definition applied, and the definitions'
+    /// facts it took; an error past the substitutions a cycle would need.
+    fn defined(&self, form: &Linear, nat: bool) -> Result<(Linear, Vec<String>), String> {
+        let mut form = form.clone();
+        let mut used = Vec::new();
+        for _ in 0..=self.defs.len() {
+            let Some(def) = self.defs.iter().find(|d| d.0 == nat && mentions(&form, d.1)) else {
+                return Ok((form, used));
+            };
+            form = FieldReading::substitute(&form, def.1, &def.2)?;
+            if !used.contains(&def.3) {
+                used.push(def.3.clone());
+            }
+        }
+        Err("the written equations define atoms in terms of each other".into())
+    }
+
+    /// The certificate: each side that multiplies stated equal to its form
+    /// over monomials by `ring`, and `omega` over the facts and those
+    /// equations, every monomial one atom to it.
+    fn source(&self) -> Result<String, String> {
+        let mut lets = String::new();
+        let mut args: Vec<String> = self.facts.iter().map(|f| f.alias.clone()).collect();
+        for (i, (_, nat, form, product)) in self.sides.iter().enumerate() {
+            let nat = *nat;
+            let (defined, used) = self.defined(form, nat)?;
+            // A definition's own atom side is its fact already.
+            let own = self.defs.iter().any(|d| d.0 == nat && *form == (BTreeMap::from([(FieldReading::atom_monomial(d.1), 1)]), 0));
+            if !product && (used.is_empty() || own) {
+                continue;
+            }
+            let source = integral_form_source(&defined, nat, &|j| integral_alias(nat, j))?;
+            let name = format!("__lin_b{i}");
+            let ring = if used.is_empty() { "ring".to_string() } else { format!("ring({})", used.join(", ")) };
+            lets.push_str(&format!("let {name}: ({} = {source}) = {ring}; ", term_alias(i)));
+            args.push(name);
+        }
+        let omega = if args.is_empty() { "omega".to_string() } else { format!("omega({})", args.join(", ")) };
+        Ok(if lets.is_empty() { omega } else { format!("{{ {lets}{omega} }}") })
+    }
+
+    /// The sides as read, for a refusal.
+    fn shown(&self, elab: &Elaborator, cx: &Cx) -> Vec<String> {
+        self.sides
+            .iter()
+            .map(|(tm, nat, form, _)| {
+                let written = elab.spell_term_clean(cx, tm).unwrap_or_else(|| elab.display_rough_term(cx, tm, &[]));
+                let read = if *nat { self.nats.render(form) } else { self.ints.render(form) };
+                format!("`{written}` as `{read}`")
+            })
+            .collect()
+    }
+}
+
+fn parse_ty(source: &str) -> Result<heather_syntax::Ty, String> {
+    let wrapper = format!("theorem __linarith_generated(): {source} {{ 0 }}");
+    let mut file = parse_file(&wrapper).map_err(|error| error.msg)?;
+    let Some(Item::Decl(decl)) = file.items.pop() else {
+        return Err("internal: a carrier type did not parse".into());
+    };
+    Ok(decl.result)
+}
+
 fn parse_expr(source: &str) -> Result<Expr, String> {
     let wrapper = format!("theorem __linarith_generated(): 0 = 0 {{ {source} }}");
     let mut file = parse_file(&wrapper).map_err(|error| error.msg)?;
@@ -770,9 +946,28 @@ impl Elaborator {
                 .is_some_and(|key| !self.traits.instances_answering(class, Some(&key.key)).is_empty())
         };
         // The carrier: the goal's, else the first written fact's, else the
-        // first context fact's that is at a supported carrier.
+        // first context fact's that is at a supported carrier. `Int` and
+        // `Nat` go to `omega` with `ring`'s monomials as atoms (design §8);
+        // an ordered field is asked first, since its order unfolds to one
+        // at `Int`.
         let goal_reading = Reading::of(self, cx, goal, span);
         let context: Vec<(String, Type)> = local_facts(self, cx);
+        let at_field = |ty: &Type| Reading::of(self, cx, ty, span).is_some_and(|r| supported(&r.stated().carrier));
+        let integral = |ty: &Type| crate::omega_cert::integral_sides(self, cx, ty).is_some();
+        let route = if at_field(goal) {
+            false
+        } else if integral(goal) {
+            true
+        } else {
+            let mut facts: Vec<&Type> = written.iter().map(|(_, ty, _)| ty).collect();
+            if facts.is_empty() {
+                facts = context.iter().map(|(_, ty)| ty).collect();
+            }
+            facts.into_iter().find_map(|ty| if at_field(ty) { Some(false) } else { integral(ty).then_some(true) }).unwrap_or(false)
+        };
+        if route {
+            return self.linarith_integral(cx, hyps, &written, &context, goal, lvl, span);
+        }
         let carrier = goal_reading
             .as_ref()
             .map(|r| (Rc::clone(&r.stated().carrier), r.stated().level.clone()))
@@ -873,6 +1068,14 @@ impl Elaborator {
             }
         }
         let Some((source, cited)) = found else {
+            // An order that unfolds to one at `Int` (`Rat::Le` is a
+            // cross-multiplication) may follow there with products as
+            // monomials, as `ring` falls back to the unfolded equation.
+            if integral(goal)
+                && let Ok(proof) = self.linarith_integral(cx, hyps, &written, &context, goal, lvl, span)
+            {
+                return Ok(proof);
+            }
             // Each row as it was read, so an atom that was not the one the
             // author meant (a numeral read as an atom, two spellings of one
             // value) shows.
@@ -944,6 +1147,121 @@ impl Elaborator {
             .map(|(_, (term, ty, level))| LetValue::new(Rc::new(term), ty, level))
             .collect();
         Ok(LetValue::discard_around(self, cx, unused, proof, goal, lvl))
+    }
+}
+
+impl Elaborator {
+    /// `linarith` at `Int` and `Nat` (design §8): every side of the goal
+    /// and of the facts read by `ring`'s reifier, each side that multiplies
+    /// stated equal to its normal form over monomials, and `omega` given
+    /// the facts and those equations. A product's normal form is spelled
+    /// one way, so `omega`, which reads each product as an atom, meets
+    /// `b * a`, `a * b` and the `a * b` inside `(a + 1) * b` as one.
+    /// `omega` decides: the integers' rounding and its own reading of the
+    /// context come with it.
+    #[allow(clippy::too_many_arguments)]
+    fn linarith_integral(
+        &self,
+        cx: &Cx,
+        hyps: &[Expr],
+        written: &[(Term, Type, Level)],
+        context: &[(String, Type)],
+        goal: &Type,
+        lvl: &Level,
+        span: Span,
+    ) -> R<Term> {
+        let err = |msg: String| ElabError::Elab { msg, span };
+        let spell = |ty: &Type| self.spell_type_clean(cx, ty).unwrap_or_else(|| self.display_type(cx, ty));
+        let carrier = |source: &str| -> R<(Type, Level)> {
+            let ty = parse_ty(source).map_err(err)?;
+            self.generated_scope(|me| me.elab_ty(cx, &ty))
+        };
+        let (int_ty, int_level) = carrier("int::Int")?;
+        let (nat_ty, nat_level) = carrier("Nat")?;
+        let mut problem = Integral {
+            ints: FieldReading::integral(self, cx, false, int_ty.clone(), int_level.clone(), span),
+            nats: FieldReading::integral(self, cx, true, nat_ty.clone(), nat_level.clone(), span),
+            sides: Vec::new(),
+            facts: Vec::new(),
+            defs: Vec::new(),
+        };
+        problem.sides_of(self, cx, goal);
+        for (i, (term, ty, level)) in written.iter().enumerate() {
+            let shown = match &hyps[i].kind {
+                heather_syntax::ExprKind::Var(name) => name.clone(),
+                _ => format!("hypothesis {}", i + 1),
+            };
+            if !problem.sides_of(self, cx, ty) {
+                return Err(err(format!(
+                    "`linarith` at `Int` and `Nat` combines `<`, `<=` and `=` facts there, and their negations; \
+                     `{shown}` is `{}`",
+                    spell(ty)
+                )));
+            }
+            let alias = format!("__lin_h{i}");
+            problem.definition(self, cx, ty, &alias);
+            problem.facts.push(Fact { alias, term: term.clone(), ty: ty.clone(), level: level.clone(), shown, written: Some(i) });
+        }
+        let attempt = |problem: &Integral| -> Result<Term, (ElabError, String)> {
+            let source = problem.source().map_err(|e| (err(e), String::new()))?;
+            let mut inner = cx.clone();
+            let depth = cx.names.len();
+            let mut alias = |name: String, term: Rc<Term>, ty: &Type, level: &Level| {
+                inner.aliases.push(Rc::new(Alias {
+                    name,
+                    depth,
+                    term,
+                    ty: ty.clone(),
+                    level: level.clone(),
+                    skel: None,
+                    spliced: None,
+                    shifted: Default::default(),
+                }));
+            };
+            let at = |nat: bool| if nat { (&nat_ty, &nat_level) } else { (&int_ty, &int_level) };
+            for (i, (tm, nat, _, _)) in problem.sides.iter().enumerate() {
+                let (ty, level) = at(*nat);
+                alias(term_alias(i), Rc::clone(tm), ty, level);
+            }
+            for (nat, reading) in [(false, &problem.ints), (true, &problem.nats)] {
+                let (ty, level) = at(nat);
+                for (j, tm) in reading.atom_terms().into_iter().enumerate() {
+                    alias(integral_alias(nat, j), tm, ty, level);
+                }
+            }
+            for fact in &problem.facts {
+                alias(fact.alias.clone(), Rc::new(fact.term.clone()), &fact.ty, &fact.level);
+            }
+            let expr = parse_expr(&source).map_err(|detail| {
+                (err(format!("`linarith` wrote a certificate that does not parse: {detail}\n  generated: {source}")), source.clone())
+            })?;
+            self.generated_scope(|me| me.elab_check(&inner, &expr, goal, lvl)).map_err(|error| (error, source))
+        };
+        // The written facts' sides first; failing that, the context facts'
+        // too, which `omega` reads anyway but not their products. An
+        // attempt that asked for a restart is discarded whatever it returns.
+        let mut outcome = attempt(&problem);
+        if outcome.is_err() && !self.attempt.goal_arena.restart_requested() {
+            let products = problem.sides.iter().filter(|side| side.3).count();
+            for (_, ty) in context {
+                problem.sides_of(self, cx, ty);
+            }
+            if problem.sides.iter().filter(|side| side.3).count() > products {
+                outcome = attempt(&problem);
+            }
+        }
+        outcome.map_err(|(error, source)| {
+            // `omega`'s verdict, not its table of what it read.
+            let message = error.to_string();
+            let first = message.lines().next().unwrap_or_default();
+            let first = first.split("; ").next().unwrap_or_default();
+            err(format!(
+                "`linarith` could not prove `{}` at `Int`/`Nat`: `omega` found no proof with `ring`'s monomials as \
+                 atoms; the sides read as [{}]\n  omega: {first}\n  generated `linarith` certificate: {source}",
+                spell(goal),
+                problem.shown(self, cx).join(", ")
+            ))
+        })
     }
 }
 

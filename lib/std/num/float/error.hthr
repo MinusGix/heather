@@ -28,6 +28,7 @@ import nat;
 import int;
 import omega;
 import ring;
+import linarith;
 import list;
 import option;
 import relation_props;
@@ -560,9 +561,8 @@ theorem Format::gamma_mono(self F: Format, mode: Mode, m, n: Nat, mn: m <= n, ok
     let M = m.int();
     let T = t.int();
     let C = Succ(K).int();
-    let key: (M * C + (M * T + (T * C + T * T)) = (M + T) * (C + T)) = ring;
     let nn: (0 <= M * T + (T * C + T * T)) = { let e: ((m * t + (t * Succ(K) + t * t)).int() = M * T + (T * C + T * T)) = refl; omega(e) };
-    let le: (M * C <= (M + T) * (C + T)) = omega(key, nn);
+    let le: (M * C <= (M + T) * (C + T)) = linarith(nn);
     let core: (Rat(M, Succ(K) + t) <= Rat((m + t).int(), Succ(K))) = le;
     let nt: (Rat((m + t).int(), Succ(K)) ≈ Rat(n.int(), Succ(K))) = Rat((m + t).int(), Succ(K)).same_of_parts(Rat(n.int(), Succ(K)), Int::cong_ofnat(trans(m.add_comm(t), st)), refl);
     Rat::le_respects(Rat::same_sym(gm), Rat::same_sym(gn), Rat::le_respects(Rat::same_refl(Rat(M, Succ(K) + t)), nt, core))
