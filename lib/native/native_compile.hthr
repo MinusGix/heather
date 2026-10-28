@@ -6,11 +6,10 @@
 // region, word `i` at offset `8 i` (`word_slots` of them). Each buffer has a
 // range after the words, at its capacity, and past them all a scratch range
 // one byte longer than the largest buffer (room for a path and its NUL).
-// Between statements each live word is in
-// its home (native_alloc): its slot, or the register of the home pool the
-// allocator gave it, which no statement's code uses for anything else; a
-// word nothing reads later is anywhere (`Target::Held`,
-// native_compile_homes). A statement loads what it reads from its home and
+// Between statements each live word is in its home (native_alloc): its
+// slot, or the register of the home pool the allocator gave it, which no
+// statement's code uses for anything else; a word nothing reads later is
+// anywhere (`Target::Held`, native_compile_homes). A statement loads what it reads from its home and
 // puts what it writes in the word's home, where the word is live after it
 // (`Prog::word_to`, `word_from`); RBX carries a slot's address, or a home
 // register's word, on the way. The homes and each loop's set come with the
@@ -339,9 +338,9 @@ fn Prog::writes(self p: Prog, layout: Layout, out: List<Nat>, fd, buf, from, len
     Compiled(asked.word_from(layout, out, result, Rax), Succ(Succ(names)))
 }
 
-// close(fd); the result stored.
-fn Prog::closes(self p: Prog, layout: Layout, fd, result: Nat) → Prog {
-    then(then(p, Block([MovRI(Rax, BitVec::ofNat(3))])).word_to(layout, fd, Rdi), Syscall).word_from(layout, result, Rax)
+// close(fd); the result put in its word's home.
+fn Prog::closes(self p: Prog, layout: Layout, out: List<Nat>, fd, result: Nat) → Prog {
+    then(then(p, Block([MovRI(Rax, BitVec::ofNat(3))])).word_to(layout, fd, Rdi), Syscall).word_from(layout, out, result, Rax)
 }
 
 // The path copy's counter and its two walks set, and its loop's label.
@@ -365,13 +364,13 @@ fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
 
 // openat(AT_FDCWD, scratch, O_RDONLY) of the path, its first min(len,
 // capacity) bytes up to its NUL copied to the scratch range and a NUL put
-// after them (RDI is past them); the result stored.
-fn Prog::opens(self p: Prog, layout: Layout, path, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
+// after them (RDI is past them); the result put in its word's home.
+fn Prog::opens(self p: Prog, layout: Layout, out: List<Nat>, path, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
     let clamped = then(p.word_to(layout, len, Rcx), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rcx, R9, Succ(names));
     let copied = clamped.path_copy(layout, path, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names))));
     let ended = then(then(copied, Block([MovRI(Rdx, BitVec::ofNat(0))])), StoreByte(ByteStore(Rdi, Rdx)));
     let asking: List<Instruction> = [MovRI(Rax, BitVec::ofNat(257)), MovRI(Rdi, fdcwd_word()), MovRI(Rsi, layout.scratch_at()), MovRI(Rdx, BitVec::ofNat(0))];
-    Compiled(then(then(ended, Block(asking)), Syscall).word_from(layout, result, Rax), Succ(Succ(Succ(names))))
+    Compiled(then(then(ended, Block(asking)), Syscall).word_from(layout, out, result, Rax), Succ(Succ(Succ(names))))
 }
 
 fn words_fit(ids: List<Nat>) → Bool { match ids { Nil => True, Cons(id, rest) => word_fits(id) && words_fit(rest) } }
@@ -396,12 +395,12 @@ fn Prog::call(self p: Prog, layout: Layout, out: List<Nat>, shape: CallShape, na
             False => None,
             True => match layout.capacities.nth(path) {
                 None => None,
-                Some(capacity) => Some(p.opens(layout, path, len, result, capacity, names)),
+                Some(capacity) => Some(p.opens(layout, out, path, len, result, capacity, names)),
             },
         },
         Closes(fd, result) => match words_fit([fd, result]) {
             False => None,
-            True => Some(Compiled(p.closes(layout, fd, result), names)),
+            True => Some(Compiled(p.closes(layout, out, fd, result), names)),
         },
         StatsPath(_, _, _, _) => None,
         StatsFd(_, _, _) => None,
