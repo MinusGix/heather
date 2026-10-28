@@ -414,6 +414,10 @@ fn item_symbols(source: &str, items: &[Item]) -> Vec<Value> {
         Item::Import(import) => {
             symbol(source, &format!("import {}", import.module), 2, import.span, Vec::new())
         }
+        Item::Generate(generate) => {
+            let written = source.get(generate.generator.span.start..generate.generator.span.end).unwrap_or("…");
+            symbol(source, &format!("generate {written}"), 12, generate.span, Vec::new())
+        }
     }).collect()
 }
 

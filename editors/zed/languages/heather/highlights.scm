@@ -10,7 +10,7 @@
 
 [
   "import" "export" "inductive" "codata" "record" "class" "instance" "designation"
-  "datarepr" "impl" "fn" "theorem" "axiom" "meta" "evidence" "requires" "assuming" "section" "extends" "decreases" "decreasing" "with"
+  "datarepr" "impl" "fn" "theorem" "axiom" "meta" "evidence" "requires" "assuming" "section" "generate" "extends" "decreases" "decreasing" "with"
   "for" "at" "prefix" "postfix" "mk" "let" "have" "split" "on" "match" "if"
   "else" "as" "code" "calc" "self" "infer" "squash_ind" "by"
 ] @keyword

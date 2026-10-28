@@ -5,7 +5,7 @@ labels: [metaprogramming,elaboration,design]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-10-28
 ---
 
 Own a general declaration expansion mechanism whose generators are Heather
@@ -36,3 +36,7 @@ No privileged recognition of every generator name is intended.
   is a provisional library name rather than a permanent reserved keyword.
 - [[generators-in-the-language]] owns the broader migration.
 - [[proof-carrying-function-analysis]] owns richer analysis interfaces.
+
+## Log
+
+- 2026-10-28: A first invocation exists: `generate g(args);` (docs/host-elaboration-interface-design.md §19, built for [[heather-checked-construction-api]]), a contextual keyword with nothing recognised by name; the generator is an ordinary library function returning `Tac<List<Decl>>`, and its group is checked before any of it is published. Not yet here: structured syntax input (arguments are elaborated terms, a type's name quoted as a type), private helper names, generators inside sections ([[generate-in-sections]]), composition, and the runtime-compile customer.

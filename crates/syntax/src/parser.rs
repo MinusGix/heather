@@ -983,6 +983,15 @@ impl Parser {
                     Item::Designation(d) => return refuse("a `designation`", d.span),
                     Item::Datarepr(d) => return refuse("a `datarepr`", d.span),
                     Item::Impl(i) => return refuse("an `impl`", i.span),
+                    Item::Generate(g) => {
+                        return Err(ParseError {
+                            msg: "a `generate` cannot be in a section yet: its generator runs at \
+                                  the module's empty context, and running it under the section's \
+                                  head is open (docs/host-elaboration-interface-design.md §19)"
+                                .into(),
+                            span: g.span,
+                        })
+                    }
                 }
                 items.push(item);
             }
@@ -1234,6 +1243,10 @@ impl Parser {
                 msg: "an `import` cannot appear inside an `assuming` group".into(),
                 span: i.span,
             }),
+            Item::Generate(g) => Err(ParseError {
+                msg: "a `generate` cannot yet inherit an `assuming` telescope".into(),
+                span: g.span,
+            }),
         }
     }
 
@@ -1269,6 +1282,15 @@ impl Parser {
         }
         if self.at_kw("impl") {
             return Ok(Item::Impl(self.impl_decl()?));
+        }
+        // `generate g(args);` runs a generator and publishes what it builds
+        // (docs/host-elaboration-interface-design.md §19). Contextual like
+        // `by`: only when a name follows.
+        if self.at_kw("generate") && matches!(self.nth(1), TokKind::Ident(_)) {
+            let start = self.bump().span;
+            let generator = self.postfix()?;
+            let end = self.expect(&TokKind::Semi, "`;` to end the `generate`")?;
+            return Ok(Item::Generate(GenerateItem { generator, span: start.join(end) }));
         }
         // `given` section variables and `context` constraint bundles are the
         // two other ways round 2 sketched of writing a constraint ONCE for many

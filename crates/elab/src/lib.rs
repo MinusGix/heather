@@ -1676,6 +1676,7 @@ fn item_timing_name(item: &Item) -> String {
             format!("impl {} for {}", implementation.op, implementation.repr)
         }
         Item::Import(import) => format!("import {}", import.module),
+        Item::Generate(g) => format!("generate {}", host::tactic_name(&g.generator)),
     }
 }
 
@@ -2328,6 +2329,7 @@ impl Elaborator {
             Item::Designation(d) => stats::timed(stats::Timer::Lower, || self.elab_designation(d)),
             Item::Datarepr(d) => stats::timed(stats::Timer::Lower, || self.elab_datarepr(d)),
             Item::Impl(i) => stats::timed(stats::Timer::Lower, || self.elab_impl(i)),
+            Item::Generate(g) => self.elab_generate(g),
             Item::Import(_) => Ok(()),
         }
     }
@@ -4789,6 +4791,8 @@ impl Elaborator {
 
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
         match &ty.kind {
+            // A generated declaration's type (`host::Leaves::Member`).
+            TyKind::Named { name, .. } if let Some(k) = host::leaf_index(name) => self.host_ty_leaf(cx, k, ty.span),
             // An expression in type position: infer it, require its type to be
             // a universe, and decode (docs/surface-universe.md §4). `El` is the
             // kernel's own decoding, so nothing here is a coercion — the term

@@ -232,6 +232,13 @@ pub enum RExpr {
     Lam(u64, Box<RExpr>),
     /// A global the run issued a reference to.
     Global(u64),
+    /// An argument left to inference: a hole at the domain it fills.
+    Blank,
+    /// `Pi(x, body)`: the function type abstracting the introduced local
+    /// `x` out of the type `body`.
+    Pi(u64, Box<RExpr>),
+    /// The equation between two terms.
+    Equation(Box<RExpr>, Box<RExpr>),
 }
 
 impl RExpr {
@@ -239,13 +246,19 @@ impl RExpr {
     fn locals(&self, out: &mut Vec<u64>) {
         match self {
             RExpr::Local(x) => out.push(*x),
-            RExpr::App(f, a) => {
+            RExpr::App(f, a) | RExpr::Equation(f, a) => {
                 f.locals(out);
                 a.locals(out);
             }
-            RExpr::Lam(_, body) => body.locals(out),
-            RExpr::Hd(_) | RExpr::NatLit(_) | RExpr::Global(_) => {}
+            RExpr::Lam(_, body) | RExpr::Pi(_, body) => body.locals(out),
+            RExpr::Hd(_) | RExpr::NatLit(_) | RExpr::Global(_) | RExpr::Blank => {}
         }
+    }
+
+    /// Does this stand for a type by its form (`Pi`, `Equation`), rather
+    /// than possibly for a term?
+    fn is_type_form(&self) -> bool {
+        matches!(self, RExpr::Pi(..) | RExpr::Equation(..))
     }
 }
 
@@ -299,6 +312,29 @@ pub struct SplitView {
     pub branches: Vec<BranchView>,
 }
 
+/// One constructor, as `Ctors` answers it: its name, each field's name
+/// (empty for an unnamed one) and a handle to its type (`None` for one that
+/// mentions an earlier field), and a handle to the constructor as a function
+/// of its fields where every field has one.
+#[derive(Clone, Debug)]
+pub struct CtorView {
+    pub name: String,
+    pub fields: Vec<(String, Option<u64>)>,
+    pub ctor: Option<u64>,
+}
+
+/// One declaration a generator publishes (`tactic::Decl`): its parameters
+/// are introduced locals with their implicitness, and its statement and body
+/// live under the last of them.
+#[derive(Clone, Debug)]
+pub struct DeclView {
+    pub theorem: bool,
+    pub name: String,
+    pub params: Vec<(u64, bool)>,
+    pub result: RExpr,
+    pub body: RExpr,
+}
+
 /// A request, as the host receives it from either kind of tactic.
 #[derive(Clone, Debug)]
 pub enum Request {
@@ -324,6 +360,12 @@ pub enum Request {
     Constructor(u64),
     /// A split's number and one proof per branch.
     Close(u64, Vec<RExpr>),
+    /// The type, the local's name, and the local it is introduced under.
+    Assume(RExpr, String, Option<u64>),
+    Ctors(u64),
+    AsType(RExpr),
+    /// A generator's declarations, which end its run.
+    Publish(Vec<DeclView>),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -363,6 +405,9 @@ pub enum Answer {
     /// A global reference, from `Lookup`.
     Global(Result<u64, String>),
     Split(Result<SplitView, String>),
+    /// An `Assume`d local.
+    Local(Result<LocalView, String>),
+    Ctors(Result<Vec<CtorView>, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -494,6 +539,17 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(RExpr::Lam(x, Box::new(body)))
             }
             5 => Ok(RExpr::Global(self.nat_of("expr_nat", vec![e])?)),
+            6 => Ok(RExpr::Blank),
+            7 => {
+                let x = self.nat_of("expr_nat", vec![e])?;
+                let body = self.expr(self.call("expr_arg", vec![e])?, budget)?;
+                Ok(RExpr::Pi(x, Box::new(body)))
+            }
+            8 => {
+                let l = self.expr(self.call("expr_fn", vec![e])?, budget)?;
+                let r = self.expr(self.call("expr_arg", vec![e])?, budget)?;
+                Ok(RExpr::Equation(Box::new(l), Box::new(r)))
+            }
             other => Err(format!("an `Expr` with tag {other}")),
         }
     }
@@ -528,6 +584,31 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             notes.push(self.note(self.call("host_note", vec![tree, self.lit(i)])?, &mut budget)?);
         }
         Ok(Request::Fail(msg, notes))
+    }
+
+    /// `Publish`'s declarations, one at a time and each part by itself.
+    fn decls(&self) -> Result<Request, String> {
+        let tree = self.tree;
+        let count = self.nat_of("host_decl_count", vec![tree])?;
+        let mut budget = READ_BUDGET;
+        let mut decls = Vec::new();
+        for i in 0..count {
+            let d = self.call("host_decl", vec![tree, self.lit(i)])?;
+            let params = (0..self.nat_of("decl_param_count", vec![d])?)
+                .map(|j| {
+                    let x = self.nat_of("decl_param", vec![d, self.lit(j)])?;
+                    Ok((x, self.nat_of("decl_param_implicit", vec![d, self.lit(j)])? != 0))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            decls.push(DeclView {
+                theorem: self.nat_of("decl_form", vec![d])? == 0,
+                name: self.string(self.call("decl_name", vec![d])?)?,
+                params,
+                result: self.expr(self.call("decl_result", vec![d])?, &mut budget)?,
+                body: self.expr(self.call("decl_body", vec![d])?, &mut budget)?,
+            });
+        }
+        Ok(Request::Publish(decls))
     }
 
     fn string(&self, s: &'v TmClo<'v>) -> Result<String, String> {
@@ -621,6 +702,29 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(out)
             }
             Answer::Split(Err(why)) => self.call("host_split_refused", vec![self.string_value(why)?]),
+            Answer::Local(Ok(l)) => {
+                let name = self.string_value(&l.name)?;
+                self.call("host_assumed", vec![self.lit(l.id), name, self.lit(l.ty)])
+            }
+            Answer::Local(Err(why)) => self.call("host_not_assumed", vec![self.string_value(why)?]),
+            Answer::Ctors(Ok(cs)) => {
+                let mut out = self.call("host_ctors", vec![])?;
+                for c in cs {
+                    out = self.call("host_ctor", vec![out, self.string_value(&c.name)?])?;
+                    for (name, f) in &c.fields {
+                        let name = self.string_value(name)?;
+                        out = match f {
+                            Some(h) => self.call("host_ctor_field", vec![out, name, self.lit(*h)])?,
+                            None => self.call("host_ctor_dependent_field", vec![out, name])?,
+                        };
+                    }
+                    if let Some(h) = c.ctor {
+                        out = self.call("host_ctor_fn", vec![out, self.lit(h)])?;
+                    }
+                }
+                Ok(out)
+            }
+            Answer::Ctors(Err(why)) => self.call("host_ctors_refused", vec![self.string_value(why)?]),
         }
     }
 
@@ -674,6 +778,19 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 }
                 Ok(Step::Ask(Request::Close(split, proofs)))
             }
+            17 => {
+                let mut budget = READ_BUDGET;
+                let ty = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                let name = self.string(self.call("host_name", vec![tree])?)?;
+                let under = self.nat_of("host_under", vec![tree])?.checked_sub(1);
+                Ok(Step::Ask(Request::Assume(ty, name, under)))
+            }
+            18 => Ok(Step::Ask(Request::Ctors(self.nat_of("host_handle", vec![tree])?))),
+            19 => {
+                let mut budget = READ_BUDGET;
+                Ok(Step::Ask(Request::AsType(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
+            }
+            20 => Ok(Step::Ask(self.decls()?)),
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -736,7 +853,7 @@ struct Scope {
 
 /// What a handle stands for.
 #[derive(Clone)]
-enum Held {
+pub(crate) enum Held {
     Type(Type, Level),
     Term(Term, Type, Level),
 }
@@ -808,6 +925,15 @@ struct Run {
     globals: Vec<GlobalKey>,
     splits: Vec<Rc<Split>>,
     span: Span,
+    /// A generator's run (`generate`): its root is the module's empty
+    /// context, it has no goal, and it ends by publishing.
+    generator: bool,
+}
+
+/// How a run ended: with a tactic's result, or a generator's declarations.
+enum Ended {
+    Result(RExpr),
+    Published(Vec<DeclView>),
 }
 
 /// How a split's proof is built: surface syntax whose leaves are
@@ -839,6 +965,11 @@ pub(crate) enum Leaves {
     /// Each leaf is its branch's proof, valid in a context of the length
     /// given.
     Fill(Vec<(Term, usize)>),
+    /// A generated declaration's parameter types, statement and body
+    /// ([`Elaborator::elab_generate`]), in a context of the length given.
+    /// They were built in a world of `psi` globals, and the declarations
+    /// published since are shifted past.
+    Member { fills: Vec<(Held, usize)>, psi: usize },
 }
 
 const LEAF: &str = "\0host-leaf-";
@@ -862,6 +993,16 @@ enum Fault {
     Ill(String),
 }
 
+/// A request's outcome as its answer: refused for an ill-typed `Expr`, and
+/// the run's end for a broken protocol.
+fn refusable<T>(r: Result<T, Fault>) -> Result<Result<T, String>, String> {
+    match r {
+        Ok(t) => Ok(Ok(t)),
+        Err(Fault::Ill(why)) => Ok(Err(why)),
+        Err(Fault::Protocol(msg)) => Err(msg),
+    }
+}
+
 impl Fault {
     fn msg(self) -> String {
         match self {
@@ -871,6 +1012,28 @@ impl Fault {
 }
 
 impl Run {
+    fn new(cx: &Cx, span: Span, generator: bool) -> Run {
+        Run {
+            scopes: vec![Scope { parent: None, cx: cx.clone(), world: 0, locals: Vec::new() }],
+            held: Vec::new(),
+            lets: Vec::new(),
+            opened: Vec::new(),
+            holes: Vec::new(),
+            trail: Vec::new(),
+            globals: Vec::new(),
+            splits: Vec::new(),
+            span,
+            generator,
+        }
+    }
+
+    /// The handles an invocation's arguments quoted, in order, at the root.
+    fn issue_quoted(&mut self, quoted: Vec<Held>) {
+        for held in quoted {
+            self.issue(0, held);
+        }
+    }
+
     fn len(&self, s: usize) -> usize {
         self.scopes[s].cx.gamma.len()
     }
@@ -957,11 +1120,11 @@ impl Run {
             RExpr::Hd(h) => Ok(self.held(*h)?.0),
             RExpr::Local(x) if self.let_local(*x).is_some() => Ok(0),
             RExpr::Local(x) => Ok(self.local(*x)?.0),
-            RExpr::NatLit(_) | RExpr::Global(_) => Ok(0),
-            RExpr::App(f, a) => self.join(self.scope_of(f)?, self.scope_of(a)?),
-            RExpr::Lam(x, _) => {
+            RExpr::NatLit(_) | RExpr::Global(_) | RExpr::Blank => Ok(0),
+            RExpr::App(f, a) | RExpr::Equation(f, a) => self.join(self.scope_of(f)?, self.scope_of(a)?),
+            RExpr::Lam(x, _) | RExpr::Pi(x, _) => {
                 let (s, _) = self.local(*x)?;
-                self.scopes[s].parent.ok_or_else(|| Fault::Protocol(format!("`Lam` abstracts local {x}, which the tactic did not open")))
+                self.scopes[s].parent.ok_or_else(|| Fault::Protocol(format!("`Lam` or `Pi` abstracts local {x}, which the tactic did not open")))
             }
         }
     }
@@ -1116,6 +1279,18 @@ impl Run {
     }
 }
 
+/// A generated declaration, read back from its generator's run: each
+/// parameter's name, implicitness and type (scoped in the parameters before
+/// it), the statement and the body under all of them. Everything is in the
+/// world the run was in.
+pub(crate) struct Member {
+    theorem: bool,
+    name: String,
+    params: Vec<(String, bool, Type, Level)>,
+    result: (Type, Level),
+    body: Term,
+}
+
 /// One elaborated piece of a returned `Expr`.
 struct Reified {
     term: Term,
@@ -1133,11 +1308,14 @@ pub(crate) struct Quoting {
     quote: (Term, Rc<Type>),
     /// The goal's context, where every quoted term must live.
     root: LocalCtx,
-    /// The quoted terms, in handle order after the goal.
-    terms: RefCell<Vec<(Term, Type, Level)>>,
+    /// The quoted terms and types, in handle order after the goal.
+    terms: RefCell<Vec<Held>>,
     /// The expression being checked without quoting, by the probe that
     /// decides whether it needs quoting at all.
     plain: Cell<Option<Span>>,
+    /// A generator's run issues no goal handle, so its quoted terms are
+    /// handles 0 onwards.
+    no_goal: bool,
 }
 
 impl Elaborator {
@@ -1154,23 +1332,42 @@ impl Elaborator {
             }
         }
         let world = self.goal_psi();
-        let signature = |name: &str| -> R<(Term, Type)> {
-            let key = format!("tactic::{name}");
-            let Some(abs) = self.global_abs(&key) else {
-                return err("`by` runs a tactic written against the `tactic` protocol; add `import tactic;`", span);
-            };
-            let len = world.bindings.len();
-            let GlobalBinding::Tm { ty, .. } = &world.bindings[abs] else {
-                return err(format!("`{key}` is not a term-level global"), span);
-            };
-            let head = Term::GlobalTm { var: GlobalVar((len - 1 - abs) as u32), subst: LocalSubst::id(&LocalCtx::nil()) };
-            Ok((head, ty.shift_global((len - abs) as u32)))
+        let (closed, quoted) = self.protocol_value(cx, &world, tactic, "host_tag", "by", span)?;
+        // One arena for the whole run, which keeps what it forces: each
+        // resumed tree is built from closures the earlier ones forced
+        // (`ValueArena::cache_tm`).
+        let arena = ValueArena::new();
+        let reader = Reader::new(&world, &arena);
+        let tree = reader.root(closed);
+        let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };
+        self.run_tactic(cx, &mut speaker, &shown, goal, lvl, quoted, span)
+    }
+
+    /// `tactic::name`'s head and type in `world`.
+    fn protocol_signature(&self, world: &GlobalCtx, name: &str, keyword: &str, span: Span) -> R<(Term, Type)> {
+        let key = format!("tactic::{name}");
+        let Some(abs) = self.global_abs(&key) else {
+            return err(format!("`{keyword}` runs a value of the `tactic` protocol; add `import tactic;`"), span);
         };
-        let (_, tag) = signature("host_tag")?;
-        let Type::Pi { dom_level, dom, .. } = tag else {
-            return err("`tactic::host_tag` does not take a tactic", span);
+        let len = world.bindings.len();
+        let GlobalBinding::Tm { ty, .. } = &world.bindings[abs] else {
+            return err(format!("`{key}` is not a term-level global"), span);
         };
-        let (quote_head, quote_ty) = signature("host_quote")?;
+        let head = Term::GlobalTm { var: GlobalVar((len - 1 - abs) as u32), subst: LocalSubst::id(&LocalCtx::nil()) };
+        Ok((head, ty.shift_global((len - abs) as u32)))
+    }
+
+    /// Elaborate `e`, a `by`'s tactic or a `generate`'s generator, at the
+    /// type `tactic::entry` takes, with quoting on: a closed term and the
+    /// handles its arguments quoted. A generator issues no goal handle, so
+    /// its quoted handles start at 0.
+    fn protocol_value(&self, cx: &Cx, world: &GlobalCtx, e: &Expr, entry: &str, keyword: &str, span: Span) -> R<(Term, Vec<Held>)> {
+        let shown = tactic_name(e);
+        let (_, takes) = self.protocol_signature(world, entry, keyword, span)?;
+        let Type::Pi { dom_level, dom, .. } = takes else {
+            return err(format!("`tactic::{entry}` takes nothing"), span);
+        };
+        let (quote_head, quote_ty) = self.protocol_signature(world, "host_quote", keyword, span)?;
         let Type::Pi { cod_level, cod, .. } = &quote_ty else {
             return err("`tactic::host_quote` does not take a handle", span);
         };
@@ -1181,29 +1378,23 @@ impl Elaborator {
             root: cx.gamma.clone(),
             terms: RefCell::new(Vec::new()),
             plain: Cell::new(None),
+            no_goal: keyword == "generate",
         });
         let outer = self.by_quoting.replace(Some(Rc::clone(&quoting)));
-        let term = self.elab_check(cx, tactic, &dom, &dom_level);
+        let term = self.elab_check(cx, e, &dom, &dom_level);
         self.by_quoting.replace(outer);
         let term = term?;
         let Some(closed) = crate::unification::strengthen_tm(&LocalCtx::nil(), &term, cx.gamma.len() as u32) else {
             return err(
                 format!(
-                    "`by {shown}`: a tactic's arguments can mention the goal's locals only where it expects an \
+                    "`{keyword} {shown}`: its arguments can mention the goal's locals only where it expects an \
                      `Expr`; otherwise it reaches them through the `Goal` request"
                 ),
                 span,
             );
         };
         let quoted = quoting.terms.borrow().clone();
-        // One arena for the whole run, which keeps what it forces: each
-        // resumed tree is built from closures the earlier ones forced
-        // (`ValueArena::cache_tm`).
-        let arena = ValueArena::new();
-        let reader = Reader::new(&world, &arena);
-        let tree = reader.root(closed);
-        let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };
-        self.run_tactic(cx, &mut speaker, &shown, goal, lvl, quoted, span)
+        Ok((closed, quoted))
     }
 
     /// While a `by`'s tactic expression is elaborated, `e` at `expected`:
@@ -1227,6 +1418,23 @@ impl Elaborator {
         if !lvl.equiv(&q.level) || !self.conv_types(cx, expected, &q.expr, lvl) {
             return Ok(None);
         }
+        // A type's name is quoted as the type (`generate congruences(Tm)`).
+        if let heather_syntax::ast::ExprKind::Var(name) = &e.kind
+            && !self.shadowed(cx, name)
+            && !cx.names.iter().any(|n| n == name)
+            && self.lookup_inductive(name).is_some_and(|ind| ind.params.is_empty() && ind.valparams.is_empty())
+        {
+            let written = heather_syntax::ast::Ty {
+                kind: heather_syntax::ast::TyKind::Named { name: name.clone(), args: Vec::new() },
+                span: e.span,
+            };
+            let (ty, level) = self.elab_ty(cx, &written)?;
+            let d = (cx.gamma.len() - q.root.len()) as u32;
+            let Some(ty) = crate::unification::strengthen_ty(&q.root, &ty, d) else {
+                return err("a quoted type must live in the goal's context", e.span);
+            };
+            return Ok(Some(self.quoted(&q, cx, Held::Type(ty, level), e.span)?));
+        }
         // A bare global is quoted as itself, its implicit parameters still
         // binders of its type for `Match` to solve; inferring it would
         // insert them.
@@ -1237,7 +1445,7 @@ impl Elaborator {
             && !(level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level))
         {
             let root = q.root.len() as u32;
-            return Ok(Some(self.quoted(&q, cx, term.shift_local(root), ty.shift_local(root), level, e.span)?));
+            return Ok(Some(self.quoted(&q, cx, Held::Term(term.shift_local(root), ty.shift_local(root), level), e.span)?));
         }
         q.plain.set(Some(e.span));
         let probe = self.clone().elab_infer(cx, e);
@@ -1265,16 +1473,16 @@ impl Elaborator {
                 e.span,
             );
         };
-        Ok(Some(self.quoted(&q, cx, term, ty, level, e.span)?))
+        Ok(Some(self.quoted(&q, cx, Held::Term(term, ty, level), e.span)?))
     }
 
     /// Record a quoted term of the goal's context and return the closed
     /// `host_quote(n)` that stands for it, weakened to `cx`.
-    fn quoted(&self, q: &Quoting, cx: &Cx, term: Term, ty: Type, level: Level, span: Span) -> R<Term> {
+    fn quoted(&self, q: &Quoting, cx: &Cx, held: Held, span: Span) -> R<Term> {
         let n = {
             let mut terms = q.terms.borrow_mut();
-            terms.push((term, ty, level));
-            terms.len() as u64
+            terms.push(held);
+            terms.len() as u64 - u64::from(q.no_goal)
         };
         let (head, pi) = &q.quote;
         let Type::Pi { dom_level, cod_level, dom, cod } = &**pi else {
@@ -1303,101 +1511,69 @@ impl Elaborator {
         shown: &str,
         goal: &Type,
         lvl: &Level,
-        quoted: Vec<(Term, Type, Level)>,
+        quoted: Vec<Held>,
         span: Span,
     ) -> R<Term> {
         let fail = |msg: String| err(format!("`by {shown}`: {msg}"), span);
-        let mut run = Run {
-            scopes: vec![Scope { parent: None, cx: cx.clone(), world: 0, locals: Vec::new() }],
-            held: Vec::new(),
-            lets: Vec::new(),
-            opened: Vec::new(),
-            holes: Vec::new(),
-            trail: Vec::new(),
-            globals: Vec::new(),
-            splits: Vec::new(),
-            span,
-        };
+        let mut run = Run::new(cx, span, false);
         run.issue(0, Held::Type(goal.clone(), lvl.clone()));
-        for (term, ty, level) in quoted {
-            run.issue(0, Held::Term(term, ty, level));
-        }
+        run.issue_quoted(quoted);
         self.issue_lets(cx, &mut run);
+        match self.drive(&mut run, speaker) {
+            Ok(Ended::Result(e)) => self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg)),
+            Ok(Ended::Published(_)) => fail("only `generate` publishes declarations".into()),
+            Err(msg) => fail(msg),
+        }
+    }
+
+    /// The host loop: drive `speaker` until it returns a result or, in a
+    /// generator's run, publishes, answering its requests in the run's
+    /// scopes. The error is the reason the run stopped.
+    fn drive(&self, run: &mut Run, speaker: &mut dyn Speaker) -> Result<Ended, String> {
+        let span = run.span;
+        let what = if run.generator { "generator" } else { "tactic" };
         let mut step = speaker.start();
         for answered in 0..REQUEST_BUDGET {
             let request = match step {
-                Err(msg) => return fail(format!("{msg}, after {answered} requests")),
-                Ok(Step::Done(e)) => return self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg)),
+                Err(msg) => return Err(format!("{msg}, after {answered} requests")),
+                Ok(Step::Done(e)) => return Ok(Ended::Result(e)),
                 Ok(Step::Ask(request)) => request,
             };
             let answer = match request {
-                Request::Goal => Answer::Goal(self.goal_view(cx, &mut run)),
-                Request::Defeq(a, b) => match self.defeq(&mut run, &a, &b) {
-                    Ok(same) => Answer::Bool(same),
-                    Err(f) => return fail(f.msg()),
-                },
-                Request::Fail(msg, notes) => {
-                    let rendered = match self.render_notes(&mut run, &notes) {
-                        Ok(r) => r,
-                        Err(f) => return fail(f.msg()),
-                    };
-                    return fail(format!("the tactic failed: {msg}{rendered}"));
+                Request::Goal if run.generator => {
+                    return Err("a generator has no goal: `focus` a tactic on a statement it built".into());
                 }
-                Request::Infer(e) => match self.infer_request(&mut run, &e) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
-                    Ok(h) => Answer::Handle(Ok(h)),
-                },
-                Request::Open(h, name) => match self.open_request(&mut run, h, name) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Opened(Err(why)),
-                    Ok(o) => Answer::Opened(Ok(o)),
-                },
-                Request::Resolve(name) => Answer::Handle(self.resolve_request(&mut run, &name, span)),
-                Request::View(h) => match self.view_request(&mut run, h) {
-                    Ok(v) => Answer::Head(v),
-                    Err(f) => return fail(f.msg()),
-                },
-                Request::Whnf(h) => match self.whnf_request(&mut run, h) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
-                    Ok(h) => Answer::Handle(Ok(h)),
-                },
-                Request::Match(ty, target) => match self.match_request(&mut run, ty, target, span) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Match(Err(why)),
-                    Ok(slots) => Answer::Match(Ok(slots)),
-                },
-                Request::Hole(h) => match self.hole_request(&mut run, h) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
-                    Ok(h) => Answer::Handle(Ok(h)),
-                },
+                Request::Goal => Answer::Goal(self.goal_view(&run.scopes[0].cx.clone(), run)),
+                Request::Defeq(a, b) => Answer::Bool(self.defeq(run, &a, &b).map_err(Fault::msg)?),
+                Request::Fail(msg, notes) => {
+                    let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
+                    return Err(format!("the {what} failed: {msg}{rendered}"));
+                }
+                Request::Infer(e) => Answer::Handle(refusable(self.infer_request(run, &e))?),
+                Request::Open(h, name) => Answer::Opened(refusable(self.open_request(run, h, name))?),
+                Request::Resolve(name) => Answer::Handle(self.resolve_request(run, &name, span)),
+                Request::View(h) => Answer::Head(self.view_request(run, h).map_err(Fault::msg)?),
+                Request::Whnf(h) => Answer::Handle(refusable(self.whnf_request(run, h))?),
+                Request::Match(ty, target) => Answer::Match(refusable(self.match_request(run, ty, target, span))?),
+                Request::Hole(h) => Answer::Handle(refusable(self.hole_request(run, h))?),
                 Request::Mark => Answer::Nat(run.trail.len() as u64),
                 Request::Restore(mark) => {
                     run.restore(mark as usize);
                     Answer::Unit
                 }
-                Request::Lookup(name) => Answer::Global(self.lookup_request(&mut run, &name)),
-                Request::Cases(e, goal) => match self.cases_request(&mut run, &e, goal) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Split(Err(why)),
-                    Ok(split) => Answer::Split(Ok(split)),
-                },
-                Request::Constructor(goal) => match self.constructor_request(&mut run, goal) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Split(Err(why)),
-                    Ok(split) => Answer::Split(Ok(split)),
-                },
-                Request::Close(split, proofs) => match self.close_request(&mut run, split, &proofs) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
-                    Ok(h) => Answer::Handle(Ok(h)),
-                },
+                Request::Lookup(name) => Answer::Global(self.lookup_request(run, &name)),
+                Request::Cases(e, goal) => Answer::Split(refusable(self.cases_request(run, &e, goal))?),
+                Request::Constructor(goal) => Answer::Split(refusable(self.constructor_request(run, goal))?),
+                Request::Close(split, proofs) => Answer::Handle(refusable(self.close_request(run, split, &proofs))?),
+                Request::Assume(ty, name, under) => Answer::Local(refusable(self.assume_request(run, &ty, name, under))?),
+                Request::Ctors(h) => Answer::Ctors(refusable(self.ctors_request(run, h))?),
+                Request::AsType(e) => Answer::Handle(refusable(self.as_type_request(run, &e))?),
+                Request::Publish(decls) if run.generator => return Ok(Ended::Published(decls)),
+                Request::Publish(_) => return Err("only `generate` publishes declarations; a tactic cannot".into()),
             };
             step = speaker.resume(answer);
         }
-        fail(format!("the tactic made more than {REQUEST_BUDGET} requests without finishing"))
+        Err(format!("the {what} made more than {REQUEST_BUDGET} requests without finishing"))
     }
 
     /// The tactic's result as a proof of the goal: elaborated, compared with
@@ -1484,27 +1660,54 @@ impl Elaborator {
     /// either side mentions. A failed comparison solves nothing.
     fn defeq(&self, run: &mut Run, a: &RExpr, b: &RExpr) -> Result<bool, Fault> {
         let at = run.join(run.scope_of(a)?, run.scope_of(b)?)?;
-        let ty_of = |run: &Run, e: &RExpr| -> Result<Option<(Type, Level)>, Fault> {
-            let RExpr::Hd(h) = e else { return Ok(None) };
-            match run.held(*h)? {
-                (s, Held::Type(t, l)) => Ok(Some((run.lift(s, at, |k| t.shift_local(k))?, l))),
-                _ => Ok(None),
-            }
-        };
         let mark = run.trail.len();
-        let same = match (ty_of(run, a)?, ty_of(run, b)?) {
-            (Some((x, lx)), Some((y, ly))) => lx.equiv(&ly) && self.same_ty(run, at, &x, &y, &lx)?,
-            (Some(_), None) | (None, Some(_)) => false,
-            (None, None) => match (self.reify(run, a, at), self.reify(run, b, at)) {
-                (Ok(x), Ok(y)) => self.same_tm(run, at, &x, &y)?,
-                (Err(Fault::Protocol(m)), _) | (_, Err(Fault::Protocol(m))) => return Err(Fault::Protocol(m)),
-                _ => false,
-            },
-        };
+        let same = self.defeq_at(run, at, a, b)?;
         if !same {
             run.restore(mark);
         }
         Ok(same)
+    }
+
+    /// [`Self::defeq`] at scope `at`. Reading a side may make holes (a
+    /// `Blank`), which grows the world, so the first side is shifted into
+    /// the world the second left.
+    fn defeq_at(&self, run: &mut Run, at: usize, a: &RExpr, b: &RExpr) -> Result<bool, Fault> {
+        let types = a.is_type_form() || b.is_type_form() || self.is_type_handle(run, a)? || self.is_type_handle(run, b)?;
+        if types {
+            // Types with types; an ill-typed form is no type, equal to nothing.
+            let read = |me: &Self, run: &mut Run, e: &RExpr| match me.reify_ty(run, e, at) {
+                Ok(t) => Ok(Some(t)),
+                Err(Fault::Ill(_)) => Ok(None),
+                Err(f) => Err(f),
+            };
+            let Some((x, lx)) = read(self, run, a)? else { return Ok(false) };
+            let m = run.world();
+            let Some((y, ly)) = read(self, run, b)? else { return Ok(false) };
+            let x = x.shift_global((run.world() - m) as u32);
+            return Ok(lx.equiv(&ly) && self.same_ty(run, at, &x, &y, &lx)?);
+        }
+        let x = match self.reify(run, a, at) {
+            Ok(x) => x,
+            Err(Fault::Protocol(m)) => return Err(Fault::Protocol(m)),
+            Err(Fault::Ill(_)) => return Ok(false),
+        };
+        let m = run.world();
+        let y = match self.reify(run, b, at) {
+            Ok(y) => y,
+            Err(Fault::Protocol(m)) => return Err(Fault::Protocol(m)),
+            Err(Fault::Ill(_)) => return Ok(false),
+        };
+        let k = (run.world() - m) as u32;
+        let x = Reified { term: x.term.shift_global(k), ty: x.ty.shift_global(k), level: x.level };
+        self.same_tm(run, at, &x, &y)
+    }
+
+    /// Is `e` a handle to a type?
+    fn is_type_handle(&self, run: &Run, e: &RExpr) -> Result<bool, Fault> {
+        match e {
+            RExpr::Hd(h) => Ok(matches!(run.held(*h)?.1, Held::Type(..))),
+            _ => Ok(false),
+        }
     }
 
     /// Are two types of the current world the same at scope `at`? Committed
@@ -2228,6 +2431,8 @@ impl Elaborator {
             }
             RExpr::App(f, a) => {
                 let f = self.reify(run, f, at)?;
+                // Reading `f` may have made holes.
+                let m = run.world() as u32;
                 let fty = run.partial_ty(&f.ty);
                 let pi = match run.committed_ty(&fty) {
                     Some(c) => self
@@ -2240,22 +2445,35 @@ impl Elaborator {
                 let Type::Pi { dom_level, cod_level, dom, cod } = pi else {
                     return Err(Fault::Ill(format!("`{}` is applied but is not a function", self.shown_ty(run, at, &fty))));
                 };
-                let a = self.reify(run, a, at)?;
-                if !a.level.equiv(&dom_level) || !self.same_ty(run, at, &a.ty, &dom, &dom_level)? {
-                    return Err(Fault::Ill(format!(
-                        "an argument of type `{}` where `{}` is expected",
-                        self.shown_ty(run, at, &a.ty),
-                        self.shown_ty(run, at, &dom)
-                    )));
-                }
-                let arg = Rc::new(a.term);
+                let (fun, dom, cod, arg) = if matches!(**a, RExpr::Blank) {
+                    // An argument left to inference: a hole at the domain,
+                    // at this scope, which the rest of the `Expr` solves.
+                    run.holes.push(Hole { home: at, sol: None });
+                    let hole = run.occurrence(run.world() - 1);
+                    (f.term.shift_global(1), Rc::new(dom.shift_global(1)), Rc::new(cod.shift_global(1)), hole)
+                } else {
+                    let a = self.reify(run, a, at)?;
+                    let k = run.world() as u32 - m;
+                    let (fun, dom, cod) = (f.term.shift_global(k), Rc::new(dom.shift_global(k)), Rc::new(cod.shift_global(k)));
+                    if !a.level.equiv(&dom_level) || !self.same_ty(run, at, &a.ty, &dom, &dom_level)? {
+                        return Err(Fault::Ill(format!(
+                            "an argument of type `{}` where `{}` is expected",
+                            self.shown_ty(run, at, &a.ty),
+                            self.shown_ty(run, at, &dom)
+                        )));
+                    }
+                    (fun, dom, cod, a.term)
+                };
+                let arg = Rc::new(arg);
                 let ty = (*cod).clone().apply_local(&LocalSubst::id(&run.scopes[at].cx.gamma).extended(Rc::clone(&arg)));
                 Ok(Reified {
-                    term: Term::App { fun: Rc::new(f.term), dom_level, cod_level: cod_level.clone(), dom, cod, arg },
+                    term: Term::App { fun: Rc::new(fun), dom_level, cod_level: cod_level.clone(), dom, cod, arg },
                     ty,
                     level: cod_level,
                 })
             }
+            RExpr::Blank => Err(Fault::Ill("`Blank` stands only as an argument".into())),
+            RExpr::Pi(..) | RExpr::Equation(..) => Err(Fault::Ill("a `Pi` or an `Equation` stands for a type, not a term".into())),
             RExpr::Lam(x, body) => {
                 let (s, i) = run.local(*x)?;
                 if run.scopes[s].parent != Some(at) || run.scopes[s].locals.len() != 1 || i < run.len(0) {
@@ -2272,6 +2490,209 @@ impl Elaborator {
                 })
             }
         }
+    }
+
+    /// An `Expr` standing for a type, as a type of scope `at` in the current
+    /// world: a type handle, a `Pi` abstracting an introduced local of
+    /// `at`'s child, an `Equation` between two terms of one type, or a term
+    /// whose type is a universe, decoded.
+    fn reify_ty(&self, run: &mut Run, e: &RExpr, at: usize) -> Result<(Type, Level), Fault> {
+        match e {
+            RExpr::Hd(h) => {
+                if let (s, Held::Type(ty, level)) = run.held(*h)? {
+                    return Ok((run.lift(s, at, |k| ty.shift_local(k))?, level));
+                }
+            }
+            RExpr::Pi(x, body) => {
+                let (s, i) = run.local(*x)?;
+                if run.scopes[s].parent != Some(at) || run.scopes[s].locals.len() != 1 || i < run.len(0) {
+                    return Err(Fault::Protocol(format!("`Pi` abstracts local {x}, which is not bound here")));
+                }
+                let (cod, cod_level) = self.reify_ty(run, body, s)?;
+                let entry = run.scopes[s].cx.gamma.entries.get(i).expect("an opened local");
+                let dom = Rc::new(entry.ty.shift_global((run.world() - run.scopes[s].world) as u32));
+                let dom_level = entry.level.clone();
+                let level = Level::join(dom_level.clone(), cod_level.clone());
+                return Ok((Type::Pi { dom_level, cod_level, dom, cod: Rc::new(cod) }, level));
+            }
+            RExpr::Equation(l, r) => {
+                let l = self.reify(run, l, at)?;
+                let m = run.world();
+                let r = self.reify(run, r, at)?;
+                let k = (run.world() - m) as u32;
+                let (lhs, ty) = (l.term.shift_global(k), l.ty.shift_global(k));
+                if !l.level.equiv(&r.level) || !self.same_ty(run, at, &r.ty, &ty, &l.level)? {
+                    return Err(Fault::Ill(format!(
+                        "an equation between a term of `{}` and one of `{}`",
+                        self.shown_ty(run, at, &ty),
+                        self.shown_ty(run, at, &r.ty)
+                    )));
+                }
+                return Ok((Type::Id { level: l.level.clone(), ty: Rc::new(ty), lhs: Rc::new(lhs), rhs: Rc::new(r.term) }, l.level));
+            }
+            _ => {}
+        }
+        // A term whose type is a universe stands for the type it codes.
+        let r = self.reify(run, e, at)?;
+        let ty = run.partial_ty(&r.ty);
+        let universe = match run.committed_ty(&ty) {
+            Some(c) => self
+                .goal_oracle()
+                .whnf_type(&run.cx(at)?.gamma, &c)
+                .map_err(|_| Fault::Ill("ran out of fuel reading a type".into()))?,
+            None => ty.clone(),
+        };
+        match universe {
+            Type::Ty(level) => Ok((Type::El { level: level.clone(), tm: Rc::new(r.term) }, level)),
+            _ => Err(Fault::Ill(format!("a term of `{}` stands where a type is expected", self.shown_ty(run, at, &ty)))),
+        }
+    }
+
+    /// `AsType(e)`: a handle to the type `e` stands for.
+    fn as_type_request(&self, run: &mut Run, e: &RExpr) -> Result<u64, Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        match self.reify_ty(run, e, at) {
+            Ok((ty, level)) => Ok(run.issue_now(at, Held::Type(run.partial_ty(&ty), level))),
+            Err(f) => {
+                run.restore(mark);
+                Err(f)
+            }
+        }
+    }
+
+    /// `Assume(ty, name, under)`: a new local of `ty`, in a scope of its own
+    /// under `under`'s scope (the root's for `None`), so that `Pi`, `Lam` and
+    /// a declaration's parameter list can abstract it.
+    fn assume_request(&self, run: &mut Run, ty: &RExpr, name: String, under: Option<u64>) -> Result<LocalView, Fault> {
+        let parent = match under {
+            None => 0,
+            Some(x) if run.let_local(x).is_some() => {
+                return Err(Fault::Protocol(format!("local {x} is a `let`, which opens no binder to assume under")));
+            }
+            Some(x) => run.local(x)?.0,
+        };
+        let mark = run.trail.len();
+        let (t, level) = self.reify_ty(run, ty, parent).inspect_err(|_| run.restore(mark))?;
+        let Some(t) = run.committed_ty(&t) else {
+            run.restore(mark);
+            return Err(Fault::Ill("`Assume` needs a type that mentions no unsolved hole".into()));
+        };
+        let mut inner = run.cx(parent)?;
+        inner.push(name.clone(), t.clone(), level.clone());
+        let id = run.next_id();
+        let position = inner.gamma.len() - 1;
+        run.scopes.push(Scope { parent: Some(parent), cx: inner, world: 0, locals: vec![id] });
+        let scope = run.scopes.len() - 1;
+        run.opened.push((scope, position));
+        let ty = run.issue(parent, Held::Type(t, level));
+        Ok(LocalView { id, name, ty })
+    }
+
+    /// `Ctors(ty)`: the constructors of the inductive `ty` is, each read off
+    /// its own application checked at `ty`, the way `Constructor` reads a
+    /// split: the application's fields are markers that record what they are
+    /// checked at, twice with different placeholders, and a field whose type
+    /// changes between the two mentions an earlier field. Where none does,
+    /// the constructor is also built as a function of its fields, by the
+    /// same application with the fields its parameters.
+    fn ctors_request(&self, run: &mut Run, h: u64) -> Result<Vec<CtorView>, Fault> {
+        let (s, ty, lvl) = self.committed_goal(run, h, None, "Ctors")?;
+        let cx = run.cx(s)?;
+        let Some(ind) = self.inductive_of(&cx, &ty) else {
+            return Err(Fault::Ill(format!("`{}` is not an inductive type", self.display_type(&cx, &ty))));
+        };
+        if ind.codata || ind.index.is_some() {
+            return Err(Fault::Ill(format!("`{}` is codata or an indexed family, and `Ctors` reads neither", ind.name)));
+        }
+        let span = run.span;
+        let mut out = Vec::with_capacity(ind.ctors.len());
+        for (k, ctor) in ind.ctors.iter().enumerate() {
+            let n = ctor.fields.len();
+            let app = |args: Vec<Expr>| -> Expr {
+                // By the expected type, not by a name the caller's scope
+                // might shadow: the anonymous forms where they apply.
+                let head = match (ind.ctors.len(), k) {
+                    (1, _) => heather_syntax::ANON_CTOR_ONLY.to_string(),
+                    (2, 0) => heather_syntax::ANON_CTOR_LEFT.to_string(),
+                    (2, _) => heather_syntax::ANON_CTOR_RIGHT.to_string(),
+                    _ => format!("{}::{}", ind.name, ctor.name),
+                };
+                let head = Expr { kind: heather_syntax::ast::ExprKind::Var(head), span };
+                if n == 0 && ind.ctors.len() > 2 {
+                    return head;
+                }
+                Expr {
+                    kind: heather_syntax::ast::ExprKind::App { head: Box::new(head), args, named: vec![], explicit: false, goal_oriented: false },
+                    span,
+                }
+            };
+            let expr = app((0..n).map(|j| leaf_expr(j, span)).collect());
+            let skeleton = Skeleton::Constructor(expr);
+            let mut runs = Vec::with_capacity(2);
+            for placeholder in [Term::Zero, Term::Succ(Rc::new(Term::Zero))] {
+                let probe = self.clone();
+                let (built, leaves) = probe.build(&cx, &skeleton, &ty, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, span);
+                built.map_err(|e| Fault::Ill(format!("`{}`: {}", ctor.name, elab_message(e))))?;
+                let Leaves::Record { seen, .. } = leaves else { unreachable!("a recording run stays one") };
+                runs.push(seen);
+            }
+            let (second, first) = (runs.pop().expect("two runs"), runs.pop().expect("two runs"));
+            let mut fields: Vec<Option<(Type, Level)>> = Vec::with_capacity(n);
+            for (a, b) in first.into_iter().zip(second) {
+                match (a, b) {
+                    (Some((acx, aty, al)), Some((bcx, bty, _))) => {
+                        let same = acx.gamma.len() == cx.gamma.len() && acx.gamma == bcx.gamma && aty == bty;
+                        fields.push(same.then_some((aty, al)));
+                    }
+                    _ => return Err(Fault::Ill(format!("a field of `{}` was never elaborated", ctor.name))),
+                }
+            }
+            let function = match fields.iter().cloned().collect::<Option<Vec<_>>>() {
+                Some(tys) => Some(self.ctor_function(run, s, &cx, &skeleton, &ty, &lvl, &tys).map_err(|e| {
+                    Fault::Ill(format!("`{}` as a function: {e}", ctor.name))
+                })?),
+                None => None,
+            };
+            let fields = fields
+                .into_iter()
+                .zip(&ctor.fields)
+                .map(|(f, (name, _))| (name.clone().unwrap_or_default(), f.map(|(t, l)| run.issue(s, Held::Type(t, l)))))
+                .collect();
+            out.push(CtorView { name: ctor.name.clone(), fields, ctor: function });
+        }
+        Ok(out)
+    }
+
+    /// A constructor as the function `λ x̄. C(x̄)` of its fields, whose types
+    /// `tys` mention no earlier field, issued at scope `s`.
+    #[allow(clippy::too_many_arguments)]
+    fn ctor_function(&self, run: &mut Run, s: usize, cx: &Cx, skeleton: &Skeleton, ty: &Type, lvl: &Level, tys: &[(Type, Level)]) -> Result<u64, String> {
+        let n = tys.len();
+        let mut inner = cx.clone();
+        for (j, (t, l)) in tys.iter().enumerate() {
+            let name = crate::goal_combinators::fresh(self, &inner, format!("x{j}"));
+            inner.push(name, t.shift_local(j as u32), l.clone());
+        }
+        let len = inner.gamma.len();
+        let fills = (0..n).map(|j| (Term::Var(LocalVar((n - 1 - j) as u32)), len)).collect();
+        let search = crate::resolve::SearchMark::of(self);
+        let mut term = match self.build(&inner, skeleton, &ty.shift_local(n as u32), lvl, Leaves::Fill(fills), run.span).0 {
+            Ok(t) => t,
+            Err(e) => {
+                search.rollback(self);
+                return Err(elab_message(e));
+            }
+        };
+        let mut fty = ty.shift_local(n as u32);
+        let mut level = lvl.clone();
+        for (j, (t, l)) in tys.iter().enumerate().rev() {
+            let dom = Rc::new(t.shift_local(j as u32));
+            term = Term::Lam { dom_level: l.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(term) };
+            fty = Type::Pi { dom_level: l.clone(), cod_level: level.clone(), dom, cod: Rc::new(fty) };
+            level = Level::join(l.clone(), level);
+        }
+        Ok(run.issue(s, Held::Term(term, fty, level)))
     }
 
     /// A handle's committed type, lifted to scope `to`, for a request that
@@ -2488,7 +2909,179 @@ impl Elaborator {
                 Some((t, n)) if *n == cx.gamma.len() => Ok(t.clone()),
                 _ => err("a split's branch was elaborated in another context than it was proved in", span),
             },
+            Leaves::Member { fills, psi } => match fills.get(k) {
+                Some((Held::Term(t, ..), n)) if *n == cx.gamma.len() => {
+                    Ok(t.shift_global((self.goal_psi().bindings.len() - *psi) as u32))
+                }
+                _ => err("a generated declaration's body was elaborated in another context than it was built in", span),
+            },
         }
+    }
+
+    /// The type at a generated declaration's leaf `k` (see [`Leaves`]).
+    pub(crate) fn host_ty_leaf(&self, cx: &Cx, k: usize, span: Span) -> R<(Type, Level)> {
+        let Some(state) = self.host_leaves.borrow().clone() else {
+            return err("a generated declaration's type outside its declaration", span);
+        };
+        let leaves = state.borrow();
+        match &*leaves {
+            Leaves::Member { fills, psi } => match fills.get(k) {
+                Some((Held::Type(t, l), n)) if *n == cx.gamma.len() => {
+                    Ok((t.shift_global((self.goal_psi().bindings.len() - *psi) as u32), l.clone()))
+                }
+                _ => err("a generated declaration's type was elaborated in another context than it was built in", span),
+            },
+            _ => err("a generated declaration's type outside its declaration", span),
+        }
+    }
+
+    /// `generate g(args);`: run the generator `g(args)`, a
+    /// `tactic::Tac<List<tactic::Decl>>`, at the module's empty context,
+    /// and publish the declarations it ends with, every one of them or none
+    /// (design §19).
+    ///
+    /// Each declaration is built from surface syntax whose parameter types,
+    /// statement and body are markers standing for what the generator
+    /// built ([`Leaves::Member`]), and elaborated as an ordinary
+    /// declaration: its name is checked and registered, its implicit
+    /// parameters are the call convention, and the kernel gates it. So a
+    /// generated declaration is exactly what the same declaration written in
+    /// source would be. The group is one transaction: a member refused
+    /// rolls back the ones before it.
+    pub(crate) fn elab_generate(&mut self, g: &heather_syntax::ast::GenerateItem) -> R<()> {
+        let shown = tactic_name(&g.generator);
+        let (members, psi) = self.run_generator(&g.generator, g.span)?;
+        self.session_transaction(|me| {
+            for m in &members {
+                me.publish_member(m, psi, g.span).map_err(|e| match e {
+                    crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
+                        msg: format!("`generate {shown}`: the generated `{}` was refused: {msg}", m.name),
+                        span,
+                    },
+                    other => other,
+                })?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Run a generator to its declarations, each read back and checked as
+    /// far as the run can (its body against its statement), and the number
+    /// of globals of the world they were built in.
+    fn run_generator(&self, generator: &Expr, span: Span) -> R<(Vec<Member>, usize)> {
+        let shown = tactic_name(generator);
+        let fail = |msg: String| err(format!("`generate {shown}`: {msg}"), span);
+        let cx = Cx::empty();
+        let world = self.goal_psi();
+        let (closed, quoted) = self.protocol_value(&cx, &world, generator, "host_generator", "generate", span)?;
+        let (head, runs) = self.protocol_signature(&world, "host_generator", "generate", span)?;
+        let Type::Pi { dom_level, cod_level, dom, cod } = runs else {
+            return err("`tactic::host_generator` takes nothing", span);
+        };
+        let tree = Term::App { fun: Rc::new(head), dom_level, cod_level, dom, cod, arg: Rc::new(closed) };
+        let arena = ValueArena::new();
+        let reader = Reader::new(&world, &arena);
+        let tree = reader.root(tree);
+        let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };
+        let mut run = Run::new(&cx, span, true);
+        run.issue_quoted(quoted);
+        match self.drive(&mut run, &mut speaker) {
+            Ok(Ended::Published(decls)) => {
+                let members = decls.iter().map(|d| self.member(&mut run, d)).collect::<Result<Vec<_>, String>>();
+                members.map(|m| (m, world.bindings.len())).or_else(fail)
+            }
+            Ok(Ended::Result(_)) => fail("a generator ends by publishing its declarations".into()),
+            Err(msg) => fail(msg),
+        }
+    }
+
+    /// One published declaration, read back: its parameters must be a
+    /// telescope of introduced locals from the root, each in the scope of
+    /// the one before, and its body must prove its statement there.
+    fn member(&self, run: &mut Run, d: &DeclView) -> Result<Member, String> {
+        let name = &d.name;
+        if !is_name(name) {
+            return Err(format!("`{name}` is not a declaration's name"));
+        }
+        let at = |why: String| format!("`{name}`: {why}");
+        let mut parent = 0;
+        let mut params = Vec::with_capacity(d.params.len());
+        for &(x, implicit) in &d.params {
+            if run.let_local(x).is_some() {
+                return Err(at(format!("parameter {x} is a `let`, which binds nothing")));
+            }
+            let (s, i) = run.local(x).map_err(|f| at(f.msg()))?;
+            if run.scopes[s].parent != Some(parent) || run.scopes[s].locals.as_slice() != [x] {
+                return Err(at(format!("parameter {x} is not introduced under the parameter before it")));
+            }
+            let cx = run.cx(s).map_err(|f| at(f.msg()))?;
+            let entry = cx.gamma.entries.get(i).expect("an introduced local");
+            let shown = cx.names.get(i).filter(|n| is_name(n) && !n.contains("::")).cloned().unwrap_or_else(|| format!("x{}", params.len()));
+            params.push((shown, implicit, (*entry.ty).clone(), entry.level.clone()));
+            parent = s;
+        }
+        let (result, level) = self.reify_ty(run, &d.result, parent).map_err(|f| at(format!("its statement: {}", f.msg())))?;
+        let m = run.world();
+        let body = self.reify(run, &d.body, parent).map_err(|f| at(format!("its body: {}", f.msg())))?;
+        let result = result.shift_global((run.world() - m) as u32);
+        if !body.level.equiv(&level) || !self.same_ty(run, parent, &body.ty, &result, &level).map_err(|f| at(f.msg()))? {
+            return Err(at(format!(
+                "its body proves `{}`, not its statement `{}`",
+                self.shown_ty(run, parent, &body.ty),
+                self.shown_ty(run, parent, &result)
+            )));
+        }
+        let unsolved = |what: &str| at(format!("its {what} mentions a hole nothing solved"));
+        let result = run.committed_ty(&result).ok_or_else(|| unsolved("statement"))?;
+        let body = run.committed_tm(&body.term).ok_or_else(|| unsolved("body"))?;
+        Ok(Member { theorem: d.theorem, name: name.clone(), params, result: (result, level), body })
+    }
+
+    /// Elaborate one generated declaration from its skeleton (see
+    /// [`Self::elab_generate`]).
+    fn publish_member(&mut self, m: &Member, psi: usize, span: Span) -> R<()> {
+        use heather_syntax::ast::{Block, Decl, DeclKind, Param, ParamOrigin, Ty, TyKind};
+        let n = m.params.len();
+        let leaf_ty = |k: usize| Ty { kind: TyKind::Named { name: format!("{LEAF}{k}"), args: Vec::new() }, span };
+        let params = m
+            .params
+            .iter()
+            .enumerate()
+            .map(|(k, (name, implicit, _, _))| Param {
+                name: name.clone(),
+                ty: leaf_ty(k),
+                implicit: *implicit,
+                is_self: false,
+                solver: None,
+                default: None,
+                origin: ParamOrigin::Written,
+                symbol: None,
+                span,
+            })
+            .collect();
+        let decl = Decl {
+            kind: if m.theorem { DeclKind::Theorem } else { DeclKind::Fn },
+            is_meta: false,
+            is_evidence: false,
+            elaborates: None,
+            name: m.name.clone(),
+            tyvars: Vec::new(),
+            params,
+            result: leaf_ty(n),
+            decreases: None,
+            body: Block { stmts: Vec::new(), result: Box::new(leaf_expr(n + 1, span)), ons: Vec::new(), span },
+            span,
+        };
+        let mut fills: Vec<(Held, usize)> =
+            m.params.iter().enumerate().map(|(k, (_, _, t, l))| (Held::Type(t.clone(), l.clone()), k)).collect();
+        let (result, level) = &m.result;
+        fills.push((Held::Type(result.clone(), level.clone()), n));
+        fills.push((Held::Term(m.body.clone(), result.clone(), level.clone()), n));
+        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
+        let outer = self.host_leaves.replace(Some(state));
+        let published = self.elab_decl(&decl);
+        self.host_leaves.replace(outer);
+        published
     }
 
     /// `Close(split, proofs)`: each proof checked at its branch's goal
@@ -2557,7 +3150,7 @@ impl Elaborator {
 }
 
 /// The tactic as its `by` wrote it, for messages.
-fn tactic_name(e: &Expr) -> String {
+pub(crate) fn tactic_name(e: &Expr) -> String {
     match &e.kind {
         heather_syntax::ast::ExprKind::Var(name) => name.clone(),
         heather_syntax::ast::ExprKind::App { head, .. } => format!("{}(…)", tactic_name(head)),
