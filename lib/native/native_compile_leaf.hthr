@@ -97,7 +97,7 @@ theorem Target::outputs_unused(self t: Target, nodes: List<Node>, r: Gpr, m: Mem
 // ---------------------------------------------------------------------------
 // Inputs in
 
-theorem word_fits_inside(id: Nat, fits: word_fits(id).IsTrue()): id < word_slots() { Nat::leb_sound(Succ(id), word_slots(), fits) }
+theorem Layout::word_inside(self layout: Layout, id: Nat, fits: layout.word_fits(id).IsTrue()): id < layout.words { Nat::leb_sound(Succ(id), layout.words, fits) }
 
 // The registers after a port is loaded, by its kind.
 fn Target::kind_gprs(self t: Target, env: Env, kind: Option<Kind>, id: Nat, register: Gpr, g: Gprs) → Gprs {
@@ -130,7 +130,7 @@ theorem Target::goes_port_to(self t: Target, live: List<Nat>, env: Env, p, q: Pr
     loaded: p.port_to(t.layout(), port, register) = Some(q), within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     post: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(q), tree, post)):
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ post(t.port_gprs(env, port, register, g), m)) {
-    (match word_fits(port.id) as λ fits => word_fits(port.id) = fits →
+    (match t.layout().word_fits(port.id) as λ fits => t.layout().word_fits(port.id) = fits →
         (match fits { False => None, True => match Kind::of_width(port.width) {
             None => None,
             Some(kind) => match kind { Word => Some(p.word_to(t.layout(), port.id, register)), Bit => Some(p.bit_to(t.layout(), port.id, register)) },
@@ -138,7 +138,7 @@ theorem Target::goes_port_to(self t: Target, live: List<Nat>, env: Env, p, q: Pr
         t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ post(t.port_gprs(env, port, register, g), m)) {
         False => λ _ none => absurd(none),
         True => λ fits => {
-            let inside = word_fits_inside(port.id, j(sym(fits), λ b _ => b.IsTrue(), trivial));
+            let inside = t.layout().word_inside(port.id, j(sym(fits), λ b _ => b.IsTrue(), trivial));
             (match Kind::of_width(port.width) as λ k => Kind::of_width(port.width) = k →
                 (match k { None => None, Some(kind) => match kind { Word => Some(p.word_to(t.layout(), port.id, register)), Bit => Some(p.bit_to(t.layout(), port.id, register)) } }) = Some(q) →
                 t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ post(t.port_gprs(env, port, register, g), m)) {
@@ -169,7 +169,7 @@ theorem Target::goes_port_to(self t: Target, live: List<Nat>, env: Env, p, q: Pr
 // A port loaded: its width is a kind, and its code extends the program.
 theorem Prog::port_to_kind(self p: Prog, layout: Layout, port: Port, register: Gpr, q: Prog, loaded: p.port_to(layout, port, register) = Some(q)):
     Exists<Kind>(λ kind => Kind::of_width(port.width) = Some(kind)) ∧ p.Within(q) {
-    (match word_fits(port.id) as λ fits => word_fits(port.id) = fits →
+    (match layout.word_fits(port.id) as λ fits => layout.word_fits(port.id) = fits →
         (match fits { False => None, True => match Kind::of_width(port.width) {
             None => None,
             Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)) },
@@ -216,7 +216,7 @@ theorem Prog::ports_from_within(layout: Layout, out: List<Nat>, ports: List<Port
             Nil => λ p q none => absurd(none),
             Cons(register, later) => match words {
                 Nil => λ p q none => absurd(none),
-                Cons(word, others) => λ p q => (match word_fits(word) as λ fits => word_fits(word) = fits →
+                Cons(word, others) => λ p q => (match layout.word_fits(word) as λ fits => layout.word_fits(word) = fits →
                     (match fits { False => None, True => p.word_from(layout, out, word, register).ports_from(layout, out, rest, others, later) }) = Some(q) → p.Within(q) {
                     False => λ _ none => absurd(none),
                     True => λ _ more => p.within_trans(p.word_from(layout, out, word, register), q, p.within_word_from(layout, out, word, register),
@@ -497,7 +497,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
             Nil => λ p q env none => absurd(none),
             Cons(register, later) => match words {
                 Nil => λ p q env none => absurd(none),
-                Cons(word, others) => λ p q env => (match word_fits(word) as λ fits => word_fits(word) = fits →
+                Cons(word, others) => λ p q env => (match t.layout().word_fits(word) as λ fits => t.layout().word_fits(word) = fits →
                     (match fits { False => None, True => p.word_from(t.layout(), out, word, register).ports_from(t.layout(), out, rest, others, later) }) = Some(q) →
                     q.Within(t.program) → Rbx.absent_from(Cons(register, later)).IsTrue() → ((r: Gpr) → Mem(r, Cons(register, later)) → t.homes.uses(r) = False) →
                     t.homes.all_apart(Cons(word, others), out).IsTrue() →
@@ -506,7 +506,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
                         PortsAt(values, Cons(port, rest), Cons(register, later), g)) {
                     False => λ _ none => absurd(none),
                     True => λ fits more within rbx unused apart next => {
-                        let inside = word_fits_inside(word, j(sym(fits), λ b _ => b.IsTrue(), trivial));
+                        let inside = t.layout().word_inside(word, j(sym(fits), λ b _ => b.IsTrue(), trivial));
                         let layout = t.layout();
                         let stored = p.word_from(layout, out, word, register);
                         let settled = Env(env.words.put(word, values(port.width, port.id).toNat(), 0), env.buffers, env.args);

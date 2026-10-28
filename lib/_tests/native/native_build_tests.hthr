@@ -12,19 +12,19 @@ import bitvec;
 import itree;
 
 // An exit's status computed into a temporary, the first word.
-theorem exit_three(): run(exit(num(3))).source() = Source(functions := [], buffers := [], main := Then(Stmt::leaf([Const(64, 0, 3)]), Exit(0))) {
+theorem exit_three(): run(exit(num(3))).source() = Source(functions := [], buffers := [], words := 1, main := Then(Stmt::leaf([Const(64, 0, 3)]), Exit(0))) {
     refl
 }
 
-// As `write-elf` reads it back: a literal source, no buffers, a `Then` of a
+// As `write-elf` reads it back: a literal source, one word, no buffers, a `Then` of a
 // leaf (no ports, one `Const`) and an `Exit`.
-theorem exit_three_spelled(): run(exit(num(3))).source().spelled() = [1, 0, 2, 0, 0, 1, 0, 64, 0, 3, 0, 5, 0] { refl }
+theorem exit_three_spelled(): run(exit(num(3))).source().spelled() = [1, 1, 0, 2, 0, 0, 1, 0, 64, 0, 3, 0, 5, 0] { refl }
 
 // `x := x + 1` is one node that reads the word it writes: S4 does not take
 // it, so it is a wide leaf of its own, after the constants' leaf.
 fn bump() → Tool { run(local(num(5), λ x => x.set(x.get() + num(1)) ++ exit(x.get()))) }
 
-theorem bump_lowered(): bump().source() = Source(functions := [], buffers := [],
+theorem bump_lowered(): bump().source() = Source(functions := [], buffers := [], words := 3,
     main := Then(Stmt::leaf([Const(64, 0, 5), Const(64, 2, 1)]), Then(Stmt::leaf([Add(64, 0, 0, 2)]), Exit(0)))) {
     refl
 }
@@ -33,7 +33,7 @@ theorem bump_lowered(): bump().source() = Source(functions := [], buffers := [],
 // leaf of their own, compiled a node at a time.
 fn copy_byte() → Tool { buffer(4, λ b => run(b.put(num(0), b.at(num(1))))) }
 
-theorem copy_byte_lowered(): copy_byte().source() = Source(functions := [], buffers := [Buffer(4, [])],
+theorem copy_byte_lowered(): copy_byte().source() = Source(functions := [], buffers := [Buffer(4, [])], words := 4,
     main := Then(Stmt::leaf([Const(64, 0, 0), Const(64, 2, 1)]), Stmt::leaf([BufferLoad(1, 0, 2), BufferStore(3, 0, 0, 1)]))) {
     refl
 }
@@ -42,7 +42,7 @@ theorem copy_byte_lowered(): copy_byte().source() = Source(functions := [], buff
 // bit flipped at one bit, all in one leaf; the branch tests it.
 fn either() → Tool { run(local(num(7), λ x => branch(x.get(), exit(num(1)), exit(num(2))))) }
 
-theorem either_lowered(): either().source() = Source(functions := [], buffers := [],
+theorem either_lowered(): either().source() = Source(functions := [], buffers := [], words := 5,
     main := Then(Stmt::leaf([Const(64, 0, 7), Const(64, 3, 0), Equal(64, 2, 0, 3), Const(1, 4, 1), BitXor(1, 1, 2, 4)]),
         Branch(1, Then(Stmt::leaf([Const(64, 1, 1)]), Exit(1)), Then(Stmt::leaf([Const(64, 1, 2)]), Exit(1))))) {
     refl
@@ -52,7 +52,7 @@ theorem either_lowered(): either().source() = Source(functions := [], buffers :=
 // leaf before it, the length into the first word (issues/native-source-argv.md).
 fn arg_length(k: Nat) → Tool { buffer(4, λ b => run(local(num(0), λ n => arg(num(k), b, n) ++ exit(n.get())))) }
 
-theorem arg_length_lowered(): arg_length(1).source() = Source(functions := [], buffers := [Buffer(4, [])],
+theorem arg_length_lowered(): arg_length(1).source() = Source(functions := [], buffers := [Buffer(4, [])], words := 2,
     main := Then(Stmt::leaf([Const(64, 0, 0), Const(64, 1, 1)]), Then(Arg(1, 0, 0), Exit(0)))) {
     refl
 }

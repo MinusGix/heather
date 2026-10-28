@@ -41,3 +41,6 @@ process's stack to be a data region the profile relies on from the entry.
 - 2026-10-26: Taken up by [[native-source-argv]] (round 6 of `docs/native-real-programs-plan.md`), which finishes it: argv is the first client of the stack region.
 - 2026-10-27: [[native-source-argv]] did the argv part without a stack region: the ELF theorem (native_compile_elf) takes the entry memory as `X86Memory::LoadedFrom(file)` below 0x412000 and `ArgvAt` above it, at the entry RSP; compiled code reads argv through RSP saved at entry and pushes nothing. What stays here: the region a compiled callee spills into (`DataRegion::stack` from the entry), its size decision, and the loader mapping it.
 - 2026-10-28: Re-scoped (tracker tidy): argv shipped without this region, so the title and scope now name what is left, the stack a compiled call spills and pushes into. Milestone `hih-tools` swapped for `hih-pl-wp`: the plan's tools inline their procedures and never touch a stack (`docs/native-real-programs-plan.md` §7), while a `Wp` callee from a lowered function does.
+- 2026-10-28: [[native-data-capacity]] made the RW segment the program's
+  size: `LoadedFrom(size, file)` agrees below `io_data_end(size)` and
+  `ArgvAt` reads above it.

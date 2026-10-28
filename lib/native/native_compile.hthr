@@ -3,7 +3,8 @@
 // round S3.2). `native_compile_correct` proves it once.
 //
 // Every word of the environment has a slot of eight bytes in one data
-// region, word `i` at offset `8 i` (`word_slots` of them). Each buffer has a
+// region, word `i` at offset `8 i`, as many as the source declares
+// (`Source::words`). Each buffer has a
 // range after the words, at its capacity, and past them all a scratch range
 // one byte longer than the largest buffer (room for a path and its NUL).
 // Between statements each live word is in its home (native_alloc): its
@@ -49,7 +50,7 @@
 // - At entry RSP is saved, then each buffer's initial bytes are stored, a
 //   byte at a time, as many as it holds.
 //
-// Any id at or past `word_slots` is refused. The program is checked once,
+// Any id at or past the source's words is refused. The program is checked once,
 // by evaluation, for its layout (`Prog::laid_out`).
 import native_source;
 import native_alloc;
@@ -73,10 +74,6 @@ import option;
 // ---------------------------------------------------------------------------
 // The layout
 
-fn word_slots() → Nat { 64 }
-
-fn word_fits(id: Nat) → Bool { Succ(id).leb(word_slots()) }
-
 fn List::total(self sizes: List<Nat>) → Nat {
     match sizes { Nil => 0, Cons(size, rest) => size + rest.total() }
 }
@@ -85,7 +82,8 @@ fn List::largest(self sizes: List<Nat>) → Nat {
     match sizes { Nil => 0, Cons(size, rest) => size.max(rest.largest()) }
 }
 
-// Where the region starts, each buffer's capacity, and each word's home
+// Where the region starts, how many words it has slots for, each buffer's
+// capacity, and each word's home
 // (native_alloc). An address in the
 // region is a ripple add from its start (`add_nat`), so a program's bytes
 // evaluate however far into the region it reaches; the proofs read it as
@@ -96,14 +94,21 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // `Layout::of` computes from the homes once: every leaf reads them several
 // times, and recomputing the two filters there dominated the compile's
 // evaluation (issues/native-leaf-pool-per-leaf.md).
-record Layout { low: BitVec(64), capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr> }
+record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr> }
+
+// Word `id` has a slot.
+fn Layout::word_fits(self layout: Layout, id: Nat) → Bool { Succ(id).leb(layout.words) }
+
+fn Layout::words_fit(self layout: Layout, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(id, rest) => layout.word_fits(id) && layout.words_fit(rest) }
+}
 
 fn Layout::word_offset(self layout: Layout, id: Nat) → Nat { 8 * id }
 fn Layout::word_at(self layout: Layout, id: Nat) → BitVec(64) { layout.low.add_nat(layout.word_offset(id)) }
-fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * word_slots() + layout.capacities.take(buf).total() }
+fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * layout.words + layout.capacities.take(buf).total() }
 fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf)) }
 fn Layout::byte_at(self layout: Layout, buf, i: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf) + i) }
-fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * word_slots() + layout.capacities.total() }
+fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.words + layout.capacities.total() }
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
 fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
 fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
@@ -145,7 +150,7 @@ fn Prog::word_from(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, regist
 // A port read into a register as S4 holds it: a word as itself, a bit
 // zero-extended.
 fn Prog::port_to(self p: Prog, layout: Layout, port: Port, register: Gpr) → Option<Prog> {
-    match word_fits(port.id) {
+    match layout.word_fits(port.id) {
         False => None,
         True => match Kind::of_width(port.width) {
             None => None,
@@ -176,7 +181,7 @@ fn Prog::ports_from(self p: Prog, layout: Layout, out: List<Nat>, ports: List<Po
             Nil => None,
             Cons(register, later) => match words {
                 Nil => None,
-                Cons(word, others) => match word_fits(word) {
+                Cons(word, others) => match layout.word_fits(word) {
                     False => None,
                     True => p.word_from(layout, out, word, register).ports_from(layout, out, rest, others, later),
                 },
@@ -237,11 +242,11 @@ fn register_pool() → List<Gpr> { [Rax, Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11, R
 fn Homes::leaf_pool(self homes: Homes) → List<Gpr> { register_pool().filter(λ (register: Gpr) => !homes.uses(register)) }
 
 // A layout with its pools computed from its homes.
-fn Layout::of(low: BitVec(64), capacities: List<Nat>, homes: Homes) → Layout { Layout(low, capacities, homes, homes.leaf_pool(), homes.registers()) }
+fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout(low, words, capacities, homes, homes.leaf_pool(), homes.registers()) }
 fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
-theorem Layout::of_pool(low: BitVec(64), capacities: List<Nat>, homes: Homes):
-    Layout::of(low, capacities, homes).leaf_pool() = register_pool().filter(λ (register: Gpr) => !homes.uses(register)) { refl }
-theorem Layout::of_taken(low: BitVec(64), capacities: List<Nat>, homes: Homes): Layout::of(low, capacities, homes).taken = homes.registers() { refl }
+theorem Layout::of_pool(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes):
+    Layout::of(low, words, capacities, homes).leaf_pool() = register_pool().filter(λ (register: Gpr) => !homes.uses(register)) { refl }
+theorem Layout::of_taken(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes): Layout::of(low, words, capacities, homes).taken = homes.registers() { refl }
 
 // No register twice.
 fn Gpr::absent_from(self register: Gpr, registers: List<Gpr>) → Bool {
@@ -385,32 +390,30 @@ fn Prog::opens(self p: Prog, layout: Layout, out: List<Nat>, path, len, result: 
     Compiled(then(then(ended, Block(asking)), Syscall).word_from(layout, out, result, Rax), Succ(Succ(Succ(names))))
 }
 
-fn words_fit(ids: List<Nat>) → Bool { match ids { Nil => True, Cons(id, rest) => word_fits(id) && words_fit(rest) } }
-
 fn Prog::call(self p: Prog, layout: Layout, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
     match shape {
-        Reads(fd, buf, len, result) => match words_fit([fd, len, result]) {
+        Reads(fd, buf, len, result) => match layout.words_fit([fd, len, result]) {
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
                 Some(capacity) => Some(p.reads(layout, out, fd, buf, len, result, capacity, names)),
             },
         },
-        Writes(fd, buf, from, len, result) => match words_fit([fd, from, len, result]) {
+        Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
                 Some(capacity) => Some(p.writes(layout, out, fd, buf, from, len, result, capacity, names)),
             },
         },
-        Opens(path, len, result) => match words_fit([len, result]) {
+        Opens(path, len, result) => match layout.words_fit([len, result]) {
             False => None,
             True => match layout.capacities.nth(path) {
                 None => None,
                 Some(capacity) => Some(p.opens(layout, out, path, len, result, capacity, names)),
             },
         },
-        Closes(fd, result) => match words_fit([fd, result]) {
+        Closes(fd, result) => match layout.words_fit([fd, result]) {
             False => None,
             True => Some(Compiled(p.closes(layout, out, fd, result), names)),
         },
@@ -465,7 +468,7 @@ fn Prog::args(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, cap
 }
 
 fn Prog::arg(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, names: Nat) → Option<Compiled> {
-    match words_fit([index, len]) {
+    match layout.words_fit([index, len]) {
         False => None,
         True => match layout.capacities.nth(buf) {
             None => None,
@@ -503,14 +506,14 @@ fn Prog::stores(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index
 
 fn Prog::byte_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, names: Nat) → Option<Compiled> {
     match node {
-        BufferLoad(output, buf, index) => match words_fit([output, index]) {
+        BufferLoad(output, buf, index) => match layout.words_fit([output, index]) {
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
                 Some(cap) => Some(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names))),
             },
         },
-        BufferStore(output, buf, index, value) => match words_fit([output, index, value]) {
+        BufferStore(output, buf, index, value) => match layout.words_fit([output, index, value]) {
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
@@ -680,7 +683,7 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
             None => None,
             Some(c) => rest.emit(c.prog, layout, out, c.names),
         },
-        Branch(condition, yes, no) => match word_fits(condition) {
+        Branch(condition, yes, no) => match layout.word_fits(condition) {
             False => None,
             True => match yes.emit(p.tests(layout, condition, Succ(names)), layout, out, Succ(Succ(names))) {
                 None => None,
@@ -690,14 +693,14 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
                 },
             },
         },
-        Repeat(body, again) => match word_fits(again) {
+        Repeat(body, again) => match layout.word_fits(again) {
             False => None,
             True => match body.emit(p.label(Succ(names)), layout, Repeat(body, again).loop_out(layout.homes, out), Succ(Succ(names))) {
                 None => None,
                 Some(b) => Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)),
             },
         },
-        Exit(status) => match word_fits(status) {
+        Exit(status) => match layout.word_fits(status) {
             False => None,
             True => Some(Compiled(p.exits(layout, status), names)),
         },
@@ -707,7 +710,7 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
-fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.capacities(), homes) }
+fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.words, src.capacities(), homes) }
 
 fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
     Start.saves_rsp(src.layout(low, homes)).inits(src.layout(low, homes), src.buffers, 0)
@@ -731,7 +734,7 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 // What `write-elf` says when `Source::compile` is `None`: the first statement
 // the compile refuses, in source order, and why. Nothing proves it agrees
 // with the compile, so it is only a message; at a statement it asks the
-// compile's own pieces (`Prog::leaf`, `Prog::call`, `word_fits`) and names
+// compile's own pieces (`Prog::leaf`, `Prog::call`, `Layout::word_fits`) and names
 // the reason only when they refuse.
 //
 // A refusal is `[at, kind, reason, first, second]`: `at` numbers every
@@ -769,28 +772,28 @@ fn CompileScan::of(at, kind: Nat, why: List<Nat>) → CompileScan {
 }
 
 // The first id at or past the slots.
-fn ids_refusal(ids: List<Nat>) → List<Nat> {
+fn ids_refusal(layout: Layout, ids: List<Nat>) → List<Nat> {
     match ids {
         Nil => [],
-        Cons(id, rest) => match word_fits(id) { False => [4, id, word_slots()], True => ids_refusal(rest) },
+        Cons(id, rest) => match layout.word_fits(id) { False => [4, id, layout.words], True => ids_refusal(layout, rest) },
     }
 }
 
 // The first input at or past the slots, or neither a word nor a bit.
-fn inputs_refusal(ports: List<Port>) → List<Nat> {
+fn inputs_refusal(layout: Layout, ports: List<Port>) → List<Nat> {
     match ports {
         Nil => [],
-        Cons(port, rest) => match word_fits(port.id) {
-            False => [4, port.id, word_slots()],
-            True => match Kind::of_width(port.width) { None => [5, port.width, 0], Some(_) => inputs_refusal(rest) },
+        Cons(port, rest) => match layout.word_fits(port.id) {
+            False => [4, port.id, layout.words],
+            True => match Kind::of_width(port.width) { None => [5, port.width, 0], Some(_) => inputs_refusal(layout, rest) },
         },
     }
 }
 
-fn outputs_refusal(ports: List<Port>) → List<Nat> {
+fn outputs_refusal(layout: Layout, ports: List<Port>) → List<Nat> {
     match ports {
         Nil => [],
-        Cons(port, rest) => match word_fits(port.id) { False => [4, port.id, word_slots()], True => outputs_refusal(rest) },
+        Cons(port, rest) => match layout.word_fits(port.id) { False => [4, port.id, layout.words], True => outputs_refusal(layout, rest) },
     }
 }
 
@@ -804,9 +807,9 @@ fn leaf_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
                 False => [2, 0, 0],
                 True => match ports_absent(nodes_inputs(nodes), nodes_writes(nodes)) {
                     False => [3, 0, 0],
-                    True => match inputs_refusal(nodes_inputs(nodes)) {
+                    True => match inputs_refusal(layout, nodes_inputs(nodes)) {
                         Cons(reason, details) => Cons(reason, details),
-                        Nil => match outputs_refusal(nodes_write_ports(nodes)) {
+                        Nil => match outputs_refusal(layout, nodes_write_ports(nodes)) {
                             Cons(reason, details) => Cons(reason, details),
                             Nil => [6, 0, 0],
                         },
@@ -818,7 +821,7 @@ fn leaf_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
 }
 
 fn buffer_refusal(layout: Layout, ids: List<Nat>, buf: Nat) → List<Nat> {
-    match ids_refusal(ids) {
+    match ids_refusal(layout, ids) {
         Cons(reason, details) => Cons(reason, details),
         Nil => match layout.capacities.nth(buf) { None => [8, buf, layout.capacities.len()], Some(_) => [] },
     }
@@ -837,9 +840,9 @@ fn node_refusal(layout: Layout, node: Node, at: Nat) → List<Nat> {
     match node {
         BufferLoad(output, buf, index) => buffer_refusal(layout, [output, index], buf),
         BufferStore(output, buf, index, value) => buffer_refusal(layout, [output, index, value], buf),
-        _ => match inputs_refusal(node.read_ports()) {
+        _ => match inputs_refusal(layout, node.read_ports()) {
             Cons(reason, details) => Cons(reason, details),
-            Nil => match ids_refusal([node_output(node).id]) { Cons(reason, details) => Cons(reason, details), Nil => [11, at, 0] },
+            Nil => match ids_refusal(layout, [node_output(node).id]) { Cons(reason, details) => Cons(reason, details), Nil => [11, at, 0] },
         },
     }
 }
@@ -884,7 +887,7 @@ fn call_refusal(layout: Layout, shape: CallShape) → List<Nat> {
         Reads(fd, buf, len, result) => buffer_refusal(layout, [fd, len, result], buf),
         Writes(fd, buf, from, len, result) => buffer_refusal(layout, [fd, from, len, result], buf),
         Opens(path, len, result) => buffer_refusal(layout, [len, result], path),
-        Closes(fd, result) => ids_refusal([fd, result]),
+        Closes(fd, result) => ids_refusal(layout, [fd, result]),
         StatsPath(_, _, _, _) => [7, 4, 0],
         StatsFd(_, _, _) => [7, 5, 0],
     }
@@ -895,15 +898,15 @@ fn Stmt::scan(self s: Stmt, layout: Layout, at: Nat) → CompileScan {
         Compute(region) => CompileScan::of(at, 0, region_refusal(layout, region)),
         Invoke(shape) => CompileScan::of(at, 1, call_refusal(layout, shape)),
         Then(first, rest) => match first.scan(layout, at) { Passed(next) => rest.scan(layout, next), Refused(why) => Refused(why) },
-        Branch(condition, yes, no) => match CompileScan::of(at, 2, ids_refusal([condition])) {
+        Branch(condition, yes, no) => match CompileScan::of(at, 2, ids_refusal(layout, [condition])) {
             Passed(next) => match yes.scan(layout, next) { Passed(after) => no.scan(layout, after), Refused(why) => Refused(why) },
             Refused(why) => Refused(why),
         },
-        Repeat(body, again) => match CompileScan::of(at, 3, ids_refusal([again])) {
+        Repeat(body, again) => match CompileScan::of(at, 3, ids_refusal(layout, [again])) {
             Passed(next) => body.scan(layout, next),
             Refused(why) => Refused(why),
         },
-        Exit(status) => CompileScan::of(at, 4, ids_refusal([status])),
+        Exit(status) => CompileScan::of(at, 4, ids_refusal(layout, [status])),
         Arg(index, buf, len) => CompileScan::of(at, 6, buffer_refusal(layout, [index, len], buf)),
     }
 }

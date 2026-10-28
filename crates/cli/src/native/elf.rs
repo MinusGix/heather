@@ -7,7 +7,10 @@
 //! untrusted, and then stated as literals the kernel checks: that the source
 //! compiles to the literal program (`<source>_elf_compiles`), and that the
 //! file of any program it compiles to is the bytes written
-//! (`<source>_elf_written`). From those, its layout's fit to the page
+//! (`<source>_elf_written`). The program's data segment is its layout's
+//! size rounded up to a page (`<source>_elf_size`), up to the profile's
+//! limit (issues/native-data-capacity.md); it is zero-filled, so it takes
+//! nothing in the file. From those, the layout's fit to the segment
 //! (`<source>_elf_fits`, by evaluation) and the code's length, every
 //! certificate states the once-proved compiler's theorem of the file
 //! (`<source>_elf_simulates`, by `Source::elf_file_simulates`,
@@ -15,7 +18,7 @@
 //! So a theorem about the source's tree (cat's `cat_implements`) is about
 //! the file written. That Linux loads the file as the theorem's loader says
 //! is outside the proof. Nothing is written unless the kernel accepts every
-//! statement, and a source that does not fit the page, or that the compiler
+//! statement, and a source past the profile's data limit, or that the compiler
 //! refuses, is refused with its reason (`Source::refusal`, untrusted).
 //!
 //! A compile is most of what one declaration's fuel buys, so no statement
@@ -37,7 +40,7 @@
 //! (`emission::byte_reads`), so the program's literal, whose items are most
 //! of what elaborating it costs, is elaborated once, in the certificate
 //! (issues/write-elf-build-constants.md). The literal spells each address in the region as the compiler
-//! does, `add_nat` from the page's start, so the emission's check compares
+//! does, `add_nat` from the segment's start, so the emission's check compares
 //! the two by their arguments instead of evaluating each one's bits.
 use std::path::{Path, PathBuf};
 
@@ -58,9 +61,11 @@ const HEADER: usize = 232;
 /// cat, and a piece a long last item stretches well past it still fits a
 /// declaration's fuel, which eight times this size does not.
 const PIECE: usize = 96;
-/// Where the region is, and the window an address in it is spelled from.
-const LOW: &str = "DataRegion::io_page().low";
-const REGION: std::ops::Range<u64> = 0x410000..0x412000;
+/// Where the data segment starts; an address in it is spelled from here.
+const LOW: &str = "io_data_low()";
+const DATA: u64 = 0x410000;
+/// The segment is a whole number of pages.
+const PAGE: u64 = 4096;
 
 /// The modules the probes and the certificate import besides the source's
 /// own; `write-elf` loads them itself, so a program file imports only what
@@ -188,7 +193,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     let layout = format!("{src}().layout({LOW}, {homes})");
     let entry = format!("{src}().entry({LOW}, {homes})");
     let probes = format!("import {root};\n{imports}{lowered}
-fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().capacities(), Homes([], [])).size(), DataRegion::io_page().size] }}
+fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().words, {src}().capacities(), Homes([], [])).size(), io_data_limit()] }}
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 ");
@@ -198,16 +203,21 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
         let _row = heather_elab::stats::scope(heather_elab::stats::ScopeKind::Item, module, name);
         function_ir_source::evaluate_numbers(fork, &format!("{module}::{name}")).map_err(|e| format!("`{symbol}` ({name}): {e}"))
     };
+    // The segment: the layout's size in whole pages, which the theorem
+    // takes only up to the profile's limit.
+    let [needed, limit] = numbers(&fork, &probe, &format!("{p}_room"))?[..] else {
+        return Err(format!("`{symbol}`'s layout did not read back"));
+    };
+    let size = needed.div_ceil(PAGE) * PAGE;
+    if size > limit {
+        return Err(format!("`{symbol}` needs a data segment of {size} bytes for its words, buffers, scratch range and saved RSP, \
+            past the I/O profile's limit of {limit} (`io_data_limit`)"));
+    }
+    let region = DATA..DATA + size;
     let address = |width: u32, n: u64| {
-        if width == 64 && REGION.contains(&n) { format!("{LOW}.add_nat({})", n - REGION.start) }
+        if width == 64 && region.contains(&n) { format!("{LOW}.add_nat({})", n - DATA) }
         else { format!("@bitvec::BitVec::ofNat({width}, {n})") }
     };
-    // The theorem takes the fit as a hypothesis, so a program past the page
-    // would be written with nothing said of it.
-    if let [size, page] = numbers(&fork, &probe, &format!("{p}_room"))?[..] && size > page {
-        return Err(format!("`{symbol}` does not fit the I/O page: its words, buffers, scratch range and saved RSP take {size} bytes \
-            and the page holds {page}, so `Source::elf_file_simulates` would not cover it"));
-    }
     // The words' homes, from the greedy allocator (`Source::homes`,
     // native_alloc), spelled: the compile checks them, so the allocator is
     // evaluated once, here, and never by the kernel.
@@ -252,7 +262,7 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
     let code = emission::code(p, &items, &cuts);
     let offsets = labels::offsets(&lens);
     let table = labels::table(p, &items, &offsets);
-    let header = format!("io_elf_header(BitVec::ofNat(232 + {length}), BitVec::ofNat((232 + {length}).shr(8)))");
+    let header = format!("io_elf_header(BitVec::ofNat(232 + {length}), BitVec::ofNat((232 + {length}).shr(8)), {size})");
     // The bytes on the same fork, a read at a time by the parts' programs
     // and the table, so only the certificate elaborates the literal.
     let (byte_text, byte_reads) = emission::byte_reads(p, &spans, &offsets);
@@ -280,12 +290,12 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom(f), loaded), args, argv)");
+    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
 {lowered}theorem {p}_lowered_is(): {symbol}() = {src}() {{ refl }}
-"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io().linux(), src.denote(args), s),\n        {simulated})"))
+"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io({p}_size()).linux(), src.denote(args), s),\n        {simulated})"))
     };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
@@ -320,9 +330,13 @@ theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{
     {src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), {p}_emitted(), {p}_laid())
 }}
 
-// Its words, buffers and scratch range fit the page.
-theorem {p}_fits(): Layout::of({LOW}, {src}().capacities(), {homes}).size() <= DataRegion::io_page().size {{
-    Nat::leb_sound(Layout::of({LOW}, {src}().capacities(), {homes}).size(), DataRegion::io_page().size, trivial)
+// Its data segment, in whole pages, within the profile's limit; its words,
+// buffers and scratch range fit it.
+fn {p}_size() → Nat {{ {size} }}
+theorem {p}_within(): {p}_size() <= io_data_limit() {{ Nat::leb_sound({p}_size(), io_data_limit(), trivial) }}
+
+theorem {p}_fits(): Layout::of({LOW}, {src}().words, {src}().capacities(), {homes}).size() <= {p}_size() {{
+    Nat::leb_sound(Layout::of({LOW}, {src}().words, {src}().capacities(), {homes}).size(), {p}_size(), trivial)
 }}
 
 // The bytes, a piece at a time from the last item.
@@ -336,17 +350,17 @@ theorem {p}_header_is(): {header} = {p}_header() {{ refl }}
 // The file written: its header, then the code.
 fn {p}_file() → List<BitVec(8)> {{ {p}_header() ++ {p}_upto_0() }}
 
-theorem {p}_file_is(): io_elf_file({p}_upto_0()) = {p}_file() {{
-    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => List::append(io_elf_header(BitVec::ofNat(232 + n), BitVec::ofNat((232 + n).shr(8))), {p}_upto_0()), {p}_length()),
+theorem {p}_file_is(): io_elf_file({p}_upto_0(), {p}_size()) = {p}_file() {{
+    trans(cong_fn<Nat, List<BitVec(8)>>(λ n => List::append(io_elf_header(BitVec::ofNat(232 + n), BitVec::ofNat((232 + n).shr(8)), {p}_size()), {p}_upto_0()), {p}_length()),
         cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ h => List::append(h, {p}_upto_0()), {p}_header_is()))
 }}
 
 // Whatever names the compile's program, its file is the one written.
 theorem {p}_written(program: Prog, compiled: {src}().compile({LOW}, {homes}) = Some(program)):
-    io_elf_file(assemble(no_fills(), program, [])) = {p}_file() {{
+    io_elf_file(assemble(no_fills(), program, []), {p}_size()) = {p}_file() {{
     let same: ({p}_code() = program) = Option::some_inj({p}_code(), program, trans(sym({p}_compiles()), compiled));
-    j(same, λ q _ => io_elf_file(assemble(no_fills(), q, [])) = {p}_file(),
-        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(x), {p}_bytes()), {p}_file_is()))
+    j(same, λ q _ => io_elf_file(assemble(no_fills(), q, []), {p}_size()) = {p}_file(),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => io_elf_file(x, {p}_size()), {p}_bytes()), {p}_file_is()))
 }}
 
 theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {{
@@ -357,10 +371,10 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 // The process Linux makes of the file written, at its entry with the
 // command line `args` on its stack, simulates `{symbol}`'s tree run with
 // `args` (`Source::elf_file_simulates`, from `native_compile_correct`).
-theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io())>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom({p}_file()), args: List<List<BitVec(8)>>,
-    argv: ArgvAt(X86Profile::io().data().above(0x412000), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io().linux(), {symbol}().denote(args), s) {{
+theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io({p}_size()))>, entry: s.rip = io_entry(),
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
+    argv: ArgvAt(X86Profile::io({p}_size()).data().above(io_data_end({p}_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::io({p}_size()).linux(), {symbol}().denote(args), s) {{
     {simulates}
 }}
 ", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));
@@ -393,7 +407,8 @@ theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io())>, entry: s.rip
     write_new(&certificate, text.as_bytes())?;
     std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
     write_executable(&output, &file)?;
-    println!("{}: {} bytes, `{symbol}` compiled into the I/O profile's ELF as the kernel checked it", output.display(), file.len());
+    println!("{}: {} bytes and a {size}-byte data segment, `{symbol}` compiled into the I/O profile's ELF as the kernel checked it",
+        output.display(), file.len());
     println!("certificate: {}", certificate.display());
     Ok(())
 }

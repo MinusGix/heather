@@ -367,13 +367,13 @@ fn Homes::closed(self homes: Homes, src: Source, fuel: Nat) → Homes {
     }
 }
 
-// More passes than the sets can grow by: 64 words (`word_slots`) in as
-// many sets.
-fn closure_fuel() → Nat { 4096 }
+// More passes than the sets can grow by: the source's words in as many
+// sets.
+fn Source::closure_fuel(self src: Source) → Nat { Succ(src.words * src.words) }
 
 // Every word in its slot (the memory-resident compiler), and the least
 // closed loop sets.
-fn Homes::slots(src: Source) → Homes { Homes([], []).closed(src, closure_fuel()) }
+fn Homes::slots(src: Source) → Homes { Homes([], []).closed(src, src.closure_fuel()) }
 
 fn Allocator::spill_all() → Allocator { Allocator(λ src => Homes::slots(src)) }
 

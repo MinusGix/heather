@@ -526,7 +526,7 @@ theorem argv_slot_sum(a, r: BitVec(64), k, argc: Nat, value: a.toNat() = k, belo
 // Below argc: the argument's pointer loaded from its slot, its bytes
 // copied, and on to the store of its length.
 theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p: Prog, index, buf, len, cap, names: Nat,
-    in_len: len < word_slots(), found: t.caps.nth(buf) = Some(cap),
+    in_len: len < t.words, found: t.caps.nth(buf) = Some(cap),
     sub: (i: Nat) → Mem(i, out) → i ≠ len → Mem(i, live), apart: t.homes.apart(len, out).IsTrue(),
     within: p.args(t.layout(), out, index, buf, len, cap, names).prog.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     next: t.At(prog_len(p.args(t.layout(), out, index, buf, len, cap, names).prog), out, tree, env.arg(env.number(index), buf, len)),
@@ -634,7 +634,7 @@ theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p
 // and no argument there; below it, the argument's pointer loaded, and on to
 // the copy's head with nothing copied.
 theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Prog, index, buf, len, cap, names: Nat,
-    in_index: index < word_slots(), in_len: len < word_slots(), holds: Mem(index, live),
+    in_index: index < t.words, in_len: len < t.words, holds: Mem(index, live),
     sub: (i: Nat) → Mem(i, out) → i ≠ len → Mem(i, live), apart: t.homes.apart(len, out).IsTrue(), found: t.caps.nth(buf) = Some(cap),
     within: p.args(t.layout(), out, index, buf, len, cap, names).prog.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     next: t.At(prog_len(p.args(t.layout(), out, index, buf, len, cap, names).prog), out, tree, env.arg(env.number(index), buf, len))):

@@ -113,7 +113,7 @@ theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat 
             Inr(past)
         },
     });
-    let words = λ (k: Nat) (inside: k < word_slots()) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, 8 * k, λ t short =>
+    let words = λ (k: Nat) (inside: k < layout.words) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, 8 * k, λ t short =>
         r.cells_outside(v, q, [c], 8 * k + t, Inl(omega(layout.word_below_buffers(k, t, inside, short), layout.buffers_after_words(buf)))))),
         keeps.left(k, inside));
     ⟨words, λ b cb found_b => match b.eq_dec(buf) {
@@ -231,7 +231,7 @@ theorem Prog::byte_to_within(self p: Prog, layout: Layout, buf, index, cap, skip
 }
 
 // The byte at the word `index` of buffer `buf` in RAX, zero past the end.
-theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog, buf, index, cap, n: Nat, inside: index < word_slots(),
+theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog, buf, index, cap, n: Nat, inside: index < t.words,
     holds: Mem(index, live), found: t.caps.nth(buf) = Some(cap), within: p.byte_to(t.layout(), buf, index, cap, Succ(n)).Within(t.program),
     tree: ITree<BitVec(64)>(Events::linux()), q: Gprs → X86Memory(t.r.profile) → Type,
     next: t.GoesR(prog_len(p.byte_to(t.layout(), buf, index, cap, Succ(n))), tree, q)):
@@ -322,7 +322,7 @@ theorem Prog::loads_within(self p: Prog, layout: Layout, out: List<Nat>, output,
 // The byte put in the word `output`'s home: the environment with it set is
 // the one the claim after reads.
 theorem Target::goes_loads(self t: Target, live, out: List<Nat>, env, other: Env, p: Prog, output, buf, index, cap, names: Nat,
-    inside_output: output < word_slots(), inside_index: index < word_slots(), holds: Mem(index, live),
+    inside_output: output < t.words, inside_index: index < t.words, holds: Mem(index, live),
     sub: (i: Nat) → Mem(i, out) → i ≠ output → Mem(i, live), apart: t.homes.apart(output, out).IsTrue(), found: t.caps.nth(buf) = Some(cap),
     within: p.loads(t.layout(), out, output, buf, index, cap, names).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     same: env.set_word(output, byte_word(buffer_byte(env.buffers, buf, env.word(index).toNat()))) = other,
@@ -366,7 +366,7 @@ theorem Prog::byte_from_within(self p: Prog, layout: Layout, buf, index, value, 
 // The word `value`'s low byte stored at the word `index` of buffer `buf`,
 // nothing stored past the end: on with the environment the source stores.
 theorem Target::goes_byte_from(self t: Target, live: List<Nat>, env: Env, p: Prog, buf, index, value, cap, n: Nat,
-    inside_index: index < word_slots(), inside_value: value < word_slots(), holds_index: Mem(index, live), holds_value: Mem(value, live),
+    inside_index: index < t.words, inside_value: value < t.words, holds_index: Mem(index, live), holds_value: Mem(value, live),
     found: t.caps.nth(buf) = Some(cap),
     within: p.byte_from(t.layout(), buf, index, value, cap, Succ(n)).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     next: t.At(prog_len(p.byte_from(t.layout(), buf, index, value, cap, Succ(n))), live, tree, env.store_at(buf, index, value))):
@@ -456,7 +456,7 @@ theorem Prog::stores_within(self p: Prog, layout: Layout, out: List<Nat>, output
 
 // The byte stored, then read back to the word `output`.
 theorem Target::goes_stores(self t: Target, live, out: List<Nat>, env, other: Env, p: Prog, output, buf, index, value, cap, names: Nat,
-    inside_output: output < word_slots(), inside_index: index < word_slots(), inside_value: value < word_slots(),
+    inside_output: output < t.words, inside_index: index < t.words, inside_value: value < t.words,
     holds_index: Mem(index, live), holds_value: Mem(value, live), sub: (i: Nat) → Mem(i, out) → i ≠ output → Mem(i, live),
     apart: t.homes.apart(output, out).IsTrue(), found: t.caps.nth(buf) = Some(cap),
     within: p.stores(t.layout(), out, output, buf, index, value, cap, names).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
@@ -496,7 +496,7 @@ theorem Env::computes_store(self env: Env, output, buf, index, value: Nat):
 theorem Prog::within_byte_node(self p: Prog, layout: Layout, out: List<Nat>, names: Nat, c: Compiled): (node: Node) →
     p.byte_node(layout, out, node, names) = Some(c) → p.Within(c.prog) {
     λ node => match node {
-        BufferLoad(output, buf, index) => match words_fit([output, index]) {
+        BufferLoad(output, buf, index) => match layout.words_fit([output, index]) {
             False => λ none => absurd(none),
             True => match layout.capacities.nth(buf) {
                 None => λ none => absurd(none),
@@ -507,7 +507,7 @@ theorem Prog::within_byte_node(self p: Prog, layout: Layout, out: List<Nat>, nam
                 },
             },
         },
-        BufferStore(output, buf, index, value) => match words_fit([output, index, value]) {
+        BufferStore(output, buf, index, value) => match layout.words_fit([output, index, value]) {
             False => λ none => absurd(none),
             True => match layout.capacities.nth(buf) {
                 None => λ none => absurd(none),
@@ -532,15 +532,15 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
     λ node => match node {
         BufferLoad(output, buf, index) => λ apart => {
             let live = live_before([index], output, out);
-            (match words_fit([output, index]) as λ b => words_fit([output, index]) = b → (match b {
+            (match layout.words_fit([output, index]) as λ b => layout.words_fit([output, index]) = b → (match b {
                 False => None,
                 True => match layout.capacities.nth(buf) { None => None, Some(cap) => Some(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names))) },
             }) = Some(c) → c.prog.Within(t.program) → t.At(prog_len(c.prog), out, tree, env.computes([BufferLoad(output, buf, index)])) →
                 t.At(prog_len(p), live, tree, env) {
                 False => λ _ none => absurd(none),
                 True => λ fit => {
-                    let ok = Bool::is_true_and(word_fits(output), word_fits(index) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(word_fits(index), True, ok.right);
+                    let ok = Bool::is_true_and(layout.word_fits(output), layout.word_fits(index) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::is_true_and(layout.word_fits(index), True, ok.right);
                     (match t.caps.nth(buf) as λ o => t.caps.nth(buf) = o →
                             (match o { None => None, Some(cap) => Some(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names))) }) = Some(c) →
                             c.prog.Within(t.program) → t.At(prog_len(c.prog), out, tree, env.computes([BufferLoad(output, buf, index)])) →
@@ -550,7 +550,7 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
                             λ x _ => x.prog.Within(t.program) → t.At(prog_len(x.prog), out, tree, env.computes([BufferLoad(output, buf, index)])) →
                                 t.At(prog_len(p), live, tree, env),
                             λ within next => t.goes_loads(live, out, env, env.computes([BufferLoad(output, buf, index)]), p, output, buf, index, cap, names,
-                                word_fits_inside(output, ok.left), word_fits_inside(index, ok2.left), live_before_reads([index], output, out, index, Inl(refl)),
+                                layout.word_inside(output, ok.left), layout.word_inside(index, ok2.left), live_before_reads([index], output, out, index, Inl(refl)),
                                 λ i m ne => live_before_keeps([index], output, out, i, m, ne), apart, found, within, tree,
                                 env.computes_load(output, buf, index), next)),
                     })(refl)
@@ -559,7 +559,7 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
         },
         BufferStore(output, buf, index, value) => λ apart => {
             let live = live_before([index, value], output, out);
-            (match words_fit([output, index, value]) as λ b => words_fit([output, index, value]) = b → (match b {
+            (match layout.words_fit([output, index, value]) as λ b => layout.words_fit([output, index, value]) = b → (match b {
                 False => None,
                 True => match layout.capacities.nth(buf) {
                     None => None,
@@ -569,9 +569,9 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
                 t.At(prog_len(p), live, tree, env) {
                 False => λ _ none => absurd(none),
                 True => λ fit => {
-                    let ok = Bool::is_true_and(word_fits(output), word_fits(index) && (word_fits(value) && True), j(sym(fit), λ v _ => v.IsTrue(), trivial));
-                    let ok2 = Bool::is_true_and(word_fits(index), word_fits(value) && True, ok.right);
-                    let ok3 = Bool::is_true_and(word_fits(value), True, ok2.right);
+                    let ok = Bool::is_true_and(layout.word_fits(output), layout.word_fits(index) && (layout.word_fits(value) && True), j(sym(fit), λ v _ => v.IsTrue(), trivial));
+                    let ok2 = Bool::is_true_and(layout.word_fits(index), layout.word_fits(value) && True, ok.right);
+                    let ok3 = Bool::is_true_and(layout.word_fits(value), True, ok2.right);
                     (match t.caps.nth(buf) as λ o => t.caps.nth(buf) = o →
                             (match o { None => None, Some(cap) => Some(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names)))) }) = Some(c) →
                             c.prog.Within(t.program) → t.At(prog_len(c.prog), out, tree, env.computes([BufferStore(output, buf, index, value)])) →
@@ -581,7 +581,7 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
                             λ x _ => x.prog.Within(t.program) → t.At(prog_len(x.prog), out, tree, env.computes([BufferStore(output, buf, index, value)])) →
                                 t.At(prog_len(p), live, tree, env),
                             λ within next => t.goes_stores(live, out, env, env.computes([BufferStore(output, buf, index, value)]), p, output, buf, index, value, cap, names,
-                                word_fits_inside(output, ok.left), word_fits_inside(index, ok2.left), word_fits_inside(value, ok3.left),
+                                layout.word_inside(output, ok.left), layout.word_inside(index, ok2.left), layout.word_inside(value, ok3.left),
                                 live_before_reads([index, value], output, out, index, Inl(refl)),
                                 live_before_reads([index, value], output, out, value, Inr(Inl(refl))),
                                 λ i m ne => live_before_keeps([index, value], output, out, i, m, ne), apart, found, within, tree,

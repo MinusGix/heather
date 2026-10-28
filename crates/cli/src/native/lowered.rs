@@ -1,5 +1,5 @@
 //! A source read back as a literal (`Source::spelled`, native_source_spelled): its
-//! buffers, and its statement tree with each leaf's nodes. `write-elf`
+//! words, its buffers, and its statement tree with each leaf's nodes. `write-elf`
 //! states the literal, checks it equal to the source by `refl`, and
 //! compiles it, so a source a builder lowers is evaluated once rather than
 //! in every statement of the certificate.
@@ -123,6 +123,7 @@ impl Printer<'_> {
 pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<String>, String> {
     let mut printer = Printer { reader: Reader { numbers, at: 0 }, p, defs: String::new(), count: 0 };
     if printer.reader.next()? == 0 { return Ok(None); }
+    let words = printer.reader.next()?;
     let count = printer.reader.next()? as usize;
     let mut buffers = Vec::with_capacity(count);
     for _ in 0..count {
@@ -135,6 +136,6 @@ pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<String>, String
     if printer.reader.at != numbers.len() {
         return Err("the spelled source ran past its statement".into());
     }
-    Ok(Some(format!("{}fn {p}_lowered() → Source {{ Source(functions := [], buffers := [{}], main := {main}) }}\n",
+    Ok(Some(format!("{}fn {p}_lowered() → Source {{ Source(functions := [], buffers := [{}], words := {words}, main := {main}) }}\n",
         printer.defs, buffers.join(", "))))
 }

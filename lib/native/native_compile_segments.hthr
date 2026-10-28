@@ -260,7 +260,7 @@ theorem Target::goes_store_byte(self t: Target, before: Prog, name: Nat, store: 
 // Words in and out of their slots
 
 // The word in `register`, from its slot: RBX the slot's address.
-theorem Target::goes_word_to_slot(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+theorem Target::goes_word_to_slot(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < t.words,
     holds: Mem(id, live), slot: t.homes.home(id) = InSlot,
     within: p.word_to(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_to(t.layout(), id, register)), tree, q)):
@@ -315,7 +315,7 @@ theorem Target::goes_word_to_reg(self t: Target, live: List<Nat>, env: Env, p: P
 
 // The word in `register`, a live word read from its home; RBX written on
 // the way (`Layout::rbx_word`).
-theorem Target::goes_word_to(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+theorem Target::goes_word_to(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < t.words,
     holds: Mem(id, live), within: p.word_to(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_to(t.layout(), id, register)), tree, q)):
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
@@ -329,7 +329,7 @@ theorem Target::goes_word_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
 }
 
 // `register` stored to the word's slot.
-theorem Target::goes_word_store(self t: Target, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+theorem Target::goes_word_store(self t: Target, p: Prog, id: Nat, register: Gpr, inside: id < t.words,
     within: p.word_store(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_store(t.layout(), id, register)), tree, q)):
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
@@ -369,7 +369,7 @@ theorem Target::home_apart(self t: Target, id, k: Nat, at: t.homes.home(id) = In
 // `register` put in a word's home where `out` is live after: the word set,
 // the rest as they were, over any part `after` of `out` (a leaf's results
 // are written one by one, each live set the words not yet written).
-theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < t.words,
     rbx: Rbx.same(register) = False, narrow: (i: Nat) → Mem(i, after) → Mem(i, out),
     sub: (i: Nat) → Mem(i, after) → i ≠ id → Mem(i, live), apart: t.homes.Apart(id, after),
     within: p.word_from(t.layout(), out, id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
@@ -424,7 +424,7 @@ theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env:
 }
 
 // …over the whole of `out`.
-theorem Target::goes_word_from(self t: Target, live, out: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+theorem Target::goes_word_from(self t: Target, live, out: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < t.words,
     rbx: Rbx.same(register) = False, sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), apart: t.homes.apart(id, out).IsTrue(),
     within: p.word_from(t.layout(), out, id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_from(t.layout(), out, id, register)), tree, q)):
@@ -435,7 +435,7 @@ theorem Target::goes_word_from(self t: Target, live, out: List<Nat>, env: Env, p
 
 // The result in RAX put in its word's home: the environment with it set is
 // the one the claim after reads.
-theorem Target::goes_result(self t: Target, live, out: List<Nat>, env, other: Env, p: Prog, result: Nat, inside: result < word_slots(),
+theorem Target::goes_result(self t: Target, live, out: List<Nat>, env, other: Env, p: Prog, result: Nat, inside: result < t.words,
     sub: (i: Nat) → Mem(i, out) → i ≠ result → Mem(i, live), apart: t.homes.apart(result, out).IsTrue(),
     within: p.word_from(t.layout(), out, result, Rax).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     next: t.At(prog_len(p.word_from(t.layout(), out, result, Rax)), out, tree, other)):
@@ -450,7 +450,7 @@ theorem Target::goes_result(self t: Target, live, out: List<Nat>, env, other: En
 }
 
 // The word's low bit in `register`, zero-extended; RBX one.
-theorem Target::goes_bit_to(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(), holds: Mem(id, live),
+theorem Target::goes_bit_to(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < t.words, holds: Mem(id, live),
     within: p.bit_to(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.bit_to(t.layout(), id, register)), tree, q)):
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ {
@@ -518,7 +518,7 @@ theorem Bool::set_of_not(b, z: Bool, is: z = !b, clear: z = False): b = True {
 
 // A bit tested: on past the JE where it is set, to the label it names where
 // it is clear.
-theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, condition: Nat, n: Nat, inside: condition < word_slots(),
+theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, condition: Nat, n: Nat, inside: condition < t.words,
     holds: Mem(condition, live), within: p.tests(t.layout(), condition, Succ(n)).Within(t.program),
     else_k: Nat, else_before: Prog, else_item: Asm, else_at: asm_back(t.program, else_k) = Prog::At(else_before, Succ(n), else_item),
     tree: ITree<BitVec(64)>(Events::linux()),
@@ -550,7 +550,7 @@ theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, c
 }
 
 // exit(status), every exit with the word meeting the tree.
-theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, status: Nat, inside: status < word_slots(), holds: Mem(status, live),
+theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, status: Nat, inside: status < t.words, holds: Mem(status, live),
     within: p.exits(t.layout(), status).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, env.word(status)) → Sim(t.io(), tree, s)):
     t.At(prog_len(p), live, tree, env) {

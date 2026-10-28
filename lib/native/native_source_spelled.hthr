@@ -92,13 +92,13 @@ fn List::spell_buffers(self buffers: List<Buffer>) → List<Nat> {
     }
 }
 
-// `[1]`, its buffers' count and each buffer, then `main`; or `[0]`.
+// `[1]`, its words, its buffers' count and each buffer, then `main`; or `[0]`.
 fn Source::spelled(self src: Source) → List<Nat> {
     match src.functions {
         Cons(_, _) => [0],
         Nil => match src.main.spelled_stmt() {
             None => [0],
-            Some(main) => Cons(1, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), main))),
+            Some(main) => Cons(1, Cons(src.words, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), main)))),
         },
     }
 }

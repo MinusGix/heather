@@ -296,7 +296,7 @@ impl Writer<'_> {
                 let (body_start, body_end, after) = self.part(body)?;
                 if self.end(*open) != body_start || self.starts[*close] != body_end { return Err(out_of_order()); }
                 let start = self.starts[*open];
-                let proof = format!("Stmt::emit_repeat_of({p}_s_{id}(), trivial, trivial, {}, {layout}, {p}_o_{id}(), {names}, Compiled({}, {after}), {p}_e_{}())",
+                let proof = format!("Stmt::emit_repeat_of({p}_s_{id}(), trivial, {}, {layout}, trivial, {p}_o_{id}(), {names}, Compiled({}, {after}), {p}_e_{}())",
                     self.program(start), self.program(body_end), body.id());
                 (*id, *names, start, self.end(*close), after, proof)
             }
@@ -308,7 +308,7 @@ impl Writer<'_> {
                     return Err(out_of_order());
                 }
                 let start = self.starts[*open];
-                let proof = format!("Stmt::emit_branch_of({p}_s_{id}(), trivial, trivial, {}, {layout}, {p}_o_{id}(), {names}, Compiled({}, {between}), Compiled({}, {after}), {p}_e_{}(), {p}_e_{}())",
+                let proof = format!("Stmt::emit_branch_of({p}_s_{id}(), trivial, {}, {layout}, trivial, {p}_o_{id}(), {names}, Compiled({}, {between}), Compiled({}, {after}), {p}_e_{}(), {p}_e_{}())",
                     self.program(start), self.program(yes_end), self.program(no_end), yes.id(), no.id());
                 (*id, *names, start, self.end(*close), after, proof)
             }
