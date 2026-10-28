@@ -23,7 +23,7 @@ fn cat_tool(capacity: Nat) → Tool {
     buffer(capacity, λ buf => run(each_read(stdin(), buf, λ n => write_all(stdout(), buf, n.get()))))
 }
 
-fn cat_tool_source() → Source { cat_tool(256).source() }
+fn cat_tool_256() → Tool { cat_tool(256) }
 
 // ---------------------------------------------------------------------------
 // tr a-z A-Z
@@ -36,7 +36,7 @@ fn tr_upper(capacity: Nat) → Tool {
         ++ write_all(stdout(), buf, n.get()))))
 }
 
-fn tr_upper_source() → Source { tr_upper(256).source() }
+fn tr_upper_tool() → Tool { tr_upper(256) }
 
 // ---------------------------------------------------------------------------
 // yes
@@ -52,7 +52,7 @@ fn ascii(codes: List<Nat>) → List<BitVec(8)> { codes.map(λ (code: Nat) => Bit
 // "yes, heather\n".
 fn yes_line() → List<BitVec(8)> { ascii([121, 101, 115, 44, 32, 104, 101, 97, 116, 104, 101, 114, 10]) }
 
-fn yes_source() → Source { yes(yes_line()).source() }
+fn yes_tool() → Tool { yes(yes_line()) }
 
 // ---------------------------------------------------------------------------
 // head -c N
@@ -65,7 +65,7 @@ fn head_c(count, capacity: Nat) → Tool {
         n.get().and_also(left.get()))))))
 }
 
-fn head_c10_source() → Source { head_c(10, 256).source() }
+fn head_c10_tool() → Tool { head_c(10, 256) }
 
 // ---------------------------------------------------------------------------
 // wc -l
@@ -79,7 +79,7 @@ fn wc_l(capacity: Nat) → Tool {
         ++ exit(lines.get()))))
 }
 
-fn wc_l_source() → Source { wc_l(256).source() }
+fn wc_l_tool() → Tool { wc_l(256) }
 
 // ---------------------------------------------------------------------------
 // echo
@@ -101,7 +101,7 @@ fn echo(capacity: Nat) → Tool {
             ++ write_all(stdout(), newline, num(1))))))))
 }
 
-fn echo_source() → Source { echo(1024).source() }
+fn echo_tool() → Tool { echo(1024) }
 
 // ---------------------------------------------------------------------------
 // yes STR
@@ -127,7 +127,7 @@ fn yes_args(capacity: Nat) → Tool {
             ++ do_while(write_all(stdout(), line, at.get()), num(1))))))))
 }
 
-fn yes_args_source() → Source { yes_args(1024).source() }
+fn yes_args_tool() → Tool { yes_args(1024) }
 
 // ---------------------------------------------------------------------------
 // cat FILE…
@@ -143,16 +143,23 @@ fn cat_entry(errno: Nat, message: String) → List<BitVec(8)> {
 }
 
 // The diagnostics' buffer: "cat: write error" (its first five bytes are
-// "cat: "), then the errnos a cat mostly meets with glibc's message for
-// each (strerror in the C locale), then errno 0's entry, "Unknown error",
-// which a scan for an errno not in the table stops at. GNU adds the number
-// there (decimal output is round 9, issues/native-decimal-io.md). The table
-// is short because a buffer's initial bytes are stored one instruction
-// each, in one kernel evaluation (issues/native-tool-certificate-budget.md).
+// "cat: "), then the errnos a cat may meet with glibc's message for each
+// (strerror in the C locale), then errno 0's entry, "Unknown error", which
+// a scan for an errno not in the table stops at. GNU adds the number there
+// (decimal output is round 9, issues/native-decimal-io.md). A buffer's
+// initial bytes are stored by the entry, a few kernel steps each, stated a
+// stretch at a time (issues/native-tool-certificate-budget.md).
 fn cat_table() → List<BitVec(8)> {
     ascii_text("cat: write error") ++ cat_entry(2, "No such file or directory") ++ cat_entry(13, "Permission denied")
         ++ cat_entry(21, "Is a directory") ++ cat_entry(20, "Not a directory") ++ cat_entry(36, "File name too long")
-        ++ cat_entry(5, "Input/output error") ++ cat_entry(28, "No space left on device") ++ cat_entry(0, "Unknown error")
+        ++ cat_entry(40, "Too many levels of symbolic links") ++ cat_entry(5, "Input/output error") ++ cat_entry(28, "No space left on device")
+        ++ cat_entry(1, "Operation not permitted") ++ cat_entry(4, "Interrupted system call") ++ cat_entry(6, "No such device or address")
+        ++ cat_entry(9, "Bad file descriptor") ++ cat_entry(11, "Resource temporarily unavailable") ++ cat_entry(12, "Cannot allocate memory")
+        ++ cat_entry(14, "Bad address") ++ cat_entry(19, "No such device") ++ cat_entry(22, "Invalid argument")
+        ++ cat_entry(23, "Too many open files in system") ++ cat_entry(24, "Too many open files") ++ cat_entry(26, "Text file busy")
+        ++ cat_entry(27, "File too large") ++ cat_entry(30, "Read-only file system") ++ cat_entry(32, "Broken pipe")
+        ++ cat_entry(75, "Value too large for defined data type") ++ cat_entry(116, "Stale file handle") ++ cat_entry(122, "Disk quota exceeded")
+        ++ cat_entry(0, "Unknown error")
 }
 
 // Bytes of a buffer to stderr; a failed write exits 1.
@@ -205,4 +212,4 @@ fn cat_files(capacity, name_cap: Nat) → Tool {
             ++ exit(status.get()))))))))))))))
 }
 
-fn cat_files_source() → Source { cat_files(1024, 512).source() }
+fn cat_files_tool() → Tool { cat_files(1024, 512) }

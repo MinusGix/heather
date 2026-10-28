@@ -246,15 +246,19 @@ nothing in trust (`issues/native-allocator-cost.md`).
   over the memory-resident compile and taken cat's single-`refl` compile in
   `native_cat_compiled` close to the kernel's per-declaration fuel
   (`issues/native-leaf-pool-per-leaf.md`).
-- **The check in the certificate** is one `refl`
-  (`{p}_allocated`). It grows linearly with the program and is the
-  certificate's largest single item at eight times cat
-  (`issues/native-allocator-cost.md`).
+- **The check in the certificate** is stated over the emission's parts
+  (`{p}_ck_{id}`, joined by `Stmt::checked_then_of`/`branch_of`/`repeat_of`
+  and `Source::allocation_of` in native_compile_correct): each part's
+  `Stmt::checked` with its `out` and incoming live set as literals read on
+  the fork (`Source::checked_spelled`), so no one `refl` grows with the
+  program (`issues/native-tool-certificate-budget.md`).
 - **The greedy allocator** makes a few liveness passes (one per level of
   loop-set propagation) and one graph pass. Each is linear in the program,
   and a write costs its live set times the word count. It runs only on
   write-elf's fork, and the compile tests check with slot homes for the
-  same reason.
+  same reason. Its memory, not the kernel's fuel, is the wall for tools
+  past cat FILE's size: twice cat's body runs the fork out of memory in
+  `{p}_homes_spelled` (`issues/native-allocator-cost.md`).
 - **write-elf** gains one `{p}_o_{id}` definition per part (that part's
   live-out). The joins take it, and its cost per part is the live-in of one
   statement.

@@ -772,6 +772,153 @@ theorem Stmt::emit_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), fits: wor
     })(is, fits, yes, no)
 }
 
+// The allocation's check from its parts', for the same reader: what
+// `Stmt::checked` finds of a statement from what it finds of its parts, so
+// the check a compile makes (`Source::allocation_ok`) is stated a part at
+// a time too.
+theorem Stmt::checked_then_of(self s: Stmt, is: s.is_then().IsTrue(), homes: Homes, out, mid, l: List<Nat>,
+    rest: s.right().checked(homes, out) = Some(mid), first: s.left().checked(homes, mid) = Some(l)): s.checked(homes, out) = Some(l) {
+    (match s as λ t => t.is_then().IsTrue() → t.right().checked(homes, out) = Some(mid) → t.left().checked(homes, mid) = Some(l) → t.checked(homes, out) = Some(l) {
+        Then(f, r) => λ _ hr hf => j(sym(hr), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(m) => f.checked(homes, m) }) = Some(l), hf),
+        Compute(_) => λ no _ _ => false_elim(no),
+        Invoke(_) => λ no _ _ => false_elim(no),
+        Branch(_, _, _) => λ no _ _ => false_elim(no),
+        Repeat(_, _) => λ no _ _ => false_elim(no),
+        Exit(_) => λ no _ _ => false_elim(no),
+        Arg(_, _, _) => λ no _ _ => false_elim(no),
+    })(is, rest, first)
+}
+
+theorem Stmt::checked_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), homes: Homes, out, y, n: List<Nat>,
+    yes: s.left().checked(homes, out) = Some(y), no: s.right().checked(homes, out) = Some(n)): s.checked(homes, out) = Some(Cons(s.word(), y.union(n))) {
+    (match s as λ t => t.is_branch().IsTrue() → t.left().checked(homes, out) = Some(y) → t.right().checked(homes, out) = Some(n) →
+            t.checked(homes, out) = Some(Cons(t.word(), y.union(n))) {
+        Branch(c, ys, ns) => λ _ hy hn => j(sym(hy), λ o _ => (match o as λ _ => Option<List<Nat>> {
+                None => None,
+                Some(a) => match ns.checked(homes, out) { None => None, Some(b) => Some(Cons(c, a.union(b))) },
+            }) = Some(Cons(c, y.union(n))),
+            j(sym(hn), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(b) => Some(Cons(c, y.union(b))) }) = Some(Cons(c, y.union(n))), refl)),
+        Compute(_) => λ no _ _ => false_elim(no),
+        Invoke(_) => λ no _ _ => false_elim(no),
+        Then(_, _) => λ no _ _ => false_elim(no),
+        Repeat(_, _) => λ no _ _ => false_elim(no),
+        Exit(_) => λ no _ _ => false_elim(no),
+        Arg(_, _, _) => λ no _ _ => false_elim(no),
+    })(is, yes, no)
+}
+
+theorem Stmt::checked_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), homes: Homes, out, b: List<Nat>,
+    body: s.left().checked(homes, loop_after(s.word(), homes.loop_set(s.word()), out)) = Some(b), within: b.within(homes.loop_set(s.word())) = True):
+    s.checked(homes, out) = Some(homes.loop_set(s.word())) {
+    (match s as λ t => t.is_repeat().IsTrue() → t.left().checked(homes, loop_after(t.word(), homes.loop_set(t.word()), out)) = Some(b) →
+            b.within(homes.loop_set(t.word())) = True → t.checked(homes, out) = Some(homes.loop_set(t.word())) {
+        Repeat(bd, again) => λ _ hb hw => j(sym(hb), λ o _ => (match o as λ _ => Option<List<Nat>> {
+                None => None,
+                Some(x) => match x.within(homes.loop_set(again)) { False => None, True => Some(homes.loop_set(again)) },
+            }) = Some(homes.loop_set(again)),
+            j(sym(hw), λ w _ => (match w as λ _ => Option<List<Nat>> { False => None, True => Some(homes.loop_set(again)) }) = Some(homes.loop_set(again)), refl)),
+        Compute(_) => λ no _ _ => false_elim(no),
+        Invoke(_) => λ no _ _ => false_elim(no),
+        Then(_, _) => λ no _ _ => false_elim(no),
+        Branch(_, _, _) => λ no _ _ => false_elim(no),
+        Exit(_) => λ no _ _ => false_elim(no),
+        Arg(_, _, _) => λ no _ _ => false_elim(no),
+    })(is, body, within)
+}
+
+theorem Source::allocation_of(self src: Source, homes: Homes, l: List<Nat>, fits: homes.fits() = True, checked: src.main.checked(homes, []) = Some(l),
+    slotted: homes.slotted(l) = True): src.allocation_ok(homes) = True {
+    j(sym(fits), λ f _ => Bool::and(f, match src.main.checked(homes, []) { None => False, Some(live) => homes.slotted(live) }) = True,
+        j(sym(checked), λ o _ => Bool::and(True, match o as λ _ => Bool { None => False, Some(live) => homes.slotted(live) }) = True, slotted))
+}
+
+// The sets `Stmt::checked` finds, read for `write-elf` (untrusted): in
+// preorder, each statement's `out` and the set before it, each after its
+// length. `None` where the check fails.
+record LiveTrace { live: List<Nat>, reads: List<Nat> }
+
+fn List::spelled_set(self set: List<Nat>) → List<Nat> { Cons(set.len(), set) }
+
+fn Stmt::checked_leaf(self s: Stmt, homes: Homes, out: List<Nat>) → Option<LiveTrace> {
+    match s.checked(homes, out) { None => None, Some(l) => Some(LiveTrace(l, List::append(out.spelled_set(), l.spelled_set()))) }
+}
+
+fn Stmt::checked_trace(self s: Stmt, homes: Homes, out: List<Nat>) → Option<LiveTrace> {
+    match s {
+        Then(first, rest) => match rest.checked_trace(homes, out) {
+            None => None,
+            Some(r) => match first.checked_trace(homes, r.live) {
+                None => None,
+                Some(f) => Some(LiveTrace(f.live, List::append(out.spelled_set(), List::append(f.live.spelled_set(), List::append(f.reads, r.reads))))),
+            },
+        },
+        Branch(condition, yes, no) => match yes.checked_trace(homes, out) {
+            None => None,
+            Some(y) => match no.checked_trace(homes, out) {
+                None => None,
+                Some(n) => {
+                    let live = Cons(condition, y.live.union(n.live));
+                    Some(LiveTrace(live, List::append(out.spelled_set(), List::append(live.spelled_set(), List::append(y.reads, n.reads)))))
+                },
+            },
+        },
+        Repeat(body, again) => match body.checked_trace(homes, loop_after(again, homes.loop_set(again), out)) {
+            None => None,
+            Some(b) => match b.live.within(homes.loop_set(again)) {
+                False => None,
+                True => Some(LiveTrace(homes.loop_set(again), List::append(out.spelled_set(), List::append(homes.loop_set(again).spelled_set(), b.reads)))),
+            },
+        },
+        Compute(region) => Stmt::checked_leaf(Compute(region), homes, out),
+        Invoke(shape) => Stmt::checked_leaf(Invoke(shape), homes, out),
+        Exit(status) => Stmt::checked_leaf(Exit(status), homes, out),
+        Arg(index, buf, len) => Stmt::checked_leaf(Arg(index, buf, len), homes, out),
+    }
+}
+
+fn Source::checked_spelled(self src: Source, homes: Homes) → List<Nat> {
+    match src.main.checked_trace(homes, []) { None => [], Some(t) => t.reads }
+}
+
+// The entry's initial bytes a stretch at a time, for the same reader: a
+// buffer's bytes stored as two lists one after the other, and the buffers
+// one after another (`Source::entry`, `Prog::inits`).
+theorem Prog::bytes_init_room_zero(self p: Prog, layout: Layout, bytes: List<BitVec(8)>, buf, i: Nat): p.bytes_init(layout, bytes, 0, buf, i) = p {
+    match bytes { Nil => refl, Cons(_, _) => refl }
+}
+
+theorem Prog::bytes_init_append(layout: Layout, buf: Nat, xs, ys: List<BitVec(8)>): (room, i: Nat) → (p: Prog) →
+    p.bytes_init(layout, List::append(xs, ys), room, buf, i) = p.bytes_init(layout, xs, room, buf, i).bytes_init(layout, ys, room - xs.len(), buf, i + xs.len()) {
+    match xs {
+        Nil => λ room i p => j(sym(Nat::sub_zero(room)), λ r _ => p.bytes_init(layout, ys, room, buf, i) = p.bytes_init(layout, ys, r, buf, i), refl),
+        Cons(c, rest) => λ room => match room {
+            Zero => λ i p => sym(p.bytes_init_room_zero(layout, ys, buf, i + Succ(rest.len()))),
+            Succ(r) => λ i p => {
+                let q = p.byte_init(layout, buf, i, c);
+                j(i.add_succ_left(rest.len()),
+                    λ n _ => q.bytes_init(layout, List::append(rest, ys), r, buf, Succ(i)) = q.bytes_init(layout, rest, r, buf, Succ(i)).bytes_init(layout, ys, r - rest.len(), buf, n),
+                    Prog::bytes_init_append(layout, buf, rest, ys, r, Succ(i), q))
+            },
+        },
+    }
+}
+
+theorem Prog::bytes_init_append_of(layout: Layout, buf: Nat, xs, ys: List<BitVec(8)>, room, i: Nat, p, q, r: Prog,
+    first: p.bytes_init(layout, xs, room, buf, i) = q, rest: q.bytes_init(layout, ys, room - xs.len(), buf, i + xs.len()) = r):
+    p.bytes_init(layout, List::append(xs, ys), room, buf, i) = r {
+    trans(Prog::bytes_init_append(layout, buf, xs, ys, room, i, p), j(sym(first), λ x _ => x.bytes_init(layout, ys, room - xs.len(), buf, i + xs.len()) = r, rest))
+}
+
+theorem Prog::inits_of(layout: Layout, b: Buffer, rest: List<Buffer>, buf: Nat, p, q, r: Prog,
+    first: p.bytes_init(layout, b.initial, b.capacity, buf, 0) = q, others: q.inits(layout, rest, Succ(buf)) = r): p.inits(layout, Cons(b, rest), buf) = r {
+    j(sym(first), λ x _ => x.inits(layout, rest, Succ(buf)) = r, others)
+}
+
+theorem Source::entry_of(self src: Source, low: BitVec(64), homes: Homes, p, q: Prog, saved: Start.saves_rsp(src.layout(low, homes)) = p,
+    filled: p.inits(src.layout(low, homes), src.buffers, 0) = q): src.entry(low, homes) = q {
+    j(sym(saved), λ x _ => x.inits(src.layout(low, homes), src.buffers, 0) = q, filled)
+}
+
 // The compiled program, from its first byte with its code resident, its
 // region zero and the command line `args` at RSP above the region,
 // simulates the source run with `args` at every fuel, whatever homes the

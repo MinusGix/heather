@@ -35,4 +35,4 @@ Rounds 1–9 of the plan: [[native-source-bytes]], [[native-compile-capacity]],
 [[native-elf-every-program]], [[native-compile-wider-leaves]],
 [[native-source-builder]], [[native-source-argv]],
 [[native-compile-other-calls]], [[native-data-capacity]],
-[[native-decimal-io]]. And [[native-tool-certificate-budget]]: cat FILE (round 7) fits its certificate only narrowly, and the larger tools need the lowering and initial-byte `refl`s split.
+[[native-decimal-io]]. And [[native-tool-certificate-budget]] (closed): lowering, initial bytes and the allocation check are stated by parts, so no certificate statement grows with the tool; the fork's allocator is the next wall ([[native-allocator-cost]]).
