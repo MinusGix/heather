@@ -49,7 +49,7 @@ use heather_elab::{function_ir_source, Elaborator};
 use heather_cache::module_image::ImageFreshness;
 use heather_cli::{loader, semantic::SemanticSession};
 
-use super::{check_file, emission, labels, lowered, parts, symbol_ok, verified, write_new};
+use super::{allocator, check_file, emission, labels, lowered, parts, symbol_ok, verified, write_new};
 
 /// The I/O profile's file is at most this long (`io_elf_file`'s sixteen-bit
 /// size), its header included.
@@ -208,6 +208,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
 fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().capacities(), Homes([], [])).size(), DataRegion::io_page().size] }}
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
+fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -227,9 +228,24 @@ fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
     }
     // The words' homes, from the greedy allocator (`Source::homes`,
     // native_alloc), spelled: the compile checks them, so the allocator is
-    // evaluated once, here, and never by the kernel.
+    // run once, here, and never by the kernel. Over a literal source it runs
+    // in Rust (`allocator`), the same steps on the literal read back: on the
+    // fork every value it forced was kept until the read returned, and its
+    // memory grew with the tool past the rail. `HEATHER_ELF_ALLOCATOR=both`
+    // runs the fork's too and refuses unless they agree.
+    let on_fork = |fork: &Elaborator| numbers(fork, &probe, &format!("{p}_homes_spelled"));
+    let in_rust = if lowered.is_empty() { None } else { allocator::homes_spelled(&numbers(&fork, &probe, &format!("{p}_lowered_spelled"))?) };
+    let spelled_homes = match in_rust {
+        Some(ours) => {
+            if std::env::var("HEATHER_ELF_ALLOCATOR").as_deref() == Ok("both") && on_fork(&fork)? != ours {
+                return Err(format!("`{symbol}`'s homes from native_alloc and from write-elf's allocator differ"));
+            }
+            ours
+        }
+        None => on_fork(&fork)?,
+    };
     let homes_def = format!("fn {homes} → Homes {{ {} }}\n",
-        homes_literal(&numbers(&fork, &probe, &format!("{p}_homes_spelled"))?).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?);
+        homes_literal(&spelled_homes).ok_or_else(|| format!("`{symbol}`'s homes did not read back"))?);
     // The program a part at a time, each read on its own, so a read holds
     // one part's values and not the program's.
     let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?)?;

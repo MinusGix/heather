@@ -1,9 +1,11 @@
 //! `tr a-z A-Z`, `yes`, `head -c 10`, `wc -l`, `echo` and `yes STR` over
-//! the command line, and `cat FILE…` over open and close, written with the builder (`native_build`),
+//! the command line, `cat FILE…` over open and close, and `wc [-clw]` and
+//! `head -n N` over decimal output and input, written with the builder (`native_build`),
 //! compiled by the effectful source compiler and written as ELFs by
 //! `heather write-elf`, run as Linux processes beside GNU's
 //! (issues/native-source-bytes.md, issues/native-source-builder.md,
-//! issues/native-source-argv.md, issues/native-compile-other-calls.md).
+//! issues/native-source-argv.md, issues/native-compile-other-calls.md,
+//! issues/native-decimal-io.md).
 //! None has
 //! a theorem of its own: `lib/native/native_tools.hthr` holds only the
 //! tools, and `native_compile_correct` is the proof of each.
@@ -17,11 +19,14 @@ use heather_cli::showcase;
 /// One `write-elf` of `symbol` through the image store native_cat.rs uses,
 /// over the gate's world as cat's is (the gate builds it, as the suite's CLI
 /// image warmup), in the stale lanes replaying images an earlier build wrote.
-fn write_tool(symbol: &str, output: &Path) {
+fn write_tool(symbol: &str, output: &Path) { write_program("lib/native/native_tools.hthr", symbol, output) }
+
+/// `write_tool` of a program in another module.
+fn write_program(module: &str, symbol: &str, output: &Path) {
     let root = showcase::repo_root();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
     cmd.current_dir(&root)
-        .args(["write-elf", "lib/native/native_tools.hthr", symbol, "-o"])
+        .args(["write-elf", module, symbol, "-o"])
         .arg(output)
         .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES)
         .args(["--world", "lib"]);
@@ -346,6 +351,136 @@ fn compiled_cat_files_runs_as_gnu_cat() {
         let gnu = run_both(Command::new("cat").env("LC_ALL", "C").current_dir(&dir).arg("text"), b"", Stdio::from(full));
         assert_eq!(ours.0, Some(1), "a failed write exits 1");
         assert_eq!((ours.0, String::from_utf8_lossy(&ours.2)), (gnu.0, String::from_utf8_lossy(&gnu.2)), "as GNU's does, saying what it says");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// GNU's `wc` under `LC_ALL=C`, given `args`.
+fn gnu_wc(args: &[&str]) -> Command {
+    let mut wc = Command::new("wc");
+    wc.env("LC_ALL", "C").args(args);
+    wc
+}
+
+#[test]
+fn compiled_wc_prints_counts_as_gnu_wc() {
+    let dir = scratch("wc_counts");
+    let binary = dir.join("wc");
+    write_tool("wc_counts_tool", &binary);
+
+    // Nothing, words between every kind of space, control bytes and bytes
+    // past ASCII inside and between words (neither start nor end one),
+    // text past a buffer, and random bytes, under every set of flags, one
+    // count printed bare and more in columns.
+    let mut random = Bytes::seeded("wc");
+    let text = random.take(30000, |r| b"ab \t\n\x0b\x0c\r\x01\x7f\x80\xff"[(r % 12) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    let inputs: [&[u8]; 6] = [b"", b"one\n", b"no newline", b"a\tb\x0bc\x0cd\re  f\n\n", b"\x01 a\x80b \xff\x00", &text];
+    let flags: [&[&str]; 9] = [&[], &["-c"], &["-l"], &["-w"], &["-l", "-c"], &["-lw"], &["-cwl"], &["-w", "-c"], &["-l", "-wc"]];
+    for args in flags {
+        for input in inputs.iter().copied().chain([&bytes[..]]) {
+            let (code, out) = run(Command::new(&binary).args(args), input, Stdio::piped());
+            let (gnu_code, gnu_out) = run(&mut gnu_wc(args), input, Stdio::piped());
+            assert_eq!(code, Some(0), "wc {args:?} exits 0");
+            assert_eq!(code, gnu_code, "as GNU's does");
+            assert_eq!(String::from_utf8_lossy(&out), String::from_utf8_lossy(&gnu_out),
+                "wc {args:?} prints what GNU's prints ({} bytes in)", input.len());
+        }
+    }
+
+    // A flag it does not know exits 1, as GNU's does.
+    for args in [&["-x"][..], &["-lx"]] {
+        let (code, _) = run(Command::new(&binary).args(args), b"", Stdio::piped());
+        let (gnu_code, _) = run(&mut gnu_wc(args), b"", Stdio::piped());
+        assert_eq!(code, Some(1), "wc {args:?} exits 1");
+        assert_eq!(code, gnu_code, "as GNU's does");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn compiled_head_takes_its_count_as_gnu_head() {
+    let dir = scratch("head_n");
+    let binary = dir.join("head");
+    write_tool("head_n_tool", &binary);
+
+    // Lines past a buffer and random bytes, under counts of none (ten),
+    // zero, one, more lines than the input has, the largest word, and a
+    // count in each spelling.
+    let mut random = Bytes::seeded("head -n");
+    let lines = random.take(30000, |r| b"ab\n"[(r % 3) as usize]);
+    let bytes = random.take(70000, |r| r as u8);
+    let count = format!("{}", 1 + random.next() % 5000);
+    let counts: Vec<Vec<&str>> = vec![
+        vec![],
+        vec!["-n", "0"],
+        vec!["-n", "1"],
+        vec!["-n3"],
+        vec!["-n", "007"],
+        vec!["-n", &count],
+        vec!["-n", "99999999"],
+        vec!["-n", "18446744073709551615"],
+    ];
+    for args in &counts {
+        for input in [&b""[..], b"no newline", b"one\ntwo\nthree\n", &lines, &bytes] {
+            let ours = run_both(Command::new(&binary).args(args), input, Stdio::piped());
+            let gnu = run_both(Command::new("head").env("LC_ALL", "C").args(args), input, Stdio::piped());
+            assert_eq!(ours.0, Some(0), "head {args:?} exits 0");
+            assert_eq!(ours.0, gnu.0, "as GNU's does");
+            assert!(ours.1 == gnu.1, "head {args:?} sends what GNU's sends ({} bytes in)", input.len());
+        }
+    }
+
+    // Counts that are not numbers, and one past the largest word: both say
+    // GNU's error and exit 1.
+    for n in ["", "x", "1x", "99999999999999999999x", "18446744073709551616", "99999999999999999999999"] {
+        let ours = run_both(Command::new(&binary).args(["-n", n]), b"a\n", Stdio::piped());
+        let gnu = run_both(Command::new("head").env("LC_ALL", "C").args(["-n", n]), b"a\n", Stdio::piped());
+        assert_eq!(ours.0, Some(1), "head -n {n:?} exits 1");
+        assert_eq!((ours.0, String::from_utf8_lossy(&ours.2)), (gnu.0, String::from_utf8_lossy(&gnu.2)), "head -n {n:?} says what GNU's says");
+        assert!(ours.1.is_empty(), "and sends nothing");
+    }
+
+    // A missing count exits 1.
+    let (code, _, _) = run_both(Command::new(&binary).arg("-n"), b"a\n", Stdio::piped());
+    assert_eq!(code, Some(1), "head -n with no count exits 1");
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(Command::new(&binary).args(["-n", "1"]), b"no room\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn compiled_decimals_round_trip_the_widest_words() {
+    let dir = scratch("decimal_echo");
+    let binary = dir.join("decimal_echo");
+    write_program("lib/_tests/native/native_decimal_tests.hthr", "decimal_echo_tool", &binary);
+
+    // Zero, every power of ten and the number below it, the signed edges,
+    // the largest word, and random words.
+    let mut random = Bytes::seeded("decimal echo");
+    let mut values: Vec<u64> = vec![0, 1, 9, (1 << 63) - 1, 1 << 63, (1 << 63) + 1, u64::MAX - 1, u64::MAX];
+    values.extend((1..20).flat_map(|k| [10u64.pow(k) - 1, 10u64.pow(k)]));
+    values.extend((0..16).map(|_| random.next() >> (random.next() % 64)));
+    for v in values {
+        let (code, out, _) = run_both(Command::new(&binary).arg(v.to_string()), b"", Stdio::piped());
+        assert_eq!(code, Some(0), "{v} reads back");
+        assert_eq!(String::from_utf8_lossy(&out), format!("{v}\n{}\n", v as i64), "{v} prints as itself and as a signed word");
+    }
+
+    // Leading zeros read; past the largest word, not all digits, or empty,
+    // it exits 1.
+    let (code, out, _) = run_both(Command::new(&binary).arg("000042"), b"", Stdio::piped());
+    assert_eq!((code, String::from_utf8_lossy(&out).into_owned()), (Some(0), "42\n42\n".to_string()), "leading zeros read");
+    for text in ["18446744073709551616", "18446744073709551620", "99999999999999999999", "184467440737095516150", "12a", "-1", ""] {
+        let (code, out, _) = run_both(Command::new(&binary).arg(text), b"", Stdio::piped());
+        assert_eq!(code, Some(1), "{text:?} is refused");
+        assert!(out.is_empty(), "with nothing printed");
     }
 
     std::fs::remove_dir_all(dir).unwrap();
