@@ -16,6 +16,7 @@
 // and none reaches the RSP slot.
 import native_source;
 import native_compile;
+import native_alloc;
 import native_compile_facts;
 import function_ir_eval;
 import linux_calls;
@@ -49,7 +50,10 @@ import omega;
 record Target {
     r: DataRegion,
     caps: List<Nat>,
-    fits: Layout(r.low, caps).size() <= r.size,
+    // Each word's home (native_alloc), every register in the pool.
+    homes: Homes,
+    homed: homes.fits().IsTrue(),
+    fits: Layout(r.low, caps, homes).size() <= r.size,
     program: Prog,
     origin: BitVec(64),
     laid: program.laid_out().IsTrue(),
@@ -57,7 +61,7 @@ record Target {
     args: List<List<BitVec(8)>>,
 }
 
-fn Target::layout(self t: Target) → Layout { Layout(t.r.low, t.caps) }
+fn Target::layout(self t: Target) → Layout { Layout(t.r.low, t.caps, t.homes) }
 fn Target::io(self t: Target) → LinuxIo<X86Memory(t.r.profile)> { t.r.profile.linux() }
 fn Target::site(self t: Target) → Site<X86Memory(t.r.profile)> { t.io().site(t.program, t.origin) }
 fn Target::writes(self t: Target) → ByteWrites<X86Memory(t.r.profile)> { linux_writes(t.io()) }

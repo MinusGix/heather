@@ -365,12 +365,15 @@ fn List::widths_agree(self nodes: List<Node>, written: List<Port>) → Bool {
 }
 
 // Whether S4 takes the nodes whole (`Prog::pure_leaf`): all pure, its
-// inputs and nodes within the register pool, in evaluation order and no
-// input written (`leaf_checks`), values read at their widths. Its values
-// stay in registers, so it is the better leaf.
+// inputs and nodes within the registers no word may live in
+// (`scratch_pool`), so whatever homes the words get, in evaluation order
+// and no input written (`leaf_checks`), values read at their widths. Its
+// values stay in registers, so it is the better leaf.
 fn List::fits_registers(self nodes: List<Node>) → Bool {
-    nodes_pure(nodes) && ((nodes_inputs(nodes).len() + nodes.len()).leb(register_pool().len())
-        && (leaf_checks(nodes, leaf_inputs(nodes), leaf_outputs(nodes)) && nodes.widths_agree([])))
+    let pool = scratch_pool();
+    let inputs = nodes_inputs(nodes).len();
+    nodes_pure(nodes) && ((inputs + nodes.len()).leb(pool.len())
+        && (leaf_checks(nodes, pool.take(inputs), pool.drop(inputs).take(nodes.len())) && nodes.widths_agree([])))
 }
 
 // Whether the leaf so far takes the next node, as `Prog::computes` would.

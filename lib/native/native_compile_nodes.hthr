@@ -23,6 +23,8 @@ import native_compile_region;
 import native_compile_segments;
 import native_compile_leaf;
 import native_compile_bytes;
+import native_compile_homes;
+import native_alloc;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -71,16 +73,6 @@ theorem List::put_swap<A>(i: Nat): (k: Nat) → i ≠ k → (xs: List<A>) → (x
     }
 }
 
-theorem absent_false_mem(id: Nat, ids: List<Nat>): absent(id, ids) = False → Mem(id, ids) {
-    match ids {
-        Nil => λ no => absurd(no),
-        Cons(x, rest) => (match id.eq_dec(x) as λ d => Bool::and(match d { Inl(_) => False, Inr(_) => True }, absent(id, rest)) = False →
-            Mem(id, Cons(x, rest)) {
-            Inl(e) => λ _ => Inl(e),
-            Inr(_) => λ no => Inr(absent_false_mem(id, rest, no)),
-        }),
-    }
-}
 
 // A word put before the results settle is put over when a node writes it.
 theorem settle_put_over(nodes: List<Node>): (id: Nat) → Mem(id, nodes_writes(nodes)) → (words: List<Nat>) → (buffers: Buffers()) →
@@ -341,153 +333,201 @@ theorem Node::renamed_step(self node: Node, spare: Nat, values: Valuation()):
     }
 }
 
-theorem Prog::within_node_alone(self p: Prog, layout: Layout, node: Node, q: Prog, emitted: p.node_alone(layout, node) = Some(q)): p.Within(q) {
-    p.within_leaf_into(layout, [node.renamed(node.spare())], [node_output(node).id], q, emitted)
+// A node renamed reads what it read.
+theorem Node::renamed_reads(self node: Node, output: Nat): function_ir_eval::Node::reads(node.renamed(output)) = function_ir_eval::Node::reads(node) {
+    match node {
+        Const(_, _, _) => refl,
+        Move(_, _, _) => refl,
+        Add(_, _, _, _) => refl,
+        Sub(_, _, _, _) => refl,
+        BitAnd(_, _, _, _) => refl,
+        BitOr(_, _, _, _) => refl,
+        BitXor(_, _, _, _) => refl,
+        ShiftLeft(_, _, _, _) => refl,
+        LogicalShiftRight(_, _, _, _) => refl,
+        ArithmeticShiftRight(_, _, _, _) => refl,
+        UnsignedLessThan(_, _, _, _) => refl,
+        SignedLessThan(_, _, _, _) => refl,
+        Equal(_, _, _, _) => refl,
+        BufferLoad(_, _, _) => refl,
+        BufferStore(_, _, _, _) => refl,
+    }
 }
 
-// A pure node's code: on with the environment its leaf computes.
-theorem Target::goes_node_alone(self t: Target, env: Env, p, q: Prog, node: Node, pure: node.pure().IsTrue(),
-    emitted: p.node_alone(t.layout(), node) = Some(q), within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(q), tree, env.computes([node]))): t.At(prog_len(p), tree, env) {
-    let out = node_output(node);
+theorem Prog::within_node_alone(self p: Prog, layout: Layout, out: List<Nat>, node: Node, q: Prog, emitted: p.node_alone(layout, out, node) = Some(q)): p.Within(q) {
+    p.within_leaf_into(layout, out, [node.renamed(node.spare())], [node_output(node).id], q, emitted)
+}
+
+// A pure node's code: on with the environment its leaf computes, from the
+// node's reads and what is live after it.
+theorem Target::goes_node_alone(self t: Target, out: List<Nat>, env: Env, p, q: Prog, node: Node, pure: node.pure().IsTrue(),
+    apart: t.homes.apart(node_output(node).id, out).IsTrue(),
+    emitted: p.node_alone(t.layout(), out, node) = Some(q), within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(q), out, tree, env.computes([node]))): t.At(prog_len(p), live_before(function_ir_eval::Node::reads(node), node_output(node).id, out), tree, env) {
+    let o = node_output(node);
     let renamed = node.renamed(node.spare());
     let v = env.valuation();
-    let k = node.value(v)(out.width).toNat();
-    let stored: (Env(env.words.put(out.id, renamed.step(v)(node_output(renamed).width, node_output(renamed).id).toNat(), 0), env.buffers, env.args) =
-            Env(env.words.put(out.id, k, 0), env.buffers, env.args)) =
-        cong_fn<Nat, Env>(λ n => Env(env.words.put(out.id, n, 0), env.buffers, env.args), node.renamed_step(node.spare(), v));
-    let computed: (Env(env.words.put(out.id, k, 0), env.buffers, env.args) = env.computes([node])) =
+    let k = node.value(v)(o.width).toNat();
+    let live = live_before(function_ir_eval::Node::reads(node), o.id, out);
+    let stored: (Env(env.words.put(o.id, renamed.step(v)(node_output(renamed).width, node_output(renamed).id).toNat(), 0), env.buffers, env.args) =
+            Env(env.words.put(o.id, k, 0), env.buffers, env.args)) =
+        cong_fn<Nat, Env>(λ n => Env(env.words.put(o.id, n, 0), env.buffers, env.args), node.renamed_step(node.spare(), v));
+    let computed: (Env(env.words.put(o.id, k, 0), env.buffers, env.args) = env.computes([node])) =
         j(sym(node.run_pure(v, env.buffers, pure)),
-            λ s _ => Env(env.words.put(out.id, k, 0), env.buffers, env.args) = Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), s.buffers, env.args),
-            cong_fn<Nat, Env>(λ n => Env(env.words.put(out.id, n, 0), env.buffers, env.args),
-                cong_fn(λ (x: BitVec(out.width)) => x.toNat(), sym(Valuation::set_here(v, out.id, node.value(v), out.width)))));
-    t.goes_leaf_into(env, p, q, [renamed], [out.id], emitted, within, tree,
-        j(sym(trans(stored, computed)), λ e _ => t.At(prog_len(q), tree, e), next))
+            λ s _ => Env(env.words.put(o.id, k, 0), env.buffers, env.args) = Env(env.words.put(o.id, s.values(o.width, o.id).toNat(), 0), s.buffers, env.args),
+            cong_fn<Nat, Env>(λ n => Env(env.words.put(o.id, n, 0), env.buffers, env.args),
+                cong_fn(λ (x: BitVec(o.width)) => x.toNat(), sym(Valuation::set_here(v, o.id, node.value(v), o.width)))));
+    let reads = λ (port: Port) (m: Mem(port, nodes_inputs([renamed]))) => {
+        let kept = ports_outside_mem(nodes_read_ports([renamed]), nodes_writes([renamed]), port, m);
+        match renamed.read_ports().mem_append(Nil, port, kept.left) as λ _ => Mem(port.id, live) {
+            Inl(here) => live_before_reads(function_ir_eval::Node::reads(node), o.id, out, port.id,
+                j(node.renamed_reads(node.spare()), λ xs _ => Mem(port.id, xs), renamed.read_port_id(port, here))),
+            Inr(never) => false_elim(never),
+        }
+    };
+    let keeps = λ (i: Nat) (m: Mem(i, out)) (unwritten: absent(i, [o.id]) = True) => {
+        let parts = Bool::is_true_and(i.differs(o.id), True, j(sym(unwritten), λ b _ => b.IsTrue(), trivial));
+        live_before_keeps(function_ir_eval::Node::reads(node), o.id, out, i, m, i.differs_ne(o.id, parts.left))
+    };
+    t.goes_leaf_into(live, out, env, p, q, [renamed], [o.id], emitted, within, tree, reads, keeps,
+        Bool::is_true_and_intro(t.homes.apart(o.id, out), True, apart, trivial),
+        j(sym(trans(stored, computed)), λ e _ => t.At(prog_len(q), out, tree, e), next))
 }
 
 // ---------------------------------------------------------------------------
 // Each node's code
 
-theorem Prog::within_one_node(self p: Prog, layout: Layout, node: Node, names: Nat, c: Compiled, emitted: p.one_node(layout, node, names) = Some(c)):
-    p.Within(c.prog) {
+theorem Prog::within_one_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, names: Nat, c: Compiled,
+    emitted: p.one_node(layout, out, node, names) = Some(c)): p.Within(c.prog) {
     (match node.pure() as λ b => (match b {
-            True => match p.node_alone(layout, node) { None => None, Some(q) => Some(Compiled(q, names)) },
-            False => p.byte_node(layout, node, names),
+            True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
+            False => p.byte_node(layout, out, node, names),
         }) = Some(c) → p.Within(c.prog) {
-        True => (match p.node_alone(layout, node) as λ o => p.node_alone(layout, node) = o →
+        True => (match p.node_alone(layout, out, node) as λ o => p.node_alone(layout, out, node) = o →
                 (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → p.Within(c.prog) {
             None => λ _ none => absurd(none),
-            Some(q) => λ alone same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog), p.within_node_alone(layout, node, q, alone)),
+            Some(q) => λ alone same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog), p.within_node_alone(layout, out, node, q, alone)),
         })(refl),
-        False => p.within_byte_node(layout, names, c, node),
+        False => p.within_byte_node(layout, out, names, c, node),
     })(emitted)
 }
 
-theorem Target::goes_one_node(self t: Target, env: Env, p: Prog, names: Nat, c: Compiled, tree: ITree<BitVec(64)>(Events::linux()), node: Node,
-    emitted: p.one_node(t.layout(), node, names) = Some(c), within: c.prog.Within(t.program), next: t.At(prog_len(c.prog), tree, env.computes([node]))):
-    t.At(prog_len(p), tree, env) {
+theorem Target::goes_one_node(self t: Target, out: List<Nat>, env: Env, p: Prog, names: Nat, c: Compiled, tree: ITree<BitVec(64)>(Events::linux()), node: Node,
+    apart: t.homes.apart(node_output(node).id, out).IsTrue(),
+    emitted: p.one_node(t.layout(), out, node, names) = Some(c), within: c.prog.Within(t.program), next: t.At(prog_len(c.prog), out, tree, env.computes([node]))):
+    t.At(prog_len(p), live_before(function_ir_eval::Node::reads(node), node_output(node).id, out), tree, env) {
     let layout = t.layout();
+    let live = live_before(function_ir_eval::Node::reads(node), node_output(node).id, out);
     (match node.pure() as λ b => node.pure() = b → (match b {
-            True => match p.node_alone(layout, node) { None => None, Some(q) => Some(Compiled(q, names)) },
-            False => p.byte_node(layout, node, names),
-        }) = Some(c) → t.At(prog_len(p), tree, env) {
-        True => λ pure => (match p.node_alone(layout, node) as λ o => p.node_alone(layout, node) = o →
-                (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → t.At(prog_len(p), tree, env) {
+            True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
+            False => p.byte_node(layout, out, node, names),
+        }) = Some(c) → t.At(prog_len(p), live, tree, env) {
+        True => λ pure => (match p.node_alone(layout, out, node) as λ o => p.node_alone(layout, out, node) = o →
+                (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → t.At(prog_len(p), live, tree, env) {
             None => λ _ none => absurd(none),
             Some(q) => λ alone same => {
                 let c_is = Option::some_inj(Compiled(q, names), c, same);
-                t.goes_node_alone(env, p, q, node, j(sym(pure), λ b _ => b.IsTrue(), trivial), alone,
+                t.goes_node_alone(out, env, p, q, node, j(sym(pure), λ b _ => b.IsTrue(), trivial), apart, alone,
                     j(sym(c_is), λ x _ => x.prog.Within(t.program), within), tree,
-                    j(sym(c_is), λ x _ => t.At(prog_len(x.prog), tree, env.computes([node])), next))
+                    j(sym(c_is), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes([node])), next))
             },
         })(refl),
-        False => λ _ byte => t.goes_byte_node(env, p, names, c, tree, node, byte, within, next),
+        False => λ _ byte => t.goes_byte_node(out, env, p, names, c, tree, node, apart, byte, within, next),
     })(refl, emitted)
 }
 
-theorem Prog::within_each_node(layout: Layout, nodes: List<Node>): (p: Prog) → (names: Nat) → (c: Compiled) →
-    p.each_node(layout, nodes, names) = Some(c) → p.Within(c.prog) {
+theorem Prog::within_each_node(layout: Layout, out: List<Nat>, nodes: List<Node>): (p: Prog) → (names: Nat) → (c: Compiled) →
+    p.each_node(layout, out, nodes, names) = Some(c) → p.Within(c.prog) {
     match nodes {
         Nil => λ p names c some => j(Option::some_inj(Compiled(p, names), c, some), λ x _ => p.Within(x.prog), p.within_self()),
-        Cons(node, rest) => λ p names c => (match p.one_node(layout, node, names) as λ o => p.one_node(layout, node, names) = o →
-                (match o { None => None, Some(d) => d.prog.each_node(layout, rest, d.names) }) = Some(c) → p.Within(c.prog) {
+        Cons(node, rest) => λ p names c => (match p.one_node(layout, nodes_live_in(rest, out), node, names) as λ o =>
+                p.one_node(layout, nodes_live_in(rest, out), node, names) = o →
+                (match o { None => None, Some(d) => d.prog.each_node(layout, out, rest, d.names) }) = Some(c) → p.Within(c.prog) {
             None => λ _ none => absurd(none),
-            Some(d) => λ one more => p.within_trans(d.prog, c.prog, p.within_one_node(layout, node, names, d, one),
-                Prog::within_each_node(layout, rest, d.prog, d.names, c, more)),
+            Some(d) => λ one more => p.within_trans(d.prog, c.prog, p.within_one_node(layout, nodes_live_in(rest, out), node, names, d, one),
+                Prog::within_each_node(layout, out, rest, d.prog, d.names, c, more)),
         })(refl),
     }
 }
 
-theorem Target::goes_each_node(self t: Target, tree: ITree<BitVec(64)>(Events::linux()), nodes: List<Node>): (env: Env) → (p: Prog) → (names: Nat) →
-    (c: Compiled) → p.each_node(t.layout(), nodes, names) = Some(c) → c.prog.Within(t.program) → t.At(prog_len(c.prog), tree, env.steps(nodes)) →
-    t.At(prog_len(p), tree, env) {
+theorem Target::goes_each_node(self t: Target, tree: ITree<BitVec(64)>(Events::linux()), out: List<Nat>, nodes: List<Node>): (env: Env) → (p: Prog) →
+    (names: Nat) → (c: Compiled) → p.each_node(t.layout(), out, nodes, names) = Some(c) → c.prog.Within(t.program) →
+    t.homes.nodes_apart(nodes, out).IsTrue() → t.At(prog_len(c.prog), out, tree, env.steps(nodes)) →
+    t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
     match nodes {
-        Nil => λ env p names c some within next =>
-            j(sym(Option::some_inj(Compiled(p, names), c, some)), λ x _ => t.At(prog_len(x.prog), tree, env), next),
-        Cons(node, rest) => λ env p names c => (match p.one_node(t.layout(), node, names) as λ o => p.one_node(t.layout(), node, names) = o →
-                (match o { None => None, Some(d) => d.prog.each_node(t.layout(), rest, d.names) }) = Some(c) → c.prog.Within(t.program) →
-                t.At(prog_len(c.prog), tree, env.steps(Cons(node, rest))) → t.At(prog_len(p), tree, env) {
-            None => λ _ none => absurd(none),
-            Some(d) => λ one more within next => {
-                let w_d = d.prog.within_trans(c.prog, t.program, Prog::within_each_node(t.layout(), rest, d.prog, d.names, c, more), within);
-                t.goes_one_node(env, p, names, d, tree, node, one, w_d,
-                    t.goes_each_node(tree, rest, env.computes([node]), d.prog, d.names, c, more, within, next))
-            },
-        })(refl),
+        Nil => λ env p names c some within _ next =>
+            j(sym(Option::some_inj(Compiled(p, names), c, some)), λ x _ => t.At(prog_len(x.prog), out, tree, env), next),
+        Cons(node, rest) => λ env p names c => {
+            let after = nodes_live_in(rest, out);
+            (match p.one_node(t.layout(), after, node, names) as λ o => p.one_node(t.layout(), after, node, names) = o →
+                (match o { None => None, Some(d) => d.prog.each_node(t.layout(), out, rest, d.names) }) = Some(c) → c.prog.Within(t.program) →
+                t.homes.nodes_apart(Cons(node, rest), out).IsTrue() →
+                t.At(prog_len(c.prog), out, tree, env.steps(Cons(node, rest))) → t.At(prog_len(p), nodes_live_in(Cons(node, rest), out), tree, env) {
+                None => λ _ none => absurd(none),
+                Some(d) => λ one more within apart next => {
+                    let parts = Bool::is_true_and(t.homes.apart(node_output(node).id, after), t.homes.nodes_apart(rest, out), apart);
+                    let w_d = d.prog.within_trans(c.prog, t.program, Prog::within_each_node(t.layout(), out, rest, d.prog, d.names, c, more), within);
+                    t.goes_one_node(after, env, p, names, d, tree, node, parts.left, one, w_d,
+                        t.goes_each_node(tree, out, rest, env.computes([node]), d.prog, d.names, c, more, within, parts.right, next))
+                },
+            })(refl)
+        },
     }
 }
 
 // ---------------------------------------------------------------------------
 // The leaf
 
-theorem Prog::pure_leaf_some(self p: Prog, layout: Layout, nodes: List<Node>, q: Prog, some: p.pure_leaf(layout, nodes) = Some(q)):
-    nodes_pure(nodes).IsTrue() ∧ p.leaf(layout, nodes) = Some(q) {
-    (match nodes_pure(nodes) as λ b => nodes_pure(nodes) = b → (match b { True => p.leaf(layout, nodes), False => None }) = Some(q) →
-        nodes_pure(nodes).IsTrue() ∧ p.leaf(layout, nodes) = Some(q) {
+theorem Prog::pure_leaf_some(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, q: Prog, some: p.pure_leaf(layout, out, nodes) = Some(q)):
+    nodes_pure(nodes).IsTrue() ∧ p.leaf(layout, out, nodes) = Some(q) {
+    (match nodes_pure(nodes) as λ b => nodes_pure(nodes) = b → (match b { True => p.leaf(layout, out, nodes), False => None }) = Some(q) →
+        nodes_pure(nodes).IsTrue() ∧ p.leaf(layout, out, nodes) = Some(q) {
         True => λ pure leafed => ⟨j(sym(pure), λ b _ => b.IsTrue(), trivial), leafed⟩,
         False => λ _ none => absurd(none),
     })(refl, some)
 }
 
 // Where a leaf's code starts, within it.
-theorem Prog::within_computes(self p: Prog, layout: Layout, nodes: List<Node>, names: Nat, c: Compiled,
-    emitted: p.computes(layout, nodes, names) = Some(c)): p.Within(c.prog) {
-    (match p.pure_leaf(layout, nodes) as λ o => p.pure_leaf(layout, nodes) = o → (match o {
+theorem Prog::within_computes(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, names: Nat, c: Compiled,
+    emitted: p.computes(layout, out, nodes, names) = Some(c)): p.Within(c.prog) {
+    (match p.pure_leaf(layout, out, nodes) as λ o => p.pure_leaf(layout, out, nodes) = o → (match o {
             Some(q) => Some(Compiled(q, names)),
-            None => match nodes_wide(nodes) { True => p.each_node(layout, nodes, names), False => None },
+            None => match nodes_wide(nodes) { True => p.each_node(layout, out, nodes, names), False => None },
         }) = Some(c) → p.Within(c.prog) {
         Some(q) => λ whole same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog),
-            p.within_leaf(layout, nodes, q, p.pure_leaf_some(layout, nodes, q, whole).right)),
+            p.within_leaf(layout, out, nodes, q, p.pure_leaf_some(layout, out, nodes, q, whole).right)),
         None => λ _ => (match nodes_wide(nodes) {
-            True => λ each => Prog::within_each_node(layout, nodes, p, names, c, each),
+            True => λ each => Prog::within_each_node(layout, out, nodes, p, names, c, each),
             False => λ none => absurd(none),
         }),
     })(refl, emitted)
 }
 
-// What a leaf's code claims: from its start, on from its end with the
-// environment the source computes.
-theorem Target::goes_computes(self t: Target, env: Env, p: Prog, nodes: List<Node>, names: Nat, c: Compiled,
-    emitted: p.computes(t.layout(), nodes, names) = Some(c), within: c.prog.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(c.prog), tree, env.computes(nodes))): t.At(prog_len(p), tree, env) {
+// What a leaf's code claims: from its start with what its nodes need live, on
+// from its end with the environment the source computes and `out` live.
+theorem Target::goes_computes(self t: Target, out: List<Nat>, env: Env, p: Prog, nodes: List<Node>, names: Nat, c: Compiled,
+    emitted: p.computes(t.layout(), out, nodes, names) = Some(c), within: c.prog.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    checked: (t.homes.nodes_apart(nodes, out) && t.homes.all_apart(nodes_writes(nodes), out)).IsTrue(),
+    next: t.At(prog_len(c.prog), out, tree, env.computes(nodes))): t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
     let layout = t.layout();
-    (match p.pure_leaf(layout, nodes) as λ o => p.pure_leaf(layout, nodes) = o → (match o {
+    let aparts = Bool::is_true_and(t.homes.nodes_apart(nodes, out), t.homes.all_apart(nodes_writes(nodes), out), checked);
+    (match p.pure_leaf(layout, out, nodes) as λ o => p.pure_leaf(layout, out, nodes) = o → (match o {
             Some(q) => Some(Compiled(q, names)),
-            None => match nodes_wide(nodes) { True => p.each_node(layout, nodes, names), False => None },
-        }) = Some(c) → t.At(prog_len(p), tree, env) {
+            None => match nodes_wide(nodes) { True => p.each_node(layout, out, nodes, names), False => None },
+        }) = Some(c) → t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
         Some(q) => λ whole same => {
-            let leafed = p.pure_leaf_some(layout, nodes, q, whole);
+            let leafed = p.pure_leaf_some(layout, out, nodes, q, whole);
             let c_is = Option::some_inj(Compiled(q, names), c, same);
             let w_q: q.Within(t.program) = j(sym(c_is), λ x _ => x.prog.Within(t.program), within);
-            let next_q: t.At(prog_len(q), tree, env.computes(nodes)) = j(sym(c_is), λ x _ => t.At(prog_len(x.prog), tree, env.computes(nodes)), next);
+            let next_q: t.At(prog_len(q), out, tree, env.computes(nodes)) = j(sym(c_is), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes(nodes)), next);
             let ran = run_nodes_pure(nodes, leafed.left, env.valuation(), env.buffers);
-            t.goes_leaf(env, p, q, nodes, leafed.right, w_q, tree,
-                j(ran, λ s _ => t.At(prog_len(q), tree, Env(env.words, s.buffers, env.args).settle(s.values, nodes_write_ports(nodes))), next_q))
+            t.goes_leaf(out, env, p, q, nodes, leafed.right, w_q, tree, aparts.right,
+                j(ran, λ s _ => t.At(prog_len(q), out, tree, Env(env.words, s.buffers, env.args).settle(s.values, nodes_write_ports(nodes))), next_q))
         },
         None => λ _ => (match nodes_wide(nodes) as λ b => nodes_wide(nodes) = b →
-                (match b { True => p.each_node(layout, nodes, names), False => None }) = Some(c) → t.At(prog_len(p), tree, env) {
-            True => λ wide each => t.goes_each_node(tree, nodes, env, p, names, c, each, within,
-                j(env.computes_steps(nodes, j(sym(wide), λ b _ => b.IsTrue(), trivial)), λ e _ => t.At(prog_len(c.prog), tree, e), next)),
+                (match b { True => p.each_node(layout, out, nodes, names), False => None }) = Some(c) → t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
+            True => λ wide each => t.goes_each_node(tree, out, nodes, env, p, names, c, each, within, aparts.left,
+                j(env.computes_steps(nodes, j(sym(wide), λ b _ => b.IsTrue(), trivial)), λ e _ => t.At(prog_len(c.prog), out, tree, e), next)),
             False => λ _ none => absurd(none),
         })(refl),
     })(refl, emitted)

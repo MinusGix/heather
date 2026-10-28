@@ -13,6 +13,8 @@ import native_source;
 import native_compile;
 import native_compile_facts;
 import native_compile_region;
+import native_compile_homes;
+import native_alloc;
 import native_compile_steps;
 import linux_calls;
 import linux_trees;
@@ -44,29 +46,122 @@ fn Target::GoesR(self t: Target, at: Nat, tree: ITree<BitVec(64)>(Events::linux(
     t.Goes(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory))
 }
 
-// Where the environment is placed, whatever the registers hold: the claim
+// Where the environment's `live` words are (`Target::Held`): the claim
 // between statements.
-fn Target::At(self t: Target, at: Nat, tree: ITree<BitVec(64)>(Events::linux()), env: Env) → Type {
-    t.GoesR(at, tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m))
+fn Target::At(self t: Target, at: Nat, live: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), env: Env) → Type {
+    t.GoesR(at, tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m))
 }
 
-// A register other than the one written reads as it did.
-theorem read_gpr_other(register, query: Gpr, value: BitVec(64), g: Gprs, differ: register.same(query) = False):
-    read_gpr(query, write_gpr(register, value, g)) = read_gpr(query, g) {
-    j(sym(differ), λ b _ => (match b { False => g.at(query), True => value }) = g.at(query), refl)
+// What RBX holds once a word is in a register: its slot's address, or the
+// word itself, moved from its home.
+fn Layout::rbx_word(self layout: Layout, env: Env, id: Nat) → BitVec(64) {
+    match layout.homes.home(id) { InSlot => layout.word_at(id), InReg(_) => env.word(id) }
+}
+
+// A word's code, by its home.
+theorem Prog::word_to_slot(self p: Prog, layout: Layout, id: Nat, register: Gpr, slot: layout.homes.home(id) = InSlot):
+    p.word_to(layout, id, register) = then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Load(WordLoad(register, Rbx))) {
+    j(sym(slot), λ h _ => (match h {
+        InSlot => then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Load(WordLoad(register, Rbx))),
+        InReg(k) => then(p, Block([MovRR(Rbx, home_register(k)), MovRR(register, Rbx)])),
+    }) = then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Load(WordLoad(register, Rbx))), refl)
+}
+
+theorem Prog::word_to_reg(self p: Prog, layout: Layout, id: Nat, register: Gpr, k: Nat, at: layout.homes.home(id) = InReg(k)):
+    p.word_to(layout, id, register) = then(p, Block([MovRR(Rbx, home_register(k)), MovRR(register, Rbx)])) {
+    j(sym(at), λ h _ => (match h {
+        InSlot => then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Load(WordLoad(register, Rbx))),
+        InReg(r) => then(p, Block([MovRR(Rbx, home_register(r)), MovRR(register, Rbx)])),
+    }) = then(p, Block([MovRR(Rbx, home_register(k)), MovRR(register, Rbx)])), refl)
+}
+
+theorem Prog::word_from_dead(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, register: Gpr, dead: out.holds(id) = False):
+    p.word_from(layout, out, id, register) = p {
+    j(sym(dead), λ b _ => (match b {
+        False => p,
+        True => match layout.homes.home(id) {
+            InSlot => p.word_store(layout, id, register),
+            InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+        },
+    }) = p, refl)
+}
+
+theorem Prog::word_from_live(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, register: Gpr, live: out.holds(id) = True):
+    p.word_from(layout, out, id, register) = (match layout.homes.home(id) {
+        InSlot => p.word_store(layout, id, register),
+        InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+    }) {
+    j(sym(live), λ b _ => (match b {
+        False => p,
+        True => match layout.homes.home(id) {
+            InSlot => p.word_store(layout, id, register),
+            InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+        },
+    }) = (match layout.homes.home(id) {
+        InSlot => p.word_store(layout, id, register),
+        InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+    }), refl)
+}
+
+theorem Prog::word_from_slot(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, register: Gpr, live: out.holds(id) = True,
+    slot: layout.homes.home(id) = InSlot): p.word_from(layout, out, id, register) = p.word_store(layout, id, register) {
+    trans(p.word_from_live(layout, out, id, register, live), j(sym(slot), λ h _ => (match h {
+        InSlot => p.word_store(layout, id, register),
+        InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+    }) = p.word_store(layout, id, register), refl))
+}
+
+theorem Prog::word_from_reg(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, register: Gpr, live: out.holds(id) = True,
+    k: Nat, at: layout.homes.home(id) = InReg(k)): p.word_from(layout, out, id, register) = then(p, Block([MovRR(home_register(k), register)])) {
+    trans(p.word_from_live(layout, out, id, register, live), j(sym(at), λ h _ => (match h {
+        InSlot => p.word_store(layout, id, register),
+        InReg(r) => then(p, Block([MovRR(home_register(r), register)])),
+    }) = then(p, Block([MovRR(home_register(k), register)])), refl))
+}
+
+// Where a piece's start sits within the piece.
+theorem Prog::within_word_to(self p: Prog, layout: Layout, id: Nat, register: Gpr): p.Within(p.word_to(layout, id, register)) {
+    (match layout.homes.home(id) as λ h => p.Within(match h {
+        InSlot => then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Load(WordLoad(register, Rbx))),
+        InReg(k) => then(p, Block([MovRR(Rbx, home_register(k)), MovRR(register, Rbx)])),
+    }) {
+        InSlot => Exists(2, refl),
+        InReg(_) => Exists(1, refl),
+    })
+}
+
+theorem Prog::within_bit_to(self p: Prog, layout: Layout, id: Nat, register: Gpr): p.Within(p.bit_to(layout, id, register)) {
+    p.within_step(p.word_to(layout, id, register), 0, Block([MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)]), p.within_word_to(layout, id, register))
+}
+
+theorem Prog::within_word_from(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, register: Gpr): p.Within(p.word_from(layout, out, id, register)) {
+    (match out.holds(id) as λ b => p.Within(match b {
+        False => p,
+        True => match layout.homes.home(id) {
+            InSlot => p.word_store(layout, id, register),
+            InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+        },
+    }) {
+        False => p.within_self(),
+        True => (match layout.homes.home(id) as λ h => p.Within(match h {
+            InSlot => p.word_store(layout, id, register),
+            InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+        }) {
+            InSlot => Exists(2, refl),
+            InReg(_) => Exists(1, refl),
+        }),
+    })
 }
 
 // Where each piece's start sits, read off where the piece sits.
 theorem Prog::word_to_within(self p: Prog, layout: Layout, id: Nat, register: Gpr, program: Prog,
     within: p.word_to(layout, id, register).Within(program)): p.Within(program) {
-    let mov = then(p, Block([MovRI(Rbx, layout.word_at(id))]));
-    p.within_before(0, Block([MovRI(Rbx, layout.word_at(id))]), program, mov.within_before(0, Load(WordLoad(register, Rbx)), program, within))
+    p.within_trans(p.word_to(layout, id, register), program, p.within_word_to(layout, id, register), within)
 }
 
-theorem Prog::word_from_within(self p: Prog, layout: Layout, id: Nat, register: Gpr, program: Prog,
-    within: p.word_from(layout, id, register).Within(program)): p.Within(program) {
-    let mov = then(p, Block([MovRI(Rbx, layout.word_at(id))]));
-    p.within_before(0, Block([MovRI(Rbx, layout.word_at(id))]), program, mov.within_before(0, Store(WordStore(Rbx, register)), program, within))
+theorem Prog::word_from_within(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, register: Gpr, program: Prog,
+    within: p.word_from(layout, out, id, register).Within(program)): p.Within(program) {
+    p.within_trans(p.word_from(layout, out, id, register), program, p.within_word_from(layout, out, id, register), within)
 }
 
 theorem Prog::bit_to_within(self p: Prog, layout: Layout, id: Nat, register: Gpr, program: Prog,
@@ -164,31 +259,79 @@ theorem Target::goes_store_byte(self t: Target, before: Prog, name: Nat, store: 
 // ---------------------------------------------------------------------------
 // Words in and out of their slots
 
-// The word in `register`, RBX its slot's address.
-theorem Target::goes_word_to(self t: Target, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+// The word in `register`, from its slot: RBX the slot's address.
+theorem Target::goes_word_to_slot(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+    holds: Mem(id, live), slot: t.homes.home(id) = InSlot,
     within: p.word_to(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_to(t.layout(), id, register)), tree, q)):
-    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧
-        q(write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().word_at(id), g)), m)) {
-    let mov = then(p, Block([MovRI(Rbx, t.layout().word_at(id))]));
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        q(write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().rbx_word(env, id), g)), m)) {
+    let layout = t.layout();
+    let code = p.word_to_slot(layout, id, register, slot);
+    let w = j(code, λ x _ => x.Within(t.program), within);
+    let n = j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next);
+    let mov = then(p, Block([MovRI(Rbx, layout.word_at(id))]));
     let post = λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory);
-    let loaded = t.goes_load(mov, 0, WordLoad(register, Rbx), within, tree, post, next);
-    let moved = t.goes_block(p, 0, [MovRI(Rbx, t.layout().word_at(id))], mov.within_before(0, Load(WordLoad(register, Rbx)), t.program, within),
+    let loaded = t.goes_load(mov, 0, WordLoad(register, Rbx), w, tree, post, n);
+    let moved = t.goes_block(p, 0, [MovRI(Rbx, layout.word_at(id))], mov.within_before(0, Load(WordLoad(register, Rbx)), t.program, w),
         tree, λ (u: MachineState<X86Memory(t.r.profile)>) => Exists<BitVec(64)>(λ word =>
             (read_gpr(Rbx, u.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
             ((read_word(t.site().data, u.memory, read_gpr(Rbx, u.gprs)) = Some(word)) ∧ post(word_load_after(WordLoad(register, Rbx), word, u)))), loaded);
+    let rbx: (layout.rbx_word(env, id) = layout.word_at(id)) =
+        j(sym(slot), λ h _ => (match h { InSlot => layout.word_at(id), InReg(_) => env.word(id) }) = layout.word_at(id), refl);
     λ s here resident held => {
-        let read = t.read_slot(env, held.left.witness, s.memory, held.left.proof.left, held.left.proof.right.left, id, inside);
-        let s1 = execute_block_normal([MovRI(Rbx, t.layout().word_at(id))], s);
-        let ok: q(word_load_after(WordLoad(register, Rbx), env.word(id), s1).gprs, word_load_after(WordLoad(register, Rbx), env.word(id), s1).memory) = held.right;
-        moved(s, here, resident, Exists(env.word(id), ⟨read.left, ⟨read.right, ok⟩⟩))
+        let words = held.left.witness;
+        let placed = held.left.proof.left;
+        let read = t.read_slot(env.with_words(words), placed.witness, s.memory, placed.proof.left, placed.proof.right.left, id, inside);
+        let word: (env.with_words(words).word(id) = env.word(id)) = t.held_slot_word(live, env, s.gprs, s.memory, held.left, id, holds, slot);
+        let s1 = execute_block_normal([MovRI(Rbx, layout.word_at(id))], s);
+        let ok: q(word_load_after(WordLoad(register, Rbx), env.word(id), s1).gprs, word_load_after(WordLoad(register, Rbx), env.word(id), s1).memory) =
+            j(rbx, λ x _ => q(write_gpr(register, env.word(id), write_gpr(Rbx, x, s.gprs)), s.memory), held.right);
+        moved(s, here, resident, Exists(env.word(id), ⟨read.left, ⟨trans(read.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), word)), ok⟩⟩))
     }
 }
 
+// …or from its register, through RBX.
+theorem Target::goes_word_to_reg(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr,
+    holds: Mem(id, live), k: Nat, at: t.homes.home(id) = InReg(k),
+    within: p.word_to(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_to(t.layout(), id, register)), tree, q)):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        q(write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().rbx_word(env, id), g)), m)) {
+    let layout = t.layout();
+    let code = p.word_to_reg(layout, id, register, k, at);
+    let n = j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next);
+    let w = j(code, λ x _ => x.Within(t.program), within);
+    let moved = t.goes_block(p, 0, [MovRR(Rbx, home_register(k)), MovRR(register, Rbx)], w, tree,
+        λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), n);
+    let rbx: (layout.rbx_word(env, id) = env.word(id)) =
+        j(sym(at), λ h _ => (match h { InSlot => layout.word_at(id), InReg(_) => env.word(id) }) = env.word(id), refl);
+    λ s here resident held => {
+        let value: (read_gpr(home_register(k), s.gprs) = env.word(id)) = t.held_reg_word(live, env, s.gprs, s.memory, held.left, id, holds, k, at);
+        moved(s, here, resident, j(sym(value), λ x _ => q(write_gpr(register, x, write_gpr(Rbx, x, s.gprs)), s.memory),
+            j(rbx, λ x _ => q(write_gpr(register, env.word(id), write_gpr(Rbx, x, s.gprs)), s.memory), held.right)))
+    }
+}
+
+// The word in `register`, a live word read from its home; RBX written on
+// the way (`Layout::rbx_word`).
+theorem Target::goes_word_to(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+    holds: Mem(id, live), within: p.word_to(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_to(t.layout(), id, register)), tree, q)):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        q(write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().rbx_word(env, id), g)), m)) {
+    (match t.homes.home(id) as λ h => t.homes.home(id) = h →
+            t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+                q(write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().rbx_word(env, id), g)), m)) {
+        InSlot => λ slot => t.goes_word_to_slot(live, env, p, id, register, inside, holds, slot, within, tree, q, next),
+        InReg(k) => λ at => t.goes_word_to_reg(live, env, p, id, register, holds, k, at, within, tree, q, next),
+    })(refl)
+}
+
 // `register` stored to the word's slot.
-theorem Target::goes_word_from(self t: Target, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
-    within: p.word_from(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_from(t.layout(), id, register)), tree, q)):
+theorem Target::goes_word_store(self t: Target, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+    within: p.word_store(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_store(t.layout(), id, register)), tree, q)):
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
         q(write_gpr(Rbx, t.layout().word_at(id), g), t.r.profile.store(m, t.layout().word_at(id),
             word_bytes(read_gpr(register, write_gpr(Rbx, t.layout().word_at(id), g)))))) {
@@ -213,32 +356,111 @@ theorem Target::goes_word_from(self t: Target, p: Prog, id: Nat, register: Gpr, 
     }
 }
 
-// The result in RAX stored to its word: the environment with it set is
+// A home register is apart from every register no word lives in.
+theorem Target::home_apart(self t: Target, id, k: Nat, at: t.homes.home(id) = InReg(k), x: Gpr, unused: t.homes.uses(x) = False):
+    home_register(k).same(x) = False {
+    (match home_register(k).same(x) as λ b => home_register(k).same(x) = b → b = False {
+        True => λ e => absurd(trans(sym(unused), trans(cong_fn<Gpr, Bool>(λ r => t.homes.uses(r), sym(home_register(k).same_sound(x, e))),
+            t.homes.used(id, k, at)))),
+        False => λ _ => refl,
+    })(refl)
+}
+
+// `register` put in a word's home where `out` is live after: the word set,
+// the rest as they were, over any part `after` of `out` (a leaf's results
+// are written one by one, each live set the words not yet written).
+theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+    rbx: Rbx.same(register) = False, narrow: (i: Nat) → Mem(i, after) → Mem(i, out),
+    sub: (i: Nat) → Mem(i, after) → i ≠ id → Mem(i, live), apart: t.homes.Apart(id, after),
+    within: p.word_from(t.layout(), out, id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_from(t.layout(), out, id, register)), tree, q)):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(after, env.set_word(id, read_gpr(register, g)), g2, m2) → t.Spares(g, g2) → q(g2, m2))) {
+    let layout = t.layout();
+    let goal = λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(after, env.set_word(id, read_gpr(register, s.gprs)), g2, m2) → t.Spares(s.gprs, g2) → q(g2, m2));
+    (match out.holds(id) as λ b => out.holds(id) = b → t.Goes(prog_len(p), tree, goal) {
+        False => λ dead_out => {
+            let dead: (after.holds(id) = False) = (match after.holds(id) as λ b => after.holds(id) = b → b = False {
+                True => λ e => absurd(trans(sym(dead_out), out.mem_holds(id, narrow(id, after.holds_mem(id, e))))),
+                False => λ _ => refl,
+            })(refl);
+            let n = j(p.word_from_dead(layout, out, id, register, dead_out), λ x _ => t.GoesR(prog_len(x), tree, q), next);
+            t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory), goal, n,
+                λ s held => held.right(s.gprs, s.memory, t.held_dead(live, after, env, id, read_gpr(register, s.gprs), s.gprs, s.memory, held.left, sub, dead),
+                    λ x _ _ => refl))
+        },
+        True => λ live_id => (match t.homes.home(id) as λ h => t.homes.home(id) = h → t.Goes(prog_len(p), tree, goal) {
+            InSlot => λ slot => {
+                let code = p.word_from_slot(layout, out, id, register, live_id, slot);
+                let a = layout.word_at(id);
+                let stored = t.goes_word_store(p, id, register, inside, j(code, λ x _ => x.Within(t.program), within), tree, q,
+                    j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
+                t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
+                        q(write_gpr(Rbx, a, s.gprs), t.r.profile.store(s.memory, a, word_bytes(read_gpr(register, write_gpr(Rbx, a, s.gprs))))),
+                    goal, stored, λ s held => {
+                        let value: (read_gpr(register, write_gpr(Rbx, a, s.gprs)) = read_gpr(register, s.gprs)) = read_gpr_other(Rbx, register, a, s.gprs, rbx);
+                        let after = t.held_slot_set(live, after, env, id, read_gpr(register, s.gprs), s.gprs, s.memory, held.left, sub, slot, inside);
+                        j(sym(value), λ v _ => q(write_gpr(Rbx, a, s.gprs), t.r.profile.store(s.memory, a, word_bytes(v))),
+                            held.right(write_gpr(Rbx, a, s.gprs), t.r.profile.store(s.memory, a, word_bytes(read_gpr(register, s.gprs))), after,
+                                λ x _ apart_x => read_gpr_other(Rbx, x, a, s.gprs, apart_x)))
+                    })
+            },
+            InReg(k) => λ at => {
+                let code = p.word_from_reg(layout, out, id, register, live_id, k, at);
+                let moved = t.goes_block(p, 0, [MovRR(home_register(k), register)], j(code, λ x _ => x.Within(t.program), within), tree,
+                    λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
+                t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
+                        q(execute_block_normal([MovRR(home_register(k), register)], s).gprs, execute_block_normal([MovRR(home_register(k), register)], s).memory),
+                    goal, moved, λ s held => {
+                        let w = read_gpr(register, s.gprs);
+                        held.right(write_gpr(home_register(k), w, s.gprs), s.memory,
+                            t.held_reg_set(live, after, env, id, w, s.gprs, s.memory, held.left, sub, k, at, apart),
+                            λ x unused _ => read_gpr_other(home_register(k), x, w, s.gprs, t.home_apart(id, k, at, x, unused)))
+                    })
+            },
+        })(refl),
+    })(refl)
+}
+
+// …over the whole of `out`.
+theorem Target::goes_word_from(self t: Target, live, out: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+    rbx: Rbx.same(register) = False, sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), apart: t.homes.apart(id, out).IsTrue(),
+    within: p.word_from(t.layout(), out, id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_from(t.layout(), out, id, register)), tree, q)):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env.set_word(id, read_gpr(register, g)), g2, m2) → t.Spares(g, g2) → q(g2, m2))) {
+    t.goes_word_into(live, out, out, env, p, id, register, inside, rbx, λ i m => m, sub, t.homes.apart_sound(id, out, apart), within, tree, q, next)
+}
+
+// The result in RAX put in its word's home: the environment with it set is
 // the one the claim after reads.
-theorem Target::goes_result(self t: Target, env, other: Env, p: Prog, result: Nat, inside: result < word_slots(),
-    within: p.word_from(t.layout(), result, Rax).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(p.word_from(t.layout(), result, Rax)), tree, other)):
-    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ (env.set_word(result, read_gpr(Rax, g)) = other)) {
-    let a = t.layout().word_at(result);
-    let stored = t.goes_word_from(p, result, Rax, inside, within, tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(other, m), next);
-    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(other, t.r.profile.store(s.memory, a, word_bytes(read_gpr(Rax, s.gprs)))),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ (env.set_word(result, read_gpr(Rax, s.gprs)) = other), stored,
-        λ s held => t.placed_same(env.set_word(result, read_gpr(Rax, s.gprs)), other, t.r.profile.store(s.memory, a, word_bytes(read_gpr(Rax, s.gprs))),
-            t.placed_word(env, s.memory, held.left, result, inside, read_gpr(Rax, s.gprs)), held.right))
+theorem Target::goes_result(self t: Target, live, out: List<Nat>, env, other: Env, p: Prog, result: Nat, inside: result < word_slots(),
+    sub: (i: Nat) → Mem(i, out) → i ≠ result → Mem(i, live), apart: t.homes.apart(result, out).IsTrue(),
+    within: p.word_from(t.layout(), out, result, Rax).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(p.word_from(t.layout(), out, result, Rax)), out, tree, other)):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (env.set_word(result, read_gpr(Rax, g)) = other)) {
+    let stored = t.goes_word_from(live, out, env, p, result, Rax, inside, refl, sub, apart, within, tree,
+        λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(out, other, g, m), next);
+    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+            ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env.set_word(result, read_gpr(Rax, s.gprs)), g2, m2) → t.Spares(s.gprs, g2) →
+                t.Held(out, other, g2, m2)),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (env.set_word(result, read_gpr(Rax, s.gprs)) = other), stored,
+        λ s held => ⟨held.left, λ g2 m2 after _ => t.held_same(out, env.set_word(result, read_gpr(Rax, s.gprs)), other, g2, m2, after, held.right)⟩)
 }
 
 // The word's low bit in `register`, zero-extended; RBX one.
-theorem Target::goes_bit_to(self t: Target, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(),
+theorem Target::goes_bit_to(self t: Target, live: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < word_slots(), holds: Mem(id, live),
     within: p.bit_to(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.bit_to(t.layout(), id, register)), tree, q)):
-    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ {
-        let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().word_at(id), g)));
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ {
+        let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().rbx_word(env, id), g)));
         q(write_gpr(register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded), m)
     }) {
     let word = p.word_to(t.layout(), id, register);
     let masked = t.goes_block(word, 0, [MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)], within, tree,
         λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), next);
-    t.goes_word_to(env, p, id, register, inside, word.within_before(0, Block([MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)]), t.program, within),
+    t.goes_word_to(live, env, p, id, register, inside, holds, word.within_before(0, Block([MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)]), t.program, within),
         tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => {
             let loaded = write_gpr(Rbx, BitVec::ofNat(1), g);
             q(write_gpr(register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded), m)
@@ -296,42 +518,42 @@ theorem Bool::set_of_not(b, z: Bool, is: z = !b, clear: z = False): b = True {
 
 // A bit tested: on past the JE where it is set, to the label it names where
 // it is clear.
-theorem Target::goes_tests(self t: Target, env: Env, p: Prog, condition: Nat, n: Nat, inside: condition < word_slots(),
-    within: p.tests(t.layout(), condition, Succ(n)).Within(t.program),
+theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, condition: Nat, n: Nat, inside: condition < word_slots(),
+    holds: Mem(condition, live), within: p.tests(t.layout(), condition, Succ(n)).Within(t.program),
     else_k: Nat, else_before: Prog, else_item: Asm, else_at: asm_back(t.program, else_k) = Prog::At(else_before, Succ(n), else_item),
     tree: ITree<BitVec(64)>(Events::linux()),
-    yes: env.bit(condition) = True → t.At(prog_len(p.tests(t.layout(), condition, Succ(n))), tree, env),
-    no: env.bit(condition) = False → t.At(prog_len(else_before), tree, env)):
-    t.At(prog_len(p), tree, env) {
+    yes: env.bit(condition) = True → t.At(prog_len(p.tests(t.layout(), condition, Succ(n))), live, tree, env),
+    no: env.bit(condition) = False → t.At(prog_len(else_before), live, tree, env)):
+    t.At(prog_len(p), live, tree, env) {
     let bits = p.bit_to(t.layout(), condition, Rax);
     let tested = bits.test_label(Rax);
     let w_tested = tested.within_before(0, Jcc(E, Succ(n)), t.program, within);
     let w_bits = bits.within_before(0, Block([TestRR(Rax, Rax)]), t.program, w_tested);
-    let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ (f.zf = !env.bit(condition));
+    let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (f.zf = !env.bit(condition));
     let lands = t.program.lands_jcc(t.laid, within.witness, tested, 0, E, n, within.proof, else_k, else_before, else_item, else_at);
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), within.witness, tested, 0, E, Succ(n), within.proof, prog_len(else_before), lands, tree, pre,
         λ u here resident held => no(Bool::clear_of_not(env.bit(condition), u.flags.zf, held.left.right, held.right), u, here, resident, held.left.left),
         λ u here resident held => yes(Bool::set_of_not(env.bit(condition), u.flags.zf, held.left.right, held.right), u, here, resident, held.left.left));
     let flagged = t.goes_block(bits, 0, [TestRR(Rax, Rax)], w_tested, tree,
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped);
-    let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧
+    let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         (is_zero_bits(64, read_gpr(Rax, g).band(read_gpr(Rax, g))) = !env.bit(condition));
-    let loaded = t.goes_bit_to(env, p, condition, Rax, inside, w_bits, tree, q,
+    let loaded = t.goes_bit_to(live, env, p, condition, Rax, inside, holds, w_bits, tree, q,
         t.goes_weaken(prog_len(bits), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre(execute_block_normal([TestRR(Rax, Rax)], u).gprs,
             execute_block_normal([TestRR(Rax, Rax)], u).flags, execute_block_normal([TestRR(Rax, Rax)], u).memory),
             λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), flagged, λ u held => held));
-    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ {
-            let g = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(Rax, env.word(condition), write_gpr(Rbx, t.layout().word_at(condition), s.gprs)));
+    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ {
+            let g = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(Rax, env.word(condition), write_gpr(Rbx, t.layout().rbx_word(env, condition), s.gprs)));
             q(write_gpr(Rax, read_gpr(Rax, g).band(read_gpr(Rbx, g)), g), s.memory)
-        }, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory), loaded,
+        }, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), loaded,
         λ s held => ⟨held, ⟨held, bit_tests_zero(env.number(condition))⟩⟩)
 }
 
 // exit(status), every exit with the word meeting the tree.
-theorem Target::goes_exits(self t: Target, env: Env, p: Prog, status: Nat, inside: status < word_slots(),
+theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, status: Nat, inside: status < word_slots(), holds: Mem(status, live),
     within: p.exits(t.layout(), status).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, env.word(status)) → Sim(t.io(), tree, s)):
-    t.At(prog_len(p), tree, env) {
+    t.At(prog_len(p), live, tree, env) {
     let word = p.word_to(t.layout(), status, Rdi);
     let set = then(word, Block([MovRI(Rax, BitVec::ofNat(60))]));
     let w_set = set.within_before(0, Syscall, t.program, within);
@@ -341,12 +563,12 @@ theorem Target::goes_exits(self t: Target, env: Env, p: Prog, status: Nat, insid
         λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(u, env.word(status)), called);
     let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
         (read_gpr(Rax, write_gpr(Rax, BitVec::ofNat(60), g)) = BitVec::ofNat(60)) ∧ (read_gpr(Rdi, write_gpr(Rax, BitVec::ofNat(60), g)) = env.word(status));
-    let loaded = t.goes_word_to(env, p, status, Rdi, inside, w_word, tree, q,
+    let loaded = t.goes_word_to(live, env, p, status, Rdi, inside, holds, w_word, tree, q,
         t.goes_weaken(prog_len(word), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(execute_block_normal([MovRI(Rax, BitVec::ofNat(60))], u), env.word(status)),
             λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), moved, λ u held => held));
-    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧
-            q(write_gpr(Rdi, env.word(status), write_gpr(Rbx, t.layout().word_at(status), s.gprs)), s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory), loaded, λ s held => ⟨held, ⟨refl, refl⟩⟩)
+    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+            q(write_gpr(Rdi, env.word(status), write_gpr(Rbx, t.layout().rbx_word(env, status), s.gprs)), s.memory),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), loaded, λ s held => ⟨held, ⟨refl, refl⟩⟩)
 }
 
 // Off the end of `main`: exit 0.
