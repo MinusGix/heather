@@ -1,0 +1,47 @@
+// The allocators (`Allocates`, native_alloc): their instances are never
+// refused by proof, so what is probed here is what the proofs do not say.
+// Greedy's proof is its fallback's, so a probe shows its colouring passes
+// on its own and puts words in registers; the slots' loop sets fall back
+// to the widest ones only when the growth runs out of fuel.
+import native_source;
+import native_cat;
+import native_alloc;
+import function_ir;
+import x86_64;
+import bool;
+import list;
+import nat;
+
+// cat's write loop alone: words 1 stdout, 4 sent, 5 left, 16 zero; bit 19
+// one, and the loop goes again on bit 14.
+fn writes() → Source {
+    Source(functions := [], buffers := [Buffer(4)],
+        main := Then(ops([Const(64, 1, 1), Const(64, 4, 0), Const(64, 3, 4), Const(64, 5, 4), Const(64, 16, 0), Const(1, 19, 1)]),
+            Repeat(cat_write(), 14)))
+}
+
+// The colouring passes the check without the fallback, and homes words
+// in registers.
+theorem greedy_colouring_passes(): writes().allocation_ok(Greedy::standard().colouring(writes())) = True { refl }
+theorem greedy_colouring_uses_registers(): Greedy::standard().colouring(writes()).uses(R12) = True { refl }
+
+// So the greedy allocator keeps its colouring: the slots it falls back to
+// put nothing in R12. (Stated on a Bool: the homes' equality by `refl`
+// converts the two allocations in lockstep, past the memory rail.)
+theorem greedy_keeps_its_colouring(): Greedy::standard().assign(writes()).uses(R12) = True { refl }
+
+// Growth stops closed at the least sets, not the widest: word 13 is
+// written before it is read on every pass, so the loop's set leaves it out,
+// though the widest set holds it.
+theorem slots_least(): Homes::slots(writes()).loop_set(14).holds(13) = False { refl }
+theorem wide_holds_all(): Homes([], writes().main.words().wide()).loop_set(14).holds(13) = True { refl }
+
+// With no fuel the growth gives up at once, and the widest sets stand in;
+// the check passes them.
+theorem no_fuel_is_wide(): writes().loop_sets(0, []) = writes().main.words().wide() { refl }
+theorem wide_passes(): writes().allocation_ok(Homes([], writes().loop_sets(0, []))) = True { refl }
+
+// The class finds an instance by the allocator's type, and its law is the
+// compile's check.
+theorem spill_all_by_class(src: Source): src.allocation_ok(src.homes_by(SpillAll())).IsTrue() { src.homes_by_ok(SpillAll()) }
+theorem greedy_by_class(src: Source): src.allocation_ok(src.homes_by(Greedy(3))).IsTrue() { src.homes_by_ok(Greedy(3)) }

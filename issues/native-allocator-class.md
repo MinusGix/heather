@@ -1,6 +1,6 @@
 ---
 title: Make the register allocator a class whose instances prove they are never refused
-status: open
+status: closed
 labels: [native,x86]
 area: heather-in-heather
 created: 2026-10-28
@@ -30,3 +30,24 @@ reason 12 is unreachable by proof.
 
 - **[[native-register-moves-and-convention]]** owns the calling convention.
   Assumed here: only that a call site's `Held` is re-established from it.
+
+## Resolution
+
+- 2026-10-28: Closed. The allocator is the class `Allocates<A>`
+  (`lib/native/native_alloc.hthr`): `assign: A → Source → Homes` and the
+  law `never_refused`, completeness against `Source::allocation_ok`. A
+  tuning is a value of the type. Instances: `SpillAll`, and `Greedy {
+  loop_weight }`, write-elf's at `Greedy::standard()`, so
+  `Source::homes_ok` makes reason 12 unreachable for write-elf.
+  `SpillAll`'s proof does not show the growth reaches a closed set within
+  its fuel, as the scope above planned: where the growth stops is checked
+  once more, and the widest sets (every word the program names, in every
+  loop's set) stand in when it is not closed. `Stmt::checked_wide` proves
+  those closed for every program by one structural induction, so no
+  monotonicity or counting lemma is needed, and the growth stays a
+  heuristic that gives the least sets. `Greedy`'s colouring is not proved;
+  its `assign` falls back to the slots' homes when the check refuses them
+  (`Homes::or_else`), and `lib/_tests/native/native_alloc_tests.hthr`
+  probes that the colouring passes on its own. Per-procedure allocators
+  need procedures; their composition is written down in the design doc §6
+  and stays in [[native-register-moves-and-convention]]'s scope.
