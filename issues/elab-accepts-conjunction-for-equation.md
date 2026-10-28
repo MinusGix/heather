@@ -69,15 +69,15 @@ only on a refusal no recorded probe decided (one more kernel check of the
 refused declaration; nothing on any accepting path: an `Option` checked on
 the error branch of `tm_check`). `Elaborator::kernel_refusal` then:
 
-- looks the located term up among the recorded sites, **by syntax**: a
-  written `refl` at the same Γ claiming the refused equation, or a checking
-  site at the same Γ comparing the same two types. A site whose probe was
+- looks the located term up among the recorded sites, **by conversion**
+  (budgeted like the `refl` note): a written `refl` at the same depth whose
+  side converts with the refused `Refl`'s, or a checking site at the same
+  depth whose two types convert with the refused check's. Not by syntax: the
+  kernel holds the emitted spelling (statement and slots are respelled at
+  the emission chokepoint) and the note the elaborator's, and a syntactic
+  match missed every `refl` the census below found. A site whose probe was
   only inconclusive (out of the note's small budget) is still the site, and
-  the kernel has now decided it, so the report moves there. That was live:
-  the interval search pins (`lib/_tests/std/num/float/interval_tests.hthr`,
-  `creal_interval_tests.hthr`) are `refl`s whose sides outrun the note
-  budget, and were reported at the whole declaration; they are now at the
-  `refl`, with both sides.
+  the kernel has now decided it, so the report moves there.
 - otherwise reports `KernelSite::Unrecorded`: the gate's verdict and the
   declaration's span, plus `no checking site recorded this refusal: the
   kernel refused `p`, which has type `And<a = b, b = b>`, where `a = b` is
@@ -93,10 +93,20 @@ directive match it. A new route that forgets to record is then (a) still
 readable — term and both types — the first time anyone meets it, and (b)
 unpinnable, so it cannot settle into the corpus as an accepted refusal.
 
-**Census.** Every `expect-error` in `lib/` (80 refusals over `lib/_tests`)
-and every `Refusal::Kernel` pin in the elab tests passes the new rule: no
-live unrecorded refusal is pinned. The interval pins above were the only
-ones the locator moved.
+**Census.** Making the rule strict found the live instances. The 80
+`expect-error` refusals in `lib/_tests` were all attributed once `refl`s are
+matched (the interval search pins, `interval_tests.hthr` and
+`creal_interval_tests.hthr`, were at the declaration: `refl`s whose sides
+outrun the note budget; now at the `refl`). The elab tests' `Refusal::Kernel`
+pins failed it in 11 tests (each stops at its first failing case, and all
+pass now): 10 written `refl`s whose notes did not decide (coinductive `Bisim`/`Eutt` constructor arguments, itree `Sim` and
+trace pins, `utf8`'s open laws, `kernel_model`'s blocked probe), now
+reported at the `refl`; and one **real route gap**: `on ?compatibility := h`
+with `h` of the wrong statement (`lib_setoid_mergeable`'s `bad_resumption`).
+The `on` recorded its checking note, but the kernel refuses where the goal
+is *applied* (`h(xs, ys, h)`, `HeadMismatch`), and only `NotConvertible`
+consulted the notes. `HeadMismatch` now consults them too, so that refusal
+is at the `h` of the `on`.
 
 **Tests.** `crates/kernel/tests/typing.rs`:
 `locate_refusal_names_the_innermost_failing_check` (a variable under a λ,
