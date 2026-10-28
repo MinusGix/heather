@@ -87,31 +87,6 @@ theorem Gpr::absent_rest(self register: Gpr, other: Gpr, rest: List<Gpr>, absent
 // ---------------------------------------------------------------------------
 // Sets of words as lists
 
-theorem absent_false_mem(id: Nat, ids: List<Nat>): absent(id, ids) = False → Mem(id, ids) {
-    match ids {
-        Nil => λ no => absurd(no),
-        Cons(x, rest) => (match id.eq_dec(x) as λ d => Bool::and(match d { Inl(_) => False, Inr(_) => True }, absent(id, rest)) = False →
-            Mem(id, Cons(x, rest)) {
-            Inl(e) => λ _ => Inl(e),
-            Inr(_) => λ no => Inr(absent_false_mem(id, rest, no)),
-        }),
-    }
-}
-
-theorem List::holds_mem(self ids: List<Nat>, id: Nat, held: ids.holds(id) = True): Mem(id, ids) {
-    (match absent(id, ids) as λ b => absent(id, ids) = b → !b = True → Mem(id, ids) {
-        True => λ _ no => absurd(no),
-        False => λ none _ => absent_false_mem(id, ids, none),
-    })(refl, held)
-}
-
-theorem List::mem_holds(self ids: List<Nat>, id: Nat, m: Mem(id, ids)): ids.holds(id) = True {
-    (match absent(id, ids) as λ b => absent(id, ids) = b → !b = True {
-        True => λ none => false_elim(absent_mem(id, ids, j(sym(none), λ b _ => b.IsTrue(), trivial), id, m, refl)),
-        False => λ _ => refl,
-    })(refl)
-}
-
 theorem List::mem_filter_of<A>(self xs: List<A>, p: A → Bool, a: A, keep: p(a) = True): Mem(a, xs) → Mem(a, xs.filter(p)) {
     match xs {
         Nil => λ never => never,
@@ -147,19 +122,6 @@ theorem live_before_keeps(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat
 // What a step reads is live before it.
 theorem live_before_reads(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat, m: Mem(i, reads)): Mem(i, live_before(reads, written, out)) {
     reads.union_left(out.minus([written]), i, m)
-}
-
-theorem List::within_mem(self a: List<Nat>, b: List<Nat>): a.within(b).IsTrue() → (i: Nat) → Mem(i, a) → Mem(i, b) {
-    match a {
-        Nil => λ _ i never => false_elim(never),
-        Cons(id, rest) => λ inside i m => {
-            let parts = Bool::is_true_and(b.holds(id), rest.within(b), inside);
-            match m {
-                Inl(e) => j(sym(e), λ x _ => Mem(x, b), b.holds_mem(id, eq_true_of_is_true(b.holds(id), parts.left))),
-                Inr(later) => rest.within_mem(b, parts.right, i, later),
-            }
-        },
-    }
 }
 
 // ---------------------------------------------------------------------------

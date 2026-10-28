@@ -479,6 +479,16 @@ fn Int::natAbs(self a: Int) → Nat {
 
 fn Int::abs(self a: Int) → Int { OfNat(a.natAbs()) }
 
+// `OfNat` is injective: `natAbs` reads the payload back.
+theorem Int::ofnat_inj({a, b: Nat}, p: OfNat(a) = OfNat(b)): a = b {
+    let read: (a = OfNat(b).natAbs()) = rewrite(sym(p), refl);
+    read
+}
+
+theorem Int::ofnat_ne({a, b: Nat}, h: a ≠ b): OfNat(a) ≠ OfNat(b) {
+    λ (p: OfNat(a) = OfNat(b)) => h(Int::ofnat_inj(p))
+}
+
 fn DivModEquation(dividend, divisor: Int, state: DivMod) → Type {
     match state {
         MkIntDivMod(quotient, remainder) =>

@@ -818,6 +818,16 @@ fn List::nth<A>(self xs: List<A>, i: Nat) → Option<A> {
     }
 }
 
+theorem List::nth_replicate<A>(x: A, n: Nat): (i: Nat) → i < n → List::replicate(x, n).nth(i) = Some(x) {
+    match n {
+        Zero => λ i never => false_elim(never),
+        Succ(k) => λ i => match i {
+            Zero => λ _ => refl,
+            Succ(l) => λ below => List::nth_replicate(x, k, l, below),
+        },
+    }
+}
+
 theorem List::nth_append_l<A>(self xs: List<A>, ys: List<A>):
     (i: Nat, a: A) → xs.nth(i) = Some(a) → (xs ++ ys).nth(i) = Some(a)
 {

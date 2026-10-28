@@ -210,6 +210,9 @@ pub enum Relation {
     Lt,
     Ge,
     Gt,
+    /// `≠`: only CutSat reads it (`cutsat::Problem::assume_ne`); Omega's
+    /// real shadow has no row for it.
+    Ne,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

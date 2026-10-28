@@ -18,6 +18,11 @@
 //! tree it does not evaluate, and the program's literal is cut wherever a
 //! part starts or ends, so each statement's programs are definitions.
 //!
+//! The compile's check of the homes (`Stmt::checked`) is stated over the
+//! same parts (`Checks`), from the sets it finds before each statement,
+//! read on the fork (`Source::checked_spelled`); and the entry's stores of
+//! the buffers' initial bytes a definition of them at a time (`Inits`).
+//!
 //! The reads are untrusted, like everything a fork reads: a misreading makes
 //! a statement the kernel refuses, never a wrong one it accepts. The items
 //! around a `Repeat`'s or `Branch`'s parts are read from expressions that
@@ -26,7 +31,7 @@
 
 use std::collections::BTreeSet;
 
-use super::verified;
+use super::{lowered, verified};
 
 /// A part with at most this many leaves is read and stated whole.
 const LEAVES: usize = 8;
@@ -34,15 +39,18 @@ const LEAVES: usize = 8;
 const STRETCH: usize = 32;
 
 /// A node of `Source::shape`'s tree.
-struct Shape { kind: u64, names: u64, then: u64, children: Vec<Shape>, leaves: usize }
+/// `index` is its place in the preorder.
+struct Shape { kind: u64, names: u64, then: u64, children: Vec<Shape>, leaves: usize, index: usize }
 
 impl Shape {
-    fn read(records: &mut std::slice::Iter<'_, [u64; 3]>) -> Result<Shape, String> {
+    fn read(records: &mut std::slice::Iter<'_, [u64; 3]>, count: &mut usize) -> Result<Shape, String> {
         let &[kind, names, then] = records.next().ok_or_else(malformed)?;
+        let index = *count;
+        *count += 1;
         let arity = match kind { 0 => 0, 1 | 3 => 2, 2 => 1, _ => return Err(malformed()) };
-        let children = (0..arity).map(|_| Shape::read(records)).collect::<Result<Vec<_>, _>>()?;
+        let children = (0..arity).map(|_| Shape::read(records, count)).collect::<Result<Vec<_>, _>>()?;
         let leaves = if arity == 0 { 1 } else { children.iter().map(|c| c.leaves).sum() };
-        Ok(Shape { kind, names, then, children, leaves })
+        Ok(Shape { kind, names, then, children, leaves, index })
     }
 }
 
@@ -56,15 +64,20 @@ fn miscounted() -> String { "the statement tree's shape counts label names its e
 
 /// How a part is read and stated; the numbers are reads, in program order.
 enum Part {
-    Whole { id: usize, names: u64, read: usize },
-    Then { id: usize, names: u64, first: Box<Part>, rest: Box<Part> },
-    Repeat { id: usize, names: u64, open: usize, body: Box<Part>, close: usize },
-    Branch { id: usize, names: u64, open: usize, yes: Box<Part>, middle: usize, no: Box<Part>, close: usize },
+    Whole { id: usize, names: u64, read: usize, index: usize },
+    Then { id: usize, names: u64, first: Box<Part>, rest: Box<Part>, index: usize },
+    Repeat { id: usize, names: u64, open: usize, body: Box<Part>, close: usize, index: usize },
+    Branch { id: usize, names: u64, open: usize, yes: Box<Part>, middle: usize, no: Box<Part>, close: usize, index: usize },
 }
 
 impl Part {
     fn id(&self) -> usize {
         match self { Part::Whole { id, .. } | Part::Then { id, .. } | Part::Repeat { id, .. } | Part::Branch { id, .. } => *id }
+    }
+
+    /// Where it is in the statement tree's preorder.
+    fn index(&self) -> usize {
+        match self { Part::Whole { index, .. } | Part::Then { index, .. } | Part::Repeat { index, .. } | Part::Branch { index, .. } => *index }
     }
 
     /// The label name the shape says it starts at.
@@ -88,7 +101,7 @@ pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u6
     if shape.len() % 3 != 0 { return Err(malformed()); }
     let records: Vec<[u64; 3]> = shape.rchunks(3).map(|r| [r[2], r[1], r[0]]).collect();
     let mut at = records.iter();
-    let tree = Shape::read(&mut at)?;
+    let tree = Shape::read(&mut at, &mut 0)?;
     if at.next().is_some() || tree.names != 0 { return Err(malformed()); }
     let text = format!("fn {p}_s_0() → Stmt {{ {source} }}\nfn {p}_o_0() → List<Nat> {{ [] }}\n");
     let mut planner = Planner { p, layout, text, reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1 };
@@ -129,7 +142,7 @@ impl Planner<'_> {
         if shape.leaves <= LEAVES {
             let read = self.push("part", true, format!("{p}_s_{id}().emission_reading({layout}, {p}_o_{id}(), {names})"),
                 format!("{p}_s_{id}().emit(Start, {layout}, {p}_o_{id}(), {names}).map(λ (c: Compiled) => c.prog).unwrap_or(Start)"));
-            return Ok(Part::Whole { id, names, read });
+            return Ok(Part::Whole { id, names, read, index: shape.index });
         }
         let (s, ss) = (names + 1, names + 2);
         let word = format!("{p}_s_{id}().word()");
@@ -137,14 +150,14 @@ impl Planner<'_> {
             (1, [first, rest]) if shape.then == names => {
                 let f = self.child(id, "left", format!("{p}_s_{id}().right().live_in({layout}.homes, {p}_o_{id}())"));
                 let r = self.child(id, "right", format!("{p}_o_{id}()"));
-                Part::Then { id, names, first: Box::new(self.part(first, f)?), rest: Box::new(self.part(rest, r)?) }
+                Part::Then { id, names, first: Box::new(self.part(first, f)?), rest: Box::new(self.part(rest, r)?), index: shape.index }
             }
             (2, [body]) if shape.then == ss => {
                 let b = self.child(id, "left", format!("{p}_s_{id}().loop_out({layout}.homes, {p}_o_{id}())"));
                 let open = self.read("open", format!("Start.label({s})"));
                 let body = Box::new(self.part(body, b)?);
                 let close = self.read("close", format!("then(Start.tests({layout}, {word}, {ss}), Jmp({s})).label({ss})"));
-                Part::Repeat { id, names, open, body, close }
+                Part::Repeat { id, names, open, body, close, index: shape.index }
             }
             (3, [yes, no]) if shape.then == ss => {
                 let (y, n) = (self.child(id, "left", format!("{p}_o_{id}()")), self.child(id, "right", format!("{p}_o_{id}()")));
@@ -153,7 +166,7 @@ impl Planner<'_> {
                 let middle = self.read("middle", format!("Start.else_label({s}, {ss})"));
                 let no = Box::new(self.part(no, n)?);
                 let close = self.read("close", format!("Start.join_label({ss})"));
-                Part::Branch { id, names, open, yes, middle, no, close }
+                Part::Branch { id, names, open, yes, middle, no, close, index: shape.index }
             }
             _ => return Err(malformed()),
         })
@@ -193,8 +206,14 @@ pub(super) struct Stated { pub theorems: String, pub items: Vec<(u64, String)>, 
 /// whole: the first, and how many.
 pub(super) struct Span { program: String, pub start: usize, pub count: usize }
 
-/// `readings` are `plan`'s reads, read.
-pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Vec<Reading>) -> Result<Stated, String> {
+/// A literal source's buffers (`lowered::Buffers`), for stating the entry's
+/// stores of their initial bytes a definition of them at a time: the
+/// source, the homes, and each buffer's capacity and initial length.
+pub(super) struct Inits<'a> { pub src: &'a str, pub homes: &'a str, pub shapes: &'a [(u64, usize)] }
+
+/// `readings` are `plan`'s reads, read. With `inits`, the entry is stated
+/// from its parts (`Inits::state`); without, by one `refl`.
+pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Vec<Reading>, inits: Option<Inits<'_>>, checks: Option<Checks<'_>>) -> Result<Stated, String> {
     if readings.len() != plan.reads.len() { return Err(out_of_order()); }
     let mut starts = Vec::with_capacity(readings.len());
     let (mut items, mut lens) = (Vec::new(), Vec::new());
@@ -207,14 +226,21 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
     let parts: String = plan.text.lines().filter(|line| line.starts_with(&format!("fn {p}_s_")) || line.starts_with(&format!("fn {p}_o_")))
         .map(|line| format!("{line}\n")).collect();
     let mut writer = Writer { p, layout, readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts };
-    writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{ refl }}\n", writer.program(entered)));
+    match inits {
+        Some(inits) => inits.state(&mut writer, entered)?,
+        None => writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{ refl }}\n", writer.program(entered))),
+    }
     let (start, end, _) = writer.part(&plan.root)?;
     if start != entered || end != main { return Err(out_of_order()); }
+    if let Some(checks) = checks { writer.theorems.push_str(&checks.state(p, &plan.root)?); }
     for k in (0..items.len()).step_by(STRETCH) { writer.cuts.insert(k); }
     let spans = plan.programs.into_iter().zip(&readings).zip(&starts)
         .map(|((program, reading), &start)| Span { program, start, count: reading.items.len() }).collect();
     Ok(Stated { theorems: writer.theorems, items, lens, cuts: writer.cuts, spans })
 }
+
+/// Items a byte read takes at most.
+const READ: usize = 256;
 
 /// The bytes a read at a time, on the fork that read the parts, once the
 /// labels are known: each read's program at `Start` again, encoded with its
@@ -226,14 +252,21 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
 /// the certificate (issues/write-elf-build-constants.md); bytes read wrong
 /// are a piece the kernel refuses. The reads, named in program order, with
 /// the spans they read.
-pub(super) fn byte_reads<'a>(p: &str, spans: &'a [Span], offsets: &[u64]) -> (String, Vec<(String, &'a Span)>) {
+pub(super) fn byte_reads(p: &str, spans: &[Span], offsets: &[u64]) -> (String, Vec<(String, std::ops::Range<usize>)>) {
     let mut text = String::new();
     let mut reads = Vec::new();
     for (r, span) in spans.iter().enumerate().filter(|(_, span)| span.count > 0) {
-        let name = format!("{p}_bytes_{r}");
-        text.push_str(&format!("fn {name}() → List<Nat> {{ asm_code_ending_onto(no_fills(), {p}_table().labels(), {}, {}, {}, Nil).map(λ (b: BitVec(8)) => b.toNat()) }}\n",
-            span.program, span.count, offsets[span.start + span.count]));
-        reads.push((name, span));
+        // A long read (the entry's stores of a buffer's initial bytes) a
+        // window at a time, from the back: the fork's value cache keeps
+        // all of one read, so a read's memory is its window's.
+        let end = span.start + span.count;
+        for (w, from) in (span.start..end).step_by(READ).enumerate() {
+            let to = (from + READ).min(end);
+            let name = format!("{p}_bytes_{r}_{w}");
+            text.push_str(&format!("fn {name}() → List<Nat> {{ asm_code_ending_onto(no_fills(), {p}_table().labels(), asm_back({}, {}), {}, {}, Nil).map(λ (b: BitVec(8)) => b.toNat()) }}\n",
+                span.program, end - to, to - from, offsets[to]));
+            reads.push((name, from..to));
+        }
     }
     (text, reads)
 }
@@ -252,6 +285,125 @@ pub(super) fn code(p: &str, items: &[(u64, String)], cuts: &BTreeSet<usize>) -> 
     }
     code.push_str(&format!("fn {p}_code() → Prog {{ {} }}\n", program(items.len())));
     code
+}
+
+/// The allocation's check, stated over the same parts as the emission
+/// (`Stmt::checked_then_of`, `checked_branch_of`, `checked_repeat_of`,
+/// native_compile_correct): the source, the homes, and
+/// `Source::checked_spelled`'s read, each statement's `out` and the set
+/// `Stmt::checked` finds before it, in preorder.
+pub(super) struct Checks<'a> { pub src: &'a str, pub homes: &'a str, pub sets: &'a [u64] }
+
+impl Checks<'_> {
+    /// `{p}_ck_{id}` for each part, and `{p}_allocation_is`, that the
+    /// compile's check of the homes passes.
+    fn state(&self, p: &str, root: &Part) -> Result<String, String> {
+        let bad = || "the allocation's sets did not read back".to_string();
+        // A set at `at`, after its length, and where the next starts.
+        let set = |at: usize| -> Result<(String, usize), String> {
+            let len = *self.sets.get(at).ok_or_else(bad)? as usize;
+            let ids = self.sets.get(at + 1..at + 1 + len).ok_or_else(bad)?;
+            Ok((format!("[{}]", ids.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")), at + 1 + len))
+        };
+        let mut sets = Vec::new();
+        let mut at = 0;
+        while at < self.sets.len() {
+            let (out, next) = set(at)?;
+            let (live, next) = set(next)?;
+            sets.push((out, live));
+            at = next;
+        }
+        let mut text = String::new();
+        self.part(p, root, &sets, &mut text)?;
+        let (src, homes) = (self.src, self.homes);
+        text.push_str(&format!("theorem {p}_allocation_is(): {src}().allocation_ok({homes}) = True {{\n    \
+            {src}().allocation_of({homes}, {}, refl, {p}_ck_0(), refl)\n}}\n", sets.first().ok_or_else(bad)?.1));
+        Ok(text)
+    }
+
+    fn part(&self, p: &str, part: &Part, sets: &[(String, String)], text: &mut String) -> Result<(), String> {
+        let homes = self.homes;
+        let (out, live) = sets.get(part.index()).ok_or("the allocation's sets are fewer than the statements")?;
+        let set = |part: &Part| sets.get(part.index()).map(|(_, live)| live.as_str()).ok_or("the allocation's sets are fewer than the statements");
+        let proof = match part {
+            Part::Whole { .. } => "refl".to_string(),
+            Part::Then { id, first, rest, .. } => {
+                self.part(p, first, sets, text)?;
+                self.part(p, rest, sets, text)?;
+                format!("Stmt::checked_then_of({p}_s_{id}(), trivial, {homes}, {out}, {}, {live}, {p}_ck_{}(), {p}_ck_{}())", set(rest)?, rest.id(), first.id())
+            }
+            Part::Branch { id, yes, no, .. } => {
+                self.part(p, yes, sets, text)?;
+                self.part(p, no, sets, text)?;
+                format!("Stmt::checked_branch_of({p}_s_{id}(), trivial, {homes}, {out}, {}, {}, {p}_ck_{}(), {p}_ck_{}())", set(yes)?, set(no)?, yes.id(), no.id())
+            }
+            Part::Repeat { id, body, .. } => {
+                self.part(p, body, sets, text)?;
+                format!("Stmt::checked_repeat_of({p}_s_{id}(), trivial, {homes}, {out}, {}, {p}_ck_{}(), refl)", set(body)?, body.id())
+            }
+        };
+        text.push_str(&format!("theorem {p}_ck_{}(): {p}_s_{}().checked({homes}, {out}) = Some({live}) {{ {proof} }}\n", part.id(), part.id()));
+        Ok(())
+    }
+}
+
+impl Inits<'_> {
+    /// The entry, `Source::entry`: RSP saved (`{p}_entry_saved`), then
+    /// each buffer's initial bytes stored (`{p}_in_{j}`), a definition of
+    /// them at a time (`{p}_ib_{j}_{k}_is`, joined by
+    /// `Prog::bytes_init_append_of` as `{p}_it_{j}_{k}_is`). The literal is
+    /// cut where each starts and ends.
+    fn state(&self, writer: &mut Writer<'_>, entered: usize) -> Result<(), String> {
+        let (p, layout) = (writer.p, writer.layout);
+        let chunk = lowered::CHUNK as u64;
+        // Two items save RSP, and two store each byte while there is room.
+        let mut at = 2;
+        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}) = {} {{ refl }}\n", writer.program(at));
+        let mut starts = Vec::with_capacity(self.shapes.len());
+        for (j, &(capacity, len)) in self.shapes.iter().enumerate() {
+            starts.push(at);
+            let chunks = len.div_ceil(lowered::CHUNK);
+            // Where definition `k` of the bytes starts, and the room left there.
+            let offset = |k: usize| (k as u64 * chunk).min(len as u64);
+            let room = |k: usize| capacity.saturating_sub(offset(k));
+            let mut bounds = vec![at];
+            for k in 0..chunks {
+                at += 2 * (offset(k + 1) - offset(k)).min(room(k)) as usize;
+                bounds.push(at);
+                writer.cuts.insert(at);
+                text.push_str(&format!("theorem {p}_ib_{j}_{k}_is(): {}.bytes_init({layout}, {p}_ib_{j}_{k}(), {}, {j}, {}) = {} {{ refl }}\n",
+                    writer.program(bounds[k]), room(k), offset(k), writer.program(at)));
+            }
+            let end = writer.program(at);
+            text.push_str(&format!("theorem {p}_it_{j}_{chunks}_is(): {end}.bytes_init({layout}, {p}_it_{j}_{chunks}(), {}, {j}, {}) = {end} {{ refl }}\n",
+                room(chunks), offset(chunks)));
+            for k in (0..chunks).rev() {
+                let (from, to) = (writer.program(bounds[k]), writer.program(bounds[k + 1]));
+                text.push_str(&format!("theorem {p}_it_{j}_{k}_is(): {from}.bytes_init({layout}, {p}_it_{j}_{k}(), {room}, {j}, {offset}) = {end} {{\n    \
+                    Prog::bytes_init_append_of({layout}, {j}, {p}_ib_{j}_{k}(), {p}_it_{j}_{next}(), {room}, {offset}, {from}, {to}, {end}, {p}_ib_{j}_{k}_is(), {p}_it_{j}_{next}_is())\n}}\n",
+                    room = room(k), offset = offset(k), next = k + 1));
+            }
+        }
+        if at != entered {
+            return Err(format!("the entry's initial bytes are {} items, and the entry read {entered}", at));
+        }
+        let end = writer.program(at);
+        let count = self.shapes.len();
+        text.push_str(&format!("theorem {p}_in_{count}_is(): {end}.inits({layout}, {p}_bl_{count}(), {count}) = {end} {{ refl }}\n"));
+        for (j, &(capacity, _)) in self.shapes.iter().enumerate().rev() {
+            let from = writer.program(starts[j]);
+            let to = writer.program(starts.get(j + 1).copied().unwrap_or(at));
+            text.push_str(&format!("theorem {p}_in_{j}_is(): {from}.inits({layout}, {p}_bl_{j}(), {j}) = {end} {{\n    \
+                Prog::inits_of({layout}, Buffer({capacity}, {p}_it_{j}_0()), {p}_bl_{}(), {j}, {from}, {to}, {end}, {p}_it_{j}_0_is(), {p}_in_{}_is())\n}}\n",
+                j + 1, j + 1));
+        }
+        let start = writer.program(2);
+        text.push_str(&format!("theorem {p}_entry(): {src}().entry({LOW}, {homes}) = {end} {{\n    \
+            {src}().entry_of({LOW}, {homes}, {start}, {end}, {p}_entry_saved(), {p}_in_0_is())\n}}\n", src = self.src, homes = self.homes, LOW = super::elf::LOW));
+        writer.cuts.insert(2);
+        writer.theorems.push_str(&text);
+        Ok(())
+    }
 }
 
 struct Writer<'a> {
@@ -279,11 +431,11 @@ impl Writer<'_> {
     fn part(&mut self, part: &Part) -> Result<(usize, usize, u64), String> {
         let (p, layout) = (self.p, self.layout);
         let (id, names, start, end, after, proof) = match part {
-            Part::Whole { id, names, read } => {
+            Part::Whole { id, names, read, .. } => {
                 let after = self.readings[*read].names.ok_or_else(out_of_order)?;
                 (*id, *names, self.starts[*read], self.end(*read), after, "refl".to_string())
             }
-            Part::Then { id, names, first, rest } => {
+            Part::Then { id, names, first, rest, .. } => {
                 let (start, middle, between) = self.part(first)?;
                 let (rest_start, end, after) = self.part(rest)?;
                 if rest_start != middle { return Err(out_of_order()); }
@@ -292,7 +444,7 @@ impl Writer<'_> {
                     self.program(start), self.program(middle), first.id(), rest.id());
                 (*id, *names, start, end, after, proof)
             }
-            Part::Repeat { id, names, open, body, close } => {
+            Part::Repeat { id, names, open, body, close, .. } => {
                 let (body_start, body_end, after) = self.part(body)?;
                 if self.end(*open) != body_start || self.starts[*close] != body_end { return Err(out_of_order()); }
                 let start = self.starts[*open];
@@ -300,7 +452,7 @@ impl Writer<'_> {
                     self.program(start), self.program(body_end), body.id());
                 (*id, *names, start, self.end(*close), after, proof)
             }
-            Part::Branch { id, names, open, yes, middle, no, close } => {
+            Part::Branch { id, names, open, yes, middle, no, close, .. } => {
                 let (yes_start, yes_end, between) = self.part(yes)?;
                 let (no_start, no_end, after) = self.part(no)?;
                 if no.names() != between { return Err(miscounted()); }

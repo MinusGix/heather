@@ -248,15 +248,84 @@ divisibility interaction remains a structured resource refusal.
 
 The core returns either a checked integer model, a contradiction root plus the
 reachable typed derivation slice, or partial model/residual constraints with a
-resource reason. Omega now routes real-shadow survivors through this untrusted
-search and reconstructs the first simple-Cooper certificate slice with ordinary
-Heather lemmas; the kernel remains the only acceptance boundary. The
-deterministic 20,000-system boxed rail pins 11,074 models and 8,926
-contradictions, closing all 91 real-shadow misses. The minimized seed-680
-system is also kernel-certified end to end. Pugh's nightmare remains a direct
-search/DAG regression: its nested residue tree needs cached named proof sharing
-before it can be an economical kernel certificate instead of an exponentially
-duplicated source term.
+resource reason. Omega routes real-shadow survivors through this untrusted
+search; the kernel remains the only acceptance boundary. The deterministic
+20,000-system boxed rail pins 11,074 models and 8,926 contradictions, closing
+all 91 real-shadow misses.
+
+### Complete search (2026-10-28)
+
+The search is now complete over `≤`, `=`, `≠` and `∣` with no refusal shape
+left (`ResourceReason` is only step/case budgets and a repeated-conflict
+guard):
+
+- **Solved-form divisibility.** At most one divisibility constraint per
+  leading variable. A second one on the same variable is combined with the
+  first by the solve-div rule: `m ∣ a·x + p` and `n ∣ b·x + q` with
+  `g = gcd(a·n, b·m) = u·a·n + v·b·m` become `m·n ∣ u·n·(a·x + p) + v·m·(b·x + q)`
+  (still on `x`) and `g ∣ b·(a·x + p) − a·(b·x + q)`, which no longer mentions
+  `x`. When the variable has no admissible value left, `d ∣ a·x + p` drops
+  it: `gcd(a, d) ∣ p`.
+- **Cooper with a carried divisibility.** A conflict between a lower bound, an
+  upper bound and the variable's divisibility splits into
+  `lcm(A, A·d / gcd(A·d, |c|))` cases (left; the right rule is the mirror). Each
+  case carries the cut bound, the selected residue and the rewritten
+  divisibility.
+- **Disequalities.** `p ≠ 0` is checked against the model; a conflict splits
+  into `p + 1 ≤ 0` and `−p + 1 ≤ 0` only then.
+- Every split case is a **scope**. A derived node's scope is the deepest
+  scope among its premises, so a fact learned in one case is never visible in
+  a sibling, and a fact learned from the root alone is shared by every case.
+
+### Scoped DAG certificate (2026-10-28)
+
+`crates/elab/src/cutsat_cert.rs` writes the reachable derivation slice as one
+`have` per node, in id order, inside the block of the node's scope. `have` is
+opaque, so the kernel checks each node once and every later use is a variable
+(`issues/arithmetic-certificate-dag-sharing.md`, 2026-09-25 note). A node's
+statement is a row fact over the atom list:
+
+- `dot(ROW, atoms) <= BOUND` for `p ≤ 0`;
+- `cut_dvd(D, dot(ROW, atoms) + C)` for `D ∣ p`, where
+  `cut_dvd(d, v) = Exists(w. v = d·w)`;
+- `dot(ROW, atoms) + C ≠ 0` for `p ≠ 0`;
+- `False` for a conflict.
+
+Each rule is one named lemma in `lib/std/tactic/omega.hthr`: `divide_upper`
+(tighten), `cut_resolve`, `cut_dvd_combo` (solve-div, both outputs),
+`cut_dvd_drop`, `cut_constant_upper` / `cut_constant_dvd` /
+`cut_constant_diseq`, `cut_diseq` (the split), and `cut_cooper_left` /
+`cut_cooper_right`. A Cooper node's cases are a `Below(period, P)` chain
+(`below_zero`, `below_succ`), each case a `λ h_cut h_sel h_car => { … }`
+block. Closed arithmetic in side conditions (row splits, period divisibility
+witnesses, threshold comparisons) is `refl` or a literal comparison, decided
+by evaluation.
+
+The Cooper lemmas are proved once over abstract values
+(`cut_cooper_core`, `cut_cooper_{left,right}_values`) and instantiated at
+`dot` rows by `dot_pivot`. Two `omega` gotchas shaped them: Omega reads a
+`dot(…)` term specially, so lemmas whose context mentions symbolic `dot`
+terms must state the arithmetic over plain `Int`s; and an `Exists` witness's
+`.proof` has a β-redex type that Omega skips, so it is bound under an
+annotated `have` first.
+
+No certificate re-enters Omega. Pugh's nightmare and the seed-680 gap are
+kernel-checked through `omega` as library probes
+(`lib/_tests/std/tactic/omega_tests.hthr`); the cost of Pugh is dominated by
+elaborating the certificate, then the kernel gate, with the search itself
+negligible. The old nested-continuation route did not finish under the rail.
+
+### Disequalities reach CutSat (2026-10-28)
+
+Omega's frontend reflects a context `x ≠ y` at Int, and at Nat through
+`Int::ofnat_ne`, as `Relation::Ne`, with evidence
+`normalized_ne_value : dot(row) + c ≠ 0`. Omega's real shadow ignores these
+rows (they sit after every bounded fact, so Omega's assumption indices are
+unchanged); CutSat reads them with `assume_ne` and splits one only where its
+model lands on the excluded value. Before, each disequality was split up
+front and Omega re-ran on both sides, `2ⁿ` runs for `n` disequalities. The
+up-front split stays as the fallback for shapes CutSat is not given:
+`¬(d ∣ e)` still splits on its remainder.
 
 ## Why dark/grey shadows remain open
 

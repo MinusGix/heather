@@ -1,0 +1,95 @@
+// The decimal procedures run as the sources they lower to
+// (issues/native-decimal-io.md): each probe is a tool whose exit status
+// says whether the bytes it formatted are `decimal`'s, padded by
+// `pad_left`, or is the number it parsed, evaluated by `Source::tree` with
+// fuel past every loop's count, its silent steps stripped. Every loop pass
+// of the source's denotation costs the kernel tens of thousands of steps,
+// so the probes are small values at the edges the code turns on: zero, one
+// digit, a power of ten and the number below it, padding wider and
+// narrower than the digits, a stop at a byte not a digit. The widest words
+// and the overflow run as compiled code against GNU instead
+// (`crates/cli/tests/native_tools.rs`).
+import native_decimal;
+import native_build;
+import native_source;
+import decimal;
+import list;
+import bitvec;
+import itree;
+import linux_trees;
+import nat;
+
+// Exits 0 if `put_decimal_padded` stores `pad_left(width, ' ',
+// decimal(value))`, 2 if it stores another count of bytes, 1 if another
+// byte.
+fn formats(value, width: Nat) → Tool {
+    buffer(32, λ out => buffer_of(pad_left(width, BitVec::ofNat(32), decimal(value)), λ want => run(local(num(0), λ at =>
+        put_decimal_padded(out, at, num(value), num(width))
+        ++ when(at.get().differs(want.size()), exit(num(2)))
+        ++ for_count(at.get(), λ i => when(out.at(i.get()).differs(want.at(i.get())), exit(num(1))))
+        ++ exit(num(0))))))
+}
+
+// The status a run exits with, its loops' silent steps stripped.
+fn exits(t: Tool, status: Nat) → Type { ITree::next(Events::linux(), t.source().tree([], 24)) = Exits(BitVec::ofNat(status)) }
+
+fn passes(t: Tool) → Type { exits(t, 0) }
+
+theorem formats_zero(): passes(formats(0, 0)) { refl }
+theorem formats_seven(): passes(formats(7, 0)) { refl }
+theorem formats_ten(): passes(formats(10, 0)) { refl }
+theorem formats_ninety_nine(): passes(formats(99, 0)) { refl }
+theorem formats_hundred(): passes(formats(100, 0)) { refl }
+theorem formats_padded(): passes(formats(5, 3)) { refl }
+theorem formats_wider_than_width(): passes(formats(42, 1)) { refl }
+
+// The negated word printed with its sign: -7 as "-7".
+fn formats_signed() → Tool {
+    buffer(32, λ out => buffer_of([BitVec::ofNat(45), BitVec::ofNat(55)], λ want => run(local(num(0), λ at =>
+        put_signed_decimal(out, at, num(0) - num(7))
+        ++ when(at.get().differs(want.size()), exit(num(2)))
+        ++ for_count(at.get(), λ i => when(out.at(i.get()).differs(want.at(i.get())), exit(num(1))))
+        ++ exit(num(0))))))
+}
+
+theorem formats_negative(): passes(formats_signed()) { refl }
+
+// What `parse_decimal` reads of the bytes, from index 0: the value, where
+// it stopped, or its overflow flag, as the exit status.
+inductive Reading { Value, End, Overflow }
+
+fn parses(bytes: List<BitVec(8)>, what: Reading) → Tool {
+    buffer_of(bytes, λ text => run(local(num(0), λ value => local(num(0), λ end => local(num(0), λ overflow =>
+        parse_decimal(text, num(0), text.size(), value, end, overflow)
+        ++ exit(match what { Value => value.get(), End => end.get(), Overflow => overflow.get() }))))))
+}
+
+fn reads(bytes: List<BitVec(8)>, what: Reading, n: Nat) → Type { exits(parses(bytes, what), n) }
+
+theorem parses_digit(): reads(decimal(7), Value, 7) { refl }
+// It stops at the first byte not a digit: "12x" is 12, stopped at 2.
+theorem parses_prefix(): reads(decimal(12) ++ [BitVec::ofNat(120)], Value, 12) { refl }
+theorem parses_prefix_end(): reads(decimal(12) ++ [BitVec::ofNat(120)], End, 2) { refl }
+theorem parses_prefix_fits(): reads(decimal(12) ++ [BitVec::ofNat(120)], Overflow, 0) { refl }
+// No digit: zero, stopped where it began.
+theorem parses_none(): reads([BitVec::ofNat(43)], Value, 0) { refl }
+theorem parses_none_end(): reads([BitVec::ofNat(43)], End, 0) { refl }
+
+// The widest words, as compiled code: argv[1] read as a decimal, then
+// printed back as an unsigned and as a signed word, a line each; an
+// argument that is empty, not all digits, or past the largest word exits 1.
+// `crates/cli/tests/native_tools.rs` builds it and runs it on the edges the
+// probes above cannot afford.
+fn decimal_echo() → Tool {
+    buffer(32, λ text => buffer(48, λ out => run(local(num(0), λ len => local(num(0), λ value => local(num(0), λ end =>
+        local(num(0), λ overflow => local(num(0), λ at =>
+            arg(num(1), text, len)
+            ++ when(len.get().negative().or_else(num(32).below(len.get())), exit(num(1)))
+            ++ parse_decimal(text, num(0), len.get(), value, end, overflow)
+            ++ when(end.get().differs(len.get()).or_else(len.get().not()).or_else(overflow.get()), exit(num(1)))
+            ++ put_decimal(out, at, value.get()) ++ out.put(at.get(), num(10)) ++ at.set(at.get() + num(1))
+            ++ put_signed_decimal(out, at, value.get()) ++ out.put(at.get(), num(10)) ++ at.set(at.get() + num(1))
+            ++ write_all(stdout(), out, at.get())))))))))
+}
+
+fn decimal_echo_tool() → Tool { decimal_echo() }
