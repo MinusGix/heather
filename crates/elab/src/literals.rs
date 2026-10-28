@@ -45,6 +45,11 @@ fn scaled_names(lit: &ScaledLit) -> (&'static str, &'static str, &'static str) {
     if lit.hex { (HEX_TYPE, HEX_INTRO, HEX_RAT) } else { (DECIMAL_TYPE, DECIMAL_INTRO, DECIMAL_RAT) }
 }
 
+/// The module half of a resolved key: `char` for `char::ofNat`.
+fn key_module(key: &str) -> &str {
+    key.split_once("::").map_or(key, |(module, _)| module)
+}
+
 fn var(name: &str, span: Span) -> Expr {
     Expr {
         kind: ExprKind::Var(name.to_string()),
@@ -78,28 +83,50 @@ impl Elaborator {
             .is_some_and(|carrier| carrier.key == key)
     }
 
-    /// `char::ofNat(code, bool::decide_yes(refl))`. The proof is exactly the
+    /// Run `read` with names resolved as `module` reads them: the module
+    /// declaring a literal's spec type. A literal's generated call is that
+    /// module's term, not the client's: `char::ofNat`'s witness names
+    /// `bool::decide_yes` and a string's characters are `char` literals, so
+    /// resolving them in the client's scope demanded imports the client never
+    /// wrote, and the refusal then named the type's own module
+    /// (issues/literal-needs-module-names-wrong-module.md). The client's
+    /// scope already decided that the type is in reach; the call it expands
+    /// to sees what the type's module sees, as a parameter default does.
+    fn read_in_module<T>(&self, module: &str, read: impl FnOnce(&Self) -> T) -> T {
+        let Some(scope) = self.names.module_scope(module) else {
+            return read(self);
+        };
+        let scope = Rc::new(scope.clone());
+        let _scope = self.use_scope(&scope);
+        read(self)
+    }
+
+    /// `char::ofNat(code, bool::decide_yes(refl))`, and the module it reads
+    /// in (see [`Self::read_in_module`]). The proof is exactly the
     /// term the `decide` goal combinator writes; the kernel judges the `refl`
     /// by running the `Decide<char::scalar(n)>` instance at the code, and it
     /// can only go the `Inl` way because the lexer already refused every
     /// non-scalar payload.
-    fn char_intro(&self, c: char, span: Span) -> Option<Expr> {
+    fn char_intro(&self, c: char, span: Span) -> Option<(Expr, String)> {
         let intro = self.key_of(CHAR_INTRO)?;
-        let yes = self.key_of(DECIDE_YES)?;
+        let module = key_module(&intro).to_string();
+        let yes = self.read_in_module(&module, |s| s.key_of(DECIDE_YES))?;
         let code = Expr {
             kind: ExprKind::Num(u64::from(u32::from(c)).into()),
             span,
         };
         let proof = call(var(&yes, span), vec![Expr { kind: ExprKind::Refl, span }], span);
-        Some(call(var(&intro, span), vec![code, proof], span))
+        Some((call(var(&intro, span), vec![code, proof], span), module))
     }
 
     /// `string::String([…])` — the record over the *collection literal* of the
     /// characters. Reusing `[…]` is the point: the `List<Char>` body is built
     /// by the protocol `list` already registers, so a string literal adds no
-    /// list-building route of its own.
-    fn string_intro(&self, text: &str, span: Span) -> Option<Expr> {
+    /// list-building route of its own. Read in `string`'s scope, which is
+    /// what lets the characters build without `char` imported here.
+    fn string_intro(&self, text: &str, span: Span) -> Option<(Expr, String)> {
         let ctor = self.key_of(STRING_TYPE)?;
+        let module = key_module(&ctor).to_string();
         let chars = text
             .chars()
             .map(|c| Expr {
@@ -111,7 +138,7 @@ impl Elaborator {
             kind: ExprKind::CollectionLit(chars),
             span,
         };
-        Some(call(var(&ctor, span), vec![body], span))
+        Some((call(var(&ctor, span), vec![body], span), module))
     }
 
     /// The class rung, shared by both literals and shaped on
@@ -227,10 +254,10 @@ impl Elaborator {
         lvl: &Level,
     ) -> R<Term> {
         if self.expected_is(cx, expected, CHAR_TYPE, e.span) {
-            let intro = self
+            let (intro, module) = self
                 .char_intro(c, e.span)
                 .ok_or_else(|| self.literal_needs_module(CHAR_TYPE, e.span))?;
-            return self.elab_check(cx, &intro, expected, lvl);
+            return self.read_in_module(&module, |s| s.elab_check(cx, &intro, expected, lvl));
         }
         if let Some(result) =
             self.literal_class(cx, "CharLiteral", "ofChar", e, expected, lvl, e.span)
@@ -245,10 +272,10 @@ impl Elaborator {
     /// A character literal in inference position: `Char`, the only type it
     /// names by itself.
     pub(crate) fn elab_char_infer(&self, cx: &Cx, c: char, e: &Expr) -> R<(Term, Type, Level)> {
-        let intro = self
+        let (intro, module) = self
             .char_intro(c, e.span)
             .ok_or_else(|| self.literal_needs_module(CHAR_TYPE, e.span))?;
-        self.elab_infer(cx, &intro)
+        self.read_in_module(&module, |s| s.elab_infer(cx, &intro))
     }
 
     /// A string literal in checking position.
@@ -261,10 +288,10 @@ impl Elaborator {
         lvl: &Level,
     ) -> R<Term> {
         if self.expected_is(cx, expected, STRING_TYPE, e.span) {
-            let intro = self
+            let (intro, module) = self
                 .string_intro(text, e.span)
                 .ok_or_else(|| self.literal_needs_module(STRING_TYPE, e.span))?;
-            return self.elab_check(cx, &intro, expected, lvl);
+            return self.read_in_module(&module, |s| s.elab_check(cx, &intro, expected, lvl));
         }
         if let Some(result) =
             self.literal_class(cx, "StringLiteral", "ofString", e, expected, lvl, e.span)
@@ -283,10 +310,10 @@ impl Elaborator {
         text: &str,
         e: &Expr,
     ) -> R<(Term, Type, Level)> {
-        let intro = self
+        let (intro, module) = self
             .string_intro(text, e.span)
             .ok_or_else(|| self.literal_needs_module(STRING_TYPE, e.span))?;
-        self.elab_infer(cx, &intro)
+        self.read_in_module(&module, |s| s.elab_infer(cx, &intro))
     }
 
     /// `rat::Decimal::lit(mant, up, down)` (or `HexFloat`'s), the exponent
