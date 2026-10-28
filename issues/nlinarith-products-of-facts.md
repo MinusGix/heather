@@ -1,6 +1,6 @@
 ---
 title: Products of facts and squares in linarith (nlinarith)
-status: open
+status: closed
 labels: [tactics,arith,proofs]
 area: tactics
 milestone: [tac-arith]
@@ -54,3 +54,4 @@ Done when the two probes above are `nlinarith` successes, the refusals in
 
 ## Log
 - 2026-10-28: Design chosen (docs/nonlinear-arithmetic-design.md): one certificate, with nlinarith as the first search. Compared against SOS by SDP (deferred to [[sos-certificate-oracle]], offline and writing hints), polyrith-style oracles (`ring(h)` already searches for equalities), CAD (declined: no certificate, not constructive at `CReal`), and interval branch-and-bound (complementary, [[interval-variable-boxes]]). The body above now records the build.
+- 2026-10-28: Built (design §4). `nlinarith(facts…)` in crates/elab/src/linarith.rs: at a field, products of the goal's assumed negation and the written facts (then the context's, at most 12 rows), squares from `ring`'s reading (`FieldReading::squares`) and from even monomials, the goal read back from a refutation (`nlin_le_of_refute`, `Rat::lt_of_not_le`; a `<` goal at `CReal` stays direct); at `Int`/`Nat`, each product a `let` from `nlin_int_*`/`nlin_nat_*` plus a `ring` bridge to monomials, `omega` deciding under `λ __nlin_g`. Lemmas: `OrderedField::sq_nonneg` (constructive), `Rat::`/`CReal::`/`Int::sq_nonneg`, `Int::mul_nonneg`. Probes in `lib/_tests/std/tactic/linarith_tests.hthr` (the two refusals this issue named are successes now). `Rat::mul_nonneg`, `mul_nonpos_l`, `mul_nonpos_r` and `mul_nonneg_of_nonpos` are `nlinarith(ha, hb)`. Closing.

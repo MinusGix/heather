@@ -293,6 +293,9 @@ struct Fact {
     level: Level,
     shown: String,
     written: Option<usize>,
+    /// `nlinarith`'s assumed negation of the goal, bound by the certificate's
+    /// own `λ __nlin_g`, not an alias (its term and type are placeholders).
+    bound: bool,
 }
 
 /// A positive factor a row may be multiplied by: the denominator `d` of a
@@ -321,7 +324,25 @@ struct Use {
     by: Vec<usize>,
     form: Linear,
     strict: bool,
+    /// One of `nlinarith`'s parts instead (`Problem::extras`).
+    extra: Option<usize>,
 }
+
+/// A part `nlinarith` adds (docs/nonlinear-arithmetic-design.md §4): the
+/// product of two rows' differences, or a square, as the certificate writes
+/// it, the proof that it is on the right side of zero, and its form.
+struct Extra {
+    source: String,
+    proof: String,
+    strict: bool,
+    form: Linear,
+    /// The facts the proof cites.
+    facts: Vec<usize>,
+}
+
+/// The most rows `nlinarith` multiplies pairwise: the products grow with
+/// the square of it, and the elimination's input with them.
+const MAX_PRODUCT_ROWS: usize = 12;
 
 /// `form·d` with `r·d` read as `1`: a monomial with `r` loses one `r`, any
 /// other is multiplied by `d`.
@@ -376,6 +397,15 @@ struct Problem<'a> {
     factors: Vec<Factor>,
     /// The reciprocals whose positivity by construction is a fact already.
     constructed: Vec<usize>,
+    /// `nlinarith`'s products and squares, rebuilt for each search.
+    extras: Vec<Extra>,
+    /// Whether the context's facts are multiplied too (`nlinarith`'s second
+    /// pass), not only the written ones and the goal's negation.
+    multiply_context: bool,
+    /// The carrier's lemma reading `a < b` off a refutation of `b <= a`,
+    /// where its order is decided (`Rat`): `nlinarith` may then multiply the
+    /// negation of a strict goal too.
+    decided_lt: Option<String>,
 }
 
 fn term_alias(i: usize) -> String {
@@ -441,7 +471,7 @@ impl Problem<'_> {
             for (atom, term, ty, level, shown) in pending {
                 self.constructed.push(atom);
                 let alias = format!("__lin_h{}", self.facts.len());
-                self.add_fact(elab, cx, Fact { alias, term, ty, level, shown, written: None }, span);
+                self.add_fact(elab, cx, Fact { alias, term, ty, level, shown, written: None, bound: false }, span);
             }
         }
         self.factors.clear();
@@ -504,7 +534,7 @@ impl Problem<'_> {
     /// A form and the same form multiplied by each set of at most
     /// `MAX_SCALINGS` factors whose reciprocals it mentions, one at a time.
     fn uses(&self, row: Option<usize>, form: Linear, strict: bool) -> Result<Vec<Use>, String> {
-        let mut out = vec![Use { row, by: Vec::new(), form, strict }];
+        let mut out = vec![Use { row, by: Vec::new(), form, strict, extra: None }];
         let mut next = 0;
         while next < out.len() {
             if out[next].by.len() < MAX_SCALINGS {
@@ -524,7 +554,7 @@ impl Problem<'_> {
                         continue;
                     }
                     let form = scale(&out[next].form, factor)?;
-                    out.push(Use { row, by, form, strict });
+                    out.push(Use { row, by, form, strict, extra: None });
                 }
             }
             next += 1;
@@ -532,11 +562,14 @@ impl Problem<'_> {
         Ok(out)
     }
 
-    /// Every fact's row with its scalings.
+    /// Every fact's row with its scalings, and `nlinarith`'s parts.
     fn fact_uses(&self) -> Result<Vec<Use>, String> {
         let mut out = Vec::new();
         for (i, row) in self.rows.iter().enumerate() {
             out.extend(self.uses(Some(i), self.difference(row.lo, row.hi)?, row.strict)?);
+        }
+        for (e, extra) in self.extras.iter().enumerate() {
+            out.push(Use { row: None, by: Vec::new(), form: extra.form.clone(), strict: extra.strict, extra: Some(e) });
         }
         Ok(out)
     }
@@ -621,6 +654,17 @@ impl Problem<'_> {
             for j in &u.by {
                 cite(self.factors[*j].fact);
             }
+            if let Some(e) = u.extra {
+                let extra = &self.extras[e];
+                extra.facts.iter().for_each(|f| cite(*f));
+                let scale_lemma = if extra.strict { "lin_scale_lt" } else { "lin_scale_le" };
+                let mut part = (extra.source.clone(), extra.proof.clone());
+                if k != 1 {
+                    part = (format!("{k} * {}", part.0), format!("linarith::{scale_lemma}<{c}>({k}, {}, {}, {})", part.0, num_pos(k), part.1));
+                }
+                parts.push((part.0, part.1, extra.strict));
+                continue;
+            }
             let Some(i) = u.row else {
                 multiplier.push(match (u.by.is_empty(), k) {
                     (true, _) => (format!("{k}"), num_pos(k)),
@@ -689,6 +733,197 @@ impl Problem<'_> {
             }
         };
         Ok((source, cited))
+    }
+
+    /// An atom as the certificate writes it: the alias of its term.
+    fn atom_source(&mut self, atom: usize) -> Result<String, String> {
+        let tm = self.reading.atom_terms().get(atom).cloned().ok_or("internal: an atom out of the reading's table")?;
+        let i = self.term(&tm)?;
+        if self.forms[i] != (BTreeMap::from([(FieldReading::atom_monomial(atom), 1)]), 0) {
+            return Err("internal: an atom's term did not read as that atom".into());
+        }
+        Ok(term_alias(i))
+    }
+
+    /// A form as source at the carrier, over its atoms' aliases.
+    fn form_source(&mut self, form: &Linear) -> Result<String, String> {
+        let mut parts = Vec::new();
+        for (m, c) in form.0.clone() {
+            let mut factors = Vec::new();
+            for (atom, e) in m.iter().enumerate() {
+                for _ in 0..*e {
+                    factors.push(self.atom_source(atom)?);
+                }
+            }
+            let monomial = factors.join(" * ");
+            let body = if c.abs() == 1 { monomial } else { format!("{} * {monomial}", c.unsigned_abs()) };
+            parts.push(if c < 0 { format!("-({body})") } else { format!("({body})") });
+        }
+        if form.1 != 0 || parts.is_empty() {
+            parts.push(if form.1 < 0 { format!("-{}", form.1.unsigned_abs()) } else { form.1.to_string() });
+        }
+        Ok(format!("({})", parts.join(" + ")))
+    }
+
+    /// `nlinarith`'s parts (docs/nonlinear-arithmetic-design.md §4.2): the
+    /// product of every pair of the rows it multiplies — the goal's assumed
+    /// negation, the written facts, and in the second pass the context's —
+    /// each row with itself included; and a square for each base the terms
+    /// write squared (`t * t`) and for each monomial whose exponents are all
+    /// even.
+    fn add_products(&mut self) -> Result<(), String> {
+        self.extras.clear();
+        let c = self.carrier.clone();
+        let mut chosen: Vec<usize> = Vec::new();
+        for class in 0..3 {
+            for (i, row) in self.rows.iter().enumerate() {
+                let fact = &self.facts[row.fact];
+                let of = if fact.bound {
+                    0
+                } else if fact.written.is_some() {
+                    1
+                } else {
+                    2
+                };
+                if of == class && (class < 2 || self.multiply_context) {
+                    chosen.push(i);
+                }
+            }
+        }
+        chosen.truncate(MAX_PRODUCT_ROWS);
+        // Each chosen row's difference as written, its proof, strictness,
+        // form and fact.
+        let mut rows = Vec::new();
+        for &i in &chosen {
+            let row = &self.rows[i];
+            let source = format!("({} + -{})", term_alias(row.hi), term_alias(row.lo));
+            rows.push((source, self.part(row), row.strict, self.difference(row.lo, row.hi)?, row.fact));
+        }
+        let weak = |r: &(String, String, bool, Linear, usize)| {
+            if r.2 { format!("linarith::lin_weaken<{c}>({}, {})", r.0, r.1) } else { r.1.clone() }
+        };
+        for (x, p) in rows.iter().enumerate() {
+            for q in &rows[x..] {
+                let form = FieldReading::product(&p.3, &q.3)?;
+                let (proof, strict) = if p.2 && q.2 {
+                    (format!("linarith::nlin_mul_lt<{c}>({}, {}, {}, {})", p.0, q.0, p.1, q.1), true)
+                } else {
+                    (format!("linarith::nlin_mul_le<{c}>({}, {}, {}, {})", p.0, q.0, weak(p), weak(q)), false)
+                };
+                let facts = if p.4 == q.4 { vec![p.4] } else { vec![p.4, q.4] };
+                self.extras.push(Extra { source: format!("({} * {})", p.0, q.0), proof, strict, form, facts });
+            }
+        }
+        let mut bases: Vec<Linear> = self.reading.squares().to_vec();
+        let mut monomials: Vec<Vec<u32>> = self.forms.iter().flat_map(|f| f.0.keys().cloned()).collect();
+        monomials.sort();
+        monomials.dedup();
+        for m in monomials {
+            if m.iter().any(|e| *e > 0) && m.iter().all(|e| e % 2 == 0) {
+                let root: Vec<u32> = m.iter().map(|e| e / 2).collect();
+                let base = (BTreeMap::from([(root, 1)]), 0);
+                if !bases.contains(&base) {
+                    bases.push(base);
+                }
+            }
+        }
+        for base in bases {
+            let source = self.form_source(&base)?;
+            let form = FieldReading::product(&base, &base)?;
+            self.extras.push(Extra {
+                source: format!("({source} * {source})"),
+                proof: format!("linarith::nlin_sq<{c}>({source})"),
+                strict: false,
+                form,
+                facts: Vec::new(),
+            });
+        }
+        Ok(())
+    }
+
+    /// `nlinarith`'s refutation: with `hi − lo` assumed on the right side of
+    /// zero (the goal's negation, which the certificate binds as
+    /// `__nlin_g`), the facts and their products are contradictory. The
+    /// expression proves `False` under that binder.
+    fn refute(&mut self, lo: usize, hi: usize, strict: bool, names: &mut usize) -> Result<Option<(String, Vec<usize>)>, String> {
+        let fact = self.facts.len();
+        self.facts.push(Fact {
+            alias: "__nlin_g".into(),
+            term: Term::Zero,
+            ty: (*self.carrier_ty).clone(),
+            level: self.carrier_level.clone(),
+            shown: "the goal's negation".into(),
+            written: None,
+            bound: true,
+        });
+        let lemma = if strict { "lin_lt_part" } else { "lin_le_part" };
+        self.rows.push(Row { lo, hi, strict, lemma, args: (lo, hi), fact });
+        let found = self.add_products().and_then(|()| {
+            let uses = self.fact_uses()?;
+            match eliminate(Self::fm_rows(&uses))? {
+                Some(lambda) => self.write(lo, hi, false, &uses, &lambda, names).map(Some),
+                None => Ok(None),
+            }
+        });
+        self.rows.pop();
+        self.facts.pop();
+        self.extras.clear();
+        Ok(found?.map(|(proof, mut cited)| {
+            cited.retain(|f| *f != fact);
+            (proof, cited)
+        }))
+    }
+
+    /// `nlinarith`'s certificate for the goal (design §2): a refutation
+    /// wherever one proves the goal, so its negation is multiplied like a
+    /// fact; a strict goal at a carrier whose order is not decided (`CReal`)
+    /// keeps the direct form, its negation used linearly.
+    fn prove_nonlinear(&mut self, goal: &Goal) -> Result<Option<(String, Vec<usize>)>, String> {
+        let mut names = 0;
+        let c = self.carrier.clone();
+        let le_of = |a: usize, b: usize, body: String| {
+            format!("linarith::nlin_le_of_refute<{c}>({}, {}, λ __nlin_g => {body})", term_alias(a), term_alias(b))
+        };
+        Ok(match *goal {
+            Goal::Order { a, b, strict: false } => self.refute(b, a, true, &mut names)?.map(|(p, cited)| (le_of(a, b, p), cited)),
+            Goal::Order { a, b, strict: true } => {
+                self.add_products()?;
+                let direct = self.order(a, b, true, &mut names)?;
+                self.extras.clear();
+                match (direct, self.decided_lt.clone()) {
+                    (Some(found), _) => Some(found),
+                    (None, Some(lemma)) => self.refute(b, a, false, &mut names)?.map(|(p, cited)| {
+                        (format!("{lemma}(x := {}, y := {}, h := λ __nlin_g => {p})", term_alias(a), term_alias(b)), cited)
+                    }),
+                    (None, None) => None,
+                }
+            }
+            Goal::Same { a, b } => {
+                let Some((up, mut cited)) = self.refute(b, a, true, &mut names)? else {
+                    return Ok(None);
+                };
+                let Some((down, more)) = self.refute(a, b, true, &mut names)? else {
+                    return Ok(None);
+                };
+                cited.extend(more.into_iter().filter(|f| !cited.contains(f)).collect::<Vec<_>>());
+                let (up, down) = (le_of(a, b, up), le_of(b, a, down));
+                Some((format!("linarith::lin_same_of_le<{c}>({}, {}, {up}, {down})", term_alias(a), term_alias(b)), cited))
+            }
+            Goal::NotLt { a, b } => self.refute(a, b, true, &mut names)?.map(|(p, cited)| (format!("λ __nlin_g => {p}"), cited)),
+            Goal::Absurd => {
+                if self.terms.is_empty() {
+                    return Ok(None);
+                }
+                self.add_products()?;
+                let uses = self.fact_uses()?;
+                let found = match eliminate(Self::fm_rows(&uses))? {
+                    Some(lambda) => Some(self.write(0, 0, false, &uses, &lambda, &mut names)?),
+                    None => None,
+                };
+                self.extras.clear();
+                found
+            }
+        })
     }
 
     /// A certificate for the goal from the facts so far.
@@ -778,10 +1013,45 @@ struct Integral<'a> {
     /// `t`, which `ring` proves from the equation (`(y * z).den.int() =
     /// q * r` makes `(a * e) * (y * z).den.int()` the monomial `a·e·q·r`).
     defs: Vec<(bool, usize, Linear, String)>,
+    /// `nlinarith` (docs/nonlinear-arithmetic-design.md §4.4): the orders it
+    /// multiplies pairwise, and how the certificate reads the goal back from
+    /// a refutation, the source around `λ __nlin_g => …`.
+    nonlinear: bool,
+    orders: Vec<IntOrder>,
+    refute: Option<(IntOrder, String, String)>,
+}
+
+/// An order at `Int` or `Nat` that `nlinarith` multiplies: `lo <= hi` or
+/// `lo < hi` over the sides' indices, and its proof as source (a negated
+/// fact goes through its carrier's `le_of_not_lt`/`lt_of_not_le`).
+#[derive(Clone)]
+struct IntOrder {
+    nat: bool,
+    lo: usize,
+    hi: usize,
+    strict: bool,
+    proof: String,
 }
 
 fn integral_alias(nat: bool, i: usize) -> String {
     format!("__lin_{}{i}", if nat { 'n' } else { 'i' })
+}
+
+/// `a − b`.
+fn form_sub(a: &Linear, b: &Linear) -> Result<Linear, String> {
+    let (mut terms, constant) = a.clone();
+    for (m, c) in &b.0 {
+        let entry = terms.entry(m.clone()).or_insert(0);
+        *entry = entry.checked_sub(*c).ok_or_else(overflow)?;
+    }
+    terms.retain(|_, c| *c != 0);
+    Ok((terms, constant.checked_sub(b.1).ok_or_else(overflow)?))
+}
+
+/// `a + b`.
+fn form_add(a: &Linear, b: &Linear) -> Result<Linear, String> {
+    let negated: Linear = (b.0.iter().map(|(m, c)| (m.clone(), -c)).collect(), -b.1);
+    form_sub(a, &negated)
 }
 
 impl Integral<'_> {
@@ -871,8 +1141,157 @@ impl Integral<'_> {
             lets.push_str(&format!("let {name}: ({} = {source}) = {ring}; ", term_alias(i)));
             args.push(name);
         }
+        if self.nonlinear {
+            self.products(&mut lets, &mut args)?;
+        }
+        if let Some((_, open, close)) = &self.refute {
+            args.push("__nlin_g".into());
+            return Ok(format!("{open}{{ {lets}omega({}) }}{close}", args.join(", ")));
+        }
         let omega = if args.is_empty() { "omega".to_string() } else { format!("omega({})", args.join(", ")) };
         Ok(if lets.is_empty() { omega } else { format!("{{ {lets}{omega} }}") })
+    }
+
+    fn side_index(&self, tm: &Rc<Term>, nat: bool) -> Option<usize> {
+        self.sides.iter().position(|(t, n, _, _)| t == tm && *n == nat)
+    }
+
+    /// `ty` as an order `nlinarith` multiplies, proved by `proof`: `a <= b`,
+    /// `a < b`, or the negation of one, which is the other the other way.
+    fn order_of(&mut self, elab: &Elaborator, cx: &Cx, ty: &Type, proof: &str) -> Option<IntOrder> {
+        let (direct, (nat, strict, l, r)) = match crate::omega_cert::integral_order(elab, ty) {
+            Some(order) => (true, order),
+            None => (false, crate::omega_cert::integral_order(elab, &negated_domain(elab, cx, ty)?)?),
+        };
+        self.side(&l, nat).ok()?;
+        self.side(&r, nat).ok()?;
+        let (li, ri) = (self.side_index(&l, nat)?, self.side_index(&r, nat)?);
+        let module = if nat { "nat::Nat" } else { "int::Int" };
+        let (tl, tr) = (term_alias(li), term_alias(ri));
+        Some(match (direct, strict) {
+            (true, _) => IntOrder { nat, lo: li, hi: ri, strict, proof: proof.into() },
+            // `¬(l < r)` is `r <= l`; `¬(l <= r)` is `r < l`.
+            (false, true) => IntOrder { nat, lo: ri, hi: li, strict: false, proof: format!("{module}::le_of_not_lt({tl}, {tr}, {proof})") },
+            (false, false) => IntOrder { nat, lo: ri, hi: li, strict: true, proof: format!("{module}::lt_of_not_le({tr}, {tl}, {proof})") },
+        })
+    }
+
+    /// The goal's negation as an order assumed under `__nlin_g`, and the
+    /// source that reads the goal back from a proof of `False` under it.
+    fn refutation(&mut self, elab: &Elaborator, cx: &Cx, goal: &Type) -> Option<(IntOrder, String, String)> {
+        let g = |nat, lo, hi, strict| IntOrder { nat, lo, hi, strict, proof: "__nlin_g".into() };
+        if let Some((nat, strict, a, b)) = crate::omega_cert::integral_order(elab, goal) {
+            let (ai, bi) = (self.side_index(&a, nat)?, self.side_index(&b, nat)?);
+            let module = if nat { "nat::Nat" } else { "int::Int" };
+            let (ta, tb) = (term_alias(ai), term_alias(bi));
+            return Some(if strict {
+                // `a < b` from a refutation of `b <= a`.
+                (g(nat, bi, ai, false), format!("{module}::lt_of_not_le({ta}, {tb}, λ __nlin_g => "), ")".into())
+            } else {
+                // `a <= b` from a refutation of `b < a`.
+                (g(nat, bi, ai, true), format!("{module}::le_of_not_lt({tb}, {ta}, λ __nlin_g => "), ")".into())
+            });
+        }
+        let (nat, strict, l, r) = crate::omega_cert::integral_order(elab, &negated_domain(elab, cx, goal)?)?;
+        let (li, ri) = (self.side_index(&l, nat)?, self.side_index(&r, nat)?);
+        Some((g(nat, li, ri, strict), "λ __nlin_g => ".into(), String::new()))
+    }
+
+    /// `nlinarith`'s lets: each pair of orders multiplied, stated over the
+    /// sides and, by `ring`, over monomials; and at `Int` each square the
+    /// terms write and each monomial with only even exponents, the same way.
+    fn products(&self, lets: &mut String, args: &mut Vec<String>) -> Result<(), String> {
+        let mut orders: Vec<&IntOrder> = self.refute.iter().map(|r| &r.0).chain(&self.orders).collect();
+        orders.truncate(MAX_PRODUCT_ROWS);
+        let t = term_alias;
+        let tag = |o: &IntOrder| if o.strict { "lt" } else { "le" };
+        let diff = |o: &IntOrder| -> Result<(Linear, Vec<String>), String> {
+            let (hi, mut used) = self.defined(&self.sides[o.hi].2, o.nat)?;
+            let (lo, more) = self.defined(&self.sides[o.lo].2, o.nat)?;
+            used.extend(more.into_iter().filter(|d| !used.contains(d)).collect::<Vec<_>>());
+            Ok((form_sub(&hi, &lo)?, used))
+        };
+        let ring = |used: &[String]| if used.is_empty() { "ring".to_string() } else { format!("ring({})", used.join(", ")) };
+        let mut k = 0;
+        for (x, p) in orders.iter().enumerate() {
+            for q in &orders[x..] {
+                if p.nat != q.nat {
+                    continue;
+                }
+                let nat = p.nat;
+                let alias = |j| integral_alias(nat, j);
+                let args_of = format!("{}, {}, {}, {}, {}, {}", t(p.lo), t(p.hi), t(q.lo), t(q.hi), p.proof, q.proof);
+                if nat {
+                    // `a·d + b·c <= a·c + b·d` for `a <= b`, `c <= d`; a
+                    // strict fact's low side is `a + 1`.
+                    let mut used: Vec<String> = Vec::new();
+                    let mut form = |i: usize, succ: bool| -> Result<Linear, String> {
+                        let (f, more) = self.defined(&self.sides[i].2, true)?;
+                        used.extend(more.into_iter().filter(|d| !used.contains(d)).collect::<Vec<_>>());
+                        Ok((f.0, f.1 + Z::from(succ)))
+                    };
+                    let (fa, fb, fc, fd) = (form(p.lo, p.strict)?, form(p.hi, false)?, form(q.lo, q.strict)?, form(q.hi, false)?);
+                    let low = |o: &IntOrder| if o.strict { format!("({} + 1)", t(o.lo)) } else { t(o.lo) };
+                    let (a, b, c, d) = (low(p), t(p.hi), low(q), t(q.hi));
+                    let left = format!("{a} * {d} + {b} * {c}");
+                    let right = format!("{a} * {c} + {b} * {d}");
+                    let left_form = form_add(&FieldReading::product(&fa, &fd)?, &FieldReading::product(&fb, &fc)?)?;
+                    let right_form = form_add(&FieldReading::product(&fa, &fc)?, &FieldReading::product(&fb, &fd)?)?;
+                    lets.push_str(&format!(
+                        "let __nlin_p{k}: ({left} <= {right}) = linarith::nlin_nat_{}_{}({args_of}); \
+                         let __nlin_l{k}: ({left} = {}) = {}; let __nlin_r{k}: ({right} = {}) = {}; ",
+                        tag(p),
+                        tag(q),
+                        integral_form_source(&left_form, true, &alias)?,
+                        ring(&used),
+                        integral_form_source(&right_form, true, &alias)?,
+                        ring(&used),
+                    ));
+                    args.extend([format!("__nlin_p{k}"), format!("__nlin_l{k}"), format!("__nlin_r{k}")]);
+                } else {
+                    let ((dp, mut used), (dq, more)) = (diff(p)?, diff(q)?);
+                    used.extend(more.into_iter().filter(|d| !used.contains(d)).collect::<Vec<_>>());
+                    let product = format!("({} - {}) * ({} - {})", t(p.hi), t(p.lo), t(q.hi), t(q.lo));
+                    let rel = if p.strict && q.strict { "<" } else { "<=" };
+                    let form = FieldReading::product(&dp, &dq)?;
+                    lets.push_str(&format!(
+                        "let __nlin_p{k}: (int::OfNat(0) {rel} {product}) = linarith::nlin_int_{}_{}({args_of}); \
+                         let __nlin_q{k}: ({product} = {}) = {}; ",
+                        tag(p),
+                        tag(q),
+                        integral_form_source(&form, false, &alias)?,
+                        ring(&used),
+                    ));
+                    args.extend([format!("__nlin_p{k}"), format!("__nlin_q{k}")]);
+                }
+                k += 1;
+            }
+        }
+        let mut bases: Vec<Linear> = self.ints.squares().to_vec();
+        let mut monomials: Vec<Vec<u32>> =
+            self.sides.iter().filter(|side| !side.1).flat_map(|side| side.2.0.keys().cloned()).collect();
+        monomials.sort();
+        monomials.dedup();
+        for m in monomials {
+            if m.iter().any(|e| *e > 0) && m.iter().all(|e| e % 2 == 0) {
+                let base = (BTreeMap::from([(m.iter().map(|e| e / 2).collect::<Vec<u32>>(), 1)]), 0);
+                if !bases.contains(&base) {
+                    bases.push(base);
+                }
+            }
+        }
+        let alias = |j| integral_alias(false, j);
+        for (j, base) in bases.iter().enumerate() {
+            let e = integral_form_source(base, false, &alias)?;
+            let form = FieldReading::product(base, base)?;
+            lets.push_str(&format!(
+                "let __nlin_s{j}: (int::OfNat(0) <= ({e}) * ({e})) = linarith::nlin_int_sq({e}); \
+                 let __nlin_t{j}: (({e}) * ({e}) = {}) = ring; ",
+                integral_form_source(&form, false, &alias)?
+            ));
+            args.extend([format!("__nlin_s{j}"), format!("__nlin_t{j}")]);
+        }
+        Ok(())
     }
 
     /// The sides as read, for a refusal.
@@ -916,11 +1335,14 @@ impl Drop for Depth<'_> {
 }
 
 impl Elaborator {
-    /// `linarith` and `linarith(h₁, …, hₖ)` in checking position.
-    pub(crate) fn elab_linarith(&self, cx: &Cx, hyps: &[Expr], goal: &Type, lvl: &Level, span: Span) -> R<Term> {
+    /// `linarith` and `linarith(h₁, …, hₖ)` in checking position; with
+    /// `nonlinear`, `nlinarith`, which multiplies the facts too
+    /// (docs/nonlinear-arithmetic-design.md §4).
+    pub(crate) fn elab_linarith(&self, cx: &Cx, hyps: &[Expr], goal: &Type, lvl: &Level, span: Span, nonlinear: bool) -> R<Term> {
         let err = |msg: String| ElabError::Elab { msg, span };
+        let tactic = if nonlinear { "nlinarith" } else { "linarith" };
         if self.key_of("linarith::lin_finish_le").is_none() {
-            return Err(err("`linarith` requires its certificate library; add `import linarith;`".into()));
+            return Err(err(format!("`{tactic}` requires its certificate library; add `import linarith;`")));
         }
         let mut written = Vec::new();
         for hyp in hyps {
@@ -966,7 +1388,7 @@ impl Elaborator {
             facts.into_iter().find_map(|ty| if at_field(ty) { Some(false) } else { integral(ty).then_some(true) }).unwrap_or(false)
         };
         if route {
-            return self.linarith_integral(cx, hyps, &written, &context, goal, lvl, span);
+            return self.linarith_integral(cx, hyps, &written, &context, goal, lvl, span, nonlinear);
         }
         let carrier = goal_reading
             .as_ref()
@@ -1007,7 +1429,13 @@ impl Elaborator {
             facts: Vec::new(),
             factors: Vec::new(),
             constructed: Vec::new(),
+            extras: Vec::new(),
+            multiply_context: false,
+            decided_lt: None,
         };
+        if nonlinear && carrier_shown == "Rat" && self.key_of("rat::Rat::lt_of_not_le").is_some() {
+            problem.decided_lt = Some("rat::Rat::lt_of_not_le".into());
+        }
         let goal_shape = match &goal_reading {
             Some(r) if spell(&r.stated().carrier) == carrier_shown => {
                 let s = r.stated();
@@ -1030,6 +1458,7 @@ impl Elaborator {
                 level: level.clone(),
                 shown: written_name(i),
                 written: Some(i),
+                bound: false,
             };
             if !problem.add_fact(self, cx, fact, span) {
                 return Err(err(format!(
@@ -1041,7 +1470,8 @@ impl Elaborator {
         }
         problem.add_denominators(self, cx, span);
         // The written facts first; failing that, every fact in context too.
-        let mut found = problem.prove(&goal_shape).map_err(err)?;
+        let prove = |problem: &mut Problem| if nonlinear { problem.prove_nonlinear(&goal_shape) } else { problem.prove(&goal_shape) };
+        let mut found = prove(&mut problem).map_err(err)?;
         if found.is_none() {
             let before = problem.facts.len();
             for (name, _) in &context {
@@ -1059,12 +1489,14 @@ impl Elaborator {
                     level,
                     shown: name.clone(),
                     written: None,
+                    bound: false,
                 };
                 problem.add_fact(self, cx, fact, span);
             }
             if problem.facts.len() > before {
                 problem.add_denominators(self, cx, span);
-                found = problem.prove(&goal_shape).map_err(err)?;
+                problem.multiply_context = true;
+                found = prove(&mut problem).map_err(err)?;
             }
         }
         let Some((source, cited)) = found else {
@@ -1072,7 +1504,7 @@ impl Elaborator {
             // cross-multiplication) may follow there with products as
             // monomials, as `ring` falls back to the unfolded equation.
             if integral(goal)
-                && let Ok(proof) = self.linarith_integral(cx, hyps, &written, &context, goal, lvl, span)
+                && let Ok(proof) = self.linarith_integral(cx, hyps, &written, &context, goal, lvl, span, nonlinear)
             {
                 return Ok(proof);
             }
@@ -1104,10 +1536,26 @@ impl Elaborator {
                 Goal::Absurd => "",
                 _ => " and the goal's negation",
             };
+            let products = if nonlinear {
+                let negated = match goal_shape {
+                    Goal::Order { strict: true, .. } if problem.decided_lt.is_none() => {
+                        format!(", the goal's negation not among them: at `{carrier_shown}` a refutation does not prove `<`")
+                    }
+                    Goal::Absurd => String::new(),
+                    _ => ", the goal's negation among them".into(),
+                };
+                format!(
+                    " with the pairwise products of the written facts{negated}, and the squares the terms show; \
+                     a square or product it does not try can be given as a fact (`{carrier_shown}::sq_nonneg(a - b)`)"
+                )
+            } else {
+                let multiplies = problem.forms.iter().any(|f| f.0.keys().any(|m| m.iter().sum::<u32>() >= 2));
+                let hint = if multiplies { "; `nlinarith` also multiplies the facts and tries squares" } else { "" };
+                format!(" (products and other non-linear terms are atoms{hint})")
+            };
             return Err(err(format!(
-                "`linarith` could not prove `{shown_goal}`: no nonnegative combination of the facts{negation} \
-                 is a contradiction over `{carrier_shown}` (products and other non-linear terms are atoms); \
-                 the facts read as [{}]{goal_read}",
+                "`{tactic}` could not prove `{shown_goal}`: no nonnegative combination of the facts{negation} \
+                 is a contradiction over `{carrier_shown}`{products}; the facts read as [{}]{goal_read}",
                 read.join(", ")
             )));
         };
@@ -1133,9 +1581,9 @@ impl Elaborator {
             inner.aliases.push(alias(fact.alias.clone(), Rc::new(fact.term.clone()), fact.ty.clone(), fact.level.clone()));
         }
         let expr = parse_expr(&source)
-            .map_err(|detail| err(format!("`linarith` wrote a certificate that does not parse: {detail}\n  generated: {source}")))?;
+            .map_err(|detail| err(format!("`{tactic}` wrote a certificate that does not parse: {detail}\n  generated: {source}")))?;
         let proof = self.generated_scope(|me| me.elab_check(&inner, &expr, goal, lvl)).map_err(|error| {
-            err(format!("{error}\n  generated `linarith` certificate: {source}"))
+            err(format!("{error}\n  generated `{tactic}` certificate: {source}"))
         })?;
         // A written fact the certificate does not cite still faces the
         // kernel, as `ring`'s do.
@@ -1169,8 +1617,10 @@ impl Elaborator {
         goal: &Type,
         lvl: &Level,
         span: Span,
+        nonlinear: bool,
     ) -> R<Term> {
         let err = |msg: String| ElabError::Elab { msg, span };
+        let tactic = if nonlinear { "nlinarith" } else { "linarith" };
         let spell = |ty: &Type| self.spell_type_clean(cx, ty).unwrap_or_else(|| self.display_type(cx, ty));
         let carrier = |source: &str| -> R<(Type, Level)> {
             let ty = parse_ty(source).map_err(err)?;
@@ -1184,8 +1634,14 @@ impl Elaborator {
             sides: Vec::new(),
             facts: Vec::new(),
             defs: Vec::new(),
+            nonlinear,
+            orders: Vec::new(),
+            refute: None,
         };
         problem.sides_of(self, cx, goal);
+        if nonlinear {
+            problem.refute = problem.refutation(self, cx, goal);
+        }
         for (i, (term, ty, level)) in written.iter().enumerate() {
             let shown = match &hyps[i].kind {
                 heather_syntax::ExprKind::Var(name) => name.clone(),
@@ -1200,7 +1656,10 @@ impl Elaborator {
             }
             let alias = format!("__lin_h{i}");
             problem.definition(self, cx, ty, &alias);
-            problem.facts.push(Fact { alias, term: term.clone(), ty: ty.clone(), level: level.clone(), shown, written: Some(i) });
+            if nonlinear && let Some(order) = problem.order_of(self, cx, ty, &alias) {
+                problem.orders.push(order);
+            }
+            problem.facts.push(Fact { alias, term: term.clone(), ty: ty.clone(), level: level.clone(), shown, written: Some(i), bound: false });
         }
         let attempt = |problem: &Integral| -> Result<Term, (ElabError, String)> {
             let source = problem.source().map_err(|e| (err(e), String::new()))?;
@@ -1243,10 +1702,20 @@ impl Elaborator {
         let mut outcome = attempt(&problem);
         if outcome.is_err() && !self.attempt.goal_arena.restart_requested() {
             let products = problem.sides.iter().filter(|side| side.3).count();
-            for (_, ty) in context {
+            let orders = problem.orders.len();
+            for (name, ty) in context {
                 problem.sides_of(self, cx, ty);
+                // A context fact is multiplied only while the products stay
+                // few; a written one is already an order.
+                if nonlinear
+                    && problem.orders.len() < MAX_PRODUCT_ROWS
+                    && !written.iter().any(|(_, wty, _)| wty == ty)
+                    && let Some(order) = problem.order_of(self, cx, ty, name)
+                {
+                    problem.orders.push(order);
+                }
             }
-            if problem.sides.iter().filter(|side| side.3).count() > products {
+            if problem.sides.iter().filter(|side| side.3).count() > products || problem.orders.len() > orders {
                 outcome = attempt(&problem);
             }
         }
@@ -1256,8 +1725,8 @@ impl Elaborator {
             let first = message.lines().next().unwrap_or_default();
             let first = first.split("; ").next().unwrap_or_default();
             err(format!(
-                "`linarith` could not prove `{}` at `Int`/`Nat`: `omega` found no proof with `ring`'s monomials as \
-                 atoms; the sides read as [{}]\n  omega: {first}\n  generated `linarith` certificate: {source}",
+                "`{tactic}` could not prove `{}` at `Int`/`Nat`: `omega` found no proof with `ring`'s monomials as \
+                 atoms; the sides read as [{}]\n  omega: {first}\n  generated `{tactic}` certificate: {source}",
                 spell(goal),
                 problem.shown(self, cx).join(", ")
             ))

@@ -177,16 +177,20 @@ refusal says that `nlinarith` may prove it.
 
 ### 4.2 The products
 
-- **Which facts multiply.** The written facts and the negated goal (where
-  §2 allows it) are multiplied pairwise, each with itself included. That is
-  `k(k+1)/2` products for `k` rows. Context facts join linearly in the second
-  pass, as in `linarith`, and are not multiplied. With `k` small the
-  products stay few, and a client widens the product set by writing the fact.
-- **Squares.** The reader records every `t * t`, `t.npow(2)` and `t ^ 2` it
-  meets in the goal and the written facts, before normalization, because
-  `(a − b)²` normalizes to a shape that no longer shows the square. Each
-  monomial in the problem whose exponents are all even is also offered as the
-  square of its root. Both are cheap and need no search.
+- **Which facts multiply.** The goal's negation (where §2 allows it) and
+  the written facts are multiplied pairwise, each with itself included. That
+  is `k(k+1)/2` products for `k` rows. When those find nothing, the second
+  pass adds the context's facts, as `linarith` does, and multiplies them too,
+  so `nlinarith` with no arguments works. Either way at most 12 rows are
+  multiplied (`MAX_PRODUCT_ROWS`), taking the negation first, then the
+  written facts, then the context's.
+- **Squares.** The reader (`FieldReading::squares`) records the base of every
+  product whose two factors read as one nonconstant polynomial (`t * t`,
+  `(a - b) * (a - b)`), before normalization, because `(a − b)²` normalizes
+  to a shape that no longer shows the square. Each monomial in the problem
+  whose exponents are all even is also offered as the square of its root.
+  Both are cheap and need no search. `npow` is an atom to `ring`, so
+  `x.npow(2)` is not read as a square.
 - **Degree.** Products are of two parts, so the degree is two in the facts.
   A third factor comes from a hint, which is a fact and therefore multiplies.
   A `degree` knob waits for a client (Mathlib's default is two as well).
@@ -197,27 +201,49 @@ search treats each new monomial as a variable.
 
 ### 4.3 The certificate's text
 
-Each product part is a generic lemma in `lib/std/tactic/linarith.hthr`
-(`nlin_mul_le_le`, `nlin_mul_lt_lt`, `nlin_mul_lt_le`, `nlin_sq`), stated over
-the parts `0 <= hi + -lo` so that the existing `lin_add_*`, `lin_scale_*` and
-`ring` identity are reused unchanged. The refutation finish is one more lemma
-over `le_of_not_lt`: `λ g. lin_finish_false(…)` with `g`'s part among the
-parts.
+The parts are generic lemmas in `lib/std/tactic/linarith.hthr`, stated over
+the differences `hi + -lo` that `linarith` already writes, so the existing
+`lin_scale_*`, `lin_add_*` and the one `ring` identity are reused unchanged:
+`nlin_mul_le` (a strict part weakened first by `lin_weaken`), `nlin_mul_lt`,
+and `nlin_sq`. A product's form is its two parts' forms multiplied out
+(`FieldReading::product`); a square's base is written over the atoms' aliases
+(`Problem::form_source`). `nlin_le_of_refute` is `le_of_not_lt`: the
+certificate for `a <= b` is
+
+```text
+linarith::nlin_le_of_refute<C>(a, b, λ __nlin_g => <certificate of False>)
+```
+
+with `__nlin_g: b < a` a row like a written fact, its part
+`lin_lt_part(b, a, __nlin_g)`. `¬(a < b)` is the `λ` alone, `a ≈ b` two
+refutations, and a strict goal at `Rat` goes through `Rat::lt_of_not_le`.
 
 ### 4.4 At `Int` and `Nat`
 
 `linarith`'s integral route hands `omega` the facts and one `ring` bridge per
-multiplying side (linarith-design §8). `nlinarith` adds each product part as
-one more `let` fact, `let __nlin_p0: (OfNat(0) <= p₀ * p₁) = Int::mul_nonneg(…)`,
-together with the bridge that states its side as monomials. `omega` then
-decides as before. A product with the negated goal goes under
-`Int::lt_of_not_le` or `le_of_not_lt` with goal `False`, since `omega` negates
+multiplying side (linarith-design §8). `nlinarith` adds, for each pair of
+orders among the goal's negation and the facts (`<=`, `<`, and their
+negations through `le_of_not_lt`/`lt_of_not_le`), two more `let`s:
+
+```text
+let __nlin_p0: (int::OfNat(0) <= (b - a) * (d - c)) = linarith::nlin_int_le_le(a, b, c, d, h₁, h₂);
+let __nlin_q0: ((b - a) * (d - c) = <monomials>) = ring;
+```
+
+`omega` reads the product as one atom by its spelling, the same in both, and
+the bridge ties it to the monomials. At `Int` each square the terms write
+(and each monomial with only even exponents) gets the same pair, from
+`nlin_int_sq`. A goal `a <= b` or `a < b` (or a negated one) is read back
+through `Int::le_of_not_lt`/`lt_of_not_le` (`Nat::` at `Nat`) with `omega`
+proving `False` under `λ __nlin_g`, since `omega` negates the goal
 internally and cannot be handed a product of its own negation.
 
 At `Nat` a part cannot be a difference, because subtraction truncates. The
-product of `a <= b` and `c <= d` is stated additively as
-`a·d + b·c <= a·c + b·d` (a new `Nat::mul_le_cross`). A strict fact is its
-`+ 1` form.
+product of `a <= b` and `c <= d` is stated with its four terms on the sides
+where they are positive, `a·d + b·c <= a·c + b·d` (`nlin_nat_le_le`). A strict
+fact's low side is `a + 1` (`nlin_nat_lt_le` etc.), so a product with a
+strict fact stays strong enough to cancel a positive factor. No squares at
+`Nat`: its atoms are nonnegative to `omega` already.
 
 ### 4.5 Library lemmas the round adds
 
@@ -227,15 +253,15 @@ product of `a <= b` and `c <= d` is stated additively as
   `0 <= x·x` by `mul_nonneg`, which contradicts `h` again. No decision on the
   sign of `x` is made.
 - Concrete forms that a hint can name without a section: `Rat::sq_nonneg`,
-  `CReal::sq_nonneg`, `Int::sq_nonneg` and `Int::mul_nonneg` (neither `Int`
-  lemma exists yet), plus `Nat::mul_le_cross`.
+  `CReal::sq_nonneg`, `Int::sq_nonneg`, and `Int::mul_nonneg`.
 
 ### 4.6 Refusal
 
-The refusal lists the facts as they were read (as `linarith`'s does), the
-products it tried, and, at `CReal` with a `<` goal, that the goal was not
-multiplied and why. It suggests the hint spelling `sq_nonneg(…)` and
-`mul_nonneg(h₁, h₂)`.
+The refusal lists the facts as they were read, as `linarith`'s does, says
+that the pairwise products and the shown squares were tried, and at `CReal`
+with a `<` goal says that the goal's negation was not multiplied and why. It
+gives the hint spelling (`CReal::sq_nonneg(a - b)`). `linarith`'s own refusal
+names `nlinarith` when its reading has a product in it.
 
 ## 5. Sums of squares: the offline oracle
 

@@ -145,4 +145,65 @@ theorem lin_same_of_le(a, b: A, hab: a <= b, hba: b <= a): a ≈ b { StrictOrder
 
 theorem lin_not_lt_of_le(a, b: A, h: b <= a): ¬(a < b) { A.not_lt_of_le(b, a, h) }
 
+// ---------------------------------------------------------------------------
+// `nlinarith` (docs/nonlinear-arithmetic-design.md): products of parts and
+// squares are parts too, and `a <= b` is read back from a refutation of
+// `b < a`, so the goal's negation can be multiplied like a fact.
+
+theorem nlin_mul_le(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x * y { OrderedField::mul_nonneg(x, y, hx, hy) }
+
+theorem nlin_mul_lt(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x * y { A.mul_pos(x, y, hx, hy) }
+
+theorem nlin_sq(x: A): A.unit <= x * x { OrderedField::sq_nonneg(x) }
+
+theorem nlin_le_of_refute(a, b: A, h: ¬(b < a)): a <= b { A.le_of_not_lt(a, b, h) }
+
+}
+
+// ---------------------------------------------------------------------------
+// `nlinarith` at `Int` and `Nat`: the product of two facts' differences,
+// stated over the facts' own sides, for `omega` to meet next to `ring`'s
+// statement of it over monomials.
+
+theorem nlin_int_le_le(a, b, c, d: Int, h1: a <= b, h2: c <= d): OfNat(0) <= (b - a) * (d - c) {
+    (b - a).mul_nonneg(d - c, omega(h1), omega(h2))
+}
+
+theorem nlin_int_lt_le(a, b, c, d: Int, h1: a < b, h2: c <= d): OfNat(0) <= (b - a) * (d - c) {
+    (b - a).mul_nonneg(d - c, omega(h1), omega(h2))
+}
+
+theorem nlin_int_le_lt(a, b, c, d: Int, h1: a <= b, h2: c < d): OfNat(0) <= (b - a) * (d - c) {
+    (b - a).mul_nonneg(d - c, omega(h1), omega(h2))
+}
+
+theorem nlin_int_lt_lt(a, b, c, d: Int, h1: a < b, h2: c < d): OfNat(0) < (b - a) * (d - c) {
+    let scaled = OfNat(0).mul_lt_mono_r(b - a, d - c, omega(h1), omega(h2));
+    rewrite(sym((d - c).zero_mul()), scaled)
+}
+
+theorem nlin_int_sq(x: Int): OfNat(0) <= x * x { x.sq_nonneg() }
+
+// At `Nat` a difference truncates, so the product `(b - a)·(d - c) ≥ 0` is
+// stated with its four terms on the sides they are positive on.
+theorem nlin_nat_le_le(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * d + b * c <= a * c + b * d {
+    let e: (b * d + a * c = (b * c + a * d) + (b - a) * (d - c)) = {
+        let rb: (b = (b - a) + a) = sym(a.sub_add_cancel(b, h1));
+        let rd: (d = (d - c) + c) = sym(c.sub_add_cancel(d, h2));
+        ring(rb, rd)
+    };
+    omega(e)
+}
+
+// A strict fact `a < b` is `a + 1 <= b`, which keeps the product strict.
+theorem nlin_nat_lt_le(a, b, c, d: Nat, h1: a < b, h2: c <= d): (a + 1) * d + b * c <= (a + 1) * c + b * d {
+    nlin_nat_le_le(a + 1, b, c, d, omega(h1), h2)
+}
+
+theorem nlin_nat_le_lt(a, b, c, d: Nat, h1: a <= b, h2: c < d): a * d + b * (c + 1) <= a * (c + 1) + b * d {
+    nlin_nat_le_le(a, b, c + 1, d, h1, omega(h2))
+}
+
+theorem nlin_nat_lt_lt(a, b, c, d: Nat, h1: a < b, h2: c < d): (a + 1) * d + b * (c + 1) <= (a + 1) * (c + 1) + b * d {
+    nlin_nat_le_le(a + 1, b, c + 1, d, omega(h1), omega(h2))
 }

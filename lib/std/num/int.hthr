@@ -1166,6 +1166,11 @@ theorem Int::mul_le_mono_r(self a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): a *
         k, hk, h)
 }
 
+// A product of nonnegatives is nonnegative: `0 ≤ a` scaled by `b`.
+theorem Int::mul_nonneg(self a, b: Int, ha: OfNat(0) <= a, hb: OfNat(0) <= b): OfNat(0) <= a * b {
+    rewrite(sym(b.zero_mul()), OfNat(0).mul_le_mono_r(a, b, ha, hb))
+}
+
 theorem Int::mul_le_mono_l(self a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): k * a <= k * b {
     rewrite(k.mul_comm(a), k.mul_comm(b),
         a.mul_le_mono_r(b, k, h, hk))
@@ -1213,6 +1218,22 @@ theorem Int::le_neg(self a: Int): (b: Int) → a <= b → -b <= -a {
                     },
                 NegSucc(_) => λ p => p,
             },
+    }
+}
+
+// A square is nonnegative: a nonpositive `a` squares as `(-a)·(-a)`.
+theorem Int::sq_nonneg(self a: Int): OfNat(0) <= a * a {
+    match OfNat(0).le_total(a) {
+        Inl(up) => a.mul_nonneg(a, up, up),
+        Inr(down) => {
+            let flipped: (OfNat(0) <= -a) = a.le_neg(OfNat(0), down);
+            let same = calc {
+                -a * -a = -(a * -a) := a.mul_neg_l(-a),
+                    = -(-(a * a)) := prelude::cong(a.mul_neg_r(a)),
+                    = a * a := (a * a).neg_neg(),
+            };
+            rewrite(sym(same), (-a).mul_nonneg(-a, flipped, flipped))
+        },
     }
 }
 

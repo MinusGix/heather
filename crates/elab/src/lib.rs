@@ -5405,13 +5405,14 @@ impl Elaborator {
                 self.elab_ring(cx, args, expected, lvl, e.span)
             }
             // `linarith` proves a linear order goal at an ordered field from
-            // the facts, up to its `≈` (docs/linarith-design.md).
+            // the facts, up to its `≈` (docs/linarith-design.md); `nlinarith`
+            // multiplies the facts too (docs/nonlinear-arithmetic-design.md).
             ExprKind::Var(name)
-                if name == "linarith"
+                if matches!(name.as_str(), "linarith" | "nlinarith")
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                self.elab_linarith(cx, &[], expected, lvl, e.span)
+                self.elab_linarith(cx, &[], expected, lvl, e.span, name == "nlinarith")
             }
             ExprKind::App {
                 head,
@@ -5419,14 +5420,15 @@ impl Elaborator {
                 named,
                 explicit: false,
                 goal_oriented: false,
-            } if matches!(&head.kind, ExprKind::Var(name) if name == "linarith")
-                && !self.shadowed(cx, "linarith")
-                && self.ctor_here_expected(cx, "linarith", expected).is_none() =>
+            } if let ExprKind::Var(name) = &head.kind
+                && matches!(name.as_str(), "linarith" | "nlinarith")
+                && !self.shadowed(cx, name)
+                && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
                 if !named.is_empty() {
-                    return err("`linarith` takes its facts positionally", e.span);
+                    return err(format!("`{name}` takes its facts positionally"), e.span);
                 }
-                self.elab_linarith(cx, args, expected, lvl, e.span)
+                self.elab_linarith(cx, args, expected, lvl, e.span, name == "nlinarith")
             }
             // `positivity` is `:= infer`'s proposition search run as a tactic,
             // with `omega` as the fallback at every subgoal the evidence rules

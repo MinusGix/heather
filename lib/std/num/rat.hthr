@@ -276,7 +276,7 @@ theorem Rat::add_le_mono_r(self x, y, z: Rat, h: x <= y): x + z <= y + z {
 theorem Rat::mul_nonneg({x, y: Rat}, hx: 0 <= x, hy: 0 <= y): 0 <= x * y {
     let ha: (0 <= x.num) = omega(Int::zero_mul(x.den.int()));
     let hb: (0 <= y.num) = omega(Int::zero_mul(y.den.int()));
-    omega(Int::mul_le_mono_r(0, x.num, y.num, ha, hb), Int::zero_mul(y.num))
+    nlinarith(ha, hb)
 }
 
 // ---------------------------------------------------------------------------
@@ -385,19 +385,19 @@ theorem Rat::recip_respects({x, x2: Rat}, hx: x ≈ x2): x.recip() ≈ x2.recip(
 theorem Rat::mul_nonpos_l({x, y: Rat}, hx: x <= 0, hy: 0 <= y): x * y <= 0 {
     let ha: (x.num <= 0) = omega(Int::zero_mul(x.den.int()));
     let hb: (0 <= y.num) = omega(Int::zero_mul(y.den.int()));
-    omega(Int::mul_le_mono_r(x.num, 0, y.num, ha, hb), Int::zero_mul(y.num), Int::zero_mul((x * y).den.int()))
+    nlinarith(ha, hb)
 }
 
 theorem Rat::mul_nonpos_r({x, y: Rat}, hx: 0 <= x, hy: y <= 0): x * y <= 0 {
     let ha: (0 <= x.num) = omega(Int::zero_mul(x.den.int()));
     let hb: (y.num <= 0) = omega(Int::zero_mul(y.den.int()));
-    omega(Int::mul_le_mono_r(y.num, 0, x.num, hb, ha), Int::zero_mul(x.num), x.num.mul_comm(y.num), Int::zero_mul((x * y).den.int()))
+    nlinarith(ha, hb)
 }
 
 theorem Rat::mul_nonneg_of_nonpos({x, y: Rat}, hx: x <= 0, hy: y <= 0): 0 <= x * y {
     let ha: (x.num <= 0) = omega(Int::zero_mul(x.den.int()));
-    let hb: (0 <= -y.num) = omega(Int::zero_mul(y.den.int()));
-    omega(Int::mul_le_mono_r(x.num, 0, -y.num, ha, hb), Int::zero_mul(-y.num), x.num.mul_neg_r(y.num), Int::zero_mul((x * y).den.int()))
+    let hb: (y.num <= 0) = omega(Int::zero_mul(y.den.int()));
+    nlinarith(ha, hb)
 }
 
 theorem Rat::recip_parts_nonneg(a: Int, d: Pos<Nat>, h: 0 <= a): 0 <= Rat::recip_parts(a, d) {
@@ -1731,6 +1731,10 @@ instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
 // Its integers named too (std/ordered_field's `OrderedFieldOfInt`), which is
 // what `linarith`'s certificates are checked against.
 instance OrderedFieldOfInt<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {}
+
+// A square is nonnegative (`OrderedField::sq_nonneg`), named at the carrier
+// so a hint can cite it: `nlinarith(Rat::sq_nonneg(a - b))`.
+theorem Rat::sq_nonneg(self x: Rat): 0 <= x * x { OrderedField::sq_nonneg(x) }
 
 // Subtraction is monotone in its left argument and antitone in its right,
 // and both directions cancel.
