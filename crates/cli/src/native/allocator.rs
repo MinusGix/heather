@@ -1,6 +1,8 @@
-//! `Allocator::greedy` (native_alloc) over a source read back as numbers
+//! `Greedy::colouring` (native_alloc) over a source read back as numbers
 //! (`Source::spelled`): the words' homes `write-elf` compiles with, spelled
-//! as `Homes::spelled` spells them. The allocator is untrusted, as every
+//! as `Homes::spelled` spells them. `Greedy::assign` checks the colouring
+//! and falls back to the slots; that check is the parts' (`elf`), so a
+//! colouring it refuses gives way to the fork's homes there. The allocator is untrusted, as every
 //! read is, since the compile checks the homes it is given
 //! (`Source::allocation_ok`); it runs here because evaluating it on the
 //! fork keeps every value it forces until the read returns, so its memory
@@ -12,6 +14,8 @@
 
 /// Registers in the home pool (`home_pool`).
 const POOL: u64 = 6;
+/// What a loop's body weighs more than what holds it (`Greedy::standard`).
+const LOOP_WEIGHT: u64 = 7;
 
 #[derive(Clone)]
 struct Node { output: u64, reads: Vec<u64> }
@@ -181,8 +185,11 @@ fn sets_within(a: &[Vec<u64>], b: &[Vec<u64>]) -> bool {
     a.iter().enumerate().all(|(i, set)| { let other = b.get(i).map_or(&[][..], |o| &o[..]); set.iter().all(|id| holds(other, *id)) })
 }
 
-/// `Homes::slots`: every word in its slot, the least closed loop sets, in
-/// at most `Source::closure_fuel` passes.
+/// `Homes::slots`: every word in its slot, the least closed loop sets
+/// (`Source::loop_sets`), in at most `Source::closure_fuel` passes. Where
+/// the growth stops is not checked here, as `Source::closed_or_wide` checks
+/// it: sets the check refuses leave the colouring refused too, and the
+/// fork's homes stand in (`elf`).
 fn slots(words: u64, main: &Stmt) -> Homes {
     let mut homes = Homes { of: vec![], loops: vec![] };
     for _ in 0..words * words + 1 {
@@ -245,7 +252,7 @@ fn bump(weights: &mut Vec<u64>, id: u64, by: u64) {
     put(weights, id as usize, w + by, 0);
 }
 
-/// `Stmt::weights`: reads and writes counted, a loop's body seven more than
+/// `Stmt::weights`: reads and writes counted, a loop's body `LOOP_WEIGHT` more than
 /// what holds it.
 fn weights(s: &Stmt, scale: u64, w: &mut Vec<u64>) {
     match s {
@@ -259,7 +266,7 @@ fn weights(s: &Stmt, scale: u64, w: &mut Vec<u64>) {
         }
         Stmt::Then(first, rest) => { weights(first, scale, w); weights(rest, scale, w); }
         Stmt::Branch(condition, yes, no) => { bump(w, *condition, scale); weights(yes, scale, w); weights(no, scale, w); }
-        Stmt::Repeat(body, again) => { bump(w, *again, scale + 7); weights(body, scale + 7, w); }
+        Stmt::Repeat(body, again) => { bump(w, *again, scale + LOOP_WEIGHT); weights(body, scale + LOOP_WEIGHT, w); }
         Stmt::Exit(status) => bump(w, *status, scale),
         Stmt::Arg { index, len } => { bump(w, *index, scale); bump(w, *len, scale); }
     }
@@ -293,7 +300,7 @@ fn colour(order: &[u64], entry: &[u64], rows: &[Vec<bool>], homes: &mut Homes) {
     }
 }
 
-/// `Allocator::greedy`'s homes of the spelled source, spelled as
+/// `Greedy::standard().colouring`'s homes of the spelled source, spelled as
 /// `Homes::spelled`; `None` when the source does not read back as a
 /// builder's.
 pub(super) fn homes_spelled(spelled: &[u64]) -> Option<Vec<u64>> {
