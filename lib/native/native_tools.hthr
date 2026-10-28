@@ -1,6 +1,7 @@
 // cat and the tools past it (docs/native-real-programs-plan.md, rounds 1,
-// 5, 6 and 7): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, `echo` and
-// `yes STR` over the command line, and `cat FILE…`, written with the builder
+// 5, 6, 7 and 9): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, `echo` and
+// `yes STR` over the command line, `cat FILE…`, and `wc [-clw]` and
+// `head -n N` over decimals (`native_decimal`), written with the builder
 // (`native_build`) and lowered to sources `heather write-elf` compiles.
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the

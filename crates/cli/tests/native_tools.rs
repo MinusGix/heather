@@ -19,12 +19,17 @@ use heather_cli::showcase;
 /// One `write-elf` of `symbol` through the image store native_cat.rs uses,
 /// over the gate's world as cat's is (the gate builds it, as the suite's CLI
 /// image warmup), in the stale lanes replaying images an earlier build wrote.
-fn write_tool(symbol: &str, output: &Path) { write_program("lib/native/native_tools.hthr", symbol, output) }
+fn write_tool(symbol: &str, output: &Path) { write_program("lib/native/native_tools.hthr", symbol, output, false) }
 
-/// `write_tool` of a program in another module.
-fn write_program(module: &str, symbol: &str, output: &Path) {
+/// `write_tool` of a program in any module; `both_allocators` has
+/// `write-elf` run native_alloc's allocator on its fork beside its own and
+/// refuse unless they agree (affordable only for a small tool).
+fn write_program(module: &str, symbol: &str, output: &Path, both_allocators: bool) {
     let root = showcase::repo_root();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
+    if both_allocators {
+        cmd.env("HEATHER_ELF_ALLOCATOR", "both");
+    }
     cmd.current_dir(&root)
         .args(["write-elf", module, symbol, "-o"])
         .arg(output)
@@ -92,7 +97,8 @@ fn gnu_tr() -> Command {
 fn compiled_tr_runs_as_gnu_tr() {
     let dir = scratch("tr");
     let binary = dir.join("tr");
-    write_tool("tr_upper_tool", &binary);
+    // write-elf's allocator proposes native_alloc's homes.
+    write_program("lib/native/native_tools.hthr", "tr_upper_tool", &binary, true);
     let file = std::fs::read(&binary).unwrap();
     assert_eq!(&file[..4], b"\x7fELF");
 
@@ -459,7 +465,7 @@ fn compiled_head_takes_its_count_as_gnu_head() {
 fn compiled_decimals_round_trip_the_widest_words() {
     let dir = scratch("decimal_echo");
     let binary = dir.join("decimal_echo");
-    write_program("lib/_tests/native/native_decimal_tests.hthr", "decimal_echo_tool", &binary);
+    write_program("lib/_tests/native/native_decimal_tests.hthr", "decimal_echo_tool", &binary, false);
 
     // Zero, every power of ten and the number below it, the signed edges,
     // the largest word, and random words.

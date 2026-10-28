@@ -225,13 +225,21 @@ under the contract. The calling convention is filed with the moves
 allocators with the class.
 
 **Where the allocator runs.** The greedy allocator, evaluated in the
-kernel, costs more than one declaration's fuel on cat. So write-elf
-evaluates it on its fork, where the read fuel is large. It spells the result
-(`Homes::spelled`) as a literal `{p}_homes()` in the certificate. The
-certificate proves `{p}_allocated(): allocation_ok(homes).IsTrue()` by
-evaluation, so the kernel sees only the check. `native_cat_compiled` spells
-cat's homes in the same way. Moving the heuristic into Rust would cost
-nothing in trust (`issues/native-allocator-cost.md`).
+kernel, costs more than one declaration's fuel on cat. So write-elf first
+evaluated it on its fork, where the read fuel is large; but a read keeps
+every value it forces until it returns, and the allocator's memory grew
+with the tool, past the 8 GiB rail on `wc` (round 9,
+`issues/native-decimal-io.md`). write-elf now runs the same allocator in
+Rust over the source it reads back (`crates/cli/src/native/allocator.rs`),
+step for step and its lists in the same orders, so it proposes the same
+homes; `HEATHER_ELF_ALLOCATOR=both` runs the fork's beside it and refuses
+unless they agree, which `native_tools.rs` does for `tr`. This costs nothing
+in trust: the homes are spelled (`Homes::spelled`) as a literal `{p}_homes()`
+in the certificate, which proves `{p}_allocated():
+allocation_ok(homes).IsTrue()` (by parts, §7), so the kernel sees only the
+check. `native_alloc.hthr` stays the allocator's definition, the one an
+allocator class would hold. `native_cat_compiled` spells cat's homes in the
+same way.
 
 ## 7. Costs, as shapes
 
@@ -254,11 +262,9 @@ nothing in trust (`issues/native-allocator-cost.md`).
   program (`issues/native-tool-certificate-budget.md`).
 - **The greedy allocator** makes a few liveness passes (one per level of
   loop-set propagation) and one graph pass. Each is linear in the program,
-  and a write costs its live set times the word count. It runs only on
-  write-elf's fork, and the compile tests check with slot homes for the
-  same reason. Its memory, not the kernel's fuel, is the wall for tools
-  past cat FILE's size: twice cat's body runs the fork out of memory in
-  `{p}_homes_spelled` (`issues/native-allocator-cost.md`).
+  and a write costs its live set times the word count. Evaluated, its
+  memory grows with that work, so write-elf runs it in Rust, and the
+  compile tests check with slot homes.
 - **write-elf** gains one `{p}_o_{id}` definition per part (that part's
   live-out). The joins take it, and its cost per part is the live-in of one
   statement.
