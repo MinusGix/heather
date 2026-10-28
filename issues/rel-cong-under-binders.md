@@ -1,6 +1,6 @@
 ---
 title: Let rel_cong and rel_derive cross binders through the pointwise relation
-status: open
+status: closed
 labels: [setoids,relations,tactics]
 area: tactics
 milestone: [tac-general]
@@ -27,3 +27,7 @@ asks for, `PreservesRelation(Pointwise(R), R, λ g. f(…, g, …))`
 The builder generates source text over aliases made at the goal's depth, so
 the part to design is aliases below a binder (the rewrite states such
 evidence in an extended context and keeps nothing, §10.4).
+
+## Log
+
+- 2026-10-28: Done (docs/equation-rewrite-design.md §10.6). `rel_cong`/`rel_derive` cross an application whose sides differ in one argument, a λ on each side: the λs' shared binders give `Pointwise(…(R))`, the consumer's evidence is §10.2's `PreservesRelation(Pointwise(R), R, λ g. f(…, g, …))` (so `MonoidRel::range_pointwise` answers both tactics), and the proof argument is `λ z…. p` with `p` the bodies walked below the binders. Aliases below a binder: the builder pushes the binder, walks and elaborates the body's text *there*, restores its context, and aliases the resulting λ term at the outer depth, so nothing that mentions the binder survives; missing evidence is closed over the binders and applied back (§10.4's obligation shape). Probes in `lib/_tests/std/algebra/big_operator_tests.hthr` (nested, triangle, antidiag, open semiring, bound-mentioning context with and without `on ?compatibility`, an unexplained change refused, `rel_derive` through a sum).

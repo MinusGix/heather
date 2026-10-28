@@ -1,6 +1,6 @@
 ---
 title: Instantiate an unapplied law whose left side is headed by a class operation
-status: open
+status: closed
 labels: [tactics,rewriting]
 area: tactics
 milestone: [tac-general]
@@ -26,3 +26,7 @@ Wanted: key such a pattern by the operation's *instance* (the class
 argument the goal's node carries) or let the first argument that is not a
 pattern variable decide, with the 256-candidate cap; and η-contract
 `λ z. x(z)` patterns.
+
+## Log
+
+- 2026-10-28: Done (docs/equation-rewrite-design.md §6.1). `same_key` keys a pattern headed by one of its own variables by its first argument that is no variable (refusing an all-variable pattern, as before); `match_pattern` resolves a class-dictionary argument left unbound once the arguments before it are, and refuses the candidate when nothing resolves (`c + ∑ …` binds `*` to `+`); a `λ z. g(z)` pattern matches as `g` (η) against the candidate's η-contraction or the λ itself. Works at an open semiring and at `Rat`, at the root and below a binder. `big_operator.hthr`'s `range_mul_range` and `range_cauchy` are now one `rewrite(Semiring::…, …)` each; its other `range_cong` proofs consult the bound `k < n` and stay. Probes in `big_operator_tests.hthr`, with a wrong-operation negative control.

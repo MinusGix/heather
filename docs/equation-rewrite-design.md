@@ -180,6 +180,27 @@ Refused: a left side that is itself one of the arguments (it would match
 every subterm), and an argument only the right side mentions (nothing in the
 goal determines it — the error names it and asks for it explicitly).
 
+**A law about a class's operation** (`issues/rewrite-class-law-instantiation.md`,
+2026-10-28). A theorem stated in a class's section takes the section's
+operations and dictionary as arguments, so `Semiring::mul_range_l`'s left
+side `c * ∑ k < n, f(k)` is headed by a pattern variable, `*`. Such a
+pattern is keyed by its first argument that is no pattern variable (here the
+sum, keyed by `range`), and the head binds to whatever operation the
+candidate applies; a pattern of nothing but variables still has no key. The
+dictionary is not a part matching can bind — the left side mentions it only
+inside what it builds from it (the sum's monoid) — so once the arguments
+before it are bound, a class-dictionary argument left unbound is *resolved*
+at its instantiated type. Nothing resolving refuses the candidate: `c + ∑ …`
+binds `*` to `+`, and `Semiring(≈, +, +)` has no instance. The same holds
+at a concrete carrier (`Rat`'s `*` against the instance). The 256-candidate
+cap bounds the looser key.
+
+A pattern `λ z. g(z)`, `z` not in `g`, is matched as `g` (η), against what
+the candidate contracts to by η, or the candidate λ itself: the law's
+`λ k. f(k)` binds `f`, which occurs nowhere else. A candidate body that is
+no η-redex (`λ k. f(k) + 1`) binds `f` to that λ, and the instance's right
+side carries the β-redex `(λ k. f(k) + 1)(k)`, which conversion reads.
+
 Applying an unapplied commutativity lemma twice rewrites the first instance
 back (`rewrite(Nat::add_comm, Nat::add_comm, …)` on `k + n <= k + m` turns
 `k + n` into `n + k`, then the first `_ + _` is `n + k` again). That is
@@ -566,14 +587,35 @@ index. An unchanged argument without `Reflexive` evidence is the same
 
 ### 10.5 What it does not do
 
-- `rel_cong` and `rel_derive` still stop at a λ
-  (`issues/rel-cong-under-binders.md`): they walk two given sides in
-  lockstep, and need the same crossing.
-- A law about a class operation (`Semiring::mul_range_l` at an open
-  semiring) is not instantiated unapplied, under a binder or not: its left
-  side is headed by the class's operation, a pattern variable, which §6.1's
-  key refuses (`issues/rewrite-class-law-instantiation.md`). Under a binder
-  that is the case that bites, since the law cannot be applied to a bound
-  variable by hand; `big_operator.hthr`'s `range_cong` proofs stay as they
-  are for it.
 - Dependent binders, and a sum's bound offered to its body (§10.2).
+
+`rel_cong`/`rel_derive` under binders (§10.6) and laws about a class's
+operation (§6.1, `Semiring::mul_range_l` at an open semiring, which is the
+case that bites below a binder: its arguments mention the bound index) were
+follow-ups of this round. `big_operator.hthr`'s `range_mul_range` and
+`range_cauchy` are now one `rewrite(Semiring::…, …)` each; its other
+`range_cong` proofs use the bound `k < n`, which a rewrite does not offer.
+
+### 10.6 `rel_cong` and `rel_derive` under binders
+
+`issues/rel-cong-under-binders.md`, 2026-10-28. `rel_cong(h)` walks the
+goal's two sides in lockstep (§9.3's ancestor), and stopped at a λ. Now an
+application whose two sides differ in exactly one argument, a λ on each side,
+is crossed as the rewrite crosses it: the λs' shared binders (as many as both
+have with the same type, non-dependent) give the relation
+`Pointwise<D₁, …>(…(R))`, the consumer's evidence is
+`PreservesRelation(Pointwise(R), R, λ g. f(…, g, …))` — §10.2's statement,
+so `MonoidRel::range_pointwise` answers both tactics — and its proof
+argument is `λ z₁ … zₖ. p` for `p : R(a, b)`, the bodies walked below the
+binders.
+
+The builder spells its proof as source text over aliases at the goal's depth.
+Below a binder it keeps that shape one level down: the binder is pushed onto
+its context, the body walked there (aliases, evidence, the supplied proof's
+sides shifted once per depth), the text elaborated *there* to a term, and the
+context restored, so nothing made below survives — it mentions the binder.
+The λ around that term is aliased at the outer depth with its pointwise type.
+Evidence missing below binders is an obligation closed over them and applied
+back, §10.4's `(z: Nat) -> PreservesRelation(Same, Same, g(z))`. A consumer
+whose context does not map those functions into the carrier is not crossed,
+and the walk goes on to its other rules, ending in the usual mismatch.
