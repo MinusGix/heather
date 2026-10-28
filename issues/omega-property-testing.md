@@ -3,9 +3,8 @@ title: Differentially property-test Omega search and certificates
 status: open
 labels: [proofs,testing,arithmetic,solver]
 area: tactics
-blocked-by: [omega-linear-arithmetic]
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-10-28
 ---
 
 Broaden Omega's generated-system testing from the pure real-shadow core to the
@@ -47,3 +46,4 @@ success in the presence of an exhaustive model is never allowed.
   real region is the singleton `x = -5/2, y = 1`. Pugh's classic nightmare is
   pinned separately. Still open: generate the corresponding Heather source
   subset, minimize frontend failures, and kernel-gate every generated success.
+- 2026-10-28: Tracker tidy: dropped `blocked-by: [omega-linear-arithmetic]`. That issue is closed (the affine solver and its certificates landed), so nothing blocks this one; its scope here is unchanged.

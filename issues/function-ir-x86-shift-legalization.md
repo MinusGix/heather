@@ -3,9 +3,8 @@ title: Legalize FunctionIR shifts against x86 masked shift counts
 status: open
 labels: [compiler,function-ir,x86,semantics,legalization,bitvec]
 area: heather-in-heather
-blocked-by: [function-ir-x86-constants]
 created: 2026-09-01
-updated: 2026-09-01
+updated: 2026-10-28
 ---
 
 FunctionIR shift nodes use an immediate mathematical Nat count. Logical shifts
@@ -41,3 +40,6 @@ appears.
 - **[[function-ir-x86-constants]]** supplies immediate encoding and
   variable-length block layout.
 
+## Log
+
+- 2026-10-28: Tracker tidy: dropped `blocked-by: [function-ir-x86-constants]`, which is closed (immediates and variable-length layout landed). The scope still stands: the verified lowering refuses the three shift nodes (`Region::lower`, `lib/native/function_ir/function_ir_lower.hthr`, `ShiftLeft(_, _, _, _) => None`), and `Asm` has no shift instruction forms yet, so the legalization rule and the SHL/SHR/SAR forms both land against the verified lowering rather than the per-function path B2 retired.
