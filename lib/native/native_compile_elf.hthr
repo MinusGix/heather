@@ -39,7 +39,7 @@ import omega;
 // its entry with the command line `args` on its stack, simulates the source
 // run with `args`.
 theorem Source::elf_simulates(self src: Source, program: Prog, homes: Homes, compiled: src.compile(DataRegion::io_page().low, homes) = Some(program),
-    fits: Layout(DataRegion::io_page().low, src.capacities(), homes).size() <= DataRegion::io_page().size,
+    fits: Layout::of(DataRegion::io_page().low, src.capacities(), homes).size() <= DataRegion::io_page().size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io())>,
     entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(header ++ assemble(no_fills(), program, Nil)),
@@ -64,7 +64,7 @@ theorem Source::elf_simulates(self src: Source, program: Prog, homes: Homes, com
 // The same, of the file `write-elf` writes: the I/O profile's ELF of the
 // program's bytes, whose header is 232 bytes whatever their length.
 theorem Source::elf_file_simulates(self src: Source, program: Prog, homes: Homes, compiled: src.compile(DataRegion::io_page().low, homes) = Some(program),
-    fits: Layout(DataRegion::io_page().low, src.capacities(), homes).size() <= DataRegion::io_page().size,
+    fits: Layout::of(DataRegion::io_page().low, src.capacities(), homes).size() <= DataRegion::io_page().size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     s: MachineState<X86Memory(X86Profile::io())>,
     entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(io_elf_file(assemble(no_fills(), program, Nil))),

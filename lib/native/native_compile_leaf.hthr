@@ -232,7 +232,7 @@ theorem Prog::within_leaf_lowered(self loaded: Prog, layout: Layout, out: List<N
     code: Option<List<Instruction>>, q: Prog, stored: loaded.leaf_lowered(layout, out, nodes, words, code) = Some(q)): loaded.Within(q) {
     (match code as λ c => loaded.leaf_lowered(layout, out, nodes, words, c) = Some(q) → loaded.Within(q) {
         None => λ none => absurd(none),
-        Some(instructions) => (match leaves_all(instructions, layout.homes.registers()) as λ b =>
+        Some(instructions) => (match leaves_all(instructions, layout.taken) as λ b =>
                 (match b { False => None, True => then(loaded, Block(instructions)).ports_from(layout, out, nodes_write_ports(nodes), words, layout.leaf_outputs(nodes)) }) =
                     Some(q) → loaded.Within(q) {
             False => λ none => absurd(none),
@@ -585,12 +585,12 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
                 Some(loaded) => λ loaded_is => (match region.lower(ins, outs, place_into(outs)) as λ c => region.lower(ins, outs, place_into(outs)) = c →
                     loaded.leaf_lowered(layout, out, nodes, words, c) = Some(q) → t.At(prog_len(p), live, tree, env) {
                     None => λ _ none => absurd(none),
-                    Some(code) => λ lowered => (match leaves_all(code, layout.homes.registers()) as λ b => leaves_all(code, layout.homes.registers()) = b →
+                    Some(code) => λ lowered => (match leaves_all(code, layout.taken) as λ b => leaves_all(code, layout.taken) = b →
                         (match b { False => None, True => then(loaded, Block(code)).ports_from(layout, out, outputs, words, outs) }) = Some(q) →
                         t.At(prog_len(p), live, tree, env) {
                         False => λ _ none => absurd(none),
                         True => λ leaves_is stored => {
-                            let leaves: leaves_all(code, layout.homes.registers()).IsTrue() = j(sym(leaves_is), λ b _ => b.IsTrue(), trivial);
+                            let leaves: leaves_all(code, layout.taken).IsTrue() = j(sym(leaves_is), λ b _ => b.IsTrue(), trivial);
                             let body = then(loaded, Block(code));
                             let w_body = body.within_trans(q, t.program, Prog::ports_from_within(layout, out, outputs, words, outs, body, q, stored), within);
                             let w_loaded = loaded.within_before(0, Block(code), t.program, w_body);
@@ -607,7 +607,7 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
                                 λ s held => {
                                     let kept = t.held_kept(left, env, s.gprs, execute_block_normal(code, s).gprs, s.memory,
                                         t.held_sub(left, live, env, s.gprs, s.memory, held.left, narrowed),
-                                        execute_block_kept<X86Memory(t.r.profile)>(code, s, layout.homes.registers(), leaves));
+                                        execute_block_kept<X86Memory(t.r.profile)>(code, s, layout.taken, leaves));
                                     ⟨j(sym(execute_block_memory<X86Memory(t.r.profile)>(code, s)), λ m _ => t.Held(left, env, execute_block_normal(code, s).gprs, m), kept),
                                      region.lower_correct<X86Memory(t.r.profile)>(ins, outs, place_into(outs), code, values, s, lowered, held.right, holds)⟩
                                 });
