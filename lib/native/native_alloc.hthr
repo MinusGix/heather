@@ -4,7 +4,7 @@
 // Every word of the environment has a home between statements: its slot,
 // as the memory-resident compiler gave every word, or a register of the
 // home pool, which no statement's code uses for anything else. Which home
-// each word gets is an allocator's proposal (`Allocator`), and nothing
+// each word gets is an allocator's proposal (`Allocates`), and nothing
 // proves an allocator right: the compiler checks what it is given
 // (`Source::allocation_ok`), and `native_compile_correct` holds of every
 // assignment that passes. So an allocator is a heuristic, swapped or tuned
@@ -32,6 +32,7 @@ import function_ir_eval;
 import x86_64;
 import bool;
 import list;
+import logic;
 import nat;
 import option;
 
@@ -303,7 +304,22 @@ fn Source::allocation_ok(self src: Source, homes: Homes) → Bool {
 // ---------------------------------------------------------------------------
 // Allocators. Nothing above depends on what one proposes.
 
-record Allocator { assign: Source → Homes }
+// An allocator: a type whose values propose homes for a source, each with
+// the proof that the compile takes what it proposes. Soundness is the
+// check's, so the law asks only completeness: an instance's homes never
+// fail `Source::allocation_ok`, and a compile with them is never refused for
+// reason 12. A tuning is a value of the type (`Greedy`'s loop weight), and
+// a new heuristic whose homes cannot be proved right is made an instance
+// by checking them itself (`Homes::or_else`).
+class Allocates<A> {
+    assign: A → Source → Homes,
+    never_refused: (a: A) → (src: Source) → src.allocation_ok(assign(a, src)).IsTrue(),
+}
+
+// The homes an allocator gives the source.
+fn Source::homes_by<A: Allocates>(self src: Source, a: A) → Homes { A.assign(a, src) }
+
+theorem Source::homes_by_ok<A: Allocates>(self src: Source, a: A): src.allocation_ok(src.homes_by(a)).IsTrue() { A.never_refused(a, src) }
 
 // One pass over the statement: the set live before it, under `homes`'s
 // loop sets, and `sets` with each loop's entry joined with what its body
@@ -351,18 +367,59 @@ fn List::sets_within(self a: List<List<Nat>>, b: List<List<Nat>>) → Bool {
     }
 }
 
-// The homes with their loop sets grown until a pass adds nothing: then
-// every loop's set is closed, and the check finds it so. Liveness grows
-// with the sets, so a pass that does not close adds a word to some set,
-// and there are at most the slots' number of words in each of the slots'
-// number of sets. Two loops that test one word share a set, closed for
-// both.
-fn Homes::closed(self homes: Homes, src: Source, fuel: Nat) → Homes {
+// Every id the statement names.
+fn nodes_words(nodes: List<Node>) → List<Nat> {
+    match nodes { Nil => [], Cons(node, rest) => Cons(node_output(node).id, function_ir_eval::Node::reads(node)) ++ nodes_words(rest) }
+}
+
+fn Stmt::words(self s: Stmt) → List<Nat> {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => nodes_words(body.nodes),
+            Sequence(_, _) => [],
+            Compose(_, _) => [],
+            Conditional(_, _, _, _, _, _) => [],
+            Call(_, _, _) => [],
+            Loop(_, _, _, _, _, _, _, _, _) => [],
+        },
+        Invoke(shape) => Cons(shape.result(), shape.reads()),
+        Then(first, rest) => first.words() ++ rest.words(),
+        Branch(condition, yes, no) => Cons(condition, yes.words() ++ no.words()),
+        Repeat(body, again) => Cons(again, body.words()),
+        Exit(status) => [status],
+        Arg(index, _, len) => [index, len],
+    }
+}
+
+// One past the greatest id.
+fn List::bound(self ids: List<Nat>) → Nat { match ids { Nil => 0, Cons(id, rest) => Succ(id).max(rest.bound()) } }
+
+// The widest loop sets: every id of `ids` in the set of every loop that
+// tests one of them. With every word the program names, the check finds
+// them closed (`Source::wide_ok`), whatever the program.
+fn List::wide(self ids: List<Nat>) → List<List<Nat>> { List::replicate(ids, ids.bound()) }
+
+// Loop sets the check finds closed: `loops` when it does, the widest sets
+// when it does not.
+fn Source::closed_or_wide(self src: Source, loops: List<List<Nat>>) → List<List<Nat>> {
+    match src.main.checked(Homes([], loops), []) { None => src.main.words().wide(), Some(_) => loops }
+}
+
+// The loop sets grown until a pass adds nothing: then every loop's set is
+// closed, and the check finds it so. Liveness grows with the sets, so a
+// pass that does not close adds a word to some set, and there are at most
+// the slots' number of words in each of the slots' number of sets. Two
+// loops that test one word share a set, closed for both. Nothing proves the
+// growth stops, or stops closed: where it stops is checked once more, and
+// the widest sets stand in if the check refuses (`Source::closed_or_wide`),
+// so the result is closed by proof (`Source::loop_sets_ok`) while the
+// heuristic gives the least sets.
+fn Source::loop_sets(self src: Source, fuel: Nat, loops: List<List<Nat>>) → List<List<Nat>> {
     match fuel {
-        Zero => homes,
+        Zero => src.closed_or_wide(loops),
         Succ(more) => {
-            let sets = src.main.needs(homes, [], homes.loops).sets;
-            match sets.sets_within(homes.loops) { True => homes, False => Homes(homes.of, sets).closed(src, more) }
+            let sets = src.main.needs(Homes([], loops), [], loops).sets;
+            match sets.sets_within(loops) { True => src.closed_or_wide(loops), False => src.loop_sets(more, sets) }
         },
     }
 }
@@ -373,9 +430,18 @@ fn closure_fuel() → Nat { 4096 }
 
 // Every word in its slot (the memory-resident compiler), and the least
 // closed loop sets.
-fn Homes::slots(src: Source) → Homes { Homes([], []).closed(src, closure_fuel()) }
+fn Homes::slots(src: Source) → Homes { Homes([], src.loop_sets(closure_fuel(), [])) }
 
-fn Allocator::spill_all() → Allocator { Allocator(λ src => Homes::slots(src)) }
+// `homes` when the check passes them, else `fallback`: a heuristic made
+// complete by a complete fallback (`Homes::or_else_ok`).
+fn Homes::or_else(self homes: Homes, src: Source, fallback: Homes) → Homes {
+    match src.allocation_ok(homes) { True => homes, False => fallback }
+}
+
+// Every word in its slot.
+record SpillAll {}
+
+fn SpillAll::assign(self a: SpillAll, src: Source) → Homes { Homes::slots(src) }
 
 // Two words interfere when one is written while the other is live after
 // the write: then they may not share a register (`Homes::apart`). The
@@ -453,8 +519,9 @@ fn Stmt::graph(self s: Stmt, homes: Homes, out: List<Nat>, of: List<List<Bool>>)
     }
 }
 
-// How often each word is read or written, a loop's body counting seven
-// more than what holds it: the greedy allocator's priority. Indexed by id.
+// How often each word is read or written, a loop's body counting
+// `loop_weight` more than what holds it: the greedy allocator's priority.
+// Indexed by id.
 fn List::weight(self weights: List<Nat>, id: Nat) → Nat { match weights.nth(id) { None => 0, Some(w) => w } }
 
 fn List::bump(self weights: List<Nat>, id, by: Nat) → List<Nat> {
@@ -474,7 +541,7 @@ fn nodes_weights(nodes: List<Node>, scale: Nat, weights: List<Nat>) → List<Nat
     }
 }
 
-fn Stmt::weights(self s: Stmt, scale: Nat, weights: List<Nat>) → List<Nat> {
+fn Stmt::weights(self s: Stmt, loop_weight, scale: Nat, weights: List<Nat>) → List<Nat> {
     match s {
         Compute(region) => match region {
             Dataflow(body) => nodes_weights(body.nodes, scale, weights),
@@ -485,9 +552,9 @@ fn Stmt::weights(self s: Stmt, scale: Nat, weights: List<Nat>) → List<Nat> {
             Loop(_, _, _, _, _, _, _, _, _) => weights,
         },
         Invoke(shape) => weights.bump_all(Cons(shape.result(), shape.reads()), scale),
-        Then(first, rest) => rest.weights(scale, first.weights(scale, weights)),
-        Branch(condition, yes, no) => no.weights(scale, yes.weights(scale, weights.bump(condition, scale))),
-        Repeat(body, again) => body.weights(scale + 7, weights.bump(again, scale + 7)),
+        Then(first, rest) => rest.weights(loop_weight, scale, first.weights(loop_weight, scale, weights)),
+        Branch(condition, yes, no) => no.weights(loop_weight, scale, yes.weights(loop_weight, scale, weights.bump(condition, scale))),
+        Repeat(body, again) => body.weights(loop_weight, scale + loop_weight, weights.bump(again, scale + loop_weight)),
         Exit(status) => weights.bump(status, scale),
         Arg(index, _, len) => weights.bump_all([index, len], scale),
     }
@@ -554,19 +621,26 @@ fn List::colour(self order: List<Nat>, entry: List<Nat>, graph: List<List<Bool>>
     }
 }
 
-fn Allocator::greedy() → Allocator {
-    Allocator(λ src => {
-        let slots = Homes::slots(src);
-        let graph = src.main.graph(slots, [], []);
-        // A row for every word a slot can hold, so `registers_of` meets
-        // each word a row may flag.
-        let rows = graph.of.put(63, graph.of.row(63), []);
-        src.main.weights(1, []).heaviest().colour(graph.live, rows, slots)
-    })
+// Greedy colouring, a loop's body weighing `loop_weight` more than what
+// holds it. Nothing proves a colouring passes the check, so the slots
+// stand in for one that does not (`Homes::or_else`); write-elf's programs
+// are coloured, and the tests probe that a colouring passes on its own
+// (native_alloc_tests).
+record Greedy { loop_weight: Nat }
+
+// The weight write-elf's homes are coloured with.
+fn Greedy::standard() → Greedy { Greedy(7) }
+
+fn Greedy::colouring(self g: Greedy, src: Source) → Homes {
+    let slots = Homes::slots(src);
+    let graph = src.main.graph(slots, [], []);
+    // A row for every word a slot can hold, so `registers_of` meets
+    // each word a row may flag.
+    let rows = graph.of.put(63, graph.of.row(63), []);
+    src.main.weights(g.loop_weight, 1, []).heaviest().colour(graph.live, rows, slots)
 }
 
-// The homes `write-elf` compiles a source with.
-fn Source::homes(self src: Source) → Homes { Allocator::greedy().assign(src) }
+fn Greedy::assign(self g: Greedy, src: Source) → Homes { g.colouring(src).or_else(src, Homes::slots(src)) }
 
 // Homes as numbers, for `write-elf` to read and spell (untrusted, like
 // every read): how many words have a home, each home (0 the slot, `k + 1`
@@ -580,3 +654,269 @@ fn List::sets_spelled(self sets: List<List<Nat>>) → List<Nat> {
 }
 
 fn Homes::spelled(self homes: Homes) → List<Nat> { Cons(homes.of.len(), homes.of.homes_spelled() ++ homes.loops.sets_spelled()) }
+
+// ---------------------------------------------------------------------------
+// The instances: neither is ever refused
+//
+// With every word in its slot every write is apart, so the check can fail
+// only at a loop whose set is not closed. The widest sets are closed for
+// every program: everything live is a word the program names, and every
+// set holds all of them (`Stmt::checked_wide`). So the slots' loop sets are
+// closed whether the growth stopped closed or the widest sets stood in,
+// and nothing needs the growth to stop.
+
+// Sets of ids as lists.
+theorem absent_false_mem(id: Nat, ids: List<Nat>): absent(id, ids) = False → Mem(id, ids) {
+    match ids {
+        Nil => λ no => absurd(no),
+        Cons(x, rest) => (match id.eq_dec(x) as λ d => Bool::and(match d { Inl(_) => False, Inr(_) => True }, absent(id, rest)) = False →
+            Mem(id, Cons(x, rest)) {
+            Inl(e) => λ _ => Inl(e),
+            Inr(_) => λ no => Inr(absent_false_mem(id, rest, no)),
+        }),
+    }
+}
+
+theorem List::holds_mem(self ids: List<Nat>, id: Nat, held: ids.holds(id) = True): Mem(id, ids) {
+    (match absent(id, ids) as λ b => absent(id, ids) = b → !b = True → Mem(id, ids) {
+        True => λ _ no => absurd(no),
+        False => λ none _ => absent_false_mem(id, ids, none),
+    })(refl, held)
+}
+
+theorem List::mem_holds(self ids: List<Nat>, id: Nat, m: Mem(id, ids)): ids.holds(id) = True {
+    (match absent(id, ids) as λ b => absent(id, ids) = b → !b = True {
+        True => λ none => false_elim(absent_mem(id, ids, j(sym(none), λ b _ => b.IsTrue(), trivial), id, m, refl)),
+        False => λ _ => refl,
+    })(refl)
+}
+
+theorem List::within_mem(self a: List<Nat>, b: List<Nat>): a.within(b).IsTrue() → (i: Nat) → Mem(i, a) → Mem(i, b) {
+    match a {
+        Nil => λ _ i never => false_elim(never),
+        Cons(id, rest) => λ inside i m => {
+            let parts = Bool::is_true_and(b.holds(id), rest.within(b), inside);
+            match m {
+                Inl(e) => j(sym(e), λ x _ => Mem(x, b), b.holds_mem(id, eq_true_of_is_true(b.holds(id), parts.left))),
+                Inr(later) => rest.within_mem(b, parts.right, i, later),
+            }
+        },
+    }
+}
+
+// Every id of `a` is one of `m`.
+fn List::Inside(self a: List<Nat>, m: List<Nat>) → Type { (i: Nat) → Mem(i, a) → Mem(i, m) }
+
+// A set the check found, inside `m`; nothing when it found none.
+fn Option::Inside(self o: Option<List<Nat>>, m: List<Nat>) → Type { match o { None => False, Some(l) => l.Inside(m) } }
+
+theorem List::within_of_inside(self a: List<Nat>, m: List<Nat>): a.Inside(m) → a.within(m) = True {
+    match a {
+        Nil => λ _ => refl,
+        Cons(id, rest) => λ inside => j(sym(m.mem_holds(id, inside(id, Inl(refl)))), λ b _ => (b && rest.within(m)) = True,
+            rest.within_of_inside(m, λ i x => inside(i, Inr(x)))),
+    }
+}
+
+theorem List::inside_union(self a: List<Nat>, b, m: List<Nat>, sa: a.Inside(m), sb: b.Inside(m)): a.union(b).Inside(m) {
+    λ i x => match a.mem_append(b.filter(λ (id: Nat) => absent(id, a)), i, x) {
+        Inl(l) => sa(i, l),
+        Inr(r) => sb(i, b.mem_filter(i, λ (id: Nat) => absent(id, a), r)),
+    }
+}
+
+theorem List::inside_minus(self a: List<Nat>, b, m: List<Nat>, sa: a.Inside(m)): a.minus(b).Inside(m) {
+    λ i x => sa(i, a.mem_filter(i, λ (id: Nat) => absent(id, b), x))
+}
+
+theorem inside_live_before(reads: List<Nat>, written: Nat, out, m: List<Nat>, sr: reads.Inside(m), so: out.Inside(m)):
+    live_before(reads, written, out).Inside(m) {
+    reads.inside_union(out.minus([written]), m, sr, out.inside_minus([written], m, so))
+}
+
+// With every word in its slot, every write is apart and every live word
+// slotted.
+theorem List::all_apart_slots(self ids: List<Nat>, loops: List<List<Nat>>, out: List<Nat>): Homes([], loops).all_apart(ids, out) = True {
+    match ids { Nil => refl, Cons(_, rest) => rest.all_apart_slots(loops, out) }
+}
+
+theorem List::slotted_slots(self ids: List<Nat>, loops: List<List<Nat>>): Homes([], loops).slotted(ids) = True {
+    match ids { Nil => refl, Cons(_, rest) => rest.slotted_slots(loops) }
+}
+
+theorem List::nodes_checked_inside(self nodes: List<Node>, loops: List<List<Nat>>, out, m: List<Nat>, so: out.Inside(m)):
+    nodes_words(nodes).Inside(m) → Option::Inside(Homes([], loops).nodes_checked(nodes, out), m) {
+    match nodes {
+        Nil => λ _ => so,
+        Cons(node, rest) => λ sw => {
+            let homes = Homes([], loops);
+            let id = node_output(node).id;
+            let reads = function_ir_eval::Node::reads(node);
+            (match homes.nodes_checked(rest, out) as λ o => Option::Inside(o, m) →
+                    Option::Inside(match o {
+                        None => None,
+                        Some(after) => match homes.apart(id, after) { False => None, True => Some(live_before(reads, id, after)) },
+                    }, m) {
+                None => λ never => false_elim(never),
+                Some(after) => λ inside => inside_live_before(reads, id, after, m,
+                    λ i x => sw(i, Cons(id, reads).mem_append_l(nodes_words(rest), i, Inr(x))), inside),
+            })(rest.nodes_checked_inside(loops, out, m, so, λ i x => sw(i, Cons(id, reads).mem_append_r(nodes_words(rest), i, x))))
+        },
+    }
+}
+
+// Every word in its slot and every loop's set `m`, where `m` holds every
+// word the statement names and what is live after it: the check passes,
+// and finds the set live before it inside `m`.
+theorem Stmt::checked_wide(self s: Stmt, loops: List<List<Nat>>, m: List<Nat>, wide: (again: Nat) → Mem(again, m) → Homes([], loops).loop_set(again) = m):
+    (out: List<Nat>) → out.Inside(m) → s.words().Inside(m) → Option::Inside(s.checked(Homes([], loops), out), m) {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => λ out so sw => (match Homes([], loops).nodes_checked(body.nodes, out) as λ o => Option::Inside(o, m) →
+                    Option::Inside(match o {
+                        None => None,
+                        Some(live) => match Homes([], loops).all_apart(nodes_writes(body.nodes), out) { False => None, True => Some(live) },
+                    }, m) {
+                None => λ never => false_elim(never),
+                Some(live) => λ inside => j(sym(nodes_writes(body.nodes).all_apart_slots(loops, out)),
+                    λ b _ => Option::Inside(match b as λ _ => Option<List<Nat>> { False => None, True => Some(live) }, m), inside),
+            })(body.nodes.nodes_checked_inside(loops, out, m, so, sw)),
+            Sequence(_, _) => λ out so _ => so,
+            Compose(_, _) => λ out so _ => so,
+            Conditional(_, _, _, _, _, _) => λ out so _ => so,
+            Call(_, _, _) => λ out so _ => so,
+            Loop(_, _, _, _, _, _, _, _, _) => λ out so _ => so,
+        },
+        Invoke(shape) => λ out so sw => inside_live_before(shape.reads(), shape.result(), out, m, λ i x => sw(i, Inr(x)), so),
+        Then(first, rest) => λ out so sw => (match rest.checked(Homes([], loops), out) as λ o => Option::Inside(o, m) →
+                Option::Inside(match o { None => None, Some(mid) => first.checked(Homes([], loops), mid) }, m) {
+            None => λ never => false_elim(never),
+            Some(mid) => λ inside => first.checked_wide(loops, m, wide, mid, inside, λ i x => sw(i, first.words().mem_append_l(rest.words(), i, x))),
+        })(rest.checked_wide(loops, m, wide, out, so, λ i x => sw(i, first.words().mem_append_r(rest.words(), i, x)))),
+        Branch(condition, yes, no) => λ out so sw => {
+            let homes = Homes([], loops);
+            (match yes.checked(homes, out) as λ o => Option::Inside(o, m) →
+                    Option::Inside(match o {
+                        None => None,
+                        Some(y) => match no.checked(homes, out) { None => None, Some(n) => Some(Cons(condition, y.union(n))) },
+                    }, m) {
+                None => λ never => false_elim(never),
+                Some(y) => λ in_y => (match no.checked(homes, out) as λ o => Option::Inside(o, m) →
+                        Option::Inside(match o { None => None, Some(n) => Some(Cons(condition, y.union(n))) }, m) {
+                    None => λ never => false_elim(never),
+                    Some(n) => λ in_n => {
+                        let both = y.inside_union(n, m, in_y, in_n);
+                        λ i x => match x {
+                            Inl(e) => j(sym(e), λ k _ => Mem(k, m), sw(condition, Inl(refl))),
+                            Inr(r) => both(i, r),
+                        }
+                    },
+                })(no.checked_wide(loops, m, wide, out, so, λ i x => sw(i, Inr(yes.words().mem_append_r(no.words(), i, x))))),
+            })(yes.checked_wide(loops, m, wide, out, so, λ i x => sw(i, Inr(yes.words().mem_append_l(no.words(), i, x)))))
+        },
+        Repeat(body, again) => λ out so sw => {
+            let homes = Homes([], loops);
+            let set = homes.loop_set(again);
+            let is_m: (set = m) = wide(again, sw(again, Inl(refl)));
+            let set_in: set.Inside(m) = j(sym(is_m), λ k _ => k.Inside(m), λ i x => x);
+            let both = set.inside_union(out, m, set_in, so);
+            let after_in: loop_after(again, set, out).Inside(m) = λ i x => match x {
+                Inl(e) => j(sym(e), λ k _ => Mem(k, m), sw(again, Inl(refl))),
+                Inr(r) => both(i, r),
+            };
+            (match body.checked(homes, loop_after(again, set, out)) as λ o => Option::Inside(o, m) →
+                    Option::Inside(match o { None => None, Some(b) => match b.within(set) { False => None, True => Some(set) } }, m) {
+                None => λ never => false_elim(never),
+                Some(b) => λ inside => {
+                    let within = b.within_of_inside(set, λ i x => j(sym(is_m), λ k _ => Mem(i, k), inside(i, x)));
+                    j(sym(within), λ w _ => Option::Inside(match w as λ _ => Option<List<Nat>> { False => None, True => Some(set) }, m), set_in)
+                },
+            })(body.checked_wide(loops, m, wide, loop_after(again, set, out), after_in, λ i x => sw(i, Inr(x))))
+        },
+        Exit(_) => λ out so sw => sw,
+        Arg(index, _, len) => λ out so sw => inside_live_before([index], len, out, m, λ i x => match x {
+            Inl(e) => sw(i, Inl(e)),
+            Inr(never) => false_elim(never),
+        }, so),
+    }
+}
+
+theorem List::below_bound(self ids: List<Nat>, i: Nat): Mem(i, ids) → i < ids.bound() {
+    match ids {
+        Nil => λ never => false_elim(never),
+        Cons(id, rest) => λ x => match x {
+            Inl(e) => j(sym(e), λ k _ => k < Succ(id).max(rest.bound()), Succ(id).le_max_l(rest.bound())),
+            Inr(r) => Succ(i).le_trans(rest.bound(), Succ(id).max(rest.bound()), rest.below_bound(i, r), Succ(id).le_max_r(rest.bound())),
+        },
+    }
+}
+
+theorem List::wide_set(self m: List<Nat>, again: Nat, x: Mem(again, m)): Homes([], m.wide()).loop_set(again) = m {
+    j(sym(List::nth_replicate(m, m.bound(), again, m.below_bound(again, x))),
+        λ o _ => (match o as λ _ => List<Nat> { None => [], Some(set) => set }) = m, refl)
+}
+
+// Every word in its slot passes when the check finds the loop sets closed.
+theorem Source::slots_ok(self src: Source, loops: List<List<Nat>>, live: List<Nat>, got: src.main.checked(Homes([], loops), []) = Some(live)):
+    src.allocation_ok(Homes([], loops)).IsTrue() {
+    j(sym(got), λ o _ => Bool::IsTrue(match o as λ _ => Bool { None => False, Some(l) => Homes([], loops).slotted(l) }),
+        j(sym(live.slotted_slots(loops)), λ b _ => b.IsTrue(), trivial))
+}
+
+theorem Source::wide_ok(self src: Source): src.allocation_ok(Homes([], src.main.words().wide())).IsTrue() {
+    let m = src.main.words();
+    let homes = Homes([], m.wide());
+    (match src.main.checked(homes, []) as λ o => src.main.checked(homes, []) = o → Option::Inside(o, m) → src.allocation_ok(homes).IsTrue() {
+        None => λ _ never => false_elim(never),
+        Some(live) => λ got _ => src.slots_ok(m.wide(), live, got),
+    })(refl, src.main.checked_wide(m.wide(), m, λ again x => m.wide_set(again, x), [], λ i never => false_elim(never), λ i x => x))
+}
+
+theorem Source::closed_or_wide_ok(self src: Source, loops: List<List<Nat>>): src.allocation_ok(Homes([], src.closed_or_wide(loops))).IsTrue() {
+    (match src.main.checked(Homes([], loops), []) as λ o => src.main.checked(Homes([], loops), []) = o →
+            src.allocation_ok(Homes([], match o as λ _ => List<List<Nat>> { None => src.main.words().wide(), Some(_) => loops })).IsTrue() {
+        None => λ _ => src.wide_ok(),
+        Some(live) => λ got => src.slots_ok(loops, live, got),
+    })(refl)
+}
+
+theorem Source::loop_sets_ok(self src: Source, fuel: Nat): (loops: List<List<Nat>>) → src.allocation_ok(Homes([], src.loop_sets(fuel, loops))).IsTrue() {
+    match fuel {
+        Zero => λ loops => src.closed_or_wide_ok(loops),
+        Succ(more, ih) => λ loops => {
+            let sets = src.main.needs(Homes([], loops), [], loops).sets;
+            match sets.sets_within(loops) as λ b => src.allocation_ok(Homes([],
+                    match b as λ _ => List<List<Nat>> { True => src.closed_or_wide(loops), False => src.loop_sets(more, sets) })).IsTrue() {
+                True => src.closed_or_wide_ok(loops),
+                False => ih(sets),
+            }
+        },
+    }
+}
+
+theorem Homes::slots_ok(src: Source): src.allocation_ok(Homes::slots(src)).IsTrue() { src.loop_sets_ok(closure_fuel(), []) }
+
+theorem Homes::or_else_ok(self homes: Homes, src: Source, fallback: Homes, ok: src.allocation_ok(fallback).IsTrue()):
+    src.allocation_ok(homes.or_else(src, fallback)).IsTrue() {
+    (match src.allocation_ok(homes) as λ b => src.allocation_ok(homes) = b →
+            src.allocation_ok(match b as λ _ => Homes { True => homes, False => fallback }).IsTrue() {
+        True => λ passed => j(sym(passed), λ b _ => b.IsTrue(), trivial),
+        False => λ _ => ok,
+    })(refl)
+}
+
+theorem SpillAll::never_refused(self a: SpillAll, src: Source): src.allocation_ok(a.assign(src)).IsTrue() { Homes::slots_ok(src) }
+
+instance Allocates<SpillAll> { assign := SpillAll::assign, never_refused := SpillAll::never_refused }
+
+theorem Greedy::never_refused(self g: Greedy, src: Source): src.allocation_ok(g.assign(src)).IsTrue() {
+    g.colouring(src).or_else_ok(src, Homes::slots(src), Homes::slots_ok(src))
+}
+
+instance Allocates<Greedy> { assign := Greedy::assign, never_refused := Greedy::never_refused }
+
+// The homes `write-elf` compiles a source with, which the check always
+// passes: write-elf's reason 12 is unreachable.
+fn Source::homes(self src: Source) → Homes { src.homes_by(Greedy::standard()) }
+
+theorem Source::homes_ok(self src: Source): src.allocation_ok(src.homes()).IsTrue() { src.homes_by_ok(Greedy::standard()) }

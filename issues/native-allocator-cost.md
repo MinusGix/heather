@@ -7,7 +7,7 @@ created: 2026-10-28
 updated: 2026-10-28
 ---
 
-`Allocator::greedy` (`lib/native/native_alloc.hthr`) costs more than one
+`Greedy::colouring` (`lib/native/native_alloc.hthr`) costs more than one
 declaration's kernel fuel on cat, so write-elf evaluates it on its fork and
 spells the homes as a literal (`docs/native-register-allocation-design.md`
 §6). It makes a few linear liveness passes and one graph pass over flag

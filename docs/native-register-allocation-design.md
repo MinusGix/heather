@@ -175,21 +175,62 @@ Emission (`native_compile.hthr`) reads and writes words through
 ## 6. Allocators
 
 ```text
-record Allocator { assign: Source → Homes }
-fn Allocator::spill_all() → Allocator   // every word in its slot, least loop sets
-fn Allocator::greedy() → Allocator      // weighted greedy colouring
-fn Source::homes(self src) → Homes      // what write-elf uses: greedy
+class Allocates<A> {
+    assign: A → Source → Homes,
+    never_refused: (a: A) → (src: Source) → src.allocation_ok(assign(a, src)).IsTrue(),
+}
+record SpillAll {}                      // every word in its slot, least loop sets
+record Greedy { loop_weight: Nat }      // weighted greedy colouring, slots as fallback
+fn Source::homes_by<A: Allocates>(self src, a: A) → Homes
+fn Source::homes(self src) → Homes      // what write-elf uses: Greedy::standard() (weight 7)
 ```
 
-`greedy` first computes `Homes::slots(src)` (least loop sets, everything
-in a slot). One more pass builds the interference graph (`Stmt::graph`): two
-words interfere when one is written while the other is live after the
-write. The graph is a row of flags per word, so adding a write never
-searches a list of ids. The greedy allocator then weighs each word by its
-reads and writes, with a loop body counting seven more per level than what
-holds it. Taking the words heaviest first, it gives each one the first pool
-register that no interfering word already has. A word live at the start
-keeps its slot.
+An allocator is a type with an `Allocates` instance, and a tuning is a value
+of that type (`Greedy(3)` weighs loops less than `Greedy::standard()`). The
+class follows Minus's suggestion (2026-10-28) that the allocator be a type
+class whose instances prove properties, so that it can be swapped or tuned.
+
+**The law is completeness, not soundness.** The check already makes
+soundness independent of the allocator, so no instance proves its homes
+correct. What an instance proves is that the check never refuses them:
+`∀ src, src.allocation_ok(assign(a, src))`. Reason 12 is then unreachable for
+that allocator by proof, and since `Source::homes` is `Greedy`'s
+(`Source::homes_ok`), it is unreachable for write-elf.
+
+**`SpillAll`'s proof needs no fixpoint.** With every word in its slot, every
+write is apart and every live word slotted by evaluation, so the check
+fails only at a loop whose set is not closed. Proving that `Stmt::needs`'s
+growth reaches a closed set within `closure_fuel` would need monotonicity
+of liveness in the sets and a count of how far they can grow. Instead the
+growth stays a heuristic, and what it stops at is checked once more
+(`Source::closed_or_wide`). If the check refuses, or the fuel runs out, the
+**widest sets** stand in: every word the program names
+(`Stmt::words`) in every loop's set (`List::wide`). Those are closed for
+every program (`Stmt::checked_wide`, one structural induction): everything
+live is a word the program names, and every set holds all of them. On every
+program so far the growth stops closed, so the result is the least sets as
+before. The cost is one more check pass at the end, and the probes in
+`lib/_tests/native/native_alloc_tests.hthr` pin both halves: the least set
+leaves out a word written before it is read, and fuel 0 gives the widest.
+
+**A heuristic made complete by a fallback.** `Greedy`'s colouring is not
+proved to pass the check. Its `assign` checks its own homes and falls back
+to the slots' when they fail (`Homes::or_else`, `Homes::or_else_ok`). That
+is the general recipe for any heuristic that cannot be proved: an instance
+in two lines, at the cost of one check pass. The price is that the proof
+says nothing about the heuristic itself, and a colouring that failed would
+fall back silently to a spilled program. So the probes check by evaluation
+that greedy's colouring passes on its own and homes words in registers.
+
+`Greedy`'s colouring first computes `Homes::slots(src)` (least loop sets,
+everything in a slot). One more pass builds the interference graph
+(`Stmt::graph`): two words interfere when one is written while the other is
+live after the write. The graph is a row of flags per word, so adding a
+write never searches a list of ids. The colouring then weighs each word by
+its reads and writes, with a loop body counting `loop_weight` more per
+level than what holds it. Taking the words heaviest first, it gives each
+one the first pool register that no interfering word already has. A word
+live at the start keeps its slot.
 
 Every table here is built lazily, one `put` at a time. A row read after
 thousands of writes would otherwise force thousands of `put`s nested inside
@@ -198,31 +239,23 @@ reports it as running out of fuel, which is how the 8×-cat probe first
 failed. So each `put` is settled as it is made: its spine and the entry it
 changed are forced by a match.
 
-**Why a record, not a class with proofs yet.** Minus suggested making the
-allocator a type class whose instances prove properties, so that it can be
-swapped or tuned. The check already makes soundness independent of the
-allocator, so no instance has to prove that its homes are correct. What an
-instance *could* still prove is **completeness**: its homes never fail the
-check (`∀ src, src.allocation_ok(assign(src))`). Then reason 12 would be
-unreachable for that allocator by proof, not only by testing. `spill_all`
-is the natural first instance, but its proof needs `Homes::closed` to
-reach a fixpoint within its fuel, which is a real lemma about the pass's
-monotonicity. The record is the class's data half, and the move is filed as
-`issues/native-allocator-class.md`.
-
-**Per-function allocators.** The interface does not rule them out, and
-nothing in the check assumes one allocator. A source has a single `main`
-today, inlined helpers included, so "per function" has nothing to range
-over yet. When procedures that call each other arrive (plan §7), each
-procedure will carry its own `Homes`, checked against its own body. The
-procedures then compose through a **boundary contract**: which pool
-registers a callee may write (caller-saved) and which it keeps
-(callee-saved), and where arguments and results go. With that contract in
-place, two procedures can use different allocators, as long as each one's
-homes pass its own check and the call site's `Held` is re-established
-under the contract. The calling convention is filed with the moves
-(`issues/native-register-moves-and-convention.md`), and per-function
-allocators with the class.
+**Per-function allocators.** Nothing in the class or the check assumes one
+allocator for a program. A source has a single `main` today, inlined
+helpers included, so "per function" has nothing to range over yet. When
+procedures that call each other arrive (plan §7), each procedure carries
+its own homes, checked against its own body, and so may carry its own
+allocator: a procedure's allocator is any `A: Allocates`, chosen per
+procedure (a hot loop's procedure tuned with a heavier loop weight, a cold
+one spilled). The procedures then compose through a **boundary contract**:
+which pool registers a callee may write (caller-saved) and which it keeps
+(callee-saved), and where arguments and results go. Completeness composes
+the same way soundness does: each procedure's homes pass its own check, and
+the call site's `Held` is re-established from the contract, so a program
+whose procedures each use a complete allocator is never refused for its
+homes, whichever allocators they are. What the contract says is
+`issues/native-register-moves-and-convention.md`'s. Whether two procedures
+should share one allocator is then a tuning choice, not a soundness or
+completeness question; early on every procedure can use `Source::homes`'s.
 
 **Where the allocator runs.** The greedy allocator, evaluated in the
 kernel, costs more than one declaration's fuel on cat. So write-elf
@@ -298,8 +331,8 @@ and behave as before. Probe sizes for programs without a built binary:
 - **One loop set per loop**, not per tested word, so that loops which
   share a word stop keeping each other's words alive
   (`issues/native-loop-sets-by-loop.md`).
-- **Completeness by proof**: the allocator class
-  (`issues/native-allocator-class.md`).
+- **Per-procedure allocators**, once procedures exist (§6; with
+  `issues/native-register-moves-and-convention.md`).
 - **Emission's constant factor**, the leaf pool recomputed per leaf
   (`issues/native-leaf-pool-per-leaf.md`).
 - **The allocator's own cost** (`issues/native-allocator-cost.md`).
