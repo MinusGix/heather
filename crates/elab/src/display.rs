@@ -563,7 +563,12 @@ impl Speller<'_> {
             }
             Type::Fin { len } => format!("Fin({})", self.tm(len, d)),
             Type::Pi { dom, cod, .. } => {
-                let dom_s = self.ty(dom, d + 1);
+                // `->` associates to the right: a function domain is
+                // parenthesized, or `(A -> B) -> C` would read as `A -> B -> C`.
+                let dom_s = match &**dom {
+                    Type::Pi { .. } => format!("({})", self.ty(dom, d + 1)),
+                    _ => self.ty(dom, d + 1),
+                };
                 if self.dependent(cod, d) {
                     let name = self.fresh();
                     let cod_s = self.under(&name, cod, d);

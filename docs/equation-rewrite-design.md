@@ -462,9 +462,7 @@ results would never be asked for again.
 
 Each is a follow-up issue:
 
-- **Under binders** (`issues/rewrite-setoid-under-binders.md`): rewriting
-  inside a λ needs the pointwise relation and a binder `Respects` instance;
-  mengine uses funext, which Heather does not assume.
+- ~~**Under binders**~~: done, §10.
 - **`↔` goals** (`issues/rewrite-setoid-iff-goals.md`): `Iff` is a record,
   so its two directions are projections and a constructor the plan would
   build around each half.
@@ -475,3 +473,107 @@ Each is a follow-up issue:
   `issues/relational-rewrite-controls.md`; a DAG walk has no tree positions to
   number.
 
+## 10. Rewriting along a relation under binders
+
+`issues/rewrite-setoid-under-binders.md`, 2026-10-28. §9's walk stopped at a
+λ, refusing an occurrence inside one. It now goes in, as Rocq's
+`setoid_rewrite` does with `pointwise_relation`: mengine crosses binders by
+funext, which Heather does not assume, so the crossing is evidence.
+
+```heather
+theorem rewrite_law_under_sum(n: Nat, f: Nat → Rat, e: ∑ k < n, f(k) ≈ 0): ∑ k < n, (f(k) + 0) ≈ 0 {
+    rewrite(Rat::add_zero, e)
+}
+```
+
+### 10.1 The pointwise relation
+
+`relation_props::Pointwise<D, C>(R)(f, g) := (z: D) → R(f(z), g(z))`. A λ's
+body is rewritten one binder down; from `p : R(t, t')` there, the λ node's
+result is `λ z. t'` with `λ z. p : Pointwise(R)(λ z. t, λ z. t')`, which
+checks because the relation unfolds to the Π `p` inhabits up to β. A λ whose
+body is a λ (`antidiag`'s `λ i k => …`) is related by
+`Pointwise(Pointwise(R))`, one per binder, so one crossing serves a curried
+consumer. The relation is non-dependent: a binder whose type mentions the one
+before it is refused.
+
+`Respectful(RelId, R)` is not it: that asks `R(f(x), g(y))` of every pair of
+equal points, so a proof of it from a pointwise one costs a transport per
+point, and nothing gains from the extra generality.
+
+### 10.2 Crossing a binder's consumer
+
+A λ is an argument of something: `MonoidRel::range(op, n, λ k => …)` for
+`∑`. That application gets one step, by evidence
+
+```text
+PreservesRelation(Pointwise<D, C>(R), R, λ g. f(…, g, …))
+```
+
+its context always written as a λ (even in the last position, where §9.3
+writes a partial application), because that is how a rule states it: an
+argument a function consumes is a λ in the source. Resolution answers it as
+§9.4 says — a hypothesis in scope, else an evidence rule, else a
+`?compatibility` obligation. A changed λ beside another changed argument is
+refused by name: no evidence shape relates both.
+
+The sum's rules live in `big_operator.hthr`, `MonoidRel::range_pointwise` and
+`MonoidRel::antidiag_pointwise`, each a corollary of `range_cong`. They are
+evidence rules with every parameter in braces, outside the section: a rule
+cannot take a class premise (Paterson's measure reads only propositions), and
+an instance head cannot key on a λ argument, so the dictionary is a brace the
+conclusion's `range(op, n, f)` fixes by unification. One rule serves every
+carrier, `Rat` and an open semiring's `+` and `*` alike.
+
+`range_cong` is *bounded*: its premise asks for `f(k) ≈ g(k)` only below the
+bound. The rule discards that bound (`λ k _ => h(k)`): a rewrite's per-node
+proof never consults a hypothesis, so offering `k < n` to the body would buy
+nothing until a rewrite under conditions exists.
+
+### 10.3 Depth, the memo, and instances below a binder
+
+The walk keeps the binders it is below. Results are memoized per node *and
+binder scope* — one scope per λ node, not per depth, since two λs at one
+depth may bind different types, and evidence and conversion below them
+depend on that. A shared λ node is still walked once, at its parent's scope.
+The step's left side, right side and proof are shifted once per depth and
+kept.
+
+An unapplied law is instantiated by the first node the walk meets that
+matches (§6.1), now below binders too, matching in the binders' context.
+When the bindings mention a bound variable (`f(k) + 0` against
+`(y) → y + 0 ≈ y`) the instance is kept **relative** to the innermost
+binders it mentions: `f(k) + 0` under `λ k` is also `f(j) + 0` under a
+second sum's `λ j`. The instance's relation and carrier must not mention a
+bound variable; that is refused.
+
+### 10.4 Evidence below binders
+
+A context that mentions no bound variable (`range(+, n)` inside an outer
+sum, `c * ·`) is looked up at the rewrite's own context, once for every
+depth it occurs at, and shifted. One that does (`∑ k < m - i, …` under
+`λ i`, or `g(k, ·)`) is stated in the binders' context; there resolution's
+answers mention the binders and nothing is kept. Missing there, the
+obligation is closed over the binders and applied back to them:
+
+```text
+?compatibility : (z: Nat) -> PreservesRelation(Same, Same, g(z))
+```
+
+so `on ?compatibility := c` discharges it with `c` a hypothesis for every
+index. An unchanged argument without `Reflexive` evidence is the same
+(`?fixed`).
+
+### 10.5 What it does not do
+
+- `rel_cong` and `rel_derive` still stop at a λ
+  (`issues/rel-cong-under-binders.md`): they walk two given sides in
+  lockstep, and need the same crossing.
+- A law about a class operation (`Semiring::mul_range_l` at an open
+  semiring) is not instantiated unapplied, under a binder or not: its left
+  side is headed by the class's operation, a pattern variable, which §6.1's
+  key refuses (`issues/rewrite-class-law-instantiation.md`). Under a binder
+  that is the case that bites, since the law cannot be applied to a bound
+  variable by hand; `big_operator.hthr`'s `range_cong` proofs stay as they
+  are for it.
+- Dependent binders, and a sum's bound offered to its body (§10.2).

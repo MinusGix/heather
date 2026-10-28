@@ -161,3 +161,57 @@ theorem norm_num_real_product(): ∏ k < 3, rup(k) ≈ 6 { by norm_num() }
 theorem norm_num_real_body(): ∑ k < 3, (rup(k) * rup(k) - 1) ≈ 11 { by norm_num() }
 theorem norm_num_real_empty(): ∑ k < 0, rup(k) ≈ 0 { by norm_num() }
 theorem norm_num_real_false(): ¬(∑ k < 3, rup(k) ≈ 7) { by norm_num() }
+
+// Setoid `rewrite` under the binder of `∑`/`∏` (docs/equation-rewrite-design.md
+// §10): the body is rewritten below the binder, the two λs are related
+// pointwise, and the sum crosses that relation by `MonoidRel::range_pointwise`.
+theorem rewrite_under_sum(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y, e: ∑ k < n, f(k) * y ≈ y): ∑ k < n, f(k) * x ≈ y { rewrite(h, e) }
+theorem rewrite_under_product(n: Nat, f: Nat → Rat): ∏ k < n, (f(k) + 0) ≈ ∏ k < n, f(k) { rewrite(Rat::add_zero, Rat::same_refl(∏ k < n, f(k))) }
+theorem rewrite_under_sum_hypothesis(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y, e: ∑ k < n, (f(k) + x) ≈ 0): ∑ k < n, (f(k) + y) ≈ 0 {
+    rewrite(h, in := e)
+}
+// An unapplied law is instantiated below the binder: `f(k) + 0` mentions `k`.
+// The instance is relative to the binder it mentions, so it is the same
+// instance under a second sum's own binder.
+theorem rewrite_law_under_sum(n: Nat, f: Nat → Rat, e: ∑ k < n, f(k) ≈ 0): ∑ k < n, (f(k) + 0) ≈ 0 { rewrite(Rat::add_zero, e) }
+theorem rewrite_law_under_two_sums(m, n: Nat, f: Nat → Rat): ∑ k < n, (f(k) + 0) + ∑ j < m, (f(j) + 0) ≈ ∑ k < n, f(k) + ∑ j < m, f(j) {
+    rewrite(Rat::add_zero, Rat::same_refl(∑ k < n, f(k) + ∑ j < m, f(j)))
+}
+// Nested sums, a triangular one whose inner bound mentions the outer index
+// (the inner sum's evidence is found below the outer binder), and the
+// antidiagonal's two binders, crossed at once by `antidiag_pointwise`.
+theorem rewrite_nested(m, n: Nat, f: Nat → Nat → Rat): ∑ i < m, ∑ k < n, (f(i, k) + 0) ≈ ∑ i < m, ∑ k < n, f(i, k) {
+    rewrite(Rat::add_zero, Rat::same_refl(∑ i < m, ∑ k < n, f(i, k)))
+}
+theorem rewrite_triangle(m: Nat, f: Nat → Nat → Rat): ∑ i < m, ∑ k < m - i, (f(i, k) + 0) ≈ ∑ i < m, ∑ k < m - i, f(i, k) {
+    rewrite(Rat::add_zero, Rat::same_refl(∑ i < m, ∑ k < m - i, f(i, k)))
+}
+theorem rewrite_antidiag(n: Nat, f: Nat → Rat):
+    MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * (f(k) + 0)) ≈ MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * f(k))
+{
+    rewrite(Rat::add_zero, Rat::same_refl(MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * f(k))))
+}
+// At an open semiring, through its `+` monoid, and a law of the class.
+theorem rewrite_under_open_sum<A: Semiring(≈, +, *)>(n: Nat, f, g: Nat → A, c: A):
+    ∑ k < n, c * (f(k) + g(k)) ≈ ∑ k < n, (c * f(k) + c * g(k))
+{
+    rewrite(A.distrib_l, A.rel_refl(∑ k < n, (c * f(k) + c * g(k))))
+}
+// A context that mentions the index has its evidence stated below the
+// binder; missing, it is an obligation over every index.
+theorem rewrite_bound_context(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h: x ≈ y,
+    c: (k: Nat) → PreservesRelation(Rat::Same, Rat::Same, g(k))): ∑ k < n, g(k, x) ≈ ∑ k < n, g(k, y)
+{
+    rewrite(h, Rat::same_refl(∑ k < n, g(k, y)))
+    on ?compatibility := c;
+}
+// expect-error: ?compatibility : (z: Nat) -> PreservesRelation(Same, Same, g(z))
+theorem rewrite_bound_context_open(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, g(k, x) ≈ ∑ k < n, g(k, y) {
+    rewrite(h, Rat::same_refl(∑ k < n, g(k, y)))
+}
+// A sum that leaves the carrier, as an argument of a `Nat`-valued count,
+// stays refused: the rewrite stays in `≈`'s carrier.
+// expect-error: does not map functions into it
+theorem rewrite_sum_leaves(n: Nat, x, y: Rat, h: x ≈ y, size: (Nat → Rat) → Nat, back: Nat → Rat, e: back(size(λ k => y)) ≈ 0):
+    back(size(λ k => x)) ≈ 0
+{ rewrite(h, e) }

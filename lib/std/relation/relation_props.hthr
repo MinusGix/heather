@@ -127,6 +127,16 @@ theorem respectful_compose<A, B, C, D, E, F>(
     λ x y h => hg(f(x), f2(y), hf(x, y, h))
 }
 
+// Functions related at every point: `R(f(z), g(z))` for every `z`. Rocq's
+// `pointwise_relation`; a relation rewrite under a binder relates the two
+// λs by it (docs/equation-rewrite-design.md §10), and a binder's consumer
+// crosses it with `PreservesRelation(Pointwise(R), S, consumer)`. Not
+// `Respectful(RelId, R)`, which asks the same of every pair of equal points
+// and so needs a transport per point where this needs none.
+fn Pointwise<D, C>(R: C → C → Type) → (D → C) → (D → C) → Type {
+    λ f g => (z: D) → R(f(z), g(z))
+}
+
 // A relation-preserving map is kept as a predicate, not a class: the map and
 // both relations already identify the property completely, and the first
 // consumers pass its evidence explicitly. Composition is heterogeneous in

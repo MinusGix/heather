@@ -82,3 +82,20 @@ theorem two_arguments<A: Equivalence(R)>(R: A → A → Type, k: A → Nat → A
 theorem leaves_the_carrier<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, back: Nat → A, x, y, z: A,
     h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
 { rewrite(h, e) }
+
+// Under a binder (§10): the body is rewritten below it, the two λs are
+// related by `Pointwise(R)`, and the consumer crosses that by its evidence.
+theorem under_binder<A: Equivalence(R)>(R: A → A → Type, F: (A → A) → A, f: A → A, x, y, w: A,
+    c: PreservesRelation(Pointwise<A, A>(R), R, F), cf: PreservesRelation(R, R, f), h: R(x, y), e: R(F(λ z => f(y)), w)):
+    R(F(λ z => f(x)), w)
+{ rewrite(h, e) }
+// Two binders of one λ, crossed by `Pointwise(Pointwise(R))`.
+theorem under_two_binders<A: Equivalence(R)>(R: A → A → Type, F: (A → A → A) → A, f: A → A, x, y, w: A,
+    c: PreservesRelation(Pointwise<A, A → A>(Pointwise<A, A>(R)), R, F), cf: PreservesRelation(R, R, f), h: R(x, y),
+    e: R(F(λ u v => f(y)), w)): R(F(λ u v => f(x)), w)
+{ rewrite(h, e) }
+// A λ changed beside another argument has no congruence to ask for.
+// expect-error: changes in 2 of its arguments, a λ among them
+theorem binder_and_argument<A: Equivalence(R)>(R: A → A → Type, G: (A → A) → A → A, f: A → A, x, y, w: A,
+    cf: PreservesRelation(R, R, f), h: R(x, y), e: R(G(λ z => f(y), y), w)): R(G(λ z => f(x), x), w)
+{ rewrite(h, e) }
