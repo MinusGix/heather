@@ -218,6 +218,10 @@ pub(crate) type Linear = (BTreeMap<Vec<u32>, Z>, Z);
 pub(crate) struct FieldReading<'a> {
     reifier: Reifier<'a>,
     reciprocals: Vec<Reciprocal>,
+    /// The bases of the squares read so far, `t` for each `t * t` written,
+    /// as forms (`nlinarith` offers `t·t ≥ 0`; docs/nonlinear-arithmetic-design.md
+    /// §4.2). Normalization hides a square's shape, so it is kept here.
+    squares: Vec<Linear>,
 }
 
 /// A reciprocal atom `r` the reading met with its fact `r·d ≈ 1`: the
@@ -245,6 +249,7 @@ impl<'a> FieldReading<'a> {
                 in_fact: false,
             },
             reciprocals: Vec::new(),
+            squares: Vec::new(),
         })
     }
 
@@ -265,6 +270,7 @@ impl<'a> FieldReading<'a> {
                 in_fact: false,
             },
             reciprocals: Vec::new(),
+            squares: Vec::new(),
         }
     }
 
@@ -301,6 +307,22 @@ impl<'a> FieldReading<'a> {
     /// The reciprocals met so far whose fact could be written.
     pub(crate) fn reciprocals(&self) -> &[Reciprocal] {
         &self.reciprocals
+    }
+
+    /// The bases of the squares the terms read so far write.
+    pub(crate) fn squares(&self) -> &[Linear] {
+        &self.squares
+    }
+
+    /// `a·b`, two forms over the reading's monomials multiplied out.
+    pub(crate) fn product(a: &Linear, b: &Linear) -> Result<Linear, String> {
+        let poly = |form: &Linear| {
+            let mut p = Poly(form.0.clone());
+            p.add_term(Vec::new(), form.1).map(|_| p)
+        };
+        let mut terms = poly(a)?.mul(&poly(b)?)?.0;
+        let constant = terms.remove(&Vec::new()).unwrap_or(0);
+        Ok((terms, constant))
     }
 
     /// The monomial that is atom `atom` alone.
@@ -366,12 +388,21 @@ impl<'a> FieldReading<'a> {
     /// is a constant: a product `omega` would read as one atom of its own.
     pub(crate) fn read(&mut self, tm: &Rc<Term>) -> Result<(Linear, bool), String> {
         let (atoms, facts) = (self.reifier.atoms.len(), self.reifier.facts.len());
-        let read = self
-            .reifier
-            .reify(tm)
-            .and_then(|syn| Ok((poly_of(&syn)?, multiplies(&syn))));
+        let mut squares = Vec::new();
+        let read = self.reifier.reify(tm).and_then(|syn| {
+            squares_of(&syn, &mut squares)?;
+            Ok((poly_of(&syn)?, multiplies(&syn)))
+        });
         if read.is_ok() {
             self.record_reciprocals(facts);
+            for square in squares {
+                let mut terms = square.0;
+                let constant = terms.remove(&Vec::new()).unwrap_or(0);
+                let form = (terms, constant);
+                if !self.squares.contains(&form) {
+                    self.squares.push(form);
+                }
+            }
         }
         self.reifier.facts.truncate(facts);
         let (poly, product) = match read {
@@ -1019,6 +1050,28 @@ impl Poly {
     fn scale(&self, c: Z, m: &Mono) -> Result<Self, String> {
         self.mul(&Poly::monomial(c, m.clone()))
     }
+}
+
+/// The bases of the squares `syn` writes: each product whose two factors
+/// read as one nonconstant polynomial.
+fn squares_of(syn: &Syn, out: &mut Vec<Poly>) -> Result<(), String> {
+    match syn {
+        Syn::Atom(_) | Syn::Const(_) => {}
+        Syn::Neg(a) => squares_of(a, out)?,
+        Syn::Add(a, b) | Syn::Sub(a, b) => {
+            squares_of(a, out)?;
+            squares_of(b, out)?;
+        }
+        Syn::Mul(a, b) => {
+            squares_of(a, out)?;
+            squares_of(b, out)?;
+            let base = poly_of(a)?;
+            if base == poly_of(b)? && base.0.keys().any(|m| !m.is_empty()) && !out.contains(&base) {
+                out.push(base);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn poly_of(syn: &Syn) -> Result<Poly, String> {

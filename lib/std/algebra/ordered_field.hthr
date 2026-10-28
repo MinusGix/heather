@@ -831,6 +831,22 @@ theorem OrderedField::mul_nonneg(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.u
     StrictOrder::le_respects(x * A.unit, A.unit, x * y, x * y, A.mul_zero(x), A.rel_refl(x * y), OrderedField::mul_le_mono_l(A.unit, y, x, hy, hx))
 }
 
+// A square is nonnegative, with no decision on the sign of `x`: were `x·x`
+// negative, `x < 0` would make it the positive `(-x)·(-x)`, so `0 ≤ x`, and
+// then `x·x` is a product of nonnegatives after all.
+theorem OrderedField::sq_nonneg(x: A): A.unit <= x * x {
+    A.le_of_not_lt(A.unit, x * x, λ neg => {
+        let not_below: ¬(x < A.unit) = λ below => {
+            let flipped: (A.unit < A.inv(x) * A.inv(x)) =
+                A.mul_pos(A.inv(x), A.inv(x), OrderedAddGroup::neg_pos(x, below), OrderedAddGroup::neg_pos(x, below));
+            A.lt_irrefl(A.unit, A.lt_trans(A.unit, x * x, A.unit,
+                StrictOrder::lt_respects_r(A.unit, A.inv(x) * A.inv(x), x * x, Ring::neg_mul_neg(x, x), flipped), neg))
+        };
+        let up: (A.unit <= x) = A.le_of_not_lt(A.unit, x, not_below);
+        A.not_lt_of_le(A.unit, x * x, OrderedField::mul_nonneg(x, x, up, up), neg)
+    })
+}
+
 // Both factors moved, both nonnegative below.
 theorem OrderedField::mul_le_mul(a, b, c, d: A, h1: a <= b, h2: c <= d, ha: A.unit <= a, hc: A.unit <= c): a * c <= b * d {
     PseudoOrder::le_trans(a * c, b * c, b * d, OrderedField::mul_le_mono_r(a, b, c, h1, hc),

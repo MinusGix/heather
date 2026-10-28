@@ -181,8 +181,9 @@ grows by that factor; the problems this is for have one or two.
   needs a concrete carrier with designated operations, as `ring`'s relation
   reading does.
 - **`Int`/`Nat`.** Built later: §8.
-- **Products of facts** (`nlinarith`), and `¬(x <= y)` facts, which at
-  `CReal` do not give `y < x`.
+- **Products of facts** (`nlinarith`, designed in
+  [nonlinear-arithmetic-design](nonlinear-arithmetic-design.md)), and
+  `¬(x <= y)` facts, which at `CReal` do not give `y < x`.
 
 ## 7. Cost shape
 

@@ -71,7 +71,8 @@ theorem creal_absurd_goal(x, y: CReal, h1: x < y, h2: y < x): x * x ≈ y { lina
 // A goal that does not follow is refused with the facts it tried.
 // expect-error: `linarith` could not prove
 theorem rat_not_entailed(x, y: Rat, h: x <= y): x < y { linarith(h) }
-// expect-error: `linarith` could not prove
+// A product is an atom to `linarith`, and its refusal names `nlinarith`.
+// expect-error: `nlinarith` also multiplies the facts
 theorem creal_product_is_not_linear(x: CReal, h: 0 <= x): 0 <= x * x { linarith(h) }
 // A denominator of unknown sign, or a negative one, is not cleared.
 // expect-error: `linarith` could not prove
@@ -126,3 +127,48 @@ theorem int_square_is_not_linear(x: Int): OfNat(0) <= x * x { linarith }
 theorem int_wrong_fact(x: Int, h: True): x * x <= x * x { linarith(h) }
 // expect-error: `linarith` could not prove
 theorem nat_not_entailed(a, b: Nat, h: a * b <= 3): b * a < 3 { linarith(h) }
+
+// ---------------------------------------------------------------------------
+// `nlinarith` (docs/nonlinear-arithmetic-design.md): the facts multiplied
+// pairwise, the goal's negation among them where a refutation proves the
+// goal, and the squares the terms show.
+
+// Squares the goal writes, at both fields and at `Int`; a square's
+// negation refuted.
+theorem nlin_creal_sq(x: CReal): 0 <= x * x { nlinarith }
+theorem nlin_rat_sq_diff(a, b: Rat): 0 <= (a - b) * (a - b) { nlinarith }
+theorem nlin_int_sq(x: Int): OfNat(0) <= x * x { nlinarith }
+theorem nlin_creal_not_neg(x: CReal): ¬(x * x < 0) { nlinarith }
+// A monomial whose exponents are all even is a square.
+theorem nlin_rat_even(x, y: Rat, h: x * x * (y * y) <= 0): x * x * (y * y) ≈ 0 { nlinarith(h) }
+// Products of facts, written or from the context.
+theorem nlin_rat_prod(a, b: Rat, ha: 0 <= a, hb: 0 <= b): 0 <= a * b { nlinarith(ha, hb) }
+theorem nlin_rat_prod_context(a, b: Rat, ha: 0 <= a, hb: 0 <= b): 0 <= a * b { nlinarith }
+theorem nlin_creal_prod_strict(a, b: CReal, ha: 0 < a, hb: 0 < b): 0 < a * b { nlinarith(ha, hb) }
+theorem nlin_rat_mono(a, b, c: Rat, h: a <= b, hc: 0 <= c): a * c <= b * c { nlinarith(h, hc) }
+theorem nlin_int_prod(a, b: Int, ha: OfNat(0) <= a, hb: OfNat(0) <= b): OfNat(0) <= a * b { nlinarith(ha, hb) }
+theorem nlin_int_prod_strict(a, b: Int, ha: OfNat(0) < a, hb: OfNat(0) < b): OfNat(0) < a * b { nlinarith(ha, hb) }
+theorem nlin_nat_cross(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * d + b * c <= a * c + b * d { nlinarith(h1, h2) }
+// A hint is a fact: the square `nlinarith` does not try by itself.
+theorem nlin_rat_amgm(a, b: Rat): 2 * (a * b) <= a * a + b * b { nlinarith(Rat::sq_nonneg(a - b)) }
+theorem nlin_creal_amgm(a, b: CReal): 2 * (a * b) <= a * a + b * b { nlinarith(CReal::sq_nonneg(a - b)) }
+// The goal's negation multiplied: cancelling a positive factor.
+theorem nlin_rat_cancel(a, b, c: Rat, h: a * c <= b * c, hc: 0 < c): a <= b { nlinarith(h, hc) }
+theorem nlin_creal_cancel(a, b, c: CReal, h: a * c <= b * c, hc: 0 < c): a <= b { nlinarith(h, hc) }
+theorem nlin_int_cancel(a, b, c: Int, h: a * c <= b * c, hc: OfNat(0) < c): a <= b { nlinarith(h, hc) }
+theorem nlin_nat_cancel(a, b, c: Nat, h: a * c <= b * c, hc: 0 < c): a <= b { nlinarith(h, hc) }
+theorem nlin_int_sq_diff(a, b: Int): OfNat(0) <= (a - b) * (a - b) { nlinarith }
+// In checking position inside a block.
+theorem nlin_rat_let(a, b: Rat, ha: 0 <= a, hb: 0 <= b): 0 <= a * b + 1 {
+    let p: (0 <= a * b) = nlinarith(ha, hb);
+    linarith(p)
+}
+// A strict goal at `Rat`, whose order is decided.
+theorem nlin_rat_cancel_lt(a, b, c: Rat, h: a * c < b * c, hc: 0 < c): a < b { nlinarith(h, hc) }
+
+// Refusals: a goal that does not follow, and a strict goal at `CReal`,
+// where a refutation proves only its double negation.
+// expect-error: `nlinarith` could not prove
+theorem nlin_rat_not_entailed(x: Rat, h: 0 <= x): x * x <= x { nlinarith(h) }
+// expect-error: a refutation does not prove `<`
+theorem nlin_creal_cancel_lt(a, b, c: CReal, h: a * c < b * c, hc: 0 < c): a < b { nlinarith(h, hc) }
