@@ -5,7 +5,7 @@ labels: [native,x86,proofs]
 area: heather-in-heather
 milestone: [hih-pl-wp, hih-pl-source]
 created: 2026-10-21
-updated: 2026-10-25
+updated: 2026-10-28
 ---
 
 `Contract` is `pre`/`post` over `Gprs`, and `Contract::Runs` requires
@@ -37,3 +37,4 @@ that design (§2.4).
 
 - 2026-10-24: 2026-10-24: [[wp-stack-items]] landed calls as a second table, `Callee`: pre/post over the view and the state (given the return address), honesty in continuation form so a body is proved by `Wp` (`Callee::returns_by`). Its footprint is whatever the view says after the call, not a range. A `Proved` contract with memory could take the same shape (view-relative, the view after as an output), and the two tables may then be one.
 - 2026-10-25: S3.2 landed without this ([[native-effect-source-compiler]], closed): its leaves are register-only dataflow regions entering by S4's `Region::lower_correct`, and its proofs run over the code's `Goes` claim rather than `Wp`, with memory handled by the region invariant `Target::Placed`. A leaf that spills or calls needs a footprint contract, now on [[native-compile-wider-leaves]]'s path.
+- 2026-10-28: Abate et al.'s WP-preservation paper (docs/wp-preserving-compilation-survey.md §4) states compiled functions' target contracts as the correspondence plus pre, with a per-cell footprint and nothing over the whole memory. That supports the view-relative footprint proposed on 2026-10-24. [[native-procedure-contracts]] is the effectful-procedure customer.
