@@ -5,7 +5,7 @@ labels: [metaprogramming,elaboration,design]
 area: tactics
 milestone: [tac-host-interface, hih-passes]
 created: 2026-09-07
-updated: 2026-10-22
+updated: 2026-10-28
 ---
 
 Own the public interface between user metafunctions and the active compiler:
@@ -49,3 +49,4 @@ string. Identity and correctness are separate claims.
 - 2026-10-22: Round 2½: View (on the speller's shared call recogniser and instance recognisers), Whnf, and Match (the elaborator's unifier with a function type's leading parameters as scratch-world metavariables). `apply` now fills every parameter its conclusion determines, implicit ones included (`by apply(sym, assumption())`), and proves the rest with its premise tactic. Bare globals are quoted and resolved with their whole type. Hole stays deferred: no tactic needs metavariables shared across premises yet. Design §14.
 - 2026-10-22: Round 2¾ (host round 3): holes shared across premises. `Hole(ty)` makes a run-scoped metavariable in the unifier's scratch-world form; `Defeq` and every application's domain check solve holes by the elaborator's unifier (one home scope at a time, `unify_under`), and the kernel only ever sees zonked terms. `Mark`/`Restore` let `attempt` forget a failed alternative's solutions. `apply` makes a depended-on open parameter a hole, so `apply(trans, assumption())` closes `a = c`. Also `GlobalRef` identities (`Lookup`, `Global(g)`, `HGlobal`'s reference) and `At` notes, rendered by the host. Design §15.
 - 2026-10-22: Round 3 (tac-first-port): split_all in Heather. New requests Cases(e, goal) (the elaborator's own match on e, the motive abstracting e and what reaches it through definitions, one branch per constructor with its fields and equation as locals), Constructor(goal) (one branch per field) and Close(split, proofs); View's HMatch(scrut). A split's skeleton is elaborated with marker leaves twice to record the branches (a dependent field is refused) and once more by Close with the proofs. lib/std/tactic/tactic.hthr gains reflexivity, cases_on and split_all; it closes the ten goals of goal_combinators.rs (tactic_split_all.rs). Evaluation between requests dominates a run: [[tactic-strategy-step-cost]]. Design §16.
+- 2026-10-28: Round 4: publication, through [[heather-checked-construction-api]] (closed by it). The host loop now runs in two modes: `by` (a goal, ends in a result) and `generate` (no goal, ends in `Publish`); the capability boundary is unchanged, every new request is a host primitive answered by the elaborator, and the published members go through the ordinary source declaration path, kernel gate included. Design §19. R3½ (oracles) and the Tac→ITree move remain.

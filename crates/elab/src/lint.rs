@@ -186,6 +186,7 @@ pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
             datarepr_body(&d.body, &mut out);
         }
         Item::Impl(i) => datarepr_body(&i.body, &mut out),
+        Item::Generate(g) => expr(&g.generator, &mut out),
         Item::Import(_) => {}
     }
     out

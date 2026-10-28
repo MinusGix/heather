@@ -334,11 +334,13 @@ impl Elaborator {
         // scoped there.
         let mut pcx = cx.clone();
         let mut k = 0u32;
+        let mut telescope = Vec::new();
         let mut cur = self.whnf(cx, proof_ty, h.span)?;
         let (level, ty, lhs, rhs) = loop {
             match cur {
                 Type::Id { level, ty, lhs, rhs } => break (level, ty, lhs, rhs),
                 Type::Pi { dom_level, dom, cod, .. } if k < MAX_OPEN => {
+                    telescope.push(((*dom).clone(), dom_level.clone()));
                     pcx.push(format!("_{k}"), (*dom).clone(), dom_level);
                     k += 1;
                     cur = self.whnf(&pcx, &cod, h.span)?;
@@ -362,7 +364,7 @@ impl Elaborator {
             .take(CANDIDATES)
             .find_map(|t| {
                 let mut binds = vec![None; k as usize];
-                self.match_pattern(cx, &lhs, &t, k, &mut binds).then_some(binds)
+                self.match_pattern(cx, &lhs, &t, k, &mut binds, &telescope, h.span).then_some(binds)
             });
         let Some(binds) = found else {
             return Err(ElabError::Elab {
@@ -413,15 +415,85 @@ impl Elaborator {
     /// constructor value's annotation in another. Annotations of the spines
     /// themselves are not read: the instance is built from the bindings, and
     /// the caller's abstraction re-checks it by conversion, which decides.
-    fn match_pattern(&self, cx: &Cx, pat: &Term, t: &Rc<Term>, k: u32, binds: &mut [Option<Rc<Term>>]) -> bool {
+    ///
+    /// `telescope` is the `x`s' types, outermost first, each scoped in Γ and
+    /// the `x`s before it. A class dictionary among them that matching left
+    /// unbound is resolved at its instantiated type
+    /// ([`Self::bind_dictionaries`]).
+    #[allow(clippy::too_many_arguments)]
+    fn match_pattern(
+        &self,
+        cx: &Cx,
+        pat: &Term,
+        t: &Rc<Term>,
+        k: u32,
+        binds: &mut [Option<Rc<Term>>],
+        telescope: &[(Type, Level)],
+        span: Span,
+    ) -> bool {
         let mut deferred = Vec::new();
         if !self.match_spine(cx, pat, t, k, binds, &mut deferred) {
+            return false;
+        }
+        if !self.bind_dictionaries(cx, k, binds, telescope, span) {
             return false;
         }
         deferred.into_iter().all(|(p, t)| match instantiate(&cx.gamma, &p, k, binds) {
             Some(p) => p == *t || self.terms_convert(cx, &p, &t),
             None => false,
         })
+    }
+
+    /// Binds each class dictionary in `telescope` that matching left unbound
+    /// by resolution, at its type instantiated by the arguments before it. A
+    /// law stated in a class's section takes the section's dictionary, which
+    /// its left side mentions only inside what it builds from it (`range`'s
+    /// monoid, say), never as a part matching can bind. `false` when one does
+    /// not resolve: the candidate is not an instance — its operation is not
+    /// the class's.
+    fn bind_dictionaries(
+        &self,
+        cx: &Cx,
+        k: u32,
+        binds: &mut [Option<Rc<Term>>],
+        telescope: &[(Type, Level)],
+        span: Span,
+    ) -> bool {
+        for (j, (dom, level)) in telescope.iter().enumerate() {
+            let slot = k as usize - 1 - j;
+            if binds[slot].is_some() {
+                continue;
+            }
+            // Binder `i < j` is `Var(j - 1 - i)` in `dom`; extended outermost
+            // first.
+            let mut sigma = LocalSubst::id(&cx.gamma);
+            let mut bound = true;
+            for i in 0..j {
+                match &binds[k as usize - 1 - i] {
+                    Some(arg) => sigma = sigma.extended(Rc::clone(arg)),
+                    None => {
+                        bound = false;
+                        break;
+                    }
+                }
+            }
+            if !bound {
+                continue;
+            }
+            let ty = dom.apply_local(&sigma);
+            let is_class = self.display_tag_of(&ty).is_some_and(|ind| {
+                ind.is_record && self.traits.has_class(&crate::names::qkey(&ind.scope.module, &ind.name))
+            });
+            if !is_class {
+                continue;
+            }
+            let shown = self.display_type(cx, &ty);
+            match self.resolve_goal(cx, &ty, level, &shown, None, span, &mut Vec::new()) {
+                Some(dict) => binds[slot] = Some(Rc::new(dict)),
+                None => return false,
+            }
+        }
+        true
     }
 
     fn match_spine(
@@ -447,6 +519,12 @@ impl Elaborator {
         }
         if let Some(closed) = crate::strengthen_tm(&cx.gamma, pat, k) {
             return closed == **t || self.terms_convert(cx, &closed, t);
+        }
+        // `λ z. g(z)` with `z` not in `g` is `g` (η): a law's `λ k. f(k)`
+        // binds `f`, to what the goal's λ contracts to, or to the λ itself.
+        if let Some(g) = eta(pat) {
+            let t = eta(t).map_or_else(|| Rc::clone(t), Rc::new);
+            return self.match_spine(cx, &g, &t, k, binds, deferred);
         }
         match (crate::spelling::app_of(pat), crate::spelling::app_of(t)) {
             (Some((pf, pa)), Some((tf, ta))) => {
@@ -548,15 +626,38 @@ fn instantiate(gamma: &heather_kernel::term::LocalCtx, pat: &Term, k: u32, binds
     (binds.iter().all(Option::is_some) || one == at(&Term::Succ(Rc::new(Term::Zero)))).then_some(one)
 }
 
+/// `λ z. g(z)` contracted to `g`, when `z` does not occur in `g`.
+fn eta(t: &Term) -> Option<Term> {
+    let Term::Lam { body, .. } = t else { return None };
+    let (g, arg) = crate::spelling::app_of(body)?;
+    if !matches!(&**arg, Term::Var(x) if x.0 == 0) {
+        return None;
+    }
+    let lowered = g.inst_top(0, &Term::Zero);
+    (lowered.shift_local(1) == **g).then_some(lowered)
+}
+
 /// The key a candidate must share with a pattern: the same application
-/// head (a pattern variable never heads one here) and the same number of
-/// arguments. `k` is how many binders the pattern is scoped under beyond
-/// the candidate.
+/// head and the same number of arguments. `k` is how many binders the
+/// pattern is scoped under beyond the candidate. A pattern headed by one of
+/// its own variables — a class's operation, which a law stated in the
+/// class's section takes as an argument — is keyed instead by its first
+/// argument that is no variable of its own, which must share its key; a
+/// pattern with no such argument has none, as it would match every
+/// application.
 fn same_key(pat: &Term, t: &Term, k: u32) -> bool {
     let (ph, pargs) = crate::spelling::app_spine(pat);
     let (th, targs) = crate::spelling::app_spine(t);
     if pargs.len() != targs.len() {
         return false;
+    }
+    let variable = |p: &Term| matches!(p, Term::Var(x) if x.0 < k);
+    if variable(ph) {
+        return pargs
+            .iter()
+            .zip(&targs)
+            .find(|(p, _)| !variable(p))
+            .is_some_and(|(p, t)| same_key(p, t, k));
     }
     match (ph, th) {
         (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) => a == b,

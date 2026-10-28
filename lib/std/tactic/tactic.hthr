@@ -44,6 +44,13 @@ import string;
 // `Lookup` hand one out, the same number for the same global throughout a
 // run, so a tactic compares heads by identity rather than by name.
 // `Global(g)` is that global as a term, with its whole type.
+//
+// An `Expr` may also stand for a type (design §19): a handle to one, a
+// function type `Pi(x, body)` abstracting an introduced local as `Lam`
+// does, an `Equation` between two terms of one type, or a term whose type is
+// a universe. `Blank`, as an argument, is an argument left to inference: a
+// hole at the parameter's type that checking the rest of the application
+// solves, as a call's implicit argument is.
 
 record Handle { id: Nat }
 record LocalRef { id: Nat }
@@ -56,6 +63,9 @@ inductive Expr {
     NatLit(n: Nat),
     Lam(x: LocalRef, body: Expr),
     Global(g: GlobalRef),
+    Blank,
+    Pi(x: LocalRef, body: Expr),
+    Equation(lhs: Expr, rhs: Expr),
 }
 
 // One local of the goal's context: how to refer to it, its name for
@@ -116,6 +126,32 @@ record Branch { locals: List<LocalInfo>, goal: Handle }
 // proof per branch into a proof of the goal.
 record Split { id: Nat, branches: List<Branch> }
 
+// One constructor of an inductive type, as `Ctors` answers it: its name, its
+// fields, and the constructor as a function of its fields where no field's
+// type mentions an earlier field. A field is its name (empty when it has
+// none) and its type, `None` where that mentions an earlier field.
+record FieldInfo { name: String, ty: Option<Handle> }
+
+record CtorInfo { name: String, fields: List<FieldInfo>, ctor: Option<Handle> }
+
+// ---------------------------------------------------------------------------
+// Declarations, as a generator builds them (design §19).
+//
+// A generator is a `Tac<List<Decl>>` that `generate g(args);` runs at a
+// module's top level. Its declarations are checked as the same declarations
+// written in source would be, and published in that module only if every one
+// of them is accepted.
+//
+// A declaration's parameters are locals the generator made with `Assume`,
+// each under the one before it; its statement `result` and its `body` live
+// under the last. A parameter is implicit (`{x: T}`) when its flag says so.
+
+inductive DeclForm { AsTheorem, AsFunction }
+
+record Param { x: LocalRef, implicit: Bool }
+
+record Decl { form: DeclForm, name: String, params: List<Param>, result: Expr, body: Expr }
+
 // ---------------------------------------------------------------------------
 // The requests, and the request tree.
 
@@ -165,6 +201,17 @@ inductive Req {
     Constructor(goal: Handle),
     // The proof of a split's goal, from one proof per branch, in order.
     Close(id: Nat, proofs: List<Expr>),
+    // A new local of the type `ty`, under the local `under` (the last
+    // parameter of a telescope being built) or, with `None`, under the root.
+    // `Pi` and `Lam` abstract it, and a `Decl` lists it as a parameter.
+    Assume(ty: Expr, name: String, under: Option<LocalRef>),
+    // The constructors of the inductive type `ty`.
+    Ctors(ty: Handle),
+    // A handle to the type an `Expr` stands for.
+    AsType(e: Expr),
+    // End a generator's run by publishing `decls` where the `generate` is.
+    // A tactic's `by` refuses it: only `generate` publishes.
+    Publish(decls: List<Decl>),
 }
 
 inductive Never {}
@@ -189,6 +236,10 @@ fn Resp(r: Req) → Type {
         Cases(_, _) => Checked<Split>,
         Constructor(_) => Checked<Split>,
         Close(_, _) => Checked<Handle>,
+        Assume(_, _, _) => Checked<LocalInfo>,
+        Ctors(_) => Checked<List<CtorInfo>>,
+        AsType(_) => Checked<Handle>,
+        Publish(_) => Never,
     }
 }
 
@@ -232,6 +283,18 @@ fn constructor(goal: Handle) → Tac<Checked<Split>> { Ask(Constructor(goal), λ
 
 fn close(id: Nat, proofs: List<Expr>) → Tac<Checked<Handle>> { Ask(Close(id, proofs), λ c => Pure(c)) }
 
+fn assume(ty: Expr, name: String, under: Option<LocalRef>) → Tac<Checked<LocalInfo>> {
+    Ask(Assume(ty, name, under), λ c => Pure(c))
+}
+
+fn ctors(ty: Handle) → Tac<Checked<List<CtorInfo>>> { Ask(Ctors(ty), λ c => Pure(c)) }
+
+fn as_type(e: Expr) → Tac<Checked<Handle>> { Ask(AsType(e), λ c => Pure(c)) }
+
+fn publish<A>(decls: List<Decl>) → Tac<A> {
+    Ask(Publish(decls), λ never => match never {})
+}
+
 // An answer of any kind, as the elaborator builds one, and the answer at a
 // request's own type. A `match` on the request would not refine the
 // continuation's domain, so the dependent answer is computed by `fit`
@@ -247,6 +310,8 @@ inductive Answer {
     AUnit,
     AGlobal(c: Checked<GlobalRef>),
     ASplit(c: Checked<Split>),
+    ALocal(c: Checked<LocalInfo>),
+    ACtors(c: Checked<List<CtorInfo>>),
 }
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
@@ -269,6 +334,10 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Cases(_, _) => match a { ASplit(c) => Fits(c), _ => Mismatch },
         Constructor(_) => match a { ASplit(c) => Fits(c), _ => Mismatch },
         Close(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Assume(_, _, _) => match a { ALocal(c) => Fits(c), _ => Mismatch },
+        Ctors(_) => match a { ACtors(c) => Fits(c), _ => Mismatch },
+        AsType(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Publish(_) => Mismatch,
     }
 }
 
@@ -623,6 +692,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 0: a result. 1: `Goal`. 2: `Defeq`. 3: `Fail`. 4: `Infer`. 5: `Open`.
 // 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`. 10: `Hole`. 11: `Mark`.
 // 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
+// 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -643,6 +713,10 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Cases(_, _) => 14,
             Constructor(_) => 15,
             Close(_, _) => 16,
+            Assume(_, _, _) => 17,
+            Ctors(_) => 18,
+            AsType(_) => 19,
+            Publish(_) => 20,
         },
     }
 }
@@ -654,7 +728,14 @@ fn host_result(t: Tac<Expr>) → Expr {
 fn host_lhs(t: Tac<Expr>) → Expr {
     match t {
         Pure(e) => e,
-        Ask(r, _) => match r { Defeq(a, _) => a, Infer(e) => e, Cases(e, _) => e, _ => NatLit(0) },
+        Ask(r, _) => match r {
+            Defeq(a, _) => a,
+            Infer(e) => e,
+            Cases(e, _) => e,
+            Assume(ty, _, _) => ty,
+            AsType(e) => e,
+            _ => NatLit(0),
+        },
     }
 }
 
@@ -678,6 +759,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Hole(ty) => ty.id,
             Cases(_, goal) => goal.id,
             Constructor(goal) => goal.id,
+            Ctors(ty) => ty.id,
             _ => 0,
         },
     }
@@ -716,13 +798,79 @@ fn host_target(t: Tac<Expr>) → Nat {
     match t { Pure(_) => 0, Ask(r, _) => match r { Match(_, target) => target.id, _ => 0 } }
 }
 
-// `Open`'s, `Resolve`'s or `Lookup`'s name.
+// `Open`'s, `Resolve`'s, `Lookup`'s or `Assume`'s name.
 fn host_name(t: Tac<Expr>) → String {
     match t {
         Pure(_) => "",
-        Ask(r, _) => match r { Open(_, name) => name, Resolve(name) => name, Lookup(name) => name, _ => "" },
+        Ask(r, _) => match r {
+            Open(_, name) => name,
+            Resolve(name) => name,
+            Lookup(name) => name,
+            Assume(_, name, _) => name,
+            _ => "",
+        },
     }
 }
+
+// The local `Assume` is under: 0 for the root, and one more than its id
+// otherwise.
+fn host_under(t: Tac<Expr>) → Nat {
+    match t {
+        Pure(_) => 0,
+        Ask(r, _) => match r {
+            Assume(_, _, under) => match under { None => 0, Some(x) => Succ(x.id) },
+            _ => 0,
+        },
+    }
+}
+
+// `Publish`'s declarations, read one at a time, and each declaration's
+// parts.
+fn host_decls(t: Tac<Expr>) → List<Decl> {
+    match t { Pure(_) => [], Ask(r, _) => match r { Publish(ds) => ds, _ => [] } }
+}
+
+fn decls_len(ds: List<Decl>) → Nat { match ds { Nil => 0, Cons(_, rest) => Succ(decls_len(rest)) } }
+
+fn host_decl_count(t: Tac<Expr>) → Nat { decls_len(host_decls(t)) }
+
+fn decls_at(ds: List<Decl>, i: Nat) → Decl {
+    match ds {
+        Nil => Decl(AsTheorem, "", [], NatLit(0), NatLit(0)),
+        Cons(d, rest) => match i { Zero => d, Succ(j) => decls_at(rest, j) },
+    }
+}
+
+fn host_decl(t: Tac<Expr>, i: Nat) → Decl { decls_at(host_decls(t), i) }
+
+// 0: a theorem. 1: a function.
+fn decl_form(d: Decl) → Nat { match d.form { AsTheorem => 0, AsFunction => 1 } }
+
+fn decl_name(d: Decl) → String { d.name }
+
+fn decl_result(d: Decl) → Expr { d.result }
+
+fn decl_body(d: Decl) → Expr { d.body }
+
+fn params_len(ps: List<Param>) → Nat { match ps { Nil => 0, Cons(_, rest) => Succ(params_len(rest)) } }
+
+fn params_at(ps: List<Param>, i: Nat) → Param {
+    match ps {
+        Nil => Param(LocalRef(0), False),
+        Cons(p, rest) => match i { Zero => p, Succ(j) => params_at(rest, j) },
+    }
+}
+
+fn decl_param_count(d: Decl) → Nat { params_len(d.params) }
+
+fn decl_param(d: Decl, i: Nat) → Nat { params_at(d.params, i).x.id }
+
+// 1 when the parameter is implicit.
+fn decl_param_implicit(d: Decl, i: Nat) → Nat { match params_at(d.params, i).implicit { True => 1, False => 0 } }
+
+// A generator, as the host runs it: its declarations, published by its last
+// request.
+fn host_generator(g: Tac<List<Decl>>) → Tac<Expr> { g.bind(λ ds => publish(ds)) }
 
 // A failure's message. Its notes are read one at a time, and the elaborator
 // renders them, since an `At` note's term is spelled by its diagnostics.
@@ -772,20 +920,40 @@ fn host_resume(t: Tac<Expr>, a: Answer) → Tac<Expr> {
 }
 
 // 0: `Hd`. 1: `Local`. 2: `App`. 3: `NatLit`. 4: `Lam`. 5: `Global`.
+// 6: `Blank`. 7: `Pi`. 8: `Equation`.
 fn expr_tag(e: Expr) → Nat {
-    match e { Hd(_) => 0, Local(_) => 1, App(_, _) => 2, NatLit(_) => 3, Lam(_, _) => 4, Global(_) => 5 }
+    match e {
+        Hd(_) => 0,
+        Local(_) => 1,
+        App(_, _) => 2,
+        NatLit(_) => 3,
+        Lam(_, _) => 4,
+        Global(_) => 5,
+        Blank => 6,
+        Pi(_, _) => 7,
+        Equation(_, _) => 8,
+    }
 }
 
 // The number a leaf carries: a handle, a local, a literal or a global;
-// `Lam`'s local.
+// `Lam`'s and `Pi`'s local.
 fn expr_nat(e: Expr) → Nat {
-    match e { Hd(h) => h.id, Local(x) => x.id, App(_, _) => 0, NatLit(n) => n, Lam(x, _) => x.id, Global(g) => g.id }
+    match e {
+        Hd(h) => h.id,
+        Local(x) => x.id,
+        NatLit(n) => n,
+        Lam(x, _) => x.id,
+        Global(g) => g.id,
+        Pi(x, _) => x.id,
+        _ => 0,
+    }
 }
 
-fn expr_fn(e: Expr) → Expr { match e { App(f, _) => f, _ => e } }
+// `App`'s function; `Equation`'s left side.
+fn expr_fn(e: Expr) → Expr { match e { App(f, _) => f, Equation(l, _) => l, _ => e } }
 
-// `App`'s argument; `Lam`'s body.
-fn expr_arg(e: Expr) → Expr { match e { App(_, a) => a, Lam(_, b) => b, _ => e } }
+// `App`'s argument; `Lam`'s and `Pi`'s body; `Equation`'s right side.
+fn expr_arg(e: Expr) → Expr { match e { App(_, a) => a, Lam(_, b) => b, Pi(_, b) => b, Equation(_, r) => r, _ => e } }
 
 fn chars_len(cs: List<Char>) → Nat { match cs { Nil => 0, Cons(_, rest) => Succ(chars_len(rest)) } }
 
@@ -917,6 +1085,50 @@ fn host_branch_local(a: Answer, ref: Nat, name: String, ty: Nat) → Answer {
 }
 
 fn host_split_refused(why: String) → Answer { ASplit(Refused(why)) }
+
+fn host_assumed(ref: Nat, name: String, ty: Nat) → Answer { ALocal(Accepted(LocalInfo(LocalRef(ref), name, Handle(ty)))) }
+
+fn host_not_assumed(why: String) → Answer { ALocal(Refused(why)) }
+
+// Constructors are answered one at a time, each followed by its fields in
+// order and then, where it has one, the constructor as a function.
+fn host_ctors() → Answer { ACtors(Accepted([])) }
+
+fn host_ctors_refused(why: String) → Answer { ACtors(Refused(why)) }
+
+// The constructors with the last one changed by `f`.
+fn ctors_last(cs: List<CtorInfo>, f: CtorInfo → CtorInfo) → List<CtorInfo> {
+    match cs {
+        Nil => [],
+        Cons(c, rest) => match rest { Nil => [f(c)], Cons(_, _) => Cons(c, ctors_last(rest, f)) },
+    }
+}
+
+fn ctors_answer(a: Answer, f: CtorInfo → CtorInfo) → Answer {
+    match a {
+        ACtors(c) => match c { Accepted(cs) => ACtors(Accepted(ctors_last(cs, f))), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_ctor(a: Answer, name: String) → Answer {
+    match a {
+        ACtors(c) => match c { Accepted(cs) => ACtors(Accepted(cs ++ [CtorInfo(name, [], None)])), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_ctor_field(a: Answer, name: String, h: Nat) → Answer {
+    ctors_answer(a, λ c => CtorInfo(c.name, c.fields ++ [FieldInfo(name, Some(Handle(h)))], c.ctor))
+}
+
+fn host_ctor_dependent_field(a: Answer, name: String) → Answer {
+    ctors_answer(a, λ c => CtorInfo(c.name, c.fields ++ [FieldInfo(name, None)], c.ctor))
+}
+
+fn host_ctor_fn(a: Answer, h: Nat) → Answer {
+    ctors_answer(a, λ c => CtorInfo(c.name, c.fields, Some(Handle(h))))
+}
 
 // A term of the goal's context, quoted where a tactic's argument expects an
 // `Expr`.

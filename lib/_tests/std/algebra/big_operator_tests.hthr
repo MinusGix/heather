@@ -215,3 +215,56 @@ theorem rewrite_bound_context_open(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h:
 theorem rewrite_sum_leaves(n: Nat, x, y: Rat, h: x ≈ y, size: (Nat → Rat) → Nat, back: Nat → Rat, e: back(size(λ k => y)) ≈ 0):
     back(size(λ k => x)) ≈ 0
 { rewrite(h, e) }
+
+// `rel_cong` and `rel_derive` cross the same binders
+// (docs/equation-rewrite-design.md §10.6): two λs whose bodies differ are
+// walked below the binder to a pointwise proof, and their consumer crosses it
+// by the evidence `rewrite` asks for.
+theorem rel_cong_under_sum(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, f(k) * x ≈ ∑ k < n, f(k) * y { rel_cong(h) }
+theorem rel_cong_nested(m, n: Nat, f: Nat → Nat → Rat, x, y: Rat, h: x ≈ y):
+    ∑ i < m, ∑ k < n, f(i, k) * x ≈ ∑ i < m, ∑ k < n, f(i, k) * y
+{ rel_cong(h) }
+theorem rel_cong_triangle(m: Nat, f: Nat → Nat → Rat, x, y: Rat, h: x ≈ y):
+    ∑ i < m, ∑ k < m - i, f(i, k) * x ≈ ∑ i < m, ∑ k < m - i, f(i, k) * y
+{ rel_cong(h) }
+theorem rel_cong_antidiag(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y):
+    MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * f(k) * x) ≈ MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * f(k) * y)
+{ rel_cong(h) }
+theorem rel_cong_open_sum<A: Semiring(≈, +, *)>(n: Nat, f: Nat → A, c, d: A, h: c ≈ d): ∑ k < n, c * f(k) + c ≈ ∑ k < n, d * f(k) + c { rel_cong(h) }
+theorem rel_cong_bound_context(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h: x ≈ y,
+    c: (k: Nat) → PreservesRelation(Rat::Same, Rat::Same, g(k))): ∑ k < n, g(k, x) ≈ ∑ k < n, g(k, y)
+{
+    rel_cong(h)
+    on ?compatibility := c;
+}
+// expect-error: ?compatibility : (z: Nat) -> PreservesRelation(Same, Same, g(z))
+theorem rel_cong_bound_context_open(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, g(k, x) ≈ ∑ k < n, g(k, y) { rel_cong(h) }
+// A negative control: the body changes in a way `h` does not explain.
+// expect-error: context mismatch
+theorem rel_cong_unexplained(n: Nat, f, g: Nat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, f(k) * x ≈ ∑ k < n, g(k) * y { rel_cong(h) }
+theorem rel_derive_sum(n: Nat, f: Nat → Rat): PreservesRelation(Rat::Same, Rat::Same, λ x => ∑ k < n, f(k) * x) { rel_derive }
+
+// A law stated in a class's section is instantiated unapplied: its left side
+// `c * ∑ k < n, f(k)` is headed by the class's `*`, an argument of the law,
+// so it is keyed by the sum; the dictionary is resolved, and the body pattern
+// `λ k. f(k)` is `f` (docs/equation-rewrite-design.md §6.1).
+theorem class_law_open<A: Semiring(≈, +, *)>(n: Nat, f: Nat → A, c: A, e: ∑ k < n, c * f(k) ≈ c): c * ∑ k < n, f(k) ≈ c {
+    rewrite(Semiring::mul_range_l, e)
+}
+theorem class_law_rat(n: Nat, f: Nat → Rat, c: Rat, e: ∑ k < n, c * f(k) ≈ c): c * ∑ k < n, f(k) ≈ c { rewrite(Semiring::mul_range_l, e) }
+// A body that is no η-redex binds `f` to the λ itself.
+theorem class_law_body(n: Nat, f: Nat → Rat, c: Rat, e: ∑ k < n, c * (f(k) + 1) ≈ 0): c * ∑ k < n, (f(k) + 1) ≈ 0 {
+    rewrite(Semiring::mul_range_l, e)
+}
+// Below a binder, where the law's arguments mention the index.
+theorem class_law_under_sum<A: Semiring(≈, +, *)>(m, n: Nat, f, g: Nat → A):
+    ∑ i < m, f(i) * ∑ k < n, g(k) ≈ ∑ i < m, ∑ k < n, f(i) * g(k)
+{
+    rewrite(Semiring::mul_range_l, A.rel_refl(∑ i < m, ∑ k < n, f(i) * g(k)))
+}
+// A negative control: `c + ∑ …` has the sum, but its operation is not the
+// semiring's `*`, so no dictionary resolves and nothing is an instance.
+// expect-error: is an instance of this relation's left side
+theorem class_law_wrong_operation<A: Semiring(≈, +, *)>(n: Nat, f: Nat → A, c: A, e: ∑ k < n, c * f(k) ≈ c): c + ∑ k < n, f(k) ≈ c {
+    rewrite(Semiring::mul_range_l, e)
+}

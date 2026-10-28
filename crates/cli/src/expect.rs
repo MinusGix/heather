@@ -41,7 +41,7 @@
 //! it, and says why: an unflagged check keeps meaning "every declaration
 //! checks", as it does beside `--cache`.
 
-use heather_elab::ElabError;
+use heather_elab::{ElabError, KernelSite};
 use heather_syntax::Span;
 
 /// Why a directive says its declaration is refused.
@@ -77,6 +77,13 @@ impl Directive {
     /// the same declaration asks for an incidental slip by name.
     fn holds(&self, err: &ElabError, rendered: &str, incidental: bool, slip_named: bool) -> bool {
         if incidental && !slip_named {
+            return false;
+        }
+        // A refusal no recorded site explains is an elaborator gap, not a
+        // refusal to pin, whatever the directive says of it
+        // (`KernelSite::Unrecorded`): it is reported as it stands, so the gap
+        // is fixed rather than kept.
+        if matches!(err, ElabError::Kernel { site: KernelSite::Unrecorded, .. }) {
             return false;
         }
         let kind = match self.kind {

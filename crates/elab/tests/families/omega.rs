@@ -59,3 +59,5 @@ mod tactic_host;
 mod tactic_split_all;
 #[path = "../tactic_splits.rs"]
 mod tactic_splits;
+#[path = "../tactic_generate.rs"]
+mod tactic_generate;

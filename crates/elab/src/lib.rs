@@ -203,7 +203,7 @@ pub const PRELUDE: &str = include_str!("prelude.hthr");
 /// a file — there is no `prelude.hthr` on disk to find.
 pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
 
-pub use diagnostics::{ElabError, GoalReport, GoalSource, IndexedRoute, LintFix, Warning};
+pub use diagnostics::{ElabError, GoalReport, GoalSource, IndexedRoute, KernelSite, LintFix, Warning};
 pub use heather_syntax::Span;
 
 impl From<ParseError> for ElabError {
@@ -706,6 +706,9 @@ pub struct Elaborator {
     /// shared by clones, exactly like the two collectors above: ordinary
     /// elaboration pays one `Option` branch per declaration.
     emission_findings: Option<Rc<RefCell<Vec<EmissionFinding>>>>,
+    /// Test-time only: inferred arguments owe no check note
+    /// ([`Self::forget_owed_argument_checks`]).
+    owed_checks_forgotten: bool,
     /// Successful Omega reconstruction steps, including recursively generated
     /// logical branches, in checking order.
     omega_reports: RefCell<Vec<OmegaReport>>,
@@ -798,6 +801,48 @@ impl DerefMut for Elaborator {
     #[track_caller]
     fn deref_mut(&mut self) -> &mut Self::Target {
         stats::make_mut(&mut self.committed)
+    }
+}
+
+/// A recorded site that a kernel-located refusal turned out to be
+/// ([`Elaborator::kernel_refusal`]): reported as its own probe would have
+/// reported it, had the probe's budget reached the verdict.
+enum RecordedSite {
+    /// A written `refl`, with its two sides when both spell.
+    Refl { span: Span, sides: Option<(String, String)> },
+    /// A checking site, with its two types when both spell and differ.
+    Check { span: Span, types: Option<(String, String)> },
+}
+
+impl RecordedSite {
+    fn into_error(self, decl: &str, err: TypeError, with_op: impl Fn(String) -> String) -> ElabError {
+        match self {
+            RecordedSite::Check { span, types: Some((g, w)) } => ElabError::Elab {
+                msg: with_op(format!("this has type `{g}`, but `{w}` is expected here")),
+                span,
+            },
+            RecordedSite::Check { span, types: None } => ElabError::Kernel {
+                decl: decl.to_string(),
+                span,
+                err,
+                note: Some(with_op(
+                    "the type of this expression does not convert to the type expected here".to_string(),
+                )),
+                site: KernelSite::Recorded,
+            },
+            RecordedSite::Refl { span, sides } => ElabError::Kernel {
+                decl: decl.to_string(),
+                span,
+                err,
+                note: Some(with_op(match sides {
+                    Some((l, r)) => format!(
+                        "`refl` needs both sides to be definitionally equal, but `{l}` and `{r}` are not"
+                    ),
+                    None => "`refl` needs both sides to be definitionally equal, and these are not".to_string(),
+                })),
+                site: KernelSite::Recorded,
+            },
+        }
     }
 }
 
@@ -1413,6 +1458,9 @@ impl application::ImplicitApplicationElab for Elaborator {
     }
 
     fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span) {
+        if self.owed_checks_forgotten {
+            return;
+        }
         self.note_check_mismatch(cx, got, expected, level, span)
     }
 
@@ -1676,6 +1724,7 @@ fn item_timing_name(item: &Item) -> String {
             format!("impl {} for {}", implementation.op, implementation.repr)
         }
         Item::Import(import) => format!("import {}", import.module),
+        Item::Generate(g) => format!("generate {}", host::tactic_name(&g.generator)),
     }
 }
 
@@ -1766,6 +1815,7 @@ impl Elaborator {
             fuel: DEFAULT_FUEL,
             value_metrics: None,
             emission_findings: None,
+            owed_checks_forgotten: false,
             omega_reports: RefCell::new(Vec::new()),
             unfold_refusals: RefCell::new(std::collections::HashMap::new()),
             container_decls: RefCell::new(Vec::new()),
@@ -1914,6 +1964,7 @@ impl Elaborator {
                         span: item.span,
                         err: *err,
                         note: None,
+                        site: KernelSite::Other,
                     },
                     None => ElabError::Elab {
                         msg: format!("the kernel worker checking `{}` panicked", item.name),
@@ -2115,6 +2166,17 @@ impl Elaborator {
     /// and test-time switch, not a default.
     pub fn enable_emission_walk(&mut self) {
         self.emission_findings = Some(Rc::new(RefCell::new(Vec::new())));
+    }
+
+    /// Re-open the gap `OwedChecks` closed (#168): an inferred argument's
+    /// comparison with its parameter is recorded by nobody, as before that
+    /// round. A **test-time switch** and nothing else — it exists so the
+    /// safety net under every such gap, the kernel's locator
+    /// ([`KernelSite::Unrecorded`], issues/elab-accepts-conjunction-for-equation.md),
+    /// can be tested against a real one rather than a constructed refusal.
+    #[doc(hidden)]
+    pub fn forget_owed_argument_checks(&mut self) {
+        self.owed_checks_forgotten = true;
     }
 
     /// Drain emission-slot findings without disabling the walk.
@@ -2328,6 +2390,7 @@ impl Elaborator {
             Item::Designation(d) => stats::timed(stats::Timer::Lower, || self.elab_designation(d)),
             Item::Datarepr(d) => stats::timed(stats::Timer::Lower, || self.elab_datarepr(d)),
             Item::Impl(i) => stats::timed(stats::Timer::Lower, || self.elab_impl(i)),
+            Item::Generate(g) => self.elab_generate(g),
             Item::Import(_) => Ok(()),
         }
     }
@@ -4265,6 +4328,7 @@ impl Elaborator {
         }
         let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
         drop(decl_type);
+        *self.attempt.telescope.borrow_mut() = cx.names.clone();
         // The graph records what the checked proof/body references, not names
         // appearing only in its public statement (issues/axiom-provenance.md).
         self.attempt.direct_dependencies.borrow_mut().clear();
@@ -4426,7 +4490,9 @@ impl Elaborator {
             stats::time_kernel(|| {
                 self.kernel_check_type(&self.psi, Layer::Prog, &empty, &stmt, &stmt_lvl)
             })
-            .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
+            .map_err(|e| {
+                self.kernel_refusal(&decl.name, decl.span, e, &self.psi, Layer::Prog, &empty, None, &stmt, &stmt_lvl)
+            })?;
         }
 
         // A default's names resolve where the declaration was written, at
@@ -4554,7 +4620,7 @@ impl Elaborator {
         // doing: every dependent needs it, and it is the cheap half
         // (`docs/parallel-kernel-gate-design.md` §2).
         stats::time_kernel(|| self.kernel_check_type(psi, Layer::Prog, ctx, ty, level))
-            .map_err(|e| self.kernel_error(name, span, e))?;
+            .map_err(|e| self.kernel_refusal(name, span, e, psi, Layer::Prog, ctx, None, ty, level))?;
         if self.gate_is_inline() {
             // A serial replay may already hold this exact obligation's
             // verdict, earned by a worker of the pass it replaces
@@ -4564,7 +4630,7 @@ impl Elaborator {
                 Some(verdict) => verdict,
                 None => stats::time_kernel(|| self.kernel_check_term(psi, Layer::Code, ctx, body, ty, level)),
             };
-            verdict.map_err(|e| self.kernel_error(name, span, e))?;
+            verdict.map_err(|e| self.kernel_refusal(name, span, e, psi, Layer::Code, ctx, Some(body), ty, level))?;
             let unsealed = recording.finish();
             if let Some(g) = self.gate.as_ref() {
                 g.accepted(psi, &item, &unsealed);
@@ -4789,6 +4855,8 @@ impl Elaborator {
 
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
         match &ty.kind {
+            // A generated declaration's type (`host::Leaves::Member`).
+            TyKind::Named { name, .. } if let Some(k) = host::leaf_index(name) => self.host_ty_leaf(cx, k, ty.span),
             // An expression in type position: infer it, require its type to be
             // a universe, and decode (docs/surface-universe.md §4). `El` is the
             // kernel's own decoding, so nothing here is a coercion — the term
@@ -8232,7 +8300,13 @@ impl Elaborator {
     /// both spell travels the same way ([`MismatchNote::Located`]), when no
     /// `refl` note has more to say.
     fn kernel_error(&self, decl: &str, span: Span, e: TypeError) -> ElabError {
-        if e == TypeError::NotConvertible
+        // A head of the wrong former is the same disagreement met one step
+        // later: a proof of `same(x, y)` filled into a goal whose statement
+        // unfolds to a Π is refused where the goal is *applied*, as
+        // `HeadMismatch`, and the site that explains it is the checking note
+        // at the `on` (issues/elab-accepts-conjunction-for-equation.md).
+        let conversion = matches!(e, TypeError::NotConvertible | TypeError::HeadMismatch);
+        if conversion
             && let Some((note, at)) = self.refused_decide()
         {
             return ElabError::Kernel {
@@ -8240,9 +8314,10 @@ impl Elaborator {
                 span: at,
                 err: e,
                 note: Some(note),
+                site: KernelSite::Recorded,
             };
         }
-        let mismatch = (e == TypeError::NotConvertible)
+        let mismatch = conversion
             .then(|| self.pending_mismatch())
             .flatten();
         let located = match mismatch {
@@ -8256,13 +8331,20 @@ impl Elaborator {
             Some((MismatchNote::Located(msg), at)) => Some((msg, at)),
             None => None,
         };
-        let refl = (e == TypeError::NotConvertible)
+        let refl = conversion
             .then(|| self.pending_refl_note())
             .flatten()
             .or(located);
         let (span, refl_note) = match refl {
             Some((msg, at)) => (at, Some(msg)),
             None => (span, None),
+        };
+        let site = if refl_note.is_some() {
+            KernelSite::Recorded
+        } else if conversion {
+            KernelSite::Unrecorded
+        } else {
+            KernelSite::Other
         };
         let note = match (refl_note, self.operator_fallback_note()) {
             (Some(refl), Some(op)) => Some(format!("{refl} (note: {op})")),
@@ -8274,7 +8356,195 @@ impl Elaborator {
             span,
             err: e,
             note,
+            site,
         }
+    }
+
+    /// [`Self::kernel_error`] for a refusal of `body` at `ty` (or of `ty`
+    /// itself, with no body) in `psi`; Γ: when no recorded site's probe
+    /// decides it, ask the kernel where it failed
+    /// (`issues/elab-accepts-conjunction-for-equation.md`).
+    ///
+    /// **Why the kernel, and why only here.** Every recorded site is a place
+    /// the elaborator *knew* it was trusting the gate. An unrecorded refusal
+    /// is one where it did not know — a route that placed a term without
+    /// comparing or recording — and no list of routes kept by hand closes
+    /// that class: the inferred-argument route (#168), the β-redex spelling
+    /// (#184) and the check fallback were each found by a bisection after a
+    /// bare `NotConvertible`. The kernel is the one place every placement
+    /// passes through, so it is the one that can always say where. It costs
+    /// one more check of the refused declaration, and runs on no other path.
+    ///
+    /// The located term is then looked for among the recorded sites, by
+    /// syntax: a site whose probe was only *inconclusive* (a `refl` whose
+    /// sides outran the note's small budget) is still the site, and the
+    /// kernel has now decided it, so the report moves there as if the probe
+    /// had. Only a refusal that matches no recorded site stays
+    /// [`KernelSite::Unrecorded`], at the declaration, naming the refused
+    /// term and its two types where they spell.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn kernel_refusal(
+        &self,
+        decl: &str,
+        span: Span,
+        e: TypeError,
+        psi: &GlobalCtx,
+        layer: Layer,
+        gamma: &LocalCtx,
+        body: Option<&Term>,
+        ty: &Type,
+        level: &Level,
+    ) -> ElabError {
+        let error = self.kernel_error(decl, span, e);
+        let ElabError::Kernel { site: KernelSite::Unrecorded, note: op_note, .. } = &error else {
+            return error;
+        };
+        let with_op = |said: String| match op_note {
+            Some(op) => format!("{said} (note: {op})"),
+            None => said,
+        };
+        let found = match body {
+            Some(body) => typing::locate_refusal(psi, 0, layer, gamma, body, ty, level, self.fuel),
+            None => typing::locate_type_refusal(psi, 0, layer, gamma, ty, level, self.fuel),
+        };
+        let said = match &found {
+            Some(found) if found.psi_len == psi.bindings.len() => {
+                if let Some(at) = self.recorded_site_of(psi, found) {
+                    return at.into_error(decl, e, with_op);
+                }
+                self.refused_site_note(found)
+            }
+            Some(_) => "no checking site recorded this refusal; the kernel refused a term \
+                        under a binder of the global context, which has no surface spelling"
+                .to_string(),
+            None => "no checking site recorded this refusal, and the kernel refused no \
+                     term check in it"
+                .to_string(),
+        };
+        ElabError::Kernel {
+            decl: decl.to_string(),
+            span,
+            err: e,
+            note: Some(with_op(said)),
+            site: KernelSite::Unrecorded,
+        }
+    }
+
+    /// The recorded site a located refusal is, if any: a written `refl` at
+    /// the same depth whose side converts with the refused `Refl`'s, or a
+    /// checking site at the same depth whose two types convert with the
+    /// refused check's. **By conversion, not syntax**: the kernel holds the
+    /// emitted spelling (the statement and every slot are respelled on their
+    /// way through the emission chokepoint), the note the elaborator's, and
+    /// the two differ in exactly the way conversion forgives. Budgeted like
+    /// the `refl` note; out of budget is no match. Only in a world with no
+    /// goal slots, where the two sides' global indices agree.
+    fn recorded_site_of(&self, psi: &GlobalCtx, found: &typing::RefusedSite) -> Option<RecordedSite> {
+        let world = self.goal_psi();
+        if world.bindings.len() != psi.bindings.len() {
+            return None;
+        }
+        let oracle = oracle::SemanticOracle::in_world(world, self.fuel.min(diagnostics::REFL_NOTE_FUEL));
+        let gamma = &found.gamma;
+        let same_depth = |c: &Cx| c.gamma.base == gamma.base && c.gamma.entries.len() == gamma.entries.len();
+        if let Term::Refl { tm, .. } = &found.term {
+            let refls = self.attempt.refl_notes.borrow();
+            let site = refls.iter().find(|n| {
+                same_depth(&n.cx)
+                    && (n.lhs == **tm || oracle.convert_term(gamma, Layer::Prog, &n.lhs, tm, &n.ty, &n.level).is_ok())
+            });
+            if let Some(n) = site {
+                let sides = self.spell_term_clean(&n.cx, &n.lhs).zip(self.spell_term_clean(&n.cx, &n.rhs));
+                return Some(RecordedSite::Refl { span: n.span, sides });
+            }
+        }
+        let (Some(expected), Some(inferred)) = (&found.expected, &found.inferred) else {
+            return None;
+        };
+        let converts = |a: &Type, b: &Type, level: &Level| {
+            a == b || oracle.convert_type(gamma, Layer::Prog, a, b, level).is_ok()
+        };
+        let checks = self.attempt.check_notes.borrow();
+        let n = checks.iter().find(|n| {
+            same_depth(&n.cx) && converts(&n.expected, expected, &n.level) && converts(&n.got, inferred, &n.level)
+        })?;
+        let got = self.display_type_clean(&n.cx, &n.got);
+        let want = self.display_type_clean(&n.cx, &n.expected);
+        Some(RecordedSite::Check { span: n.span, types: got.zip(want).filter(|(g, w)| g != w) })
+    }
+
+    /// The located refusal, said: the term and the two types, each where it
+    /// spells in full ([`Self::spell_term_clean`], [`Self::display_type_clean`]:
+    /// a claim about a type the reader cannot check is worse than none).
+    fn refused_site_note(&self, found: &typing::RefusedSite) -> String {
+        let cx = self.refused_site_cx(found);
+        let term = cx.as_ref().and_then(|cx| self.spell_term_clean(cx, &found.term));
+        let spell = |ty: &Option<Type>| match (&cx, ty) {
+            (Some(cx), Some(ty)) => self.display_type_clean(cx, ty),
+            _ => None,
+        };
+        let (got, want) = (spell(&found.inferred), spell(&found.expected));
+        let what = match term {
+            Some(t) => format!("`{t}`"),
+            None => "a term with no surface spelling".to_string(),
+        };
+        let types = match (got, want) {
+            (Some(g), Some(w)) if g != w => format!(", which has type `{g}`, where `{w}` is expected"),
+            (Some(g), Some(_)) => format!(
+                ", which has type `{g}` where a type that displays the same is expected"
+            ),
+            (None, Some(w)) => format!(" where `{w}` is expected"),
+            (Some(g), None) => format!(", which has type `{g}`"),
+            (None, None) => String::new(),
+        };
+        format!(
+            "no checking site recorded this refusal: the kernel refused {what}{types} \
+             (an elaborator gap: issues/elab-accepts-conjunction-for-equation.md)"
+        )
+    }
+
+    /// Names for a located refusal's Γ, binder by binder: the name a
+    /// recorded site's context gave it, where that context shares Γ up to
+    /// it (those are the binders the source wrote, under the names it
+    /// wrote); else the declaration's parameter name at that position (the
+    /// kernel's outermost binders are the telescope, whose types the
+    /// statement respells, so they are matched by position); else a fresh
+    /// name, as the display names a binder the kernel does not name.
+    fn refused_site_cx(&self, found: &typing::RefusedSite) -> Option<Cx> {
+        let gamma = &found.gamma;
+        if !matches!(gamma.base, heather_kernel::term::CtxBase::Nil) {
+            return None;
+        }
+        let shared = |c: &Cx| -> usize {
+            if c.gamma.base != gamma.base {
+                return 0;
+            }
+            (0..c.gamma.entries.len().min(gamma.entries.len()))
+                .take_while(|&i| c.gamma.entries.get(i) == gamma.entries.get(i))
+                .count()
+        };
+        let checks = self.attempt.check_notes.borrow();
+        let refls = self.attempt.refl_notes.borrow();
+        let none = Vec::new();
+        let (k, written) = checks.iter().map(|n| &n.cx).chain(refls.iter().map(|n| &n.cx))
+            .map(|c| (shared(c), &c.names))
+            .max_by_key(|(k, _)| *k)
+            .unwrap_or((0, &none));
+        let telescope = self.attempt.telescope.borrow();
+        let mut cx = Cx::empty();
+        for i in 0..gamma.entries.len() {
+            let entry = gamma.entries.get(i)?;
+            let name = match (i < k).then(|| written.get(i)).flatten().or_else(|| telescope.get(i)) {
+                Some(name) => name.clone(),
+                None => ["x", "y", "z", "a", "b", "c"]
+                    .iter()
+                    .map(|n| n.to_string())
+                    .chain((i..).map(|n| format!("x{n}")))
+                    .find(|n| !cx.names.contains(n))?,
+            };
+            cx.push(name, (*entry.ty).clone(), entry.level.clone());
+        }
+        Some(cx)
     }
 
     /// Is a bare `decide` something the writer bound, rather than the goal

@@ -25,7 +25,8 @@
 //! read that verdict, and their `refl` pins have sides no display can spell —
 //! it moves the report to the `refl` and appends the two sides.
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, KernelSite};
+use heather_kernel::typing::TypeError;
 
 const LIST: &str = "
 inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
@@ -552,4 +553,49 @@ fn a_redex_head_of_the_right_type_is_accepted() {
         let post = λ (u: Nat) => P(u); let x: post(f(n)) = h; trivial }}\n\
         theorem good_binder(P: Nat → Type, Q: Type, q: Q): True {{ \
         weaken_like(λ (s: Nat) => P(s) ∧ Q, λ (s: Nat) => P(s), λ s held => ⟨held, q⟩) }}\n"));
+}
+
+/// **The net under the class** (`issues/elab-accepts-conjunction-for-equation.md`).
+/// A refusal no recorded site explains is a route that placed a term without
+/// comparing or recording it; each one was found by bisecting a bare
+/// `NotConvertible`. The filed case is re-opened here as it stood before
+/// #168 — the inferred argument of `sym`/`trans` owing no check — and the
+/// kernel's locator must still name the refused term and both types, flag
+/// the refusal as unrecorded, and leave the verdict and the span the gate's.
+#[test]
+fn an_unrecorded_refusal_names_the_refused_term_and_both_types() {
+    const BOTH: &str = "record Both<P, Q> { l: P, r: Q }\n";
+    let cases = [
+        ("theorem bad4(a, b: Nat, p: Both<a = b, b = b>): b = a { sym(p) }", "theorem bad4("),
+        ("theorem bad2(a, b, c: Nat, p: Both<a = b, b = b>, q: b = c): a = c { trans(p, q) }", "theorem bad2("),
+    ];
+    for (case, head) in cases {
+        let src = format!("{BOTH}{case}\n");
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.forget_owed_argument_checks();
+        let r = e.elab_source(&src).expect_err("refused");
+        let rendered = r.render(&src);
+        let ElabError::Kernel { span, err, site, .. } = &r else { panic!("{case}: expected the kernel's refusal: {rendered}") };
+        assert_eq!(*site, KernelSite::Unrecorded, "{case}\n{rendered}");
+        assert_eq!(*err, TypeError::NotConvertible, "{case}\n{rendered}");
+        assert!(src[span.start as usize..].starts_with(head), "{case}: the span stays the declaration's\n{rendered}");
+        assert!(
+            rendered.contains("no checking site recorded this refusal: the kernel refused `p`, \
+                               which has type `Both<a = b, b = b>`, where `a = b` is expected"),
+            "{case}\n{rendered}"
+        );
+    }
+}
+
+/// **Control for the net.** With the route recording, the same refusals are
+/// the elaborator's, at `p`, and nothing is called unrecorded.
+#[test]
+fn a_recorded_site_still_reports_at_the_argument() {
+    let src = "record Both<P, Q> { l: P, r: Q }\n\
+               theorem bad4(a, b: Nat, p: Both<a = b, b = b>): b = a { sym(p) }\n";
+    let r = reject(src);
+    let rendered = r.render(src);
+    let ElabError::Elab { span, .. } = &r else { panic!("expected the elaborator's report: {rendered}") };
+    assert_eq!(&src[span.start as usize..span.end as usize], "p", "{rendered}");
+    assert!(rendered.contains("this has type `Both<a = b, b = b>`, but `a = b` is expected here"), "{rendered}");
 }

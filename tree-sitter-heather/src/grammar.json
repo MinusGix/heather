@@ -68,6 +68,10 @@
         {
           "type": "SYMBOL",
           "name": "section_declaration"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "generate_declaration"
         }
       ]
     },
@@ -1060,6 +1064,27 @@
               "name": "repr_clause_block"
             }
           ]
+        }
+      ]
+    },
+    "generate_declaration": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "generate"
+        },
+        {
+          "type": "FIELD",
+          "name": "generator",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expression"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ";"
         }
       ]
     },
