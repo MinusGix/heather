@@ -381,7 +381,7 @@ theorem Target::byte_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) 
 theorem Target::byte_below_stack(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), bytes: List<BitVec(8)>, short: bytes.len() <= cap,
     i: Nat, below: i < bytes.len()): (t.layout().buffer_offset(buf) + i) + 1 <= t.layout().stack_offset() {
     let ends = t.layout().buffer_end(buf, cap, found);
-    let stack: (t.layout().scratch_offset() <= t.layout().stack_offset()) = t.layout().scratch_offset().le_add_l(t.caps.largest());
+    let stack: (t.layout().scratch_offset() <= t.layout().stack_offset()) = t.layout().scratch_offset().le_add_l(t.caps.largest() + 1);
     omega(ends, stack, short, below)
 }
 
@@ -641,7 +641,8 @@ theorem Target::landed_store(self t: Target, env: Env, m: X86Memory(t.r.profile)
     let sizes: (so + t.caps.largest() <= t.r.size) = t.scratch_room();
     let fits: (so + bytes.len() <= t.r.size) = Nat::le_trans(so + bytes.len(), so + t.caps.largest(), t.r.size,
         so.add_le_mono_l(bytes.len(), t.caps.largest(), short), sizes);
-    let below: (so + bytes.len() <= t.layout().stack_offset()) = so.add_le_mono_l(bytes.len(), t.caps.largest(), short);
+    let below: (so + bytes.len() <= t.layout().stack_offset()) = Nat::le_trans(so + bytes.len(), so + t.caps.largest(), t.layout().stack_offset(),
+        so.add_le_mono_l(bytes.len(), t.caps.largest(), short), t.layout().scratch_below_stack());
     j(sym(t.scratch_rip()), λ x _ => t.Landed(env, bytes, t.r.profile.store(m, x, bytes)),
         Exists(t.r.buffer(v).set_span(so, bytes.to_vector()).cells, ⟨t.r.store_holds(v, m, placed.proof.left, so, bytes, fits),
             ⟨t.layout().keeps_agree(env, v, t.r.buffer(v).set_span(so, bytes.to_vector()).cells, placed.proof.right.left,

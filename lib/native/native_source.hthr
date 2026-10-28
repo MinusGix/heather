@@ -20,11 +20,12 @@
 // nodes read and write the buffers in place (`function_ir_state`'s `run`).
 // A buffer starts as its initial bytes, then zeroes. A call reads
 // and writes buffers whole and never faults: a read asks for at most what
-// its buffer holds and lands at the buffer's start, and a write sends the
-// span its buffer holds. A failed call leaves its errno negated in its
-// result word, as Linux leaves it in RAX. The command line is part of the
-// environment, read and never written: a program's meaning is a family over
-// its arguments (`Source::denote(args)`).
+// its buffer holds and lands at the buffer's start, a write sends the span
+// its buffer holds, and an open or a stat names the path its buffer holds,
+// up to its length or its first NUL. A failed call leaves its errno
+// negated in its result word, as Linux leaves it in RAX. The command line is
+// part of the environment, read and never written: a program's meaning is a
+// family over its arguments (`Source::denote(args)`).
 //
 // Every loop goes round at most the fuel's number of times, so a program is
 // the family of its trees over fuel (`Source::denote`, a `Program`), and
@@ -138,14 +139,24 @@ fn span(buffer: List<BitVec(8)>, from, len: Nat) → List<BitVec(8)> { buffer.dr
 // Bytes landed at a buffer's start; the buffer keeps its length.
 fn fill(buffer, bytes: List<BitVec(8)>) → List<BitVec(8)> { (bytes ++ buffer.drop(bytes.len())).take(buffer.len()) }
 
+// A path's bytes up to its first NUL: what Linux reads of it, a C string
+// ending at the NUL (`CStringAt`), so a path the source names past a NUL
+// is the part before it.
+fn List::before_nul(self bytes: List<BitVec(8)>) → List<BitVec(8)> {
+    match bytes {
+        Nil => Nil,
+        Cons(c, rest) => match c.toNat() { Zero => Nil, Succ(_) => Cons(c, rest.before_nul()) },
+    }
+}
+
 // What the call asks Linux, read off the environment.
 fn CallShape::cmd(self shape: CallShape, env: Env) → LinuxCmd<Nat> {
     match shape {
         Reads(fd, buf, len, _) => ReadCmd(env.word(fd), env.number(len).min(env.buffer(buf).len())),
         Writes(fd, buf, from, len, _) => WriteCmd(env.word(fd), span(env.buffer(buf), env.number(from), env.number(len))),
-        Opens(path, len, _) => OpenCmd(env.buffer(path).take(env.number(len))),
+        Opens(path, len, _) => OpenCmd(env.buffer(path).take(env.number(len)).before_nul()),
         Closes(fd, _) => CloseCmd(env.word(fd)),
-        StatsPath(path, len, _, _) => StatCmd(StatPath(env.buffer(path).take(env.number(len)))),
+        StatsPath(path, len, _, _) => StatCmd(StatPath(env.buffer(path).take(env.number(len)).before_nul())),
         StatsFd(fd, _, _) => StatCmd(StatFd(env.word(fd))),
     }
 }

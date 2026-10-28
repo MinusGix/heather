@@ -212,7 +212,8 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
 /// The bytes a read at a time, on the fork that read the parts, once the
 /// labels are known: each read's program at `Start` again, encoded with its
 /// offsets carried down from where its items end in the whole
-/// (`asm_code_ending`, x86_64_asm_table) and its jumps by the table
+/// (`asm_code_ending_onto`, x86_64_asm_table: consed from the back, so a
+/// long read is linear) and its jumps by the table
 /// `{p}_table()` the text must also define (`labels::table`). So the fork
 /// needs no literal of the program, and the literal is elaborated once, in
 /// the certificate (issues/write-elf-build-constants.md); bytes read wrong
@@ -223,7 +224,7 @@ pub(super) fn byte_reads<'a>(p: &str, spans: &'a [Span], offsets: &[u64]) -> (St
     let mut reads = Vec::new();
     for (r, span) in spans.iter().enumerate().filter(|(_, span)| span.count > 0) {
         let name = format!("{p}_bytes_{r}");
-        text.push_str(&format!("fn {name}() → List<Nat> {{ asm_code_ending(no_fills(), {p}_table().labels(), {}, {}, {}).map(λ (b: BitVec(8)) => b.toNat()) }}\n",
+        text.push_str(&format!("fn {name}() → List<Nat> {{ asm_code_ending_onto(no_fills(), {p}_table().labels(), {}, {}, {}, Nil).map(λ (b: BitVec(8)) => b.toNat()) }}\n",
             span.program, span.count, offsets[span.start + span.count]));
         reads.push((name, span));
     }

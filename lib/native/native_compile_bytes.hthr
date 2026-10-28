@@ -149,7 +149,7 @@ theorem Target::placed_byte(self t: Target, env: Env, m: X86Memory(t.r.profile),
     let v = placed.witness;
     let o = t.layout().buffer_offset(buf);
     let fits: (o + i + 1 <= t.r.size) = omega(t.layout().buffer_end(buf, cap, found), t.scratch_fits(), below);
-    let stack: (t.layout().stack_offset() = t.layout().scratch_offset() + t.caps.largest()) = refl;
+    let stack: (t.layout().stack_offset() = t.layout().scratch_offset() + (t.caps.largest() + 1)) = refl;
     let under: (o + i + 1 <= t.layout().stack_offset()) = omega(t.layout().buffer_end(buf, cap, found), stack, below);
     Exists(t.r.stored_cells(v, o + i, [c]),
         ⟨t.r.store_holds(v, m, placed.proof.left, o + i, [c], fits),

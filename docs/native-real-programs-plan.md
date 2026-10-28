@@ -344,11 +344,33 @@ the loaded file below `0x412000` and `ArgvAt` above it as hypotheses,
 which is what Linux hands a process, and no compiled code uses a stack. The stack region proper stays with `io-image-process-stack`, for a
 compiled callee that spills.
 
+**Status.** open/close done, 2026-10-28
+(`issues/native-compile-other-calls.md`): `Prog::call` compiles `Opens` and
+`Closes` (`native_compile_opens`), and `cat FILE…` is built by `write-elf`
+and run beside GNU's, diagnostics and exit status included. The path an
+`Opens` names is its buffer's bytes up to its length *or its first NUL*
+(`List::before_nul`), since Linux reads a C string; the compiled copy loop
+stops at either and stores the NUL after them in scratch, which is one byte
+longer than the largest buffer for it. Stat is still refused
+(`issues/native-compile-stat.md`). cat's messages are a table scanned at
+run time, so the code that writes a diagnostic exists once; it holds the
+seven errnos a cat mostly meets, and says "Unknown error" past them where
+GNU names the errno or adds its number (decimal output is round 9). The
+table is that short, and cat fits its certificate at all, because two of
+`write-elf`'s statements are one kernel `refl` each under fixed fuel: the
+builder's lowering of the whole tool, and the entry that stores a
+buffer's initial bytes one instruction each
+(`issues/native-tool-certificate-budget.md`, which the larger §2 tools
+need first). The round also made `write-elf`'s byte read linear
+(`asm_code_ending_onto`): it nested its appends to the left, and a long
+entry ran it out of memory.
+
 ### 3.6 Room
 
 `write-elf` puts the whole environment in `DataRegion::io_page()`: 4096 bytes
 (`linux_x86_64_image.hthr`). That page holds 64 word slots (512 bytes), every
-buffer at its capacity, and a scratch range as large as the largest buffer.
+buffer at its capacity, and a scratch range one byte longer than the largest
+buffer (room for a path's NUL).
 So all of a program's buffers together hold under 3.5 KiB, and one buffer
 under 1.8 KiB. `sort`, `rev` of a long line, and `grep`'s line carried
 across reads all need more. `word_slots()` is a constant 64, and the builder

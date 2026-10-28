@@ -1,6 +1,6 @@
 // cat and the tools past it (docs/native-real-programs-plan.md, rounds 1,
-// 5 and 6): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, and `echo` and
-// `yes STR` over the command line, written with the builder
+// 5, 6 and 7): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, `echo` and
+// `yes STR` over the command line, and `cat FILE…`, written with the builder
 // (`native_build`) and lowered to sources `heather write-elf` compiles.
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
@@ -9,6 +9,10 @@ import native_build;
 import native_source;
 import list;
 import bitvec;
+import string;
+import char;
+import bool;
+import nat;
 
 // ---------------------------------------------------------------------------
 // cat
@@ -124,3 +128,81 @@ fn yes_args(capacity: Nat) → Tool {
 }
 
 fn yes_args_source() → Source { yes_args(1024).source() }
+
+// ---------------------------------------------------------------------------
+// cat FILE…
+
+// ASCII text's bytes, one per character (the code of each below 128).
+fn ascii_text(s: String) → List<BitVec(8)> { s.chars.map(λ (c: Char) => BitVec::ofNat(c.code)) }
+
+// One entry of cat's message table: the errno, the length of the text, and
+// the text ": MESSAGE\n".
+fn cat_entry(errno: Nat, message: String) → List<BitVec(8)> {
+    let text = ascii_text(": ") ++ ascii_text(message) ++ ascii_text("\n");
+    Cons(BitVec::ofNat(errno), Cons(BitVec::ofNat(text.len()), text))
+}
+
+// The diagnostics' buffer: "cat: write error" (its first five bytes are
+// "cat: "), then the errnos a cat mostly meets with glibc's message for
+// each (strerror in the C locale), then errno 0's entry, "Unknown error",
+// which a scan for an errno not in the table stops at. GNU adds the number
+// there (decimal output is round 9, issues/native-decimal-io.md). The table
+// is short because a buffer's initial bytes are stored one instruction
+// each, in one kernel evaluation (issues/native-tool-certificate-budget.md).
+fn cat_table() → List<BitVec(8)> {
+    ascii_text("cat: write error") ++ cat_entry(2, "No such file or directory") ++ cat_entry(13, "Permission denied")
+        ++ cat_entry(21, "Is a directory") ++ cat_entry(20, "Not a directory") ++ cat_entry(36, "File name too long")
+        ++ cat_entry(5, "Input/output error") ++ cat_entry(28, "No space left on device") ++ cat_entry(0, "Unknown error")
+}
+
+// Bytes of a buffer to stderr; a failed write exits 1.
+fn say(texts: Buf, from, len: Val) → Act { write_span(stderr(), texts, from, len, λ _ => exit(num(1))) }
+
+// GNU's `cat FILE…` given no options: each file in turn to stdout, `-` (or
+// no file at all) stdin. A file that does not open, or a read or close that
+// fails, says "cat: FILE: MESSAGE" on stderr and the exit status is 1, and
+// the next file goes on; a write that fails says "cat: write error:
+// MESSAGE" and exits 1. A name longer than its buffer exits 1. GNU's
+// options, its quoting of odd names, and its check that an input is not the
+// output (which needs fstat) are not here.
+//
+// The builder inlines what it calls, so each file's errno (`failed`, or
+// `refused` for a write) is kept and one report after the file says it,
+// its message found by a scan of the table: one copy of the code that
+// writes a diagnostic, whatever the table holds.
+fn cat_files(capacity, name_cap: Nat) → Tool {
+    buffer(capacity, λ data => buffer(name_cap, λ name => buffer_of(cat_table(), λ texts => run(
+        local(num(0), λ status => local(num(1), λ k => local(num(0), λ len => local(num(0), λ fd => local(num(0), λ n =>
+        local(num(0), λ closed => local(num(0), λ failed => local(num(0), λ refused => local(num(0), λ at =>
+            arg(k.get(), name, len)
+            ++ when(len.get().negative(), name.put(num(0), num(45)) ++ len.set(num(1)))
+            ++ loop_while(len.get().negative().not(),
+                when(num(name_cap).below(len.get()), exit(num(1)))
+                ++ failed.set(num(0))
+                ++ branch(len.get().equals(num(1)).and_also(name.at(num(0)).equals(num(45))), fd.set(num(0)), open(name, len.get(), fd))
+                ++ branch(fd.get().negative(), failed.set(num(0) - fd.get()),
+                    do_while(
+                        read(fd.get(), data, data.size(), n)
+                        ++ branch(n.get().negative(), failed.set(num(0) - n.get()),
+                            write_span(stdout(), data, num(0), n.get(), λ wrote => refused.set(num(0) - wrote.get()))),
+                        n.get().negative().not().and_also(n.get()).and_also(refused.get().not()))
+                    ++ when(fd.get().differs(num(0)), close(fd.get(), closed)
+                        ++ when(closed.get().negative().and_also(failed.get().or_else(refused.get()).not()), failed.set(num(0) - closed.get()))))
+                ++ when(failed.get().or_else(refused.get()),
+                    failed.set(failed.get() + refused.get())
+                    ++ at.set(num(5))
+                    ++ when(refused.get(), at.set(num(16)))
+                    ++ say(texts, num(0), at.get())
+                    ++ when(refused.get().not(), write_span(stderr(), name, num(0), len.get(), λ _ => exit(num(1))))
+                    ++ at.set(num(16))
+                    ++ loop_while(texts.at(at.get()).differs(failed.get()).and_also(texts.at(at.get())),
+                        at.set(at.get() + texts.at(at.get() + num(1)) + num(2)))
+                    ++ say(texts, at.get() + num(2), texts.at(at.get() + num(1)))
+                    ++ when(refused.get(), exit(num(1)))
+                    ++ status.set(num(1)))
+                ++ k.set(k.get() + num(1))
+                ++ arg(k.get(), name, len))
+            ++ exit(status.get()))))))))))))))
+}
+
+fn cat_files_source() → Source { cat_files(1024, 512).source() }

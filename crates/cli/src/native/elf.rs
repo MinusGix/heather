@@ -398,7 +398,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         4 => format!("word {first} is past the {second} word slots"),
         5 => format!("an input of width {first}: only words (64) and bits (1) load"),
         6 => format!("S4's lowering refused the leaf{NARROW}"),
-        7 => format!("`{}` is not compiled yet (issues/native-compile-other-calls.md)",
+        7 => format!("`{}` is not compiled yet (issues/native-compile-stat.md)",
             ["", "", "open", "close", "stat", "fstat"].get(first as usize).unwrap_or(&"the call")),
         8 => format!("buffer {first} does not exist: the source has {second}"),
         9 => "the program's labels did not lay out".into(),

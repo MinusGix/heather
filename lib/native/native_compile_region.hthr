@@ -171,11 +171,18 @@ theorem Layout::buffer_apart(self layout: Layout, b, cap, other: Nat, found: lay
     apart
 }
 
+// The scratch range is one byte longer than the largest buffer, so a path
+// and its NUL fit: the RSP slot starts past it.
+theorem Layout::scratch_below_stack(self layout: Layout): layout.scratch_offset() + layout.capacities.largest() <= layout.stack_offset() {
+    layout.scratch_offset().add_le_mono_l(layout.capacities.largest(), layout.capacities.largest() + 1, layout.capacities.largest().le_add_l(1))
+}
+
 theorem Layout::scratch_holds(self layout: Layout, b, cap: Nat, found: layout.capacities.nth(b) = Some(cap)):
     layout.scratch_offset() + cap <= layout.stack_offset() {
     let holds: (layout.scratch_offset() + cap <= layout.scratch_offset() + layout.capacities.largest()) =
         omega(layout.capacities.largest_nth(b, cap, found));
-    holds
+    Nat::le_trans(layout.scratch_offset() + cap, layout.scratch_offset() + layout.capacities.largest(), layout.stack_offset(), holds,
+        layout.scratch_below_stack())
 }
 
 // ---------------------------------------------------------------------------
@@ -283,7 +290,8 @@ theorem Target::stack_fits(self t: Target): t.layout().stack_offset() + 8 <= t.r
 
 // …and the scratch range ends at it.
 theorem Target::scratch_room(self t: Target): t.layout().scratch_offset() + t.caps.largest() <= t.r.size {
-    t.layout().stack_offset().le_of_add_le(8, t.r.size, t.stack_fits())
+    Nat::le_trans(t.layout().scratch_offset() + t.caps.largest(), t.layout().stack_offset(), t.r.size, t.layout().scratch_below_stack(),
+        t.layout().stack_offset().le_of_add_le(8, t.r.size, t.stack_fits()))
 }
 
 theorem Target::scratch_fits(self t: Target): t.layout().scratch_offset() <= t.r.size {
@@ -385,7 +393,7 @@ theorem Target::kept_store(self t: Target, m: X86Memory(t.r.profile), q: Nat, by
 theorem Target::slot_below_stack(self t: Target, i: Nat, inside: i < word_slots()): 8 * i + 8 <= t.layout().stack_offset() {
     let words: (8 * i + 8 <= 8 * word_slots()) = t.layout().word_below_buffers(i, 7, inside, trivial);
     let after: (8 * word_slots() <= t.layout().scratch_offset()) = t.layout().scratch_after_words();
-    let below: (t.layout().scratch_offset() <= t.layout().stack_offset()) = t.layout().scratch_offset().le_add_l(t.caps.largest());
+    let below: (t.layout().scratch_offset() <= t.layout().stack_offset()) = t.layout().scratch_offset().le_add_l(t.caps.largest() + 1);
     omega(words, after, below)
 }
 

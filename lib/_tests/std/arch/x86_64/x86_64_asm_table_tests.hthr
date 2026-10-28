@@ -44,6 +44,8 @@ theorem stray_checked(): stray_table().checked(stray(), 2, 7).IsTrue() { trivial
 theorem prog_bytes_by_table(): asm_code_after(no_fills(), asm_labels(prog()), prog(), 4) = asm_code_ending(no_fills(), table().labels(), prog(), 4, 14) {
     table().piece_by(prog(), 14, prog_checked(), prog(), 4, 14, 4, prog_checked(), trivial)
 }
+// Consed from the back, the same bytes.
+theorem prog_bytes_onto(): asm_code_ending_onto(no_fills(), table().labels(), prog(), 4, 14, Nil) = asm_code_ending(no_fills(), table().labels(), prog(), 4, 14) { refl }
 // The top two items' bytes alone, the window ending at 14.
 theorem prog_last_bytes(): asm_code_after(no_fills(), asm_labels(prog()), prog(), 2) = asm_code_ending(no_fills(), table().labels(), prog(), 2, 14) {
     table().piece_by(prog(), 14, prog_checked(), prog(), 4, 14, 2, prog_checked(), trivial)
