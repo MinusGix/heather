@@ -730,6 +730,43 @@ theorem List::mem_filter<A>(self xs: List<A>, a: A, p: A → Bool):
     }
 }
 
+// What the filter keeps passes it.
+theorem List::mem_filter_holds<A>(self xs: List<A>, a: A, p: A → Bool): Mem(a, xs.filter(p)) → p(a) = True {
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => (match p(h) as λ b => p(h) = b → Mem(a, match b { True => Cons(h, t.filter(p)), False => t.filter(p) }) → p(a) = True {
+            True => λ kept m => match m {
+                Inl(e) => trans(cong_fn(p, e), kept),
+                Inr(m2) => t.mem_filter_holds(a, p, m2),
+            },
+            False => λ _ m => t.mem_filter_holds(a, p, m),
+        })(refl),
+    }
+}
+
+theorem List::mem_take<A>(self xs: List<A>, a: A): (n: Nat) → Mem(a, xs.take(n)) → Mem(a, xs) {
+    match xs {
+        Nil => λ n m => false_elim(m),
+        Cons(h, t) => λ n => match n {
+            Zero => λ m => false_elim(m),
+            Succ(k) => λ m => match m {
+                Inl(e) => Inl(e),
+                Inr(m2) => Inr(t.mem_take(a, k, m2)),
+            },
+        },
+    }
+}
+
+theorem List::mem_drop<A>(self xs: List<A>, a: A): (n: Nat) → Mem(a, xs.drop(n)) → Mem(a, xs) {
+    match xs {
+        Nil => λ n m => false_elim(m),
+        Cons(h, t) => λ n => match n {
+            Zero => λ m => m,
+            Succ(k) => λ m => Inr(t.mem_drop(a, k, m)),
+        },
+    }
+}
+
 theorem List::mem_rev<A>(self xs: List<A>, a: A): Mem(a, xs.rev()) → Mem(a, xs) {
     match xs {
         Nil => λ m => false_elim(m),

@@ -11,6 +11,8 @@ import native_source;
 import native_compile;
 import native_compile_facts;
 import native_compile_region;
+import native_compile_homes;
+import native_alloc;
 import native_compile_steps;
 import native_compile_segments;
 import function_ir_eval;
@@ -205,15 +207,20 @@ theorem Target::count_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf)
 // What a write's code claims: from the statement's start, write(fd, buffer
 // + min(from, capacity), min(len, capacity - that)), and on from its end
 // with each answer decoded into the environment.
-theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, len, result, cap, names: Nat,
+theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, fd, buf, from, len, result, cap, names: Nat,
     in_fd: fd < word_slots(), in_from: from < word_slots(), in_len: len < word_slots(), in_result: result < word_slots(),
-    found: t.caps.nth(buf) = Some(cap),
-    within: p.writes(t.layout(), fd, buf, from, len, result, cap, names).prog.Within(t.program),
+    found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
+    within: p.writes(t.layout(), out, fd, buf, from, len, result, cap, names).prog.Within(t.program),
     tree: WriteResult → ITree<BitVec(64)>(Events::linux()),
     next: (a: WriteResult) → LinuxCmd::Answers(Writes(fd, buf, from, len, result).cmd(env), a) →
-        t.At(prog_len(p.writes(t.layout(), fd, buf, from, len, result, cap, names).prog), tree(a), Writes(fd, buf, from, len, result).answer(env, a))):
-    t.At(prog_len(p), Vis(Writes(fd, buf, from, len, result).cmd(env), tree), env) {
+        t.At(prog_len(p.writes(t.layout(), out, fd, buf, from, len, result, cap, names).prog), out, tree(a), Writes(fd, buf, from, len, result).answer(env, a))):
+    t.At(prog_len(p), live_before([fd, from, len], result, out), Vis(Writes(fd, buf, from, len, result).cmd(env), tree), env) {
     let layout = t.layout();
+    let live = live_before([fd, from, len], result, out);
+    let m_fd: Mem(fd, live) = live_before_reads([fd, from, len], result, out, fd, Inl(refl));
+    let m_from: Mem(from, live) = live_before_reads([fd, from, len], result, out, from, Inr(Inl(refl)));
+    let m_len: Mem(len, live) = live_before_reads([fd, from, len], result, out, len, Inr(Inr(Inl(refl))));
+    let sub = λ (i: Nat) (m: Mem(i, out)) (ne: i ≠ result) => live_before_keeps([fd, from, len], result, out, i, m, ne);
     let shape = Writes(fd, buf, from, len, result);
     let c = shape.cmd(env);
     let bytes = span(env.buffer(buf), env.number(from), env.number(len));
@@ -228,7 +235,7 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
     let w4 = then(room, Block(asking));
     let w5 = w4.word_to(layout, fd, Rdi);
     let asked = then(w5, Syscall);
-    let w_asked = asked.word_from_within(layout, result, Rax, t.program, within);
+    let w_asked = asked.word_from_within(layout, out, result, Rax, t.program, within);
     let w_w5 = w5.within_before(0, Syscall, t.program, w_asked);
     let w_w4 = w4.word_to_within(layout, fd, Rdi, t.program, w_w5);
     let w_room = room.within_before(0, Block(asking), t.program, w_w4);
@@ -240,9 +247,9 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
     let room_cap: (cap < Nat::pow(2, 64)) = t.cap_small(buf, cap, found);
     // The SYSCALL, each answer stored to its word.
     let after = λ (a: WriteResult) (u: MachineState<X86Memory(t.r.profile)>) => LinuxCmd::Answers(c, a) ∧
-        (t.Placed(env, u.memory) ∧ (env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(env, a)));
+        (t.Held(live, env, u.gprs, u.memory) ∧ (env.set_word(result, read_gpr(Rax, u.gprs)) = shape.answer(env, a)));
     let called = t.io().goes_call(t.program, t.origin, t.code_fits(), w_asked.witness, w5, 0, w_asked.proof, c, tree, after,
-        λ a u here resident held => t.goes_result(env, shape.answer(env, a), asked, result, in_result, within, tree(a), next(a, held.left),
+        λ a u here resident held => t.goes_result(live, out, env, shape.answer(env, a), asked, result, in_result, sub, apart, within, tree(a), next(a, held.left),
             u, here, resident, held.right));
     let call_pre = λ (s: MachineState<X86Memory(t.r.profile)>) => LinuxRequests(t.io(), s, c) ∧
         (t.site().Resident(s.memory) → (a: WriteResult) → LinuxCmd::Answers(c, a) → LinuxResumes(t.io(), s, c, a, λ (u: MachineState<X86Memory(t.r.profile)>) =>
@@ -250,24 +257,24 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
     let q5 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → call_pre(MachineState(g, f, rip, m));
     let at_w5 = t.goes_weaken(prog_len(w5), Vis(c, tree), call_pre, λ (s: MachineState<X86Memory(t.r.profile)>) => q5(s.gprs, s.memory), called,
         λ s held => held(s.flags, s.rip));
-    let at_w4 = t.goes_word_to(env, w4, fd, Rdi, in_fd, w_w5, Vis(c, tree), q5, at_w5);
-    let post4 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, u.memory) ∧
-        q5(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.word_at(fd), u.gprs)), u.memory);
+    let at_w4 = t.goes_word_to(live, env, w4, fd, Rdi, in_fd, m_fd, w_w5, Vis(c, tree), q5, at_w5);
+    let post4 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
+        q5(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_word(env, fd), u.gprs)), u.memory);
     let at_room0 = t.goes_block(room, 0, asking, w_w4, Vis(c, tree), post4, at_w4);
     // At the request: the offset and the count clamped.
-    let q_room = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧
+    let q_room = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(Rdx, g).toNat() = env.number(len).min(cap - clamped)));
     let at_room = t.goes_weaken(prog_len(room), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => post4(execute_block_normal(asking, s)),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_room(s.gprs, s.memory), at_room0, λ s held => {
-            let placed = held.left;
-            let asked = t.writes_request(env, s.memory, placed, buf, cap, found, env.number(from), env.number(len),
+            let kept = held.left;
+            let asked = t.writes_request(env.with_words(kept.witness), s.memory, kept.proof.left, buf, cap, found, env.number(from), env.number(len),
                 read_gpr(R8, s.gprs), read_gpr(Rdx, s.gprs), held.right.left, held.right.right);
-            ⟨placed, λ f rip => ⟨⟨⟨refl, ⟨refl, ⟨asked.left, asked.right.left⟩⟩⟩, trivial⟩,
+            ⟨kept, λ f rip => ⟨⟨⟨refl, ⟨refl, ⟨asked.left, asked.right.left⟩⟩⟩, trivial⟩,
                 λ resident a => match a {
-                    Wrote(count) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨placed,
+                    Wrote(count) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
                         cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w),
                             word_of_nat_ofNat(count, t.count_fits(buf, cap, found, count, bytes.len(), answers, asked.right.right)))⟩⟩⟩,
-                    WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨placed,
+                    WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
                         cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
                 }⟩⟩
         });
@@ -276,21 +283,21 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
         ((read_gpr(Rdx, g).borrow_sub_bit(read_gpr(R9, g)) = True) → q_room(g, m)) ∧
         ((read_gpr(Rdx, g).borrow_sub_bit(read_gpr(R9, g)) = False) → q_room(write_gpr(Rdx, read_gpr(R9, g), g), m));
     let at_w3 = t.goes_clamp(w3, Rdx, R9, Succ(names), w_room, Vis(c, tree), q_room, at_room);
-    let q_w2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧
+    let q_w2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(R9, g).toNat() = cap - clamped));
-    let at_w2 = t.goes_weaken(prog_len(w2), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧
-            room_pre(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.word_at(len), s.gprs)), s.memory),
+    let at_w2 = t.goes_weaken(prog_len(w2), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+            room_pre(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.rbx_word(env, len), s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_w2(s.gprs, s.memory),
-        t.goes_word_to(env, w2, len, Rdx, in_len, w_w3, Vis(c, tree), room_pre, at_w3), λ s held => {
+        t.goes_word_to(live, env, w2, len, Rdx, in_len, m_len, w_w3, Vis(c, tree), room_pre, at_w3), λ s held => {
             let word = env.word(len);
             let r9 = read_gpr(R9, s.gprs);
             let both: (word.toNat().min(r9.toNat()) = env.number(len).min(cap - clamped)) =
-                eq2(λ (x: Nat) (y: Nat) => x.min(y), t.word_number(env, s.memory, held.left, len, in_len), held.right.right);
+                eq2(λ (x: Nat) (y: Nat) => x.min(y), t.held_number(live, env, s.gprs, s.memory, held.left, len, m_len, in_len), held.right.right);
             ⟨held.left, ⟨λ kept => ⟨held.left, ⟨held.right.left, trans(sym(BitVec::clamp_kept(word, r9, kept)), both)⟩⟩,
                 λ bound => ⟨held.left, ⟨held.right.left, trans(sym(BitVec::clamp_bound(word, r9, bound)), both)⟩⟩⟩⟩
         });
     // What is left of the buffer past the offset.
-    let q_start = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧
+    let q_start = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(R9, g).toNat() = cap));
     let at_start = t.goes_weaken(prog_len(start), Vis(c, tree),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_w2(execute_block_normal([SubRR(R9, R8)], s).gprs, s.memory),
@@ -309,7 +316,7 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
         ((read_gpr(R8, g).borrow_sub_bit(read_gpr(R9, g)) = True) → q_start(g, m)) ∧
         ((read_gpr(R8, g).borrow_sub_bit(read_gpr(R9, g)) = False) → q_start(write_gpr(R8, read_gpr(R9, g), g), m));
     let at_w1 = t.goes_clamp(w1, R8, R9, names, w_start, Vis(c, tree), q_start, at_start);
-    let q_w0 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ (read_gpr(R8, g).toNat() = env.number(from));
+    let q_w0 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(R8, g).toNat() = env.number(from));
     let at_w0 = t.goes_weaken(prog_len(w0), Vis(c, tree),
         λ (s: MachineState<X86Memory(t.r.profile)>) => start_pre(execute_block_normal([MovRI(R9, BitVec::ofNat(cap))], s).gprs, s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_w0(s.gprs, s.memory),
@@ -325,11 +332,11 @@ theorem Target::goes_writes(self t: Target, env: Env, p: Prog, fd, buf, from, le
              λ over => ⟨held.left, ⟨trans(sym(BitVec::clamp_bound(r8, bound, over)), both), bound_is⟩⟩⟩
         });
     t.goes_weaken(prog_len(p), Vis(c, tree),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧
-            q_w0(write_gpr(R8, env.word(from), write_gpr(Rbx, layout.word_at(from), s.gprs)), s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory),
-        t.goes_word_to(env, p, from, R8, in_from, w_w0, Vis(c, tree), q_w0, at_w0),
-        λ s held => ⟨held, ⟨held, t.word_number(env, s.memory, held, from, in_from)⟩⟩)
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+            q_w0(write_gpr(R8, env.word(from), write_gpr(Rbx, layout.rbx_word(env, from), s.gprs)), s.memory),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
+        t.goes_word_to(live, env, p, from, R8, in_from, m_from, w_w0, Vis(c, tree), q_w0, at_w0),
+        λ s held => ⟨held, ⟨held, t.held_number(live, env, s.gprs, s.memory, held, from, m_from, in_from)⟩⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -348,21 +355,22 @@ fn Target::Copying(self t: Target, v: Nat → BitVec(8), buf, i: Nat, bytes: Lis
 }
 
 // The loop's invariant at its head: R8 the count copied, RSI and RDI past
-// it in the two ranges, RAX the count to copy.
-fn Target::CopyAt(self t: Target, v: Nat → BitVec(8), buf: Nat, bytes: List<BitVec(8)>, i: Nat, g: Gprs, m: X86Memory(t.r.profile)) → Type {
+// it in the two ranges, RAX the count to copy, the home registers as they
+// were (`vals`).
+fn Target::CopyAt(self t: Target, v: Nat → BitVec(8), buf: Nat, bytes: List<BitVec(8)>, i: Nat, vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile)) → Type {
     (i <= bytes.len()) ∧ ((read_gpr(R8, g) = word_of_nat(64, i)) ∧
     ((read_gpr(Rsi, g) = next_rip(t.r.low, t.layout().scratch_offset() + i)) ∧
     ((read_gpr(Rdi, g) = next_rip(t.r.low, t.layout().buffer_offset(buf) + i)) ∧
-    ((read_gpr(Rax, g) = word_of_nat(64, bytes.len())) ∧ t.Copying(v, buf, i, bytes, m)))))
+    ((read_gpr(Rax, g) = word_of_nat(64, bytes.len())) ∧ (t.Copying(v, buf, i, bytes, m) ∧ (home_values(g) = vals))))))
 }
 
 // What the store and the three adds leave: the invariant one byte further,
 // the store allowed and the code still resident.
-fn Target::Stored(self t: Target, v: Nat → BitVec(8), buf: Nat, bytes: List<BitVec(8)>, i: Nat, s: MachineState<X86Memory(t.r.profile)>) → Type {
+fn Target::Stored(self t: Target, v: Nat → BitVec(8), buf: Nat, bytes: List<BitVec(8)>, i: Nat, vals: List<BitVec(64)>, s: MachineState<X86Memory(t.r.profile)>) → Type {
     (store_base_plain(Rdi) = True) ∧
     (t.writes().writable(s.memory, read_gpr(Rdi, s.gprs), 1) ∧
     (t.site().Resident(byte_store_after(t.writes(), ByteStore(Rdi, Rdx), s).memory) ∧
-     t.CopyAt(v, buf, bytes, Succ(i),
+     t.CopyAt(v, buf, bytes, Succ(i), vals,
         execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))],
             byte_store_after(t.writes(), ByteStore(Rdi, Rdx), s)).gprs,
         execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))],
@@ -396,8 +404,9 @@ theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, 
     inside: (k: Nat) → (c: BitVec(8)) → k < i → bytes.nth(k) = Some(c) → w(t.layout().buffer_offset(buf) + k) = c,
     stacking: t.Stacking(w, m),
     r8: read_gpr(R8, g) = word_of_nat(64, i), rsi: read_gpr(Rsi, g) = next_rip(t.r.low, t.layout().scratch_offset() + i),
-    rdi: read_gpr(Rdi, g) = next_rip(t.r.low, t.layout().buffer_offset(buf) + i), rax: read_gpr(Rax, g) = word_of_nat(64, bytes.len())):
-    t.CopyAt(v, buf, bytes, Succ(i), execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))],
+    rdi: read_gpr(Rdi, g) = next_rip(t.r.low, t.layout().buffer_offset(buf) + i), rax: read_gpr(Rax, g) = word_of_nat(64, bytes.len()),
+    vals: List<BitVec(64)>, homes_at: home_values(g) = vals):
+    t.CopyAt(v, buf, bytes, Succ(i), vals, execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))],
         MachineState(write_gpr(Rdx, w(t.layout().scratch_offset() + i).zero_extend(56), g), f, rip,
             t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [imm_byte0(w(t.layout().scratch_offset() + i).zero_extend(56))]))).gprs,
         t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [imm_byte0(w(t.layout().scratch_offset() + i).zero_extend(56))])) {
@@ -418,7 +427,7 @@ theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, 
         ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), rsi), sym(next_rip_succ(t.r.low, so + i))),
         ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), rdi), sym(next_rip_succ(t.r.low, bo + i))),
         ⟨rax,
-         Exists(w2, ⟨t.r.store_holds(w, m, holds, bo + i, one, fits_one),
+         ⟨Exists(w2, ⟨t.r.store_holds(w, m, holds, bo + i, one, fits_one),
             ⟨λ q away => trans(t.r.cells_outside(w, bo + i, one, q, match away {
                     Inl(under) => Inl(Nat::le_trans(Succ(q), bo, bo + i, under, bo.le_add_l(i))),
                     Inr(over) => {
@@ -439,7 +448,7 @@ theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, 
                         trans(byte_back, trans(from_scratch, landed(i, c, got_i))));
                     j(here_k, λ x _ => w2(bo + x) = c, at_i)
                 },
-             }, t.stacking_store(w, m, bo + i, one, t.byte_below_stack(buf, cap, found, bytes, short, i, below), stacking)⟩⟩⟩)⟩⟩⟩⟩⟩
+             }, t.stacking_store(w, m, bo + i, one, t.byte_below_stack(buf, cap, found, bytes, short, i, below), stacking)⟩⟩⟩), homes_at⟩⟩⟩⟩⟩⟩
 }
 
 // One byte of the copy: from the invariant with bytes left, the byte the
@@ -447,17 +456,17 @@ theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, 
 theorem Target::copy_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, found: t.caps.nth(buf) = Some(cap),
     bytes: List<BitVec(8)>, short: bytes.len() <= cap,
     landed: (k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(t.layout().scratch_offset() + k) = c,
-    i: Nat, below: i < bytes.len(), u: MachineState<X86Memory(t.r.profile)>, resident: t.site().Resident(u.memory),
-    at: t.CopyAt(v, buf, bytes, i, u.gprs, u.memory)):
+    i: Nat, below: i < bytes.len(), vals: List<BitVec(64)>, u: MachineState<X86Memory(t.r.profile)>, resident: t.site().Resident(u.memory),
+    at: t.CopyAt(v, buf, bytes, i, vals, u.gprs, u.memory)):
     Exists<BitVec(8)>(λ byte => (read_gpr(Rsi, u.gprs).toNat() < Nat::pow(2, 47)) ∧
         ((t.site().data.read(u.memory, read_gpr(Rsi, u.gprs)) = Some(byte)) ∧
-         t.Stored(v, buf, bytes, i, byte_load_after(ByteLoad(Rdx, Rsi), byte, u)))) {
+         t.Stored(v, buf, bytes, i, vals, byte_load_after(ByteLoad(Rdx, Rsi), byte, u)))) {
     let layout = t.layout();
     let bo = layout.buffer_offset(buf);
     let so = layout.scratch_offset();
     let g = u.gprs;
     let m = u.memory;
-    let copying = at.right.right.right.right.right;
+    let copying = at.right.right.right.right.right.left;
     let w = copying.witness;
     let holds = copying.proof.left;
     let ends = layout.buffer_end(buf, cap, found);
@@ -475,11 +484,12 @@ theorem Target::copy_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, f
     let fits_one: ((bo + i) + 1 <= t.r.size) = t.byte_fits(buf, cap, found, bytes, short, i, below);
     let rip2 = next_rip(next_rip(u.rip, byte_load_bytes(ByteLoad(Rdx, Rsi)).len()), 3);
     let again = t.copy_again(v, buf, cap, found, bytes, short, landed, i, below, g, u.flags, rip2, m, w, holds,
-        copying.proof.right.left, copying.proof.right.right.left, copying.proof.right.right.right, at.right.left, rsi, rdi, at.right.right.right.right.left);
+        copying.proof.right.left, copying.proof.right.right.left, copying.proof.right.right.right, at.right.left, rsi, rdi, at.right.right.right.right.left,
+        vals, at.right.right.right.right.right.right);
     let target = next_rip(t.r.low, bo + i);
     let landing = λ (a: BitVec(64)) => t.writes().writable(m, a, 1) ∧
         (t.site().Resident(t.r.profile.store(m, a, one)) ∧
-         t.CopyAt(v, buf, bytes, Succ(i), execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))],
+         t.CopyAt(v, buf, bytes, Succ(i), vals, execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))],
                 MachineState(g1, u.flags, rip2, t.r.profile.store(m, a, one))).gprs,
             t.r.profile.store(m, a, one)));
     let landed_here: landing(target) = ⟨t.writable(m, bo + i, 1, fits_one), ⟨t.store_resident(m, bo + i, one, fits_one, resident), again⟩⟩;
@@ -492,9 +502,9 @@ theorem Target::copy_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, f
 // filled.
 theorem Target::copy_filled(self t: Target, env: Env, v: Nat → BitVec(8), keeps: t.layout().Keeps(env, v), same: env.args = t.args, buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), bytes: List<BitVec(8)>, short: bytes.len() <= cap, i: Nat, all: i = bytes.len(),
-    g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, g, m)):
+    vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, vals, g, m)):
     t.Placed(env.set_buffer(buf, fill(env.buffer(buf), bytes)), m) {
-    let copying = at.right.right.right.right.right;
+    let copying = at.right.right.right.right.right.left;
     let w = copying.witness;
     Exists(w, ⟨copying.proof.left, ⟨t.layout().keeps_fill(env, v, w, keeps, buf, cap, found, bytes, short,
         λ q away => copying.proof.right.left(q, match away { Inl(under) => Inl(under), Inr(over) => Inr(j(sym(all), λ x _ => t.layout().buffer_offset(buf) + x <= q, over)) }),
@@ -504,7 +514,7 @@ theorem Target::copy_filled(self t: Target, env: Env, v: Nat → BitVec(8), keep
 
 // With every byte copied, R8 equals RAX, so the JE is taken.
 theorem Target::copy_ends(self t: Target, v: Nat → BitVec(8), buf: Nat, bytes: List<BitVec(8)>, i: Nat, all: i = bytes.len(),
-    g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, g, m), zf: Bool,
+    vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, vals, g, m), zf: Bool,
     is: zf = is_zero_bits(64, read_gpr(R8, g).sub(read_gpr(Rax, g))), clear: zf = False): False {
     let n = bytes.len();
     let same: (word_of_nat(64, i) = word_of_nat(64, n)) = cong_fn<Nat, BitVec(64)>(λ x => word_of_nat(64, x), all);
@@ -517,7 +527,7 @@ theorem Target::copy_ends(self t: Target, v: Nat → BitVec(8), buf: Nat, bytes:
 // With bytes left, R8 is not RAX, so the JE falls through.
 theorem Target::copy_goes_on(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, found: t.caps.nth(buf) = Some(cap),
     bytes: List<BitVec(8)>, short: bytes.len() <= cap, i: Nat, below: i < bytes.len(),
-    g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, g, m), zf: Bool,
+    vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, vals, g, m), zf: Bool,
     is: zf = is_zero_bits(64, read_gpr(R8, g).sub(read_gpr(Rax, g))), set: zf = True): False {
     let n = bytes.len();
     let n_small: (n < Nat::pow(2, 64)) = Nat::le_trans(Succ(n), Succ(cap), Nat::pow(2, 64), Nat::le_succ_succ(n, cap, short),
@@ -529,17 +539,28 @@ theorem Target::copy_goes_on(self t: Target, v: Nat → BitVec(8), buf, cap: Nat
     false_elim(Nat::lt_irrefl(n, j(counts, λ x _ => x < n, below)))
 }
 
+// The head with every byte copied: the live words held with the buffer
+// filled.
+theorem Target::copy_held(self t: Target, live: List<Nat>, env: Env, words: List<Nat>, v: Nat → BitVec(8), keeps: t.layout().Keeps(env.with_words(words), v),
+    same: env.args = t.args, vals: List<BitVec(64)>, agrees: t.homes.Agrees(live, env, words, vals), buf, cap: Nat,
+    found: t.caps.nth(buf) = Some(cap), bytes: List<BitVec(8)>, short: bytes.len() <= cap, i: Nat, all: i = bytes.len(),
+    g: Gprs, m: X86Memory(t.r.profile), at: t.CopyAt(v, buf, bytes, i, vals, g, m)):
+    t.Held(live, env.set_buffer(buf, fill(env.buffer(buf), bytes)), g, m) {
+    Exists(words, ⟨t.copy_filled(env.with_words(words), v, keeps, same, buf, cap, found, bytes, short, i, all, vals, g, m, at),
+        j(sym(at.right.right.right.right.right.right), λ vs _ => t.homes.Agrees(live, env.set_buffer(buf, fill(env.buffer(buf), bytes)), words, vs), agrees)⟩)
+}
+
 // The head: CMP R8, RAX and a JE out, each way on from the invariant.
-theorem Target::goes_copy_head(self t: Target, v: Nat → BitVec(8), p: Prog, buf, h, d: Nat, bytes: List<BitVec(8)>, i: Nat,
+theorem Target::goes_copy_head(self t: Target, v: Nat → BitVec(8), p: Prog, buf, h, d: Nat, bytes: List<BitVec(8)>, i: Nat, vals: List<BitVec(64)>,
     within: p.copy_in(t.layout(), buf, Succ(h), Succ(d)).Within(t.program),
     done_k: Nat, done_before: Prog, done_item: Asm, done_at: asm_back(t.program, done_k) = Prog::At(done_before, Succ(d), done_item),
     tree: ITree<BitVec(64)>(Events::linux()),
-    taken: t.Goes(prog_len(done_before), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => (t.CopyAt(v, buf, bytes, i, u.gprs, u.memory) ∧
+    taken: t.Goes(prog_len(done_before), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => (t.CopyAt(v, buf, bytes, i, vals, u.gprs, u.memory) ∧
         (u.flags.zf = is_zero_bits(64, read_gpr(R8, u.gprs).sub(read_gpr(Rax, u.gprs))))) ∧ (u.flags.zf = True)),
     fall: t.Goes(prog_len(then(then(p.copy_head(t.layout(), buf, Succ(h)), Block([CmpRR(R8, Rax)])), Jcc(E, Succ(d)))), tree,
-        λ (u: MachineState<X86Memory(t.r.profile)>) => (t.CopyAt(v, buf, bytes, i, u.gprs, u.memory) ∧
+        λ (u: MachineState<X86Memory(t.r.profile)>) => (t.CopyAt(v, buf, bytes, i, vals, u.gprs, u.memory) ∧
         (u.flags.zf = is_zero_bits(64, read_gpr(R8, u.gprs).sub(read_gpr(Rax, u.gprs))))) ∧ (u.flags.zf = False))):
-    t.GoesR(prog_len(p.copy_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, i, g, m)) {
+    t.GoesR(prog_len(p.copy_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, i, vals, g, m)) {
     let layout = t.layout();
     let set = p.copy_head(layout, buf, Succ(h));
     let cmp = then(set, Block([CmpRR(R8, Rax)]));
@@ -547,14 +568,14 @@ theorem Target::goes_copy_head(self t: Target, v: Nat → BitVec(8), p: Prog, bu
     let w_tested = tested.within_trans(p.copy_in(layout, buf, Succ(h), Succ(d)), t.program, Exists(4, refl), within);
     let w_cmp = cmp.within_before(0, Jcc(E, Succ(d)), t.program, w_tested);
     let lands_done = t.program.lands_jcc(t.laid, w_tested.witness, cmp, 0, E, d, w_tested.proof, done_k, done_before, done_item, done_at);
-    let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, i, g, m) ∧
+    let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, i, vals, g, m) ∧
         (f.zf = is_zero_bits(64, read_gpr(R8, g).sub(read_gpr(Rax, g))));
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_tested.witness, cmp, 0, E, Succ(d), w_tested.proof,
         prog_len(done_before), lands_done, tree, pre, taken, fall);
     t.goes_weaken(prog_len(set), tree,
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre(execute_block_normal([CmpRR(R8, Rax)], u).gprs,
             execute_block_normal([CmpRR(R8, Rax)], u).flags, execute_block_normal([CmpRR(R8, Rax)], u).memory),
-        λ (u: MachineState<X86Memory(t.r.profile)>) => t.CopyAt(v, buf, bytes, i, u.gprs, u.memory),
+        λ (u: MachineState<X86Memory(t.r.profile)>) => t.CopyAt(v, buf, bytes, i, vals, u.gprs, u.memory),
         t.goes_block(set, 0, [CmpRR(R8, Rax)], w_cmp, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped),
         λ u held => ⟨held, refl⟩)
 }
@@ -564,10 +585,10 @@ theorem Target::goes_copy_body(self t: Target, v: Nat → BitVec(8), p: Prog, bu
     within: p.copy_in(t.layout(), buf, Succ(h), Succ(d)).Within(t.program),
     bytes: List<BitVec(8)>, short: bytes.len() <= cap,
     landed: (k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(t.layout().scratch_offset() + k) = c,
-    tree: ITree<BitVec(64)>(Events::linux()), i: Nat, below: i < bytes.len(),
-    again: t.GoesR(prog_len(p.copy_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, Succ(i), g, m))):
+    tree: ITree<BitVec(64)>(Events::linux()), i: Nat, below: i < bytes.len(), vals: List<BitVec(64)>,
+    again: t.GoesR(prog_len(p.copy_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, Succ(i), vals, g, m))):
     t.Goes(prog_len(then(then(p.copy_head(t.layout(), buf, Succ(h)), Block([CmpRR(R8, Rax)])), Jcc(E, Succ(d)))), tree,
-        λ (u: MachineState<X86Memory(t.r.profile)>) => (t.CopyAt(v, buf, bytes, i, u.gprs, u.memory) ∧
+        λ (u: MachineState<X86Memory(t.r.profile)>) => (t.CopyAt(v, buf, bytes, i, vals, u.gprs, u.memory) ∧
         (u.flags.zf = is_zero_bits(64, read_gpr(R8, u.gprs).sub(read_gpr(Rax, u.gprs))))) ∧ (u.flags.zf = False)) {
     let layout = t.layout();
     let set0 = then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))]));
@@ -582,39 +603,42 @@ theorem Target::goes_copy_body(self t: Target, v: Nat → BitVec(8), p: Prog, bu
     let w_set = p.copy_head(layout, buf, Succ(h)).within_trans(p.copy_in(layout, buf, Succ(h), Succ(d)), t.program, Exists(6, refl), within);
     let back = t.program.lands_jmp(t.laid, within.witness, stepped, 0, h, within.proof, w_set.witness, set0, Block([]), w_set.proof);
     let jumped = t.io().goes_jmp(t.program, t.origin, t.code_fits(), within.witness, stepped, 0, Succ(h), within.proof, prog_len(set0), back, tree,
-        λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, Succ(i), g, m), again);
-    let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.CopyAt(v, buf, bytes, Succ(i), u.gprs, u.memory);
+        λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, Succ(i), vals, g, m), again);
+    let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.CopyAt(v, buf, bytes, Succ(i), vals, u.gprs, u.memory);
     let added = t.goes_block(moved, 0, adds, w_stepped, tree, post, jumped);
     let post2 = λ (u: MachineState<X86Memory(t.r.profile)>) => post(execute_block_normal(adds, u));
     let stored = t.goes_store_byte(loaded, 0, ByteStore(Rdi, Rdx), w_moved, tree, post2, added);
     let read = t.goes_load_byte(tested, 0, ByteLoad(Rdx, Rsi), w_loaded, tree,
-        λ (u: MachineState<X86Memory(t.r.profile)>) => t.Stored(v, buf, bytes, i, u), stored);
-    λ u here resident held => read(u, here, resident, t.copy_byte(v, buf, cap, found, bytes, short, landed, i, below, u, resident, held.left.left))
+        λ (u: MachineState<X86Memory(t.r.profile)>) => t.Stored(v, buf, bytes, i, vals, u), stored);
+    λ u here resident held => read(u, here, resident, t.copy_byte(v, buf, cap, found, bytes, short, landed, i, below, vals, u, resident, held.left.left))
 }
 
 // The loop, from its head with `left` bytes left to copy, on to the label
-// past it with the buffer filled.
-theorem Target::goes_copy_loop(self t: Target, env: Env, p: Prog, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), h, d: Nat,
+// past it with the buffer filled and RAX the count.
+theorem Target::goes_copy_loop(self t: Target, live: List<Nat>, env: Env, p: Prog, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), h, d: Nat,
     within: p.copy_in(t.layout(), buf, Succ(h), Succ(d)).Within(t.program),
     done_k: Nat, done_before: Prog, done_item: Asm, done_at: asm_back(t.program, done_k) = Prog::At(done_before, Succ(d), done_item),
     bytes: List<BitVec(8)>, short: bytes.len() <= cap, tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(done_before), tree, env.set_buffer(buf, fill(env.buffer(buf), bytes))),
-    v: Nat → BitVec(8), keeps: t.layout().Keeps(env, v), same: env.args = t.args,
+    next: t.GoesR(prog_len(done_before), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
+        t.Held(live, env.set_buffer(buf, fill(env.buffer(buf), bytes)), g, m) ∧ (read_gpr(Rax, g) = word_of_nat(64, bytes.len()))),
+    words: List<Nat>, v: Nat → BitVec(8), keeps: t.layout().Keeps(env.with_words(words), v), same: env.args = t.args,
+    vals: List<BitVec(64)>, agrees: t.homes.Agrees(live, env, words, vals),
     landed: (k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(t.layout().scratch_offset() + k) = c, left: Nat):
     (i: Nat) → i + left = bytes.len() →
-    t.GoesR(prog_len(p.copy_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, i, g, m)) {
+    t.GoesR(prog_len(p.copy_head(t.layout(), buf, Succ(h))), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.CopyAt(v, buf, bytes, i, vals, g, m)) {
     match left {
-        Zero => λ i all => t.goes_copy_head(v, p, buf, h, d, bytes, i, within, done_k, done_before, done_item, done_at, tree,
+        Zero => λ i all => t.goes_copy_head(v, p, buf, h, d, bytes, i, vals, within, done_k, done_before, done_item, done_at, tree,
             λ u here resident held => next(u, here, resident,
-                t.copy_filled(env, v, keeps, same, buf, cap, found, bytes, short, i, all, u.gprs, u.memory, held.left.left)),
-            λ u here resident held => false_elim(t.copy_ends(v, buf, bytes, i, all, u.gprs, u.memory, held.left.left, u.flags.zf,
+                ⟨t.copy_held(live, env, words, v, keeps, same, vals, agrees, buf, cap, found, bytes, short, i, all, u.gprs, u.memory, held.left.left),
+                 held.left.left.right.right.right.right.left⟩),
+            λ u here resident held => false_elim(t.copy_ends(v, buf, bytes, i, all, vals, u.gprs, u.memory, held.left.left, u.flags.zf,
                 held.left.right, held.right))),
         Succ(l, ih) => λ i all => {
             let ahead: (i < bytes.len()) = j(all, λ x _ => Succ(i) <= x, Nat::le_succ_succ(i, i + l, i.le_add_l(l)));
-            t.goes_copy_head(v, p, buf, h, d, bytes, i, within, done_k, done_before, done_item, done_at, tree,
-                λ u here resident held => false_elim(t.copy_goes_on(v, buf, cap, found, bytes, short, i, ahead, u.gprs, u.memory,
+            t.goes_copy_head(v, p, buf, h, d, bytes, i, vals, within, done_k, done_before, done_item, done_at, tree,
+                λ u here resident held => false_elim(t.copy_goes_on(v, buf, cap, found, bytes, short, i, ahead, vals, u.gprs, u.memory,
                     held.left.left, u.flags.zf, held.left.right, held.right)),
-                t.goes_copy_body(v, p, buf, cap, found, h, d, within, bytes, short, landed, tree, i, ahead, ih(Succ(i), trans(i.add_succ_left(l), all))))
+                t.goes_copy_body(v, p, buf, cap, found, h, d, within, bytes, short, landed, tree, i, ahead, vals, ih(Succ(i), trans(i.add_succ_left(l), all))))
         },
     }
 }
@@ -651,29 +675,9 @@ theorem Target::landed_store(self t: Target, env: Env, m: X86Memory(t.r.profile)
               λ k c got => t.r.cells_inside(v, so, bytes, k, c, got)⟩⟩⟩))
 }
 
-// A word stored to its slot keeps the landed bytes.
-theorem Target::landed_word(self t: Target, env: Env, bytes: List<BitVec(8)>, m: X86Memory(t.r.profile), landed: t.Landed(env, bytes, m),
-    i: Nat, inside: i < word_slots(), word: BitVec(64)):
-    t.Landed(env.set_word(i, word), bytes, t.r.profile.store(m, t.layout().word_at(i), word_bytes(word))) {
-    let v = landed.witness;
-    let so = t.layout().scratch_offset();
-    let w = t.r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells;
-    j(sym(t.word_rip(i, inside)), λ x _ => t.Landed(env.set_word(i, word), bytes, t.r.profile.store(m, x, word_bytes(word))),
-        Exists(w, ⟨t.r.store_holds(v, m, landed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
-            ⟨t.layout().keeps_word(t.r, env, v, landed.proof.right.left, i, inside, word),
-             ⟨t.stacked_store(env, v, m, 8 * i, word_bytes(word), t.slot_below_stack(i, inside), landed.proof.right.right.left),
-             λ k c got => {
-                let words: (8 * i + 8 <= 8 * word_slots()) = t.layout().word_below_buffers(i, 7, inside, trivial);
-                let past: (8 * i + 8 <= so + k) = Nat::le_trans(8 * i + 8, so, so + k,
-                    Nat::le_trans(8 * i + 8, 8 * word_slots(), so, words, t.layout().scratch_after_words()), so.le_add_l(k));
-                trans(t.r.cells_outside(v, 8 * i, word_bytes(word), so + k, Inr(past)), landed.proof.right.right.right(k, c, got))
-             }⟩⟩⟩))
-}
-
-// The same environment, so the same claim.
-theorem Target::at_same(self t: Target, at: Nat, tree: ITree<BitVec(64)>(Events::linux()), env, other: Env, same: env = other,
-    goes: t.At(at, tree, other)): t.At(at, tree, env) {
-    j(sym(same), λ e _ => t.At(at, tree, e), goes)
+// The live words held, and a read's bytes landed in the scratch range.
+fn Target::HeldLanded(self t: Target, live: List<Nat>, env: Env, bytes: List<BitVec(8)>, g: Gprs, m: X86Memory(t.r.profile)) → Type {
+    Exists<List<Nat>>(λ words => t.Landed(env.with_words(words), bytes, m) ∧ t.homes.Agrees(live, env, words, home_values(g)))
 }
 
 // Where the copy's head sits, read off where the copy sits.
@@ -691,48 +695,55 @@ theorem Prog::copy_in_within(self p: Prog, layout: Layout, buf, head, done: Nat,
         moved.within_before(0, Block(adds), program, stepped.within_before(0, Jmp(head), program, within))))))
 }
 
-// After a read that succeeded: the count stored, TEST finds it
-// nonnegative, and the bytes are copied in.
-theorem Target::goes_read_back_ok(self t: Target, env: Env, asked: Prog, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap),
+// After a read that succeeded: TEST finds the count nonnegative, the bytes
+// are copied in, and the count is put in the result's home.
+theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env, asked: Prog, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap),
     result: Nat, in_result: result < word_slots(), names: Nat,
-    within: asked.read_back(t.layout(), buf, result, names).Within(t.program),
+    sub: (i: Nat) → Mem(i, out) → i ≠ result → Mem(i, live), apart: t.homes.apart(result, out).IsTrue(),
+    within: asked.read_back(t.layout(), out, buf, result, names).Within(t.program),
     bytes: List<BitVec(8)>, short: bytes.len() <= cap, tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(asked.read_back(t.layout(), buf, result, names)), tree,
+    next: t.At(prog_len(asked.read_back(t.layout(), out, buf, result, names)), out, tree,
         env.set_buffer(buf, fill(env.buffer(buf), bytes)).set_word(result, count_word(bytes.len())))):
     t.GoesR(prog_len(asked), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
-        t.Landed(env, bytes, m) ∧ (read_gpr(Rax, g) = word_of_nat(64, bytes.len()))) {
+        t.HeldLanded(live, env, bytes, g, m) ∧ (read_gpr(Rax, g) = word_of_nat(64, bytes.len()))) {
     let layout = t.layout();
     let n = bytes.len();
     let done = Succ(Succ(Succ(names)));
-    let stored = asked.word_from(layout, result, Rax);
-    let tested0 = then(stored, Block([TestRR(Rax, Rax)]));
+    let tested0 = then(asked, Block([TestRR(Rax, Rax)]));
     let tested = then(tested0, Jcc(S, done));
     let copied = tested.copy_in(layout, buf, Succ(Succ(names)), done);
+    let labelled = copied.label(done);
     let init: List<Instruction> = [MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))];
-    let w_copied = copied.within_before(done, Block([]), t.program, within);
+    let w_labelled = labelled.word_from_within(layout, out, result, Rax, t.program, within);
+    let w_copied = copied.within_before(done, Block([]), t.program, w_labelled);
     let w_head = tested.copy_in_within(layout, buf, Succ(Succ(names)), done, t.program, w_copied);
     let w_set0 = then(tested, Block(init)).within_before(Succ(Succ(names)), Block([]), t.program, w_head);
     let w_tested = tested.within_before(0, Block(init), t.program, w_set0);
     let w_tested0 = tested0.within_before(0, Jcc(S, done), t.program, w_tested);
-    let w_stored = stored.within_before(0, Block([TestRR(Rax, Rax)]), t.program, w_tested0);
     let canonical: (n <= Nat::pow(2, 47)) = Nat::le_trans(n, cap, Nat::pow(2, 47), short, t.cap_canonical(buf, cap, found));
     let small: (n < Nat::pow(2, 63)) = canonical_lt_signed(n, canonical);
     let n_small: (n < Nat::pow(2, 64)) = canonical_lt_word(n, canonical);
-    let env1 = env.set_word(result, word_of_nat(64, n));
-    let filled = env1.set_buffer(buf, fill(env1.buffer(buf), bytes));
-    let next1 = t.at_same(prog_len(copied), tree, filled, env.set_buffer(buf, fill(env.buffer(buf), bytes)).set_word(result, count_word(n)),
-        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w).set_buffer(buf, fill(env.buffer(buf), bytes)), word_of_nat_ofNat(n, n_small)), next);
+    let filled = env.set_buffer(buf, fill(env.buffer(buf), bytes));
+    // The count put in the result's home.
+    let stored = t.goes_result(live, out, filled, filled.set_word(result, count_word(n)), labelled, result, in_result, sub, apart, within, tree, next);
+    let at_done = t.goes_weaken(prog_len(copied), tree,
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, filled, s.gprs, s.memory) ∧ (filled.set_word(result, read_gpr(Rax, s.gprs)) = filled.set_word(result, count_word(n))),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, filled, s.gprs, s.memory) ∧ (read_gpr(Rax, s.gprs) = word_of_nat(64, n)), stored,
+        λ s held => ⟨held.left, trans(cong_fn<BitVec(64), Env>(λ w => filled.set_word(result, w), held.right),
+            cong_fn<BitVec(64), Env>(λ w => filled.set_word(result, w), word_of_nat_ofNat(n, n_small)))⟩);
+    // The copy, from its head.
     let so = layout.scratch_offset();
-    let copy_pre: MachineState<X86Memory(t.r.profile)> → Type = λ u => Exists<Nat → BitVec(8)>(λ v => layout.Keeps(env1, v) ∧
-        (((k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(so + k) = c) ∧ (t.CopyAt(v, buf, bytes, 0, u.gprs, u.memory) ∧ (env1.args = t.args))));
+    let copy_pre: MachineState<X86Memory(t.r.profile)> → Type = λ u => Exists<List<Nat>>(λ words => Exists<Nat → BitVec(8)>(λ v =>
+        layout.Keeps(env.with_words(words), v) ∧ (((k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(so + k) = c) ∧
+        (t.CopyAt(v, buf, bytes, 0, home_values(u.gprs), u.gprs, u.memory) ∧ ((env.args = t.args) ∧ t.homes.Agrees(live, env, words, home_values(u.gprs)))))));
     let at_head: t.Goes(prog_len(then(tested, Block(init))), tree, copy_pre) = λ u here resident held =>
-        t.goes_copy_loop(env1, tested, buf, cap, found, Succ(names), Succ(Succ(names)), w_copied, within.witness, copied, Block([]), within.proof,
-            bytes, short, tree, next1, held.witness, held.proof.left, held.proof.right.right.right, held.proof.right.left, n, 0, n.add_left_zero(), u, here, resident,
-            held.proof.right.right.left);
+        t.goes_copy_loop(live, env, tested, buf, cap, found, Succ(names), Succ(Succ(names)), w_copied, w_labelled.witness, copied, Block([]), w_labelled.proof,
+            bytes, short, tree, at_done, held.witness, held.proof.witness, held.proof.proof.left, held.proof.proof.right.right.right.left, home_values(u.gprs),
+            held.proof.proof.right.right.right.right, held.proof.proof.right.left, n, 0, n.add_left_zero(), u, here, resident, held.proof.proof.right.right.left);
     let at_tested = t.goes_block(tested, 0, init, w_set0, tree, copy_pre, at_head);
-    let q_st = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Landed(env1, bytes, m) ∧ (read_gpr(Rax, g) = word_of_nat(64, n));
+    let q_st = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.HeldLanded(live, env, bytes, g, m) ∧ (read_gpr(Rax, g) = word_of_nat(64, n));
     let pre_js = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => q_st(g, m) ∧ (f.sf = read_gpr(Rax, g).band(read_gpr(Rax, g)).sign_bit());
-    let lands = t.program.lands_jcc(t.laid, w_tested.witness, tested0, 0, S, Succ(Succ(names)), w_tested.proof, within.witness, copied, Block([]), within.proof);
+    let lands = t.program.lands_jcc(t.laid, w_tested.witness, tested0, 0, S, Succ(Succ(names)), w_tested.proof, w_labelled.witness, copied, Block([]), w_labelled.proof);
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_tested.witness, tested0, 0, S, done, w_tested.proof, prog_len(copied), lands, tree, pre_js,
         λ u here resident held => {
             let rax = held.left.left.right;
@@ -741,76 +752,65 @@ theorem Target::goes_read_back_ok(self t: Target, env: Env, asked: Prog, buf, ca
             absurd(trans(sym(clear), trans(sym(held.left.right), held.right)))
         },
         λ u here resident held => at_tested(u, here, resident, {
-            let landed = held.left.left.left;
-            Exists(landed.witness, ⟨landed.proof.right.left, ⟨landed.proof.right.right.right,
-                ⟨⟨trivial, ⟨refl, ⟨t.scratch_rip(), ⟨t.buffer_rip(buf, cap, found), ⟨held.left.left.right, Exists(landed.witness, ⟨landed.proof.left,
-                    ⟨λ q _ => refl, ⟨λ k c early _ => false_elim(k.not_succ_le_zero(early)), landed.proof.right.right.left.right⟩⟩⟩)⟩⟩⟩⟩⟩,
-                 landed.proof.right.right.left.left⟩⟩⟩)
+            let kept = held.left.left.left;
+            let landed = kept.proof.left;
+            Exists(kept.witness, Exists(landed.witness, ⟨landed.proof.right.left, ⟨landed.proof.right.right.right,
+                ⟨⟨trivial, ⟨refl, ⟨t.scratch_rip(), ⟨t.buffer_rip(buf, cap, found), ⟨held.left.left.right, ⟨Exists(landed.witness, ⟨landed.proof.left,
+                    ⟨λ q _ => refl, ⟨λ k c early _ => false_elim(k.not_succ_le_zero(early)), landed.proof.right.right.left.right⟩⟩⟩), refl⟩⟩⟩⟩⟩⟩,
+                 ⟨landed.proof.right.right.left.left, kept.proof.right⟩⟩⟩⟩))
         }));
-    let at_stored = t.goes_weaken(prog_len(stored), tree,
+    t.goes_weaken(prog_len(asked), tree,
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(execute_block_normal([TestRR(Rax, Rax)], u).gprs,
             execute_block_normal([TestRR(Rax, Rax)], u).flags, execute_block_normal([TestRR(Rax, Rax)], u).memory),
         λ (u: MachineState<X86Memory(t.r.profile)>) => q_st(u.gprs, u.memory),
-        t.goes_block(stored, 0, [TestRR(Rax, Rax)], w_tested0, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(u.gprs, u.flags, u.memory), jumped),
-        λ u held => ⟨held, refl⟩);
-    let a = layout.word_at(result);
-    t.goes_weaken(prog_len(asked), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => q_st(write_gpr(Rbx, a, s.gprs), t.r.profile.store(s.memory, a, word_bytes(read_gpr(Rax, s.gprs)))),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Landed(env, bytes, s.memory) ∧ (read_gpr(Rax, s.gprs) = word_of_nat(64, n)),
-        t.goes_word_from(asked, result, Rax, in_result, w_stored, tree, q_st, at_stored),
-        λ s held => ⟨j(held.right, λ x _ => t.Landed(env.set_word(result, x), bytes, t.r.profile.store(s.memory, a, word_bytes(read_gpr(Rax, s.gprs)))),
-            t.landed_word(env, bytes, s.memory, held.left, result, in_result, read_gpr(Rax, s.gprs))), held.right⟩)
+        t.goes_block(asked, 0, [TestRR(Rax, Rax)], w_tested0, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(u.gprs, u.flags, u.memory), jumped),
+        λ u held => ⟨held, refl⟩)
 }
 
-// After a read that failed: the negated errno stored, TEST finds it
-// negative, and the JS skips the copy.
-theorem Target::goes_read_back_failed(self t: Target, env: Env, asked: Prog, buf, result: Nat, in_result: result < word_slots(), names: Nat,
-    within: asked.read_back(t.layout(), buf, result, names).Within(t.program),
+// After a read that failed: TEST finds the negated errno negative, the JS
+// skips the copy, and the errno is put in the result's home.
+theorem Target::goes_read_back_failed(self t: Target, live, out: List<Nat>, env: Env, asked: Prog, buf, result: Nat, in_result: result < word_slots(), names: Nat,
+    sub: (i: Nat) → Mem(i, out) → i ≠ result → Mem(i, live), apart: t.homes.apart(result, out).IsTrue(),
+    within: asked.read_back(t.layout(), out, buf, result, names).Within(t.program),
     e: Nat, error: Errno(e), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(asked.read_back(t.layout(), buf, result, names)), tree, env.set_word(result, native_source::errno_word(e)))):
+    next: t.At(prog_len(asked.read_back(t.layout(), out, buf, result, names)), out, tree, env.set_word(result, native_source::errno_word(e)))):
     t.GoesR(prog_len(asked), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
-        t.Placed(env, m) ∧ (read_gpr(Rax, g) = linux_x86_64_io::errno_word(e))) {
+        t.Held(live, env, g, m) ∧ (read_gpr(Rax, g) = linux_x86_64_io::errno_word(e))) {
     let layout = t.layout();
     let done = Succ(Succ(Succ(names)));
-    let stored = asked.word_from(layout, result, Rax);
-    let tested0 = then(stored, Block([TestRR(Rax, Rax)]));
+    let tested0 = then(asked, Block([TestRR(Rax, Rax)]));
     let tested = then(tested0, Jcc(S, done));
     let copied = tested.copy_in(layout, buf, Succ(Succ(names)), done);
+    let labelled = copied.label(done);
     let init: List<Instruction> = [MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))];
-    let w_copied = copied.within_before(done, Block([]), t.program, within);
+    let w_labelled = labelled.word_from_within(layout, out, result, Rax, t.program, within);
+    let w_copied = copied.within_before(done, Block([]), t.program, w_labelled);
     let w_head = tested.copy_in_within(layout, buf, Succ(Succ(names)), done, t.program, w_copied);
     let w_set0 = then(tested, Block(init)).within_before(Succ(Succ(names)), Block([]), t.program, w_head);
     let w_tested = tested.within_before(0, Block(init), t.program, w_set0);
     let w_tested0 = tested0.within_before(0, Jcc(S, done), t.program, w_tested);
-    let w_stored = stored.within_before(0, Block([TestRR(Rax, Rax)]), t.program, w_tested0);
     let word = linux_x86_64_io::errno_word(e);
-    let env2 = env.set_word(result, word);
-    let next2 = t.at_same(prog_len(copied), tree, env2, env.set_word(result, native_source::errno_word(e)),
-        cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(e, error))), next);
-    let q_st = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env2, m) ∧ (read_gpr(Rax, g) = word);
+    let other = env.set_word(result, native_source::errno_word(e));
+    let stored = t.goes_result(live, out, env, other, labelled, result, in_result, sub, apart, within, tree, next);
+    let q_st = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rax, g) = word);
     let pre_js = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => q_st(g, m) ∧ (f.sf = read_gpr(Rax, g).band(read_gpr(Rax, g)).sign_bit());
-    let lands = t.program.lands_jcc(t.laid, w_tested.witness, tested0, 0, S, Succ(Succ(names)), w_tested.proof, within.witness, copied, Block([]), within.proof);
+    let lands = t.program.lands_jcc(t.laid, w_tested.witness, tested0, 0, S, Succ(Succ(names)), w_tested.proof, w_labelled.witness, copied, Block([]), w_labelled.proof);
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_tested.witness, tested0, 0, S, done, w_tested.proof, prog_len(copied), lands, tree, pre_js,
-        λ u here resident held => next2(u, here, resident, held.left.left.left),
+        λ u here resident held => stored(u, here, resident, ⟨held.left.left.left,
+            trans(cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), held.left.left.right),
+                cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(e, error))))⟩),
         λ u here resident held => {
             let rax = held.left.left.right;
             let set = test_self_negative(read_gpr(Rax, u.gprs),
                 j(sym(rax), λ x _ => Nat::pow(2, 63) <= x.toNat(), errno_negative(e, error)));
             absurd(trans(sym(set), trans(sym(held.left.right), held.right)))
         });
-    let at_stored = t.goes_weaken(prog_len(stored), tree,
+    t.goes_weaken(prog_len(asked), tree,
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(execute_block_normal([TestRR(Rax, Rax)], u).gprs,
             execute_block_normal([TestRR(Rax, Rax)], u).flags, execute_block_normal([TestRR(Rax, Rax)], u).memory),
         λ (u: MachineState<X86Memory(t.r.profile)>) => q_st(u.gprs, u.memory),
-        t.goes_block(stored, 0, [TestRR(Rax, Rax)], w_tested0, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(u.gprs, u.flags, u.memory), jumped),
-        λ u held => ⟨held, refl⟩);
-    let a = layout.word_at(result);
-    t.goes_weaken(prog_len(asked), tree,
-        λ (s: MachineState<X86Memory(t.r.profile)>) => q_st(write_gpr(Rbx, a, s.gprs), t.r.profile.store(s.memory, a, word_bytes(read_gpr(Rax, s.gprs)))),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧ (read_gpr(Rax, s.gprs) = word),
-        t.goes_word_from(asked, result, Rax, in_result, w_stored, tree, q_st, at_stored),
-        λ s held => ⟨j(held.right, λ x _ => t.Placed(env.set_word(result, x), t.r.profile.store(s.memory, a, word_bytes(read_gpr(Rax, s.gprs)))),
-            t.placed_word(env, s.memory, held.left, result, in_result, read_gpr(Rax, s.gprs))), held.right⟩)
+        t.goes_block(asked, 0, [TestRR(Rax, Rax)], w_tested0, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(u.gprs, u.flags, u.memory), jumped),
+        λ u held => ⟨held, refl⟩)
 }
 
 // A read asks for at most its buffer, which is its capacity.
@@ -838,15 +838,19 @@ theorem Target::scratch_inside(self t: Target, k: Nat, short: k <= t.caps.larges
 // What a read's code claims: from the statement's start, read(fd, scratch,
 // min(len, capacity)), and on from its end with each answer decoded into
 // the environment.
-theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, result, cap, names: Nat,
+theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, fd, buf, len, result, cap, names: Nat,
     in_fd: fd < word_slots(), in_len: len < word_slots(), in_result: result < word_slots(),
-    found: t.caps.nth(buf) = Some(cap),
-    within: p.reads(t.layout(), fd, buf, len, result, cap, names).prog.Within(t.program),
+    found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
+    within: p.reads(t.layout(), out, fd, buf, len, result, cap, names).prog.Within(t.program),
     tree: ReadResult → ITree<BitVec(64)>(Events::linux()),
     next: (a: ReadResult) → LinuxCmd::Answers(Reads(fd, buf, len, result).cmd(env), a) →
-        t.At(prog_len(p.reads(t.layout(), fd, buf, len, result, cap, names).prog), tree(a), Reads(fd, buf, len, result).answer(env, a))):
-    t.At(prog_len(p), Vis(Reads(fd, buf, len, result).cmd(env), tree), env) {
+        t.At(prog_len(p.reads(t.layout(), out, fd, buf, len, result, cap, names).prog), out, tree(a), Reads(fd, buf, len, result).answer(env, a))):
+    t.At(prog_len(p), live_before([fd, len], result, out), Vis(Reads(fd, buf, len, result).cmd(env), tree), env) {
     let layout = t.layout();
+    let live = live_before([fd, len], result, out);
+    let m_fd: Mem(fd, live) = live_before_reads([fd, len], result, out, fd, Inl(refl));
+    let m_len: Mem(len, live) = live_before_reads([fd, len], result, out, len, Inr(Inl(refl)));
+    let sub = λ (i: Nat) (m: Mem(i, out)) (ne: i ≠ result) => live_before_keeps([fd, len], result, out, i, m, ne);
     let shape = Reads(fd, buf, len, result);
     let c = shape.cmd(env);
     let most = env.number(len).min(env.buffer(buf).len());
@@ -857,18 +861,19 @@ theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, resu
     let r2 = then(clamped, Block(asking));
     let r3 = r2.word_to(layout, fd, Rdi);
     let asked = then(r3, Syscall);
-    let w_asked = asked.within_before(0, Block([MovRI(Rbx, layout.word_at(result))]), t.program,
-        then(asked, Block([MovRI(Rbx, layout.word_at(result))])).within_before(0, Store(WordStore(Rbx, Rax)), t.program,
-        asked.word_from(layout, result, Rax).within_before(0, Block([TestRR(Rax, Rax)]), t.program,
-        then(asked.word_from(layout, result, Rax), Block([TestRR(Rax, Rax)])).within_before(0, Jcc(S, Succ(Succ(Succ(names)))), t.program,
-        then(then(asked.word_from(layout, result, Rax), Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names))))).within_before(0,
-            Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))]), t.program,
-        then(then(then(asked.word_from(layout, result, Rax), Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names))))),
-            Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))])).within_before(Succ(Succ(names)), Block([]), t.program,
-        then(then(asked.word_from(layout, result, Rax), Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names))))).copy_in_within(layout, buf,
-            Succ(Succ(names)), Succ(Succ(Succ(names))), t.program,
-            then(then(asked.word_from(layout, result, Rax), Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names))))).copy_in(layout, buf,
-                Succ(Succ(names)), Succ(Succ(Succ(names)))).within_before(Succ(Succ(Succ(names))), Block([]), t.program, within))))))));
+    let done = Succ(Succ(Succ(names)));
+    let tested0 = then(asked, Block([TestRR(Rax, Rax)]));
+    let tested = then(tested0, Jcc(S, done));
+    let copied = tested.copy_in(layout, buf, Succ(Succ(names)), done);
+    let labelled = copied.label(done);
+    let init: List<Instruction> = [MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))];
+    let w_labelled = labelled.word_from_within(layout, out, result, Rax, t.program, within);
+    let w_copied = copied.within_before(done, Block([]), t.program, w_labelled);
+    let w_head = tested.copy_in_within(layout, buf, Succ(Succ(names)), done, t.program, w_copied);
+    let w_set0 = then(tested, Block(init)).within_before(Succ(Succ(names)), Block([]), t.program, w_head);
+    let w_tested = tested.within_before(0, Block(init), t.program, w_set0);
+    let w_tested0 = tested0.within_before(0, Jcc(S, done), t.program, w_tested);
+    let w_asked = asked.within_before(0, Block([TestRR(Rax, Rax)]), t.program, w_tested0);
     let w_r3 = r3.within_before(0, Syscall, t.program, w_asked);
     let w_r2 = r2.word_to_within(layout, fd, Rdi, t.program, w_r3);
     let w_clamped = clamped.within_before(0, Block(asking), t.program, w_r2);
@@ -877,19 +882,20 @@ theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, resu
     let room_cap: (cap < Nat::pow(2, 64)) = t.cap_small(buf, cap, found);
     // The SYSCALL, each answer on from where it leaves the machine.
     let after: ReadResult → MachineState<X86Memory(t.r.profile)> → Type = λ a u => LinuxCmd::Answers(c, a) ∧ match a as λ _ => Type {
-        ReadBytes(bytes) => t.Landed(env, bytes, u.memory) ∧ (read_gpr(Rax, u.gprs) = word_of_nat(64, bytes.len())),
-        ReadFailed(e) => t.Placed(env, u.memory) ∧ (read_gpr(Rax, u.gprs) = linux_x86_64_io::errno_word(e)),
+        ReadBytes(bytes) => t.HeldLanded(live, env, bytes, u.gprs, u.memory) ∧ (read_gpr(Rax, u.gprs) = word_of_nat(64, bytes.len())),
+        ReadFailed(e) => t.Held(live, env, u.gprs, u.memory) ∧ (read_gpr(Rax, u.gprs) = linux_x86_64_io::errno_word(e)),
     };
     let called = t.io().goes_call(t.program, t.origin, t.code_fits(), w_asked.witness, r3, 0, w_asked.proof, c, tree, after,
         λ a => match a {
             ReadBytes(bytes) => λ u here resident held => {
-                let placed = t.landed_placed(env, bytes, u.memory, held.right.left);
+                let kept = held.right.left;
+                let placed = t.landed_placed(env.with_words(kept.witness), bytes, u.memory, kept.proof.left);
                 let short: (bytes.len() <= cap) = Nat::le_trans(bytes.len(), most, cap, held.left,
-                    t.reads_most(env, u.memory, placed, buf, cap, found, env.number(len)).right);
-                t.goes_read_back_ok(env, asked, buf, cap, found, result, in_result, names, within, bytes, short, tree(ReadBytes(bytes)),
+                    t.reads_most(env.with_words(kept.witness), u.memory, placed, buf, cap, found, env.number(len)).right);
+                t.goes_read_back_ok(live, out, env, asked, buf, cap, found, result, in_result, names, sub, apart, within, bytes, short, tree(ReadBytes(bytes)),
                     next(ReadBytes(bytes), held.left), u, here, resident, held.right)
             },
-            ReadFailed(e) => λ u here resident held => t.goes_read_back_failed(env, asked, buf, result, in_result, names, within, e, held.left,
+            ReadFailed(e) => λ u here resident held => t.goes_read_back_failed(live, out, env, asked, buf, result, in_result, names, sub, apart, within, e, held.left,
                 tree(ReadFailed(e)), next(ReadFailed(e), held.left), u, here, resident, held.right),
         });
     let call_pre = λ (s: MachineState<X86Memory(t.r.profile)>) => LinuxRequests(t.io(), s, c) ∧
@@ -898,35 +904,38 @@ theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, resu
     let q3 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → call_pre(MachineState(g, f, rip, m));
     let at_r3 = t.goes_weaken(prog_len(r3), Vis(c, tree), call_pre, λ (s: MachineState<X86Memory(t.r.profile)>) => q3(s.gprs, s.memory), called,
         λ s held => held(s.flags, s.rip));
-    let at_r2 = t.goes_word_to(env, r2, fd, Rdi, in_fd, w_r3, Vis(c, tree), q3, at_r3);
-    let post2 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, u.memory) ∧
-        q3(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.word_at(fd), u.gprs)), u.memory);
+    let at_r2 = t.goes_word_to(live, env, r2, fd, Rdi, in_fd, m_fd, w_r3, Vis(c, tree), q3, at_r3);
+    let post2 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
+        q3(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_word(env, fd), u.gprs)), u.memory);
     let at_clamped0 = t.goes_block(clamped, 0, asking, w_r2, Vis(c, tree), post2, at_r2);
     // At the request: the count clamped.
-    let q_cl = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ (read_gpr(Rdx, g).toNat() = env.number(len).min(cap));
+    let q_cl = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rdx, g).toNat() = env.number(len).min(cap));
     let at_clamped = t.goes_weaken(prog_len(clamped), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => post2(execute_block_normal(asking, s)),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_cl(s.gprs, s.memory), at_clamped0, λ s held => {
             let m = s.memory;
-            let placed = held.left;
+            let kept = held.left;
+            let words = kept.witness;
+            let placed = kept.proof.left;
             let so = layout.scratch_offset();
-            let most_is = t.reads_most(env, m, placed, buf, cap, found, env.number(len));
+            let most_is = t.reads_most(env.with_words(words), m, placed, buf, cap, found, env.number(len));
             let most_cap = most_is.right;
             let at = sym(t.scratch_rip());
-            let kept = λ (bytes: List<BitVec(8)>) (fits: so + bytes.len() <= t.r.size) (resident: t.site().Resident(m)) =>
+            let resides = λ (bytes: List<BitVec(8)>) (fits: so + bytes.len() <= t.r.size) (resident: t.site().Resident(m)) =>
                 j(at, λ x _ => t.site().Resident(t.r.profile.store(m, x, bytes)), t.store_resident(m, so, bytes, fits, resident));
-            ⟨placed, λ f rip => ⟨⟨⟨refl, ⟨refl, trans(held.right, sym(most_is.left))⟩⟩,
+            ⟨kept, λ f rip => ⟨⟨⟨refl, ⟨refl, trans(held.right, sym(most_is.left))⟩⟩,
                     j(at, λ x _ => t.io().writable(m, x, most),
                         t.writable(m, so, most, t.scratch_inside(most, t.under_largest(buf, cap, found, most, most, most.le_refl(), most_cap))))⟩,
                 λ resident a => match a {
                     ReadBytes(bytes) => λ answers junk leaves rcx r11 => {
                         let short = t.under_largest(buf, cap, found, bytes.len(), most, answers, most_cap);
-                        ⟨kept(bytes, t.scratch_inside(bytes.len(), short), resident),
-                            ⟨answers, ⟨t.landed_store(env, m, placed, bytes, short), refl⟩⟩⟩
+                        ⟨resides(bytes, t.scratch_inside(bytes.len(), short), resident),
+                            ⟨answers, ⟨Exists(words, ⟨t.landed_store(env.with_words(words), m, placed, bytes, short), kept.proof.right⟩), refl⟩⟩⟩
                     },
                     ReadFailed(_) => λ answers junk leaves rcx r11 => {
                         let short = t.under_largest(buf, cap, found, junk.len(), most, leaves, most_cap);
-                        ⟨kept(junk, t.scratch_inside(junk.len(), short), resident),
-                            ⟨answers, ⟨t.landed_placed(env, junk, t.r.profile.store(m, layout.scratch_at(), junk), t.landed_store(env, m, placed, junk, short)), refl⟩⟩⟩
+                        ⟨resides(junk, t.scratch_inside(junk.len(), short), resident),
+                            ⟨answers, ⟨Exists(words, ⟨t.landed_placed(env.with_words(words), junk, t.r.profile.store(m, layout.scratch_at(), junk),
+                                t.landed_store(env.with_words(words), m, placed, junk, short)), kept.proof.right⟩), refl⟩⟩⟩
                     },
                 }⟩⟩
         });
@@ -935,7 +944,7 @@ theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, resu
     let clamp_pre = λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
         ((read_gpr(Rdx, g).borrow_sub_bit(read_gpr(R9, g)) = True) → q_cl(g, m)) ∧
         ((read_gpr(Rdx, g).borrow_sub_bit(read_gpr(R9, g)) = False) → q_cl(write_gpr(Rdx, read_gpr(R9, g), g), m));
-    let q_r0 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Placed(env, m) ∧ (read_gpr(Rdx, g).toNat() = env.number(len));
+    let q_r0 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rdx, g).toNat() = env.number(len));
     let at_r0 = t.goes_weaken(prog_len(r0), Vis(c, tree),
         λ (s: MachineState<X86Memory(t.r.profile)>) => clamp_pre(execute_block_normal([MovRI(R9, BitVec::ofNat(cap))], s).gprs, s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_r0(s.gprs, s.memory),
@@ -951,9 +960,9 @@ theorem Target::goes_reads(self t: Target, env: Env, p: Prog, fd, buf, len, resu
              λ over => ⟨held.left, trans(sym(BitVec::clamp_bound(rdx, bound, over)), both)⟩⟩
         });
     t.goes_weaken(prog_len(p), Vis(c, tree),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory) ∧
-            q_r0(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.word_at(len), s.gprs)), s.memory),
-        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Placed(env, s.memory),
-        t.goes_word_to(env, p, len, Rdx, in_len, w_r0, Vis(c, tree), q_r0, at_r0),
-        λ s held => ⟨held, ⟨held, t.word_number(env, s.memory, held, len, in_len)⟩⟩)
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+            q_r0(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.rbx_word(env, len), s.gprs)), s.memory),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
+        t.goes_word_to(live, env, p, len, Rdx, in_len, m_len, w_r0, Vis(c, tree), q_r0, at_r0),
+        λ s held => ⟨held, ⟨held, t.held_number(live, env, s.gprs, s.memory, held, len, m_len, in_len)⟩⟩)
 }
