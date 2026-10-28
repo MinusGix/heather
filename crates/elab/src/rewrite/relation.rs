@@ -55,6 +55,7 @@ impl Elaborator {
     ) -> R<Option<RelationRewrite<'a>>> {
         let mut pcx = cx.clone();
         let mut k = 0u32;
+        let mut telescope = Vec::new();
         let mut cur = proof_ty.clone();
         let pattern = loop {
             let unfolded = self.whnf(&pcx, &cur, h.span)?;
@@ -69,6 +70,7 @@ impl Elaborator {
             }
             match unfolded {
                 Type::Pi { dom_level, dom, cod, .. } if k < MAX_OPEN => {
+                    telescope.push(((*dom).clone(), dom_level.clone()));
                     pcx.push(format!("_{k}"), (*dom).clone(), dom_level);
                     k += 1;
                     cur = (*cod).clone();
@@ -114,7 +116,9 @@ impl Elaborator {
             }
             let here = nodes.context(cx, *scope);
             let mut binds = vec![None; k as usize];
-            if self.match_pattern(&here, &left, t, k, &mut binds) {
+            let at_depth: Vec<_> =
+                telescope.iter().enumerate().map(|(j, (dom, level))| (dom.shift_local_above(d, j as u32), level.clone())).collect();
+            if self.match_pattern(&here, &left, t, k, &mut binds, &at_depth, h.span) {
                 found = Some((binds, here, d));
                 break;
             }

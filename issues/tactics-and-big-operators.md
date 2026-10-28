@@ -43,7 +43,7 @@ further would make a tactic's reading grow with the term, and a law like
 | `norm_num` | yes, by value | already worked at Nat/Int/Rat/Dyadic by evaluation; CReal now reads a closed sum or product term by term (`norm_num_range`) |
 | `intervals` | yes, on closed sums | already worked (Rat leaves compute, CReal leaves are enclosed); a term-by-term reading is not needed yet |
 | equation `rewrite` under `∑` | yes | already worked: an equation rewrites under the binder |
-| setoid `rewrite` / `rel_cong` under `∑` | yes | `rewrite` done ([[rewrite-setoid-under-binders]], crossing by `MonoidRel::range_pointwise`); `rel_cong` left to [[rel-cong-under-binders]] |
+| setoid `rewrite` / `rel_cong` under `∑` | yes | done: `rewrite` ([[rewrite-setoid-under-binders]], crossing by `MonoidRel::range_pointwise`), `rel_cong` by the same crossing ([[rel-cong-under-binders]]) |
 | `split_all`, `subst`, `decide`, `bv_omega`, `rel_derive` | no: none of them has a reason to look inside a sum | no change |
 
 ## What landed besides the readings

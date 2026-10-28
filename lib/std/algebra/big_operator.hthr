@@ -342,10 +342,7 @@ theorem Semiring::range_mul_r(n: Nat, f: Nat → A, c: A): (∑ k < n, f(k)) * c
 theorem Semiring::range_mul_range(m, n: Nat, f, g: Nat → A):
     (∑ i < m, f(i)) * (∑ k < n, g(k)) ≈ ∑ i < m, ∑ k < n, f(i) * g(k)
 {
-    A.rel_trans((∑ i < m, f(i)) * (∑ k < n, g(k)), ∑ i < m, f(i) * ∑ k < n, g(k), ∑ i < m, ∑ k < n, f(i) * g(k),
-        Semiring::range_mul_r(m, f, ∑ k < n, g(k)),
-        MonoidRel::range_cong(+, m, λ i => f(i) * ∑ k < n, g(k), λ i => ∑ k < n, f(i) * g(k),
-            λ i hi => Semiring::mul_range_l(f(i), n, g)))
+    rewrite(Semiring::range_mul_r, Semiring::mul_range_l, A.rel_refl(∑ i < m, ∑ k < n, f(i) * g(k)))
 }
 
 // The first `N` coefficients of a Cauchy product, `c(n) = ∑_{i+j=n} a(i) b(j)`,
@@ -353,11 +350,7 @@ theorem Semiring::range_mul_range(m, n: Nat, f, g: Nat → A):
 theorem Semiring::range_cauchy(N: Nat, a, b: Nat → A):
     ∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)) ≈ ∑ i < N, a(i) * ∑ k < N - i, b(k)
 {
-    A.rel_trans(∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)), ∑ i < N, ∑ k < N - i, a(i) * b(k),
-        ∑ i < N, a(i) * ∑ k < N - i, b(k),
-        CommMonoidRel::range_antidiag(≈, +, N, λ i k => a(i) * b(k)),
-        MonoidRel::range_cong(+, N, λ i => ∑ k < N - i, a(i) * b(k), λ i => a(i) * ∑ k < N - i, b(k),
-            λ i hi => A.rel_sym(a(i) * ∑ k < N - i, b(k), ∑ k < N - i, a(i) * b(k), Semiring::mul_range_l(a(i), N - i, b))))
+    rewrite(Semiring::mul_range_l, CommMonoidRel::range_antidiag(≈, +, N, λ i k => a(i) * b(k)))
 }
 
 }

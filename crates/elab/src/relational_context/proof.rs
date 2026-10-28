@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalSubst, Term, Type};
+use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{parse_file, Expr, Item, Span};
 
 use crate::{err, goals, Alias, Cx, ElabError, Elaborator, TyVar, R};
@@ -91,14 +91,21 @@ struct Builder<'a> {
     nodes: usize,
     goals: usize,
     derive: bool,
+    /// The binders the walk is below, outermost first, each type scoped
+    /// where its binder is: the λs of a consumer's argument, walked to a
+    /// pointwise proof (`docs/equation-rewrite-design.md` §10.6).
+    binders: Vec<(Rc<Type>, Level)>,
+    /// The supplied proof's two sides at each depth below the binders,
+    /// shifted once per depth.
+    sides: Vec<(Rc<Term>, Rc<Term>)>,
     /// The projected fields of each dictionary reachable by name from
-    /// `cx.dicts`, for this derivation's lifetime. Only the innermost binder
+    /// `cx.dicts`, for this derivation's lifetime, per depth. Only the innermost binder
     /// of a name is ever searched (the `seen` set below), and the walk pushes
     /// nothing but freshly named aliases, so a name's projections are the
     /// same term at every search — while recomputing them is the `Σ`-spine
     /// walk of `project_field`, once per field per search
     /// (issues/relational-derivation-cost.md).
-    fields: RefCell<HashMap<String, Rc<Vec<Field>>>>,
+    fields: RefCell<HashMap<(String, usize), Rc<Vec<Field>>>>,
 }
 
 impl Builder<'_> {
@@ -131,11 +138,34 @@ impl Builder<'_> {
     }
 
     fn value(&mut self, value: Rc<Term>) -> String {
-        self.alias(
-            value,
-            (*self.relation.carrier).clone(),
-            self.relation.level.clone(),
-        )
+        let carrier = self.relation.carrier.shift_local(self.binders.len() as u32);
+        self.alias(value, carrier, self.relation.level.clone())
+    }
+
+    /// A type variable for binder type `dom`, scoped where the walk is.
+    fn domain(&mut self, dom: &Rc<Type>, level: &Level) -> String {
+        let name = self.fresh();
+        self.cx.tyvars.push(TyVar {
+            name: name.clone(),
+            ty: (**dom).clone(),
+            level: level.clone(),
+            depth: self.cx.names.len(),
+        });
+        name
+    }
+
+    /// The supplied proof's left and right sides at the walk's depth.
+    fn sides(&mut self) -> (Rc<Term>, Rc<Term>) {
+        let d = self.binders.len();
+        while self.sides.len() <= d {
+            let by = self.sides.len() as u32;
+            let shifted = (
+                Rc::new(self.relation.left.shift_local(by)),
+                Rc::new(self.relation.right.shift_local(by)),
+            );
+            self.sides.push(shifted);
+        }
+        self.sides[d].clone()
     }
 
     fn core_checks(&self, term: &Term, ty: &Type, level: &Level) -> bool {
@@ -192,7 +222,7 @@ impl Builder<'_> {
             &self.cx,
             ty,
             level,
-            &self.e.display_type(self.original, ty),
+            &self.e.display_type(if self.binders.is_empty() { self.original } else { &self.cx }, ty),
             None,
             self.span,
             &mut Vec::new(),
@@ -204,13 +234,13 @@ impl Builder<'_> {
     /// for "no dictionary here": a name that does not resolve, or resolves
     /// away from its recorded class, is a settled answer too.
     fn dictionary_fields(&self, name: &str, class: &str) -> Rc<Vec<Field>> {
-        if let Some(cached) = self.fields.borrow().get(name) {
+        // Per depth: below a binder the dictionary is the same one, shifted.
+        let key = (name.to_string(), self.cx.names.len());
+        if let Some(cached) = self.fields.borrow().get(&key) {
             return cached.clone();
         }
         let built = Rc::new(self.project_fields(name, class));
-        self.fields
-            .borrow_mut()
-            .insert(name.to_string(), built.clone());
+        self.fields.borrow_mut().insert(key, built.clone());
         built
     }
 
@@ -315,7 +345,24 @@ impl Builder<'_> {
                 "rel_cong"
             };
             self.goals += 1;
-            self.e.relation_obligation(self.original, tactic, label, self.goals - 1, ty.clone(), level.clone(), self.span)?
+            // Below binders the statement mentions them: the goal is closed
+            // over them, at the tactic's own context, and applied back
+            // (`docs/equation-rewrite-design.md` §10.4).
+            let (closed, closed_level) = self.binders.iter().rev().fold((ty.clone(), level.clone()), |(cod, cod_level), (dom, dom_level)| {
+                let pi = Type::Pi {
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: dom.clone(),
+                    cod: Rc::new(cod),
+                };
+                (pi, Level::join(dom_level.clone(), cod_level))
+            });
+            let goal = self.e.relation_obligation(self.original, tactic, label, self.goals - 1, closed, closed_level, self.span)?;
+            let k = self.binders.len() as u32;
+            (0..k).rev().fold(goal.shift_local(k), |fun, i| Term::AppAt {
+                fun: Rc::new(fun),
+                arg: Rc::new(Term::Var(LocalVar(i))),
+            })
         };
         Ok(self.alias(Rc::new(term), ty, level))
     }
@@ -403,6 +450,139 @@ impl Builder<'_> {
         Ok(Some(format!("relation_function::choose_respects({}, {first}, {second}, {same}, {yes}, {yes2}, {hy}, {no}, {no2}, {hn})", self.rel)))
     }
 
+    /// A consumer of a λ whose body changed: `f(…, λ z. a, …)` against
+    /// `f(…, λ z. b, …)`, nothing else different. The two λs are related
+    /// pointwise, `Pointwise(R)` (one per binder they share), and the
+    /// consumer crosses that by the evidence `rewrite` asks for,
+    /// `PreservesRelation(Pointwise(R), R, λ g. f(…, g, …))`
+    /// (`MonoidRel::range_pointwise` for `∑`; `docs/equation-rewrite-design.md`
+    /// §10.2, §10.6). `None` for any other pair, and for a consumer that does
+    /// not map such functions into the carrier.
+    fn across(&mut self, left: &Rc<Term>, right: &Rc<Term>, depth: usize) -> R<Option<String>> {
+        let (head, largs) = crate::spelling::app_spine(left);
+        let (rhead, rargs) = crate::spelling::app_spine(right);
+        if head != rhead || largs.len() != rargs.len() {
+            return Ok(None);
+        }
+        let changed: Vec<usize> = (0..largs.len()).filter(|&j| largs[j] != rargs[j]).collect();
+        let [i] = changed[..] else { return Ok(None) };
+        let Some(over) = self.shared_binders(largs[i], rargs[i]) else {
+            return Ok(None);
+        };
+        let mut input = self.rel.clone();
+        let mut fun = self.carrier.clone();
+        for (dom, level) in over.iter().rev() {
+            let d = self.domain(dom, level);
+            input = format!("relation_props::Pointwise<{d}, {fun}>({input})");
+            fun = format!("{d} → {fun}");
+        }
+        let (fun_ty, fun_level) = self.type_of(&fun)?;
+        let (op_ty, op_level) = self.type_of(&format!("({fun}) → {}", self.carrier))?;
+        // `λ g. f(…, g, …)`, written as a λ wherever `g` sits, as the
+        // library's rules state it.
+        let body = largs.iter().enumerate().fold(Rc::new(head.shift_local(1)), |fun, (j, a)| {
+            let arg = if j == i { Rc::new(Term::Var(LocalVar(0))) } else { Rc::new(a.shift_local(1)) };
+            Rc::new(Term::AppAt { fun, arg })
+        });
+        let context = Term::Lam {
+            dom_level: fun_level.clone(),
+            cod_level: self.relation.level.clone(),
+            dom: Rc::new(fun_ty.clone()),
+            body,
+        };
+        if !self.core_checks(&context, &op_ty, &op_level) {
+            return Ok(None);
+        }
+        let op = self.alias(Rc::new(context), op_ty, op_level);
+        let (ty, level) = self.type_of(&format!(
+            "relation_props::PreservesRelation({input}, {}, {op})",
+            self.rel
+        ))?;
+        if self.derive && self.resolve(&ty, &level).is_none() {
+            if let Some(result) = self.expand(left, right, depth) {
+                return result.map(Some);
+            }
+        }
+        let certificate = self.evidence(ty, level, "compatibility")?;
+        let x = self.alias(largs[i].clone(), fun_ty.clone(), fun_level.clone());
+        let y = self.alias(rargs[i].clone(), fun_ty, fun_level);
+        let (h_ty, h_level) = self.type_of(&format!("{input}({x}, {y})"))?;
+        let (proof, _) = self.pointwise(largs[i], rargs[i], over.len(), depth)?;
+        let h = self.alias(Rc::new(proof), h_ty, h_level);
+        Ok(Some(format!("{certificate}({x}, {y}, {h})")))
+    }
+
+    /// The binder types two λs share, outermost first, each scoped where the
+    /// λs are: as many as both have with the same type. `None` for no λ, or
+    /// a binder whose type mentions an earlier one: the pointwise relation is
+    /// not dependent.
+    fn shared_binders(&self, left: &Term, right: &Term) -> Option<Vec<(Rc<Type>, Level)>> {
+        let mut over = Vec::new();
+        let (mut l, mut r) = (left, right);
+        while let (
+            Term::Lam { dom_level, dom, body: lb, .. },
+            Term::Lam { dom: rdom, body: rb, .. },
+        ) = (l, r)
+        {
+            if dom != rdom {
+                break;
+            }
+            let lowered = crate::strengthen_ty(&self.cx.gamma, dom, over.len() as u32)?;
+            over.push((Rc::new(lowered), dom_level.clone()));
+            l = lb;
+            r = rb;
+        }
+        (!over.is_empty()).then_some(over)
+    }
+
+    /// `λ z₁ … zₖ. p : Pointwise(…Pointwise(R))(left, right)` for two λs
+    /// sharing `k` binders, and the level of that type: `p : R(a, b)` is
+    /// their bodies walked below the binders and elaborated there. Nothing
+    /// made below is kept, since it mentions the binders; the proof is a
+    /// term, aliased where the λs are.
+    fn pointwise(&mut self, left: &Rc<Term>, right: &Rc<Term>, k: usize, depth: usize) -> R<(Term, Level)> {
+        let (
+            Term::Lam { dom_level, dom, body: a, .. },
+            Term::Lam { body: b, .. },
+        ) = (&**left, &**right)
+        else {
+            unreachable!("shared binders are λs")
+        };
+        let saved = self.cx.clone();
+        let z = self.fresh();
+        self.cx.push(z, (**dom).clone(), dom_level.clone());
+        self.binders.push((dom.clone(), dom_level.clone()));
+        let inner = if k > 1 {
+            self.pointwise(a, b, k - 1, depth)
+        } else {
+            self.body(a, b, depth)
+        };
+        self.binders.pop();
+        self.cx = saved;
+        let (body, holds) = inner?;
+        let level = Level::join(dom_level.clone(), holds.clone());
+        Ok((
+            Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: holds,
+                dom: dom.clone(),
+                body: Rc::new(body),
+            },
+            level,
+        ))
+    }
+
+    /// `p : R(a, b)` below the binders, elaborated there.
+    fn body(&mut self, a: &Rc<Term>, b: &Rc<Term>, depth: usize) -> R<(Term, Level)> {
+        let text = self.walk(a.clone(), b.clone(), depth + 1)?;
+        let x = self.value(a.clone());
+        let y = self.value(b.clone());
+        let (ty, level) = self.type_of(&format!("{}({x}, {y})", self.rel))?;
+        let expr = expression(&text, self.span)?;
+        let term = self.e.generated_scope(|e| e.elab_check(&self.cx, &expr, &ty, &level))?;
+        Ok((term, level))
+    }
+
     fn walk(&mut self, left: Rc<Term>, right: Rc<Term>, depth: usize) -> R<String> {
         self.nodes += 1;
         if self.nodes > (if self.derive { 512 } else { 256 })
@@ -437,8 +617,12 @@ impl Builder<'_> {
             let (ty, level) = self.type_of(&format!("{}({x}, {x})", self.rel))?;
             return self.evidence(ty, level, "fixed");
         }
-        if left == self.relation.left && right == self.relation.right {
+        let (supplied_left, supplied_right) = self.sides();
+        if left == supplied_left && right == supplied_right {
             return Ok(self.witness.clone());
+        }
+        if let Some(proof) = self.across(&left, &right, depth)? {
+            return Ok(proof);
         }
         if let (
             Some((lf, ly)),
@@ -602,6 +786,8 @@ pub(crate) fn check(
         nodes: 0,
         goals: 0,
         derive,
+        binders: Vec::new(),
+        sides: Vec::new(),
         fields: RefCell::new(HashMap::new()),
     };
     b.carrier = b.fresh();
