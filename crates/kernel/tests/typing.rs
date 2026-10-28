@@ -23,7 +23,7 @@ use heather_kernel::term::{
 };
 use heather_kernel::typing::{
     check_global_ctx, check_global_ctx_extension, check_local_ctx, check_local_subst, check_term,
-    check_type, infer_term, infer_type, TypeError,
+    check_type, infer_term, infer_type, locate_refusal, TypeError,
 };
 
 const FUEL: u64 = 100_000;
@@ -151,6 +151,35 @@ fn application_and_beta_conversion() {
         check_closed(Layer::Prog, &t, &nat_to_nat(), &Level::Zero).unwrap_err(),
         TypeError::NotConvertible
     );
+}
+
+/// The locator names the innermost failing check, scoped where it ran
+/// (`issues/elab-accepts-conjunction-for-equation.md`): the variable under
+/// the λ, not the λ, with both types; and nothing for a check that passes.
+#[test]
+fn locate_refusal_names_the_innermost_failing_check() {
+    let unit = Type::Unit { level: Level::Zero };
+    let to_unit = Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: rty(Type::Nat), cod: rty(unit.clone()) };
+    let id = lam(v(0));
+    let psi = GlobalCtx::default();
+    assert_eq!(check_closed(Layer::Prog, &id, &to_unit, &Level::Zero).unwrap_err(), TypeError::NotConvertible);
+    let found = locate_refusal(&psi, 0, Layer::Prog, &nil_ctx(), &id, &to_unit, &Level::Zero, FUEL)
+        .expect("a refused check is located");
+    assert!(found.term == v(0), "the refused term is the variable, not the λ around it");
+    assert_eq!(found.gamma.entries.len(), 1, "scoped under the λ's binder");
+    assert!(found.expected == Some(unit) && found.inferred == Some(Type::Nat));
+    assert_eq!(found.err, TypeError::NotConvertible);
+
+    // A λ where a `Nat` is expected fails before any conversion: located,
+    // with no inferred type.
+    let bad_arg = app(lam(v(0)), lam(v(0)));
+    let found = locate_refusal(&psi, 0, Layer::Prog, &nil_ctx(), &bad_arg, &Type::Nat, &Level::Zero, FUEL)
+        .expect("located");
+    assert!(found.term == lam(v(0)) && found.expected == Some(Type::Nat) && found.inferred.is_none());
+    assert_eq!(found.err, TypeError::HeadMismatch);
+
+    // The negative control: a check that holds locates nothing.
+    assert!(locate_refusal(&psi, 0, Layer::Prog, &nil_ctx(), &id, &nat_to_nat(), &Level::Zero, FUEL).is_none());
 }
 
 #[test]

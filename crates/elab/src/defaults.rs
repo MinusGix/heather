@@ -181,11 +181,10 @@ impl Elaborator {
         // transparent name), so it is judged in the padded world the
         // elaborator works in, before the attempt's slots are rolled back.
         let world = self.goal_psi();
-        stats::time_kernel(|| {
-            self.kernel_check_type(&world, Layer::Prog, &cx.gamma, ty, lvl)?;
-            self.kernel_check_term(&world, Layer::Code, &cx.gamma, &term, ty, lvl)
-        })
-        .map_err(|e| self.kernel_error(decl, default.span, e))
+        stats::time_kernel(|| self.kernel_check_type(&world, Layer::Prog, &cx.gamma, ty, lvl))
+            .map_err(|e| self.kernel_refusal(decl, default.span, e, &world, Layer::Prog, &cx.gamma, None, ty, lvl))?;
+        stats::time_kernel(|| self.kernel_check_term(&world, Layer::Code, &cx.gamma, &term, ty, lvl))
+            .map_err(|e| self.kernel_refusal(decl, default.span, e, &world, Layer::Code, &cx.gamma, Some(&term), ty, lvl))
     }
 
     /// Install a stored declaration scope for one read of stored syntax. The

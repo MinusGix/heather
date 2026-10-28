@@ -382,6 +382,7 @@ impl Elaborator {
                     span: decl.span,
                     err: e,
                     note: None,
+                    site: crate::KernelSite::Other,
                 })?;
                 crate::stats::time_kernel(|| {
                     self.kernel_check_term(&self.psi, Layer::Meta, &empty, &term, &stmt, &lvl)
@@ -391,6 +392,7 @@ impl Elaborator {
                     span: decl.span,
                     err: e,
                     note: None,
+                    site: crate::KernelSite::Other,
                 })?;
                 let unsealed = recording.finish();
                 if let Some(g) = self.gate.as_ref() {
