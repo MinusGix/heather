@@ -1117,7 +1117,7 @@ note.
 
 | # | Issue | Part | Needs | Unblocks |
 |---|---|---|---|---|
-| 0 | `analysis-vertical-slice` | all, thinly | `ring` at `≈` (#219) | §10.1's certified root end to end. It tests the interfaces, the class-system nesting and the kernel cost before items 1–14 build on them |
+| 0 | `analysis-vertical-slice` | acceptance test | 2, 3, 4, 6, 7, 11, 12 | §10.1's certified root, checked at each layer as it lands and closed as an instance of item 12's general theorem |
 | 1 | `finite-sums-and-products` | A | semiring layers (done) | everything below, plus `finite-linear-algebra`'s `Fin n` sums |
 | 2 | `finite-difference-calculus` | A′ | 1 | binomial convolution (3), geometric tails (8), mean value inequality (7) |
 | 3 | `formal-power-series` | B (Hurwitz) | 1, 2, `ring` at `≈` (#219) | `exp`/`sin`/`cos` and their laws formally, the formal derivative for `ml-layers`, Newton lifting |
@@ -1137,10 +1137,12 @@ note.
 | — | `borel-laplace-summation` | §3.8 | `summation-methods`, 7, §12's integral | Gevrey classes, Watson uniqueness, the differential-algebra homomorphism |
 | — | `gaussian-state-by-stein` | ML bridge | 3, `ml-gaussian-states` | the Gaussian state defined by `E[x_i f] = ∑_j C_ij E[∂_j f]`, with Wick's matchings as a theorem. This gives expectations to ML theory before measure theory exists |
 
-Item 0 comes first. It builds the minimum of items 1, 3, 6, 7 and 12 in
-their own files, and its findings are logged on those issues before their
-full rounds start. After it, items 1–4 can run in parallel once item 1's
-range sum exists. Items 5 and 6
+Each layer is built in its proper, general form, never as the minimum one
+result needs. Item 0 is not a first round: it is §10.1's root carried as an
+acceptance test through items 2, 3, 4, 6, 7, 11 and 12 in that order, and
+it closes when the root is an instance of item 12's theorem. Item 12 waits
+for item 11's Taylor models rather than shipping the polynomial case
+first. Items 1–4 can run in parallel once item 1's range sum exists. Items 5 and 6
 are the interfaces. Each is validated by two instances in its first round
 (§3.7), and that is why each needs item 3 and then a `CReal` instance. Item
 3 has an outside customer waiting (`ml-layers`). Items 7 and 8 are what
@@ -1166,7 +1168,7 @@ Made here. Each is revisable when a customer pushes back.
   derivative and evidence (§3.1), and smoothness is coinductive.
 - **A series is not its sum** (§3.8). Summation methods are partial maps
   with Hardy's capability laws, and convergent evaluation is one of them.
-- **A vertical slice first** (§13, item 0), then the layers.
+- **Full layers, not a thin slice.** Each layer is built in its general form; §10.1's root is the acceptance test through them (§13, item 0).
 - **Several variables are iterated series** (§5).
 - **Searches by tool:** Newton's in Heather and WZ's as a Rust oracle to
   start. The checks are always in Heather (§3.5).

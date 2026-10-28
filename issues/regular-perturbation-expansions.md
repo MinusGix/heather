@@ -4,7 +4,7 @@ status: open
 labels: [mathematics,analysis]
 area: mathematics
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-28
 ---
 
 Layer F of `docs/analysis-foundations-design.md` (§10): every perturbation
@@ -21,7 +21,7 @@ Scope:
   the worked example of §10.1: `x² + εx − 1 = 0` near `1`, the truncation
   `1 − ε/2 + ε²/8` by Newton on series in `ε`, its residual `ε⁴/64` by `ring`,
   and the certified expansion with `|R| ≤ C·|ε|⁴` from Kantorovich;
-  [[analysis-vertical-slice]] delivers it first, and this issue generalises it;
+  its being an instance of this issue's theorem closes [[analysis-vertical-slice]];
 - singular perturbation of algebraic equations: Puiseux exponents from the
   Newton polygon;
 - a width-expansion probe in the shape of Roberts–Yaida–Hanin (a statistic
@@ -37,3 +37,5 @@ belong to [[grid-based-transseries]].
 - **[[valued-rings-and-newton]]**: the dominance interface and the Newton lemma.
 - **[[formal-power-series]]**: Newton lifting on series.
 - **[[certified-expansions]]**: the expansion statement.
+- **[[taylor-model-enclosures]]**: bounds uniform in `ε` over `|ε| ≤ r`; the
+  general theorem waits for them rather than shipping the polynomial case first.
