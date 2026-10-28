@@ -182,6 +182,24 @@ theorem MonoidRel::at_other(i, k: Nat, x: A, ne: i ≠ k): MonoidRel::at(op, i, 
 
 }
 
+// The sum respects its terms pointwise: the evidence a relation `rewrite`
+// crosses the binder of `∑`/`∏` by (docs/equation-rewrite-design.md §10).
+// Outside the section, every parameter in braces: an evidence rule is applied
+// by search, which fills each one from the goal, the dictionary among them.
+// `range_cong`'s bound `k < n` goes unused, as the rewrite has no use for it.
+evidence theorem MonoidRel::range_pointwise<A>({R: A → A → Type}, {op: A → A → A}, {d: MonoidRel<A>(R, op)},
+    {n: Nat}): PreservesRelation(Pointwise<Nat, A>(R), R, λ f => MonoidRel::range(op, n, f))
+{
+    λ f g h => MonoidRel::range_cong(op, n, f, g, λ k _ => h(k))
+}
+
+// The antidiagonal's two binders, crossed at once.
+evidence theorem MonoidRel::antidiag_pointwise<A>({R: A → A → Type}, {op: A → A → A}, {d: MonoidRel<A>(R, op)},
+    {n: Nat}): PreservesRelation(Pointwise<Nat, Nat → A>(Pointwise<Nat, A>(R)), R, λ f => MonoidRel::antidiag(op, n, f))
+{
+    λ f g h => MonoidRel::range_cong(op, Succ(n), λ i => f(i, n - i), λ i => g(i, n - i), λ i _ => h(i, n - i))
+}
+
 section<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A) {
 
 theorem CommMonoidRel::range_op(n: Nat, f, g: Nat → A):

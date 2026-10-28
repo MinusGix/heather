@@ -111,9 +111,13 @@ theorem rewrite_not_reversed(x, y, z: Rat, h: x ≈ y, e: y + z ≈ z): y + z �
 // `=` does not respect `≈`, so an equation goal is not rewritten along it.
 // expect-error: is not a relation application `S(l, r)`
 theorem rewrite_into_equation(x, y: Rat, h: x ≈ y, e: y.num = y.num): x.num = x.num { rewrite(h, e) }
-// Under a binder the rewrite would need the pointwise relation.
-// expect-error: under a binder
-theorem rewrite_under_binder(x, y: Rat, h: x ≈ y, f: (Rat → Rat) → Rat, e: f(λ z => z + y) ≈ y): f(λ z => z + x) ≈ y { rewrite(h, e) }
+// Under a binder the two λs are related pointwise (§10), and the binder's
+// consumer crosses that relation by evidence: given here, an obligation when
+// missing.
+theorem rewrite_under_binder(x, y: Rat, h: x ≈ y, f: (Rat → Rat) → Rat,
+    c: PreservesRelation(Pointwise<Rat, Rat>(Rat::Same), Rat::Same, f), e: f(λ z => z + y) ≈ y): f(λ z => z + x) ≈ y { rewrite(h, e) }
+// expect-error: ?compatibility : PreservesRelation(Pointwise(Same), Same
+theorem rewrite_under_binder_open(x, y: Rat, h: x ≈ y, f: (Rat → Rat) → Rat, e: f(λ z => z + y) ≈ y): f(λ z => z + x) ≈ y { rewrite(h, e) }
 // `at :=` numbers tree positions, which a shared walk does not have.
 // expect-error: a relation rewrite rewrites every occurrence
 theorem rewrite_at(x, y: Rat, h: x ≈ y, e: y + x ≈ x): x + x ≈ x { rewrite(h, e, at := 1) }
