@@ -265,13 +265,16 @@ with the tool, past the 8 GiB rail on `wc` (round 9,
 `issues/native-decimal-io.md`). write-elf now runs the same allocator in
 Rust over the source it reads back (`crates/cli/src/native/allocator.rs`),
 step for step and its lists in the same orders, so it proposes the same
-homes; `HEATHER_ELF_ALLOCATOR=both` runs the fork's beside it and refuses
+colouring. It does not run the check, so `Greedy::assign`'s fallback is
+write-elf's: the parts' check of the colouring is read before anything is
+emitted, and if it refuses, the fork's homes stand in, which are then every
+word in its slot (`Homes::or_else`). `HEATHER_ELF_ALLOCATOR=both` runs the fork's beside it and refuses
 unless they agree, which `native_tools.rs` does for `tr`. This costs nothing
 in trust: the homes are spelled (`Homes::spelled`) as a literal `{p}_homes()`
 in the certificate, which proves `{p}_allocated():
 allocation_ok(homes).IsTrue()` (by parts, §7), so the kernel sees only the
-check. `native_alloc.hthr` stays the allocator's definition, the one an
-allocator class would hold. `native_cat_compiled` spells cat's homes in the
+check. `native_alloc.hthr` stays the allocator's definition (`Greedy`,
+the `Allocates` instance). `native_cat_compiled` spells cat's homes in the
 same way.
 
 ## 7. Costs, as shapes
