@@ -585,6 +585,36 @@ A stored theorem has no proof to ask about and keeps its statement check.
 The trust is unchanged: rung 1 either way, and a body the store never saw
 still faces the kernel.
 
+**Statement verdicts (2026-10-29).** That kept statement check was, by
+2026-10-29, the whole of a warm native world's `image_recheck`: every
+theorem and opaque declaration of every replayed module re-checked on every
+load, with every verdict stored
+(`issues/native-process-fixed-cost.md`). Replay now asks
+`KernelGate::admits_statement` about a declaration without a body, and
+records a passed statement with `statement_accepted`. The key is a third
+family,
+
+```
+statement_key = SHA-256( "heather/statement/1\0" ++ interface )
+```
+
+which is enough because the interface renders the statement itself and
+every referent as its own interface: a statement check is type formation
+over those referents' types and the δ-visible bodies their interfaces carry,
+and nothing else. A statement check that opened a sealed proof keeps no
+verdict, by the rule `accepted` follows.
+
+**One gate, several Ψs (2026-10-29).** An elaborator and its forks share
+one gate, and `write-elf` asks it about the parent's Ψ and each fork's in
+turn. The prefix of interface hashes was reset whenever a shorter Ψ asked
+and trusted unread for a longer one, so each switch re-hashed the whole
+world, and a Ψ that diverged from the last one but was already longer than
+the hashed prefix would have inherited its hashes. The cache now keeps a
+`GlobalMark` of the Ψ its prefix was built along and keeps exactly the
+bindings the asking Ψ has in common with it (`GlobalBindings::common_prefix`:
+sealed chunks shared by pointer are common without a look, anything else is
+compared by `==`).
+
 The cold overhead deserves one honest caveat: 6.8% is an upper bound taken
 while the machine was busiest. A tighter paired loop later the same session
 (v2 only, `plain`/`cold` alternating, five iterations, load falling) gave

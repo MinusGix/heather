@@ -1909,6 +1909,10 @@ struct GlobalChunk {
     bindings: Rc<Vec<GlobalBinding>>,
 }
 
+/// [`GlobalBindings::mark`]: what a Ψ held when the mark was taken.
+#[derive(Clone)]
+pub struct GlobalMark(GlobalBindings);
+
 /// Persistent outermost-first storage for Ψ.
 #[derive(Clone)]
 pub struct GlobalBindings {
@@ -2023,6 +2027,41 @@ impl GlobalBindings {
 
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.identity, &other.identity)
+    }
+
+    /// A handle on the bindings `self` holds now, for a caller that keeps
+    /// something per binding and must later learn how much of it still
+    /// describes another Ψ ([`GlobalBindings::common_prefix`]): the verdict
+    /// cache's interface hashes, shared by an elaborator and its forks. It
+    /// holds the chunks by reference count and copies no binding; the next
+    /// push onto `self` copies the open tail (at most one chunk) once.
+    pub fn mark(&self) -> GlobalMark {
+        GlobalMark(self.clone())
+    }
+
+    /// How many leading bindings `self` has in common with the Ψ `mark` was
+    /// taken of. A sealed chunk both hold by pointer is common without a
+    /// look, so a fork, which shares every chunk its parent had sealed,
+    /// costs a pointer comparison per chunk and an `==` per tail binding;
+    /// any other binding is compared by `==`, so the answer is exact
+    /// whatever the sharing.
+    pub fn common_prefix(&self, mark: &GlobalMark) -> usize {
+        let other = &mark.0;
+        let n = self.len().min(other.len());
+        if self.same_identity(other) {
+            return n;
+        }
+        let mut i = 0;
+        for (a, b) in self.sealed.iter().zip(other.sealed.iter()) {
+            if i + GLOBAL_CHUNK > n || !Rc::ptr_eq(&a.bindings, &b.bindings) {
+                break;
+            }
+            i += GLOBAL_CHUNK;
+        }
+        while i < n && self.get(i) == other.get(i) {
+            i += 1;
+        }
+        i
     }
 
     fn push(&mut self, binding: GlobalBinding) {
