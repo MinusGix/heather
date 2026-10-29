@@ -79,7 +79,9 @@ certificate that grows with the code (T2, T3).
 **Update 2026-10-29:** the recheck (theorem statements with no verdict) and
 the merkle walk's re-hash of the world at each fork switch are fixed; the
 warm floor is about 8 CPU-s and the world replay about 5
-(`issues/native-process-fixed-cost.md`, log). The first-run miss is open.
+(`issues/native-process-fixed-cost.md`, log). The first-run miss is fixed
+too: `write-elf` after the gate replays every library module (first run
+after a `lib/native` gate 49 to 31 CPU-s).
 
 Leverage: about 11 `write-elf` processes in `native_tools` alone, plus
 `native_cat`'s, at 18 to 30 s each before any tool-specific work

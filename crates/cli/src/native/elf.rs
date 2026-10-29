@@ -73,11 +73,8 @@ const PAGE: u64 = 4096;
 
 /// The modules the probes and the certificate import besides the source's
 /// own; `write-elf` loads them itself, so a program file imports only what
-/// it uses.
-const IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_build", "native_build_parts", "native_alloc", "native_compile", "native_compile_correct", "native_compile_elf",
-    "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_io", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
-    "x86_64_asm_table",
-    "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
+/// it uses. In the lib so the library gate can hold them to the world.
+use heather_cli::world::WRITE_ELF_IMPORTS as IMPORTS;
 
 pub(super) fn write(args: &[String]) -> Result<(), String> {
     let mut positional = Vec::new();
