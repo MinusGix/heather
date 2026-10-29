@@ -146,7 +146,7 @@ and its `El(D#tycode)` spelling, at record projections and at lifted `omega`
 slots, not proof work. Same tree, cold `lib/native` child at width one: kernel
 steps fell from 78.8M to 16.1M and the kernel gate from 335 to 118 s, nearly
 every `Target::*` lemma by 85 to 98% of its steps. The tree had grown past
-the 302 CPU-s above (507 CPU-s on master at this commit, 304 with the fix), so the child's
+the 302 CPU-s above (507 CPU-s on master at this commit, 304 with the fix, 274 once #264 landed too), so the child's
 margin is read off `issues/native-gate-child-cold-at-rail.md`'s log. What
 leads the child now is elaboration: `Stmt::emit_extends`, the
 `native_build_parts` `packs_*_of` family, `loop_head`.
