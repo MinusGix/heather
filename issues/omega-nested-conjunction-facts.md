@@ -1,6 +1,6 @@
 ---
 title: omega splits a conjunction fact one level only
-status: open
+status: closed
 labels: [omega,tactics]
 area: tactics
 created: 2026-10-29
@@ -24,3 +24,12 @@ rounding round) is to bind `.left`/`.right` as lets by hand.
   conjunction in a fact, as probes in `lib/_tests/std/tactic/omega_tests.hthr`.
 - The certificate cites the projections it used (`h.right.left`), so an
   unused conjunct costs nothing in the kernel.
+
+## Resolution (2026-10-29)
+
+`local_facts` (`crates/elab/src/omega_cert.rs`) lists a conjunction fact as
+its conjuncts at every depth, each named by its projection path and typed by
+`project_field`; the certificate cites `h.right.left` only where it uses it.
+A disjunction under a conjunction is split like a top-level one. Design:
+`docs/omega-measure-reduction-design.md` §13. Probes and a control:
+`conj_*` in `lib/_tests/std/tactic/omega_tests.hthr`.

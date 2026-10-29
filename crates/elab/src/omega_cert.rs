@@ -877,20 +877,47 @@ pub(crate) fn source_context(cx: &Cx) -> std::borrow::Cow<'_, Cx> {
 // Resolve each visible name once through the same binder/alias precedence as
 // ordinary expressions. Alias types are weakened to this context by resolve.
 // A hidden binder (`#ih`, a `match`'s induction hypothesis) is left out: a
-// certificate is source, and source cannot name it.
+// certificate is source, and source cannot name it. A conjunction is listed
+// as its conjuncts, at every depth, each named by its projection path
+// (`h.right.left`): a certificate cites only the ones it uses
+// (issues/omega-nested-conjunction-facts.md).
 pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
     let mut seen = std::collections::HashSet::new();
-    cx.names
-        .iter()
-        .chain(cx.aliases.iter().map(|alias| &alias.name))
-        .filter(|name| !name.starts_with('#'))
-        .filter(|name| seen.insert((*name).clone()))
-        .filter_map(|name| {
-            elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 })
-                .ok()
-                .map(|(_, ty, _)| (name.clone(), ty))
-        })
-        .collect()
+    let mut facts = Vec::new();
+    for name in cx.names.iter().chain(cx.aliases.iter().map(|alias| &alias.name)) {
+        if name.starts_with('#') || !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Ok((term, ty, _)) = elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 }) {
+            push_conjuncts(elab, cx, name.clone(), Rc::new(term), ty, &mut facts);
+        }
+    }
+    facts
+}
+
+/// `name: ty`, or, when `ty` is `logic::And`, each side read through its
+/// projection, recursively.
+fn push_conjuncts(elab: &Elaborator, cx: &Cx, name: String, term: Rc<Term>, ty: Type, out: &mut Vec<(String, Type)>) {
+    if let Some(ind) = elab.display_tag_of(&ty)
+        && crate::goal_combinators::conjunction(&ind)
+    {
+        let sides: Option<Vec<_>> = ["left", "right"]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, field)| {
+                elab.project_field(cx, &ind, &ty, Rc::clone(&term), idx, heather_syntax::Span { start: 0, end: 0 })
+                    .ok()
+                    .map(|(side, side_ty, _)| (format!("{name}.{field}"), Rc::new(side), side_ty))
+            })
+            .collect();
+        if let Some(sides) = sides {
+            for (side_name, side, side_ty) in sides {
+                push_conjuncts(elab, cx, side_name, side, side_ty, out);
+            }
+            return;
+        }
+    }
+    out.push((name, ty));
 }
 
 fn reflect_assumption(

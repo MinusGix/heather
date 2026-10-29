@@ -160,7 +160,7 @@ fn case_domain(elab: &Elaborator, cx: &Cx, lhs: &Type) -> Option<Rc<crate::induc
 }
 
 /// `logic`'s `And`: a goal the leaf proves one side at a time.
-fn conjunction(inductive: &crate::inductive::Inductive) -> bool {
+pub(crate) fn conjunction(inductive: &crate::inductive::Inductive) -> bool {
     matches!(inductive.name.as_str(), "And" | "logic::And") && inductive.ctors.len() == 1 && inductive.ctors[0].fields.len() == 2
 }
 
