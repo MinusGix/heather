@@ -510,3 +510,21 @@ goal's `n`. Two changes, both in `crates/elab/src/omega_cert.rs`:
 §5's hazard is as in §11: every occurrence of such a field takes the same
 route, so no atom splits, and a field read off a neutral record (`q.den.pred`)
 is untouched. Probes and controls: `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 13. Conjunction facts at every depth (2026-10-29)
+
+`issues/omega-nested-conjunction-facts.md`. A context fact `h: P ∧ Q` was
+read only by the connective split, the fallback after reflection fails:
+`omega::and_elim_false` binds both sides and re-enters as
+`__omega_connective_branch`, which splits nothing further. So in
+`h: a < b ∧ (b < c ∧ c < 5)` the inner conjunction was never read.
+
+Now `local_facts` lists a conjunction as its conjuncts, recursively, each
+under its projection path (`h.left`, `h.right.left`, `h.right.right`), with
+the type `project_field` gives it. Every consumer of `local_facts` (Omega's
+reflection, the relevance layers, CutSat, the connective and disequality
+splits, `linarith`'s and `bv_omega`'s fact scans) sees the conjuncts as
+ordinary facts. The certificate is source, so a used conjunct is cited by its
+path and an unused one never reaches the kernel; a disjunction under a
+conjunction (`h.right: A ∨ B`) is split like a top-level one. The `And` arm of
+`split_connective` stays only for a fact whose projection declines.

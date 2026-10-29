@@ -48,9 +48,8 @@ property of Heather.
 ## 3. omega
 
 - **Give it what it cannot read yet:** a Nat `a - b` is an atom (add
-  `Nat::sub_add_cancel`, [[omega-nat-truncated-subtraction]]); a nested
-  conjunction is split one level (bind `.left`/`.right`,
-  [[omega-nested-conjunction-facts]]); an `Exists`'s `.proof` is skipped
+  `Nat::sub_add_cancel`, [[omega-nat-truncated-subtraction]]); an
+  `Exists`'s `.proof` is skipped
   (restate it with a typed `have`, [[omega-redex-typed-fact-ignored]]).
 - **Over records and layouts at a literal program, prefer Nat step lemmas**
   (`Nat::le_trans`, `add_le_mono_l`) or a generic lemma over Nat variables.
