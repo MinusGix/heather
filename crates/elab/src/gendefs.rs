@@ -1804,7 +1804,13 @@ impl Elaborator {
         // reference at `ā`. `respell_ty` recovers the telescope's binders as
         // its arguments — the identity spine — and proves the reference means
         // the template, so a decline here is exactly the case with no name to
-        // use.
+        // use. A closed record has no reference, and its binder takes the
+        // spelling a statement gives the record (the emission chokepoint):
+        // that is the receiver's type at every use site, and the inline
+        // template differs from it wherever a field's type is a coded
+        // declaration. `Target`'s `X86Profile` is one, inline twenty times the
+        // size of its name, and every `t.r` converted the two
+        // (`issues/native-lemma-kernel-steps.md`).
         let mut d_ty = Rc::new(if telescoped {
             let Some(r) = self.respell_ty(&cx, &template) else {
                 decline!("register_rec_projs", &ind.name, "binder-reference");
@@ -1812,7 +1818,7 @@ impl Elaborator {
             };
             r
         } else {
-            template.clone()
+            self.annotation_type(&cx, &template, 0)
         });
         // The definitions' own context: `·, θ̄, v : R`, which is where the
         // whole walk lives — the field types come out of it scoped exactly as

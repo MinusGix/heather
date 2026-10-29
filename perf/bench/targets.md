@@ -140,6 +140,17 @@ case. Cases: `native/goes-arg-found`, `native/call-step`,
 `native/arg-cells-store`, `native/emit-extends` (elaborator-bound, 0.7 s of
 whnf and substitution).
 
+**2026-10-29, after the spelling fix** (`issues/native-lemma-kernel-steps.md`, closed):
+both items were conversions between a coded declaration's inline lowering
+and its `El(D#tycode)` spelling, at record projections and at lifted `omega`
+slots, not proof work. Same tree, cold `lib/native` child at width one: kernel
+steps fell from 78.8M to 16.1M and the kernel gate from 335 to 118 s, nearly
+every `Target::*` lemma by 85 to 98% of its steps. The tree had grown past
+the 302 CPU-s above (507 CPU-s on master at this commit, 304 with the fix), so the child's
+margin is read off `issues/native-gate-child-cold-at-rail.md`'s log. What
+leads the child now is elaboration: `Stmt::emit_extends`, the
+`native_build_parts` `packs_*_of` family, `loop_head`.
+
 ## T5. The rest of the library, for breadth
 
 | item | cost alone | where | case |
