@@ -118,6 +118,24 @@ pub trait KernelGate {
     /// that `accepted` never re-hashes what `admits` hashed — must forget
     /// it here, or the next declaration at that position could inherit it.
     fn abandon(&self, _psi: &GlobalCtx) {}
+
+    /// May the statement check of `binding`, a declaration without a body
+    /// (a theorem's statement, an opaque declaration) about to land at
+    /// `psi.bindings.len()`, be skipped? Asked only by module-image replay,
+    /// which otherwise re-checks every such statement on every load: a
+    /// verdict about the body's absence is all a definition's [`Self::admits`]
+    /// already covers, and these bindings have no body to key one on
+    /// (`issues/native-process-fixed-cost.md`). The default vouches for
+    /// nothing.
+    fn admits_statement(&self, _psi: &GlobalCtx, _binding: &heather_kernel::term::GlobalBinding) -> bool {
+        false
+    }
+
+    /// `binding`'s statement just passed the kernel in `psi`, opening the
+    /// sealed proofs `unsealed`. Called only after a `false` from
+    /// [`Self::admits_statement`]; the same rule as [`Self::accepted`] holds
+    /// for `unsealed`.
+    fn statement_accepted(&self, _psi: &GlobalCtx, _binding: &heather_kernel::term::GlobalBinding, _unsealed: &[usize]) {}
 }
 
 /// A gate that never admits anything: the identity, useful as a control.
@@ -164,5 +182,15 @@ impl KernelGate for Except {
 
     fn abandon(&self, psi: &GlobalCtx) {
         self.inner.abandon(psi);
+    }
+
+    // Statement verdicts are asked only by image replay, which never runs a
+    // probed item (`--only` elaborates those), so there is no name to match.
+    fn admits_statement(&self, psi: &GlobalCtx, binding: &heather_kernel::term::GlobalBinding) -> bool {
+        self.inner.admits_statement(psi, binding)
+    }
+
+    fn statement_accepted(&self, psi: &GlobalCtx, binding: &heather_kernel::term::GlobalBinding, unsealed: &[usize]) {
+        self.inner.statement_accepted(psi, binding, unsealed);
     }
 }
