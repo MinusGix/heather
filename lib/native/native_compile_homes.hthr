@@ -159,6 +159,13 @@ theorem Homes::nodes_checked_sound(self homes: Homes, out: List<Nat>, nodes: Lis
 
 // What `Stmt::checked` finds is the set live before the statement, and the
 // checks hold.
+// A region's check finds what is live before it.
+theorem Homes::region_checked_sound(self homes: Homes, region: StructuredRegion, out, l: List<Nat>, got: homes.region_checked(region, out) = Some(l)):
+    (l = homes.region_live(region, out)) ∧ Bool::IsTrue(match homes.region_checked(region, out) { None => False, Some(_) => True }) {
+    ⟨j(sym(got), λ o _ => l = (match o as λ _ => List<Nat> { None => out, Some(live) => live }), refl),
+        j(sym(got), λ o _ => Bool::IsTrue(match o as λ _ => Bool { None => False, Some(_) => True }), trivial)⟩
+}
+
 theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l: List<Nat>) →
     s.checked(homes, out) = Some(l) → (l = s.live_in(homes, out)) ∧ s.checks(homes, out).IsTrue() {
     match s {
@@ -182,11 +189,11 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
                     })(refl)
                 },
             })(refl),
-            Sequence(_, _) => λ out l same => ⟨sym(Option::some_inj(out, l, same)), trivial⟩,
-            Compose(_, _) => λ out l same => ⟨sym(Option::some_inj(out, l, same)), trivial⟩,
-            Conditional(_, _, _, _, _, _) => λ out l same => ⟨sym(Option::some_inj(out, l, same)), trivial⟩,
-            Call(_, _, _) => λ out l same => ⟨sym(Option::some_inj(out, l, same)), trivial⟩,
-            Loop(_, _, _, _, _, _, _, _, _) => λ out l same => ⟨sym(Option::some_inj(out, l, same)), trivial⟩,
+            Sequence(a, b) => λ out l same => homes.region_checked_sound(Sequence(a, b), out, l, same),
+            Compose(a, b) => λ out l same => homes.region_checked_sound(Compose(a, b), out, l, same),
+            Conditional(a, b, c, d, e, f) => λ out l same => homes.region_checked_sound(Conditional(a, b, c, d, e, f), out, l, same),
+            Call(a, b, c) => λ out l same => homes.region_checked_sound(Call(a, b, c), out, l, same),
+            Loop(a, b, c, d, e, f, g, h, i) => λ out l same => homes.region_checked_sound(Loop(a, b, c, d, e, f, g, h, i), out, l, same),
         },
         Invoke(shape) => λ out l => (match homes.apart(shape.result(), out) as λ b => homes.apart(shape.result(), out) = b →
                 (match b { False => None, True => Some(live_before(shape.reads(), shape.result(), out)) }) = Some(l) →

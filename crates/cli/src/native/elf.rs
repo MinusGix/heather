@@ -484,7 +484,8 @@ fn refused(symbol: &str, why: &[u64]) -> String {
     };
     let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", 6 => "an argument", _ => "the program" };
     let reason = match reason {
-        0 => format!("a {} region; only a dataflow leaf compiles (issues/native-compile-wider-leaves.md)",
+        0 => format!("a {} region the compiler does not take: a node not at width 64 or reading a word not written before it, \
+            a branch on a bit that may not be its word's low bit, a loop not in counted form, or a call (native_structured)",
             ["", "sequence", "compose", "conditional", "call", "loop"].get(first as usize).unwrap_or(&"structured")),
         1 => format!("the leaf needs {first} registers, one per input and per node, and the pool holds {second}{NARROW}"),
         2 => format!("the leaf's nodes are not in evaluation order{NARROW}"),
@@ -499,6 +500,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         10 => format!("node {first} of the leaf is not at width 64, and a leaf S4 does not take whole compiles a node at a time only when every node is"),
         11 => format!("S4's lowering refused node {first} of the leaf alone"),
         12 => "the words' homes fail the allocation's check (`Source::allocation_ok`): the allocator's proposal is wrong, a bug in it".into(),
+        13 => "a loop whose words live after it include one it moves or counts with, or whose leaves do not compile".into(),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }

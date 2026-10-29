@@ -91,12 +91,24 @@ fn nodes_write_ports(nodes: List<Node>) → List<Port> {
     match nodes { Nil => [], Cons(node, rest) => Cons(node_output(node), nodes_write_ports(rest)) }
 }
 
-fn StructuredRegion::write_ports(self region: StructuredRegion) → List<Port> {
+// The ports a region's run writes, in the order it writes them: a
+// conditional's are its taken arm's, read as `run` branches, at the value
+// it reads its bit at; a loop's are its outputs and the bit it ends with.
+fn StructuredRegion::written(self region: StructuredRegion, call: Answers(), values: Valuation(), buffers: Buffers()) → List<Port> {
     match region {
         Dataflow(body) => nodes_write_ports(body.nodes),
-        Sequence(prefix, continuation) => nodes_write_ports(prefix.nodes) ++ continuation.write_ports(),
-        Compose(prefix, continuation) => prefix.write_ports() ++ continuation.write_ports(),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.write_ports() ++ when_false.write_ports(),
+        Sequence(prefix, continuation) => {
+            let after = run_nodes(prefix.nodes, values, buffers);
+            nodes_write_ports(prefix.nodes) ++ continuation.written(call, after.values, after.buffers)
+        },
+        Compose(prefix, continuation) => {
+            let after = prefix.run(call, values, buffers);
+            prefix.written(call, values, buffers) ++ continuation.written(call, after.values, after.buffers)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match values(1, condition).head_bit() {
+            False => when_false.written(call, values, buffers),
+            True => when_true.written(call, values, buffers),
+        },
         Call(_, _, result) => [Port(result, 64)],
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => word_ports(outputs) ++ [Port(exhausted, 1)],
     }
@@ -113,7 +125,7 @@ fn Env::settle(self env: Env, after: Valuation(), ports: List<Port>) → Env {
 
 fn Env::compute(self env: Env, call: Answers(), region: StructuredRegion) → Env {
     let after = region.run(call, env.valuation(), env.buffers);
-    Env(env.words, after.buffers, env.args).settle(after.values, region.write_ports())
+    Env(env.words, after.buffers, env.args).settle(after.values, region.written(call, env.valuation(), env.buffers))
 }
 
 // ---------------------------------------------------------------------------
@@ -323,12 +335,25 @@ fn CallShape::words(self shape: CallShape) → List<Nat> {
 // One past the largest id: the words a statement naming `ids` needs.
 fn List::word_bound(self ids: List<Nat>) → Nat { match ids { Nil => 0, Cons(id, rest) => Succ(id).max(rest.word_bound()) } }
 
+// Every id a region names, a loop's own words and its body's with them.
+fn StructuredRegion::ids(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_mentions(body.nodes),
+        Sequence(prefix, continuation) => nodes_mentions(prefix.nodes) ++ continuation.ids(),
+        Compose(prefix, continuation) => prefix.ids() ++ continuation.ids(),
+        Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.ids() ++ when_false.ids()),
+        Call(_, arguments, result) => Cons(result, arguments),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            Cons(bound, Cons(count, Cons(exit, Cons(exhausted, inputs ++ (parameters ++ (next ++ (outputs ++ body.ids()))))))),
+    }
+}
+
 // One past the largest word a statement names: what a source of it
 // declares (`Source::words`, `Source::of`) when every word it names gets a
 // slot.
 fn Stmt::word_bound(self s: Stmt) → Nat {
     match s {
-        Compute(region) => region.mentions().word_bound(),
+        Compute(region) => region.ids().word_bound(),
         Invoke(shape) => shape.words().word_bound(),
         Then(first, rest) => first.word_bound().max(rest.word_bound()),
         Branch(condition, yes, no) => Succ(condition).max(yes.word_bound().max(no.word_bound())),

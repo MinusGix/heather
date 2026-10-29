@@ -150,41 +150,6 @@ fn nodes_live_in(nodes: List<Node>, out: List<Nat>) → List<Nat> {
 // what is live after the loop.
 fn loop_after(again: Nat, set, out: List<Nat>) → List<Nat> { Cons(again, set.union(out)) }
 
-// Live before the statement, given what is live after it; a loop's, its
-// set.
-fn Stmt::live_in(self s: Stmt, homes: Homes, out: List<Nat>) → List<Nat> {
-    match s {
-        Compute(region) => match region {
-            Dataflow(body) => nodes_live_in(body.nodes, out),
-            // Refused by the compiler; anything is sound here.
-            Sequence(_, _) => out,
-            Compose(_, _) => out,
-            Conditional(_, _, _, _, _, _) => out,
-            Call(_, _, _) => out,
-            Loop(_, _, _, _, _, _, _, _, _) => out,
-        },
-        Invoke(shape) => live_before(shape.reads(), shape.result(), out),
-        Then(first, rest) => first.live_in(homes, rest.live_in(homes, out)),
-        Branch(condition, yes, no) => Cons(condition, yes.live_in(homes, out).union(no.live_in(homes, out))),
-        Repeat(_, again) => homes.loop_set(again),
-        Exit(status) => [status],
-        Arg(index, _, len) => live_before([index], len, out),
-    }
-}
-
-// What is live after a `Repeat`'s body, given what is live after the loop.
-fn Stmt::loop_out(self s: Stmt, homes: Homes, out: List<Nat>) → List<Nat> {
-    match s {
-        Repeat(_, again) => loop_after(again, homes.loop_set(again), out),
-        Compute(_) => out,
-        Invoke(_) => out,
-        Then(_, _) => out,
-        Branch(_, _, _) => out,
-        Exit(_) => out,
-        Arg(_, _, _) => out,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The checks
 
@@ -225,31 +190,6 @@ fn Homes::slotted(self homes: Homes, ids: List<Nat>) → Bool {
     }
 }
 
-// Every write in the statement apart from what is live after it, and every
-// loop's set closed. A leaf is checked for both ways the compiler may take
-// it: whole (its results written last) and a node at a time.
-fn Stmt::checks(self s: Stmt, homes: Homes, out: List<Nat>) → Bool {
-    match s {
-        Compute(region) => match region {
-            Dataflow(body) => homes.nodes_apart(body.nodes, out) && homes.all_apart(nodes_writes(body.nodes), out),
-            Sequence(_, _) => True,
-            Compose(_, _) => True,
-            Conditional(_, _, _, _, _, _) => True,
-            Call(_, _, _) => True,
-            Loop(_, _, _, _, _, _, _, _, _) => True,
-        },
-        Invoke(shape) => homes.apart(shape.result(), out),
-        Then(first, rest) => first.checks(homes, rest.live_in(homes, out)) && rest.checks(homes, out),
-        Branch(_, yes, no) => yes.checks(homes, out) && no.checks(homes, out),
-        Repeat(body, again) => {
-            let after = loop_after(again, homes.loop_set(again), out);
-            body.live_in(homes, after).within(homes.loop_set(again)) && body.checks(homes, after)
-        },
-        Exit(_) => True,
-        Arg(_, _, len) => homes.apart(len, out),
-    }
-}
-
 // The same checks with each set computed once (`Stmt::checks` asks a
 // `Then`'s rest for its set at every level): the set live before the
 // statement, where every check passes.
@@ -268,19 +208,176 @@ fn Homes::nodes_checked(self homes: Homes, nodes: List<Node>, out: List<Nat>) �
     }
 }
 
-fn Stmt::checked(self s: Stmt, homes: Homes, out: List<Nat>) → Option<List<Nat>> {
+// Every id the nodes name.
+fn nodes_words(nodes: List<Node>) → List<Nat> {
+    match nodes { Nil => [], Cons(node, rest) => Cons(node_output(node).id, function_ir_eval::Node::reads(node)) ++ nodes_words(rest) }
+}
+
+// ---------------------------------------------------------------------------
+// Structured regions (issues/native-compile-wider-leaves.md)
+//
+// A region other than a dataflow leaf compiles as its parts do
+// (native_compile's `Prog::region`): a sequence's leaf and the rest one after
+// the other, a conditional as a branch, a loop as a counted loop of leaves.
+// Its liveness is its parts' read backwards, as a statement's is, and its
+// check is theirs; `Homes::region_checked` is both in one pass, and what is
+// live before a region is what it finds (`Homes::region_live`).
+
+// `o` where the bit is set, else none: a check before an option.
+fn Bool::guard<B>(self b: Bool, o: Option<B>) → Option<B> { match b { False => None, True => o } }
+
+// A leaf's check: a node at a time, and its results written last.
+fn Homes::leaf_checked(self homes: Homes, nodes: List<Node>, out: List<Nat>) → Option<List<Nat>> {
+    match homes.nodes_checked(nodes, out) {
+        None => None,
+        Some(live) => match homes.all_apart(nodes_writes(nodes), out) { False => None, True => Some(live) },
+    }
+}
+
+// A loop region's leaves, all plain words at width 64. Its count runs down
+// in the word `count`; the word `exhausted` holds the loop's own bits on
+// the way: whether the count is out at its head, the one it counts down
+// by, and at its end the bit the loop leaves.
+fn moves(to, from: List<Nat>) → List<Node> {
+    match to {
+        Nil => [],
+        Cons(t, ts) => match from { Nil => [], Cons(f, fs) => Cons(Move(64, t, f), moves(ts, fs)) },
+    }
+}
+
+// The count from the bound, the parameters from the inputs.
+fn loop_entry(bound, count: Nat, inputs, parameters: List<Nat>) → List<Node> { Cons(Move(64, count, bound), moves(parameters, inputs)) }
+
+// Whether the count is out.
+fn loop_zero(count, exhausted: Nat) → List<Node> { [Const(64, exhausted, 0), Equal(64, exhausted, count, exhausted)] }
+
+// The count less one.
+fn loop_down(count, exhausted: Nat) → List<Node> { [Const(64, exhausted, 1), Sub(64, count, count, exhausted)] }
+
+// Out by the exit: not exhausted.
+fn loop_stop(exhausted: Nat) → List<Node> { [Const(64, exhausted, 0)] }
+
+// Every word a region's code may write: its nodes' results, and a loop's
+// parameters, count and bit as well as its outputs.
+fn StructuredRegion::touches(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_writes(body.nodes),
+        Sequence(prefix, continuation) => nodes_writes(prefix.nodes) ++ continuation.touches(),
+        Compose(prefix, continuation) => prefix.touches() ++ continuation.touches(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.touches() ++ when_false.touches(),
+        Call(_, _, result) => [result],
+        Loop(_, _, parameters, count, body, _, _, outputs, exhausted) => Cons(count, Cons(exhausted, parameters ++ (outputs ++ body.touches()))),
+    }
+}
+
+// Every word a region's code names.
+fn StructuredRegion::named(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_words(body.nodes),
+        Sequence(prefix, continuation) => nodes_words(prefix.nodes) ++ continuation.named(),
+        Compose(prefix, continuation) => prefix.named() ++ continuation.named(),
+        Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.named() ++ when_false.named()),
+        Call(_, arguments, result) => Cons(result, arguments),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            nodes_words(loop_entry(bound, count, inputs, parameters)) ++ (nodes_words(loop_zero(count, exhausted)) ++
+            (nodes_words(moves(parameters, next)) ++ (nodes_words(loop_stop(exhausted)) ++ (nodes_words(loop_down(count, exhausted)) ++
+            (nodes_words(moves(outputs, parameters)) ++ Cons(exit, body.named())))))),
+    }
+}
+
+// Live before the region, given what is live after it, where every write
+// is apart from what is live after it; a loop's head set (its count's
+// `loop_set`) closed. A loop's code, by what is live after each piece
+// (`Prog::region`): the entry leaf; at the head the zero test and its bit
+// tested, out to the end when it is set; the body; the parameters moved
+// from `next`; the exit bit tested, out by `loop_stop` when it is set, else
+// `loop_down` and back to the head; at the end the outputs moved from the
+// parameters.
+// A loop's head: what its head needs within its set, and what is live
+// before its entry.
+fn Homes::closed(self homes: Homes, head, set: List<Nat>, entry: List<Node>) → Option<List<Nat>> {
+    head.within(set).guard(homes.leaf_checked(entry, set))
+}
+
+fn Homes::region_checked(self homes: Homes, region: StructuredRegion, out: List<Nat>) → Option<List<Nat>> {
+    match region {
+        Dataflow(body) => homes.leaf_checked(body.nodes, out),
+        Sequence(prefix, continuation) => homes.region_checked(continuation, out).and_then(λ mid => homes.leaf_checked(prefix.nodes, mid)),
+        Compose(prefix, continuation) => homes.region_checked(continuation, out).and_then(λ mid => homes.region_checked(prefix, mid)),
+        Conditional(_, condition, _, _, when_true, when_false) => homes.region_checked(when_true, out).and_then(λ y =>
+            homes.region_checked(when_false, out).and_then(λ n => Some(Cons(condition, y.union(n))))),
+        Call(_, _, _) => Some(out),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
+            let set = homes.loop_set(count);
+            homes.leaf_checked(moves(outputs, parameters), out).and_then(λ done =>
+            homes.leaf_checked(loop_stop(exhausted), done).and_then(λ stop =>
+            homes.leaf_checked(loop_down(count, exhausted), set).and_then(λ down =>
+            homes.leaf_checked(moves(parameters, next), Cons(exit, stop.union(down))).and_then(λ after =>
+            homes.region_checked(body, after).and_then(λ b =>
+            homes.leaf_checked(loop_zero(count, exhausted), Cons(exhausted, b.union(done))).and_then(λ head =>
+            homes.closed(head, set, loop_entry(bound, count, inputs, parameters))))))))
+        },
+    }
+}
+
+fn Homes::region_live(self homes: Homes, region: StructuredRegion, out: List<Nat>) → List<Nat> {
+    match homes.region_checked(region, out) { None => out, Some(live) => live }
+}
+
+// Live before the statement, given what is live after it; a loop's, its
+// set.
+fn Stmt::live_in(self s: Stmt, homes: Homes, out: List<Nat>) → List<Nat> {
     match s {
         Compute(region) => match region {
-            Dataflow(body) => match homes.nodes_checked(body.nodes, out) {
-                None => None,
-                Some(live) => match homes.all_apart(nodes_writes(body.nodes), out) { False => None, True => Some(live) },
-            },
-            Sequence(_, _) => Some(out),
-            Compose(_, _) => Some(out),
-            Conditional(_, _, _, _, _, _) => Some(out),
-            Call(_, _, _) => Some(out),
-            Loop(_, _, _, _, _, _, _, _, _) => Some(out),
+            Dataflow(body) => nodes_live_in(body.nodes, out),
+            _ => homes.region_live(region, out),
         },
+        Invoke(shape) => live_before(shape.reads(), shape.result(), out),
+        Then(first, rest) => first.live_in(homes, rest.live_in(homes, out)),
+        Branch(condition, yes, no) => Cons(condition, yes.live_in(homes, out).union(no.live_in(homes, out))),
+        Repeat(_, again) => homes.loop_set(again),
+        Exit(status) => [status],
+        Arg(index, _, len) => live_before([index], len, out),
+    }
+}
+
+// What is live after a `Repeat`'s body, given what is live after the loop.
+fn Stmt::loop_out(self s: Stmt, homes: Homes, out: List<Nat>) → List<Nat> {
+    match s {
+        Repeat(_, again) => loop_after(again, homes.loop_set(again), out),
+        Compute(_) => out,
+        Invoke(_) => out,
+        Then(_, _) => out,
+        Branch(_, _, _) => out,
+        Exit(_) => out,
+        Arg(_, _, _) => out,
+    }
+}
+
+// Every write in the statement apart from what is live after it, and every
+// loop's set closed. A leaf is checked for both ways the compiler may take
+// it: whole (its results written last) and a node at a time.
+fn Stmt::checks(self s: Stmt, homes: Homes, out: List<Nat>) → Bool {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => homes.nodes_apart(body.nodes, out) && homes.all_apart(nodes_writes(body.nodes), out),
+            _ => match homes.region_checked(region, out) { None => False, Some(_) => True },
+        },
+        Invoke(shape) => homes.apart(shape.result(), out),
+        Then(first, rest) => first.checks(homes, rest.live_in(homes, out)) && rest.checks(homes, out),
+        Branch(_, yes, no) => yes.checks(homes, out) && no.checks(homes, out),
+        Repeat(body, again) => {
+            let after = loop_after(again, homes.loop_set(again), out);
+            body.live_in(homes, after).within(homes.loop_set(again)) && body.checks(homes, after)
+        },
+        Exit(_) => True,
+        Arg(_, _, len) => homes.apart(len, out),
+    }
+}
+
+fn Stmt::checked(self s: Stmt, homes: Homes, out: List<Nat>) → Option<List<Nat>> {
+    match s {
+        Compute(region) => homes.region_checked(region, out),
         Invoke(shape) => match homes.apart(shape.result(), out) { False => None, True => Some(live_before(shape.reads(), shape.result(), out)) },
         Then(first, rest) => match rest.checked(homes, out) { None => None, Some(mid) => first.checked(homes, mid) },
         Branch(condition, yes, no) => match yes.checked(homes, out) {
@@ -326,16 +423,41 @@ theorem Source::homes_by_ok<A: Allocates>(self src: Source, a: A): src.allocatio
 // needs at its head. A `Then`'s rest is walked once, so a pass is linear.
 record Needs { live: List<Nat>, sets: List<List<Nat>> }
 
+// A region's pass: its parts' read backwards, as `region_checked` reads
+// them, a loop's head set (its count's) joined with what its head needs.
+fn Homes::region_needs(self homes: Homes, region: StructuredRegion, out: List<Nat>, sets: List<List<Nat>>) → Needs {
+    match region {
+        Dataflow(body) => Needs(nodes_live_in(body.nodes, out), sets),
+        Sequence(prefix, continuation) => {
+            let after = homes.region_needs(continuation, out, sets);
+            Needs(nodes_live_in(prefix.nodes, after.live), after.sets)
+        },
+        Compose(prefix, continuation) => {
+            let after = homes.region_needs(continuation, out, sets);
+            homes.region_needs(prefix, after.live, after.sets)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => {
+            let n = homes.region_needs(when_false, out, sets);
+            let y = homes.region_needs(when_true, out, n.sets);
+            Needs(Cons(condition, y.live.union(n.live)), y.sets)
+        },
+        Call(_, _, _) => Needs(out, sets),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
+            let set = homes.loop_set(count);
+            let done = nodes_live_in(moves(outputs, parameters), out);
+            let stop = nodes_live_in(loop_stop(exhausted), done);
+            let down = nodes_live_in(loop_down(count, exhausted), set);
+            let b = homes.region_needs(body, nodes_live_in(moves(parameters, next), Cons(exit, stop.union(down))), sets);
+            let head = nodes_live_in(loop_zero(count, exhausted), Cons(exhausted, b.live.union(done)));
+            let had = match b.sets.nth(count) { None => set, Some(held) => held };
+            Needs(nodes_live_in(loop_entry(bound, count, inputs, parameters), set), b.sets.put(count, had.union(head), []))
+        },
+    }
+}
+
 fn Stmt::needs(self s: Stmt, homes: Homes, out: List<Nat>, sets: List<List<Nat>>) → Needs {
     match s {
-        Compute(region) => match region {
-            Dataflow(body) => Needs(nodes_live_in(body.nodes, out), sets),
-            Sequence(_, _) => Needs(out, sets),
-            Compose(_, _) => Needs(out, sets),
-            Conditional(_, _, _, _, _, _) => Needs(out, sets),
-            Call(_, _, _) => Needs(out, sets),
-            Loop(_, _, _, _, _, _, _, _, _) => Needs(out, sets),
-        },
+        Compute(region) => homes.region_needs(region, out, sets),
         Invoke(shape) => Needs(live_before(shape.reads(), shape.result(), out), sets),
         Then(first, rest) => {
             let after = rest.needs(homes, out, sets);
@@ -367,21 +489,9 @@ fn List::sets_within(self a: List<List<Nat>>, b: List<List<Nat>>) → Bool {
     }
 }
 
-// Every id the statement names.
-fn nodes_words(nodes: List<Node>) → List<Nat> {
-    match nodes { Nil => [], Cons(node, rest) => Cons(node_output(node).id, function_ir_eval::Node::reads(node)) ++ nodes_words(rest) }
-}
-
 fn Stmt::words(self s: Stmt) → List<Nat> {
     match s {
-        Compute(region) => match region {
-            Dataflow(body) => nodes_words(body.nodes),
-            Sequence(_, _) => [],
-            Compose(_, _) => [],
-            Conditional(_, _, _, _, _, _) => [],
-            Call(_, _, _) => [],
-            Loop(_, _, _, _, _, _, _, _, _) => [],
-        },
+        Compute(region) => region.named(),
         Invoke(shape) => Cons(shape.result(), shape.reads()),
         Then(first, rest) => first.words() ++ rest.words(),
         Branch(condition, yes, no) => Cons(condition, yes.words() ++ no.words()),
@@ -493,16 +603,45 @@ fn nodes_graph(nodes: List<Node>, out: List<Nat>, of: List<List<Bool>>) → Grap
     }
 }
 
+// A leaf's writes, both ways.
+fn leaf_graph(nodes: List<Node>, out: List<Nat>, of: List<List<Bool>>) → Graph {
+    nodes_graph(nodes, out, of.all_written(nodes_writes(nodes), out))
+}
+
+// A region's writes, by what is live after each piece (`region_checked`).
+fn Homes::region_graph(self homes: Homes, region: StructuredRegion, out: List<Nat>, of: List<List<Bool>>) → Graph {
+    match region {
+        Dataflow(body) => leaf_graph(body.nodes, out, of),
+        Sequence(prefix, continuation) => {
+            let after = homes.region_graph(continuation, out, of);
+            leaf_graph(prefix.nodes, after.live, after.of)
+        },
+        Compose(prefix, continuation) => {
+            let after = homes.region_graph(continuation, out, of);
+            homes.region_graph(prefix, after.live, after.of)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => {
+            let n = homes.region_graph(when_false, out, of);
+            let y = homes.region_graph(when_true, out, n.of);
+            Graph(Cons(condition, y.live.union(n.live)), y.of)
+        },
+        Call(_, _, _) => Graph(out, of),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
+            let set = homes.loop_set(count);
+            let done = leaf_graph(moves(outputs, parameters), out, of);
+            let stop = leaf_graph(loop_stop(exhausted), done.live, done.of);
+            let down = leaf_graph(loop_down(count, exhausted), set, stop.of);
+            let moved = leaf_graph(moves(parameters, next), Cons(exit, stop.live.union(down.live)), down.of);
+            let b = homes.region_graph(body, moved.live, moved.of);
+            let head = leaf_graph(loop_zero(count, exhausted), Cons(exhausted, b.live.union(done.live)), b.of);
+            leaf_graph(loop_entry(bound, count, inputs, parameters), set, head.of)
+        },
+    }
+}
+
 fn Stmt::graph(self s: Stmt, homes: Homes, out: List<Nat>, of: List<List<Bool>>) → Graph {
     match s {
-        Compute(region) => match region {
-            Dataflow(body) => nodes_graph(body.nodes, out, of.all_written(nodes_writes(body.nodes), out)),
-            Sequence(_, _) => Graph(out, of),
-            Compose(_, _) => Graph(out, of),
-            Conditional(_, _, _, _, _, _) => Graph(out, of),
-            Call(_, _, _) => Graph(out, of),
-            Loop(_, _, _, _, _, _, _, _, _) => Graph(out, of),
-        },
+        Compute(region) => homes.region_graph(region, out, of),
         Invoke(shape) => Graph(live_before(shape.reads(), shape.result(), out), of.written(shape.result(), out)),
         Then(first, rest) => {
             let after = rest.graph(homes, out, of);
@@ -541,16 +680,29 @@ fn nodes_weights(nodes: List<Node>, scale: Nat, weights: List<Nat>) → List<Nat
     }
 }
 
+// A region's reads and writes, a loop's body and its count's ticking
+// `loop_weight` heavier.
+fn StructuredRegion::weighed(self region: StructuredRegion, loop_weight, scale: Nat, weights: List<Nat>) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_weights(body.nodes, scale, weights),
+        Sequence(prefix, continuation) => continuation.weighed(loop_weight, scale, nodes_weights(prefix.nodes, scale, weights)),
+        Compose(prefix, continuation) => continuation.weighed(loop_weight, scale, prefix.weighed(loop_weight, scale, weights)),
+        Conditional(_, condition, _, _, when_true, when_false) =>
+            when_false.weighed(loop_weight, scale, when_true.weighed(loop_weight, scale, weights.bump(condition, scale))),
+        Call(_, arguments, result) => weights.bump_all(Cons(result, arguments), scale),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
+            let inner = scale + loop_weight;
+            let entered = nodes_weights(loop_entry(bound, count, inputs, parameters), scale, weights);
+            let passes = nodes_weights(loop_zero(count, exhausted) ++ (moves(parameters, next) ++ loop_down(count, exhausted)), inner,
+                body.weighed(loop_weight, inner, entered).bump(exit, inner));
+            nodes_weights(loop_stop(exhausted) ++ moves(outputs, parameters), scale, passes)
+        },
+    }
+}
+
 fn Stmt::weights(self s: Stmt, loop_weight, scale: Nat, weights: List<Nat>) → List<Nat> {
     match s {
-        Compute(region) => match region {
-            Dataflow(body) => nodes_weights(body.nodes, scale, weights),
-            Sequence(_, _) => weights,
-            Compose(_, _) => weights,
-            Conditional(_, _, _, _, _, _) => weights,
-            Call(_, _, _) => weights,
-            Loop(_, _, _, _, _, _, _, _, _) => weights,
-        },
+        Compute(region) => region.weighed(loop_weight, scale, weights),
         Invoke(shape) => weights.bump_all(Cons(shape.result(), shape.reads()), scale),
         Then(first, rest) => rest.weights(loop_weight, scale, first.weights(loop_weight, scale, weights)),
         Branch(condition, yes, no) => no.weights(loop_weight, scale, yes.weights(loop_weight, scale, weights.bump(condition, scale))),
@@ -765,28 +917,122 @@ theorem List::nodes_checked_inside(self nodes: List<Node>, loops: List<List<Nat>
     }
 }
 
+theorem Option::inside_and_then(self o: Option<List<Nat>>, m: List<Nat>, f: List<Nat> → Option<List<Nat>>):
+    Option::Inside(o, m) → ((l: List<Nat>) → l.Inside(m) → Option::Inside(f(l), m)) → Option::Inside(o.and_then(f), m) {
+    match o { None => λ never _ => false_elim(never), Some(l) => λ inside then => then(l, inside) }
+}
+
+theorem List::leaf_checked_inside(self nodes: List<Node>, loops: List<List<Nat>>, out, m: List<Nat>, so: out.Inside(m),
+    sw: nodes_words(nodes).Inside(m)): Option::Inside(Homes([], loops).leaf_checked(nodes, out), m) {
+    let apart = λ (live: List<Nat>) => match Homes([], loops).all_apart(nodes_writes(nodes), out) { False => None, True => Some(live) };
+    (match Homes([], loops).nodes_checked(nodes, out) as λ o => Option::Inside(o, m) →
+            Option::Inside(match o { None => None, Some(live) => apart(live) }, m) {
+        None => λ never => false_elim(never),
+        Some(live) => λ inside => j(sym(nodes_writes(nodes).all_apart_slots(loops, out)),
+            λ b _ => Option::Inside(match b as λ _ => Option<List<Nat>> { False => None, True => Some(live) }, m), inside),
+    })(nodes.nodes_checked_inside(loops, out, m, so, sw))
+}
+
+theorem List::cons_inside(self ids: List<Nat>, id: Nat, m: List<Nat>, x: Mem(id, m), inside: ids.Inside(m)): Cons(id, ids).Inside(m) {
+    λ i y => match y {
+        Inl(e) => j(sym(e), λ k _ => Mem(k, m), x),
+        Inr(r) => inside(i, r),
+    }
+}
+
+// The region's check passes with every word in its slot and every loop's
+// set `m`, and finds the set live before it inside `m`.
+theorem StructuredRegion::checked_inside(self region: StructuredRegion, loops: List<List<Nat>>, m: List<Nat>,
+    wide: (again: Nat) → Mem(again, m) → Homes([], loops).loop_set(again) = m):
+    (out: List<Nat>) → out.Inside(m) → region.named().Inside(m) → Option::Inside(Homes([], loops).region_checked(region, out), m) {
+    let homes = Homes([], loops);
+    match region {
+        Dataflow(body) => λ out so sw => body.nodes.leaf_checked_inside(loops, out, m, so, sw),
+        Sequence(prefix, continuation) => λ out so sw => homes.region_checked(continuation, out).inside_and_then(m,
+            λ mid => homes.leaf_checked(prefix.nodes, mid),
+            continuation.checked_inside(loops, m, wide, out, so, λ i x => sw(i, nodes_words(prefix.nodes).mem_append_r(continuation.named(), i, x))),
+            λ mid inside => prefix.nodes.leaf_checked_inside(loops, mid, m, inside,
+                λ i x => sw(i, nodes_words(prefix.nodes).mem_append_l(continuation.named(), i, x)))),
+        Compose(prefix, continuation) => λ out so sw => homes.region_checked(continuation, out).inside_and_then(m,
+            λ mid => homes.region_checked(prefix, mid),
+            continuation.checked_inside(loops, m, wide, out, so, λ i x => sw(i, prefix.named().mem_append_r(continuation.named(), i, x))),
+            λ mid inside => prefix.checked_inside(loops, m, wide, mid, inside, λ i x => sw(i, prefix.named().mem_append_l(continuation.named(), i, x)))),
+        Conditional(_, condition, _, _, when_true, when_false) => λ out so sw => {
+            let both = λ (i: Nat) (x: Mem(i, when_true.named() ++ when_false.named())) => sw(i, Inr(x));
+            homes.region_checked(when_true, out).inside_and_then(m,
+                λ y => homes.region_checked(when_false, out).and_then(λ n => Some(Cons(condition, y.union(n)))),
+                when_true.checked_inside(loops, m, wide, out, so, λ i x => both(i, when_true.named().mem_append_l(when_false.named(), i, x))),
+                λ y in_y => homes.region_checked(when_false, out).inside_and_then(m, λ n => Some(Cons(condition, y.union(n))),
+                    when_false.checked_inside(loops, m, wide, out, so, λ i x => both(i, when_true.named().mem_append_r(when_false.named(), i, x))),
+                    λ n in_n => y.union(n).cons_inside(condition, m, sw(condition, Inl(refl)), y.inside_union(n, m, in_y, in_n))))
+        },
+        Call(_, _, _) => λ out so sw => so,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ out so sw => {
+            let set = homes.loop_set(count);
+            let entry = loop_entry(bound, count, inputs, parameters);
+            let w0 = nodes_words(entry);
+            let w1 = nodes_words(loop_zero(count, exhausted));
+            let w2 = nodes_words(moves(parameters, next));
+            let w3 = nodes_words(loop_stop(exhausted));
+            let w4 = nodes_words(loop_down(count, exhausted));
+            let w5 = nodes_words(moves(outputs, parameters));
+            let w6 = Cons(exit, body.named());
+            let t5 = w5 ++ w6;
+            let t4 = w4 ++ t5;
+            let t3 = w3 ++ t4;
+            let t2 = w2 ++ t3;
+            let t1 = w1 ++ t2;
+            let in1: t1.Inside(m) = λ i x => sw(i, w0.mem_append_r(t1, i, x));
+            let in2: t2.Inside(m) = λ i x => in1(i, w1.mem_append_r(t2, i, x));
+            let in3: t3.Inside(m) = λ i x => in2(i, w2.mem_append_r(t3, i, x));
+            let in4: t4.Inside(m) = λ i x => in3(i, w3.mem_append_r(t4, i, x));
+            let in5: t5.Inside(m) = λ i x => in4(i, w4.mem_append_r(t5, i, x));
+            let in6: w6.Inside(m) = λ i x => in5(i, w5.mem_append_r(w6, i, x));
+            let s0: w0.Inside(m) = λ i x => sw(i, w0.mem_append_l(t1, i, x));
+            let s1: w1.Inside(m) = λ i x => in1(i, w1.mem_append_l(t2, i, x));
+            let s2: w2.Inside(m) = λ i x => in2(i, w2.mem_append_l(t3, i, x));
+            let s3: w3.Inside(m) = λ i x => in3(i, w3.mem_append_l(t4, i, x));
+            let s4: w4.Inside(m) = λ i x => in4(i, w4.mem_append_l(t5, i, x));
+            let s5: w5.Inside(m) = λ i x => in5(i, w5.mem_append_l(w6, i, x));
+            let is_m: (set = m) = wide(count, s0(count, Inl(refl)));
+            let set_in: set.Inside(m) = j(sym(is_m), λ k _ => k.Inside(m), λ i x => x);
+            let f6 = λ (head: List<Nat>) => homes.closed(head, set, entry);
+            let f5 = λ (done: List<Nat>) (b: List<Nat>) => homes.leaf_checked(loop_zero(count, exhausted), Cons(exhausted, b.union(done))).and_then(f6);
+            let f4 = λ (done: List<Nat>) (after: List<Nat>) => homes.region_checked(body, after).and_then(f5(done));
+            let f3 = λ (done: List<Nat>) (stop: List<Nat>) (down: List<Nat>) =>
+                homes.leaf_checked(moves(parameters, next), Cons(exit, stop.union(down))).and_then(f4(done));
+            let f2 = λ (done: List<Nat>) (stop: List<Nat>) => homes.leaf_checked(loop_down(count, exhausted), set).and_then(f3(done, stop));
+            let f1 = λ (done: List<Nat>) => homes.leaf_checked(loop_stop(exhausted), done).and_then(f2(done));
+            homes.leaf_checked(moves(outputs, parameters), out).inside_and_then(m, f1,
+                moves(outputs, parameters).leaf_checked_inside(loops, out, m, so, s5),
+                λ done in_done => homes.leaf_checked(loop_stop(exhausted), done).inside_and_then(m, f2(done),
+                    loop_stop(exhausted).leaf_checked_inside(loops, done, m, in_done, s3),
+                    λ stop in_stop => homes.leaf_checked(loop_down(count, exhausted), set).inside_and_then(m, f3(done, stop),
+                        loop_down(count, exhausted).leaf_checked_inside(loops, set, m, set_in, s4),
+                        λ down in_down => homes.leaf_checked(moves(parameters, next), Cons(exit, stop.union(down))).inside_and_then(m, f4(done),
+                            moves(parameters, next).leaf_checked_inside(loops, Cons(exit, stop.union(down)), m,
+                                stop.union(down).cons_inside(exit, m, in6(exit, Inl(refl)), stop.inside_union(down, m, in_stop, in_down)), s2),
+                            λ after in_after => homes.region_checked(body, after).inside_and_then(m, f5(done),
+                                body.checked_inside(loops, m, wide, after, in_after, λ i x => in6(i, Inr(x))),
+                                λ b in_b => homes.leaf_checked(loop_zero(count, exhausted), Cons(exhausted, b.union(done))).inside_and_then(m, f6,
+                                    loop_zero(count, exhausted).leaf_checked_inside(loops, Cons(exhausted, b.union(done)), m,
+                                        b.union(done).cons_inside(exhausted, m, s1(exhausted, Inl(refl)), b.inside_union(done, m, in_b, in_done)), s1),
+                                    λ head in_head => {
+                                        let within = head.within_of_inside(set, λ i x => j(sym(is_m), λ k _ => Mem(i, k), in_head(i, x)));
+                                        j(sym(within), λ w _ => Option::Inside(w.guard(homes.leaf_checked(entry, set)), m),
+                                            entry.leaf_checked_inside(loops, set, m, set_in, s0))
+                                    }))))))
+        },
+    }
+}
+
 // Every word in its slot and every loop's set `m`, where `m` holds every
 // word the statement names and what is live after it: the check passes,
 // and finds the set live before it inside `m`.
 theorem Stmt::checked_wide(self s: Stmt, loops: List<List<Nat>>, m: List<Nat>, wide: (again: Nat) → Mem(again, m) → Homes([], loops).loop_set(again) = m):
     (out: List<Nat>) → out.Inside(m) → s.words().Inside(m) → Option::Inside(s.checked(Homes([], loops), out), m) {
     match s {
-        Compute(region) => match region {
-            Dataflow(body) => λ out so sw => (match Homes([], loops).nodes_checked(body.nodes, out) as λ o => Option::Inside(o, m) →
-                    Option::Inside(match o {
-                        None => None,
-                        Some(live) => match Homes([], loops).all_apart(nodes_writes(body.nodes), out) { False => None, True => Some(live) },
-                    }, m) {
-                None => λ never => false_elim(never),
-                Some(live) => λ inside => j(sym(nodes_writes(body.nodes).all_apart_slots(loops, out)),
-                    λ b _ => Option::Inside(match b as λ _ => Option<List<Nat>> { False => None, True => Some(live) }, m), inside),
-            })(body.nodes.nodes_checked_inside(loops, out, m, so, sw)),
-            Sequence(_, _) => λ out so _ => so,
-            Compose(_, _) => λ out so _ => so,
-            Conditional(_, _, _, _, _, _) => λ out so _ => so,
-            Call(_, _, _) => λ out so _ => so,
-            Loop(_, _, _, _, _, _, _, _, _) => λ out so _ => so,
-        },
+        Compute(region) => λ out so sw => region.checked_inside(loops, m, wide, out, so, sw),
         Invoke(shape) => λ out so sw => inside_live_before(shape.reads(), shape.result(), out, m, λ i x => sw(i, Inr(x)), so),
         Then(first, rest) => λ out so sw => (match rest.checked(Homes([], loops), out) as λ o => Option::Inside(o, m) →
                 Option::Inside(match o { None => None, Some(mid) => first.checked(Homes([], loops), mid) }, m) {

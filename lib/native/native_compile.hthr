@@ -54,6 +54,7 @@
 // by evaluation, for its layout (`Prog::laid_out`).
 import native_source;
 import native_alloc;
+import native_structured;
 import function_ir;
 import function_ir_eval;
 import function_ir_lower;
@@ -589,31 +590,6 @@ fn Prog::each_node(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Nod
     }
 }
 
-// Whether the node works at width 64; a byte node always does.
-fn Node::wide(self node: Node) → Bool {
-    match node {
-        Const(width, _, _) => width.matches(64),
-        Move(width, _, _) => width.matches(64),
-        Add(width, _, _, _) => width.matches(64),
-        Sub(width, _, _, _) => width.matches(64),
-        BitAnd(width, _, _, _) => width.matches(64),
-        BitOr(width, _, _, _) => width.matches(64),
-        BitXor(width, _, _, _) => width.matches(64),
-        ShiftLeft(width, _, _, _) => width.matches(64),
-        LogicalShiftRight(width, _, _, _) => width.matches(64),
-        ArithmeticShiftRight(width, _, _, _) => width.matches(64),
-        UnsignedLessThan(width, _, _, _) => width.matches(64),
-        SignedLessThan(width, _, _, _) => width.matches(64),
-        Equal(width, _, _, _) => width.matches(64),
-        BufferLoad(_, _, _) => True,
-        BufferStore(_, _, _, _) => True,
-    }
-}
-
-fn nodes_wide(nodes: List<Node>) → Bool {
-    match nodes { Nil => True, Cons(node, rest) => node.wide() && nodes_wide(rest) }
-}
-
 // ---------------------------------------------------------------------------
 // A leaf
 
@@ -667,16 +643,57 @@ fn Prog::tests(self p: Prog, layout: Layout, condition: Nat, else_name: Nat) →
     p.bit_to(layout, condition, Rax).branch_label(Rax, else_name)
 }
 
+// A structured region (native_structured), `out` live after it: a leaf
+// as `computes`; a sequence's leaf then the rest, a composition's parts in
+// order, each with what the rest needs live after it; a conditional as a
+// `Branch`; a loop as a counted loop of leaves. A loop's labels: its head,
+// where its body starts, where it counts down, and its end. At the head a
+// leaf puts in `exhausted` whether the count is out, and the loop leaves
+// when it is; the body runs; the parameters are moved from `next`; the exit
+// bit tested, the loop leaves with `exhausted` clear when it is set, and
+// otherwise puts one in `exhausted`, takes it from the count and goes back
+// to the head. At the end the outputs are moved from the parameters.
+fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout, out: List<Nat>, names: Nat) → Option<Compiled> {
+    let homes = layout.homes;
+    match region {
+        Dataflow(body) => p.computes(layout, out, body.nodes, names),
+        Sequence(prefix, continuation) => p.computes(layout, homes.region_live(continuation, out), prefix.nodes, names).and_then(λ a =>
+            continuation.code(a.prog, layout, out, a.names)),
+        Compose(prefix, continuation) => prefix.code(p, layout, homes.region_live(continuation, out), names).and_then(λ a =>
+            continuation.code(a.prog, layout, out, a.names)),
+        Conditional(_, condition, _, _, when_true, when_false) => layout.word_fits(condition).guard(
+            when_true.code(p.tests(layout, condition, Succ(names)), layout, out, Succ(Succ(names))).and_then(λ y =>
+            when_false.code(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, y.names).and_then(λ n =>
+            Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names))))),
+        Call(_, _, _) => None,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
+            let head = Succ(names);
+            let enter = Succ(head);
+            let again = Succ(enter);
+            let leave = Succ(again);
+            let set = homes.loop_set(count);
+            let done = nodes_live_in(moves(outputs, parameters), out);
+            let stop = nodes_live_in(loop_stop(exhausted), done);
+            let down = nodes_live_in(loop_down(count, exhausted), set);
+            let after = nodes_live_in(moves(parameters, next), Cons(exit, stop.union(down)));
+            (layout.words_fit([exhausted, exit]) && loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches()))).guard(
+                p.computes(layout, set, loop_entry(bound, count, inputs, parameters), leave).and_then(λ e =>
+                e.prog.label(head).computes(layout, Cons(exhausted, homes.region_live(body, after).union(done)), loop_zero(count, exhausted), e.names).and_then(λ z =>
+                body.code(z.prog.tests(layout, exhausted, enter).else_label(enter, leave), layout, after, z.names).and_then(λ b =>
+                b.prog.computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), b.names).and_then(λ m =>
+                m.prog.tests(layout, exit, again).computes(layout, done, loop_stop(exhausted), m.names).and_then(λ x =>
+                x.prog.else_label(again, leave).computes(layout, set, loop_down(count, exhausted), x.names).and_then(λ d =>
+                then(d.prog, Jmp(head)).label(leave).computes(layout, out, moves(outputs, parameters), d.names))))))))
+        },
+    }
+}
+
 // The statement, `out` live after it.
 fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat) → Option<Compiled> {
     match s {
         Compute(region) => match region {
             Dataflow(body) => p.computes(layout, out, body.nodes, names),
-            Sequence(_, _) => None,
-            Compose(_, _) => None,
-            Conditional(_, _, _, _, _, _) => None,
-            Call(_, _, _) => None,
-            Loop(_, _, _, _, _, _, _, _, _) => None,
+            _ => match region.scopes() { False => None, True => region.code(p, layout, out, names) },
         },
         Invoke(shape) => p.call(layout, out, shape, names),
         Then(first, rest) => match first.emit(p, layout, rest.live_in(layout.homes, out), names) {
@@ -743,8 +760,11 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 // loop, 4 an exit, 5 the program as a whole, 6 an argument; the reasons, with what
 // `first` and `second` hold:
 //
-//   0  a region other than a dataflow leaf (1 Sequence, 2 Compose,
-//      3 Conditional, 4 Call, 5 Loop)
+//   0  a structured region the compiler does not take
+//      (native_structured: a node not at width 64 or reading a word not
+//      written before it, a branch on a bit that may not be its word's low
+//      bit, a loop not in counted form, or a call): its kind (1 Sequence,
+//      2 Compose, 3 Conditional, 4 Call, 5 Loop)
 //   1  a leaf needs more registers than the pool holds (needed, the pool:
 //      the registers no word lives in)
 //   2  a leaf's nodes are not in evaluation order
@@ -760,6 +780,8 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 //  10  a leaf S4 does not take whole, with a node not at width 64 (its
 //      position in the leaf, from 1)
 //  11  S4's lowering refused a node alone (its position in the leaf)
+//  13  a loop whose words live after it are ones it moves or counts with,
+//      or whose leaves do not compile
 //
 // Reasons 1, 2, 3 and 6 come only from an all-pure leaf with a node not at
 // width 64: one with every node wide compiles a node at a time.
@@ -871,14 +893,53 @@ fn computes_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
     }
 }
 
+fn StructuredRegion::kind(self region: StructuredRegion) → Nat {
+    match region {
+        Dataflow(_) => 0,
+        Sequence(_, _) => 1,
+        Compose(_, _) => 2,
+        Conditional(_, _, _, _, _, _) => 3,
+        Call(_, _, _) => 4,
+        Loop(_, _, _, _, _, _, _, _, _) => 5,
+    }
+}
+
+// A structured region the compiler does not take names its kind; one whose
+// parts do not compile, the first leaf that does not, else 13.
+// The first leaf of a region that does not compile alone.
+fn parts_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => computes_refusal(layout, body.nodes),
+        Sequence(prefix, continuation) => match computes_refusal(layout, prefix.nodes) {
+            Nil => parts_refusal(layout, continuation),
+            Cons(reason, details) => Cons(reason, details),
+        },
+        Compose(prefix, continuation) => match parts_refusal(layout, prefix) {
+            Nil => parts_refusal(layout, continuation),
+            Cons(reason, details) => Cons(reason, details),
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match ids_refusal(layout, [condition]) {
+            Nil => match parts_refusal(layout, when_true) {
+                Nil => parts_refusal(layout, when_false),
+                Cons(reason, details) => Cons(reason, details),
+            },
+            Cons(reason, details) => Cons(reason, details),
+        },
+        Call(_, _, _) => [0, 4, 0],
+        Loop(_, _, _, _, body, exit, _, _, exhausted) => match ids_refusal(layout, [exhausted, exit]) {
+            Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
+            Cons(reason, details) => Cons(reason, details),
+        },
+    }
+}
+
 fn region_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
     match region {
         Dataflow(body) => computes_refusal(layout, body.nodes),
-        Sequence(_, _) => [0, 1, 0],
-        Compose(_, _) => [0, 2, 0],
-        Conditional(_, _, _, _, _, _) => [0, 3, 0],
-        Call(_, _, _) => [0, 4, 0],
-        Loop(_, _, _, _, _, _, _, _, _) => [0, 5, 0],
+        _ => match region.scopes() {
+            False => [0, region.kind(), 0],
+            True => match region.code(Start, layout, [], 0) { Some(_) => [], None => parts_refusal(layout, region) },
+        },
     }
 }
 
@@ -951,12 +1012,21 @@ fn List::names_after(self nodes: List<Node>, names: Nat) → Nat {
     match nodes { Nil => names, Cons(node, rest) => rest.names_after(node.names_after(names)) }
 }
 
+// A region's: a conditional takes two, a loop four, then their parts.
+fn StructuredRegion::names_after(self region: StructuredRegion, names: Nat) → Nat {
+    match region {
+        Dataflow(body) => body.nodes.names_after(names),
+        Sequence(prefix, continuation) => continuation.names_after(prefix.nodes.names_after(names)),
+        Compose(prefix, continuation) => continuation.names_after(prefix.names_after(names)),
+        Conditional(_, _, _, _, when_true, when_false) => when_false.names_after(when_true.names_after(Succ(Succ(names)))),
+        Call(_, _, _) => names,
+        Loop(_, _, _, _, body, _, _, _, _) => body.names_after(Succ(Succ(Succ(Succ(names))))),
+    }
+}
+
 fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
     match s {
-        Compute(region) => match region {
-            Dataflow(body) => body.nodes.names_after(names),
-            _ => names,
-        },
+        Compute(region) => region.names_after(names),
         Invoke(shape) => match shape {
             Reads(_, _, _, _) => Succ(Succ(Succ(names))),
             Writes(_, _, _, _, _) => Succ(Succ(names)),

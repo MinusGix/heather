@@ -1,0 +1,176 @@
+// Which structured regions the native compiler takes inside a leaf
+// (issues/native-compile-wider-leaves.md; round 4 of
+// docs/native-real-programs-plan.md).
+//
+// A region other than a dataflow leaf compiles as its parts
+// (native_compile's `Prog::region`): a sequence's leaf then the rest, a
+// composition's two regions one after the other, a conditional as a branch
+// on its bit, a loop as a counted loop of leaves. Each part settles its
+// words into the environment before the next reads them, where the region
+// keeps every value at every width. The two agree when the region is
+// *scoped*: every node works at width 64, reads only words written before
+// it, and a bit the region branches on is the low bit of its word.
+//
+// A scope says which ids hold a word the region may read (`defined`), and
+// which of those may have a one-bit view that is not their word's low bit
+// (`loose`). A node's result is defined after it; it is clean when it is a
+// comparison, a constant, or a move of a clean bit, and loose otherwise (an
+// addition's one-bit view adds the operands' one-bit views). A loop's body
+// sees only its pass's own words: the parameters and the count, all clean.
+// native_region_meaning proves a scoped region's run settles as its parts
+// do one after the other.
+//
+// A loop's words must also fit its counted form: its parameters and outputs
+// each distinct, its count, bit and exit apart from the words it moves, each
+// list of moves made one at a time reading nothing an earlier move wrote
+// (`moves_ordered`), and its body never writing its count. A call region is
+// refused.
+import native_source;
+import native_alloc;
+import function_ir;
+import function_ir_eval;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// Whether the node works at width 64; a byte node always does.
+fn Node::wide(self node: Node) → Bool {
+    match node {
+        Const(width, _, _) => width.matches(64),
+        Move(width, _, _) => width.matches(64),
+        Add(width, _, _, _) => width.matches(64),
+        Sub(width, _, _, _) => width.matches(64),
+        BitAnd(width, _, _, _) => width.matches(64),
+        BitOr(width, _, _, _) => width.matches(64),
+        BitXor(width, _, _, _) => width.matches(64),
+        ShiftLeft(width, _, _, _) => width.matches(64),
+        LogicalShiftRight(width, _, _, _) => width.matches(64),
+        ArithmeticShiftRight(width, _, _, _) => width.matches(64),
+        UnsignedLessThan(width, _, _, _) => width.matches(64),
+        SignedLessThan(width, _, _, _) => width.matches(64),
+        Equal(width, _, _, _) => width.matches(64),
+        BufferLoad(_, _, _) => True,
+        BufferStore(_, _, _, _) => True,
+    }
+}
+
+fn nodes_wide(nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => node.wide() && nodes_wide(rest) }
+}
+
+record Scope { defined: Nat → Bool, loose: Nat → Bool }
+
+// Every word defined and clean: what a statement's region starts from.
+fn Scope::all() → Scope { Scope(λ _ => True, λ _ => False) }
+
+// An id the region may branch on: defined, and clean.
+fn Scope::bit(self s: Scope, id: Nat) → Bool { s.defined(id) && !s.loose(id) }
+
+fn Scope::all_defined(self s: Scope, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(id, rest) => s.defined(id) && s.all_defined(rest) }
+}
+
+// Whether a node's one-bit result is its word's low bit.
+fn Scope::clean(self s: Scope, node: Node) → Bool {
+    match node {
+        Const(_, _, _) => True,
+        Move(_, _, source) => s.bit(source),
+        UnsignedLessThan(_, _, _, _) => True,
+        SignedLessThan(_, _, _, _) => True,
+        Equal(_, _, _, _) => True,
+        _ => False,
+    }
+}
+
+// `id` defined, clean or loose.
+fn Scope::put(self s: Scope, id: Nat, clean: Bool) → Scope {
+    Scope(λ x => x.matches(id) || s.defined(x), λ x => match x.matches(id) { True => !clean, False => s.loose(x) })
+}
+
+// Each node wide, reading defined words, its result defined after it.
+fn Scope::nodes(self s: Scope, nodes: List<Node>) → Option<Scope> {
+    match nodes {
+        Nil => Some(s),
+        Cons(node, rest) => match node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) {
+            False => None,
+            True => s.put(node_output(node).id, s.clean(node)).nodes(rest),
+        },
+    }
+}
+
+// What both arms of a conditional leave.
+fn Scope::join(self a: Scope, b: Scope) → Scope { Scope(λ x => a.defined(x) && b.defined(x), λ x => a.loose(x) || b.loose(x)) }
+
+// A loop's pass: its parameters and count.
+fn Scope::pass(parameters: List<Nat>, count: Nat) → Scope { Scope(λ x => parameters.holds(x) || x.matches(count), λ _ => False) }
+
+// After a loop: its outputs and bit, all clean.
+fn Scope::looped(self s: Scope, outputs: List<Nat>, exhausted: Nat) → Scope {
+    Scope(λ x => (x.matches(exhausted) || outputs.holds(x)) || s.defined(x),
+        λ x => match x.matches(exhausted) || outputs.holds(x) { True => False, False => s.loose(x) })
+}
+
+// Moves made one at a time as one move: no target read by a later move.
+fn moves_ordered(to, from: List<Nat>) → Bool {
+    match to {
+        Nil => True,
+        Cons(t, ts) => match from { Nil => True, Cons(_, fs) => absent(t, fs) && moves_ordered(ts, fs) },
+    }
+}
+
+// A loop's words fit its counted form (`Prog::region`).
+fn StructuredRegion::loop_shape(self region: StructuredRegion) → Bool {
+    match region {
+        Loop(inputs, _, parameters, count, body, exit, next, outputs, exhausted) =>
+            (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len()) && outputs.len().matches(parameters.len())))
+            && ((distinct(parameters) && distinct(outputs))
+            && ((absent(count, parameters) && (absent(count, inputs) && count.differs(exhausted)))
+            && ((absent(exhausted, parameters) && (absent(exhausted, outputs) && absent(exit, parameters)))
+            && ((moves_ordered(parameters, inputs) && (moves_ordered(parameters, next) && moves_ordered(outputs, parameters)))
+            && absent(count, body.touches()))))),
+        Dataflow(_) => False,
+        Sequence(_, _) => False,
+        Compose(_, _) => False,
+        Conditional(_, _, _, _, _, _) => False,
+        Call(_, _, _) => False,
+    }
+}
+
+// Every word live after a loop is one it ends with, or one its code never
+// writes (`clobbered`: its count, parameters and body's words).
+fn loop_keeps(out, outputs: List<Nat>, exhausted: Nat, clobbered: List<Nat>) → Bool {
+    match out {
+        Nil => True,
+        Cons(i, rest) => ((i.matches(exhausted) || outputs.holds(i)) || absent(i, clobbered)) && loop_keeps(rest, outputs, exhausted, clobbered),
+    }
+}
+
+// The scope after the region, from `s`, when it is scoped.
+fn StructuredRegion::scoped(self region: StructuredRegion, s: Scope) → Option<Scope> {
+    match region {
+        Dataflow(body) => s.nodes(body.nodes),
+        Sequence(prefix, continuation) => s.nodes(prefix.nodes).and_then(λ m => continuation.scoped(m)),
+        Compose(prefix, continuation) => prefix.scoped(s).and_then(λ m => continuation.scoped(m)),
+        Conditional(_, condition, _, _, when_true, when_false) => match s.bit(condition) {
+            False => None,
+            True => when_true.scoped(s).and_then(λ a => when_false.scoped(s).and_then(λ b => Some(a.join(b)))),
+        },
+        Call(_, _, _) => None,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            match (s.defined(bound) && s.all_defined(inputs))
+                && Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).loop_shape() {
+                False => None,
+                True => body.scoped(Scope::pass(parameters, count)).and_then(λ b => match b.bit(exit) && b.all_defined(next) {
+                    False => None,
+                    True => Some(s.looped(outputs, exhausted)),
+                }),
+            },
+    }
+}
+
+// What a statement's region asks: scoped from every word.
+fn StructuredRegion::scopes(self region: StructuredRegion) → Bool {
+    match region.scoped(Scope::all()) { None => False, Some(_) => True }
+}
