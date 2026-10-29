@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""Probe benchmarks: the slow declarations and fixed costs of the real
+library, one at a time, through the `heather` binary the suite runs.
+
+    scripts/bench-probes                     # measure every default case, print
+    scripts/bench-probes --filter native     # the cases whose name contains it
+    scripts/bench-probes --heavy             # also the write-elf cases (a minute or more each)
+    scripts/bench-probes --check             # compare against perf/bench/results.tsv; exit 1 on a regression
+    scripts/bench-probes --save              # record this run's rows in perf/bench/results.tsv
+    scripts/bench-probes --list              # what is in the suite, and why
+
+docs/cloud-benchmarks.md is the convention (cloud timings are the reference,
+what a row means, when a moved counter is the result). perf/bench/cases.tsv
+lists the cases; perf/bench/targets.md says why each is one.
+
+What it does, in order, and why each step:
+
+1. Builds the CLI the suite uses (`cargo build -p heather-cli --bin heather`,
+   the dev profile with the hot crates at opt-level 3) and **copies it** to
+   target/bench-probes/heather. A build during a measurement relinks
+   target/debug/heather and the images it keyed stop matching
+   (issues/cold-checking-round trap, twice).
+2. Warms an image store for that binary: one `heather check --cache --world
+   lib --expectations` per library folder a case reads, in the library
+   gate's order, into target/bench-probes/store. Warm, this is a replay; on a
+   fresh box or after a compiler edit it is the gate's cold build of those
+   folders (minutes), and it is never timed.
+3. Runs each case `--samples` times at kernel width one under the suite's
+   rails, reading the case's rows of a `--timings` table by column name.
+
+Case kinds (cases.tsv `kind`):
+
+- `only`: `check --cache --only ITEM FILE` over the store. `--only` always
+  runs the kernel on the named items and leaves the store as it found it
+  (docs/check-only-design.md §2), so samples repeat exactly. The row is the
+  item's: its marginal cost over a replayed prefix. A generated item the
+  module shares (a gendef, an instance) is vouched for here and is charged
+  to whichever declaration first used it in a cold run; that is why a cold
+  gate's per-item gate column can exceed this one's.
+- `warm`: `check --cache FILE` after one unmeasured run, so every module is a
+  hit. The row is the run's: what a process pays to load its world.
+- `elf-warm`: `write-elf FILE SYMBOL` after one unmeasured run, so the
+  certificate's verdicts are stored: the floor every write-elf pays.
+- `elf-cold` (heavy): `write-elf` over a fresh copy of the store each sample,
+  so the certificate is kernel-checked cold, as on a fresh box.
+
+Counters (evaluator steps, conversion queries, substitution nodes, gated
+terms) are exact for one tree and must agree across samples; seconds are the
+minimum over samples, with the spread printed. Stdlib only, like
+scripts/timings.
+"""
+
+import argparse
+import csv
+import os
+import platform
+import resource
+import shutil
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+BENCH = ROOT / "perf" / "bench"
+CASES = BENCH / "cases.tsv"
+RESULTS = BENCH / "results.tsv"
+WORK = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "bench-probes"
+
+# The suite's rails (scripts/test): 6 GiB of address space per process. CPU
+# is looser than the suite's 300 s because an elf-cold case is a whole
+# write-elf, and a runaway is still stopped.
+MEM_BYTES = 6 << 30
+CPU_SECS = int(os.environ.get("HEATHER_BENCH_CPU_SECS", "900"))
+
+# A time regression is a case at least this much slower than its recorded
+# row on the same environment key; the kernel suite's threshold, for its
+# reason (docs/benchmarking.md: a gate that cries wolf gets ignored).
+SLOWER = 1.25
+FASTER = 0.8
+
+# Columns read from the case's row. Seconds are self time (`*_ns` columns sum
+# to total_ns); `image` is decode + recheck + relocate + publish.
+IMAGE_COLS = ["image_decode_ns", "image_recheck_ns", "image_relocate_ns", "image_publish_ns", "cache_hash_ns"]
+COUNTERS = ["eval_steps", "queries", "conv_misses", "local_subst_nodes", "shift_global_nodes", "check_terms"]
+# Exact for one tree, except these two: the substitution and rescoping memos
+# are keyed by node address, so what they answer (and so the nodes visited)
+# moves by a little from run to run. They are compared within this fraction.
+APPROX = {"local_subst_nodes", "shift_global_nodes"}
+APPROX_TOLERANCE = 0.05
+# `time` is the headline a case is gated on: the process's CPU for a case
+# that is a whole process (warm, elf-*), the named rows' total for `only`,
+# whose process is mostly the replayed world (`native/world-replay`).
+SECONDS = ["time", "cpu", "total", "kernel", "elab", "merkle", "image"]
+
+
+def sh(*cmd, default="unknown"):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, check=False).stdout.strip() or default
+    except OSError:
+        return default
+
+
+def cpu_model():
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or "unknown"
+
+
+def environment():
+    """The env rows. `source` is `cloud` in a Claude Code cloud container
+    (the reference, docs/cloud-benchmarks.md); times compare only when cpu,
+    nproc, profile and rustc agree, never on the hostname."""
+    mem = "unknown"
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal"):
+                mem = f"{round(int(line.split()[1]) / (1 << 20))} GiB"
+    except OSError:
+        pass
+    return {
+        "source": "cloud" if os.environ.get("CLAUDE_CODE_REMOTE") == "true" else socket.gethostname(),
+        "cpu": cpu_model(),
+        "nproc": str(os.cpu_count()),
+        "mem": mem,
+        "profile": "dev (hot crates opt-level 3), kernel width 1",
+        "rustc": sh("rustc", "--version"),
+        "commit": sh("git", "rev-parse", "--short", "HEAD"),
+        "date": time.strftime("%Y-%m-%d", time.gmtime()),
+    }
+
+
+TIME_KEY = ("cpu", "nproc", "profile", "rustc")
+
+
+def read_cases():
+    cases = []
+    with open(CASES) as f:
+        for row in csv.DictReader((line for line in f if not line.startswith("#")), delimiter="\t"):
+            cases.append(row)
+    return cases
+
+
+def gate_folder(path):
+    """The library gate folder a library file belongs to
+    (crates/cli/tests/library.rs `gate_folders`), or None for a fixture."""
+    parts = Path(path).parts
+    if parts[0] != "lib":
+        return None
+    if parts[1] == "_tests":
+        depth = 4 if parts[2] == "std" else 3
+    else:
+        depth = 3 if parts[1] == "std" else 2
+    return str(Path(*parts[:depth]))
+
+
+def gate_order(folder):
+    """The gate's order: lib/std/*, lib/_tests/std/*, then the rest of lib/
+    and lib/_tests. Shared modules are built by the first folder to need
+    them; the order keeps a later one from building std itself."""
+    rank = 0 if folder.startswith("lib/std/") else 1 if folder.startswith("lib/_tests/std/") else 3 if folder.startswith("lib/_tests/") else 2
+    return (rank, folder)
+
+
+def limits():
+    resource.setrlimit(resource.RLIMIT_AS, (MEM_BYTES, MEM_BYTES))
+    resource.setrlimit(resource.RLIMIT_CPU, (CPU_SECS, CPU_SECS))
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+def run(cmd, log, workers="1"):
+    """Run `cmd` under the rails; returns (exit code, CPU seconds, wall)."""
+    env = dict(os.environ, HEATHER_KERNEL_WORKERS=workers)
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    start = time.time()
+    with open(log, "w") as out:
+        code = subprocess.run(cmd, cwd=ROOT, stdout=out, stderr=subprocess.STDOUT, env=env, preexec_fn=limits).returncode
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
+    return code, cpu, time.time() - start
+
+
+def build():
+    print("building the CLI (dev profile, as the suite runs it)…", flush=True)
+    WORK.mkdir(parents=True, exist_ok=True)
+    with open(WORK / "build.log", "w") as log:
+        if subprocess.run(["cargo", "build", "-q", "-p", "heather-cli", "--bin", "heather"], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT).returncode:
+            sys.exit(f"build failed, see {WORK / 'build.log'}")
+    binary = WORK / "heather"
+    shutil.copy2(ROOT / "target" / "debug" / "heather", binary)
+    return binary
+
+
+def warm(binary, store, cases):
+    folders = sorted({f for c in cases for f in [gate_folder(c["file"])] if f}, key=gate_order)
+    # A fixture's closure is in the native world; lib/native's gate builds it.
+    if any(gate_folder(c["file"]) is None for c in cases) and "lib/native" not in folders:
+        folders.append("lib/native")
+        folders.sort(key=gate_order)
+    for folder in folders:
+        start = time.time()
+        code, cpu, _ = run([str(binary), "check", "--cache", "--cache-dir", str(store), "--expectations", "--world", "lib", folder],
+                           WORK / "warm.log", workers=os.environ.get("HEATHER_KERNEL_WORKERS", "8"))
+        print(f"  warm {folder}: {cpu:.0f} CPU-s, {time.time() - start:.0f} s{'' if code == 0 else '  FAILED, see ' + str(WORK / 'warm.log')}", flush=True)
+        if code != 0:
+            sys.exit(2)
+
+
+def rows_of(tsv):
+    with open(tsv) as f:
+        return list(csv.DictReader(f, delimiter="\t"))
+
+
+def measure_rows(rows):
+    """Seconds and counters summed over `rows` (one item row, several item
+    rows of an `only` case naming many, or the run row)."""
+    g = lambda r, c: int(r.get(c) or 0)
+    m = {}
+    total = sum(g(r, "total_ns") for r in rows)
+    kernel = sum(g(r, "kernel_gate_ns") for r in rows)
+    merkle = sum(g(r, "merkle_walk_ns") for r in rows)
+    image = sum(g(r, c) for r in rows for c in IMAGE_COLS)
+    m["total"], m["kernel"], m["merkle"], m["image"] = total / 1e9, kernel / 1e9, merkle / 1e9, image / 1e9
+    m["elab"] = (total - kernel - merkle - image) / 1e9
+    for c in COUNTERS:
+        if c == "queries":
+            m[c] = sum(g(r, "conv_shortcut_hits") + g(r, "conv_memo_hits") + g(r, "conv_misses") for r in rows)
+        else:
+            m[c] = sum(g(r, c) for r in rows)
+    return m
+
+
+def case_command(binary, case, store, out, tsv):
+    kind, file, target = case["kind"], case["file"], case["target"]
+    flags = case.get("flags", "").split()
+    if kind == "only":
+        return [str(binary), "check", "--cache", "--cache-dir", str(store), "--world", "lib", *flags,
+                "--only", target, "--timings", str(tsv), file]
+    if kind == "warm":
+        return [str(binary), "check", "--cache", "--cache-dir", str(store), "--world", "lib", *flags, "--timings", str(tsv), file]
+    if kind in ("elf-warm", "elf-cold"):
+        # write-elf refuses an existing output, and leaves its certificate
+        # beside it.
+        for old in out.parent.glob(out.name + "*"):
+            old.unlink()
+        return [str(binary), "write-elf", file, target, "-o", str(out), "--cache-dir", str(store), "--world", "lib", "--timings", str(tsv)]
+    sys.exit(f"{case['name']}: unknown kind `{kind}`")
+
+
+def pick_rows(case, rows):
+    if case["kind"] == "only":
+        want = case["target"].split(",")
+        got = [r for r in rows if r["scope"] == "item" and any((r["module"] + "::" + r["item"]).endswith(w) or r["item"] == w for w in want)]
+        return got if len(got) >= len(want) else None
+    return [r for r in rows if r["scope"] == "run"] or None
+
+
+def measure(binary, store, case, samples):
+    name = case["name"]
+    out = WORK / "out" / name.replace("/", "_")
+    out.mkdir(parents=True, exist_ok=True)
+    tsv, log = out / "timings.tsv", out / "run.log"
+    if case["kind"] == "elf-warm":
+        # Its own copy: the priming run stores the certificate's verdicts.
+        own = out / "warm-store"
+        shutil.rmtree(own, ignore_errors=True)
+        shutil.copytree(store, own)
+        store = own
+    if case["kind"] in ("warm", "elf-warm"):
+        # Unmeasured: publish the root's image (and the certificate's
+        # verdicts) so every measured sample is a hit.
+        code, _, _ = run(case_command(binary, case, store, out / "elf", tsv), log)
+        if code != 0:
+            return {"error": f"priming run failed, see {log}"}
+    if case["kind"] == "only" and case["file"].startswith("perf/"):
+        # A fixture root has no image until it has been checked once.
+        run([str(binary), "check", "--cache", "--cache-dir", str(store), "--world", "lib", case["file"]], log)
+    taken = []
+    for _ in range(samples):
+        sample_store = store
+        if case["kind"] == "elf-cold":
+            sample_store = out / "store"
+            shutil.rmtree(sample_store, ignore_errors=True)
+            shutil.copytree(store, sample_store)
+        if tsv.exists():
+            tsv.unlink()
+        code, cpu, _ = run(case_command(binary, case, sample_store, out / "elf", tsv), log)
+        if case["kind"] == "elf-cold":
+            shutil.rmtree(sample_store, ignore_errors=True)
+        if code != 0 or not tsv.exists():
+            return {"error": f"exit {code}, see {log}"}
+        rows = pick_rows(case, rows_of(tsv))
+        if rows is None:
+            return {"error": f"no row for `{case['target']}` in {tsv}"}
+        m = measure_rows(rows)
+        m["cpu"] = cpu
+        m["time"] = m["total"] if case["kind"] == "only" else cpu
+        taken.append(m)
+    if case["kind"] == "elf-warm":
+        shutil.rmtree(store, ignore_errors=True)
+    best = {k: min(t[k] for t in taken) for k in SECONDS}
+    best["spread"] = max(t["time"] for t in taken) / max(best["time"], 1e-9)
+    for c in COUNTERS:
+        values = {t[c] for t in taken}
+        best[c] = min(values)
+        if c in APPROX and max(values) <= min(values) * (1 + APPROX_TOLERANCE):
+            continue
+        if len(values) > 1:
+            best.setdefault("unstable", []).append(f"{c} {min(values)}..{max(values)}")
+    return best
+
+
+def read_results():
+    env, rows = {}, {}
+    if RESULTS.exists():
+        for line in RESULTS.read_text().splitlines():
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if parts[0] == "env":
+                env[parts[1]] = parts[2]
+            elif parts[0] == "case":
+                rows[parts[1]] = dict(zip(["name"] + SECONDS + ["spread"] + COUNTERS, parts[1:]))
+    return env, rows
+
+
+def write_results(env, rows):
+    lines = ["# Probe benchmark results — see docs/cloud-benchmarks.md",
+             "# Regenerate with: scripts/bench-probes --save   (a filtered --save replaces only the cases it ran)",
+             "# case\tname\t" + "\t".join(f"{s}_s" for s in SECONDS) + "\tspread\t" + "\t".join(COUNTERS)]
+    lines += [f"env\t{k}\t{v}" for k, v in env.items()]
+    for name in sorted(rows):
+        r = rows[name]
+        lines.append("case\t" + "\t".join([name] + [str(r[k]) for k in SECONDS + ["spread"] + COUNTERS]))
+    RESULTS.write_text("\n".join(lines) + "\n")
+
+
+def fmt(m):
+    return (f"time {m['time']:7.2f}s  cpu {m['cpu']:7.2f}  total {m['total']:7.2f}  kernel {m['kernel']:7.2f}  elab {m['elab']:6.2f}  "
+            f"merkle {m['merkle']:5.2f}  image {m['image']:5.2f}  ×{m['spread']:.2f}  steps {m['eval_steps']:>10}  queries {m['queries']:>8}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--filter", default="", help="only cases whose name contains this")
+    ap.add_argument("--samples", type=int, default=3)
+    ap.add_argument("--heavy", action="store_true", help="include the elf-cold cases (a cold certificate each sample)")
+    ap.add_argument("--check", action="store_true", help="compare against perf/bench/results.tsv")
+    ap.add_argument("--save", action="store_true", help="record into perf/bench/results.tsv")
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--no-build", action="store_true", help="reuse target/bench-probes/heather")
+    args = ap.parse_args()
+
+    cases = [c for c in read_cases() if args.filter in c["name"] and (args.heavy or c["kind"] != "elf-cold")]
+    if args.list:
+        for c in read_cases():
+            print(f"{c['name']:34} {c['kind']:9} {c['file']}  {c['target']}\n{'':34} {c['why']}")
+        return
+    if not cases:
+        sys.exit("no case matches")
+
+    load = os.getloadavg()[0]
+    if load > (os.cpu_count() or 1) / 4:
+        print(f"⚠ load average {load:.1f} on {os.cpu_count()} CPUs: seconds will be noisy (counters are not)")
+    binary = WORK / "heather" if args.no_build else build()
+    # The library's images and verdicts, which no case writes to: an elf-*
+    # case copies it, so its certificate is cold, and the other cases run
+    # over a copy taken here, because priming a fixture publishes its
+    # verdicts (and the frozen certificate's are the live one's).
+    library = WORK / "store"
+    print(f"warming {library} (untimed)…", flush=True)
+    warm(binary, library, cases)
+    store = WORK / "cases-store"
+    shutil.rmtree(store, ignore_errors=True)
+    shutil.copytree(library, store)
+
+    env = environment()
+    old_env, old = read_results()
+    comparable = all(old_env.get(k) == env[k] for k in TIME_KEY)
+    results, regressed = {}, False
+    for case in cases:
+        m = measure(binary, library if case["kind"].startswith("elf-") else store, case, args.samples)
+        if "error" in m:
+            print(f"{case['name']:34} ERROR {m['error']}")
+            regressed = True
+            continue
+        results[case["name"]] = m
+        line = f"{case['name']:34} {fmt(m)}"
+        if m.get("unstable"):
+            line += f"  ⚠ counters differ across samples: {', '.join(m['unstable'])}"
+        print(line, flush=True)
+        if args.check and case["name"] in old:
+            o = old[case["name"]]
+            moved = [c for c in COUNTERS if (abs(m[c] - int(o[c])) > int(o[c]) * APPROX_TOLERANCE if c in APPROX else str(m[c]) != o[c])]
+            if moved:
+                print(f"{'':34} counters moved: " + ", ".join(f"{c} {o[c]} → {m[c]}" for c in moved))
+            if comparable:
+                ratio = m["time"] / max(float(o["time"]), 1e-9)
+                if ratio >= SLOWER:
+                    print(f"{'':34} REGRESSED: time ×{ratio:.2f} ({o['time']} s → {m['time']:.2f} s)")
+                    regressed = True
+                elif ratio <= FASTER:
+                    print(f"{'':34} faster: time ×{ratio:.2f}; re-record with --save if intended")
+    if args.check and not comparable:
+        print(f"shape-only: results.tsv was recorded on another environment ({', '.join(f'{k}={old_env.get(k)}' for k in TIME_KEY)}); counters compared, seconds not")
+    if args.save:
+        if args.samples < 3:
+            print("⚠ fewer than three samples saved: the minimum is a weak estimate")
+        rows = {} if not comparable else dict(old)
+        for name, m in results.items():
+            rows[name] = {k: (f"{m[k]:.3f}" if k in SECONDS or k == "spread" else str(m[k])) for k in SECONDS + ["spread"] + COUNTERS}
+        if not comparable and old:
+            print("results.tsv was another environment's; this run replaces it whole")
+        write_results(env, rows)
+        print(f"saved {len(results)} case(s) to {RESULTS.relative_to(ROOT)}")
+    if args.check and not comparable:
+        sys.exit(3)
+    sys.exit(1 if regressed else 0)
+
+
+if __name__ == "__main__":
+    main()

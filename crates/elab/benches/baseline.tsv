@@ -1,196 +1,559 @@
 # Heather frontend benchmark baseline — see docs/frontend-benchmarking.md
 # Regenerate with: scripts/bench-frontend --save
-env	host	minus-desktop
-env	cpu	AMD Ryzen 7 5700X 8-Core Processor
+env	host	vm
+env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz
 env	profile	release
-env	rustc	rustc 1.97.1 (8bab26f4f 2026-07-14)
-env	commit	f354d48
-case	corpus/prelude	build	125260.8
-case	corpus/prelude	clone	6873.1
-case	corpus/parse	vec_code.hthr	75369.3
-case	corpus/parse	ir_v1.hthr	1897537.2
-case	corpus/check-file	vec_code.hthr	513838.3
-case	corpus/check-file	ir_v1.hthr:decls	224934547.0
-case	corpus/check-file	ir_v1.hthr	3775879878.0
-case	scale/declarations	16	712414.5
-case	scale/declarations	32	1140079.8
-case	scale/declarations	64	2199487.3
-case	scale/declarations	128	4490525.4
-case	scale/wide-inductive	4	92944.8
-case	scale/wide-inductive	8	168005.5
-case	scale/wide-inductive	16	445707.5
-case	scale/wide-inductive	32	1261983.9
-case	forded/computed-arms	2	2588937.5
-case	forded/computed-arms	3	6172482.5
-case	forded/computed-arms	4	11174034.0
-case	forded/computed-arms	5	19319491.0
-case	forded/computed-arms	6	28715135.0
-case	forded/occurrences	1	6461129.6
-case	forded/occurrences	2	12512543.0
-case	forded/occurrences	4	23246030.0
-case	forded/occurrences	8	46227881.0
-case	forded/declared-index-tags	2	4158869.0
-case	forded/declared-index-tags	3	6047294.1
-case	forded/declared-index-tags	4	7886717.8
-case	forded/declared-index-tags	5	10709320.8
-case	forded/declared-index-tags	6	13741481.0
-case	forded/declared-index-branching	2	23722257.0
-case	forded/declared-index-branching	3	36558041.0
-case	forded/declared-index-branching	4	52561955.0
-case	forded/declared-index-branching	5	74365797.0
-case	forded/declared-index-branching	6	101191511.0
-case	indexed/arms	2	177786.5
-case	indexed/arms	3	351724.6
-case	indexed/arms	4	576304.8
-case	indexed/arms	5	983427.8
-case	indexed/arms	6	1559024.5
-case	meta/nested-inference	4	605366.5
-case	meta/nested-inference	8	1454226.8
-case	meta/nested-inference	16	5289348.1
-case	meta/nested-inference	32	25024730.0
-split	corpus/check-file	vec_code.hthr	parse	88697
-split	corpus/check-file	vec_code.hthr	elab	417968
-split	corpus/check-file	vec_code.hthr	kernel	148269
-split	corpus/check-file	ir_v1.hthr:decls	parse	545818
-split	corpus/check-file	ir_v1.hthr:decls	elab	80011237
-split	corpus/check-file	ir_v1.hthr:decls	kernel	143216285
-split	corpus/check-file	ir_v1.hthr	parse	2755672
-split	corpus/check-file	ir_v1.hthr	elab	771026078
-split	corpus/check-file	ir_v1.hthr	kernel	2963289091
-split	scale/declarations	16	parse	127189
-split	scale/declarations	16	elab	1537890
-split	scale/declarations	16	kernel	251994
-split	scale/declarations	32	parse	242286
-split	scale/declarations	32	elab	700652
-split	scale/declarations	32	kernel	352503
-split	scale/declarations	64	parse	527303
-split	scale/declarations	64	elab	1488092
-split	scale/declarations	64	kernel	721943
-split	scale/declarations	128	parse	806139
-split	scale/declarations	128	elab	2244239
-split	scale/declarations	128	kernel	1113658
-split	scale/wide-inductive	4	parse	13857
-split	scale/wide-inductive	4	elab	85389
-split	scale/wide-inductive	4	kernel	36339
-split	scale/wide-inductive	8	parse	20518
-split	scale/wide-inductive	8	elab	112533
-split	scale/wide-inductive	8	kernel	58550
-split	scale/wide-inductive	16	parse	31249
-split	scale/wide-inductive	16	elab	232089
-split	scale/wide-inductive	16	kernel	154420
-split	scale/wide-inductive	32	parse	65343
-split	scale/wide-inductive	32	elab	742189
-split	scale/wide-inductive	32	kernel	461820
-split	forded/computed-arms	2	parse	87094
-split	forded/computed-arms	2	elab	436563
-split	forded/computed-arms	2	kernel	1977887
-split	forded/computed-arms	3	parse	126859
-split	forded/computed-arms	3	elab	766115
-split	forded/computed-arms	3	kernel	5139382
-split	forded/computed-arms	4	parse	143140
-split	forded/computed-arms	4	elab	1372156
-split	forded/computed-arms	4	kernel	10929973
-split	forded/computed-arms	5	parse	209194
-split	forded/computed-arms	5	elab	1812153
-split	forded/computed-arms	5	kernel	16845401
-split	forded/computed-arms	6	parse	286790
-split	forded/computed-arms	6	elab	2658770
-split	forded/computed-arms	6	kernel	26719444
-split	forded/occurrences	1	parse	106331
-split	forded/occurrences	1	elab	979534
-split	forded/occurrences	1	kernel	5319083
-split	forded/occurrences	2	parse	67267
-split	forded/occurrences	2	elab	1688000
-split	forded/occurrences	2	kernel	10192855
-split	forded/occurrences	4	parse	104276
-split	forded/occurrences	4	elab	3331558
-split	forded/occurrences	4	kernel	20691466
-split	forded/occurrences	8	parse	159530
-split	forded/occurrences	8	elab	6510339
-split	forded/occurrences	8	kernel	39649735
-split	forded/declared-index-tags	2	parse	49553
-split	forded/declared-index-tags	2	elab	1346839
-split	forded/declared-index-tags	2	kernel	3354320
-split	forded/declared-index-tags	3	parse	38332
-split	forded/declared-index-tags	3	elab	1563184
-split	forded/declared-index-tags	3	kernel	5152449
-split	forded/declared-index-tags	4	parse	39925
-split	forded/declared-index-tags	4	elab	1578565
-split	forded/declared-index-tags	4	kernel	6700584
-split	forded/declared-index-tags	5	parse	50846
-split	forded/declared-index-tags	5	elab	1942629
-split	forded/declared-index-tags	5	kernel	8739858
-split	forded/declared-index-tags	6	parse	41618
-split	forded/declared-index-tags	6	elab	2398649
-split	forded/declared-index-tags	6	kernel	11659349
-split	forded/declared-index-branching	2	parse	82104
-split	forded/declared-index-branching	2	elab	2146252
-split	forded/declared-index-branching	2	kernel	21927868
-split	forded/declared-index-branching	3	parse	86764
-split	forded/declared-index-branching	3	elab	2625468
-split	forded/declared-index-branching	3	kernel	33743697
-split	forded/declared-index-branching	4	parse	107162
-split	forded/declared-index-branching	4	elab	3398135
-split	forded/declared-index-branching	4	kernel	49892994
-split	forded/declared-index-branching	5	parse	114405
-split	forded/declared-index-branching	5	elab	4279857
-split	forded/declared-index-branching	5	kernel	68578000
-split	forded/declared-index-branching	6	parse	141467
-split	forded/declared-index-branching	6	elab	5730819
-split	forded/declared-index-branching	6	kernel	94526481
-split	indexed/arms	2	parse	28053
-split	indexed/arms	2	elab	153571
-split	indexed/arms	2	kernel	106940
-split	indexed/arms	3	parse	52949
-split	indexed/arms	3	elab	107613
-split	indexed/arms	3	kernel	210848
-split	indexed/arms	4	parse	77686
-split	indexed/arms	4	elab	80872
-split	indexed/arms	4	kernel	430682
-split	indexed/arms	5	parse	45185
-split	indexed/arms	5	elab	157166
-split	indexed/arms	5	kernel	750124
-split	indexed/arms	6	parse	86023
-split	indexed/arms	6	elab	182732
-split	indexed/arms	6	kernel	1684785
-split	meta/nested-inference	4	parse	46237
-split	meta/nested-inference	4	elab	382102
-split	meta/nested-inference	4	kernel	210555
-split	meta/nested-inference	8	parse	55835
-split	meta/nested-inference	8	elab	763227
-split	meta/nested-inference	8	kernel	629507
-split	meta/nested-inference	16	parse	109155
-split	meta/nested-inference	16	elab	2832445
-split	meta/nested-inference	16	kernel	2159190
-split	meta/nested-inference	32	parse	238450
-split	meta/nested-inference	32	elab	16991654
-split	meta/nested-inference	32	kernel	8384658
-slope	corpus/parse	1.575
-slope	corpus/check-file	4.221
-slope	scale/declarations	0.892
-slope	scale/wide-inductive	1.270
-slope	forded/computed-arms	2.192
-slope	forded/occurrences	0.941
-slope	forded/declared-index-tags	1.077
-slope	forded/declared-index-branching	1.313
-slope	indexed/arms	1.953
-slope	meta/nested-inference	1.797
-slope	rewrite/fa	1.440
-slope	rewrite/repeat-mod	1.820
-slope	rewrite/let-addr0	2.735
-slope	rewrite/let-nary	1.115
-slope	rewrite/setoid-let-addr0	0.900
-slope	let/fan	1.103
-slope	let/dep	1.098
-slope	let/under	1.720
-slope	let/stmt	1.043
-slope	inductive/isa-declaration	0.990
-slope	inductive/isa-constructor-use	0.963
-slope	inductive/isa-opcode-match	0.940
-slope	inductive/isa-roundtrip	1.130
-slope	inductive/enum-equality	1.960
-slope	inductive/record-fields	1.423
-slope	inductive/mutual-declaration	0.840
-slope	inductive/mutual-recursion	1.280
-slope	inductive/typed-syntax	0.750
-slope	inductive/function-fields	0.880
+env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
+env	commit	045c9ed
+case	corpus/prelude	build	4676447.3
+case	corpus/prelude	clone	357.4
+case	corpus/prelude	image-fork	1620.6
+case	corpus/prelude	image-first-decl	867203.4
+case	corpus/module-replay	logic.hthr:source	15777425.0
+case	corpus/module-replay	logic.hthr:replay	6097663.2
+case	corpus/parse	vec_code.hthr	186154.5
+case	corpus/parse	ir_v1.hthr	5555003.6
+case	corpus/check-file	vec_code.hthr	5335676.8
+case	corpus/check-file	ir_v1.hthr:decls	328611955.0
+case	corpus/check-file	ir_v1.hthr	598750414.0
+case	scale/declarations	16	1895307.0
+case	scale/declarations	32	3307607.5
+case	scale/declarations	64	7089431.5
+case	scale/declarations	128	12061533.0
+case	scale/image-first-ordinary	16	840275.8
+case	scale/image-first-ordinary	64	744198.6
+case	scale/image-first-ordinary	256	873845.6
+case	scale/image-first-ordinary	1024	819279.6
+case	scale/image-first-inductive	4	757196.1
+case	scale/image-first-inductive	16	856844.1
+case	scale/image-first-inductive	64	1005059.5
+case	scale/image-first-inductive	256	951740.8
+case	scale/wide-inductive	4	406143.3
+case	scale/wide-inductive	8	733226.5
+case	scale/wide-inductive	16	1478208.1
+case	scale/wide-inductive	32	4228545.9
+case	scale/certified-dispatch	2	3981608.5
+case	scale/certified-dispatch	4	5529536.0
+case	scale/certified-dispatch	8	9628130.0
+case	scale/certified-dispatch	16	26555115.0
+case	forded/computed-arms	2	3612167.8
+case	forded/computed-arms	3	6236008.0
+case	forded/computed-arms	4	4509683.3
+case	forded/computed-arms	5	5565536.5
+case	forded/computed-arms	6	5558784.0
+case	forded/occurrences	1	3774498.6
+case	forded/occurrences	2	4390076.5
+case	forded/occurrences	4	6937097.3
+case	forded/occurrences	8	13520518.0
+case	forded/declared-index-tags	2	8841859.8
+case	forded/declared-index-tags	3	10233374.0
+case	forded/declared-index-tags	4	16821907.0
+case	forded/declared-index-tags	5	22206117.0
+case	forded/declared-index-tags	6	28433622.0
+case	forded/declared-index-branching	2	5673224.8
+case	forded/declared-index-branching	3	6129520.8
+case	forded/declared-index-branching	4	6915896.8
+case	forded/declared-index-branching	5	8185142.0
+case	forded/declared-index-branching	6	9040727.2
+case	indexed/arms	2	521916.9
+case	indexed/arms	3	1406882.7
+case	indexed/arms	4	2165079.8
+case	indexed/arms	5	3419962.0
+case	indexed/arms	6	5617832.3
+case	inductive/isa-declaration	32	3676795.1
+case	inductive/isa-declaration	64	7596397.3
+case	inductive/isa-declaration	128	14009039.0
+case	inductive/isa-declaration	256	26625368.0
+case	inductive/isa-declaration	512	52734096.0
+case	inductive/isa-constructor-use	32	12282820.0
+case	inductive/isa-constructor-use	64	25654531.0
+case	inductive/isa-constructor-use	128	47519718.0
+case	inductive/isa-constructor-use	256	97298648.0
+case	inductive/isa-opcode-match	32	7646023.8
+case	inductive/isa-opcode-match	64	13598291.0
+case	inductive/isa-opcode-match	128	25053093.0
+case	inductive/isa-opcode-match	256	57159823.0
+case	inductive/isa-roundtrip	16	11058530.5
+case	inductive/isa-roundtrip	32	21779510.0
+case	inductive/isa-roundtrip	64	50190516.0
+case	inductive/isa-roundtrip	128	123158808.0
+case	inductive/enum-equality	8	5488788.5
+case	inductive/enum-equality	16	19230045.0
+case	inductive/enum-equality	32	72587199.0
+case	inductive/enum-equality	64	330169433.0
+case	inductive/record-fields	8	3337809.2
+case	inductive/record-fields	16	6159286.6
+case	inductive/record-fields	32	16230204.0
+case	inductive/record-fields	64	83553532.0
+case	inductive/mutual-declaration	4	4430999.6
+case	inductive/mutual-declaration	8	6935708.8
+case	inductive/mutual-declaration	16	15637279.0
+case	inductive/mutual-declaration	32	32941078.0
+case	inductive/mutual-recursion	4	18216436.0
+case	inductive/mutual-recursion	8	31289252.0
+case	inductive/mutual-recursion	16	79344187.0
+case	inductive/mutual-recursion	32	163070487.0
+case	inductive/typed-syntax	8	41200303.0
+case	inductive/typed-syntax	16	62135086.0
+case	inductive/typed-syntax	32	108928060.0
+case	inductive/typed-syntax	64	227130790.0
+case	inductive/function-fields	2	14327437.0
+case	inductive/function-fields	4	22162476.0
+case	inductive/function-fields	6	30633308.0
+case	inductive/function-fields	8	37082199.0
+case	meta/nested-inference	4	2015365.3
+case	meta/nested-inference	8	4587911.0
+case	meta/nested-inference	16	14915016.0
+case	meta/nested-inference	32	81994472.0
+case	rewrite/fa	16	1896258.1
+case	rewrite/fa	32	5049621.9
+case	rewrite/fa	64	18090847.0
+case	rewrite/fa	128	84738270.0
+case	rewrite/repeat-mod	16	2863513.9
+case	rewrite/repeat-mod	32	8603614.5
+case	rewrite/repeat-mod	64	30452797.0
+case	rewrite/repeat-mod	128	110206755.0
+case	rewrite/let-addr0	16	14086227.0
+case	rewrite/let-addr0	32	76150275.0
+case	rewrite/let-addr0	64	494016842.0
+case	rewrite/let-addr0	128	3573601269.0
+case	rewrite/let-nary	4	865159.8
+case	rewrite/let-nary	8	1240385.4
+case	rewrite/let-nary	16	2854960.8
+case	rewrite/let-nary	32	6764795.7
+case	rewrite/setoid-let-addr0	16	13747772.0
+case	rewrite/setoid-let-addr0	32	25656999.0
+case	rewrite/setoid-let-addr0	64	53939943.0
+case	rewrite/setoid-let-addr0	128	95393065.0
+case	let/fan	32	813430.3
+case	let/fan	64	1557416.8
+case	let/fan	128	3287482.2
+case	let/fan	256	7156423.0
+case	let/dep	32	2600244.2
+case	let/dep	64	4912469.7
+case	let/dep	128	10682985.2
+case	let/dep	256	24432841.0
+case	let/under	16	1581846.9
+case	let/under	32	4831470.1
+case	let/under	64	16844005.0
+case	let/under	128	65009500.0
+case	let/stmt	32	1910852.6
+case	let/stmt	64	3879156.2
+case	let/stmt	128	8305477.2
+case	let/stmt	256	18286567.0
+split	corpus/check-file	vec_code.hthr	parse	218247
+split	corpus/check-file	vec_code.hthr	elab	2641324
+split	corpus/check-file	vec_code.hthr	kernel	1356025
+split	corpus/check-file	ir_v1.hthr:decls	parse	1097747
+split	corpus/check-file	ir_v1.hthr:decls	elab	288684935
+split	corpus/check-file	ir_v1.hthr:decls	kernel	10271507
+split	corpus/check-file	ir_v1.hthr	parse	6246262
+split	corpus/check-file	ir_v1.hthr	elab	424649792
+split	corpus/check-file	ir_v1.hthr	kernel	37223978
+split	scale/declarations	16	parse	329005
+split	scale/declarations	16	elab	9537388
+split	scale/declarations	16	kernel	484643
+split	scale/declarations	32	parse	508199
+split	scale/declarations	32	elab	1870435
+split	scale/declarations	32	kernel	933060
+split	scale/declarations	64	parse	1392915
+split	scale/declarations	64	elab	4857827
+split	scale/declarations	64	kernel	2233176
+split	scale/declarations	128	parse	3617190
+split	scale/declarations	128	elab	11783675
+split	scale/declarations	128	kernel	5228942
+split	scale/image-first-ordinary	16	parse	19352
+split	scale/image-first-ordinary	16	elab	176011
+split	scale/image-first-ordinary	16	kernel	1021945
+split	scale/image-first-ordinary	64	parse	9942
+split	scale/image-first-ordinary	64	elab	143406
+split	scale/image-first-ordinary	64	kernel	384214
+split	scale/image-first-ordinary	256	parse	18683
+split	scale/image-first-ordinary	256	elab	169323
+split	scale/image-first-ordinary	256	kernel	446305
+split	scale/image-first-ordinary	1024	parse	8496
+split	scale/image-first-ordinary	1024	elab	116556
+split	scale/image-first-ordinary	1024	kernel	346726
+split	scale/image-first-inductive	4	parse	7796
+split	scale/image-first-inductive	4	elab	900963
+split	scale/image-first-inductive	4	kernel	470641
+split	scale/image-first-inductive	16	parse	5583
+split	scale/image-first-inductive	16	elab	153064
+split	scale/image-first-inductive	16	kernel	401861
+split	scale/image-first-inductive	64	parse	4956
+split	scale/image-first-inductive	64	elab	127949
+split	scale/image-first-inductive	64	kernel	483276
+split	scale/image-first-inductive	256	parse	6455
+split	scale/image-first-inductive	256	elab	143553
+split	scale/image-first-inductive	256	kernel	342599
+split	scale/wide-inductive	4	parse	57245
+split	scale/wide-inductive	4	elab	527080
+split	scale/wide-inductive	4	kernel	274721
+split	scale/wide-inductive	8	parse	70864
+split	scale/wide-inductive	8	elab	526225
+split	scale/wide-inductive	8	kernel	279898
+split	scale/wide-inductive	16	parse	122464
+split	scale/wide-inductive	16	elab	945977
+split	scale/wide-inductive	16	kernel	530834
+split	scale/wide-inductive	32	parse	345224
+split	scale/wide-inductive	32	elab	2543369
+split	scale/wide-inductive	32	kernel	1565341
+split	scale/certified-dispatch	2	parse	168680
+split	scale/certified-dispatch	2	elab	3193105
+split	scale/certified-dispatch	2	kernel	2533575
+split	scale/certified-dispatch	4	parse	237146
+split	scale/certified-dispatch	4	elab	2990853
+split	scale/certified-dispatch	4	kernel	3483195
+split	scale/certified-dispatch	8	parse	245903
+split	scale/certified-dispatch	8	elab	3935775
+split	scale/certified-dispatch	8	kernel	7022572
+split	scale/certified-dispatch	16	parse	414760
+split	scale/certified-dispatch	16	elab	7320625
+split	scale/certified-dispatch	16	kernel	25197590
+split	forded/computed-arms	2	parse	98140
+split	forded/computed-arms	2	elab	2730597
+split	forded/computed-arms	2	kernel	3023734
+split	forded/computed-arms	3	parse	142970
+split	forded/computed-arms	3	elab	7790616
+split	forded/computed-arms	3	kernel	5006960
+split	forded/computed-arms	4	parse	154637
+split	forded/computed-arms	4	elab	2163748
+split	forded/computed-arms	4	kernel	4095493
+split	forded/computed-arms	5	parse	187917
+split	forded/computed-arms	5	elab	2046891
+split	forded/computed-arms	5	kernel	3362840
+split	forded/computed-arms	6	parse	180320
+split	forded/computed-arms	6	elab	2331965
+split	forded/computed-arms	6	kernel	3584618
+split	forded/occurrences	1	parse	125016
+split	forded/occurrences	1	elab	1780654
+split	forded/occurrences	1	kernel	3625592
+split	forded/occurrences	2	parse	118719
+split	forded/occurrences	2	elab	1862055
+split	forded/occurrences	2	kernel	2755790
+split	forded/occurrences	4	parse	187886
+split	forded/occurrences	4	elab	2807027
+split	forded/occurrences	4	kernel	3388212
+split	forded/occurrences	8	parse	340268
+split	forded/occurrences	8	elab	6684502
+split	forded/occurrences	8	kernel	6654992
+split	forded/declared-index-tags	2	parse	67695
+split	forded/declared-index-tags	2	elab	3104647
+split	forded/declared-index-tags	2	kernel	5564746
+split	forded/declared-index-tags	3	parse	79076
+split	forded/declared-index-tags	3	elab	4230611
+split	forded/declared-index-tags	3	kernel	9551941
+split	forded/declared-index-tags	4	parse	67968
+split	forded/declared-index-tags	4	elab	6446457
+split	forded/declared-index-tags	4	kernel	11153576
+split	forded/declared-index-tags	5	parse	86488
+split	forded/declared-index-tags	5	elab	11462662
+split	forded/declared-index-tags	5	kernel	15265384
+split	forded/declared-index-tags	6	parse	111239
+split	forded/declared-index-tags	6	elab	12922841
+split	forded/declared-index-tags	6	kernel	17650569
+split	forded/declared-index-branching	2	parse	126038
+split	forded/declared-index-branching	2	elab	2584447
+split	forded/declared-index-branching	2	kernel	5285585
+split	forded/declared-index-branching	3	parse	94038
+split	forded/declared-index-branching	3	elab	2653947
+split	forded/declared-index-branching	3	kernel	4925282
+split	forded/declared-index-branching	4	parse	87545
+split	forded/declared-index-branching	4	elab	2436592
+split	forded/declared-index-branching	4	kernel	4850782
+split	forded/declared-index-branching	5	parse	90423
+split	forded/declared-index-branching	5	elab	2417944
+split	forded/declared-index-branching	5	kernel	5501657
+split	forded/declared-index-branching	6	parse	177137
+split	forded/declared-index-branching	6	elab	2997603
+split	forded/declared-index-branching	6	kernel	6637282
+split	indexed/arms	2	parse	46160
+split	indexed/arms	2	elab	417795
+split	indexed/arms	2	kernel	251201
+split	indexed/arms	3	parse	69721
+split	indexed/arms	3	elab	444931
+split	indexed/arms	3	kernel	652795
+split	indexed/arms	4	parse	102294
+split	indexed/arms	4	elab	725874
+split	indexed/arms	4	kernel	1356440
+split	indexed/arms	5	parse	102805
+split	indexed/arms	5	elab	791702
+split	indexed/arms	5	kernel	2624648
+split	indexed/arms	6	parse	254851
+split	indexed/arms	6	elab	1174176
+split	indexed/arms	6	kernel	6094391
+split	inductive/isa-declaration	32	parse	249489
+split	inductive/isa-declaration	32	elab	4351890
+split	inductive/isa-declaration	32	kernel	337819
+split	inductive/isa-declaration	64	parse	471220
+split	inductive/isa-declaration	64	elab	5199030
+split	inductive/isa-declaration	64	kernel	357736
+split	inductive/isa-declaration	128	parse	991340
+split	inductive/isa-declaration	128	elab	12205753
+split	inductive/isa-declaration	128	kernel	618684
+split	inductive/isa-declaration	256	parse	1555772
+split	inductive/isa-declaration	256	elab	24985713
+split	inductive/isa-declaration	256	kernel	1531626
+split	inductive/isa-declaration	512	parse	2754830
+split	inductive/isa-declaration	512	elab	58946177
+split	inductive/isa-declaration	512	kernel	4157950
+split	inductive/isa-constructor-use	32	parse	294777
+split	inductive/isa-constructor-use	32	elab	18951244
+split	inductive/isa-constructor-use	32	kernel	1092484
+split	inductive/isa-constructor-use	64	parse	280789
+split	inductive/isa-constructor-use	64	elab	26714711
+split	inductive/isa-constructor-use	64	kernel	953753
+split	inductive/isa-constructor-use	128	parse	460597
+split	inductive/isa-constructor-use	128	elab	46765394
+split	inductive/isa-constructor-use	128	kernel	1303271
+split	inductive/isa-constructor-use	256	parse	944710
+split	inductive/isa-constructor-use	256	elab	122026517
+split	inductive/isa-constructor-use	256	kernel	2983802
+split	inductive/isa-opcode-match	32	parse	280089
+split	inductive/isa-opcode-match	32	elab	7271946
+split	inductive/isa-opcode-match	32	kernel	1000713
+split	inductive/isa-opcode-match	64	parse	424202
+split	inductive/isa-opcode-match	64	elab	13310664
+split	inductive/isa-opcode-match	64	kernel	1502444
+split	inductive/isa-opcode-match	128	parse	813867
+split	inductive/isa-opcode-match	128	elab	25292428
+split	inductive/isa-opcode-match	128	kernel	2845302
+split	inductive/isa-opcode-match	256	parse	1671259
+split	inductive/isa-opcode-match	256	elab	48073698
+split	inductive/isa-opcode-match	256	kernel	5636399
+split	inductive/isa-roundtrip	16	parse	259840
+split	inductive/isa-roundtrip	16	elab	7181916
+split	inductive/isa-roundtrip	16	kernel	4094297
+split	inductive/isa-roundtrip	32	parse	560827
+split	inductive/isa-roundtrip	32	elab	18562344
+split	inductive/isa-roundtrip	32	kernel	13620159
+split	inductive/isa-roundtrip	64	parse	818342
+split	inductive/isa-roundtrip	64	elab	27620054
+split	inductive/isa-roundtrip	64	kernel	21916637
+split	inductive/isa-roundtrip	128	parse	2184270
+split	inductive/isa-roundtrip	128	elab	58410451
+split	inductive/isa-roundtrip	128	kernel	52088128
+split	inductive/enum-equality	8	parse	132976
+split	inductive/enum-equality	8	elab	3422220
+split	inductive/enum-equality	8	kernel	3542767
+split	inductive/enum-equality	16	parse	195039
+split	inductive/enum-equality	16	elab	8651624
+split	inductive/enum-equality	16	kernel	12275934
+split	inductive/enum-equality	32	parse	355851
+split	inductive/enum-equality	32	elab	28858164
+split	inductive/enum-equality	32	kernel	46191861
+split	inductive/enum-equality	64	parse	987582
+split	inductive/enum-equality	64	elab	124260769
+split	inductive/enum-equality	64	kernel	209102481
+split	inductive/record-fields	8	parse	128608
+split	inductive/record-fields	8	elab	2862772
+split	inductive/record-fields	8	kernel	1861960
+split	inductive/record-fields	16	parse	181369
+split	inductive/record-fields	16	elab	3141083
+split	inductive/record-fields	16	kernel	3347592
+split	inductive/record-fields	32	parse	261301
+split	inductive/record-fields	32	elab	5527163
+split	inductive/record-fields	32	kernel	11033418
+split	inductive/record-fields	64	parse	591216
+split	inductive/record-fields	64	elab	19558099
+split	inductive/record-fields	64	kernel	80624085
+split	inductive/mutual-declaration	4	parse	46471
+split	inductive/mutual-declaration	4	elab	1548329
+split	inductive/mutual-declaration	4	kernel	4769209
+split	inductive/mutual-declaration	8	parse	69897
+split	inductive/mutual-declaration	8	elab	2623535
+split	inductive/mutual-declaration	8	kernel	4788865
+split	inductive/mutual-declaration	16	parse	169523
+split	inductive/mutual-declaration	16	elab	8385849
+split	inductive/mutual-declaration	16	kernel	8633572
+split	inductive/mutual-declaration	32	parse	331156
+split	inductive/mutual-declaration	32	elab	16752635
+split	inductive/mutual-declaration	32	kernel	24443857
+split	inductive/mutual-recursion	4	parse	168952
+split	inductive/mutual-recursion	4	elab	6437256
+split	inductive/mutual-recursion	4	kernel	14712881
+split	inductive/mutual-recursion	8	parse	236643
+split	inductive/mutual-recursion	8	elab	12149097
+split	inductive/mutual-recursion	8	kernel	20170745
+split	inductive/mutual-recursion	16	parse	533752
+split	inductive/mutual-recursion	16	elab	38457641
+split	inductive/mutual-recursion	16	kernel	63618275
+split	inductive/mutual-recursion	32	parse	902285
+split	inductive/mutual-recursion	32	elab	92654252
+split	inductive/mutual-recursion	32	kernel	105582795
+split	inductive/typed-syntax	8	parse	480747
+split	inductive/typed-syntax	8	elab	13553641
+split	inductive/typed-syntax	8	kernel	34719945
+split	inductive/typed-syntax	16	parse	689355
+split	inductive/typed-syntax	16	elab	17588110
+split	inductive/typed-syntax	16	kernel	45120399
+split	inductive/typed-syntax	32	parse	1342118
+split	inductive/typed-syntax	32	elab	33547184
+split	inductive/typed-syntax	32	kernel	77596608
+split	inductive/typed-syntax	64	parse	4583378
+split	inductive/typed-syntax	64	elab	73566149
+split	inductive/typed-syntax	64	kernel	163861860
+split	inductive/function-fields	2	parse	189091
+split	inductive/function-fields	2	elab	5148825
+split	inductive/function-fields	2	kernel	10813227
+split	inductive/function-fields	4	parse	175957
+split	inductive/function-fields	4	elab	7984134
+split	inductive/function-fields	4	kernel	15219121
+split	inductive/function-fields	6	parse	255759
+split	inductive/function-fields	6	elab	12102227
+split	inductive/function-fields	6	kernel	20829076
+split	inductive/function-fields	8	parse	317142
+split	inductive/function-fields	8	elab	13377234
+split	inductive/function-fields	8	kernel	22846284
+split	meta/nested-inference	4	parse	134728
+split	meta/nested-inference	4	elab	2232734
+split	meta/nested-inference	4	kernel	672509
+split	meta/nested-inference	8	parse	130520
+split	meta/nested-inference	8	elab	4520354
+split	meta/nested-inference	8	kernel	758329
+split	meta/nested-inference	16	parse	193778
+split	meta/nested-inference	16	elab	17673149
+split	meta/nested-inference	16	kernel	1760047
+split	meta/nested-inference	32	parse	369627
+split	meta/nested-inference	32	elab	78451946
+split	meta/nested-inference	32	kernel	4732276
+split	rewrite/fa	16	parse	107942
+split	rewrite/fa	16	elab	1359853
+split	rewrite/fa	16	kernel	1972039
+split	rewrite/fa	32	parse	147026
+split	rewrite/fa	32	elab	1571513
+split	rewrite/fa	32	kernel	3649884
+split	rewrite/fa	64	parse	244028
+split	rewrite/fa	64	elab	4897594
+split	rewrite/fa	64	kernel	14849333
+split	rewrite/fa	128	parse	830902
+split	rewrite/fa	128	elab	17640653
+split	rewrite/fa	128	kernel	85632056
+split	rewrite/repeat-mod	16	parse	140498
+split	rewrite/repeat-mod	16	elab	1982719
+split	rewrite/repeat-mod	16	kernel	2141573
+split	rewrite/repeat-mod	32	parse	166324
+split	rewrite/repeat-mod	32	elab	4207214
+split	rewrite/repeat-mod	32	kernel	5865524
+split	rewrite/repeat-mod	64	parse	307704
+split	rewrite/repeat-mod	64	elab	8507930
+split	rewrite/repeat-mod	64	kernel	21108542
+split	rewrite/repeat-mod	128	parse	879503
+split	rewrite/repeat-mod	128	elab	36681072
+split	rewrite/repeat-mod	128	kernel	109896069
+split	rewrite/let-addr0	16	parse	275580
+split	rewrite/let-addr0	16	elab	7699163
+split	rewrite/let-addr0	16	kernel	7880995
+split	rewrite/let-addr0	32	parse	525616
+split	rewrite/let-addr0	32	elab	37511015
+split	rewrite/let-addr0	32	kernel	43655280
+split	rewrite/let-addr0	64	parse	1296409
+split	rewrite/let-addr0	64	elab	311685595
+split	rewrite/let-addr0	64	kernel	308769040
+split	rewrite/let-addr0	128	parse	2338192
+split	rewrite/let-addr0	128	elab	2286588472
+split	rewrite/let-addr0	128	kernel	1949179514
+split	rewrite/let-nary	4	parse	79419
+split	rewrite/let-nary	4	elab	643975
+split	rewrite/let-nary	4	kernel	853350
+split	rewrite/let-nary	8	parse	102364
+split	rewrite/let-nary	8	elab	605853
+split	rewrite/let-nary	8	kernel	598802
+split	rewrite/let-nary	16	parse	163098
+split	rewrite/let-nary	16	elab	1527503
+split	rewrite/let-nary	16	kernel	1713717
+split	rewrite/let-nary	32	parse	308626
+split	rewrite/let-nary	32	elab	3271180
+split	rewrite/let-nary	32	kernel	3987016
+split	rewrite/setoid-let-addr0	16	parse	360570
+split	rewrite/setoid-let-addr0	16	elab	2874630
+split	rewrite/setoid-let-addr0	16	kernel	11276616
+split	rewrite/setoid-let-addr0	32	parse	741787
+split	rewrite/setoid-let-addr0	32	elab	4008417
+split	rewrite/setoid-let-addr0	32	kernel	22352118
+split	rewrite/setoid-let-addr0	64	parse	1853082
+split	rewrite/setoid-let-addr0	64	elab	8338024
+split	rewrite/setoid-let-addr0	64	kernel	61666148
+split	rewrite/setoid-let-addr0	128	parse	3251051
+split	rewrite/setoid-let-addr0	128	elab	15027572
+split	rewrite/setoid-let-addr0	128	kernel	100278441
+split	let/fan	32	parse	226681
+split	let/fan	32	elab	7287362
+split	let/fan	32	kernel	339071
+split	let/fan	64	parse	325274
+split	let/fan	64	elab	1021136
+split	let/fan	64	kernel	337700
+split	let/fan	128	parse	664510
+split	let/fan	128	elab	2307622
+split	let/fan	128	kernel	687730
+split	let/fan	256	parse	1319407
+split	let/fan	256	elab	4580372
+split	let/fan	256	kernel	1706936
+split	let/dep	32	parse	407763
+split	let/dep	32	elab	1282772
+split	let/dep	32	kernel	626843
+split	let/dep	64	parse	919328
+split	let/dep	64	elab	2849525
+split	let/dep	64	kernel	1496802
+split	let/dep	128	parse	1583601
+split	let/dep	128	elab	5867910
+split	let/dep	128	kernel	3047438
+split	let/dep	256	parse	3928764
+split	let/dep	256	elab	12330435
+split	let/dep	256	kernel	6224359
+split	let/under	16	parse	251679
+split	let/under	16	elab	1657560
+split	let/under	16	kernel	248979
+split	let/under	32	parse	485616
+split	let/under	32	elab	4772857
+split	let/under	32	kernel	538992
+split	let/under	64	parse	1045255
+split	let/under	64	elab	17489290
+split	let/under	64	kernel	1457443
+split	let/under	128	parse	2729174
+split	let/under	128	elab	65165269
+split	let/under	128	kernel	4408966
+split	let/stmt	32	parse	573594
+split	let/stmt	32	elab	1050871
+split	let/stmt	32	kernel	536440
+split	let/stmt	64	parse	1016141
+split	let/stmt	64	elab	1653298
+split	let/stmt	64	kernel	1373442
+split	let/stmt	128	parse	1892540
+split	let/stmt	128	elab	4690726
+split	let/stmt	128	kernel	2313931
+split	let/stmt	256	parse	5254055
+split	let/stmt	256	elab	7081795
+split	let/stmt	256	kernel	6381396
+slope	corpus/parse	1.627
+slope	corpus/check-file	2.189
+slope	scale/declarations	0.911
+slope	scale/image-first-ordinary	0.006
+slope	scale/image-first-inductive	0.061
+slope	scale/wide-inductive	1.115
+slope	scale/certified-dispatch	0.901
+slope	forded/computed-arms	0.304
+slope	forded/occurrences	0.618
+slope	forded/declared-index-tags	1.116
+slope	forded/declared-index-branching	0.434
+slope	indexed/arms	2.083
+slope	inductive/isa-declaration	0.949
+slope	inductive/isa-constructor-use	0.985
+slope	inductive/isa-opcode-match	0.959
+slope	inductive/isa-roundtrip	1.164
+slope	inductive/enum-equality	1.965
+slope	inductive/record-fields	1.534
+slope	inductive/mutual-declaration	0.986
+slope	inductive/mutual-recursion	1.083
+slope	inductive/typed-syntax	0.820
+slope	inductive/function-fields	0.691
+slope	meta/nested-inference	1.774
+slope	rewrite/fa	1.829
+slope	rewrite/repeat-mod	1.762
+slope	rewrite/let-addr0	2.666
+slope	rewrite/let-nary	1.010
+slope	rewrite/setoid-let-addr0	0.946
+slope	let/fan	1.049
+slope	let/dep	1.082
+slope	let/under	1.788
+slope	let/stmt	1.087
