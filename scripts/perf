@@ -153,6 +153,10 @@ def sh(*cmd, default=""):
 
 
 def guess_source():
+    # A Claude Code cloud container: the reference environment since
+    # 2026-10-29 (docs/cloud-benchmarks.md). Its hostname is not stable.
+    if os.environ.get("CLAUDE_CODE_REMOTE") == "true":
+        return "cloud"
     if str(ROOT).startswith("/work"):
         return "furnace"
     if socket.gethostname() == "minus-desktop":

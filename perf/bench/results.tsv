@@ -1,0 +1,24 @@
+# Probe benchmark results — see docs/cloud-benchmarks.md
+# Regenerate with: scripts/bench-probes --save   (a filtered --save replaces only the cases it ran)
+# case	name	time_s	cpu_s	total_s	kernel_s	elab_s	merkle_s	image_s	spread	eval_steps	queries	conv_misses	local_subst_nodes	shift_global_nodes	check_terms
+env	source	cloud
+env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz
+env	nproc	4
+env	mem	16 GiB
+env	profile	dev (hot crates opt-level 3), kernel width 1
+env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
+env	commit	709e71c
+env	date	2026-10-29
+case	algebra/pos-of-mul-pos-nonneg	2.347	3.576	2.347	0.261	2.085	0.000	0.000	1.107	3075	8448	1121	8188569	40192	70
+case	cert/yes-labels	1.061	12.391	1.061	0.634	0.426	0.000	0.000	1.093	377026	38601	2384	603728	104239	80
+case	cert/yes-pieces	0.775	12.123	0.775	0.744	0.032	0.000	0.000	1.081	607244	336	21	76223	57453	7
+case	native/arg-cells-store	0.997	10.051	0.997	0.271	0.676	0.003	0.000	1.105	169610	4836	308	688853	2725658	2
+case	native/call-step	8.315	18.725	8.315	7.802	0.509	0.004	0.000	1.156	4613905	43425	4779	3774051	1795294	1
+case	native/elf-cold-head-n	113.852	113.852	115.564	33.297	53.124	14.912	13.528	1.061	40019490	1333239	123152	38479196	19125891	4594
+case	native/elf-cold-yes	37.112	37.112	36.381	2.779	6.629	14.458	12.515	1.054	4820806	383984	28800	10570896	6225266	537
+case	native/elf-floor-yes	19.982	19.982	18.875	0.022	1.981	8.711	7.976	1.034	3124259	295459	19853	5397174	2060939	75
+case	native/emit-extends	0.748	10.758	0.748	0.001	0.727	0.019	0.000	1.112	5709	1176	261	1750468	149816	5
+case	native/goes-arg-found	11.408	20.455	11.408	9.197	2.163	0.010	0.000	1.056	5208171	53163	9013	7035523	2048758	14
+case	native/world-replay	9.465	9.465	9.511	0.003	1.256	1.540	6.695	1.067	2141133	256704	17167	4512216	1541505	12
+case	tactic/attempt-from	4.348	7.159	4.348	4.114	0.234	0.000	0.000	1.284	588235	286961	2134	8017601	48581	1
+case	x86/moves-spills	4.752	9.205	4.752	0.720	4.021	0.011	0.000	1.035	384201	21154	1732	10705231	14736740	0

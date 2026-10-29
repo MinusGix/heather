@@ -100,6 +100,12 @@
   the headline number is the scaling exponent, not the time.
   `docs/benchmarking.md` explains "regressed" and why the harness is
   first-party (the kernel has zero dependencies, dev-dependencies included).
+- **Cloud timings are the reference** (Minus, 2026-10-29): record and compare
+  on the cloud box, counters first (`docs/cloud-benchmarks.md`). To
+  hillclimb on a slow native or library cost, use **`scripts/bench-probes`**
+  (`--filter`, `--check`, `--save`; `--heavy` adds cold `write-elf`s): one
+  declaration (`--only`) or one fixed cost per case, from
+  `perf/bench/cases.tsv`, chosen from the ranked `perf/bench/targets.md`.
 - **What is slow right now: `scripts/perf report`** (`perf/README.md`), over
   the environment-keyed diary in `perf/snapshots/` (`snapshot` records,
   `serve` is the dashboard). Read it before choosing a perf target, so a round
