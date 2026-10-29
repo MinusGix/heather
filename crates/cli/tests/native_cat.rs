@@ -159,6 +159,7 @@ fn mebibyte_buffer_runs_as_cat() {
 /// The probes `lib/_tests/native/native_compile_tests.hthr` holds, which
 /// import none of the certificate's modules.
 const PROBES: &str = "lib/_tests/native/native_compile_tests.hthr";
+const STRUCTURED: &str = "lib/_tests/native/native_structured_tests.hthr";
 
 /// A program that is not cat gets the compiler's theorem with no proof of
 /// its own: `head -c 10` copies ten bytes of any longer input and exits 0.
@@ -199,6 +200,35 @@ fn wider_leaves_run() {
     let (code, out) = run(&mixed, b"abcdef", Stdio::piped());
     assert_eq!(out, b"Abcdef", "the first byte stored back, less 32");
     assert_eq!(code, Some((97 + 98 + 99 + 100) % 256), "it exits with the first four bytes' sum");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Structured regions compile inside a leaf: `tr a-z A-Z` maps the bytes it
+/// read with one loop region, a conditional in its body, and writes them
+/// back; regions the compile does not take are refused with their reason
+/// (issues/native-compile-wider-leaves.md).
+#[test]
+fn structured_regions_run() {
+    let dir = scratch("structured");
+    let tr = dir.join("tr_upper");
+    let result = write_elf(STRUCTURED, "tr_upper", &tr);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    let (code, out) = run(&tr, b"hello, World! z", Stdio::piped());
+    assert_eq!(out, b"HELLO, WORLD! Z", "lower-case letters raised, the rest kept");
+    assert_eq!(code, Some(15), "it exits with the loop's index at its end, the count read");
+    let (code, out) = run(&tr, b"abcdefghijklmnopqrst", Stdio::piped());
+    assert_eq!((code, &out[..]), (Some(16), &b"ABCDEFGHIJKLMNOP"[..]), "one read of at most sixteen bytes");
+    for (source, reason) in [
+        ("uncounted", "`uncounted` is refused at statement 2, a computation: a loop region the compiler does not take"),
+        ("clobbers", "`clobbers` is refused at statement 2, a computation: a loop whose words live after it include one it moves or counts with"),
+    ] {
+        let output = dir.join(source);
+        let result = write_elf(STRUCTURED, source, &output);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success(), "`{source}` is refused");
+        assert!(stderr.contains(reason), "`{source}`'s refusal says `{reason}`:\n{stderr}");
+        assert!(!output.exists(), "and nothing is written for it");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

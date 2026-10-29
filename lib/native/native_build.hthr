@@ -28,6 +28,7 @@
 
 import native_source;
 import native_compile;
+import native_structured;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;

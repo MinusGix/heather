@@ -18,6 +18,7 @@
 // node's is its own (native_compile_bytes).
 import native_source;
 import native_compile;
+import native_structured;
 import native_compile_facts;
 import native_compile_region;
 import native_compile_segments;
