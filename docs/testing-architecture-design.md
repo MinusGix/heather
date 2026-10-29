@@ -290,6 +290,9 @@ optimisation from "checked nightly" to "proven".
   for by the verdict store), so an elab edit no longer re-elaborates every
   library module. Plain `scripts/test` keeps the exact policy; a round runs
   it only when it changes the image format, the caches or the loader.
+  Since 2026-10-29 the native certificate gates run in it only when the diff
+  touches what they check, plus one smoke tool; the sentinel runs them
+  nightly (issues/pr-lane-cost-2026-10-29.md).
 - **`scripts/sentinel run`**, nightly from a scheduled cloud session on a
   fresh container at `master`: the exact-policy suite. Green, it publishes
   the image stores to the orphan branch `claude/sentinel-images` and reports

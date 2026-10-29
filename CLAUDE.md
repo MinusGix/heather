@@ -14,7 +14,11 @@
     list in `scripts/test`.
   - A round's **final** verification, and any change touching `lib/`, the kit
     or the generators, runs `scripts/test --pr`: every test, over the same
-    replayed images. The exact image policy (plain `scripts/test`, which
+    replayed images, except that the native x86 certificate gates
+    (`crates/cli/tests/native*.rs`) shrink to one smoke unless the diff
+    touches what they check (`lib/native`, the machine/OS models,
+    `crates/cli/src/native`, the kernel; `HEATHER_PR_NATIVE=all` forces
+    them). The exact image policy (plain `scripts/test`, which
     re-elaborates every library module after a compiler edit) is the nightly
     master sentinel's lane; run it yourself only when the round changes the
     image format, the caches or the loader (`crates/cache`,

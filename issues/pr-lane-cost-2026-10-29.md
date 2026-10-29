@@ -1,6 +1,6 @@
 ---
 title: Decide what the PR lane runs now that the native gates dominate it
-status: open
+status: closed
 labels: [testing,performance,decision]
 area: infrastructure
 created: 2026-10-29
@@ -62,3 +62,17 @@ Recommended: B. The native gates are acceptance tests of a compiler
 proved once; an elaborator or parser change that breaks them also breaks
 the library gate or the smoke in almost every case, and the sentinel
 catches the rest within a day.
+
+## Log
+
+- 2026-10-29: Minus chose B. `scripts/test --pr`, unfiltered, skips every
+  `#[test]` in `crates/cli/tests/native*.rs` except
+  `compiled_yes_runs_as_gnu_yes` unless `git diff` from the merge base with
+  origin/master (untracked files included) touches `lib/native/`,
+  `lib/_tests/native/`, `lib/std/machine/`, `lib/std/os/`,
+  `crates/cli/src/native/`, `crates/cli/tests/native*`, `crates/kernel/src/`
+  or `crates/kernel-lib/`. The names are read from the files, so a new gate
+  is covered without editing the script. No merge base or
+  `HEATHER_PR_NATIVE=all` runs them all. Decision logic checked by hand on
+  this branch (23 skipped, the smoke kept), with an untracked file under
+  `lib/native/` (none skipped), and with the override.
