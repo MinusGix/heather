@@ -92,3 +92,13 @@ fn bytes<A>(x: A) → List<A> { List::replicate(x, 20000) }
 fn size16(lo: Nat, hi: Nat) → Nat { lo + 256 * hi }
 theorem closed_size(): 232 + bytes(0).len() = size16(8, 79) { refl }
 theorem open_element_size<A>(x: A): 232 + bytes(x).len() = size16(8, 79) { refl }
+
+// A statement may open with a list literal: the `[` is a vector type `[T; n]`
+// only when a `;` follows its element (statement-leading-list-literal-parse).
+theorem literal_first(): [1, 2, 3] = three() { refl }
+theorem literal_first_hyp(xs: List<Nat>, h: [1, 2] = xs): [1, 2] = xs { h }
+fn vector_still(v: [Nat; 3]) → [Nat; 3] { v }
+// It parses; what is left is the carrier, which a literal left of `++` does
+// not supply yet (list-literal-left-of-append).
+// expect-error: `++` has no meaning here
+theorem literal_left_of_append(): [1] ++ [2] = [1, 2] { refl }

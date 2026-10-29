@@ -287,12 +287,15 @@ struct Parser {
 
 type R<T> = Result<T, ParseError>;
 
-/// The two speculating sites, as the `site` half of a [`Parser::spec_failed`]
-/// key. They must not share: the expression site additionally requires a `(`
-/// or a `>` where the type site does not, so the same position can fail for
-/// one and succeed for the other.
+/// The two speculating sites on a `<`, as the `site` half of a
+/// [`Parser::spec_failed`] key. They must not share: the expression site
+/// additionally requires a `(` or a `>` where the type site does not, so the
+/// same position can fail for one and succeed for the other.
 const SITE_EXPR_TYARGS: u8 = 1 << 4;
 const SITE_TY_NAMED: u8 = 1 << 5;
+/// The `[T; n]` branch of [`Parser::ty`]: a `[` whose element does not parse
+/// as a type followed by `;` is a list literal, read by the expression grammar.
+const SITE_TY_VEC: u8 = 1 << 6;
 
 /// A calc step's relation, ordered by strength: composing two steps yields
 /// the stronger (`=` < `≈` < `<=` < `<`), which is what the mixed lemmas
@@ -3286,12 +3289,27 @@ impl Parser {
             return Ok(Ty { kind: TyKind::Splice { name }, span: start.join(nsp) });
         }
         // `[T; n]` — a length-indexed vector (docs/container-fields.md §2.1).
-        if matches!(self.peek(), TokKind::LBracket) {
+        // A leading `[` in type position is also the list literal that opens
+        // an equality's left endpoint — `[1] ++ [2] = [1, 2]` is a statement
+        // — so the vector reading is speculative, like `D<A, B>` below: the
+        // element parses as a type, and only a `;` after it commits. Anything
+        // else rewinds to the expression grammar, whose `[` arm tells the two
+        // apart by the same first separator
+        // (issues/statement-leading-list-literal-parse.md).
+        if matches!(self.peek(), TokKind::LBracket) && !self.spec_seen_failing(self.pos, SITE_TY_VEC) {
+            let save = self.pos;
             let start = self.bump().span;
-            let elem = self.ty()?;
-            self.expect(&TokKind::Semi, "`;` (a vector type is `[T; n]`)")?;
+            let elem = match self.ty() {
+                Ok(elem) if matches!(self.peek(), TokKind::Semi) => elem,
+                _ => {
+                    self.spec_note_failure(save, SITE_TY_VEC);
+                    let lhs = self.with_iff(restricted, |p| p.expr())?;
+                    return Ok(expr_as_ty(&lhs));
+                }
+            };
+            self.bump(); // `;`
             let len = self.expr()?;
-            let end = self.expect(&TokKind::RBracket, "`]`")?;
+            let end = self.expect(&TokKind::RBracket, "`]` (a vector type is `[T; n]`)")?;
             return Ok(Ty {
                 kind: TyKind::Vec { elem: Box::new(elem), len: Box::new(len) },
                 span: start.join(end),
@@ -6033,6 +6051,58 @@ mod tests {
             let ExprKind::CollectionLit(elems) = body(src) else { panic!("{src}: expected a literal") };
             assert_eq!(elems.len(), len, "{src}");
         }
+    }
+
+    /// A statement (a declared type) may open with a list literal: the `[`
+    /// is the vector type `[T; n]` only when a `;` follows its element
+    /// (issues/statement-leading-list-literal-parse.md).
+    #[test]
+    fn statements_may_start_with_a_list_literal() {
+        for (stmt, lhs_len) in [
+            ("[1] ++ [2] = [1, 2]", None),
+            ("[] = xs", Some(0)),
+            ("[x] = xs", Some(1)),
+            ("[x, y,] = xs", Some(2)),
+            ("[[1]] = [[1]]", Some(1)),
+            ("[[Nat; 3]] = xs", Some(1)),
+        ] {
+            let src = format!("theorem t(xs: List<Nat>, h: {stmt}): {stmt} {{ h }}");
+            let f = parse_file(&src).unwrap_or_else(|e| panic!("{stmt}: {}", e.msg));
+            let d = only_decl(&f);
+            for ty in [&d.params[1].ty, &d.result] {
+                let TyKind::Eq(lhs, _) = &ty.kind else { panic!("{stmt}: expected an equality") };
+                match (lhs_len, &lhs.kind) {
+                    (Some(n), ExprKind::CollectionLit(elems)) => assert_eq!(elems.len(), n, "{stmt}"),
+                    (None, ExprKind::App { args, .. }) => {
+                        assert!(args.iter().all(|a| matches!(a.kind, ExprKind::CollectionLit(_))), "{stmt}")
+                    }
+                    (_, other) => panic!("{stmt}: unexpected left endpoint {other:?}"),
+                }
+            }
+        }
+        // `[T; n]` keeps its reading in the same positions.
+        for ty in ["[Nat; 3]", "[[A; n]; m]", "[A -> B; n]", "[List<A>; n]", "[Nat; 3] -> [Nat; 3]"] {
+            let src = format!("fn f(v: {ty}) -> {ty} {{ v }}");
+            let f = parse_file(&src).unwrap_or_else(|e| panic!("{ty}: {}", e.msg));
+            let d = only_decl(&f);
+            for t in [&d.params[0].ty, &d.result] {
+                let vec = match &t.kind {
+                    TyKind::Fn { dom, .. } => &dom.kind,
+                    k => k,
+                };
+                assert!(matches!(vec, TyKind::Vec { .. }), "{ty}");
+            }
+        }
+        // A malformed vector type past its `;` still reports as one, and a
+        // deep nest of literals is one attempt per bracket.
+        for (ty, token) in [("[A; n, m]", ","), ("[A; n; m]", ";")] {
+            let src = format!("fn f() -> {ty} {{ v }}");
+            let err = parse_file(&src).unwrap_err();
+            assert!(err.msg.contains("a vector type is `[T; n]`"), "{ty}: {}", err.msg);
+            assert_eq!(&src[err.span.start..err.span.end], token, "{ty}");
+        }
+        let deep = format!("{}1{} = x", "[".repeat(200), "]".repeat(200));
+        parse_file(&format!("theorem t(): {deep} {{ refl }}")).unwrap();
     }
 
     #[test]
