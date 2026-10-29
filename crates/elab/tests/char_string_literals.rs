@@ -234,3 +234,33 @@ theorem differ(): ¬(Cons('a', Nil) = Cons('b', Nil)) { decide }
 "#,
     );
 }
+
+/// A character met again in one declaration is the first one's term: its
+/// `Decide` resolution runs once, not once per letter, and the letters still
+/// read back as what was written — repeated and distinct ones alike.
+#[test]
+fn a_repeated_character_resolves_once_per_declaration() {
+    let goals = |text: &str| {
+        let src = format!("{PREAMBLE}fn word() -> String {{ \"{text}\" }}\n");
+        let mut e = library();
+        e.enable_item_timings();
+        if let Err(error) = e.elab_module_source("probe", &src) {
+            panic!("{}", error.render(&src));
+        }
+        let rows = e.take_item_timings();
+        heather_elab::stats::disable();
+        let row = rows.iter().find(|r| r.item == "word").expect("the measured declaration");
+        row.counters[heather_elab::stats::Counter::ResolveGoals as usize]
+    };
+    let (short, long) = (goals("ab"), goals("abababababababab"));
+    assert!(short > 0, "a character resolves its witness");
+    assert_eq!(short, long, "resolutions grew with repeated letters: {short} → {long}");
+    check(r#"
+fn word() -> String { "abba" }
+theorem spelled(): word().chars = ['a', 'b', 'b', 'a'] { refl }
+"#);
+    refused(r#"
+fn word() -> String { "abba" }
+theorem spelled(): word().chars = ['a', 'b', 'a', 'a'] { refl }
+"#);
+}

@@ -48,6 +48,20 @@ visits; nothing is spelled and no definition body is copied. It is a
 function of the statement and the definitions before it, so it is fixed by
 the interfaces, which §4 relies on.
 
+**A family that never carries data is not run.** Where the walk's answer is
+final (not under a `Σ`'s first component), a statement `El(F(a⃗))` with `F` a
+global family is first tried at fresh variables in a walk of its own with a
+small fuel of its own: `F(x⃗)` unfolds once, and when it is one of the
+no-data formers, or a `match` stuck on a variable whose every arm is (say
+`x.IsTrue()`, whose arms are `True` and `False`), no instance can carry
+data and the answer is opaque without forcing `a⃗`. Without this, the walk
+ran `a⃗` to learn which arm it was in, to the whole fuel when `a⃗` is a large
+closed computation (every `{p}_checked_` statement of a write-elf
+certificate is one), only to reach the same verdict. A "not shown" from the
+family walk falls back to the full test, so the classification is unchanged:
+an audit over every library theorem found the two tests agreeing on all of
+them (2026-10-29).
+
 **Unknown means opaque.** A statement the walk cannot settle keeps its
 proof out, which is what every theorem was before. The other default looked
 like a memory cost only, but a kept proof is *run* wherever an elimination

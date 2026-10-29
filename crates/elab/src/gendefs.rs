@@ -2668,6 +2668,35 @@ impl Elaborator {
         g: u32,
     ) -> Option<(Level, Vec<Rc<Term>>)> {
         let _phase = crate::stats::guard(crate::stats::Timer::InstanceMatch);
+        let key = crate::attempt::InstanceMatchKey {
+            tag: ind.tag,
+            base: match cx.gamma.base {
+                CtxBase::Nil => None,
+                CtxBase::Var(v) => Some(v.0),
+            },
+            len: cx.gamma.entries.len(),
+            d,
+            g,
+            scope: self.lowering_scope(),
+        };
+        if let Some((_, known)) = self.attempt.instance_matches.borrow().get(&key).and_then(|seen| seen.iter().find(|(t, _)| t == ty)) {
+            return known.clone();
+        }
+        let found = self.instance_match_uncached(cx, ind, ty, d, g);
+        self.attempt.instance_matches.borrow_mut().entry(key).or_default().push((ty.clone(), found.clone()));
+        found
+    }
+
+    /// [`Self::instance_match`] without its memo; `instance_match_calls`
+    /// counts these.
+    fn instance_match_uncached(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        ty: &Type,
+        d: u32,
+        g: u32,
+    ) -> Option<(Level, Vec<Rc<Term>>)> {
         crate::stats::count(crate::stats::Counter::InstanceMatchCalls);
         let Some(entry) = self.ty_code_fn_now(ind.tag, g) else {
             decline!("instance_match", &ind.name, "no-tycode-fn");
