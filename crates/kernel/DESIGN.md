@@ -490,6 +490,38 @@ above the cap — folds exactly as it does today, and what does not meet the
 criterion — an element type with a payload of its own, an open width, a chain
 that stops being a Σ — is compared exactly as it is today.
 
+**A vector literal is a term** (`Term::VecLit`,
+`issues/packed-vector-literal-term.md`, `docs/bitvector-literal-entry-design.md`
+§3, §6). `VecLit{ℓ, elem, zero, one, w, bits}` is a closed prefix of a `Vec`
+all of whose elements are one of two given terms, and it is `NatLit` one
+former over: notation for the right-nested Σ-chain `⟨e(b₀), ⟨e(b₁), … ⟨⟩⟩⟩`
+with `e(0) = zero` and `e(1) = one`, `1 ≤ w ≤ 64`, bit `i` the `i`th
+element. Its typing rule checks `elem` as a type and `zero` and `one`
+against it — three judgements, independent of the width — and nothing else:
+the rule contains no two-valued criterion and names no library type, so the
+term means the chain whatever `elem` is. Adequacy is that unfolding
+identity, and it has one owner, `term::vec_lit_unfold`: the chain's head
+pair with the `Vec` rule's own annotations and a `VecLit` one element
+shorter (or `⟨⟩` at width one). `reduce.rs`'s `Fst`/`Snd` arms, the
+evaluator's fallback, and the full chain (`vec_lit_chain`) are all built
+from it, so the literal and its chain are one step apart everywhere. What
+the term buys is entry: when `elem` meets the bit criterion and `zero`/`one`
+evaluate to its injections, the evaluator reads the whole literal into one
+`Val::BitRun`, the eager route the value domain cannot have at `Term::Pair`,
+available because the term carries the element type a pair does not. That
+entry charges one fuel unit, not one per bit: the width is capped at the
+word, and it is fewer than the chain's walk spent, which is the rule above.
+When the criterion declines (an open element type, an element with a payload
+of its own, an `elem` that is not two-valued) the literal evaluates to its
+head pair with the shorter literal behind it, one node per demanded bit.
+It is a compact spelling the code recursors cannot see whole, so like the
+checked spellings it is refused under `box` and in layer v, and the quote
+boundary and the exporter write out its chain (`RebuildChecked`). The
+elaborator emits one only for a vector literal whose elements are closed and
+at most two distinct terms over an element type that whnfs to a sum, packing
+the last 64 and keeping any prefix as pairs (`check_vec_lit`); everything
+else elaborates as before.
+
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
 theorem's `u`-cases redo under that split — see

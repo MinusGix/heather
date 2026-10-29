@@ -107,6 +107,12 @@ certificate is a faithful unit. Cases: `cert/yes-pieces` and
 fewer steps per assembled instruction (what `asm_code_after` evaluates), or
 kernel per-step cost (about 1.2 µs per step here).
 
+Since the packed vector literal (2026-10-29, `issues/packed-vector-literal-term.md`)
+write-elf's byte literals enter the kernel as one word each: `cert/yes-pieces`
+fell from 607K to 489K steps, and the frozen fixture is that certificate. What
+a piece spends now is the encoder's `ofNat` at closed numerals and `Nat::add`
+in addresses: `issues/native-encoder-ofnat-cost.md`.
+
 ## T3. `write-elf`'s own reads (owner: `issues/native-tool-test-cold-certificate-rail.md`)
 
 Not the kernel. In `cat_files_tool`, `bytes_#_#` (158 reads) took 37 s and

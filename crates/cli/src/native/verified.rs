@@ -668,7 +668,7 @@ pub(super) fn byte_pieces(prefix: &str, pieces: &[Piece], bytes: &[u8]) -> Strin
     let mut text = String::new();
     let mut end = bytes.len();
     for (c, Piece { back, count, start }) in pieces.iter().enumerate() {
-        let literal: Vec<String> = bytes[*start..end].iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
+        let literal: Vec<String> = bytes[*start..end].iter().map(|&b| super::word_literal(8, u64::from(b))).collect();
         end = *start;
         text.push_str(&format!("fn {prefix}_piece_{c}() → List<BitVec(8)> {{ [{}] }}\n", literal.join(", ")));
         text.push_str(&format!("theorem {prefix}_piece_{c}_is(): asm_code_after(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back}), {count}) = {prefix}_piece_{c}() {{ refl }}\n"));

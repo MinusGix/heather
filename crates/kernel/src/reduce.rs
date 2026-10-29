@@ -703,6 +703,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
             // component form). This is why the checked spellings need no
             // rule of their own in the recursor's β.
             Term::Pair { fst, .. } | Term::PairAt { fst, .. } => Some((**fst).clone()),
+            Term::VecLit { .. } => vec_lit_proj(pair, false),
             _ => step_scrut(pair, gamma, defs, frames).map(|p| Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -725,6 +726,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
                     Some((**(if second { snd } else { fst })).clone())
                 }
+                Term::VecLit { .. } => vec_lit_proj(pair, second),
                 // The checked projections carry no annotation at all (design
                 // §2.1), so there is nothing here but the receiver: a
                 // projection on a neutral pair is neutral, and exposing the
@@ -804,6 +806,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         // snd (pair a b) ⇝ b; else reduce the pair   (extension)
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { snd, .. } | Term::PairAt { snd, .. } => Some((**snd).clone()),
+            Term::VecLit { .. } => vec_lit_proj(pair, true),
             _ => step_scrut(pair, gamma, defs, frames).map(|p| Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -2922,6 +2925,25 @@ pub fn is_neutral_term(t: &Term) -> bool {
     }
 }
 
+/// `fst`/`snd` of a [`Term::VecLit`]: a component of its one-step view
+/// ([`crate::term::vec_lit_unfold`]), so a projection reads the literal
+/// exactly as it reads the pair chain it spells. A literal outside its
+/// range is ill-typed and stuck.
+fn vec_lit_proj(lit: &Term, second: bool) -> Option<Term> {
+    let Term::VecLit { level, elem, zero, one, width, bits } = lit else {
+        unreachable!("vec_lit_proj is given a vector literal")
+    };
+    if !crate::term::vec_lit_in_range(*width, *bits) {
+        return None;
+    }
+    let Term::Pair { fst, snd, .. } =
+        crate::term::vec_lit_unfold(level, elem, zero, one, *width, *bits)
+    else {
+        unreachable!("a vector literal unfolds to a pair")
+    };
+    Some((*if second { snd } else { fst }).clone())
+}
+
 /// Weak head normal terms `w` (Nf), including neutrals.
 pub fn is_whnf_term(t: &Term) -> bool {
     match t {
@@ -2955,6 +2977,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         // The checked spellings are introduction forms and are whnf exactly
         // as the forms they spell (docs/intro-by-type-design.md).
         | Term::PairAt { .. }
+        | Term::VecLit { .. }
         | Term::InlAt { .. }
         | Term::InrAt { .. }
         | Term::Sup { .. }

@@ -1123,11 +1123,22 @@ impl<'a> ExprElab<'a> {
                 span,
             );
         }
-        let mut acc = Term::Triv {
-            level: level.clone(),
+        // Last to first, as the chain was always built: which element's
+        // error is reported first does not change.
+        let mut checked = Vec::with_capacity(elems.len());
+        for element in elems.iter().rev() {
+            checked.push(Rc::new(elab.check_expression(cx, element, &elem, &level)?));
+        }
+        checked.reverse();
+        // The longest tail that packs is written as one `VecLit`, and only
+        // what precedes it as pairs (docs/bitvector-literal-entry-design.md
+        // §3: the literal is the chain it spells, so the split is invisible).
+        let packed = self.packed_vec_tail(cx, &level, &elem, &checked);
+        let (mut acc, spelled) = match packed {
+            Some((lit, n)) => (lit, elems.len() - n),
+            None => (Term::Triv { level: level.clone() }, elems.len()),
         };
-        for (j, element) in elems.iter().enumerate().rev() {
-            let element = elab.check_expression(cx, element, &elem, &level)?;
+        for (j, element) in checked.into_iter().take(spelled).enumerate().rev() {
             acc = Term::Pair {
                 fst_level: level.clone(),
                 snd_level: level.clone(),
@@ -1137,11 +1148,65 @@ impl<'a> ExprElab<'a> {
                     elem: Rc::new(elem.shift_local(1)),
                     len: Rc::new(crate::inductive::nat_lit(elems.len() - 1 - j)),
                 }),
-                fst: Rc::new(element),
+                fst: element,
                 snd: Rc::new(acc),
             };
         }
         Ok(acc)
+    }
+
+    /// A vector literal's packable tail, as a [`Term::VecLit`] with how many
+    /// elements it holds: the last (up to) 64 elements, when they are closed
+    /// and at most two distinct terms, at an element type whose whnf is a
+    /// sum — the shape a two-constructor enumeration lowers to, and the only
+    /// one the evaluator can pack into a word. Anything else is left to the
+    /// pair chain, so no reader of other vectors sees a new spelling.
+    fn packed_vec_tail(
+        &self,
+        cx: &Cx,
+        level: &Level,
+        elem: &Rc<Type>,
+        checked: &[Rc<Term>],
+    ) -> Option<(Term, usize)> {
+        let n = checked.len().min(heather_kernel::term::VEC_LIT_WIDTH_CAP as usize);
+        if n < 2 {
+            return None;
+        }
+        let tail = &checked[checked.len() - n..];
+        let zero = Rc::clone(&tail[0]);
+        let mut one: Option<Rc<Term>> = None;
+        let mut bits = 0u64;
+        for (i, t) in tail.iter().enumerate() {
+            if Rc::ptr_eq(t, &zero) || **t == *zero {
+                continue;
+            }
+            match &one {
+                Some(o) if Rc::ptr_eq(t, o) || **t == **o => bits |= 1 << i,
+                Some(_) => return None,
+                None => {
+                    one = Some(Rc::clone(t));
+                    bits |= 1 << i;
+                }
+            }
+        }
+        let one = one.unwrap_or_else(|| Rc::clone(&zero));
+        if heather_kernel::subst::local_bound(&zero) != 0
+            || heather_kernel::subst::local_bound(&one) != 0
+        {
+            return None;
+        }
+        let Ok(Type::Sum { .. }) = self.semantic.whnf_type(&cx.gamma, elem) else {
+            return None;
+        };
+        let lit = Term::VecLit {
+            level: level.clone(),
+            elem: Rc::clone(elem),
+            zero,
+            one,
+            width: n as u32,
+            bits,
+        };
+        Some((lit, n))
     }
 }
 

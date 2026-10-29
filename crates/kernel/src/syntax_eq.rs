@@ -484,6 +484,15 @@ impl SharedEq for Term {
                     && fst_ty.shared_eq(o_fst_ty, m) && snd_ty.shared_eq(o_snd_ty, m)
                     && pair.shared_eq(o_pair, m)
             }
+            Term::VecLit { level, elem, zero, one, width, bits } => {
+                let Term::VecLit {
+                    level: o_level, elem: o_elem, zero: o_zero, one: o_one, width: o_width,
+                    bits: o_bits,
+                } = other else { return false };
+                width == o_width && bits == o_bits && level.shared_eq(o_level, m)
+                    && elem.shared_eq(o_elem, m) && zero.shared_eq(o_zero, m)
+                    && one.shared_eq(o_one, m)
+            }
             Term::PairAt { ty, fst, snd } => {
                 let Term::PairAt { ty: o_ty, fst: o_fst, snd: o_snd } = other else { return false };
                 ty.shared_eq(o_ty, m) && fst.shared_eq(o_fst, m) && snd.shared_eq(o_snd, m)

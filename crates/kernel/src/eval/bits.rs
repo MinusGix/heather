@@ -26,11 +26,12 @@
 use std::sync::Arc as Rc;
 
 use crate::level::Level;
+use crate::term::Term;
 use crate::value::{
-    BitTy, Elim, SigAnn, SumAnn, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP,
+    BitTy, Elim, Env, SigAnn, SumAnn, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP,
 };
 
-use super::{Eval, Res};
+use super::{Eval, OutOfFuel, Res, Work};
 
 /// How deep a unit-like Σ-nest, or a canonical payload, may be.
 ///
@@ -73,6 +74,76 @@ impl<'v> Sigma<'v> {
 }
 
 impl<'v> Eval<'_, 'v> {
+    /// A [`Term::VecLit`] — entry route four
+    /// (`docs/bitvector-literal-entry-design.md` §3.3): straight to a
+    /// [`Val::BitRun`] when the element type meets the bit criterion and its
+    /// two elements are that type's own injections, in either order or the
+    /// same one twice. The run is the chain the literal spells, bit for bit,
+    /// so this is the representation change and nothing else. It charges one
+    /// step, as a numeral does: building a word is constant work, and every
+    /// bit a consumer later takes out of it is charged where it is taken.
+    ///
+    /// Otherwise the literal is its one-step view — a pair whose tail is the
+    /// literal one element shorter, still a term — so an element type that
+    /// is open, or not two-valued, costs one pair per element demanded and
+    /// never the whole chain.
+    pub(super) fn step_vec_lit(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
+        let Term::VecLit { level, elem, zero, one, width, bits } = t else {
+            unreachable!("step_vec_lit is given a vector literal")
+        };
+        // Out of range is ill-typed, and `eval`'s one failure is "no answer".
+        if !crate::term::vec_lit_in_range(*width, *bits) {
+            return Err(OutOfFuel);
+        }
+        let ty = self.arena.ty(TyClo::new(*env, Rc::clone(elem)));
+        if let Some(word) = self.vec_lit_word(ty, zero, one, *width, *bits, env)? {
+            let (bt, word) = word;
+            self.spend()?;
+            let tail_len = self.vclo(Rc::new(Val::Zero));
+            let tail = self.vclo(Rc::new(Val::Triv { level: level.clone() }));
+            return Ok(Work::Val(Rc::new(Val::BitRun {
+                level: level.clone(),
+                ty: bt,
+                width: *width,
+                bits: word,
+                tail_len,
+                tail,
+            })));
+        }
+        let unfolded = crate::term::vec_lit_unfold(level, elem, zero, one, *width, *bits);
+        self.step_eval(&unfolded, env)
+    }
+
+    /// The word a vector literal packs to, at its element type's bit
+    /// injections: each of `zero` and `one` is read as the injection it is,
+    /// δ-transparently and with a canonical payload ([`Eval::bit_of`]).
+    fn vec_lit_word(
+        &mut self,
+        elem: &'v TyClo<'v>,
+        zero: &Rc<Term>,
+        one: &Rc<Term>,
+        width: u32,
+        bits: u64,
+        env: &Env<'v>,
+    ) -> Res<Option<(&'v BitTy<'v>, u64)>> {
+        let Some(bt) = self.bit_ty(elem)? else { return Ok(None) };
+        let side = |this: &mut Self, t: &Rc<Term>| -> Res<Option<bool>> {
+            let v = this.eval_tm(t, env)?;
+            let v = this.delta_whnf(v)?;
+            this.bit_of(&v)
+        };
+        let Some(z) = side(self, zero)? else { return Ok(None) };
+        let Some(o) = side(self, one)? else { return Ok(None) };
+        let mask = if width >= 64 { u64::MAX } else { (1u64 << width) - 1 };
+        let word = match (z, o) {
+            (false, true) => bits,
+            (true, false) => !bits & mask,
+            (false, false) => 0,
+            (true, true) => mask,
+        };
+        Ok(Some((bt, word)))
+    }
+
     /// Whether `elem` is a *bit type*, and with what injections. Decided
     /// once per element closure and memoized in the arena; the negative
     /// verdict is memoized too, since it is the common one.

@@ -45,6 +45,16 @@ fn report(result: Result<(), String>) -> ExitCode {
     }
 }
 
+/// A closed bitvector in a generated certificate: its bits written out,
+/// least significant first, which the elaborator packs into one kernel
+/// vector literal (`Term::VecLit`, docs/bitvector-literal-entry-design.md
+/// §3) — a word the kernel reads in one step, where `BitVec::ofNat(width, n)`
+/// is a fold it runs a bit at a time.
+fn word_literal(width: u32, n: u64) -> String {
+    let bits: Vec<&str> = (0..width).map(|i| if i < 64 && n >> i & 1 == 1 { "True" } else { "False" }).collect();
+    format!("@bitvec::BitVec::from_bits({width}, [{}])", bits.join(", "))
+}
+
 fn symbol_ok(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')

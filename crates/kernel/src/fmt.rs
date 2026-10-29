@@ -255,6 +255,10 @@ impl fmt::Debug for Term {
             ),
             Term::Zero => f.write_str("0"),
             Term::NatLit(n) => write!(f, "{n}"),
+            Term::VecLit { level, elem, zero, one, width, bits } => write!(
+                f,
+                "vec[{level:?}]({elem:?}; {zero:?}, {one:?}; {width}#{bits:#x})"
+            ),
             Term::Succ(t) => write!(f, "S({t:?})"),
             Term::ElimNat { level, motive, base, step, scrut } => write!(
                 f,

@@ -1501,6 +1501,7 @@ impl<'v> Dom<'v> for Syn {
             | Term::TyLam { .. }
             | Term::Pair { .. }
             | Term::PairAt { .. }
+            | Term::VecLit { .. }
             | Term::Triv { .. }
             | Term::SRefl { .. }
             | Term::Squash { .. } => TmView::Opaque,

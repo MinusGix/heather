@@ -88,7 +88,7 @@ pub(super) fn byte_pieces(p: &str, pieces: &[Piece], bytes: &[u8], items: usize,
     let length = offsets[items];
     for (c, piece) in pieces.iter().enumerate() {
         let (count, start) = (piece.count, piece.start);
-        let literal: Vec<String> = bytes[start..end].iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
+        let literal: Vec<String> = bytes[start..end].iter().map(|&b| super::word_literal(8, u64::from(b))).collect();
         end = start;
         let top = items - piece.back;
         text.push_str(&format!("fn {p}_piece_{c}() → List<BitVec(8)> {{ [{}] }}

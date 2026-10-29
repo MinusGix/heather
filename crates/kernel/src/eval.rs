@@ -1301,6 +1301,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 return Ok(Work::Elim(p, self.elim_of(t, env)));
             }
             Term::ElimCodeTm { .. } => return self.step_elim_code_tm(t, env),
+            Term::VecLit { .. } => return self.step_vec_lit(t, env),
             _ => return self.step_intro(t, env),
         };
         Ok(Work::Val(Rc::new(v)))
