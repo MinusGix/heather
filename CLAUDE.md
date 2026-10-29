@@ -126,6 +126,11 @@
   `docs/testing-generated-terms.md` — vary all four axes (literal *and*
   neutral scrutinee, an **open** element type, a *checking* position and not
   only computation, and a negative control); defects have hidden behind each.
+- **Writing proofs: `docs/proof-patterns.md`** has the rules rounds kept
+  rediscovering (closed verdicts as `b = True` by `refl`, never `refl`
+  between two computations, neutral parameters, stage theorems, what `omega`
+  cannot read yet), each with its reason and the issue that would retire it.
+  Correct it when a rule goes stale.
 - **Rust test or theorem: `docs/test-value-audit.md` §5.** If Heather can
   state a claim, write it in Heather. A library PR adds theorems to its module
   (a client would cite them) or probes to `lib/_tests` (mirrors `lib/`,

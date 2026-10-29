@@ -3363,6 +3363,19 @@ pub(crate) fn reconstruct(
             report: wrapper_report("omega::nat_le_of_not_not_le", 0),
         });
     }
+    // A negated relation (`¬(a <= b)`, `a ≠ b`): assume it and refute the
+    // assumption, which the recursive invocation reads as a context fact.
+    if let Some(domain) = negated_domain(elab, cx, expected)
+        && reads_as_relation(elab, cx, &domain)
+    {
+        let source = "λ __omega_assumed => omega".to_string();
+        return Ok(Certificate {
+            atoms: None,
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("λ", 0),
+        });
+    }
     if elab.display_type(cx, expected) != "False" {
         // A goal a definition unfolds to (`counts_advance([c], next, s)` is
         // `c(next) <= Succ(c(s))`, and `counts_advance(Nil, …)` is `True`):

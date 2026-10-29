@@ -408,14 +408,19 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         };
         let mut root_ok = true;
         // `--only`'s names, per module: `mod::name` names a module of the
-        // closure, a bare name the root module.
+        // closure, any other name the root module. Module names are stems,
+        // so the module is the first segment, and only when the closure has
+        // one by that name: `nat::Nat::add_comm` is nat's `Nat::add_comm`,
+        // and a bare `Nat::add_comm` is the root's.
         let only: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = opts
             .only
             .iter()
             .flatten()
-            .map(|spec| match spec.rsplit_once("::") {
-                Some((module, name)) => (module.to_string(), name.to_string()),
-                None => (modules.last().map(|m| m.name.clone()).unwrap_or_default(), spec.clone()),
+            .map(|spec| match spec.split_once("::") {
+                Some((module, name)) if modules.iter().any(|m| m.name == module) => {
+                    (module.to_string(), name.to_string())
+                }
+                _ => (modules.last().map(|m| m.name.clone()).unwrap_or_default(), spec.clone()),
             })
             .fold(Default::default(), |mut map, (module, name)| {
                 map.entry(module).or_default().insert(name);

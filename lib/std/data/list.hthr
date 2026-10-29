@@ -747,7 +747,7 @@ theorem List::mem_filter_holds<A>(self xs: List<A>, a: A, p: A → Bool): Mem(a,
 theorem List::mem_take<A>(self xs: List<A>, a: A): (n: Nat) → Mem(a, xs.take(n)) → Mem(a, xs) {
     match xs {
         Nil => λ n m => false_elim(m),
-        Cons(h, t) => λ n => match n {
+        Cons(_, t) => λ n => match n {
             Zero => λ m => false_elim(m),
             Succ(k) => λ m => match m {
                 Inl(e) => Inl(e),
@@ -760,7 +760,7 @@ theorem List::mem_take<A>(self xs: List<A>, a: A): (n: Nat) → Mem(a, xs.take(n
 theorem List::mem_drop<A>(self xs: List<A>, a: A): (n: Nat) → Mem(a, xs.drop(n)) → Mem(a, xs) {
     match xs {
         Nil => λ n m => false_elim(m),
-        Cons(h, t) => λ n => match n {
+        Cons(_, t) => λ n => match n {
             Zero => λ m => m,
             Succ(k) => λ m => Inr(t.mem_drop(a, k, m)),
         },
