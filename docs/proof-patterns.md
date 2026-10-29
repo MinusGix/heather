@@ -106,8 +106,9 @@ Not diagnosed well yet:
   `import algebra;`, characters at a byte `import char;`
   ([[literal-classes-need-importing]]).
 - `[x] ++ ys` has no carrier: write `Cons(x, ys)` or `List::append`
-  ([[list-literal-left-of-append]]); a statement cannot start with `[`
-  ([[statement-leading-list-literal-parse]]).
+  ([[list-literal-left-of-append]]). A statement may start with a literal
+  (`[1, 2] = xs`); `[` opens a vector type only when `;` follows its
+  element ([[statement-leading-list-literal-parse]]).
 - Generated source: never `list::Nil` (bare `Nil` resolves by expected
   type), and Int numerals as `int::OfNat(k)`.
 
