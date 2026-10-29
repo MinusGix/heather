@@ -93,7 +93,7 @@ Leverage: about 11 `write-elf` processes in `native_tools` alone, plus
 | family | items | kernel s | evaluator steps | what it is |
 |---|---|---|---|---|
 | `piece_#_is` | 195 | 35.1 | 20.3M | `asm_code_after(…) = piece` by `refl`: the assembler run by the kernel, about 100K steps per piece, flat in the program's size |
-| `at_#` | 335 | 18.6 | 7.4M | the label prefixes, gated as `Prog` literals (plus 5.7 s of `instance_match` in elaboration) |
+| `at_#` | 335 | 18.6 | 7.4M | the label prefixes, gated as `Prog` literals (plus 5.7 s of `instance_match` in elaboration); since 2026-10-29 under a tenth of these steps (`cert/yes-labels` −92%: the `[…]` literals compared an inline carrier, issue log) |
 | `e_#` | 104 | 6.2 | 4.9M | entry statements |
 | `ib_#_#_is` | 22 | 5.4 | 3.3M | initial bytes |
 | `piece_#` | 195 | 3.5 | 0.9M | the piece literals themselves (elab whnf 4.4) |
