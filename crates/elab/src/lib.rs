@@ -4733,6 +4733,45 @@ impl Elaborator {
         Ok((sigma, aux, Some(Rc::new(world))))
     }
 
+    /// `cx` with every binder's type in the emission spelling
+    /// ([`Self::annotation_type`]), the context a lifted proof or a named
+    /// value is committed in. The kernel types the body's binders by the
+    /// spellings the declaration emitted (its statement's `Π` domains, its
+    /// `λ` annotations), and a slot reference `u^{id}` checks each of those
+    /// binders against the slot's own context: stored as the elaborator
+    /// keeps it, with a coded declaration inline, every reference converted
+    /// an inline copy of `X86Profile` or `Stack<M>` against its `El` name,
+    /// once per binder per tactic call (`omega`'s atom list is one such
+    /// reference per call). Respelled, the two are one syntax and the
+    /// conversion is the reflexivity shortcut.
+    pub(crate) fn emitted_cx(&self, cx: &Cx) -> Cx {
+        let n = cx.gamma.len();
+        let scope = self.psi.bindings.len();
+        let mut entries = Vec::with_capacity(n);
+        let mut changed = false;
+        for i in 0..n {
+            let entry = cx.gamma.entries.get(i).expect("a binder in range");
+            let key = (Rc::as_ptr(&entry.ty) as usize, i, scope);
+            let known = self.attempt.emitted_entries.borrow().get(&key).map(|(_, ty)| Rc::clone(ty));
+            let ty = match known {
+                Some(ty) => ty,
+                None => {
+                    let ty = self.emit_ty(&cx.prefix(i), &entry.ty, 0).map_or_else(|| Rc::clone(&entry.ty), Rc::new);
+                    self.attempt.emitted_entries.borrow_mut().insert(key, (Rc::clone(&entry.ty), Rc::clone(&ty)));
+                    ty
+                }
+            };
+            changed |= !Rc::ptr_eq(&ty, &entry.ty);
+            entries.push(heather_kernel::term::CtxEntry { ty, level: entry.level.clone() });
+        }
+        if !changed {
+            return cx.clone();
+        }
+        let mut out = cx.clone();
+        out.gamma = LocalCtx::from_vec(cx.gamma.base, entries);
+        out
+    }
+
     // -- goals --------------------------------------------------------------
 
     /// Raise a goal with a stable discriminator for several synthesized goals
@@ -5609,7 +5648,7 @@ impl Elaborator {
                     Ok(term) => Ok(self
                         .attempt
                         .goal_arena
-                        .allocate_proved(cx, expected.clone(), lvl.clone(), term.clone(), e.span)
+                        .allocate_proved(&self.emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
                         .unwrap_or(term)),
                     Err(error) => {
                         // Name the side condition that failed, not only the goal
@@ -6059,7 +6098,7 @@ impl Elaborator {
                 let term = self
                     .attempt
                     .goal_arena
-                    .allocate_transparent(cx, ty.clone(), level.clone(), atoms.clone());
+                    .allocate_transparent(&self.emitted_cx(cx), ty.clone(), level.clone(), atoms.clone());
                 let term = match term {
                     goals::Named::Slot(reference) => reference,
                     goals::Named::Inline => atoms,

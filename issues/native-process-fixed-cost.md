@@ -53,38 +53,3 @@ the same floor without `write-elf`'s parts (`native/world-replay`).
 The warm `write-elf` floor is dominated by the tool's own work, and
 `write-elf` after the gate hits every library module. Both are read off
 those cases.
-
-## Log
-
-- 2026-10-29: Two of the three costs fixed (branch claude/project-thread-fod7fz).
-  - **`image_recheck` was theorem statements.** Replay asked the gate about
-    every definition, but a declaration without a body had no key, so its
-    statement was re-checked on every load: in the warm native world, 2916
-    unsealed and 731 sealed statements, all of the replay's evaluator steps.
-    Statement verdicts now cover them (`KernelGate::admits_statement`,
-    `merkle::statement_key`, `docs/cache-v1-design.md` §12). A statement
-    check that opened a sealed proof keeps none.
-  - **Most of the merkle walk was the world hashed again.** `write-elf`'s
-    forks share the parent's gate, and the gate cleared its prefix of
-    interface hashes whenever a shorter Ψ asked, so the first probe
-    declaration and the certificate each re-hashed the whole world. The gate
-    now keeps what the asking Ψ shares with the last (`GlobalMark`,
-    `GlobalBindings::common_prefix`). The same change closes a hazard the old
-    rule had: a divergent Ψ already longer than the prefix inherited its
-    hashes (`a_longer_divergent_psi_does_not_inherit_the_last_ones_hashes`).
-  - One sample each, cloud: `native/world-replay` 9.5 to 4.8 CPU-s (image
-    6.7 to 1.7, evaluator steps 2.1M to 123); `native/elf-floor-yes` 20.0 to
-    8.0 (merkle 8.7 to 2.8, image 8.0 to 2.0). Three-sample rows are in
-    `perf/bench/results.tsv`.
-  - **Left: the first `write-elf` after the gate.** `native_tools` and
-    `native_build_parts` are imported by no library module, so they are not
-    in the world (`crates/cli/src/world.rs`): each process loads them after
-    its own prefix, and the gate's `lib/native` child and `write-elf` have
-    different prefixes, hence different keys. The key's build lock means the
-    suite pays this once per store, not once per process. Two ways to fix
-    it: a `lib/_tests` probe module that imports them makes them shared, or
-    `write-elf` loads its closure after the gate's prefix for the source's
-    folder. Not done here.
-  - What is left of the warm floor: the world's one interface walk (about
-    1.6 s, in `world-replay` too), decode, and `write-elf`'s own reads
-    (930K evaluator steps).

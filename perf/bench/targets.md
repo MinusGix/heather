@@ -76,11 +76,6 @@ certificate that grows with the code (T2, T3).
   9.5 CPU-s: image 6.7 (recheck), merkle 1.5, elaboration 1.3. That is the
   floor without `write-elf`.
 
-**Update 2026-10-29:** the recheck (theorem statements with no verdict) and
-the merkle walk's re-hash of the world at each fork switch are fixed; the
-warm floor is about 8 CPU-s and the world replay about 5
-(`issues/native-process-fixed-cost.md`, log). The first-run miss is open.
-
 Leverage: about 11 `write-elf` processes in `native_tools` alone, plus
 `native_cat`'s, at 18 to 30 s each before any tool-specific work
 (`native_branches` runs `compile-x86`, not measured here). Cases: `native/world-replay`, `native/elf-floor-yes`,
@@ -139,6 +134,17 @@ module check with a fresh verdict store would show it, and is a follow-up
 case. Cases: `native/goes-arg-found`, `native/call-step`,
 `native/arg-cells-store`, `native/emit-extends` (elaborator-bound, 0.7 s of
 whnf and substitution).
+
+**2026-10-29, after the spelling fix** (`issues/native-lemma-kernel-steps.md`, closed):
+both items were conversions between a coded declaration's inline lowering
+and its `El(D#tycode)` spelling, at record projections and at lifted `omega`
+slots, not proof work. Same tree, cold `lib/native` child at width one: kernel
+steps fell from 78.8M to 16.1M and the kernel gate from 335 to 118 s, nearly
+every `Target::*` lemma by 85 to 98% of its steps. The tree had grown past
+the 302 CPU-s above (507 CPU-s on master at this commit, 304 with the fix), so the child's
+margin is read off `issues/native-gate-child-cold-at-rail.md`'s log. What
+leads the child now is elaboration: `Stmt::emit_extends`, the
+`native_build_parts` `packs_*_of` family, `loop_head`.
 
 ## T5. The rest of the library, for breadth
 

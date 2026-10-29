@@ -96,6 +96,12 @@ pub(super) struct DeclAttempt {
     /// otherwise an elaboration and a `Decide` resolution with its kernel
     /// check, and the shared allocation is what the kernel's memo keys on.
     pub(super) char_literals: RefCell<Vec<(char, (Option<u32>, usize, u32), Type, Term)>>,
+    /// [`crate::Elaborator::emitted_cx`]'s memo: a binder's type in the
+    /// emission spelling, by the stored type's allocation, its position and
+    /// the Ψ scope. The stored `Rc` rides along so its address cannot be
+    /// reused while the entry stands. Contexts share their spine, so the
+    /// tactic calls of one block respell each binder once.
+    pub(super) emitted_entries: RefCell<std::collections::HashMap<(usize, usize, usize), (Rc<Type>, Rc<Type>)>>,
 
     /// Slot retained during an argument-slot ownership probe.
     pub(super) slot_probe_target: Cell<Option<Span>>,
@@ -144,6 +150,7 @@ impl DeclAttempt {
         self.wf_slot_annotations.get_mut().clear();
         self.instance_matches.get_mut().clear();
         self.char_literals.get_mut().clear();
+        self.emitted_entries.get_mut().clear();
         self.goal_arena.prepare();
     }
 
@@ -159,6 +166,7 @@ impl DeclAttempt {
         self.wf_slot_annotations.get_mut().clear();
         self.instance_matches.get_mut().clear();
         self.char_literals.get_mut().clear();
+        self.emitted_entries.get_mut().clear();
         self.op_fallback_notes.get_mut().clear();
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();

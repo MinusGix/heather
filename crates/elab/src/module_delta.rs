@@ -1118,8 +1118,7 @@ impl Elaborator {
     /// identity) and an `admits` hit skips its statement and body the way it
     /// does for a fresh declaration; a miss is checked and `accepted` at the
     /// same points the source path uses. A theorem is stored without its
-    /// proof, so it asks about its statement alone
-    /// ([`crate::gate::KernelGate::admits_statement`]). Before
+    /// proof and has nothing to ask: its statement is checked. Before
     /// 2026-09-17 a replay rechecked every stored body regardless, so a warm
     /// run of an unchanged file cost more than an edited one
     /// (`issues/semantic-replay-phase-attribution.md`).
@@ -1163,27 +1162,14 @@ impl Elaborator {
                 }
                 _ => None,
             };
-            // A declaration without a body (a theorem's statement, an opaque
-            // one) has no check key, but its statement has a verdict of its
-            // own: without one every load re-checked every such statement,
-            // which was the whole of a warm world's `image_recheck`
-            // (`issues/native-process-fixed-cost.md`).
-            let bodiless = matches!(binding, GlobalBinding::Tm { body: None, .. });
             let admitted = match (&gate, &body) {
                 (Some(g), Some(item)) => g.admits(&prefix, item),
-                (Some(g), None) if bodiless => g.admits_statement(&prefix, binding),
                 _ => false,
             };
             if !admitted {
-                let (checked, unsealed) = heather_kernel::unseal::record(|| {
-                    typing::check_global_binding_statement(&prefix, binding, 0, self.fuel)
-                });
-                if let Err(e) = checked {
+                if let Err(e) = typing::check_global_binding_statement(&prefix, binding, 0, self.fuel) {
                     statement = Err(ModuleReplayError::Kernel(e));
                     break;
-                }
-                if let (Some(g), true) = (&gate, bodiless) {
-                    g.statement_accepted(&prefix, binding, &unsealed);
                 }
                 if let Some(item) = &body {
                     if inline {

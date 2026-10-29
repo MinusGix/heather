@@ -32,3 +32,14 @@ world's order, and this run built the prefix in `lib/std/arch`'s child. The
 A cold gate on a fresh cloud box (the sentinel's configuration) leaves the
 `lib/native` child with a margin under the rail, read off the sentinel's
 per-target times or a by-hand cold folder run like the one above.
+
+## Log
+
+- 2026-10-29: Measured around the spelling fix of [[native-lemma-kernel-steps]] (cloud box, branch claude/project-thread-n0z5jm, master e208de4). The tree has grown since 709e71c (`native_compile_structured` and others), so the child was re-measured on both binaries at this commit: dev binaries, kernel width one, 6 GiB address-space limit, `lib/std`, `lib/lang` and `lib/kernel_model` built first into a fresh store, then `check --cache --expectations --world lib lib/native` timed by rusage.
+
+    | binary | CPU-s (user + sys) | kernel steps | kernel gate s |
+    |---|---|---|---|
+    | master e208de4 | 506.9 | 78.8M | 335 |
+    | with the fix | 304.2 alone (294.9 in a run beside other work) | 16.1M | 123 |
+
+    So master was far over the rail at this commit, not just over it, and the fix takes about 200 CPU-s out of the child; nearly every `Target::*` lemma lost 85 to 98% of its steps, not only the two named ones. It still sits at the rail. What leads the child now is not the kernel's arithmetic: `Stmt::emit_extends` (9 s, half elaborator whnf), the `native_build_parts` `Act::packs_*_of` family (4 to 7 s each, which a re-run with `--only` over the warm store does not reproduce, likely shared generated items gated at their first user; not confirmed), and the `native_compile_structured` lemmas (1 to 1.5 s of projection substitution each). Leaving this open for a next round on those.

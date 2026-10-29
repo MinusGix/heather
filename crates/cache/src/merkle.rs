@@ -105,7 +105,6 @@ pub type Hash = [u8; 32];
 const DOMAIN_IFACE: &[u8] = b"heather/iface/2\0";
 const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/1\0";
 const DOMAIN_CHECK: &[u8] = b"heather/check/2\0";
-const DOMAIN_STATEMENT: &[u8] = b"heather/statement/1\0";
 
 /// The interface hashes of a Ψ prefix, in binding order.
 ///
@@ -1348,25 +1347,6 @@ pub fn check_key(prefix: &Prefix, body: &Term, opaque: bool, iface: &Hash) -> Op
     }
     w.tag(tag::KEY_PROOF);
     w.term(body);
-    w.finish()
-}
-
-/// The cache identity of one statement check: "the kernel accepted the
-/// statement of a binding with *this* interface, in a context whose
-/// interfaces hash thus". Asked by module-image replay for a declaration
-/// with no body, whose statement it would otherwise re-check on every load
-/// (`issues/native-process-fixed-cost.md`).
-///
-/// The interface hash is all of it. It renders the statement (its context,
-/// layer, type and level), and each global the statement refers to as that
-/// global's own interface hash, which is everything the statement check can
-/// read: the check is type formation over those referents' types and the
-/// δ-visible bodies their interfaces carry. A different domain keeps it
-/// apart from a definition's check key, which is the same interface hash
-/// under `KEY_DEF`.
-pub fn statement_key(prefix: &Prefix, iface: &Hash) -> Option<Hash> {
-    let mut w = Walk::new(DOMAIN_STATEMENT, prefix, prefix.len() as u32);
-    w.buf.extend_from_slice(iface);
     w.finish()
 }
 

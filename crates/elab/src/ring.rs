@@ -1892,7 +1892,7 @@ impl Elaborator {
         })?;
         // As `omega`'s: one transparent slot per atom list, so the kernel
         // meets the list once rather than once per use.
-        let term = match self.attempt.goal_arena.allocate_transparent(cx, ty.clone(), level.clone(), atoms.clone()) {
+        let term = match self.attempt.goal_arena.allocate_transparent(&self.emitted_cx(cx), ty.clone(), level.clone(), atoms.clone()) {
             crate::goals::Named::Slot(reference) => reference,
             crate::goals::Named::Inline => atoms,
             crate::goals::Named::Restart => {
