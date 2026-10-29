@@ -50,7 +50,6 @@ fn tr_upper() → Source {
                     Then(Invoke(Writes(19, 0, 0, 1, 20)), Exit(7)))))))
 }
 
-
 // Refused, with the reason named: a loop counting with one of its own
 // parameters is not in counted form (reason 0, kind 5); a loop whose
 // parameter is read after it, so its moves would clobber a live word
