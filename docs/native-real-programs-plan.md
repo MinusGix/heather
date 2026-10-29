@@ -309,8 +309,20 @@ next runs, a pure node through S4 as a region of its own (its output
 renamed, so it may read its own word) and a byte node by its own code. So
 a leaf has no length limit, mixes byte nodes with arithmetic, and reads
 words it writes. `native_compile_correct` covers it through one lemma: the
-leaf settles as its nodes do one at a time (`Env::steps_settle`). The
-`Sequence`, `Compose`, `Conditional` and `Loop` regions are still refused.
+leaf settles as its nodes do one at a time (`Env::steps_settle`).
+
+Regions done, 2026-10-29. `Sequence`, `Compose`, `Conditional` and `Loop`
+compile memory-resident wherever the region is scoped from every word
+(`lib/native/native_structured.hthr`: nodes wide, each word read written
+before it, branches on a word's low bit, loops in counted form). A loop is
+a counted loop of leaves around its body, its state in the parameters'
+homes. `native_compile_correct` covers them through the same statement
+induction: each region's code runs as the region's meaning
+(`StructuredRegion::code_runs`, a loop by induction on its count), and the
+meaning is the region's run settled (`compute_same`). `tr a-z A-Z` with its
+byte map as one loop region is written by `write-elf` and runs
+(`crates/cli/tests/native_cat.rs`, `structured_regions_run`). `Call`
+regions stay refused.
 
 ### 3.5 The command line, files, and diagnostics
 

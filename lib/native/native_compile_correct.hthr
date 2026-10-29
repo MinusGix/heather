@@ -10,7 +10,10 @@
 // end with each environment it may finish in, and meets every exit with
 // its status. `Then` is `bind_assoc`; `Branch` is the test's two ways and a
 // JMP over the second arm; `Repeat` is an induction on the loop's fuel, the
-// body run each round with the test and a JMP back as its continuation.
+// body run each round with the test and a JMP back as its continuation. A
+// structured region's code runs as the region's meaning
+// (native_compile_structured's `StructuredRegion::code_runs`), which is its
+// run settled where it is scoped from every word (`compute_same`).
 import native_source;
 import native_compile;
 import native_compile_facts;

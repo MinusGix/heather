@@ -24,8 +24,18 @@
 //   width as `Env::settle` keeps it. Any other leaf whose nodes all work at
 //   width 64 compiles a node at a time, each result put before the next
 //   node reads it: a pure node through S4 as a region of its own, a byte
-//   node by its own code. A conditional, loop or call region is refused for
-//   now.
+//   node by its own code.
+// - A structured region compiles where it is scoped from every word
+//   (native_structured: its nodes wide, each word read written before it,
+//   each branch on a word's low bit, each loop in counted form), its parts
+//   memory-resident as leaves are (`StructuredRegion::code`): a sequence's
+//   leaf then the rest, a composition's parts in order, a conditional as a
+//   branch on its bit with a JMP over the second arm, and a loop as a
+//   counted loop of leaves around its body (the count and the parameters
+//   moved in, a zero test at the head, the body, the next state moved into
+//   the parameters, a test of the exit bit, the count less one and a JMP
+//   back; the outputs moved out at the end). A call region is refused: the
+//   builder inlines.
 // - A byte node compares its index with its buffer's capacity (CMP and a
 //   JAE past the access), and loads or stores the byte at the buffer's
 //   address plus the index; a store then reads the byte back as a load
@@ -933,12 +943,12 @@ fn parts_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
     }
 }
 
-fn region_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
+fn region_refusal(layout: Layout, region: StructuredRegion, out: List<Nat>) → List<Nat> {
     match region {
         Dataflow(body) => computes_refusal(layout, body.nodes),
         _ => match region.scopes() {
             False => [0, region.kind(), 0],
-            True => match region.code(Start, layout, [], 0) { Some(_) => [], None => parts_refusal(layout, region) },
+            True => match region.code(Start, layout, out, 0) { Some(_) => [], None => parts_refusal(layout, region) },
         },
     }
 }
@@ -954,17 +964,22 @@ fn call_refusal(layout: Layout, shape: CallShape) → List<Nat> {
     }
 }
 
-fn Stmt::scan(self s: Stmt, layout: Layout, at: Nat) → CompileScan {
+// `out` is what is live after the statement, as `Stmt::emit` has it: a
+// region's code depends on it.
+fn Stmt::scan(self s: Stmt, layout: Layout, out: List<Nat>, at: Nat) → CompileScan {
     match s {
-        Compute(region) => CompileScan::of(at, 0, region_refusal(layout, region)),
+        Compute(region) => CompileScan::of(at, 0, region_refusal(layout, region, out)),
         Invoke(shape) => CompileScan::of(at, 1, call_refusal(layout, shape)),
-        Then(first, rest) => match first.scan(layout, at) { Passed(next) => rest.scan(layout, next), Refused(why) => Refused(why) },
+        Then(first, rest) => match first.scan(layout, rest.live_in(layout.homes, out), at) {
+            Passed(next) => rest.scan(layout, out, next),
+            Refused(why) => Refused(why),
+        },
         Branch(condition, yes, no) => match CompileScan::of(at, 2, ids_refusal(layout, [condition])) {
-            Passed(next) => match yes.scan(layout, next) { Passed(after) => no.scan(layout, after), Refused(why) => Refused(why) },
+            Passed(next) => match yes.scan(layout, out, next) { Passed(after) => no.scan(layout, out, after), Refused(why) => Refused(why) },
             Refused(why) => Refused(why),
         },
         Repeat(body, again) => match CompileScan::of(at, 3, ids_refusal(layout, [again])) {
-            Passed(next) => body.scan(layout, next),
+            Passed(next) => body.scan(layout, Repeat(body, again).loop_out(layout.homes, out), next),
             Refused(why) => Refused(why),
         },
         Exit(status) => CompileScan::of(at, 4, ids_refusal(layout, [status])),
@@ -973,7 +988,7 @@ fn Stmt::scan(self s: Stmt, layout: Layout, at: Nat) → CompileScan {
 }
 
 fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes) → List<Nat> {
-    match src.main.scan(src.layout(low, homes), 1) {
+    match src.main.scan(src.layout(low, homes), [], 1) {
         Refused(why) => why,
         Passed(_) => match src.allocation_ok(homes) {
             False => [0, 5, 12, 0, 0],

@@ -50,3 +50,15 @@ fn tr_upper() → Source {
                     Then(Invoke(Writes(19, 0, 0, 1, 20)), Exit(7)))))))
 }
 
+
+// Refused, with the reason named: a loop counting with one of its own
+// parameters is not in counted form (reason 0, kind 5); a loop whose
+// parameter is read after it, so its moves would clobber a live word
+// (reason 13).
+fn uncounted() → Source {
+    Source::of([Buffer(16)], Then(ops([Const(64, 1, 3), Const(64, 2, 0)]), Then(Compute(Loop([2], 1, [3], 3, upper_byte(), 5, [6], [7], 8)), Exit(7))))
+}
+fn clobbers() → Source { Source::of([Buffer(16)], Then(ops([Const(64, 1, 3), Const(64, 2, 0)]), Then(Compute(byte_map()), Exit(3)))) }
+
+theorem uncounted_refused(): refused(uncounted()) = [2, 0, 0, 5, 0] { refl }
+theorem clobbers_refused(): refused(clobbers()) = [2, 0, 13, 0, 0] { refl }
