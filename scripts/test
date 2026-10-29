@@ -29,7 +29,13 @@
 # still elaborates unchanged library modules identically, which the nightly
 # master sentinel runs instead (docs/testing-architecture-design.md §2.1).
 # After an elab edit that check is most of the extra cost: every library
-# module re-elaborated.
+# module re-elaborated. Unfiltered, it also leaves out the native x86
+# certificate gates (crates/cli/tests/native*.rs, about half the suite's CPU,
+# all of it kernel-checking certificates cold on a fresh box) unless the
+# round's diff from origin/master touches what they check; one small tool
+# (`compiled_yes_runs_as_gnu_yes`) still goes through write-elf as a smoke,
+# and the sentinel runs the rest nightly (issues/pr-lane-cost-2026-10-29.md).
+# HEATHER_PR_NATIVE=all runs them anyway.
 # --long additionally runs every slow kernel self-check on every occasion
 # (crates/kernel/src/checks.rs) in its own target directory; not a gate,
 # a sweep to run when the kernel's traversals or bounds memo changed.
@@ -105,6 +111,27 @@ elif [[ "${1:-}" == --pr ]]; then
   TEST_LANE=pr
   export HEATHER_SEMANTIC_IMAGES=accept-stale
   echo "pr lane: every test runs; semantic images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the master sentinel runs the exact policy"
+  # The native certificate gates run when the round changed something they
+  # check: the native library and the machine/OS models it is proved over,
+  # write-elf, the kernel, or the gates themselves. No merge base with
+  # origin/master (a checkout without it) means run them.
+  native_paths='^(lib/native/|lib/_tests/native/|lib/std/machine/|lib/std/os/|crates/cli/src/native/|crates/cli/tests/native|crates/kernel/src/|crates/kernel-lib/)'
+  native_smoke=compiled_yes_runs_as_gnu_yes
+  if (( $# == 0 )) && [[ "${HEATHER_PR_NATIVE:-}" != all ]] &&
+     base=$(git merge-base HEAD origin/master 2>/dev/null); then
+    touched=$( { git diff --name-only "$base"; git ls-files --others --exclude-standard; } |
+               grep -E "$native_paths" | head -3 || true)
+    if [[ -z "$touched" ]]; then
+      while read -r name; do
+        [[ "$name" == "$native_smoke" ]] || SKIP+=(--skip "$name")
+      done < <(awk '/#\[test\]/ { t = 1; next }
+                    t && match($0, /fn [a-z_0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3); t = 0 }' \
+                 crates/cli/tests/native*.rs)
+      echo "pr lane: nothing the native certificate gates check changed since $(git rev-parse --short "$base"); running only $native_smoke of them (HEATHER_PR_NATIVE=all runs every one)"
+    else
+      echo "pr lane: native certificate gates run, since the round touches $(echo $touched | tr ' ' ',')"
+    fi
+  fi
 elif [[ "${1:-}" == --long ]]; then
   shift
   TEST_LANE=long
