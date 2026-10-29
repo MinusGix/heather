@@ -79,6 +79,23 @@ pub(super) struct DeclAttempt {
     pub(super) children_annotations: RefCell<Vec<(Type, (usize, u32), bool, Rc<Type>, Rc<Type>)>>,
     /// The same for a `sup_f`'s shape and arity slots, keyed by the `Wf`.
     pub(super) wf_slot_annotations: RefCell<Vec<(Type, (usize, u32), (Rc<Type>, Rc<Term>))>>,
+    /// `instance_match`'s answers (`gendefs.rs`): the subject type, compared
+    /// structurally, under its declaration's tag, the context, the binders
+    /// past it, the scratch depth and the Ψ scope — everything the match
+    /// reads. A literal names the same instantiations at every constructor
+    /// (`At(…, Block([…]))` matches `List<Instruction>` again and again;
+    /// `issues/constructor-literal-respell-cost.md`), and each match is a hole
+    /// walk, a template instantiated and walked again, and its arguments
+    /// emitted.
+    pub(super) instance_matches: RefCell<std::collections::HashMap<InstanceMatchKey, Vec<(Type, Option<(Level, Vec<Rc<Term>>)>)>>>,
+    /// A character literal checked at `Char` itself, by the character, the
+    /// context's base and length, the Ψ scope and the expected type (compared
+    /// structurally): `char::ofNat(code, decide_yes(refl))` read in `char`'s
+    /// scope (`literals.rs`) names only globals, so a second `'a'` — every
+    /// letter of every string literal — is the first one's term. Each is
+    /// otherwise an elaboration and a `Decide` resolution with its kernel
+    /// check, and the shared allocation is what the kernel's memo keys on.
+    pub(super) char_literals: RefCell<Vec<(char, (Option<u32>, usize, u32), Type, Term)>>,
 
     /// Slot retained during an argument-slot ownership probe.
     pub(super) slot_probe_target: Cell<Option<Span>>,
@@ -97,6 +114,20 @@ pub(super) struct DeclAttempt {
     pub(super) telescope: RefCell<Vec<String>>,
 }
 
+/// [`DeclAttempt::instance_matches`]' key past the subject type: the tag, the
+/// context's base and length, the binders past it, the scratch depth and the
+/// Ψ scope (`Elaborator::lowering_scope`).
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) struct InstanceMatchKey {
+    pub(super) tag: u32,
+    /// `None` for `·`, else the context variable.
+    pub(super) base: Option<u32>,
+    pub(super) len: usize,
+    pub(super) d: u32,
+    pub(super) g: u32,
+    pub(super) scope: u32,
+}
+
 impl DeclAttempt {
     /// Prepare the same state object for another attempt at the declaration.
     pub(super) fn prepare(&mut self) {
@@ -111,6 +142,8 @@ impl DeclAttempt {
         self.direct_dependencies.get_mut().clear();
         self.children_annotations.get_mut().clear();
         self.wf_slot_annotations.get_mut().clear();
+        self.instance_matches.get_mut().clear();
+        self.char_literals.get_mut().clear();
         self.goal_arena.prepare();
     }
 
@@ -124,6 +157,8 @@ impl DeclAttempt {
         self.goal_arena.finish();
         self.children_annotations.get_mut().clear();
         self.wf_slot_annotations.get_mut().clear();
+        self.instance_matches.get_mut().clear();
+        self.char_literals.get_mut().clear();
         self.op_fallback_notes.get_mut().clear();
         self.check_notes.get_mut().clear();
         self.unmarked_receivers.get_mut().clear();

@@ -240,3 +240,28 @@ theorem probe(c: Cmd, k: Resp(c) -> Tree, n: Nat, w: Seen(c, n, λ a m => Fits(k
     let (here, there) = (in_place - in_place_bare, lemma - lemma_bare);
     assert!(here <= 2 * there, "the match costs {here} in place against {there} in the lemma");
 }
+
+/// A constructor literal names the same instantiations at every node: each
+/// `At` of a `Prog`-shaped spine respells its `List<Op>` field type
+/// (`issues/constructor-literal-respell-cost.md`). The matches are answered
+/// once per declaration, so their count no longer follows the literal's
+/// length; the literal and a wrong value still check as before.
+#[test]
+fn a_constructor_literal_matches_its_instances_once() {
+    let setup = "
+inductive Seq<A> { Done, More(A, Seq<A>) }
+inductive Op { Load(Nat), Store(Nat) }
+inductive Prog { Start, At(Prog, Nat, Seq<Op>) }
+fn size(p: Prog) -> Nat { match p { Start => 0, At(q, n, ops) => Succ(size(q)) } }
+";
+    let literal = |k: usize| (0..k).fold("Start".to_owned(), |p, i| format!("At({p}, {i}, More(Load({i}), More(Store({i}), Done)))"));
+    let rows: Vec<_> = [4, 16].into_iter().map(|k| {
+        let source = format!("fn lit() -> Prog {{ {} }}\ntheorem lit_size(): size(lit()) = {k} {{ refl }}", literal(k));
+        let refusal = format!("theorem lit_wrong(): size(lit()) = {} {{ refl }}", k + 1);
+        measure_item(setup, &source, "lit", &refusal)
+    }).collect();
+    let matches: Vec<_> = rows.iter().map(|r| r.counters[stats::Counter::InstanceMatchCalls as usize]).collect();
+    eprintln!("literal of 4/16 nodes, instance matches: {matches:?}");
+    assert!(matches.iter().all(|&n| n > 0), "the literal's field types are respelled: {matches:?}");
+    assert_eq!(matches[0], matches[1], "the matches grew with the literal: {matches:?}");
+}

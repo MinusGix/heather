@@ -1,11 +1,11 @@
 ---
 title: Stop re-matching the same type instances at every constructor of a literal
-status: open
+status: closed
 labels: [elaboration,performance,native]
 area: language
 milestone: [hih-tools]
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-29
 ---
 
 Split from [[write-elf-build-constants]]. Elaborating a `Prog` literal
@@ -41,3 +41,7 @@ build at width one, `instance_match_ns` over half of it).
 
 A literal's `instance_match_calls` no longer grows with its constructor
 count, or what grows is attributed and justified.
+
+## Log
+
+- 2026-10-29: Done by the memo (2026-10-29, branch claude/project-thread-xnpxz6): `instance_match` answers are kept per declaration attempt (`DeclAttempt::instance_matches`, keyed by the subject type structurally plus tag, context base and length, binders past it, scratch depth and Ψ scope — everything the match reads; the uncached body only reads the context's base and length). A 300-`At` probe: matches fell from thousands to a constant (about two dozen), `instance_match` time by two orders of magnitude, counts of steps and conversion queries unchanged. Cold cat certificate: `at_#` matches fell about six-fold, and the family's time roughly halved. Test: `a_constructor_literal_matches_its_instances_once` (`crates/elab/tests/annotation_cost.rs`). The respell itself still happens once per distinct field type; that is the per-declaration constant the issue named.

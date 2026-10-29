@@ -18,7 +18,7 @@
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{CtxBase, Term, Type};
 use heather_syntax::{Expr, ExprKind, ScaledLit, Span};
 
 use crate::{application, Cx, ElabError, Elaborator, R};
@@ -254,10 +254,23 @@ impl Elaborator {
         lvl: &Level,
     ) -> R<Term> {
         if self.expected_is(cx, expected, CHAR_TYPE, e.span) {
+            let at = (
+                match cx.gamma.base {
+                    CtxBase::Nil => None,
+                    CtxBase::Var(v) => Some(v.0),
+                },
+                cx.gamma.entries.len(),
+                self.lowering_scope(),
+            );
+            if let Some((.., term)) = self.attempt.char_literals.borrow().iter().find(|(k, a, ty, _)| *k == c && *a == at && ty == expected) {
+                return Ok(term.clone());
+            }
             let (intro, module) = self
                 .char_intro(c, e.span)
                 .ok_or_else(|| self.literal_needs_module(CHAR_TYPE, e.span))?;
-            return self.read_in_module(&module, |s| s.elab_check(cx, &intro, expected, lvl));
+            let term = self.read_in_module(&module, |s| s.elab_check(cx, &intro, expected, lvl))?;
+            self.attempt.char_literals.borrow_mut().push((c, at, expected.clone(), term.clone()));
+            return Ok(term);
         }
         if let Some(result) =
             self.literal_class(cx, "CharLiteral", "ofChar", e, expected, lvl, e.span)

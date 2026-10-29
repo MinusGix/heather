@@ -344,3 +344,31 @@ theorem other(): Wit { Wit(n := 2, ok := refl) }
     wrong.replay_module_delta(&decoded, &identity).unwrap();
     assert!(wrong.elab_module_source("user", "import wit;\ntheorem wit_three(): wit().n = 3 { refl }\n").is_err());
 }
+
+/// Which theorems keep their proofs (`sealing.rs`) is settled for a
+/// statement like `x.IsTrue()` without running `x`: no instance of the family
+/// carries data, so the answer is the opaque one whatever `x` computes. Before,
+/// the test ran `x` to its fuel only to learn that — every `checked` statement
+/// of a write-elf certificate (`issues/native-tool-test-cold-certificate-rail.md`).
+/// The control: a family with one data arm still keeps its proof.
+#[test]
+fn a_proposition_family_statement_is_opaque_without_running_its_argument() {
+    let module = r#"
+inductive Flag { No, Yes }
+fn spin(n: Nat) -> Flag { match n { Zero => Yes, Succ(k) => spin(k) } }
+fn holds(f: Flag) -> Type { match f { No => 0 = 1, Yes => 0 = 0 } }
+fn pick(f: Flag) -> Type { match f { No => 0 = 0, Yes => Nat } }
+axiom far(): holds(spin(1000000));
+axiom near(): pick(spin(3));
+theorem far_again(): holds(spin(1000000)) { far() }
+theorem near_again(): pick(spin(3)) { near() }
+"#;
+    let mut e = Elaborator::with_prelude().unwrap();
+    let base = e.psi().bindings.len();
+    let before = heather_kernel::stats::snapshot();
+    e.elab_module_source("families", module).expect("the module checks");
+    let steps = heather_kernel::stats::snapshot().since(&before).eval_steps;
+    let kept = e.psi().sealed.iter().filter(|(i, _)| *i >= base).count();
+    assert_eq!(kept, 1, "only `near_again`, whose statement is `Nat`, keeps its proof");
+    assert!(steps < 1 << 14, "{steps} evaluator steps: `spin(1000000)` ran");
+}

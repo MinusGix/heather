@@ -1903,6 +1903,13 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// abstract prefix of Δ to the abstract prefix of Γ identically, and
     /// `·^k_{g?}` targets an empty Δ, so past the payloads the lookup falls
     /// through to the same [`Head::BaseVar`] numbering either way.
+    /// `u^δ` alone, glued to its body when it has one: what evaluating
+    /// `Term::GlobalTm` produces, for a reader that holds the head of a
+    /// neutral and wants to apply it to arguments of its own.
+    pub fn global(&mut self, var: GlobalVar, subst: VSubst<'v>) -> Rc<Val<'v>> {
+        self.global_tm(var, subst)
+    }
+
     fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> Rc<Val<'v>> {
         let body = self.defs.body_unshifted(var).map(Rc::clone);
         let unfold = body.map(|body| self.glue(var, &subst, body));

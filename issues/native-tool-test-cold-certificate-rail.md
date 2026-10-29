@@ -5,7 +5,7 @@ labels: [native,tests,perf]
 area: heather-in-heather
 milestone: [hih-tools]
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-29
 ---
 
 `compiled_cat_files_runs_as_gnu_cat` (`crates/cli/tests/native_tools.rs`)
@@ -39,3 +39,12 @@ parts.
 
 A cold run of the test (a fresh verdict store) passes under the suite's
 rails on a cloud box.
+
+## Log
+
+- 2026-10-29: Cold cost attributed and cut (2026-10-29, branch claude/project-thread-xnpxz6). Cloud box, test-profile binary, width one, `write-elf … cat_files_tool --world lib` over a store the cold gate had just written (so the library replays and the certificate checks cold):
+
+  - `{p}_checked_#` was not kernel time: it was `carries_data` (`crates/elab/src/sealing.rs`) running each statement's `checked(…).IsTrue()` to its whole fuel to learn that `True`/`False` carry no data. A family no instance of which carries data is now settled at fresh variables without running its argument (`docs/theorem-witness-unfolding-design.md` §2). The family left the top of the table.
+  - `{p}_at_#` was half `instance_match`: fixed under [[constructor-literal-respell-cost]]. The `bytes_#_#` reads shrank with it.
+
+  Whole run about 30% fewer CPU-s than before, and now well under the 300 CPU-s rail on its own (it was just over). What is left, largest first: `piece_#_is` (kernel, flat), `bytes_#_#` (the fork's reads), `at_#` (kernel, now most of it), the two `read_#_entry` reads. Leaving this open until a cold `scripts/test` run of the test itself passes in CI-like conditions; the measurement here is the write-elf run the test makes, not the test.

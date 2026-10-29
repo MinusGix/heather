@@ -290,12 +290,15 @@ impl Speller<'_> {
             // A context can carry an alias bound deeper than its own names
             // (one cut back to a prefix); that alias is not in scope here.
             let later = names.get(a.depth..)?;
+            // The term first: it is the test that almost always fails, and
+            // the shadowing scan is quadratic in the aliases in scope.
+            if !shifted_projection(&a.term, later.len() as u32, t) {
+                return None;
+            }
             let shadowed = later.iter().any(|n| *n == a.name)
                 || aliases[k + 1..].iter().any(|b| b.name == a.name);
             let written = a.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
-            (written && !shadowed && crate::spelling::same_projection(
-                &a.term.shift_local((names.len() - a.depth) as u32), t,
-            )).then(|| a.name.clone())
+            (written && !shadowed).then(|| a.name.clone())
         })
     }
 
@@ -1259,6 +1262,23 @@ fn escape_into(c: char, quote: char, out: &mut String) {
     }
 }
 
+/// `spelling::same_projection(&alias.shift_local(by), t)` without the shift
+/// unless the paths agree: a weakening keeps a projection a projection and a
+/// node of one kind that kind, and moves a variable by `by`. The shift copies
+/// the alias, and a walk asks every alias in scope at every projection it
+/// spells (omega's certificate reads its atoms this way).
+fn shifted_projection(alias: &Term, by: u32, t: &Term) -> bool {
+    match (crate::spelling::proj_of(alias), crate::spelling::proj_of(t)) {
+        (Some((af, ap)), Some((tf, tp))) => af == tf && shifted_projection(ap, by, tp),
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => match (alias, t) {
+            (Term::Var(i), Term::Var(j)) => i.0.checked_add(by) == Some(j.0),
+            _ if std::mem::discriminant(alias) != std::mem::discriminant(t) => false,
+            _ => alias.shift_local(by) == *t,
+        },
+    }
+}
+
 /// Truncate a raw node's rendering. `fmt.rs` already bounds it by nodes; this
 /// bounds it by columns, which is the axis a diagnostic is read on.
 fn elide(s: &str) -> String {
@@ -1273,6 +1293,33 @@ fn elide(s: &str) -> String {
 mod tests {
     use super::*;
     use heather_kernel::level::Level;
+
+    /// The alias test without its copy answers what the copy did, on paths
+    /// that agree, that part where the shift moves the base, and that differ
+    /// in a field, in length or in the base's kind.
+    #[test]
+    fn a_shifted_projection_agrees_with_shifting_the_alias() {
+        let var = |i| Rc::new(Term::Var(LocalVar(i)));
+        let fst = |p: Rc<Term>| Rc::new(Term::FstAt { pair: p });
+        let snd = |p: Rc<Term>| Rc::new(Term::SndAt { pair: p });
+        let aliases = [var(0), fst(var(1)), snd(fst(var(0))), fst(Rc::new(Term::Zero)), snd(Rc::new(Term::Succ(var(2))))];
+        let subjects = [
+            var(0), var(3), fst(var(1)), fst(var(4)), snd(var(4)), fst(fst(var(4))), snd(fst(var(3))),
+            snd(fst(var(2))), fst(Rc::new(Term::Zero)), snd(Rc::new(Term::Succ(var(5)))), snd(Rc::new(Term::Succ(var(2)))),
+        ];
+        for alias in &aliases {
+            for t in &subjects {
+                for by in [0, 1, 3] {
+                    assert_eq!(
+                        shifted_projection(alias, by, t),
+                        crate::spelling::same_projection(&alias.shift_local(by), t),
+                        "{alias:?} shifted by {by} against {t:?}",
+                    );
+                }
+            }
+        }
+        assert!(shifted_projection(&snd(fst(var(0))), 3, &snd(fst(var(3)))));
+    }
 
     #[test]
     fn rough_parameter_types_elide_kernel_only_nodes_and_exhausted_budgets() {
