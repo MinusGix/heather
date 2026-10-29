@@ -37,9 +37,9 @@ Case kinds (cases.tsv `kind`):
   module shares (a gendef, an instance) is vouched for here and is charged
   to whichever declaration first used it in a cold run; that is why a cold
   gate's per-item gate column can exceed this one's.
-- `warm`: `check --cache FILE` after one unmeasured run, so every module is a
-  hit. The row is the run's: what a process pays to load its world.
-- `elf-warm`: `write-elf FILE SYMBOL` after one unmeasured run, so the
+- `warm`: `check --cache FILE` after two unmeasured runs, so every module is a
+  hit and every replayed statement has its verdict. The row is the run's: what a process pays to load its world.
+- `elf-warm`: `write-elf FILE SYMBOL` after two unmeasured runs, so the
   certificate's verdicts are stored: the floor every write-elf pays.
 - `elf-cold` (heavy): `write-elf` over a fresh copy of the store each sample,
   so the certificate is kernel-checked cold, as on a fresh box.
@@ -272,11 +272,14 @@ def measure(binary, store, case, samples):
         shutil.copytree(store, own)
         store = own
     if case["kind"] in ("warm", "elf-warm"):
-        # Unmeasured: publish the root's image (and the certificate's
-        # verdicts) so every measured sample is a hit.
-        code, _, _ = run(case_command(binary, case, store, out / "elf", tsv), log)
-        if code != 0:
-            return {"error": f"priming run failed, see {log}"}
+        # Unmeasured, twice: the first publishes the images of the modules
+        # the store had none for (and the certificate's verdicts), and the
+        # second replays those images once, which records their statements'
+        # verdicts, so every measured sample is a hit.
+        for _ in range(2):
+            code, _, _ = run(case_command(binary, case, store, out / "elf", tsv), log)
+            if code != 0:
+                return {"error": f"priming run failed, see {log}"}
     if case["kind"] == "only" and case["file"].startswith("perf/"):
         # A fixture root has no image until it has been checked once.
         run([str(binary), "check", "--cache", "--cache-dir", str(store), "--world", "lib", case["file"]], log)

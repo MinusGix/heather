@@ -86,9 +86,12 @@ kind:
   process around it is mostly the replayed world, which is a case of its own
   (`native/world-replay`); an `only` case is gated on the item's seconds, not
   the process's.
-- **`warm`**: `heather check --cache FILE` after one unmeasured run, so every
+- **`warm`**: `heather check --cache FILE` after two unmeasured runs, so every
   module is an image hit and the run row is what loading the world costs.
-- **`elf-warm`**: `heather write-elf` after one unmeasured run, so the
+  Two, because a module the store had no image for is elaborated by the
+  first and replayed for the first time by the second, which is when its
+  statements' verdicts are recorded.
+- **`elf-warm`**: `heather write-elf` after two unmeasured runs, so the
   certificate's verdicts are stored. What is left is the fixed cost every
   `write-elf` pays with no kernel work.
 - **`elf-cold`** (with `--heavy`): `write-elf` over a fresh copy of the store

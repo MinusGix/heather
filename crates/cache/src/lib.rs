@@ -65,6 +65,11 @@ pub struct Counts {
     /// declaration, so on a run that gates N declarations this is N, not 2N;
     /// it was 2N until 2026-09-17 (`issues/merkle-walk-cold-share.md`).
     pub hashed: usize,
+    /// Body-less declarations whose statement image replay re-checked
+    /// ([`KernelGate::admits_statement`] said no).
+    pub statements_checked: usize,
+    /// Body-less declarations whose statement a stored verdict vouched for.
+    pub statement_hits: usize,
 }
 
 impl Counts {
@@ -73,9 +78,15 @@ impl Counts {
             checked: self.checked - earlier.checked,
             hits: self.hits - earlier.hits,
             hashed: self.hashed - earlier.hashed,
+            statements_checked: self.statements_checked - earlier.statements_checked,
+            statement_hits: self.statement_hits - earlier.statement_hits,
         }
     }
 }
+
+/// The name a statement verdict is stored under. Names are metadata
+/// (`docs/cache-v1-design.md` §8) and replay has none to give.
+pub const STATEMENT_ENTRY: &str = "<statement>";
 
 struct Inner {
     store: Store,
@@ -86,6 +97,21 @@ struct Inner {
     /// index it will land at. Lets `sync` reuse it instead of re-rendering the
     /// binding a third time.
     pending: Option<(usize, Option<Hash>)>,
+    /// The interface hash [`KernelGate::admits_statement`] computed, with the
+    /// binding it describes and the index it was asked at. Image replay asks
+    /// before it pushes the binding, so `sync` would otherwise render every
+    /// replayed statement twice. Unlike `pending` it is used only when the
+    /// binding that landed is that binding (`==`, which is pointer equality
+    /// for a replayed binding's shared children): a replay that fails after
+    /// asking lands something else at that index, and must not inherit it.
+    statement: Option<(usize, heather_kernel::term::GlobalBinding, Option<Hash>)>,
+    /// The Ψ whose first `prefix.len()` bindings `prefix` describes. An
+    /// elaborator and its forks share one gate and ask about different Ψs
+    /// in turn (`write-elf` reads its program on forks, then checks the
+    /// certificate on the parent), so `sync` keeps only as much of `prefix`
+    /// as the asking Ψ has in common with this one. `None` with an empty
+    /// prefix.
+    mark: Option<heather_kernel::term::GlobalMark>,
     /// The open questions: identities computed by [`Inner::identify`] for
     /// declarations `admits` has been asked about and `accepted` has not yet
     /// answered, keyed by the Ψ length they were asked at, then by name and
@@ -144,6 +170,8 @@ impl Cache {
                 store,
                 prefix: Vec::new(),
                 pending: None,
+                statement: None,
+                mark: None,
                 open: BTreeMap::new(),
                 counts: Counts::default(),
             }),
@@ -206,6 +234,8 @@ impl Cache {
         let mut inner = self.inner.borrow_mut();
         inner.prefix.clear();
         inner.pending = None;
+        inner.statement = None;
+        inner.mark = None;
         inner.open.clear();
     }
 }
@@ -219,24 +249,57 @@ impl Inner {
     /// what makes the cache's view of Ψ correct for a caller that pushes
     /// bindings of its own.
     fn sync(&mut self, psi: &GlobalCtx) {
-        // Belt to `Cache::begin_run`'s braces: a Ψ shorter than the prefix is
-        // certainly a different Ψ, and hashing against a stale prefix would
-        // produce keys that mean nothing. Cheap, and it fails towards
-        // recomputation rather than towards a wrong key.
-        if self.prefix.len() > psi.bindings.len() {
-            self.prefix.clear();
+        // Keep the hashes of the bindings this Ψ shares with the one the
+        // prefix was built along, and only those: hashing against a stale
+        // prefix would produce keys that mean nothing. Until 2026-10-29 a
+        // shorter Ψ cleared the prefix and a longer one was trusted unread,
+        // so each switch between an elaborator and its forks re-hashed the
+        // whole world (seconds per `write-elf`, on its first probe
+        // declaration and its certificate,
+        // `issues/native-process-fixed-cost.md`), and a fork that had grown
+        // past a sibling's bindings without asking would have hashed against
+        // the sibling's.
+        let common = match &self.mark {
+            Some(mark) => psi.bindings.common_prefix(mark).min(self.prefix.len()),
+            None => 0,
+        };
+        if common < self.prefix.len() {
+            self.prefix.truncate(common);
             self.pending = None;
-            self.open.clear();
+            self.statement = None;
+            // A question asked past the common part was asked about another
+            // Ψ's declaration.
+            self.open.split_off(&(common + 1));
         }
         while self.prefix.len() < psi.bindings.len() {
             let i = self.prefix.len();
-            let h = match self.pending.take() {
-                Some((idx, h)) if idx == i => h,
+            let h = match (self.pending.take(), self.statement.take()) {
+                (Some((idx, h)), _) if idx == i => h,
+                (_, Some((idx, b, h))) if idx == i && b == psi.bindings[i] => h,
                 _ => merkle::interface_hash(&self.prefix, &psi.bindings[i]),
             };
             self.prefix.push(h);
         }
         self.pending = None;
+        self.statement = None;
+        self.mark = Some(psi.bindings.mark());
+    }
+
+    /// The statement key of `binding` about to land at `psi.bindings.len()`,
+    /// remembering its interface hash for `sync`. `None` when unhashable.
+    fn statement_key(&mut self, psi: &GlobalCtx, binding: &heather_kernel::term::GlobalBinding) -> Option<(Hash, Hash)> {
+        self.sync(psi);
+        let at = self.prefix.len();
+        let iface = match &self.statement {
+            Some((idx, b, h)) if *idx == at && b == binding => *h,
+            _ => {
+                let h = merkle::interface_hash(&self.prefix, binding);
+                self.statement = Some((at, binding.clone(), h));
+                h
+            }
+        };
+        let iface = iface?;
+        Some((iface, merkle::statement_key(&self.prefix, &iface)?))
     }
 
     /// Interface hash and check key for the item at the gate, or `None` if
@@ -351,6 +414,36 @@ impl KernelGate for Cache {
 
     fn abandon(&self, psi: &GlobalCtx) {
         self.inner.borrow_mut().open.split_off(&psi.bindings.len());
+    }
+
+    /// A statement verdict is "the kernel accepted this binding's statement
+    /// in a context whose interfaces hash thus": the interface hash covers
+    /// the statement and, through its references, everything the statement
+    /// check reads (`merkle::statement_key`).
+    fn admits_statement(&self, psi: &GlobalCtx, binding: &heather_kernel::term::GlobalBinding) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        let hit = match inner.statement_key(psi, binding) {
+            Some((_, key)) => inner.store.contains(&key),
+            None => false,
+        };
+        if hit {
+            inner.counts.statement_hits += 1;
+        } else {
+            inner.counts.statements_checked += 1;
+        }
+        hit
+    }
+
+    fn statement_accepted(&self, psi: &GlobalCtx, binding: &heather_kernel::term::GlobalBinding, unsealed: &[usize]) {
+        // The same rule as `accepted`: a check that opened a sealed proof
+        // leaned on a body no interface hash covers.
+        if !unsealed.is_empty() {
+            return;
+        }
+        let mut inner = self.inner.borrow_mut();
+        if let Some((iface, key)) = inner.statement_key(psi, binding) {
+            inner.store.insert(key, iface, STATEMENT_ENTRY);
+        }
     }
 
     fn assumption(
