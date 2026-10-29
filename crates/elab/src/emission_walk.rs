@@ -342,6 +342,11 @@ impl Walk<'_> {
             // one slot each and **no binder under it** — the component forms'
             // `snd_ty` is walked at `d + 1`, `T` at `d`. An unannotated intro
             // and the projections have no slot at all.
+            Term::VecLit { elem, zero, one, .. } => {
+                self.slot("VecLit.elem", elem, d);
+                self.term(zero, d);
+                self.term(one, d);
+            }
             Term::PairAt { ty, fst, snd } => {
                 if let Some(ty) = ty {
                     self.slot("PairAt.ty", ty, d);

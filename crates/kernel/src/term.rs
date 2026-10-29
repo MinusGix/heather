@@ -503,6 +503,27 @@ pub enum Term {
         scrut: Rc<Term>,
     },
 
+    /// `[b₀, …, b_{w-1}]^l(T; zero, one)` — a closed prefix of a `Vec`
+    /// whose every element is one of two terms, held as a machine word
+    /// (`docs/bitvector-literal-entry-design.md` §3,
+    /// `issues/packed-vector-literal-term.md`). Observationally the
+    /// right-nested pair chain the `Vec` rule types, element `i` being `one`
+    /// when bit `i` of `bits` is set and `zero` otherwise, ending in `⟨⟩^l`:
+    /// exactly as [`Term::NatLit`] is `Succ^n(Zero)`, and with the same
+    /// one-step view ([`vec_lit_unfold`]). It names nothing — no element
+    /// type, no two-valued criterion — so its typing rule checks two
+    /// elements and not `w`; whether the *value* packs into a word is the
+    /// evaluator's question (`eval/bits.rs`), asked of the element type.
+    /// `1 ≤ width ≤ 64` and no bit at or above `width` is set.
+    VecLit {
+        level: Level,
+        elem: Rc<Type>,
+        zero: Rc<Term>,
+        one: Rc<Term>,
+        width: u32,
+        bits: u64,
+    },
+
     // ---- dependent pairs (extension beyond DeLaM ch. 04) ----
     /// `pair^{l,l'}(x:S. T; a; b) : Σ^{l,l'}(x:S). T` — dependent pair
     /// introduction. Fully annotated so it synthesizes: `snd_ty` binds one
@@ -2189,6 +2210,92 @@ pub fn is_nat_zero(t: &Term) -> bool {
 pub fn nat_lit_pred(n: &Numeral) -> Term {
     let pred = n.pred().expect("only a nonzero literal has a predecessor");
     if pred.is_zero() { Term::Zero } else { Term::NatLit(pred) }
+}
+
+/// The widest [`Term::VecLit`]: one machine word.
+pub const VEC_LIT_WIDTH_CAP: u32 = 64;
+
+/// Whether a [`Term::VecLit`]'s width and bits are in range: the typing
+/// rule's side condition, and what [`vec_lit_unfold`] relies on.
+pub fn vec_lit_in_range(width: u32, bits: u64) -> bool {
+    (1..=VEC_LIT_WIDTH_CAP).contains(&width) && (width == 64 || bits >> width == 0)
+}
+
+/// A [`Term::VecLit`]'s one-step view: the pair the `Vec` rule types at a
+/// successor length, `pair^{l,l}(_: T. Vec^l(T; w-1); e₀; rest)`, its tail
+/// the literal one element shorter, or `⟨⟩^l` at width one. These are the
+/// annotations an elaborated vector literal's chain carries
+/// (`check_vec_lit`), so a literal and its chain are the same term one step
+/// apart.
+pub fn vec_lit_unfold(
+    level: &Level,
+    elem: &Rc<Type>,
+    zero: &Rc<Term>,
+    one: &Rc<Term>,
+    width: u32,
+    bits: u64,
+) -> Term {
+    debug_assert!(vec_lit_in_range(width, bits));
+    let head = if bits & 1 == 0 { zero } else { one };
+    let rest = if width == 1 {
+        Term::Triv { level: level.clone() }
+    } else {
+        Term::VecLit {
+            level: level.clone(),
+            elem: Rc::clone(elem),
+            zero: Rc::clone(zero),
+            one: Rc::clone(one),
+            width: width - 1,
+            bits: bits >> 1,
+        }
+    };
+    let rest_len = if width == 1 { Term::Zero } else { Term::NatLit(u64::from(width - 1).into()) };
+    Term::Pair {
+        fst_level: level.clone(),
+        snd_level: level.clone(),
+        fst_ty: Rc::clone(elem),
+        snd_ty: Rc::new(Type::Vec {
+            level: level.clone(),
+            elem: Rc::new(elem.shift_local(1)),
+            len: Rc::new(rest_len),
+        }),
+        fst: Rc::clone(head),
+        snd: Rc::new(rest),
+    }
+}
+
+/// A [`Term::VecLit`] spelled out: the whole pair chain, for a reader that
+/// takes vectors apart by their components — a `box` payload's recursors,
+/// an export target. Each node is [`vec_lit_unfold`]'s, so the chain is the
+/// one the literal stands for.
+pub fn vec_lit_chain(
+    level: &Level,
+    elem: &Rc<Type>,
+    zero: &Rc<Term>,
+    one: &Rc<Term>,
+    width: u32,
+    bits: u64,
+) -> Term {
+    debug_assert!(vec_lit_in_range(width, bits));
+    let shifted = Rc::new(elem.shift_local(1));
+    let mut acc = Term::Triv { level: level.clone() };
+    for i in (0..width).rev() {
+        let rest = width - 1 - i;
+        let rest_len = if rest == 0 { Term::Zero } else { Term::NatLit(u64::from(rest).into()) };
+        acc = Term::Pair {
+            fst_level: level.clone(),
+            snd_level: level.clone(),
+            fst_ty: Rc::clone(elem),
+            snd_ty: Rc::new(Type::Vec {
+                level: level.clone(),
+                elem: Rc::clone(&shifted),
+                len: Rc::new(rest_len),
+            }),
+            fst: Rc::clone(if bits >> i & 1 == 0 { zero } else { one }),
+            snd: Rc::new(acc),
+        };
+    }
+    acc
 }
 
 // ---------------------------------------------------------------------------

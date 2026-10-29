@@ -746,6 +746,15 @@ impl Tr<'_> {
                 &[fst_level, snd_level],
                 vec![self.ty(fst_ty)?, self.lam_ty(fst_ty, snd_ty)?, self.tm(pair)?],
             )?,
+            // A packed vector literal is its pair chain to a target. The
+            // export's spelling pass already writes it out; this is for a
+            // term that reached here without one.
+            Term::VecLit { level, elem, zero, one, width, bits } => {
+                if !heather_kernel::term::vec_lit_in_range(*width, *bits) {
+                    return refuse("vector literal out of range");
+                }
+                self.tm(&heather_kernel::term::vec_lit_chain(level, elem, zero, one, *width, *bits))?
+            }
             // ---- checked spellings: the components are the target's to infer ----
             Term::PairAt { ty, fst, snd } => self.at_ty(ty, "pair", 2, vec![self.tm(fst)?, self.tm(snd)?])?,
             Term::InlAt { ty, val } => self.at_ty(ty, "inl", 2, vec![self.tm(val)?])?,

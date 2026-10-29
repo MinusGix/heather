@@ -257,6 +257,7 @@ mod tag {
     pub const E_TMM: u8 = 0x81;
     pub const E_TMDVEC: u8 = 0x82;
     pub const E_TMIWF: u8 = 0x83;
+    pub const E_VECLIT: u8 = 0x84;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -832,6 +833,16 @@ impl<'a> Walk<'a> {
             Term::SndAt { pair } => {
                 self.tag(tag::E_SND_AT);
                 self.term(pair);
+            }
+            Term::VecLit { level, elem, zero, one, width, bits } => {
+                self.tag(tag::E_VECLIT);
+                self.level(level);
+                self.ty(elem);
+                self.term(zero);
+                self.term(one);
+                self.u32(*width);
+                self.u32(*bits as u32);
+                self.u32((bits >> 32) as u32);
             }
             Term::AppAt { fun, arg } => {
                 self.tag(tag::E_APP_AT);

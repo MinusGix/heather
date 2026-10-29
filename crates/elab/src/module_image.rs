@@ -1064,6 +1064,11 @@ fn put_term_node(w: &mut Writer, term: &Term) {
         Term::InlAt { ty: None, val } => { w.byte(60); put_term(w, val); }
         Term::InrAt { ty: None, val } => { w.byte(61); put_term(w, val); }
         Term::AppAt { fun, arg } => { w.byte(62); put_term(w, fun); put_term(w, arg); }
+        // A packed vector literal (docs/bitvector-literal-entry-design.md
+        // §3): its two elements and its word, never the chain it spells.
+        Term::VecLit { level, elem, zero, one, width, bits } => {
+            w.byte(70); put_level(w, level); put_type(w, elem); put_term(w, zero); put_term(w, one); w.u32(*width); w.u64(*bits);
+        }
     }
 }
 
@@ -1138,6 +1143,11 @@ fn get_term_node(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         67 => get_tm_m(r)?,
         68 => Term::TmDVec { level: get_level(r)?, len: term_rc(r)?, fam: term_rc(r)? },
         69 => get_tm_iwf(r)?,
+        70 => {
+            let (level, elem, zero, one) = (get_level(r)?, type_rc(r)?, term_rc(r)?, term_rc(r)?);
+            let (width, bits) = (r.u32()?, r.u64()?);
+            Term::VecLit { level, elem, zero, one, width, bits }
+        }
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))
 }

@@ -3897,6 +3897,33 @@ impl Tc {
 
 
             // -- unit and empty (extension beyond ch. 04) -------------------
+            // [b₀, …, b_{w-1}]^l(T; z, o) : Vec^l(T; w) @ l
+            // (docs/bitvector-literal-entry-design.md §3.1). Two elements are
+            // checked, not `w`: every element *is* `zero` or `one`, which is
+            // what makes the literal the pair chain `vec_lit_unfold` spells
+            // and lets that chain's typing be read off these premises. The
+            // width is bounded by a word and no bit beyond it is set. Like
+            // the checked spellings it is a compact spelling of a chain the
+            // code recursors would have to see whole, so it is refused in a
+            // `box` payload, whose recursors range over component forms.
+            Term::VecLit { level, elem, zero, one, width, bits } => {
+                self.checked_spelling_admitted(env)?;
+                if !crate::term::vec_lit_in_range(*width, *bits) {
+                    return Err(TypeError::HeadMismatch);
+                }
+                self.level_wf(env, level)?;
+                self.ty_check(env, elem, level)?;
+                self.tm_check_rc(env, zero, elem, level)?;
+                self.tm_check_rc(env, one, elem, level)?;
+                Ok((
+                    Type::Vec {
+                        level: level.clone(),
+                        elem: Rc::clone(elem),
+                        len: Rc::new(Term::NatLit(u64::from(*width).into())),
+                    },
+                    level.clone(),
+                ))
+            }
             // ⟨⟩^l : Unit^l @ l.
             //
             // The level annotation is load-bearing, not decoration: without
@@ -4624,6 +4651,7 @@ fn term_head(t: &Term) -> &'static str {
         Term::ElimSEmpty { .. } => "ElimSEmpty",
         Term::ElimSquash { .. } => "ElimSquash",
         Term::Pair { .. } => "Pair",
+        Term::VecLit { .. } => "VecLit",
         Term::Fst { .. } => "Fst",
         Term::Snd { .. } => "Snd",
         Term::Triv { .. } => "Triv",

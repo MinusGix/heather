@@ -824,6 +824,14 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             fst: sub_tm(fst, m, at),
             snd: sub_tm(snd, m, at),
         },
+        Term::VecLit { level, elem, zero, one, width, bits } => Term::VecLit {
+            level: m.level(level, at),
+            elem: sub_ty(elem, m, at),
+            zero: sub_tm(zero, m, at),
+            one: sub_tm(one, m, at),
+            width: *width,
+            bits: *bits,
+        },
         Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => Term::Fst {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -2570,6 +2578,19 @@ impl Mapper for RebuildChecked<'_> {
 
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
         use crate::typing::Spelled;
+        // A packed vector literal is a compact spelling too, and needs no
+        // recorded view: it carries its own annotations, so its chain is
+        // written out directly (`term::vec_lit_chain`).
+        if let Term::VecLit { level, elem, zero, one, width, bits } = &**t {
+            if !crate::term::vec_lit_in_range(*width, *bits) {
+                return None;
+            }
+            self.seen += 1;
+            self.replaced += 1;
+            let elem = sub_ty(elem, self, at);
+            let (zero, one) = (sub_tm(zero, self, at), sub_tm(one, self, at));
+            return Some(crate::term::vec_lit_chain(level, &elem, &zero, &one, *width, *bits));
+        }
         if !matches!(
             &**t,
             Term::PairAt { .. }

@@ -1428,6 +1428,7 @@ pub fn count_term(t: &Term) -> u64 {
         Term::Pair { fst_ty, snd_ty, fst, snd, .. } => {
             count_type(fst_ty) + count_type(snd_ty) + count_term(fst) + count_term(snd)
         }
+        Term::VecLit { elem, zero, one, .. } => count_type(elem) + count_term(zero) + count_term(one),
         Term::Fst { fst_ty, snd_ty, pair, .. } | Term::Snd { fst_ty, snd_ty, pair, .. } => {
             count_type(fst_ty) + count_type(snd_ty) + count_term(pair)
         }

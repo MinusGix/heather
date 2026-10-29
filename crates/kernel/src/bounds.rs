@@ -576,6 +576,10 @@ impl Cache {
                 .opt_type_use(ty)
                 .join(self.term_use(fst))
                 .join(self.term_use(snd)),
+            Term::VecLit { elem, zero, one, .. } => self
+                .type_use(elem)
+                .join(self.term_use(zero))
+                .join(self.term_use(one)),
             Term::InlAt { ty, val: t } | Term::InrAt { ty, val: t } => {
                 self.opt_type_use(ty).join(self.term_use(t))
             }

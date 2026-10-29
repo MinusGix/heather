@@ -155,7 +155,7 @@ pub(super) fn buffers(p: &str, reader: &mut Reader<'_>, count: usize) -> Result<
     for j in 0..count {
         let capacity = reader.next()?;
         let len = reader.next()? as usize;
-        let bytes = reader.take(len)?.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect::<Vec<_>>();
+        let bytes = reader.take(len)?.iter().map(|&b| super::word_literal(8, u64::from(b))).collect::<Vec<_>>();
         let chunks: Vec<&[String]> = bytes.chunks(CHUNK).collect();
         let mut text = format!("fn {p}_it_{j}_{}() → List<BitVec(8)> {{ [] }}\n", chunks.len());
         for (k, chunk) in chunks.iter().enumerate().rev() {

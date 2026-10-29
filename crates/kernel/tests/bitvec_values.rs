@@ -392,3 +392,191 @@ fn projections_out_of_a_word_agree_with_the_chain() {
     accepts(&g, &rebuilt, &w, &ty);
     refuses(&g, &rebuilt, &word(4, 0b1111), &ty);
 }
+
+// -------------------------------------------------------------------------
+// The packed literal `Term::VecLit` (issues/kernel-native-bitvector-values.md)
+// -------------------------------------------------------------------------
+//
+// A packed literal is a compact spelling of the pair chain above, so every
+// row compares it against that chain: the evidence that the literal *is*
+// its chain, at the widths, element orders and positions where a wrong
+// reading would show. Its typing obligations are the chain's, and its
+// refusals (range, payload, `box`) are pinned by their errors.
+
+use heather_kernel::reduce::whnf_term;
+use heather_kernel::term::{vec_lit_chain, VEC_LIT_WIDTH_CAP};
+use heather_kernel::typing::{spell_checked_in_code, TypeError};
+
+fn lit_over(zero: Term, one: Term, elem: Type, width: u32, bits: u64) -> Term {
+    Term::VecLit { level: Level::Zero, elem: rty(elem), zero: rt(zero), one: rt(one), width, bits }
+}
+
+/// A packed word over `bool_like`, element 0 `False`, element 1 `True`.
+fn lit(width: u32, bits: u64) -> Term {
+    lit_over(bit(false), bit(true), bool_like(), width, bits)
+}
+
+fn mask(width: u32) -> u64 {
+    if width == 64 { u64::MAX } else { (1u64 << width) - 1 }
+}
+
+fn lit_widths() -> [u32; 4] {
+    [1, 2, VEC_LIT_WIDTH_CAP - 1, VEC_LIT_WIDTH_CAP]
+}
+
+#[test]
+fn a_packed_literal_is_its_chain_at_every_width() {
+    let g = gamma_with(&[]);
+    for width in lit_widths() {
+        let bits = 0x9e37_79b9_7f4a_7c15 & mask(width);
+        let ty = word_ty(width);
+        let l = lit(width, bits);
+        check(&g, &l, &ty);
+        accepts(&g, &l, &word(width, u128::from(bits)), &ty);
+        accepts(&g, &word(width, u128::from(bits)), &l, &ty);
+        accepts(&g, &l, &lit(width, bits), &ty);
+        for position in [0, width - 1] {
+            let flipped = bits ^ 1 << position;
+            refuses(&g, &l, &word(width, u128::from(flipped)), &ty);
+            refuses(&g, &word(width, u128::from(flipped)), &l, &ty);
+            refuses(&g, &l, &lit(width, flipped), &ty);
+        }
+    }
+}
+
+#[test]
+fn which_element_is_one_is_the_literal_s_not_the_type_s() {
+    // The swapped literal: `zero` is `True`. Its bits read as the
+    // complement — what a reader that assumed `zero` was the type's first
+    // constructor would get wrong.
+    let g = gamma_with(&[]);
+    for width in lit_widths() {
+        let ty = word_ty(width);
+        let bits = 0x0123_4567_89ab_cdef & mask(width);
+        let swapped = lit_over(bit(true), bit(false), bool_like(), width, bits);
+        check(&g, &swapped, &ty);
+        accepts(&g, &swapped, &word(width, u128::from(!bits & mask(width))), &ty);
+        accepts(&g, &swapped, &lit(width, !bits & mask(width)), &ty);
+        refuses(&g, &swapped, &lit(width, bits), &ty);
+        // A constant literal: both elements the same, so the bits are
+        // irrelevant to what it denotes.
+        let ones = lit_over(bit(true), bit(true), bool_like(), width, bits);
+        accepts(&g, &ones, &word(width, u128::from(mask(width))), &ty);
+        refuses(&g, &ones, &word(width, 0), &ty);
+    }
+}
+
+#[test]
+fn a_packed_tail_under_a_structural_prefix() {
+    // The elaborator packs a long literal's last 64 elements and keeps the
+    // rest as pairs: the chain must still meet the all-structural word,
+    // through the run's prefix-and-residual comparison.
+    let g = gamma_with(&[]);
+    let ty = word_ty(8);
+    let tail = lit(5, 0b10110);
+    let mixed = word_over(3, 0b101, tail, nat(5));
+    check(&g, &mixed, &ty);
+    accepts(&g, &mixed, &word(8, 0b10110 << 3 | 0b101), &ty);
+    refuses(&g, &mixed, &word(8, 0b10111 << 3 | 0b101), &ty);
+    refuses(&g, &mixed, &word(8, 0b10110 << 3 | 0b100), &ty);
+}
+
+#[test]
+fn open_elements_and_an_open_element_type_fall_back_to_the_chain() {
+    // Γ = (A : Ty 0, x : El A, y : El A): neither the element type nor its
+    // elements are closed, so nothing packs into a word; the literal must
+    // still be its chain, and still tell `x` from `y`.
+    let mut g = LocalCtx::nil();
+    g.entries.push(CtxEntry { ty: rty(Type::Ty(Level::Zero)), level: Level::constant(1) });
+    let el = |a: u32| Type::El { level: Level::Zero, tm: rt(Term::Var(LocalVar(a))) };
+    g.entries.push(CtxEntry { ty: rty(el(0)), level: Level::Zero });
+    g.entries.push(CtxEntry { ty: rty(el(1)), level: Level::Zero });
+    let a = el(2);
+    let (x, y) = (Term::Var(LocalVar(1)), Term::Var(LocalVar(0)));
+    let l = lit_over(x.clone(), y.clone(), a.clone(), 3, 0b010);
+    let ty = vec(a.clone(), nat(3));
+    check(&g, &l, &ty);
+    let chain = |e: [&Term; 3]| {
+        let mut out = triv();
+        for (i, e) in e.iter().enumerate().rev() {
+            let rest = vec(a.shift_local(1), nat(2 - i as u64));
+            out = pair(a.clone(), rest, (*e).clone(), out);
+        }
+        out
+    };
+    accepts(&g, &l, &chain([&x, &y, &x]), &ty);
+    refuses(&g, &l, &chain([&x, &x, &x]), &ty);
+    refuses(&g, &l, &chain([&x, &y, &y]), &ty);
+}
+
+#[test]
+fn a_literal_checks_against_a_computed_length() {
+    // The literal's type spells its length as a numeral; a checking position
+    // that computes the same length must accept it, and a different one
+    // must not.
+    let g = gamma_with(&[]);
+    let computed = vec(bool_like(), Term::Succ(rt(Term::Succ(rt(nat(2))))));
+    check(&g, &lit(4, 0b1001), &computed);
+    let wrong = vec(bool_like(), Term::Succ(rt(nat(2))));
+    assert!(check_term(&GlobalCtx::default(), 0, Layer::Prog, &g, &lit(4, 0b1001), &wrong, &Level::Zero, FUEL)
+        .is_err());
+}
+
+fn infer_err(t: &Term) -> TypeError {
+    heather_kernel::typing::infer_term(&GlobalCtx::default(), 0, Layer::Prog, &LocalCtx::nil(), t, FUEL)
+        .expect_err("should be refused")
+}
+
+#[test]
+fn an_out_of_range_or_ill_typed_literal_is_refused() {
+    assert_eq!(infer_err(&lit(0, 0)), TypeError::HeadMismatch);
+    assert_eq!(infer_err(&lit(VEC_LIT_WIDTH_CAP + 1, 0)), TypeError::HeadMismatch);
+    assert_eq!(infer_err(&lit(3, 0b1000)), TypeError::HeadMismatch);
+    // An element that is not of the element type is a refusal, even at a
+    // position no bit selects.
+    let bad = lit_over(bit(false), nat(1), bool_like(), 3, 0);
+    infer_err(&bad);
+    // The controls.
+    heather_kernel::typing::infer_term(&GlobalCtx::default(), 0, Layer::Prog, &LocalCtx::nil(), &lit(3, 0b111), FUEL)
+        .unwrap();
+}
+
+#[test]
+fn projections_of_a_literal_reduce_to_its_chain_s() {
+    let g = LocalCtx::nil();
+    let l = lit(3, 0b110);
+    let proj = |second: bool, of: Term, len: u64| {
+        let (fst_ty, snd_ty, pair) = (rty(bool_like()), rty(vec(bool_like(), nat(len - 1))), rt(of));
+        if second {
+            Term::Snd { fst_level: Level::Zero, snd_level: Level::Zero, fst_ty, snd_ty, pair }
+        } else {
+            Term::Fst { fst_level: Level::Zero, snd_level: Level::Zero, fst_ty, snd_ty, pair }
+        }
+    };
+    assert!(whnf_term(&proj(false, l.clone(), 3), &g, FUEL).unwrap() == bit(false));
+    assert!(whnf_term(&proj(true, l.clone(), 3), &g, FUEL).unwrap() == lit(2, 0b11));
+    let second = proj(false, proj(true, l, 3), 2);
+    assert!(whnf_term(&second, &g, FUEL).unwrap() == bit(true));
+    // The last element's tail is `⟨⟩`, not a width-zero literal.
+    assert!(whnf_term(&proj(true, lit(1, 1), 1), &g, FUEL).unwrap() == triv());
+}
+
+#[test]
+fn a_box_payload_sees_the_chain() {
+    // The code recursors range over component forms, so a literal under
+    // `box` is refused, and the quote boundary spells it as its chain.
+    let l = lit(3, 0b101);
+    let ty = word_ty(3);
+    let code_ty = Type::CodeTm { ctx: LocalCtx::nil(), ty: rty(ty.clone()), level: Level::Zero };
+    let in_box = |t: Term| {
+        check_term(&GlobalCtx::default(), 0, Layer::Meta, &LocalCtx::nil(), &Term::BoxTm(rt(t)), &code_ty, &Level::Zero, FUEL)
+    };
+    assert_eq!(in_box(l.clone()).unwrap_err(), TypeError::UnderBox);
+    let spelled =
+        spell_checked_in_code(&GlobalCtx::default(), 0, Layer::Code, &LocalCtx::nil(), rt(l.clone()), &ty, &Level::Zero, FUEL)
+            .unwrap();
+    let elem = rty(bool_like());
+    assert!(*spelled == vec_lit_chain(&Level::Zero, &elem, &rt(bit(false)), &rt(bit(true)), 3, 0b101));
+    in_box((*spelled).clone()).unwrap();
+    accepts(&LocalCtx::nil(), &spelled, &l, &ty);
+}
