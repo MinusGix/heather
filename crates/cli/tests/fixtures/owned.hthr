@@ -1,0 +1,10 @@
+// A module whose declarations have owners, for `--only` names that carry
+// `::` themselves (`Nat::twice`, `owned::Nat::twice`).
+fn Nat::twice(self n: Nat) -> Nat {
+    match n {
+        Zero => Zero,
+        Succ(m) => Succ(Succ(m.twice())),
+    }
+}
+
+theorem Nat::twice_zero(): Nat::twice(Zero) = Zero { refl }

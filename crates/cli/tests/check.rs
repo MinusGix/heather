@@ -594,6 +594,27 @@ fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An `--only` name may carry `::` itself: a member's owner is not a module.
+/// The module is the first segment, and only when the closure has one by
+/// that name; otherwise the whole name is the root's.
+#[test]
+fn only_reads_owner_qualified_names() {
+    let dir = cache_dir("only-owned");
+    let arg = dir.display().to_string();
+    assert_eq!(heather(&["check", "--cache-dir", &arg, "owned.hthr"]).status.code(), Some(0));
+    for name in ["Nat::twice_zero", "owned::Nat::twice_zero"] {
+        let out = heather(&["check", "--cache-dir", &arg, "--only", name, "owned.hthr"]);
+        assert_eq!(out.status.code(), Some(0), "{name}: {}", String::from_utf8_lossy(&out.stderr));
+        let line = String::from_utf8_lossy(&out.stdout);
+        assert!(line.contains("owned.hthr: ok (only) — 1 declaration elaborated for --only, "), "{name}: {line}");
+    }
+    let out = heather(&["check", "--cache-dir", &arg, "--only", "Nat::nope", "owned.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--only named `owned::Nat::nope` that no module of the closure declares"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn expectations_turn_named_refusals_into_a_green_check() {
     let out = heather(&["check", "--expectations", "expect/met.hthr"]);
