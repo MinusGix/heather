@@ -29,7 +29,11 @@ heather check --cache --only <item>[,<item>…] [--timings f.tsv] [--kernel-work
 
 - An item is `name` (a declaration of the root module) or `module::name`
   (a declaration of any module in the closure, e.g. `omega::cutsat_left_cut`
-  while checking the showcase). A mutual measure group is elaborated whole
+  while checking the showcase). The module is the first segment, and only
+  when the closure has a module by that name, so an owned declaration is
+  `Nat::add_comm` at the root or `nat::Nat::add_comm` anywhere (before
+  2026-10-29 the last `::` split it, which read `Nat` as the module and
+  refused every owned name). A mutual measure group is elaborated whole
   when any member is named — a group is one slice and one transaction.
 - `--only` requires `--cache`: the prefix comes from the store. For a module
   with named items the pass ignores the source-keyed image (a hit would

@@ -4,7 +4,7 @@ status: open
 labels: [frontend,modules,elaboration,ergonomics,design]
 area: language
 created: 2026-09-16
-updated: 2026-09-16
+updated: 2026-10-29
 ---
 
 A module that uses a language *feature* must hand-import the modules that
@@ -78,3 +78,4 @@ Two things to settle when this is picked up:
 - 2026-09-16: Filed from the `calc_parser.hthr` reexport cleanup, where the
   three imports survived a removal probe (one furnace `heather check` per
   import) and had to be kept with an explanatory comment.
+- 2026-10-29: (proof-patterns audit, [[proof-patterns-audit-2026-10]]) Another instance, probed on master 4f0ac27: `∑ k < 0, f(k) = 0` at Nat with `import nat; import relation; import big_operator;` is refused with "cannot infer the implicit arguments needed for `MonoidRel<A>(≈, op)` in `MonoidRel::range` … supply the indices explicitly with `@MonoidRel::range(…)`", which points at the call rather than at the missing instance module; adding `import algebra_rel; import semiring;` (where Nat's `CommSemiring` instance lives) makes it check. Memory had it since 2026-10-27 as "∑ at Nat without `import relation` fails with a misleading note"; `relation` alone is not enough.

@@ -142,3 +142,13 @@ theorem cutsat_combines_congruences(x, y, z: Int,
     b1: NegSucc(2) <= y, c1: y <= OfNat(3),
     b2: NegSucc(2) <= z, c2: z <= OfNat(3)): logic::False
 { omega }
+
+// A negated relation as the goal is assumed and refuted: `≠`, `¬(_ <= _)`
+// and `¬(_ < _)` at Nat and at Int.
+theorem ne_goal_nat(a, b: Nat, h: a < b): a ≠ b { omega }
+theorem ne_goal_int(a, b: Int, h: a < b): a ≠ b { omega }
+theorem not_le_goal_int(a, b: Int, h: a < b): ¬(b <= a) { omega }
+theorem not_lt_goal_nat(a, b: Nat, h: a <= b): ¬(b < a) { omega }
+// Control: the assumption has a model.
+// expect-error: `omega` got stuck
+theorem ne_goal_false(a, b: Nat, h: a <= b): a ≠ b { omega }
