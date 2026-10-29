@@ -27,9 +27,16 @@ fi
 command -v cargo >/dev/null 2>&1 || exit 0
 mkdir -p target
 log=target/session-prebuild.log
-# One prebuild per container: a resumed or compacted session must not start
-# a second one beside the session's own builds.
-[[ -e "$log" ]] && exit 0
+# One prebuild at a time: a resumed or compacted session must not start a
+# second one beside a running one. The guard is a lock the detached build
+# holds, not the log: the cloud environment's container snapshot carries
+# target/ (a log from the snapshotted session's prebuild included), so a
+# file-existence guard skipped the prebuild in every container started from
+# it (issues/session-prebuild-skipped-by-snapshot.md). A rerun after a
+# finished prebuild is a no-op build.
+command -v flock >/dev/null 2>&1 || exit 0
+exec 9>>target/session-prebuild.lock
+flock -n 9 || exit 0
 setsid nohup nice -n 10 bash -c '
   echo "session prebuild started $(date -u +%FT%TZ)"
   SECONDS=0
