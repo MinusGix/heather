@@ -8202,6 +8202,14 @@ impl Elaborator {
             );
         };
 
+        // The carrier by its code, when it has one: a field's `List<Instr>`
+        // arrives as its inline lowering, and the goal and the two
+        // conversions below would otherwise compare that against the
+        // instance's code-spelled type by unfolding every code inside it —
+        // each element type's whole sum, and every sum its fields name, per
+        // literal (`issues/native-tool-test-cold-certificate-rail.md`, log).
+        let respelled = self.respell_ty(cx, expected);
+        let expected = respelled.as_ref().unwrap_or(expected);
         let length = inductive::nat_lit(elems.len());
         let targs = [(expected.clone(), expected_level.clone())];
         let vargs = [(length.clone(), Type::Nat, Level::Zero)];
