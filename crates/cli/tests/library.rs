@@ -145,6 +145,33 @@ fn every_library_module_is_reached() {
     }
 }
 
+/// Every module a `write-elf --world lib` of a tool loads is a module of the
+/// library's world: `native_tools`' closure and the modules `write-elf`
+/// imports itself (`world::WRITE_ELF_IMPORTS`). A module outside the world
+/// loads after its process's own prefix, so the gate's `lib/native` child and
+/// `write-elf` key it differently, and the first `write-elf` after the gate
+/// elaborates it again (`issues/native-process-fixed-cost.md`). A module only
+/// `write-elf` reads joins the world by a `lib/_tests` probe that imports it,
+/// as `native_tools_tests` and `native_build_parts_tests` do.
+#[test]
+fn write_elf_loads_only_world_modules() {
+    let root = root();
+    let search = [root.join("lib/std"), root.join("lib")];
+    let world = heather_cli::world::World::of(&root.join("lib"), &search).unwrap_or_else(|e| panic!("the library's world: {}", e.msg));
+    let closure = heather_cli::loader::load_with(&root.join("lib/native/native_tools.hthr"), &search, heather_cli::world::WRITE_ELF_IMPORTS)
+        .unwrap_or_else(|e| panic!("write-elf's closure: {}", e.msg));
+    let outside: Vec<String> = closure
+        .iter()
+        .filter(|m| !world.order().contains(&m.path))
+        .map(|m| m.path.strip_prefix(&root).unwrap_or(&m.path).display().to_string())
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "modules `write-elf` loads that are not in the library's world: {outside:?}\n\
+         Import each from a `lib/_tests` probe module so the gate builds the image `write-elf` replays."
+    );
+}
+
 /// `lib/_tests` is a leaf: nothing outside it imports one of its modules, and
 /// its stems end in `_tests` so they cannot collide with the modules they
 /// mirror.

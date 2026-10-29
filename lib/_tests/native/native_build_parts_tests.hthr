@@ -1,0 +1,29 @@
+// A tool's lowering read the way `write-elf` states it, a part at a time
+// (native_build_parts, issues/native-tool-certificate-budget.md): the packing
+// of the tool's statement from the start, `Act::lowered_at(0)`, is the main
+// statement `Tool::source` gives (native_build_tests has the same tools'
+// sources whole). This module also makes native_build_parts, which no
+// library module imports, a shared module of the library's world, so the
+// gate builds the image every `write-elf --world lib` replays
+// (issues/native-process-fixed-cost.md).
+import native_build_parts;
+import native_build;
+import native_source;
+import native_compile;
+import function_ir;
+import list;
+import bitvec;
+
+// An exit's status computed into a temporary, as `exit_three`'s source.
+theorem exit_three_lowered_at(): run(exit(num(3))).opened(0).main.lowered_at(0) = Then(Stmt::leaf([Const(64, 0, 3)]), Exit(0)) {
+    refl
+}
+
+// A word bound by a `Let` and bumped in place: the constants' leaf, then the
+// wide leaf S4 does not take, as `bump_lowered`'s source.
+fn bump() → Tool { run(local(num(5), λ x => x.set(x.get() + num(1)) ++ exit(x.get()))) }
+
+theorem bump_lowered_at(): bump().opened(0).main.lowered_at(0) =
+    Then(Stmt::leaf([Const(64, 0, 5), Const(64, 2, 1)]), Then(Stmt::leaf([Add(64, 0, 0, 2)]), Exit(0))) {
+    refl
+}

@@ -43,6 +43,12 @@ it builds it (the store's single-flight lock makes a concurrent asker wait),
 and every other one replays it. A module nothing imports (a test module, a
 leaf of the library) is not in the world: it is loaded after the prefix, so
 its key depends on its own process, which is the only one that checks it.
+A module that only a command reads, not another module (`native_tools` and
+`native_build_parts`, which `write-elf` loads), is then keyed apart in the
+gate and in that command, and the command's first run elaborates it again;
+a `lib/_tests` probe that imports it makes it shared, and the gate's
+`write_elf_loads_only_world_modules` holds `write-elf`'s closure to the world
+(`issues/native-process-fixed-cost.md`).
 
 The order is built folder by folder (`world::folders`: a directory holding
 `.hthr` files is a folder with everything below it; one holding only

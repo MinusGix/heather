@@ -24,6 +24,18 @@ use std::path::{Path, PathBuf};
 
 use crate::loader::{self, LoadError, Module};
 
+/// The modules `heather write-elf` loads besides its source's closure
+/// (`native/elf.rs`): the probes and the certificate import them. Every one,
+/// with the closure of the tools it compiles, must be a module of `lib`'s
+/// world, or it is loaded after a prefix of `write-elf`'s own and its image
+/// is keyed apart from the one the library gate built
+/// (`issues/native-process-fixed-cost.md`); the gate's
+/// `write_elf_loads_only_world_modules` holds it so.
+pub const WRITE_ELF_IMPORTS: &[&str] = &["native_source", "native_source_spelled", "native_build", "native_build_parts", "native_alloc", "native_compile", "native_compile_correct", "native_compile_elf",
+    "linux_x86_64_byte_memory", "linux_x86_64_image", "linux_x86_64_io", "linux_x86_64_sim", "x86_64", "x86_64_asm", "x86_64_asm_runs",
+    "x86_64_asm_table",
+    "x86_64_byte_memory", "x86_64_data_read", "x86_64_store", "bitvec", "bool", "list", "logic", "nat", "option"];
+
 /// The shared modules of a library, in the order every check over it loads
 /// them.
 pub struct World {

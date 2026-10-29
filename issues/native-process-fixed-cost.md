@@ -88,3 +88,25 @@ those cases.
   - What is left of the warm floor: the world's one interface walk (about
     1.6 s, in `world-replay` too), decode, and `write-elf`'s own reads
     (930K evaluator steps).
+- 2026-10-29: The first `write-elf` after the gate hits every library module
+  (branch claude/project-thread-efz2wn). `lib/_tests/native/native_tools_tests`
+  and `native_build_parts_tests` import the two modules, which makes them
+  shared, so the world places them and the gate's `lib/native` child and
+  `write-elf --world lib` load them over one prefix. The probes are real:
+  the tools' fixed bytes, and `Act::lowered_at(0)` (the packing write-elf
+  states by parts) against the sources native_build_tests states whole.
+  `write-elf`'s import list moved into the lib (`world::WRITE_ELF_IMPORTS`)
+  so the gate's `write_elf_loads_only_world_modules` can hold its whole
+  closure to the world; with the probes removed it names exactly these two.
+  - Measured: a cold `check --world lib lib/native` store, then the first
+    `write-elf yes_tool` over a fresh copy of it, three interleaved samples
+    each at width one, cloud dev binary: 49.0 to 30.7 CPU-s (min).
+    `native_tools` 7.1 to 0.1 s, `native_build_parts` 17.9 to 3.3 (its
+    merkle replay), relocation 4.5 to 0.2; evaluator steps 2.91M to 2.79M,
+    identical across samples on each side.
+  - What the first run still pays over the second: the certificate itself
+    (its merkle walk and kernel check, the tool's own work) and about 3 s of
+    `image_recheck`, the statements of the modules the gate built, whose
+    verdicts only a replay records. Recording a statement verdict when the
+    building process lands a theorem would remove it; that touches what the
+    cache vouches for, so it is its own round.
