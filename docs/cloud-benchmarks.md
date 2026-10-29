@@ -154,7 +154,9 @@ generated text and for fixed costs that need a root of their own.
 2. `scripts/bench-probes --filter <case> --check` before touching anything,
    so the recorded row is known to reproduce on this box.
 3. Iterate with `--samples 1`, reading counters, which are exact at one
-   sample.
+   sample. Do not read a one-sample time: right after a warm step that
+   rebuilt images, one sample has read 1.4× its recorded row with every
+   counter unchanged, and three samples on a quiet box matched the row.
 4. Finish with three samples, `--check` over every default case (the
    neighbours are the regression check), and `--save`. Say in the commit
    which counter moved and by how much.
