@@ -1,6 +1,6 @@
 ---
 title: Record benchmark timings on the cloud box, and keep a probe suite of the slow native costs
-status: open
+status: closed
 labels: [performance,benchmarking,tooling,native]
 area: infrastructure
 milestone: [hih-tools]
@@ -48,5 +48,10 @@ re-recorded on the cloud box.
   certificate), `--only` on the top items, and a warm second `write-elf`.
   The findings and their numbers are in `perf/bench/targets.md`. New issues
   for what had no owner: [[native-process-fixed-cost]],
-  [[native-gate-child-cold-at-rail]], [[native-lemma-kernel-steps]]. The
-  kernel and frontend baselines were not re-recorded in this round.
+  [[native-gate-child-cold-at-rail]], [[native-lemma-kernel-steps]].
+- 2026-10-29: The kernel and frontend baselines were re-recorded on the cloud
+  box (`scripts/bench --save`, `scripts/bench-frontend --save`, full runs,
+  nothing else running). Six declared bands are left by the cloud slopes,
+  and [[cloud-bench-bands-out-of-range]] owns them. Every "done when" item
+  is met, so this closes; the targets' work is owned by the issues
+  `perf/bench/targets.md` names.

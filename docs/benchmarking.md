@@ -124,6 +124,8 @@ optimizations, only measurements (`issues/README.md` rule 3).
 `crates/kernel/benches/baseline.tsv`, tab-separated so it stays greppable and
 diffable, and parseable without a dependency. Rows are `env` (host, cpu,
 profile, rustc, commit), `case` (family, size, min ns), `slope`, and `stack`.
+It is recorded on the cloud box, the reference environment since 2026-10-29
+(`docs/cloud-benchmarks.md` §1); the same holds for the frontend suite's.
 Being in the tree is the point: a baseline that lives in CI artifacts is a
 baseline nobody compares against by hand.
 
