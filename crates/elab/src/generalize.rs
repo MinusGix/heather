@@ -26,7 +26,7 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
-use heather_syntax::{Arm, Expr, ExprKind, LamBinder, Span};
+use heather_syntax::{Arm, Expr, ExprKind, LamBinder, Pat, Span};
 
 use crate::surface::walk_expr;
 use crate::{Cx, Elaborator};
@@ -133,6 +133,56 @@ impl Elaborator {
         varying
     }
 
+    /// The locals a `match` on the local `scrutinee` refines: every binder
+    /// after it whose type mentions it, closed under dependency
+    /// (issues/elab-match-refines-hypothesis-kernel-rejects.md). Generalized
+    /// into the motive like a varied parameter, so in the `Zero` arm of
+    /// `match n` a hypothesis `h: ¬(n = 0)` *is* `¬(0 = 0)` — in the kernel's
+    /// term, not only in what the arm's author was told. Ascending.
+    ///
+    /// Two kinds of binder stay where they are. A hidden `#` binder is the
+    /// machinery's (an enclosing ih, a convoy window), and its reader finds
+    /// it by position, not by a name the arm could rebind. And a structural
+    /// recursion's own `match` keeps its motive the recursion's: a self-call
+    /// can pass only declared parameters, and those it varies are
+    /// [`Self::varying_params`]'s already.
+    pub(crate) fn refined_hypotheses(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrutinee: &Term,
+        dec: Option<usize>,
+    ) -> Vec<usize> {
+        let Term::Var(LocalVar(index)) = scrutinee else {
+            return Vec::new();
+        };
+        let m = cx.gamma.entries.len();
+        let x = m - 1 - *index as usize;
+        if let (Some(_), Some(s)) = (dec, cx.selfref.as_ref()) {
+            let mut calls = false;
+            for arm in arms {
+                walk_expr(&arm.body, &mut |e| {
+                    calls |= crate::recursion::surface_self_call(s, e).is_some();
+                });
+            }
+            if calls {
+                return Vec::new();
+            }
+        }
+        let mut refined: Vec<usize> = Vec::new();
+        for q in x + 1..m {
+            if cx.names[q].starts_with('#') {
+                continue;
+            }
+            let Some(entry) = cx.gamma.entries.get(q) else { break };
+            let mentions = |p: usize| entry.ty.abstract_local(&Term::Var(LocalVar((q - 1 - p) as u32))).is_some();
+            if mentions(x) || refined.iter().any(|&p| mentions(p)) {
+                refined.push(q);
+            }
+        }
+        refined
+    }
+
     /// `Π(y₁ : T_{j₁}) … Π(y_g : T_{j_g}). expected`, with every reference to a
     /// generalized parameter inside the domains and the goal pointing at the
     /// new binder. Scoped in `cx`, like `expected`; its level is the join.
@@ -174,10 +224,19 @@ impl Elaborator {
         arms.iter()
             .map(|arm| {
                 let span = arm.body.span;
+                // A pattern variable of the same name shadowed the local in
+                // the arm as written, so it still does: the generalized
+                // binder takes a name the body cannot spell.
+                let mut bound = Vec::new();
+                arm.binders.iter().for_each(|pat| pattern_names(pat, &mut bound));
                 let binders = positions
                     .iter()
                     .map(|&p| LamBinder {
-                        name: cx.names[p].clone(),
+                        name: if bound.contains(&cx.names[p].as_str()) {
+                            format!("#{}", cx.names[p])
+                        } else {
+                            cx.names[p].clone()
+                        },
                         ty: None,
                         implicit: false,
                         span,
@@ -227,6 +286,15 @@ impl Elaborator {
             term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
         }
         term
+    }
+}
+
+/// Every variable a pattern binds, however deep.
+fn pattern_names<'a>(pat: &'a Pat, out: &mut Vec<&'a str>) {
+    match pat {
+        Pat::Var { name, .. } => out.push(name),
+        Pat::Ctor { args, .. } => args.iter().for_each(|arg| pattern_names(arg, out)),
+        Pat::Named { pat, .. } => pattern_names(pat, out),
     }
 }
 

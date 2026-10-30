@@ -59,20 +59,25 @@ motives predated or ignored the synthesis.
 ## 4. The convoy over `Whole`
 
 `has_respects`, `neg_has`, `add_has`, `mul_has`, `recip_has`, `lt_of_below`
-and `le_of_below_eq` each lift a box lemma to intervals with
+and `le_of_below_eq` each lifted a box lemma to intervals with
 
 ```heather
 match I as λ K => K.Has(x) → K.add(J, p).Has(x + y) { Bnd(a, b) => λ kx => …, Whole => λ _ => trivial }(hx)
 ```
 
-The motive is there only to refine the hypothesis `hx` along with the goal.
-That is the elaborator's job ([[elab-match-refines-hypothesis-kernel-rejects]]:
-generalize the hypotheses that mention a variable scrutinee), and it is 11
-sites here and 13 in `creal_interval.hthr`. A library combinator (an
-`Interval::lift2` with one containment theorem) would also remove them, but
-only by redefining every operation through it, which the tactic and the
-`CReal` file convert through; the elaborator fix is the one that pays
-everywhere.
+The motive was there only to refine the hypothesis `hx` along with the goal.
+That is the elaborator's job now
+([[elab-match-refines-hypothesis-kernel-rejects]], closed 2026-10-30: a
+`match` on a local generalizes the hypotheses that mention it), so each is
+
+```heather
+match I { Bnd(a, b) => match J { Bnd(c, d) => Interval::add_bnd_has(a, b, c, d, p, hx, hy), Whole => trivial }, Whole => trivial }
+```
+
+7 sites here and 9 in `creal_interval.hthr`. What remains is a convoy on a
+computed scrutinee (`Interval::of_rat(lo, p)` in `span_has_real`,
+`Dyadic::lt_bool(0, lo)` in `apart_of_excludes`), which refines no
+hypothesis because it is not a local.
 
 ## 5. Two copies of the search
 
@@ -98,9 +103,8 @@ four commutations of it), `Dyadic::rat_nonneg` beside `rat_pos`,
 
 ## What is left, ranked
 
-1. [[elab-match-refines-hypothesis-kernel-rejects]] — the convoys (§4).
-   Language work; the most sites, in both interval files and wherever a
-   total interpretation has a degenerate case.
+1. ~~[[elab-match-refines-hypothesis-kernel-rejects]]~~ — the convoys
+   (§4); closed 2026-10-30.
 2. [[interval-containment-once-over-ordered-field]] — `creal_interval.hthr`
    restates 26 of these lemmas at `CReal`; proving them once over an
    ordered field folds half that file into instances, and every shape
