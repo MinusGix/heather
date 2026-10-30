@@ -254,7 +254,7 @@ impl<'v> Env<'v> {
     pub fn identity(arena: &'v ValueArena<'v>, n: u32) -> Env<'v> {
         let mut env = Env::empty();
         for level in 0..n {
-            let value = arena.val(Val::var(level));
+            let value = arena.val(Val::var(arena, level));
             env = env.push(arena, arena.tm(TmClo::val(value)));
         }
         env
@@ -358,6 +358,8 @@ pub struct ValueArena<'v> {
     /// borrow of it rather than a reference count.
     vals: Arena<Val<'v>>,
     vtys: Arena<VTy<'v>>,
+    neutrals: Arena<VNeutral<'v>>,
+    elim_cells: Arena<Elim<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
     terms: Arena<TmClo<'v>>,
@@ -766,6 +768,8 @@ impl<'v> ValueArena<'v> {
             envs: Arena::new(),
             vals: Arena::new(),
             vtys: Arena::new(),
+            neutrals: Arena::new(),
+            elim_cells: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
             terms: Arena::new(),
@@ -793,6 +797,8 @@ impl<'v> ValueArena<'v> {
                 envs: Arena::new(),
                 vals: Arena::new(),
                 vtys: Arena::new(),
+                neutrals: Arena::new(),
+                elim_cells: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),
                 terms: Arena::new(),
@@ -817,6 +823,17 @@ impl<'v> ValueArena<'v> {
     /// A value, born in this region.
     pub fn val(&'v self, value: Val<'v>) -> &'v Val<'v> {
         self.vals.alloc(value)
+    }
+
+    /// A neutral's head, spine and glue, born in this region.
+    pub fn neutral(&'v self, value: VNeutral<'v>) -> &'v VNeutral<'v> {
+        self.neutrals.alloc(value)
+    }
+
+    /// An elimination that is not a spine node — a frame's, a glued
+    /// unfolding's, an induction hypothesis's — born in this region.
+    pub fn elim_cell(&'v self, value: Elim<'v>) -> &'v Elim<'v> {
+        self.elim_cells.alloc(value)
     }
 
     /// A type value, born in this region.
@@ -1039,7 +1056,7 @@ pub enum TmClo<'v> {
     Val(&'v Val<'v>),
     Elim {
         head: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
     },
 }
 
@@ -1052,7 +1069,7 @@ impl<'v> TmClo<'v> {
         TmClo::Val(v)
     }
 
-    pub fn elim(head: &'v TmClo<'v>, elim: Rc<Elim<'v>>) -> TmClo<'v> {
+    pub fn elim(head: &'v TmClo<'v>, elim: &'v Elim<'v>) -> TmClo<'v> {
         TmClo::Elim { head, elim }
     }
 
@@ -1544,7 +1561,7 @@ pub enum Val<'v> {
     NatSync {
         program: Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
     },
     /// A fold over a *width* whose step is a bit transducer
     /// (`eval/transduce.rs`), waiting for the arguments its class fires at.
@@ -1558,9 +1575,9 @@ pub enum Val<'v> {
     BitFold {
         program: Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         class: Rc<Transducer>,
-        apps: Rc<Vec<Rc<Elim<'v>>>>,
+        apps: Rc<Vec<&'v Elim<'v>>>,
     },
     Refl {
         level: Level,
@@ -1644,7 +1661,7 @@ pub enum Val<'v> {
     /// rather than applied, it is first built as the λ it stands for
     /// (`Eval::wf_ih_lam`). A strategy change with no semantic content.
     WfIh {
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1663,7 +1680,7 @@ pub enum Val<'v> {
     /// than applied, it is first built as the λ it stands for
     /// (`Eval::w_ih_lam`). A strategy change with no semantic content.
     WIh {
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1683,7 +1700,7 @@ pub enum Val<'v> {
     /// λ it stands for (`Eval::iwf_ih_lam`). A strategy change with no
     /// semantic content.
     IWfIh {
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1711,7 +1728,7 @@ pub enum Val<'v> {
     BoxTy(Rc<Type>),
     BoxTm(Rc<Term>),
 
-    Neutral(Rc<VNeutral<'v>>),
+    Neutral(&'v VNeutral<'v>),
 }
 
 impl<'v> Val<'v> {
@@ -1821,8 +1838,8 @@ impl<'v> Val<'v> {
     }
 
     /// The neutral variable at concrete level `lvl`.
-    pub fn var(lvl: u32) -> Val<'v> {
-        Val::Neutral(Rc::new(VNeutral {
+    pub fn var(arena: &'v ValueArena<'v>, lvl: u32) -> Val<'v> {
+        Val::Neutral(arena.neutral(VNeutral {
             head: Head::Var(lvl),
             spine: ElimSpine::empty(),
             unfold: None,
@@ -1830,8 +1847,8 @@ impl<'v> Val<'v> {
     }
 
     /// The neutral variable at abstract-prefix depth `depth`.
-    pub fn base_var(depth: u32) -> Val<'v> {
-        Val::Neutral(Rc::new(VNeutral {
+    pub fn base_var(arena: &'v ValueArena<'v>, depth: u32) -> Val<'v> {
+        Val::Neutral(arena.neutral(VNeutral {
             head: Head::BaseVar(depth),
             spine: ElimSpine::empty(),
             unfold: None,

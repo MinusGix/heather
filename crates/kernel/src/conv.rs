@@ -689,7 +689,7 @@ impl<'v> Env<'v> {
 
     fn push_entry(&self, ty: Rc<Type>, vty: &'v TyClo<'v>, level: Level) -> Env<'v> {
         let mut e = self.clone();
-        let var = e.arena.tm(TmClo::val(e.arena.val(value::Val::var(
+        let var = e.arena.tm(TmClo::val(e.arena.val(value::Val::var(e.arena,
             self.gamma.entries.len() as u32,
         ))));
         e.rho = e.rho.push(e.arena, var);

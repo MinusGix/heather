@@ -89,7 +89,7 @@ fn glen<'v>(env: &Env<'v>) -> u32 {
 
 /// The neutral variable a binder pushed at Γ-length `level` is bound to.
 fn fresh<'v>(arena: &'v ValueArena<'v>, level: u32) -> &'v TmClo<'v> {
-    arena.tm(TmClo::val(arena.val(Val::var(level))))
+    arena.tm(TmClo::val(arena.val(Val::var(arena, level))))
 }
 
 /// The same variable, taken from the environment that already holds it
@@ -303,7 +303,7 @@ mod tests {
         let base = || arena.tm(TmClo::syn(rho, Rc::new(Term::Zero)));
         let step = || arena.tm(TmClo::syn(rho, Rc::new(Term::Var(LocalVar(1)))));
         let fold = |head, level, motive, base, step| TmC::here(&env, arena.tm(TmClo::elim(
-            head, Rc::new(Elim::ElimNat { level, motive, base, step }),
+            head, arena.elim_cell(Elim::ElimNat { level, motive, base, step }),
         )));
         let a = fold(head(), Level::Zero, motive(), base(), step());
         let b = fold(head(), Level::Zero, motive(), base(), step());
@@ -550,7 +550,7 @@ fn glued<'v>(v: &&'v Val<'v>) -> Option<GlobalVar> {
 /// function, an eliminator's scrutinee. The glued unfolding of the shorter
 /// spine is recovered from the longer one's, which was built as exactly that
 /// elimination applied to it.
-fn spine_head<'v>(arena: &'v ValueArena<'v>, n: &Rc<VNeutral<'v>>) -> &'v Val<'v> {
+fn spine_head<'v>(arena: &'v ValueArena<'v>, n: &VNeutral<'v>) -> &'v Val<'v> {
     let spine = n.spine.pop();
     if spine.is_empty() {
         match &n.head {
@@ -564,7 +564,7 @@ fn spine_head<'v>(arena: &'v ValueArena<'v>, n: &Rc<VNeutral<'v>>) -> &'v Val<'v
         Some(TmClo::Elim { head, .. }) => Some(*head),
         _ => None,
     };
-    arena.val(Val::Neutral(Rc::new(VNeutral {
+    arena.val(Val::Neutral(arena.neutral(VNeutral {
         head: n.head.clone(),
         spine,
         unfold,
@@ -627,7 +627,7 @@ fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32
             _ => false,
         },
         (TmClo::Elim { head: h1, elim: e1 }, TmClo::Elim { head: h2, elim: e2 }) if pending == 0 => {
-            clo_identity(h1, h2, 0, budget) && (Rc::ptr_eq(e1, e2) || match (&**e1, &**e2) {
+            clo_identity(h1, h2, 0, budget) && (std::ptr::eq::<Elim<'v>>(*e1, *e2) || match (&**e1, &**e2) {
                 (Elim::ElimNat { level: l1, motive: m1, base: z1, step: s1 },
                  Elim::ElimNat { level: l2, motive: m2, base: z2, step: s2 }) => {
                     l1 == l2 && ty_clo_identity(m1, m2, 1, budget)
@@ -1416,8 +1416,8 @@ impl<'v> Dom<'v> for Values {
     fn local(env: &Env<'v>, x: LocalVar) -> TmC<'v> {
         let n = glen(env);
         let v = match n.checked_sub(1 + x.0) {
-            Some(level) => Val::var(level),
-            None => Val::base_var(x.0 - n),
+            Some(level) => Val::var(env.arena, level),
+            None => Val::base_var(env.arena, x.0 - n),
         };
         TmC::value(env, env.arena.val(v))
     }
@@ -2108,7 +2108,7 @@ fn rec_env<'v>(rec: &RecEnv<'v>, env: &Env<'v>) -> value::Env<'v> {
 
 /// A neutral's view: its outermost elimination, with the shorter spine as the
 /// function or scrutinee. The empty spine is the head itself.
-fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v, Values> {
+fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a VNeutral<'v>) -> TmView<'a, 'v, Values> {
     let Some(last) = n.spine.last() else {
         return match &n.head {
             // A concrete local's identity is its **level**; the arms want the

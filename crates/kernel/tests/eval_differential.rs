@@ -113,7 +113,7 @@ fn fresh<'v>(arena: &'v ValueArena<'v>, gamma: &LocalCtx, k: u32) -> (LocalCtx, 
     let mut args = Vec::with_capacity(k as usize);
     for j in 0..k {
         g.entries.push(CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero });
-        args.push(arena.tm(TmClo::val(arena.val(Val::var(n + j)))));
+        args.push(arena.tm(TmClo::val(arena.val(Val::var(arena, n + j)))));
     }
     (g, args)
 }
@@ -783,7 +783,7 @@ impl<'a, 'v> Agree<'a, 'v> {
 
     /// A neutral value against a neutral term: peel the spine from the
     /// outside, matching the syntax's outermost eliminator each time.
-    fn ne(&mut self, n: &Rc<VNeutral<'v>>, w: &Term, gamma: &LocalCtx, depth: u32) -> A {
+    fn ne(&mut self, n: &'v VNeutral<'v>, w: &Term, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
@@ -795,7 +795,7 @@ impl<'a, 'v> Agree<'a, 'v> {
         // the same head, and `delta_whnf` has already forced any definition
         // at it (that is what makes this recursion well-founded against a
         // δ-reduced syntax side).
-        let prefix = Rc::new(VNeutral {
+        let prefix = self.arena.neutral(VNeutral {
             head: n.head.clone(),
             spine: rest,
             unfold: None,

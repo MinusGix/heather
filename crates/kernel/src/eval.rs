@@ -81,7 +81,7 @@ fn neutral<'v>(
     spine: ElimSpine<'v>,
     unfold: Option<&'v TmClo<'v>>,
 ) -> &'v Val<'v> {
-    arena.val(Val::Neutral(Rc::new(VNeutral { head, spine, unfold })))
+    arena.val(Val::Neutral(arena.neutral(VNeutral { head, spine, unfold })))
 }
 
 // -- materializing a closure's pending global offset -------------------------
@@ -203,7 +203,7 @@ enum Frame<'v> {
     /// A thunk being forced: its value is memoized when it arrives
     /// (`ValueArena::cache_tm`).
     Memo(&'v TmClo<'v>),
-    Elim(Rc<Elim<'v>>),
+    Elim(&'v Elim<'v>),
     /// A successor program waiting for the value its fold produced at the
     /// run's tail. A run there is merged into one program rather than left
     /// as the next fragment of a chain, so that `add`-shaped folds over
@@ -226,7 +226,7 @@ enum Frame<'v> {
     /// that flows back in place of its argument.
     SyncArg {
         head: &'v Val<'v>,
-        app: Rc<Elim<'v>>,
+        app: &'v Elim<'v>,
     },
 }
 
@@ -492,7 +492,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             TmClo::Elim { head, elim, .. } => {
                 let w = Work::Force(head);
                 self.frames.push(Frame::Memo(c));
-                self.frames.push(Frame::Elim(Rc::clone(elim)));
+                self.frames.push(Frame::Elim(*elim));
                 w
             }
         }
@@ -1264,7 +1264,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         let v = match t {
             Term::Var(x) => match env.lookup(x.0) {
                 Lookup::Bound(c) => return Ok(Work::Force(c)),
-                Lookup::Base(d) => Val::base_var(d),
+                Lookup::Base(d) => Val::base_var(self.arena, d),
             },
             // -- eliminations: the head here, the eliminator out of line --
             Term::App { fun, .. }
@@ -1938,7 +1938,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// the glue is forced ([`ValueArena::mark_sealed`]). `None` when `n` is
     /// not such a neutral.
     #[inline(never)]
-    fn unseal(&mut self, n: &VNeutral<'v>) -> Option<Rc<VNeutral<'v>>> {
+    fn unseal(&mut self, n: &VNeutral<'v>) -> Option<&'v VNeutral<'v>> {
         if n.unfold.is_some() {
             return None;
         }
@@ -1954,9 +1954,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         let mut spine: Vec<&'v Elim<'v>> = n.spine.iter_rev().collect();
         spine.reverse();
         for e in spine {
-            unfold = self.arena.tm(TmClo::elim(unfold, Rc::new(e.clone())));
+            unfold = self.arena.tm(TmClo::elim(unfold, e));
         }
-        Some(Rc::new(VNeutral { head: n.head.clone(), spine: n.spine, unfold: Some(unfold) }))
+        Some(self.arena.neutral(VNeutral { head: n.head.clone(), spine: n.spine, unfold: Some(unfold) }))
     }
 
     /// `T ⇝* W` on **syntax**, in a local context that is not the ambient
@@ -1997,15 +1997,15 @@ impl<'a, 'v> Eval<'a, 'v> {
             (Val::NatSync { .. }, Elim::App { .. }) => self.fire_nat_sync(head, e),
             (Val::NatRun { .. }, Elim::ElimNat { .. }) => self.fire_nat_run(head, e),
             (Val::WfIh { elim, label, children }, Elim::App { .. }) => {
-                let (elim, label, children) = (Rc::clone(elim), *label, *children);
+                let (elim, label, children) = (*elim, *label, *children);
                 self.wf_ih_apply(&head, &elim, label, children, e)
             }
             (Val::WIh { elim, label, children }, Elim::App { .. }) => {
-                let (elim, label, children) = (Rc::clone(elim), *label, *children);
+                let (elim, label, children) = (*elim, *label, *children);
                 self.w_ih_apply(&head, &elim, label, children, e)
             }
             (Val::IWfIh { elim, label, children }, Elim::App { .. }) => {
-                let (elim, label, children) = (Rc::clone(elim), *label, *children);
+                let (elim, label, children) = (*elim, *label, *children);
                 self.iwf_ih_apply(&head, &elim, label, children, e)
             }
             _ => self.step_fire(head, e),
@@ -2041,7 +2041,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
             if matches!(&*self.classify_step(step)?, FoldClass::Affine { .. } | FoldClass::Sync { .. }) {
                 self.spend()?;
-                self.frames.push(Frame::Elim(Rc::new(e)));
+                self.frames.push(Frame::Elim(self.arena.elim_cell(e)));
                 return Ok(Work::Force(unfold));
             }
         }
@@ -2053,12 +2053,12 @@ impl<'a, 'v> Eval<'a, 'v> {
         if self.transparent && !e.is_application() {
             if let Some(unfold) = n.unfold {
                 self.spend()?;
-                self.frames.push(Frame::Elim(Rc::new(e)));
+                self.frames.push(Frame::Elim(self.arena.elim_cell(e)));
                 return Ok(Work::Force(unfold));
             }
         }
-        let n = Rc::clone(n);
-        Ok(Work::Val(self.push_elim(&n, e)))
+        let n = *n;
+        Ok(Work::Val(self.push_elim(n, e)))
     }
 
     /// [`Eval::step_elim`] at a canonical head whose β does not re-enter
@@ -2099,7 +2099,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             (Val::Succ(pred), Elim::ElimNat { step, .. }) => {
                 self.spend()?;
                 let (pred, step) = (*pred, *step);
-                let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
+                let ih = self.arena.tm(TmClo::elim(pred, self.arena.elim_cell(e.clone())));
                 Ok(Work::Apply(step, vec![pred, ih]))
             }
             (Val::Refl { .. }, Elim::J { case, .. }) => {
@@ -2244,7 +2244,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         e: &Elim<'v>,
     ) -> Work<'v> {
         let pred = Val::nat_run_pred(self.arena, program, tail);
-        let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
+        let ih = self.arena.tm(TmClo::elim(pred, self.arena.elim_cell(e.clone())));
         Work::Apply(step, vec![pred, ih])
     }
 
@@ -2287,7 +2287,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 self.spend()?;
                 self.frames.push(Frame::SyncArg {
                     head: head,
-                    app: Rc::new(e.clone()),
+                    app: self.arena.elim_cell(e.clone()),
                 });
                 return Ok(Work::Force(unfold));
             }
@@ -2322,9 +2322,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
                 let left = self.nat_residual(cancelled.left, tail);
                 let right = self.nat_residual(cancelled.right, right_tail);
-                let folded = self.arena.tm(TmClo::elim(left, Rc::clone(elim)));
+                let folded = self.arena.tm(TmClo::elim(left, *elim));
                 let app = Elim::App { ann: ann.clone(), arg: right };
-                self.frames.push(Frame::Elim(Rc::new(app)));
+                self.frames.push(Frame::Elim(self.arena.elim_cell(app)));
                 return Ok(Work::Force(folded));
             }
         }
@@ -2333,11 +2333,11 @@ impl<'a, 'v> Eval<'a, 'v> {
         // the ordinary outer successor step and retry the application
         // on its result; no semantic case is guessed here.
         let pred = Val::nat_run_pred(self.arena, program, tail);
-        let ih = self.arena.tm(TmClo::elim(pred, Rc::clone(elim)));
+        let ih = self.arena.tm(TmClo::elim(pred, *elim));
         let Elim::ElimNat { step, .. } = &**elim else {
             unreachable!("NatSync stores a Nat eliminator")
         };
-        self.frames.push(Frame::Elim(Rc::new(e)));
+        self.frames.push(Frame::Elim(self.arena.elim_cell(e)));
         self.spend()?;
         Ok(Work::Apply(*step, vec![pred, ih]))
     }
@@ -2346,12 +2346,14 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// unfolding by the same elimination, so that forcing the unfolding
     /// replays the spine (design §5).
     #[inline(never)]
-    fn push_elim(&mut self, n: &Rc<VNeutral<'v>>, e: Elim<'v>) -> &'v Val<'v> {
-        let unfold = n
-            .unfold
-            .as_ref()
-            .map(|u| self.arena.tm(TmClo::elim(u, Rc::new(e.clone()))));
+    fn push_elim(&mut self, n: &'v VNeutral<'v>, e: Elim<'v>) -> &'v Val<'v> {
+        // The unfolding's elimination is the spine node's own: one cell,
+        // where the glue used to copy the elimination into a second.
         let spine = self.arena.elim(n.spine, e);
+        let unfold = match (n.unfold, spine.last()) {
+            (Some(u), Some(e)) => Some(self.arena.tm(TmClo::elim(u, e))),
+            _ => None,
+        };
         neutral(self.arena, n.head.clone(), spine, unfold)
     }
 
@@ -2376,7 +2378,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         {
             return Ok(None);
         }
-        let ih = self.arena.val(Val::WIh { elim: Rc::new(e.clone()), label, children });
+        let ih = self.arena.val(Val::WIh { elim: self.arena.elim_cell(e.clone()), label, children });
         let step = *step;
         Ok(Some(Work::Apply(
             step,
@@ -2492,7 +2494,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     fn w_ih_apply(
         &mut self,
         head: &'v Val<'v>,
-        elim: &Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
         e: Elim<'v>,
@@ -2505,7 +2507,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let body = *body;
             self.spend()?;
             self.spend()?;
-            self.frames.push(Frame::Elim(Rc::clone(elim)));
+            self.frames.push(Frame::Elim(elim));
             return Ok(Work::Apply1(body, arg));
         }
         match Eval::w_ih_lam(self.arena, label, children, elim).as_deref() {
@@ -2538,7 +2540,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         {
             return Ok(None);
         }
-        let ih = self.arena.val(Val::WfIh { elim: Rc::new(e.clone()), label, children });
+        let ih = self.arena.val(Val::WfIh { elim: self.arena.elim_cell(e.clone()), label, children });
         let step = *step;
         Ok(Some(Work::Apply(
             step,
@@ -2638,7 +2640,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         {
             return Ok(None);
         }
-        let ih = self.arena.val(Val::IWfIh { elim: Rc::new(e.clone()), label, children });
+        let ih = self.arena.val(Val::IWfIh { elim: self.arena.elim_cell(e.clone()), label, children });
         let step = *step;
         Ok(Some(Work::Apply(step, vec![label, children, self.vclo(ih)])))
     }
@@ -2705,7 +2707,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     fn iwf_ih_apply(
         &mut self,
         head: &'v Val<'v>,
-        elim: &Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
         e: Elim<'v>,
@@ -2751,13 +2753,13 @@ impl<'a, 'v> Eval<'a, 'v> {
         elim: &Elim<'v>,
         label: &'v TmClo<'v>,
         position: &'v TmClo<'v>,
-    ) -> Option<Rc<Elim<'v>>> {
+    ) -> Option<&'v Elim<'v>> {
         let Elim::ElimIWf { sig, motive_level, motive, step, env, .. } = elim else {
             return None;
         };
         let (rho, child) = sig.child.as_syn()?;
         let rho = rho.push(self.arena, label).push(self.arena, position);
-        Some(Rc::new(Elim::ElimIWf {
+        Some(self.arena.elim_cell(Elim::ElimIWf {
             sig: Rc::clone(sig),
             motive_level: motive_level.clone(),
             motive,
@@ -2823,7 +2825,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     fn wf_ih_apply(
         &mut self,
         head: &'v Val<'v>,
-        elim: &Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
         e: Elim<'v>,
@@ -2840,7 +2842,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             match &*i {
                 Val::Inl { .. } => {
                     self.spend()?;
-                    self.frames.push(Frame::Elim(Rc::clone(elim)));
+                    self.frames.push(Frame::Elim(elim));
                     return Ok(Work::Force(fst));
                 }
                 Val::Inr { val, .. } => {
@@ -3529,7 +3531,7 @@ mod tests {
     #[test]
     fn a_peeled_window_over_an_open_tail_stops_at_the_innermost_step() {
         let arena = ValueArena::new();
-        let x = arena.tm(TmClo::val(arena.val(Val::var(0))));
+        let x = arena.tm(TmClo::val(arena.val(Val::var(&arena, 0))));
         let head = arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(9).unwrap()),
             tail: x,
@@ -3601,7 +3603,7 @@ mod tests {
     fn a_window_over_an_open_tail_projects_the_stuck_fold() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let x = arena.tm(TmClo::val(arena.val(Val::var(0))));
+        let x = arena.tm(TmClo::val(arena.val(Val::var(&arena, 0))));
         let head = arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(9).unwrap()),
             tail: x,

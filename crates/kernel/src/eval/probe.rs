@@ -93,7 +93,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     fn probe_var(&self, level: u32) -> &'v TmClo<'v> {
-        self.vclo(self.arena.val(Val::var(level)))
+        self.vclo(self.arena.val(Val::var(self.arena, level)))
     }
 
     /// `step k ih`, driven to its δ-transparent weak head value.

@@ -78,7 +78,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             FoldClass::Sync { .. } => Ok(Some(Work::Val(self.arena.val(Val::NatSync {
                 program: Rc::clone(program),
                 tail,
-                elim: Rc::new(e.clone()),
+                elim: self.arena.elim_cell(e.clone()),
             })))),
             FoldClass::Affine { tree, uniform } => {
                 self.fold_affine(head, program, tail, e, tree, *uniform)
@@ -101,7 +101,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         uniform: bool,
     ) -> Res<Option<Work<'v>>> {
         let Elim::ElimNat { step, motive, .. } = e else { unreachable!() };
-        let fold_at_tail = self.arena.tm(TmClo::elim(tail, Rc::new(e.clone())));
+        let fold_at_tail = self.arena.tm(TmClo::elim(tail, self.arena.elim_cell(e.clone())));
         // What the iterate is applied to, its type's index, and how many
         // times the tree is applied.
         let (base, base_at, count) = if uniform {
@@ -227,7 +227,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let next_ty = match step {
                 Proj::Fst => self.force_ty(fst_ty)?,
                 Proj::Snd => {
-                    let fst_thunk = self.arena.tm(TmClo::elim(cur, Rc::new(fst_elim.clone())));
+                    let fst_thunk = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(fst_elim.clone())));
                     self.apply_ty(snd_ty, &[fst_thunk])?
                 }
             };
@@ -237,7 +237,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                 },
             };
-            cur = self.arena.tm(TmClo::elim(cur, Rc::new(elim)));
+            cur = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(elim)));
             ty = self.delta_whnf_ty(next_ty)?;
         }
         Ok(Some(cur))

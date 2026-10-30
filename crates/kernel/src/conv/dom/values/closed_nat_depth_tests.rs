@@ -116,9 +116,9 @@ fn closed_nat_equality_depth_budget_open_tails() {
     }
     let arena = ValueArena::new();
     let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
-    let x = arena.tm(TmClo::val(arena.val(Val::var(0))));
-    let same_x = arena.tm(TmClo::val(arena.val(Val::var(0))));
-    let y = arena.tm(TmClo::val(arena.val(Val::var(1))));
+    let x = arena.tm(TmClo::val(arena.val(Val::var(&arena, 0))));
+    let same_x = arena.tm(TmClo::val(arena.val(Val::var(&arena, 0))));
+    let y = arena.tm(TmClo::val(arena.val(Val::var(&arena, 1))));
     let a = chain(&env, 2048, x, true);
     let equal = chain(&env, 2048, same_x, true);
     let different = chain(&env, 2048, y, true);

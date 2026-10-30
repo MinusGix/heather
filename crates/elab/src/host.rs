@@ -497,7 +497,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 }),
                 arg,
             };
-            out = self.arena.tm(TmClo::elim(out, Rc::new(elim)));
+            out = self.arena.tm(TmClo::elim(out, self.arena.elim_cell(elim)));
             ty = cod;
         }
         Ok(out)

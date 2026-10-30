@@ -162,7 +162,7 @@ impl<'v> Walk<'_, '_, 'v> {
         let mut fresh = depth;
         for e in args {
             let Elim::App { ann, .. } = e else { return false };
-            let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(fresh))));
+            let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(self.arena, fresh))));
             fresh += 1;
             let Ok(next) = family.ev.elim(head, Elim::App { ann: ann.clone(), arg: x }) else { return false };
             head = next;
@@ -174,7 +174,7 @@ impl<'v> Walk<'_, '_, 'v> {
 
     /// A one-binder type closure under a fresh variable at level `depth`.
     fn under(&mut self, clo: &'v TyClo<'v>, depth: u32) -> Option<&'v VTy<'v>> {
-        let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(depth))));
+        let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(self.arena, depth))));
         self.ev.apply_ty(clo, &[x]).ok()
     }
 }
@@ -202,7 +202,7 @@ impl<'v> Family<'_, '_, 'v> {
                 let Val::Neutral(n) = &**tm else { return false };
                 let Some(Elim::Case { case_l, case_r, .. }) = n.spine.last() else { return false };
                 [*case_l, *case_r].into_iter().all(|arm| {
-                    let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(depth))));
+                    let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(self.arena, depth))));
                     let Ok(code) = self.ev.apply(arm, &[x]) else { return false };
                     let at = self.arena.ty_el(level.clone(), self.arena.tm(TmClo::val(code)));
                     match self.ev.force_ty(at) {

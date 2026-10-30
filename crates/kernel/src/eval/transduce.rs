@@ -137,7 +137,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     fn transduce_var(&self, level: u32) -> &'v TmClo<'v> {
-        self.vclo(self.arena.val(Val::var(level)))
+        self.vclo(self.arena.val(Val::var(self.arena, level)))
     }
 
     fn probe_transducer(
@@ -1040,7 +1040,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let next_ty = match step {
                 Proj::Fst => fst_ty,
                 Proj::Snd => {
-                    let head = self.arena.tm(TmClo::elim(cur, Rc::new(fst_elim.clone())));
+                    let head = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(fst_elim.clone())));
                     let t = self.apply_ty(snd_ty, &[head])?;
                     self.arena.ty(TyClo::val(t))
                 }
@@ -1051,7 +1051,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                 },
             };
-            cur = self.arena.tm(TmClo::elim(cur, Rc::new(elim)));
+            cur = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(elim)));
             ty = next_ty;
         }
         Ok(Some(cur))
@@ -1304,7 +1304,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         Ok(Some(Work::Val(self.arena.val(Val::BitFold {
             program: Rc::clone(program),
             tail,
-            elim: Rc::new(e.clone()),
+            elim: self.arena.elim_cell(e.clone()),
             class,
             apps: Rc::new(Vec::new()),
         }))))
@@ -1317,18 +1317,18 @@ impl<'a, 'v> Eval<'a, 'v> {
             unreachable!("bit_fold_app is given a waiting fold")
         };
         let mut collected = (**apps).clone();
-        collected.push(Rc::new(e));
+        collected.push(self.arena.elim_cell(e));
         if collected.len() < class.modes.len() {
             return Ok(Work::Val(self.arena.val(Val::BitFold {
                 program: Rc::clone(program),
                 tail,
-                elim: Rc::clone(elim),
+                elim: *elim,
                 class: Rc::clone(class),
                 apps: Rc::new(collected),
             })));
         }
         let (program, tail, elim, class) =
-            (Rc::clone(program), *tail, Rc::clone(elim), Rc::clone(class));
+            (Rc::clone(program), *tail, *elim, Rc::clone(class));
         if let Some(work) = self.fire_transducer(&program, tail, &elim, &class, &collected)? {
             return Ok(work);
         }
@@ -1341,9 +1341,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         };
         let step = *step;
         let pred = Val::nat_run_pred(self.arena, &program, tail);
-        let ih = self.arena.tm(TmClo::elim(pred, Rc::clone(&elim)));
+        let ih = self.arena.tm(TmClo::elim(pred, elim));
         for app in collected.iter().rev() {
-            self.frames.push(super::Frame::Elim(Rc::clone(app)));
+            self.frames.push(super::Frame::Elim(*app));
         }
         self.spend()?;
         Ok(Work::Apply(step, vec![pred, ih]))
@@ -1360,7 +1360,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
         class: &Rc<Transducer>,
-        apps: &[Rc<Elim<'v>>],
+        apps: &[&'v Elim<'v>],
     ) -> Res<Option<Work<'v>>> {
         let Elim::ElimNat { motive, .. } = e else { unreachable!() };
         let motive = *motive;
@@ -1519,7 +1519,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         let end = decompose(end_state, &class.state_enums);
         let mut cur = self.apply_ty(motive, &[tail_len])?;
         cur = self.delta_whnf_ty(cur)?;
-        let mut residual_apps: Vec<Rc<Elim<'v>>> = Vec::with_capacity(class.modes.len());
+        let mut residual_apps: Vec<&'v Elim<'v>> = Vec::with_capacity(class.modes.len());
         for (j, mode) in class.modes.iter().enumerate() {
             let VTy::Pi { dom_level, cod_level, dom, cod } = &*cur else {
                 return Ok(None);
@@ -1542,14 +1542,14 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
                 ArgMode::Carried => carried_end.unwrap_or(args[j]),
             };
-            residual_apps.push(Rc::new(Elim::App { ann: Some(PiAnn { dom_level, cod_level, dom, cod }), arg }));
+            residual_apps.push(self.arena.elim_cell(Elim::App { ann: Some(PiAnn { dom_level, cod_level, dom, cod }), arg }));
             cur = self.apply_ty(cod, &[arg])?;
             cur = self.delta_whnf_ty(cur)?;
         }
         let cod_at_tail = self.arena.ty(TyClo::val(cur));
-        let mut folded = self.arena.tm(TmClo::elim(tail_len, Rc::new(e.clone())));
+        let mut folded = self.arena.tm(TmClo::elim(tail_len, self.arena.elim_cell(e.clone())));
         for app in &residual_apps {
-            folded = self.arena.tm(TmClo::elim(folded, Rc::clone(app)));
+            folded = self.arena.tm(TmClo::elim(folded, *app));
         }
 
         match &class.output {
