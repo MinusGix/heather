@@ -52,3 +52,7 @@ named at every `Rat::le_trans` (`widen_has`).
   `Respects2` instances.
 - **[[monotonicity-tactic]]** owns `mono`. Assumed here: only that a
   preprocessing step on the goal's two sides can run before its comparison.
+
+## Log
+
+- 2026-10-30: [[casting-standard]] (docs/casting-design.md §6) places this step in a cast standard: per-edge move/elim/squash law tables, `push_cast` and `norm_cast` over them, `mono` and `ring` as consumers. The step is needed under every surface option, so it can start before the surface is decided.
