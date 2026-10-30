@@ -551,30 +551,7 @@ impl SemanticSession {
     /// The canonical order of the closure of a module with these imports
     /// (`docs/module-dag-design.md` §2), from the finished modules' own.
     fn canon_of(&self, imports: &[String]) -> Canon {
-        let Some(big) = imports
-            .iter()
-            .max_by(|a, b| self.done[*a].canon.order.len().cmp(&self.done[*b].canon.order.len()).then(b.cmp(a)))
-        else {
-            return Canon::default();
-        };
-        let mut order: Vec<String> = (*self.done[big].canon.order).clone();
-        order.push(big.clone());
-        let spine = order.len();
-        let mut placed: HashSet<String> = order.iter().cloned().collect();
-        fn visit(done: &HashMap<String, Finished>, m: &str, placed: &mut HashSet<String>, order: &mut Vec<String>) {
-            if placed.contains(m) {
-                return;
-            }
-            for d in &done[m].imports {
-                visit(done, d, placed, order);
-            }
-            placed.insert(m.to_string());
-            order.push(m.to_string());
-        }
-        for m in imports {
-            visit(&self.done, m, &mut placed, &mut order);
-        }
-        Canon { order: Rc::new(order), spine }
+        canon_over(imports, &|m| &self.done[m].canon.order, &|m| &self.done[m].imports)
     }
 
     /// Ψ length of the world `order` (after the prelude).
@@ -1414,6 +1391,46 @@ pub fn written_imports(src: &str) -> Vec<String> {
     }
 }
 
+/// The canonical order of the closure of a module with these imports
+/// (`docs/module-dag-design.md` §2): the largest import's order and that
+/// import (the least name on a tie), then the rest of the closure depth
+/// first over the other imports in their sorted order. `order_of` and
+/// `imports_of` give each module below it its own order and its sorted
+/// imports. The session and the build planner share it, so they agree on
+/// every key.
+fn canon_over<'a>(
+    imports: &[String],
+    order_of: &dyn Fn(&str) -> &'a Rc<Vec<String>>,
+    imports_of: &dyn Fn(&str) -> &'a [String],
+) -> Canon {
+    let Some(big) = imports.iter().max_by(|a, b| order_of(a).len().cmp(&order_of(b).len()).then(b.cmp(a))) else {
+        return Canon::default();
+    };
+    let mut order: Vec<String> = (**order_of(big)).clone();
+    order.push(big.clone());
+    let spine = order.len();
+    let mut placed: HashSet<String> = order.iter().cloned().collect();
+    fn visit<'a>(
+        imports_of: &dyn Fn(&str) -> &'a [String],
+        m: &str,
+        placed: &mut HashSet<String>,
+        order: &mut Vec<String>,
+    ) {
+        if placed.contains(m) {
+            return;
+        }
+        for d in imports_of(m) {
+            visit(imports_of, d, placed, order);
+        }
+        placed.insert(m.to_string());
+        order.push(m.to_string());
+    }
+    for m in imports {
+        visit(imports_of, m, &mut placed, &mut order);
+    }
+    Canon { order: Rc::new(order), spine }
+}
+
 fn internal_failure(module: &str, why: String) -> ModuleOutcome {
     ModuleOutcome {
         errors: vec![ElabError::Elab {
@@ -1568,4 +1585,101 @@ impl WorldModule {
 fn put_str(h: &mut Sha256, s: &str) {
     h.update(&(s.len() as u64).to_le_bytes());
     h.update(s.as_bytes());
+}
+
+/// Where a module stands in a [`BuildPlan`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildState {
+    /// Its image is in the store.
+    Built,
+    /// Every module of its closure is built and it is not: checking it now
+    /// elaborates it over images.
+    Ready,
+    /// Some module of its closure is not built yet.
+    Waiting,
+}
+
+/// The modules of a load that have no image yet, found without loading
+/// anything (`docs/module-dag-design.md` §12): a module's key is its source,
+/// its lint profile and the interface hashes of its closure's images, which
+/// their headers record, so the keys can be chained up the import graph by
+/// reading headers. A scheduler checks the ready modules one process each and
+/// refreshes the plan as they land.
+pub struct BuildPlan {
+    images: ModuleImageCache,
+    freshness: ImageFreshness,
+    modules: Vec<Module>,
+    imports: Vec<Vec<String>>,
+    canon: Vec<Canon>,
+    at: HashMap<String, usize>,
+    identity: Vec<Option<Hash32>>,
+    state: Vec<BuildState>,
+}
+
+type Hash32 = [u8; 32];
+
+impl BuildPlan {
+    /// `modules` in the loader's order (every import before its importer).
+    pub fn new(cache_dir: PathBuf, freshness: ImageFreshness, modules: Vec<Module>) -> Self {
+        let at: HashMap<String, usize> = modules.iter().enumerate().map(|(i, m)| (m.name.clone(), i)).collect();
+        let mut imports: Vec<Vec<String>> = Vec::with_capacity(modules.len());
+        let mut canon: Vec<Canon> = Vec::with_capacity(modules.len());
+        for m in &modules {
+            let mut written: Vec<String> = written_imports(&m.src).into_iter().filter(|d| at.contains_key(d)).collect();
+            written.sort();
+            written.dedup();
+            let c = canon_over(&written, &|d| &canon[at[d]].order, &|d| &imports[at[d]]);
+            imports.push(written);
+            canon.push(c);
+        }
+        let n = modules.len();
+        let mut plan = Self {
+            images: ModuleImageCache::new(cache_dir),
+            freshness,
+            modules,
+            imports,
+            canon,
+            at,
+            identity: vec![None; n],
+            state: vec![BuildState::Waiting; n],
+        };
+        plan.refresh();
+        plan
+    }
+
+    /// Read the headers of the modules not yet known built, in order.
+    pub fn refresh(&mut self) {
+        for i in 0..self.modules.len() {
+            if self.state[i] == BuildState::Built {
+                continue;
+            }
+            let ids: Option<Vec<Hash32>> = self.canon[i].order.iter().map(|d| self.identity[self.at[d]]).collect();
+            let Some(ids) = ids else {
+                self.state[i] = BuildState::Waiting;
+                continue;
+            };
+            let m = &self.modules[i];
+            let key = ModuleCacheKey::for_source(&m.name, &m.src, &ModuleDependencyIdentity::new(ids), m.lint_profile());
+            match self.images.recorded_interface(key, self.freshness) {
+                Some(id) => {
+                    self.identity[i] = Some(id);
+                    self.state[i] = BuildState::Built;
+                }
+                None => self.state[i] = BuildState::Ready,
+            }
+        }
+    }
+
+    pub fn modules(&self) -> &[Module] {
+        &self.modules
+    }
+
+    pub fn state(&self, i: usize) -> BuildState {
+        self.state[i]
+    }
+
+    /// The modules `i` imports, as indices.
+    pub fn imports(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
+        self.imports[i].iter().map(|d| self.at[d])
+    }
 }

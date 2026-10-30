@@ -26,8 +26,6 @@ fn root() -> PathBuf {
 /// the loader searches every folder below `-L`, so a mirror of `arith` cannot
 /// also be called `arith`).
 const TESTS_DIR: &str = "lib/_tests";
-/// The gate's last folders, in this order (`every_library_module_checks`).
-const NATIVE_FOLDERS: [&str; 2] = ["lib/native", "lib/_tests/native"];
 
 /// Modules nothing imports that are kept on purpose, each with its reason.
 /// A module lands here only when someone decides it should stay without a
@@ -218,17 +216,19 @@ fn gate_folders() -> Vec<PathBuf> {
     folders.into_iter().map(|p| p.strip_prefix(&root).expect("under the root").to_path_buf()).collect()
 }
 
-/// Every module under `lib/` checks, `lib/_tests` included: one `heather
-/// check` per folder ([`gate_folders`]), three side by side, through one semantic
-/// cache at width one as `scripts/test` runs every child. Folders share
-/// modules, and every module is checked over its own import closure
-/// (`docs/module-dag-design.md`), so its image has one key in every child that
-/// loads it: the first child to need it builds it, and a child that finds
-/// another building it checks a module of its own meanwhile (§7). The store
-/// is the showcase gate's too ([`showcase::CLI_CHECK_IMAGES`]); its
-/// single-flight build makes a child with nothing else to do wait for the
-/// other's image rather than elaborate it again. Warm, every module replays;
-/// a changed module or compiler re-elaborates what changed.
+/// Every module under `lib/` checks, `lib/_tests` included, in two steps
+/// over one semantic cache at width one as `scripts/test` runs every child.
+/// First every module without an image is elaborated in a `heather check` of
+/// its own, three at a time, longest chain first (`--build-jobs`,
+/// `docs/module-dag-design.md` §12), so each module's CPU rail is its own and
+/// the gate's length is the import graph's critical path. Then one `heather
+/// check` per folder ([`gate_folders`]), three side by side, replays its
+/// closure and reports what it holds: its warnings, its matched refusals, and
+/// the errors of any module the first step could not build, which it
+/// elaborates again to say why. Every module is checked over its own import
+/// closure, so its image has one key in every process that loads it. The
+/// store is the showcase gate's too ([`showcase::CLI_CHECK_IMAGES`]). Warm,
+/// the first step finds nothing to build and every module replays.
 /// The fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`) replays
 /// images an earlier build wrote, as the showcase gate does.
 ///
@@ -241,26 +241,31 @@ fn gate_folders() -> Vec<PathBuf> {
 fn every_library_module_checks() {
     let root = root();
     let stale = std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale");
-    // Three at a time, as the suite runner runs targets: each child may
-    // hold a library prefix in memory.
-    // The library's folders before `lib/_tests`'s, each part with small
-    // closures first (the order `World::folders` places them in), and the
-    // native folders after both. A child builds whatever of its closure no
-    // child has built yet, under its own CPU rail
-    // (`docs/module-dag-design.md` §7). A test folder's closure is mostly
-    // library and its own modules are its heaviest, so starting it after the
-    // library's children keeps it paying for its own modules (a cold suite
-    // put `lib/_tests/std/tactic` over the rail when it started beside
-    // `lib/std/tactic`, 2026-10-30). `lib/native`'s own modules alone sit
-    // near the rail (`issues/native-gate-child-cold-at-rail.md`), so it
-    // starts when the rest of its closure is built, as in the old chain.
+    let images_flags = |cmd: &mut Command| {
+        cmd.current_dir(&root);
+        cmd.env("HEATHER_KERNEL_WORKERS", "1");
+        cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+        cmd.arg("--expectations");
+        if stale {
+            cmd.arg("--accept-stale-images");
+        }
+    };
+    // Three at a time, as the suite runner runs targets: each process may
+    // hold a closure of the library in memory.
+    let mut build = Command::new(env!("CARGO_BIN_EXE_heather"));
+    build.arg("check");
+    images_flags(&mut build);
+    let out = build.args(["--build-jobs", "3", "--build-only", "lib"]).output().expect("run heather check");
+    let built = String::from_utf8_lossy(&out.stderr).into_owned();
+    // Printed with `--nocapture`: what the first step built, and what it
+    // could not (the folder checks below report why).
+    eprintln!("{}", built.lines().filter(|l| l.starts_with("build: ")).collect::<Vec<_>>().join("\n"));
+    assert!(out.status.success(), "the build step did not run: {built}");
+    // Small closures first, the order `World::folders` places them in. Every
+    // module that can be built already is, so a child replays.
     let world = heather_cli::world::World::of(&root.join("lib"), &[root.join("lib/std"), root.join("lib")]).unwrap_or_else(|e| panic!("the library's world: {}", e.msg));
     let mut folders = gate_folders();
-    folders.sort_by_key(|f| {
-        let position = world.folders().iter().position(|w| w.starts_with(root.join(f))).unwrap_or(usize::MAX);
-        let native = NATIVE_FOLDERS.iter().position(|n| f == Path::new(n));
-        (native, f.starts_with(TESTS_DIR), position)
-    });
+    folders.sort_by_key(|f| world.folders().iter().position(|w| w.starts_with(root.join(f))).unwrap_or(usize::MAX));
     let queue = std::sync::Mutex::new(std::collections::VecDeque::from(folders));
     let failures = std::sync::Mutex::new(Vec::new());
     let started = std::time::Instant::now();
@@ -270,19 +275,13 @@ fn every_library_module_checks() {
                 let Some(folder) = queue.lock().expect("queue").pop_front() else { break };
                 let begun = started.elapsed().as_secs_f64();
                 let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
-                cmd.current_dir(&root).arg("check");
-                cmd.env("HEATHER_KERNEL_WORKERS", "1");
-                cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
-                cmd.arg("--expectations");
-                if stale {
-                    cmd.arg("--accept-stale-images");
-                }
+                cmd.arg("check");
+                images_flags(&mut cmd);
                 cmd.arg(&folder);
                 let out = cmd.output().expect("run heather check");
                 let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
                 text.push_str(&String::from_utf8_lossy(&out.stderr));
-                // Printed with `--nocapture` and in a failure's log: which
-                // folders the gate's chain of module builds waited on.
+                // Printed with `--nocapture` and in a failure's log.
                 eprintln!("gate folder\t{}\t{begun:.1}\t{:.1}", folder.display(), started.elapsed().as_secs_f64());
                 let ok_line = format!("{}: ok", folder.display());
                 if !out.status.success() || !text.contains(&ok_line) {

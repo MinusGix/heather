@@ -100,7 +100,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--build-jobs <n> [--build-only]] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
@@ -157,6 +157,14 @@ struct Opts {
     /// own closure in every process (`docs/module-dag-design.md`).
     #[allow(dead_code)]
     world: Option<PathBuf>,
+    /// `--build-jobs N`: before checking, elaborate every module of the load
+    /// that has no image yet, each in a `heather check` of its own, up to N
+    /// at a time, a module once its closure's images exist and the longest
+    /// chain first (`docs/module-dag-design.md` §12). Each process spends
+    /// its own CPU rail on its own module; the check that follows replays.
+    build_jobs: Option<usize>,
+    /// `--build-only`: stop after `--build-jobs`' builds.
+    build_only: bool,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -176,6 +184,8 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         kernel_workers: None,
         expectations: false,
         world: None,
+        build_jobs: None,
+        build_only: false,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -240,6 +250,22 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             opts.expectations = true;
             continue;
         }
+        if let Some(rest) = a.strip_prefix("--build-jobs") {
+            let spec = match rest.strip_prefix('=') {
+                Some(n) if !n.is_empty() => n.to_string(),
+                _ if rest.is_empty() => it.next().ok_or("`--build-jobs` needs a count")?.clone(),
+                _ => return Err(format!("unknown option `{a}`")),
+            };
+            match spec.parse::<usize>() {
+                Ok(n) if n > 0 => opts.build_jobs = Some(n),
+                _ => return Err("`--build-jobs` needs a positive integer".into()),
+            }
+            continue;
+        }
+        if a == "--build-only" {
+            opts.build_only = true;
+            continue;
+        }
         if let Some(rest) = a.strip_prefix("--only") {
             let spec = match rest.strip_prefix('=') {
                 Some(d) if !d.is_empty() => d.to_string(),
@@ -294,6 +320,12 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
                 opts.search.push(PathBuf::from(dir));
             }
         }
+    }
+    if opts.build_jobs.is_some() && !opts.cache {
+        return Err("`--build-jobs` builds module images: pass `--cache` (or `--cache-dir`)".into());
+    }
+    if opts.build_only && opts.build_jobs.is_none() {
+        return Err("`--build-only` needs `--build-jobs`".into());
     }
     if opts.only.is_some() && !opts.cache {
         return Err("`--only` replays the rest of the module from the cache: pass `--cache` (or `--cache-dir`)".into());
@@ -392,6 +424,12 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
+        if let Some(jobs) = opts.build_jobs {
+            build_ahead(opts, &search, modules.clone(), jobs);
+            if opts.build_only {
+                continue;
+            }
+        }
         let mut root_ok = true;
         // `--only`'s names, per module: `mod::name` names a module of the
         // closure, any other name the root module. Module names are stems,
@@ -981,6 +1019,97 @@ fn child_dirs(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// search directory after a miss in them (so a private `shadow/base.hthr`
 /// cannot shadow or conflict with the public `base.hthr`). Module names
 /// remain flat: duplicate names below are still ambiguous.
+/// `--build-jobs`: elaborate the modules of `modules` that have no image,
+/// one `heather check` each, `jobs` at a time (`docs/module-dag-design.md`
+/// §12). A module is started once every module of its closure has an image,
+/// longest remaining chain first, measured in source bytes. One that fails
+/// is reported with the tail of its output and leaves its dependents
+/// unbuilt; the check that follows elaborates and reports them as usual.
+fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jobs: usize) {
+    use heather_cli::semantic::{BuildPlan, BuildState};
+    let mut plan = BuildPlan::new(opts.cache_dir.clone(), opts.images, modules);
+    let n = plan.modules().len();
+    let mut dependents = vec![Vec::new(); n];
+    for i in 0..n {
+        for d in plan.imports(i) {
+            dependents[d].push(i);
+        }
+    }
+    // In the loader's order every importer comes after what it imports.
+    let mut chain = vec![0usize; n];
+    for i in (0..n).rev() {
+        chain[i] = plan.modules()[i].src.len() + dependents[i].iter().map(|&d| chain[d]).max().unwrap_or(0);
+    }
+    let exe = std::env::current_exe().expect("the running binary");
+    let logs = std::env::temp_dir().join(format!("heather-build-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&logs);
+    let mut started = vec![false; n];
+    let mut running: Vec<(usize, std::process::Child, PathBuf)> = Vec::new();
+    let (mut built, mut failed) = (0usize, Vec::new());
+    loop {
+        plan.refresh();
+        while running.len() < jobs {
+            let Some(i) = (0..n)
+                .filter(|&i| !started[i] && plan.state(i) == BuildState::Ready)
+                .max_by_key(|&i| (chain[i], std::cmp::Reverse(i)))
+            else {
+                break;
+            };
+            started[i] = true;
+            let m = &plan.modules()[i];
+            let log = logs.join(format!("{}.log", m.name));
+            let mut cmd = std::process::Command::new(&exe);
+            cmd.arg("check").arg("--cache-dir").arg(&opts.cache_dir);
+            if opts.images == ImageFreshness::AcceptStale {
+                cmd.arg("--accept-stale-images");
+            }
+            if opts.expectations {
+                cmd.arg("--expectations");
+            }
+            for dir in search {
+                cmd.arg("-L").arg(dir);
+            }
+            cmd.arg(&m.path);
+            let out = std::fs::File::create(&log).expect("a build log");
+            cmd.stdout(std::process::Stdio::null()).stderr(out);
+            match cmd.spawn() {
+                Ok(child) => running.push((i, child, log)),
+                Err(e) => failed.push(format!("{}: could not start: {e}", m.name)),
+            }
+        }
+        if running.is_empty() {
+            break;
+        }
+        // No wait-any in std: poll the few children there are.
+        let finished = loop {
+            if let Some(k) = running.iter_mut().position(|(_, child, _)| matches!(child.try_wait(), Ok(Some(_)) | Err(_))) {
+                break running.swap_remove(k);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let (i, mut child, log) = finished;
+        let status = child.wait();
+        if status.as_ref().is_ok_and(|s| s.success()) {
+            built += 1;
+        } else {
+            let text = std::fs::read_to_string(&log).unwrap_or_default();
+            let tail: Vec<&str> = text.lines().rev().take(12).collect();
+            let status = status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
+            failed.push(format!(
+                "{} ({status}):\n{}",
+                plan.modules()[i].name,
+                tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            ));
+        }
+        let _ = std::fs::remove_file(&log);
+    }
+    let _ = std::fs::remove_dir(&logs);
+    for f in &failed {
+        eprintln!("build: {f}");
+    }
+    eprintln!("build: {built} module{} built ahead, {} failed", if built == 1 { "" } else { "s" }, failed.len());
+}
+
 fn search_for_path(path: &Path, configured: &[PathBuf]) -> Vec<PathBuf> {
     let mut search = configured.to_vec();
     if path.is_dir() && !same_search_dir(&search, path) {

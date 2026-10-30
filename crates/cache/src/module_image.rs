@@ -834,6 +834,28 @@ impl ModuleImageCache {
         Some(file)
     }
 
+    /// The interface hash an image for `key` records, read from its header
+    /// alone: what a planner chains the keys of the modules above it from,
+    /// without decoding anything (`docs/module-dag-design.md` §12). `None`
+    /// when there is no image this freshness would load, or it records
+    /// refusals of another build (which no session replays). Unchecked: a
+    /// damaged image is found by the load that follows, which elaborates
+    /// the module instead.
+    pub fn recorded_interface(&self, key: ModuleCacheKey, freshness: ImageFreshness) -> Option<[u8; 32]> {
+        let mut file = std::fs::File::open(self.path(key)).ok()?;
+        let mut head = [0u8; HEADER];
+        file.read_exact(&mut head).ok()?;
+        if &head[..8] != MAGIC || head[8..40] != key.0 {
+            return None;
+        }
+        let current = head[40..72] == SemanticsIdentity::current().0;
+        let refusals = u64::from_le_bytes(head[128..136].try_into().unwrap());
+        if !current && (freshness == ImageFreshness::Exact || refusals > 0) {
+            return None;
+        }
+        Some(head[72..104].try_into().unwrap())
+    }
+
     /// Whether another process is building `key` now: no image yet, and its
     /// build lock is held. A scheduler sets such a module aside and checks
     /// another whose imports it has, rather than wait
