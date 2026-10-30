@@ -121,3 +121,7 @@ theorem creal_substituted(x, x2, y: CReal, h: x ≈ x2): x * y + y ≈ (x2 + 1) 
 theorem rat_not_identity(x, y: Rat): (x + y) * (x + y) ≈ x * x + y * y { ring }
 // expect-error: no combination
 theorem creal_no_combination(x, y: CReal, h: x ≈ y): x * x ≈ y { ring(h) }
+// A checking form met where nothing is expected
+// (issues/checking-tactic-in-inference-position-diagnostic.md).
+// expect-error: `ring` needs an expected type
+theorem let_ring_unannotated(a: Int): a + a = a * 2 { let k = ring; k }

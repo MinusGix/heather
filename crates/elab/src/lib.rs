@@ -9743,6 +9743,25 @@ impl Elaborator {
                         span,
                     );
                 }
+                // The proof-search tactics are checking forms too: met where
+                // nothing is expected, the name is not a missing import
+                // (`issues/checking-tactic-in-inference-position-diagnostic.md`).
+                if matches!(name, "omega" | "ring" | "linarith" | "nlinarith" | "bv_omega" | "positivity") {
+                    let call = if matches!(name, "bv_omega" | "positivity") {
+                        name.to_string()
+                    } else {
+                        format!("{name}(…)")
+                    };
+                    return err(
+                        format!(
+                            "`{name}` needs an expected type (it is checking-only, like `refl`): it \
+                             proves a goal, so it only means anything where one is known (a \
+                             `theorem` body, an annotated `let`, an argument)\n  hint: state what \
+                             it proves: `let k: (T) = {call};`"
+                        ),
+                        span,
+                    );
+                }
                 Err(self.name_miss(name, format!("unbound name `{name}`"), span))
             }
         }

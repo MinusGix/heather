@@ -1,10 +1,10 @@
 ---
 title: omega in inference position says unbound name omega
-status: open
+status: closed
 labels: [diagnostics,tactics,omega]
 area: tactics
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 `omega` (and `omega(h…)`) is a checking-position form. In inference
@@ -30,3 +30,12 @@ argument".
   expected type and show the `let k: (T) = omega(…);` spelling. The same for
   `ring`, `linarith`, `nlinarith`, `bv_omega` if they share the gap.
 - A pinned refusal in lib/_tests with `// expect-error:` naming that text.
+
+## Resolution (2026-10-30)
+
+The resolver's last stop (`resolve`'s unbound branch in
+`crates/elab/src/lib.rs`, beside `rewrite` and `subst`) names `omega`,
+`ring`, `linarith`, `nlinarith`, `bv_omega` and `positivity` as checking-only
+forms with the `let k: (T) = omega(…);` spelling. It fires only where the
+name is unbound, so a local or global of that name still wins. Pinned in
+`lib/_tests/std/tactic/{omega,ring,linarith}_tests.hthr`.
