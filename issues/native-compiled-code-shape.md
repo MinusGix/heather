@@ -4,7 +4,7 @@ status: open
 labels: [native,x86,perf]
 area: heather-in-heather
 created: 2026-10-25
-updated: 2026-10-28
+updated: 2026-10-30
 ---
 
 The compiler of S3.2 (`lib/native/native_compile.hthr`,
@@ -30,3 +30,4 @@ soundness. Found while proving S3.2 (2026-10-25).
 
 - 2026-10-28: Keeping words in registers makes the correspondence depend on the program point. Abate et al. (docs/wp-preserving-compilation-survey.md §4) name the same need for register allocation as future work, with a location map per point and a value relation. Target::Placed would grow a per-point register map; Keeps already reads words through a value relation (word_in).
 - 2026-10-28: Words in registers landed as [[native-register-allocation]] (`docs/native-register-allocation-design.md`): one home per word for the whole program, checked by evaluation, with no per-point map; `Target::Held` is `Placed` plus `Homes::Agrees` over the live words. What remains here is the word-wise copy and the unmasked branch test. Per-point homes and moves are [[native-register-moves-and-convention]].
+- 2026-10-30: A constraint on any optimisation that drops stores: if secret erasure is ever built, the scrub stores at a cut are required by the compiler's theorem, so they must not be removed ([[native-secret-erasure]], `docs/zeroization-survey.md` §5).
