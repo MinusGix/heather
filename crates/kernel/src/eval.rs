@@ -203,7 +203,13 @@ enum Frame<'v> {
     /// A thunk being forced: its value is memoized when it arrives
     /// (`ValueArena::cache_tm`).
     Memo(&'v TmClo<'v>),
+    /// An elimination that already has a region cell (a glued unfolding's,
+    /// an eliminator's own recursion).
     Elim(&'v Elim<'v>),
+    /// An elimination made for this frame alone. Held by value rather than
+    /// given a region cell: the frame is popped long before the query ends,
+    /// and a cell would keep it until then.
+    Owned(Elim<'v>),
     /// A successor program waiting for the value its fold produced at the
     /// run's tail. A run there is merged into one program rather than left
     /// as the next fragment of a chain, so that `add`-shaped folds over
@@ -507,7 +513,8 @@ impl<'a, 'v> Eval<'a, 'v> {
                 self.arena.cache_tm(c, &v);
                 Work::Val(v)
             }
-            Frame::Elim(e) => Work::Elim(v, (*e).clone()),
+            Frame::Elim(e) => Work::Elim(v, e.clone()),
+            Frame::Owned(e) => Work::Elim(v, e),
             Frame::SyncArg { head, app } => {
                 let Elim::App { ann, .. } = &*app else {
                     unreachable!("SyncArg stores an application")
@@ -2041,7 +2048,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
             if matches!(&*self.classify_step(step)?, FoldClass::Affine { .. } | FoldClass::Sync { .. }) {
                 self.spend()?;
-                self.frames.push(Frame::Elim(self.arena.elim_cell(e)));
+                self.frames.push(Frame::Owned(e));
                 return Ok(Work::Force(unfold));
             }
         }
@@ -2053,7 +2060,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         if self.transparent && !e.is_application() {
             if let Some(unfold) = n.unfold {
                 self.spend()?;
-                self.frames.push(Frame::Elim(self.arena.elim_cell(e)));
+                self.frames.push(Frame::Owned(e));
                 return Ok(Work::Force(unfold));
             }
         }
@@ -2324,7 +2331,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let right = self.nat_residual(cancelled.right, right_tail);
                 let folded = self.arena.tm(TmClo::elim(left, *elim));
                 let app = Elim::App { ann: ann.clone(), arg: right };
-                self.frames.push(Frame::Elim(self.arena.elim_cell(app)));
+                self.frames.push(Frame::Owned(app));
                 return Ok(Work::Force(folded));
             }
         }
@@ -2337,7 +2344,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         let Elim::ElimNat { step, .. } = &**elim else {
             unreachable!("NatSync stores a Nat eliminator")
         };
-        self.frames.push(Frame::Elim(self.arena.elim_cell(e)));
+        self.frames.push(Frame::Owned(e));
         self.spend()?;
         Ok(Work::Apply(*step, vec![pred, ih]))
     }
