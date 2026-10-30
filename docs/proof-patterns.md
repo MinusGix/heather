@@ -50,7 +50,12 @@ property of Heather.
 - **Give it what it cannot read yet.** A Nat `a - b` is split into its two
   cases, so no `Nat::sub_add_cancel` beside the call
   ([[omega-nat-truncated-subtraction]]). An `Exists`'s `.proof` is read as
-  its contractum (`omega(e.proof)`), with no restating `have`.
+  its contractum (`omega(e.proof)`), with no restating `have`. A Bool guard
+  (`F.canonical(m, b).IsTrue()`, a record's `ok` field) is read by its
+  `&&`/`||`/`!`/`leb` structure, through a Bool definition's `let`s, so
+  `omega(g.ok)` replaces an `is_true_and`/`leb_sound` chain or an `_elim`
+  whose conjuncts only feed omega ([[omega-reads-bool-guards]]); a stuck
+  `match` inside the guard is still not read.
 - **Over records and layouts at a literal program, prefer Nat step lemmas**
   (`Nat::le_trans`, `add_le_mono_l`) or a generic lemma over Nat variables.
   The kernel converts the atoms' definitions. omega does read a field at

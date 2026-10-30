@@ -1,6 +1,6 @@
 ---
 title: omega reads a Bool guard `b.IsTrue()` by its structure
-status: open
+status: closed
 labels: [omega,tactics,proofs,ergonomics]
 area: tactics
 milestone: [tac-arith]
@@ -47,3 +47,20 @@ a residual that names it.
 
 Related: [[decide-bit-is-the-comparison]] (the other route, which removes the
 Bool/Prop gap at definitions instead of in the tactic).
+
+## Landed (2026-10-30)
+
+A guard round (`split_bool_guards`, omega_cert.rs) reads every `b.IsTrue()`
+and `¬b.IsTrue()` in scope with the `omega::guard_*` rules (omega.hthr):
+`&&`, `||`, `!`, `leb`, a Bool definition through one alias at its
+unfolding (the unifier does not unfold it, and mis-solves instead:
+[[unifier-spine-across-distinct-heads]]), and any other Bool as the Nat
+atom `omega::bit(r)` (the open question: an arithmetic atom, no
+propositional kind). Guard goals are refuted from their negation. A stuck
+`match` inside a guard (the fourth bullet) is not read: the round binds the
+part and leaves it ([[omega-guard-reads-nat-match]]), so `canonical`'s
+least-exponent disjunction stays a `reflects_elim`. Design:
+`docs/omega-measure-reduction-design.md` §17. `Format::canonical_elim` is
+`omega(ok)` per conjunct, `Finite::units_le_max` cites `g.ok` instead of
+the elim, and the probes and controls are in
+`lib/_tests/std/tactic/omega_tests.hthr`.

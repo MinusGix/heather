@@ -405,7 +405,7 @@ theorem Format::canonical_elim(self F: Format, mag, bexp: Nat, ok: F.canonical(m
     Succ(mag) <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
         ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top())
 {
-    reflects_elim(F.canonical_reflects(mag, bexp), ok)
+    And(omega(ok), And(omega(ok), And(reflects_elim(F.canonical_reflects(mag, bexp), ok).right.right.left, λ rt sp => omega(ok, rt, sp))))
 }
 
 // Zero of either sign.

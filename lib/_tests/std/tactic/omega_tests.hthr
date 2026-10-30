@@ -229,3 +229,43 @@ theorem sub_add_cancel_truncated(a, b: Nat): a - b + b = a { omega }
 theorem let_omega_unannotated(a: Nat, h: a < 3): a < 4 { let k = omega(h); k }
 // expect-error: `omega` needs an expected type
 theorem let_bare_omega_unannotated(a: Nat, h: a < 3): a < 4 { let k = omega; k }
+
+// A Bool guard `b.IsTrue()` is read by its structure: `&&` as both sides,
+// `||` as two cases, `!` as its operand's opposite, `n.leb(m)` as `n <= m`,
+// and any other Bool `r` as the atom `bit(r)`, so `r` meets `!r`
+// (issues/omega-reads-bool-guards.md, §17 of the design).
+theorem guard_and(n, m: Nat, h: (n.leb(m) && m.leb(5)).IsTrue()): n <= 5 { omega }
+theorem guard_or(n: Nat, h: (n.leb(2) || 7.leb(n)).IsTrue(), k: 3 <= n): 7 <= n { omega }
+theorem guard_not_leb(n, m: Nat, h: (!n.leb(m)).IsTrue()): m < n { omega }
+theorem guard_not_and(n, m: Nat, h: (!(n.leb(m) && m.leb(n))).IsTrue()): n ≠ m { omega }
+theorem guard_not_or(n, m: Nat, h: (!(n.leb(m) || m.leb(3))).IsTrue()): 4 < n { omega }
+theorem guard_not_not(n: Nat, h: (!(!n.leb(3))).IsTrue()): n < 4 { omega }
+theorem guard_atom(r: Bool, n: Nat, h: (!(r && n.leb(3))).IsTrue(), rt: r.IsTrue()): 3 < n { omega }
+// As a negation, as a fact argument, and as a record's field.
+theorem guard_negated(n: Nat, h: ¬(n.leb(4)).IsTrue()): 5 <= n { omega }
+theorem guard_argument(n: Nat, h: (n.leb(4) && 2.leb(n)).IsTrue()): 2 <= n {
+    let k: (n <= 4) = omega(h);
+    omega(h)
+}
+record Window { lo: Nat, hi: Nat, ok: lo.leb(hi).IsTrue() }
+theorem guard_field(w: Window): w.lo <= w.hi { omega(w.ok) }
+// Through a Bool definition and its `let`s, at the top and inside a guard.
+fn ordered(n, m: Nat) → Bool { let le = n.leb(m); le && !m.leb(n) }
+theorem guard_definition(n, m: Nat, h: ordered(n, m).IsTrue()): n < m { omega }
+theorem guard_inner_definition(n, m: Nat, h: (2.leb(n) && ordered(n, m)).IsTrue()): 3 <= m { omega }
+// Past one round's branches, the last disjunctions are left to the next.
+theorem guard_four_splits(n: Nat, h: ((n.leb(0) || 2.leb(n)) && (n.leb(1) || 3.leb(n)) && (n.leb(2) || 4.leb(n)) && (n.leb(3) || 5.leb(n))).IsTrue(), k: 1 <= n): 5 <= n { omega }
+// A guard goal, and its negation.
+theorem guard_goal(n, m: Nat, h: n < m): (n.leb(m) && !m.leb(n)).IsTrue() { omega }
+theorem guard_goal_definition(n, m: Nat, h: n < m): ordered(n, m).IsTrue() { omega }
+theorem guard_goal_negated(n: Nat, h: 5 <= n): ¬(n.leb(4)).IsTrue() { omega }
+// Controls. A false claim through a guard is refused, naming the guard's
+// parts; a guard over a Bool function no unfolding takes apart is skipped,
+// and the refusal lists it; a bare atom has nothing to meet.
+// expect-error: __omega_guard0_2: Le(n, m), __omega_guard0_3: Le(m, 5)
+theorem guard_false_claim(n, m: Nat, h: (n.leb(m) && m.leb(5)).IsTrue()): n <= 4 { omega }
+fn parity(n: Nat) → Bool { match n { Zero => True, Succ(k) => !parity(k) } }
+// expect-error: h: IsTrue(parity(n))
+theorem guard_unreadable(n: Nat, h: parity(n).IsTrue()): n = 0 { omega }
+// expect-error: `omega` got stuck
+theorem guard_bare_atom(r: Bool, n: Nat, h: r.IsTrue()): n = 0 { omega }

@@ -591,3 +591,77 @@ and a subtraction whose spelling did not round-trip would otherwise be split
 forever. A refused control's report names the case its model lives in
 (`__omega_sub0_case: Lt(a, b)` among the locals). Probes are in
 `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 17. Bool guards (2026-10-30)
+
+`issues/omega-reads-bool-guards.md`. A fact `b.IsTrue()` was skipped
+whatever `b` was, so every client of a Bool-guarded field
+(`Finite::ok`, the x86 asm tables, FunctionIR evaluation) took the guard
+apart with `is_true_and`/`leb_sound` before omega could see it
+(`docs/bool-guard-reflection-design.md` §3.2).
+
+A **guard round** (`split_bool_guards` in `crates/elab/src/omega_cert.rs`)
+now reads every guard in scope by its structure, with one `omega::guard_*`
+rule (omega.hthr) per connective, each taking one connective off a guard
+proved true (`h: b.IsTrue()`) or proved false (`h: (!b).IsTrue()`):
+
+| guard | proved true | proved false |
+|---|---|---|
+| `a && b` | both (`guard_and`) | two cases, `!a` or `!b` (`guard_nand`) |
+| `a \|\| b` | two cases (`guard_or`) | both negated (`guard_nor`) |
+| `!a` | `a` proved false | `a` proved true (`guard_not_not`) |
+| `n.leb(m)` | `n <= m` (`guard_leb`) | `m < n` (`guard_not_leb`) |
+| any other Bool `r` | `bit(r) = 1` (`guard_bit`) | `bit(r) = 0` (`guard_not_bit`) |
+
+A fact `¬b.IsTrue()` is `b` proved false (`guard_negated`). The rules take
+the guard's operands as implicits, so the certificate spells nothing: the
+checker reads them off the evidence's type, and the parts reach the leaf
+`omega` as the original subterms. Every guard in scope is taken apart in one
+certificate, which ends in `omega` at each branch.
+
+- **Definitions.** A guard whose head is a Bool definition
+  (`F.canonical(mag, bexp)`) is unfolded one reduct at a time, as §11
+  unfolds a defined proposition, to the first reduct with a connective at its
+  head, through its `let`s. The unfolded statement is the type of an alias
+  (`__omega_unfold{k}_{i}`) the caller binds before checking, whose value is
+  the fact itself: the kernel converts the two where the rule uses it. An
+  alias rather than a written type, because the reduct need not spell
+  (`canonical`'s least-exponent test is a `match`), and rather than letting
+  the unifier find the reduct, because it does not: asked for
+  `(?a && ?b).IsTrue()` against `g(n, m).IsTrue()` it solved `?a := n`,
+  `?b := m` and left the kernel to refuse it.
+- **Atoms.** A Bool that is neither a connective nor a comparison, nor a
+  definition that unfolds to one (`F.specials.reserves_top()`, a variable),
+  is the atom `omega::bit(r)` (`1` when true, `0` when false): Nat
+  arithmetic, so `r` and `!r` meet as `bit(r) = 1` against `bit(r) = 0`
+  with no propositional atom kind and no case split per atom. The issue's
+  open question resolves that way. A stuck `match` inside a guard is not
+  read; its part is bound and left alone.
+- **Rounds and settling.** A round is the first fallback of the attempt
+  that answers, before the disequality, connective and subtraction splits,
+  so a goal that closed before closes as it did; it is written only when
+  some guard has a connective or a comparison to read (or two bare atoms
+  might meet). The facts it reads are settled for the omegas inside it (a
+  stack on the elaborator, `omega_settled_guards`, pushed while the
+  certificate is checked); the parts it binds are `__omega_guard{k}_{i}`,
+  never read again. What it leaves for the next round is bound as
+  `__omega_open{k}_{i}` (`guard_open`): a part that needs a definition
+  unfolded (an alias can only be made for a fact already in scope), and a
+  disjunction past the round's budget of `GUARD_BRANCHES` branches — each
+  `||` doubles the certificate's tail. A later round runs only where a
+  branch fails without it, at most `GUARD_ROUND_LIMIT` deep.
+- **Goals.** A goal `b.IsTrue()` that does not compute to a verdict is
+  refuted from its negation (`guard_goal`), which the round reads as a fact;
+  `¬b.IsTrue()` is assumed and refuted, as a negated relation is.
+
+`Format::canonical_elim` (`lib/std/num/float/float.hthr`) is now
+`omega(ok)` for its comparison conjuncts and `λ rt sp => omega(ok, rt, sp)`
+for the reserved-top implication, the disjunction staying a `reflects_elim`;
+`Finite::units_le_max` reads `g.ok` through `omega` instead of binding the
+elim. Probes for each connective, a definition at the top and inside a
+guard, a record's guard field, a guard goal, the next-round budget, and the
+controls (a false claim naming the guard's parts, a guard over `parity(n)`
+that no unfolding takes apart, a bare atom) are in
+`lib/_tests/std/tactic/omega_tests.hthr`. The library's hand-written
+decompositions in modules that do not import omega (the x86 asm tables,
+FunctionIR evaluation) are left as they are.

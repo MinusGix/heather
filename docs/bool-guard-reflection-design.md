@@ -143,6 +143,11 @@ of `if n <= m`.
 
 ### 3.2 omega reads Bool guards ([[omega-reads-bool-guards]])
 
+Landed 2026-10-30 (§17 of `docs/omega-measure-reduction-design.md`):
+`canonical_elim` is now the `omega(ok)` form below, the atom
+`reserves_top()` is the Nat atom `omega::bit(r)`, and the stuck `match` in
+`normal` is [[omega-guard-reads-nat-match]]. The sketch as filed:
+
 The general fix for the 24 files. `omega` reading a fact `b.IsTrue()` by the
 guard's structure (`leb` as `<=`, `&&` as `∧`, `||` as `∨`, `!` as
 `¬`, δ through a Bool definition such as `canonical`, a stuck
