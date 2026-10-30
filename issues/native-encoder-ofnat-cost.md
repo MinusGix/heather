@@ -1,11 +1,11 @@
 ---
 title: Native certificate pieces spend their steps on the encoder's ofNat at closed numerals
-status: open
+status: closed
 labels: [kernel,native,bitvec,performance]
 area: heather-in-heather
 milestone: [hih-tools]
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 Filed from the packed vector literal round ([[packed-vector-literal-term]], [[kernel-native-bitvector-values]], 2026-10-29). With write-elf's byte literals born packed, what a native certificate piece (`piece_#_is`) still spends is the **encoder's** `BitVec::ofNat` at closed numerals, not the literal side. A per-definition δ-unfold profile of `yes_tool_elf_piece_1_is` (a throwaway patch, debug binary, width one) put the remaining steps on `ofNat`'s own recursion (`cons_bit`, `odd_bit`, `Nat::half`, `from_bits`, a few thousand unfolds each) and `Nat::add` (the `add_nat` address arithmetic). The `ofNat` traffic comes from three places:
@@ -22,3 +22,24 @@ Two levers, not exclusive:
 ## Done when
 
 `cert/yes-pieces` is a small fraction of its steps after the packed literal round, or the reason it cannot be is written down.
+
+## Resolution (2026-10-30)
+
+Lever 2, without the replay: the kernel reads `ofNat`'s step as
+`cons(f(x), ih(g(x)))` with `f` and `g` chains of classified `Nat` folds,
+reads their trees and bases out of the probe as closed data, and at a
+closed `x` produces the word by arithmetic (`Output::NatState`,
+`Transducer::run_nat`; a functional-graph walk of each window instead of the
+tree's powers). No definition is named; library code keeps writing
+`ofNat(n, k)`. `docs/bitvector-literal-entry-design.md` §10.10 has the
+adequacy argument and the numbers; `crates/kernel/DESIGN.md` the paragraph.
+
+`cert/yes-pieces` (cloud, interleaved pairs): 488,749 → 327,015 steps,
+kernel 0.97 → 0.57 s. `ofNat(64, k)` at a literal: ~2,200 → 268 steps,
+flat in the magnitude. What `yes-pieces` still spends is no longer `ofNat`
+— the "small fraction" bar is not met by this lever alone; the remainder
+(`Nat::add` address arithmetic, the encoders' record and list structure)
+is [[native-certificate-pieces-remaining-cost]], and lever 1 (opcode bytes as
+literals) is now unnecessary for `ofNat`'s sake. Packing write-elf's
+immediates, refused in #269 because the lowering's `ofNat` met them at the
+spine, may now be cheap either way and is worth re-measuring.

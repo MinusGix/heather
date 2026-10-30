@@ -142,7 +142,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// `Succ^{inc}(Zero)`.
-    fn literal(&self, inc: &Increment) -> &'v TmClo<'v> {
+    pub(super) fn literal(&self, inc: &Increment) -> &'v TmClo<'v> {
         let zero = self.vclo(Rc::new(Val::Zero));
         match inc {
             None => zero,

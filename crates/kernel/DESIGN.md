@@ -479,6 +479,29 @@ definition's spelling; the library's vectors sit inside a record, so a
 peeled argument is a `Vec` in a unit-like Σ-context and the class carries the
 projection path to it.
 
+A fold whose one argument is a `Nat` is the same machine with an infinite
+state (`docs/bitvector-literal-entry-design.md` §10.10). `bitvec::ofNat`
+recurses on the width carrying `x`, and its step is `cons(f(x), ih(g(x)))`;
+there is nothing to tabulate, so the class instead reads `f` and `g` off the
+probe value as **data**: each is the state variable under a spine of
+projections and `elim_Nat`s whose steps classify as affine trees (the `Nat`
+classes above — `odd_bit`'s and `half`'s course-of-values windows are
+permutations), with every fold's base, and a peeled fold's innermost step,
+read back as a closed pair of naturals and bits. At a closed state the word
+is then arithmetic — the orbit `x, g(x), g(g(x)), …` read through `f`, each
+iterate computed as `eval/runs.rs` would compute that fold, here as a walk
+of the tree's functional graph — and nothing is replayed. Adequacy is the
+substitution property with the state as a third probe variable: the probe
+value was reached with `k`, `ih` and `x` neutral and no case split stuck on
+any of them, so at every instantiation the step is the same eliminations
+applied to `v`; and since what was read out of them holds no closure, it is
+applied to `v` without substituting into one. Whatever does not read back
+closed — a base that mentions `x`, an opaque fold, an `ih` inside the bit —
+declines the class, and an open state at the call declines the firing: both
+fold exactly as before. The replay this replaced (run the step once per bit)
+was correct and no faster than the structural fold, which is why it was
+never landed.
+
 Conversion compares two vectors over such an element type by their words,
 before Σ-η, packing a structural side by the `fst`/`snd` η would have taken;
 a side that is two stuck spines is left to the neutral-first guard, and a

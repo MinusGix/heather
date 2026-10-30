@@ -200,6 +200,14 @@ fn BitVec::toNat({n: Nat}, self x: BitVec(n)) → Nat {
 // magnitude, which is what the top-down spelling was written for in the first
 // place.
 //
+// At a closed argument the kernel does better than that: it reads this step
+// as `cons(f(x), ih(g(x)))` with `f` and `g` classified folds, and produces
+// the whole word by arithmetic on their windows, flat in the width's steps
+// as well as the magnitude (`crates/kernel/DESIGN.md`, native bitvector
+// values; `docs/bitvector-literal-entry-design.md` §10.10). That depends on
+// the same two classifications, and on `odd_bit` and `half` being folds of
+// `x` alone; a spelling whose bit read the width would fold bit by bit.
+//
 // Truncation is definitional. `BitVec::ofNat(x): BitVec(n)` is the low `n`
 // bits of `x` for
 // every `x` by construction, as `mul` and the module header require — no
