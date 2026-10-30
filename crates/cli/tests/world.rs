@@ -40,6 +40,11 @@ fn replayed(stdout: &str) -> usize {
     before.rsplit(' ').next().unwrap().parse().unwrap()
 }
 
+fn accepted(stdout: &str) -> usize {
+    let (before, _) = stdout.split_once(" accepted from cache").unwrap_or_else(|| panic!("no cache count: {stdout}"));
+    before.rsplit(' ').next().unwrap().parse().unwrap()
+}
+
 /// `user` imports `colour` before `base`, so `lib/c`'s load order puts
 /// `colour` under `base` where `lib/b`'s holds no `colour` at all, and
 /// `colour`'s inductive came before `base`'s in one process and not in the
@@ -145,5 +150,32 @@ fn a_module_that_fails_to_build_leaves_the_check_to_report_it() {
     assert!(err.contains("build: broken ("), "{err}");
     assert!(err.contains("build: 1 module built ahead, 1 failed"), "{err}");
     assert!(err.contains("unbound name `nope`"), "{err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A replay over a module's own canonical world that passed once is
+/// vouched for whole the next time: none of its declarations is asked about
+/// (`docs/module-dag-design.md` §13). An edit below a module changes its
+/// world's identity, so its replay is rechecked again.
+#[test]
+fn a_replay_that_passed_is_vouched_for_whole_next_time() {
+    let root = library("vouched", LIB);
+    let first = check(&root, &["lib/c"]);
+    assert!(!first.contains("vouched"), "{first}");
+    let second = check(&root, &["lib/c"]);
+    assert_eq!(replayed(&second), 3);
+    assert!(second.contains("0 declarations kernel-checked"), "{second}");
+    // `colour` and `base` replay over the prelude alone the first warm time
+    // and record it; `user`'s world is theirs.
+    let third = check(&root, &["lib/c"]);
+    assert!(third.contains("0 declarations kernel-checked"), "{third}");
+    assert!(third.contains("(3 vouched for whole)"), "{third}");
+    // What is still asked about lies outside every image (the root's own
+    // closure prefix); the replayed bindings are no longer asked about.
+    assert!(accepted(&third) < accepted(&second), "{second}{third}");
+    // An edit to `base` changes its image and every world above it.
+    std::fs::write(root.join("lib/b/base.hthr"), "inductive Base { One, Two, Three }\nfn base_one() → Base { One }\n").unwrap();
+    let edited = check(&root, &["lib/c"]);
+    assert!(edited.contains("(1 vouched for whole)"), "only `colour` is unchanged: {edited}");
     let _ = std::fs::remove_dir_all(&root);
 }

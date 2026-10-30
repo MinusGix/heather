@@ -981,7 +981,7 @@ impl Elaborator {
         let sealed = previous.sealed_in(slice.psi.clone());
         // Inline, whatever the pool's width: the pool holds the bodies of the
         // items elaborated around this one, and their join is the module's.
-        self.recheck_extension(&previous.module, bindings, &sealed, false)?;
+        self.recheck_extension(&previous.module, bindings, &sealed, false, &mut true)?;
         // The item's text is unchanged but may sit elsewhere in the file:
         // every span the slice carries moves with it.
         let offset = start as i64 - slice.start as i64;
@@ -1081,6 +1081,23 @@ impl Elaborator {
         delta: &ModuleDelta,
         dependencies: &ModuleDependencyIdentity,
     ) -> Result<(), ModuleReplayError> {
+        self.replay_module_delta_keyed(delta, dependencies, None)
+    }
+
+    /// [`Self::replay_module_delta`] with `replay`, an identity of this exact
+    /// replay that its caller vouches for: the stored bytes the delta was
+    /// decoded from and the world it is replayed over, module by module
+    /// (`docs/module-dag-design.md` §13). A gate that has seen the identity
+    /// pass skips the recheck of the whole extension; one whose recheck
+    /// passes without opening a sealed proof records it. Everything else a
+    /// replay checks (the dependency identity, opened proofs, exports, the
+    /// metadata preflight) is checked either way.
+    pub fn replay_module_delta_keyed(
+        &mut self,
+        delta: &ModuleDelta,
+        dependencies: &ModuleDependencyIdentity,
+        replay: Option<&[u8; 32]>,
+    ) -> Result<(), ModuleReplayError> {
         if dependencies != &delta.dependencies {
             return Err(ModuleReplayError::DependencyIdentity);
         }
@@ -1100,7 +1117,17 @@ impl Elaborator {
         if !self.names.valid_exports(&delta.scope) {
             return Err(ModuleReplayError::MetadataConflict("reexports"));
         }
-        self.recheck_extension(&delta.module, &delta.extension, &delta.sealed, true)?;
+        let gate = self.gate.clone();
+        match (&gate, replay) {
+            (Some(g), Some(key)) if g.admits_replay(key) => {}
+            _ => {
+                let mut clean = true;
+                self.recheck_extension(&delta.module, &delta.extension, &delta.sealed, true, &mut clean)?;
+                if let (Some(g), Some(key), true) = (&gate, replay, clean) {
+                    g.replay_accepted(key);
+                }
+            }
+        }
 
         let mut candidate = self.semantic_image().elaborator();
         candidate.names.enter_scope(delta.scope.clone());
@@ -1158,6 +1185,7 @@ impl Elaborator {
         extension: &[GlobalBinding],
         sealed: &[(usize, Rc<SealedProof>)],
         on_pool: bool,
+        clean: &mut bool,
     ) -> Result<(), ModuleReplayError> {
         let gate = self.gate.clone();
         // `on_pool == false` keeps every body on this thread even at width:
@@ -1211,6 +1239,10 @@ impl Elaborator {
                     statement = Err(ModuleReplayError::Kernel(e));
                     break;
                 }
+                // `clean`: no check this replay ran opened a sealed proof,
+                // so a verdict about the whole replay may be kept on the
+                // same rule as one about a declaration.
+                *clean &= unsealed.is_empty();
                 if let (Some(g), true) = (&gate, bodiless) {
                     g.statement_accepted(&prefix, binding, &unsealed);
                 }
@@ -1225,10 +1257,13 @@ impl Elaborator {
                             statement = Err(ModuleReplayError::Kernel(e));
                             break;
                         }
+                        *clean &= unsealed.is_empty();
                         if let Some(g) = &gate {
                             g.accepted(&prefix, item, &unsealed);
                         }
                     } else {
+                        // Its seals are known only at the join.
+                        *clean = false;
                         self.kernel_pool.submit(pool::Deferred {
                             name: name.clone(),
                             span: heather_syntax::Span { start: 0, end: 0 },

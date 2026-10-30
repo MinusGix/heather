@@ -212,6 +212,9 @@ struct Finished {
     /// Its delta over its canonical world, when held; otherwise the store
     /// has it under [`Self::key`].
     delta: Option<Rc<ModuleDelta>>,
+    /// The SHA-256 of the stored bytes `delta` was decoded from, when it was
+    /// (`replay_key`).
+    content: Option<[u8; 32]>,
     /// The canonical world after it, once built.
     state: Option<SemanticImage>,
 }
@@ -257,6 +260,9 @@ pub struct SemanticSession {
     /// a module that checked, and is published with them
     /// (`docs/module-dag-design.md` §11).
     expectations: bool,
+    /// The stored bytes' digest of the image the last [`Self::check_in`]
+    /// replayed, for the module's [`Finished`].
+    hit_content: Option<[u8; 32]>,
 }
 
 /// `--only` asked for a module's previous image and there was none: the
@@ -323,6 +329,7 @@ impl SemanticSession {
             only: BTreeMap::new(),
             only_met: BTreeSet::new(),
             expectations: false,
+            hit_content: None,
         }
     }
 
@@ -507,6 +514,7 @@ impl SemanticSession {
             digest: OnceLock::new(),
             hashes: None,
             delta: Some(Rc::new(delta)),
+            content: self.hit_content.take(),
             state,
         };
         self.done.insert(module.name.clone(), finished);
@@ -590,15 +598,15 @@ impl SemanticSession {
 
     /// `name`'s delta over its canonical world: held, or decoded from the
     /// store against a placeholder prefix of that world's length.
-    fn canonical_delta(&self, name: &str) -> Result<Rc<ModuleDelta>, String> {
+    fn canonical_delta(&self, name: &str) -> Result<(Rc<ModuleDelta>, Option<[u8; 32]>), String> {
         let f = &self.done[name];
         if let Some(delta) = &f.delta {
-            return Ok(Rc::clone(delta));
+            return Ok((Rc::clone(delta), f.content));
         }
         let images = self.images.as_ref().ok_or("no image store holds it")?;
         let psi = placeholder(self.world_len(&f.canon.order));
         match stats::timed(stats::Timer::ImageDecode, || images.load(f.key, psi, f.source_len, self.freshness)) {
-            Ok(Some(loaded)) => Ok(Rc::new(loaded.delta)),
+            Ok(Some(loaded)) => Ok((Rc::new(loaded.delta), Some(loaded.content))),
             Ok(None) => Err(format!("the image of `{name}` is gone from the store")),
             Err(e) => Err(format!("the image of `{name}` is unusable: {e}")),
         }
@@ -607,9 +615,14 @@ impl SemanticSession {
     /// Move `name`'s canonical delta into `world`, whose modules are
     /// `before`, and replay it there (`docs/module-dag-design.md` §4).
     fn load_into(&mut self, world: &mut Elaborator, name: &str, before: &[String]) -> Result<(), String> {
-        let delta = self.canonical_delta(name)?;
+        let (delta, content) = self.canonical_delta(name)?;
         let f = &self.done[name];
+        // Over its own canonical world a replay can be vouched for whole; a
+        // moved one is checked binding by binding, whose verdicts key on
+        // the moved terms themselves.
+        let mut replay = None;
         let moved = if f.canon.order[..] == *before {
+            replay = content.map(|c| self.replay_key(before, &c));
             delta.over_prefix(world.psi().clone()).ok_or_else(|| format!("`{name}`'s world has another length"))?
         } else {
             let map = self.move_map(&f.canon.order, before.iter().map(String::as_str));
@@ -621,8 +634,31 @@ impl SemanticSession {
                 })
                 .map_err(|e| format!("moving `{name}`: {e}"))?
         };
-        stats::timed(stats::Timer::ImageRecheck, || world.replay_module_delta(&moved, delta.dependencies()))
-            .map_err(|e| format!("replaying `{name}`: {e}"))
+        stats::timed(stats::Timer::ImageRecheck, || {
+            world.replay_module_delta_keyed(&moved, delta.dependencies(), replay.as_ref())
+        })
+        .map_err(|e| format!("replaying `{name}`: {e}"))
+    }
+
+    /// The identity of replaying the stored bytes `content` over the world
+    /// whose modules are `world`, in order, after the prelude
+    /// (`docs/module-dag-design.md` §13): this build (which decodes the bytes
+    /// and elaborated the prelude), the prelude's length, and each module of
+    /// the world by name and interface hash, which together fix every
+    /// binding the bytes' positions name.
+    fn replay_key(&self, world: &[String], content: &[u8; 32]) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(b"heather/module-replay/1\0");
+        h.update(&SemanticsIdentity::current().bytes());
+        h.update(&(self.base.as_ref().expect("base").len as u64).to_le_bytes());
+        h.update(&(world.len() as u64).to_le_bytes());
+        for m in world {
+            h.update(&(m.len() as u64).to_le_bytes());
+            h.update(m.as_bytes());
+            h.update(&self.done[m].identity);
+        }
+        h.update(content);
+        h.finish()
     }
 
     /// Move a canonical delta into the caller's world.
@@ -712,6 +748,7 @@ impl SemanticSession {
                 digest: OnceLock::new(),
                 hashes: None,
                 delta: None,
+                content: None,
                 state: None,
             },
         );
@@ -767,6 +804,7 @@ impl SemanticSession {
         elab.set_lint_profile(lint_profile);
         let start = elab.psi().bindings.len();
         let mut notices = Vec::new();
+        self.hit_content = None;
         if !self.images_usable {
             let checked = elab.check_module_delta(&module.name, &module.src, dependencies);
             elab.take_omega_reports();
@@ -804,10 +842,13 @@ impl SemanticSession {
             let decoded = decoded.map(|loaded| loaded.filter(|l| self.replayable(l)));
             match decoded {
                 Ok(Some(loaded)) => match stats::timed(stats::Timer::ImageRecheck, || {
-                    elab.replay_module_delta(&loaded.delta, &dependencies)
+                    // `elab`'s world is `canon`'s exactly.
+                    let replay = self.replay_key(&canon.order, &loaded.content);
+                    elab.replay_module_delta_keyed(&loaded.delta, &dependencies, Some(&replay))
                 }) {
                     Ok(()) => {
                         self.hits += 1;
+                        self.hit_content = Some(loaded.content);
                         self.note_stale(&module.name, loaded.stale, &mut notices);
                         return (
                             ModuleOutcome {
@@ -1343,6 +1384,7 @@ impl Finished {
             digest: OnceLock::new(),
             hashes: None,
             delta: None,
+            content: None,
             state: None,
         }
     }

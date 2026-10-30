@@ -119,6 +119,20 @@ pub trait KernelGate {
     /// it here, or the next declaration at that position could inherit it.
     fn abandon(&self, _psi: &GlobalCtx) {}
 
+    /// May a module-image replay skip rechecking its whole extension? `key`
+    /// identifies the replay: the stored bytes and the world under them,
+    /// module by module, as its caller computes it
+    /// (`Elaborator::replay_module_delta_keyed`). The default vouches for
+    /// nothing.
+    fn admits_replay(&self, _key: &[u8; 32]) -> bool {
+        false
+    }
+
+    /// The replay `key` names just passed the kernel without opening a
+    /// sealed proof. Called only after a `false` from
+    /// [`Self::admits_replay`].
+    fn replay_accepted(&self, _key: &[u8; 32]) {}
+
     /// May the statement check of `binding`, a declaration without a body
     /// (a theorem's statement, an opaque declaration) about to land at
     /// `psi.bindings.len()`, be skipped? Asked only by module-image replay,

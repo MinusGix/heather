@@ -321,3 +321,40 @@ module count over the library) where folder children replayed about three
 times it. Replay is dominated by the Merkle walk that lets the verdict store
 vouch for a replayed binding, and it is what makes the build step's CPU
 higher than the racing children's.
+
+## 13. Vouching for a whole replay
+
+A replay asks the verdict store about every binding it rechecks, and the
+store answers by Merkle hash, so each replay hashes its whole extension
+along the chain (`Inner::sync`) before a single verdict comes back. When
+the same image is replayed over the same world again, every one of those
+questions has the answer it had last time.
+
+So a replay that rechecked clean records one verdict for the whole replay,
+keyed by
+
+- the decoder's build (`SemanticsIdentity::current`): an image another
+  compiler wrote, replayed by a stale lane, never matches;
+- the world under the module: its length and each module's name and
+  identity, in order;
+- the image's content hash (`LoadedModule::content`, over the semantic
+  section).
+
+The next replay with that key is not rechecked at all. "Clean" is the
+per-binding store's own rule: no check unsealed a proof, and no body went to
+the deferred pool (whose verdict the replay does not wait for). A replay
+that was not clean records nothing and is rechecked every time, as before.
+
+Only a replay over the module's **own canonical world** is vouched for: the
+cache hit of the module itself, and an import loaded where the map is the
+identity (`over_prefix`). A moved image (§4) keeps the per-binding path,
+because those verdicts key on the moved terms and so do not have to trust
+`relocate`; vouching for a moved replay by its source image would.
+
+The cost it removes is the hashing, which grows with the replayed
+extension; decoding and the replay's other rechecks (statement and
+registry checks that are not verdicts) stay. On a tactic-test module whose
+closure is large and mostly canonical, a warm check is about a sixth
+faster, the Merkle walk about halved (what is left is its moved imports);
+on a module whose replay is dominated by decoding the change is lost in
+the noise. The `ok` line says `(N vouched for whole)`.
