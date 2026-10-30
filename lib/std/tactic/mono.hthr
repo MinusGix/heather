@@ -764,29 +764,44 @@ fn mono_unsubs() → List<Unsub> {
      Unsub("Int::sub", "Int::add", "Int::neg"), Unsub("Dyadic::sub", "Dyadic::add", "Dyadic::neg")]
 }
 
-fn mono_unsub_named(f: GlobalRef, x, y: Handle, us: List<Unsub>) → Tac<Option<Expr>> {
+// Only against a sum (`other`'s head is the carrier's `+`): elsewhere the
+// restated goal is no nearer a law, and costs the search its fuel.
+fn mono_unsub_named(f: GlobalRef, x, y: Handle, other: Option<GlobalRef>, us: List<Unsub>) → Tac<Option<Expr>> {
     match us {
         Nil => Pure(None),
         Cons(u, rest) => mono_try_global(u.sub).bind(λ o => match o {
-            None => mono_unsub_named(f, x, y, rest),
+            None => mono_unsub_named(f, x, y, other, rest),
             Some(g) => match g.id.same(f.id) {
-                False => mono_unsub_named(f, x, y, rest),
+                False => mono_unsub_named(f, x, y, other, rest),
                 True => mono_try_global(u.add).bind(λ a => mono_try_global(u.neg).bind(λ n => Pure(match a {
                     None => None,
-                    Some(ga) => match n { None => None, Some(gn) => Some(App(App(Global(ga), Hd(x)), App(Global(gn), Hd(y)))) },
+                    Some(ga) => match n {
+                        None => None,
+                        Some(gn) => match other {
+                            None => None,
+                            Some(h) => match h.id.same(ga.id) { True => Some(App(App(Global(ga), Hd(x)), App(Global(gn), Hd(y)))), False => None },
+                        },
+                    },
                 }))),
             },
         }),
     }
 }
 
-fn mono_unsub_side(h: Handle) → Tac<Option<Expr>> {
-    view(h).bind(λ v => match v {
-        HGlobal(f, _, args) => match args {
-            Cons(x, more) => match more { Cons(y, rest) => match rest { Nil => mono_unsub_named(f, x, y, mono_unsubs()), Cons(_, _) => Pure(None) }, Nil => Pure(None) },
-            Nil => Pure(None),
-        },
-        _ => Pure(None),
+fn mono_head_global(h: Handle) → Tac<Option<GlobalRef>> {
+    view(h).bind(λ v => Pure(match v { HGlobal(f, _, _) => Some(f), _ => None }))
+}
+
+fn mono_unsub_side(h, other: Handle) → Tac<Option<Expr>> {
+    mono_head_global(other).bind(λ og => match og {
+        None => Pure(None),
+        Some(_) => view(h).bind(λ v => match v {
+            HGlobal(f, _, args) => match args {
+                Cons(x, more) => match more { Cons(y, rest) => match rest { Nil => mono_unsub_named(f, x, y, og, mono_unsubs()), Cons(_, _) => Pure(None) }, Nil => Pure(None) },
+                Nil => Pure(None),
+            },
+            _ => Pure(None),
+        }),
     })
 }
 
@@ -809,7 +824,7 @@ fn mono_unsub_goal(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Expr) → Tac<
 // `None` where neither side is a subtraction. The restated goal is the
 // goal up to unfolding `-`, so its proof is the goal's.
 fn mono_unsub(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Handle) → Tac<Option<Expr>> {
-    mono_unsub_side(l).bind(λ ol => mono_unsub_side(r).bind(λ or => match ol {
+    mono_unsub_side(l, r).bind(λ ol => mono_unsub_side(r, l).bind(λ or => match ol {
         None => match or { None => mono_none(), Some(_) => mono_unsub_goal(M, prove, strict, mono_or_hd(ol, l), mono_or_hd(or, r)) },
         Some(_) => mono_unsub_goal(M, prove, strict, mono_or_hd(ol, l), mono_or_hd(or, r)),
     }))

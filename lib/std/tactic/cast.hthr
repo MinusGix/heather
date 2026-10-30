@@ -366,6 +366,20 @@ fn cast_ats(cs: List<CastCarrier>) → Tac<List<CastAt>> {
     }
 }
 
+// The carrier one of whose relations is `rel`, resolved alone: its three
+// relations are looked up first, the rest only for the one that matches.
+fn cast_is_named(rel: GlobalRef, name: String) → Tac<Bool> {
+    cast_try_global(name).bind(λ o => Pure(match o { None => False, Some(g) => rel.id.same(g.id) }))
+}
+
+fn cast_carrier_for(rel: GlobalRef, cs: List<CastCarrier>) → Tac<Option<CastAt>> {
+    match cs {
+        Nil => Pure(None),
+        Cons(c, rest) => cast_is_named(rel, c.le).bind(λ a => cast_is_named(rel, c.lt).bind(λ b => cast_is_named(rel, c.same).bind(λ s =>
+            match a || b || s { True => cast_at(c), False => cast_carrier_for(rel, rest) }))),
+    }
+}
+
 // The carrier one of whose relations is `rel`.
 fn cast_rel_in(rel: GlobalRef, cs: List<CastAt>) → Option<CastAt> {
     match cs {
@@ -712,14 +726,19 @@ fn cast_lower(C: CastAt, G: Sides, h: Expr, depth: Nat, cs: List<CastAt>, es: Li
 fn cast_from_at(h: Expr, depth: Nat) → Tac<Expr> {
     goal().bind(λ g => cast_sides(g.target).bind(λ gs => match gs {
         None => fail("cast_from: the goal is not a relation between two sides", []),
-        Some(G) => cast_ats(cast_carriers()).bind(λ cs => match cast_rel_in(G.rel, cs) {
+        Some(G) => cast_carrier_for(G.rel, cast_carriers()).bind(λ oc => match oc {
             None => fail("cast_from: the goal's relation is not one of a carrier the casts are read at", []),
             Some(C) => cast_first_carry(C, G, [h]).bind(λ direct => match direct {
                 Some(e) => Pure(e),
-                None => cast_edge_refs(cast_edge_table()).bind(λ edges => attempt(cast_from_lifted(C, G, [h], depth, cast_lift_law(G, C), edges, cs)).bind(λ o => match o {
-                    Done(e) => Pure(e),
-                    Failed(msg, notes) => cast_lower(C, G, h, depth, cs, edges).bind(λ lowered => match lowered { Some(e) => Pure(e), None => fail(msg, notes) }),
-                })),
+                // Depth 0 (`mono`'s per-fact probe) lifts and lowers nothing.
+                None => match depth {
+                    Zero => fail("cast_from: the fact and the goal differ once their casts are read", []),
+                    Succ(_) => cast_ats(cast_carriers()).bind(λ cs => cast_edge_refs(cast_edge_table()).bind(λ edges =>
+                        attempt(cast_from_lifted(C, G, [h], depth, cast_lift_law(G, C), edges, cs)).bind(λ o => match o {
+                            Done(e) => Pure(e),
+                            Failed(msg, notes) => cast_lower(C, G, h, depth, cs, edges).bind(λ lowered => match lowered { Some(e) => Pure(e), None => fail(msg, notes) }),
+                        }))),
+                },
             }),
         }),
     }))
