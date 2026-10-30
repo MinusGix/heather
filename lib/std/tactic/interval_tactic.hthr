@@ -186,6 +186,31 @@ fn interval_binary(H: IntervalHeads, c, w: GlobalRef, ra, rb: IntervalRead) → 
     IntervalRead(interval_app2(c, ra.tree, rb.tree), interval_apps(Global(w), [ra.tree, rb.tree, ra.wf, rb.wf]))
 }
 
+// The apartness an inverse takes, at `args[i]`: as written, or, since the
+// view lists only what a call writes and an inferred or named proof is not
+// that, a hole of the type `partial` takes next, solved by comparing `call`
+// applied to it with the node `h` read. Reading the inverse as a leaf
+// instead would enclose it by its own terms, which do not compute when the
+// proof is a hypothesis.
+fn interval_proof_arg(args: List<Handle>, i: Nat, partial: Expr, call: Expr, h: Handle) → Tac<Expr> {
+    match interval_arg(args, i) {
+        Some(p) => Pure(Hd(p)),
+        None => infer(partial).bind(λ c => match c {
+            Refused(why) => fail("intervals: " ++ why, []),
+            Accepted(ty) => view(ty).bind(λ v => match v {
+                HPi(dom) => hole(dom).bind(λ hc => match hc {
+                    Refused(why) => fail("intervals: " ++ why, []),
+                    Accepted(p) => defeq(App(call, Hd(p)), Hd(h)).bind(λ same => match same {
+                        True => Pure(Hd(p)),
+                        False => fail("intervals: the apartness an inverse was given is not found", [At(Hd(h), Tried("this real", "its proof argument"))]),
+                    }),
+                }),
+                _ => fail("intervals: an inverse node does not take a proof", []),
+            }),
+        }),
+    }
+}
+
 // The tree for `h`. `fuel` bounds the depth; past it, at a head the reader
 // does not know, and at a call missing an argument, the term is a leaf.
 fn interval_reify(H: IntervalHeads, fuel: Nat, h: Handle) → Tac<IntervalRead> {
@@ -200,10 +225,12 @@ fn interval_reify(H: IntervalHeads, fuel: Nat, h: Handle) → Tac<IntervalRead> 
                     ORecip => interval_reify(H, f, a).bind(λ ra => Pure(IntervalRead(interval_app1(H.irecip, ra.tree), ra.wf))),
                     OEmbed => Pure(IntervalRead(interval_app1(H.iexact, Hd(a)), Global(H.wleaf))),
                     OBox(b) => Pure(IntervalRead(interval_app1(H.ibox, interval_app1(b, Hd(a))), Global(H.wleaf))),
-                    OInv => match interval_arg(args, 1) {
+                    OInv => match H.inv {
                         None => Pure(interval_leaf(H, h)),
-                        Some(p) => interval_reify(H, f, a).bind(λ ra => Pure(IntervalRead(interval_apps(Global(H.iinv), [ra.tree, Hd(a), Hd(p)]),
-                            interval_apps(Global(H.winv), [ra.tree, Hd(a), Hd(p), interval_app1(H.same, Hd(a)), ra.wf])))),
+                        Some(inv) => interval_reify(H, f, a).bind(λ ra =>
+                            interval_proof_arg(args, 1, interval_apps(Global(H.iinv), [ra.tree, Hd(a)]), App(Global(inv), Hd(a)), h).bind(λ p =>
+                            Pure(IntervalRead(interval_apps(Global(H.iinv), [ra.tree, Hd(a), p]),
+                                interval_apps(Global(H.winv), [ra.tree, Hd(a), p, interval_app1(H.same, Hd(a)), ra.wf]))))),
                     },
                     OPow => match interval_arg(args, 1) {
                         None => Pure(interval_leaf(H, h)),

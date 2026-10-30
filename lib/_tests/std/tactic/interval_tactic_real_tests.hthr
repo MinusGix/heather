@@ -17,14 +17,14 @@ theorem compound(): (CReal::ofRat(1) + CReal::ofRat(Rat(1, 100))).npow(100) < CR
 theorem leaf_compound(): (CReal::ofRat(1) + step()).npow(100) < CReal::ofRat(3) { by intervals() }
 // A numeral is a real leaf: its terms are the numeral's floors, exact.
 theorem below_one(): third() < 1 { by intervals() }
-// The index refines: a ninth and an eighth are 1/72 apart, which index 5
-// cannot separate and its third refinement, index 8, can.
-theorem refined(): third() * third() < CReal::ofRat(Rat(1, 8)) { by intervals(p := 16, tries := 6, n := 5) }
+// The index refines, one bit per try: a ninth and an eighth are 1/72 apart,
+// which index 3 (terms within 1/8) cannot separate and a later try can.
+theorem refined(): third() * third() < CReal::ofRat(Rat(1, 8)) { by intervals(p := 16, tries := 6, n := 3) }
 
 // expect-error: intervals: the enclosures do not separate the two sides
 theorem false_order(): CReal::ofRat(Rat(1, 2)) < third() { by intervals() }
 // expect-error: intervals: the enclosures do not separate the two sides
-theorem too_close(): third() * third() < CReal::ofRat(Rat(1, 8)) { by intervals(p := 16, tries := 2, n := 5) }
+theorem too_close(): third() * third() < CReal::ofRat(Rat(1, 8)) { by intervals(p := 16, tries := 2, n := 3) }
 // expect-error: intervals: the enclosures do not separate the two sides
 theorem open_side(x: CReal): x < x + 1 { by intervals() }
 // An equality is never decided by enclosures, even as `<=`.
