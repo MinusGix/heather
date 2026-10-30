@@ -25,6 +25,7 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("pair", PAIR),
     ("list", LIST),
     ("algebra", ALGEBRA),
+    ("morphism", include_str!("../../../../lib/std/algebra/morphism.hthr")),
     ("int", INT),
     ("bitvec", BITVEC),
     ("relation", RELATION),

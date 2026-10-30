@@ -652,4 +652,56 @@ What it does not do yet, each for a reason:
 Next ([[cast-carrier-reader]]): the located diagnostic for `cast_from`,
 `0`/`1`/subtraction, `Nat → Int` as an `OrderedSemiringHom` edge, and the
 library's remaining hand-named image laws (`arith.hthr`, `round.hthr`,
-`series.hthr`, `error.hthr`); `↑` and `cast<B>` after (§7 step 3).
+`series.hthr`, `error.hthr`); `↑` and `cast<B>` after (§7 step 3). Done in
+slice 4, §12.
+
+## 12. Slice 4: `0`, `1`, subtraction, `Nat → Int`, and the diagnostic (2026-10-30)
+
+- **Subtraction** is every carrier's `x + -y`: `ring` reads an image of a
+  subtraction with the add law at `-y` (the caller converts the image to the
+  law's left side), and `cast_push` moves it the same way. `0` and `1` move
+  by `zero_law`/`one_law`. A `mono` goal written with `-` on one side and
+  pushed to `+ -` on the other is still not closed (`mono` matches heads
+  before it pushes); state it with `cast_from` or `cast_to`.
+- **`Nat → Int` is an edge** of its own family: `OrderedSemiringHom<A, B>`
+  (`lib/std/algebra/morphism.hthr`) has no `neg`, and its section's laws
+  are `OrderedSemiringHom::…_law`. `Int::ofNat_hom()` (`int.hthr`) is its
+  value; its laws hold by computation except `map_add`
+  (`Int::ofNat_add`). `Nat::Same` and `Int::Same` are named globals (a λ
+  index is β-reduced and cannot be inferred back).
+  - The cast tactics' edge table (`cast_edge_table`) records each edge's
+    family and its count of leading indices, and a law is the family's by
+    name (`cast_law_of`). An edge is tried for a lift only when its map's
+    codomain is the target carrier (`cast_edge_into`); without that check a
+    candidate the host accepted could still be ill-typed in the kernel.
+  - `Int` is a cast carrier (`Int::Same` is `=`, with its `respects`
+    lemmas), so `cast_from` carries a `Nat` fact to an `Int` goal, or on to
+    `Rat` two edges deep.
+  - `ring` at `Int` reads `OfNat(m + n)`, `(m * n).int()` and `OfNat(Succ(m))`
+    with the edge's law as a definition fact, as `edge_image` does the
+    others (`Reifier::nat_image`). The image stays an atom: a first
+    version that replaced it by the sum of the parts' images broke
+    `rat.hthr`'s denominator proofs, where `Rat::add(x, y).den.int()` and
+    `(x.den * y.den).int()` are one atom only because atoms are identified
+    up to conversion. The parts are spelled as the image was (`OfNat(m)`
+    beside `OfNat(m + n)`), so they are the atoms the goal names.
+- **The diagnostic**: `cast_from` (and `cast_to`) on a failure push the fact
+  and the goal to cast-normal form and name the first subterm where they
+  differ (`cast_differ_in`, outermost first, below every head the two
+  share): "at `rat(neg(lo))`, the fact's left side in cast-normal form, has
+  this; at `neg(rat(lo))`, the goal's, has this instead". Its first real
+  customer was a module that had not imported `morphism`, where the push
+  could not find the laws and stopped at the first image.
+- **The float library**: `arith.hthr`'s `add_correct`/`mul_correct`/
+  `fma_correct`/`fma_zero`, `round.hthr`'s `val_neg`, and `series.hthr`'s
+  `widen_has` read their images by `ring`, `cast_from` and `linarith`. What
+  stays hand-named reads through a wrapper `ring` keeps as an atom
+  (`Finite::val`, `Format::grid`, `CReal::at`, which are images under
+  another name), a step that holds by computing a constructor
+  (`Dyadic(NegSucc(k), e)`'s negation), or a `Dyadic` order goal, which no
+  cast carrier reads yet.
+
+Left: `↑`/`cast<B>` (§7 step 3); reading `Finite::val`-like wrappers as the
+images they unfold to; `Dyadic` as a carrier; `mono` pushing before it
+matches heads; the tactics needing `import morphism` where they run (a
+missing import degrades to "differ" rather than saying so).

@@ -27,6 +27,7 @@ fn elaborator() -> Elaborator {
         ("pair", PAIR),
         ("list", LIST),
         ("algebra", ALGEBRA),
+        ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
         ("int", INT),
         ("omega", OMEGA),
     ] {

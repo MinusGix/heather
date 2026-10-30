@@ -25,6 +25,7 @@ const MODULES: &[(&str, &str)] = &[
     ("pair", include_str!("../../../lib/std/core/pair.hthr")),
     ("list", include_str!("../../../lib/std/data/list.hthr")),
     ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("int", include_str!("../../../lib/std/num/int.hthr")),
     ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
@@ -36,7 +37,6 @@ const MODULES: &[(&str, &str)] = &[
     ("ordered_field", include_str!("../../../lib/std/algebra/ordered_field.hthr")),
     ("big_operator", include_str!("../../../lib/std/algebra/big_operator.hthr")),
     ("linarith", include_str!("../../../lib/std/tactic/linarith.hthr")),
-    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("rat", include_str!("../../../lib/std/num/rat.hthr")),
 ];
 
