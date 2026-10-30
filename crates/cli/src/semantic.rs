@@ -1,16 +1,23 @@
 //! Cache-aware semantic module loading without presentation policy.
 //!
-//! A session follows one topologically ordered import closure. It owns the
-//! exact-prefix identity required by the current absolute-Ψ image format and
-//! returns diagnostics, warnings and cache notices to its caller. Cache hits
-//! are always bounded, kernel-checked semantic replay; this component never
-//! installs the separate trusted declaration cache gate.
+//! A module is elaborated over its import closure and nothing else, in the
+//! closure's canonical order (`docs/module-dag-design.md`): the session keeps,
+//! per module it has finished, that module's identity and canonical world,
+//! builds the next module's world from the worlds of its imports, and keys
+//! its image by its source and its closure's identities alone. So a module
+//! means one thing in every process, whatever else the process loads, and
+//! modules that do not import one another can be built apart. An image is
+//! loaded into any other world by moving it there; every replay is bounded,
+//! kernel-checked or vouched for by the verdict store, and this component
+//! never installs the separate trusted declaration cache gate. Diagnostics,
+//! warnings and cache notices go back to the caller.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::io::Write as _;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 use heather_cache::merkle::{self, Hash};
@@ -21,9 +28,9 @@ use heather_cache::module_image::{
 use heather_cache::sha256::Sha256;
 use heather_elab::{
     ElabError, Elaborator, LintProfile, ModuleDelta, ModuleDependencyIdentity, NameWorld,
-    RegistryPart, RelocationTarget, Warning, WorldHasher, source_identifiers, stats,
+    RegistryPart, RelocationTarget, SemanticImage, Warning, WorldHasher, source_identifiers, stats,
 };
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, Term, Type};
 
 use crate::loader::Module;
 
@@ -110,8 +117,9 @@ pub struct ModuleOutcome {
     pub notices: Vec<CacheNotice>,
 }
 
-/// One module of the session's world, in load order: what relocating a later
-/// module needs to know about it (`docs/module-interface-cutoff-design.md`).
+/// One module of the world under a module, in that world's order: what
+/// relocating a later module needs to know about it
+/// (`docs/module-interface-cutoff-design.md`).
 struct WorldModule {
     name: String,
     /// Its Ψ positions.
@@ -163,22 +171,72 @@ impl WorldHasher for MerkleHasher<'_> {
 
 const BASE_MODULE: &str = "<base>";
 
-/// State for one accepted, topologically ordered module closure.
+/// The canonical order of a module's closure without the module
+/// (`docs/module-dag-design.md` §2): `order[..spine]` is the canonical
+/// order of its largest import with that import last, so the world under the
+/// module extends that import's world by `order[spine..]`.
+#[derive(Clone, Default)]
+struct Canon {
+    order: Rc<Vec<String>>,
+    spine: usize,
+}
+
+/// What the session keeps of a module it has finished, in the module's own
+/// canonical coordinates.
+struct Finished {
+    /// The imports the session had finished when it checked the module, in
+    /// name order: the edges its canonical order is taken over.
+    imports: Vec<String>,
+    canon: Canon,
+    /// Its imports, or theirs, did not check, or it did not: no world holds
+    /// it, and nothing that imports it is checked.
+    failed: bool,
+    /// The bindings it adds.
+    len: usize,
+    /// Its interface hash over its canonical world: what keys its
+    /// dependents (§5).
+    identity: [u8; 32],
+    key: ModuleCacheKey,
+    source_len: usize,
+    registry: Option<RegistryPart>,
+    /// The digest of [`Self::registry`]'s projection, position-independent,
+    /// once taken.
+    digest: OnceLock<Option<Hash>>,
+    /// Content hash per binding, once taken; position-independent.
+    hashes: Option<Rc<Vec<Option<Hash>>>>,
+    /// Its delta over its canonical world, when held; otherwise the store
+    /// has it under [`Self::key`].
+    delta: Option<Rc<ModuleDelta>>,
+    /// The canonical world after it, once built.
+    state: Option<SemanticImage>,
+}
+
+/// The prelude's world: what every canonical world starts from.
+struct Base {
+    image: SemanticImage,
+    len: usize,
+    hashes: Option<Rc<Vec<Option<Hash>>>>,
+}
+
+/// State for one checked closure.
 pub struct SemanticSession {
     images: Option<ModuleImageCache>,
-    interfaces: Vec<[u8; 32]>,
     images_usable: bool,
     freshness: ImageFreshness,
     hits: usize,
     stale_hits: usize,
     relocated: usize,
     replayed_items: usize,
-    /// The modules checked so far, after the bindings that were in Ψ before
-    /// the first: the dependency world of the next one.
-    world: Vec<WorldModule>,
-    /// Content hash per Ψ binding (`merkle::interface_hash`), synced lazily:
-    /// only a miss needs it.
-    merkle: Vec<Option<Hash>>,
+    /// Whether the caller's elaborator accumulates every module checked, in
+    /// the caller's order (the default: a consumer reads the world it
+    /// loaded). Without it the caller's elaborator only configures the
+    /// worlds modules are checked in, which saves moving each module into
+    /// one more world.
+    process_world: bool,
+    /// The modules in the caller's elaborator, in order, with their Ψ ranges.
+    process: Vec<(String, Range<usize>)>,
+    base: Option<Base>,
+    done: HashMap<String, Finished>,
     /// `HEATHER_RELOCATION_AUDIT`: under [`ImageFreshness::Exact`], every
     /// module elaborated after a miss is also moved from a candidate image
     /// when one passes, and the two are compared, one line per module
@@ -243,14 +301,15 @@ impl SemanticSession {
         Self {
             images_usable: images.is_some(),
             images,
-            interfaces: Vec::new(),
             freshness: ImageFreshness::Exact,
             hits: 0,
             stale_hits: 0,
             relocated: 0,
             replayed_items: 0,
-            world: Vec::new(),
-            merkle: Vec::new(),
+            process_world: true,
+            process: Vec::new(),
+            base: None,
+            done: HashMap::new(),
             audit: std::env::var_os("HEATHER_RELOCATION_AUDIT").map(PathBuf::from),
             only: BTreeMap::new(),
             only_met: BTreeSet::new(),
@@ -261,6 +320,16 @@ impl SemanticSession {
     /// while the rest of the module replays (`docs/check-only-design.md`).
     pub fn with_only(mut self, only: BTreeMap<String, BTreeSet<String>>) -> Self {
         self.only = only;
+        self
+    }
+
+    /// Leave the caller's elaborator out of the checked world: each module
+    /// is checked in its own canonical world and only there, and the
+    /// elaborator passed to [`Self::check`] is the configuration those
+    /// worlds are made with (its gate, width, lints, collectors). For a
+    /// driver that reads nothing back from it, like `heather check`.
+    pub fn without_process_world(mut self) -> Self {
+        self.process_world = false;
         self
     }
 
@@ -314,9 +383,12 @@ impl SemanticSession {
         self.replayed_items
     }
 
-    /// Check or replay the next module. After a source error, later modules
-    /// remain checkable for diagnostic recovery, but no longer read or write
-    /// images because the accepted prefix has been broken.
+    /// Check or replay the next module, over its import closure alone
+    /// (`docs/module-dag-design.md` §2). Every module it imports must have
+    /// been given to the session before it; an import the session has not
+    /// seen is left to the elaborator to report. A module whose closure holds
+    /// a module that did not check is not checked: there is no world to
+    /// check it in.
     pub fn check(
         &mut self,
         elab: &mut Elaborator,
@@ -331,36 +403,380 @@ impl SemanticSession {
         // The profile is part of the image key, so the lints the module is
         // elaborated under are the ones it is keyed by.
         elab.set_lint_profile(lint_profile);
-        if !self.images_usable {
+        if self.base.is_none() {
+            self.base = Some(Base { image: elab.semantic_image(), len: elab.psi().bindings.len(), hashes: None });
+        }
+        let mut imports: Vec<String> =
+            written_imports(&module.src).into_iter().filter(|m| self.done.contains_key(m)).collect();
+        imports.sort();
+        imports.dedup();
+        let canon = self.canon_of(&imports);
+        let source_len = module.src.len();
+        let failed_import = canon.order.iter().find(|m| self.done[*m].failed).cloned();
+        if let Some(failed) = failed_import {
+            self.done.insert(module.name.clone(), Finished::failed(imports, canon, source_len));
             return ModuleOutcome {
-                errors: elab.check_module_source(&module.name, &module.src),
-                warnings: elab.take_warnings(),
+                errors: vec![ElabError::Elab {
+                    msg: format!(
+                        "module `{}` is not checked: its import closure holds `{failed}`, which did not check",
+                        module.name
+                    ),
+                    span: heather_syntax::Span { start: 0, end: 0 },
+                }],
+                warnings: Vec::new(),
                 replayed: false,
                 replayed_items: 0,
                 forced_items: 0,
                 notices: Vec::new(),
             };
         }
+        let dependencies =
+            ModuleDependencyIdentity::new(canon.order.iter().map(|m| self.done[m].identity).collect());
+        let key = ModuleCacheKey::for_source(&module.name, &module.src, &dependencies, lint_profile);
+        let source = SourceKey::for_source(&module.name, &module.src, lint_profile);
+        let in_place = self.process_world
+            && self.process.len() == canon.order.len()
+            && self.process.iter().zip(canon.order.iter()).all(|((n, _), m)| n == m);
+
+        // A hit moved straight into the caller's world: the canonical world
+        // under the module is needed only to elaborate it.
+        if self.process_world && !in_place && self.images_usable && !self.only.contains_key(&module.name) {
+            if let Some(outcome) = self.hit_into_process(elab, module, key, &dependencies, &imports, &canon) {
+                return outcome;
+            }
+        }
 
         let start = elab.psi().bindings.len();
-        if self.world.is_empty() && start > 0 {
-            self.world.push(WorldModule::new(BASE_MODULE.into(), 0..start, None));
-        }
-        let dependencies = ModuleDependencyIdentity::new(self.interfaces.clone());
-        let key = ModuleCacheKey::for_source(
-            &module.name,
-            &module.src,
-            &dependencies,
-            lint_profile,
-        );
-        let source = SourceKey::for_source(&module.name, &module.src, lint_profile);
-        let mut notices = Vec::new();
-        if let Some(force) = self.only.get(&module.name).cloned() {
-            let outcome = self.check_only(elab, module, dependencies, force, notices);
-            if outcome.errors.is_empty() {
-                self.enter_world(elab, module, start, None);
-            }
+        let (outcome, delta, state) = if in_place {
+            let (outcome, delta) = self.check_in(elab, module, lint_profile, key, source, dependencies, &canon);
+            let state = delta.as_ref().map(|_| elab.semantic_image());
+            (outcome, delta, state)
+        } else {
+            let mut world = match stats::timed(stats::Timer::ImageRecheck, || self.world_before(elab, &canon)) {
+                Ok(world) => world,
+                Err(why) => {
+                    self.done.insert(module.name.clone(), Finished::failed(imports, canon, source_len));
+                    return internal_failure(&module.name, why);
+                }
+            };
+            let (outcome, delta) = self.check_in(&mut world, module, lint_profile, key, source, dependencies, &canon);
+            let state = delta.as_ref().map(|_| world.semantic_image());
+            (outcome, delta, state)
+        };
+        let Some(delta) = delta else {
+            self.done.insert(module.name.clone(), Finished::failed(imports, canon, source_len));
             return outcome;
+        };
+        let finished = Finished {
+            imports,
+            canon,
+            failed: false,
+            len: delta.binding_count(),
+            identity: ModuleImageCache::interface_hash(&delta),
+            key,
+            source_len,
+            registry: Some(delta.registry_part()),
+            digest: OnceLock::new(),
+            hashes: None,
+            delta: Some(Rc::new(delta)),
+            state,
+        };
+        self.done.insert(module.name.clone(), finished);
+        if self.process_world {
+            if !in_place {
+                let delta = self.done[&module.name].delta.clone().expect("held");
+                if let Err(why) = self.into_process(elab, &module.name, &delta) {
+                    self.done.get_mut(&module.name).expect("finished").failed = true;
+                    return internal_failure(&module.name, why);
+                }
+            }
+            let end = elab.psi().bindings.len();
+            self.process.push((module.name.clone(), start..end));
+        }
+        outcome
+    }
+
+    /// Whether `module` was refused only because a module of its import
+    /// closure did not check: its one error restates that module's, which a
+    /// caller reporting every module has already shown.
+    pub fn blocked_by_import(&self, module: &str) -> bool {
+        self.done.get(module).is_some_and(|m| m.failed && m.canon.order.iter().any(|d| self.done[d].failed))
+    }
+
+    /// Whether checking `module` now would wait for another process that is
+    /// building its image (`ModuleImageCache::being_built`). Its imports must
+    /// have been checked.
+    pub fn built_elsewhere(&self, module: &Module, imports: &[String], lint_profile: LintProfile) -> bool {
+        let Some(images) = self.images.as_ref().filter(|_| self.images_usable) else { return false };
+        let mut imports: Vec<String> = imports.iter().filter(|m| self.done.contains_key(*m)).cloned().collect();
+        imports.sort();
+        imports.dedup();
+        let canon = self.canon_of(&imports);
+        if canon.order.iter().any(|m| self.done[m].failed) {
+            return false;
+        }
+        let dependencies =
+            ModuleDependencyIdentity::new(canon.order.iter().map(|m| self.done[m].identity).collect());
+        images.being_built(ModuleCacheKey::for_source(&module.name, &module.src, &dependencies, lint_profile))
+    }
+
+    /// The canonical order of the closure of a module with these imports
+    /// (`docs/module-dag-design.md` §2), from the finished modules' own.
+    fn canon_of(&self, imports: &[String]) -> Canon {
+        let Some(big) = imports
+            .iter()
+            .max_by(|a, b| self.done[*a].canon.order.len().cmp(&self.done[*b].canon.order.len()).then(b.cmp(a)))
+        else {
+            return Canon::default();
+        };
+        let mut order: Vec<String> = (*self.done[big].canon.order).clone();
+        order.push(big.clone());
+        let spine = order.len();
+        let mut placed: HashSet<String> = order.iter().cloned().collect();
+        fn visit(done: &HashMap<String, Finished>, m: &str, placed: &mut HashSet<String>, order: &mut Vec<String>) {
+            if placed.contains(m) {
+                return;
+            }
+            for d in &done[m].imports {
+                visit(done, d, placed, order);
+            }
+            placed.insert(m.to_string());
+            order.push(m.to_string());
+        }
+        for m in imports {
+            visit(&self.done, m, &mut placed, &mut order);
+        }
+        Canon { order: Rc::new(order), spine }
+    }
+
+    /// Ψ length of the world `order` (after the prelude).
+    fn world_len(&self, order: &[String]) -> usize {
+        self.base.as_ref().expect("base").len + order.iter().map(|m| self.done[m].len).sum::<usize>()
+    }
+
+    /// An elaborator configured as `template` over the canonical world
+    /// `canon`: the world of its largest import, extended by the rest
+    /// (`docs/module-dag-design.md` §6).
+    fn world_before(&mut self, template: &Elaborator, canon: &Canon) -> Result<Elaborator, String> {
+        let image = match canon.spine {
+            0 => self.base.as_ref().expect("base").image.clone(),
+            k => self.state_of(template, &canon.order[k - 1].clone())?,
+        };
+        let mut world = template.fork_over(&image);
+        for i in canon.spine..canon.order.len() {
+            let order = Rc::clone(&canon.order);
+            self.load_into(&mut world, &order[i], &order[..i])?;
+        }
+        Ok(world)
+    }
+
+    /// The canonical world after `name`, built once.
+    fn state_of(&mut self, template: &Elaborator, name: &str) -> Result<SemanticImage, String> {
+        if let Some(state) = &self.done[name].state {
+            return Ok(state.clone());
+        }
+        let canon = self.done[name].canon.clone();
+        let mut world = self.world_before(template, &canon)?;
+        self.load_into(&mut world, name, &canon.order)?;
+        let state = world.semantic_image();
+        self.done.get_mut(name).expect("finished").state = Some(state.clone());
+        Ok(state)
+    }
+
+    /// `name`'s delta over its canonical world: held, or decoded from the
+    /// store against a placeholder prefix of that world's length.
+    fn canonical_delta(&self, name: &str) -> Result<Rc<ModuleDelta>, String> {
+        let f = &self.done[name];
+        if let Some(delta) = &f.delta {
+            return Ok(Rc::clone(delta));
+        }
+        let images = self.images.as_ref().ok_or("no image store holds it")?;
+        let psi = placeholder(self.world_len(&f.canon.order));
+        match stats::timed(stats::Timer::ImageDecode, || images.load(f.key, psi, f.source_len, self.freshness)) {
+            Ok(Some(loaded)) => Ok(Rc::new(loaded.delta)),
+            Ok(None) => Err(format!("the image of `{name}` is gone from the store")),
+            Err(e) => Err(format!("the image of `{name}` is unusable: {e}")),
+        }
+    }
+
+    /// Move `name`'s canonical delta into `world`, whose modules are
+    /// `before`, and replay it there (`docs/module-dag-design.md` §4).
+    fn load_into(&mut self, world: &mut Elaborator, name: &str, before: &[String]) -> Result<(), String> {
+        let delta = self.canonical_delta(name)?;
+        let f = &self.done[name];
+        let moved = if f.canon.order[..] == *before {
+            delta.over_prefix(world.psi().clone()).ok_or_else(|| format!("`{name}`'s world has another length"))?
+        } else {
+            let map = self.move_map(&f.canon.order, before.iter().map(String::as_str));
+            delta
+                .relocate(RelocationTarget {
+                    dependency_psi: world.psi().clone(),
+                    dependencies: delta.dependencies().clone(),
+                    map: &mut |a| map.at(a),
+                })
+                .map_err(|e| format!("moving `{name}`: {e}"))?
+        };
+        stats::timed(stats::Timer::ImageRecheck, || world.replay_module_delta(&moved, delta.dependencies()))
+            .map_err(|e| format!("replaying `{name}`: {e}"))
+    }
+
+    /// Move a canonical delta into the caller's world.
+    fn into_process(&mut self, elab: &mut Elaborator, name: &str, delta: &ModuleDelta) -> Result<(), String> {
+        let order = self.done[name].canon.order.clone();
+        let map = self.move_map(&order, self.process.iter().map(|(n, _)| n.as_str()));
+        let moved = delta
+            .relocate(RelocationTarget {
+                dependency_psi: elab.psi().clone(),
+                dependencies: delta.dependencies().clone(),
+                map: &mut |a| map.at(a),
+            })
+            .map_err(|e| format!("moving `{name}`: {e}"))?;
+        stats::timed(stats::Timer::ImageRecheck, || elab.replay_module_delta(&moved, delta.dependencies()))
+            .map_err(|e| format!("replaying `{name}`: {e}"))
+    }
+
+    /// The position map from the world `from` to a world whose modules are
+    /// `to`, module by module: each module's bindings keep their layout.
+    fn move_map<'a>(&self, from: &[String], to: impl Iterator<Item = &'a str>) -> MoveMap {
+        let base = self.base.as_ref().expect("base").len;
+        let mut at = base;
+        let mut new_start = HashMap::new();
+        for m in to {
+            new_start.insert(m, at);
+            at += self.done.get(m).map_or(0, |f| f.len);
+        }
+        let mut ranges = Vec::with_capacity(from.len());
+        let mut at = base;
+        for m in from {
+            let len = self.done[m].len;
+            ranges.push((at, at + len, new_start.get(m.as_str()).copied()));
+            at += len;
+        }
+        MoveMap { base, ranges }
+    }
+
+    /// The world under a module checked in the caller's elaborator out of
+    /// place, when the store has its image: moved there directly, never
+    /// through the canonical world, which only elaboration needs. `None`
+    /// sends the module down the canonical path, which reports what this
+    /// one saw.
+    fn hit_into_process(
+        &mut self,
+        elab: &mut Elaborator,
+        module: &Module,
+        key: ModuleCacheKey,
+        dependencies: &ModuleDependencyIdentity,
+        imports: &[String],
+        canon: &Canon,
+    ) -> Option<ModuleOutcome> {
+        let images = self.images.as_ref()?;
+        let psi = placeholder(self.world_len(&canon.order));
+        let loaded = stats::timed(stats::Timer::ImageDecode, || images.load(key, psi, module.src.len(), self.freshness))
+            .ok()??;
+        if loaded.delta.dependencies() != dependencies {
+            return None;
+        }
+        let start = elab.psi().bindings.len();
+        let map = self.move_map(&canon.order, self.process.iter().map(|(n, _)| n.as_str()));
+        let moved = loaded
+            .delta
+            .relocate(RelocationTarget {
+                dependency_psi: elab.psi().clone(),
+                dependencies: dependencies.clone(),
+                map: &mut |a| map.at(a),
+            })
+            .ok()?;
+        stats::timed(stats::Timer::ImageRecheck, || elab.replay_module_delta(&moved, dependencies)).ok()?;
+        self.hits += 1;
+        let mut notices = Vec::new();
+        self.note_stale(&module.name, loaded.stale, &mut notices);
+        // The canonical delta is not kept: the caller's world holds the moved
+        // copy, and a later elaboration that needs this module's canonical
+        // world decodes it again.
+        self.done.insert(
+            module.name.clone(),
+            Finished {
+                imports: imports.to_vec(),
+                canon: canon.clone(),
+                failed: false,
+                len: loaded.delta.binding_count(),
+                identity: loaded.interface_hash,
+                key,
+                source_len: module.src.len(),
+                registry: Some(loaded.delta.registry_part()),
+                digest: OnceLock::new(),
+                hashes: None,
+                delta: None,
+                state: None,
+            },
+        );
+        let end = elab.psi().bindings.len();
+        self.process.push((module.name.clone(), start..end));
+        Some(ModuleOutcome {
+            errors: Vec::new(),
+            warnings: loaded.warnings,
+            replayed: true,
+            replayed_items: 0,
+            forced_items: 0,
+            notices,
+        })
+    }
+
+    fn note_stale(&mut self, module: &str, stale: Option<SemanticsIdentity>, notices: &mut Vec<CacheNotice>) {
+        match stale {
+            Some(writer) if writer == SemanticsIdentity::relocated() => {
+                self.relocated += 1;
+                notices.push(CacheNotice {
+                    module: module.to_string(),
+                    kind: CacheNoticeKind::Relocated,
+                    error: "stored after an earlier relocation".into(),
+                });
+            }
+            Some(writer) => {
+                self.stale_hits += 1;
+                notices.push(CacheNotice {
+                    module: module.to_string(),
+                    kind: CacheNoticeKind::StaleReplayed,
+                    error: format!("build {} rather than {}", writer.short(), SemanticsIdentity::current().short()),
+                });
+            }
+            None => {}
+        }
+    }
+
+    /// Check or replay `module` in `elab`, whose world is exactly the
+    /// canonical world `canon` under it. Returns the module's delta over
+    /// that world when it checked.
+    #[allow(clippy::too_many_arguments)]
+    fn check_in(
+        &mut self,
+        elab: &mut Elaborator,
+        module: &Module,
+        lint_profile: LintProfile,
+        key: ModuleCacheKey,
+        source: SourceKey,
+        dependencies: ModuleDependencyIdentity,
+        canon: &Canon,
+    ) -> (ModuleOutcome, Option<ModuleDelta>) {
+        elab.set_lint_profile(lint_profile);
+        let start = elab.psi().bindings.len();
+        let mut notices = Vec::new();
+        if !self.images_usable {
+            let checked = elab.check_module_delta(&module.name, &module.src, dependencies);
+            elab.take_omega_reports();
+            return match checked {
+                Ok(delta) => (
+                    ModuleOutcome { errors: Vec::new(), warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, notices },
+                    Some(delta),
+                ),
+                Err(errors) => (
+                    ModuleOutcome { errors, warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, notices },
+                    None,
+                ),
+            };
+        }
+        if let Some(force) = self.only.get(&module.name).cloned() {
+            return self.check_only(elab, module, dependencies, force, notices);
         }
         let images = self.images.as_ref().expect("usable images have a cache");
         // A miss takes the key's build lock and looks again before building:
@@ -383,40 +799,19 @@ impl SemanticSession {
                     elab.replay_module_delta(&loaded.delta, &dependencies)
                 }) {
                     Ok(()) => {
-                        self.interfaces.push(loaded.interface_hash);
                         self.hits += 1;
-                        match loaded.stale {
-                            Some(writer) if writer == SemanticsIdentity::relocated() => {
-                                self.relocated += 1;
-                                notices.push(CacheNotice {
-                                    module: module.name.clone(),
-                                    kind: CacheNoticeKind::Relocated,
-                                    error: "stored after an earlier relocation".into(),
-                                });
-                            }
-                            Some(writer) => {
-                                self.stale_hits += 1;
-                                notices.push(CacheNotice {
-                                    module: module.name.clone(),
-                                    kind: CacheNoticeKind::StaleReplayed,
-                                    error: format!(
-                                        "build {} rather than {}",
-                                        writer.short(),
-                                        SemanticsIdentity::current().short()
-                                    ),
-                                });
-                            }
-                            None => {}
-                        }
-                        self.enter_world(elab, module, start, Some(loaded.delta.registry_part()));
-                        return ModuleOutcome {
-                            errors: Vec::new(),
-                            warnings: loaded.warnings,
-                            replayed: true,
-                            replayed_items: 0,
-                            forced_items: 0,
-                            notices,
-                        };
+                        self.note_stale(&module.name, loaded.stale, &mut notices);
+                        return (
+                            ModuleOutcome {
+                                errors: Vec::new(),
+                                warnings: loaded.warnings,
+                                replayed: true,
+                                replayed_items: 0,
+                                forced_items: 0,
+                                notices,
+                            },
+                            Some(loaded.delta),
+                        );
                     }
                     // A dependency theorem this module computed with has a
                     // new proof under the same statement: an ordinary miss,
@@ -450,7 +845,8 @@ impl SemanticSession {
         // image of the same source here (the stale lane) or auditing that
         // move against the elaboration (the exact lane), and for the world
         // record the publication below carries either way.
-        let view = stats::timed(stats::Timer::ImageRelocate, || self.observe_world(elab, module));
+        let (world, merkle) = stats::timed(stats::Timer::ImageRelocate, || self.world_view(elab, canon));
+        let view = stats::timed(stats::Timer::ImageRelocate, || observe_world(&world, &merkle, elab, module));
         if view.is_none() && std::env::var_os("HEATHER_RELOCATION_DEBUG").is_some() {
             eprintln!("relocation-debug {}: no world view", module.name);
         }
@@ -459,13 +855,12 @@ impl SemanticSession {
             match self.freshness {
                 ImageFreshness::AcceptStale => {
                     match stats::timed(stats::Timer::ImageRelocate, || {
-                        self.relocation(elab, module, source, &dependencies, view)
+                        self.relocation(&world, &merkle, elab, module, source, &dependencies, view)
                     }) {
                         Relocation::Moved { delta, warnings, lookups } => match stats::timed(stats::Timer::ImageRecheck, || {
                             elab.replay_module_delta(&delta, &dependencies)
                         }) {
                             Ok(()) => {
-                                self.interfaces.push(ModuleImageCache::interface_hash(&delta));
                                 self.hits += 1;
                                 self.relocated += 1;
                                 notices.push(CacheNotice {
@@ -473,7 +868,7 @@ impl SemanticSession {
                                     kind: CacheNoticeKind::Relocated,
                                     error: "registries and the names it wrote unchanged".into(),
                                 });
-                                let record = self.world_record(start, &delta, view, lookups);
+                                let record = world_record(&world, &merkle, start, &delta, view, lookups);
                                 let images = self.images.as_ref().expect("usable images have a cache");
                                 if let Err(error) = stats::timed(stats::Timer::ImagePublish, || {
                                     images.publish_world(
@@ -490,15 +885,17 @@ impl SemanticSession {
                                         error: error.to_string(),
                                     });
                                 }
-                                self.enter_world(elab, module, start, Some(delta.registry_part()));
-                                return ModuleOutcome {
-                                    errors: Vec::new(),
-                                    warnings,
-                                    replayed: true,
-                                    replayed_items: 0,
-                                    forced_items: 0,
-                                    notices,
-                                };
+                                return (
+                                    ModuleOutcome {
+                                        errors: Vec::new(),
+                                        warnings,
+                                        replayed: true,
+                                        replayed_items: 0,
+                                        forced_items: 0,
+                                        notices,
+                                    },
+                                    Some(delta),
+                                );
                             }
                             Err(error) => notices.push(CacheNotice {
                                 module: module.name.clone(),
@@ -519,7 +916,7 @@ impl SemanticSession {
                     }
                 }
                 ImageFreshness::Exact if self.audit.is_some() => {
-                    audited = Some(self.relocation(elab, module, source, &dependencies, view));
+                    audited = Some(self.relocation(&world, &merkle, elab, module, source, &dependencies, view));
                 }
                 ImageFreshness::Exact => {}
             }
@@ -580,25 +977,26 @@ impl SemanticSession {
                 checked
             }
             Err(errors) => {
-                self.images_usable = false;
-                return ModuleOutcome {
-                    errors,
-                    warnings: elab.take_warnings(),
-                    replayed: false,
-                    replayed_items: 0,
-                    forced_items: 0,
-                    notices,
-                };
+                return (
+                    ModuleOutcome {
+                        errors,
+                        warnings: elab.take_warnings(),
+                        replayed: false,
+                        replayed_items: 0,
+                        forced_items: 0,
+                        notices,
+                    },
+                    None,
+                );
             }
         };
         self.replayed_items += replayed_items;
-        self.interfaces.push(ModuleImageCache::interface_hash(&delta));
         let warnings = elab.take_warnings();
         if let Some(audited) = audited {
             self.audit(&module.name, audited, &delta);
         }
         let record = view.zip(lookups).and_then(|(view, lookups)| {
-            stats::timed(stats::Timer::ImageRelocate, || self.world_record(start, &delta, &view, lookups))
+            stats::timed(stats::Timer::ImageRelocate, || world_record(&world, &merkle, start, &delta, &view, lookups))
         });
         let images = self.images.as_ref().expect("usable images have a cache");
         if let Err(error) = stats::timed(stats::Timer::ImagePublish, || {
@@ -616,127 +1014,59 @@ impl SemanticSession {
                 error: error.to_string(),
             });
         }
-        self.enter_world(elab, module, start, Some(delta.registry_part()));
-        ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, forced_items: 0, notices }
+        (ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, forced_items: 0, notices }, Some(delta))
     }
 
-    /// Record a module that is now in Ψ as part of the world under the next.
-    fn enter_world(&mut self, elab: &Elaborator, module: &Module, start: usize, registry: Option<RegistryPart>) {
-        let end = elab.psi().bindings.len();
-        // `--only` keeps no delta to take a registry part from; a module of
-        // unknown registry contribution makes every later digest
-        // incomparable, which refuses every later relocation, as it should.
-        let registry = registry.or_else(|| Some(RegistryPart::unknown()));
-        self.world.push(WorldModule::new(module.name.clone(), start..end, registry));
-    }
-
-    /// Content hashes for every binding in Ψ, extending the ones already
-    /// taken: Ψ only grows within a session.
-    /// An assumption hashes in its own domain, as in the verdict store: a
-    /// theorem turned into an assumption of the same statement is a change.
-    fn sync_merkle(&mut self, elab: &Elaborator) {
+    /// The world under a module whose world is `canon`, as the early cutoff
+    /// reads it: its modules with their registry contributions, and a
+    /// content hash per binding. Hashes and digests are position-independent,
+    /// so each module's are taken once and reused in every world.
+    fn world_view(&mut self, elab: &Elaborator, canon: &Canon) -> (Vec<WorldModule>, Vec<Option<Hash>>) {
         let psi = elab.psi();
-        if self.merkle.len() > psi.bindings.len() {
-            self.merkle.clear();
-        }
-        while self.merkle.len() < psi.bindings.len() {
-            let at = self.merkle.len();
-            let h = if elab.is_assumption_at(at) {
-                merkle::assumption_interface_hash(&self.merkle, &psi.bindings[at])
-            } else {
-                merkle::interface_hash(&self.merkle, &psi.bindings[at])
-            };
-            self.merkle.push(h);
-        }
-    }
-
-    /// The registry digest and name digest of the world under `module`
-    /// (`docs/module-interface-cutoff-design.md` §2); `None` when some part
-    /// of it cannot be hashed, which only ever costs a relocation.
-    fn observe_world(&mut self, elab: &Elaborator, module: &Module) -> Option<WorldView> {
-        self.sync_merkle(elab);
-        let mut registry = Sha256::new();
-        registry.update(b"heather/world-registry/1\0");
-        for m in &self.world {
-            match &m.registry {
-                None => {
-                    put_str(&mut registry, &m.name);
-                    for at in m.range.clone() {
-                        registry.update(&self.merkle[at]?);
-                    }
-                }
-                Some(part) if part.is_inert() => {}
-                Some(_) => {
-                    put_str(&mut registry, &m.name);
-                    registry.update(&m.registry_digest(&self.merkle)?);
-                }
-            }
-        }
-        Some(WorldView {
-            registry: registry.finish(),
-            names: elab.name_world(),
-            identifiers: source_identifiers(&module.src),
-        })
-    }
-
-    /// The digest of what the identifiers of `view` and `lookups` resolve to
-    /// in its names: every declaration whose last segment is one of them,
-    /// with its content hash, and every module named by one.
-    fn names_digest(&self, view: &WorldView, lookups: &[String]) -> Option<Hash> {
-        let lookups: BTreeSet<&str> = lookups.iter().map(String::as_str).collect();
-        let wanted = |name: &str| view.identifiers.contains(name) || lookups.contains(name);
-        let observed = view.names.observations(&wanted);
-        let mut names = Sha256::new();
-        names.update(b"heather/world-names/2\0");
-        names.update(&(observed.bytes.len() as u64).to_le_bytes());
-        names.update(&observed.bytes);
-        for at in observed.globals {
-            names.update(&(*self.merkle.get(at)?)?);
-        }
-        // A module name it wrote or looked up is a qualifier it may have
-        // resolved.
-        for m in &self.world {
-            if wanted(&m.name) {
-                put_str(&mut names, &m.name);
-            }
-        }
-        Some(names.finish())
-    }
-
-    /// The world record a published image of `delta` carries: its
-    /// dependency references by content, and the digests of `view`.
-    fn world_record(&self, base: usize, delta: &ModuleDelta, view: &WorldView, lookups: Vec<String>) -> Option<WorldRecord> {
-        let mut references = Vec::new();
-        let refs = match delta.dependency_references() {
-            Ok(refs) => refs,
-            Err(e) => {
-                if std::env::var_os("HEATHER_RELOCATION_DEBUG").is_some() {
-                    eprintln!("relocation-debug {}: no record: {e}", delta.module());
-                }
-                return None;
+        let base = self.base.as_mut().expect("base");
+        let base_len = base.len;
+        let base_hashes = match &base.hashes {
+            Some(h) => Rc::clone(h),
+            None => {
+                let mut merkle = Vec::with_capacity(base_len);
+                hash_bindings(elab, psi, 0..base_len, &mut merkle);
+                let h = Rc::new(merkle);
+                base.hashes = Some(Rc::clone(&h));
+                h
             }
         };
-        for at in refs {
-            let module = self.world.partition_point(|m| m.range.end <= at);
-            let m = self.world.get(module).filter(|m| m.range.contains(&at))?;
-            let hash = (*self.merkle.get(at)?)?;
-            let same = m.index(&self.merkle).get(&hash)?;
-            references.push(WorldReference {
-                abs: at as u64,
-                module: module as u32,
-                hash,
-                rank: same.binary_search(&at).ok()? as u32,
-                count: same.len() as u32,
-            });
+        let mut merkle: Vec<Option<Hash>> = Vec::with_capacity(psi.bindings.len());
+        merkle.extend(base_hashes.iter().copied());
+        let mut world = Vec::with_capacity(canon.order.len() + 1);
+        if base_len > 0 {
+            world.push(WorldModule::new(BASE_MODULE.into(), 0..base_len, None));
         }
-        Some(WorldRecord {
-            base: base as u64,
-            modules: self.world.iter().map(|m| m.name.clone()).collect(),
-            references,
-            registry: view.registry,
-            names: self.names_digest(view, &lookups)?,
-            lookups,
-        })
+        for m in canon.order.iter() {
+            let at = merkle.len();
+            let f = self.done.get_mut(m).expect("finished");
+            match &f.hashes {
+                Some(h) => merkle.extend(h.iter().copied()),
+                None => {
+                    hash_bindings(elab, psi, at..at + f.len, &mut merkle);
+                    f.hashes = Some(Rc::new(merkle[at..].to_vec()));
+                }
+            }
+            let wm = WorldModule::new(m.clone(), at..at + f.len, f.registry.clone().or_else(|| Some(RegistryPart::unknown())));
+            if let Some(d) = f.digest.get() {
+                let _ = wm.digest.set(*d);
+            }
+            world.push(wm);
+        }
+        // Digests taken here are kept for the next world.
+        for wm in &world {
+            if let Some(f) = self.done.get(&wm.name)
+                && f.digest.get().is_none()
+                && wm.registry.as_ref().is_some_and(|p| !p.is_inert())
+            {
+                let _ = f.digest.set(wm.registry_digest(&merkle));
+            }
+        }
+        (world, merkle)
     }
 
     /// Look for an image of this exact source over another world, and move
@@ -745,8 +1075,11 @@ impl SemanticSession {
     /// every binding it refers to is found again, by content, in the module
     /// it came from (`docs/module-interface-cutoff-design.md` §3). The moved
     /// delta is not replayed here.
+    #[allow(clippy::too_many_arguments)]
     fn relocation(
         &self,
+        world: &[WorldModule],
+        merkle: &[Option<Hash>],
         elab: &Elaborator,
         module: &Module,
         source: SourceKey,
@@ -767,16 +1100,16 @@ impl SemanticSession {
         if record.registry != view.registry {
             return Relocation::Refused("the world's registries differ".into());
         }
-        if Some(record.names) != self.names_digest(view, &record.lookups) {
+        if Some(record.names) != names_digest(world, merkle, view, &record.lookups) {
             return Relocation::Refused("a name the module wrote resolves differently".into());
         }
-        let by_name: HashMap<&str, &WorldModule> = self.world.iter().map(|m| (m.name.as_str(), m)).collect();
+        let by_name: HashMap<&str, &WorldModule> = world.iter().map(|m| (m.name.as_str(), m)).collect();
         let mut map = HashMap::with_capacity(record.references.len());
         for r in &record.references {
             let Some(m) = by_name.get(record.modules[r.module as usize].as_str()) else {
                 return Relocation::Refused(format!("module `{}` is not in this world", record.modules[r.module as usize]));
             };
-            match m.index(&self.merkle).get(&r.hash) {
+            match m.index(merkle).get(&r.hash) {
                 Some(same) if same.len() == r.count as usize => {
                     map.insert(r.abs as usize, same[r.rank as usize]);
                 }
@@ -842,16 +1175,14 @@ impl SemanticSession {
         dependencies: ModuleDependencyIdentity,
         force: BTreeSet<String>,
         mut notices: Vec<CacheNotice>,
-    ) -> ModuleOutcome {
+    ) -> (ModuleOutcome, Option<ModuleDelta>) {
         let images = self.images.as_ref().expect("usable images have a cache");
         let previous = stats::timed(stats::Timer::ImageDecode, || {
             images.load_previous(&module.name, &dependencies, elab.psi().clone(), self.freshness)
         });
-        let previous = match previous {
-            Ok(Some(previous)) => previous,
-            Ok(None) => {
-                self.images_usable = false;
-                return ModuleOutcome {
+        let refused = |notices: Vec<CacheNotice>| {
+            (
+                ModuleOutcome {
                     errors: vec![ElabError::Elab {
                         msg: NoPreviousImage {
                             module: module.name.clone(),
@@ -865,30 +1196,20 @@ impl SemanticSession {
                     replayed_items: 0,
                     forced_items: 0,
                     notices,
-                };
-            }
+                },
+                None,
+            )
+        };
+        let previous = match previous {
+            Ok(Some(previous)) => previous,
+            Ok(None) => return refused(notices),
             Err(error) => {
                 notices.push(CacheNotice {
                     module: module.name.clone(),
                     kind: CacheNoticeKind::PreviousUnusable,
                     error: error.to_string(),
                 });
-                self.images_usable = false;
-                return ModuleOutcome {
-                    errors: vec![ElabError::Elab {
-                        msg: NoPreviousImage {
-                            module: module.name.clone(),
-                            refusal: images.refusal(&module.name, &dependencies),
-                        }
-                        .to_string(),
-                        span: heather_syntax::Span { start: 0, end: 0 },
-                    }],
-                    warnings: Vec::new(),
-                    replayed: false,
-                    replayed_items: 0,
-                    forced_items: 0,
-                    notices,
-                };
+                return refused(notices);
             }
         };
         match elab.check_module_delta_only(&module.name, &module.src, dependencies, &previous.delta, force) {
@@ -896,21 +1217,22 @@ impl SemanticSession {
                 elab.take_omega_reports();
                 self.replayed_items += report.replayed;
                 self.only_met.extend(met.into_iter().map(|n| format!("{}::{n}", module.name)));
-                // The interface a full check would have published, so later
-                // modules replay over the same world; the image itself is
-                // not written.
-                self.interfaces.push(ModuleImageCache::interface_hash(&delta));
-                ModuleOutcome {
-                    errors: Vec::new(),
-                    warnings: elab.take_warnings(),
-                    replayed: false,
-                    replayed_items: report.replayed,
-                    forced_items: report.forced,
-                    notices,
-                }
+                // The delta a full check would have published, so later
+                // modules are checked over the same world; the image itself
+                // is not written.
+                (
+                    ModuleOutcome {
+                        errors: Vec::new(),
+                        warnings: elab.take_warnings(),
+                        replayed: false,
+                        replayed_items: report.replayed,
+                        forced_items: report.forced,
+                        notices,
+                    },
+                    Some(delta),
+                )
             }
-            Err(errors) => {
-                self.images_usable = false;
+            Err(errors) => (
                 ModuleOutcome {
                     errors,
                     warnings: elab.take_warnings(),
@@ -918,10 +1240,198 @@ impl SemanticSession {
                     replayed_items: 0,
                     forced_items: 0,
                     notices,
+                },
+                None,
+            ),
+        }
+    }
+}
+
+impl Finished {
+    fn failed(imports: Vec<String>, canon: Canon, source_len: usize) -> Self {
+        Finished {
+            imports,
+            canon,
+            failed: true,
+            len: 0,
+            identity: [0; 32],
+            key: ModuleCacheKey::for_source("", "", &ModuleDependencyIdentity::default(), LintProfile::Default),
+            source_len,
+            registry: None,
+            digest: OnceLock::new(),
+            hashes: None,
+            delta: None,
+            state: None,
+        }
+    }
+}
+
+/// [`SemanticSession::move_map`]'s map: old position to new.
+struct MoveMap {
+    base: usize,
+    /// Per module of the old world, in order: its old range and its new
+    /// start, `None` when the new world does not hold it.
+    ranges: Vec<(usize, usize, Option<usize>)>,
+}
+
+impl MoveMap {
+    fn at(&self, a: usize) -> Option<usize> {
+        if a < self.base {
+            return Some(a);
+        }
+        let i = self.ranges.partition_point(|&(_, end, _)| end <= a);
+        let &(start, end, new) = self.ranges.get(i)?;
+        (start..end).contains(&a).then_some(new? + (a - start))
+    }
+}
+
+/// A prefix of `len` bindings that are nobody: what an image is decoded
+/// against when it is moved before it is replayed. Its length is all the
+/// decoder reads of it, and the move replaces it before the replay compares
+/// the prefix with the world's.
+fn placeholder(len: usize) -> GlobalCtx {
+    GlobalCtx::new(vec![GlobalBinding::Ctx; len])
+}
+
+/// The modules a source imports, as written, the prelude aside. The loader
+/// read the same lines; a parse error is the elaborator's to report.
+pub fn written_imports(src: &str) -> Vec<String> {
+    match heather_syntax::parse_file(src) {
+        Ok(file) => file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                heather_syntax::Item::Import(imp) if imp.module != heather_elab::PRELUDE_MODULE => Some(imp.module.clone()),
+                _ => None,
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn internal_failure(module: &str, why: String) -> ModuleOutcome {
+    ModuleOutcome {
+        errors: vec![ElabError::Elab {
+            msg: format!("module `{module}` could not be placed in its world: {why}"),
+            span: heather_syntax::Span { start: 0, end: 0 },
+        }],
+        warnings: Vec::new(),
+        replayed: false,
+        replayed_items: 0,
+        forced_items: 0,
+        notices: Vec::new(),
+    }
+}
+
+/// Content hashes for `range` of `psi`, appended to `merkle`, which holds
+/// the hashes of everything before it.
+/// An assumption hashes in its own domain, as in the verdict store: a
+/// theorem turned into an assumption of the same statement is a change.
+fn hash_bindings(elab: &Elaborator, psi: &GlobalCtx, range: Range<usize>, merkle: &mut Vec<Option<Hash>>) {
+    for at in range {
+        let binding = psi.bindings.get(at).expect("in the world");
+        let h = if elab.is_assumption_at(at) {
+            merkle::assumption_interface_hash(merkle, binding)
+        } else {
+            merkle::interface_hash(merkle, binding)
+        };
+        merkle.push(h);
+    }
+}
+
+/// The registry digest and name digest of the world under `module`
+/// (`docs/module-interface-cutoff-design.md` §2); `None` when some part
+/// of it cannot be hashed, which only ever costs a relocation.
+fn observe_world(world: &[WorldModule], merkle: &[Option<Hash>], elab: &Elaborator, module: &Module) -> Option<WorldView> {
+    let mut registry = Sha256::new();
+    registry.update(b"heather/world-registry/1\0");
+    for m in world {
+        match &m.registry {
+            None => {
+                put_str(&mut registry, &m.name);
+                for at in m.range.clone() {
+                    registry.update(&merkle[at]?);
                 }
+            }
+            Some(part) if part.is_inert() => {}
+            Some(_) => {
+                put_str(&mut registry, &m.name);
+                registry.update(&m.registry_digest(merkle)?);
             }
         }
     }
+    Some(WorldView {
+        registry: registry.finish(),
+        names: elab.name_world(),
+        identifiers: source_identifiers(&module.src),
+    })
+}
+
+/// The digest of what the identifiers of `view` and `lookups` resolve to
+/// in its names: every declaration whose last segment is one of them,
+/// with its content hash, and every module named by one.
+fn names_digest(world: &[WorldModule], merkle: &[Option<Hash>], view: &WorldView, lookups: &[String]) -> Option<Hash> {
+    let lookups: BTreeSet<&str> = lookups.iter().map(String::as_str).collect();
+    let wanted = |name: &str| view.identifiers.contains(name) || lookups.contains(name);
+    let observed = view.names.observations(&wanted);
+    let mut names = Sha256::new();
+    names.update(b"heather/world-names/2\0");
+    names.update(&(observed.bytes.len() as u64).to_le_bytes());
+    names.update(&observed.bytes);
+    for at in observed.globals {
+        names.update(&(*merkle.get(at)?)?);
+    }
+    // A module name it wrote or looked up is a qualifier it may have
+    // resolved.
+    for m in world {
+        if wanted(&m.name) {
+            put_str(&mut names, &m.name);
+        }
+    }
+    Some(names.finish())
+}
+
+/// The world record a published image of `delta` carries: its
+/// dependency references by content, and the digests of `view`.
+fn world_record(
+    world: &[WorldModule],
+    merkle: &[Option<Hash>],
+    base: usize,
+    delta: &ModuleDelta,
+    view: &WorldView,
+    lookups: Vec<String>,
+) -> Option<WorldRecord> {
+    let mut references = Vec::new();
+    let refs = match delta.dependency_references() {
+        Ok(refs) => refs,
+        Err(e) => {
+            if std::env::var_os("HEATHER_RELOCATION_DEBUG").is_some() {
+                eprintln!("relocation-debug {}: no record: {e}", delta.module());
+            }
+            return None;
+        }
+    };
+    for at in refs {
+        let module = world.partition_point(|m| m.range.end <= at);
+        let m = world.get(module).filter(|m| m.range.contains(&at))?;
+        let hash = (*merkle.get(at)?)?;
+        let same = m.index(merkle).get(&hash)?;
+        references.push(WorldReference {
+            abs: at as u64,
+            module: module as u32,
+            hash,
+            rank: same.binary_search(&at).ok()? as u32,
+            count: same.len() as u32,
+        });
+    }
+    Some(WorldRecord {
+        base: base as u64,
+        modules: world.iter().map(|m| m.name.clone()).collect(),
+        references,
+        registry: view.registry,
+        names: names_digest(world, merkle, view, &lookups)?,
+        lookups,
+    })
 }
 
 impl WorldModule {

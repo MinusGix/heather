@@ -150,6 +150,20 @@ impl Elaborator {
         }
     }
 
+    /// An elaborator configured as this one (its gate, kernel width, lints,
+    /// collectors) over `image`'s world instead of its own: where a driver
+    /// elaborates a module over exactly its import closure
+    /// (`docs/module-dag-design.md` §6). The memos keyed by Ψ position are
+    /// dropped, as a rollback drops them, and nothing this elaborator has
+    /// pending (warnings, reports, a journal) comes along.
+    pub fn fork_over(&self, image: &SemanticImage) -> Elaborator {
+        let mut elab = self.fork();
+        image.committed.clone().restore(&mut elab);
+        elab.take_warnings();
+        elab.take_omega_reports();
+        elab
+    }
+
     /// Run an operation atomically with respect to all committed session
     /// state. The original error is returned after restoring the checkpoint.
     pub(crate) fn session_transaction<T>(

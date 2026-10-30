@@ -33,8 +33,7 @@ fn write_program(module: &str, symbol: &str, output: &Path, both_allocators: boo
     cmd.current_dir(&root)
         .args(["write-elf", module, symbol, "-o"])
         .arg(output)
-        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES)
-        .args(["--world", "lib"]);
+        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }

@@ -1,7 +1,8 @@
-//! A module checked by two processes shares one image only when both gave it
-//! the same prefix (`docs/library-world-design.md`): the lint profile is the
-//! module's own, and `--world` loads the library's shared modules in one
-//! order before each root's own.
+//! A module checked by two processes shares one image whatever else either
+//! process loads (`docs/module-dag-design.md`): it is checked over its own
+//! import closure, keyed by that closure, under its own lint profile.
+//! `--world`, which made the prefixes equal instead
+//! (`docs/library-world-design.md`), is accepted and changes nothing.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -39,10 +40,10 @@ fn replayed(stdout: &str) -> usize {
     before.rsplit(' ').next().unwrap().parse().unwrap()
 }
 
-/// `colour` sorts first and `user` imports it before `base`, so `lib/c`'s
-/// own load order puts `colour` under `base` and `lib/b`'s does not: two
-/// prefixes, so two elaborations of `base`, and `colour`'s inductive moves
-/// `base`'s nominal tag besides.
+/// `user` imports `colour` before `base`, so `lib/c`'s load order puts
+/// `colour` under `base` where `lib/b`'s holds no `colour` at all, and
+/// `colour`'s inductive came before `base`'s in one process and not in the
+/// other.
 const LIB: &[(&str, &str)] = &[
     ("lib/a/colour.hthr", "inductive Colour { Red, Green }\n"),
     ("lib/a/shade.hthr", "import colour;\nfn shade(c: Colour) → Colour { c }\n"),
@@ -52,31 +53,32 @@ const LIB: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn folders_over_one_world_share_their_shared_modules() {
+fn folders_share_their_shared_modules_whatever_their_load_orders() {
     let root = library("shared", LIB);
-    check(&root, &["--world", "lib", "lib/b"]);
-    // `colour` and `base`, built by `lib/b`'s process over the same prefix.
-    assert_eq!(replayed(&check(&root, &["--world", "lib", "lib/c"])), 2);
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// The control: without the world, `lib/c` replays nothing `lib/b` built.
-#[test]
-fn folders_over_their_own_load_orders_share_nothing() {
-    let root = library("unshared", LIB);
     check(&root, &["lib/b"]);
-    assert_eq!(replayed(&check(&root, &["lib/c"])), 0);
+    check(&root, &["lib/a"]);
+    // `colour` and `base`, built by two other processes over other loads.
+    assert_eq!(replayed(&check(&root, &["lib/c"])), 2);
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A root needing no shared module loads none, and a root needing an early
-/// one loads only the world up to it: `lib/a` is checked over `colour` alone.
+/// A root loads its closure and nothing else: `lib/a` needs only `colour`
+/// of what `lib/c` built.
 #[test]
-fn a_root_loads_the_world_only_up_to_what_it_needs() {
+fn a_root_loads_only_its_closure() {
     let root = library("prefix", LIB);
-    check(&root, &["--world", "lib", "lib/c"]);
-    let out = check(&root, &["--world", "lib", "lib/a"]);
+    check(&root, &["lib/c"]);
+    let out = check(&root, &["lib/a"]);
     assert_eq!(replayed(&out), 1, "{out}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `--world` is accepted for the callers that pass it, and changes nothing.
+#[test]
+fn the_world_flag_changes_nothing() {
+    let root = library("flag", LIB);
+    check(&root, &["lib/c"]);
+    assert_eq!(replayed(&check(&root, &["--world", "lib", "lib/c"])), 3);
     let _ = std::fs::remove_dir_all(&root);
 }
 

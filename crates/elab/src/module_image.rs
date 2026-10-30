@@ -33,7 +33,7 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x1a";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x1b";
 const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x18";
 
 /// Hard limits applied before any decoded collection or string allocation.

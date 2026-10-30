@@ -825,6 +825,20 @@ impl ModuleImageCache {
         Some(file)
     }
 
+    /// Whether another process is building `key` now: no image yet, and its
+    /// build lock is held. A scheduler sets such a module aside and checks
+    /// another whose imports it has, rather than wait
+    /// (`docs/module-dag-design.md` §7). Advisory, like the lock: `false`
+    /// when it cannot tell.
+    pub fn being_built(&self, key: ModuleCacheKey) -> bool {
+        if self.path(key).exists() {
+            return false;
+        }
+        let path = self.dir.join(format!("{}.lock", hex(&key.0)));
+        let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) else { return false };
+        matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    }
+
     /// Publish through a unique temporary sibling and atomic rename. Leaving
     /// a temporary file after a crash is harmless: readers name only the
     /// content-addressed final path.

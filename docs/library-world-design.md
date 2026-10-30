@@ -1,7 +1,9 @@
 # One world for every process that checks the library
 
-Status: implemented (`heather check --world <dir>`, `crates/cli/src/world.rs`);
-the library gate uses `--world lib`.
+Status: superseded by `docs/module-dag-design.md` (2026-10-30): a module is
+checked over its own import closure and keyed by it, so no process needs a
+shared prefix. `--world` is accepted and ignored; `World::folders` survives as
+the gate's folder order. Kept for the history of why the chain existed.
 Issue: `issues/early-cutoff-registry-and-order-granularity.md`.
 
 ## 1. Why a folder could not use another folder's images
