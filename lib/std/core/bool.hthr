@@ -91,7 +91,7 @@ theorem or_bit_reflects<P>(d: P ∨ ¬P): Reflects(P, or_bit(d)) {
 }
 
 // The connectives' bits reflect the connectives.
-theorem reflects_and(P, Q: Type, x, y: Bool, p: Reflects(P, x), q: Reflects(Q, y)): Reflects(P ∧ Q, x && y) {
+theorem reflects_and({P, Q: Type}, {x, y: Bool}, p: Reflects(P, x), q: Reflects(Q, y)): Reflects(P ∧ Q, x && y) {
     And(λ e => (match x as λ c => (x = c) → (c && y = True) → P ∧ Q {
             True => λ hx hy => And(p.left(hx), q.left(hy)),
             False => λ _ no => absurd(no),
@@ -102,7 +102,7 @@ theorem reflects_and(P, Q: Type, x, y: Bool, p: Reflects(P, x), q: Reflects(Q, y
         })(refl, e))
 }
 
-theorem reflects_or(P, Q: Type, x, y: Bool, p: Reflects(P, x), q: Reflects(Q, y)): Reflects(P ∨ Q, x || y) {
+theorem reflects_or({P, Q: Type}, {x, y: Bool}, p: Reflects(P, x), q: Reflects(Q, y)): Reflects(P ∨ Q, x || y) {
     And(λ e => (match x as λ c => (x = c) → (c || y = True) → P ∨ Q {
             True => λ hx _ => Inl(p.left(hx)),
             False => λ _ hy => Inr(q.left(hy)),
@@ -113,7 +113,7 @@ theorem reflects_or(P, Q: Type, x, y: Bool, p: Reflects(P, x), q: Reflects(Q, y)
         })(refl, e))
 }
 
-theorem reflects_not(P: Type, x: Bool, p: Reflects(P, x)): Reflects(¬P, !x) {
+theorem reflects_not({P: Type}, {x: Bool}, p: Reflects(P, x)): Reflects(¬P, !x) {
     And(λ e => (match x as λ c => (x = c) → (!c = True) → ¬P {
             True => λ _ no => absurd(no),
             False => λ hx _ => p.right(hx),
@@ -160,7 +160,7 @@ instance<P: Decide, Q: Decide> Decide<P ∧ Q> {
         Inr(np) => Inr(λ (h: P ∧ Q) => np(h.left)),
     },
     bit := P.bit && Q.bit,
-    reflects := reflects_and(P, Q, P.bit, Q.bit, P.reflects, Q.reflects),
+    reflects := reflects_and(P.reflects, Q.reflects),
 }
 
 instance<P: Decide, Q: Decide> Decide<P ∨ Q> {
@@ -173,7 +173,7 @@ instance<P: Decide, Q: Decide> Decide<P ∨ Q> {
         },
     },
     bit := P.bit || Q.bit,
-    reflects := reflects_or(P, Q, P.bit, Q.bit, P.reflects, Q.reflects),
+    reflects := reflects_or(P.reflects, Q.reflects),
 }
 
 instance<P: Decide> Decide<¬P> {
@@ -182,7 +182,7 @@ instance<P: Decide> Decide<¬P> {
         Inr(np) => Inl(np),
     },
     bit := !P.bit,
-    reflects := reflects_not(P, P.bit, P.reflects),
+    reflects := reflects_not(P.reflects),
 }
 
 // The consumers. `decide` is the projection a caller reaches for when it wants
@@ -277,6 +277,32 @@ theorem is_true_dec_yes(b: Bool, p: b.IsTrue()): b.is_true_dec() = Inl(p) {
         True => λ u => refl,
     }(p)
 }
+
+// Reflection read at `IsTrue`, the form a Bool guard is carried in. A
+// guard built from comparisons and connectives is proved by assembling its
+// `Reflects` from the parts' (`reflects_and`, `Nat::leb_reflects`, …),
+// mapping it onto the statement wanted with `reflects_iff`, and reading it
+// either way: `reflects_intro` proves the guard from the proposition and
+// `reflects_elim` the proposition from the guard.
+theorem reflects_of_is_true({P: Type}, {b: Bool}, sound: b.IsTrue() → P, complete: P → b.IsTrue()): Reflects(P, b) {
+    And(λ e => sound(rewrite(e, trivial)), λ e p => j(e, λ c _ => c.IsTrue(), complete(p)))
+}
+
+theorem reflects_iff({P, Q: Type}, {b: Bool}, r: Reflects(P, b), pq: P → Q, qp: Q → P): Reflects(Q, b) {
+    And(λ e => pq(r.left(e)), λ e q => r.right(e)(qp(q)))
+}
+
+theorem reflects_elim({P: Type}, {b: Bool}, r: Reflects(P, b), h: b.IsTrue()): P { r.left(eq_true_of_is_true(b, h)) }
+
+theorem reflects_intro({P: Type}, {b: Bool}, r: Reflects(P, b), p: P): b.IsTrue() {
+    match b as λ c => Reflects(P, c) → c.IsTrue() {
+        False => λ no => no.right(refl)(p),
+        True => λ _ => trivial,
+    }(r)
+}
+
+// A Bool reflects its own truth.
+theorem Bool::is_true_reflects(self b: Bool): Reflects(b.IsTrue(), b) { reflects_of_is_true(λ h => h, λ h => h) }
 
 theorem Bool::is_true_and(self a: Bool): (b: Bool) → (a && b).IsTrue() → a.IsTrue() ∧ b.IsTrue() {
     match a {

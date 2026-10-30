@@ -355,10 +355,41 @@ theorem Format::four_le_top(self F: Format): 4 <= F.top() {
     omega
 }
 
-// The canonical form from its four conditions, each stated as a fact about
-// naturals: the significand fits, the exponent is in range, a significand
-// below `2^(prec - 1)` sits at the least exponent, and a format that reserves
-// its top pattern for NaN leaves room below it in the top binade.
+// The canonical form as a proposition: its four conditions, each a fact
+// about naturals. The significand fits, the exponent is in range, a
+// significand below `2^(prec - 1)` sits at the least exponent, and a format
+// that reserves its top pattern for NaN leaves room below it in the top
+// binade.
+fn Format::Canonical(self F: Format, mag, bexp: Nat) → Type {
+    Succ(mag) <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
+        ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top())
+}
+
+// `canonical` decides `Canonical`: each comparison bit reflects its `<=`,
+// the least-exponent test reflects its disjunction case by case, and the
+// negated reserved-top test reads back as the implication.
+theorem Format::canonical_reflects(self F: Format, mag, bexp: Nat): Reflects(F.Canonical(mag, bexp), F.canonical(mag, bexp)) {
+    let normal = match bexp as λ b => Reflects(b = 0 ∨ F.half() <= mag, match b { Zero => True, Succ(_) => F.half().leb(mag) }) {
+        Zero => reflects_of_is_true(λ _ => Inl(refl), λ _ => trivial),
+        Succ(_) => reflects_iff(F.half().leb_reflects(mag), λ le => Inr(le), λ n => match n {
+            Inl(zero) => false_elim(omega(zero)),
+            Inr(le) => le,
+        }),
+    };
+    let reserved = reflects_and(reflects_and(F.specials.reserves_top().is_true_reflects(), F.span.leb_reflects(bexp)), F.top().leb_reflects(Succ(mag)));
+    let tests = reflects_and(reflects_and(Succ(mag).leb_reflects(F.top()), bexp.leb_reflects(F.span)), normal);
+    reflects_iff(reflects_and(tests, reflects_not(reserved)),
+        λ c => And(c.left.left.left, And(c.left.left.right, And(c.left.right, λ rt sp => {
+            let over: ¬(F.top() <= Succ(mag)) = λ o => c.right(And(And(rt, sp), o));
+            omega
+        }))),
+        λ c => And(And(And(c.left, c.right.left), c.right.right.left), λ r => {
+            let room = c.right.right.right(r.left.left, r.left.right);
+            omega
+        }))
+}
+
+// The canonical form from its four conditions.
 theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
     fits: Succ(mag) <= F.top(),
     range: bexp <= F.span,
@@ -366,27 +397,7 @@ theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
     free: F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top()):
     F.canonical(mag, bexp).IsTrue()
 {
-    let fits_bit = Succ(mag).leb_complete(F.top(), fits);
-    let range_bit = bexp.leb_complete(F.span, range);
-    let normal_bit = match bexp as λ b => (b = 0 ∨ F.half() <= mag) → (match b { Zero => True, Succ(_) => F.half().leb(mag) }).IsTrue() {
-        Zero => λ _ => trivial,
-        Succ(_) => λ n => match n {
-            Inl(zero) => false_elim(omega(zero)),
-            Inr(le) => F.half().leb_complete(mag, le),
-        },
-    }(normal);
-    let reserved = F.specials.reserves_top() && F.span.leb(bexp) && F.top().leb(Succ(mag));
-    let free_bit = reserved.is_true_not_intro(λ r => {
-        let rs = (F.specials.reserves_top() && F.span.leb(bexp)).is_true_and(F.top().leb(Succ(mag)), r);
-        let rr = F.specials.reserves_top().is_true_and(F.span.leb(bexp), rs.left);
-        let room = free(rr.left, F.span.leb_sound(bexp, rr.right));
-        let over = F.top().leb_sound(Succ(mag), rs.right);
-        omega
-    });
-    (Succ(mag).leb(F.top()) && bexp.leb(F.span) && (match bexp { Zero => True, Succ(_) => F.half().leb(mag) })).is_true_and_intro(!reserved,
-        (Succ(mag).leb(F.top()) && bexp.leb(F.span)).is_true_and_intro(match bexp { Zero => True, Succ(_) => F.half().leb(mag) },
-            Succ(mag).leb(F.top()).is_true_and_intro(bexp.leb(F.span), fits_bit, range_bit), normal_bit),
-        free_bit)
+    reflects_intro(F.canonical_reflects(mag, bexp), And(fits, And(range, And(normal, free))))
 }
 
 // The four conditions back out of the canonical form.
@@ -394,23 +405,7 @@ theorem Format::canonical_elim(self F: Format, mag, bexp: Nat, ok: F.canonical(m
     Succ(mag) <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
         ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top())
 {
-    let normal_bit = match bexp { Zero => True, Succ(_) => F.half().leb(mag) };
-    let reserved = F.specials.reserves_top() && F.span.leb(bexp) && F.top().leb(Succ(mag));
-    let all = (Succ(mag).leb(F.top()) && bexp.leb(F.span) && normal_bit).is_true_and(!reserved, ok);
-    let abc = (Succ(mag).leb(F.top()) && bexp.leb(F.span)).is_true_and(normal_bit, all.left);
-    let ab = Succ(mag).leb(F.top()).is_true_and(bexp.leb(F.span), abc.left);
-    let normal = match bexp as λ b => (match b { Zero => True, Succ(_) => F.half().leb(mag) }).IsTrue() → (b = 0 ∨ F.half() <= mag) {
-        Zero => λ _ => Inl(refl),
-        Succ(_) => λ t => Inr(F.half().leb_sound(mag, t)),
-    }(abc.right);
-    let free: (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top()) = λ rt sp => match Succ(Succ(mag)).le_dec(F.top()) as λ _ => Succ(Succ(mag)) <= F.top() {
-        Inl(room) => room,
-        Inr(none) => false_elim(reserved.is_true_not(all.right)(
-            (F.specials.reserves_top() && F.span.leb(bexp)).is_true_and_intro(F.top().leb(Succ(mag)),
-                F.specials.reserves_top().is_true_and_intro(F.span.leb(bexp), rt, F.span.leb_complete(bexp, sp)),
-                F.top().leb_complete(Succ(mag), Nat::le_of_not_lt(Succ(mag), F.top(), none))))),
-    };
-    And(Succ(mag).leb_sound(F.top(), ab.left), And(bexp.leb_sound(F.span, ab.right), And(normal, free)))
+    reflects_elim(F.canonical_reflects(mag, bexp), ok)
 }
 
 // Zero of either sign.
