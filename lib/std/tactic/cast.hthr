@@ -517,14 +517,22 @@ fn cast_lift_law(G: Sides, C: CastAt) → String {
     }
 }
 
-// One candidate per edge whose family has the law.
-fn cast_lift_candidates(law: String, es: List<EdgeRef>, args: List<Handle>) → Tac<List<Candidate>> {
+// Whether the edge maps into `target`: its map's codomain is the carrier.
+fn cast_edge_into(e: EdgeRef, target: Handle) → Tac<Bool> {
+    infer(Global(e.map)).bind(λ c => match c {
+        Refused(_) => Pure(False),
+        Accepted(ty) => open(ty, "x").bind(λ o => match o { Refused(_) => Pure(False), Accepted(op) => defeq(Hd(op.body), Hd(target)) }),
+    })
+}
+
+// One candidate per edge into `target` whose family has the law.
+fn cast_lift_candidates(law: String, es: List<EdgeRef>, args: List<Handle>, target: Handle) → Tac<List<Candidate>> {
     match es {
         Nil => Pure([]),
-        Cons(e, rest) => cast_law_of(e, law).bind(λ o => cast_lift_candidates(law, rest, args).bind(λ more => Pure(match o {
-            None => more,
-            Some(l) => Cons(Candidate(l, e.hom, e.indices, args, None), more),
-        }))),
+        Cons(e, rest) => cast_edge_into(e, target).bind(λ into => cast_law_of(e, law).bind(λ o => cast_lift_candidates(law, rest, args, target).bind(λ more => Pure(match into {
+            False => more,
+            True => match o { None => more, Some(l) => Cons(Candidate(l, e.hom, e.indices, args, None), more) },
+        })))),
     }
 }
 
@@ -565,7 +573,7 @@ fn cast_ups_at(fs: List<Expr>, law: String, edges: List<EdgeRef>, target: Handle
             Refused(_) => cast_ups_at(rest, law, edges, target),
             Accepted(ty) => cast_sides(ty).bind(λ s => match s {
                 None => cast_ups_at(rest, law, edges, target),
-                Some(F) => cast_lift_candidates(law, edges, [F.l, F.r]).bind(λ cs => cast_lift_each(f, target, cs)).bind(λ here =>
+                Some(F) => cast_lift_candidates(law, edges, [F.l, F.r], target).bind(λ cs => cast_lift_each(f, target, cs)).bind(λ here =>
                     cast_ups_at(rest, law, edges, target).bind(λ more => Pure(here ++ more))),
             }),
         }),
@@ -633,7 +641,89 @@ fn cast_from_at(h: Expr, depth: Nat) → Tac<Expr> {
     }))
 }
 
-fn cast_from(h: Expr, depth: Nat := 2) → Tac<Expr> { cast_from_at(h, depth) }
+// Where two normal forms first differ: the outermost pair of subterms that
+// are not the same, below every head the two share.
+record Differ { a: Handle, b: Handle }
+
+fn cast_zip(xs, ys: List<Handle>) → List<Differ> {
+    match xs { Nil => [], Cons(x, xr) => match ys { Nil => [], Cons(y, yr) => Cons(Differ(x, y), cast_zip(xr, yr)) } }
+}
+
+// The first pair of `ps` that differs, a pair under one head read as its
+// arguments' pairs, in order.
+fn cast_differ_in(ps: List<Differ>, fuel: Nat) → Tac<Option<Differ>> {
+    match fuel {
+        Zero => Pure(match ps { Nil => None, Cons(p, _) => Some(p) }),
+        Succ(k) => match ps {
+            Nil => Pure(None),
+            Cons(p, rest) => defeq(Hd(p.a), Hd(p.b)).bind(λ same => match same {
+                True => cast_differ_in(rest, k),
+                False => view(p.a).bind(λ va => view(p.b).bind(λ vb => match va {
+                    HGlobal(f, _, xs) => match vb {
+                        HGlobal(g, _, ys) => match f.id.same(g.id) && xs.len().same(ys.len()) && !xs.len().same(0) {
+                            True => cast_differ_in(cast_zip(xs, ys) ++ rest, k),
+                            False => Pure(Some(p)),
+                        },
+                        _ => Pure(Some(p)),
+                    },
+                    _ => Pure(Some(p)),
+                })),
+            }),
+        },
+    }
+}
+
+fn cast_differ(a, b: Handle, fuel: Nat) → Tac<Option<Differ>> {
+    defeq(Hd(a), Hd(b)).bind(λ same => match same {
+        True => Pure(None),
+        False => cast_differ_in([Differ(a, b)], fuel).bind(λ d => Pure(match d { None => Some(Differ(a, b)), Some(_) => d })),
+    })
+}
+
+fn cast_differ_notes(d: Differ, side: String) → List<Note> {
+    [At(Hd(d.a), Tried("the fact's " ++ side ++ " side in cast-normal form", "has this")),
+     At(Hd(d.b), Tried("the goal's " ++ side ++ " side in cast-normal form", "has this instead"))]
+}
+
+// Why `h` does not prove the goal: where a fact of the goal's relation
+// differs from the goal once both are in cast-normal form, the first
+// differing subterm of each side (docs/casting-design.md §12).
+fn cast_explain(h: Expr, msg: String, notes: List<Note>) → Tac<Expr> {
+    goal().bind(λ g => cast_sides(g.target).bind(λ gs => infer(h).bind(λ c => match gs {
+        None => fail(msg, notes),
+        Some(G) => match c {
+            Refused(_) => fail(msg, notes),
+            Accepted(ty) => cast_sides(ty).bind(λ fs => match fs {
+                None => fail(msg, notes),
+                Some(F) => match G.rel.id.same(F.rel.id) {
+                    False => fail(msg, notes ++ [At(Hd(ty), Tried("the fact", "is not the goal's relation, and no edge reads it as that"))]),
+                    True => cast_ats(cast_carriers()).bind(λ cs => match cast_rel_in(G.rel, cs) {
+                        None => fail(msg, notes),
+                        Some(C) => cast_push(C, G.l, cast_fuel()).bind(λ gl => cast_push(C, G.r, cast_fuel()).bind(λ gr =>
+                            cast_push(C, F.l, cast_fuel()).bind(λ fl => cast_push(C, F.r, cast_fuel()).bind(λ fr =>
+                            cast_differ(fl.to, gl.to, cast_fuel()).bind(λ dl => match dl {
+                                Some(d) => fail(msg, notes ++ cast_differ_notes(d, "left")),
+                                None => cast_differ(fr.to, gr.to, cast_fuel()).bind(λ dr => match dr {
+                                    Some(d) => fail(msg, notes ++ cast_differ_notes(d, "right")),
+                                    None => fail(msg, notes),
+                                }),
+                            }))))),
+                    }),
+                },
+            }),
+        },
+    })))
+}
+
+// `cast_from_at`, with a failure located where the fact and the goal differ.
+fn cast_from_explained(h: Expr, depth: Nat) → Tac<Expr> {
+    attempt(cast_from_at(h, depth)).bind(λ o => match o {
+        Done(e) => Pure(e),
+        Failed(msg, notes) => cast_explain(h, msg, notes),
+    })
+}
+
+fn cast_from(h: Expr, depth: Nat := 2) → Tac<Expr> { cast_from_explained(h, depth) }
 
 // `cast_to(S, prove)`: the goal by `S`, stated as wanted (at the goal's
 // carrier or one an edge maps into it) and proved by `prove`, then carried
@@ -641,6 +731,6 @@ fn cast_from(h: Expr, depth: Nat := 2) → Tac<Expr> { cast_from_at(h, depth) }
 fn cast_to(S: Expr, prove: Tac<Expr>, depth: Nat := 2) → Tac<Expr> {
     as_type(S).bind(λ c => match c {
         Refused(why) => fail("cast_to: the statement is not a type: " ++ why, []),
-        Accepted(t) => goal().bind(λ g => focus(GoalInfo(t, g.locals), prove).bind(λ p => cast_from_at(p, depth))),
+        Accepted(t) => goal().bind(λ g => focus(GoalInfo(t, g.locals), prove).bind(λ p => cast_from_explained(p, depth))),
     })
 }

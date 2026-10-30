@@ -60,6 +60,29 @@ theorem omega_then_linarith(m, n: Int, h: m < n): Rat::ofInt(m) + 1 <= Rat::ofIn
     let k: (m + 1 <= n) = omega;
     linarith(Rat::ofInt_le(m + 1, n, k))
 }
+// Subtraction is the add law at a negation, and `0` and `1` are the
+// images of the source's.
+theorem ring_sub(a, c: Dyadic): (a - c).rat() ≈ a.rat() - c.rat() { ring }
+theorem ring_sub_int(m, n: Int): Rat::ofInt(m - n) + Rat::ofInt(n) ≈ Rat::ofInt(m) { ring }
+theorem ring_zero(a: Dyadic): (a * 0).rat() ≈ 0 { ring }
+theorem ring_one(a: Dyadic): (a * 1).rat() ≈ a.rat() { ring }
+theorem from_sub(a, c: Dyadic, x: Rat, h: a.rat() - c.rat() <= x): (a - c).rat() <= x { by cast_from(h) }
+theorem from_zero(a: Dyadic, x: Rat, h: a.rat() + 0 <= x): (a + 0).rat() <= x { by cast_from(h) }
+theorem from_one(a: Dyadic, x: Rat, h: a.rat() * 1 <= x): (a * 1).rat() <= x { by cast_from(h) }
+
+// `Nat → Int` is an edge (`Int::ofNat_hom`, a semiring morphism): `ring`
+// at `Int` reads `OfNat(m + n)` and `(m * n).int()` by its laws, and
+// `cast_from` carries a `Nat` fact to `Int`, or on to `Rat`.
+theorem nat_ring_add(m, n: Nat): OfNat(m + n) * OfNat(2) = OfNat(m) * OfNat(2) + OfNat(n) * OfNat(2) { ring }
+theorem nat_ring_mul(m, n: Nat): (m * n + m).int() = m.int() * (n.int() + OfNat(1)) { ring }
+theorem nat_linarith(m, n: Nat, x: Int, h: OfNat(m) + OfNat(n) <= x): OfNat(m + n) <= x { linarith }
+theorem nat_ring_rat(m, n: Nat): Rat::ofInt(OfNat(m * n)) ≈ Rat::ofInt(OfNat(m)) * Rat::ofInt(OfNat(n)) { ring }
+theorem nat_from(m, n: Nat, h: m <= n): m.int() <= n.int() { by cast_from(h) }
+theorem nat_from_add(m, n: Nat, h: m + 1 <= n): m.int() + OfNat(1) <= n.int() { by cast_from(h) }
+theorem nat_from_mul(m, n: Nat, h: m * n < n): OfNat(m) * OfNat(n) < OfNat(n) { by cast_from(h) }
+theorem nat_from_rat(m, n: Nat, h: m <= n): Rat::ofInt(OfNat(m)) <= Rat::ofInt(OfNat(n)) { by cast_from(h) }
+theorem nat_from_pulled(m, k: Nat, x: Int, h: m.int() + k.int() <= x): (m + k).int() <= x { by cast_from(h) }
+
 // A law reads an image as what it is, not as anything ring-equal to it.
 // expect-error: it is not an identity of commutative rings
 theorem ring_wrong(a, c: Dyadic): (a * c).rat() ≈ a.rat() + c.rat() { ring }
@@ -76,6 +99,10 @@ theorem no_law(a: Dyadic, p: Nat, x: Rat, h: a.rat() <= x): a.down(p).rat() <= x
 // that differs by more than its casts does not carry.
 // expect-error: cast_from: the fact and the goal differ once their casts are read
 theorem from_other(a, c: Dyadic, x: Rat, h: (a * c).rat() <= x): a.rat() + c.rat() <= x { by cast_from(h) }
+// The failure names where the two first differ once their casts are read:
+// here the right sides, `x` against `y`.
+// expect-error: has this instead
+theorem from_differ(a, c: Dyadic, x, y: Rat, h: (a + c).rat() <= x): a.rat() + c.rat() <= y { by cast_from(h) }
 // The facts must still be there: a cast step does not invent a bound.
 // expect-error: mono: nothing proves this goal
 theorem no_fact(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x): (a + c).rat() <= x + y { by mono() }
