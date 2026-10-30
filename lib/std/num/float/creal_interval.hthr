@@ -45,6 +45,7 @@ import interval;
 import list;
 import tactic;
 import mono;
+import cast;
 import omega;
 
 // A dyadic as a constant real is `CReal::ofRat(d.rat())`.
@@ -243,8 +244,7 @@ theorem Interval::recip_bnd_has_real(lo, hi: Dyadic, p: Nat, {x: CReal}, h: x.Ap
             Inl(_) => trivial,
             Inr(no) => {
                 let hn: (hi < 0) = Rat::lt_of_not_le(x := hi.rat(), y := Dyadic::rat(0), h := no);
-                let neg_pos: (0 < -hi) = Rat::lt_respects(Rat::same_sym(Dyadic::rat_neg(0)), Rat::same_sym(hi.rat_neg()),
-                    Rat::neg_lt(x := hi.rat(), y := Dyadic::rat(0), h := hn));
+                let neg_pos: (0 < -hi) = by cast_from(Rat::neg_lt(x := hi.rat(), y := Dyadic::rat(0), h := hn));
                 let x_neg: (x < 0) = CReal::lt_of_le_of_lt(hx.right, CReal::lt_respects(CReal::ofRat(hi.rat()).same_refl(), CReal::ofRat_respects(Dyadic::rat_zero()), Dyadic::real_lt(hn)));
                 let hnx: ((-x).Apart(0)) = Inr(CReal::lt_respects(CReal::neg_zero(), (-x).same_refl(), CReal::neg_lt(x_neg)));
                 let flipped: Bnd(-hi, -lo).HasReal(-x) = Interval::neg_has_real(Bnd(lo, hi), hx);

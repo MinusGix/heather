@@ -322,7 +322,9 @@ record CastOp { op: String, respects: String }
 record CastCarrier { same: String, le: String, lt: String, refl: String, sym: String, trans: String, le_respects: String, lt_respects: String, ops: List<CastOp> }
 
 fn cast_carriers() → List<CastCarrier> {
-    [CastCarrier("Int::Same", "Int::Le", "Int::Lt", "Int::same_refl", "Int::same_sym", "Int::same_trans", "Int::le_respects", "Int::lt_respects",
+    [CastCarrier("Dyadic::Same", "Dyadic::Le", "Dyadic::Lt", "Dyadic::same_refl", "Dyadic::same_sym", "Dyadic::same_trans", "Dyadic::le_respects", "Dyadic::lt_respects",
+        [CastOp("Dyadic::add", "Dyadic::add_respects"), CastOp("Dyadic::mul", "Dyadic::mul_respects"), CastOp("Dyadic::neg", "Dyadic::neg_respects")]),
+     CastCarrier("Int::Same", "Int::Le", "Int::Lt", "Int::same_refl", "Int::same_sym", "Int::same_trans", "Int::le_respects", "Int::lt_respects",
         [CastOp("Int::add", "Int::add_respects"), CastOp("Int::mul", "Int::mul_respects"), CastOp("Int::neg", "Int::neg_respects")]),
      CastCarrier("Rat::Same", "Rat::Le", "Rat::Lt", "Rat::same_refl", "Rat::same_sym", "Rat::same_trans", "Rat::le_respects", "Rat::lt_respects",
         [CastOp("Rat::add", "Rat::add_respects"), CastOp("Rat::mul", "Rat::mul_respects"), CastOp("Rat::neg", "Rat::neg_respects")]),
@@ -628,6 +630,85 @@ fn cast_from_lifted(C: CastAt, G: Sides, fs: List<Expr>, depth: Nat, law: String
     }
 }
 
+// Lowering the goal: an order at `C` between two values is reflected from
+// the order of their images along an edge out of `C` (`le_of_map_law`), so
+// the goal is restated at the edge's target carrier `D` and proved there
+// from `h`, directly or by lifting (a `Dyadic` goal from a `Rat` fact).
+fn cast_edge_from(e: EdgeRef, source: Handle) → Tac<Bool> {
+    infer(Global(e.map)).bind(λ c => match c {
+        Refused(_) => Pure(False),
+        Accepted(ty) => view(ty).bind(λ v => match v { HPi(dom) => defeq(Hd(dom), Hd(source)), _ => Pure(False) }),
+    })
+}
+
+// `D`'s relation for `G`'s, at `C`, with the law that reflects it.
+record Lowered { rel: GlobalRef, law: String }
+
+fn cast_lowered_rel(G: Sides, C, D: CastAt) → Option<Lowered> {
+    match G.rel.id.same(C.le.id) {
+        True => Some(Lowered(D.le, "le_of_map_law")),
+        False => match G.rel.id.same(C.lt.id) { True => Some(Lowered(D.lt, "lt_of_map_law")), False => None },
+    }
+}
+
+fn cast_lower_at(C: CastAt, G: Sides, h: Expr, depth: Nat, e: EdgeRef, D: CastAt, cs: List<CastAt>, es: List<EdgeRef>) → Tac<Option<Expr>> {
+    match cast_lowered_rel(G, C, D) {
+        None => Pure(None),
+        Some(lo) => cast_carrier_type(D).bind(λ dt => match dt {
+            None => Pure(None),
+            Some(target) => cast_edge_into(e, target).bind(λ into => match into {
+                False => Pure(None),
+                True => cast_law_of(e, lo.law).bind(λ lw => match lw {
+                    None => Pure(None),
+                    Some(law) => as_type(App(App(Global(lo.rel), App(Global(e.map), Hd(G.l))), App(Global(e.map), Hd(G.r)))).bind(λ t => match t {
+                        Refused(_) => Pure(None),
+                        Accepted(t) => cast_sides(t).bind(λ s => match s {
+                            None => Pure(None),
+                            Some(G2) => goal().bind(λ g => attempt(focus(GoalInfo(t, g.locals), cast_first_carry(D, G2, [h]).bind(λ direct => match direct {
+                                Some(p) => Pure(p),
+                                None => cast_from_lifted(D, G2, [h], depth, cast_lift_law(G2, D), es, cs),
+                            }))).bind(λ o => match o {
+                                Failed(_, _) => Pure(None),
+                                Done(p) => cast_lift_one(p, target, Candidate(law, e.hom, e.indices, [G.l, G.r], None)),
+                            })),
+                        }),
+                    }),
+                }),
+            }),
+        }),
+    }
+}
+
+fn cast_lower_into(C: CastAt, G: Sides, h: Expr, depth: Nat, e: EdgeRef, ds: List<CastAt>, cs: List<CastAt>, es: List<EdgeRef>) → Tac<Option<Expr>> {
+    match ds {
+        Nil => Pure(None),
+        Cons(D, rest) => cast_lower_at(C, G, h, depth, e, D, cs, es).bind(λ o => match o {
+            Some(p) => Pure(Some(p)),
+            None => cast_lower_into(C, G, h, depth, e, rest, cs, es),
+        }),
+    }
+}
+
+fn cast_lower_along(C: CastAt, G: Sides, h: Expr, depth: Nat, source: Handle, todo: List<EdgeRef>, cs: List<CastAt>, es: List<EdgeRef>) → Tac<Option<Expr>> {
+    match todo {
+        Nil => Pure(None),
+        Cons(e, rest) => cast_edge_from(e, source).bind(λ from => match from {
+            False => cast_lower_along(C, G, h, depth, source, rest, cs, es),
+            True => cast_lower_into(C, G, h, depth, e, cs, cs, es).bind(λ o => match o {
+                Some(p) => Pure(Some(p)),
+                None => cast_lower_along(C, G, h, depth, source, rest, cs, es),
+            }),
+        }),
+    }
+}
+
+fn cast_lower(C: CastAt, G: Sides, h: Expr, depth: Nat, cs: List<CastAt>, es: List<EdgeRef>) → Tac<Option<Expr>> {
+    cast_carrier_type(C).bind(λ st => match st {
+        None => Pure(None),
+        Some(source) => cast_lower_along(C, G, h, depth, source, es, cs, es),
+    })
+}
+
 fn cast_from_at(h: Expr, depth: Nat) → Tac<Expr> {
     goal().bind(λ g => cast_sides(g.target).bind(λ gs => match gs {
         None => fail("cast_from: the goal is not a relation between two sides", []),
@@ -635,7 +716,10 @@ fn cast_from_at(h: Expr, depth: Nat) → Tac<Expr> {
             None => fail("cast_from: the goal's relation is not one of a carrier the casts are read at", []),
             Some(C) => cast_first_carry(C, G, [h]).bind(λ direct => match direct {
                 Some(e) => Pure(e),
-                None => cast_edge_refs(cast_edge_table()).bind(λ edges => cast_from_lifted(C, G, [h], depth, cast_lift_law(G, C), edges, cs)),
+                None => cast_edge_refs(cast_edge_table()).bind(λ edges => attempt(cast_from_lifted(C, G, [h], depth, cast_lift_law(G, C), edges, cs)).bind(λ o => match o {
+                    Done(e) => Pure(e),
+                    Failed(msg, notes) => cast_lower(C, G, h, depth, cs, edges).bind(λ lowered => match lowered { Some(e) => Pure(e), None => fail(msg, notes) }),
+                })),
             }),
         }),
     }))
@@ -716,10 +800,16 @@ fn cast_explain(h: Expr, msg: String, notes: List<Note>) → Tac<Expr> {
 }
 
 // `cast_from_at`, with a failure located where the fact and the goal differ.
+// The edges' laws are looked up by name where the tactic runs, so without
+// `import morphism` no image moves; that is said first, not left to read as
+// a difference.
 fn cast_from_explained(h: Expr, depth: Nat) → Tac<Expr> {
-    attempt(cast_from_at(h, depth)).bind(λ o => match o {
-        Done(e) => Pure(e),
-        Failed(msg, notes) => cast_explain(h, msg, notes),
+    cast_try_global("OrderedRingHom::add_law").bind(λ laws => match laws {
+        None => fail("cast_from: the edges' laws are not in scope here; `import morphism;` in this module", [At(h, Tried("the fact", "not read"))]),
+        Some(_) => attempt(cast_from_at(h, depth)).bind(λ o => match o {
+            Done(e) => Pure(e),
+            Failed(msg, notes) => cast_explain(h, msg, notes),
+        }),
     })
 }
 

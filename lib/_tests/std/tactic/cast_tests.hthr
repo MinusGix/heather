@@ -83,6 +83,14 @@ theorem nat_from_mul(m, n: Nat, h: m * n < n): OfNat(m) * OfNat(n) < OfNat(n) { 
 theorem nat_from_rat(m, n: Nat, h: m <= n): Rat::ofInt(OfNat(m)) <= Rat::ofInt(OfNat(n)) { by cast_from(h) }
 theorem nat_from_pulled(m, k: Nat, x: Int, h: m.int() + k.int() <= x): (m + k).int() <= x { by cast_from(h) }
 
+// A goal at `Dyadic` is lowered: an order between two values is reflected
+// from the order of their images (`le_of_map_law`), so a `Rat` fact, or a
+// `Rat` statement proved there, carries to it.
+theorem lower_from(a, b: Dyadic, h: a.rat() + b.rat() <= 0): a + b <= 0 { by cast_from(h) }
+theorem lower_neg(hi: Dyadic, hn: hi < 0): 0 < -hi { by cast_from(Rat::neg_lt(x := hi.rat(), y := Dyadic::rat(0), h := hn)) }
+theorem lower_to(a, b, c: Dyadic, h: a <= b): a + c <= b + c { by cast_to(a.rat() + c.rat() <= b.rat() + c.rat(), mono()) }
+theorem dyadic_up(a, b: Dyadic, h: a + b <= 0): a.rat() + b.rat() <= 0 { by cast_from(h) }
+
 // A law reads an image as what it is, not as anything ring-equal to it.
 // expect-error: it is not an identity of commutative rings
 theorem ring_wrong(a, c: Dyadic): (a * c).rat() ≈ a.rat() + c.rat() { ring }

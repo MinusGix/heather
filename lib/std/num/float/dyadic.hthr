@@ -324,6 +324,10 @@ theorem Dyadic::lt_respects({a, a2, b, b2: Dyadic}, ha: a ≈ a2, hb: b ≈ b2, 
     Rat::lt_respects(x := a.rat(), x2 := a2.rat(), y := b.rat(), y2 := b2.rat(), hx := ha, hy := hb, h := h)
 }
 
+theorem Dyadic::le_respects({a, a2, b, b2: Dyadic}, ha: a ≈ a2, hb: b ≈ b2, h: a <= b): a2 <= b2 {
+    Rat::le_respects(x := a.rat(), x2 := a2.rat(), y := b.rat(), y2 := b2.rat(), hx := ha, hy := hb, h := h)
+}
+
 theorem Dyadic::same_of_not_lt({a, b: Dyadic}, h1: ¬(a < b), h2: ¬(b < a)): a ≈ b {
     Rat::same_of_not_lt(x := a.rat(), y := b.rat(), h1 := h1, h2 := h2)
 }
