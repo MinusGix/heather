@@ -961,7 +961,6 @@ theorem Rat::scale_inv_pow2(b, n: Nat): Rat::ofInt(Nat::pow(2, b).int()) * Rat::
     ring(prod, fd, part, whole)
 }
 
-
 // Every rational is below some integer: x = a/p < |a| + 1, because p ≥ 1.
 theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
     let a = x.num;

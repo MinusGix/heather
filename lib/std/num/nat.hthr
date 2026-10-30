@@ -1460,8 +1460,6 @@ evidence theorem Nat::add_pos_r({a, b: Nat}, pb: 0 < b := infer): 0 < a + b {
 // denominator's positivity with no argument.
 evidence theorem Nat::pow_pos({a, n: Nat}, pa: 0 < a := infer): 0 < a.pow(n) { a.one_le_pow(n, pa) }
 
-
-
 theorem Nat::fact_le_succ(self n: Nat): n.fact() <= Succ(n).fact() {
     rewrite(sym(n.fact().mul_left_one()), n.fact().mul_le_mono_r(1, Succ(n), trivial))
 }
