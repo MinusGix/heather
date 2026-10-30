@@ -254,7 +254,7 @@ impl<'v> Env<'v> {
     pub fn identity(arena: &'v ValueArena<'v>, n: u32) -> Env<'v> {
         let mut env = Env::empty();
         for level in 0..n {
-            let value = Rc::new(Val::var(level));
+            let value = arena.val(Val::var(arena, level));
             env = env.push(arena, arena.tm(TmClo::val(value)));
         }
         env
@@ -295,8 +295,8 @@ impl<'v> Env<'v> {
 pub struct ValueArena<'v> {
     #[cfg(feature = "value-metrics")]
     metrics: Option<&'v ValueMetrics>,
-    term_cache: RefCell<ValueCache<*const TmClo<'v>, Val<'v>>>,
-    type_cache: RefCell<ValueCache<*const TyClo<'v>, VTy<'v>>>,
+    term_cache: RefCell<ValueCache<*const TmClo<'v>, &'v Val<'v>>>,
+    type_cache: RefCell<ValueCache<*const TyClo<'v>, &'v VTy<'v>>>,
     /// The probed class of each `Nat` fold step (`eval/probe.rs`), by the
     /// step closure's identity. Closures live as long as the arena, so a
     /// key is never reused; the class depends on nothing but the closure
@@ -350,8 +350,16 @@ pub struct ValueArena<'v> {
     /// (issues/tier2-left-nested-bind-cost.md). The keys are arena closures,
     /// which live as long as this map, so no address is freed and reused
     /// under it; kept for the query like the force cache.
-    shared_apps: RefCell<ValueCache<(usize, usize), Val<'v>>>,
+    shared_apps: RefCell<ValueCache<(usize, usize), &'v Val<'v>>>,
     envs: Arena<EnvNode<'v>>,
+    /// The forced values themselves (`issues/value-cache-memo-in-arena.md`):
+    /// a value is born here, so forcing a node is a bump of this region
+    /// rather than a heap allocation beside it, and the memo above holds a
+    /// borrow of it rather than a reference count.
+    vals: Arena<Val<'v>>,
+    vtys: Arena<VTy<'v>>,
+    neutrals: Arena<VNeutral<'v>>,
+    elim_cells: Arena<Elim<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
     terms: Arena<TmClo<'v>>,
@@ -392,6 +400,10 @@ struct ValueMetricCells {
     env_nodes: Cell<u64>,
     term_closures: Cell<u64>,
     type_closures: Cell<u64>,
+    /// The memo counters count table events: a lookup, a hit, a new key.
+    /// They are not allocation counts — the value an insert records was
+    /// born in the arena when it was forced, memoized or not
+    /// (`issues/value-cache-memo-in-arena.md`).
     term_cache_lookups: Cell<u64>,
     term_cache_hits: Cell<u64>,
     term_cache_inserts: Cell<u64>,
@@ -667,23 +679,27 @@ pub(crate) type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHa
 /// [`ValueArena::cache_tm`] for why that is a constant factor over the arena
 /// and not a bound to choose.
 struct ValueCache<K, V> {
-    values: PtrMap<K, Rc<V>>,
+    values: PtrMap<K, V>,
 }
 
-impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
+impl<K: Copy + Eq + std::hash::Hash, V: Copy> ValueCache<K, V> {
     fn new() -> ValueCache<K, V> {
         ValueCache { values: PtrMap::default() }
     }
 
-    fn get(&self, key: K) -> Option<Rc<V>> {
-        self.values.get(&key).cloned()
+    fn get(&self, key: K) -> Option<V> {
+        self.values.get(&key).copied()
     }
 
     /// Remember `value` for `key`; whether it was new.
-    fn insert(&mut self, key: K, value: &Rc<V>) -> bool {
-        if self.values.contains_key(&key) { return false; }
-        self.values.insert(key, Rc::clone(value));
-        true
+    fn insert(&mut self, key: K, value: V) -> bool {
+        match self.values.entry(key) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(value);
+                true
+            }
+        }
     }
 
     #[cfg(feature = "value-metrics")]
@@ -731,11 +747,11 @@ impl<'v> ValueArena<'v> {
     }
 
     /// See `shared_apps`.
-    pub(crate) fn shared_app(&self, key: (usize, usize)) -> Option<Rc<Val<'v>>> {
+    pub(crate) fn shared_app(&self, key: (usize, usize)) -> Option<&'v Val<'v>> {
         self.shared_apps.borrow().get(key)
     }
 
-    pub(crate) fn cache_shared_app(&self, key: (usize, usize), value: &Rc<Val<'v>>) {
+    pub(crate) fn cache_shared_app(&self, key: (usize, usize), value: &'v Val<'v>) {
         self.shared_apps.borrow_mut().insert(key, value);
     }
 
@@ -754,6 +770,10 @@ impl<'v> ValueArena<'v> {
             w_ih: RefCell::new(PtrMap::default()),
             shared_apps: RefCell::new(ValueCache::new()),
             envs: Arena::new(),
+            vals: Arena::new(),
+            vtys: Arena::new(),
+            neutrals: Arena::new(),
+            elim_cells: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
             terms: Arena::new(),
@@ -778,7 +798,11 @@ impl<'v> ValueArena<'v> {
                 sealed_any: Cell::new(false),
                 w_ih: RefCell::new(PtrMap::default()),
                 shared_apps: RefCell::new(ValueCache::new()),
-                    envs: Arena::new(),
+                envs: Arena::new(),
+                vals: Arena::new(),
+                vtys: Arena::new(),
+                neutrals: Arena::new(),
+                elim_cells: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),
                 terms: Arena::new(),
@@ -798,6 +822,27 @@ impl<'v> ValueArena<'v> {
             ValueMetrics::bump(&m.inner.term_closures);
         }
         self.terms.alloc(value)
+    }
+
+    /// A value, born in this region.
+    pub fn val(&'v self, value: Val<'v>) -> &'v Val<'v> {
+        self.vals.alloc(value)
+    }
+
+    /// A neutral's head, spine and glue, born in this region.
+    pub fn neutral(&'v self, value: VNeutral<'v>) -> &'v VNeutral<'v> {
+        self.neutrals.alloc(value)
+    }
+
+    /// An elimination that is not a spine node — a frame's, a glued
+    /// unfolding's, an induction hypothesis's — born in this region.
+    pub fn elim_cell(&'v self, value: Elim<'v>) -> &'v Elim<'v> {
+        self.elim_cells.alloc(value)
+    }
+
+    /// A type value, born in this region.
+    pub fn vty(&'v self, value: VTy<'v>) -> &'v VTy<'v> {
+        self.vtys.alloc(value)
     }
 
     pub fn ty(&'v self, value: TyClo<'v>) -> &'v TyClo<'v> {
@@ -891,9 +936,9 @@ impl<'v> ValueArena<'v> {
         self.sealed_glues.borrow().iter().find(|(c, _)| *c == key).map(|(_, at)| *at)
     }
 
-    pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<Rc<Val<'v>>> {
+    pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<&'v Val<'v>> {
         match clo {
-            TmClo::Val(value) => Some(Rc::clone(value)),
+            TmClo::Val(value) => Some(*value),
             _ => {
                 let found = self.term_cache.borrow().get(clo as *const TmClo<'v>);
                 #[cfg(feature = "value-metrics")]
@@ -908,9 +953,9 @@ impl<'v> ValueArena<'v> {
         }
     }
 
-    pub(crate) fn memo_ty(&self, clo: &'v TyClo<'v>) -> Option<Rc<VTy<'v>>> {
+    pub(crate) fn memo_ty(&self, clo: &'v TyClo<'v>) -> Option<&'v VTy<'v>> {
         match clo {
-            TyClo::Val(value) => Some(Rc::clone(value)),
+            TyClo::Val(value) => Some(*value),
             _ => {
                 let found = self.type_cache.borrow().get(clo as *const TyClo<'v>);
                 #[cfg(feature = "value-metrics")]
@@ -955,7 +1000,7 @@ impl<'v> ValueArena<'v> {
     ///
     /// Policy changes the fuel a query spends, never its value: the memo is
     /// a function of the closure alone, and only successes are remembered.
-    pub(crate) fn cache_tm(&self, clo: &'v TmClo<'v>, value: &Rc<Val<'v>>) {
+    pub(crate) fn cache_tm(&self, clo: &'v TmClo<'v>, value: &'v Val<'v>) {
         if !matches!(clo, TmClo::Val(_)) {
             let mut cache = self.term_cache.borrow_mut();
             let inserted = cache.insert(clo as *const TmClo<'v>, value);
@@ -970,7 +1015,7 @@ impl<'v> ValueArena<'v> {
     }
 
     /// [`Self::cache_tm`] for types.
-    pub(crate) fn cache_ty(&self, clo: &'v TyClo<'v>, value: &Rc<VTy<'v>>) {
+    pub(crate) fn cache_ty(&self, clo: &'v TyClo<'v>, value: &'v VTy<'v>) {
         if !matches!(clo, TyClo::Val(_)) {
             let mut cache = self.type_cache.borrow_mut();
             let inserted = cache.insert(clo as *const TyClo<'v>, value);
@@ -1004,18 +1049,18 @@ impl<'v> ValueArena<'v> {
 ///
 /// **A thunk never memoizes a failure**: the memo is written only on `Ok`, so
 /// a value graph forced under an insufficient budget and re-forced under a
-/// larger one still succeeds (design §6). Successful results live in the
-/// query arena's bounded cache, so sharing cannot retain an unbounded forced
-/// graph.
+/// larger one still succeeds (design §6). Successful results are born in the
+/// query arena and memoized there by the closure's address, so a forced graph
+/// is freed flat when the query ends, never by a recursive drop.
 pub enum TmClo<'v> {
     Syn {
         env: Env<'v>,
         body: Rc<Term>,
     },
-    Val(Rc<Val<'v>>),
+    Val(&'v Val<'v>),
     Elim {
         head: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
     },
 }
 
@@ -1024,11 +1069,11 @@ impl<'v> TmClo<'v> {
         TmClo::Syn { env, body }
     }
 
-    pub fn val(v: Rc<Val<'v>>) -> TmClo<'v> {
+    pub fn val(v: &'v Val<'v>) -> TmClo<'v> {
         TmClo::Val(v)
     }
 
-    pub fn elim(head: &'v TmClo<'v>, elim: Rc<Elim<'v>>) -> TmClo<'v> {
+    pub fn elim(head: &'v TmClo<'v>, elim: &'v Elim<'v>) -> TmClo<'v> {
         TmClo::Elim { head, elim }
     }
 
@@ -1087,7 +1132,7 @@ pub enum TyClo<'v> {
         env: Env<'v>,
         body: Rc<Type>,
     },
-    Val(Rc<VTy<'v>>),
+    Val(&'v VTy<'v>),
     Vec {
         level: &'v Level,
         elem: &'v TyClo<'v>,
@@ -1108,7 +1153,7 @@ impl<'v> TyClo<'v> {
         TyClo::Syn { env, body }
     }
 
-    pub fn val(v: Rc<VTy<'v>>) -> TyClo<'v> {
+    pub fn val(v: &'v VTy<'v>) -> TyClo<'v> {
         TyClo::Val(v)
     }
 
@@ -1172,7 +1217,7 @@ pub enum VTail {
 #[derive(Clone)]
 pub struct VSubst<'v> {
     pub tail: VTail,
-    pub terms: Vec<Rc<Val<'v>>>,
+    pub terms: Vec<&'v Val<'v>>,
 }
 
 impl VTail {
@@ -1208,7 +1253,7 @@ pub enum Head<'v> {
     /// An eliminator applied to a value it cannot eliminate — reachable only
     /// on ill-typed input, where `reduce.rs` is likewise stuck without being
     /// neutral. Given a home here so that no input reaches a panic.
-    Stuck(Rc<Val<'v>>),
+    Stuck(&'v Val<'v>),
 }
 
 impl Head<'_> {
@@ -1242,7 +1287,7 @@ pub enum VNeTy<'v> {
     /// `El^l ν` at an encoding that does not decode. Forced, so the payload
     /// is a weak head value: a neutral (the ch. 06 case) or — on ill-typed
     /// input — a stuck one.
-    El { level: Level, tm: Rc<Val<'v>> },
+    El { level: Level, tm: &'v Val<'v> },
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,14 +1363,14 @@ pub enum VTy<'v> {
     Vec {
         level: Level,
         elem: &'v TyClo<'v>,
-        len: Rc<Val<'v>>,
+        len: &'v Val<'v>,
     },
     /// See [`VTy::Vec`].
-    Fin { len: Rc<Val<'v>> },
+    Fin { len: &'v Val<'v> },
     /// See [`VTy::Vec`]; `fam` has one pending binder, `i : Fin len`.
     DVec {
         level: Level,
-        len: Rc<Val<'v>>,
+        len: &'v Val<'v>,
         fam: &'v TyClo<'v>,
     },
     /// Binds *universe* variables, not a local: entered by instantiating the
@@ -1356,6 +1401,13 @@ pub enum VTy<'v> {
         level: Level,
     },
     Neutral(VNeTy<'v>),
+}
+
+impl<'v> VTy<'v> {
+    /// [`Val::ptr_eq`] for type values.
+    pub fn ptr_eq(a: &VTy<'v>, b: &VTy<'v>) -> bool {
+        std::ptr::eq(a, b)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1513,7 +1565,7 @@ pub enum Val<'v> {
     NatSync {
         program: Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
     },
     /// A fold over a *width* whose step is a bit transducer
     /// (`eval/transduce.rs`), waiting for the arguments its class fires at.
@@ -1527,9 +1579,9 @@ pub enum Val<'v> {
     BitFold {
         program: Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         class: Rc<Transducer>,
-        apps: Rc<Vec<Rc<Elim<'v>>>>,
+        apps: Rc<Vec<&'v Elim<'v>>>,
     },
     Refl {
         level: Level,
@@ -1613,7 +1665,7 @@ pub enum Val<'v> {
     /// rather than applied, it is first built as the λ it stands for
     /// (`Eval::wf_ih_lam`). A strategy change with no semantic content.
     WfIh {
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1632,7 +1684,7 @@ pub enum Val<'v> {
     /// than applied, it is first built as the λ it stands for
     /// (`Eval::w_ih_lam`). A strategy change with no semantic content.
     WIh {
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1652,7 +1704,7 @@ pub enum Val<'v> {
     /// λ it stands for (`Eval::iwf_ih_lam`). A strategy change with no
     /// semantic content.
     IWfIh {
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1680,7 +1732,17 @@ pub enum Val<'v> {
     BoxTy(Rc<Type>),
     BoxTm(Rc<Term>),
 
-    Neutral(Rc<VNeutral<'v>>),
+    Neutral(&'v VNeutral<'v>),
+}
+
+impl<'v> Val<'v> {
+    /// Whether two values are one region object. Values are born in the
+    /// query arena and never freed while it lives, so an address names one
+    /// value for the whole query (the `Rc::ptr_eq` this replaced could not
+    /// say as much once an `Rc` was dropped).
+    pub fn ptr_eq(a: &Val<'v>, b: &Val<'v>) -> bool {
+        std::ptr::eq(a, b)
+    }
 }
 
 impl<'v> Val<'v> {
@@ -1693,7 +1755,7 @@ impl<'v> Val<'v> {
         let (_, rest) = ContextProgram::uncons(program);
         match rest {
             None => tail,
-            Some(program) => arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
+            Some(program) => arena.tm(TmClo::val(arena.val(Val::NatRun { program, tail }))),
         }
     }
 
@@ -1722,11 +1784,11 @@ impl<'v> Val<'v> {
         let (rest_len, rest) = match std::num::NonZeroU64::new(u64::from(width - 1)) {
             None => (tail_len, tail),
             Some(count) => (
-                arena.tm(TmClo::val(Rc::new(Val::NatRun {
+                arena.tm(TmClo::val(arena.val(Val::NatRun {
                     program: ContextProgram::run((), count),
                     tail: tail_len,
                 }))),
-                arena.tm(TmClo::val(Rc::new(Val::BitRun {
+                arena.tm(TmClo::val(arena.val(Val::BitRun {
                     level: level.clone(),
                     ty,
                     width: width - 1,
@@ -1780,8 +1842,8 @@ impl<'v> Val<'v> {
     }
 
     /// The neutral variable at concrete level `lvl`.
-    pub fn var(lvl: u32) -> Val<'v> {
-        Val::Neutral(Rc::new(VNeutral {
+    pub fn var(arena: &'v ValueArena<'v>, lvl: u32) -> Val<'v> {
+        Val::Neutral(arena.neutral(VNeutral {
             head: Head::Var(lvl),
             spine: ElimSpine::empty(),
             unfold: None,
@@ -1789,8 +1851,8 @@ impl<'v> Val<'v> {
     }
 
     /// The neutral variable at abstract-prefix depth `depth`.
-    pub fn base_var(depth: u32) -> Val<'v> {
-        Val::Neutral(Rc::new(VNeutral {
+    pub fn base_var(arena: &'v ValueArena<'v>, depth: u32) -> Val<'v> {
+        Val::Neutral(arena.neutral(VNeutral {
             head: Head::BaseVar(depth),
             spine: ElimSpine::empty(),
             unfold: None,
@@ -2399,9 +2461,9 @@ mod tests {
     #[test]
     fn deep_arena_value_chain_drops_without_using_the_native_stack() {
         let arena = ValueArena::new();
-        let mut clo = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let mut clo = arena.tm(TmClo::val(arena.val(Val::Zero)));
         for _ in 0..100_000 {
-            clo = arena.tm(TmClo::val(Rc::new(Val::Succ(clo))));
+            clo = arena.tm(TmClo::val(arena.val(Val::Succ(clo))));
         }
         assert!(arena.memo_tm(clo).is_some());
     }
@@ -2425,13 +2487,13 @@ mod tests {
     fn environment_value_identity_ignores_nodes_but_not_captured_values() {
         let arena = ValueArena::new();
         let base = super::Env::empty();
-        let shared = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let shared = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let left = base.push(&arena, shared);
         let right = base.push(&arena, shared);
         assert!(!super::Env::ptr_eq(&left, &right));
         assert!(super::Env::values_ptr_eq(&left, &right));
 
-        let separately_allocated = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let separately_allocated = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let different = base.push(&arena, separately_allocated);
         assert!(!super::Env::values_ptr_eq(&left, &different));
     }
@@ -2440,9 +2502,9 @@ mod tests {
     fn environment_prefix_identity_ignores_unobserved_outer_values() {
         let arena = ValueArena::new();
         let base = super::Env::empty();
-        let left_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let right_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let shared_inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let left_outer = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let right_outer = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let shared_inner = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let left = base.push(&arena, left_outer).push(&arena, shared_inner);
         let right = base.push(&arena, right_outer).push(&arena, shared_inner);
 
@@ -2456,8 +2518,8 @@ mod tests {
     fn environment_prefix_keeps_length_and_abstract_boundary_in_sync() {
         let arena = ValueArena::new();
         let base = super::Env::empty();
-        let outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let outer = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let inner = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let env = base.push(&arena, outer).push(&arena, inner);
 
         let prefix = env.prefix(1);
@@ -2480,7 +2542,7 @@ mod tests {
         let mut closures = Vec::with_capacity(n);
         for _ in 0..n {
             let clo = arena.tm(TmClo::syn(env, Rc::new(crate::term::Term::Zero)));
-            arena.cache_tm(clo, &Rc::new(Val::Zero));
+            arena.cache_tm(clo, &arena.val(Val::Zero));
             closures.push(clo);
         }
         assert!(arena.memo_tm(closures[0]).is_some());

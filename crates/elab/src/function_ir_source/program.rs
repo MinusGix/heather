@@ -1092,7 +1092,7 @@ impl<'a, 'v> Reader<'a, 'v> {
         Ok(self.arena.tm(TmClo::syn(Env::empty(), std::sync::Arc::new(head))))
     }
 
-    fn force(&self, c: &'v TmClo<'v>) -> Result<std::sync::Arc<Val<'v>>, SourceError> {
+    fn force(&self, c: &'v TmClo<'v>) -> Result<&'v Val<'v>, SourceError> {
         let mut eval = heather_kernel::eval::Eval::new(READ_FUEL,
             heather_kernel::reduce::Defs::transparent_cached(self.psi, &self.cache), heather_kernel::term::CtxBase::Nil, self.arena);
         eval.force(c).and_then(|v| eval.delta_whnf(v)).map_err(|_| SourceError::Unsupported("evaluation ran out of fuel".into()))
@@ -1104,7 +1104,7 @@ impl<'a, 'v> Reader<'a, 'v> {
         let w = self.force(c)?;
         let (label, children) = match &*w {
             Val::Supf { label, children, .. } => (*label, self.spine(children)?),
-            _ => (self.arena.tm(TmClo::val(std::sync::Arc::clone(&w))), vec![]),
+            _ => (self.arena.tm(TmClo::val(w)), vec![]),
         };
         let v = self.force(label)?;
         let (index, payload) = match &*v {

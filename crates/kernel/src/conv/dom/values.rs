@@ -89,7 +89,7 @@ fn glen<'v>(env: &Env<'v>) -> u32 {
 
 /// The neutral variable a binder pushed at Γ-length `level` is bound to.
 fn fresh<'v>(arena: &'v ValueArena<'v>, level: u32) -> &'v TmClo<'v> {
-    arena.tm(TmClo::val(Rc::new(Val::var(level))))
+    arena.tm(TmClo::val(arena.val(Val::var(arena, level))))
 }
 
 /// The same variable, taken from the environment that already holds it
@@ -131,7 +131,7 @@ mod tests {
         tail: &'v TmClo<'v>,
     ) -> TmC<'v> {
         TmC {
-            clo: arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
+            clo: arena.tm(TmClo::val(arena.val(Val::NatRun { program, tail }))),
             home: 0,
             sat: 0,
         }
@@ -146,10 +146,10 @@ mod tests {
         let gamma = LocalCtx::nil();
         let arena = value::ValueArena::new();
         let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
-        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let tail = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let left = nat_run(&arena, left, tail);
         let right = nat_run(&arena, right, tail);
-        let ty = TyC::value(&env, Rc::new(VTy::Nat));
+        let ty = TyC::value(&env, arena.vty(VTy::Nat));
         Conv::<Values>::new(fuel, &psi).tm(&env, &left, &right, &ty, &Level::Zero)
     }
 
@@ -229,7 +229,7 @@ mod tests {
         let gamma = LocalCtx::nil();
         let arena = value::ValueArena::new();
         let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
-        let ty = TyC::value(&env, Rc::new(VTy::Nat));
+        let ty = TyC::value(&env, arena.vty(VTy::Nat));
         assert_eq!(Conv::<Values>::new(1, &psi).tm(&env, &a, &same, &ty, &Level::Zero), Ok(()));
         assert_eq!(
             Conv::<Values>::new(1, &psi).tm(&env, &a, &other_home, &ty, &Level::Zero),
@@ -240,8 +240,8 @@ mod tests {
     #[test]
     fn suspended_identity_counts_pending_binders_and_only_reads_used_captures() {
         let arena = ValueArena::new();
-        let z = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let same_z = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let z = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let same_z = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let x = fresh(&arena, 0);
         let y = fresh(&arena, 1);
         let rho = |outer, inner| value::Env::empty().push(&arena, outer).push(&arena, inner);
@@ -297,13 +297,13 @@ mod tests {
         let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
         let rho = value::Env::empty();
         let program = || value::program::ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap());
-        let zero = || arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let head = || arena.tm(TmClo::val(Rc::new(Val::NatRun { program: program(), tail: zero() })));
+        let zero = || arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let head = || arena.tm(TmClo::val(arena.val(Val::NatRun { program: program(), tail: zero() })));
         let motive = || arena.ty(TyClo::new(rho, Rc::new(Type::Nat)));
         let base = || arena.tm(TmClo::syn(rho, Rc::new(Term::Zero)));
         let step = || arena.tm(TmClo::syn(rho, Rc::new(Term::Var(LocalVar(1)))));
         let fold = |head, level, motive, base, step| TmC::here(&env, arena.tm(TmClo::elim(
-            head, Rc::new(Elim::ElimNat { level, motive, base, step }),
+            head, arena.elim_cell(Elim::ElimNat { level, motive, base, step }),
         )));
         let a = fold(head(), Level::Zero, motive(), base(), step());
         let b = fold(head(), Level::Zero, motive(), base(), step());
@@ -379,7 +379,7 @@ impl<'v> TyC<'v> {
         TyC { clo, home: n, sat: n + k }
     }
 
-    fn value(env: &Env<'v>, v: Rc<VTy<'v>>) -> TyC<'v> {
+    fn value(env: &Env<'v>, v: &'v VTy<'v>) -> TyC<'v> {
         TyC::here(env, env.arena.ty(TyClo::val(v)))
     }
 }
@@ -395,7 +395,7 @@ impl<'v> TmC<'v> {
         TmC { clo, home: n, sat: n + k }
     }
 
-    fn value(env: &Env<'v>, v: Rc<Val<'v>>) -> TmC<'v> {
+    fn value(env: &Env<'v>, v: &'v Val<'v>) -> TmC<'v> {
         TmC::here(env, env.arena.tm(TmClo::val(v)))
     }
 }
@@ -536,7 +536,7 @@ fn run<'v, T>(
 /// The definition at the head of a δ-stuck spine: at values it is one read,
 /// because a glued neutral *is* the answer the syntactic `delta_head` walks a
 /// spine to find (design §5).
-fn glued<'v>(v: &Rc<Val<'v>>) -> Option<GlobalVar> {
+fn glued<'v>(v: &&'v Val<'v>) -> Option<GlobalVar> {
     match &**v {
         Val::Neutral(n) if n.unfold.is_some() => match &n.head {
             Head::Global { var, .. } => Some(*var),
@@ -550,13 +550,13 @@ fn glued<'v>(v: &Rc<Val<'v>>) -> Option<GlobalVar> {
 /// function, an eliminator's scrutinee. The glued unfolding of the shorter
 /// spine is recovered from the longer one's, which was built as exactly that
 /// elimination applied to it.
-fn spine_head<'v>(n: &Rc<VNeutral<'v>>) -> Rc<Val<'v>> {
+fn spine_head<'v>(arena: &'v ValueArena<'v>, n: &VNeutral<'v>) -> &'v Val<'v> {
     let spine = n.spine.pop();
     if spine.is_empty() {
         match &n.head {
-            Head::BoxedGlobalTy(c) => return Rc::new(Val::BoxTy(Rc::clone(c))),
-            Head::BoxedGlobalTm(c) => return Rc::new(Val::BoxTm(Rc::clone(c))),
-            Head::Stuck(v) => return Rc::clone(v),
+            Head::BoxedGlobalTy(c) => return arena.val(Val::BoxTy(Rc::clone(c))),
+            Head::BoxedGlobalTm(c) => return arena.val(Val::BoxTm(Rc::clone(c))),
+            Head::Stuck(v) => return *v,
             _ => {}
         }
     }
@@ -564,7 +564,7 @@ fn spine_head<'v>(n: &Rc<VNeutral<'v>>) -> Rc<Val<'v>> {
         Some(TmClo::Elim { head, .. }) => Some(*head),
         _ => None,
     };
-    Rc::new(Val::Neutral(Rc::new(VNeutral {
+    arena.val(Val::Neutral(arena.neutral(VNeutral {
         head: n.head.clone(),
         spine,
         unfold,
@@ -618,7 +618,7 @@ fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32
                     }
                 })
         }
-        (TmClo::Val(v1), TmClo::Val(v2)) if pending == 0 => Rc::ptr_eq(v1, v2) || match (&**v1, &**v2) {
+        (TmClo::Val(v1), TmClo::Val(v2)) if pending == 0 => Val::ptr_eq(v1, v2) || match (&**v1, &**v2) {
             (Val::Zero, Val::Zero) => true,
             (Val::NatRun { program: p1, tail: t1 }, Val::NatRun { program: p2, tail: t2 }) => {
                 value::program::ContextProgram::equivalent_fast(p1, p2)
@@ -627,7 +627,7 @@ fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32
             _ => false,
         },
         (TmClo::Elim { head: h1, elim: e1 }, TmClo::Elim { head: h2, elim: e2 }) if pending == 0 => {
-            clo_identity(h1, h2, 0, budget) && (Rc::ptr_eq(e1, e2) || match (&**e1, &**e2) {
+            clo_identity(h1, h2, 0, budget) && (std::ptr::eq::<Elim<'v>>(*e1, *e2) || match (&**e1, &**e2) {
                 (Elim::ElimNat { level: l1, motive: m1, base: z1, step: s1 },
                  Elim::ElimNat { level: l2, motive: m2, base: z2, step: s2 }) => {
                     l1 == l2 && ty_clo_identity(m1, m2, 1, budget)
@@ -677,8 +677,8 @@ fn env_identity<'v>(a: &value::Env<'v>, b: &value::Env<'v>, used: u32, tail: boo
 // ---------------------------------------------------------------------------
 
 impl<'v> Dom<'v> for Values {
-    type Ty = Rc<VTy<'v>>;
-    type Tm = Rc<Val<'v>>;
+    type Ty = &'v VTy<'v>;
+    type Tm = &'v Val<'v>;
     type TyC = TyC<'v>;
     type TmC = TmC<'v>;
     type Subst = VSubst<'v>;
@@ -686,7 +686,7 @@ impl<'v> Dom<'v> for Values {
 
     // -- reduction ----------------------------------------------------------
 
-    fn whnf_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TyC<'v>) -> R<Rc<VTy<'v>>> {
+    fn whnf_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TyC<'v>) -> R<&'v VTy<'v>> {
         let c = open_ty(env, t, 0);
         run(cv, env, |ev| {
             let v = ev.force_ty(&c)?;
@@ -694,15 +694,15 @@ impl<'v> Dom<'v> for Values {
         })
     }
 
-    fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<Rc<VTy<'v>>> {
+    fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<&'v VTy<'v>> {
         run(cv, env, |ev| ev.eval_ty(t, &env.rho))
     }
 
-    fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<Rc<Val<'v>>> {
+    fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<&'v Val<'v>> {
         run(cv, env, |ev| ev.eval_tm_ref(t, &env.rho))
     }
 
-    fn whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<Rc<Val<'v>>> {
+    fn whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<&'v Val<'v>> {
         let c = open_tm(env, t, 0);
         run(cv, env, |ev| {
             let v = ev.force(&c)?;
@@ -712,18 +712,18 @@ impl<'v> Dom<'v> for Values {
 
     /// Forcing *is* the δ-opaque reduction: a definition becomes a glued
     /// neutral and its unfolding is a thunk nobody has pulled.
-    fn whnf_ty_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TyC<'v>) -> R<Rc<VTy<'v>>> {
+    fn whnf_ty_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TyC<'v>) -> R<&'v VTy<'v>> {
         let c = open_ty(env, t, 0);
         run(cv, env, |ev| ev.force_ty(&c))
     }
 
-    fn whnf_tm_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<Rc<Val<'v>>> {
+    fn whnf_tm_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<&'v Val<'v>> {
         let c = open_tm(env, t, 0);
         run(cv, env, |ev| ev.force(&c))
     }
 
-    fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<VTy<'v>>) -> R<Rc<VTy<'v>>> {
-        let w = Rc::clone(w);
+    fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &&'v VTy<'v>) -> R<&'v VTy<'v>> {
+        let w = *w;
         run(cv, env, |ev| ev.delta_step_ty(w))
     }
 
@@ -747,20 +747,20 @@ impl<'v> Dom<'v> for Values {
         ))
     }
 
-    fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<Val<'v>>) -> R<Rc<Val<'v>>> {
-        let w = Rc::clone(w);
+    fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &&'v Val<'v>) -> R<&'v Val<'v>> {
+        let w = *w;
         run(cv, env, |ev| ev.delta_step(w))
     }
 
-    fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: Rc<Val<'v>>) -> R<Rc<Val<'v>>> {
+    fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'v Val<'v>) -> R<&'v Val<'v>> {
         run(cv, env, |ev| ev.delta_whnf(w))
     }
 
-    fn delta_head(_cv: &Conv<'v, Self>, _env: &Env<'v>, w: &Rc<Val<'v>>) -> Option<GlobalVar> {
+    fn delta_head(_cv: &Conv<'v, Self>, _env: &Env<'v>, w: &&'v Val<'v>) -> Option<GlobalVar> {
         glued(w)
     }
 
-    fn delta_head_ty(_cv: &Conv<'v, Self>, _env: &Env<'v>, w: &Rc<VTy<'v>>) -> Option<GlobalVar> {
+    fn delta_head_ty(_cv: &Conv<'v, Self>, _env: &Env<'v>, w: &&'v VTy<'v>) -> Option<GlobalVar> {
         match &**w {
             VTy::Neutral(VNeTy::El { tm, .. }) => glued(tm),
             VTy::Vec { len, .. } | VTy::Fin { len } | VTy::DVec { len, .. } => glued(len),
@@ -768,7 +768,7 @@ impl<'v> Dom<'v> for Values {
         }
     }
 
-    fn is_application_spine(w: &Rc<Val<'v>>) -> bool {
+    fn is_application_spine(w: &&'v Val<'v>) -> bool {
         match &**w {
             Val::Neutral(n) => n.spine.iter_rev().all(|e| {
                 matches!(e, Elim::App { .. } | Elim::UApp { .. } | Elim::CtxApp { .. } | Elim::TyApp { .. })
@@ -801,7 +801,7 @@ impl<'v> Dom<'v> for Values {
         }
     }
 
-    fn view_ty<'a>(_cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Rc<VTy<'v>>) -> TyView<'a, 'v, Self> {
+    fn view_ty<'a>(_cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a &'v VTy<'v>) -> TyView<'a, 'v, Self> {
         match &**w {
             VTy::Nat => TyView::Nat,
             VTy::Ty(l) => TyView::Ty(l),
@@ -866,12 +866,12 @@ impl<'v> Dom<'v> for Values {
             VTy::Vec { level, elem, len } => TyView::Vec {
                 level,
                 elem: TyC::here(env, *elem),
-                len: TmC::value(env, Rc::clone(len)),
+                len: TmC::value(env, *len),
             },
-            VTy::Fin { len } => TyView::Fin { len: TmC::value(env, Rc::clone(len)) },
+            VTy::Fin { len } => TyView::Fin { len: TmC::value(env, *len) },
             VTy::DVec { level, len, fam } => TyView::DVec {
                 level,
-                len: TmC::value(env, Rc::clone(len)),
+                len: TmC::value(env, *len),
                 fam: TyC::under(env, *fam, 1),
             },
             VTy::UPi { num_vars, level, body } => TyView::UPi {
@@ -894,12 +894,12 @@ impl<'v> Dom<'v> for Values {
                 TyView::GlobalTy { var: *var, subst }
             }
             VTy::Neutral(VNeTy::El { level, tm }) => {
-                TyView::El { level, tm: TmC::value(env, Rc::clone(tm)) }
+                TyView::El { level, tm: TmC::value(env, *tm) }
             }
         }
     }
 
-    fn view_tm<'a>(_cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Rc<Val<'v>>) -> TmView<'a, 'v, Self> {
+    fn view_tm<'a>(_cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a &'v Val<'v>) -> TmView<'a, 'v, Self> {
         match &**w {
             Val::TmNat => TmView::TmNat,
             Val::TmTy(l) => TmView::TmTy(l),
@@ -1035,13 +1035,13 @@ impl<'v> Dom<'v> for Values {
         }
     }
 
-    fn head_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<Rc<Val<'v>>> {
+    fn head_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<&'v Val<'v>> {
         let c = open_tm(env, t, 0);
         run(cv, env, |ev| ev.force(&c))
     }
 
-    fn as_child_ty(_cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<VTy<'v>>) -> R<TyC<'v>> {
-        Ok(TyC::value(env, Rc::clone(w)))
+    fn as_child_ty(_cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &&'v VTy<'v>) -> R<TyC<'v>> {
+        Ok(TyC::value(env, *w))
     }
 
     // -- scope --------------------------------------------------------------
@@ -1197,7 +1197,7 @@ impl<'v> Dom<'v> for Values {
     }
 
     fn subst_term(env: &Env<'v>, d: &VSubst<'v>, k: usize) -> TmC<'v> {
-        TmC::value(env, Rc::clone(&d.terms[k]))
+        TmC::value(env, d.terms[k])
     }
 
     /// `VTail`'s coarser test: the source context's length and `·`'s base are
@@ -1221,7 +1221,7 @@ impl<'v> Dom<'v> for Values {
     ) -> R<TyC<'v>> {
         let mut e = value::Env::empty();
         for v in &d.terms[..k] {
-            let value = env.arena.tm(TmClo::val(Rc::clone(v)));
+            let value = env.arena.tm(TmClo::val(*v));
             e = e.push(env.arena, value);
         }
         Ok(TyC::here(env, env.arena.ty(TyClo::new(e, Rc::clone(t)))))
@@ -1230,39 +1230,39 @@ impl<'v> Dom<'v> for Values {
     // -- synthesized types --------------------------------------------------
 
     fn nat(env: &Env<'v>) -> TyC<'v> {
-        TyC::value(env, Rc::new(VTy::Nat))
+        TyC::value(env, env.arena.vty(VTy::Nat))
     }
 
     fn univ(env: &Env<'v>, level: &Level) -> TyC<'v> {
-        TyC::value(env, Rc::new(VTy::Ty(level.clone())))
+        TyC::value(env, env.arena.vty(VTy::Ty(level.clone())))
     }
 
     fn empty(env: &Env<'v>, level: &Level) -> TyC<'v> {
-        TyC::value(env, Rc::new(VTy::Empty { level: level.clone() }))
+        TyC::value(env, env.arena.vty(VTy::Empty { level: level.clone() }))
     }
 
     fn sempty(env: &Env<'v>, level: &Level) -> TyC<'v> {
-        TyC::value(env, Rc::new(VTy::SEmpty { level: level.clone() }))
+        TyC::value(env, env.arena.vty(VTy::SEmpty { level: level.clone() }))
     }
 
     fn squash(env: &Env<'v>, level: &Level, ty: &TyC<'v>) -> TyC<'v> {
         TyC::value(
             env,
-            Rc::new(VTy::Squash { level: level.clone(), ty: ty.clo }),
+            env.arena.vty(VTy::Squash { level: level.clone(), ty: ty.clo }),
         )
     }
 
     fn code_ty(env: &Env<'v>, ctx: &LocalCtx, level: &Level) -> TyC<'v> {
         TyC::value(
             env,
-            Rc::new(VTy::CodeTy { ctx: ctx.clone(), level: level.clone() }),
+            env.arena.vty(VTy::CodeTy { ctx: ctx.clone(), level: level.clone() }),
         )
     }
 
     fn code_tm(env: &Env<'v>, ctx: &LocalCtx, ty: &Rc<Type>, level: &Level) -> TyC<'v> {
         TyC::value(
             env,
-            Rc::new(VTy::CodeTm {
+            env.arena.vty(VTy::CodeTm {
                 ctx: ctx.clone(),
                 ty: Rc::clone(ty),
                 level: level.clone(),
@@ -1288,7 +1288,7 @@ impl<'v> Dom<'v> for Values {
     ) -> R<TyC<'v>> {
         Ok(TyC::value(
             env,
-            Rc::new(VTy::Pi {
+            env.arena.vty(VTy::Pi {
                 dom_level: dom_level.clone(),
                 cod_level: cod_level.clone(),
                 dom: open_ty(env, dom, 0),
@@ -1307,7 +1307,7 @@ impl<'v> Dom<'v> for Values {
     ) -> R<TyC<'v>> {
         Ok(TyC::value(
             env,
-            Rc::new(VTy::Sum {
+            env.arena.vty(VTy::Sum {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
                 lhs: open_ty(env, lhs, 0),
@@ -1326,7 +1326,7 @@ impl<'v> Dom<'v> for Values {
     ) -> R<TyC<'v>> {
         Ok(TyC::value(
             env,
-            Rc::new(VTy::W {
+            env.arena.vty(VTy::W {
                 shape_level: shape_level.clone(),
                 pos_level: pos_level.clone(),
                 shape: open_ty(env, shape, 0),
@@ -1344,7 +1344,7 @@ impl<'v> Dom<'v> for Values {
     ) -> R<TyC<'v>> {
         Ok(TyC::value(
             env,
-            Rc::new(VTy::Wf {
+            env.arena.vty(VTy::Wf {
                 level: level.clone(),
                 shape: open_ty(env, shape, 0),
                 arity: open_tm(env, arity, 1),
@@ -1391,7 +1391,7 @@ impl<'v> Dom<'v> for Values {
     ) -> R<TyC<'v>> {
         Ok(TyC::value(
             env,
-            Rc::new(VTy::Id {
+            env.arena.vty(VTy::Id {
                 level: level.clone(),
                 ty: open_ty(env, ty, 0),
                 lhs: open_tm(env, lhs, 0),
@@ -1403,23 +1403,23 @@ impl<'v> Dom<'v> for Values {
     // -- synthesized terms --------------------------------------------------
 
     fn zero(env: &Env<'v>) -> TmC<'v> {
-        TmC::value(env, Rc::new(Val::Zero))
+        TmC::value(env, env.arena.val(Val::Zero))
     }
 
     fn succ(_cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<TmC<'v>> {
         Ok(TmC::value(
             env,
-            Rc::new(Val::Succ(open_tm(env, t, 0))),
+            env.arena.val(Val::Succ(open_tm(env, t, 0))),
         ))
     }
 
     fn local(env: &Env<'v>, x: LocalVar) -> TmC<'v> {
         let n = glen(env);
         let v = match n.checked_sub(1 + x.0) {
-            Some(level) => Val::var(level),
-            None => Val::base_var(x.0 - n),
+            Some(level) => Val::var(env.arena, level),
+            None => Val::base_var(env.arena, x.0 - n),
         };
-        TmC::value(env, Rc::new(v))
+        TmC::value(env, env.arena.val(v))
     }
 
     fn refl(
@@ -1431,7 +1431,7 @@ impl<'v> Dom<'v> for Values {
     ) -> R<TmC<'v>> {
         Ok(TmC::value(
             env,
-            Rc::new(Val::Refl {
+            env.arena.val(Val::Refl {
                 level: level.clone(),
                 ty: open_ty(env, ty, 0),
                 tm: open_tm(env, tm, 0),
@@ -1454,7 +1454,7 @@ impl<'v> Dom<'v> for Values {
         let v = open_tm(env, val, 0);
         Ok(TmC::value(
             env,
-            Rc::new(if left {
+            env.arena.val(if left {
                 Val::Inl { ann: Some(SumAnn { lhs_level: ll, rhs_level: rl, lhs: l, rhs: r }), val: v }
             } else {
                 Val::Inr { ann: Some(SumAnn { lhs_level: ll, rhs_level: rl, lhs: l, rhs: r }), val: v }
@@ -1478,7 +1478,7 @@ impl<'v> Dom<'v> for Values {
         };
         Ok(TmC::value(
             env,
-            Rc::new(Val::Sup {
+            env.arena.val(Val::Sup {
                 shape_level: shape_level.clone(),
                 pos_level: pos_level.clone(),
                 shape_ty: *shape,
@@ -1527,8 +1527,8 @@ impl<'v> Dom<'v> for Values {
     fn cancel_nat_prefix(
         cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
-        a: &Rc<Val<'v>>,
-        b: &Rc<Val<'v>>,
+        a: &&'v Val<'v>,
+        b: &&'v Val<'v>,
     ) -> R<Option<(TmC<'v>, TmC<'v>)>> {
         let (
             Val::NatRun { program: left, tail: left_tail },
@@ -1553,7 +1553,7 @@ impl<'v> Dom<'v> for Values {
         let arena = env.arena;
         let residual = |program, tail| match program {
             None => tail,
-            Some(program) => arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
+            Some(program) => arena.tm(TmClo::val(arena.val(Val::NatRun { program, tail }))),
         };
         Ok(Some((
             TmC::here(env, residual(cancelled.left, left_tail)),
@@ -1564,8 +1564,8 @@ impl<'v> Dom<'v> for Values {
     fn bit_vec_eq(
         cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
-        a: &Rc<Val<'v>>,
-        b: &Rc<Val<'v>>,
+        a: &&'v Val<'v>,
+        b: &&'v Val<'v>,
         fst_ty: &TyC<'v>,
         snd_ty: &TyC<'v>,
         snd_level: &Level,
@@ -1590,7 +1590,7 @@ impl<'v> Dom<'v> for Values {
             return Ok(None);
         }
         let (elem, tail_ty) = (*elem, snd_ty.clo);
-        let (a, b) = (Rc::clone(a), Rc::clone(b));
+        let (a, b) = (*a, *b);
         let level = snd_level.clone();
         let Some(prefix) =
             run(cv, env, |ev| ev.pack_bit_prefix(&level, elem, tail_ty, a, b))?
@@ -1658,11 +1658,11 @@ impl<'v> Dom<'v> for Values {
     }
 
     fn box_ty(env: &Env<'v>, code: Rc<Type>) -> TmC<'v> {
-        TmC::value(env, Rc::new(Val::BoxTy(code)))
+        TmC::value(env, env.arena.val(Val::BoxTy(code)))
     }
 
     fn box_tm(env: &Env<'v>, code: Rc<Term>) -> TmC<'v> {
-        TmC::value(env, Rc::new(Val::BoxTm(code)))
+        TmC::value(env, env.arena.val(Val::BoxTm(code)))
     }
 
     fn box_ty_payload(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &TmC<'v>) -> R<Option<Rc<Type>>> {
@@ -1689,8 +1689,8 @@ impl<'v> Dom<'v> for Values {
         cv: &mut Conv<'v, Self>,
         outer: &Env<'v>,
         inner: &Env<'v>,
-        a: &Rc<Val<'v>>,
-        b: &Rc<Val<'v>>,
+        a: &&'v Val<'v>,
+        b: &&'v Val<'v>,
         dom_level: &Level,
         cod_level: &Level,
         dom: &TyC<'v>,
@@ -1705,7 +1705,7 @@ impl<'v> Dom<'v> for Values {
             }),
             arg: var_at(inner, glen(outer)),
         };
-        let (a, b) = (Rc::clone(a), Rc::clone(b));
+        let (a, b) = (*a, *b);
         let (x, y) = run(cv, inner, |ev| {
             let x = ev.elim(a, e.clone())?;
             let y = ev.elim(b, e)?;
@@ -1718,8 +1718,8 @@ impl<'v> Dom<'v> for Values {
         cv: &mut Conv<'v, Self>,
         _outer: &Env<'v>,
         inner: &Env<'v>,
-        a: &Rc<Val<'v>>,
-        b: &Rc<Val<'v>>,
+        a: &&'v Val<'v>,
+        b: &&'v Val<'v>,
         num_vars: u32,
     ) -> R<(TmC<'v>, TmC<'v>)> {
         let o = Outer { arena: inner.arena, univs: num_vars, globals: 0 };
@@ -1738,8 +1738,8 @@ impl<'v> Dom<'v> for Values {
         cv: &mut Conv<'v, Self>,
         _outer: &Env<'v>,
         inner: &Env<'v>,
-        a: &Rc<Val<'v>>,
-        b: &Rc<Val<'v>>,
+        a: &&'v Val<'v>,
+        b: &&'v Val<'v>,
     ) -> R<(TmC<'v>, TmC<'v>)> {
         let o = Outer { arena: inner.arena, univs: 0, globals: 1 };
         let (a, b) = (value::shift::val(a, o), value::shift::val(b, o));
@@ -1756,8 +1756,8 @@ impl<'v> Dom<'v> for Values {
         cv: &mut Conv<'v, Self>,
         _outer: &Env<'v>,
         inner: &Env<'v>,
-        a: &Rc<Val<'v>>,
-        b: &Rc<Val<'v>>,
+        a: &&'v Val<'v>,
+        b: &&'v Val<'v>,
         ctx: &LocalCtx,
     ) -> R<(TmC<'v>, TmC<'v>)> {
         let o = Outer { arena: inner.arena, univs: 0, globals: 1 };
@@ -1775,15 +1775,15 @@ impl<'v> Dom<'v> for Values {
         cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
         first: bool,
-        a: &Rc<Val<'v>>,
-        b: &Rc<Val<'v>>,
+        a: &&'v Val<'v>,
+        b: &&'v Val<'v>,
         fst_level: &Level,
         snd_level: &Level,
         fst_ty: &TyC<'v>,
         snd_ty: &TyC<'v>,
     ) -> R<(TmC<'v>, TmC<'v>)> {
         let e = proj_elim(env, first, fst_level, snd_level, fst_ty, snd_ty);
-        let (a, b) = (Rc::clone(a), Rc::clone(b));
+        let (a, b) = (*a, *b);
         let (x, y) = run(cv, env, |ev| {
             let x = ev.elim(a, e.clone())?;
             let y = ev.elim(b, e)?;
@@ -1916,10 +1916,10 @@ impl<'v> Dom<'v> for Values {
     fn iwf_children(
         cv: &mut Conv<'v, Self>,
         env: &Env<'v>,
-        w: &Rc<VTy<'v>>,
+        w: &&'v VTy<'v>,
         label: &TmC<'v>,
     ) -> R<TyC<'v>> {
-        let wv = Self::whnf_ty(cv, env, &TyC::value(env, Rc::clone(w)))?;
+        let wv = Self::whnf_ty(cv, env, &TyC::value(env, *w))?;
         let VTy::IWf { sig, .. } = &*wv else {
             return Err(NC);
         };
@@ -2108,7 +2108,7 @@ fn rec_env<'v>(rec: &RecEnv<'v>, env: &Env<'v>) -> value::Env<'v> {
 
 /// A neutral's view: its outermost elimination, with the shorter spine as the
 /// function or scrutinee. The empty spine is the head itself.
-fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v, Values> {
+fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a VNeutral<'v>) -> TmView<'a, 'v, Values> {
     let Some(last) = n.spine.last() else {
         return match &n.head {
             // A concrete local's identity is its **level**; the arms want the
@@ -2123,7 +2123,7 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a Rc<VNeutral<'v>>) -> TmView<'a, 'v
             _ => TmView::Opaque,
         };
     };
-    let head = TmC::value(env, spine_head(n));
+    let head = TmC::value(env, spine_head(env.arena, n));
     match last {
         Elim::App { ann, arg } => TmView::App {
             levels: ann.as_ref().map(|a| (&a.dom_level, &a.cod_level)),
@@ -2348,7 +2348,7 @@ pub(crate) fn eval_ity<'v>(
     t: &ITy,
     depth: u32,
     delta_final: bool,
-) -> R<Rc<VTy<'v>>> {
+) -> R<&'v VTy<'v>> {
     match t {
         ITy::Owned(s) => eval_ity_syn(cv, env, s, depth, delta_final),
         ITy::Syn(s) => eval_ity_syn(cv, env, s, depth, delta_final),
@@ -2366,11 +2366,11 @@ pub(crate) fn eval_ity<'v>(
 pub(crate) fn select_ity<'v>(
     cv: &mut Conv<'v, Values>,
     env: &Env<'v>,
-    w: Rc<VTy<'v>>,
+    w: &'v VTy<'v>,
     sel: &Sel,
     at_depth: u32,
     delta_final: bool,
-) -> R<Rc<VTy<'v>>> {
+) -> R<&'v VTy<'v>> {
     let c: &'v TyClo<'v> = match (&*w, sel) {
         (VTy::Sigma { fst, .. }, Sel::Fst) => fst,
         (VTy::Sigma { snd, .. }, Sel::Snd(_)) => snd,
@@ -2385,7 +2385,6 @@ pub(crate) fn select_ity<'v>(
         // panic.
         _ => return Err(NC),
     };
-    drop(w);
     let arg: Option<&'v TmClo<'v>> = match sel {
         Sel::Snd(a) | Sel::App(a) => {
             let rho = if at_depth == glen(env) {
@@ -2416,7 +2415,7 @@ fn eval_ity_syn<'v>(
     s: &Type,
     depth: u32,
     delta_final: bool,
-) -> R<Rc<VTy<'v>>> {
+) -> R<&'v VTy<'v>> {
     let rho = if depth == glen(env) {
         env.rho.clone()
     } else {

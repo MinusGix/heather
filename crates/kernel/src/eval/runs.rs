@@ -41,7 +41,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     pub(super) fn fold_run(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         program: &Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
@@ -59,7 +59,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     fn fold_by_class(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         program: &Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
@@ -75,10 +75,10 @@ impl<'a, 'v> Eval<'a, 'v> {
             // ordinary one-step path as before.
             FoldClass::Opaque => self.fold_transduce(program, tail, e),
             FoldClass::Direct => Ok(None),
-            FoldClass::Sync { .. } => Ok(Some(Work::Val(Rc::new(Val::NatSync {
+            FoldClass::Sync { .. } => Ok(Some(Work::Val(self.arena.val(Val::NatSync {
                 program: Rc::clone(program),
                 tail,
-                elim: Rc::new(e.clone()),
+                elim: self.arena.elim_cell(e.clone()),
             })))),
             FoldClass::Affine { tree, uniform } => {
                 self.fold_affine(head, program, tail, e, tree, *uniform)
@@ -93,7 +93,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     fn fold_affine(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         program: &Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
@@ -101,7 +101,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         uniform: bool,
     ) -> Res<Option<Work<'v>>> {
         let Elim::ElimNat { step, motive, .. } = e else { unreachable!() };
-        let fold_at_tail = self.arena.tm(TmClo::elim(tail, Rc::new(e.clone())));
+        let fold_at_tail = self.arena.tm(TmClo::elim(tail, self.arena.elim_cell(e.clone())));
         // What the iterate is applied to, its type's index, and how many
         // times the tree is applied.
         let (base, base_at, count) = if uniform {
@@ -109,7 +109,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         } else {
             let (_, rest) = ContextProgram::uncons(program);
             let inner = self.drive(Work::Apply(*step, vec![tail, fold_at_tail]))?;
-            (self.vclo(inner), self.vclo(Rc::new(Val::Succ(tail))), rest)
+            (self.vclo(inner), self.vclo(self.arena.val(Val::Succ(tail))), rest)
         };
         let Some(count) = count else {
             // One successor, peeled: the innermost step is the whole fold.
@@ -135,7 +135,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         // A tuple, or a projection: annotate from the motive.
         let base_ty = self.apply_ty(motive, &[base_at])?;
         let base_ty = self.delta_whnf_ty(base_ty)?;
-        let scrut = self.vclo(Rc::clone(head));
+        let scrut = self.vclo(head);
         let out_ty = self.apply_ty(motive, &[scrut])?;
         let out_ty = self.delta_whnf_ty(out_ty)?;
         Ok(self.build(&iterated, base, &base_ty, out_ty)?.map(Work::Force))
@@ -143,11 +143,11 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// `Succ^{inc}(Zero)`.
     pub(super) fn literal(&self, inc: &Increment) -> &'v TmClo<'v> {
-        let zero = self.vclo(Rc::new(Val::Zero));
+        let zero = self.vclo(self.arena.val(Val::Zero));
         match inc {
             None => zero,
             Some(program) => {
-                self.vclo(Rc::new(Val::NatRun { program: Rc::clone(program), tail: zero }))
+                self.vclo(self.arena.val(Val::NatRun { program: Rc::clone(program), tail: zero }))
             }
         }
     }
@@ -158,18 +158,18 @@ impl<'a, 'v> Eval<'a, 'v> {
         &mut self,
         tree: &AffineTree,
         base: &'v TmClo<'v>,
-        base_ty: &Rc<VTy<'v>>,
-        out_ty: Rc<VTy<'v>>,
+        base_ty: &'v VTy<'v>,
+        out_ty: &'v VTy<'v>,
     ) -> Res<Option<&'v TmClo<'v>>> {
         Ok(Some(match tree {
             AffineTree::Lit { inc } => self.literal(inc),
             AffineTree::Leaf { inc, path } => {
-                let Some(component) = self.project(base, Rc::clone(base_ty), path)? else {
+                let Some(component) = self.project(base, base_ty, path)? else {
                     return Ok(None);
                 };
                 match inc {
                     None => component,
-                    Some(program) => self.vclo(Rc::new(Val::NatRun {
+                    Some(program) => self.vclo(self.arena.val(Val::NatRun {
                         program: Rc::clone(program),
                         tail: component,
                     })),
@@ -192,7 +192,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let Some(snd_v) = self.build(snd, base, base_ty, snd_out)? else {
                     return Ok(None);
                 };
-                self.vclo(Rc::new(Val::Pair {
+                self.vclo(self.arena.val(Val::Pair {
                     ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                     fst: fst_v,
                     snd: snd_v,
@@ -207,7 +207,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     fn project(
         &mut self,
         base: &'v TmClo<'v>,
-        base_ty: Rc<VTy<'v>>,
+        base_ty: &'v VTy<'v>,
         path: &[Proj],
     ) -> Res<Option<&'v TmClo<'v>>> {
         let mut cur = base;
@@ -227,7 +227,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let next_ty = match step {
                 Proj::Fst => self.force_ty(fst_ty)?,
                 Proj::Snd => {
-                    let fst_thunk = self.arena.tm(TmClo::elim(cur, Rc::new(fst_elim.clone())));
+                    let fst_thunk = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(fst_elim.clone())));
                     self.apply_ty(snd_ty, &[fst_thunk])?
                 }
             };
@@ -237,7 +237,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                 },
             };
-            cur = self.arena.tm(TmClo::elim(cur, Rc::new(elim)));
+            cur = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(elim)));
             ty = self.delta_whnf_ty(next_ty)?;
         }
         Ok(Some(cur))

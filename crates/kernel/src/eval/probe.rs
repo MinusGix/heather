@@ -93,12 +93,12 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     fn probe_var(&self, level: u32) -> &'v TmClo<'v> {
-        self.vclo(Rc::new(Val::var(level)))
+        self.vclo(self.arena.val(Val::var(self.arena, level)))
     }
 
     /// `step k ih`, driven to its δ-transparent weak head value.
     #[inline(never)]
-    fn probe_apply(&mut self, step: &'v TmClo<'v>, k: &'v TmClo<'v>) -> Res<Rc<Val<'v>>> {
+    fn probe_apply(&mut self, step: &'v TmClo<'v>, k: &'v TmClo<'v>) -> Res<&'v Val<'v>> {
         let ih = self.probe_var(PROBE_IH);
         let v = self.drive(Work::Apply(step, vec![k, ih]))?;
         self.delta_whnf(v)
@@ -113,7 +113,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         if let Some(tree) = self.read_affine(&value)? {
             return Ok(FoldClass::Affine { tree, uniform: true });
         }
-        let peeled = self.vclo(Rc::new(Val::Succ(self.probe_var(PROBE_X))));
+        let peeled = self.vclo(self.arena.val(Val::Succ(self.probe_var(PROBE_X))));
         let value = self.probe_apply(step, peeled)?;
         Ok(match self.read_affine(&value)? {
             Some(tree) => FoldClass::Affine { tree, uniform: false },
@@ -125,9 +125,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// that is `Succ^q(ih x)`. The application's annotations are dummies —
     /// the result is read for its head and spine and never kept.
     #[inline(never)]
-    fn probe_sync(&mut self, fun: Rc<Val<'v>>) -> Res<FoldClass> {
+    fn probe_sync(&mut self, fun: &'v Val<'v>) -> Res<FoldClass> {
         let nat = self.arena.ty(TyClo::new(Env::empty(), Rc::new(Type::Nat)));
-        let arg = self.vclo(Rc::new(Val::Succ(self.probe_var(PROBE_X))));
+        let arg = self.vclo(self.arena.val(Val::Succ(self.probe_var(PROBE_X))));
         let app = Elim::App {
             ann: Some(PiAnn {
                 dom_level: Level::Zero,
@@ -157,8 +157,8 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// Read a probe value as an affine tree; `None` is "not one".
     #[inline(never)]
-    fn read_affine(&mut self, value: &Rc<Val<'v>>) -> Res<Option<AffineTree>> {
-        if let Val::Pair { fst, snd, .. } = &**value {
+    fn read_affine(&mut self, value: &'v Val<'v>) -> Res<Option<AffineTree>> {
+        if let Val::Pair { fst, snd, .. } = &*value {
             let fst = self.force(fst)?;
             let fst = self.delta_whnf(fst)?;
             let Some(fst) = self.read_affine(&fst)? else { return Ok(None) };
@@ -167,7 +167,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let Some(snd) = self.read_affine(&snd)? else { return Ok(None) };
             return Ok(Some(AffineTree::Pair(Box::new(fst), Box::new(snd))));
         }
-        let (inc, tail) = self.strip_successors(Rc::clone(value))?;
+        let (inc, tail) = self.strip_successors(value)?;
         Ok(match &*tail {
             Val::Zero => Some(AffineTree::Lit { inc }),
             Val::Neutral(n) if matches!(n.head, Head::Var(PROBE_IH)) => {
@@ -179,7 +179,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// `Succ^q(t)` as `(q, t)`, with `t` forced past every successor and
     /// glued definition; `t` is whatever the successors sit on.
-    fn strip_successors(&mut self, value: Rc<Val<'v>>) -> Res<(Increment, Rc<Val<'v>>)> {
+    fn strip_successors(&mut self, value: &'v Val<'v>) -> Res<(Increment, &'v Val<'v>)> {
         let mut inc: Increment = None;
         let mut cur = value;
         loop {

@@ -167,7 +167,7 @@ pub fn tm_clo<'v>(c: &'v TmClo<'v>, o: Outer<'v>) -> &'v TmClo<'v> {
         TmClo::Syn { env: e, body, .. } => TmClo::syn(env(e, o), tm_syn(body, o)),
         TmClo::Val(v) => TmClo::val(val(v, o)),
         TmClo::Elim { head, elim, .. } => {
-            TmClo::elim(tm_clo(head, o), Rc::new(elimination(elim, o)))
+            TmClo::elim(tm_clo(head, o), o.arena.elim_cell(elimination(elim, o)))
         }
     })
 }
@@ -418,14 +418,14 @@ fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
     }
 }
 
-fn neutral<'v>(n: &Rc<VNeutral<'v>>, o: Outer<'v>) -> Rc<VNeutral<'v>> {
+fn neutral<'v>(n: &'v VNeutral<'v>, o: Outer<'v>) -> &'v VNeutral<'v> {
     let mut eliminations: Vec<_> = n.spine.iter_rev().collect();
     eliminations.reverse();
     let mut spine = super::ElimSpine::empty();
     for elim in eliminations {
         spine = o.arena.elim(spine, elimination(elim, o));
     }
-    Rc::new(VNeutral {
+    o.arena.neutral(VNeutral {
         head: head(&n.head, o),
         spine,
         unfold: n.unfold.as_ref().map(|u| tm_clo(u, o)),
@@ -442,11 +442,11 @@ fn nety<'v>(n: &VNeTy<'v>, o: Outer<'v>) -> VNeTy<'v> {
     }
 }
 
-pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
+pub fn vty<'v>(v: &'v VTy<'v>, o: Outer<'v>) -> &'v VTy<'v> {
     if o.is_none() {
-        return Rc::clone(v);
+        return v;
     }
-    Rc::new(match &**v {
+    o.arena.vty(match &*v {
         VTy::Nat => VTy::Nat,
         VTy::Ty(l) => VTy::Ty(level(l, o)),
         VTy::Unit { level: l } => VTy::Unit { level: level(l, o) },
@@ -536,11 +536,11 @@ pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
     })
 }
 
-pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
+pub fn val<'v>(v: &'v Val<'v>, o: Outer<'v>) -> &'v Val<'v> {
     if o.is_none() {
-        return Rc::clone(v);
+        return v;
     }
-    Rc::new(match &**v {
+    o.arena.val(match &*v {
         Val::TmNat => Val::TmNat,
         Val::TmTy(l) => Val::TmTy(level(l, o)),
         Val::TmUnit { level: l } => Val::TmUnit { level: level(l, o) },
@@ -652,16 +652,16 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
         Val::NatSync { program, tail, elim } => Val::NatSync {
             program: Rc::clone(program),
             tail: tm_clo(tail, o),
-            elim: Rc::new(elimination(elim, o)),
+            elim: o.arena.elim_cell(elimination(elim, o)),
         },
         // The class is pure data — a table of bits and state indices — so it
         // is shared; everything scoped is shifted.
         Val::BitFold { program, tail, elim, class, apps } => Val::BitFold {
             program: Rc::clone(program),
             tail: tm_clo(tail, o),
-            elim: Rc::new(elimination(elim, o)),
+            elim: o.arena.elim_cell(elimination(elim, o)),
             class: Rc::clone(class),
-            apps: Rc::new(apps.iter().map(|e| Rc::new(elimination(e, o))).collect()),
+            apps: Rc::new(apps.iter().map(|e| o.arena.elim_cell(elimination(e, o))).collect()),
         },
         Val::Refl { level: l, ty, tm } => Val::Refl {
             level: level(l, o),
@@ -722,17 +722,17 @@ pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
             seed: tm_clo(seed, o),
         },
         Val::WfIh { elim, label, children } => Val::WfIh {
-            elim: Rc::new(elimination(elim, o)),
+            elim: o.arena.elim_cell(elimination(elim, o)),
             label: tm_clo(label, o),
             children: tm_clo(children, o),
         },
         Val::WIh { elim, label, children } => Val::WIh {
-            elim: Rc::new(elimination(elim, o)),
+            elim: o.arena.elim_cell(elimination(elim, o)),
             label: tm_clo(label, o),
             children: tm_clo(children, o),
         },
         Val::IWfIh { elim, label, children } => Val::IWfIh {
-            elim: Rc::new(elimination(elim, o)),
+            elim: o.arena.elim_cell(elimination(elim, o)),
             label: tm_clo(label, o),
             children: tm_clo(children, o),
         },

@@ -107,7 +107,7 @@ impl<'a, 'v> Reader<'a, 'v> {
     /// The δ-transparent weak head **value** of a sub-structure. The arena's
     /// bounded cache shares recent forces while allowing values the walk has
     /// left behind to be reclaimed.
-    pub(crate) fn force(&self, c: &'v TmClo<'v>) -> Result<Rc<Val<'v>>, String> {
+    pub(crate) fn force(&self, c: &'v TmClo<'v>) -> Result<&'v Val<'v>, String> {
         let mut ev = Eval::new(READ_FUEL, Defs::transparent_cached(self.psi, &self.cache), CtxBase::Nil, self.arena);
         ev.force(c).and_then(|v| ev.delta_whnf(v)).map_err(|_| "the host query ran out of fuel".to_string())
     }
@@ -497,7 +497,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 }),
                 arg,
             };
-            out = self.arena.tm(TmClo::elim(out, Rc::new(elim)));
+            out = self.arena.tm(TmClo::elim(out, self.arena.elim_cell(elim)));
             ty = cod;
         }
         Ok(out)
@@ -835,7 +835,7 @@ impl<'v> Interpreted<'_, '_, 'v> {
         };
         let fst = self.arena.tm(TmClo::val(force(fst)?));
         let snd = self.arena.tm(TmClo::val(force(snd)?));
-        Ok(self.arena.tm(TmClo::val(Rc::new(Val::Pair { ann: ann.clone(), fst, snd }))))
+        Ok(self.arena.tm(TmClo::val(self.arena.val(Val::Pair { ann: ann.clone(), fst, snd }))))
     }
 }
 

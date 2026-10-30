@@ -137,7 +137,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     fn transduce_var(&self, level: u32) -> &'v TmClo<'v> {
-        self.vclo(Rc::new(Val::var(level)))
+        self.vclo(self.arena.val(Val::var(self.arena, level)))
     }
 
     fn probe_transducer(
@@ -159,7 +159,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
         }
         let k = self.transduce_var(PROBE_K);
-        let succ_k = self.vclo(Rc::new(Val::Succ(k)));
+        let succ_k = self.vclo(self.arena.val(Val::Succ(k)));
         // One walk with a representative choice says how many combinations
         // there are; the table's walks repeat it at each of them.
         let Some(shape) = self.walk_motive(motive, succ_k, 0, &[])? else {
@@ -286,8 +286,8 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// whose step classifies as an affine tree (`eval/probe.rs`) over a base
     /// that reads back closed — the data [`NatRead::apply`] runs. `None` is
     /// "not one".
-    fn read_nat(&mut self, v: &Rc<Val<'v>>, x: u32) -> Res<Option<NatRead>> {
-        let (outer, tail) = self.strip_run(Rc::clone(v))?;
+    fn read_nat(&mut self, v: &'v Val<'v>, x: u32) -> Res<Option<NatRead>> {
+        let (outer, tail) = self.strip_run(v)?;
         let Val::Neutral(n) = &*tail else { return Ok(None) };
         if !matches!(n.head, Head::Var(l) if l == x) {
             return Ok(None);
@@ -313,7 +313,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     let first = if *uniform {
                         None
                     } else {
-                        let zero = self.vclo(Rc::new(Val::Zero));
+                        let zero = self.vclo(self.arena.val(Val::Zero));
                         let v = self.drive(Work::Apply(step, vec![zero, base]))?;
                         let v = self.delta_whnf(v)?;
                         let Some(d) = self.read_datum(&v, NEST_LIMIT)? else {
@@ -332,11 +332,11 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// A computed value read back as a closed [`Datum`]: pairs of closed
     /// naturals and bits. Anything else — a neutral anywhere, a payload that
     /// is not canonical — is `None`.
-    fn read_datum(&mut self, v: &Rc<Val<'v>>, depth: u32) -> Res<Option<Datum>> {
+    fn read_datum(&mut self, v: &'v Val<'v>, depth: u32) -> Res<Option<Datum>> {
         if depth == 0 {
             return Ok(None);
         }
-        if let Val::Pair { fst, snd, .. } = &**v {
+        if let Val::Pair { fst, snd, .. } = &*v {
             let (fst, snd) = (*fst, *snd);
             let a = self.force(fst)?;
             let a = self.delta_whnf(a)?;
@@ -349,7 +349,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         if let Some(bit) = self.bit_of(v)? {
             return Ok(Some(Datum::Bit(bit)));
         }
-        let (inc, under) = self.strip_run(Rc::clone(v))?;
+        let (inc, under) = self.strip_run(v)?;
         Ok(matches!(&*under, Val::Zero).then_some(Datum::Nat(inc)))
     }
 
@@ -595,11 +595,11 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// the state index the step moved to.
     fn recursive_call(
         &mut self,
-        v: &Rc<Val<'v>>,
+        v: &'v Val<'v>,
         shape: &Walk<'v>,
         slot: &[Proj],
     ) -> Res<Option<u32>> {
-        let Val::Neutral(n) = &**v else { return Ok(None) };
+        let Val::Neutral(n) = &*v else { return Ok(None) };
         if !matches!(n.head, Head::Var(PROBE_IH)) {
             return Ok(None);
         }
@@ -625,10 +625,10 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// eliminations past the call.
     fn call_arguments(
         &mut self,
-        v: &Rc<Val<'v>>,
+        v: &'v Val<'v>,
         shape: &Walk<'v>,
     ) -> Res<Option<Vec<&'v Elim<'v>>>> {
-        let Val::Neutral(n) = &**v else { return Ok(None) };
+        let Val::Neutral(n) = &*v else { return Ok(None) };
         let mut spine: Vec<&'v Elim<'v>> = n.spine.iter_rev().collect();
         spine.reverse();
         if spine.len() < shape.modes.len() {
@@ -654,7 +654,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             match mode {
                 ArgMode::Peeled(i) => {
                     let slot = shape.peeled[*i as usize].clone();
-                    let Some(inner) = self.slot_of(&slot, Rc::clone(&v))? else {
+                    let Some(inner) = self.slot_of(&slot, v)? else {
                         return Ok(None);
                     };
                     if !is_var(&inner, PROBE_TAIL - *i) {
@@ -786,7 +786,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             _ => return Ok(None),
         };
-        let inner = self.vclo(Rc::new(Val::Pair {
+        let inner = self.vclo(self.arena.val(Val::Pair {
             ann: Some(SigAnn {
                 fst_level: at.level.clone(),
                 snd_level: at.level.clone(),
@@ -804,7 +804,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     // Applying the step
     // -----------------------------------------------------------------
 
-    fn transduce_apply(&mut self, step: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> Res<Rc<Val<'v>>> {
+    fn transduce_apply(&mut self, step: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> Res<&'v Val<'v>> {
         let ih = self.transduce_var(PROBE_IH);
         let k = self.transduce_var(PROBE_K);
         let mut v = self.drive(Work::Apply(step, vec![k, ih]))?;
@@ -833,7 +833,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// `Succ^q(t)` as `(q, t)`, `t` forced past every successor and glued
     /// definition.
-    fn strip_run(&mut self, value: Rc<Val<'v>>) -> Res<(Increment, Rc<Val<'v>>)> {
+    fn strip_run(&mut self, value: &'v Val<'v>) -> Res<(Increment, &'v Val<'v>)> {
         let mut inc: Increment = None;
         let mut cur = value;
         loop {
@@ -875,7 +875,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             },
             TyClo::Val(v) => match &**v {
                 VTy::Vec { level, elem, len } => {
-                    Some((level.clone(), *elem, self.vclo(Rc::clone(len))))
+                    Some((level.clone(), *elem, self.vclo(*len)))
                 }
                 _ => None,
             },
@@ -922,7 +922,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         // through an already-forced annotation from being read as a record.
         if let TyClo::Vec { level: l, elem, len: pred } = snd {
             if std::ptr::eq(*elem, fst) {
-                let len = self.vclo(Rc::new(Val::Succ(pred)));
+                let len = self.vclo(self.arena.val(Val::Succ(pred)));
                 return Ok(Some(VecAt {
                     slot: Vec::new(),
                     outer: ty,
@@ -983,7 +983,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 (head, tail)
             }
         };
-        Ok(Some(self.vclo(Rc::new(Val::Pair {
+        Ok(Some(self.vclo(self.arena.val(Val::Pair {
             ann: Some(SigAnn { fst_level, snd_level, fst_ty: fst, snd_ty: snd }),
             fst: head,
             snd: tail,
@@ -994,7 +994,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// not pass through is the canonical inhabitant of a unit-like type.
     /// Purely on the value: a wrapper that is not built is not one this can
     /// see through, and declining is the caller's ordinary path.
-    fn slot_of(&mut self, slot: &[Proj], v: Rc<Val<'v>>) -> Res<Option<Rc<Val<'v>>>> {
+    fn slot_of(&mut self, slot: &[Proj], v: &'v Val<'v>) -> Res<Option<&'v Val<'v>>> {
         let mut cur = v;
         for step in slot {
             let Val::Pair { fst, snd, .. } = &*cur else { return Ok(None) };
@@ -1040,7 +1040,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let next_ty = match step {
                 Proj::Fst => fst_ty,
                 Proj::Snd => {
-                    let head = self.arena.tm(TmClo::elim(cur, Rc::new(fst_elim.clone())));
+                    let head = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(fst_elim.clone())));
                     let t = self.apply_ty(snd_ty, &[head])?;
                     self.arena.ty(TyClo::val(t))
                 }
@@ -1051,7 +1051,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                 },
             };
-            cur = self.arena.tm(TmClo::elim(cur, Rc::new(elim)));
+            cur = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(elim)));
             ty = next_ty;
         }
         Ok(Some(cur))
@@ -1128,12 +1128,12 @@ impl<'a, 'v> Eval<'a, 'v> {
         Ok(match (&*w, ev) {
             (VTy::Unit { level }, EnumVal::Triv) => {
                 let level = level.clone();
-                Some(self.vclo(Rc::new(Val::Triv { level })))
+                Some(self.vclo(self.arena.val(Val::Triv { level })))
             }
             // Reached only through `enumerate`'s unit-like check.
             (VTy::SEq { level, ty, lhs, .. }, EnumVal::Triv) => {
                 let (level, ty, tm) = (level.clone(), *ty, *lhs);
-                Some(self.vclo(Rc::new(Val::SRefl { level, ty, tm })))
+                Some(self.vclo(self.arena.val(Val::SRefl { level, ty, tm })))
             }
             (VTy::Sum { lhs_level, rhs_level, lhs, rhs }, EnumVal::Inl(v) | EnumVal::Inr(v)) => {
                 let (lhs_level, rhs_level, lhs, rhs) =
@@ -1143,7 +1143,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     return Ok(None);
                 };
                 let ann = Some(SumAnn { lhs_level, rhs_level, lhs, rhs });
-                Some(self.vclo(Rc::new(if right {
+                Some(self.vclo(self.arena.val(if right {
                     Val::Inr { ann, val }
                 } else {
                     Val::Inl { ann, val }
@@ -1156,7 +1156,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let rest = self.apply_ty(snd_ty, &[head])?;
                 let rest = self.arena.ty(TyClo::val(rest));
                 let Some(tail) = self.enum_value(rest, b)? else { return Ok(None) };
-                Some(self.vclo(Rc::new(Val::Pair {
+                Some(self.vclo(self.arena.val(Val::Pair {
                     ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                     fst: head,
                     snd: tail,
@@ -1169,14 +1169,14 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// Read a computed value back as an [`EnumVal`]; `None` when it is not
     /// one of the enumerated shapes — a neutral payload, say, which is what
     /// keeps a non-canonical value from being read as a canonical one.
-    fn read_enum(&mut self, v: &Rc<Val<'v>>, depth: u32) -> Res<Option<EnumVal>> {
+    fn read_enum(&mut self, v: &'v Val<'v>, depth: u32) -> Res<Option<EnumVal>> {
         if depth == 0 {
             return Ok(None);
         }
-        Ok(match &**v {
+        Ok(match &*v {
             Val::Triv { .. } | Val::SRefl { .. } => Some(EnumVal::Triv),
             Val::Inl { val, .. } | Val::Inr { val, .. } => {
-                let right = matches!(&**v, Val::Inr { .. });
+                let right = matches!(&*v, Val::Inr { .. });
                 let inner = self.force(val)?;
                 let inner = self.delta_whnf(inner)?;
                 let Some(read) = self.read_enum(&inner, depth - 1)? else { return Ok(None) };
@@ -1246,8 +1246,8 @@ fn state_values(state_enums: &[Vec<EnumVal>]) -> Vec<EnumVal> {
     out
 }
 
-fn is_var(v: &Rc<Val<'_>>, level: u32) -> bool {
-    matches!(&**v, Val::Neutral(n) if matches!(n.head, Head::Var(l) if l == level)
+fn is_var(v: &Val<'_>, level: u32) -> bool {
+    matches!(&*v, Val::Neutral(n) if matches!(n.head, Head::Var(l) if l == level)
         && n.spine.is_empty())
 }
 
@@ -1301,10 +1301,10 @@ impl<'a, 'v> Eval<'a, 'v> {
         if class.modes.is_empty() {
             return self.fire_transducer(program, tail, e, &class, &[]);
         }
-        Ok(Some(Work::Val(Rc::new(Val::BitFold {
+        Ok(Some(Work::Val(self.arena.val(Val::BitFold {
             program: Rc::clone(program),
             tail,
-            elim: Rc::new(e.clone()),
+            elim: self.arena.elim_cell(e.clone()),
             class,
             apps: Rc::new(Vec::new()),
         }))))
@@ -1312,23 +1312,23 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// One application of a waiting fold: collect it, and fire at arity.
     #[inline(never)]
-    pub(super) fn bit_fold_app(&mut self, head: &Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
-        let Val::BitFold { program, tail, elim, class, apps } = &**head else {
+    pub(super) fn bit_fold_app(&mut self, head: &'v Val<'v>, e: Elim<'v>) -> Res<Work<'v>> {
+        let Val::BitFold { program, tail, elim, class, apps } = &*head else {
             unreachable!("bit_fold_app is given a waiting fold")
         };
         let mut collected = (**apps).clone();
-        collected.push(Rc::new(e));
+        collected.push(self.arena.elim_cell(e));
         if collected.len() < class.modes.len() {
-            return Ok(Work::Val(Rc::new(Val::BitFold {
+            return Ok(Work::Val(self.arena.val(Val::BitFold {
                 program: Rc::clone(program),
                 tail,
-                elim: Rc::clone(elim),
+                elim: *elim,
                 class: Rc::clone(class),
                 apps: Rc::new(collected),
             })));
         }
         let (program, tail, elim, class) =
-            (Rc::clone(program), *tail, Rc::clone(elim), Rc::clone(class));
+            (Rc::clone(program), *tail, *elim, Rc::clone(class));
         if let Some(work) = self.fire_transducer(&program, tail, &elim, &class, &collected)? {
             return Ok(work);
         }
@@ -1341,9 +1341,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         };
         let step = *step;
         let pred = Val::nat_run_pred(self.arena, &program, tail);
-        let ih = self.arena.tm(TmClo::elim(pred, Rc::clone(&elim)));
+        let ih = self.arena.tm(TmClo::elim(pred, elim));
         for app in collected.iter().rev() {
-            self.frames.push(super::Frame::Elim(Rc::clone(app)));
+            self.frames.push(super::Frame::Elim(*app));
         }
         self.spend()?;
         Ok(Work::Apply(step, vec![pred, ih]))
@@ -1360,7 +1360,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
         class: &Rc<Transducer>,
-        apps: &[Rc<Elim<'v>>],
+        apps: &[&'v Elim<'v>],
     ) -> Res<Option<Work<'v>>> {
         let Elim::ElimNat { motive, .. } = e else { unreachable!() };
         let motive = *motive;
@@ -1395,7 +1395,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
         // -- the peeled arguments, as words
         let mut words = vec![0u64; class.peeled as usize];
-        let mut rests: Vec<Option<Rc<Val<'v>>>> = vec![None; class.peeled as usize];
+        let mut rests: Vec<Option<&'v Val<'v>>> = vec![None; class.peeled as usize];
         let mut start = vec![0usize; class.state_enums.len()];
         // A finite output may short-circuit, so its bits are read one at a
         // time and only as far as the table needs them; every other output
@@ -1514,12 +1514,12 @@ impl<'a, 'v> Eval<'a, 'v> {
         // -- the fold at the residual width, at the residual arguments
         let tail_len = match &residual {
             None => tail,
-            Some(p) => self.vclo(Rc::new(Val::NatRun { program: Rc::clone(p), tail })),
+            Some(p) => self.vclo(self.arena.val(Val::NatRun { program: Rc::clone(p), tail })),
         };
         let end = decompose(end_state, &class.state_enums);
         let mut cur = self.apply_ty(motive, &[tail_len])?;
         cur = self.delta_whnf_ty(cur)?;
-        let mut residual_apps: Vec<Rc<Elim<'v>>> = Vec::with_capacity(class.modes.len());
+        let mut residual_apps: Vec<&'v Elim<'v>> = Vec::with_capacity(class.modes.len());
         for (j, mode) in class.modes.iter().enumerate() {
             let VTy::Pi { dom_level, cod_level, dom, cod } = &*cur else {
                 return Ok(None);
@@ -1542,14 +1542,14 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
                 ArgMode::Carried => carried_end.unwrap_or(args[j]),
             };
-            residual_apps.push(Rc::new(Elim::App { ann: Some(PiAnn { dom_level, cod_level, dom, cod }), arg }));
+            residual_apps.push(self.arena.elim_cell(Elim::App { ann: Some(PiAnn { dom_level, cod_level, dom, cod }), arg }));
             cur = self.apply_ty(cod, &[arg])?;
             cur = self.delta_whnf_ty(cur)?;
         }
         let cod_at_tail = self.arena.ty(TyClo::val(cur));
-        let mut folded = self.arena.tm(TmClo::elim(tail_len, Rc::new(e.clone())));
+        let mut folded = self.arena.tm(TmClo::elim(tail_len, self.arena.elim_cell(e.clone())));
         for app in &residual_apps {
-            folded = self.arena.tm(TmClo::elim(folded, Rc::clone(app)));
+            folded = self.arena.tm(TmClo::elim(folded, *app));
         }
 
         match &class.output {
@@ -1565,7 +1565,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let Some(run_tail) = self.slot_thunk(cod_at_tail, &slot, folded)? else {
                     return Ok(None);
                 };
-                let run = self.vclo(Rc::new(Val::BitRun {
+                let run = self.vclo(self.arena.val(Val::BitRun {
                     level: at.level.clone(),
                     ty: bt,
                     width,
@@ -1573,7 +1573,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     tail_len: at.len,
                     tail: run_tail,
                 }));
-                let full = self.vclo(Rc::new(Val::NatRun {
+                let full = self.vclo(self.arena.val(Val::NatRun {
                     program: Rc::clone(program),
                     tail,
                 }));
@@ -1620,8 +1620,8 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let total = add_increments(&scale(&q, &base_inc), &r);
                 let under = self.vclo(under);
                 Ok(Some(Work::Val(match total {
-                    None => Rc::new(Val::Zero),
-                    Some(program) => Rc::new(Val::NatRun { program, tail: under }),
+                    None => self.arena.val(Val::Zero),
+                    Some(program) => self.arena.val(Val::NatRun { program, tail: under }),
                 })))
             }
         }
@@ -1639,7 +1639,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     ) -> Res<Option<Work<'v>>> {
         let Output::Finite { values, .. } = &class.output else { return Ok(None) };
         let value = values[out as usize].clone();
-        let full = self.vclo(Rc::new(Val::NatRun {
+        let full = self.vclo(self.arena.val(Val::NatRun {
             program: Rc::clone(program),
             tail,
         }));
@@ -1649,7 +1649,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// One bit off the head of a vector value, and what is left of it.
-    fn pack_bit(&mut self, value: Rc<Val<'v>>) -> Res<Option<(bool, Rc<Val<'v>>)>> {
+    fn pack_bit(&mut self, value: &'v Val<'v>) -> Res<Option<(bool, &'v Val<'v>)>> {
         Ok(self.pack_word(value, 1)?.map(|(bits, rest)| (bits & 1 == 1, rest)))
     }
 
@@ -1661,9 +1661,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// Anything else declines, and declining is the fold this replaced.
     fn pack_word(
         &mut self,
-        value: Rc<Val<'v>>,
+        value: &'v Val<'v>,
         width: u32,
-    ) -> Res<Option<(u64, Rc<Val<'v>>)>> {
+    ) -> Res<Option<(u64, &'v Val<'v>)>> {
         let mut bits = 0u64;
         let mut taken = 0u32;
         let mut cur = value;
@@ -1678,7 +1678,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                         let forced = self.force(tail)?;
                         self.delta_whnf(forced)?
                     } else {
-                        Rc::new(Val::BitRun {
+                        self.arena.val(Val::BitRun {
                             level: level.clone(),
                             ty,
                             width: held - take,
@@ -2142,7 +2142,7 @@ mod tests {
         step: Rc<Term>,
         width: u64,
         args: &[Rc<Term>],
-    ) -> Rc<Val<'v>> {
+    ) -> &'v Val<'v> {
         let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, arena);
         let elim = Elim::ElimNat {
             level: Level::Zero,
@@ -2150,8 +2150,8 @@ mod tests {
             base: arena.tm(TmClo::syn(Env::empty(), base)),
             step: arena.tm(TmClo::syn(Env::empty(), step)),
         };
-        let zero = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let scrut = Rc::new(match std::num::NonZeroU64::new(width) {
+        let zero = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let scrut = arena.val(match std::num::NonZeroU64::new(width) {
             None => Val::Zero,
             Some(c) => Val::NatRun { program: ContextProgram::run((), c), tail: zero },
         });
@@ -2173,7 +2173,7 @@ mod tests {
     }
 
     /// The word a produced value holds, at the record's slot.
-    fn produced<'v>(arena: &'v ValueArena<'v>, v: Rc<Val<'v>>) -> (u32, u64) {
+    fn produced<'v>(arena: &'v ValueArena<'v>, v: &'v Val<'v>) -> (u32, u64) {
         let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, arena);
         let inner = ev
             .slot_of(&[Proj::Snd, Proj::Fst], v)

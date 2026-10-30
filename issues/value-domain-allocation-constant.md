@@ -4,7 +4,7 @@ status: open
 labels: [kernel,conversion,performance]
 area: kernel
 created: 2026-07-31
-updated: 2026-09-11
+updated: 2026-10-30
 ---
 
 Stage 2b of [[nbe-conversion-round]] killed the exponential (the acceptance
@@ -219,3 +219,8 @@ and should re-read this at the same time — conversion no longer calls
 - 2026-09-06: Module-only profile datum (2026-09-06, five-node FunctionIR/x86 module, perf attached only around the module check): _int_malloc 16%, malloc_consolidate 7%, unlink_chunk 7% — ~30% of module wall in the allocator, plus map_type/map_term<ShiftGlobal> ~8% (every conversion query owns a fresh reduce::BodyCache, so a definition's rescoped body is rebuilt per query) and SubstGlobal ~4%. Levers, none taken: share the BodyCache per typing gate (Ψ is fixed within one binding's check), pool/reset ValueArena across a gate's queries instead of new/drop per query. SipHash on the cache's pointer keys (~7%) was replaced by a first-party pointer hasher in this round.
 - 2026-09-06: The two levers of the 2026-09-06 datum now have an owner: [[conversion-query-arena-pooling]].
 - 2026-09-11: 2026-09-11: the two 2026-09-06 levers resolved by [[conversion-query-arena-pooling]] (closed): BodyCache-per-gate landed (module kernel -11%, the ShiftGlobal/SubstGlobal share); arena pooling refused by measurement. The ~30% allocator share is the value caches' Rc<VTy>/Rc<Val> memo cells (1.94 M per five-node module, 33:1 against arena chunks) — owner [[value-cache-memo-in-arena]].
+- 2026-10-30: The memo half of this constant is gone ([[value-cache-memo-in-arena]], closed). Forced values, neutrals and value-domain eliminations are now born in the query arena and passed as `&'v` borrows, with no `Arc` and no `malloc`. The kernel gate fell 18–23% on the cloud box with every counter unchanged. That share was the whole `Rc<Val>`/`Rc<VTy>` block of the 2026-08-01 and 2026-09-06 profiles, plus the atomic increments and decrements on every value clone and drop.
+
+  What is left of this file's list, unchanged in rank: (2) `Clo1`, (3) one frame stack across `Dom` operations, (4) `TmC::value`'s re-wrap. Two more come out of this round. First, `Work::Elim` carries its `Elim` by value, so a frame's region cell is cloned out at every return (`Eval::step_return`), and several fire paths (`step_fire`, `fire_elim_w` and others) clone the elimination again into a cell for the ih. Carrying `&'v Elim` through `Work` would remove both clones. Second, the word-keyed conversion memo that [[kernel-native-bitvector-values]] assigned the closed issue now sits here.
+
+  Measurement note for whoever takes the next slice. On the cloud box, `scripts/bench --check` of master against a fresh master baseline moved ±30–40% per case, on a quiet box, so its seconds cannot resolve a constant of this size. The box has no hardware performance counters (`perf_event_open` gives ENOENT), and valgrind cannot read the mold-linked binary's debug info, so DHAT stacks come back unsymbolized. `scripts/perf ab`'s interleaved `kernel_gate` column on real files did separate cleanly; use that.

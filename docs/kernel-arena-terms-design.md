@@ -313,6 +313,13 @@ and it collects essentially the whole measured allocation constant.
 
 ### 5.1 The slice
 
+**Landed 2026-10-30** (`issues/value-cache-memo-in-arena.md`, closed), with
+the value-domain `Elim` cells in the same arena as well; the paragraphs below
+are the plan as written, and the issue log has the measurement. One
+difference from the plan: an elimination a frame of the evaluator's
+continuation stack makes for itself rides in the frame by value, not in a
+region cell, because the frame is popped long before the query ends.
+
 `ValueArena` (`value.rs:250`) owns five `typed_arena::Arena`s for
 `EnvNode`/`Level`/`ElimNode`/`TmClo`/`TyClo`. The **forced values** —
 `Val<'v>` and `VTy<'v>` — are not among them: `Eval::force` and friends

@@ -10,7 +10,7 @@ use crate::term::{CtxEntry, GlobalCtx};
 const FUEL: u64 = 1 << 22;
 
 fn zero<'v>(arena: &'v ValueArena<'v>) -> &'v TmClo<'v> {
-    arena.tm(TmClo::val(Rc::new(Val::Zero)))
+    arena.tm(TmClo::val(arena.val(Val::Zero)))
 }
 
 fn chain<'v>(
@@ -29,7 +29,7 @@ fn chain<'v>(
         } else {
             // Deliberately do not use the packing constructor: also pin the
             // ordinary Succ/Succ and mixed Succ/NatRun comparison paths.
-            env.arena.tm(TmClo::val(Rc::new(Val::Succ(tail))))
+            env.arena.tm(TmClo::val(env.arena.val(Val::Succ(tail))))
         };
     }
     TmC::here(env, tail)
@@ -74,7 +74,7 @@ fn closed_nat_equality_depth_budget_segmented_runs() {
         for _ in 0..4096 {
             // Keep segment boundaries: each cancellation must continue at
             // another run rather than finishing at one compressed numeral.
-            tail = arena.tm(TmClo::val(Rc::new(Val::NatRun {
+            tail = arena.tm(TmClo::val(arena.val(Val::NatRun {
                 program: Rc::clone(&program), tail,
             })));
         }
@@ -116,9 +116,9 @@ fn closed_nat_equality_depth_budget_open_tails() {
     }
     let arena = ValueArena::new();
     let env = Env::new(&arena, &psi, &gamma, crate::layer::Layer::Prog);
-    let x = arena.tm(TmClo::val(Rc::new(Val::var(0))));
-    let same_x = arena.tm(TmClo::val(Rc::new(Val::var(0))));
-    let y = arena.tm(TmClo::val(Rc::new(Val::var(1))));
+    let x = arena.tm(TmClo::val(arena.val(Val::var(&arena, 0))));
+    let same_x = arena.tm(TmClo::val(arena.val(Val::var(&arena, 0))));
+    let y = arena.tm(TmClo::val(arena.val(Val::var(&arena, 1))));
     let a = chain(&env, 2048, x, true);
     let equal = chain(&env, 2048, same_x, true);
     let different = chain(&env, 2048, y, true);
