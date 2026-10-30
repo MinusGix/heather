@@ -232,7 +232,11 @@ the survey's costs live.
 
 ### 5.1 The cast graph
 
-An edge is an instance of a one-field class, the way `Numeral` is:
+An edge is a registered map. The sketch below shows only the map, as a
+one-field class the way `Numeral` is; §5.6 refines it so that an edge is a
+*morphism value* (the map and its laws as a record), which is the form that
+also replaces the combined classes (`CommRingOfInt`, `OrderedFieldOfInt`, the
+proposed `OrderedFieldOfRat`):
 
 ```heather
 class Cast<A, B> { cast: A → B }
@@ -338,6 +342,52 @@ the `↑` per statement. If it is dense in exactly the arithmetic spines C
 would cover — e.g. `interval.hthr` bounds — C can be turned on per module
 (an attribute, like the lint profile) rather than language-wide.
 
+### 5.6 An edge is a morphism, not a combined class
+
+Added 2026-10-30, after Minus's objection (on
+[interval-containment-once-over-ordered-field](../issues/interval-containment-once-over-ordered-field.md))
+to classes like `CommRingOfInt`, `OrderedFieldOfInt` and `OrderedFieldOfRat`,
+which fuse a structure with one particular map into it. The cast graph wants
+the same split, so the standard is:
+
+- **A morphism is data.** A record per kind of structure-preserving map,
+  indexed by the two carriers' relations and operations the way the layers
+  are (`docs/constructive-ordered-field-design.md`):
+
+  ```heather
+  record OrderedRingHom<A, B>(…A's ≈ < <= + *…, …B's…) {
+      map: A → B,
+      map_respects, map_zero, map_one, map_add, map_mul,
+      map_le_iff, map_lt_iff,     // order-embedding: preserves and reflects
+  }
+  ```
+
+  with weaker records (`RingHom`, `OrderEmbedding`) for edges that are not
+  ordered-ring maps. The structures stay plain `OrderedField`, `CommRing`.
+- **A cast edge is a registered morphism value**, not an instance of a
+  combined class: `Rat::ofInt_hom: OrderedRingHom<Int, Rat>(…)`, with
+  `map := Rat::ofInt` and the existing `Rat::ofInt_*` lemmas as its fields.
+  `↑` elaborates to the `map` field unfolded, so §5.3's terms are unchanged.
+  The §6.1 law table *is* the record's fields (typed, not lemma names), plus
+  any extra laws listed beside it (`↑(a⁻¹)`, `↑(a ^ n)`).
+- **Generic code takes the morphism as a parameter**, not a bigger class:
+  `section<K: OrderedField(≈, <, <=, +, *)>(φ: OrderedRingHom<Rat, K>(…))`
+  for interval containment. At `Rat`, `φ` is the identity morphism and at
+  `CReal` it is `CReal::ofRat_hom`, the same values the cast graph holds. One
+  definition of "the embedding" serves `↑`, `push_cast` and the generic
+  lemmas.
+- **The more fundamental constraint, for `Int`.** `Int` is initial among
+  rings: any `CommRing` already has a map from `Int` (by `0`, `1`, `+`,
+  negation), and any two ring morphisms out of `Int` agree up to `≈`. So
+  generic code needs no `of_int` field at all: it can define the map, and a
+  carrier's own spelling (`Rat::ofInt`) is related to it by the uniqueness
+  theorem, which is exactly a *squash* law (§6.1). The open question is only
+  whether `ring`/`linarith` can read coefficients through the generic map at
+  acceptable cost, or need the carrier's spelling handed to them (then as a
+  morphism parameter, not a class field). The same holds for `Nat` among
+  semirings. `Rat` is initial among fields of characteristic zero, but its
+  map needs inverses and apartness, so `Rat → K` stays a parameter.
+
 ## 6. The cast tactics
 
 Independent of the syntax choice (A, B and C all need it), and the part
@@ -345,7 +395,9 @@ that closes [push-cast-through-embeddings](../issues/push-cast-through-embedding
 
 ### 6.1 One law table per edge
 
-Beside each `Cast` instance, a table of its laws, in `mono`'s style
+Beside each edge, a table of its laws. Under §5.6 the table is the
+morphism record's fields plus extras; the first cut can be lemma names in
+`mono`'s style
 (`lib/std/tactic/mono.hthr`: records of lemma names, skipped when the name
 does not resolve), sorted by Lean's three classes because the three are used
 differently:
@@ -422,6 +474,9 @@ name, as `bv_omega` does (`docs/bv-omega-design.md`). Until that lands,
    `BitVec → Nat` only with conditional laws (§6.3).
 4. **Diamonds**: shortest path wins with a squash law (recommended), or
    forbid any second path at declaration.
-5. **`n.int()` vs `OfNat(n)`**: `↑` produces `OfNat(n)` and tactics
+5. **Edges as morphism values** (§5.6, recommended), replacing the
+   combined `…OfInt`/`…OfRat` classes over time, or a `Cast<A, B>` class
+   with a separate law table.
+6. **`n.int()` vs `OfNat(n)`**: `↑` produces `OfNat(n)` and tactics
    normalize `.int()` to it (recommended), or make `.int()` the canonical
    spelling and teach `omega`/`ring` to read it.

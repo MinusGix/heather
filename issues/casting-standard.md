@@ -33,3 +33,4 @@ canonical `Nat → Int` spelling.
 ## Log
 
 - 2026-10-30: Design note drafted (docs/casting-design.md); awaiting Minus's choice of option.
+- 2026-10-30: Minus objects to combined classes (`CommRingOfInt`, `OrderedFieldOfInt`, proposed `OrderedFieldOfRat`); design §5.6 makes a cast edge a registered morphism value (`OrderedRingHom<A, B>` record of map + laws), generic code takes the morphism as a parameter, and `Int`'s map is derivable by initiality. Agrees with [[interval-containment-once-over-ordered-field]].
