@@ -1,10 +1,10 @@
 ---
 title: omega ignores a fact whose type is a β-redex (an Exists's .proof)
-status: open
+status: closed
 labels: [omega,tactics]
 area: tactics
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 A fact whose type is a β-redex is listed among `omega`'s locals but not
@@ -30,3 +30,16 @@ unifier does since PR #62 (`spelling::beta_head`).
 
 - `ex_proof` closes with `omega(e.proof)` and with `e.proof` bound as an
   unannotated `let`, as probes in `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## Resolution (2026-10-30)
+
+`push_conjuncts` (`crates/elab/src/omega_cert.rs`), which every fact in
+`local_facts` passes through, now contracts the head β-redexes of an `El`
+type with `spelling::beta_head` before reading it. The contractum is what
+omega, `linarith` and `bv_omega` then see, so a `.proof` whose predicate is
+a conjunction is also split into its conjuncts. The certificate cites the
+fact by name at its original type; the two are β-convertible. Design:
+`docs/omega-measure-reduction-design.md` §15. Probes `ex_proof`,
+`ex_proof_let`, `ex_proof_conj`, `ex_proof_int` and the control
+`ex_proof_false` are in `lib/_tests/std/tactic/omega_tests.hthr`; the four
+positive probes are refused on master.

@@ -185,3 +185,19 @@ theorem conj_argument(a, b, c: Nat, h: a < b ∧ (b < c ∧ c < 5)): a < 5 {
 // Control: every conjunct read, and still a model (`a = 2, b = 3, c = 4`).
 // expect-error: `omega` got stuck
 theorem conj_nested_false(a, b, c: Nat, h: a < b ∧ (b < c ∧ c < 5)): a < 2 { omega }
+
+// A fact typed by a head β-redex is read through its contractum: an
+// `Exists`'s `.proof` is `(λ k => P(k))(e.witness)`
+// (issues/omega-redex-typed-fact-ignored.md).
+theorem ex_proof(a: Nat, e: Exists<Nat>(λ k => a = k + 2)): 2 <= a { omega(e.proof) }
+theorem ex_proof_let(a: Nat, e: Exists<Nat>(λ k => a = k + 2)): 2 <= a {
+    let p = e.proof;
+    omega
+}
+// The contractum is a conjunction, read as its conjuncts.
+theorem ex_proof_conj(a: Nat, e: Exists<Nat>(λ k => a = k + 2 ∧ k < 3)): a < 5 { omega(e.proof) }
+// At Int, with the witness under the relation's other side.
+theorem ex_proof_int(x: Int, e: Exists<Int>(λ k => k < x ∧ OfNat(3) <= k)): OfNat(3) < x { omega(e.proof) }
+// Control: the contractum read, and still a model (`a = 2`).
+// expect-error: `omega` got stuck
+theorem ex_proof_false(a: Nat, e: Exists<Nat>(λ k => a = k + 2)): 3 <= a { omega(e.proof) }
