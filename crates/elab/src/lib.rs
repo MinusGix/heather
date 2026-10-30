@@ -5287,14 +5287,23 @@ impl Elaborator {
                 // in the matching lambdas, and the recursor is applied back to
                 // the parameters. Only here, in checking position — the goal
                 // is what there is to generalize.
+                //
+                // A local scrutinee refines the hypotheses that mention it the
+                // same way (issues/elab-match-refines-hypothesis-kernel-
+                // rejects.md): they join the generalized positions, so each
+                // arm sees them at its constructor.
                 let dec = recursion::descends_on_param(cx, &scrut_t);
-                let positions = match dec {
+                let mut positions = match dec {
                     Some(dec) => self.varying_params(cx, arms, dec),
                     None => Vec::new(),
                 };
-                if let Some(dec) = dec
-                    && !positions.is_empty()
-                {
+                for p in self.refined_hypotheses(cx, arms, &scrut_t, dec, expected) {
+                    if !positions.contains(&p) {
+                        positions.push(p);
+                    }
+                }
+                positions.sort_unstable();
+                if !positions.is_empty() {
                     let (gen_ty, gen_lvl) =
                         self.generalize_expected(cx, &positions, expected, lvl);
                     let motive = matching::synthesize_motive(
@@ -5303,11 +5312,13 @@ impl Elaborator {
                     let arms = self.wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
                     let mut gcx = cx.clone();
-                    gcx.generalized = Some(Rc::new(generalize::Generalization {
-                        dec,
-                        positions: Rc::clone(&positions),
-                        span: e.span,
-                    }));
+                    if let Some(dec) = dec {
+                        gcx.generalized = Some(Rc::new(generalize::Generalization {
+                            dec,
+                            positions: Rc::clone(&positions),
+                            span: e.span,
+                        }));
+                    }
                     let elim = match eqbind {
                         None => self.elab_match(
                             &gcx,

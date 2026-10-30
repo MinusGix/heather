@@ -67,18 +67,15 @@ fn Interval::HasReal(self I: Interval, x: CReal) → Type {
 }
 
 theorem Interval::has_real_respects(I: Interval, {x, y: CReal}, e: x ≈ y, h: I.HasReal(x)): I.HasReal(y) {
-    match I as λ K => K.HasReal(x) → K.HasReal(y) {
-        Bnd(lo, hi) => λ k => And(CReal::le_respects(CReal::ofRat(lo.rat()).same_refl(), e, k.left), CReal::le_respects(e, CReal::ofRat(hi.rat()).same_refl(), k.right)),
-        Whole => λ _ => trivial,
-    }(h)
+    match I {
+        Bnd(lo, hi) => And(CReal::le_respects(CReal::ofRat(lo.rat()).same_refl(), e, h.left), CReal::le_respects(e, CReal::ofRat(hi.rat()).same_refl(), h.right)),
+        Whole => trivial,
+    }
 }
 
 // A rational member is a member at `CReal`: the embedding keeps `≤`.
 theorem Interval::has_real_of_has(I: Interval, {q: Rat}, h: I.Has(q)): I.HasReal(CReal::ofRat(q)) {
-    match I as λ K => K.Has(q) → K.HasReal(CReal::ofRat(q)) {
-        Bnd(_, _) => λ k => And(CReal::ofRat_le(k.left), CReal::ofRat_le(k.right)),
-        Whole => λ _ => trivial,
-    }(h)
+    match I { Bnd(_, _) => And(CReal::ofRat_le(h.left), CReal::ofRat_le(h.right)), Whole => trivial }
 }
 
 theorem Interval::of_rat_has_real(q: Rat, p: Nat): Interval::of_rat(q, p).HasReal(CReal::ofRat(q)) {
@@ -89,11 +86,11 @@ theorem Interval::of_rat_has_real(q: Rat, p: Nat): Interval::of_rat(q, p).HasRea
 // The operations, at `CReal`.
 
 theorem Interval::neg_has_real(I: Interval, {x: CReal}, h: I.HasReal(x)): I.neg().HasReal(-x) {
-    match I as λ K => K.HasReal(x) → K.neg().HasReal(-x) {
-        Bnd(lo, hi) => λ k => And(CReal::le_respects(CReal::same_sym(hi.real_neg()), (-x).same_refl(), CReal::neg_le(k.right)),
-            CReal::le_respects((-x).same_refl(), CReal::same_sym(lo.real_neg()), CReal::neg_le(k.left))),
-        Whole => λ _ => trivial,
-    }(h)
+    match I {
+        Bnd(lo, hi) => And(CReal::le_respects(CReal::same_sym(hi.real_neg()), (-x).same_refl(), CReal::neg_le(h.right)),
+            CReal::le_respects((-x).same_refl(), CReal::same_sym(lo.real_neg()), CReal::neg_le(h.left))),
+        Whole => trivial,
+    }
 }
 
 theorem Interval::add_bnd_has_real(a, b, c, d: Dyadic, p: Nat, {x, y: CReal}, hx: Bnd(a, b).HasReal(x), hy: Bnd(c, d).HasReal(y)):
@@ -105,13 +102,10 @@ theorem Interval::add_bnd_has_real(a, b, c, d: Dyadic, p: Nat, {x, y: CReal}, hx
 }
 
 theorem Interval::add_has_real(I, J: Interval, p: Nat, {x, y: CReal}, hx: I.HasReal(x), hy: J.HasReal(y)): I.add(J, p).HasReal(x + y) {
-    match I as λ K => K.HasReal(x) → K.add(J, p).HasReal(x + y) {
-        Bnd(a, b) => λ kx => match J as λ L => L.HasReal(y) → Bnd(a, b).add(L, p).HasReal(x + y) {
-            Bnd(c, d) => λ ky => Interval::add_bnd_has_real(a, b, c, d, p, kx, ky),
-            Whole => λ _ => trivial,
-        }(hy),
-        Whole => λ _ => trivial,
-    }(hx)
+    match I {
+        Bnd(a, b) => match J { Bnd(c, d) => Interval::add_bnd_has_real(a, b, c, d, p, hx, hy), Whole => trivial },
+        Whole => trivial,
+    }
 }
 
 theorem Interval::sub_has_real(I, J: Interval, p: Nat, {x, y: CReal}, hx: I.HasReal(x), hy: J.HasReal(y)): I.sub(J, p).HasReal(x - y) {
@@ -205,13 +199,10 @@ theorem Interval::mul_bnd_has_real(a, b, c, d: Dyadic, p: Nat, {x, y: CReal}, hx
 }
 
 theorem Interval::mul_has_real(I, J: Interval, p: Nat, {x, y: CReal}, hx: I.HasReal(x), hy: J.HasReal(y)): I.mul(J, p).HasReal(x * y) {
-    match I as λ K => K.HasReal(x) → K.mul(J, p).HasReal(x * y) {
-        Bnd(a, b) => λ kx => match J as λ L => L.HasReal(y) → Bnd(a, b).mul(L, p).HasReal(x * y) {
-            Bnd(c, d) => λ ky => Interval::mul_bnd_has_real(a, b, c, d, p, kx, ky),
-            Whole => λ _ => trivial,
-        }(hy),
-        Whole => λ _ => trivial,
-    }(hx)
+    match I {
+        Bnd(a, b) => match J { Bnd(c, d) => Interval::mul_bnd_has_real(a, b, c, d, p, hx, hy), Whole => trivial },
+        Whole => trivial,
+    }
 }
 
 // Reciprocals. A positive interval's reverses its bounds, by inversion's
@@ -262,10 +253,7 @@ theorem Interval::recip_bnd_has_real(lo, hi: Dyadic, p: Nat, {x: CReal}, h: x.Ap
 }
 
 theorem Interval::recip_has_real(I: Interval, p: Nat, {x: CReal}, h: x.Apart(0), hx: I.HasReal(x)): I.recip(p).HasReal(x.inv(h := h)) {
-    match I as λ K => K.HasReal(x) → K.recip(p).HasReal(x.inv(h := h)) {
-        Bnd(lo, hi) => λ k => Interval::recip_bnd_has_real(lo, hi, p, h, k),
-        Whole => λ _ => trivial,
-    }(hx)
+    match I { Bnd(lo, hi) => Interval::recip_bnd_has_real(lo, hi, p, h, hx), Whole => trivial }
 }
 
 // An enclosure that excludes zero shows its real apart from zero.
@@ -275,14 +263,14 @@ fn Interval::excludes_zero(self I: Interval) → Bool {
 
 theorem Interval::apart_of_excludes(I: Interval, {x: CReal}, hx: I.HasReal(x), h: I.excludes_zero().IsTrue()): x.Apart(0) {
     let zero: (CReal::ofRat(Dyadic::rat(0)) ≈ 0) = CReal::ofRat_respects(Dyadic::rat_zero());
-    match I as λ K => K.HasReal(x) → K.excludes_zero().IsTrue() → x.Apart(0) {
-        Bnd(lo, hi) => λ k => match Dyadic::lt_bool(0, lo) as λ v => Dyadic::lt_bool(0, lo) = v → Bool::IsTrue(match v { True => True, False => hi.lt_bool(0) }) → x.Apart(0) {
+    match I {
+        Bnd(lo, hi) => match Dyadic::lt_bool(0, lo) as λ v => Dyadic::lt_bool(0, lo) = v → Bool::IsTrue(match v { True => True, False => hi.lt_bool(0) }) → x.Apart(0) {
             True => λ e _ => Inr(CReal::lt_of_lt_of_le(CReal::lt_respects(zero, CReal::ofRat(lo.rat()).same_refl(),
-                Dyadic::real_lt(Dyadic::lt_of_lt_bool(0, lo, Bool::is_true_of_eq(e)))), k.left)),
-            False => λ _ v => Inl(CReal::lt_of_le_of_lt(k.right, CReal::lt_respects(CReal::ofRat(hi.rat()).same_refl(), zero, Dyadic::real_lt(hi.lt_of_lt_bool(0, v))))),
-        }(refl),
-        Whole => λ _ no => false_elim(no),
-    }(hx, h)
+                Dyadic::real_lt(Dyadic::lt_of_lt_bool(0, lo, Bool::is_true_of_eq(e)))), hx.left)),
+            False => λ _ v => Inl(CReal::lt_of_le_of_lt(hx.right, CReal::lt_respects(CReal::ofRat(hi.rat()).same_refl(), zero, Dyadic::real_lt(hi.lt_of_lt_bool(0, v))))),
+        }(refl, h),
+        Whole => false_elim(h),
+    }
 }
 
 // Powers, by the product chain and by squaring, as at `Rat`.
@@ -348,23 +336,23 @@ theorem CReal::enclose_has(self x: CReal, n, p: Nat): x.enclose(n, p).HasReal(x)
 // Verdicts at `CReal`.
 
 theorem Interval::lt_of_below_real(I, J: Interval, {x, y: CReal}, hx: I.HasReal(x), hy: J.HasReal(y), h: I.below(J).IsTrue()): x < y {
-    match I as λ K => K.HasReal(x) → K.below(J).IsTrue() → x < y {
-        Bnd(a, b) => λ kx => match J as λ L => L.HasReal(y) → Bnd(a, b).below(L).IsTrue() → x < y {
-            Bnd(c, _) => λ ky v => CReal::lt_of_le_of_lt(kx.right, CReal::lt_of_lt_of_le(Dyadic::real_lt(b.lt_of_lt_bool(c, v)), ky.left)),
-            Whole => λ _ no => false_elim(no),
-        }(hy),
-        Whole => λ _ no => false_elim(no),
-    }(hx, h)
+    match I {
+        Bnd(_, b) => match J {
+            Bnd(c, _) => CReal::lt_of_le_of_lt(hx.right, CReal::lt_of_lt_of_le(Dyadic::real_lt(b.lt_of_lt_bool(c, h)), hy.left)),
+            Whole => false_elim(h),
+        },
+        Whole => false_elim(h),
+    }
 }
 
 theorem Interval::le_of_below_eq_real(I, J: Interval, {x, y: CReal}, hx: I.HasReal(x), hy: J.HasReal(y), h: I.below_eq(J).IsTrue()): x <= y {
-    match I as λ K => K.HasReal(x) → K.below_eq(J).IsTrue() → x <= y {
-        Bnd(a, b) => λ kx => match J as λ L => L.HasReal(y) → Bnd(a, b).below_eq(L).IsTrue() → x <= y {
-            Bnd(c, _) => λ ky v => CReal::le_trans(kx.right, CReal::le_trans(Dyadic::real_le(b.le_of_le_bool(c, v)), ky.left)),
-            Whole => λ _ no => false_elim(no),
-        }(hy),
-        Whole => λ _ no => false_elim(no),
-    }(hx, h)
+    match I {
+        Bnd(_, b) => match J {
+            Bnd(c, _) => CReal::le_trans(hx.right, CReal::le_trans(Dyadic::real_le(b.le_of_le_bool(c, h)), hy.left)),
+            Whole => false_elim(h),
+        },
+        Whole => false_elim(h),
+    }
 }
 
 theorem CReal::lt_of_enclose(self x, y: CReal, n, p: Nat, h: x.enclose(n, p).below(y.enclose(n, p)) = True): x < y {

@@ -1,6 +1,6 @@
 ---
 title: A match refines an earlier hypothesis in the elaborator but not in the kernel term
-status: open
+status: closed
 labels: [frontend,elaboration,motives,bug]
 area: language
 created: 2026-10-10
@@ -54,3 +54,4 @@ workaround is to move the hypothesis after the match (`→` in the statement,
 ## Log
 
 - 2026-10-30: Customer count (2026-10-30, interval elegance round): the workaround's other spelling, the convoy by application `match I as λ K => K.Has(x) → … { Bnd(…) => λ k => …, Whole => λ _ => trivial }(h)`, is 11 sites in lib/std/num/float/interval.hthr and 13 in creal_interval.hthr (every `*_has` lift from boxes to intervals, and `lt_of_below`). Generalizing the hypotheses that mention a variable scrutinee would turn each into a motive-less `match I { Bnd(…) => …, Whole => trivial }` over the refined hypothesis. The library rewrite kept them; this issue is where they go.
+- 2026-10-30: Fixed by generalizing. The elaborator never believed the refinement: `refl` is not checked by the elaborator at all (it notes the endpoints for the gate and emits `Refl`), so the kernel was the first judge, and the motive left `h` about `n`. Now a motive-less `match` on a local in checking position generalizes the later binders whose type mentions the scrutinee and that an arm names or the goal mentions (with the binders their types need; hidden `#` and reserved `__` binders excepted), through the ih-generalization path (`Elaborator::refined_hypotheses` in `generalize.rs`; Π goal, arms wrapped in `λ h =>` under the hypotheses' own names, recursor applied back). Not done for a recursion's own `match` with self-calls in its arms (a self-call cannot pass a non-parameter local) nor in inference position; `docs/ih-generalization-design.md` §5. A pattern variable named like a refined hypothesis still shadows it (the wrapped binder is renamed `#h` in that arm). The convoys went: 7 in `interval.hthr`, 9 in `creal_interval.hthr` (the issue's 11/13 counted the inner `match J` convoys separately); the two left are on computed scrutinees (`Interval::of_rat(…)`, `Dyadic::lt_bool(0, lo)`), which are not locals. Acceptance: `crates/elab/tests/match_refines_hypotheses.rs`. A first cut that generalized *every* such binder broke 59 tests: a `match` in a function body or a `j` motive changed term and no longer converted with the `match` it restates (`Memory::read_allowed`), and the measure rewrite reads `__dec_h` unrefined.
