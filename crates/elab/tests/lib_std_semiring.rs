@@ -36,6 +36,7 @@ const MODULES: &[(&str, &str)] = &[
     ("ordered_field", include_str!("../../../lib/std/algebra/ordered_field.hthr")),
     ("big_operator", include_str!("../../../lib/std/algebra/big_operator.hthr")),
     ("linarith", include_str!("../../../lib/std/tactic/linarith.hthr")),
+    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("rat", include_str!("../../../lib/std/num/rat.hthr")),
 ];
 
