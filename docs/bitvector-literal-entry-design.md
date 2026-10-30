@@ -959,3 +959,62 @@ library` and no timings at all. Each column needs its own build. Recorded in
   truncation as a `mod_succ` loop. It is a record of the 2026-09-07 round and
   was left as written; the live statement is now `lib/std/bitvec/bitvec.hthr`'s
   header.
+
+### 10.10 The `Nat`-state arm without replay (2026-10-29) — §10.7 and §10.9 answered
+
+Issue `native-encoder-ofnat-cost`. §10.9's open question was whether the
+per-bit step application can be avoided at all, given that the value domain
+has no substitution into a probe's state variable. It can, and no
+substitution is needed: what §4.4 wanted to *compose symbolically* can
+instead be *read out as data* at the probe and applied to a closed state as
+arithmetic.
+
+At the probe, `ofNat`'s step at `k`, `ih`, `x` neutral is
+`cons(odd_bit(x), ih(half(x)))`, and δ-transparently each of `odd_bit(x)`
+and `half(x)` is the variable `x` under a spine `elim_Nat(M; b; s) · fst`.
+Everything in that spine that a closed state's value depends on is already
+closure-free or can be made so:
+
+- `s` is classified by `eval/probe.rs` into an `AffineTree` — data, the
+  permutation windows §10.1 found;
+- `b` is forced and read back as a closed pair of naturals and bits
+  (`Datum`); a base that mentioned `x` would not read back, and declines;
+- for a *peeled* class, the innermost step `s(0, b)` — the one
+  `eval/runs.rs` takes as written — is evaluated once at the probe and read
+  back closed the same way.
+
+The class (`Output::NatState { bit, next }`, two `NatRead`s) then holds no
+closure at all, and firing at a closed `x` is
+`value/transducer.rs`'s `Transducer::run_nat`: the orbit `x, g(x), …` read
+through `f`, each fold being exactly `eval/runs.rs`'s arithmetic over that
+data. Adequacy is the substitution property with `x` as a third probe
+variable; the step's reduction to that shape did not split on `x`, so at any
+`v` it is the same eliminations applied to `v`, and those are what the data
+computes. An open state at the call declines the firing; the class declining
+leaves the fold as it was.
+
+Iterating each fold by the tree's own power costs `2·log₂ x` compositions
+per bit — at a full 64-bit argument that was most of what was left (probe
+below, 1.9 ms). `Datum::iterated_small` instead walks the tree as a
+functional graph on the window's leaf positions and skips whole cycles by a
+multiplication, `O(leaves)` per bit whatever the magnitude, falling back to
+the power past `u128`; a randomized reference test pins it to
+`AffineTree::iterate`.
+
+Measured (cloud, dev profile, one kernel worker; a probe file and the
+`cert/` bench-probes cases, both binaries on one box):
+
+| | before | after |
+| --- | --- | --- |
+| `toNat(64, ofNat(64, 0x401000)) = …` gate ms / steps | 4.8 / 2 154 | 1.0 / 268 |
+| `toNat(64, ofNat(64, 0x0123456789abcdef)) = …` | 5.4 / 2 358 | 1.1 / 268 |
+| `ofNat(8, 0xc0) = from_bits(8, […])` | 1.2 / 484 | 0.6 / 231 |
+| `cert/yes-pieces` steps | 488 749 | **327 015** |
+| `cert/yes-pieces` kernel s (min of 5, two interleaved pairs) | 0.96, 0.98 | **0.57, 0.58** |
+| `cert/yes-labels` steps / kernel s | 29 897 / 0.20 | 29 897 / 0.19–0.20 |
+
+The cost is now flat in the magnitude as well as bounded by the width.
+`ofNat(n, k) ≈ ofNat(n, k)` is untouched: the δ-lazy spine meet happens
+before anything is evaluated. The replay patch §10.7 kept
+(`docs/patches/bitvector-nat-state-arm.patch`) is superseded and removed;
+it is in git history before this round.

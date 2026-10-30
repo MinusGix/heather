@@ -47,7 +47,9 @@ use crate::level::Level;
 use crate::term::Type;
 use crate::value::algebra::{add_increments, AffineTree, FoldClass, Increment, Proj};
 use crate::value::program::ContextProgram;
-use crate::value::transducer::{scale, ArgMode, EnumVal, Output, Transducer, TABLE_CAP};
+use crate::value::transducer::{
+    scale, ArgMode, Datum, EnumVal, NatRead, Output, ReadElim, Transducer, TABLE_CAP,
+};
 use crate::value::{
     BitTy, Elim, Env, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VTy, Val, BIT_RUN_WIDTH_CAP,
 };
@@ -189,7 +191,166 @@ impl<'a, 'v> Eval<'a, 'v> {
         {
             return Ok(Some(class));
         }
-        self.probe_value_output(step, motive, succ_k, &shape, &combos)
+        if let Some(class) = self.probe_value_output(step, motive, succ_k, &shape, &combos)? {
+            return Ok(Some(class));
+        }
+        self.probe_nat_state(step, &shape)
+    }
+
+    /// The **`Nat`-state** output (`docs/bitvector-literal-entry-design.md`
+    /// §4.4, §10.10): one carried argument `x`, and one application of the
+    /// step is `cons(f(x), ih(g(x)))` — `bitvec::ofNat`'s shape — with `f`
+    /// and `g` neutrals at `x` whose spines are classified `Nat` folds and
+    /// projections ([`Eval::read_nat`]).
+    ///
+    /// Asked last, so a verdict either tabulated arm reaches is unmoved: to
+    /// them the argument is carried, as before. The probe's `x` is the
+    /// carried variable itself; nothing here needs to know that `x : Nat`,
+    /// because the reading is only ever applied to a state that forces to
+    /// a closed natural, and a spine whose first elimination is `elim_Nat`
+    /// says so by typing.
+    ///
+    /// Adequacy is the substitution property again, now with three
+    /// variables: the probe value was reached with `k`, `ih` and `x` all
+    /// neutral and no stuck case split on any of them, so at every
+    /// instantiation the step is `cons(f(v), ih(g(v)))` with `f` and `g`
+    /// the *same* eliminations applied to `v`. Those eliminations are read
+    /// out of the value as data — each fold's classified tree, its base
+    /// read back closed, and for a peeled class its innermost step read
+    /// back closed — so applying them to `v` is the arithmetic
+    /// `eval/runs.rs` would perform on them, and needs no substitution into
+    /// a closure. Whatever does not read back closed (a base mentioning
+    /// `x`, an opaque fold, an `ih` inside a bit) declines the class.
+    fn probe_nat_state(
+        &mut self,
+        step: &'v TmClo<'v>,
+        shape: &Walk<'v>,
+    ) -> Res<Option<Transducer>> {
+        if shape.modes.as_slice() != [ArgMode::Carried] {
+            return Ok(None);
+        }
+        let Some(at) = self.vec_in(shape.cod, NEST_LIMIT)? else { return Ok(None) };
+        if self.bit_ty(at.elem)?.is_none() {
+            return Ok(None);
+        }
+        let x = PROBE_CARRIED;
+        let slot = at.slot.clone();
+        let value = self.transduce_apply(step, &shape.args)?;
+        let Some(inner) = self.slot_of(&slot, value)? else { return Ok(None) };
+        let Val::Pair { fst, snd, .. } = &*inner else { return Ok(None) };
+        let (fst, snd) = (*fst, *snd);
+        let head = self.force(fst)?;
+        let head = self.delta_whnf(head)?;
+        let Some(bit) = self.read_nat(&head, x)? else { return Ok(None) };
+        if bit.outer.is_some() {
+            return Ok(None);
+        }
+        // The tail is exactly `ih(g(x))` under the slot's projections.
+        let rest = self.force(snd)?;
+        let rest = self.delta_whnf(rest)?;
+        let Val::Neutral(n) = &*rest else { return Ok(None) };
+        if !matches!(n.head, Head::Var(PROBE_IH)) {
+            return Ok(None);
+        }
+        let mut spine: Vec<&Elim<'v>> = n.spine.iter_rev().collect();
+        spine.reverse();
+        if spine.len() != 1 + slot.len() {
+            return Ok(None);
+        }
+        for (proj, elim) in slot.iter().zip(&spine[1..]) {
+            let ok = matches!(
+                (proj, elim),
+                (Proj::Fst, Elim::Fst { .. }) | (Proj::Snd, Elim::Snd { .. })
+            );
+            if !ok {
+                return Ok(None);
+            }
+        }
+        let Elim::App { arg, .. } = spine[0] else { return Ok(None) };
+        let arg = self.force(arg)?;
+        let arg = self.delta_whnf(arg)?;
+        let Some(next) = self.read_nat(&arg, x)? else { return Ok(None) };
+        Ok(Some(Transducer {
+            modes: shape.modes.clone(),
+            peeled: 0,
+            slots: Vec::new(),
+            out_slot: slot,
+            states: vec![EnumVal::Triv],
+            state_enums: Vec::new(),
+            next: vec![0],
+            output: Output::NatState { bit, next },
+        }))
+    }
+
+    /// `v` as `Succ^q(x.e₁…eₙ)` with each `eᵢ` a projection or an `elim_Nat`
+    /// whose step classifies as an affine tree (`eval/probe.rs`) over a base
+    /// that reads back closed — the data [`NatRead::apply`] runs. `None` is
+    /// "not one".
+    fn read_nat(&mut self, v: &Rc<Val<'v>>, x: u32) -> Res<Option<NatRead>> {
+        let (outer, tail) = self.strip_run(Rc::clone(v))?;
+        let Val::Neutral(n) = &*tail else { return Ok(None) };
+        if !matches!(n.head, Head::Var(l) if l == x) {
+            return Ok(None);
+        }
+        let mut spine: Vec<&'v Elim<'v>> = n.spine.iter_rev().collect();
+        spine.reverse();
+        let mut elims = Vec::with_capacity(spine.len());
+        for elim in spine {
+            elims.push(match elim {
+                Elim::Fst { .. } => ReadElim::Proj(Proj::Fst),
+                Elim::Snd { .. } => ReadElim::Proj(Proj::Snd),
+                Elim::ElimNat { base, step, .. } => {
+                    let (base, step) = (*base, *step);
+                    let class = self.classify_step(step)?;
+                    let FoldClass::Affine { tree, uniform } = &*class else { return Ok(None) };
+                    let b = self.force(base)?;
+                    let b = self.delta_whnf(b)?;
+                    let Some(base_datum) = self.read_datum(&b, NEST_LIMIT)? else {
+                        return Ok(None);
+                    };
+                    // A peeled class's innermost step reads `k = 0`; it is
+                    // taken as written, once, here.
+                    let first = if *uniform {
+                        None
+                    } else {
+                        let zero = self.vclo(Rc::new(Val::Zero));
+                        let v = self.drive(Work::Apply(step, vec![zero, base]))?;
+                        let v = self.delta_whnf(v)?;
+                        let Some(d) = self.read_datum(&v, NEST_LIMIT)? else {
+                            return Ok(None);
+                        };
+                        Some(d)
+                    };
+                    ReadElim::Fold { tree: tree.clone(), uniform: *uniform, base: base_datum, first }
+                }
+                _ => return Ok(None),
+            });
+        }
+        Ok(Some(NatRead { elims, outer }))
+    }
+
+    /// A computed value read back as a closed [`Datum`]: pairs of closed
+    /// naturals and bits. Anything else — a neutral anywhere, a payload that
+    /// is not canonical — is `None`.
+    fn read_datum(&mut self, v: &Rc<Val<'v>>, depth: u32) -> Res<Option<Datum>> {
+        if depth == 0 {
+            return Ok(None);
+        }
+        if let Val::Pair { fst, snd, .. } = &**v {
+            let (fst, snd) = (*fst, *snd);
+            let a = self.force(fst)?;
+            let a = self.delta_whnf(a)?;
+            let Some(a) = self.read_datum(&a, depth - 1)? else { return Ok(None) };
+            let b = self.force(snd)?;
+            let b = self.delta_whnf(b)?;
+            let Some(b) = self.read_datum(&b, depth - 1)? else { return Ok(None) };
+            return Ok(Some(Datum::Pair(Rc::new(a), Rc::new(b))));
+        }
+        if let Some(bit) = self.bit_of(v)? {
+            return Ok(Some(Datum::Bit(bit)));
+        }
+        let (inc, under) = self.strip_run(Rc::clone(v))?;
+        Ok(matches!(&*under, Val::Zero).then_some(Datum::Nat(inc)))
     }
 
     /// The **cons** and **pass** outputs: the step either puts one bit on
@@ -1269,6 +1430,20 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
         }
         let state0 = mixed_radix(&start, &class.state_enums);
+        // A `Nat` state must be closed: an `ofNat` of something that does
+        // not reduce costs this one force, and folds as it always did.
+        let nat_state = if matches!(class.output, Output::NatState { .. }) {
+            let [x] = args.as_slice() else { return Ok(None) };
+            let v = self.force(x)?;
+            let v = self.delta_whnf(v)?;
+            let (inc, under) = self.strip_run(v)?;
+            if !matches!(&*under, Val::Zero) {
+                return Ok(None);
+            }
+            Some(inc)
+        } else {
+            None
+        };
 
         // -- the bits, and the machine over them
         if finite {
@@ -1308,10 +1483,20 @@ impl<'a, 'v> Eval<'a, 'v> {
         // attempt that declines has not spent the word's worth twice.
         self.spend_n(u64::from(read))?;
 
+        // The `Nat` state the residual fold starts from.
+        let mut carried_end: Option<&'v TmClo<'v>> = None;
         let (produced, end_state) = match &class.output {
             Output::Cons { .. } => {
                 let Some(out) = class.run_cons(width, &words, state0) else { return Ok(None) };
                 out
+            }
+            Output::NatState { .. } => {
+                let Some((word, end)) = class.run_nat(width, nat_state.as_ref().expect("read"))
+                else {
+                    return Ok(None);
+                };
+                carried_end = Some(self.literal(&end));
+                (word, 0)
             }
             Output::Pass => (0, class.run_pass(width, &words, state0)),
             Output::Finite { .. } | Output::Scaled { .. } => (0, state0),
@@ -1355,7 +1540,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     let Some(a) = self.enum_value(dom, &value)? else { return Ok(None) };
                     a
                 }
-                ArgMode::Carried => args[j],
+                ArgMode::Carried => carried_end.unwrap_or(args[j]),
             };
             residual_apps.push(Rc::new(Elim::App { ann: Some(PiAnn { dom_level, cod_level, dom, cod }), arg }));
             cur = self.apply_ty(cod, &[arg])?;
@@ -1369,7 +1554,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
         match &class.output {
             Output::Pass => Ok(Some(Work::Force(folded))),
-            Output::Cons { .. } => {
+            Output::Cons { .. } | Output::NatState { .. } => {
                 let Some(at) = self.vec_in(cod_at_tail, NEST_LIMIT)? else {
                     return Ok(None);
                 };
@@ -2234,6 +2419,195 @@ mod tests {
             .expect("fuel")
             .expect("a record");
         assert!(matches!(&*inner, Val::Triv { .. }), "not the empty vector: {inner:?}");
+    }
+
+    // -- a `Nat` state: `ofNat`'s shape (design §10.10) ----------------------
+
+    /// `λ n. Nat → BitVec(n)` — `ofNat`'s motive. `elem` is the vector's
+    /// element type, so an axis of the tests can open it.
+    fn nat_state_motive(elem: Rc<Type>) -> Rc<Type> {
+        let cod = sigma(
+            tag(),
+            sigma(Rc::new(Type::Vec { level: Level::Zero, elem, len: var(2) }), unit_ty()),
+        );
+        Rc::new(Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: Rc::new(Type::Nat), cod })
+    }
+
+    fn nat_state_base() -> Rc<Term> {
+        lam(Rc::new(Type::Nat), record(&nat(0), triv()))
+    }
+
+    fn bool2() -> Rc<Type> {
+        sigma(bool_ty(), bool_ty())
+    }
+
+    fn nat2() -> Rc<Type> {
+        sigma(Rc::new(Type::Nat), Rc::new(Type::Nat))
+    }
+
+    fn nat_fold(motive: Rc<Type>, base: Rc<Term>, step: Rc<Term>, scrut: Rc<Term>) -> Rc<Term> {
+        Rc::new(Term::ElimNat { level: Level::Zero, motive, base, step, scrut })
+    }
+
+    /// `odd_bit(x)` as the library's course-of-values window
+    /// `⟨odd(n), odd(n+1)⟩`: a permutation of the window, read uniformly.
+    /// `peeled` spells the step with a `match` on `k` instead, whose `Zero`
+    /// arm is the window at one — the class `eval/runs.rs` takes the
+    /// innermost step of as written.
+    fn odd_bit(x: Rc<Term>, peeled: bool) -> Rc<Term> {
+        // Under the step's binders: `p` = 0, `j` = 1.
+        let swap = pair(bool_ty(), bool_ty(), snd(bool_ty(), bool_ty(), var(0)), fst(bool_ty(), bool_ty(), var(0)));
+        let step = if peeled {
+            // `match j { Zero => ⟨True, False⟩, Succ(_) => swap }`, the
+            // inner fold's own binders shifting `p` to 2.
+            let swap_up = pair(bool_ty(), bool_ty(), snd(bool_ty(), bool_ty(), var(2)), fst(bool_ty(), bool_ty(), var(2)));
+            nat_fold(bool2(), pair(bool_ty(), bool_ty(), bit(true), bit(false)), swap_up, var(1))
+        } else {
+            swap
+        };
+        let window = nat_fold(bool2(), pair(bool_ty(), bool_ty(), bit(false), bit(true)), step, x);
+        fst(bool_ty(), bool_ty(), window)
+    }
+
+    /// `half(x)` as the window `⟨half(n), half(n+1)⟩`.
+    fn half(x: Rc<Term>) -> Rc<Term> {
+        let nat_ty = || Rc::new(Type::Nat);
+        let step = pair(nat_ty(), nat_ty(), snd(nat_ty(), nat_ty(), var(0)), succ(&fst(nat_ty(), nat_ty(), var(0))));
+        let window = nat_fold(nat2(), pair(nat_ty(), nat_ty(), nat(0), nat(0)), step, x);
+        fst(nat_ty(), nat_ty(), window)
+    }
+
+    /// `λ x. cons(f(x), ih(g(x)))` inside the record. Scope in the body:
+    /// `x` = 0, `ih` = 1, `k` = 2.
+    fn of_nat_step_with(
+        head: impl Fn(Rc<Term>, Rc<Term>) -> Rc<Term>,
+        next: impl Fn(Rc<Term>) -> Rc<Term>,
+    ) -> Rc<Term> {
+        let k = var(2);
+        let call = app(var(1), Rc::new(Type::Nat), next(var(0)));
+        let body = record(&succ(&k), vcons(&k, head(var(0), Rc::clone(&k)), bits_of(&k, call)));
+        lam(Rc::new(Type::Nat), body)
+    }
+
+    fn of_nat_step(peeled: bool) -> Rc<Term> {
+        of_nat_step_with(move |x, _| odd_bit(x, peeled), half)
+    }
+
+    fn of_nat<'v>(arena: &'v ValueArena<'v>, width: u64, x: Rc<Term>, peeled: bool) -> (u32, u64) {
+        let v = fold(arena, nat_state_motive(bool_ty()), nat_state_base(), of_nat_step(peeled), width, &[x]);
+        produced(arena, v)
+    }
+
+    fn lit(n: u64) -> Rc<Term> {
+        Rc::new(Term::NatLit(n.into()))
+    }
+
+    fn low_bits(x: u64, width: u32) -> u64 {
+        if width >= 64 { x } else { x & ((1u64 << width) - 1) }
+    }
+
+    #[test]
+    fn of_nat_is_classified_with_its_two_folds_read_as_arithmetic() {
+        let arena = ValueArena::new();
+        for peeled in [false, true] {
+            let class = classify(&arena, nat_state_motive(bool_ty()), of_nat_step(peeled))
+                .expect("classified");
+            assert_eq!(class.modes, vec![ArgMode::Carried]);
+            assert_eq!(class.out_slot, vec![Proj::Snd, Proj::Fst]);
+            let Output::NatState { bit, next } = &class.output else { panic!("not a Nat state") };
+            // `fst ∘ elim_Nat` both, the bit's fold with its innermost step
+            // read back exactly when it is peeled.
+            assert_eq!(bit.elims.len(), 2);
+            assert_eq!(next.elims.len(), 2);
+            let ReadElim::Fold { uniform, first, .. } = &bit.elims[0] else { panic!("no fold") };
+            assert_eq!(*uniform, !peeled);
+            assert_eq!(first.is_some(), peeled);
+        }
+    }
+
+    #[test]
+    fn of_nat_at_a_literal_is_born_one_word() {
+        let arena = ValueArena::new();
+        let xs = [0u64, 1, 5, 0xc0, 0x40_1000, 0x0123_4567_89ab_cdef, u64::MAX];
+        for peeled in [false, true] {
+            for width in [1u32, 4, 8, 63, 64] {
+                for x in xs {
+                    assert_eq!(
+                        of_nat(&arena, u64::from(width), lit(x), peeled),
+                        (width, low_bits(x, width)),
+                        "ofNat({width}, {x:#x}), peeled {peeled}",
+                    );
+                }
+            }
+            // A unary literal is the same state as a numeral.
+            assert_eq!(of_nat(&arena, 8, nat(37), peeled), (8, 37));
+        }
+    }
+
+    #[test]
+    fn of_nat_past_a_word_is_a_second_run_from_the_state_the_first_left() {
+        // Width 70 at a numeral past 2^64: the first word is the low 64 bits,
+        // and the residual fold starts at `x >> 64` — so its bits are the
+        // numeral's next six, read through the produced run's tail.
+        let arena = ValueArena::new();
+        let x: u128 = (0b10_1101u128 << 64) | 0xfedc_ba98_7654_3210;
+        let big = Rc::new(Term::NatLit(heather_numeral::Numeral::from_u128(x)));
+        let v = fold(&arena, nat_state_motive(bool_ty()), nat_state_base(), of_nat_step(false), 70, &[big]);
+        let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
+        let inner = ev.slot_of(&[Proj::Snd, Proj::Fst], v).expect("fuel").expect("a record");
+        let Val::BitRun { width, bits, tail, .. } = &*inner else { panic!("not a run: {inner:?}") };
+        assert_eq!((*width, *bits), (64, 0xfedc_ba98_7654_3210));
+        let rest = ev.force(tail).expect("fuel");
+        let rest = ev.delta_whnf(rest).expect("fuel");
+        let Val::BitRun { width, bits, .. } = &*rest else { panic!("not a run: {rest:?}") };
+        assert_eq!((*width, *bits), (6, 0b10_1101));
+    }
+
+    #[test]
+    fn of_nat_at_a_neutral_state_stays_structural() {
+        // The state is a variable: no bit is closed, so the fold is the
+        // ordinary one — a pair the `Vec` rule built, not a run.
+        let arena = ValueArena::new();
+        let v = fold(&arena, nat_state_motive(bool_ty()), nat_state_base(), of_nat_step(false), 4, &[var(0)]);
+        let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
+        let inner = ev.slot_of(&[Proj::Snd, Proj::Fst], v).expect("fuel").expect("a record");
+        assert!(matches!(&*inner, Val::Pair { .. }), "not structural: {inner:?}");
+    }
+
+    #[test]
+    fn of_nat_over_an_open_element_type_declines() {
+        // Not two-valued, so there is no word to be born as.
+        let arena = ValueArena::new();
+        assert!(classify(&arena, nat_state_motive(Rc::new(Type::Nat)), of_nat_step(false)).is_none());
+    }
+
+    #[test]
+    fn a_bit_read_off_the_width_or_an_opaque_fold_is_not_a_nat_state() {
+        // Negative controls. The bit is a fold on `k`, not on the state; and
+        // the bit is parity spelled one successor at a time through `not`,
+        // which `probe.rs` leaves opaque, so there is no arithmetic to read.
+        // Both decline, and both still fold to the right chain.
+        let arena = ValueArena::new();
+        let on_k = of_nat_step_with(|_, k| odd_bit(k, false), half);
+        let opaque = |x: Rc<Term>| nat_fold(bool_ty(), bit(false), not_bit(var(0)), x);
+        let slow = of_nat_step_with(move |x, _| opaque(x), half);
+        for (step, expect) in [(on_k, [true, false, true, false]), (slow, [true, false, true, false])] {
+            assert!(classify(&arena, nat_state_motive(bool_ty()), Rc::clone(&step)).is_none());
+            // `on_k`: the outermost step's `k` is 3, then 2, 1, 0. `slow`:
+            // the bits of 5.
+            let v = fold(&arena, nat_state_motive(bool_ty()), nat_state_base(), step, 4, &[lit(5)]);
+            let mut ev = Eval::new(FUEL, Defs::opaque(), CtxBase::Nil, &arena);
+            let mut cur = ev.slot_of(&[Proj::Snd, Proj::Fst], v).expect("fuel").expect("a record");
+            for want in expect {
+                let Val::Pair { fst, snd, .. } = &*cur else { panic!("not a pair: {cur:?}") };
+                let (fst, snd) = (*fst, *snd);
+                let head = ev.force(fst).expect("fuel");
+                let head = ev.delta_whnf(head).expect("fuel");
+                assert_eq!(ev.bit_of(&head).expect("fuel"), Some(want));
+                let rest = ev.force(snd).expect("fuel");
+                cur = ev.delta_whnf(rest).expect("fuel");
+            }
+        }
     }
 
     // -- running the probe -------------------------------------------------

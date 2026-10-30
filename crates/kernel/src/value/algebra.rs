@@ -113,6 +113,21 @@ impl AffineTree {
         Some(cur.clone())
     }
 
+    /// The sub-tree at exactly `path`: no descent through a leaf, which
+    /// [`AffineTree::at`] allows and a reader of the tree's own shape must
+    /// not.
+    pub fn at_exact(&self, path: &[Proj]) -> Option<&AffineTree> {
+        let mut cur = self;
+        for step in path {
+            let AffineTree::Pair(fst, snd) = cur else { return None };
+            cur = match step {
+                Proj::Fst => fst,
+                Proj::Snd => snd,
+            };
+        }
+        Some(cur)
+    }
+
     /// `outer ∘ inner`: the tree for two steps, the inner one first —
     /// `outer[ih := inner]`.
     pub fn compose(outer: &AffineTree, inner: &AffineTree) -> Option<AffineTree> {
