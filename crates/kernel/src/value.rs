@@ -400,6 +400,10 @@ struct ValueMetricCells {
     env_nodes: Cell<u64>,
     term_closures: Cell<u64>,
     type_closures: Cell<u64>,
+    /// The memo counters count table events: a lookup, a hit, a new key.
+    /// They are not allocation counts — the value an insert records was
+    /// born in the arena when it was forced, memoized or not
+    /// (`issues/value-cache-memo-in-arena.md`).
     term_cache_lookups: Cell<u64>,
     term_cache_hits: Cell<u64>,
     term_cache_inserts: Cell<u64>,
@@ -1045,9 +1049,9 @@ impl<'v> ValueArena<'v> {
 ///
 /// **A thunk never memoizes a failure**: the memo is written only on `Ok`, so
 /// a value graph forced under an insufficient budget and re-forced under a
-/// larger one still succeeds (design §6). Successful results live in the
-/// query arena's bounded cache, so sharing cannot retain an unbounded forced
-/// graph.
+/// larger one still succeeds (design §6). Successful results are born in the
+/// query arena and memoized there by the closure's address, so a forced graph
+/// is freed flat when the query ends, never by a recursive drop.
 pub enum TmClo<'v> {
     Syn {
         env: Env<'v>,
