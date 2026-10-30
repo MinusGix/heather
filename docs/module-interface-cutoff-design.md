@@ -3,6 +3,9 @@
 Status: implemented for the stale-image lanes (`--accept-stale-images`,
 `scripts/test --fast`, `scripts/test --pr`), audited by the exact lane.
 Issue: `issues/relocatable-semantic-module-images.md`.
+Since `docs/module-dag-design.md`, "the world under a module" is its import
+closure in canonical order, not its process's prefix; the cutoff's moves are
+unchanged within that world.
 
 ## 1. The problem
 

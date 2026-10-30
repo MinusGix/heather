@@ -1,8 +1,8 @@
 # Building library modules in dependency order
 
-Status: design, staged implementation (§9).
+Status: built (§9), measured (§10).
 Issues: `issues/module-dag-build.md`, `issues/nominal-tags-from-declaration-identity.md`.
-Supersedes `docs/library-world-design.md` §2 (the world) once §9's stages land.
+Supersedes `docs/library-world-design.md` §2 (the world).
 
 ## 1. Why the gate is a chain
 
@@ -112,25 +112,25 @@ sits in `canon(M)`. Loading it there is three steps, all exact.
    key, which a move does not change (the Merkle hash names references by
    content). Soundness never rests on the move.
 3. **Merging its registries.** Two images built apart can carry entries for
-   one key. Two classes of entry differ here:
+   one key, and the first world that holds both refuses: the replay of the
+   later one fails with the metadata conflict the preflight already raises,
+   reported at `M` as an error naming the module. This holds for both
+   classes of entry:
+   - **Declarations**: instances, classes, designations, evidence rules,
+     derived instances, implementations, accesses, meta programs. Two
+     modules that each declare one for the same key are incoherent.
    - **Content caches**: the generated definitions keyed by a tag (`GenDef`,
      the guard copies `GenTyCode`/`GenTyCodeFn`/`GenWfSlots`/
      `GenSpineCodes`/`GenFamLevels`) and representation monomorphs. A family
      over an index type from another module registers that index type's code
-     (`register_idx_code`); two sibling families each register one. Each
-     copy stays at its position, and the terms of the module that made it
-     keep naming it. The index keeps the copy that came first in
-     `canon(M)`, after checking that the two copies have the same content
-     hash; differing content is a conflict. Today the second family would
-     have found the first's copy, because its process loaded the first
-     family's module before it whether it imported it or not.
-   - **Declarations**: instances, classes, designations, evidence rules,
-     derived instances, implementations, accesses, meta programs. Two
-     modules that each declare one for the same key are incoherent, and the
-     first world that holds both refuses: the replay of the later one fails
-     with the conflict, reported at `M` as an error naming both modules.
-     Before this design such a pair could not both check in one process at
-     all, so the library has none.
+     (`register_idx_code`), so two sibling families over one foreign index
+     type would each carry a copy. Before this design the second family
+     found the first's copy, because its process loaded the first family's
+     module whether it imported it or not. Keeping the first copy after
+     checking the two have one content hash would be sound; it is not built,
+     because the library has no such pair (every folder checks under the new
+     rule), and a refusal is the conservative answer until one appears
+     (`issues/module-dag-build.md`).
 
 The state a process reaches for `canon(M)` is a function of the images of
 `M`'s closure and their order, and each image is a function of its key
@@ -152,9 +152,11 @@ keys of exactly the modules that import it transitively. Adding a module
 nothing imports, or an import edge elsewhere in the library, changes nothing
 for `M`, where the world reordered every later module's prefix.
 
-The image records its canonical module list and each module's binding count
-beside the world record, so a load can compute the move of step 1 and check
-it against the process's own computation before decoding.
+The image does not need to record its canonical order: the key already
+fixes it, and the process computes the move of §4 step 1 from the two orders
+and the binding counts of the modules it has finished. A decoded image whose
+length disagrees with that computation is refused as an internal failure,
+never moved.
 
 ## 6. Worlds inside one process
 
@@ -177,16 +179,26 @@ binding are content hashes and are cached by binding.
 
 ## 7. The gate
 
-With closure keys the gate's children no longer have to follow one order.
-Each child checks one folder: it walks its closure in topological order and,
-for a module with no image yet, tries the module's build lock without
-blocking. A module another child is building is set aside and the child goes
-on with any module whose dependencies it has; it blocks on a lock only when
-nothing else is ready. The single-flight lock still makes every module an
+With closure keys the gate's children no longer have to follow one order, and
+the gate itself is unchanged: three children at a time, one folder each, in
+`World::folders` order. Inside a child, `heather check` walks its modules in
+a topological order of the written imports and, among the modules whose
+imports it has finished, takes the first that no other process is building
+(`ModuleImageStore::being_built`, a non-blocking try of the build lock). Only
+when every ready module is being built elsewhere does it take one anyway and
+block on its lock. The single-flight lock still makes every module an
 elaboration once in the whole gate.
 
 What bounds the gate is then the import graph's critical path (the longest
-chain of elaboration cost through imports), not the sum.
+chain of elaboration cost through imports, which is the native compile
+chain), not the sum. A simulation of the gate over the measured per-module
+costs found the folder order is not a further lever: largest-first gains a
+little and puts two heavy folders under the CPU rail at once.
+
+A module that fails no longer turns images off for the rest of the process.
+Its dependents are refused with a note naming it ("its import closure holds
+`X`, which did not check"), and modules that do not import it go on as
+before.
 
 ## 8. Memory
 
@@ -197,18 +209,40 @@ the world prefix up to its last needed module. Three children run at a time
 as before; giving them more width is what doubled peak memory to 5–6 GB
 before (`issues/library-gate-warmup-runs-alone.md`), and this design does not.
 
-## 9. Stages
+## 9. What was built
 
-1. Tags from the declaration (§3). Changes every image; the format version is
-   bumped so no image of counted tags is replayed into a world of hashed
-   ones.
+1. Tags from the declaration (§3). The module image format version is bumped,
+   so no image of counted tags is replayed into a world of hashed ones.
 2. Closure worlds in `SemanticSession` (§4–§6): canonical orders from the
-   loader's graph, closure keys, moved loads, duplicate content caches.
-   `--world` becomes a no-op, kept for callers, and `World::of` survives only
-   as the gate's folder order.
-3. The gate's scheduling (§7).
+   written imports, closure keys, moved loads (`ModuleDelta::relocate`, or
+   `over_prefix` when the map is the identity), per-module snapshots
+   (`Elaborator::fork_over`). `heather check` runs without a process world
+   (each module's world is canonical, nothing accumulates); `--deny-axioms`
+   and the library callers that need one process-wide state keep the process
+   world, into which each finished module is moved.
+3. The child's scheduling (§7).
 
-What goes away with stage 2: `write_elf_loads_only_world_modules` and
-`WRITE_ELF_IMPORTS`'s reason to exist (every process keys every module the
-same way), the showcase rows' `--world lib`, and the early cutoff's
-"module order" refusals (its registry digest is over the closure).
+`--world` is accepted and ignored, for the scripts that pass it to older
+binaries (`scripts/bench-probes` A/B runs). `World::folders` survives as the
+gate's folder order. `write_elf_loads_only_world_modules` is gone: every
+process keys every module the same way.
+
+## 10. Measurements
+
+Cloud box (4 CPUs), the library gate's driver run by hand over a cold image
+store, three children, 300 s CPU rail, master against this design, same
+build profile. Shapes, not numbers (`CLAUDE.md`):
+
+- **Cold wall time** drops by about two fifths. CPU time drops a little
+  (fewer duplicate replays: a folder's closure replays about its own size,
+  not nearly twice it).
+- **Peak memory** across all children rises by about a third, and the
+  largest child by about a tenth: children now overlap heavy folders that
+  the chain kept apart. It stays well inside the 6 GiB per-process rail.
+- On master the `lib/_tests/std/algebra` child died at the CPU rail cold,
+  waiting behind the chain; under closure keys it checks.
+- **Warm** (every image present) CPU is unchanged; it is dominated by the
+  refusal-test modules, which are re-elaborated every run.
+- The sequential elaboration sum over the library is several times the
+  critical path, so with three workers the gate is now width-bound, not
+  chain-bound; more width would help only as far as memory allows (§8).

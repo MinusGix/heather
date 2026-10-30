@@ -86,3 +86,4 @@ reuse of an earlier one.
   ran 676 s / 1018 CPU-s beside the other targets, and all of them had
   finished when it did; the tail is now the gate followed by `native_tools`
   (303 s), so the chain is the next lever.
+- 2026-10-30: The world chain is gone ([[module-dag-build]], `docs/module-dag-design.md`): images are keyed by import closures, so the children build independent modules in parallel; cold gate wall drops by about two fifths, peak memory rises by about a third.
