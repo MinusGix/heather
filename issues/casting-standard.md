@@ -32,5 +32,6 @@ canonical `Nat → Int` spelling.
 
 ## Log
 
-- 2026-10-30: Design note drafted (docs/casting-design.md); awaiting Minus's choice of option.
+- 2026-10-30: Design note drafted (docs/casting-design.md).
 - 2026-10-30: Minus objects to combined classes (`CommRingOfInt`, `OrderedFieldOfInt`, proposed `OrderedFieldOfRat`); design §5.6 makes a cast edge a registered morphism value (`OrderedRingHom<A, B>` record of map + laws), generic code takes the morphism as a parameter, and `Int`'s map is derivable by initiality. Agrees with [[interval-containment-once-over-ordered-field]].
+- 2026-10-30: DECIDED by Minus: option B, glyph `↑`, and the recommended answer on every other §8 question (edges = numeric tower + Dyadic/Finite first, shortest path + squash, morphism values, `OfNat(n)` canonical). Minus asked for cast tactics better than Lean's push_cast/norm_cast; §6.4 proposes cast-transparent arithmetic tactics (carrier-annotated reification) and `cast_to(S)` (state the goal you want, checked modulo morphism laws) with located `push_cast(at: …)` as the fallback.
