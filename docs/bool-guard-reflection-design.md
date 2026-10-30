@@ -121,6 +121,13 @@ Two larger steps, filed as issues; each deletes a different part of §2.
 
 ### 3.1 Comparison decisions whose bit is `leb` ([[decide-bit-is-the-comparison]])
 
+> **Landed 2026-10-30.** As below, except that `canonical` spells its
+> proposition inside `decide_bit<…>()` rather than naming `F.Canonical`:
+> instance search does not unfold a defined proposition
+> ([[decide-at-defined-proposition]]), so `Canonical` was folded into
+> `canonical`'s body and intro/elim are `decide_intro(…)` / `decide_elim(ok)`.
+> The issue's resolution records what else moved.
+
 `Decide<n <= m>`'s bit is `or_bit(Nat::le_dec(n, m))`, not `n.leb(m)`, so a
 `decide_bit<P>()` over `<=` is never the guard a program writes. With the bit
 `leb` (reflection `Nat::leb_reflects`) and a `Decide<P → Q>` instance (bit

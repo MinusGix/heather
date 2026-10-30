@@ -124,6 +124,18 @@ theorem reflects_not({P: Type}, {x: Bool}, p: Reflects(P, x)): Reflects(¬P, !x)
         })(refl, e))
 }
 
+// Implication's bit is `!x || y`: `Q` is tested only where `P` holds.
+theorem reflects_imp({P, Q: Type}, {x, y: Bool}, p: Reflects(P, x), q: Reflects(Q, y)): Reflects(P → Q, !x || y) {
+    And(λ e => (match x as λ c => (x = c) → (!c || y = True) → P → Q {
+            True => λ _ hy _ => q.left(hy),
+            False => λ hx _ a => false_elim(p.right(hx)(a)),
+        })(refl, e),
+     λ e f => (match x as λ c => (x = c) → (!c || y = False) → False {
+            True => λ hx hy => q.right(hy)(f(p.left(hx))),
+            False => λ _ no => absurd(no),
+        })(refl, e))
+}
+
 // The two constants. `True` is the kernel's `Unit^0`, so `Inl(trivial)` is the
 // only inhabitant there is; `False`'s refutation is the identity, exactly as
 // `not_succ_le_zero` is over in `nat`.
@@ -183,6 +195,20 @@ instance<P: Decide> Decide<¬P> {
     },
     bit := !P.bit,
     reflects := reflects_not(P.reflects),
+}
+
+// Implication, so a guard's side condition (`rt → sp → room`) decides as
+// written rather than as the `¬(rt ∧ sp ∧ ¬room)` a program tests.
+instance<P: Decide, Q: Decide> Decide<P → Q> {
+    dec := match P.dec {
+        Inl(p) => match Q.dec {
+            Inl(q) => Inl(λ (_: P) => q),
+            Inr(nq) => Inr(λ (f: P → Q) => nq(f(p))),
+        },
+        Inr(np) => Inl(λ (p: P) => false_elim(np(p))),
+    },
+    bit := !P.bit || Q.bit,
+    reflects := reflects_imp(P.reflects, Q.reflects),
 }
 
 // The consumers. `decide` is the projection a caller reaches for when it wants
@@ -300,6 +326,12 @@ theorem reflects_intro({P: Type}, {b: Bool}, r: Reflects(P, b), p: P): b.IsTrue(
         True => λ _ => trivial,
     }(r)
 }
+
+// The same two readings at a decision: a Bool guard that is
+// `decide_bit<P>()` is proved from `P` and read back into it, with the
+// instance's reflection doing what a hand-built `*_reflects` lemma did.
+theorem decide_intro<P: Decide>(p: P): decide_bit<P>().IsTrue() { reflects_intro(P.reflects, p) }
+theorem decide_elim<P: Decide>(h: decide_bit<P>().IsTrue()): P { reflects_elim(P.reflects, h) }
 
 // A Bool reflects its own truth.
 theorem Bool::is_true_reflects(self b: Bool): Reflects(b.IsTrue(), b) { reflects_of_is_true(λ h => h, λ h => h) }

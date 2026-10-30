@@ -1,0 +1,33 @@
+// Probes of a decision's bit (issues/decide-bit-is-the-comparison.md): a
+// decided comparison's bit is the comparison a program writes, so a Bool
+// guard built from comparisons and connectives is `decide_bit` of its
+// proposition, and `decide_intro` / `decide_elim` read it both ways.
+
+import logic; import bool; import nat; import int; import omega;
+
+// The bits are the comparisons themselves, at an open argument.
+theorem nat_le_bit(n, m: Nat): decide_bit<n <= m>() = n.leb(m) { refl }
+theorem nat_eq_bit(n, m: Nat): decide_bit<n = m>() = n.same(m) { refl }
+theorem int_le_bit(a, b: Int): decide_bit<a <= b>() = a.leb(b) { refl }
+
+// Implication decides as written; its bit tests `Q` only where `P` holds.
+theorem imp_bit(b: Bool, n, m: Nat): decide_bit<b.IsTrue() → n <= m>() = !b || n.leb(m) { refl }
+theorem imp_vacuous(): decide_bit<(2 <= 1) → (5 <= 3)>() = True { refl }
+theorem imp_refuted(): decide_bit<(1 <= 2) → (5 <= 3)>() = False { refl }
+theorem imp_nested(n: Nat): decide_bit<n = 0 → n <= 0 → 0 <= n>() = !n.same(0) || (!n.leb(0) || True) { refl }
+
+// A guard spelled as a program writes it is the decision of its statement.
+fn guard(n, m: Nat) → Bool { decide_bit<n <= m ∧ (m = 0 ∨ 1 <= n)>() }
+theorem guard_spelled(n, m: Nat): guard(n, m) = n.leb(m) && (m.same(0) || 1.leb(n)) { refl }
+
+theorem guard_intro(n, m: Nat, le: n <= m, pos: 1 <= n): guard(n, m).IsTrue() {
+    decide_intro<n <= m ∧ (m = 0 ∨ 1 <= n)>(And(le, Inr(pos)))
+}
+
+theorem guard_elim(n, m: Nat, ok: guard(n, m).IsTrue()): n <= m { (decide_elim<n <= m ∧ (m = 0 ∨ 1 <= n)>(ok)).left }
+
+theorem imp_intro(n: Nat): decide_bit<n <= 0 → n = 0>().IsTrue() { decide_intro<n <= 0 → n = 0>(λ h => omega) }
+
+// Closed guards decide by evaluation, both ways.
+theorem guard_closed(): guard(3, 7) = True { refl }
+theorem guard_closed_no(): guard(0, 7) = False { refl }

@@ -2362,7 +2362,7 @@ impl Elaborator {
         // equality from Bool equality by the same resolved declaration keys
         // every other carrier uses, while the full instance type remains what
         // candidate trial checks against a goal.
-        let (head, head_key, equality) = if matches!(carrier.kind, TyKind::Eq(..)) {
+        let (head, head_key, headless_suffix) = if matches!(carrier.kind, TyKind::Eq(..)) {
             let cx = self.instance_head_cx(d)?;
             let (lowered, _) = self.elab_ty(&cx, carrier)?;
             let crate::Type::Id { ty, .. } = lowered else {
@@ -2384,7 +2384,16 @@ impl Elaborator {
             // cannot begin a source name, so this is a structural registry
             // component rather than a spelling that could resolve elsewhere.
             let equality_key = format!("#Eq@{}", owner.key);
-            (owner.written, equality_key, true)
+            (owner.written, equality_key, "#Eq")
+        } else if matches!(carrier.kind, TyKind::Fn { binder: None, implicit: false, .. }) {
+            // Implication is the other headless former a class is for:
+            // `Decide<P → Q>` decides a guard's side condition as written
+            // (issues/decide-bit-is-the-comparison.md). An arrow has no
+            // endpoint type to own it, so the class owns it: one structural
+            // key per class, `Decide::Decide#Fn`, which `#` keeps unwritable.
+            let owner = d.class.name.clone();
+            let key = format!("#Fn@{}", class_key);
+            (owner, key, "#Fn")
         } else {
             let Some(head) = head_name(carrier) else {
                 return err(
@@ -2408,7 +2417,7 @@ impl Elaborator {
                 );
             }
             let key = self.carrier_key(&head);
-            (head, key, false)
+            (head, key, "")
         };
         // The index (docs/operation-indexed-classes-design.md §3.1). Its
         // spelling joins the registry key, so it is computed from the
@@ -2434,16 +2443,15 @@ impl Elaborator {
             );
         }
         let index = self.index_spelling(&d.class, &class, d)?;
-        let equality_suffix = if equality { "#Eq" } else { "" };
         let prefix = if index.is_empty() {
-            format!("{head}::{}{equality_suffix}", class.name)
+            format!("{head}::{}{headless_suffix}", class.name)
         } else {
             // Two instances of one class at one carrier are the point (§3), so
             // the canonical name carries the index. `#` never begins an
             // identifier, so the suffix is unwritable and `Bool::Monoid(or)`
             // — the `T::C(args)` spelling of §5.1 — is how it is reached.
             format!(
-                "{head}::{}{equality_suffix}#{}",
+                "{head}::{}{headless_suffix}#{}",
                 class.name,
                 name_suffix(&index)
             )
