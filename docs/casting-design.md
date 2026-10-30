@@ -574,8 +574,7 @@ What it does not do yet, each for a reason:
 
 - **Not a normal form.** `mono` moves an image only where its own split
   stops, layer by layer; a hypothesis stated at the fully pushed form is not
-  matched against an unpushed goal. That is `cast_to`'s job (§6.4), on the
-  shared reader.
+  matched against an unpushed goal. (Slice 2, §10, adds that.)
 - **No `0`, `1` or subtraction moves** in `mono` yet (the fields exist), and
   `Nat → Int` is not an edge yet: it needs an `OrderedSemiringHom` (`Nat`
   has no negation), with its laws stated at `Int::Same`.
@@ -591,5 +590,38 @@ What it does not do yet, each for a reason:
   answered `false`): a hole whose type mentions earlier holes,
   `map: ?A → ?B`, needs it.
 
-Next: the carrier-annotated reader shared by `ring`, `linarith`, `mono` and
-`omega`, then `cast_to(S)`; `↑` and `cast<B>` after (§7 step 3).
+## 10. Slice 2: the normal form, `cast_from` and `cast_to` (2026-10-30)
+
+- **The normal form** (`cast_push`, `lib/std/tactic/cast.hthr`): a side
+  read with every image pushed to the leaves. An operation of the carrier
+  has its operands read and is rebuilt by its `respects` lemma; an image an
+  edge moves is moved (`cast_move`) and read again; anything else is a leaf.
+  The proof `h ≈ normal` is built as it goes, `None` where nothing moved. The
+  carriers it is read at are a table of names (`cast_carriers`: `Rat` and
+  `CReal`, their relations, `≈` laws and the `+`, `*`, `-` congruences).
+- **`cast_from(h)`** proves the goal from `h` when the two are one relation
+  whose sides agree in normal form, carrying `h` along the four `≈` proofs
+  (`le_respects`/`lt_respects`, or `trans` for `≈`). It accepts `h` pushed
+  in, pulled out, or stated at a carrier an edge maps into the goal's:
+  `h: a <= b` at `Dyadic` proves `CReal::ofRat(a.rat()) <= CReal::ofRat(b.rat())`
+  through two edges, and `h: m + 1 <= n` at `Int` proves
+  `Rat::ofInt(m) + 1 <= Rat::ofInt(n)` (a `Rat` numeral is `Rat::ofInt`'s image
+  of an `Int` one, §1.2). Lifting is lazy and uses only the goal relation's
+  law (`le_law`, `lt_law`, `respects_law`), straight into the goal's carrier
+  first and through another carrier second: an eager lift of every fact
+  through every edge and law ran out of tactic fuel.
+- **`cast_to(S, prove)`** is §6.4's "state, don't steer": `S` proved by
+  `prove`, then carried by `cast_from`. `S` is any statement the goal agrees
+  with through casts, including one at the source carrier
+  (`cast_to(a <= b, assumption())`).
+- **`mono` consumes it**: where its split and the cast moves stop, a given
+  term or local whose statement agrees with the goal through casts closes
+  it (`cast_from` without lifting; orders between images are already
+  `le_law`'s). So `h: a.rat() + b.rat() * c.rat() <= x` closes
+  `(a + b * c).rat() <= x`, which slice 1 could not.
+- **A disagreement is not diagnosed yet**: `cast_from` reports that the
+  two differ, not the first subterm where they do (§6.4 asks for that).
+
+Next ([[cast-carrier-reader]]): `ring`, `linarith` and `omega` reading
+through the same normal form, the located diagnostic, `0`/`1`/subtraction,
+and `Nat → Int`; `↑` and `cast<B>` after (§7 step 3).

@@ -225,3 +225,332 @@ fn cast_hom() → Tac<Expr> { cast_hom_among(cast_edges()) }
 fn cast_premise(prove: Tac<Expr>) → Tac<Expr> {
     attempt(cast_hom()).bind(λ r => match r { Done(e) => Pure(e), Failed(_, _) => prove })
 }
+
+// ---------------------------------------------------------------------------
+// Reading a side to its cast-normal form, and `cast_from` / `cast_to`
+// (docs/casting-design.md §6.4): every image pushed to the leaves along the
+// edges' laws, through the target carrier's operations by their `respects`
+// lemmas. Two statements that agree there are the same statement read
+// through the casts, and the proof of one is the other's carried along
+// `≈`.
+
+// A carrier the normal form is computed at: its relations and
+// their `≈`-respecting lemmas, the `≈` laws, and the operations whose
+// operands the push enters, each with its `respects` lemma.
+record CastOp { op: String, respects: String }
+
+record CastCarrier { same: String, le: String, lt: String, refl: String, sym: String, trans: String, le_respects: String, lt_respects: String, ops: List<CastOp> }
+
+fn cast_carriers() → List<CastCarrier> {
+    [CastCarrier("Rat::Same", "Rat::Le", "Rat::Lt", "Rat::same_refl", "Rat::same_sym", "Rat::same_trans", "Rat::le_respects", "Rat::lt_respects",
+        [CastOp("Rat::add", "Rat::add_respects"), CastOp("Rat::mul", "Rat::mul_respects"), CastOp("Rat::neg", "Rat::neg_respects")]),
+     CastCarrier("CReal::Same", "CReal::Le", "CReal::Lt", "CReal::same_refl", "CReal::same_sym", "CReal::same_trans", "CReal::le_respects", "CReal::lt_respects",
+        [CastOp("CReal::add", "CReal::add_respects"), CastOp("CReal::mul", "CReal::mul_respects"), CastOp("CReal::neg", "CReal::neg_respects")])]
+}
+
+// A carrier's names resolved; `None` where the carrier's module is not
+// imported where the tactic runs.
+record CastOpRef { op: GlobalRef, respects: GlobalRef }
+
+record CastAt { same: GlobalRef, le: GlobalRef, lt: GlobalRef, refl: GlobalRef, sym: GlobalRef, trans: GlobalRef, le_respects: GlobalRef, lt_respects: GlobalRef, ops: List<CastOpRef> }
+
+fn cast_global_or(name: String, k: GlobalRef → Tac<Option<CastAt>>) → Tac<Option<CastAt>> {
+    cast_try_global(name).bind(λ o => match o { None => Pure(None), Some(g) => k(g) })
+}
+
+fn cast_ops(ops: List<CastOp>) → Tac<List<CastOpRef>> {
+    match ops {
+        Nil => Pure([]),
+        Cons(o, rest) => cast_try_global(o.op).bind(λ a => cast_try_global(o.respects).bind(λ b => cast_ops(rest).bind(λ more => Pure(match a {
+            None => more,
+            Some(x) => match b { None => more, Some(y) => Cons(CastOpRef(x, y), more) },
+        })))),
+    }
+}
+
+fn cast_at(c: CastCarrier) → Tac<Option<CastAt>> {
+    cast_global_or(c.same, λ same => cast_global_or(c.le, λ le => cast_global_or(c.lt, λ lt =>
+    cast_global_or(c.refl, λ refl => cast_global_or(c.sym, λ sym => cast_global_or(c.trans, λ trans =>
+    cast_global_or(c.le_respects, λ ler => cast_global_or(c.lt_respects, λ ltr =>
+    cast_ops(c.ops).bind(λ ops => Pure(Some(CastAt(same, le, lt, refl, sym, trans, ler, ltr, ops))))))))))))
+}
+
+fn cast_ats(cs: List<CastCarrier>) → Tac<List<CastAt>> {
+    match cs {
+        Nil => Pure([]),
+        Cons(c, rest) => cast_at(c).bind(λ o => cast_ats(rest).bind(λ more => Pure(match o { None => more, Some(a) => Cons(a, more) }))),
+    }
+}
+
+// The carrier one of whose relations is `rel`.
+fn cast_rel_in(rel: GlobalRef, cs: List<CastAt>) → Option<CastAt> {
+    match cs {
+        Nil => None,
+        Cons(c, rest) => match rel.id.same(c.same.id) || rel.id.same(c.le.id) || rel.id.same(c.lt.id) { True => Some(c), False => cast_rel_in(rel, rest) },
+    }
+}
+
+fn cast_op_in(f: GlobalRef, ops: List<CastOpRef>) → Option<CastOpRef> {
+    match ops { Nil => None, Cons(o, rest) => match f.id.same(o.op.id) { True => Some(o), False => cast_op_in(f, rest) } }
+}
+
+// A side read to its normal form: what it is now, and the proof `h ≈ to`
+// (`None` where the push changed nothing).
+record Pushed { to: Handle, proof: Option<Expr> }
+
+fn cast_kept(h: Handle) → Tac<Pushed> { Pure(Pushed(h, None)) }
+
+// The right side of the `≈` a proof states.
+fn cast_rhs(p: Expr) → Tac<Option<Handle>> {
+    infer(p).bind(λ c => match c {
+        Refused(_) => Pure(None),
+        Accepted(ty) => view(ty).bind(λ v => Pure(match v { HGlobal(_, _, Cons(_, Cons(r, Nil))) => Some(r), _ => None })),
+    })
+}
+
+// `h ≈ a.to` then `a.to ≈ b.to`.
+fn cast_join(C: CastAt, h: Handle, a, b: Pushed) → Pushed {
+    match a.proof {
+        None => b,
+        Some(p) => match b.proof {
+            None => a,
+            Some(q) => Pushed(b.to, Some(App(App(App(App(App(Global(C.trans), Hd(h)), Hd(a.to)), Hd(b.to)), p), q))),
+        },
+    }
+}
+
+// `a.to ≈ h` from `h ≈ a.to`.
+fn cast_sym(C: CastAt, h: Handle, a: Pushed) → Option<Expr> {
+    match a.proof { None => None, Some(p) => Some(App(App(App(Global(C.sym), Hd(h)), Hd(a.to)), p)) }
+}
+
+fn cast_or_refl(C: CastAt, h: Handle, p: Option<Expr>) → Expr { match p { None => App(Global(C.refl), Hd(h)), Some(e) => e } }
+
+// A one-operand operation of `C` over its pushed operand, by its
+// `respects` lemma.
+fn cast_respects1(o: CastOpRef, h, x: Handle, px: Pushed) → Tac<Pushed> {
+    match px.proof {
+        None => cast_kept(h),
+        Some(p) => {
+            let e: Expr = App(App(App(Global(o.respects), Hd(x)), Hd(px.to)), p);
+            cast_rhs(e).bind(λ r => Pure(match r { None => Pushed(h, None), Some(to) => Pushed(to, Some(e)) }))
+        },
+    }
+}
+
+fn cast_respects2(C: CastAt, o: CastOpRef, h, x, y: Handle, px, py: Pushed) → Tac<Pushed> {
+    let e: Expr = App(App(App(App(App(App(Global(o.respects), Hd(x)), Hd(px.to)), Hd(y)), Hd(py.to)), cast_or_refl(C, x, px.proof)), cast_or_refl(C, y, py.proof));
+    match px.proof {
+        None => match py.proof {
+            None => cast_kept(h),
+            Some(_) => cast_rhs(e).bind(λ r => Pure(match r { None => Pushed(h, None), Some(to) => Pushed(to, Some(e)) })),
+        },
+        Some(_) => cast_rhs(e).bind(λ r => Pure(match r { None => Pushed(h, None), Some(to) => Pushed(to, Some(e)) })),
+    }
+}
+
+// `h` read to its normal form at `C`: an operation of `C` has its operands
+// read; an image an edge moves is moved and the result read again; anything
+// else is a leaf.
+fn cast_push(C: CastAt, h: Handle, fuel: Nat) → Tac<Pushed> {
+    match fuel {
+        Zero => cast_kept(h),
+        Succ(k) => view(h).bind(λ v => match v {
+            HGlobal(f, _, args) => match cast_op_in(f, C.ops) {
+                Some(o) => match args {
+                    Nil => cast_kept(h),
+                    Cons(x, more) => match more {
+                        Nil => cast_push(C, x, k).bind(λ px => cast_respects1(o, h, x, px)),
+                        Cons(y, rest) => match rest {
+                            Nil => cast_push(C, x, k).bind(λ px => cast_push(C, y, k).bind(λ py => cast_respects2(C, o, h, x, y, px, py))),
+                            Cons(_, _) => cast_kept(h),
+                        },
+                    },
+                },
+                None => cast_move(h, 4).bind(λ m => match m {
+                    None => cast_kept(h),
+                    Some(mv) => cast_push(C, mv.to, k).bind(λ rest => Pure(cast_join(C, h, Pushed(mv.to, Some(mv.proof)), rest))),
+                }),
+            },
+            _ => cast_kept(h),
+        }),
+    }
+}
+
+fn cast_fuel() → Nat { 64 }
+
+// A relation's two sides, where the handle is a relation applied to two.
+record Sides { rel: GlobalRef, l: Handle, r: Handle }
+
+fn cast_sides(t: Handle) → Tac<Option<Sides>> {
+    view(t).bind(λ v => Pure(match v { HGlobal(g, _, Cons(l, Cons(r, Nil))) => Some(Sides(g, l, r)), _ => None }))
+}
+
+fn cast_carried(C: CastAt, G, F: Sides, el, er: Pushed, f: Expr) → Expr {
+    let pl: Expr = cast_or_refl(C, F.l, el.proof);
+    let pr: Expr = cast_or_refl(C, F.r, er.proof);
+    match G.rel.id.same(C.same.id) {
+        // `G.l ≈ F.l ≈ F.r ≈ G.r`.
+        True => {
+            let back: Expr = App(App(App(Global(C.sym), Hd(F.l)), Hd(G.l)), pl);
+            let tail: Expr = App(App(App(App(App(Global(C.trans), Hd(F.l)), Hd(F.r)), Hd(G.r)), f), pr);
+            App(App(App(App(App(Global(C.trans), Hd(G.l)), Hd(F.l)), Hd(G.r)), back), tail)
+        },
+        False => {
+            let resp: GlobalRef = match G.rel.id.same(C.le.id) { True => C.le_respects, False => C.lt_respects };
+            App(App(App(App(App(App(App(Global(resp), Hd(F.l)), Hd(G.l)), Hd(F.r)), Hd(G.r)), pl), pr), f)
+        },
+    }
+}
+
+// The proof of the goal `G` from `f: F`, where `G` and `F` are one relation
+// of `C` whose sides agree in normal form; `None` where they do not.
+fn cast_carry(C: CastAt, G, F: Sides, f: Expr) → Tac<Option<Expr>> {
+    match G.rel.id.same(F.rel.id) {
+        False => Pure(None),
+        True => cast_push(C, G.l, cast_fuel()).bind(λ gl => cast_push(C, G.r, cast_fuel()).bind(λ gr =>
+            cast_push(C, F.l, cast_fuel()).bind(λ fl => cast_push(C, F.r, cast_fuel()).bind(λ fr =>
+            defeq(Hd(gl.to), Hd(fl.to)).bind(λ sl => defeq(Hd(gr.to), Hd(fr.to)).bind(λ sr => match sl && sr {
+                False => Pure(None),
+                True => {
+                    // `F.l ≈ G.l` and `F.r ≈ G.r`, through the normal forms.
+                    let el: Pushed = cast_join(C, F.l, fl, Pushed(G.l, cast_sym(C, G.l, gl)));
+                    let er: Pushed = cast_join(C, F.r, fr, Pushed(G.r, cast_sym(C, G.r, gr)));
+                    Pure(Some(match el.proof {
+                        None => match er.proof { None => f, Some(_) => cast_carried(C, G, F, el, er, f) },
+                        Some(_) => cast_carried(C, G, F, el, er, f),
+                    }))
+                },
+            }))))))
+    }
+}
+
+// `f` read through one edge into the carrier `target`: the edge's law for
+// the relation `rel` of the goal (`le_law`, `lt_law`, `respects_law`), one
+// candidate per edge.
+fn cast_lift_law(G: Sides, C: CastAt) → String {
+    match G.rel.id.same(C.le.id) {
+        True => cast_le_law(),
+        False => match G.rel.id.same(C.lt.id) { True => cast_lt_law(), False => cast_respects_law() },
+    }
+}
+
+// The candidate with `f` as its last argument, if it checks.
+fn cast_lift_one(f: Expr, target: Handle, c: Candidate) → Tac<Option<Expr>> {
+    cast_built(Candidate(c.law, c.edge, c.args, Some(f)), target).bind(λ b => match b {
+        None => Pure(None),
+        Some(e) => infer(e).bind(λ r => Pure(match r { Refused(_) => None, Accepted(_) => Some(e) })),
+    })
+}
+
+fn cast_lift_each(f: Expr, target: Handle, cs: List<Candidate>) → Tac<List<Expr>> {
+    match cs {
+        Nil => Pure([]),
+        Cons(c, rest) => mark().bind(λ m => attempt(cast_lift_one(f, target, c)).bind(λ o => match o {
+            Done(r) => match r {
+                Some(e) => cast_lift_each(f, target, rest).bind(λ more => Pure(Cons(e, more))),
+                None => restore(m).bind(λ _ => cast_lift_each(f, target, rest)),
+            },
+            Failed(_, _) => cast_lift_each(f, target, rest),
+        })),
+    }
+}
+
+// The carrier's type, as the domain of its `refl` (a type name is not an
+// `Expr` the host reads as a type).
+fn cast_carrier_type(C: CastAt) → Tac<Option<Handle>> {
+    infer(Global(C.refl)).bind(λ c => match c {
+        Refused(_) => Pure(None),
+        Accepted(ty) => open(ty, "x").bind(λ o => Pure(match o { Refused(_) => None, Accepted(op) => Some(op.local.ty) })),
+    })
+}
+
+fn cast_ups_at(fs: List<Expr>, law: GlobalRef, edges: List<GlobalRef>, target: Handle) → Tac<List<Expr>> {
+    match fs {
+        Nil => Pure([]),
+        Cons(f, rest) => infer(f).bind(λ c => match c {
+            Refused(_) => cast_ups_at(rest, law, edges, target),
+            Accepted(ty) => cast_sides(ty).bind(λ s => match s {
+                None => cast_ups_at(rest, law, edges, target),
+                Some(F) => cast_lift_each(f, target, cast_at_edges(law, edges, [F.l, F.r])).bind(λ here =>
+                    cast_ups_at(rest, law, edges, target).bind(λ more => Pure(here ++ more))),
+            }),
+        }),
+    }
+}
+
+// Each of `fs` read through each edge into `C` by `law`.
+fn cast_ups(fs: List<Expr>, law: GlobalRef, edges: List<GlobalRef>, C: CastAt) → Tac<List<Expr>> {
+    cast_carrier_type(C).bind(λ t => match t {
+        None => Pure([]),
+        Some(target) => cast_ups_at(fs, law, edges, target),
+    })
+}
+
+// `fs` read into each of `cs`, for a second edge after.
+fn cast_ups_among(fs: List<Expr>, law: GlobalRef, edges: List<GlobalRef>, cs: List<CastAt>) → Tac<List<Expr>> {
+    match cs { Nil => Pure([]), Cons(C, rest) => cast_ups(fs, law, edges, C).bind(λ a => cast_ups_among(fs, law, edges, rest).bind(λ b => Pure(a ++ b))) }
+}
+
+fn cast_first_carry(C: CastAt, G: Sides, fs: List<Expr>) → Tac<Option<Expr>> {
+    match fs {
+        Nil => Pure(None),
+        Cons(f, rest) => infer(f).bind(λ c => match c {
+            Refused(_) => cast_first_carry(C, G, rest),
+            Accepted(ty) => cast_sides(ty).bind(λ s => match s {
+                None => cast_first_carry(C, G, rest),
+                Some(F) => mark().bind(λ m => attempt(cast_carry(C, G, F, f)).bind(λ o => match o {
+                    Done(r) => match r { Some(e) => Pure(Some(e)), None => restore(m).bind(λ _ => cast_first_carry(C, G, rest)) },
+                    Failed(_, _) => cast_first_carry(C, G, rest),
+                })),
+            }),
+        }),
+    }
+}
+
+// `cast_from(h)`: the goal, from `h`, where the two agree once every cast is
+// read through the edges' laws: `h` may state the goal with its images
+// pushed in or out, or at a carrier an edge maps into the goal's (`h: a <= b`
+// at `Dyadic` for a goal at `CReal`, two edges deep).
+// The goal from `fs` read through edges, one more edge each round: first
+// straight into the goal's carrier, then through another carrier first.
+fn cast_from_lifted(C: CastAt, G: Sides, fs: List<Expr>, depth: Nat, law: GlobalRef, edges: List<GlobalRef>, cs: List<CastAt>) → Tac<Expr> {
+    match depth {
+        Zero => fail("cast_from: the fact and the goal differ once their casts are read", []),
+        Succ(d) => cast_ups(fs, law, edges, C).bind(λ ups => cast_first_carry(C, G, ups).bind(λ o => match o {
+            Some(e) => Pure(e),
+            None => match d {
+                Zero => fail("cast_from: the fact and the goal differ once their casts are read", []),
+                Succ(_) => cast_ups_among(fs, law, edges, cs).bind(λ mids => cast_from_lifted(C, G, mids, d, law, edges, cs)),
+            },
+        })),
+    }
+}
+
+fn cast_from_at(h: Expr, depth: Nat) → Tac<Expr> {
+    goal().bind(λ g => cast_sides(g.target).bind(λ gs => match gs {
+        None => fail("cast_from: the goal is not a relation between two sides", []),
+        Some(G) => cast_ats(cast_carriers()).bind(λ cs => match cast_rel_in(G.rel, cs) {
+            None => fail("cast_from: the goal's relation is not one of a carrier the casts are read at", []),
+            Some(C) => cast_first_carry(C, G, [h]).bind(λ direct => match direct {
+                Some(e) => Pure(e),
+                None => cast_resolved(cast_edges()).bind(λ edges => cast_try_global(cast_lift_law(G, C)).bind(λ lo => match lo {
+                    None => fail("cast_from: the fact and the goal differ once their casts are read", []),
+                    Some(law) => cast_from_lifted(C, G, [h], depth, law, edges, cs),
+                })),
+            }),
+        }),
+    }))
+}
+
+fn cast_from(h: Expr, depth: Nat := 2) → Tac<Expr> { cast_from_at(h, depth) }
+
+// `cast_to(S, prove)`: the goal by `S`, stated as wanted (at the goal's
+// carrier or one an edge maps into it) and proved by `prove`, then carried
+// to the goal by `cast_from`.
+fn cast_to(S: Expr, prove: Tac<Expr>, depth: Nat := 2) → Tac<Expr> {
+    as_type(S).bind(λ c => match c {
+        Refused(why) => fail("cast_to: the statement is not a type: " ++ why, []),
+        Accepted(t) => goal().bind(λ g => focus(GoalInfo(t, g.locals), prove).bind(λ p => cast_from_at(p, depth))),
+    })
+}

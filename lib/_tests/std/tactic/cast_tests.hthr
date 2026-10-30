@@ -3,7 +3,7 @@
 // (lib/std/tactic/cast.hthr; docs/casting-design.md §6.4). Tests, not
 // library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import mono;
+import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import cast; import mono;
 import relation_props; import algebra_rel; import semiring; import ordered_field; import morphism; import dyadic;
 
 // An image of an operation is read as the operation of the images, on
@@ -25,6 +25,26 @@ theorem int_add(m, n: Int, x, y: Rat, hm: Rat::ofInt(m) <= x, hn: Rat::ofInt(n) 
 // An image of an image: `≈` is carried through the outer edge.
 theorem two_edges(a, c: Dyadic, x, y: CReal, hx: CReal::ofRat(a.rat()) <= x, hy: CReal::ofRat(c.rat()) <= y): CReal::ofRat((a + c).rat()) <= x + y { by mono() }
 
+// A fact stated with its casts read another way closes the goal: the
+// images pushed to the leaves on one side and not the other.
+theorem pushed_fact(a, b, c: Dyadic, x: Rat, h: a.rat() + b.rat() * c.rat() <= x): (a + b * c).rat() <= x { by mono() }
+
+// `cast_from(h)`: the goal from `h`, the two agreeing once their casts are
+// read, with `h` pushed in, pulled out, at a carrier an edge maps in (one
+// or two edges deep), or an `≈`.
+theorem from_pushed(a, b, c: Dyadic, x: Rat, h: a.rat() + b.rat() * c.rat() <= x): (a + b * c).rat() <= x { by cast_from(h) }
+theorem from_pulled(a, c: Dyadic, x: Rat, h: (a + c).rat() <= x): a.rat() + c.rat() <= x { by cast_from(h) }
+theorem from_source(a, b: Dyadic, h: a <= b): a.rat() <= b.rat() { by cast_from(h) }
+theorem from_two_edges(a, b: Dyadic, h: a < b): CReal::ofRat(a.rat()) < CReal::ofRat(b.rat()) { by cast_from(h) }
+theorem from_same(a, c: Dyadic): (a + c).rat() ≈ a.rat() + c.rat() { by cast_from(Rat::same_refl(a.rat() + c.rat())) }
+// An `Int` fact read at `Rat`: the numeral `1` at `Rat` is `Rat::ofInt`'s
+// image of `Int`'s, so `m + 1` pushes to `ofInt(m) + 1`.
+theorem from_int(m, n: Int, h: m + 1 <= n): Rat::ofInt(m) + 1 <= Rat::ofInt(n) { by cast_from(h) }
+
+// `cast_to(S, prove)`: the goal stated as wanted, proved by `prove`.
+theorem to_pushed(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x, hy: c.rat() <= y): (a + c).rat() <= x + y { by cast_to(a.rat() + c.rat() <= x + y, mono()) }
+theorem to_source(a, b: Dyadic, x: Rat, h: a <= b): a.rat() <= b.rat() { by cast_to(a <= b, assumption()) }
+
 // The edges as values: their laws are their fields.
 theorem field_add(a, c: Dyadic): (a + c).rat() ≈ a.rat() + c.rat() { OrderedRingHom::add_law<Dyadic, Rat>(Dyadic::rat_hom(), a, c) }
 theorem field_reflect(p, q: Rat, h: CReal::ofRat(p) <= CReal::ofRat(q)): p <= q { OrderedRingHom::le_of_map_law<Rat, CReal>(CReal::ofRat_hom(), p, q, h) }
@@ -33,6 +53,10 @@ theorem field_reflect(p, q: Rat, h: CReal::ofRat(p) <= CReal::ofRat(q)): p <= q 
 // reported as `mono` reports any goal it cannot prove.
 // expect-error: mono: nothing proves this goal
 theorem no_law(a: Dyadic, p: Nat, x: Rat, h: a.rat() <= x): a.down(p).rat() <= x { by mono() }
+// Casts read differently are still the same statement or nothing: a fact
+// that differs by more than its casts does not carry.
+// expect-error: cast_from: the fact and the goal differ once their casts are read
+theorem from_other(a, c: Dyadic, x: Rat, h: (a * c).rat() <= x): a.rat() + c.rat() <= x { by cast_from(h) }
 // The facts must still be there: a cast step does not invent a bound.
 // expect-error: mono: nothing proves this goal
 theorem no_fact(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x): (a + c).rat() <= x + y { by mono() }

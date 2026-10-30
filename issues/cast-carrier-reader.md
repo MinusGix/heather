@@ -36,3 +36,7 @@ laws), `interval.hthr`'s `widen_has`, and the `rat_add`/`rat_mul` calls in
 
 - **[[casting-standard]]** owns the edges and the surface. Assumed here:
   only that an edge is an `OrderedRingHom` value whose fields are its laws.
+
+## Log
+
+- 2026-10-30: Slice 2 (docs/casting-design.md §10): cast_push normal form over a carrier table (Rat, CReal), cast_from(h) (pushed/pulled/lifted one or two edges/≈), cast_to(S, prove), and mono closes a goal from a fact that agrees through casts. Left here: ring/linarith/omega on the same normal form, a located diagnostic for a disagreement, 0/1/sub moves, Nat→Int, and the slice-1 customers listed above.
