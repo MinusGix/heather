@@ -442,11 +442,11 @@ fn nety<'v>(n: &VNeTy<'v>, o: Outer<'v>) -> VNeTy<'v> {
     }
 }
 
-pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
+pub fn vty<'v>(v: &'v VTy<'v>, o: Outer<'v>) -> &'v VTy<'v> {
     if o.is_none() {
-        return Rc::clone(v);
+        return v;
     }
-    Rc::new(match &**v {
+    o.arena.vty(match &*v {
         VTy::Nat => VTy::Nat,
         VTy::Ty(l) => VTy::Ty(level(l, o)),
         VTy::Unit { level: l } => VTy::Unit { level: level(l, o) },
@@ -536,11 +536,11 @@ pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
     })
 }
 
-pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
+pub fn val<'v>(v: &'v Val<'v>, o: Outer<'v>) -> &'v Val<'v> {
     if o.is_none() {
-        return Rc::clone(v);
+        return v;
     }
-    Rc::new(match &**v {
+    o.arena.val(match &*v {
         Val::TmNat => Val::TmNat,
         Val::TmTy(l) => Val::TmTy(level(l, o)),
         Val::TmUnit { level: l } => Val::TmUnit { level: level(l, o) },

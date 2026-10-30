@@ -25,7 +25,6 @@
 //! program's code (`CodeResident`, a conjunction per byte) is the case that
 //! decided it.
 
-use std::sync::Arc as Rc;
 
 use heather_kernel::eval::Eval;
 use heather_kernel::reduce::Defs;
@@ -80,7 +79,7 @@ impl<'v> Walk<'_, '_, 'v> {
     /// learn that `True` and `False` carry nothing. Not under a `Σ`'s first
     /// component, where an unknown makes the whole statement unknown but a no
     /// goes on to the second.
-    fn data(&mut self, ty: Rc<VTy<'v>>, depth: u32, last: bool) -> Option<bool> {
+    fn data(&mut self, ty: &'v VTy<'v>, depth: u32, last: bool) -> Option<bool> {
         self.nodes = self.nodes.checked_sub(1)?;
         if last && self.never_data(&ty, depth) {
             return Some(false);
@@ -148,9 +147,9 @@ impl<'v> Walk<'_, '_, 'v> {
     /// own ([`Family::never`]) with its own fuel, so the arguments — however
     /// much they would compute — are never forced, and the main walk's fuel
     /// and nodes are untouched. A `false` here only means "not shown".
-    fn never_data(&mut self, ty: &Rc<VTy<'v>>, depth: u32) -> bool {
-        let VTy::Neutral(VNeTy::El { level, tm }) = &**ty else { return false };
-        let Val::Neutral(n) = &**tm else { return false };
+    fn never_data(&mut self, ty: &'v VTy<'v>, depth: u32) -> bool {
+        let VTy::Neutral(VNeTy::El { level, tm }) = &*ty else { return false };
+        let Val::Neutral(n) = &*tm else { return false };
         let Head::Global { var, subst } = &n.head else { return false };
         if n.unfold.is_none() || n.spine.is_empty() || !n.spine.iter_rev().all(|e| e.is_application()) {
             return false;
@@ -163,7 +162,7 @@ impl<'v> Walk<'_, '_, 'v> {
         let mut fresh = depth;
         for e in args {
             let Elim::App { ann, .. } = e else { return false };
-            let x = self.arena.tm(TmClo::val(Rc::new(Val::var(fresh))));
+            let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(fresh))));
             fresh += 1;
             let Ok(next) = family.ev.elim(head, Elim::App { ann: ann.clone(), arg: x }) else { return false };
             head = next;
@@ -174,8 +173,8 @@ impl<'v> Walk<'_, '_, 'v> {
     }
 
     /// A one-binder type closure under a fresh variable at level `depth`.
-    fn under(&mut self, clo: &'v TyClo<'v>, depth: u32) -> Option<Rc<VTy<'v>>> {
-        let x = self.arena.tm(TmClo::val(Rc::new(Val::var(depth))));
+    fn under(&mut self, clo: &'v TyClo<'v>, depth: u32) -> Option<&'v VTy<'v>> {
+        let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(depth))));
         self.ev.apply_ty(clo, &[x]).ok()
     }
 }
@@ -192,7 +191,7 @@ struct Family<'e, 'a, 'v> {
 }
 
 impl<'v> Family<'_, '_, 'v> {
-    fn never(&mut self, ty: Rc<VTy<'v>>, depth: u32) -> bool {
+    fn never(&mut self, ty: &'v VTy<'v>, depth: u32) -> bool {
         let Some(nodes) = self.nodes.checked_sub(1) else { return false };
         self.nodes = nodes;
         let Ok(ty) = self.ev.delta_whnf_ty(ty) else { return false };
@@ -203,7 +202,7 @@ impl<'v> Family<'_, '_, 'v> {
                 let Val::Neutral(n) = &**tm else { return false };
                 let Some(Elim::Case { case_l, case_r, .. }) = n.spine.last() else { return false };
                 [*case_l, *case_r].into_iter().all(|arm| {
-                    let x = self.arena.tm(TmClo::val(Rc::new(Val::var(depth))));
+                    let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(depth))));
                     let Ok(code) = self.ev.apply(arm, &[x]) else { return false };
                     let at = self.arena.ty_el(level.clone(), self.arena.tm(TmClo::val(code)));
                     match self.ev.force_ty(at) {

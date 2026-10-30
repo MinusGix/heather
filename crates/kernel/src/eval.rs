@@ -76,11 +76,12 @@ type Res<T> = Result<T, OutOfFuel>;
 // ---------------------------------------------------------------------------
 
 fn neutral<'v>(
+    arena: &'v ValueArena<'v>,
     head: Head<'v>,
     spine: ElimSpine<'v>,
     unfold: Option<&'v TmClo<'v>>,
-) -> Rc<Val<'v>> {
-    Rc::new(Val::Neutral(Rc::new(VNeutral { head, spine, unfold })))
+) -> &'v Val<'v> {
+    arena.val(Val::Neutral(Rc::new(VNeutral { head, spine, unfold })))
 }
 
 // -- materializing a closure's pending global offset -------------------------
@@ -163,9 +164,9 @@ fn under_binder_ty<'v>(
 /// An eliminator applied to something it cannot eliminate. Unreachable on
 /// well-typed input — `reduce.rs` is equally stuck there — but represented
 /// rather than panicked on, so no input reaches undefined behaviour.
-fn stuck<'v>(arena: &'v ValueArena<'v>, head: &Rc<Val<'v>>, e: &Elim<'v>) -> Rc<Val<'v>> {
+fn stuck<'v>(arena: &'v ValueArena<'v>, head: &'v Val<'v>, e: &Elim<'v>) -> &'v Val<'v> {
     let spine = arena.elim(ElimSpine::empty(), e.clone());
-    neutral(Head::Stuck(Rc::clone(head)), spine, None)
+    neutral(arena, Head::Stuck(head), spine, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +176,7 @@ fn stuck<'v>(arena: &'v ValueArena<'v>, head: &Rc<Val<'v>>, e: &Elim<'v>) -> Rc<
 /// A pending reduction, in the tail position of [`Eval::drive`]'s loop.
 enum Work<'v> {
     /// Already a weak head value.
-    Val(Rc<Val<'v>>),
+    Val(&'v Val<'v>),
     /// `eval(t, ρ)`.
     Eval(Rc<Term>, Env<'v>),
     /// Force a 0-binder sub-structure.
@@ -186,7 +187,7 @@ enum Work<'v> {
     /// must not allocate a vector to say so.
     Apply1(&'v TmClo<'v>, &'v TmClo<'v>),
     /// Eliminate a weak head value.
-    Elim(Rc<Val<'v>>, Elim<'v>),
+    Elim(&'v Val<'v>, Elim<'v>),
 }
 
 /// What [`Eval::fire_instantiate`] substitutes into a binder's body.
@@ -218,13 +219,13 @@ enum Frame<'v> {
     /// tail conversion keeps, so an open wrapper is not normalized away.
     NatRunTail {
         program: Rc<ContextProgram<()>>,
-        glued: Option<Rc<Val<'v>>>,
+        glued: Option<&'v Val<'v>>,
     },
     /// A synchronous fold (`head`, a `NatSync`) waiting for its unfolded
     /// right-hand counter; the application `app` is retried with the value
     /// that flows back in place of its argument.
     SyncArg {
-        head: Rc<Val<'v>>,
+        head: &'v Val<'v>,
         app: Rc<Elim<'v>>,
     },
 }
@@ -336,7 +337,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         self.depth = frames;
     }
 
-    fn vclo(&self, value: Rc<Val<'v>>) -> &'v TmClo<'v> {
+    fn vclo(&self, value: &'v Val<'v>) -> &'v TmClo<'v> {
         self.arena.tm(TmClo::val(value))
     }
 
@@ -347,7 +348,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     ) -> &'v TmClo<'v> {
         match program {
             None => tail,
-            Some(program) => self.vclo(Rc::new(Val::NatRun { program, tail })),
+            Some(program) => self.vclo(self.arena.val(Val::NatRun { program, tail })),
         }
     }
 
@@ -414,7 +415,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// where its depth is the syntax's and the rewriter's own — *except* when
     /// a value nests scrutinees, which is why each re-entry is counted
     /// against [`NATIVE_DEPTH_LIMIT`] (docs/native-depth-budget-design.md).
-    fn drive(&mut self, start: Work<'v>) -> Res<Rc<Val<'v>>> {
+    fn drive(&mut self, start: Work<'v>) -> Res<&'v Val<'v>> {
         if self.depth >= NATIVE_DEPTH_LIMIT {
             return Err(OutOfFuel);
         }
@@ -434,7 +435,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// ones is a call to a function kept out of line, so this frame holds
     /// only `work` and what the next call needs, and a re-entry costs that
     /// rather than the union of every arm's locals.
-    fn drive_from(&mut self, start: Work<'v>, floor: usize) -> Res<Rc<Val<'v>>> {
+    fn drive_from(&mut self, start: Work<'v>, floor: usize) -> Res<&'v Val<'v>> {
         let mut work = start;
         loop {
             // Every arm writes the one `next`, so the frame holds one `Work`
@@ -482,7 +483,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             return Work::Val(v);
         }
         match c {
-            TmClo::Val(v) => Work::Val(Rc::clone(v)),
+            TmClo::Val(v) => Work::Val(*v),
             TmClo::Syn { env, body, .. } => {
                 let w = Work::Eval(Rc::clone(body), *env);
                 self.frames.push(Frame::Memo(c));
@@ -499,7 +500,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// A value flowing back into the frame it was popped from.
     #[inline(never)]
-    fn step_return(&mut self, frame: Frame<'v>, v: Rc<Val<'v>>) -> Res<Work<'v>> {
+    fn step_return(&mut self, frame: Frame<'v>, v: &'v Val<'v>) -> Res<Work<'v>> {
         Ok(match frame {
             // A thunk records its value only on success.
             Frame::Memo(c) => {
@@ -516,7 +517,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             Frame::NatRunTail { program, glued } => match &*v {
                 Val::NatRun { program: inner, tail } => {
-                    Work::Val(Rc::new(Val::NatRun {
+                    Work::Val(self.arena.val(Val::NatRun {
                         program: ContextProgram::append(program, Rc::clone(inner)),
                         tail: *tail,
                     }))
@@ -524,15 +525,15 @@ impl<'a, 'v> Eval<'a, 'v> {
                 Val::Neutral(n) if n.unfold.is_some() => {
                     self.spend()?;
                     let unfold = n.unfold.unwrap();
-                    let glued = glued.or_else(|| Some(Rc::clone(&v)));
+                    let glued = glued.or_else(|| Some(v));
                     self.frames.push(Frame::NatRunTail { program, glued });
                     Work::Force(unfold)
                 }
                 Val::Neutral(_) => {
                     let tail = glued.unwrap_or(v);
-                    Work::Val(Rc::new(Val::NatRun { program, tail: self.vclo(tail) }))
+                    Work::Val(self.arena.val(Val::NatRun { program, tail: self.vclo(tail) }))
                 }
-                _ => Work::Val(Rc::new(Val::NatRun { program, tail: self.vclo(v) })),
+                _ => Work::Val(self.arena.val(Val::NatRun { program, tail: self.vclo(v) })),
             },
         })
     }
@@ -541,17 +542,17 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// Force a 0-binder sub-structure to its weak head value. Memoizes on
     /// success only.
-    pub fn force(&mut self, c: &'v TmClo<'v>) -> Res<Rc<Val<'v>>> {
+    pub fn force(&mut self, c: &'v TmClo<'v>) -> Res<&'v Val<'v>> {
         self.drive(Work::Force(c))
     }
 
     /// [`Eval::force`] for types.
-    pub fn force_ty(&mut self, c: &'v TyClo<'v>) -> Res<Rc<VTy<'v>>> {
+    pub fn force_ty(&mut self, c: &'v TyClo<'v>) -> Res<&'v VTy<'v>> {
         if let Some(v) = self.arena.memo_ty(c) {
             return Ok(v);
         }
         let v = match c {
-            TyClo::Val(v) => Rc::clone(v),
+            TyClo::Val(v) => *v,
             TyClo::Syn { env, body, .. } => {
                 let (env, body) = (*env, Rc::clone(body));
                 self.eval_ty(&body, &env)?
@@ -574,7 +575,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// Apply a closure to its pending binders' values, `args[0]` outermost.
     /// This is the operation that replaces `apply_local`: it allocates one
     /// environment cell per binder and copies nothing.
-    pub fn apply(&mut self, c: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> Res<Rc<Val<'v>>> {
+    pub fn apply(&mut self, c: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> Res<&'v Val<'v>> {
         let w = match args {
             [a] => Work::Apply1(c, *a),
             _ => Work::Apply(c, args.to_vec()),
@@ -585,7 +586,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// [`Eval::apply`] for type closures. A closure that is not syntactic has
     /// no pending binders and ignores them (`TyClo::Val` is a *constant*
     /// closure — the shape conversion's weakened annotations take).
-    pub fn apply_ty(&mut self, c: &'v TyClo<'v>, args: &[&'v TmClo<'v>]) -> Res<Rc<VTy<'v>>> {
+    pub fn apply_ty(&mut self, c: &'v TyClo<'v>, args: &[&'v TmClo<'v>]) -> Res<&'v VTy<'v>> {
         if args.is_empty() {
             return self.force_ty(c);
         }
@@ -605,7 +606,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// unfolding with spine comparison: a transparent wrapper may reveal the
     /// same head as the other side without requiring either body to normalize
     /// completely.
-    pub fn delta_step(&mut self, v: Rc<Val<'v>>) -> Res<Rc<Val<'v>>> {
+    pub fn delta_step(&mut self, v: &'v Val<'v>) -> Res<&'v Val<'v>> {
         let unfold = match &*v {
             Val::Neutral(n) => n.unfold,
             _ => None,
@@ -632,14 +633,14 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// loop is still needed — an application spine over a glued head is
     /// left glued by the replay — and it terminates because every round
     /// unfolds at least the innermost definition.
-    pub fn delta_whnf(&mut self, mut v: Rc<Val<'v>>) -> Res<Rc<Val<'v>>> {
+    pub fn delta_whnf(&mut self, mut v: &'v Val<'v>) -> Res<&'v Val<'v>> {
         let saved = std::mem::replace(&mut self.transparent, true);
         let out = loop {
-            let next = match self.delta_step(Rc::clone(&v)) {
+            let next = match self.delta_step(v) {
                 Ok(next) => next,
                 Err(e) => break Err(e),
             };
-            if Rc::ptr_eq(&next, &v) {
+            if Val::ptr_eq(next, v) {
                 break Ok(v);
             }
             v = next;
@@ -661,10 +662,10 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// that type's head former and reading the component closures off it —
     /// which is where the sharing this round is about comes from, because the
     /// components are closures over an environment and are never copied.
-    pub fn ty_to_former(&mut self, mut v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
+    pub fn ty_to_former(&mut self, mut v: &'v VTy<'v>) -> Res<&'v VTy<'v>> {
         while matches!(&*v, VTy::Neutral(_)) {
-            let d = self.delta_step_ty(Rc::clone(&v))?;
-            if Rc::ptr_eq(&d, &v) {
+            let d = self.delta_step_ty(v)?;
+            if VTy::ptr_eq(d, v) {
                 break;
             }
             v = d;
@@ -672,50 +673,50 @@ impl<'a, 'v> Eval<'a, 'v> {
         Ok(v)
     }
 
-    pub fn delta_step_ty(&mut self, v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
+    pub fn delta_step_ty(&mut self, v: &'v VTy<'v>) -> Res<&'v VTy<'v>> {
         enum Next<'v> {
             Done,
-            El(Level, Rc<Val<'v>>),
-            Vec(Level, &'v TyClo<'v>, Rc<Val<'v>>),
-            Fin(Rc<Val<'v>>),
-            DVec(Level, &'v TyClo<'v>, Rc<Val<'v>>),
+            El(Level, &'v Val<'v>),
+            Vec(Level, &'v TyClo<'v>, &'v Val<'v>),
+            Fin(&'v Val<'v>),
+            DVec(Level, &'v TyClo<'v>, &'v Val<'v>),
         }
         let next = match &*v {
-            VTy::Neutral(VNeTy::El { level, tm }) => Next::El(level.clone(), Rc::clone(tm)),
-            VTy::Vec { level, elem, len } => Next::Vec(level.clone(), *elem, Rc::clone(len)),
-            VTy::Fin { len } => Next::Fin(Rc::clone(len)),
-            VTy::DVec { level, len, fam } => Next::DVec(level.clone(), *fam, Rc::clone(len)),
+            VTy::Neutral(VNeTy::El { level, tm }) => Next::El(level.clone(), *tm),
+            VTy::Vec { level, elem, len } => Next::Vec(level.clone(), *elem, *len),
+            VTy::Fin { len } => Next::Fin(*len),
+            VTy::DVec { level, len, fam } => Next::DVec(level.clone(), *fam, *len),
             _ => Next::Done,
         };
         match next {
             Next::Done => Ok(v),
             Next::El(level, tm) => {
-                let d = self.delta_step(Rc::clone(&tm))?;
-                if Rc::ptr_eq(&d, &tm) {
+                let d = self.delta_step(tm)?;
+                if Val::ptr_eq(d, tm) {
                     Ok(v)
                 } else {
                     self.decode(&level, &d)
                 }
             }
             Next::Vec(level, elem, len) => {
-                let d = self.delta_step(Rc::clone(&len))?;
-                if Rc::ptr_eq(&d, &len) {
+                let d = self.delta_step(len)?;
+                if Val::ptr_eq(d, len) {
                     Ok(v)
                 } else {
                     self.vec_ty(&level, elem, &d)
                 }
             }
             Next::Fin(len) => {
-                let d = self.delta_step(Rc::clone(&len))?;
-                if Rc::ptr_eq(&d, &len) {
+                let d = self.delta_step(len)?;
+                if Val::ptr_eq(d, len) {
                     Ok(v)
                 } else {
                     self.fin_ty(&d)
                 }
             }
             Next::DVec(level, fam, len) => {
-                let d = self.delta_step(Rc::clone(&len))?;
-                if Rc::ptr_eq(&d, &len) {
+                let d = self.delta_step(len)?;
+                if Val::ptr_eq(d, len) {
                     Ok(v)
                 } else {
                     self.dvec_ty(&level, fam, &d)
@@ -726,14 +727,14 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// Force the glued unfoldings at a type's δ-stuck term until none
     /// remains.
-    pub fn delta_whnf_ty(&mut self, mut v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
+    pub fn delta_whnf_ty(&mut self, mut v: &'v VTy<'v>) -> Res<&'v VTy<'v>> {
         let saved = std::mem::replace(&mut self.transparent, true);
         let out = loop {
-            let next = match self.delta_step_ty(Rc::clone(&v)) {
+            let next = match self.delta_step_ty(v) {
                 Ok(next) => next,
                 Err(e) => break Err(e),
             };
-            if Rc::ptr_eq(&next, &v) {
+            if VTy::ptr_eq(next, v) {
                 break Ok(v);
             }
             v = next;
@@ -745,7 +746,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     // -- types --------------------------------------------------------------
 
     /// Evaluate a type to a weak head normal type value.
-    pub fn eval_ty(&mut self, t: &Type, env: &Env<'v>) -> Res<Rc<VTy<'v>>> {
+    pub fn eval_ty(&mut self, t: &Type, env: &Env<'v>) -> Res<&'v VTy<'v>> {
         let yclo = |env: &Env<'v>, body: &Rc<Type>| {
             self.arena.ty(TyClo::new(*env, Rc::clone(body)))
         };
@@ -864,7 +865,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 return self.dvec_ty(level, yclo(env, fam), &lv);
             }
         };
-        Ok(Rc::new(v))
+        Ok(self.arena.vty(v))
     }
 
     /// `El^l v` — decode an encoding *value*, or leave the neutral `El`.
@@ -872,7 +873,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// The decoded children are built as `El` **syntax** over the encoding
     /// child's own closure, so the decode stays one step deep: a `Π` is weak
     /// head normal and its domain is not reduced until someone asks.
-    fn decode(&mut self, level: &Level, v: &Rc<Val<'v>>) -> Res<Rc<VTy<'v>>> {
+    fn decode(&mut self, level: &Level, v: &'v Val<'v>) -> Res<&'v VTy<'v>> {
         // `El^l c` as a lazy type. When `c` has syntax the `El` is built as
         // syntax over the child's own closure — one step deep, so a decoded
         // `Π`'s domain is not reduced until someone asks; otherwise the
@@ -888,9 +889,9 @@ impl<'a, 'v> Eval<'a, 'v> {
             })
         };
         let stuck_el =
-            || Ok(Rc::new(VTy::Neutral(VNeTy::El { level: level.clone(), tm: Rc::clone(v) })));
+            || Ok(arena.vty(VTy::Neutral(VNeTy::El { level: level.clone(), tm: v })));
 
-        let decoded = match &**v {
+        let decoded = match &*v {
             Val::TmNat => VTy::Nat,
             Val::TmTy(l) => VTy::Ty(l.clone()),
             Val::TmUnit { level } => VTy::Unit { level: level.clone() },
@@ -1036,7 +1037,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             _ => return stuck_el(),
         };
         self.spend()?;
-        Ok(Rc::new(decoded))
+        Ok(self.arena.vty(decoded))
     }
 
     /// `Vec^l(T; k)`: `0 ⇝ Unit^l`, `S k ⇝ Σ(_ : T). Vec^l(T; k)`, stuck
@@ -1052,9 +1053,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         &mut self,
         level: &Level,
         elem: &'v TyClo<'v>,
-        len: &Rc<Val<'v>>,
-    ) -> Res<Rc<VTy<'v>>> {
-        let out = match &**len {
+        len: &'v Val<'v>,
+    ) -> Res<&'v VTy<'v>> {
+        let out = match &*len {
             Val::Zero => {
                 self.spend()?;
                 VTy::Unit { level: level.clone() }
@@ -1081,10 +1082,10 @@ impl<'a, 'v> Eval<'a, 'v> {
             _ => VTy::Vec {
                 level: level.clone(),
                 elem,
-                len: Rc::clone(len),
+                len: len,
             },
         };
-        Ok(Rc::new(out))
+        Ok(self.arena.vty(out))
     }
 
     /// `DVec^l(k; i. F)`: `0 ⇝ Unit^l`,
@@ -1107,13 +1108,13 @@ impl<'a, 'v> Eval<'a, 'v> {
         &mut self,
         level: &Level,
         fam: &'v TyClo<'v>,
-        len: &Rc<Val<'v>>,
-    ) -> Res<Rc<VTy<'v>>> {
-        let stuck = || Ok(Rc::new(VTy::DVec { level: level.clone(), len: Rc::clone(len), fam }));
-        let pred = match &**len {
+        len: &'v Val<'v>,
+    ) -> Res<&'v VTy<'v>> {
+        let stuck = || Ok(self.arena.vty(VTy::DVec { level: level.clone(), len: len, fam }));
+        let pred = match &*len {
             Val::Zero => {
                 self.spend()?;
-                return Ok(Rc::new(VTy::Unit { level: level.clone() }));
+                return Ok(self.arena.vty(VTy::Unit { level: level.clone() }));
             }
             Val::Succ(pred) => *pred,
             Val::NatRun { program, tail } => Val::nat_run_pred(self.arena, program, tail),
@@ -1138,14 +1139,14 @@ impl<'a, 'v> Eval<'a, 'v> {
             )),
         };
         let snd = self.arena.ty(TyClo::new(fenv.push(self.arena, pred), Rc::new(tail)));
-        Ok(Rc::new(VTy::Sigma { fst_level: level.clone(), snd_level: level.clone(), fst, snd }))
+        Ok(self.arena.vty(VTy::Sigma { fst_level: level.clone(), snd_level: level.clone(), fst, snd }))
     }
 
     /// `Fin(k)`: `0 ⇝ Empty^0`, `S k ⇝ Unit^0 +^{0,0} Fin(k)`, stuck
     /// otherwise. Both reducts are closed apart from the predecessor, which
     /// again rides in the environment.
-    fn fin_ty(&mut self, len: &Rc<Val<'v>>) -> Res<Rc<VTy<'v>>> {
-        let out = match &**len {
+    fn fin_ty(&mut self, len: &'v Val<'v>) -> Res<&'v VTy<'v>> {
+        let out = match &*len {
             Val::Zero => {
                 self.spend()?;
                 VTy::Empty { level: Level::Zero }
@@ -1183,9 +1184,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                     )),
                 }
             }
-            _ => VTy::Fin { len: Rc::clone(len) },
+            _ => VTy::Fin { len: len },
         };
-        Ok(Rc::new(out))
+        Ok(self.arena.vty(out))
     }
 
     /// A local substitution inside a neutral: its terms become **values**,
@@ -1202,7 +1203,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     // -- terms --------------------------------------------------------------
 
     /// Evaluate a term to a weak head normal value.
-    pub fn eval_tm(&mut self, t: &Rc<Term>, env: &Env<'v>) -> Res<Rc<Val<'v>>> {
+    pub fn eval_tm(&mut self, t: &Rc<Term>, env: &Env<'v>) -> Res<&'v Val<'v>> {
         self.eval_tm_ref(t, env)
     }
 
@@ -1210,7 +1211,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// conversion, which is syntax lent to the checker. Wrapping it in an
     /// `Rc` just to start the machine cost 1.3× on `nat/check-numeral`, whose
     /// every conversion is one `Nat ≈ Nat`.
-    pub fn eval_tm_ref(&mut self, t: &Term, env: &Env<'v>) -> Res<Rc<Val<'v>>> {
+    pub fn eval_tm_ref(&mut self, t: &Term, env: &Env<'v>) -> Res<&'v Val<'v>> {
         let w = self.step_eval(t, env)?;
         self.drive(w)
     }
@@ -1232,7 +1233,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// application is β and reads nothing of the site's Π annotation, where
     /// a stuck application would keep the first site's annotation in its
     /// spine.
-    fn eval_projected(&mut self, pair: &Rc<Term>, env: &Env<'v>) -> Res<Rc<Val<'v>>> {
+    fn eval_projected(&mut self, pair: &Rc<Term>, env: &Env<'v>) -> Res<&'v Val<'v>> {
         let (fun, arg) = match &**pair {
             Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => (fun, arg),
             _ => return self.eval_tm(pair, env),
@@ -1304,7 +1305,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             Term::VecLit { .. } => return self.step_vec_lit(t, env),
             _ => return self.step_intro(t, env),
         };
-        Ok(Work::Val(Rc::new(v)))
+        Ok(Work::Val(self.arena.val(v)))
     }
 
     /// [`Eval::step_eval`] at a former that is not an elimination.
@@ -1408,7 +1409,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             Term::NatLit(n) if n.is_zero() => Val::Zero,
             Term::NatLit(n) => Val::NatRun {
                 program: nat_lit_program(n),
-                tail: self.arena.tm(TmClo::val(Rc::new(Val::Zero))),
+                tail: self.arena.tm(TmClo::val(self.arena.val(Val::Zero))),
             },
             Term::Succ(p) => Val::Succ(tclo(env, p)),
             Term::Refl { level, ty, tm } => Val::Refl {
@@ -1606,7 +1607,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
             _ => unreachable!("step_eval evaluates variables and eliminations itself"),
         };
-        Ok(Work::Val(Rc::new(v)))
+        Ok(Work::Val(self.arena.val(v)))
     }
 
     /// The eliminator of the elimination `t`, its closures over `env`; the
@@ -1907,14 +1908,14 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// `u^δ` alone, glued to its body when it has one: what evaluating
     /// `Term::GlobalTm` produces, for a reader that holds the head of a
     /// neutral and wants to apply it to arguments of its own.
-    pub fn global(&mut self, var: GlobalVar, subst: VSubst<'v>) -> Rc<Val<'v>> {
+    pub fn global(&mut self, var: GlobalVar, subst: VSubst<'v>) -> &'v Val<'v> {
         self.global_tm(var, subst)
     }
 
-    fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> Rc<Val<'v>> {
+    fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> &'v Val<'v> {
         let body = self.defs.body_unshifted(var).map(Rc::clone);
         let unfold = body.map(|body| self.glue(var, &subst, body));
-        neutral(Head::Global { var, subst }, ElimSpine::empty(), unfold)
+        neutral(self.arena, Head::Global { var, subst }, ElimSpine::empty(), unfold)
     }
 
     /// `body[δ]` for the global `var` as a closure: δ's payload values over
@@ -1922,7 +1923,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     fn glue(&mut self, var: GlobalVar, subst: &VSubst<'v>, body: Rc<Term>) -> &'v TmClo<'v> {
         let mut denv = Env::at(var.0 + 1);
         for v in &subst.terms {
-            denv = denv.push(self.arena, self.vclo(Rc::clone(v)));
+            denv = denv.push(self.arena, self.vclo(*v));
         }
         self.arena.tm(TmClo::syn(denv, body))
     }
@@ -1974,7 +1975,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// Apply one elimination to a weak head value: fire its β, or extend the
     /// neutral's spine (and, when the neutral is glued, its unfolding).
-    pub fn elim(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Rc<Val<'v>>> {
+    pub fn elim(&mut self, head: &'v Val<'v>, e: Elim<'v>) -> Res<&'v Val<'v>> {
         self.drive(Work::Elim(head, e))
     }
 
@@ -1987,7 +1988,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// native stack during a re-entry is then this frame and the one arm's,
     /// never the union of every arm's locals (design §8).
     #[inline(never)]
-    fn step_elim(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+    fn step_elim(&mut self, head: &'v Val<'v>, e: Elim<'v>) -> Res<Work<'v>> {
         match (&*head, &e) {
             (Val::Neutral(_), _) => self.step_neutral(head, e),
             // A width fold waiting for the arguments its class fires at
@@ -2014,7 +2015,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// [`Eval::step_elim`] at a neutral head: unfold a glued scrutinee the
     /// fold machinery or a transparent request wants, or extend the spine.
     #[inline(never)]
-    fn step_neutral(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+    fn step_neutral(&mut self, head: &'v Val<'v>, e: Elim<'v>) -> Res<Work<'v>> {
         let Val::Neutral(n) = &*head else { unreachable!("step_neutral is given a neutral") };
         let unsealed = if e.unseals() { self.unseal(n) } else { None };
         let n = unsealed.as_ref().unwrap_or(n);
@@ -2063,7 +2064,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// [`Eval::step_elim`] at a canonical head whose β does not re-enter
     /// the machine: fire it, or be stuck.
     #[inline(never)]
-    fn step_fire(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+    fn step_fire(&mut self, head: &'v Val<'v>, e: Elim<'v>) -> Res<Work<'v>> {
         match (&*head, &e) {
             (Val::Lam { body, .. }, Elim::App { arg, .. }) => {
                 self.spend()?;
@@ -2122,7 +2123,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let pair = Val::bit_run_unpack(
                     self.arena, level, ty, *width, *bits, tail_len, tail,
                 );
-                Ok(Work::Elim(Rc::new(pair), e.clone()))
+                Ok(Work::Elim(self.arena.val(pair), e.clone()))
             }
             (Val::Pair { fst, .. }, Elim::Fst { .. }) => {
                 self.spend()?;
@@ -2190,6 +2191,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             (Val::BoxTy(code), Elim::ElimCodeTy { .. }) => {
                 if matches!(&**code, Type::GlobalTy { .. }) {
                     return Ok(Work::Val(neutral(
+                        self.arena,
                         Head::BoxedGlobalTy(Rc::clone(code)),
                         self.arena.elim(ElimSpine::empty(), e.clone()),
                         None,
@@ -2204,6 +2206,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             (Val::BoxTm(code), Elim::ElimCodeTm { .. }) => {
                 if matches!(&**code, Term::GlobalTm { .. }) {
                     return Ok(Work::Val(neutral(
+                        self.arena,
                         Head::BoxedGlobalTm(Rc::clone(code)),
                         self.arena.elim(ElimSpine::empty(), e.clone()),
                         None,
@@ -2222,7 +2225,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// A Nat fold over a run: iterated by its algebra's class when it has
     /// one (`eval/runs.rs`), otherwise one successor step.
     #[inline(never)]
-    fn fire_nat_run(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+    fn fire_nat_run(&mut self, head: &'v Val<'v>, e: Elim<'v>) -> Res<Work<'v>> {
         let (Val::NatRun { program, tail }, Elim::ElimNat { .. }) = (&*head, &e) else {
             unreachable!("fire_nat_run is given a Nat fold over a run")
         };
@@ -2252,7 +2255,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     fn fire_instantiate(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         e: &Elim<'v>,
         body: &'v TmClo<'v>,
         by: Instantiate,
@@ -2270,7 +2273,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// (`Frame::SyncArg`): cancel the matching prefix of two runs, or
     /// expose one outer successor step.
     #[inline(never)]
-    fn fire_nat_sync(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
+    fn fire_nat_sync(&mut self, head: &'v Val<'v>, e: Elim<'v>) -> Res<Work<'v>> {
         let (Val::NatSync { program, tail, elim }, Elim::App { ann, arg }) = (&*head, &e) else {
             unreachable!("fire_nat_sync is given a synchronous fold's application")
         };
@@ -2283,7 +2286,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 // scrutinee case above.
                 self.spend()?;
                 self.frames.push(Frame::SyncArg {
-                    head: Rc::clone(&head),
+                    head: head,
                     app: Rc::new(e.clone()),
                 });
                 return Ok(Work::Force(unfold));
@@ -2343,13 +2346,13 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// unfolding by the same elimination, so that forcing the unfolding
     /// replays the spine (design §5).
     #[inline(never)]
-    fn push_elim(&mut self, n: &Rc<VNeutral<'v>>, e: Elim<'v>) -> Rc<Val<'v>> {
+    fn push_elim(&mut self, n: &Rc<VNeutral<'v>>, e: Elim<'v>) -> &'v Val<'v> {
         let unfold = n
             .unfold
             .as_ref()
             .map(|u| self.arena.tm(TmClo::elim(u, Rc::new(e.clone()))));
         let spine = self.arena.elim(n.spine, e);
-        neutral(n.head.clone(), spine, unfold)
+        neutral(self.arena, n.head.clone(), spine, unfold)
     }
 
     /// `elim_W (sup(…; a; f)) ⇝ s[a/a, f/f, (λ y. elim_W …(f y))/ih]`,
@@ -2373,7 +2376,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         {
             return Ok(None);
         }
-        let ih = Rc::new(Val::WIh { elim: Rc::new(e.clone()), label, children });
+        let ih = self.arena.val(Val::WIh { elim: Rc::new(e.clone()), label, children });
         let step = *step;
         Ok(Some(Work::Apply(
             step,
@@ -2395,7 +2398,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
         e: &Elim<'v>,
-    ) -> Option<Rc<Val<'v>>> {
+    ) -> Option<&'v Val<'v>> {
         let Elim::ElimW {
             shape_level,
             pos_level,
@@ -2473,7 +2476,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 }
             },
         );
-        Some(Rc::new(Val::Lam {
+        Some(arena.val(Val::Lam {
             dom_level: pos_level.clone(),
             cod_level: motive_level.clone(),
             dom: arena.ty(TyClo::new(rho_af, Rc::clone(&syntax.dom))),
@@ -2488,7 +2491,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     fn w_ih_apply(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         elim: &Rc<Elim<'v>>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
@@ -2535,7 +2538,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         {
             return Ok(None);
         }
-        let ih = Rc::new(Val::WfIh { elim: Rc::new(e.clone()), label, children });
+        let ih = self.arena.val(Val::WfIh { elim: Rc::new(e.clone()), label, children });
         let step = *step;
         Ok(Some(Work::Apply(
             step,
@@ -2553,7 +2556,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
         e: &Elim<'v>,
-    ) -> Option<Rc<Val<'v>>> {
+    ) -> Option<&'v Val<'v>> {
         let Elim::ElimWf { level, motive_level, shape, arity, motive, step, env } = e else {
             return None;
         };
@@ -2598,7 +2601,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             step: st3,
             scrut: Rc::new(child),
         };
-        Some(Rc::new(Val::Lam {
+        Some(self.arena.val(Val::Lam {
             dom_level: Level::Zero,
             cod_level: motive_level.clone(),
             dom: self.arena.ty(TyClo::new(
@@ -2635,7 +2638,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         {
             return Ok(None);
         }
-        let ih = Rc::new(Val::IWfIh { elim: Rc::new(e.clone()), label, children });
+        let ih = self.arena.val(Val::IWfIh { elim: Rc::new(e.clone()), label, children });
         let step = *step;
         Ok(Some(Work::Apply(step, vec![label, children, self.vclo(ih)])))
     }
@@ -2652,7 +2655,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
         e: &Elim<'v>,
-    ) -> Option<Rc<Val<'v>>> {
+    ) -> Option<&'v Val<'v>> {
         let Elim::ElimIWf { sig, motive_level, motive, step, env, .. } = e else {
             return None;
         };
@@ -2686,7 +2689,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             unreachable!("iwf_ih builds a λ")
         };
         let rho_acs = env.push(self.arena, label).push(self.arena, children);
-        Some(Rc::new(Val::Lam {
+        Some(self.arena.val(Val::Lam {
             dom_level,
             cod_level,
             dom: self.arena.ty(TyClo::new(rho_acs, dom)),
@@ -2701,7 +2704,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     fn iwf_ih_apply(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         elim: &Rc<Elim<'v>>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
@@ -2819,7 +2822,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     #[inline(never)]
     fn wf_ih_apply(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         elim: &Rc<Elim<'v>>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
@@ -2925,7 +2928,7 @@ pub fn whnf_value<'v>(
     gamma: &LocalCtx,
     defs: Defs<'_>,
     fuel: u64,
-) -> Result<Rc<Val<'v>>, OutOfFuel> {
+) -> Result<&'v Val<'v>, OutOfFuel> {
     let mut ev = Eval::new(fuel, defs, gamma.base, arena);
     let env = Env::identity(arena, gamma.entries.len() as u32);
     let v = ev.eval_tm(t, &env)?;
@@ -2981,7 +2984,7 @@ pub fn whnf_value_ty<'v>(
     gamma: &LocalCtx,
     defs: Defs<'_>,
     fuel: u64,
-) -> Result<Rc<VTy<'v>>, OutOfFuel> {
+) -> Result<&'v VTy<'v>, OutOfFuel> {
     let mut ev = Eval::new(fuel, defs, gamma.base, arena);
     let env = Env::identity(arena, gamma.entries.len() as u32);
     let v = ev.eval_ty(t, &env)?;
@@ -3044,7 +3047,7 @@ mod tests {
         Elim::ElimNat {
             level: Level::Zero,
             motive: arena.ty(TyClo::new(env, Rc::new(Type::Nat))),
-            base: arena.tm(TmClo::val(Rc::new(Val::Zero))),
+            base: arena.tm(TmClo::val(arena.val(Val::Zero))),
             step: arena.tm(TmClo::syn(env, Rc::new(step_body))),
         }
     }
@@ -3091,7 +3094,7 @@ mod tests {
     #[test]
     fn saturated_runs_present_two_to_64_as_one_successor_step() {
         let arena = ValueArena::new();
-        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let tail = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let program = two_to_64();
         let pred = Val::nat_run_pred(&arena, &program, tail);
         assert!(matches!(pred, TmClo::Val(v) if matches!(&**v, Val::NatRun { .. })));
@@ -3129,9 +3132,9 @@ mod tests {
     fn successor_algebra_maps_a_shared_run_without_visiting_its_nodes() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let tail = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let program = shared_two_to_64();
-        let head = Rc::new(Val::NatRun { program: Rc::clone(&program), tail });
+        let head = arena.val(Val::NatRun { program: Rc::clone(&program), tail });
         let elim = nat_elim(
             &arena,
             env,
@@ -3150,12 +3153,12 @@ mod tests {
     fn successor_algebra_merges_the_run_its_tail_produces() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let zero = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let inner = arena.tm(TmClo::val(Rc::new(Val::NatRun {
+        let zero = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let inner = arena.tm(TmClo::val(arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(4).unwrap()),
             tail: zero,
         })));
-        let head = Rc::new(Val::NatRun {
+        let head = arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(3).unwrap()),
             tail: inner,
         });
@@ -3177,8 +3180,8 @@ mod tests {
     fn double_successor_algebra_scales_a_saturated_run() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let head = Rc::new(Val::NatRun {
+        let tail = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let head = arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(1 << 40).unwrap()),
             tail,
         });
@@ -3201,8 +3204,8 @@ mod tests {
     fn double_successor_algebra_composes_an_overflowing_count() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let head = Rc::new(Val::NatRun {
+        let tail = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let head = arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap()),
             tail,
         });
@@ -3242,8 +3245,8 @@ mod tests {
     fn an_arbitrary_fold_over_a_shared_run_still_obeys_fuel() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let head = Rc::new(Val::NatRun { program: shared_two_to_64(), tail });
+        let tail = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let head = arena.val(Val::NatRun { program: shared_two_to_64(), tail });
         // Match on the induction hypothesis: observing the result genuinely
         // asks to traverse the logical spine, so compression must not claim
         // a constant-time answer. (Returning `ih` unchanged is the identity
@@ -3263,12 +3266,12 @@ mod tests {
     fn synchronous_fold_cancels_independent_saturated_runs() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let left = Rc::new(Val::NatRun {
+        let tail = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let left = arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap()),
             tail,
         });
-        let right = arena.tm(TmClo::val(Rc::new(Val::NatRun {
+        let right = arena.tm(TmClo::val(arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(u64::MAX).unwrap()),
             tail,
         })));
@@ -3288,9 +3291,9 @@ mod tests {
     fn synchronous_fold_bisimulates_independent_exponential_dags() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let tail = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let left = Rc::new(Val::NatRun { program: shared_two_to_64(), tail });
-        let right = arena.tm(TmClo::val(Rc::new(Val::NatRun {
+        let tail = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let left = arena.val(Val::NatRun { program: shared_two_to_64(), tail });
+        let right = arena.tm(TmClo::val(arena.val(Val::NatRun {
             program: shared_two_to_64(),
             tail,
         })));
@@ -3323,7 +3326,7 @@ mod tests {
 
     /// A weak head `Nat` value's count, walking successors and runs through
     /// their tails; only a test may hold the whole number.
-    fn nat_value<'v>(ev: &mut Eval<'_, 'v>, value: Rc<Val<'v>>) -> u128 {
+    fn nat_value<'v>(ev: &mut Eval<'_, 'v>, value: &'v Val<'v>) -> u128 {
         let mut total = 0u128;
         let mut cur = value;
         loop {
@@ -3343,10 +3346,10 @@ mod tests {
         }
     }
 
-    fn run_over_zero<'v>(arena: &'v ValueArena<'v>, count: u64) -> Rc<Val<'v>> {
-        Rc::new(Val::NatRun {
+    fn run_over_zero<'v>(arena: &'v ValueArena<'v>, count: u64) -> &'v Val<'v> {
+        arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(count).unwrap()),
-            tail: arena.tm(TmClo::val(Rc::new(Val::Zero))),
+            tail: arena.tm(TmClo::val(arena.val(Val::Zero))),
         })
     }
 
@@ -3526,8 +3529,8 @@ mod tests {
     #[test]
     fn a_peeled_window_over_an_open_tail_stops_at_the_innermost_step() {
         let arena = ValueArena::new();
-        let x = arena.tm(TmClo::val(Rc::new(Val::var(0))));
-        let head = Rc::new(Val::NatRun {
+        let x = arena.tm(TmClo::val(arena.val(Val::var(0))));
+        let head = arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(9).unwrap()),
             tail: x,
         });
@@ -3598,8 +3601,8 @@ mod tests {
     fn a_window_over_an_open_tail_projects_the_stuck_fold() {
         let arena = ValueArena::new();
         let env = Env::empty();
-        let x = arena.tm(TmClo::val(Rc::new(Val::var(0))));
-        let head = Rc::new(Val::NatRun {
+        let x = arena.tm(TmClo::val(arena.val(Val::var(0))));
+        let head = arena.val(Val::NatRun {
             program: ContextProgram::run((), NonZeroU64::new(9).unwrap()),
             tail: x,
         });

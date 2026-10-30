@@ -47,8 +47,8 @@ pub(crate) const UNIT_NEST_LIMIT: u32 = 64;
 pub(crate) struct BitPrefix<'v> {
     pub left_bits: u64,
     pub right_bits: u64,
-    pub left: Rc<Val<'v>>,
-    pub right: Rc<Val<'v>>,
+    pub left: &'v Val<'v>,
+    pub right: &'v Val<'v>,
     /// The `Vec` at the residual length — the type the two residuals are
     /// compared at, taken from the type walk and not reconstructed.
     pub ty: &'v TyClo<'v>,
@@ -99,9 +99,9 @@ impl<'v> Eval<'_, 'v> {
         if let Some(word) = self.vec_lit_word(ty, zero, one, *width, *bits, env)? {
             let (bt, word) = word;
             self.spend()?;
-            let tail_len = self.vclo(Rc::new(Val::Zero));
-            let tail = self.vclo(Rc::new(Val::Triv { level: level.clone() }));
-            return Ok(Work::Val(Rc::new(Val::BitRun {
+            let tail_len = self.vclo(self.arena.val(Val::Zero));
+            let tail = self.vclo(self.arena.val(Val::Triv { level: level.clone() }));
+            return Ok(Work::Val(self.arena.val(Val::BitRun {
                 level: level.clone(),
                 ty: bt,
                 width: *width,
@@ -174,7 +174,7 @@ impl<'v> Eval<'_, 'v> {
         ) else {
             return Ok(None);
         };
-        let zero = self.vclo(Rc::new(Val::Inl {
+        let zero = self.vclo(self.arena.val(Val::Inl {
             ann: Some(SumAnn {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
@@ -183,7 +183,7 @@ impl<'v> Eval<'_, 'v> {
             }),
             val: zero,
         }));
-        let one = self.vclo(Rc::new(Val::Inr {
+        let one = self.vclo(self.arena.val(Val::Inr {
             ann: Some(SumAnn { lhs_level, rhs_level, lhs, rhs }),
             val: one,
         }));
@@ -211,14 +211,14 @@ impl<'v> Eval<'_, 'v> {
         match &*w {
             VTy::Unit { level } => {
                 let level = level.clone();
-                Ok(Some(self.vclo(Rc::new(Val::Triv { level }))))
+                Ok(Some(self.vclo(self.arena.val(Val::Triv { level }))))
             }
             VTy::SEq { level, ty, lhs, rhs } => {
                 let (level, ty, tm, rhs) = (level.clone(), *ty, *lhs, *rhs);
                 if !self.seq_is_unit(tm, rhs)? {
                     return Ok(None);
                 }
-                Ok(Some(self.vclo(Rc::new(Val::SRefl { level, ty, tm }))))
+                Ok(Some(self.vclo(self.arena.val(Val::SRefl { level, ty, tm }))))
             }
             VTy::Sigma { fst_level, snd_level, fst, snd } => {
                 let (fst_level, snd_level, fst, snd) =
@@ -231,7 +231,7 @@ impl<'v> Eval<'_, 'v> {
                 let Some(rest) = self.unit_inhabitant(rest_ty, depth - 1)? else {
                     return Ok(None);
                 };
-                Ok(Some(self.vclo(Rc::new(Val::Pair {
+                Ok(Some(self.vclo(self.arena.val(Val::Pair {
                     ann: Some(SigAnn {
                         fst_level,
                         snd_level,
@@ -295,8 +295,8 @@ impl<'v> Eval<'_, 'v> {
     /// makes unpacking reproduce the same value rather than a merely
     /// convertible one (design §3.1); anything else does not pack and stays
     /// structural.
-    pub(crate) fn bit_of(&mut self, v: &Rc<Val<'v>>) -> Res<Option<bool>> {
-        let (bit, payload) = match &**v {
+    pub(crate) fn bit_of(&mut self, v: &'v Val<'v>) -> Res<Option<bool>> {
+        let (bit, payload) = match &*v {
             Val::Inl { val, .. } => (false, *val),
             Val::Inr { val, .. } => (true, *val),
             _ => return Ok(None),
@@ -341,9 +341,9 @@ impl<'v> Eval<'_, 'v> {
         &mut self,
         bt: &'v BitTy<'v>,
         sigma: &Sigma<'v>,
-        v: &Rc<Val<'v>>,
-    ) -> Res<Option<(bool, Rc<Val<'v>>)>> {
-        let (head, rest) = match &**v {
+        v: &'v Val<'v>,
+    ) -> Res<Option<(bool, &'v Val<'v>)>> {
+        let (head, rest) = match &*v {
             Val::Pair { fst, snd, .. } => (self.force(fst)?, self.force(snd)?),
             Val::BitRun { level, ty, width, bits, tail_len, tail } => {
                 if !std::ptr::eq(ty.elem, bt.elem) {
@@ -358,8 +358,8 @@ impl<'v> Eval<'_, 'v> {
                 (self.force(fst)?, self.force(snd)?)
             }
             _ => {
-                let head = self.elim(Rc::clone(v), sigma.proj(true))?;
-                let rest = self.elim(Rc::clone(v), sigma.proj(false))?;
+                let head = self.elim(v, sigma.proj(true))?;
+                let rest = self.elim(v, sigma.proj(false))?;
                 (head, rest)
             }
         };
@@ -380,8 +380,8 @@ impl<'v> Eval<'_, 'v> {
         level: &Level,
         elem: &'v TyClo<'v>,
         tail_ty: &'v TyClo<'v>,
-        mut left: Rc<Val<'v>>,
-        mut right: Rc<Val<'v>>,
+        mut left: &'v Val<'v>,
+        mut right: &'v Val<'v>,
     ) -> Res<Option<BitPrefix<'v>>> {
         let Some(bt) = self.bit_ty(elem)? else { return Ok(None) };
         let (mut left_bits, mut right_bits) = (0u64, 0u64);
@@ -438,8 +438,8 @@ impl<'v> Eval<'_, 'v> {
         bits: u64,
     ) -> Res<Option<Val<'v>>> {
         let Some(ty) = self.bit_ty(elem)? else { return Ok(None) };
-        let tail_len = self.vclo(Rc::new(Val::Zero));
-        let tail = self.vclo(Rc::new(Val::Triv { level: level.clone() }));
+        let tail_len = self.vclo(self.arena.val(Val::Zero));
+        let tail = self.vclo(self.arena.val(Val::Triv { level: level.clone() }));
         Ok(Some(Val::BitRun {
             level: level.clone(),
             ty,
@@ -498,7 +498,7 @@ mod tests {
                 .expect("the criterion holds");
             // Walk the Σ-chain the run stands for, one `Pair` at a time.
             let mut read = 0u64;
-            let mut cur = Rc::new(run);
+            let mut cur = arena.val(run);
             for i in 0..width {
                 let Val::BitRun { level, ty, width: w, bits: b, tail_len, tail } = &*cur else {
                     panic!("seed {case}: chain ended at bit {i}");
@@ -531,13 +531,13 @@ mod tests {
             // The Σ-tail of the *first* pair: a `Vec` at one less than the
             // words' width, which is the type `pack_bit_prefix` walks in
             // lockstep with the values.
-            let mut len = ev.vclo(Rc::new(Val::Zero));
+            let mut len = ev.vclo(arena.val(Val::Zero));
             for _ in 1..width {
-                len = ev.vclo(Rc::new(Val::Succ(len)));
+                len = ev.vclo(arena.val(Val::Succ(len)));
             }
             let tail_ty = arena.ty_vec(Level::Zero, elem, len);
             let prefix = ev
-                .pack_bit_prefix(&Level::Zero, elem, tail_ty, Rc::new(left), Rc::new(right))
+                .pack_bit_prefix(&Level::Zero, elem, tail_ty, arena.val(left), arena.val(right))
                 .expect("fuel");
             let prefix = prefix.expect("at least one bit packs");
             let differ = a ^ b;
