@@ -220,3 +220,12 @@ theorem sub_checking(a, b, c: Nat, h: a <= b): (b - a) + c + a = b + c {
 // names the case it came from.
 // expect-error: __omega_sub0_case: Lt(a, b), __omega_sub0_eq: sub(a, b) = 0
 theorem sub_add_cancel_truncated(a, b: Nat): a - b + b = a { omega }
+
+// `omega` is a checking form: where nothing is expected it says so and how
+// to state the goal, not "unbound name"
+// (issues/checking-tactic-in-inference-position-diagnostic.md).
+// expect-error: `omega` needs an expected type
+// expect-error: `let k: (T) = omega(…);`
+theorem let_omega_unannotated(a: Nat, h: a < 3): a < 4 { let k = omega(h); k }
+// expect-error: `omega` needs an expected type
+theorem let_bare_omega_unannotated(a: Nat, h: a < 3): a < 4 { let k = omega; k }

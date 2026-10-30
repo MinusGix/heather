@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CPU_MARKER, collect, completionMessage, familyShards, jobBounds, limitedCommand, listingArgs, parseArtifacts, parseCpu, parseResults, parseTestTimes, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
+import { CPU_MARKER, collect, completionMessage, familyShards, jobBounds, limitedCommand, listingArgs, orderTargets, parseArtifacts, parseCpu, parseResults, parseTestTimes, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -158,6 +158,38 @@ test("failure reporting arrives while another target is running and keep-going s
     assert.equal(stopped.length, 1, "fail-fast still stops scheduling after a failure");
     assert.match(received, /failed.rs: FAIL/);
     assert.ok(!received.includes("later.rs"));
+  } finally {
+    process.stdout.write = write;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a prerequisite starts first and only its readers wait for it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "heather-prerequisite-"));
+  const write = process.stdout.write;
+  try {
+    const built = join(dir, "built");
+    const summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s";
+    // The gate publishes its store only at the end; a reader that started
+    // early would find it missing and fail, and an independent target runs
+    // while the gate is still going.
+    const targets = orderTargets([
+      { name: "native_cat", label: "native_cat.rs", executable: "bash", args: ["-c",
+        '[[ -f "$1" ]] && printf "%s\\n" "$2"', "reader", built, summary] },
+      { name: "lib_std_list", label: "lib_std_list.rs", executable: "bash", args: ["-c",
+        '[[ ! -f "$1" ]] && printf "%s\\n" "$2"', "independent", built, summary] },
+      { name: "library", label: "library.rs", executable: "bash", args: ["-c",
+        'sleep 0.5; touch "$1"; printf "%s\\n" "$2"', "gate", built, summary] },
+    ], new Map([["native_cat.rs", 900], ["lib_std_list.rs", 800], ["library.rs", 1]]));
+    assert.deepEqual(targets.map((t) => [t.name, t.after]),
+      [["library", []], ["native_cat", ["library"]], ["lib_std_list", []]]);
+    process.stdout.write = function(chunk, ...args) {
+      return /^\[(start|done )/.test(chunk.toString()) ? true : write.call(this, chunk, ...args);
+    };
+    const runs = await runTargets(targets, 3, [], true);
+    for (const run of runs) assert.equal(run.result.passed, 1, `${run.target.label}: ${run.output}`);
+    // Without the gate in the run, its readers do not wait for it.
+    assert.deepEqual(orderTargets(targets.slice(1)).map((t) => t.after), [[], []]);
   } finally {
     process.stdout.write = write;
     rmSync(dir, { recursive: true, force: true });

@@ -172,3 +172,7 @@ theorem nlin_rat_cancel_lt(a, b, c: Rat, h: a * c < b * c, hc: 0 < c): a < b { n
 theorem nlin_rat_not_entailed(x: Rat, h: 0 <= x): x * x <= x { nlinarith(h) }
 // expect-error: a refutation does not prove `<`
 theorem nlin_creal_cancel_lt(a, b, c: CReal, h: a * c < b * c, hc: 0 < c): a < b { nlinarith(h, hc) }
+// A checking form met where nothing is expected
+// (issues/checking-tactic-in-inference-position-diagnostic.md).
+// expect-error: `linarith` needs an expected type
+theorem let_linarith_unannotated(x: Rat, h: x < 1): x < 2 { let k = linarith(h); k }
