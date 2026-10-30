@@ -47,10 +47,10 @@ property of Heather.
 
 ## 3. omega
 
-- **Give it what it cannot read yet:** a Nat `a - b` is an atom (add
-  `Nat::sub_add_cancel`, [[omega-nat-truncated-subtraction]]). An
-  `Exists`'s `.proof` is read as its contractum (`omega(e.proof)`), with no
-  restating `have`.
+- **Give it what it cannot read yet.** A Nat `a - b` is split into its two
+  cases, so no `Nat::sub_add_cancel` beside the call
+  ([[omega-nat-truncated-subtraction]]). An `Exists`'s `.proof` is read as
+  its contractum (`omega(e.proof)`), with no restating `have`.
 - **Over records and layouts at a literal program, prefer Nat step lemmas**
   (`Nat::le_trans`, `add_le_mono_l`) or a generic lemma over Nat variables.
   The kernel converts the atoms' definitions. omega does read a field at

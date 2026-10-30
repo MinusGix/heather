@@ -935,6 +935,20 @@ theorem or_elim_false<P, Q>(h: P ∨ Q,
     or_elim(h, left, right)
 }
 
+// A truncated subtraction's two cases, as Lean's `omega` splits it: `b <= a`
+// with `(a - b) + b = a`, or `a < b` with `a - b = 0`. The subtraction stays
+// an atom in both; each case's facts tie it to `a` and `b`
+// (issues/omega-nat-truncated-subtraction.md).
+theorem nat_sub_elim(a, b: Nat,
+    left: b <= a → (a - b) + b = a → False,
+    right: a < b → a - b = 0 → False): False
+{
+    match a.lt_or_ge(b) {
+        Inl(lt) => right(lt, a.sub_zero_of_le(b, a.le_of_lt(b, lt))),
+        Inr(ge) => left(ge, b.sub_add_cancel(a, ge)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CutSat's certificate rules (crates/elab/src/cutsat.rs, cutsat_cert.rs).
 //
