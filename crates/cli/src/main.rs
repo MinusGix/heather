@@ -478,6 +478,13 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 eprintln!("{notice}");
             }
             forced_items += outcome.forced_items;
+            // A module refused for its import's failure is not checked, and
+            // not reported as ok; the error was that import's, shown with it.
+            if semantic.blocked_by_import(&m.name) {
+                root_ok = false;
+                failed = true;
+                continue;
+            }
             let mut hint = None;
             let errs = if opts.expectations {
                 let verdict = expect::judge(&m.src, outcome.errors);

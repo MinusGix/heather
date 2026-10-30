@@ -496,6 +496,13 @@ impl SemanticSession {
         outcome
     }
 
+    /// Whether `module` was refused only because a module of its import
+    /// closure did not check: its one error restates that module's, which a
+    /// caller reporting every module has already shown.
+    pub fn blocked_by_import(&self, module: &str) -> bool {
+        self.done.get(module).is_some_and(|m| m.failed && m.canon.order.iter().any(|d| self.done[d].failed))
+    }
+
     /// Whether checking `module` now would wait for another process that is
     /// building its image (`ModuleImageCache::being_built`). Its imports must
     /// have been checked.
