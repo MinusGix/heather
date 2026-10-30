@@ -21,8 +21,8 @@
 // into a `NumReal` tree (`norm_num_real.hthr`): `+`, binary and unary `-`,
 // `*`, `npow`, `^`, `⁻¹` and `abs` are nodes, and any other real is a leaf
 // when it is `CReal::ofRat(q)` up to unfolding (a numeral, a constant
-// defined as one), read as the embedding of its own first term. The tree's rational
-// value is decided as at `Rat` and carried across the embedding by the
+// defined as one), read as the embedding of the `q` that unfolding finds.
+// The tree's rational value is decided as at `Rat` and carried across the embedding by the
 // carrier's laws (`NumReal::sound`).
 //
 // The verdict is asked of the elaborator before the proof is built, so a
@@ -215,7 +215,7 @@ fn norm_num_checks(N: NormNumNames, rel: NormNumRel, neg: Bool, l, r: Expr, args
 record NormNumRealHeads {
     add: GlobalRef, sub: GlobalRef, neg: GlobalRef, mul: GlobalRef, npow: GlobalRef, pow: GlobalRef, abs: GlobalRef, inv: GlobalRef, embed: GlobalRef,
     q: GlobalRef, nadd: GlobalRef, nsub: GlobalRef, nneg: GlobalRef, nmul: GlobalRef, npw: GlobalRef, nabs: GlobalRef, ninv: GlobalRef, nzpow: GlobalRef,
-    wq: GlobalRef, wtwo: GlobalRef, wat: GlobalRef, same: GlobalRef, term: GlobalRef,
+    wq: GlobalRef, wtwo: GlobalRef, wat: GlobalRef, same: GlobalRef,
     range: Option<GlobalRef>, zero: GlobalRef, one: GlobalRef,
 }
 
@@ -234,9 +234,9 @@ fn norm_num_real_heads() → Tac<NormNumRealHeads> {
     norm_num_real_global("norm_num_neg").bind(λ nneg => norm_num_real_global("norm_num_mul").bind(λ nmul => norm_num_real_global("norm_num_pow").bind(λ npw =>
     norm_num_real_global("norm_num_abs").bind(λ nabs => norm_num_real_global("norm_num_inv").bind(λ ninv => norm_num_real_global("norm_num_zpow").bind(λ nzpow =>
     norm_num_real_global("norm_num_wf_q").bind(λ wq => norm_num_real_global("norm_num_wf_two").bind(λ wtwo => norm_num_real_global("norm_num_wf_at").bind(λ wat =>
-    norm_num_global("CReal::same_refl").bind(λ same => norm_num_real_global("norm_num_term").bind(λ term =>
+    norm_num_global("CReal::same_refl").bind(λ same =>
     norm_num_try("MonoidRel::range").bind(λ range => norm_num_real_global("norm_num_sum_unit").bind(λ zero => norm_num_real_global("norm_num_prod_unit").bind(λ one =>
-        Pure(NormNumRealHeads(add, sub, neg, mul, npow, pow, abs, inv, embed, q, nadd, nsub, nneg, nmul, npw, nabs, ninv, nzpow, wq, wtwo, wat, same, term, range, zero, one))))))))))))))))))))))))))))
+        Pure(NormNumRealHeads(add, sub, neg, mul, npow, pow, abs, inv, embed, q, nadd, nsub, nneg, nmul, npw, nabs, ninv, nzpow, wq, wtwo, wat, same, range, zero, one)))))))))))))))))))))))))))
 }
 
 // A tree read off a real, with its well-formedness witness.
@@ -261,15 +261,23 @@ fn norm_num_exact(H: NormNumRealHeads, q: Expr) → NormNumRead { NormNumRead(Ap
 
 // A real the reader has no node for is a leaf when it is
 // `CReal::ofRat(q)` up to unfolding (a numeral, a constant defined as one):
-// then it is the embedding of its own first term, `norm_num_term(x)`, by
-// conversion, which is asked here so that a real that is not (a variable)
-// fails with its reason.
+// a hole for `q` is solved by comparing the real with the embedding of the
+// hole, which is asked here so that a real that is not (a variable) fails
+// with its reason. The terms cannot give `q` back: they are its roundings.
 fn norm_num_leaf(H: NormNumRealHeads, h: Handle) → Tac<NormNumRead> {
-    let q = App(Global(H.term), Hd(h));
-    defeq(Hd(h), App(Global(H.embed), q)).bind(λ same => match same {
-        True => Pure(norm_num_exact(H, q)),
-        False => fail("norm_num: a side is not a closed real expression", [
-            At(Hd(h), Tried("this real", "not `CReal::ofRat(q)` up to unfolding, nor `+ - * npow ^ ⁻¹ abs` of such"))]),
+    infer(Global(H.embed)).bind(λ c => match c {
+        Refused(why) => fail("norm_num: " ++ why, []),
+        Accepted(ty) => view(ty).bind(λ v => match v {
+            HPi(dom) => hole(dom).bind(λ hq => match hq {
+                Refused(why) => fail("norm_num: " ++ why, []),
+                Accepted(q) => defeq(Hd(h), App(Global(H.embed), Hd(q))).bind(λ same => match same {
+                    True => Pure(norm_num_exact(H, Hd(q))),
+                    False => fail("norm_num: a side is not a closed real expression", [
+                        At(Hd(h), Tried("this real", "not `CReal::ofRat(q)` up to unfolding, nor `+ - * npow ^ ⁻¹ abs` of such"))]),
+                }),
+            }),
+            _ => fail("norm_num: the embedding of the rationals is not a function", []),
+        }),
     })
 }
 

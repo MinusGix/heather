@@ -148,13 +148,14 @@ theorem scale_chain(x, y, z, w: CReal, a: x <= y, b: y < z, hw: 0 < w): x * w < 
     }
 }
 
-// `≈` read Bishop's way: at every index, not only eventually.
-theorem close_at_three(x, y: CReal, h: x ≈ y): (x.seq(3) -y.seq(3)).abs() <= Rat::inv_succ(3) + Rat::inv_succ(3) {
-    CReal::bishop_of_same(h, 3)
+// `≈` read Bishop's way: at every index, not only eventually. A term `x.at(n)`
+// is the dyadic `x.seq(n)` read as a rational, within 2^-n of the real.
+theorem close_at_three(x, y: CReal, h: x ≈ y): (x.at(3) - y.at(3)).abs() <= Rat::inv_pow2(3) + Rat::inv_pow2(3) {
+    CReal::bishop_of_same(h)(3)
 }
 
 // And `≤` read Bishop's way, back to the refutation.
-theorem le_from_terms(x, y: CReal, h: (n: Nat) → x.seq(n) <= y.seq(n) + (Rat::inv_succ(n) + Rat::inv_succ(n))): x <= y {
+theorem le_from_terms(x, y: CReal, h: (n: Nat) → x.at(n) <= y.at(n) + (Rat::inv_pow2(n) + Rat::inv_pow2(n))): x <= y {
     CReal::le_of_bishop(h)
 }
 
@@ -164,42 +165,43 @@ theorem le_from_terms(x, y: CReal, h: (n: Nat) → x.seq(n) <= y.seq(n) + (Rat::
 fn half() → Rat { Rat(OfNat(1), 2) }
 fn third() → Rat { Rat(OfNat(1), 3) }
 
-// A sum's term is the summands' terms at 2n+1, added as fractions.
-theorem sum_term(): (CReal::ofRat(half()) + CReal::ofRat(third())).seq(5) ≈ Rat(OfNat(5), 6) { refl }
+// A sum's term is the summands' terms one index further out, added as
+// dyadics: at index 6 a half is 64/128 and a third rounds down to 42/128.
+theorem sum_term(): (CReal::ofRat(half()) + CReal::ofRat(third())).at(5) ≈ Rat(OfNat(53), 64) { refl }
 
 // The modulus is data: `add_zero` says how far out `x + 0` is within
 // 1/(k+1) of `x`, and the answer evaluates.
 theorem add_zero_start(): CReal::add_zero(1, 3).witness = 7 { refl }
 
-// So is a gap: `0 < 1` is witnessed by 1/(k+1) below the rational gap, and
-// the k that `Rat::archimedean_inv` finds is the denominator of 1/1.
-theorem one_gap(): zero_below_one().witness = 1 { refl }
+// So is a gap: `0 < 1` is witnessed by 1/(k+1) below the rational gap, with
+// room left for the terms' roundings: 1/8 here.
+theorem one_gap(): zero_below_one().witness = 7 { refl }
 
 // Two different sequences are the same real: 1/2 written as 2/4.
 theorem half_same(): CReal::ofRat(half()) ≈ CReal::ofRat(Rat(OfNat(2), 4)) { CReal::ofRat_respects(refl) }
 
-// A product reads its factors further out: both bounds are 2 here, so term
-// 0 reads index 5. The constants make that invisible in the value.
-theorem product_term(): (CReal::ofRat(half()) * CReal::ofRat(third())).seq(0) ≈ Rat(OfNat(1), 6) { refl }
+// A product reads its factors a few bits further out (their bounds' bit
+// width) and rounds the exact product down to n + 1 bits: a sixth at index
+// 10 is 341/2048.
+theorem product_term(): (CReal::ofRat(half()) * CReal::ofRat(third())).at(10) ≈ Rat(OfNat(341), 2048) { refl }
 
-// The product laws' moduli compute too, through `mul_close`: for 1 · 1 the
-// bound is 3 on each side, so the factors must be within 1/14 of each other,
-// which regularity grants from index 55 on.
-theorem mul_comm_start(): CReal::mul_comm(1, 1, 0).witness = 55 { refl }
+// The product laws' moduli compute too, through `mul_close`: for 1 · 1,
+// regularity grants the closeness the bounds ask for from index 143 on.
+theorem mul_comm_start(): CReal::mul_comm(1, 1, 0).witness = 143 { refl }
 
-// The inverse computes: 0 < 2 carries the gap 1/2 (k = 1) from index 0 on,
-// so term n reads index (k+1)²(n+1) + n, and every term inverts the
-// constant 2.
+// The inverse computes: 0 < 2 carries the gap 1/8 (k = 7), so term n reads
+// x past the gap's start and at least n + 1 + w out, w the bit width of
+// (k+1)², and every term inverts the constant 2 exactly.
 theorem two_apart(): CReal::ofRat(Rat(OfNat(2), 1)).Apart(0) {
     let gap: (0 < Rat(OfNat(2), 1)) = omega;
     Inr(CReal::ofRat_lt(gap))
 }
 
-theorem two_gap(): (CReal::ofRat(Rat(OfNat(2), 1)).away_of_apart(two_apart())).witness = 1 { refl }
+theorem two_gap(): (CReal::ofRat(Rat(OfNat(2), 1)).away_of_apart(two_apart())).witness = 7 { refl }
 
-theorem inv_two_index(): CReal::inv_at(1, 0, 4) = 24 { refl }
+theorem inv_two_index(): CReal::inv_at(7, 0, 4) = 12 { refl }
 
-theorem inv_two_term(): CReal::ofRat(Rat(OfNat(2), 1)).inv(h := two_apart()).seq(4) ≈ half() { refl }
+theorem inv_two_term(): CReal::ofRat(Rat(OfNat(2), 1)).inv(h := two_apart()).at(4) ≈ half() { refl }
 
 // Written as notation, the apartness comes from the rational's sign
 // (`ofRat_apart`, `Rat::apart_of_positive`), and the embedding carries the
@@ -210,8 +212,9 @@ theorem inv_two_searched(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat
 
 // Adding to both sides of a gap keeps it: the same 1/(k+1), from the same
 // start.
-theorem shifted_gap(z: CReal): CReal::add_lt_mono_r(0, 1, z, zero_below_one()).witness = 1 { refl }
+theorem shifted_gap(z: CReal): CReal::add_lt_mono_r(0, 1, z, zero_below_one()).witness = 7 { refl }
 
 // A product of positive reals clears zero by the product of the gaps: 0 < 1
-// has the gap 1/2, so 1 · 1 has 1/4.
-theorem squared_gap(): CReal::mul_pos(zero_below_one(), zero_below_one()).witness = 3 { refl }
+// has the gap 1/8, and the product's gap, 1/256, leaves room for the
+// product's rounding.
+theorem squared_gap(): CReal::mul_pos(zero_below_one(), zero_below_one()).witness = 255 { refl }

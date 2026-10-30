@@ -10,10 +10,11 @@
 //     err(N+j) <= err(N) / 2^j                        (`Series::decay`)
 //
 // so the partial sums past `start` are within `err` of each other, and
-// `err` falls below any 1/(n+1) a width of digits further on
-// (`Series::fine`). The limit is the real whose n-th term is the partial
-// sum at that index (`Series::real`), and it lies within `err(N)` of every
-// partial sum past `start` (`Series::below`, `Series::above`).
+// `err` falls below 2^-(n+1) a further n+1 terms past the bit width of its
+// size at `start` (`Series::fine`). The limit is the real whose n-th term is
+// the partial sum at that index, rounded to n+1 bits (`Series::real`), and
+// it lies within `err(N)` of every partial sum past `start`
+// (`Series::below`, `Series::above`).
 //
 // Its enclosure needs no term of the real: the partial sum and the last term
 // are carried as intervals (`Series::box`, by the containment theorems of
@@ -159,68 +160,85 @@ theorem Series::err_start_le(self s: Series): s.err(s.start) <= Rat::ofInt(OfNat
     Rat::le_trans(Rat::add_le_mono(b, b), Rat::le_of_same(two))
 }
 
-// The real's n-th term reads the partial sum a width past `start`: far
-// enough that `scale · 2^-width` is below 1/(n+1).
-fn Series::index(self s: Series, n: Nat) → Nat { s.start + (s.scale() * (n + 1) + n).width() }
+// The real's n-th term reads the partial sum n+1+b terms past `start`, b
+// the bit width of `scale`: there `scale · 2^-(n+1+b)` is below 2^-(n+1).
+fn Series::index(self s: Series, n: Nat) → Nat { s.start + ((n + 1) + s.scale().width()) }
 
-theorem Series::index_start(self s: Series, n: Nat): s.start <= s.index(n) { s.start.le_add_l((s.scale() * (n + 1) + n).width()) }
+theorem Series::index_start(self s: Series, n: Nat): s.start <= s.index(n) { s.start.le_add_l((n + 1) + s.scale().width()) }
 
-theorem Series::fine(self s: Series, n: Nat): s.err(s.index(n)) <= Rat::inv_succ(n) {
-    let far = s.scale() * (n + 1) + n;
-    let w = far.width();
+theorem Series::fine(self s: Series, n: Nat): s.err(s.index(n)) <= Rat::inv_pow2(n + 1) {
+    let b = s.scale().width();
+    let w = (n + 1) + b;
     let q = Rat::inv_succ(w.ones());
+    let big = Rat::ofInt(OfNat(Nat::pow(2, b)));
+    let qp: (q ≈ Rat::inv_pow2(w)) = q.same_of_parts(Rat::inv_pow2(w), refl, w.ones_succ_pow());
+    let below: (s.scale() < Nat::pow(2, b)) = s.scale().lt_pow_width();
+    let sb: (Rat::ofInt(OfNat(s.scale())) <= big) = omega(below);
     calc {
         s.err(s.start + w) <= s.err(s.start) * q := s.decay(s.start, s.start.le_refl(), w),
         <= Rat::ofInt(OfNat(s.scale())) * q := by mono_with([s.err_start_le()]),
-        <= Rat::inv_succ(n) := Rat::scale_inv_succ_le(s.scale(), w.ones(), n, far.le_ones_width(), q.le_refl()),
+        <= big * q := by mono_with([sb]),
+        ≈ big * Rat::inv_pow2(w) := Rat::mul_respects(big.same_refl(), qp),
+        ≈ Rat::inv_pow2(n + 1) := Rat::scale_inv_pow2(b, n + 1),
     }
 }
 
-theorem Series::regular(self s: Series, m, n: Nat): (s.sum(s.index(m)) - s.sum(s.index(n))).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n) {
+theorem Series::regular(self s: Series, m, n: Nat): (s.sum(s.index(m)) - s.sum(s.index(n))).abs() <= Rat::inv_pow2(m + 1) + Rat::inv_pow2(n + 1) {
     let a = s.index(m);
     let b = s.index(n);
-    let u = Rat::inv_succ(m);
-    let v = Rat::inv_succ(n);
+    let u = Rat::inv_pow2(m + 1);
+    let v = Rat::inv_pow2(n + 1);
     match Nat::le_total(a, b) {
         Inl(h) => calc {
             (s.sum(a) - s.sum(b)).abs() ≈ (s.sum(b) - s.sum(a)).abs() := s.sum(a).abs_sub_comm(s.sum(b)),
             <= s.err(a) := s.sum_close(a, b, s.index_start(m), h),
             <= u := s.fine(m),
-            <= u + v := u.le_add_nonneg(v, Rat::le_of_lt(Rat::inv_succ_pos(n))),
+            <= u + v := u.le_add_nonneg(v, Rat::inv_pow2_nonneg(n + 1)),
         },
         Inr(h) => calc {
             (s.sum(a) - s.sum(b)).abs() <= s.err(b) := s.sum_close(b, a, s.index_start(n), h),
             <= v := s.fine(n),
-            <= v + u := v.le_add_nonneg(u, Rat::le_of_lt(Rat::inv_succ_pos(m))),
+            <= v + u := v.le_add_nonneg(u, Rat::inv_pow2_nonneg(m + 1)),
             ≈ u + v := v.add_comm(u),
         },
     }
 }
 
-fn Series::real(self s: Series) → CReal { CReal(λ n => s.sum(s.index(n)), λ m n => s.regular(m, n)) }
+fn Series::real(self s: Series) → CReal { CReal::rounded(λ n => s.sum(s.index(n)), λ m n => s.regular(m, n)) }
 
-// The real is within `err(N)` of each partial sum past `start`. Its n-th
-// term is a partial sum too: an earlier one is within its own error, which
-// is below 1/(n+1), and a later one within `err(N)`.
+// The real's i-th term is within a rounding of the partial sum it reads.
+theorem Series::real_at(self s: Series, i: Nat): (s.real().at(i) - s.sum(s.index(i))).abs() <= Rat::inv_pow2(i + 1) {
+    CReal::rounded_close(λ n => s.sum(s.index(n)), λ m n => s.regular(m, n), i)
+}
+
+// The real is within `err(N)` of each partial sum past `start`. Its i-th
+// term is within a rounding of a partial sum: an earlier one is within its
+// own error, which is below 2^-(i+1), and a later one within `err(N)`; the
+// rounding and the error together are below 1/(k+1) from i = k on.
 theorem Series::above(self s: Series, n: Nat, hs: s.start <= n): s.real() <= CReal::ofRat(s.sum(n) + s.err(n)) {
     let c = s.sum(n);
     let e = s.err(n);
-    CReal::le_of_close(λ k => Exists(k, λ i from => {
+    CReal::le_ofRat_of_close(c + e, λ k => Exists(k, λ i from => {
         let l = s.index(i);
-        let f = Rat::inv_succ(k);
-        let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(k));
+        let g = Rat::inv_pow2(i + 1);
+        let gg: (g + g <= Rat::inv_succ(k)) =
+            Rat::le_trans(Rat::le_of_same(Rat::inv_pow2_half(i)), Rat::le_trans(Rat::inv_pow2_le_inv_succ(i), Rat::inv_succ_antitone(k, i, from)));
+        let hg: (0 <= g) = Rat::inv_pow2_nonneg(i + 1);
+        let r: (s.real().at(i) <= s.sum(l) + g) = Rat::le_add_of_dist(s.real_at(i));
         match Nat::le_total(l, n) {
             Inl(h) => {
                 let d = calc {
                     (s.sum(l) - c).abs() ≈ (c - s.sum(l)).abs() := s.sum(l).abs_sub_comm(c),
                     <= s.err(l) := s.sum_close(l, n, s.index_start(i), h),
-                    <= Rat::inv_succ(i) := s.fine(i),
-                    <= f := Rat::inv_succ_antitone(k, i, from),
+                    <= g := s.fine(i),
                 };
-                let near: (s.sum(l) <= (c + e) + f) = linarith(Rat::le_add_of_dist(d), s.err_nonneg(n));
+                let near: (s.real().at(i) <= (c + e) + Rat::inv_succ(k)) = linarith(r, Rat::le_add_of_dist(d), s.err_nonneg(n), gg);
                 near
             },
-            Inr(h) => Rat::le_trans(Rat::le_add_of_dist(s.sum_close(n, l, hs, h)), (c + e).le_add_nonneg(f, hf)),
+            Inr(h) => {
+                let near: (s.real().at(i) <= (c + e) + Rat::inv_succ(k)) = linarith(r, Rat::le_add_of_dist(s.sum_close(n, l, hs, h)), gg, hg);
+                near
+            },
         }
     }))
 }
@@ -228,18 +246,20 @@ theorem Series::above(self s: Series, n: Nat, hs: s.start <= n): s.real() <= CRe
 theorem Series::below(self s: Series, n: Nat, hs: s.start <= n): CReal::ofRat(s.sum(n) - s.err(n)) <= s.real() {
     let c = s.sum(n);
     let e = s.err(n);
-    CReal::le_of_close(λ k => Exists(k, λ i from => {
+    CReal::ofRat_le_of_close(c - e, λ k => Exists(k, λ i from => {
         let l = s.index(i);
-        let f = Rat::inv_succ(k);
-        let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(k));
+        let g = Rat::inv_pow2(i + 1);
+        let gg: (g + g <= Rat::inv_succ(k)) =
+            Rat::le_trans(Rat::le_of_same(Rat::inv_pow2_half(i)), Rat::le_trans(Rat::inv_pow2_le_inv_succ(i), Rat::inv_succ_antitone(k, i, from)));
+        let hg: (0 <= g) = Rat::inv_pow2_nonneg(i + 1);
+        let r: (s.sum(l) <= s.real().at(i) + g) = Rat::le_add_of_dist(Rat::le_trans(Rat::le_of_same(s.sum(l).abs_sub_comm(s.real().at(i))), s.real_at(i)));
         match Nat::le_total(l, n) {
             Inl(h) => {
                 let d = calc {
                     (c - s.sum(l)).abs() <= s.err(l) := s.sum_close(l, n, s.index_start(i), h),
-                    <= Rat::inv_succ(i) := s.fine(i),
-                    <= f := Rat::inv_succ_antitone(k, i, from),
+                    <= g := s.fine(i),
                 };
-                let near: (c - e <= s.sum(l) + f) = linarith(Rat::le_add_of_dist(d), s.err_nonneg(n));
+                let near: (c - e <= s.real().at(i) + Rat::inv_succ(k)) = linarith(r, Rat::le_add_of_dist(d), s.err_nonneg(n), gg);
                 near
             },
             Inr(h) => {
@@ -247,7 +267,7 @@ theorem Series::below(self s: Series, n: Nat, hs: s.start <= n): CReal::ofRat(s.
                     (c - s.sum(l)).abs() ≈ (s.sum(l) - c).abs() := c.abs_sub_comm(s.sum(l)),
                     <= e := s.sum_close(n, l, hs, h),
                 };
-                let near: (c - e <= s.sum(l) + f) = linarith(Rat::le_add_of_dist(d), hf);
+                let near: (c - e <= s.real().at(i) + Rat::inv_succ(k)) = linarith(r, Rat::le_add_of_dist(d), gg, hg);
                 near
             },
         }

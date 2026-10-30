@@ -1981,3 +1981,40 @@ theorem Nat::leb_not_lt(self n, m: Nat, h: Succ(n).leb(m).not().IsTrue()): m.leb
 theorem Nat::leb_lt_le_absurd(self n, m: Nat, lt: Succ(n).leb(m).IsTrue(), le: m.leb(n).IsTrue()): False {
     n.lt_irrefl(Succ(n).le_trans(m, n, Succ(n).leb_sound(m, lt), m.leb_sound(n, le)))
 }
+
+// `ones(j)` is 2^j - 1, so a number is below two to its width.
+theorem Nat::ones_succ_pow(self j: Nat): j.ones() + 1 = Nat::pow(2, j) {
+    match j {
+        Zero => refl,
+        Succ(i) => {
+            let o = i.ones();
+            let ih: (o + 1 = Nat::pow(2, i)) = i.ones_succ_pow();
+            let fwd: (Succ(0 + o) + o = Succ((0 + o) + o)) = (0 + o).add_succ_left(o);
+            let back: (Succ((0 + o) + o) = Succ(0 + o) + o) = j(fwd, λ z _ => z = Succ(0 + o) + o, refl);
+            let step: (Succ(Succ(o * 2)) = Succ(o) * 2) = Nat::cong_succ(back);
+            j(ih, λ y _ => Succ(Succ(o * 2)) = y * 2, step)
+        },
+    }
+}
+
+theorem Nat::lt_pow_width(self n: Nat): n < Nat::pow(2, n.width()) {
+    let w = n.width();
+    let below: (n <= w.ones()) = n.le_ones_width();
+    let top: (w.ones() + 1 = Nat::pow(2, w)) = w.ones_succ_pow();
+    j(top, λ y _ => n < y, below)
+}
+
+// A power of two outgrows its exponent: n < 2^n. The binary rate of a real's
+// terms (std/creal) is at least as fine as the unary one.
+theorem Nat::lt_two_pow(self n: Nat): n < Nat::pow(2, n) {
+    match n {
+        Zero => trivial,
+        Succ(k) => {
+            let p = Nat::pow(2, k);
+            let ih: (k < p) = k.lt_two_pow();
+            let one: (1 <= p) = Nat::one_le_pow(2, k, trivial);
+            let sum: (Succ(k) + 1 <= p + p) = Nat::add_le_mono(Succ(k), p, 1, p, ih, one);
+            j(p.mul_two(), λ y _ => Succ(k) + 1 <= y → Succ(k) < p * 2, λ h => h)(sum)
+        },
+    }
+}

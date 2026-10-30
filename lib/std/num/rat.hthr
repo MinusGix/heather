@@ -846,6 +846,22 @@ theorem Rat::quarters_le({f: Rat}, j: Nat, hf: f <= Rat::inv_succ((j + j + 1) + 
     }
 }
 
+// A middle step within 1/(2k+2) between two steps within 1/(4k+4) each
+// stays within 1/(k+1): the shape of a chain whose ends are roundings.
+theorem Rat::sandwich_le({e, m: Rat}, k: Nat, he: e <= Rat::inv_succ((k + k + 1) + (k + k + 1) + 1), hm: m <= Rat::inv_succ(k + k + 1)):
+    (e + m) + e <= Rat::inv_succ(k)
+{
+    let half = Rat::inv_succ(k + k + 1);
+    let q = Rat::inv_succ((k + k + 1) + (k + k + 1) + 1);
+    calc {
+        (e + m) + e ≈ (m + e) + e := Rat::add_respects(e.add_comm(m), e.same_refl()),
+        ≈ m + (e + e) := m.add_assoc(e, e),
+        <= half + (q + q) := Rat::add_le_mono(hm, Rat::add_le_mono(he, he)),
+        ≈ half + half := Rat::add_respects(half.same_refl(), Rat::inv_succ_half(k + k + 1)),
+        ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
+    }
+}
+
 // A bound of l+1 against the step 1/((l+1)(k+1)) leaves 1/(k+1): the
 // product reads its factors at index (l+1)(k+1) - 1 to keep the other
 // factor's size inside the rate.
@@ -899,6 +915,52 @@ theorem Rat::le_of_mul_le_bounded({p, q: Rat}, j, l: Nat, hp: 0 < p, hb: p <= Ra
     })
 }
 
+// `inv_pow2(n)` is 2^-n, the binary step: the rate of a real's n-th term
+// (std/creal), so that the index counts bits. Its denominator is a power of
+// two, positive by `Nat::pow_pos`.
+
+fn Rat::inv_pow2(n: Nat) → Rat { Rat(1, Nat::pow(2, n)) }
+
+theorem Rat::inv_pow2_pos(n: Nat): 0 < Rat::inv_pow2(n) { omega }
+
+theorem Rat::inv_pow2_nonneg(n: Nat): 0 <= Rat::inv_pow2(n) { Rat::le_of_lt(Rat::inv_pow2_pos(n)) }
+
+theorem Rat::inv_pow2_antitone(m, n: Nat, h: m <= n): Rat::inv_pow2(n) <= Rat::inv_pow2(m) {
+    let grow: (Nat::pow(2, m) <= Nat::pow(2, n)) = Nat::pow_le_pow_r(2, m, n, trivial, h);
+    omega(grow)
+}
+
+// Two halves of 2^-n: 2^-(n+1) + 2^-(n+1) ≈ 2^-n.
+theorem Rat::inv_pow2_half(n: Nat): Rat::inv_pow2(n + 1) + Rat::inv_pow2(n + 1) ≈ Rat::inv_pow2(n) {
+    let half = Rat::inv_pow2(n + 1).den;
+    let p = Nat::pow(2, n);
+    let whole: (Rat::inv_pow2(n).den.int() = p.int()) = refl;
+    let part: (half.int() = p.int() * 2) = refl;
+    ring(whole, part, half.int_mul(half))
+}
+
+// The binary step is at most the unary one, since n + 1 <= 2^n.
+theorem Rat::inv_pow2_le_inv_succ(n: Nat): Rat::inv_pow2(n) <= Rat::inv_succ(n) {
+    let big: (n < Nat::pow(2, n)) = n.lt_two_pow();
+    omega(big)
+}
+
+theorem Rat::inv_pow2_le_one(n: Nat): Rat::inv_pow2(n) <= 1 { Rat::le_trans(Rat::inv_pow2_le_inv_succ(n), Rat::inv_succ_le_one(n)) }
+
+// A bound of 2^b against the step 2^-(n+b) leaves 2^-n: the product reads its
+// factors b bits further out to keep the other factor's size inside the rate.
+theorem Rat::scale_inv_pow2(b, n: Nat): Rat::ofInt(Nat::pow(2, b).int()) * Rat::inv_pow2(n + b) ≈ Rat::inv_pow2(n) {
+    let big = Rat::ofInt(Nat::pow(2, b).int());
+    let fine = Rat::inv_pow2(n + b);
+    let parts: (Nat::pow(2, n + b) = Nat::pow(2, n) * Nat::pow(2, b)) = Nat::pow_add(2, n, b);
+    let fd: (fine.den.int() = Nat::pow(2, n + b).int()) = refl;
+    let part: (Nat::pow(2, n + b).int() = Nat::pow(2, n).int() * Nat::pow(2, b).int()) = rewrite(parts, refl);
+    let whole: (Rat::inv_pow2(n).den.int() = Nat::pow(2, n).int()) = refl;
+    let unit: (big.den.int() = 1) = refl;
+    let prod: ((big * fine).den.int() = fine.den.int()) = ring(big.den_mul(fine), unit);
+    ring(prod, fd, part, whole)
+}
+
 // Every rational is below some integer: x = a/p < |a| + 1, because p ≥ 1.
 theorem Rat::archimedean(self x: Rat): ∃ n: Nat, x < Rat::ofInt(OfNat(n)) {
     let a = x.num;
@@ -914,6 +976,13 @@ theorem Rat::archimedean_inv(self eps: Rat, h: 0 < eps): ∃ n: Nat, Rat::inv_su
     let r = eps.den.int();
     let he: (1 <= e) = omega(Int::zero_mul(r));
     Exists(eps.den, omega(Int::mul_le_mono_r(1, e, OfNat(Succ(eps.den)), he, trivial)))
+}
+
+// Every positive rational is above some 2^-n.
+theorem Rat::archimedean_inv_pow2(self eps: Rat, h: 0 < eps): ∃ n: Nat, Rat::inv_pow2(n) < eps {
+    match eps.archimedean_inv(h) {
+        Exists(n, small) => Exists(n, Rat::lt_of_le_of_lt(Rat::inv_pow2_le_inv_succ(n), small)),
+    }
 }
 
 // A rational is at most its numerator in size, a/p with p ≥ 1; with the
@@ -981,6 +1050,17 @@ theorem Rat::dist_triangle(self x, y, z: Rat): (x - z).abs() <= (x - y).abs() + 
     calc {
         (x - z).abs() ≈ ((x - y) + (y - z)).abs() := Rat::abs_respects(Rat::same_sym(x.sub_add_sub(y, z))),
         <= (x - y).abs() + (y - z).abs() := (x - y).abs_triangle(y - z),
+    }
+}
+
+// Three steps of a chain: a to b to c to d.
+theorem Rat::dist_three({a, b, c, d, e1, e2, e3: Rat}, h1: (a - b).abs() <= e1, h2: (b - c).abs() <= e2, h3: (c - d).abs() <= e3):
+    (a - d).abs() <= (e1 + e2) + e3
+{
+    calc {
+        (a - d).abs() <= (a - c).abs() + (c - d).abs() := a.dist_triangle(c, d),
+        <= ((a - b).abs() + (b - c).abs()) + (c - d).abs() := (a - c).abs().add_le_mono_r((a - b).abs() + (b - c).abs(), (c - d).abs(), a.dist_triangle(b, c)),
+        <= (e1 + e2) + e3 := Rat::add_le_mono(Rat::add_le_mono(h1, h2), h3),
     }
 }
 
@@ -1980,3 +2060,8 @@ theorem Rat::range_le(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) 
 theorem Rat::range_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → k < n → 0 <= f(k)): 0 <= MonoidRel::range(+, n, f) {
     LocatedAddGroup::range_nonneg(n, f, h)
 }
+
+// Products distribute over differences.
+theorem Rat::sub_mul(self a, b, c: Rat): (a - b) * c ≈ a * c - b * c { ring }
+
+theorem Rat::mul_sub(self a, b, c: Rat): a * (b - c) ≈ a * b - a * c { ring }
