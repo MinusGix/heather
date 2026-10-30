@@ -270,6 +270,9 @@ theorem decide_yes<P: Decide>(h: or_index(P.dec) = 0): P { or_of_index_zero(P.de
 
 fn Bool::IsTrue(self b: Bool) → Type { match b { False => False, True => True } }
 
+// A verdict written `b = True` (the shape `refl` proves) as the proposition.
+theorem Bool::is_true_of_eq({b: Bool}, h: b = True): b.IsTrue() { j(sym(h), λ w _ => w.IsTrue(), trivial) }
+
 theorem Bool::is_true_unique(self b: Bool, p, q: b.IsTrue()): p = q {
     match b as λ x => (u, v: x.IsTrue()) → u = v {
         False => λ u v => false_elim(u),

@@ -257,6 +257,12 @@ theorem Rat::le_respects({x, x2, y, y2: Rat}, hx: x ≈ x2, hy: y ≈ y2, h: x <
     Rat::le_trans(Rat::le_trans(Rat::le_of_same(Rat::same_sym(hx)), h), Rat::le_of_same(hy))
 }
 
+// One side moved along `≈`, the other kept: the `calc` step `≈ … <=` as one
+// call, with nothing to fill on the side that does not move.
+theorem Rat::le_of_same_of_le({x, y, z: Rat}, hxy: x ≈ y, hyz: y <= z): x <= z { Rat::le_trans(Rat::le_of_same(hxy), hyz) }
+
+theorem Rat::le_of_le_of_same({x, y, z: Rat}, hxy: x <= y, hyz: y ≈ z): x <= z { Rat::le_trans(hxy, Rat::le_of_same(hyz)) }
+
 // Adding on the right preserves order. Both sides expand to two monomials;
 // the z-terms agree outright and the x/y terms compare by `h` scaled by r·r.
 theorem Rat::add_le_mono_r(self x, y, z: Rat, h: x <= y): x + z <= y + z {
@@ -742,6 +748,10 @@ theorem Rat::pos_of_mul_pos({x, y: Rat}, hx: 0 < x, h: 0 < x * y): 0 < y {
 theorem Rat::mul_le_mono_r_nonpos({x, y, z: Rat}, h: x <= y, hz: z <= 0): y * z <= x * z {
     let flipped = Rat::mul_le_mono_r(x := x, y := y, z := -z, h := h, hz := omega(hz, Int::zero_mul(z.den.int())));
     linarith(flipped)
+}
+
+theorem Rat::mul_le_mono_l_nonpos({x, y, z: Rat}, h: x <= y, hz: z <= 0): z * y <= z * x {
+    Rat::le_respects(y.mul_comm(z), x.mul_comm(z), Rat::mul_le_mono_r_nonpos(h, hz))
 }
 
 // ---------------------------------------------------------------------------

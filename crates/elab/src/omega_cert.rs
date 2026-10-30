@@ -50,6 +50,25 @@ pub(crate) struct Certificate {
     /// binds it once, so the checker meets one list rather than one per row.
     /// `None` when `source` does not use the name.
     pub atoms: Option<String>,
+    /// A Bool-guard round's facts (`split_bool_guards`): what the caller
+    /// binds before checking, and the facts it settles while it does.
+    pub guards: Option<GuardRound>,
+}
+
+/// A fact the caller binds before checking a certificate: `term` (a fact
+/// already in scope) at `ty`, its guard's definition unfolded.
+pub(crate) struct GuardAlias {
+    pub name: String,
+    pub term: Rc<Term>,
+    pub ty: Type,
+    pub level: Level,
+}
+
+pub(crate) struct GuardRound {
+    pub aliases: Vec<GuardAlias>,
+    /// The names of the facts the round reads: no `omega` inside the
+    /// certificate reads them again.
+    pub settles: Vec<String>,
 }
 
 /// The name a certificate uses for its atom list (`Certificate::atoms`).
@@ -882,14 +901,26 @@ pub(crate) fn source_context(cx: &Cx) -> std::borrow::Cow<'_, Cx> {
 // (`h.right.left`): a certificate cites only the ones it uses
 // (issues/omega-nested-conjunction-facts.md).
 pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
+    local_fact_entries(elab, cx).into_iter().map(|fact| (fact.name, fact.ty)).collect()
+}
+
+/// A fact `local_facts` lists, with its evidence and its type's level.
+struct LocalFact {
+    name: String,
+    term: Rc<Term>,
+    ty: Type,
+    level: Level,
+}
+
+fn local_fact_entries(elab: &Elaborator, cx: &Cx) -> Vec<LocalFact> {
     let mut seen = std::collections::HashSet::new();
     let mut facts = Vec::new();
     for name in cx.names.iter().chain(cx.aliases.iter().map(|alias| &alias.name)) {
         if name.starts_with('#') || !seen.insert(name.clone()) {
             continue;
         }
-        if let Ok((term, ty, _)) = elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 }) {
-            push_conjuncts(elab, cx, name.clone(), Rc::new(term), ty, &mut facts);
+        if let Ok((term, ty, level)) = elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 }) {
+            push_conjuncts(elab, cx, name.clone(), Rc::new(term), ty, level, &mut facts);
         }
     }
     facts
@@ -900,7 +931,7 @@ pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
 /// unifier does (`spelling::beta_head`): an `Exists`'s `.proof` is typed
 /// `(λ k => P(k))(e.witness)`, and read raw no relation is visible in it
 /// (issues/omega-redex-typed-fact-ignored.md).
-fn push_conjuncts(elab: &Elaborator, cx: &Cx, name: String, term: Rc<Term>, ty: Type, out: &mut Vec<(String, Type)>) {
+fn push_conjuncts(elab: &Elaborator, cx: &Cx, name: String, term: Rc<Term>, ty: Type, level: Level, out: &mut Vec<LocalFact>) {
     let ty = match &ty {
         Type::El { level, tm } => match crate::spelling::beta_head(tm) {
             Some(contractum) => Type::El { level: level.clone(), tm: Rc::new(contractum) },
@@ -917,17 +948,17 @@ fn push_conjuncts(elab: &Elaborator, cx: &Cx, name: String, term: Rc<Term>, ty: 
             .map(|(idx, field)| {
                 elab.project_field(cx, &ind, &ty, Rc::clone(&term), idx, heather_syntax::Span { start: 0, end: 0 })
                     .ok()
-                    .map(|(side, side_ty, _)| (format!("{name}.{field}"), Rc::new(side), side_ty))
+                    .map(|(side, side_ty, side_level)| (format!("{name}.{field}"), Rc::new(side), side_ty, side_level))
             })
             .collect();
         if let Some(sides) = sides {
-            for (side_name, side, side_ty) in sides {
-                push_conjuncts(elab, cx, side_name, side, side_ty, out);
+            for (side_name, side, side_ty, side_level) in sides {
+                push_conjuncts(elab, cx, side_name, side, side_ty, side_level, out);
             }
             return;
         }
     }
-    out.push((name, ty));
+    out.push(LocalFact { name, term, ty, level });
 }
 
 fn reflect_assumption(
@@ -3121,6 +3152,7 @@ fn split_disequality(elab: &Elaborator, cx: &Cx, cutsat_read_equalities: bool) -
         );
         return Ok(Some(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: OmegaReport {
@@ -3160,6 +3192,7 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
         };
         return Ok(Some(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: OmegaReport {
@@ -3265,12 +3298,284 @@ fn split_nat_subtraction(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificat
         );
         return Ok(Some(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("omega::nat_sub_elim", 1),
         }));
     }
     Ok(None)
+}
+
+/// The names a Bool-guard round binds (`split_bool_guards`): its parts
+/// (`__omega_guard{k}_{i}`, read in the round, never again), the guards it
+/// leaves for the next round (`__omega_open{k}_{i}`), and the facts it binds
+/// at their definition's unfolding (`__omega_unfold{k}_{i}`).
+const GUARD_PART: &str = "__omega_guard";
+const GUARD_OPEN: &str = "__omega_open";
+const GUARD_UNFOLD: &str = "__omega_unfold";
+
+/// Guard rounds one goal may sit under: a round reads every guard in scope,
+/// so another is only for what it left open.
+const GUARD_ROUND_LIMIT: usize = 6;
+
+/// Branches one round's disjunctions may make, `||` proved true and `&&`
+/// proved false; a disjunction past them is left open for the next round,
+/// which only a branch that fails without it reaches.
+const GUARD_BRANCHES: usize = 8;
+
+/// One connective off a Bool guard (`b` in `b.IsTrue()`).
+enum GuardShape<'a> {
+    And(&'a Rc<Term>, &'a Rc<Term>),
+    Or(&'a Rc<Term>, &'a Rc<Term>),
+    Not(&'a Rc<Term>),
+    /// `n.leb(m)`, read as `n <= m`.
+    Leb,
+    /// A variable, a call or a field: the atom `omega::bit(b)`, unless a definition
+    /// unfolds it to a connective (`unfold_guard`).
+    Atom,
+    /// Anything else (a stuck `match`): not read.
+    Other,
+}
+
+fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
+    let args = |name| named_args(elab, b, name);
+    if let Some(args) = args("bool::Bool::and") && let [x, y] = args.as_slice() {
+        return GuardShape::And(x, y);
+    }
+    if let Some(args) = args("bool::Bool::or") && let [x, y] = args.as_slice() {
+        return GuardShape::Or(x, y);
+    }
+    if let Some(args) = args("bool::Bool::not") && let [x] = args.as_slice() {
+        return GuardShape::Not(x);
+    }
+    if args("nat::Nat::leb").is_some_and(|args| args.len() == 2) {
+        return GuardShape::Leb;
+    }
+    match app_spine(b).0 {
+        Term::GlobalTm { .. } | Term::Var(_) => GuardShape::Atom,
+        _ if is_field_read(elab, b) => GuardShape::Atom,
+        _ => GuardShape::Other,
+    }
+}
+
+/// Whether a guard has a connective or a comparison under its negations.
+fn guard_reads_by_structure(elab: &Elaborator, b: &Rc<Term>) -> bool {
+    match guard_shape(elab, b) {
+        GuardShape::Not(x) => guard_reads_by_structure(elab, x),
+        GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Leb => true,
+        GuardShape::Atom | GuardShape::Other => false,
+    }
+}
+
+/// `b` in a fact `b.IsTrue()`.
+fn is_true_arg<'a>(elab: &Elaborator, ty: &'a Type) -> Option<&'a Rc<Term>> {
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    let args = named_args(elab, tm, "bool::Bool::IsTrue")?;
+    let [b] = args.as_slice() else {
+        return None;
+    };
+    Some(b)
+}
+
+/// A guard whose head is a Bool definition, unfolded one reduct at a time to
+/// the first with a connective at its head (`F.canonical(mag, bexp)` through
+/// its `let`s to its `&&` chain), under any negations; `None` when it has one
+/// already or never reaches one. As §11 unfolds a defined proposition.
+fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
+    match guard_shape(elab, b) {
+        GuardShape::Not(x) => Some(with_arg_at(b, 0, &unfold_guard(elab, cx, x)?)),
+        GuardShape::Atom if head_is_global(b) && !is_ctor_value(b) => {
+            let oracle = elab.goal_oracle();
+            oracle.term_reducts(&cx.gamma, b, PROPOSITION_UNFOLD_STEPS).map(Rc::new).find(|reduct| {
+                matches!(
+                    guard_shape(elab, reduct),
+                    GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
+/// A guard a round reads: `evidence` proves `term.IsTrue()` when `positive`
+/// and `(!term).IsTrue()` otherwise; `negated` evidence proves
+/// `¬term.IsTrue()` instead.
+#[derive(Clone)]
+struct GuardItem {
+    evidence: String,
+    term: Rc<Term>,
+    positive: bool,
+    negated: bool,
+}
+
+struct GuardEmitter<'a> {
+    elab: &'a Elaborator,
+    cx: &'a Cx,
+    round: usize,
+    fresh: usize,
+    rules: Vec<&'static str>,
+}
+
+impl GuardEmitter<'_> {
+    fn name(&mut self, prefix: &str) -> String {
+        let name = format!("{prefix}{}_{}", self.round, self.fresh);
+        self.fresh += 1;
+        name
+    }
+
+    fn rule(&mut self, rule: &'static str) -> &'static str {
+        if !self.rules.contains(&rule) {
+            self.rules.push(rule);
+        }
+        rule
+    }
+
+    fn item(evidence: &str, term: &Rc<Term>, positive: bool) -> GuardItem {
+        GuardItem { evidence: evidence.to_string(), term: Rc::clone(term), positive, negated: false }
+    }
+
+    /// The guards in `items`, the first taken apart and the rest after it,
+    /// as one source term that ends in `omega` at every branch; at most
+    /// `budget` branches.
+    fn emit(&mut self, mut items: Vec<GuardItem>, budget: usize) -> String {
+        if items.is_empty() {
+            return "omega".to_string();
+        }
+        let item = items.remove(0);
+        let h = item.evidence.clone();
+        let then = |front: Vec<GuardItem>, rest: &[GuardItem]| front.into_iter().chain(rest.iter().cloned()).collect::<Vec<_>>();
+        if item.negated {
+            let x = self.name(GUARD_PART);
+            let body = self.emit(then(vec![Self::item(&x, &item.term, false)], &items), budget);
+            return format!("{}({h}, {x} ⊢ {body})", self.rule("omega::guard_negated"));
+        }
+        match (item.positive, guard_shape(self.elab, &item.term)) {
+            (true, GuardShape::And(a, b)) => {
+                let (x, y) = (self.name(GUARD_PART), self.name(GUARD_PART));
+                let body = self.emit(then(vec![Self::item(&x, a, true), Self::item(&y, b, true)], &items), budget);
+                format!("{}({h}, {x} {y} ⊢ {body})", self.rule("omega::guard_and"))
+            }
+            (false, GuardShape::Or(a, b)) => {
+                let (x, y) = (self.name(GUARD_PART), self.name(GUARD_PART));
+                let body = self.emit(then(vec![Self::item(&x, a, false), Self::item(&y, b, false)], &items), budget);
+                format!("{}({h}, {x} {y} ⊢ {body})", self.rule("omega::guard_nor"))
+            }
+            (positive, GuardShape::Or(a, b) | GuardShape::And(a, b)) if budget >= 2 => {
+                let (x, y) = (self.name(GUARD_PART), self.name(GUARD_PART));
+                let left = self.emit(then(vec![Self::item(&x, a, positive)], &items), budget / 2);
+                let right = self.emit(then(vec![Self::item(&y, b, positive)], &items), budget / 2);
+                let rule = if positive { "omega::guard_or" } else { "omega::guard_nand" };
+                format!("{}({h}, {x} ⊢ {left}, {y} ⊢ {right})", self.rule(rule))
+            }
+            (true, GuardShape::Not(a)) => {
+                self.emit(then(vec![Self::item(&h, a, false)], &items), budget)
+            }
+            (false, GuardShape::Not(a)) => {
+                let x = self.name(GUARD_PART);
+                let body = self.emit(then(vec![Self::item(&x, a, true)], &items), budget);
+                format!("{}({h}, {x} ⊢ {body})", self.rule("omega::guard_not_not"))
+            }
+            (positive, GuardShape::Leb) => {
+                let x = self.name(GUARD_PART);
+                let body = self.emit(items, budget);
+                let rule = if positive { "omega::guard_leb" } else { "omega::guard_not_leb" };
+                format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
+            }
+            (positive, GuardShape::Atom) if unfold_guard(self.elab, self.cx, &item.term).is_none() => {
+                let x = self.name(GUARD_PART);
+                let body = self.emit(items, budget);
+                let rule = if positive { "omega::guard_bit" } else { "omega::guard_not_bit" };
+                format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
+            }
+            // A disjunction past the budget, or a definition to unfold: the
+            // next round reads it, where it is a fact in scope.
+            (_, GuardShape::Or(..) | GuardShape::And(..) | GuardShape::Atom) => {
+                let x = self.name(GUARD_OPEN);
+                let body = self.emit(items, budget);
+                format!("{}({h}, {x} ⊢ {body})", self.rule("omega::guard_open"))
+            }
+            (_, GuardShape::Other) => self.emit(items, budget),
+        }
+    }
+}
+
+/// The Bool guards among the facts, read by their structure
+/// (issues/omega-reads-bool-guards.md, design §17): a fact `b.IsTrue()` or
+/// `¬b.IsTrue()` is taken apart by the `omega::guard_*` rules, `&&` into
+/// both sides, `||` into two branches, `!` by its operand's opposite rule,
+/// `n.leb(m)` into `n <= m` (`!n.leb(m)` into `m < n`), and any other Bool
+/// into the atom `bit(b)`, `1` or `0`. A guard whose head is a definition is
+/// read at its unfolding, a fact bound beside the original
+/// (`GuardRound::aliases`). Every guard in scope is read in one round, ending
+/// in `omega` at each branch; the facts it reads are settled for the omegas
+/// inside it, and what it leaves open is the next round's. A round is
+/// written only when some guard has a connective or a comparison to read:
+/// a context of bare Bool atoms is left as it was.
+fn split_bool_guards(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    if elab.key_of("omega::guard_and").is_none() {
+        return Ok(None);
+    }
+    let (round, settled) = {
+        let rounds = elab.omega_settled_guards.borrow();
+        let settled: std::collections::HashSet<String> = rounds.iter().flatten().cloned().collect();
+        (rounds.len(), settled)
+    };
+    if round >= GUARD_ROUND_LIMIT {
+        return Ok(None);
+    }
+    let mut items = Vec::new();
+    let mut aliases = Vec::new();
+    let mut settles = Vec::new();
+    let mut readable = false;
+    for fact in local_fact_entries(elab, cx) {
+        if fact.name.starts_with(GUARD_PART) || fact.name.starts_with(GUARD_UNFOLD) || settled.contains(&fact.name) {
+            continue;
+        }
+        if let Some(b) = is_true_arg(elab, &fact.ty) {
+            let (evidence, b) = match unfold_guard(elab, cx, b) {
+                Some(unfolded) => {
+                    let Type::El { level, tm } = &fact.ty else { unreachable!() };
+                    let name = format!("{GUARD_UNFOLD}{round}_{}", aliases.len());
+                    aliases.push(GuardAlias {
+                        name: name.clone(),
+                        term: Rc::clone(&fact.term),
+                        ty: Type::El { level: level.clone(), tm: with_arg_at(tm, 0, &unfolded) },
+                        level: fact.level.clone(),
+                    });
+                    (name, unfolded)
+                }
+                None => (fact.name.clone(), Rc::clone(b)),
+            };
+            readable |= guard_reads_by_structure(elab, &b);
+            items.push(GuardItem { evidence, term: b, positive: true, negated: false });
+            settles.push(fact.name);
+        } else if let Some(domain) = negated_domain(elab, cx, &fact.ty)
+            && let Some(b) = is_true_arg(elab, &domain)
+        {
+            readable |= guard_reads_by_structure(elab, b) || unfold_guard(elab, cx, b).is_some();
+            items.push(GuardItem { evidence: fact.name.clone(), term: Rc::clone(b), positive: false, negated: true });
+            settles.push(fact.name);
+        }
+    }
+    // Bare atoms alone: one fact `r.IsTrue()` beside `¬r.IsTrue()` still
+    // meets as `bit(r)`; a single one has nothing to meet.
+    if !readable && items.len() < 2 {
+        return Ok(None);
+    }
+    let mut emitter = GuardEmitter { elab, cx, round, fresh: 0, rules: Vec::new() };
+    let source = emitter.emit(items, GUARD_BRANCHES);
+    let mut report = wrapper_report("omega::guard_and", 0);
+    report.used_lemmas = emitter.rules;
+    Ok(Some(Certificate {
+        atoms: None,
+        guards: Some(GuardRound { aliases, settles }),
+        expr: parse_generated_expr(&source)?,
+        source,
+        report,
+    }))
 }
 
 /// What CutSat said about a reflection Omega's real shadow left satisfiable.
@@ -3373,6 +3678,7 @@ pub(crate) fn reconstruct(
         let source = "logic::And(left := omega, right := omega)".to_string();
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("logic::And", 0),
@@ -3388,6 +3694,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_antisym", 0),
@@ -3400,6 +3707,7 @@ pub(crate) fn reconstruct(
         let source = format!("nat::Nat::le_antisym({}, 0, omega, omega)", remainder);
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("nat::Nat::le_antisym", 0),
@@ -3416,6 +3724,7 @@ pub(crate) fn reconstruct(
         let source = format!("int::Int::le_antisym({}, {}, omega, omega)", left, right);
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_antisym", 0),
@@ -3429,6 +3738,7 @@ pub(crate) fn reconstruct(
         let source = format!("nat::Nat::le_antisym({}, {}, omega, omega)", left, right);
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("nat::Nat::le_antisym", 0),
@@ -3443,6 +3753,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::lt_of_not_le", 0),
@@ -3461,6 +3772,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_of_not_lt", 0),
@@ -3475,6 +3787,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("omega::nat_lt_of_not_not_lt", 0),
@@ -3489,6 +3802,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("omega::nat_le_of_not_not_le", 0),
@@ -3497,11 +3811,12 @@ pub(crate) fn reconstruct(
     // A negated relation (`¬(a <= b)`, `a ≠ b`): assume it and refute the
     // assumption, which the recursive invocation reads as a context fact.
     if let Some(domain) = negated_domain(elab, cx, expected)
-        && reads_as_relation(elab, cx, &domain)
+        && (reads_as_relation(elab, cx, &domain) || is_true_arg(elab, &domain).is_some())
     {
         let source = "λ __omega_assumed => omega".to_string();
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("λ", 0),
@@ -3520,6 +3835,7 @@ pub(crate) fn reconstruct(
                     let source = "trivial".to_string();
                     return Ok(Certificate {
                         atoms: None,
+                        guards: None,
                         expr: parse_generated_expr(&source)?,
                         source,
                         report: wrapper_report("trivial", 0),
@@ -3538,6 +3854,18 @@ pub(crate) fn reconstruct(
                     return reconstruct(elab, cx, &unfolded, allow_disequality_split, allow_connective_split, allow_cutsat);
                 }
             }
+        }
+        // A guard goal that does not compute to a verdict: assume its
+        // negation, which a guard round reads as a fact.
+        if is_true_arg(elab, expected).is_some() && elab.key_of("omega::guard_goal").is_some() {
+            let source = "omega::guard_goal(__omega_negated_goal ⊢ omega)".to_string();
+            return Ok(Certificate {
+                atoms: None,
+                guards: None,
+                expr: parse_generated_expr(&source)?,
+                source,
+                report: wrapper_report("omega::guard_goal", 0),
+            });
         }
         return Err(format!(
             "Omega currently expects `False` or an affine `Int`/`Nat` relation goal, got `{}`",
@@ -3582,6 +3910,9 @@ pub(crate) fn reconstruct(
                 }
             }
             let Some(first) = explicit.first() else {
+                if let Some(certificate) = split_bool_guards(elab, cx)? {
+                    return Ok(certificate);
+                }
                 if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx, false)? {
                     return Ok(certificate);
                 }
@@ -3689,6 +4020,7 @@ fn refute_spelled(
             let used_lemmas = reconstruction_lemmas(&source);
             return Ok(Certificate {
                 atoms: None,
+                guards: None,
                 expr,
                 source,
                 report: OmegaReport {
@@ -3710,6 +4042,12 @@ fn refute_spelled(
                     phases: OmegaPhases::default(),
                 },
             });
+        }
+        // Bool guards first, and only in the attempt that answers: a round
+        // reads every guard at once, and the splits below read its parts
+        // inside it.
+        if record_failure && let Some(certificate) = split_bool_guards(elab, cx)? {
+            return Ok(certificate);
         }
         // A CutSat model already satisfies every `=`/`≠` it was given, so
         // splitting one of those would only re-find it; other disequality
@@ -4746,6 +5084,7 @@ fn refute_spelled(
         let used_lemmas = reconstruction_lemmas(&source);
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr,
             source,
             report: OmegaReport {
@@ -4816,6 +5155,7 @@ fn refute_spelled(
     let used_lemmas = reconstruction_lemmas(&source);
     Ok(Certificate {
         atoms: None,
+        guards: None,
         expr,
         source,
         report: OmegaReport {

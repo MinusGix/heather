@@ -3,6 +3,7 @@
 // these lemmas, while ordinary Heather elaboration and the kernel check every
 // equality and order step.
 
+import bool;
 import int;
 import list;
 import logic;
@@ -947,6 +948,82 @@ theorem nat_sub_elim(a, b: Nat,
         Inl(lt) => right(lt, a.sub_zero_of_le(b, a.le_of_lt(b, lt))),
         Inr(ge) => left(ge, b.sub_add_cancel(a, ge)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bool guards (issues/omega-reads-bool-guards.md, design §17). A fact
+// `b.IsTrue()` is read by `b`'s structure: each rule takes one connective
+// off a guard proved true (`h: b.IsTrue()`) or proved false
+// (`h: (!b).IsTrue()`) and hands its parts to the rest of the certificate. A
+// comparison bit becomes its relation; any other Bool is the atom `bit(b)`,
+// so `r` and `!r` meet as `bit(r) = 1` against `bit(r) = 0`. The guard's
+// operands are implicit: the checker reads them off `h`'s type.
+
+fn bit(b: Bool) → Nat { match b { False => 0, True => 1 } }
+
+theorem guard_and({a, b: Bool}, h: (a && b).IsTrue(), k: a.IsTrue() → b.IsTrue() → False): False {
+    let both = a.is_true_and(b, h);
+    k(both.left, both.right)
+}
+
+theorem guard_or({a, b: Bool}, h: (a || b).IsTrue(), left: a.IsTrue() → False, right: b.IsTrue() → False): False {
+    or_elim(a.is_true_or(b, h), left, right)
+}
+
+theorem guard_nand({a, b: Bool}, h: (!(a && b)).IsTrue(), left: (!a).IsTrue() → False, right: (!b).IsTrue() → False): False {
+    match a as λ x => (!(x && b)).IsTrue() → ((!x).IsTrue() → False) → False {
+        False => λ _ l => l(trivial),
+        True => λ g _ => right(g),
+    }(h, left)
+}
+
+theorem guard_nor({a, b: Bool}, h: (!(a || b)).IsTrue(), k: (!a).IsTrue() → (!b).IsTrue() → False): False {
+    match a as λ x => (!(x || b)).IsTrue() → ((!x).IsTrue() → (!b).IsTrue() → False) → False {
+        False => λ g c => c(trivial, g),
+        True => λ g _ => g,
+    }(h, k)
+}
+
+theorem guard_not_not({a: Bool}, h: (!(!a)).IsTrue(), k: a.IsTrue() → False): False {
+    match a as λ x => (!(!x)).IsTrue() → (x.IsTrue() → False) → False {
+        False => λ g _ => g,
+        True => λ _ c => c(trivial),
+    }(h, k)
+}
+
+theorem guard_leb({n, m: Nat}, h: n.leb(m).IsTrue(), k: n <= m → False): False { k(n.leb_sound(m, h)) }
+
+theorem guard_not_leb({n, m: Nat}, h: (!n.leb(m)).IsTrue(), k: m < n → False): False {
+    k(nat_lt_of_not_le(n, m, λ le => n.leb(m).is_true_not(h, n.leb_complete(m, le))))
+}
+
+theorem guard_bit({b: Bool}, h: b.IsTrue(), k: bit(b) = 1 → False): False {
+    match b as λ x => x.IsTrue() → (bit(x) = 1 → False) → False {
+        False => λ g _ => g,
+        True => λ _ c => c(refl),
+    }(h, k)
+}
+
+theorem guard_not_bit({b: Bool}, h: (!b).IsTrue(), k: bit(b) = 0 → False): False {
+    match b as λ x => (!x).IsTrue() → (bit(x) = 0 → False) → False {
+        False => λ _ c => c(refl),
+        True => λ g _ => g,
+    }(h, k)
+}
+
+// A guard proved false as a negation, and a guard left for a later round:
+// its operand needs a definition unfolded, or splitting it now would
+// multiply the branches past the round's budget.
+theorem guard_negated({b: Bool}, h: ¬b.IsTrue(), k: (!b).IsTrue() → False): False { k(b.is_true_not_intro(h)) }
+
+theorem guard_open({b: Bool}, h: b.IsTrue(), k: b.IsTrue() → False): False { k(h) }
+
+// A guard goal, refuted from its negation.
+theorem guard_goal({b: Bool}, k: (!b).IsTrue() → False): b.IsTrue() {
+    match b as λ x => ((!x).IsTrue() → False) → x.IsTrue() {
+        False => λ c => c(trivial),
+        True => λ _ => trivial,
+    }(k)
 }
 
 // ---------------------------------------------------------------------------

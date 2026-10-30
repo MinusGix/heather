@@ -225,7 +225,6 @@ theorem Finite::H_bounds({F: Format}, g: Finite(F)): -(g.units() * 2).int() <= g
 
 // Every finite float is at most the largest.
 theorem Finite::units_le_max({F: Format}, g: Finite(F)): g.units() <= F.max_mag() * Nat::pow(2, F.span) {
-    let c = F.canonical_elim(g.mag, g.bexp, g.ok);
     let mb = F.max_mag_bounds();
     let t: (F.top() = F.half() * 2) = F.top_double();
     match g.bexp.lt_trichotomy(F.span) as λ _ => g.mag * Nat::pow(2, g.bexp) <= F.max_mag() * Nat::pow(2, F.span) {
@@ -233,7 +232,7 @@ theorem Finite::units_le_max({F: Format}, g: Finite(F)): g.units() <= F.max_mag(
             let pb = Nat::pow(2, g.bexp);
             let ps = Nat::pow(2, F.span);
             let pbb = Nat::pow(2, Succ(g.bexp));
-            let fit: (Succ(g.mag) * pb <= F.top() * pb) = Nat::mul_le_mono_r(pb, Succ(g.mag), F.top(), c.left);
+            let fit: (Succ(g.mag) * pb <= F.top() * pb) = Nat::mul_le_mono_r(pb, Succ(g.mag), F.top(), omega(g.ok));
             let unf: (Succ(g.mag) * pb = pb + g.mag * pb) = g.mag.mul_succ_left(pb);
             let pd: (pbb = pb * 2) = refl;
             let dbl: (F.top() * pb = F.half() * pbb) = ring(t, pd);
@@ -243,10 +242,10 @@ theorem Finite::units_le_max({F: Format}, g: Finite(F)): g.units() <= F.max_mag(
             omega
         },
         Inr(rest) => {
-            let top_exp: (g.bexp = F.span) = match rest as λ _ => g.bexp = F.span { Inl(e) => e, Inr(over) => false_elim(omega(c.right.left, over)) };
+            let top_exp: (g.bexp = F.span) = match rest as λ _ => g.bexp = F.span { Inl(e) => e, Inr(over) => false_elim(omega(g.ok, over)) };
             let le: (g.mag <= F.max_mag()) = match F.specials.reserves_top().is_true_dec() as λ _ => g.mag <= F.max_mag() {
-                Inl(rt) => { let room = c.right.right.right(rt, omega); let eq = mb.right.right.left(rt); omega },
-                Inr(nr) => { let eq = mb.right.right.right(nr); let fit = c.left; omega },
+                Inl(rt) => { let eq = mb.right.right.left(rt); omega(g.ok) },
+                Inr(nr) => { let eq = mb.right.right.right(nr); omega(g.ok) },
             };
             let scaled = Nat::mul_le_mono_r(Nat::pow(2, F.span), g.mag, F.max_mag(), le);
             j(sym(top_exp), λ b _ => g.mag * Nat::pow(2, b) <= F.max_mag() * Nat::pow(2, F.span), scaled)

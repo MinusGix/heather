@@ -734,6 +734,10 @@ pub struct Elaborator {
     /// How many `omega` certificates are currently being checked above this
     /// point: the nesting depth recorded in [`OmegaPhases`].
     omega_depth: Cell<usize>,
+    /// The facts each Bool-guard round being checked above this point has
+    /// read (`omega_cert::split_bool_guards`), one entry per round: the
+    /// omegas inside a round do not read them again.
+    omega_settled_guards: RefCell<Vec<Vec<String>>>,
     /// How many `ring` certificates are being checked above this point
     /// (`ring.rs`): their library names resolve as `omega`'s do.
     ring_depth: Cell<usize>,
@@ -1823,6 +1827,7 @@ impl Elaborator {
             container_at: Cell::new(0),
             omega_failure_reports: RefCell::new(Vec::new()),
             omega_depth: Cell::new(0),
+            omega_settled_guards: RefCell::new(Vec::new()),
             ring_depth: Cell::new(0),
             rule_citation: RefCell::new(None),
             meta_pushed: RefCell::new(Vec::new()),
@@ -6122,8 +6127,36 @@ impl Elaborator {
             }
             None => cx,
         };
+        // A guard round binds the guards it reads at their unfolding, and
+        // settles the facts it reads for the omegas inside it.
+        let guarded;
+        let guard_round = cert.guards.take();
+        let cx = match &guard_round {
+            Some(round) => {
+                let mut inner = cx.clone();
+                for alias in &round.aliases {
+                    inner.aliases.push(Rc::new(Alias {
+                        name: alias.name.clone(),
+                        depth: cx.names.len(),
+                        term: Rc::clone(&alias.term),
+                        ty: alias.ty.clone(),
+                        level: alias.level.clone(),
+                        skel: None,
+                        spliced: None,
+                        shifted: Default::default(),
+                    }));
+                }
+                self.omega_settled_guards.borrow_mut().push(round.settles.clone());
+                guarded = inner;
+                &guarded
+            }
+            None => cx,
+        };
         let checked = self
             .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl));
+        if guard_round.is_some() {
+            self.omega_settled_guards.borrow_mut().pop();
+        }
         phases.check_ns = check_guard.finish();
         let term = checked.map_err(|error| ElabError::Elab {
             msg: match &cert.atoms {
