@@ -1,10 +1,10 @@
 ---
 title: Publish the sentinel's image stores again (archive over GitHub's file limit)
-status: open
+status: closed
 labels: [testing,sentinel,caching]
 area: infrastructure
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 The nightly sentinel is running and green (2026-10-29: `3608 passed, 0
@@ -30,3 +30,10 @@ checked too.
 
 The next green sentinel's report says "Image stores published". If it still
 fails, the session log has the push's error.
+
+## Log
+
+- 2026-10-30: The first sentinel after #260 (c16d0e3, `3628 passed, 0
+  failed`) published: `images.tgz.000` (90 MB) + `.001` (34.6 MB). At
+  124.6 MB the single archive was over GitHub's limit, which confirms the
+  cause. Fresh containers now seed from c16d0e3.
