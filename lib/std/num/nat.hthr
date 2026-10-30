@@ -1919,7 +1919,6 @@ theorem Nat::ldiv_mod(self n: Nat, d: Pos<Nat>): n.ldiv(d).rem() = n.mod(d) {
 // and `Le` are the same two-argument recursion written into `Bool` and into
 // `Type`.
 
-// TODO: should "sound" / "complete" w.r.t. some proposition be a definition inofitself or a typeclass?
 theorem Nat::leb_sound(self n: Nat): (m: Nat) → n.leb(m).IsTrue() → n <= m {
     match n {
         Zero => λ m h => trivial,
@@ -1939,6 +1938,10 @@ theorem Nat::leb_complete(self n: Nat): (m: Nat) → n <= m → n.leb(m).IsTrue(
         },
     }
 }
+
+// The two together: `leb` reflects `<=`, the piece a guard assembled from
+// comparisons is reflected from (`bool`'s `reflects_and`, `reflects_iff`).
+theorem Nat::leb_reflects(self n, m: Nat): Reflects(n <= m, n.leb(m)) { reflects_of_is_true(n.leb_sound(m), n.leb_complete(m)) }
 
 // The decision, evaluated at a known order.
 theorem Nat::leb_true(self n, m: Nat, h: n <= m): n.leb(m) = True { eq_true_of_is_true(n.leb(m), n.leb_complete(m, h)) }
