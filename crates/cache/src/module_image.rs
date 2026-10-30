@@ -18,16 +18,16 @@ use heather_kernel::term::GlobalCtx;
 use crate::sha256::{Sha256, hex, sha256};
 use crate::{ELABORATOR_SEMANTICS, KERNEL_SEMANTICS};
 
-const MAGIC: &[u8; 8] = b"HTHCACH\x05";
+const MAGIC: &[u8; 8] = b"HTHCACH\x06";
 const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/3\0";
 const DOMAIN_INTERFACE: &[u8] = b"heather/module-interface/1\0";
 const DOMAIN_SEMANTICS: &[u8] = b"heather/module-semantics/1\0";
 const DOMAIN_RELOCATED: &[u8] = b"heather/module-relocated/1\0";
 const DOMAIN_SOURCE: &[u8] = b"heather/module-source/1\0";
 /// magic, cache key, producing semantics, interface hash, semantic length,
-/// warning count, world-record length. The first 104 bytes are what
+/// warning count, world-record length, expected refusals. The first 104 bytes are what
 /// `scripts/sentinel` reads; they keep their places across format versions.
-const HEADER: usize = 8 + 32 + 32 + 32 + 8 + 8 + 8;
+const HEADER: usize = 8 + 32 + 32 + 32 + 8 + 8 + 8 + 8;
 const CHECKSUM: usize = 32;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -307,6 +307,11 @@ pub struct LoadedModule {
     /// What the image recorded about its dependency world, when its writer
     /// could say (`docs/module-interface-cutoff-design.md` §2).
     pub world: Option<WorldRecord>,
+    /// Declarations the module's `expect-error` directives say are refused,
+    /// and its writer saw refused that way; zero for a module that checked
+    /// whole. The delta holds the module's other items
+    /// (`docs/module-dag-design.md` §11).
+    pub refusals: usize,
 }
 
 #[derive(Debug)]
@@ -741,6 +746,9 @@ impl ModuleImageCache {
             return Err(ModuleCacheError::Corrupt("module warning count exceeds the limit"));
         }
         let world_len = u64::from_le_bytes(bytes[120..128].try_into().unwrap());
+        let refusals = u64::from_le_bytes(bytes[128..136].try_into().unwrap());
+        let refusals = usize::try_from(refusals)
+            .map_err(|_| ModuleCacheError::Corrupt("module refusal count overflows"))?;
         let world_len = usize::try_from(world_len)
             .map_err(|_| ModuleCacheError::Corrupt("module world record length overflows"))?;
         let semantic_end = HEADER
@@ -797,6 +805,7 @@ impl ModuleImageCache {
             stale,
             interface_hash,
             world,
+            refusals,
         }))
     }
 
@@ -876,6 +885,20 @@ impl ModuleImageCache {
         semantics: SemanticsIdentity,
         world: Option<(SourceKey, &WorldRecord)>,
     ) -> Result<[u8; 32], ModuleCacheError> {
+        self.publish_refused(key, delta, warnings, semantics, world, 0)
+    }
+
+    /// [`Self::publish_world`] for a module `refusals` of whose declarations
+    /// were refused as its directives say: `delta` is the rest of it.
+    pub fn publish_refused(
+        &self,
+        key: ModuleCacheKey,
+        delta: &ModuleDelta,
+        warnings: &[Warning],
+        semantics: SemanticsIdentity,
+        world: Option<(SourceKey, &WorldRecord)>,
+        refusals: usize,
+    ) -> Result<[u8; 32], ModuleCacheError> {
         let (semantic, nodes) = delta.to_image();
         if nodes > self.limits.max_nodes {
             self.note_refusal(
@@ -915,6 +938,7 @@ impl ModuleImageCache {
         bytes.extend_from_slice(&(semantic.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&(warnings.len() as u64).to_le_bytes());
         bytes.extend_from_slice(&(record.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&(refusals as u64).to_le_bytes());
         bytes.extend_from_slice(&semantic);
         bytes.extend_from_slice(&record);
         encode_warnings(&mut bytes, warnings, self.limits)?;

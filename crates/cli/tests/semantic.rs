@@ -443,3 +443,81 @@ fn a_failed_import_stops_its_dependents_and_nothing_else() {
     assert!(warm.check(&mut again, &beside, LintProfile::Default).replayed, "a module checked after a failure was not published");
     let _ = std::fs::remove_dir_all(cache);
 }
+
+const REFUSING: &str = "fn good() -> Nat { 1 }\n\n// expect-error: unbound name\nfn bad() -> Nat { nope() }\n";
+const OVER_REFUSING: &str = "import refusing;\ntheorem uses(): refusing::good() = 1 { refl }\n";
+
+/// A module refused exactly as its directives say is, to a session that
+/// judges them, a module that checked: it has an image, which replays with
+/// its refusal count, and its dependents are checked over what did check
+/// (`docs/module-dag-design.md` §11).
+#[test]
+fn a_module_refused_as_it_says_replays_for_a_judging_session() {
+    let cache = temp("refusing");
+    let (refusing, over) = (module("refusing", REFUSING), module("over_refusing", OVER_REFUSING));
+    for warm in [false, true] {
+        let mut e = Elaborator::with_prelude().unwrap();
+        let mut session = SemanticSession::new(Some(cache.clone())).with_expectations();
+        let out = session.check(&mut e, &refusing, LintProfile::Default);
+        assert!(out.errors.is_empty(), "{:?}", out.errors.iter().map(|e| e.render(REFUSING)).collect::<Vec<_>>());
+        assert_eq!((out.replayed, out.expected_refusals), (warm, 1));
+        let out = session.check(&mut e, &over, LintProfile::Default);
+        assert!(out.errors.is_empty(), "{:?}", out.errors.iter().map(|e| e.render(OVER_REFUSING)).collect::<Vec<_>>());
+        assert_eq!(out.replayed, warm);
+    }
+    // A session that does not judge refusals never replays one: its refused
+    // declaration is an error again.
+    let mut e = Elaborator::with_prelude().unwrap();
+    let mut plain = SemanticSession::new(Some(cache.clone()));
+    let out = plain.check(&mut e, &refusing, LintProfile::Default);
+    assert!(!out.replayed);
+    assert_eq!(out.expected_refusals, 0);
+    let text = out.errors.iter().map(|e| e.render(REFUSING)).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("unbound name"), "{text}");
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+/// A refusal another build recorded is not this build's verdict, and no
+/// kernel recheck can make it one: the stale lane elaborates the module
+/// again and judges it afresh.
+#[test]
+fn a_stale_image_of_refusals_is_elaborated_again() {
+    let cache = temp("stale-refusing");
+    let refusing = module("refusing", REFUSING);
+    let dependencies = ModuleDependencyIdentity::default();
+    let key = ModuleCacheKey::for_source(&refusing.name, &refusing.src, &dependencies, LintProfile::Default);
+    let mut writer = Elaborator::with_prelude().unwrap();
+    let (delta, errors) = writer.check_module_delta_refusing(&refusing.name, &refusing.src, dependencies);
+    assert_eq!(errors.len(), 1);
+    ModuleImageCache::new(cache.clone())
+        .publish_refused(key, &delta, &[], SemanticsIdentity::of("older", "build"), None, 1)
+        .unwrap();
+    let mut e = Elaborator::with_prelude().unwrap();
+    let mut stale = SemanticSession::new(Some(cache.clone()))
+        .with_freshness(ImageFreshness::AcceptStale)
+        .with_expectations();
+    let out = stale.check(&mut e, &refusing, LintProfile::Default);
+    assert!(!out.replayed, "a stale refusal was replayed");
+    assert_eq!(stale.stale_hits(), 0);
+    assert!(out.errors.is_empty());
+    assert_eq!(out.expected_refusals, 1);
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+/// Refusals that do not meet their directives leave no image: the module
+/// failed, and its raw errors go to the caller to judge.
+#[test]
+fn a_module_that_misses_its_directives_is_not_published() {
+    let cache = temp("misses-directive");
+    let src = REFUSING.replace("unbound name", "a reason it is not refused for");
+    let refusing = module("refusing", &src);
+    for _ in 0..2 {
+        let mut e = Elaborator::with_prelude().unwrap();
+        let mut session = SemanticSession::new(Some(cache.clone())).with_expectations();
+        let out = session.check(&mut e, &refusing, LintProfile::Default);
+        assert!(!out.replayed);
+        assert_eq!(out.expected_refusals, 0);
+        assert_eq!(out.errors.len(), 1);
+    }
+    let _ = std::fs::remove_dir_all(cache);
+}

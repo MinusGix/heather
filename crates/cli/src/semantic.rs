@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 
 use heather_cache::merkle::{self, Hash};
 use heather_cache::module_image::{
-    ImageFreshness, ImageRefusal, ModuleCacheKey, ModuleImageCache, SemanticsIdentity, SourceKey,
+    ImageFreshness, ImageRefusal, LoadedModule, ModuleCacheKey, ModuleImageCache, SemanticsIdentity, SourceKey,
     WorldRecord, WorldReference,
 };
 use heather_cache::sha256::Sha256;
@@ -114,6 +114,11 @@ pub struct ModuleOutcome {
     /// Declarations elaborated because `--only` named them
     /// (`docs/check-only-design.md`); such a module is not published.
     pub forced_items: usize,
+    /// Under [`SemanticSession::with_expectations`]: declarations refused as
+    /// the module's `expect-error` directives say, the module otherwise
+    /// checking. Its errors are then already judged and empty. Zero when the
+    /// caller is still to judge `errors` (`docs/module-dag-design.md` §11).
+    pub expected_refusals: usize,
     pub notices: Vec<CacheNotice>,
 }
 
@@ -248,6 +253,10 @@ pub struct SemanticSession {
     only: BTreeMap<String, BTreeSet<String>>,
     /// The `--only` names the passes met, `module::name`.
     only_met: BTreeSet<String>,
+    /// `--expectations`: a module whose refusals all match its directives is
+    /// a module that checked, and is published with them
+    /// (`docs/module-dag-design.md` §11).
+    expectations: bool,
 }
 
 /// `--only` asked for a module's previous image and there was none: the
@@ -313,6 +322,7 @@ impl SemanticSession {
             audit: std::env::var_os("HEATHER_RELOCATION_AUDIT").map(PathBuf::from),
             only: BTreeMap::new(),
             only_met: BTreeSet::new(),
+            expectations: false,
         }
     }
 
@@ -331,6 +341,23 @@ impl SemanticSession {
     pub fn without_process_world(mut self) -> Self {
         self.process_world = false;
         self
+    }
+
+    /// Judge each module's errors against its `expect-error` directives
+    /// (`crate::expect`) here rather than in the caller, so that a module
+    /// refused exactly as it says has an image like any module that checked.
+    /// Such an image replays only for a session that judges, and only when
+    /// this build wrote it: a refusal is the elaborator's verdict, which no
+    /// kernel recheck can reproduce, so the stale lanes elaborate it again.
+    pub fn with_expectations(mut self) -> Self {
+        self.expectations = true;
+        self
+    }
+
+    /// Whether a stored image may stand for its module here: one that holds
+    /// refusals only for a session that judges them, from this build.
+    fn replayable(&self, loaded: &LoadedModule) -> bool {
+        loaded.refusals == 0 || (self.expectations && loaded.stale.is_none())
     }
 
     /// The `--only` names (`module::name`) no pass met — the ones to report
@@ -427,6 +454,7 @@ impl SemanticSession {
                 replayed: false,
                 replayed_items: 0,
                 forced_items: 0,
+                expected_refusals: 0,
                 notices: Vec::new(),
             };
         }
@@ -673,7 +701,7 @@ impl SemanticSession {
         let psi = placeholder(self.world_len(&canon.order));
         let loaded = stats::timed(stats::Timer::ImageDecode, || images.load(key, psi, module.src.len(), self.freshness))
             .ok()??;
-        if loaded.delta.dependencies() != dependencies {
+        if loaded.delta.dependencies() != dependencies || !self.replayable(&loaded) {
             return None;
         }
         let start = elab.psi().bindings.len();
@@ -718,6 +746,7 @@ impl SemanticSession {
             replayed: true,
             replayed_items: 0,
             forced_items: 0,
+            expected_refusals: loaded.refusals,
             notices,
         })
     }
@@ -766,11 +795,11 @@ impl SemanticSession {
             elab.take_omega_reports();
             return match checked {
                 Ok(delta) => (
-                    ModuleOutcome { errors: Vec::new(), warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, notices },
+                    ModuleOutcome { errors: Vec::new(), warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, expected_refusals: 0, notices },
                     Some(delta),
                 ),
                 Err(errors) => (
-                    ModuleOutcome { errors, warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, notices },
+                    ModuleOutcome { errors, warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, expected_refusals: 0, notices },
                     None,
                 ),
             };
@@ -794,6 +823,8 @@ impl SemanticSession {
             let decoded = stats::timed(stats::Timer::ImageDecode, || {
                 images.load(key, elab.psi().clone(), module.src.len(), self.freshness)
             });
+            // An image of refusals this session may not stand on is no image.
+            let decoded = decoded.map(|loaded| loaded.filter(|l| self.replayable(l)));
             match decoded {
                 Ok(Some(loaded)) => match stats::timed(stats::Timer::ImageRecheck, || {
                     elab.replay_module_delta(&loaded.delta, &dependencies)
@@ -808,6 +839,7 @@ impl SemanticSession {
                                 replayed: true,
                                 replayed_items: 0,
                                 forced_items: 0,
+                                expected_refusals: loaded.refusals,
                                 notices,
                             },
                             Some(loaded.delta),
@@ -839,6 +871,10 @@ impl SemanticSession {
                 }),
             }
             break;
+        }
+
+        if self.expectations && crate::expect::count(&module.src) > 0 {
+            return self.check_refusing(elab, module, key, dependencies, notices);
         }
 
         // A miss. What the world under the module offers it, for moving an
@@ -892,6 +928,7 @@ impl SemanticSession {
                                         replayed: true,
                                         replayed_items: 0,
                                         forced_items: 0,
+                                        expected_refusals: 0,
                                         notices,
                                     },
                                     Some(delta),
@@ -984,6 +1021,7 @@ impl SemanticSession {
                         replayed: false,
                         replayed_items: 0,
                         forced_items: 0,
+                        expected_refusals: 0,
                         notices,
                     },
                     None,
@@ -1014,7 +1052,66 @@ impl SemanticSession {
                 error: error.to_string(),
             });
         }
-        (ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, forced_items: 0, notices }, Some(delta))
+        (ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, forced_items: 0, expected_refusals: 0, notices }, Some(delta))
+    }
+
+    /// A miss of a module with `expect-error` directives, in a session that
+    /// judges them (`docs/module-dag-design.md` §11): elaborated whole, its
+    /// errors judged here, and published with its refusal count when every
+    /// refusal is the one its directive names and nothing else failed. A
+    /// module that does not meet its directives is an ordinary failure, its
+    /// raw errors left for the caller to judge and report. Never sliced from
+    /// a previous image or moved from another world: a refusal is not
+    /// something either can carry over.
+    fn check_refusing(
+        &mut self,
+        elab: &mut Elaborator,
+        module: &Module,
+        key: ModuleCacheKey,
+        dependencies: ModuleDependencyIdentity,
+        mut notices: Vec<CacheNotice>,
+    ) -> (ModuleOutcome, Option<ModuleDelta>) {
+        let (delta, errors) = elab.check_module_delta_refusing(&module.name, &module.src, dependencies);
+        elab.take_omega_reports();
+        let warnings = elab.take_warnings();
+        let refusals = if errors.is_empty() {
+            0
+        } else {
+            let verdict = crate::expect::judge(&module.src, errors.clone());
+            if !verdict.errors.is_empty() {
+                let outcome = ModuleOutcome {
+                    errors,
+                    warnings,
+                    replayed: false,
+                    replayed_items: 0,
+                    forced_items: 0,
+                    expected_refusals: 0,
+                    notices,
+                };
+                return (outcome, None);
+            }
+            verdict.matched
+        };
+        let images = self.images.as_ref().expect("usable images have a cache");
+        if let Err(error) = stats::timed(stats::Timer::ImagePublish, || {
+            images.publish_refused(key, &delta, &warnings, SemanticsIdentity::current(), None, refusals)
+        }) {
+            notices.push(CacheNotice {
+                module: module.name.clone(),
+                kind: CacheNoticeKind::PublishFailed,
+                error: error.to_string(),
+            });
+        }
+        let outcome = ModuleOutcome {
+            errors: Vec::new(),
+            warnings,
+            replayed: false,
+            replayed_items: 0,
+            forced_items: 0,
+            expected_refusals: refusals,
+            notices,
+        };
+        (outcome, Some(delta))
     }
 
     /// The world under a module whose world is `canon`, as the early cutoff
@@ -1094,6 +1191,11 @@ impl SemanticSession {
             Ok(None) => return Relocation::NoCandidate,
             Err(error) => return Relocation::Refused(format!("candidate unusable: {error}")),
         };
+        // A refusal is the elaborator's verdict: moving it to another world
+        // would assert the elaborator refuses there too.
+        if loaded.refusals > 0 {
+            return Relocation::NoCandidate;
+        }
         let Some(record) = &loaded.world else {
             return Relocation::NoCandidate;
         };
@@ -1195,6 +1297,7 @@ impl SemanticSession {
                     replayed: false,
                     replayed_items: 0,
                     forced_items: 0,
+                    expected_refusals: 0,
                     notices,
                 },
                 None,
@@ -1227,6 +1330,7 @@ impl SemanticSession {
                         replayed: false,
                         replayed_items: report.replayed,
                         forced_items: report.forced,
+                        expected_refusals: 0,
                         notices,
                     },
                     Some(delta),
@@ -1239,6 +1343,7 @@ impl SemanticSession {
                     replayed: false,
                     replayed_items: 0,
                     forced_items: 0,
+                    expected_refusals: 0,
                     notices,
                 },
                 None,
@@ -1319,6 +1424,7 @@ fn internal_failure(module: &str, why: String) -> ModuleOutcome {
         replayed: false,
         replayed_items: 0,
         forced_items: 0,
+        expected_refusals: 0,
         notices: Vec::new(),
     }
 }

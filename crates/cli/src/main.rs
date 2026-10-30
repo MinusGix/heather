@@ -419,6 +419,9 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         if !opts.deny_axioms {
             semantic = semantic.without_process_world();
         }
+        if opts.expectations {
+            semantic = semantic.with_expectations();
+        }
         let mut forced_items = 0;
         let mut refusals_matched = 0;
         // `HEATHER_VALUE_METRICS`: print the kernel's value-machine counters
@@ -486,7 +489,11 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 continue;
             }
             let mut hint = None;
-            let errs = if opts.expectations {
+            let errs = if outcome.expected_refusals > 0 {
+                // Judged by the session, which published the module with them.
+                refusals_matched += outcome.expected_refusals;
+                outcome.errors
+            } else if opts.expectations {
                 let verdict = expect::judge(&m.src, outcome.errors);
                 refusals_matched += verdict.matched;
                 verdict.errors
