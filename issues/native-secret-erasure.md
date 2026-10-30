@@ -33,6 +33,9 @@ scrubs.
   register, and that the pool is known per compile.
 - The heap allocator does not exist yet (milestone `hih-memory`). The note
   says how the invariant forces scrub-on-free once it does.
+- **[[native-constant-time]]** / `docs/constant-time-survey.md` is the
+  companion property. Its source labels would discharge this issue's
+  obligation that the kept words are public (that survey's §8).
 
 ## Log
 
