@@ -491,6 +491,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         match c {
             TmClo::Val(v) => Work::Val(*v),
             TmClo::Syn { env, body, .. } => {
+                if let Some(v) = self.arena.memo_closed(c) {
+                    return Work::Val(v);
+                }
                 let w = Work::Eval(Rc::clone(body), *env);
                 self.frames.push(Frame::Memo(c));
                 w
@@ -511,6 +514,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             // A thunk records its value only on success.
             Frame::Memo(c) => {
                 self.arena.cache_tm(c, &v);
+                self.arena.cache_closed(c, v);
                 Work::Val(v)
             }
             Frame::Elim(e) => Work::Elim(v, e.clone()),
@@ -3414,6 +3418,58 @@ mod tests {
         };
         let step = arena.tm(TmClo::syn(env, Rc::new(drops_ih)));
         assert!(matches!(&*ev.classify_step(step).unwrap(), FoldClass::Opaque));
+    }
+
+    /// A step that reads none of its captures is classified once per query,
+    /// whatever environment each occurrence closes it over — every unfolding
+    /// of a definition holding the fold closes it over that call's arguments
+    /// (issues/native-certificate-pieces-remaining-cost.md). One that reads
+    /// a capture is a new question under each.
+    #[test]
+    fn a_step_reading_no_capture_is_probed_once() {
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(1 << 20, Defs::opaque(), CtxBase::Nil, &arena);
+        let zero = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let (here, there) = (Env::empty(), Env::empty().push(&arena, zero).push(&arena, zero));
+        let body = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))));
+        let first = arena.tm(TmClo::syn(here, Rc::clone(&body)));
+        assert!(!matches!(&*ev.classify_step(first).unwrap(), FoldClass::Opaque | FoldClass::Direct));
+        let spent = ev.fuel();
+        let second = arena.tm(TmClo::syn(there, Rc::clone(&body)));
+        assert!(!matches!(&*ev.classify_step(second).unwrap(), FoldClass::Opaque | FoldClass::Direct));
+        assert_eq!(ev.fuel(), spent);
+        assert_eq!(first.ident_under(2), second.ident_under(2));
+        // `x₂`, the innermost capture, read beside `ih`: the two closures
+        // are two identities.
+        let reads = Rc::new(Term::Var(LocalVar(2)));
+        let (a, b) = (arena.tm(TmClo::syn(there, Rc::clone(&reads))), arena.tm(TmClo::syn(there.push(&arena, zero), reads)));
+        assert_ne!(a.ident_under(2), b.ident_under(2));
+    }
+
+    /// A closed subterm is evaluated once per query: forcing it under a
+    /// second environment spends nothing.
+    #[test]
+    fn a_closed_body_is_evaluated_once() {
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(1 << 20, Defs::opaque(), CtxBase::Nil, &arena);
+        let zero = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let redex = Rc::new(Term::App {
+            fun: Rc::new(dummy_lam(Term::Succ(Rc::new(Term::Var(LocalVar(0)))))),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+            arg: Rc::new(Term::Zero),
+        });
+        let first = arena.tm(TmClo::syn(Env::empty(), Rc::clone(&redex)));
+        let value = ev.force(first).unwrap();
+        assert_eq!(nat_value(&mut ev, value), 1);
+        let spent = ev.fuel();
+        assert!(spent < 1 << 20);
+        let second = arena.tm(TmClo::syn(Env::empty().push(&arena, zero), redex));
+        let value = ev.force(second).unwrap();
+        assert_eq!(nat_value(&mut ev, value), 1);
+        assert_eq!(ev.fuel(), spent);
     }
 
     /// `(λx. x x)(λx. x x)` as a step body, applied to `ih` when `reads_ih`:
