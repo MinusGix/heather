@@ -102,12 +102,13 @@ struct Edge {
     add: &'static str,
     mul: &'static str,
     neg: &'static str,
+    sub: &'static str,
 }
 
 const EDGES: [Edge; 3] = [
-    Edge { map: "dyadic::Dyadic::rat", hom: "dyadic::Dyadic::rat_hom", add: "dyadic::Dyadic::add", mul: "dyadic::Dyadic::mul", neg: "dyadic::Dyadic::neg" },
-    Edge { map: "creal::CReal::ofRat", hom: "creal::CReal::ofRat_hom", add: "rat::Rat::add", mul: "rat::Rat::mul", neg: "rat::Rat::neg" },
-    Edge { map: "rat::Rat::ofInt", hom: "rat::Rat::ofInt_hom", add: "int::Int::add", mul: "int::Int::mul", neg: "int::Int::neg" },
+    Edge { map: "dyadic::Dyadic::rat", hom: "dyadic::Dyadic::rat_hom", add: "dyadic::Dyadic::add", mul: "dyadic::Dyadic::mul", neg: "dyadic::Dyadic::neg", sub: "dyadic::Dyadic::sub" },
+    Edge { map: "creal::CReal::ofRat", hom: "creal::CReal::ofRat_hom", add: "rat::Rat::add", mul: "rat::Rat::mul", neg: "rat::Rat::neg", sub: "rat::Rat::sub" },
+    Edge { map: "rat::Rat::ofInt", hom: "rat::Rat::ofInt_hom", add: "int::Int::add", mul: "int::Int::mul", neg: "int::Int::neg", sub: "int::Int::sub" },
 ];
 
 /// How many edges deep an image of an image is read.
@@ -538,7 +539,91 @@ impl Reifier<'_> {
         if let Some(value) = self.elab.spell_term_source(self.cx, tm).as_deref().and_then(integer_source) {
             return Ok(Syn::Const(value));
         }
+        if let Some(atom) = self.nat_image(tm, depth)? {
+            return Ok(Syn::Atom(atom));
+        }
         self.projection_or_atom(tm, depth)
+    }
+
+    /// The `Nat → Int` edge (docs/casting-design.md §12): an image of a
+    /// `Nat` sum, product or successor, `OfNat(m + n)` or `(m * n).int()`, is
+    /// an atom read with the edge's law (`Int::ofNat_hom`'s `map_add` and
+    /// `map_mul`), whose right side, the images of the parts spelled as the
+    /// image was, is read the same way: [`Self::edge_image`] for this edge.
+    /// The image stays an atom, so a term converting to it under another
+    /// spelling (`Rat::add(x, y).den` beside `x.den * y.den`) is the same
+    /// atom still.
+    fn nat_image(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Option<usize>, String> {
+        let (inner, rebuild): (Rc<Term>, fn(&str) -> String) =
+            if let Some(args) = named_args(self.elab, tm, "int::Nat::int") && let [n] = args.as_slice() {
+                (Rc::clone(n), |p| format!("int::Nat::int({p})"))
+            } else {
+                let Some(source) = self.elab.spell_term_source(self.cx, tm) else { return Ok(None) };
+                let Some(body) = source.strip_prefix("int::OfNat(").or_else(|| source.strip_prefix("OfNat(")).and_then(|b| b.strip_suffix(')')) else {
+                    return Ok(None);
+                };
+                let Some(inner) = parse_expr(body)
+                    .ok()
+                    .and_then(|e| self.elab.generated_scope(|me| me.elab_check(self.cx, &e, &Type::Nat, &Level::Zero)).ok())
+                else {
+                    return Ok(None);
+                };
+                (Rc::new(inner), |p| format!("int::OfNat({p})"))
+            };
+        let (law, parts) = if let Term::Succ(a) = &*inner {
+            ("map_add", vec![Rc::clone(a), Rc::new(Term::Succ(Rc::new(Term::Zero)))])
+        } else if let Some(xs) = named_args(self.elab, &inner, "nat::Nat::add")
+            && let [x, y] = xs.as_slice()
+        {
+            ("map_add", vec![Rc::clone(x), Rc::clone(y)])
+        } else if let Some(xs) = named_args(self.elab, &inner, "nat::Nat::mul")
+            && let [x, y] = xs.as_slice()
+        {
+            ("map_mul", vec![Rc::clone(x), Rc::clone(y)])
+        } else {
+            return Ok(None);
+        };
+        let mut sources = Vec::new();
+        for part in &parts {
+            let Some(part) = self.elab.spell_term_source(self.cx, part) else { return Ok(None) };
+            sources.push(format!("({part})"));
+        }
+        let proof = format!("(int::Int::ofNat_hom()).{law}({})", sources.join(", "));
+        let Some((term, ty, level)) = parse_expr(&proof)
+            .ok()
+            .and_then(|e| self.elab.generated_scope(|me| me.elab_infer(self.cx, &e)).ok())
+        else {
+            return Ok(None);
+        };
+        let Some(eq) = equation(self.elab, self.cx, &ty) else {
+            return Ok(None);
+        };
+        let oracle = self.elab.goal_oracle().bounded(NUMERAL_STEPS);
+        if oracle.convert_term(&self.cx.gamma, Layer::Prog, tm, &eq.lhs, &self.ty, &self.level).is_err() {
+            return Ok(None);
+        }
+        let atom = self.intern(tm)?;
+        if self.facts.iter().any(|f| f.atom == atom) {
+            return Ok(Some(atom));
+        }
+        let mut syns = Vec::new();
+        for part in &sources {
+            let Some(image) = parse_expr(&rebuild(part))
+                .ok()
+                .and_then(|e| self.elab.generated_scope(|me| me.elab_check(self.cx, &e, &self.ty, &self.level)).ok())
+            else {
+                return Ok(None);
+            };
+            syns.push(self.reify_within(&Rc::new(image), depth)?);
+        }
+        let [a, b] = syns.as_slice() else { return Ok(None) };
+        let rhs = match law {
+            "map_mul" => Syn::Mul(Box::new(a.clone()), Box::new(b.clone())),
+            _ => Syn::Add(Box::new(a.clone()), Box::new(b.clone())),
+        };
+        let sides = Written { lhs: Syn::Atom(atom), rhs };
+        self.facts.push(Fact { atom, kind: FactKind::Definition, term, ty, level, sides });
+        Ok(Some(atom))
     }
 
     fn reify_nat(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Syn, String> {
@@ -781,7 +866,8 @@ impl Reifier<'_> {
     }
 
     /// An edge's image of an operation (`(a + c).rat()`, `CReal::ofRat(p *
-    /// q)`, `Rat::ofInt(-m)`: `+`, `*` and negation) is an atom read with the
+    /// q)`, `Rat::ofInt(-m)`: `+`, `*`, negation, and subtraction as `x + -y`)
+    /// is an atom read with the
     /// edge's law (the field `map_add` of `Dyadic::rat_hom`,
     /// docs/casting-design.md §11), whose right side, the images of the
     /// operands, is read the same way. An image of an image (`CReal::ofRat((a + c).rat())`) carries the
@@ -839,6 +925,13 @@ impl Reifier<'_> {
                 && let [x] = xs.as_slice()
             {
                 return Some(law("map_neg", &format!("({})", spell(x)?)));
+            }
+            // Every carrier's `x - y` is `x + -y`: the add law at `-y`, whose
+            // left side the caller converts to the image.
+            if let Some(xs) = named_args(self.elab, inner, edge.sub)
+                && let [x, y] = xs.as_slice()
+            {
+                return Some(law("map_add", &format!("({}), -({})", spell(x)?, spell(y)?)));
             }
             // An image of an image: the inner law, carried through this edge.
             let proof = self.edge_law(inner, nesting - 1)?;
