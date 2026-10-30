@@ -201,3 +201,12 @@ theorem ex_proof_int(x: Int, e: Exists<Int>(λ k => k < x ∧ OfNat(3) <= k)): O
 // Control: the contractum read, and still a model (`a = 2`).
 // expect-error: `omega` got stuck
 theorem ex_proof_false(a: Nat, e: Exists<Nat>(λ k => a = k + 2)): 3 <= a { omega(e.proof) }
+
+// `omega` is a checking form: where nothing is expected it says so and how
+// to state the goal, not "unbound name"
+// (issues/checking-tactic-in-inference-position-diagnostic.md).
+// expect-error: `omega` needs an expected type
+// expect-error: `let k: (T) = omega(…);`
+theorem let_omega_unannotated(a: Nat, h: a < 3): a < 4 { let k = omega(h); k }
+// expect-error: `omega` needs an expected type
+theorem let_bare_omega_unannotated(a: Nat, h: a < 3): a < 4 { let k = omega; k }
