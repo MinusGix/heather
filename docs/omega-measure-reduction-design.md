@@ -528,3 +528,22 @@ ordinary facts. The certificate is source, so a used conjunct is cited by its
 path and an unused one never reaches the kernel; a disjunction under a
 conjunction (`h.right: A ∨ B`) is split like a top-level one. The `And` arm of
 `split_connective` stays only for a fact whose projection declines.
+
+## 14. Fields at closed arguments (2026-10-30)
+
+`issues/omega-closed-field-value-atomised.md`. §10's `projection_reduct`
+asks first for the read's bounded weak head, keeping it on a numeral or an
+arithmetic shape. At a variable that head is stuck early and cheap; at
+closed arguments (`Lay::of(3).size`, every layout at a literal program) it
+evaluates the field itself, spends the budget, and the failure returned from
+the function before §11–§12's read-as-put route was tried. Every field of the
+call became its own atom, so `Lay::of(3).size` and `Lay::of(3).cap`, put as
+`lay(3)` and `lay(3) + 4`, shared nothing.
+
+A spent budget now skips only the shortcut. The field is then read as put:
+the receiver unfolded as far as its pair, the field projected without δ, so
+it is spelled and never evaluated, and its atoms are decided like any other
+subterm's. A cheap field still takes the shortcut and arrives as its numeral.
+A field put as an eliminator over the computation (`match lay(n) { … }`)
+stays behind its projection, as §12 left it; probes and that control are in
+`lib/_tests/std/tactic/omega_tests.hthr`.

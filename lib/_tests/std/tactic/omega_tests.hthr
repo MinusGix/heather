@@ -1,7 +1,7 @@
 // Probes of the `omega` tactic (`lib/std/tactic/omega.hthr`,
 // `docs/omega-measure-reduction-design.md`). Tests, not library: nothing
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import omega;
+import logic; import bool; import nat; import int; import omega; import list;
 
 // A field of a call that unfolds to a constructor is read as what was put
 // there, through any number of record fields
@@ -43,6 +43,22 @@ theorem stuck_call_opaque(b: Bool, n: Nat): Q::bumped(b, n).den.pred <= n { omeg
 theorem false_through_fields(n: Nat): R::at(n).inner.den.pred = n + 1 { omega }
 // expect-error: `omega` got stuck
 theorem neutral_receiver(q: Q, n: Nat): q.den.pred = n { omega }
+
+// At closed arguments a field is read as put, without evaluating it: two
+// fields of one call share their atoms though `lay(3)` computes past the
+// projection's step budget (issues/omega-closed-field-value-atomised.md).
+fn lay(n: Nat) → Nat { List::range(n).map(λ i => i * i).len() }
+record Lay { size: Nat, cap: Nat }
+fn Lay::of(n: Nat) → Lay { Lay(lay(n), lay(n) + 4) }
+theorem at_var(n, a: Nat, h: a < Lay::of(n).size): a < Lay::of(n).cap { omega }
+theorem at_lit(a: Nat, h: a < Lay::of(3).size): a < Lay::of(3).cap { omega }
+theorem at_lit_goal(): Lay::of(30).size < Lay::of(30).cap { omega }
+// Control: a field put as a match on that computation stays an atom, so a
+// claim only its value makes true is refused (`Pick::of(3).v` is 2).
+record Pick { v: Nat }
+fn Pick::of(n: Nat) → Pick { Pick(match lay(n) { Zero => 0, Succ(k) => k }) }
+// expect-error: `omega` got stuck
+theorem closed_match_opaque(a: Nat, h: a < Pick::of(3).v): a < 2 { omega }
 
 // Integer-only conflicts the real shadow misses go to CutSat, whose
 // certificate is one `have` per reachable derivation node

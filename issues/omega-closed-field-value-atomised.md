@@ -1,10 +1,10 @@
 ---
 title: omega gives up on a record field when the call's arguments are closed
-status: open
+status: closed
 labels: [omega,tactics,native]
 area: tactics
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 `omega` reads a field of a call as what the constructor put there
@@ -47,3 +47,16 @@ afterwards like any other subterm.
 - `at_lit` closes, as a probe in `lib/_tests/std/tactic/omega_tests.hthr`.
 - A control: a record whose field is put as a computation `omega` cannot
   read still gets the stuck-call refusal it gets today.
+
+## Resolution (2026-10-30)
+
+The budget that ran out was not `field_as_put_within`'s but the one before
+it: `projection_reduct` (`crates/elab/src/omega_cert.rs`) first asks for the
+whole read's bounded weak head, which at closed arguments evaluates the
+field on into `lay(3)`, and a spent budget returned from the function before
+the read-as-put route ran. A spent budget now only skips that shortcut; the
+receiver is unfolded as far as its pair and the field projected without δ,
+as at a variable. Design: `docs/omega-measure-reduction-design.md` §14.
+Probes `at_lit`, `at_lit_goal` and the control `closed_match_opaque` (a field
+put as a `match` on the computation stays an atom) are in
+`lib/_tests/std/tactic/omega_tests.hthr`.

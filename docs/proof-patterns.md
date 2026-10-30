@@ -53,8 +53,9 @@ property of Heather.
   (restate it with a typed `have`, [[omega-redex-typed-fact-ignored]]).
 - **Over records and layouts at a literal program, prefer Nat step lemmas**
   (`Nat::le_trans`, `add_le_mono_l`) or a generic lemma over Nat variables.
-  The kernel converts the atoms' definitions, and a field whose value
-  computes is read as an opaque atom ([[omega-closed-field-value-atomised]]).
+  The kernel converts the atoms' definitions. omega does read a field at
+  closed arguments as what was put there (`Lay::of(3).size` meets
+  `Lay::of(3).cap`), so a failure there is a missing fact, not an atom.
 - **It reads every hypothesis in scope.** Keep its context small: put
   arithmetic in small lemmas, never `omega` inside a stretch or with `Rat`
   facts in scope. `omega(h, …)` names the load-bearing facts; whether it
