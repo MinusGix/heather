@@ -132,14 +132,22 @@ stands. Other parameters of an indexed recursion are generalized as usual
 
 ## 5. What it does not do
 
-- **The context is not refined by a `match`.** A hypothesis `h : Le(n, m)`
-  in the *parameter list* does not become `Le(Succ k, Zero)` inside
-  `match m { Zero => … }`, generalized or not; only a hypothesis behind an
-  arrow (or a sequent binder) is at the refined type, because it is
-  introduced *after* the inner `match`. The library already writes `le_trans`
-  that way and keeps doing so. Generalizing `h` with `m` gives the arm the
-  right *goal*; whether the hypothesis reduces is the convoy question, which
-  is unchanged.
+- **The context is refined by a non-recursive `match`, not by the
+  recursion's own.** Since `issues/elab-match-refines-hypothesis-kernel-
+  rejects.md`, a motive-less `match` on a local in checking position also
+  generalizes the later binders whose type mentions the scrutinee (directly
+  or through another) and that an arm names or the goal mentions, with the
+  binders their types need (`Elaborator::refined_hypotheses`), through the
+  same three steps: Π goal, wrapped arms, re-application. Only those: a
+  `match` in a function body or a motive is a computation that must stay the
+  term it restates, and the machinery's binders (`#ih`, a measure
+  recursion's `__dec_h`) are read as they were. So `h : Le(n, m)` *is* `Le(Succ k, Zero)` in
+  `match m { Zero => … }`. A `match` on a parameter whose arms make a
+  self-call keeps exactly the generalization above: a self-call can pass
+  only declared parameters, so a refined local that is not one would leave
+  the ih a Π nothing can instantiate. There a hypothesis behind an arrow
+  (or a sequent binder) is still the way to have it refined, which is how
+  the library writes `le_trans`.
 - **Inference position.** A `match` whose type is inferred has no goal to
   abstract from. A written motive that does not quantify the parameter meets
   the old refusal, which now says under what conditions generalization
@@ -157,13 +165,16 @@ stands. Other parameters of an indexed recursion are generalized as usual
 - `crates/elab/src/generalize.rs` — the scan, the Π goal, the arm wrapping,
   the re-application; unit tests for the renaming substitution.
 - `crates/elab/src/lib.rs`, `elab_check`'s motive-less `match` arm — the
-  entry: descends on a parameter and varies something → the path above.
+  entry: descends on a parameter and varies something, or refines a
+  hypothesis → the path above.
 - `crates/elab/src/recursion.rs` — `Guard::generalized`, and the self-call
   applying the ih to its varied arguments.
 - Guard construction sites (`matching/routes.rs`, `wf.rs`, `indexed.rs`,
   `forded.rs`) read the planned generalization off `Cx::generalized`, keyed
   by the `match`'s span so a nested `match` on the same parameter — whose arms
   were not wrapped — never inherits one it cannot honor.
-- `crates/elab/tests/ih_generalization.rs` — acceptance.
+- `crates/elab/tests/ih_generalization.rs` — acceptance;
+  `crates/elab/tests/match_refines_hypotheses.rs` for the refined
+  hypotheses.
 
 No kernel change.
