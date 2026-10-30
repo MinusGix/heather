@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,motives,bug]
 area: language
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-30
 ---
 
 The elaborator treats a hypothesis bound *before* a `match` as refined by the
@@ -50,3 +50,7 @@ workaround is to move the hypothesis after the match (`→` in the statement,
 
 - **[[goal-motive-by-scrutinee-abstraction]]** owns motive synthesis for the
   goal. Assumed here: only that hypotheses are not part of it today.
+
+## Log
+
+- 2026-10-30: Customer count (2026-10-30, interval elegance round): the workaround's other spelling, the convoy by application `match I as λ K => K.Has(x) → … { Bnd(…) => λ k => …, Whole => λ _ => trivial }(h)`, is 11 sites in lib/std/num/float/interval.hthr and 13 in creal_interval.hthr (every `*_has` lift from boxes to intervals, and `lt_of_below`). Generalizing the hypotheses that mention a variable scrutinee would turn each into a motive-less `match I { Bnd(…) => …, Whole => trivial }` over the refined hypothesis. The library rewrite kept them; this issue is where they go.

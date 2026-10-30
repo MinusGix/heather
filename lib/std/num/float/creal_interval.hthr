@@ -278,7 +278,7 @@ theorem Interval::apart_of_excludes(I: Interval, {x: CReal}, hx: I.HasReal(x), h
     match I as λ K => K.HasReal(x) → K.excludes_zero().IsTrue() → x.Apart(0) {
         Bnd(lo, hi) => λ k => match Dyadic::lt_bool(0, lo) as λ v => Dyadic::lt_bool(0, lo) = v → Bool::IsTrue(match v { True => True, False => hi.lt_bool(0) }) → x.Apart(0) {
             True => λ e _ => Inr(CReal::lt_of_lt_of_le(CReal::lt_respects(zero, CReal::ofRat(lo.rat()).same_refl(),
-                Dyadic::real_lt(Dyadic::lt_of_lt_bool(0, lo, j(sym(e), λ w _ => w.IsTrue(), trivial)))), k.left)),
+                Dyadic::real_lt(Dyadic::lt_of_lt_bool(0, lo, Bool::is_true_of_eq(e)))), k.left)),
             False => λ _ v => Inl(CReal::lt_of_le_of_lt(k.right, CReal::lt_respects(CReal::ofRat(hi.rat()).same_refl(), zero, Dyadic::real_lt(hi.lt_of_lt_bool(0, v))))),
         }(refl),
         Whole => λ _ no => false_elim(no),
@@ -368,11 +368,11 @@ theorem Interval::le_of_below_eq_real(I, J: Interval, {x, y: CReal}, hx: I.HasRe
 }
 
 theorem CReal::lt_of_enclose(self x, y: CReal, n, p: Nat, h: x.enclose(n, p).below(y.enclose(n, p)) = True): x < y {
-    Interval::lt_of_below_real(x.enclose(n, p), y.enclose(n, p), x.enclose_has(n, p), y.enclose_has(n, p), j(sym(h), λ w _ => w.IsTrue(), trivial))
+    Interval::lt_of_below_real(x.enclose(n, p), y.enclose(n, p), x.enclose_has(n, p), y.enclose_has(n, p), Bool::is_true_of_eq(h))
 }
 
 theorem CReal::le_of_enclose(self x, y: CReal, n, p: Nat, h: x.enclose(n, p).below_eq(y.enclose(n, p)) = True): x <= y {
-    Interval::le_of_below_eq_real(x.enclose(n, p), y.enclose(n, p), x.enclose_has(n, p), y.enclose_has(n, p), j(sym(h), λ w _ => w.IsTrue(), trivial))
+    Interval::le_of_below_eq_real(x.enclose(n, p), y.enclose(n, p), x.enclose_has(n, p), y.enclose_has(n, p), Bool::is_true_of_eq(h))
 }
 
 // ---------------------------------------------------------------------------
@@ -456,7 +456,7 @@ theorem RealExpr::wf_of_plain(self e: RealExpr): e.plain().IsTrue() → e.Wf() {
     }
 }
 
-theorem RealExpr::wf_plain(self e: RealExpr, h: e.plain() = True): e.Wf() { e.wf_of_plain(j(sym(h), λ w _ => w.IsTrue(), trivial)) }
+theorem RealExpr::wf_plain(self e: RealExpr, h: e.plain() = True): e.Wf() { e.wf_of_plain(Bool::is_true_of_eq(h)) }
 
 fn RealExpr::enclose(self e: RealExpr, n, p: Nat) → Interval {
     match e {
@@ -513,7 +513,7 @@ theorem RealExpr::lt_of_search_from(self a, b: RealExpr, wa: a.Wf(), wb: b.Wf(),
         Zero => λ n p no => false_elim(no),
         Succ(t) => λ n p => match a.enclose(n, p).below(b.enclose(n, p)) as λ v => a.enclose(n, p).below(b.enclose(n, p)) = v →
                 Bool::IsTrue(match v { True => True, False => a.lt_search(b, n + n + 1, Succ(p), t) }) → a.eval() < b.eval() {
-            True => λ e _ => Interval::lt_of_below_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), j(sym(e), λ w _ => w.IsTrue(), trivial)),
+            True => λ e _ => Interval::lt_of_below_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), Bool::is_true_of_eq(e)),
             False => λ _ v => RealExpr::lt_of_search_from(a, b, wa, wb, t, n + n + 1, Succ(p), v),
         }(refl),
     }
@@ -524,7 +524,7 @@ theorem RealExpr::le_of_search_from(self a, b: RealExpr, wa: a.Wf(), wb: b.Wf(),
         Zero => λ n p no => false_elim(no),
         Succ(t) => λ n p => match a.enclose(n, p).below_eq(b.enclose(n, p)) as λ v => a.enclose(n, p).below_eq(b.enclose(n, p)) = v →
                 Bool::IsTrue(match v { True => True, False => a.le_search(b, n + n + 1, Succ(p), t) }) → a.eval() <= b.eval() {
-            True => λ e _ => Interval::le_of_below_eq_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), j(sym(e), λ w _ => w.IsTrue(), trivial)),
+            True => λ e _ => Interval::le_of_below_eq_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), Bool::is_true_of_eq(e)),
             False => λ _ v => RealExpr::le_of_search_from(a, b, wa, wb, t, n + n + 1, Succ(p), v),
         }(refl),
     }
@@ -536,10 +536,10 @@ theorem RealExpr::apart_of_search_from(self a, b: RealExpr, wa: a.Wf(), wb: b.Wf
         Succ(t) => λ n p => match a.enclose(n, p).below(b.enclose(n, p)) as λ v => a.enclose(n, p).below(b.enclose(n, p)) = v →
                 Bool::IsTrue(match v { True => True, False => match b.enclose(n, p).below(a.enclose(n, p)) { True => True, False => a.apart_search(b, n + n + 1, Succ(p), t) } })
                 → a.eval().Apart(b.eval()) {
-            True => λ e _ => Inl(Interval::lt_of_below_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), j(sym(e), λ w _ => w.IsTrue(), trivial))),
+            True => λ e _ => Inl(Interval::lt_of_below_real(a.enclose(n, p), b.enclose(n, p), a.enclose_has(n, p, wa), b.enclose_has(n, p, wb), Bool::is_true_of_eq(e))),
             False => λ _ => match b.enclose(n, p).below(a.enclose(n, p)) as λ v => b.enclose(n, p).below(a.enclose(n, p)) = v →
                     Bool::IsTrue(match v { True => True, False => a.apart_search(b, n + n + 1, Succ(p), t) }) → a.eval().Apart(b.eval()) {
-                True => λ e _ => Inr(Interval::lt_of_below_real(b.enclose(n, p), a.enclose(n, p), b.enclose_has(n, p, wb), a.enclose_has(n, p, wa), j(sym(e), λ w _ => w.IsTrue(), trivial))),
+                True => λ e _ => Inr(Interval::lt_of_below_real(b.enclose(n, p), a.enclose(n, p), b.enclose_has(n, p, wb), a.enclose_has(n, p, wa), Bool::is_true_of_eq(e))),
                 False => λ _ v => RealExpr::apart_of_search_from(a, b, wa, wb, t, n + n + 1, Succ(p), v),
             }(refl),
         }(refl),
@@ -547,13 +547,13 @@ theorem RealExpr::apart_of_search_from(self a, b: RealExpr, wa: a.Wf(), wb: b.Wf
 }
 
 theorem RealExpr::lt_of_search(self a, b: RealExpr, n, p, tries: Nat, wa: a.Wf(), wb: b.Wf(), h: a.lt_search(b, n, p, tries) = True): a.eval() < b.eval() {
-    a.lt_of_search_from(b, wa, wb, tries, n, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+    a.lt_of_search_from(b, wa, wb, tries, n, p, Bool::is_true_of_eq(h))
 }
 
 theorem RealExpr::le_of_search(self a, b: RealExpr, n, p, tries: Nat, wa: a.Wf(), wb: b.Wf(), h: a.le_search(b, n, p, tries) = True): a.eval() <= b.eval() {
-    a.le_of_search_from(b, wa, wb, tries, n, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+    a.le_of_search_from(b, wa, wb, tries, n, p, Bool::is_true_of_eq(h))
 }
 
 theorem RealExpr::apart_of_search(self a, b: RealExpr, n, p, tries: Nat, wa: a.Wf(), wb: b.Wf(), h: a.apart_search(b, n, p, tries) = True): a.eval().Apart(b.eval()) {
-    a.apart_of_search_from(b, wa, wb, tries, n, p, j(sym(h), λ w _ => w.IsTrue(), trivial))
+    a.apart_of_search_from(b, wa, wb, tries, n, p, Bool::is_true_of_eq(h))
 }
