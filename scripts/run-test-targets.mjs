@@ -111,13 +111,41 @@ export function listingArgs(libtestArgs) {
   return out;
 }
 
-function expandFamilies(artifacts, libtestArgs) {
+// `members` (the pr lane's selection, scripts/affected-targets.mjs) maps a
+// family to the members it chose to skip. A shard it does not name runs:
+// the selector only skips what it knows the inputs of.
+function expandFamilies(artifacts, libtestArgs, members = new Map()) {
   return artifacts.flatMap((artifact) => {
     if (!isFamily(artifact)) return [artifact];
     const listing = execFileSync(artifact.executable, ["--list", "--format", "terse", ...listingArgs(libtestArgs)],
       { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-    return familyShards(artifact, listing);
+    return selectShards(familyShards(artifact, listing), members.get(artifact.name));
   });
+}
+
+export function selectShards(shards, skip) {
+  return skip ? shards.filter((shard) => !skip.has(shard.name)) : shards;
+}
+
+// `family\tmember\trun|skip` lines, kept as each family's skipped members.
+export function parseMembers(text) {
+  const members = new Map();
+  for (const line of text.split("\n")) {
+    const [family, member, verdict] = line.split("\t");
+    if (!family || !member || verdict !== "skip") continue;
+    if (!members.has(family)) members.set(family, new Set());
+    members.get(family).add(member);
+  }
+  return members;
+}
+
+// The doc-test phase's command: every package (`*`), the listed ones, or
+// none (null) when the pr lane's selection left out every package.
+export function docTestArgs(packages, libtestArgs) {
+  const tail = ["--doc", "--", ...libtestArgs];
+  if (packages === null || packages.includes("*")) return ["test", "--workspace", "--exclude", "heather-elab-unit", ...tail];
+  const named = packages.filter((p) => p !== "heather-elab-unit");
+  return named.length ? ["test", ...named.flatMap((p) => ["-p", p]), ...tail] : null;
 }
 
 // A shard's per-test rows keep the names its file's own binary reported, so
@@ -424,6 +452,9 @@ async function main() {
   const manifest = take("--manifest");
   const timingsPath = take("--timings");
   const jobsRequested = take("--jobs");
+  const optional = (flag) => (args.includes(flag) ? take(flag) : null);
+  const membersPath = optional("--members");
+  const docPackagesPath = optional("--doc-packages");
   const keepGoingIndex = args.indexOf("--keep-going");
   const keepGoing = keepGoingIndex >= 0;
   if (keepGoing) args.splice(keepGoingIndex, 1);
@@ -437,12 +468,14 @@ async function main() {
   const jobs = bounds.jobs;
   const history = loadHistory(timingsPath);
   const artifacts = parseArtifacts(readFileSync(manifest, "utf8"));
-  const targets = expandFamilies(artifacts, libtestArgs);
+  const members = membersPath ? parseMembers(readFileSync(membersPath, "utf8")) : new Map();
+  const targets = expandFamilies(artifacts, libtestArgs, members);
   targets.sort((a, b) => {
     if (a.exclusive !== b.exclusive) return a.exclusive ? 1 : -1;
     return (history.get(b.label) ?? 0) - (history.get(a.label) ?? 0) || a.label.localeCompare(b.label);
   });
-  if (!targets.length) throw new Error("Cargo manifest contained no test executables");
+  // The pr lane's selection may leave a family no member its skips keep.
+  if (!targets.length && !membersPath) throw new Error("Cargo manifest contained no test executables");
   console.log(`\n== test targets: ${targets.length} (${artifacts.length} binaries), ${jobs}-way bound (${jobs * LIMIT_KIB / 1024 / 1024} GiB maximum child address space) ==`);
   const reserveGib = (bounds.reserveKib / 1024 / 1024).toFixed(1);
   if (bounds.automatic) {
@@ -482,20 +515,24 @@ async function main() {
 
   // Cargo remains responsible for doctest discovery. Its rustdoc children
   // inherit the same rails, and Cargo runs this phase serially.
-  console.log("\n== doc tests (serial) ==");
   // `heather-elab-unit` is elab's sources again, for its unit tests only
   // (`doctest = false`, which `--doc` does not honour): documenting it would
   // compile a second full O3 rlib of the elaborator after every elab edit,
   // for no doc test (issues/suite-iteration-chokepoints-2026-10.md).
-  const doc = await collect(limitedCommand("cargo", ["test", "--workspace", "--exclude", "heather-elab-unit", "--doc", "--", ...libtestArgs]));
-  process.stdout.write(doc.output);
-  const docResult = parseResults(doc.output);
-  merge(total, docResult);
-  if (doc.signal || docResult.resultLines === 0 || (doc.code !== 0 && docResult.failed === 0)) incomplete = true;
-
-  const docCpu = parseCpu(doc.output).cpu;
+  const docPackages = docPackagesPath ? readFileSync(docPackagesPath, "utf8").split("\n").filter(Boolean) : null;
+  const docArgs = docTestArgs(docPackages, libtestArgs);
   const timingRows = runs.map((run) => [run.result.duration || run.wall, run.target.label, run.cpu]);
-  timingRows.push([docResult.duration, "doc-tests", docCpu]);
+  if (docArgs) {
+    console.log("\n== doc tests (serial) ==");
+    const doc = await collect(limitedCommand("cargo", docArgs));
+    process.stdout.write(doc.output);
+    const docResult = parseResults(doc.output);
+    merge(total, docResult);
+    if (doc.signal || docResult.resultLines === 0 || (doc.code !== 0 && docResult.failed === 0)) incomplete = true;
+    timingRows.push([docResult.duration, "doc-tests", parseCpu(doc.output).cpu]);
+  } else {
+    console.log("\n== doc tests: none selected ==");
+  }
   timingRows.sort((a, b) => b[0] - a[0]);
   console.log(`\n== slowest test targets (reported test time; CPU = user+sys against the ${CPU_RAIL_SECONDS} s rail) ==`);
   const visible = timingRows.filter(([seconds]) => seconds >= 1).slice(0, 20);
