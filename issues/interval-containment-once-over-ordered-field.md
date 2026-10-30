@@ -16,11 +16,15 @@ corner arguments; the file's own header says so. Every proof-shape cleanup
 (the 2026-10-30 round's `bnd_has_of`/`widen_has`) has to be done twice, and
 the `CReal` copy was not.
 
-The direction: state `Has` against an `OrderedField(≈, <, <=, +, *)`
-dictionary and an embedding of the bounds (`Dyadic → Rat → K`), prove each
-operation's containment once inside a `section<K: OrderedField(…)>`, and
-make `Interval::Has` and `Interval::HasReal` the readings at `Rat` and at
-`CReal`.
+The direction (decided 2026-10-30, see the log): state `Has` against an
+`OrderedField(≈, <, <=, +, *)` dictionary and an ordered-ring morphism from
+the bounds' type into it, passed as data (`φ: OrderedRingHom<Rat, K>`, the
+morphism record [[casting-standard]] registers as a cast edge; identity at
+`Rat`, `CReal::ofRat_hom` at `CReal`), prove each operation's containment
+once inside a `section<K: OrderedField(…)>(φ: …)`, and make `Interval::Has`
+and `Interval::HasReal` the readings at `Rat` and at `CReal`. No combined
+class (`OrderedFieldOfRat`): the embedding is a morphism between two
+structures, not a capability of one.
 
 What has to be settled first:
 
@@ -114,3 +118,17 @@ containment for free.
   wins either way: `StrictOrder::le_by_cases` and
   `OrderedField::mul_le_mono_l_nonpos`/`_r_nonpos` (missing from the class
   layer today) belong in `ordered_field.hthr`.
+- 2026-10-30: DECIDED with Minus: the embedding is a morphism record
+  passed as a parameter, not the `OrderedFieldOfRat` class the assessment
+  prototyped (combined X-of-Y classes exist only because two constraints
+  installing the same `≈`, `+`, `*` are refused,
+  [[constraints-sharing-indices]]). The record is
+  [[casting-standard]]'s `OrderedRingHom` (docs/casting-design.md §5.6),
+  so one value serves the cast graph and this section; take its field
+  names. The readings still convert: at the identity morphism `HasIn`
+  reduces to `Has` by β. Longer term the ℚ-embedding is derivable in every
+  ordered field (`of_nat`, `recip`), with carriers proving only that their
+  own spelling coincides with it; that would also retire `CommRingOfInt`
+  and `OrderedFieldOfInt`. The containment proofs use only a monotone map
+  commuting with `+`, `*`, `-` up to `≈`, so a `Dyadic → K` morphism (the
+  composite through `Rat`) would let statements drop `.rat()`.
