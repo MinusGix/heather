@@ -153,10 +153,12 @@ fn a_module_that_fails_to_build_leaves_the_check_to_report_it() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A replay over a module's own canonical world that passed once is
-/// vouched for whole the next time: none of its declarations is asked about
-/// (`docs/module-dag-design.md` §13). An edit below a module changes its
-/// world's identity, so its replay is rechecked again.
+/// A replay that passed once is vouched for whole the next time over the
+/// same worlds: none of its declarations is asked about
+/// (`docs/module-dag-design.md` §13). That holds for an import moved into
+/// another module's world as well as for one replayed over its own. An edit
+/// below a module changes its world's identity, so its replay is rechecked
+/// again.
 #[test]
 fn a_replay_that_passed_is_vouched_for_whole_next_time() {
     let root = library("vouched", LIB);
@@ -166,13 +168,14 @@ fn a_replay_that_passed_is_vouched_for_whole_next_time() {
     assert_eq!(replayed(&second), 3);
     assert!(second.contains("0 declarations kernel-checked"), "{second}");
     // `colour` and `base` replay over the prelude alone the first warm time
-    // and record it; `user`'s world is theirs.
+    // and record it, and one of them again moved above the other, under
+    // `user`; `user`'s world is theirs.
     let third = check(&root, &["lib/c"]);
     assert!(third.contains("0 declarations kernel-checked"), "{third}");
-    assert!(third.contains("(3 vouched for whole)"), "{third}");
-    // What is still asked about lies outside every image (the root's own
-    // closure prefix); the replayed bindings are no longer asked about.
-    assert!(accepted(&third) < accepted(&second), "{second}{third}");
+    assert!(third.contains("(4 vouched for whole)"), "{third}");
+    // Nothing is asked about one declaration at a time, the moved import's
+    // bindings included.
+    assert_eq!(accepted(&third), 0, "{second}{third}");
     // An edit to `base` changes its image and every world above it.
     std::fs::write(root.join("lib/b/base.hthr"), "inductive Base { One, Two, Three }\nfn base_one() → Base { One }\n").unwrap();
     let edited = check(&root, &["lib/c"]);

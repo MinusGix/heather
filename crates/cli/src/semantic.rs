@@ -617,22 +617,25 @@ impl SemanticSession {
     fn load_into(&mut self, world: &mut Elaborator, name: &str, before: &[String]) -> Result<(), String> {
         let (delta, content) = self.canonical_delta(name)?;
         let f = &self.done[name];
-        // Over its own canonical world a replay can be vouched for whole; a
-        // moved one is checked binding by binding, whose verdicts key on
-        // the moved terms themselves.
-        let mut replay = None;
-        let moved = if f.canon.order[..] == *before {
-            replay = content.map(|c| self.replay_key(before, &c));
+        // A replay is vouched for whole over its own canonical world, and a
+        // moved one over the pair of worlds the move is computed from (§13).
+        let canonical = f.canon.order[..] == *before;
+        let replay = content.map(|c| match canonical {
+            true => self.replay_key(before, &c),
+            false => self.moved_replay_key(&f.canon.order, before.iter().map(String::as_str), &c),
+        });
+        let moved = if canonical {
             delta.over_prefix(world.psi().clone()).ok_or_else(|| format!("`{name}`'s world has another length"))?
         } else {
             let map = self.move_map(&f.canon.order, before.iter().map(String::as_str));
-            delta
-                .relocate(RelocationTarget {
+            stats::timed(stats::Timer::ImageRelocate, || {
+                delta.relocate(RelocationTarget {
                     dependency_psi: world.psi().clone(),
                     dependencies: delta.dependencies().clone(),
                     map: &mut |a| map.at(a),
                 })
-                .map_err(|e| format!("moving `{name}`: {e}"))?
+            })
+            .map_err(|e| format!("moving `{name}`: {e}"))?
         };
         stats::timed(stats::Timer::ImageRecheck, || {
             world.replay_module_delta_keyed(&moved, delta.dependencies(), replay.as_ref())
@@ -651,29 +654,63 @@ impl SemanticSession {
         h.update(b"heather/module-replay/1\0");
         h.update(&SemanticsIdentity::current().bytes());
         h.update(&(self.base.as_ref().expect("base").len as u64).to_le_bytes());
+        self.hash_world(&mut h, world.iter().map(String::as_str));
+        h.update(content);
+        h.finish()
+    }
+
+    /// The identity of replaying the stored bytes `content`, written over
+    /// the world `from`, after moving them into the world `to`
+    /// (`docs/module-dag-design.md` §13): what [`Self::replay_key`] names,
+    /// plus the world the bytes' positions were counted in. The move is a
+    /// function of the two worlds' orders and binding counts (§4), so these
+    /// fix the moved delta and the world it is replayed over, which is all
+    /// the first replay's recheck judged.
+    fn moved_replay_key<'a>(
+        &self,
+        from: &[String],
+        to: impl Iterator<Item = &'a str> + ExactSizeIterator,
+        content: &[u8; 32],
+    ) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(b"heather/module-replay-moved/1\0");
+        h.update(&SemanticsIdentity::current().bytes());
+        h.update(&(self.base.as_ref().expect("base").len as u64).to_le_bytes());
+        self.hash_world(&mut h, from.iter().map(String::as_str));
+        self.hash_world(&mut h, to);
+        h.update(content);
+        h.finish()
+    }
+
+    /// A world's modules, in order, by name and interface hash.
+    fn hash_world<'a>(&self, h: &mut Sha256, world: impl Iterator<Item = &'a str> + ExactSizeIterator) {
         h.update(&(world.len() as u64).to_le_bytes());
         for m in world {
             h.update(&(m.len() as u64).to_le_bytes());
             h.update(m.as_bytes());
             h.update(&self.done[m].identity);
         }
-        h.update(content);
-        h.finish()
     }
 
     /// Move a canonical delta into the caller's world.
     fn into_process(&mut self, elab: &mut Elaborator, name: &str, delta: &ModuleDelta) -> Result<(), String> {
         let order = self.done[name].canon.order.clone();
+        let replay = self.done[name]
+            .content
+            .map(|c| self.moved_replay_key(&order, self.process.iter().map(|(n, _)| n.as_str()), &c));
         let map = self.move_map(&order, self.process.iter().map(|(n, _)| n.as_str()));
-        let moved = delta
-            .relocate(RelocationTarget {
+        let moved = stats::timed(stats::Timer::ImageRelocate, || {
+            delta.relocate(RelocationTarget {
                 dependency_psi: elab.psi().clone(),
                 dependencies: delta.dependencies().clone(),
                 map: &mut |a| map.at(a),
             })
-            .map_err(|e| format!("moving `{name}`: {e}"))?;
-        stats::timed(stats::Timer::ImageRecheck, || elab.replay_module_delta(&moved, delta.dependencies()))
-            .map_err(|e| format!("replaying `{name}`: {e}"))
+        })
+        .map_err(|e| format!("moving `{name}`: {e}"))?;
+        stats::timed(stats::Timer::ImageRecheck, || {
+            elab.replay_module_delta_keyed(&moved, delta.dependencies(), replay.as_ref())
+        })
+        .map_err(|e| format!("replaying `{name}`: {e}"))
     }
 
     /// The position map from the world `from` to a world whose modules are
@@ -718,16 +755,18 @@ impl SemanticSession {
             return None;
         }
         let start = elab.psi().bindings.len();
+        let replay = self.moved_replay_key(&canon.order, self.process.iter().map(|(n, _)| n.as_str()), &loaded.content);
         let map = self.move_map(&canon.order, self.process.iter().map(|(n, _)| n.as_str()));
-        let moved = loaded
-            .delta
-            .relocate(RelocationTarget {
+        let moved = stats::timed(stats::Timer::ImageRelocate, || {
+            loaded.delta.relocate(RelocationTarget {
                 dependency_psi: elab.psi().clone(),
                 dependencies: dependencies.clone(),
                 map: &mut |a| map.at(a),
             })
+        })
+        .ok()?;
+        stats::timed(stats::Timer::ImageRecheck, || elab.replay_module_delta_keyed(&moved, dependencies, Some(&replay)))
             .ok()?;
-        stats::timed(stats::Timer::ImageRecheck, || elab.replay_module_delta(&moved, dependencies)).ok()?;
         self.hits += 1;
         let mut notices = Vec::new();
         self.note_stale(&module.name, loaded.stale, &mut notices);
