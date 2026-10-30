@@ -26,6 +26,8 @@ fn root() -> PathBuf {
 /// the loader searches every folder below `-L`, so a mirror of `arith` cannot
 /// also be called `arith`).
 const TESTS_DIR: &str = "lib/_tests";
+/// The gate's last folders, in this order (`every_library_module_checks`).
+const NATIVE_FOLDERS: [&str; 2] = ["lib/native", "lib/_tests/native"];
 
 /// Modules nothing imports that are kept on purpose, each with its reason.
 /// A module lands here only when someone decides it should stay without a
@@ -242,18 +244,22 @@ fn every_library_module_checks() {
     // Three at a time, as the suite runner runs targets: each child may
     // hold a library prefix in memory.
     // The library's folders before `lib/_tests`'s, each part with small
-    // closures first (the order `World::folders` places them in). A child
-    // builds whatever of its closure no child has built yet, under its own
-    // CPU rail; a test folder's closure is mostly library, and its own
-    // modules are the heaviest, so starting it after the library's children
-    // keeps it paying for its own modules only (a cold suite put
-    // `lib/_tests/std/tactic` over the rail when it started beside
-    // `lib/std/tactic`, 2026-10-30, `docs/module-dag-design.md` §7).
+    // closures first (the order `World::folders` places them in), and the
+    // native folders after both. A child builds whatever of its closure no
+    // child has built yet, under its own CPU rail
+    // (`docs/module-dag-design.md` §7). A test folder's closure is mostly
+    // library and its own modules are its heaviest, so starting it after the
+    // library's children keeps it paying for its own modules (a cold suite
+    // put `lib/_tests/std/tactic` over the rail when it started beside
+    // `lib/std/tactic`, 2026-10-30). `lib/native`'s own modules alone sit
+    // near the rail (`issues/native-gate-child-cold-at-rail.md`), so it
+    // starts when the rest of its closure is built, as in the old chain.
     let world = heather_cli::world::World::of(&root.join("lib"), &[root.join("lib/std"), root.join("lib")]).unwrap_or_else(|e| panic!("the library's world: {}", e.msg));
     let mut folders = gate_folders();
     folders.sort_by_key(|f| {
         let position = world.folders().iter().position(|w| w.starts_with(root.join(f))).unwrap_or(usize::MAX);
-        (f.starts_with(TESTS_DIR), position)
+        let native = NATIVE_FOLDERS.iter().position(|n| f == Path::new(n));
+        (native, f.starts_with(TESTS_DIR), position)
     });
     let queue = std::sync::Mutex::new(std::collections::VecDeque::from(folders));
     let failures = std::sync::Mutex::new(Vec::new());

@@ -181,7 +181,8 @@ binding are content hashes and are cached by binding.
 
 With closure keys the gate's children no longer have to follow one order.
 The gate still runs three children at a time, one folder each: the library's
-folders first and `lib/_tests`'s after, each part in `World::folders` order. Inside a child, `heather check` walks its modules in
+folders first and `lib/_tests`'s after, each part in `World::folders` order,
+then `lib/native` and `lib/_tests/native`. Inside a child, `heather check` walks its modules in
 a topological order of the written imports and, among the modules whose
 imports it has finished, takes the first that no other process is building
 (`ModuleImageStore::being_built`, a non-blocking try of the build lock). Only
@@ -200,9 +201,15 @@ cold suite started `lib/_tests/std/tactic` beside `lib/std/tactic`; the test
 child built half the tactic library and died at the rail, though alone and
 cold it costs the same CPU on both designs. A test folder's closure is mostly
 library, and its own modules are its heaviest, so starting the test folders
-after the library's keeps each test child paying for its own modules. That
-order also shortened the cold gate further, in a simulation over measured
-per-module costs and on the box; largest-first was worse for the rail.
+after the library's keeps each test child paying for its own modules.
+`lib/native`'s own modules alone come near the rail
+(`issues/native-gate-child-cold-at-rail.md`); started early, it lost the
+same race in a PR-lane run, so it goes last, when the rest of its closure is
+built, as it did in the chain. In a simulation over measured per-module
+costs that costs the cold gate a few percent against library-first alone,
+and waiting on whole folders instead (a folder starts when the folders of
+its closure finish) costs about two fifths, because it gives up the
+module-level overlap; largest-first was worse for the rail.
 
 A module that fails no longer turns images off for the rest of the process.
 Its dependents are refused with a note naming it ("its import closure holds
