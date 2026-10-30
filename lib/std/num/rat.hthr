@@ -1325,12 +1325,6 @@ theorem Rat::le_of_le_add_inv_succ({a, b: Rat}, close: (k: Nat) → a <= b + Rat
     })
 }
 
-instance(x, y: Rat) Decide<Rat::Le(x, y)> {
-    dec := x.le_dec(y),
-    bit := or_bit(x.le_dec(y)),
-    reflects := or_bit_reflects(x.le_dec(y)),
-}
-
 // ---------------------------------------------------------------------------
 // Apartness, the inverse, and integer powers
 // (docs/inverse-power-notation-design.md). The inverse takes apartness from
@@ -1383,6 +1377,15 @@ theorem Rat::le_of_bool(self x, y: Rat, h: x.le_bool(y) = True): x <= y { Int::l
 theorem Rat::not_le_of_bool(self x, y: Rat, h: x.le_bool(y) = False): ¬(x <= y) { Int::not_le_of_leb(x.num * y.den.int(), y.num * x.den.int(), h) }
 theorem Rat::lt_of_bool(self x, y: Rat, h: x.lt_bool(y) = True): x < y { Int::le_of_leb((x.num * y.den.int()).isucc(), y.num * x.den.int(), h) }
 theorem Rat::not_lt_of_bool(self x, y: Rat, h: x.lt_bool(y) = False): ¬(x < y) { Int::not_le_of_leb((x.num * y.den.int()).isucc(), y.num * x.den.int(), h) }
+// The order's decision. Its bit is `le_bool`, the cross-product comparison,
+// so a decided `<=` evaluates as that comparison does
+// (issues/decide-bit-is-the-comparison.md).
+instance(x, y: Rat) Decide<Rat::Le(x, y)> {
+    dec := x.le_dec(y),
+    bit := x.le_bool(y),
+    reflects := And(x.le_of_bool(y), x.not_le_of_bool(y)),
+}
+
 theorem Rat::apart_of_lt_bool(self x, y: Rat, h: x.lt_bool(y) = True): x.Apart(y) { Inl(x.lt_of_bool(y, h)) }
 theorem Rat::apart_of_gt_bool(self x, y: Rat, h: y.lt_bool(x) = True): x.Apart(y) { Inr(y.lt_of_bool(x, h)) }
 theorem Rat::not_apart_of_bool(self x, y: Rat, h1: x.lt_bool(y) = False, h2: y.lt_bool(x) = False): ¬(x.Apart(y)) {

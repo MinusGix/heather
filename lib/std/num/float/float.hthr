@@ -129,12 +129,16 @@ fn e2m1() → Format { Format(1, trivial, 0, 2, FiniteOnly) }
 // Canonical form.
 
 // The significand fits in `prec` bits, the exponent is in range, only the
-// least exponent holds significands below `2^(prec - 1)`, and the pattern the
-// format reserves for NaN is not taken.
+// least exponent holds significands below `2^(prec - 1)`, and a format that
+// reserves its top pattern for NaN leaves room below it in the top binade.
+// Stated as the proposition and computed as its decision, whose bit is the
+// comparisons themselves (`leb`, `same`, `&&`, `||`, `!`;
+// issues/decide-bit-is-the-comparison.md), so the proof field of a `Finite`
+// is proof-irrelevant, a closed format decides it by `refl`, and the four
+// conditions go in and out by `decide_intro` / `decide_elim`.
 fn Format::canonical(self F: Format, mag, bexp: Nat) → Bool {
-    let normal = match bexp { Zero => True, Succ(_) => F.half().leb(mag) };
-    let reserved = F.specials.reserves_top() && F.span.leb(bexp) && F.top().leb(Succ(mag));
-    Succ(mag).leb(F.top()) && bexp.leb(F.span) && normal && !reserved
+    decide_bit<Succ(mag) <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
+        ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top())>()
 }
 
 record Finite(F: Format) { neg: Bool, mag: Nat, bexp: Nat, ok: F.canonical(mag, bexp).IsTrue() }
@@ -355,40 +359,6 @@ theorem Format::four_le_top(self F: Format): 4 <= F.top() {
     omega
 }
 
-// The canonical form as a proposition: its four conditions, each a fact
-// about naturals. The significand fits, the exponent is in range, a
-// significand below `2^(prec - 1)` sits at the least exponent, and a format
-// that reserves its top pattern for NaN leaves room below it in the top
-// binade.
-fn Format::Canonical(self F: Format, mag, bexp: Nat) → Type {
-    Succ(mag) <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
-        ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top())
-}
-
-// `canonical` decides `Canonical`: each comparison bit reflects its `<=`,
-// the least-exponent test reflects its disjunction case by case, and the
-// negated reserved-top test reads back as the implication.
-theorem Format::canonical_reflects(self F: Format, mag, bexp: Nat): Reflects(F.Canonical(mag, bexp), F.canonical(mag, bexp)) {
-    let normal = match bexp as λ b => Reflects(b = 0 ∨ F.half() <= mag, match b { Zero => True, Succ(_) => F.half().leb(mag) }) {
-        Zero => reflects_of_is_true(λ _ => Inl(refl), λ _ => trivial),
-        Succ(_) => reflects_iff(F.half().leb_reflects(mag), λ le => Inr(le), λ n => match n {
-            Inl(zero) => false_elim(omega(zero)),
-            Inr(le) => le,
-        }),
-    };
-    let reserved = reflects_and(reflects_and(F.specials.reserves_top().is_true_reflects(), F.span.leb_reflects(bexp)), F.top().leb_reflects(Succ(mag)));
-    let tests = reflects_and(reflects_and(Succ(mag).leb_reflects(F.top()), bexp.leb_reflects(F.span)), normal);
-    reflects_iff(reflects_and(tests, reflects_not(reserved)),
-        λ c => And(c.left.left.left, And(c.left.left.right, And(c.left.right, λ rt sp => {
-            let over: ¬(F.top() <= Succ(mag)) = λ o => c.right(And(And(rt, sp), o));
-            omega
-        }))),
-        λ c => And(And(And(c.left, c.right.left), c.right.right.left), λ r => {
-            let room = c.right.right.right(r.left.left, r.left.right);
-            omega
-        }))
-}
-
 // The canonical form from its four conditions.
 theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
     fits: Succ(mag) <= F.top(),
@@ -397,7 +367,7 @@ theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
     free: F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top()):
     F.canonical(mag, bexp).IsTrue()
 {
-    reflects_intro(F.canonical_reflects(mag, bexp), And(fits, And(range, And(normal, free))))
+    decide_intro(And(fits, And(range, And(normal, free))))
 }
 
 // The four conditions back out of the canonical form.
@@ -405,7 +375,7 @@ theorem Format::canonical_elim(self F: Format, mag, bexp: Nat, ok: F.canonical(m
     Succ(mag) <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
         ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top())
 {
-    And(omega(ok), And(omega(ok), And(reflects_elim(F.canonical_reflects(mag, bexp), ok).right.right.left, λ rt sp => omega(ok, rt, sp))))
+    decide_elim(ok)
 }
 
 // Zero of either sign.

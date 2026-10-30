@@ -231,13 +231,13 @@ fn Nat::Lt(self n, m: Nat) → Type { Succ(n).Le(m) }
 designation <= at Nat := Nat::Le
 designation < at Nat := Nat::Lt
 
-// The decision procedure, kept. It is NOT part of the order's specification —
-// nothing above mentions it and no lemma below is stated with it — and as of
-// 2026-08-17 its last *specification* customer is gone too: `list_algos`'s
-// insertion sort went propositional and decides with `le_dec`. What still reads
-// `leb` is `certgen_code`, where a Boolean is the subject rather than the
-// statement, which is exactly the role issues/class-ops-prop-vs-bool.md leaves
-// `Bool` in.
+// The decision procedure. It is NOT part of the order's specification —
+// nothing above mentions it — but it is the order's decided bit: the `Decide`
+// instance below carries `leb` as its `bit`, so `decide_bit<n <= m>()` is the
+// guard a program writes (issues/decide-bit-is-the-comparison.md). Its other
+// readers are `certgen_code`, where a Boolean is the subject rather than the
+// statement, which is the role issues/class-ops-prop-vs-bool.md leaves `Bool`
+// in, and closed-fact evaluation (`le_of_leb`, below).
 fn Nat::leb(self n, m: Nat) → Bool {
     match n {
         Zero => True,
@@ -274,6 +274,8 @@ theorem Nat::same_sound(self n: Nat): (m: Nat) → n.same(m) = True → n = m {
         },
     }
 }
+
+theorem Nat::ne_of_same(self n, m: Nat, h: n.same(m) = False): n ≠ m { λ e => absurd(trans(sym(h), j(e, λ k _ => n.same(k) = True, n.same_self()))) }
 
 fn Nat::sub(self m, n: Nat) → Nat {
     match m {
@@ -515,6 +517,35 @@ fn DivMod::Spec(n, divisor: Nat, state: DivMod) → Type {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The bridge between the Boolean decision and the propositional order. `leb`
+// and `Le` are the same two-argument recursion written into `Bool` and into
+// `Type`.
+
+theorem Nat::leb_sound(self n: Nat): (m: Nat) → n.leb(m).IsTrue() → n <= m {
+    match n {
+        Zero => λ m h => trivial,
+        Succ(_, ih) => λ m => match m {
+            Zero => λ h => false_elim(h),
+            Succ(l) => λ h => ih(l, h),
+        },
+    }
+}
+
+theorem Nat::leb_complete(self n: Nat): (m: Nat) → n <= m → n.leb(m).IsTrue() {
+    match n {
+        Zero => λ m h => trivial,
+        Succ(_, ih) => λ m => match m {
+            Zero => λ h => false_elim(h),
+            Succ(l) => λ h => ih(l, h),
+        },
+    }
+}
+
+// The two together: `leb` reflects `<=`, the piece a guard assembled from
+// comparisons is reflected from (`bool`'s `reflects_and`, `reflects_iff`).
+theorem Nat::leb_reflects(self n, m: Nat): Reflects(n <= m, n.leb(m)) { reflects_of_is_true(n.leb_sound(m), n.leb_complete(m)) }
+
 // The order's `Decide` instance — generic in **both** of its values
 // (docs/value-generic-instances-design.md, 2026-08-17). Until value binders
 // existed the only registrable spelling was `Decide<Le(2, 5)>` at fixed
@@ -527,7 +558,13 @@ fn DivMod::Spec(n, divisor: Nat, state: DivMod) → Type {
 // This is what lets `list_algos`'s `insert` decide through the class instead of
 // naming `le_dec`, which is the measurement issues/value-generic-instances.md
 // was filed to take.
-instance(n, m: Nat) Decide<Nat::Le(n, m)> { dec := Nat::le_dec(n, m), bit := or_bit(Nat::le_dec(n, m)), reflects := or_bit_reflects(Nat::le_dec(n, m)) }
+//
+// Its bit is `leb` and not `or_bit(le_dec(n, m))`, so a decided `<=` is the
+// comparison itself: an evidence-free `if n <= m` branches on `n.leb(m)`, and a
+// Bool guard built from comparisons is a `decide_bit` of its proposition
+// (`decide_intro` / `decide_elim` read it). Equality's bit is `same` the same
+// way.
+instance(n, m: Nat) Decide<Nat::Le(n, m)> { dec := Nat::le_dec(n, m), bit := n.leb(m), reflects := n.leb_reflects(m) }
 
 // ---------------------------------------------------------------------------
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the
@@ -830,7 +867,7 @@ fn Nat::equation(self n: Nat) → (m: Nat) → (n = m) ∨ True {
     }
 }
 
-instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m), bit := or_bit(Nat::eq_dec(n, m)), reflects := or_bit_reflects(Nat::eq_dec(n, m)) }
+instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m), bit := n.same(m), reflects := And(n.same_sound(m), λ h => n.ne_of_same(m, h)) }
 
 // The same decision as a property of the carrier, which is what a polymorphic
 // container's decider requires of its element type (`logic::DecEq`).
@@ -1914,35 +1951,6 @@ theorem Nat::ldiv_mod(self n: Nat, d: Pos<Nat>): n.ldiv(d).rem() = n.mod(d) {
     sym(n.div_mod_unique(d, n.ldiv(d).quot(), n.ldiv(d).rem(), n.ldiv_parts(d), n.ldiv_rem_lt(d, d_pos := d_pos)).right)
 }
 
-// ---------------------------------------------------------------------------
-// The bridge between the Boolean decision and the propositional order. `leb`
-// and `Le` are the same two-argument recursion written into `Bool` and into
-// `Type`.
-
-theorem Nat::leb_sound(self n: Nat): (m: Nat) → n.leb(m).IsTrue() → n <= m {
-    match n {
-        Zero => λ m h => trivial,
-        Succ(_, ih) => λ m => match m {
-            Zero => λ h => false_elim(h),
-            Succ(l) => λ h => ih(l, h),
-        },
-    }
-}
-
-theorem Nat::leb_complete(self n: Nat): (m: Nat) → n <= m → n.leb(m).IsTrue() {
-    match n {
-        Zero => λ m h => trivial,
-        Succ(_, ih) => λ m => match m {
-            Zero => λ h => false_elim(h),
-            Succ(l) => λ h => ih(l, h),
-        },
-    }
-}
-
-// The two together: `leb` reflects `<=`, the piece a guard assembled from
-// comparisons is reflected from (`bool`'s `reflects_and`, `reflects_iff`).
-theorem Nat::leb_reflects(self n, m: Nat): Reflects(n <= m, n.leb(m)) { reflects_of_is_true(n.leb_sound(m), n.leb_complete(m)) }
-
 // The decision, evaluated at a known order.
 theorem Nat::leb_true(self n, m: Nat, h: n <= m): n.leb(m) = True { eq_true_of_is_true(n.leb(m), n.leb_complete(m, h)) }
 theorem Nat::leb_false(self n, m: Nat, h: m < n): n.leb(m) = False {
@@ -1959,8 +1967,6 @@ theorem Nat::leb_false(self n, m: Nat, h: m < n): n.leb(m) = False {
 theorem Nat::le_of_leb(self n, m: Nat, h: n.leb(m) = True): n <= m { n.leb_sound(m, j(sym(h), λ d _ => d.IsTrue(), trivial)) }
 
 theorem Nat::not_le_of_leb(self n, m: Nat, h: n.leb(m) = False): ¬(n <= m) { λ le => absurd(trans(sym(h), n.leb_true(m, le))) }
-
-theorem Nat::ne_of_same(self n, m: Nat, h: n.same(m) = False): n ≠ m { λ e => absurd(trans(sym(h), j(e, λ k _ => n.same(k) = True, n.same_self()))) }
 
 theorem Nat::le_of_not_lt(self n, m: Nat, h: ¬(n < m)): m <= n {
     or_resolve(m.le_dec(n), λ (k: ¬(m <= n)) => h(n.lt_of_not_le(m, k)))
