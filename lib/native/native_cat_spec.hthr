@@ -169,8 +169,6 @@ theorem cat_wrote_left(r, sent, left, count: Nat, small: r < Nat::pow(2, 63), su
     let back: (BitVec::ofNat(r, n := 64).toNat() - BitVec::ofNat(sum, n := 64).toNat() = r - (sent + count)) =
         j(sym(hb), λ x _ => BitVec::ofNat(r, n := 64).toNat() - x = r - (sent + count),
             j(sym(hr), λ y _ => y - (sent + count) = r - (sent + count), refl));
-    let back_r: ((r - (sent + count)) + (sent + count) = r) = Nat::sub_add_cancel(sent + count, r, { omega });
-    let back_left: ((left - count) + count = left) = Nat::sub_add_cancel(count, left, wrote);
     let arith: (r - (sent + count) = left - count) = { omega };
     trans(diff, trans(back, arith))
 }
@@ -187,7 +185,6 @@ theorem cat_wrote_some(r, sent, left, count: Nat, small: r < Nat::pow(2, 63), su
     more: 0 < left - count): wrote_all(r, sent, count_word(count).toNat()) = False
 {
     let rest: (wrote_left(r, sent, count_word(count).toNat()) = left - count) = cat_wrote_left(r, sent, left, count, small, sums, wrote);
-    let back: ((left - count) + count = left) = Nat::sub_add_cancel(count, left, wrote);
     cat_count_nonzero(wrote_left(r, sent, count_word(count).toNat()), j(sym(rest), λ x _ => 0 < x, more),
         j(sym(rest), λ x _ => x < Nat::pow(2, 63), { omega }))
 }
@@ -199,7 +196,6 @@ theorem cat_errno_failed(e: Nat, valid: Errno(e)): wrote_failed(errno_word(e).to
 
 theorem cat_span_len(buf: List<BitVec(8)>, sent, left: Nat, h: sent + left <= buf.len()): span(buf, sent, left).len() = left {
     let rest: (buf.drop(sent).len() = buf.len() - sent) = buf.len_drop(sent);
-    let back: ((buf.len() - sent) + sent = buf.len()) = Nat::sub_add_cancel(sent, buf.len(), { omega });
     buf.drop(sent).len_take(left, j(sym(rest), λ x _ => left <= x, { omega }))
 }
 
@@ -213,7 +209,6 @@ theorem cat_fill_len(buf, bytes: List<BitVec(8)>, h: bytes.len() <= buf.len()): 
     let whole: ((bytes ++ buf.drop(bytes.len())).len() = bytes.len() + (buf.len() - bytes.len())) =
         trans(bytes.len_append(buf.drop(bytes.len())), @cong(λ (x: Nat) => bytes.len() + x, buf.drop(bytes.len()).len(),
             buf.len() - bytes.len(), buf.len_drop(bytes.len())));
-    let back: ((buf.len() - bytes.len()) + bytes.len() = buf.len()) = Nat::sub_add_cancel(bytes.len(), buf.len(), h);
     (bytes ++ buf.drop(bytes.len())).len_take(buf.len(), j(sym(whole), λ x _ => buf.len() <= x, { omega }))
 }
 
@@ -328,7 +323,6 @@ theorem cat_wrote_more(args: List<List<BitVec(8)>>, call: Answers(), n, k, m: Na
     let all: (wrote_all(r, sent, w6) = False) = cat_wrote_some(r, sent, left, count, small_r, sums, wrote, more);
     let hs: (wrote_sent(sent, w6) = sent + count) = cat_wrote_sent(r, sent, left, count, small_r, sums, wrote);
     let hl: (wrote_left(r, sent, w6) = left - count) = cat_wrote_left(r, sent, left, count, small_r, sums, wrote);
-    let back: ((left - count) + count = left) = Nat::sub_add_cancel(count, left, wrote);
     let env = cat_wrote(args, c, r, sent, w6, w7, w8, buf);
     let again: (env.bit(14) = True) = trans(cat_stop_again(wrote_failed(w6), wrote_all(r, sent, w6)),
         j(sym(failed), λ b _ => Bool::not(Bool::or(b, wrote_all(r, sent, w6))) = True, j(sym(all), λ b _ => Bool::not(Bool::or(False, b)) = True, refl)));

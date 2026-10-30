@@ -202,6 +202,25 @@ theorem ex_proof_int(x: Int, e: Exists<Int>(λ k => k < x ∧ OfNat(3) <= k)): O
 // expect-error: `omega` got stuck
 theorem ex_proof_false(a: Nat, e: Exists<Nat>(λ k => a = k + 2)): 3 <= a { omega(e.proof) }
 
+// A truncated subtraction `a - b` is split into its two cases, `b <= a` with
+// `(a - b) + b = a` and `a < b` with `a - b = 0`, the subtraction kept an atom
+// both constrain (issues/omega-nat-truncated-subtraction.md).
+theorem sub_add_cancel_bare(a, b: Nat, h: b <= a): a - b + b = a { omega }
+theorem sub_le_bare(a, b: Nat): a - b <= a { omega }
+theorem sub_zero_past(a, b: Nat, h: a < b): a - b = 0 { omega }
+// In a fact, and two subtractions, one nested in the other.
+theorem sub_in_fact(a, b, n: Nat, h: a - b = n + 1): b < a { omega }
+theorem sub_nested(a, b, c: Nat, h: c <= b, k: b <= a): a - (b - c) = a - b + c { omega }
+// In a checking position, beside a fact argument.
+theorem sub_checking(a, b, c: Nat, h: a <= b): (b - a) + c + a = b + c {
+    let k: ((b - a) + c + a = b + c) = omega(h);
+    k
+}
+// Control: without `b <= a`, the case `a < b` has a model, and the refusal
+// names the case it came from.
+// expect-error: __omega_sub0_case: Lt(a, b), __omega_sub0_eq: sub(a, b) = 0
+theorem sub_add_cancel_truncated(a, b: Nat): a - b + b = a { omega }
+
 // `omega` is a checking form: where nothing is expected it says so and how
 // to state the goal, not "unbound name"
 // (issues/checking-tactic-in-inference-position-diagnostic.md).

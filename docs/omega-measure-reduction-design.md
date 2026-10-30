@@ -564,3 +564,30 @@ a conjunction under the redex is split as in §13. Only the head is
 contracted: a redex inside a relation's side is an atom like any other
 subterm. The certificate still cites the fact by name; its declared type and
 the contractum are β-convertible, so the kernel pays one β-step.
+
+## 16. Truncated subtraction at Nat (2026-10-30)
+
+`issues/omega-nat-truncated-subtraction.md`. A Nat `a - b` was one atom, so
+`a - b + b = a` under `b <= a` had the model `a = b = 0, a - b = 1`, and every
+round fed `Nat::sub_add_cancel` by hand. It is now split as Lean's `omega`
+splits it: `omega::nat_sub_elim(a, b, …)` gives two branches, `b <= a` with
+`(a - b) + b = a` and `a < b` with `a - b = 0`, bound as
+`__omega_sub{k}_case` and `__omega_sub{k}_eq`, each closed by `omega` again.
+The subtraction stays one atom; both cases now constrain it, so a linear
+problem is enough in each. Nothing new is trusted: the split is a lemma in
+`omega.hthr` and the branches are ordinary certificates.
+
+`split_nat_subtraction` is the last fallback of the attempt that answers:
+after CutSat finds a model and after the disequality and connective splits,
+so a goal that closed before closes the same way, and not in a narrower
+relevance layer, whose failure only widens. It looks for subtractions on the
+sides of the relations `integral_sides` reads (stated, unfolded or negated,
+through `Succ` and applied globals, never under a binder), newest fact
+first, so the negated goal's subtractions are split before an old fact's.
+A subtraction is settled once a case equation in scope names it, compared by
+its spelling; the case equations are counted to name the next pair, and
+past six of them nothing more is split — each split doubles the branches,
+and a subtraction whose spelling did not round-trip would otherwise be split
+forever. A refused control's report names the case its model lives in
+(`__omega_sub0_case: Lt(a, b)` among the locals). Probes are in
+`lib/_tests/std/tactic/omega_tests.hthr`.

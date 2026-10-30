@@ -509,9 +509,7 @@ fn Format::gamma(self F: Format, mode: Mode, n: Nat) → Rat { Rat(n.int(), Succ
 
 // With the room `D = u_den - n` named, `γ(n)` is `n / D`.
 theorem Format::gamma_at(self F: Format, mode: Mode, n: Nat, D: Pos<Nat>, e: F.u_den(mode) = D + n): F.gamma(mode, n) ≈ Rat(n.int(), D) {
-    let le: (Succ(n) <= F.u_den(mode)) = omega(e, D_pos);
-    let s = Succ(n).sub_add_cancel(F.u_den(mode), le);
-    let room: (Succ(F.u_den(mode) - Succ(n)) = D) = omega;
+    let room: (Succ(F.u_den(mode) - Succ(n)) = D) = omega(e, D_pos);
     (F.gamma(mode, n)).same_of_parts(Rat(n.int(), D), refl, room)
 }
 
@@ -541,23 +539,21 @@ theorem gamma_add_core(m, n, K: Nat):
 theorem Format::gamma_add(self F: Format, mode: Mode, m, n: Nat, ok: m + n < F.u_den(mode)):
     F.gamma(mode, m) + F.gamma(mode, n) + F.gamma(mode, m) * F.gamma(mode, n) <= F.gamma(mode, m + n)
 {
-    let s = Succ(m + n).sub_add_cancel(F.u_den(mode), ok);
     let K = F.u_den(mode) - Succ(m + n);
-    let gm = F.gamma_at(mode, m, Succ(K) + n, omega(s));
-    let gn = F.gamma_at(mode, n, Succ(K) + m, omega(s));
-    let gmn = F.gamma_at(mode, m + n, Succ(K), omega(s));
+    let gm = F.gamma_at(mode, m, Succ(K) + n, omega);
+    let gn = F.gamma_at(mode, n, Succ(K) + m, omega);
+    let gmn = F.gamma_at(mode, m + n, Succ(K), omega);
     let lhs = Rat::add_respects(Rat::add_respects(gm, gn), Rat::mul_respects(gm, gn));
     Rat::le_respects(Rat::same_sym(lhs), Rat::same_sym(gmn), gamma_add_core(m, n, K))
 }
 
 // `γ` grows with `n`: `m / (D + t) <= (m + t) / D`.
 theorem Format::gamma_mono(self F: Format, mode: Mode, m, n: Nat, mn: m <= n, ok: n < F.u_den(mode)): F.gamma(mode, m) <= F.gamma(mode, n) {
-    let s = Succ(n).sub_add_cancel(F.u_den(mode), ok);
     let t = n - m;
     let st = m.sub_add_cancel(n, mn);
     let K = F.u_den(mode) - Succ(n);
-    let gm = F.gamma_at(mode, m, Succ(K) + t, omega(s, st));
-    let gn = F.gamma_at(mode, n, Succ(K), omega(s));
+    let gm = F.gamma_at(mode, m, Succ(K) + t, omega(st));
+    let gn = F.gamma_at(mode, n, Succ(K), omega);
     let M = m.int();
     let T = t.int();
     let C = Succ(K).int();
@@ -575,12 +571,11 @@ theorem Format::u_le_gamma(self F: Format, mode: Mode): F.u(mode) <= F.gamma(mod
         NearestAway => Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top()),
         TowardPos => F.two_le_half(), TowardNeg => F.two_le_half(), TowardZero => F.two_le_half(),
     };
-    let s = Nat::sub_add_cancel(2, F.u_den(mode), two);
     let K = F.u_den(mode) - 2;
-    let g = F.gamma_at(mode, 1, Succ(K), omega(s));
+    let g = F.gamma_at(mode, 1, Succ(K), omega);
     let d1: ((Rat(1, F.u_den(mode))).den.int() = F.u_den(mode).int()) = refl;
     let d2: ((Rat(1, Succ(K))).den.int() = Succ(K).int()) = refl;
-    let le: (Rat(1, F.u_den(mode)) <= Rat(1, Succ(K))) = omega(s, d1, d2);
+    let le: (Rat(1, F.u_den(mode)) <= Rat(1, Succ(K))) = omega(d1, d2);
     Rat::le_respects(Rat::same_refl(F.u(mode)), Rat::same_sym(g), le)
 }
 

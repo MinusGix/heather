@@ -1303,7 +1303,6 @@ theorem loop_counter_step(rest: Nat, lt: Succ(rest) < Nat::pow(2, 64)):
     let zero = BitVec::zero(n := 64);
     let under: (rest < Nat::pow(2, 64)) = { omega };
     let reading: (c.toNat() = Nat::pow(2, 64) - 1) = refl;
-    let back: ((Nat::pow(2, 64) - 1) + 1 = Nat::pow(2, 64)) = Nat::sub_add_cancel(1, Nat::pow(2, 64), trivial);
     let count: (Succ(rest) + (Nat::pow(2, 64) - 1) = rest + Nat::pow(2, 64)) = { omega };
     trans(sym(BitVec::iter_add_eq_add(64, BitVec::ofNat(Succ(rest), n := 64), c)),
     trans(BitVec::cong_iterate_increment_count(64, BitVec::ofNat(Succ(rest), n := 64), reading),
@@ -1893,7 +1892,6 @@ fn frame_free() → Instruction { AddRI8(Rsp, BitVec::ofNat(64)) }
 theorem frame_allocated(low: BitVec(64), i: Nat):
     next_rip(low, i + 64).add(BitVec::ofNat(256 - 64, n := 8).sign_extend(56)) = next_rip(low, i) {
     let reading: (BitVec::ofNat(256 - 64, n := 8).sign_extend(56).toNat() = Nat::pow(2, 64) - 64) = refl;
-    let back: ((Nat::pow(2, 64) - 64) + 64 = Nat::pow(2, 64)) = Nat::sub_add_cancel(64, Nat::pow(2, 64), trivial);
     let count: ((i + 64) + (Nat::pow(2, 64) - 64) = i + Nat::pow(2, 64)) = { omega };
     trans(sym(BitVec::iter_add_eq_add(64, next_rip(low, i + 64), BitVec::ofNat(256 - 64, n := 8).sign_extend(56))),
     trans(rip_count(next_rip(low, i + 64), reading),

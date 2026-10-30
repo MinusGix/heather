@@ -3184,6 +3184,95 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
     Ok(None)
 }
 
+/// The prefix of the facts a subtraction split binds: `__omega_sub{k}_case`
+/// (`b <= a` or `a < b`) and `__omega_sub{k}_eq` (`(a - b) + b = a` or
+/// `a - b = 0`), `k` counting the splits already around the goal.
+const SUB_CASE: &str = "__omega_sub";
+
+/// Subtraction splits one goal may sit under: each doubles the branches, and
+/// a case equation whose subtraction no longer spells as it did when split
+/// would otherwise be split again forever.
+const SUB_SPLIT_LIMIT: usize = 6;
+
+/// The truncated subtractions `a - b` at `Nat` that `tm` reads through the
+/// arithmetic around them, outermost first; a binder's body is not entered.
+fn nat_subtractions<'a>(elab: &Elaborator, tm: &'a Rc<Term>, out: &mut Vec<&'a Rc<Term>>) {
+    if let Term::Succ(inner) = &**tm {
+        return nat_subtractions(elab, inner, out);
+    }
+    if named_args(elab, tm, "nat::Nat::sub").is_some_and(|args| args.len() == 2) {
+        out.push(tm);
+    }
+    let (head, args) = app_spine(tm);
+    if matches!(head, Term::GlobalTm { .. }) {
+        for arg in args {
+            nat_subtractions(elab, arg, out);
+        }
+    }
+}
+
+/// A truncated subtraction `a - b` a fact reads as an atom, split into its two
+/// cases by `omega::nat_sub_elim`, Lean's `omega`'s split: `b <= a` with
+/// `(a - b) + b = a`, or `a < b` with `a - b = 0`. Each branch is `omega`
+/// again with the case's two facts beside the rest, so the subtraction stays
+/// one atom that both now constrain. The fact nearest the goal is asked
+/// first; a subtraction a case equation already names is settled.
+fn split_nat_subtraction(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    if elab.key_of("omega::nat_sub_elim").is_none() {
+        return Ok(None);
+    }
+    let facts = local_facts(elab, cx);
+    let spelled_subtractions = |ty: &Type| {
+        let mut found = Vec::new();
+        if let Some((_, left, right)) = integral_sides(elab, cx, ty) {
+            let mut terms = Vec::new();
+            nat_subtractions(elab, &left, &mut terms);
+            nat_subtractions(elab, &right, &mut terms);
+            found.extend(terms.into_iter().filter_map(|tm| {
+                let args = named_args(elab, tm, "nat::Nat::sub")?;
+                Some((
+                    nat_term_source(elab, cx, tm).ok()?,
+                    nat_term_source(elab, cx, args[0]).ok()?,
+                    nat_term_source(elab, cx, args[1]).ok()?,
+                ))
+            }));
+        }
+        found
+    };
+    let case_equations: Vec<_> = facts
+        .iter()
+        .filter(|(name, _)| name.starts_with(SUB_CASE) && name.ends_with("_eq"))
+        .collect();
+    if case_equations.len() >= SUB_SPLIT_LIMIT {
+        return Ok(None);
+    }
+    let settled: std::collections::HashSet<String> = case_equations
+        .iter()
+        .filter_map(|(_, ty)| spelled_subtractions(ty).into_iter().next())
+        .map(|(source, _, _)| source)
+        .collect();
+    let k = case_equations.len();
+    for (_, ty) in facts.iter().rev() {
+        let Some((_, minuend, subtrahend)) =
+            spelled_subtractions(ty).into_iter().find(|(source, _, _)| !settled.contains(source))
+        else {
+            continue;
+        };
+        let source = format!(
+            "omega::nat_sub_elim({minuend}, {subtrahend}, \
+             {SUB_CASE}{k}_case {SUB_CASE}{k}_eq ⊢ omega, \
+             {SUB_CASE}{k}_case {SUB_CASE}{k}_eq ⊢ omega)",
+        );
+        return Ok(Some(Certificate {
+            atoms: None,
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("omega::nat_sub_elim", 1),
+        }));
+    }
+    Ok(None)
+}
+
 /// What CutSat said about a reflection Omega's real shadow left satisfiable.
 enum CutAnswer {
     /// The certificate source, its reachable and total node counts, and the
@@ -3631,6 +3720,11 @@ fn refute_spelled(
             return Ok(certificate);
         }
         if allow_connective_split && let Some(certificate) = split_connective(elab, cx)? {
+            return Ok(certificate);
+        }
+        // Last, so a goal that closes today closes as it did; and only in the
+        // attempt that answers, since its branches read every fact anyway.
+        if record_failure && let Some(certificate) = split_nat_subtraction(elab, cx)? {
             return Ok(certificate);
         }
         let local_types = local_facts(elab, cx)

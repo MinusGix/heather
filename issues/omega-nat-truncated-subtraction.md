@@ -1,10 +1,10 @@
 ---
 title: omega reads Nat subtraction as an atom: split a - b like Lean's omega
-status: open
+status: closed
 labels: [omega,tactics,arithmetic]
 area: tactics
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 `omega` reads a truncated Nat subtraction `a - b` as one atom, so the facts
@@ -36,3 +36,16 @@ subtraction split is one more scope kind.
   is refused with a model that names the case.
 - The library's hand-fed `sub_add_cancel` lets next to an `omega` can be
   dropped (not required to land; a sweep can follow).
+
+## Landed (2026-10-30)
+
+`omega` splits `a - b` as Lean's does: `omega::nat_sub_elim` (omega.hthr)
+gives the branches `b <= a ∧ (a - b) + b = a` and `a < b ∧ a - b = 0`, each
+closed by `omega` again, the subtraction kept one atom
+(`split_nat_subtraction`, the last fallback of the attempt that answers).
+Design: `docs/omega-measure-reduction-design.md` §16. Probes
+`sub_add_cancel_bare`, `sub_le_bare`, `sub_zero_past`, `sub_in_fact`,
+`sub_nested`, `sub_checking` and the control `sub_add_cancel_truncated`
+(refused, its report naming `__omega_sub0_case: Lt(a, b)`) are in
+`lib/_tests/std/tactic/omega_tests.hthr`. The library sweep is
+[[omega-sub-add-cancel-sweep]]; `Format::gamma_at` was the first drop.

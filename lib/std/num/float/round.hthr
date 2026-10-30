@@ -985,7 +985,6 @@ theorem Format::max_H_lt_ovf(self F: Format, has: F.specials.has_inf().IsTrue())
     let eq: (Succ(F.max_mag()) = F.top()) = mb.right.right.right(F.specials.inf_free(has));
     let ps = Nat::pow(2, F.span);
     let mx = Finite::max_H(F);
-    let s0: ((F.top() + F.top() - 1) + 1 = F.top() + F.top()) = Nat::sub_add_cancel(1, F.top() + F.top(), omega);
     let s: (F.top() + F.top() - 1 = Succ(F.max_mag() + F.max_mag())) = omega;
     let o2: (F.ovf_h() = Succ(F.max_mag() + F.max_mag()) * ps) = Nat::cong(λ (w: Nat) => w * ps, s);
     let pp: (0 < ps) = Nat::pow_pos(a := 2, n := F.span);
@@ -1105,7 +1104,6 @@ theorem Format::mid_arith(self F: Format, h: Nat, below: h < F.limit_h(), o: Opt
     let us: (Succ(F.m_of(h)) * P = P + F.m_of(h) * P) = F.m_of(h).mul_succ_left(P);
     let at = up.at;
     let du: ((F.down(h)).units() * 2 <= h) = omega;
-    let rr: ((h - (F.down(h)).units() * 2) + (F.down(h)).units() * 2 = h) = Nat::sub_add_cancel((F.down(h)).units() * 2, h, du);
     And(omega, And(omega, And(omega, And(omega, And(omega, qp)))))
 }
 
@@ -1943,7 +1941,6 @@ theorem Finite::below_not_undercuts({F: Format}, x: Rat, f: Finite(F), b: Finite
 theorem Format::ovf_pos(self F: Format): 0 < F.ovf() {
     let tp: (0 < F.top()) = Nat::pow_pos(a := 2, n := F.prec());
     let sp: (0 < Nat::pow(2, F.span)) = Nat::pow_pos(a := 2, n := F.span);
-    let s0: ((F.top() + F.top() - 1) + 1 = F.top() + F.top()) = Nat::sub_add_cancel(1, F.top() + F.top(), omega);
     let mp: (0 < F.ovf_h()) = Nat::mul_pos(a := F.top() + F.top() - 1, b := Nat::pow(2, F.span), pa := omega, pb := sp);
     Rat::lt_respects(F.grid_zero(), F.ovf().same_refl(), F.grid_lt(0, F.ovf_h().int(), omega))
 }
