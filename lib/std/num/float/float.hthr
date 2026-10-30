@@ -454,8 +454,6 @@ theorem Format::max_mag_bounds(self F: Format):
     let h = F.two_le_half();
     let t: (F.top() = F.half() * 2) = F.top_double();
     let four = F.four_le_top();
-    let s1 = Nat::sub_add_cancel(1, F.top(), Nat::le_trans(1, 4, F.top(), trivial, four));
-    let s2 = Nat::sub_add_cancel(2, F.top(), Nat::le_trans(2, 4, F.top(), trivial, four));
     match F.specials.reserves_top() as λ r => F.half() <= (match r { True => F.top() - 2, False => F.top() - 1 })
         ∧ Succ(match r { True => F.top() - 2, False => F.top() - 1 }) <= F.top()
         ∧ (r.IsTrue() → Succ(Succ(match r { True => F.top() - 2, False => F.top() - 1 })) = F.top())
@@ -480,8 +478,6 @@ fn Finite::max_finite(F: Format) → Finite(F) {
     let h = F.two_le_half();
     let t: (F.top() = F.half() * 2) = F.top_double();
     let four = F.four_le_top();
-    let s1 = Nat::sub_add_cancel(1, F.top(), Nat::le_trans(1, 4, F.top(), trivial, four));
-    let s2 = Nat::sub_add_cancel(2, F.top(), Nat::le_trans(2, 4, F.top(), trivial, four));
     let fits = match F.specials.reserves_top() as λ r => Succ(match r { True => F.top() - 2, False => F.top() - 1 }) <= F.top() {
         True => { let g: (F.top() - 2 + 1 <= F.top()) = omega; g },
         False => { let g: (F.top() - 1 + 1 <= F.top()) = omega; g },

@@ -180,7 +180,7 @@ theorem fill_short(buffer, bytes: List<BitVec(8)>, short: bytes.len() <= buffer.
     fill(buffer, bytes) = bytes ++ buffer.drop(bytes.len()) {
     let whole: ((bytes ++ buffer.drop(bytes.len())).len() <= buffer.len()) =
         j(sym(bytes.len_append(buffer.drop(bytes.len()))), λ n _ => n <= buffer.len(),
-            j(sym(buffer.len_drop(bytes.len())), λ d _ => bytes.len() + d <= buffer.len(), omega(short, Nat::sub_add_cancel(bytes.len(), buffer.len(), short))));
+            j(sym(buffer.len_drop(bytes.len())), λ d _ => bytes.len() + d <= buffer.len(), omega(short)));
     (bytes ++ buffer.drop(bytes.len())).take_long(buffer.len(), whole)
 }
 

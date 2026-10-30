@@ -33,7 +33,6 @@ fn eintr() → Nat { 4 }
 theorem errno_value(e: Nat, error: Errno(e)): errno_word(e).toNat() = Nat::pow(2, 64) - e {
     let low: (1 <= e) = error.left;
     let high: (e <= 4095) = error.right;
-    let back: ((Nat::pow(2, 64) - e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
     BitVec::toNat_ofNat(64, Nat::pow(2, 64) - e, { omega })
 }
 // An errno word is in the top half of the range, so TEST sets SF; no count
@@ -41,7 +40,6 @@ theorem errno_value(e: Nat, error: Errno(e)): errno_word(e).toNat() = Nat::pow(2
 theorem errno_negative(e: Nat, error: Errno(e)): Nat::pow(2, 63) <= errno_word(e).toNat() {
     let value = errno_value(e, error);
     let high: (e <= 4095) = error.right;
-    let back: ((Nat::pow(2, 64) - e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
     omega
 }
 theorem errno_nonzero(e: Nat, error: Errno(e)): 0 < errno_word(e).toNat() {
@@ -58,7 +56,6 @@ theorem other_errno_plus_four(e: Nat, error: Errno(e), other: Not(e = eintr())):
         let four: BitVec(64) = BitVec::ofNat(4);
         let value = errno_value(e, error);
         let high: (e <= 4095) = error.right;
-        let back: ((Nat::pow(2, 64) - e) + e = Nat::pow(2, 64)) = Nat::sub_add_cancel(e, Nat::pow(2, 64), { omega });
         let four_value: (four.toNat() = 4) = BitVec::toNat_ofNat(64, 4, trivial);
         let sum: (a.add(four).toNat() = a.toNat() + four.toNat()) = bitvec_nat::toNat_add(64, a, four, { omega });
         zero_bits_of_pos(64, a.add(four), { omega })

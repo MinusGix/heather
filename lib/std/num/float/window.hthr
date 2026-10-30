@@ -80,7 +80,6 @@ theorem Format::win_down_val(self F: Format, j, c: Nat, g: Finite(F), jb: j <= g
     (F.win_down(j, c, g, ok)).val() ≈ g.val()
 {
     let wq = F.window_qmin(j, c);
-    let back: ((g.bexp - j) + j = g.bexp) = j.sub_add_cancel(g.bexp, jb);
     let e: ((F.window(j, c)).qmin() + (g.bexp - j).int() = F.qmin() + g.bexp.int()) = omega;
     j(e, λ v _ => Dyadic(g.signed(), (F.window(j, c)).qmin() + (g.bexp - j).int()).rat() ≈ Dyadic(g.signed(), v).rat(),
         Dyadic(g.signed(), (F.window(j, c)).qmin() + (g.bexp - j).int()).rat().same_refl())
@@ -113,7 +112,6 @@ theorem Format::win_down_ok(self F: Format, j, c: Nat, g: Finite(F), jb: j <= g.
     let f = F.canonical_elim(g.mag, g.bexp, g.ok);
     let fits: (Succ(g.mag) <= F.top()) = f.left;
     let fn: (g.bexp = 0 ∨ F.half() <= g.mag) = f.right.right.left;
-    let back: ((g.bexp - j) + j = g.bexp) = j.sub_add_cancel(g.bexp, jb);
     let range: (g.bexp - j <= c) = omega;
     let normal: (g.bexp - j = 0 ∨ F.half() <= g.mag) = match fn { Inl(z) => Inl(omega(z)), Inr(le) => Inr(le) };
     let ws: ((F.window(j, c)).span = c) = refl;
@@ -367,8 +365,7 @@ theorem Format::win_ovf_pos(self F: Format, j, c: Nat): 0 < (F.window(j, c)).ovf
     let W = F.window(j, c);
     let f = F.four_le_top();
     let p = Nat::pow_pos(a := 2, n := c);
-    let back: ((F.top() + F.top() - 1) + 1 = F.top() + F.top()) = Nat::sub_add_cancel(1, F.top() + F.top(), omega(f));
-    let k: (1 <= F.top() + F.top() - 1) = omega(f, back);
+    let k: (1 <= F.top() + F.top() - 1) = omega(f);
     let pos: (0 < W.ovf_h()) = Nat::mul_pos(a := F.top() + F.top() - 1, b := Nat::pow(2, c), pa := k, pb := p);
     Rat::lt_respects(W.grid_zero(), W.ovf().same_refl(), W.grid_lt(0, W.ovf_h().int(), omega(pos)))
 }
@@ -378,10 +375,9 @@ theorem Format::win_hi_le_ovf(self F: Format, j, c: Nat): (F.win_hi(j, c)).val()
     let f = F.four_le_top();
     let t: (F.top() = F.half() * 2) = F.top_double();
     let hh: ((F.win_hi(j, c)).H() = ((F.half() * Nat::pow(2, c)) * 2).int()) = refl;
-    let back: ((F.top() + F.top() - 1) + 1 = F.top() + F.top()) = Nat::sub_add_cancel(1, F.top() + F.top(), omega(f));
     let pc = Nat::pow(2, c);
     let m1: ((F.half() * pc) * 2 = F.top() * pc) = ring(t);
-    let m2: (F.top() * pc <= (F.top() + F.top() - 1) * pc) = Nat::mul_le_mono_r(pc, F.top(), F.top() + F.top() - 1, omega(f, back));
+    let m2: (F.top() * pc <= (F.top() + F.top() - 1) * pc) = Nat::mul_le_mono_r(pc, F.top(), F.top() + F.top() - 1, omega(f));
     let od: (W.ovf_h() = (F.top() + F.top() - 1) * pc) = refl;
     Rat::le_respects(Rat::same_sym((F.win_hi(j, c)).val_grid()), W.ovf().same_refl(), W.grid_le((F.win_hi(j, c)).H(), W.ovf_h().int(), omega(hh, m1, m2, od)))
 }
