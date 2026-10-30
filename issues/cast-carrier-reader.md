@@ -1,0 +1,38 @@
+---
+title: Read casts once for every arithmetic tactic, and state the goal wanted with cast_to(S)
+status: open
+labels: [tactics,casts,reals]
+area: tactics
+created: 2026-10-30
+updated: 2026-10-30
+---
+
+The cast tactics' second half (docs/casting-design.md §6.4, §9): one
+reader that builds an expression tree whose nodes record the carrier they
+are computed at, with the cast edges (`OrderedRingHom` values,
+`lib/std/algebra/morphism.hthr`) between carriers, shared by `ring`,
+`linarith`, `mono`, `omega` and a new `cast_to(S)`.
+
+- **The reader** pushes images to the leaves along the edges' fields
+  (`add_law`, `mul_law`, `neg_law`, `zero_law`, `one_law`) and lifts a
+  comparison of two images of one edge to the source (`le_of_map_law`), and
+  emits those laws as part of the tactic's certificate. Slice 1's
+  `cast_move` (`lib/std/tactic/cast.hthr`) is one layer of it.
+- **`cast_to(S)`** reads the goal and `S` through it, checks they agree
+  modulo the laws, and replaces the goal by `S`; a disagreement names the
+  first subterm where the two readings differ. `have h: S := cast_from(h0)`
+  for a hypothesis.
+- **Consumers**: a hypothesis stated at the pushed form then matches an
+  unpushed goal (what `mono`'s layer-by-layer reading cannot do), and
+  `ring`'s spelling-based cast reading (`RingExpr::of_nat_add`, …) moves
+  onto the edges.
+
+Customers left by slice 1: `dyadic.hthr`'s own order lemmas
+(`Dyadic::neg_le`, `rat_pos`, …, each a `Rat` lemma between two image
+laws), `interval.hthr`'s `widen_has`, and the `rat_add`/`rat_mul` calls in
+`lib/std/num/float/arith.hthr`, `round.hthr`, `series.hthr`, `error.hthr`.
+
+## What it assumes from elsewhere
+
+- **[[casting-standard]]** owns the edges and the surface. Assumed here:
+  only that an edge is an `OrderedRingHom` value whose fields are its laws.

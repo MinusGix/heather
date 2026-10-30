@@ -39,6 +39,7 @@ import order;
 import ordered_field;
 import semiring;
 import rat;
+import morphism;
 export algebra::{Numeral};
 
 record Dyadic { mant: Int, exp: Int }
@@ -189,6 +190,26 @@ instance Respects2<Dyadic, Dyadic, Dyadic>(Dyadic::Same, Dyadic::Same, Dyadic::S
 theorem Dyadic::rat_zero(): Dyadic::rat(0) ≈ 0 { Dyadic::rat_ofInt(0) }
 
 theorem Dyadic::rat_one(): Dyadic::rat(1) ≈ 1 { Dyadic::rat_ofInt(1) }
+
+// The dyadics inside the rationals, as a cast edge (docs/casting-design.md
+// §5.6): `Dyadic`'s order and `≈` are defined through `rat`, so preserving
+// and reflecting them is the identity.
+fn Dyadic::rat_hom() → OrderedRingHom<Dyadic, Rat>(Dyadic::rat,
+        Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add, Dyadic::mul, Dyadic::neg, 0, 1,
+        Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1) {
+    OrderedRingHom {
+        map_respects: λ x y h => h,
+        map_zero: Dyadic::rat_zero(),
+        map_one: Dyadic::rat_one(),
+        map_add: λ x y => x.rat_add(y),
+        map_mul: λ x y => x.rat_mul(y),
+        map_neg: λ x => x.rat_neg(),
+        map_le: λ x y h => h,
+        map_lt: λ x y h => h,
+        le_of_map: λ x y h => h,
+        lt_of_map: λ x y h => h,
+    }
+}
 
 theorem Dyadic::add_comm(self a, b: Dyadic): a + b ≈ b + a {
     Dyadic::same_via(a.rat_add(b), a.rat().add_comm(b.rat()), b.rat_add(a))

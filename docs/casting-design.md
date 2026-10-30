@@ -533,5 +533,63 @@ so it is as predictable as the morphism tables are complete.
    `…OfInt`/`…OfRat` classes over time.
 6. **`↑` produces `OfNat(n)`**, and the tactics normalize `.int()` to it.
 
-Open: the cast tactics' shape (§6.4), which Minus asked to do better than
-Lean's.
+7. **The cast tactics are §6.4's**: cast-transparent tactics through a
+   shared reader, and `cast_to(S)` for stating the goal wanted (Minus:
+   stating the goal is what a model writing mathematics does most easily).
+
+## 9. Slice 1: the edges, and `mono` reading them (2026-10-30)
+
+What landed, against §7's step 2:
+
+- **`OrderedRingHom<A, B>`** (`lib/std/algebra/morphism.hthr`), with the
+  map and both sides' relations and operations as indices and the ten laws
+  as fields, and a theorem per field (`OrderedRingHom::add_law`, …) taking
+  the morphism explicitly. A call names the carriers
+  (`OrderedRingHom::add_law<Dyadic, Rat>(Dyadic::rat_hom(), a, c)`): the
+  record is structural, so `B` occurs in a morphism's type only through its
+  indices' types, and nothing infers it from the morphism.
+- **Three edges**: `Dyadic::rat_hom`, `CReal::ofRat_hom`, `Rat::ofInt_hom`,
+  each beside its target type and built from the existing image lemmas.
+  Every index is a named global: `Int`'s `≈` is the new `Int::Same` (`=`),
+  because a λ there is β-reduced out of the field types and then cannot be
+  inferred back.
+- **`lib/std/tactic/cast.hthr`**: `cast_move(h, depth)` reads an image one
+  layer in (`(a + c).rat()` to `a.rat() + c.rat()`, and an image of an image
+  through `respects_law` on the outer edge), returning the moved term and its
+  `≈` proof without touching the goal. The law is applied to fresh holes, one
+  per index, with the target carrier's hole set to the image's type first
+  (the structural record again).
+- **`mono` reads casts** where a goal's sides do not split by a law: an
+  order between two images of one edge becomes the source order
+  (`le_law`/`lt_law`), else a side that an edge moves is moved and the goal
+  continues on the moved side (`Rat::le_of_same_of_le` and its three
+  siblings per carrier, `MonoCarrier.pushes`). Probes in
+  `lib/_tests/std/tactic/cast_tests.hthr`.
+- **Customers**: `interval.hthr`'s negation, sum, positive-product and
+  corner bounds, and `creal_interval.hthr`'s, are `by mono_with([…])` over
+  the bounds' facts; `Dyadic::real_neg`/`real_add`/`real_mul` (the
+  two-edge composites) are retired, as §6.1 predicted.
+
+What it does not do yet, each for a reason:
+
+- **Not a normal form.** `mono` moves an image only where its own split
+  stops, layer by layer; a hypothesis stated at the fully pushed form is not
+  matched against an unpushed goal. That is `cast_to`'s job (§6.4), on the
+  shared reader.
+- **No `0`, `1` or subtraction moves** in `mono` yet (the fields exist), and
+  `Nat → Int` is not an edge yet: it needs an `OrderedSemiringHom` (`Nat`
+  has no negation), with its laws stated at `Int::Same`.
+- **A client imports `morphism`.** The tactic looks the field theorems up by
+  name where the `by` is, so a module using `mono` across casts imports
+  `morphism` (and the edges' modules, which it already does for the types).
+- **Host gaps found on the way.** The tactic side cannot project a record
+  field (no projection globals; a record value views as `HOther`), so the
+  laws are read through the field theorems. `apply` of a generic class lemma
+  at a concrete carrier fails to infer the relation's carrier, so the push
+  lemmas are per carrier. Two open types compared by the host are now the
+  same when they are the same syntax (`same_ty`'s `(None, None)` case, which
+  answered `false`): a hole whose type mentions earlier holes,
+  `map: ?A → ?B`, needs it.
+
+Next: the carrier-annotated reader shared by `ring`, `linarith`, `mono` and
+`omega`, then `cast_to(S)`; `↑` and `cast<B>` after (§7 step 3).

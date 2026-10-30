@@ -789,6 +789,12 @@ theorem Int::add_mul_distr(self a, b, c: Int): (a + b) * c = a * c + b * c {
 
 // ---------------------------------------------------------------------------
 
+// Equality as a named relation, for where a relation is an index: a
+// morphism out of `Int` (`Rat::ofInt_hom`) states its laws at `Int::Same`,
+// and a λ there would be β-reduced out of the record's field types, leaving
+// nothing to infer it from (lib/std/algebra/morphism.hthr).
+fn Int::Same(self a, b: Int) → Type { a = b }
+
 fn Int::Le(self a, b: Int) → Type {
     match a {
         OfNat(m) => match b { OfNat(n) => m <= n, NegSucc(_) => False },

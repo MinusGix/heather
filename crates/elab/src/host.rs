@@ -1720,7 +1720,10 @@ impl Elaborator {
             (Some(x), Some(y)) => Ok(run.cx(at).is_ok_and(|cx| self.conv_types(&cx, &x, &y, lvl))),
             (None, Some(y)) => self.solve(run, at, &pa, &y, lvl),
             (Some(x), None) => self.solve(run, at, &pb, &x, lvl),
-            (None, None) => Ok(false),
+            // Two open types are the same when they are the same syntax: a
+            // hole applied to a hole of a type that mentions earlier holes
+            // (`map: ?A → ?B` after `?A` and `?B`) compares exactly this.
+            (None, None) => Ok(pa == pb),
         }
     }
 

@@ -1,0 +1,227 @@
+// The cast edges the tactics read (docs/casting-design.md §5.6, §6): each
+// edge is an `OrderedRingHom` value declared beside its target type, and
+// its laws are read through `morphism`'s field theorems, so what an edge
+// covers is fixed by the record's type.
+//
+// `cast_move(h)` reads an image `map(op(x, y))` one layer in, to
+// `op'(map(x), map(y))`, and returns the moved term with its proof
+// `h ≈ moved`: the law is applied to the edge and the operands, its
+// carriers and indices left to inference, and the statement it gets is the
+// edge's own spelling. Nothing is asked of the goal, so a tactic can read a
+// side before it decides what to prove. A name that does not resolve where
+// the tactic runs is skipped, so a client that does not import `creal` pays
+// nothing for its edge.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+
+// The edges, by the name of their value.
+fn cast_edges() → List<String> { ["Dyadic::rat_hom", "CReal::ofRat_hom", "Rat::ofInt_hom"] }
+
+// The laws that move an image of a two-operand operation inward, and of a
+// one-operand one.
+fn cast_binary_laws() → List<String> { ["OrderedRingHom::add_law", "OrderedRingHom::mul_law"] }
+
+fn cast_unary_laws() → List<String> { ["OrderedRingHom::neg_law"] }
+
+// The law that carries `≈` through an edge: what moves an image that sits
+// under another edge's image, `CReal::ofRat((a + c).rat())`.
+fn cast_respects_law() → String { "OrderedRingHom::respects_law" }
+
+// The laws that read an order between two images as the order of what they
+// are images of.
+fn cast_le_law() → String { "OrderedRingHom::le_law" }
+
+fn cast_lt_law() → String { "OrderedRingHom::lt_law" }
+
+// Every field theorem's leading parameters, left to inference: the two
+// carriers, the map and the eight indices of each side
+// (lib/std/algebra/morphism.hthr's section).
+fn cast_indices() → Nat { 19 }
+
+fn cast_try_global(name: String) → Tac<Option<GlobalRef>> {
+    lookup(name).bind(λ c => match c { Accepted(g) => Pure(Some(g)), Refused(_) => Pure(None) })
+}
+
+fn cast_resolved(names: List<String>) → Tac<List<GlobalRef>> {
+    match names {
+        Nil => Pure([]),
+        Cons(n, rest) => cast_try_global(n).bind(λ o => cast_resolved(rest).bind(λ more => Pure(match o { None => more, Some(g) => Cons(g, more) }))),
+    }
+}
+
+fn cast_apps(e: Expr, args: List<Handle>) → Expr { match args { Nil => e, Cons(a, rest) => cast_apps(App(e, Hd(a)), rest) } }
+
+// `e` applied to `n` holes, one per leading parameter, each at its
+// parameter's type: what checking the rest of an application solves, held
+// across requests (a `Blank` is a new hole at every reading of its `Expr`).
+fn cast_holes(n: Nat, e: Expr) → Tac<Option<Expr>> {
+    match n {
+        Zero => Pure(Some(e)),
+        Succ(k) => infer(e).bind(λ c => match c {
+            Refused(_) => Pure(None),
+            Accepted(ty) => open(ty, "_").bind(λ o => match o {
+                Refused(_) => Pure(None),
+                Accepted(op) => hole(op.local.ty).bind(λ h => match h {
+                    Refused(_) => Pure(None),
+                    Accepted(x) => cast_holes(k, App(e, Hd(x))),
+                }),
+            }),
+        }),
+    }
+}
+
+// A field theorem at an edge, applied to its operands (and, for
+// `respects_law`, a proof after them).
+record Candidate { law: GlobalRef, edge: GlobalRef, args: List<Handle>, after: Option<Expr> }
+
+// The law's holes with the target carrier `B` set to `target`: the record
+// is structural, so `B` occurs in the edge's type only through the types of
+// its indices, and solving those holes does not solve it.
+fn cast_targeted(law: GlobalRef, target: Handle) → Tac<Option<Expr>> {
+    cast_holes(1, Global(law)).bind(λ o => match o {
+        None => Pure(None),
+        Some(e) => infer(e).bind(λ c => match c {
+            Refused(_) => Pure(None),
+            Accepted(ty) => open(ty, "_").bind(λ op => match op {
+                Refused(_) => Pure(None),
+                Accepted(b) => hole(b.local.ty).bind(λ hb => match hb {
+                    Refused(_) => Pure(None),
+                    Accepted(x) => defeq(Hd(x), Hd(target)).bind(λ same => match same {
+                        False => Pure(None),
+                        True => cast_holes(cast_indices() - 2, App(e, Hd(x))),
+                    }),
+                }),
+            }),
+        }),
+    })
+}
+
+fn cast_built(c: Candidate, target: Handle) → Tac<Option<Expr>> {
+    cast_targeted(c.law, target).bind(λ o => Pure(match o {
+        None => None,
+        Some(e) => {
+            let applied: Expr = cast_apps(App(e, Global(c.edge)), c.args);
+            Some(match c.after { None => applied, Some(p) => App(applied, p) })
+        },
+    }))
+}
+
+// An image read one layer in: the moved term and the proof that the image
+// is `≈` to it.
+record Moved { to: Handle, proof: Expr }
+
+fn cast_none() → Tac<Option<Moved>> { Pure(None) }
+
+// The candidate, if it checks and states `h ≈ to` for some `to`: the move.
+fn cast_if_moves(h: Handle, c: Candidate) → Tac<Option<Moved>> {
+    infer(Hd(h)).bind(λ t => match t { Refused(_) => cast_none(), Accepted(target) => cast_built(c, target).bind(λ b => match b {
+        None => cast_none(),
+        Some(e) => infer(e).bind(λ r => match r {
+            Refused(_) => cast_none(),
+            Accepted(ty) => view(ty).bind(λ v => match v {
+                HGlobal(_, _, Cons(lhs, Cons(rhs, Nil))) => defeq(Hd(lhs), Hd(h)).bind(λ same => Pure(match same { True => Some(Moved(rhs, e)), False => None })),
+                _ => cast_none(),
+            }),
+        }),
+    }) })
+}
+
+// The first candidate that moves `h`; a failed one's holes are forgotten.
+fn cast_first_move(h: Handle, cs: List<Candidate>) → Tac<Option<Moved>> {
+    match cs {
+        Nil => cast_none(),
+        Cons(c, rest) => mark().bind(λ m => attempt(cast_if_moves(h, c)).bind(λ o => match o {
+            Done(r) => match r { Some(mv) => Pure(Some(mv)), None => restore(m).bind(λ _ => cast_first_move(h, rest)) },
+            Failed(_, _) => cast_first_move(h, rest),
+        })),
+    }
+}
+
+fn cast_at_edges(law: GlobalRef, edges: List<GlobalRef>, args: List<Handle>) → List<Candidate> {
+    match edges { Nil => [], Cons(g, rest) => Cons(Candidate(law, g, args, None), cast_at_edges(law, rest, args)) }
+}
+
+// Each law at each edge, applied to `args`.
+fn cast_candidates(laws, edges: List<GlobalRef>, args: List<Handle>) → List<Candidate> {
+    match laws {
+        Nil => [],
+        Cons(l, rest) => cast_at_edges(l, edges, args) ++ cast_candidates(rest, edges, args),
+    }
+}
+
+// `respects_law` at each edge, carrying `inner: u ≈ v` through it.
+fn cast_through(resp: GlobalRef, edges: List<GlobalRef>, u: Handle, inner: Moved) → List<Candidate> {
+    match edges {
+        Nil => [],
+        Cons(g, rest) => Cons(Candidate(resp, g, [u, inner.to], Some(inner.proof)), cast_through(resp, rest, u, inner)),
+    }
+}
+
+// The laws whose operands are `args`, by their number.
+fn cast_for(args: List<Handle>, binary, unary, edges: List<GlobalRef>) → List<Candidate> {
+    match args {
+        Cons(_, Cons(_, Nil)) => cast_candidates(binary, edges, args),
+        Cons(_, Nil) => cast_candidates(unary, edges, args),
+        _ => [],
+    }
+}
+
+fn cast_operands(v: Head) → List<Handle> { match v { HGlobal(_, _, xs) => xs, _ => [] } }
+
+// The move carried through the outer edge, once `u` has moved.
+fn cast_outer(h, u: Handle, edges: List<GlobalRef>, inner: Option<Moved>) → Tac<Option<Moved>> {
+    match inner {
+        None => cast_none(),
+        Some(m) => cast_try_global(cast_respects_law()).bind(λ resp => match resp {
+            None => cast_none(),
+            Some(r) => cast_first_move(h, cast_through(r, edges, u, m)),
+        }),
+    }
+}
+
+// `cast_move(h, depth)`: `h`, an image `map(u)`, read one layer in. Where
+// `u` is an operation's application, the edge's law at that operation;
+// where `u` is itself an image, `u` moved and the move carried through the
+// outer edge (at most `depth` edges deep). `None` where no edge's law
+// applies: the image is an atom.
+fn cast_move(h: Handle, depth: Nat) → Tac<Option<Moved>> {
+    match depth {
+        Zero => cast_none(),
+        Succ(d) => view(h).bind(λ v => match v {
+            HGlobal(_, _, Cons(u, Nil)) => view(u).bind(λ vu =>
+                cast_resolved(cast_edges()).bind(λ edges => cast_resolved(cast_binary_laws()).bind(λ binary => cast_resolved(cast_unary_laws()).bind(λ unary =>
+                    cast_first_move(h, cast_for(cast_operands(vu), binary, unary, edges)).bind(λ direct => match direct {
+                        Some(m) => Pure(Some(m)),
+                        None => cast_move(u, d).bind(λ inner => cast_outer(h, u, edges, inner)),
+                    }))))),
+            _ => cast_none(),
+        }),
+    }
+}
+
+// The goal, a morphism premise, closed by the first edge whose value has
+// its type.
+fn cast_hom_among(names: List<String>) → Tac<Expr> {
+    match names {
+        Nil => fail("cast: no edge is the morphism this law needs", []),
+        Cons(n, rest) => cast_try_global(n).bind(λ o => match o {
+            None => cast_hom_among(rest),
+            Some(g) => attempt(exact(Global(g))).bind(λ r => match r { Done(e) => Pure(e), Failed(_, _) => cast_hom_among(rest) }),
+        }),
+    }
+}
+
+fn cast_hom() → Tac<Expr> { cast_hom_among(cast_edges()) }
+
+// The premise tactic for a law applied by `apply`: a morphism premise is an
+// edge, anything else is `prove`'s.
+fn cast_premise(prove: Tac<Expr>) → Tac<Expr> {
+    attempt(cast_hom()).bind(λ r => match r { Done(e) => Pure(e), Failed(_, _) => prove })
+}

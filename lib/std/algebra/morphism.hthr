@@ -1,0 +1,55 @@
+// Structure-preserving maps between carriers, as data (docs/casting-design.md
+// §5.6). A morphism is a record of a map and its laws, indexed by both
+// carriers' relations and operations the way the order and algebra layers
+// are; the structures themselves stay plain classes, and no class fuses a
+// structure with one particular map into it.
+//
+// A cast edge is a value of this record (`Dyadic::rat_hom`,
+// `CReal::ofRat_hom`, `Rat::ofInt_hom`, each beside its target type), and
+// the cast tactics read the edges' laws through the theorems below, one per
+// field, so an edge's coverage is fixed by its type: a missing law is a
+// missing field, refused where the edge is declared.
+//
+// The map and the operations are indices rather than fields so that a law's
+// statement is spelled at the carriers' own globals: `Dyadic::rat_hom`'s
+// `map_add` states `(x + y).rat() ≈ x.rat() + y.rat()`, which is what the
+// goals that use it say.
+
+// An order-embedding ring morphism: preserves `≈`, `0`, `1`, `+`, `*` and
+// negation, and preserves and reflects `<=` and `<`.
+record OrderedRingHom<A, B>(map: A → B,
+        same_a, lt_a, le_a: A → A → Type, add_a, mul_a: A → A → A, neg_a: A → A, zero_a, one_a: A,
+        same_b, lt_b, le_b: B → B → Type, add_b, mul_b: B → B → B, neg_b: B → B, zero_b, one_b: B) {
+    map_respects: (x, y: A) → same_a(x, y) → same_b(map(x), map(y)),
+    map_zero: same_b(map(zero_a), zero_b),
+    map_one: same_b(map(one_a), one_b),
+    map_add: (x, y: A) → same_b(map(add_a(x, y)), add_b(map(x), map(y))),
+    map_mul: (x, y: A) → same_b(map(mul_a(x, y)), mul_b(map(x), map(y))),
+    map_neg: (x: A) → same_b(map(neg_a(x)), neg_b(map(x))),
+    map_le: (x, y: A) → le_a(x, y) → le_b(map(x), map(y)),
+    map_lt: (x, y: A) → lt_a(x, y) → lt_b(map(x), map(y)),
+    le_of_map: (x, y: A) → le_b(map(x), map(y)) → le_a(x, y),
+    lt_of_map: (x, y: A) → lt_b(map(x), map(y)) → lt_a(x, y),
+}
+
+// The fields as theorems, the morphism an explicit argument: a tactic
+// applies these and proves the morphism premise by naming an edge, and a
+// call names the carriers (`OrderedRingHom::add_law<Dyadic, Rat>(…)`), which
+// the morphism's type alone does not let the elaborator infer.
+section<A, B>({map: A → B},
+        {same_a, lt_a, le_a: A → A → Type}, {add_a, mul_a: A → A → A}, {neg_a: A → A}, {zero_a, one_a: A},
+        {same_b, lt_b, le_b: B → B → Type}, {add_b, mul_b: B → B → B}, {neg_b: B → B}, {zero_b, one_b: B},
+        f: OrderedRingHom<A, B>(map, same_a, lt_a, le_a, add_a, mul_a, neg_a, zero_a, one_a, same_b, lt_b, le_b, add_b, mul_b, neg_b, zero_b, one_b)) {
+
+theorem OrderedRingHom::respects_law(x, y: A, h: same_a(x, y)): same_b(map(x), map(y)) { f.map_respects(x, y, h) }
+theorem OrderedRingHom::zero_law(): same_b(map(zero_a), zero_b) { f.map_zero }
+theorem OrderedRingHom::one_law(): same_b(map(one_a), one_b) { f.map_one }
+theorem OrderedRingHom::add_law(x, y: A): same_b(map(add_a(x, y)), add_b(map(x), map(y))) { f.map_add(x, y) }
+theorem OrderedRingHom::mul_law(x, y: A): same_b(map(mul_a(x, y)), mul_b(map(x), map(y))) { f.map_mul(x, y) }
+theorem OrderedRingHom::neg_law(x: A): same_b(map(neg_a(x)), neg_b(map(x))) { f.map_neg(x) }
+theorem OrderedRingHom::le_law(x, y: A, h: le_a(x, y)): le_b(map(x), map(y)) { f.map_le(x, y, h) }
+theorem OrderedRingHom::lt_law(x, y: A, h: lt_a(x, y)): lt_b(map(x), map(y)) { f.map_lt(x, y, h) }
+theorem OrderedRingHom::le_of_map_law(x, y: A, h: le_b(map(x), map(y))): le_a(x, y) { f.le_of_map(x, y, h) }
+theorem OrderedRingHom::lt_of_map_law(x, y: A, h: lt_b(map(x), map(y))): lt_a(x, y) { f.lt_of_map(x, y, h) }
+
+}
