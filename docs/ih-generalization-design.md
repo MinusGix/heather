@@ -135,10 +135,13 @@ stands. Other parameters of an indexed recursion are generalized as usual
 - **The context is refined by a non-recursive `match`, not by the
   recursion's own.** Since `issues/elab-match-refines-hypothesis-kernel-
   rejects.md`, a motive-less `match` on a local in checking position also
-  generalizes every later binder whose type mentions the scrutinee
-  (`Elaborator::refined_hypotheses`, closed under dependency, hidden `#`
-  binders excepted), through the same three steps: Π goal, wrapped arms,
-  re-application. So `h : Le(n, m)` *is* `Le(Succ k, Zero)` in
+  generalizes the later binders whose type mentions the scrutinee (directly
+  or through another) and that an arm names or the goal mentions, with the
+  binders their types need (`Elaborator::refined_hypotheses`), through the
+  same three steps: Π goal, wrapped arms, re-application. Only those: a
+  `match` in a function body or a motive is a computation that must stay the
+  term it restates, and the machinery's binders (`#ih`, a measure
+  recursion's `__dec_h`) are read as they were. So `h : Le(n, m)` *is* `Le(Succ k, Zero)` in
   `match m { Zero => … }`. A `match` on a parameter whose arms make a
   self-call keeps exactly the generalization above: a self-call can pass
   only declared parameters, so a refined local that is not one would leave
