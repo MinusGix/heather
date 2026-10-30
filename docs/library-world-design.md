@@ -90,9 +90,11 @@ three times: once for the gate, once in cat's order, and once more in
 almost no image with either. Each of the last two was one process of about
 250 CPU-s, close to the rail (`issues/library-gate-native-cold-rail.md`).
 Now `write-elf` takes `--world` as `check` does, the native tests pass
-`--world lib`, and the warmup before them is the gate itself
-(`scripts/test`'s `cli_images_warmup`), which builds the front a folder per
-child. Over the gate's store a `write-elf` replays its whole closure; the
+`--world lib`, and the gate runs before them, building the front a folder
+per child: in an unfiltered suite the runner starts it first and holds the
+native targets until it has finished (`PREREQUISITES` in
+`scripts/run-test-targets.mjs`), and a focused run of a native target runs
+it first as a warmup (`scripts/test`'s `cli_images_warmup`). Over the gate's store a `write-elf` replays its whole closure; the
 world's prefix costs it a few CPU-seconds of replays beyond its own closure.
 
 ## 4. What it does not do

@@ -14,8 +14,8 @@ use heather_cli::showcase;
 
 /// One `write-elf` of cat through the library gate's image store, over the
 /// gate's world (`--world lib`, `docs/library-world-design.md` §3), so its
-/// closure replays what the gate built; the suite's CLI image warmup is the
-/// gate, run first. In the suite's stale lanes it replays images an earlier
+/// closure replays what the gate built; the suite runs the gate first and
+/// this target after it (`PREREQUISITES` in scripts/run-test-targets.mjs). In the suite's stale lanes it replays images an earlier
 /// build wrote, as the gate does: without that, every compiler edit made
 /// this test rebuild the whole closure from source.
 fn write_cat(output: &Path) {

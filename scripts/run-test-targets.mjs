@@ -61,6 +61,37 @@ export function parseArtifacts(text, root = process.cwd()) {
 
 export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 
+// Targets whose run builds a store other targets read, each with the targets
+// that read it. The library gate (crates/cli/tests/library.rs) builds the CLI
+// image store over the library's world, and native_cat/native_tools's
+// `write-elf` replays its closure from it (`--world lib`,
+// docs/library-world-design.md §3); cold, one `write-elf` would build the
+// world's front itself, past the CPU rail. So a prerequisite starts first and
+// its readers wait until it has finished, pass or fail, while every other
+// target fills the slots it leaves idle: the gate is one long chain of
+// module builds (each over every module before it), about one CPU busy for
+// most of its run. A prerequisite the run does not hold blocks nothing.
+// scripts/test used to run the gate alone as a warmup before this phase and
+// then again here as a test (issues/library-gate-warmup-runs-alone.md).
+export const PREREQUISITES = new Map([["library", ["native_cat", "native_tools"]]]);
+
+// Schedule order: prerequisites first, exclusive targets last, the rest
+// slowest-first by the latest history; each target gets `after`, the
+// prerequisites in this run it waits for.
+export function orderTargets(targets, history = new Map()) {
+  const present = new Set(targets.map((t) => t.name));
+  const waits = new Map();
+  for (const [before, readers] of PREREQUISITES) {
+    if (!present.has(before)) continue;
+    for (const reader of readers) waits.set(reader, [...(waits.get(reader) ?? []), before]);
+  }
+  const ordered = targets.map((t) => ({ ...t, after: waits.get(t.name) ?? [] }));
+  const rank = (t) => (t.exclusive ? 2 : PREREQUISITES.has(t.name) ? 0 : 1);
+  ordered.sort((a, b) => rank(a) - rank(b)
+    || (history.get(b.label) ?? 0) - (history.get(a.label) ?? 0) || a.label.localeCompare(b.label));
+  return ordered;
+}
+
 // A family binary (`family_*`, crates/elab/Cargo.toml) links several test
 // files into one executable to save the links, not to share a process: it
 // runs as one shard per member file, and a shard is scheduled, railed,
@@ -403,15 +434,20 @@ function readOwnCgroupValue(name) {
 export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}) {
   const pending = [...targets];
   const completed = [];
+  const finished = new Set();
   let active = 0;
   let failed = false;
   return new Promise((resolve) => {
     const pump = () => {
       if ((!pending.length || (failed && !keepGoing)) && active === 0) return resolve(completed);
       while (active < jobs && pending.length && !(failed && !keepGoing)) {
-        if (pending[0].exclusive && active > 0) break;
-        const target = pending.shift();
-        if (target.exclusive && active !== 0) { pending.unshift(target); break; }
+        // The first target whose prerequisites have finished; with nothing
+        // running and nothing ready, the head, so a cycle cannot hang.
+        let index = pending.findIndex((t) => (t.after ?? []).every((name) => finished.has(name)));
+        if (index < 0 && active === 0) index = 0;
+        if (index < 0) break;
+        if (pending[index].exclusive && active > 0) break;
+        const [target] = pending.splice(index, 1);
         active++;
         process.stdout.write(`[start ${completed.length + active}/${targets.length}] ${target.label}${target.exclusive ? " (exclusive)" : ""}\n`);
         const started = process.hrtime.bigint();
@@ -427,6 +463,7 @@ export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv
           run.result = parseResults(run.output);
           if (run.code !== 0 || run.signal || run.result.resultLines !== 1) failed = true;
           completed.push(run);
+          finished.add(target.name);
           active--;
           process.stdout.write(completionMessage(run, completed.length, targets.length));
           pump();
@@ -469,11 +506,7 @@ async function main() {
   const history = loadHistory(timingsPath);
   const artifacts = parseArtifacts(readFileSync(manifest, "utf8"));
   const members = membersPath ? parseMembers(readFileSync(membersPath, "utf8")) : new Map();
-  const targets = expandFamilies(artifacts, libtestArgs, members);
-  targets.sort((a, b) => {
-    if (a.exclusive !== b.exclusive) return a.exclusive ? 1 : -1;
-    return (history.get(b.label) ?? 0) - (history.get(a.label) ?? 0) || a.label.localeCompare(b.label);
-  });
+  const targets = orderTargets(expandFamilies(artifacts, libtestArgs, members), history);
   // The pr lane's selection may leave a family no member its skips keep.
   if (!targets.length && !membersPath) throw new Error("Cargo manifest contained no test executables");
   console.log(`\n== test targets: ${targets.length} (${artifacts.length} binaries), ${jobs}-way bound (${jobs * LIMIT_KIB / 1024 / 1024} GiB maximum child address space) ==`);
