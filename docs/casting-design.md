@@ -704,4 +704,43 @@ slice 4, §12.
 Left: `↑`/`cast<B>` (§7 step 3); reading `Finite::val`-like wrappers as the
 images they unfold to; `Dyadic` as a carrier; `mono` pushing before it
 matches heads; the tactics needing `import morphism` where they run (a
-missing import degrades to "differ" rather than saying so).
+missing import degrades to "differ" rather than saying so). All but the
+first done in slice 5, §13.
+
+## 13. Slice 5: lowering, wrappers, subtraction in `mono` (2026-10-30)
+
+- **A missing `import morphism`** is named: `cast_from`/`cast_to` look the
+  family laws up first and, absent, fail with "the edges' laws are not in
+  scope here; `import morphism;` in this module" (the laws are found by
+  name where the tactic runs, so an import in `cast.hthr` would not help).
+- **Lowering the goal.** `cast_from` lifted a fact *up* an edge into the
+  goal's carrier; it now also restates an order goal at `C` as the order of
+  the two sides' images along an edge out of `C`, proves that from the
+  fact, and reflects it back by `le_of_map_law`/`lt_of_map_law`
+  (`cast_lower`). A `Dyadic` goal `0 < -hi` takes the `Rat` fact
+  `-Dyadic::rat(0) < -hi.rat()`, and `cast_to(a.rat() + c.rat() <= …,
+  mono())` proves a `Dyadic` order with `mono` working at `Rat`. `Dyadic`
+  is a cast carrier (with a new `Dyadic::le_respects`). `≈` is not lowered:
+  no family has an injectivity law, and `Dyadic::Same` is the images' `≈`
+  by definition, which `cast_from` reads directly.
+- **Wrappers.** `ring` reads a definition whose first few δ-reducts reach an
+  edge's map applied (`Finite::val(x)` is `x.dyadic().rat()`,
+  `Format::grid(F, n)` is `Dyadic(n, …).rat()`) as that image
+  (`Reifier::wrapped_image`, at most four steps). The reduct is read back by
+  its spelling and re-elaborated: a δ-step's term carries the definition's
+  own substitution, which `named_args` does not see through. `CReal::at`
+  unfolds to `x.seq(n).rat()`, whose field read does not spell
+  (issues/ring-field-read-atom-spelling.md), so its laws are still not read.
+- **Subtraction in `mono`.** Where the two sides share no operation and one
+  is a subtraction, `mono` restates it as `x + -y`, which it is by
+  definition at every carrier, before reading casts (`mono_unshared`): the
+  push of `(a - c).rat()` is a sum, and now meets `x - y`.
+- **Float library**: `arith.hthr`'s `add`/`mul` correctness state the exact
+  value as written (`a.val() + b.val()`) again, and `add_zero`/`fma_zero`
+  read `zero` through `ring(zero)`; `error.hthr`'s `grid_scale` and one
+  `creal_interval.hthr` sign step use `ring`/`cast_from`.
+
+Left: `↑`/`cast<B>` (§7 step 3, the surface); field reads in ring atoms'
+spellings (`CReal::at`); `ofInt` across two edges (`Dyadic::ofInt(n).rat()`
+against `Rat::ofInt(n)`, a composite-edge law); `Dyadic(NegSucc(k), e)`'s
+negation, which holds by computing a constructor.
