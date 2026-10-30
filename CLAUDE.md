@@ -13,12 +13,15 @@
     `docs/module-interface-cutoff-design.md`). What it skips is the `SKIP`
     list in `scripts/test`.
   - A round's **final** verification, and any change touching `lib/`, the kit
-    or the generators, runs `scripts/test --pr`: every test, over the same
-    replayed images, except that the native x86 certificate gates
-    (`crates/cli/tests/native*.rs`) shrink to one smoke unless the diff
-    touches what they check (`lib/native`, the machine/OS models,
-    `crates/cli/src/native`, the kernel; `HEATHER_PR_NATIVE=all` forces
-    them). The exact image policy (plain `scripts/test`, which
+    or the generators, runs `scripts/test --pr`: the test files its diff
+    from `origin/master` can affect (Cargo's dep-info, family members one
+    by one, every run-time reader of `lib/` on a `lib/` change; anything it
+    cannot place runs everything; `HEATHER_PR_AFFECTED=all` forces all, §2.2.1
+    of the design note), over the same replayed images, and the native x86
+    certificate gates (`crates/cli/tests/native*.rs`) shrink to one smoke
+    unless the diff touches what they check (`lib/native`, the machine/OS
+    models, `crates/cli/src/native`, the kernel; `HEATHER_PR_NATIVE=all`
+    forces them). The exact image policy (plain `scripts/test`, which
     re-elaborates every library module after a compiler edit) is the nightly
     master sentinel's lane; run it yourself only when the round changes the
     image format, the caches or the loader (`crates/cache`,
