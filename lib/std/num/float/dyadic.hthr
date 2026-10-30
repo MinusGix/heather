@@ -309,6 +309,8 @@ theorem Dyadic::same_of_not_lt({a, b: Dyadic}, h1: ¬(a < b), h2: ¬(b < a)): a 
 
 theorem Dyadic::le_of_not_lt({a, b: Dyadic}, h: ¬(b < a)): a <= b { Rat::le_of_not_lt(x := a.rat(), y := b.rat(), h := h) }
 
+theorem Dyadic::lt_of_not_le({a, b: Dyadic}, h: ¬(b <= a)): a < b { Rat::lt_of_not_le(x := a.rat(), y := b.rat(), h := h) }
+
 theorem Dyadic::not_lt_of_le({a, b: Dyadic}, h: a <= b): ¬(b < a) { Rat::not_lt_of_le(x := a.rat(), y := b.rat(), h := h) }
 
 theorem Dyadic::lt_cotrans(self a, b, c: Dyadic, h: a < b): a < c ∨ c < b { a.rat().lt_cotrans(b.rat(), c.rat(), h) }
@@ -566,6 +568,13 @@ theorem Dyadic::pos_of_mant({m: Nat}, e: Int, hm: 0 < m): 0 < Dyadic(m.int(), e)
 }
 
 theorem Dyadic::rat_pos({d: Dyadic}, h: 0 < d): 0 < d.rat() { Rat::lt_respects(Dyadic::rat_zero(), d.rat().same_refl(), h) }
+
+theorem Dyadic::rat_nonneg({d: Dyadic}, h: 0 <= d): 0 <= d.rat() { Rat::le_respects(Dyadic::rat_zero(), d.rat().same_refl(), h) }
+
+// Negation turns a negative bound into a positive one.
+theorem Dyadic::neg_pos({d: Dyadic}, h: d < 0): 0 < -d {
+    Rat::lt_respects(Rat::same_sym(Dyadic::rat_neg(0)), Rat::same_sym(d.rat_neg()), Rat::neg_lt(x := d.rat(), y := Dyadic::rat(0), h := h))
+}
 
 theorem Dyadic::recip_down_at(m: Nat, e: Int, p: Nat, hm: 0 < m):
     Dyadic(m.int(), e).recip_down(p).rat() <= Dyadic(m.int(), e).rat().recip()
