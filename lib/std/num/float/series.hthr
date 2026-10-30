@@ -43,6 +43,9 @@ import list;
 import tactic;
 import mono;
 import linarith;
+import ring;
+import cast;
+import morphism;
 
 record Series {
     first: Rat,
@@ -331,20 +334,20 @@ theorem Interval::widen_has(T, S: Interval, p: Nat, {t, q: Rat}, {x: CReal}, ht:
             Bnd(a, c) => λ kq => {
                 let m = (-lo).max(hi);
                 let e = m + m;
-                let ml: (-lo.rat() <= m.rat()) = Rat::le_respects(lo.rat_neg(), m.rat().same_refl(), (-lo).le_max_of(hi, (-lo).rat(), Inl((-lo).rat().le_refl())));
+                let ml: (-lo.rat() <= m.rat()) = by cast_from((-lo).le_max_of(hi, (-lo).rat(), Inl((-lo).rat().le_refl())));
                 let lower: (-m.rat() <= t) = Rat::le_trans(Rat::le_respects((-m.rat()).same_refl(), lo.rat().neg_neg(), Rat::neg_le(x := -lo.rat(), y := m.rat(), h := ml)), kt.left);
                 let upper: (t <= m.rat()) = Rat::le_trans(kt.right, (-lo).le_max_of(hi, hi.rat(), Inr(hi.rat().le_refl())));
                 let ab: (t.abs() <= m.rat()) = Rat::abs_le(lower, upper);
-                let eb: (t.abs() + t.abs() <= e.rat()) = Rat::le_trans(Rat::add_le_mono(ab, ab), Rat::le_of_same(Rat::same_sym(m.rat_add(m))));
+                let eb: (t.abs() + t.abs() <= e.rat()) = linarith(ab);
                 let low = calc {
                     (a - e).down(p).rat() <= (a - e).rat() := (a - e).down_le(p),
-                    ≈ a.rat() - e.rat() := a.rat_sub(e),
+                    ≈ a.rat() - e.rat() := ring,
                     <= q - e.rat() := by mono_with([kq.left]),
                     <= q - (t.abs() + t.abs()) := by mono(),
                 };
                 let high = calc {
                     q + (t.abs() + t.abs()) <= c.rat() + e.rat() := by mono_with([kq.right]),
-                    ≈ (c + e).rat() := Rat::same_sym(c.rat_add(e)),
+                    ≈ (c + e).rat() := ring,
                     <= (c + e).up(p).rat() := (c + e).le_up(p),
                 };
                 And(CReal::le_trans(CReal::ofRat_le(low), lo_x), CReal::le_trans(hi_x, CReal::ofRat_le(high)))

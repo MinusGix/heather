@@ -1230,7 +1230,7 @@ theorem Format::round_h_correct(self F: Format, mode: Mode, x: Rat, h: Nat, st: 
 // conjugate mode.
 
 theorem Finite::val_neg({F: Format}, g: Finite(F)): (-g).val() ≈ -g.val() {
-    Rat::same_trans(x := (-g).val(), y := (-g.dyadic()).rat(), z := -g.val(), hxy := g.dyadic_neg(), hyz := g.dyadic().rat_neg())
+    Rat::same_trans(x := (-g).val(), y := (-g.dyadic()).rat(), z := -g.dyadic().rat(), hxy := g.dyadic_neg(), hyz := ring)
 }
 
 theorem Finite::neg_neg_val({F: Format}, g: Finite(F)): -(-g).val() ≈ g.val() {
