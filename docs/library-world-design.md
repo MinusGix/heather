@@ -98,8 +98,8 @@ world's prefix costs it a few CPU-seconds of replays beyond its own closure.
 The showcase gate's rows (`crates/cli/tests/showcase.rs`) stayed on their own
 order until 2026-10-30, so the three algebra clients (`creal_client`,
 `ordered_field_client`, `semiring_client`) re-elaborated `rat`, `creal`,
-`ordered_field` and their prefixes from source after the gate had built them:
-about 90–120 s of a row each over a gate-warm store, the target's whole cost.
+`ordered_field` and their prefixes from source after the gate had built them,
+which was nearly the whole cost of the target over a gate-warm store.
 They pass `--world lib` now and replay the gate's images; only the row's own
 module, which no world holds, is elaborated, and a gate-warm target is a small
 fraction of its former CPU.
