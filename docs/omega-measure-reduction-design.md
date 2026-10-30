@@ -547,3 +547,20 @@ subterm's. A cheap field still takes the shortcut and arrives as its numeral.
 A field put as an eliminator over the computation (`match lay(n) { … }`)
 stays behind its projection, as §12 left it; probes and that control are in
 `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 15. Facts typed by a β-redex (2026-10-30)
+
+`issues/omega-redex-typed-fact-ignored.md`. An `Exists`'s `.proof` is typed
+`(λ k => P(k))(e.witness)`: the record's field type instantiated at the
+witness, with the redex left in place. The display contracts it (PR #184),
+so the report listed the fact as `a = add(e.witness, 2)`, but reflection
+looks for a relation at the type's head, found an application of a λ, and
+skipped the fact.
+
+`push_conjuncts` now contracts the head redexes of a fact's `El` type
+(`spelling::beta_head`, the unifier's contraction since PR #62) before the
+conjunction check, so every consumer of `local_facts` sees the contractum and
+a conjunction under the redex is split as in §13. Only the head is
+contracted: a redex inside a relation's side is an atom like any other
+subterm. The certificate still cites the fact by name; its declared type and
+the contractum are β-convertible, so the kernel pays one β-step.

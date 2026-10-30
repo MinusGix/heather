@@ -896,8 +896,18 @@ pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
 }
 
 /// `name: ty`, or, when `ty` is `logic::And`, each side read through its
-/// projection, recursively.
+/// projection, recursively. A head β-redex is contracted first, as the
+/// unifier does (`spelling::beta_head`): an `Exists`'s `.proof` is typed
+/// `(λ k => P(k))(e.witness)`, and read raw no relation is visible in it
+/// (issues/omega-redex-typed-fact-ignored.md).
 fn push_conjuncts(elab: &Elaborator, cx: &Cx, name: String, term: Rc<Term>, ty: Type, out: &mut Vec<(String, Type)>) {
+    let ty = match &ty {
+        Type::El { level, tm } => match crate::spelling::beta_head(tm) {
+            Some(contractum) => Type::El { level: level.clone(), tm: Rc::new(contractum) },
+            None => ty,
+        },
+        _ => ty,
+    };
     if let Some(ind) = elab.display_tag_of(&ty)
         && crate::goal_combinators::conjunction(&ind)
     {
