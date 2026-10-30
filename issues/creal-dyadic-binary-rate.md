@@ -1,6 +1,6 @@
 ---
 title: Make CReal terms dyadic at the binary rate 2^-n
-status: open
+status: closed
 labels: [stdlib,mathematics,reals,performance]
 area: mathematics
 milestone: [math-reals]
@@ -43,3 +43,11 @@ Make the n-th term a `Dyadic` within 2^-n, so the index is the bit count:
 
 - 2026-10-30: Filed by Minus's call in the CReal design thread ("just do
   the full method"). Taken up in the same thread.
+- 2026-10-30: Done (docs/creal-dyadic-round.md). Every law, instance and
+  client checks on `seq: Nat → Dyadic` at 2^-n; `CReal::enclose` is the exact
+  `[x.seq(n) - 2^-n, x.seq(n) + 2^-n]`; `third_64` and `ninth_64` evaluate
+  64-bit terms. Two tactic leaves had leaned on the old constant terms of
+  `ofRat`: `intervals` now recovers an inverse's proof by a hole, and
+  `norm_num`'s leaf by a hole the host's comparison solves through δ steps
+  of the committed side. `Int::divmod` moved to long division for the
+  64-bit floors.
