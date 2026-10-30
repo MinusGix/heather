@@ -4,7 +4,7 @@ status: open
 labels: [testing,performance,tooling]
 area: infrastructure
 created: 2026-10-21
-updated: 2026-10-23
+updated: 2026-10-30
 ---
 
 The full lane is what most pull requests wait on, on a 4-CPU cloud container
@@ -136,3 +136,6 @@ and summing module rows gives image replays per test. The runner's
 - 2026-10-23: Re-measured fresh / warm / elab-edit after #130 and #145 in
   [[testing-architecture]], which takes the suite-wide direction (post-merge
   sentinel, affected-target selection, single-flight image builds).
+- 2026-10-30: The fresh-box profile's largest cost was the library gate run
+  alone as a warmup and then again as a test; the runner now starts it first
+  beside the targets that do not read its store ([[library-gate-warmup-runs-alone]]).

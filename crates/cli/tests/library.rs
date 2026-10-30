@@ -277,10 +277,12 @@ fn every_library_module_checks() {
     folders.sort_by_key(|f| world.folders().iter().position(|w| w.starts_with(root.join(f))).unwrap_or(usize::MAX));
     let queue = std::sync::Mutex::new(std::collections::VecDeque::from(folders));
     let failures = std::sync::Mutex::new(Vec::new());
+    let started = std::time::Instant::now();
     std::thread::scope(|scope| {
         for _ in 0..3 {
             scope.spawn(|| loop {
                 let Some(folder) = queue.lock().expect("queue").pop_front() else { break };
+                let begun = started.elapsed().as_secs_f64();
                 let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
                 cmd.current_dir(&root).arg("check");
                 cmd.env("HEATHER_KERNEL_WORKERS", "1");
@@ -293,6 +295,9 @@ fn every_library_module_checks() {
                 let out = cmd.output().expect("run heather check");
                 let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
                 text.push_str(&String::from_utf8_lossy(&out.stderr));
+                // Printed with `--nocapture` and in a failure's log: which
+                // folders the gate's chain of module builds waited on.
+                eprintln!("gate folder\t{}\t{begun:.1}\t{:.1}", folder.display(), started.elapsed().as_secs_f64());
                 let ok_line = format!("{}: ok", folder.display());
                 if !out.status.success() || !text.contains(&ok_line) {
                     failures.lock().expect("failures").push(format!("== {} ({})\n{text}", folder.display(), out.status));

@@ -272,8 +272,10 @@ native_bin_warmup() {
 # of the library, which no one process does under the rail. So the warmup is
 # the gate: one child per folder, three at a time, each well inside the
 # rail. In the stale lanes the gate replays with their trade, as `write-elf`
-# then does. Warm it is the gate's replays; the parallel phase runs it again
-# as a test.
+# then does. Only a focused run of a native target warms it here: an
+# unfiltered run's parallel phase starts the gate first and holds those
+# targets until it has finished (`PREREQUISITES` in run-test-targets.mjs),
+# so the gate runs once, beside the targets that do not read its store.
 cli_images_warmup() {
   (
     ulimit -v 6291456
@@ -300,7 +302,6 @@ if (( $# == 0 )); then
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
     selected heather && native_warmup
-    selected library && cli_images_warmup
   fi
 else
   if [[ "$requested" == *"--test native"* ]]; then
