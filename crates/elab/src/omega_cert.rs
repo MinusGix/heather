@@ -3331,7 +3331,7 @@ enum GuardShape<'a> {
     Not(&'a Rc<Term>),
     /// `n.leb(m)`, read as `n <= m`.
     Leb,
-    /// A variable or a call: the atom `omega::bit(b)`, unless a definition
+    /// A variable, a call or a field: the atom `omega::bit(b)`, unless a definition
     /// unfolds it to a connective (`unfold_guard`).
     Atom,
     /// Anything else (a stuck `match`): not read.
@@ -3354,6 +3354,7 @@ fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
     }
     match app_spine(b).0 {
         Term::GlobalTm { .. } | Term::Var(_) => GuardShape::Atom,
+        _ if is_field_read(elab, b) => GuardShape::Atom,
         _ => GuardShape::Other,
     }
 }

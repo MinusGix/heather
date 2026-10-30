@@ -249,6 +249,8 @@ theorem guard_argument(n: Nat, h: (n.leb(4) && 2.leb(n)).IsTrue()): 2 <= n {
 }
 record Window { lo: Nat, hi: Nat, ok: lo.leb(hi).IsTrue() }
 theorem guard_field(w: Window): w.lo <= w.hi { omega(w.ok) }
+record Gate { open: Bool, at: Nat }
+theorem guard_bool_field(g: Gate, h: (!(g.open && g.at.leb(3))).IsTrue(), o: g.open.IsTrue()): 3 < g.at { omega }
 // Through a Bool definition and its `let`s, at the top and inside a guard.
 fn ordered(n, m: Nat) → Bool { let le = n.leb(m); le && !m.leb(n) }
 theorem guard_definition(n, m: Nat, h: ordered(n, m).IsTrue()): n < m { omega }
