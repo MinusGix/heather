@@ -15,6 +15,10 @@ theorem mul_left(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x, hy: c.rat() <= y, ha
 theorem strict_left(a, c: Dyadic, x, y: Rat, hx: a.rat() < x, hy: c.rat() <= y): (a + c).rat() < x + y { by mono() }
 // Nested operations move layer by layer.
 theorem nested(a, b, c: Dyadic, x, y, z: Rat, ha: a.rat() <= x, hb: b.rat() <= y, hc: c.rat() <= z, hb0: 0 <= b.rat(), hc0: 0 <= c.rat()): (a + b * c).rat() <= x + y * z { by mono() }
+// A subtraction is a sum by definition: the image of `a - c` pushes to a
+// sum, and the other side's `x - y` is read as `x + -y` to meet it.
+theorem sub_left(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x, hy: y <= c.rat()): (a - c).rat() <= x - y { by mono() }
+theorem sub_right(a, c: Dyadic, x, y: Rat, hx: x <= a.rat(), hy: c.rat() <= y): x - y <= (a - c).rat() { by mono() }
 // An order between two images of one edge is the order of what they are
 // images of, so a `Dyadic::Le` fact closes a `Rat` goal.
 theorem order(a, b: Dyadic, h: a <= b): a.rat() <= b.rat() { by mono() }

@@ -754,13 +754,86 @@ fn mono_cast_or_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Hand
     }
 }
 
+// A subtraction at a side's head read as `x + -y`, which every carrier's
+// `-` is by definition: a cast pushed into `(a - c).rat()` comes out as a
+// sum (`a.rat() + (-c).rat()`), and the other side's `x - y` then meets it.
+record Unsub { sub: String, add: String, neg: String }
+
+fn mono_unsubs() → List<Unsub> {
+    [Unsub("Rat::sub", "Rat::add", "Rat::neg"), Unsub("CReal::sub", "CReal::add", "CReal::neg"),
+     Unsub("Int::sub", "Int::add", "Int::neg"), Unsub("Dyadic::sub", "Dyadic::add", "Dyadic::neg")]
+}
+
+fn mono_unsub_named(f: GlobalRef, x, y: Handle, us: List<Unsub>) → Tac<Option<Expr>> {
+    match us {
+        Nil => Pure(None),
+        Cons(u, rest) => mono_try_global(u.sub).bind(λ o => match o {
+            None => mono_unsub_named(f, x, y, rest),
+            Some(g) => match g.id.same(f.id) {
+                False => mono_unsub_named(f, x, y, rest),
+                True => mono_try_global(u.add).bind(λ a => mono_try_global(u.neg).bind(λ n => Pure(match a {
+                    None => None,
+                    Some(ga) => match n { None => None, Some(gn) => Some(App(App(Global(ga), Hd(x)), App(Global(gn), Hd(y)))) },
+                }))),
+            },
+        }),
+    }
+}
+
+fn mono_unsub_side(h: Handle) → Tac<Option<Expr>> {
+    view(h).bind(λ v => match v {
+        HGlobal(f, _, args) => match args {
+            Cons(x, more) => match more { Cons(y, rest) => match rest { Nil => mono_unsub_named(f, x, y, mono_unsubs()), Cons(_, _) => Pure(None) }, Nil => Pure(None) },
+            Nil => Pure(None),
+        },
+        _ => Pure(None),
+    })
+}
+
+fn mono_or_hd(o: Option<Expr>, h: Handle) → Expr { match o { None => Hd(h), Some(e) => e } }
+
+fn mono_unsub_goal(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Expr) → Tac<Option<Expr>> {
+    match match strict { True => M.lt, False => M.le } {
+        KGlobal(id) => as_type(App(App(Global(GlobalRef(id)), l), r)).bind(λ c => match c {
+            Refused(_) => mono_none(),
+            Accepted(t) => goal().bind(λ g => attempt(focus(GoalInfo(t, g.locals), prove)).bind(λ o => match o {
+                Done(e) => Pure(Some(e)),
+                Failed(_, _) => mono_none(),
+            })),
+        }),
+        _ => mono_none(),
+    }
+}
+
+// The goal with a side's subtraction read as a sum, proved by `prove`;
+// `None` where neither side is a subtraction. The restated goal is the
+// goal up to unfolding `-`, so its proof is the goal's.
+fn mono_unsub(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Handle) → Tac<Option<Expr>> {
+    mono_unsub_side(l).bind(λ ol => mono_unsub_side(r).bind(λ or => match ol {
+        None => match or { None => mono_none(), Some(_) => mono_unsub_goal(M, prove, strict, mono_or_hd(ol, l), mono_or_hd(or, r)) },
+        Some(_) => mono_unsub_goal(M, prove, strict, mono_or_hd(ol, l), mono_or_hd(or, r)),
+    }))
+}
+
+// Sides with no shared operation: a subtraction read as a sum first, then
+// a cast or a leaf.
+fn mono_unshared(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → Tac<Expr> {
+    match M.pushes {
+        None => mono_cast_or_leaf(M, prove, strict, target, l, r),
+        Some(_) => mono_unsub(M, prove, strict, l, r).bind(λ o => match o {
+            Some(e) => Pure(e),
+            None => mono_cast_or_leaf(M, prove, strict, target, l, r),
+        }),
+    }
+}
+
 // Split the goal by the law for its sides' shared operation, or read it
 // through a cast, or prove it as a leaf. `prove` proves the law's premises.
 fn mono_split(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → Tac<Expr> {
     view(l).bind(λ vl => view(r).bind(λ vr => match mono_call(vl) {
         Some(cl) => match mono_call(vr) {
             Some(cr) => match cl.op.same(cr.op) && mono_len(cl.args).same(mono_len(cr.args)) {
-                False => mono_cast_or_leaf(M, prove, strict, target, l, r),
+                False => mono_unshared(M, prove, strict, target, l, r),
                 True => mono_diffs(0, cl.args, cr.args).bind(λ diffs => match diffs {
                     Nil => mono_leaf(M, prove, strict, target, l, r),
                     Cons(_, _) => match mono_law_for(M.laws, strict, cl.op, diffs) {
