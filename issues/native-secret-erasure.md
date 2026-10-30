@@ -34,7 +34,6 @@ scrubs.
 - The heap allocator does not exist yet (milestone `hih-memory`). The note
   says how the invariant forces scrub-on-free once it does.
 
-## Before implementing
+## Log
 
-Read *High-assurance zeroization* (TCHES 2024, ePrint 2023/1713) in full.
-Only its abstract was available to the survey.
+- 2026-10-30: Minus attached *High-assurance zeroization* (TCHES 2024), which is now read in full, in `docs/zeroization-survey.md` §8.1. Jasmin's machine-checked theorem is one-run: invalid memory is unchanged or zero. The design adopts that keep-or-zero form for `Canonical`. What Heather would add: registers and flags inside the theorem, the non-interference step proved rather than argued, and a source obligation on kept words.

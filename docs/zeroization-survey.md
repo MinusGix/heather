@@ -7,7 +7,9 @@ Sources: Frank Denis, *Zeroization*, parts
 [1](https://00f.net/2026/10/06/zeroization-1/) ("Wiping can make things
 worse"), [2](https://00f.net/2026/10/06/zeroization-2/) ("Clearing the stack
 and registers") and [3](https://00f.net/2026/10/06/zeroization-3/), all
-6 October 2026. Background papers are in §8. Heather is referenced against
+6 October 2026. The closest prior work, Arranz Olmos et al., *High-assurance
+zeroization* (TCHES 2024), was read in full; §8.1 compares it with this
+design. Other background papers are in §8.2. Heather is referenced against
 master at `f07adea`, and only lightly: the shape of the idea matters more
 than today's compiler, which will change.
 
@@ -68,6 +70,16 @@ longer exists in any readable memory*?
    buffers, page cache, swap, core dumps), and argv as the kernel holds it.
    Each one becomes an explicit assumption or a released event, never a
    silent gap (§7).
+
+6. **Jasmin has already done a version of this, and it supports the
+   approach.** The TCHES 2024 paper wipes all the stack an exported
+   function used, not just its secret parts, and machine-checks a one-run
+   theorem: every target cell outside the source's valid memory either
+   keeps its old value or is zero. The design here keeps that "keep or
+   zero" form (§4.1). It goes further in three places. Registers and flags
+   are inside the theorem. The step from canonical state to
+   non-interference is proved rather than argued on paper. And the words
+   the program keeps carry a source-level obligation (§8.1).
 
 ---
 
@@ -229,6 +241,23 @@ two-run argument happens only at the source, over a handful of words. The
 x86 part is a one-run invariant of the same kind as the matching relation
 the compiler already proves.
 
+**Keep or zero.** Jasmin's theorem (§8.1) allows a cleared location
+either to be zero *or to still hold the value it had when the boundary
+began*. Heather should take that form too. Let `entry` be the target state
+where the boundary began. Then:
+
+> **`Canonical(K, env, entry, σ)`.** As above, except that every cell and
+> register outside `K` is zero **or equal to its value in `entry`**.
+
+This keeps the one-run shape, and wiping a location the boundary never
+wrote becomes unnecessary. All the proof needs is a frame fact (the code
+did not write there), which the compiler proves anyway. The price is one
+premise: `entry` itself must be independent of the secret. That holds when
+the secret is first derived or read *inside* the boundary, which is part
+2's "derive the key inside the boundary" advice, made a hypothesis. It
+also holds when the previous cut was canonical. The functional lemma then
+reads: equal kept words and equal entry states give equal views.
+
 ### 4.2 The compiler doesn't need to know what is secret
 
 The reduction never mentions a secret label at the target. The compiler
@@ -246,13 +275,19 @@ path:
 - proving **source erasure** (§4.1 lemma 2), perhaps one day by a security
   type system over `Source`, instead of by hand.
 
-A cheaper scrub set is possible later, following the allocator's pattern
+Under the keep-or-zero form, a cheaper scrub set needs no change to the
+theorem. It can follow the allocator's pattern
 (`docs/native-register-allocation-design.md`: an untrusted proposer and a
-trusted check). An untrusted analysis proposes "these slots were never
-written since the last canonical point". The compile checks that claim by
-evaluation and skips the wipe where it holds. The canonical invariant stays
-the theorem, and the analysis only removes stores the check proves
-redundant.
+trusted check). An untrusted analysis proposes "these slots are not
+written inside the boundary". The compile checks that claim by evaluation,
+and skips the wipe where it holds, because those slots satisfy the
+"equal to entry" branch.
+
+Jasmin reached the same decision for its own reasons (§8.1). Wiping only
+secret data would mean deciding, for each stack address at function exit,
+whether its last write was secret, which is complex and gains little. And
+its Spectre-v1 protection already labels most data secret, so a secret-only
+wipe would clear almost the whole stack anyway.
 
 ### 4.3 Control flow at the cut
 
@@ -322,6 +357,13 @@ assumptions instead of leaving them as silent gaps.
   argues for putting the cut before the next syscall. Swap and dumps can be
   addressed by modelling `mlock`/`madvise(MADV_DONTDUMP)` as Linux calls in
   the tree. Their effect on the kernel is an assumption.
+- **Speculation can skip the scrub.** Jasmin's authors note that a
+  zeroization *loop* can be cut short under misspeculation. An attacker who
+  trains the branch predictor gets an early abort (their reference SBB+22).
+  Their answer is a fence after the loop, or an unrolled scrub. An
+  architectural theorem cannot see this, so the choice of scrub shape
+  belongs with any future speculative-constant-time work. Until then,
+  prefer an unrolled scrub, or a loop followed by `lfence`.
 - **Signals.** Heather programs install no handlers today. If they ever do,
   a signal frame is written on the stack region (inside `view`, so it is
   covered) or on an alternate stack (part 2's warning: that stack must be
@@ -329,17 +371,93 @@ assumptions instead of leaving them as silent gaps.
 
 ## 8. Related work
 
-- **Arranz Olmos, Barthe, Gonzalez, Grégoire, Laporte, Léchenet, Oliveira,
-  Schwabe, *High-assurance zeroization*, TCHES 2024(1), 375–397**
-  ([ePrint 2023/1713](https://eprint.iacr.org/2023/1713)). Jasmin extended
-  to wipe stack and registers on return, with the compiler's correctness
-  proof extended to cover it. Overhead is reported under 2% except for
-  short-input symmetric routines. This is the closest prior work: a
-  verified compiler that proves erasure. **Only its abstract was read**
-  (the ePrint and TCHES PDFs refused this container). It is worth reading
-  before an implementation round, to compare its exact theorem with §3.2
-  and its stack strategy with §6. Minus could attach the PDF, as for earlier
-  surveys.
+### 8.1 *High-assurance zeroization* (Jasmin), read in full
+
+Santiago Arranz Olmos, Gilles Barthe, Ruben Gonzalez, Benjamin Grégoire,
+Vincent Laporte, Jean-Christophe Léchenet, Tiago Oliveira, Peter Schwabe,
+TCHES 2024(1), 375–397, DOI 10.46586/tches.v2024.i1.375-397 (CC BY 4.0).
+Section and figure numbers below are the paper's.
+
+**Attacker.** The attacker acts when an `export` function (a library entry
+point) returns, not when internal functions return. At that moment it
+reads the registers, the flags, and the stack between `sp − n` and `sp`,
+where `n` is the extra stack the compiler computed. Microarchitectural
+attacks, swap and hibernation (left to `mlock`), and the caller's own
+arguments are out of scope (§1).
+
+**Failure modes (§2).** These are the posts' failure modes, measured on
+eleven libraries (nine C/C++, ring and Dalek in Rust):
+- no zeroization at all (BearSSL, ring);
+- `memset` removed by dead-store elimination (TinyDTLS, NSS);
+- zeroization only in API frames, which misses copies further down the call
+  stack. libsodium's and OpenSSL's ChaCha20 leave the full key on the
+  stack, and the authors built a key-recovery demo.
+- source-level zeroization (`zeroize`, `clear_on_drop`), which can't see
+  spills and callee-saved saves. ref10 X25519 declares 328 bytes of locals,
+  but GCC reports 464 bytes of stack.
+
+**Design (§4.2–4.4).**
+- Wipe *all* the stack the export function and its callees used, not just
+  the secret parts, and only at export exit. Per-function wiping was judged
+  too costly.
+- The stack bound comes from the Stack Allocation pass, propagated up an
+  acyclic call graph, since Jasmin has no recursion. It is rounded up to
+  the alignment and the clear step.
+- The pass runs after Linearization, so after stack and register
+  allocation.
+- Two strategies: a loop, or unrolled stores, using `MOV`/`VMOV` with a
+  clear step of 8 to 256 bits.
+- Registers, flags and XMM can be cleared too. "No analysis is needed in
+  this case."
+
+**Theorem (§4.5, Figure 2).** Suppose the source function takes `σs` to
+`σs'`, the target takes `σt` to `σt'`, and `σs ≡ σt`. Then:
+- **Correctness:** `σs' ≡ σt'`.
+- **Security:** `¬valid(σs, p) ⟹ σt'[p] = σt[p] ∨ σt'[p] = 0`.
+
+In words, any memory the source did not consider valid either kept its
+value from before the call, or is zero. The security property is proved
+for the zeroization pass. It is shown preserved by the passes after it,
+and the passes before it are shown not to write outside the stack region
+the compiler predicted. All of this is machine-checked in Coq.
+
+**What is argued, not checked (§4.6).**
+- Composition with constant-time ("stack constant-time") is argued on
+  paper. The zeroed region is statically determined, and zeroing the same
+  part of two indistinguishable states keeps them indistinguishable.
+  §4.6 says plainly that this is not machine-checked, and that compiler
+  preservation of constant-time is proved only for an older Jasmin
+  version.
+- Validation (§5) fills the stack with PRF output and checks that it reads
+  back zero. Register clearing was checked by inspecting the assembly.
+
+**Cost (§5).** Overhead is mostly under 2%, and close to zero on large
+inputs, since the scrub is a fixed cost. It peaks on short inputs to
+symmetric routines: Poly1305 avx2 at 128 bytes is +32.6% with the loop
+(about 56 cycles) and +7.0% unrolled. Clearing runs at roughly 32 bytes
+per cycle.
+
+**How it compares with this note.**
+
+| | Jasmin (TCHES 2024) | This design |
+|---|---|---|
+| Statement | One-run, per cell: invalid memory is unchanged or zero | Two-run non-interference over the whole state (§3.2), reduced to a one-run keep-or-zero invariant (§4.1). |
+| Registers, flags | Cleared on request, validated by reading the assembly; Figure 2 is about memory | Inside `Canonical` and inside `view`. |
+| Step to non-interference | Argued on paper (§4.6) | The functional lemma, proved once (§4.1 lemma 1). |
+| Live / valid data | The client's responsibility: valid source memory is not in the claim | Kept words `K` carry a source-erasure obligation (§4.1 lemma 2). |
+| Where | Export-function exit | Any declared cut, with `erased_forward` for later states. |
+| Stack bound | Acyclic call graph, no recursion | The region `Layout::of` proves per compile. |
+| Secret labels | Not needed; everything used is wiped | Same (§4.2). |
+| Speculation | Fence after the loop, or unrolled | Noted as a limit (§7). |
+
+The paper supports the two main choices here: wipe everything used rather
+than track secrets, and state a one-run, per-location property that a
+compiler proof can carry. Heather's additions are the parts the paper
+leaves to prose or to the client. It also gives Heather the keep-or-zero
+form, which §4.1 now uses.
+
+### 8.2 Other work
+
 - **Besson, Dang, Jensen, *Securing Compilation Against Memory Probing*,
   PLAS 2018**, and ***Information-Flow Preservation in Compiler
   Optimisations*, CSF 2019.** These define information-flow-preserving
@@ -347,11 +465,32 @@ assumptions instead of leaving them as silent gaps.
   validate (and, where needed, repair) dead-store elimination and register
   allocation. They are the formal version of part 1, and the source of §5's
   rule. Read here at the abstract level only.
+- **Simon, Chisnall, Anderson, *What You Get is What You C*, EuroS&P
+  2018** (the TCHES paper's SCA18). This proposed `__zero_on_return` for
+  LLVM, with function-, stack- and call-graph-based variants (code at
+  `lmrs2/zerostack`), and no unbounded recursion. It was never merged into
+  mainline LLVM. Its call-graph variant is the one closest to Jasmin's
+  design.
+- **Yang, Johannesmeyer, Olesen, Lerner, Levchenko, *Dead Store
+  Elimination (Still) Considered Harmful*, USENIX Security 2017.** This
+  surveys scrubbing techniques and adds a scrub-safe DSE option to LLVM.
+- **Daniel, Bardin, Rezk, *Binsec/Rel*, ACM TOPS 2022.** A relational
+  symbolic binary analyser covering constant-time *and secret erasure*. It
+  is a checker for binaries that come with no proof, and the nearest tool
+  to the two-run statement of §3.2.
+- **Chow, Pfaff, Garfinkel, Rosenblum, *Shredding your garbage*, USENIX
+  Security 2005.** This gives the "data lifetime" vocabulary. The secure
+  deallocation lifetime (first write to deallocation) is the TCHES
+  attacker's model.
 - **Information erasure as a language property**: Chong and Myers'
   language-based information erasure (CSFW 2005), and Hunt and Sands, *Just
   forget it* (ESOP 2008). These are the definitions §3.2's shape follows: a
   secret may affect released outputs and nothing else after the erasure
-  point. Cited from memory, not re-read for this note.
+  point. Characterised as the TCHES paper's related work characterises
+  them: Chong and Myers give a type system with declassification and
+  erasure operators, and Hunt and Sands treat erasure as non-interference
+  with a checking type system. Neither considers compilation. Not re-read
+  for this note.
 - **Constant-time-preserving compilation** (CompCert-CT, Barthe et al.,
   POPL 2020; Jasmin's constant-time and Spectre checks). This is the
   adjacent property §4.3 sets aside. A later round could share a
@@ -378,8 +517,11 @@ Nothing here is needed by `hih-tools`. Roughly, the order would be:
    time MAC verify, or a key derivation) proves `env|K` public directly.
    A label/type discipline over `Source` comes later, perhaps shared with
    constant-time work.
-5. **Cheaper scrubs.** An untrusted "untouched since last cut" analysis,
-   checked by evaluation (§4.2), when the cost shows up in a real program.
+5. **Cheaper scrubs.** An untrusted "not written inside the boundary"
+   analysis, checked by evaluation, which the keep-or-zero form admits with
+   no change to the theorem (§4.2). Build it when the cost shows up in a
+   real program. Jasmin's numbers say the wipe is a fixed cost, which
+   matters only for short boundaries.
 
 Open decisions, to settle when the work becomes real:
 
