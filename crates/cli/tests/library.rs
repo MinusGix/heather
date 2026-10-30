@@ -241,12 +241,20 @@ fn every_library_module_checks() {
     let stale = std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale");
     // Three at a time, as the suite runner runs targets: each child may
     // hold a library prefix in memory.
-    // Small closures first (the order `World::folders` places them in): a
-    // child then finds most of its closure built by the children before it,
-    // rather than elaborating the library's front under its own rail.
+    // The library's folders before `lib/_tests`'s, each part with small
+    // closures first (the order `World::folders` places them in). A child
+    // builds whatever of its closure no child has built yet, under its own
+    // CPU rail; a test folder's closure is mostly library, and its own
+    // modules are the heaviest, so starting it after the library's children
+    // keeps it paying for its own modules only (a cold suite put
+    // `lib/_tests/std/tactic` over the rail when it started beside
+    // `lib/std/tactic`, 2026-10-30, `docs/module-dag-design.md` §7).
     let world = heather_cli::world::World::of(&root.join("lib"), &[root.join("lib/std"), root.join("lib")]).unwrap_or_else(|e| panic!("the library's world: {}", e.msg));
     let mut folders = gate_folders();
-    folders.sort_by_key(|f| world.folders().iter().position(|w| w.starts_with(root.join(f))).unwrap_or(usize::MAX));
+    folders.sort_by_key(|f| {
+        let position = world.folders().iter().position(|w| w.starts_with(root.join(f))).unwrap_or(usize::MAX);
+        (f.starts_with(TESTS_DIR), position)
+    });
     let queue = std::sync::Mutex::new(std::collections::VecDeque::from(folders));
     let failures = std::sync::Mutex::new(Vec::new());
     let started = std::time::Instant::now();

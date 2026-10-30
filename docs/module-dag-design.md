@@ -179,9 +179,9 @@ binding are content hashes and are cached by binding.
 
 ## 7. The gate
 
-With closure keys the gate's children no longer have to follow one order, and
-the gate itself is unchanged: three children at a time, one folder each, in
-`World::folders` order. Inside a child, `heather check` walks its modules in
+With closure keys the gate's children no longer have to follow one order.
+The gate still runs three children at a time, one folder each: the library's
+folders first and `lib/_tests`'s after, each part in `World::folders` order. Inside a child, `heather check` walks its modules in
 a topological order of the written imports and, among the modules whose
 imports it has finished, takes the first that no other process is building
 (`ModuleImageStore::being_built`, a non-blocking try of the build lock). Only
@@ -191,9 +191,18 @@ elaboration once in the whole gate.
 
 What bounds the gate is then the import graph's critical path (the longest
 chain of elaboration cost through imports, which is the native compile
-chain), not the sum. A simulation of the gate over the measured per-module
-costs found the folder order is not a further lever: largest-first gains a
-little and puts two heavy folders under the CPU rail at once.
+chain), not the sum.
+
+The folder order matters for the rail, not for the sum. A child builds
+whatever of its closure no other child has built yet, under its own 300 s
+CPU rail, so who builds a shared module is now a race. With the old order a
+cold suite started `lib/_tests/std/tactic` beside `lib/std/tactic`; the test
+child built half the tactic library and died at the rail, though alone and
+cold it costs the same CPU on both designs. A test folder's closure is mostly
+library, and its own modules are its heaviest, so starting the test folders
+after the library's keeps each test child paying for its own modules. That
+order also shortened the cold gate further, in a simulation over measured
+per-module costs and on the box; largest-first was worse for the rail.
 
 A module that fails no longer turns images off for the rest of the process.
 Its dependents are refused with a note naming it ("its import closure holds
@@ -233,7 +242,8 @@ Cloud box (4 CPUs), the library gate's driver run by hand over a cold image
 store, three children, 300 s CPU rail, master against this design, same
 build profile. Shapes, not numbers (`CLAUDE.md`):
 
-- **Cold wall time** drops by about two fifths. CPU time drops a little
+- **Cold wall time** drops by about two fifths with the old folder order, and
+  by about half with library folders first (§7). CPU time drops a little
   (fewer duplicate replays: a folder's closure replays about its own size,
   not nearly twice it).
 - **Peak memory** across all children rises by about a third, and the

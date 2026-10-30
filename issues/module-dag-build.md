@@ -19,7 +19,7 @@ visible only through imports, so an image means one thing.
 
 Built 2026-10-30 (design §9): independent modules build in parallel across
 the gate's children, which set aside a module another process is building.
-Cold gate wall time drops by about two fifths; peak memory across children
+Cold gate wall time drops by about half; peak memory across children
 rises by about a third (design §10).
 
 ## Left
@@ -29,9 +29,11 @@ rises by about a third (design §10).
   code, and the first world holding both refuses. The library has none.
   Keeping the first copy after a content-hash check is the sound merge, to
   build when a pair appears.
-- **The gate's folder order** stays `World::folders`; a simulation found no
-  order worth the rail risk. Width beyond three children is memory-bound
-  (design §8).
+- **Who builds a shared module is a race** between the gate's children, each
+  under its own CPU rail. Library folders now go before test folders
+  (design §7), which kept every child under the rail cold; a heavy folder
+  near the rail can still lose the race. Width beyond three children is
+  memory-bound (design §8).
 - **The early cutoff's registry digest** is still over the whole world under
   the module, now the closure's
   ([[early-cutoff-registry-and-order-granularity]]).
