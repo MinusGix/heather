@@ -123,19 +123,11 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    let mut sources = loader::load_with(source, &search, IMPORTS).map_err(|e| e.msg)?;
-    // `check --world`'s order (`world.rs`): the world's prefix first, so the
-    // closure replays the images every other process over that world wrote
-    // (the library gate's, which the suite runs before this).
-    if let Some(dir) = &world {
-        let mut search = search.clone();
-        if !search.contains(dir) { search.push(dir.clone()); }
-        let world = heather_cli::world::World::of(dir, &search).map_err(|e| format!("--world {}: {}", dir.display(), e.msg))?;
-        let prefix: Vec<&Path> = world.prefix(&sources).iter().map(PathBuf::as_path).collect();
-        if !prefix.is_empty() {
-            sources = loader::load_after_with(&prefix, source, &search, IMPORTS).map_err(|e| e.msg)?;
-        }
-    }
+    // `--world` is accepted and ignored: every module is checked over its
+    // own closure (`docs/module-dag-design.md`), so the closure is all this
+    // loads and its images are the ones every other process wrote.
+    let _ = &world;
+    let sources = loader::load_with(source, &search, IMPORTS).map_err(|e| e.msg)?;
     let canonical = source.canonicalize().map_err(|e| format!("{}: {e}", source.display()))?;
     let root = sources.iter().find(|m| m.path == canonical).ok_or("the source is not in its own closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;

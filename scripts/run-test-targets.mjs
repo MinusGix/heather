@@ -63,14 +63,12 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 
 // Targets whose run builds a store other targets read, each with the targets
 // that read it. The library gate (crates/cli/tests/library.rs) builds the CLI
-// image store over the library's world, and native_cat/native_tools's
-// `write-elf` replays its closure from it (`--world lib`,
-// docs/library-world-design.md §3); cold, one `write-elf` would build the
-// world's front itself, past the CPU rail. So a prerequisite starts first and
-// its readers wait until it has finished, pass or fail, while every other
-// target fills the slots it leaves idle: the gate is one long chain of
-// module builds (each over every module before it), about one CPU busy for
-// most of its run. A prerequisite the run does not hold blocks nothing.
+// image store, and native_cat/native_tools's `write-elf` replays its closure
+// from it (every module is keyed by its own closure,
+// docs/module-dag-design.md); cold, one `write-elf` would build that closure
+// itself, past the CPU rail. So a prerequisite starts first and its readers
+// wait until it has finished, pass or fail, while every other target fills
+// the slots it leaves idle. A prerequisite the run does not hold blocks nothing.
 // scripts/test used to run the gate alone as a warmup before this phase and
 // then again here as a test (issues/library-gate-warmup-runs-alone.md).
 export const PREREQUISITES = new Map([["library", ["native_cat", "native_tools"]]]);

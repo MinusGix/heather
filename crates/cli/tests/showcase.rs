@@ -40,13 +40,9 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
     // scripts/test) replays an image an earlier build wrote, as
     // crates/elab/tests/support does.
     cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
-    // Over the gate's world (`docs/library-world-design.md`): an image is
-    // keyed by every module loaded before it, so a row loading its closure
-    // in its own order keys `creal`, `ordered_field` and the rest apart from
-    // the gate's and elaborates them again from source. Over the world each
-    // library module sits on the gate's prefix and replays its image; only
-    // the row's own module is elaborated.
-    cmd.arg("--world").arg("lib");
+    // Every library module is keyed by its own closure
+    // (`docs/module-dag-design.md`), so the row's closure replays the gate's
+    // images and only the row's own module is elaborated.
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }

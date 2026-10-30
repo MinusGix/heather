@@ -346,3 +346,100 @@ fn a_client_is_elaborated_again_when_a_name_it_looked_up_changes_meaning() {
     assert_eq!(p.relocated, 0);
     assert!(!p.modules[1].1);
 }
+
+fn module(name: &str, src: &str) -> Module {
+    Module { name: name.into(), path: format!("{name}.hthr").into(), src: src.into() }
+}
+
+const SHADES: &str = "inductive Shade { Light, Dark }\nfn dark() -> Shade { Shade::Dark }\n";
+const PICKER: &str = "import shades;\nfn pick(s: shades::Shade) -> Nat { match s { Light => 0, Dark => 1 } }\ntheorem picked(): pick(shades::dark()) = 1 { refl }\n";
+const UNRELATED: &str = "inductive Other { A, B, C }\nfn first() -> Other { Other::A }\n";
+
+/// A module is checked over its import closure alone
+/// (`docs/module-dag-design.md` §2): a session that checked an unrelated
+/// module, one with an inductive of its own, before it keys and builds it
+/// exactly as a session that did not, so the second replays the first's
+/// images. Before, a module's image was keyed by everything its process had
+/// loaded before it, and the unrelated inductive also moved every later
+/// nominal tag.
+#[test]
+fn a_module_means_the_same_whatever_else_its_process_loaded() {
+    let cache = temp("closure");
+    let mut alone = Elaborator::with_prelude().unwrap();
+    let mut first = SemanticSession::new(Some(cache.clone()));
+    for m in [module("shades", SHADES), module("picker", PICKER)] {
+        let out = first.check(&mut alone, &m, LintProfile::Default);
+        assert!(out.errors.is_empty() && !out.replayed, "{}", m.name);
+    }
+
+    let mut beside = Elaborator::with_prelude().unwrap();
+    let prelude = beside.psi().bindings.len();
+    let mut second = SemanticSession::new(Some(cache.clone()));
+    let out = second.check(&mut beside, &module("unrelated", UNRELATED), LintProfile::Default);
+    assert!(out.errors.is_empty() && !out.replayed);
+    let unrelated = beside.psi().bindings.len() - prelude;
+    for m in [module("shades", SHADES), module("picker", PICKER)] {
+        let out = second.check(&mut beside, &m, LintProfile::Default);
+        assert!(out.errors.is_empty(), "{}", m.name);
+        assert!(out.replayed, "{} was elaborated again over a prefix holding an unrelated module", m.name);
+    }
+    assert_eq!(second.hits(), 2);
+    // The caller's world holds all three, the two replayed ones moved past
+    // the unrelated module.
+    assert_eq!(beside.psi().bindings.len(), alone.psi().bindings.len() + unrelated);
+
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+const MAG: &str = "class Mag<A> { op: A -> A -> A }\nfn combine<A> requires m: Mag<A> (x: A, y: A) -> A { m.op(x, y) }\n";
+const MAG_NAT: &str = "import mag;\ninstance Mag<Nat> { fn op(x: Nat, y: Nat) -> Nat { y } }\n";
+const TWICE: &str = "fn twice(x: Nat) -> Nat { combine(x, x) }\ntheorem second(): twice(3) = 3 { refl }\n";
+
+/// What a module sees of the registries is what its closure contributes
+/// (`docs/module-dag-design.md` §2): an instance declared in a module the
+/// client does not import is not found, although the session checked that
+/// module first, and importing it is the fix. Before, every module checked
+/// earlier in the process was visible, imported or not, so whether `twice`
+/// checked depended on what else the process loaded.
+#[test]
+fn an_instance_is_visible_only_through_imports() {
+    for cache in [None, Some(temp("instances"))] {
+        let mut e = Elaborator::with_prelude().unwrap();
+        let mut session = SemanticSession::new(cache.clone());
+        for m in [module("mag", MAG), module("mag_nat", MAG_NAT)] {
+            assert!(session.check(&mut e, &m, LintProfile::Default).errors.is_empty(), "{}", m.name);
+        }
+        let blind = format!("import mag;\n{TWICE}");
+        let out = session.check(&mut e, &module("blind", &blind), LintProfile::Default);
+        assert!(!out.errors.is_empty(), "an instance from a module `blind` does not import was found");
+        let seeing = format!("import mag;\nimport mag_nat;\n{TWICE}");
+        let out = session.check(&mut e, &module("seeing", &seeing), LintProfile::Default);
+        assert!(out.errors.is_empty(), "{:?}", out.errors.iter().map(|e| e.render(&seeing)).collect::<Vec<_>>());
+        if let Some(cache) = cache {
+            let _ = std::fs::remove_dir_all(cache);
+        }
+    }
+}
+
+/// A module whose closure holds one that did not check is not checked:
+/// there is no world to check it in. One beside it, outside that closure,
+/// is checked as usual, with its image.
+#[test]
+fn a_failed_import_stops_its_dependents_and_nothing_else() {
+    let cache = temp("failed-import");
+    let mut e = Elaborator::with_prelude().unwrap();
+    let mut session = SemanticSession::new(Some(cache.clone()));
+    let broken = module("broken", "fn bad() -> Nat { Type }\n");
+    assert!(!session.check(&mut e, &broken, LintProfile::Default).errors.is_empty());
+    let dependent = module("dependent", "import broken;\nfn ok() -> Nat { 0 }\n");
+    let out = session.check(&mut e, &dependent, LintProfile::Default);
+    let text = out.errors.iter().map(|e| e.render(&dependent.src)).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("`broken`, which did not check"), "{text}");
+    let beside = module("shades", SHADES);
+    let out = session.check(&mut e, &beside, LintProfile::Default);
+    assert!(out.errors.is_empty());
+    let mut again = Elaborator::with_prelude().unwrap();
+    let mut warm = SemanticSession::new(Some(cache.clone()));
+    assert!(warm.check(&mut again, &beside, LintProfile::Default).replayed, "a module checked after a failure was not published");
+    let _ = std::fs::remove_dir_all(cache);
+}

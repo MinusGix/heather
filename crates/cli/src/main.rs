@@ -47,7 +47,7 @@ use heather_elab::{Elaborator, stats};
 // The loader lives in this crate's `lib` target so that the frontend bench
 // corpus computes its import closure with the *same* code the CLI does
 // (see `lib.rs`, issues/frontend-bench-ir-closure-stale.md).
-use heather_cli::{expect, loader, semantic::SemanticSession, world::World};
+use heather_cli::{expect, loader, semantic::SemanticSession};
 
 mod color;
 mod fmt;
@@ -151,9 +151,11 @@ struct Opts {
     /// they mark must be refused for the reason they name, and is then not
     /// an error (`expect.rs`). Off, a directive is a comment.
     expectations: bool,
-    /// `--world <dir>`: load the library under `dir`'s shared modules in its
-    /// canonical order before each root's own (`world.rs`), so the library
-    /// gate's processes share one image per module.
+    /// `--world <dir>`: accepted and ignored. It loaded the library's shared
+    /// modules in one order before each root's own, so that the gate's
+    /// processes keyed each module alike; a module is now checked over its
+    /// own closure in every process (`docs/module-dag-design.md`).
+    #[allow(dead_code)]
     world: Option<PathBuf>,
 }
 
@@ -327,16 +329,6 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         }
         Rc::new(c)
     });
-    let world = match &opts.world {
-        Some(dir) => match World::of(dir, &search_for_path(dir, &opts.search)) {
-            Ok(world) => Some(world),
-            Err(e) => {
-                eprintln!("{}: --world {}: {}", color::error_label(stderr_color), dir.display(), e.msg);
-                return ExitCode::from(2);
-            }
-        },
-        None => None,
-    };
     let mut failed = false;
     for path in files {
         // A fresh elaborator per **path**: two file paths re-elaborate a shared
@@ -388,17 +380,11 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
         };
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-        let loaded = loader::load_many(&root_refs, &search).and_then(|modules| match &world {
-            // The world's prefix first, then the roots: the prefix is closed
-            // under imports and in load order already, so the loader keeps it
-            // as it is and appends what the roots need beyond it.
-            Some(world) if !world.prefix(&modules).is_empty() => {
-                let mut all: Vec<&Path> = world.prefix(&modules).iter().map(PathBuf::as_path).collect();
-                all.extend(&root_refs);
-                loader::load_many(&all, &search)
-            }
-            _ => Ok(modules),
-        });
+        // Every module is checked over its own import closure
+        // (`docs/module-dag-design.md`), so the closure is all a check loads:
+        // `--world` no longer changes what a module means or how its image is
+        // keyed, and is accepted for the callers that still pass it.
+        let loaded = loader::load_many(&root_refs, &search);
         let modules = match loaded {
             Ok(m) => m,
             Err(e) => {
@@ -429,6 +415,10 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()))
             .with_freshness(opts.images)
             .with_only(only);
+        // Only `--deny-axioms` reads the checked world back.
+        if !opts.deny_axioms {
+            semantic = semantic.without_process_world();
+        }
         let mut forced_items = 0;
         let mut refusals_matched = 0;
         // `HEATHER_VALUE_METRICS`: print the kernel's value-machine counters
@@ -448,7 +438,28 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
             elab.enable_value_metrics();
         }
-        for m in &modules {
+        // In the loader's order, except that a module another process is
+        // building is set aside while one whose imports are checked can go
+        // first (`docs/module-dag-design.md` §7): the library gate's
+        // children share one store, and without this one waits on another's
+        // build lock with modules of its own ready.
+        let imports: Vec<Vec<String>> = modules.iter().map(|m| heather_cli::semantic::written_imports(&m.src)).collect();
+        let position: std::collections::HashMap<&str, usize> =
+            modules.iter().enumerate().map(|(i, m)| (m.name.as_str(), i)).collect();
+        let mut checked = vec![false; modules.len()];
+        let mut pending: Vec<usize> = (0..modules.len()).collect();
+        while !pending.is_empty() {
+            let ready = |i: usize, checked: &[bool]| {
+                imports[i].iter().all(|d| position.get(d.as_str()).is_none_or(|&j| checked[j]))
+            };
+            let pick = pending
+                .iter()
+                .position(|&i| ready(i, &checked) && !semantic.built_elsewhere(&modules[i], &imports[i], modules[i].lint_profile()))
+                .or_else(|| pending.iter().position(|&i| ready(i, &checked)))
+                .unwrap_or(0);
+            let i = pending.remove(pick);
+            checked[i] = true;
+            let m = &modules[i];
             elab.reset_value_metrics();
             let outcome = semantic.check(&mut elab, m, m.lint_profile());
             if report_metrics {

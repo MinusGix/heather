@@ -300,6 +300,20 @@ impl ModuleDelta {
         })
     }
 
+    /// The same delta over another dependency prefix of the same length,
+    /// unrewritten: for an image decoded against a placeholder prefix
+    /// (`docs/module-dag-design.md` §4) when the world it is loaded into puts
+    /// every module of its closure where its own canonical world did, so the
+    /// move is the identity. The caller vouches for that; the replay
+    /// rechecks every binding against the prefix it is given either way.
+    /// `None` when the lengths differ.
+    pub fn over_prefix(&self, dependency_psi: GlobalCtx) -> Option<ModuleDelta> {
+        (dependency_psi.bindings.len() == self.dependency_psi.bindings.len()).then(|| ModuleDelta {
+            dependency_psi,
+            ..self.clone()
+        })
+    }
+
     /// Every dependency position (below the module's base) the delta refers
     /// to anywhere: bindings, sealed proofs, registry payloads, opened
     /// proofs. What a relocation must find a counterpart for, and the only
