@@ -40,3 +40,4 @@ laws), `interval.hthr`'s `widen_has`, and the `rat_add`/`rat_mul` calls in
 ## Log
 
 - 2026-10-30: Slice 2 (docs/casting-design.md §10): cast_push normal form over a carrier table (Rat, CReal), cast_from(h) (pushed/pulled/lifted one or two edges/≈), cast_to(S, prove), and mono closes a goal from a fact that agrees through casts. Left here: ring/linarith/omega on the same normal form, a located diagnostic for a disagreement, 0/1/sub moves, Nat→Int, and the slice-1 customers listed above.
+- 2026-10-30: Slice 3 (docs/casting-design.md §11): ring reads edge images through definition facts (edge fields, no morphism import), linarith substitutes definitions into its forms, omega unchanged by design. Left: cast_from's located diagnostic, 0/1/sub, Nat→Int edge, remaining hand-named image laws in the float library.

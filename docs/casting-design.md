@@ -622,6 +622,34 @@ What it does not do yet, each for a reason:
 - **A disagreement is not diagnosed yet**: `cast_from` reports that the
   two differ, not the first subterm where they do (§6.4 asks for that).
 
-Next ([[cast-carrier-reader]]): `ring`, `linarith` and `omega` reading
-through the same normal form, the located diagnostic, `0`/`1`/subtraction,
-and `Nat → Int`; `↑` and `cast<B>` after (§7 step 3).
+## 11. Slice 3: `ring` and `linarith` read casts (2026-10-30)
+
+- **`ring`** (`crates/elab/src/ring.rs`, `Reifier::edge_image`): an edge's
+  image of `+`, `*` or negation is an atom read with a *definition* fact,
+  the edge's field (`(Dyadic::rat_hom()).map_add(a, c)`), whose right side,
+  the images of the operands, is read the same way. An image of an image
+  carries the inner law through the outer edge's `map_respects`, up to three
+  edges deep. It is the mechanism `ring` already had for `Nat` casts inside
+  `Rat::ofInt(OfNat(…))` (`RingExpr::of_nat_add`, §1.3), now fed by the
+  edges, so the certificate eliminates the atom exactly as it did those.
+  The law is read off the edge value's own field, so a client needs no
+  `import morphism`; the edge table (`EDGES`) names the maps, the values and
+  the source operations.
+- **`linarith`** reads a defined atom as its definition
+  (`FieldReading::read`), so its linear forms see through casts, and the
+  combination's `ring` check cites the same facts. This also applies to the
+  `Nat`-cast definitions that `ring` already read.
+- **`omega`** is unchanged, by design: it decides at `Int`/`Nat`, where its
+  casts (`.int()`, `OfNat`) are its own atoms (§6.2). A fact `omega` proves
+  at `Int` reaches a `Rat` goal through the edge
+  (`linarith(Rat::ofInt_le(m + 1, n, k))`, with `Rat::ofInt(m + 1)` read as
+  `Rat::ofInt(m) + 1`), or through `cast_from`.
+- **The one normal form is not literally shared yet**: the Rust reifier and
+  `cast.hthr`'s `cast_push` read the same edges by the same laws, in two
+  implementations. Making `cast_push` the reader `ring` calls would need
+  `ring` to run as a `Tac`, which it does not.
+
+Next ([[cast-carrier-reader]]): the located diagnostic for `cast_from`,
+`0`/`1`/subtraction, `Nat → Int` as an `OrderedSemiringHom` edge, and the
+library's remaining hand-named image laws (`arith.hthr`, `round.hthr`,
+`series.hthr`, `error.hthr`); `↑` and `cast<B>` after (§7 step 3).

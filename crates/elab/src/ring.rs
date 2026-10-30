@@ -93,6 +93,26 @@ impl Carrier {
     }
 }
 
+/// A cast edge the reifier reads through (docs/casting-design.md §5.6): the
+/// map's global, the `OrderedRingHom` value, and the source carrier's
+/// operations, as bare global names.
+struct Edge {
+    map: &'static str,
+    hom: &'static str,
+    add: &'static str,
+    mul: &'static str,
+    neg: &'static str,
+}
+
+const EDGES: [Edge; 3] = [
+    Edge { map: "dyadic::Dyadic::rat", hom: "dyadic::Dyadic::rat_hom", add: "dyadic::Dyadic::add", mul: "dyadic::Dyadic::mul", neg: "dyadic::Dyadic::neg" },
+    Edge { map: "creal::CReal::ofRat", hom: "creal::CReal::ofRat_hom", add: "rat::Rat::add", mul: "rat::Rat::mul", neg: "rat::Rat::neg" },
+    Edge { map: "rat::Rat::ofInt", hom: "rat::Rat::ofInt_hom", add: "int::Int::add", mul: "int::Int::mul", neg: "int::Int::neg" },
+];
+
+/// How many edges deep an image of an image is read.
+const EDGE_NESTING: u32 = 3;
+
 /// Reified syntax; `Sub`/`Neg` occur only at `Int`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Syn {
@@ -390,6 +410,16 @@ impl<'a> FieldReading<'a> {
         let (atoms, facts) = (self.reifier.atoms.len(), self.reifier.facts.len());
         let mut squares = Vec::new();
         let read = self.reifier.reify(tm).and_then(|syn| {
+            // An atom read with a definition (a cast pushed one level in,
+            // `Reifier::cast`, `Reifier::edge_image`) is read as what it
+            // stands for, so the linear reading sees through casts as `ring`
+            // does; the combination's check cites the same facts.
+            let defs: Vec<(usize, Syn)> = self.reifier.facts[facts..]
+                .iter()
+                .filter(|f| f.kind == FactKind::Definition)
+                .map(|f| (f.atom, f.sides.rhs.clone()))
+                .collect();
+            let syn = defined(&syn, &defs, defs.len() + 1);
             squares_of(&syn, &mut squares)?;
             Ok((poly_of(&syn)?, multiplies(&syn)))
         });
@@ -576,6 +606,9 @@ impl Reifier<'_> {
         if let Some(atom) = self.cast(tm, ops, depth)? {
             return Ok(Syn::Atom(atom));
         }
+        if let Some(atom) = self.edge_image(tm, depth)? {
+            return Ok(Syn::Atom(atom));
+        }
         if let Some(step) = self.range_step(tm, depth)? {
             return Ok(step);
         }
@@ -745,6 +778,77 @@ impl Reifier<'_> {
             self.facts.push(Fact { atom, kind: FactKind::Definition, term, ty, level, sides });
         }
         Ok(Some(atom))
+    }
+
+    /// An edge's image of an operation (`(a + c).rat()`, `CReal::ofRat(p *
+    /// q)`, `Rat::ofInt(-m)`: `+`, `*` and negation) is an atom read with the
+    /// edge's law (the field `map_add` of `Dyadic::rat_hom`,
+    /// docs/casting-design.md §11), whose right side, the images of the
+    /// operands, is read the same way. An image of an image (`CReal::ofRat((a + c).rat())`) carries the
+    /// inner law through the outer edge by `map_respects`. Confirmed, like
+    /// [`Self::cast`], by converting the term to the law's left side.
+    fn edge_image(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Option<usize>, String> {
+        let Some(proof) = self.edge_law(tm, EDGE_NESTING) else {
+            return Ok(None);
+        };
+        let Some((term, ty, level)) = parse_expr(&proof)
+            .ok()
+            .and_then(|e| self.elab.generated_scope(|me| me.elab_infer(self.cx, &e)).ok())
+        else {
+            return Ok(None);
+        };
+        let Some(eq) = relation_equation(self.elab, self.cx, &ty, self.span) else {
+            return Ok(None);
+        };
+        let oracle = self.elab.goal_oracle().bounded(NUMERAL_STEPS);
+        if oracle.convert_term(&self.cx.gamma, Layer::Prog, tm, &eq.lhs, &self.ty, &self.level).is_err() {
+            return Ok(None);
+        }
+        let atom = self.intern(tm)?;
+        if self.facts.iter().any(|f| f.atom == atom) {
+            return Ok(Some(atom));
+        }
+        let rhs = self.reify_within(&eq.rhs, depth)?;
+        let sides = Written { lhs: Syn::Atom(atom), rhs };
+        self.facts.push(Fact { atom, kind: FactKind::Definition, term, ty, level, sides });
+        Ok(Some(atom))
+    }
+
+    /// The source of a proof that `tm`, an edge's image, is `≈` to the
+    /// images of what it is an image of; `None` where `tm` is no edge's
+    /// image of an operation, at most `nesting` edges deep.
+    fn edge_law(&self, tm: &Rc<Term>, nesting: u32) -> Option<String> {
+        if nesting == 0 {
+            return None;
+        }
+        let spell = |t: &Term| self.elab.spell_term_source(self.cx, t);
+        for edge in EDGES {
+            let Some(args) = named_args(self.elab, tm, edge.map) else { continue };
+            let [inner] = args.as_slice() else { continue };
+            // The edge's field, read off its value: its type names every
+            // index, and no import of `morphism` is needed where `ring` runs.
+            let law = |field: &str, rest: &str| format!("({}()).{field}({rest})", edge.hom);
+            for (op, name) in [(edge.add, "map_add"), (edge.mul, "map_mul")] {
+                if let Some(xs) = named_args(self.elab, inner, op)
+                    && let [x, y] = xs.as_slice()
+                {
+                    return Some(law(name, &format!("({}), ({})", spell(x)?, spell(y)?)));
+                }
+            }
+            if let Some(xs) = named_args(self.elab, inner, edge.neg)
+                && let [x] = xs.as_slice()
+            {
+                return Some(law("map_neg", &format!("({})", spell(x)?)));
+            }
+            // An image of an image: the inner law, carried through this edge.
+            let proof = self.edge_law(inner, nesting - 1)?;
+            let (_, ty, _) = parse_expr(&proof)
+                .ok()
+                .and_then(|e| self.elab.generated_scope(|me| me.elab_infer(self.cx, &e)).ok())?;
+            let rel = Relation::of_type(self.elab, self.cx, &ty, self.span)?;
+            return Some(law("map_respects", &format!("({}), ({}), {proof}", spell(inner)?, spell(&rel.right)?)));
+        }
+        None
     }
 
     /// The integer a carrier's numeral stands for: the one its spelling ends
@@ -1054,6 +1158,23 @@ impl Poly {
 
 /// The bases of the squares `syn` writes: each product whose two factors
 /// read as one nonconstant polynomial.
+/// `syn` with each defined atom replaced by its definition, `fuel` levels
+/// deep (a definition's right side may mention atoms defined before it).
+fn defined(syn: &Syn, defs: &[(usize, Syn)], fuel: usize) -> Syn {
+    let go = |s: &Syn| Box::new(defined(s, defs, fuel));
+    match syn {
+        Syn::Atom(a) => match defs.iter().find(|(d, _)| d == a) {
+            Some((_, rhs)) if fuel > 0 => defined(rhs, defs, fuel - 1),
+            _ => syn.clone(),
+        },
+        Syn::Const(_) => syn.clone(),
+        Syn::Add(a, b) => Syn::Add(go(a), go(b)),
+        Syn::Sub(a, b) => Syn::Sub(go(a), go(b)),
+        Syn::Mul(a, b) => Syn::Mul(go(a), go(b)),
+        Syn::Neg(a) => Syn::Neg(go(a)),
+    }
+}
+
 fn squares_of(syn: &Syn, out: &mut Vec<Poly>) -> Result<(), String> {
     match syn {
         Syn::Atom(_) | Syn::Const(_) => {}

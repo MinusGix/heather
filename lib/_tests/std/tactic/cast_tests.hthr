@@ -3,7 +3,7 @@
 // (lib/std/tactic/cast.hthr; docs/casting-design.md §6.4). Tests, not
 // library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import cast; import mono;
+import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import cast; import mono; import omega; import ring; import linarith;
 import relation_props; import algebra_rel; import semiring; import ordered_field; import morphism; import dyadic;
 
 // An image of an operation is read as the operation of the images, on
@@ -44,6 +44,25 @@ theorem from_int(m, n: Int, h: m + 1 <= n): Rat::ofInt(m) + 1 <= Rat::ofInt(n) {
 // `cast_to(S, prove)`: the goal stated as wanted, proved by `prove`.
 theorem to_pushed(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x, hy: c.rat() <= y): (a + c).rat() <= x + y { by cast_to(a.rat() + c.rat() <= x + y, mono()) }
 theorem to_source(a, b: Dyadic, x: Rat, h: a <= b): a.rat() <= b.rat() { by cast_to(a <= b, assumption()) }
+
+// `ring` and `linarith` read an image of an operation through its edge's
+// law, as `mono` does: the image is an atom defined by the law's right side.
+theorem ring_add(a, c: Dyadic): (a + c).rat() ≈ c.rat() + a.rat() { ring }
+theorem ring_mul(a, b, c: Dyadic): (a * (b + c)).rat() ≈ a.rat() * b.rat() + a.rat() * c.rat() { ring }
+theorem ring_neg(a: Dyadic): (-a).rat() + a.rat() ≈ 0 { ring }
+theorem ring_int(m, n: Int): Rat::ofInt(m * n + m) ≈ Rat::ofInt(m) * (Rat::ofInt(n) + 1) { ring }
+theorem ring_two_edges(a, c: Dyadic): CReal::ofRat((a + c).rat()) ≈ CReal::ofRat(a.rat()) + CReal::ofRat(c.rat()) { ring }
+theorem linarith_add(a, c: Dyadic, x: Rat, h: a.rat() <= x, k: c.rat() <= x): (a + c).rat() <= x + x { linarith }
+theorem linarith_real(p, q: Rat, x: CReal, h: CReal::ofRat(p) + CReal::ofRat(q) < x): CReal::ofRat(p + q) < x { linarith }
+// `omega` decides at `Int`, and the `Int` fact is read at `Rat` through the
+// edge: `Rat::ofInt(m + 1)` is `Rat::ofInt(m) + 1`.
+theorem omega_then_linarith(m, n: Int, h: m < n): Rat::ofInt(m) + 1 <= Rat::ofInt(n) {
+    let k: (m + 1 <= n) = omega;
+    linarith(Rat::ofInt_le(m + 1, n, k))
+}
+// A law reads an image as what it is, not as anything ring-equal to it.
+// expect-error: it is not an identity of commutative rings
+theorem ring_wrong(a, c: Dyadic): (a * c).rat() ≈ a.rat() + c.rat() { ring }
 
 // The edges as values: their laws are their fields.
 theorem field_add(a, c: Dyadic): (a + c).rat() ≈ a.rat() + c.rat() { OrderedRingHom::add_law<Dyadic, Rat>(Dyadic::rat_hom(), a, c) }
