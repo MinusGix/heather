@@ -783,6 +783,20 @@ paper too).
   recomputation allocates fewer closures. The memo changes the fuel a query
   spends, never a verdict: it is a function of the closure alone, and only
   successes are remembered.
+  A closure whose body reads **no capture** is one value wherever it is
+  read, so the arena also keeps closed closures' values by their body and
+  global offset alone (`TmClo::closed_ident`; the environment's length too
+  when the body holds a substitution tail, which the length rewrites), and
+  the fold-class and transducer memos key a step or motive the same way
+  past its own binders (`TmClo::ident_under`). Both answer the same
+  question the closure key does, for every closure over that body: a
+  definition's unfolding closes its body's constants and its folds' steps
+  over each call's arguments afresh, and keyed by address they were
+  re-evaluated and re-probed once per call — on a native certificate piece
+  that was over a third of the evaluator's steps
+  (`issues/native-certificate-pieces-remaining-cost.md`). The test is the
+  bounds memo's footprint, the same reading conversion's closure identity
+  makes.
   Hot handles are kept compact: an environment closure captures only its
   persistent head and length, while whichever machine extends it supplies the
   already-owned query arena explicitly. Persistent cells remain two pointers.

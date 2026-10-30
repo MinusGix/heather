@@ -111,7 +111,12 @@ Since the packed vector literal (2026-10-29, `issues/packed-vector-literal-term.
 write-elf's byte literals enter the kernel as one word each: `cert/yes-pieces`
 fell from 607K to 489K steps, and the frozen fixture is that certificate. What
 a piece spends now is the encoder's `ofNat` at closed numerals and `Nat::add`
-in addresses: `issues/native-encoder-ofnat-cost.md`.
+in addresses: `issues/native-encoder-ofnat-cost.md`. `ofNat` became one word
+(489K → 327K), and then most of what was left turned out to be fold-class
+probes repeated at every unfolding, not `Nat::add`: keyed by what a closure
+reads, 327K → 199K steps, kernel 0.30 → 0.15 s on cloud
+(`issues/native-certificate-pieces-remaining-cost.md`). The rest is spread
+over the inductive representation, with no single site.
 
 ## T3. `write-elf`'s own reads (owner: `issues/native-tool-test-cold-certificate-rail.md`)
 

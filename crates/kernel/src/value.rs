@@ -298,10 +298,20 @@ pub struct ValueArena<'v> {
     term_cache: RefCell<ValueCache<*const TmClo<'v>, &'v Val<'v>>>,
     type_cache: RefCell<ValueCache<*const TyClo<'v>, &'v VTy<'v>>>,
     /// The probed class of each `Nat` fold step (`eval/probe.rs`), by the
-    /// step closure's identity. Closures live as long as the arena, so a
-    /// key is never reused; the class depends on nothing but the closure
-    /// and the definitions, which are fixed for one arena.
-    fold_classes: RefCell<HashMap<*const TmClo<'v>, Rc<algebra::FoldClass>>>,
+    /// step's [`TmClo::ident_under`] its two binders: the class depends on
+    /// nothing but what the step's body reads and the definitions, which are
+    /// fixed for one arena. Not the closure's address: every unfolding of a
+    /// definition whose body holds the fold allocates a fresh step closure
+    /// over that call's arguments, and a step that reads none of them was
+    /// re-probed once per call (on a native certificate piece, most of what
+    /// it spent on probes; issues/native-certificate-pieces-remaining-cost.md).
+    /// The key's addresses are kept alive by the arena's closures, as for
+    /// `transducers`'.
+    fold_classes: RefCell<PtrMap<CloId, Rc<algebra::FoldClass>>>,
+    /// Closed closures' values, by [`TmClo::closed_ident`]
+    /// ([`ValueArena::memo_closed`]); kept, like `term_cache`, for the
+    /// query, and alive by the same argument as `transducers`' keys.
+    closed_values: RefCell<PtrMap<CloId, &'v Val<'v>>>,
     /// Whether each element type satisfies the bit criterion, and with what
     /// injections (`docs/native-bitvector-values-design.md` §3.1), by the
     /// element closure's identity. Decided once per type, beside the fold
@@ -317,12 +327,15 @@ pub struct ValueArena<'v> {
     /// eliminations sharing a step but not a motive are two questions
     /// (`eval/transduce.rs`).
     ///
-    /// The key is the closures' [`TmClo::ident`], not their addresses: the
-    /// evaluator allocates a fresh closure cell at every `Term::ElimNat` it
-    /// evaluates, so an address key re-probes the same fold once per
-    /// occurrence — which for this class is a walk of the motive and one
-    /// application of the step per table entry. The identity's addresses are
-    /// a syntax `Rc` and an environment node, both of which the arena's own
+    /// The key is the closures' [`TmClo::ident_under`] their binders, not
+    /// their addresses: the evaluator allocates a fresh closure cell at
+    /// every `Term::ElimNat` it evaluates, so an address key re-probes the
+    /// same fold once per occurrence — which for this class is a walk of
+    /// the motive and one application of the step per table entry; the
+    /// environment's entries are left out when the step reads none of them,
+    /// as `take_low`'s and `drop_low`'s do not, each call's unfolding
+    /// otherwise being a new identity. The identity's addresses are a
+    /// syntax `Rc` and an environment node, both of which the arena's own
     /// closures keep alive for as long as this map lives, so neither can be
     /// freed and reused underneath it. A [`PtrMap`], because the lookup sits
     /// on every opaque `Nat` fold's step: the default hasher over five words
@@ -761,7 +774,8 @@ impl<'v> ValueArena<'v> {
             metrics: None,
             term_cache: RefCell::new(ValueCache::new()),
             type_cache: RefCell::new(ValueCache::new()),
-            fold_classes: RefCell::new(HashMap::new()),
+            fold_classes: RefCell::new(PtrMap::default()),
+            closed_values: RefCell::new(PtrMap::default()),
             bit_types: RefCell::new(HashMap::new()),
             bit_tys: std::cell::OnceCell::new(),
             transducers: RefCell::new(PtrMap::default()),
@@ -790,7 +804,8 @@ impl<'v> ValueArena<'v> {
                 metrics: Some(metrics),
                 term_cache: RefCell::new(ValueCache::new()),
                 type_cache: RefCell::new(ValueCache::new()),
-                fold_classes: RefCell::new(HashMap::new()),
+                fold_classes: RefCell::new(PtrMap::default()),
+                closed_values: RefCell::new(PtrMap::default()),
                 bit_types: RefCell::new(HashMap::new()),
                 bit_tys: std::cell::OnceCell::new(),
                 transducers: RefCell::new(PtrMap::default()),
@@ -882,11 +897,11 @@ impl<'v> ValueArena<'v> {
     /// The cached value for `clo`, if it is currently retained by this
     /// query's bounded cache.
     pub fn fold_class(&self, step: &'v TmClo<'v>) -> Option<Rc<algebra::FoldClass>> {
-        self.fold_classes.borrow().get(&(step as *const TmClo<'v>)).cloned()
+        self.fold_classes.borrow().get(&step.ident_under(2)).cloned()
     }
 
     pub fn cache_fold_class(&self, step: &'v TmClo<'v>, class: Rc<algebra::FoldClass>) {
-        self.fold_classes.borrow_mut().insert(step as *const TmClo<'v>, class);
+        self.fold_classes.borrow_mut().insert(step.ident_under(2), class);
     }
 
     /// The decided bit criterion for `elem`, if it has been decided; the
@@ -909,7 +924,7 @@ impl<'v> ValueArena<'v> {
         step: &'v TmClo<'v>,
         motive: &'v TyClo<'v>,
     ) -> Option<Option<Rc<Transducer>>> {
-        self.transducers.borrow().get(&(step.ident(), motive.ident())).cloned()
+        self.transducers.borrow().get(&(step.ident_under(2), motive.ident_under(1))).cloned()
     }
 
     pub fn cache_transducer(
@@ -918,7 +933,7 @@ impl<'v> ValueArena<'v> {
         motive: &'v TyClo<'v>,
         class: Option<Rc<Transducer>>,
     ) {
-        self.transducers.borrow_mut().insert((step.ident(), motive.ident()), class);
+        self.transducers.borrow_mut().insert((step.ident_under(2), motive.ident_under(1)), class);
     }
 
     /// `clo` glues the sealed proof at absolute Ψ index `at`.
@@ -950,6 +965,32 @@ impl<'v> ValueArena<'v> {
                 }
                 found
             }
+        }
+    }
+
+    /// The value of a closure whose body reads nothing of its environment
+    /// ([`TmClo::closed_ident`]), forced under any other closure over the
+    /// same body: such a body denotes one value wherever it is read, so it
+    /// is evaluated once per query. Without it, a constant written inside a
+    /// definition — `Nat::pow(2, 32)` in `near_rel`, an opcode's
+    /// `ofNat(0x89)` — is recomputed at every unfolding, the closure being
+    /// allocated afresh over each call's arguments. A bare variable is never
+    /// closed, and is skipped before the footprint is asked.
+    pub fn memo_closed(&self, clo: &'v TmClo<'v>) -> Option<&'v Val<'v>> {
+        let key = Self::closed_key(clo)?;
+        self.closed_values.borrow().get(&key).copied()
+    }
+
+    pub fn cache_closed(&self, clo: &'v TmClo<'v>, value: &'v Val<'v>) {
+        if let Some(key) = Self::closed_key(clo) {
+            self.closed_values.borrow_mut().entry(key).or_insert(value);
+        }
+    }
+
+    fn closed_key(clo: &TmClo<'v>) -> Option<CloId> {
+        match clo {
+            TmClo::Syn { body, .. } if !matches!(&**body, Term::Var(_)) => clo.closed_ident(0),
+            _ => None,
         }
     }
 
@@ -1102,6 +1143,31 @@ impl<'v> TmClo<'v> {
             _ => (self as *const TmClo<'v> as usize, usize::MAX, u32::MAX, u32::MAX),
         }
     }
+
+    /// [`TmClo::ident`] of a closure its user applies to `pending`
+    /// arguments, as an eliminator applies its step: when the body reads no
+    /// capture past those, the environment's entries are not part of the
+    /// identity, and two closures over the same body differing only there
+    /// are one ([`TmClo::closed_ident`]).
+    pub fn ident_under(&self, pending: u32) -> CloId {
+        self.closed_ident(pending).unwrap_or_else(|| self.ident())
+    }
+
+    /// The identity of a syntactic closure whose body reads no capture past
+    /// its `pending` binders: the body and the global offset it is read at,
+    /// whatever the entries. The length stays in it when the body holds a
+    /// substitution tail, which is rewritten by the whole environment's
+    /// length (`bounds.rs`; conversion's `env_identity` reads closures the
+    /// same way). `None` for a body that reads a capture, and for anything
+    /// that is not syntax.
+    pub fn closed_ident(&self, pending: u32) -> Option<CloId> {
+        let TmClo::Syn { env, body } = self else { return None };
+        let used = crate::bounds::term_local_use(body);
+        (used.bound <= pending).then(|| {
+            let len = if used.has_tail { env.len() } else { 0 };
+            (Rc::as_ptr(body) as usize, 0, len, env.gshift())
+        })
+    }
 }
 
 /// See [`TmClo::ident`].
@@ -1177,6 +1243,18 @@ impl<'v> TyClo<'v> {
             }
             _ => (self as *const TyClo<'v> as usize, usize::MAX, u32::MAX, u32::MAX),
         }
+    }
+
+    /// See [`TmClo::ident_under`].
+    pub fn ident_under(&self, pending: u32) -> CloId {
+        if let TyClo::Syn { env, body } = self {
+            let used = crate::bounds::type_local_use(body);
+            if used.bound <= pending {
+                let len = if used.has_tail { env.len() } else { 0 };
+                return (Rc::as_ptr(body) as usize, 0, len, env.gshift());
+            }
+        }
+        self.ident()
     }
 
     pub fn as_syn(&self) -> Option<(&Env<'v>, &Rc<Type>)> {
