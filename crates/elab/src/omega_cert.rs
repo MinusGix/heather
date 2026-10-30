@@ -1300,12 +1300,17 @@ fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> O
     if !is_field_read(elab, tm) {
         return None;
     }
-    let reduct = Rc::new(elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm).ok()?);
-    if matches!(&*reduct, Term::NatLit(_)) {
-        return Some(reduct);
-    }
-    if let Some(shaped) = named_arithmetic_shape(elab, cx, &reduct, &[], depth) {
-        return Some(shaped);
+    // A read at closed arguments whose field computes past the budget has no
+    // weak head here; it is still read as put, below
+    // (issues/omega-closed-field-value-atomised.md).
+    if let Ok(reduct) = elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm) {
+        let reduct = Rc::new(reduct);
+        if matches!(&*reduct, Term::NatLit(_)) {
+            return Some(reduct);
+        }
+        if let Some(shaped) = named_arithmetic_shape(elab, cx, &reduct, &[], depth) {
+            return Some(shaped);
+        }
     }
     let field = field_as_put(elab, cx, tm)?;
     named_arithmetic_shape(elab, cx, &field, &[], depth).or_else(|| {
