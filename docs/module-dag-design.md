@@ -345,16 +345,32 @@ per-binding store's own rule: no check unsealed a proof, and no body went to
 the deferred pool (whose verdict the replay does not wait for). A replay
 that was not clean records nothing and is rechecked every time, as before.
 
-Only a replay over the module's **own canonical world** is vouched for: the
-cache hit of the module itself, and an import loaded where the map is the
-identity (`over_prefix`). A moved image (§4) keeps the per-binding path,
-because those verdicts key on the moved terms and so do not have to trust
-`relocate`; vouching for a moved replay by its source image would.
+A replay over the module's **own canonical world** (the cache hit of the
+module itself, and an import loaded where the map is the identity,
+`over_prefix`) is keyed as above. A **moved** replay (§4) is keyed by the
+same parts plus the world the stored positions were counted in: the
+module's canonical world, by name and identity, beside the world it is
+moved into. The move is a function of those two orders and the modules'
+binding counts, and the decode a function of the bytes and the build, so
+the key fixes the moved delta and the Ψ it is replayed over; the replay
+that recorded the verdict rechecked exactly those terms, binding by
+binding. Nothing about `relocate` is trusted beyond determinism: a wrong
+move would have failed that first recheck (or passed it as the terms it
+actually produced, which are the ones the next replay produces again).
+All three places that move an image key its replay this way
+(`load_into`, `into_process`, `hit_into_process`). Until 2026-10-30 moved
+replays kept the per-binding path, and on a tactic-test module they were
+the Merkle walk that was left.
 
 The cost it removes is the hashing, which grows with the replayed
-extension; decoding and the replay's other rechecks (statement and
-registry checks that are not verdicts) stay. On a tactic-test module whose
-closure is large and mostly canonical, a warm check is about a sixth
-faster, the Merkle walk about halved (what is left is its moved imports);
-on a module whose replay is dominated by decoding the change is lost in
-the noise. The `ok` line says `(N vouched for whole)`.
+extension; decoding, the move itself, and the replay's other rechecks
+(statement and registry checks that are not verdicts) stay. On a
+tactic-test module whose closure is large, vouching for canonical replays
+made a warm check about a sixth faster and halved the Merkle walk;
+vouching for moved ones took the rest of the walk and about another sixth,
+and no declaration is asked about one at a time. What a warm check of such
+a module is left with is mostly the move (`image_relocate_ns`, which times
+these moves as well as the early cutoff's), then decoding
+(`issues/warm-replay-relocate-cost.md`). On a module whose replay is
+dominated by decoding the change is lost in the noise. The `ok` line says
+`(N vouched for whole)`.
