@@ -5297,7 +5297,7 @@ impl Elaborator {
                     Some(dec) => self.varying_params(cx, arms, dec),
                     None => Vec::new(),
                 };
-                for p in self.refined_hypotheses(cx, arms, &scrut_t, dec) {
+                for p in self.refined_hypotheses(cx, arms, &scrut_t, dec, expected) {
                     if !positions.contains(&p) {
                         positions.push(p);
                     }
