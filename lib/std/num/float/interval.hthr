@@ -67,7 +67,7 @@ theorem Interval::bnd_has_of({lo, hi: Dyadic}, {L, H, x: Rat}, el: lo.rat() ≈ 
 }
 
 // Rounding the bounds outward keeps what the box held.
-theorem Interval::widen_has({lo, hi: Dyadic}, p: Nat, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(lo.down(p), hi.up(p)).Has(x) {
+theorem Interval::round_out_has({lo, hi: Dyadic}, p: Nat, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(lo.down(p), hi.up(p)).Has(x) {
     And(Rat::le_trans(x := lo.down(p).rat(), y := lo.rat(), z := x, hxy := lo.down_le(p), hyz := h.left),
         Rat::le_trans(x := x, y := hi.rat(), z := hi.up(p).rat(), hxy := h.right, hyz := hi.le_up(p)))
 }
@@ -94,7 +94,7 @@ fn Interval::add(self I, J: Interval, p: Nat) → Interval {
 theorem Interval::add_bnd_has(a, b, c, d: Dyadic, p: Nat, {x, y: Rat}, hx: Bnd(a, b).Has(x), hy: Bnd(c, d).Has(y)):
     Bnd((a + c).down(p), (b + d).up(p)).Has(x + y)
 {
-    Interval::widen_has(p, Interval::bnd_has_of(a.rat_add(c), b.rat_add(d), Rat::add_le_mono(hx.left, hy.left), Rat::add_le_mono(hx.right, hy.right)))
+    Interval::round_out_has(p, Interval::bnd_has_of(a.rat_add(c), b.rat_add(d), Rat::add_le_mono(hx.left, hy.left), Rat::add_le_mono(hx.right, hy.right)))
 }
 
 theorem Interval::add_has(I, J: Interval, p: Nat, {x, y: Rat}, hx: I.Has(x), hy: J.Has(y)): I.add(J, p).Has(x + y) {
@@ -192,8 +192,9 @@ theorem Interval::mul_box_has(a, b, c, d: Dyadic, p: Nat, {x, y: Rat}, hx: Bnd(a
         Inl(ay) => Inl(Rat::le_trans(ay, Interval::corner_hi(a, c, d, a.rat() * y, ba.right))),
         Inr(by) => Inr(Rat::le_trans(by, Interval::corner_hi(b, c, d, b.rat() * y, bb.right))),
     });
+    // Typed, not passed inline: issues/and-at-match-predicate-implicit-level-mismatch.md.
     let both: (Bnd(lo, hi).Has(t)) = And(low, high);
-    Interval::widen_has(p, both)
+    Interval::round_out_has(p, both)
 }
 
 theorem Interval::mul_pos_has(a, b, c, d: Dyadic, p: Nat, ha: 0 <= a, hc: 0 <= c, {x, y: Rat}, hx: Bnd(a, b).Has(x), hy: Bnd(c, d).Has(y)):
@@ -201,7 +202,7 @@ theorem Interval::mul_pos_has(a, b, c, d: Dyadic, p: Nat, ha: 0 <= a, hc: 0 <= c
 {
     let ha0 = Dyadic::rat_nonneg(ha);
     let hc0 = Dyadic::rat_nonneg(hc);
-    Interval::widen_has(p, Interval::bnd_has_of(a.rat_mul(c), b.rat_mul(d), Rat::mul_le_mul(hx.left, hy.left, ha0, hc0),
+    Interval::round_out_has(p, Interval::bnd_has_of(a.rat_mul(c), b.rat_mul(d), Rat::mul_le_mul(hx.left, hy.left, ha0, hc0),
         Rat::mul_le_mul(hx.right, hy.right, Rat::le_trans(ha0, hx.left), Rat::le_trans(hc0, hy.left))))
 }
 
