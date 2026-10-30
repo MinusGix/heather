@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 
 use heather_cache::merkle::{self, Hash};
 use heather_cache::module_image::{
-    ImageFreshness, ImageRefusal, ModuleCacheKey, ModuleImageCache, SemanticsIdentity, SourceKey,
+    ImageFreshness, ImageRefusal, LoadedModule, ModuleCacheKey, ModuleImageCache, SemanticsIdentity, SourceKey,
     WorldRecord, WorldReference,
 };
 use heather_cache::sha256::Sha256;
@@ -114,6 +114,11 @@ pub struct ModuleOutcome {
     /// Declarations elaborated because `--only` named them
     /// (`docs/check-only-design.md`); such a module is not published.
     pub forced_items: usize,
+    /// Under [`SemanticSession::with_expectations`]: declarations refused as
+    /// the module's `expect-error` directives say, the module otherwise
+    /// checking. Its errors are then already judged and empty. Zero when the
+    /// caller is still to judge `errors` (`docs/module-dag-design.md` §11).
+    pub expected_refusals: usize,
     pub notices: Vec<CacheNotice>,
 }
 
@@ -248,6 +253,10 @@ pub struct SemanticSession {
     only: BTreeMap<String, BTreeSet<String>>,
     /// The `--only` names the passes met, `module::name`.
     only_met: BTreeSet<String>,
+    /// `--expectations`: a module whose refusals all match its directives is
+    /// a module that checked, and is published with them
+    /// (`docs/module-dag-design.md` §11).
+    expectations: bool,
 }
 
 /// `--only` asked for a module's previous image and there was none: the
@@ -313,6 +322,7 @@ impl SemanticSession {
             audit: std::env::var_os("HEATHER_RELOCATION_AUDIT").map(PathBuf::from),
             only: BTreeMap::new(),
             only_met: BTreeSet::new(),
+            expectations: false,
         }
     }
 
@@ -331,6 +341,23 @@ impl SemanticSession {
     pub fn without_process_world(mut self) -> Self {
         self.process_world = false;
         self
+    }
+
+    /// Judge each module's errors against its `expect-error` directives
+    /// (`crate::expect`) here rather than in the caller, so that a module
+    /// refused exactly as it says has an image like any module that checked.
+    /// Such an image replays only for a session that judges, and only when
+    /// this build wrote it: a refusal is the elaborator's verdict, which no
+    /// kernel recheck can reproduce, so the stale lanes elaborate it again.
+    pub fn with_expectations(mut self) -> Self {
+        self.expectations = true;
+        self
+    }
+
+    /// Whether a stored image may stand for its module here: one that holds
+    /// refusals only for a session that judges them, from this build.
+    fn replayable(&self, loaded: &LoadedModule) -> bool {
+        loaded.refusals == 0 || (self.expectations && loaded.stale.is_none())
     }
 
     /// The `--only` names (`module::name`) no pass met — the ones to report
@@ -427,6 +454,7 @@ impl SemanticSession {
                 replayed: false,
                 replayed_items: 0,
                 forced_items: 0,
+                expected_refusals: 0,
                 notices: Vec::new(),
             };
         }
@@ -523,30 +551,7 @@ impl SemanticSession {
     /// The canonical order of the closure of a module with these imports
     /// (`docs/module-dag-design.md` §2), from the finished modules' own.
     fn canon_of(&self, imports: &[String]) -> Canon {
-        let Some(big) = imports
-            .iter()
-            .max_by(|a, b| self.done[*a].canon.order.len().cmp(&self.done[*b].canon.order.len()).then(b.cmp(a)))
-        else {
-            return Canon::default();
-        };
-        let mut order: Vec<String> = (*self.done[big].canon.order).clone();
-        order.push(big.clone());
-        let spine = order.len();
-        let mut placed: HashSet<String> = order.iter().cloned().collect();
-        fn visit(done: &HashMap<String, Finished>, m: &str, placed: &mut HashSet<String>, order: &mut Vec<String>) {
-            if placed.contains(m) {
-                return;
-            }
-            for d in &done[m].imports {
-                visit(done, d, placed, order);
-            }
-            placed.insert(m.to_string());
-            order.push(m.to_string());
-        }
-        for m in imports {
-            visit(&self.done, m, &mut placed, &mut order);
-        }
-        Canon { order: Rc::new(order), spine }
+        canon_over(imports, &|m| &self.done[m].canon.order, &|m| &self.done[m].imports)
     }
 
     /// Ψ length of the world `order` (after the prelude).
@@ -673,7 +678,7 @@ impl SemanticSession {
         let psi = placeholder(self.world_len(&canon.order));
         let loaded = stats::timed(stats::Timer::ImageDecode, || images.load(key, psi, module.src.len(), self.freshness))
             .ok()??;
-        if loaded.delta.dependencies() != dependencies {
+        if loaded.delta.dependencies() != dependencies || !self.replayable(&loaded) {
             return None;
         }
         let start = elab.psi().bindings.len();
@@ -718,6 +723,7 @@ impl SemanticSession {
             replayed: true,
             replayed_items: 0,
             forced_items: 0,
+            expected_refusals: loaded.refusals,
             notices,
         })
     }
@@ -766,11 +772,11 @@ impl SemanticSession {
             elab.take_omega_reports();
             return match checked {
                 Ok(delta) => (
-                    ModuleOutcome { errors: Vec::new(), warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, notices },
+                    ModuleOutcome { errors: Vec::new(), warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, expected_refusals: 0, notices },
                     Some(delta),
                 ),
                 Err(errors) => (
-                    ModuleOutcome { errors, warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, notices },
+                    ModuleOutcome { errors, warnings: elab.take_warnings(), replayed: false, replayed_items: 0, forced_items: 0, expected_refusals: 0, notices },
                     None,
                 ),
             };
@@ -794,6 +800,8 @@ impl SemanticSession {
             let decoded = stats::timed(stats::Timer::ImageDecode, || {
                 images.load(key, elab.psi().clone(), module.src.len(), self.freshness)
             });
+            // An image of refusals this session may not stand on is no image.
+            let decoded = decoded.map(|loaded| loaded.filter(|l| self.replayable(l)));
             match decoded {
                 Ok(Some(loaded)) => match stats::timed(stats::Timer::ImageRecheck, || {
                     elab.replay_module_delta(&loaded.delta, &dependencies)
@@ -808,6 +816,7 @@ impl SemanticSession {
                                 replayed: true,
                                 replayed_items: 0,
                                 forced_items: 0,
+                                expected_refusals: loaded.refusals,
                                 notices,
                             },
                             Some(loaded.delta),
@@ -839,6 +848,10 @@ impl SemanticSession {
                 }),
             }
             break;
+        }
+
+        if self.expectations && crate::expect::count(&module.src) > 0 {
+            return self.check_refusing(elab, module, key, dependencies, notices);
         }
 
         // A miss. What the world under the module offers it, for moving an
@@ -892,6 +905,7 @@ impl SemanticSession {
                                         replayed: true,
                                         replayed_items: 0,
                                         forced_items: 0,
+                                        expected_refusals: 0,
                                         notices,
                                     },
                                     Some(delta),
@@ -984,6 +998,7 @@ impl SemanticSession {
                         replayed: false,
                         replayed_items: 0,
                         forced_items: 0,
+                        expected_refusals: 0,
                         notices,
                     },
                     None,
@@ -1014,7 +1029,66 @@ impl SemanticSession {
                 error: error.to_string(),
             });
         }
-        (ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, forced_items: 0, notices }, Some(delta))
+        (ModuleOutcome { errors: Vec::new(), warnings, replayed: false, replayed_items, forced_items: 0, expected_refusals: 0, notices }, Some(delta))
+    }
+
+    /// A miss of a module with `expect-error` directives, in a session that
+    /// judges them (`docs/module-dag-design.md` §11): elaborated whole, its
+    /// errors judged here, and published with its refusal count when every
+    /// refusal is the one its directive names and nothing else failed. A
+    /// module that does not meet its directives is an ordinary failure, its
+    /// raw errors left for the caller to judge and report. Never sliced from
+    /// a previous image or moved from another world: a refusal is not
+    /// something either can carry over.
+    fn check_refusing(
+        &mut self,
+        elab: &mut Elaborator,
+        module: &Module,
+        key: ModuleCacheKey,
+        dependencies: ModuleDependencyIdentity,
+        mut notices: Vec<CacheNotice>,
+    ) -> (ModuleOutcome, Option<ModuleDelta>) {
+        let (delta, errors) = elab.check_module_delta_refusing(&module.name, &module.src, dependencies);
+        elab.take_omega_reports();
+        let warnings = elab.take_warnings();
+        let refusals = if errors.is_empty() {
+            0
+        } else {
+            let verdict = crate::expect::judge(&module.src, errors.clone());
+            if !verdict.errors.is_empty() {
+                let outcome = ModuleOutcome {
+                    errors,
+                    warnings,
+                    replayed: false,
+                    replayed_items: 0,
+                    forced_items: 0,
+                    expected_refusals: 0,
+                    notices,
+                };
+                return (outcome, None);
+            }
+            verdict.matched
+        };
+        let images = self.images.as_ref().expect("usable images have a cache");
+        if let Err(error) = stats::timed(stats::Timer::ImagePublish, || {
+            images.publish_refused(key, &delta, &warnings, SemanticsIdentity::current(), None, refusals)
+        }) {
+            notices.push(CacheNotice {
+                module: module.name.clone(),
+                kind: CacheNoticeKind::PublishFailed,
+                error: error.to_string(),
+            });
+        }
+        let outcome = ModuleOutcome {
+            errors: Vec::new(),
+            warnings,
+            replayed: false,
+            replayed_items: 0,
+            forced_items: 0,
+            expected_refusals: refusals,
+            notices,
+        };
+        (outcome, Some(delta))
     }
 
     /// The world under a module whose world is `canon`, as the early cutoff
@@ -1094,6 +1168,11 @@ impl SemanticSession {
             Ok(None) => return Relocation::NoCandidate,
             Err(error) => return Relocation::Refused(format!("candidate unusable: {error}")),
         };
+        // A refusal is the elaborator's verdict: moving it to another world
+        // would assert the elaborator refuses there too.
+        if loaded.refusals > 0 {
+            return Relocation::NoCandidate;
+        }
         let Some(record) = &loaded.world else {
             return Relocation::NoCandidate;
         };
@@ -1195,6 +1274,7 @@ impl SemanticSession {
                     replayed: false,
                     replayed_items: 0,
                     forced_items: 0,
+                    expected_refusals: 0,
                     notices,
                 },
                 None,
@@ -1227,6 +1307,7 @@ impl SemanticSession {
                         replayed: false,
                         replayed_items: report.replayed,
                         forced_items: report.forced,
+                        expected_refusals: 0,
                         notices,
                     },
                     Some(delta),
@@ -1239,6 +1320,7 @@ impl SemanticSession {
                     replayed: false,
                     replayed_items: 0,
                     forced_items: 0,
+                    expected_refusals: 0,
                     notices,
                 },
                 None,
@@ -1309,6 +1391,46 @@ pub fn written_imports(src: &str) -> Vec<String> {
     }
 }
 
+/// The canonical order of the closure of a module with these imports
+/// (`docs/module-dag-design.md` §2): the largest import's order and that
+/// import (the least name on a tie), then the rest of the closure depth
+/// first over the other imports in their sorted order. `order_of` and
+/// `imports_of` give each module below it its own order and its sorted
+/// imports. The session and the build planner share it, so they agree on
+/// every key.
+fn canon_over<'a>(
+    imports: &[String],
+    order_of: &dyn Fn(&str) -> &'a Rc<Vec<String>>,
+    imports_of: &dyn Fn(&str) -> &'a [String],
+) -> Canon {
+    let Some(big) = imports.iter().max_by(|a, b| order_of(a).len().cmp(&order_of(b).len()).then(b.cmp(a))) else {
+        return Canon::default();
+    };
+    let mut order: Vec<String> = (**order_of(big)).clone();
+    order.push(big.clone());
+    let spine = order.len();
+    let mut placed: HashSet<String> = order.iter().cloned().collect();
+    fn visit<'a>(
+        imports_of: &dyn Fn(&str) -> &'a [String],
+        m: &str,
+        placed: &mut HashSet<String>,
+        order: &mut Vec<String>,
+    ) {
+        if placed.contains(m) {
+            return;
+        }
+        for d in imports_of(m) {
+            visit(imports_of, d, placed, order);
+        }
+        placed.insert(m.to_string());
+        order.push(m.to_string());
+    }
+    for m in imports {
+        visit(imports_of, m, &mut placed, &mut order);
+    }
+    Canon { order: Rc::new(order), spine }
+}
+
 fn internal_failure(module: &str, why: String) -> ModuleOutcome {
     ModuleOutcome {
         errors: vec![ElabError::Elab {
@@ -1319,6 +1441,7 @@ fn internal_failure(module: &str, why: String) -> ModuleOutcome {
         replayed: false,
         replayed_items: 0,
         forced_items: 0,
+        expected_refusals: 0,
         notices: Vec::new(),
     }
 }
@@ -1462,4 +1585,101 @@ impl WorldModule {
 fn put_str(h: &mut Sha256, s: &str) {
     h.update(&(s.len() as u64).to_le_bytes());
     h.update(s.as_bytes());
+}
+
+/// Where a module stands in a [`BuildPlan`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildState {
+    /// Its image is in the store.
+    Built,
+    /// Every module of its closure is built and it is not: checking it now
+    /// elaborates it over images.
+    Ready,
+    /// Some module of its closure is not built yet.
+    Waiting,
+}
+
+/// The modules of a load that have no image yet, found without loading
+/// anything (`docs/module-dag-design.md` §12): a module's key is its source,
+/// its lint profile and the interface hashes of its closure's images, which
+/// their headers record, so the keys can be chained up the import graph by
+/// reading headers. A scheduler checks the ready modules one process each and
+/// refreshes the plan as they land.
+pub struct BuildPlan {
+    images: ModuleImageCache,
+    freshness: ImageFreshness,
+    modules: Vec<Module>,
+    imports: Vec<Vec<String>>,
+    canon: Vec<Canon>,
+    at: HashMap<String, usize>,
+    identity: Vec<Option<Hash32>>,
+    state: Vec<BuildState>,
+}
+
+type Hash32 = [u8; 32];
+
+impl BuildPlan {
+    /// `modules` in the loader's order (every import before its importer).
+    pub fn new(cache_dir: PathBuf, freshness: ImageFreshness, modules: Vec<Module>) -> Self {
+        let at: HashMap<String, usize> = modules.iter().enumerate().map(|(i, m)| (m.name.clone(), i)).collect();
+        let mut imports: Vec<Vec<String>> = Vec::with_capacity(modules.len());
+        let mut canon: Vec<Canon> = Vec::with_capacity(modules.len());
+        for m in &modules {
+            let mut written: Vec<String> = written_imports(&m.src).into_iter().filter(|d| at.contains_key(d)).collect();
+            written.sort();
+            written.dedup();
+            let c = canon_over(&written, &|d| &canon[at[d]].order, &|d| &imports[at[d]]);
+            imports.push(written);
+            canon.push(c);
+        }
+        let n = modules.len();
+        let mut plan = Self {
+            images: ModuleImageCache::new(cache_dir),
+            freshness,
+            modules,
+            imports,
+            canon,
+            at,
+            identity: vec![None; n],
+            state: vec![BuildState::Waiting; n],
+        };
+        plan.refresh();
+        plan
+    }
+
+    /// Read the headers of the modules not yet known built, in order.
+    pub fn refresh(&mut self) {
+        for i in 0..self.modules.len() {
+            if self.state[i] == BuildState::Built {
+                continue;
+            }
+            let ids: Option<Vec<Hash32>> = self.canon[i].order.iter().map(|d| self.identity[self.at[d]]).collect();
+            let Some(ids) = ids else {
+                self.state[i] = BuildState::Waiting;
+                continue;
+            };
+            let m = &self.modules[i];
+            let key = ModuleCacheKey::for_source(&m.name, &m.src, &ModuleDependencyIdentity::new(ids), m.lint_profile());
+            match self.images.recorded_interface(key, self.freshness) {
+                Some(id) => {
+                    self.identity[i] = Some(id);
+                    self.state[i] = BuildState::Built;
+                }
+                None => self.state[i] = BuildState::Ready,
+            }
+        }
+    }
+
+    pub fn modules(&self) -> &[Module] {
+        &self.modules
+    }
+
+    pub fn state(&self, i: usize) -> BuildState {
+        self.state[i]
+    }
+
+    /// The modules `i` imports, as indices.
+    pub fn imports(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
+        self.imports[i].iter().map(|d| self.at[d])
+    }
 }

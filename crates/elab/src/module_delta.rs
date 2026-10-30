@@ -1045,6 +1045,35 @@ impl Elaborator {
         Ok(self.delta_from_journal(module, dependencies, dependency_psi, journal))
     }
 
+    /// [`Self::check_module_delta`], keeping the delta of what checked when
+    /// some declarations were refused: a refused declaration registers
+    /// nothing, so the journal holds exactly the module's other items. For a
+    /// module whose refusals are its point (`heather check --expectations`),
+    /// whose caller judges `errors` and decides whether the delta stands
+    /// for the module (`docs/module-dag-design.md` §11).
+    pub fn check_module_delta_refusing(
+        &mut self,
+        module: &str,
+        src: &str,
+        dependencies: ModuleDependencyIdentity,
+    ) -> (ModuleDelta, Vec<ElabError>) {
+        assert!(
+            self.module_journal.borrow().is_none(),
+            "module delta extraction is not nested"
+        );
+        let dependency_psi = (*self.psi).clone();
+        let base_len = dependency_psi.bindings.len();
+        *self.module_journal.borrow_mut() =
+            Some(ModuleJournal::new(base_len, self.warnings.borrow().len()));
+        let errs = self.check_module_source_inner(module, src);
+        let journal = self
+            .module_journal
+            .borrow_mut()
+            .take()
+            .expect("module journal was installed");
+        (self.delta_from_journal(module, dependencies, dependency_psi, journal), errs)
+    }
+
     /// Recheck the stored suffix, install metadata into a private candidate,
     /// and publish the candidate only after every operation succeeds.
     pub fn replay_module_delta(

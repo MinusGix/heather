@@ -1,6 +1,6 @@
 # Building library modules in dependency order
 
-Status: built (§9), measured (§10).
+Status: built (§9, §11, §12), measured (§10).
 Issues: `issues/module-dag-build.md`, `issues/nominal-tags-from-declaration-identity.md`.
 Supersedes `docs/library-world-design.md` §2 (the world).
 
@@ -179,42 +179,38 @@ binding are content hashes and are cached by binding.
 
 ## 7. The gate
 
-With closure keys the gate's children no longer have to follow one order.
-The gate still runs three children at a time, one folder each: the library's
-folders first and `lib/_tests`'s after, each part in `World::folders` order,
-then `lib/native` and `lib/_tests/native`. Inside a child, `heather check` walks its modules in
-a topological order of the written imports and, among the modules whose
-imports it has finished, takes the first that no other process is building
-(`ModuleImageStore::being_built`, a non-blocking try of the build lock). Only
-when every ready module is being built elsewhere does it take one anyway and
-block on its lock. The single-flight lock still makes every module an
-elaboration once in the whole gate.
+The gate first builds, then checks (§12). `heather check --build-jobs 3
+--build-only lib` elaborates every module that has no image, each in a
+`heather check` of its own, three at a time, a module once its closure's
+images exist and the longest remaining chain first. Then three children at a
+time check one folder each, in `World::folders` order, over a store that
+holds every module that can be built: they replay, and report each module's
+warnings and matched refusals, and the errors of a module the build step
+could not build, which they elaborate again to say why.
 
-What bounds the gate is then the import graph's critical path (the longest
-chain of elaboration cost through imports, which is the native compile
-chain), not the sum.
+What bounds the cold gate is then the import graph's critical path (the
+longest chain of elaboration cost through imports, which is the native
+compile chain) and the width, not the sum, and a module's CPU rail covers
+that module and the replay of its closure, never another module's
+elaboration.
 
-The folder order matters for the rail, not for the sum. A child builds
-whatever of its closure no other child has built yet, under its own 300 s
-CPU rail, so who builds a shared module is now a race. With the old order a
-cold suite started `lib/_tests/std/tactic` beside `lib/std/tactic`; the test
-child built half the tactic library and died at the rail, though alone and
-cold it costs the same CPU on both designs. A test folder's closure is mostly
-library, and its own modules are its heaviest, so starting the test folders
-after the library's keeps each test child paying for its own modules.
-`lib/native`'s own modules alone come near the rail
-(`issues/native-gate-child-cold-at-rail.md`); started early, it lost the
-same race in a PR-lane run, so it goes last, when the rest of its closure is
-built, as it did in the chain. In a simulation over measured per-module
-costs that costs the cold gate a few percent against library-first alone,
-and waiting on whole folders instead (a folder starts when the folders of
-its closure finish) costs about two fifths, because it gives up the
-module-level overlap; largest-first was worse for the rail.
+An earlier form of this design let each folder child build whatever of its
+closure no child had built yet, setting aside a module another process held
+the build lock of (`ModuleImageStore::being_built`; `heather check` still
+does this within one process). It was shorter cold, because no module's
+closure was replayed by a process of its own, but who built a shared module
+was a race, and the race decided which child's rail paid for it: a cold
+suite killed `lib/_tests/std/tactic`, which had built half the tactic
+library beside `lib/std/tactic`'s child, and a PR-lane run killed
+`lib/native` the same way. Ordering the folders (library, then tests, then
+native) kept both under the rail on the box, but a heavy folder could still
+lose the race.
 
 A module that fails no longer turns images off for the rest of the process.
 Its dependents are refused with a note naming it ("its import closure holds
 `X`, which did not check"), and modules that do not import it go on as
-before.
+before. The build step leaves a failed module's dependents unbuilt, and the
+folder check reports it.
 
 ## 8. Memory
 
@@ -258,8 +254,70 @@ build profile. Shapes, not numbers (`CLAUDE.md`):
   the chain kept apart. It stays well inside the 6 GiB per-process rail.
 - On master the `lib/_tests/std/algebra` child died at the CPU rail cold,
   waiting behind the chain; under closure keys it checks.
-- **Warm** (every image present) CPU is unchanged; it is dominated by the
-  refusal-test modules, which are re-elaborated every run.
+- **Warm** (every image present) CPU was unchanged by §2–§6: it was
+  dominated by the refusal-test modules, which were re-elaborated every run.
+  With their images (§11) the warm gate takes about half the wall time and
+  about two fifths less CPU.
+- **Building ahead** (§12): the cold gate is about a fifth longer than the
+  racing children's and about a quarter more CPU, from the build processes'
+  closure replays, and still about a third shorter than the chain; every
+  child stayed far under its rail.
 - The sequential elaboration sum over the library is several times the
   critical path, so with three workers the gate is now width-bound, not
   chain-bound; more width would help only as far as memory allows (§8).
+
+## 11. Expected refusals have images
+
+A `lib/_tests` module states refusals as `// expect-error` directives
+(`crates/cli/src/expect.rs`). Before, its refused declarations were errors
+to the session, so the module never had an image, was elaborated again on
+every run, and stopped anything that imported it. Most of a warm gate was
+those modules.
+
+Under `--expectations` the session judges a module with directives itself
+(`SemanticSession::with_expectations`). It elaborates it whole
+(`Elaborator::check_module_delta_refusing`, which keeps the delta of what
+checked: a refused declaration registers nothing), judges the errors
+against the directives, and when every refusal is the one its directive
+names and nothing else failed, publishes the delta with the count of
+matched refusals in the image header. The module then counts as checked,
+and its dependents are checked over what did check. A module that misses its
+directives is an ordinary failure and has no image.
+
+A refusal is the elaborator's verdict, which no kernel recheck can
+reproduce, so such an image is replayed only
+
+- by a session that judges directives: a plain `heather check` of the same
+  module elaborates it and fails, as before;
+- when this build wrote it: the stale lanes elaborate it again, since an
+  older compiler's refusal says nothing about this one's;
+
+and it is never moved to another world (the early cutoff) or sliced from
+(the declaration-slice replay), both of which would assert the refusal
+carries over.
+
+## 12. Building ahead
+
+A module's key is its source, its lint profile and the interface hashes of
+its closure's images (§5), and every image header records its interface hash
+(`ModuleImageCache::recorded_interface`). So the keys of a whole load can be
+computed by reading headers in import order, without decoding an image: a
+module whose closure is all built has a key, and is built when the store
+holds that key (`semantic::BuildPlan`). The planner uses the session's own
+canonical order (`canon_over`), so the two agree on every key; a module
+whose build does not land at the planned key is not retried.
+
+`heather check --build-jobs N` runs the planner over the load before
+checking and starts a `heather check` of the module's file (with the
+parent's `--expectations` and image policy) for each ready module, up to N
+at a time, in order of the longest chain of source bytes above it,
+refreshing the plan as each finishes. `--build-only`
+stops there. A module that fails is reported with the tail of its output; its
+dependents stay unbuilt, and the ordinary check that follows reports it.
+
+The price is replay: each build process replays its module's closure, so the
+build step replays every closure once (§2's sum, about eighteen times the
+module count over the library) where folder children replayed about three
+times it. Replay is dominated by the Merkle walk that lets the verdict store
+vouch for a replayed binding, and it is what makes the build step's CPU
+higher than the racing children's.

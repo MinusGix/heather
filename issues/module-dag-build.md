@@ -29,11 +29,16 @@ rises by about a third (design §10).
   code, and the first world holding both refuses. The library has none.
   Keeping the first copy after a content-hash check is the sound merge, to
   build when a pair appears.
-- **Who builds a shared module is a race** between the gate's children, each
-  under its own CPU rail. Library folders now go before test folders
-  (design §7), which kept every child under the rail cold; a heavy folder
-  near the rail can still lose the race. Width beyond three children is
-  memory-bound (design §8).
+- **Building ahead replays every closure once** (design §12): each build
+  process replays its module's closure, about a quarter more cold CPU than
+  folder children racing for shared modules. A long-lived worker that
+  builds several modules in turn, restarted before its rail, would replay
+  less; the verdict store's Merkle walk is most of a replay. Width beyond
+  three is memory-bound (design §8).
 - **The early cutoff's registry digest** is still over the whole world under
   the module, now the closure's
   ([[early-cutoff-registry-and-order-granularity]]).
+
+## Log
+
+- 2026-10-30: Expected refusals have images (design §11): a `lib/_tests` module refused exactly as its directives say is published and replays for a judging session of the same build. The gate builds ahead (§12, `heather check --build-jobs`): every missing module in a process of its own, longest chain first, so no child's rail pays for another's module; the race this issue listed is gone. Warm gate about half the wall time; cold about a fifth longer than racing, a third shorter than the chain.

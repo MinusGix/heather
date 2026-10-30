@@ -95,3 +95,55 @@ fn a_library_module_keeps_its_profile_under_any_root() {
     assert_eq!(replayed(&check(&root, &["lib/native"])), 1);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// `--build-jobs` elaborates every module without an image, one process
+/// each, before the check, which then replays all of them; with every image
+/// present it builds nothing (`docs/module-dag-design.md` §12).
+#[test]
+fn build_jobs_build_every_missing_module_ahead() {
+    let root = library("build", LIB);
+    let built = |out: &std::process::Output| String::from_utf8_lossy(&out.stderr).lines().find(|l| l.contains("built ahead")).map(str::to_string);
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_heather"))
+            .current_dir(&root)
+            .arg("check")
+            .arg("--cache-dir")
+            .arg(root.join("images"))
+            .args(args)
+            .output()
+            .expect("run heather")
+    };
+    let out = run(&["--build-jobs", "2", "--build-only", "lib/c"]);
+    assert!(out.status.success());
+    assert_eq!(built(&out).as_deref(), Some("build: 3 modules built ahead, 0 failed"), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.stdout.is_empty(), "`--build-only` reports no module");
+    assert_eq!(replayed(&check(&root, &["lib/c"])), 3);
+    let out = run(&["--build-jobs", "2", "lib/c"]);
+    assert_eq!(built(&out).as_deref(), Some("build: 0 modules built ahead, 0 failed"));
+    assert_eq!(replayed(&String::from_utf8_lossy(&out.stdout)), 3);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A module that fails to build is reported, its dependents are left
+/// unbuilt, and the check after the builds reports it as usual.
+#[test]
+fn a_module_that_fails_to_build_leaves_the_check_to_report_it() {
+    let root = library("build-fails", &[
+        ("lib/a/broken.hthr", "fn bad() → Nat { nope() }\n"),
+        ("lib/a/above.hthr", "import broken;\nfn above() → Nat { 0 }\n"),
+        ("lib/a/beside.hthr", "fn beside() → Nat { 0 }\n"),
+    ]);
+    let out = Command::new(env!("CARGO_BIN_EXE_heather"))
+        .current_dir(&root)
+        .args(["check", "--cache-dir"])
+        .arg(root.join("images"))
+        .args(["--build-jobs", "2", "lib/a"])
+        .output()
+        .expect("run heather");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("build: broken ("), "{err}");
+    assert!(err.contains("build: 1 module built ahead, 1 failed"), "{err}");
+    assert!(err.contains("unbound name `nope`"), "{err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
