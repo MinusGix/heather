@@ -344,7 +344,7 @@ theorem Format::grid_scale(self F: Format, c: Nat, n: Int): Rat::ofInt(c.int()) 
     let e: (OfNat(0) + (F.qmin() - 1) = F.qmin() - 1) = omega;
     calc {
         Rat::ofInt(c.int()) * F.grid(n) ≈ (Dyadic::ofInt(c.int())).rat() * F.grid(n) := Rat::mul_respects(Rat::same_sym(Dyadic::rat_ofInt(c.int())), (F.grid(n)).same_refl()),
-        ≈ (Dyadic::ofInt(c.int()) * Dyadic(n, F.qmin() - 1)).rat() := Rat::same_sym(Dyadic::ofInt(c.int()).rat_mul(Dyadic(n, F.qmin() - 1))),
+        ≈ (Dyadic::ofInt(c.int()) * Dyadic(n, F.qmin() - 1)).rat() := ring,
         ≈ F.grid(c.int() * n) := j(e, λ k _ => (Dyadic(c.int() * n, OfNat(0) + (F.qmin() - 1))).rat() ≈ (Dyadic(c.int() * n, k)).rat(),
             (Dyadic(c.int() * n, OfNat(0) + (F.qmin() - 1))).rat().same_refl()),
     }

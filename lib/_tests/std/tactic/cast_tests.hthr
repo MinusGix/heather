@@ -91,6 +91,12 @@ theorem lower_neg(hi: Dyadic, hn: hi < 0): 0 < -hi { by cast_from(Rat::neg_lt(x 
 theorem lower_to(a, b, c: Dyadic, h: a <= b): a + c <= b + c { by cast_to(a.rat() + c.rat() <= b.rat() + c.rat(), mono()) }
 theorem dyadic_up(a, b: Dyadic, h: a + b <= 0): a.rat() + b.rat() <= 0 { by cast_from(h) }
 
+// A definition that is an image under another name (`Finite::val` is
+// `x.dyadic().rat()`) is read as the image it unfolds to.
+fn image_of(a: Dyadic) → Rat { a.rat() }
+theorem ring_wrapper(a, c: Dyadic): image_of(a) + image_of(c) ≈ (a + c).rat() { ring }
+theorem ring_wrapper_fact(a, c: Dyadic, h: image_of(a) + image_of(c) ≈ 0): (a + c).rat() ≈ 0 { ring(h) }
+
 // A law reads an image as what it is, not as anything ring-equal to it.
 // expect-error: it is not an identity of commutative rings
 theorem ring_wrong(a, c: Dyadic): (a * c).rat() ≈ a.rat() + c.rat() { ring }

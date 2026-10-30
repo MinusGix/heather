@@ -111,6 +111,10 @@ const EDGES: [Edge; 3] = [
     Edge { map: "rat::Rat::ofInt", hom: "rat::Rat::ofInt_hom", add: "int::Int::add", mul: "int::Int::mul", neg: "int::Int::neg", sub: "int::Int::sub" },
 ];
 
+/// How many δ-steps a definition is unfolded looking for the edge image it
+/// names ([`Reifier::wrapped_image`]).
+const WRAPPER_STEPS: u64 = 4;
+
 /// How many edges deep an image of an image is read.
 const EDGE_NESTING: u32 = 3;
 
@@ -697,7 +701,36 @@ impl Reifier<'_> {
         if let Some(step) = self.range_step(tm, depth)? {
             return Ok(step);
         }
+        if let Some(image) = self.wrapped_image(tm) {
+            return self.reify_within(&image, depth);
+        }
         Ok(Syn::Atom(self.intern(tm)?))
+    }
+
+    /// A definition that is an edge's image under another name
+    /// (`Finite::val(x)` is `x.dyadic().rat()`, `Format::grid(F, n)` is
+    /// `Dyadic(n, …).rat()`, docs/casting-design.md §13): its first few
+    /// δ-reducts, the first that is an edge's map applied, so the image is
+    /// read, and named, as it is everywhere else.
+    fn wrapped_image(&self, tm: &Rc<Term>) -> Option<Rc<Term>> {
+        let (head, args) = app_spine(tm);
+        if args.is_empty() || !matches!(head, Term::GlobalTm { .. }) {
+            return None;
+        }
+        if EDGES.iter().any(|edge| named_args(self.elab, tm, edge.map).is_some()) {
+            return None;
+        }
+        // A reduct is read back by its spelling, re-elaborated here: a
+        // δ-step's result carries the definition's own substitution.
+        let oracle = self.elab.goal_oracle().bounded(NUMERAL_STEPS);
+        let source = oracle
+            .term_reducts(&self.cx.gamma, tm, WRAPPER_STEPS)
+            .filter_map(|reduct| self.elab.spell_term_source(self.cx, &reduct))
+            .find(|source| EDGES.iter().any(|edge| source.starts_with(&format!("{}(", edge.map))))?;
+        let image = parse_expr(&source)
+            .ok()
+            .and_then(|e| self.elab.generated_scope(|me| me.elab_check(self.cx, &e, &self.ty, &self.level)).ok())?;
+        Some(Rc::new(image))
     }
 
     /// A range sum at a successor bound is its last term added on, a range
