@@ -179,10 +179,10 @@ binding are content hashes and are cached by binding.
 
 ## 7. The gate
 
-The gate first builds, then checks (§12). `heather check --build-jobs 3
+The gate first builds, then checks (§12). `heather check --build-jobs 4
 --build-only lib` elaborates every module that has no image, each in a
-`heather check` of its own, three at a time, a module once its closure's
-images exist and the longest remaining chain first. Then three children at a
+`heather check` of its own, four at a time, a module once its closure's
+images exist and the longest remaining chain first. Then four children at a
 time check one folder each, in `World::folders` order, over a store that
 holds every module that can be built: they replay, and report each module's
 warnings and matched refusals, and the errors of a module the build step
@@ -214,12 +214,43 @@ folder check reports it.
 
 ## 8. Memory
 
-A child holds the snapshots of its closure: the modules on the
+A process holds the worlds of its closure: the modules on the
 largest-import chains are shared, and a remainder module is one extra copy
-per world it is moved into. That is no more than today's child, which holds
-the world prefix up to its last needed module. Three children run at a time
-as before; giving them more width is what doubled peak memory to 5–6 GB
-before (`issues/library-gate-warmup-runs-alone.md`), and this design does not.
+per world it is moved into. A build process (§12) holds one closure, of
+one module. A folder child holds the worlds of every module of its folder,
+and a test folder's roots are imported by nothing, so before the session
+was told its load each root's world, with its moved copies, stayed to the
+end of the process.
+
+`SemanticSession::expect_load` takes the modules the driver will check,
+with their imports. The session then keeps a finished module's world only
+while a module still to come imports it directly (only a direct import can
+be a world's base, §6), and its delta, registry part and hashes only while
+one holds it in its closure; at zero they are dropped. A wrong list costs
+time, never a verdict: a dropped world is built again (`state_of`) and a
+dropped delta decoded again from the store, and a session without a store
+keeps every delta. `heather check` passes its load.
+
+Measured cold on the cloud box (4 CPUs, 15 GB), the whole gate at three
+and at four jobs, peak resident memory per process and summed over all of
+them:
+
+- The largest process is a build process of one test module over most of
+  the tactic library, a little under 2 GB, and the four largest are all
+  build processes. Dropping worlds does not move them: one closure is what
+  such a process is for.
+- Folder children were never the peak. Dropping worlds takes the largest
+  ones down by an eighth to more than a quarter (`lib/_tests/std/tactic`
+  most).
+- Summed over all processes the peak stays under 3 GB at four jobs as at
+  three: the heavy builds do not overlap more. Since §12 each build process
+  holds one closure, and memory no longer bounds the width; the earlier
+  doubling to 5–6 GB (`issues/library-gate-warmup-runs-alone.md`) was
+  folder children building wide closures with kernel width above one.
+
+So the gate runs four wide, one process per CPU. Cold, the build step takes
+about a fifth less wall time than at three; the warm folder checks are
+unchanged.
 
 ## 9. What was built
 

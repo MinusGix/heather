@@ -219,10 +219,10 @@ fn gate_folders() -> Vec<PathBuf> {
 /// Every module under `lib/` checks, `lib/_tests` included, in two steps
 /// over one semantic cache at width one as `scripts/test` runs every child.
 /// First every module without an image is elaborated in a `heather check` of
-/// its own, three at a time, longest chain first (`--build-jobs`,
+/// its own, four at a time, longest chain first (`--build-jobs`,
 /// `docs/module-dag-design.md` §12), so each module's CPU rail is its own and
 /// the gate's length is the import graph's critical path. Then one `heather
-/// check` per folder ([`gate_folders`]), three side by side, replays its
+/// check` per folder ([`gate_folders`]), four side by side, replays its
 /// closure and reports what it holds: its warnings, its matched refusals, and
 /// the errors of any module the first step could not build, which it
 /// elaborates again to say why. Every module is checked over its own import
@@ -250,12 +250,13 @@ fn every_library_module_checks() {
             cmd.arg("--accept-stale-images");
         }
     };
-    // Three at a time, as the suite runner runs targets: each process may
-    // hold a closure of the library in memory.
+    // Four at a time, one per CPU of a cloud box: each process holds at
+    // most one closure of the library, under 2 GB, and four of them stay
+    // far inside the box (`docs/module-dag-design.md` §8).
     let mut build = Command::new(env!("CARGO_BIN_EXE_heather"));
     build.arg("check");
     images_flags(&mut build);
-    let out = build.args(["--build-jobs", "3", "--build-only", "lib"]).output().expect("run heather check");
+    let out = build.args(["--build-jobs", "4", "--build-only", "lib"]).output().expect("run heather check");
     let built = String::from_utf8_lossy(&out.stderr).into_owned();
     // Printed with `--nocapture`: what the first step built, and what it
     // could not (the folder checks below report why).
@@ -270,7 +271,7 @@ fn every_library_module_checks() {
     let failures = std::sync::Mutex::new(Vec::new());
     let started = std::time::Instant::now();
     std::thread::scope(|scope| {
-        for _ in 0..3 {
+        for _ in 0..4 {
             scope.spawn(|| loop {
                 let Some(folder) = queue.lock().expect("queue").pop_front() else { break };
                 let begun = started.elapsed().as_secs_f64();

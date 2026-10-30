@@ -34,8 +34,8 @@ rises by about a third (design §10).
   folder children racing for shared modules. A long-lived worker that
   builds several modules in turn, restarted before its rail, would replay
   less; the verdict store's Merkle walk was most of a replay, and a
-  canonical replay now skips it (design §13). Width beyond
-  three is memory-bound (design §8).
+  canonical replay now skips it (design §13). The gate runs four wide
+  (design §8); more than one process per CPU would only queue.
 - **The early cutoff's registry digest** is still over the whole world under
   the module, now the closure's
   ([[early-cutoff-registry-and-order-granularity]]).
@@ -45,3 +45,4 @@ rises by about a third (design §10).
 - 2026-10-30: Expected refusals have images (design §11): a `lib/_tests` module refused exactly as its directives say is published and replays for a judging session of the same build. The gate builds ahead (§12, `heather check --build-jobs`): every missing module in a process of its own, longest chain first, so no child's rail pays for another's module; the race this issue listed is gone. Warm gate about half the wall time; cold about a fifth longer than racing, a third shorter than the chain.
 - 2026-10-30: A replay that rechecked clean over its own canonical world is vouched for whole next time (design §13): one verdict keyed by build, world identities and image content, so the per-binding Merkle walk is skipped. Moved replays keep the per-binding path. Warm tactic-test module about a sixth faster; decode-bound modules unchanged.
 - 2026-10-30: Moved replays are vouched for whole too (design §13): the key adds the world the stored positions were counted in beside the one the image is moved into, which fixes the moved delta, so nothing about `relocate` is trusted beyond determinism. All three move sites key their replays. Warm `mono_tests` (release, cloud, by hand, 4 interleaved pairs): 4.51–4.69 s → 3.69–3.79 s; per-declaration questions 780 → 0, Merkle walk 0.84 s → 0. The composition moves are now timed as `image_relocate_ns`, and they are 2.3 s of the 3.7 s left ([[warm-replay-relocate-cost]]).
+- 2026-10-30: The gate builds and checks four wide (design §8). Memory was no longer the bound: since building ahead each build process holds one closure (largest just under 2 GB) and the summed peak stays under 3 GB at four jobs as at three. `heather check` tells its session the load (`SemanticSession::expect_load`), which drops a module's world once nothing left imports it and its delta once nothing left holds it; folder children's peaks drop by an eighth to a quarter, build processes are unchanged. Cold build step about a fifth shorter.
