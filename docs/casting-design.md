@@ -1,6 +1,7 @@
 # Casting: what a cast is in Heather, and how it is written
 
-Date: 2026-10-30. Status: **proposal, awaiting Minus's decision** (§8).
+Date: 2026-10-30. Status: **decided 2026-10-30** (§8: option B, `↑`, and the
+recommended answer to every other question); §6.4 is the open design.
 Owner: [casting-standard](../issues/casting-standard.md). Consumer:
 [push-cast-through-embeddings](../issues/push-cast-through-embeddings.md).
 
@@ -446,6 +447,63 @@ discharged by `omega` over the context, and a failed premise is reported by
 name, as `bv_omega` does (`docs/bv-omega-design.md`). Until that lands,
 `BitVec → Nat` stays out of `↑` and `bv_omega` owns it.
 
+### 6.4 Doing better than Lean's cast pushing
+
+Added 2026-10-30. Minus's verdict on `push_cast`/`norm_cast` from use: hard
+to direct, and troublesome. Where the trouble comes from, and what Heather
+does instead:
+
+| Lean's trouble | Its cause | Heather's answer |
+|---|---|---|
+| The goal comes back in a shape nobody asked for | a simp set rewrites everywhere to *its* normal form, with lemma priorities and other simp lemmas deciding the outcome | the user says the shape (*state, don't steer*, below); the tactic only checks it |
+| Hard to aim at one subterm | simp has no location short of `conv` | a located move takes a pattern (`push_cast(at: ↑(n + 1))`), the way `rewrite` does |
+| A missing lemma silently does nothing | `@[norm_cast]` tagging, and the elim/move/squash class is guessed from the lemma's shape | an edge is a morphism record (§5.6): its laws are its fields, so coverage is fixed by the type and a missing law is a named refusal, not a silent stop |
+| Partial progress, then an opaque "failed to simplify" | the simp loop has no notion of what was owed | a refusal names the subterm that blocked and why: no law for `↑(a / b)` on `Int → Rat`, or a side condition `b <= a` that `omega` could not prove from the context |
+| Numerals need special splitting (`(2 : ℝ)` as `((2 : ℕ) : ℝ)`) | numerals and casts are different terms | free: a numeral at `Rat` *is* `↑` of a `Nat` numeral (§1.2) |
+| Diamonds of composite casts need squash lemmas | many spellings of one composite | one spelling per path (§5.1); squash laws are only the declared second paths |
+| Nat subtraction and division need hand-applied lemmas | conditional laws are not simp lemmas | conditional laws are part of the table, discharged by `omega` against the context and reported by name when they fail (§6.3) |
+
+The two ideas that do most of the work:
+
+**1. Cast-transparent tactics, so cast pushing is rarely a step at all.**
+In Lean you push casts *so that* `ring`, `linarith` or `omega` can see the
+goal. In Heather the arithmetic tactics read casts themselves. Their reifiers
+already build an expression tree; each node also records the carrier it is
+computed at, and the casts are edges between carriers. The tactic then
+*chooses* where to decide: the lowest carrier every atom lives in (two
+`Int` images compared at `Rat` are decided at `Int` by `omega`), or the
+target carrier with every image pushed to the leaves (for `ring` and
+`linarith` over mixed atoms). It emits the morphism laws as part of its own
+certificate. No intermediate goal is shown, so there is no normal form to be
+surprised by. `ring` already does a fragment of this by hand (§1.3), and
+`mono` gets it by reading both sides through the same tree.
+
+**2. State, don't steer, when the user does want a different goal.**
+Instead of a sequence of moves whose result you discover, you write the goal
+you want:
+
+```heather
+// goal: ↑(n + 1) * x <= ↑m * x   at Rat, with n, m: Nat
+cast_to(↑n * x + x <= ↑m * x);    // a goal stated at the shape wanted
+cast_to(n + 1 <= m);              // or at the carrier wanted: decided by omega
+```
+
+`cast_to(S)` reads both the goal and `S` through the carrier tree, checks
+that they agree modulo the edges' laws (and the context, for conditional
+ones), and replaces the goal by `S`. When they do not agree, it reports the
+first subterm where the two readings differ, the way `ring` names what
+clearing leaves. `have h: S := cast_from(h0)` is the same for a hypothesis.
+This replaces `norm_cast`, `push_cast`, `exact_mod_cast`, `zify`, `qify`
+and `rify` with one directed form, where the direction is whatever the user
+wrote. The located `push_cast(at: pattern)` stays for the case where writing
+the whole goal out is longer than naming the one subterm.
+
+What it costs: the carrier-annotated reader is shared by `ring`,
+`linarith`, `mono`, `omega` and `cast_to`, so it is one piece of work with
+five consumers, built on the existing reifiers. `cast_to`'s check is a
+normalization of both sides with the move laws, then a syntactic comparison,
+so it is as predictable as the morphism tables are complete.
+
 ## 7. What changes, in order
 
 1. **Decide** (§8). This note and its issue only.
@@ -463,20 +521,17 @@ name, as `bv_omega` does (`docs/bv-omega-design.md`). Until that lands,
    rename lossy functions for what they lose; retire composite-law lemmas.
    Never a bulk rewrite in one PR.
 
-## 8. Decisions for Minus
+## 8. Decisions (Minus, 2026-10-30)
 
-1. **Which option**: A, **B** (recommended), or C. D is listed only to be
-   rejected.
-2. **Glyph**: `↑e` with `cast<B>(e)` as the named form (recommended), or
-   only `cast<B>(e)` / `e.cast()` in ASCII.
-3. **Which edges are casts**: the numeric tower and `Dyadic`/`Finite` now
-   (recommended); subtype projections (`Pos<Nat> → Nat`, `Fin → Nat`) next;
-   `BitVec → Nat` only with conditional laws (§6.3).
-4. **Diamonds**: shortest path wins with a squash law (recommended), or
-   forbid any second path at declaration.
-5. **Edges as morphism values** (§5.6, recommended), replacing the
-   combined `…OfInt`/`…OfRat` classes over time, or a `Cast<A, B>` class
-   with a separate law table.
-6. **`n.int()` vs `OfNat(n)`**: `↑` produces `OfNat(n)` and tactics
-   normalize `.int()` to it (recommended), or make `.int()` the canonical
-   spelling and teach `omega`/`ring` to read it.
+1. **Option B.** C stays available as a per-module opt-in if `↑` proves
+   dense (§5.5); D is rejected.
+2. **Glyph `↑e`**, with `cast<B>(e)` as the named form.
+3. **Edges**: the numeric tower and `Dyadic`/`Finite` now; subtype
+   projections next; `BitVec → Nat` only with conditional laws (§6.3).
+4. **Diamonds**: shortest path wins, with a squash law for the other path.
+5. **Edges are morphism values** (§5.6), replacing the combined
+   `…OfInt`/`…OfRat` classes over time.
+6. **`↑` produces `OfNat(n)`**, and the tactics normalize `.int()` to it.
+
+Open: the cast tactics' shape (§6.4), which Minus asked to do better than
+Lean's.
