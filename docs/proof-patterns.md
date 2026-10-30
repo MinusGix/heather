@@ -60,8 +60,10 @@ property of Heather.
   arithmetic in small lemmas, never `omega` inside a stretch or with `Rat`
   facts in scope. `omega(h, …)` names the load-bearing facts; whether it
   should read *only* those is [[omega-listed-facts-only]], an open decision.
-- **It needs a checking position:** `let k: (T) = omega(…);`
-  ([[checking-tactic-in-inference-position-diagnostic]]).
+- **It needs a checking position:** `let k: (T) = omega(…);`. Where
+  nothing is expected the refusal says so (as for `ring`, `linarith`,
+  `nlinarith`, `bv_omega`, `positivity`;
+  [[checking-tactic-in-inference-position-diagnostic]], closed).
 - **Linear arithmetic at `Rat`/`CReal` is `linarith`**, not `omega`, which
   unfolds Rat facts into Int cross products.
 - **nat.hthr and int.hthr cannot import omega.** Facts about Nat and Int
