@@ -279,9 +279,9 @@ fn interval_order(rel: GlobalRef, target, l, r: Handle, p, tries, n: Nat) → Ta
 
 // `intervals(p, tries, n)`: prove `l < r` or `l <= r` at `Rat` by
 // enclosures, starting at `p` bits and doubling `tries` times; at `CReal`
-// (and `l.Apart(r)` there), reading real leaves at index `n` and refining
-// the index `tries` times.
-fn intervals(p: Nat := 32, tries: Nat := 4, n: Nat := 1023) → Tac<Expr> {
+// (and `l.Apart(r)` there), reading real leaves at index `n`, which counts
+// bits, and refining the index `tries` times.
+fn intervals(p: Nat := 32, tries: Nat := 4, n: Nat := 32) → Tac<Expr> {
     goal().bind(λ g => view(g.target).bind(λ v => match v {
         HGlobal(rel, _, args) => match interval_arg(args, 0) {
             None => interval_not_order(g.target),

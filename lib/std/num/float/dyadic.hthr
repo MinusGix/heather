@@ -719,3 +719,32 @@ theorem Dyadic::floor_rat_close(q: Rat, p: Nat): (Dyadic::floor_rat(q, p).rat() 
     let close: ((r - q).abs() <= c) = Rat::dist_le_of_le_add(up, down);
     Rat::le_respects(Rat::abs_respects(Rat::sub_respects(Rat::same_sym(at), q.same_refl())), Rat::inv_pow2(p).same_refl(), close)
 }
+
+// An integer floors to itself at every precision.
+theorem Dyadic::floor_rat_int(z: Int, p: Nat): Dyadic::floor_rat(Rat::ofInt(z), p).rat() ≈ Rat::ofInt(z) {
+    let P = Nat::pow(2, p).int();
+    let N = z * P;
+    let d = N.div(1);
+    let m = N.mod(1);
+    let nz: (OfNat(1) ≠ OfNat(0)) = λ e => omega(e);
+    let parts: (d * 1 + m = N) = Int::div_mul_add_mod(N, 1);
+    let lo: (OfNat(0) <= m) = N.mod_nonneg(1, nz);
+    let hi: (m < OfNat(1)) = N.mod_lt_abs(1, nz);
+    let zero: (m = 0) = omega(lo, hi);
+    let one: (Nat::pow(2, 0).int() = 1) = refl;
+    let r = Rat(d * Nat::pow(2, 0).int(), Nat::pow(2, p));
+    let at: (Dyadic::floor_rat(Rat::ofInt(z), p).rat() ≈ r) = Dyadic::rat_split(d, -p.int(), 0, p, omega);
+    let rd: (r.den.int() = P) = refl;
+    let exact: (r.num * Rat::ofInt(z).den.int() = Rat::ofInt(z).num * r.den.int()) = ring(parts, zero, one, rd);
+    Rat::same_trans(at, exact)
+}
+
+// The absolute value is exact: the mantissa's, at the same exponent.
+fn Dyadic::abs(self d: Dyadic) → Dyadic { Dyadic(d.mant.abs(), d.exp) }
+
+theorem Dyadic::rat_abs(self d: Dyadic): d.abs().rat() ≈ d.rat().abs() {
+    let P = Nat::pow(2, d.exp.pos_part()).int();
+    let e: ((d.mant * P).abs() = d.mant.abs() * P.abs()) = d.mant.abs_mul(P);
+    let num: (d.mant.abs() * P = (d.mant * P).abs()) = rewrite(e, refl);
+    d.abs().rat().same_of_parts(d.rat().abs(), num, refl)
+}

@@ -419,19 +419,22 @@ designation * at Int := Int::mul
 // Euclidean division.  A nonzero divisor uses its positive magnitude, so the
 // remainder is always non-negative and strictly below that magnitude.  The
 // sign of the divisor changes only the quotient.  At zero we use the same
-// total convention as `Nat`: quotient zero, remainder the dividend.
+// total convention as `Nat`: quotient zero, remainder the dividend.  The
+// magnitudes divide by long division (`Nat::ldiv`), one step per quotient
+// bit, so a quotient of a wide numerator evaluates (a 60-bit real's term is
+// one).
 
 inductive DivMod { MkIntDivMod(quotient: Int, remainder: Int) }
 
 fn Int::divmod_nonneg(dividend: Nat, divisor_pred: Nat) → DivMod {
-    match dividend.divmod(Succ(divisor_pred)) {
+    match dividend.ldiv(Succ(divisor_pred)) {
         MkDivMod(quotient, remainder) =>
             MkIntDivMod(OfNat(quotient), OfNat(remainder)),
     }
 }
 
 fn Int::divmod_negative(dividend_pred: Nat, divisor_pred: Nat) → DivMod {
-    match Succ(dividend_pred).divmod(Succ(divisor_pred)) {
+    match Succ(dividend_pred).ldiv(Succ(divisor_pred)) {
         MkDivMod(quotient, remainder) => match remainder {
             Zero => MkIntDivMod(Int::negOfNat(quotient), OfNat(0)),
             Succ(_) => MkIntDivMod(
@@ -1467,7 +1470,7 @@ theorem Int::divmod_nonneg_reconstruct(dividend, divisor_pred: Nat):
         OfNat(dividend), OfNat(Succ(divisor_pred)),
         Int::divmod_nonneg(dividend, divisor_pred))
 {
-    match dividend.divmod(Succ(divisor_pred)) as λ state =>
+    match dividend.ldiv(Succ(divisor_pred)) as λ state =>
         DivMod::Spec(dividend, Succ(divisor_pred), state) →
         DivModEquation(
             OfNat(dividend), OfNat(Succ(divisor_pred)),
@@ -1480,7 +1483,7 @@ theorem Int::divmod_nonneg_reconstruct(dividend, divisor_pred: Nat):
             trans(
                 Int::ofNat_mul_add(quotient, Succ(divisor_pred), remainder),
                 Int::cong_ofnat(spec.left)),
-    }(Nat::divmod_spec(dividend, Succ(divisor_pred)))
+    }(Nat::ldiv_spec(dividend, Succ(divisor_pred)))
 }
 
 theorem Int::divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
@@ -1488,7 +1491,7 @@ theorem Int::divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
         NegSucc(dividend_pred), OfNat(Succ(divisor_pred)),
         Int::divmod_negative(dividend_pred, divisor_pred))
 {
-    match Succ(dividend_pred).divmod(Succ(divisor_pred)) as λ state =>
+    match Succ(dividend_pred).ldiv(Succ(divisor_pred)) as λ state =>
         DivMod::Spec(Succ(dividend_pred), Succ(divisor_pred), state) →
         DivModEquation(
             NegSucc(dividend_pred), OfNat(Succ(divisor_pred)),
@@ -1559,7 +1562,7 @@ theorem Int::divmod_negative_reconstruct(dividend_pred, divisor_pred: Nat):
                     },
                 },
         }(spec.left, spec.right),
-    }(Nat::divmod_spec(Succ(dividend_pred), Succ(divisor_pred)))
+    }(Nat::ldiv_spec(Succ(dividend_pred), Succ(divisor_pred)))
 }
 
 theorem Int::divmod_positive_reconstruct(dividend: Int, divisor_pred: Nat):
@@ -1634,7 +1637,7 @@ theorem Int::divmod_nonneg_bounds(dividend, divisor_pred: Nat):
     DivModBounds(
         OfNat(Succ(divisor_pred)), Int::divmod_nonneg(dividend, divisor_pred))
 {
-    match dividend.divmod(Succ(divisor_pred)) as λ state =>
+    match dividend.ldiv(Succ(divisor_pred)) as λ state =>
         DivMod::Spec(dividend, Succ(divisor_pred), state) →
         DivModBounds(
             OfNat(Succ(divisor_pred)),
@@ -1647,13 +1650,13 @@ theorem Int::divmod_nonneg_bounds(dividend, divisor_pred: Nat):
             Inl(impossible) => false_elim(impossible),
             Inr(bounded) => And(trivial, bounded),
         },
-    }(Nat::divmod_spec(dividend, Succ(divisor_pred)))
+    }(Nat::ldiv_spec(dividend, Succ(divisor_pred)))
 }
 
 theorem Int::divmod_negative_bounds(dividend_pred, divisor_pred: Nat):
     DivModBounds(OfNat(Succ(divisor_pred)), Int::divmod_negative(dividend_pred, divisor_pred))
 {
-    match Succ(dividend_pred).divmod(Succ(divisor_pred)) as λ state =>
+    match Succ(dividend_pred).ldiv(Succ(divisor_pred)) as λ state =>
         DivMod::Spec(Succ(dividend_pred), Succ(divisor_pred), state) →
         DivModBounds(
             OfNat(Succ(divisor_pred)),
@@ -1689,7 +1692,7 @@ theorem Int::divmod_negative_bounds(dividend_pred, divisor_pred: Nat):
                 ),
             },
         }(spec.right),
-    }(Nat::divmod_spec(Succ(dividend_pred), Succ(divisor_pred)))
+    }(Nat::ldiv_spec(Succ(dividend_pred), Succ(divisor_pred)))
 }
 
 theorem Int::divmod_positive_bounds(dividend: Int, divisor_pred: Nat):

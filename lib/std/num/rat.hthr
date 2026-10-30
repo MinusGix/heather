@@ -846,6 +846,22 @@ theorem Rat::quarters_le({f: Rat}, j: Nat, hf: f <= Rat::inv_succ((j + j + 1) + 
     }
 }
 
+// A middle step within 1/(2k+2) between two steps within 1/(4k+4) each
+// stays within 1/(k+1): the shape of a chain whose ends are roundings.
+theorem Rat::sandwich_le({e, m: Rat}, k: Nat, he: e <= Rat::inv_succ((k + k + 1) + (k + k + 1) + 1), hm: m <= Rat::inv_succ(k + k + 1)):
+    (e + m) + e <= Rat::inv_succ(k)
+{
+    let half = Rat::inv_succ(k + k + 1);
+    let q = Rat::inv_succ((k + k + 1) + (k + k + 1) + 1);
+    calc {
+        (e + m) + e ≈ (m + e) + e := Rat::add_respects(e.add_comm(m), e.same_refl()),
+        ≈ m + (e + e) := m.add_assoc(e, e),
+        <= half + (q + q) := Rat::add_le_mono(hm, Rat::add_le_mono(he, he)),
+        ≈ half + half := Rat::add_respects(half.same_refl(), Rat::inv_succ_half(k + k + 1)),
+        ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
+    }
+}
+
 // A bound of l+1 against the step 1/((l+1)(k+1)) leaves 1/(k+1): the
 // product reads its factors at index (l+1)(k+1) - 1 to keep the other
 // factor's size inside the rate.
@@ -1035,6 +1051,17 @@ theorem Rat::dist_triangle(self x, y, z: Rat): (x - z).abs() <= (x - y).abs() + 
     calc {
         (x - z).abs() ≈ ((x - y) + (y - z)).abs() := Rat::abs_respects(Rat::same_sym(x.sub_add_sub(y, z))),
         <= (x - y).abs() + (y - z).abs() := (x - y).abs_triangle(y - z),
+    }
+}
+
+// Three steps of a chain: a to b to c to d.
+theorem Rat::dist_three({a, b, c, d, e1, e2, e3: Rat}, h1: (a - b).abs() <= e1, h2: (b - c).abs() <= e2, h3: (c - d).abs() <= e3):
+    (a - d).abs() <= (e1 + e2) + e3
+{
+    calc {
+        (a - d).abs() <= (a - c).abs() + (c - d).abs() := a.dist_triangle(c, d),
+        <= ((a - b).abs() + (b - c).abs()) + (c - d).abs() := (a - c).abs().add_le_mono_r((a - b).abs() + (b - c).abs(), (c - d).abs(), a.dist_triangle(b, c)),
+        <= (e1 + e2) + e3 := Rat::add_le_mono(Rat::add_le_mono(h1, h2), h3),
     }
 }
 
@@ -2034,3 +2061,8 @@ theorem Rat::range_le(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) 
 theorem Rat::range_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → k < n → 0 <= f(k)): 0 <= MonoidRel::range(+, n, f) {
     LocatedAddGroup::range_nonneg(n, f, h)
 }
+
+// Products distribute over differences.
+theorem Rat::sub_mul(self a, b, c: Rat): (a - b) * c ≈ a * c - b * c { ring }
+
+theorem Rat::mul_sub(self a, b, c: Rat): a * (b - c) ≈ a * b - a * c { ring }
