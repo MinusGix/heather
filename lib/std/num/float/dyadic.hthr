@@ -677,3 +677,45 @@ fn Dyadic::nonneg_dec(self d: Dyadic) → 0 <= d ∨ ¬(0 <= d) {
             Dyadic::lt_of_mant_lt(NegSucc(n), 0, d.exp, Int::negsucc_lt_ofnat(n, 0))))),
     }
 }
+
+// ---------------------------------------------------------------------------
+// A rational floored to p bits: ⌊q · 2^p⌋ · 2^-p, within 2^-p of q. The real
+// numbers (std/creal) keep their terms dyadic with it, so a term's size is its
+// precision and not the history of the operations that made it.
+
+fn Dyadic::floor_rat(q: Rat, p: Nat) → Dyadic { Dyadic((q.num * Nat::pow(2, p).int()).div(q.den.int()), -p.int()) }
+
+theorem Dyadic::floor_rat_close(q: Rat, p: Nat): (Dyadic::floor_rat(q, p).rat() - q).abs() <= Rat::inv_pow2(p) {
+    let P = Nat::pow(2, p).int();
+    let D = q.den.int();
+    let N = q.num * P;
+    let d = N.div(D);
+    let m = N.mod(D);
+    let nz: (D ≠ OfNat(0)) = λ e => omega(q.den_pos, e);
+    let parts: (d * D + m = N) = Int::div_mul_add_mod(N, D);
+    let lo: (OfNat(0) <= m) = N.mod_nonneg(D, nz);
+    let hi: (m < D) = N.mod_lt_abs(D, nz);
+    let pnn: (OfNat(0) <= P) = trivial;
+    let parts2: ((d * D + m) * P = N * P) = rewrite(parts, refl);
+    let lo2: (OfNat(0) <= m * P) = m.mul_nonneg(P, lo, pnn);
+    let hi2: (m * P <= D * P) = m.mul_le_mono_r(D, P, m.le_of_lt(D, hi), pnn);
+    let r = Rat(d * Nat::pow(2, 0).int(), Nat::pow(2, p));
+    let at: (Dyadic::floor_rat(q, p).rat() ≈ r) = Dyadic::rat_split(d, -p.int(), 0, p, omega);
+    let c = Rat::inv_pow2(p);
+    let one: (Nat::pow(2, 0).int() = 1) = refl;
+    let dp: (OfNat(0) <= D * P) = D.mul_nonneg(P, trivial, pnn);
+    let rn: (r.num = d * Nat::pow(2, 0).int()) = refl;
+    let rd: (r.den.int() = P) = refl;
+    let sd: ((q + c).den.int() = D * P) = refl;
+    let sn: ((q + c).num = q.num * P + 1 * D) = refl;
+    let td: ((r + c).den.int() = P * P) = refl;
+    let tn: ((r + c).num = r.num * P + 1 * P) = refl;
+    let ea: (r.num * (q + c).den.int() + m * P = (q.num * P) * P) = ring(rn, one, sd, parts2);
+    let eb: ((q + c).num * r.den.int() = (q.num * P) * P + D * P) = ring(sn, rd);
+    let ec: (q.num * (r + c).den.int() = (q.num * P) * P) = ring(td);
+    let ed: ((r + c).num * q.den.int() + m * P = (q.num * P) * P + D * P) = ring(tn, rn, one, parts2);
+    let up: (r <= q + c) = omega(ea, eb, lo2, dp);
+    let down: (q <= r + c) = omega(ec, ed, hi2);
+    let close: ((r - q).abs() <= c) = Rat::dist_le_of_le_add(up, down);
+    Rat::le_respects(Rat::abs_respects(Rat::sub_respects(Rat::same_sym(at), q.same_refl())), Rat::inv_pow2(p).same_refl(), close)
+}
