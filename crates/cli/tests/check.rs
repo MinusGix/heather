@@ -569,6 +569,9 @@ fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
     assert!(err.contains("refused as too large to store"), "{err}");
 
     // Populate, then probe. The `(only)` line is reserved, like `(cache)`.
+    // The second run replays and records the whole-replay verdict, so the
+    // baseline is the third: one that already finds it (`docs/module-dag-design.md` §13).
+    assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
     assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
     let cold = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
     let baseline = String::from_utf8_lossy(&cold.stdout).to_string();

@@ -33,7 +33,8 @@ rises by about a third (design §10).
   process replays its module's closure, about a quarter more cold CPU than
   folder children racing for shared modules. A long-lived worker that
   builds several modules in turn, restarted before its rail, would replay
-  less; the verdict store's Merkle walk is most of a replay. Width beyond
+  less; the verdict store's Merkle walk was most of a replay, and a
+  canonical replay now skips it (design §13). Width beyond
   three is memory-bound (design §8).
 - **The early cutoff's registry digest** is still over the whole world under
   the module, now the closure's
@@ -42,3 +43,4 @@ rises by about a third (design §10).
 ## Log
 
 - 2026-10-30: Expected refusals have images (design §11): a `lib/_tests` module refused exactly as its directives say is published and replays for a judging session of the same build. The gate builds ahead (§12, `heather check --build-jobs`): every missing module in a process of its own, longest chain first, so no child's rail pays for another's module; the race this issue listed is gone. Warm gate about half the wall time; cold about a fifth longer than racing, a third shorter than the chain.
+- 2026-10-30: A replay that rechecked clean over its own canonical world is vouched for whole next time (design §13): one verdict keyed by build, world identities and image content, so the per-binding Merkle walk is skipped. Moved replays keep the per-binding path. Warm tactic-test module about a sixth faster; decode-bound modules unchanged.
