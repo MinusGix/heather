@@ -41,6 +41,7 @@ const MODULES: &[(&str, &str)] = &[
     ("linarith", include_str!("../../../lib/std/tactic/linarith.hthr")),
     ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("rat", include_str!("../../../lib/std/num/rat.hthr")),
+    ("dyadic", include_str!("../../../lib/std/num/float/dyadic.hthr")),
     ("creal", include_str!("../../../lib/std/num/creal.hthr")),
 ];
 

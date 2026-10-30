@@ -312,6 +312,10 @@ pub struct LoadedModule {
     /// whole. The delta holds the module's other items
     /// (`docs/module-dag-design.md` §11).
     pub refusals: usize,
+    /// The SHA-256 of the semantic bytes `delta` was decoded from: with the
+    /// world it is replayed over, what a whole-replay verdict is keyed by
+    /// (`docs/module-dag-design.md` §13).
+    pub content: [u8; 32],
 }
 
 #[derive(Debug)]
@@ -771,6 +775,7 @@ impl ModuleImageCache {
             ));
         }
         let semantic = &bytes[HEADER..semantic_end];
+        let content = sha256(semantic);
         let delta = ModuleDelta::from_image_bytes(semantic, dependency_psi, self.limits)
             .map_err(ModuleCacheError::Decode)?;
         // The stored interface hash is the writer's projection. A different
@@ -806,6 +811,7 @@ impl ModuleImageCache {
             interface_hash,
             world,
             refusals,
+            content,
         }))
     }
 

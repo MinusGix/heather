@@ -668,6 +668,13 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                         0 => String::new(),
                         k => format!(" ({k} moved onto a changed dependency world)"),
                     };
+                    // A replay a stored verdict vouched for whole asked
+                    // nothing about its declarations
+                    // (`docs/module-dag-design.md` §13).
+                    let relocated = match n.replay_hits {
+                        0 => relocated,
+                        k => format!("{relocated} ({k} vouched for whole)"),
+                    };
                     println!(
                         "{path}: {} (cache) — {} declaration{} kernel-checked, {} accepted \
                          from cache, {} semantic module{} replayed{relocated}, {} declaration{} \

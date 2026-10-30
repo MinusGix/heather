@@ -155,6 +155,10 @@ const READ_BUDGET: usize = 4096;
 /// Leading parameters `Match` will treat as unknowns before giving up.
 const MATCH_PARAMETERS: usize = 64;
 
+/// How many δ/β reducts of a committed term a comparison with holes tries
+/// before giving up ([`Elaborator::same_tm`]).
+const HOLE_UNFOLD_STEPS: u64 = 16;
+
 /// What one `Match` learns about class parameters, shared by its attempts at
 /// every parameter count: the goals the dictionaries in scope answer, per
 /// class, and resolution's answer per goal.
@@ -1743,7 +1747,33 @@ impl Elaborator {
             lhs: Rc::new(r.term.clone()),
             rhs: Rc::new(r.term.clone()),
         };
-        self.same_ty(run, at, &refl(x), &refl(y), &x.level)
+        if self.same_ty(run, at, &refl(x), &refl(y), &x.level)? {
+            return Ok(true);
+        }
+        // The unifier pairs two rigid spines only when their heads agree, and
+        // leaves a side that would unfold to the other "a whnf's to find": a
+        // named constant `third()` against `CReal::ofRat(?q)` learns nothing,
+        // though `third`'s body is that call. So the committed side is stepped
+        // one δ/β reduct at a time, and the comparison retried at each, before
+        // it gives up — not its weak head normal form, which would unfold
+        // `ofRat` too and leave no call to pair `?q` with.
+        let (committed, partial) = match (run.committed_tm(&x.term), run.committed_tm(&y.term)) {
+            (Some(a), None) => ((a, x), y),
+            (None, Some(b)) => ((b, y), x),
+            _ => return Ok(false),
+        };
+        let (committed, side) = committed;
+        let cx = run.cx(at)?;
+        let oracle = self.goal_oracle();
+        // A reduct is a committed term; the holes are the world's first globals.
+        let m = run.world() as u32;
+        for reduct in oracle.term_reducts(&cx.gamma, &committed, HOLE_UNFOLD_STEPS) {
+            let r = Reified { term: reduct.shift_global(m), ty: side.ty.clone(), level: side.level.clone() };
+            if self.same_ty(run, at, &refl(&r), &refl(partial), &partial.level)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Unify `pat`, which mentions unsolved holes, with the committed `subj`

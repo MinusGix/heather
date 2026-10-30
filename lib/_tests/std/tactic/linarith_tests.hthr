@@ -34,7 +34,7 @@ theorem rat_product_atom(x, y, z: Rat, h: x * y <= z, hz: z < 1): y * x < 1 { li
 theorem creal_reciprocal_atom(x, y: CReal, hx: x.Apart(0), h: x⁻¹ <= y): x⁻¹ - y <= 0 { linarith(h) }
 
 // An atom with no source spelling, a real's term, is named by an alias.
-theorem rat_term_atoms(x: CReal, m, n: Nat, h: x.seq(m) <= x.seq(n) + 1, hn: x.seq(n) < 0): x.seq(m) < 1 { linarith(h, hn) }
+theorem rat_term_atoms(x: CReal, m, n: Nat, h: x.at(m) <= x.at(n) + 1, hn: x.at(n) < 0): x.at(m) < 1 { linarith(h, hn) }
 
 // Facts come from the context when the written ones do not suffice.
 theorem rat_from_context(a, b, c: Rat, h1: a < b, h2: b < c): a < c { linarith }
