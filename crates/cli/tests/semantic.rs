@@ -444,6 +444,46 @@ fn a_failed_import_stops_its_dependents_and_nothing_else() {
     let _ = std::fs::remove_dir_all(cache);
 }
 
+const LEFT: &str = "import shades;\nfn left() -> shades::Shade { shades::dark() }\n";
+const RIGHT: &str = "import shades;\nfn right() -> Nat { 2 }\n";
+const TOP: &str = "import left;\nimport right;\ntheorem both(): right::right() = 2 { refl }\n";
+
+/// A session told its load (`expect_load`) keeps a module's world only while
+/// a module still to come imports it, and its delta only while one holds it
+/// in its closure (`docs/module-dag-design.md` §8), so a folder of test
+/// modules does not hold a world per test. A load that leaves an importer
+/// out costs that importer a rebuilt world, never a verdict.
+#[test]
+fn a_session_lets_go_of_what_nothing_left_needs() {
+    let diamond = || [module("shades", SHADES), module("left", LEFT), module("right", RIGHT), module("top", TOP)];
+    for (tag, told) in [("load-all", 4), ("load-part", 2)] {
+        let cache = temp(tag);
+        let mut e = Elaborator::with_prelude().unwrap();
+        let mut session = SemanticSession::new(Some(cache.clone())).without_process_world();
+        let modules = diamond();
+        let imports: Vec<Vec<String>> = modules.iter().map(|m| heather_cli::semantic::written_imports(&m.src)).collect();
+        session.expect_load(modules.iter().zip(&imports).take(told).map(|(m, i)| (m.name.as_str(), i.as_slice())));
+        let mut held = Vec::new();
+        for m in &modules {
+            let out = session.check(&mut e, m, LintProfile::Default);
+            assert!(out.errors.is_empty(), "{tag} {}: {:?}", m.name, out.errors.iter().map(|e| e.render(&m.src)).collect::<Vec<_>>());
+            held.push(session.held());
+        }
+        if told == 4 {
+            // After `left`, `shades` is still imported by `right`; after
+            // `right` only `top` needs the two sides, and after `top` nothing.
+            assert_eq!(held, [(1, 1), (2, 2), (2, 3), (0, 0)], "{tag}");
+        } else {
+            // Only `shades` and `left` were announced, so after `left` nothing
+            // is needed. `right` and `top` then rebuild the worlds after
+            // `shades` and `left` from the store, and keep what they finish.
+            assert_eq!(held[1], (0, 0), "{tag}");
+            assert_eq!(held[3], (4, 2), "{tag}");
+        }
+        let _ = std::fs::remove_dir_all(cache);
+    }
+}
+
 const REFUSING: &str = "fn good() -> Nat { 1 }\n\n// expect-error: unbound name\nfn bad() -> Nat { nope() }\n";
 const OVER_REFUSING: &str = "import refusing;\ntheorem uses(): refusing::good() = 1 { refl }\n";
 

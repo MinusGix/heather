@@ -485,6 +485,9 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         // children share one store, and without this one waits on another's
         // build lock with modules of its own ready.
         let imports: Vec<Vec<String>> = modules.iter().map(|m| heather_cli::semantic::written_imports(&m.src)).collect();
+        // What each module still to come needs, so a finished module's world
+        // goes once nothing left imports it (`docs/module-dag-design.md` §8).
+        semantic.expect_load(modules.iter().zip(&imports).map(|(m, i)| (m.name.as_str(), i.as_slice())));
         let position: std::collections::HashMap<&str, usize> =
             modules.iter().enumerate().map(|(i, m)| (m.name.as_str(), i)).collect();
         let mut checked = vec![false; modules.len()];

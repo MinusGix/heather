@@ -263,6 +263,25 @@ pub struct SemanticSession {
     /// The stored bytes' digest of the image the last [`Self::check_in`]
     /// replayed, for the module's [`Finished`].
     hit_content: Option<[u8; 32]>,
+    /// The rest of the load, once the caller has said what it is
+    /// ([`Self::expect_load`]): what each module still to be checked will
+    /// need of the finished ones (`docs/module-dag-design.md` §8).
+    load: Option<Load>,
+}
+
+/// What the modules still to be checked need of the finished ones. A
+/// module's world after it (its `state`) is where its direct importers start
+/// from (§6); its canonical delta, registry part and hashes are read by any
+/// module whose closure holds it. Each count is of modules still to come;
+/// at zero the session drops what the count kept alive.
+struct Load {
+    /// Per module of the load not yet checked: its imports within the load,
+    /// and its closure (transitive imports) within the load.
+    pending: HashMap<String, (Vec<String>, Vec<String>)>,
+    /// Per module: how many pending modules import it directly.
+    importers: HashMap<String, usize>,
+    /// Per module: how many pending modules hold it in their closure.
+    holders: HashMap<String, usize>,
 }
 
 /// `--only` asked for a module's previous image and there was none: the
@@ -330,6 +349,114 @@ impl SemanticSession {
             only_met: BTreeSet::new(),
             expectations: false,
             hit_content: None,
+            load: None,
+        }
+    }
+
+    /// The modules the caller will check, each with its written imports, so
+    /// that the session keeps a finished module's world and delta only while
+    /// a module still to come needs them (`docs/module-dag-design.md` §8).
+    /// Without it everything finished is kept to the end, which a closure of
+    /// the library can afford but a folder of test modules over it cannot
+    /// when several such processes run side by side. Imports outside the
+    /// list are ignored; a module checked that the list does not name keeps
+    /// everything, as before. A world dropped and needed after all is built
+    /// again (`state_of`), and a delta decoded again from the store (a
+    /// session without one keeps every delta), so a wrong list costs time,
+    /// never a verdict.
+    pub fn expect_load<'a>(&mut self, modules: impl IntoIterator<Item = (&'a str, &'a [String])>) {
+        let direct: HashMap<&str, Vec<&str>> =
+            modules.into_iter().map(|(m, imports)| (m, imports.iter().map(String::as_str).collect())).collect();
+        fn close<'a>(m: &'a str, direct: &HashMap<&'a str, Vec<&'a str>>, closures: &mut HashMap<&'a str, Vec<&'a str>>) {
+            if closures.contains_key(m) {
+                return;
+            }
+            // Marked before the walk, so an import cycle (which the loader
+            // refuses) cannot recurse forever here.
+            closures.insert(m, Vec::new());
+            let mut closure: BTreeSet<&str> = BTreeSet::new();
+            for &d in direct[m].iter().filter(|d| direct.contains_key(*d)) {
+                close(d, direct, closures);
+                closure.insert(d);
+                closure.extend(closures[d].iter().copied());
+            }
+            closures.insert(m, closure.into_iter().collect());
+        }
+        let mut closures = HashMap::new();
+        for &m in direct.keys() {
+            close(m, &direct, &mut closures);
+        }
+        let mut load = Load { pending: HashMap::new(), importers: HashMap::new(), holders: HashMap::new() };
+        for (&m, imports) in &direct {
+            let mut imports: Vec<String> =
+                imports.iter().filter(|d| direct.contains_key(*d)).map(|d| d.to_string()).collect();
+            imports.sort();
+            imports.dedup();
+            for d in &imports {
+                *load.importers.entry(d.clone()).or_default() += 1;
+            }
+            let closure: Vec<String> = closures[m].iter().map(|d| d.to_string()).collect();
+            for d in &closure {
+                *load.holders.entry(d.clone()).or_default() += 1;
+            }
+            load.pending.insert(m.to_string(), (imports, closure));
+        }
+        self.load = Some(load);
+    }
+
+    /// How many finished modules the session holds the world after, and
+    /// how many it holds the delta of: what [`Self::expect_load`] lets go.
+    pub fn held(&self) -> (usize, usize) {
+        (self.done.values().filter(|f| f.state.is_some()).count(), self.done.values().filter(|f| f.delta.is_some()).count())
+    }
+
+    /// `name` has been checked: what it needed of its imports and closure is
+    /// no longer needed for it, and what nothing still to come needs is
+    /// dropped. The store keeps every image, so a delta dropped here could
+    /// be decoded again; the counts make sure it never has to be.
+    fn finished_with(&mut self, name: &str) {
+        let Some(load) = self.load.as_mut() else { return };
+        let Some((imports, closure)) = load.pending.remove(name) else { return };
+        let mut drop_state = Vec::new();
+        let mut drop_all = Vec::new();
+        for d in imports {
+            let n = load.importers.get_mut(&d).expect("counted");
+            *n -= 1;
+            if *n == 0 {
+                drop_state.push(d);
+            }
+        }
+        for d in closure {
+            let n = load.holders.get_mut(&d).expect("counted");
+            *n -= 1;
+            if *n == 0 {
+                drop_all.push(d);
+            }
+        }
+        if load.importers.get(name).is_none_or(|&n| n == 0) {
+            drop_state.push(name.to_string());
+        }
+        if load.holders.get(name).is_none_or(|&n| n == 0) {
+            drop_all.push(name.to_string());
+        }
+        for m in drop_state {
+            if let Some(f) = self.done.get_mut(&m) {
+                f.state = None;
+            }
+        }
+        // The caller's world, when it has one, was moved its own copy of
+        // each module and needs nothing of the canonical ones. Without a
+        // store a delta is the only copy, so it stays.
+        if self.images.is_none() {
+            drop_all.clear();
+        }
+        for m in drop_all {
+            if let Some(f) = self.done.get_mut(&m) {
+                f.state = None;
+                f.delta = None;
+                f.registry = None;
+                f.hashes = None;
+            }
         }
     }
 
@@ -424,6 +551,17 @@ impl SemanticSession {
     /// a module that did not check is not checked: there is no world to
     /// check it in.
     pub fn check(
+        &mut self,
+        elab: &mut Elaborator,
+        module: &Module,
+        lint_profile: LintProfile,
+    ) -> ModuleOutcome {
+        let outcome = self.check_held(elab, module, lint_profile);
+        self.finished_with(&module.name);
+        outcome
+    }
+
+    fn check_held(
         &mut self,
         elab: &mut Elaborator,
         module: &Module,
