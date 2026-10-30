@@ -10,8 +10,10 @@
 //
 // Equality is a setoid, `CReal::Same`, written `≈`: two reals are the same
 // when their terms become arbitrarily close, with the index from which they
-// are within 1/(k+1) given as data (`∃` is a record, so the modulus
-// computes). Two sequences that differ in finitely many places, or approach
+// are within 1/(k+1) given as data. Nothing needs to ask a proof for that
+// index: for regular sequences 2k+1 always serves (Bishop's form, below,
+// `close_of_same`), so a result that must compute, like the start of a
+// moved gap (`lt_respects`), reads closeness there. Two sequences that differ in finitely many places, or approach
 // the same number at different speeds, are `≈` and not `=`; the regularity
 // proofs are never compared.
 //
@@ -134,17 +136,21 @@ fn CReal::BishopSame(x, y: CReal) → Type {
     (n: Nat) → (x.seq(n) - y.seq(n)).abs() <= Rat::inv_succ(n) + Rat::inv_succ(n)
 }
 
+theorem CReal::close_of_bishop({x, y: CReal}, h: x.BishopSame(y), k, n: Nat, from: k + k + 1 <= n):
+    (x.seq(n) - y.seq(n)).abs() <= Rat::inv_succ(k)
+{
+    let fine = Rat::inv_succ(n);
+    let half = Rat::inv_succ(k + k + 1);
+    let le_half: (fine <= half) = Rat::inv_succ_antitone(k + k + 1, n, from);
+    calc {
+        (x.seq(n) - y.seq(n)).abs() <= fine + fine := h(n),
+        <= half + half := Rat::add_le_mono(le_half, le_half),
+        ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
+    }
+}
+
 theorem CReal::same_of_bishop({x, y: CReal}, h: x.BishopSame(y)): x ≈ y {
-    x.same_of_close(y, λ k n from => {
-        let fine = Rat::inv_succ(n);
-        let half = Rat::inv_succ(k + k + 1);
-        let le_half: (fine <= half) = Rat::inv_succ_antitone(k + k + 1, n, from);
-        calc {
-            (x.seq(n) - y.seq(n)).abs() <= fine + fine := h(n),
-            <= half + half := Rat::add_le_mono(le_half, le_half),
-            ≈ Rat::inv_succ(k) := Rat::inv_succ_half(k),
-        }
-    })
+    x.same_of_close(y, λ k n from => CReal::close_of_bishop(h, k, n, from))
 }
 
 theorem CReal::bishop_of_same({x, y: CReal}, h: x ≈ y): x.BishopSame(y) {
@@ -180,6 +186,14 @@ theorem CReal::bishop_of_same({x, y: CReal}, h: x ≈ y): x.BishopSame(y) {
             }
         })
     }
+}
+
+// `≈` read at one precision from the fixed index 2k+1, whatever modulus the
+// proof carries: through Bishop's form, which has none.
+theorem CReal::close_of_same({x, y: CReal}, h: x ≈ y, k, n: Nat, from: k + k + 1 <= n):
+    (x.seq(n) - y.seq(n)).abs() <= Rat::inv_succ(k)
+{
+    CReal::close_of_bishop(CReal::bishop_of_same(h), k, n, from)
 }
 
 // ---------------------------------------------------------------------------
@@ -692,35 +706,33 @@ theorem CReal::lt_of_term(self x, y: CReal, k, n: Nat, far: 16 * k + 15 <= n,
     }))
 }
 
-// Moving each side by 1/(4k+4) along `≈` costs half of a 1/(k+1) gap.
+// Moving each side by 1/(4k+4) along `≈` costs half of a 1/(k+1) gap. The
+// closeness is read from the fixed index 8k+7 (`close_of_same`), so the new
+// start depends on the gap alone and computing it never opens the `≈`
+// proofs.
 theorem CReal::lt_respects({x, x2, y, y2: CReal}, hx: x ≈ x2, hy: y ≈ y2, h: x < y): x2 < y2 {
     match h {
         Exists(k, rest) => match rest {
             Exists(s, gap) => {
                 let k2 = k + k + 1;
                 let k4 = k2 + k2 + 1;
+                let far = k4 + k4 + 1;
                 let half = Rat::inv_succ(k2);
                 let e = Rat::inv_succ(k4);
-                match hx(k4) {
-                    Exists(i, cx) => match hy(k4) {
-                        Exists(j, cy) => Exists(k2, Exists(s.max(i.max(j)), λ n from => {
-                            let inner: (i.max(j) <= n) = i.max(j).le_trans(s.max(i.max(j)), n, s.le_max_r(i.max(j)), from);
-                            let at_s: (s <= n) = s.le_trans(s.max(i.max(j)), n, s.le_max_l(i.max(j)), from);
-                            let at_i: (i <= n) = i.le_trans(i.max(j), n, i.le_max_l(j), inner);
-                            let at_j: (j <= n) = j.le_trans(i.max(j), n, i.le_max_r(j), inner);
-                            let dx: ((x2.seq(n) - x.seq(n)).abs() <= e) = calc {
-                                (x2.seq(n) - x.seq(n)).abs() ≈ (x.seq(n) - x2.seq(n)).abs() := x2.seq(n).abs_sub_comm(x.seq(n)),
-                                <= e := cx(n, at_i),
-                            };
-                            let dy: ((y.seq(n) - y2.seq(n)).abs() <= e) = cy(n, at_j);
-                            let wide = calc {
-                                x.seq(n) + (half + (e + e)) ≈ x.seq(n) + Rat::inv_succ(k) := Rat::add_respects(x.seq(n).same_refl(), ring),
-                                <= y.seq(n) := gap(n, at_s),
-                            };
-                            Rat::le_of_close_gap(Rat::le_add_of_dist(dx), Rat::le_add_of_dist(dy), wide)
-                        })),
-                    },
-                }
+                Exists(k2, Exists(s.max(far), λ n from => {
+                    let at_s: (s <= n) = s.le_trans(s.max(far), n, s.le_max_l(far), from);
+                    let at_far: (far <= n) = far.le_trans(s.max(far), n, s.le_max_r(far), from);
+                    let dx: ((x2.seq(n) - x.seq(n)).abs() <= e) = calc {
+                        (x2.seq(n) - x.seq(n)).abs() ≈ (x.seq(n) - x2.seq(n)).abs() := x2.seq(n).abs_sub_comm(x.seq(n)),
+                        <= e := CReal::close_of_same(hx, k4, n, at_far),
+                    };
+                    let dy: ((y.seq(n) - y2.seq(n)).abs() <= e) = CReal::close_of_same(hy, k4, n, at_far);
+                    let wide = calc {
+                        x.seq(n) + (half + (e + e)) ≈ x.seq(n) + Rat::inv_succ(k) := Rat::add_respects(x.seq(n).same_refl(), ring),
+                        <= y.seq(n) := gap(n, at_s),
+                    };
+                    Rat::le_of_close_gap(Rat::le_add_of_dist(dx), Rat::le_add_of_dist(dy), wide)
+                }))
             },
         },
     }
