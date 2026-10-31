@@ -128,6 +128,13 @@ theorem StrictOrder::le_of_same_r(x, y, z: A, e: z ≈ y, h: x <= y): x <= z {
     StrictOrder::le_respects(x, x, y, z, A.rel_refl(x), A.rel_sym(z, y, e), h)
 }
 
+// A `≤` is a refutation, so a proof of one may split on `y < z` inside it:
+// nothing is decided and no locatedness is used. `CReal::le_by_sign` is this
+// at `z = 0`.
+theorem StrictOrder::le_by_cases(u, v, y, z: A, below: y < z → u <= v, above: z <= y → u <= v): u <= v {
+    A.le_of_not_lt(u, v, λ back => A.not_lt_of_le(u, v, above(A.le_of_not_lt(z, y, λ yz => A.not_lt_of_le(u, v, below(yz), back))), back))
+}
+
 theorem StrictOrder::lt_of_same_l(x, y, z: A, e: x ≈ y, h: y < z): x < z {
     A.lt_respects(y, x, z, z, A.rel_sym(x, y, e), A.rel_refl(z), h)
 }
@@ -844,6 +851,20 @@ theorem OrderedField::mul_le_mono_l(x, y, z: A, h: x <= y, hz: A.unit <= z): z *
 
 theorem OrderedField::mul_le_mono_r(x, y, z: A, h: x <= y, hz: A.unit <= z): x * z <= y * z {
     StrictOrder::le_respects(z * x, x * z, z * y, y * z, A.commutative.comm(z, x), A.commutative.comm(z, y), OrderedField::mul_le_mono_l(x, y, z, h, hz))
+}
+
+// Multiplying by a nonpositive reverses a weak inequality: negate the
+// factor, multiply, and negate back.
+theorem OrderedField::mul_le_mono_l_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit): z * y <= z * x {
+    let nz: (A.unit <= A.inv(z)) = StrictOrder::le_of_same_l(A.unit, A.inv(A.unit), A.inv(z), A.rel_sym(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(z)), LocatedAddGroup::neg_le(z, A.unit, hz));
+    let flipped: (A.inv(A.inv(z) * y) <= A.inv(A.inv(z) * x)) = LocatedAddGroup::neg_le(A.inv(z) * x, A.inv(z) * y, OrderedField::mul_le_mono_l(x, y, A.inv(z), h, nz));
+    let back = λ (w: A) => A.rel_trans(A.inv(A.inv(z) * w), A.inv(A.inv(z * w)), z * w,
+        A.inv_respects(A.inv(z) * w, A.inv(z * w), Ring::neg_mul(z, w)), GroupRel::inv_inv(+, z * w));
+    StrictOrder::le_respects(A.inv(A.inv(z) * y), z * y, A.inv(A.inv(z) * x), z * x, back(y), back(x), flipped)
+}
+
+theorem OrderedField::mul_le_mono_r_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit): y * z <= x * z {
+    StrictOrder::le_respects(z * y, y * z, z * x, x * z, A.commutative.comm(z, y), A.commutative.comm(z, x), OrderedField::mul_le_mono_l_nonpos(x, y, z, h, hz))
 }
 
 // A product of nonnegatives is nonnegative.
