@@ -1978,9 +1978,7 @@ theorem Nat::div_checked_parts(n, d, g: Nat): Nat::div_checked(n, d, g).quot() *
         (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).quot() * d
         + (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() = n
     {
-        True => λ le => match Nat::leb(Succ(n - g * d), d) as λ c2 =>
-            (match c2 { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }).quot() * d + (match c2 { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }).rem() = n
-        {
+        True => λ le => match Nat::leb(Succ(n - g * d), d) {
             True => trans((g * d).add_comm(n - g * d), (g * d).sub_add_cancel(n, (g * d).leb_sound(n, j(sym(le), λ c _ => c.IsTrue(), trivial)))),
             False => n.ldiv_parts(d),
         },
