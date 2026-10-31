@@ -732,6 +732,8 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
             True => Some(Compiled(p.exits(layout, status), names)),
         },
         Arg(index, buf, len) => p.arg(layout, out, index, buf, len, names),
+        // Not compiled yet (docs/native-procedures-design.md §7, slice 2).
+        Perform(_, _, _) => None,
     }
 }
 
@@ -984,6 +986,7 @@ fn Stmt::scan(self s: Stmt, layout: Layout, out: List<Nat>, at: Nat) → Compile
         },
         Exit(status) => CompileScan::of(at, 4, ids_refusal(layout, [status])),
         Arg(index, buf, len) => CompileScan::of(at, 6, buffer_refusal(layout, [index, len], buf)),
+        Perform(procedure, _, _) => CompileScan::of(at, 7, [14, procedure, 0]),
     }
 }
 
@@ -1064,6 +1067,7 @@ fn Stmt::shape(self s: Stmt, m: Shape) → Shape {
         Invoke(shape) => Invoke(shape).leaf_shape(m),
         Exit(code) => Exit(code).leaf_shape(m),
         Arg(index, buf, len) => Arg(index, buf, len).leaf_shape(m),
+        Perform(procedure, args, results) => Perform(procedure, args, results).leaf_shape(m),
     }
 }
 
@@ -1085,9 +1089,9 @@ fn Stmt::emission_reading(self s: Stmt, layout: Layout, out: List<Nat>, names: N
 // parent's (`Stmt::emit_then_of` and its siblings, native_compile_correct):
 // a `Then`'s two statements, a `Branch`'s two arms, a `Repeat`'s body on the
 // left; and the word a `Branch` or `Repeat` tests. A leaf is its own parts.
-fn Stmt::is_then(self s: Stmt) → Bool { match s { Then(_, _) => True, Compute(_) => False, Invoke(_) => False, Branch(_, _, _) => False, Repeat(_, _) => False, Exit(_) => False, Arg(_, _, _) => False } }
-fn Stmt::is_branch(self s: Stmt) → Bool { match s { Branch(_, _, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Repeat(_, _) => False, Exit(_) => False, Arg(_, _, _) => False } }
-fn Stmt::is_repeat(self s: Stmt) → Bool { match s { Repeat(_, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Branch(_, _, _) => False, Exit(_) => False, Arg(_, _, _) => False } }
-fn Stmt::left(self s: Stmt) → Stmt { match s { Then(first, _) => first, Branch(_, yes, _) => yes, Repeat(body, _) => body, Compute(_) => s, Invoke(_) => s, Exit(_) => s, Arg(_, _, _) => s } }
-fn Stmt::right(self s: Stmt) → Stmt { match s { Then(_, rest) => rest, Branch(_, _, no) => no, Repeat(_, _) => s, Compute(_) => s, Invoke(_) => s, Exit(_) => s, Arg(_, _, _) => s } }
-fn Stmt::word(self s: Stmt) → Nat { match s { Branch(condition, _, _) => condition, Repeat(_, again) => again, Then(_, _) => 0, Compute(_) => 0, Invoke(_) => 0, Exit(_) => 0, Arg(_, _, _) => 0 } }
+fn Stmt::is_then(self s: Stmt) → Bool { match s { Then(_, _) => True, Compute(_) => False, Invoke(_) => False, Branch(_, _, _) => False, Repeat(_, _) => False, Exit(_) => False, Arg(_, _, _) => False, Perform(_, _, _) => False } }
+fn Stmt::is_branch(self s: Stmt) → Bool { match s { Branch(_, _, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Repeat(_, _) => False, Exit(_) => False, Arg(_, _, _) => False, Perform(_, _, _) => False } }
+fn Stmt::is_repeat(self s: Stmt) → Bool { match s { Repeat(_, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Branch(_, _, _) => False, Exit(_) => False, Arg(_, _, _) => False, Perform(_, _, _) => False } }
+fn Stmt::left(self s: Stmt) → Stmt { match s { Then(first, _) => first, Branch(_, yes, _) => yes, Repeat(body, _) => body, Compute(_) => s, Invoke(_) => s, Exit(_) => s, Arg(_, _, _) => s, Perform(_, _, _) => s } }
+fn Stmt::right(self s: Stmt) → Stmt { match s { Then(_, rest) => rest, Branch(_, _, no) => no, Repeat(_, _) => s, Compute(_) => s, Invoke(_) => s, Exit(_) => s, Arg(_, _, _) => s, Perform(_, _, _) => s } }
+fn Stmt::word(self s: Stmt) → Nat { match s { Branch(condition, _, _) => condition, Repeat(_, again) => again, Then(_, _) => 0, Compute(_) => 0, Invoke(_) => 0, Exit(_) => 0, Arg(_, _, _) => 0, Perform(_, _, _) => 0 } }

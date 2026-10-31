@@ -1,0 +1,87 @@
+// Procedures in the source mean what docs/native-procedures-design.md §2
+// says: each probe is a source whose exit status is what its calls
+// computed, evaluated by `Source::tree` and its silent steps stripped. A
+// recursion that uses its own word after the call (not a tail loop), the
+// depth exit one call past the source's depth, a callee's locals given
+// back to the caller, and a buffer the callee writes, which the caller
+// sees.
+import native_source;
+import function_ir;
+import list;
+import bitvec;
+import itree;
+import linux_trees;
+import nat;
+
+fn ops(nodes: List<Node>) → Stmt { Compute(Dataflow(Region(Ports([]), nodes, Ports([])))) }
+
+fn exits(src: Source, status: Nat) → Type { ITree::next(Events::linux(), src.tree([], 4)) = Exits(BitVec::ofNat(status)) }
+
+// sum(k) = k + sum(k - 1), sum(0) = 0: the parameter `k` (word 1) is read
+// after the recursive call, so the call must give it back.
+fn sum_body() → Stmt {
+    Then(ops([Const(64, 4, 0), Equal(64, 3, 1, 4)]),
+        Branch(3,
+            ops([Const(64, 2, 0)]),
+            Then(ops([Const(64, 4, 1), Sub(64, 5, 1, 4)]),
+                Then(Perform(0, [5], [6]), ops([Add(64, 2, 6, 1)])))))
+}
+
+fn sum() → Procedure { Procedure(params := [1], results := [2], locals := [1, 2, 3, 4, 5, 6], body := sum_body()) }
+
+// sum(k) into word 7, then exit with `status`.
+fn summing(k, depth, status: Nat) → Source {
+    Source(functions := [], buffers := [], words := 8,
+        main := Then(ops([Const(64, 0, k)]), Then(Perform(0, [0], [7]), Exit(status))),
+        procedures := [sum()], depth := depth)
+}
+
+// sum(4) nests five calls deep.
+theorem sum_four(): exits(summing(4, 5, 7), 10) { refl }
+theorem sum_zero(): exits(summing(0, 1, 7), 0) { refl }
+
+// One call short of the depth it needs: the fifth call exits 139.
+theorem sum_too_deep(): exits(summing(4, 4, 7), 139) { refl }
+theorem sum_no_depth(): exits(summing(0, 0, 7), 139) { refl }
+
+// A word the callee owns is the caller's again after the call: word 1 is
+// `sum`'s parameter, and `main` set it first.
+fn kept() → Source {
+    Source(functions := [], buffers := [], words := 8,
+        main := Then(ops([Const(64, 0, 3), Const(64, 1, 9)]), Then(Perform(0, [0], [7]), Exit(1))),
+        procedures := [sum()], depth := 8)
+}
+
+theorem caller_word_kept(): exits(kept(), 9) { refl }
+
+// The same helper from two sites: sum(2) + sum(3).
+fn twice() → Source {
+    Source(functions := [], buffers := [], words := 10,
+        main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]),
+            Then(ops([Const(64, 0, 3)]), Then(Perform(0, [0], [8]), Then(ops([Add(64, 9, 7, 8)]), Exit(9)))))),
+        procedures := [sum()], depth := 8)
+}
+
+theorem helper_twice(): exits(twice(), 9) { refl }
+
+// A buffer is shared: the callee stores a byte, the caller reads it.
+fn poke() → Procedure {
+    Procedure(params := [1], results := [], locals := [1, 2, 3],
+        body := ops([Const(64, 2, 0), BufferStore(3, 0, 2, 1)]))
+}
+
+fn shared() → Source {
+    Source(functions := [], buffers := [Buffer(4)], words := 6,
+        main := Then(ops([Const(64, 0, 42)]), Then(Perform(0, [0], []), Then(ops([Const(64, 4, 0), BufferLoad(5, 0, 4)]), Exit(5)))),
+        procedures := [poke()], depth := 1)
+}
+
+theorem buffer_shared(): exits(shared(), 42) { refl }
+
+// A call to no procedure does nothing.
+fn missing() → Source {
+    Source(functions := [], buffers := [], words := 2,
+        main := Then(ops([Const(64, 0, 5)]), Then(Perform(3, [0], [0]), Exit(0))), depth := 1)
+}
+
+theorem missing_procedure(): exits(missing(), 5) { refl }

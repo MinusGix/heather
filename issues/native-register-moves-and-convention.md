@@ -4,7 +4,7 @@ status: open
 labels: [native,x86]
 area: heather-in-heather
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-31
 milestone: [nh-procedures]
 ---
 
@@ -23,3 +23,7 @@ arguments and results go.
   and result registers, and `Held` across a call from it.
 - Per-procedure `Homes`, so two procedures may use different allocators
   ([[native-allocator-class]]).
+
+## Log
+
+- 2026-10-31: docs/native-procedures-design.md §3 fixes the first convention: arguments and results in RDI, RSI, RDX, RCX, R8, R9 (at most six each), homes global, the callee saves its own locals. Every word outside a callee's locals is live across a call to it; per-call-site pass-through sets with per-procedure clobber sets, and moves between homes, stay here.

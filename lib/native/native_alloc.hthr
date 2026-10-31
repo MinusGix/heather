@@ -338,6 +338,7 @@ fn Stmt::live_in(self s: Stmt, homes: Homes, out: List<Nat>) → List<Nat> {
         Repeat(_, again) => homes.loop_set(again),
         Exit(status) => [status],
         Arg(index, _, len) => live_before([index], len, out),
+        Perform(_, args, results) => args.union(out.minus(results)),
     }
 }
 
@@ -351,6 +352,7 @@ fn Stmt::loop_out(self s: Stmt, homes: Homes, out: List<Nat>) → List<Nat> {
         Branch(_, _, _) => out,
         Exit(_) => out,
         Arg(_, _, _) => out,
+        Perform(_, _, _) => out,
     }
 }
 
@@ -372,6 +374,7 @@ fn Stmt::checks(self s: Stmt, homes: Homes, out: List<Nat>) → Bool {
         },
         Exit(_) => True,
         Arg(_, _, len) => homes.apart(len, out),
+        Perform(_, _, results) => homes.all_apart(results, out),
     }
 }
 
@@ -390,6 +393,7 @@ fn Stmt::checked(self s: Stmt, homes: Homes, out: List<Nat>) → Option<List<Nat
         },
         Exit(status) => Some([status]),
         Arg(index, _, len) => match homes.apart(len, out) { False => None, True => Some(live_before([index], len, out)) },
+        Perform(_, args, results) => match homes.all_apart(results, out) { False => None, True => Some(args.union(out.minus(results))) },
     }
 }
 
@@ -475,6 +479,7 @@ fn Stmt::needs(self s: Stmt, homes: Homes, out: List<Nat>, sets: List<List<Nat>>
         },
         Exit(status) => Needs([status], sets),
         Arg(index, _, len) => Needs(live_before([index], len, out), sets),
+        Perform(_, args, results) => Needs(args.union(out.minus(results)), sets),
     }
 }
 
@@ -498,6 +503,7 @@ fn Stmt::words(self s: Stmt) → List<Nat> {
         Repeat(body, again) => Cons(again, body.words()),
         Exit(status) => [status],
         Arg(index, _, len) => [index, len],
+        Perform(_, args, results) => args ++ results,
     }
 }
 
@@ -655,6 +661,7 @@ fn Stmt::graph(self s: Stmt, homes: Homes, out: List<Nat>, of: List<List<Bool>>)
         Repeat(body, again) => Graph(homes.loop_set(again), body.graph(homes, loop_after(again, homes.loop_set(again), out), of).of),
         Exit(status) => Graph([status], of),
         Arg(index, _, len) => Graph(live_before([index], len, out), of.written(len, out)),
+        Perform(_, args, results) => Graph(args.union(out.minus(results)), of.all_written(results, out)),
     }
 }
 
@@ -709,6 +716,7 @@ fn Stmt::weights(self s: Stmt, loop_weight, scale: Nat, weights: List<Nat>) → 
         Repeat(body, again) => body.weights(loop_weight, scale + loop_weight, weights.bump(again, scale + loop_weight)),
         Exit(status) => weights.bump(status, scale),
         Arg(index, _, len) => weights.bump_all([index, len], scale),
+        Perform(_, args, results) => weights.bump_all(args ++ results, scale),
     }
 }
 
@@ -1084,6 +1092,9 @@ theorem Stmt::checked_wide(self s: Stmt, loops: List<List<Nat>>, m: List<Nat>, w
             Inl(e) => sw(i, Inl(e)),
             Inr(never) => false_elim(never),
         }, so),
+        Perform(_, args, results) => λ out so sw => j(sym(results.all_apart_slots(loops, out)),
+            λ b _ => Option::Inside(match b as λ _ => Option<List<Nat>> { False => None, True => Some(args.union(out.minus(results))) }, m),
+            args.inside_union(out.minus(results), m, λ i x => sw(i, args.mem_append_l(results, i, x)), out.inside_minus(results, m, so))),
     }
 }
 

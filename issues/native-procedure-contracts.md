@@ -4,7 +4,7 @@ status: open
 labels: [native,proofs,design]
 area: heather-in-heather
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-31
 milestone: [nh-procedures]
 ---
 
@@ -59,3 +59,7 @@ This issue records that shape so the procedures round starts from it.
   should be the same notion.
 - **[[io-image-process-stack]]** owns the process stack that activation
   frames live on.
+
+## Log
+
+- 2026-10-31: docs/native-procedures-design.md §5 takes the derived-contract part: a procedure's claim is Stmt::emit_runs at the callee's Target (its frames on the caller's, one less depth), proved for every procedure at once by induction on the call depth (the linking theorem, depth for Löb). No per-slot footprint is needed for it: the callee's words are its own by the meaning (restored), buffers shared. The footprint, the relational frame for Proved contracts and the two controls stay here.
