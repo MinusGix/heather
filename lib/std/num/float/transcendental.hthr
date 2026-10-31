@@ -8,7 +8,8 @@
 // returns a float only with a proof that it is the correct rounding of the
 // real (`exp_fin_correct`, `log_fin_correct`); a `None` means the tries ran out, never a wrong
 // answer. That the search always ends, so that `None` cannot happen with
-// enough tries, is the Padé gap of issues/float-round-real-termination.md.
+// enough tries, is `round_real_apart` given the Padé gap and narrowing
+// enclosures (issues/exp-log-grid-gap.md).
 
 import logic;
 import bool;
