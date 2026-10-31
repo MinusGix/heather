@@ -56,6 +56,18 @@ Same box, before → after (seconds, single samples):
 | 32-pass cat write-elf | 78 s | 62 s |
 | its certificate's kernel gate | 19 s | 10 s |
 
+`scripts/perf ab --base origin/master --file
+perf/bench/fixtures/yes_tool_elf_certificate.hthr` (cold, three interleaved
+samples, every sample separated): the frozen `yes_tool` certificate over its
+whole closure falls by about a third in wall time, more in kernel time and
+peak memory. Most of that is library lemmas that mention `Asm` in their
+statements (`Stmt::emit_extends`, `Stmt::emit_runs`, `Target::loop_head`
+each to about a fifth), not the certificate itself: every module over the
+native compiler gets cheaper, cold. Counters: typing memo hits about
+halved, `instance_match` calls down a quarter, global rescopes down over a
+third; evaluator steps up about one percent (the codes that now exist are
+unfolded where they are read), one calc showcase unchanged.
+
 By family on the 32-pass cat: `at_#` fell to about a third, `upto_#_is`
 to under half, `e_#` and `checked_#` by about a quarter. On `cat_files_tool`
 the cut is smaller (`at_#` to under half), so the gain widens with the code.
