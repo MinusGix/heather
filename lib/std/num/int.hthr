@@ -1350,6 +1350,10 @@ fn Int::ofNat_hom() → OrderedSemiringHom<Nat, Int>(Nat::int,
     }
 }
 
+// The `Nat → Int` edge for `↑` (lib/std/algebra/morphism.hthr): `↑n` is
+// `OfNat(n)`, one spelling for every cast into `Int`.
+instance Cast<Nat, Int>(OfNat) { }
+
 theorem Int::zero_le_ofNat(n: Nat): OfNat(0) <= OfNat(n) { trivial }
 
 theorem Int::negsucc_le_ofNat(m, n: Nat): NegSucc(m) <= OfNat(n) { trivial }

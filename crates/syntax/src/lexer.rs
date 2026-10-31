@@ -127,6 +127,10 @@ pub enum TokKind {
     /// bytes each, matched in the three-byte window beside `∃`.
     BigSum,    // ∑
     BigProd,   // ∏
+    /// `↑` (U+2191) — a cast (docs/casting-design.md §5.2, §14): a prefix
+    /// operator whose target the checking position supplies. Three bytes,
+    /// matched beside `∑`.
+    UpArrow,   // ↑
     Forall,    // ∀
     /// `$` — splice, inside a `code { … }` quote (`$x`, `${e}`) and in type
     /// position for a `TyCode` binder (`[$a; $k]`). The splice *form* is
@@ -603,6 +607,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "∃" => Some(TokKind::Exists),
             "∑" => Some(TokKind::BigSum),
             "∏" => Some(TokKind::BigProd),
+            "↑" => Some(TokKind::UpArrow),
             "∀" => Some(TokKind::Forall),
             "≠" => Some(TokKind::Ne),
             "⊢" => Some(TokKind::Turnstile),

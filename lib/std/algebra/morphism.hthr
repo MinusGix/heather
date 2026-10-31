@@ -15,6 +15,14 @@
 // `map_add` states `(x + y).rat() ≈ x.rat() + y.rat()`, which is what the
 // goals that use it say.
 
+// A cast edge for the surface (docs/casting-design.md §5.2, §14): `↑e` at a
+// position expecting `B` is the maps of the edges along the shortest path
+// from `e`'s carrier to `B`, applied (`↑n : Rat` is `Rat::ofInt(OfNat(n))`).
+// An edge is an instance `Cast<A, B>(map)` beside its target type, indexed by
+// the map so that one source has several targets; only lossless maps are
+// edges, and two shortest paths between two carriers are refused at the cast.
+class Cast<A, B>(map: A → B) { }
+
 // An order-embedding ring morphism: preserves `≈`, `0`, `1`, `+`, `*` and
 // negation, and preserves and reflects `<=` and `<`.
 record OrderedRingHom<A, B>(map: A → B,

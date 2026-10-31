@@ -495,6 +495,8 @@ fn Rat::ofInt_hom() → OrderedRingHom<Int, Rat>(Rat::ofInt,
     }
 }
 
+instance Cast<Int, Rat>(Rat::ofInt) { }
+
 theorem Rat::lt_trichotomy(self x, y: Rat): x < y ∨ x ≈ y ∨ y < x {
     (x.num * y.den.int()).lt_trichotomy(y.num * x.den.int())
 }

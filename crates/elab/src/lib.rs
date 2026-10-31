@@ -6390,8 +6390,9 @@ impl Elaborator {
         let want_s = self.display_type_clean(cx, expected);
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
-                "this has type `{g}`, but `{w}` is expected here{}",
+                "this has type `{g}`, but `{w}` is expected here{}{}",
                 self.opaque_equation_note(cx, got, expected),
+                self.cast_help(cx, got, expected, *span),
             )),
             (Some(g), Some(_)) => MismatchNote::Located(format!(
                 "this has type `{g}` where a type that displays the same is expected; \
@@ -9016,6 +9017,9 @@ impl Elaborator {
                         .value_skel(cx, name)
                         .is_some_and(|s| s.leading_implicit() > 0)
             }
+            // A cast takes its target from the checking position, as a
+            // numeral does (docs/casting-design.md §5.2).
+            ExprKind::App { .. } if surface::is_cast(e) => true,
             ExprKind::App { .. } => match e.as_named() {
                 Some(("absurd", _, _)) => !self.shadowed(cx, "absurd"),
                 Some((name @ ("rel_cong" | "rel_derive"), _, false)) => !self.shadowed(cx, name) && self.ctor_here(cx, name).is_none(),

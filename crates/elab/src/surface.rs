@@ -27,6 +27,7 @@ pub(crate) fn operator_carrier_leaf(
     loop {
         if let ExprKind::App { head, args, .. } = &leaf.kind
             && matches!(head.kind, ExprKind::OpSymbol { .. })
+            && !is_cast(leaf)
             && let Some(first) = args.first()
         {
             pending.extend(args[1..].iter().rev());
@@ -34,7 +35,9 @@ pub(crate) fn operator_carrier_leaf(
             continue;
         }
         let numeral = matches!(leaf.kind, ExprKind::Num(_));
-        if !numeral && !checking_only(leaf) {
+        // A cast `↑e` is a leaf, and checking-only: its operand's carrier is
+        // the source, never the spine's (docs/casting-design.md §5.2).
+        if !numeral && !is_cast(leaf) && !checking_only(leaf) {
             return leaf;
         }
         first_leaf.get_or_insert(leaf);
@@ -48,6 +51,14 @@ pub(crate) fn operator_carrier_leaf(
     }
 }
 
+/// `↑e`, a cast (docs/casting-design.md §5.2): the prefix symbol `↑` applied
+/// to one operand.
+pub(crate) fn is_cast(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::App { head, args, .. }
+        if args.len() == 1
+            && matches!(&head.kind, ExprKind::OpSymbol { symbol, fixity: heather_syntax::OpFixity::Prefix } if symbol == "↑"))
+}
+
 /// Numerals with no inference-capable anchor need a checking carrier.
 /// `1 + a` can infer, while `1 + make()` still needs a carrier when `make`'s
 /// implicit type can only be recovered from its expected result.
@@ -55,10 +66,13 @@ pub(crate) fn expression_needs_numeral_carrier(
     e: &Expr,
     checking_only: impl FnMut(&Expr) -> bool,
 ) -> bool {
+    // A cast needs its target exactly as a numeral needs its carrier.
     match &e.kind {
         ExprKind::Num(_) => true,
+        ExprKind::App { .. } if is_cast(e) => true,
         ExprKind::App { head, .. } if matches!(head.kind, ExprKind::OpSymbol { .. }) => {
-            matches!(operator_carrier_leaf(e, checking_only).kind, ExprKind::Num(_))
+            let leaf = operator_carrier_leaf(e, checking_only);
+            matches!(leaf.kind, ExprKind::Num(_)) || is_cast(leaf)
         }
         _ => false,
     }
@@ -69,13 +83,14 @@ pub(crate) fn expression_needs_numeral_carrier(
 pub(crate) fn expression_left_leaf_is_numeral(mut e: &Expr) -> bool {
     while let ExprKind::App { head, args, .. } = &e.kind
         && matches!(head.kind, ExprKind::OpSymbol { .. })
+        && !is_cast(e)
         && let Some(first) = args.first()
     {
         e = first;
     }
     // A character literal is as flexible as a numeral: `'\t' <= b` at a
     // byte takes its carrier from `b`, through `CharLiteral`.
-    matches!(e.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_))
+    matches!(e.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_)) || is_cast(e)
 }
 
 /// Read an expression as type syntax when its shape has that second reading.

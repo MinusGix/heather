@@ -349,6 +349,9 @@ impl Elaborator {
     /// `expected` is the checking position's type where there is one, and
     /// `None` at the two inference sites.
     pub(crate) fn op_rewrite(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<Option<Expr>> {
+        if let Some(cast) = self.cast_rewrite(cx, e, expected)? {
+            return Ok(Some(cast));
+        }
         let (sym, args, explicit, goal_oriented) = match &e.kind {
             ExprKind::OpSymbol { symbol, fixity } => ((symbol, fixity), None, false, false),
             ExprKind::App {

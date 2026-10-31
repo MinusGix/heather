@@ -808,7 +808,8 @@ fn mono_unsub_side(h, other: Handle) → Tac<Option<Expr>> {
 fn mono_or_hd(o: Option<Expr>, h: Handle) → Expr { match o { None => Hd(h), Some(e) => e } }
 
 fn mono_unsub_goal(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Expr) → Tac<Option<Expr>> {
-    match match strict { True => M.lt, False => M.le } {
+    let order: OpKey = match strict { True => M.lt, False => M.le };
+    match order {
         KGlobal(id) => as_type(App(App(Global(GlobalRef(id)), l), r)).bind(λ c => match c {
             Refused(_) => mono_none(),
             Accepted(t) => goal().bind(λ g => attempt(focus(GoalInfo(t, g.locals), prove)).bind(λ o => match o {

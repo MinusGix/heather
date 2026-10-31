@@ -211,6 +211,12 @@ fn Dyadic::rat_hom() → OrderedRingHom<Dyadic, Rat>(Dyadic::rat,
     }
 }
 
+// `Int → Dyadic` and `Dyadic → Rat`: `Int → Rat` stays the direct edge, one
+// step against two.
+instance Cast<Dyadic, Rat>(Dyadic::rat) { }
+
+instance Cast<Int, Dyadic>(Dyadic::ofInt) { }
+
 theorem Dyadic::add_comm(self a, b: Dyadic): a + b ≈ b + a {
     Dyadic::same_via(a.rat_add(b), a.rat().add_comm(b.rat()), b.rat_add(a))
 }

@@ -1586,6 +1586,8 @@ fn CReal::ofRat_hom() → OrderedRingHom<Rat, CReal>(CReal::ofRat,
     }
 }
 
+instance Cast<Rat, CReal>(CReal::ofRat) { }
+
 instance Preorder<CReal>(CReal::Le) {
     rel_refl := CReal::le_refl,
     rel_trans := λ x y z hxy hyz => CReal::le_trans(hxy, hyz),
