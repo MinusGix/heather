@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,performance,traits]
 area: language
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 Found by the assessment of [[interval-containment-once-over-ordered-field]]
@@ -44,3 +44,19 @@ run it).
 Why it matters: every "prove it once over the class" refactor (intervals,
 `linarith`'s certificates, `mono`'s class laws, the analysis layers) trades
 duplicated text for this cost in the cold gate.
+
+## Log
+
+- 2026-10-31: The plain generic lemmas are much cheaper on today's master
+  (the interval section's lemmas written with named laws elaborate in
+  well under a second each, `mul_box_has_in` included). Tactics are the
+  outlier now. `by mono_with` at a class carrier, reading images through a
+  morphism parameter ([[cast-reading-through-local-morphism]]), costs tens
+  of seconds per lemma and millions of kernel steps. Its `CReal` twin,
+  reading through a registered edge, costs milliseconds. Measured on the
+  interval round's section: `between_l_in` (four calls) and `neg_has_in`,
+  `add_bnd_has_in`, `mul_pos_has_in` (two each) each spent 20–60 s and
+  2–5M steps. The same four lemmas with `hom.map_*` laws and
+  `StrictOrder::le_of_same_l/_r` each take under a second. So
+  `interval.hthr`'s generic section names the laws. Make `mono` cheap at a
+  class carrier and those proofs can go back to two lines each.

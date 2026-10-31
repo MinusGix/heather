@@ -1,10 +1,10 @@
 ---
 title: Prove interval containment once, over an ordered field, and read it at Rat and CReal
-status: open
+status: closed
 labels: [reals,intervals,refactor]
 area: mathematics
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 `lib/std/num/float/creal_interval.hthr` proves 26 `Interval::*_real`
@@ -152,4 +152,24 @@ containment for free.
   while the per-carrier ones are short. Since #286 the duplication is cheap
   (two short proofs instead of two long ones), so do that issue first, then
   this round becomes moving `creal_interval.hthr`'s proofs into the section.
+- 2026-10-31: DONE. `interval.hthr` proves containment once in
+  `section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K}, hom:
+  OrderedRingHom<Rat, K>(…))`: `Interval::HasIn`, `has_in_respects`,
+  `has_in_of_has`, the image laws `image_neg/add/mul`, `round_out_has_in`,
+  `neg/add/sub_has_in`, `between_l_in`, `corner_lo/hi_in`,
+  `mul_box/mul_pos/mul_bnd/mul_has_in`, `lt_of_below_in`,
+  `le_of_below_eq_in`. Every `Rat` theorem of those operations is now one
+  application of its generic twin at `Rat::id_hom()` (new in `rat.hthr`,
+  with its named map `Rat::id`), and every `CReal` one in
+  `creal_interval.hthr` is one at `CReal::ofRat_hom()`. The per-carrier
+  `between_r`, `between_l`, `corner_lo/hi` and their `_real` copies are
+  gone. The product's sign split is `StrictOrder::le_by_cases`, and
+  `OrderedField::mul_le_mono_l/r_nonpos` are new, all in
+  `ordered_field.hthr`. Reciprocals, powers, `of_rat_has` and the enclosures
+  from terms stay per carrier, as assessed. The generic proofs name the
+  morphism's laws rather than calling `by mono_with`, which costs tens of
+  seconds per lemma at a class carrier
+  ([[generic-lemma-elaboration-cost]], 2026-10-31 log). Probes:
+  `creal_interval_tests.hthr`'s `has_reads_generic` and siblings (both
+  readings convert at a neutral interval, in both directions).
 

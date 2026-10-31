@@ -504,6 +504,29 @@ fn Rat::ofInt_hom() → OrderedRingHom<Int, Rat>(Rat::ofInt,
 
 instance Cast<Int, Rat>(Rat::ofInt) { }
 
+// The identity, as a morphism: what generic code over a field with the
+// rationals inside it (`section<K: OrderedField(…)>(…, hom:
+// OrderedRingHom<Rat, K>(…))`) is read at `Rat` with. Its map is named, not
+// `λ q => q`: with an anonymous map the readings' types fail to convert.
+fn Rat::id(self q: Rat) → Rat { q }
+
+fn Rat::id_hom() → OrderedRingHom<Rat, Rat>(Rat::id,
+        Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+        Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1) {
+    OrderedRingHom {
+        map_respects: λ p q h => h,
+        map_zero: Rat::same_refl(0),
+        map_one: Rat::same_refl(1),
+        map_add: λ p q => Rat::same_refl(p + q),
+        map_mul: λ p q => Rat::same_refl(p * q),
+        map_neg: λ q => Rat::same_refl(-q),
+        map_le: λ p q h => h,
+        map_lt: λ p q h => h,
+        le_of_map: λ p q h => h,
+        lt_of_map: λ p q h => h,
+    }
+}
+
 theorem Rat::lt_trichotomy(self x, y: Rat): x < y ∨ x ≈ y ∨ y < x {
     (x.num * y.den.int()).lt_trichotomy(y.num * x.den.int())
 }
