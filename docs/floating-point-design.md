@@ -1189,7 +1189,15 @@ rounding relation's; the shift needs one lemma (`Int::shr_mul_le`) and is
 sound at every shift amount, so how many bits `Dyadic::cut` drops is a cost
 choice with no proof attached. A reciprocal of a positive `m · 2^e` is
 `⌊2^K / m⌋ · 2^(-e-K)` below and its successor above, with
-`K = p + width(m)`.
+`K = p + width(m)`. The quotient is `Nat::pow2_div`: a loop that doubles a
+remainder and takes one quotient bit per step guesses it, starting at
+`2^(width(m) - 1)` so that it runs only the quotient's `p` bits, and two
+comparisons, `g·m <= 2^K < (g + 1)·m`, keep the guess or fall back to
+`ldiv`. Only `ldiv`'s two facts (`q·m + r = 2^K`, `r < m`) reach the
+proofs, so nothing about the loop is proved
+(issues/interval-evaluation-budget.md). `Interval::of_rat` takes the
+reciprocal of its positive denominator as one point (`recip_point`), one
+quotient for both bounds.
 
 **Intervals.** `inductive Interval { Bnd(lo, hi: Dyadic), Whole }`.
 `I.Has(x)` reads `lo <= x <= hi` at `Rat`, and `Whole` holds everything.

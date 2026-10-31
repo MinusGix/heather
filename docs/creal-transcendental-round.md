@@ -158,23 +158,30 @@ reference rounded exactly.
 | exp(0.5), exp(-0.5) | binary32 | correct |
 | exp(1) | binary16, bfloat16 | correct |
 | log 2, log 3, log 10, log 1.5, log 0.5 | binary32 | correct |
+| exp(-3) | binary32 | 0x3D4BED86 |
+| exp(1) | binary64 | 0x4005BF0A8B145769 |
 
-**Cost.** One of these uses between a quarter and nine tenths of the kernel's
-fixed 2^20-step budget. `exp(-3)` at binary32 and `exp(1)` at binary64 run out
-of steps.
+**Cost.** Each is evaluated under the kernel's fixed fuel of 2^20. The fuel
+counts evaluator steps and, for every comparison or subtraction of two
+numerals, the length of the numbers compared. As of
+[interval-evaluation-budget](../issues/interval-evaluation-budget.md), a
+binary32 value takes between a third and two thirds of it and exp(1) at
+binary64 about seven tenths. Before that round, the ratios' reciprocals were
+long divisions over every bit of `2^K`. Now they are a guessed quotient
+checked by two comparisons (`Nat::pow2_div`). That halved every cost and
+brought exp(-3) at binary32 and exp(1) at binary64 inside the fuel.
 
-Where the steps go:
+Where the fuel still goes:
 
-- **Every interval operation ends in `Dyadic::down`/`up`.** Their bit-by-bit
-  width and shift are a few thousand steps at 80 bits, and a series step is
-  four or five such operations.
-- **Each ratio is a long division by the argument's unreduced denominator.**
+- **Every interval operation ends in `Dyadic::down`/`up`.** Their width and
+  shift halve once per bit. Comparisons against a table of powers of two
+  were tried for the width and cost more fuel: a comparison is charged by
+  its length.
+- **Each reciprocal's guess compares once per quotient bit,** at the
+  divisor's length. log's ratio divides by `(A + B)^2`, twice a mantissa's
+  width, so log 3 at binary64 is still over the fuel.
 - **Alternating series take the four-corner product every step.** Their
-  cancellation also costs a second try.
-
-The directions are in
-[interval-evaluation-budget](../issues/interval-evaluation-budget.md).
-binary64 waits on them. Nothing in the proofs does.
+  cancellation also costs a second try. exp(-3) at binary64 is over too.
 
 ## Left out
 
