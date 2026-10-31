@@ -118,6 +118,14 @@ reads, 327K → 199K steps, kernel 0.30 → 0.15 s on cloud
 (`issues/native-certificate-pieces-remaining-cost.md`). The rest is spread
 over the inductive representation, with no single site.
 
+**Update 2026-10-31 (second pass):** `Asm` and `Prog` had no type codes:
+their lowering mentions a function, and the codes were registered in a
+stale scope, so the kernel refused them and every `Prog` literal was
+gated against inline lowerings (`issues/codes-registered-in-a-stale-scope.md`).
+With the codes, `at_#` is under half on `cat_files_tool` and about a third
+on a 32-pass cat; `bytes_#_#` (T3) is now the largest family
+(`issues/native-certificate-second-pass.md`).
+
 ## T3. `write-elf`'s own reads (owner: `issues/native-tool-test-cold-certificate-rail.md`)
 
 Not the kernel. In `cat_files_tool`, `bytes_#_#` (158 reads) took 37 s and
