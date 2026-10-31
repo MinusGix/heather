@@ -70,17 +70,133 @@ enum Carrier {
     Rel(Rc<RelCarrier>),
 }
 
-/// A `≈` carrier's spelling and its designated operations, as bare global
-/// names. A missing designation is an operation the reifier leaves to atoms.
+/// A `≈` carrier's spelling and its operations. A missing one is an
+/// operation the reifier leaves to atoms.
 #[derive(PartialEq, Eq, Debug)]
 struct RelCarrier {
     source: String,
-    add: Option<String>,
-    sub: Option<String>,
-    mul: Option<String>,
-    neg: Option<String>,
+    same: Op,
+    add: Option<Op>,
+    sub: Option<Op>,
+    mul: Option<Op>,
+    neg: Option<Op>,
     /// The postfix `⁻¹`, read as a reciprocal (`Reifier::reciprocal`).
-    inv: Option<String>,
+    inv: Option<Op>,
+    /// At a class carrier, its integers (`ClassInts`); `None` at a carrier
+    /// with a `CommRingOfInt` instance.
+    class: Option<ClassInts>,
+}
+
+/// How an operation is named where a term spells it: a carrier's
+/// designation, a global; or, at a class carrier, a local (the section's
+/// `+`) or a field read off the dictionary in scope (`K.inv`), compared as
+/// the term it is.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Op {
+    Global(String),
+    Term(Rc<Term>),
+}
+
+impl Op {
+    /// `tm`'s arguments where `tm` applies this operation.
+    fn args<'t>(&self, elab: &Elaborator, tm: &'t Term) -> Option<Vec<&'t Rc<Term>>> {
+        match self {
+            Op::Global(name) => named_args(elab, tm, name),
+            Op::Term(op) => {
+                let mut args = Vec::new();
+                let mut head = tm;
+                while let Some((fun, arg)) = crate::spelling::app_of(head) {
+                    args.push(arg);
+                    head = fun;
+                }
+                args.reverse();
+                (*head == **op).then_some(args)
+            }
+        }
+    }
+
+    /// The global this operation is, where it is one.
+    fn global(&self) -> Option<&str> {
+        match self {
+            Op::Global(name) => Some(name),
+            Op::Term(_) => None,
+        }
+    }
+}
+
+/// A class carrier's integers (docs/casting-design.md §16): a type
+/// parameter `K` whose ring is a dictionary in scope
+/// (`section<K: OrderedField(≈, <, <=, +, *)>`) has no `CommRingOfInt`
+/// instance, and its integers are the ones every ring has
+/// (`semiring::Ring::int_cast`). The certificate's lemmas get them as the
+/// dictionary `semiring::CommRing::with_ints<K>()`, bound where the
+/// certificate is elaborated as [`CLASS_INTS`], which instance search finds
+/// in scope; a constant is that map's image, and `0`, `1` are the
+/// dictionary's own `K.unit` and `K.multiplicative.unit` by computation.
+#[derive(PartialEq, Eq, Debug)]
+struct ClassInts {
+    ints: Rc<Term>,
+    ty: Type,
+    level: Level,
+    zero: Rc<Term>,
+    one: Rc<Term>,
+}
+
+/// The name a class carrier's integers dictionary is bound to.
+const CLASS_INTS: &str = "__ring_ints";
+
+impl ClassInts {
+    /// `cx` with these integers in scope for a certificate at `carrier`:
+    /// [`Elaborator::class_dictionary_scope`] for `ring`'s lemmas.
+    fn scope(&self, elab: &Elaborator, cx: &Cx, carrier: &str) -> Option<Cx> {
+        elab.class_dictionary_scope(cx, carrier, CLASS_INTS, (&self.ints, &self.ty, &self.level), "semiring::CommRingOfInt", "semiring::CommRing")
+    }
+}
+
+impl Elaborator {
+    /// `cx` with a class carrier's derived dictionary `value` in scope (a
+    /// `CommRingOfInt` or `OrderedFieldOfInt` at `K`, built by
+    /// `CommRing::with_ints`, `OrderedField::with_ints`), so the generic
+    /// lemmas a certificate names find it: bound as a `let` named `name`,
+    /// which instance search consults, and declared as a binder of `class`
+    /// at `carrier` whose indices are those of the scope's own dictionary
+    /// of `ring` (the section's `K: OrderedField(≈, <, <=, +, *)` read as a
+    /// `CommRing(≈, +, *)`), so a lemma's call pins its `≈`, `+` and `*`
+    /// from scope as it would from a section's constraint.
+    pub(crate) fn class_dictionary_scope(
+        &self,
+        cx: &Cx,
+        carrier: &str,
+        name: &str,
+        value: (&Rc<Term>, &Type, &Level),
+        class: &str,
+        ring: &str,
+    ) -> Option<Cx> {
+        let index = self.scope_dict_index(cx, &self.key_of(ring)?)?.into_iter().collect::<Option<Vec<Expr>>>()?;
+        let wrapper = format!("theorem __ring_generated(): {carrier} {{ 0 }}");
+        let Some(Item::Decl(decl)) = parse_file(&wrapper).ok()?.items.pop() else {
+            return None;
+        };
+        let (term, ty, level) = value;
+        let mut inner = cx.clone();
+        inner.aliases.push(Rc::new(Alias {
+            name: name.to_string(),
+            depth: cx.names.len(),
+            term: Rc::clone(term),
+            ty: ty.clone(),
+            level: level.clone(),
+            skel: None,
+            spliced: None,
+            shifted: Default::default(),
+        }));
+        inner.dicts.push(Rc::new(crate::context::DictBinder {
+            name: format!("#{name}"),
+            class: class.to_string(),
+            carrier: decl.result,
+            index,
+        }));
+        Some(inner)
+    }
 }
 
 impl Carrier {
@@ -110,6 +226,15 @@ const EDGES: [Edge; 3] = [
     Edge { map: "creal::CReal::ofRat", hom: "creal::CReal::ofRat_hom", add: "rat::Rat::add", mul: "rat::Rat::mul", neg: "rat::Rat::neg", sub: "rat::Rat::sub" },
     Edge { map: "rat::Rat::ofInt", hom: "rat::Rat::ofInt_hom", add: "int::Int::add", mul: "int::Int::mul", neg: "int::Int::neg", sub: "int::Int::sub" },
 ];
+
+/// A morphism in scope as an edge ([`Reifier::find_local_edges`]): the
+/// local's name, the source carrier as written, and the map as an image
+/// applies it.
+struct LocalEdge {
+    hom: String,
+    source: String,
+    map: Rc<Term>,
+}
 
 /// How many δ-steps a definition is unfolded looking for the edge image it
 /// names ([`Reifier::wrapped_image`]).
@@ -188,19 +313,18 @@ fn equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Equation> {
 }
 
 /// `ty` as `x ≈ y` at a carrier whose `≈` it is and which has a
-/// `CommRingOfInt` instance, read as written: the relation is not unfolded.
+/// `CommRingOfInt` instance, or at a class carrier, read as written: the
+/// relation is not unfolded.
 fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Equation> {
     elab.key_of("ring::RingExpr::sound_rel")?;
     let rel = Relation::of_type(elab, cx, ty, span)?;
-    let carrier = elab.carrier_of_ty(cx, &rel.carrier, span)?;
-    let same = elab.designated("≈", OpFixity::Infix, &carrier.key)?;
     let Type::El { tm, .. } = ty else {
         return None;
     };
-    if named_args(elab, tm, &same)?.len() != 2 {
+    let ops = rel_carrier(elab, cx, &rel.carrier, span)?;
+    if ops.same.args(elab, tm)?.len() != 2 {
         return None;
     }
-    let ops = rel_carrier(elab, cx, &rel.carrier, span)?;
     Some(Equation {
         carrier: Carrier::Rel(Rc::new(ops)),
         ty: (*rel.carrier).clone(),
@@ -211,21 +335,59 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
 }
 
 /// A carrier with a `CommRingOfInt` instance, its spelling and designated
-/// operations.
+/// operations; else a class carrier ([`class_carrier`]).
 fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, span: Span) -> Option<RelCarrier> {
-    let carrier = elab.carrier_of_ty(cx, carrier_ty, span)?;
+    let Some(carrier) = elab.carrier_of_ty(cx, carrier_ty, span) else {
+        return class_carrier(elab, cx, carrier_ty);
+    };
     let class = elab.key_of("semiring::CommRingOfInt")?;
     if elab.traits.instances_answering(&class, Some(&carrier.key)).is_empty() {
         return None;
     }
-    let op = |sym: &str, fixity| elab.designated(sym, fixity, &carrier.key);
+    let op = |sym: &str, fixity| elab.designated(sym, fixity, &carrier.key).map(Op::Global);
     Some(RelCarrier {
         source: elab.spell_type_clean(cx, carrier_ty)?,
+        same: op("≈", OpFixity::Infix)?,
         add: op("+", OpFixity::Infix),
         sub: op("-", OpFixity::Infix),
         mul: op("*", OpFixity::Infix),
         neg: op("-", OpFixity::Prefix),
         inv: op("⁻¹", OpFixity::Postfix),
+        class: None,
+    })
+}
+
+/// A class carrier's ring (`ClassInts`), read off
+/// `semiring::CommRing::with_ints<K>()` elaborated where the goal is:
+/// instance search finds `K`'s ring in scope, and the call's implicit
+/// arguments, `K` and its `≈`, `+` and `*`, are the operations as the
+/// section binds them (the dictionary's type is structural, its indices
+/// substituted away). `K.unit`, `K.multiplicative.unit` and `K.inv` are read as a
+/// statement spells them. `K` has no `-` or `⁻¹` designation, so a
+/// difference is written `x + K.inv(y)` and a reciprocal is an atom.
+fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCarrier> {
+    elab.key_of("semiring::CommRing::with_ints")?;
+    let source = elab.spell_type_clean(cx, carrier_ty)?;
+    let infer = |written: &str| {
+        let expr = parse_expr(written).ok()?;
+        elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok()
+    };
+    let (ints, ty, level) = infer(&format!("semiring::CommRing::with_ints<{source}>()"))?;
+    let (same, add, mul) = match named_args(elab, &ints, "semiring::CommRing::with_ints")?.as_slice() {
+        [_, same, add, mul, ..] => (Rc::clone(same), Rc::clone(add), Rc::clone(mul)),
+        _ => return None,
+    };
+    let field = |name: &str| infer(&format!("{source}.{name}")).map(|(term, _, _)| Rc::new(term));
+    let (zero, one, neg) = (field("unit")?, field("multiplicative.unit")?, field("inv"));
+    Some(RelCarrier {
+        source,
+        same: Op::Term(same),
+        add: Some(Op::Term(add)),
+        sub: None,
+        mul: Some(Op::Term(mul)),
+        neg: neg.map(Op::Term),
+        inv: None,
+        class: Some(ClassInts { ints: Rc::new(ints), ty, level, zero, one }),
     })
 }
 
@@ -272,6 +434,7 @@ impl<'a> FieldReading<'a> {
                 atoms: Vec::new(),
                 facts: Vec::new(),
                 in_fact: false,
+                local_edges: Default::default(),
             },
             reciprocals: Vec::new(),
             squares: Vec::new(),
@@ -293,6 +456,7 @@ impl<'a> FieldReading<'a> {
                 atoms: Vec::new(),
                 facts: Vec::new(),
                 in_fact: false,
+                local_edges: Default::default(),
             },
             reciprocals: Vec::new(),
             squares: Vec::new(),
@@ -375,7 +539,7 @@ impl<'a> FieldReading<'a> {
             let Some(eq) = relation_equation(reifier.elab, reifier.cx, &fact.ty, reifier.span) else {
                 continue;
             };
-            let Some(den) = named_args(reifier.elab, &eq.lhs, mul).and_then(|args| match args.as_slice() {
+            let Some(den) = mul.args(reifier.elab, &eq.lhs).and_then(|args| match args.as_slice() {
                 [_, den] => Some(Rc::clone(den)),
                 _ => None,
             }) else {
@@ -475,6 +639,9 @@ struct Reifier<'a> {
     facts: Vec<Fact>,
     /// Reading a reciprocal's own fact, whose reciprocal is already an atom.
     in_fact: bool,
+    /// The morphisms in scope into the carrier, found at the first image
+    /// that might be one's.
+    local_edges: std::cell::OnceCell<Vec<LocalEdge>>,
 }
 
 /// An atom read together with a fact the library states for it, elaborated,
@@ -514,7 +681,18 @@ impl Reifier<'_> {
     }
 
     fn binary(&mut self, tm: &Rc<Term>, name: &str, depth: u32) -> Result<Option<(Syn, Syn)>, String> {
-        let Some(args) = named_args(self.elab, tm, name) else {
+        let args = named_args(self.elab, tm, name);
+        self.binary_args(args, depth)
+    }
+
+    /// [`Self::binary`] at a carrier's operation.
+    fn binary_op(&mut self, tm: &Rc<Term>, op: &Op, depth: u32) -> Result<Option<(Syn, Syn)>, String> {
+        let args = op.args(self.elab, tm);
+        self.binary_args(args, depth)
+    }
+
+    fn binary_args(&mut self, args: Option<Vec<&Rc<Term>>>, depth: u32) -> Result<Option<(Syn, Syn)>, String> {
+        let Some(args) = args else {
             return Ok(None);
         };
         let [left, right] = args.as_slice() else {
@@ -663,22 +841,22 @@ impl Reifier<'_> {
     /// through.
     fn reify_rel(&mut self, tm: &Rc<Term>, ops: &RelCarrier, depth: u32) -> Result<Syn, String> {
         if let Some(op) = &ops.add
-            && let Some((a, b)) = self.binary(tm, op, depth)?
+            && let Some((a, b)) = self.binary_op(tm, op, depth)?
         {
             return Ok(Syn::Add(Box::new(a), Box::new(b)));
         }
         if let Some(op) = &ops.sub
-            && let Some((a, b)) = self.binary(tm, op, depth)?
+            && let Some((a, b)) = self.binary_op(tm, op, depth)?
         {
             return Ok(Syn::Sub(Box::new(a), Box::new(b)));
         }
         if let Some(op) = &ops.mul
-            && let Some((a, b)) = self.binary(tm, op, depth)?
+            && let Some((a, b)) = self.binary_op(tm, op, depth)?
         {
             return Ok(Syn::Mul(Box::new(a), Box::new(b)));
         }
         if let Some(op) = &ops.neg
-            && let Some(args) = named_args(self.elab, tm, op)
+            && let Some(args) = op.args(self.elab, tm)
             && let [inner] = args.as_slice()
         {
             let inner = Rc::clone(inner);
@@ -740,7 +918,7 @@ impl Reifier<'_> {
         let (add, mul) = match &self.carrier {
             Carrier::Int => (Some("int::Int::add"), Some("int::Int::mul")),
             Carrier::Nat => (Some("nat::Nat::add"), Some("nat::Nat::mul")),
-            Carrier::Rel(ops) => (ops.add.as_deref(), ops.mul.as_deref()),
+            Carrier::Rel(ops) => (ops.add.as_ref().and_then(Op::global), ops.mul.as_ref().and_then(Op::global)),
         };
         let is = |op: &Term, name: Option<&str>| name.is_some_and(|name| crate::range_sum::op_is(self.elab, op, name));
         if let Some(op) = crate::range_sum::empty(self.elab, tm) {
@@ -773,7 +951,7 @@ impl Reifier<'_> {
     /// condition. A reciprocal whose fact cannot be written stays a plain
     /// atom.
     fn reciprocal(&mut self, tm: &Rc<Term>, ops: &RelCarrier, depth: u32) -> Result<Option<usize>, String> {
-        let (lemma, den, args) = if let Some(op) = &ops.inv
+        let (lemma, den, args) = if let Some(op) = ops.inv.as_ref().and_then(Op::global)
             && let Some(args) = named_args(self.elab, tm, op)
             && let [x, h] = args.as_slice()
         {
@@ -974,21 +1152,144 @@ impl Reifier<'_> {
             let rel = Relation::of_type(self.elab, self.cx, &ty, self.span)?;
             return Some(law("map_respects", &format!("({}), ({}), {proof}", spell(inner)?, spell(&rel.right)?)));
         }
-        None
+        self.local_edge_law(tm, nesting)
+    }
+
+    /// [`Self::edge_law`] along a morphism in scope ([`LocalEdge`]): the
+    /// family's law at the local, `OrderedRingHom::add_law<A, K>(hom, x, y)`.
+    /// The source's operations are the morphism type's indices, which no
+    /// table names, so each law that fits the image's shape is written and
+    /// the first whose left side converts to the image is the one: `+`,
+    /// `*`, subtraction as `x + -y`, negation, `0` and `1`; and an image of
+    /// an image carries the inner law through `respects_law`.
+    fn local_edge_law(&self, tm: &Rc<Term>, nesting: u32) -> Option<String> {
+        let (head, args) = app_spine(tm);
+        let [inner] = args.as_slice() else { return None };
+        let edges = self.local_edges.get_or_init(|| self.find_local_edges());
+        let edge = edges.iter().find(|e| *head == *e.map)?;
+        let spell = |t: &Term| self.elab.spell_term_source(self.cx, t);
+        let law = |name: &str, rest: &str| {
+            let sep = if rest.is_empty() { "" } else { ", " };
+            format!("morphism::OrderedRingHom::{name}<{}, {}>({}{sep}{rest})", edge.source, self.carrier.name(), edge.hom)
+        };
+        let fits = |proof: &str| {
+            let Some((_, ty, _)) = parse_expr(proof)
+                .ok()
+                .and_then(|e| self.elab.generated_scope(|me| me.elab_infer(self.cx, &e)).ok())
+            else {
+                return false;
+            };
+            let Some(rel) = Relation::of_type(self.elab, self.cx, &ty, self.span) else { return false };
+            let oracle = self.elab.goal_oracle().bounded(NUMERAL_STEPS);
+            oracle.convert_term(&self.cx.gamma, Layer::Prog, tm, &rel.left, &self.ty, &self.level).is_ok()
+        };
+        let (_, parts) = app_spine(inner);
+        let mut candidates = Vec::new();
+        match parts.as_slice() {
+            [x, y] => {
+                let (x, y) = (spell(x)?, spell(y)?);
+                candidates.push(law("add_law", &format!("({x}), ({y})")));
+                candidates.push(law("mul_law", &format!("({x}), ({y})")));
+                candidates.push(law("add_law", &format!("({x}), -({y})")));
+            }
+            [x] => candidates.push(law("neg_law", &format!("({})", spell(x)?))),
+            _ => {}
+        }
+        match spell(inner).and_then(|s| integer_source(&s).or_else(|| trailing_integer(&s))) {
+            Some(0) => candidates.push(law("zero_law", "")),
+            Some(1) => candidates.push(law("one_law", "")),
+            _ => {}
+        }
+        if let Some(found) = candidates.into_iter().find(|c| fits(c)) {
+            return Some(found);
+        }
+        // An image of an image: the inner law, carried through this edge.
+        let proof = self.edge_law(inner, nesting - 1)?;
+        let (_, ty, _) = parse_expr(&proof)
+            .ok()
+            .and_then(|e| self.elab.generated_scope(|me| me.elab_infer(self.cx, &e)).ok())?;
+        let rel = Relation::of_type(self.elab, self.cx, &ty, self.span)?;
+        Some(law("respects_law", &format!("({}), ({}), {proof}", spell(inner)?, spell(&rel.right)?)))
+    }
+
+    /// The morphisms in scope that map into this carrier
+    /// (docs/casting-design.md §15, §16): a local whose type is
+    /// `OrderedRingHom<A, K>(map, …)`, found as `mono` finds one. The record
+    /// is structural, so its type names no family: a local map `A → K` in
+    /// scope gives the candidate `A`, and a local is a morphism when the
+    /// family's `zero_law<A, K>` checks at it, whose statement then names
+    /// the map. Nothing is tried where no local maps into the carrier.
+    fn find_local_edges(&self) -> Vec<LocalEdge> {
+        let mut edges = Vec::new();
+        if self.elab.key_of("morphism::OrderedRingHom::zero_law").is_none() {
+            return edges;
+        }
+        let Some(carrier) = self.elab.spell_type_clean(self.cx, &self.ty) else {
+            return edges;
+        };
+        let names = &self.cx.names;
+        let mut sources: Vec<String> = Vec::new();
+        for pos in 0..names.len() {
+            let (_, ty, _) = self.elab.local(self.cx, pos);
+            if let Type::Pi { dom, cod, .. } = &ty
+                && **cod == self.ty.shift_local(1)
+                && let Some(source) = self.elab.spell_type_clean(self.cx, dom)
+                && !sources.contains(&source)
+            {
+                sources.push(source);
+            }
+        }
+        if sources.is_empty() {
+            return edges;
+        }
+        for pos in (0..names.len()).rev() {
+            let name = &names[pos];
+            let (_, ty, _) = self.elab.local(self.cx, pos);
+            if matches!(ty, Type::Pi { .. }) || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
+            for source in &sources {
+                let written = format!("morphism::OrderedRingHom::zero_law<{source}, {carrier}>({name})");
+                let Some((_, ty, _)) = parse_expr(&written)
+                    .ok()
+                    .and_then(|e| self.elab.generated_scope(|me| me.elab_infer(self.cx, &e)).ok())
+                else {
+                    continue;
+                };
+                let Some(rel) = Relation::of_type(self.elab, self.cx, &ty, self.span) else { continue };
+                let (map, args) = app_spine(&rel.left);
+                if args.len() == 1 {
+                    edges.push(LocalEdge { hom: name.clone(), source: source.clone(), map: Rc::new(map.clone()) });
+                    break;
+                }
+            }
+        }
+        edges
     }
 
     /// The integer a carrier's numeral stands for: the one its spelling ends
     /// in (`Rat::ofInt(OfNat(2))`, `CReal::ofRat(Rat::ofInt(OfNat(2)))`),
     /// confirmed by converting the term to what the certificate's `RConst`
     /// evaluates to, so a term that only spells like a numeral stays an atom.
+    /// At a class carrier, `K.unit` and `K.multiplicative.unit` are `0` and
+    /// `1` as written, and another constant is the integers' image spelled
+    /// out (`semiring::Ring::int_cast<K>(int::OfNat(2))`, what `linarith`
+    /// writes for its coefficients).
     fn rel_numeral(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<Z> {
+        if let Some(ints) = &ops.class {
+            if *tm == ints.zero {
+                return Some(0);
+            }
+            if *tm == ints.one {
+                return Some(1);
+            }
+        }
         let source = self.elab.spell_term_source(self.cx, tm)?;
         let value = integer_source(&source).or_else(|| trailing_integer(&source))?;
-        let written = format!(
-            "ring::RingExpr::eval_rel<{}>(ring::RConst({}), Nil)",
-            ops.source,
-            int_source(value)
-        );
+        let written = match &ops.class {
+            None => format!("ring::RingExpr::eval_rel<{}>(ring::RConst({}), Nil)", ops.source, int_source(value)),
+            Some(_) => format!("semiring::Ring::int_cast<{}>({})", ops.source, int_source(value)),
+        };
         let expr = parse_expr(&written).ok()?;
         let constant = self
             .elab
@@ -1901,6 +2202,7 @@ fn reconstruct_at(
         atoms: Vec::new(),
         facts: Vec::new(),
         in_fact: false,
+        local_edges: Default::default(),
     };
     let goal_syn = Written {
         lhs: reifier.reify(&goal_eq.lhs)?,
@@ -2211,6 +2513,15 @@ impl Elaborator {
                 spliced: None,
                 shifted: Default::default(),
             }));
+        }
+        // At a class carrier the lemmas' `CommRingOfInt` is the ring's own
+        // integers, found in scope.
+        if let Carrier::Rel(rel) = &cert.carrier
+            && let Some(ints) = &rel.class
+        {
+            inner = ints
+                .scope(self, &inner, &rel.source)
+                .ok_or_else(|| err(format!("`ring` could not put `{}`'s integers in scope", rel.source)))?;
         }
         let expr = parse_expr(&cert.source)
             .map_err(|detail| err(format!("`ring` wrote a certificate that does not parse: {detail}\n  generated: {}", cert.source)))?;

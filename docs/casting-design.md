@@ -860,3 +860,63 @@ only globals, so `mono` read nothing through `hom`.
 
 Pinned in `lib/_tests/std/tactic/cast_tests.hthr` (the `local_hom_…`
 section).
+
+## 16. `ring` and `linarith` at a class carrier (2026-10-31)
+
+Issue `cast-reading-at-class-carrier` answers §5.6's open question for
+`Int`: the tactics read coefficients through the derived map, and no
+carrier spelling or morphism parameter is handed to them.
+
+- **The derived map.** `semiring.hthr` defines, in a
+  `section<A: Ring(≈, +, *)>`, `Ring::nat_cast` (by `A.unit`,
+  `A.multiplicative.unit` and `+`, with `1` its own case so that
+  `nat_cast(1)` is the unit and not `0 + 1`) and `Ring::int_cast`
+  (`NegSucc(n)` ↦ `A.inv(nat_cast(n + 1))`), with their laws:
+  `nat_cast_add`/`_mul`, `int_cast_add`/`_mul` (through
+  `int_cast_sub_nat_nat`, following `Int::add`'s own cases), all up to `≈`.
+- **The dictionary is built, not assumed.** `CommRing::with_ints()` and
+  `OrderedField::with_ints()` build the `CommRingOfInt` /
+  `OrderedFieldOfInt` record from the class in scope, with `of_int :=
+  Ring::int_cast`. The combined classes stay what the tactics' soundness
+  theorems are stated over (`RingExpr::sound_rel`, linarith's
+  certificate lemmas); at a class carrier they are now a derived value, so
+  §5.6's retirement of them as *parameters* holds.
+- **How the tactics find it.** `rel_carrier` (crates/elab/src/ring.rs)
+  falls back from the concrete table to `class_carrier` when the carrier is
+  a type local: it elaborates `with_ints<K>()` and reads `≈`, `+`, `*` off
+  the call's implicit arguments (the record's type is structural, so they
+  are not on its type), and zero, one and negation as `K.unit`,
+  `K.multiplicative.unit`, `K.inv`. An operation is an `Op`: a global name
+  (the concrete carriers, as before) or a term compared by equality (the
+  section's locals, which have no spelling). linarith's `ClassField` does
+  the same for `OrderedField::with_ints`, adding `<` and `<=`.
+- **Certificates name it.** The certificate source cannot spell the
+  section's operations, so each tactic binds the built dictionary for the
+  certificate's elaboration: an alias (`__ring_ints`, `__lin_ints`) the
+  instance search's first step finds, and a `DictBinder` so the scoped
+  index pinning sees it (`class_dictionary_scope`). linarith spells its
+  constants through `Spell`: `0` and `1` as `K.unit` and
+  `K.multiplicative.unit`, another integer as `Ring::int_cast<K>(…)`.
+- **A morphism in scope is an edge of both.** §15's local edges reach
+  `ring`'s reifier too: `find_local_edges` collects the locals that are
+  `OrderedRingHom<_, K>` values, and an image `map(op(…))` is pushed by the
+  first of `add_law`, `mul_law`, `add_law` at a negated argument (for
+  `Rat::sub`), `neg_law`, `zero_law`, `one_law` whose left side converts,
+  and nested images move through `respects_law`. So `map(p + q) ≈ map(q) +
+  map(p)` is `ring`, and `map(p) + map(q) <= x ⊢ map(p + q) <= x` is
+  `linarith`, as are composites through `Dyadic::rat_hom`.
+- **Cost shape.** A coefficient is a numeral inside `of_int(…)`, and the
+  soundness theorem relates it to the goal through the dictionary's laws,
+  so `nat_cast` is unfolded only where the goal itself spells a numeral at
+  `K`; there it is unary, linear in the numeral. Goals at a class carrier
+  spell `K.unit` and `K.multiplicative.unit`, which are read directly. Not
+  measured: the round adds no inference route on a hot path.
+- **What it does not do.** `cast_from` / `cast_to` still find their carrier
+  in `cast_carriers()` by global names; issue `cast-from-at-class-carrier`.
+  The concrete carriers keep their `CommRingOfInt` instances and their own
+  integer spellings (`Rat::ofInt`); relating those to `Ring::int_cast` (the
+  squash law of §5.6) is not needed by any tactic yet.
+
+Pinned in `lib/_tests/std/tactic/ring_tests.hthr` and `linarith_tests.hthr`
+(the `class_…` sections) and `cast_tests.hthr` (`local_ring_…`,
+`local_linarith_…`).
