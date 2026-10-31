@@ -53,6 +53,7 @@ LANDED_SHOWN = 30
 def load_issue_module():
     """`scripts/issue` as a module, so its parser stays the one parser."""
     path = ROOT / "scripts" / "issue"
+    sys.dont_write_bytecode = True  # no scripts/__pycache__ left in the checkout
     loader = importlib.machinery.SourceFileLoader("heather_issue", str(path))
     spec = importlib.util.spec_from_loader("heather_issue", loader)
     mod = importlib.util.module_from_spec(spec)
