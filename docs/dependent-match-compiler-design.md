@@ -8,7 +8,7 @@ position, and compiles nested patterns to case trees with per-clause
 equations. Its "done when" is this note, decided by Minus, with the slices
 filed.
 
-**Status: proposed (2026-10-31).** No kernel change is needed and none is
+**Status: proposed (2026-10-31); slice 4 implemented (§8.1).** No kernel change is needed and none is
 proposed. Everything here is elaborator front end over the route lowerings
 that already exist.
 
@@ -362,6 +362,37 @@ Two more parts:
 Closes `unfolding-computed-scrutinee`, generates `cd_loop_unfold` and
 `count_down_unfold`, and unblocks R3b of `pure-imperative-statements` (the
 `while … decreases` lowering, sequencing design §7.3).
+
+### 8.1 As implemented (slice 4, 2026-10-31)
+
+Slice 4 landed ahead of slice 1, on what the surface already writes: a
+`match h:` equation binding on any scrutinee, and a computed scrutinee
+without one. `measure.rs` `Respell::convoy_at_anchor` is the node.
+
+- **Rendering.** `L(s, q)` is `f#body`'s own spelling of the match. A fork of
+  the body rewrite (`Rewrite::fork`) produces it, with the same obligation
+  numbering and transports and without advancing the walk. `__dec_k`,
+  `__dec_ih` and `__dec_h` are then replaced by the anchor's arguments. In
+  `f_unfold`, `__dec_ih` becomes the partial application `f#rec(e)`, since
+  every use of the ih is a call and a λ would need annotations.
+- **Arm anchors.** Inside such an arm, `f#rec(…)` does not reduce, so
+  `Respell::anchors` holds the two arm bodies, and the anchors of a nested
+  variable match are taken from them.
+- **Enclosing refinements.** The rendering names their `__dec_eq`
+  binders, which are bound to `refl` by `let`s around the proof, as a leaf
+  binds them.
+- **Lifting.** Two fixes were needed:
+  - The body rewrite let-binds a computed scrutinee as `__dec_scrut_N`, and an
+    arm's equation used to be stated about that name. A lifted obligation
+    has no `let`, so there the name was an unrelated parameter (the root
+    cause of P5). The equation is now stated about the expression.
+  - Any arm equation is a candidate fact, where before only `b = True` or
+    `b = False` were. The refinement's own `__dec_eq` is excluded.
+- **Still refused:** a `_` arm around a recursive call, a recursive call in a
+  scrutinee, and a written motive.
+
+The anonymous equation of slice 1 reaches this node with no further change,
+because the walk does not care who named the equation.
 
 ## 9. Indexed families: the packed equation
 

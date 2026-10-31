@@ -271,6 +271,13 @@ fn count_down(s: CdState) → CdState decreases s.m {
         False => count_down(CdState(s.m - 1, Cons(s.m, s.out))),
     }
 }
+// Its unfolding equation goes through the convoy, with the lifted
+// obligation quantifying the equation (docs/dependent-match-compiler-design.md §8).
+theorem count_down_step(s: CdState, h: s.m.leb(0) = False):
+    count_down(s) = (match h: Nat::leb(s.m, 0) {
+        True => s,
+        False => count_down(CdState(s.m - 1, Cons(s.m, s.out))),
+    }) { count_down_unfold(s) }
 // Through a Bool definition and its `let`s, at the top and inside a guard.
 fn ordered(n, m: Nat) → Bool { let le = n.leb(m); le && !m.leb(n) }
 theorem guard_definition(n, m: Nat, h: ordered(n, m).IsTrue()): n < m { omega }

@@ -1,6 +1,6 @@
 ---
 title: Unfolding equations for a decreases body that matches on a computed scrutinee
-status: open
+status: closed
 labels: [frontend,elaboration,proofs]
 area: language
 created: 2026-09-05
@@ -31,3 +31,4 @@ state the equation per outer arm. The first is the natural one.
 - 2026-10-31: 2026-10-31: Now blocks R3b of [[pure-imperative-statements]]: a lowered while … decreases matches on its condition under an equation binder (docs/sequencing-surface-design.md §5.3), and its _unfold is refused because the lifted obligation depends on that equation (probe P5). The first route here, generalizing the scrutinee into a convoy, is the one the lowering needs.
 - 2026-10-31: 2026-10-31: [[dependent-match-compiler]] would retire this as one symptom of the general fix (an equation in every arm, case trees with clause equations).
 - 2026-10-31: Owned by [[unfolding-through-convoyed-match]] (slice 4 of [[dependent-match-compiler]], docs/dependent-match-compiler-design.md §8): the walk re-matches the convoy's own eliminator at a fresh scrutinee with the equation as a binder.
+- 2026-10-31: Closed by [[unfolding-through-convoyed-match]]: merge's negative control is now a positive test.

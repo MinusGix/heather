@@ -1,6 +1,6 @@
 ---
 title: The decreases unfolding walk goes through a convoyed match, on any scrutinee
-status: open
+status: closed
 labels: [elaboration,proofs,recursion]
 area: language
 created: 2026-10-31
@@ -14,3 +14,7 @@ The walk (`measure.rs` `match_at_anchor`, docs/decreases-unfolding-design.md §3
 ## Done when
 - `cd_loop_unfold` (probe P5) and PR #316's `count_down_unfold` are generated; `merge`'s negative control in crates/elab/tests/decreases_unfolding.rs flips to positive.
 - Closes [[unfolding-computed-scrutinee]]; unblocks R3b of [[pure-imperative-statements]].
+
+## Log
+
+- 2026-10-31: Landed: Respell::convoy_at_anchor walks a computed or equation-bound match by rendering f#body's spelling with a fork of the rewrite; lifted obligations state arm equations about the scrutinee expression (not the __dec_scrut alias) and take any arm equation as a candidate fact. merge_unfold, cd_loop_unfold, count_down_unfold generated (docs/dependent-match-compiler-design.md §8.1).
