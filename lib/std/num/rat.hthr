@@ -458,6 +458,13 @@ designation < at Rat := Rat::Lt
 // `Decide` instance computes with it.
 fn Rat::le_dec(self x, y: Rat) → x <= y ∨ ¬(x <= y) { Int::le_dec(x.num * y.den.int(), y.num * x.den.int()) }
 
+fn Rat::same_dec(self x, y: Rat) → x ≈ y ∨ ¬(x ≈ y) {
+    match x.le_dec(y) {
+        Inl(a) => match y.le_dec(x) { Inl(b) => Inl(Rat::le_antisymm(a, b)), Inr(nb) => Inr(λ e => nb(Rat::le_of_same(Rat::same_sym(e)))) },
+        Inr(na) => Inr(λ e => na(Rat::le_of_same(e))),
+    }
+}
+
 theorem Rat::le_of_lt({x, y: Rat}, h: x < y): x <= y { omega }
 
 theorem Rat::lt_irrefl(self x: Rat): ¬(x < x) { λ h => omega }
@@ -2212,6 +2219,108 @@ theorem Rat::root_below({g, x: Rat}, nn: 0 <= x, pos: 0 < g, lt: x < g * g): ∃
 theorem Rat::sides_of_abs({R, q, u, e: Rat}, nn: 0 <= q, h: (R - q).abs() <= u * q.abs() + e): R <= q + u * q + e ∧ q - u * q - e <= R {
     let uq: (u * q.abs() ≈ u * q) = Rat::mul_respects(u.same_refl(), q.abs_of_nonneg(nn));
     And(linarith((R - q).le_abs(), h, uq), linarith((R - q).neg_le_abs(), h, uq))
+}
+
+// `|R - q| <= u·|q| + e` at a nonpositive `q`, as its two affine sides.
+theorem Rat::sides_of_abs_nonpos({R, q, u, e: Rat}, np: q <= 0, h: (R - q).abs() <= u * q.abs() + e): R <= q - u * q + e ∧ q + u * q - e <= R {
+    let uq: (u * q.abs() ≈ u * -q) = Rat::mul_respects(u.same_refl(), q.abs_of_nonpos(np));
+    And(linarith((R - q).le_abs(), h, uq), linarith((R - q).neg_le_abs(), h, uq))
+}
+
+// The roots from below approach `|q|` from each side
+// (lib/std/num/creal.hthr's `is_sqrt_sq`), and they move by at most `d`
+// when their argument moves by `d²` (the real root, `CReal::sqrt`).
+
+// Some 2^-n times `c` is under any positive `d`.
+theorem Rat::inv_pow2_mul_lt(d, c: Rat, hd: 0 < d, hc: 0 <= c): ∃ n: Nat, Rat::inv_pow2(n) * c < d {
+    let c1 = c + 1;
+    let r = c1.recip();
+    let one: (c1 * r ≈ 1) = c1.mul_recip(λ z => Rat::lt_irrefl(0, Rat::lt_respects(Rat::same_refl(0), z, linarith(hc))));
+    let rn: (0 <= r) = Rat::recip_nonneg(x := c1, h := linarith(hc));
+    let rpos: (0 < r) = nlinarith(one, hc, rn);
+    let eps = d * r;
+    let epos: (0 < eps) = Rat::mul_pos(hd, rpos);
+    match eps.archimedean_inv_pow2(epos) {
+        Exists(n, small) => {
+            let e = Rat::inv_pow2(n);
+            let a: (e * c1 < eps * c1) = Rat::mul_lt_mono_r(small, linarith(hc));
+            let b: (eps * c1 ≈ d) = ring(one);
+            let g: (e * c < d) = linarith(a, b, Rat::inv_pow2_pos(n));
+            Exists(n, g)
+        },
+    }
+}
+
+// The roots from below get as close to `|q|` as wanted, from each side.
+theorem Rat::root_floor_up(self q: Rat, r: Rat, h: q.abs() < r): ∃ n: Nat, (q.root_floor(n) + Rat::inv_pow2(n)) * (q.root_floor(n) + Rat::inv_pow2(n)) < r {
+    let x = q.abs();
+    let xn: (0 <= x) = q.abs_nonneg();
+    match Rat::inv_pow2_mul_lt(r - x, x + x + 3, linarith(h), linarith(xn)) {
+        Exists(n, small0) => {
+            let f = q.root_floor(n);
+            let e = Rat::inv_pow2(n);
+            let sp = q.root_floor_spec(n);
+            let fn0: (0 <= f) = q.root_floor_nonneg(n);
+            let fb: (f <= x + 1) = nlinarith(sp.left, fn0, xn);
+            let e1: (e <= 1) = Rat::inv_pow2_le_one(n);
+            let en: (0 <= e) = Rat::inv_pow2_nonneg(n);
+            let fe: (f * e <= (x + 1) * e) = Rat::mul_le_mono_r(fb, en);
+            let ee: (e * e <= e) = nlinarith(e1, en);
+            let small: (e * (x + x + 3) < r - x) = small0;
+            let g: ((f + e) * (f + e) < r) = linarith(sp.left, fe, ee, small);
+            Exists(n, g)
+        },
+    }
+}
+
+theorem Rat::root_floor_down(self q: Rat, r: Rat, h: r < q.abs()): ∃ n: Nat, r < q.root_floor(n) * q.root_floor(n) {
+    let x = q.abs();
+    let xn: (0 <= x) = q.abs_nonneg();
+    match Rat::inv_pow2_mul_lt(x - r, x + x + 3, linarith(h), linarith(xn)) {
+        Exists(n, small0) => {
+            let f = q.root_floor(n);
+            let e = Rat::inv_pow2(n);
+            let sp = q.root_floor_spec(n);
+            let fn0: (0 <= f) = q.root_floor_nonneg(n);
+            let fb: (f <= x + 1) = nlinarith(sp.left, fn0, xn);
+            let e1: (e <= 1) = Rat::inv_pow2_le_one(n);
+            let en: (0 <= e) = Rat::inv_pow2_nonneg(n);
+            let fe: (f * e <= (x + 1) * e) = Rat::mul_le_mono_r(fb, en);
+            let ee: (e * e <= e) = nlinarith(e1, en);
+            let small: (e * (x + x + 3) < x - r) = small0;
+            let g: (r < f * f) = linarith(sp.right, fe, ee, small);
+            Exists(n, g)
+        },
+    }
+}
+
+theorem Rat::inv_pow2_double(n: Nat): Rat::inv_pow2(n + n) ≈ Rat::inv_pow2(n) * Rat::inv_pow2(n) {
+    let e: (Nat::pow(2, n + n) = Nat::pow(2, n) * Nat::pow(2, n)) = Nat::pow_add(2, n, n);
+    omega(e)
+}
+
+// `p² <= |b| + d²` puts `p` under `b`'s root from below plus its precision
+// plus `d`.
+theorem Rat::lt_root_floor_add({p, d: Rat}, b: Rat, n: Nat, dn: 0 <= d, h: p * p <= b.abs() + d * d): p < b.root_floor(n) + Rat::inv_pow2(n) + d {
+    let f = b.root_floor(n);
+    let e = Rat::inv_pow2(n);
+    let up: (b.abs() < (f + e) * (f + e)) = (b.root_floor_spec(n)).right;
+    let fe: (0 <= f + e) = linarith(b.root_floor_nonneg(n), Rat::inv_pow2_pos(n));
+    let cross: (0 <= d * (f + e)) = Rat::mul_nonneg(dn, fe);
+    let g: (p * p < (f + e + d) * (f + e + d)) = linarith(h, up, cross);
+    Rat::lt_of_sq_lt(linarith(fe, dn), g)
+}
+
+// `f² <= p² + d²` with `p, d >= 0` puts `f <= p + d`.
+theorem Rat::le_add_of_sq_le({f, p, d: Rat}, pn: 0 <= p, dn: 0 <= d, h: f * f <= p * p + d * d): f <= p + d {
+    let pd: (0 <= p * d) = Rat::mul_nonneg(pn, dn);
+    match Rat::le_total(0, f) {
+        Inl(fn0) => {
+            let sq: (f * f <= (p + d) * (p + d)) = linarith(h, pd);
+            Rat::le_of_sq_le(fn0, linarith(pn, dn), sq)
+        },
+        Inr(fneg) => linarith(fneg, pn, dn),
+    }
 }
 
 // ---------------------------------------------------------------------------

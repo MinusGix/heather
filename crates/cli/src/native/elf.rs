@@ -321,11 +321,12 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), args, argv)");
+    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
+        top, depth, placed, s, entry, rsp,
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom(X86Profile::process({p}_size(), top, depth), {p}_size(), f), loaded), args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
-{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io({p}_size()).linux(), src.denote(args), s),\n        {simulated})"))
+{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::process({p}_size(), top, depth).linux(), src.denote(args), s),\n        {simulated})"))
     };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
@@ -395,13 +396,15 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
         j(sym({p}_length()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {length}, 65536, trivial)))
 }}
 
-// The process Linux makes of the file written, at its entry with the
-// command line `args` on its stack, simulates `{symbol}`'s tree run with
-// `args` (`Source::elf_file_simulates`, from `native_compile_correct`).
-theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io({p}_size()))>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
-    argv: ArgvAt(X86Profile::io({p}_size()).data().above(io_data_end({p}_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io({p}_size()).linux(), {source}.denote(args), s) {{
+// The process Linux makes of the file written, at its entry with `depth`
+// bytes of stack below RSP and the command line `args` on the stack above,
+// simulates `{symbol}`'s tree run with `args` (`Source::elf_file_simulates`,
+// from `native_compile_correct`).
+theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
+    s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(X86Profile::process({p}_size(), top, depth), {p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
+    argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(io_data_end({p}_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}
 }}
 ", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));
