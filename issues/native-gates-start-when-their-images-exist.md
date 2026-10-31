@@ -53,3 +53,14 @@ only earlier.
 ## Log
 
 - 2026-10-31: filed with the change above.
+- 2026-10-31: Two `HEATHER_PR_NATIVE=all scripts/test --pr` runs on a
+  4-CPU cloud box, both green (3653 passed). **Cold** (the change rebuilt
+  every image): the gate ran 350 s and the probe released its readers at
+  302 s, so the native closure finishes near the end of the build step
+  (it is the longest chain, which `--build-jobs` starts first) and what is
+  saved is the folder-check phase. Only one runner slot was free then:
+  `native_cat` started 38 s later, and `native_tools`, which had no history
+  in this lane and sorted after it, started when the gate ended, so the
+  run's tail did not move. With the history that run wrote, `native_tools`
+  goes first. **Warm**: the first probe released them 1 s into the gate's
+  26 s; `native_tools` started at once and the test phase took 184 s.
