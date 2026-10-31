@@ -1,0 +1,734 @@
+// exp's addition law at rational arguments, `exp(a + b) ≈ exp(a)·exp(b)`
+// (issues/elementary-functions-at-reals.md), as the Cauchy product of the
+// two series.
+//
+// The coefficient identity. With u_i = a^i/i!, v_k = b^k/k! and the
+// antidiagonal c_n = Σ_{i+k=n} u_i v_k, the claim is c_n = (a+b)^n/n!, the
+// n-th term of exp(a+b). Each step splits the weight n+1 of the antidiagonal
+// at n+1 as i + (n+1-i), and the terms' ratios turn each weight into a
+// factor (`i·u_i = a·u_{i-1}`, `(n+1-i)·v_{n+1-i} = b·v_{n-i}`):
+//
+//     (n+1)·c_{n+1} = a·c_n + b·c_n                    (`exp_prod_step`)
+//
+// so no binomial coefficient is needed (`Series::exp_prod_term`).
+//
+// The limit. A Cauchy product's partial sum is the triangle `i + k < N`
+// (`Semiring::range_cauchy`), the product of partial sums the square, and
+// they differ by the terms with `i, k < N <= i + k`. Bounded through the
+// magnitudes, the gap is the square of the majorants less their triangle,
+// and that square lies inside the majorants' triangle of side 2N
+// (`Series::cauchy_gap`); at the majorants of exp, that triangle is the
+// partial sum of exp(|a| + |b|), whose tail vanishes (`Series::cauchy`).
+
+import logic;
+import bool;
+import nat;
+import int;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import big_operator;
+import creal;
+import dyadic;
+import interval;
+import creal_interval;
+import series;
+import elementary;
+import omega;
+import tactic;
+import mono;
+import linarith;
+import ring;
+
+// ---------------------------------------------------------------------------
+// The coefficient identity.
+
+fn Series::exp_prod_term(a, b: Rat, n: Nat) → Rat { MonoidRel::antidiag(+, n, λ i k => Series::exp(a).term(i) * Series::exp(b).term(k)) }
+
+// The left weights: Σ_{i<n+2} i·u_i·v_{n+1-i} = a·c_n. The first term has
+// weight 0, and past it `(k+1)·u_{k+1} = a·u_k`.
+theorem Series::exp_prod_left(a, b: Rat, n: Nat):
+    MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * (Series::exp(a).term(i) * Series::exp(b).term(Succ(n) - i)))
+        ≈ a * Series::exp_prod_term(a, b, n)
+{
+    let u = λ (i: Nat) => Series::exp(a).term(i);
+    let v = λ (k: Nat) => Series::exp(b).term(k);
+    let f = λ (i: Nat) => Rat::ofInt(OfNat(i)) * (u(i) * v(Succ(n) - i));
+    let first: (f(0) ≈ 0) = (u(0) * v(Succ(n) - 0)).zero_mul();
+    let shifted: (MonoidRel::range(+, Succ(n), λ k => f(Succ(k))) ≈ MonoidRel::range(+, Succ(n), λ k => a * (u(k) * v(n - k)))) =
+        MonoidRel::range_cong(+, Succ(n), λ k => f(Succ(k)), λ k => a * (u(k) * v(n - k)), λ k hk => {
+            let c: (Rat::ofInt(OfNat(k + 1)) * Rat::inv_succ(k) ≈ 1) = Rat::succ_mul_inv_succ(k);
+            let r: (Rat::ofInt(OfNat(Succ(k))) * ((u(k) * (a * Rat::inv_succ(k))) * v(n - k)) ≈ a * (u(k) * v(n - k))) = ring(c);
+            r
+        });
+    calc {
+        MonoidRel::range(+, Succ(Succ(n)), f) ≈ f(0) + MonoidRel::range(+, Succ(n), λ k => f(Succ(k))) := MonoidRel::range_succ_l(+, Succ(n), f),
+        ≈ 0 + MonoidRel::range(+, Succ(n), λ k => a * (u(k) * v(n - k))) := Rat::add_respects(first, shifted),
+        ≈ MonoidRel::range(+, Succ(n), λ k => a * (u(k) * v(n - k))) := Rat::zero_add(MonoidRel::range(+, Succ(n), λ k => a * (u(k) * v(n - k)))),
+        ≈ a * Series::exp_prod_term(a, b, n) := Rat::same_sym(Semiring::mul_range_l(a, Succ(n), λ k => u(k) * v(n - k))),
+    }
+}
+
+// The right weights: Σ_{i<n+2} (n+1-i)·u_i·v_{n+1-i} = b·c_n. The last
+// term has weight 0, and before it `n+1-i = (n-i)+1`.
+theorem Series::exp_prod_right(a, b: Rat, n: Nat):
+    MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n) - i)) * (Series::exp(a).term(i) * Series::exp(b).term(Succ(n) - i)))
+        ≈ b * Series::exp_prod_term(a, b, n)
+{
+    let u = λ (i: Nat) => Series::exp(a).term(i);
+    let v = λ (k: Nat) => Series::exp(b).term(k);
+    let g = λ (i: Nat) => Rat::ofInt(OfNat(Succ(n) - i)) * (u(i) * v(Succ(n) - i));
+    let z: (Succ(n) - Succ(n) = 0) = omega;
+    let last: (g(Succ(n)) ≈ 0) = j(sym(z), λ y _ => Rat::ofInt(OfNat(y)) * (u(Succ(n)) * v(y)) ≈ 0, ring);
+    let body: (MonoidRel::range(+, Succ(n), g) ≈ MonoidRel::range(+, Succ(n), λ i => b * (u(i) * v(n - i)))) =
+        MonoidRel::range_cong(+, Succ(n), g, λ i => b * (u(i) * v(n - i)), λ i hi => {
+            let e: (Succ(n) - i = Succ(n - i)) = omega(hi);
+            let c: (Rat::ofInt(OfNat(n - i + 1)) * Rat::inv_succ(n - i) ≈ 1) = Rat::succ_mul_inv_succ(n - i);
+            let at: (Rat::ofInt(OfNat(Succ(n - i))) * (u(i) * (v(n - i) * (b * Rat::inv_succ(n - i)))) ≈ b * (u(i) * v(n - i))) = ring(c);
+            j(sym(e), λ y _ => Rat::ofInt(OfNat(y)) * (u(i) * v(y)) ≈ b * (u(i) * v(n - i)), at)
+        });
+    calc {
+        MonoidRel::range(+, Succ(Succ(n)), g) ≈ MonoidRel::range(+, Succ(n), λ i => b * (u(i) * v(n - i))) + 0 := Rat::add_respects(body, last),
+        ≈ MonoidRel::range(+, Succ(n), λ i => b * (u(i) * v(n - i))) := Rat::add_zero(MonoidRel::range(+, Succ(n), λ i => b * (u(i) * v(n - i)))),
+        ≈ b * Series::exp_prod_term(a, b, n) := Rat::same_sym(Semiring::mul_range_l(b, Succ(n), λ i => u(i) * v(n - i))),
+    }
+}
+
+theorem Series::exp_prod_step(a, b: Rat, n: Nat):
+    Rat::ofInt(OfNat(Succ(n))) * Series::exp_prod_term(a, b, Succ(n)) ≈ (a + b) * Series::exp_prod_term(a, b, n)
+{
+    let u = λ (i: Nat) => Series::exp(a).term(i);
+    let v = λ (k: Nat) => Series::exp(b).term(k);
+    let T = λ (i: Nat) => u(i) * v(Succ(n) - i);
+    let c = Series::exp_prod_term(a, b, n);
+    let parts: (MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n))) * T(i))
+        ≈ MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(Succ(n) - i)) * T(i))) =
+        MonoidRel::range_cong(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n))) * T(i), λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(Succ(n) - i)) * T(i),
+            λ i hi => {
+                let e: (i + (Succ(n) - i) = Succ(n)) = omega(hi);
+                let sum: (Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(Succ(n) - i)) ≈ Rat::ofInt(OfNat(i + (Succ(n) - i)))) = omega(Int::ofNat_add(i, Succ(n) - i));
+                let w: (Rat::ofInt(OfNat(Succ(n))) ≈ Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(Succ(n) - i))) =
+                    j(e, λ y _ => Rat::ofInt(OfNat(y)) ≈ Rat::ofInt(OfNat(i)) + Rat::ofInt(OfNat(Succ(n) - i)), Rat::same_sym(sum));
+                let r: (Rat::ofInt(OfNat(Succ(n))) * T(i) ≈ Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(Succ(n) - i)) * T(i)) = ring(w);
+                r
+            });
+    calc {
+        Rat::ofInt(OfNat(Succ(n))) * Series::exp_prod_term(a, b, Succ(n))
+            ≈ MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n))) * T(i)) := Semiring::mul_range_l(Rat::ofInt(OfNat(Succ(n))), Succ(Succ(n)), T),
+        ≈ MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * T(i) + Rat::ofInt(OfNat(Succ(n) - i)) * T(i)) := parts,
+        ≈ MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * T(i)) + MonoidRel::range(+, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(Succ(n) - i)) * T(i))
+            := CommMonoidRel::range_op(≈, +, Succ(Succ(n)), λ i => Rat::ofInt(OfNat(i)) * T(i), λ i => Rat::ofInt(OfNat(Succ(n) - i)) * T(i)),
+        ≈ a * c + b * c := Rat::add_respects(Series::exp_prod_left(a, b, n), Series::exp_prod_right(a, b, n)),
+        ≈ (a + b) * c := ring,
+    }
+}
+
+// The coefficient identity: c_n is exp(a+b)'s n-th term.
+theorem Series::exp_prod_term_eq(a, b: Rat, n: Nat): Series::exp_prod_term(a, b, n) ≈ Series::exp(a + b).term(n) {
+    match n {
+        Zero => Rat::same_refl(1),
+        Succ(m) => {
+            let ih = Series::exp_prod_term_eq(a, b, m);
+            let st = Series::exp_prod_step(a, b, m);
+            let c: (Rat::ofInt(OfNat(m + 1)) * Rat::inv_succ(m) ≈ 1) = Rat::succ_mul_inv_succ(m);
+            let w = Series::exp(a + b).term(m);
+            let x = Series::exp_prod_term(a, b, Succ(m));
+            let r: (x ≈ w * ((a + b) * Rat::inv_succ(m))) = calc {
+                x ≈ (Rat::ofInt(OfNat(Succ(m))) * x) * Rat::inv_succ(m) := ring(c),
+                ≈ ((a + b) * Series::exp_prod_term(a, b, m)) * Rat::inv_succ(m) := Rat::mul_respects(st, Rat::inv_succ(m).same_refl()),
+                ≈ ((a + b) * w) * Rat::inv_succ(m) := Rat::mul_respects(Rat::mul_respects((a + b).same_refl(), ih), Rat::inv_succ(m).same_refl()),
+                ≈ w * ((a + b) * Rat::inv_succ(m)) := ring,
+            };
+            r
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The Cauchy product of two series, read through majorants.
+
+// A difference of sums is the sum of the differences.
+theorem Rat::range_sub(n: Nat, f, g: Nat → Rat): ∑ k < n, (f(k) - g(k)) ≈ (∑ k < n, f(k)) - ∑ k < n, g(k) {
+    match n {
+        Zero => ring,
+        Succ(m) => {
+            let ih = Rat::range_sub(m, f, g);
+            let r: ((∑ k < m, (f(k) - g(k))) + (f(m) - g(m)) ≈ ((∑ k < m, f(k)) + f(m)) - ((∑ k < m, g(k)) + g(m))) = ring(ih);
+            r
+        },
+    }
+}
+
+theorem Series::sum_same_range(self s: Series, n: Nat): s.sum(n) ≈ ∑ i < n, s.term(i) {
+    j(s.sum_is_range(n), λ y _ => s.sum(n) ≈ y, s.sum(n).same_refl())
+}
+
+// The partial sum less a shorter one is the terms between them.
+theorem Series::sum_tail_terms(self t: Series, N, i: Nat, h: i <= N): t.sum(N) - ∑ k < N - i, t.term(k) ≈ ∑ k < i, t.term((N - i) + k) {
+    let e: ((N - i) + i = N) = omega(h);
+    let whole: (∑ k < N, t.term(k) ≈ ∑ k < (N - i) + i, t.term(k)) = MonoidRel::range_eq(+, N, (N - i) + i, λ k => t.term(k), sym(e));
+    let parts: (∑ k < (N - i) + i, t.term(k) ≈ (∑ k < N - i, t.term(k)) + ∑ k < i, t.term((N - i) + k)) = MonoidRel::range_add(+, N - i, i, λ k => t.term(k));
+    let r = t.sum_same_range(N);
+    ring(r, whole, parts)
+}
+
+// The product of partial sums less the Cauchy product's: the rows of the
+// square past the triangle.
+theorem Series::cauchy_alg(self s: Series, t, w: Series, hw: (n: Nat) → MonoidRel::antidiag(+, n, λ i k => s.term(i) * t.term(k)) ≈ w.term(n), N: Nat):
+    s.sum(N) * t.sum(N) - w.sum(N) ≈ ∑ i < N, s.term(i) * (t.sum(N) - ∑ k < N - i, t.term(k))
+{
+    let A = ∑ i < N, s.term(i) * t.sum(N);
+    let B = ∑ i < N, s.term(i) * ∑ k < N - i, t.term(k);
+    let sq: (s.sum(N) * t.sum(N) ≈ A) = Rat::same_trans(Rat::mul_respects(s.sum_same_range(N), t.sum(N).same_refl()),
+        Semiring::range_mul_r(N, λ i => s.term(i), t.sum(N)));
+    let tri: (w.sum(N) ≈ B) = Rat::same_trans(w.sum_same_range(N), Rat::same_trans(
+        MonoidRel::range_cong(+, N, λ n => w.term(n), λ n => MonoidRel::antidiag(+, n, λ i k => s.term(i) * t.term(k)), λ n _ => Rat::same_sym(hw(n))),
+        Semiring::range_cauchy(N, λ i => s.term(i), λ k => t.term(k))));
+    let rows: (∑ i < N, s.term(i) * (t.sum(N) - ∑ k < N - i, t.term(k)) ≈ A - B) = Rat::same_trans(
+        MonoidRel::range_cong(+, N, λ i => s.term(i) * (t.sum(N) - ∑ k < N - i, t.term(k)), λ i => s.term(i) * t.sum(N) - s.term(i) * ∑ k < N - i, t.term(k),
+            λ i _ => {
+                let r: (s.term(i) * (t.sum(N) - ∑ k < N - i, t.term(k)) ≈ s.term(i) * t.sum(N) - s.term(i) * ∑ k < N - i, t.term(k)) = ring;
+                r
+            }),
+        Rat::range_sub(N, λ i => s.term(i) * t.sum(N), λ i => s.term(i) * ∑ k < N - i, t.term(k)));
+    ring(sq, tri, rows)
+}
+
+theorem Series::term_nonneg_of_dominates(self s: Series, S: Series, hs: (i: Nat) → s.term(i).abs() <= S.term(i), i: Nat): 0 <= S.term(i) {
+    Rat::le_trans(s.term(i).abs_nonneg(), hs(i))
+}
+
+// One row of the gap, bounded by the majorants' row.
+theorem Series::cauchy_row(self s: Series, t, S, T: Series, hs: (i: Nat) → s.term(i).abs() <= S.term(i), ht: (k: Nat) → t.term(k).abs() <= T.term(k),
+    N, i: Nat, hi: i <= N):
+    (s.term(i) * (t.sum(N) - ∑ k < N - i, t.term(k))).abs() <= S.term(i) * (T.sum(N) - ∑ k < N - i, T.term(k))
+{
+    let d = t.sum(N) - ∑ k < N - i, t.term(k);
+    let D = T.sum(N) - ∑ k < N - i, T.term(k);
+    let dt: (d ≈ ∑ k < i, t.term((N - i) + k)) = t.sum_tail_terms(N, i, hi);
+    let DT: (D ≈ ∑ k < i, T.term((N - i) + k)) = T.sum_tail_terms(N, i, hi);
+    let dD: (d.abs() <= D) = calc {
+        d.abs() ≈ (∑ k < i, t.term((N - i) + k)).abs() := Rat::abs_respects(dt),
+        <= ∑ k < i, t.term((N - i) + k).abs() := Rat::sum_abs_le(i, λ k => t.term((N - i) + k)),
+        <= ∑ k < i, T.term((N - i) + k) := Rat::range_le(i, λ k => t.term((N - i) + k).abs(), λ k => T.term((N - i) + k), λ k _ => ht((N - i) + k)),
+        ≈ D := Rat::same_sym(DT),
+    };
+    calc {
+        (s.term(i) * d).abs() ≈ s.term(i).abs() * d.abs() := s.term(i).abs_mul(d),
+        <= S.term(i) * D := Rat::mul_le_mul(hs(i), dD, s.term(i).abs_nonneg(), d.abs_nonneg()),
+    }
+}
+
+// The gap between the product of partial sums and the Cauchy product's,
+// bounded by the majorants' gap.
+theorem Series::cauchy_gap(self s: Series, t, w, S, T, W: Series,
+    hs: (i: Nat) → s.term(i).abs() <= S.term(i), ht: (k: Nat) → t.term(k).abs() <= T.term(k),
+    hw: (n: Nat) → MonoidRel::antidiag(+, n, λ i k => s.term(i) * t.term(k)) ≈ w.term(n),
+    hW: (n: Nat) → MonoidRel::antidiag(+, n, λ i k => S.term(i) * T.term(k)) ≈ W.term(n), N: Nat):
+    (s.sum(N) * t.sum(N) - w.sum(N)).abs() <= S.sum(N) * T.sum(N) - W.sum(N)
+{
+    let f = λ (i: Nat) => s.term(i) * (t.sum(N) - ∑ k < N - i, t.term(k));
+    let F = λ (i: Nat) => S.term(i) * (T.sum(N) - ∑ k < N - i, T.term(k));
+    calc {
+        (s.sum(N) * t.sum(N) - w.sum(N)).abs() ≈ (∑ i < N, f(i)).abs() := Rat::abs_respects(s.cauchy_alg(t, w, hw, N)),
+        <= ∑ i < N, f(i).abs() := Rat::sum_abs_le(N, f),
+        <= ∑ i < N, F(i) := Rat::range_le(N, λ i => f(i).abs(), F, λ i hi => s.cauchy_row(t, S, T, hs, ht, N, i, omega(hi))),
+        ≈ S.sum(N) * T.sum(N) - W.sum(N) := Rat::same_sym(S.cauchy_alg(T, W, hW, N)),
+    }
+}
+
+// The majorants' square lies inside their triangle of side 2N.
+theorem Series::cauchy_square(self S: Series, T, W: Series, nS: (i: Nat) → 0 <= S.term(i), nT: (k: Nat) → 0 <= T.term(k),
+    hW: (n: Nat) → MonoidRel::antidiag(+, n, λ i k => S.term(i) * T.term(k)) ≈ W.term(n), N: Nat):
+    S.sum(N) * T.sum(N) <= W.sum(N + N)
+{
+    let row = λ (i: Nat) => S.term(i) * ∑ k < (N + N) - i, T.term(k);
+    let tri: (W.sum(N + N) ≈ ∑ i < N + N, row(i)) = Rat::same_trans(W.sum_same_range(N + N), Rat::same_trans(
+        MonoidRel::range_cong(+, N + N, λ n => W.term(n), λ n => MonoidRel::antidiag(+, n, λ i k => S.term(i) * T.term(k)), λ n _ => Rat::same_sym(hW(n))),
+        Semiring::range_cauchy(N + N, λ i => S.term(i), λ k => T.term(k))));
+    let halves: (∑ i < N + N, row(i) ≈ (∑ i < N, row(i)) + ∑ j < N, row(N + j)) = MonoidRel::range_add(+, N, N, row);
+    let upper: (0 <= ∑ j < N, row(N + j)) = Rat::range_nonneg(N, λ j => row(N + j),
+        λ j _ => Rat::mul_nonneg(nS(N + j), Rat::range_nonneg((N + N) - (N + j), λ k => T.term(k), λ k _ => nT(k))));
+    let longer = λ (i: Nat) (hi: i < N) => {
+        let e: ((N + N) - i = N + (N - i)) = omega(hi);
+        let more: (∑ k < N + (N - i), T.term(k) ≈ (∑ k < N, T.term(k)) + ∑ k < N - i, T.term(N + k)) = MonoidRel::range_add(+, N, N - i, λ k => T.term(k));
+        let pos: (0 <= ∑ k < N - i, T.term(N + k)) = Rat::range_nonneg(N - i, λ k => T.term(N + k), λ k _ => nT(N + k));
+        let le: (∑ k < N, T.term(k) <= ∑ k < N + (N - i), T.term(k)) = linarith(more, pos);
+        let le2: (∑ k < N, T.term(k) <= ∑ k < (N + N) - i, T.term(k)) = j(sym(e), λ y _ => ∑ k < N, T.term(k) <= ∑ k < y, T.term(k), le);
+        let r: (S.term(i) * T.sum(N) <= row(i)) = Rat::mul_le_mono_l(Rat::le_trans(Rat::le_of_same(T.sum_same_range(N)), le2), nS(i));
+        r
+    };
+    let lower: (∑ i < N, S.term(i) * T.sum(N) <= ∑ i < N, row(i)) = Rat::range_le(N, λ i => S.term(i) * T.sum(N), row, longer);
+    let sq: (S.sum(N) * T.sum(N) ≈ ∑ i < N, S.term(i) * T.sum(N)) = Rat::same_trans(Rat::mul_respects(S.sum_same_range(N), T.sum(N).same_refl()),
+        Semiring::range_mul_r(N, λ i => S.term(i), T.sum(N)));
+    linarith(sq, lower, upper, halves, tri)
+}
+
+// A product of two reals, one within `e` of 0 and the other within `M`, is
+// within `e·M` of 0.
+theorem CReal::mul_dev({d, y: CReal}, e, M: Rat, he: 0 <= e, d1: CReal::ofRat(-e) <= d, d2: d <= CReal::ofRat(e),
+    y1: CReal::ofRat(-M) <= y, y2: y <= CReal::ofRat(M)):
+    CReal::ofRat(-(e * M)) <= d * y ∧ d * y <= CReal::ofRat(e * M)
+{
+    let E = CReal::ofRat(e);
+    let nE = CReal::ofRat(-e);
+    let pe: (0 <= E) = CReal::ofRat_le(he);
+    let ne: (nE <= 0) = CReal::ofRat_le(linarith(he));
+    let m1 = CReal::ofRat_mul(e, M);
+    let m2 = CReal::ofRat_mul(-e, -M);
+    let m3 = CReal::ofRat_mul(-e, M);
+    let m4 = CReal::ofRat_mul(e, -M);
+    let r2: (CReal::ofRat(-e * -M) ≈ CReal::ofRat(e * M)) = CReal::ofRat_respects(ring);
+    let r3: (CReal::ofRat(-e * M) ≈ CReal::ofRat(-(e * M))) = CReal::ofRat_respects(ring);
+    let r4: (CReal::ofRat(e * -M) ≈ CReal::ofRat(-(e * M))) = CReal::ofRat_respects(ring);
+    let upper: (d * y <= CReal::ofRat(e * M)) = CReal::le_by_sign(y,
+        λ py => {
+            let a: (d * y <= E * y) = CReal::mul_le_mono_r(d2, py);
+            let b: (E * y <= E * CReal::ofRat(M)) = CReal::mul_le_mono_l(y2, pe);
+            CReal::le_trans(a, CReal::le_trans(b, CReal::le_of_same(CReal::same_sym(m1))))
+        },
+        λ ny => {
+            let a: (d * y <= nE * y) = CReal::mul_le_mono_r_nonpos(d1, ny);
+            let b: (nE * y <= nE * CReal::ofRat(-M)) = CReal::mul_le_mono_l_nonpos(y1, ne);
+            CReal::le_trans(a, CReal::le_trans(b, CReal::le_of_same(CReal::same_trans(CReal::same_sym(m2), r2))))
+        });
+    let lower: (CReal::ofRat(-(e * M)) <= d * y) = CReal::le_by_sign(y,
+        λ py => {
+            let a: (nE * CReal::ofRat(M) <= nE * y) = CReal::mul_le_mono_l_nonpos(y2, ne);
+            let b: (nE * y <= d * y) = CReal::mul_le_mono_r(d1, py);
+            CReal::le_trans(CReal::le_of_same(CReal::same_trans(CReal::same_sym(r3), m3)), CReal::le_trans(a, b))
+        },
+        λ ny => {
+            let a: (E * CReal::ofRat(-M) <= E * y) = CReal::mul_le_mono_l(y1, pe);
+            let b: (E * y <= d * y) = CReal::mul_le_mono_r_nonpos(d2, ny);
+            CReal::le_trans(CReal::le_of_same(CReal::same_trans(CReal::same_sym(r4), m4)), CReal::le_trans(a, b))
+        });
+    And(lower, upper)
+}
+
+// Past `n0`, a partial sum and its error stay below those at `n0`.
+theorem Series::bound_after(self s: Series, n0: Nat, hs: s.start <= n0, N: Nat, h: n0 <= N): s.sum(N) + s.err(N) <= s.sum(n0) + s.err(n0) {
+    let moved: ((s.sum(N) - s.sum(n0)).abs() + s.err(N) <= s.err(n0)) =
+        j(n0.le_add(N, h), λ y _ => (s.sum(y) - s.sum(n0)).abs() + s.err(y) <= s.err(n0), s.tail(n0, hs, N - n0));
+    linarith(moved, (s.sum(N) - s.sum(n0)).le_abs())
+}
+
+// A dominated partial sum is below the majorant's.
+theorem Series::sum_abs_dominated(self s: Series, S: Series, hs: (i: Nat) → s.term(i).abs() <= S.term(i), N: Nat): s.sum(N).abs() <= S.sum(N) {
+    calc {
+        s.sum(N).abs() ≈ (∑ i < N, s.term(i)).abs() := Rat::abs_respects(s.sum_same_range(N)),
+        <= ∑ i < N, s.term(i).abs() := Rat::sum_abs_le(N, λ i => s.term(i)),
+        <= ∑ i < N, S.term(i) := Rat::range_le(N, λ i => s.term(i).abs(), λ i => S.term(i), λ i _ => hs(i)),
+        ≈ S.sum(N) := Rat::same_sym(S.sum_same_range(N)),
+    }
+}
+
+theorem Series::err_dominated(self s: Series, S: Series, hs: (i: Nat) → s.term(i).abs() <= S.term(i), N: Nat): s.err(N) <= S.err(N) {
+    let h = hs(N);
+    let l = S.term(N).le_abs();
+    let r: (s.term(N).abs() + s.term(N).abs() <= S.term(N).abs() + S.term(N).abs()) = linarith(h, l);
+    r
+}
+
+// A majorant's sum and error at `start` are nonnegative; past `start` they
+// bound every partial sum (`Series::bound_after`).
+theorem Series::reach_nonneg(self s: Series, S: Series, hs: (i: Nat) → s.term(i).abs() <= S.term(i)): 0 <= S.sum(S.start) + S.err(S.start) {
+    let a = S.sum_abs_dominated(S, λ i => Rat::le_of_same(S.term(i).abs_of_nonneg(s.term_nonneg_of_dominates(S, hs, i))), S.start);
+    linarith(a, S.sum(S.start).abs_nonneg(), S.err_nonneg(S.start))
+}
+
+// The Cauchy product at one index `N` far enough out for a slack 2^-m.
+theorem Series::cauchy_near(self s: Series, t, w, S, T, W: Series,
+    hs: (i: Nat) → s.term(i).abs() <= S.term(i), ht: (k: Nat) → t.term(k).abs() <= T.term(k),
+    hw: (n: Nat) → MonoidRel::antidiag(+, n, λ i k => s.term(i) * t.term(k)) ≈ w.term(n),
+    hW: (n: Nat) → MonoidRel::antidiag(+, n, λ i k => S.term(i) * T.term(k)) ≈ W.term(n),
+    m, N: Nat, MS, MT: Rat, eMS: MS = S.sum(S.start) + S.err(S.start), eMT: MT = T.sum(T.start) + T.err(T.start),
+    i1: s.index((m + 2) + MT.abs_ceil().width()) <= N, i2: t.index((m + 2) + MS.abs_ceil().width()) <= N,
+    i3: w.index(m + 2) <= N, i4: W.index(m + 2) <= N, iS: S.start <= N, iT: T.start <= N):
+    w.real() <= s.real() * t.real() + CReal::ofRat(Rat::inv_pow2(m)) ∧ s.real() * t.real() <= w.real() + CReal::ofRat(Rat::inv_pow2(m))
+{
+    let x = s.real();
+    let y = t.real();
+    let z = w.real();
+    let nS = λ (i: Nat) => s.term_nonneg_of_dominates(S, hs, i);
+    let nT = λ (k: Nat) => t.term_nonneg_of_dominates(T, ht, k);
+    let ma = (m + 2) + MT.abs_ceil().width();
+    let mb = (m + 2) + MS.abs_ceil().width();
+    let rS: (0 <= MS) = j(sym(eMS), λ v _ => 0 <= v, s.reach_nonneg(S, hs));
+    let rT: (0 <= MT) = j(sym(eMT), λ v _ => 0 <= v, t.reach_nonneg(T, ht));
+    let pMS: (MS.abs() ≈ MS) = MS.abs_of_nonneg(rS);
+    let pMT: (MT.abs() ≈ MT) = MT.abs_of_nonneg(rT);
+    let st1: (s.start <= N) = s.start.le_trans(s.index(ma), N, s.index_start(ma), i1);
+    let st2: (t.start <= N) = t.start.le_trans(t.index(mb), N, t.index_start(mb), i2);
+    let st3: (w.start <= N) = w.start.le_trans(w.index(m + 2), N, w.index_start(m + 2), i3);
+    let st4: (W.start <= N) = W.start.le_trans(W.index(m + 2), N, W.index_start(m + 2), i4);
+    let p = s.sum(N);
+    let q = t.sum(N);
+    let r = w.sum(N);
+    let e1 = s.err(N);
+    let e2 = t.err(N);
+    let e3 = w.err(N);
+    let g = W.err(N);
+    let Q = Rat::inv_pow2(m + 2);
+    let f1: (MT.abs() * e1 <= Q) = Rat::scaled_small(MT, e1, m + 2, s.err_nonneg(N),
+        Rat::le_trans(s.err_small(ma, N, i1), Rat::inv_pow2_antitone(ma, ma + 1, omega)));
+    let f2: (MS.abs() * e2 <= Q) = Rat::scaled_small(MS, e2, m + 2, t.err_nonneg(N),
+        Rat::le_trans(t.err_small(mb, N, i2), Rat::inv_pow2_antitone(mb, mb + 1, omega)));
+    let f3: (e3 <= Q) = Rat::le_trans(w.err_small(m + 2, N, i3), Rat::inv_pow2_antitone(m + 2, m + 3, omega));
+    let f4: (g <= Q) = Rat::le_trans(W.err_small(m + 2, N, i4), Rat::inv_pow2_antitone(m + 2, m + 3, omega));
+    let g1: (MT * e1 <= Q) = Rat::le_trans(Rat::le_of_same(Rat::mul_respects(Rat::same_sym(pMT), e1.same_refl())), f1);
+    let g2: (MS * e2 <= Q) = Rat::le_trans(Rat::le_of_same(Rat::mul_respects(Rat::same_sym(pMS), e2.same_refl())), f2);
+    let pS = s.sum_abs_dominated(S, hs, N);
+    let qT = t.sum_abs_dominated(T, ht, N);
+    let e1S = s.err_dominated(S, hs, N);
+    let bS0 = S.bound_after(S.start, S.start.le_refl(), N, iS);
+    let bT0 = T.bound_after(T.start, T.start.le_refl(), N, iT);
+    let bS: (S.sum(N) + S.err(N) <= MS) = j(sym(eMS), λ v _ => S.sum(N) + S.err(N) <= v, bS0);
+    let bT: (T.sum(N) + T.err(N) <= MT) = j(sym(eMT), λ v _ => T.sum(N) + T.err(N) <= v, bT0);
+    let xlo = s.below(N, st1);
+    let xhi = s.above(N, st1);
+    let ylo = t.below(N, st2);
+    let yhi = t.above(N, st2);
+    let zlo = w.below(N, st3);
+    let zhi = w.above(N, st3);
+    let xb_hi: (x <= CReal::ofRat(MS)) = CReal::le_trans(xhi, CReal::ofRat_le(linarith(p.le_abs(), pS, e1S, bS)));
+    let xb_lo: (CReal::ofRat(-MS) <= x) = CReal::le_trans(CReal::ofRat_le(linarith(p.neg_le_abs(), pS, e1S, bS)), xlo);
+    let qb_hi: (q <= MT) = linarith(q.le_abs(), qT, T.err_nonneg(N), bT);
+    let qb_lo: (-MT <= q) = linarith(q.neg_le_abs(), qT, T.err_nonneg(N), bT);
+    let d1lo: (CReal::ofRat(-e2) <= y - CReal::ofRat(q)) = linarith(ylo);
+    let d1hi: (y - CReal::ofRat(q) <= CReal::ofRat(e2)) = linarith(yhi);
+    let d2lo: (CReal::ofRat(-e1) <= x - CReal::ofRat(p)) = linarith(xlo);
+    let d2hi: (x - CReal::ofRat(p) <= CReal::ofRat(e1)) = linarith(xhi);
+    let dev1 = CReal::mul_dev(e2, MS, t.err_nonneg(N), d1lo, d1hi, xb_lo, xb_hi);
+    let dev2 = CReal::mul_dev(e1, MT, s.err_nonneg(N), d2lo, d2hi, CReal::ofRat_le(qb_lo), CReal::ofRat_le(qb_hi));
+    let gap = s.cauchy_gap(t, w, S, T, W, hs, ht, hw, hW, N);
+    let square = S.cauchy_square(T, W, nS, nT, hW, N);
+    let tail: ((W.sum(N + N) - W.sum(N)).abs() <= g) = W.sum_close(N, N + N, st4, omega);
+    let pq = CReal::ofRat_mul(p, q);
+    let h1 = Rat::inv_pow2_half(m + 1);
+    let h0 = Rat::inv_pow2_half(m);
+    let R1: (r + e3 <= p * q - (e2 * MS + e1 * MT) + Rat::inv_pow2(m)) =
+        linarith(gap, square, tail, (p * q - r).neg_le_abs(), (W.sum(N + N) - W.sum(N)).le_abs(), f3, f4, g1, g2, h1, h0);
+    let R2: (p * q + (e2 * MS + e1 * MT) <= (r - e3) + Rat::inv_pow2(m)) =
+        linarith(gap, square, tail, (p * q - r).le_abs(), (W.sum(N + N) - W.sum(N)).le_abs(), f3, f4, g1, g2, h1, h0);
+    let up: (z <= x * y + CReal::ofRat(Rat::inv_pow2(m))) = linarith(zhi, CReal::ofRat_le(R1), dev1.left, dev2.left, pq);
+    let dn: (x * y <= z + CReal::ofRat(Rat::inv_pow2(m))) = linarith(zlo, CReal::ofRat_le(R2), dev1.right, dev2.right, pq);
+    And(up, dn)
+}
+
+// The Cauchy product: a series whose terms are the antidiagonals of two
+// others', with majorants whose antidiagonals are a third's terms, sums to
+// the product of their sums.
+theorem Series::cauchy(self s: Series, t, w, S, T, W: Series,
+    hs: (i: Nat) → s.term(i).abs() <= S.term(i), ht: (k: Nat) → t.term(k).abs() <= T.term(k),
+    hw: (n: Nat) → MonoidRel::antidiag(+, n, λ i k => s.term(i) * t.term(k)) ≈ w.term(n),
+    hW: (n: Nat) → MonoidRel::antidiag(+, n, λ i k => S.term(i) * T.term(k)) ≈ W.term(n)):
+    w.real() ≈ s.real() * t.real()
+{
+    let MS = S.sum(S.start) + S.err(S.start);
+    let MT = T.sum(T.start) + T.err(T.start);
+    let near = λ (m: Nat) => {
+        let ma = (m + 2) + MT.abs_ceil().width();
+        let mb = (m + 2) + MS.abs_ceil().width();
+        let N = s.index(ma) + t.index(mb) + w.index(m + 2) + W.index(m + 2) + S.start + T.start;
+        s.cauchy_near(t, w, S, T, W, hs, ht, hw, hW, m, N, MS, MT, refl, refl, omega, omega, omega, omega, omega, omega)
+    };
+    CReal::le_antisymm(CReal::le_of_slack(λ m => near(m).left), CReal::le_of_slack(λ m => near(m).right))
+}
+
+// ---------------------------------------------------------------------------
+// The addition law at rationals, with exp(|a|), exp(|b|) and their product
+// exp(|a| + |b|) as the majorants.
+
+theorem CReal::exp_rat_add(a, b: Rat): CReal::exp_rat(a + b) ≈ CReal::exp_rat(a) * CReal::exp_rat(b) {
+    Series::exp(a).cauchy(Series::exp(b), Series::exp(a + b), Series::exp(a.abs()), Series::exp(b.abs()), Series::exp(a.abs() + b.abs()),
+        λ i => Rat::le_of_same(Series::exp_term_abs(a, i)), λ k => Rat::le_of_same(Series::exp_term_abs(b, k)),
+        λ n => Series::exp_prod_term_eq(a, b, n), λ n => Series::exp_prod_term_eq(a.abs(), b.abs(), n))
+}
+
+// ---------------------------------------------------------------------------
+// Series with the same terms, partial sums of nonnegative terms, and a
+// series with its first terms dropped.
+
+theorem Series::sums_same(self s: Series, s2: Series, h: (k: Nat) → s.term(k) ≈ s2.term(k), N: Nat): s.sum(N) ≈ s2.sum(N) {
+    match N {
+        Zero => Rat::same_refl(0),
+        Succ(k) => Rat::add_respects(s.sums_same(s2, h, k), h(k)),
+    }
+}
+
+theorem Series::same_terms(self s: Series, s2: Series, h: (k: Nat) → s.term(k) ≈ s2.term(k)): s.real() ≈ s2.real() {
+    let e = s.comb(s2, s2, 0, 1, 0, 0, 0, 0, λ N => {
+        let a = s.sums_same(s2, h, 0 + N);
+        let r: (s.sum(0 + N) ≈ 0 + 1 * s2.sum(0 + N) + 0 * s2.sum(0 + N)) = ring(a);
+        r
+    });
+    let y = s2.real();
+    let r: (CReal::ofRat(0) + CReal::ofRat(1) * y + CReal::ofRat(0) * y ≈ y) = ring;
+    CReal::same_trans(e, r)
+}
+
+theorem Series::sum_mono(self s: Series, nn: (k: Nat) → 0 <= s.term(k), n, j: Nat): s.sum(n) <= s.sum(n + j) {
+    match j {
+        Zero => Rat::le_refl(s.sum(n)),
+        Succ(i) => {
+            let ih = s.sum_mono(nn, n, i);
+            let r: (s.sum(n) <= s.sum(n + i) + s.term(n + i)) = linarith(ih, nn(n + i));
+            r
+        },
+    }
+}
+
+// A partial sum of nonnegative terms is below the limit.
+theorem Series::sum_le_real(self s: Series, nn: (k: Nat) → 0 <= s.term(k), n: Nat): CReal::ofRat(s.sum(n)) <= s.real() {
+    CReal::le_of_slack(λ m => {
+        let N = n + s.index(m);
+        let iN: (s.index(m) <= N) = omega;
+        let st: (s.start <= N) = s.start.le_trans(s.index(m), N, s.index_start(m), iN);
+        let mono = s.sum_mono(nn, n, s.index(m));
+        let small: (s.err(N) <= Rat::inv_pow2(m)) = Rat::le_trans(s.err_small(m, N, iN), Rat::inv_pow2_antitone(m, m + 1, omega));
+        let r: (s.sum(n) <= (s.sum(N) - s.err(N)) + Rat::inv_pow2(m)) = linarith(mono, small);
+        linarith(CReal::ofRat_le(r), s.below(N, st))
+    })
+}
+
+// The series from its `j`-th term on. Its ratios are the original's from
+// `j` on, so they are small from the same start.
+fn Series::drop(self s: Series, j: Nat) → Series {
+    Series(s.term(j), λ k => s.ratio(j + k), s.start, λ k hk => s.small(j + k, Nat::le_trans(s.start, k, j + k, hk, omega)))
+}
+
+theorem Series::drop_term(self s: Series, j, k: Nat): (s.drop(j)).term(k) ≈ s.term(j + k) {
+    match k {
+        Zero => Rat::same_refl(s.term(j)),
+        Succ(i) => Rat::mul_respects(s.drop_term(j, i), Rat::same_refl(s.ratio(j + i))),
+    }
+}
+
+theorem Series::drop_sum(self s: Series, j, N: Nat): (s.drop(j)).sum(N) ≈ s.sum(j + N) - s.sum(j) {
+    match N {
+        Zero => ring,
+        Succ(k) => {
+            let ih = s.drop_sum(j, k);
+            let t = s.drop_term(j, k);
+            let r: ((s.drop(j)).sum(k) + (s.drop(j)).term(k) ≈ (s.sum(j + k) + s.term(j + k)) - s.sum(j)) = ring(ih, t);
+            r
+        },
+    }
+}
+
+// The limit is the first `j` terms plus the rest.
+theorem Series::drop_real(self s: Series, j: Nat): s.real() ≈ CReal::ofRat(s.sum(j)) + (s.drop(j)).real() {
+    let d = s.drop(j);
+    let e = d.comb(s, s, -s.sum(j), 1, 0, 0, j, 0, λ N => {
+        let a = s.drop_sum(j, 0 + N);
+        let z: (0 + N = N) = omega;
+        let b: (d.sum(0 + N) ≈ s.sum(j + N) - s.sum(j)) = j(sym(z), λ v _ => d.sum(v) ≈ s.sum(j + N) - s.sum(j), s.drop_sum(j, N));
+        let r: (d.sum(0 + N) ≈ -s.sum(j) + 1 * s.sum(j + N) + 0 * s.sum(0 + N)) = ring(b);
+        r
+    });
+    let x = s.real();
+    let r: (CReal::ofRat(-s.sum(j)) + CReal::ofRat(1) * x + CReal::ofRat(0) * x ≈ x - CReal::ofRat(s.sum(j))) = linarith(CReal::ofRat_neg(s.sum(j)));
+    linarith(e, r)
+}
+
+// ---------------------------------------------------------------------------
+// exp at rationals: it respects `≈`, is at least 1 + a from a nonnegative
+// a, is positive, and is increasing.
+
+theorem Series::exp_term_respects(a, b: Rat, e: a ≈ b, k: Nat): Series::exp(a).term(k) ≈ Series::exp(b).term(k) {
+    match k {
+        Zero => Rat::same_refl(1),
+        Succ(i) => Rat::mul_respects(Series::exp_term_respects(a, b, e, i), Rat::mul_respects(e, Rat::inv_succ(i).same_refl())),
+    }
+}
+
+theorem CReal::exp_rat_respects({a, b: Rat}, e: a ≈ b): CReal::exp_rat(a) ≈ CReal::exp_rat(b) {
+    Series::exp(a).same_terms(Series::exp(b), λ k => Series::exp_term_respects(a, b, e, k))
+}
+
+theorem CReal::exp_rat_ge(a: Rat, ha: 0 <= a): CReal::ofRat(1 + a) <= CReal::exp_rat(a) {
+    let s = Series::exp(a);
+    let d: (s.sum(2) ≈ (0 + 1) + 1 * (a * Rat::inv_succ(0))) = Rat::same_refl(s.sum(2));
+    let i0: (Rat::inv_succ(0) ≈ 1) = omega;
+    let two: (s.sum(2) ≈ 1 + a) = ring(d, i0);
+    CReal::le_trans(CReal::ofRat_le(Rat::le_of_same(Rat::same_sym(two))), s.sum_le_real(λ k => Series::exp_term_nonneg(a, ha, k), 2))
+}
+
+theorem CReal::exp_rat_neg_mul(a: Rat): CReal::exp_rat(a) * CReal::exp_rat(-a) ≈ 1 {
+    let z: (a + -a ≈ 0) = ring;
+    CReal::same_trans(CReal::same_sym(CReal::exp_rat_add(a, -a)), CReal::exp_rat_of_zero(a + -a, z))
+}
+
+theorem CReal::exp_rat_pos(a: Rat): 0 < CReal::exp_rat(a) {
+    match Rat::le_total(0, a) {
+        Inl(ha) => {
+            let g = CReal::exp_rat_ge(a, ha);
+            let one: (CReal::ofRat(0) < CReal::ofRat(1 + a)) = CReal::ofRat_lt(linarith(ha));
+            CReal::lt_of_lt_of_le(one, g)
+        },
+        Inr(ha) => {
+            let na: (0 <= -a) = linarith(ha);
+            let g = CReal::exp_rat_ge(-a, na);
+            let pos: (0 < CReal::exp_rat(-a)) = CReal::lt_of_lt_of_le(CReal::ofRat_lt(linarith(na)), g);
+            let prod: (0 < CReal::exp_rat(-a) * CReal::exp_rat(a)) =
+                CReal::lt_of_lt_of_le(CReal::zero_lt_one(), CReal::le_of_same(CReal::same_sym(CReal::same_trans(CReal::mul_comm(CReal::exp_rat(-a), CReal::exp_rat(a)), CReal::exp_rat_neg_mul(a)))));
+            CReal::pos_of_mul_pos(pos, prod)
+        },
+    }
+}
+
+// exp(b) = exp(a)·exp(b - a), and exp(b - a) is at least 1 + (b - a).
+theorem CReal::exp_rat_shift(a, b: Rat): CReal::exp_rat(b) ≈ CReal::exp_rat(a) * CReal::exp_rat(b - a) {
+    let e: (b ≈ a + (b - a)) = ring;
+    CReal::same_trans(CReal::exp_rat_respects(e), CReal::exp_rat_add(a, b - a))
+}
+
+theorem CReal::exp_rat_le({a, b: Rat}, h: a <= b): CReal::exp_rat(a) <= CReal::exp_rat(b) {
+    let d = b - a;
+    let g = CReal::exp_rat_ge(d, linarith(h));
+    let ea = CReal::exp_rat(a);
+    let one: (CReal::ofRat(1) <= CReal::exp_rat(d)) = CReal::le_trans(CReal::ofRat_le(linarith(h)), g);
+    let m: (ea * CReal::ofRat(1) <= ea * CReal::exp_rat(d)) = CReal::mul_le_mono_l(one, CReal::le_of_lt(CReal::exp_rat_pos(a)));
+    let r: (ea * CReal::ofRat(1) ≈ ea) = ea.mul_one();
+    CReal::le_trans(CReal::le_of_same(CReal::same_sym(r)), CReal::le_trans(m, CReal::le_of_same(CReal::same_sym(CReal::exp_rat_shift(a, b)))))
+}
+
+theorem CReal::exp_rat_lt({a, b: Rat}, h: a < b): CReal::exp_rat(a) < CReal::exp_rat(b) {
+    let d = b - a;
+    let g = CReal::exp_rat_ge(d, linarith(h));
+    let ea = CReal::exp_rat(a);
+    let one: (CReal::ofRat(1) < CReal::exp_rat(d)) = CReal::lt_of_lt_of_le(CReal::ofRat_lt(linarith(h)), g);
+    let m: (ea * CReal::ofRat(1) < ea * CReal::exp_rat(d)) = CReal::mul_lt_mono_l(one, CReal::exp_rat_pos(a));
+    let r: (ea * CReal::ofRat(1) ≈ ea) = ea.mul_one();
+    CReal::lt_of_le_of_lt(CReal::le_of_same(CReal::same_sym(r)), CReal::lt_of_lt_of_le(m, CReal::le_of_same(CReal::same_sym(CReal::exp_rat_shift(a, b)))))
+}
+
+// ---------------------------------------------------------------------------
+// Bounds on a bounded set: |a| <= B bounds exp(a) by `exp_reach(B)`, the
+// partial sum and error of exp(B) at its start, and exp(d) - 1 by
+// |d|·exp_reach(D) for |d| <= D. With exp(a) - exp(b) = (exp(a - b) - 1)·exp(b)
+// they make exp Lipschitz on [-B, B] with constant `exp_lip(B)`.
+
+fn CReal::exp_reach(B: Rat) → Rat { Series::exp(B).sum(Series::exp(B).start) + Series::exp(B).err(Series::exp(B).start) }
+
+theorem CReal::exp_reach_nonneg(B: Rat, hB: 0 <= B): 0 <= CReal::exp_reach(B) {
+    let E = Series::exp(B);
+    E.reach_nonneg(E, λ i => Rat::le_of_same(E.term(i).abs_of_nonneg(Series::exp_term_nonneg(B, hB, i))))
+}
+
+theorem Series::exp_term_mono(c, B: Rat, hc: 0 <= c, h: c <= B, k: Nat): Series::exp(c).term(k) <= Series::exp(B).term(k) {
+    match k {
+        Zero => Rat::le_refl(1),
+        Succ(i) => {
+            let f = Rat::inv_succ(i);
+            let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(i));
+            Rat::mul_le_mul(Series::exp_term_mono(c, B, hc, h, i), Rat::mul_le_mono_r(h, hf), Series::exp_term_nonneg(c, hc, i), Rat::mul_nonneg(hc, hf))
+        },
+    }
+}
+
+theorem Series::exp_term_dominated(b, B: Rat, hb: b.abs() <= B, k: Nat): Series::exp(b).term(k).abs() <= Series::exp(B).term(k) {
+    Rat::le_trans(Rat::le_of_same(Series::exp_term_abs(b, k)), Series::exp_term_mono(b.abs(), B, b.abs_nonneg(), hb, k))
+}
+
+theorem CReal::exp_rat_bound(b, B: Rat, hb: b.abs() <= B): CReal::ofRat(-CReal::exp_reach(B)) <= CReal::exp_rat(b) ∧ CReal::exp_rat(b) <= CReal::ofRat(CReal::exp_reach(B)) {
+    let s = Series::exp(b);
+    let E = Series::exp(B);
+    let hB: (0 <= B) = Rat::le_trans(b.abs_nonneg(), hb);
+    let n = s.start + E.start;
+    let d = s.real_dominated(E, 1, omega, λ k => {
+        let r: (s.term(k).abs() <= 1 * E.term(k)) = linarith(Series::exp_term_dominated(b, B, hb, k));
+        r
+    }, n, omega, Series::exp_term_nonneg(B, hB, n));
+    let up: (E.sum(n) + E.err(n) <= CReal::exp_reach(B)) = E.bound_after(E.start, E.start.le_refl(), n, omega);
+    let lo: (-CReal::exp_reach(B) <= -(1 * (E.sum(n) + E.err(n)))) = linarith(up);
+    let hi: (1 * (E.sum(n) + E.err(n)) <= CReal::exp_reach(B)) = linarith(up);
+    And(CReal::le_trans(CReal::ofRat_le(lo), d.left), CReal::le_trans(d.right, CReal::ofRat_le(hi)))
+}
+
+// exp(d) - 1 is the series from its second term, whose k-th term
+// d^(k+1)/(k+1)! is at most |d|·D^k/k! in size.
+theorem Series::exp_drop_dominated(d, D: Rat, hd: d.abs() <= D, k: Nat): ((Series::exp(d)).drop(1)).term(k).abs() <= d.abs() * Series::exp(D).term(k) {
+    let s = (Series::exp(d)).drop(1);
+    match k {
+        Zero => {
+            let i0: (Rat::inv_succ(0) ≈ 1) = omega;
+            let c: (s.term(0) ≈ 1 * (d * Rat::inv_succ(0))) = Rat::same_refl(s.term(0));
+            let t: (s.term(0) ≈ d) = ring(c, i0);
+            let r: (s.term(0).abs() <= d.abs() * 1) = Rat::le_trans(Rat::le_of_same(Rat::abs_respects(t)), linarith(d.abs_nonneg()));
+            r
+        },
+        Succ(i) => {
+            let ih = Series::exp_drop_dominated(d, D, hd, i);
+            let f = Rat::inv_succ(1 + i);
+            let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(1 + i));
+            let g = Rat::inv_succ(i);
+            let fg: (f <= g) = Rat::inv_succ_antitone(i, 1 + i, omega);
+            let step: (d.abs() * f <= D * g) = Rat::mul_le_mul(hd, fg, d.abs_nonneg(), hf);
+            let t = s.term(i);
+            let r: ((t * (d * f)).abs() <= d.abs() * (Series::exp(D).term(i) * (D * g))) = calc {
+                (t * (d * f)).abs() ≈ t.abs() * (d * f).abs() := t.abs_mul(d * f),
+                ≈ t.abs() * (d.abs() * f) := Rat::mul_respects(t.abs().same_refl(), Rat::same_trans(d.abs_mul(f), Rat::mul_respects(d.abs().same_refl(), f.abs_of_nonneg(hf)))),
+                <= (d.abs() * Series::exp(D).term(i)) * (D * g) := Rat::mul_le_mul(ih, step, t.abs_nonneg(), Rat::mul_nonneg(d.abs_nonneg(), hf)),
+                ≈ d.abs() * (Series::exp(D).term(i) * (D * g)) := ring,
+            };
+            r
+        },
+    }
+}
+
+theorem CReal::exp_rat_sub_one(d, D: Rat, hd: d.abs() <= D):
+    CReal::ofRat(-(d.abs() * CReal::exp_reach(D))) <= CReal::exp_rat(d) - 1 ∧ CReal::exp_rat(d) - 1 <= CReal::ofRat(d.abs() * CReal::exp_reach(D))
+{
+    let e = Series::exp(d);
+    let s = e.drop(1);
+    let E = Series::exp(D);
+    let hD: (0 <= D) = Rat::le_trans(d.abs_nonneg(), hd);
+    let n = s.start + E.start;
+    let dom = s.real_dominated(E, d.abs(), d.abs_nonneg(), λ k => Series::exp_drop_dominated(d, D, hd, k), n, omega, Series::exp_term_nonneg(D, hD, n));
+    let up: (E.sum(n) + E.err(n) <= CReal::exp_reach(D)) = E.bound_after(E.start, E.start.le_refl(), n, omega);
+    let sc: (d.abs() * (E.sum(n) + E.err(n)) <= d.abs() * CReal::exp_reach(D)) = Rat::mul_le_mono_l(up, d.abs_nonneg());
+    let lo: (-(d.abs() * CReal::exp_reach(D)) <= -(d.abs() * (E.sum(n) + E.err(n)))) = linarith(sc);
+    let one: (e.sum(1) ≈ 1) = Rat::same_trans(Rat::same_refl(e.sum(1)), Rat::zero_add(1));
+    let whole: (CReal::exp_rat(d) ≈ CReal::ofRat(e.sum(1)) + s.real()) = e.drop_real(1);
+    let o: (CReal::ofRat(e.sum(1)) ≈ 1) = CReal::ofRat_respects(one);
+    let x = CReal::exp_rat(d);
+    let r: (x - 1 ≈ s.real()) = linarith(whole, o);
+    And(linarith(CReal::ofRat_le(lo), dom.left, r), linarith(CReal::ofRat_le(sc), dom.right, r))
+}
+
+fn CReal::exp_lip(B: Rat) → Rat { CReal::exp_reach(B.abs()) * CReal::exp_reach(B.abs() + B.abs()) }
+
+theorem CReal::exp_lip_nonneg(B: Rat): 0 <= CReal::exp_lip(B) {
+    let A = B.abs();
+    Rat::mul_nonneg(CReal::exp_reach_nonneg(A, B.abs_nonneg()), CReal::exp_reach_nonneg(A + A, linarith(B.abs_nonneg())))
+}
+
+theorem CReal::exp_rat_lip(B, a, b: Rat, ha: a.abs() <= B, hb: b.abs() <= B):
+    CReal::ofRat(-(CReal::exp_lip(B) * (a - b).abs())) <= CReal::exp_rat(a) - CReal::exp_rat(b)
+        ∧ CReal::exp_rat(a) - CReal::exp_rat(b) <= CReal::ofRat(CReal::exp_lip(B) * (a - b).abs())
+{
+    let A = B.abs();
+    let K1 = CReal::exp_reach(A);
+    let K2 = CReal::exp_reach(A + A);
+    let ha2: (a.abs() <= A) = Rat::le_trans(ha, B.le_abs());
+    let hb2: (b.abs() <= A) = Rat::le_trans(hb, B.le_abs());
+    let hab: ((a - b).abs() <= A + A) = Rat::abs_le(linarith(ha2, hb2, a.neg_le_abs(), b.le_abs()), linarith(ha2, hb2, a.le_abs(), b.neg_le_abs()));
+    let sub1 = CReal::exp_rat_sub_one(a - b, A + A, hab);
+    let bd = CReal::exp_rat_bound(b, A, hb2);
+    let k2: (0 <= K2) = CReal::exp_reach_nonneg(A + A, linarith(B.abs_nonneg()));
+    let e = (a - b).abs() * K2;
+    let he: (0 <= e) = Rat::mul_nonneg((a - b).abs_nonneg(), k2);
+    let dev = CReal::mul_dev(e, K1, he, sub1.left, sub1.right, bd.left, bd.right);
+    let sh = CReal::exp_rat_shift(b, a);
+    let eq: (CReal::ofRat(e * K1) ≈ CReal::ofRat((K1 * K2) * (a - b).abs())) = CReal::ofRat_respects(ring);
+    let eqn: (CReal::ofRat(-(e * K1)) ≈ CReal::ofRat(-((K1 * K2) * (a - b).abs()))) = CReal::ofRat_respects(ring);
+    let lo: (CReal::ofRat(-((K1 * K2) * (a - b).abs())) <= CReal::exp_rat(a) - CReal::exp_rat(b)) = linarith(dev.left, sh, eqn);
+    let hi: (CReal::exp_rat(a) - CReal::exp_rat(b) <= CReal::ofRat((K1 * K2) * (a - b).abs())) = linarith(dev.right, sh, eq);
+    And(lo, hi)
+}
