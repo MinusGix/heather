@@ -3,9 +3,8 @@ title: Let a generated declaration cite an earlier member of its group
 status: open
 labels: [metaprogramming,elaboration]
 area: tactics
-milestone: [tac-host-interface]
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-31
 ---
 
 A `generate` publishes its declarations only after the generator's run ends
@@ -26,3 +25,7 @@ all-or-nothing publication.
   reported as the cause, not the later member that cited it.
 - A probe in `lib/_tests/std/tactic` where the second member's body cites the
   first, and a negative control citing a member that is refused.
+
+## Log
+
+- 2026-10-31: `tac-host-interface` is marked done in docs/roadmap.md (its "done when" is met), so this issue no longer serves it; it stays open in area `tactics` with no milestone.
