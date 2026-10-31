@@ -989,7 +989,8 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
                         True => λ laid same => (j(Option::some_inj(whole, program, same),
                             λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimProgram(r.profile.linux(), src.denote(args), s),
                             λ at_whole => {
-                                let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args);
+                                let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
+                                    read_gpr(Rsp, s.gprs), [], 0);
                                 let live = src.main.live_in(homes, []);
                                 let saved = Start.saves_rsp(layout);
                                 let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
@@ -1005,10 +1006,10 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
                                     λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
                                     λ u at exited => sim_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
                                 let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
-                                λ n => t.goes_start(live, ok2.left, Start, w_saved, tree(n),
+                                λ n => t.goes_start(live, ok2.left, refl, refl, Start, w_saved, tree(n),
                                     t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
                                         runs(n)(n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
-                                    s, here, at_whole, ⟨zero, argv⟩)
+                                    s, here, at_whole, ⟨zero, ⟨argv, refl⟩⟩)
                             }))(resident),
                     })(refl)
                 },

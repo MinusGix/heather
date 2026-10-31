@@ -128,7 +128,14 @@ fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.words + layo
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
 fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
 fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
-fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 8 }
+// The current activation's frame address, and how many calls are in
+// progress (docs/native-procedures-design.md §4.1): zero at entry, as the
+// region starts.
+fn Layout::frame_offset(self layout: Layout) → Nat { layout.stack_offset() + 8 }
+fn Layout::frame_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.frame_offset()) }
+fn Layout::used_offset(self layout: Layout) → Nat { layout.stack_offset() + 16 }
+fn Layout::used_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.used_offset()) }
+fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 24 }
 
 // ---------------------------------------------------------------------------
 // Words in and out of their slots
@@ -443,8 +450,10 @@ fn Prog::call(self p: Prog, layout: Layout, out: List<Nat>, shape: CallShape, na
 
 // RSP as the process starts, saved to the slot past the scratch range: the
 // command line is above it (`ArgvAt`), and no statement keeps a register.
+// It is `main`'s frame too, saved to the frame slot.
 fn Prog::saves_rsp(self p: Prog, layout: Layout) → Prog {
-    then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)))
+    let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
+    then(then(saved, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)))
 }
 
 // RDX the saved RSP, R9 argc, RCX the index; past argc a JAE to `past`.

@@ -62,6 +62,14 @@ record Target {
     laid: program.laid_out().IsTrue(),
     // The command line the process was started with.
     args: List<List<BitVec(8)>>,
+    // The running activation (docs/native-procedures-design.md §5): its
+    // frame's address, the words from there up to the top of the frames
+    // below it (each callee's saved locals and return address), and how
+    // many calls are in progress. `main`'s frame is the entry RSP, with no
+    // words and no calls.
+    frame: BitVec(64),
+    frames: List<BitVec(64)>,
+    used: Nat,
 }
 
 fn Target::layout(self t: Target) → Layout { Layout::of(t.r.low, t.words, t.caps, t.homes) }
@@ -115,9 +123,33 @@ fn Layout::Keeps(self layout: Layout, env: Env, v: Nat → BitVec(8)) → Type {
 // does writes.
 fn Target::argv(self t: Target) → ByteReadAccess<X86Memory(t.r.profile)> { t.r.profile.data().above(t.r.low.toNat() + t.r.size) }
 
-// The command line at the RSP its slot holds…
+// Words read in order from `address` up, each as its eight bytes.
+fn FramesAt<M>(data: ByteReadAccess<M>, memory: M, words: List<BitVec(64)>) → BitVec(64) → Type {
+    match words {
+        Nil => λ _ => True,
+        Cons(word, rest) => λ address => WordBytesAt(data, memory, address, word) ∧ FramesAt(data, memory, rest, next_rip(address, 8)),
+    }
+}
+
+theorem frames_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
+    words: List<BitVec(64)>): (address: BitVec(64)) → FramesAt(data, memory, words, address) → FramesAt(other, later, words, address) {
+    match words {
+        Nil => λ address _ => trivial,
+        Cons(word, rest) => λ address at => ⟨word_bytes_at_kept(data, memory, other, later, kept, address, word, at.left),
+            frames_at_kept(data, memory, other, later, kept, rest, next_rip(address, 8), at.right)⟩,
+    }
+}
+
+// The activation in the region's two slots, and its frames above the
+// region, as the command line is.
+fn Target::Framing(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
+    (word_in(v, t.layout().frame_offset()) = t.frame) ∧
+    ((word_in(v, t.layout().used_offset()).toNat() = t.used) ∧ FramesAt(t.argv(), m, t.frames, t.frame))
+}
+
+// The command line at the RSP its slot holds, and the activation…
 fn Target::Stacking(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
-    ArgvAt(t.argv(), m, word_in(v, t.layout().stack_offset()), t.args)
+    ArgvAt(t.argv(), m, word_in(v, t.layout().stack_offset()), t.args) ∧ t.Framing(v, m)
 }
 
 // …and it is the environment's.
@@ -293,7 +325,10 @@ theorem Layout::keeps_fill(self layout: Layout, env: Env, v, w: Nat → BitVec(8
 // The region in memory: reads, stores, and the code kept resident
 
 // The slot RSP is saved to ends inside the region…
-theorem Target::stack_fits(self t: Target): t.layout().stack_offset() + 8 <= t.r.size { t.fits }
+theorem Target::stack_fits(self t: Target): t.layout().stack_offset() + 8 <= t.r.size {
+    let slots: (t.layout().stack_offset() + 24 <= t.r.size) = t.fits;
+    omega(slots)
+}
 
 // …and the scratch range ends at it.
 theorem Target::scratch_room(self t: Target): t.layout().scratch_offset() + t.caps.largest() <= t.r.size {
@@ -411,10 +446,16 @@ theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memor
     let so = t.layout().stack_offset();
     let w = t.r.buffer(v).set_span(q, bytes.to_vector()).cells;
     let size: (q + bytes.len() <= t.r.size) = omega(fits, t.stack_fits());
+    let after = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
+    let kept = t.kept_store(m, q, bytes, size);
     let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k _ => t.r.cells_outside(v, q, bytes, so + k, Inr(omega(fits))));
-    j(sym(slot), λ rsp _ => ArgvAt(t.argv(), t.r.profile.store(m, next_rip(t.r.low, q), bytes), rsp, t.args),
-        argv_at_kept(t.argv(), m, t.argv(), t.r.profile.store(m, next_rip(t.r.low, q), bytes), t.kept_store(m, q, bytes, size),
-            word_in(v, so), t.args, stacking))
+    let frame: (word_in(w, so + 8) = word_in(v, so + 8)) = word_in_agree(w, v, so + 8, λ k _ => t.r.cells_outside(v, q, bytes, so + 8 + k, Inr(omega(fits))));
+    let used: (word_in(w, so + 16) = word_in(v, so + 16)) = word_in_agree(w, v, so + 16, λ k _ => t.r.cells_outside(v, q, bytes, so + 16 + k, Inr(omega(fits))));
+    ⟨j(sym(slot), λ rsp _ => ArgvAt(t.argv(), after, rsp, t.args),
+        argv_at_kept(t.argv(), m, t.argv(), after, kept, word_in(v, so), t.args, stacking.left)),
+     ⟨trans(frame, stacking.right.left),
+      ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), used), stacking.right.right.left),
+       frames_at_kept(t.argv(), m, t.argv(), after, kept, t.frames, t.frame, stacking.right.right.right)⟩⟩⟩
 }
 
 theorem Target::stacked_store(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,
