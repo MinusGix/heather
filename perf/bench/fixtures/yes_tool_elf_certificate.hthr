@@ -434,14 +434,17 @@ theorem yes_tool_elf_short(): 232 + assemble(no_fills(), yes_tool_elf_code(), []
         j(sym(yes_tool_elf_length()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + 733, 65536, trivial)))
 }
 
-// The process Linux makes of the file written, at its entry with the
-// command line `args` on its stack, simulates `yes_tool`'s tree run with
-// `args` (`Source::elf_file_simulates`, from `native_compile_correct`).
-theorem yes_tool_elf_simulates(s: MachineState<X86Memory(X86Profile::io(yes_tool_elf_size()))>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom(yes_tool_elf_size(), yes_tool_elf_file()), args: List<List<BitVec(8)>>,
-    argv: ArgvAt(X86Profile::io(yes_tool_elf_size()).data().above(io_data_end(yes_tool_elf_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io(yes_tool_elf_size()).linux(), yes_tool().source().denote(args), s) {
-    j(sym(yes_tool_elf_lowered_is()), λ src _ => SimProgram(X86Profile::io(yes_tool_elf_size()).linux(), src.denote(args), s),
-        yes_tool_elf_lowered().elf_file_simulates(yes_tool_elf_size(), yes_tool_elf_within(), yes_tool_elf_code(), yes_tool_elf_homes(), yes_tool_elf_compiles(), yes_tool_elf_fits(), yes_tool_elf_short(), s, entry,
-        j(sym(yes_tool_elf_written(yes_tool_elf_code(), yes_tool_elf_compiles())), λ f _ => s.memory.LoadedFrom(yes_tool_elf_size(), f), loaded), args, argv))
+// The process Linux makes of the file written, at its entry with `depth`
+// bytes of stack below RSP and the command line `args` on the stack above,
+// simulates `yes_tool`'s tree run with `args` (`Source::elf_file_simulates`,
+// from `native_compile_correct`).
+theorem yes_tool_elf_simulates(top, depth: Nat, placed: StackPlaced(yes_tool_elf_size(), top, depth),
+    s: MachineState<X86Memory(X86Profile::process(yes_tool_elf_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(X86Profile::process(yes_tool_elf_size(), top, depth), yes_tool_elf_size(), yes_tool_elf_file()), args: List<List<BitVec(8)>>,
+    argv: ArgvAt(X86Profile::process(yes_tool_elf_size(), top, depth).data().above(io_data_end(yes_tool_elf_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process(yes_tool_elf_size(), top, depth).linux(), yes_tool().source().denote(args), s) {
+    j(sym(yes_tool_elf_lowered_is()), λ src _ => SimProgram(X86Profile::process(yes_tool_elf_size(), top, depth).linux(), src.denote(args), s),
+        yes_tool_elf_lowered().elf_file_simulates(yes_tool_elf_size(), yes_tool_elf_within(), yes_tool_elf_code(), yes_tool_elf_homes(), yes_tool_elf_compiles(), yes_tool_elf_fits(), yes_tool_elf_short(),
+        top, depth, placed, s, entry, rsp,
+        j(sym(yes_tool_elf_written(yes_tool_elf_code(), yes_tool_elf_compiles())), λ f _ => s.memory.LoadedFrom(X86Profile::process(yes_tool_elf_size(), top, depth), yes_tool_elf_size(), f), loaded), args, argv))
 }

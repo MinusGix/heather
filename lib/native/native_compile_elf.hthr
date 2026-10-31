@@ -11,10 +11,21 @@
 // each evaluated once, and `Source::elf_file_simulates` then reads its
 // theorem off the file it wrote.
 //
+// The process is one of `X86Profile::process(size, top, depth)`: it relies
+// on the segment and on `depth` bytes of stack below the entry RSP, `top`
+// (issues/io-image-process-stack.md), so `DataRegion::process_stack` is a
+// `Stack` of its memory from the entry, its top at RSP
+// (`DataRegion::process_stack_entry`). The compile pushes nothing yet, so
+// the proof uses only the segment; the stack is in the statement for the
+// compiled calls that will spill into it, and any `depth` up to what exec
+// maps may be taken.
+//
 // Outside the proof, as for cat (native_cat_executable): that Linux maps
 // the file as `X86Memory::io_load` says below the segment's end
-// (`X86Memory::LoadedFrom`), puts the command line on the stack above it as
-// the psABI lays it out (`ArgvAt`), and starts the process at `io_entry()`.
+// (`X86Memory::LoadedFrom`), maps `depth` bytes of stack below the entry
+// RSP where `StackPlaced` says, puts the command line on the stack above it
+// as the psABI lays it out (`ArgvAt`), and starts the process at
+// `io_entry()`.
 import native_source;
 import native_compile;
 import native_compile_region;
@@ -44,17 +55,19 @@ import omega;
 theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
     compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
-    header: List<BitVec(8)>, long: header.len() = 232, s: MachineState<X86Memory(X86Profile::io(size))>,
-    entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io(size).linux(), src.denote(args), s) {
-    let r = DataRegion::io_data(size, within);
-    let data = X86Profile::io(size).data();
+    header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
+    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(X86Profile::process(size, top, depth), size, header ++ assemble(no_fills(), program, Nil)),
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
+    let x = X86Profile::process(size, top, depth);
+    let r = DataRegion::process_data(size, within, top, depth);
+    let data = x.data();
     let bytes = assemble(no_fills(), program, Nil);
     let start: (io_entry() = next_rip(io_entry(), 0)) = BitVec::eq_of_eq_bit(64, io_entry(), next_rip(io_entry(), 0), refl);
-    let resident = j(start, λ y _ => CodeResident(X86Profile::io(size).fetch(), s.memory, bytes, y),
-        s.memory.loaded_entry(size, within, header, bytes, long, short, loaded));
-    let zero = s.memory.loaded_data(size, within, header ++ bytes, loaded);
+    let resident = j(start, λ y _ => CodeResident(x.fetch(), s.memory, bytes, y),
+        s.memory.loaded_entry(x, size, within, header, bytes, long, short, loaded));
+    let zero = s.memory.loaded_data(size, within, top, depth, header ++ bytes, loaded);
     let floor: (r.low.toNat() + r.size = io_data_end(size)) = refl;
     let above: ReadsKept(data.above(io_data_end(size)), s.memory, data.above(r.low.toNat() + r.size), s.memory) = λ a byte got => {
         let found = data.above_read(io_data_end(size), s.memory, a, byte, got);
@@ -71,11 +84,12 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
 theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
     compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
-    s: MachineState<X86Memory(X86Profile::io(size))>,
-    entry: s.rip = io_entry(), loaded: s.memory.LoadedFrom(size, io_elf_file(assemble(no_fills(), program, Nil), size)),
-    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io(size).linux(), src.denote(args), s) {
+    top, depth: Nat, placed: StackPlaced(size, top, depth),
+    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(X86Profile::process(size, top, depth), size, io_elf_file(assemble(no_fills(), program, Nil), size)),
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
     let length = 232 + assemble(no_fills(), program, Nil).len();
     src.elf_simulates(size, within, program, homes, compiled, fits, short, io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size),
-        io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), s, entry, loaded, args, argv)
+        io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), top, depth, placed, s, entry, rsp, loaded, args, argv)
 }
