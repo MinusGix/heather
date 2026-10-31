@@ -621,7 +621,6 @@ theorem Format::off_grid_of_apart(self F: Format, X: CReal, dd: Rat, hdd: 0 < dd
 {
     match dd.archimedean_inv_pow2(hdd) {
         Exists(k, small) => {
-            let sm: (Rat::inv_pow2(k) < dd) = small;
             let y = X.at(k + 3);
             let up: (X <= CReal::ofRat(y + Rat::inv_pow2(k + 3))) = X.le_term_add(k + 3);
             let dn: (CReal::ofRat(y - Rat::inv_pow2(k + 3)) <= X) = X.term_sub_le(k + 3);
@@ -629,8 +628,8 @@ theorem Format::off_grid_of_apart(self F: Format, X: CReal, dd: Rat, hdd: 0 < dd
             let q2: (Rat::inv_pow2(k + 2) + Rat::inv_pow2(k + 2) ≈ Rat::inv_pow2(k + 1)) = Rat::inv_pow2_half(k + 1);
             let q3: (Rat::inv_pow2(k + 3) + Rat::inv_pow2(k + 3) ≈ Rat::inv_pow2(k + 2)) = Rat::inv_pow2_half(k + 2);
             let p3: (0 < Rat::inv_pow2(k + 3)) = Rat::inv_pow2_pos(k + 3);
-            let gap0: (Rat::inv_pow2(k + 1) + Rat::inv_pow2(k + 3) < dd) = linarith(sm, q1, q2, q3, p3);
-            let gap1: (Rat::inv_pow2(k + 3) < dd) = linarith(sm, q1, q2, q3, p3);
+            let gap0: (Rat::inv_pow2(k + 1) + Rat::inv_pow2(k + 3) < dd) = linarith(small, q1, q2, q3, p3);
+            let gap1: (Rat::inv_pow2(k + 3) < dd) = linarith(small, q1, q2, q3, p3);
             let ip = Rat::inv_pow2(k + 1);
             let p2 = p3;
             match F.grid_floor(y) {

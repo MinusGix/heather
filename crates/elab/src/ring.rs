@@ -1714,6 +1714,27 @@ fn clear_denominators(target: &Poly, facts: &[(usize, Poly, FactKind)]) -> Resul
     Ok(out)
 }
 
+/// `p` with the definitions among `facts` substituted, as
+/// [`clear_denominators`] substitutes them in the target, and the multiplier
+/// of each fact: `p = p̃ + Σⱼ qⱼ·fⱼ`. Reciprocals stay atoms here, since
+/// clearing one multiplies, and a hypothesis is used as written.
+fn substitute_definitions(p: &Poly, facts: &[(usize, Poly, FactKind)]) -> Result<(Poly, Vec<Poly>), String> {
+    let mut indices = Vec::new();
+    let mut definitions = Vec::new();
+    for (j, fact) in facts.iter().enumerate() {
+        if fact.2 == FactKind::Definition {
+            indices.push(j);
+            definitions.push(fact.clone());
+        }
+    }
+    let out = clear_denominators(p, &definitions)?;
+    let mut multipliers = vec![Poly::default(); facts.len()];
+    for (j, m) in indices.into_iter().zip(out.multipliers) {
+        multipliers[j] = m;
+    }
+    Ok((out.cleared, multipliers))
+}
+
 // ---------------------------------------------------------------------------
 // Rendering the certificate.
 
@@ -1962,12 +1983,28 @@ fn reconstruct_at(
             });
         }
         // The written hypotheses account for what clearing left; failing
-        // that, every row is searched together.
-        let from_cleared = multipliers(&cleared.cleared, hyp_polys)?.map(|e| {
-            e.iter()
-                .map(|p| cleared.scale.mul(p))
-                .chain(cleared.multipliers.iter().cloned().map(Ok))
-                .collect::<Result<Vec<_>, String>>()
+        // that, every row is searched together. Clearing substituted the
+        // definitions (a cast pushed through a sum, `Reifier::edge_image`)
+        // in the target, so they are substituted in each hypothesis too:
+        // a hypothesis that mentions `ofRat(x)` meets a target in which
+        // `ofRat(2 - x)` became `2 - ofRat(x)` only once both are read the
+        // same way (issues/ring-hypotheses-cast-spelling.md).
+        let substituted = hyp_polys
+            .iter()
+            .map(|p| substitute_definitions(p, &eliminated))
+            .collect::<Result<Vec<_>, String>>()?;
+        let hyp_cleared: Vec<Poly> = substituted.iter().map(|(p, _)| p.clone()).collect();
+        let from_cleared = multipliers(&cleared.cleared, &hyp_cleared)?.map(|e| {
+            let hyps = e.iter().map(|p| cleared.scale.mul(p)).collect::<Result<Vec<_>, String>>()?;
+            // `pᵢ = p̃ᵢ + Σⱼ qᵢⱼ·fⱼ`, so the facts' multipliers give back what
+            // each hypothesis's substitution took.
+            let mut facts = cleared.multipliers.clone();
+            for (c, (_, q)) in hyps.iter().zip(&substituted) {
+                for (m, qj) in facts.iter_mut().zip(q) {
+                    *m = m.sub(&c.mul(qj)?)?;
+                }
+            }
+            Ok::<_, String>(hyps.into_iter().chain(facts).collect::<Vec<_>>())
         });
         let found = match from_cleared {
             Some(found) => Some(found?),

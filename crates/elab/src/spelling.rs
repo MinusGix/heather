@@ -222,6 +222,18 @@ pub(crate) fn beta_head(t: &Term) -> Option<Term> {
     Some(beta_head(&r).unwrap_or(r))
 }
 
+/// `ty` with its `El` term's head β-redexes contracted ([`beta_head`]);
+/// `None` when there was none. A pattern-bound proof is typed so: an
+/// `Exists`'s `.proof` is `(λ k => P(k))(e.witness)`, read raw no relation is
+/// visible in it (issues/omega-redex-typed-fact-ignored.md,
+/// issues/linarith-redex-typed-fact.md).
+pub(crate) fn beta_head_ty(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::El { level, tm } => Some(Type::El { level: level.clone(), tm: Rc::new(beta_head(tm)?) }),
+        _ => None,
+    }
+}
+
 /// An application the elaborator **constructs** from a Π it holds, outside
 /// the surface-call path (`docs/app-by-head-type-design.md` §6.1, every
 /// emitter switched): `app@(f; a)` unless the head is a λ, which infers only

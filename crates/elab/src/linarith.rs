@@ -94,7 +94,13 @@ enum Reading {
 }
 
 impl Reading {
+    /// A head β-redex is read through its contractum, as `omega` reads a
+    /// fact (`spelling::beta_head_ty`): a pattern-bound `Exists` proof is
+    /// typed by its predicate applied to the witness
+    /// (issues/linarith-redex-typed-fact.md).
     fn of(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Reading> {
+        let contracted = crate::spelling::beta_head_ty(ty);
+        let ty = contracted.as_ref().unwrap_or(ty);
         if let Some(s) = stated(elab, cx, ty, span) {
             return Some(Reading::Stated(s));
         }

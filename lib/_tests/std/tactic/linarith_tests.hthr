@@ -166,6 +166,26 @@ theorem nlin_rat_let(a, b: Rat, ha: 0 <= a, hb: 0 <= b): 0 <= a * b + 1 {
 // A strict goal at `Rat`, whose order is decided.
 theorem nlin_rat_cancel_lt(a, b, c: Rat, h: a * c < b * c, hc: 0 < c): a < b { nlinarith(h, hc) }
 
+// A pattern-bound fact is typed by its predicate applied to the witness, a
+// head β-redex, and is read through its contractum as `omega` reads one
+// (issues/linarith-redex-typed-fact.md): at a field, at `Int`, and
+// multiplied by `nlinarith`.
+theorem lin_redex_typed_rat(dd: Rat, hdd: 0 < dd): ∃ k: Nat, Rat::inv_pow2(k) + Rat::inv_pow2(k) < dd + dd {
+    match dd.archimedean_inv_pow2(hdd) {
+        Exists(k, small) => Exists(k, linarith(small)),
+    }
+}
+theorem lin_redex_typed_int(e: ∃ k: Int, 2 * k <= 6): ∃ k: Int, 4 * k <= 12 {
+    match e {
+        Exists(k, h) => Exists(k, linarith(h)),
+    }
+}
+theorem nlin_redex_typed_int(e: ∃ k: Int, 3 <= k): ∃ k: Int, 9 <= k * k {
+    match e {
+        Exists(k, h) => Exists(k, nlinarith(h)),
+    }
+}
+
 // Refusals: a goal that does not follow, and a strict goal at `CReal`,
 // where a refutation proves only its double negation.
 // expect-error: `nlinarith` could not prove

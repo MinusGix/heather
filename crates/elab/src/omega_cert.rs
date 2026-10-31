@@ -623,7 +623,10 @@ fn reads_as_relation(elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
 /// An order at `Int` or `Nat` as written, not unfolded: whether it is at
 /// `Nat`, whether it is strict, and its two sides. `nlinarith` multiplies
 /// these (docs/nonlinear-arithmetic-design.md §4.4).
+/// A head β-redex is read through its contractum, as [`push_conjuncts`] does.
 pub(crate) fn integral_order(elab: &Elaborator, ty: &Type) -> Option<(bool, bool, Rc<Term>, Rc<Term>)> {
+    let contracted = crate::spelling::beta_head_ty(ty);
+    let ty = contracted.as_ref().unwrap_or(ty);
     let found = |nat, strict, sides: Option<(&Rc<Term>, &Rc<Term>)>| sides.map(|(l, r)| (nat, strict, Rc::clone(l), Rc::clone(r)));
     found(false, false, relation_args(elab, ty))
         .or_else(|| found(false, true, strict_relation_args(elab, ty)))
@@ -634,8 +637,11 @@ pub(crate) fn integral_order(elab: &Elaborator, ty: &Type) -> Option<(bool, bool
 /// The two sides of a relation this frontend reflects, as `linarith` at
 /// `Int` and `Nat` reads them (docs/linarith-design.md §8): `<=`, `<` or `=`
 /// at either, its negation, or a defined proposition that unfolds to one;
-/// `true` for `Nat`.
+/// `true` for `Nat`. A head β-redex is read through its contractum, as
+/// [`push_conjuncts`] does.
 pub(crate) fn integral_sides(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(bool, Rc<Term>, Rc<Term>)> {
+    let contracted = crate::spelling::beta_head_ty(ty);
+    let ty = contracted.as_ref().unwrap_or(ty);
     let stated = |ty: &Type| {
         let decoded = crate::inductive::decoded(ty);
         let int = relation_args(elab, ty)
@@ -932,13 +938,7 @@ fn local_fact_entries(elab: &Elaborator, cx: &Cx) -> Vec<LocalFact> {
 /// `(λ k => P(k))(e.witness)`, and read raw no relation is visible in it
 /// (issues/omega-redex-typed-fact-ignored.md).
 fn push_conjuncts(elab: &Elaborator, cx: &Cx, name: String, term: Rc<Term>, ty: Type, level: Level, out: &mut Vec<LocalFact>) {
-    let ty = match &ty {
-        Type::El { level, tm } => match crate::spelling::beta_head(tm) {
-            Some(contractum) => Type::El { level: level.clone(), tm: Rc::new(contractum) },
-            None => ty,
-        },
-        _ => ty,
-    };
+    let ty = crate::spelling::beta_head_ty(&ty).unwrap_or(ty);
     if let Some(ind) = elab.display_tag_of(&ty)
         && crate::goal_combinators::conjunction(&ind)
     {

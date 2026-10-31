@@ -324,8 +324,13 @@ another's denominator is met first, so it is still there to eliminate when the
 outer one's `d` brings it in), leaves a polynomial free of them that is zero
 exactly when the goal is an identity of fields at those denominators. A true
 identity is never missed, unlike §4's bounded search, and no multiplier has a
-fraction. Written hypotheses are searched for against what clearing leaves;
-failing that, every row is searched together. The Rust side checks its own
+fraction. Written hypotheses are searched for against what clearing leaves,
+each with the definitions below substituted the same way first (so a
+hypothesis spelling `ofRat(x)` meets a goal spelling `ofRat(2 - x)`; the
+substitution's multipliers are given back to the definitions' rows, and a
+reciprocal in a hypothesis stays an atom there,
+issues/ring-hypotheses-cast-spelling.md); failing that, every row is searched
+together. The Rust side checks its own
 combination before writing it.
 
 **Casts.** `inv_succ(n + n + 1)`'s denominator is `Rat::ofInt(OfNat(n + n +
