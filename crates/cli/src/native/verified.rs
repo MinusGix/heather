@@ -741,7 +741,13 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
                     };
                     instructions.push(instruction);
                 }
-                format!("Block([{}])", instructions.join(", "))
+                // Spelled by its constructors and not as `[…]`: a list
+                // literal resolves its `CollectionLiteral` instance and
+                // unifies its element type at every use, which made a
+                // certificate's `{p}_at_` stretches cost about twice what
+                // their constructors do.
+                let list = instructions.iter().rev().fold("Nil".to_string(), |rest, i| format!("Cons({i}, {rest})"));
+                format!("Block({list})")
             }
             1 => format!("Jcc({}, {})", CONDITIONS.get(take()? as usize).ok_or_else(bad)?, take()?),
             2 => format!("Jmp({})", take()?),
