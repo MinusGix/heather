@@ -379,6 +379,7 @@ fn ty_former(t: &Type) -> &'static str {
         Type::Empty { .. } => "Empty",
         Type::Vec { .. } => "Vec",
         Type::Wf { .. } => "Wf",
+        Type::W { .. } => "W",
         Type::Id { .. } => "Id",
         Type::SEq { .. } => "SEq",
         _ => "other-ty",
@@ -398,6 +399,7 @@ fn tm_former(t: &Term) -> &'static str {
         Term::Zero | Term::Succ(_) => "Num",
         Term::TmTy(_) => "TmTy",
         Term::TmNat => "TmNat",
+        Term::Case { .. } => "Case",
         Term::TmPi { .. } => "TmPi",
         Term::TmSigma { .. } => "TmSigma",
         Term::TmSum { .. } => "TmSum",
@@ -554,6 +556,19 @@ impl Holes<'_> {
                 (v1 == v2).then_some(())?;
                 self.tm(n1, n2, md)?;
                 self.ty(e1, e2, md)
+            }
+            // A tier-2 lowering (docs/inductive-tier2-w-lowering.md): the
+            // positions are scoped under the shape's binder. No declaration
+            // with a registered code function lowers onto `W` today, so this
+            // is reached from [`Elaborator::constructor_spelling`]'s computed
+            // template (issues/higher-kinded-classes.md).
+            (
+                Type::W { shape: s1, pos: p1, shape_level: l1, pos_level: r1 },
+                Type::W { shape: s2, pos: p2, shape_level: l2, pos_level: r2 },
+            ) => {
+                (l1 == l2 && r1 == r2).then_some(())?;
+                self.ty(s1, s2, md)?;
+                self.ty(p1, p2, md + 1)
             }
             (
                 Type::Id { ty: t1, lhs: a1, rhs: b1, level: v1 },
@@ -777,6 +792,44 @@ impl Holes<'_> {
             // on both sides only: step 2's walk is syntactic.
             (Term::FstAt { pair: p1 }, Term::FstAt { pair: p2 })
             | (Term::SndAt { pair: p1 }, Term::SndAt { pair: p2 }) => self.tm(p1, p2, md),
+            // A tier-2 lowering's positions are a `case` over the shape
+            // (docs/inductive-tier2-w-lowering.md), and a payload type sits
+            // in its branch types. The motive and both branches bind the
+            // scrutinee's component. Reached from
+            // [`Elaborator::constructor_spelling`]'s computed template
+            // (issues/higher-kinded-classes.md).
+            (
+                Term::Case {
+                    lhs_level: ll1,
+                    rhs_level: rl1,
+                    motive_level: ml1,
+                    lhs: l1,
+                    rhs: r1,
+                    motive: m1,
+                    case_l: cl1,
+                    case_r: cr1,
+                    scrut: t1,
+                },
+                Term::Case {
+                    lhs_level: ll2,
+                    rhs_level: rl2,
+                    motive_level: ml2,
+                    lhs: l2,
+                    rhs: r2,
+                    motive: m2,
+                    case_l: cl2,
+                    case_r: cr2,
+                    scrut: t2,
+                },
+            ) => {
+                (ll1 == ll2 && rl1 == rl2 && ml1 == ml2).then_some(())?;
+                self.ty(l1, l2, md)?;
+                self.ty(r1, r2, md)?;
+                self.ty(m1, m2, md + 1)?;
+                self.tm(cl1, cl2, md + 1)?;
+                self.tm(cr1, cr2, md + 1)?;
+                self.tm(t1, t2, md)
+            }
             (a, b) => {
                 if a == b {
                     return Some(());
@@ -2739,6 +2792,71 @@ impl Elaborator {
         self.instance_ref(cx, &ind, ty, d, g)
     }
 
+    /// A type of a generic declaration that registered **no** code function
+    /// — a tier-2 one such as `Tac<A>`, which names its leaf predicate and
+    /// nothing else — spelled as its constructor applied to its type
+    /// arguments, `El l (app(λ x̄. ⌜D<El x̄>⌝; ā))`
+    /// (issues/higher-kinded-classes.md, piece 1). What
+    /// [`Self::respell_ty`] gives a declaration that registered one, for the
+    /// one reader that needs an application whatever the head:
+    /// the unifier's applied meta, `?M(⌜Nat⌝) ≟ Tac<Nat>`, whose aligned
+    /// spine then learns `?M` as the λ. The arguments are recovered the way
+    /// [`Self::instance_match`] recovers them, against the code function
+    /// computed (not registered) here, and its identity step is what makes
+    /// the guess sound. `None` for every other declaration, including one
+    /// that registered a code function: [`Self::respell_ty`] is its route.
+    ///
+    /// Computes the declaration's open lowering per call, and is reached only
+    /// from that one unifier arm, after the registered route declined.
+    pub(crate) fn constructor_spelling(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
+        let ind = self.tag_of(ty)?;
+        if ind.params.is_empty()
+            || !ind.valparams.is_empty()
+            || ind.index.is_some()
+            || ind.codata
+            || !ind.co_index.is_empty()
+            || !ind.members.is_empty()
+            || self.ty_code_fn_now(ind.tag, 0).is_some()
+        {
+            return None;
+        }
+        let profile = vec![Level::Zero; ind.params.len()];
+        let at = self.tycode_fn_at_profile(&ind, &profile, span)?;
+        let entry = TyCodeFn {
+            template: Rc::new(at.template),
+            stmt: Rc::new(at.ty),
+            param_levels: at.targs.iter().map(|(_, l)| l.clone()).collect(),
+            level: at.l,
+        };
+        let (level, args) = self.instance_match_entry(cx, &ind, &entry, ty, 0, 0)?;
+        let mut head = self.generic_former_lambda(cx, &ind, &entry.param_levels, span).ok()?;
+        let mut cur = weakened(&entry.stmt, cx, 0);
+        for arg in &args {
+            let Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } = cur
+            else {
+                return None;
+            };
+            head = crate::spelling::checked_app(
+                Rc::new(head),
+                dom_level,
+                cod_level,
+                dom,
+                Rc::clone(&cod),
+                Rc::clone(arg),
+            );
+            cur = cod.apply_local(&id_subst_at(cx, 0).extended(Rc::clone(arg)));
+        }
+        matches!(cur, Type::Ty(_)).then_some(Type::El {
+            level,
+            tm: Rc::new(head),
+        })
+    }
+
     /// `El l (app(D#tycode_fn^δ; ā))` for an inline instantiation of a
     /// parameterized or value-indexed declaration (§4.1). Two steps, and the
     /// second is what makes the first sound: the arguments are **guessed** by
@@ -2894,6 +3012,23 @@ impl Elaborator {
             decline!("instance_match", &ind.name, "no-tycode-fn");
             return None;
         };
+        self.instance_match_entry(cx, ind, &entry, ty, d, g)
+    }
+
+    /// [`Self::instance_match_uncached`] against a given code function's
+    /// `entry` — the registered one, or one computed for a declaration that
+    /// registered none ([`Self::constructor_spelling`]). The identity step
+    /// below is what makes either sound: the template at the recovered
+    /// arguments must be the subject.
+    fn instance_match_entry(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        entry: &TyCodeFn,
+        ty: &Type,
+        d: u32,
+        g: u32,
+    ) -> Option<(Level, Vec<Rc<Term>>)> {
         let np = entry.param_levels.len();
         let arity = pi_arity(&entry.stmt);
         if arity != np + ind.valparams.len() {
@@ -2950,7 +3085,7 @@ impl Elaborator {
         // one walk cannot drift from the other. `strict` restores the one
         // reading the match gives up, a global's substitution tail (§3 of
         // `docs/closed-argument-and-parameter-domain-spelling-design.md`).
-        let copy = instance_of_template(&entry, &inline, frame_tail(cx, d));
+        let copy = instance_of_template(entry, &inline, frame_tail(cx, d));
         let mut proof = Holes {
             el: self,
             g,

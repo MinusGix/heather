@@ -1540,6 +1540,12 @@ impl application::ImplicitApplicationElab for Elaborator {
         let prefer = written
             .zip(applied.as_ref())
             .and_then(|(w, applied)| self.solver_carrier_head(w, params, applied));
+        // A class over a type constructor shows the constructor the call
+        // solved, `Bind<List>`, not the parameter it was written with.
+        let display = written
+            .zip(prefer.as_deref())
+            .and_then(|(w, key)| self.kinded_goal_display(w, params, key))
+            .unwrap_or(display);
         let mut trace = Vec::new();
         match self.resolve_goal(
             cx,
@@ -1682,6 +1688,41 @@ impl application::ImplicitApplicationElab for Elaborator {
             && !class.valparams.is_empty()
         {
             return self.value_slot_refusal(&class, name, None, span);
+        }
+        // A class over a type constructor (issues/higher-kinded-classes.md):
+        // its carrier is a value implicit, so `<…>` cannot give it. Name it,
+        // and say what would have pinned it.
+        if let Some(solver) = params
+            .get(obligation.param)
+            .and_then(|parameter| parameter.solver.as_deref())
+            && let Some(reference) = self.class_ref_of_ty(solver)
+            && let Some(class) = self.lookup_class(&reference.name)
+            && class.is_kinded()
+            && let Some(carrier) = reference
+                .args
+                .iter()
+                .zip(&class.kinds)
+                .filter(|(_, k)| k.is_some())
+                .find_map(|(a, _)| match &a.kind {
+                    TyKind::Named { name, args } if args.is_empty() => params
+                        .iter()
+                        .find(|p| !p.is_type && p.name == *name)
+                        .map(|p| p.name.clone()),
+                    _ => None,
+                })
+        {
+            return ElabError::Elab {
+                msg: format!(
+                    "the goal of `{parameter}` (`{goal}`) needs the type constructor \
+                     `{carrier}`, which this call does not determine: an argument at \
+                     `{carrier}` applied (`{carrier}(Nat)`) pins it only when its type is a \
+                     declared generic type applied to arguments (`Option<Nat>`), so a \
+                     type with no such head leaves it open. Write it \
+                     (`{name}({carrier} := Option, …)`) or pass `{parameter}` explicitly \
+                     (`@{name}(…)`)"
+                ),
+                span,
+            };
         }
         ElabError::Elab {
             msg: format!(
@@ -4913,6 +4954,11 @@ impl Elaborator {
     // -- types --------------------------------------------------------------
 
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
+        // A class over a type constructor, `Bind<Option>`, is its record
+        // applied to the constructor (issues/higher-kinded-classes.md).
+        if let Some(t) = self.kinded_class_ty(ty) {
+            return self.elab_ty(cx, &t);
+        }
         match &ty.kind {
             // A generated declaration's type (`host::Leaves::Member`).
             TyKind::Named { name, .. } if let Some(k) = host::leaf_index(name) => self.host_ty_leaf(cx, k, ty.span),
@@ -9148,12 +9194,14 @@ impl Elaborator {
         let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, span);
         let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
         let respell = |t: &Type| self.respell_ty(cx, t);
+        let constructor = |t: &Type| self.constructor_spelling(cx, t, span);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
             type_args: &type_args,
             canonical_head: &canonical_head,
             respell: &respell,
+            constructor: &constructor,
         };
         unify_ty_root(&u, pat, subj, n, 0, sols);
     }
@@ -9167,12 +9215,14 @@ impl Elaborator {
         let type_args = |t: &Term, e: u32| self.spine_type_args(cx, t, e, span);
         let canonical_head = |t: &Term, e: u32| self.canonical_head(cx, t, e);
         let respell = |t: &Type| self.respell_ty(cx, t);
+        let constructor = |t: &Type| self.constructor_spelling(cx, t, span);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
             type_args: &type_args,
             canonical_head: &canonical_head,
             respell: &respell,
+            constructor: &constructor,
         };
         unify_ty_root(&u, pat, subj, n, d, sols);
     }

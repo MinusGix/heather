@@ -1837,6 +1837,9 @@ impl Elaborator {
         let Some(ind) = self.lookup_inductive(name).cloned() else {
             return Ok(None);
         };
+        if ind.valparams.is_empty() {
+            return self.check_generic_former_value(cx, &ind, head, args, expected, span);
+        }
         // Saturated (or over-applied) is somebody else's case: the type
         // position already handles it, and there is nothing to abstract.
         let Some(missing) = ind
@@ -1920,6 +1923,216 @@ impl Elaborator {
             };
         }
         Ok(Some(t))
+    }
+
+    /// A bare **generic** declaration name checked against a function type
+    /// over universes, `Option ⇐ Π(A : Ty 0). Ty 0`
+    /// (issues/higher-kinded-classes.md, piece 2): the type former as a type
+    /// constructor value, η-expanded over its type parameters,
+    ///
+    /// ```text
+    /// D  ⇐  Π(x₁ : Ty l₁). … Π(x_m : Ty l_m). Ty l
+    ///     ⇝  λ x₁ … λ x_m. ⌜D<El x₁, …, El x_m>⌝
+    /// ```
+    ///
+    /// [`Self::check_type_former_value`]'s value-parameter η-expansion with
+    /// the binders filling the **type** parameters instead: `<A>` parameters
+    /// are substituted at each use (`docs/inductive-tier0-lowering.md` §2),
+    /// so the abstraction is the elaborator's and the body is the ordinary
+    /// lowering of `D<x̄>` at local type variables — which the emission
+    /// respelling quotes as `app(D#tycode_fn^δ; x̄)` where the declaration
+    /// registered one. Same disambiguator: no constructor inhabits a
+    /// universe, so a spine ending in `Ty l` can only want the type former.
+    ///
+    /// Only the bare name: a partial type-argument list (`Result<Nat>` at
+    /// `Type → Type`) is not this reading, and an argument list is a
+    /// constructor's. Every domain must be a universe — a type parameter
+    /// ranges over types — and the count must be the parameter count.
+    fn check_generic_former_value(
+        &self,
+        cx: &Cx,
+        ind: &Rc<Inductive>,
+        head: &Expr,
+        args: &[Expr],
+        expected: &Type,
+        span: Span,
+    ) -> R<Option<Term>> {
+        let Some((name, targs)) = named_head(head) else {
+            return Ok(None);
+        };
+        if ind.params.is_empty()
+            || !args.is_empty()
+            || !targs.is_empty()
+            || ind.index.is_some()
+            || !ind.co_index.is_empty()
+        {
+            return Ok(None);
+        }
+        if self.shadowed(cx, name) {
+            return Ok(None);
+        }
+        let mut pcx = cx.clone();
+        let mut ty = expected.clone();
+        let mut peeled: Vec<(String, Level, Level, Rc<Type>)> = Vec::new();
+        // The first domain that is not a universe. A spine that still ends
+        // in `Ty l` wants a type former, so that is this reading's error
+        // rather than a fall-through to "cannot be used here".
+        let mut not_universe: Option<usize> = None;
+        let want = loop {
+            match self.whnf(&pcx, &ty, span)? {
+                Type::Pi {
+                    dom_level,
+                    cod_level,
+                    dom,
+                    cod,
+                } => {
+                    if not_universe.is_none() && !matches!(self.whnf(&pcx, &dom, span)?, Type::Ty(_)) {
+                        not_universe = Some(peeled.len());
+                    }
+                    let binder = format!("#ta{}", peeled.len());
+                    pcx.push(binder.clone(), (*dom).clone(), dom_level.clone());
+                    ty = (*cod).clone();
+                    peeled.push((binder, dom_level, cod_level, dom));
+                }
+                Type::Ty(want) => break want,
+                _ => return Ok(None),
+            }
+        };
+        if peeled.is_empty() {
+            return Ok(None);
+        }
+        if let Some(k) = not_universe {
+            return err(
+                format!(
+                    "`{name}` is a type constructor over types, but argument {} of the \
+                     expected function type is not a universe: a type parameter takes \
+                     a type",
+                    k + 1
+                ),
+                span,
+            );
+        }
+        if peeled.len() != ind.params.len() {
+            // Fewer binders than parameters is the `Result` case: the bare
+            // name abstracts every parameter, so the constructor that fixes
+            // some of them is a λ the author writes.
+            let hint = if peeled.len() < ind.params.len() {
+                format!(
+                    "; to fix the others, write the constructor as a λ (`λ ({}: Type) => \
+                     {name}<…>`)",
+                    ind.params[0]
+                )
+            } else {
+                String::new()
+            };
+            return err(
+                format!(
+                    "`{name}` takes {} type argument(s), but the expected type \
+                     constructor provides {} before its `Type`{hint}",
+                    ind.params.len(),
+                    peeled.len()
+                ),
+                span,
+            );
+        }
+        // The η-short spelling first: the declaration's registered code
+        // function **is** this constructor, `D#tycode_fn^δ`, when its level
+        // profile is the one the binders peel. Every type built from it,
+        // `M(A)` in a class's field, is then the reference spelling
+        // `El(app(D#tycode_fn^δ; ⌜A⌝))` the rest of the elaborator already
+        // reads as `D<A>`, where the λ below would leave a β-redex at every
+        // use.
+        if let Some(entry) = self.ty_code_fn_now(ind.tag, 0)
+            && entry.level.equiv(&want)
+            && entry.param_levels.len() == peeled.len()
+            && entry
+                .param_levels
+                .iter()
+                .zip(&peeled)
+                .all(|(l, (_, _, _, dom))| matches!(&**dom, Type::Ty(k) if k.equiv(l)))
+            && let Some(head) = self.gen_ref(cx, crate::gendefs::GenDef::TyCodeFn(ind.tag))
+        {
+            return Ok(Some(head));
+        }
+        let levels: Vec<Level> = peeled
+            .iter()
+            .map(|(_, _, _, dom)| match &**dom {
+                Type::Ty(l) => l.clone(),
+                _ => Level::Zero,
+            })
+            .collect();
+        if levels.len() != peeled.len()
+            || peeled.iter().any(|(_, _, _, dom)| !matches!(&**dom, Type::Ty(_)))
+        {
+            return Ok(None);
+        }
+        let t = self.generic_former_lambda_at(cx, ind, &levels, Some(&want), span)?;
+        Ok(Some(t))
+    }
+
+    /// `λ (x₁ : Ty l₁) … (x_m : Ty l_m). ⌜D<El x₁, …, El x_m>⌝` in `cx`: a
+    /// generic declaration as a type constructor value, its body the ordinary
+    /// lowering of `D<x̄>` at local type variables, quoted
+    /// (issues/higher-kinded-classes.md). The η-long spelling, for a
+    /// declaration whose code function is not registered (or whose level
+    /// profile is not the registered one).
+    pub(crate) fn generic_former_lambda(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        levels: &[Level],
+        span: Span,
+    ) -> R<Term> {
+        self.generic_former_lambda_at(cx, ind, levels, None, span)
+    }
+
+    fn generic_former_lambda_at(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        levels: &[Level],
+        want: Option<&Level>,
+        span: Span,
+    ) -> R<Term> {
+        let mut pcx = cx.clone();
+        let m = levels.len();
+        for (i, l) in levels.iter().enumerate() {
+            // `#` marks an elaborator-introduced binder: unspellable, so it
+            // captures nothing the user wrote.
+            pcx.push(format!("#ta{i}"), Type::Ty(l.clone()), Level::succ(l.clone()));
+        }
+        // `D<El x₁, …>` lowered directly, as the declaration's own code
+        // function template is (`tycode_fn_telescope`): no name to resolve,
+        // so nothing in scope can capture it.
+        let targs: Vec<(Type, Level)> = levels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                (
+                    Type::El {
+                        level: l.clone(),
+                        tm: Rc::new(Term::Var(LocalVar((m - 1 - i) as u32))),
+                    },
+                    l.clone(),
+                )
+            })
+            .collect();
+        let (lowered, level) = self.lower_instance(&pcx, ind, &targs, &[], span)?;
+        let want = want.cloned().unwrap_or_else(|| level.clone());
+        let mut t =
+            crate::expr::ExprElab::quote_type_at(self, &pcx, &lowered, &level, &want, span)?;
+        let mut cod_level = Level::succ(want);
+        for l in levels.iter().rev() {
+            let dom_level = Level::succ(l.clone());
+            t = Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::new(Type::Ty(l.clone())),
+                body: Rc::new(t),
+            };
+            cod_level = Level::max(dom_level, cod_level).normalize().canonical();
+        }
+        Ok(t)
     }
 
     /// The type arguments of `D(v̄)`, recovered from the value arguments'

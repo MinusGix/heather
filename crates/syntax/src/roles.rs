@@ -496,6 +496,9 @@ impl<'a> Walk<'a> {
                 if !c.params.is_empty() {
                     self.list_bare("class-params", c.span, &c.name);
                 }
+                for k in c.kinds.iter().flatten() {
+                    self.ty(k);
+                }
                 for p in &c.valparams {
                     self.param(p);
                 }
