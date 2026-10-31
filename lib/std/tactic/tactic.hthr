@@ -209,6 +209,12 @@ inductive Req {
     Ctors(ty: Handle),
     // A handle to the type an `Expr` stands for.
     AsType(e: Expr),
+    // `e` applied to `n` new holes, one per leading parameter of its type,
+    // each at its parameter's type with the holes before it as the earlier
+    // arguments: the holes, in order. `infer` of `e` applied to them reads
+    // the application this made. One request for what `n` rounds of
+    // `infer`, `open` and `hole` build one argument at a time.
+    Holes(e: Expr, n: Nat),
     // End a generator's run by publishing `decls` where the `generate` is.
     // A tactic's `by` refuses it: only `generate` publishes.
     Publish(decls: List<Decl>),
@@ -239,6 +245,7 @@ fn Resp(r: Req) → Type {
         Assume(_, _, _) => Checked<LocalInfo>,
         Ctors(_) => Checked<List<CtorInfo>>,
         AsType(_) => Checked<Handle>,
+        Holes(_, _) => Checked<List<Handle>>,
         Publish(_) => Never,
     }
 }
@@ -291,6 +298,8 @@ fn ctors(ty: Handle) → Tac<Checked<List<CtorInfo>>> { Ask(Ctors(ty), λ c => P
 
 fn as_type(e: Expr) → Tac<Checked<Handle>> { Ask(AsType(e), λ c => Pure(c)) }
 
+fn holes(e: Expr, n: Nat) → Tac<Checked<List<Handle>>> { Ask(Holes(e, n), λ c => Pure(c)) }
+
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
 }
@@ -312,6 +321,7 @@ inductive Answer {
     ASplit(c: Checked<Split>),
     ALocal(c: Checked<LocalInfo>),
     ACtors(c: Checked<List<CtorInfo>>),
+    AHoles(c: Checked<List<Handle>>),
 }
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
@@ -337,6 +347,7 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Assume(_, _, _) => match a { ALocal(c) => Fits(c), _ => Mismatch },
         Ctors(_) => match a { ACtors(c) => Fits(c), _ => Mismatch },
         AsType(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Holes(_, _) => match a { AHoles(c) => Fits(c), _ => Mismatch },
         Publish(_) => Mismatch,
     }
 }
@@ -692,7 +703,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 0: a result. 1: `Goal`. 2: `Defeq`. 3: `Fail`. 4: `Infer`. 5: `Open`.
 // 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`. 10: `Hole`. 11: `Mark`.
 // 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
-// 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`.
+// 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -717,6 +728,7 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Ctors(_) => 18,
             AsType(_) => 19,
             Publish(_) => 20,
+            Holes(_, _) => 21,
         },
     }
 }
@@ -734,6 +746,7 @@ fn host_lhs(t: Tac<Expr>) → Expr {
             Cases(e, _) => e,
             Assume(ty, _, _) => ty,
             AsType(e) => e,
+            Holes(e, _) => e,
             _ => NatLit(0),
         },
     }
@@ -768,6 +781,11 @@ fn host_handle(t: Tac<Expr>) → Nat {
 // `Restore`'s mark.
 fn host_mark(t: Tac<Expr>) → Nat {
     match t { Pure(_) => 0, Ask(r, _) => match r { Restore(m) => m, _ => 0 } }
+}
+
+// How many holes `Holes` asks for.
+fn host_hole_count(t: Tac<Expr>) → Nat {
+    match t { Pure(_) => 0, Ask(r, _) => match r { Holes(_, n) => n, _ => 0 } }
 }
 
 // `Close`'s split.
@@ -1043,6 +1061,18 @@ fn host_open_slot(a: Answer) → Answer {
 }
 
 fn host_not_matched(why: String) → Answer { AMatch(Refused(why)) }
+
+// `Holes`' answer, one hole at a time.
+fn host_holes() → Answer { AHoles(Accepted([])) }
+
+fn host_holes_next(a: Answer, h: Nat) → Answer {
+    match a {
+        AHoles(c) => match c { Accepted(hs) => AHoles(Accepted(hs ++ [Handle(h)])), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_no_holes(why: String) → Answer { AHoles(Refused(why)) }
 
 fn host_nat(n: Nat) → Answer { ANat(n) }
 

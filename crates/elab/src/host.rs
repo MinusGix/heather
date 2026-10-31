@@ -223,7 +223,7 @@ impl MatchDicts {
 }
 
 /// An `Expr`, as the host reads one back from a tactic.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RExpr {
     /// A handle the host issued.
     Hd(u64),
@@ -246,6 +246,16 @@ pub enum RExpr {
 }
 
 impl RExpr {
+    /// Does a `Blank` occur in it? Each reading of one is a new hole.
+    fn has_blank(&self) -> bool {
+        match self {
+            RExpr::Blank => true,
+            RExpr::App(f, a) | RExpr::Equation(f, a) => f.has_blank() || a.has_blank(),
+            RExpr::Lam(_, b) | RExpr::Pi(_, b) => b.has_blank(),
+            RExpr::Hd(_) | RExpr::Local(_) | RExpr::NatLit(_) | RExpr::Global(_) => false,
+        }
+    }
+
     /// Every local this `Expr` names outright, not through a handle.
     fn locals(&self, out: &mut Vec<u64>) {
         match self {
@@ -368,6 +378,8 @@ pub enum Request {
     Assume(RExpr, String, Option<u64>),
     Ctors(u64),
     AsType(RExpr),
+    /// A term, and how many holes to apply it to.
+    Holes(RExpr, u64),
     /// A generator's declarations, which end its run.
     Publish(Vec<DeclView>),
 }
@@ -412,6 +424,8 @@ pub enum Answer {
     /// An `Assume`d local.
     Local(Result<LocalView, String>),
     Ctors(Result<Vec<CtorView>, String>),
+    /// The holes `Holes` made.
+    Holes(Result<Vec<u64>, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -729,6 +743,14 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(out)
             }
             Answer::Ctors(Err(why)) => self.call("host_ctors_refused", vec![self.string_value(why)?]),
+            Answer::Holes(Ok(hs)) => {
+                let mut out = self.call("host_holes", vec![])?;
+                for h in hs {
+                    out = self.call("host_holes_next", vec![out, self.lit(*h)])?;
+                }
+                Ok(out)
+            }
+            Answer::Holes(Err(why)) => self.call("host_no_holes", vec![self.string_value(why)?]),
         }
     }
 
@@ -795,6 +817,11 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(Step::Ask(Request::AsType(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
             }
             20 => Ok(Step::Ask(self.decls()?)),
+            21 => {
+                let mut budget = READ_BUDGET;
+                let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Holes(e, self.nat_of("host_hole_count", vec![tree])?)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -932,6 +959,24 @@ struct Run {
     /// A generator's run (`generate`): its root is the module's empty
     /// context, it has no goal, and it ends by publishing.
     generator: bool,
+    /// Applications already reified, by scope and `Expr`: a tactic builds an
+    /// application one argument at a time and asks for each prefix's type
+    /// (`apply_slots`, `cast_holes`), so each request re-reads the prefix
+    /// before it. A hit is the earlier reading, in the world it was made in
+    /// and valid while the hole solutions it was made under stand
+    /// ([`Reading`]).
+    readings: std::collections::HashMap<(usize, RExpr), Reading>,
+}
+
+/// A remembered reification: the world it was made in (its terms are
+/// shifted past the holes made since) and the trail's length then. A
+/// `Restore` below that length may have forgotten a solution the reading
+/// relied on (its argument's type matched the domain by it), so it drops
+/// the reading.
+struct Reading {
+    reified: Reified,
+    world: usize,
+    trail: usize,
 }
 
 /// How a run ended: with a tactic's result, or a generator's declarations.
@@ -1028,6 +1073,7 @@ impl Run {
             splits: Vec::new(),
             span,
             generator,
+            readings: std::collections::HashMap::new(),
         }
     }
 
@@ -1276,6 +1322,9 @@ impl Run {
 
     /// Forget the solutions found after `mark`.
     fn restore(&mut self, mark: usize) {
+        if self.trail.len() > mark {
+            self.readings.retain(|_, r| r.trail <= mark);
+        }
         while self.trail.len() > mark {
             let j = self.trail.pop().expect("a solved hole");
             self.holes[j].sol = None;
@@ -1296,6 +1345,7 @@ pub(crate) struct Member {
 }
 
 /// One elaborated piece of a returned `Expr`.
+#[derive(Clone)]
 struct Reified {
     term: Term,
     ty: Type,
@@ -1572,6 +1622,7 @@ impl Elaborator {
                 Request::Assume(ty, name, under) => Answer::Local(refusable(self.assume_request(run, &ty, name, under))?),
                 Request::Ctors(h) => Answer::Ctors(refusable(self.ctors_request(run, h))?),
                 Request::AsType(e) => Answer::Handle(refusable(self.as_type_request(run, &e))?),
+                Request::Holes(e, n) => Answer::Holes(refusable(self.holes_request(run, &e, n))?),
                 Request::Publish(decls) if run.generator => return Ok(Ended::Published(decls)),
                 Request::Publish(_) => return Err("only `generate` publishes declarations; a tactic cannot".into()),
             };
@@ -2001,6 +2052,69 @@ impl Elaborator {
 
     /// `Hole(ty)`: a new metavariable of the type `ty` stands for, at `ty`'s
     /// scope, as a handle to its occurrence there.
+    /// `Holes(e, n)`: `e` applied to `n` new holes, each at its parameter's
+    /// type with the holes before it as the earlier arguments. Each prefix
+    /// is remembered as a reading ([`Run::readings`]), so the tactic's
+    /// `infer` of the application it spells from the holes is a hit, and
+    /// the whole costs one exposure and one instantiation per hole (building
+    /// the same holes by `infer`, `open` and `hole` re-reads each prefix).
+    fn holes_request(&self, run: &mut Run, e: &RExpr, n: u64) -> Result<Vec<u64>, Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        let out = self.holes_at(run, e, n, at);
+        if out.is_err() {
+            // The holes made before the refusal stay, unsolved and
+            // unreachable: the world only grows.
+            run.restore(mark);
+        }
+        out
+    }
+
+    fn holes_at(&self, run: &mut Run, e: &RExpr, n: u64, at: usize) -> Result<Vec<u64>, Fault> {
+        let r = self.reify(run, e, at)?;
+        let m = run.world() as u32;
+        let fty = run.partial_ty(&r.ty);
+        let mut ty = match run.committed_ty(&fty) {
+            Some(c) => self
+                .goal_oracle()
+                .whnf_type(&run.cx(at)?.gamma, &c)
+                .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?
+                .shift_global(m),
+            None => fty.clone(),
+        };
+        // Every hole is made first, so what is built from them is shifted
+        // past them once, not once per hole.
+        let first = run.world();
+        for _ in 0..n {
+            run.holes.push(Hole { home: at, sol: None });
+        }
+        let k = n as u32;
+        let mut term = r.term.shift_global(k);
+        ty = ty.shift_global(k);
+        let mut level = r.level;
+        let mut spelled = e.clone();
+        let mut out = Vec::with_capacity(n as usize);
+        for i in 0..n as usize {
+            // Past the first, the type is an instantiated codomain over the
+            // new holes, never committed: a parameter must be one outright.
+            let Type::Pi { dom_level, cod_level, dom, cod } = ty else {
+                return Err(Fault::Ill(format!("`{}` takes fewer than {n} arguments", self.shown_ty(run, at, &fty))));
+            };
+            let hole = run.occurrence(first + i);
+            let h = run.issue_in(at, run.world(), Held::Term(hole.clone(), (*dom).clone(), dom_level.clone()));
+            let arg = Rc::new(hole);
+            ty = (*cod).clone().apply_local(&LocalSubst::id(&run.scopes[at].cx.gamma).extended(Rc::clone(&arg)));
+            term = Term::App { fun: Rc::new(term), dom_level, cod_level: cod_level.clone(), dom, cod, arg };
+            level = cod_level;
+            spelled = RExpr::App(Box::new(spelled), Box::new(RExpr::Hd(h)));
+            let reified = Reified { term: term.clone(), ty: ty.clone(), level: level.clone() };
+            let reading = Reading { reified, world: run.world(), trail: run.trail.len() };
+            run.readings.insert((at, spelled.clone()), reading);
+            out.push(h);
+        }
+        Ok(out)
+    }
+
     fn hole_request(&self, run: &mut Run, h: u64) -> Result<u64, Fault> {
         let (home, ty, level) = match run.held(h)? {
             (s, Held::Type(t, l)) => (s, run.partial_ty(&t), l),
@@ -2462,49 +2576,19 @@ impl Elaborator {
                 let n = run.len(at) as u32;
                 Ok(Reified { term: term.shift_local(n).shift_global(m), ty: ty.shift_local(n).shift_global(m), level })
             }
-            RExpr::App(f, a) => {
-                let f = self.reify(run, f, at)?;
-                // Reading `f` may have made holes.
-                let m = run.world() as u32;
-                let fty = run.partial_ty(&f.ty);
-                let pi = match run.committed_ty(&fty) {
-                    Some(c) => self
-                        .goal_oracle()
-                        .whnf_type(&run.cx(at)?.gamma, &c)
-                        .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?
-                        .shift_global(m),
-                    None => fty.clone(),
-                };
-                let Type::Pi { dom_level, cod_level, dom, cod } = pi else {
-                    return Err(Fault::Ill(format!("`{}` is applied but is not a function", self.shown_ty(run, at, &fty))));
-                };
-                let (fun, dom, cod, arg) = if matches!(**a, RExpr::Blank) {
-                    // An argument left to inference: a hole at the domain,
-                    // at this scope, which the rest of the `Expr` solves.
-                    run.holes.push(Hole { home: at, sol: None });
-                    let hole = run.occurrence(run.world() - 1);
-                    (f.term.shift_global(1), Rc::new(dom.shift_global(1)), Rc::new(cod.shift_global(1)), hole)
-                } else {
-                    let a = self.reify(run, a, at)?;
-                    let k = run.world() as u32 - m;
-                    let (fun, dom, cod) = (f.term.shift_global(k), Rc::new(dom.shift_global(k)), Rc::new(cod.shift_global(k)));
-                    if !a.level.equiv(&dom_level) || !self.same_ty(run, at, &a.ty, &dom, &dom_level)? {
-                        return Err(Fault::Ill(format!(
-                            "an argument of type `{}` where `{}` is expected",
-                            self.shown_ty(run, at, &a.ty),
-                            self.shown_ty(run, at, &dom)
-                        )));
-                    }
-                    (fun, dom, cod, a.term)
-                };
-                let arg = Rc::new(arg);
-                let ty = (*cod).clone().apply_local(&LocalSubst::id(&run.scopes[at].cx.gamma).extended(Rc::clone(&arg)));
-                Ok(Reified {
-                    term: Term::App { fun: Rc::new(fun), dom_level, cod_level: cod_level.clone(), dom, cod, arg },
-                    ty,
-                    level: cod_level,
-                })
+            RExpr::App(..) if !e.has_blank() => {
+                if let Some(r) = run.readings.get(&(at, e.clone())) {
+                    let k = (run.world() - r.world) as u32;
+                    let r = &r.reified;
+                    return Ok(Reified { term: r.term.shift_global(k), ty: r.ty.shift_global(k), level: r.level.clone() });
+                }
+                let RExpr::App(f, a) = e else { unreachable!() };
+                let r = self.reify_app(run, f, a, at)?;
+                let reading = Reading { reified: r.clone(), world: run.world(), trail: run.trail.len() };
+                run.readings.insert((at, e.clone()), reading);
+                Ok(r)
             }
+            RExpr::App(f, a) => self.reify_app(run, f, a, at),
             RExpr::Blank => Err(Fault::Ill("`Blank` stands only as an argument".into())),
             RExpr::Pi(..) | RExpr::Equation(..) => Err(Fault::Ill("a `Pi` or an `Equation` stands for a type, not a term".into())),
             RExpr::Lam(x, body) => {
@@ -2523,6 +2607,51 @@ impl Elaborator {
                 })
             }
         }
+    }
+
+    /// `f(a)`, reified at scope `at`.
+    fn reify_app(&self, run: &mut Run, f: &RExpr, a: &RExpr, at: usize) -> Result<Reified, Fault> {
+        let f = self.reify(run, f, at)?;
+        // Reading `f` may have made holes.
+        let m = run.world() as u32;
+        let fty = run.partial_ty(&f.ty);
+        let pi = match run.committed_ty(&fty) {
+            Some(c) => self
+                .goal_oracle()
+                .whnf_type(&run.cx(at)?.gamma, &c)
+                .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?
+                .shift_global(m),
+            None => fty.clone(),
+        };
+        let Type::Pi { dom_level, cod_level, dom, cod } = pi else {
+            return Err(Fault::Ill(format!("`{}` is applied but is not a function", self.shown_ty(run, at, &fty))));
+        };
+        let (fun, dom, cod, arg) = if matches!(a, RExpr::Blank) {
+            // An argument left to inference: a hole at the domain,
+            // at this scope, which the rest of the `Expr` solves.
+            run.holes.push(Hole { home: at, sol: None });
+            let hole = run.occurrence(run.world() - 1);
+            (f.term.shift_global(1), Rc::new(dom.shift_global(1)), Rc::new(cod.shift_global(1)), hole)
+        } else {
+            let a = self.reify(run, a, at)?;
+            let k = run.world() as u32 - m;
+            let (fun, dom, cod) = (f.term.shift_global(k), Rc::new(dom.shift_global(k)), Rc::new(cod.shift_global(k)));
+            if !a.level.equiv(&dom_level) || !self.same_ty(run, at, &a.ty, &dom, &dom_level)? {
+                return Err(Fault::Ill(format!(
+                    "an argument of type `{}` where `{}` is expected",
+                    self.shown_ty(run, at, &a.ty),
+                    self.shown_ty(run, at, &dom)
+                )));
+            }
+            (fun, dom, cod, a.term)
+        };
+        let arg = Rc::new(arg);
+        let ty = (*cod).clone().apply_local(&LocalSubst::id(&run.scopes[at].cx.gamma).extended(Rc::clone(&arg)));
+        Ok(Reified {
+            term: Term::App { fun: Rc::new(fun), dom_level, cod_level: cod_level.clone(), dom, cod, arg },
+            ty,
+            level: cod_level,
+        })
     }
 
     /// An `Expr` standing for a type, as a type of scope `at` in the current

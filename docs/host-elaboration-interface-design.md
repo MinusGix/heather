@@ -881,3 +881,40 @@ publishes all of them where the generator was invoked, or none.
   section or under `assuming`; `Ctors` at a parameterized type (quoting finds
   only parameterless ones) or a dependent field; a field projection in
   `Expr`; R3½'s oracles.
+
+## 20. Building an application one argument at a time (2026-10-31)
+
+Issue `generic-lemma-elaboration-cost`. `mono` at a class carrier cost
+seconds per call where its concrete twin cost a fraction of that, and most
+of it was `Infer`: a tactic that applies a law to holes for its leading
+parameters (`apply_slots`, `cast.hthr`'s `cast_holes` and `cast_slots`)
+asks for the type of each prefix, and the host re-read every prefix from the
+`Expr` — each `Infer` of `f(h1, …, hk)` re-reified `f(h1, …, h(k-1))`,
+re-zonked its type and re-substituted it. A morphism law has nineteen
+leading parameters over a record type the size of the morphism's laws, so
+the reads were quadratic in the spine over a large type.
+
+- **The host remembers its readings.** `Run::readings` keeps each reified
+  application with no `Blank` in it (a `Blank` is a new hole at every
+  reading), by scope and `Expr`, with the world it was made in (a hit is
+  shifted past the holes made since) and the trail's length then (a
+  `Restore` below it drops the reading, since the argument's domain check
+  may have relied on a solution it forgets). The prefix of the next `Infer`
+  is then a hit, and each request costs one argument's worth.
+- **`Holes(e, n)`** answers `e` applied to `n` new holes, one per leading
+  parameter, each at its parameter's type with the holes before it as the
+  earlier arguments, and records each prefix as a reading, so the tactic's
+  `infer` of `cast_apps(e, holes)` is a hit. It makes the holes first and
+  instantiates the spine once per hole, where `infer`, `open` and `hole`
+  per argument shifted and zonked the whole spine three times each.
+  `cast_holes`, `cast_targeted` and `cast_slots` are one request each now
+  (`cast_slots` unifies its presets with the first holes afterwards; the
+  later holes' types mention them, so nothing is read before they are set).
+- **`mono` reads the cast edges once per run** (`Mono.edges`, read where the
+  carrier has push lemmas): reading a morphism local checks a law at it,
+  and `mono` read every edge again at each leaf's push, order and fact
+  probe. `cast_premise_among` and `cast_from_among` take edges a caller
+  holds.
+
+What is left of a `mono` call at a class carrier is evaluating the tactic
+between requests and `apply`'s `Match`, the same as at a concrete carrier.

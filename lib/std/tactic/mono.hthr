@@ -269,8 +269,10 @@ record Given { e: Expr, ty: Handle }
 // The carrier's lemmas that replace a side by one it is `≈` to.
 record Pushes { le_l: GlobalRef, le_r: GlobalRef, lt_l: GlobalRef, lt_r: GlobalRef }
 
-// What a run works with: the goal's carrier, its laws, and the given terms.
-record Mono { le: OpKey, lt: OpKey, reflexive: Option<GlobalRef>, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>, truth: Handle, holds: GlobalRef }
+// What a run works with: the goal's carrier, its laws, the given terms, and
+// the cast edges in scope (read once per run where the carrier has push
+// lemmas: a morphism local is recognised by checking a law at it).
+record Mono { le: OpKey, lt: OpKey, reflexive: Option<GlobalRef>, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>, truth: Handle, holds: GlobalRef, edges: List<EdgeRef> }
 
 fn mono_try_global(name: String) → Tac<Option<GlobalRef>> {
     lookup(name).bind(λ c => match c { Accepted(g) => Pure(Some(g)), Refused(_) => Pure(None) })
@@ -310,7 +312,7 @@ fn mono_is(o: Option<GlobalRef>, g: GlobalRef) → Bool { match o { None => Fals
 fn mono_run(le, lt: OpKey, rf, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>) → Tac<Mono> {
     mono_global("mono_trivial").bind(λ triv => infer(Global(triv)).bind(λ c => match c {
         Refused(why) => fail("mono: " ++ why, []),
-        Accepted(truth) => Pure(Mono(le, lt, rf, weaken, laws, signs, pushes, given, truth, triv)),
+        Accepted(truth) => Pure(Mono(le, lt, rf, weaken, laws, signs, pushes, given, truth, triv, [])),
     }))
 }
 
@@ -699,8 +701,8 @@ fn mono_push_applied(push: GlobalRef, mv: Moved, prove: Tac<Expr>) → Tac<Optio
 
 // `l rel r` from `l ≈ l2` and `l2 rel r` (`push` is the carrier's lemma
 // taking them in that order), when `l` is an image an edge moves.
-fn mono_push_left(rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
-    cast_move(l, 4).bind(λ m => match m {
+fn mono_push_left(es: List<EdgeRef>, rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
+    cast_move_in(l, 4, es).bind(λ m => match m {
         None => mono_none(),
         Some(mv) => match rel {
             KGlobal(_) => mono_sub(rel, mv.to, r, prove).bind(λ q => Pure(match q {
@@ -713,8 +715,8 @@ fn mono_push_left(rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) �
 }
 
 // `l rel r` from `r ≈ r2` and `l rel r2`.
-fn mono_push_right(rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
-    cast_move(r, 4).bind(λ m => match m {
+fn mono_push_right(es: List<EdgeRef>, rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
+    cast_move_in(r, 4, es).bind(λ m => match m {
         None => mono_none(),
         Some(mv) => match rel {
             KGlobal(_) => mono_sub(rel, l, mv.to, prove).bind(λ q => Pure(match q {
@@ -727,12 +729,12 @@ fn mono_push_right(rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) 
 }
 
 // An order between two images of one edge, by the edge's order law.
-fn mono_cast_order(strict, both: Bool, prove: Tac<Expr>) → Tac<Option<Expr>> {
+fn mono_cast_order(es: List<EdgeRef>, strict, both: Bool, prove: Tac<Expr>) → Tac<Option<Expr>> {
     match both {
         False => mono_none(),
         True => cast_try_global(match strict { True => cast_lt_law(), False => cast_le_law() }).bind(λ o => match o {
             None => mono_none(),
-            Some(law) => attempt(apply(Global(law), cast_premise(prove))).bind(λ r => match r { Done(e) => Pure(Some(e)), Failed(_, _) => mono_none() }),
+            Some(law) => attempt(apply(Global(law), cast_premise_among(es, prove))).bind(λ r => match r { Done(e) => Pure(Some(e)), Failed(_, _) => mono_none() }),
         }),
     }
 }
@@ -740,12 +742,12 @@ fn mono_cast_order(strict, both: Bool, prove: Tac<Expr>) → Tac<Option<Expr>> {
 // The goal from a given term or a local whose statement agrees with it
 // once both are read through the casts (`cast_from`, no edge lifted:
 // `mono_cast_order` reads orders between images).
-fn mono_cast_facts(fs: List<Expr>) → Tac<Option<Expr>> {
+fn mono_cast_facts(es: List<EdgeRef>, fs: List<Expr>) → Tac<Option<Expr>> {
     match fs {
         Nil => mono_none(),
-        Cons(f, rest) => mark().bind(λ m => attempt(cast_from_at(f, 0)).bind(λ o => match o {
+        Cons(f, rest) => mark().bind(λ m => attempt(cast_from_among(f, 0, Pure(es))).bind(λ o => match o {
             Done(e) => Pure(Some(e)),
-            Failed(_, _) => restore(m).bind(λ _ => mono_cast_facts(rest)),
+            Failed(_, _) => restore(m).bind(λ _ => mono_cast_facts(es, rest)),
         })),
     }
 }
@@ -764,13 +766,13 @@ fn mono_cast_or_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Hand
         Some(P) => {
             let rel: OpKey = match strict { True => M.lt, False => M.le };
             let leaf: Tac<Expr> = mono_leaf(M, prove, strict, target, l, r);
-            mono_images_of_one(l, r).bind(λ both => mono_cast_order(strict, both, prove).bind(λ o => match o {
+            mono_images_of_one(l, r).bind(λ both => mono_cast_order(M.edges, strict, both, prove).bind(λ o => match o {
                 Some(e) => Pure(e),
-                None => mono_push_left(rel, match strict { True => P.lt_l, False => P.le_l }, l, r, prove).bind(λ o2 => match o2 {
+                None => mono_push_left(M.edges, rel, match strict { True => P.lt_l, False => P.le_l }, l, r, prove).bind(λ o2 => match o2 {
                     Some(e) => Pure(e),
-                    None => mono_push_right(rel, match strict { True => P.lt_r, False => P.le_r }, l, r, prove).bind(λ o3 => match o3 {
+                    None => mono_push_right(M.edges, rel, match strict { True => P.lt_r, False => P.le_r }, l, r, prove).bind(λ o3 => match o3 {
                         Some(e) => Pure(e),
-                        None => goal().bind(λ g => mono_cast_facts(mono_given_exprs(M.given) ++ mono_local_exprs(g.locals)).bind(λ o4 => match o4 {
+                        None => goal().bind(λ g => mono_cast_facts(M.edges, mono_given_exprs(M.given) ++ mono_local_exprs(g.locals)).bind(λ o4 => match o4 {
                             Some(e) => Pure(e),
                             None => leaf,
                         })),
@@ -949,13 +951,21 @@ fn mono_find(g: GoalInfo, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> 
     }
 }
 
+// The run with the cast edges in scope read, where its carrier reads casts.
+fn mono_with_edges(M: Mono) → Tac<Mono> {
+    match M.pushes {
+        None => Pure(M),
+        Some(_) => cast_all_edges().bind(λ es => Pure(Mono(M.le, M.lt, M.reflexive, M.weaken, M.laws, M.signs, M.pushes, M.given, M.truth, M.holds, es))),
+    }
+}
+
 // `mono_with(hs, depth)`: prove `l <= r` or `l < r` by monotonicity, with
 // the terms `hs` for the leaves, splitting at most `depth` goals deep.
 fn mono_with(hs: List<Expr>, depth: Nat := 64) → Tac<Expr> {
     goal().bind(λ g => view(g.target).bind(λ v => match mono_call(v) {
         Some(c) => mono_given(hs).bind(λ given => mono_find(g, c.op, given).bind(λ found => match found {
             None => mono_not_order(g.target),
-            Some(M) => mono_prove(M, depth),
+            Some(M) => mono_with_edges(M).bind(λ M2 => mono_prove(M2, depth)),
         })),
         None => mono_not_order(g.target),
     }))
