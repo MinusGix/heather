@@ -4,7 +4,7 @@ status: open
 labels: [reals,intervals,float]
 area: mathematics
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-31
 ---
 
 `CReal::exp_rat`, `sin_rat` and `cos_rat` (`lib/std/num/float/elementary.hthr`,
@@ -34,3 +34,7 @@ Scope:
   functions at rationals, and the `RBox` leaf.
 - **[[elementary-functions-at-reals]]** owns the functional equations the
   reductions need.
+
+## Log
+
+- 2026-10-31: 2026-10-31: log at positive rationals landed by the binade reduction (`Binade::of`, log 2 = 2·atanh(1/3)) and is an `Enclosed` leaf through `RealExpr::enclosed` ([[creal-compress-and-transcendentals]]); its statement as exp's inverse stays open. exp's halving reduction and sin/cos range reduction are still open here.

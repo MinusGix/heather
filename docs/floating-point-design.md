@@ -569,8 +569,8 @@ roadmap's.
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed except sqrt, §14; sqrt is [float-sqrt](../issues/float-sqrt.md). |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
-| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. |
-| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. |
+| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); termination is [float-round-real-termination](../issues/float-round-real-termination.md). |
+| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)). |
 
 ML numerics on top (dot products, softmax, stochastic rounding) belong to
 the ML milestones that pull them, not here. The notation of §4.2 and §5.5

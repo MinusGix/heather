@@ -1491,6 +1491,13 @@ theorem Rat::apart_of_nonzero({x: Rat}, h: ¬(x ≈ 0)): x.Apart(0) {
 
 // A sign is the numerator's sign.
 theorem Rat::num_pos({x: Rat}, h: 0 < x): 0 < x.num { omega }
+
+theorem Rat::num_abs_pos(self q: Rat, pos: 0 < q): 0 < q.num.natAbs() {
+    match q.num as λ z => 0 < z → 0 < z.natAbs() {
+        OfNat(n) => λ h => { let k: (0 < n) = h; k },
+        NegSucc(_) => λ (h: False) => false_elim(h),
+    }(Rat::num_pos(pos))
+}
 theorem Rat::num_neg({x: Rat}, h: x < 0): x.num < 0 { omega }
 
 // A product of numbers apart from zero is apart from zero: the sign of the
