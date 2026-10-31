@@ -33,8 +33,16 @@ use crate::{ElabError, Elaborator, R, err};
 pub(crate) struct ClassInfo {
     /// Unqualified name, as written.
     pub name: String,
-    /// Type-parameter names, in order.
+    /// Type-parameter names, in order — every name written in the angle
+    /// brackets, kinded or not.
     pub params: Vec<String>,
+    /// Parallel to [`Self::params`]: a **constructor** parameter's kind
+    /// (`class Bind<M: Type → Type>`, issues/higher-kinded-classes.md), `None`
+    /// for an ordinary type parameter. A kinded parameter is a term, so the
+    /// class's record takes it as a leading value parameter, before
+    /// [`Self::valparams`]; [`Elaborator::kinded_class_ty`] moves a written
+    /// head's argument there.
+    pub kinds: Vec<Option<Ty>>,
     /// `class Monoid<A>(op: A -> A -> A)` — the declared **value indices**
     /// (docs/operation-indexed-classes-design.md §3), types written in terms
     /// of `params`. Empty for an unindexed class. Their names are what a
@@ -52,6 +60,16 @@ pub(crate) struct ClassInfo {
     /// the class's own fields. Used to phrase the collision diagnostic and to
     /// decide which ancestor an inherited field is filled from.
     pub owner: Vec<Option<String>>,
+}
+
+impl ClassInfo {
+    /// Does the class take a type constructor (`class Bind<M: Type → Type>`)?
+    /// Its record then has value parameters even with no written index, so a
+    /// literal of it is spelled without type arguments and takes them from
+    /// the expected type, as an indexed class's does.
+    pub(crate) fn is_kinded(&self) -> bool {
+        self.kinds.iter().any(Option::is_some)
+    }
 }
 
 /// A registered instance: one canonical value per (class, resolved carrier)
@@ -169,6 +187,10 @@ pub(crate) fn instance_key(class_key: &str, head_key: &str, index: &str) -> Inst
 #[derive(Clone, Default)]
 pub(crate) struct Traits {
     class_members: HashSet<String>,
+    /// The unqualified names of the classes with a kinded parameter
+    /// (`class Bind<M: Type → Type>`): the cheap prefilter that keeps
+    /// [`Elaborator::kinded_class_ty`] off every other named type.
+    kinded: HashSet<String>,
     classes: HashMap<String, Rc<ClassInfo>>,
     instances: HashMap<InstKey, InstanceInfo>,
     designations: HashMap<DesigKey, DesignationInfo>,
@@ -199,7 +221,18 @@ impl Traits {
         for name in info.fields.iter().filter_map(|field| field.name.as_ref()) {
             self.class_members.insert(name.clone());
         }
+        if info.kinds.iter().any(Option::is_some) {
+            self.kinded.insert(info.name.clone());
+        }
         self.classes.insert(key, Rc::new(info));
+    }
+
+    /// Could `name` (qualified or not) name a class with a kinded parameter?
+    /// A prefilter on the last path segment: `false` is certain, `true` is
+    /// then resolved.
+    pub(crate) fn maybe_kinded(&self, name: &str) -> bool {
+        !self.kinded.is_empty()
+            && self.kinded.contains(name.rsplit("::").next().unwrap_or(name))
     }
 
     pub(crate) fn class(&self, key: &str) -> Option<&Rc<ClassInfo>> {
@@ -683,6 +716,22 @@ pub(crate) fn class_ref_written(r: &ClassRef) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     )
+}
+
+/// A class head's argument written in a type slot, read as the expression a
+/// kinded parameter takes: `Option` is the name, `Result<Nat>` the generic
+/// application, and an expression in type position is itself. `None` for a
+/// structural type former, which no type constructor is spelled as.
+fn ty_as_expr(t: &Ty) -> Option<Expr> {
+    match &t.kind {
+        TyKind::Named { name, args } if args.is_empty() => Some(var(name, t.span)),
+        TyKind::Named { name, args } => Some(span_expr(
+            ExprKind::TyApp { head: Box::new(var(name, t.span)), args: args.clone() },
+            t.span,
+        )),
+        TyKind::OfExpr(e) => Some((**e).clone()),
+        _ => None,
+    }
 }
 
 fn span_expr(kind: ExprKind, span: Span) -> Expr {
@@ -1501,10 +1550,38 @@ impl Elaborator {
             result: None,
             span: d.span,
         };
+        // A kinded parameter is a type constructor, a term: the record takes
+        // it as a leading value parameter (`record Bind(M: Type → Type)`, the
+        // shape that already computes as a dictionary), and keeps the
+        // ordinary ones as its type parameters.
+        let kinds = if d.kinds.len() == d.params.len() {
+            d.kinds.clone()
+        } else {
+            vec![None; d.params.len()]
+        };
+        let mut rec_params = Vec::new();
+        let mut rec_valparams = Vec::new();
+        for (p, k) in d.params.iter().zip(&kinds) {
+            match k {
+                None => rec_params.push(p.clone()),
+                Some(kind) => rec_valparams.push(Param {
+                    name: p.clone(),
+                    ty: kind.clone(),
+                    implicit: false,
+                    is_self: false,
+                    solver: None,
+                    default: None,
+                    origin: heather_syntax::ParamOrigin::Written,
+                    symbol: None,
+                    span: kind.span,
+                }),
+            }
+        }
+        rec_valparams.extend(d.valparams.iter().cloned());
         let ind = InductiveDecl {
             name: d.name.clone(),
-            params: d.params.clone(),
-            valparams: d.valparams.clone(),
+            params: rec_params,
+            valparams: rec_valparams,
             ctors: vec![ctor],
             is_record: true,
             is_codata: false,
@@ -1515,6 +1592,7 @@ impl Elaborator {
         let info = ClassInfo {
             name: d.name.clone(),
             params: d.params.clone(),
+            kinds,
             valparams: d.valparams.clone(),
             fields,
             ancestors,
@@ -1586,7 +1664,76 @@ impl Elaborator {
             let abs = self.global_abs_of(*var)?;
             return self.names.global_name_at(abs as u32).map(str::to_string);
         }
+        // A class over a type constructor (issues/higher-kinded-classes.md):
+        // the carrier is a value parameter `{M: Type → Type}`, solved by now
+        // to the constructor — `D#tycode_fn^δ` for a declaration with a code
+        // function, whose key is the declaration's own. A λ constructor has
+        // no head to prefer.
+        if let TyKind::Named { name, args } = &carrier.kind
+            && args.is_empty()
+            && let Some(position) = params.iter().position(|p| !p.is_type && p.name == *name)
+        {
+            let mut spine = Vec::new();
+            let mut head = applied;
+            while let Some((fun, arg)) = crate::spelling::app_of(head) {
+                spine.push(&**arg);
+                head = fun;
+            }
+            spine.reverse();
+            let mut head = *spine.get(position)?;
+            while let Some((fun, _)) = crate::spelling::app_of(head) {
+                head = fun;
+            }
+            let Term::GlobalTm { var, .. } = head else {
+                return None;
+            };
+            let abs = self.global_abs_of(*var)?;
+            let crate::gendefs::GenDef::TyCodeFn(tag) =
+                *self.types.gdefs().key_for_abs(&(abs as u32))?
+            else {
+                return None;
+            };
+            let owner = self.types.by_tag(tag)?;
+            return Some(qkey(&owner.scope.module, &owner.name));
+        }
         head_name(carrier).map(|h| self.carrier_key(h))
+    }
+
+    /// A solver parameter's written class goal with its constructor
+    /// parameter replaced by the constructor the call solved it to —
+    /// `Bind<M>` shown as `Bind<List>` — for a class over a type constructor
+    /// (issues/higher-kinded-classes.md). `key` is
+    /// [`Self::solver_carrier_head`]'s answer; `None` for every other goal.
+    pub(crate) fn kinded_goal_display(
+        &self,
+        written: &Ty,
+        params: &[ParamMeta],
+        key: &str,
+    ) -> Option<String> {
+        let reference = self.class_ref_of_ty(written)?;
+        let class = self.lookup_class(&reference.name)?;
+        if !class.is_kinded() {
+            return None;
+        }
+        let shown = key.rsplit("::").next().unwrap_or(key).to_string();
+        let mut changed = false;
+        let args: Vec<Ty> = reference
+            .args
+            .iter()
+            .zip(&class.kinds)
+            .map(|(a, k)| match (&a.kind, k) {
+                (TyKind::Named { name, args }, Some(_))
+                    if args.is_empty() && params.iter().any(|p| !p.is_type && p.name == *name) =>
+                {
+                    changed = true;
+                    Ty { kind: TyKind::Named { name: shown.clone(), args: Vec::new() }, span: a.span }
+                }
+                _ => a.clone(),
+            })
+            .collect();
+        changed.then(|| {
+            render_ty(&heather_syntax::class_ty(reference.name, args, reference.index, written.span))
+        })
     }
 
     /// The **index spelling** of an instance head
@@ -1815,6 +1962,81 @@ impl Elaborator {
 
     pub(crate) fn lookup_class(&self, name: &str) -> Option<Rc<ClassInfo>> {
         self.traits.class(&self.key_of(name)?).cloned()
+    }
+
+    /// A written head of a class over a type constructor, re-spelled as the
+    /// record it lowers to (issues/higher-kinded-classes.md, piece 3):
+    ///
+    /// ```text
+    /// Bind<Option>            ⇝  Bind(Option)
+    /// StateM<S, M>(op)        ⇝  StateM<S>(M, op)      (M kinded, S not)
+    /// ```
+    ///
+    /// A kinded parameter is a term, so the class's record takes it as a
+    /// leading value parameter ([`Self::elab_class`]); the angle-bracket
+    /// spelling stays the class's interface, which every reader of a
+    /// [`ClassRef`] (registry keys, canonical names, `requires`) keeps
+    /// seeing. The argument becomes an expression: a bare generic name is
+    /// then checked at the kind, which is the η-expansion
+    /// `check_generic_former_value` does, and a parameter `M` is a local.
+    /// `None` for every type that is not such a head, so nothing else moves.
+    pub(crate) fn kinded_class_ty(&self, ty: &Ty) -> Option<Ty> {
+        let (name, args, index): (&str, &[Ty], &[Expr]) = match &ty.kind {
+            TyKind::Named { name, args } => (name, args, &[]),
+            TyKind::OfExpr(e) => match &e.kind {
+                ExprKind::App {
+                    head,
+                    args: index,
+                    named,
+                    explicit: false,
+                    goal_oriented: false,
+                } if named.is_empty() => match &head.kind {
+                    ExprKind::TyApp { head: h, args } => match &h.kind {
+                        ExprKind::Var(n) => (n, args, index),
+                        _ => return None,
+                    },
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if args.is_empty() || !self.traits.maybe_kinded(name) {
+            return None;
+        }
+        let info = self.lookup_class(name)?;
+        if info.kinds.len() != args.len() || info.kinds.iter().all(Option::is_none) {
+            return None;
+        }
+        let span = ty.span;
+        let mut targs = Vec::new();
+        let mut vargs = Vec::new();
+        for (a, k) in args.iter().zip(&info.kinds) {
+            match k {
+                None => targs.push(a.clone()),
+                Some(_) => vargs.push(ty_as_expr(a)?),
+            }
+        }
+        vargs.extend(index.iter().cloned());
+        let head = var(name, span);
+        let head = if targs.is_empty() {
+            head
+        } else {
+            span_expr(ExprKind::TyApp { head: Box::new(head), args: targs }, span)
+        };
+        Some(Ty {
+            kind: TyKind::OfExpr(Box::new(span_expr(
+                ExprKind::App {
+                    head: Box::new(head),
+                    args: vargs,
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            ))),
+            span,
+        })
     }
 
     /// A parameter's type read as a **class reference**: the class's name, its
@@ -2875,7 +3097,7 @@ impl Elaborator {
         let lit = span_expr(
             ExprKind::RecordLit {
                 name: class.name.clone(),
-                tyargs: if class.valparams.is_empty() {
+                tyargs: if class.valparams.is_empty() && !class.is_kinded() {
                     d.class.args.clone()
                 } else {
                     Vec::new()
@@ -3055,7 +3277,7 @@ impl Elaborator {
             let mut alit = span_expr(
                 ExprKind::RecordLit {
                     name: ainfo.name.clone(),
-                    tyargs: if ainfo.valparams.is_empty() {
+                    tyargs: if ainfo.valparams.is_empty() && !ainfo.is_kinded() {
                         aargs.clone()
                     } else {
                         Vec::new()

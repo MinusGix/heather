@@ -32,3 +32,7 @@ Against `docs/sequencing-surface-design.md` (§2, §3, §10, §12):
 
 - **[[sequencing-surface-design]]** owns the spelling and the protocol.
 - **[[higher-kinded-classes]]** (R2a) provides classes over a type constructor.
+
+## Log
+
+- 2026-10-31: R2a landed ([[higher-kinded-classes]], docs/higher-kinded-classes-design.md §5): instances write implicit binders (pure := λ {A} a => …, no implicit-λ insertion); a class named Pure has a record constructor Pure that collides with Tac's Pure, so choose the name or qualify before the classes enter the library; a Result instance waits on [[class-instance-at-lambda-carrier]].

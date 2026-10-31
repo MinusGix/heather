@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x1b";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x18";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x1c";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x19";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -1911,14 +1911,16 @@ fn get_class_ref(r: &mut Reader<'_>) -> Result<ClassRef, ModuleImageDecodeError>
 }
 
 fn put_class(w: &mut Writer, info: &ClassInfo) {
-    w.string(&info.name); w.vec(&info.params, |w, s| w.string(s)); w.vec(&info.valparams, put_param);
+    w.string(&info.name); w.vec(&info.params, |w, s| w.string(s));
+    w.vec(&info.kinds, |w, k| w.option(k.as_ref(), put_ty)); w.vec(&info.valparams, put_param);
     w.vec(&info.fields, put_field_decl); w.vec(&info.ancestors, put_class_ref);
     w.vec(&info.owner, |w, owner| w.option(owner.as_ref(), |w, s| w.string(s)));
 }
 
 fn get_class(r: &mut Reader<'_>) -> Result<ClassInfo, ModuleImageDecodeError> {
     Ok(ClassInfo {
-        name: r.string()?, params: r.vec(Reader::string)?, valparams: r.vec(get_param)?,
+        name: r.string()?, params: r.vec(Reader::string)?, kinds: r.vec(|r| r.option(get_ty))?,
+        valparams: r.vec(get_param)?,
         fields: r.vec(get_field_decl)?, ancestors: r.vec(get_class_ref)?,
         owner: r.vec(|r| r.option(Reader::string))?,
     })

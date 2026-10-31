@@ -51,9 +51,11 @@ impl Elaborator {
             let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, argument.span);
             let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
             let respell = |t: &Type| self.respell_ty(cx, t);
+            let constructor = |t: &Type| self.constructor_spelling(cx, t, argument.span);
             let u = U {
                 gamma: &cx.gamma, subject_metas: Some((n, sols)),
                 type_args: &type_args, canonical_head: &canonical_head, respell: &respell,
+                constructor: &constructor,
             };
             unify_ty_root(&u, &pattern, &subject, k, 0, &mut inner);
             // Even an unused implicit must be determined; zonking only the

@@ -132,7 +132,12 @@ bounded pieces of work.*
   `Option`, and generic code `twice({M}, m: Monad(M), x: M(Nat))` computes:
   `twice(option_monad(), Some(3)) = Some(3)` by `refl`.
 
-**What does not, and is the work** (proposed as R2's first slice, §12):
+**What does not, and is the work** (proposed as R2's first slice, §12).
+*Landed 2026-10-31 as R2a: `docs/higher-kinded-classes-design.md`. Its §5
+lists what R2 inherits: instances write their implicit binders
+(`pure := λ {A} a => …`), a class named `Pure` collides with `Tac`'s
+constructor `Pure`, and a `Result` instance waits on
+`issues/class-instance-at-lambda-carrier.md`.*
 
 1. **The unifier cannot solve `?M(Nat) =?= Option<Nat>`.**
    `pick({M: Type → Type}, x: M(Nat))` called at an `Option<Nat>` or a
