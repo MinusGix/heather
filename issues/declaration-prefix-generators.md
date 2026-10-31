@@ -25,6 +25,6 @@ prefix that names a generator, the first syntax-carrying form of
 
 ## Done when
 
-`runtime fn f` publishes `f::runtime` in the R5d round, a test generator
+`runtime fn f` publishes `instance Compile(f)` in the R5d round, a test generator
 prefix publishes a lemma about the function it prefixes, and the unknown and
 non-generator prefixes are refused with their reasons.

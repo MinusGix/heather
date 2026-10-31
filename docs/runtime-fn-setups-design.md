@@ -36,7 +36,7 @@ runtime fn wc_step(s: WcState, b: BitVec(8)) → WcState {
 //   wc_step::rt        : rt::Program       the body, reflected as data       (§3, §4)
 //   wc_step::judged    : default().judge(wc_step::rt()) = Ok        by refl  (§5)
 //   wc_step::reflects  : wc_step::rt().meaning(…) = wc_step         by refl  (§4.3)
-//   wc_step::runtime   : Compiled(wc_step)  the code and its agreement theorem (§6)
+//   instance Compile(wc_step)          the code and its agreement theorem (§6, §9.3)
 ```
 
 1. **A setup is a record value** with a judgment, a lowering and one soundness
@@ -68,9 +68,13 @@ runtime fn wc_step(s: WcState, b: BitVec(8)) → WcState {
    runs the library generator `g` over the elaborated `f`;
    `runtime(owned) fn f` picks a setup (§9). A runtime fn may call only its
    setup's primitives and other runtime fns.
-8. **Nothing is left of `compile-typeclass-design`'s class layer** (§9.3). The
-   published `f::runtime` record is the instance, keyed on `f`'s syntax by
-   construction. That issue and `runtime-compile-opt-in` close as superseded.
+8. **The `Compile` class stays, and a setup is one way to produce its
+   instances** (§9.3). `Compile(f)` is an operation-indexed class keyed on the
+   function (`Monoid<A>(op)`'s mechanism): code plus its agreement with `f`.
+   The `runtime` generator publishes `instance Compile(f)`; a hand-written
+   instance (tuned FunctionIR and its proof) is accepted with no setup; a call
+   finds its callee's code by instance search. `runtime-compile-opt-in` closes
+   as superseded; `compile-typeclass-design` narrows to this.
 
 ---
 
@@ -174,9 +178,9 @@ none, as `generate` does today):
 | `f::judged` | `s.judge(f::rt()) = Ok` | `refl` (kernel evaluation) |
 | `f::reflects` | `(xs…) → f::rt().meaning(callees…)(xs…) = f(xs…)` | `refl` (conversion, §4.3) |
 | `f::code()` | `rt::Code` | `s.lower(f::rt())` unfolded, or evaluated by the generator and pinned by `refl` |
-| `f::runtime` | `Compiled(f)`: the setup's name, `f::code()`, the callees' `Compiled` records, and `(xs…) → f::code().run(encode(xs…)) = encode(f(xs…))` | `s.sound(…)` rewritten by `f::reflects` |
+| `instance Compile(f)` | `f::code()` and `agrees : (xs…) → f::code().run(encode(xs…)) = encode(f(xs…))`, callees answered by their own `Compile` instances | `s.sound(…)` rewritten by `f::reflects` |
 
-`Compiled(f)` is the one thing every consumer reads: a runtime fn calling `f`,
+`Compile(f)` is the one thing every consumer reads: a runtime fn calling `f`,
 the builder's helper form while it exists, `compile-x86`, and N3's program
 entry. Its agreement theorem mentions `f` itself, so no consumer ever sees
 `rt`.
@@ -373,8 +377,8 @@ an ordinary fn …" at the call, with the setup named.
 For pure code (N1): `c.Agrees(p)` is, for every entry argument tuple, that
 the FunctionIR program `c` evaluates on the arguments' encoding to the
 encoding of `p.meaning(…)` on them, with callees answered by their own
-`Compiled` code. `encode_τ : τ.sem → List<BitVec(w)>` is the layout of §7.2.
-Composed with `f::reflects`, it is the statement `f::runtime` publishes:
+`Compile` instances. `encode_τ : τ.sem → List<BitVec(w)>` is the layout of §7.2.
+Composed with `f::reflects`, it is the statement `Compile(f)`'s `agrees` field holds:
 `f::code().run(encode(xs)) = encode(f(xs))`. Downstream, `compiled_returns`
 carries that to x86 for an export, and a `Compute` leaf's region meaning
 carries it into a `Source`.
@@ -416,7 +420,7 @@ port in the environment. Its pieces, and where each already exists:
 | `If`, `Case` on a bit or enum tag | `Conditional` | `Conditional` evaluates the chosen branch | used by every decided `_agrees` |
 | `&&`, `\|\|`, `!`, Bool helpers | trees of `Conditional` | the tree decides the connective | today a per-function `split_all`, here one lemma per connective |
 | `Make`, `Field` | ports per field (§7.2) | layout lemmas: `encode` of a record is its fields' encodings | new, small |
-| `Call` | `Call` region | callee's `Compiled` agreement | `program_eval_sources` |
+| `Call` | `Call` region | callee's `Compile` agreement | `program_eval_sources` |
 | `Fold`, `ForIn` over `Bytes` or a range | `Loop` with `BufferLoad` | `loop_eval_agrees` instantiated at the step's meaning | `function_ir_compile::loop_eval_agrees` |
 | `Measured` | `Loop` of at most the measure | `loop_eval_agrees_measured` | the same file |
 
@@ -566,26 +570,53 @@ down, and nothing is compiled because something else happened to call it.
 The alternative, reflecting an ordinary helper through and inlining it,
 silently compiles mathematics and makes a library edit change what runs.
 
-`f::rt()` lists its callees by reference to their `Compiled` records, so a
-callee is reflected and judged once, in its own declaration, and `f`'s
-certificate cites its agreement. A callee under a different setup is accepted
-when its `Compiled` record's agreement has the form the caller's `sound`
-needs; for N1 there is one setup and the question waits for R12.
+A `Call` in `f::rt()` names its callee, and the generator finds the
+callee's code by instance search for `Compile(g)`, so a callee is compiled
+once, in its own declaration (or by hand, §9.3), and `f`'s certificate cites
+its agreement. Changing how `g` is compiled (another setup, a hand instance)
+changes no caller. The agreement statement is the same for every instance,
+whoever produced it, which is what lets a caller's `sound` cite a callee
+compiled under another setup; a setup that needs more from its callees
+(ownership's non-aliasing) asks for a stronger class, a question for R12.
 
-### 9.3 What is left of `compile-typeclass-design` and `runtime-compile-opt-in`
+### 9.3 The `Compile` class: what stays, what changes
 
-| their item | here |
+The first draft of this note made `Compiled(f)` a plain record and closed
+`compile-typeclass-design`. Minus asked about the class (2026-10-31), and
+keeping it is better: a record has the class's content (code plus its
+agreement with `f`) but loses two things only a class gives.
+
+```heather
+// an operation-indexed class, keyed on a function value (docs/operation-indexed-classes-design.md)
+class Compile<F>(f: F) { code: rt::Code, agrees: code.Agrees(f) }
+
+runtime fn step(…) → … { … }
+// the generator publishes:  instance Compile(step) := default().compiled(step::rt(), step::judged, step::reflects)
+
+instance Compile(fast_hash) := Compile(code := tuned_ir(), agrees := tuned_ir_agrees)   // by hand, no setup
+```
+
+- **Hand-written instances.** `runtime-compile-opt-in` decided that a valid
+  hand-written instance is accepted without the marker. A setup is then one
+  way to produce instances, not the only one: hand-tuned FunctionIR for a hot
+  function, with its proof, is used by every caller.
+- **Resolution.** A call finds its callee's code by instance search (§9.2),
+  instead of a callee list fixed at reflection.
+
+| the old issue's item | here |
 |---|---|
-| a function runs only with a checked instance or an explicit marker (`runtime-compile-opt-in`, 2026-09-07) | kept: the marker is §9.1, the instance is `f::runtime` |
-| instances keyed on syntax, so refactoring invalidates them | by construction: `f::rt()` is re-reflected whenever `f`'s module re-elaborates, and `f::reflects` is checked against the current `f` |
-| resolution-from-main over the call graph | `f::rt()`'s callee list; explicit, not resolved |
+| a function runs only with a checked instance or an explicit marker (`runtime-compile-opt-in`, 2026-09-07) | kept: the marker is §9.1, which publishes the instance |
+| instances keyed on syntax, so refactoring invalidates them | kept: the generator re-runs whenever `f`'s module re-elaborates, `f::reflects` is checked against the current `f`, and a hand instance whose proof no longer checks is refused |
+| coherence | one instance per function; the setup is the instance's content, not its key. Two setups for one `f` need a named or scoped instance, which operation-indexed classes already allow |
+| resolution-from-main over the call graph | instance search at each `Call` |
 | target indexing (`Compile[Cpu]`) | struck already (2026-08-07): the target is the back half's |
-| `CallCtx`-parametric specialization | a lowering's business, if a setup wants it; N2 is where it would matter |
-| the class itself (`Compile`, `derive_runtime_fn`) | not needed: `Compiled(f)` is a record type, and the generator publishes the value |
+| `CallCtx`-parametric specialization, generic code (`where Compile(A::add)`) | stays open on `compile-typeclass-design`; not needed for N1 |
+| `derive_runtime_fn` | the `runtime` prefix |
 
-So both issues close as superseded by this note when it is adopted, with
-their open acceptance items moved: explicit opt-in tests and the
-`examples/x86-native/mix.hthr` opt-in go to `runtime-fn-default-setup`.
+So `runtime-compile-opt-in` closes as superseded, its open acceptance items
+(unmarked rejection, hand-instance success, `examples/x86-native/mix.hthr`
+opting in) moving to `runtime-fn-default-setup`, and
+`compile-typeclass-design` narrows to the class above plus its open items.
 
 ---
 
@@ -596,12 +627,12 @@ their open acceptance items moved: explicit opt-in tests and the
   reflected word function's region (through the Rust reflector) and builder
   forms for `Loop` and `Conditional` regions. They are the near-term way to
   write a tool's pure parts as Heather functions, and their builder-facing
-  form survives R5: in R5 the helper form takes a `Compiled(f)` record instead
+  form survives R5: in R5 the helper form takes a function with a `Compile` instance instead
   of a function the Rust reflector reads, and the loop-region forms become
   unnecessary for code a runtime fn can express.
 - **R5 (N1).** The Heather generator replaces the Rust reflector.
-  `compile-x86 file f` requires `runtime fn f`, reads `f::runtime`, and runs
-  the existing `lower_program`/`compiled_returns` chain with `f::runtime`'s
+  `compile-x86 file f` requires a `Compile(f)` instance (from `runtime fn f` or by hand), and runs
+  the existing `lower_program`/`compiled_returns` chain with that instance's
   agreement where `_agrees` was. The `examples/x86-native` files gain the
   prefix. `crates/elab/src/function_ir_source/` is deleted once every example
   passes through the generator.
@@ -676,7 +707,7 @@ an issue:
 | R5a | `runtime-body-reflection-requests` | §3.2's host requests | V5; the reflector reads `examples/x86-native`'s bodies |
 | R5a | `runtime-fn-reflected-language` | `rt`, `Ty::sem`, `Program::meaning`, V1–V4 | the pins of V1–V4 by `refl` |
 | R5b | `runtime-default-setup-soundness` | `Setup`, the default judgment and lowering, `sound` | `default().sound` proved for §7's N1 constructs |
-| R5c | `declaration-prefix-generators` | §9.1's syntax | `runtime fn f` publishes `f::runtime`; unknown prefixes refused by name |
+| R5c | `declaration-prefix-generators` | §9.1's syntax | `runtime fn f` publishes `instance Compile(f)`; unknown prefixes refused by name |
 | R5d | `runtime-fn-default-setup` (narrowed) | the generator, `compile-x86` on it, the Rust reflector deleted, a tool using runtime fn helpers | its existing "done when" |
 | back half | `function-ir-alu-core` (log), `function-ir-multi-word-calls` | `Mul`/`UDiv`/`URem` nodes; multi-word call arguments and results | each issue's own |
 | N3 | `runtime-nat-checked-arithmetic` | §7.2's `Nat` trap | when decision 6 is taken |
@@ -720,8 +751,7 @@ Made without asking (say if wrong): flat records and enums are the setup's own
 scalar layout, not `datarepr` (§7.2); a setup's evidence is consumed in its
 own lowering and theorem, the back half keeping one contract (§6.2); the
 lowering emits `Source` directly, never through the builder (§10);
-`compile-typeclass-design` and `runtime-compile-opt-in` close as superseded
-(§9.3).
+`runtime-compile-opt-in` closes as superseded (§9.3).
 
 ---
 

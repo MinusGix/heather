@@ -14,7 +14,7 @@ proved once (route 2 of [[in-language-certificate-emission]]).
 
 ## Scope
 
-- `Setup { name, judge, lower, sound }` and `Compiled(f)` in
+- `Setup { name, judge, lower, sound }` and the `Compile(f)` class in
   `lib/native/runtime/`.
 - The default judgment over `rt` (§5.1), with reasons and paths.
 - The lowering to a FunctionIR program (§7): the primitive table, flat

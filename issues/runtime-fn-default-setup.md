@@ -21,15 +21,15 @@ integration round. The other slices have their own issues:
 
 - The `runtime` generator (design §2.2): reflect, judge in the elaborator for
   located refusals, publish `f::rt`, `f::judged`, `f::reflects`, `f::code` and
-  `f::runtime : Compiled(f)` as one group.
-- `compile-x86 file f` requires `runtime fn f` and reads `f::runtime` in place
+  `instance Compile(f)` as one group.
+- `compile-x86 file f` requires `runtime fn f` and reads the `Compile(f)` instance in place
   of the Rust reflector's `_agrees` (design §10); the `examples/x86-native`
   files gain the prefix (from [[runtime-compile-opt-in]]: `mix.hthr` opts in
   explicitly, and unmarked functions are refused with an actionable message).
 - `crates/elab/src/function_ir_source/` deleted once every example passes
   through the generator.
 - The builder's reflected-helper form ([[native-build-reflected-helpers]])
-  takes a `Compiled(f)` record, so a tool's pure parts are runtime fns.
+  takes a function with a `Compile` instance, so a tool's pure parts are runtime fns.
 
 ## What it assumes from elsewhere
 
