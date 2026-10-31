@@ -20,16 +20,19 @@
 // (`Rat::root_above`, `Rat::root_below`), between which every rational is
 // in the cell.
 //
-// The error model carries over the same way. A rounding interval around a
-// nonnegative real can be cut to lie in range (`Format::rounds_real_cut`),
-// the rational bound `|r - q| <= u·q + η` holds at both of its ends, and an
-// affine bound at both ends holds in between (`CReal::err_between`). So
-// `|r - x| <= u·x + η` in range and `|r - x| <= u·x` in the normal range at
-// every nonnegative real (`Format::real_error_nonneg`,
-// `real_relative_nonneg`), and in particular for the root
-// (`Finite::sqrt_real_error`, `sqrt_real_relative`), the bound that waited
-// on this module. At a real of either sign (`Format::real_error`,
-// `real_relative`) the sign is split inside the `≤`, which needs no decision.
+// The error model carries over the same way, and is proved once over any
+// ordered field with a morphism from `Rat` (§18.2): a rounding interval
+// around `x` cut to lie in range has both ends rounding to `r`, the rational
+// bound `|r - q| <= u·|q| + η` is two affine bounds with nonnegative slopes
+// there, and an affine bound at both ends holds in between
+// (`Rat::err_in_nonneg`, `_nonpos`). At `CReal` the sandwich reads as
+// `|r - x| <= u·x + η` in range and `|r - x| <= u·x` in the normal range
+// at every nonnegative real (`Format::real_error_nonneg`,
+// `real_relative_nonneg`), in particular for the root
+// (`Finite::sqrt_real_error`, `sqrt_real_relative`), and at a real of
+// either sign (`Format::real_error`, `real_relative`) the sign is split
+// inside the `≤`, which needs no decision. A faithful rounding has the
+// directed modes' model (`Format::real_faithful_error`).
 //
 // The root of a real is `CReal::sqrt` (creal.hthr); at a float's real it is
 // `sqrt_rat` of the value, so the float root rounds it

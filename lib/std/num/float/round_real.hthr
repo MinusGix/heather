@@ -6,7 +6,9 @@
 // relation, and what computes is the search that finds a witness for it.
 //
 // The relation, `RoundsToReal(F, mode, x, r)`: some rational interval around
-// `x` rounds to `r` throughout. A real that is not a breakpoint has such an
+// `x` rounds to `r` throughout. It is stated once over any ordered field
+// with a morphism from `Rat` (`Format::RoundsIn`), and `RoundsToReal` is its
+// reading at `CReal`. A real that is not a breakpoint has such an
 // interval, since rounding is constant on the open cell between two
 // breakpoints, and a rational has the degenerate one (`rounds_real_of_rat`,
 // `rounds_real_rat`), so at `Rat` this is exactly `RoundsTo`. Any two
@@ -22,6 +24,9 @@
 // `x` is clear of the rounding grid and its enclosures narrow
 // (`round_enclosed_ends`), and then `round_real_apart` needs no fuel and no
 // `Option`. For `exp` and `log` the gap is Padé's (issues/exp-log-grid-gap.md).
+//
+// A faithful rounding (one of the two neighbours) needs no gap: the search
+// for it ends whenever the enclosures narrow (`Format::faithful_real_total`).
 
 import logic;
 import bool;
