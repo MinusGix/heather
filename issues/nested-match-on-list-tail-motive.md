@@ -45,3 +45,4 @@ its `as`.
 ## Log
 
 - 2026-10-31: 2026-10-31: still fails after dependent-match-compiler slice 2. Standalone (rest a parameter, goal P(total(Cons(x, rest))) → Nat) it checks; inside the outer Cons arm it does not, so the outer arm's goal spells the tail some other way than Var(rest) (tier-2 List on W) and abstract_scrut finds nothing. A field_rewrap-style respelling for recursive fields is the likely fix.
+- 2026-10-31: 2026-10-31: root cause traced (see match-clause-equations' log): the tail binder is a read of the W kids function, the goal spells supf(inj x; f'), and rebuilding the value around the abstracted tail needs Empty-domain η the kernel does not have. Shares its fix with eqbind-deep-pattern-kernel-rejects.
