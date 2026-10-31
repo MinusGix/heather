@@ -274,8 +274,10 @@ native_bin_warmup() {
 # rail. In the stale lanes the gate replays with their trade, as `write-elf`
 # then does. Only a focused run of a native target warms it here: an
 # unfiltered run's parallel phase starts the gate first and holds those
-# targets until it has finished (`PREREQUISITES` in run-test-targets.mjs),
-# so the gate runs once, beside the targets that do not read its store.
+# targets until `heather check --unbuilt` finds lib/native's and
+# lib/_tests/native's closures built, or the gate has finished
+# (`PREREQUISITES` in run-test-targets.mjs), so the gate runs once, beside
+# the targets that do not read its store.
 cli_images_warmup() {
   (
     ulimit -v 6291456
