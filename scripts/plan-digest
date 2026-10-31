@@ -1,0 +1,449 @@
+#!/usr/bin/env python3
+"""Render the project's plan as a small set of markdown files.
+
+The plan's sources are `docs/roadmap.md` (areas, their priority, the
+milestones) and `issues/*.md` (every issue's area, milestones and blockers);
+`scripts/issue` already reads both, and this script reuses its parser. What it
+adds is a digest someone without a checkout can read in one go, and the recent
+history that says where effort has actually been going:
+
+  digest.md          milestones with status and progress, areas with their
+                     open/closed counts and recent activity, what landed in
+                     the last week, and the roadmap's latest decisions
+  areas/<area>.md    every open issue of one area, one line each, by milestone
+  open-issues.tsv    every open issue as one row (for grep and scripts)
+  recent.md          the last 30 days: merged PRs, issues filed and closed
+  README.md          what the files are and the one-command refresh
+
+Everything is rendered from one commit (`--ref`, default `origin/master`),
+never from the working tree, and every date window is counted back from that
+commit's date rather than from today. Rendering the same commit twice writes
+the same bytes, so a refresh with nothing new to say changes no file, and the
+first line of digest.md names the commit it was built from.
+
+Usage:
+  scripts/plan-digest [--fetch] [--ref REV] [--out DIR]
+
+`--fetch` runs `git fetch origin master` first. The default output directory
+is the project's shared folder, `/mnt/project-files/plan`.
+
+Stdlib only.
+"""
+
+import argparse
+import datetime
+import importlib.machinery
+import importlib.util
+import io
+import os
+import re
+import subprocess
+import sys
+import tarfile
+import tempfile
+from collections import Counter, defaultdict
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_OUT = Path("/mnt/project-files/plan")
+WEEK, MONTH = 7, 30
+LANDED_SHOWN = 30
+
+
+def load_issue_module():
+    """`scripts/issue` as a module, so its parser stays the one parser."""
+    path = ROOT / "scripts" / "issue"
+    loader = importlib.machinery.SourceFileLoader("heather_issue", str(path))
+    spec = importlib.util.spec_from_loader("heather_issue", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def git(*args) -> str:
+    return subprocess.run(["git", "-C", str(ROOT), *args], check=True,
+                          capture_output=True, text=True).stdout
+
+
+def extract(ref: str, into: Path):
+    """`issues/` and `docs/roadmap.md` as they are at `ref`."""
+    blob = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar", ref,
+                           "issues", "docs/roadmap.md"],
+                          check=True, capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(blob)) as tar:
+        tar.extractall(into, filter="data") if hasattr(tarfile, "data_filter") else tar.extractall(into)
+
+
+def history(ref: str, since: str):
+    """Commits on `ref` since `since`, newest first: dicts with sha, date,
+    subject, pr, the issue slugs each touched, and the slugs it filed or
+    closed (a `+status: closed` line, or a new file)."""
+    out = git("log", ref, f"--since={since}", "--format=\x1e%H\t%ad\t%s",
+              "--date=short", "-p", "-U0", "--no-renames", "--", "issues/")
+    # A second, name-only pass picks up commits that touched no issue file.
+    names = git("log", ref, f"--since={since}", "--format=\x1e%H\t%ad\t%s", "--date=short")
+    commits, by_sha = [], {}
+    boundary = shallow_boundary()
+    for line in names.split("\n"):
+        if line.startswith("\x1e"):
+            sha, date, subject = line[1:].split("\t", 2)
+            m = re.search(r"\(#(\d+)\)\s*$", subject)
+            full, sha = sha, sha[:7]
+            c = dict(sha=sha, date=date, subject=subject, pr=m.group(1) if m else "",
+                     touched=[], filed=[], closed=[], boundary=False)
+            c["boundary"] = full in boundary
+            commits.append(c)
+            by_sha[full] = c
+    cur, slug, new_file = None, None, False
+    for line in out.split("\n"):
+        if line.startswith("\x1e"):
+            cur = by_sha.get(line[1:].split("\t", 1)[0])
+            slug = None
+            if cur is not None and cur["boundary"]:
+                cur = None  # a shallow clone's root: its diff adds every file
+        elif cur is None:
+            continue
+        elif line.startswith("--- "):
+            new_file = line == "--- /dev/null"
+        elif line.startswith("+++ b/issues/") and line.endswith(".md"):
+            slug = line[len("+++ b/issues/"):-3]
+            if slug in ("README", "INDEX"):
+                slug = None
+                continue
+            cur["touched"].append(slug)
+            if new_file:
+                cur["filed"].append(slug)
+        elif slug and line.startswith("+status:") and line.split(":", 1)[1].split("#")[0].strip() == "closed":
+            if slug not in cur["filed"]:
+                cur["closed"].append(slug)
+    return commits
+
+
+def shallow_boundary():
+    """Full shas where a shallow clone's history is cut off."""
+    path = Path(git("rev-parse", "--git-path", "shallow").strip())
+    path = path if path.is_absolute() else ROOT / path
+    return set(path.read_text().split()) if path.exists() else set()
+
+
+def milestone_done_raw(roadmap: Path):
+    """{milestone: done-when} with its backticks intact (`roadmap_table` strips
+    them from both ends of every cell, which cuts a leading code span)."""
+    text = roadmap.read_text() if roadmap.exists() else ""
+    m = re.search(r"<!-- milestones -->\n(.*?)<!-- /milestones -->", text, re.DOTALL)
+    out = {}
+    for line in (m.group(1).splitlines() if m else []):
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 4:
+            out[cells[0].strip("`")] = cells[3]
+    return out
+
+
+def oneline(text: str, width: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= width else text[: width - 1].rstrip() + "…"
+
+
+def issue_line(m, area_rank, with_area=False):
+    bits = []
+    if with_area and m["area"]:
+        bits.append(f"{m['area']} (p{area_rank.get(m['area'], '—')})")
+    if m["milestone"]:
+        bits.append("ms " + ",".join(m["milestone"]))
+    if m["blocked-by"]:
+        bits.append("blocked by " + ",".join(m["blocked-by"]))
+    if m["status"] == "blocked":
+        bits.append("BLOCKED")
+    if m.get("updated"):
+        bits.append(f"upd {m['updated']}")
+    return f"- `{m['slug']}` {oneline(m['title'], 110)}" + (f" — {'; '.join(bits)}" if bits else "")
+
+
+def roadmap_log_tail(roadmap: Path, n: int):
+    text = roadmap.read_text() if roadmap.exists() else ""
+    m = re.search(r"^## Log\n(.*)$", text, re.DOTALL | re.MULTILINE)
+    if not m:
+        return []
+    entries, cur = [], None
+    for line in m.group(1).splitlines():
+        if line.startswith("- "):
+            cur = line[2:]
+            entries.append(cur)
+        elif line.strip() and entries:
+            entries[-1] += " " + line.strip()
+    # The log is append-ordered but not strictly by date; sort by its date prefix.
+    entries.sort(key=lambda e: e[:10])
+    return entries[-n:]
+
+
+def render(ref: str, mod, tree: Path):
+    mod.ISSUES = tree / "issues"
+    mod.ROADMAP = tree / "docs" / "roadmap.md"
+    mod.INDEX = mod.ISSUES / "INDEX.md"
+    issues = mod.load_all()
+    areas, milestones = mod.load_roadmap()
+    sha = git("rev-parse", "--short", ref).strip()
+    head_date = git("log", "-1", "--format=%ad", "--date=short", ref).strip()
+    d0 = datetime.date.fromisoformat(head_date)
+    week_ago = (d0 - datetime.timedelta(days=WEEK)).isoformat()
+    month_ago = (d0 - datetime.timedelta(days=MONTH)).isoformat()
+    commits = history(ref, month_ago + "T00:00:00")
+    done_raw = milestone_done_raw(mod.ROADMAP)
+    cut = [c for c in commits if c["boundary"]]
+    history_note = (f"History is cut at {cut[-1]['date']} (shallow clone); counts before it are missing. "
+                    "`--fetch` deepens it." if cut else "")
+
+    live = [m for m in issues if m["status"] != "closed"]
+    by_slug = {m["slug"]: m for m in issues}
+    area_rank = {a["area"]: a["rank"] for a in areas}
+    area_order = [a["area"] for a in areas]
+
+    # Activity: an area or milestone is active on a day a commit touched one
+    # of its issues (rounds log in their issue, so this is a fair proxy).
+    area_last, ms_last = {}, {}
+    area_week = Counter()
+    filed_week, closed_week = Counter(), Counter()
+    for c in commits:
+        seen_a, seen_m = set(), set()
+        for s in c["touched"]:
+            m = by_slug.get(s)
+            if not m:
+                continue
+            if m["area"]:
+                seen_a.add(m["area"])
+            seen_m.update(m["milestone"])
+        for a in seen_a:
+            area_last[a] = max(area_last.get(a, ""), c["date"])
+            if c["date"] >= week_ago:
+                area_week[a] += 1
+        for x in seen_m:
+            ms_last[x] = max(ms_last.get(x, ""), c["date"])
+        if c["date"] >= week_ago:
+            for s in c["filed"]:
+                filed_week[(by_slug.get(s) or {}).get("area", "") or "none"] += 1
+            for s in c["closed"]:
+                closed_week[(by_slug.get(s) or {}).get("area", "") or "none"] += 1
+
+    ms_open = defaultdict(list)
+    ms_closed = Counter()
+    for m in issues:
+        for x in m["milestone"]:
+            if m["status"] == "closed":
+                ms_closed[x] += 1
+            else:
+                ms_open[x].append(m["slug"])
+    children = defaultdict(list)
+    for x in milestones:
+        if x["parent"]:
+            children[x["parent"]].append(x)
+
+    files = {}
+
+    # ---- digest.md -------------------------------------------------------
+    L = [f"# Heather plan digest — master `{sha}` ({head_date})", "",
+         "Generated by `scripts/plan-digest` from `docs/roadmap.md` and `issues/*.md` at that commit; "
+         "do not edit. Windows count back from the commit's date. "
+         "Every open issue, one line each: `areas/<area>.md`; the month's history: `recent.md`.", ""]
+    if history_note:
+        L += [f"**{history_note}**", ""]
+
+    L += ["## Areas (priority order)", "",
+          "| p | area | tier | open | blocked | closed | in a milestone | commits 7d | filed/closed 7d | last activity |",
+          "|---|---|---|---|---|---|---|---|---|---|"]
+    for a in areas:
+        mine = [m for m in issues if m["area"] == a["area"]]
+        op = [m for m in mine if m["status"] != "closed"]
+        L.append(f"| {a['rank']} | {a['area']} | {a['tier']} | {len(op)} | "
+                 f"{sum(1 for m in op if m['status'] == 'blocked' or m['blocked-by'])} | "
+                 f"{len(mine) - len(op)} | {sum(1 for m in op if m['milestone'])} | "
+                 f"{area_week[a['area']]} | +{filed_week[a['area']]}/−{closed_week[a['area']]} | "
+                 f"{area_last.get(a['area'], f'before {month_ago}')} |")
+    untagged = [m for m in live if not m["area"]]
+    if untagged:
+        L.append(f"| — | (no area) | — | {len(untagged)} | | | | | +{filed_week['none']}/−{closed_week['none']} | |")
+    quiet = [a["area"] for a in areas if a["tier"] in ("focus", "steady") and not area_week[a["area"]]]
+    L += ["", "\"blocked\" counts open issues with a `blocked-by` or `status: blocked`. "
+          "\"commits 7d\" counts commits that touched one of the area's issues."]
+    if quiet:
+        L += ["", f"**Focus/steady areas with no issue activity in 7 days:** {', '.join(quiet)}."]
+    L.append("")
+
+    L += ["## Milestones", "",
+          "Status from the roadmap; `open N / closed M` counts the issues that name the milestone; "
+          "`last` is the last commit touching one of them. Done and moved milestones are one line.", ""]
+    for a in area_order:
+        mine = [x for x in milestones if x["area"] == a]
+        if not mine:
+            continue
+        L.append(f"### {a} (p{area_rank[a]})")
+        L.append("")
+        names = {x["milestone"] for x in mine}
+        roots = [x for x in mine if not x["parent"] or x["parent"] not in names]
+        for root in roots:
+            for depth, x in [(0, root)] + [(1, c) for c in children[root["milestone"]]]:
+                ind = "  " * depth
+                name = x["milestone"]
+                if x["status"] in ("done", "moved"):
+                    L.append(f"{ind}- ~~{name}~~ **{x['status']}**")
+                    continue
+                subs = children.get(name, [])
+                sub = (f", subs {sum(1 for c in subs if c['status'] == 'done')}/{len(subs)} done" if subs else "")
+                op = sorted(ms_open.get(name, []))
+                L.append(f"{ind}- **{name}** {x['status']}{sub}; open {len(op)} / closed {ms_closed[name]}; "
+                         f"last {ms_last.get(name, '—')}")
+                L.append(f"{ind}  - done when: {oneline(done_raw.get(name, x['done']), 260)}")
+                if op:
+                    shown = ", ".join(f"`{s}`" for s in op[:12]) + (f", … +{len(op) - 12}" if len(op) > 12 else "")
+                    L.append(f"{ind}  - open: {shown}")
+        L.append("")
+
+    landed = [c for c in commits if c["date"] >= week_ago]
+    L += [f"## Landed on master since {week_ago} ({len(landed)} commits)", ""]
+    per_area = Counter(a for c in landed for a in
+                       {(by_slug.get(s) or {}).get("area", "") for s in c["touched"]} - {""})
+    L += ["By area (commits touching its issues): "
+          + ", ".join(f"{a} {per_area[a]}" for a in area_order if per_area[a]) + ".", ""]
+    if len(landed) > LANDED_SHOWN:
+        L += [f"The newest {LANDED_SHOWN}; the rest are in `recent.md`.", ""]
+    for c in landed[:LANDED_SHOWN]:
+        areas_c = sorted({(by_slug.get(s) or {}).get("area", "") for s in c["touched"]} - {""},
+                         key=lambda a: area_order.index(a) if a in area_order else 99)
+        tag = f" [{', '.join(areas_c)}]" if areas_c else ""
+        closed = f"; closed {', '.join(c['closed'])}" if c["closed"] else ""
+        subject = oneline(re.sub(r"\s*\(#\d+\)\s*$", "", c["subject"]), 120)
+        L.append(f"- {c['date']} {('#' + c['pr'] + ' ') if c['pr'] else ''}{subject}{tag}{oneline(closed, 160)}")
+    L.append("")
+
+    L += ["## Latest roadmap decisions", "", "The last entries of `docs/roadmap.md`'s log, shortened.", ""]
+    L += [f"- {oneline(e, 300)}" for e in roadmap_log_tail(mod.ROADMAP, 6)]
+    L.append("")
+
+    blocked = [m for m in live if m["blocked-by"] or m["status"] == "blocked"]
+    L += [f"## Blocked ({len(blocked)})", ""]
+    for m in sorted(blocked, key=lambda m: (area_order.index(m["area"]) if m["area"] in area_order else 99, m["slug"])):
+        waits = [b for b in m["blocked-by"] if (by_slug.get(b) or {}).get("status", "closed") != "closed"]
+        L.append(f"- `{m['slug']}` ({m['area'] or 'no area'}) waits on "
+                 + (", ".join(f"`{b}`" for b in waits) if waits else "nothing open (blockers closed: stale `blocked-by`)"))
+    L.append("")
+    files["digest.md"] = "\n".join(L)
+
+    # ---- areas/<area>.md ---------------------------------------------------
+    for a in areas + ([dict(area="none", rank="—", tier="—", name="No area", direction="Open issues with no area.")] if untagged else []):
+        key = a["area"]
+        op = [m for m in live if (m["area"] or "none") == key]
+        L = [f"# {a['name']} (`{key}`, p{a['rank']}, {a['tier']}) — master `{sha}`", "",
+             a["direction"], "", f"{len(op)} open issues. Generated by `scripts/plan-digest`.", ""]
+        groups = defaultdict(list)
+        for m in op:
+            groups[m["milestone"][0] if m["milestone"] else ""].append(m)
+        ms_names = [x["milestone"] for x in milestones]
+        for g in sorted(groups, key=lambda g: (g == "", ms_names.index(g) if g in ms_names else 99, g)):
+            L.append(f"## {g or 'No milestone'} ({len(groups[g])})")
+            L.append("")
+            L += [issue_line(m, area_rank) for m in sorted(groups[g], key=lambda m: m["slug"])]
+            L.append("")
+        files[f"areas/{key}.md"] = "\n".join(L)
+
+    # ---- open-issues.tsv ---------------------------------------------------
+    rows = ["slug\tstatus\tarea\tpriority\ttier\tmilestones\tblocked_by\tlabels\tcreated\tupdated\ttitle"]
+    tier = {a["area"]: a["tier"] for a in areas}
+    for m in sorted(live, key=lambda m: (area_order.index(m["area"]) if m["area"] in area_order else 99, m["slug"])):
+        rows.append("\t".join([m["slug"], m["status"], m["area"], area_rank.get(m["area"], ""),
+                               tier.get(m["area"], ""), ",".join(m["milestone"]), ",".join(m["blocked-by"]),
+                               ",".join(m["labels"]), m.get("created", ""), m.get("updated", ""),
+                               " ".join(m["title"].split())]))
+    files["open-issues.tsv"] = "\n".join(rows)
+
+    # ---- recent.md ---------------------------------------------------------
+    L = [f"# Last {MONTH} days on master — `{sha}` ({head_date})", "",
+         "Generated by `scripts/plan-digest`. Per commit: issues it filed (+) and closed (−).", ""]
+    for c in commits:
+        extra = ([f"+{s}" for s in c["filed"]] + [f"−{s}" for s in c["closed"]])
+        L.append(f"- {c['date']} {('#' + c['pr'] + ' ') if c['pr'] else ''}`{c['sha']}` "
+                 f"{oneline(re.sub(r'[ ]*[(]#[0-9]+[)][ ]*$', '', c['subject']), 140)}" + (f" ({' '.join(extra)})" if extra else ""))
+    files["recent.md"] = "\n".join(L)
+
+    files["README.md"] = README.format(ref=ref)
+    return {k: v.rstrip("\n") + "\n" for k, v in files.items()}
+
+
+README = """# plan/ — the project plan, rendered from master
+
+Written by `scripts/plan-digest` in the Heather repository; do not edit by
+hand, the next refresh overwrites it. Read `digest.md` first: milestones with
+status and progress, areas in priority order with recent activity, what
+landed this week, the latest roadmap decisions and what is blocked. Its first
+line names the master commit it was built from.
+
+- `digest.md`: the overview, small enough to read in one go.
+- `areas/<area>.md`: every open issue of one area, one line each, grouped by
+  milestone (area, milestones, blockers, last update).
+- `open-issues.tsv`: every open issue as one tab-separated row.
+- `recent.md`: the last 30 days of master, with the issues each commit filed
+  and closed.
+
+The sources stay authoritative: `docs/roadmap.md` owns areas, priorities and
+milestones, `issues/*.md` own the issues. This folder is a read-only copy.
+
+## Refresh
+
+From a checkout of the repository (any branch; the script reads the commit,
+not the working tree):
+
+    scripts/plan-digest --fetch
+
+It renders `{ref}` into `/mnt/project-files/plan/` (`--out DIR` elsewhere,
+`--ref REV` for another commit). It is idempotent: the same commit renders the
+same bytes, unchanged files are not rewritten, and files for areas that no
+longer exist are removed. It prints `unchanged` or the files it wrote.
+"""
+
+
+def write_out(out: Path, files: dict):
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "areas").mkdir(exist_ok=True)
+    wrote = []
+    for rel, text in sorted(files.items()):
+        path = out / rel
+        if path.exists() and path.read_text() == text:
+            continue
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(text)
+        os.replace(tmp, path)
+        wrote.append(rel)
+    for stale in sorted((out / "areas").glob("*.md")):
+        if f"areas/{stale.name}" not in files:
+            stale.unlink()
+            wrote.append(f"areas/{stale.name} (removed)")
+    return wrote
+
+
+def main():
+    p = argparse.ArgumentParser(prog="plan-digest", description=__doc__.split("\n\n")[0])
+    p.add_argument("--ref", default="origin/master", help="commit to render (default origin/master)")
+    p.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"output directory (default {DEFAULT_OUT})")
+    p.add_argument("--fetch", action="store_true", help="git fetch origin master first")
+    p.add_argument("--stdout", action="store_true", help="print digest.md instead of writing files")
+    args = p.parse_args()
+    if args.fetch:
+        cmd = ["git", "-C", str(ROOT), "fetch", "-q"]
+        if shallow_boundary():
+            # A shallow clone (cloud containers clone 50 commits) would cut the
+            # month's history short; deepen to a little past the window.
+            since = datetime.date.today() - datetime.timedelta(days=MONTH + 15)
+            cmd.append(f"--shallow-since={since.isoformat()}")
+        subprocess.run(cmd + ["origin", "master"], check=True)
+    mod = load_issue_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        extract(args.ref, Path(tmp))
+        files = render(args.ref, mod, Path(tmp))
+    if args.stdout:
+        sys.stdout.write(files["digest.md"])
+        return
+    wrote = write_out(args.out, files)
+    sha = git("rev-parse", "--short", args.ref).strip()
+    print(f"plan-digest {sha} -> {args.out}: " + (", ".join(wrote) if wrote else "unchanged"))
+
+
+if __name__ == "__main__":
+    main()
