@@ -38,12 +38,12 @@ import option;
 // Statements' parts
 
 // 0 Skip, 1 Seq, 2 Let, 3 Set, 4 Poke, 5 When, 6 While, 7 DoWhile, 8 ReadTo,
-// 9 WriteFrom, 10 OpenOf, 11 CloseOf, 12 ArgTo, 13 Quit.
+// 9 WriteFrom, 10 OpenOf, 11 CloseOf, 12 ArgTo, 13 Quit, 14 Calculate.
 fn Act::kind(self a: Act) → Nat {
     match a {
         Skip => 0, Seq(_) => 1, Let(_, _) => 2, Set(_, _) => 3, Poke(_, _, _) => 4, When(_, _) => 5, While(_, _) => 6,
         DoWhile(_, _) => 7, ReadTo(_, _, _, _) => 8, WriteFrom(_, _, _, _, _) => 9, OpenOf(_, _, _) => 10, CloseOf(_, _) => 11,
-        ArgTo(_, _, _) => 12, Quit(_) => 13,
+        ArgTo(_, _, _) => 12, Quit(_) => 13, Calculate(_) => 14,
     }
 }
 
@@ -51,7 +51,7 @@ fn Act::is_seq(self a: Act) → Bool {
     match a {
         Seq(_) => True, Skip => False, Let(_, _) => False, Set(_, _) => False, Poke(_, _, _) => False, When(_, _) => False,
         While(_, _) => False, DoWhile(_, _) => False, ReadTo(_, _, _, _) => False, WriteFrom(_, _, _, _, _) => False,
-        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False,
+        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False, Calculate(_) => False,
     }
 }
 
@@ -59,7 +59,7 @@ fn Act::is_let(self a: Act) → Bool {
     match a {
         Let(_, _) => True, Skip => False, Seq(_) => False, Set(_, _) => False, Poke(_, _, _) => False, When(_, _) => False,
         While(_, _) => False, DoWhile(_, _) => False, ReadTo(_, _, _, _) => False, WriteFrom(_, _, _, _, _) => False,
-        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False,
+        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False, Calculate(_) => False,
     }
 }
 
@@ -67,7 +67,7 @@ fn Act::is_when(self a: Act) → Bool {
     match a {
         When(_, _) => True, Skip => False, Seq(_) => False, Let(_, _) => False, Set(_, _) => False, Poke(_, _, _) => False,
         While(_, _) => False, DoWhile(_, _) => False, ReadTo(_, _, _, _) => False, WriteFrom(_, _, _, _, _) => False,
-        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False,
+        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False, Calculate(_) => False,
     }
 }
 
@@ -75,7 +75,7 @@ fn Act::is_while(self a: Act) → Bool {
     match a {
         While(_, _) => True, Skip => False, Seq(_) => False, Let(_, _) => False, Set(_, _) => False, Poke(_, _, _) => False,
         When(_, _) => False, DoWhile(_, _) => False, ReadTo(_, _, _, _) => False, WriteFrom(_, _, _, _, _) => False,
-        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False,
+        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False, Calculate(_) => False,
     }
 }
 
@@ -83,7 +83,7 @@ fn Act::is_do_while(self a: Act) → Bool {
     match a {
         DoWhile(_, _) => True, Skip => False, Seq(_) => False, Let(_, _) => False, Set(_, _) => False, Poke(_, _, _) => False,
         When(_, _) => False, While(_, _) => False, ReadTo(_, _, _, _) => False, WriteFrom(_, _, _, _, _) => False,
-        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False,
+        OpenOf(_, _, _) => False, CloseOf(_, _) => False, ArgTo(_, _, _) => False, Quit(_) => False, Calculate(_) => False,
     }
 }
 
@@ -98,7 +98,7 @@ fn Act::part(self a: Act, next: Nat, side: Bool) → Act {
         While(_, body) => body,
         DoWhile(body, _) => body,
         Skip => a, Set(_, _) => a, Poke(_, _, _) => a, ReadTo(_, _, _, _) => a, WriteFrom(_, _, _, _, _) => a,
-        OpenOf(_, _, _) => a, CloseOf(_, _) => a, ArgTo(_, _, _) => a, Quit(_) => a,
+        OpenOf(_, _, _) => a, CloseOf(_, _) => a, ArgTo(_, _, _) => a, Quit(_) => a, Calculate(_) => a,
     }
 }
 
@@ -111,7 +111,7 @@ fn Act::tested(self a: Act, next: Nat) → Placed {
         Skip => Placed([], 0, next), Seq(_) => Placed([], 0, next), Let(_, _) => Placed([], 0, next), Set(_, _) => Placed([], 0, next),
         Poke(_, _, _) => Placed([], 0, next), ReadTo(_, _, _, _) => Placed([], 0, next), WriteFrom(_, _, _, _, _) => Placed([], 0, next),
         OpenOf(_, _, _) => Placed([], 0, next), CloseOf(_, _) => Placed([], 0, next), ArgTo(_, _, _) => Placed([], 0, next),
-        Quit(_) => Placed([], 0, next),
+        Quit(_) => Placed([], 0, next), Calculate(_) => Placed([], 0, next),
     }
 }
 
@@ -121,7 +121,7 @@ fn Act::init_items(self a: Act, next: Nat) → List<Item> {
         Let(init, _) => init.assigned(next, Succ(next)).ops(),
         Skip => [], Seq(_) => [], Set(_, _) => [], Poke(_, _, _) => [], When(_, _) => [], While(_, _) => [], DoWhile(_, _) => [],
         ReadTo(_, _, _, _) => [], WriteFrom(_, _, _, _, _) => [], OpenOf(_, _, _) => [], CloseOf(_, _) => [], ArgTo(_, _, _) => [],
-        Quit(_) => [],
+        Quit(_) => [], Calculate(_) => [],
     }
 }
 
@@ -165,6 +165,7 @@ theorem Act::packs_seq_of(self a: Act, is: a.is_seq().IsTrue(), next: Nat, g0, g
         CloseOf(_, _) => λ no _ _ => false_elim(no),
         ArgTo(_, _, _) => λ no _ _ => false_elim(no),
         Quit(_) => λ no _ _ => false_elim(no),
+        Calculate(_) => λ no _ _ => false_elim(no),
     })(is, first, second)
 }
 
@@ -192,6 +193,7 @@ theorem Act::packs_let_of(self a: Act, is: a.is_let().IsTrue(), next: Nat, g0, g
         CloseOf(_, _) => λ no _ _ => false_elim(no),
         ArgTo(_, _, _) => λ no _ _ => false_elim(no),
         Quit(_) => λ no _ _ => false_elim(no),
+        Calculate(_) => λ no _ _ => false_elim(no),
     })(is, init, body)
 }
 
@@ -224,6 +226,7 @@ theorem Act::packs_when_of(self a: Act, is: a.is_when().IsTrue(), next: Nat, yes
         CloseOf(_, _) => λ no _ _ => false_elim(no),
         ArgTo(_, _, _) => λ no _ _ => false_elim(no),
         Quit(_) => λ no _ _ => false_elim(no),
+        Calculate(_) => λ no _ _ => false_elim(no),
     })(is, lowered_yes, lowered_no)
 }
 
@@ -264,6 +267,7 @@ theorem Act::packs_while_of(self a: Act, is: a.is_while().IsTrue(), next: Nat, p
         CloseOf(_, _) => λ no _ => false_elim(no),
         ArgTo(_, _, _) => λ no _ => false_elim(no),
         Quit(_) => λ no _ => false_elim(no),
+        Calculate(_) => λ no _ => false_elim(no),
     })(is, passes)
 }
 
@@ -290,6 +294,7 @@ theorem Act::packs_do_while_of(self a: Act, is: a.is_do_while().IsTrue(), next: 
         CloseOf(_, _) => λ no _ => false_elim(no),
         ArgTo(_, _, _) => λ no _ => false_elim(no),
         Quit(_) => λ no _ => false_elim(no),
+        Calculate(_) => λ no _ => false_elim(no),
     })(is, passes)
 }
 
@@ -328,6 +333,20 @@ fn Val::size(self v: Val) → Nat {
     }
 }
 
+// A pure statement's values and statements, its binders met from `next`
+// as `Calc::pieces` meets them.
+fn Calc::size(self c: Calc, next: Nat) → Nat {
+    match c {
+        Nothing => 1,
+        Both(parts) => Succ(parts(True).size(next) + parts(False).size(next)),
+        Fresh(init, body) => Succ(init.size() + body(Var(next)).size(Succ(next))),
+        Assign(_, value) => Succ(value.size()),
+        Store(_, index, value) => Succ(index.size() + value.size()),
+        Choose(condition, arms) => Succ(condition.size() + (arms(True).size(next) + arms(False).size(next))),
+        Passes(bound, state, body, stop, _) => Succ(bound.size() + (state.len() + (body(Var(next)).size(next) + stop.size()))),
+    }
+}
+
 // The statement tree in preorder, three numbers a statement: its kind, the
 // first word free where it is met, and the size of its own values; then its
 // parts (`Act::part`), `True`'s first. Nothing is lowered.
@@ -347,6 +366,7 @@ fn Act::shape(self a: Act, next: Nat) → List<Nat> {
         CloseOf(fd, _) => [11, next, fd.size()],
         ArgTo(index, _, _) => [12, next, index.size()],
         Quit(status) => [13, next, status.size()],
+        Calculate(calc) => [14, next, calc.size(next)],
     }
 }
 
@@ -455,5 +475,6 @@ fn Act::traced(self a: Act, next: Nat, k: Packing, plan: List<Nat>) → Traced {
         CloseOf(fd, result) => CloseOf(fd, result).traced_whole(next, k, plan.after_flag()),
         ArgTo(index, buf, len) => ArgTo(index, buf, len).traced_whole(next, k, plan.after_flag()),
         Quit(status) => Quit(status).traced_whole(next, k, plan.after_flag()),
+        Calculate(calc) => Calculate(calc).traced_whole(next, k, plan.after_flag()),
     }
 }

@@ -34,7 +34,7 @@ struct Shape { kind: u64, next: u64, children: Vec<Shape>, weight: u64 }
 impl Shape {
     fn read(records: &mut std::slice::Iter<'_, [u64; 3]>) -> Result<Shape, String> {
         let &[kind, next, own] = records.next().ok_or("the tool's shape ended early")?;
-        let arity = match kind { 1 | 5 => 2, 2 | 6 | 7 => 1, 0 | 3 | 4 | 8..=13 => 0, _ => return Err(format!("statement kind {kind}")) };
+        let arity = match kind { 1 | 5 => 2, 2 | 6 | 7 => 1, 0 | 3 | 4 | 8..=14 => 0, _ => return Err(format!("statement kind {kind}")) };
         let children = (0..arity).map(|_| Shape::read(records)).collect::<Result<Vec<_>, _>>()?;
         let weight = 1 + own + children.iter().map(|c| c.weight).sum::<u64>();
         Ok(Shape { kind, next, children, weight })
