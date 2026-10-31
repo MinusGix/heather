@@ -267,7 +267,6 @@ theorem X86Memory::io_load_entry(size: Nat, within: size <= io_data_limit(), hea
         λ y _ => CodeResident(X86Profile::io(size).fetch(), X86Memory::io_load(size, within, header ++ code), code, y), resident)
 }
 
-
 // ---------------------------------------------------------------------------
 // A process loaded from the file, with a stack of its own
 

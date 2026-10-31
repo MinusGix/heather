@@ -79,11 +79,11 @@ theorem probe_segment_kept(word: BitVec(64)): DataRegion::process_data(4096, pro
 
 // A stack overlapping the segment is not placed, nor one deeper than exec
 // maps.
-theorem overlapping_not_placed(): ¬ StackPlaced(4096, 0x410000, 8) {
+theorem overlapping_not_placed(): ¬StackPlaced(4096, 0x410000, 8) {
     let end: (io_data_end(4096) = 0x411000) = refl;
     λ placed => omega(placed.above, end)
 }
-theorem deep_not_placed(top: Nat): ¬ StackPlaced(4096, top, 0x20001) {
+theorem deep_not_placed(top: Nat): ¬StackPlaced(4096, top, 0x20001) {
     let limit: (io_stack_limit() = 0x20000) = refl;
     λ placed => omega(placed.within, limit)
 }
