@@ -2114,3 +2114,102 @@ theorem Rat::range_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → k < n → 0 <=
 theorem Rat::sub_mul(self a, b, c: Rat): (a - b) * c ≈ a * c - b * c { ring }
 
 theorem Rat::mul_sub(self a, b, c: Rat): a * (b - c) ≈ a * b - a * c { ring }
+
+// ---------------------------------------------------------------------------
+// Square roots from below (lib/std/num/float/float_real.hthr reads floats'
+// roots through them). `root_floor(q, n)` is the integer root of
+// `⌊|q|·4^n⌋` over `2^n`: at most `√|q|` and within `2^-n` of it, which is
+// all `CReal::sqrt_rat` needs. Comparisons with a root are read through
+// squares (`lt_of_sq_lt`, `le_of_sq_le`), and strictly inside a gap
+// between two squares there is a rational on each side of the root
+// (`root_above`, `root_below`).
+
+theorem Rat::lt_of_sq_lt({a, c: Rat}, hc: 0 <= c, h: a * a < c * c): a < c { nlinarith(hc, h) }
+
+theorem Rat::le_of_sq_le({a, c: Rat}, ha: 0 <= a, hc: 0 <= c, h: a * a <= c * c): a <= c { nlinarith(ha, hc, h) }
+
+fn Rat::root_floor(self q: Rat, n: Nat) → Rat {
+    Rat(OfNat(((q.num.natAbs() * (Nat::pow(2, n) * Nat::pow(2, n))).ldiv(q.den).quot()).isqrt()), Nat::pow(2, n))
+}
+
+// It is a root of `|q|` from below within `2^-n`.
+theorem Rat::root_floor_spec(self q: Rat, n: Nat): q.root_floor(n) * q.root_floor(n) <= q.abs() ∧ q.abs() < (q.root_floor(n) + Rat::inv_pow2(n)) * (q.root_floor(n) + Rat::inv_pow2(n)) {
+    let A = q.num.natAbs();
+    let D = q.den;
+    let P = Nat::pow(2, n);
+    let N = (A * (P * P)).ldiv(D).quot();
+    let m = (A * (P * P)).ldiv(D).rem();
+    let k = N.isqrt();
+    let parts: (N * D + m = A * (P * P)) = (A * (P * P)).ldiv_parts(D);
+    let small: (m < D) = (A * (P * P)).ldiv_rem_lt(D);
+    let root = N.isqrt_spec();
+    let lo: ((k * k) * D <= N * D) = Nat::mul_le_mono_r(D, k * k, N, root.left);
+    let hi: (Succ(N) * D <= (Succ(k) * Succ(k)) * D) = Nat::mul_le_mono_r(D, Succ(N), Succ(k) * Succ(k), root.right);
+    let r = q.root_floor(n);
+    let s = Rat(OfNat(Succ(k)), P);
+    let c = Rat::inv_pow2(n);
+    let rn: ((r + c).num = k.int() * P.int() + 1 * P.int()) = refl;
+    let rd: ((r + c).den.int() = P.int() * P.int()) = refl;
+    let sn: (s.num = k.int() + 1) = refl;
+    let sd: (s.den.int() = P.int()) = refl;
+    let e: ((r + c).num * s.den.int() = s.num * (r + c).den.int()) = ring(rn, rd, sn, sd);
+    let up: (r + c ≈ s) = omega(e);
+    let a0: ((k * k) * D <= A * (P * P)) = omega(lo, parts);
+    let sN: (Succ(N) * D = N * D + D) = ring;
+    let b0: (A * (P * P) < (Succ(k) * Succ(k)) * D) = omega(hi, parts, small, sN);
+    let a: (r * r <= q.abs()) = a0;
+    let b: (q.abs() < s * s) = b0;
+    And(a, Rat::lt_respects(q.abs().same_refl(), Rat::mul_respects(Rat::same_sym(up), Rat::same_sym(up)), b))
+}
+
+theorem Rat::root_floor_nonneg(self q: Rat, n: Nat): 0 <= q.root_floor(n) { omega }
+
+// Each root from below sits under every other plus that one's precision.
+theorem Rat::root_floor_below(self q: Rat, m, n: Nat): q.root_floor(m) < q.root_floor(n) + Rat::inv_pow2(n) {
+    let b = q.root_floor(n) + Rat::inv_pow2(n);
+    let b_nn: (0 <= b) = linarith(q.root_floor_nonneg(n), Rat::inv_pow2_pos(n));
+    Rat::lt_of_sq_lt(b_nn, Rat::lt_of_le_of_lt((q.root_floor_spec(m)).left, (q.root_floor_spec(n)).right))
+}
+
+// So the roots at n+1 bits are a regular sequence.
+theorem Rat::root_floor_regular(self q: Rat, m, n: Nat): (q.root_floor(m + 1) - q.root_floor(n + 1)).abs() <= Rat::inv_pow2(m + 1) + Rat::inv_pow2(n + 1) {
+    let x = q.root_floor_below(m + 1, n + 1);
+    let y = q.root_floor_below(n + 1, m + 1);
+    Rat::abs_le(linarith(y, Rat::inv_pow2_pos(n + 1)), linarith(x, Rat::inv_pow2_pos(m + 1)))
+}
+
+// Above a square below `x` there is a rational whose square is still at most
+// `x`: `g + d/(2g + 1 + d)` with `d = x - g²`, whose square exceeds `g²` by
+// `δ·(2g + δ) <= δ·(2g + 1 + d) = d`.
+theorem Rat::root_above({g, x: Rat}, nn: 0 <= g, lt: g * g < x): ∃ lo: Rat, g < lo ∧ lo * lo <= x {
+    let t = (g + g + 1) + (x - g * g);
+    let tpos: (0 < t) = linarith(nn, lt);
+    let i = t.recip();
+    let ti: (t * i ≈ 1) = t.mul_recip(λ z => Rat::lt_irrefl(0, Rat::lt_respects(Rat::same_refl(0), z, tpos)));
+    let e = (x - g * g) * i;
+    let et: (e * t ≈ x - g * g) = ring(ti);
+    let e_nn: (0 <= e) = Rat::mul_nonneg(linarith(lt), Rat::recip_nonneg(Rat::le_of_lt(tpos)));
+    let e_le: (e <= 1) = nlinarith(et, tpos);
+    let e_pos: (0 < e) = nlinarith(et, lt, e_nn, tpos);
+    Exists(g + e, And(linarith(e_pos), nlinarith(et, e_nn, e_le)))
+}
+
+// Below a square above `x` there is one whose square is still at least `x`:
+// Newton's step `(g² + x)/(2g)`, whose square exceeds `x` by `(hi - g)²`.
+theorem Rat::root_below({g, x: Rat}, nn: 0 <= x, pos: 0 < g, lt: x < g * g): ∃ hi: Rat, hi < g ∧ 0 <= hi ∧ x <= hi * hi {
+    let t = g + g;
+    let tpos: (0 < t) = linarith(pos);
+    let i = t.recip();
+    let ti: (t * i ≈ 1) = t.mul_recip(λ z => Rat::lt_irrefl(0, Rat::lt_respects(Rat::same_refl(0), z, tpos)));
+    let hi = (g * g + x) * i;
+    let ht: (hi * t ≈ g * g + x) = ring(ti);
+    let sq: (0 <= (hi - g) * (hi - g)) = Rat::sq_nonneg(hi - g);
+    let hi_nn: (0 <= hi) = Rat::mul_nonneg(nlinarith(nn, pos), Rat::recip_nonneg(Rat::le_of_lt(tpos)));
+    Exists(hi, And(nlinarith(ht, lt, pos, hi_nn), And(hi_nn, nlinarith(ht, sq))))
+}
+
+// `|R - q| <= u·q + e` at a nonnegative `q`, as its two affine sides.
+theorem Rat::sides_of_abs({R, q, u, e: Rat}, nn: 0 <= q, h: (R - q).abs() <= u * q.abs() + e): R <= q + u * q + e ∧ q - u * q - e <= R {
+    let uq: (u * q.abs() ≈ u * q) = Rat::mul_respects(u.same_refl(), q.abs_of_nonneg(nn));
+    And(linarith((R - q).le_abs(), h, uq), linarith((R - q).neg_le_abs(), h, uq))
+}
