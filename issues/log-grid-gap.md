@@ -36,3 +36,7 @@ The argument, once that law exists:
 ## What it assumes from elsewhere
 - **[[elementary-functions-at-reals]]** owns `exp(log q) ≈ q`, and exp at
   real arguments with its monotonicity.
+
+## Log
+
+- 2026-10-31: exp at real arguments is monotone and Lipschitz on bounded sets now (`CReal::exp_le`, `CReal::exp_lt`, `CReal::exp_dev`, lib/std/num/float/elementary_real.hthr), so the second bullet's half is done. Still blocked on `exp(log q) ≈ q`: [[elementary-functions-at-reals]] says why it is not cheap.

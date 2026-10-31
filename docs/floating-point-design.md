@@ -1349,9 +1349,14 @@ independent, so a goal that needs the dependency (`x - x`) widens. Left:
 - `log`, by the atanh series after reducing the argument, and argument
   reduction for `exp`, `sin` and `cos`, whose cost is otherwise linear in
   the argument ([[interval-log-and-reduction]]);
-- the functions at real arguments, and their laws (`exp(a + b) ≈ exp(a) ·
-  exp(b)`, `sin² + cos² ≈ 1`), which want continuity and `CReal` series
-  ([[elementary-functions-at-reals]]).
+- sin and cos at real arguments, and their laws (the addition formulas,
+  `sin² + cos² ≈ 1`; [[elementary-functions-at-reals]]). exp is done:
+  `exp(a + b) ≈ exp(a) · exp(b)` at rationals as a Cauchy product of the two
+  series (`lib/std/num/float/exp_law.hthr`), then `CReal::exp` as `exp_rat`
+  extended by its Lipschitz bound on bounded sets
+  (`lib/std/num/creal_lipschitz.hthr`), with the law, monotonicity and a leaf
+  `CReal::exp_real_box` the tactic reads at `CReal::exp(x)`
+  (`lib/std/num/float/elementary_real.hthr`).
 
 ## 17. Floats at the reals (`float-reals`)
 
