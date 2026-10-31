@@ -20,16 +20,19 @@
 // (`Rat::root_above`, `Rat::root_below`), between which every rational is
 // in the cell.
 //
-// The error model carries over the same way. A rounding interval around a
-// nonnegative real can be cut to lie in range (`Format::rounds_real_cut`),
-// the rational bound `|r - q| <= u·q + η` holds at both of its ends, and an
-// affine bound at both ends holds in between (`CReal::err_between`). So
-// `|r - x| <= u·x + η` in range and `|r - x| <= u·x` in the normal range at
-// every nonnegative real (`Format::real_error_nonneg`,
-// `real_relative_nonneg`), and in particular for the root
-// (`Finite::sqrt_real_error`, `sqrt_real_relative`), the bound that waited
-// on this module. At a real of either sign (`Format::real_error`,
-// `real_relative`) the sign is split inside the `≤`, which needs no decision.
+// The error model carries over the same way, and is proved once over any
+// ordered field with a morphism from `Rat` (§18.2): a rounding interval
+// around `x` cut to lie in range has both ends rounding to `r`, the rational
+// bound `|r - q| <= u·|q| + η` is two affine bounds with nonnegative slopes
+// there, and an affine bound at both ends holds in between
+// (`Rat::err_in_nonneg`, `_nonpos`). At `CReal` the sandwich reads as
+// `|r - x| <= u·x + η` in range and `|r - x| <= u·x` in the normal range
+// at every nonnegative real (`Format::real_error_nonneg`,
+// `real_relative_nonneg`), in particular for the root
+// (`Finite::sqrt_real_error`, `sqrt_real_relative`), and at a real of
+// either sign (`Format::real_error`, `real_relative`) the sign is split
+// inside the `≤`, which needs no decision. A faithful rounding has the
+// directed modes' model (`Format::real_faithful_error`).
 //
 // The root of a real is `CReal::sqrt` (creal.hthr); at a float's real it is
 // `sqrt_rat` of the value, so the float root rounds it
@@ -48,6 +51,7 @@ import algebra;
 import algebra_rel;
 import order;
 import ordered_field;
+import morphism;
 import semiring;
 import rat;
 import creal;
@@ -136,28 +140,223 @@ theorem Finite::sqrt_rounds_real({F: Format}, a: Finite(F), mode: Mode, nan: F.s
 }
 
 // ---------------------------------------------------------------------------
-// The error model at the reals.
+// The error model over any ordered field (docs/floating-point-design.md
+// §18.2).
+//
+// The rational bound `|r - q| <= u·|q| + η` (error.hthr) is two affine
+// bounds in `q` (`Rat::sides_of_abs`), with slopes `1 ± u`, nonnegative when
+// `0 <= u <= 1`. An affine bound with a nonnegative slope at a rational
+// below `x` holds at `x` above it (`Rat::affine_up`), and one at a rational
+// above `x` holds below it (`Rat::affine_down`). A rounding interval around
+// `x` cut to lie in range (`Rat::around_above`, `around_below`) has both
+// ends in range and rounding to `r`, so the two sides hold at `x`: the
+// standard model as the sandwich `(1 - u)·x - η <= r <= (1 + u)·x + η` at a
+// nonnegative `x`, with the slopes swapped at a nonpositive one. Nothing
+// about `x` is decided and nothing beyond the field's laws and the
+// morphism's is read, so the same proof serves `Rat`, `CReal`, and any
+// other ordered field; the `CReal` theorems below are its readings.
 
-// A rounding interval around a real between `b` and `c` can be cut to lie
-// between them, and its ends round to the float.
-theorem Format::rounds_real_cut(self F: Format, mode: Mode, {x: CReal}, r: Float(F), b, c: Rat, hb: CReal::ofRat(b) <= x, hc: x <= CReal::ofRat(c),
-    hr: RoundsToReal(F, mode, x, r)):
-    ∃ lo: Rat, ∃ hi: Rat, b <= lo ∧ hi <= c ∧ CReal::ofRat(lo) <= x ∧ x <= CReal::ofRat(hi) ∧ RoundsTo(F, mode, lo, r) ∧ RoundsTo(F, mode, hi, r)
+// A faithful rounding is within the directed modes' bound (`u` and `η`
+// doubled from nearest's).
+theorem Format::faithful_error_bound(self F: Format, q: Rat, r: Finite(F), range: q.abs() <= (Finite::max_finite(F)).val(), h: F.Faithful(q, Fin(r))):
+    (r.val() - q).abs() <= F.u(TowardNeg) * q.abs() + F.eta(TowardNeg)
 {
-    match hr {
-        Exists(lo0, rest) => match rest {
-            Exists(hi0, w) => match CReal::ofRat_le_max(lo0, b, w.left, hb) {
-                Exists(lo, lw) => match CReal::le_ofRat_min(hi0, c, w.right.left, hc) {
-                    Exists(hi, hw) => {
-                        let lo_hi0: (lo <= hi0) = CReal::le_of_ofRat_le(p := lo, q := hi0, h := CReal::le_trans(lw.right.right, w.right.left));
-                        let lo0_hi: (lo0 <= hi) = CReal::le_of_ofRat_le(p := lo0, q := hi, h := CReal::le_trans(w.left, hw.right.right));
-                        Exists(lo, Exists(hi, And(lw.right.left, And(hw.right.left, And(lw.right.right, And(hw.right.right,
-                            And(w.right.right(lo, lw.left, lo_hi0), w.right.right(hi, lo0_hi, hw.left))))))))
-                    },
-                },
+    match h { Inl(d) => F.error_bound(TowardNeg, q, r, range, d), Inr(u) => F.error_bound(TowardPos, q, r, range, u) }
+}
+
+section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
+        hom: OrderedRingHom<Rat, K>(map, Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+            ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
+
+// `R <= a·lo + b` with `0 <= a` and `lo` below `x`: `R <= a·x + b` at `x`.
+theorem Rat::affine_up(x: K, lo, R, a, b: Rat, a_nn: Rat::Le(0, a), l: map(lo) <= x, at: Rat::Le(R, Rat::add(Rat::mul(a, lo), b))): map(R) <= map(a) * x + map(b) {
+    let A = map(a);
+    let L = Rat::add(Rat::mul(a, lo), b);
+    let e0: (map(L) ≈ A * map(lo) + map(b)) = K.rel_trans(map(L), map(Rat::mul(a, lo)) + map(b), A * map(lo) + map(b),
+        hom.map_add(Rat::mul(a, lo), b), OrderedAddGroup::add_respects(map(Rat::mul(a, lo)), A * map(lo), map(b), map(b), hom.map_mul(a, lo), K.rel_refl(map(b))));
+    let a0: (K.unit <= A) = StrictOrder::le_of_same_l(K.unit, map(0), A, K.rel_sym(map(0), K.unit, hom.map_zero), hom.map_le(0, a, a_nn));
+    let m: (A * map(lo) + map(b) <= A * x + map(b)) = OrderedAddGroup::add_le_mono_r(A * map(lo), A * x, map(b), OrderedField::mul_le_mono_l(map(lo), x, A, l, a0));
+    PseudoOrder::le_trans(map(R), A * map(lo) + map(b), A * x + map(b),
+        StrictOrder::le_of_same_r(map(R), map(L), A * map(lo) + map(b), K.rel_sym(map(L), A * map(lo) + map(b), e0), hom.map_le(R, L, at)), m)
+}
+
+// `a·hi + b <= R` with `0 <= a` and `hi` above `x`: `a·x + b <= R` at `x`.
+theorem Rat::affine_down(x: K, hi, R, a, b: Rat, a_nn: Rat::Le(0, a), h: x <= map(hi), at: Rat::Le(Rat::add(Rat::mul(a, hi), b), R)): map(a) * x + map(b) <= map(R) {
+    let A = map(a);
+    let H = Rat::add(Rat::mul(a, hi), b);
+    let e0: (map(H) ≈ A * map(hi) + map(b)) = K.rel_trans(map(H), map(Rat::mul(a, hi)) + map(b), A * map(hi) + map(b),
+        hom.map_add(Rat::mul(a, hi), b), OrderedAddGroup::add_respects(map(Rat::mul(a, hi)), A * map(hi), map(b), map(b), hom.map_mul(a, hi), K.rel_refl(map(b))));
+    let a0: (K.unit <= A) = StrictOrder::le_of_same_l(K.unit, map(0), A, K.rel_sym(map(0), K.unit, hom.map_zero), hom.map_le(0, a, a_nn));
+    let m: (A * x + map(b) <= A * map(hi) + map(b)) = OrderedAddGroup::add_le_mono_r(A * x, A * map(hi), map(b), OrderedField::mul_le_mono_l(x, map(hi), A, h, a0));
+    PseudoOrder::le_trans(A * x + map(b), A * map(hi) + map(b), map(R), m,
+        StrictOrder::le_of_same_l(A * map(hi) + map(b), map(H), map(R), K.rel_sym(map(H), A * map(hi) + map(b), e0), hom.map_le(H, R, at)))
+}
+
+// The transfer at a nonnegative point: a bound `|R - q| <= u·|q| + e` at
+// every rational of `[b, M]` with `P` (`0 <= b`) holds at every `x` in
+// `[b, M]` that `P` holds around, as its two sides.
+theorem Rat::err_in_nonneg(x: K, P: Rat → Type, R, u, e, b, M: Rat, u_nn: Rat::Le(0, u), u_le: Rat::Le(u, 1), b_nn: Rat::Le(0, b),
+    low: map(b) <= x, range: x <= map(M), h: Rat::Around(hom, x, P),
+    bound: (q: Rat) → Rat::Le(b, q) → Rat::Le(q, M) → P(q) → Rat::Le(Rat::abs(Rat::sub(R, q)), Rat::add(Rat::mul(u, Rat::abs(q)), e))):
+    map(Rat::sub(1, u)) * x + map(Rat::neg(e)) <= map(R) ∧ map(R) <= map(Rat::add(1, u)) * x + map(e)
+{
+    let slopes = Rat::slopes_nonneg(u_nn, u_le);
+    let cut = Rat::around_below(hom, x, λ q => Rat::Le(b, q) ∧ P(q), M, range, Rat::around_above(hom, x, P, b, low, h));
+    match Rat::around_ends(hom, x, λ q => Rat::Le(q, M) ∧ (Rat::Le(b, q) ∧ P(q)), cut) {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => {
+                let pl = w.right.right.left;
+                let ph = w.right.right.right;
+                let at_lo = Rat::sides_of_abs(Rat::le_trans(b_nn, pl.right.left), bound(lo, pl.right.left, pl.left, pl.right.right));
+                let at_hi = Rat::sides_of_abs(Rat::le_trans(b_nn, ph.right.left), bound(hi, ph.right.left, ph.left, ph.right.right));
+                And(Rat::affine_down(hom, x, hi, R, Rat::sub(1, u), Rat::neg(e), slopes.left, w.right.left, at_hi.right),
+                    Rat::affine_up(hom, x, lo, R, Rat::add(1, u), e, slopes.right, w.left, at_lo.left))
             },
         },
     }
+}
+
+// At a nonpositive point the slopes swap: `[-M, c]` with `c <= 0`.
+theorem Rat::err_in_nonpos(x: K, P: Rat → Type, R, u, e, c, M: Rat, u_nn: Rat::Le(0, u), u_le: Rat::Le(u, 1), c_np: Rat::Le(c, 0),
+    high: x <= map(c), range: map(Rat::neg(M)) <= x, h: Rat::Around(hom, x, P),
+    bound: (q: Rat) → Rat::Le(Rat::neg(M), q) → Rat::Le(q, c) → P(q) → Rat::Le(Rat::abs(Rat::sub(R, q)), Rat::add(Rat::mul(u, Rat::abs(q)), e))):
+    map(Rat::add(1, u)) * x + map(Rat::neg(e)) <= map(R) ∧ map(R) <= map(Rat::sub(1, u)) * x + map(e)
+{
+    let slopes = Rat::slopes_nonneg(u_nn, u_le);
+    let cut = Rat::around_below(hom, x, λ q => Rat::Le(Rat::neg(M), q) ∧ P(q), c, high, Rat::around_above(hom, x, P, Rat::neg(M), range, h));
+    match Rat::around_ends(hom, x, λ q => Rat::Le(q, c) ∧ (Rat::Le(Rat::neg(M), q) ∧ P(q)), cut) {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => {
+                let pl = w.right.right.left;
+                let ph = w.right.right.right;
+                let at_lo = Rat::sides_of_abs_nonpos(Rat::le_trans(pl.left, c_np), bound(lo, pl.right.left, pl.left, pl.right.right));
+                let at_hi = Rat::sides_of_abs_nonpos(Rat::le_trans(ph.left, c_np), bound(hi, ph.right.left, ph.left, ph.right.right));
+                And(Rat::affine_down(hom, x, hi, R, Rat::add(1, u), Rat::neg(e), slopes.right, w.right.left, at_hi.right),
+                    Rat::affine_up(hom, x, lo, R, Rat::sub(1, u), e, slopes.left, w.left, at_lo.left))
+            },
+        },
+    }
+}
+
+// A zero intercept drops out.
+theorem Rat::image_add_zero(y: K): y + map(0) ≈ y {
+    K.rel_trans(y + map(0), y + K.unit, y, OrderedAddGroup::add_respects(y, y, map(0), K.unit, K.rel_refl(y), hom.map_zero), K.unit_r(y))
+}
+
+theorem Rat::image_add_neg_zero(y: K): y + map(Rat::neg(0)) ≈ y {
+    K.rel_trans(y + map(Rat::neg(0)), y + map(0), y, OrderedAddGroup::add_respects(y, y, map(Rat::neg(0)), map(0), K.rel_refl(y), hom.map_respects(Rat::neg(0), 0, refl)),
+        Rat::image_add_zero(hom, y))
+}
+
+// The error model with underflow, at a nonnegative point in range.
+theorem Format::error_in_nonneg(self F: Format, mode: Mode, x: K, r: Finite(F), nn: map(0) <= x, range: x <= map((Finite::max_finite(F)).val()),
+    hr: F.RoundsIn(hom, mode, x, Fin(r))):
+    map(Rat::sub(1, F.u(mode))) * x + map(Rat::neg(F.eta(mode))) <= map(r.val()) ∧ map(r.val()) <= map(Rat::add(1, F.u(mode))) * x + map(F.eta(mode))
+{
+    let M = (Finite::max_finite(F)).val();
+    Rat::err_in_nonneg(hom, x, λ q => RoundsTo(F, mode, q, Fin(r)), r.val(), F.u(mode), F.eta(mode), 0, M, Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode), Rat::le_refl(0),
+        nn, range, hr, λ q (q_nn: Rat::Le(0, q)) (q_M: Rat::Le(q, M)) hq => F.error_bound(mode, q, r, Rat::le_respects(Rat::same_sym(q.abs_of_nonneg(q_nn)), M.same_refl(), q_M), hq))
+}
+
+// The error model with underflow, at a nonpositive point in range.
+theorem Format::error_in_nonpos(self F: Format, mode: Mode, x: K, r: Finite(F), np: x <= map(0), range: map(Rat::neg((Finite::max_finite(F)).val())) <= x,
+    hr: F.RoundsIn(hom, mode, x, Fin(r))):
+    map(Rat::add(1, F.u(mode))) * x + map(Rat::neg(F.eta(mode))) <= map(r.val()) ∧ map(r.val()) <= map(Rat::sub(1, F.u(mode))) * x + map(F.eta(mode))
+{
+    let M = (Finite::max_finite(F)).val();
+    Rat::err_in_nonpos(hom, x, λ q => RoundsTo(F, mode, q, Fin(r)), r.val(), F.u(mode), F.eta(mode), 0, M, Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode), Rat::le_refl(0),
+        np, range, hr, λ q (q_M: Rat::Le(Rat::neg(M), q)) (q_np: Rat::Le(q, 0)) hq => F.error_bound(mode, q, r, Rat::abs_le_of_between(q_M, q_np), hq))
+}
+
+// The standard model in the normal range, at a nonnegative point:
+// `(1 - u)·x <= r <= (1 + u)·x`.
+theorem Format::relative_in_nonneg(self F: Format, mode: Mode, x: K, r: Finite(F), normal: map((Finite::min_normal(F)).val()) <= x,
+    range: x <= map((Finite::max_finite(F)).val()), hr: F.RoundsIn(hom, mode, x, Fin(r))):
+    map(Rat::sub(1, F.u(mode))) * x <= map(r.val()) ∧ map(r.val()) <= map(Rat::add(1, F.u(mode))) * x
+{
+    let M = (Finite::max_finite(F)).val();
+    let m = (Finite::min_normal(F)).val();
+    let s = Rat::err_in_nonneg(hom, x, λ q => RoundsTo(F, mode, q, Fin(r)), r.val(), F.u(mode), 0, m, M, Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode),
+        Rat::le_of_lt(Finite::min_normal_pos(F)), normal, range, hr,
+        λ q (q_m: Rat::Le(m, q)) (q_M: Rat::Le(q, M)) hq => {
+            let ea = q.abs_of_nonneg(Rat::le_trans(Rat::le_of_lt(Finite::min_normal_pos(F)), q_m));
+            let rel = F.relative_error(mode, q, r, Rat::le_respects(Rat::same_sym(ea), M.same_refl(), q_M), Rat::le_respects(m.same_refl(), Rat::same_sym(ea), q_m), hq);
+            Rat::le_respects(Rat::same_refl(Rat::abs(Rat::sub(r.val(), q))), Rat::same_sym(Rat::add_zero(Rat::mul(F.u(mode), Rat::abs(q)))), rel)
+        });
+    let lo_x = map(Rat::sub(1, F.u(mode))) * x;
+    let hi_x = map(Rat::add(1, F.u(mode))) * x;
+    And(StrictOrder::le_of_same_l(lo_x, lo_x + map(Rat::neg(0)), map(r.val()), K.rel_sym(lo_x + map(Rat::neg(0)), lo_x, Rat::image_add_neg_zero(hom, lo_x)), s.left),
+        StrictOrder::le_of_same_r(map(r.val()), hi_x + map(0), hi_x, K.rel_sym(hi_x + map(0), hi_x, Rat::image_add_zero(hom, hi_x)), s.right))
+}
+
+// The standard model in the normal range, at a nonpositive point:
+// `(1 + u)·x <= r <= (1 - u)·x`.
+theorem Format::relative_in_nonpos(self F: Format, mode: Mode, x: K, r: Finite(F), normal: x <= map(Rat::neg((Finite::min_normal(F)).val())),
+    range: map(Rat::neg((Finite::max_finite(F)).val())) <= x, hr: F.RoundsIn(hom, mode, x, Fin(r))):
+    map(Rat::add(1, F.u(mode))) * x <= map(r.val()) ∧ map(r.val()) <= map(Rat::sub(1, F.u(mode))) * x
+{
+    let M = (Finite::max_finite(F)).val();
+    let m = (Finite::min_normal(F)).val();
+    let s = Rat::err_in_nonpos(hom, x, λ q => RoundsTo(F, mode, q, Fin(r)), r.val(), F.u(mode), 0, Rat::neg(m), M, Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode),
+        Rat::neg_nonpos_of_pos(Finite::min_normal_pos(F)), normal, range, hr,
+        λ q (q_M: Rat::Le(Rat::neg(M), q)) (q_m: Rat::Le(q, Rat::neg(m))) hq => {
+            let ab = Rat::abs_between_neg(Finite::min_normal_pos(F), q_M, q_m);
+            let rel = F.relative_error(mode, q, r, ab.right, ab.left, hq);
+            Rat::le_respects(Rat::same_refl(Rat::abs(Rat::sub(r.val(), q))), Rat::same_sym(Rat::add_zero(Rat::mul(F.u(mode), Rat::abs(q)))), rel)
+        });
+    let lo_x = map(Rat::add(1, F.u(mode))) * x;
+    let hi_x = map(Rat::sub(1, F.u(mode))) * x;
+    And(StrictOrder::le_of_same_l(lo_x, lo_x + map(Rat::neg(0)), map(r.val()), K.rel_sym(lo_x + map(Rat::neg(0)), lo_x, Rat::image_add_neg_zero(hom, lo_x)), s.left),
+        StrictOrder::le_of_same_r(map(r.val()), hi_x + map(0), hi_x, K.rel_sym(hi_x + map(0), hi_x, Rat::image_add_zero(hom, hi_x)), s.right))
+}
+
+// A faithful rounding is within the directed modes' model, at a
+// nonnegative point and at a nonpositive one.
+theorem Format::faithful_error_in_nonneg(self F: Format, x: K, r: Finite(F), nn: map(0) <= x, range: x <= map((Finite::max_finite(F)).val()),
+    hr: F.FaithfulIn(hom, x, Fin(r))):
+    map(Rat::sub(1, F.u(TowardNeg))) * x + map(Rat::neg(F.eta(TowardNeg))) <= map(r.val()) ∧ map(r.val()) <= map(Rat::add(1, F.u(TowardNeg))) * x + map(F.eta(TowardNeg))
+{
+    let M = (Finite::max_finite(F)).val();
+    Rat::err_in_nonneg(hom, x, λ q => F.Faithful(q, Fin(r)), r.val(), F.u(TowardNeg), F.eta(TowardNeg), 0, M, Rat::le_of_lt(F.u_pos(TowardNeg)), F.u_le_one(TowardNeg), Rat::le_refl(0),
+        nn, range, hr, λ q (q_nn: Rat::Le(0, q)) (q_M: Rat::Le(q, M)) hq => F.faithful_error_bound(q, r, Rat::le_respects(Rat::same_sym(q.abs_of_nonneg(q_nn)), M.same_refl(), q_M), hq))
+}
+
+theorem Format::faithful_error_in_nonpos(self F: Format, x: K, r: Finite(F), np: x <= map(0), range: map(Rat::neg((Finite::max_finite(F)).val())) <= x,
+    hr: F.FaithfulIn(hom, x, Fin(r))):
+    map(Rat::add(1, F.u(TowardNeg))) * x + map(Rat::neg(F.eta(TowardNeg))) <= map(r.val()) ∧ map(r.val()) <= map(Rat::sub(1, F.u(TowardNeg))) * x + map(F.eta(TowardNeg))
+{
+    let M = (Finite::max_finite(F)).val();
+    Rat::err_in_nonpos(hom, x, λ q => F.Faithful(q, Fin(r)), r.val(), F.u(TowardNeg), F.eta(TowardNeg), 0, M, Rat::le_of_lt(F.u_pos(TowardNeg)), F.u_le_one(TowardNeg), Rat::le_refl(0),
+        np, range, hr, λ q (q_M: Rat::Le(Rat::neg(M), q)) (q_np: Rat::Le(q, 0)) hq => F.faithful_error_bound(q, r, Rat::abs_le_of_between(q_M, q_np), hq))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// The error model at the reals: the readings at `CReal::ofRat_hom`, the
+// sandwich restated as `|r - x| <= u·x + η`.
+
+// The sandwich around a nonnegative real, as an absolute value.
+theorem CReal::abs_of_sandwich({x, R: CReal}, u, e: Rat, lower: CReal::ofRat(1 - u) * x + CReal::ofRat(-e) <= R, upper: R <= CReal::ofRat(1 + u) * x + CReal::ofRat(e)):
+    (R - x).abs() <= CReal::ofRat(u) * x + CReal::ofRat(e)
+{
+    let U = CReal::ofRat(u);
+    let a: (CReal::ofRat(1 + u) * x ≈ (1 + U) * x) = CReal::mul_respects(CReal::ofRat_add(1, u), x.same_refl());
+    let b: (CReal::ofRat(1 - u) * x ≈ (1 - U) * x) = CReal::mul_respects(CReal::ofRat_sub(1, u), x.same_refl());
+    let c: (CReal::ofRat(-e) ≈ -CReal::ofRat(e)) = CReal::ofRat_neg(e);
+    CReal::abs_le(linarith(lower, b, c), linarith(upper, a))
+}
+
+// The sandwich around a nonpositive real, as an absolute value.
+theorem CReal::abs_of_sandwich_nonpos({x, R: CReal}, u, e: Rat, lower: CReal::ofRat(1 + u) * x + CReal::ofRat(-e) <= R, upper: R <= CReal::ofRat(1 - u) * x + CReal::ofRat(e)):
+    (R - x).abs() <= CReal::ofRat(u) * -x + CReal::ofRat(e)
+{
+    let U = CReal::ofRat(u);
+    let a: (CReal::ofRat(1 + u) * x ≈ (1 + U) * x) = CReal::mul_respects(CReal::ofRat_add(1, u), x.same_refl());
+    let b: (CReal::ofRat(1 - u) * x ≈ (1 - U) * x) = CReal::mul_respects(CReal::ofRat_sub(1, u), x.same_refl());
+    let c: (CReal::ofRat(-e) ≈ -CReal::ofRat(e)) = CReal::ofRat_neg(e);
+    let un = Ring::mul_neg(U, x);
+    CReal::abs_le(linarith(lower, a, c, un), linarith(upper, b, un))
 }
 
 // The error model with underflow at a nonnegative real in range:
@@ -166,20 +365,8 @@ theorem Format::real_error_nonneg(self F: Format, mode: Mode, x: CReal, r: Finit
     range: x <= CReal::ofRat((Finite::max_finite(F)).val()), hr: RoundsToReal(F, mode, x, Fin(r))):
     (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * x + CReal::ofRat(F.eta(mode))
 {
-    let M = (Finite::max_finite(F)).val();
-    match F.rounds_real_cut(mode, Fin(r), 0, M, nn, range, hr) {
-        Exists(lo, rest) => match rest {
-            Exists(hi, w) => {
-                let lo_nn: (0 <= lo) = w.left;
-                let hi_nn: (0 <= hi) = CReal::le_of_ofRat_le(p := 0, q := hi, h := CReal::le_trans(nn, w.right.right.right.left));
-                let lo_M: (lo <= M) = CReal::le_of_ofRat_le(p := lo, q := M, h := CReal::le_trans(w.right.right.left, range));
-                let at_lo = F.error_bound(mode, lo, r, Rat::le_respects(Rat::same_sym(lo.abs_of_nonneg(lo_nn)), M.same_refl(), lo_M), w.right.right.right.right.left);
-                let at_hi = F.error_bound(mode, hi, r, Rat::le_respects(Rat::same_sym(hi.abs_of_nonneg(hi_nn)), M.same_refl(), w.right.left), w.right.right.right.right.right);
-                CReal::err_between(lo, hi, r.val(), F.u(mode), F.eta(mode), Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode),
-                    w.right.right.left, w.right.right.right.left, (Rat::sides_of_abs(lo_nn, at_lo)).left, (Rat::sides_of_abs(hi_nn, at_hi)).right)
-            },
-        },
-    }
+    let s = F.error_in_nonneg(CReal::ofRat_hom(), mode, x, r, nn, range, hr);
+    CReal::abs_of_sandwich(F.u(mode), F.eta(mode), s.left, s.right)
 }
 
 // The relative error in the normal range: `|r - x| <= u·x`.
@@ -187,30 +374,58 @@ theorem Format::real_relative_nonneg(self F: Format, mode: Mode, x: CReal, r: Fi
     range: x <= CReal::ofRat((Finite::max_finite(F)).val()), hr: RoundsToReal(F, mode, x, Fin(r))):
     (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * x
 {
+    let s = F.relative_in_nonneg(CReal::ofRat_hom(), mode, x, r, normal, range, hr);
+    let U = CReal::ofRat(F.u(mode));
+    let a: (CReal::ofRat(1 + F.u(mode)) * x ≈ (1 + U) * x) = CReal::mul_respects(CReal::ofRat_add(1, F.u(mode)), x.same_refl());
+    let b: (CReal::ofRat(1 - F.u(mode)) * x ≈ (1 - U) * x) = CReal::mul_respects(CReal::ofRat_sub(1, F.u(mode)), x.same_refl());
+    CReal::abs_le(linarith(s.left, b), linarith(s.right, a))
+}
+
+// The error model with underflow at a nonpositive real in range.
+theorem Format::real_error_nonpos(self F: Format, mode: Mode, x: CReal, r: Finite(F), np: x <= 0,
+    range: CReal::ofRat(-(Finite::max_finite(F)).val()) <= x, hr: RoundsToReal(F, mode, x, Fin(r))):
+    (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * -x + CReal::ofRat(F.eta(mode))
+{
+    let s = F.error_in_nonpos(CReal::ofRat_hom(), mode, x, r, np, range, hr);
+    CReal::abs_of_sandwich_nonpos(F.u(mode), F.eta(mode), s.left, s.right)
+}
+
+// The relative error at a nonpositive real in the normal range.
+theorem Format::real_relative_nonpos(self F: Format, mode: Mode, x: CReal, r: Finite(F), normal: x <= CReal::ofRat(-(Finite::min_normal(F)).val()),
+    range: CReal::ofRat(-(Finite::max_finite(F)).val()) <= x, hr: RoundsToReal(F, mode, x, Fin(r))):
+    (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * -x
+{
+    let s = F.relative_in_nonpos(CReal::ofRat_hom(), mode, x, r, normal, range, hr);
+    let U = CReal::ofRat(F.u(mode));
+    let a: (CReal::ofRat(1 + F.u(mode)) * x ≈ (1 + U) * x) = CReal::mul_respects(CReal::ofRat_add(1, F.u(mode)), x.same_refl());
+    let b: (CReal::ofRat(1 - F.u(mode)) * x ≈ (1 - U) * x) = CReal::mul_respects(CReal::ofRat_sub(1, F.u(mode)), x.same_refl());
+    let un = Ring::mul_neg(U, x);
+    CReal::abs_le(linarith(s.left, a, un), linarith(s.right, b, un))
+}
+
+// A faithful rounding of a real in range is within the directed modes'
+// model: `|r - x| <= 2^(1-p)·|x| + 2^qmin` (`u`, `η` at `TowardNeg`).
+theorem Format::real_faithful_error(self F: Format, x: CReal, r: Finite(F), range: x.abs() <= CReal::ofRat((Finite::max_finite(F)).val()),
+    hr: FaithfulReal(F, x, Fin(r))):
+    (r.real() - x).abs() <= CReal::ofRat(F.u(TowardNeg)) * x.abs() + CReal::ofRat(F.eta(TowardNeg))
+{
     let M = (Finite::max_finite(F)).val();
-    let m = (Finite::min_normal(F)).val();
-    let m_nn: (0 <= m) = Rat::le_of_lt(Finite::min_normal_pos(F));
-    match F.rounds_real_cut(mode, Fin(r), m, M, normal, range, hr) {
-        Exists(lo, rest) => match rest {
-            Exists(hi, w) => {
-                let lo_nn: (0 <= lo) = Rat::le_trans(m_nn, w.left);
-                let m_hi: (m <= hi) = CReal::le_of_ofRat_le(p := m, q := hi, h := CReal::le_trans(normal, w.right.right.right.left));
-                let hi_nn: (0 <= hi) = Rat::le_trans(m_nn, m_hi);
-                let lo_M: (lo <= M) = CReal::le_of_ofRat_le(p := lo, q := M, h := CReal::le_trans(w.right.right.left, range));
-                let ea = lo.abs_of_nonneg(lo_nn);
-                let eb = hi.abs_of_nonneg(hi_nn);
-                let at_lo = F.relative_error(mode, lo, r, Rat::le_respects(Rat::same_sym(ea), M.same_refl(), lo_M),
-                    Rat::le_respects(m.same_refl(), Rat::same_sym(ea), w.left), w.right.right.right.right.left);
-                let at_hi = F.relative_error(mode, hi, r, Rat::le_respects(Rat::same_sym(eb), M.same_refl(), w.right.left),
-                    Rat::le_respects(m.same_refl(), Rat::same_sym(eb), m_hi), w.right.right.right.right.right);
-                let at_lo0 = Rat::le_respects((r.val() - lo).abs().same_refl(), Rat::same_sym(Rat::add_zero(F.u(mode) * lo.abs())), at_lo);
-                let at_hi0 = Rat::le_respects((r.val() - hi).abs().same_refl(), Rat::same_sym(Rat::add_zero(F.u(mode) * hi.abs())), at_hi);
-                let b = CReal::err_between(lo, hi, r.val(), F.u(mode), 0, Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode),
-                    w.right.right.left, w.right.right.right.left, (Rat::sides_of_abs(lo_nn, at_lo0)).left, (Rat::sides_of_abs(hi_nn, at_hi0)).right);
-                CReal::le_of_same_r(CReal::same_sym(CReal::add_zero(CReal::ofRat(F.u(mode)) * x)), b)
-            },
+    let U = CReal::ofRat(F.u(TowardNeg));
+    let u_nn: (0 <= U) = CReal::ofRat_le(Rat::le_of_lt(F.u_pos(TowardNeg)));
+    CReal::le_by_sign(x,
+        λ nn => {
+            let s = F.faithful_error_in_nonneg(CReal::ofRat_hom(), x, r, nn, CReal::le_trans(x.le_abs(), range), hr);
+            let b = CReal::abs_of_sandwich(F.u(TowardNeg), F.eta(TowardNeg), s.left, s.right);
+            let m: (U * x <= U * x.abs()) = CReal::mul_le_mono_l(x.le_abs(), u_nn);
+            linarith(b, m)
         },
-    }
+        λ np => {
+            let low: (CReal::ofRat(-M) <= x) = CReal::le_of_same_l(CReal::ofRat_neg(M), linarith(x.neg_le_abs(), range));
+            let s = F.faithful_error_in_nonpos(CReal::ofRat_hom(), x, r, np, low, hr);
+            let b = CReal::abs_of_sandwich_nonpos(F.u(TowardNeg), F.eta(TowardNeg), s.left, s.right);
+            let m: (U * -x <= U * x.abs()) = CReal::mul_le_mono_l(x.neg_le_abs(), u_nn);
+            linarith(b, m)
+        })
 }
 
 // The root's error with underflow, `|r - √x| <= u·√x + η`, while `x <= M²`
@@ -240,31 +455,7 @@ theorem Finite::sqrt_real_relative({F: Format}, a: Finite(F), mode: Mode, nan: F
 // ---------------------------------------------------------------------------
 // The error model at a real of either sign. Whether `x >= 0` cannot be
 // decided, but each conclusion is a `≤`, a negation at `CReal`, so
-// `CReal::le_by_sign` splits on it: the nonpositive side cuts the rounding
-// interval to `[-M, 0]` (or `[-M, -m]`) and reads the rational bound at its
-// ends through `CReal::err_between_nonpos`.
-
-// The error model with underflow at a nonpositive real in range.
-theorem Format::real_error_nonpos(self F: Format, mode: Mode, x: CReal, r: Finite(F), np: x <= 0,
-    range: CReal::ofRat(-(Finite::max_finite(F)).val()) <= x, hr: RoundsToReal(F, mode, x, Fin(r))):
-    (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * -x + CReal::ofRat(F.eta(mode))
-{
-    let M = (Finite::max_finite(F)).val();
-    match F.rounds_real_cut(mode, Fin(r), -M, 0, range, np, hr) {
-        Exists(lo, rest) => match rest {
-            Exists(hi, w) => {
-                let hi_np: (hi <= 0) = w.right.left;
-                let lo_np: (lo <= 0) = CReal::le_of_ofRat_le(p := lo, q := 0, h := CReal::le_trans(w.right.right.left, np));
-                let hi_M: (-M <= hi) = CReal::le_of_ofRat_le(p := -M, q := hi, h := CReal::le_trans(range, w.right.right.right.left));
-                let lo_M: (-M <= lo) = w.left;
-                let at_lo = F.error_bound(mode, lo, r, Rat::le_respects(Rat::same_sym(lo.abs_of_nonpos(lo_np)), M.same_refl(), linarith(lo_M)), w.right.right.right.right.left);
-                let at_hi = F.error_bound(mode, hi, r, Rat::le_respects(Rat::same_sym(hi.abs_of_nonpos(hi_np)), M.same_refl(), linarith(hi_M)), w.right.right.right.right.right);
-                CReal::err_between_nonpos(lo, hi, r.val(), F.u(mode), F.eta(mode), Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode),
-                    w.right.right.left, w.right.right.right.left, (Rat::sides_of_abs_nonpos(lo_np, at_lo)).left, (Rat::sides_of_abs_nonpos(hi_np, at_hi)).right)
-            },
-        },
-    }
-}
+// `CReal::le_by_sign` splits on it inside.
 
 // The model with underflow at every real in range, `|r - x| <= u·|x| + η`:
 // the conclusion is a `≤`, so the sign of `x` is split inside it.
@@ -287,39 +478,6 @@ theorem Format::real_error(self F: Format, mode: Mode, x: CReal, r: Finite(F), r
             let m: (U * -x <= U * x.abs()) = CReal::mul_le_mono_l(x.neg_le_abs(), u_nn);
             linarith(b, m)
         })
-}
-
-// The relative error at a nonpositive real in the normal range.
-theorem Format::real_relative_nonpos(self F: Format, mode: Mode, x: CReal, r: Finite(F), normal: x <= CReal::ofRat(-(Finite::min_normal(F)).val()),
-    range: CReal::ofRat(-(Finite::max_finite(F)).val()) <= x, hr: RoundsToReal(F, mode, x, Fin(r))):
-    (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * -x
-{
-    let M = (Finite::max_finite(F)).val();
-    let m = (Finite::min_normal(F)).val();
-    let m_pos: (0 < m) = Finite::min_normal_pos(F);
-    match F.rounds_real_cut(mode, Fin(r), -M, -m, range, normal, hr) {
-        Exists(lo, rest) => match rest {
-            Exists(hi, w) => {
-                let hi_m: (hi <= -m) = w.right.left;
-                let lo_m: (lo <= -m) = CReal::le_of_ofRat_le(p := lo, q := -m, h := CReal::le_trans(w.right.right.left, normal));
-                let hi_M: (-M <= hi) = CReal::le_of_ofRat_le(p := -M, q := hi, h := CReal::le_trans(range, w.right.right.right.left));
-                let lo_M: (-M <= lo) = w.left;
-                let lo_np: (lo <= 0) = linarith(lo_m, m_pos);
-                let hi_np: (hi <= 0) = linarith(hi_m, m_pos);
-                let ea = lo.abs_of_nonpos(lo_np);
-                let eb = hi.abs_of_nonpos(hi_np);
-                let at_lo = F.relative_error(mode, lo, r, Rat::le_respects(Rat::same_sym(ea), M.same_refl(), linarith(lo_M)),
-                    Rat::le_respects(m.same_refl(), Rat::same_sym(ea), linarith(lo_m)), w.right.right.right.right.left);
-                let at_hi = F.relative_error(mode, hi, r, Rat::le_respects(Rat::same_sym(eb), M.same_refl(), linarith(hi_M)),
-                    Rat::le_respects(m.same_refl(), Rat::same_sym(eb), linarith(hi_m)), w.right.right.right.right.right);
-                let at_lo0 = Rat::le_respects((r.val() - lo).abs().same_refl(), Rat::same_sym(Rat::add_zero(F.u(mode) * lo.abs())), at_lo);
-                let at_hi0 = Rat::le_respects((r.val() - hi).abs().same_refl(), Rat::same_sym(Rat::add_zero(F.u(mode) * hi.abs())), at_hi);
-                let b = CReal::err_between_nonpos(lo, hi, r.val(), F.u(mode), 0, Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode),
-                    w.right.right.left, w.right.right.right.left, (Rat::sides_of_abs_nonpos(lo_np, at_lo0)).left, (Rat::sides_of_abs_nonpos(hi_np, at_hi0)).right);
-                CReal::le_of_same_r(CReal::same_sym(CReal::add_zero(CReal::ofRat(F.u(mode)) * -x)), b)
-            },
-        },
-    }
 }
 
 // The standard model at every real in the normal range, `|r - x| <= u·|x|`.

@@ -120,3 +120,22 @@ theorem log_one_any(tries: Nat, mode: Mode): Float::log(Float::Fin(one32()), tri
 theorem log_one_rounds(mode: Mode): RoundsToReal(binary32(), mode, CReal::log_rat(one32().val(), omega), Float::Fin(Finite::zero(binary32(), False))) {
     Float::log_correct(one32(), omega, 0, mode, trivial, Float::Fin(Finite::zero(binary32(), False)), log_one_any(0, mode))
 }
+
+// Faithful rounding at a transcendental (round_real.hthr, §18.3): exp(1)
+// rounded down at the top of a box at or below the bottom rounded up. Here
+// it is the down neighbour, 0x402DF854 (binary32) and 0x4005BF0A8B145769
+// (binary64), what `FaithfulReal` says it is.
+theorem exp_one_32_faithful(): binary32().faithful_real(CReal::exp_box(one32().val()), 4) = Some(Fin(Finite(False, 11401300, 127, trivial))) { refl }
+theorem exp_one_64_faithful(): binary64().faithful_real(CReal::exp_box(one64().val()), 4) = Some(Fin(Finite(False, 6121026514868073, 1023, trivial))) { refl }
+
+theorem e_faithful(): FaithfulReal(binary32(), CReal::exp_rat(one32().val()), Fin(Finite(False, 11401300, 127, trivial))) {
+    binary32().faithful_real_correct(CReal::exp_box(one32().val()), 4, Fin(Finite(False, 11401300, 127, trivial)), exp_one_32_faithful())
+}
+
+// Over exp's own enclosures it needs no `Option` and no Padé gap (that
+// search's evaluation is past the kernel's fuel, as `Float::exp_total`'s is).
+theorem e_faithful_total(): FaithfulReal(binary32(), CReal::exp_rat(one32().val()), binary32().faithful_real_total(CReal::exp_rat(one32().val()).enclosed(),
+    CReal::exp_rat(one32().val()).enclosed_narrows(16, omega, binary32().prec() + 16, binary32().prec() + 16)))
+{
+    binary32().faithful_real_total_correct(CReal::exp_rat(one32().val()).enclosed(), CReal::exp_rat(one32().val()).enclosed_narrows(16, omega, binary32().prec() + 16, binary32().prec() + 16))
+}

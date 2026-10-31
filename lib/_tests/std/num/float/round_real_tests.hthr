@@ -49,3 +49,42 @@ theorem neg_third_cell(): binary32().Cell(neg_third(), -third_h() - 1, 152) {
 fn neg_third_off() → binary32().OffGrid(neg_third()) { Exists(-third_h() - 1, Exists(152, neg_third_cell())) }
 
 theorem neg_third_down(): binary32().round_real_apart(TowardNeg, neg_third().enclosed(), neg_third().enclosed_narrows(16, omega, 40, 40), neg_third_off()) = Fin(Finite(True, 11184811, 124, trivial)) { refl }
+
+// ---------------------------------------------------------------------------
+// Faithful rounding ends where correct rounding cannot (§18.3).
+
+fn one_real() → CReal { CReal::ofRat(1) }
+fn one32() → Finite(binary32()) { Finite(False, 8388608, 126, trivial) }
+fn one32_up() → Finite(binary32()) { Finite(False, 8388609, 126, trivial) }
+
+// At 1, a float, the boxes `[1 - ε, 1 + ε]` round down to two different
+// floats at every width, so rounding down never ends; the faithful test
+// passes on the first box.
+theorem one_down_open(): binary32().round_real(TowardNeg, one_real().enclosed(), 4) = None { refl }
+theorem one_faithful(): binary32().faithful_real(one_real().enclosed(), 1) = Some(Fin(one32())) { refl }
+
+// What it means, and the total version, whose tries come from the
+// narrowing at the least gap.
+theorem one_faithful_holds(): FaithfulReal(binary32(), one_real(), Fin(one32())) {
+    binary32().faithful_real_correct(one_real().enclosed(), 1, Fin(one32()), one_faithful())
+}
+
+theorem one_faithful_total(): binary32().faithful_real_total(one_real().enclosed(), one_real().enclosed_narrows(16, omega, binary32().prec() + 16, binary32().prec() + 16)) = Fin(one32()) { refl }
+
+// The midpoint `1 + 2^-24` between 1 and its successor: nearest never
+// decides between them; the faithful answer is one of the two.
+fn mid_real() → CReal { CReal::ofRat(Rat(16777217, 16777216)) }
+theorem mid_near_open(): binary32().round_real(NearestEven, mid_real().enclosed(), 4) = None { refl }
+theorem mid_faithful(): binary32().faithful_real(mid_real().enclosed(), 1) = Some(Fin(one32())) { refl }
+
+// At a rational the relation is read at the rational: 1's successor is not
+// a faithful rounding of 1.
+theorem one_up_not_faithful(): ¬FaithfulReal(binary32(), one_real(), Fin(one32_up())) {
+    let down: RoundsTo(binary32(), TowardNeg, 1, Fin(one32())) = binary32().round_rat_correct(TowardNeg, 1);
+    let up: RoundsTo(binary32(), TowardPos, 1, Fin(one32())) = binary32().round_rat_correct(TowardPos, 1);
+    let gap: (one32().val() < one32_up().val()) = trivial;
+    λ h => match Rat::around_rat<CReal>(CReal::ofRat_hom(), 1, λ q => binary32().Faithful(q, Fin(one32_up())), h) {
+        Inl(d) => { let e: (one32_up().val() ≈ one32().val()) = binary32().rounds_unique(TowardNeg, 1, Fin(one32_up()), Fin(one32()), d, down); Rat::not_le_of_lt(gap, Rat::le_of_same(e)) },
+        Inr(u) => { let e: (one32_up().val() ≈ one32().val()) = binary32().rounds_unique(TowardPos, 1, Fin(one32_up()), Fin(one32()), u, up); Rat::not_le_of_lt(gap, Rat::le_of_same(e)) },
+    }
+}
