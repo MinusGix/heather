@@ -3968,10 +3968,34 @@ impl Elaborator {
         // recursively matches every remaining instance again at every dot.
         if self.emits_at_forms(cx) {
             crate::stats::count(crate::stats::Counter::ProjectionStructural);
+            // The walk descends a spine that is a `Σ` outright without
+            // substituting: `pending` are the earlier fields' projections,
+            // which the binders `cur` is under stand for, and they are
+            // substituted once, into the field's type alone. Substituting
+            // each step into the whole tail cost a dictionary read the size
+            // of the dictionary's type times the field's depth, which a
+            // generic lemma pays at every class law it names
+            // (issues/generic-lemma-elaboration-cost.md). A tail that is not
+            // a `Σ` outright is substituted then and exposed by `whnf`, as
+            // every step was before.
+            let at = |ty: &Type, pending: &[Rc<Term>]| {
+                crate::stats::timed(crate::stats::Timer::ProjectionSubst, || {
+                    let sub = pending.iter().fold(LocalSubst::id(&cx.gamma), |s, p| s.extended(Rc::clone(p)));
+                    ty.apply_local(&sub)
+                })
+            };
             let mut cur = record_ty.clone();
+            let mut pending: Vec<Rc<Term>> = Vec::new();
             let mut pair = value;
             for step in 0..=idx + 1 {
-                let Type::Sigma { fst_level, fst, snd, .. } = self.whnf(cx, &cur, span)? else {
+                if !matches!(cur, Type::Sigma { .. }) {
+                    if !pending.is_empty() {
+                        cur = at(&cur, &pending);
+                        pending.clear();
+                    }
+                    cur = self.whnf(cx, &cur, span)?;
+                }
+                let Type::Sigma { fst_level, fst, snd, .. } = cur else {
                     return err(
                         format!("internal: `{}` has no field spine entry {step} (malformed record encoding)", ind.name),
                         span,
@@ -3979,10 +4003,11 @@ impl Elaborator {
                 };
                 let proj = Rc::new(Term::FstAt { pair: Rc::clone(&pair) });
                 if step == idx + 1 {
-                    return Ok(((*proj).clone(), (*fst).clone(), fst_level));
+                    let ty = if pending.is_empty() { (*fst).clone() } else { at(&fst, &pending) };
+                    return Ok(((*proj).clone(), ty, fst_level));
                 }
-                cur = crate::stats::timed(crate::stats::Timer::ProjectionSubst,
-                    || snd.apply_local(&LocalSubst::id(&cx.gamma).extended(proj)));
+                pending.push(proj);
+                cur = (*snd).clone();
                 pair = Rc::new(Term::SndAt { pair });
             }
             unreachable!("the loop returns at step idx + 1");

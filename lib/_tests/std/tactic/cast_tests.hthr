@@ -148,4 +148,14 @@ theorem local_hom_composite_strict(a, c: Dyadic, x, y: K, hx: map(a.rat()) < x, 
 
 theorem local_hom_order(p, q: Rat, h: Rat::Le(p, q)): map(p) <= map(q) { by mono_with([h]) }
 
+// `ring` and `linarith` read the same images as the operations of their
+// sources, at the class carrier (issue cast-reading-at-class-carrier).
+theorem local_ring_add(p, q: Rat): map(Rat::add(p, q)) ≈ map(q) + map(p) { ring }
+theorem local_ring_mul(p, q: Rat, x: K): map(Rat::mul(p, Rat::add(q, 1))) * x ≈ map(p) * map(q) * x + map(p) * x { ring }
+theorem local_ring_neg(p: Rat): map(Rat::neg(p)) + map(p) ≈ map(0) { ring }
+theorem local_ring_sub(p, q: Rat): map(Rat::sub(p, q)) + map(q) ≈ map(p) { ring }
+theorem local_ring_composite(a, c: Dyadic): map(Dyadic::add(a, c).rat()) ≈ map(a.rat()) + map(c.rat()) { ring }
+theorem local_linarith_add(p, q: Rat, x: K, h: map(p) + map(q) <= x): map(Rat::add(p, q)) <= x { linarith }
+theorem local_linarith_one(p: Rat, x: K, h: map(p) < x): map(Rat::add(p, 1)) < x + K.multiplicative.unit { linarith }
+
 }

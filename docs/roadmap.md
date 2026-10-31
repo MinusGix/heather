@@ -27,6 +27,12 @@ reviewed the first draft on 2026-10-20; changes since are in the log.
   [--milestone M,N]` retags without touching `updated:`. The web viewer's
   **Areas** tab shows the same order, with each area's direction and
   milestones.
+- `scripts/plan-digest` renders this file's areas and milestones with each
+  milestone's progress and last activity, every open issue as one line, and
+  the last month of master, into `/mnt/project-files/plan/` (the project's
+  shared folder) for readers without a checkout. It reads a commit
+  (`--ref`, default `origin/master`), not the working tree, and is
+  idempotent; `--fetch` refreshes first.
 - `scripts/issue check` reads the two tables below. An unknown area or
   milestone in an issue is an error, and so is a submilestone whose parent
   is missing or belongs to another area; open issues with no area are one
@@ -127,7 +133,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `float-arith` | mathematics | done | Add, sub, mul, fma, div, sqrt and format conversion, each with value, signed-zero and special-value theorems. | math-float |
 | `float-eft` | mathematics | open | Sterbenz, Fast2Sum, TwoSum, TwoProduct, Veltkamp splitting and Kahan summation are proved. | math-float |
 | `float-bits` | mathematics | open | Bit-level encode/decode with the round trip, the OCP storage formats, NaN payload policies and exception flags. Not needed for `math-float` to be done. | math-float |
-| `float-reals` | mathematics | open | Rounding is stated at `CReal` through a transfer lemma to any ordered field: faithful rounding computes, and correct rounding computes from apartness from the breakpoints. Not needed for `math-float` to be done. | math-float |
+| `float-reals` | mathematics | done | Rounding is stated at `CReal` through a transfer lemma to any ordered field: faithful rounding computes, and correct rounding computes from apartness from the breakpoints. Not needed for `math-float` to be done. | math-float |
 | `float-transcendental` | mathematics | open | Correctly rounded `exp` and `log`, from a `CReal` series plus a Padé apartness proof. Not needed for `math-float` to be done. | math-float |
 | `math-metatheory` | mathematics | open | A result from heather-coq (for example a small logical-relation proof) is restated and proved in Heather. |  |
 | `math-specific-choice` | mathematics | open | A library convention, with inference behind it, for asking for the specific property instead of choice, with per-type instances that discharge it without an axiom. |  |
@@ -638,3 +644,4 @@ separate machines do not slow each other's tests.
   (oracles, `Tac` on `ITree`, generator gaps) stays open in its issues
   without a milestone.
 - 2026-10-31: Minus re-aimed the compiler work (`docs/compiler-milestones-proposal.md`, §8 records the decisions). `hih-tools` closes at nine tools as a regression corpus. `hih-native-heather` is added (`runtime fn` setups: `nh-front`, `nh-procedures`, `nh-effects`, `nh-heap`, `nh-ownership`), and `hih-first-alloc` moves into `nh-heap`. `hih-self` gets `self-lexer` and `self-compiler`. `language` gains `lang-sequencing` (binding over any carrier) and `lang-proof-modularity` (opt-in interface definitions). Ownership is the second setup by Minus's lean, to be confirmed when its round starts.
+- 2026-10-31: `float-reals` marked done: `RoundsTo` and the error model's transfer stated once over any ordered field with a morphism from `Rat` (`RoundsToReal` its `CReal` reading), faithful rounding of an enclosed real that always ends, correct rounding from the grid gap (`docs/floating-point-design.md` §17–§18, issues/float-reals-ordered-field.md).

@@ -7,7 +7,7 @@
 // crates/elab/tests/lib_std_ring.rs; the refusals stay there, except the
 // ones at a `≈` carrier, which are below.
 import logic; import nat; import int; import list; import omega; import ring;
-import relation_props; import semiring; import rat; import creal;
+import relation_props; import algebra_rel; import semiring; import ordered_field; import rat; import creal;
 
 // Identities at `Int`, over neutral atoms and closed numerals.
 theorem squares(a, b: Int): (a + b) * (a - b) = a * a - b * b { ring }
@@ -125,3 +125,23 @@ theorem creal_no_combination(x, y: CReal, h: x ≈ y): x * x ≈ y { ring(h) }
 // (issues/checking-tactic-in-inference-position-diagnostic.md).
 // expect-error: `ring` needs an expected type
 theorem let_ring_unannotated(a: Int): a + a = a * 2 { let k = ring; k }
+
+// At a class carrier (issue cast-reading-at-class-carrier): the ring is the
+// section's own operations, its zero and one are `K.unit` and
+// `K.multiplicative.unit`, and its integers read through the derived map
+// out of `Int` (`semiring::Ring::int_cast`, docs/casting-design.md §16).
+section<K: OrderedField(≈, <, <=, +, *)> {
+theorem class_distrib(x, y: K): x * (y + K.multiplicative.unit) ≈ x * y + x { ring }
+theorem class_square(x, y: K): (x + y) * (x + y) ≈ x * x + (x * y + x * y) + y * y { ring }
+theorem class_neg(x: K): x + K.inv(x) ≈ K.unit { ring }
+theorem class_neg_mul(x, y: K): K.inv(x * y) ≈ K.inv(x) * y { ring }
+theorem class_hyp(x, y, z: K, h: x ≈ y + z): x * x ≈ (y + z) * x { ring(h) }
+theorem class_hyp_product(x, y: K, h: x * y ≈ K.multiplicative.unit): x * (y * x) ≈ x { ring(h) }
+// expect-error: differ by
+theorem class_not_identity(x, y: K): (x + y) * (x + y) ≈ x * x + y * y { ring }
+}
+
+// A commutative ring is enough for `ring`.
+section<R: CommRing(≈, +, *)> {
+theorem comm_ring_class(x, y: R): x * y + y * x ≈ y * (x + x) { ring }
+}

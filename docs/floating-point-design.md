@@ -1398,12 +1398,13 @@ the cases are on the float's sticky bit, a computed `Bool`.
 
 **The error model at the reals.** A rounding interval around a real `x`
 with `b ≤ x ≤ c` can be cut to lie in `[b, c]` without deciding anything
-about `x` (`Format::rounds_real_cut`, from `CReal::ofRat_le_max` and
-`le_ofRat_min`: of two rationals below `x` the larger is). At a nonnegative
+about `x`: of two rationals below `x` the larger is. At a nonnegative
 `q` the bound `|r - q| ≤ u·q + e` is two affine inequalities
 (`Rat::sides_of_abs`), each monotone in `q` when `0 ≤ u ≤ 1`, so holding
-at both ends of the interval it holds at `x` (`CReal::err_between`, the
-two sides joined by `CReal::abs_le`). This gives, at every nonnegative real:
+at both ends of the interval it holds at `x`. Since §18.2 this transfer is
+proved once over any ordered field (`Rat::err_in_nonneg`), and the theorems
+here are its readings at `CReal`, the sandwich restated with `CReal::abs_le`
+(`CReal::abs_of_sandwich`). This gives, at every nonnegative real:
 
 - `Format::real_error_nonneg`: `|r - x| ≤ u·x + η` in range (`x ≤ M`);
 - `Format::real_relative_nonneg`: `|r - x| ≤ u·x` in the normal range.
@@ -1422,7 +1423,7 @@ nonpositive side needs no conjugate mode: the rounding interval is cut to
 `[-M, 0]` (or `[-M, -m]`), the rational bound at its ends is
 `|r - q| ≤ u·(-q) + η` (`Rat::sides_of_abs_nonpos`), and the two affine
 sides, now increasing in `q` with slopes `1 - u` and `1 + u`, hold in between
-(`CReal::err_between_nonpos`). The pieces are joined by `|x| ≥ x` and
+(`Rat::err_in_nonpos`, §18.2). The pieces are joined by `|x| ≥ x` and
 `|x| ≥ -x` (`CReal::le_abs`, `neg_le_abs`):
 
 - `Format::real_error`: `|r - x| ≤ u·|x| + η` while `|x| ≤ M`;
@@ -1460,8 +1461,141 @@ gives `is_root_sq`, so `√x·√x ≈ |x|` (`sqrt_sq`), `sqrt_respects`, and
 customer is error analysis of compound expressions; `√(3² + 4²) ≈ 5` is a
 probe.
 
-**Left in `float-reals`.** The transfer to any ordered field, faithful
-rounding and `Placed` of §6
-([float-reals-ordered-field](../issues/float-reals-ordered-field.md)); the
-Padé gap that would make Ziv's search end unconditionally for exp and
-log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md).
+**Left in `float-reals`.** Nothing since §18. The gap that would make
+Ziv's search end unconditionally for log is
+[log-grid-gap](../issues/log-grid-gap.md), under `float-transcendental`
+(exp's landed in [exp-log-grid-gap](../issues/exp-log-grid-gap.md)).
+
+## 18. Floats over any ordered field (`float-reals`)
+
+Modules: `lib/std/num/float/round_real.hthr` (the relation, faithful
+rounding) and `float_real.hthr` (the error model). Probes are in
+`lib/_tests/std/num/float/round_real_tests.hthr`, `float_real_tests.hthr`
+and `transcendental_tests.hthr`. Issue:
+[float-reals-ordered-field](../issues/float-reals-ordered-field.md).
+
+Every generic statement lives in a section over `K: OrderedField(≈, <, ≤,
++, *)` and a morphism `hom: OrderedRingHom<Rat, K>(map, …)`, the shape the
+interval enclosures use (§16, `docs/casting-design.md` §5.6). `Rat` reads
+them at `Rat::id_hom`, `CReal` at `CReal::ofRat_hom`.
+
+### 18.1 The relation
+
+A point `x` of `K` is read through the rationals around it. `P` holds
+around `x` (`Rat::Around(hom, x, P)`) when some rational interval `[lo, hi]`
+with `map(lo) ≤ x ≤ map(hi)` has `P` at each of its rationals. A correct
+rounding is `RoundsTo` around `x`:
+
+```heather
+fn Format::RoundsIn(self F: Format, mode: Mode, x: K, r: Float(F)) → Type {
+    Rat::Around(hom, x, λ q => RoundsTo(F, mode, q, r))
+}
+fn RoundsToReal(F, mode, x: CReal, r) → Type { F.RoundsIn(CReal::ofRat_hom(), mode, x, r) }
+```
+
+`RoundsToReal` is now this reading, not a second definition. At an image
+the relation is `RoundsTo` both ways (`rounds_in_of_rat`, by the point
+interval, and `rounds_in_rat`, the morphism reflecting `≤`), it respects
+`≈` (`rounds_in_respects`), and two roundings of one point agree
+(`rounds_in_unique`: two intervals around `x` share a rational,
+`Rat::around_meet`). The interval can be cut at a rational below `x` and
+one above it without deciding anything about `x` (`Rat::around_above`,
+`around_below`: of two rationals below `x` the larger is), and both its ends
+satisfy `P` (`Rat::around_ends`).
+
+**Why an interval, not §5.1's pointwise clauses.** §5.1 sketched
+`RoundsTo<K>` with its clauses read at `K` (`r.val ≤ x` and every finite
+`g ≤ x` below `r`, …). The two agree at a rational, and classically
+everywhere, but they differ in what a constructive proof can supply: the
+pointwise clauses at a real are negations about `x` that nothing computes,
+while the interval is what Ziv's search actually produces and what every
+transfer reads. The pointwise form also needs the clauses restated over
+`K` (the nearest modes compare distances, which needs an absolute value or
+a maximum at `K`); the interval form needs none of it, since every clause
+stays at `Rat`. Pointwise clauses from an interval are a lemma per mode if
+a customer appears.
+
+**`Placed` is not built** (§6). It was to be the hypothesis of
+`RoundsTo::exists`, which `F.OffGrid` (§12, `float-round-real-termination`)
+already serves for the reals at hand: a correct rounding computes from an
+enclosure clear of the grid, and faithful rounding (§18.3) needs nothing.
+A classical caller who wants `∃ r, RoundsIn(x, r)` at every `x` is the
+customer that would bring it back; none exists.
+
+### 18.2 The error model, once
+
+The rational bound `|r - q| ≤ u·|q| + η` (§13) is, at a nonnegative `q`,
+the two affine bounds `r ≤ (1 + u)·q + η` and `(1 - u)·q - η ≤ r`
+(`Rat::sides_of_abs`), with nonnegative slopes when `0 ≤ u ≤ 1`
+(`Rat::slopes_nonneg`). An affine bound with a nonnegative slope at a
+rational below `x` holds at `x` (`Rat::affine_up`: the morphism keeps `≤`,
+`+` and `*`, and `OrderedField::mul_le_mono_l` moves the slope's product),
+and one at a rational above `x` holds below it (`Rat::affine_down`). Cut
+the interval around `x` to `[b, M]` and read the two sides at its ends:
+
+```heather
+theorem Rat::err_in_nonneg(x: K, P, R, u, e, b, M: Rat, …, h: Rat::Around(hom, x, P),
+    bound: (q: Rat) → b ≤ q → q ≤ M → P(q) → |R - q| ≤ u·|q| + e):
+    map(1 - u)·x + map(-e) ≤ map(R) ∧ map(R) ≤ map(1 + u)·x + map(e)
+```
+
+and `Rat::err_in_nonpos` with the slopes swapped on `[-M, c]`, `c ≤ 0`.
+The conclusions are sandwiches, because `K` has no absolute value; the
+standard model reads as written in the literature once one is there. The
+instances:
+
+- `Format::error_in_nonneg`/`_nonpos`: the model with underflow in range;
+- `Format::relative_in_nonneg`/`_nonpos`: `(1 - u)·x ≤ r ≤ (1 + u)·x` in the
+  normal range (the zero intercept dropped by `Rat::image_add_zero`);
+- `Format::faithful_error_in_nonneg`/`_nonpos`: a faithful rounding is
+  within the directed modes' `u` and `η`
+  (`Format::faithful_error_bound` at `Rat`, by cases on the neighbour).
+
+The `CReal` theorems of §17 are readings: the sandwich at
+`CReal::ofRat_hom`, restated as `|r - x| ≤ u·x + η` by `linarith` at
+`CReal` (`CReal::abs_of_sandwich`, `_nonpos`), with the sign split of §17.1
+on top. `CReal::err_between`, `err_between_nonpos`, `ofRat_le_max`,
+`le_ofRat_min` and `Format::rounds_real_cut` are gone. `Format::real_faithful_error`
+is new: `|r - x| ≤ u·|x| + η` at the directed `u`, `η` for any faithful
+rounding of a real in range. At `Rat` the sandwich is a probe (-1/3 in
+binary16 at `Rat::id_hom`).
+
+**The Rat proofs stay the base.** The rational error model (§13) is proved
+by grid arithmetic on half-unit counts, which only a carrier with a grid
+has; it is not restated over `K`. What was duplicated was the transfer
+(cut, both ends, monotone in between), and that is now proved once.
+
+### 18.3 Faithful rounding that always ends
+
+A faithful rounding of `q` rounds it down or up (`Format::Faithful`); at a
+point of `K` it is that around the point (`Format::FaithfulIn`,
+`FaithfulReal` at `CReal`). In the set reading of §5.5 it is `○ᶠx`.
+
+§6 proposed rounding an approximation within half the least gap to
+nearest. The shipped test is cheaper and reads any enclosure: round the top
+`hi` of a box down to `r` and the bottom `lo` up to `s`, and keep `r` when
+`r ≤ s` (`Format::faithful_box`, `Float::le_bool` deciding the order). Then
+`r` is faithful at every rational `q` of the box (`faithful_between`): it
+lies between `q`'s rounding down (`rounds_mono` at `q ≤ hi`) and its
+rounding up (`s ≤` that, at `lo ≤ q`, and `Float::le_trans`), and nothing
+lies strictly between those two (`Format::faithful_of_squeeze`, by
+`le_total` at `Rat` on the float's value, the infinities by their clauses).
+The test passes once the box is narrower than the least gap `2^qmin`
+(`Format::down_le_up`): if `s < r` as finite floats then `lo ≤ s`, `r ≤ hi`,
+and two floats are a whole number of gaps apart (`Finite::gap`, by
+`Finite::H_even`), so `hi - lo ≥ 2^qmin`; a saturated end is the extreme
+float, on the right side by its own clause. So the search
+(`faithful_enclosed`, `round_real`'s schedule as `faithful_real`) ends
+within `faithful_tries`, the narrowing's witness at `gap_bits` (`2^-gap_bits
+≤ 2^qmin`, `gap_bits_small`), and `Format::faithful_real_total(e, narrow)`
+needs no `Option` and no condition on the real: at a float, at a midpoint,
+at a transcendental. The box theorem `faithful_box_correct` is stated over
+`K`.
+
+In practice the test passes at about the precision Ziv's search needs,
+since its answer is the lower neighbour as soon as the box is inside one
+cell: probes return `exp(1)` faithfully at binary32 and binary64 over
+the series boxes at the cost of the correctly rounded probe, return 1 at 1
+and at the midpoint `1 + 2^-24` on the first box, where rounding down (at
+1) and to nearest (at the midpoint) never end (`one_down_open`,
+`mid_near_open`), and refute 1's successor as a faithful rounding of 1.

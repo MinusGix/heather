@@ -1,6 +1,6 @@
 ---
 title: ring, linarith and cast_from at a class carrier
-status: open
+status: closed
 labels: [tactics,casting,algebra]
 area: tactics
 created: 2026-10-31
@@ -29,3 +29,7 @@ other cast readers do not run at a class carrier at all, morphism or not:
 Wanted when a generic proof needs more than `mono`: the interval
 containment round ([[interval-containment-once-over-ordered-field]]) is
 expected to need only `mono`.
+
+## Log
+
+- 2026-10-31: LANDED for ring, linarith and nlinarith: at a class carrier the ring is the section's own operations (`semiring::CommRing::with_ints`, `ordered_field::OrderedField::with_ints` build the `…OfInt` dictionary from `K`'s class), integers read through the derived `semiring::Ring::int_cast` (no morphism parameter needed: Int is initial), and a morphism in scope is an edge of both (add, mul, sub, neg, 0, 1, composites through `Dyadic::rat_hom`). Probes in lib/_tests/std/tactic/{ring,linarith,cast}_tests.hthr; docs/casting-design.md §16. cast_from/cast_to split to [[cast-from-at-class-carrier]].

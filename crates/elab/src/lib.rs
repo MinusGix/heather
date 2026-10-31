@@ -8551,7 +8551,7 @@ impl Elaborator {
 
     /// A local variable by absolute position (outermost first), as
     /// [`Self::resolve`] would return it.
-    fn local(&self, cx: &Cx, pos: usize) -> (Term, Type, Level) {
+    pub(crate) fn local(&self, cx: &Cx, pos: usize) -> (Term, Type, Level) {
         let idx = (cx.names.len() - 1 - pos) as u32;
         let entry = &cx.gamma.entries[pos];
         (

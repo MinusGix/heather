@@ -94,3 +94,23 @@ theorem neg_third_relative(): (third16_fin().real() - CReal::ofRat(Rat(-1, 3))).
     let a = CReal::ofRat_abs(Rat(-1, 3));
     (binary16()).real_relative(NearestEven, CReal::ofRat(Rat(-1, 3)), third16_fin(), CReal::le_of_same_r(a, CReal::ofRat_le(trivial)), CReal::le_of_same_l(a, CReal::ofRat_le(trivial)), hr)
 }
+
+// The model over any ordered field (§18.2), read at `Rat` and the identity:
+// -1/3's sandwich in binary16, from its rational rounding.
+theorem neg_third_sandwich_rat(): Rat::add(Rat::mul(Rat::add(1, (binary16()).u(NearestEven)), Rat(-1, 3)), Rat::neg((binary16()).eta(NearestEven))) <= third16_fin().val()
+    ∧ third16_fin().val() <= Rat::add(Rat::mul(Rat::sub(1, (binary16()).u(NearestEven)), Rat(-1, 3)), (binary16()).eta(NearestEven))
+{
+    let hq: RoundsTo(binary16(), NearestEven, Rat(-1, 3), Fin(third16_fin())) = j(third16_is(), λ v _ => RoundsTo(binary16(), NearestEven, Rat(-1, 3), v), (binary16()).round_rat_correct(NearestEven, Rat(-1, 3)));
+    let hr = Format::rounds_in_of_rat<Rat>(Rat::id_hom(), binary16(), NearestEven, Rat(-1, 3), Fin(third16_fin()), hq);
+    Format::error_in_nonpos(Rat::id_hom(), binary16(), NearestEven, Rat(-1, 3), third16_fin(), trivial, trivial, hr)
+}
+
+// A faithful rounding of a real carries the directed modes' model: 1/3
+// faithfully in binary32 (the down neighbour), within `2^-23·|x| + 2^-149`.
+fn third_real() → CReal { CReal::ofRat(Rat(1, 3)) }
+fn third32_down() → Finite(binary32()) { Finite(False, 11184810, 124, trivial) }
+theorem third_faithful(): (binary32()).faithful_real(third_real().enclosed(), 1) = Some(Fin(third32_down())) { refl }
+theorem third_faithful_error(): (third32_down().real() - third_real()).abs() <= CReal::ofRat((binary32()).u(TowardNeg)) * third_real().abs() + CReal::ofRat((binary32()).eta(TowardNeg)) {
+    let hr = (binary32()).faithful_real_correct(third_real().enclosed(), 1, Fin(third32_down()), third_faithful());
+    (binary32()).real_faithful_error(third_real(), third32_down(), CReal::le_of_same_l(CReal::ofRat_abs(Rat(1, 3)), CReal::ofRat_le(trivial)), hr)
+}
