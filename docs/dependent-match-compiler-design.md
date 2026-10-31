@@ -261,9 +261,11 @@ showed to be enough for the readers that exist.
 
 - **Elaborator.** A motive-less `match` with no `h:` on a non-indexed
   scrutinee (`Elaborator::elab_match_pending`, `lib.rs`) pushes an id onto
-  `Cx::pending_eqs` and elaborates as today. `omega`'s fact listing
-  (`omega_cert.rs` `local_fact_entries`) and `linarith`'s context fallback
-  mark every pending id in scope as wanted (`Attempt::match_eq_wanted`). No
+  `Cx::pending_eqs` and elaborates as today. `omega` (`elab_omega`) and
+  `linarith`, when they get stuck, mark every pending id in scope as wanted
+  (`Attempt::match_eq_wanted`). Marking at listing time instead
+  re-elaborated every failing arm that ran `omega`, which made a
+  refusal-heavy test about a third slower. No
   signal unwinds: the arm runs to its end. Only if it fails, and a reader
   wanted the equation, does the match roll back and re-elaborate as the
   convoy with the equation bound as `__match_eq` (`MATCH_EQ`). If the retry
