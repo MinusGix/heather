@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaborator,proofs,ergonomics]
 area: language
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-31
 ---
 
 A `match` with no `as` motive, on the tail binder of a `Cons` arm that sits
@@ -43,3 +43,5 @@ The repro checks with no written motive, and `Target::goes_single` drops
 its `as`.
 
 ## Log
+
+- 2026-10-31: 2026-10-31: still fails after dependent-match-compiler slice 2. Standalone (rest a parameter, goal P(total(Cons(x, rest))) → Nat) it checks; inside the outer Cons arm it does not, so the outer arm's goal spells the tail some other way than Var(rest) (tier-2 List on W) and abstract_scrut finds nothing. A field_rewrap-style respelling for recursive fields is the likely fix.

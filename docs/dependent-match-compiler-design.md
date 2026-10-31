@@ -8,7 +8,7 @@ position, and compiles nested patterns to case trees with per-clause
 equations. Its "done when" is this note, decided by Minus, with the slices
 filed.
 
-**Status: decided (2026-10-31, §13); slices 4, 1 and 3 implemented (§8.1, §4.3.1, §6.1).** No kernel change is needed and none is
+**Status: decided (2026-10-31, §13); slices 4, 1, 3 and 2 implemented (§8.1, §4.3.1, §6.1, §5.1).** No kernel change is needed and none is
 proposed. Everything here is elaborator front end over the route lowerings
 that already exist.
 
@@ -329,6 +329,32 @@ Rung 3 of the ladder (conversion at stuck positions) is not used for
 hypotheses. A hypothesis is a fact the author wrote, so a syntactic
 occurrence is what they can see, and conversion candidates are budgeted
 for the goal alone (`STUCK_CANDIDATES`).
+
+### 5.1 As implemented (slice 2, 2026-10-31)
+
+- **Where.** `Elaborator::refined_by_occurrence` (`generalize.rs`) is the
+  computed-scrutinee branch of `refined_hypotheses`. A binder after every
+  local the scrutinee mentions is about it when its type contains the term.
+  The type is weakened to the match's context and tested with
+  `abstract_local`. Binders whose types mention such a binder are about it
+  too.
+- **Selection.** The selection rule is the variable case's, shared as
+  `select_refined`. `synthesize_motive` then abstracts the term out of the
+  generalized goal, Π domains included, so `h: e = True` becomes
+  `h: z = True` in the motive.
+- **What it does not reach.**
+  - **`split_all`'s `Cases`.** It builds its own motive (`host.rs`
+    `cases_request`) and never goes through this route.
+    `split-all-revise-hypotheses` stays open on that.
+  - **A motive-less match on a `Cons` tail.** The case is inside the outer
+    arm of `nested-match-on-list-tail-motive`, which fails before any
+    hypothesis is involved. The outer arm's goal does not spell the tail as
+    the variable, so even the goal is not abstracted. That is a
+    field-spelling gap like the one `field_rewrap` covers for tier-0 fields,
+    not this slice's.
+- **The pending equation of an enclosing match (item 3 above)** is not a
+  local yet, because slice 1 keeps it out of Γ until read. It becomes one
+  in slice 5, where a convoy's equation is a real binder.
 
 ## 6. Inference position
 

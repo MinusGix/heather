@@ -57,3 +57,4 @@ issues each slice closes.
 - 2026-10-31: Decided: equation only when read, anonymous equation unspellable, order 4 (landed) → 1, 3, 2, 5, 6, 7 (design §13).
 - 2026-10-31: Slice 1 (match-equation-in-every-arm) done on PR #318: the anonymous arm equation, in the term only when an arm needs it (§4.3.1).
 - 2026-10-31: Slice 3 (match-infers-constant-motive) done on PR #318 (§6.1).
+- 2026-10-31: Slice 2 (match-refines-computed-scrutinee) done on PR #318 (§5.1).

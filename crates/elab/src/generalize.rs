@@ -157,10 +157,15 @@ impl Elaborator {
         dec: Option<usize>,
         expected: &Type,
     ) -> Vec<usize> {
-        let Term::Var(LocalVar(index)) = scrutinee else {
-            return Vec::new();
-        };
         let m = cx.gamma.entries.len();
+        // A computed scrutinee is abstracted the same way, by syntactic
+        // occurrence (docs/dependent-match-compiler-design.md §5): a binder
+        // whose type contains the term is about it. Only binders after every
+        // local the term mentions can be, since the motive abstracts the term
+        // as it stands in `cx`.
+        let Term::Var(LocalVar(index)) = scrutinee else {
+            return self.refined_by_occurrence(cx, arms, scrutinee, expected);
+        };
         let x = m - 1 - *index as usize;
         if let (Some(_), Some(s)) = (dec, cx.selfref.as_ref()) {
             let mut calls = false;
@@ -176,16 +181,44 @@ impl Elaborator {
         // Every binder whose type is about the scrutinee, directly or through
         // an earlier one: what the match *could* refine.
         let mut about: Vec<usize> = Vec::new();
-        let mentions = |q: usize, p: usize| {
-            cx.gamma.entries.get(q).is_some_and(|entry| {
-                entry.ty.abstract_local(&Term::Var(LocalVar((q - 1 - p) as u32))).is_some()
-            })
-        };
         for q in x + 1..m {
-            if mentions(q, x) || about.iter().any(|&p| mentions(q, p)) {
+            if mentions_binder(cx, q, x) || about.iter().any(|&p| mentions_binder(cx, q, p)) {
                 about.push(q);
             }
         }
+        self.select_refined(cx, arms, expected, about)
+    }
+
+    /// [`Self::refined_hypotheses`] at a computed scrutinee.
+    fn refined_by_occurrence(&self, cx: &Cx, arms: &[Arm], scrutinee: &Term, expected: &Type) -> Vec<usize> {
+        let m = cx.gamma.entries.len();
+        let wrapped = Type::El { level: Level::Zero, tm: Rc::new(scrutinee.clone()) };
+        let first = (0..m)
+            .rev()
+            .find(|&p| wrapped.abstract_local(&Term::Var(LocalVar((m - 1 - p) as u32))).is_some())
+            .map_or(0, |p| p + 1);
+        let contains = |q: usize| {
+            cx.gamma.entries.get(q).is_some_and(|entry| {
+                entry.ty.shift_local((m - q) as u32).abstract_local(scrutinee).is_some()
+            })
+        };
+        let mut about: Vec<usize> = Vec::new();
+        for q in first..m {
+            if contains(q) || about.iter().any(|&p| mentions_binder(cx, q, p)) {
+                about.push(q);
+            }
+        }
+        if about.is_empty() {
+            return about;
+        }
+        self.select_refined(cx, arms, expected, about)
+    }
+
+    /// Of the binders `about` the scrutinee, what an arm names or the goal
+    /// mentions, closed under what their types need.
+    fn select_refined(&self, cx: &Cx, arms: &[Arm], expected: &Type, about: Vec<usize>) -> Vec<usize> {
+        let m = cx.gamma.entries.len();
+        let mentions = |q: usize, p: usize| mentions_binder(cx, q, p);
         // Of those, what an arm names or the goal mentions. A `match` is also
         // a computation: one in a function body or a motive must stay the
         // term it always was, so that it still converts with the `match` it
@@ -436,4 +469,11 @@ mod tests {
             cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Var(LocalVar(0)))));
         assert_eq!(back, goal);
     }
+}
+
+/// Whether binder `q`'s type mentions the earlier binder `p`.
+fn mentions_binder(cx: &Cx, q: usize, p: usize) -> bool {
+    cx.gamma.entries.get(q).is_some_and(|entry| {
+        entry.ty.abstract_local(&Term::Var(LocalVar((q - 1 - p) as u32))).is_some()
+    })
 }

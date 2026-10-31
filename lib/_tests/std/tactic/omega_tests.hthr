@@ -289,6 +289,12 @@ theorem guard_unnamed_in_arm(a, b: Nat, h: b < a): a.leb(b) = False {
 theorem guards_unnamed_nested(a, b, c: Nat): a - b <= a + c {
     match a.leb(b) { True => match b.leb(c) { True => omega, False => omega }, False => omega }
 }
+// A hypothesis containing the computed scrutinee is refined in each arm
+// (design §5, issues/match-refines-computed-scrutinee.md): in the `False`
+// arm `h` is `False = True`.
+theorem guard_hypothesis_refined(n: Nat, h: n.leb(3) = True): n <= 3 {
+    match n.leb(3) { True => omega, False => absurd(h) }
+}
 fn half(n: Nat) → Nat decreases n {
     match Nat::leb(n, 1) {
         True => 0,
