@@ -105,6 +105,21 @@ pub(crate) fn proj_of(t: &Term) -> Option<(bool, &Rc<Term>)> {
     }
 }
 
+/// The component a projection chain reads off a pair it is written over,
+/// by syntax alone: `fst(snd(pair(a; pair(b; c))))` is `b`. A field read
+/// off a constructed record (`CdState(s.m - 1, …).m`, a `decreases`
+/// measure at a self-call's argument) is this shape, and its component is
+/// the field's value with no δ step taken — where a weak head would unfold
+/// the value on into its definition's eliminator
+/// (issues/decreases-measure-record-field-unspelled.md). `None` unless every
+/// projection meets a pair.
+pub(crate) fn project_value(t: &Term) -> Option<&Rc<Term>> {
+    let (first, pair) = proj_of(t)?;
+    let inner: &Term = if proj_of(pair).is_some() { project_value(pair)? } else { pair };
+    let (a, b) = pair_of(inner)?;
+    Some(if first { a } else { b })
+}
+
 /// Compare a projection path without comparing its typing annotations.
 /// Arm aliases and motive instantiations carry different emitted spellings
 /// of the same Σ types.

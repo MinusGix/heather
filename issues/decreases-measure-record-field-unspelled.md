@@ -1,6 +1,6 @@
 ---
 title: A decreases measure over a record field at a constructed record is unspelled and omega cannot read it
-status: open
+status: closed
 labels: [omega,proofs,elaboration]
 area: tactics
 created: 2026-10-31
@@ -38,3 +38,7 @@ did for a measure applied to a constructor pattern.
 ## Done when
 
 The repro checks with `omega` as the default closer and no `on`.
+
+## Log
+
+- 2026-10-31: CLOSED. Three gaps, not one (docs/omega-measure-reduction-design.md §18): the read `fst(snd(pair(…)))` off a constructed record had no spelling (the speller's weak head overshot into `sub`'s eliminator; now projected by syntax, `CdState(sub(s.m, 1), …).m` for display and the field's value for source), `omega` reflected it as an unspellable atom (same overshoot; `field_as_put` takes the syntactic component), and the arm's `h: leb(s.m, 0) = False` was never a fact `omega` read — the two-parameter control failed without `on` too. Bool equations are now guards (`omega::guard_eq_true`/`guard_eq_false`), and the lifted obligation quantifies an arm equation at `True`/`False`. The repro checks with no `on`; probes in `lib/_tests/std/tactic/omega_tests.hthr`.
