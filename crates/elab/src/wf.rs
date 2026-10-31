@@ -5383,4 +5383,85 @@ theorem code_literal(): code_a(mk_code(FA)) = FA { refl }
             assert_eq!(**cod, inline.shift_local(1));
         }
     }
+
+    // -- a lowering that mentions a global -----------------------------------
+    // (`issues/codes-registered-in-a-stale-scope.md`)
+
+    /// A field type may mention a function (`measured: twice(m) = 2`), and a
+    /// global reference counts from the end of Ψ. A declaration's codes are
+    /// registered one definition after another from one lowering, so each
+    /// one pushed moved every later read of it: the second payload code
+    /// named the binding one before `twice`, the kernel refused it, and so
+    /// did the whole-type code and a recursive declaration's slot pair. And
+    /// the registry's guard copy, compared raw, matched the lowering in
+    /// front of a reader only until Ψ grew. Every value of such a type was
+    /// spelled inline (x86_64_asm's `Asm`, whose `Proved` and `Piece` fields
+    /// measure `bytes.len()`, and with it every `Prog`). Now every code is
+    /// registered, the lowering respells to its own reference after Ψ has
+    /// grown past the declaration, the reference unspells to today's
+    /// lowering, and values in the first and the late constructor, by
+    /// literal and at a neutral argument, in a checking position and in a
+    /// match, still check; a wrong proof in the field is still refused.
+    #[test]
+    fn a_lowering_that_mentions_a_function_gets_every_code() {
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(
+            "
+fn twice(n: Nat) → Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(twice(k))) } }
+inductive Late { LateA(n: Nat), LateB(m: Nat, measured: twice(m) = Succ(Succ(Zero))) }
+inductive LateRec { LateStart, LateAt(before: LateRec, m: Nat, measured: twice(m) = Succ(Succ(Zero))) }
+fn pad() → Nat { Zero }
+fn late_a(n: Nat) → Late { LateA(n) }
+fn late_b() → Late { LateB(Succ(Zero), refl) }
+fn late_rec() → LateRec { LateAt(LateAt(LateStart, Succ(Zero), refl), Succ(Zero), refl) }
+fn late_size(r: LateRec) → Nat { match r { LateStart => Zero, LateAt(before, _, _) => Succ(late_size(before)) } }
+fn late_m(l: Late) → Nat { match l { LateA(n) => n, LateB(m, _) => m } }
+fn late_under(k: Nat) → (Nat → Late) { λ n => LateB(Succ(Zero), refl) }
+fn late_pick(k: Nat, l: Late) → Late { match k { Zero => l, Succ(_) => LateA(k) } }
+theorem late_rec_size(): late_size(late_rec()) = Succ(Succ(Zero)) { refl }
+theorem late_b_m(): late_m(late_b()) = Succ(Zero) { refl }
+theorem late_a_m(n: Nat): late_m(late_a(n)) = n { refl }
+theorem late_under_m(k, n: Nat): late_m(late_under(k)(n)) = Succ(Zero) { refl }
+theorem late_pick_zero(l: Late): late_pick(Zero, l) = l { refl }
+",
+        )
+        .expect("the declarations and their values elaborate");
+        let e = Env { el, cx: Cx::empty() };
+        let late = e.ind("Late").tag;
+        for k in 0..2 {
+            assert!(e.el.gen_ref(&e.cx, GenDef::PayloadCode(late, k)).is_some(), "`Late#payload{k}`");
+        }
+        assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(late)).is_some(), "`Late#tycode`");
+        let rec = e.ind("LateRec").tag;
+        assert!(e.el.gen_ref(&e.cx, GenDef::ShapeCode(rec)).is_some(), "`LateRec#shape`");
+        assert!(e.el.gen_ref(&e.cx, GenDef::ArityFn(rec)).is_some(), "`LateRec#arity`");
+        assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(rec)).is_some(), "`LateRec#tycode`");
+        for (name, tag) in [("Late", late), ("LateRec", rec)] {
+            let (inline, l) = e.lowered(name);
+            let named = e.el.respell_ty(&e.cx, &inline).unwrap_or_else(|| panic!("`{name}` respells to its code"));
+            let Type::El { tm, .. } = &named else { panic!("`{name}`: `El` of a code") };
+            assert!(e.el.is_gen_ref(tm, GenDef::TyCode(tag)), "`{name}`");
+            assert!(e.el.conv_types(&e.cx, &named, &inline, &l), "`{name}`");
+            assert!(e.el.conv_types(&e.cx, &inline, &named, &l), "`{name}`");
+            assert_eq!(e.el.unspell_here(&named).as_ref(), Some(&inline), "`{name}` unspells to today's lowering");
+            // The negative control: the stale spelling itself, its `twice`
+            // one binding over, is not this declaration's lowering.
+            assert!(e.el.respell_ty(&e.cx, &inline.shift_global(1)).is_none(), "`{name}`: a stale lowering");
+            // Under a binder the lowering's `twice` carries the longer
+            // context, and so does the reference minted there; the guard
+            // is read in that context, and the reference unspells back to it.
+            let mut cx = Cx::empty();
+            cx.push("#k".into(), Type::Nat, Level::Zero);
+            let deeper = inline.shift_local(1);
+            assert_ne!(deeper, inline, "`{name}`: the lowering mentions a global, which carries its context");
+            let named = e.el.respell_ty(&cx, &deeper).unwrap_or_else(|| panic!("`{name}` respells under a binder"));
+            assert!(e.el.conv_types(&cx, &named, &deeper, &l), "`{name}`");
+            assert_eq!(e.el.unspell_here(&named).as_ref(), Some(&deeper), "`{name}` unspells in its context");
+            assert!(e.el.respell_ty(&cx, &inline).is_none(), "`{name}`: the lowering of another context");
+        }
+        let mut wrong = e.el;
+        let refusal = wrong.elab_source("fn late_bad() → Late { LateB(Succ(Succ(Zero)), refl) }")
+            .expect_err("a field's proof is still checked");
+        assert!(refusal.message().contains("`twice(2)` and `2` are not"), "{}", refusal.message());
+    }
 }
