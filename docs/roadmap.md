@@ -95,8 +95,8 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `hih-kernel-model` | heather-in-heather | open | A model of the kernel's reduction in Heather states the facts its accelerations rely on, and proves them, so that an optimisation checked nightly can be promoted to proven (`docs/kernel-model-design.md`). |  |
 | `hih-km-probe` | heather-in-heather | done | The fold classifier's probe is sound: a run that is not blocked on a probe variable is, at the same fuel, the run of every instance (`Tm::whnf_inst`, `Tm::whnf_inst_settled`). | hih-kernel-model |
 | `hih-km-runs` | heather-in-heather | done | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs (`Tm::fold_affine`, `Tm::fold_affine_peeled`, `Tm::fold_sync`). | hih-kernel-model |
-| `tac-in-heather` | tactics | open | A tactic is written in Heather through a host elaboration interface, and one tactic that lives in Rust today has a Heather counterpart. |  |
-| `tac-host-interface` | tactics | open | Heather code can read a goal, build a checked term, and report failure with its search state, through one scoped host interface. | tac-in-heather |
+| `tac-in-heather` | tactics | done | A tactic is written in Heather through a host elaboration interface, and one tactic that lives in Rust today has a Heather counterpart. |  |
+| `tac-host-interface` | tactics | done | Heather code can read a goal, build a checked term, and report failure with its search state, through one scoped host interface. | tac-in-heather |
 | `tac-first-port` | tactics | done | One tactic that lives in Rust today (candidate: `split_all` or `monoid` normalisation) has a Heather implementation that closes the same goals. | tac-in-heather |
 | `tac-general` | tactics | open | A general-purpose rewriting and congruence-closure tactic (grind-like) closes the routine goals that today need hand `trans`/`cong` towers, and hands back its search state when it fails. |  |
 | `tac-arith` | tactics | open | Linear integer arithmetic is complete and certified (CutSat), and polynomial inequalities go through the ring normaliser. |  |
@@ -104,7 +104,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `it-function-fields` | interaction-trees | done | A surface inductive can have a recursive function-typed field (`Vis(c, k: Resp(c) -> Tree)`), lowered through W, with match and recursion over it. | it-library |
 | `it-core` | interaction-trees | done | Events as containers, the fuel-cut tree, `bind`/`iter`/`mrec`, and the structural laws, with the definitional ones checked as such. | it-library |
 | `it-refinement` | interaction-trees | done | Trace refinement and depth-indexed equivalence, with the bridge to `converges`/`fuel_monotone` and one handler into world threading. | it-library |
-| `it-native` | interaction-trees | open | A native program's theorem says its run refines an interaction tree. |  |
+| `it-native` | interaction-trees | done | A native program's theorem says its run refines an interaction tree. |  |
 | `it-coinductive` | interaction-trees | open | Interaction trees diverge for real: a coinductive tree over container events with `bind` and `iter`, `approx` into the finite tree, and bisimilarity and eutt as `M` instances, bridged to the finite library's `Same` (`docs/kernel-coinduction-design.md` §6). |  |
 | `it-cotree` | interaction-trees | done | `CoTree<R>(E)` with `bind`, `map`, `translate` and fuel-free `iter`, its approximations as a `Program` (`spin` diverges with no fuel), and strong bisimilarity as indexed codata with reflexivity, symmetry, transitivity, the monad laws, a `bind` congruence and the bridge to `Same` (`docs/coitree-design.md`). | it-coinductive |
 | `it-eutt` | interaction-trees | done | Equivalence up to taus on `CoTree` as indexed codata with drop counts: reflexivity, symmetry, transitivity, `CTau(t) ≈ t`, the monad laws, and equivalent trees giving programs that refine each other (`docs/coitree-design.md` §7). | it-coinductive |
@@ -252,14 +252,20 @@ few general-purpose ones are worth real design.
 case splitting (`split_all`), positivity, `decide`, relational congruence
 (`rel_cong`), and `calc` chains (`docs/certifying-arithmetic-automation-design.md`,
 `docs/ring-normalization-design.md`, `docs/relational-context-round.md`).
-All of them are written in Rust in `crates/elab`. Metaprograms with
-quote/splice exist, but there is no interface yet for writing a tactic in
-Heather.
+Tactics are also written in Heather, as request trees `Tac<A>` the
+elaborator answers through one host interface
+(`docs/host-elaboration-interface-design.md`, `lib/std/tactic/tactic.hthr`):
+`split_all` (ported from Rust), `apply`, `first_of`, `mono`, `norm_num`,
+`intervals`, and `generate` for declaration groups (`derive.hthr`). The
+arithmetic deciders (`omega`, `ring`, `linarith`) keep their search in Rust
+with a Heather certificate.
 
-**Blockers.** The host elaboration interface and a checked construction API
-([host-elaboration-interface](../issues/host-elaboration-interface.md),
-[heather-checked-construction-api](../issues/heather-checked-construction-api.md),
-[elabcode-abstraction-layer](../issues/elabcode-abstraction-layer.md)). There
+**Blockers.** What the host interface still lacks is native oracles with
+checked certificates and `Tac` on the tree library's `ITree`
+([host-elaboration-interface](../issues/host-elaboration-interface.md)), and
+generators at open types and in sections
+([generator-ctors-open-types](../issues/generator-ctors-open-types.md),
+[generate-in-sections](../issues/generate-in-sections.md)). There
 is no general rewriting tactic, so routine equalities are hand `trans`/`cong`
 towers ([grind-port](../issues/grind-port.md),
 [monoid-normalisation](../issues/monoid-normalisation.md),
@@ -303,9 +309,12 @@ up to a structural equivalence `ITree::Same` (finite trees need no depth
 index; fuel plays its part). Traces, refinement across fuel, the bridge to
 `converges`/`fuel_monotone`, and a state handler that is world threading are
 `lib/std/itree/itree_trace.hthr` and `lib/std/itree/itree_state.hthr`
-(`docs/itree-refinement-round.md`), so `it-library` is done. The native program logic has to
-be designed to meet the trees
-([native-one-program-logic](../issues/native-one-program-logic.md)).
+(`docs/itree-refinement-round.md`), so `it-library` is done. Native code
+meets the trees through `Sim` (`lib/std/os/linux/linux_x86_64_sim.hthr`):
+every program `write-elf` builds has a theorem that its ELF simulates its
+source's tree at every fuel, so `it-native` is done
+([native-one-program-logic](../issues/native-one-program-logic.md),
+[native-elf-every-program](../issues/native-elf-every-program.md)).
 
 **Milestones.** `it-library` through its submilestones `it-function-fields`,
 `it-core` and `it-refinement`, then `it-native` together with
@@ -595,3 +604,14 @@ separate machines do not slow each other's tests.
 - 2026-10-28: `hih-pl-first-program` marked done: `tr a-z A-Z` is built by
   `write-elf` through the verified compiler with no per-program proof
   (PR #210, `issues/native-source-bytes.md`), after B2 (PR #156).
+- 2026-10-31: `tac-host-interface`, `tac-in-heather` and `it-native` marked
+  done. The host interface reads goals, builds checked terms and reports
+  failures with what it tried (rounds 1–2¾), and `split_all` has a Heather
+  port that closes the Rust one's goals (`tac-first-port`). Every program
+  `write-elf` builds gets `<s>_elf_simulates`, `SimProgram` of the ELF
+  against `src.denote(args)` (`Source::elf_file_simulates`), and
+  `sim_every_run` says a run that got a returning trace's answers produced
+  exactly that trace's events. The claim holds at every fuel, so liveness is
+  not stated. The host interface's remaining work
+  (oracles, `Tac` on `ITree`, generator gaps) stays open in its issues
+  without a milestone.

@@ -3,9 +3,8 @@ title: Ctors and quoting at parameterized types and dependent fields
 status: open
 labels: [metaprogramming,elaboration]
 area: tactics
-milestone: [tac-host-interface]
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-31
 ---
 
 `Ctors(ty)` answers a parameterless, non-indexed inductive only, and a
@@ -33,3 +32,7 @@ axis is not exercised by a generator yet.
 - Then decide whether `lib/kernel_model/kernel_reduction.hthr`'s
   hand-written `Tm::cong_*` group moves to a generator (it holds non-`Tm`
   fields fixed, which wants a `congruences_over(T, field types)` variant).
+
+## Log
+
+- 2026-10-31: `tac-host-interface` is marked done in docs/roadmap.md (its "done when" is met), so this issue no longer serves it; it stays open in area `tactics` with no milestone.
