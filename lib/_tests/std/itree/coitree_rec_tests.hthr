@@ -1,0 +1,108 @@
+// Probes of `lib/std/itree/coitree_rec.hthr`: recursion with no fuel. A
+// tail-recursive search and a non-tail sum run at literals by a count and
+// `refl`; the unfolding laws at an open call; a search's result proved by
+// fixpoint induction; a function that calls itself forever proved never to
+// return by the same rule; a sum proved total by its measure and its value
+// read back by `get`. Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import itree; import itree_trace; import coitree; import coitree_eutt; import coitree_rec;
+import omega;
+
+// ---------------------------------------------------------------------------
+// An unbounded search: the least `m >= n` whose square is at least 50. A
+// tail call, written as a body whose self-call is an event.
+
+fn big(m: Nat) → Bool { 50.leb(m * m) }
+
+fn search_at(n: Nat, b: Bool) → CoTree<Nat>(Events::sum(Events::calls(Nat, Nat), Events::none())) {
+    match b { True => CRet(n), False => CVis(Inl(Succ(n)), λ r => CRet(r)) }
+}
+fn search_body(n: Nat) → CoTree<Nat>(Events::sum(Events::calls(Nat, Nat), Events::none())) { search_at(n, big(n)) }
+fn search(n: Nat) → CoTree<Nat>(Events::none()) {
+    CoTree::rec(Events::calls(Nat, Nat), Events::none(), search_body, n)
+}
+
+theorem search_0(): CoTree::after(Events::none(), 40, search(0)) = ORet(8) { refl }
+theorem search_0_returns(): Returns(Events::none(), search(0), 8) { Returns(40, refl) }
+// A count larger than needed is harmless.
+theorem search_0_late(): CoTree::after(Events::none(), 400, search(0)) = ORet(8) { refl }
+theorem search_9(): CoTree::after(Events::none(), 0, search(9)) = ORet(9) { refl }
+
+// The negative controls: a wrong value, and a count too small to reach it.
+// expect-error(kernel): the kernel rejected `search_wrong`: NotConvertible
+theorem search_wrong(): CoTree::after(Events::none(), 40, search(0)) = ORet(7) { refl }
+// expect-error(kernel): the kernel rejected `search_short`: NotConvertible
+theorem search_short(): CoTree::after(Events::none(), 3, search(0)) = ORet(8) { refl }
+
+// Unfolding at an open call: one silent step to the body bound to the call's
+// continuation.
+theorem search_unfold(n: Nat, k: Nat → CoTree<Nat>(Events::sum(Events::calls(Nat, Nat), Events::none()))):
+    CoTree::mrec_obs<Nat>(Events::calls(Nat, Nat), Events::none(), search_body, OVis(Inl(n), k))
+        = OTau(CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body,
+            CoTree::bind<Nat, Nat>(Events::sum(Events::calls(Nat, Nat), Events::none()), search_body(n), k)))
+{
+    CoTree::mrec_call<Nat>(Events::calls(Nat, Nat), Events::none(), search_body, n, k)
+}
+
+// What the search returns is at least where it started, and big: fixpoint
+// induction, with no count or fuel in the statement.
+fn Found(n: Nat, r: Nat) → Type { n <= r ∧ big(r) = True }
+
+theorem search_body_safe(n: Nat): CoTree::Safe<Nat>(Events::calls(Nat, Nat), Events::none(), Found, search_body(n), λ r => Found(n, r)) {
+    (match big(n) as λ b => big(n) = b →
+            CoTree::Safe<Nat>(Events::calls(Nat, Nat), Events::none(), Found, search_at(n, b), λ r => Found(n, r)) {
+        True => λ h => CoTree::safe_ret<Nat>(Events::calls(Nat, Nat), Events::none(), Found, λ r => Found(n, r), n, And(omega, h)),
+        False => λ h => CoTree::safe_call<Nat>(Events::calls(Nat, Nat), Events::none(), Found, λ r => Found(n, r), Succ(n), λ r => CRet(r),
+            λ r f => CoTree::safe_ret<Nat>(Events::calls(Nat, Nat), Events::none(), Found, λ r2 => Found(n, r2), r,
+                And(omega(f.left), f.right))),
+    })(refl)
+}
+
+theorem search_found(n: Nat, r: Nat, h: Returns(Events::none(), search(n), r)): n <= r ∧ big(r) = True {
+    CoTree::rec_sound(Events::calls(Nat, Nat), Events::none(), search_body, Found, search_body_safe, n, r, h)
+}
+
+// ---------------------------------------------------------------------------
+// Divergence by the same rule: a function that only calls itself returns
+// nothing, because `False` is an invariant it keeps.
+
+fn again_body(n: Nat) → CoTree<Nat>(Events::sum(Events::calls(Nat, Nat), Events::none())) { CVis(Inl(n), λ r => CRet(r)) }
+fn again(n: Nat) → CoTree<Nat>(Events::none()) { CoTree::rec(Events::calls(Nat, Nat), Events::none(), again_body, n) }
+
+theorem again_never(n: Nat, r: Nat, h: Returns(Events::none(), again(n), r)): False {
+    CoTree::rec_sound(Events::calls(Nat, Nat), Events::none(), again_body, λ _ _ => False,
+        λ d => CoTree::safe_call<Nat>(Events::calls(Nat, Nat), Events::none(), λ _ _ => False, λ _ => False, d, λ r2 => CRet(r2),
+            λ r2 f => false_elim(f)), n, r, h)
+}
+
+// ---------------------------------------------------------------------------
+// A call that is not in tail position: `n + (n - 1) + … + 0`. Its pending
+// tree grows a continuation per call, and still returns at a literal.
+
+fn sum_body(n: Nat) → CoTree<Nat>(Events::sum(Events::calls(Nat, Nat), Events::none())) {
+    match n { Zero => CRet(0), Succ(m) => CVis(Inl(m), λ r => CRet(n + r)) }
+}
+fn sum_to(n: Nat) → CoTree<Nat>(Events::none()) { CoTree::rec(Events::calls(Nat, Nat), Events::none(), sum_body, n) }
+
+theorem sum_4(): CoTree::after(Events::none(), 20, sum_to(4)) = ORet(10) { refl }
+
+// Total by its measure, the argument: every call is at a smaller one. The
+// invariant carried along is that the sum is at least its last term.
+fn Summed(n: Nat, r: Nat) → Type { n <= r }
+
+theorem sum_reaches(n: Nat): CoTree::Reaches<Nat>(Events::calls(Nat, Nat), Events::none(), Summed, λ d2 => d2 < n, sum_body(n), λ r => Summed(n, r)) {
+    match n {
+        Zero => Exists(1, omega),
+        Succ(m) => Exists(2, And(omega, λ r f => omega)),
+    }
+}
+
+theorem sum_total(n: Nat): (∃ r: Nat, Returns(Events::none(), sum_to(n), r) ∧ Summed(n, r)) {
+    CoTree::rec_total(Events::calls(Nat, Nat), Events::none(), sum_body, Summed, λ d => d, sum_reaches, n)
+}
+
+// The total face: the value read back off the tree, by evaluation.
+fn sum_value(n: Nat) → Nat {
+    CoTree::get(Events::none(), sum_to(n), Exists(sum_total(n).witness, sum_total(n).proof.left))
+}
+theorem sum_value_4(): sum_value(4) = 10 { refl }

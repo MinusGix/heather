@@ -1,10 +1,11 @@
 # Partial functions as coinductive computations
 
-Status: **assessment and proposal, for Minus's decision.** Issue
-`issues/partial-functions-coinductive.md` (item 5, part 2, of the
-fundamental-improvements memo of 2026-10-31). Written on master `c7f5472`.
-Nothing here is in `lib/` yet; the probe in §3 checks against master as it
-stands, with no kernel or elaborator change.
+Status: **round 1 (the library) implemented**, 2026-10-31, after Minus
+agreed with the proposal and with dropping the decimal formatter as the
+customer. Issue `issues/partial-functions-coinductive.md` (item 5, part 2,
+of the fundamental-improvements memo of 2026-10-31). Written on master
+`c7f5472`. §8 says what landed and where it differs from §4.3; rounds 2
+and 3 (§6) are not built.
 
 ## 0. The answer in one page
 
@@ -274,12 +275,13 @@ events.
    and `rec_refines`. Its customer is the kernel model's `whnf` restated
    without fuel (§5). Prerequisite for the eutt-level unfolding:
    `coitree-eutt-bind-cong`.
+   *Done, 2026-10-31, except `rec_refines` (§8).*
 2. **`partial fn` surface** (after sequencing R2/R3): elaboration (§4.2) with
    the tail case to `iter`, the refusals, and `f_unfold`.
 3. **Partial `runtime fn` loops** (after R5): tail case only, through
    `iter_refines`.
 
-**Proposed change to the issue's "done when":** drop the decimal formatter,
+**Change to the issue's "done when"** (agreed by Minus, 2026-10-31): drop the decimal formatter,
 because its fuel is a termination witness and belongs to
 `unfolding-computed-scrutinee` and sequencing R3. Replace it with "a
 function whose divergence is real (the kernel model's `whnf`) is restated
@@ -297,3 +299,77 @@ and a `partial` runtime loop compiles under the default setup."
   `refl` at a literal needs a count large enough. A `Returns` helper that
   searches for the count, so the user never writes one, is a small tactic
   once `norm_num`-style deciders exist.
+
+## 8. Round 1 as built
+
+`lib/std/itree/coitree_rec.hthr`, with its customer in
+`lib/kernel_model/kernel_whnf.hthr`. No kernel or elaborator change was
+needed. Every theorem below is proved once, over any `D`, `E` and body.
+
+- **The loop**: `CoTree::rec_vis`, `rec_step`, `mrec` and `rec`, which is
+  §3's probe. `Events::calls(A, B)` names a function's calls.
+- **Unfolding**: `CoTree::mrec_obs(o)` is what `mrec(t)` observes when `t`
+  observes `o`, which holds by `δβ`. `mrec_at` rewrites `obs(t)`, and
+  `mrec_ret`, `mrec_tau` and `mrec_call` hold by `refl` at open arguments.
+  `mrec_cmd_settled` says a command of `E` is a settled node.
+- **`Returns(E, t, r)`** is a record of a `count` and
+  `after(count, t) = ORet(r)`.
+- **Partial correctness** (`rec_sound`, called `rec_induct` in §4.3). The
+  body's obligation is `CoTree::Safe(D, E, P, body(d), P(d))`. That is a
+  computed type indexed by a step count (`SafeObs`), not an inductive
+  family, because a family indexed by a tree is not constructor-headed
+  (`docs/inductive-indexed-lowering.md` §1), and the itree library already
+  reads relations off observations this way. Users never see the count:
+  `safe_ret`, `safe_tau` and `safe_call` build the obligation one
+  constructor at a time, and `safe_bind` composes it. The proof is an
+  induction on `Returns`' count, which matches on the pending tree's
+  observation.
+- **Sequencing**: `mrec_bisim` says bisimilar pending trees return the same
+  values after the same count. `mrec_bind` says a pending tree that returns
+  `a`, followed by a continuation that returns `r` from `a`, returns `r`.
+  The call case meets `bind(bind(body(d), k'), k)` against
+  `bind(body(d), λ x. bind(k'(x), k))`, and `bind_assoc` with `mrec_bisim`
+  closes it, so no `Eutt` was needed.
+- **Termination** (`rec_total`, called `rec_returns` in §4.3). The body's
+  obligation is `CoTree::Reaches(D, E, P, Ok, body(d), P(d))` with
+  `Ok(d2) = measure(d2) < measure(d)`: within some depth, every path returns
+  within `P(d)`, calling only allowed arguments. The proof is an induction
+  on a bound above the measure, with `mrec_reaches` inside it, and
+  `mrec_bind` for each call.
+- **Back to a total value**: `CoTree::get(E, t, h)` reads the value off the
+  tree, running it for the count in `h`. `get_eq` and `get_returns` state
+  what it gives. In the probes, `sum_value(4) = 10` holds by `refl` through
+  `rec_total`'s witness.
+- **Not built**: `rec_refines` against `Program::rec`, which is
+  `issues/coitree-rec-program-bridge.md` (§4.4: only non-tail native
+  recursion needs it), and the eutt-level `f(x) ≈ bind(body(x), f)`, which
+  waits on `coitree-eutt-bind-cong`.
+
+**The customer.** `Tm::step_co` is `Tm::step` with each recursive
+reduction as a call. `Option` is gone, because it only ever stood for
+running out of fuel. `Tm::whnf_co(t)` is `CoTree::rec` of `step_co`, and
+`Tm::whnf_co_sound` (every value it returns is a reduct) is `rec_sound`
+with `P = Reduces`. The per-case lemmas are `whnf_sound`'s, with `safe_call`
+in place of `ih`. The fuelled `Tm::whnf` stays, because `kernel_runs.hthr`'s
+folds read it.
+
+**Tests.** `lib/_tests/std/itree/coitree_rec_tests.hthr` covers:
+- a tail-recursive unbounded search and a non-tail sum, run at literals by a
+  count and `refl`;
+- the unfolding law at an open call;
+- the search's result, proved by `rec_sound`;
+- a function that only calls itself, proved never to return by `rec_sound`
+  with `False` as the invariant;
+- the sum, proved total by its measure, with its value read back by `get`;
+- a wrong value and a short count as `expect-error` controls.
+
+`lib/_tests/kernel_model/kernel_whnf_tests.hthr` covers:
+- β, ι and a stuck application, at literals;
+- soundness used at a literal run;
+- `Ω` still running after any count tried;
+- a wrong normal form and a short count, both refused.
+
+One thing the probes surfaced: a body whose `match` is on a computed
+scrutinee (`big(n)`) needs that scrutinee as a parameter of a helper
+(`search_at(n, b)`) before a proof can case on it. That is
+`issues/unfolding-computed-scrutinee.md` again, met from the proof side.

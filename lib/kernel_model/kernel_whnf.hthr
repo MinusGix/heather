@@ -1,0 +1,131 @@
+// Weak-head reduction with no fuel (docs/partial-functions-design.md §5):
+// the evaluator of `kernel_reduction.hthr` as a partial function. Each
+// recursive call of `Tm::step` is a call event, and `CoTree::rec` answers it
+// by reducing again, so there is no fuel and no `None`: a term whose
+// reduction never stops is a computation that never returns. Its soundness
+// is `Tm::whnf_sound`'s proof read as a fixpoint induction
+// (`CoTree::rec_sound`): every value a reduction returns is a reduct.
+import logic;
+import nat;
+import itree;
+import itree_trace;
+import coitree;
+import coitree_eutt;
+import coitree_rec;
+import kernel_reduction;
+import kernel_runs;
+
+// What a call promises: the value is a reduct of the argument.
+fn Tm::Evaluates(d: Tm, v: Tm) → Type { d.Reduces(v) }
+
+// Reduce `d` and return what it reduces to: a tail call.
+fn Tm::reduce_co(d: Tm) → CoTree<Tm>(Events::sum(Events::calls(Tm, Tm), Events::none())) { CVis(Inl(d), λ v => CRet(v)) }
+
+fn Tm::app_head_co(a: Tm, h: Tm) → CoTree<Tm>(Events::sum(Events::calls(Tm, Tm), Events::none())) {
+    match h { Lam(b) => Tm::reduce_co(b.open(a)), _ => CRet(App(h, a)) }
+}
+
+fn Tm::rec_head_co(z: Tm, s: Tm, h: Tm) → CoTree<Tm>(Events::sum(Events::calls(Tm, Tm), Events::none())) {
+    match h {
+        NZero => Tm::reduce_co(z),
+        NSucc(m) => Tm::reduce_co(App(App(s, m), NRec(z, s, m))),
+        _ => CRet(NRec(z, s, h)),
+    }
+}
+
+fn Tm::proj_head_co(p: Proj, h: Tm) → CoTree<Tm>(Events::sum(Events::calls(Tm, Tm), Events::none())) {
+    match h { SPair(a, b) => Tm::reduce_co(p.pick(a, b)), _ => CRet(SProj(p, h)) }
+}
+
+// One step of reduction, its recursive reductions as calls.
+fn Tm::step_co(t: Tm) → CoTree<Tm>(Events::sum(Events::calls(Tm, Tm), Events::none())) {
+    match t {
+        App(f, a) => CVis(Inl(f), λ h => Tm::app_head_co(a, h)),
+        NRec(z, s, n) => CVis(Inl(n), λ h => Tm::rec_head_co(z, s, h)),
+        SProj(p, w) => CVis(Inl(w), λ h => Tm::proj_head_co(p, h)),
+        NRun(c, w) => match c { Zero => Tm::reduce_co(w), Succ(m) => CRet(NSucc(NRun(m, w))) },
+        _ => CRet(t),
+    }
+}
+
+// Weak-head reduction: a computation that returns the weak-head normal form
+// if reduction stops, and never returns if it does not.
+fn Tm::whnf_co(t: Tm) → CoTree<Tm>(Events::none()) { CoTree::rec(Events::calls(Tm, Tm), Events::none(), Tm::step_co, t) }
+
+// ---------------------------------------------------------------------------
+// Soundness
+
+// A tail call keeps a reduct: `d` reduces to what it returns, and `t` to `d`.
+theorem Tm::reduce_co_safe(t: Tm, d: Tm, td: t.Reduces(d)): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::reduce_co(d), λ v => t.Reduces(v)) {
+    CoTree::safe_call<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => t.Reduces(v), d, λ v => CRet(v), λ v dv => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v2 => t.Reduces(v2), v, Tm::reduces_trans(td, dv)))
+}
+
+// The head reduced to `h`; whatever applying it returns is a reduct of the application.
+theorem Tm::app_head_co_safe(f: Tm, a: Tm, h: Tm, fh: f.Reduces(h)): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::app_head_co(a, h), λ v => App(f, a).Reduces(v)) {
+    (match h as λ y => f.Reduces(y) → CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::app_head_co(a, y), λ v => App(f, a).Reduces(v)) {
+        Bv(i) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(Bv(i), a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+        Fv(x) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(Fv(x), a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+        Lam(b) => λ hr => Tm::reduce_co_safe(App(f, a), b.open(a), Tm::reduces_trans(Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr), Tm::reduces_one(Tm::red_beta(b, a)))),
+        App(f2, b2) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(App(f2, b2), a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+        NZero => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(NZero, a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+        NSucc(m) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(NSucc(m), a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+        NRec(z2, s2, n2) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(NRec(z2, s2, n2), a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+        SPair(c, d) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(SPair(c, d), a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+        SProj(q, w) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(SProj(q, w), a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+        NRun(c, w) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f, a).Reduces(v), App(NRun(c, w), a), Tm::reduces_map(λ (y: Tm) => App(y, a), Tm::ctx_app_head(a), hr)),
+    })(fh)
+}
+
+theorem Tm::rec_head_co_safe(z: Tm, s: Tm, n: Tm, h: Tm, nh: n.Reduces(h)): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::rec_head_co(z, s, h), λ v => NRec(z, s, n).Reduces(v)) {
+    (match h as λ y => n.Reduces(y) → CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::rec_head_co(z, s, y), λ v => NRec(z, s, n).Reduces(v)) {
+        Bv(i) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z, s, n).Reduces(v), NRec(z, s, Bv(i)), Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr)),
+        Fv(x) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z, s, n).Reduces(v), NRec(z, s, Fv(x)), Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr)),
+        Lam(b) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z, s, n).Reduces(v), NRec(z, s, Lam(b)), Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr)),
+        App(f2, b2) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z, s, n).Reduces(v), NRec(z, s, App(f2, b2)), Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr)),
+        NZero => λ hr => Tm::reduce_co_safe(NRec(z, s, n), z, Tm::reduces_trans(Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr), Tm::reduces_one(Tm::red_iota_zero(z, s)))),
+        NSucc(m) => λ hr => Tm::reduce_co_safe(NRec(z, s, n), App(App(s, m), NRec(z, s, m)), Tm::reduces_trans(Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr), Tm::reduces_one(Tm::red_iota_succ(z, s, m)))),
+        NRec(z2, s2, n2) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z, s, n).Reduces(v), NRec(z, s, NRec(z2, s2, n2)), Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr)),
+        SPair(c, d) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z, s, n).Reduces(v), NRec(z, s, SPair(c, d)), Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr)),
+        SProj(q, w) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z, s, n).Reduces(v), NRec(z, s, SProj(q, w)), Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr)),
+        NRun(c, w) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z, s, n).Reduces(v), NRec(z, s, NRun(c, w)), Tm::reduces_map(λ (y: Tm) => NRec(z, s, y), Tm::ctx_rec(z, s), hr)),
+    })(nh)
+}
+
+theorem Tm::proj_head_co_safe(p: Proj, t: Tm, h: Tm, th: t.Reduces(h)): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::proj_head_co(p, h), λ v => SProj(p, t).Reduces(v)) {
+    (match h as λ y => t.Reduces(y) → CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::proj_head_co(p, y), λ v => SProj(p, t).Reduces(v)) {
+        Bv(i) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, Bv(i)), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+        Fv(x) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, Fv(x)), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+        Lam(b) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, Lam(b)), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+        App(f2, b2) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, App(f2, b2)), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+        NZero => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, NZero), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+        NSucc(m) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, NSucc(m)), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+        NRec(z2, s2, n2) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, NRec(z2, s2, n2)), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+        SPair(c, d) => λ hr => Tm::reduce_co_safe(SProj(p, t), p.pick(c, d), Tm::reduces_trans(Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr), Tm::reduces_one(Tm::red_proj(p, c, d)))),
+        SProj(q, w) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, SProj(q, w)), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+        NRun(c, w) => λ hr => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(p, t).Reduces(v), SProj(p, NRun(c, w)), Tm::reduces_map(λ (y: Tm) => SProj(p, y), Tm::ctx_proj(p), hr)),
+    })(th)
+}
+
+// The body keeps the invariant: one step returns a reduct, when its calls do.
+theorem Tm::step_co_safe(t: Tm): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::step_co(t), λ v => t.Reduces(v)) {
+    match t {
+        Bv(i) => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => Bv(i).Reduces(v), Bv(i), Tm::reduces_refl(Bv(i))),
+        Fv(x) => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => Fv(x).Reduces(v), Fv(x), Tm::reduces_refl(Fv(x))),
+        Lam(b) => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => Lam(b).Reduces(v), Lam(b), Tm::reduces_refl(Lam(b))),
+        App(f2, b2) => CoTree::safe_call<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f2, b2).Reduces(v), f2, λ h => Tm::app_head_co(b2, h), λ h fh => Tm::app_head_co_safe(f2, b2, h, fh)),
+        NZero => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NZero.Reduces(v), NZero, Tm::reduces_refl(NZero)),
+        NSucc(m) => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NSucc(m).Reduces(v), NSucc(m), Tm::reduces_refl(NSucc(m))),
+        NRec(z2, s2, n2) => CoTree::safe_call<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z2, s2, n2).Reduces(v), n2, λ h => Tm::rec_head_co(z2, s2, h), λ h nh => Tm::rec_head_co_safe(z2, s2, n2, h, nh)),
+        SPair(c, d) => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SPair(c, d).Reduces(v), SPair(c, d), Tm::reduces_refl(SPair(c, d))),
+        SProj(q, w) => CoTree::safe_call<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(q, w).Reduces(v), w, λ h => Tm::proj_head_co(q, h), λ h wh => Tm::proj_head_co_safe(q, w, h, wh)),
+        NRun(c, w) => match c {
+            Zero => Tm::reduce_co_safe(NRun(0, w), w, Tm::reduces_one(Tm::red_unpack_zero(w))),
+            Succ(m) => CoTree::safe_ret<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRun(Succ(m), w).Reduces(v), NSucc(NRun(m, w)), Tm::reduces_one(Tm::red_unpack_succ(m, w))),
+        },
+    }
+}
+
+// Every value weak-head reduction returns is a reduct, with no fuel in sight.
+theorem Tm::whnf_co_sound(t: Tm, v: Tm, h: Returns(Events::none(), Tm::whnf_co(t), v)): t.Reduces(v) {
+    CoTree::rec_sound(Events::calls(Tm, Tm), Events::none(), Tm::step_co, Tm::Evaluates, Tm::step_co_safe, t, v, h)
+}
