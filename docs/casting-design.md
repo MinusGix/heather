@@ -744,3 +744,57 @@ Left: `↑`/`cast<B>` (§7 step 3, the surface); field reads in ring atoms'
 spellings (`CReal::at`); `ofInt` across two edges (`Dyadic::ofInt(n).rat()`
 against `Rat::ofInt(n)`, a composite-edge law); `Dyadic(NegSucc(k), e)`'s
 negation, which holds by computing a constructor.
+
+## 14. Slice 6: `↑` and `cast<B>` (2026-10-31)
+
+§7 step 3, the surface.
+
+- **Edges are `Cast` instances.** `class Cast<A, B>(map: A → B) { }` in
+  `morphism.hthr`; each lossless edge is declared beside its target type's
+  morphism, `instance Cast<Nat, Int>(OfNat) { }`, `Cast<Int, Rat>`,
+  `Cast<Rat, CReal>`, `Cast<Int, Dyadic>`, `Cast<Dyadic, Rat>`. The instance
+  table keys a `Cast` instance by its source carrier and its map, so one
+  source has as many targets as it has edges. The graph is read where the
+  cast is written: an edge whose module is not imported is not there.
+  A constructor map (`OfNat`) takes its target from its inductive; any
+  other map's target is its inferred type's codomain carrier.
+- **`↑e`** lexes as `TokKind::UpArrow` and parses as a prefix operator at
+  the precedence of `-`/`¬`, an `OpSymbol` application, so module images and
+  the parser's AST are unchanged. `op_rewrite` turns it, at a checking
+  position expecting `B`, into the maps of the shortest edge path from the
+  operand's carrier to `B` applied innermost first
+  (`dispatch/cast.rs`): `↑n : Rat` is `Rat::ofInt(OfNat(n))` by `refl`.
+  An operand already of the target type, by conversion, is returned as it
+  stands, so `fn g<A>(x: A) → A { ↑x }` and `↑x : Rat` at `x: Rat` are the
+  identity (the §5.2 lint on a concrete identity cast is not built).
+- **A leaf without a carrier.** `operator_carrier_leaf` skips a cast as an
+  anchor and does not descend into it, as it does a numeral, so
+  `↑m * x` and `x + ↑n - 1` take the spine's carrier from `x` and the cast
+  checks there.
+- **`cast<B>(e)`** is the same rewrite with the target named (lowered by
+  `elab_ty`), at checking and inference positions alike:
+  `let y = cast<Rat>(n);` is fine. It is recognized syntactically, a
+  type-applied `cast` that no local or global shadows, and is never a term.
+- **Refusals**, each pinned in `lib/_tests/std/algebra/morphism_tests.hthr`:
+  - no target: "a cast needs a target here: write `cast<B>(e)`, or give the
+    position a type";
+  - no path: "no cast from `Rat` to `Int`: … (the edges out of `Rat` here:
+    …); a lossy conversion is a named function, never `↑`";
+  - two shortest paths: "`↑` from `P` to `S` has 2 paths of the same length
+    (…)", naming both. It does not say "ambiguous": a refusal whose headline
+    says "is ambiguous" reads as a name-resolution slip to
+    `--expectations`;
+  - no `morphism` import: named, as the tactics' laws are.
+- **The mismatch help** (§5.4): a checking mismatch between two carriers
+  joined by an edge path appends "`Nat` embeds in `Rat` (Nat → Int → Rat):
+  write `↑` before it". The lossy-function variant is not built.
+- **Editor**: `↑` is in the Tree-sitter grammar's four prefix productions,
+  `syntax-inventory.json` and both highlight queries; the formatter writes it
+  tight (`↑n - 1`). A `match match …` that `mono.hthr` had grown, which the
+  editor grammar cannot parse, is a `let` now.
+
+Left: the speller still prints the maps, not `↑e` (§5.3). Printing `↑`
+needs every reader of spelled source to read it back, and `ring` and the
+tactics re-elaborate spellings at positions that may have no expected type,
+where `↑` would be refused; it waits for a spelling that carries the target
+where none is implied (`cast<B>`), and for the migration of §7 step 5.

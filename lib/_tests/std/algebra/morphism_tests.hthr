@@ -20,6 +20,9 @@ theorem dyadic_real_is_chain(d: Dyadic): dyadic_real(d) = CReal::ofRat(d.rat()) 
 // `cast<B>(e)` names the target where nothing else gives one.
 fn named(n: Nat) → CReal { cast<CReal>(n) }
 theorem named_is_chain(n: Nat): named(n) = CReal::ofRat(Rat::ofInt(OfNat(n))) { refl }
+// … including an inference position: an equation's side, an unannotated `let`.
+theorem named_inferred(n: Nat): cast<Rat>(n) = Rat::ofInt(OfNat(n)) { refl }
+fn named_let(n: Nat) → Rat { let y = cast<Rat>(n); y + 1 }
 // A cast is a leaf without a carrier of its own: the operator spine
 // takes its carrier from the other operand, and the cast checks there.
 fn scaled(m: Int, x: Rat) → Rat { ↑m * x }

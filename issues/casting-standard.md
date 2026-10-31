@@ -4,7 +4,7 @@ status: open
 labels: [design,elaboration,numerals,tactics]
 area: language
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 The library's numeric tower writes its casts five ways (`OfNat(n)`,
@@ -36,3 +36,4 @@ canonical `Nat → Int` spelling.
 - 2026-10-30: Minus objects to combined classes (`CommRingOfInt`, `OrderedFieldOfInt`, proposed `OrderedFieldOfRat`); design §5.6 makes a cast edge a registered morphism value (`OrderedRingHom<A, B>` record of map + laws), generic code takes the morphism as a parameter, and `Int`'s map is derivable by initiality. Agrees with [[interval-containment-once-over-ordered-field]].
 - 2026-10-30: DECIDED by Minus: option B, glyph `↑`, and the recommended answer on every other §8 question (edges = numeric tower + Dyadic/Finite first, shortest path + squash, morphism values, `OfNat(n)` canonical). Minus asked for cast tactics better than Lean's push_cast/norm_cast; §6.4 proposes cast-transparent arithmetic tactics (carrier-annotated reification) and `cast_to(S)` (state the goal you want, checked modulo morphism laws) with located `push_cast(at: …)` as the fallback.
 - 2026-10-30: Slice 1 landed (§9): morphism edges + mono reads casts; push-cast-through-embeddings closed; next [[cast-carrier-reader]], then the surface.
+- 2026-10-31: Slice 6 (§14): `↑e` and `cast<B>(e)` elaborate along the shortest path of `Cast` instances (`class Cast<A, B>(map)` in morphism.hthr, one instance per edge); refusals for no target, no path, two shortest paths; the mismatch help names the embedding; editor grammar knows `↑`. Left: the speller printing `↑` (§5.3), the identity-cast lint, the lossy-function help, and §7 steps 4–5.
