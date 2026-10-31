@@ -132,3 +132,24 @@ containment for free.
   and `OrderedFieldOfInt`. The containment proofs use only a monotone map
   commuting with `+`, `*`, `-` up to `≈`, so a `Dyadic → K` morphism (the
   composite through `Rat`) would let statements drop `.rat()`.
+- 2026-10-31: RE-CHECKED on master after #290 (match refines hypotheses:
+  the convoys are gone) and #286 (morphism records; `mono` reads images
+  through cast edges, so most per-carrier proofs are now two `by
+  mono_with` lines). The decided shape works: a
+  `section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K}, hom:
+  OrderedRingHom<Rat, K>(map, …, ≈, <, <=, +, *, K.inv, K.unit,
+  K.multiplicative.unit))` header is accepted; a generic `add_bnd_has_in`
+  read at `CReal` with `CReal::ofRat_hom()` and at `Rat` with an identity
+  morphism, both by conversion. The identity needs a named map
+  (`fn Rat::id(self q: Rat) → Rat { q }`): with `λ q => q` as the map the
+  kernel refuses the reading with NotConvertible between two
+  `OrderedRingHom<…>` types that display the same. Members of the section
+  take `hom` explicitly, including sibling calls inside it
+  (`Bnd(a, b).HasIn(hom, x)`, `Interval::image_add(hom, a, c, x)`). The
+  blocker for doing it now is [[cast-reading-through-local-morphism]]:
+  inside the section `mono` cannot read `map(Dyadic::add(a, c).rat())`
+  through `hom`, so the generic proofs would be the long named-law form
+  while the per-carrier ones are short. Since #286 the duplication is cheap
+  (two short proofs instead of two long ones), so do that issue first, then
+  this round becomes moving `creal_interval.hthr`'s proofs into the section.
+
