@@ -45,7 +45,7 @@ per instruction, and the two largest were the elaboration of the literals:
   `List::map([n, …], λ b => BitVec::ofNat(8, b))` instead of a literal of
   `from_bits(8, [eight Bools])`. The elaborator paid eight constructor
   lookups and a vector per byte; the kernel reads `ofNat` at a numeral as
-  one word ([[ofnat-nat-state-arithmetic]]), so `piece_#_is` is unchanged
+  one word ([[native-encoder-ofnat-cost]]), so `piece_#_is` is unchanged
   (6.158M → 6.161M steps) and `upto_#_len` grows a little (138K → 249K steps,
   under 0.1 s).
 - **Instruction blocks by their constructors** (`verified::read_items_with`):
