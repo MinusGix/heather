@@ -15,7 +15,8 @@ use heather_cli::showcase;
 /// One `write-elf` of cat through the library gate's image store, whose
 /// closure replays what the gate built (every module is keyed by its own
 /// closure, `docs/module-dag-design.md`); the suite runs the gate first and
-/// this target after it (`PREREQUISITES` in scripts/run-test-targets.mjs). In the suite's stale lanes it replays images an earlier
+/// starts this target once the images it replays are built
+/// (`PREREQUISITES` in scripts/run-test-targets.mjs). In the suite's stale lanes it replays images an earlier
 /// build wrote, as the gate does: without that, every compiler edit made
 /// this test rebuild the whole closure from source.
 fn write_cat(output: &Path) {

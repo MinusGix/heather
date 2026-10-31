@@ -17,8 +17,9 @@ use std::process::{Command, Stdio};
 use heather_cli::showcase;
 
 /// One `write-elf` of `symbol` through the image store native_cat.rs uses,
-/// over the gate's world as cat's is (the gate builds it, and the suite runs
-/// this target after the gate), in the stale lanes replaying images an earlier build wrote.
+/// over the gate's world as cat's is (the gate builds it, and the suite starts
+/// this target once the images it replays are built), in the stale lanes
+/// replaying images an earlier build wrote.
 fn write_tool(symbol: &str, output: &Path) { write_program("lib/native/native_tools.hthr", symbol, output, false) }
 
 /// `write_tool` of a program in any module; `both_allocators` has

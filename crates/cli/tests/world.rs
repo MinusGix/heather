@@ -129,6 +129,32 @@ fn build_jobs_build_every_missing_module_ahead() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `--unbuilt` names the modules of a load that have no image, in the
+/// loader's order, and exits 1 while there are any; it builds nothing. The
+/// test runner asks it before starting a target that reads the gate's store.
+#[test]
+fn unbuilt_names_the_modules_without_an_image() {
+    let root = library("unbuilt", LIB);
+    let unbuilt = || {
+        let out = Command::new(env!("CARGO_BIN_EXE_heather"))
+            .current_dir(&root)
+            .arg("check")
+            .arg("--cache-dir")
+            .arg(root.join("images"))
+            .args(["--unbuilt", "lib/c"])
+            .output()
+            .expect("run heather");
+        (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    assert_eq!(unbuilt(), (Some(1), "colour\nbase\nuser\n".to_string()));
+    assert_eq!(unbuilt().1, "colour\nbase\nuser\n", "asking builds nothing");
+    check(&root, &["lib/a"]);
+    assert_eq!(unbuilt(), (Some(1), "base\nuser\n".to_string()));
+    check(&root, &["lib/c"]);
+    assert_eq!(unbuilt(), (Some(0), String::new()));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A module that fails to build is reported, its dependents are left
 /// unbuilt, and the check after the builds reports it as usual.
 #[test]

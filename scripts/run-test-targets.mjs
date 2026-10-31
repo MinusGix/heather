@@ -4,7 +4,7 @@
 // workspace runs. Keep policy (limits, lanes, doctests) there; this file owns
 // scheduling, buffered output, and exact result accounting.
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { dirname, normalize, resolve } from "node:path";
@@ -67,11 +67,27 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 // from it (every module is keyed by its own closure,
 // docs/module-dag-design.md); cold, one `write-elf` would build that closure
 // itself, past the CPU rail. So a prerequisite starts first and its readers
-// wait until it has finished, pass or fail, while every other target fills
-// the slots it leaves idle. A prerequisite the run does not hold blocks nothing.
+// wait, while every other target fills the slots it leaves idle. A
+// prerequisite the run does not hold blocks nothing.
+//
+// A reader needs only the images its own loads replay, not the whole gate:
+// `built` names the folders whose loads cover them (every file the native
+// targets hand to `write-elf` is in one, and `write-elf`'s fixed imports,
+// `WRITE_ELF_IMPORTS`, are in lib/native's closure), and `store` the image
+// store. While the prerequisite runs, the runner asks `heather check
+// --unbuilt` (BuildPlan, docs/module-dag-design.md §12: image headers only,
+// nothing elaborated) every PROBE_SECONDS, and releases the readers as soon
+// as nothing there is unbuilt; if that never happens they start when the
+// prerequisite finishes, pass or fail, as before. Warm, the first probe
+// releases them.
 // scripts/test used to run the gate alone as a warmup before this phase and
 // then again here as a test (issues/library-gate-warmup-runs-alone.md).
-export const PREREQUISITES = new Map([["library", ["native_cat", "native_tools"]]]);
+export const PREREQUISITES = new Map([["library", {
+  readers: ["native_cat", "native_tools"],
+  built: ["lib/native", "lib/_tests/native"],
+  store: "target/cli-check-images",
+}]]);
+const PROBE_SECONDS = 10;
 
 // Schedule order: prerequisites first, exclusive targets last, the rest
 // slowest-first by the latest history; each target gets `after`, the
@@ -79,7 +95,7 @@ export const PREREQUISITES = new Map([["library", ["native_cat", "native_tools"]
 export function orderTargets(targets, history = new Map()) {
   const present = new Set(targets.map((t) => t.name));
   const waits = new Map();
-  for (const [before, readers] of PREREQUISITES) {
+  for (const [before, { readers }] of PREREQUISITES) {
     if (!present.has(before)) continue;
     for (const reader of readers) waits.set(reader, [...(waits.get(reader) ?? []), before]);
   }
@@ -88,6 +104,34 @@ export function orderTargets(targets, history = new Map()) {
   ordered.sort((a, b) => rank(a) - rank(b)
     || (history.get(b.label) ?? 0) - (history.get(a.label) ?? 0) || a.label.localeCompare(b.label));
   return ordered;
+}
+
+// The `heather` binary the test targets run (`CARGO_BIN_EXE_heather`): the
+// manifest's non-test artifact of the bin target, or null.
+export function binaryOf(text, name) {
+  for (const line of text.split("\n")) {
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (msg.reason === "compiler-artifact" && msg.executable && !msg.profile?.test
+      && msg.target?.name === name && msg.target.kind.includes("bin")) return msg.executable;
+  }
+  return null;
+}
+
+// The probe's command: the modules of `built`'s loads that `store` has no
+// image of, under the lane's image policy (the gate's and `write-elf`'s).
+export function probeArgs({ built, store }, env = process.env) {
+  const stale = env.HEATHER_SEMANTIC_IMAGES === "accept-stale" ? ["--accept-stale-images"] : [];
+  return ["check", "--cache-dir", store, ...stale, "--unbuilt", ...built];
+}
+
+// Resolves to true when the probe found nothing unbuilt (exit 0); a refusal,
+// a crash or a missing binary is not ready.
+function probe(heather, prerequisite) {
+  return new Promise((resolve) => {
+    execFile(heather, probeArgs(prerequisite), { cwd: process.cwd(), maxBuffer: 1024 * 1024, timeout: 120_000,
+      env: { ...process.env, HEATHER_KERNEL_WORKERS: "1" } }, (error) => resolve(!error));
+  });
 }
 
 // A family binary (`family_*`, crates/elab/Cargo.toml) links several test
@@ -429,24 +473,56 @@ function readOwnCgroupValue(name) {
   }
 }
 
-export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}) {
+// `ready(prerequisite)` resolves to whether its readers may start before it
+// finishes (`probe` over the manifest's `heather`; none, they never do),
+// asked every `probeSeconds`.
+export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}, ready = null, probeSeconds = PROBE_SECONDS) {
   const pending = [...targets];
   const completed = [];
   const finished = new Set();
+  // Prerequisites whose readers were released before they finished.
+  const released = new Set();
+  const probing = new Set();
+  const timers = new Set();
   let active = 0;
   let failed = false;
   return new Promise((resolve) => {
+    // Ask again in `probeSeconds` while `name` runs and a reader still waits.
+    const watch = (name) => {
+      if (!ready || probing.has(name) || !PREREQUISITES.get(name)?.built) return;
+      probing.add(name);
+      const ask = async () => {
+        const waiting = () => !finished.has(name) && !released.has(name)
+          && pending.some((t) => (t.after ?? []).includes(name));
+        if (!waiting()) return;
+        if (await ready(name) && waiting()) {
+          released.add(name);
+          const readers = pending.filter((t) => (t.after ?? []).includes(name)).map((t) => t.name);
+          process.stdout.write(`[ready] ${name}: ${PREREQUISITES.get(name).built.join(", ")} built; ${readers.join(", ")} may start\n`);
+          pump();
+          return;
+        }
+        const timer = setTimeout(() => { timers.delete(timer); ask(); }, probeSeconds * 1000);
+        timers.add(timer);
+      };
+      ask();
+    };
     const pump = () => {
-      if ((!pending.length || (failed && !keepGoing)) && active === 0) return resolve(completed);
+      if ((!pending.length || (failed && !keepGoing)) && active === 0) {
+        for (const timer of timers) clearTimeout(timer);
+        return resolve(completed);
+      }
       while (active < jobs && pending.length && !(failed && !keepGoing)) {
-        // The first target whose prerequisites have finished; with nothing
-        // running and nothing ready, the head, so a cycle cannot hang.
-        let index = pending.findIndex((t) => (t.after ?? []).every((name) => finished.has(name)));
+        // The first target whose prerequisites have finished or released it;
+        // with nothing running and nothing ready, the head, so a cycle
+        // cannot hang.
+        let index = pending.findIndex((t) => (t.after ?? []).every((name) => finished.has(name) || released.has(name)));
         if (index < 0 && active === 0) index = 0;
         if (index < 0) break;
         if (pending[index].exclusive && active > 0) break;
         const [target] = pending.splice(index, 1);
         active++;
+        if (PREREQUISITES.has(target.name)) watch(target.name);
         process.stdout.write(`[start ${completed.length + active}/${targets.length}] ${target.label}${target.exclusive ? " (exclusive)" : ""}\n`);
         const started = process.hrtime.bigint();
         const args = [...libtestArgs, ...(target.args ?? [])];
@@ -523,8 +599,10 @@ async function main() {
     mkdirSync(declsDir, { recursive: true });
     console.log(`declaration rows per test thread go to ${declsDir}/ (HEATHER_SUITE_DECLS)`);
   }
+  const heather = binaryOf(readFileSync(manifest, "utf8"), "heather");
+  const ready = heather ? (name) => probe(heather, PREREQUISITES.get(name)) : null;
   const runs = await runTargets(targets, jobs, libtestArgs, keepGoing,
-    declsDir ? { HEATHER_TIMINGS_DIR: resolve(declsDir) } : {});
+    declsDir ? { HEATHER_TIMINGS_DIR: resolve(declsDir) } : {}, ready);
   // Complete target blocks are emitted in stable label order, never interleaved.
   runs.sort((a, b) => a.target.label.localeCompare(b.target.label));
   for (const run of runs) {

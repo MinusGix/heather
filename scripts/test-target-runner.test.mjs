@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CPU_MARKER, collect, completionMessage, familyShards, jobBounds, limitedCommand, listingArgs, orderTargets, parseArtifacts, parseCpu, parseResults, parseTestTimes, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
+import { CPU_MARKER, binaryOf, collect, completionMessage, familyShards, jobBounds, limitedCommand, listingArgs, orderTargets, parseArtifacts, parseCpu, parseResults, parseTestTimes, PREREQUISITES, probeArgs, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -194,6 +194,55 @@ test("a prerequisite starts first and only its readers wait for it", async () =>
     process.stdout.write = write;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a probe releases a prerequisite's readers before it finishes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "heather-release-"));
+  const write = process.stdout.write;
+  try {
+    const built = join(dir, "built");
+    const read = join(dir, "read");
+    const summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s";
+    // The gate builds what its readers need, then passes only if a reader
+    // ran while it was still going; the reader needs that part built.
+    const targets = orderTargets([
+      { name: "native_tools", label: "native_tools.rs", executable: "bash", args: ["-c",
+        '[[ -f "$1" ]] && touch "$2" && printf "%s\\n" "$3"', "reader", built, read, summary] },
+      { name: "library", label: "library.rs", executable: "bash", args: ["-c",
+        'sleep 0.2; touch "$1"; for _ in $(seq 100); do [[ -f "$2" ]] && break; sleep 0.05; done; [[ -f "$2" ]] && printf "%s\\n" "$3"',
+        "gate", built, read, summary] },
+    ]);
+    let received = "";
+    process.stdout.write = function(chunk, ...args) {
+      const message = chunk.toString();
+      if (!/^\[(start|done |ready)/.test(message)) return write.call(this, chunk, ...args);
+      received += message;
+      return true;
+    };
+    const asked = [];
+    const ready = async (name) => { asked.push(name); return existsSync(built); };
+    const runs = await runTargets(targets, 2, [], true, {}, ready, 0.05);
+    for (const run of runs) assert.equal(run.result.passed, 1, `${run.target.label}: ${run.output}`);
+    assert.ok(asked.length >= 2 && asked.every((name) => name === "library"), asked.join());
+    assert.match(received, /\[ready\] library: lib\/native, lib\/_tests\/native built; native_tools may start/);
+    assert.ok(received.indexOf("[ready]") < received.indexOf("library.rs: PASS"), received);
+  } finally {
+    process.stdout.write = write;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the probe is the manifest's heather asking the gate's store under the lane's images", () => {
+  const manifest = [
+    JSON.stringify({ reason: "compiler-artifact", executable: "/t/debug/deps/heather-1", profile: { test: true }, target: { name: "heather", kind: ["bin"] } }),
+    JSON.stringify({ reason: "compiler-artifact", executable: "/t/debug/heather", profile: { test: false }, target: { name: "heather", kind: ["bin"] } }),
+  ].join("\n");
+  assert.equal(binaryOf(manifest, "heather"), "/t/debug/heather");
+  assert.equal(binaryOf(manifest, "other"), null);
+  const library = PREREQUISITES.get("library");
+  assert.deepEqual(probeArgs(library, {}),
+    ["check", "--cache-dir", "target/cli-check-images", "--unbuilt", "lib/native", "lib/_tests/native"]);
+  assert.deepEqual(probeArgs(library, { HEATHER_SEMANTIC_IMAGES: "accept-stale" }).slice(3, 4), ["--accept-stale-images"]);
 });
 
 test("the wrapper's CPU line is summed and removed from the child's output", () => {

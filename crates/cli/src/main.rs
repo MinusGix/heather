@@ -100,7 +100,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--build-jobs <n> [--build-only]] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--build-jobs <n> [--build-only]] [--unbuilt] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
@@ -165,6 +165,13 @@ struct Opts {
     build_jobs: Option<usize>,
     /// `--build-only`: stop after `--build-jobs`' builds.
     build_only: bool,
+    /// `--unbuilt`: name the modules of the load that have no image yet,
+    /// one per line, and exit 1 when there are any; nothing is elaborated
+    /// (the plan `--build-jobs` schedules from, [`BuildPlan`]). The test
+    /// runner asks it when a target may start reading the gate's store.
+    ///
+    /// [`BuildPlan`]: heather_cli::semantic::BuildPlan
+    unbuilt: bool,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -186,6 +193,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         world: None,
         build_jobs: None,
         build_only: false,
+        unbuilt: false,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -266,6 +274,10 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             opts.build_only = true;
             continue;
         }
+        if a == "--unbuilt" {
+            opts.unbuilt = true;
+            continue;
+        }
         if let Some(rest) = a.strip_prefix("--only") {
             let spec = match rest.strip_prefix('=') {
                 Some(d) if !d.is_empty() => d.to_string(),
@@ -324,6 +336,12 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
     if opts.build_jobs.is_some() && !opts.cache {
         return Err("`--build-jobs` builds module images: pass `--cache` (or `--cache-dir`)".into());
     }
+    if opts.unbuilt && !opts.cache {
+        return Err("`--unbuilt` reads module images: pass `--cache` (or `--cache-dir`)".into());
+    }
+    if opts.unbuilt && opts.build_jobs.is_some() {
+        return Err("`--unbuilt` builds nothing: drop `--build-jobs`".into());
+    }
     if opts.build_only && opts.build_jobs.is_none() {
         return Err("`--build-only` needs `--build-jobs`".into());
     }
@@ -334,6 +352,9 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
 }
 
 fn check(opts: &Opts, files: &[String]) -> ExitCode {
+    if opts.unbuilt {
+        return unbuilt(opts, files);
+    }
     let stderr_color = color::stderr_enabled();
     let stdout_color = color::stdout_enabled();
     if opts.timings.is_some() {
@@ -1118,6 +1139,40 @@ fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jo
         eprintln!("build: {f}");
     }
     eprintln!("build: {built} module{} built ahead, {} failed", if built == 1 { "" } else { "s" }, failed.len());
+}
+
+/// `--unbuilt`: the modules of every path's load without an image, read off
+/// image headers as [`build_ahead`] plans, in the loader's order.
+fn unbuilt(opts: &Opts, files: &[String]) -> ExitCode {
+    use heather_cli::semantic::{BuildPlan, BuildState};
+    let stderr_color = color::stderr_enabled();
+    let mut missing = std::collections::BTreeSet::new();
+    for path in files {
+        let root_path = Path::new(path);
+        let search = search_for_path(root_path, &opts.search);
+        let roots = match roots_for_path(root_path, &search) {
+            Ok(roots) => roots,
+            Err(msg) => {
+                eprintln!("{}: {msg}", color::error_label(stderr_color));
+                return ExitCode::from(2);
+            }
+        };
+        let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        let modules = match loader::load_many(&root_refs, &search) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("{}: {}", color::error_label(stderr_color), e.msg);
+                return ExitCode::from(2);
+            }
+        };
+        let plan = BuildPlan::new(opts.cache_dir.clone(), opts.images, modules);
+        for (i, m) in plan.modules().iter().enumerate() {
+            if plan.state(i) != BuildState::Built && missing.insert(m.name.clone()) {
+                println!("{}", m.name);
+            }
+        }
+    }
+    ExitCode::from(if missing.is_empty() { 0 } else { 1 })
 }
 
 fn search_for_path(path: &Path, configured: &[PathBuf]) -> Vec<PathBuf> {
