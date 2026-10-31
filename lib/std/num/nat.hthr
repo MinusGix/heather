@@ -1956,6 +1956,85 @@ theorem Nat::ldiv_mod(self n: Nat, d: Pos<Nat>): n.ldiv(d).rem() = n.mod(d) {
 }
 
 // ---------------------------------------------------------------------------
+// `2^K / d` for reciprocal bounds (issues/interval-evaluation-budget.md).
+// `ldiv` halves all `K` bits of its numerator, a halving, a doubling, a
+// subtraction, a decision and its proof per bit; at the `K` of a series
+// ratio's reciprocal that was most of an interval enclosure's cost. A
+// reciprocal needs only the quotient's bits, and needs them only as a guess
+// that two comparisons can check.
+
+// A division whose quotient was guessed: kept when `g·d <= n < (g + 1)·d`,
+// which is two comparisons, and `ldiv` otherwise. Its parts are `ldiv`'s
+// whichever way the check goes.
+fn Nat::div_checked(n, d, g: Nat) → DivMod {
+    match Nat::leb(g * d, n) {
+        True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) },
+        False => n.ldiv(d),
+    }
+}
+
+theorem Nat::div_checked_parts(n, d, g: Nat): Nat::div_checked(n, d, g).quot() * d + Nat::div_checked(n, d, g).rem() = n {
+    match Nat::leb(g * d, n) as λ c => Nat::leb(g * d, n) = c →
+        (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).quot() * d
+        + (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() = n
+    {
+        True => λ le => match Nat::leb(Succ(n - g * d), d) as λ c2 =>
+            (match c2 { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }).quot() * d + (match c2 { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }).rem() = n
+        {
+            True => trans((g * d).add_comm(n - g * d), (g * d).sub_add_cancel(n, (g * d).leb_sound(n, j(sym(le), λ c _ => c.IsTrue(), trivial)))),
+            False => n.ldiv_parts(d),
+        },
+        False => λ _ => n.ldiv_parts(d),
+    }(refl)
+}
+
+theorem Nat::div_checked_rem_lt(n: Nat, d: Pos<Nat>, g: Nat): Nat::div_checked(n, d, g).rem() < d {
+    match Nat::leb(g * d, n) as λ c =>
+        (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() < d
+    {
+        True => match Nat::leb(Succ(n - g * d), d) as λ c2 => Nat::leb(Succ(n - g * d), d) = c2 →
+            (match c2 { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }).rem() < d
+        {
+            True => λ lt => Succ(n - g * d).leb_sound(d, j(sym(lt), λ c _ => c.IsTrue(), trivial)),
+            False => λ _ => n.ldiv_rem_lt(d, d_pos := d_pos),
+        }(refl),
+        False => n.ldiv_rem_lt(d, d_pos := d_pos),
+    }
+}
+
+// The guess for `⌊2^K / d⌋`: from `q·d + r = 2^j` with `r < d`, each step
+// doubles `r` and takes one quotient bit, a doubling, a comparison and a
+// subtraction. Starting at `2^j <= d` (`j = width(d) - 1`) leaves `K - j`
+// steps, the quotient's own bits, where `ldiv` would halve all `K` bits of
+// the numerator. The fuel goes on the comparisons, which the kernel charges
+// by the length of the numbers compared.
+fn Nat::recip_bits(d: Nat, s: DivMod, steps: Nat) → DivMod {
+    match steps {
+        Zero => s,
+        Succ(k) => match s { MkDivMod(q, r) => Nat::recip_bits(d, match Nat::leb(d, r * 2) { True => MkDivMod(Succ(q * 2), r * 2 - d), False => MkDivMod(q * 2, r * 2) }, k) },
+    }
+}
+
+fn Nat::pow2_div_start(d, P: Nat) → DivMod { match Nat::leb(d, P) { True => MkDivMod(1, P - d), False => MkDivMod(0, P) } }
+
+fn Nat::pow2_div_from(K, d, j: Nat) → Nat { Nat::recip_bits(d, Nat::pow2_div_start(d, Nat::pow_sq(2, j)), K - j).quot() }
+
+fn Nat::pow2_div_guess(K, d: Nat) → Nat { Nat::pow2_div_from(K, d, d.width() - 1) }
+
+// `2^K` divided by `d`, with `ldiv`'s parts.
+fn Nat::pow2_div(K, d: Nat) → DivMod { Nat::div_checked(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d)) }
+
+theorem Nat::pow2_div_parts(K, d: Nat): Nat::pow2_div(K, d).quot() * d + Nat::pow2_div(K, d).rem() = Nat::pow(2, K) {
+    j(Nat::pow_sq_eq(2, K), λ N _ => Nat::div_checked(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d)).quot() * d
+        + Nat::div_checked(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d)).rem() = N,
+        Nat::div_checked_parts(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d)))
+}
+
+theorem Nat::pow2_div_rem_lt(K: Nat, d: Pos<Nat>): Nat::pow2_div(K, d).rem() < d {
+    Nat::div_checked_rem_lt(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d), d_pos := d_pos)
+}
+
+// ---------------------------------------------------------------------------
 // Integer square root. `isqrt` takes the root `r` of `⌊n/4⌋` first; the root
 // of `n` is then `2r` or `2r + 1`, and one comparison of `(2r + 1)²` with `n`
 // picks it. A step is a multiplication and a comparison, which the kernel

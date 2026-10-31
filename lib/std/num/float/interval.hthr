@@ -282,7 +282,17 @@ theorem Interval::recip_has(I: Interval, p: Nat, {x: Rat}, h: I.Has(x)): I.recip
 
 fn Interval::of_int(n: Int) → Interval { Interval::point(Dyadic(n, 0)) }
 
-fn Interval::of_rat(q: Rat, p: Nat) → Interval { Interval::of_int(q.num).mul(Interval::of_int(q.den.int()).recip(p), p) }
+// The reciprocal of a positive point, one quotient for both bounds:
+// `recip(point(d))` divides twice and tests both signs first.
+fn Interval::recip_quot_at(e: Int, K, q: Nat) → Interval { Bnd(Dyadic(q.int(), -e - K.int()), Dyadic(Succ(q).int(), -e - K.int())) }
+
+fn Interval::recip_cut_at(e: Int, K, m: Nat) → Interval { Interval::recip_quot_at(e, K, Nat::pow2_div(K, m).quot()) }
+
+fn Interval::recip_point(d: Dyadic, p: Nat) → Interval { Interval::recip_cut_at(d.exp, d.recip_cut(p), d.mant.natAbs()) }
+
+theorem Interval::recip_point_has(d: Dyadic, p: Nat, pos: 0 < d): Interval::recip_point(d, p).Has(d.rat().recip()) { d.recip_bounds(p, pos) }
+
+fn Interval::of_rat(q: Rat, p: Nat) → Interval { Interval::of_int(q.num).mul(Interval::recip_point(Dyadic(q.den.int(), 0), p), p) }
 
 theorem Interval::of_rat_same(q: Rat): Dyadic(q.num, 0).rat() * Dyadic(q.den.int(), 0).rat().recip() ≈ q {
     let D = Dyadic(q.den.int(), 0).rat();
@@ -302,8 +312,8 @@ theorem Interval::of_rat_same(q: Rat): Dyadic(q.num, 0).rat() * Dyadic(q.den.int
 
 theorem Interval::of_rat_has(q: Rat, p: Nat): Interval::of_rat(q, p).Has(q) {
     let num = Interval::point_has(Dyadic(q.num, 0));
-    let den = Interval::recip_has(Interval::of_int(q.den.int()), p, Interval::point_has(Dyadic(q.den.int(), 0)));
-    Interval::has_respects(Interval::of_rat(q, p), Interval::of_rat_same(q), Interval::mul_has(Interval::of_int(q.num), Interval::of_int(q.den.int()).recip(p), p, num, den))
+    let den = Interval::recip_point_has(Dyadic(q.den.int(), 0), p, Dyadic::pos_of_mant(0, q.den_pos));
+    Interval::has_respects(Interval::of_rat(q, p), Interval::of_rat_same(q), Interval::mul_has(Interval::of_int(q.num), Interval::recip_point(Dyadic(q.den.int(), 0), p), p, num, den))
 }
 
 fn Interval::npow(self I: Interval, n, p: Nat) → Interval { match n { Zero => Interval::of_int(1), Succ(k) => I.npow(k, p).mul(I, p) } }
