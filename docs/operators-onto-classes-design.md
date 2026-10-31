@@ -775,7 +775,13 @@ parent that has it. That checks at `Rat` and `CReal` because their canonical
 instances already share the ancestor by reference (traits-design §4). At an
 open carrier with no merged dictionary in scope the fields need not agree,
 and the kernel gate refuses the assembly. A closed answer is queued for the
-canonical table, so a carrier pays for its assembly once.
+canonical table, so a carrier pays for its assembly once. That has to work
+with goals in flight, because nearly every call is in a tactic's
+certificate: `record_joined` reads the applied spelling out of the goal
+world and the call's Γ before queueing it, and `joined_hit` looks entries up
+at the spelling, shifted into the goal world. Without it every `linarith`
+call rebuilt and re-gated the whole dictionary, and `creal`'s cold build
+went past the suite's CPU rail.
 
 **Index pinning reads the parents too.** A call's index slots are filled
 from a dictionary in scope of the goal's class or a descendant

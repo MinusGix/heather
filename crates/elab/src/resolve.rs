@@ -345,6 +345,14 @@ impl Elaborator {
         if let Some(t) = self.derived_hit(cx, goal, prefer) {
             return Some(t);
         }
+        // A merged class's assembly is minted at its applied spelling (step
+        // 2b), which the inline lowering does not convert to within the
+        // table's lookup fuel.
+        if inline.is_some() && self.tag_of(goal).is_some_and(|i| i.name.contains('+')) {
+            if let Some(t) = self.joined_hit(cx, spelled, prefer) {
+                return Some(t);
+            }
+        }
 
         // 1. Ascending scopes: locals innermost-first, then `let` aliases.
         //    "An explicit value in scope always wins over derivation" is this
@@ -637,7 +645,7 @@ impl Elaborator {
             tr.push(line(depth, "rejected", "the parents' fields disagree here".to_string()));
             return None;
         }
-        self.record_derived(goal, lvl, prefer);
+        self.record_joined(cx, spelled, lvl, prefer);
         Some(t)
     }
 
@@ -1122,6 +1130,65 @@ impl Elaborator {
         Some(self.derived_ref(cx, d.abs))
     }
 
+    /// [`Self::derived_hit`] for a merged class's assembly (step 2b), at the
+    /// goal's applied spelling and in the goal world: a table entry's
+    /// committed globals sit `global_padding` further out there. A
+    /// tactic's certificate is elaborated with goals in flight, which is
+    /// where nearly every such call is.
+    fn joined_hit(&self, cx: &Cx, spelled: &Type, prefer: Option<&str>) -> Option<Term> {
+        let now = self.psi.bindings.len() as u32;
+        let pad = self.global_padding();
+        let d = self
+            .traits
+            .derived()
+            .iter()
+            .filter(|d| heads_may_agree(d.head.as_deref(), prefer))
+            .find(|d| {
+                let ty = d.ty.shift_global(now - d.at);
+                let ty = if pad == 0 { ty } else { weaken_global_below(&ty, pad) };
+                self.derived_conv(cx, &ty, spelled, &d.level)
+            })?;
+        Some(self.derived_ref(cx, d.abs))
+    }
+
+    /// Queue a merged class's assembly for the canonical table. Unlike
+    /// [`Self::record_derived`] it accepts a goal met with goals in flight:
+    /// the type is read out of the goal world (its committed globals
+    /// renumbered down past the arena, refused if it mentions a goal) and
+    /// out of the call's Γ (refused if it mentions a local), so the mint
+    /// re-runs the search in the empty context of the committed Ψ.
+    fn record_joined(&self, cx: &Cx, spelled: &Type, lvl: &Level, prefer: Option<&str>) {
+        if !matches!(cx.gamma.base, heather_kernel::term::CtxBase::Nil) {
+            return;
+        }
+        let n = cx.gamma.entries.len() as u32;
+        let Some(local) = crate::unification::strengthen_ty(&LocalCtx::nil(), spelled, n) else {
+            return;
+        };
+        let pad = self.global_padding();
+        let closed = if pad == 0 {
+            local
+        } else {
+            let down = local.apply_global(&heather_kernel::subst::GlobalSubst {
+                entries: (0..pad).map(|_| heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::Zero))).collect(),
+            });
+            if weaken_global_below(&down, pad) != local {
+                return;
+            }
+            down
+        };
+        if !self.type_is_closed(&closed, lvl) {
+            return;
+        }
+        let mut pending = self.pending_derived.borrow_mut();
+        if pending.iter().any(|(t, l, _, head)| {
+            heads_may_agree(head.as_deref(), prefer) && self.derived_conv(&Cx::empty(), t, &closed, l)
+        }) {
+            return;
+        }
+        pending.push((closed, lvl.clone(), self.psi.bindings.len() as u32, prefer.map(str::to_string)));
+    }
+
     /// `u^δ` for a minted global, the same construction [`Elaborator::resolve`]
     /// makes for a written name: the goals sit innermost, so a committed
     /// binding is that much further out, and a closed statement's delayed
@@ -1399,4 +1466,10 @@ impl Measure {
                 .iter()
                 .all(|(b, n)| other.occurrences.get(b).is_some_and(|m| n <= m))
     }
+}
+
+/// A committed-world type read into a goal world `pad` arena entries deep:
+/// every global moves `pad` further out, since the arena sits innermost.
+fn weaken_global_below(t: &Type, pad: u32) -> Type {
+    t.shift_global(pad)
 }
