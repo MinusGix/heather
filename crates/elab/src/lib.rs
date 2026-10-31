@@ -5424,7 +5424,12 @@ impl Elaborator {
                     Some(dec) => self.varying_params(cx, arms, dec),
                     None => Vec::new(),
                 };
-                for p in self.refined_hypotheses(cx, arms, &scrut_t, dec, expected) {
+                // With `match h:` the convoy's equation is stated about the
+                // computed scrutinee itself, and an arm that passes `h` to a
+                // hypothesis needs that hypothesis about the same term, so
+                // neither is refined (design §5.1).
+                let refines = eqbind.is_none() || matches!(scrut_t, Term::Var(_));
+                for p in refines.then(|| self.refined_hypotheses(cx, arms, &scrut_t, dec, expected)).unwrap_or_default() {
                     if !positions.contains(&p) {
                         positions.push(p);
                     }
