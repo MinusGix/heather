@@ -257,8 +257,7 @@ theorem Interval::mul_box_has_in(a, b, c, d: Dyadic, p: Nat, x, y: K, hx: Bnd(a,
     let high: (x * y <= H) = StrictOrder::le_by_cases(x * y, H, y, K.unit,
         λ neg => PseudoOrder::le_trans(x * y, A * y, H, OrderedField::mul_le_mono_r_nonpos(A, x, y, hx.left, StrictOrder::le_of_lt(y, K.unit, neg)), hi_a),
         λ pos => PseudoOrder::le_trans(x * y, B * y, H, OrderedField::mul_le_mono_r(x, B, y, hx.right, pos), hi_b));
-    let both: (Bnd(lo, hi).HasIn(hom, x * y)) = And(low, high);
-    Interval::round_out_has_in(hom, lo, hi, p, x * y, both)
+    Interval::round_out_has_in(hom, lo, hi, p, x * y, And(low, high))
 }
 
 theorem Interval::mul_pos_has_in(a, b, c, d: Dyadic, p: Nat, ha: Dyadic::Le(0, a), hc: Dyadic::Le(0, c), x, y: K, hx: Bnd(a, b).HasIn(hom, x), hy: Bnd(c, d).HasIn(hom, y)):

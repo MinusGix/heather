@@ -1040,7 +1040,7 @@ fn List::list_eq_dec<A: DecEq>(self xs: List<A>) → (ys: List<A>) → xs = ys �
                                 Inl(tail_eq) => Inl(List::cons_eq(tail1, tail2, head1, head2, head_eq, tail_eq)),
                                 Inr(tail_ne) =>
                                     Inr(λ (p: (Cons(head1, tail1) = Cons(head2, tail2))) =>
-                                        tail_ne(List::cong_tail<A>(p))),
+                                        tail_ne(List::cong_tail(p))),
                             },
                     },
             },
