@@ -1,6 +1,6 @@
 # Compiler milestones, reconsidered: ordinary Heather compiles
 
-Status: **proposal, 2026-10-31; thesis adopted by Minus, §8 items 2–6 open.** Nothing here is built,
+Status: **proposal, 2026-10-31; thesis adopted by Minus, §8 items 5–7 open.** Nothing here is built,
 and `docs/roadmap.md` is unchanged until the decisions in §8 are made. Written
 on master `cb5331c`, after `hih-tools` reached nine of its fourteen tools.
 
@@ -29,12 +29,15 @@ directions all come back to the same gap, so the plan closes it:
   exit in pure functions. This removes the `bind` towers in tactics and the
   `local(…, λ x => …)` towers in tools with one feature, and gives
   imperative style in pure code (§3, milestone `lang-sequencing`).
-- The native compiler takes **ordinary first-order Heather**: words of any
-  width, `Bool`, records and enums, `match`, structural and measure
-  recursion, calls that are not inlined, then `uniq` capabilities for I/O,
-  then heap data through `datarepr`. Each of these is a general feature, and
-  each one makes many programs possible at once (§4, milestone
-  `hih-native-heather`).
+- An ordinary Heather function compiles when it is marked **`runtime fn`
+  under a setup**. A setup is a Heather library generator that boxes the
+  function, checks a judgment over its code, and hands the compiler a
+  lowering plus the proofs that judgment earned. The default setup takes
+  words of any width, `Bool`, records and enums, `match`, recursion, calls
+  that are not inlined, `uniq` capabilities for I/O, and heap data through
+  `datarepr`. A second setup, Rust-style ownership, gives the compiler
+  non-aliasing facts it can use. Each step is a general feature, not a
+  tool (§4, milestone `hih-native-heather`).
 - Heather in Heather gets **two concrete first components** on that
   compiler: Heather's own lexer, compiled natively and tested against the
   Rust lexer on the whole library; then the native compiler itself
@@ -125,21 +128,24 @@ compiled from its own Heather source would replace exactly that step.
 
 ## 2. The thesis
 
-> A program is an ordinary Heather function. The language makes that
-> function pleasant to write in an imperative style. The native compiler
-> takes it, and the builder and `Source` become the compiler's back half.
+> A program is an ordinary Heather function, opted into running by
+> `runtime fn` under a setup: a library generator that boxes the function,
+> analyses its code, and hands the compiler a lowering and the proofs its
+> analysis earned. The language makes that function pleasant to write in an
+> imperative style, and the builder and `Source` become the compiler's back
+> half.
 
 This joins Minus's three directions:
 
 | direction | what it becomes here |
 |---|---|
 | a better language | one sequencing surface (§3), used by tactics, parsers, `Result`/`Option`, trees, and native programs |
-| generalizing features | the compiler grows by language feature (records, calls, capabilities, heap), not by tool (§4) |
+| generalizing features | the compiler grows by language feature (records, calls, capabilities, heap) and by setup (ownership, constant time), not by tool (§4) |
 | Heather in Heather | the lexer, then the compiler itself, compiled from Heather (§5) |
 
 It also keeps the decisions already made. The effects decision
 (`issues/effects-direction.md`, 2026-10-21) is a uniqueness-threaded surface
-that denotes interaction trees, which is §4's round N4. The source's shape
+that denotes interaction trees, which is §4's step N3. The source's shape
 (control layer over total FunctionIR, loops split by totality,
 `docs/native-effect-source-design.md` §12) is the back half, unchanged. The
 principle "compiler proved once, no per-program proofs" holds. The one
@@ -238,53 +244,93 @@ carrier. Each is a refusal that names its reason
 
 ---
 
-## 4. The compiler: ordinary Heather compiles (`hih-native-heather`)
+## 4. The compiler: `runtime fn` setups (`hih-native-heather`)
 
-The compiler's back half stays as it is: `Source` statements, FunctionIR
-regions, checked homes, `native_compile_correct`, `write-elf`'s ELF theorem.
-The new work is a front end that takes ordinary Heather and produces a
-`Source` with a certificate that it agrees with the Heather function, then
-the language features that front end needs. Four submilestones, in order.
+### 4.1 What a `runtime fn` is
 
-**N1 `nh-front`: first-order pure functions.** One reflector, from an
-elaborated Heather function to FunctionIR regions and `Source` leaves. It
-generalizes `compile-x86`'s word reflector and replaces the builder for pure
-code. It takes:
+Heather is not Lean: not every function is compiled. An ordinary `fn` is
+kerneltime mathematics, and it never runs on hardware
+(`issues/datarepr-separation.md`, "Execution model"). A function crosses to
+the machine only when it opts in, and the opt-in is not a compiler keyword.
+It is a **declaration generator** written in Heather
+(`issues/runtime-compile-opt-in.md`, `issues/scoped-declaration-generators.md`).
+The generator boxes the function, so it can analyse the function's code
+*intensionally*. It then produces whatever that setup's compiler needs, as
+checked declarations (Minus, 2026-10-31).
 
-- `BitVec(w)` at any width the ISA model has, `Bool`, `Nat` narrowed to a
-  word with overflow as a refusal (the `datarepr` narrowing,
+So "ordinary Heather compiles" means this: an ordinary Heather function,
+marked `runtime fn` under some **setup**, compiles with no per-program proof.
+A setup is a library value with four parts:
+
+1. **A fragment and a reflection.** The fragment is the code the setup
+   accepts. The generator reads the function's boxed body through the pull
+   API (`Elaborator::fn_body_code` today, `docs/fn-signature-reflection-design.md`;
+   the host interface's `View` for tactics) into an ElabCode-style AST,
+   which is ordinary data (`issues/elabcode-abstraction-layer.md`).
+2. **A judgment.** This is a decidable check over that AST, written as an
+   ordinary `Bool` function. The default setup's judgment is "is in the
+   fragment". A stricter setup checks more.
+3. **One soundness theorem, proved once per setup.** It says what a
+   function that passes the judgment guarantees at run time. For the
+   default setup that is agreement: the `Source` it lowers to denotes the
+   function. A stricter setup's theorem also hands the compiler facts it
+   may use, such as "this buffer is not aliased" or "no branch depends on
+   a secret".
+4. **A lowering** from the AST to `Source` and FunctionIR, the back half
+   that exists today. Its output is kernel-checked as `write-elf`'s is.
+
+The compiler consumes a setup's evidence as it consumes any certificate.
+That is the claim of `issues/ownership-discipline-over-code.md`: a
+discipline is a decidable syntactic judgment over reflected code plus one
+soundness theorem, and the kernel never learns the word. Instance keying
+stays on syntax (`issues/compile-typeclass-design.md`): a setup's verdict is
+about this code, and refactoring the function re-runs the generator.
+
+### 4.2 The default setup, and its four steps
+
+The **default setup** is "abstract programming that can talk to the
+system". It covers words of any width, `Bool`, records and enums, `match`,
+§3's loops, calls, and I/O through capabilities. Representations come from
+`datarepr`. Its judgment is membership in the fragment, and its theorem is
+agreement. It grows in four steps (the submilestones):
+
+**N1 `nh-front`: the generator and the pure fragment.** The `runtime fn`
+generator, written in Heather on the host interface, and the default
+setup's pure fragment:
+
+- `BitVec(w)` at any width the ISA model has, `Bool`, and `Nat` narrowed
+  to a word, with overflow as a refusal (the `datarepr` narrowing,
   `docs/datarepr-design.md` §2.4);
-- flat records and enums (no recursive fields) laid out in words, so a
-  `WcState` record or an `enum Flag { L, W, C }` is a value, not a set of
-  word ids;
-- `match`, `if`, and the layer-2 loops of §3, which lower to FunctionIR's
-  bounded loop where a measure exists (L3) and to the layer's `Repeat`
-  otherwise;
+- flat records and enums laid out in words, so a `WcState` record or an
+  `enum Flag { L, W, C }` is a value and not a set of word ids;
+- `match`, `if`, and §3's loops, lowering to FunctionIR's bounded loop
+  where a measure exists (L3) and to the layer's `Repeat` otherwise;
 - fixed-size byte arrays as buffers, with `a[i]` and `a[i] := v` as the
-  state edges round 1 built;
-- calls inlined as today.
+  state edges that round 1 built;
+- calls inlined, as today.
 
-Its certificate states that the region evaluates to the function, at
-neutral arguments, in the `compile-x86` `_agrees` form. This absorbs
-`native-build-loop-regions` and `native-build-reflected-helpers`, and
-`compile-x86` becomes a client of the same reflector.
+Its agreement certificate states that the lowered region evaluates to the
+function at neutral arguments, in `compile-x86`'s `_agrees` form. Today
+`compile-x86`'s reflector is Rust (`crates/elab/src/function_ir_source/`).
+N1 moves that logic into Heather as the setup's lowering, which the
+roadmap's "logic in Heather, not Rust" principle asks for anyway. N1 also
+absorbs `native-build-loop-regions` and `native-build-reflected-helpers`.
 
-**N2 `nh-procedures`: calls that are not inlined.** A `Stmt` (or region)
-call to a compiled procedure, with its frame on the process stack
-(`io-image-process-stack`), its contract derived from its body, not proved
-per procedure (`native-procedure-contracts`), and a register convention
-(`native-register-moves-and-convention`). Recursion that is not a tail
-loop compiles. Code size grows once per helper rather than once per call
-site, which is the wall the next-areas evaluation predicted for `grep -F`.
+**N2 `nh-procedures`: calls that are not inlined.** A call to a compiled
+procedure, with its frame on the process stack (`io-image-process-stack`),
+its contract derived from its body rather than proved per procedure
+(`native-procedure-contracts`), and a register convention
+(`native-register-moves-and-convention`). Recursion that is not a tail loop
+compiles. Code grows once per helper, not once per call site, which is the
+wall the next-areas evaluation predicted for `grep -F`.
 
-**N3 `nh-effects`: I/O as uniqueness-threaded capabilities.** This is
-`effects-uniqueness-surface`: a program is a function over `uniq`
-capabilities, written with §3's surface.
-
-The spellings below are illustrative; R1 and R6 fix them.
+**N3 `nh-effects`: talking to the system.** This is
+`effects-uniqueness-surface`. A `runtime fn` takes `uniq` capabilities and
+is written with §3's surface. The spellings below are illustrative; R1 and
+R6 fix them.
 
 ```heather
-fn wc(io: uniq Io, args: Args) → Exit {
+runtime fn wc(io: uniq Io, args: Args) → Exit {
     let mut lines = 0;
     let mut buf: [BitVec(8); 4096] = zeros();
     loop {
@@ -297,20 +343,50 @@ fn wc(io: uniq Io, args: Args) → Exit {
 }
 ```
 
-It elaborates into `Source`: a run of pure statements becomes a leaf
-(through N1), `io.read` an `Invoke`, `loop` a `Repeat`. Its world-threading
-reading agrees with `denote` construct by construct, proved once (the
-statement of `ITree::run_state_bind`). Character and string literals are
-bytes here (`'\n'`, `"cat: "`), and a program file stops importing the
-compiler's modules by hand (`feature-implicit-module-dependencies`).
+It lowers into `Source`: a run of pure statements becomes a leaf (through
+N1), `io.read` becomes an `Invoke`, and `loop` becomes a `Repeat`. The pure
+reading, world threading, agrees with `denote` construct by construct,
+proved once (the statement of `ITree::run_state_bind`). Character and string
+literals are bytes here (`'\n'`, `"cat: "`). A program file stops importing
+the compiler's modules by hand (`feature-implicit-module-dependencies`).
 
 **N4 `nh-heap`: recursive data at run time.** This is `hih-first-alloc`,
-re-scoped. A bump arena (in the data segment first, then `mmap` as a Linux
-event), with exhaustion as a defined exit, which fits partial correctness.
-`datarepr` instances (already implemented for v1, `crates/elab/src/datarepr.rs`)
-give `List` and small trees arena cells, and the reflector compiles
-functions over them. A metered bound on the arena is `hih-alloc-metering`'s
-follow-up, not a prerequisite.
+re-scoped. It starts with a bump arena in the data segment, then moves to
+`mmap` as a Linux event. Exhausting the arena is a defined exit, which fits
+partial correctness. `datarepr` instances give `List` and small trees arena
+cells. `datarepr` v1 is implemented (`crates/elab/src/datarepr.rs`). A
+metered bound on the arena is `hih-alloc-metering`'s follow-up, not a
+prerequisite.
+
+### 4.3 An alternative setup: `nh-ownership`
+
+The milestone is not done when one setup works. It is done when a
+**second** setup exists beside the default one and gives the compiler
+something the default cannot, because that is what makes setups a feature
+and not a second name for the compiler. The candidate Minus named is
+Rust-style ownership (`issues/ownership-discipline-over-code.md`):
+
+- the judgment is a borrow check over the reflected AST (moves, shared and
+  unique borrows, scopes);
+- the soundness theorem is proved once, against the byte memory model
+  (`lib/std/machine/memory.hthr`, PR #120): code that passes neither aliases a unique
+  buffer nor reads one after it is freed;
+- what the compiler gets is in-place update of buffers and arena cells
+  where the default setup must copy or keep everything, frees with no
+  per-program proof, and values kept in registers across calls that cannot
+  touch them.
+
+The cheaper second setup is **constant time** (`docs/constant-time-survey.md`).
+Its judgment is "no branch or address depends on a secret", its theorem is
+the survey's leakage contract, and it needs no heap. If a setup is wanted
+before N4 lands, it can go first.
+
+### 4.4 What stays as it is
+
+The back half: `Source` statements, FunctionIR regions, checked homes,
+`native_compile_correct`, and `write-elf`'s ELF theorem. The builder stays
+as a library a setup's lowering may emit into, and it stops being how
+people write programs.
 
 ---
 
@@ -322,7 +398,7 @@ with a test that cannot be argued with.
 
 **S1 `self-lexer`: Heather's lexer, in Heather, compiled natively.** A pure
 function from bytes to tokens, written with §3's surface. Its spec is the
-token grammar. It is compiled by N1 and N3 into a `heather-lex` executable
+token grammar. It is a `runtime fn` under the default setup, compiled by N1 and N3 into a `heather-lex` executable
 that streams tokens to stdout, so it needs no heap. Done when its output
 matches `crates/syntax/src/lexer.rs` on every file under `lib/`. This is a
 customer for the whole front end on a real workload, and the first piece of
@@ -417,6 +493,78 @@ proves a goal about `f` does it by unfolding `f`, so its cost grows with
 Each round's "done when" names the `docs/proof-patterns.md` rules it
 retires, so the guide shrinks as the milestone lands.
 
+### 6.3 Interface definitions, in detail
+
+Minus asked for this one to be spelled out (2026-10-31). Today a `fn` has
+one visibility for proofs: its whole body, everywhere. Theorems already
+have the other one (opaque, `docs/have-design.md`). An **interface
+definition** sits between the two.
+
+```heather
+interface fn List::sorted_insert(self xs: List<Nat>, x: Nat) → List<Nat> {
+    match xs { … }
+}
+// generated beside it, as decreases functions already get them:
+//   List::sorted_insert::nil:  Nil.sorted_insert(x) = [x]
+//   List::sorted_insert::cons: Cons(y, ys).sorted_insert(x) = if x <= y { … } else { … }
+
+theorem List::sorted_insert_sorted(…): … { … }   // proved inside, by the equations or by unfolding
+```
+
+What changes, and what does not:
+
+- **Proofs outside the defining module do not unfold it.** The elaborator's
+  conversion and every tactic treat `sorted_insert(…)` at an open argument
+  as an atom. A proof reaches the body through the equations, the lemmas
+  proved about it, or an explicit `unfold sorted_insert` that says "I am
+  thinking about the code here". Inside its own module the body is visible
+  as it is today, so the lemmas that make the interface can be proved.
+- **Closed values still compute.** `[3, 1].sorted_insert(2) = [1, 2, 3]` by
+  `refl` still works, because evaluation at closed arguments is how the
+  library states verdicts (`docs/proof-patterns.md` §1). The boundary is on
+  *reasoning* about open terms, not on running.
+- **The kernel is unchanged.** It is an elaborator and tactic policy. A
+  proof term that crosses the boundary cites an equation lemma, so the
+  kernel checks it without unfolding. No proof is accepted that would be
+  refused today.
+- **Boxing is unaffected.** A `runtime fn` setup reads the boxed body
+  through the pull API (§4.1). That is intensional analysis of code, a
+  different act from conversion in a proof, so an interface definition can
+  still be compiled and still be checked by a discipline.
+
+What it buys:
+
+- **Specific properties without lots of code.** Goals stay in the vocabulary
+  of the interface. A tactic that meets `sorted_insert` uses its registered
+  lemmas (§6.2) instead of expanding a `match` that spells the whole
+  implementation into the goal.
+- **Cost.** The lockstep unfoldings that `docs/proof-patterns.md` §1 warns
+  against stop at the boundary, and so do the large goal spellings that
+  make later steps dearer.
+- **Robustness and rebuilds.** Changing an implementation does not break
+  client proofs that never looked inside it. That is also the shape early
+  cutoff wants (`docs/module-interface-cutoff-design.md`): a client that did
+  not unfold a definition did not observe its body. Whether module images
+  can then skip re-elaborating on a body edit is a question for P2 to
+  measure, not a promise.
+
+**Opt-in or default.** The library today leans on conversion through
+definitions everywhere: `refl` on computed sides, `trivial`, matches that
+reduce through helpers. So:
+
+- *Opt-in per definition* (`interface fn`) breaks nothing. Modules migrate
+  one at a time, starting where proofs are slowest or most fragile. The
+  cost is that the boundary is only where someone thought to put it.
+- *Default for exported definitions, opt-out with `transparent fn`* gives
+  modular reasoning everywhere, and is the direction Lean's module system
+  has taken for build cost. But it would break a large part of the library
+  in one step, and the migration would be the round.
+
+The recommendation is opt-in now, with P2 measuring one migrated module. If
+it pays, the default can flip later, module by module. The precedent is the
+`--review` lints, which arrived as warnings before they were required.
+
+
 ---
 
 ## 7. The rounds, in order
@@ -430,12 +578,13 @@ lanes).
 | R1 | `lang-sequencing` | **sequencing design** | design note: the carrier protocol (class, instance lookup from the expected type), the binding spelling, interleaved statements, `let mut`/`:=`/`for`/`while`/`break`/`return` lowering, what proofs see (§3.3), and the effects case (N3) so one surface serves both | the note is decided by Minus, and R2/R3 are filed | — | R4 |
 | R2 | `lang-sequencing` | **binding statements** | `let x <- e;` and `e;` in blocks over any carrier, `Option` `?`; port `mono.hthr` and one parser chain | `mono.hthr` has no `bind` tower, and `lib/std/tactic`'s `.bind(` count falls by most of `mono`'s share; refusals named | R1 | R4, R10 |
 | R3 | `lang-sequencing` | **pure imperative** | `let mut`, `:=`, `for` over lists and ranges, `while … decreases`/`fuel`, early exit; lowering to folds with unfolding equations and exposed step functions | the decimal formatter and `wc`'s step are written imperatively, and their theorems are proved by the existing tactics with no hand unfolding; negative controls refuse by reason | R2 | R5 |
-| R4 | `hih-native-heather` | **N1 design** | design note: the reflector's fragment, layouts of records and enums in words, `Nat` narrowing, how the `_agrees` certificate scales (stated per loop and per function), and how the builder is retired | decided by Minus; N1's issues filed, `native-build-loop-regions` and `native-build-reflected-helpers` folded in | — | R1 |
-| R5 | `hih-native-heather` | **N1: pure functions compile** | the reflector of §4 N1, with `compile-x86` moved onto it | a `wc` step over a `WcState` record and the decimal formatter, written as ordinary Heather, compile into a tool and pass its GNU test; `compile-x86`'s examples still pass | R4 (R3 for the imperative spellings) | R2, R3 |
+| R4 | `hih-native-heather` | **setups design** | design note: the setup record (§4.1: fragment, judgment, soundness theorem, lowering) and how the compiler consumes its evidence; the `runtime fn` generator on `scoped-declaration-generators` and the host interface; reflecting a body beyond `fn_body_code`'s Nat fragment; the default setup's fragment, record and enum layouts, `Nat` narrowing; how the `_agrees` certificate scales; what is left of `compile-typeclass-design` | decided by Minus; N1's issues filed, `native-build-loop-regions` and `native-build-reflected-helpers` folded in | — | R1, P1 |
+| R5 | `hih-native-heather` | **N1: the generator and the pure fragment** | the `runtime fn` generator in Heather, the default setup's pure fragment and lowering, `compile-x86`'s Rust reflector retired onto it | a `wc` step over a `WcState` record and the decimal formatter, marked `runtime fn`, compile into a tool and pass its GNU test; `compile-x86`'s examples still pass through the Heather generator | R4 (R3 for the imperative spellings) | R2, R3 |
 | R6 | `hih-native-heather` | **N3: I/O as capabilities** | `effects-uniqueness-surface` over §3's surface; byte and string literals; implicit compiler imports | `cat FILE…`, `wc` and `head -n` are rewritten in it and pass the same GNU tests; the builder versions are deleted | R3, R5 | R7 |
 | R7 | `hih-self` | **S1: the lexer** | Heather's lexer in Heather, streaming tokens, compiled natively | `heather-lex` matches the Rust lexer on every file under `lib/` | R6 | R8, R10 |
 | R8 | `hih-native-heather` | **N2: procedures** | compiled calls with frames on the process stack, derived contracts, a register convention; `io-image-process-stack` finished | one helper called from several sites is compiled once; a non-tail recursive function compiles; `grep -F` is built with a shared line-buffer helper | R5 | R7 |
 | R9 | `hih-native-heather` | **N4: the heap** | a short design section first, then the bump arena, `datarepr` cells for `List` and trees, arena exhaustion as a defined exit | `sort` (lines into a list) and `tac` are written as ordinary Heather and pass GNU tests | R8 | R10 |
+| R12 | `hih-native-heather` | **a second setup: ownership** | `nh-ownership` (§4.3): the borrow-check judgment over reflected code, its soundness theorem against the byte memory model, and what the compiler does with it (in-place updates, frees) | a program that updates an arena structure in place compiles under the ownership setup with no per-program proof, the same program under the default setup copies, and a program that aliases a unique buffer is refused by the judgment with its reason | R9 (constant time first, if a setup is wanted earlier: R5 is enough) | R11 |
 | R10 | `hih-passes` | **first pass in Heather** | constant folding and dead-node removal over FunctionIR regions, proved once to preserve `eval`, run inside `Source::compile` | the regression tools build with smaller code and unchanged GNU results; the proof is one theorem, not per program | — | any |
 | P1 | `lang-proof-modularity` | **proof-modularity design** | design note: interface definitions (what conversion may unfold, where, and the `unfold` escape), the registry mechanism and which tactics read it first, invariant and contract rules, and which `proof-patterns` rules each piece retires | decided by Minus; P2–P5 filed | — | R1, R4 |
 | P2 | `lang-proof-modularity` | **interface definitions** | generated equations, no unfolding outside the module unless asked, tactics and `rewrite` use the equations | one library module (the interval or layout lemmas) re-proved through equations with fewer conversion steps in `--timings`; one proof-patterns rule retired | P1 | R2, R5 |
@@ -472,6 +621,9 @@ proposal.
 | `tactic-composition-ergonomics` | stays separate: it is about proof scripts (`split_all; all_goals {…}`), not about binding results; P1 says whether registries change it |
 | `frontend-large-proof-composition-cost`, `let-fanout-diagnostic` | P5 |
 | `mono-class-laws`, `monotonicity-tactic` | P3 decides what remains |
+| `runtime-compile-opt-in`, `scoped-declaration-generators`, `compile-typeclass-design` | R4 and R5: the marker is the setup's generator; R4 says what is left of the class layer |
+| `elabcode-abstraction-layer`, `code-variable-analysis-api` | R4 and R5: the reflected AST the setups read |
+| `ownership-discipline-over-code` | R12 |
 | `native-decimal-io-proved`, `native-compile-stat` | unchanged, not scheduled |
 
 ---
@@ -481,26 +633,26 @@ proposal.
 1. **Adopt the thesis** (§2): native programs become ordinary Heather
    functions, and the builder becomes the compiler's back half. *Adopted
    (Minus, 2026-10-31), with proof composition added as §6.*
-2. **`hih-tools`**: close it at the nine built tools as a regression corpus
-   (recommended), or keep its "done when" and finish the remaining five
-   alongside.
-3. **Binding over a carrier** (§3.1): `Tac` and the builder already have
-   monadic types, and the sugar hides the CPS without adding any. Is that
-   inside the effects decision's "users never write monadic types", or do
-   you want binding limited to named carriers (`Tac`, `Result`, `Option`)?
-4. **The lexer before the heap** (R7 before R9): the first Heather-in-Heather
-   program would stream tokens with no allocation. The alternative is to
-   wait for the heap and have the lexer return a token list.
-5. **Interface definitions** (§6.2): opt-in per definition (recommended,
-   so nothing that computes by conversion today breaks), or the default for
-   exported definitions with an opt-out.
+2. **`hih-tools`**: close it at the nine built tools as a regression
+   corpus. *Decided (Minus, 2026-10-31): yes.*
+3. **Binding over a carrier** (§3.1): any carrier with a `bind`, or only
+   named ones. *Decided (Minus, 2026-10-31): any.*
+4. **The lexer before the heap** (R7 before R9). *Decided, tentatively
+   (Minus, 2026-10-31: "I guess").* Swapping is cheap: the token-list lexer
+   follows from the streaming one once N4 lands.
+5. **Interface definitions** (§6.3): opt-in per definition (recommended),
+   or the default for exported definitions with an opt-out. Open: Minus
+   asked for the detail that §6.3 now gives.
 6. **Roadmap shape**: add `lang-sequencing` and `lang-proof-modularity`
    (area `language`, pulled by `heather-in-heather` and `tactics`) and `hih-native-heather` with
    `nh-front`, `nh-procedures`, `nh-effects`, `nh-heap` as submilestones;
-   re-scope `hih-first-alloc` into `nh-heap`; give `hih-self` the
+   re-scope `hih-first-alloc` into `nh-heap`; add `nh-ownership`; give `hih-self` the
    submilestones `self-lexer` and `self-compiler`. Once you decide, the
    roadmap rows, the log line and the issues go on this PR before it
    merges.
+7. **Setups** (§4, added after Minus's note of 2026-10-31 on `runtime fn`):
+   is ownership the right second setup to name as the milestone's bar, with
+   constant time as the cheaper first one if a setup is wanted early?
 
 ## 9. Risks, and what would change the order
 
