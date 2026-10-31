@@ -23,3 +23,9 @@ is a design note that Minus decides on, plus R2 and R3 filed against it.
 ## Done when
 
 Minus has decided the note, and [[binding-statements]] and [[pure-imperative-statements]] state their scope against it.
+
+## Log
+
+- 2026-10-31: 2026-10-31: Design note written: docs/sequencing-surface-design.md (§11 lists the decisions for Minus). Carrier protocol = owner members M::bind/M::pure, since a class over a type constructor is not expressible (probe P1). R2 and R3 restated against it; R3 split into R3a and R3b, with R3b (while … decreases) waiting on [[unfolding-computed-scrutinee]]. Filed [[omega-certificate-bare-nil]] and [[decreases-measure-record-field-unspelled]] from the probes.
+- 2026-10-31: 2026-10-31: Revised after Minus's PR comment (a Monad Heather cannot express should be fixed in Heather): the carrier protocol is now classes Bind<M>/Pure<M> over a type constructor, with the three missing pieces filed as R2a [[higher-kinded-classes]]. Probe P1 was too narrow: value-parameter inductives and λ A => Option<A> are already Type → Type values, and a record dictionary over M computes. Owner members stay as the fallback.
+- 2026-10-31: 2026-10-31: Minus asked for fundamental improvements beyond this round; filed from the memo (https://claude.ai/artifact/Y2Jo9y9Mgd52QdguvaL43s): [[parametric-type-families]] (Minus unsure; decision round first), [[certificates-as-terms]], [[elaborator-glued-evaluation]], [[dependent-match-compiler]], [[proof-scripts-as-tac-blocks]], [[measure-inference]], [[partial-functions-coinductive]]; in-place update logged on [[ownership-discipline-over-code]].

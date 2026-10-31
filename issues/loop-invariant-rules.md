@@ -20,3 +20,7 @@ not unfolding.
 ## Done when
 
 `count_words`'s spec is proved with an invariant and a step lemma in a few lines, and one property of a rewritten tool is proved about its function.
+
+## Log
+
+- 2026-10-31: 2026-10-31: docs/sequencing-surface-design.md §7.2 proposes that the invariant rule be library theorems over the two lowered shapes (List::foldl_invariant, List::for_in_invariant) plus a tactic step that applies them, not a per-loop generator, because every lowered for is foldl or for_in applied to a named step. Pending Minus's decision (§11 item 5).
