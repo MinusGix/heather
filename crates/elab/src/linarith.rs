@@ -68,12 +68,25 @@ struct Stated {
     level: Level,
 }
 
-/// `ty` as the carrier's designated `≈`, `<` or `<=`, read as written.
+/// `ty` as the carrier's designated `≈`, `<` or `<=`, read as written; at a
+/// class carrier, as its dictionary's (`ClassField`).
 fn stated(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Stated> {
     let relation = Relation::of_type(elab, cx, ty, span)?;
-    let carrier = elab.carrier_of_ty(cx, &relation.carrier, span)?;
     let Type::El { tm, .. } = ty else {
         return None;
+    };
+    let Some(carrier) = elab.carrier_of_ty(cx, &relation.carrier, span) else {
+        let field = ClassField::of(elab, cx, &relation.carrier)?;
+        let rel = [(&field.same, Rel::Same), (&field.lt, Rel::Lt), (&field.le, Rel::Le)]
+            .into_iter()
+            .find_map(|(op, rel)| (*relation.head == **op).then_some(rel))?;
+        return Some(Stated {
+            rel,
+            left: relation.left,
+            right: relation.right,
+            carrier: relation.carrier,
+            level: relation.level,
+        });
     };
     [("≈", Rel::Same), ("<", Rel::Lt), ("<=", Rel::Le)].into_iter().find_map(|(sym, rel)| {
         let name = elab.designated(sym, OpFixity::Infix, &carrier.key)?;
@@ -85,6 +98,75 @@ fn stated(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Stated> {
             level: relation.level.clone(),
         })
     })
+}
+
+/// An ordered field that is a class carrier: a type parameter `K` whose
+/// field is a dictionary in scope (`section<K: OrderedField(≈, <, <=, +,
+/// *)>`), with no `OrderedFieldOfInt` instance. Its integers are the ones
+/// every ring has, packaged by `ordered_field::OrderedField::with_ints<K>()`,
+/// whose call's implicit arguments name `K`'s `≈`, `<`, `<=` as the section
+/// binds them. The certificate gets the dictionary in scope
+/// (`Elaborator::class_dictionary_scope`) and spells `K`'s constants and
+/// negation through it (`Spell`).
+struct ClassField {
+    ints: Rc<Term>,
+    ty: Type,
+    level: Level,
+    same: Rc<Term>,
+    lt: Rc<Term>,
+    le: Rc<Term>,
+}
+
+/// The name a class carrier's ordered field dictionary is bound to.
+const CLASS_FIELD: &str = "__lin_ints";
+
+impl ClassField {
+    fn of(elab: &Elaborator, cx: &Cx, carrier: &Type) -> Option<ClassField> {
+        elab.key_of("ordered_field::OrderedField::with_ints")?;
+        let source = elab.spell_type_clean(cx, carrier)?;
+        let expr = parse_expr(&format!("ordered_field::OrderedField::with_ints<{source}>()")).ok()?;
+        let (ints, ty, level) = elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok()?;
+        let (same, lt, le) = match named_args(elab, &ints, "ordered_field::OrderedField::with_ints")?.as_slice() {
+            [_, same, lt, le, ..] => (Rc::clone(same), Rc::clone(lt), Rc::clone(le)),
+            _ => return None,
+        };
+        Some(ClassField { ints: Rc::new(ints), ty, level, same, lt, le })
+    }
+}
+
+/// How a certificate spells the carrier's constants and negation: numerals
+/// and `-x` where the carrier designates them, and at a class carrier `K`
+/// (`ClassField`) `K.unit`, `K.multiplicative.unit`, the integers' images
+/// (`semiring::Ring::int_cast<K>(int::OfNat(2))`) and `K.inv(x)`, which
+/// `ring` reads back as the same constants and negation.
+struct Spell {
+    class: Option<String>,
+}
+
+impl Spell {
+    fn num(&self, k: Z) -> String {
+        let Some(c) = &self.class else {
+            return if k < 0 { format!("-{}", k.unsigned_abs()) } else { k.to_string() };
+        };
+        match k {
+            0 => format!("{c}.unit"),
+            1 => format!("{c}.multiplicative.unit"),
+            k if k > 0 => format!("semiring::Ring::int_cast<{c}>(int::OfNat({k}))"),
+            k => format!("semiring::Ring::int_cast<{c}>(int::NegSucc({}))", k.unsigned_abs() - 1),
+        }
+    }
+
+    fn neg(&self, e: &str) -> String {
+        match &self.class {
+            None => format!("-{e}"),
+            Some(c) => format!("{c}.inv({e})"),
+        }
+    }
+
+    /// `hi + -lo`, as the lemmas state a difference.
+    fn diff(&self, hi: &str, lo: &str) -> String {
+        format!("({hi} + {})", self.neg(lo))
+    }
 }
 
 /// What a fact or goal says, or its negation `¬(left < right)`.
@@ -394,6 +476,7 @@ fn mentions(form: &Linear, atom: usize) -> bool {
 struct Problem<'a> {
     reading: FieldReading<'a>,
     carrier: String,
+    spell: Spell,
     carrier_ty: Rc<Type>,
     carrier_level: Level,
     terms: Vec<Rc<Term>>,
@@ -495,7 +578,7 @@ impl Problem<'_> {
             let mut found = None;
             for row in self.rows.iter().filter(|row| row.strict) {
                 let Ok(diff) = self.difference(row.lo, row.hi) else { continue };
-                let source = format!("({} + -{})", term_alias(row.hi), term_alias(row.lo));
+                let source = self.spell.diff(&term_alias(row.hi), &term_alias(row.lo));
                 let base = self.part(row);
                 if diff == form {
                     found = Some(Factor { recip, form: form.clone(), source, proof: base, fact: row.fact });
@@ -503,8 +586,9 @@ impl Problem<'_> {
                 }
                 if diff == alone && found.is_none() {
                     let td = term_alias(d);
+                    let one = self.spell.num(1);
                     let proof = format!(
-                        "{{ let __lin_d: ({source} * {td} ≈ 1) = ring; linarith::lin_den_pos<{c}>({source}, {td}, {base}, __lin_d) }}"
+                        "{{ let __lin_d: ({source} * {td} ≈ {one}) = ring; linarith::lin_den_pos<{c}>({source}, {td}, {base}, __lin_d) }}"
                     );
                     found = Some(Factor { recip, form: form.clone(), source: td, proof, fact: row.fact });
                 }
@@ -642,6 +726,7 @@ impl Problem<'_> {
         let c = &self.carrier;
         let point = term_alias(a);
         let num_pos = |k: Z| format!("linarith::lin_num_pos<{c}>({point}, {})", k - 1);
+        let num = |k: Z| self.spell.num(k);
         let mut cited = Vec::new();
         let mut cite = |f: usize| {
             if !cited.contains(&f) {
@@ -666,18 +751,20 @@ impl Problem<'_> {
                 let scale_lemma = if extra.strict { "lin_scale_lt" } else { "lin_scale_le" };
                 let mut part = (extra.source.clone(), extra.proof.clone());
                 if k != 1 {
-                    part = (format!("{k} * {}", part.0), format!("linarith::{scale_lemma}<{c}>({k}, {}, {}, {})", part.0, num_pos(k), part.1));
+                    let n = num(k);
+                    part = (format!("{n} * {}", part.0), format!("linarith::{scale_lemma}<{c}>({n}, {}, {}, {})", part.0, num_pos(k), part.1));
                 }
                 parts.push((part.0, part.1, extra.strict));
                 continue;
             }
             let Some(i) = u.row else {
                 multiplier.push(match (u.by.is_empty(), k) {
-                    (true, _) => (format!("{k}"), num_pos(k)),
+                    (true, _) => (num(k), num_pos(k)),
                     (false, 1) => self.product(&u.by),
                     (false, _) => {
                         let (e, p) = self.product(&u.by);
-                        (format!("({k} * {e})"), format!("linarith::lin_scale_lt<{c}>({k}, {e}, {}, {p})", num_pos(k)))
+                        let n = num(k);
+                        (format!("({n} * {e})"), format!("linarith::lin_scale_lt<{c}>({n}, {e}, {}, {p})", num_pos(k)))
                     }
                 });
                 continue;
@@ -689,22 +776,23 @@ impl Problem<'_> {
             // statement before the instance is chosen, so a `sub` that only
             // unfolds to it would not.
             let scale_lemma = if row.strict { "lin_scale_lt" } else { "lin_scale_le" };
-            let mut part = (format!("({} + -{})", term_alias(row.hi), term_alias(row.lo)), self.part(row));
+            let mut part = (self.spell.diff(&term_alias(row.hi), &term_alias(row.lo)), self.part(row));
             if !u.by.is_empty() {
                 let (e, p) = self.product(&u.by);
                 part = (format!("({e} * {})", part.0), format!("linarith::{scale_lemma}<{c}>({e}, {}, {p}, {})", part.0, part.1));
             }
             if k != 1 {
-                part = (format!("{k} * {}", part.0), format!("linarith::{scale_lemma}<{c}>({k}, {}, {}, {})", part.0, num_pos(k), part.1));
+                let n = num(k);
+                part = (format!("{n} * {}", part.0), format!("linarith::{scale_lemma}<{c}>({n}, {}, {}, {})", part.0, num_pos(k), part.1));
             }
             parts.push((part.0, part.1, row.strict));
         }
         let constant = -sum.1;
         if constant > 0 {
-            parts.push((format!("{constant}"), num_pos(constant), true));
+            parts.push((num(constant), num_pos(constant), true));
         }
         let (s, hs, positive) = match parts.pop() {
-            None => ("0".to_string(), format!("linarith::lin_zero_le<{c}>({point})"), false),
+            None => (num(0), format!("linarith::lin_zero_le<{c}>({point})"), false),
             Some(last) => parts.into_iter().rev().fold(last, |(e, p, st), (ei, pi, si)| {
                 let lemma = match (si, st) {
                     (false, false) => "lin_add_le_le",
@@ -720,7 +808,8 @@ impl Problem<'_> {
         let (ta, tb) = (term_alias(a), term_alias(b));
         let source = match multiplier.pop() {
             None => format!(
-                "logic::false_elim({{ let {name}: ({s} ≈ 0) = ring; linarith::lin_finish_false<{c}>({s}, {hs}, {name}) }})"
+                "logic::false_elim({{ let {name}: ({s} ≈ {}) = ring; linarith::lin_finish_false<{c}>({s}, {hs}, {name}) }})",
+                num(0)
             ),
             Some(last) => {
                 let (k, hk) = multiplier.into_iter().rev().fold(last, |(e, p), (ei, pi)| {
@@ -733,8 +822,9 @@ impl Problem<'_> {
                 } else {
                     ("lin_finish_le", hs)
                 };
+                let diff = self.spell.diff(&tb, &ta);
                 format!(
-                    "{{ let {name}: ({k} * ({tb} + -{ta}) ≈ {s}) = ring; linarith::{finish}<{c}>({ta}, {tb}, {k}, {s}, {hk}, {hs}, {name}) }}"
+                    "{{ let {name}: ({k} * {diff} ≈ {s}) = ring; linarith::{finish}<{c}>({ta}, {tb}, {k}, {s}, {hk}, {hs}, {name}) }}"
                 )
             }
         };
@@ -762,11 +852,11 @@ impl Problem<'_> {
                 }
             }
             let monomial = factors.join(" * ");
-            let body = if c.abs() == 1 { monomial } else { format!("{} * {monomial}", c.unsigned_abs()) };
-            parts.push(if c < 0 { format!("-({body})") } else { format!("({body})") });
+            let body = if c.abs() == 1 { monomial } else { format!("{} * {monomial}", self.spell.num(c.abs())) };
+            parts.push(if c < 0 { self.spell.neg(&format!("({body})")) } else { format!("({body})") });
         }
         if form.1 != 0 || parts.is_empty() {
-            parts.push(if form.1 < 0 { format!("-{}", form.1.unsigned_abs()) } else { form.1.to_string() });
+            parts.push(self.spell.num(form.1));
         }
         Ok(format!("({})", parts.join(" + ")))
     }
@@ -802,7 +892,7 @@ impl Problem<'_> {
         let mut rows = Vec::new();
         for &i in &chosen {
             let row = &self.rows[i];
-            let source = format!("({} + -{})", term_alias(row.hi), term_alias(row.lo));
+            let source = self.spell.diff(&term_alias(row.hi), &term_alias(row.lo));
             rows.push((source, self.part(row), row.strict, self.difference(row.lo, row.hi)?, row.fact));
         }
         let weak = |r: &(String, String, bool, Linear, usize)| {
@@ -1368,10 +1458,13 @@ impl Elaborator {
             _ => format!("hypothesis {}", i + 1),
         };
         let class = self.key_of("ordered_field::OrderedFieldOfInt");
+        // A carrier with an instance, or a class carrier (`ClassField`).
         let supported = |carrier: &Type| {
             let Some(class) = &class else { return false };
-            self.carrier_of_ty(cx, carrier, span)
-                .is_some_and(|key| !self.traits.instances_answering(class, Some(&key.key)).is_empty())
+            match self.carrier_of_ty(cx, carrier, span) {
+                Some(key) => !self.traits.instances_answering(class, Some(&key.key)).is_empty(),
+                None => ClassField::of(self, cx, carrier).is_some(),
+            }
         };
         // The carrier: the goal's, else the first written fact's, else the
         // first context fact's that is at a supported carrier. `Int` and
@@ -1424,8 +1517,13 @@ impl Elaborator {
         let Some(reading) = FieldReading::at(self, cx, &carrier_ty, carrier_level.clone(), span) else {
             return Err(err(format!("`linarith` could not read `{carrier_shown}` as a ring with its integers named")));
         };
+        let class_field = match self.carrier_of_ty(cx, &carrier_ty, span) {
+            Some(_) => None,
+            None => ClassField::of(self, cx, &carrier_ty),
+        };
         let mut problem = Problem {
             carrier: reading.carrier_source().to_string(),
+            spell: Spell { class: class_field.as_ref().map(|_| reading.carrier_source().to_string()) },
             reading,
             carrier_ty: Rc::clone(&carrier_ty),
             carrier_level,
@@ -1585,6 +1683,20 @@ impl Elaborator {
         for &f in &cited {
             let fact = &problem.facts[f];
             inner.aliases.push(alias(fact.alias.clone(), Rc::new(fact.term.clone()), fact.ty.clone(), fact.level.clone()));
+        }
+        // At a class carrier the lemmas' `OrderedFieldOfInt` is the field
+        // with the integers every ring has, found in scope.
+        if let Some(field) = &class_field {
+            inner = self
+                .class_dictionary_scope(
+                    &inner,
+                    &problem.carrier,
+                    CLASS_FIELD,
+                    (&field.ints, &field.ty, &field.level),
+                    "ordered_field::OrderedFieldOfInt",
+                    "ordered_field::OrderedField",
+                )
+                .ok_or_else(|| err(format!("`{tactic}` could not put `{carrier_shown}`'s integers in scope")))?;
         }
         let expr = parse_expr(&source)
             .map_err(|detail| err(format!("`{tactic}` wrote a certificate that does not parse: {detail}\n  generated: {source}")))?;

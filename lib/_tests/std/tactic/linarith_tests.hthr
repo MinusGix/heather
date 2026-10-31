@@ -9,7 +9,7 @@
 // which must resolve in a client that imports only `linarith` (once, every
 // numeral here silently became an atom).
 import logic; import nat; import int; import omega; import linarith;
-import relation_props; import semiring; import ordered_field; import rat; import creal;
+import relation_props; import list; import algebra_rel; import ring; import semiring; import ordered_field; import rat; import creal;
 
 // The rearrangements issues/linarith-ordered-fields.md names.
 theorem rat_trans(a, b, c: Rat, h1: a <= b, h2: b < c): a < c { linarith(h1, h2) }
@@ -196,3 +196,17 @@ theorem nlin_creal_cancel_lt(a, b, c: CReal, h: a * c < b * c, hc: 0 < c): a < b
 // (issues/checking-tactic-in-inference-position-diagnostic.md).
 // expect-error: `linarith` needs an expected type
 theorem let_linarith_unannotated(x: Rat, h: x < 1): x < 2 { let k = linarith(h); k }
+
+// At a class carrier (issue cast-reading-at-class-carrier): the facts and
+// the goal are the section's own relations, and the certificate is spelled
+// in its operations (docs/casting-design.md §16).
+section<K: OrderedField(≈, <, <=, +, *)> {
+theorem class_trans(x, y, z: K, h: x <= y, k: y < z): x < z { linarith }
+theorem class_halve(x, y: K, h: x + x <= y + y): x <= y { linarith }
+theorem class_not_lt(x, y: K, h: x < y): ¬(y < x) { linarith }
+theorem class_unit(x: K, h: K.unit < x): K.unit < x + x { linarith }
+theorem class_antisymm(x, y: K, h: x <= y, k: y <= x): x ≈ y { linarith }
+theorem class_product(x, y: K, h: K.unit <= x, k: K.unit <= y): K.unit <= x * y { nlinarith }
+// expect-error: `linarith` could not prove
+theorem class_not_entailed(x, y: K, h: x <= y): x < y { linarith }
+}
