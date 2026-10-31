@@ -510,6 +510,9 @@ impl Elaborator {
             level: level.clone(),
             at,
         });
+        if crate::gendefs::mentions_global(&inline) {
+            self.types.gdefs_mut().insert_guard_at(crate::gendefs::GuardKey::TyCode(tag), at);
+        }
         self.types.gdefs_mut().insert_ty_code(tag, (inline, level));
     }
 
@@ -528,6 +531,9 @@ impl Elaborator {
             slots: slots.clone(),
             at,
         });
+        if crate::gendefs::mentions_global(&slots.shape) || slots.arity.shift_global(1) != *slots.arity {
+            self.types.gdefs_mut().insert_guard_at(crate::gendefs::GuardKey::WfSlots(tag), at);
+        }
         self.types.gdefs_mut().insert_wf_slots(tag, slots);
     }
 
@@ -537,6 +543,9 @@ impl Elaborator {
             codes: codes.clone(),
             at,
         });
+        if codes.ctors.iter().chain(&codes.nodes).any(|(ty, _)| crate::gendefs::mentions_global(ty)) {
+            self.types.gdefs_mut().insert_guard_at(crate::gendefs::GuardKey::Spine(tag), at);
+        }
         self.types.gdefs_mut().insert_spine_codes(tag, codes);
     }
 

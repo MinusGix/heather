@@ -778,6 +778,17 @@ pub struct Elaborator {
     /// with, by tag ([`Elaborator::share_iwf_part`]), so equal ones are one
     /// allocation. Nothing here is semantic.
     pub(crate) iwf_part_memo: RefCell<HashMap<(u32, bool), Rc<Type>>>,
+    /// The registry's guard copies that mention a global, each read where
+    /// its last reader was ([`Elaborator::guard_ty`]): the shift and the
+    /// frame it was read at, the raw copy, and the read. Nothing here is
+    /// semantic.
+    pub(crate) guard_reads: RefCell<HashMap<gendefs::GuardKey, (u32, SubstTail, Rc<Type>, Rc<Type>)>>,
+    /// A `Wf` slot pair's guard as the one former it is read as, by the raw
+    /// shape it was built from.
+    pub(crate) guard_slot_formers: RefCell<HashMap<u32, (Rc<Type>, Rc<Type>)>>,
+    /// …and a spine's components, read together so a sum keeps pointing at
+    /// its sides ([`Elaborator::with_spine`]).
+    pub(crate) guard_spine_reads: RefCell<HashMap<u32, (u32, SubstTail, Rc<Type>, Rc<gendefs::SpineCodes>)>>,
     /// The oracle consulted at the kernel gate (`gate.rs`), if any. `None` —
     /// the default, and what every test and the unflagged CLI use — means the
     /// kernel runs on every declaration, exactly as it always has.
@@ -1835,6 +1846,9 @@ impl Elaborator {
             result_only_memo: RefCell::new(HashMap::new()),
             named_type_memo: RefCell::new(HashMap::new()),
             iwf_part_memo: RefCell::new(HashMap::new()),
+            guard_reads: RefCell::new(HashMap::new()),
+            guard_slot_formers: RefCell::new(HashMap::new()),
+            guard_spine_reads: RefCell::new(HashMap::new()),
             gate: None,
             kernel_pool: pool::KernelPool::default(),
             kernel_replay: pool::ReplaySlot::default(),
