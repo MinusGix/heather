@@ -288,7 +288,6 @@ theorem Ring::inv_unit(x: A): A.inv(A.unit) ≈ A.unit {
     A.rel_sym(A.unit, A.inv(A.unit), GroupRel::inv_unique(+, A.unit, A.unit, A.unit_l(A.unit)))
 }
 
-
 // Negation distributes over a sum: `+` is commutative.
 theorem Ring::inv_add(a, b: A): A.inv(a + b) ≈ A.inv(a) + A.inv(b) {
     A.rel_sym(A.inv(a) + A.inv(b), A.inv(a + b), GroupRel::inv_unique(+, a + b, A.inv(a) + A.inv(b), calc {
@@ -305,12 +304,12 @@ theorem Ring::nat_cast_add(m, n: Nat): Ring::nat_cast<A>(Nat::add(m, n)) ≈ Rin
         Zero => A.rel_sym(Ring::nat_cast<A>(m) + A.unit, Ring::nat_cast<A>(m), A.unit_r(Ring::nat_cast<A>(m))),
         Succ(k) => calc {
             Ring::nat_cast<A>(Succ(Nat::add(m, k)))
-                ≈ Ring::nat_cast<A>(Nat::add(m, k)) + A.multiplicative.unit := Ring::nat_cast_succ(Nat::add(m, k)),
+                ≈ Ring::nat_cast<A>(Nat::add(m, k)) + A.multiplicative.unit := Ring::nat_cast_succ<A>(Nat::add(m, k)),
                 ≈ (Ring::nat_cast<A>(m) + Ring::nat_cast<A>(k)) + A.multiplicative.unit := rel_cong(Ring::nat_cast_add<A>(m, k)),
                 ≈ Ring::nat_cast<A>(m) + (Ring::nat_cast<A>(k) + A.multiplicative.unit)
                     := A.assoc(Ring::nat_cast<A>(m), Ring::nat_cast<A>(k), A.multiplicative.unit),
                 ≈ Ring::nat_cast<A>(m) + Ring::nat_cast<A>(Succ(k))
-                    := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ(k))),
+                    := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ<A>(k))),
         },
     }
 }
@@ -320,7 +319,7 @@ theorem Ring::nat_cast_mul(m, n: Nat): Ring::nat_cast<A>(Nat::mul(m, n)) ≈ Rin
         Zero => A.rel_sym(Ring::nat_cast<A>(m) * A.unit, A.unit, A.mul_zero(Ring::nat_cast<A>(m))),
         Succ(k) => calc {
             Ring::nat_cast<A>(Nat::add(Nat::mul(m, k), m))
-                ≈ Ring::nat_cast<A>(Nat::mul(m, k)) + Ring::nat_cast<A>(m) := Ring::nat_cast_add(Nat::mul(m, k), m),
+                ≈ Ring::nat_cast<A>(Nat::mul(m, k)) + Ring::nat_cast<A>(m) := Ring::nat_cast_add<A>(Nat::mul(m, k), m),
                 ≈ Ring::nat_cast<A>(m) * Ring::nat_cast<A>(k) + Ring::nat_cast<A>(m) := rel_cong(Ring::nat_cast_mul<A>(m, k)),
                 ≈ Ring::nat_cast<A>(m) * Ring::nat_cast<A>(k) + Ring::nat_cast<A>(m) * A.multiplicative.unit
                     := rel_cong(A.rel_sym(Ring::nat_cast<A>(m) * A.multiplicative.unit, Ring::nat_cast<A>(m), A.multiplicative.unit_r(Ring::nat_cast<A>(m)))),
@@ -329,14 +328,14 @@ theorem Ring::nat_cast_mul(m, n: Nat): Ring::nat_cast<A>(Nat::mul(m, n)) ≈ Rin
                         Ring::nat_cast<A>(m) * Ring::nat_cast<A>(k) + Ring::nat_cast<A>(m) * A.multiplicative.unit,
                         A.distrib_l(Ring::nat_cast<A>(m), Ring::nat_cast<A>(k), A.multiplicative.unit)),
                 ≈ Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(k))
-                    := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ(k))),
+                    := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ<A>(k))),
         },
     }
 }
 
 theorem Ring::int_cast_neg_of_nat(n: Nat): Ring::int_cast<A>(Int::negOfNat(n)) ≈ A.inv(Ring::nat_cast<A>(n)) {
     match n {
-        Zero => A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit(A.unit)),
+        Zero => A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit<A>(A.unit)),
         Succ(k) => A.rel_refl(A.inv(Ring::nat_cast<A>(Succ(k)))),
     }
 }
@@ -346,18 +345,18 @@ theorem Ring::int_cast_sub_nat_nat(m, n: Nat): Ring::int_cast<A>(Int::subNatNat(
     match m {
         Zero => calc {
             Ring::int_cast<A>(Int::negOfNat(n))
-                ≈ A.inv(Ring::nat_cast<A>(n)) := Ring::int_cast_neg_of_nat(n),
+                ≈ A.inv(Ring::nat_cast<A>(n)) := Ring::int_cast_neg_of_nat<A>(n),
                 ≈ A.unit + A.inv(Ring::nat_cast<A>(n)) := A.rel_sym(A.unit + A.inv(Ring::nat_cast<A>(n)), A.inv(Ring::nat_cast<A>(n)), A.unit_l(A.inv(Ring::nat_cast<A>(n)))),
         },
         Succ(k) => match n {
             Zero => calc {
                 Ring::nat_cast<A>(Succ(k))
                     ≈ Ring::nat_cast<A>(Succ(k)) + A.unit := A.rel_sym(Ring::nat_cast<A>(Succ(k)) + A.unit, Ring::nat_cast<A>(Succ(k)), A.unit_r(Ring::nat_cast<A>(Succ(k)))),
-                    ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(A.unit) := rel_cong(A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit(A.unit))),
+                    ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(A.unit) := rel_cong(A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit<A>(A.unit))),
             },
             Succ(l) => calc {
                 Ring::int_cast<A>(Int::subNatNat(k, l))
-                    ≈ Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l)) := Ring::int_cast_sub_nat_nat(k, l),
+                    ≈ Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l)) := Ring::int_cast_sub_nat_nat<A>(k, l),
                     ≈ (Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l))) + A.unit
                         := A.rel_sym((Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l))) + A.unit, Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l)),
                             A.unit_r(Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l)))),
@@ -367,12 +366,12 @@ theorem Ring::int_cast_sub_nat_nat(m, n: Nat): Ring::int_cast<A>(Int::subNatNat(
                         := CommMonoidRel::interchange(≈, +, Ring::nat_cast<A>(k), A.inv(Ring::nat_cast<A>(l)), A.multiplicative.unit, A.inv(A.multiplicative.unit)),
                     ≈ (Ring::nat_cast<A>(k) + A.multiplicative.unit) + A.inv(Ring::nat_cast<A>(l) + A.multiplicative.unit)
                         := rel_cong(A.rel_sym(A.inv(Ring::nat_cast<A>(l) + A.multiplicative.unit), A.inv(Ring::nat_cast<A>(l)) + A.inv(A.multiplicative.unit),
-                            Ring::inv_add(Ring::nat_cast<A>(l), A.multiplicative.unit))),
+                            Ring::inv_add<A>(Ring::nat_cast<A>(l), A.multiplicative.unit))),
                     ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(Ring::nat_cast<A>(l) + A.multiplicative.unit)
-                        := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ(k))),
+                        := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ<A>(k))),
                     ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(Ring::nat_cast<A>(Succ(l)))
                         := rel_cong(A.inv_respects(Ring::nat_cast<A>(l) + A.multiplicative.unit, Ring::nat_cast<A>(Succ(l)),
-                            A.rel_sym(Ring::nat_cast<A>(Succ(l)), Ring::nat_cast<A>(l) + A.multiplicative.unit, Ring::nat_cast_succ(l)))),
+                            A.rel_sym(Ring::nat_cast<A>(Succ(l)), Ring::nat_cast<A>(l) + A.multiplicative.unit, Ring::nat_cast_succ<A>(l)))),
             },
         },
     }
@@ -381,13 +380,13 @@ theorem Ring::int_cast_sub_nat_nat(m, n: Nat): Ring::int_cast<A>(Int::subNatNat(
 theorem Ring::int_cast_add(a, b: Int): Ring::int_cast<A>(Int::add(a, b)) ≈ Ring::int_cast<A>(a) + Ring::int_cast<A>(b) {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => Ring::nat_cast_add(m, n),
-            NegSucc(n) => Ring::int_cast_sub_nat_nat(m, Succ(n)),
+            OfNat(n) => Ring::nat_cast_add<A>(m, n),
+            NegSucc(n) => Ring::int_cast_sub_nat_nat<A>(m, Succ(n)),
         },
         NegSucc(m) => match b {
             OfNat(n) => calc {
                 Ring::int_cast<A>(Int::subNatNat(n, Succ(m)))
-                    ≈ Ring::nat_cast<A>(n) + A.inv(Ring::nat_cast<A>(Succ(m))) := Ring::int_cast_sub_nat_nat(n, Succ(m)),
+                    ≈ Ring::nat_cast<A>(n) + A.inv(Ring::nat_cast<A>(Succ(m))) := Ring::int_cast_sub_nat_nat<A>(n, Succ(m)),
                     ≈ A.inv(Ring::nat_cast<A>(Succ(m))) + Ring::nat_cast<A>(n) := A.comm(Ring::nat_cast<A>(n), A.inv(Ring::nat_cast<A>(Succ(m)))),
             },
             NegSucc(n) => calc {
@@ -395,7 +394,7 @@ theorem Ring::int_cast_add(a, b: Int): Ring::int_cast<A>(Int::add(a, b)) ≈ Rin
                     ≈ A.inv(Ring::nat_cast<A>(Succ(m)) + Ring::nat_cast<A>(Succ(n))) := A.inv_respects(
                         Ring::nat_cast<A>(Succ(Succ(Nat::add(m, n)))), Ring::nat_cast<A>(Succ(m)) + Ring::nat_cast<A>(Succ(n)), calc {
                         Ring::nat_cast<A>(Succ(Succ(Nat::add(m, n))))
-                            ≈ Ring::nat_cast<A>(Succ(Nat::add(m, n))) + A.multiplicative.unit := Ring::nat_cast_succ(Succ(Nat::add(m, n))),
+                            ≈ Ring::nat_cast<A>(Succ(Nat::add(m, n))) + A.multiplicative.unit := Ring::nat_cast_succ<A>(Succ(Nat::add(m, n))),
                             ≈ (Ring::nat_cast<A>(Nat::add(m, n)) + A.multiplicative.unit) + A.multiplicative.unit := rel_cong(Ring::nat_cast_succ<A>(Nat::add(m, n))),
                             ≈ ((Ring::nat_cast<A>(m) + Ring::nat_cast<A>(n)) + A.multiplicative.unit) + A.multiplicative.unit := rel_cong(Ring::nat_cast_add<A>(m, n)),
                             ≈ (Ring::nat_cast<A>(m) + Ring::nat_cast<A>(n)) + (A.multiplicative.unit + A.multiplicative.unit)
@@ -403,11 +402,11 @@ theorem Ring::int_cast_add(a, b: Int): Ring::int_cast<A>(Int::add(a, b)) ≈ Rin
                             ≈ (Ring::nat_cast<A>(m) + A.multiplicative.unit) + (Ring::nat_cast<A>(n) + A.multiplicative.unit)
                                 := CommMonoidRel::interchange(≈, +, Ring::nat_cast<A>(m), Ring::nat_cast<A>(n), A.multiplicative.unit, A.multiplicative.unit),
                             ≈ Ring::nat_cast<A>(Succ(m)) + (Ring::nat_cast<A>(n) + A.multiplicative.unit)
-                                := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(m) + A.multiplicative.unit, Ring::nat_cast_succ(m))),
+                                := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(m) + A.multiplicative.unit, Ring::nat_cast_succ<A>(m))),
                             ≈ Ring::nat_cast<A>(Succ(m)) + Ring::nat_cast<A>(Succ(n))
-                                := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(n)), Ring::nat_cast<A>(n) + A.multiplicative.unit, Ring::nat_cast_succ(n))),
+                                := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(n)), Ring::nat_cast<A>(n) + A.multiplicative.unit, Ring::nat_cast_succ<A>(n))),
                     }),
-                    ≈ A.inv(Ring::nat_cast<A>(Succ(m))) + A.inv(Ring::nat_cast<A>(Succ(n))) := Ring::inv_add(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(Succ(n))),
+                    ≈ A.inv(Ring::nat_cast<A>(Succ(m))) + A.inv(Ring::nat_cast<A>(Succ(n))) := Ring::inv_add<A>(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(Succ(n))),
             },
         },
     }
@@ -416,12 +415,12 @@ theorem Ring::int_cast_add(a, b: Int): Ring::int_cast<A>(Int::add(a, b)) ≈ Rin
 theorem Ring::int_cast_mul(a, b: Int): Ring::int_cast<A>(Int::mul(a, b)) ≈ Ring::int_cast<A>(a) * Ring::int_cast<A>(b) {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => Ring::nat_cast_mul(m, n),
+            OfNat(n) => Ring::nat_cast_mul<A>(m, n),
             NegSucc(n) => calc {
                 Ring::int_cast<A>(Int::negOfNat(Nat::mul(m, Succ(n))))
-                    ≈ A.inv(Ring::nat_cast<A>(Nat::mul(m, Succ(n)))) := Ring::int_cast_neg_of_nat(Nat::mul(m, Succ(n))),
+                    ≈ A.inv(Ring::nat_cast<A>(Nat::mul(m, Succ(n)))) := Ring::int_cast_neg_of_nat<A>(Nat::mul(m, Succ(n))),
                     ≈ A.inv(Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(n)))
-                        := A.inv_respects(Ring::nat_cast<A>(Nat::mul(m, Succ(n))), Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(n)), Ring::nat_cast_mul(m, Succ(n))),
+                        := A.inv_respects(Ring::nat_cast<A>(Nat::mul(m, Succ(n))), Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(n)), Ring::nat_cast_mul<A>(m, Succ(n))),
                     ≈ Ring::nat_cast<A>(m) * A.inv(Ring::nat_cast<A>(Succ(n)))
                         := A.rel_sym(Ring::nat_cast<A>(m) * A.inv(Ring::nat_cast<A>(Succ(n))), A.inv(Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(n))),
                             Ring::mul_neg(Ring::nat_cast<A>(m), Ring::nat_cast<A>(Succ(n)))),
@@ -430,16 +429,16 @@ theorem Ring::int_cast_mul(a, b: Int): Ring::int_cast<A>(Int::mul(a, b)) ≈ Rin
         NegSucc(m) => match b {
             OfNat(n) => calc {
                 Ring::int_cast<A>(Int::negOfNat(Nat::mul(Succ(m), n)))
-                    ≈ A.inv(Ring::nat_cast<A>(Nat::mul(Succ(m), n))) := Ring::int_cast_neg_of_nat(Nat::mul(Succ(m), n)),
+                    ≈ A.inv(Ring::nat_cast<A>(Nat::mul(Succ(m), n))) := Ring::int_cast_neg_of_nat<A>(Nat::mul(Succ(m), n)),
                     ≈ A.inv(Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(n))
-                        := A.inv_respects(Ring::nat_cast<A>(Nat::mul(Succ(m), n)), Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(n), Ring::nat_cast_mul(Succ(m), n)),
+                        := A.inv_respects(Ring::nat_cast<A>(Nat::mul(Succ(m), n)), Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(n), Ring::nat_cast_mul<A>(Succ(m), n)),
                     ≈ A.inv(Ring::nat_cast<A>(Succ(m))) * Ring::nat_cast<A>(n)
                         := A.rel_sym(A.inv(Ring::nat_cast<A>(Succ(m))) * Ring::nat_cast<A>(n), A.inv(Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(n)),
                             Ring::neg_mul(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(n))),
             },
             NegSucc(n) => calc {
                 Ring::nat_cast<A>(Nat::mul(Succ(m), Succ(n)))
-                    ≈ Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(Succ(n)) := Ring::nat_cast_mul(Succ(m), Succ(n)),
+                    ≈ Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(Succ(n)) := Ring::nat_cast_mul<A>(Succ(m), Succ(n)),
                     ≈ A.inv(Ring::nat_cast<A>(Succ(m))) * A.inv(Ring::nat_cast<A>(Succ(n)))
                         := A.rel_sym(A.inv(Ring::nat_cast<A>(Succ(m))) * A.inv(Ring::nat_cast<A>(Succ(n))), Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(Succ(n)),
                             Ring::neg_mul_neg(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(Succ(n)))),
