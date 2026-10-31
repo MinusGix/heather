@@ -29,3 +29,4 @@ statements.
 ## Log
 
 - 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.
+- 2026-10-31: 2026-10-31: `docs/runtime-fn-setups-design.md` §10: kept as a near-term builder ergonomics win. Once R5 lands, loops and conditionals a `runtime fn` can express are written there and lowered to `Loop`/`Conditional` by the default setup; the builder forms retire with the builder in R6.

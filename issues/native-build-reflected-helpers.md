@@ -38,3 +38,4 @@ loops (decimal formatting, [[native-decimal-io]]) need it most.
 ## Log
 
 - 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.
+- 2026-10-31: 2026-10-31: `docs/runtime-fn-setups-design.md` §10: kept as the near-term stepping stone (through the Rust reflector). Its builder-facing form survives R5: in [[runtime-fn-default-setup]] the helper form takes a `Compiled(f)` record from a `runtime fn` instead of a function the Rust reflector reads.

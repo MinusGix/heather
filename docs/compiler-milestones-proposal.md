@@ -286,6 +286,9 @@ soundness theorem, and the kernel never learns the word. Instance keying
 stays on syntax (`issues/compile-typeclass-design.md`): a setup's verdict is
 about this code, and refactoring the function re-runs the generator.
 
+R4's design of all four parts, and of how the compiler consumes the
+evidence, is `docs/runtime-fn-setups-design.md`.
+
 ### 4.2 The default setup, and its four steps
 
 The **default setup** is "abstract programming that can talk to the
