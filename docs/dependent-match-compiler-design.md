@@ -8,7 +8,7 @@ position, and compiles nested patterns to case trees with per-clause
 equations. Its "done when" is this note, decided by Minus, with the slices
 filed.
 
-**Status: proposed (2026-10-31); slice 4 implemented (§8.1).** No kernel change is needed and none is
+**Status: decided (2026-10-31, §13); slice 4 implemented (§8.1).** No kernel change is needed and none is
 proposed. Everything here is elaborator front end over the route lowerings
 that already exist.
 
@@ -536,14 +536,15 @@ fn half(n: Nat) → Nat decreases n {
 diagnostic. With slice 1 the arm is `omega`, reading `h` and the anonymous
 `a.leb(b) = True`.)
 
-## 13. Decisions for Minus
+## 13. Decisions
 
-1. **§4.2–4.3: the equation enters the term only when read** (pending
-   binder, re-elaborate on first read), rather than convoying every match.
-   This is recommended because function bodies keep their shape and the
-   library measurement becomes a counter diff.
-2. **§4.1: the anonymous equation is visible to tactics but not
-   spellable** in source. The other option is a fixed spellable name such
-   as `eq`, which would shadow user binders.
-3. **Slice order**: 1 and 4 first, because #316's `cd_loop_unfold` and
-   R3b are waiting on them. Then 3, 2, 5, 6, and 7 last.
+Decided 2026-10-31. Minus left the choice to what is best for the language,
+and the recommendations below were taken.
+
+1. **§4.2–4.3: the equation enters the term only when read.** A pending
+   binder is re-elaborated as the convoy on first read; the alternative was
+   convoying every match. Function bodies keep their shape, and the library
+   measurement becomes a counter diff.
+2. **§4.1: the anonymous equation is visible to tactics but not spellable**
+   in source. A fixed spellable name such as `eq` would shadow user binders.
+3. **Slice order**: 4 first (landed, §8.1), then 1, 3, 2, 5, 6, and 7 last.
