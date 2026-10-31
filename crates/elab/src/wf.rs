@@ -5460,7 +5460,8 @@ theorem late_pick_zero(l: Late): late_pick(Zero, l) = l { refl }
             assert!(e.el.respell_ty(&cx, &inline).is_none(), "`{name}`: the lowering of another context");
         }
         let mut wrong = e.el;
-        assert!(wrong.elab_source("fn late_bad() → Late { LateB(Succ(Succ(Zero)), refl) }").is_err(),
-            "a field's proof is still checked");
+        let refusal = wrong.elab_source("fn late_bad() → Late { LateB(Succ(Succ(Zero)), refl) }")
+            .expect_err("a field's proof is still checked");
+        assert!(refusal.message().contains("`twice(2)` and `2` are not"), "{}", refusal.message());
     }
 }
