@@ -87,6 +87,39 @@ fn CReal::exp_rat(a: Rat) → CReal { Series::exp(a).real() }
 
 fn CReal::exp_box(a: Rat) → Enclosed { Series::exp(a).enclosed() }
 
+// At a zero argument every term past the first vanishes, so exp(0) = 1: the
+// one exact value exp takes at a rational, which the search alone cannot
+// round in a directed mode (an enclosure of 1 straddles it).
+theorem Series::exp_sum_zero(a: Rat, z: a ≈ 0, m: Nat): Series::exp(a).sum(Succ(m)) ≈ 1 {
+    let s = Series::exp(a);
+    match m {
+        Zero => Rat::zero_add(1),
+        Succ(i) => {
+            let t = s.term(i);
+            let f = Rat::inv_succ(i);
+            let vanish = calc {
+                t * (a * f) ≈ t * (0 * f) := Rat::mul_respects(t.same_refl(), Rat::mul_respects(z, f.same_refl())),
+                ≈ t * 0 := Rat::mul_respects(t.same_refl(), f.zero_mul()),
+                ≈ 0 := t.mul_zero(),
+            };
+            Rat::same_trans(Rat::add_respects(Series::exp_sum_zero(a, z, i), vanish), Rat::add_zero(1))
+        },
+    }
+}
+
+theorem CReal::exp_rat_of_zero(a: Rat, z: a ≈ 0): CReal::exp_rat(a) ≈ CReal::ofRat(1) {
+    let s = Series::exp(a);
+    let at_one = λ (n: Nat) => {
+        let d: (s.index(n) = s.start + ((n + 1) + s.scale().width())) = refl;
+        let e: (s.index(n) = Succ(s.index(n) - 1)) = omega(d);
+        let r: (s.sum(s.index(n)) ≈ 1) = j(sym(e), λ k _ => s.sum(k) ≈ 1, Series::exp_sum_zero(a, z, s.index(n) - 1));
+        r
+    };
+    CReal::same_of_approx(CReal::exp_rat(a), CReal::ofRat(1), λ n => s.sum(s.index(n)), λ _ => 1,
+        λ n => s.real_at(n), λ n => CReal::ofRat_close_r(1, n),
+        CReal::ofRat_approx(λ n => s.sum(s.index(n)), λ _ => 1, at_one, λ _ => Rat::same_refl(1), Rat::same_refl(1)))
+}
+
 // ---------------------------------------------------------------------------
 // sin and cos: one step is two degrees, `(2k+2)(2k+3) = 4k² + 10k + 6` and
 // `(2k+1)(2k+2) = 4k² + 6k + 2`.
@@ -256,3 +289,9 @@ fn CReal::log_frac_box(a, b: Nat, pa: 0 < a, pb: 0 < b) → Enclosed { (CReal::l
 fn CReal::log_rat(q: Rat, pos: 0 < q) → CReal { CReal::log_frac(q.num.natAbs(), q.den, q.num_abs_pos(pos), q.den_pos) }
 
 fn CReal::log_box(q: Rat, pos: 0 < q) → Enclosed { CReal::log_frac_box(q.num.natAbs(), q.den, q.num_abs_pos(pos), q.den_pos) }
+
+// The positivity proof only feeds the series' `small` fields, which no term
+// reads, so the two reals agree term by term.
+theorem CReal::log_rat_irrel(q: Rat, p1, p2: 0 < q): CReal::log_rat(q, p1) ≈ CReal::log_rat(q, p2) {
+    (CReal::log_rat(q, p1)).same_of_terms(CReal::log_rat(q, p2), λ n => (CReal::log_rat(q, p1)).at(n).same_refl())
+}

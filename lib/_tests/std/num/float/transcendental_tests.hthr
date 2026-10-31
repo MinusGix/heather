@@ -3,7 +3,7 @@
 // was checked against a 200-digit reference rounded exactly. Tests, not
 // library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import option; import omega; import rat; import creal; import dyadic; import float; import round; import window; import literal; import interval; import creal_interval; import series; import elementary; import round_real; import transcendental;
+import logic; import bool; import nat; import int; import option; import omega; import rat; import creal; import dyadic; import float; import round; import window; import literal; import interval; import creal_interval; import series; import elementary; import round_real; import arith; import transcendental;
 
 fn half32() → Finite(binary32()) { Finite(False, 8388608, 125, trivial) }
 fn one32() → Finite(binary32()) { Finite(False, 8388608, 126, trivial) }
@@ -49,4 +49,46 @@ theorem rounds_real_one(): RoundsToReal(binary32(), NearestEven, CReal::ofRat(on
 }
 theorem rounds_real_back(): RoundsTo(binary32(), NearestEven, one32().val(), Fin(one32())) {
     binary32().rounds_real_rat(NearestEven, one32().val(), Fin(one32()), rounds_real_one())
+}
+
+// Every float: the specials of IEEE 754 §9.2.
+fn four_e3m2() → Finite(e3m2()) { Finite(False, 4, 4, trivial) }
+fn neg_two32() → Finite(binary32()) { Finite(True, 8388608, 127, trivial) }
+
+// exp(±0) = 1 exactly, in every mode: the search alone never settles a
+// directed rounding of 1.
+theorem exp_zero_32_down(): Float::exp(Float::Fin(Finite::zero(binary32(), True)), 4, mode := TowardNeg) = Some(Float::Fin(one32())) { refl }
+theorem exp_zero_32_up(): Float::exp(Float::Fin(Finite::zero(binary32(), False)), 4, mode := TowardPos) = Some(Float::Fin(one32())) { refl }
+theorem exp_zero_32_no_tries(): Float::exp(Float::Fin(Finite::zero(binary32(), False)), 0) = Some(Float::Fin(one32())) { refl }
+theorem exp_zero_rounds(): RoundsToReal(binary32(), TowardNeg, CReal::exp_rat((Finite::zero(binary32(), True)).val()), Float::Fin(one32())) {
+    Float::exp_correct(Finite::zero(binary32(), True), 4, TowardNeg, Float::Fin(one32()), exp_zero_32_down())
+}
+theorem exp_finite_32(): Float::exp(Float::Fin(one32()), 4) = Some(Float::Fin(Finite(False, 11401300, 127, trivial))) { refl }
+theorem exp_inf_32(): Float::exp(Float::Inf(False, trivial), 4, F := binary32()) = Some(Float::Inf(False, trivial)) { refl }
+theorem exp_neg_inf_32(): Float::exp(Float::Inf(True, trivial), 4, F := binary32()) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem exp_nan_32(): Float::exp(Float::NaN(trivial), 4, F := binary32()) = Some(Float::NaN(trivial)) { refl }
+
+// Overflow is the search: e^4 = 54.59… is past e3m2's largest float, 28,
+// and a format without infinities saturates.
+theorem exp_four_e3m2(): Float::exp(Float::Fin(four_e3m2()), 4) = Some(Float::Fin(Finite::max_finite(e3m2()))) { refl }
+
+// log: a positive argument is the search, ±0 divides by zero, a negative is
+// invalid.
+theorem log_two_float_32(): Float::log(Float::Fin(two32()), 4) = Some(Float::Fin(Finite(False, 11629080, 125, trivial))) { refl }
+theorem log_zero_32(): Float::log(Float::Fin(Finite::zero(binary32(), False)), 4) = Some(Float::Inf(True, trivial)) { refl }
+theorem log_neg_zero_32(): Float::log(Float::Fin(Finite::zero(binary32(), True)), 4) = Some(Float::Inf(True, trivial)) { refl }
+theorem log_neg_32(): Float::log(Float::Fin(neg_two32()), 4) = Some(Float::NaN(trivial)) { refl }
+theorem log_inf_32(): Float::log(Float::Inf(False, trivial), 4, F := binary32()) = Some(Float::Inf(False, trivial)) { refl }
+theorem log_neg_inf_32(): Float::log(Float::Inf(True, trivial), 4, F := binary32()) = Some(Float::NaN(trivial)) { refl }
+theorem log_nan_32(): Float::log(Float::NaN(trivial), 4, F := binary32()) = Some(Float::NaN(trivial)) { refl }
+
+// Without infinities (e4m3 has NaN only), log(0) is NaN.
+theorem log_zero_e4m3(): Float::log(Float::Fin(Finite::zero(e4m3(), False)), 4) = Some(Float::NaN(trivial)) { refl }
+
+// The theorems at an open float, read at a closed one.
+theorem log_neg_open(): Float::log(Float::Fin(neg_two32()), 4) = Some(Float::NaN(trivial)) {
+    Float::log_neg(neg_two32(), Finite::val_neg_lt(neg_two32(), refl, 8388607, refl), 4, NearestEven, trivial)
+}
+theorem log_two_rounds(): RoundsToReal(binary32(), NearestEven, CReal::log_rat(two32().val(), omega), Float::Fin(Finite(False, 11629080, 125, trivial))) {
+    Float::log_correct(two32(), omega, 4, NearestEven, trivial, Float::Fin(Finite(False, 11629080, 125, trivial)), log_two_float_32())
 }
