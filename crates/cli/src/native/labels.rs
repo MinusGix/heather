@@ -82,16 +82,21 @@ pub(super) fn piece_cuts(pieces: &[Piece], items: usize) -> impl Iterator<Item =
 /// `asm_back(code, back)`: walking back from the whole program made every
 /// piece's statement, and the `upto` chain's, convert past every later
 /// piece, more than linear in the program (issues/write-elf-build-constants.md).
+/// A piece's bytes are a list of numerals mapped to bytes: as a literal of
+/// `word_literal`s each byte was eight constructors and a vector for the
+/// elaborator, which made the pieces' definitions most of their cost, while
+/// the kernel reads `ofNat` at a numeral as one word either way
+/// (issues/native-certificate-literal-cost.md).
 pub(super) fn byte_pieces(p: &str, pieces: &[Piece], bytes: &[u8], items: usize, offsets: &[u64]) -> String {
     let mut text = String::new();
     let mut end = bytes.len();
     let length = offsets[items];
     for (c, piece) in pieces.iter().enumerate() {
         let (count, start) = (piece.count, piece.start);
-        let literal: Vec<String> = bytes[start..end].iter().map(|&b| super::word_literal(8, u64::from(b))).collect();
+        let literal: Vec<String> = bytes[start..end].iter().map(u8::to_string).collect();
         end = start;
         let top = items - piece.back;
-        text.push_str(&format!("fn {p}_piece_{c}() → List<BitVec(8)> {{ [{}] }}
+        text.push_str(&format!("fn {p}_piece_{c}() → List<BitVec(8)> {{ List::map<Nat, BitVec(8)>([{}], λ (b: Nat) => @bitvec::BitVec::ofNat(8, b)) }}
 theorem {p}_piece_{c}_is(): asm_code_after(no_fills(), asm_labels({p}_code()), {p}_at_{top}(), {count}) = {p}_piece_{c}() {{
     trans({p}_table().piece_by({p}_code(), {length}, {p}_checked_{items}(), {p}_at_{top}(), {top}, {}, {count}, {p}_checked_{top}(), trivial), refl)
 }}

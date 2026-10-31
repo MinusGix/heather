@@ -213,8 +213,12 @@ impl<'v, 'g> Readback<'v, 'g> {
     fn ty(&mut self, c: &'v TyClo<'v>, k: u32) -> Option<Rc<Type>> {
         match c {
             TyClo::Syn { env, body } => {
-                let sigma = self.subst(env, local_bound_ty(body).saturating_sub(k))?;
+                let used = local_bound_ty(body).saturating_sub(k);
+                let sigma = self.subst(env, used)?;
                 let body = shifted_ty(body, env);
+                if self.identity(&sigma, used) {
+                    return Some(body);
+                }
                 Some(Rc::new(under_ty(&body, k, &sigma)))
             }
             TyClo::El { level, tm } => Some(Rc::new(Type::El { level: (*level).clone(), tm: self.tm(tm, k)? })),
@@ -232,8 +236,12 @@ impl<'v, 'g> Readback<'v, 'g> {
     fn tm(&mut self, c: &'v TmClo<'v>, k: u32) -> Option<Rc<Term>> {
         match c {
             TmClo::Syn { env, body } => {
-                let sigma = self.subst(env, local_bound(body).saturating_sub(k))?;
+                let used = local_bound(body).saturating_sub(k);
+                let sigma = self.subst(env, used)?;
                 let body = shifted_tm(body, env);
+                if self.identity(&sigma, used) {
+                    return Some(body);
+                }
                 Some(Rc::new(under_tm(&body, k, &sigma)))
             }
             TmClo::Val(v) if k == 0 => Some(Rc::new(self.val(v)?)),
@@ -521,6 +529,25 @@ impl<'v, 'g> Readback<'v, 'g> {
             terms.push(if index < used { self.entry(entry)? } else { Rc::clone(&unused) });
         }
         Some(LocalSubst { tail: LocalSubst::id(self.gamma).tail, terms })
+    }
+
+    /// Whether `sigma`, built by [`Self::subst`] for a body whose free
+    /// variables are below `used`, sends that body to itself: the closure was
+    /// captured over Γ's own identity environment (one entry per entry of Γ,
+    /// so the body's global tails already have Γ's length) and every entry
+    /// the body can see reads back as its own variable. Applying it anyway
+    /// is the identity at the cost of a walk of the whole body: a closed
+    /// subtree that mentions a global is never skipped by its bounds (its
+    /// `u^δ` tail is rewritten unconditionally, `heather_kernel::bounds`), so
+    /// a collection literal's spine, whose children each hold the rest of
+    /// the literal's vector, read back in time quadratic in its length.
+    fn identity(&self, sigma: &LocalSubst, used: u32) -> bool {
+        let len = sigma.terms.len();
+        len == self.len as usize
+            && sigma.terms.iter().enumerate().all(|(p, t)| {
+                let index = (len - 1 - p) as u32;
+                index >= used || matches!(&**t, Term::Var(LocalVar(i)) if *i == index)
+            })
     }
 }
 

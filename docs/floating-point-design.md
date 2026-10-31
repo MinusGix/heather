@@ -570,7 +570,7 @@ roadmap's.
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
 | later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); the search ends from a real clear of the grid ([float-round-real-termination](../issues/float-round-real-termination.md), `round_real_apart`); the Padé gap for exp and log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md). The operations, the square root and the error model at nonnegative reals landed, §17. |
-| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)). |
+| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)); `Float::exp`/`Float::log` over every float with the §9.2 specials. |
 
 ML numerics on top (dot products, softmax, stochastic rounding) belong to
 the ML milestones that pull them, not here. The notation of §4.2 and §5.5
@@ -1189,7 +1189,15 @@ rounding relation's; the shift needs one lemma (`Int::shr_mul_le`) and is
 sound at every shift amount, so how many bits `Dyadic::cut` drops is a cost
 choice with no proof attached. A reciprocal of a positive `m · 2^e` is
 `⌊2^K / m⌋ · 2^(-e-K)` below and its successor above, with
-`K = p + width(m)`.
+`K = p + width(m)`. The quotient is `Nat::pow2_div`: a loop that doubles a
+remainder and takes one quotient bit per step guesses it, starting at
+`2^(width(m) - 1)` so that it runs only the quotient's `p` bits, and two
+comparisons, `g·m <= 2^K < (g + 1)·m`, keep the guess or fall back to
+`ldiv`. Only `ldiv`'s two facts (`q·m + r = 2^K`, `r < m`) reach the
+proofs, so nothing about the loop is proved
+(issues/interval-evaluation-budget.md). `Interval::of_rat` takes the
+reciprocal of its positive denominator as one point (`recip_point`), one
+quotient for both bounds.
 
 **Intervals.** `inductive Interval { Bnd(lo, hi: Dyadic), Whole }`.
 `I.Has(x)` reads `lo <= x <= hi` at `Rat`, and `Whole` holds everything.

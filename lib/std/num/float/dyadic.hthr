@@ -579,11 +579,13 @@ theorem Dyadic::le_up(self d: Dyadic, p: Nat): d <= d.up(p) {
 // ---------------------------------------------------------------------------
 // Reciprocal bounds. A positive `m · 2^e` has reciprocal `2^K / m · 2^(-e-K)`
 // for any `K`; flooring the quotient gives a bound below and its successor
-// one above. `K = p + width(m)` leaves at least `p` bits in the quotient.
+// one above. `K = p + width(m)` leaves at least `p` bits in the quotient,
+// which is guessed one bit per step and checked (`Nat::pow2_div`): any
+// quotient with `ldiv`'s parts gives sound bounds.
 
 fn Dyadic::recip_cut(self d: Dyadic, p: Nat) → Nat { p + d.mant.natAbs().width() }
 
-fn Dyadic::recip_quot(self d: Dyadic, p: Nat) → Nat { Nat::pow(2, d.recip_cut(p)).ldiv(d.mant.natAbs()).quot() }
+fn Dyadic::recip_quot(self d: Dyadic, p: Nat) → Nat { Nat::pow2_div(d.recip_cut(p), d.mant.natAbs()).quot() }
 
 fn Dyadic::recip_down(self d: Dyadic, p: Nat) → Dyadic { Dyadic(d.recip_quot(p).int(), -d.exp - d.recip_cut(p).int()) }
 
@@ -612,9 +614,9 @@ theorem Dyadic::recip_down_at(m: Nat, e: Int, p: Nat, hm: 0 < m):
 {
     let d = Dyadic(m.int(), e);
     let K = p + m.width();
-    let q = Nat::pow(2, K).ldiv(m).quot();
-    let r = Nat::pow(2, K).ldiv(m).rem();
-    let parts: (q * m + r = Nat::pow(2, K)) = Nat::pow(2, K).ldiv_parts(m);
+    let q = Nat::pow2_div(K, m).quot();
+    let r = Nat::pow2_div(K, m).rem();
+    let parts: (q * m + r = Nat::pow(2, K)) = Nat::pow2_div_parts(K, m);
     let lo = Dyadic(q.int(), -e - K.int());
     let scale: ((lo * d).rat() ≈ Rat((q.int() * m.int()) * 1, Nat::pow(2, K))) = Dyadic::recip_scale(q.int(), m.int(), e, K);
     let cross: ((q.int() * m.int()) * 1 * 1 <= 1 * Nat::pow(2, K).int()) = omega(parts, Nat::int_mul(q, m));
@@ -628,10 +630,10 @@ theorem Dyadic::recip_up_at(m: Nat, e: Int, p: Nat, hm: 0 < m):
 {
     let d = Dyadic(m.int(), e);
     let K = p + m.width();
-    let q = Nat::pow(2, K).ldiv(m).quot();
-    let r = Nat::pow(2, K).ldiv(m).rem();
-    let parts: (q * m + r = Nat::pow(2, K)) = Nat::pow(2, K).ldiv_parts(m);
-    let rem: (r < m) = Nat::pow(2, K).ldiv_rem_lt(m, d_pos := hm);
+    let q = Nat::pow2_div(K, m).quot();
+    let r = Nat::pow2_div(K, m).rem();
+    let parts: (q * m + r = Nat::pow(2, K)) = Nat::pow2_div_parts(K, m);
+    let rem: (r < m) = Nat::pow2_div_rem_lt(K, m, d_pos := hm);
     let hi = Dyadic(Succ(q).int(), -e - K.int());
     let scale: ((hi * d).rat() ≈ Rat((Succ(q).int() * m.int()) * 1, Nat::pow(2, K))) = Dyadic::recip_scale(Succ(q).int(), m.int(), e, K);
     let cross: (1 * Nat::pow(2, K).int() <= (Succ(q).int() * m.int()) * 1 * 1) = omega(parts, rem, Nat::int_mul(Succ(q), m), q.mul_succ_left(m));

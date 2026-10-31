@@ -583,6 +583,26 @@ theorem Finite::val_neg_lt({F: Format}, a: Finite(F), ea: a.neg = True, k: Nat, 
     j(sym(ea), λ b _ => Dyadic(match b { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat() < 0, at_mag)
 }
 
+theorem Finite::val_pos_lt({F: Format}, a: Finite(F), ea: a.neg = False, k: Nat, em: a.mag = Succ(k)): 0 < a.val() {
+    let z: (Dyadic(0, a.q()).rat() ≈ 0) = Rat::same_trans(x := Dyadic(0, a.q()).rat(), y := Dyadic::rat(0), z := 0, hxy := Dyadic::zero_mant(a.q()), hyz := Dyadic::rat_zero());
+    let l: (Dyadic(0, a.q()).rat() < Dyadic(Succ(k).int(), a.q()).rat()) = Dyadic::lt_of_mant_lt(0, Succ(k).int(), a.q(), omega);
+    let base: (0 < Dyadic(Succ(k).int(), a.q()).rat()) = Rat::lt_respects(z, Dyadic(Succ(k).int(), a.q()).rat().same_refl(), l);
+    let at_mag: (0 < Dyadic(a.mag.int(), a.q()).rat()) = j(sym(em), λ m _ => 0 < Dyadic(m.int(), a.q()).rat(), base);
+    j(sym(ea), λ b _ => 0 < Dyadic(match b { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat(), at_mag)
+}
+
+// The sign of a finite float, decided: a zero of either sign, positive, or
+// negative.
+fn Finite::sign_dec({F: Format}, self a: Finite(F)) → a.mag = 0 ∨ (0 < a.val() ∨ a.val() < 0) {
+    match a.mag as λ m => a.mag = m → a.mag = 0 ∨ (0 < a.val() ∨ a.val() < 0) {
+        Zero => λ em => Inl(em),
+        Succ(k) => λ em => Inr(match a.neg as λ s => a.neg = s → 0 < a.val() ∨ a.val() < 0 {
+            False => λ ea => Inl(Finite::val_pos_lt(a, ea, k, em)),
+            True => λ ea => Inr(Finite::val_neg_lt(a, ea, k, em)),
+        }(refl)),
+    }(refl)
+}
+
 // A nonnegative float's root, as the rounding sees it.
 theorem Finite::sqrt_approx({F: Format}, a: Finite(F), nn: 0 <= a.val()): F.SqrtApprox(a.val(), a.sqrt_h(), a.sqrt_st()) {
     let h = a.sqrt_h();
