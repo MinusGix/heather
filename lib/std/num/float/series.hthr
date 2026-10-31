@@ -408,3 +408,122 @@ theorem Series::enclose_auto_has(self s: Series, p: Nat): s.enclose_auto(p).HasR
 }
 
 fn Series::enclosed(self s: Series) → Enclosed { Enclosed(s.real(), λ _ p => s.enclose_auto(p), λ _ p => s.enclose_auto_has(p)) }
+
+// ---------------------------------------------------------------------------
+// Limits of series in linear relation, and limits dominated by another
+// series (issues/exp-log-grid-gap.md).
+
+// Past `start` the error never grows.
+theorem Series::err_mono(self s: Series, n, m: Nat, hs: s.start <= n, h: n <= m): s.err(m) <= s.err(n) {
+    let moved: ((s.sum(m) - s.sum(n)).abs() + s.err(m) <= s.err(n)) =
+        j(n.le_add(m, h), λ y _ => (s.sum(y) - s.sum(n)).abs() + s.err(y) <= s.err(n), s.tail(n, hs, m - n));
+    linarith(moved, (s.sum(m) - s.sum(n)).abs_nonneg())
+}
+
+// From `index(m)` on, the error is below 2^-(m+1).
+theorem Series::err_small(self s: Series, m, n: Nat, h: s.index(m) <= n): s.err(n) <= Rat::inv_pow2(m + 1) {
+    Rat::le_trans(s.err_mono(s.index(m), n, s.index_start(m), h), s.fine(m))
+}
+
+// Partial sums in a fixed linear relation, offset by `d`, `d1`, `d2` terms:
+// the relation at the first sums and between every later term carries to
+// every later sum.
+theorem Series::sums_comb(self s: Series, s1, s2: Series, c, a, b: Rat, d, d1, d2: Nat,
+    base: s.sum(d) ≈ c + a * s1.sum(d1) + b * s2.sum(d2),
+    terms: (k: Nat) → s.term(d + k) ≈ a * s1.term(d1 + k) + b * s2.term(d2 + k), N: Nat):
+    s.sum(d + N) ≈ c + a * s1.sum(d1 + N) + b * s2.sum(d2 + N)
+{
+    match N {
+        Zero => base,
+        Succ(k) => {
+            let ih = s.sums_comb(s1, s2, c, a, b, d, d1, d2, base, terms, k);
+            let t = terms(k);
+            let r: (s.sum(d + k) + s.term(d + k) ≈ c + a * (s1.sum(d1 + k) + s1.term(d1 + k)) + b * (s2.sum(d2 + k) + s2.term(d2 + k))) = ring(ih, t);
+            r
+        },
+    }
+}
+
+// A series whose partial sums are, from some offsets on, `c` plus a linear
+// combination of two others' sums has their combination as its limit. Each
+// limit is within its error of each partial sum past its start; far enough
+// out the three errors, scaled, fit in any slack 2^-m.
+theorem Series::comb(self s: Series, s1, s2: Series, c, a, b: Rat, d, d1, d2: Nat,
+    eq: (N: Nat) → s.sum(d + N) ≈ c + a * s1.sum(d1 + N) + b * s2.sum(d2 + N)):
+    s.real() ≈ CReal::ofRat(c) + CReal::ofRat(a) * s1.real() + CReal::ofRat(b) * s2.real()
+{
+    let x = s.real();
+    let y1 = s1.real();
+    let y2 = s2.real();
+    let R = CReal::ofRat(c) + CReal::ofRat(a) * y1 + CReal::ofRat(b) * y2;
+    let near = λ (m: Nat) => {
+        let ma = (m + 2) + a.abs_ceil().width();
+        let mb = (m + 2) + b.abs_ceil().width();
+        let N = s.index(m + 2) + s1.index(ma) + s2.index(mb);
+        let n0 = d + N;
+        let n1 = d1 + N;
+        let n2 = d2 + N;
+        let i0: (s.index(m + 2) <= n0) = omega;
+        let i1: (s1.index(ma) <= n1) = omega;
+        let i2: (s2.index(mb) <= n2) = omega;
+        let st0: (s.start <= n0) = s.start.le_trans(s.index(m + 2), n0, s.index_start(m + 2), i0);
+        let st1: (s1.start <= n1) = s1.start.le_trans(s1.index(ma), n1, s1.index_start(ma), i1);
+        let st2: (s2.start <= n2) = s2.start.le_trans(s2.index(mb), n2, s2.index_start(mb), i2);
+        let e0 = s.err(n0);
+        let e1 = s1.err(n1);
+        let e2 = s2.err(n2);
+        let q = Rat::inv_pow2(m + 2);
+        let f0: (e0 <= q) = Rat::le_trans(s.err_small(m + 2, n0, i0), Rat::inv_pow2_antitone(m + 2, m + 3, omega));
+        let f1: (a.abs() * e1 <= q) = Rat::scaled_small(a, e1, m + 2, s1.err_nonneg(n1),
+            Rat::le_trans(s1.err_small(ma, n1, i1), Rat::inv_pow2_antitone(ma, ma + 1, omega)));
+        let f2: (b.abs() * e2 <= q) = Rat::scaled_small(b, e2, m + 2, s2.err_nonneg(n2),
+            Rat::le_trans(s2.err_small(mb, n2, i2), Rat::inv_pow2_antitone(mb, mb + 1, omega)));
+        let h1 = Rat::inv_pow2_half(m + 1);
+        let h0 = Rat::inv_pow2_half(m);
+        let qp = Rat::inv_pow2_pos(m + 2);
+        let S0 = s.sum(n0);
+        let S1 = s1.sum(n1);
+        let S2 = s2.sum(n2);
+        let e = eq(N);
+        let p1 = CReal::scale_between(a, S1, e1, s1.below(n1, st1), s1.above(n1, st1));
+        let p2 = CReal::scale_between(b, S2, e2, s2.below(n2, st2), s2.above(n2, st2));
+        let up: (S0 + e0 <= c + (a * S1 - a.abs() * e1) + (b * S2 - b.abs() * e2) + Rat::inv_pow2(m)) = linarith(e, f0, f1, f2, h1, h0, qp);
+        let dn: (c + (a * S1 + a.abs() * e1) + (b * S2 + b.abs() * e2) <= (S0 - e0) + Rat::inv_pow2(m)) = linarith(e, f0, f1, f2, h1, h0, qp);
+        let x_up: (x <= R + CReal::ofRat(Rat::inv_pow2(m))) = linarith(s.above(n0, st0), CReal::ofRat_le(up), p1.left, p2.left);
+        let x_dn: (R <= x + CReal::ofRat(Rat::inv_pow2(m))) = linarith(s.below(n0, st0), CReal::ofRat_le(dn), p1.right, p2.right);
+        And(x_up, x_dn)
+    };
+    CReal::le_antisymm(CReal::le_of_slack(λ m => near(m).left), CReal::le_of_slack(λ m => near(m).right))
+}
+
+// A series dominated term by term by `C` times a nonnegative one, both from
+// one index `n` past their starts, has its limit within `C` times the
+// other's partial sum and error at `n`.
+theorem Series::sum_dominated(self s: Series, t: Series, C: Rat, hC: 0 <= C, dom: (k: Nat) → s.term(k).abs() <= C * t.term(k), n: Nat):
+    s.sum(n).abs() <= C * t.sum(n)
+{
+    match n {
+        Zero => { let z: (Rat::abs(0) ≈ 0) = refl; linarith(z) },
+        Succ(k) => {
+            let ih = s.sum_dominated(t, C, hC, dom, k);
+            let r: ((s.sum(k) + s.term(k)).abs() <= C * (t.sum(k) + t.term(k))) = linarith(Rat::abs_triangle(s.sum(k), s.term(k)), ih, dom(k));
+            r
+        },
+    }
+}
+
+theorem Series::real_dominated(self s: Series, t: Series, C: Rat, hC: 0 <= C, dom: (k: Nat) → s.term(k).abs() <= C * t.term(k),
+    n: Nat, hs: s.start <= n, ht: 0 <= t.term(n)):
+    CReal::ofRat(-(C * (t.sum(n) + t.err(n)))) <= s.real() ∧ s.real() <= CReal::ofRat(C * (t.sum(n) + t.err(n)))
+{
+    let sd = s.sum_dominated(t, C, hC, dom, n);
+    let tn: (t.term(n).abs() ≈ t.term(n)) = t.term(n).abs_of_nonneg(ht);
+    let en: (s.err(n) <= C * t.err(n)) = calc {
+        s.term(n).abs() + s.term(n).abs() <= C * t.term(n) + C * t.term(n) := Rat::add_le_mono(dom(n), dom(n)),
+        ≈ C * (t.term(n) + t.term(n)) := ring,
+        ≈ C * (t.term(n).abs() + t.term(n).abs()) := Rat::mul_respects(C.same_refl(), Rat::same_sym(Rat::add_respects(tn, tn))),
+    };
+    let lo: (-(C * (t.sum(n) + t.err(n))) <= s.sum(n) - s.err(n)) = linarith(sd, en, s.sum(n).neg_le_abs());
+    let hi: (s.sum(n) + s.err(n) <= C * (t.sum(n) + t.err(n))) = linarith(sd, en, s.sum(n).le_abs());
+    And(CReal::le_trans(CReal::ofRat_le(lo), s.below(n, hs)), CReal::le_trans(s.above(n, hs), CReal::ofRat_le(hi)))
+}

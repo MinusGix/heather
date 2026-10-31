@@ -7,9 +7,11 @@
 // result is Ziv's search over them (`Format::round_real`). The search
 // returns a float only with a proof that it is the correct rounding of the
 // real (`exp_fin_correct`, `log_fin_correct`); a `None` means the tries ran out, never a wrong
-// answer. That the search always ends, so that `None` cannot happen with
-// enough tries, is `round_real_apart` given the Padé gap and narrowing
-// enclosures (issues/exp-log-grid-gap.md).
+// answer. For exp the search ends: the Padé gap (pade.hthr) puts exp at a
+// nonzero rational off the grid, so `Float::exp_total` rounds every float
+// with no `Option`, over exp's own `CReal::enclosed` boxes (the series boxes
+// have no narrowing proof yet, issues/exp-box-narrowing.md). log's gap waits
+// on `exp(log q) ≈ q` (issues/log-grid-gap.md).
 
 import logic;
 import bool;
@@ -27,6 +29,8 @@ import series;
 import elementary;
 import round_real;
 import arith;
+import pade;
+import omega;
 
 // ---------------------------------------------------------------------------
 // exp
@@ -191,3 +195,62 @@ theorem Float::log_neg_inf({F: Format}, h: F.specials.has_inf().IsTrue(), tries:
 }
 
 theorem Float::log_nan({F: Format}, h, nan: F.specials.has_nan().IsTrue(), tries: Nat, mode: Mode): Float::log(NaN(h), tries, mode := mode, nan := nan) = Some(NaN(h)) { refl }
+
+// ---------------------------------------------------------------------------
+// exp with no Option (issues/exp-log-grid-gap.md): the Padé gap makes the
+// search end, so the try count is computed rather than supplied.
+
+// exp at a nonzero finite float, total: the search over exp's own
+// enclosures, with its try count from the Padé gap.
+fn Format::exp_fin_total(self F: Format, mode: Mode, f: Finite(F), nz: ¬(f.val() ≈ 0)) → Float(F) {
+    let X = CReal::exp_rat(f.val());
+    F.round_real_apart(mode, X.enclosed(), X.enclosed_narrows(16, omega, F.prec() + 16, F.prec() + 16), F.exp_off_grid(f.val(), nz))
+}
+
+theorem Format::exp_fin_total_correct(self F: Format, mode: Mode, f: Finite(F), nz: ¬(f.val() ≈ 0)):
+    RoundsToReal(F, mode, CReal::exp_rat(f.val()), F.exp_fin_total(mode, f, nz))
+{
+    let X = CReal::exp_rat(f.val());
+    F.round_real_apart_correct(mode, X.enclosed(), X.enclosed_narrows(16, omega, F.prec() + 16, F.prec() + 16), F.exp_off_grid(f.val(), nz))
+}
+
+// And the search with an Option ends: enough tries return Some.
+theorem Format::exp_search_ends(self F: Format, mode: Mode, f: Finite(F), nz: ¬(f.val() ≈ 0)):
+    ∃ tries: Nat, ∃ r: Float(F), F.round_real(mode, CReal::exp_rat(f.val()).enclosed(), tries) = Some(r)
+{
+    let X = CReal::exp_rat(f.val());
+    let narrow = X.enclosed_narrows(16, omega, F.prec() + 16, F.prec() + 16);
+    let off = F.exp_off_grid(f.val(), nz);
+    Exists(F.round_apart_tries(X.enclosed(), F.prec() + 16, F.prec() + 16, 16, narrow, off), F.round_real_ends(mode, X.enclosed(), narrow, off))
+}
+
+// exp on every float with no Option (IEEE 754 §9.2 specials as `Float::exp`).
+fn Float::exp_total({F: Format}, self x: Float(F), mode: Mode := NearestEven) → Float(F) {
+    match x {
+        Fin(a) => match a.mag as λ m => a.mag = m → Float(F) {
+            Zero => λ _ => F.round_exact(mode, 1, False),
+            Succ(k) => λ em => F.exp_fin_total(mode, a, Finite::val_ne_zero(a, k, em)),
+        }(refl),
+        Inf(n, h) => match n { False => Inf(False, h), True => Float::Fin(Finite::zero(F, False)) },
+        NaN(h) => NaN(h),
+    }
+}
+
+theorem Float::exp_total_correct({F: Format}, a: Finite(F), mode: Mode):
+    RoundsToReal(F, mode, CReal::exp_rat(a.val()), Float::exp_total(Float::Fin(a), mode := mode))
+{
+    match a.mag as λ m => (em: a.mag = m) → RoundsToReal(F, mode, CReal::exp_rat(a.val()), (match m as λ m0 => a.mag = m0 → Float(F) {
+            Zero => λ _ => F.round_exact(mode, 1, False),
+            Succ(k) => λ em0 => F.exp_fin_total(mode, a, Finite::val_ne_zero(a, k, em0)),
+        })(em))
+    {
+        Zero => λ em => {
+            let one: RoundsTo(F, mode, Dyadic::rat(1), F.round_exact(mode, 1, False)) = F.round_exact_correct(mode, 1, False);
+            let at_one: RoundsToReal(F, mode, CReal::ofRat(Dyadic::rat(1)), F.round_exact(mode, 1, False)) = F.rounds_real_of_rat(mode, Dyadic::rat(1), F.round_exact(mode, 1, False), one);
+            let same: (CReal::ofRat(Dyadic::rat(1)) ≈ CReal::exp_rat(a.val())) =
+                CReal::same_trans(CReal::ofRat_respects(Dyadic::rat_one()), CReal::same_sym(CReal::exp_rat_of_zero(a.val(), Finite::val_of_mag_zero(a, em))));
+            F.rounds_real_respects(mode, same, F.round_exact(mode, 1, False), at_one)
+        },
+        Succ(k) => λ em => F.exp_fin_total_correct(mode, a, Finite::val_ne_zero(a, k, em)),
+    }(refl)
+}

@@ -2892,3 +2892,109 @@ theorem CReal::sqrt_rat_nonneg(q: Rat): 0 <= CReal::sqrt_rat(q) { CReal::is_sqrt
 theorem CReal::is_sqrt_exact({s: CReal}, {x: Rat}, g: Rat, gn: 0 <= g, e: g * g ≈ x, h: s.IsSqrt(x)): s ≈ CReal::ofRat(g) {
     CReal::le_antisymm(h.right(g, gn, Rat::le_of_same(Rat::same_sym(e))), h.left(g, gn, Rat::le_of_same(e)))
 }
+
+// ---------------------------------------------------------------------------
+// Slack, scaling, and apartness from a scaled error (issues/exp-log-grid-gap.md).
+
+// Below every slack 2^-m is below: a gap `y < x` is at least some 1/(k+1)
+// at x - y's terms, so 2^-(k+1) under it is a slack the hypothesis refutes.
+theorem CReal::le_of_slack({x, y: CReal}, h: (m: Nat) → x <= y + CReal::ofRat(Rat::inv_pow2(m))): x <= y {
+    λ (back: y < x) => match CReal::pos_gap(CReal::sub_pos(back)) {
+        Exists(k, rest) => match rest {
+            Exists(s, gap) => {
+                let q = Rat::inv_succ(k);
+                let below: (CReal::ofRat(q) <= x - y) = CReal::ofRat_le_of_close(q, λ j => Exists(s, λ n from =>
+                    Rat::le_trans(gap(n, from), (x - y).at(n).le_add_nonneg(Rat::inv_succ(j), Rat::le_of_lt(Rat::inv_succ_pos(j))))));
+                let small: (Rat::inv_pow2(k + 1) < q) = Rat::lt_of_le_of_lt(Rat::inv_pow2_le_inv_succ(k + 1), omega);
+                let strict: (y + CReal::ofRat(Rat::inv_pow2(k + 1)) < x) = linarith(below, CReal::ofRat_lt(small));
+                h(k + 1, strict)
+            },
+        },
+    }
+}
+
+// A real between `q ∓ e`, scaled by a rational `a`, is between `aq ∓ |a|e`.
+theorem CReal::scale_between({y: CReal}, a, q, e: Rat, lo: CReal::ofRat(q - e) <= y, hi: y <= CReal::ofRat(q + e)):
+    CReal::ofRat(a * q - a.abs() * e) <= CReal::ofRat(a) * y ∧ CReal::ofRat(a) * y <= CReal::ofRat(a * q + a.abs() * e)
+{
+    match Rat::le_total(0, a) {
+        Inl(nn) => {
+            let za: (0 <= CReal::ofRat(a)) = CReal::ofRat_le(nn);
+            let ab: (CReal::ofRat(a.abs() * e) ≈ CReal::ofRat(a * e)) = CReal::ofRat_respects(Rat::mul_respects(a.abs_of_nonneg(nn), e.same_refl()));
+            let l: (CReal::ofRat(a) * CReal::ofRat(q - e) <= CReal::ofRat(a) * y) = CReal::mul_le_mono_l(lo, za);
+            let u: (CReal::ofRat(a) * y <= CReal::ofRat(a) * CReal::ofRat(q + e)) = CReal::mul_le_mono_l(hi, za);
+            And(linarith(l, ab), linarith(u, ab))
+        },
+        Inr(np) => {
+            let za: (CReal::ofRat(a) <= 0) = CReal::ofRat_le(np);
+            let ab: (CReal::ofRat(a.abs() * e) ≈ CReal::ofRat(-a * e)) = CReal::ofRat_respects(Rat::mul_respects(a.abs_of_nonpos(np), e.same_refl()));
+            let l: (CReal::ofRat(a) * CReal::ofRat(q + e) <= CReal::ofRat(a) * y) = CReal::mul_le_mono_l_nonpos(hi, za);
+            let u: (CReal::ofRat(a) * y <= CReal::ofRat(a) * CReal::ofRat(q - e)) = CReal::mul_le_mono_l_nonpos(lo, za);
+            And(linarith(l, ab), linarith(u, ab))
+        },
+    }
+}
+
+// One scaled error decides a side: if a Z = E - b with |E| <= nu/4,
+// |b| >= nu and 2|a| d <= nu, then Z is at least d away from 0.
+
+theorem CReal::apart_of_scaled({Z, E: CReal}, a, b, nu, eps, d: Rat, hnu: 0 < nu, he4: eps + eps + eps + eps <= nu, hd: 0 <= d,
+    had: a.abs() * d + a.abs() * d <= nu, e: CReal::ofRat(a) * Z ≈ E - CReal::ofRat(b),
+    elo: CReal::ofRat(-eps) <= E, ehi: E <= CReal::ofRat(eps), hb: nu <= b ∨ b <= -nu):
+    Z <= CReal::ofRat(-d) ∨ CReal::ofRat(d) <= Z
+{
+    let p1: (a * d <= a.abs() * d) = Rat::mul_le_mono_r(a.le_abs(), hd);
+    let p2: (-a.abs() * d <= a * d) = Rat::mul_le_mono_r(a.neg_abs_le(), hd);
+    let up0: (a * d + a * d <= nu) = linarith(p1, had);
+    let dn0: (-nu <= a * d + a * d) = linarith(p2, had);
+    let up = CReal::ofRat_le(up0);
+    let dn = CReal::ofRat_le(dn0);
+    let n0 = CReal::ofRat_lt(hnu);
+    let e4 = CReal::ofRat_le(he4);
+    match hb {
+        Inl(bp) => {
+            let B = CReal::ofRat_le(bp);
+            match a.lt_trichotomy(0) {
+                Inl(an) => Inr(λ (h: Z < CReal::ofRat(d)) => {
+                    let m: (CReal::ofRat(a) * CReal::ofRat(d) <= CReal::ofRat(a) * Z) = CReal::mul_le_mono_l_nonpos(CReal::le_of_lt(h), CReal::ofRat_le(Rat::le_of_lt(an)));
+                    let k: False = linarith(m, e, ehi, B, e4, dn, n0);
+                    k
+                }),
+                Inr(r) => match r {
+                    Inl(az) => {
+                        let z: (CReal::ofRat(a) * Z ≈ CReal::ofRat(0) * Z) = CReal::mul_respects(CReal::ofRat_respects(az), Z.same_refl());
+                        let k: False = linarith(z, e, ehi, B, e4, n0);
+                        false_elim(k)
+                    },
+                    Inr(ap) => Inl(λ (h: CReal::ofRat(-d) < Z) => {
+                        let m: (CReal::ofRat(a) * CReal::ofRat(-d) <= CReal::ofRat(a) * Z) = CReal::mul_le_mono_l(CReal::le_of_lt(h), CReal::ofRat_le(Rat::le_of_lt(ap)));
+                        let k: False = linarith(m, e, ehi, B, e4, up, n0);
+                        k
+                    }),
+                },
+            }
+        },
+        Inr(bn) => {
+            let B = CReal::ofRat_le(bn);
+            match a.lt_trichotomy(0) {
+                Inl(an) => Inl(λ (h: CReal::ofRat(-d) < Z) => {
+                    let m: (CReal::ofRat(a) * Z <= CReal::ofRat(a) * CReal::ofRat(-d)) = CReal::mul_le_mono_l_nonpos(CReal::le_of_lt(h), CReal::ofRat_le(Rat::le_of_lt(an)));
+                    let k: False = linarith(m, e, elo, B, e4, dn, n0);
+                    k
+                }),
+                Inr(r) => match r {
+                    Inl(az) => {
+                        let z: (CReal::ofRat(a) * Z ≈ CReal::ofRat(0) * Z) = CReal::mul_respects(CReal::ofRat_respects(az), Z.same_refl());
+                        let k: False = linarith(z, e, elo, B, e4, n0);
+                        false_elim(k)
+                    },
+                    Inr(ap) => Inr(λ (h: Z < CReal::ofRat(d)) => {
+                        let m: (CReal::ofRat(a) * Z <= CReal::ofRat(a) * CReal::ofRat(d)) = CReal::mul_le_mono_l(CReal::le_of_lt(h), CReal::ofRat_le(Rat::le_of_lt(ap)));
+                        let k: False = linarith(m, e, elo, B, e4, up, n0);
+                        k
+                    }),
+                },
+            }
+        },
+    }
+}

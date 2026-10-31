@@ -2213,3 +2213,42 @@ theorem Rat::sides_of_abs({R, q, u, e: Rat}, nn: 0 <= q, h: (R - q).abs() <= u *
     let uq: (u * q.abs() ≈ u * q) = Rat::mul_respects(u.same_refl(), q.abs_of_nonneg(nn));
     And(linarith((R - q).le_abs(), h, uq), linarith((R - q).neg_le_abs(), h, uq))
 }
+
+// ---------------------------------------------------------------------------
+// Small helpers for series limits and lattices (issues/exp-log-grid-gap.md).
+
+// Multiply both sides of a `≈` on the right.
+theorem Rat::mul_same_r({a, b, c: Rat}, h: a ≈ b): a * c ≈ b * c { Rat::mul_respects(h, c.same_refl()) }
+
+// `|a|·e` below 2^-m once `e` is below 2^-(m + w), 2^w past `a`'s ceiling.
+theorem Rat::scaled_small(a, e: Rat, m: Nat, h0: 0 <= e, he: e <= Rat::inv_pow2(m + a.abs_ceil().width())): a.abs() * e <= Rat::inv_pow2(m) {
+    let w = a.abs_ceil().width();
+    let big = Rat::ofInt(Nat::pow(2, w).int());
+    let below: (a.abs_ceil() < Nat::pow(2, w)) = a.abs_ceil().lt_pow_width();
+    let ab: (a.abs() <= big) = Rat::le_trans(a.abs_le_abs_ceil(), omega(below));
+    calc {
+        a.abs() * e <= big * Rat::inv_pow2(m + w) := Rat::mul_le_mul(ab, he, a.abs_nonneg(), h0),
+        ≈ Rat::inv_pow2(m) := Rat::scale_inv_pow2(w, m),
+    }
+}
+
+// A rational multiple of nu by an integer is 0 or at least nu away from 0.
+theorem Rat::far_of_int(N: Int, nu: Rat, hnu: 0 <= nu, {b: Rat}, hb: b ≈ Rat::ofInt(N) * nu): N = 0 ∨ (nu <= b ∨ b <= -nu) {
+    match N.lt_trichotomy(0) {
+        Inl(neg) => {
+            let c: (Rat::ofInt(N) <= Rat::ofInt(-1)) = Rat::ofInt_le(N, -1, omega(neg));
+            let m: (Rat::ofInt(N) * nu <= Rat::ofInt(-1) * nu) = Rat::mul_le_mono_r(c, hnu);
+            let r: (b <= -nu) = linarith(m, hb);
+            Inr(Inr(r))
+        },
+        Inr(r) => match r {
+            Inl(z) => Inl(z),
+            Inr(pos) => {
+                let c: (Rat::ofInt(1) <= Rat::ofInt(N)) = Rat::ofInt_le(1, N, omega(pos));
+                let m: (Rat::ofInt(1) * nu <= Rat::ofInt(N) * nu) = Rat::mul_le_mono_r(c, hnu);
+                let s: (nu <= b) = linarith(m, hb);
+                Inr(Inl(s))
+            },
+        },
+    }
+}

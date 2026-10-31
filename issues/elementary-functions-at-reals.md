@@ -34,3 +34,4 @@ Scope:
 
 - 2026-10-27: docs/analysis-foundations-design.md §8 proposes the laws as formal identities proved by coinduction over Hurwitz series ([[formal-power-series]], §3.4) carried through evaluation as a ring homomorphism ([[power-series-evaluation]]); no real derivatives needed.
 - 2026-10-31: 2026-10-31: `CReal::log_rat` exists (lib/std/num/float/elementary.hthr, the atanh series after scaling into one binade, plus e·log 2), defined as that sum: `exp(log q) ≈ q` and `log(exp a) ≈ a` are owed here with the other laws ([[creal-compress-and-transcendentals]]).
+- 2026-10-31: exp-log-grid-gap closed for exp (2026-10-31, lib/std/num/float/pade.hthr). log's gap is now [[log-grid-gap]], blocked here: it needs exp(log q) ≈ q and exp monotone or Lipschitz on a bounded interval at real arguments.

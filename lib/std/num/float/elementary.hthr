@@ -295,3 +295,30 @@ fn CReal::log_box(q: Rat, pos: 0 < q) → Enclosed { CReal::log_frac_box(q.num.n
 theorem CReal::log_rat_irrel(q: Rat, p1, p2: 0 < q): CReal::log_rat(q, p1) ≈ CReal::log_rat(q, p2) {
     (CReal::log_rat(q, p1)).same_of_terms(CReal::log_rat(q, p2), λ n => (CReal::log_rat(q, p1)).at(n).same_refl())
 }
+
+// ---------------------------------------------------------------------------
+// exp's terms at |x|: their magnitudes, and nonnegative at a nonnegative x.
+
+theorem Series::exp_term_abs(x: Rat, k: Nat): Series::exp(x).term(k).abs() ≈ Series::exp(x.abs()).term(k) {
+    match k {
+        Zero => refl,
+        Succ(j) => {
+            let ih = Series::exp_term_abs(x, j);
+            let t = Series::exp(x).term(j);
+            let f = Rat::inv_succ(j);
+            let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(j));
+            calc {
+                (t * (x * f)).abs() ≈ t.abs() * (x * f).abs() := t.abs_mul(x * f),
+                ≈ t.abs() * (x.abs() * f.abs()) := Rat::mul_respects(t.abs().same_refl(), x.abs_mul(f)),
+                ≈ Series::exp(x.abs()).term(j) * (x.abs() * f) := Rat::mul_respects(ih, Rat::mul_respects(x.abs().same_refl(), f.abs_of_nonneg(hf))),
+            }
+        },
+    }
+}
+
+theorem Series::exp_term_nonneg(a: Rat, ha: 0 <= a, k: Nat): 0 <= Series::exp(a).term(k) {
+    match k {
+        Zero => omega,
+        Succ(j) => Rat::mul_nonneg(Series::exp_term_nonneg(a, ha, j), Rat::mul_nonneg(ha, Rat::le_of_lt(Rat::inv_succ_pos(j)))),
+    }
+}

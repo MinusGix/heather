@@ -2714,3 +2714,16 @@ theorem Format::round_exact_zero(self F: Format, mode: Mode, d: Dyadic, z: Bool,
     let sg: (F.round_exact(mode, d, z)).SignIs(z) = j(d.sign_or_zero(z, zero), λ b _ => (F.round_exact(mode, d, z)).SignIs(b), F.round_exact_sign(mode, d, z));
     Float::eq_zero_of(F.round_exact(mode, d, z), z, same, sg)
 }
+
+// ---------------------------------------------------------------------------
+// The grid as a lattice 2^-d Z.
+
+// The grid is the lattice 2^-d Z at d = (qmin - 1)'s negative part, scaled by its positive part.
+theorem Format::grid_lattice(self F: Format, m: Int):
+    F.grid(m) ≈ Rat::ofInt(m * Nat::pow(2, (F.qmin() - 1).pos_part()).int()) * Rat::inv_pow2((F.qmin() - 1).neg_part())
+{
+    let P = Nat::pow(2, (F.qmin() - 1).pos_part()).int();
+    let Q = Nat::pow(2, (F.qmin() - 1).neg_part()).int();
+    let i: ((m * P) * (OfNat(1) * Q) = ((m * P) * OfNat(1)) * Q) = ring;
+    i
+}
