@@ -64,3 +64,10 @@ only earlier.
   run's tail did not move. With the history that run wrote, `native_tools`
   goes first. **Warm**: the first probe released them 1 s into the gate's
   26 s; `native_tools` started at once and the test phase took 184 s.
+- 2026-10-31: A cold build step with per-module times shows the native
+  closure was not first in the queue. Ordered by source bytes, its modules
+  waited behind the std test chains and were last built at about 200 s
+  of 221 s, although the native chain itself was done by 89 s. The gate
+  now builds the native folders' closures first (`--build-first`), and they
+  are built by about 99 s with the step's length unchanged
+  ([[native-closure-builds-first]]).

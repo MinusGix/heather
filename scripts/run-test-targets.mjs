@@ -82,6 +82,7 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 // releases them.
 // scripts/test used to run the gate alone as a warmup before this phase and
 // then again here as a test (issues/library-gate-warmup-runs-alone.md).
+// `built` is mirrored by the library gate's `--build-first` (crates/cli/tests/library.rs).
 export const PREREQUISITES = new Map([["library", {
   readers: ["native_cat", "native_tools"],
   built: ["lib/native", "lib/_tests/native"],

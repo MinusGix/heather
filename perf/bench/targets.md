@@ -128,6 +128,12 @@ mid size.
 
 ## T4. lib/native's cold gate child (owners: `issues/native-gate-child-cold-at-rail.md`, `issues/native-lemma-kernel-steps.md`)
 
+**2026-10-31:** since #291 the gate builds each module in a process of its
+own, so there is no `lib/native` child to fit under the rail any more. Every
+native module took at most about 12 s cold, and the folder's check replays
+in a few seconds (`issues/native-closure-builds-first.md`). The rest of this
+section describes the folder child before that change.
+
 At 302 CPU-s (299 user plus 3 system), the child is over the suite's 300 s
 rail on a cold store. Cold module totals (s): `native_compile_args` 62.5
 (kernel 52), `native_compile_bytes` 46 (kernel 40), `function_ir_lower_calls`

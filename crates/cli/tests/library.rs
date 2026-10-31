@@ -256,6 +256,12 @@ fn every_library_module_checks() {
     let mut build = Command::new(env!("CARGO_BIN_EXE_heather"));
     build.arg("check");
     images_flags(&mut build);
+    // The native folders' closures go first: the test runner starts the
+    // native gates once their images exist (`PREREQUISITES` in
+    // `scripts/run-test-targets.mjs`, whose `built` this mirrors), and the
+    // step is CPU-bound, so building them first moves that release forward
+    // without lengthening the step (`docs/module-dag-design.md` §12).
+    build.args(["--build-first", "lib/native", "--build-first", "lib/_tests/native"]);
     let out = build.args(["--build-jobs", "4", "--build-only", "lib"]).output().expect("run heather check");
     let built = String::from_utf8_lossy(&out.stderr).into_owned();
     // Printed with `--nocapture`: what the first step built, and what it
