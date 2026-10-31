@@ -24,6 +24,39 @@ statements (the itree rounds).
 
 ## Done when
 
-The decimal formatter or another fuel-specified library function is
-restated without fuel in its statement, and a `partial` runtime loop
-compiles under the default setup.
+A function whose divergence is real is restated with no fuel in its
+statements, its soundness proved by fixpoint induction (done: the kernel
+model's `Tm::whnf_co`); a `partial fn` surface elaborates onto
+`CoTree::iter`/`CoTree::rec` (after sequencing R2/R3); and a `partial`
+runtime loop compiles under the default setup (after R5). The decimal
+formatter is not a customer: its fuel is a termination witness, which
+`unfolding-computed-scrutinee` and `while … decreases` own (Minus,
+2026-10-31).
+
+## Log
+
+- 2026-10-31: Assessed in `docs/partial-functions-design.md`. The
+  coinductive library already has everything except `CoTree::rec`. A probe
+  builds it as a loop over the pending tree (`iter`, Coq's `interp_mrec`):
+  its unfolding laws hold by `refl` at open arguments, runs at literals check
+  by a count and `refl`, and the cost is linear in calls. The note proposes
+  `partial fn f(x: A) → B` as `f : A → CoTree<B>(E)`, with tail recursion
+  lowered to `iter`, and the general case to `rec`; proofs go through
+  library rules (`Returns`, fixpoint induction, a measure rule,
+  `Partial::get`). It also proposes changing "done when": the decimal
+  formatter's fuel is a termination witness (its fix is
+  `unfolding-computed-scrutinee` and `while … decreases`), so the customer
+  should be the kernel model's `Tm::whnf`, whose divergence is real. Three
+  rounds in §6, for Minus's decision.
+- 2026-10-31: Minus agreed with the note and the change to "done when".
+  Round 1 (the library) landed: `lib/std/itree/coitree_rec.hthr` has
+  `CoTree::rec`/`mrec`, the unfolding laws, `Returns`, fixpoint induction
+  (`Safe`, `safe_bind`, `rec_sound`), `mrec_bisim`, `mrec_bind`,
+  termination by a measure (`Reaches`, `rec_total`) and `CoTree::get`.
+  The customer is `lib/kernel_model/kernel_whnf.hthr`: `Tm::whnf_co`, with
+  `whnf_co_sound` proved by `rec_sound` and no fuel anywhere. Probes in
+  `lib/_tests/std/itree/coitree_rec_tests.hthr` and
+  `lib/_tests/kernel_model/kernel_whnf_tests.hthr`. The bridge to
+  `Program::rec` is [[coitree-rec-program-bridge]]. Left here: the surface
+  (round 2) and runtime loops (round 3). Also not yet done: proving that
+  `Ω` never returns, which needs a lemma saying a λ's only reduct is itself.
