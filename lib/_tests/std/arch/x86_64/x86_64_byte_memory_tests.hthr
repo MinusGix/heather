@@ -1,0 +1,45 @@
+// A memory's profile read off its type (x86_64_byte_memory;
+// issues/implicit-from-record-parameter-type.md): `X86Memory(x)` reaches the
+// profile only through a field, `relied: x.relies(perms)`, so an implicit `x`
+// is learned from a projection of it. The same at smaller records: a
+// parameter read through one projection, two, applied, beside an open type
+// parameter, and in a checking position; and a memory of another profile
+// refused, spelled with its argument.
+import x86_64_byte_memory;
+import bitvec;
+import logic;
+import nat;
+
+fn X86Memory::cell({x: X86Profile}, self m: X86Memory(x), a: BitVec(64)) → BitVec(8) { m.cells(a) }
+
+// A neutral profile, and one written out.
+fn neutral_cell(x: X86Profile, m: X86Memory(x), a: BitVec(64)) → BitVec(8) { m.cell(a) }
+fn trusting() → X86Profile { X86Profile(λ _ => True) }
+fn literal_cell(m: X86Memory(trusting()), a: BitVec(64)) → BitVec(8) { m.cell(a) }
+theorem cell_is_cells(x: X86Profile, m: X86Memory(x), a: BitVec(64)): m.cell(a) = m.cells(a) { refl }
+
+record Probe { k: Nat }
+record Read(x: Probe) { v: Nat, ok: x.k = v }
+fn Read::get({x: Probe}, self m: Read(x)) → Nat { m.v }
+fn read_neutral(x: Probe, m: Read(x)) → Nat { m.get() }
+fn read_literal(m: Read(Probe(k := 3))) → Nat { m.get() }
+theorem read_checked(x: Probe, m: Read(x)): m.get() = m.v { refl }
+
+// Two projections deep.
+record Pair { p: Probe, j: Nat }
+record Deep(r: Pair) { ok: r.p.k = r.j }
+fn Deep::j({r: Pair}, self m: Deep(r)) → Nat { r.j }
+fn deep_neutral(r: Pair, m: Deep(r)) → Nat { m.j() }
+
+// Beside an open type parameter.
+record Carry<A>(x: Probe) { a: A, ok: x.k = x.k }
+fn Carry::get<A>({x: Probe}, self m: Carry<A>(x)) → A { m.a }
+fn carry_open<A>(x: Probe, m: Carry<A>(x)) → A { m.get() }
+
+// Two arguments that must agree: the first teaches the profile, the second
+// is checked against it.
+record Other(x: Probe) { w: Nat, ok: x.k = w }
+fn Read::both({x: Probe}, self m: Read(x), n: Other(x)) → Nat { m.v }
+fn both_agree(x: Probe, m: Read(x), n: Other(x)) → Nat { m.both(n) }
+// expect-error(mismatch): this has type `Other(y)`, but `Other(x)` is expected here
+fn both_disagree(x: Probe, y: Probe, m: Read(x), n: Other(y)) → Nat { m.both(n) }

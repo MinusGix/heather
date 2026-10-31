@@ -1,6 +1,6 @@
 ---
 title: Infer an implicit from a record type's parameter when its fields project it
-status: open
+status: closed
 labels: [elaborator,inference]
 area: language
 created: 2026-10-31
@@ -42,3 +42,20 @@ arguments first.
   only incomplete.
 - Then drop the explicit profile from `X86Memory::LoadedFrom` and
   `X86Memory::loaded_entry` (lib/std/os/linux/linux_x86_64_image.hthr).
+
+## Log
+
+- 2026-10-31: Done. The root cause was narrower than head-first matching: a
+  record type has no head to match (it lowers inline to its Σ tower), and
+  `unify_tm` had no case for projections, so `fst@(snd@(?x))` against
+  `fst@(snd@(x))` paired nothing. It now pairs `fst`/`snd` (either spelling)
+  and recurses into the receivers (docs/unifier-completeness-design.md §10.3).
+  The type speller's instance matcher (`Holes::tm`) lacked the checked
+  projections too, so a mismatch between two instances printed the bare name
+  and reached the kernel; it now spells `Other(y)` against `Other(x)`.
+  `X86Memory::LoadedFrom` and `loaded_entry` take the profile implicitly
+  again, in the library and in `write-elf`'s generated source. Probes in
+  lib/_tests/std/arch/x86_64/x86_64_byte_memory_tests.hthr: neutral and
+  literal profiles, one and two projections, beside an open type parameter,
+  a checking position, and two arguments that disagree, refused with the
+  spelled mismatch.

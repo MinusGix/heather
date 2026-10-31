@@ -754,3 +754,30 @@ elaborator-side instance of the invariant
 `issues/elaborator-canonical-type-spelling.md` asks for, which is to make
 readers see through names rather than make emitters guess, applied to the
 one reader that learns implicits.
+
+### 10.3 Projections (2026-10-31)
+
+A record type lowers inline to its fields' Σ tower, so a parameter that the
+fields read only through a projection reaches the unifier inside one:
+`record U(x: Q) { v: Nat, ok: x.k = v }` makes `U(?x)` carry
+`fst@(snd@(?x))` where the subject `U(x)` carries `fst@(snd@(x))`. `unify_tm`
+had no projection case, so nothing paired the receivers and `?x` was never
+learned (`issues/implicit-from-record-parameter-type.md`; `X86Memory(x)`,
+whose `relied: x.relies(perms)` applies a projection, is the case the library
+kept working around). A parameter written whole, or applied as a function,
+already met the `app` congruence.
+
+The new case pairs `fst`/`fst@` with either spelling of `fst`, and `snd`
+likewise, and recurses into the receivers. A projection is not injective, so
+`?x := x` is one solution of `fst(?x) = fst(x)` and not the only one; that is
+the same license the application congruence takes with a rigid head, and the
+kernel judges the completed call.
+
+The type speller had the same gap one layer over: `Holes::tm` (the instance
+matcher behind `respell_ty`, `docs/per-instantiation-type-codes-design.md`
+§4.1) read the annotated `Fst`/`Snd` but not the checked `fst@`/`snd@`, so
+such a parameter was never placed and the instance spelled as the bare name.
+A mismatch between `Other(x)` and `Other(y)` printed `Other` twice and fell
+through to the kernel ("a type that displays the same"); it now reads "this
+has type `Other(y)`, but `Other(x)` is expected here". The arm accepts the
+same spelling on both sides only, since step 2's walk is syntactic.

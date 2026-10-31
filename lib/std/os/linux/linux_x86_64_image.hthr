@@ -277,9 +277,8 @@ theorem X86Memory::io_load_entry(size: Nat, within: size <= io_data_limit(), hea
 // relies on.
 fn io_data_end(size: Nat) → Nat { 0x410000 + size }
 
-// The profile is explicit: it is not inferred from the memory's type
-// (issues/implicit-from-record-parameter-type.md).
-fn X86Memory::LoadedFrom(x: X86Profile, size: Nat, self m: X86Memory(x), file: List<BitVec(8)>) → Type {
+// The profile is the memory's, read off its type.
+fn X86Memory::LoadedFrom({x: X86Profile}, size: Nat, self m: X86Memory(x), file: List<BitVec(8)>) → Type {
     (a: BitVec(64)) → a.toNat() < io_data_end(size) → (m.cells(a) = io_cell(file, a.toNat())) ∧ (m.perms(a) = io_perm(size, file.len(), a.toNat()))
 }
 
@@ -346,8 +345,8 @@ theorem io_executable_low(size: Nat, within: size <= io_data_limit(), file: List
 
 // A memory of any profile loaded from a 232-byte header and code: the code
 // resident at the entry.
-theorem X86Memory::loaded_entry(x: X86Profile, size: Nat, within: size <= io_data_limit(), self m: X86Memory(x), header, code: List<BitVec(8)>,
-    long: header.len() = 232, fits: 232 + code.len() <= 65536, loaded: m.LoadedFrom(x, size, header ++ code)):
+theorem X86Memory::loaded_entry({x: X86Profile}, size: Nat, within: size <= io_data_limit(), self m: X86Memory(x), header, code: List<BitVec(8)>,
+    long: header.len() = 232, fits: 232 + code.len() <= 65536, loaded: m.LoadedFrom(size, header ++ code)):
     CodeResident(x.fetch(), m, code, io_entry()) {
     code_resident_alike(X86Profile::io(size), x, X86Memory::io_load(size, within, header ++ code), m, λ a exec => {
         let same = loaded(a, io_executable_low(size, within, header ++ code, a, exec));
@@ -357,7 +356,7 @@ theorem X86Memory::loaded_entry(x: X86Profile, size: Nat, within: size <= io_dat
 
 // The loader's own memory is loaded from the file.
 theorem X86Memory::io_load_loaded(size: Nat, within: size <= io_data_limit(), file: List<BitVec(8)>):
-    X86Memory::io_load(size, within, file).LoadedFrom(X86Profile::io(size), size, file) { λ a _ => ⟨refl, refl⟩ }
+    X86Memory::io_load(size, within, file).LoadedFrom(size, file) { λ a _ => ⟨refl, refl⟩ }
 
 // ---------------------------------------------------------------------------
 // The process's stack (issues/io-image-process-stack.md)
@@ -499,13 +498,13 @@ fn X86Memory::process_load(size: Nat, within: size <= io_data_limit(), top, dept
 // It is loaded from the file: a process of the profile, at its entry, is
 // one Linux can start.
 theorem X86Memory::process_load_loaded(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth),
-    file: List<BitVec(8)>): X86Memory::process_load(size, within, top, depth, placed, file).LoadedFrom(X86Profile::process(size, top, depth), size, file) {
+    file: List<BitVec(8)>): X86Memory::process_load(size, within, top, depth, placed, file).LoadedFrom(size, file) {
     λ a below => ⟨refl, process_perm_below(size, file.len(), top, depth, a.toNat(), omega(below, placed.above))⟩
 }
 
 // A process loaded from the file: its segment zero.
 theorem X86Memory::loaded_data(size: Nat, within: size <= io_data_limit(), top, depth: Nat, self m: X86Memory(X86Profile::process(size, top, depth)),
-    file: List<BitVec(8)>, loaded: m.LoadedFrom(X86Profile::process(size, top, depth), size, file)): DataRegion::process_data(size, within, top, depth).Holds(io_zero(), m) {
+    file: List<BitVec(8)>, loaded: m.LoadedFrom(size, file)): DataRegion::process_data(size, within, top, depth).Holds(io_zero(), m) {
     let end: (io_data_end(size) = 0x410000 + size) = refl;
     λ p inside => {
         let value = io_data_offset(size, within, p, inside);
