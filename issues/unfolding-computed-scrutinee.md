@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,proofs]
 area: language
 created: 2026-09-05
-updated: 2026-09-25
+updated: 2026-10-31
 ---
 
 
@@ -28,3 +28,4 @@ state the equation per outer arm. The first is the natural one.
 ## Log
 
 - 2026-09-25: Hit again by the decimal spec in lib/decimal_line.hthr: `decimal(n)` by `decreases` over `match Nat::le_dec(10, n)` gets no `decimal_unfold`, so the spec is written with explicit fuel (`decimal_digits(n, n)`) instead. That's worth revisiting once this lands: the `decreases` form reads better as a specification.
+- 2026-10-31: 2026-10-31: Now blocks R3b of [[pure-imperative-statements]]: a lowered while … decreases matches on its condition under an equation binder (docs/sequencing-surface-design.md §5.3), and its _unfold is refused because the lifted obligation depends on that equation (probe P5). The first route here, generalizing the scrutinee into a convoy, is the one the lowering needs.

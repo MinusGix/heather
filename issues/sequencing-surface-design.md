@@ -23,3 +23,7 @@ is a design note that Minus decides on, plus R2 and R3 filed against it.
 ## Done when
 
 Minus has decided the note, and [[binding-statements]] and [[pure-imperative-statements]] state their scope against it.
+
+## Log
+
+- 2026-10-31: 2026-10-31: Design note written: docs/sequencing-surface-design.md (§11 lists the decisions for Minus). Carrier protocol = owner members M::bind/M::pure, since a class over a type constructor is not expressible (probe P1). R2 and R3 restated against it; R3 split into R3a and R3b, with R3b (while … decreases) waiting on [[unfolding-computed-scrutinee]]. Filed [[omega-certificate-bare-nil]] and [[decreases-measure-record-field-unspelled]] from the probes.
