@@ -768,6 +768,15 @@ impl Holes<'_> {
                 self.ty(s1, s2, md + 1)?;
                 self.tm(p1, p2, md)
             }
+            // The checked projections, `fst@`/`snd@` (docs/intro-by-type-design.md):
+            // a record type whose parameter its fields read through a
+            // projection — `U(x)` with `ok: x.k = v` — carries the parameter
+            // under one, and without this arm the parameter is never placed
+            // and the instance spells as the bare name
+            // (issues/implicit-from-record-parameter-type.md). Same spelling
+            // on both sides only: step 2's walk is syntactic.
+            (Term::FstAt { pair: p1 }, Term::FstAt { pair: p2 })
+            | (Term::SndAt { pair: p1 }, Term::SndAt { pair: p2 }) => self.tm(p1, p2, md),
             (a, b) => {
                 if a == b {
                     return Some(());

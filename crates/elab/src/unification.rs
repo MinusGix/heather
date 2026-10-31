@@ -629,6 +629,21 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
                 unify_tm(u, v1, v2, n, d, sols);
             }
         }
+        // Projections, in either spelling on either side. A record type
+        // lowers inline to its fields' Σ tower, so a parameter the fields
+        // read through a projection reaches the unifier as `fst@(snd@(?x))`
+        // against `fst@(snd@(x))` — `U(x)` with `ok: x.k = v`
+        // (issues/implicit-from-record-parameter-type.md). Same component on
+        // both sides pairs the receivers. A projection is not injective, so
+        // `?x := x` is one solution, not the only one: learn-only, like the
+        // application congruence above, and the kernel judges the call.
+        (p, s) if projection_of(p).is_some() && projection_of(s).is_some() => {
+            let (first1, r1) = projection_of(p).expect("a projection");
+            let (first2, r2) = projection_of(s).expect("a projection");
+            if first1 == first2 {
+                unify_tm(u, r1, r2, n, d, sols);
+            }
+        }
         (Term::Lam { body: b1, .. }, Term::Lam { body: b2, .. }) => {
             unify_tm(u, b1, b2, n, d + 1, sols);
         }
@@ -842,6 +857,16 @@ fn global_head(mut t: &Term) -> bool {
 fn pair_of(t: &Term) -> Option<(&Term, &Term)> {
     match t {
         Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => Some((fst, snd)),
+        _ => None,
+    }
+}
+
+/// Which component a projection takes (`true` for `fst`), and its
+/// receiver, in either spelling.
+fn projection_of(t: &Term) -> Option<(bool, &Term)> {
+    match t {
+        Term::Fst { pair, .. } | Term::FstAt { pair } => Some((true, pair)),
+        Term::Snd { pair, .. } | Term::SndAt { pair } => Some((false, pair)),
         _ => None,
     }
 }
