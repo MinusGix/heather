@@ -3,7 +3,7 @@ title: Datarepr: kernel representation vs runtime representation
 status: open
 labels: [compiler,design,runtime]
 area: heather-in-heather
-milestone: [hih-memory]
+milestone: [hih-memory, nh-heap]
 created: 2026-07-24
 updated: 2026-10-28
 ---

@@ -3,9 +3,9 @@ title: Prove the decimal procedures' sources print `decimal` for every word
 status: open
 labels: [native,proofs,stdlib]
 area: heather-in-heather
-milestone: [hih-tools]
+milestone: []
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-31
 ---
 
 [[native-decimal-io]] checks `put_decimal_padded` and `parse_decimal`
@@ -30,3 +30,7 @@ Neither is a theorem for every word.
 
 `native_compile_correct` already makes every compiled tool simulate its
 source; this would add that the source's numbers are the right digits.
+
+## Log
+
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). No milestone; still not scheduled.

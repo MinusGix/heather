@@ -85,13 +85,21 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item (syscalls and proved pieces included) and one loop rule are sound once, probed for elaborator cost. | hih-program-logic |
 | `hih-pl-source` | heather-in-heather | open | An effectful source denotes Linux trees, compiles to x86-64 by a Heather function, and the compiler's correctness theorem is proved once. | hih-program-logic |
 | `hih-pl-first-program` | heather-in-heather | done | `tr` is built through the verified compiler with no per-program proof (the per-function certificate path was retired in B2, 2026-10-24). | hih-program-logic |
-| `hih-tools` | heather-in-heather | open | A dozen small GNU-compatible tools (`echo`, `cat FILE…`, `head -n`, `tr`, `wc`, `grep -F`, `cmp`, `sort` and the rest of `docs/native-real-programs-plan.md` §2) are built by `write-elf` through the verified compiler with no per-program proof, and pass tests against GNU under `LC_ALL=C`. | hih-program-logic |
+| `hih-tools` | heather-in-heather | done | Small GNU-compatible tools are built by `write-elf` through the verified compiler with no per-program proof, and pass tests against GNU under `LC_ALL=C`. Closed at nine (`cat`, `cat FILE…`, `head -c`, `head -n`, `yes`, `yes STR`, `echo`, `tr`, `wc`), which stay as a regression corpus; `grep -F`, `sort` and `tac` move to `nh-procedures` and `nh-heap` (2026-10-31, `docs/compiler-milestones-proposal.md` §8). | hih-program-logic |
 | `hih-memory` | heather-in-heather | open | A native program allocates on the heap, under a byte-addressed memory model whose certificates bound and track the allocation. |  |
 | `hih-memory-model` | heather-in-heather | open | Byte-addressed memory with explicit access outcomes is a library model that the native machine model and the program logic both use. | hih-memory |
 | `hih-alloc-metering` | heather-in-heather | open | Certificates state an allocation bound, over a platform model that meters allocation. | hih-memory |
-| `hih-first-alloc` | heather-in-heather | open | One native program allocates, frees or bounds its heap, and its theorem says so. | hih-memory |
+| `hih-first-alloc` | heather-in-heather | moved | Moved into `nh-heap` (2026-10-31): one native program allocates, frees or bounds its heap, and its theorem says so. | hih-memory |
 | `hih-passes` | heather-in-heather | open | A compiler pass (certificate emission or an optimisation) is a Heather metaprogram with its proof, and Rust only moves its output around. |  |
 | `hih-self` | heather-in-heather | open | A first component of Heather itself (candidate: the lexer, on the parser library) is written in Heather and compiled natively. |  |
+| `self-lexer` | heather-in-heather | open | Heather's lexer is a `runtime fn` compiled natively, and its token stream matches `crates/syntax/src/lexer.rs` on every file under `lib/` (`docs/compiler-milestones-proposal.md` §5). | hih-self |
+| `self-compiler` | heather-in-heather | open | `Source::compile` and its checks are compiled natively, and `write-elf` runs that binary in place of the fork's kernel evaluation, with the kernel's check of the emission unchanged. | hih-self |
+| `hih-native-heather` | heather-in-heather | open | An ordinary Heather function marked `runtime fn` compiles under a setup (a library generator that boxes it, checks a judgment over its code, and is proved sound once) with no per-program proof, and two setups exist: the default one, and one that gives the compiler facts the default cannot (`docs/compiler-milestones-proposal.md` §4). |  |
+| `nh-front` | heather-in-heather | open | The `runtime fn` generator is written in Heather, and the default setup compiles first-order pure functions (words of any width, `Bool`, flat records and enums, `match`, loops, byte arrays) with an agreement certificate; `compile-x86` runs on it instead of its Rust reflector. | hih-native-heather |
+| `nh-procedures` | heather-in-heather | open | Calls compile to procedures with frames on the process stack and contracts derived from their bodies: a helper's code is emitted once, a non-tail recursive function compiles, and `grep -F` passes its GNU tests. | hih-native-heather |
+| `nh-effects` | heather-in-heather | open | A `runtime fn` talks to the system through `uniq` capabilities in the sequencing surface, denoting trees through `Source`; `cat FILE…`, `wc` and `head -n` are rewritten in it and pass their GNU tests. | hih-native-heather |
+| `nh-heap` | heather-in-heather | open | A `runtime fn` builds and reads lists and trees in an arena through `datarepr`, with exhaustion a defined exit; `sort` and `tac` pass their GNU tests. | hih-native-heather |
+| `nh-ownership` | heather-in-heather | open | A second setup checks Rust-style ownership over reflected code, is proved sound once against the byte memory model, and the compiler uses its evidence for in-place updates and frees. | hih-native-heather |
 | `hih-kernel-model` | heather-in-heather | open | A model of the kernel's reduction in Heather states the facts its accelerations rely on, and proves them, so that an optimisation checked nightly can be promoted to proven (`docs/kernel-model-design.md`). |  |
 | `hih-km-probe` | heather-in-heather | done | The fold classifier's probe is sound: a run that is not blocked on a probe variable is, at the same fuel, the run of every instance (`Tm::whnf_inst`, `Tm::whnf_inst_settled`). | hih-kernel-model |
 | `hih-km-runs` | heather-in-heather | done | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs (`Tm::fold_affine`, `Tm::fold_affine_peeled`, `Tm::fold_sync`). | hih-kernel-model |
@@ -132,6 +140,8 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `gpu-model` | gpu | open | A design note fixes the GPU execution model and the kernel-language level (tile IR, Triton-like) to prove against, with what it needs from the other areas. |  |
 | `rust-design` | rust-in-heather | open | A design note fixes the Rust subset, the semantics source (MIR or surface), and what the translation needs from `hih-memory` and `it-library`. |  |
 | `lean-fragment` | lean-in-heather | open | A design note says which fragment of Lean translates into Heather and how impredicative `Prop` is handled. |  |
+| `lang-sequencing` | language | open | Blocks bind over any carrier with a `bind` (`let x <- e;`, `e;`), and pure functions have `let mut`, `:=`, `for`, `while` and early exit, lowered to folds with unfolding equations; `mono.hthr` has no `bind` towers (`docs/compiler-milestones-proposal.md` §3). |  |
+| `lang-proof-modularity` | language | open | Proofs compose against interfaces: opt-in interface definitions, lemma registries that automation reads, invariant and contract rules for loops and procedures, and large proofs that keep their sharing, each retiring rules from `docs/proof-patterns.md` (`docs/compiler-milestones-proposal.md` §6). |  |
 <!-- /milestones -->
 
 ## Why these priorities
@@ -231,11 +241,17 @@ and above all a way to track allocations.
 **Milestones.** `hih-program-logic` first, since every later program is
 written on it (submilestones `hih-pl-spec`, `hih-pl-wp`, `hih-pl-source`,
 `hih-pl-first-program`; it waits on `it-core` and burns the hand-proved
-process stack first; its `hih-tools` is where native programs become
-real tools, `docs/native-real-programs-plan.md`), then `hih-memory` (submilestones `hih-memory-model`,
-`hih-alloc-metering`, `hih-first-alloc`). `hih-passes` can proceed in parallel
-because it is meta-layer work. `hih-self` comes after both
-([self-hosting-first-component](../issues/self-hosting-first-component.md)).
+process stack first; its `hih-tools` made native programs real tools,
+`docs/native-real-programs-plan.md`, and closed at nine of them). Since
+2026-10-31 the direction is `docs/compiler-milestones-proposal.md`:
+ordinary Heather compiles. `hih-native-heather` grows the compiler by
+language feature and by setup (`nh-front`, `nh-procedures`, `nh-effects`,
+`nh-heap`, `nh-ownership`), with its rounds in that document's §7, and
+`hih-memory` (submilestones `hih-memory-model`, `hih-alloc-metering`; its
+first allocation is `nh-heap`) underneath. `hih-passes` can proceed in
+parallel because it is meta-layer work; its first round is
+[function-ir-pass-in-heather](../issues/function-ir-pass-in-heather.md). `hih-self` is `self-lexer` and then
+`self-compiler`, on the compiler `hih-native-heather` builds.
 `hih-kernel-model` is independent of all of them: it models the kernel's
 reduction in Heather so that the kernel's own accelerations, and later the
 caches, can be proved rather than checked nightly
@@ -470,6 +486,12 @@ issues ([frontend-roadmap](../issues/frontend-roadmap.md),
 needs one of their issues, the issue names that milestone. That is how an
 enabling issue shows it has a puller.
 
+`language` has two milestones of its own, both pulled by
+`hih-native-heather` and the tactics (`docs/compiler-milestones-proposal.md`
+§3, §6): `lang-sequencing`, one sequencing surface for any carrier and for
+pure imperative code, and `lang-proof-modularity`, proofs that compose
+against interfaces rather than code.
+
 ## Design principles
 
 These are not areas. They shape decisions in every area, and a design doc
@@ -615,3 +637,4 @@ separate machines do not slow each other's tests.
   not stated. The host interface's remaining work
   (oracles, `Tac` on `ITree`, generator gaps) stays open in its issues
   without a milestone.
+- 2026-10-31: Minus re-aimed the compiler work (`docs/compiler-milestones-proposal.md`, §8 records the decisions). `hih-tools` closes at nine tools as a regression corpus. `hih-native-heather` is added (`runtime fn` setups: `nh-front`, `nh-procedures`, `nh-effects`, `nh-heap`, `nh-ownership`), and `hih-first-alloc` moves into `nh-heap`. `hih-self` gets `self-lexer` and `self-compiler`. `language` gains `lang-sequencing` (binding over any carrier) and `lang-proof-modularity` (opt-in interface definitions). Ownership is the second setup by Minus's lean, to be confirmed when its round starts.

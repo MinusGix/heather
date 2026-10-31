@@ -5,6 +5,7 @@ labels: [native,proofs,design]
 area: heather-in-heather
 created: 2026-10-28
 updated: 2026-10-28
+milestone: [nh-procedures]
 ---
 
 When the effectful source gains procedures that make calls (a later `Stmt`
