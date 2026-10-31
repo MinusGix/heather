@@ -34,8 +34,9 @@ function. The elaborator checks that term like any other.
 ## 0. The proposal in one page
 
 ```heather
-// Layer 1: binding over a carrier. The carrier is the owner of the block's
-// expected type (`Tac`), and `let x <- e;` is `e.bind(λ x => …)`.
+// Layer 1: binding over a carrier. The carrier is the constructor of the
+// block's expected type (`Tac`), and `let x <- e;` is `Bind::bind(e, λ x => …)`
+// at `Tac`'s instance.
 fn mono_run(…) → Tac<Mono> {
     let triv <- mono_global("mono_trivial");
     let truth <- infer(Global(triv)).or_fail("mono: ");
@@ -56,13 +57,14 @@ fn count_words(bytes: List<BitVec(8)>) → Nat {
 }
 ```
 
-1. **The carrier protocol is a pair of owner members, not a class**
-   (§2). A carrier is a named type `M` with `M::bind(self m, k)`, and
-   `M::pure(a)` where a form must inject a value. The block's carrier is the
-   owner of its expected type, or else of its first bound expression. The
-   lowered term is the hand-written `bind` tower exactly, so a port changes
-   no kernel term. A class cannot be written: type constructors are not
-   values in Heather (probe P1).
+1. **The carrier protocol is two classes over a type constructor,
+   `Bind<M>` and `Pure<M>`** (§2). Heather can nearly state them already:
+   a record over `M: Type → Type` works and computes (probe P1). Three
+   pieces are missing and become R2's first slice: the unifier's
+   `?M(A) =?= Option<A>`, a bare `Option` as a `Type → Type` value, and a
+   class whose carrier is a constructor. The block's carrier is the
+   constructor of its expected type, or else of its first bound expression.
+   Owner members (`M::bind`) are the fallback if that slice proves large.
 2. **The spelling is `let x <- e;`** (`←` too), with `e;` for a discarded
    result and `(<- e)` for a nested bind. A nested bind runs before the
    statement it is in, in written order, and never leaves a match arm, an
@@ -112,45 +114,95 @@ Counted on `3099a7d`.
 
 ## 2. The carrier protocol
 
-### 2.1 Owner members, and why not a class
+### 2.1 A class over a type constructor
 
-A **carrier** is a type whose head is a name `M`, an inductive, record,
-codata type or type-former `fn`, with:
+*Revised 2026-10-31, after Minus's comment on the PR that a `Monad` Heather
+cannot express is something to fix in Heather. The first draft said a class
+could not be written and chose owner members instead. Probe P1 was too
+narrow: most of what a class needs works already, and the gaps are three
+bounded pieces of work.*
+
+**What works today** (probe P1, all on `3099a7d`):
+
+- A value-parameter inductive is a type constructor:
+  `inductive Box(A: Type) { … }` passes as `M: Type → Type`.
+- So is a generic inductive under a λ: `λ (A: Type) => Option<A>`.
+- A record over a constructor is a dictionary:
+  `record Monad(M: Type → Type) { pure: …, bind: … }`, with a value at
+  `Option`, and generic code `twice({M}, m: Monad(M), x: M(Nat))` computes:
+  `twice(option_monad(), Some(3)) = Some(3)` by `refl`.
+
+**What does not, and is the work** (proposed as R2's first slice, §12):
+
+1. **The unifier cannot solve `?M(Nat) =?= Option<Nat>`.**
+   `pick({M: Type → Type}, x: M(Nat))` called at an `Option<Nat>` or a
+   `Box(Nat)` gives "could not infer the implicit argument `M`". The fix is
+   the first-order approximation that Lean and Haskell use: an applied
+   unknown against a named type applied to arguments takes the head with the
+   leading arguments, so `?M := λ A => Option<A>`. For `Result<A, E>` this
+   picks the last argument, so a `Result` instance is over `λ A =>
+   Result<A, E>` only if the approximation abstracts the right argument.
+   Where it cannot, the instance names its constructor and the expected type
+   pins `M`.
+2. **A bare generic name is not a constructor value.** Passing `Option` where
+   `Type → Type` is expected says "`Option` cannot be used here". The fix
+   η-expands a generic name with one remaining parameter at a
+   `Type → Type` position to `λ A => Option<A>`. This is elaboration only.
+3. **A class's carrier must be a type.** `class Monad(M: Type → Type)` is
+   refused ("a class is a record parameterized by its carrier"), and
+   `class Bind<M: Type → Type>` does not parse. Both the carrier syntax and
+   the registry key have to take a constructor. Instance keys are already
+   resolved head references (`docs/instance-resolved-key-design.md`), so the
+   key of `instance Bind<Option>` is the head `option::Option`.
+
+**The classes.** Two small classes rather than one `Monad`, so that "any type
+with a `bind`" (Minus, 2026-10-31) holds literally:
 
 ```heather
-fn M::bind<…>(self m: M<…A…>, k: A → M<…B…>) → M<…B…>   // required
-fn M::pure<…>(a: A) → M<…A…>                            // where §5 needs it
+class Bind<M: Type → Type> { bind: {A, B: Type} → M(A) → (A → M(B)) → M(B) }
+class Pure<M: Type → Type> { pure: {A: Type} → A → M(A) }
+
+instance Bind<Tac> { bind := Tac::bind }
+instance Pure<Tac> { pure := λ a => Pure(a) }
 ```
 
-Every other parameter is implicit. The protocol does not say where `A`
-sits in `M`'s arguments: `Result<A, E>` puts it first, `Parser<T, A>` last,
-and `ITree<A>(E)` has a value parameter after it. The elaborator never needs
-to know, because it only builds the two calls and checks them.
+`let x <- e; rest` lowers to `Bind::bind(e, λ x => rest)` at the carrier's
+instance, and the forms of §5–§6 that inject a value use `Pure`. Laws are
+not fields. A lawful-monad class can extend both later if a proof needs one.
 
-**Why not a class `Monad<M>`.** It cannot be stated. Class parameters are
-types, and a type constructor is not a value: `class Bind<M: Type → Type>`
-does not parse, and passing `Option` where `Type → Type` is expected is
-refused with "`Option` cannot be used here" (probe P1). Type parameters are
-monomorphized (`docs/traits-layer2-design.md` §3.1), so making constructors
-first-class would be a language round of its own. It would buy laws as class
-fields. No customer here wants those: tactics and parsers are not proved
-lawful, and where a proof wants a law, a theorem about `M::bind` states it.
+**What the class buys over owner members**, which were the first draft's
+protocol (each carrier `M` had members `M::bind` and `M::pure`, found by
+owner-by-head resolution):
 
-**What owner members buy.**
+- **Carriers with no named head.** A state monad can be `λ A => S →
+  Pair<A, S>`, with no wrapper record. Owner members need a name to own
+  them.
+- **Generic code in Heather.** `traverse`, `for_m` and `when` are written once
+  over `Bind<M>`/`Pure<M>`. The member route has to generate them per loop
+  (§6.1's CPS over `foldr`). With the class, §6.1's carrier `for` is a call
+  to a library `List::for_m`.
+- **The general fix.** A class over a constructor is useful beyond this
+  round (functors, traversals, the effects library), which is the
+  proposal's "generalizing features" direction.
 
-- **The lowered term is the hand-written term.** `let x <- e; rest` becomes
-  `M::bind(e, λ x => rest)`, which is what `e.bind(λ x => rest)` resolves to
-  today. It has no dictionary and no projection to unfold. That matters for
-  closed evaluation: `docs/native-programs-read-like-programs-design.md` §2
-  found that an instance arrives as an unreduced projection. Porting `mono`
-  therefore changes **no kernel term**, and R2 can prove that with
-  `scripts/timings --diff`: identical count columns before and after.
-- **It is Minus's "any type with a `bind`"**, read literally. No
-  declaration has to opt in beyond having the member.
-- **Resolution already exists.** Owner-by-head resolution
-  (`docs/receiver-member-resolution-design.md` §1) finds `M` from a call's
-  declared result type without inferring the receiver, which covers
-  `fail(…)`, `Pure(x)` and `goal()`.
+**What it costs.**
+
+- **The three pieces above**, before R2's sugar can land. Pieces 1 and 3
+  are the substantial ones.
+- **The lowered term is no longer the hand-written one.** It goes through the
+  instance: `Bind::bind` at `Bind<Tac>`, which δ-reduces to `Tac::bind`.
+  Instances are transparent, so closed evaluation still computes (the
+  `Option` probe is `refl`). But a port of `mono` changes kernel terms, so
+  the "identical count columns" check is replaced by "the timings do not
+  move beyond noise", read with `scripts/perf ab`. A native setup that
+  reflects code has to see through one instance projection. That is the
+  unreduced-projection friction `docs/native-programs-read-like-programs-design.md`
+  §2 found with `Numeral`, and the setup (R4) owns it.
+
+**The fallback**, if the class work proves larger than it looks: the
+owner-member protocol, which needs none of the three pieces. The sugar is
+written so that the carrier lookup is one function. Switching between the
+two changes that function and §2.3's library additions, and nothing in §3–§10.
 
 ### 2.2 Which carrier a block uses
 
@@ -164,10 +216,13 @@ A scope is a **carrier scope** when it contains `let … <- e;`, a nested
 `if` bodies. A `mut self` call on a `let mut` local (§8.2) is not counted:
 it is an assignment, so it discards nothing. Its carrier is, in order:
 
-1. the owner of the scope's **expected type**, when the scope is checked
-   (a `fn` body whose result is `Tac<Expr>` has carrier `Tac`);
-2. otherwise the owner of the **first bound expression's type**, found by
-   owner-by-head resolution, or by inference when that declines.
+1. the constructor of the scope's **expected type**, when the scope is
+   checked (a `fn` body whose result is `Tac<Expr>` has carrier `Tac`),
+   with its `Bind` instance resolved as any instance is;
+2. otherwise the constructor of the **first bound expression's type**,
+   found by inference (or by owner-by-head resolution,
+   `docs/receiver-member-resolution-design.md` §1, when inference declines,
+   which covers `fail(…)` and `Pure(x)`).
 
 Every bind in the scope uses that one carrier. A statement whose
 computation has another carrier is a type error at that statement, and the
@@ -183,12 +238,11 @@ A pure scope, with none of the three forms, is exactly today's block.
 
 ### 2.3 What the library adds
 
-R2 adds the members its customers lack. Each is a one-liner:
-`Tac::pure`, `Option::bind`, `Option::pure`, `Result::bind`, `Result::pure`
-(beside `and_then`, which stays), and `Parser::pure` (today a free `pure` in
-`parser_combinators`). `ITree::bind` takes its event signature explicitly,
-so it gets a `self` form with `E` implicit. Also `Tac::or_fail(self t:
-Tac<Checked<A>>, prefix: String) → Tac<A>`, which retires the 34
+R2 adds the instances its customers need. Each is one line: `Bind`/`Pure`
+at `Tac`, `Option`, `Result` (over `λ A => Result<A, E>`), `Parser` and
+`ITree`. It adds the generic helpers `List::for_m`, `traverse` and `when`
+over the classes. It also adds `Tac::or_fail(self t: Tac<Checked<A>>,
+prefix: String) → Tac<A>`, which retires the 34
 `Refused(why) => fail(…)` matches as a library function rather than a
 syntax.
 
@@ -197,11 +251,11 @@ syntax.
 ### 3.1 Forms
 
 ```heather
-let x <- e;              // M::bind(e, λ x => rest)
+let x <- e;              // Bind::bind(e, λ x => rest), at the carrier's instance
 let x: A <- e;           // the binder annotated; e is checked at M<…A…>
 let { a, b } <- e;       // bind, then destructure the record (docs/named-patterns-by-field-design.md §2)
 let _ <- e;              // discard, explicitly
-e;                       // discard: M::bind(e, λ _ => rest)
+e;                       // discard: Bind::bind(e, λ _ => rest)
 f(<- e, y)               // nested bind: let t <- e; f(t, y)
 match <- e { … }         // the same, at a scrutinee
 ```
@@ -223,7 +277,7 @@ lint for an unused `let` already catches the slip of forgetting the arrow.
 
 `(<- e)` is the binding counterpart of `?`, and it reuses the same
 expansion: `docs/result-propagation-design.md` lowers `K[e?]` to
-`and_then(e, λ v => K[v])`, and `K[(<- e)]` lowers to `M::bind(e, λ v =>
+`and_then(e, λ v => K[v])`, and `K[(<- e)]` lowers to `Bind::bind(e, λ v =>
 K[v])`. The rules are the ones `?` already has, for the same reasons:
 
 - **written order**: several nested binds in one statement run left to
@@ -338,7 +392,7 @@ declarations (§5.4), and `break`/`continue` target it.
 - `while … decreases` is refused in a carrier scope (§6.2).
 
 `return e` takes the **value**, in pure and carrier code alike: in a
-carrier scope it is `M::pure(e)` and exits. The block's final expression
+carrier scope it is `Pure::pure(e)` and exits. The block's final expression
 remains a computation, as today: `Pure(x)` or a tail call.
 
 ## 5. Layer 2: lowering in pure code
@@ -393,7 +447,9 @@ a global is elaborated and kernel-checked once. The step is also what
 proofs state facts about (§7) and what the native compiler consumes (§9).
 `decreases` sets the precedent of generated siblings (`f#body`, `f#rec`).
 
-The **iteration protocol** uses owner members again. `for x in e` with
+The **iteration protocol** uses owner members: a container's folds are its
+own operations, and no class over containers is needed yet. A `Foldable`
+class can replace the table once §2.1's constructor classes exist. `for x in e` with
 `e : O<…>` calls:
 
 | body | member | type |
@@ -487,16 +543,18 @@ the size linear.
 The same statements work in a carrier scope. The state threads through
 `bind`:
 
-- a `for` is CPS over `O::foldr`:
-  `xs.foldr(λ x k => λ s => step(s, x).bind(k), λ s => M::pure(s))(s0)`,
-  with `step` returning `M<S>` (probe P3: `count_defeq` over `Tac`
-  checks). With early exits, `step` returns `M<ForStep<S, R>>`, and the folded
-  function stops at `Break`/`Return` by `M::pure`;
+- a `for` is a call to the library's `List::for_m(xs, s0, step)`, written
+  once over `Bind<M>`/`Pure<M>` as CPS over `foldr`:
+  `xs.foldr(λ x k => λ s => step(s, x).bind(k), λ s => pure(s))(s0)`,
+  with `step` returning `M(S)` (probe P3: the same CPS over `Tac` checks).
+  With early exits, `List::for_in_m` takes a step returning
+  `M(ForStep<S, R>)` and stops at `Break`/`Return`. Under the owner-member
+  fallback, the lowering writes this CPS inline instead;
 - a statement `if`/`match` whose arms bind joins through
-  `(match c { … M::pure(state) … }).bind(λ state => rest)`.
+  `Bind::bind(match c { … pure(state) … }, λ state => rest)`.
 
-These are the forms that need `M::pure`. When the carrier has none, the
-refusal names the member: "`for` in a `Parser` block needs `Parser::pure`".
+These are the forms that need `Pure<M>`. When the carrier has no instance,
+the refusal names it: "`for` in a `Parser` block needs `Pure<Parser>`".
 
 ### 6.2 No `decreases` loops in a carrier scope
 
@@ -635,12 +693,12 @@ and R2 or R3 adds it as a negative control:
 
 | form | reason |
 |---|---|
-| `let x <- e;` in a scope whose expected type's owner has no `bind` | "`Nat` has no `bind`: this block is not over a carrier" |
-| `let x <- e;` with no expected type, where `e`'s owner has no `bind` | the same, naming `e`'s type |
+| `let x <- e;` in a scope whose expected type has no `Bind` instance | "`Nat` has no `Bind` instance: this block is not over a carrier" |
+| `let x <- e;` with no expected type, where `e`'s type has none | the same, naming `e`'s type |
 | a bind whose computation's carrier is not the block's | "this computation is an `Option`, but the block's carrier is `Tac`" |
 | `e;` in a pure scope | "a statement here discards a pure value" |
 | `x = e;` as a statement (an equation, so a discarded proposition) | the same, plus "to assign, write `x := e`" (`issues/warn-bare-eq-no-effect.md`) |
-| `for`/statement `if` with binds where `M::pure` is missing | "needs `M::pure`" |
+| `for`/statement `if` with binds where `Pure<M>` is missing | "needs `Pure<M>`" |
 | `x := e` where `x` is not `let mut` | "`x` is not mutable: declare it `let mut x`" |
 | `:=` inside a λ | "a λ cannot assign the enclosing function's locals" |
 | a `mut` local whose type mentions another `mut` local | "the type of a mutable local cannot depend on another" |
@@ -653,8 +711,11 @@ and R2 or R3 adds it as a negative control:
 
 ## 11. Decisions for Minus
 
-1. **Carrier protocol: owner members `M::bind` / `M::pure`, not a class**
-   (§2.1). A class is not expressible today. *Recommended.*
+1. **Carrier protocol: classes `Bind<M>`/`Pure<M>` over a type
+   constructor, with the three missing pieces built first as R2a** (§2.1).
+   The alternative is owner members `M::bind`/`M::pure`, which need no
+   language work but give no generic code and need a named head.
+   *Recommended: the classes (revised after Minus's PR comment).*
 2. **Carrier scopes are implicit**: a block is over a carrier when it binds
    or sequences, with no `do` keyword (§2.2). The alternative is an
    explicit marker, which Lean needs because it is an expression language
@@ -680,15 +741,22 @@ and R2 or R3 adds it as a negative control:
 
 ## 12. What R2 and R3 take
 
+**R2a, `higher-kinded-classes`** (new): §2.1's three pieces. They are the
+unifier's first-order approximation for `?M(A) =?= Option<A>`, a bare
+generic name η-expanded at a `Type → Type` position, and classes (and
+instance keys) whose carrier is a constructor. Done when `class Bind<M:
+Type → Type>` has instances at `Option` and `Tac`, and a generic
+`twice({M}, x: M(Nat))` with `Bind<M> := infer` resolves at both and
+computes by `refl`.
+
 **R2, `binding-statements`.** `let x <- e;` (and `←`, annotated,
 destructuring, `_`), `e;`, nested `(<- e)` and `match <- e`, lowered in
-`elab_stmts`. The carrier comes from the expected type, then owner-by-head.
-`?` for `Option`. The library members of §2.3 (`Tac::pure`, `Tac::or_fail`,
-`Option`/`Result` `bind`/`pure`, `Parser::pure`, `ITree::bind`'s `self`
-form). Port `mono.hthr` and one parser chain, with `scripts/timings --diff`
-showing identical count columns on `mono`'s probes (no kernel term changed).
-Tree-sitter and `heather fmt`. Layer-1 refusals from §10. Unchanged done-when:
-`mono.hthr` has no `bind` tower.
+`elab_stmts` through `Bind<M>`. The carrier comes from the expected type,
+then from the first bound expression. `?` for `Option`. The instances and
+helpers of §2.3 (`Tac::or_fail`, `List::for_m`). Port `mono.hthr` and one
+parser chain, and check with `scripts/perf ab` that `mono`'s probes do not
+move beyond noise. Tree-sitter and `heather fmt`. Layer-1 refusals from §10.
+Unchanged done-when: `mono.hthr` has no `bind` tower.
 
 **R3, `pure-imperative-statements`**, in two slices so the second can wait
 on its dependency:
@@ -713,10 +781,23 @@ Each loop's body is elaborated once, as its step's declaration.
 
 ## Appendix: probes (run on `3099a7d`, `heather check -L lib`)
 
-- **P1, a class over a type constructor.** `class Bind<M: Type → Type> {…}`
-  fails to parse ("expected `>` to close the type parameters, found
-  Colon"). `fn ap(M: Type → Type, x: M(Nat))` called as `ap(Option,
-  Some(1))` is refused: "`Option` cannot be used here".
+- **P1, a class over a type constructor.** Works:
+  - `inductive Box(A: Type)` passed as `M: Type → Type`;
+  - `λ (A: Type) => Option<A>` as a constructor;
+  - `record Monad(M: Type → Type)` with a value at `Option`, and a generic
+    `twice({M}, m: Monad(M), x: M(Nat))`, where
+    `twice(option_monad(), Some(3)) = Some(3)` holds by `refl`.
+
+  Fails:
+  - `class Bind<M: Type → Type>` does not parse ("expected `>` to close the
+    type parameters, found Colon");
+  - `class Monad(M: Type → Type)` has no carrier ("`Monad` needs its
+    arguments here");
+  - a dummy carrier `class Monad<U>(M: …)` with `:= infer` leaves the index
+    unpinned;
+  - `ap(Option, Some(1))` gives "`Option` cannot be used here";
+  - `pick({M: Type → Type}, x: M(Nat))` at `Box(Nat)` or `Option<Nat>`
+    gives "could not infer the implicit argument `M`".
 - **P2, `count_words` hand-lowered.** A generated record, a step with
   annotated SSA joins, and `xs.foldl(step, init)`. Closed `refl` gives 3 on
   an eight-byte input. The step fact needs `split_all; all_goals { omega }`.
