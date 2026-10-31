@@ -60,6 +60,6 @@ point as `√x`, each comparison read through squares). `Finite::sqrt_correct`
 proves it in every mode; `cell_iff_approx` shows the cell is exactly what the
 rounding reads and `sqrt_witness_cell` that it is never empty. `Nat::isqrt`
 with `isqrt_spec` is in `nat.hthr`; sign and special-value theorems and
-binary16/binary32 literal tests are in. When `float-reals` lands, the reals'
-`√x` lies in its own cell and the statement transfers; the standard model for
-a root waits on that.
+binary16/binary32 literal tests are in. At the reals, `√x` lies in its own cell
+and the statement transfers; the standard model for a root waited on that,
+and both landed in [[float-reals-sqrt-and-error]].

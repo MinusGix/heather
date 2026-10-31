@@ -2768,3 +2768,127 @@ theorem CReal::inv_neg({x: CReal}, hx: x.Apart(0), hn: (-x).Apart(0)): (-x).inv(
     let u = x.inv(h := hx);
     CReal::same_sym(OrderedField::recip_unique(-x, hn, -u, CReal::same_trans(Ring::neg_mul_neg(x, u), x.mul_inv(h := hx))))
 }
+
+// ---------------------------------------------------------------------------
+// Square roots (lib/std/num/float/float_real.hthr). A root is compared with
+// rationals through squares: `s² <= t²` with `t >= 0` gives `s <= t`
+// (`le_of_sq_le`). `IsSqrt(s, x)` says `s` is the nonnegative root of the
+// rational `x` as the cut it makes, the form every comparison with a root
+// reads; `s * s ≈ x` gives it (`is_sqrt_of_sq`). `sqrt_rat(q)` is `√|q|`,
+// the rational roots from below at n+1 bits (`Rat::root_floor`), and is one
+// (`sqrt_rat_is_sqrt`).
+
+theorem CReal::le_of_sq_le({s, t: CReal}, ht: 0 <= t, h: s * s <= t * t): s <= t {
+    λ (back: t < s) => {
+        let spos: (0 < s) = CReal::lt_of_le_of_lt(ht, back);
+        let a: (t * t <= t * s) = CReal::mul_le_mono_l(CReal::le_of_lt(back), ht);
+        let b: (t * s < s * s) = CReal::mul_lt_mono_r(back, spos);
+        h(CReal::lt_of_le_of_lt(a, b))
+    }
+}
+
+// `|d| <= c` from `-c <= d <= c`: a gap above `c` at a term of `|d|` is one
+// above `c` at `d`'s term or at `-d`'s.
+theorem CReal::abs_le({d, c: CReal}, lower: -c <= d, upper: d <= c): d.abs() <= c {
+    λ back => match back {
+        Exists(k, rest) => match rest {
+            Exists(st, gap) => {
+                let n = st.max(16 * k + 15);
+                let far: (16 * k + 15 <= n) = st.le_max_r(16 * k + 15);
+                let shrink: (Rat::inv_succ(k + k + 1) <= Rat::inv_succ(k)) = Rat::inv_succ_antitone(k, k + k + 1, omega);
+                let at: (c.at(n) + Rat::inv_succ(k + k + 1) <= d.at(n).abs()) =
+                    Rat::le_trans(Rat::add_le_mono_l(Rat::inv_succ(k + k + 1), Rat::inv_succ(k), c.at(n), shrink),
+                        Rat::le_trans(gap(n, st.le_max_l(16 * k + 15)), Rat::le_of_same(d.abs_at(n))));
+                match d.at(n).abs_cases() {
+                    Inl(p) => upper(c.lt_of_term(d, k, n, far, Rat::le_trans(at, Rat::le_of_same(p.right)))),
+                    Inr(m) => {
+                        let nd: (c < -d) = c.lt_of_term(-d, k, n, far, Rat::le_trans(at, Rat::le_of_same(Rat::same_trans(m.right, Rat::same_sym(d.neg_at(n))))));
+                        let dc: (-d <= c) = CReal::le_of_same_r(CReal::same_sym(c.neg_neg()), CReal::neg_le(lower));
+                        dc(nd)
+                    },
+                }
+            },
+        },
+    }
+}
+
+// The larger of two rationals below `x` is below it, and the smaller of two
+// above, without deciding anything about `x`.
+theorem CReal::ofRat_le_max({x: CReal}, a, b: Rat, ha: CReal::ofRat(a) <= x, hb: CReal::ofRat(b) <= x): ∃ c: Rat, a <= c ∧ b <= c ∧ CReal::ofRat(c) <= x {
+    match Rat::le_total(a, b) { Inl(ab) => Exists(b, And(ab, And(b.le_refl(), hb))), Inr(ba) => Exists(a, And(a.le_refl(), And(ba, ha))) }
+}
+
+theorem CReal::le_ofRat_min({x: CReal}, a, b: Rat, ha: x <= CReal::ofRat(a), hb: x <= CReal::ofRat(b)): ∃ c: Rat, c <= a ∧ c <= b ∧ x <= CReal::ofRat(c) {
+    match Rat::le_total(a, b) { Inl(ab) => Exists(a, And(a.le_refl(), And(ab, ha))), Inr(ba) => Exists(b, And(ba, And(b.le_refl(), hb))) }
+}
+
+// An affine error bound at both ends of an interval holds inside it: with
+// `0 <= u <= 1`, `R <= lo + u·lo + e` and `hi - u·hi - e <= R` give
+// `|R - x| <= u·x + e` for every real `x` in `[lo, hi]`.
+theorem CReal::err_between({x: CReal}, lo, hi, R, u, e: Rat, u_nn: 0 <= u, u_le: u <= 1,
+    l: CReal::ofRat(lo) <= x, h: x <= CReal::ofRat(hi), at_lo: R <= lo + u * lo + e, at_hi: hi - u * hi - e <= R):
+    (CReal::ofRat(R) - x).abs() <= CReal::ofRat(u) * x + CReal::ofRat(e)
+{
+    let L = CReal::ofRat(lo);
+    let H = CReal::ofRat(hi);
+    let U = CReal::ofRat(u);
+    let E = CReal::ofRat(e);
+    let ca: (CReal::ofRat(lo + u * lo + e) ≈ L + U * L + E) = CReal::same_trans(CReal::ofRat_add(lo + u * lo, e),
+        CReal::add_respects(CReal::same_trans(CReal::ofRat_add(lo, u * lo), CReal::add_respects(L.same_refl(), CReal::ofRat_mul(u, lo))), E.same_refl()));
+    let cb: (CReal::ofRat(hi - u * hi - e) ≈ H - U * H - E) = CReal::same_trans(CReal::ofRat_sub(hi - u * hi, e),
+        CReal::sub_respects(CReal::same_trans(CReal::ofRat_sub(hi, u * hi), CReal::sub_respects(H.same_refl(), CReal::ofRat_mul(u, hi))), E.same_refl()));
+    let A: (CReal::ofRat(R) <= L + U * L + E) = CReal::le_of_same_r(CReal::same_sym(ca), CReal::ofRat_le(at_lo));
+    let B: (H - U * H - E <= CReal::ofRat(R)) = CReal::le_of_same_l(CReal::same_sym(cb), CReal::ofRat_le(at_hi));
+    let m1: (U * L <= U * x) = CReal::mul_le_mono_l(l, CReal::ofRat_le(u_nn));
+    let m2: ((1 - U) * x <= (1 - U) * H) = CReal::mul_le_mono_l(h, CReal::sub_nonneg(CReal::ofRat_le(u_le)));
+    CReal::abs_le(linarith(B, m2), linarith(A, m1))
+}
+
+fn CReal::sqrt_rat(q: Rat) → CReal { CReal::rounded(λ n => q.root_floor(n + 1), λ m n => q.root_floor_regular(m, n)) }
+
+// `s` is the nonnegative square root of `x`, read as the cut it makes: at or
+// above every nonnegative rational whose square is at most `x`, at or below
+// every one whose square is at least `x`.
+fn CReal::IsSqrt(s: CReal, x: Rat) → Type {
+    ((p: Rat) → 0 <= p → p * p <= x → CReal::ofRat(p) <= s) ∧ ((p: Rat) → 0 <= p → x <= p * p → s <= CReal::ofRat(p))
+}
+
+theorem CReal::is_sqrt_of_sq({s: CReal}, {x: Rat}, nn: 0 <= s, sq: s * s ≈ CReal::ofRat(x)): s.IsSqrt(x) {
+    And(λ p pn le => CReal::le_of_sq_le(nn, CReal::le_respects(CReal::ofRat_mul(p, p), CReal::same_sym(sq), CReal::ofRat_le(le))),
+        λ p pn ge => CReal::le_of_sq_le(CReal::ofRat_le(pn), CReal::le_respects(CReal::same_sym(sq), CReal::ofRat_mul(p, p), CReal::ofRat_le(ge))))
+}
+
+theorem CReal::is_sqrt_respects({s: CReal}, {x, y: Rat}, e: x ≈ y, h: s.IsSqrt(x)): s.IsSqrt(y) {
+    And(λ p pn le => h.left(p, pn, Rat::le_respects((p * p).same_refl(), Rat::same_sym(e), le)),
+        λ p pn ge => h.right(p, pn, Rat::le_respects(Rat::same_sym(e), (p * p).same_refl(), ge)))
+}
+
+theorem CReal::is_sqrt_nonneg({s: CReal}, {x: Rat}, nn: 0 <= x, h: s.IsSqrt(x)): 0 <= s { h.left(0, Rat::le_refl(0), omega(nn)) }
+
+theorem CReal::sqrt_rat_is_sqrt(q: Rat): CReal::sqrt_rat(q).IsSqrt(q.abs()) {
+    let s = CReal::sqrt_rat(q);
+    And(λ p pn le => CReal::ofRat_le_of_close(p, λ j => Exists(j, λ n from => {
+            let f = q.root_floor(n + 1);
+            let e = Rat::inv_pow2(n + 1);
+            let close: ((s.at(n) - f).abs() <= e) = CReal::rounded_close(λ k => q.root_floor(k + 1), λ a b => q.root_floor_regular(a, b), n);
+            let fe_nn: (0 <= f + e) = linarith(q.root_floor_nonneg(n + 1), Rat::inv_pow2_pos(n + 1));
+            let pf: (p < f + e) = Rat::lt_of_sq_lt(fe_nn, Rat::lt_of_le_of_lt(le, (q.root_floor_spec(n + 1)).right));
+            let fs: (f <= s.at(n) + e) = Rat::le_add_of_dist(Rat::le_respects(s.at(n).abs_sub_comm(f), e.same_refl(), close));
+            linarith(pf, fs, Rat::inv_pow2_half(n), Rat::inv_pow2_le_inv_succ(n), Rat::inv_succ_antitone(j, n, from))
+        })),
+        λ p pn ge => CReal::le_ofRat_of_close(p, λ j => Exists(j, λ n from => {
+            let f = q.root_floor(n + 1);
+            let e = Rat::inv_pow2(n + 1);
+            let close: ((s.at(n) - f).abs() <= e) = CReal::rounded_close(λ k => q.root_floor(k + 1), λ a b => q.root_floor_regular(a, b), n);
+            let fp: (f <= p) = Rat::le_of_sq_le(q.root_floor_nonneg(n + 1), pn, Rat::le_trans((q.root_floor_spec(n + 1)).left, ge));
+            let sf: (s.at(n) <= f + e) = Rat::le_add_of_dist(close);
+            linarith(fp, sf, Rat::inv_pow2_half(n), Rat::inv_pow2_le_inv_succ(n), Rat::inv_succ_antitone(j, n, from), Rat::inv_pow2_pos(n + 1))
+        })))
+}
+
+theorem CReal::sqrt_rat_nonneg(q: Rat): 0 <= CReal::sqrt_rat(q) { CReal::is_sqrt_nonneg(q.abs_nonneg(), CReal::sqrt_rat_is_sqrt(q)) }
+
+// A rational root: `s ≈ g` when `g >= 0` and `g² ≈ x`.
+theorem CReal::is_sqrt_exact({s: CReal}, {x: Rat}, g: Rat, gn: 0 <= g, e: g * g ≈ x, h: s.IsSqrt(x)): s ≈ CReal::ofRat(g) {
+    CReal::le_antisymm(h.right(g, gn, Rat::le_of_same(Rat::same_sym(e))), h.left(g, gn, Rat::le_of_same(e)))
+}

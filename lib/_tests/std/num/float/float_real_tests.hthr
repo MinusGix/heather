@@ -1,0 +1,54 @@
+// Probes of `lib/std/num/float/float_real.hthr` and the square roots in
+// rat.hthr and creal.hthr: the theorems at literals, and a negative control.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import int; import omega; import rat; import creal;
+import dyadic; import float; import round; import error; import arith; import relation_props; import algebra_rel; import ordered_field;
+import window; import literal; import interval; import creal_interval; import round_real; import float_real;
+
+fn h16(neg: Bool, m, b: Nat, ok: binary16().canonical(m, b).IsTrue()) → Finite(binary16()) { Finite(neg, m, b, ok) }
+fn two16() → Finite(binary16()) { h16(False, 1024, 15, trivial) }
+fn four16() → Finite(binary16()) { h16(False, 1024, 16, trivial) }
+fn root_two16() → Finite(binary16()) { h16(False, 1448, 14, trivial) }
+fn root_two16_up() → Finite(binary16()) { h16(False, 1449, 14, trivial) }
+
+// The rational roots from below: √2 to 11 bits is 2896/2048 (2896² ≤ 2·4^11
+// < 2897²), and the real's 10th term is that root floored to 11 bits.
+theorem root_floor_two(): Rat::root_floor(2, 11) ≈ Rat(2896, 2048) { refl }
+theorem sqrt_two_term(): CReal::sqrt_rat(2).at(10) ≈ Rat(2896, 2048) { refl }
+// A perfect square's root is the rational root; the root is of |q|.
+theorem sqrt_four(): CReal::sqrt_rat(4) ≈ CReal::ofRat(2) { CReal::is_sqrt_exact(2, trivial, refl, CReal::sqrt_rat_is_sqrt(4)) }
+theorem sqrt_neg_four(): CReal::sqrt_rat(-4) ≈ CReal::ofRat(2) { CReal::is_sqrt_exact(2, trivial, refl, CReal::sqrt_rat_is_sqrt(-4)) }
+
+// The value theorem at the reals: binary16 √2 = 1448/1024 is the correct
+// rounding of the real √2 (inexact: strictly inside a cell), in nearest
+// and upward modes; √4 = 2 is exact.
+theorem root_two_real(): RoundsToReal(binary16(), NearestEven, CReal::sqrt_rat(two16().val()), two16().sqrt()) {
+    Finite::sqrt_rounds_real(two16(), NearestEven, trivial, trivial)
+}
+theorem root_two_real_up(): RoundsToReal(binary16(), TowardPos, CReal::sqrt_rat(two16().val()), two16().sqrt(mode := TowardPos)) {
+    Finite::sqrt_rounds_real(two16(), TowardPos, trivial, trivial)
+}
+theorem root_four_real(): RoundsToReal(binary16(), NearestEven, CReal::sqrt_rat(four16().val()), four16().sqrt()) {
+    Finite::sqrt_rounds_real(four16(), NearestEven, trivial, trivial)
+}
+
+// Negative control: the next float up is not a nearest rounding of √2, since
+// correct roundings of one real are the same float.
+theorem root_two_not_up(): ¬RoundsToReal(binary16(), NearestEven, CReal::sqrt_rat(two16().val()), Fin(root_two16_up())) {
+    λ h => {
+        let e: (root_two16().val() ≈ root_two16_up().val()) = (binary16()).rounds_real_unique(NearestEven, CReal::sqrt_rat(two16().val()), Fin(root_two16()), Fin(root_two16_up()),
+            Finite::sqrt_rounds_real(two16(), NearestEven, trivial, trivial), h);
+        let lt: (root_two16().val() < root_two16_up().val()) = trivial;
+        Rat::lt_irrefl(root_two16_up().val(), Rat::lt_respects(e, root_two16_up().val().same_refl(), lt))
+    }
+}
+
+// The standard model at the root: |r - √2| <= 2^-11·√2.
+theorem root_two_model(): (root_two16().real() - CReal::sqrt_rat(two16().val())).abs() <= CReal::ofRat((binary16()).u(NearestEven)) * CReal::sqrt_rat(two16().val()) {
+    Finite::sqrt_real_relative(two16(), NearestEven, trivial, trivial, CReal::sqrt_rat(two16().val()),
+        CReal::is_sqrt_respects(two16().val().abs_of_nonneg(trivial), CReal::sqrt_rat_is_sqrt(two16().val())), trivial, trivial, root_two16(), refl)
+}
+
+// The other operations at the reals: 2 + 2 rounds to 4.
+theorem add_real_two(): RoundsToReal(binary16(), NearestEven, two16().real() + two16().real(), two16().add(two16())) { Finite::add_real(two16(), two16(), NearestEven) }
