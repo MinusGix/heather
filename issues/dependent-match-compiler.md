@@ -40,3 +40,17 @@ enlarge terms.
 
 A design note decided by Minus, with its slices filed, naming which open
 issues each slice closes.
+
+## Slices (docs/dependent-match-compiler-design.md §11)
+
+1. [[match-equation-in-every-arm]]
+2. [[match-refines-computed-scrutinee]]
+3. [[match-infers-constant-motive]]
+4. [[unfolding-through-convoyed-match]]
+5. [[match-clause-equations]] (owns [[eqbind-deep-pattern-kernel-rejects]])
+6. [[match-equation-indexed-family]]
+7. [[match-motive-sweep]]
+
+## Log
+
+- 2026-10-31: Design note docs/dependent-match-compiler-design.md, awaiting Minus's decision (§13). Census of 1443 written motives: 601 hand-carried hypotheses, 339 non-dependent, 259 equation convoys, 244 dependent goals. A `--review` sample finds 180 of 379 already redundant. Six probes on master (§2.1), one of them a new elaborator-accepts/kernel-rejects defect. Seven slices filed.

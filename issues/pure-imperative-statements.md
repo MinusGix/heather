@@ -35,3 +35,7 @@ R3a: `wc`'s step is written imperatively, and its facts are proved by the existi
 
 - **[[sequencing-surface-design]]** owns the lowering.
 - **[[loop-invariant-rules]]** owns the invariant rule over these loops.
+
+## Log
+
+- 2026-10-31: R3b's unfolding dependency is now [[unfolding-through-convoyed-match]]; R2's annotated per-variable join loses its required annotation with [[match-infers-constant-motive]].
