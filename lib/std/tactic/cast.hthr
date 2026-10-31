@@ -54,19 +54,12 @@ fn cast_apps(e: Expr, args: List<Handle>) → Expr { match args { Nil => e, Cons
 // parameter's type: what checking the rest of an application solves, held
 // across requests (a `Blank` is a new hole at every reading of its `Expr`).
 fn cast_holes(n: Nat, e: Expr) → Tac<Option<Expr>> {
-    match n {
-        Zero => Pure(Some(e)),
-        Succ(k) => infer(e).bind(λ c => match c {
-            Refused(_) => Pure(None),
-            Accepted(ty) => open(ty, "_").bind(λ o => match o {
-                Refused(_) => Pure(None),
-                Accepted(op) => hole(op.local.ty).bind(λ h => match h {
-                    Refused(_) => Pure(None),
-                    Accepted(x) => cast_holes(k, App(e, Hd(x))),
-                }),
-            }),
-        }),
-    }
+    holes(e, n).bind(λ c => Pure(match c { Refused(_) => None, Accepted(hs) => Some(cast_apps(e, hs)) }))
+}
+
+// The `n`th of `hs`.
+fn cast_nth(hs: List<Handle>, n: Nat) → Option<Handle> {
+    match hs { Nil => None, Cons(h, rest) => match n { Zero => Some(h), Succ(k) => cast_nth(rest, k) } }
 }
 
 // A field theorem at an edge, applied to its operands (and, for
@@ -78,21 +71,12 @@ record Candidate { law: GlobalRef, edge: Expr, indices: Nat, args: List<Handle>,
 // is structural, so `B` occurs in the edge's type only through the types of
 // its indices, and solving those holes does not solve it.
 fn cast_targeted(law: GlobalRef, indices: Nat, target: Handle) → Tac<Option<Expr>> {
-    cast_holes(1, Global(law)).bind(λ o => match o {
-        None => Pure(None),
-        Some(e) => infer(e).bind(λ c => match c {
-            Refused(_) => Pure(None),
-            Accepted(ty) => open(ty, "_").bind(λ op => match op {
-                Refused(_) => Pure(None),
-                Accepted(b) => hole(b.local.ty).bind(λ hb => match hb {
-                    Refused(_) => Pure(None),
-                    Accepted(x) => defeq(Hd(x), Hd(target)).bind(λ same => match same {
-                        False => Pure(None),
-                        True => cast_holes(indices - 2, App(e, Hd(x))),
-                    }),
-                }),
-            }),
-        }),
+    holes(Global(law), indices).bind(λ c => match c {
+        Refused(_) => Pure(None),
+        Accepted(hs) => match cast_nth(hs, 1) {
+            None => Pure(None),
+            Some(b) => defeq(Hd(b), Hd(target)).bind(λ same => Pure(match same { False => None, True => Some(cast_apps(Global(law), hs)) })),
+        },
     })
 }
 
@@ -276,31 +260,32 @@ fn cast_local_edge_at(hom: Expr, family: String, indices: Nat, ring: Bool, args:
 // morphism parameter after them (`OrderedRingHom<?A, ?B>(?map, …)`).
 record HomSlots { holes: List<Handle>, applied: Expr, ty: Handle }
 
-// Each hole is made once the ones before it are set: a hole at the first
-// `presets` is unified with it before the next hole's type is read.
-fn cast_slots(n: Nat, e: Expr, acc: List<Handle>, presets: List<Handle>) → Tac<Option<HomSlots>> {
-    match n {
-        Zero => infer(e).bind(λ c => match c {
-            Refused(_) => Pure(None),
-            Accepted(ty) => open(ty, "_").bind(λ o => match o { Refused(_) => Pure(None), Accepted(op) => Pure(Some(HomSlots(acc, e, op.local.ty))) }),
-        }),
-        Succ(k) => infer(e).bind(λ c => match c {
-            Refused(_) => Pure(None),
-            Accepted(ty) => open(ty, "_").bind(λ o => match o {
-                Refused(_) => Pure(None),
-                Accepted(op) => hole(op.local.ty).bind(λ h => match h {
-                    Refused(_) => Pure(None),
-                    Accepted(x) => match presets {
-                        Nil => cast_slots(k, App(e, Hd(x)), acc ++ [x], []),
-                        Cons(p, more) => defeq(Hd(x), Hd(p)).bind(λ same => match same {
-                            False => Pure(None),
-                            True => cast_slots(k, App(e, Hd(x)), acc ++ [x], more),
-                        }),
-                    },
-                }),
-            }),
-        }),
+// The first holes are unified with `presets`, in order; the later holes'
+// types mention them, so they are read with the presets in place.
+fn cast_presets(hs, presets: List<Handle>) → Tac<Bool> {
+    match presets {
+        Nil => Pure(True),
+        Cons(p, more) => match hs {
+            Nil => Pure(False),
+            Cons(h, rest) => defeq(Hd(h), Hd(p)).bind(λ same => match same { False => Pure(False), True => cast_presets(rest, more) }),
+        },
     }
+}
+
+fn cast_slots(n: Nat, e: Expr, presets: List<Handle>) → Tac<Option<HomSlots>> {
+    holes(e, n).bind(λ c => match c {
+        Refused(_) => Pure(None),
+        Accepted(hs) => cast_presets(hs, presets).bind(λ set => match set {
+            False => Pure(None),
+            True => {
+                let applied: Expr = cast_apps(e, hs);
+                infer(applied).bind(λ t => match t {
+                    Refused(_) => Pure(None),
+                    Accepted(ty) => open(ty, "_").bind(λ o => match o { Refused(_) => Pure(None), Accepted(op) => Pure(Some(HomSlots(hs, applied, op.local.ty))) }),
+                })
+            },
+        }),
+    })
 }
 
 // The two carriers a local map's type `A → B` names, as candidates for a
@@ -341,7 +326,7 @@ fn cast_slots_fit(S: HomSlots, l: Expr) → Tac<Bool> {
 fn cast_local_edge_with(l: LocalInfo, family: String, indices: Nat, ring: Bool, law: GlobalRef, cs: List<Carriers>) → Tac<Option<EdgeRef>> {
     match cs {
         Nil => Pure(None),
-        Cons(c, rest) => mark().bind(λ m => cast_slots(indices, Global(law), [], [c.a, c.b]).bind(λ sl => match sl {
+        Cons(c, rest) => mark().bind(λ m => cast_slots(indices, Global(law), [c.a, c.b]).bind(λ sl => match sl {
             None => restore(m).bind(λ _ => cast_local_edge_with(l, family, indices, ring, law, rest)),
             Some(S) => cast_slots_fit(S, Local(l.ref)).bind(λ fits => match fits {
                 False => restore(m).bind(λ _ => cast_local_edge_with(l, family, indices, ring, law, rest)),
@@ -525,6 +510,12 @@ fn cast_hom() → Tac<Expr> { cast_local_edges().bind(λ es => cast_hom_local(es
 // edge, anything else is `prove`'s.
 fn cast_premise(prove: Tac<Expr>) → Tac<Expr> {
     attempt(cast_hom()).bind(λ r => match r { Done(e) => Pure(e), Failed(_, _) => prove })
+}
+
+// `cast_premise` over edges a caller read once (`mono` reads them per run,
+// not per premise: reading a morphism local checks a law at it).
+fn cast_premise_among(es: List<EdgeRef>, prove: Tac<Expr>) → Tac<Expr> {
+    attempt(cast_hom_local(es)).bind(λ r => match r { Done(e) => Pure(e), Failed(_, _) => prove })
 }
 
 // ---------------------------------------------------------------------------
@@ -944,14 +935,16 @@ fn cast_lower(C: CastAt, G: Sides, h: Expr, depth: Nat, cs: List<CastAt>, es: Li
     })
 }
 
-fn cast_from_at(h: Expr, depth: Nat) → Tac<Expr> {
+// `cast_from_at` with the edges `read` reads, once the goal is at a carrier
+// the casts are read at: a caller that already holds them passes `Pure`.
+fn cast_from_among(h: Expr, depth: Nat, read: Tac<List<EdgeRef>>) → Tac<Expr> {
     goal().bind(λ g => cast_sides(g.target).bind(λ gs => match gs {
         None => fail("cast_from: the goal is not a relation between two sides", []),
         Some(G) => cast_carrier_for(G.rel, cast_carriers()).bind(λ oc => match oc {
             None => fail("cast_from: the goal's relation is not one of a carrier the casts are read at", []),
             // The edges are read once: the morphisms in scope cost a view of
             // each local.
-            Some(C) => cast_all_edges().bind(λ edges => cast_first_carry(C, G, [h], edges).bind(λ direct => match direct {
+            Some(C) => read.bind(λ edges => cast_first_carry(C, G, [h], edges).bind(λ direct => match direct {
                 Some(e) => Pure(e),
                 // Depth 0 (`mono`'s per-fact probe) lifts and lowers nothing.
                 None => match depth {
@@ -966,6 +959,8 @@ fn cast_from_at(h: Expr, depth: Nat) → Tac<Expr> {
         }),
     }))
 }
+
+fn cast_from_at(h: Expr, depth: Nat) → Tac<Expr> { cast_from_among(h, depth, cast_all_edges()) }
 
 // Where two normal forms first differ: the outermost pair of subterms that
 // are not the same, below every head the two share.
