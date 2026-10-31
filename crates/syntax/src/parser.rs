@@ -1322,7 +1322,7 @@ impl Parser {
         let start = self.peek_span();
         self.bump(); // `class`
         let (name, _) = self.ident("class name")?;
-        let params = self.tyvar_list()?;
+        let (params, kinds) = self.class_tyvar_list()?;
         // `class Monoid<A>(op: A -> A -> A)` — the index list, in the position
         // and with the grammar a `record` head already has
         // (docs/operation-indexed-classes-design.md §2.1: there is no second
@@ -1363,7 +1363,35 @@ impl Parser {
             self.bump();
         }
         let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
-        Ok(ClassDecl { name, params, valparams, extends, fields, span: start.join(end) })
+        Ok(ClassDecl { name, params, kinds, valparams, extends, fields, span: start.join(end) })
+    }
+
+    /// A class head's `<A, M: Type → Type>`: [`Self::tyvar_list`] plus an
+    /// optional **kind** per parameter (issues/higher-kinded-classes.md). A
+    /// kind is any type — what makes it a type constructor is the
+    /// elaborator's check — so the grammar is a parameter's own
+    /// `name: T`, and an unannotated name keeps meaning a type.
+    fn class_tyvar_list(&mut self) -> R<(Vec<String>, Vec<Option<Ty>>)> {
+        let mut params = Vec::new();
+        let mut kinds = Vec::new();
+        if matches!(self.peek(), TokKind::Lt) {
+            self.bump();
+            loop {
+                params.push(self.binder_ident("type parameter name")?.0);
+                kinds.push(if matches!(self.peek(), TokKind::Colon) {
+                    self.bump();
+                    Some(self.ty()?)
+                } else {
+                    None
+                });
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
+        }
+        Ok((params, kinds))
     }
 
     /// `Monoid<A>` — a class applied to its arguments. The brackets are

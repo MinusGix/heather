@@ -116,6 +116,26 @@ theorem StrictOrder::le_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2, h:
         A.lt_respects(y2, y, x2, x, A.rel_sym(y, y2, hy), A.rel_sym(x, x2, hx), back)))
 }
 
+// A side replaced by one it is `≈` to, the moved side named in between:
+// what `mono` reads a cast through at a class carrier
+// (lib/std/tactic/mono.hthr, `mono_push_left`), the shape of
+// `Rat::le_of_same_of_le` and its siblings.
+theorem StrictOrder::le_of_same_l(x, y, z: A, e: x ≈ y, h: y <= z): x <= z {
+    StrictOrder::le_respects(y, x, z, z, A.rel_sym(x, y, e), A.rel_refl(z), h)
+}
+
+theorem StrictOrder::le_of_same_r(x, y, z: A, e: z ≈ y, h: x <= y): x <= z {
+    StrictOrder::le_respects(x, x, y, z, A.rel_refl(x), A.rel_sym(z, y, e), h)
+}
+
+theorem StrictOrder::lt_of_same_l(x, y, z: A, e: x ≈ y, h: y < z): x < z {
+    A.lt_respects(y, x, z, z, A.rel_sym(x, y, e), A.rel_refl(z), h)
+}
+
+theorem StrictOrder::lt_of_same_r(x, y, z: A, e: z ≈ y, h: x < y): x < z {
+    A.lt_respects(x, x, y, z, A.rel_refl(x), A.rel_sym(z, y, e), h)
+}
+
 // Antisymmetry of `≤` modulo `≈` is tightness: it never yields `=`.
 theorem StrictOrder::le_antisymm(x, y: A, hxy: x <= y, hyx: y <= x): x ≈ y {
     A.lt_tight(x, y, A.not_lt_of_le(y, x, hyx), A.not_lt_of_le(x, y, hxy))
