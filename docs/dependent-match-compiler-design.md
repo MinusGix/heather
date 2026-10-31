@@ -8,7 +8,7 @@ position, and compiles nested patterns to case trees with per-clause
 equations. Its "done when" is this note, decided by Minus, with the slices
 filed.
 
-**Status: decided (2026-10-31, §13); slice 4 implemented (§8.1).** No kernel change is needed and none is
+**Status: decided (2026-10-31, §13); slices 4, 1 and 3 implemented (§8.1, §4.3.1, §6.1).** No kernel change is needed and none is
 proposed. Everything here is elaborator front end over the route lowerings
 that already exist.
 
@@ -254,6 +254,46 @@ macro or generated arm can read hypotheses without a visible tactic, and an
 arm can contain `omega` that reads nothing. The pending binder is exact for
 names and conservative only for fact listing.
 
+### 4.3.1 As implemented (slice 1, 2026-10-31)
+
+The pending binder landed in a narrower form than §4.3, which the slice
+showed to be enough for the readers that exist.
+
+- **Elaborator.** A motive-less `match` with no `h:` on a non-indexed
+  scrutinee (`Elaborator::elab_match_pending`, `lib.rs`) pushes an id onto
+  `Cx::pending_eqs` and elaborates as today. `omega`'s fact listing
+  (`omega_cert.rs` `local_fact_entries`) and `linarith`'s context fallback
+  mark every pending id in scope as wanted (`Attempt::match_eq_wanted`). No
+  signal unwinds: the arm runs to its end. Only if it fails, and a reader
+  wanted the equation, does the match roll back and re-elaborate as the
+  convoy with the equation bound as `__match_eq` (`MATCH_EQ`). If the retry
+  fails too, the first error is reported.
+- **What that buys.** An arm that listed the equation and succeeded without
+  it keeps its plain term. That is §4.3's "listed but never cited" case,
+  with no second pass. The convoy appears only where the arm cannot
+  succeed without it.
+- **What it leaves out.** The anonymous equation is not resolvable by name,
+  since `__match_eq` cannot be written. `split_all`, `rewrite`'s hypothesis
+  search and `absurd` do not mark it wanted yet. Each is one call to
+  `want_match_equations` when a customer needs it.
+- **`decreases` bodies.** A lifted obligation is stated over the telescope
+  the body rewrite writes (`measure.rs`), not over the elaborator's `Cx`, so
+  the pending binder cannot reach it. There the rule is applied to the
+  rewrite itself (`AutoEqs`):
+  - A candidate is a plain `match` on a computed scrutinee, with no
+    equation binding and a recursive call in an arm.
+  - The declaration is lowered with every candidate bound as `__dec_meqN`.
+    It is lowered again with only the candidates whose equation a lifted
+    obligation quantifies, which `measure_local_evidence`'s trial decides.
+  - The companions are generated under the same choice. A candidate nobody
+    reads keeps its plain match in `f#body`.
+  - `Respell::convoy_at_anchor` lets the two sides of the walk carry
+    different equations, since `f_unfold`'s right side is the source, which
+    binds none.
+- **Probes.** P2 checks (`omega_tests.hthr` `guard_unnamed_in_arm`, with a
+  negative control). P6 checks, and `half_unfold` is generated (same file,
+  `half_step`). Both are refused on master.
+
 ### 4.4 What it retires
 
 - The 259 hand-written equation convoys and the 145 `(refl)` applications:
@@ -305,6 +345,36 @@ It also removes a large share of the 339 `λ _ => T` motives.
 A dependent match in inference position still needs its motive. Inferring
 one from the arms would need higher-order unification, which is
 `issues/elab-unifier-completeness.md`'s and not this round's.
+
+### 6.1 As implemented (slice 3, 2026-10-31)
+
+- **The probe.** When no non-binding arm infers, `matching::probe_arm_type`
+  lowers the match once, through its ordinary route, at a marker motive:
+  `Unit` at a universe variable no declaration binds. `Cx::arm_type_probe`
+  carries the sink.
+- **The interception.** `elab_check` intercepts a body checked against the
+  marker in a context with the probe set. It infers the body instead, then
+  strengthens the type past the binders the route pushed
+  (`matching::strengthen_past`, the same substitution test the `if` probe
+  uses).
+  - The first arm whose type survives, and mentions no marker level (an arm
+    returning its own `ih`), is recorded, and the lowering stops.
+  - An arm whose type mentions a binder gives a dummy term, and the route
+    goes on to the next arm.
+- **Why this way.** Every route (`Nat`, data, `Fin`, deep patterns, W and
+  indexed families) builds its own arm contexts. The probe reuses them all,
+  rather than recomputing field types per route. The whole lowering is
+  rolled back. The real lowering then runs at the constant motive found, as
+  before.
+- **`match h:` in inference position.** The same search runs, and the real
+  lowering is `elab_convoy` at the constant motive
+  (`ConstantMotiveElab::lower_constant_convoy`). The probe at the marker goes
+  through the convoy too, so an arm that reads `h` is probed in a context
+  where `h` is bound.
+- **Tests that pinned the old refusal.** `motive_synth.rs`
+  `every_arm_binding_still_asks_for_a_motive` became the positive test. Its
+  negative control is now an arm type that mentions its binder. The three
+  receiver probes in `records.rs` use arms that do not infer at all.
 
 ## 7. Clause equations
 
@@ -391,8 +461,10 @@ without one. `measure.rs` `Respell::convoy_at_anchor` is the node.
 - **Still refused:** a `_` arm around a recursive call, a recursive call in a
   scrutinee, and a written motive.
 
-The anonymous equation of slice 1 reaches this node with no further change,
-because the walk does not care who named the equation.
+The anonymous equation of slice 1 reaches this node with one change
+(§4.3.1): the two sides may carry different equations, and an anchor that is
+an arm's plain `match` is given its constant motive, since it stands on one
+side of the motive's `=`.
 
 ## 9. Indexed families: the packed equation
 

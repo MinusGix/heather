@@ -425,6 +425,12 @@ assigned local, which `split_all` handles consistently (it splits every
 occurrence of a comparison, `docs/native-programs-read-like-programs-design.md`
 §2). The alternative is a join tuple, which proofs would have to project.
 
+*Amended (2026-10-31):* probe P2's refusal is gone. A motive-less `match`
+in inference position now takes its constant motive from any arm whose type
+lives outside its binders (`docs/dependent-match-compiler-design.md` §6.1).
+The annotation is optional wherever some arm's type names `T`. The walk can
+keep writing it, since it knows the type and the annotation costs nothing.
+
 ### 5.2 Loops: a named step, then a fold
 
 The **state** of a loop is the `mut` locals its body assigns. A loop that

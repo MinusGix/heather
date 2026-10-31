@@ -7,7 +7,7 @@
 
 use std::sync::Arc as Rc;
 
-use heather_kernel::level::Level;
+use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, Expr, ExprKind, LamBinder, MatchForm, Span, Ty, TyKind};
 
@@ -68,6 +68,66 @@ pub(crate) trait ConstantMotiveElab: MatchSpeculationState {
         motive_level: Level,
         span: Span,
     ) -> R<Term>;
+
+    /// [`Self::lower_constant_match`] with the arms' equation bound as `h`
+    /// (a convoy). Only the elaborator implements it.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_constant_convoy(
+        &self,
+        _cx: &Cx,
+        _form: MatchForm,
+        _generated: bool,
+        _h: &str,
+        _arms: &[Arm],
+        _scrutinee: Term,
+        _scrutinee_type: &Type,
+        _scrutinee_level: &Level,
+        _motive: Type,
+        _motive_level: Level,
+        _result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        err("an equation binding has no constant-motive lowering here", span)
+    }
+}
+
+/// The sink of an arm-type probe (docs/dependent-match-compiler-design.md
+/// §6). The probe lowers the match at a constant marker motive; the first arm
+/// body checked against the marker whose inferred type lives outside the
+/// arm's binders is recorded here, and the probe stops.
+pub(crate) struct ArmTypeProbe {
+    /// The context length at the `match`.
+    pub(crate) base: usize,
+    pub(crate) found: std::sync::Mutex<Option<(Type, Level)>>,
+}
+
+/// The marker level: a universe variable no declaration binds.
+pub(crate) const ARM_PROBE_LEVEL: Level = Level::Var(UnivVar(u32::MAX - 1));
+
+/// The marker motive's type, `Unit` at the marker level. Closed, so shifting
+/// and substitution leave it alone, and in whnf.
+pub(crate) fn arm_probe_marker() -> Type {
+    Type::Unit { level: ARM_PROBE_LEVEL }
+}
+
+/// Whether `ty` mentions the marker level (an arm that returned its own
+/// `ih`, whose type is the marker): such a type names no motive.
+pub(crate) fn mentions_marker(ty: &Type) -> bool {
+    ty.shift_univ_above(1, u32::MAX - 1) != *ty
+}
+
+/// `ty`, inferred under `extra` binders past the probe's base, strengthened
+/// past them; `None` if it mentions one.
+pub(crate) fn strengthen_past(ty: &Type, gamma: &heather_kernel::term::LocalCtx, extra: usize) -> Option<Type> {
+    if extra == 0 {
+        return Some(ty.clone());
+    }
+    let mut sub = LocalSubst::id(gamma);
+    for _ in 0..extra {
+        sub = sub.extended(Rc::new(Term::Zero));
+    }
+    let base = ty.apply_local(&sub);
+    (base.shift_local(extra as u32) == *ty).then_some(base)
 }
 
 /// The outcome of trying to infer a constant match motive.
@@ -217,6 +277,23 @@ pub(crate) fn infer_match_constant_motive(
     generated: bool,
     span: Span,
 ) -> MotiveInference<(Term, Type, Level), ElabError> {
+    infer_match_constant_motive_eq(elab, cx, form, scrutinee, arms, None, generated, span)
+}
+
+/// [`infer_match_constant_motive`], for a match that may bind its equation
+/// (`match h: e { … }` in inference position, design §6): the motive is the
+/// constant one and the arms are lowered as a convoy.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn infer_match_constant_motive_eq(
+    elab: &(impl ConstantMotiveElab + ?Sized),
+    cx: &Cx,
+    form: MatchForm,
+    scrutinee: &Expr,
+    arms: &[Arm],
+    eqbind: Option<&str>,
+    generated: bool,
+    span: Span,
+) -> MotiveInference<(Term, Type, Level), ElabError> {
     // Match speculation's phase column (`docs/instrumentation-design.md` §5):
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
@@ -237,6 +314,14 @@ pub(crate) fn infer_match_constant_motive(
                 None
             }
         });
+    // Any arm, in its own binder context: the match is lowered once at the
+    // marker motive, and the first arm whose type lives outside its binders
+    // names the motive (design §6).
+    let named = named.or_else(|| {
+        let found = probe_arm_type(elab, cx, form, scrutinee, arms, eqbind, generated, span);
+        speculation.rollback();
+        found
+    });
     drop(probe);
     let Some((ty, level)) = named else {
         return MotiveInference::Declined;
@@ -244,18 +329,34 @@ pub(crate) fn infer_match_constant_motive(
     let attempt: R<(Term, Type, Level)> = (|| {
         let (scrutinee_term, scrutinee_type, scrutinee_level) =
             elab.infer_motive_expr(cx, scrutinee)?;
-        let term = elab.lower_constant_match(
-            cx,
-            form,
-            generated,
-            arms,
-            scrutinee_term,
-            &scrutinee_type,
-            &scrutinee_level,
-            ty.shift_local(1),
-            level.clone(),
-            span,
-        )?;
+        let term = match eqbind {
+            None => elab.lower_constant_match(
+                cx,
+                form,
+                generated,
+                arms,
+                scrutinee_term,
+                &scrutinee_type,
+                &scrutinee_level,
+                ty.shift_local(1),
+                level.clone(),
+                span,
+            )?,
+            Some(h) => elab.lower_constant_convoy(
+                cx,
+                form,
+                generated,
+                h,
+                arms,
+                scrutinee_term,
+                &scrutinee_type,
+                &scrutinee_level,
+                ty.shift_local(1),
+                level.clone(),
+                &ty,
+                span,
+            )?,
+        };
         Ok((term, ty, level))
     })();
     match attempt {
@@ -265,6 +366,48 @@ pub(crate) fn infer_match_constant_motive(
         }
         Err(_) => MotiveInference::Declined,
     }
+}
+
+/// Lower the match once at the marker motive with an [`ArmTypeProbe`] in
+/// its context, and read back the first arm type that lives outside its
+/// arm's binders. The lowering's result and effects are discarded by the
+/// caller's rollback; a route that cannot run at the marker simply finds
+/// nothing.
+#[allow(clippy::too_many_arguments)]
+fn probe_arm_type(
+    elab: &(impl ConstantMotiveElab + ?Sized),
+    cx: &Cx,
+    form: MatchForm,
+    scrutinee: &Expr,
+    arms: &[Arm],
+    eqbind: Option<&str>,
+    generated: bool,
+    span: Span,
+) -> Option<(Type, Level)> {
+    if eqbind.is_none() && arms.iter().all(|a| a.binders.is_empty()) {
+        // The non-binding search above already tried every arm.
+        return None;
+    }
+    let (scrutinee_term, scrutinee_type, scrutinee_level) =
+        elab.infer_motive_expr(cx, scrutinee).ok()?;
+    let sink = Rc::new(ArmTypeProbe {
+        base: cx.gamma.len(),
+        found: std::sync::Mutex::new(None),
+    });
+    let mut pcx = cx.clone();
+    pcx.arm_type_probe = Some(Rc::clone(&sink));
+    let marker = arm_probe_marker();
+    let _ = match eqbind {
+        None => elab.lower_constant_match(
+            &pcx, form, generated, arms, scrutinee_term, &scrutinee_type, &scrutinee_level,
+            marker, ARM_PROBE_LEVEL, span,
+        ),
+        Some(h) => elab.lower_constant_convoy(
+            &pcx, form, generated, h, arms, scrutinee_term, &scrutinee_type, &scrutinee_level,
+            marker.clone(), ARM_PROBE_LEVEL, &marker, span,
+        ),
+    };
+    sink.found.lock().ok()?.take()
 }
 
 /// Discover a constant motive for the parser-generated `if` match.

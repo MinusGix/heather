@@ -448,13 +448,13 @@ fn a_splits_diagnostics_name_split() {
 
     // Not just the form's name: the *spelling it suggests* is one a writer
     // who typed `split` can paste. `match e as λ z => T { … }` is not.
-    // Every arm binds, for the reason the `match` twin of this test records:
-    // a non-binding arm would now name the type and the `split` would
-    // elaborate.
+    // No arm infers, for the reason the `match` twin of this test records:
+    // an arm whose type is known would now name the motive and the `split`
+    // would elaborate.
     let m = bad(
         "inductive Two<A> { L(v: A), R(v: A) }
          fn f<A>(t: Two<A>) -> A {
-             let x = { split t; on L(v) := v; on R(v) := v; }; x }",
+             let x = { split t; on L(v) := λ y => y; on R(v) := λ y => y; }; x(t) }",
     );
     assert!(m.contains("`split` in inference position"), "got: {m}");
     assert!(m.contains("`split e as \u{3bb} z => T;`"), "got: {m}");
@@ -486,16 +486,19 @@ fn a_matchs_diagnostics_still_name_match() {
     let m = bad("inductive Void { }\nfn f(x: Void) -> Nat { match x { Zero => 0 } }");
     assert!(m.contains("so `match` takes no arms"), "got: {m}");
 
-    // Every arm binds, which is what keeps this in inference position's error
-    // path at all: since 2026-08-17 a motive-less `match` whose arms include a
-    // non-binding one takes its motive from that arm
-    // (`issues/match-arg-of-polymorphic-callee-needs-motive.md`), and the
-    // probe this test used to run — `match r { Stuck => d, … }` — now
-    // elaborates. The message is what is under test, not the refusal.
+    // No arm infers, which is what keeps this in inference position's error
+    // path at all: since 2026-08-17 a motive-less `match` takes its motive
+    // from a non-binding arm
+    // (`issues/match-arg-of-polymorphic-callee-needs-motive.md`), and since
+    // 2026-10-31 from any arm whose type lives outside its binders
+    // (docs/dependent-match-compiler-design.md §6.1), so the probes this test
+    // used to run — `match r { Stuck => d, … }`, then `L(v) => v` — now
+    // elaborate. An unannotated `λ` infers nothing. The message is what is
+    // under test, not the refusal.
     let m = bad(
         "inductive Two<A> { L(v: A), R(v: A) }
          fn f<A>(t: Two<A>) -> A {
-             let x = match t { L(v) => v, R(v) => v }; x }",
+             let x = match t { L(v) => λ y => y, R(v) => λ y => y }; x(t) }",
     );
     assert!(m.contains("`match` in inference position"), "got: {m}");
     assert!(m.contains("`match e as \u{3bb} z => T { … }`"), "got: {m}");

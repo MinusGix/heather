@@ -353,6 +353,78 @@ fn a_recursive_call_in_a_scrutinee_is_refused_but_the_function_still_checks() {
     assert!(msg.contains("a recursive call in a `match` scrutinee"), "{msg}");
 }
 
+#[test]
+fn a_plain_match_on_a_computed_scrutinee_gets_its_equation_where_an_obligation_reads_it() {
+    // No `h:` written: `half`'s obligation `n - 2 < n` needs the guard, so
+    // the lowering binds the arm's equation for the lifted obligation alone
+    // (docs/dependent-match-compiler-design.md §4, §13), and the companions
+    // walk the convoy it leaves in `half#body`. The unfolding equation states
+    // the match as written.
+    ok(r#"
+        import bool;
+        fn half(n: Nat) -> Nat decreases n {
+            match Nat::leb(n, 1) {
+                True => 0,
+                False => Succ(half(n - 2)),
+            }
+        }
+        theorem half_stmt(n: Nat): half(n) = (match Nat::leb(n, 1) {
+            True => 0,
+            False => Succ(half(n - 2)),
+        }) { half_unfold(n) }
+        theorem half_seven(): half(7) = 3 { refl }
+    "#);
+    // An open element type, the candidate nested under an arm that recurses
+    // through a second match, and the equation read by `omega` there.
+    ok(r#"
+        import bool;
+        fn take_n<A>(n: Nat, xs: List<A>) -> List<A> decreases n {
+            match Nat::leb(n, 0) {
+                True => Nil,
+                False => match xs {
+                    Nil => Nil,
+                    Cons(x, xt) => Cons(x, take_n(n - 1, xt)),
+                },
+            }
+        }
+        theorem take_n_stmt<A>(n: Nat, xs: List<A>): take_n(n, xs) = (match Nat::leb(n, 0) as λ _ => List<A> {
+            True => Nil,
+            False => match xs { Nil => Nil, Cons(x, xt) => Cons(x, take_n(n - 1, xt)) },
+        }) { take_n_unfold(n, xs) }
+        theorem take_two(): take_n<Nat>(2, [7, 8, 9]) = [7, 8] { refl }
+    "#);
+    // A candidate no obligation reads keeps its plain match, and unfolds the
+    // same way.
+    ok(r#"
+        import bool;
+        fn walk(n: Nat) -> Nat decreases n {
+            match n {
+                Zero => 0,
+                Succ(k) => match Nat::leb(k, 3) { True => walk(k), False => Succ(walk(k)) },
+            }
+        }
+        theorem walk_succ(k: Nat): walk(Succ(k)) =
+            (match Nat::leb(k, 3) { True => walk(k), False => Succ(walk(k)) }) { walk_unfold(Succ(k)) }
+    "#);
+}
+
+#[test]
+fn an_obligation_the_guard_does_not_give_is_still_refused() {
+    // Negative control: the equation is `n.leb(1) = False`, which does not
+    // give `n - 1 + 1 < n`; the lifted obligation fails, the un-lifted
+    // fallback fails with it, and the declaration is refused.
+    let msg = elab_err(r#"
+        import bool;
+        fn bad(n: Nat) -> Nat decreases n {
+            match Nat::leb(n, 1) {
+                True => 0,
+                False => Succ(bad(n - 1 + 1)),
+            }
+        }
+    "#);
+    assert!(msg.contains("omega"), "{msg}");
+}
+
 // -- back inside the walk -----------------------------------------------------
 
 #[test]

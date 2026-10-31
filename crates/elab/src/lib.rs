@@ -1247,6 +1247,27 @@ impl matching::ConstantMotiveElab for Elaborator {
         self.elab_ty(cx, condition)
     }
 
+    fn lower_constant_convoy(
+        &self,
+        cx: &Cx,
+        form: MatchForm,
+        generated: bool,
+        h: &str,
+        arms: &[Arm],
+        scrutinee: Term,
+        scrutinee_type: &Type,
+        scrutinee_level: &Level,
+        motive: Type,
+        motive_level: Level,
+        result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        self.elab_convoy(
+            cx, form, generated, h, arms, scrutinee, scrutinee_type, scrutinee_level, motive,
+            &motive_level, result, span,
+        )
+    }
+
     fn lower_constant_match(
         &self,
         cx: &Cx,
@@ -3797,7 +3818,27 @@ impl Elaborator {
         // calls, exactly as it was before this round, and the companions are
         // declined with the reason. An obligation that is genuinely unprovable
         // fails again there, with the message §2 of the measures doc pins.
-        let mut family = measure::lower(decl, &self_name, &measure, omega_available, self, true)?;
+        // A computed scrutinee's equation enters the lowering only where a
+        // lifted obligation reads it (design §13): lowered with every
+        // candidate bound, then again with just the ones the obligations
+        // quantify, so a body whose obligations never read one keeps the
+        // plain match it was written with.
+        let mut auto = measure::AutoEqs::All;
+        let mut family = measure::lower(decl, &self_name, &measure, omega_available, self, true, &auto)?;
+        if family.auto_candidates > 0 {
+            let mut used: Vec<usize> = family
+                .obligations
+                .iter()
+                .flat_map(|o| o.decl.params.iter().filter_map(|p| measure::auto_eq_index(&p.name)))
+                .collect();
+            used.sort_unstable();
+            used.dedup();
+            let all = used.len() == family.auto_candidates;
+            auto = measure::AutoEqs::Only(used);
+            if !all {
+                family = measure::lower(decl, &self_name, &measure, omega_available, self, true, &auto)?;
+            }
+        }
         let mut lifted = true;
         for part in &family.obligations {
             if let Err(why) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
@@ -3810,7 +3851,7 @@ impl Elaborator {
             }
         }
         if !lifted {
-            family = measure::lower(decl, &self_name, &measure, omega_available, self, false)?;
+            family = measure::lower(decl, &self_name, &measure, omega_available, self, false, &measure::AutoEqs::Off)?;
         }
         for part in &family.decls {
             self.elab_decl_one(&part.decl, Some(&part.obligations))?;
@@ -3827,7 +3868,7 @@ impl Elaborator {
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
         if lifted {
-            match measure::companions(decl, &self_name, &measure, omega_available, self) {
+            match measure::companions(decl, &self_name, &measure, omega_available, self, &auto) {
                 Err(why) => {
                     self.unfold_refusals.borrow_mut().insert(unfold, why);
                 }
@@ -5038,6 +5079,32 @@ impl Elaborator {
         capture_slots: bool,
     ) -> R<Term> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
+        // An arm body under a constant-motive probe (`matching::probe_arm_type`):
+        // inferred, and its type recorded when it lives outside the arm. An
+        // arm that names nothing lets the probe go on to the next one.
+        if let Some(probe) = cx.arm_type_probe.as_ref()
+            && *expected == matching::arm_probe_marker()
+        {
+            let probe = Rc::clone(probe);
+            let mut icx = cx.clone();
+            icx.arm_type_probe = None;
+            let found = self.elab_infer(&icx, e).ok().and_then(|(_, ty, level)| {
+                let extra = cx.gamma.len().checked_sub(probe.base)?;
+                let ty = matching::strengthen_past(&ty, &cx.gamma, extra)?;
+                let marked = matching::mentions_marker(&ty)
+                    || matching::mentions_marker(&Type::Unit { level: level.clone() });
+                (!marked).then_some((ty, level))
+            });
+            return match found {
+                Some(found) => {
+                    if let Ok(mut slot) = probe.found.lock() {
+                        *slot = Some(found);
+                    }
+                    err("a constant motive was found; the probe stops here", e.span)
+                }
+                None => Ok(Term::Zero),
+            };
+        }
         // A corecursive body's two positions, a node and a child
         // (docs/codata-elaborator-design.md §5.2).
         if let Some(site) = cx.corec.as_ref()
@@ -5379,47 +5446,55 @@ impl Elaborator {
                             span: e.span,
                         }));
                     }
-                    let elim = match eqbind {
+                    let run = |mcx: &Cx, eq: Option<&str>| match eq {
                         None => self.elab_match(
-                            &gcx,
+                            mcx,
                             *form,
                             *generated,
                             &arms,
-                            scrut_t,
+                            scrut_t.clone(),
                             &scrut_ty,
                             &scrut_lvl,
-                            motive,
-                            gen_lvl,
+                            motive.clone(),
+                            gen_lvl.clone(),
                             e.span,
-                        )?,
+                        ),
                         Some(h) => self.elab_convoy(
-                            &gcx, *form, *generated, h, &arms, scrut_t, &scrut_ty, &scrut_lvl,
-                            motive, &gen_lvl, &gen_ty, e.span,
-                        )?,
+                            mcx, *form, *generated, h, &arms, scrut_t.clone(), &scrut_ty,
+                            &scrut_lvl, motive.clone(), &gen_lvl, &gen_ty, e.span,
+                        ),
+                    };
+                    let elim = match eqbind {
+                        None => self.elab_match_pending(&gcx, &scrut_ty, &run)?,
+                        Some(h) => run(&gcx, Some(h))?,
                     };
                     return Ok(self.instantiate_generalized(cx, elim, gen_ty, &positions));
                 }
                 let motive = matching::synthesize_motive(
                     self, cx, &scrut_t, &scrut_ty, &scrut_lvl, expected, e.span,
                 );
-                let Some(h) = eqbind else {
-                    return self.elab_match(
-                        cx,
+                let run = |mcx: &Cx, eq: Option<&str>| match eq {
+                    None => self.elab_match(
+                        mcx,
                         *form,
                         *generated,
                         arms,
-                        scrut_t,
+                        scrut_t.clone(),
                         &scrut_ty,
                         &scrut_lvl,
-                        motive,
+                        motive.clone(),
                         lvl.clone(),
                         e.span,
-                    );
+                    ),
+                    Some(h) => self.elab_convoy(
+                        mcx, *form, *generated, h, arms, scrut_t.clone(), &scrut_ty, &scrut_lvl,
+                        motive.clone(), lvl, expected, e.span,
+                    ),
                 };
-                self.elab_convoy(
-                    cx, *form, *generated, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl,
-                    expected, e.span,
-                )
+                match eqbind {
+                    None => self.elab_match_pending(cx, &scrut_ty, &run),
+                    Some(h) => run(cx, Some(h)),
+                }
             }
             // `absurd(p)`: from an equation between distinct constructors,
             // anything — so it needs the expected type
@@ -6124,6 +6199,7 @@ impl Elaborator {
             );
         }
         let outer_depth = self.omega_depth.get();
+        let written_cx = cx;
         let source_cx = omega_cert::source_context(cx);
         let cx = source_cx.as_ref();
         let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
@@ -6137,9 +6213,14 @@ impl Elaborator {
             name != "__omega_connective_branch",
             true,
         )
-        .map_err(|detail| ElabError::Elab {
-            msg: format!("`omega` got stuck: {detail}"),
-            span: span,
+        .map_err(|detail| {
+            // Stuck: an arm equation not yet in scope might be the missing
+            // fact (docs/dependent-match-compiler-design.md §4.3.1).
+            self.want_match_equations(written_cx);
+            ElabError::Elab {
+                msg: format!("`omega` got stuck: {detail}"),
+                span: span,
+            }
         })?;
         let reconstruct_ns = reconstruct_guard.finish();
         let mut phases = omega_cert::phases();
@@ -7926,10 +8007,10 @@ impl Elaborator {
                 motive: None,
                 scrut,
                 arms,
-                eqbind: None,
+                eqbind,
                 generated,
             } => {
-                if *form == MatchForm::If {
+                if *form == MatchForm::If && eqbind.is_none() {
                     match matching::infer_if_constant_motive(
                         self, cx, scrut, arms, *generated, e.span,
                     ) {
@@ -7938,8 +8019,8 @@ impl Elaborator {
                         matching::MotiveInference::Declined => {}
                     }
                 }
-                match matching::infer_match_constant_motive(
-                    self, cx, *form, scrut, arms, *generated, e.span,
+                match matching::infer_match_constant_motive_eq(
+                    self, cx, *form, scrut, arms, eqbind.as_deref(), *generated, e.span,
                 ) {
                     matching::MotiveInference::Accepted(result) => return Ok(result),
                     matching::MotiveInference::Failed(error) => return Err(error),
@@ -8083,6 +8164,67 @@ impl Elaborator {
             // function and rewrites every symbol, bare or applied, to a name.
             ExprKind::OpSymbol { symbol: s, .. } => {
                 err(format!("`{s}` reached elaboration unresolved"), e.span)
+            }
+        }
+    }
+
+    /// A motive-less `match` with no equation binding, whose arms see the
+    /// equation `e = pattern` as **pending** (docs/dependent-match-compiler-
+    /// design.md §4.3): the arms elaborate without it, and a reader of
+    /// hypotheses that ran in them records that it wanted it. Only when the
+    /// arms then fail is the match elaborated again as its convoy, with the
+    /// equation bound under [`MATCH_EQ`]; a match that checks without the
+    /// equation keeps its term, so function bodies and every conversion
+    /// against a restated `match` are unchanged. If the convoy fails too, the
+    /// first error is the one reported.
+    ///
+    /// An indexed family has no homogeneous equation yet (§9), so there the
+    /// match is elaborated once, as before.
+    fn elab_match_pending(
+        &self,
+        cx: &Cx,
+        scrut_ty: &Type,
+        run: &dyn Fn(&Cx, Option<&str>) -> R<Term>,
+    ) -> R<Term> {
+        if self.iwf_of_at(cx, scrut_ty).is_some() || self.indexed_of_at(cx, scrut_ty).is_some() {
+            return run(cx, None);
+        }
+        let id = self.attempt.match_eq_next.get();
+        self.attempt.match_eq_next.set(id.wrapping_add(1));
+        let mark = matching::MatchSpeculationState::mark_match_state(self);
+        let mut pcx = cx.clone();
+        let mut pending = (*pcx.pending_eqs).clone();
+        pending.push(id);
+        pcx.pending_eqs = Rc::new(pending);
+        let first = run(&pcx, None);
+        let wanted = {
+            let mut wanted = self.attempt.match_eq_wanted.borrow_mut();
+            let had = wanted.contains(&id);
+            wanted.retain(|w| *w != id);
+            had
+        };
+        match first {
+            Err(error) if wanted => {
+                matching::MatchSpeculationState::rollback_match_state(self, mark);
+                run(cx, Some(MATCH_EQ)).map_err(|_| {
+                    matching::MatchSpeculationState::rollback_match_state(self, mark);
+                    error
+                })
+            }
+            other => other,
+        }
+    }
+
+    /// A reader of hypotheses (`omega`, `linarith`) is about to list them:
+    /// every pending match equation in scope is wanted (§4.3).
+    pub(crate) fn want_match_equations(&self, cx: &Cx) {
+        if cx.pending_eqs.is_empty() {
+            return;
+        }
+        let mut wanted = self.attempt.match_eq_wanted.borrow_mut();
+        for id in cx.pending_eqs.iter() {
+            if !wanted.contains(id) {
+                wanted.push(*id);
             }
         }
     }
@@ -10139,3 +10281,8 @@ enum GroupKind {
     /// recursing over a mutual family (docs/mutual-inductive-design.md §6).
     Structural,
 }
+
+/// The reserved name of a match's anonymous equation once it is bound
+/// (docs/dependent-match-compiler-design.md §4.1). `__` names are the
+/// machinery's; a certificate may spell it, a user does not write it.
+pub(crate) const MATCH_EQ: &str = "__match_eq";
