@@ -1,0 +1,8 @@
+// The cast tactics look the edges' laws up by name where they run
+// (lib/std/tactic/cast.hthr): a module that has not imported `morphism`
+// is told so, not shown a difference the casts would have explained.
+// Tests, not library (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import list; import tactic; import cast; import dyadic;
+
+// expect-error: `import morphism;` in this module
+theorem no_morphism(lo, m: Dyadic, h: (-lo).rat() <= m.rat()): -lo.rat() <= m.rat() { by cast_from(h) }

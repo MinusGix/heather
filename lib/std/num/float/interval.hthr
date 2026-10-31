@@ -41,6 +41,10 @@ import ordered_field;
 import semiring;
 import rat;
 import dyadic;
+import morphism;
+import list;
+import tactic;
+import mono;
 
 inductive Interval { Bnd(lo: Dyadic, hi: Dyadic), Whole }
 
@@ -59,12 +63,10 @@ fn Interval::point(d: Dyadic) → Interval { Bnd(d, d) }
 
 theorem Interval::point_has(d: Dyadic): Interval::point(d).Has(d.rat()) { And(d.rat().le_refl(), d.rat().le_refl()) }
 
-// Most containments are a bound on each side computed in `Rat` and read
-// back through the bounds' images (`Dyadic::rat_add`, `rat_mul`, …): `el`
-// and `eh` name what the dyadic bounds are, and `hl`, `hh` bound `x`.
-theorem Interval::bnd_has_of({lo, hi: Dyadic}, {L, H, x: Rat}, el: lo.rat() ≈ L, eh: hi.rat() ≈ H, hl: L <= x, hh: x <= H): Bnd(lo, hi).Has(x) {
-    And(Rat::le_of_same_of_le(el, hl), Rat::le_of_le_of_same(hh, Rat::same_sym(eh)))
-}
+// Most containments are a bound on each side computed in `Rat`: `mono`
+// reads a bound's image `(a + c).rat()` as `a.rat() + c.rat()` through the
+// `Dyadic::rat_hom` edge (docs/casting-design.md §6.4), so a bound states
+// what it is and the image laws are not named.
 
 // Rounding the bounds outward keeps what the box held.
 theorem Interval::round_out_has({lo, hi: Dyadic}, p: Nat, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(lo.down(p), hi.up(p)).Has(x) {
@@ -79,7 +81,12 @@ fn Interval::neg(self I: Interval) → Interval { match I { Bnd(lo, hi) => Bnd(-
 
 theorem Interval::neg_has(I: Interval, {x: Rat}, h: I.Has(x)): I.neg().Has(-x) {
     match I {
-        Bnd(lo, hi) => Interval::bnd_has_of(hi.rat_neg(), lo.rat_neg(), Rat::neg_le(h.right), Rat::neg_le(h.left)),
+        Bnd(lo, hi) => {
+            let low: ((-hi).rat() <= -x) = by mono_with([h.right]);
+            let high: (-x <= (-lo).rat()) = by mono_with([h.left]);
+            let both: (Bnd(-hi, -lo).Has(-x)) = And(low, high);
+            both
+        },
         Whole => trivial,
     }
 }
@@ -94,7 +101,10 @@ fn Interval::add(self I, J: Interval, p: Nat) → Interval {
 theorem Interval::add_bnd_has(a, b, c, d: Dyadic, p: Nat, {x, y: Rat}, hx: Bnd(a, b).Has(x), hy: Bnd(c, d).Has(y)):
     Bnd((a + c).down(p), (b + d).up(p)).Has(x + y)
 {
-    Interval::round_out_has(p, Interval::bnd_has_of(a.rat_add(c), b.rat_add(d), Rat::add_le_mono(hx.left, hy.left), Rat::add_le_mono(hx.right, hy.right)))
+    let low: ((a + c).rat() <= x + y) = by mono_with([hx.left, hy.left]);
+    let high: (x + y <= (b + d).rat()) = by mono_with([hx.right, hy.right]);
+    let both: (Bnd(a + c, b + d).Has(x + y)) = And(low, high);
+    Interval::round_out_has(p, both)
 }
 
 theorem Interval::add_has(I, J: Interval, p: Nat, {x, y: Rat}, hx: I.Has(x), hy: J.Has(y)): I.add(J, p).Has(x + y) {
@@ -138,15 +148,15 @@ theorem Interval::between_l({C, D, y: Rat}, z: Rat, h: C <= y ∧ y <= D):
 // products bound.
 theorem Interval::corner_lo(a, c, d: Dyadic, s: Rat, h: a.rat() * c.rat() <= s ∨ a.rat() * d.rat() <= s): (a * c).min(a * d).rat() <= s {
     (a * c).min_le_of(a * d, s, match h {
-        Inl(l) => Inl(Rat::le_of_same_of_le(a.rat_mul(c), l)),
-        Inr(r) => Inr(Rat::le_of_same_of_le(a.rat_mul(d), r)),
+        Inl(l) => Inl(by mono_with([l])),
+        Inr(r) => Inr(by mono_with([r])),
     })
 }
 
 theorem Interval::corner_hi(a, c, d: Dyadic, s: Rat, h: s <= a.rat() * c.rat() ∨ s <= a.rat() * d.rat()): s <= (a * c).max(a * d).rat() {
     (a * c).le_max_of(a * d, s, match h {
-        Inl(l) => Inl(Rat::le_of_le_of_same(l, Rat::same_sym(a.rat_mul(c)))),
-        Inr(r) => Inr(Rat::le_of_le_of_same(r, Rat::same_sym(a.rat_mul(d)))),
+        Inl(l) => Inl(by mono_with([l])),
+        Inr(r) => Inr(by mono_with([r])),
     })
 }
 
@@ -199,8 +209,10 @@ theorem Interval::mul_pos_has(a, b, c, d: Dyadic, p: Nat, ha: 0 <= a, hc: 0 <= c
 {
     let ha0 = Dyadic::rat_nonneg(ha);
     let hc0 = Dyadic::rat_nonneg(hc);
-    Interval::round_out_has(p, Interval::bnd_has_of(a.rat_mul(c), b.rat_mul(d), Rat::mul_le_mul(hx.left, hy.left, ha0, hc0),
-        Rat::mul_le_mul(hx.right, hy.right, Rat::le_trans(ha0, hx.left), Rat::le_trans(hc0, hy.left))))
+    let low: ((a * c).rat() <= x * y) = by mono_with([hx.left, hy.left, ha0, hc0]);
+    let high: (x * y <= (b * d).rat()) = by mono_with([hx.right, hy.right, Rat::le_trans(ha0, hx.left), Rat::le_trans(hc0, hy.left)]);
+    let both: (Bnd(a * c, b * d).Has(x * y)) = And(low, high);
+    Interval::round_out_has(p, both)
 }
 
 theorem Interval::mul_bnd_has(a, b, c, d: Dyadic, p: Nat, {x, y: Rat}, hx: Bnd(a, b).Has(x), hy: Bnd(c, d).Has(y)): Interval::mul_bnd(a, b, c, d, p).Has(x * y) {

@@ -10,6 +10,7 @@ fn base() -> Elaborator {
         ("pair", include_str!("../../../lib/std/core/pair.hthr")),
         ("list", include_str!("../../../lib/std/data/list.hthr")),
         ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+        ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
         ("int", include_str!("../../../lib/std/num/int.hthr")),
         ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
         ("result", include_str!("../../../lib/std/core/result.hthr")),

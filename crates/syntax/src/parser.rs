@@ -4196,6 +4196,10 @@ impl Parser {
         let symbol = match self.peek() {
             TokKind::Minus => "-",
             TokKind::Bang => "!",
+            // A cast, at `-`'s precedence (docs/casting-design.md §5.2):
+            // `↑n - 1` subtracts at the target, `↑(n - 1)` casts the
+            // difference.
+            TokKind::UpArrow => "↑",
             TokKind::BigSum | TokKind::BigProd => return self.big_operator(),
             _ => return self.power(),
         };
@@ -6194,6 +6198,23 @@ mod tests {
         assert_eq!(as_call(&outer_args[0].kind).0, "!");
     }
 
+    /// `↑` binds as tightly as the other prefixes: `↑n - 1` casts `n`, and
+    /// the subtraction happens at the target (docs/casting-design.md §14).
+    #[test]
+    fn a_cast_is_a_prefix_symbol_binding_tighter_than_infix() {
+        let k = body("↑n - 1");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "-");
+        let (cast, cast_args, _) = as_call(&args[0].kind);
+        assert_eq!(cast, "↑");
+        assert_eq!(cast_args.len(), 1);
+        let ExprKind::App { head, .. } = &args[0].kind else { unreachable!() };
+        assert!(matches!(
+            head.kind,
+            ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. }
+        ));
+    }
+
     #[test]
     fn semantic_brackets_desugar_to_is_true() {
         let k = body("⟦!b⟧");
@@ -6464,6 +6485,7 @@ mod tests {
         assert_eq!(kinds("∃ k")[0], TokKind::Exists);
         assert_eq!(kinds("∑ k")[0], TokKind::BigSum);
         assert_eq!(kinds("∏ k")[0], TokKind::BigProd);
+        assert_eq!(kinds("↑n")[0], TokKind::UpArrow);
         assert_eq!(kinds("∀ k")[0], TokKind::Forall);
         // `λ`, the other two-byte glyph, is unmoved.
         assert_eq!(kinds("λ x")[0], TokKind::Lambda);

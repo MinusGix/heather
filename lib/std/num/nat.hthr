@@ -231,6 +231,10 @@ fn Nat::Lt(self n, m: Nat) → Type { Succ(n).Le(m) }
 designation <= at Nat := Nat::Le
 designation < at Nat := Nat::Lt
 
+// Equality as a named relation, for where a relation is an index (a
+// morphism out of `Nat`, `Int::ofNat_hom`; lib/std/algebra/morphism.hthr).
+fn Nat::Same(self a, b: Nat) → Type { a = b }
+
 // The decision procedure. It is NOT part of the order's specification —
 // nothing above mentions it — but it is the order's decided bit: the `Decide`
 // instance below carries `leb` as its `bit`, so `decide_bit<n <= m>()` is the

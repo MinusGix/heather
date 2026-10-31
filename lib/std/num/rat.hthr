@@ -31,6 +31,7 @@ import order;
 import bool;
 import semiring;
 import ordered_field;
+import morphism;
 import big_operator;
 import linarith;
 export algebra::{Numeral};
@@ -296,6 +297,10 @@ theorem Rat::ofInt_inj(m, n: Int, h: Rat::ofInt(m) ≈ Rat::ofInt(n)): m = n { o
 
 theorem Rat::ofInt_le(m, n: Int, h: m <= n): Rat::ofInt(m) <= Rat::ofInt(n) { omega }
 
+theorem Rat::ofInt_neg(n: Int): Rat::ofInt(-n) ≈ -Rat::ofInt(n) { refl }
+
+theorem Rat::ofInt_respects(m, n: Int, h: m = n): Rat::ofInt(m) ≈ Rat::ofInt(n) { omega }
+
 // ---------------------------------------------------------------------------
 // The reciprocal of a fraction, as raw arithmetic: total, with 0 sent to 0,
 // so its law asks for a nonzero argument. This is not the inverse `x⁻¹`,
@@ -465,6 +470,33 @@ theorem Rat::le_of_not_lt({x, y: Rat}, h: ¬(y < x)): x <= y { omega }
 
 theorem Rat::not_lt_of_le({x, y: Rat}, h: x <= y): ¬(y < x) { λ lt => omega }
 
+theorem Rat::ofInt_lt(m, n: Int, h: m < n): Rat::ofInt(m) < Rat::ofInt(n) { omega }
+
+theorem Rat::le_of_ofInt_le(m, n: Int, h: Rat::ofInt(m) <= Rat::ofInt(n)): m <= n { omega }
+
+theorem Rat::lt_of_ofInt_lt(m, n: Int, h: Rat::ofInt(m) < Rat::ofInt(n)): m < n { omega }
+
+// The integers inside the rationals, as a cast edge (docs/casting-design.md
+// §5.6). `Int`'s `≈` is equality.
+fn Rat::ofInt_hom() → OrderedRingHom<Int, Rat>(Rat::ofInt,
+        Int::Same, Int::Lt, Int::Le, Int::add, Int::mul, Int::neg, 0, 1,
+        Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1) {
+    OrderedRingHom {
+        map_respects: λ m n h => Rat::ofInt_respects(m, n, h),
+        map_zero: Rat::same_refl(0),
+        map_one: Rat::same_refl(1),
+        map_add: λ m n => Rat::ofInt_add(m, n),
+        map_mul: λ m n => Rat::ofInt_mul(m, n),
+        map_neg: λ n => Rat::ofInt_neg(n),
+        map_le: λ m n h => Rat::ofInt_le(m, n, h),
+        map_lt: λ m n h => Rat::ofInt_lt(m, n, h),
+        le_of_map: λ m n h => Rat::le_of_ofInt_le(m, n, h),
+        lt_of_map: λ m n h => Rat::lt_of_ofInt_lt(m, n, h),
+    }
+}
+
+instance Cast<Int, Rat>(Rat::ofInt) { }
+
 theorem Rat::lt_trichotomy(self x, y: Rat): x < y ∨ x ≈ y ∨ y < x {
     (x.num * y.den.int()).lt_trichotomy(y.num * x.den.int())
 }
@@ -472,6 +504,16 @@ theorem Rat::lt_trichotomy(self x, y: Rat): x < y ∨ x ≈ y ∨ y < x {
 theorem Rat::lt_respects({x, x2, y, y2: Rat}, hx: x ≈ x2, hy: y ≈ y2, h: x < y): x2 < y2 {
     Rat::lt_of_not_le(λ back => Rat::not_le_of_lt(h, Rat::le_respects(Rat::same_sym(hy), Rat::same_sym(hx), back)))
 }
+
+// One side replaced by one it is `≈` to, the `≈` premise first: the shape a
+// tactic applies when it knows the replacement before the order (`mono`'s
+// cast step, lib/std/tactic/mono.hthr). The left `<=` one is
+// `Rat::le_of_same_of_le`.
+theorem Rat::le_of_same_r({x, y, z: Rat}, e: z ≈ y, h: x <= y): x <= z { Rat::le_respects(x.same_refl(), Rat::same_sym(e), h) }
+
+theorem Rat::lt_of_same_l({x, y, z: Rat}, e: x ≈ y, h: y < z): x < z { Rat::lt_respects(Rat::same_sym(e), z.same_refl(), h) }
+
+theorem Rat::lt_of_same_r({x, y, z: Rat}, e: z ≈ y, h: x < y): x < z { Rat::lt_respects(x.same_refl(), Rat::same_sym(e), h) }
 
 // The mixed transitivities go through `¬(… ≤ …)`: a counterexample to the
 // conclusion would chain back into a counterexample to the strict premise.

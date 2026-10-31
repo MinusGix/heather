@@ -133,6 +133,7 @@ fn omega_proves_positive_subtype_closure() {
             include_str!("../../../docs/showcase/lift_positive.hthr"),
         ),
         ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+        ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
         ("int", include_str!("../../../lib/std/num/int.hthr")),
         ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ] {

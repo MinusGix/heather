@@ -54,6 +54,7 @@ import ordered_field;
 import big_operator;
 import linarith;
 import rat;
+import morphism;
 import dyadic;
 export algebra::{Numeral};
 
@@ -1545,6 +1546,17 @@ theorem CReal::le_respects({x, x2, y, y2: CReal}, hx: x ≈ x2, hy: y ≈ y2, h:
     λ back => h(CReal::lt_respects(CReal::same_sym(hy), CReal::same_sym(hx), back))
 }
 
+// One side replaced by one it is `≈` to, the `≈` premise first: the shape a
+// tactic applies when it knows the replacement before the order (`mono`'s
+// cast step, lib/std/tactic/mono.hthr).
+theorem CReal::le_of_same_l({x, y, z: CReal}, e: x ≈ y, h: y <= z): x <= z { CReal::le_respects(CReal::same_sym(e), z.same_refl(), h) }
+
+theorem CReal::le_of_same_r({x, y, z: CReal}, e: z ≈ y, h: x <= y): x <= z { CReal::le_respects(x.same_refl(), CReal::same_sym(e), h) }
+
+theorem CReal::lt_of_same_l({x, y, z: CReal}, e: x ≈ y, h: y < z): x < z { CReal::lt_respects(CReal::same_sym(e), z.same_refl(), h) }
+
+theorem CReal::lt_of_same_r({x, y, z: CReal}, e: z ≈ y, h: x < y): x < z { CReal::lt_respects(x.same_refl(), CReal::same_sym(e), h) }
+
 // The embedding preserves and reflects `≤`, through `<` both ways.
 theorem CReal::ofRat_le({p, q: Rat}, h: p <= q): CReal::ofRat(p) <= CReal::ofRat(q) {
     λ back => Rat::not_le_of_lt(CReal::lt_of_ofRat_lt(back), h)
@@ -1553,6 +1565,28 @@ theorem CReal::ofRat_le({p, q: Rat}, h: p <= q): CReal::ofRat(p) <= CReal::ofRat
 theorem CReal::le_of_ofRat_le({p, q: Rat}, h: CReal::ofRat(p) <= CReal::ofRat(q)): p <= q {
     Rat::le_of_not_lt(λ below => h(CReal::ofRat_lt(below)))
 }
+
+// The rationals inside the reals, as a cast edge (docs/casting-design.md
+// §5.6). A numeral at `CReal` is the rational numeral embedded, so `0` and
+// `1` are preserved by reflexivity.
+fn CReal::ofRat_hom() → OrderedRingHom<Rat, CReal>(CReal::ofRat,
+        Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+        CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul, CReal::neg, 0, 1) {
+    OrderedRingHom {
+        map_respects: λ p q h => CReal::ofRat_respects(h),
+        map_zero: CReal::same_refl(0),
+        map_one: CReal::same_refl(1),
+        map_add: λ p q => CReal::ofRat_add(p, q),
+        map_mul: λ p q => CReal::ofRat_mul(p, q),
+        map_neg: λ q => CReal::ofRat_neg(q),
+        map_le: λ p q h => CReal::ofRat_le(h),
+        map_lt: λ p q h => CReal::ofRat_lt(h),
+        le_of_map: λ p q h => CReal::le_of_ofRat_le(h),
+        lt_of_map: λ p q h => CReal::lt_of_ofRat_lt(h),
+    }
+}
+
+instance Cast<Rat, CReal>(CReal::ofRat) { }
 
 instance Preorder<CReal>(CReal::Le) {
     rel_refl := CReal::le_refl,

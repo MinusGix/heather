@@ -9,6 +9,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("pair", include_str!("../../../../lib/std/core/pair.hthr")),
     ("list", include_str!("../../../../lib/std/data/list.hthr")),
     ("algebra", include_str!("../../../../lib/std/algebra/algebra.hthr")),
+    ("morphism", include_str!("../../../../lib/std/algebra/morphism.hthr")),
     ("int", include_str!("../../../../lib/std/num/int.hthr")),
     ("bitvec", include_str!("../../../../lib/std/bitvec/bitvec.hthr")),
     ("function_ir", include_str!("../../../../lib/native/function_ir/function_ir.hthr")),

@@ -297,6 +297,20 @@ impl Traits {
         out.into_iter().map(|(_, g, p, i)| (g, p, i)).collect()
     }
 
+    /// Every instance of a class: its head key and its index spelling, in
+    /// key order. The cast edges are read this way
+    /// (`Elaborator::cast_edges`, docs/casting-design.md §14).
+    pub(crate) fn instances_of_class(&self, class_key: &str) -> Vec<(String, String)> {
+        let mut out: Vec<_> = self
+            .instances
+            .keys()
+            .filter(|(class, _, _)| class == class_key)
+            .map(|(_, head, index)| (head.clone(), index.clone()))
+            .collect();
+        out.sort();
+        out
+    }
+
     pub(crate) fn instances_answering(
         &self,
         class_key: &str,

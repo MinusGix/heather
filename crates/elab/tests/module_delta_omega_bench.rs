@@ -33,6 +33,7 @@ fn omega_dependency_closure_source_vs_safe_replay() {
         ("pair", PAIR),
         ("list", LIST),
         ("algebra", ALGEBRA),
+        ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
         ("int", INT),
         ("omega", OMEGA),
     ];

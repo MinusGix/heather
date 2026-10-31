@@ -95,7 +95,7 @@ fn Finite::div({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEve
 // Value theorems: each result is a correct rounding of the exact value.
 
 theorem Finite::add_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() + b.val(), a.add(b, mode := mode)) {
-    F.rounds_respects(mode, a.val() + b.val(), (a.dyadic() + b.dyadic()).rat(), Rat::same_sym(a.dyadic().rat_add(b.dyadic())), a.add(b, mode := mode),
+    F.rounds_respects(mode, a.val() + b.val(), (a.dyadic() + b.dyadic()).rat(), ring, a.add(b, mode := mode),
         F.round_exact_correct(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg)))
 }
 
@@ -105,14 +105,13 @@ theorem Finite::sub_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(
 }
 
 theorem Finite::mul_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() * b.val(), a.mul(b, mode := mode)) {
-    F.rounds_respects(mode, a.val() * b.val(), (a.dyadic() * b.dyadic()).rat(), Rat::same_sym(a.dyadic().rat_mul(b.dyadic())), a.mul(b, mode := mode),
+    F.rounds_respects(mode, a.val() * b.val(), (a.dyadic() * b.dyadic()).rat(), ring, a.mul(b, mode := mode),
         F.round_exact_correct(mode, a.dyadic() * b.dyadic(), a.neg.xor(b.neg)))
 }
 
 theorem Finite::fma_correct({F: Format}, a, b, c: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() * b.val() + c.val(), a.fma(b, c, mode := mode)) {
     let d = a.dyadic() * b.dyadic() + c.dyadic();
-    let e: (d.rat() ≈ a.val() * b.val() + c.val()) =
-        Rat::same_trans((a.dyadic() * b.dyadic()).rat_add(c.dyadic()), Rat::add_respects(a.dyadic().rat_mul(b.dyadic()), c.val().same_refl()));
+    let e: (d.rat() ≈ a.val() * b.val() + c.val()) = ring;
     F.rounds_respects(mode, a.val() * b.val() + c.val(), d.rat(), Rat::same_sym(e), a.fma(b, c, mode := mode),
         F.round_exact_correct(mode, d, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg)))
 }
@@ -157,7 +156,7 @@ theorem Finite::add_zero({F: Format}, a, b: Finite(F), mode: Mode, zero: a.val()
     a.add(b, mode := mode) = Fin(Finite::zero(F, mode.sum_zero_neg(a.neg, b.neg)))
 {
     F.round_exact_zero(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg),
-        Dyadic::zero_of_rat(Rat::same_trans(a.dyadic().rat_add(b.dyadic()), zero)))
+        Dyadic::zero_of_rat(ring(zero)))
 }
 
 // `x - x` is `+0`, except `-0` toward `-∞`, whatever the sign of `x`.
@@ -219,8 +218,7 @@ theorem Finite::fma_zero({F: Format}, a, b, c: Finite(F), mode: Mode, zero: a.va
     a.fma(b, c, mode := mode) = Fin(Finite::zero(F, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg)))
 {
     let d = a.dyadic() * b.dyadic() + c.dyadic();
-    let e: (d.rat() ≈ a.val() * b.val() + c.val()) =
-        Rat::same_trans((a.dyadic() * b.dyadic()).rat_add(c.dyadic()), Rat::add_respects(a.dyadic().rat_mul(b.dyadic()), c.val().same_refl()));
+    let e: (d.rat() ≈ a.val() * b.val() + c.val()) = ring;
     F.round_exact_zero(mode, d, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg), Dyadic::zero_of_rat(Rat::same_trans(e, zero)))
 }
 

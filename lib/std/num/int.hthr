@@ -2,6 +2,7 @@ import nat;
 import logic;
 import bool;
 import algebra;
+import morphism;
 
 inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
 
@@ -792,6 +793,12 @@ theorem Int::add_mul_distr(self a, b, c: Int): (a + b) * c = a * c + b * c {
 
 // ---------------------------------------------------------------------------
 
+// Equality as a named relation, for where a relation is an index: a
+// morphism out of `Int` (`Rat::ofInt_hom`) states its laws at `Int::Same`,
+// and a λ there would be β-reduced out of the record's field types, leaving
+// nothing to infer it from (lib/std/algebra/morphism.hthr).
+fn Int::Same(self a, b: Int) → Type { a = b }
+
 fn Int::Le(self a, b: Int) → Type {
     match a {
         OfNat(m) => match b { OfNat(n) => m <= n, NegSucc(_) => False },
@@ -1307,6 +1314,45 @@ theorem Int::ofNat_le_iff(m, n: Nat): m <= n ↔ OfNat(m) <= OfNat(n) {
 theorem Int::ofNat_lt_iff(m, n: Nat): m < n ↔ OfNat(m) < OfNat(n) {
     Iff(λ (h: m < n) => h, λ (h: OfNat(m) < OfNat(n)) => h)
 }
+
+// `Int` modulo `Int::Same` (which is `=`), as the cast tactics read a
+// carrier: its laws and the congruences of its operations
+// (lib/std/tactic/cast.hthr).
+theorem Int::same_refl(self a: Int): Int::Same(a, a) { refl }
+theorem Int::same_sym({a, b: Int}, h: Int::Same(a, b)): Int::Same(b, a) { sym(h) }
+theorem Int::same_trans({a, b, c: Int}, hab: Int::Same(a, b), hbc: Int::Same(b, c)): Int::Same(a, c) { trans(hab, hbc) }
+theorem Int::add_respects({a, a2, b, b2: Int}, ha: Int::Same(a, a2), hb: Int::Same(b, b2)): Int::Same(a + b, a2 + b2) {
+    trans(Int::cong(λ (w: Int) => w + b, ha), Int::cong(λ (w: Int) => a2 + w, hb))
+}
+theorem Int::mul_respects({a, a2, b, b2: Int}, ha: Int::Same(a, a2), hb: Int::Same(b, b2)): Int::Same(a * b, a2 * b2) {
+    trans(Int::cong(λ (w: Int) => w * b, ha), Int::cong(λ (w: Int) => a2 * w, hb))
+}
+theorem Int::neg_respects({a, a2: Int}, ha: Int::Same(a, a2)): Int::Same(-a, -a2) { Int::cong(λ (w: Int) => -w, ha) }
+theorem Int::le_respects({a, a2, b, b2: Int}, ha: Int::Same(a, a2), hb: Int::Same(b, b2), h: a <= b): a2 <= b2 { subst(ha, subst(hb, h)) }
+theorem Int::lt_respects({a, a2, b, b2: Int}, ha: Int::Same(a, a2), hb: Int::Same(b, b2), h: a < b): a2 < b2 { subst(ha, subst(hb, h)) }
+
+// The `Nat → Int` cast edge (docs/casting-design.md §12): `n.int()`, which
+// is `OfNat(n)`. Its laws hold by computation: `Int::add` and `Int::mul` on
+// two `OfNat`s are `OfNat` of the `Nat` operation, and the orders agree.
+fn Int::ofNat_hom() → OrderedSemiringHom<Nat, Int>(Nat::int,
+        Nat::Same, Nat::Lt, Nat::Le, Nat::add, Nat::mul, 0, 1,
+        Int::Same, Int::Lt, Int::Le, Int::add, Int::mul, OfNat(0), OfNat(1)) {
+    OrderedSemiringHom {
+        map_respects: λ m n h => Int::cong_ofnat(h),
+        map_zero: refl,
+        map_one: refl,
+        map_add: λ m n => Int::ofNat_add(m, n),
+        map_mul: λ m n => refl,
+        map_le: λ m n h => h,
+        map_lt: λ m n h => h,
+        le_of_map: λ m n h => h,
+        lt_of_map: λ m n h => h,
+    }
+}
+
+// The `Nat → Int` edge for `↑` (lib/std/algebra/morphism.hthr): `↑n` is
+// `OfNat(n)`, one spelling for every cast into `Int`.
+instance Cast<Nat, Int>(OfNat) { }
 
 theorem Int::zero_le_ofNat(n: Nat): OfNat(0) <= OfNat(n) { trivial }
 

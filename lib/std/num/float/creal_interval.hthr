@@ -40,20 +40,19 @@ import semiring;
 import rat;
 import creal;
 import dyadic;
+import morphism;
 import interval;
+import list;
+import tactic;
+import mono;
+import cast;
 import omega;
 
 // A dyadic as a constant real is `CReal::ofRat(d.rat())`.
 
-theorem Dyadic::real_neg(self a: Dyadic): CReal::ofRat((-a).rat()) ≈ -CReal::ofRat(a.rat()) { CReal::same_trans(CReal::ofRat_respects(a.rat_neg()), CReal::ofRat_neg(a.rat())) }
-
-theorem Dyadic::real_add(self a, b: Dyadic): CReal::ofRat((a + b).rat()) ≈ CReal::ofRat(a.rat()) + CReal::ofRat(b.rat()) {
-    CReal::same_trans(CReal::ofRat_respects(a.rat_add(b)), CReal::ofRat_add(a.rat(), b.rat()))
-}
-
-theorem Dyadic::real_mul(self a, b: Dyadic): CReal::ofRat((a * b).rat()) ≈ CReal::ofRat(a.rat()) * CReal::ofRat(b.rat()) {
-    CReal::same_trans(CReal::ofRat_respects(a.rat_mul(b)), CReal::ofRat_mul(a.rat(), b.rat()))
-}
+// Its images of an operation, `CReal::ofRat((a + c).rat())`, are read by
+// `mono` through both edges (`Dyadic::rat_hom`, `CReal::ofRat_hom`;
+// docs/casting-design.md §6.4), so no law here names them.
 
 theorem Dyadic::real_le({a, b: Dyadic}, h: a <= b): CReal::ofRat(a.rat()) <= CReal::ofRat(b.rat()) { CReal::ofRat_le(p := a.rat(), q := b.rat(), h := h) }
 
@@ -88,8 +87,12 @@ theorem Interval::of_rat_has_real(q: Rat, p: Nat): Interval::of_rat(q, p).HasRea
 
 theorem Interval::neg_has_real(I: Interval, {x: CReal}, h: I.HasReal(x)): I.neg().HasReal(-x) {
     match I {
-        Bnd(lo, hi) => And(CReal::le_respects(CReal::same_sym(hi.real_neg()), (-x).same_refl(), CReal::neg_le(h.right)),
-            CReal::le_respects((-x).same_refl(), CReal::same_sym(lo.real_neg()), CReal::neg_le(h.left))),
+        Bnd(lo, hi) => {
+            let low: (CReal::ofRat((-hi).rat()) <= -x) = by mono_with([h.right]);
+            let high: (-x <= CReal::ofRat((-lo).rat())) = by mono_with([h.left]);
+            let both: (Bnd(-hi, -lo).HasReal(-x)) = And(low, high);
+            both
+        },
         Whole => trivial,
     }
 }
@@ -97,8 +100,8 @@ theorem Interval::neg_has_real(I: Interval, {x: CReal}, h: I.HasReal(x)): I.neg(
 theorem Interval::add_bnd_has_real(a, b, c, d: Dyadic, p: Nat, {x, y: CReal}, hx: Bnd(a, b).HasReal(x), hy: Bnd(c, d).HasReal(y)):
     Bnd((a + c).down(p), (b + d).up(p)).HasReal(x + y)
 {
-    let low: (CReal::ofRat((a + c).rat()) <= x + y) = CReal::le_respects(CReal::same_sym(a.real_add(c)), (x + y).same_refl(), CReal::add_le_mono(hx.left, hy.left));
-    let high: (x + y <= CReal::ofRat((b + d).rat())) = CReal::le_respects((x + y).same_refl(), CReal::same_sym(b.real_add(d)), CReal::add_le_mono(hx.right, hy.right));
+    let low: (CReal::ofRat((a + c).rat()) <= x + y) = by mono_with([hx.left, hy.left]);
+    let high: (x + y <= CReal::ofRat((b + d).rat())) = by mono_with([hx.right, hy.right]);
     And(CReal::le_trans((a + c).down_real(p), low), CReal::le_trans(high, (b + d).real_up(p)))
 }
 
@@ -125,13 +128,15 @@ theorem Interval::between_l_real(z, c, d: Dyadic, {y: CReal}, hy: Bnd(c, d).HasR
     match Rat::le_total(0, z.rat()) {
         Inl(pos) => {
             let hz: (0 <= CReal::ofRat(z.rat())) = CReal::ofRat_le(pos);
-            And(Inl(CReal::le_respects(CReal::same_sym(z.real_mul(c)), zy.same_refl(), CReal::mul_le_mono_l(hy.left, hz))),
-                Inr(CReal::le_respects(zy.same_refl(), CReal::same_sym(z.real_mul(d)), CReal::mul_le_mono_l(hy.right, hz))))
+            let l: (CReal::ofRat((z * c).rat()) <= zy) = by mono_with([hy.left, hz]);
+            let r: (zy <= CReal::ofRat((z * d).rat())) = by mono_with([hy.right, hz]);
+            And(Inl(l), Inr(r))
         },
         Inr(neg) => {
             let hz: (CReal::ofRat(z.rat()) <= 0) = CReal::ofRat_le(neg);
-            And(Inr(CReal::le_respects(CReal::same_sym(z.real_mul(d)), zy.same_refl(), CReal::mul_le_mono_l_nonpos(hy.right, hz))),
-                Inl(CReal::le_respects(zy.same_refl(), CReal::same_sym(z.real_mul(c)), CReal::mul_le_mono_l_nonpos(hy.left, hz))))
+            let l: (CReal::ofRat((z * d).rat()) <= zy) = by mono_with([CReal::mul_le_mono_l_nonpos(hy.right, hz)]);
+            let r: (zy <= CReal::ofRat((z * c).rat())) = by mono_with([CReal::mul_le_mono_l_nonpos(hy.left, hz)]);
+            And(Inr(l), Inl(r))
         },
     }
 }
@@ -181,10 +186,10 @@ theorem Interval::mul_pos_has_real(a, b, c, d: Dyadic, p: Nat, ha: 0 <= a, hc: 0
     let hc0: (0 <= CReal::ofRat(c.rat())) = CReal::le_respects(CReal::ofRat_respects(Dyadic::rat_zero()), CReal::ofRat(c.rat()).same_refl(), Dyadic::real_le(hc));
     let y0: (0 <= y) = CReal::le_trans(hc0, hy.left);
     let b0: (0 <= CReal::ofRat(b.rat())) = CReal::le_trans(ha0, CReal::le_trans(hx.left, hx.right));
-    let low: (CReal::ofRat((a * c).rat()) <= x * y) = CReal::le_respects(CReal::same_sym(a.real_mul(c)), (x * y).same_refl(),
-        CReal::le_trans(CReal::mul_le_mono_l(hy.left, ha0), CReal::mul_le_mono_r(hx.left, y0)));
-    let high: (x * y <= CReal::ofRat((b * d).rat())) = CReal::le_respects((x * y).same_refl(), CReal::same_sym(b.real_mul(d)),
-        CReal::le_trans(CReal::mul_le_mono_r(hx.right, y0), CReal::mul_le_mono_l(hy.right, b0)));
+    // Both factors differ, which `mono` has no `CReal` law for: the chain
+    // is given, and `mono` reads the images.
+    let low: (CReal::ofRat((a * c).rat()) <= x * y) = by mono_with([CReal::le_trans(CReal::mul_le_mono_l(hy.left, ha0), CReal::mul_le_mono_r(hx.left, y0))]);
+    let high: (x * y <= CReal::ofRat((b * d).rat())) = by mono_with([CReal::le_trans(CReal::mul_le_mono_r(hx.right, y0), CReal::mul_le_mono_l(hy.right, b0))]);
     And(CReal::le_trans((a * c).down_real(p), low), CReal::le_trans(high, (b * d).real_up(p)))
 }
 
@@ -239,8 +244,7 @@ theorem Interval::recip_bnd_has_real(lo, hi: Dyadic, p: Nat, {x: CReal}, h: x.Ap
             Inl(_) => trivial,
             Inr(no) => {
                 let hn: (hi < 0) = Rat::lt_of_not_le(x := hi.rat(), y := Dyadic::rat(0), h := no);
-                let neg_pos: (0 < -hi) = Rat::lt_respects(Rat::same_sym(Dyadic::rat_neg(0)), Rat::same_sym(hi.rat_neg()),
-                    Rat::neg_lt(x := hi.rat(), y := Dyadic::rat(0), h := hn));
+                let neg_pos: (0 < -hi) = by cast_from(Rat::neg_lt(x := hi.rat(), y := Dyadic::rat(0), h := hn));
                 let x_neg: (x < 0) = CReal::lt_of_le_of_lt(hx.right, CReal::lt_respects(CReal::ofRat(hi.rat()).same_refl(), CReal::ofRat_respects(Dyadic::rat_zero()), Dyadic::real_lt(hn)));
                 let hnx: ((-x).Apart(0)) = Inr(CReal::lt_respects(CReal::neg_zero(), (-x).same_refl(), CReal::neg_lt(x_neg)));
                 let flipped: Bnd(-hi, -lo).HasReal(-x) = Interval::neg_has_real(Bnd(lo, hi), hx);
