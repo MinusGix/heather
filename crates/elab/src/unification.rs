@@ -441,10 +441,17 @@ fn spine_len(mut t: &Term) -> usize {
 }
 
 /// The subject is in the committed world, so even global index zero is
-/// rigid: only the pattern uses indices below `n` as scratch metas.
+/// rigid: only the pattern uses indices below `n` as scratch metas. A field
+/// read off a rigid receiver is as rigid as the receiver: a class
+/// dictionary's `K.inv(x)` is `fst@(snd@(…(d)))(x)`, which a morphism's
+/// `?neg_b(map(x))` learns `?neg_b := K.inv` from
+/// (issues/cast-reading-through-local-morphism.md).
 fn rigid_head(mut t: &Term) -> bool {
     while let Some((fun, _)) = spelling::app_of(t) {
         t = fun;
+    }
+    while let Some((_, receiver)) = projection_of(t) {
+        t = receiver;
     }
     matches!(t, Term::Var(_) | Term::GlobalTm { .. })
 }

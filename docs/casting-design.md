@@ -798,3 +798,65 @@ needs every reader of spelled source to read it back, and `ring` and the
 tactics re-elaborate spellings at positions that may have no expected type,
 where `↑` would be refused; it waits for a spelling that carries the target
 where none is implied (`cast<B>`), and for the migration of §7 step 5.
+
+## 15. A morphism in scope is an edge (2026-10-31)
+
+Issue `cast-reading-through-local-morphism`, the step §5.6's generic code
+needs: inside
+`section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K}, hom: OrderedRingHom<Rat, K>(map, …))`
+the morphism is a local, and the registered edges (`cast_edge_table`) name
+only globals, so `mono` read nothing through `hom`.
+
+- **Local edges.** `cast_local_edges` (`lib/std/tactic/cast.hthr`) reads
+  every local of the goal whose type is an `OrderedRingHom<A, B>(…)` or
+  `OrderedSemiringHom<A, B>(…)` as an edge. A morphism record is structural,
+  so its type does not view as `HGlobal` and unifying it with the family's
+  at holes solves nothing: its carriers occur only in its indices' types,
+  and its indices only under the fields' binders. So the family's
+  `respects_law` is applied to holes for its leading parameters, `A` and
+  `B` set first to the carriers of a local map in scope (a local of type
+  `A → B`, the section's `map: Rat → K`), and checked at the local: the
+  application check solves the index holes, which are then the local's map
+  and the source's `+`, `*` and negation (holes 2, 6, 7, 8). Only a local
+  whose type the view does not present is tried, and only where a local map
+  exists, so a concrete goal pays a view per local. A morphism over a
+  global map with no local map of its carriers in scope is not found. An
+  index may be a global or a local (`CastKey`), so a section's `map` and a
+  class's `+` are matched by their local, and an image is an `HLocal` call
+  as well as an `HGlobal` one. The source's subtraction, which the type
+  does not carry, is the carrier's `sub` found by its `add` (`cast_subs`).
+  The morphism itself is an `Expr` (`Candidate.edge`, `EdgeRef.hom`): the
+  law is applied to the local as to a global. `cast_move` and `cast_from`
+  read the local edges first, then the registered ones (`cast_all_edges`);
+  `cast_from` reads them once per call and threads them through
+  `cast_push`, since a failing `cast_from` search otherwise spent its
+  request budget re-reading the context; `cast_hom`, the premise tactic for
+  an order law, tries the morphism locals first.
+- **The unifier learns a class's field read.** The section's indices
+  `K.inv`, `K.unit` are field reads off the dictionary
+  (`fst@(snd@(…(d)))`), and `?neg_b(map(x))` against `K.inv(map(x))`
+  learned nothing: the value-spine rule aligns only against a rigid local or
+  global head. A projection chain off a rigid receiver is now a rigid head
+  too (`unification.rs`, `rigid_head`), learn-only as before.
+- **The composite needs nothing new.** `map(Dyadic::add(a, c).rat())` is an
+  image of an image: `cast_move` moves the inner one by `Dyadic::rat_hom`'s
+  `add_law` and carries the move through `hom`'s `respects_law`, and the
+  restated side `map(a.rat() + c.rat())` is then moved by `hom`'s own
+  `add_law`.
+- **`mono` at a class carrier reads casts.** A class carrier had no push
+  lemmas, so `mono_cast_or_leaf` never tried a cast there. It now has
+  `StrictOrder::le_of_same_l`/`_r` and `lt_of_same_l`/`_r`
+  (`ordered_field.hthr`, the shape of `Rat::le_of_same_of_le`); since the
+  order is a local and the lemma's leading parameters are the class's, the
+  push is `apply`'d (`mono_push_applied`): the moved point is a hole the
+  `≈` premise solves (`exact` of the move's proof) and the order premise is
+  the restated goal. An order between two images of one local map
+  (`map(p) <= map(q)`) is the morphism's `le_law`, as for a global map.
+- **What it does not do.** `ring` and `linarith` read no class carrier at
+  all (their carriers are `CommRingOfInt` instances), so a morphism local
+  gives them nothing yet; `cast_from` reads local edges only at a concrete
+  carrier (its carriers are `cast_carriers`, by global names). Both are
+  issue `cast-reading-at-class-carrier`.
+
+Pinned in `lib/_tests/std/tactic/cast_tests.hthr` (the `local_hom_…`
+section).

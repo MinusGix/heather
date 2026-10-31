@@ -388,6 +388,12 @@ fn mono_class_signs(args: List<Handle>, ls: List<ClassSign>) → Tac<List<Sign>>
     }
 }
 
+// The push lemmas at every class (a cast read through a morphism in scope,
+// `cast_local_edges`): `StrictOrder`'s, applied with the dictionary in scope.
+fn mono_class_pushes() → PushLaws {
+    PushLaws("StrictOrder::le_of_same_l", "StrictOrder::le_of_same_r", "StrictOrder::lt_of_same_l", "StrictOrder::lt_of_same_r")
+}
+
 // The run for a dictionary of class `c`, whose arguments are `args`, when
 // its `<=` or `<` is `rel`.
 fn mono_dictionary(c: MonoClass, args: List<Handle>, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
@@ -398,8 +404,8 @@ fn mono_dictionary(c: MonoClass, args: List<Handle>, rel: OpKey, given: List<Giv
             Some(s) => match l.same(rel) || s.same(rel) {
                 False => Pure(None),
                 True => mono_try_global("StrictOrder::le_refl").bind(λ rf => mono_try_global("StrictOrder::le_of_lt").bind(λ weaken =>
-                    mono_class_laws(args, c.laws).bind(λ laws => mono_class_signs(args, c.signs).bind(λ signs =>
-                    mono_run(l, s, rf, weaken, laws, signs, None, given).bind(λ M => Pure(Some(M))))))),
+                    mono_class_laws(args, c.laws).bind(λ laws => mono_class_signs(args, c.signs).bind(λ signs => mono_pushes(Some(mono_class_pushes())).bind(λ pushes =>
+                    mono_run(l, s, rf, weaken, laws, signs, pushes, given).bind(λ M => Pure(Some(M)))))))),
             },
         },
     }))
@@ -652,10 +658,12 @@ fn mono_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → 
 // what they are images of. The goal is never shown in between: the laws
 // are steps of the proof.
 
-// Are both handles one global applied to one argument, the same global?
+// Are both handles one map applied to one argument, the same map: a global,
+// or a local (a section's `map`, whose morphism is in scope)?
 fn mono_images_of_one(l, r: Handle) → Tac<Bool> {
     view(l).bind(λ vl => view(r).bind(λ vr => Pure(match vl {
         HGlobal(f, _, Cons(_, Nil)) => match vr { HGlobal(g, _, Cons(_, Nil)) => f.id.same(g.id), _ => False },
+        HLocal(x, Cons(_, Nil)) => match vr { HLocal(y, Cons(_, Nil)) => x.id.same(y.id), _ => False },
         _ => False,
     })))
 }
@@ -676,15 +684,31 @@ fn mono_sub(rel: OpKey, a, b: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
     }
 }
 
+// The move's proof where a premise is the `≈` it states, `prove` elsewhere.
+fn mono_moved_or(p: Expr, prove: Tac<Expr>) → Tac<Expr> {
+    attempt(exact(p)).bind(λ r => match r { Done(e) => Pure(e), Failed(_, _) => prove })
+}
+
+// At a class carrier the order is a local and the push lemma is
+// `StrictOrder`'s, whose dictionary is a premise: the lemma is applied, its
+// moved point a hole the `≈` premise solves, and its order premise is the
+// restated goal, proved by `prove`.
+fn mono_push_applied(push: GlobalRef, mv: Moved, prove: Tac<Expr>) → Tac<Option<Expr>> {
+    attempt(apply(Global(push), mono_moved_or(mv.proof, prove))).bind(λ r => match r { Done(e) => Pure(Some(e)), Failed(_, _) => mono_none() })
+}
+
 // `l rel r` from `l ≈ l2` and `l2 rel r` (`push` is the carrier's lemma
 // taking them in that order), when `l` is an image an edge moves.
 fn mono_push_left(rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
     cast_move(l, 4).bind(λ m => match m {
         None => mono_none(),
-        Some(mv) => mono_sub(rel, mv.to, r, prove).bind(λ q => Pure(match q {
-            None => None,
-            Some(h) => Some(App(App(App(App(App(Global(push), Hd(l)), Hd(mv.to)), Hd(r)), mv.proof), h)),
-        })),
+        Some(mv) => match rel {
+            KGlobal(_) => mono_sub(rel, mv.to, r, prove).bind(λ q => Pure(match q {
+                None => None,
+                Some(h) => Some(App(App(App(App(App(Global(push), Hd(l)), Hd(mv.to)), Hd(r)), mv.proof), h)),
+            })),
+            _ => mono_push_applied(push, mv, prove),
+        },
     })
 }
 
@@ -692,10 +716,13 @@ fn mono_push_left(rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) �
 fn mono_push_right(rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
     cast_move(r, 4).bind(λ m => match m {
         None => mono_none(),
-        Some(mv) => mono_sub(rel, l, mv.to, prove).bind(λ q => Pure(match q {
-            None => None,
-            Some(h) => Some(App(App(App(App(App(Global(push), Hd(l)), Hd(mv.to)), Hd(r)), mv.proof), h)),
-        })),
+        Some(mv) => match rel {
+            KGlobal(_) => mono_sub(rel, l, mv.to, prove).bind(λ q => Pure(match q {
+                None => None,
+                Some(h) => Some(App(App(App(App(App(Global(push), Hd(l)), Hd(mv.to)), Hd(r)), mv.proof), h)),
+            })),
+            _ => mono_push_applied(push, mv, prove),
+        },
     })
 }
 
