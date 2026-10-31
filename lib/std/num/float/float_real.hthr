@@ -28,7 +28,12 @@
 // every nonnegative real (`Format::real_error_nonneg`,
 // `real_relative_nonneg`), and in particular for the root
 // (`Finite::sqrt_real_error`, `sqrt_real_relative`), the bound that waited
-// on this module.
+// on this module. At a real of either sign (`Format::real_error`,
+// `real_relative`) the sign is split inside the `≤`, which needs no decision.
+//
+// The root of a real is `CReal::sqrt` (creal.hthr); at a float's real it is
+// `sqrt_rat` of the value, so the float root rounds it
+// (`Finite::sqrt_rounds_root`).
 
 import logic;
 import bool;
@@ -230,4 +235,126 @@ theorem Finite::sqrt_real_relative({F: Format}, a: Finite(F), mode: Mode, nan: F
     let hr: RoundsToReal(F, mode, s, Fin(r)) = j(is, λ v _ => RoundsToReal(F, mode, s, v), Finite::sqrt_real(a, mode, nan, nn, s, root));
     F.real_relative_nonneg(mode, s, r, root.left((Finite::min_normal(F)).val(), Rat::le_of_lt(Finite::min_normal_pos(F)), normal),
         root.right((Finite::max_finite(F)).val(), Finite::max_finite_nonneg(F), range), hr)
+}
+
+// ---------------------------------------------------------------------------
+// The error model at a real of either sign. Whether `x >= 0` cannot be
+// decided, but each conclusion is a `≤`, a negation at `CReal`, so
+// `CReal::le_by_sign` splits on it: the nonpositive side cuts the rounding
+// interval to `[-M, 0]` (or `[-M, -m]`) and reads the rational bound at its
+// ends through `CReal::err_between_nonpos`.
+
+// The error model with underflow at a nonpositive real in range.
+theorem Format::real_error_nonpos(self F: Format, mode: Mode, x: CReal, r: Finite(F), np: x <= 0,
+    range: CReal::ofRat(-(Finite::max_finite(F)).val()) <= x, hr: RoundsToReal(F, mode, x, Fin(r))):
+    (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * -x + CReal::ofRat(F.eta(mode))
+{
+    let M = (Finite::max_finite(F)).val();
+    match F.rounds_real_cut(mode, Fin(r), -M, 0, range, np, hr) {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => {
+                let hi_np: (hi <= 0) = w.right.left;
+                let lo_np: (lo <= 0) = CReal::le_of_ofRat_le(p := lo, q := 0, h := CReal::le_trans(w.right.right.left, np));
+                let hi_M: (-M <= hi) = CReal::le_of_ofRat_le(p := -M, q := hi, h := CReal::le_trans(range, w.right.right.right.left));
+                let lo_M: (-M <= lo) = w.left;
+                let at_lo = F.error_bound(mode, lo, r, Rat::le_respects(Rat::same_sym(lo.abs_of_nonpos(lo_np)), M.same_refl(), linarith(lo_M)), w.right.right.right.right.left);
+                let at_hi = F.error_bound(mode, hi, r, Rat::le_respects(Rat::same_sym(hi.abs_of_nonpos(hi_np)), M.same_refl(), linarith(hi_M)), w.right.right.right.right.right);
+                CReal::err_between_nonpos(lo, hi, r.val(), F.u(mode), F.eta(mode), Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode),
+                    w.right.right.left, w.right.right.right.left, (Rat::sides_of_abs_nonpos(lo_np, at_lo)).left, (Rat::sides_of_abs_nonpos(hi_np, at_hi)).right)
+            },
+        },
+    }
+}
+
+// The model with underflow at every real in range, `|r - x| <= u·|x| + η`:
+// the conclusion is a `≤`, so the sign of `x` is split inside it.
+theorem Format::real_error(self F: Format, mode: Mode, x: CReal, r: Finite(F), range: x.abs() <= CReal::ofRat((Finite::max_finite(F)).val()),
+    hr: RoundsToReal(F, mode, x, Fin(r))):
+    (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * x.abs() + CReal::ofRat(F.eta(mode))
+{
+    let M = (Finite::max_finite(F)).val();
+    let U = CReal::ofRat(F.u(mode));
+    let u_nn: (0 <= U) = CReal::ofRat_le(Rat::le_of_lt(F.u_pos(mode)));
+    CReal::le_by_sign(x,
+        λ nn => {
+            let b = F.real_error_nonneg(mode, x, r, nn, CReal::le_trans(x.le_abs(), range), hr);
+            let m: (U * x <= U * x.abs()) = CReal::mul_le_mono_l(x.le_abs(), u_nn);
+            linarith(b, m)
+        },
+        λ np => {
+            let low: (CReal::ofRat(-M) <= x) = CReal::le_of_same_l(CReal::ofRat_neg(M), linarith(x.neg_le_abs(), range));
+            let b = F.real_error_nonpos(mode, x, r, np, low, hr);
+            let m: (U * -x <= U * x.abs()) = CReal::mul_le_mono_l(x.neg_le_abs(), u_nn);
+            linarith(b, m)
+        })
+}
+
+// The relative error at a nonpositive real in the normal range.
+theorem Format::real_relative_nonpos(self F: Format, mode: Mode, x: CReal, r: Finite(F), normal: x <= CReal::ofRat(-(Finite::min_normal(F)).val()),
+    range: CReal::ofRat(-(Finite::max_finite(F)).val()) <= x, hr: RoundsToReal(F, mode, x, Fin(r))):
+    (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * -x
+{
+    let M = (Finite::max_finite(F)).val();
+    let m = (Finite::min_normal(F)).val();
+    let m_pos: (0 < m) = Finite::min_normal_pos(F);
+    match F.rounds_real_cut(mode, Fin(r), -M, -m, range, normal, hr) {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => {
+                let hi_m: (hi <= -m) = w.right.left;
+                let lo_m: (lo <= -m) = CReal::le_of_ofRat_le(p := lo, q := -m, h := CReal::le_trans(w.right.right.left, normal));
+                let hi_M: (-M <= hi) = CReal::le_of_ofRat_le(p := -M, q := hi, h := CReal::le_trans(range, w.right.right.right.left));
+                let lo_M: (-M <= lo) = w.left;
+                let lo_np: (lo <= 0) = linarith(lo_m, m_pos);
+                let hi_np: (hi <= 0) = linarith(hi_m, m_pos);
+                let ea = lo.abs_of_nonpos(lo_np);
+                let eb = hi.abs_of_nonpos(hi_np);
+                let at_lo = F.relative_error(mode, lo, r, Rat::le_respects(Rat::same_sym(ea), M.same_refl(), linarith(lo_M)),
+                    Rat::le_respects(m.same_refl(), Rat::same_sym(ea), linarith(lo_m)), w.right.right.right.right.left);
+                let at_hi = F.relative_error(mode, hi, r, Rat::le_respects(Rat::same_sym(eb), M.same_refl(), linarith(hi_M)),
+                    Rat::le_respects(m.same_refl(), Rat::same_sym(eb), linarith(hi_m)), w.right.right.right.right.right);
+                let at_lo0 = Rat::le_respects((r.val() - lo).abs().same_refl(), Rat::same_sym(Rat::add_zero(F.u(mode) * lo.abs())), at_lo);
+                let at_hi0 = Rat::le_respects((r.val() - hi).abs().same_refl(), Rat::same_sym(Rat::add_zero(F.u(mode) * hi.abs())), at_hi);
+                let b = CReal::err_between_nonpos(lo, hi, r.val(), F.u(mode), 0, Rat::le_of_lt(F.u_pos(mode)), F.u_le_one(mode),
+                    w.right.right.left, w.right.right.right.left, (Rat::sides_of_abs_nonpos(lo_np, at_lo0)).left, (Rat::sides_of_abs_nonpos(hi_np, at_hi0)).right);
+                CReal::le_of_same_r(CReal::same_sym(CReal::add_zero(CReal::ofRat(F.u(mode)) * -x)), b)
+            },
+        },
+    }
+}
+
+// The standard model at every real in the normal range, `|r - x| <= u·|x|`.
+// Being normal is stated as `m <= |x|`; the sign split happens inside the
+// `≤`, where `m <= |x|` and `x <= 0` give `x <= -m` (`|x| ≈ -x` there).
+theorem Format::real_relative(self F: Format, mode: Mode, x: CReal, r: Finite(F), normal: CReal::ofRat((Finite::min_normal(F)).val()) <= x.abs(),
+    range: x.abs() <= CReal::ofRat((Finite::max_finite(F)).val()), hr: RoundsToReal(F, mode, x, Fin(r))):
+    (r.real() - x).abs() <= CReal::ofRat(F.u(mode)) * x.abs()
+{
+    let M = (Finite::max_finite(F)).val();
+    let m = (Finite::min_normal(F)).val();
+    let U = CReal::ofRat(F.u(mode));
+    let u_nn: (0 <= U) = CReal::ofRat_le(Rat::le_of_lt(F.u_pos(mode)));
+    CReal::le_by_sign(x,
+        λ nn => {
+            let b = F.real_relative_nonneg(mode, x, r, CReal::le_trans(normal, CReal::le_of_same(x.abs_of_nonneg(nn))), CReal::le_trans(x.le_abs(), range), hr);
+            let m1: (U * x <= U * x.abs()) = CReal::mul_le_mono_l(x.le_abs(), u_nn);
+            linarith(b, m1)
+        },
+        λ np => {
+            let low: (CReal::ofRat(-M) <= x) = CReal::le_of_same_l(CReal::ofRat_neg(M), linarith(x.neg_le_abs(), range));
+            let high: (x <= CReal::ofRat(-m)) = CReal::le_of_same_r(CReal::ofRat_neg(m), linarith(normal, CReal::le_of_same(x.abs_of_nonpos(np))));
+            let b = F.real_relative_nonpos(mode, x, r, high, low, hr);
+            let m1: (U * -x <= U * x.abs()) = CReal::mul_le_mono_l(x.neg_le_abs(), u_nn);
+            linarith(b, m1)
+        })
+}
+
+// ---------------------------------------------------------------------------
+// The root of a real (creal.hthr, `CReal::sqrt`): at a float's real it is
+// `sqrt_rat` of its value, so the float root rounds it too.
+
+// The float root is a correct rounding of the root of the float's real.
+theorem Finite::sqrt_rounds_root({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), nn: 0 <= a.val()):
+    RoundsToReal(F, mode, a.real().sqrt(), a.sqrt(mode := mode, nan := nan))
+{
+    F.rounds_real_respects(mode, CReal::same_sym(CReal::sqrt_ofRat(a.val())), a.sqrt(mode := mode, nan := nan), Finite::sqrt_rounds_real(a, mode, nan, nn))
 }

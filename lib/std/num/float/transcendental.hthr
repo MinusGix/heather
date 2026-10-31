@@ -54,6 +54,48 @@ theorem Format::log_fin_correct(self F: Format, mode: Mode, f: Finite(F), pos: 0
     F.round_real_correct(mode, CReal::log_box(f.val(), pos), tries, r, is)
 }
 
+// A positive argument: 1 is answered before the search, as +0 in every mode
+// (IEEE 754 §9.2; issues/float-log-one-exact.md). At 1 the real is the
+// rational 0, a breakpoint in every directed mode. The search's enclosure of
+// log 1 happens to be exactly [0, 0] (the series' first term is 0 and the
+// binade's exponent 0), but nothing in its theorem says so or fixes the
+// zero's sign, and an enclosure that only shrinks to 0 would straddle the
+// breakpoint forever; answered first, +0 is a theorem (`Float::log_one`).
+fn Format::log_pos(self F: Format, mode: Mode, a: Finite(F), pos: 0 < a.val(), tries: Nat) → Option<Float(F)> {
+    match a.val().same_dec(1) { Inl(_) => Some(Float::Fin(Finite::zero(F, False))), Inr(_) => F.log_fin(mode, a, pos, tries) }
+}
+
+// +0 rounds 0 in every mode.
+theorem Format::rounds_zero(self F: Format, mode: Mode): RoundsTo(F, mode, 0, Float::Fin(Finite::zero(F, False))) {
+    F.rounds_respects(mode, 0, (Finite::zero(F, False)).val(), Rat::same_sym(Finite::zero_val(F)), Float::Fin(Finite::zero(F, False)), F.rounds_exact(mode, Finite::zero(F, False)))
+}
+
+theorem Format::log_pos_correct(self F: Format, mode: Mode, a: Finite(F), pos: 0 < a.val(), tries: Nat, r: Float(F), is: F.log_pos(mode, a, pos, tries) = Some(r)):
+    RoundsToReal(F, mode, CReal::log_rat(a.val(), pos), r)
+{
+    match a.val().same_dec(1) as λ c => (match c as λ _ => Option<Float(F)> { Inl(_) => Some(Float::Fin(Finite::zero(F, False))), Inr(_) => F.log_fin(mode, a, pos, tries) }) = Some(r) →
+        RoundsToReal(F, mode, CReal::log_rat(a.val(), pos), r)
+    {
+        Inl(one) => λ is0 => {
+            let e: (Float::Fin(Finite::zero(F, False)) = r) = Option::some_inj(Float::Fin(Finite::zero(F, False)), r, is0);
+            let at: RoundsToReal(F, mode, CReal::ofRat(0), r) = j(e, λ o _ => RoundsToReal(F, mode, CReal::ofRat(0), o), F.rounds_real_of_rat(mode, 0, Float::Fin(Finite::zero(F, False)), F.rounds_zero(mode)));
+            F.rounds_real_respects(mode, CReal::same_sym(CReal::log_rat_of_one(a.val(), pos, one)), r, at)
+        },
+        Inr(_) => λ is1 => F.log_fin_correct(mode, a, pos, tries, r, is1),
+    }(is)
+}
+
+theorem Format::log_pos_one(self F: Format, mode: Mode, a: Finite(F), pos: 0 < a.val(), tries: Nat, one: a.val() ≈ 1):
+    F.log_pos(mode, a, pos, tries) = Some(Float::Fin(Finite::zero(F, False)))
+{
+    match a.val().same_dec(1) as λ c => (match c as λ _ => Option<Float(F)> { Inl(_) => Some(Float::Fin(Finite::zero(F, False))), Inr(_) => F.log_fin(mode, a, pos, tries) }) =
+        Some(Float::Fin(Finite::zero(F, False)))
+    {
+        Inl(_) => refl,
+        Inr(no) => false_elim(no(one)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Every float (IEEE 754 §9.2, issues/float-exp-log-specials.md).
 //
@@ -108,7 +150,7 @@ fn Float::log({F: Format}, self x: Float(F), tries: Nat, mode: Mode := NearestEv
     match x {
         Fin(a) => match a.sign_dec() {
             Inl(_) => Some(F.div_by_zero(True, nan)),
-            Inr(c) => match c { Inl(pos) => F.log_fin(mode, a, pos, tries), Inr(_) => Some(NaN(nan)) },
+            Inr(c) => match c { Inl(pos) => F.log_pos(mode, a, pos, tries), Inr(_) => Some(NaN(nan)) },
         },
         Inf(n, h) => match n { False => Some(Inf(False, h)), True => Some(NaN(nan)) },
         NaN(h) => Some(NaN(h)),
@@ -123,13 +165,13 @@ theorem Float::log_correct({F: Format}, a: Finite(F), pos: 0 < a.val(), tries: N
     let no = Rat::lt_irrefl(0);
     match a.sign_dec() as λ c => (match c as λ _ => Option<Float(F)> {
         Inl(_) => Some(F.div_by_zero(True, nan)),
-        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
+        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_pos(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
     }) = Some(r) → RoundsToReal(F, mode, CReal::log_rat(a.val(), pos), r) {
         Inl(em) => λ _ => false_elim(no(Rat::lt_respects(Rat::same_refl(0), Finite::val_of_mag_zero(a, em), pos))),
-        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(r) →
+        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_pos(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(r) →
             RoundsToReal(F, mode, CReal::log_rat(a.val(), pos), r)
         {
-            Inl(p) => λ is1 => F.rounds_real_respects(mode, CReal::log_rat_irrel(a.val(), p, pos), r, F.log_fin_correct(mode, a, p, tries, r, is1)),
+            Inl(p) => λ is1 => F.rounds_real_respects(mode, CReal::log_rat_irrel(a.val(), p, pos), r, F.log_pos_correct(mode, a, p, tries, r, is1)),
             Inr(neg) => λ _ => false_elim(no(Rat::lt_trans(pos, neg))),
         },
     }(is)
@@ -143,10 +185,10 @@ theorem Float::log_zero({F: Format}, a: Finite(F), z: a.mag = 0, tries: Nat, mod
     let vz = Finite::val_of_mag_zero(a, z);
     match a.sign_dec() as λ c => (match c as λ _ => Option<Float(F)> {
         Inl(_) => Some(F.div_by_zero(True, nan)),
-        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
+        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_pos(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
     }) = Some(F.div_by_zero(True, nan)) {
         Inl(_) => refl,
-        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(F.div_by_zero(True, nan)) {
+        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_pos(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(F.div_by_zero(True, nan)) {
             Inl(p) => false_elim(no(Rat::lt_respects(Rat::same_refl(0), vz, p))),
             Inr(neg) => false_elim(no(Rat::lt_respects(vz, Rat::same_refl(0), neg))),
         },
@@ -168,10 +210,10 @@ theorem Float::log_neg({F: Format}, a: Finite(F), neg: a.val() < 0, tries: Nat, 
     let no = Rat::lt_irrefl(0);
     match a.sign_dec() as λ c => (match c as λ _ => Option<Float(F)> {
         Inl(_) => Some(F.div_by_zero(True, nan)),
-        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
+        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_pos(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
     }) = Some(NaN(nan)) {
         Inl(em) => false_elim(no(Rat::lt_respects(Finite::val_of_mag_zero(a, em), Rat::same_refl(0), neg))),
-        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(NaN(nan)) {
+        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_pos(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(NaN(nan)) {
             Inl(p) => false_elim(no(Rat::lt_trans(p, neg))),
             Inr(_) => refl,
         },
@@ -191,3 +233,22 @@ theorem Float::log_neg_inf({F: Format}, h: F.specials.has_inf().IsTrue(), tries:
 }
 
 theorem Float::log_nan({F: Format}, h, nan: F.specials.has_nan().IsTrue(), tries: Nat, mode: Mode): Float::log(NaN(h), tries, mode := mode, nan := nan) = Some(NaN(h)) { refl }
+
+// log(1) = +0 exactly, in every mode, at any spelling of 1.
+theorem Float::log_one({F: Format}, a: Finite(F), one: a.val() ≈ 1, tries: Nat, mode: Mode, nan: F.specials.has_nan().IsTrue()):
+    Float::log(Float::Fin(a), tries, mode := mode, nan := nan) = Some(Float::Fin(Finite::zero(F, False)))
+{
+    let no = Rat::lt_irrefl(0);
+    let pos1: (0 < a.val()) = Rat::lt_respects(Rat::same_refl(0), Rat::same_sym(one), trivial);
+    let res = Some(Float::Fin(Finite::zero(F, False)));
+    match a.sign_dec() as λ c => (match c as λ _ => Option<Float(F)> {
+        Inl(_) => Some(F.div_by_zero(True, nan)),
+        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_pos(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
+    }) = res {
+        Inl(em) => false_elim(no(Rat::lt_respects(Rat::same_refl(0), Finite::val_of_mag_zero(a, em), pos1))),
+        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_pos(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = res {
+            Inl(p) => F.log_pos_one(mode, a, p, tries, one),
+            Inr(neg) => false_elim(no(Rat::lt_trans(pos1, neg))),
+        },
+    }
+}

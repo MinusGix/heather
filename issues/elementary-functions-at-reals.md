@@ -34,3 +34,4 @@ Scope:
 
 - 2026-10-27: docs/analysis-foundations-design.md §8 proposes the laws as formal identities proved by coinduction over Hurwitz series ([[formal-power-series]], §3.4) carried through evaluation as a ring homomorphism ([[power-series-evaluation]]); no real derivatives needed.
 - 2026-10-31: 2026-10-31: `CReal::log_rat` exists (lib/std/num/float/elementary.hthr, the atanh series after scaling into one binade, plus e·log 2), defined as that sum: `exp(log q) ≈ q` and `log(exp a) ≈ a` are owed here with the other laws ([[creal-compress-and-transcendentals]]).
+- 2026-10-31: `CReal::sqrt` exists at real arguments (creal.hthr; [[float-reals-next]]): terms are the rational function at a finer term of the argument, regular by a modulus of continuity (Hölder-½, `Rat::lt_root_floor_add`), with the law `√x·√x ≈ |x|` proved through the cut. The same template is the second route above.

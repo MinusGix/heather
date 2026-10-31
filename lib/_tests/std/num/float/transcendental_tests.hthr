@@ -101,3 +101,22 @@ theorem log_neg_open(): Float::log(Float::Fin(neg_two32()), 4) = Some(Float::NaN
 theorem log_two_rounds(): RoundsToReal(binary32(), NearestEven, CReal::log_rat(two32().val(), omega), Float::Fin(Finite(False, 11629080, 125, trivial))) {
     Float::log_correct(two32(), omega, 4, NearestEven, trivial, Float::Fin(Finite(False, 11629080, 125, trivial)), log_two_float_32())
 }
+
+// log(1) = +0 exactly, in every mode (issues/float-log-one-exact.md): answered
+// before the search, so even zero tries suffice.
+theorem log_one_32(): Float::log(Float::Fin(one32()), 0) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem log_one_32_down(): Float::log(Float::Fin(one32()), 0, mode := TowardNeg) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem log_one_32_up(): Float::log(Float::Fin(one32()), 0, mode := TowardPos) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem log_one_32_zero(): Float::log(Float::Fin(one32()), 0, mode := TowardZero) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem log_one_64_down(): Float::log(Float::Fin(one64()), 0, mode := TowardNeg) = Some(Float::Fin(Finite::zero(binary64(), False))) { refl }
+// The search alone lands on +0 too at this spelling, since its enclosure of
+// log 1 is exactly [0, 0] (first term 0, exponent 0); but only the answer
+// before it is a theorem about the zero's sign (`Float::log_one`).
+theorem log_one_search_down(): binary32().log_fin(TowardNeg, one32(), omega, 4) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+// The theorem at a neutral mode and tries, and the value it rounds.
+theorem log_one_any(tries: Nat, mode: Mode): Float::log(Float::Fin(one32()), tries, mode := mode) = Some(Float::Fin(Finite::zero(binary32(), False))) {
+    Float::log_one(one32(), refl, tries, mode, trivial)
+}
+theorem log_one_rounds(mode: Mode): RoundsToReal(binary32(), mode, CReal::log_rat(one32().val(), omega), Float::Fin(Finite::zero(binary32(), False))) {
+    Float::log_correct(one32(), omega, 0, mode, trivial, Float::Fin(Finite::zero(binary32(), False)), log_one_any(0, mode))
+}

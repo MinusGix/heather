@@ -295,3 +295,60 @@ fn CReal::log_box(q: Rat, pos: 0 < q) → Enclosed { CReal::log_frac_box(q.num.n
 theorem CReal::log_rat_irrel(q: Rat, p1, p2: 0 < q): CReal::log_rat(q, p1) ≈ CReal::log_rat(q, p2) {
     (CReal::log_rat(q, p1)).same_of_terms(CReal::log_rat(q, p2), λ n => (CReal::log_rat(q, p1)).at(n).same_refl())
 }
+
+// ---------------------------------------------------------------------------
+// log 1 = 0 (issues/float-log-one-exact.md): the one rational value log takes
+// at a rational, which the search alone cannot round in a directed mode. At
+// `a = b` the series is 2·atanh(0), whose first term, and so every term,
+// is 0, and the binade's exponent is 0, which scales the ln 2 term away.
+
+theorem Series::atanh2_diag(A, B: Nat, ab: A = B, small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1):
+    (Series::atanh2(A, B, small)).real() ≈ CReal::ofRat(0)
+{
+    let s = Series::atanh2(A, B, small);
+    let c = Rat::inv_succ(A + B - 1);
+    let z: (A.int() - B.int() + (A.int() - B.int()) = 0) = omega(ab);
+    let first: (s.term(0) ≈ 0) = j(sym(z), λ v _ => Rat::ofInt(v) * c ≈ 0, c.zero_mul());
+    let a0: (s.term(0).abs() ≈ 0) = Rat::abs_respects(first);
+    let err: (s.err(0) ≈ 0) = Rat::same_trans(Rat::add_respects(a0, a0), Rat::add_zero(0));
+    s.same_of_exact(0, omega, err)
+}
+
+// A balanced binade with equal ends and exponent 0 has log 0.
+theorem Binade::log_zero(self B: Binade, h: B.Balanced(), ab: B.a = B.b, e0: B.e = 0):
+    (RAdd(RBox((B.series(h)).enclosed()), RMul(RRat(Rat::ofInt(B.e)), RBox(Series::ln2().enclosed())))).eval() ≈ CReal::ofRat(0)
+{
+    let L = CReal::ln2();
+    let ser = Series::atanh2_diag(B.a, B.b, ab, Series::atanh_close(B.a, B.b, h.left, h.right));
+    let scaled: (CReal::ofRat(Rat::ofInt(B.e)) * L ≈ CReal::ofRat(0)) = j(sym(e0), λ v _ => CReal::ofRat(Rat::ofInt(v)) * L ≈ CReal::ofRat(0), L.zero_mul());
+    CReal::same_trans(CReal::add_respects(ser, scaled), CReal::add_zero(CReal::ofRat(0)))
+}
+
+// a/a is its own binade: both widths agree, so the first arm scales by 2^0.
+theorem Binade::of_diag(a: Nat): (Binade::of(a, a)).a = (Binade::of(a, a)).b ∧ (Binade::of(a, a)).e = 0 {
+    let w = a.width();
+    match w.le_dec(w) as λ c => (Binade::at(a, a, c)).a = (Binade::at(a, a, c)).b ∧ (Binade::at(a, a, c)).e = 0 {
+        Inl(_) => {
+            let z: (w - w = 0) = omega;
+            let one: (a = a * Nat::pow(2, w - w)) = j(sym(z), λ k _ => a = a * Nat::pow(2, k), omega);
+            And(one, omega(z))
+        },
+        Inr(n) => false_elim(n(omega)),
+    }
+}
+
+theorem CReal::log_frac_diag(a: Nat, pa, pb: 0 < a): CReal::log_frac(a, a, pa, pb) ≈ CReal::ofRat(0) {
+    let d = Binade::of_diag(a);
+    (Binade::of(a, a)).log_zero(Binade::of_close(a, a, pa, pb), d.left, d.right)
+}
+
+theorem CReal::log_frac_same(a, b: Nat, ab: a = b, pa: 0 < a, pb: 0 < b): CReal::log_frac(a, b, pa, pb) ≈ CReal::ofRat(0) {
+    j(ab, λ v _ => (pv: 0 < v) → CReal::log_frac(a, v, pa, pv) ≈ CReal::ofRat(0), λ pv => CReal::log_frac_diag(a, pa, pv))(pb)
+}
+
+// log q = 0 at every q ≈ 1, whatever its spelling: `num = den` there.
+theorem CReal::log_rat_of_one(q: Rat, pos: 0 < q, one: q ≈ 1): CReal::log_rat(q, pos) ≈ CReal::ofRat(0) {
+    let e: (q.num = q.den.int()) = omega(one);
+    let n: (q.num.natAbs() = q.den) = j(sym(e), λ v _ => v.natAbs() = q.den, refl);
+    CReal::log_frac_same(q.num.natAbs(), q.den, n, q.num_abs_pos(pos), q.den_pos)
+}
