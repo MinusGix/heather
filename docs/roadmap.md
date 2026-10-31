@@ -27,6 +27,12 @@ reviewed the first draft on 2026-10-20; changes since are in the log.
   [--milestone M,N]` retags without touching `updated:`. The web viewer's
   **Areas** tab shows the same order, with each area's direction and
   milestones.
+- `scripts/plan-digest` renders this file's areas and milestones with each
+  milestone's progress and last activity, every open issue as one line, and
+  the last month of master, into `/mnt/project-files/plan/` (the project's
+  shared folder) for readers without a checkout. It reads a commit
+  (`--ref`, default `origin/master`), not the working tree, and is
+  idempotent; `--fetch` refreshes first.
 - `scripts/issue check` reads the two tables below. An unknown area or
   milestone in an issue is an error, and so is a submilestone whose parent
   is missing or belongs to another area; open issues with no area are one
