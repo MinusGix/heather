@@ -124,3 +124,28 @@ theorem from_differ(a, c: Dyadic, x, y: Rat, h: (a + c).rat() <= x): a.rat() + c
 // The facts must still be there: a cast step does not invent a bound.
 // expect-error: mono: nothing proves this goal
 theorem no_fact(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x): (a + c).rat() <= x + y { by mono() }
+
+// A morphism in scope is an edge (issue cast-reading-through-local-morphism):
+// generic code over an ordered field takes its embedding of `Rat` as a
+// section parameter (docs/casting-design.md §5.6), and `mono` reads its
+// images through it, and through its composite with `Dyadic::rat_hom`. In
+// the section `+` and `<=` are `K`'s, so the source's are spelled out.
+section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
+        hom: OrderedRingHom<Rat, K>(map, Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+            ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
+
+theorem local_hom_add(p, q: Rat, x, y: K, hx: map(p) <= x, hy: map(q) <= y): map(Rat::add(p, q)) <= x + y { by mono_with([hx, hy]) }
+
+theorem local_hom_add_right(p, q: Rat, x, y: K, hx: x <= map(p), hy: y <= map(q)): x + y <= map(Rat::add(p, q)) { by mono_with([hx, hy]) }
+
+theorem local_hom_composite(a, c: Dyadic, x, y: K, hx: map(a.rat()) <= x, hy: map(c.rat()) <= y): map(Dyadic::add(a, c).rat()) <= x + y {
+    by mono_with([hx, hy])
+}
+
+theorem local_hom_composite_strict(a, c: Dyadic, x, y: K, hx: map(a.rat()) < x, hy: map(c.rat()) <= y): map(Dyadic::add(a, c).rat()) < x + y {
+    by mono_with([hx, hy])
+}
+
+theorem local_hom_order(p, q: Rat, h: Rat::Le(p, q)): map(p) <= map(q) { by mono_with([h]) }
+
+}
