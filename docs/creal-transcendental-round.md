@@ -178,8 +178,11 @@ binary64 waits on them. Nothing in the proofs does.
 
 ## Left out
 
-- **IEEE specials:** exp(±∞), log(0), log of a negative number, and NaN
-  ([float-exp-log-specials](../issues/float-exp-log-specials.md)).
+- **IEEE specials:** done since, as `Float::exp` and `Float::log` over every
+  float ([float-exp-log-specials](../issues/float-exp-log-specials.md)):
+  exp(±∞), exp(±0) = 1 exactly, log(±0) = -∞, log of a negative number and
+  log(-∞) invalid, NaN in, NaN out. log(1) = +0 exactly is still the search
+  ([float-log-one-exact](../issues/float-log-one-exact.md)).
 - **Termination:** a total `round_real_apart` from the Padé gap
   ([float-round-real-termination](../issues/float-round-real-termination.md)).
 - **Argument reduction for exp:** a large argument starts its series far out

@@ -25,6 +25,7 @@ import creal_interval;
 import series;
 import elementary;
 import round_real;
+import arith;
 
 // ---------------------------------------------------------------------------
 // exp
@@ -51,3 +52,141 @@ theorem Format::log_fin_correct(self F: Format, mode: Mode, f: Finite(F), pos: 0
 {
     F.round_real_correct(mode, CReal::log_box(f.val(), pos), tries, r, is)
 }
+
+// ---------------------------------------------------------------------------
+// Every float (IEEE 754 §9.2, issues/float-exp-log-specials.md).
+//
+// exp(+∞) = +∞ and exp(-∞) = +0; exp(±0) = 1 exactly, the one rational
+// value exp takes at a rational, which the search alone cannot round in a
+// directed mode, since every enclosure of 1 straddles it. log(±0) = -∞
+// (divide by zero), and NaN where the format has no infinity, as
+// `Format::div_by_zero` reads it; log of a negative and log(-∞) are invalid;
+// log(+∞) = +∞. NaN in, NaN out. Any other finite argument goes to the
+// search, and its `None` passes through. Overflow and underflow need nothing
+// here: a real past the largest float rounds to the format's overflow value
+// through the same search, since both ends of its enclosure do.
+
+fn Float::exp({F: Format}, self x: Float(F), tries: Nat, mode: Mode := NearestEven) → Option<Float(F)> {
+    match x {
+        Fin(a) => match a.mag { Zero => Some(F.round_exact(mode, 1, False)), Succ(_) => F.exp_fin(mode, a, tries) },
+        Inf(n, h) => match n { False => Some(Inf(False, h)), True => Some(Float::Fin(Finite::zero(F, False))) },
+        NaN(h) => Some(NaN(h)),
+    }
+}
+
+// A finite argument's result is the correct rounding of its exp.
+theorem Float::exp_correct({F: Format}, a: Finite(F), tries: Nat, mode: Mode, r: Float(F), is: Float::exp(Float::Fin(a), tries, mode := mode) = Some(r)):
+    RoundsToReal(F, mode, CReal::exp_rat(a.val()), r)
+{
+    match a.mag as λ m => a.mag = m → (match m as λ _ => Option<Float(F)> { Zero => Some(F.round_exact(mode, 1, False)), Succ(_) => F.exp_fin(mode, a, tries) }) = Some(r) →
+        RoundsToReal(F, mode, CReal::exp_rat(a.val()), r)
+    {
+        Zero => λ em is0 => {
+            let e: (F.round_exact(mode, 1, False) = r) = Option::some_inj(F.round_exact(mode, 1, False), r, is0);
+            let one: RoundsTo(F, mode, Dyadic::rat(1), r) = j(e, λ o _ => RoundsTo(F, mode, Dyadic::rat(1), o), F.round_exact_correct(mode, 1, False));
+            let at_one: RoundsToReal(F, mode, CReal::ofRat(Dyadic::rat(1)), r) = F.rounds_real_of_rat(mode, Dyadic::rat(1), r, one);
+            let same: (CReal::ofRat(Dyadic::rat(1)) ≈ CReal::exp_rat(a.val())) =
+                CReal::same_trans(CReal::ofRat_respects(Dyadic::rat_one()), CReal::same_sym(CReal::exp_rat_of_zero(a.val(), Finite::val_of_mag_zero(a, em))));
+            F.rounds_real_respects(mode, same, r, at_one)
+        },
+        Succ(_) => λ _ is1 => F.exp_fin_correct(mode, a, tries, r, is1),
+    }(refl, is)
+}
+
+theorem Float::exp_zero({F: Format}, a: Finite(F), z: a.mag = 0, tries: Nat, mode: Mode): Float::exp(Float::Fin(a), tries, mode := mode) = Some(F.round_exact(mode, 1, False)) {
+    j(sym(z), λ m _ => (match m as λ _ => Option<Float(F)> { Zero => Some(F.round_exact(mode, 1, False)), Succ(_) => F.exp_fin(mode, a, tries) }) = Some(F.round_exact(mode, 1, False)), refl)
+}
+
+theorem Float::exp_inf({F: Format}, h: F.specials.has_inf().IsTrue(), tries: Nat, mode: Mode): Float::exp(Inf(False, h), tries, mode := mode) = Some(Inf(False, h)) { refl }
+
+theorem Float::exp_neg_inf({F: Format}, h: F.specials.has_inf().IsTrue(), tries: Nat, mode: Mode): Float::exp(Inf(True, h), tries, mode := mode) = Some(Float::Fin(Finite::zero(F, False))) { refl }
+
+theorem Float::exp_nan({F: Format}, h: F.specials.has_nan().IsTrue(), tries: Nat, mode: Mode): Float::exp(NaN(h), tries, mode := mode) = Some(NaN(h)) { refl }
+
+fn Float::log({F: Format}, self x: Float(F), tries: Nat, mode: Mode := NearestEven, nan: F.specials.has_nan().IsTrue() := trivial) → Option<Float(F)> {
+    match x {
+        Fin(a) => match a.sign_dec() {
+            Inl(_) => Some(F.div_by_zero(True, nan)),
+            Inr(c) => match c { Inl(pos) => F.log_fin(mode, a, pos, tries), Inr(_) => Some(NaN(nan)) },
+        },
+        Inf(n, h) => match n { False => Some(Inf(False, h)), True => Some(NaN(nan)) },
+        NaN(h) => Some(NaN(h)),
+    }
+}
+
+// A positive argument's result is the correct rounding of its log, read at
+// any proof that it is positive.
+theorem Float::log_correct({F: Format}, a: Finite(F), pos: 0 < a.val(), tries: Nat, mode: Mode, nan: F.specials.has_nan().IsTrue(), r: Float(F),
+    is: Float::log(Float::Fin(a), tries, mode := mode, nan := nan) = Some(r)): RoundsToReal(F, mode, CReal::log_rat(a.val(), pos), r)
+{
+    let no = Rat::lt_irrefl(0);
+    match a.sign_dec() as λ c => (match c as λ _ => Option<Float(F)> {
+        Inl(_) => Some(F.div_by_zero(True, nan)),
+        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
+    }) = Some(r) → RoundsToReal(F, mode, CReal::log_rat(a.val(), pos), r) {
+        Inl(em) => λ _ => false_elim(no(Rat::lt_respects(Rat::same_refl(0), Finite::val_of_mag_zero(a, em), pos))),
+        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(r) →
+            RoundsToReal(F, mode, CReal::log_rat(a.val(), pos), r)
+        {
+            Inl(p) => λ is1 => F.rounds_real_respects(mode, CReal::log_rat_irrel(a.val(), p, pos), r, F.log_fin_correct(mode, a, p, tries, r, is1)),
+            Inr(neg) => λ _ => false_elim(no(Rat::lt_trans(pos, neg))),
+        },
+    }(is)
+}
+
+// log(±0) is the divide-by-zero result: -∞, or NaN without infinities.
+theorem Float::log_zero({F: Format}, a: Finite(F), z: a.mag = 0, tries: Nat, mode: Mode, nan: F.specials.has_nan().IsTrue()):
+    Float::log(Float::Fin(a), tries, mode := mode, nan := nan) = Some(F.div_by_zero(True, nan))
+{
+    let no = Rat::lt_irrefl(0);
+    let vz = Finite::val_of_mag_zero(a, z);
+    match a.sign_dec() as λ c => (match c as λ _ => Option<Float(F)> {
+        Inl(_) => Some(F.div_by_zero(True, nan)),
+        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
+    }) = Some(F.div_by_zero(True, nan)) {
+        Inl(_) => refl,
+        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(F.div_by_zero(True, nan)) {
+            Inl(p) => false_elim(no(Rat::lt_respects(Rat::same_refl(0), vz, p))),
+            Inr(neg) => false_elim(no(Rat::lt_respects(vz, Rat::same_refl(0), neg))),
+        },
+    }
+}
+
+theorem Float::log_zero_inf({F: Format}, a: Finite(F), z: a.mag = 0, tries: Nat, mode: Mode, nan: F.specials.has_nan().IsTrue(), has: F.specials.has_inf().IsTrue()):
+    Float::log(Float::Fin(a), tries, mode := mode, nan := nan) = Some(Inf(True, has))
+{
+    let dz: (F.div_by_zero(True, nan) = Inf(True, has)) =
+        j(sym(is_true_dec_yes(F.specials.has_inf(), has)), λ c _ => (match c as λ _ => Float(F) { Inl(hh) => Inf(True, hh), Inr(_) => NaN(nan) }) = Inf(True, has), refl);
+    j(dz, λ o _ => Float::log(Float::Fin(a), tries, mode := mode, nan := nan) = Some(o), Float::log_zero(a, z, tries, mode, nan))
+}
+
+// The log of a negative is invalid.
+theorem Float::log_neg({F: Format}, a: Finite(F), neg: a.val() < 0, tries: Nat, mode: Mode, nan: F.specials.has_nan().IsTrue()):
+    Float::log(Float::Fin(a), tries, mode := mode, nan := nan) = Some(NaN(nan))
+{
+    let no = Rat::lt_irrefl(0);
+    match a.sign_dec() as λ c => (match c as λ _ => Option<Float(F)> {
+        Inl(_) => Some(F.div_by_zero(True, nan)),
+        Inr(c2) => match c2 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) },
+    }) = Some(NaN(nan)) {
+        Inl(em) => false_elim(no(Rat::lt_respects(Finite::val_of_mag_zero(a, em), Rat::same_refl(0), neg))),
+        Inr(c2) => match c2 as λ c3 => (match c3 as λ _ => Option<Float(F)> { Inl(p) => F.log_fin(mode, a, p, tries), Inr(_) => Some(NaN(nan)) }) = Some(NaN(nan)) {
+            Inl(p) => false_elim(no(Rat::lt_trans(p, neg))),
+            Inr(_) => refl,
+        },
+    }
+}
+
+theorem Float::log_inf({F: Format}, h: F.specials.has_inf().IsTrue(), tries: Nat, mode: Mode, nan: F.specials.has_nan().IsTrue()):
+    Float::log(Inf(False, h), tries, mode := mode, nan := nan) = Some(Inf(False, h))
+{
+    refl
+}
+
+theorem Float::log_neg_inf({F: Format}, h: F.specials.has_inf().IsTrue(), tries: Nat, mode: Mode, nan: F.specials.has_nan().IsTrue()):
+    Float::log(Inf(True, h), tries, mode := mode, nan := nan) = Some(NaN(nan))
+{
+    refl
+}
+
+theorem Float::log_nan({F: Format}, h, nan: F.specials.has_nan().IsTrue(), tries: Nat, mode: Mode): Float::log(NaN(h), tries, mode := mode, nan := nan) = Some(NaN(h)) { refl }
