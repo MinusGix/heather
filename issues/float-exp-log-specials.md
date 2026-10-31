@@ -22,5 +22,5 @@ needs nothing new: a real past the overflow threshold rounds to infinity
 through the same search, since both ends of its enclosure do.
 
 ## What it assumes from elsewhere
-- **[[float-round-real-termination]]** owns whether a finite argument
+- **[[exp-log-grid-gap]]** owns whether a finite argument
   always gets `Some`. Assumed here: nothing; the wrapper passes `None` on.

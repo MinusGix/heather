@@ -103,9 +103,9 @@ theorem Format::round_real_correct(self F: Format, mode: Mode, e: Enclosed, trie
 ```
 
 `None` means the tries ran out. It never means a wrong answer
-(`exp_no_tries`). Whether enough tries always succeed is the apartness
-theorem of §6, and for exp and log it is the Padé gap. Both are
-[float-round-real-termination](../issues/float-round-real-termination.md).
+(`exp_no_tries`). Enough tries always succeed for a real clear of the
+rounding grid, read through enclosures that narrow (next section). For exp
+and log that clearance is the Padé gap.
 
 **The ends are rounded in a window** (`round_dyadic_win`, through
 `round_hex`). `round_dyadic` works in half-units of 2^qmin, which is a
@@ -113,6 +113,72 @@ theorem of §6, and for exp and log it is the Padé gap. Both are
 budget. The literal path had already solved the problem with a window
 (window.hthr), so a dyadic is rounded the same way as a hex literal. A
 negative dyadic rounds its magnitude under the conjugate mode.
+
+## The search ends
+
+Added the same day by
+[float-round-real-termination](../issues/float-round-real-termination.md).
+The probes are in
+[`round_real_tests.hthr`](../lib/_tests/std/num/float/round_real_tests.hthr).
+
+```heather
+fn Format::round_real_apart(self F: Format, mode: Mode, e: Enclosed,
+    narrow: e.Narrows(F.prec() + 16, F.prec() + 16, 16), off: F.OffGrid(e.x)) → Float(F)
+theorem Format::round_real_apart_correct(…): RoundsToReal(F, mode, e.x, F.round_real_apart(mode, e, narrow, off))
+```
+
+This is Ziv's search with no fuel and no `Option`. It takes two proofs.
+
+**The gap is stated against the grid, not per mode.** Every breakpoint of
+every mode is a half-unit grid point `F.grid(m)`. A float's value is one
+(`Finite::val_grid`), so is the midpoint of two neighbours (`mid_sum`), and
+so is the overflow threshold `F.grid(F.ovf_h())`. So rounding is constant on
+each open grid cell, and `round_h` with the sticky bit set already computes
+the constant (`cell_rounds`; a negative cell goes through the conjugate
+mode). `F.Cell(x, h, k)` says that the real `x` lies in cell `h`, at least
+`2^-k` clear of both its ends. `F.OffGrid(x)` is `∃ h k, F.Cell(x, h, k)`.
+
+This is stronger than apartness from one mode's breakpoints. It also rules
+out the grid points that no mode breaks at, such as the floats themselves
+under a nearest mode. It was chosen because it needs no case per mode, and
+`Approx` already speaks its language. For the reals it is meant for it is
+just as true: exp and log at floats are irrational, apart from their exact
+cases. The cost is only in the bound. A real near a grid point that is not a
+breakpoint gets a small `k`, so the try count proved is larger, while the
+search still stops as soon as the two ends agree. The per-mode `Breakpoint`
+and the classical `Placed` of §6 are not built. Nothing needs them yet.
+
+**Narrowing is the other hypothesis.** `e.Narrows(n, p, step)` says that for
+every `k` some try's box is narrower than `2^-k`. It is an existence, so the
+try count computes from it. `Enclosed::narrows_of` reduces it to "narrower
+than `2^-k` from some index on, at any precision". `CReal::enclosed(x)`, a
+real's own boxes `x.seq(n) ± 2^-n`, narrows that way
+(`CReal::enclosed_narrows`).
+
+**The chain.**
+
+- `round_box_cell`: a box with both ends inside one cell rounds both ends
+  to `Same` floats (`rounds_unique` against the cell's rounding). `agree`
+  reads that as `True` (`Float::agree_of_same`, the converse of
+  `same_of_agree`), so the box answers `Some`.
+- `round_box_of_cell`: a box around `x` narrower than `2^-k` has both ends
+  in `x`'s cell. This is four `linarith` steps.
+- `round_enclosed_some`: a try `t` whose box answers ends the search at
+  or before `t`, given more than `t` tries. The schedule is read through
+  `Enclosed::try_at`, which unfolds as `round_enclosed` does, so no
+  multiplication `n + step·t` appears.
+- `round_enclosed_ends` puts them together, with
+  `round_apart_tries = 1 + (the narrowing's try for the gap's k)`.
+  `round_real_ends` restates it for `round_real` itself.
+
+At 1/3 in binary32 (2^150 = 3h + 1, so k = 152), `round_real_apart` gives
+0x3EAAAAAB for nearest and up and 0x3EAAAAAA for down, by `refl`. The proof
+term is evaluated through the theorems. The try count is 155, though the
+search stops at its first try.
+
+What exp and log still owe is
+[exp-log-grid-gap](../issues/exp-log-grid-gap.md). Their gap is the Padé
+bound, and their series boxes must be shown to narrow.
 
 ## exp and log
 
@@ -180,8 +246,10 @@ binary64 waits on them. Nothing in the proofs does.
 
 - **IEEE specials:** exp(±∞), log(0), log of a negative number, and NaN
   ([float-exp-log-specials](../issues/float-exp-log-specials.md)).
-- **Termination:** a total `round_real_apart` from the Padé gap
-  ([float-round-real-termination](../issues/float-round-real-termination.md)).
+- **The Padé gap for exp and log**, and narrowing of their series boxes:
+  what `round_real_apart` asks of them
+  ([exp-log-grid-gap](../issues/exp-log-grid-gap.md)). The search's end
+  itself is the section above.
 - **Argument reduction for exp:** a large argument starts its series far out
   ([interval-log-and-reduction](../issues/interval-log-and-reduction.md)).
 - **The generic `RoundsTo` over an ordered field:** the transfer lemma of §6.

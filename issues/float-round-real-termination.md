@@ -1,6 +1,6 @@
 ---
 title: Prove Ziv's search ends from apartness from the breakpoints (Padé gap for exp and log)
-status: open
+status: closed
 labels: [mathematics,reals,float]
 area: mathematics
 milestone: [float-reals, float-transcendental]
@@ -33,3 +33,17 @@ Scope:
 - **[[creal-compress-and-transcendentals]]** (closed) owns the search and its
   correctness. Assumed here: only that a refinement step narrows every
   enclosure by a fixed factor, which the series enclosures do in `p`.
+
+## Log
+
+- 2026-10-31: LANDED the search's end (docs/creal-transcendental-round.md,
+  "The search ends"). `F.Cell(x, h, k)` / `F.OffGrid(x)` state the gap against
+  the half-unit grid, which holds every breakpoint of every mode. That is
+  stronger than per-mode `Breakpoint`, and it needs no case split.
+  `Enclosed::Narrows` is the narrowing hypothesis. `round_enclosed_ends`
+  proves the search answers within `round_apart_tries`. `round_real_apart`
+  is total, with `round_real_apart_correct`. `CReal::enclosed_narrows` is the
+  first instance, and 1/3 at binary32 computes by `refl`. The Padé gap for
+  exp and log, and narrowing of their series boxes, moved to
+  [[exp-log-grid-gap]]. Per-mode `Breakpoint`/`Placed` were not built, since
+  nothing needs them yet (decision recorded in the doc).

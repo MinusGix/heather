@@ -1,0 +1,51 @@
+// Ziv's search ends (lib/std/num/float/round_real.hthr,
+// issues/float-round-real-termination.md): a real clear of the grid, read
+// through enclosures that narrow, rounds with no `Option`. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import option; import omega; import rat; import creal; import dyadic; import float; import round; import window; import literal; import interval; import creal_interval; import round_real;
+
+fn third() → CReal { CReal::ofRat(Rat(1, 3)) }
+
+// binary32's grid is m·2^-150, and 2^150 = 3h + 1: 1/3 is a third of a
+// half-unit above grid point h, so 2^-152 clear of both ends of cell h.
+fn third_h() → Int { 475749230901986627019428656483165045460915541 }
+
+theorem third_cell(): binary32().Cell(third(), third_h(), 152) {
+    And(CReal::ofRat_le(p := binary32().grid(third_h()) + Rat::inv_pow2(152), q := Rat(1, 3), h := trivial),
+        CReal::ofRat_le(p := Rat(1, 3), q := binary32().grid(third_h() + 1) - Rat::inv_pow2(152), h := trivial))
+}
+
+fn third_off() → binary32().OffGrid(third()) { Exists(third_h(), Exists(152, third_cell())) }
+
+fn third_narrows() → third().enclosed().Narrows(binary32().prec() + 16, binary32().prec() + 16, 16) { third().enclosed_narrows(16, omega, binary32().prec() + 16, binary32().prec() + 16) }
+
+// The total search computes 0x3EAAAAAB, in every mode its own neighbour.
+theorem third_near(): binary32().round_real_apart(NearestEven, third().enclosed(), third_narrows(), third_off()) = Fin(Finite(False, 11184811, 124, trivial)) { refl }
+theorem third_down(): binary32().round_real_apart(TowardNeg, third().enclosed(), third_narrows(), third_off()) = Fin(Finite(False, 11184810, 124, trivial)) { refl }
+theorem third_up(): binary32().round_real_apart(TowardPos, third().enclosed(), third_narrows(), third_off()) = Fin(Finite(False, 11184811, 124, trivial)) { refl }
+
+// What it means, with no hypothesis left over.
+theorem third_rounds(): RoundsToReal(binary32(), NearestEven, third(), binary32().round_real_apart(NearestEven, third().enclosed(), third_narrows(), third_off())) {
+    binary32().round_real_apart_correct(NearestEven, third().enclosed(), third_narrows(), third_off())
+}
+
+// The try count is the narrowing's witness for the gap, plus one: 152 + 2 + 1.
+theorem third_tries(): binary32().round_apart_tries(third().enclosed(), binary32().prec() + 16, binary32().prec() + 16, 16, third_narrows(), third_off()) = 155 { refl }
+
+// And `round_real`, given those tries, is `Some`.
+theorem third_some(): ∃ r: Float(binary32()), binary32().round_real(NearestEven, third().enclosed(), 155) = Some(r) {
+    binary32().round_real_ends(NearestEven, third().enclosed(), third_narrows(), third_off())
+}
+
+// A negative cell rounds through the conjugate mode.
+fn neg_third() → CReal { CReal::ofRat(Rat(-1, 3)) }
+
+theorem neg_third_cell(): binary32().Cell(neg_third(), -third_h() - 1, 152) {
+    And(CReal::ofRat_le(p := binary32().grid(-third_h() - 1) + Rat::inv_pow2(152), q := Rat(-1, 3), h := trivial),
+        CReal::ofRat_le(p := Rat(-1, 3), q := binary32().grid(-third_h() - 1 + 1) - Rat::inv_pow2(152), h := trivial))
+}
+
+fn neg_third_off() → binary32().OffGrid(neg_third()) { Exists(-third_h() - 1, Exists(152, neg_third_cell())) }
+
+theorem neg_third_down(): binary32().round_real_apart(TowardNeg, neg_third().enclosed(), neg_third().enclosed_narrows(16, omega, 40, 40), neg_third_off()) = Fin(Finite(True, 11184811, 124, trivial)) { refl }
