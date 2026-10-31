@@ -1,0 +1,257 @@
+// exp at real arguments, with its laws (issues/elementary-functions-at-reals.md).
+//
+// `CReal::exp(x)` is `CReal::exp_rat` extended by its Lipschitz bound on
+// bounded sets (`RatLip::ext`, creal_lipschitz.hthr; the bound is
+// `CReal::exp_rat_lip`, exp_law.hthr). Every law here reads the rational one
+// at the terms of the arguments and closes the gap by a slack: a real within
+// 2^-j of its j-th term has its exp within lip·2^-j of that term's
+// (`RatLip::ext_dev`), and lip·2^-j falls below any 2^-m.
+//
+// - `exp_ofRat`: at a rational it is `exp_rat`;
+// - `exp_add`: exp(x + y) ≈ exp(x)·exp(y), from the rational law and two
+//   products bounded on bounded sets (`CReal::mul_dev`);
+// - `exp_le`, `exp_lt`: increasing, strictly, and `exp_pos`;
+// - `exp_dev`: the Lipschitz bound itself, between a real and a rational;
+// - `exp_real_box`: the checker's leaf, the enclosures of exp at the two
+//   ends of the argument's enclosure (`CReal::enclose`), which monotonicity
+//   puts around exp(x). `by intervals()` reads `CReal::exp(x)` through it.
+
+import logic;
+import bool;
+import nat;
+import int;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import creal;
+import creal_lipschitz;
+import dyadic;
+import interval;
+import creal_interval;
+import series;
+import elementary;
+import exp_law;
+import omega;
+import tactic;
+import linarith;
+import ring;
+
+fn CReal::exp_lipschitz() → RatLip {
+    RatLip(λ q => CReal::exp_rat(q), λ B => CReal::exp_lip(B), λ B => CReal::exp_lip_nonneg(B), λ B a b ha hb => CReal::exp_rat_lip(B, a, b, ha, hb))
+}
+
+fn CReal::exp(self x: CReal) → CReal { CReal::exp_lipschitz().ext(x) }
+
+theorem CReal::exp_ofRat(q: Rat): CReal::exp(CReal::ofRat(q)) ≈ CReal::exp_rat(q) { CReal::exp_lipschitz().ext_ofRat(q) }
+
+theorem CReal::exp_respects({x, y: CReal}, h: x ≈ y): CReal::exp(x) ≈ CReal::exp(y) { CReal::exp_lipschitz().ext_respects(h) }
+
+theorem CReal::exp_zero(): CReal::exp(0) ≈ 1 { CReal::same_trans(CReal::exp_ofRat(0), CReal::exp_rat_zero()) }
+
+// The Lipschitz bound between a real and a rational inside `B`.
+theorem CReal::exp_dev(x: CReal, q, e, B: Rat, hx: (i: Nat) → x.at(i).abs() <= B, hq: q.abs() <= B,
+    lo: CReal::ofRat(q - e) <= x, hi: x <= CReal::ofRat(q + e)):
+    CReal::ofRat(-(CReal::exp_lip(B) * e)) <= CReal::exp(x) - CReal::exp_rat(q) ∧ CReal::exp(x) - CReal::exp_rat(q) <= CReal::ofRat(CReal::exp_lip(B) * e)
+{
+    CReal::exp_lipschitz().ext_dev(x, q, e, B, hx, hq, lo, hi)
+}
+
+// ---------------------------------------------------------------------------
+// Monotonicity and positivity.
+
+theorem CReal::exp_le({x, y: CReal}, h: x <= y): CReal::exp(x) <= CReal::exp(y) {
+    let B = x.bound_rat() + y.bound_rat() + 2;
+    let L = CReal::exp_lip(B);
+    let hL = CReal::exp_lip_nonneg(B);
+    let rx = x.bound_rat_nonneg();
+    let ry = y.bound_rat_nonneg();
+    let hx = λ (i: Nat) => {
+        let r: (x.at(i).abs() <= B) = linarith(x.bound_le(i), ry);
+        r
+    };
+    let hy = λ (i: Nat) => {
+        let r: (y.at(i).abs() <= B) = linarith(y.bound_le(i), rx);
+        r
+    };
+    CReal::le_of_slack(λ m => {
+        let j = (m + 2) + L.abs_ceil().width();
+        let g = Rat::inv_pow2(j);
+        let p = x.at(j);
+        let q = y.at(j);
+        let g1: (g <= 1) = Rat::inv_pow2_le_one(j);
+        let g0: (0 <= g) = Rat::inv_pow2_nonneg(j);
+        let xl: (CReal::ofRat(p - g) <= x) = x.term_sub_le(j);
+        let xh: (x <= CReal::ofRat(p + g)) = x.le_term_add(j);
+        let yl: (CReal::ofRat(q - g) <= y) = y.term_sub_le(j);
+        let yh: (y <= CReal::ofRat(q + g)) = y.le_term_add(j);
+        let pq0: (p - g <= q + g) = CReal::le_of_ofRat_le(CReal::le_trans(xl, CReal::le_trans(h, yh)));
+        let pq: (p <= q + (g + g)) = linarith(pq0);
+        let dx = CReal::exp_dev(x, p, g, B, hx, hx(j), xl, xh);
+        let dy = CReal::exp_dev(y, q, g, B, hy, hy(j), yl, yh);
+        let mono: (CReal::exp_rat(p) <= CReal::exp_rat(q + (g + g))) = CReal::exp_rat_le(pq);
+        let qb: (q.abs() <= y.bound_rat()) = y.bound_le(j);
+        let hq2: ((q + (g + g)).abs() <= B) = Rat::abs_le(linarith(qb, q.neg_le_abs(), g0, rx), linarith(qb, q.le_abs(), g1, rx));
+        let d2: (((q + (g + g)) - q).abs() <= g + g) = Rat::abs_le(linarith(g0), linarith(g0));
+        let lip = CReal::exp_rat_lip(B, q + (g + g), q, hq2, hy(j));
+        let sc: (L * ((q + (g + g)) - q).abs() <= L * (g + g)) = Rat::mul_le_mono_l(d2, hL);
+        let s: (L * g <= Rat::inv_pow2(m + 2)) = RatLip::scaled(L, hL, m + 2, j, omega);
+        let h1 = Rat::inv_pow2_half(m + 1);
+        let h0 = Rat::inv_pow2_half(m);
+        let tot: (L * g + L * (g + g) + L * g <= Rat::inv_pow2(m)) = linarith(s, h1, h0, Rat::inv_pow2_pos(m + 2));
+        let r: (CReal::exp(x) <= CReal::exp(y) + CReal::ofRat(Rat::inv_pow2(m))) =
+            linarith(dx.right, dy.left, mono, lip.right, CReal::ofRat_le(sc), CReal::ofRat_le(tot));
+        r
+    })
+}
+
+theorem CReal::exp_lt({x, y: CReal}, h: x < y): CReal::exp(x) < CReal::exp(y) {
+    match CReal::rat_between(h) {
+        Exists(p, hp) => match CReal::rat_between(hp.right) {
+            Exists(q, hq) => {
+                let pq: (p < q) = CReal::lt_of_ofRat_lt(hq.left);
+                let a: (CReal::exp(x) <= CReal::exp(CReal::ofRat(p))) = CReal::exp_le(CReal::le_of_lt(hp.left));
+                let b: (CReal::exp(CReal::ofRat(q)) <= CReal::exp(y)) = CReal::exp_le(CReal::le_of_lt(hq.right));
+                let c: (CReal::exp_rat(p) < CReal::exp_rat(q)) = CReal::exp_rat_lt(pq);
+                let c2: (CReal::exp(CReal::ofRat(p)) < CReal::exp(CReal::ofRat(q))) =
+                    CReal::lt_respects(CReal::same_sym(CReal::exp_ofRat(p)), CReal::same_sym(CReal::exp_ofRat(q)), c);
+                CReal::lt_of_le_of_lt(a, CReal::lt_of_lt_of_le(c2, b))
+            },
+        },
+    }
+}
+
+theorem CReal::exp_pos(self x: CReal): 0 < CReal::exp(x) {
+    let q = x.at(0) - Rat::inv_pow2(0);
+    let below: (CReal::exp(CReal::ofRat(q)) <= CReal::exp(x)) = CReal::exp_le(x.term_sub_le(0));
+    let pos: (0 < CReal::exp(CReal::ofRat(q))) = CReal::lt_of_lt_of_le(CReal::exp_rat_pos(q), CReal::le_of_same(CReal::same_sym(CReal::exp_ofRat(q))));
+    CReal::lt_of_lt_of_le(pos, below)
+}
+
+// ---------------------------------------------------------------------------
+// The addition law. With p, q the j-th terms of x, y and g = 2^-j:
+//
+//     exp(x)exp(y) - exp(p)exp(q) = (exp(x) - exp(p))·exp(y) + (exp(y) - exp(q))·exp(p)
+//
+// each factor in brackets within L·g, exp(y) within K + L and exp(p)
+// within K (`CReal::exp_rat_bound`), and exp(x + y) within 2L·g of
+// exp(p + q) = exp(p)exp(q).
+
+// The law at one index `j`, whose slack C·2^-j is below 2^-m.
+theorem CReal::exp_add_at(x, y: CReal, B: Rat, hB: 0 <= B, hx: (i: Nat) → x.at(i).abs() <= B, hy: (i: Nat) → y.at(i).abs() <= B,
+    hs: (i: Nat) → (x + y).at(i).abs() <= B, hpq: (j: Nat) → (x.at(j) + y.at(j)).abs() <= B, m, j: Nat,
+    sc: (CReal::exp_lip(B) * ((1 + 1) + (CReal::exp_reach(B) + CReal::exp_lip(B)) + CReal::exp_reach(B))) * Rat::inv_pow2(j) <= Rat::inv_pow2(m)):
+    CReal::exp(x + y) <= CReal::exp(x) * CReal::exp(y) + CReal::ofRat(Rat::inv_pow2(m)) ∧ CReal::exp(x) * CReal::exp(y) <= CReal::exp(x + y) + CReal::ofRat(Rat::inv_pow2(m))
+{
+    let s = x + y;
+    let L = CReal::exp_lip(B);
+    let hL = CReal::exp_lip_nonneg(B);
+    let K = CReal::exp_reach(B);
+    let hK: (0 <= K) = CReal::exp_reach_nonneg(B, hB);
+    let g = Rat::inv_pow2(j);
+    let p = x.at(j);
+    let q = y.at(j);
+    let g1: (g <= 1) = Rat::inv_pow2_le_one(j);
+    let g0: (0 <= g) = Rat::inv_pow2_nonneg(j);
+    let xl: (CReal::ofRat(p - g) <= x) = x.term_sub_le(j);
+    let xh: (x <= CReal::ofRat(p + g)) = x.le_term_add(j);
+    let yl: (CReal::ofRat(q - g) <= y) = y.term_sub_le(j);
+    let yh: (y <= CReal::ofRat(q + g)) = y.le_term_add(j);
+    let sl: (CReal::ofRat((p + q) - (g + g)) <= s) = linarith(xl, yl);
+    let sh: (s <= CReal::ofRat((p + q) + (g + g))) = linarith(xh, yh);
+    let dx = CReal::exp_dev(x, p, g, B, hx, hx(j), xl, xh);
+    let dy = CReal::exp_dev(y, q, g, B, hy, hy(j), yl, yh);
+    let ds = CReal::exp_dev(s, p + q, g + g, B, hs, hpq(j), sl, sh);
+    let law = CReal::exp_rat_add(p, q);
+    let bp = CReal::exp_rat_bound(p, B, hx(j));
+    let bq = CReal::exp_rat_bound(q, B, hy(j));
+    let Lg: (L * g <= L) = Rat::le_trans(Rat::mul_le_mono_l(g1, hL), Rat::le_of_same(L.mul_one()));
+    let ey_lo: (CReal::ofRat(-(K + L)) <= CReal::exp(y)) = linarith(dy.left, bq.left, CReal::ofRat_le(Lg));
+    let ey_hi: (CReal::exp(y) <= CReal::ofRat(K + L)) = linarith(dy.right, bq.right, CReal::ofRat_le(Lg));
+    let e0: (0 <= L * g) = Rat::mul_nonneg(hL, g0);
+    let m1 = CReal::mul_dev(L * g, K + L, e0, dx.left, dx.right, ey_lo, ey_hi);
+    let m2 = CReal::mul_dev(L * g, K, e0, dy.left, dy.right, bp.left, bp.right);
+    let tot: (L * (g + g) + (L * g) * (K + L) + (L * g) * K <= Rat::inv_pow2(m)) = linarith(sc);
+    let ex = CReal::exp(x);
+    let ey = CReal::exp(y);
+    let up: (CReal::exp(s) <= ex * ey + CReal::ofRat(Rat::inv_pow2(m))) = linarith(ds.right, law, m1.left, m2.left, CReal::ofRat_le(tot));
+    let dn: (ex * ey <= CReal::exp(s) + CReal::ofRat(Rat::inv_pow2(m))) = linarith(ds.left, law, m1.right, m2.right, CReal::ofRat_le(tot));
+    And(up, dn)
+}
+
+theorem CReal::exp_add(self x, y: CReal): CReal::exp(x + y) ≈ CReal::exp(x) * CReal::exp(y) {
+    let s = x + y;
+    let B = x.bound_rat() + y.bound_rat() + s.bound_rat();
+    let L = CReal::exp_lip(B);
+    let hL = CReal::exp_lip_nonneg(B);
+    let K = CReal::exp_reach(B);
+    let rx = x.bound_rat_nonneg();
+    let ry = y.bound_rat_nonneg();
+    let rs = s.bound_rat_nonneg();
+    let hB: (0 <= B) = linarith(rx, ry, rs);
+    let hK: (0 <= K) = CReal::exp_reach_nonneg(B, hB);
+    let C = L * ((1 + 1) + (K + L) + K);
+    let hC: (0 <= C) = Rat::mul_nonneg(hL, linarith(hK, hL));
+    let hx = λ (i: Nat) => {
+        let r: (x.at(i).abs() <= B) = linarith(x.bound_le(i), ry, rs);
+        r
+    };
+    let hy = λ (i: Nat) => {
+        let r: (y.at(i).abs() <= B) = linarith(y.bound_le(i), rx, rs);
+        r
+    };
+    let hs = λ (i: Nat) => {
+        let r: (s.at(i).abs() <= B) = linarith(s.bound_le(i), rx, ry);
+        r
+    };
+    let hpq = λ (j: Nat) => {
+        let p = x.at(j);
+        let q = y.at(j);
+        let r: ((p + q).abs() <= B) = Rat::abs_le(linarith(x.bound_le(j), y.bound_le(j), p.neg_le_abs(), q.neg_le_abs(), rs),
+            linarith(x.bound_le(j), y.bound_le(j), p.le_abs(), q.le_abs(), rs));
+        r
+    };
+    let near = λ (m: Nat) => CReal::exp_add_at(x, y, B, hB, hx, hy, hs, hpq, m, m + C.abs_ceil().width(), RatLip::scaled(C, hC, m, m + C.abs_ceil().width(), omega));
+    CReal::le_antisymm(CReal::le_of_slack(λ m => near(m).left), CReal::le_of_slack(λ m => near(m).right))
+}
+
+theorem CReal::exp_neg_mul(self x: CReal): CReal::exp(-x) * CReal::exp(x) ≈ 1 {
+    let z: (-x + x ≈ 0) = x.neg_add_self();
+    CReal::same_trans(CReal::same_sym(CReal::exp_add(-x, x)), CReal::same_trans(CReal::exp_respects(z), CReal::exp_zero()))
+}
+
+// ---------------------------------------------------------------------------
+// The checker's leaf: exp is increasing, so exp at the two ends of the
+// argument's n-th enclosure, each enclosed at `p` bits, holds exp(x).
+
+fn Interval::span(I, J: Interval) → Interval {
+    match I { Bnd(a, _) => match J { Bnd(_, d) => Bnd(a, d), Whole => Whole }, Whole => Whole }
+}
+
+theorem Interval::span_has(I, J: Interval, {u, v, z: CReal}, hu: I.HasReal(u), hv: J.HasReal(v), uz: u <= z, zv: z <= v): Interval::span(I, J).HasReal(z) {
+    match I as λ K => K.HasReal(u) → Interval::span(K, J).HasReal(z) {
+        Bnd(a, b) => λ ku => match J as λ M => M.HasReal(v) → Interval::span(Bnd(a, b), M).HasReal(z) {
+            Bnd(_, _) => λ kv => And(CReal::le_trans(ku.left, uz), CReal::le_trans(zv, kv.right)),
+            Whole => λ _ => trivial,
+        }(hv),
+        Whole => λ _ => trivial,
+    }(hu)
+}
+
+fn CReal::exp_enclose(self x: CReal, n, p: Nat) → Interval {
+    Interval::span((CReal::exp_box((x.seq(n) - CReal::radius(n)).rat())).at(n, p), (CReal::exp_box((x.seq(n) + CReal::radius(n)).rat())).at(n, p))
+}
+
+theorem CReal::exp_enclose_has(self x: CReal, n, p: Nat): x.exp_enclose(n, p).HasReal(CReal::exp(x)) {
+    let lo = (x.seq(n) - CReal::radius(n)).rat();
+    let hi = (x.seq(n) + CReal::radius(n)).rat();
+    let e = x.enclose_has(n);
+    let a: (CReal::exp_rat(lo) <= CReal::exp(x)) = CReal::le_trans(CReal::le_of_same(CReal::same_sym(CReal::exp_ofRat(lo))), CReal::exp_le(e.left));
+    let b: (CReal::exp(x) <= CReal::exp_rat(hi)) = CReal::le_trans(CReal::exp_le(e.right), CReal::le_of_same(CReal::exp_ofRat(hi)));
+    Interval::span_has((CReal::exp_box(lo)).at(n, p), (CReal::exp_box(hi)).at(n, p), (CReal::exp_box(lo)).has(n, p), (CReal::exp_box(hi)).has(n, p), a, b)
+}
+
+fn CReal::exp_real_box(x: CReal) → Enclosed { Enclosed(CReal::exp(x), λ n p => x.exp_enclose(n, p), λ n p => x.exp_enclose_has(n, p)) }
