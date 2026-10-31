@@ -213,6 +213,92 @@ log(a/b) = 2·atanh((a' - b')/(a' + b')) + e·log 2,     a/b = (a'/b')·2^e
 with the rest. So `log_fin_correct` says "the correct rounding of
 `CReal::log_rat(f.val())`", which is log by its standard series.
 
+## The Padé gap: exp's search ends
+
+Added the same day by
+[exp-log-grid-gap](../issues/exp-log-grid-gap.md). The code is
+[`pade.hthr`](../lib/std/num/float/pade.hthr), with general lemmas added to
+`creal.hthr`, `series.hthr`, `rat.hthr`, `int.hthr`, `round.hthr` and
+`round_real.hthr`. The probes are in
+[`pade_tests.hthr`](../lib/_tests/std/num/float/pade_tests.hthr).
+
+```heather
+theorem Format::exp_off_grid(self F: Format, x: Rat, hx: ¬(x ≈ 0)): F.OffGrid(CReal::exp_rat(x))
+fn Float::exp_total({F: Format}, self x: Float(F), mode: Mode := NearestEven) → Float(F)
+theorem Float::exp_total_correct({F: Format}, a: Finite(F), mode: Mode):
+    RoundsToReal(F, mode, CReal::exp_rat(a.val()), Float::exp_total(Float::Fin(a), mode := mode))
+```
+
+`exp` at every float now has a total, `Option`-free rounding, proved
+correct. It is `round_real_apart` over `exp(x)`'s own enclosures
+`CReal::enclosed`, which already narrow, with the gap below as `off`.
+`Format::exp_search_ends` says the same of the `Option` search: some try
+count returns `Some`.
+
+**No integrals.** flean bounds the Padé remainder by an integral. Heather has
+no integrals at `CReal`, and does not need one. The remainder is a series:
+
+```
+Q_n(x) e^x - P_n(x) = σ_n S_n(x),   σ_n = ±x^(2n+1),
+S_n(x) = Σ_k (n+k)! / (k! (2n+1+k)!) x^k
+```
+
+`S_n` is an ordinary `Series` (`Series::pade_rem`). Its ratio is exp's
+ratio times `(n+k+1)/(2n+k+2)`, which is at most 1, so the ratio is small
+wherever exp's is. The identity is proved by induction on `n`, from
+the three-term recurrence `S_n = (4n+6) S_{n+1} + x² S_{n+2}` and the two
+base cases `e^x = 1 + x S_0 = -1 + 2 S_0 + x² S_1`. Each of these is first
+proved between terms, then between partial sums, then between the limits:
+
+- **Terms.** A term is exp's term times a weight
+  `w(n, k) = (n+k)!/(2n+1+k)!` that does not mention `x`. The recurrence
+  becomes one field identity among weights,
+  `(2n+k+4)(2n+k+5) = (4n+6)(n+k+3) + (k+1)(k+2)`. Stated with `x` in it,
+  the same identity ran out of the kernel's fuel. Without `x`, and with the
+  reciprocals bound by `let` so that `ring` reads them as atoms, it is cheap.
+- **Sums.** `Series::sums_comb`: if a linear relation holds at the first
+  partial sums and between every later term (at fixed offsets), it holds at
+  every later partial sum.
+- **Limits.** `Series::comb`: then it holds between the limits. Each limit
+  is within its tail bound of every partial sum, and `CReal::le_of_slack`
+  closes the gap of `2^-m` for every `m`.
+
+**Integers.** Clearing denominators at `x = u/v` gives `q_n = v^n Q_n(u/v)`
+and `p_n = v^n P_n(u/v)`. They satisfy
+`a_{n+2} = (4n+6) v a_{n+1} + u² a_n`, so they are integers by
+construction (`PadeInts`). `PadeInts::bridge` ties them to the rational
+approximants. Their Casoratian `p_n q_{n+1} - p_{n+1} q_n` is `-2u` times
+`(-u²)^n`, so it is never 0 (`PadeInts::cas_pos`).
+
+**Size.** `|S_n|` is at most `n!/(2n+1)!` times `K`, where `K` is the
+tail-bounded partial sum of `e^|x|` (`CReal::pade_rem_bound`, by
+`Series::real_dominated`). So the integer error
+`|q_n e^x - p_n| <= |v^n σ_n| n!/(2n+1)! K`. These bounds are the terms
+of a series with ratio `v x²/(4n+6)` (`Series::pade_beta`), and a series'
+`fine` index gives two consecutive terms below any `2^-m`.
+
+**Apartness.** Take a lattice point `g = G·2^-d`. Then `q_n g - p_n` is an
+integer multiple of `2^-d`. It is nonzero at `n` or at `n+1`, because if
+both vanished the Casoratian would too (`PadeInts::not_both_zero`). So it is
+at least `2^-d`, while the error is below `2^-(d+2)`. Then
+`q (e^x - g) = (error) - (q g - p)` keeps `e^x - g` away from 0 by
+`2^-d / (2(|q_n| + |q_{n+1}|) + 2)`, a distance that does not depend on `g`
+(`CReal::apart_of_scaled`, `CReal::exp_apart_lattice`). The grid is such a
+lattice (`Format::grid_lattice`). A real a fixed distance from every grid
+point is off the grid (`Format::off_grid_of_apart`, which only reads the two
+ends of the cell holding a rational approximation).
+
+**What the gap does not give yet.** It does not make `Float::exp` (the
+`Option` search over the series boxes `CReal::exp_box`) end, because those
+boxes have no narrowing proof
+([exp-box-narrowing](../issues/exp-box-narrowing.md)). And it does not cover
+log. log's gap is exp's gap read through `exp(log q) ≈ q`, a law that is
+not proved
+([log-grid-gap](../issues/log-grid-gap.md)). `Float::exp_total` is not
+evaluated in the probes. Its try count is computed through the proofs (the
+Padé index, the Archimedean bound on the distance), and nothing has measured
+that cost.
+
 ## What computes today
 
 Each value below is a `refl` theorem. Each was compared against a 200-digit
@@ -256,10 +342,10 @@ Where the fuel still goes:
   exp(±∞), exp(±0) = 1 exactly, log(±0) = -∞, log of a negative number and
   log(-∞) invalid, NaN in, NaN out. log(1) = +0 exactly is still the search
   ([float-log-one-exact](../issues/float-log-one-exact.md)).
-- **The Padé gap for exp and log**, and narrowing of their series boxes:
-  what `round_real_apart` asks of them
-  ([exp-log-grid-gap](../issues/exp-log-grid-gap.md)). The search's end
-  itself is the section above.
+- **The Padé gap for log**, and narrowing of the series boxes: exp's gap is
+  the section above. log's waits on `exp(log q) ≈ q`
+  ([log-grid-gap](../issues/log-grid-gap.md)), and the boxes'
+  narrowing is [exp-box-narrowing](../issues/exp-box-narrowing.md).
 - **Argument reduction for exp:** a large argument starts its series far out
   ([interval-log-and-reduction](../issues/interval-log-and-reduction.md)).
 - **The generic `RoundsTo` over an ordered field:** the transfer lemma of §6.

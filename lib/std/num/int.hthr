@@ -1882,3 +1882,13 @@ theorem Int::shr_mul_le(self a: Int, k: Nat): a.shr(k) * Nat::pow(2, k).int() <=
         NegSucc(n) => Int::negOfNat_le_negsucc(Succ(n.shr(k)) * Nat::pow(2, k), n, Nat::lt_succ_shr_mul(k, n)),
     }
 }
+
+// ---------------------------------------------------------------------------
+// A nonzero integer has a positive magnitude.
+
+theorem Int::natAbs_pos_of_ne(self a: Int, h: ¬(a = OfNat(0))): 0 < a.natAbs() {
+    match a {
+        OfNat(n) => match n as λ m => ¬(OfNat(m) = OfNat(0)) → 0 < m { Zero => λ no => false_elim(no(refl)), Succ(_) => λ _ => trivial }(h),
+        NegSucc(_) => trivial,
+    }
+}

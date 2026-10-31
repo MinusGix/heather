@@ -4,7 +4,7 @@ status: open
 labels: [proofs,arithmetic,performance]
 area: tactics
 created: 2026-10-12
-updated: 2026-10-12
+updated: 2026-10-31
 ---
 
 A `ring` certificate's kernel cost is the in-language normalizer's evaluation
@@ -32,3 +32,7 @@ gate column per item is the one that moved.
 
 - **[[ring-normalization]]** owns the tactic and the certificate shape.
   Assumed here: only that the certificate is `sound`/`sound_with` with `refl`.
+
+## Log
+
+- 2026-10-31: Data point from exp-log-grid-gap (2026-10-31): the Padé three-term relation between series terms, stated as one field identity with x and six reciprocal atoms (inv_succ of linear forms in n, k), ran out of the kernel's fuel. The same relation, factored as exp's term times x-free weights and with the reciprocals bound by let (atoms to ring), checks well inside it. The cost grew with the number of distinct reciprocal atoms the normalizer clears together, not with the polynomial degree.
