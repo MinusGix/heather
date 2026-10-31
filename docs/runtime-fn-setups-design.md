@@ -13,6 +13,14 @@ half that exists today (`Source`, FunctionIR, `Source::compile`). Minus's note
 the system", and users can build others, such as a borrow-checked one that
 hands the compiler extra proofs.
 
+Read `docs/compilation-vision.md` first: it collects the settled principles
+and the larger picture this note is one part of. There, a setup is one kind
+of **language** (terms, meaning, judgment, compiler, one soundness theorem)
+whose terms are reflected from ordinary function bodies; DSLs, restricted
+dialects and hand-written instances are the other producers of `Compile(f)`,
+and setups also publish **facts** (side-proofs such as `Unique` or `Writes`)
+for the compiler's passes to find.
+
 This note says what each of those words is, concretely enough that R5
 (`runtime-fn-default-setup`) can be handed to a thread, and names what R5 must
 verify before it builds (§12).
