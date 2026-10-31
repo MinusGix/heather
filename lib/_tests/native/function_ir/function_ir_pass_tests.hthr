@@ -1,0 +1,45 @@
+// Probes of the FunctionIR pass (function_ir_pass): what it folds, what it
+// drops, and what it leaves.
+import function_ir;
+import function_ir_pass;
+import list;
+
+// `yes`'s loop condition, `1` made a bit (`Val::truth`, native_build): it
+// folds to the bit, and the numbers it was made from are dead.
+theorem truth_of_one_folds(): List::optimised([Const(64, 2, 1), Const(64, 3, 0), Equal(64, 1, 2, 3), Const(1, 4, 1), BitXor(1, 0, 1, 4)], [0])
+    = [Const(1, 0, 1)] { refl }
+
+// The comparisons fold at the node's width: 2^64 is zero at 64 bits.
+theorem equal_at_its_width(): List::optimised([Const(64, 1, 18446744073709551616), Const(64, 2, 0), Equal(64, 0, 1, 2)], [0])
+    = [Const(1, 0, 1)] { refl }
+theorem below_unsigned(): List::optimised([Const(64, 1, 3), Const(64, 2, 5), UnsignedLessThan(64, 0, 1, 2)], [0]) = [Const(1, 0, 1)] { refl }
+theorem below_signed(): List::optimised([Const(64, 1, 18446744073709551615), Const(64, 2, 0), SignedLessThan(64, 0, 1, 2)], [0]) = [Const(1, 0, 1)] { refl }
+
+// A copy of a known word is the number.
+theorem move_folds(): List::optimised([Const(64, 1, 7), Move(64, 0, 1)], [0, 1]) = [Const(64, 1, 7), Const(64, 0, 7)] { refl }
+
+// A word set and set again before anything reads it: the first write is dead.
+theorem overwritten_is_dead(): List::optimised([Const(64, 0, 5), Const(64, 0, 6)], [0]) = [Const(64, 0, 6)] { refl }
+
+// A word nothing after the leaf reads is dead; one that is live stays.
+theorem dead_word_dropped(): List::optimised([Const(64, 0, 0), Const(64, 1, 0)], [1]) = [Const(64, 1, 0)] { refl }
+
+// A number read by an operation the pass does not fold stays, and so does
+// the operation.
+theorem sum_kept(): List::optimised([Const(64, 1, 3), Add(64, 0, 1, 2)], [0]) = [Const(64, 1, 3), Add(64, 0, 1, 2)] { refl }
+
+// Bitwise operations fold only over bits.
+theorem wide_and_kept(): List::optimised([Const(64, 1, 6), Const(64, 2, 3), BitAnd(64, 0, 1, 2)], [0])
+    = [Const(64, 1, 6), Const(64, 2, 3), BitAnd(64, 0, 1, 2)] { refl }
+theorem bit_or_folds(): List::optimised([Const(1, 1, 0), Const(1, 2, 1), BitOr(1, 0, 1, 2)], [0]) = [Const(1, 0, 1)] { refl }
+
+// A byte node is never dropped, its output dead or not, whatever its ids.
+theorem load_kept(output, buffer, index: Nat): List::optimised([BufferLoad(output, buffer, index)], []) = [BufferLoad(output, buffer, index)] { refl }
+
+// What a store reads is live before it.
+theorem store_reads_kept(): List::optimised([Const(64, 1, 0), Const(64, 2, 65), BufferStore(3, 0, 1, 2)], [])
+    = [Const(64, 1, 0), Const(64, 2, 65), BufferStore(3, 0, 1, 2)] { refl }
+
+// A word live after the leaf is never dropped.
+// expect-error: `refl` needs both sides to be definitionally equal
+theorem live_dropped(): List::optimised([Const(64, 0, 1)], [0]) = [] { refl }

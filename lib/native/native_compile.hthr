@@ -17,8 +17,12 @@
 // compile (`Source::compile(low, homes)`), which checks them first
 // (`Source::allocation_ok`), so an allocator is never trusted.
 //
-// - A `Compute` leaf goes through S4 whole where S4 takes it: all pure, its
-//   values fitting the registers no word lives in. It loads its inputs (the
+// - A `Compute` leaf is first optimised by the FunctionIR pass
+//   (function_ir_pass: constants folded, nodes nothing reads dropped, given
+//   what is live after it; `Prog::computes_best`, native_compile_pass), and
+//   compiled as it is where what the pass leaves does not pass the leaf's
+//   checks or compile. A leaf goes through S4 whole where S4 takes it: all
+//   pure, its values fitting the registers no word lives in. It loads its inputs (the
 //   ids its nodes read and do not write), runs S4's `Region::lower` over
 //   them, and puts each node's result in its home, zero-extended from its
 //   width as `Env::settle` keeps it. Any other leaf whose nodes all work at
@@ -69,6 +73,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_lower;
 import function_ir_state;
+import function_ir_pass;
 import x86_64;
 import x86_64_block;
 import x86_64_asm;
@@ -617,6 +622,20 @@ fn Prog::computes(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node
     }
 }
 
+// A statement's leaf, through the FunctionIR pass first (function_ir_pass:
+// constants folded, dead nodes dropped, given what is live after the leaf),
+// where what the pass leaves passes the checks the leaf did and needs no
+// word the leaf did not (native_compile_pass); otherwise, or where it does
+// not compile, the leaf as it is.
+fn Prog::computes_best(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, names: Nat) → Option<Compiled> {
+    let better = nodes.optimised(out);
+    match (layout.homes.nodes_apart(better, out) && layout.homes.all_apart(nodes_writes(better), out))
+        && nodes_live_in(better, out).within(nodes_live_in(nodes, out)) {
+        False => p.computes(layout, out, nodes, names),
+        True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(c) => Some(c) },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Initial bytes
 
@@ -702,7 +721,7 @@ fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout
 fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat) → Option<Compiled> {
     match s {
         Compute(region) => match region {
-            Dataflow(body) => p.computes(layout, out, body.nodes, names),
+            Dataflow(body) => p.computes_best(layout, out, body.nodes, names),
             _ => match region.scopes() { False => None, True => region.code(p, layout, out, names) },
         },
         Invoke(shape) => p.call(layout, out, shape, names),
