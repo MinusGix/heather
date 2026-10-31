@@ -1,0 +1,107 @@
+// Calls between compiled procedures, as claims of trees
+// (docs/native-procedures-design.md §5; issues/native-compiled-procedures.md,
+// slice 2): a CALL is one machine step to its callee's label, the return
+// address pushed onto the process stack, and RET one step back to the
+// address on top of it. Each rule here is `Site::Goes`'s: what goes from
+// where the step lands goes from the step, where the stack has room for the
+// word the step pushes or holds the word it pops.
+import native_compile_steps;
+import linux_x86_64_io;
+import linux_x86_64_sim;
+import linux_trees;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_layout;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// A stack whose stores are Linux's: one step of a stack form is one of
+// Linux's steps.
+theorem LinuxIo::steps_of_stack<M>(self io: LinuxIo<M>, stack: Stack<M>(io.fetch, io.data), writes: stack.writes = linux_writes(io),
+    before, after: MachineState<M>, steps: MachineSteps(io.fetch, io.data, stack.writes, before, after)): LinuxSteps(io, before, after) {
+    linux_steps_of_machine(io, before, after, j(writes, λ w _ => MachineSteps(io.fetch, io.data, w, before, after), steps))
+}
+
+// A CALL to the label at `entry`, where the stack pointer is at offset
+// `index(s) + 8` of the stack: the return address (the item after the
+// CALL) is pushed at `index(s)` and the callee goes from its label with the
+// stack pointer there and the address on top.
+theorem LinuxIo::goes_callto<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), stack: Stack<M>(io.fetch, io.data),
+    writes: stack.writes = linux_writes(io), fits: FillsFit(program, no_fills()),
+    k: Nat, before: Prog, name, target: Nat, at: asm_back(program, k) = At(before, name, CallTo(target)),
+    entry: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(program), prog_len(before), CallTo(target)), entry),
+    t: ITree<BitVec(64)>(Events::linux()), pre: MachineState<M> → Type, index: MachineState<M> → Nat,
+    room: (s: MachineState<M>) → pre(s) → (read_gpr(Rsp, s.gprs) = stack.at(index(s) + 8)) ∧ (index(s) + 8 <= stack.size),
+    callee: (s: MachineState<M>) → pre(s) →
+        io.site(program, origin).Goes(io, entry, t, λ (u: MachineState<M>) =>
+            (u = call_near_after(stack.writes, asm_jump_of(asm_labels(program), prog_len(before), CallTo(target)), s)) ∧
+            ((read_gpr(Rsp, u.gprs) = stack.at(index(s))) ∧
+             (read_word(io.data, u.memory, stack.at(index(s))) = Some(next_rip(origin, prog_len(before) + 5)))))):
+    io.site(program, origin).Goes(io, prog_len(before), t, pre) {
+    let site = io.site(program, origin);
+    λ s here resident holds => {
+        let displacement = asm_jump_of(asm_labels(program), prog_len(before), CallTo(target));
+        let found = room(s, holds);
+        let i = index(s);
+        let space: (i + 8 <= stack.size) = found.right;
+        let pushed: (push_address(s.gprs) = stack.at(i)) =
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), found.left), push_at(stack.low, i));
+        let ret = next_rip(s.rip, 5);
+        let u = call_near_after(stack.writes, displacement, s);
+        let executes: CallNear(displacement).Executes(io.data, stack.writes, s, u) =
+            ⟨j(sym(pushed), λ a _ => WordCanonical(a), stack.canonical(i, space)),
+             ⟨j(sym(pushed), λ a _ => stack.writes.writable(s.memory, a, 8), stack.writable(s.memory, i, space)), refl⟩⟩;
+        let call = stack_step_machine(io.fetch, io.data, stack.writes, CallNear(displacement), s, u,
+            site.item_fetched(fits, s, resident, k, before, name, CallTo(target), at, here), executes);
+        let u_rip: (u.rip = next_rip(origin, entry)) =
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, displacement), here),
+                near_lands_target(origin, prog_len(before), displacement, entry, lands));
+        let u_resident: site.Resident(u.memory) =
+            j(sym(pushed), λ a _ => site.Resident(stack.writes.store(s.memory, a, word_bytes(ret))),
+                stack.keeps_code(s.memory, i, space, ret, assemble(no_fills(), program, Nil), next_rip(origin, 0), resident));
+        let u_rsp: (read_gpr(Rsp, u.gprs) = stack.at(i)) = trans(read_gpr_after_write(Rsp, push_address(s.gprs), s.gprs), pushed);
+        let u_ret: (read_word(io.data, u.memory, stack.at(i)) = Some(ret)) =
+            j(sym(pushed), λ a _ => read_word(io.data, stack.writes.store(s.memory, a, word_bytes(ret)), stack.at(i)) = Some(ret),
+                stack.stored(s.memory, i, space, ret));
+        let ret_is: (ret = next_rip(origin, prog_len(before) + 5)) = site.rip_after(s, prog_len(before), 5, here);
+        sim_back(io, t, s, u, io.steps_of_stack(stack, writes, s, u, call),
+            callee(s, holds, u, u_rip, u_resident,
+                ⟨refl, ⟨u_rsp, j(ret_is, λ r _ => read_word(io.data, u.memory, stack.at(i)) = Some(r), u_ret)⟩⟩))
+    }
+}
+
+// A RET, where the stack pointer is at offset `index(s)` and the word there
+// is `ret(s)`: from what goes where the word points, with the stack pointer
+// past it.
+theorem LinuxIo::goes_ret<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), stack: Stack<M>(io.fetch, io.data),
+    writes: stack.writes = linux_writes(io), fits: FillsFit(program, no_fills()),
+    k: Nat, before: Prog, name: Nat, at: asm_back(program, k) = At(before, name, Ret),
+    t: ITree<BitVec(64)>(Events::linux()), pre: MachineState<M> → Type, index: MachineState<M> → Nat, ret: MachineState<M> → BitVec(64),
+    top: (s: MachineState<M>) → pre(s) → (read_gpr(Rsp, s.gprs) = stack.at(index(s))) ∧ ((index(s) + 8 <= stack.size) ∧
+        (read_word(io.data, s.memory, stack.at(index(s))) = Some(ret(s)))),
+    back: (s: MachineState<M>) → pre(s) → io.site(program, origin).Resident(s.memory) → Sim(io, t, return_near_after(ret(s), s))):
+    io.site(program, origin).Goes(io, prog_len(before), t, pre) {
+    let site = io.site(program, origin);
+    λ s here resident holds => {
+        let found = top(s, holds);
+        let r = return_near_after(ret(s), s);
+        let executes: ReturnNear.Executes(io.data, stack.writes, s, r) =
+            ⟨j(sym(found.left), λ a _ => WordCanonical(a), stack.canonical(index(s), found.right.left)),
+             Exists(ret(s), ⟨j(sym(found.left), λ a _ => read_word(io.data, s.memory, a) = Some(ret(s)), found.right.right), refl⟩)⟩;
+        let step = stack_step_machine(io.fetch, io.data, stack.writes, ReturnNear, s, r,
+            site.item_fetched(fits, s, resident, k, before, name, Ret, at, here), executes);
+        sim_back(io, t, s, r, io.steps_of_stack(stack, writes, s, r, step),
+            back(s, holds, resident))
+    }
+}
