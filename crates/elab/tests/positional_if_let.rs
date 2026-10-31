@@ -130,16 +130,20 @@ fn indexed_family_keeps_the_existing_homogeneous_equation_boundary() {
         "#,
     );
 
-    let src = r#"
+    // The equation binding on an indexed family is the index packed with
+    // the value (docs/dependent-match-compiler-design.md §9), so `h` is
+    // available and `cong(h)` gives the index.
+    ok(
+        &mut with_option(),
+        r#"
         inductive MN { MZ, MS(p: MN) }
         inductive VF<A> : (n: MN) -> Type {
             VFNil                              : VF<A>(MZ),
             VFCons(n: MN, x: A, xs: VF<A>(n)) : VF<A>(MS(n)),
         }
-        fn bad(n: MN, xs: VF<Nat>(n)) -> MN {
-            if let h : VFNil = xs { MZ } else { MS(MZ) }
+        fn tagged(n: MN, xs: VF<Nat>(n)) -> MN {
+            if let h : VFNil = xs { let e: (n = MZ) = cong(h); MZ } else { MS(MZ) }
         }
-    "#;
-    let msg = bad(&mut with_option(), src);
-    assert!(msg.contains("indexed family") && msg.contains("inversion"), "{msg}");
+        "#,
+    );
 }

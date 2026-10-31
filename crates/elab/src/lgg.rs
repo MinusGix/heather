@@ -163,6 +163,7 @@ pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, M
         t: t.clone(),
         match_witness: true,
         conv: None,
+        conv_fst: None,
         witness: Vec::new(),
         path: Vec::new(),
     };
@@ -195,6 +196,7 @@ pub(crate) fn lgg_body_up_to_conversion(
     s: &Term,
     t: &Term,
     conv: &dyn Fn(&Term, &Term) -> bool,
+    conv_fst: &dyn Fn(&Term, &Term, &Term, &Term, &Type, &Level) -> bool,
 ) -> Result<Term, Mismatch> {
     if s == t {
         return lgg_body(x, y, s, t);
@@ -204,6 +206,7 @@ pub(crate) fn lgg_body_up_to_conversion(
         t: t.clone(),
         match_witness: true,
         conv: Some(conv),
+        conv_fst: Some(conv_fst),
         witness: Vec::new(),
         path: Vec::new(),
     };
@@ -233,6 +236,7 @@ pub(crate) fn first_difference(x: &Term, y: &Term) -> Option<Mismatch> {
         t: Term::Zero,
         match_witness: false,
         conv: None,
+        conv_fst: None,
         witness: Vec::new(),
         path: Vec::new(),
     };
@@ -250,6 +254,9 @@ struct Lgg<'c> {
     /// a node under none of the walk's binders (scoped in `Γ`), whether they
     /// are `(s, t)` up to conversion there.
     conv: Option<&'c dyn Fn(&Term, &Term) -> bool>,
+    /// The same test for a pair witness's first components (`a ≈ s₁`,
+    /// `b ≈ t₁` at their type and level), for [`Self::projection_hole`].
+    conv_fst: Option<&'c dyn Fn(&Term, &Term, &Term, &Term, &Type, &Level) -> bool>,
     /// `witness[k]` is `(s, t)` weakened past the `k` binders walked, the
     /// sides' scope there. Memoized because the walk asks for it at every
     /// node.
@@ -347,6 +354,40 @@ impl Lgg<'_> {
         x == sw && y == tw
     }
 
+    /// A witness pair of two dependent pairs at one `Σ`, and a position whose
+    /// sides are their first (or second) components: the hole is `fst(z)`
+    /// (or `snd(z)`). This is how a packed equation `⟨i, s⟩ = ⟨j, t⟩` gives
+    /// `i = j` by `cong` (docs/dependent-match-compiler-design.md §9).
+    fn projection_hole(&mut self, x: &Term, y: &Term, k: u32) -> Option<Term> {
+        if !self.match_witness {
+            return None;
+        }
+        let (
+            Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst: s1, snd: s2 },
+            Term::Pair { fst_level: l2, snd_level: r2, fst_ty: f2, snd_ty: g2, fst: t1, snd: t2 },
+        ) = (&self.s, &self.t)
+        else {
+            return None;
+        };
+        if fst_level != l2 || snd_level != r2 || fst_ty != f2 || snd_ty != g2 {
+            return None;
+        }
+        let first = (*x == s1.shift_local(k) && *y == t1.shift_local(k))
+            || (k == 0 && self.conv_fst.is_some_and(|conv| conv(x, y, s1, t1, fst_ty, fst_level)));
+        let second = *x == s2.shift_local(k) && *y == t2.shift_local(k);
+        let (fst_level, snd_level) = (fst_level.clone(), snd_level.clone());
+        let fst_ty = Rc::new(fst_ty.shift_local(k + 1));
+        let snd_ty = Rc::new(snd_ty.shift_local_above(k + 1, 1));
+        let pair = Rc::new(Term::Var(LocalVar(k)));
+        if first {
+            Some(Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair })
+        } else if second {
+            Some(Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair })
+        } else {
+            None
+        }
+    }
+
     /// The path to the stopping node: everything pushed on the way down,
     /// *minus* the node itself, whose two formers are reported separately.
     fn ancestors(&self) -> Vec<&'static str> {
@@ -423,6 +464,9 @@ impl Lgg<'_> {
         }
         if self.is_hole(x, y, k) || (k == 0 && self.conv.is_some_and(|conv| conv(x, y))) {
             return Ok(Term::Var(LocalVar(k)));
+        }
+        if let Some(projected) = self.projection_hole(x, y, k) {
+            return Ok(projected);
         }
         match (x, y) {
             (Term::Succ(a), Term::Succ(b)) => Ok(Term::Succ(Rc::new(self.tm(a, b, k)?))),

@@ -58,3 +58,4 @@ issues each slice closes.
 - 2026-10-31: Slice 1 (match-equation-in-every-arm) done on PR #318: the anonymous arm equation, in the term only when an arm needs it (§4.3.1).
 - 2026-10-31: Slice 3 (match-infers-constant-motive) done on PR #318 (§6.1).
 - 2026-10-31: Slice 2 (match-refines-computed-scrutinee) done on PR #318 (§5.1).
+- 2026-10-31: Slice 6 (match-equation-indexed-family) done on PR #318 (§9.1). Slice 5 blocked on the W child spelling (match-clause-equations' log).

@@ -8267,25 +8267,44 @@ impl Elaborator {
         result: &Type,
         span: Span,
     ) -> R<Term> {
-        // §4: an indexed family's arms live at *different* indices, so `e = z`
-        // would relate two values at two types. Homogeneous `Id` cannot say
-        // that, and the thing that can is the family's inversion principle —
-        // a library device, not a syntax (issues/surface-existential.md).
-        if let Some(ind) = self
-            .iwf_of_at(cx, scrut_ty)
-            .map(|(ind, _)| ind)
-            .or_else(|| self.indexed_of_at(cx, scrut_ty).map(|(ind, _)| ind))
-        {
-            return err(
-                format!(
-                    "the equation binding is not available on the indexed family \
-                     `{}`: an arm's index varies with its constructor, so \
-                     `e = pat` would relate two values at different types. Case \
-                     on the index first, or state the equation you want as an \
-                     inversion lemma",
-                    ind.name
-                ),
-                span,
+        // An indexed family's arms live at *different* indices, so `e = z`
+        // would relate two values at two types. The index packed with the
+        // value is one type, `Σ(j: I). F(j)`, and that equation is the one
+        // bound (docs/dependent-match-compiler-design.md §9).
+        if let Some((ind, fam)) = self.iwf_of_at(cx, scrut_ty) {
+            let family = PackedFamily {
+                ity: fam.ity.clone(),
+                ilvl: fam.ilvl.clone(),
+                flvl: fam.lvl(),
+                idx: Rc::clone(&fam.idx),
+                at: &|i, k| fam.ty_at(i, k),
+                eliminate: &|acx: &Cx, arms: &[Arm], scrut: Term, motive: Type, level: Level| {
+                    self.elab_match_iwf(
+                        acx, form, &ind, &fam, arms, scrut, motive, level,
+                        iwf_family::IndexMotive::Plain, span,
+                    )
+                },
+            };
+            return self.elab_convoy_packed(
+                cx, form, generated, h, arms, scrut_t, scrut_ty, scrut_lvl, &family, motive, mlvl,
+                result, span,
+            );
+        }
+        if let Some((ind, fam)) = self.indexed_of_at(cx, scrut_ty) {
+            let (ity, ilvl) = self.index_type_of(cx, &ind, span)?;
+            let family = PackedFamily {
+                ity,
+                ilvl,
+                flvl: fam.level.clone(),
+                idx: Rc::clone(&fam.idx),
+                at: &|i, k| fam.el_at(i, k),
+                eliminate: &|acx: &Cx, arms: &[Arm], scrut: Term, motive: Type, level: Level| {
+                    self.elab_match_indexed(acx, form, &ind, &fam, arms, scrut, motive, level, span)
+                },
+            };
+            return self.elab_convoy_packed(
+                cx, form, generated, h, arms, scrut_t, scrut_ty, scrut_lvl, &family, motive, mlvl,
+                result, span,
             );
         }
         let plan = matching::plan_convoy(h, arms, &scrut_t, scrut_ty, scrut_lvl, &motive, mlvl);
@@ -8303,6 +8322,93 @@ impl Elaborator {
         )?;
         Ok(matching::finish_convoy(
             elim, scrut_t, scrut_ty, scrut_lvl, mlvl, result,
+        ))
+    }
+
+    /// [`Self::elab_convoy`] on an indexed family (design §9): each arm takes
+    /// `h : ⟨i, e⟩ = ⟨idx(C, x̄), C(x̄)⟩` at `Σ(j: I). F(j)`, through the
+    /// two-binder motive `λ j z => Π(p: ⟨i, e⟩ = ⟨j, z⟩). M(j, z)`, applied to
+    /// `refl`. `M(j, z)` is the index generalized as route 1 does it; the
+    /// equation's left side is not, since it is the scrutinee's own.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_convoy_packed(
+        &self,
+        cx: &Cx,
+        form: MatchForm,
+        generated: bool,
+        h: &str,
+        arms: &[Arm],
+        scrut_t: Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+        fam: &PackedFamily<'_>,
+        motive: Type,
+        mlvl: &Level,
+        result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        let m2 = self.generalize_index(cx, &motive, &fam.idx);
+        let (ilvl, flvl) = (fam.ilvl.clone(), fam.flvl.clone());
+        let slvl = Level::join(ilvl.clone(), flvl.clone());
+        // `Σ(j: I). F(j)` and `⟨i, z⟩`, scoped `k` binders past Γ.
+        let sigma = |k: u32| Type::Sigma {
+            fst_level: ilvl.clone(),
+            snd_level: flvl.clone(),
+            fst: Rc::new(fam.ity.shift_local(k)),
+            snd: Rc::new((fam.at)(Term::Var(LocalVar(0)), k + 1)),
+        };
+        let pack = |k: u32, i: Term, z: Term| Term::Pair {
+            fst_level: ilvl.clone(),
+            snd_level: flvl.clone(),
+            fst_ty: Rc::new(fam.ity.shift_local(k)),
+            snd_ty: Rc::new((fam.at)(Term::Var(LocalVar(0)), k + 1)),
+            fst: Rc::new(i),
+            snd: Rc::new(z),
+        };
+        let here = pack(0, (*fam.idx).clone(), scrut_t.clone());
+        // Over `(Γ, j, z)`.
+        let equation = Type::Id {
+            level: slvl.clone(),
+            ty: Rc::new(sigma(2)),
+            lhs: Rc::new(here.shift_local(2)),
+            rhs: Rc::new(pack(2, Term::Var(LocalVar(1)), Term::Var(LocalVar(0)))),
+        };
+        let convoyed = Type::Pi {
+            dom_level: slvl.clone(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(equation),
+            cod: Rc::new(m2.shift_local(1)),
+        };
+        let clvl = Level::join(slvl.clone(), mlvl.clone());
+        let at_scrut = Type::Id {
+            level: slvl.clone(),
+            ty: Rc::new(sigma(0)),
+            lhs: Rc::new(here.clone()),
+            rhs: Rc::new(here.clone()),
+        };
+        let convoyed_here = Type::Pi {
+            dom_level: slvl.clone(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(at_scrut.clone()),
+            cod: Rc::new(result.shift_local(1)),
+        };
+        let plan = matching::plan_convoy(h, arms, &scrut_t, scrut_ty, scrut_lvl, &motive, mlvl);
+        let prepared = self.prepare_arms(
+            cx, form, generated, &plan.arms, &scrut_t, scrut_ty, scrut_lvl, &convoyed_here, false,
+            &clvl, span,
+        )?;
+        let (acx, arms) = match &prepared {
+            Some((c, a)) => (c, a.as_slice()),
+            None => (cx, plan.arms.as_slice()),
+        };
+        let elim = (fam.eliminate)(acx, arms, scrut_t, convoyed, clvl)?;
+        Ok(crate::spelling::checked_app(
+            Rc::new(elim),
+            slvl.clone(),
+            mlvl.clone(),
+            Rc::new(at_scrut),
+            Rc::new(result.shift_local(1)),
+            Rc::new(Term::Refl { level: slvl, ty: Rc::new(sigma(0)), tm: Rc::new(here) }),
         ))
     }
 
@@ -9654,7 +9760,13 @@ impl Elaborator {
                             };
                             conv(a, &s) && conv(b, &t)
                         };
-                        match lgg::lgg_body_up_to_conversion(&rx, &ry, &s, &t, &witness).ok().filter(|body| fits(body)) {
+                        let witness_fst = |a: &Term, b: &Term, s1: &Term, t1: &Term, ty: &Type, level: &Level| {
+                            let conv = |l: &Term, r: &Term| {
+                                oracle.convert_term(&cx.gamma, Layer::Prog, l, r, ty, level).is_ok()
+                            };
+                            conv(a, s1) && conv(b, t1)
+                        };
+                        match lgg::lgg_body_up_to_conversion(&rx, &ry, &s, &t, &witness, &witness_fst).ok().filter(|body| fits(body)) {
                             Some(body) => body,
                             None => {
                                 let msg = self.cong_mismatch(cx, &mismatch, expected, &s, &t);
@@ -10291,3 +10403,16 @@ enum GroupKind {
 /// (docs/dependent-match-compiler-design.md §4.1). `__` names are the
 /// machinery's; a certificate may spell it, a user does not write it.
 pub(crate) const MATCH_EQ: &str = "__match_eq";
+
+/// An indexed family as [`Elaborator::elab_convoy_packed`] reads it: its index
+/// type, its levels, the family at an index, and its own eliminator at a
+/// two-binder motive.
+struct PackedFamily<'a> {
+    ity: Type,
+    ilvl: Level,
+    flvl: Level,
+    idx: Rc<Term>,
+    /// `F(i)`, scoped `k` binders past Γ, `i` scoped there too.
+    at: &'a dyn Fn(Term, u32) -> Type,
+    eliminate: &'a dyn Fn(&Cx, &[Arm], Term, Type, Level) -> R<Term>,
+}

@@ -8,7 +8,7 @@ position, and compiles nested patterns to case trees with per-clause
 equations. Its "done when" is this note, decided by Minus, with the slices
 filed.
 
-**Status: decided (2026-10-31, §13); slices 4, 1, 3 and 2 implemented (§8.1, §4.3.1, §6.1, §5.1).** No kernel change is needed and none is
+**Status: decided (2026-10-31, §13); slices 4, 1, 3, 2 and 6 implemented (§8.1, §4.3.1, §6.1, §5.1, §9.1); slice 5 blocked (`match-clause-equations`' log).** No kernel change is needed and none is
 proposed. Everything here is elaborator front end over the route lowerings
 that already exist.
 
@@ -520,6 +520,40 @@ slice of its own (slice 6) because `iwf_match_motive`'s index inversion
 (tiers 1–2) has to commute with it. Until then the anonymous equation is
 simply absent on indexed families, which is today's behaviour minus the
 error.
+
+### 9.1 As implemented (slice 6, 2026-11-01)
+
+- **The convoy.** `Elaborator::elab_convoy_packed` (`lib.rs`) replaces the
+  refusal in `elab_convoy` for both lowerings of a family: `IWf`/W
+  (`iwf_of_at`) and route 1 (`indexed_of_at`).
+  - It generalizes the index out of the motive as route 1 does
+    (`generalize_index`).
+  - It wraps the result in `Π(p: ⟨i, e⟩ = ⟨j, z⟩)` over `(Γ, j, z)`, keeping
+    the left side as the scrutinee's own.
+  - It runs the family's eliminator at that two-binder motive with
+    `IndexMotive::Plain`, then applies the result to `refl`.
+  - `PackedFamily` carries what differs between the two lowerings: the
+    index type, the family at an index, and the eliminator.
+- **Reading the index.** `cong(h)` against `i = idx(C, x̄)` gives the index
+  equation. The anti-unifier learned one rule for it
+  (`Lgg::projection_hole`, `lgg.rs`): when the witnesses are two pairs at
+  one `Σ` and a differing position is their first or second components, the
+  hole is `fst(z)` or `snd(z)`. In the conversion pass it compares first
+  components up to conversion, since a family's index is spelled
+  differently by the arm and by the statement.
+- **Without inversion.** The packed motive is the plain generalization, so an
+  arm the index rules out must still be written. It closes through the
+  index equation: `VNil => { let e: (Succ(n) = 0) = cong(h); absurd(e) }`.
+  Route 1 asks for that arm without `h` too. On an `IWf` family whose index
+  inverts (tier 1), a match without `h` keeps the inverted motive and may
+  leave impossible arms out, exactly as before. With `h` it may not. That
+  arm would need the inverted motive under the `Π(p)`, which is the
+  remaining part of this slice's commuting question.
+- **Tests.** `match_equation_split.rs` replaces the refusal test with the
+  packed equation on an `MN`-indexed and a `Nat`-indexed family: an open
+  element type, a computation by `refl`, the index read in both arms, and a
+  ruled-out arm closed by `absurd`. A wrong index equation is still refused.
+  `positional_if_let.rs`'s `if let h :` on a family now checks.
 
 ## 10. Written motives become overrides
 
