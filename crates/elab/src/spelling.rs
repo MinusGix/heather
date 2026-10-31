@@ -105,6 +105,21 @@ pub(crate) fn proj_of(t: &Term) -> Option<(bool, &Rc<Term>)> {
     }
 }
 
+/// The component a projection chain reads off a pair it is written over,
+/// by syntax alone: `fst(snd(pair(a; pair(b; c))))` is `b`. A field read
+/// off a constructed record (`CdState(s.m - 1, …).m`, a `decreases`
+/// measure at a self-call's argument) is this shape, and its component is
+/// the field's value with no δ step taken — where a weak head would unfold
+/// the value on into its definition's eliminator
+/// (issues/decreases-measure-record-field-unspelled.md). `None` unless every
+/// projection meets a pair.
+pub(crate) fn project_value(t: &Term) -> Option<&Rc<Term>> {
+    let (first, pair) = proj_of(t)?;
+    let inner: &Term = if proj_of(pair).is_some() { project_value(pair)? } else { pair };
+    let (a, b) = pair_of(inner)?;
+    Some(if first { a } else { b })
+}
+
 /// Compare a projection path without comparing its typing annotations.
 /// Arm aliases and motive instantiations carry different emitted spellings
 /// of the same Σ types.
@@ -220,6 +235,18 @@ pub(crate) fn beta_head(t: &Term) -> Option<Term> {
         }
     };
     Some(beta_head(&r).unwrap_or(r))
+}
+
+/// `ty` with its `El` term's head β-redexes contracted ([`beta_head`]);
+/// `None` when there was none. A pattern-bound proof is typed so: an
+/// `Exists`'s `.proof` is `(λ k => P(k))(e.witness)`, read raw no relation is
+/// visible in it (issues/omega-redex-typed-fact-ignored.md,
+/// issues/linarith-redex-typed-fact.md).
+pub(crate) fn beta_head_ty(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::El { level, tm } => Some(Type::El { level: level.clone(), tm: Rc::new(beta_head(tm)?) }),
+        _ => None,
+    }
 }
 
 /// An application the elaborator **constructs** from a Π it holds, outside

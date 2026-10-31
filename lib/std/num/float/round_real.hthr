@@ -579,3 +579,84 @@ theorem CReal::enclose_narrow(self x: CReal, k, n: Nat, le: k + 2 <= n): x.enclo
 theorem CReal::enclosed_narrows(self x: CReal, step: Nat, ps: 1 <= step, n, p: Nat): x.enclosed().Narrows(n, p, step) {
     x.enclosed().narrows_of(step, ps, λ k => Exists(k + 2, λ m _ le => x.enclose_narrow(k, m, le)), n, p)
 }
+
+// ---------------------------------------------------------------------------
+// Every rational lies in a closed grid cell, and apart from every grid point
+// by one distance is off the grid.
+
+theorem Format::approx_between(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st)): F.grid(h.int()) <= x ∧ x <= F.grid(h.int() + 1) {
+    match st as λ s => F.Approx(x, h, s) → F.grid(h.int()) <= x ∧ x <= F.grid(h.int() + 1) {
+        False => λ (e: x ≈ F.grid(h.int())) => And(Rat::le_of_same(Rat::same_sym(e)),
+            Rat::le_trans(Rat::le_of_same(e), F.grid_le(h.int(), h.int() + 1, omega))),
+        True => λ (b: F.grid(h.int()) < x ∧ x < F.grid(h.int() + 1)) => And(Rat::le_of_lt(b.left), Rat::le_of_lt(b.right)),
+    }(a)
+}
+
+// Every rational lies in some closed grid cell.
+theorem Format::grid_floor(self F: Format, y: Rat): ∃ H: Int, F.grid(H) <= y ∧ y <= F.grid(H + 1) {
+    let h = F.rat_h(y);
+    let ab = F.approx_between(y.abs(), h, F.rat_st(y), F.rat_approx(y));
+    match Rat::le_total(0, y) {
+        Inl(nn) => {
+            let e: (y.abs() ≈ y) = y.abs_of_nonneg(nn);
+            let lo: (F.grid(h.int()) <= y) = linarith(e, ab.left);
+            let hi: (y <= F.grid(h.int() + 1)) = linarith(e, ab.right);
+            Exists(h.int(), And(lo, hi))
+        },
+        Inr(np) => {
+            let e: (y.abs() ≈ -y) = Rat::same_trans(Rat::same_sym(y.abs_neg()), (-y).abs_of_nonneg(linarith(np)));
+            let top: (-F.grid(h.int() + 1) ≈ F.grid(-(h.int() + 1))) = F.grid_neg(h.int() + 1);
+            let bot: (-F.grid(h.int()) ≈ F.grid(-h.int())) = F.grid_neg(h.int());
+            let up: (F.grid(-h.int()) <= F.grid(-(h.int() + 1) + 1)) = F.grid_le(-h.int(), -(h.int() + 1) + 1, omega);
+            let lo: (F.grid(-(h.int() + 1)) <= y) = linarith(e, ab.right, top);
+            let hi: (y <= F.grid(-(h.int() + 1) + 1)) = linarith(e, ab.left, bot, up);
+            Exists(-(h.int() + 1), And(lo, hi))
+        },
+    }
+}
+
+theorem Format::off_grid_of_apart(self F: Format, X: CReal, dd: Rat, hdd: 0 < dd,
+    ap: (m: Int) → X - CReal::ofRat(F.grid(m)) <= CReal::ofRat(-dd) ∨ CReal::ofRat(dd) <= X - CReal::ofRat(F.grid(m))):
+    F.OffGrid(X)
+{
+    match dd.archimedean_inv_pow2(hdd) {
+        Exists(k, small) => {
+            let y = X.at(k + 3);
+            let up: (X <= CReal::ofRat(y + Rat::inv_pow2(k + 3))) = X.le_term_add(k + 3);
+            let dn: (CReal::ofRat(y - Rat::inv_pow2(k + 3)) <= X) = X.term_sub_le(k + 3);
+            let q1: (Rat::inv_pow2(k + 1) + Rat::inv_pow2(k + 1) ≈ Rat::inv_pow2(k)) = Rat::inv_pow2_half(k);
+            let q2: (Rat::inv_pow2(k + 2) + Rat::inv_pow2(k + 2) ≈ Rat::inv_pow2(k + 1)) = Rat::inv_pow2_half(k + 1);
+            let q3: (Rat::inv_pow2(k + 3) + Rat::inv_pow2(k + 3) ≈ Rat::inv_pow2(k + 2)) = Rat::inv_pow2_half(k + 2);
+            let p3: (0 < Rat::inv_pow2(k + 3)) = Rat::inv_pow2_pos(k + 3);
+            let gap0: (Rat::inv_pow2(k + 1) + Rat::inv_pow2(k + 3) < dd) = linarith(small, q1, q2, q3, p3);
+            let gap1: (Rat::inv_pow2(k + 3) < dd) = linarith(small, q1, q2, q3, p3);
+            let ip = Rat::inv_pow2(k + 1);
+            let p2 = p3;
+            match F.grid_floor(y) {
+                Exists(H, c) => {
+                    let gl = F.grid(H);
+                    let gh = F.grid(H + 1);
+                    let L0 = CReal::ofRat_le(c.left);
+                    let H0 = CReal::ofRat_le(c.right);
+                    let G0 = CReal::ofRat_lt(gap0);
+                    let G1 = CReal::ofRat_lt(gap1);
+                    let lo: (CReal::ofRat(gl + ip) <= X) = match ap(H) {
+                        Inl(bad) => {
+                            let k0: False = linarith(bad, dn, L0, G1);
+                            false_elim(k0)
+                        },
+                        Inr(good) => linarith(good, G0, CReal::ofRat_lt(p2)),
+                    };
+                    let hi: (X <= CReal::ofRat(gh - ip)) = match ap(H + 1) {
+                        Inl(good) => linarith(good, G0, CReal::ofRat_lt(p2)),
+                        Inr(bad) => {
+                            let k0: False = linarith(bad, up, H0, G1);
+                            false_elim(k0)
+                        },
+                    };
+                    Exists(H, Exists(k + 1, And(lo, hi)))
+                },
+            }
+        },
+    }
+}

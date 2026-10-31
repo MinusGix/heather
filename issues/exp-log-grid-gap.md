@@ -1,6 +1,6 @@
 ---
 title: Prove exp and log at floats clear of the rounding grid (Padé gap) and their enclosures narrow
-status: open
+status: closed
 labels: [mathematics,reals,float]
 area: mathematics
 milestone: [float-transcendental]
@@ -41,3 +41,7 @@ the series (no integral), which is the more likely fit.
   assumed here only the two hypotheses of `round_real_apart` as stated.
 - **[[elementary-functions-at-reals]]** owns exp's laws at `CReal`; the
   Padé identity needs at most the series and `exp(a)·exp(b)`, if that.
+
+## Log
+
+- 2026-10-31: exp done, with no integrals: `Format::exp_off_grid` (lib/std/num/float/pade.hthr) and `Float::exp_total` / `exp_total_correct` / `Format::exp_search_ends` (transcendental.hthr), with docs/creal-transcendental-round.md "The Padé gap". The remainder is a series, `S_n = Σ (n+k)!/(k!(2n+1+k)!) x^k`, related by the three-term recurrence term by term over an x-free weight. The approximants are cleared to integers (`PadeInts`), whose Casoratian `-2u(-u²)^n` is never 0. The errors are the terms of a series with ratio `v x²/(4n+6)`. Total exp searches over `CReal::enclosed`, which already narrows. What is left moves out: the series boxes' narrowing to [[exp-box-narrowing]], and log to [[log-grid-gap]] (blocked on `exp(log q) ≈ q`). New general lemmas: `CReal::le_of_slack`, `scale_between`, `apart_of_scaled`; `Series::comb`/`sums_comb` (limits in linear relation), `real_dominated`, `err_mono`; `Format::grid_floor`, `grid_lattice`, `off_grid_of_apart`; `Int::natAbs_pos_of_ne`, `Rat::far_of_int`. Tactic gaps met on the way: [[ring-hypotheses-cast-spelling]], [[linarith-redex-typed-fact]], and a ring certificate over many reciprocals out of fuel ([[ring-certificate-kernel-cost]]).

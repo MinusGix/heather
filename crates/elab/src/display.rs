@@ -659,6 +659,7 @@ impl Speller<'_> {
             Term::Fst { .. } | Term::FstAt { .. } => self
                 .alias(t)
                 .or_else(|| self.field_read(t, d))
+                .or_else(|| self.value_field_read(t, d))
                 .or_else(|| self.projection_reduct(t, d))
                 .unwrap_or_else(|| self.raw_tm(t)),
             Term::GlobalTm { var, subst } => self
@@ -949,6 +950,44 @@ impl Speller<'_> {
         } else {
             format!("({shown}).{name}")
         })
+    }
+
+    /// A field read off a constructed record value
+    /// (issues/decreases-measure-record-field-unspelled.md): a `decreases`
+    /// measure `s.m` at the self-call `f(CdState(s.m - 1, …))` is
+    /// `fst(snd(pair(…)))`, whose receiver is no variable [`Self::field_read`]
+    /// can type, and whose weak head unfolds the field's value (`s.m - 1`)
+    /// on into `sub`'s eliminator. For reading it is the read as written,
+    /// `CdState(s.m - 1, …).m`; for a source spelling it is the field's value
+    /// itself — the component projected by syntax, which re-elaborates to a
+    /// term the read converts to by Σ-β alone. A component that does not
+    /// spell leaves the attempt to the routes after this one.
+    fn value_field_read(&self, t: &Term, d: u32) -> Option<String> {
+        let field = crate::spelling::project_value(t)?;
+        if self.qualified {
+            let before = self.fallbacks.get();
+            let shown = self.tm(field, d + 1);
+            if self.fallbacks.get() == before {
+                return Some(shown);
+            }
+            self.fallbacks.set(before);
+            return None;
+        }
+        let mut receiver = t;
+        while let Some((_, pair)) = crate::spelling::proj_of(receiver) {
+            receiver = pair;
+        }
+        let (ind, _, Some(fields)) = self.ctor_fields(receiver)? else {
+            return None;
+        };
+        if !ind.is_record {
+            return None;
+        }
+        let k = fields.iter().position(|v| Rc::ptr_eq(v, field) || **v == **field)?;
+        let (Some(name), _) = ind.ctors[0].fields.get(k)? else {
+            return None;
+        };
+        Some(format!("{}.{name}", self.ctor_value(receiver, d + 1)?))
     }
 
     /// A projection nothing above names, spelled as its bounded weak head —

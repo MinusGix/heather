@@ -103,7 +103,9 @@ theorem dictionary_view(x: A, h: x <= x): x <= x { by dictionary_in_scope("Order
 }
 
 section<A: OrderedAddGroup(≈, <, <=, +)> {
-// A lemma of a stronger class finds no dictionary here.
-// expect-error: no number of arguments makes the conclusion
+// A lemma of a stronger class finds no dictionary here: the conclusion's
+// `A.inv` names the dictionary in scope, which is of the weaker class
+// (issues/implicit-from-record-parameter-type.md: a projection teaches it).
+// expect-error: an argument of type `OrderedAddGroup<…>` where `LocatedAddGroup<…>` is expected
 theorem no_located_dictionary(x, y: A, h: x <= y): A.inv(y) <= A.inv(x) { by use_law("LocatedAddGroup::neg_le") }
 }

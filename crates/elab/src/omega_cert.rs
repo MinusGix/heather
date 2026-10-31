@@ -623,7 +623,10 @@ fn reads_as_relation(elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
 /// An order at `Int` or `Nat` as written, not unfolded: whether it is at
 /// `Nat`, whether it is strict, and its two sides. `nlinarith` multiplies
 /// these (docs/nonlinear-arithmetic-design.md §4.4).
+/// A head β-redex is read through its contractum, as [`push_conjuncts`] does.
 pub(crate) fn integral_order(elab: &Elaborator, ty: &Type) -> Option<(bool, bool, Rc<Term>, Rc<Term>)> {
+    let contracted = crate::spelling::beta_head_ty(ty);
+    let ty = contracted.as_ref().unwrap_or(ty);
     let found = |nat, strict, sides: Option<(&Rc<Term>, &Rc<Term>)>| sides.map(|(l, r)| (nat, strict, Rc::clone(l), Rc::clone(r)));
     found(false, false, relation_args(elab, ty))
         .or_else(|| found(false, true, strict_relation_args(elab, ty)))
@@ -634,8 +637,11 @@ pub(crate) fn integral_order(elab: &Elaborator, ty: &Type) -> Option<(bool, bool
 /// The two sides of a relation this frontend reflects, as `linarith` at
 /// `Int` and `Nat` reads them (docs/linarith-design.md §8): `<=`, `<` or `=`
 /// at either, its negation, or a defined proposition that unfolds to one;
-/// `true` for `Nat`.
+/// `true` for `Nat`. A head β-redex is read through its contractum, as
+/// [`push_conjuncts`] does.
 pub(crate) fn integral_sides(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(bool, Rc<Term>, Rc<Term>)> {
+    let contracted = crate::spelling::beta_head_ty(ty);
+    let ty = contracted.as_ref().unwrap_or(ty);
     let stated = |ty: &Type| {
         let decoded = crate::inductive::decoded(ty);
         let int = relation_args(elab, ty)
@@ -932,13 +938,7 @@ fn local_fact_entries(elab: &Elaborator, cx: &Cx) -> Vec<LocalFact> {
 /// `(λ k => P(k))(e.witness)`, and read raw no relation is visible in it
 /// (issues/omega-redex-typed-fact-ignored.md).
 fn push_conjuncts(elab: &Elaborator, cx: &Cx, name: String, term: Rc<Term>, ty: Type, level: Level, out: &mut Vec<LocalFact>) {
-    let ty = match &ty {
-        Type::El { level, tm } => match crate::spelling::beta_head(tm) {
-            Some(contractum) => Type::El { level: level.clone(), tm: Rc::new(contractum) },
-            None => ty,
-        },
-        _ => ty,
-    };
+    let ty = crate::spelling::beta_head_ty(&ty).unwrap_or(ty);
     if let Some(ind) = elab.display_tag_of(&ty)
         && crate::goal_combinators::conjunction(&ind)
     {
@@ -1390,6 +1390,17 @@ fn field_as_put_within(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) ->
             _ => return Rc::clone(receiver),
         }
         Rc::new(out)
+    }
+    // A read off a record constructed in place (a `decreases` measure at a
+    // self-call's argument, `CdState(s.m - 1, …).m`) is the component as
+    // put, by syntax: no receiver to unfold, and a weak head of the read
+    // would unfold the field's value on into its eliminator
+    // (issues/decreases-measure-record-field-unspelled.md).
+    if let Some(field) = crate::spelling::project_value(tm) {
+        if is_field_read(elab, field) {
+            return field_as_put_within(elab, cx, field, depth.checked_sub(1)?);
+        }
+        return Some(Rc::clone(field));
     }
     let named = elab.named_field_read(tm);
     let (_, receiver) = named.clone().unwrap_or_else(|| projection_path(tm));
@@ -3400,6 +3411,29 @@ fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
     }
 }
 
+/// `(b, v)` for a fact `b = True` (`v`) or `b = False` at `Bool`: what a
+/// `match h: n.leb(m) { … }` arm binds, read as the guard `b.IsTrue()` or
+/// `(!b).IsTrue()` (issues/decreases-measure-record-field-unspelled.md).
+/// A side that is itself a literal is no guard.
+fn bool_equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Rc<Term>, bool)> {
+    let decoded = crate::inductive::decoded(ty);
+    let Type::Id { ty, lhs, rhs, .. } = &*decoded else {
+        return None;
+    };
+    if elab.display_type(cx, ty) != "Bool" {
+        return None;
+    }
+    let literal = |t: &Term| match elab.spell_term_clean(cx, t).as_deref() {
+        Some("True") => Some(true),
+        Some("False") => Some(false),
+        _ => None,
+    };
+    if literal(lhs).is_some() {
+        return None;
+    }
+    Some((Rc::clone(lhs), literal(rhs)?))
+}
+
 /// A guard a round reads: `evidence` proves `term.IsTrue()` when `positive`
 /// and `(!term).IsTrue()` otherwise; `negated` evidence proves
 /// `¬term.IsTrue()` instead.
@@ -3409,6 +3443,9 @@ struct GuardItem {
     term: Rc<Term>,
     positive: bool,
     negated: bool,
+    /// `evidence` is the equation `term = True` (`positive`) or
+    /// `term = False`, what a `match h: b { … }` arm binds.
+    equation: bool,
 }
 
 struct GuardEmitter<'a> {
@@ -3434,7 +3471,7 @@ impl GuardEmitter<'_> {
     }
 
     fn item(evidence: &str, term: &Rc<Term>, positive: bool) -> GuardItem {
-        GuardItem { evidence: evidence.to_string(), term: Rc::clone(term), positive, negated: false }
+        GuardItem { evidence: evidence.to_string(), term: Rc::clone(term), positive, negated: false, equation: false }
     }
 
     /// The guards in `items`, the first taken apart and the rest after it,
@@ -3447,6 +3484,12 @@ impl GuardEmitter<'_> {
         let item = items.remove(0);
         let h = item.evidence.clone();
         let then = |front: Vec<GuardItem>, rest: &[GuardItem]| front.into_iter().chain(rest.iter().cloned()).collect::<Vec<_>>();
+        if item.equation {
+            let x = self.name(GUARD_PART);
+            let body = self.emit(then(vec![Self::item(&x, &item.term, item.positive)], &items), budget);
+            let rule = if item.positive { "omega::guard_eq_true" } else { "omega::guard_eq_false" };
+            return format!("{}({h}, {x} ⊢ {body})", self.rule(rule));
+        }
         if item.negated {
             let x = self.name(GUARD_PART);
             let body = self.emit(then(vec![Self::item(&x, &item.term, false)], &items), budget);
@@ -3550,13 +3593,17 @@ fn split_bool_guards(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
                 None => (fact.name.clone(), Rc::clone(b)),
             };
             readable |= guard_reads_by_structure(elab, &b);
-            items.push(GuardItem { evidence, term: b, positive: true, negated: false });
+            items.push(GuardItem { evidence, term: b, positive: true, negated: false, equation: false });
             settles.push(fact.name);
         } else if let Some(domain) = negated_domain(elab, cx, &fact.ty)
             && let Some(b) = is_true_arg(elab, &domain)
         {
             readable |= guard_reads_by_structure(elab, b) || unfold_guard(elab, cx, b).is_some();
-            items.push(GuardItem { evidence: fact.name.clone(), term: Rc::clone(b), positive: false, negated: true });
+            items.push(GuardItem { evidence: fact.name.clone(), term: Rc::clone(b), positive: false, negated: true, equation: false });
+            settles.push(fact.name);
+        } else if let Some((b, value)) = bool_equation(elab, cx, &fact.ty) {
+            readable |= guard_reads_by_structure(elab, &b) || unfold_guard(elab, cx, &b).is_some();
+            items.push(GuardItem { evidence: fact.name.clone(), term: b, positive: value, negated: false, equation: true });
             settles.push(fact.name);
         }
     }

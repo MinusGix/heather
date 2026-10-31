@@ -165,6 +165,13 @@ pub(super) struct U<'a> {
     /// usual one (issues/instance-binder-occurrence-through-binder-types.md,
     /// issues/elaborator-canonical-type-spelling.md). `None` declines.
     pub(super) respell: &'a dyn Fn(&Type) -> Option<Type>,
+    /// A rigid subject type of a generic declaration that registered no code
+    /// function, spelled as its **constructor** applied to its type arguments
+    /// (`El(app(λ A. ⌜Tac<El A>⌝; ⌜Nat⌝))`,
+    /// [`crate::Elaborator::constructor_spelling`]): what [`Self::respell`]
+    /// cannot give, asked only by an applied meta's pattern
+    /// (issues/higher-kinded-classes.md). `None` declines.
+    pub(super) constructor: &'a dyn Fn(&Type) -> Option<Type>,
 }
 
 impl<'a> U<'a> {
@@ -188,7 +195,14 @@ impl<'a> U<'a> {
     /// [`matching_value_spine`], and nothing else changes.
     #[cfg(test)]
     pub(super) fn syntactic(gamma: &'a LocalCtx) -> Self {
-        U { gamma, subject_metas: None, type_args: &|_, _| None, canonical_head: &|_, _| None, respell: &|_| None }
+        U {
+            gamma,
+            subject_metas: None,
+            type_args: &|_, _| None,
+            canonical_head: &|_, _| None,
+            respell: &|_| None,
+            constructor: &|_| None,
+        }
     }
 }
 
@@ -402,12 +416,24 @@ pub(super) fn unify_ty(
         // `gamma`, re-spelled there, weakened back.
         (Type::El { tm, .. }, s)
             if !matches!(s, Type::El { .. })
-                && committed_head(tm, n)
+                && (committed_head(tm, n) || flex_applied_head(tm, n))
                 && zonked_tm(tm, n, sols).is_none() =>
         {
-            if let Some(s0) = u.subject_ty(s, d)
-                && let Some(r @ Type::El { .. }) = (u.respell)(&s0)
+            let flex = !committed_head(tm, n);
+            let Some(s0) = u.subject_ty(s, d) else { return };
+            let respelled = (u.respell)(&s0);
+            if respelled.is_none()
+                && flex
+                && let Some(Type::El { tm: c, .. }) = (u.constructor)(&s0)
             {
+                let c = match u.subject_metas {
+                    Some((m, _)) => c.shift_global(m),
+                    None => (*c).clone(),
+                };
+                flex_spine(u, tm, &c.apply_local(&embed(u.gamma, d)), n, d, sols);
+                return;
+            }
+            if let Some(r @ Type::El { .. }) = respelled {
                 let r = match u.subject_metas {
                     Some((m, _)) => r.shift_global(m),
                     None => r,
@@ -441,10 +467,17 @@ fn spine_len(mut t: &Term) -> usize {
 }
 
 /// The subject is in the committed world, so even global index zero is
-/// rigid: only the pattern uses indices below `n` as scratch metas.
+/// rigid: only the pattern uses indices below `n` as scratch metas. A field
+/// read off a rigid receiver is as rigid as the receiver: a class
+/// dictionary's `K.inv(x)` is `fst@(snd@(…(d)))(x)`, which a morphism's
+/// `?neg_b(map(x))` learns `?neg_b := K.inv` from
+/// (issues/cast-reading-through-local-morphism.md).
 fn rigid_head(mut t: &Term) -> bool {
     while let Some((fun, _)) = spelling::app_of(t) {
         t = fun;
+    }
+    while let Some((_, receiver)) = projection_of(t) {
+        t = receiver;
     }
     matches!(t, Term::Var(_) | Term::GlobalTm { .. })
 }
@@ -627,6 +660,21 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             let (left2, v2) = injection_of(s).expect("an injection");
             if left1 == left2 {
                 unify_tm(u, v1, v2, n, d, sols);
+            }
+        }
+        // Projections, in either spelling on either side. A record type
+        // lowers inline to its fields' Σ tower, so a parameter the fields
+        // read through a projection reaches the unifier as `fst@(snd@(?x))`
+        // against `fst@(snd@(x))` — `U(x)` with `ok: x.k = v`
+        // (issues/implicit-from-record-parameter-type.md). Same component on
+        // both sides pairs the receivers. A projection is not injective, so
+        // `?x := x` is one solution, not the only one: learn-only, like the
+        // application congruence above, and the kernel judges the call.
+        (p, s) if projection_of(p).is_some() && projection_of(s).is_some() => {
+            let (first1, r1) = projection_of(p).expect("a projection");
+            let (first2, r2) = projection_of(s).expect("a projection");
+            if first1 == first2 {
+                unify_tm(u, r1, r2, n, d, sols);
             }
         }
         (Term::Lam { body: b1, .. }, Term::Lam { body: b2, .. }) => {
@@ -830,6 +878,52 @@ fn committed_head(mut t: &Term, n: u32) -> bool {
     matches!(t, Term::GlobalTm { var, .. } if var.0 >= n)
 }
 
+/// Is `t` a meta of this call **applied** to at least one argument —
+/// `?M(⌜Nat⌝)`, the type `M(Nat)` of a parameter over a type constructor
+/// `M: Type → Type` (issues/higher-kinded-classes.md, piece 1)? Its subject
+/// is re-spelled through the declaration's code like a committed head's, so
+/// `El(app(?M; ⌜Nat⌝))` meets `El(app(Option#tycode_fn^δ; ⌜Nat⌝))` and the
+/// application congruence's aligned-spine rule takes the first-order
+/// solution `?M := Option#tycode_fn^δ` (head plus leading type arguments,
+/// the last one abstracted — Lean's and Haskell's approximation).
+fn flex_applied_head(mut t: &Term, n: u32) -> bool {
+    let mut applied = false;
+    while let Some((fun, _)) = spelling::app_of(t) {
+        applied = true;
+        t = fun;
+    }
+    applied && matches!(t, Term::GlobalTm { var, .. } if var.0 < n)
+}
+
+/// An applied meta `?M(p̄)` against a rigid application `C(ā)` whose head
+/// is a **λ** — [`U::constructor`]'s spelling of a type with no registered
+/// code function. The application congruence cannot take this pair, because
+/// it contracts a β-redex head before anything else and the λ would vanish
+/// into its body; so the first-order rule is applied here directly: `?M`
+/// takes `C` with the leading arguments, and the last `|p̄|` arguments pair
+/// with the pattern's. Learn-only, like every rule here.
+fn flex_spine(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
+    let mut pargs = Vec::new();
+    let mut head = pat;
+    while let Some((fun, arg)) = spelling::app_of(head) {
+        pargs.push(arg);
+        head = fun;
+    }
+    let mut sargs = Vec::new();
+    let mut prefix = subj;
+    for _ in 0..pargs.len() {
+        let Some((fun, arg)) = spelling::app_of(prefix) else {
+            return;
+        };
+        sargs.push(arg);
+        prefix = fun;
+    }
+    unify_tm(u, head, prefix, n, d, sols);
+    for (p, a) in pargs.into_iter().zip(sargs) {
+        unify_tm(u, p, a, n, d, sols);
+    }
+}
+
 /// Is the spine's head a global, the one head δ can unfold?
 fn global_head(mut t: &Term) -> bool {
     while let Some((fun, _)) = spelling::app_of(t) {
@@ -842,6 +936,16 @@ fn global_head(mut t: &Term) -> bool {
 fn pair_of(t: &Term) -> Option<(&Term, &Term)> {
     match t {
         Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => Some((fst, snd)),
+        _ => None,
+    }
+}
+
+/// Which component a projection takes (`true` for `fst`), and its
+/// receiver, in either spelling.
+fn projection_of(t: &Term) -> Option<(bool, &Term)> {
+    match t {
+        Term::Fst { pair, .. } | Term::FstAt { pair } => Some((true, pair)),
+        Term::Snd { pair, .. } | Term::SndAt { pair } => Some((false, pair)),
         _ => None,
     }
 }

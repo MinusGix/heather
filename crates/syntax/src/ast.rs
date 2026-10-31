@@ -255,6 +255,14 @@ pub struct DatareprField {
 pub struct ClassDecl {
     pub name: String,
     pub params: Vec<String>,
+    /// Parallel to [`Self::params`]: the **kind** a parameter is written at,
+    /// `class Bind<M: Type → Type>` (issues/higher-kinded-classes.md). `None`
+    /// is an ordinary type parameter, the only kind every class written
+    /// before this grammar has. A kinded parameter is a type constructor, a
+    /// term rather than a type, so the class's record takes it as a leading
+    /// value parameter; the written head `Bind<Option>` is still spelled in
+    /// the angle brackets.
+    pub kinds: Vec<Option<Ty>>,
     /// `class Monoid<A>(op: A -> A -> A)` — the class's **value indices**
     /// (docs/operation-indexed-classes-design.md §3). The same
     /// [`InductiveDecl::valparams`] a `record` head takes, and lowered by the

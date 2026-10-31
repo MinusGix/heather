@@ -875,3 +875,13 @@ theorem Float::sqrt_inf({F: Format}, h: F.specials.has_inf().IsTrue(), nan: F.sp
 theorem Float::sqrt_neg_inf({F: Format}, h: F.specials.has_inf().IsTrue(), nan: F.specials.has_nan().IsTrue(), mode: Mode): (Float::sqrt(Inf(True, h), mode := mode, nan := nan)).is_nan() = True { refl }
 
 theorem Float::sqrt_nan({F: Format}, h, nan: F.specials.has_nan().IsTrue(), mode: Mode): (Float::sqrt(NaN(h), mode := mode, nan := nan)).is_nan() = True { refl }
+
+// ---------------------------------------------------------------------------
+// A float of nonzero magnitude has a nonzero value.
+
+theorem Finite::val_ne_zero({F: Format}, a: Finite(F), k: Nat, em: a.mag = Succ(k)): ¬(a.val() ≈ 0) {
+    match a.neg as λ b => a.neg = b → ¬(a.val() ≈ 0) {
+        False => λ ea (z: a.val() ≈ 0) => { let k0: False = linarith(Finite::val_pos_lt(a, ea, k, em), z); k0 },
+        True => λ ea (z: a.val() ≈ 0) => { let k0: False = linarith(Finite::val_neg_lt(a, ea, k, em), z); k0 },
+    }(refl)
+}

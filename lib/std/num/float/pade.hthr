@@ -1,0 +1,755 @@
+// exp at a nonzero rational is clear of every float grid
+// (issues/exp-log-grid-gap.md; docs/creal-transcendental-round.md, "The Padé
+// gap").
+//
+// Ziv's search over `exp`'s enclosures ends as soon as the real sits a known
+// distance inside one grid cell (`Format::round_real_apart`). For `exp(x)`,
+// x = u/v ≠ 0 rational, that distance comes from the diagonal Padé
+// approximants, with no integrals: every bound is read off a series.
+//
+// - The remainder: Q_n(x)e^x - P_n(x) = σ_n S_n(x), σ_n = ±x^{2n+1}, where
+//   S_n = Σ_k (n+k)!/(k!(2n+1+k)!) x^k is a `Series` (ratio
+//   x(n+k+1)/((k+1)(2n+k+2))). The identity is the three-term recurrence
+//   S_n = (4n+6) S_{n+1} + x² S_{n+2}, proved term by term over an x-free
+//   weight and carried to the limits by `Series::comb`, plus the two base
+//   cases e^x = 1 + x S_0 = -1 + 2 S_0 + x² S_1.
+// - Integers: q_n = v^n Q_n(u/v), p_n = v^n P_n(u/v) satisfy
+//   a_{n+2} = (4n+6) v a_{n+1} + u² a_n, so they are integers
+//   (`PadeInts`), and the Casoratian p_n q_{n+1} - p_{n+1} q_n = -2u(-u²)^n
+//   is never 0.
+// - Size: |q_n e^x - p_n| <= |v^n σ_n| n!/(2n+1)! K, K a bound on e^|x|,
+//   and these are the terms of a series with ratio v x²/(4n+6)
+//   (`Series::pade_beta`), so two consecutive ones are below any 2^-m.
+// - Apartness: for a lattice point g = G 2^-d, q_n g - p_n is a multiple of
+//   2^-d, nonzero at n or n+1 (else the Casoratian vanishes), so at least
+//   2^-d; with the error below 2^-(d+2) that keeps q (e^x - g) from 0, and
+//   e^x at least 2^-d/(2(|q_n| + |q_{n+1}|) + 2) from g, a distance that
+//   does not depend on g (`CReal::exp_apart_lattice`).
+//
+// The grid is such a lattice (`Format::grid_lattice`), so `exp(x)` is off
+// it (`Format::exp_off_grid`); exp(0) = 1 is the exact case.
+
+import logic;
+import bool;
+import nat;
+import int;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import big_operator;
+import creal;
+import dyadic;
+import interval;
+import creal_interval;
+import omega;
+import list;
+import tactic;
+import mono;
+import linarith;
+import ring;
+import cast;
+import morphism;
+import series;
+import elementary;
+import float;
+import round;
+import round_real;
+
+// ---------------------------------------------------------------------------
+// The remainder series S_n(x) = Σ_k (n+k)!/(k!(2n+1+k)!) x^k.
+
+// Its first term n!/(2n+1)!: each step multiplies by (n+1)/((2n+2)(2n+3)) = 1/(4n+6).
+fn Series::pade_lead(n: Nat) → Rat { match n { Zero => 1, Succ(m) => Series::pade_lead(m) * Rat::inv_succ(4 * m + 5) } }
+
+theorem Series::pade_lead_nonneg(n: Nat): 0 <= Series::pade_lead(n) {
+    match n { Zero => omega, Succ(m) => Rat::mul_nonneg(Series::pade_lead_nonneg(m), Rat::le_of_lt(Rat::inv_succ_pos(4 * m + 5))) }
+}
+
+// (n+k+1)/(2n+k+2), between 0 and 1.
+fn Series::pade_frac(n, k: Nat) → Rat { Rat::ofInt(OfNat(n + k + 1)) * Rat::inv_succ(n + n + k + 1) }
+
+// t_{k+1}/t_k = x(n+k+1)/((k+1)(2n+k+2)): exp's ratio times the fraction.
+fn Series::pade_ratio(x: Rat, n, k: Nat) → Rat { Series::exp_ratio(x, k) * Series::pade_frac(n, k) }
+
+theorem Series::pade_ratio_abs(x: Rat, n, k: Nat): Series::pade_ratio(x, n, k).abs() <= Series::exp_ratio(x, k).abs() {
+    let e = Series::exp_ratio(x, k);
+    let f = Series::pade_frac(n, k);
+    let nn: (0 <= f) = omega;
+    let le1: (f <= 1) = omega;
+    calc {
+        (e * f).abs() ≈ e.abs() * f.abs() := e.abs_mul(f),
+        ≈ e.abs() * f := Rat::mul_respects(e.abs().same_refl(), f.abs_of_nonneg(nn)),
+        <= e.abs() * 1 := Rat::mul_le_mul(e.abs().le_refl(), le1, e.abs_nonneg(), nn),
+        ≈ e.abs() := e.abs().mul_one(),
+    }
+}
+
+theorem Series::pade_small(x: Rat, n, k: Nat, hk: x.abs_ceil() + x.abs_ceil() <= k): Series::pade_ratio(x, n, k).abs() <= Rat::inv_succ(1) {
+    Rat::le_trans(Series::pade_ratio_abs(x, n, k), Series::exp_small(x, k, hk))
+}
+
+fn Series::pade_rem(x: Rat, n: Nat) → Series {
+    Series(Series::pade_lead(n), λ k => Series::pade_ratio(x, n, k), x.abs_ceil() + x.abs_ceil(), λ k hk => Series::pade_small(x, n, k, hk))
+}
+
+// ---------------------------------------------------------------------------
+// Term relations. A term is exp's term x^k/k! times a weight free of x,
+// w(n, k) = (n+k)!/(2n+1+k)!, and the remainders' relations are the
+// weights', each by induction on k with the ratios' field identity.
+
+fn Series::pade_w(n, k: Nat) → Rat { match k { Zero => Series::pade_lead(n), Succ(j) => Series::pade_w(n, j) * Series::pade_frac(n, j) } }
+
+theorem Series::pade_term_w(x: Rat, n, k: Nat): Series::pade_rem(x, n).term(k) ≈ Series::exp(x).term(k) * Series::pade_w(n, k) {
+    match k {
+        Zero => { let r: (Series::pade_lead(n) ≈ 1 * Series::pade_lead(n)) = ring; r },
+        Succ(j) => {
+            let ih = Series::pade_term_w(x, n, j);
+            let r = calc {
+                Series::pade_rem(x, n).term(j) * (x * Rat::inv_succ(j) * (Rat::ofInt(OfNat(n + j + 1)) * Rat::inv_succ(n + n + j + 1)))
+                    ≈ (Series::exp(x).term(j) * Series::pade_w(n, j)) * (x * Rat::inv_succ(j) * (Rat::ofInt(OfNat(n + j + 1)) * Rat::inv_succ(n + n + j + 1))) := Rat::mul_same_r(ih),
+                ≈ (Series::exp(x).term(j) * (x * Rat::inv_succ(j))) * (Series::pade_w(n, j) * (Rat::ofInt(OfNat(n + j + 1)) * Rat::inv_succ(n + n + j + 1))) := ring,
+            };
+            r
+        },
+    }
+}
+
+// w(n+1, k) = w(n, k) (n+k+1) / ((2n+k+2)(2n+k+3)).
+theorem Series::pade_w_next(n, k: Nat):
+    Series::pade_w(n + 1, k) ≈ Series::pade_w(n, k) * (Rat::ofInt(OfNat(n + k + 1)) * (Rat::inv_succ(n + n + k + 1) * Rat::inv_succ(n + n + k + 2)))
+{
+    match k {
+        Zero => {
+            let l = Series::pade_lead(n);
+            let r: (l * Rat::inv_succ(4 * n + 5) ≈ l * (Rat::ofInt(OfNat(n + 0 + 1)) * (Rat::inv_succ(n + n + 0 + 1) * Rat::inv_succ(n + n + 0 + 2)))) = ring;
+            r
+        },
+        Succ(j) => {
+            let ih = Series::pade_w_next(n, j);
+            let r = calc {
+                Series::pade_w(n + 1, j) * (Rat::ofInt(OfNat((n + 1) + j + 1)) * Rat::inv_succ((n + 1) + (n + 1) + j + 1))
+                    ≈ (Series::pade_w(n, j) * (Rat::ofInt(OfNat(n + j + 1)) * (Rat::inv_succ(n + n + j + 1) * Rat::inv_succ(n + n + j + 2)))) * (Rat::ofInt(OfNat((n + 1) + j + 1)) * Rat::inv_succ((n + 1) + (n + 1) + j + 1)) := Rat::mul_same_r(ih),
+                ≈ (Series::pade_w(n, j) * (Rat::ofInt(OfNat(n + j + 1)) * Rat::inv_succ(n + n + j + 1))) * (Rat::ofInt(OfNat(n + Succ(j) + 1)) * (Rat::inv_succ(n + n + Succ(j) + 1) * Rat::inv_succ(n + n + Succ(j) + 2))) := ring,
+            };
+            r
+        },
+    }
+}
+
+// w(n+2, k) = w(n, k+2) / ((2n+k+4)(2n+k+5)).
+theorem Series::pade_w_skip(n, k: Nat):
+    Series::pade_w(n + 2, 0 + k) ≈ Series::pade_w(n, 2 + k) * (Rat::inv_succ(n + n + (2 + k) + 1) * Rat::inv_succ(n + n + (2 + k) + 2))
+{
+    match k {
+        Zero => {
+            let l = Series::pade_lead(n);
+            let r: (l * Rat::inv_succ(4 * n + 5) * Rat::inv_succ(4 * (n + 1) + 5)
+                ≈ (l * (Rat::ofInt(OfNat(n + 0 + 1)) * Rat::inv_succ(n + n + 0 + 1)) * (Rat::ofInt(OfNat(n + 1 + 1)) * Rat::inv_succ(n + n + 1 + 1))) * (Rat::inv_succ(n + n + (2 + 0) + 1) * Rat::inv_succ(n + n + (2 + 0) + 2))) = ring;
+            r
+        },
+        Succ(j) => {
+            let ih = Series::pade_w_skip(n, j);
+            let r = calc {
+                Series::pade_w(n + 2, 0 + j) * (Rat::ofInt(OfNat((n + 2) + (0 + j) + 1)) * Rat::inv_succ((n + 2) + (n + 2) + (0 + j) + 1))
+                    ≈ (Series::pade_w(n, 2 + j) * (Rat::inv_succ(n + n + (2 + j) + 1) * Rat::inv_succ(n + n + (2 + j) + 2))) * (Rat::ofInt(OfNat((n + 2) + (0 + j) + 1)) * Rat::inv_succ((n + 2) + (n + 2) + (0 + j) + 1)) := Rat::mul_same_r(ih),
+                ≈ (Series::pade_w(n, 2 + j) * (Rat::ofInt(OfNat(n + (2 + j) + 1)) * Rat::inv_succ(n + n + (2 + j) + 1))) * (Rat::inv_succ(n + n + (2 + Succ(j)) + 1) * Rat::inv_succ(n + n + (2 + Succ(j)) + 2)) := ring,
+            };
+            r
+        },
+    }
+}
+
+// x² e_k = e_{k+2} (k+1)(k+2).
+theorem Series::exp_term_two(x: Rat, k: Nat): x * x * Series::exp(x).term(0 + k) ≈ Series::exp(x).term(2 + k) * (Rat::ofInt(OfNat(k + 1)) * Rat::ofInt(OfNat(k + 2))) {
+    match k {
+        Zero => { let r: (x * x * 1 ≈ (1 * (x * Rat::inv_succ(0)) * (x * Rat::inv_succ(1))) * (Rat::ofInt(OfNat(0 + 1)) * Rat::ofInt(OfNat(0 + 2)))) = ring; r },
+        Succ(j) => {
+            let ih = Series::exp_term_two(x, j);
+            let r = calc {
+                x * x * (Series::exp(x).term(0 + j) * (x * Rat::inv_succ(0 + j))) ≈ (x * x * Series::exp(x).term(0 + j)) * (x * Rat::inv_succ(0 + j)) := ring,
+                ≈ (Series::exp(x).term(2 + j) * (Rat::ofInt(OfNat(j + 1)) * Rat::ofInt(OfNat(j + 2)))) * (x * Rat::inv_succ(0 + j)) := Rat::mul_same_r(ih),
+                ≈ (Series::exp(x).term(2 + j) * (x * Rat::inv_succ(2 + j))) * (Rat::ofInt(OfNat(Succ(j) + 1)) * Rat::ofInt(OfNat(Succ(j) + 2))) := ring,
+            };
+            r
+        },
+    }
+}
+
+// (2n+k+4)(2n+k+5) = (4n+6)(n+k+3) + (k+1)(k+2).
+theorem Series::pade_split(n, k: Nat):
+    1 ≈ Rat::ofInt(OfNat(4 * n + 6)) * (Rat::ofInt(OfNat(n + (2 + k) + 1)) * (Rat::inv_succ(n + n + (2 + k) + 1) * Rat::inv_succ(n + n + (2 + k) + 2)))
+        + (Rat::ofInt(OfNat(k + 1)) * Rat::ofInt(OfNat(k + 2))) * (Rat::inv_succ(n + n + (2 + k) + 1) * Rat::inv_succ(n + n + (2 + k) + 2))
+{ ring }
+
+// The three-term relation, term by term: t_{n,k+2} = (4n+6) t_{n+1,k+2} + x² t_{n+2,k}.
+theorem Series::pade_three_term(x: Rat, n, k: Nat):
+    Series::pade_rem(x, n).term(2 + k) ≈ Rat::ofInt(OfNat(4 * n + 6)) * Series::pade_rem(x, n + 1).term(2 + k) + x * x * Series::pade_rem(x, n + 2).term(0 + k)
+{
+    let e2 = Series::exp(x).term(2 + k);
+    let e0 = Series::exp(x).term(0 + k);
+    let wa = Series::pade_w(n, 2 + k);
+    let wb = Series::pade_w(n + 1, 2 + k);
+    let wc = Series::pade_w(n + 2, 0 + k);
+    let A = Rat::ofInt(OfNat(4 * n + 6));
+    let I = Rat::inv_succ(n + n + (2 + k) + 1) * Rat::inv_succ(n + n + (2 + k) + 2);
+    let O = Rat::ofInt(OfNat(n + (2 + k) + 1));
+    let K = Rat::ofInt(OfNat(k + 1)) * Rat::ofInt(OfNat(k + 2));
+    let hb: (wb ≈ wa * (O * I)) = Series::pade_w_next(n, 2 + k);
+    let hc: (wc ≈ wa * I) = Series::pade_w_skip(n, k);
+    let he: (x * x * e0 ≈ e2 * K) = Series::exp_term_two(x, k);
+    let sp: (1 ≈ A * (O * I) + K * I) = Series::pade_split(n, k);
+    let ta: (Series::pade_rem(x, n).term(2 + k) ≈ e2 * wa) = Series::pade_term_w(x, n, 2 + k);
+    let tb: (Series::pade_rem(x, n + 1).term(2 + k) ≈ e2 * wb) = Series::pade_term_w(x, n + 1, 2 + k);
+    let tc: (Series::pade_rem(x, n + 2).term(0 + k) ≈ e0 * wc) = Series::pade_term_w(x, n + 2, 0 + k);
+    calc {
+        Series::pade_rem(x, n).term(2 + k) ≈ (e2 * wa) * 1 := Rat::same_trans(ta, Rat::same_sym((e2 * wa).mul_one())),
+        ≈ (e2 * wa) * (A * (O * I) + K * I) := Rat::mul_respects((e2 * wa).same_refl(), sp),
+        ≈ A * (e2 * (wa * (O * I))) + (e2 * K) * (wa * I) := ring,
+        ≈ A * (e2 * wb) + (x * x * e0) * wc :=
+            Rat::add_respects(Rat::mul_respects(A.same_refl(), Rat::mul_respects(e2.same_refl(), Rat::same_sym(hb))), Rat::mul_respects(Rat::same_sym(he), Rat::same_sym(hc))),
+        ≈ A * (e2 * wb) + x * x * (e0 * wc) := ring,
+        ≈ A * Series::pade_rem(x, n + 1).term(2 + k) + x * x * Series::pade_rem(x, n + 2).term(0 + k) :=
+            Rat::add_respects(Rat::mul_respects(A.same_refl(), Rat::same_sym(tb)), Rat::mul_respects((x * x).same_refl(), Rat::same_sym(tc))),
+    }
+}
+
+// S_0's terms are exp's shifted: x · t_{0,k} = x^{k+1}/(k+1)!.
+theorem Series::pade_zero_exp(x: Rat, k: Nat): Series::exp(x).term(1 + k) ≈ x * Series::pade_rem(x, 0).term(0 + k) {
+    match k {
+        Zero => { let r: (1 * (x * Rat::inv_succ(0)) ≈ x * 1) = ring; r },
+        Succ(i) => {
+            let ih = Series::pade_zero_exp(x, i);
+            let r = calc {
+                    Series::exp(x).term(1 + i) * (x * Rat::inv_succ((1 + i))) ≈ (x * Series::pade_rem(x, 0).term(0 + i)) * (x * Rat::inv_succ((1 + i))) := Rat::mul_same_r(ih),
+                    ≈ x * (Series::pade_rem(x, 0).term(0 + i) * (x * Rat::inv_succ((0 + i)) * (Rat::ofInt(OfNat(0 + (0 + i) + 1)) * Rat::inv_succ(0 + 0 + (0 + i) + 1)))) := ring,
+                };
+            r
+        },
+    }
+}
+
+// t_{0,k} = x^k/(k+1)! = exp's term over k + 1.
+theorem Series::pade_zero_term(x: Rat, k: Nat): Series::pade_rem(x, 0).term(k) ≈ Series::exp(x).term(k) * Rat::inv_succ(k) {
+    match k {
+        Zero => { let r: (Series::pade_lead(0) ≈ 1 * Rat::inv_succ(0)) = ring; r },
+        Succ(i) => {
+            let ih = Series::pade_zero_term(x, i);
+            let r = calc {
+                    Series::pade_rem(x, 0).term(i) * (x * Rat::inv_succ(i) * (Rat::ofInt(OfNat(0 + i + 1)) * Rat::inv_succ(0 + 0 + i + 1))) ≈ (Series::exp(x).term(i) * Rat::inv_succ(i)) * (x * Rat::inv_succ(i) * (Rat::ofInt(OfNat(0 + i + 1)) * Rat::inv_succ(0 + 0 + i + 1))) := Rat::mul_same_r(ih),
+                    ≈ (Series::exp(x).term(i) * (x * Rat::inv_succ(i))) * Rat::inv_succ(Succ(i)) := ring,
+                };
+            r
+        },
+    }
+}
+
+// x² t_{1,k} = x^{k+2}(k+1)/(k+3)! = exp's (k+2)-th term times (k+1)/(k+3).
+theorem Series::pade_one_exp(x: Rat, k: Nat): x * x * Series::pade_rem(x, 1).term(0 + k) ≈ Series::exp(x).term(2 + k) * Rat::ofInt(OfNat(k + 1)) * Rat::inv_succ(k + 2) {
+    match k {
+        Zero => {
+            let r: (x * x * (1 * Rat::inv_succ(4 * 0 + 5)) ≈ (1 * (x * Rat::inv_succ(0)) * (x * Rat::inv_succ(1))) * Rat::ofInt(OfNat(0 + 1)) * Rat::inv_succ(0 + 2)) = ring;
+            r
+        },
+        Succ(i) => {
+            let ih = Series::pade_one_exp(x, i);
+            let r = calc {
+                    x * x * (Series::pade_rem(x, 1).term(0 + i) * (x * Rat::inv_succ((0 + i)) * (Rat::ofInt(OfNat(1 + (0 + i) + 1)) * Rat::inv_succ(1 + 1 + (0 + i) + 1)))) ≈ (x * x * Series::pade_rem(x, 1).term(0 + i)) * (x * Rat::inv_succ((0 + i)) * (Rat::ofInt(OfNat(1 + (0 + i) + 1)) * Rat::inv_succ(1 + 1 + (0 + i) + 1))) := ring,
+                    ≈ (Series::exp(x).term(2 + i) * Rat::ofInt(OfNat(i + 1)) * Rat::inv_succ(i + 2)) * (x * Rat::inv_succ((0 + i)) * (Rat::ofInt(OfNat(1 + (0 + i) + 1)) * Rat::inv_succ(1 + 1 + (0 + i) + 1))) := Rat::mul_same_r(ih),
+                    ≈ (Series::exp(x).term(2 + i) * (x * Rat::inv_succ((2 + i)))) * Rat::ofInt(OfNat(Succ(i) + 1)) * Rat::inv_succ(Succ(i) + 2) := ring,
+                };
+            r
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The identities between partial sums, then between the limits.
+
+// S_n = (4n+6) S_{n+1} + x² S_{n+2}, from two terms on.
+theorem Series::pade_three_sums(x: Rat, n, N: Nat):
+    Series::pade_rem(x, n).sum(2 + N) ≈ 0 + Rat::ofInt(OfNat(4 * n + 6)) * Series::pade_rem(x, n + 1).sum(2 + N) + x * x * Series::pade_rem(x, n + 2).sum(0 + N)
+{
+    let l = Series::pade_lead(n);
+    let base: ((0 + l) + l * (x * Rat::inv_succ(0) * (Rat::ofInt(OfNat(n + 0 + 1)) * Rat::inv_succ(n + n + 0 + 1)))
+        ≈ 0 + Rat::ofInt(OfNat(4 * n + 6)) * ((0 + l * Rat::inv_succ(4 * n + 5)) + l * Rat::inv_succ(4 * n + 5) * (x * Rat::inv_succ(0) * (Rat::ofInt(OfNat((n + 1) + 0 + 1)) * Rat::inv_succ((n + 1) + (n + 1) + 0 + 1))))
+            + x * x * 0) = ring;
+    Series::pade_rem(x, n).sums_comb(Series::pade_rem(x, n + 1), Series::pade_rem(x, n + 2), 0, Rat::ofInt(OfNat(4 * n + 6)), x * x, 2, 2, 0,
+        base, λ k => Series::pade_three_term(x, n, k), N)
+}
+
+// exp's sums against S_0: e = 1 + x S_0.
+theorem Series::pade_zero_sums(x: Rat, N: Nat):
+    Series::exp(x).sum(1 + N) ≈ 1 + x * Series::pade_rem(x, 0).sum(0 + N) + 0 * Series::pade_rem(x, 0).sum(0 + N)
+{
+    let base: (0 + 1 ≈ 1 + x * 0 + 0 * 0) = ring;
+    Series::exp(x).sums_comb(Series::pade_rem(x, 0), Series::pade_rem(x, 0), 1, x, 0, 1, 0, 0, base,
+        λ k => Rat::same_trans(Series::pade_zero_exp(x, k), ring), N)
+}
+
+// And against S_0 and S_1: e = -1 + 2 S_0 + x² S_1.
+theorem Series::pade_one_sums(x: Rat, N: Nat):
+    Series::exp(x).sum(2 + N) ≈ -1 + 2 * Series::pade_rem(x, 0).sum(2 + N) + x * x * Series::pade_rem(x, 1).sum(0 + N)
+{
+    let base: ((0 + 1) + 1 * (x * Rat::inv_succ(0)) ≈ -1 + 2 * ((0 + 1) + 1 * (x * Rat::inv_succ(0) * (Rat::ofInt(OfNat(0 + 0 + 1)) * Rat::inv_succ(0 + 0 + 0 + 1)))) + x * x * 0) = ring;
+    let terms = λ (k: Nat) => {
+        let e = Series::exp(x).term(2 + k);
+        let r: (e ≈ 2 * Series::pade_rem(x, 0).term(2 + k) + x * x * Series::pade_rem(x, 1).term(0 + k)) = calc {
+            e ≈ 2 * (e * Rat::inv_succ(2 + k)) + e * Rat::ofInt(OfNat(k + 1)) * Rat::inv_succ(k + 2) := ring,
+            ≈ 2 * Series::pade_rem(x, 0).term(2 + k) + x * x * Series::pade_rem(x, 1).term(0 + k) :=
+                Rat::add_respects(Rat::mul_respects(Rat::same_refl(2), Rat::same_sym(Series::pade_zero_term(x, 2 + k))), Rat::same_sym(Series::pade_one_exp(x, k))),
+        };
+        r
+    };
+    Series::exp(x).sums_comb(Series::pade_rem(x, 0), Series::pade_rem(x, 1), -1, 2, x * x, 2, 2, 0, base, terms, N)
+}
+
+fn CReal::pade_rem(x: Rat, n: Nat) → CReal { Series::pade_rem(x, n).real() }
+
+theorem CReal::pade_three(x: Rat, n: Nat):
+    CReal::pade_rem(x, n) ≈ CReal::ofRat(0) + CReal::ofRat(Rat::ofInt(OfNat(4 * n + 6))) * CReal::pade_rem(x, n + 1) + CReal::ofRat(x * x) * CReal::pade_rem(x, n + 2)
+{
+    Series::pade_rem(x, n).comb(Series::pade_rem(x, n + 1), Series::pade_rem(x, n + 2), 0, Rat::ofInt(OfNat(4 * n + 6)), x * x, 2, 2, 0, λ N => Series::pade_three_sums(x, n, N))
+}
+
+theorem CReal::pade_zero(x: Rat): CReal::exp_rat(x) ≈ CReal::ofRat(1) + CReal::ofRat(x) * CReal::pade_rem(x, 0) + CReal::ofRat(0) * CReal::pade_rem(x, 0) {
+    Series::exp(x).comb(Series::pade_rem(x, 0), Series::pade_rem(x, 0), 1, x, 0, 1, 0, 0, λ N => Series::pade_zero_sums(x, N))
+}
+
+theorem CReal::pade_one(x: Rat): CReal::exp_rat(x) ≈ CReal::ofRat(-1) + CReal::ofRat(2) * CReal::pade_rem(x, 0) + CReal::ofRat(x * x) * CReal::pade_rem(x, 1) {
+    Series::exp(x).comb(Series::pade_rem(x, 0), Series::pade_rem(x, 1), -1, 2, x * x, 2, 2, 0, λ N => Series::pade_one_sums(x, N))
+}
+
+// ---------------------------------------------------------------------------
+// The diagonal Padé approximants of exp, as a recurrence: with
+// P_0 = Q_0 = 1, P_1 = 2 + x, Q_1 = 2 - x and
+//
+//     A_{n+2} = (4n+6) A_{n+1} + x² A_n,
+//
+// Q_n(x) e^x - P_n(x) = σ_n S_n(x), σ_0 = x, σ_{n+1} = -x² σ_n: the
+// remainder is x^{2n+1} times a series with first term n!/(2n+1)!.
+
+record PadePair { p0: Rat, q0: Rat, p1: Rat, q1: Rat }
+
+fn PadePair::step(self r: PadePair, x: Rat, m: Nat) → PadePair {
+    PadePair(r.p1, r.q1, Rat::ofInt(OfNat(4 * m + 6)) * r.p1 + x * x * r.p0, Rat::ofInt(OfNat(4 * m + 6)) * r.q1 + x * x * r.q0)
+}
+
+fn PadePair::at(x: Rat, n: Nat) → PadePair { match n { Zero => PadePair(1, 1, 2 + x, 2 - x), Succ(m) => PadePair::at(x, m).step(x, m) } }
+
+fn Rat::pade_sign(self x: Rat, n: Nat) → Rat { match n { Zero => x, Succ(m) => -(x * x) * x.pade_sign(m) } }
+
+theorem CReal::pade_err(x: Rat, n: Nat):
+    CReal::ofRat(PadePair::at(x, n).q0) * CReal::exp_rat(x) - CReal::ofRat(PadePair::at(x, n).p0) ≈ CReal::ofRat(x.pade_sign(n)) * CReal::pade_rem(x, n)
+    ∧ CReal::ofRat(PadePair::at(x, n).q1) * CReal::exp_rat(x) - CReal::ofRat(PadePair::at(x, n).p1) ≈ CReal::ofRat(-(x * x) * x.pade_sign(n)) * CReal::pade_rem(x, n + 1)
+{
+    let X = CReal::exp_rat(x);
+    match n {
+        Zero => {
+            let S0 = CReal::pade_rem(x, 0);
+            let S1 = CReal::pade_rem(x, 1);
+            let z: (X ≈ CReal::ofRat(1) + CReal::ofRat(x) * S0 + CReal::ofRat(0) * S0) = CReal::pade_zero(x);
+            let o: (X ≈ CReal::ofRat(-1) + CReal::ofRat(2) * S0 + CReal::ofRat(x * x) * S1) = CReal::pade_one(x);
+            let l: (CReal::ofRat(1) * X - CReal::ofRat(1) ≈ CReal::ofRat(x) * S0) = ring(z);
+            let r: (CReal::ofRat(2 - x) * X - CReal::ofRat(2 + x) ≈ CReal::ofRat(-(x * x) * x) * S1) = ring(z, o);
+            And(l, r)
+        },
+        Succ(m) => {
+            let ih = CReal::pade_err(x, m);
+            let P = PadePair::at(x, m);
+            let A = Rat::ofInt(OfNat(4 * m + 6));
+            let s = x.pade_sign(m);
+            let S0 = CReal::pade_rem(x, m);
+            let S1 = CReal::pade_rem(x, m + 1);
+            let S2 = CReal::pade_rem(x, m + 2);
+            let e0: (CReal::ofRat(P.q0) * X - CReal::ofRat(P.p0) ≈ CReal::ofRat(s) * S0) = ih.left;
+            let e1: (CReal::ofRat(P.q1) * X - CReal::ofRat(P.p1) ≈ CReal::ofRat(-(x * x) * s) * S1) = ih.right;
+            let t: (S0 ≈ CReal::ofRat(0) + CReal::ofRat(A) * S1 + CReal::ofRat(x * x) * S2) = CReal::pade_three(x, m);
+            let r: (CReal::ofRat(A * P.q1 + x * x * P.q0) * X - CReal::ofRat(A * P.p1 + x * x * P.p0) ≈ CReal::ofRat(-(x * x) * (-(x * x) * s)) * S2) = calc {
+                CReal::ofRat(A * P.q1 + x * x * P.q0) * X - CReal::ofRat(A * P.p1 + x * x * P.p0)
+                    ≈ CReal::ofRat(A) * (CReal::ofRat(P.q1) * X - CReal::ofRat(P.p1)) + CReal::ofRat(x * x) * (CReal::ofRat(P.q0) * X - CReal::ofRat(P.p0)) := ring,
+                ≈ CReal::ofRat(A) * (CReal::ofRat(-(x * x) * s) * S1) + CReal::ofRat(x * x) * (CReal::ofRat(s) * S0) :=
+                    CReal::add_respects(CReal::mul_respects(CReal::ofRat(A).same_refl(), e1), CReal::mul_respects(CReal::ofRat(x * x).same_refl(), e0)),
+                ≈ CReal::ofRat(A) * (CReal::ofRat(-(x * x) * s) * S1) + CReal::ofRat(x * x) * (CReal::ofRat(s) * (CReal::ofRat(0) + CReal::ofRat(A) * S1 + CReal::ofRat(x * x) * S2)) :=
+                    CReal::add_respects((CReal::ofRat(A) * (CReal::ofRat(-(x * x) * s) * S1)).same_refl(),
+                        CReal::mul_respects(CReal::ofRat(x * x).same_refl(), CReal::mul_respects(CReal::ofRat(s).same_refl(), t))),
+                ≈ CReal::ofRat(-(x * x) * (-(x * x) * s)) * S2 := ring,
+            };
+            And(e1, r)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// S_n is at most n!/(2n+1)! times a bound K on e^|x|, term by term against
+// e^|x|'s series: each term is exp's term times a weight w(n, k) <= w(n, 0).
+
+theorem Series::pade_frac_le(n, k: Nat): 0 <= Series::pade_frac(n, k) ∧ Series::pade_frac(n, k) <= 1 {
+    let f = Rat::inv_succ(n + n + k + 1);
+    let c: (0 <= Rat::ofInt(OfNat(n + k + 1))) = Rat::ofInt_le(0, OfNat(n + k + 1), omega);
+    let lo: (0 <= Rat::ofInt(OfNat(n + k + 1)) * f) = Rat::mul_nonneg(c, Rat::le_of_lt(Rat::inv_succ_pos(n + n + k + 1)));
+    let hi: (Rat::ofInt(OfNat(n + k + 1)) * f <= 1) = linarith;
+    And(lo, hi)
+}
+
+theorem Series::pade_w_le(n, k: Nat): 0 <= Series::pade_w(n, k) ∧ Series::pade_w(n, k) <= Series::pade_lead(n) {
+    match k {
+        Zero => And(Series::pade_lead_nonneg(n), Rat::le_refl(Series::pade_lead(n))),
+        Succ(j) => {
+            let ih = Series::pade_w_le(n, j);
+            let w = Series::pade_w(n, j);
+            let fb = Series::pade_frac_le(n, j);
+            let up: (w * Series::pade_frac(n, j) <= w * 1) = Rat::mul_le_mono_l(fb.right, ih.left);
+            let hi: (w * Series::pade_frac(n, j) <= Series::pade_lead(n)) = linarith(up, ih.right);
+            And(Rat::mul_nonneg(ih.left, fb.left), hi)
+        },
+    }
+}
+
+theorem Series::pade_dom(x: Rat, n, k: Nat): Series::pade_rem(x, n).term(k).abs() <= Series::pade_lead(n) * Series::exp(x.abs()).term(k) {
+    let e = Series::exp(x).term(k);
+    let E = Series::exp(x.abs()).term(k);
+    let w = Series::pade_w(n, k);
+    let wb = Series::pade_w_le(n, k);
+    let hE: (0 <= E) = Series::exp_term_nonneg(x.abs(), x.abs_nonneg(), k);
+    calc {
+        Series::pade_rem(x, n).term(k).abs() ≈ (e * w).abs() := Rat::abs_respects(Series::pade_term_w(x, n, k)),
+        ≈ e.abs() * w.abs() := e.abs_mul(w),
+        ≈ E * w := Rat::mul_respects(Series::exp_term_abs(x, k), w.abs_of_nonneg(wb.left)),
+        <= E * Series::pade_lead(n) := Rat::mul_le_mono_l(wb.right, hE),
+        ≈ Series::pade_lead(n) * E := ring,
+    }
+}
+
+// e^|x| from its first ratio-small term on, with that term's tail bound.
+fn Rat::pade_K(self x: Rat) → Rat { Series::exp(x.abs()).sum(x.abs_ceil() + x.abs_ceil()) + Series::exp(x.abs()).err(x.abs_ceil() + x.abs_ceil()) }
+
+theorem CReal::pade_rem_bound(x: Rat, n: Nat):
+    CReal::ofRat(-(Series::pade_lead(n) * x.pade_K())) <= CReal::pade_rem(x, n) ∧ CReal::pade_rem(x, n) <= CReal::ofRat(Series::pade_lead(n) * x.pade_K())
+{
+    let st = x.abs_ceil() + x.abs_ceil();
+    Series::pade_rem(x, n).real_dominated(Series::exp(x.abs()), Series::pade_lead(n), Series::pade_lead_nonneg(n),
+        λ k => Series::pade_dom(x, n, k), st, Nat::le_refl(st), Series::exp_term_nonneg(x.abs(), x.abs_nonneg(), st))
+}
+
+// ---------------------------------------------------------------------------
+// The approximants at x = u/v with the denominators cleared: v^n P_n(u/v)
+// is an integer, by the same recurrence with (4n+6) v and u².
+
+record PadeInts { p0: Int, q0: Int, p1: Int, q1: Int }
+
+fn PadeInts::step(self r: PadeInts, u, v: Int, m: Nat) → PadeInts {
+    PadeInts(r.p1, r.q1, OfNat(4 * m + 6) * v * r.p1 + u * u * r.p0, OfNat(4 * m + 6) * v * r.q1 + u * u * r.q0)
+}
+
+fn PadeInts::at(u, v: Int, n: Nat) → PadeInts {
+    match n { Zero => PadeInts(1, 1, 2 * v + u, 2 * v - u), Succ(m) => PadeInts::at(u, v, m).step(u, v, m) }
+}
+
+fn Rat::pade_vpow(self V: Rat, n: Nat) → Rat { match n { Zero => 1, Succ(m) => V.pade_vpow(m) * V } }
+
+theorem PadeInts::bridge(x: Rat, u, v: Int, hux: Rat::ofInt(u) ≈ Rat::ofInt(v) * x, n: Nat):
+    Rat::ofInt(PadeInts::at(u, v, n).p0) ≈ Rat::ofInt(v).pade_vpow(n) * PadePair::at(x, n).p0
+    ∧ Rat::ofInt(PadeInts::at(u, v, n).q0) ≈ Rat::ofInt(v).pade_vpow(n) * PadePair::at(x, n).q0
+    ∧ Rat::ofInt(PadeInts::at(u, v, n).p1) ≈ Rat::ofInt(v).pade_vpow(n) * Rat::ofInt(v) * PadePair::at(x, n).p1
+    ∧ Rat::ofInt(PadeInts::at(u, v, n).q1) ≈ Rat::ofInt(v).pade_vpow(n) * Rat::ofInt(v) * PadePair::at(x, n).q1
+{
+    let V = Rat::ofInt(v);
+    let U = Rat::ofInt(u);
+    match n {
+        Zero => {
+            let a: (Rat::ofInt(1) ≈ 1 * 1) = ring;
+            let c: (Rat::ofInt(2 * v + u) ≈ 1 * V * (2 + x)) = ring(hux);
+            let d: (Rat::ofInt(2 * v - u) ≈ 1 * V * (2 - x)) = ring(hux);
+            And(a, And(a, And(c, d)))
+        },
+        Succ(m) => {
+            let ih = PadeInts::bridge(x, u, v, hux, m);
+            let I = PadeInts::at(u, v, m);
+            let P = PadePair::at(x, m);
+            let w = V.pade_vpow(m);
+            let A = Rat::ofInt(OfNat(4 * m + 6));
+            let hp0: (Rat::ofInt(I.p0) ≈ w * P.p0) = ih.left;
+            let hq0: (Rat::ofInt(I.q0) ≈ w * P.q0) = ih.right.left;
+            let hp1: (Rat::ofInt(I.p1) ≈ w * V * P.p1) = ih.right.right.left;
+            let hq1: (Rat::ofInt(I.q1) ≈ w * V * P.q1) = ih.right.right.right;
+            let np: (Rat::ofInt(OfNat(4 * m + 6) * v * I.p1 + u * u * I.p0) ≈ w * V * V * (A * P.p1 + x * x * P.p0)) = calc {
+                Rat::ofInt(OfNat(4 * m + 6) * v * I.p1 + u * u * I.p0) ≈ A * V * Rat::ofInt(I.p1) + U * U * Rat::ofInt(I.p0) := ring,
+                ≈ A * V * (w * V * P.p1) + (V * x) * (V * x) * (w * P.p0) :=
+                    Rat::add_respects(Rat::mul_respects((A * V).same_refl(), hp1), Rat::mul_respects(Rat::mul_respects(hux, hux), hp0)),
+                ≈ w * V * V * (A * P.p1 + x * x * P.p0) := ring,
+            };
+            let nq: (Rat::ofInt(OfNat(4 * m + 6) * v * I.q1 + u * u * I.q0) ≈ w * V * V * (A * P.q1 + x * x * P.q0)) = calc {
+                Rat::ofInt(OfNat(4 * m + 6) * v * I.q1 + u * u * I.q0) ≈ A * V * Rat::ofInt(I.q1) + U * U * Rat::ofInt(I.q0) := ring,
+                ≈ A * V * (w * V * P.q1) + (V * x) * (V * x) * (w * P.q0) :=
+                    Rat::add_respects(Rat::mul_respects((A * V).same_refl(), hq1), Rat::mul_respects(Rat::mul_respects(hux, hux), hq0)),
+                ≈ w * V * V * (A * P.q1 + x * x * P.q0) := ring,
+            };
+            And(hp1, And(hq1, And(np, nq)))
+        },
+    }
+}
+
+// The Casoratian p0 q1 - p1 q0: -2u, then times -u² each step, so never 0.
+fn PadeInts::cas(self r: PadeInts) → Int { r.p0 * r.q1 - r.p1 * r.q0 }
+
+theorem PadeInts::cas_step(self r: PadeInts, u, v: Int, m: Nat): r.step(u, v, m).cas() = -((u * u) * r.cas()) {
+    let e: (r.p1 * (OfNat(4 * m + 6) * v * r.q1 + u * u * r.q0) - (OfNat(4 * m + 6) * v * r.p1 + u * u * r.p0) * r.q1 = -((u * u) * (r.p0 * r.q1 - r.p1 * r.q0))) = ring;
+    e
+}
+
+theorem PadeInts::cas_pos(u, v: Int, hu: 0 < u.natAbs(), n: Nat): 0 < PadeInts::at(u, v, n).cas().natAbs() {
+    match n {
+        Zero => {
+            let e: (1 * (2 * v - u) - (2 * v + u) * 1 = -(2 * u)) = ring;
+            let a: ((-(2 * u)).natAbs() = (2 * u).natAbs()) = Int::natAbs_neg(2 * u);
+            let b: ((2 * u).natAbs() = Int::natAbs(2) * u.natAbs()) = Int::natAbs_mul(2, u);
+            let c: (Int::natAbs(2) = 2) = refl;
+            let r0: (0 < (-(2 * u)).natAbs()) = omega(a, b, c, hu);
+            let r: (0 < (1 * (2 * v - u) - (2 * v + u) * 1).natAbs()) = rewrite(sym(e), in := r0);
+            r
+        },
+        Succ(m) => {
+            let ih = PadeInts::cas_pos(u, v, hu, m);
+            let W = PadeInts::at(u, v, m).cas();
+            let e = PadeInts::at(u, v, m).cas_step(u, v, m);
+            let a: ((-((u * u) * W)).natAbs() = ((u * u) * W).natAbs()) = Int::natAbs_neg((u * u) * W);
+            let b: (((u * u) * W).natAbs() = (u * u).natAbs() * W.natAbs()) = Int::natAbs_mul(u * u, W);
+            let c: ((u * u).natAbs() = u.natAbs() * u.natAbs()) = Int::natAbs_mul(u, u);
+            let p: (0 < u.natAbs() * u.natAbs() * W.natAbs()) = @Nat::mul_pos(u.natAbs() * u.natAbs(), W.natAbs(), @Nat::mul_pos(u.natAbs(), u.natAbs(), hu, hu), ih);
+            let b2: (((u * u) * W).natAbs() = u.natAbs() * u.natAbs() * W.natAbs()) = rewrite(c, in := b);
+            let r: (0 < (-((u * u) * W)).natAbs()) = omega(a, b2, p);
+            rewrite(sym(e), in := r)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The integer errors E_n = q_n e^x - p_n = τ_n S_n, τ_n = v^n σ_n, and
+// their size: |τ_n| n!/(2n+1)! K is a series' n-th term (ratio v x²/(4n+6)).
+
+fn Rat::pade_tau(self x: Rat, V: Rat, n: Nat) → Rat { V.pade_vpow(n) * x.pade_sign(n) }
+
+fn CReal::pade_int_err(x: Rat, u, v: Int, n: Nat) → CReal {
+    CReal::ofRat(Rat::ofInt(PadeInts::at(u, v, n).q0)) * CReal::exp_rat(x) - CReal::ofRat(Rat::ofInt(PadeInts::at(u, v, n).p0))
+}
+
+theorem CReal::pade_int_err_eq(x: Rat, u, v: Int, hux: Rat::ofInt(u) ≈ Rat::ofInt(v) * x, n: Nat):
+    CReal::pade_int_err(x, u, v, n) ≈ CReal::ofRat(x.pade_tau(Rat::ofInt(v), n)) * CReal::pade_rem(x, n)
+{
+    let X = CReal::exp_rat(x);
+    let I = PadeInts::at(u, v, n);
+    let P = PadePair::at(x, n);
+    let w = Rat::ofInt(v).pade_vpow(n);
+    let b = PadeInts::bridge(x, u, v, hux, n);
+    let er: (CReal::ofRat(P.q0) * X - CReal::ofRat(P.p0) ≈ CReal::ofRat(x.pade_sign(n)) * CReal::pade_rem(x, n)) = CReal::pade_err(x, n).left;
+    calc {
+        CReal::ofRat(Rat::ofInt(I.q0)) * X - CReal::ofRat(Rat::ofInt(I.p0)) ≈ CReal::ofRat(w * P.q0) * X - CReal::ofRat(w * P.p0) :=
+            CReal::sub_respects(CReal::mul_respects(CReal::ofRat_respects(b.right.left), X.same_refl()), CReal::ofRat_respects(b.left)),
+        ≈ CReal::ofRat(w) * (CReal::ofRat(P.q0) * X - CReal::ofRat(P.p0)) := ring,
+        ≈ CReal::ofRat(w) * (CReal::ofRat(x.pade_sign(n)) * CReal::pade_rem(x, n)) := CReal::mul_respects(CReal::ofRat(w).same_refl(), er),
+        ≈ CReal::ofRat(w * x.pade_sign(n)) * CReal::pade_rem(x, n) := ring,
+    }
+}
+
+fn Series::pade_beta_ratio(r: Rat, k: Nat) → Rat { r * Rat::inv_succ(4 * k + 5) }
+
+theorem Series::pade_beta_small(r: Rat, k: Nat, hk: r.abs_ceil() <= k): Series::pade_beta_ratio(r, k).abs() <= Rat::inv_succ(1) {
+    let c: (Rat::ofInt(OfNat(r.abs_ceil())) <= Rat::ofInt(OfNat(k))) = Rat::ofInt_le(OfNat(r.abs_ceil()), OfNat(k), omega(hk));
+    let f = Rat::inv_succ(4 * k + 5);
+    let up: (Rat::ofInt(OfNat(r.abs_ceil())) * f <= Rat::inv_succ(1)) = linarith(c);
+    Rat::le_trans(r.abs_mul_inv_succ(4 * k + 5), up)
+}
+
+fn Series::pade_beta(x, V: Rat) → Series {
+    Series(x.abs() * x.pade_K(), λ k => Series::pade_beta_ratio(V * (x * x), k), (V * (x * x)).abs_ceil(), λ k hk => Series::pade_beta_small(V * (x * x), k, hk))
+}
+
+theorem Series::pade_beta_term(x, V: Rat, hV: 0 <= V, n: Nat):
+    Series::pade_beta(x, V).term(n) ≈ x.pade_tau(V, n).abs() * Series::pade_lead(n) * x.pade_K()
+{
+    match n {
+        Zero => {
+            let o: (x ≈ 1 * x) = ring;
+            let r: (x.abs() * x.pade_K() ≈ (1 * x).abs() * 1 * x.pade_K()) = calc {
+                x.abs() * x.pade_K() ≈ x.abs() * 1 * x.pade_K() := ring,
+                ≈ (1 * x).abs() * 1 * x.pade_K() := Rat::mul_same_r(Rat::mul_same_r(Rat::abs_respects(o))),
+            };
+            r
+        },
+        Succ(m) => {
+            let ih = Series::pade_beta_term(x, V, hV, m);
+            let t = x.pade_tau(V, m);
+            let r = V * (x * x);
+            let hr: (0 <= r) = Rat::mul_nonneg(hV, x.sq_nonneg());
+            let f = Rat::inv_succ(4 * m + 5);
+            let L = Series::pade_lead(m);
+            let K = x.pade_K();
+            let tn: (V.pade_vpow(m) * V * (-(x * x) * x.pade_sign(m)) ≈ (V.pade_vpow(m) * x.pade_sign(m)) * (-(V * (x * x)))) = ring;
+            let ta: ((V.pade_vpow(m) * V * (-(x * x) * x.pade_sign(m))).abs() ≈ t.abs() * r) = calc {
+                (V.pade_vpow(m) * V * (-(x * x) * x.pade_sign(m))).abs() ≈ (t * (-r)).abs() := Rat::abs_respects(tn),
+                ≈ t.abs() * (-r).abs() := t.abs_mul(-r),
+                ≈ t.abs() * r := Rat::mul_respects(t.abs().same_refl(), Rat::same_trans(r.abs_neg(), r.abs_of_nonneg(hr))),
+            };
+            calc {
+                Series::pade_beta(x, V).term(m) * (r * f) ≈ (t.abs() * L * K) * (r * f) := Rat::mul_same_r(ih),
+                ≈ (t.abs() * r) * (L * f) * K := ring,
+                ≈ (V.pade_vpow(m) * V * (-(x * x) * x.pade_sign(m))).abs() * (L * f) * K := Rat::mul_same_r(Rat::mul_same_r(Rat::same_sym(ta))),
+            }
+        },
+    }
+}
+
+// The error at n is inside ±eps once the series' n-th term is.
+theorem CReal::pade_int_err_small(x: Rat, u, v: Int, hux: Rat::ofInt(u) ≈ Rat::ofInt(v) * x, hv: 0 <= v, n: Nat, eps: Rat,
+    hb: Series::pade_beta(x, Rat::ofInt(v)).term(n) <= eps):
+    CReal::ofRat(-eps) <= CReal::pade_int_err(x, u, v, n) ∧ CReal::pade_int_err(x, u, v, n) <= CReal::ofRat(eps)
+{
+    let V = Rat::ofInt(v);
+    let hV: (0 <= V) = Rat::ofInt_le(0, v, hv);
+    let t = x.pade_tau(V, n);
+    let L = Series::pade_lead(n) * x.pade_K();
+    let bd = CReal::pade_rem_bound(x, n);
+    let lo0: (CReal::ofRat(0 - L) <= CReal::pade_rem(x, n)) = CReal::le_of_same_l(CReal::ofRat_respects(ring), bd.left);
+    let hi0: (CReal::pade_rem(x, n) <= CReal::ofRat(0 + L)) = CReal::le_of_same_r(CReal::ofRat_respects(ring), bd.right);
+    let sb = CReal::scale_between(t, 0, L, lo0, hi0);
+    let te: (Series::pade_beta(x, V).term(n) ≈ t.abs() * Series::pade_lead(n) * x.pade_K()) = Series::pade_beta_term(x, V, hV, n);
+    let a: (-eps <= t * 0 - t.abs() * L) = linarith(te, hb);
+    let c: (t * 0 + t.abs() * L <= eps) = linarith(te, hb);
+    let e = CReal::pade_int_err_eq(x, u, v, hux, n);
+    And(CReal::le_of_same_r(e, CReal::le_trans(CReal::ofRat_le(a), sb.left)), CReal::le_of_same_l(e, CReal::le_trans(sb.right, CReal::ofRat_le(c))))
+}
+
+// Two consecutive small errors: at the series' index for 2^-(m+1) and the next.
+theorem Series::pade_beta_two(x, V: Rat, m: Nat):
+    Series::pade_beta(x, V).term(Series::pade_beta(x, V).index(m)) <= Rat::inv_pow2(m + 1)
+    ∧ Series::pade_beta(x, V).term(Series::pade_beta(x, V).index(m) + 1) <= Rat::inv_pow2(m + 1)
+{
+    let B = Series::pade_beta(x, V);
+    let i = B.index(m);
+    let f: (B.err(i) <= Rat::inv_pow2(m + 1)) = B.fine(m);
+    let g: (B.err(i + 1) <= B.err(i)) = B.err_mono(i, i + 1, B.index_start(m), omega);
+    let e0: (B.err(i) ≈ B.term(i).abs() + B.term(i).abs()) = B.err(i).same_refl();
+    let e1: (B.err(i + 1) ≈ B.term(i + 1).abs() + B.term(i + 1).abs()) = B.err(i + 1).same_refl();
+    let a: (B.term(i) <= Rat::inv_pow2(m + 1)) = linarith(f, e0, B.term(i).le_abs(), B.term(i).abs_nonneg());
+    let b: (B.term(i + 1) <= Rat::inv_pow2(m + 1)) = linarith(f, g, e1, B.term(i + 1).le_abs(), B.term(i + 1).abs_nonneg());
+    And(a, b)
+}
+
+// ---------------------------------------------------------------------------
+// The lattice nu Z, nu = 2^-d: q g - p is a multiple of nu, nonzero for one
+// of two consecutive approximants (the Casoratian), so at least nu.
+
+theorem Rat::pade_lattice_b(q, p, G: Int, d: Nat):
+    Rat::ofInt(q) * (Rat::ofInt(G) * Rat::inv_pow2(d)) - Rat::ofInt(p) ≈ Rat::ofInt(q * G - p * OfNat(Nat::pow(2, d))) * Rat::inv_pow2(d)
+{
+    let tv: (Rat::ofInt(OfNat(Nat::pow(2, d))) * Rat::inv_pow2(d) ≈ 1) = omega;
+    ring(tv)
+}
+
+theorem Rat::pade_delta_ok(q: Int, C: Nat, hq: q.natAbs() <= C, nu: Rat, hnu: 0 <= nu):
+    Rat::ofInt(q).abs() * (nu * Rat::inv_succ(C + C + 1)) + Rat::ofInt(q).abs() * (nu * Rat::inv_succ(C + C + 1)) <= nu
+{
+    let c = Rat::ofInt(OfNat(C));
+    let f = Rat::inv_succ(C + C + 1);
+    let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(C + C + 1));
+    let a1: (Rat::ofInt(q).abs() <= Rat::ofInt(OfNat(q.natAbs()))) = Rat::ofInt(q).abs_le_natAbs();
+    let a2: (Rat::ofInt(OfNat(q.natAbs())) <= c) = Rat::ofInt_le(OfNat(q.natAbs()), OfNat(C), omega(hq));
+    let h1: (Rat::ofInt(q).abs() * (nu * f) <= c * (nu * f)) = Rat::mul_le_mono_r(Rat::le_trans(a1, a2), Rat::mul_nonneg(hnu, hf));
+    let cf: (c * f + c * f <= 1) = linarith;
+    let h2: (nu * (c * f + c * f) <= nu * 1) = Rat::mul_le_mono_l(cf, hnu);
+    linarith(h1, h2)
+}
+
+theorem PadeInts::not_both_zero(I: PadeInts, G: Int, T: Nat, hT: 0 < T, hW: 0 < I.cas().natAbs(),
+    h0: I.q0 * G - I.p0 * OfNat(T) = 0, h1: I.q1 * G - I.p1 * OfNat(T) = 0): False
+{
+    let eq: (OfNat(T) * (I.p0 * I.q1 - I.p1 * I.q0) = (I.q1 * G - I.p1 * OfNat(T)) * I.q0 - (I.q0 * G - I.p0 * OfNat(T)) * I.q1) = ring;
+    let e1 = rewrite(h0, h1, in := eq);
+    let e2: (OfNat(T) * I.cas() = 0) = omega(e1);
+    let na: ((OfNat(T) * I.cas()).natAbs() = Int::natAbs(OfNat(T)) * I.cas().natAbs()) = Int::natAbs_mul(OfNat(T), I.cas());
+    let na2 = rewrite(e2, in := na);
+    let z: (Int::natAbs(0) = 0) = refl;
+    let t: (Int::natAbs(OfNat(T)) = T) = refl;
+    let p: (0 < T * I.cas().natAbs()) = @Nat::mul_pos(T, I.cas().natAbs(), hT, hW);
+    omega(na2, z, t, p)
+}
+
+// ---------------------------------------------------------------------------
+// exp(u/v), u ≠ 0, is a fixed distance from every point of the lattice 2^-d Z.
+
+fn CReal::ApartLattice(X: CReal, nu, dd: Rat) → Type {
+    (G: Int) → X - CReal::ofRat(Rat::ofInt(G) * nu) <= CReal::ofRat(-dd) ∨ CReal::ofRat(dd) <= X - CReal::ofRat(Rat::ofInt(G) * nu)
+}
+
+theorem CReal::exp_apart_lattice(x: Rat, u, v: Int, hux: Rat::ofInt(u) ≈ Rat::ofInt(v) * x, hv: 0 <= v, hu: 0 < u.natAbs(), d: Nat):
+    ∃ dd: Rat, 0 < dd ∧ CReal::ApartLattice(CReal::exp_rat(x), Rat::inv_pow2(d), dd)
+{
+    let V = Rat::ofInt(v);
+    let B = Series::pade_beta(x, V);
+    let n = B.index(d + 1);
+    let two = Series::pade_beta_two(x, V, d + 1);
+    let eps = Rat::inv_pow2(d + 1 + 1);
+    let nu = Rat::inv_pow2(d);
+    let X = CReal::exp_rat(x);
+    let sa = CReal::pade_int_err_small(x, u, v, hux, hv, n, eps, two.left);
+    let sb = CReal::pade_int_err_small(x, u, v, hux, hv, n + 1, eps, two.right);
+    let I = PadeInts::at(u, v, n);
+    let C = I.q0.natAbs() + I.q1.natAbs();
+    let dd = nu * Rat::inv_succ(C + C + 1);
+    let hnu: (0 < nu) = Rat::inv_pow2_pos(d);
+    let he4: (eps + eps + eps + eps <= nu) = linarith(Rat::inv_pow2_half(d + 1), Rat::inv_pow2_half(d));
+    let hdd: (0 < dd) = Rat::mul_pos(hnu, Rat::inv_succ_pos(C + C + 1));
+    let hdd0: (0 <= dd) = Rat::le_of_lt(hdd);
+    let da = Rat::pade_delta_ok(I.q0, C, omega, nu, Rat::le_of_lt(hnu));
+    let db = Rat::pade_delta_ok(I.q1, C, omega, nu, Rat::le_of_lt(hnu));
+    let T = Nat::pow(2, d);
+    let hT: (0 < T) = @Nat::pow_pos(2, d, omega);
+    let W = PadeInts::cas_pos(u, v, hu, n);
+    let la: (CReal::ofRat(-eps) <= CReal::ofRat(Rat::ofInt(I.q0)) * X - CReal::ofRat(Rat::ofInt(I.p0))) = sa.left;
+    let ha: (CReal::ofRat(Rat::ofInt(I.q0)) * X - CReal::ofRat(Rat::ofInt(I.p0)) <= CReal::ofRat(eps)) = sa.right;
+    let lb: (CReal::ofRat(-eps) <= CReal::ofRat(Rat::ofInt(I.q1)) * X - CReal::ofRat(Rat::ofInt(I.p1))) = sb.left;
+    let hb: (CReal::ofRat(Rat::ofInt(I.q1)) * X - CReal::ofRat(Rat::ofInt(I.p1)) <= CReal::ofRat(eps)) = sb.right;
+    Exists(dd, And(hdd, λ (G: Int) => {
+        let g = Rat::ofInt(G) * nu;
+        let ea: (CReal::ofRat(Rat::ofInt(I.q0)) * (X - CReal::ofRat(Rat::ofInt(G) * nu))
+            ≈ (CReal::ofRat(Rat::ofInt(I.q0)) * X - CReal::ofRat(Rat::ofInt(I.p0))) - CReal::ofRat(Rat::ofInt(I.q0) * (Rat::ofInt(G) * nu) - Rat::ofInt(I.p0))) = ring;
+        let eb: (CReal::ofRat(Rat::ofInt(I.q1)) * (X - CReal::ofRat(Rat::ofInt(G) * nu))
+            ≈ (CReal::ofRat(Rat::ofInt(I.q1)) * X - CReal::ofRat(Rat::ofInt(I.p1))) - CReal::ofRat(Rat::ofInt(I.q1) * (Rat::ofInt(G) * nu) - Rat::ofInt(I.p1))) = ring;
+        let fa = Rat::far_of_int(I.q0 * G - I.p0 * OfNat(T), nu, Rat::le_of_lt(hnu), Rat::pade_lattice_b(I.q0, I.p0, G, d));
+        let fb = Rat::far_of_int(I.q1 * G - I.p1 * OfNat(T), nu, Rat::le_of_lt(hnu), Rat::pade_lattice_b(I.q1, I.p1, G, d));
+        match fa {
+            Inr(sideA) => CReal::apart_of_scaled(Rat::ofInt(I.q0), Rat::ofInt(I.q0) * (Rat::ofInt(G) * nu) - Rat::ofInt(I.p0), nu, eps, dd,
+                hnu, he4, hdd0, da, ea, la, ha, sideA),
+            Inl(za) => match fb {
+                Inr(sideB) => CReal::apart_of_scaled(Rat::ofInt(I.q1), Rat::ofInt(I.q1) * (Rat::ofInt(G) * nu) - Rat::ofInt(I.p1), nu, eps, dd,
+                    hnu, he4, hdd0, db, eb, lb, hb, sideB),
+                Inl(zb) => false_elim(PadeInts::not_both_zero(I, G, T, hT, W, za, zb)),
+            },
+        }
+    }))
+}
+
+// exp at a nonzero rational is off the grid: the Ziv search for it ends.
+theorem Format::exp_off_grid(self F: Format, x: Rat, hx: ¬(x ≈ 0)): F.OffGrid(CReal::exp_rat(x)) {
+    let i: (x.num * (OfNat(1) * x.den.int()) = (x.den.int() * x.num) * OfNat(1)) = ring;
+    let hux: (Rat::ofInt(x.num) ≈ Rat::ofInt(x.den.int()) * x) = i;
+    let hu: (0 < x.num.natAbs()) = x.num.natAbs_pos_of_ne(λ (z: x.num = OfNat(0)) => hx(omega(z)));
+    let hv: (0 <= x.den.int()) = omega;
+    let e = F.qmin() - 1;
+    let S = Nat::pow(2, e.pos_part()).int();
+    let nu = Rat::inv_pow2(e.neg_part());
+    let X = CReal::exp_rat(x);
+    match CReal::exp_apart_lattice(x, x.num, x.den.int(), hux, hv, hu, e.neg_part()) {
+        Exists(dd, c) => F.off_grid_of_apart(X, dd, c.left, λ (m: Int) => {
+            let gq: (CReal::ofRat(F.grid(m)) ≈ CReal::ofRat(Rat::ofInt(m * S) * nu)) = CReal::ofRat_respects(F.grid_lattice(m));
+            match c.right(m * S) {
+                Inl(a) => { let r: (X - CReal::ofRat(F.grid(m)) <= CReal::ofRat(-dd)) = linarith(a, gq); Inl(r) },
+                Inr(b) => { let r: (CReal::ofRat(dd) <= X - CReal::ofRat(F.grid(m))) = linarith(b, gq); Inr(r) },
+            }
+        }),
+    }
+}

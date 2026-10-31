@@ -4,7 +4,7 @@ status: open
 labels: [frontend,diagnostics]
 area: language
 created: 2026-07-24
-updated: 2026-10-28
+updated: 2026-10-31
 ---
 
 Deferred to when the frontend has a warning mechanism (none yet). Once statement blocks and an effect/assignment form exist ([[goal-holes]] brings block statements; [[effects-direction]] fixes the assignment glyph as `:=`/`<-`), a statement-position `a = b;` is suspicious: `a = b` is a *proposition* (a type), so as a bare statement it computes nothing and discards a value — the author most likely meant the assignment `a := b;`. Emit a warning suggesting `:=`.
@@ -17,3 +17,4 @@ Follows the equality-notation decision ([[surface-syntax]], 2026-07-24): merging
 
 When the assignment form lands, what this issue needs is one `self.warn` at the statement loop's expression-statement case and a test — the channel's §8 records this issue by name as its known next customer.
 - 2026-10-28: Pointer update (tracker tidy): [[effects-direction]] is closed as decided, and the assignment form this issue waits on now belongs to [[effects-uniqueness-surface]], which builds the surface with `:=` as its glyph.
+- 2026-10-31: 2026-10-31: docs/sequencing-surface-design.md §4/§10: an expression statement in a pure scope is refused ("a statement here discards a pure value"), and a statement `x = e;` gets the hint "to assign, write `x := e`" on that refusal. So this lands with R3a ([[pure-imperative-statements]]) as a hint on a refusal, not as a separate warning.

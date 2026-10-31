@@ -345,3 +345,15 @@ and at `Cut`, by `refl`, and a wrong leaf refused; a literal loop that
 returns at fuel 3 and depth 5, carried across both ways and for an open
 body, with too little fuel and too little depth refused; an embedded `Cut`
 claiming nothing, and a bind's return carried from the bound programs.
+
+---
+
+## 9. Recursion
+
+`lib/std/itree/coitree_rec.hthr`: `CoTree::rec` runs a body whose calls to
+itself are events, as a loop over the pending tree. It is the fuel-free
+`ITree::rec`. With it come fixpoint induction, termination by a measure and
+`CoTree::get`, so a partial function can be specified with no fuel. The
+design is in `docs/partial-functions-design.md` (§8 says what was built).
+Not yet done: the refinement against `Program::rec`
+(`issues/coitree-rec-program-bridge.md`).

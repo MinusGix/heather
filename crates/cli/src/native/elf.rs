@@ -323,7 +323,7 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     // Of the literal, then of the source by its equation.
     let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
         top, depth, placed, s, entry, rsp,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom(X86Profile::process({p}_size(), top, depth), {p}_size(), f), loaded), args, argv)");
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
 {lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::process({p}_size(), top, depth).linux(), src.denote(args), s),\n        {simulated})"))
@@ -402,7 +402,7 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 // from `native_compile_correct`).
 theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
     s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom(X86Profile::process({p}_size(), top, depth), {p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
     argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(io_data_end({p}_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}

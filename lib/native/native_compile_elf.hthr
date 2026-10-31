@@ -57,7 +57,7 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom(X86Profile::process(size, top, depth), size, header ++ assemble(no_fills(), program, Nil)),
+    loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
     let x = X86Profile::process(size, top, depth);
@@ -66,7 +66,7 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
     let bytes = assemble(no_fills(), program, Nil);
     let start: (io_entry() = next_rip(io_entry(), 0)) = BitVec::eq_of_eq_bit(64, io_entry(), next_rip(io_entry(), 0), refl);
     let resident = j(start, λ y _ => CodeResident(x.fetch(), s.memory, bytes, y),
-        s.memory.loaded_entry(x, size, within, header, bytes, long, short, loaded));
+        s.memory.loaded_entry(size, within, header, bytes, long, short, loaded));
     let zero = s.memory.loaded_data(size, within, top, depth, header ++ bytes, loaded);
     let floor: (r.low.toNat() + r.size = io_data_end(size)) = refl;
     let above: ReadsKept(data.above(io_data_end(size)), s.memory, data.above(r.low.toNat() + r.size), s.memory) = λ a byte got => {
@@ -86,7 +86,7 @@ theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= 
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom(X86Profile::process(size, top, depth), size, io_elf_file(assemble(no_fills(), program, Nil), size)),
+    loaded: s.memory.LoadedFrom(size, io_elf_file(assemble(no_fills(), program, Nil), size)),
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
     let length = 232 + assemble(no_fills(), program, Nil).len();

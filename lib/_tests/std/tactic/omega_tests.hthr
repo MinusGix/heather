@@ -251,6 +251,26 @@ record Window { lo: Nat, hi: Nat, ok: lo.leb(hi).IsTrue() }
 theorem guard_field(w: Window): w.lo <= w.hi { omega(w.ok) }
 record Gate { open: Bool, at: Nat }
 theorem guard_bool_field(g: Gate, h: (!(g.open && g.at.leb(3))).IsTrue(), o: g.open.IsTrue()): 3 < g.at { omega }
+// A guard stated as an equation, what `match h: b { … }` binds, is read as
+// the guard it states (issues/decreases-measure-record-field-unspelled.md).
+theorem guard_eq_false(n, m: Nat, h: n.leb(m) = False): m < n { omega }
+theorem guard_eq_true(n: Nat, h: (n.leb(3) && 1.leb(n)) = True): n ≠ 0 { omega }
+theorem guard_eq_in_arm(n: Nat): n - 1 <= n {
+    match h: n.leb(0) { True => omega, False => omega }
+}
+// expect-error: __omega_guard0_1: Lt(m, n)
+theorem guard_eq_false_claim(n, m: Nat, h: n.leb(m) = False): n < m { omega }
+// A field read off a record constructed in place is the field as put, and a
+// `decreases` measure over a field is that read at the self-call's argument
+// (same issue): `count_down`'s obligation closes by the default `omega`.
+record CdState { m: Nat, out: List<Nat> }
+theorem field_of_constructed_record(s: CdState, h: s.m.leb(0) = False): CdState(s.m - 1, Cons(s.m, s.out)).m < s.m { omega }
+fn count_down(s: CdState) → CdState decreases s.m {
+    match h: Nat::leb(s.m, 0) {
+        True => s,
+        False => count_down(CdState(s.m - 1, Cons(s.m, s.out))),
+    }
+}
 // Through a Bool definition and its `let`s, at the top and inside a guard.
 fn ordered(n, m: Nat) → Bool { let le = n.leb(m); le && !m.leb(n) }
 theorem guard_definition(n, m: Nat, h: ordered(n, m).IsTrue()): n < m { omega }

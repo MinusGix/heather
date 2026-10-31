@@ -35,13 +35,13 @@ fn probe_memory() → X86Memory(probe_profile()) {
     X86Memory::process_load(4096, probe_within(), probe_top(), io_stack_limit(), probe_placed(), probe_file())
 }
 
-theorem probe_loaded(): probe_memory().LoadedFrom(probe_profile(), 4096, probe_file()) {
+theorem probe_loaded(): probe_memory().LoadedFrom(4096, probe_file()) {
     X86Memory::process_load_loaded(4096, probe_within(), probe_top(), io_stack_limit(), probe_placed(), probe_file())
 }
 
 // Its code at the entry, and its segment zero.
 theorem probe_code(): CodeResident(probe_profile().fetch(), probe_memory(), [BitVec::ofNat(0xc3)], io_entry()) {
-    probe_memory().loaded_entry(probe_profile(), 4096, probe_within(), io_elf_header(BitVec::ofNat(233), BitVec::ofNat((233).shr(8)), 4096),
+    probe_memory().loaded_entry(4096, probe_within(), io_elf_header(BitVec::ofNat(233), BitVec::ofNat((233).shr(8)), 4096),
         [BitVec::ofNat(0xc3)], refl, Nat::leb_sound(233, 65536, trivial), probe_loaded())
 }
 theorem probe_zero(): DataRegion::process_data(4096, probe_within(), probe_top(), io_stack_limit()).Holds(io_zero(), probe_memory()) {
