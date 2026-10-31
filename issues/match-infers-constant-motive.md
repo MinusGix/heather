@@ -1,6 +1,6 @@
 ---
 title: A motive-less match in inference position takes its constant motive from any arm
-status: open
+status: closed
 labels: [elaboration,match,inference]
 area: language
 created: 2026-10-31
@@ -14,3 +14,7 @@ Slice 3 of [[dependent-match-compiler]] (docs/dependent-match-compiler-design.md
 ## Done when
 - Probe P3 (`let x = match t { A(n) => n, B(m) => m }`) checks; this is the sequencing design's probe P2 (docs/sequencing-surface-design.md §5.1), whose `let x: T =` annotation becomes optional.
 - A dependent arm type is still refused, naming the written-motive spelling.
+
+## Log
+
+- 2026-10-31: Done on PR #318 (design §6.1): when no non-binding arm infers, the match is lowered once at a marker motive and elab_check infers the first arm checked against it, kept if its type strengthens past the arm's binders; match h: in inference position lowers as a convoy at that motive. P3 checks (motive_synth.rs, every arm binding); an arm type mentioning its binder still asks for the motive; the sequencing design's P2 annotation is now optional.

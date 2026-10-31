@@ -56,3 +56,4 @@ issues each slice closes.
 - 2026-10-31: Design note docs/dependent-match-compiler-design.md, awaiting Minus's decision (§13). Census of 1443 written motives: 601 hand-carried hypotheses, 339 non-dependent, 259 equation convoys, 244 dependent goals. A `--review` sample finds 180 of 379 already redundant. Six probes on master (§2.1), one of them a new elaborator-accepts/kernel-rejects defect. Seven slices filed.
 - 2026-10-31: Decided: equation only when read, anonymous equation unspellable, order 4 (landed) → 1, 3, 2, 5, 6, 7 (design §13).
 - 2026-10-31: Slice 1 (match-equation-in-every-arm) done on PR #318: the anonymous arm equation, in the term only when an arm needs it (§4.3.1).
+- 2026-10-31: Slice 3 (match-infers-constant-motive) done on PR #318 (§6.1).
