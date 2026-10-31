@@ -73,3 +73,12 @@ theorem apart_near(): twelfth().Apart(0) { RealExpr::apart_of_search(twelfth_tre
 theorem whole_near(): RInv(twelfth_tree(), twelfth(), twelfth_apart()).enclose(3, 16) = Whole { refl }
 theorem plain_wf(): RAdd(RReal(third()), RPow(RRat(2), 3)).Wf() { RealExpr::wf_plain(RAdd(RReal(third()), RPow(RRat(2), 3)), refl) }
 theorem recip_contract(I: Interval, p: Nat, x: CReal, h: x.Apart(0), hx: I.HasReal(x)): I.recip(p).HasReal(x.inv(h := h)) { Interval::recip_has_real(I, p, h, hx) }
+
+// Containment is proved once over an ordered field and a morphism from
+// `Rat` (`Interval::HasIn`); `Has` and `HasReal` are its readings at the
+// identity and at `CReal::ofRat_hom`, by conversion, at a neutral interval
+// too.
+theorem has_reads_generic(I: Interval, x: Rat, h: I.Has(x)): I.HasIn(Rat::id_hom(), x) { h }
+theorem generic_reads_has(I: Interval, x: Rat, h: I.HasIn(Rat::id_hom(), x)): I.Has(x) { h }
+theorem has_real_reads_generic(I: Interval, x: CReal, h: I.HasReal(x)): I.HasIn(CReal::ofRat_hom(), x) { h }
+theorem generic_reads_has_real(I: Interval, x: CReal, h: I.HasIn(CReal::ofRat_hom(), x)): I.HasReal(x) { h }
