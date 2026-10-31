@@ -1,6 +1,6 @@
 ---
 title: ring(h, …) at CReal misses a combination when the goal spells ofRat of a sum
-status: open
+status: closed
 labels: [tactics,arith,reals]
 area: tactics
 created: 2026-10-31
@@ -31,3 +31,7 @@ misses when it has to. The Rat version of `c6` (no casts) passes.
 Workaround used in pade.hthr: derive `X - 1 ≈ x S0` and `X + 1 ≈ …` with
 one hypothesis each, then a `calc` with `CReal::sub_respects` /
 `mul_respects` and a plain `ring`.
+
+## Log
+
+- 2026-10-31: Fixed. `ring`'s clearing substituted the cast definitions (`ofRat(2 - x)` as `2 - ofRat(x)`, and `ofRat(-1)` as `-1` through `map_neg`) in the target only; hypotheses kept the definition atoms, so the cleared target and the raw hypotheses never shared a reading and only the bounded joint search could link them (it did for c8, not c6). Each hypothesis now gets the same substitution (`substitute_definitions` in ring.rs), its multipliers handed back to the definitions' rows. Probes in lib/_tests/std/tactic/ring_field_tests.hthr; pade.hthr's calc workaround is `ring(z, o)` again.

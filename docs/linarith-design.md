@@ -23,7 +23,10 @@ theorem absurd(x: Rat, h1: x < 0, h2: 0 < x): False { linarith(h1, h2) }
 `linarith` proves `a <= b`, `a < b`, `a ≈ b` or `¬(a < b)` at a carrier
 with an `OrderedFieldOfInt` instance (`Rat`, `CReal`) when it follows
 linearly from the facts; with facts that contradict each other it proves any
-goal. A fact is a `<`, `<=`, `≈` or `¬(x < y)` at the goal's carrier. The
+goal. A fact is a `<`, `<=`, `≈` or `¬(x < y)` at the goal's carrier, its
+type read through a head β-redex as `omega` reads one (a pattern-bound
+`Exists` proof, typed by its predicate applied to the witness,
+issues/linarith-redex-typed-fact.md). The
 written facts (`linarith(h₁, …)`, any expression, as `omega(h, …)` takes
 them) are tried first; when they do not suffice, every such fact in the
 context is added, block `let` facts among them. A term that is not linear —

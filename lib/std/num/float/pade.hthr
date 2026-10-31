@@ -353,15 +353,8 @@ theorem CReal::pade_err(x: Rat, n: Nat):
             let S1 = CReal::pade_rem(x, 1);
             let z: (X ≈ CReal::ofRat(1) + CReal::ofRat(x) * S0 + CReal::ofRat(0) * S0) = CReal::pade_zero(x);
             let o: (X ≈ CReal::ofRat(-1) + CReal::ofRat(2) * S0 + CReal::ofRat(x * x) * S1) = CReal::pade_one(x);
-            let zz: (X - CReal::ofRat(1) ≈ CReal::ofRat(x) * S0) = ring(z);
-            let oo: (X + CReal::ofRat(1) ≈ CReal::ofRat(2) * S0 + CReal::ofRat(x * x) * S1) = ring(o);
-            let l: (CReal::ofRat(1) * X - CReal::ofRat(1) ≈ CReal::ofRat(x) * S0) = ring(zz);
-            let r: (CReal::ofRat(2 - x) * X - CReal::ofRat(2 + x) ≈ CReal::ofRat(-(x * x) * x) * S1) = calc {
-                CReal::ofRat(2 - x) * X - CReal::ofRat(2 + x) ≈ CReal::ofRat(2) * (X - CReal::ofRat(1)) - CReal::ofRat(x) * (X + CReal::ofRat(1)) := ring,
-                ≈ CReal::ofRat(2) * (CReal::ofRat(x) * S0) - CReal::ofRat(x) * (CReal::ofRat(2) * S0 + CReal::ofRat(x * x) * S1) :=
-                    CReal::sub_respects(CReal::mul_respects(CReal::ofRat(2).same_refl(), zz), CReal::mul_respects(CReal::ofRat(x).same_refl(), oo)),
-                ≈ CReal::ofRat(-(x * x) * x) * S1 := ring,
-            };
+            let l: (CReal::ofRat(1) * X - CReal::ofRat(1) ≈ CReal::ofRat(x) * S0) = ring(z);
+            let r: (CReal::ofRat(2 - x) * X - CReal::ofRat(2 + x) ≈ CReal::ofRat(-(x * x) * x) * S1) = ring(z, o);
             And(l, r)
         },
         Succ(m) => {
