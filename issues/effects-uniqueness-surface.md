@@ -4,7 +4,8 @@ status: open
 labels: [language,effects,native,frontend]
 area: language
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-31
+milestone: [nh-effects, lang-sequencing]
 ---
 
 The decided effects story ([[effects-direction]], 2026-10-21) is a
@@ -39,3 +40,7 @@ directly. This is the language round that gives them a front end.
 - **[[native-source-builder]]** owns the builder this surface targets.
   Assumed here: only that the builder is the surface's back half
   (`docs/native-real-programs-plan.md` §3.3).
+
+## Log
+
+- 2026-10-31: 2026-10-31: Round R6 of docs/compiler-milestones-proposal.md (§4.2 N3, milestone nh-effects): written with the sequencing surface ([[sequencing-surface-design]]) as a runtime fn under the default setup ([[runtime-fn-default-setup]]). Done when cat FILE…, wc and head -n are rewritten in it and pass the same GNU tests, and their builder versions are deleted. Also owns byte and string literals in programs and [[feature-implicit-module-dependencies]] for program files.

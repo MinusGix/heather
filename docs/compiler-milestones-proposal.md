@@ -1,7 +1,7 @@
 # Compiler milestones, reconsidered: ordinary Heather compiles
 
-Status: **proposal, 2026-10-31; thesis adopted by Minus, §8 items 5–7 open.** Nothing here is built,
-and `docs/roadmap.md` is unchanged until the decisions in §8 are made. Written
+Status: **adopted, 2026-10-31 (Minus's decisions are recorded in §8).** Nothing here is built,
+and its milestones are in `docs/roadmap.md`, with one issue per round. Written
 on master `cb5331c`, after `hih-tools` reached nine of its fourteen tools.
 
 Minus's ask (2026-10-31): Minus is not sure that building out the remaining tools
@@ -593,6 +593,17 @@ lanes).
 | P5 | `lang-proof-modularity` | **sharing and staging** | `frontend-large-proof-composition-cost`'s acceptance, `let-fanout-diagnostic`, staging done by the elaborator where it must stage | the nested 100-node certificate checks near the staged spelling's cost; "split into stage theorems" retires from proof-patterns | P1 | any |
 | R11 | `hih-self` | **S2: the compiler compiles itself** | `Source::compile` and its checks compiled by N1–N4; `write-elf` runs the binary in place of the fork's evaluation | `write-elf` builds the corpus through it; `scripts/perf ab` shows the fork's read-back counters gone, with the kernel check unchanged | R9 | — |
 
+Each round's issue: R1 `sequencing-surface-design`, R2
+`binding-statements`, R3 `pure-imperative-statements`, R4
+`runtime-fn-setups-design`, R5 `runtime-fn-default-setup`, R6
+`effects-uniqueness-surface`, R7 `self-hosted-lexer`, R8
+`native-compiled-procedures`, R9 `native-heap-arena`, R10
+`function-ir-pass-in-heather`, R11 `self-hosted-compiler`, R12
+`ownership-discipline-over-code`, P1 `proof-modularity-design`, P2
+`interface-definitions`, P3 `automation-lemma-registries`, P4
+`loop-invariant-rules`, P5 `frontend-large-proof-composition-cost` with
+`let-fanout-diagnostic`.
+
 R1, P1 and R4 can start today, as can R10 in the native lane. After the
 designs, three lanes run side by side: the language lane (R2, R3), the
 proof lane (P2, P3, P5, which touch the elaborator core and the tactics, so
@@ -628,7 +639,7 @@ proposal.
 
 ---
 
-## 8. Decisions for Minus
+## 8. Decisions
 
 1. **Adopt the thesis** (§2): native programs become ordinary Heather
    functions, and the builder becomes the compiler's back half. *Adopted
@@ -640,19 +651,21 @@ proposal.
 4. **The lexer before the heap** (R7 before R9). *Decided, tentatively
    (Minus, 2026-10-31: "I guess").* Swapping is cheap: the token-list lexer
    follows from the streaming one once N4 lands.
-5. **Interface definitions** (§6.3): opt-in per definition (recommended),
-   or the default for exported definitions with an opt-out. Open: Minus
-   asked for the detail that §6.3 now gives.
+5. **Interface definitions** (§6.3): opt-in per definition, or the
+   default for exported definitions. *Decided (Minus, 2026-10-31): opt-in.*
 6. **Roadmap shape**: add `lang-sequencing` and `lang-proof-modularity`
    (area `language`, pulled by `heather-in-heather` and `tactics`) and `hih-native-heather` with
    `nh-front`, `nh-procedures`, `nh-effects`, `nh-heap` as submilestones;
    re-scope `hih-first-alloc` into `nh-heap`; add `nh-ownership`; give `hih-self` the
-   submilestones `self-lexer` and `self-compiler`. Once you decide, the
-   roadmap rows, the log line and the issues go on this PR before it
-   merges.
+   submilestones `self-lexer` and `self-compiler`. *Done on this PR: the
+   rows, the log line and one issue per round are in `docs/roadmap.md` and
+   `issues/`.*
 7. **Setups** (§4, added after Minus's note of 2026-10-31 on `runtime fn`):
-   is ownership the right second setup to name as the milestone's bar, with
-   constant time as the cheaper first one if a setup is wanted early?
+   is ownership the right second setup? *Leaning yes, final choice later
+   (Minus, 2026-10-31): Rust-like talk about ownership would make
+   translating Rust code easier (`rust-in-heather`), and the lower-level
+   control is powerful. So `nh-ownership` is filed as the second setup, and
+   its round confirms the choice before it starts.*
 
 ## 9. Risks, and what would change the order
 

@@ -3,9 +3,9 @@ title: Inline reflected Heather word functions as builder helpers
 status: open
 labels: [native,frontend,ergonomics]
 area: heather-in-heather
-milestone: [hih-tools]
+milestone: [nh-front]
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-31
 ---
 
 Round 5 of `docs/native-real-programs-plan.md` (§3.3) asked for pure helpers
@@ -34,3 +34,7 @@ loops (decimal formatting, [[native-decimal-io]]) need it most.
 - **[[native-compile-wider-leaves]]** owns compiling the `Conditional` and
   `Loop` regions a reflected helper with branches or loops lowers to; until
   it lands only dataflow helpers would compile.
+
+## Log
+
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.

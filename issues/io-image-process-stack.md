@@ -5,7 +5,7 @@ labels: [native,x86,memory]
 created: 2026-10-22
 updated: 2026-10-28
 area: heather-in-heather
-milestone: [hih-memory-model, hih-pl-wp]
+milestone: [hih-memory-model, hih-pl-wp, nh-procedures]
 ---
 
 The process image (`X86Memory::io_load`, `lib/std/os/linux/linux_x86_64_image.hthr`)
