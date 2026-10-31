@@ -212,6 +212,17 @@ are stated without a cast. `8 * Succ(k)` reduces to `8 * k + 8`, which is
   frame's slots) is a lemma over the buffer (`DataRegion::x86_word_stored`),
   not a view of its own; a view over two regions at once is
   `issues/wp-view-separating-product.md`.
+- **The process's stack.** A process as the ELF theorem takes it is a
+  memory of `X86Profile::process(size, top, depth)`: what `X86Profile::io(size)`
+  relies on (the segment, since `issues/native-data-capacity.md`) and `depth`
+  bytes below the entry RSP `top` data (`issues/io-image-process-stack.md`).
+  `StackPlaced` is where Linux puts it, with `depth` at most the 128 KiB
+  exec maps before the program runs; the on-demand growth below that is
+  never relied on. `DataRegion::process_stack` is a `DataRegion`, so
+  `DataRegion::stack` is a `Stack` of the process from its entry, top at
+  RSP; its stores keep the segment (`process_stack_keeps_data`). The
+  loader with the stack (`X86Memory::process_load`) is `LoadedFrom` the
+  file, which keeps the ELF theorem's premises satisfiable.
 
 ## 7. Outside v1, and the seam for each
 

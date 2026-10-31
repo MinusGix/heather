@@ -1,9 +1,9 @@
 ---
 title: Map a stack region for compiled calls in the I/O image's profile
-status: open
+status: closed
 labels: [native,x86,memory]
 created: 2026-10-22
-updated: 2026-10-28
+updated: 2026-10-31
 area: heather-in-heather
 milestone: [hih-memory-model, hih-pl-wp]
 ---
@@ -44,3 +44,29 @@ process's stack to be a data region the profile relies on from the entry.
 - 2026-10-28: [[native-data-capacity]] made the RW segment the program's
   size: `LoadedFrom(size, file)` agrees below `io_data_end(size)` and
   `ArgvAt` reads above it.
+- 2026-10-31: Done (lib/std/os/linux/linux_x86_64_image.hthr, "The process's stack"). The
+    process is a memory of `X86Profile::process(size, top, depth)`: what
+    `X86Profile::io(size)` relies on, and `depth` bytes below `top` data.
+    `StackPlaced(size, top, depth)` is where Linux puts it: above the segment,
+    `top` canonical, and `depth` at most `io_stack_limit()`, the 128 KiB exec
+    maps below the arguments before the program runs (fs/exec.c
+    `setup_arg_pages`). The size decision the issue owed: a fixed depth the
+    process relies on, up to that 128 KiB, never the on-demand growth (what a
+    fault would map is not mapped when the run reads). `DataRegion::process_data`
+    and `DataRegion::process_stack` are the two regions;
+    `process_stack_entry` puts the stack's top at the entry RSP and
+    `process_stack_push` a CALL's return address in its top word, so
+    `DataRegion::stack` applies from the entry; `process_stack_keeps_data`:
+    a word stored in the stack keeps the segment's `Holds`. The loader
+    `X86Memory::process_load` maps the stack with the data permission and is
+    `LoadedFrom` the file (`process_load_loaded`), so the ELF theorem's
+    premises are not vacuous. `LoadedFrom` and `loaded_entry` take any profile
+    (explicitly, [[implicit-from-record-parameter-type]]). The ELF
+    theorem (`Source::elf_simulates`/`elf_file_simulates`), cat's theorems and
+    every `write-elf` certificate (`<s>_simulates`) quantify over `top`,
+    `depth` and `StackPlaced`, with `rsp: read_gpr(Rsp, s.gprs).toNat() =
+    top`; the compile pushes nothing yet, so the proof uses only the segment.
+    Probes: lib/_tests/std/os/linux/linux_x86_64_image_tests.hthr. The
+    client is [[wp-callee-from-lowered-function]] (a compiled callee spills
+    into this stack); a Wp view over segment and stack at once is
+    [[wp-view-separating-product]].

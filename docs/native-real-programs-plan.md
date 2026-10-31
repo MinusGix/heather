@@ -356,6 +356,14 @@ the loaded file below `0x412000` and `ArgvAt` above it as hypotheses,
 which is what Linux hands a process, and no compiled code uses a stack. The stack region proper stays with `io-image-process-stack`, for a
 compiled callee that spills.
 
+**Status.** Stack region done, 2026-10-31 (`issues/io-image-process-stack.md`):
+the ELF theorem's process is one of `X86Profile::process(size, top, depth)`,
+which relies on the segment and on `depth` bytes below the entry RSP `top`
+(`StackPlaced`: above the segment, canonical, at most the 128 KiB exec maps).
+`DataRegion::process_stack` is its `Stack` from the entry, top at RSP, a
+CALL's push in its top word, and stores into it keep the segment. No
+compiled code pushes yet; the compiled callee that spills is the client.
+
 **Status.** open/close done, 2026-10-28
 (`issues/native-compile-other-calls.md`): `Prog::call` compiles `Opens` and
 `Closes` (`native_compile_opens`), and `cat FILE…` is built by `write-elf`
