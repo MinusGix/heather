@@ -50,5 +50,9 @@ Every tool builds smaller with its certificate kernel-checked (a few to a
 few dozen bytes each; the largest drops are in the tools with the most
 leaves). GNU results are the native tools suite's.
 
+`Source::refusal` still reads the source before the pass, so a leaf refused
+only for a node the pass drops as dead now compiles; the
+`narrow_mixed_leaf` probe exits with its narrow word so it stays refused.
+
 Left: arithmetic folds at an open width and constants across leaves,
 [[function-ir-pass-arithmetic-folds]].
