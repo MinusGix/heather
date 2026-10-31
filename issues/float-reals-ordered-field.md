@@ -22,7 +22,10 @@ two share their theorems, plus:
   two neighbours of an enclosure, with no breakpoint to decide, so it ends
   without the Padé gap of [[exp-log-grid-gap]].
 - **`Placed`** (§6): the real's position against the grid, read off an
-  enclosure that clears every breakpoint.
+  enclosure that clears every breakpoint. [[float-round-real-termination]]
+  stated its gap against the whole half-unit grid instead (`F.OffGrid`) and
+  recorded that per-mode `Placed` is not built until something needs it;
+  the `K`-generic `RoundsTo::exists` of §6 is that customer, if it comes.
 
 ## Done when
 

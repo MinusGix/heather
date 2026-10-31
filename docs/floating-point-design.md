@@ -1463,5 +1463,5 @@ probe.
 **Left in `float-reals`.** The transfer to any ordered field, faithful
 rounding and `Placed` of §6
 ([float-reals-ordered-field](../issues/float-reals-ordered-field.md)); the
-the Padé gap that would make Ziv's search end unconditionally for exp and
+Padé gap that would make Ziv's search end unconditionally for exp and
 log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md).
