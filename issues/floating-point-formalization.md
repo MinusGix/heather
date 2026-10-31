@@ -90,3 +90,4 @@ of the area.
   with the value theorem stated at every rational in `√x`'s cell (no second
   relation, no reals), `Nat::isqrt` in `nat.hthr`, the IEEE signs and specials.
   `float-arith` is done. Design §14.1.
+- 2026-10-31: round 5 begins (`float-eft`): `lib/std/num/float/eft.hthr` with Sterbenz, grid preservation, the nearest addition error and Fast2Sum ([[float-eft-sterbenz-fast2sum]]); TwoSum, TwoProduct, Veltkamp and Kahan filed as [[float-eft-two-sum]], [[float-eft-two-product]], [[float-eft-veltkamp]], [[float-kahan-summation]]. Design §19.

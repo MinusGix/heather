@@ -567,7 +567,7 @@ roadmap's.
 | 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. Landed; §13. |
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed, §14; sqrt §14.1. |
-| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
+| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. Started: Sterbenz, the nearest addition error and Fast2Sum landed, §19; the rest is filed. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
 | later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); the search ends from a real clear of the grid ([float-round-real-termination](../issues/float-round-real-termination.md), `round_real_apart`); the Padé gap for exp and log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md). The operations, the square root, the error model at every real and the root of a real landed, §17; the ordered-field transfer is [float-reals-ordered-field](../issues/float-reals-ordered-field.md). |
 | later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)); `Float::exp`/`Float::log` over every float with the §9.2 specials. |
@@ -1599,3 +1599,88 @@ the series boxes at the cost of the correctly rounded probe, return 1 at 1
 and at the midpoint `1 + 2^-24` on the first box, where rounding down (at
 1) and to nearest (at the midpoint) never end (`one_down_open`,
 `mid_near_open`), and refute 1's successor as a faithful rounding of 1.
+
+## 19. Error-free transformations (`float-eft`)
+
+Round 5's first part. Module: `lib/std/num/float/eft.hthr`, tests in
+`lib/_tests/std/num/float/eft_tests.hthr`. Issue
+[float-eft-sterbenz-fast2sum](../issues/float-eft-sterbenz-fast2sum.md);
+the rest of the milestone is
+[float-eft-two-sum](../issues/float-eft-two-sum.md),
+[float-eft-two-product](../issues/float-eft-two-product.md),
+[float-eft-veltkamp](../issues/float-eft-veltkamp.md) and
+[float-kahan-summation](../issues/float-kahan-summation.md).
+
+**Exactness is one statement.** `Float::Exact(o, v)` says `o` is the finite
+float whose value is `v`. Once some float has the value `v`, every mode
+rounds `v` to it (`Format::exact_of_rounds`, from `rounds_exact`,
+`rounds_respects` and uniqueness), so each transformation proves only that
+its exact result is a float and gets exactness at every mode from that.
+`round_rat_of_rep` is the same fact read the other way, which is how the
+negative controls refute representability by evaluating one rounding.
+
+**Representability is one lemma.** On the half-unit grid a float `g` is
+`g.mag · 2^(g.bexp + 1)`. A natural `h = k · 2^(g.bexp + 1)` with
+`h <= g.units() · 2` has `k <= g.mag`, so `k` fits at `g`'s exponent; then
+the cut's cell has exponent at most `g.bexp` (`Format::e_of_le`: below
+`top · 2^(c+1)` the search stops by `c`), the cell's spacing divides `h`,
+and the greatest float at or below `h` is exactly `h` (`down_of_le`,
+`down_of_mult`, `Format::rep_below`). The signed form is over
+`OnGrid(c, z)`, `z = ±n · 2^(c+1)` (closed under `+`, `-` and negation, and
+every float is on the grid of every exponent at or below its own,
+`Finite::H_on_grid`): `Format::rep_on_grid`. Neither form needs
+normalisation: the cut's search does it.
+
+**Sterbenz** (`Finite::sterbenz`). For `y <= 2x` and `x <= 2y` both are
+nonnegative, and `x - y` is on the grid of the operand with the smaller
+exponent and no larger than it: if `x >= y` and `y` is the finer one,
+`x - y <= y` is the hypothesis; if `x` is the finer one, `x - y <= x` is
+free. So there is no case on which exponent is larger and no lemma that
+exponents are monotone in the value. Subnormals need nothing extra.
+
+**Rounding keeps a coarser grid** (`Format::nbr_grid`). A neighbour `s` of a
+value `x` on the grid of exponent `c` is on that grid: when `s.bexp >= c`
+it is because `s` is a float; when `s.bexp < c` the cut of `|x|` is below
+`top · 2^(s.bexp + 1)`, so its cell's spacing divides it, `x` is a float and
+`s` is `x` (`nbr_on_grid`, the negative side through `-s`). This replaces
+the textbook appeal to "the exponent of `○(x)` is at least the exponent of
+the grid".
+
+**The nearest addition error** (`Finite::add_error`). For `s` nearest to
+`a + b`, `|a + b - s|` is at most `|b|` (the distance to the float `a`) and
+at most `|a|` (to `b`), so at most the operand with the finer exponent; the
+error is on that operand's grid by `nbr_grid`; `rep_on_grid` concludes. The
+distance bounds come from `Finite::Nearest` against a candidate float,
+read at half-units (`Finite::near_err_H`). The statement is false for the
+directed modes: rounding `1 + 2^-24` up at binary16 errs by `2^-10 -
+2^-24`, which has fourteen significant bits (`err_up_not_float`).
+
+**Fast2Sum** (`fast_two_sum`, `fast_two_sum_err`, `fast_two_sum_exact`), for
+`|b| <= |a|` and `s` a finite nearest rounding of `a + b`. At `a >= 0`
+(`Format::f2s_pos`; the other sign is the same through negation and
+`nearest_flip`):
+
+- `b >= 0`: `a <= s` (the float `a` is at distance `b`) and `s <= 2a` (the
+  float `2a` is at distance `a - b`, or `2a` is past every float,
+  `Format::double_or_over`), so Sterbenz.
+- `b < 0`: `s <= a`. If `2|b| >= a`, Sterbenz makes `a + b` a float, so
+  `s = a + b` and `s - a = b`. Otherwise `a + b > a/2`: in the least binade
+  every grid value from 0 to `a` is a float, `a + b` among them; above it
+  `a/2` is a float (`Format::half_float`) at distance `a + b - a/2`, so
+  `s >= a/2` and Sterbenz.
+
+Then `b - z` is `(a + b) - s`, the addition error. The subtractions may
+round in any mode, and no hypothesis excludes overflow beyond `s` being
+finite. The tests run it at binary16 (`1 + 3·2^-12` splits as `1 + 2^-10`
+and `-2^-12`) and refute both hypotheses' necessity on concrete values:
+Sterbenz's range (`1 - 3·2^-12` is a tie) and Fast2Sum's order (`2^-24 + 1`).
+
+Observations:
+
+- `omega` cannot see through a projection of an existential (`r.witness`):
+  it stops with "could not spell an integer expression". Matching the
+  existential with `Exists(f, fh)` binds a variable it can read.
+- `Rat::not_le_of_lt` needs both points named when its strict fact is
+  `trivial` (closed values carry no inferable shape).
+- The `Nat`/`Int` facts here are about the float grid (`OnGrid` is a
+  float's cell spacing), so they stay in the float module.
