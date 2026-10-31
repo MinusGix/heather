@@ -777,6 +777,15 @@ open carrier with no merged dictionary in scope the fields need not agree,
 and the kernel gate refuses the assembly. A closed answer is queued for the
 canonical table, so a carrier pays for its assembly once.
 
+**Index pinning reads the parents too.** A call's index slots are filled
+from a dictionary in scope of the goal's class or a descendant
+(`scope_dict_index`, crates/elab/src/dispatch/dictionary.rs). A merged
+class has none in a scope holding its parents: `linarith` at a section's
+class carrier `K: OrderedField(…)` puts `OrderedField::with_ints<K>()`, a
+`CommRingOfInt`, beside the section's field. So for a merged class each slot
+is read off the first parent dictionary in scope that fills it, and the
+join then assembles the record from the same two.
+
 `linarith`'s certificate section now writes the two constraints, and
 `OrderedFieldOfInt` and its two instances are gone. Probes:
 lib/_tests/std/algebra/ordered_field_tests.hthr.
