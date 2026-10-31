@@ -569,7 +569,7 @@ roadmap's.
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed, §14; sqrt §14.1. |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
-| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); the search ends from a real clear of the grid ([float-round-real-termination](../issues/float-round-real-termination.md), `round_real_apart`); the Padé gap for exp and log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md). The operations, the square root and the error model at nonnegative reals landed, §17. |
+| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); the search ends from a real clear of the grid ([float-round-real-termination](../issues/float-round-real-termination.md), `round_real_apart`); the Padé gap for exp and log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md). The operations, the square root, the error model at every real and the root of a real landed, §17; the ordered-field transfer is [float-reals-ordered-field](../issues/float-reals-ordered-field.md). |
 | later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)); `Float::exp`/`Float::log` over every float with the §9.2 specials. |
 
 ML numerics on top (dot products, softmax, stochastic rounding) belong to
@@ -1353,7 +1353,7 @@ independent, so a goal that needs the dependency (`x - x`) widens. Left:
   exp(b)`, `sin² + cos² ≈ 1`), which want continuity and `CReal` series
   ([[elementary-functions-at-reals]]).
 
-## 17. Floats at the reals (`float-reals`, first part)
+## 17. Floats at the reals (`float-reals`)
 
 Module: `lib/std/num/float/float_real.hthr`; the root lemmas it reads are in
 `rat.hthr` and `creal.hthr`, `u_le_one` and `max_finite_nonneg` in
@@ -1414,11 +1414,54 @@ evaluation), and read at the root through the cut. This is the
 `|r - √x| ≤ u·√x` that §14.1 left for this round; at binary16, √2's
 standard model is a probe.
 
-**Left in `float-reals`.** The error model at a real of either sign (the
-cut at zero is undecidable, but the conclusion is a `≤`, so
-`CReal::le_by_sign` can split it); `sqrt_rat(q) * sqrt_rat(q) ≈ |q|` and
-the uniqueness of `IsSqrt` up to `≈`, the root of a real rather than a
-rational, and the transfer to any ordered field, faithful rounding and
-`Placed` of §6 ([float-reals-next](../issues/float-reals-next.md));
-termination of Ziv's search is
-[float-round-real-termination](../issues/float-round-real-termination.md).
+### 17.1 The error model at a real of either sign
+
+Whether `x ≥ 0` cannot be decided, but each conclusion is a `≤`, a negation
+at `CReal`, so `CReal::le_by_sign` splits on the sign inside it. The
+nonpositive side needs no conjugate mode: the rounding interval is cut to
+`[-M, 0]` (or `[-M, -m]`), the rational bound at its ends is
+`|r - q| ≤ u·(-q) + η` (`Rat::sides_of_abs_nonpos`), and the two affine
+sides, now increasing in `q` with slopes `1 - u` and `1 + u`, hold in between
+(`CReal::err_between_nonpos`). The pieces are joined by `|x| ≥ x` and
+`|x| ≥ -x` (`CReal::le_abs`, `neg_le_abs`):
+
+- `Format::real_error`: `|r - x| ≤ u·|x| + η` while `|x| ≤ M`;
+- `Format::real_relative`: `|r - x| ≤ u·|x|` while `m ≤ |x| ≤ M`.
+
+At -1/3 in binary16 both are probes.
+
+### 17.2 Roots squared, and unique
+
+A rational strictly between two apart reals (`CReal::rat_between`, from the
+gap `Lt` carries) decides every argument here. Two roots of one rational are
+the same real: a rational between them would have its square on one side of
+`x` and so be on the wrong side of one root (`CReal::is_sqrt_unique`). A
+root squares back, `s * s ≈ x` (`is_sqrt_sq`): if `x < s²`, a rational `r`
+between them is beaten by some root from above, `(f_n + 2^-n)² < r`
+(`Rat::root_floor_up`; the roots from below come within any `d` of `|q|` once
+`2^-n·(2|q| + 3) < d`), and the cut puts `s` under that root, so
+`s² < r < s²`; the other side is `Rat::root_floor_down` the same way. So
+`sqrt_rat(q)² ≈ |q|` (`CReal::sqrt_rat_sq`).
+
+### 17.3 The root of a real
+
+`√` is Hölder-½, `|√a - √b| ≤ √|a - b|`, which at rational roots from below
+is `Rat::lt_root_floor_add`: `p² ≤ |b| + d²` puts `p` under `b`'s root plus
+its precision plus `d`. So `CReal::sqrt(x)` takes as its n-th term the root
+of `x`'s term at `2(n + 2)` to `n + 2` bits: two such terms differ by at most
+`2^-(2m+4) + 2^-(2n+4) ≤ (2^-(m+2) + 2^-(n+2))²`, which moves their roots by
+`2^-(m+2) + 2^-(n+2)` plus a precision, a regular sequence. Like
+`sqrt_rat`, it is the root of `|x|`. `CReal::IsRoot(s, x)` is `IsSqrt` at a
+real argument; terms of `ofRat(p²) ≤ |x|` (by `bishop_of_le`) give
+`sqrt_is_root`, and the §17.2 argument with one more rational in between
+gives `is_root_sq`, so `√x·√x ≈ |x|` (`sqrt_sq`), `sqrt_respects`, and
+`sqrt_ofRat` (it is `sqrt_rat` at a rational, by uniqueness). At a float,
+`Finite::sqrt_rounds_root` is the value theorem at `a.real().sqrt()`. The
+customer is error analysis of compound expressions; `√(3² + 4²) ≈ 5` is a
+probe.
+
+**Left in `float-reals`.** The transfer to any ordered field, faithful
+rounding and `Placed` of §6
+([float-reals-ordered-field](../issues/float-reals-ordered-field.md)); the
+the Padé gap that would make Ziv's search end unconditionally for exp and
+log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md).
