@@ -27,3 +27,19 @@ statements (the itree rounds).
 The decimal formatter or another fuel-specified library function is
 restated without fuel in its statement, and a `partial` runtime loop
 compiles under the default setup.
+
+## Log
+
+- 2026-10-31: Assessed in `docs/partial-functions-design.md`. The
+  coinductive library already has everything except `CoTree::rec`. A probe
+  builds it as a loop over the pending tree (`iter`, Coq's `interp_mrec`):
+  its unfolding laws hold by `refl` at open arguments, runs at literals check
+  by a count and `refl`, and the cost is linear in calls. The note proposes
+  `partial fn f(x: A) → B` as `f : A → CoTree<B>(E)`, with tail recursion
+  lowered to `iter`, and the general case to `rec`; proofs go through
+  library rules (`Returns`, fixpoint induction, a measure rule,
+  `Partial::get`). It also proposes changing "done when": the decimal
+  formatter's fuel is a termination witness (its fix is
+  `unfolding-computed-scrutinee` and `while … decreases`), so the customer
+  should be the kernel model's `Tm::whnf`, whose divergence is real. Three
+  rounds in §6, for Minus's decision.
