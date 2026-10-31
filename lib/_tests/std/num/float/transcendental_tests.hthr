@@ -1,0 +1,52 @@
+// Correctly rounded exp and log at floats (lib/std/num/float/transcendental.hthr,
+// Ziv's search in round_real.hthr): each value is computed by evaluation and
+// was checked against a 200-digit reference rounded exactly. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import option; import omega; import rat; import creal; import dyadic; import float; import round; import window; import literal; import interval; import creal_interval; import series; import elementary; import round_real; import transcendental;
+
+fn half32() → Finite(binary32()) { Finite(False, 8388608, 125, trivial) }
+fn one32() → Finite(binary32()) { Finite(False, 8388608, 126, trivial) }
+fn neg_half32() → Finite(binary32()) { Finite(True, 8388608, 125, trivial) }
+fn three_halves32() → Finite(binary32()) { Finite(False, 12582912, 126, trivial) }
+fn two32() → Finite(binary32()) { Finite(False, 8388608, 127, trivial) }
+fn three32() → Finite(binary32()) { Finite(False, 12582912, 127, trivial) }
+fn ten32() → Finite(binary32()) { Finite(False, 10485760, 129, trivial) }
+fn one16() → Finite(binary16()) { Finite(False, 1024, 14, trivial) }
+fn one_bf16() → Finite(bfloat16()) { Finite(False, 128, 126, trivial) }
+
+// e = 2.718281828…: nearest and down are 0x402DF854, up is one ulp more.
+theorem exp_one_32(): binary32().exp_fin(NearestEven, one32(), 4) = Some(Fin(Finite(False, 11401300, 127, trivial))) { refl }
+theorem exp_one_32_down(): binary32().exp_fin(TowardNeg, one32(), 4) = Some(Fin(Finite(False, 11401300, 127, trivial))) { refl }
+theorem exp_one_32_up(): binary32().exp_fin(TowardPos, one32(), 4) = Some(Fin(Finite(False, 11401301, 127, trivial))) { refl }
+theorem exp_half_32(): binary32().exp_fin(NearestEven, half32(), 4) = Some(Fin(Finite(False, 13830476, 126, trivial))) { refl }
+theorem exp_neg_half_32(): binary32().exp_fin(NearestEven, neg_half32(), 4) = Some(Fin(Finite(False, 10175896, 125, trivial))) { refl }
+theorem exp_one_16(): binary16().exp_fin(NearestEven, one16(), 4) = Some(Fin(Finite(False, 1392, 15, trivial))) { refl }
+theorem exp_one_bf16(): bfloat16().exp_fin(NearestEven, one_bf16(), 4) = Some(Fin(Finite(False, 174, 127, trivial))) { refl }
+
+// Out of tries is `None`, never a wrong float.
+theorem exp_no_tries(): binary32().exp_fin(NearestEven, one32(), 0) = None { refl }
+
+// What a computed value means: the correct rounding of the real.
+theorem e_rounds(): RoundsToReal(binary32(), NearestEven, CReal::exp_rat(one32().val()), Fin(Finite(False, 11401300, 127, trivial))) {
+    binary32().exp_fin_correct(NearestEven, one32(), 4, Fin(Finite(False, 11401300, 127, trivial)), exp_one_32())
+}
+
+// log 2 = 0.693147…, log 3, log 10, log 1.5 and log 0.5 = -log 2.
+theorem log_two_32(): binary32().log_fin(NearestEven, two32(), omega, 4) = Some(Fin(Finite(False, 11629080, 125, trivial))) { refl }
+theorem log_three_32(): binary32().log_fin(NearestEven, three32(), omega, 4) = Some(Fin(Finite(False, 9215828, 126, trivial))) { refl }
+theorem log_ten_32(): binary32().log_fin(NearestEven, ten32(), omega, 4) = Some(Fin(Finite(False, 9657742, 127, trivial))) { refl }
+theorem log_three_halves_32(): binary32().log_fin(NearestEven, three_halves32(), omega, 4) = Some(Fin(Finite(False, 13605151, 124, trivial))) { refl }
+theorem log_half_32(): binary32().log_fin(NearestEven, half32(), omega, 4) = Some(Fin(Finite(True, 11629080, 125, trivial))) { refl }
+
+// The scaling into one binade: 10 = (10/8)·2^3 and 1/10 = (8/10)·2^-3.
+theorem binade_ten(): Binade::of(10, 1) = Binade(10, 8, 3) { refl }
+theorem binade_tenth(): Binade::of(1, 10) = Binade(8, 10, -3) { refl }
+
+// At a rational the relation is `RoundsTo`; any two witnesses agree.
+theorem rounds_real_one(): RoundsToReal(binary32(), NearestEven, CReal::ofRat(one32().val()), Fin(one32())) {
+    binary32().rounds_real_of_rat(NearestEven, one32().val(), Fin(one32()), binary32().rounds_exact(NearestEven, one32()))
+}
+theorem rounds_real_back(): RoundsTo(binary32(), NearestEven, one32().val(), Fin(one32())) {
+    binary32().rounds_real_rat(NearestEven, one32().val(), Fin(one32()), rounds_real_one())
+}

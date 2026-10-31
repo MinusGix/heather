@@ -492,6 +492,9 @@ theorem RealExpr::enclose_has(self e: RealExpr, n, p: Nat): e.Wf() → e.enclose
     }
 }
 
+// A well-formed tree as a leaf of its own: its enclosures, with their proof.
+fn RealExpr::enclosed(self e: RealExpr, wf: e.Wf()) → Enclosed { Enclosed(e.eval(), λ n p => e.enclose(n, p), λ n p => e.enclose_has(n, p, wf)) }
+
 // Try index `n` at `p` bits; on a miss read one index further out, one bit
 // finer, `tries` times. A term's distance to its real halves with each step,
 // and the extra bit keeps the rounding below it.

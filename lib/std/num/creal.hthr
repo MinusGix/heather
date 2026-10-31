@@ -290,6 +290,36 @@ theorem CReal::same_of_approx(self x, y: CReal, f, g: Nat → Rat,
 }
 
 // ---------------------------------------------------------------------------
+// Compression (O'Connor's `compress`). Every operation above rounds what it
+// makes except a sum, a negation and a limit, which pass their arguments'
+// dyadics on as they are, and a real built by hand from a sequence can have
+// terms of any size. `x.compress()` reads `x` one index further out and
+// floors the term to n+1 bits, so its n-th term is a dyadic at exponent
+// -(n+1) (`compress_exp`) whatever `x`'s was, at the price of one index. It
+// is the same real (`compress_same`), so a client calls it wherever the
+// terms of an expression have grown, and nothing else has to move.
+
+fn CReal::compress(self x: CReal) → CReal { CReal::rounded(λ n => x.at(n + 1), λ m n => x.regular(m + 1, n + 1)) }
+
+theorem CReal::compress_exp(self x: CReal, n: Nat): x.compress().seq(n).exp = -(n + 1).int() { refl }
+
+// The n-th term is within a rounding of x's (n+1)-th, which is within
+// 2^-(n+1) + 2^-n of x's n-th: two halves and a whole, Bishop's bound.
+theorem CReal::compress_same(self x: CReal): x.compress() ≈ x {
+    x.compress().same_of_near(x, λ n => {
+        let h = Rat::inv_pow2(n + 1);
+        let w = Rat::inv_pow2(n);
+        let c = x.compress().at(n);
+        calc {
+            (c - x.at(n)).abs() <= (c - x.at(n + 1)).abs() + (x.at(n + 1) - x.at(n)).abs() := c.dist_triangle(x.at(n + 1), x.at(n)),
+            <= h + (h + w) := Rat::add_le_mono(Dyadic::floor_rat_close(x.at(n + 1), n + 1), x.regular(n + 1, n)),
+            ≈ (h + h) + w := Rat::same_sym(h.add_assoc(h, w)),
+            ≈ w + w := Rat::add_respects(Rat::inv_pow2_half(n), w.same_refl()),
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // The rationals inside the reals: a rational floored at each precision.
 
 theorem CReal::const_regular(q: Rat, m, n: Nat): (q - q).abs() <= Rat::inv_pow2(m + 1) + Rat::inv_pow2(n + 1) {

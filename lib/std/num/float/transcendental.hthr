@@ -1,0 +1,53 @@
+// Correctly rounded exp and log at floats (docs/floating-point-design.md §6,
+// submilestone `float-transcendental`; docs/creal-transcendental-round.md).
+//
+// A finite float's value is a rational, so its exp is the series real
+// `CReal::exp_rat` at that value, and its log (at a positive float)
+// `CReal::log_rat`, each with its series' own enclosures, and the float
+// result is Ziv's search over them (`Format::round_real`). The search
+// returns a float only with a proof that it is the correct rounding of the
+// real (`exp_fin_correct`, `log_fin_correct`); a `None` means the tries ran out, never a wrong
+// answer. That the search always ends, so that `None` cannot happen with
+// enough tries, is the Padé gap of issues/float-round-real-termination.md.
+
+import logic;
+import bool;
+import nat;
+import int;
+import option;
+import rat;
+import creal;
+import dyadic;
+import float;
+import round;
+import interval;
+import creal_interval;
+import series;
+import elementary;
+import round_real;
+
+// ---------------------------------------------------------------------------
+// exp
+
+fn Format::exp_fin(self F: Format, mode: Mode, f: Finite(F), tries: Nat) → Option<Float(F)> {
+    F.round_real(mode, CReal::exp_box(f.val()), tries)
+}
+
+theorem Format::exp_fin_correct(self F: Format, mode: Mode, f: Finite(F), tries: Nat, r: Float(F), is: F.exp_fin(mode, f, tries) = Some(r)):
+    RoundsToReal(F, mode, CReal::exp_rat(f.val()), r)
+{
+    F.round_real_correct(mode, CReal::exp_box(f.val()), tries, r, is)
+}
+
+// ---------------------------------------------------------------------------
+// log
+
+fn Format::log_fin(self F: Format, mode: Mode, f: Finite(F), pos: 0 < f.val(), tries: Nat) → Option<Float(F)> {
+    F.round_real(mode, CReal::log_box(f.val(), pos), tries)
+}
+
+theorem Format::log_fin_correct(self F: Format, mode: Mode, f: Finite(F), pos: 0 < f.val(), tries: Nat, r: Float(F), is: F.log_fin(mode, f, pos, tries) = Some(r)):
+    RoundsToReal(F, mode, CReal::log_rat(f.val(), pos), r)
+{
+    F.round_real_correct(mode, CReal::log_box(f.val(), pos), tries, r, is)
+}

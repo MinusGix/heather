@@ -2008,6 +2008,34 @@ theorem Nat::lt_pow_width(self n: Nat): n < Nat::pow(2, n.width()) {
     j(top, λ y _ => n < y, below)
 }
 
+// And from the other side: a positive `n` is at least half of `2^width(n)`,
+// so `2^(width(n) - 1) <= n < 2^width(n)`. A halving step doubles both
+// sides; at one the width is one.
+theorem Nat::width_fuel_zero(self f: Nat): Nat::width_fuel(0, f) = 0 { match f { Zero => refl, Succ(_) => refl } }
+
+theorem Nat::pow_width_le_fuel(self fuel: Nat): (n: Nat) → n <= fuel → 0 < n → Nat::pow(2, Nat::width_fuel(n, fuel)) <= n + n {
+    match fuel {
+        Zero => λ n le pos => false_elim(Nat::le_trans(1, n, 0, pos, le)),
+        Succ(f, ih) => λ n => match n {
+            Zero => λ _ (pos: False) => false_elim(pos),
+            Succ(k) => λ le _ => {
+                let kf: (k <= f) = le;
+                let two: (2 <= Succ(k) + Succ(k)) = Nat::le_trans(1, Succ(k), Succ(k) + k, trivial, Succ(k).le_add_l(k));
+                match Succ(k).half() as λ y => y <= f → y + y <= Succ(k) → Nat::pow(2, Succ(Nat::width_fuel(y, f))) <= Succ(k) + Succ(k) {
+                    Zero => λ _ _ => j(sym(f.width_fuel_zero()), λ w _ => Nat::pow(2, Succ(w)) <= Succ(k) + Succ(k), two),
+                    Succ(l) => λ lf hh => {
+                        let w = Nat::width_fuel(Succ(l), f);
+                        let below: (Nat::pow(2, w) <= Succ(k)) = Nat::le_trans(Nat::pow(2, w), Succ(l) + Succ(l), Succ(k), ih(Succ(l), lf, trivial), hh);
+                        j(Succ(k).mul_two(), λ v _ => Nat::pow(2, w) * 2 <= v, Nat::mul_le_mono_r(2, Nat::pow(2, w), Succ(k), below))
+                    },
+                }(Succ(k).half().le_trans(k, f, k.half_succ_le(), kf), Succ(k).half_add_le())
+            },
+        },
+    }
+}
+
+theorem Nat::pow_width_le(self n: Nat, pos: 0 < n): Nat::pow(2, n.width()) <= n + n { n.pow_width_le_fuel(n, n.le_refl(), pos) }
+
 // A power of two outgrows its exponent: n < 2^n. The binary rate of a real's
 // terms (std/creal) is at least as fine as the unary one.
 theorem Nat::lt_two_pow(self n: Nat): n < Nat::pow(2, n) {
