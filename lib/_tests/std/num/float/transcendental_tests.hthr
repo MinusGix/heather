@@ -1,0 +1,122 @@
+// Correctly rounded exp and log at floats (lib/std/num/float/transcendental.hthr,
+// Ziv's search in round_real.hthr): each value is computed by evaluation and
+// was checked against a 200-digit reference rounded exactly. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import option; import omega; import rat; import creal; import dyadic; import float; import round; import window; import literal; import interval; import creal_interval; import series; import elementary; import round_real; import arith; import transcendental;
+
+fn half32() → Finite(binary32()) { Finite(False, 8388608, 125, trivial) }
+fn one32() → Finite(binary32()) { Finite(False, 8388608, 126, trivial) }
+fn neg_half32() → Finite(binary32()) { Finite(True, 8388608, 125, trivial) }
+fn three_halves32() → Finite(binary32()) { Finite(False, 12582912, 126, trivial) }
+fn two32() → Finite(binary32()) { Finite(False, 8388608, 127, trivial) }
+fn three32() → Finite(binary32()) { Finite(False, 12582912, 127, trivial) }
+fn ten32() → Finite(binary32()) { Finite(False, 10485760, 129, trivial) }
+fn one16() → Finite(binary16()) { Finite(False, 1024, 14, trivial) }
+fn one_bf16() → Finite(bfloat16()) { Finite(False, 128, 126, trivial) }
+fn neg_three32() → Finite(binary32()) { Finite(True, 12582912, 127, trivial) }
+fn one64() → Finite(binary64()) { Finite(False, 4503599627370496, 1022, trivial) }
+
+// e = 2.718281828…: nearest and down are 0x402DF854, up is one ulp more.
+theorem exp_one_32(): binary32().exp_fin(NearestEven, one32(), 4) = Some(Fin(Finite(False, 11401300, 127, trivial))) { refl }
+theorem exp_one_32_down(): binary32().exp_fin(TowardNeg, one32(), 4) = Some(Fin(Finite(False, 11401300, 127, trivial))) { refl }
+theorem exp_one_32_up(): binary32().exp_fin(TowardPos, one32(), 4) = Some(Fin(Finite(False, 11401301, 127, trivial))) { refl }
+theorem exp_half_32(): binary32().exp_fin(NearestEven, half32(), 4) = Some(Fin(Finite(False, 13830476, 126, trivial))) { refl }
+theorem exp_neg_half_32(): binary32().exp_fin(NearestEven, neg_half32(), 4) = Some(Fin(Finite(False, 10175896, 125, trivial))) { refl }
+theorem exp_one_16(): binary16().exp_fin(NearestEven, one16(), 4) = Some(Fin(Finite(False, 1392, 15, trivial))) { refl }
+theorem exp_one_bf16(): bfloat16().exp_fin(NearestEven, one_bf16(), 4) = Some(Fin(Finite(False, 174, 127, trivial))) { refl }
+
+// e^-3 = 0.0497870…, 0x3D4BED86: an alternating series, whose cancellation
+// takes the corner products every step. And binary64: e is
+// 0x4005BF0A8B145769. Both ran out of the kernel's fuel before
+// issues/interval-evaluation-budget.md.
+theorem exp_neg_three_32(): binary32().exp_fin(NearestEven, neg_three32(), 4) = Some(Fin(Finite(False, 13364614, 121, trivial))) { refl }
+theorem exp_one_64(): binary64().exp_fin(NearestEven, one64(), 4) = Some(Fin(Finite(False, 6121026514868073, 1023, trivial))) { refl }
+
+// Out of tries is `None`, never a wrong float.
+theorem exp_no_tries(): binary32().exp_fin(NearestEven, one32(), 0) = None { refl }
+
+// What a computed value means: the correct rounding of the real.
+theorem e_rounds(): RoundsToReal(binary32(), NearestEven, CReal::exp_rat(one32().val()), Fin(Finite(False, 11401300, 127, trivial))) {
+    binary32().exp_fin_correct(NearestEven, one32(), 4, Fin(Finite(False, 11401300, 127, trivial)), exp_one_32())
+}
+
+// log 2 = 0.693147…, log 3, log 10, log 1.5 and log 0.5 = -log 2.
+theorem log_two_32(): binary32().log_fin(NearestEven, two32(), omega, 4) = Some(Fin(Finite(False, 11629080, 125, trivial))) { refl }
+theorem log_three_32(): binary32().log_fin(NearestEven, three32(), omega, 4) = Some(Fin(Finite(False, 9215828, 126, trivial))) { refl }
+theorem log_ten_32(): binary32().log_fin(NearestEven, ten32(), omega, 4) = Some(Fin(Finite(False, 9657742, 127, trivial))) { refl }
+theorem log_three_halves_32(): binary32().log_fin(NearestEven, three_halves32(), omega, 4) = Some(Fin(Finite(False, 13605151, 124, trivial))) { refl }
+theorem log_half_32(): binary32().log_fin(NearestEven, half32(), omega, 4) = Some(Fin(Finite(True, 11629080, 125, trivial))) { refl }
+
+// The scaling into one binade: 10 = (10/8)·2^3 and 1/10 = (8/10)·2^-3.
+theorem binade_ten(): Binade::of(10, 1) = Binade(10, 8, 3) { refl }
+theorem binade_tenth(): Binade::of(1, 10) = Binade(8, 10, -3) { refl }
+
+// At a rational the relation is `RoundsTo`; any two witnesses agree.
+theorem rounds_real_one(): RoundsToReal(binary32(), NearestEven, CReal::ofRat(one32().val()), Fin(one32())) {
+    binary32().rounds_real_of_rat(NearestEven, one32().val(), Fin(one32()), binary32().rounds_exact(NearestEven, one32()))
+}
+theorem rounds_real_back(): RoundsTo(binary32(), NearestEven, one32().val(), Fin(one32())) {
+    binary32().rounds_real_rat(NearestEven, one32().val(), Fin(one32()), rounds_real_one())
+}
+
+// Every float: the specials of IEEE 754 §9.2.
+fn four_e3m2() → Finite(e3m2()) { Finite(False, 4, 4, trivial) }
+fn neg_two32() → Finite(binary32()) { Finite(True, 8388608, 127, trivial) }
+
+// exp(±0) = 1 exactly, in every mode: the search alone never settles a
+// directed rounding of 1.
+theorem exp_zero_32_down(): Float::exp(Float::Fin(Finite::zero(binary32(), True)), 4, mode := TowardNeg) = Some(Float::Fin(one32())) { refl }
+theorem exp_zero_32_up(): Float::exp(Float::Fin(Finite::zero(binary32(), False)), 4, mode := TowardPos) = Some(Float::Fin(one32())) { refl }
+theorem exp_zero_32_no_tries(): Float::exp(Float::Fin(Finite::zero(binary32(), False)), 0) = Some(Float::Fin(one32())) { refl }
+theorem exp_zero_rounds(): RoundsToReal(binary32(), TowardNeg, CReal::exp_rat((Finite::zero(binary32(), True)).val()), Float::Fin(one32())) {
+    Float::exp_correct(Finite::zero(binary32(), True), 4, TowardNeg, Float::Fin(one32()), exp_zero_32_down())
+}
+theorem exp_finite_32(): Float::exp(Float::Fin(one32()), 4) = Some(Float::Fin(Finite(False, 11401300, 127, trivial))) { refl }
+theorem exp_inf_32(): Float::exp(Float::Inf(False, trivial), 4, F := binary32()) = Some(Float::Inf(False, trivial)) { refl }
+theorem exp_neg_inf_32(): Float::exp(Float::Inf(True, trivial), 4, F := binary32()) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem exp_nan_32(): Float::exp(Float::NaN(trivial), 4, F := binary32()) = Some(Float::NaN(trivial)) { refl }
+
+// Overflow is the search: e^4 = 54.59… is past e3m2's largest float, 28,
+// and a format without infinities saturates.
+theorem exp_four_e3m2(): Float::exp(Float::Fin(four_e3m2()), 4) = Some(Float::Fin(Finite::max_finite(e3m2()))) { refl }
+
+// log: a positive argument is the search, ±0 divides by zero, a negative is
+// invalid.
+theorem log_two_float_32(): Float::log(Float::Fin(two32()), 4) = Some(Float::Fin(Finite(False, 11629080, 125, trivial))) { refl }
+theorem log_zero_32(): Float::log(Float::Fin(Finite::zero(binary32(), False)), 4) = Some(Float::Inf(True, trivial)) { refl }
+theorem log_neg_zero_32(): Float::log(Float::Fin(Finite::zero(binary32(), True)), 4) = Some(Float::Inf(True, trivial)) { refl }
+theorem log_neg_32(): Float::log(Float::Fin(neg_two32()), 4) = Some(Float::NaN(trivial)) { refl }
+theorem log_inf_32(): Float::log(Float::Inf(False, trivial), 4, F := binary32()) = Some(Float::Inf(False, trivial)) { refl }
+theorem log_neg_inf_32(): Float::log(Float::Inf(True, trivial), 4, F := binary32()) = Some(Float::NaN(trivial)) { refl }
+theorem log_nan_32(): Float::log(Float::NaN(trivial), 4, F := binary32()) = Some(Float::NaN(trivial)) { refl }
+
+// Without infinities (e4m3 has NaN only), log(0) is NaN.
+theorem log_zero_e4m3(): Float::log(Float::Fin(Finite::zero(e4m3(), False)), 4) = Some(Float::NaN(trivial)) { refl }
+
+// The theorems at an open float, read at a closed one.
+theorem log_neg_open(): Float::log(Float::Fin(neg_two32()), 4) = Some(Float::NaN(trivial)) {
+    Float::log_neg(neg_two32(), Finite::val_neg_lt(neg_two32(), refl, 8388607, refl), 4, NearestEven, trivial)
+}
+theorem log_two_rounds(): RoundsToReal(binary32(), NearestEven, CReal::log_rat(two32().val(), omega), Float::Fin(Finite(False, 11629080, 125, trivial))) {
+    Float::log_correct(two32(), omega, 4, NearestEven, trivial, Float::Fin(Finite(False, 11629080, 125, trivial)), log_two_float_32())
+}
+
+// log(1) = +0 exactly, in every mode (issues/float-log-one-exact.md): answered
+// before the search, so even zero tries suffice.
+theorem log_one_32(): Float::log(Float::Fin(one32()), 0) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem log_one_32_down(): Float::log(Float::Fin(one32()), 0, mode := TowardNeg) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem log_one_32_up(): Float::log(Float::Fin(one32()), 0, mode := TowardPos) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem log_one_32_zero(): Float::log(Float::Fin(one32()), 0, mode := TowardZero) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+theorem log_one_64_down(): Float::log(Float::Fin(one64()), 0, mode := TowardNeg) = Some(Float::Fin(Finite::zero(binary64(), False))) { refl }
+// The search alone lands on +0 too at this spelling, since its enclosure of
+// log 1 is exactly [0, 0] (first term 0, exponent 0); but only the answer
+// before it is a theorem about the zero's sign (`Float::log_one`).
+theorem log_one_search_down(): binary32().log_fin(TowardNeg, one32(), omega, 4) = Some(Float::Fin(Finite::zero(binary32(), False))) { refl }
+// The theorem at a neutral mode and tries, and the value it rounds.
+theorem log_one_any(tries: Nat, mode: Mode): Float::log(Float::Fin(one32()), tries, mode := mode) = Some(Float::Fin(Finite::zero(binary32(), False))) {
+    Float::log_one(one32(), refl, tries, mode, trivial)
+}
+theorem log_one_rounds(mode: Mode): RoundsToReal(binary32(), mode, CReal::log_rat(one32().val(), omega), Float::Fin(Finite::zero(binary32(), False))) {
+    Float::log_correct(one32(), omega, 0, mode, trivial, Float::Fin(Finite::zero(binary32(), False)), log_one_any(0, mode))
+}

@@ -3,9 +3,9 @@ title: Let the builder write loop and conditional regions
 status: open
 labels: [native,x86]
 area: heather-in-heather
-milestone: [hih-tools]
+milestone: [nh-front]
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-31
 ---
 
 The builder (`lib/native/native_build.hthr`) cuts its nodes into dataflow
@@ -25,3 +25,7 @@ statements.
   so what the builder writes is what the compiler takes.
 - A tool rewritten with it (tr's byte map is the natural first), with the
   lowering fixed in `lib/_tests/native/native_build_tests.hthr`.
+
+## Log
+
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.

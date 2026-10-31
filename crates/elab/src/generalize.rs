@@ -26,7 +26,7 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
-use heather_syntax::{Arm, Expr, ExprKind, LamBinder, Span};
+use heather_syntax::{Arm, Expr, ExprKind, LamBinder, Pat, Span};
 
 use crate::surface::walk_expr;
 use crate::{Cx, Elaborator};
@@ -133,6 +133,104 @@ impl Elaborator {
         varying
     }
 
+    /// The locals a `match` on the local `scrutinee` refines: every binder
+    /// after it whose type mentions it (directly or through another) and that
+    /// an arm names or the goal mentions, with the binders their types need
+    /// (issues/elab-match-refines-hypothesis-kernel-rejects.md). Generalized
+    /// into the motive like a varied parameter, so in the `Zero` arm of
+    /// `match n` a hypothesis `h: ¬(n = 0)` *is* `¬(0 = 0)` — in the kernel's
+    /// term, not only in what the arm's author was told. Ascending.
+    ///
+    /// Two kinds of binder stay where they are. A hidden `#` binder or a
+    /// reserved `__` one is the machinery's (an enclosing ih, a convoy
+    /// window, a measure recursion's `__dec_h`), and its reader states what
+    /// it needs about the binder as it was: the measure rewrite derives each
+    /// call's obligation from the unrefined `__dec_h` itself. And a structural
+    /// recursion's own `match` keeps its motive the recursion's: a self-call
+    /// can pass only declared parameters, and those it varies are
+    /// [`Self::varying_params`]'s already.
+    pub(crate) fn refined_hypotheses(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrutinee: &Term,
+        dec: Option<usize>,
+        expected: &Type,
+    ) -> Vec<usize> {
+        let Term::Var(LocalVar(index)) = scrutinee else {
+            return Vec::new();
+        };
+        let m = cx.gamma.entries.len();
+        let x = m - 1 - *index as usize;
+        if let (Some(_), Some(s)) = (dec, cx.selfref.as_ref()) {
+            let mut calls = false;
+            for arm in arms {
+                walk_expr(&arm.body, &mut |e| {
+                    calls |= crate::recursion::surface_self_call(s, e).is_some();
+                });
+            }
+            if calls {
+                return Vec::new();
+            }
+        }
+        // Every binder whose type is about the scrutinee, directly or through
+        // an earlier one: what the match *could* refine.
+        let mut about: Vec<usize> = Vec::new();
+        let mentions = |q: usize, p: usize| {
+            cx.gamma.entries.get(q).is_some_and(|entry| {
+                entry.ty.abstract_local(&Term::Var(LocalVar((q - 1 - p) as u32))).is_some()
+            })
+        };
+        for q in x + 1..m {
+            if mentions(q, x) || about.iter().any(|&p| mentions(q, p)) {
+                about.push(q);
+            }
+        }
+        // Of those, what an arm names or the goal mentions. A `match` is also
+        // a computation: one in a function body or a motive must stay the
+        // term it always was, so that it still converts with the `match` it
+        // restates, and a hypothesis nothing reads would change that term
+        // while refining nothing. One the goal mentions must go with the
+        // goal, whose motive abstracts the scrutinee under it.
+        let mut named: Vec<String> = Vec::new();
+        for arm in arms {
+            walk_expr(&arm.body, &mut |e| {
+                if let ExprKind::Var(name) = &e.kind {
+                    named.push(name.clone());
+                }
+            });
+        }
+        let machinery = |q: usize| cx.names[q].starts_with('#') || cx.names[q].starts_with("__");
+        let mut refined: Vec<usize> = about
+            .iter()
+            .copied()
+            .filter(|&q| {
+                !machinery(q)
+                    && (named.contains(&cx.names[q])
+                        || expected.abstract_local(&Term::Var(LocalVar((m - 1 - q) as u32))).is_some())
+            })
+            .collect();
+        // A refined binder's type is only right over the refined binders it
+        // mentions, so those go too; one that needs the machinery's stays.
+        let mut i = refined.len();
+        while i > 0 {
+            i -= 1;
+            let q = refined[i];
+            let needs: Vec<usize> =
+                about.iter().copied().filter(|&p| p < q && mentions(q, p) && !refined.contains(&p)).collect();
+            if needs.iter().any(|&p| machinery(p)) {
+                refined.remove(i);
+                continue;
+            }
+            if !needs.is_empty() {
+                refined.extend(needs);
+                refined.sort_unstable();
+                i = refined.len();
+            }
+        }
+        refined
+    }
+
     /// `Π(y₁ : T_{j₁}) … Π(y_g : T_{j_g}). expected`, with every reference to a
     /// generalized parameter inside the domains and the goal pointing at the
     /// new binder. Scoped in `cx`, like `expected`; its level is the join.
@@ -174,10 +272,19 @@ impl Elaborator {
         arms.iter()
             .map(|arm| {
                 let span = arm.body.span;
+                // A pattern variable of the same name shadowed the local in
+                // the arm as written, so it still does: the generalized
+                // binder takes a name the body cannot spell.
+                let mut bound = Vec::new();
+                arm.binders.iter().for_each(|pat| pattern_names(pat, &mut bound));
                 let binders = positions
                     .iter()
                     .map(|&p| LamBinder {
-                        name: cx.names[p].clone(),
+                        name: if bound.contains(&cx.names[p].as_str()) {
+                            format!("#{}", cx.names[p])
+                        } else {
+                            cx.names[p].clone()
+                        },
                         ty: None,
                         implicit: false,
                         span,
@@ -227,6 +334,15 @@ impl Elaborator {
             term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
         }
         term
+    }
+}
+
+/// Every variable a pattern binds, however deep.
+fn pattern_names<'a>(pat: &'a Pat, out: &mut Vec<&'a str>) {
+    match pat {
+        Pat::Var { name, .. } => out.push(name),
+        Pat::Ctor { args, .. } => args.iter().for_each(|arg| pattern_names(arg, out)),
+        Pat::Named { pat, .. } => pattern_names(pat, out),
     }
 }
 

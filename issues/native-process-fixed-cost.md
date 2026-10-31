@@ -3,9 +3,9 @@ title: Cut what every process over the native world pays before its own work
 status: open
 labels: [performance,caching,images,native,tests]
 area: infrastructure
-milestone: [hih-tools]
+milestone: [nh-effects]
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-31
 ---
 
 Every native test spawns `heather write-elf`, and every one of those
@@ -110,3 +110,4 @@ those cases.
     verdicts only a replay records. Recording a statement verdict when the
     building process lands a theorem would remove it; that touches what the
     cache vouches for, so it is its own round.
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Retagged nh-effects: [[effects-uniqueness-surface]] rewrites the tools, which must check under the suite's rail.

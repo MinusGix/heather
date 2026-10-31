@@ -344,7 +344,7 @@ theorem Format::grid_scale(self F: Format, c: Nat, n: Int): Rat::ofInt(c.int()) 
     let e: (OfNat(0) + (F.qmin() - 1) = F.qmin() - 1) = omega;
     calc {
         Rat::ofInt(c.int()) * F.grid(n) ≈ (Dyadic::ofInt(c.int())).rat() * F.grid(n) := Rat::mul_respects(Rat::same_sym(Dyadic::rat_ofInt(c.int())), (F.grid(n)).same_refl()),
-        ≈ (Dyadic::ofInt(c.int()) * Dyadic(n, F.qmin() - 1)).rat() := Rat::same_sym(Dyadic::ofInt(c.int()).rat_mul(Dyadic(n, F.qmin() - 1))),
+        ≈ (Dyadic::ofInt(c.int()) * Dyadic(n, F.qmin() - 1)).rat() := ring,
         ≈ F.grid(c.int() * n) := j(e, λ k _ => (Dyadic(c.int() * n, OfNat(0) + (F.qmin() - 1))).rat() ≈ (Dyadic(c.int() * n, k)).rat(),
             (Dyadic(c.int() * n, OfNat(0) + (F.qmin() - 1))).rat().same_refl()),
     }
@@ -444,6 +444,8 @@ theorem Finite::min_le_max(F: Format): (Finite::min_normal(F)).val() <= (Finite:
     Finite::le_of_H_le(Finite::min_normal(F), Finite::max_finite(F), omega)
 }
 
+theorem Finite::max_finite_nonneg(F: Format): 0 <= (Finite::max_finite(F)).val() { Rat::le_trans(Rat::le_of_lt(Finite::min_normal_pos(F)), Finite::min_le_max(F)) }
+
 // A nonnegative float at or below the least normal sits at the least
 // exponent.
 theorem Finite::bexp_zero_of_small({F: Format}, d: Finite(F), pos: d.neg = False, small: d.val() <= (Finite::min_normal(F)).val()): d.bexp = 0 {
@@ -481,6 +483,12 @@ theorem Format::subnormal_error(self F: Format, mode: Mode, x: Rat, r: Finite(F)
 
 theorem Format::u_pos(self F: Format, mode: Mode): 0 < F.u(mode) {
     match mode as λ md => 0 < F.u(md) { NearestEven => omega, NearestAway => omega, TowardPos => omega, TowardNeg => omega, TowardZero => omega }
+}
+
+theorem Format::u_le_one(self F: Format, mode: Mode): F.u(mode) <= 1 {
+    let t = Format::top_pos(F := F);
+    let h = Format::half_pos(F := F);
+    match mode as λ md => F.u(md) <= 1 { NearestEven => omega(t), NearestAway => omega(t), TowardPos => omega(h), TowardNeg => omega(h), TowardZero => omega(h) }
 }
 
 theorem Format::eta_nonneg(self F: Format, mode: Mode): 0 <= F.eta(mode) {

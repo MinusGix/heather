@@ -298,6 +298,13 @@ inherits the full key with the table that needs it.
 > other owner. An **equation** carrier is still refused, deliberately: that one
 > genuinely wants the full key (§8's first residue item), and
 > `issues/decidable-equation-carrier.md` owns it.
+>
+> **Amended 2026-10-30** (`issues/decide-bit-is-the-comparison.md`). A
+> non-dependent **arrow** carrier, `instance<P: Decide, Q: Decide> Decide<P → Q>`,
+> is the second headless former with an instance. It has no endpoint type to
+> own it, so the class owns it: the key is `#Fn@{class}` and the canonical
+> name `Decide::Decide#Fn`, one per class. A dependent arrow is still
+> refused.
 
 ### 7.2 `extends` at a non-parameter argument is refused, not lowered
 

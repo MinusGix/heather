@@ -47,7 +47,7 @@ use heather_elab::{Elaborator, stats};
 // The loader lives in this crate's `lib` target so that the frontend bench
 // corpus computes its import closure with the *same* code the CLI does
 // (see `lib.rs`, issues/frontend-bench-ir-closure-stale.md).
-use heather_cli::{expect, loader, semantic::SemanticSession, world::World};
+use heather_cli::{expect, loader, semantic::SemanticSession};
 
 mod color;
 mod fmt;
@@ -100,7 +100,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--build-jobs <n> [--build-only] [--build-first <dir>]... [--build-times <file.tsv>]] [--unbuilt] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
@@ -151,10 +151,37 @@ struct Opts {
     /// they mark must be refused for the reason they name, and is then not
     /// an error (`expect.rs`). Off, a directive is a comment.
     expectations: bool,
-    /// `--world <dir>`: load the library under `dir`'s shared modules in its
-    /// canonical order before each root's own (`world.rs`), so the library
-    /// gate's processes share one image per module.
+    /// `--world <dir>`: accepted and ignored. It loaded the library's shared
+    /// modules in one order before each root's own, so that the gate's
+    /// processes keyed each module alike; a module is now checked over its
+    /// own closure in every process (`docs/module-dag-design.md`).
+    #[allow(dead_code)]
     world: Option<PathBuf>,
+    /// `--build-jobs N`: before checking, elaborate every module of the load
+    /// that has no image yet, each in a `heather check` of its own, up to N
+    /// at a time, a module once its closure's images exist and the longest
+    /// chain first (`docs/module-dag-design.md` §12). Each process spends
+    /// its own CPU rail on its own module; the check that follows replays.
+    build_jobs: Option<usize>,
+    /// `--build-only`: stop after `--build-jobs`' builds.
+    build_only: bool,
+    /// `--build-times <file.tsv>`: a row per module `--build-jobs` built,
+    /// with when it became ready, started and finished and the import that
+    /// readied it, so the chain that set the build step's length can be
+    /// read back (`docs/module-dag-design.md` §12).
+    build_times: Option<PathBuf>,
+    /// `--build-first <dir>`: among modules ready to build, those below a
+    /// named directory and their closures start before the rest, so a
+    /// reader waiting on that folder's images (the test runner's native
+    /// gates) is released while the rest of the step still runs.
+    build_first: Vec<PathBuf>,
+    /// `--unbuilt`: name the modules of the load that have no image yet,
+    /// one per line, and exit 1 when there are any; nothing is elaborated
+    /// (the plan `--build-jobs` schedules from, [`BuildPlan`]). The test
+    /// runner asks it when a target may start reading the gate's store.
+    ///
+    /// [`BuildPlan`]: heather_cli::semantic::BuildPlan
+    unbuilt: bool,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -174,6 +201,11 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         kernel_workers: None,
         expectations: false,
         world: None,
+        build_jobs: None,
+        build_only: false,
+        build_times: None,
+        build_first: Vec::new(),
+        unbuilt: false,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -238,6 +270,34 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             opts.expectations = true;
             continue;
         }
+        if let Some(rest) = a.strip_prefix("--build-jobs") {
+            let spec = match rest.strip_prefix('=') {
+                Some(n) if !n.is_empty() => n.to_string(),
+                _ if rest.is_empty() => it.next().ok_or("`--build-jobs` needs a count")?.clone(),
+                _ => return Err(format!("unknown option `{a}`")),
+            };
+            match spec.parse::<usize>() {
+                Ok(n) if n > 0 => opts.build_jobs = Some(n),
+                _ => return Err("`--build-jobs` needs a positive integer".into()),
+            }
+            continue;
+        }
+        if a == "--build-only" {
+            opts.build_only = true;
+            continue;
+        }
+        if a == "--build-first" {
+            opts.build_first.push(PathBuf::from(it.next().ok_or("`--build-first` needs a directory")?));
+            continue;
+        }
+        if a == "--build-times" {
+            opts.build_times = Some(PathBuf::from(it.next().ok_or("`--build-times` needs a file")?));
+            continue;
+        }
+        if a == "--unbuilt" {
+            opts.unbuilt = true;
+            continue;
+        }
         if let Some(rest) = a.strip_prefix("--only") {
             let spec = match rest.strip_prefix('=') {
                 Some(d) if !d.is_empty() => d.to_string(),
@@ -293,6 +353,21 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             }
         }
     }
+    if opts.build_jobs.is_some() && !opts.cache {
+        return Err("`--build-jobs` builds module images: pass `--cache` (or `--cache-dir`)".into());
+    }
+    if opts.unbuilt && !opts.cache {
+        return Err("`--unbuilt` reads module images: pass `--cache` (or `--cache-dir`)".into());
+    }
+    if opts.unbuilt && opts.build_jobs.is_some() {
+        return Err("`--unbuilt` builds nothing: drop `--build-jobs`".into());
+    }
+    if opts.build_only && opts.build_jobs.is_none() {
+        return Err("`--build-only` needs `--build-jobs`".into());
+    }
+    if (opts.build_times.is_some() || !opts.build_first.is_empty()) && opts.build_jobs.is_none() {
+        return Err("`--build-times` and `--build-first` need `--build-jobs`".into());
+    }
     if opts.only.is_some() && !opts.cache {
         return Err("`--only` replays the rest of the module from the cache: pass `--cache` (or `--cache-dir`)".into());
     }
@@ -300,6 +375,9 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
 }
 
 fn check(opts: &Opts, files: &[String]) -> ExitCode {
+    if opts.unbuilt {
+        return unbuilt(opts, files);
+    }
     let stderr_color = color::stderr_enabled();
     let stdout_color = color::stdout_enabled();
     if opts.timings.is_some() {
@@ -327,16 +405,6 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         }
         Rc::new(c)
     });
-    let world = match &opts.world {
-        Some(dir) => match World::of(dir, &search_for_path(dir, &opts.search)) {
-            Ok(world) => Some(world),
-            Err(e) => {
-                eprintln!("{}: --world {}: {}", color::error_label(stderr_color), dir.display(), e.msg);
-                return ExitCode::from(2);
-            }
-        },
-        None => None,
-    };
     let mut failed = false;
     for path in files {
         // A fresh elaborator per **path**: two file paths re-elaborate a shared
@@ -388,17 +456,11 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
         };
         let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-        let loaded = loader::load_many(&root_refs, &search).and_then(|modules| match &world {
-            // The world's prefix first, then the roots: the prefix is closed
-            // under imports and in load order already, so the loader keeps it
-            // as it is and appends what the roots need beyond it.
-            Some(world) if !world.prefix(&modules).is_empty() => {
-                let mut all: Vec<&Path> = world.prefix(&modules).iter().map(PathBuf::as_path).collect();
-                all.extend(&root_refs);
-                loader::load_many(&all, &search)
-            }
-            _ => Ok(modules),
-        });
+        // Every module is checked over its own import closure
+        // (`docs/module-dag-design.md`), so the closure is all a check loads:
+        // `--world` no longer changes what a module means or how its image is
+        // keyed, and is accepted for the callers that still pass it.
+        let loaded = loader::load_many(&root_refs, &search);
         let modules = match loaded {
             Ok(m) => m,
             Err(e) => {
@@ -406,6 +468,12 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
+        if let Some(jobs) = opts.build_jobs {
+            build_ahead(opts, &search, modules.clone(), jobs);
+            if opts.build_only {
+                continue;
+            }
+        }
         let mut root_ok = true;
         // `--only`'s names, per module: `mod::name` names a module of the
         // closure, any other name the root module. Module names are stems,
@@ -429,6 +497,13 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let mut semantic = SemanticSession::new(opts.cache.then(|| opts.cache_dir.clone()))
             .with_freshness(opts.images)
             .with_only(only);
+        // Only `--deny-axioms` reads the checked world back.
+        if !opts.deny_axioms {
+            semantic = semantic.without_process_world();
+        }
+        if opts.expectations {
+            semantic = semantic.with_expectations();
+        }
         let mut forced_items = 0;
         let mut refusals_matched = 0;
         // `HEATHER_VALUE_METRICS`: print the kernel's value-machine counters
@@ -448,7 +523,31 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
             elab.enable_value_metrics();
         }
-        for m in &modules {
+        // In the loader's order, except that a module another process is
+        // building is set aside while one whose imports are checked can go
+        // first (`docs/module-dag-design.md` §7): the library gate's
+        // children share one store, and without this one waits on another's
+        // build lock with modules of its own ready.
+        let imports: Vec<Vec<String>> = modules.iter().map(|m| heather_cli::semantic::written_imports(&m.src)).collect();
+        // What each module still to come needs, so a finished module's world
+        // goes once nothing left imports it (`docs/module-dag-design.md` §8).
+        semantic.expect_load(modules.iter().zip(&imports).map(|(m, i)| (m.name.as_str(), i.as_slice())));
+        let position: std::collections::HashMap<&str, usize> =
+            modules.iter().enumerate().map(|(i, m)| (m.name.as_str(), i)).collect();
+        let mut checked = vec![false; modules.len()];
+        let mut pending: Vec<usize> = (0..modules.len()).collect();
+        while !pending.is_empty() {
+            let ready = |i: usize, checked: &[bool]| {
+                imports[i].iter().all(|d| position.get(d.as_str()).is_none_or(|&j| checked[j]))
+            };
+            let pick = pending
+                .iter()
+                .position(|&i| ready(i, &checked) && !semantic.built_elsewhere(&modules[i], &imports[i], modules[i].lint_profile()))
+                .or_else(|| pending.iter().position(|&i| ready(i, &checked)))
+                .unwrap_or(0);
+            let i = pending.remove(pick);
+            checked[i] = true;
+            let m = &modules[i];
             elab.reset_value_metrics();
             let outcome = semantic.check(&mut elab, m, m.lint_profile());
             if report_metrics {
@@ -467,8 +566,19 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 eprintln!("{notice}");
             }
             forced_items += outcome.forced_items;
+            // A module refused for its import's failure is not checked, and
+            // not reported as ok; the error was that import's, shown with it.
+            if semantic.blocked_by_import(&m.name) {
+                root_ok = false;
+                failed = true;
+                continue;
+            }
             let mut hint = None;
-            let errs = if opts.expectations {
+            let errs = if outcome.expected_refusals > 0 {
+                // Judged by the session, which published the module with them.
+                refusals_matched += outcome.expected_refusals;
+                outcome.errors
+            } else if opts.expectations {
                 let verdict = expect::judge(&m.src, outcome.errors);
                 refusals_matched += verdict.matched;
                 verdict.errors
@@ -604,6 +714,13 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                     let relocated = match semantic.relocated() {
                         0 => String::new(),
                         k => format!(" ({k} moved onto a changed dependency world)"),
+                    };
+                    // A replay a stored verdict vouched for whole asked
+                    // nothing about its declarations
+                    // (`docs/module-dag-design.md` §13).
+                    let relocated = match n.replay_hits {
+                        0 => relocated,
+                        k => format!("{relocated} ({k} vouched for whole)"),
                     };
                     println!(
                         "{path}: {} (cache) — {} declaration{} kernel-checked, {} accepted \
@@ -956,6 +1073,169 @@ fn child_dirs(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// search directory after a miss in them (so a private `shadow/base.hthr`
 /// cannot shadow or conflict with the public `base.hthr`). Module names
 /// remain flat: duplicate names below are still ambiguous.
+/// `--build-jobs`: elaborate the modules of `modules` that have no image,
+/// one `heather check` each, `jobs` at a time (`docs/module-dag-design.md`
+/// §12). A module is started once every module of its closure has an image,
+/// longest remaining chain first, measured in source bytes. One that fails
+/// is reported with the tail of its output and leaves its dependents
+/// unbuilt; the check that follows elaborates and reports them as usual.
+fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jobs: usize) {
+    use heather_cli::semantic::{BuildPlan, BuildState};
+    let mut plan = BuildPlan::new(opts.cache_dir.clone(), opts.images, modules);
+    let n = plan.modules().len();
+    let mut dependents = vec![Vec::new(); n];
+    for i in 0..n {
+        for d in plan.imports(i) {
+            dependents[d].push(i);
+        }
+    }
+    // In the loader's order every importer comes after what it imports.
+    let mut chain = vec![0usize; n];
+    for i in (0..n).rev() {
+        chain[i] = plan.modules()[i].src.len() + dependents[i].iter().map(|&d| chain[d]).max().unwrap_or(0);
+    }
+    // `--build-first`: the modules below a named directory, and their
+    // closures (an importer comes after its imports, so walking back reaches
+    // every import after its importers).
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let firsts: Vec<PathBuf> = opts.build_first.iter().map(|d| canon(d)).collect();
+    let mut first = vec![false; n];
+    for i in (0..n).rev() {
+        first[i] |= firsts.iter().any(|d| canon(&plan.modules()[i].path).starts_with(d));
+        if first[i] {
+            for d in plan.imports(i).collect::<Vec<_>>() {
+                first[d] = true;
+            }
+        }
+    }
+    let exe = std::env::current_exe().expect("the running binary");
+    let logs = std::env::temp_dir().join(format!("heather-build-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&logs);
+    let mut started = vec![false; n];
+    // Seconds since the step began: when each module started and finished.
+    let clock = std::time::Instant::now();
+    let (mut start, mut end) = (vec![None; n], vec![None::<f64>; n]);
+    let mut running: Vec<(usize, std::process::Child, PathBuf)> = Vec::new();
+    let (mut built, mut failed) = (0usize, Vec::new());
+    loop {
+        plan.refresh();
+        while running.len() < jobs {
+            let Some(i) = (0..n)
+                .filter(|&i| !started[i] && plan.state(i) == BuildState::Ready)
+                .max_by_key(|&i| (first[i], chain[i], std::cmp::Reverse(i)))
+            else {
+                break;
+            };
+            started[i] = true;
+            start[i] = Some(clock.elapsed().as_secs_f64());
+            let m = &plan.modules()[i];
+            let log = logs.join(format!("{}.log", m.name));
+            let mut cmd = std::process::Command::new(&exe);
+            cmd.arg("check").arg("--cache-dir").arg(&opts.cache_dir);
+            if opts.images == ImageFreshness::AcceptStale {
+                cmd.arg("--accept-stale-images");
+            }
+            if opts.expectations {
+                cmd.arg("--expectations");
+            }
+            for dir in search {
+                cmd.arg("-L").arg(dir);
+            }
+            cmd.arg(&m.path);
+            let out = std::fs::File::create(&log).expect("a build log");
+            cmd.stdout(std::process::Stdio::null()).stderr(out);
+            match cmd.spawn() {
+                Ok(child) => running.push((i, child, log)),
+                Err(e) => failed.push(format!("{}: could not start: {e}", m.name)),
+            }
+        }
+        if running.is_empty() {
+            break;
+        }
+        // No wait-any in std: poll the few children there are.
+        let finished = loop {
+            if let Some(k) = running.iter_mut().position(|(_, child, _)| matches!(child.try_wait(), Ok(Some(_)) | Err(_))) {
+                break running.swap_remove(k);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let (i, mut child, log) = finished;
+        let status = child.wait();
+        end[i] = Some(clock.elapsed().as_secs_f64());
+        if status.as_ref().is_ok_and(|s| s.success()) {
+            built += 1;
+        } else {
+            let text = std::fs::read_to_string(&log).unwrap_or_default();
+            let tail: Vec<&str> = text.lines().rev().take(12).collect();
+            let status = status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
+            failed.push(format!(
+                "{} ({status}):\n{}",
+                plan.modules()[i].name,
+                tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            ));
+        }
+        let _ = std::fs::remove_file(&log);
+    }
+    let _ = std::fs::remove_dir(&logs);
+    if let Some(path) = &opts.build_times {
+        // A module was ready when the last of its imports built here finished
+        // (at the start if none was); the gap to its start is the wait for a
+        // job. Following `readied_by` back from the last row is the chain
+        // that set the step's length.
+        let mut rows: Vec<usize> = (0..n).filter(|&i| end[i].is_some()).collect();
+        rows.sort_by(|&a, &b| end[a].partial_cmp(&end[b]).expect("finite"));
+        let mut tsv = String::from("module\tready_s\tstart_s\tend_s\twall_s\treadied_by\n");
+        for i in rows {
+            let by = plan.imports(i).filter(|&d| end[d].is_some()).max_by(|&a, &b| end[a].partial_cmp(&end[b]).expect("finite"));
+            let ready = by.and_then(|d| end[d]).unwrap_or(0.0);
+            let (s, e) = (start[i].expect("started"), end[i].expect("finished"));
+            let by = by.map_or("-".to_string(), |d| plan.modules()[d].name.to_string());
+            tsv.push_str(&format!("{}\t{ready:.1}\t{s:.1}\t{e:.1}\t{:.1}\t{by}\n", plan.modules()[i].name, e - s));
+        }
+        if let Err(e) = std::fs::write(path, tsv) {
+            eprintln!("build: cannot write `{}`: {e}", path.display());
+        }
+    }
+    for f in &failed {
+        eprintln!("build: {f}");
+    }
+    eprintln!("build: {built} module{} built ahead, {} failed", if built == 1 { "" } else { "s" }, failed.len());
+}
+
+/// `--unbuilt`: the modules of every path's load without an image, read off
+/// image headers as [`build_ahead`] plans, in the loader's order.
+fn unbuilt(opts: &Opts, files: &[String]) -> ExitCode {
+    use heather_cli::semantic::{BuildPlan, BuildState};
+    let stderr_color = color::stderr_enabled();
+    let mut missing = std::collections::BTreeSet::new();
+    for path in files {
+        let root_path = Path::new(path);
+        let search = search_for_path(root_path, &opts.search);
+        let roots = match roots_for_path(root_path, &search) {
+            Ok(roots) => roots,
+            Err(msg) => {
+                eprintln!("{}: {msg}", color::error_label(stderr_color));
+                return ExitCode::from(2);
+            }
+        };
+        let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        let modules = match loader::load_many(&root_refs, &search) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("{}: {}", color::error_label(stderr_color), e.msg);
+                return ExitCode::from(2);
+            }
+        };
+        let plan = BuildPlan::new(opts.cache_dir.clone(), opts.images, modules);
+        for (i, m) in plan.modules().iter().enumerate() {
+            if plan.state(i) != BuildState::Built && missing.insert(m.name.clone()) {
+                println!("{}", m.name);
+            }
+        }
+    }
+    ExitCode::from(if missing.is_empty() { 0 } else { 1 })
+}
+
 fn search_for_path(path: &Path, configured: &[PathBuf]) -> Vec<PathBuf> {
     let mut search = configured.to_vec();
     if path.is_dir() && !same_search_dir(&search, path) {

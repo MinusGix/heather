@@ -1,0 +1,22 @@
+---
+title: Invariant rules for loops and contracts for procedures, so imperative code is proved by rules
+status: open
+labels: [proofs,elaboration,native]
+area: language
+milestone: [lang-proof-modularity]
+created: 2026-10-31
+updated: 2026-10-31
+---
+
+Round P4 of `docs/compiler-milestones-proposal.md` (§6.2, §7): proofs about imperative code through rules,
+not unfolding.
+
+## Scope
+
+- An invariant rule generated beside each loop from [[pure-imperative-statements]]: `inv(init)` and `inv(s) → inv(step(s, x))` give `inv(result)`.
+- Contracts of compiled procedures cited at call sites, after [[native-compiled-procedures]] (the contract shape is [[native-procedure-contracts]]).
+- A property of a tool rewritten as a `runtime fn` ([[effects-uniqueness-surface]]) proved about its Heather function, not its `Source`.
+
+## Done when
+
+`count_words`'s spec is proved with an invariant and a step lemma in a few lines, and one property of a rewritten tool is proved about its function.

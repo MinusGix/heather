@@ -231,13 +231,17 @@ fn Nat::Lt(self n, m: Nat) → Type { Succ(n).Le(m) }
 designation <= at Nat := Nat::Le
 designation < at Nat := Nat::Lt
 
-// The decision procedure, kept. It is NOT part of the order's specification —
-// nothing above mentions it and no lemma below is stated with it — and as of
-// 2026-08-17 its last *specification* customer is gone too: `list_algos`'s
-// insertion sort went propositional and decides with `le_dec`. What still reads
-// `leb` is `certgen_code`, where a Boolean is the subject rather than the
-// statement, which is exactly the role issues/class-ops-prop-vs-bool.md leaves
-// `Bool` in.
+// Equality as a named relation, for where a relation is an index (a
+// morphism out of `Nat`, `Int::ofNat_hom`; lib/std/algebra/morphism.hthr).
+fn Nat::Same(self a, b: Nat) → Type { a = b }
+
+// The decision procedure. It is NOT part of the order's specification —
+// nothing above mentions it — but it is the order's decided bit: the `Decide`
+// instance below carries `leb` as its `bit`, so `decide_bit<n <= m>()` is the
+// guard a program writes (issues/decide-bit-is-the-comparison.md). Its other
+// readers are `certgen_code`, where a Boolean is the subject rather than the
+// statement, which is the role issues/class-ops-prop-vs-bool.md leaves `Bool`
+// in, and closed-fact evaluation (`le_of_leb`, below).
 fn Nat::leb(self n, m: Nat) → Bool {
     match n {
         Zero => True,
@@ -274,6 +278,8 @@ theorem Nat::same_sound(self n: Nat): (m: Nat) → n.same(m) = True → n = m {
         },
     }
 }
+
+theorem Nat::ne_of_same(self n, m: Nat, h: n.same(m) = False): n ≠ m { λ e => absurd(trans(sym(h), j(e, λ k _ => n.same(k) = True, n.same_self()))) }
 
 fn Nat::sub(self m, n: Nat) → Nat {
     match m {
@@ -515,6 +521,35 @@ fn DivMod::Spec(n, divisor: Nat, state: DivMod) → Type {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The bridge between the Boolean decision and the propositional order. `leb`
+// and `Le` are the same two-argument recursion written into `Bool` and into
+// `Type`.
+
+theorem Nat::leb_sound(self n: Nat): (m: Nat) → n.leb(m).IsTrue() → n <= m {
+    match n {
+        Zero => λ m h => trivial,
+        Succ(_, ih) => λ m => match m {
+            Zero => λ h => false_elim(h),
+            Succ(l) => λ h => ih(l, h),
+        },
+    }
+}
+
+theorem Nat::leb_complete(self n: Nat): (m: Nat) → n <= m → n.leb(m).IsTrue() {
+    match n {
+        Zero => λ m h => trivial,
+        Succ(_, ih) => λ m => match m {
+            Zero => λ h => false_elim(h),
+            Succ(l) => λ h => ih(l, h),
+        },
+    }
+}
+
+// The two together: `leb` reflects `<=`, the piece a guard assembled from
+// comparisons is reflected from (`bool`'s `reflects_and`, `reflects_iff`).
+theorem Nat::leb_reflects(self n, m: Nat): Reflects(n <= m, n.leb(m)) { reflects_of_is_true(n.leb_sound(m), n.leb_complete(m)) }
+
 // The order's `Decide` instance — generic in **both** of its values
 // (docs/value-generic-instances-design.md, 2026-08-17). Until value binders
 // existed the only registrable spelling was `Decide<Le(2, 5)>` at fixed
@@ -527,7 +562,13 @@ fn DivMod::Spec(n, divisor: Nat, state: DivMod) → Type {
 // This is what lets `list_algos`'s `insert` decide through the class instead of
 // naming `le_dec`, which is the measurement issues/value-generic-instances.md
 // was filed to take.
-instance(n, m: Nat) Decide<Nat::Le(n, m)> { dec := Nat::le_dec(n, m), bit := or_bit(Nat::le_dec(n, m)), reflects := or_bit_reflects(Nat::le_dec(n, m)) }
+//
+// Its bit is `leb` and not `or_bit(le_dec(n, m))`, so a decided `<=` is the
+// comparison itself: an evidence-free `if n <= m` branches on `n.leb(m)`, and a
+// Bool guard built from comparisons is a `decide_bit` of its proposition
+// (`decide_intro` / `decide_elim` read it). Equality's bit is `same` the same
+// way.
+instance(n, m: Nat) Decide<Nat::Le(n, m)> { dec := Nat::le_dec(n, m), bit := n.leb(m), reflects := n.leb_reflects(m) }
 
 // ---------------------------------------------------------------------------
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the
@@ -830,7 +871,7 @@ fn Nat::equation(self n: Nat) → (m: Nat) → (n = m) ∨ True {
     }
 }
 
-instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m), bit := or_bit(Nat::eq_dec(n, m)), reflects := or_bit_reflects(Nat::eq_dec(n, m)) }
+instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m), bit := n.same(m), reflects := And(n.same_sound(m), λ h => n.ne_of_same(m, h)) }
 
 // The same decision as a property of the carrier, which is what a polymorphic
 // container's decider requires of its element type (`logic::DecEq`).
@@ -1915,33 +1956,196 @@ theorem Nat::ldiv_mod(self n: Nat, d: Pos<Nat>): n.ldiv(d).rem() = n.mod(d) {
 }
 
 // ---------------------------------------------------------------------------
-// The bridge between the Boolean decision and the propositional order. `leb`
-// and `Le` are the same two-argument recursion written into `Bool` and into
-// `Type`.
+// `2^K / d` for reciprocal bounds (issues/interval-evaluation-budget.md).
+// `ldiv` halves all `K` bits of its numerator, a halving, a doubling, a
+// subtraction, a decision and its proof per bit; at the `K` of a series
+// ratio's reciprocal that was most of an interval enclosure's cost. A
+// reciprocal needs only the quotient's bits, and needs them only as a guess
+// that two comparisons can check.
 
-theorem Nat::leb_sound(self n: Nat): (m: Nat) → n.leb(m).IsTrue() → n <= m {
-    match n {
-        Zero => λ m h => trivial,
-        Succ(_, ih) => λ m => match m {
-            Zero => λ h => false_elim(h),
-            Succ(l) => λ h => ih(l, h),
+// A division whose quotient was guessed: kept when `g·d <= n < (g + 1)·d`,
+// which is two comparisons, and `ldiv` otherwise. Its parts are `ldiv`'s
+// whichever way the check goes.
+fn Nat::div_checked(n, d, g: Nat) → DivMod {
+    match Nat::leb(g * d, n) {
+        True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) },
+        False => n.ldiv(d),
+    }
+}
+
+theorem Nat::div_checked_parts(n, d, g: Nat): Nat::div_checked(n, d, g).quot() * d + Nat::div_checked(n, d, g).rem() = n {
+    match Nat::leb(g * d, n) as λ c => Nat::leb(g * d, n) = c →
+        (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).quot() * d
+        + (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() = n
+    {
+        True => λ le => match Nat::leb(Succ(n - g * d), d) {
+            True => trans((g * d).add_comm(n - g * d), (g * d).sub_add_cancel(n, (g * d).leb_sound(n, j(sym(le), λ c _ => c.IsTrue(), trivial)))),
+            False => n.ldiv_parts(d),
+        },
+        False => λ _ => n.ldiv_parts(d),
+    }(refl)
+}
+
+theorem Nat::div_checked_rem_lt(n: Nat, d: Pos<Nat>, g: Nat): Nat::div_checked(n, d, g).rem() < d {
+    match Nat::leb(g * d, n) as λ c =>
+        (match c { True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }, False => n.ldiv(d) }).rem() < d
+    {
+        True => match Nat::leb(Succ(n - g * d), d) as λ c2 => Nat::leb(Succ(n - g * d), d) = c2 →
+            (match c2 { True => MkDivMod(g, n - g * d), False => n.ldiv(d) }).rem() < d
+        {
+            True => λ lt => Succ(n - g * d).leb_sound(d, j(sym(lt), λ c _ => c.IsTrue(), trivial)),
+            False => λ _ => n.ldiv_rem_lt(d, d_pos := d_pos),
+        }(refl),
+        False => n.ldiv_rem_lt(d, d_pos := d_pos),
+    }
+}
+
+// The guess for `⌊2^K / d⌋`: from `q·d + r = 2^j` with `r < d`, each step
+// doubles `r` and takes one quotient bit, a doubling, a comparison and a
+// subtraction. Starting at `2^j <= d` (`j = width(d) - 1`) leaves `K - j`
+// steps, the quotient's own bits, where `ldiv` would halve all `K` bits of
+// the numerator. The fuel goes on the comparisons, which the kernel charges
+// by the length of the numbers compared.
+fn Nat::recip_bits(d: Nat, s: DivMod, steps: Nat) → DivMod {
+    match steps {
+        Zero => s,
+        Succ(k) => match s { MkDivMod(q, r) => Nat::recip_bits(d, match Nat::leb(d, r * 2) { True => MkDivMod(Succ(q * 2), r * 2 - d), False => MkDivMod(q * 2, r * 2) }, k) },
+    }
+}
+
+fn Nat::pow2_div_start(d, P: Nat) → DivMod { match Nat::leb(d, P) { True => MkDivMod(1, P - d), False => MkDivMod(0, P) } }
+
+fn Nat::pow2_div_from(K, d, j: Nat) → Nat { Nat::recip_bits(d, Nat::pow2_div_start(d, Nat::pow_sq(2, j)), K - j).quot() }
+
+fn Nat::pow2_div_guess(K, d: Nat) → Nat { Nat::pow2_div_from(K, d, d.width() - 1) }
+
+// `2^K` divided by `d`, with `ldiv`'s parts.
+fn Nat::pow2_div(K, d: Nat) → DivMod { Nat::div_checked(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d)) }
+
+theorem Nat::pow2_div_parts(K, d: Nat): Nat::pow2_div(K, d).quot() * d + Nat::pow2_div(K, d).rem() = Nat::pow(2, K) {
+    j(Nat::pow_sq_eq(2, K), λ N _ => Nat::div_checked(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d)).quot() * d
+        + Nat::div_checked(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d)).rem() = N,
+        Nat::div_checked_parts(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d)))
+}
+
+theorem Nat::pow2_div_rem_lt(K: Nat, d: Pos<Nat>): Nat::pow2_div(K, d).rem() < d {
+    Nat::div_checked_rem_lt(Nat::pow_sq(2, K), d, Nat::pow2_div_guess(K, d), d_pos := d_pos)
+}
+
+// ---------------------------------------------------------------------------
+// Integer square root. `isqrt` takes the root `r` of `⌊n/4⌋` first; the root
+// of `n` is then `2r` or `2r + 1`, and one comparison of `(2r + 1)²` with `n`
+// picks it. A step is a multiplication and a comparison, which the kernel
+// evaluates on numerals directly, so a root of `b` bits costs `b` steps, as
+// `ldiv` costs one per quotient bit. The numerator is the fuel. The
+// specification is `IsRoot`, `r² <= n < (r + 1)²` (`isqrt_spec`).
+
+fn Nat::IsRoot(n, r: Nat) → Type { r * r <= n ∧ n < Succ(r) * Succ(r) }
+
+fn Nat::quarter(self n: Nat) → Nat { n.half().half() }
+
+fn Nat::isqrt_pick(n, r: Nat, c: Succ(r * 2) * Succ(r * 2) <= n ∨ ¬(Succ(r * 2) * Succ(r * 2) <= n)) → Nat {
+    match c { Inl(_) => Succ(r * 2), Inr(_) => r * 2 }
+}
+
+fn Nat::isqrt_step(n, r: Nat) → Nat { Nat::isqrt_pick(n, r, (Succ(r * 2) * Succ(r * 2)).le_dec(n)) }
+
+fn Nat::isqrt_fuel(self n, fuel: Nat) → Nat {
+    match fuel {
+        Zero => 0,
+        Succ(f) => match n {
+            Zero => 0,
+            Succ(k) => Nat::isqrt_step(Succ(k), Succ(k).quarter().isqrt_fuel(f)),
         },
     }
 }
 
-theorem Nat::leb_complete(self n: Nat): (m: Nat) → n <= m → n.leb(m).IsTrue() {
-    match n {
-        Zero => λ m h => trivial,
-        Succ(_, ih) => λ m => match m {
-            Zero => λ h => false_elim(h),
-            Succ(l) => λ h => ih(l, h),
+fn Nat::isqrt(self n: Nat) → Nat { n.isqrt_fuel(n) }
+
+theorem Nat::mul_four(self q: Nat): q * 4 = (q + q) + (q + q) {
+    calc {
+        q * 4
+            = (q * 2) * 2 := sym(q.mul_assoc(2, 2)),
+            = (q * 2) + (q * 2) := (q * 2).mul_two(),
+            = (q + q) + (q + q) := Nat::cong(λ (w: Nat) => w + w, q.mul_two()),
+    }
+}
+
+theorem Nat::sq_double(self r: Nat): (r * 2) * (r * 2) = (r * r) * 4 { Nat::mul_shuffle(r, 2, r, 2) }
+
+theorem Nat::succ_double(self r: Nat): Succ(Succ(r * 2)) = Succ(r) * 2 {
+    calc {
+        Succ(Succ(r * 2))
+            = Succ(Succ(r + r)) := Nat::cong(λ (w: Nat) => Succ(Succ(w)), r.mul_two()),
+            = Succ(r) + Succ(r) := sym(Nat::cong_succ(r.add_succ_left(r))),
+            = Succ(r) * 2 := sym(Succ(r).mul_two()),
+    }
+}
+
+// `n` lies in `[4q, 4q + 4)` for `q = ⌊n/4⌋`.
+theorem Nat::quarter_mul_le(self n: Nat): n.quarter() * 4 <= n {
+    let h = n.half();
+    let q = h.half();
+    let a: (q + q <= h) = h.half_add_le();
+    let b: ((q + q) + (q + q) <= h + h) = (q + q).add_le_mono(h, q + q, h, a, a);
+    j(sym(q.mul_four()), λ y _ => y <= n, ((q + q) + (q + q)).le_trans(h + h, n, b, n.half_add_le()))
+}
+
+theorem Nat::lt_succ_quarter_mul(self n: Nat): n < Succ(n.quarter()) * 4 {
+    let h = n.half();
+    let q = h.half();
+    let A = Succ(q + q);
+    let a: (h <= A) = h.le_succ_half_add();
+    let b: (h + h <= A + A) = h.add_le_mono(A, h, A, a, a);
+    let c: (n <= Succ(A + A)) = n.le_trans(Succ(h + h), Succ(A + A), n.le_succ_half_add(), Nat::le_succ_succ(h + h, A + A, b));
+    let e = calc {
+        Succ(Succ(A + A))
+            = Succ(A) + Succ(A) := sym(Nat::cong_succ(A.add_succ_left(A))),
+            = (Succ(q) + Succ(q)) + (Succ(q) + Succ(q)) := sym(Nat::cong(λ (w: Nat) => w + w, Nat::cong_succ(q.add_succ_left(q)))),
+            = Succ(q) * 4 := sym(Succ(q).mul_four()),
+    };
+    j(e, λ y _ => Succ(n) <= y, Nat::le_succ_succ(n, Succ(A + A), c))
+}
+
+theorem Nat::isqrt_pick_spec(n, r: Nat, c: Succ(r * 2) * Succ(r * 2) <= n ∨ ¬(Succ(r * 2) * Succ(r * 2) <= n), ih: Nat::IsRoot(n.quarter(), r)):
+    Nat::IsRoot(n, Nat::isqrt_pick(n, r, c))
+{
+    let q = n.quarter();
+    let s = Succ(r);
+    match c {
+        Inl(le) => {
+            let up: (Succ(q) * 4 <= (s * s) * 4) = Nat::mul_le_mono_r(4, Succ(q), s * s, ih.right);
+            let lt: (n < (s * s) * 4) = n.lt_of_lt_of_le(Succ(q) * 4, (s * s) * 4, n.lt_succ_quarter_mul(), up);
+            let sq: (n < (s * 2) * (s * 2)) = j(sym(s.sq_double()), λ y _ => n < y, lt);
+            And(le, j(sym(r.succ_double()), λ y _ => n < y * y, sq))
+        },
+        Inr(nle) => {
+            let down: ((r * r) * 4 <= q * 4) = Nat::mul_le_mono_r(4, r * r, q, ih.left);
+            let le: ((r * r) * 4 <= n) = ((r * r) * 4).le_trans(q * 4, n, down, n.quarter_mul_le());
+            And(j(sym(r.sq_double()), λ y _ => y <= n, le), Nat::lt_of_not_le(n, Succ(r * 2) * Succ(r * 2), nle))
         },
     }
 }
 
-// The two together: `leb` reflects `<=`, the piece a guard assembled from
-// comparisons is reflected from (`bool`'s `reflects_and`, `reflects_iff`).
-theorem Nat::leb_reflects(self n, m: Nat): Reflects(n <= m, n.leb(m)) { reflects_of_is_true(n.leb_sound(m), n.leb_complete(m)) }
+theorem Nat::isqrt_fuel_spec(self fuel: Nat): (n: Nat) → n <= fuel → Nat::IsRoot(n, n.isqrt_fuel(fuel)) {
+    match fuel {
+        Zero => λ n => match n {
+            Zero => λ _ => And(trivial, trivial),
+            Succ(_) => λ bad => false_elim(bad),
+        },
+        Succ(f, ih) => λ n => match n {
+            Zero => λ _ => And(trivial, trivial),
+            Succ(k) => λ le => {
+                let toward: (Succ(k).quarter() <= k) = Succ(k).quarter().le_trans(Succ(k).half(), k, Succ(k).half().half_le(), k.half_succ_le());
+                let below: (Succ(k).quarter() <= f) = Succ(k).quarter().le_trans(k, f, toward, le);
+                Nat::isqrt_pick_spec(Succ(k), Succ(k).quarter().isqrt_fuel(f), (Succ(Succ(k).quarter().isqrt_fuel(f) * 2) * Succ(Succ(k).quarter().isqrt_fuel(f) * 2)).le_dec(Succ(k)),
+                    ih(Succ(k).quarter(), below))
+            },
+        },
+    }
+}
+
+theorem Nat::isqrt_spec(self n: Nat): Nat::IsRoot(n, n.isqrt()) { n.isqrt_fuel_spec(n, n.le_refl()) }
 
 // The decision, evaluated at a known order.
 theorem Nat::leb_true(self n, m: Nat, h: n <= m): n.leb(m) = True { eq_true_of_is_true(n.leb(m), n.leb_complete(m, h)) }
@@ -1960,8 +2164,6 @@ theorem Nat::le_of_leb(self n, m: Nat, h: n.leb(m) = True): n <= m { n.leb_sound
 
 theorem Nat::not_le_of_leb(self n, m: Nat, h: n.leb(m) = False): ¬(n <= m) { λ le => absurd(trans(sym(h), n.leb_true(m, le))) }
 
-theorem Nat::ne_of_same(self n, m: Nat, h: n.same(m) = False): n ≠ m { λ e => absurd(trans(sym(h), j(e, λ k _ => n.same(k) = True, n.same_self()))) }
-
 theorem Nat::le_of_not_lt(self n, m: Nat, h: ¬(n < m)): m <= n {
     or_resolve(m.le_dec(n), λ (k: ¬(m <= n)) => h(n.lt_of_not_le(m, k)))
 }
@@ -1974,4 +2176,69 @@ theorem Nat::leb_not_lt(self n, m: Nat, h: Succ(n).leb(m).not().IsTrue()): m.leb
 
 theorem Nat::leb_lt_le_absurd(self n, m: Nat, lt: Succ(n).leb(m).IsTrue(), le: m.leb(n).IsTrue()): False {
     n.lt_irrefl(Succ(n).le_trans(m, n, Succ(n).leb_sound(m, lt), m.leb_sound(n, le)))
+}
+
+// `ones(j)` is 2^j - 1, so a number is below two to its width.
+theorem Nat::ones_succ_pow(self j: Nat): j.ones() + 1 = Nat::pow(2, j) {
+    match j {
+        Zero => refl,
+        Succ(i) => {
+            let o = i.ones();
+            let ih: (o + 1 = Nat::pow(2, i)) = i.ones_succ_pow();
+            let fwd: (Succ(0 + o) + o = Succ((0 + o) + o)) = (0 + o).add_succ_left(o);
+            let back: (Succ((0 + o) + o) = Succ(0 + o) + o) = j(fwd, λ z _ => z = Succ(0 + o) + o, refl);
+            let step: (Succ(Succ(o * 2)) = Succ(o) * 2) = Nat::cong_succ(back);
+            j(ih, λ y _ => Succ(Succ(o * 2)) = y * 2, step)
+        },
+    }
+}
+
+theorem Nat::lt_pow_width(self n: Nat): n < Nat::pow(2, n.width()) {
+    let w = n.width();
+    let below: (n <= w.ones()) = n.le_ones_width();
+    let top: (w.ones() + 1 = Nat::pow(2, w)) = w.ones_succ_pow();
+    j(top, λ y _ => n < y, below)
+}
+
+// And from the other side: a positive `n` is at least half of `2^width(n)`,
+// so `2^(width(n) - 1) <= n < 2^width(n)`. A halving step doubles both
+// sides; at one the width is one.
+theorem Nat::width_fuel_zero(self f: Nat): Nat::width_fuel(0, f) = 0 { match f { Zero => refl, Succ(_) => refl } }
+
+theorem Nat::pow_width_le_fuel(self fuel: Nat): (n: Nat) → n <= fuel → 0 < n → Nat::pow(2, Nat::width_fuel(n, fuel)) <= n + n {
+    match fuel {
+        Zero => λ n le pos => false_elim(Nat::le_trans(1, n, 0, pos, le)),
+        Succ(f, ih) => λ n => match n {
+            Zero => λ _ (pos: False) => false_elim(pos),
+            Succ(k) => λ le _ => {
+                let kf: (k <= f) = le;
+                let two: (2 <= Succ(k) + Succ(k)) = Nat::le_trans(1, Succ(k), Succ(k) + k, trivial, Succ(k).le_add_l(k));
+                match Succ(k).half() as λ y => y <= f → y + y <= Succ(k) → Nat::pow(2, Succ(Nat::width_fuel(y, f))) <= Succ(k) + Succ(k) {
+                    Zero => λ _ _ => j(sym(f.width_fuel_zero()), λ w _ => Nat::pow(2, Succ(w)) <= Succ(k) + Succ(k), two),
+                    Succ(l) => λ lf hh => {
+                        let w = Nat::width_fuel(Succ(l), f);
+                        let below: (Nat::pow(2, w) <= Succ(k)) = Nat::le_trans(Nat::pow(2, w), Succ(l) + Succ(l), Succ(k), ih(Succ(l), lf, trivial), hh);
+                        j(Succ(k).mul_two(), λ v _ => Nat::pow(2, w) * 2 <= v, Nat::mul_le_mono_r(2, Nat::pow(2, w), Succ(k), below))
+                    },
+                }(Succ(k).half().le_trans(k, f, k.half_succ_le(), kf), Succ(k).half_add_le())
+            },
+        },
+    }
+}
+
+theorem Nat::pow_width_le(self n: Nat, pos: 0 < n): Nat::pow(2, n.width()) <= n + n { n.pow_width_le_fuel(n, n.le_refl(), pos) }
+
+// A power of two outgrows its exponent: n < 2^n. The binary rate of a real's
+// terms (std/creal) is at least as fine as the unary one.
+theorem Nat::lt_two_pow(self n: Nat): n < Nat::pow(2, n) {
+    match n {
+        Zero => trivial,
+        Succ(k) => {
+            let p = Nat::pow(2, k);
+            let ih: (k < p) = k.lt_two_pow();
+            let one: (1 <= p) = Nat::one_le_pow(2, k, trivial);
+            let sum: (Succ(k) + 1 <= p + p) = Nat::add_le_mono(Succ(k), p, 1, p, ih, one);
+            j(p.mul_two(), λ y _ => Succ(k) + 1 <= y → Succ(k) < p * 2, λ h => h)(sum)
+        },
+    }
 }

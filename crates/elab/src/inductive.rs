@@ -1344,17 +1344,41 @@ impl Elaborator {
         // The `IWf` route's shape (`docs/iwf-former-design.md` §8.1): the
         // declaration with its children deleted, registered as an ordinary
         // tier-0 declaration so that the unindexed tiers lower it verbatim.
-        let first_tag =
-            if self.names.module() == crate::PRELUDE_MODULE && d.name == "CollectionLiteral" {
-                crate::types::COLLECTION_LITERAL_TAG
-            } else {
-                self.types.next_tag()
-            };
-        let skel = match &route {
-            Some(IdxRoute::Iwf(_)) => Some(Rc::new(shape_of(
+        // Tags come from the qualified names (`types::declaration_tag`); a
+        // collision with a committed declaration is refused here, with both
+        // named, rather than probed onward.
+        let module = self.names.module().to_string();
+        let tag = if module == crate::PRELUDE_MODULE && d.name == "CollectionLiteral" {
+            crate::types::COLLECTION_LITERAL_TAG
+        } else {
+            crate::types::declaration_tag(&module, &d.name)
+        };
+        let shape_tag = matches!(route, Some(IdxRoute::Iwf(_)))
+            .then(|| crate::types::declaration_tag(&module, &format!("{}#shape", d.name)));
+        for t in std::iter::once(tag).chain(shape_tag) {
+            if let Some(holder) = self.types.tag_holder(t).cloned() {
+                return err(
+                    format!(
+                        "the nominal tag of `{}::{}` collides with `{}::{}`'s: tags are derived \
+                         from qualified names (docs/module-dag-design.md §3), and these two hash \
+                         alike; rename one of them",
+                        module, d.name, holder.scope.module, holder.name
+                    ),
+                    d.span,
+                );
+            }
+        }
+        if shape_tag == Some(tag) {
+            return err(
+                format!("the nominal tags of `{}` and its shape declaration collide; rename it", d.name),
+                d.span,
+            );
+        }
+        let skel = match (&route, shape_tag) {
+            (Some(IdxRoute::Iwf(_)), Some(shape_tag)) => Some(Rc::new(shape_of(
                 d,
                 &ctors,
-                first_tag,
+                shape_tag,
                 Rc::new(self.names.scope().clone()),
             ))),
             _ => None,
@@ -1362,7 +1386,7 @@ impl Elaborator {
         let ind = Rc::new(Inductive {
             name: d.name.clone(),
             scope: Rc::new(self.names.scope().clone()),
-            tag: first_tag + u32::from(skel.is_some()),
+            tag,
             params: d.params.clone(),
             valparams: d
                 .valparams

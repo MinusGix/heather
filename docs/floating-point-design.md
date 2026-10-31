@@ -566,11 +566,11 @@ roadmap's.
 | 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, and the constants (`zero`, `min_subnormal`, `min_normal`, `max_finite`) canonical for every format. Landed; §10. |
 | 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. Landed; §13. |
-| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed except sqrt, §14; sqrt is [float-sqrt](../issues/float-sqrt.md). |
+| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed, §14; sqrt §14.1. |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
-| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. |
-| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. |
+| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); the search ends from a real clear of the grid ([float-round-real-termination](../issues/float-round-real-termination.md), `round_real_apart`); the Padé gap for exp and log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md). The operations, the square root, the error model at every real and the root of a real landed, §17; the ordered-field transfer is [float-reals-ordered-field](../issues/float-reals-ordered-field.md). |
+| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)); `Float::exp`/`Float::log` over every float with the §9.2 specials. |
 
 ML numerics on top (dot products, softmax, stochastic rounding) belong to
 the ML milestones that pull them, not here. The notation of §4.2 and §5.5
@@ -1003,6 +1003,62 @@ Observations:
   constructor named `Fin`; the special-value theorems write `Float::Fin`.
 
 
+### 14.1 Square root ([float-sqrt](../issues/float-sqrt.md))
+
+Landed 2026-10-31 in the same module, closing `float-arith`. The square root
+of a float is irrational in general, so it has no rational exact value to
+hand `RoundsTo`, and the issue offered two statements: `RoundsTo` at the
+reals (waits on `float-reals`), or a second relation `RoundsToSqrt` with
+every clause rewritten (duplicates `RoundsTo` and its laws). Neither was
+needed.
+
+**The statement: a cell, not a value.** Every clause of `RoundsTo` compares
+the exact value only with half-unit grid points: floats, midpoints of
+neighbouring floats (a float is two half-units, so their midpoint is a grid
+point), the overflow threshold `F.ovf()` and zero. So a correct rounding of
+`√x` is the same thing as a correct rounding of any rational on the same side
+of every grid point as `√x`. `Format::SqrtCell(x, y)` says `y` is such a
+rational, with each comparison against `√x` read as one against `x` through
+`Format::RootLe(m, x)` (`m ≤ 0 ∨ grid(m)² ≤ x`) and `RootLt` (`m < 0 ∨
+grid(m)² < x`):
+
+    (m: Int) → (grid(m) ≤ y ↔ RootLe(m, x)) ∧ (grid(m) < y ↔ RootLt(m, x))
+
+The value theorem is `Finite::sqrt_correct(a, mode, nan, nn: 0 ≤ a.val(),
+y, cell: F.SqrtCell(a.val(), y)): RoundsTo(F, mode, y, a.sqrt(…))`: one
+relation, all of `RoundsTo`'s laws (uniqueness, the error model) apply at any
+`y` in the cell. The cell is never empty (`Finite::sqrt_witness_cell`, a
+quarter-unit point when the root is inexact) and is exactly what the rounding
+reads: given the root's description `SqrtApprox(x, h, st)` (`Approx` with
+every bound squared), `SqrtCell(x, y) ↔ Approx(y, h, st)`
+(`Format::cell_iff_approx`). At the reals, `√x` lies in its own cell and
+the theorem transfers by the same argument (§17); at `Rat` the cell is the
+honest form. A test applies the theorem at a literal: binary16 `√2` rounds
+`1.414213563`.
+
+**The computation.** `√x` in half-units is the root of `x / 2^(2(qmin-1))
+= mag · 2^(bexp + 2 - qmin)`. Writing that as `N / 2^dn` (`sqrt_n`,
+`sqrt_dn`; the exponent's positive part scales `N` up), `h =
+isqrt(⌊N / 2^dn⌋)` and the root is exact when `h² · 2^dn = N`
+(`sqrt_h`, `sqrt_st`, proved as `Finite::sqrt_approx_mag`). Then
+`F.round_h(mode, h, st)` rounds it, as every other operation does
+(`Finite::sqrt_abs`, the root of the magnitude in every format).
+`Nat::isqrt` is in `nat.hthr`: the root `r` of `⌊n/4⌋` first, then `2r`
+or `2r + 1` by one comparison of `(2r + 1)²` with `n`, so a root of `b` bits
+costs `b` steps; `isqrt_spec` proves `IsRoot`, `r² ≤ n < (r + 1)²`, by hand
+like `ldiv`. Binary16 and binary32 roots evaluate by `refl`.
+
+**Signs and specials.** IEEE 754 §9.2 (§6.3 for the zero): `√-0 = -0`
+(`sqrt_neg_zero`), a negative nonzero is NaN (`sqrt_neg`), a nonnegative
+root carries `+` (`sqrt_sign`), `√+∞ = +∞`, `√-∞` is NaN and NaN propagates
+(`Float::sqrt_inf`, `sqrt_neg_inf`, `sqrt_nan`). Like division, `sqrt` takes
+the format's NaN evidence (default `trivial`); a format without NaN uses
+`sqrt_abs`.
+
+The standard model for a root (`|r - √x| ≤ u·√x`) needed `√x` as a
+value; it landed with the root at the reals, §17 (`Finite::sqrt_real`,
+`sqrt_real_relative`).
+
 ## 15. Literals (`float-literal-entry`)
 
 Modules: `lib/std/num/float/window.hthr` (rounding in a window of a format)
@@ -1133,7 +1189,15 @@ rounding relation's; the shift needs one lemma (`Int::shr_mul_le`) and is
 sound at every shift amount, so how many bits `Dyadic::cut` drops is a cost
 choice with no proof attached. A reciprocal of a positive `m · 2^e` is
 `⌊2^K / m⌋ · 2^(-e-K)` below and its successor above, with
-`K = p + width(m)`.
+`K = p + width(m)`. The quotient is `Nat::pow2_div`: a loop that doubles a
+remainder and takes one quotient bit per step guesses it, starting at
+`2^(width(m) - 1)` so that it runs only the quotient's `p` bits, and two
+comparisons, `g·m <= 2^K < (g + 1)·m`, keep the guess or fall back to
+`ldiv`. Only `ldiv`'s two facts (`q·m + r = 2^K`, `r < m`) reach the
+proofs, so nothing about the loop is proved
+(issues/interval-evaluation-budget.md). `Interval::of_rat` takes the
+reciprocal of its positive denominator as one point (`recip_point`), one
+quotient for both bounds.
 
 **Intervals.** `inductive Interval { Bnd(lo, hi: Dyadic), Whole }`.
 `I.Has(x)` reads `lo <= x <= hi` at `Rat`, and `Whole` holds everything.
@@ -1288,3 +1352,116 @@ independent, so a goal that needs the dependency (`x - x`) widens. Left:
 - the functions at real arguments, and their laws (`exp(a + b) ≈ exp(a) ·
   exp(b)`, `sin² + cos² ≈ 1`), which want continuity and `CReal` series
   ([[elementary-functions-at-reals]]).
+
+## 17. Floats at the reals (`float-reals`)
+
+Module: `lib/std/num/float/float_real.hthr`; the root lemmas it reads are in
+`rat.hthr` and `creal.hthr`, `u_le_one` and `max_finite_nonneg` in
+`error.hthr`. Probes are in `lib/_tests/std/num/float/float_real_tests.hthr`.
+Issue: [float-reals-sqrt-and-error](../issues/float-reals-sqrt-and-error.md).
+
+**The real of a float** is the image of its value, `Finite::real(f) =
+CReal::ofRat(f.val())`, and a correct rounding of a real is `RoundsToReal`
+(round_real.hthr). Every operation whose exact value is rational carries
+over with no new proof: the rational's image is the real value up to `≈`
+(`Format::rounds_real_of_same`), so `add_real`, `sub_real`, `mul_real`,
+`fma_real` and `convert_real` are one line each over the `Rat` theorems.
+
+**Square roots at the reals.** `CReal::IsSqrt(s, x)` says `s` is the
+nonnegative root of the rational `x` as the cut it makes: at or above every
+nonnegative rational whose square is at most `x`, at or below every one
+whose square is at least `x`. That is the form every comparison with a root
+reads, and `s * s ≈ x` with `0 ≤ s` gives it (`CReal::is_sqrt_of_sq`, by
+`CReal::le_of_sq_le`: `t < s` with `t ≥ 0` would make `t² ≤ ts < s²`).
+`CReal::sqrt_rat(q)` is `√|q|`: its terms are the rational roots from below
+at `n + 1` bits, `Rat::root_floor(q, n) = isqrt(⌊|q|·4^n⌋) / 2^n`, at most
+`√|q|` and within `2^-n` of it (`root_floor_spec`), which makes the sequence
+regular (`root_floor_regular`: each root from below lies under any other
+plus that one's precision, by `lt_of_sq_lt`). The floor is `Nat::ldiv`, so
+a term evaluates in steps per bit (`sqrt_two_term` is a `refl`); `isqrt` is
+already per bit. `CReal::sqrt_rat_is_sqrt` proves the cut from the terms,
+and `is_sqrt_exact` reads a rational root back (`√4 ≈ 2`).
+
+**The value theorem.** `Finite::sqrt_real(a, mode, nan, nn, s, root:
+s.IsSqrt(a.val())): RoundsToReal(F, mode, s, a.sqrt())`, and at the
+constructed root `Finite::sqrt_rounds_real`. The interval comes from the
+root's description `SqrtApprox(x, h, st)` (§14.1). An exact root is the grid
+point `g = grid(h)`, and the cut puts `s` at `g` from both sides. An inexact
+one has `g² < x < g'²` with `g' = grid(h + 1)`, and a rational strictly
+inside each gap still has its square on the right side of `x`: above `g`,
+`g + d/(2g + 1 + d)` with `d = x - g²` (`Rat::root_above`; its square
+exceeds `g²` by `δ(2g + δ) ≤ δ(2g + 1 + d) = d`), and below `g'`, Newton's
+step `(g'² + x)/(2g')` (`Rat::root_below`; its square exceeds `x` by
+`(hi - g')²`). Every rational between them is `Approx(q, h, True)`, so in
+the cell, so rounded by `sqrt_correct`. Nothing is decided about the real:
+the cases are on the float's sticky bit, a computed `Bool`.
+
+**The error model at the reals.** A rounding interval around a real `x`
+with `b ≤ x ≤ c` can be cut to lie in `[b, c]` without deciding anything
+about `x` (`Format::rounds_real_cut`, from `CReal::ofRat_le_max` and
+`le_ofRat_min`: of two rationals below `x` the larger is). At a nonnegative
+`q` the bound `|r - q| ≤ u·q + e` is two affine inequalities
+(`Rat::sides_of_abs`), each monotone in `q` when `0 ≤ u ≤ 1`, so holding
+at both ends of the interval it holds at `x` (`CReal::err_between`, the
+two sides joined by `CReal::abs_le`). This gives, at every nonnegative real:
+
+- `Format::real_error_nonneg`: `|r - x| ≤ u·x + η` in range (`x ≤ M`);
+- `Format::real_relative_nonneg`: `|r - x| ≤ u·x` in the normal range.
+
+For the root they are `Finite::sqrt_real_error` and `sqrt_real_relative`,
+whose ranges are stated at the float, `m² ≤ a.val() ≤ M²` (checkable by
+evaluation), and read at the root through the cut. This is the
+`|r - √x| ≤ u·√x` that §14.1 left for this round; at binary16, √2's
+standard model is a probe.
+
+### 17.1 The error model at a real of either sign
+
+Whether `x ≥ 0` cannot be decided, but each conclusion is a `≤`, a negation
+at `CReal`, so `CReal::le_by_sign` splits on the sign inside it. The
+nonpositive side needs no conjugate mode: the rounding interval is cut to
+`[-M, 0]` (or `[-M, -m]`), the rational bound at its ends is
+`|r - q| ≤ u·(-q) + η` (`Rat::sides_of_abs_nonpos`), and the two affine
+sides, now increasing in `q` with slopes `1 - u` and `1 + u`, hold in between
+(`CReal::err_between_nonpos`). The pieces are joined by `|x| ≥ x` and
+`|x| ≥ -x` (`CReal::le_abs`, `neg_le_abs`):
+
+- `Format::real_error`: `|r - x| ≤ u·|x| + η` while `|x| ≤ M`;
+- `Format::real_relative`: `|r - x| ≤ u·|x|` while `m ≤ |x| ≤ M`.
+
+At -1/3 in binary16 both are probes.
+
+### 17.2 Roots squared, and unique
+
+A rational strictly between two apart reals (`CReal::rat_between`, from the
+gap `Lt` carries) decides every argument here. Two roots of one rational are
+the same real: a rational between them would have its square on one side of
+`x` and so be on the wrong side of one root (`CReal::is_sqrt_unique`). A
+root squares back, `s * s ≈ x` (`is_sqrt_sq`): if `x < s²`, a rational `r`
+between them is beaten by some root from above, `(f_n + 2^-n)² < r`
+(`Rat::root_floor_up`; the roots from below come within any `d` of `|q|` once
+`2^-n·(2|q| + 3) < d`), and the cut puts `s` under that root, so
+`s² < r < s²`; the other side is `Rat::root_floor_down` the same way. So
+`sqrt_rat(q)² ≈ |q|` (`CReal::sqrt_rat_sq`).
+
+### 17.3 The root of a real
+
+`√` is Hölder-½, `|√a - √b| ≤ √|a - b|`, which at rational roots from below
+is `Rat::lt_root_floor_add`: `p² ≤ |b| + d²` puts `p` under `b`'s root plus
+its precision plus `d`. So `CReal::sqrt(x)` takes as its n-th term the root
+of `x`'s term at `2(n + 2)` to `n + 2` bits: two such terms differ by at most
+`2^-(2m+4) + 2^-(2n+4) ≤ (2^-(m+2) + 2^-(n+2))²`, which moves their roots by
+`2^-(m+2) + 2^-(n+2)` plus a precision, a regular sequence. Like
+`sqrt_rat`, it is the root of `|x|`. `CReal::IsRoot(s, x)` is `IsSqrt` at a
+real argument; terms of `ofRat(p²) ≤ |x|` (by `bishop_of_le`) give
+`sqrt_is_root`, and the §17.2 argument with one more rational in between
+gives `is_root_sq`, so `√x·√x ≈ |x|` (`sqrt_sq`), `sqrt_respects`, and
+`sqrt_ofRat` (it is `sqrt_rat` at a rational, by uniqueness). At a float,
+`Finite::sqrt_rounds_root` is the value theorem at `a.real().sqrt()`. The
+customer is error analysis of compound expressions; `√(3² + 4²) ≈ 5` is a
+probe.
+
+**Left in `float-reals`.** The transfer to any ordered field, faithful
+rounding and `Placed` of §6
+([float-reals-ordered-field](../issues/float-reals-ordered-field.md)); the
+Padé gap that would make Ziv's search end unconditionally for exp and
+log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md).

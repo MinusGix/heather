@@ -17,8 +17,9 @@ use std::process::{Command, Stdio};
 use heather_cli::showcase;
 
 /// One `write-elf` of `symbol` through the image store native_cat.rs uses,
-/// over the gate's world as cat's is (the gate builds it, and the suite runs
-/// this target after the gate), in the stale lanes replaying images an earlier build wrote.
+/// over the gate's world as cat's is (the gate builds it, and the suite starts
+/// this target once the images it replays are built), in the stale lanes
+/// replaying images an earlier build wrote.
 fn write_tool(symbol: &str, output: &Path) { write_program("lib/native/native_tools.hthr", symbol, output, false) }
 
 /// `write_tool` of a program in any module; `both_allocators` has
@@ -33,8 +34,7 @@ fn write_program(module: &str, symbol: &str, output: &Path, both_allocators: boo
     cmd.current_dir(&root)
         .args(["write-elf", module, symbol, "-o"])
         .arg(output)
-        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES)
-        .args(["--world", "lib"]);
+        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }

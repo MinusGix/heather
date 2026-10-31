@@ -3,9 +3,8 @@ title: Run generate inside a section and under assuming
 status: open
 labels: [metaprogramming,elaboration]
 area: tactics
-milestone: [tac-host-interface]
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-31
 ---
 
 `generate g(args);` is refused inside a `section` and under `assuming`
@@ -25,3 +24,7 @@ scope), so the refusal is the gap, not a design choice.
   section's head like a written member does, checked by a probe that uses one
   at a concrete carrier.
 - The `assuming` case follows the same rule or keeps a named refusal.
+
+## Log
+
+- 2026-10-31: `tac-host-interface` is marked done in docs/roadmap.md (its "done when" is met), so this issue no longer serves it; it stays open in area `tactics` with no milestone.

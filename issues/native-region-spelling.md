@@ -3,9 +3,9 @@ title: Spell structured regions for write-elf's Rust allocator
 status: open
 labels: [native,x86]
 area: heather-in-heather
-milestone: [hih-tools]
+milestone: [nh-front]
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-31
 ---
 
 `write-elf` allocates in Rust (`crates/cli/src/native/allocator.rs`) over a
@@ -31,3 +31,7 @@ are fine; a large tool with regions would hit the rail.
   `tr_map` and the certificate `write-elf` checks for `tr_upper` both pass:
   evaluating the slot allocator's loop-set closure over a region loop with
   more live words is the likely cost. Look at it with the spelling work.
+
+## Log
+
+- 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.

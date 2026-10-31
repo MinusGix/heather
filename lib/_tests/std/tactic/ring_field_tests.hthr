@@ -55,4 +55,4 @@ theorem rat_numerals_unimported(x: Rat): (x + 1) * (x + 1) - 1 ≈ x * (x + 2) {
 // An atom with no source spelling (a field read such as a real's term) is
 // named in the atom list by an alias bound to the term
 // (issues/ring-field-read-atom-spelling.md).
-theorem rat_term_atom(x: CReal, n: Nat): x.seq(n) + 1 ≈ 1 + x.seq(n) { ring }
+theorem rat_term_atom(x: CReal, n: Nat): x.at(n) + 1 ≈ 1 + x.at(n) { ring }

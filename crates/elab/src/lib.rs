@@ -5287,14 +5287,23 @@ impl Elaborator {
                 // in the matching lambdas, and the recursor is applied back to
                 // the parameters. Only here, in checking position — the goal
                 // is what there is to generalize.
+                //
+                // A local scrutinee refines the hypotheses that mention it the
+                // same way (issues/elab-match-refines-hypothesis-kernel-
+                // rejects.md): they join the generalized positions, so each
+                // arm sees them at its constructor.
                 let dec = recursion::descends_on_param(cx, &scrut_t);
-                let positions = match dec {
+                let mut positions = match dec {
                     Some(dec) => self.varying_params(cx, arms, dec),
                     None => Vec::new(),
                 };
-                if let Some(dec) = dec
-                    && !positions.is_empty()
-                {
+                for p in self.refined_hypotheses(cx, arms, &scrut_t, dec, expected) {
+                    if !positions.contains(&p) {
+                        positions.push(p);
+                    }
+                }
+                positions.sort_unstable();
+                if !positions.is_empty() {
                     let (gen_ty, gen_lvl) =
                         self.generalize_expected(cx, &positions, expected, lvl);
                     let motive = matching::synthesize_motive(
@@ -5303,11 +5312,13 @@ impl Elaborator {
                     let arms = self.wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
                     let mut gcx = cx.clone();
-                    gcx.generalized = Some(Rc::new(generalize::Generalization {
-                        dec,
-                        positions: Rc::clone(&positions),
-                        span: e.span,
-                    }));
+                    if let Some(dec) = dec {
+                        gcx.generalized = Some(Rc::new(generalize::Generalization {
+                            dec,
+                            positions: Rc::clone(&positions),
+                            span: e.span,
+                        }));
+                    }
                     let elim = match eqbind {
                         None => self.elab_match(
                             &gcx,
@@ -6379,8 +6390,9 @@ impl Elaborator {
         let want_s = self.display_type_clean(cx, expected);
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
-                "this has type `{g}`, but `{w}` is expected here{}",
+                "this has type `{g}`, but `{w}` is expected here{}{}",
                 self.opaque_equation_note(cx, got, expected),
+                self.cast_help(cx, got, expected, *span),
             )),
             (Some(g), Some(_)) => MismatchNote::Located(format!(
                 "this has type `{g}` where a type that displays the same is expected; \
@@ -9005,6 +9017,9 @@ impl Elaborator {
                         .value_skel(cx, name)
                         .is_some_and(|s| s.leading_implicit() > 0)
             }
+            // A cast takes its target from the checking position, as a
+            // numeral does (docs/casting-design.md §5.2).
+            ExprKind::App { .. } if surface::is_cast(e) => true,
             ExprKind::App { .. } => match e.as_named() {
                 Some(("absurd", _, _)) => !self.shadowed(cx, "absurd"),
                 Some((name @ ("rel_cong" | "rel_derive"), _, false)) => !self.shadowed(cx, name) && self.ctor_here(cx, name).is_none(),

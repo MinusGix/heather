@@ -3,9 +3,8 @@ title: Add concise general tactic-composition syntax
 status: open
 labels: [surface,proofs,elaboration,syntax]
 area: tactics
-milestone: [tac-in-heather]
 created: 2026-08-27
-updated: 2026-10-01
+updated: 2026-10-31
 ---
 
 Make common proof-tree composition concise without adding solver-specific
@@ -35,3 +34,4 @@ metaprograms, and future tactics uniformly.
 ## Log
 
 - 2026-10-01: 2026-10-01: a customer from [[automatic-author-surface]]. wc.hthr's newline_is_space and wc_next_lines split cleanly with split_all, but some leaves close by refl and others by a contradiction among the comparison facts (bv_omega). One leaf body can't do both, so they stay hand-written. Wanted: an alternation leaf (try refl, else bv_omega) with defined failure behaviour.
+- 2026-10-31: `tac-in-heather` is marked done in docs/roadmap.md (a Heather `split_all` closes the Rust one's goals), so this issue no longer serves it; it stays open in area `tactics` with no milestone.

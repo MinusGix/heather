@@ -154,6 +154,7 @@ fn projections_and_qualified_names_stay_tight() {
 fn prefix_negation_is_written_tight() {
     check("theorem t(P: Type): ¬ P { p }", "theorem t(P: Type): ¬P { p }");
     check("fn f(b: Bool) -> Bool { ! b }", "fn f(b: Bool) -> Bool { !b }");
+    check("fn f(n: Nat) -> Rat { ↑ n - 1 }", "fn f(n: Nat) -> Rat { ↑n - 1 }");
 }
 
 /// `-` is both: subtraction where the parse puts it between two operands,

@@ -123,19 +123,11 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
             return Err(format!("output already exists: {}", path.display()));
         }
     }
-    let mut sources = loader::load_with(source, &search, IMPORTS).map_err(|e| e.msg)?;
-    // `check --world`'s order (`world.rs`): the world's prefix first, so the
-    // closure replays the images every other process over that world wrote
-    // (the library gate's, which the suite runs before this).
-    if let Some(dir) = &world {
-        let mut search = search.clone();
-        if !search.contains(dir) { search.push(dir.clone()); }
-        let world = heather_cli::world::World::of(dir, &search).map_err(|e| format!("--world {}: {}", dir.display(), e.msg))?;
-        let prefix: Vec<&Path> = world.prefix(&sources).iter().map(PathBuf::as_path).collect();
-        if !prefix.is_empty() {
-            sources = loader::load_after_with(&prefix, source, &search, IMPORTS).map_err(|e| e.msg)?;
-        }
-    }
+    // `--world` is accepted and ignored: every module is checked over its
+    // own closure (`docs/module-dag-design.md`), so the closure is all this
+    // loads and its images are the ones every other process wrote.
+    let _ = &world;
+    let sources = loader::load_with(source, &search, IMPORTS).map_err(|e| e.msg)?;
     let canonical = source.canonicalize().map_err(|e| format!("{}: {e}", source.display()))?;
     let root = sources.iter().find(|m| m.path == canonical).ok_or("the source is not in its own closure")?.name.clone();
     let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
@@ -329,11 +321,12 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(), s, entry,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), args, argv)");
+    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
+        top, depth, placed, s, entry, rsp,
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom(X86Profile::process({p}_size(), top, depth), {p}_size(), f), loaded), args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
-{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::io({p}_size()).linux(), src.denote(args), s),\n        {simulated})"))
+{lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::process({p}_size(), top, depth).linux(), src.denote(args), s),\n        {simulated})"))
     };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
@@ -403,13 +396,15 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
         j(sym({p}_length()), λ n _ => 232 + n <= 65536, Nat::leb_sound(232 + {length}, 65536, trivial)))
 }}
 
-// The process Linux makes of the file written, at its entry with the
-// command line `args` on its stack, simulates `{symbol}`'s tree run with
-// `args` (`Source::elf_file_simulates`, from `native_compile_correct`).
-theorem {p}_simulates(s: MachineState<X86Memory(X86Profile::io({p}_size()))>, entry: s.rip = io_entry(),
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
-    argv: ArgvAt(X86Profile::io({p}_size()).data().above(io_data_end({p}_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::io({p}_size()).linux(), {source}.denote(args), s) {{
+// The process Linux makes of the file written, at its entry with `depth`
+// bytes of stack below RSP and the command line `args` on the stack above,
+// simulates `{symbol}`'s tree run with `args` (`Source::elf_file_simulates`,
+// from `native_compile_correct`).
+theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
+    s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(X86Profile::process({p}_size(), top, depth), {p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
+    argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(io_data_end({p}_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}
 }}
 ", header_literal.join(", "), lengths = upto_lengths(p, &pieces, length)));

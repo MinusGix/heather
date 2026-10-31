@@ -28,7 +28,7 @@ fn elaborated() -> Elaborator {
     for (name, src) in [
         ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
         ("option", OPTION), ("pair", PAIR), ("list", LIST),
-        ("algebra", ALGEBRA), ("int", INT),
+        ("algebra", ALGEBRA), ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")), ("int", INT),
     ] {
         if let Err(err) = e.elab_module_source(name, src) {
             let msg = match err {

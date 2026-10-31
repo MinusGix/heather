@@ -12,7 +12,7 @@ const EXAMPLES: &str = include_str!("fixtures/function_ir_lower_examples.hthr");
 // The x86 prefix up to the block layer, then FunctionIR and what a block
 // leaves (x86_64_kept): what the lowering imports, and nothing B2 burns.
 const PREFIX: &[&str] = &[
-    "logic", "bool", "nat", "option", "pair", "list", "algebra", "int", "bitvec",
+    "logic", "bool", "nat", "option", "pair", "list", "algebra", "morphism", "int", "bitvec",
     "relation", "relation_props", "location", "certified_lookup", "x86_64", "x86_64_block",
     "function_ir",
 ];

@@ -89,14 +89,16 @@ fn NumReal::Wf(self t: NumReal) → Type {
 }
 
 // A real the embedding of `q` up to `≈` has the embedded reciprocal as its
-// inverse: the apartness moves to `CReal::ofRat(q)` and down to `q`.
+// inverse: the apartness moves to `CReal::ofRat(q)` and down to `q`, and back
+// up as the embedding's own (an inverse reads its gap off the proof, so the
+// two proofs meet by `inv_respects`).
 theorem NumReal::inv_sound({x: CReal}, {q: Rat}, sx: x ≈ CReal::ofRat(q), h: x.Apart(0)): x.inv(h := h) ≈ CReal::ofRat(q.recip()) {
     let hr: CReal::ofRat(q).Apart(0) = CReal::apart_respects(sx, CReal::same_refl(0), h);
     let hq: q.Apart(0) = match hr {
         Inl(lt) => Inl(CReal::lt_of_ofRat_lt(p := q, q := 0, h := lt)),
         Inr(gt) => Inr(CReal::lt_of_ofRat_lt(p := 0, q := q, h := gt)),
     };
-    CReal::same_trans(CReal::inv_respects(sx, h := h, h2 := hr), CReal::ofRat_inv(q, h := hq))
+    CReal::same_trans(CReal::inv_respects(sx, h := h, h2 := CReal::ofRat_apart(h := hq)), CReal::ofRat_inv(q, h := hq))
 }
 
 theorem NumReal::zpow_sound({x: CReal}, {q: Rat}, sx: x ≈ CReal::ofRat(q), n: Int): (h: x.PowOk(n)) → x.pow(n, h := h) ≈ CReal::ofRat(NumReal::zpow(q, n)) {
@@ -168,9 +170,6 @@ theorem NumReal::not_apart_of(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h1: a.rat()
 // The constructors and the well-formedness witnesses as globals the tactic
 // can name (`Lookup` names functions, not constructors).
 fn norm_num_q(q: Rat) → NumReal { NumQ(q) }
-// A leaf's value: a real that is `CReal::ofRat(q)` up to unfolding is the
-// embedding of its first term, which is `q`.
-fn norm_num_term(x: CReal) → Rat { x.seq(0) }
 // The empty sum's and the empty product's values, which a range at the
 // bound zero converts to.
 fn norm_num_sum_unit() → Rat { 0 }

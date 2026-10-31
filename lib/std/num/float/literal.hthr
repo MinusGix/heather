@@ -438,9 +438,9 @@ fn Rat::dy_rhs(q: Int, base, mant: Nat, exp: Int) → Nat { (mant * Nat::pow_sq(
 
 fn Rat::dy_exact(s: Bool, m: Nat, q: Int, base, mant: Nat, exp: Int) → Bool {
     match s {
-        False => or_bit(Rat::dy_lhs(m, q, base, exp).le_dec(Rat::dy_rhs(q, base, mant, exp)))
-            && or_bit(Rat::dy_rhs(q, base, mant, exp).le_dec(Rat::dy_lhs(m, q, base, exp))),
-        True => or_bit((Rat::dy_lhs(m, q, base, exp) + Rat::dy_rhs(q, base, mant, exp)).le_dec(0)),
+        False => Rat::dy_lhs(m, q, base, exp).leb(Rat::dy_rhs(q, base, mant, exp))
+            && Rat::dy_rhs(q, base, mant, exp).leb(Rat::dy_lhs(m, q, base, exp)),
+        True => (Rat::dy_lhs(m, q, base, exp) + Rat::dy_rhs(q, base, mant, exp)).leb(0),
     }
 }
 
@@ -458,7 +458,7 @@ theorem Rat::dy_exact_reflects(s: Bool, m: Nat, q: Int, base: Nat, bp: 1 <= base
     let rr: (R = (mant * Pb) * Y) = trans(Nat::cong(λ (v: Nat) => (mant * v) * Nat::pow_sq(2, q.neg_part()), Nat::pow_sq_eq(base, exp.pos_part())),
         Nat::cong(λ (v: Nat) => (mant * Pb) * v, Nat::pow_sq_eq(2, q.neg_part())));
     match s as λ t => Reflects(Dyadic(match t { False => m.int(), True => -m.int() }, q).rat() ≈ Rat::scaled(base, bp, mant, exp), Rat::dy_exact(t, m, q, base, mant, exp)) {
-        False => reflects_iff(reflects_and(or_bit_reflects(L.le_dec(R)), or_bit_reflects(R.le_dec(L))),
+        False => reflects_iff(reflects_and(L.leb_reflects(R), R.leb_reflects(L)),
             λ both => {
                 let e: ((m * X) * Qb = (mant * Pb) * Y) = omega(both, lr, rr);
                 Int::cong_ofnat(e)
@@ -467,7 +467,7 @@ theorem Rat::dy_exact_reflects(s: Bool, m: Nat, q: Int, base: Nat, bp: 1 <= base
                 let e2: (OfNat((m * X) * Qb) = OfNat((mant * Pb) * Y)) = e;
                 And(omega(e2, lr, rr), omega(e2, lr, rr))
             }),
-        True => reflects_iff(or_bit_reflects((L + R).le_dec(0)),
+        True => reflects_iff((L + R).leb_reflects(0),
             λ z => {
                 let e: (-((m.int() * X.int()) * Qb.int()) = (mant * Pb).int() * Y.int()) = {
                     let e2: (-OfNat((m * X) * Qb) = OfNat((mant * Pb) * Y)) = omega(z, lr, rr);

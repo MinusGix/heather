@@ -1,11 +1,11 @@
 ---
 title: A first piece of Heather written in Heather (candidate: the lexer)
-status: open
+status: closed
 labels: [native,design]
 area: heather-in-heather
 milestone: [hih-self]
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-31
 ---
 
 Owns the roadmap's `hih-self` milestone (`docs/roadmap.md`): a first
@@ -25,3 +25,7 @@ the native stack already handles. Picking it needs:
 
 This waits on the program-logic and memory milestones; it is filed now so
 those rounds know it is their customer.
+
+## Log
+
+- 2026-10-31: 2026-10-31: Split by docs/compiler-milestones-proposal.md §5 into [[self-hosted-lexer]] (milestone self-lexer: streaming tokens, no heap) and [[self-hosted-compiler]] (self-compiler). Its three needs have owners there: data representation and heap go to [[native-heap-arena]], and the differential test goes to the lexer round.

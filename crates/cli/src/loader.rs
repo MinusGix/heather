@@ -21,6 +21,7 @@ use heather_elab::LintProfile;
 use heather_syntax::{parse_file, Item};
 
 /// One module of the closure, ready to elaborate.
+#[derive(Clone)]
 pub struct Module {
     pub name: String,
     pub path: PathBuf,

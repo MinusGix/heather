@@ -1,0 +1,65 @@
+// Probes of the cast surface: `↑e` at a checking position and
+// `cast<B>(e)`, both rewritten along the shortest path of `Cast` edges
+// (lib/std/algebra/morphism.hthr, the instances beside each target type;
+// docs/casting-design.md §14). Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import creal; import dyadic; import morphism;
+
+// One edge, a neutral operand: the cast is the edge's map, by definition.
+fn nat_int(n: Nat) → Int { ↑n }
+theorem nat_int_is_ofnat(n: Nat): nat_int(n) = OfNat(n) { refl }
+// Two edges compose, innermost first.
+fn nat_rat(n: Nat) → Rat { ↑n }
+theorem nat_rat_is_chain(n: Nat): nat_rat(n) = Rat::ofInt(OfNat(n)) { refl }
+// A literal operand: a bare numeral is a `Nat`, and the chain computes.
+fn three() → Rat { ↑3 }
+theorem three_is_three(): three() = Rat::ofInt(OfNat(3)) { refl }
+// The shortest path wins: Dyadic → Rat → CReal, not through Int.
+fn dyadic_real(d: Dyadic) → CReal { ↑d }
+theorem dyadic_real_is_chain(d: Dyadic): dyadic_real(d) = CReal::ofRat(d.rat()) { refl }
+// `cast<B>(e)` names the target where nothing else gives one.
+fn named(n: Nat) → CReal { cast<CReal>(n) }
+theorem named_is_chain(n: Nat): named(n) = CReal::ofRat(Rat::ofInt(OfNat(n))) { refl }
+// … including an inference position: an equation's side, an unannotated `let`.
+theorem named_inferred(n: Nat): cast<Rat>(n) = Rat::ofInt(OfNat(n)) { refl }
+fn named_let(n: Nat) → Rat { let y = cast<Rat>(n); y + 1 }
+// A cast is a leaf without a carrier of its own: the operator spine
+// takes its carrier from the other operand, and the cast checks there.
+fn scaled(m: Int, x: Rat) → Rat { ↑m * x }
+theorem scaled_is(m: Int, x: Rat): scaled(m, x) = Rat::ofInt(m) * x { refl }
+fn shifted(n: Nat, x: Rat) → Rat { x + ↑n - 1 }
+// The identity cast, at a named carrier and at an open one.
+fn same(x: Rat) → Rat { ↑x }
+theorem same_is(x: Rat): same(x) = x { refl }
+fn open_same<A>(x: A) → A { ↑x }
+// A checking position other than a return: an argument.
+fn take(x: Rat) → Rat { x }
+fn at_argument(n: Nat) → Rat { take(↑n) }
+theorem at_argument_is(n: Nat): at_argument(n) = Rat::ofInt(OfNat(n)) { refl }
+
+// expect-error: a cast needs a target here
+theorem no_target(n: Nat): ↑n = ↑n { refl }
+
+// The edges go one way: a lossy conversion is a named function.
+// expect-error: no cast from `Rat` to `Int`
+fn lossy(x: Rat) → Int { ↑x }
+
+// expect-error: is expected here; `Nat` embeds in `Rat` (Nat → Int → Rat): write `↑` before it
+fn forgot(n: Nat) → Rat { n }
+
+// Two shortest paths of the same length are ambiguous.
+record P { v: Nat }
+record Q { v: Nat }
+record R { v: Nat }
+record S { v: Nat }
+fn P::q(p: P) → Q { Q { v: p.v } }
+fn P::r(p: P) → R { R { v: p.v } }
+fn Q::s(q: Q) → S { S { v: q.v } }
+fn R::s(r: R) → S { S { v: r.v } }
+instance Cast<P, Q>(P::q) { }
+instance Cast<P, R>(P::r) { }
+instance Cast<Q, S>(Q::s) { }
+instance Cast<R, S>(R::s) { }
+fn one_edge(p: P) → Q { ↑p }
+// expect-error: `↑` from `P` to `S` has 2 paths of the same length
+fn ambiguous(p: P) → S { ↑p }

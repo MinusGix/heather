@@ -201,3 +201,48 @@ fn the_standard_list_protocol_path_does_not_mint_a_derived_dictionary() {
         .expect("literal checks");
     assert_eq!(elaborator.psi().bindings.len(), before + 1);
 }
+
+/// A literal's spine is read back a child at a time, and each child holds
+/// the rest of the literal's vector; reading a child back must not walk that
+/// rest. It did: a closed subtree that mentions a global is never skipped by
+/// a local substitution (its `u^δ` tail is rewritten unconditionally), and
+/// the readback applied the closure's identity substitution anyway, so a
+/// literal of `k` such elements cost `k²` node visits — the byte pieces of a
+/// `write-elf` certificate, a hundred bytes each, spent most of their
+/// elaboration there. Counted on the exact `local_subst_nodes` counter, at a
+/// top-level definition (an empty Γ) and under a parameter (the closure
+/// captured over Γ's identity environment); quadrupling `k` quadruples a
+/// linear count and multiplies a quadratic one by sixteen. It was 11×; it is
+/// under 4× once the debug build's re-check of a readback by the reducer
+/// (`readback::verify_term`, one readback in sixteen) is set aside, and about
+/// 6× with it, since the reducer's own β-step still copies the rest. Under
+/// `long-checks` every readback is re-checked that way, so the count there
+/// is the reducer's and is not this test's claim.
+#[test]
+fn a_literal_spine_is_read_back_in_time_linear_in_its_length() {
+    use heather_kernel::checks::{skip_verification, SkipVerification};
+    use heather_kernel::stats as kstats;
+    if skip_verification() == SkipVerification::Full {
+        return;
+    }
+    fn visits(k: usize, under_parameter: bool) -> u64 {
+        let elements: Vec<String> = (0..k).map(|i| format!("w({i})")).collect();
+        let body = if under_parameter {
+            format!("fn w(n: Nat) -> Nat {{ n }}\nfn xs(a: Nat) -> List<Nat> {{ [{}, a] }}\n", elements.join(", "))
+        } else {
+            format!("fn w(n: Nat) -> Nat {{ n }}\nfn xs() -> List<Nat> {{ [{}] }}\n", elements.join(", "))
+        };
+        let mut elaborator = Elaborator::with_prelude().expect("prelude");
+        elaborator.elab_module_source("list", LIST).expect("canonical list module");
+        let source = format!("import list;\n{body}");
+        let before = kstats::snapshot();
+        elaborator
+            .elab_module_source("list_literal_spine", &source)
+            .unwrap_or_else(|error| panic!("{}", error.render(&source)));
+        kstats::snapshot().since(&before).local_subst_nodes
+    }
+    for under_parameter in [false, true] {
+        let (small, large) = (visits(64, under_parameter), visits(256, under_parameter));
+        assert!(large < 8 * small, "under a parameter: {under_parameter}: {small} → {large} node visits for k = 64 → 256");
+    }
+}

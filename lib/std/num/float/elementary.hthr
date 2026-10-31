@@ -14,6 +14,17 @@
 // enclosures are the series' (`Series::enclose`), and `CReal::exp_box` and
 // the others are the checker's leaves for them, which `by intervals()` reads
 // at the three heads.
+//
+// log at a positive rational a/b is the atanh series after scaling a/b into
+// one binade (`Binade`):
+//
+//     log(a/b) = 2·atanh((a' - b')/(a' + b')) + e·log 2,   a/b = (a'/b')·2^e
+//
+// with a' and b' each below twice the other, so t = (a' - b')/(a' + b') has
+// 2t² <= 1/2 and every ratio t²(2k+1)/(2k+3) is at most 1/2 from the first
+// term (`Series::atanh_close`); log 2 is 2·atanh(1/3). `CReal::log_rat` is
+// defined as that sum. That it is exp's inverse is a law still to prove
+// (issues/elementary-functions-at-reals.md).
 
 import logic;
 import bool;
@@ -76,6 +87,39 @@ fn CReal::exp_rat(a: Rat) → CReal { Series::exp(a).real() }
 
 fn CReal::exp_box(a: Rat) → Enclosed { Series::exp(a).enclosed() }
 
+// At a zero argument every term past the first vanishes, so exp(0) = 1: the
+// one exact value exp takes at a rational, which the search alone cannot
+// round in a directed mode (an enclosure of 1 straddles it).
+theorem Series::exp_sum_zero(a: Rat, z: a ≈ 0, m: Nat): Series::exp(a).sum(Succ(m)) ≈ 1 {
+    let s = Series::exp(a);
+    match m {
+        Zero => Rat::zero_add(1),
+        Succ(i) => {
+            let t = s.term(i);
+            let f = Rat::inv_succ(i);
+            let vanish = calc {
+                t * (a * f) ≈ t * (0 * f) := Rat::mul_respects(t.same_refl(), Rat::mul_respects(z, f.same_refl())),
+                ≈ t * 0 := Rat::mul_respects(t.same_refl(), f.zero_mul()),
+                ≈ 0 := t.mul_zero(),
+            };
+            Rat::same_trans(Rat::add_respects(Series::exp_sum_zero(a, z, i), vanish), Rat::add_zero(1))
+        },
+    }
+}
+
+theorem CReal::exp_rat_of_zero(a: Rat, z: a ≈ 0): CReal::exp_rat(a) ≈ CReal::ofRat(1) {
+    let s = Series::exp(a);
+    let at_one = λ (n: Nat) => {
+        let d: (s.index(n) = s.start + ((n + 1) + s.scale().width())) = refl;
+        let e: (s.index(n) = Succ(s.index(n) - 1)) = omega(d);
+        let r: (s.sum(s.index(n)) ≈ 1) = j(sym(e), λ k _ => s.sum(k) ≈ 1, Series::exp_sum_zero(a, z, s.index(n) - 1));
+        r
+    };
+    CReal::same_of_approx(CReal::exp_rat(a), CReal::ofRat(1), λ n => s.sum(s.index(n)), λ _ => 1,
+        λ n => s.real_at(n), λ n => CReal::ofRat_close_r(1, n),
+        CReal::ofRat_approx(λ n => s.sum(s.index(n)), λ _ => 1, at_one, λ _ => Rat::same_refl(1), Rat::same_refl(1)))
+}
+
 // ---------------------------------------------------------------------------
 // sin and cos: one step is two degrees, `(2k+2)(2k+3) = 4k² + 10k + 6` and
 // `(2k+1)(2k+2) = 4k² + 6k + 2`.
@@ -116,3 +160,195 @@ theorem CReal::exp_rat_zero(): CReal::exp_rat(0) ≈ 1 { Series::exp(0).same_of_
 theorem CReal::sin_rat_zero(): CReal::sin_rat(0) ≈ 0 { Series::sin(0).same_of_exact(1, trivial, omega) }
 
 theorem CReal::cos_rat_zero(): CReal::cos_rat(0) ≈ 1 { Series::cos(0).same_of_exact(1, trivial, omega) }
+
+// ---------------------------------------------------------------------------
+// log
+
+// `|A - B|` on naturals.
+fn Series::atanh_gap(A, B: Nat) → Nat { (A - B) + (B - A) }
+
+// t² = X/(m+1) with X = gap², m + 1 = (A+B)²; the ratio t²(2k+1)/(2k+3)
+// spelled in monomials, which `omega` reads.
+fn Series::atanh_X(A, B: Nat) → Nat { Series::atanh_gap(A, B) * Series::atanh_gap(A, B) }
+
+fn Series::atanh_m(A, B: Nat) → Nat { (A + B) * (A + B) - 1 }
+
+fn Series::atanh_ratio(X, m, k: Nat) → Rat { Rat::ofInt(OfNat(2 * (X * k) + X)) * Rat::inv_succ(2 * (m * k) + 3 * m + 2 * k + 2) }
+
+theorem Series::atanh_small(X, m, k: Nat, h: X + X <= m + 1): Series::atanh_ratio(X, m, k).abs() <= Rat::inv_succ(1) {
+    let p: ((X + X) * k <= (m + 1) * k) = Nat::mul_le_mono_r(k, X + X, m + 1, h);
+    let e1: ((X + X) * k = X * k + X * k) = X.add_mul_distr(X, k);
+    let e2: ((m + 1) * k = m * k + 1 * k) = m.add_mul_distr(1, k);
+    let e3: (1 * k = k) = k.mul_left_one();
+    let r = Series::atanh_ratio(X, m, k);
+    let nn: (0 <= r) = omega;
+    let le: (r <= Rat::inv_succ(1)) = omega(p, e1, e2, e3, h);
+    Rat::le_trans(Rat::le_of_same(r.abs_of_nonneg(nn)), le)
+}
+
+// 2·atanh((A - B)/(A + B)) = Σ 2t^(2k+1)/(2k+1), every ratio small.
+fn Series::atanh2(A, B: Nat, small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1) → Series {
+    Series(Rat::ofInt(A.int() - B.int() + (A.int() - B.int())) * Rat::inv_succ(A + B - 1),
+        λ k => Series::atanh_ratio(Series::atanh_X(A, B), Series::atanh_m(A, B), k), 0,
+        λ k _ => Series::atanh_small(Series::atanh_X(A, B), Series::atanh_m(A, B), k, small))
+}
+
+// Each below twice the other: the gap is below the smaller, c, so
+// 2·gap² <= 2c² <= (2c)² <= (A + B)².
+theorem Series::atanh_close(A, B: Nat, ha: A < B + B, hb: B < A + A): Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1 {
+    let s = A + B;
+    let x = Series::atanh_gap(A, B);
+    let g: (x = (A - B) + (B - A)) = refl;
+    let ex: (Series::atanh_X(A, B) = x * x) = refl;
+    let em: (Series::atanh_m(A, B) = s * s - 1) = refl;
+    let one: (1 * 1 <= s * s) = Nat::mul_le_mono(1, s, 1, s, omega(hb), omega(hb));
+    let sq = λ (c: Nat) (hx: x <= c) (hs: c + c <= s) => {
+        let xc: (x * x <= c * c) = Nat::mul_le_mono(x, c, x, c, hx, hx);
+        let cs: ((c + c) * (c + c) <= s * s) = Nat::mul_le_mono(c + c, s, c + c, s, hs, hs);
+        let e1: ((c + c) * (c + c) = c * (c + c) + c * (c + c)) = c.add_mul_distr(c, c + c);
+        let e2: (c * (c + c) = c * c + c * c) = c.mul_add_distr(c, c);
+        let r: (x * x + x * x <= s * s) = omega(xc, cs, e1, e2);
+        r
+    };
+    let both: (x * x + x * x <= s * s) = match Nat::le_total(A, B) {
+        Inl(ab) => sq(A, omega(ab, hb, g), omega),
+        Inr(ba) => sq(B, omega(ba, ha, g), omega),
+    };
+    omega(one, both, ex, em)
+}
+
+// a/b scaled into one binade: a' = a and b' = b·2^(wa-wb), or the other way
+// round, with a/b = (a'/b')·2^e.
+record Binade { a: Nat, b: Nat, e: Int }
+
+fn Binade::at(a, b: Nat, c: b.width() <= a.width() ∨ ¬(b.width() <= a.width())) → Binade {
+    match c {
+        Inl(_) => Binade(a, b * Nat::pow(2, a.width() - b.width()), (a.width() - b.width()).int()),
+        Inr(_) => Binade(a * Nat::pow(2, b.width() - a.width()), b, -(b.width() - a.width()).int()),
+    }
+}
+
+fn Binade::of(a, b: Nat) → Binade { Binade::at(a, b, b.width().le_dec(a.width())) }
+
+fn Binade::Balanced(self B: Binade) → Type { B.a < B.b + B.b ∧ B.b < B.a + B.a }
+
+// From the widths: a < 2^wa = 2^wb·2^(wa-wb) <= 2b·2^(wa-wb), and
+// b·2^(wa-wb) < 2^wb·2^(wa-wb) = 2^wa <= 2a.
+theorem Binade::scaled_close(a, b, wa, wb: Nat, ta: a < Nat::pow(2, wa), la: Nat::pow(2, wa) <= a + a,
+    tb: b < Nat::pow(2, wb), lb: Nat::pow(2, wb) <= b + b, le: wb <= wa):
+    a < b * Nat::pow(2, wa - wb) + b * Nat::pow(2, wa - wb) ∧ b * Nat::pow(2, wa - wb) < a + a
+{
+    let d = wa - wb;
+    let P = Nat::pow(2, d);
+    let pp: (0 < P) = Nat::pow_pos(a := 2, n := d);
+    let parts: (Nat::pow(2, wb + d) = Nat::pow(2, wb) * P) = Nat::pow_add(2, wb, d);
+    let back: (wb + d = wa) = omega(le);
+    let whole: (Nat::pow(2, wa) = Nat::pow(2, wb) * P) = j(back, λ y _ => Nat::pow(2, y) = Nat::pow(2, wb) * P, parts);
+    let up: (Nat::pow(2, wb) * P <= (b + b) * P) = Nat::mul_le_mono_r(P, Nat::pow(2, wb), b + b, lb);
+    let e1: ((b + b) * P = b * P + b * P) = b.add_mul_distr(b, P);
+    let below: (Succ(b) * P <= Nat::pow(2, wb) * P) = Nat::mul_le_mono_r(P, Succ(b), Nat::pow(2, wb), tb);
+    let e2: (Succ(b) * P = b * P + 1 * P) = b.add_mul_distr(1, P);
+    let e3: (1 * P = P) = P.mul_left_one();
+    And(omega(ta, whole, up, e1), omega(la, whole, below, e2, e3, pp))
+}
+
+theorem Binade::of_close(a, b: Nat, pa: 0 < a, pb: 0 < b): (Binade::of(a, b)).Balanced() {
+    let ta = a.lt_pow_width();
+    let tb = b.lt_pow_width();
+    let la = a.pow_width_le(pa);
+    let lb = b.pow_width_le(pb);
+    match b.width().le_dec(a.width()) as λ c => (Binade::at(a, b, c)).Balanced() {
+        Inl(le) => Binade::scaled_close(a, b, a.width(), b.width(), ta, la, tb, lb, le),
+        Inr(nle) => {
+            let c = Binade::scaled_close(b, a, b.width(), a.width(), tb, lb, ta, la, omega(nle));
+            And(c.right, c.left)
+        },
+    }
+}
+
+fn Binade::series(self B: Binade, h: B.Balanced()) → Series { Series::atanh2(B.a, B.b, Series::atanh_close(B.a, B.b, h.left, h.right)) }
+
+// log 2 = 2·atanh(1/3).
+fn Series::ln2() → Series { Series::atanh2(2, 1, trivial) }
+
+fn CReal::ln2() → CReal { Series::ln2().real() }
+
+// log(a/b) for positive naturals, as a checker expression whose leaves are
+// the two series: it is its own enclosure (`RealExpr::enclosed`).
+fn CReal::log_expr(a, b: Nat, pa: 0 < a, pb: 0 < b) → RealExpr {
+    let B = Binade::of(a, b);
+    RAdd(RBox((B.series(Binade::of_close(a, b, pa, pb))).enclosed()), RMul(RRat(Rat::ofInt(B.e)), RBox(Series::ln2().enclosed())))
+}
+
+theorem CReal::log_expr_wf(a, b: Nat, pa: 0 < a, pb: 0 < b): (CReal::log_expr(a, b, pa, pb)).Wf() { And(trivial, And(trivial, trivial)) }
+
+fn CReal::log_frac(a, b: Nat, pa: 0 < a, pb: 0 < b) → CReal { (CReal::log_expr(a, b, pa, pb)).eval() }
+
+fn CReal::log_frac_box(a, b: Nat, pa: 0 < a, pb: 0 < b) → Enclosed { (CReal::log_expr(a, b, pa, pb)).enclosed(CReal::log_expr_wf(a, b, pa, pb)) }
+
+fn CReal::log_rat(q: Rat, pos: 0 < q) → CReal { CReal::log_frac(q.num.natAbs(), q.den, q.num_abs_pos(pos), q.den_pos) }
+
+fn CReal::log_box(q: Rat, pos: 0 < q) → Enclosed { CReal::log_frac_box(q.num.natAbs(), q.den, q.num_abs_pos(pos), q.den_pos) }
+
+// The positivity proof only feeds the series' `small` fields, which no term
+// reads, so the two reals agree term by term.
+theorem CReal::log_rat_irrel(q: Rat, p1, p2: 0 < q): CReal::log_rat(q, p1) ≈ CReal::log_rat(q, p2) {
+    (CReal::log_rat(q, p1)).same_of_terms(CReal::log_rat(q, p2), λ n => (CReal::log_rat(q, p1)).at(n).same_refl())
+}
+
+// ---------------------------------------------------------------------------
+// log 1 = 0 (issues/float-log-one-exact.md): the one rational value log takes
+// at a rational, which the search alone cannot round in a directed mode. At
+// `a = b` the series is 2·atanh(0), whose first term, and so every term,
+// is 0, and the binade's exponent is 0, which scales the ln 2 term away.
+
+theorem Series::atanh2_diag(A, B: Nat, ab: A = B, small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1):
+    (Series::atanh2(A, B, small)).real() ≈ CReal::ofRat(0)
+{
+    let s = Series::atanh2(A, B, small);
+    let c = Rat::inv_succ(A + B - 1);
+    let z: (A.int() - B.int() + (A.int() - B.int()) = 0) = omega(ab);
+    let first: (s.term(0) ≈ 0) = j(sym(z), λ v _ => Rat::ofInt(v) * c ≈ 0, c.zero_mul());
+    let a0: (s.term(0).abs() ≈ 0) = Rat::abs_respects(first);
+    let err: (s.err(0) ≈ 0) = Rat::same_trans(Rat::add_respects(a0, a0), Rat::add_zero(0));
+    s.same_of_exact(0, omega, err)
+}
+
+// A balanced binade with equal ends and exponent 0 has log 0.
+theorem Binade::log_zero(self B: Binade, h: B.Balanced(), ab: B.a = B.b, e0: B.e = 0):
+    (RAdd(RBox((B.series(h)).enclosed()), RMul(RRat(Rat::ofInt(B.e)), RBox(Series::ln2().enclosed())))).eval() ≈ CReal::ofRat(0)
+{
+    let L = CReal::ln2();
+    let ser = Series::atanh2_diag(B.a, B.b, ab, Series::atanh_close(B.a, B.b, h.left, h.right));
+    let scaled: (CReal::ofRat(Rat::ofInt(B.e)) * L ≈ CReal::ofRat(0)) = j(sym(e0), λ v _ => CReal::ofRat(Rat::ofInt(v)) * L ≈ CReal::ofRat(0), L.zero_mul());
+    CReal::same_trans(CReal::add_respects(ser, scaled), CReal::add_zero(CReal::ofRat(0)))
+}
+
+// a/a is its own binade: both widths agree, so the first arm scales by 2^0.
+theorem Binade::of_diag(a: Nat): (Binade::of(a, a)).a = (Binade::of(a, a)).b ∧ (Binade::of(a, a)).e = 0 {
+    let w = a.width();
+    match w.le_dec(w) as λ c => (Binade::at(a, a, c)).a = (Binade::at(a, a, c)).b ∧ (Binade::at(a, a, c)).e = 0 {
+        Inl(_) => {
+            let z: (w - w = 0) = omega;
+            let one: (a = a * Nat::pow(2, w - w)) = j(sym(z), λ k _ => a = a * Nat::pow(2, k), omega);
+            And(one, omega(z))
+        },
+        Inr(n) => false_elim(n(omega)),
+    }
+}
+
+theorem CReal::log_frac_diag(a: Nat, pa, pb: 0 < a): CReal::log_frac(a, a, pa, pb) ≈ CReal::ofRat(0) {
+    let d = Binade::of_diag(a);
+    (Binade::of(a, a)).log_zero(Binade::of_close(a, a, pa, pb), d.left, d.right)
+}
+
+theorem CReal::log_frac_same(a, b: Nat, ab: a = b, pa: 0 < a, pb: 0 < b): CReal::log_frac(a, b, pa, pb) ≈ CReal::ofRat(0) {
+    j(ab, λ v _ => (pv: 0 < v) → CReal::log_frac(a, v, pa, pv) ≈ CReal::ofRat(0), λ pv => CReal::log_frac_diag(a, pa, pv))(pb)
+}
+
+// log q = 0 at every q ≈ 1, whatever its spelling: `num = den` there.
+theorem CReal::log_rat_of_one(q: Rat, pos: 0 < q, one: q ≈ 1): CReal::log_rat(q, pos) ≈ CReal::ofRat(0) {
+    let e: (q.num = q.den.int()) = omega(one);
+    let n: (q.num.natAbs() = q.den) = j(sym(e), λ v _ => v.natAbs() = q.den, refl);
+    CReal::log_frac_same(q.num.natAbs(), q.den, n, q.num_abs_pos(pos), q.den_pos)
+}

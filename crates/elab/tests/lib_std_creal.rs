@@ -12,8 +12,9 @@
 //! controls: a termwise proof where the law holds only eventually, a wrong
 //! law, a reversed or strengthened order law), and the evidence searches
 //! that must fail (an inverse at zero or an unknown sign, a negative power).
-//! Most vacuity controls are refused by the kernel: the elaborator's
-//! conversion leaves these sequence comparisons to it.
+//! The termwise controls are mismatches: a term is a dyadic read as a
+//! rational (`x.at(n)`), and the elaborator compares those itself; the
+//! order and product citations are still left to the kernel.
 
 use std::sync::OnceLock;
 
@@ -29,6 +30,7 @@ const MODULES: &[(&str, &str)] = &[
     ("pair", include_str!("../../../lib/std/core/pair.hthr")),
     ("list", include_str!("../../../lib/std/data/list.hthr")),
     ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("int", include_str!("../../../lib/std/num/int.hthr")),
     ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
@@ -41,6 +43,7 @@ const MODULES: &[(&str, &str)] = &[
     ("big_operator", include_str!("../../../lib/std/algebra/big_operator.hthr")),
     ("linarith", include_str!("../../../lib/std/tactic/linarith.hthr")),
     ("rat", include_str!("../../../lib/std/num/rat.hthr")),
+    ("dyadic", include_str!("../../../lib/std/num/float/dyadic.hthr")),
     ("creal", include_str!("../../../lib/std/num/creal.hthr")),
 ];
 
@@ -60,19 +63,19 @@ fn refused(prefix: &str, cases: &[&str], why: Refusal) {
 }
 
 /// Termwise proofs of laws that hold only eventually or not at all: the sum
-/// reads index 2n+1, so `x + 0` is close to `x` only from 2k+1 on
+/// reads index n+1, so `x + 0` is close to `x` only eventually
 /// (`CReal::add_zero`); the product's index depends on the factors' bounds in
 /// order, so even commutativity goes through `mul_close`.
 #[test]
 fn laws_are_not_termwise() {
     refused("creal_termwise", &[
-        "fn bad(x: CReal) → x + x ≈ x { (x + x).same_of_terms(x, λ n => x.seq(n).same_refl()) }",
-        "fn bad(x: CReal) → x + 0 ≈ x { (x + 0).same_of_terms(x, λ n => x.seq(n + n + 1).add_zero()) }",
+        "fn bad(x: CReal) → x + x ≈ x { (x + x).same_of_terms(x, λ n => x.at(n).same_refl()) }",
+        "fn bad(x: CReal) → x + 0 ≈ x { (x + 0).same_of_terms(x, λ n => x.at(n + 1).add_zero()) }",
         "fn bad(x, y: CReal) → x * y ≈ y * x {
-            (x * y).same_of_terms(y * x, λ n => x.seq(x.mul_at(y, n)).mul_comm(y.seq(x.mul_at(y, n))))
+            (x * y).same_of_terms(y * x, λ n => x.at(x.mul_at(y, n)).mul_comm(y.at(x.mul_at(y, n))))
         }",
-        "fn bad(x: CReal) → x * x ≈ x { (x * x).same_of_terms(x, λ n => x.seq(n).same_refl()) }",
-    ], Refusal::Kernel);
+        "fn bad(x: CReal) → x * x ≈ x { (x * x).same_of_terms(x, λ n => x.at(n).same_refl()) }",
+    ], Refusal::Mismatch);
 }
 
 /// Each lemma cited at a statement it does not prove.
@@ -87,8 +90,6 @@ fn lemmas_are_cited_at_their_own_statements() {
         "theorem bad(x: CReal, h: x.Apart(0)): x ^ (-1) ≈ x { x.pow_neg_one() }",
         // Adding to both sides keeps the direction of a gap.
         "fn bad(x, y, z: CReal, h: x < y) → y + z < x + z { x.add_lt_mono_r(y, z, h) }",
-        // Bishop's bound is 2/(n+1), not 1/(n+1).
-        "fn bad(x, y: CReal, h: x ≈ y, n: Nat) → (x.seq(n) -y.seq(n)).abs() <= Rat::inv_succ(n) { CReal::bishop_of_same(h, n) }",
         // Nonnegative factors give a nonnegative product only.
         "fn bad(x, y: CReal, hx: 0 <= x, hy: 0 <= y) → 0 < x * y { CReal::mul_nonneg(hx, hy) }",
     ], Refusal::Kernel);
@@ -102,6 +103,8 @@ fn lemmas_are_cited_at_their_own_statements() {
         "fn bad(x, y: CReal, hx: 0 <= x, hy: 0 < y) → 0 < x * y { CReal::mul_pos(hx, hy) }",
     ], Refusal::Says("which does not convert to the type expected here"));
     refused("creal_bad_cite_mismatch", &[
+        // Bishop's bound is 2 · 2^-n, not 2^-n.
+        "fn bad(x, y: CReal, h: x ≈ y, n: Nat) → (x.at(n) - y.at(n)).abs() <= Rat::inv_pow2(n) { CReal::bishop_of_same(h)(n) }",
         // A positive sum names one positive summand, not both.
         "fn bad(x, y: CReal, h: 0 < x + y) → 0 < x ∧ 0 < y { CReal::pos_of_add_pos(h) }",
         // A nonnegative factor keeps the direction, never reverses it.

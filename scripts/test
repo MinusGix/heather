@@ -266,16 +266,18 @@ native_bin_warmup() {
 
 # The CLI image store (crates/cli/src/showcase.rs CLI_CHECK_IMAGES) that the
 # library gate, the showcase gate and native_cat.rs/native_tools.rs's
-# `write-elf` share. `write-elf` loads its program's closure over the gate's
-# world (`--world lib`, docs/library-world-design.md §3), so it replays what
-# the gate built; cold, it would have to build the world's front itself, most
-# of the library, which no one process does under the rail. So the warmup is
+# `write-elf` share. Every module is keyed by its own closure
+# (docs/module-dag-design.md), so `write-elf` replays what the gate built;
+# cold, it would have to build its closure itself, most of the library, which
+# no one process does under the rail. So the warmup is
 # the gate: one child per folder, three at a time, each well inside the
 # rail. In the stale lanes the gate replays with their trade, as `write-elf`
 # then does. Only a focused run of a native target warms it here: an
 # unfiltered run's parallel phase starts the gate first and holds those
-# targets until it has finished (`PREREQUISITES` in run-test-targets.mjs),
-# so the gate runs once, beside the targets that do not read its store.
+# targets until `heather check --unbuilt` finds lib/native's and
+# lib/_tests/native's closures built, or the gate has finished
+# (`PREREQUISITES` in run-test-targets.mjs), so the gate runs once, beside
+# the targets that do not read its store.
 cli_images_warmup() {
   (
     ulimit -v 6291456

@@ -145,33 +145,6 @@ fn every_library_module_is_reached() {
     }
 }
 
-/// Every module a `write-elf --world lib` of a tool loads is a module of the
-/// library's world: `native_tools`' closure and the modules `write-elf`
-/// imports itself (`world::WRITE_ELF_IMPORTS`). A module outside the world
-/// loads after its process's own prefix, so the gate's `lib/native` child and
-/// `write-elf` key it differently, and the first `write-elf` after the gate
-/// elaborates it again (`issues/native-process-fixed-cost.md`). A module only
-/// `write-elf` reads joins the world by a `lib/_tests` probe that imports it,
-/// as `native_tools_tests` and `native_build_parts_tests` do.
-#[test]
-fn write_elf_loads_only_world_modules() {
-    let root = root();
-    let search = [root.join("lib/std"), root.join("lib")];
-    let world = heather_cli::world::World::of(&root.join("lib"), &search).unwrap_or_else(|e| panic!("the library's world: {}", e.msg));
-    let closure = heather_cli::loader::load_with(&root.join("lib/native/native_tools.hthr"), &search, heather_cli::world::WRITE_ELF_IMPORTS)
-        .unwrap_or_else(|e| panic!("write-elf's closure: {}", e.msg));
-    let outside: Vec<String> = closure
-        .iter()
-        .filter(|m| !world.order().contains(&m.path))
-        .map(|m| m.path.strip_prefix(&root).unwrap_or(&m.path).display().to_string())
-        .collect();
-    assert!(
-        outside.is_empty(),
-        "modules `write-elf` loads that are not in the library's world: {outside:?}\n\
-         Import each from a `lib/_tests` probe module so the gate builds the image `write-elf` replays."
-    );
-}
-
 /// `lib/_tests` is a leaf: nothing outside it imports one of its modules, and
 /// its stems end in `_tests` so they cannot collide with the modules they
 /// mirror.
@@ -243,18 +216,19 @@ fn gate_folders() -> Vec<PathBuf> {
     folders.into_iter().map(|p| p.strip_prefix(&root).expect("under the root").to_path_buf()).collect()
 }
 
-/// Every module under `lib/` checks, `lib/_tests` included: one `heather
-/// check` per folder ([`gate_folders`]), three side by side, through one semantic
-/// cache at width one as `scripts/test` runs every child. Folders share
-/// modules, and every child loads them over one world (`--world lib`,
-/// `docs/library-world-design.md`): the library's shared modules in one order,
-/// up to the last its folder needs, so a shared module has one image key in
-/// every child. Without it each folder's own load order gave the same module
-/// a different prefix, and from a cold store every child rebuilt the part of
-/// `std` it needed. The store is the showcase gate's too
-/// ([`showcase::CLI_CHECK_IMAGES`]); its single-flight build makes the second
-/// asker wait for the first's image rather than elaborate it again. Warm, every
-/// module replays; a changed module or compiler re-elaborates what changed.
+/// Every module under `lib/` checks, `lib/_tests` included, in two steps
+/// over one semantic cache at width one as `scripts/test` runs every child.
+/// First every module without an image is elaborated in a `heather check` of
+/// its own, four at a time, longest chain first (`--build-jobs`,
+/// `docs/module-dag-design.md` §12), so each module's CPU rail is its own and
+/// the gate's length is the import graph's critical path. Then one `heather
+/// check` per folder ([`gate_folders`]), four side by side, replays its
+/// closure and reports what it holds: its warnings, its matched refusals, and
+/// the errors of any module the first step could not build, which it
+/// elaborates again to say why. Every module is checked over its own import
+/// closure, so its image has one key in every process that loads it. The
+/// store is the showcase gate's too ([`showcase::CLI_CHECK_IMAGES`]). Warm,
+/// the first step finds nothing to build and every module replays.
 /// The fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`) replays
 /// images an earlier build wrote, as the showcase gate does.
 ///
@@ -267,11 +241,35 @@ fn gate_folders() -> Vec<PathBuf> {
 fn every_library_module_checks() {
     let root = root();
     let stale = std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale");
-    // Three at a time, as the suite runner runs targets: each child may
-    // hold a library prefix in memory.
-    // In the order the world placed the folders' modules: a child then finds
-    // the shared modules before its own built by the children before it,
-    // rather than elaborating the world's front under its own rail.
+    let images_flags = |cmd: &mut Command| {
+        cmd.current_dir(&root);
+        cmd.env("HEATHER_KERNEL_WORKERS", "1");
+        cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+        cmd.arg("--expectations");
+        if stale {
+            cmd.arg("--accept-stale-images");
+        }
+    };
+    // Four at a time, one per CPU of a cloud box: each process holds at
+    // most one closure of the library, under 2 GB, and four of them stay
+    // far inside the box (`docs/module-dag-design.md` §8).
+    let mut build = Command::new(env!("CARGO_BIN_EXE_heather"));
+    build.arg("check");
+    images_flags(&mut build);
+    // The native folders' closures go first: the test runner starts the
+    // native gates once their images exist (`PREREQUISITES` in
+    // `scripts/run-test-targets.mjs`, whose `built` this mirrors), and the
+    // step is CPU-bound, so building them first moves that release forward
+    // without lengthening the step (`docs/module-dag-design.md` §12).
+    build.args(["--build-first", "lib/native", "--build-first", "lib/_tests/native"]);
+    let out = build.args(["--build-jobs", "4", "--build-only", "lib"]).output().expect("run heather check");
+    let built = String::from_utf8_lossy(&out.stderr).into_owned();
+    // Printed with `--nocapture`: what the first step built, and what it
+    // could not (the folder checks below report why).
+    eprintln!("{}", built.lines().filter(|l| l.starts_with("build: ")).collect::<Vec<_>>().join("\n"));
+    assert!(out.status.success(), "the build step did not run: {built}");
+    // Small closures first, the order `World::folders` places them in. Every
+    // module that can be built already is, so a child replays.
     let world = heather_cli::world::World::of(&root.join("lib"), &[root.join("lib/std"), root.join("lib")]).unwrap_or_else(|e| panic!("the library's world: {}", e.msg));
     let mut folders = gate_folders();
     folders.sort_by_key(|f| world.folders().iter().position(|w| w.starts_with(root.join(f))).unwrap_or(usize::MAX));
@@ -279,24 +277,18 @@ fn every_library_module_checks() {
     let failures = std::sync::Mutex::new(Vec::new());
     let started = std::time::Instant::now();
     std::thread::scope(|scope| {
-        for _ in 0..3 {
+        for _ in 0..4 {
             scope.spawn(|| loop {
                 let Some(folder) = queue.lock().expect("queue").pop_front() else { break };
                 let begun = started.elapsed().as_secs_f64();
                 let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
-                cmd.current_dir(&root).arg("check");
-                cmd.env("HEATHER_KERNEL_WORKERS", "1");
-                cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
-                cmd.arg("--expectations").arg("--world").arg("lib");
-                if stale {
-                    cmd.arg("--accept-stale-images");
-                }
+                cmd.arg("check");
+                images_flags(&mut cmd);
                 cmd.arg(&folder);
                 let out = cmd.output().expect("run heather check");
                 let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
                 text.push_str(&String::from_utf8_lossy(&out.stderr));
-                // Printed with `--nocapture` and in a failure's log: which
-                // folders the gate's chain of module builds waited on.
+                // Printed with `--nocapture` and in a failure's log.
                 eprintln!("gate folder\t{}\t{begun:.1}\t{:.1}", folder.display(), started.elapsed().as_secs_f64());
                 let ok_line = format!("{}: ok", folder.display());
                 if !out.status.success() || !text.contains(&ok_line) {

@@ -70,6 +70,10 @@ pub struct Counts {
     pub statements_checked: usize,
     /// Body-less declarations whose statement a stored verdict vouched for.
     pub statement_hits: usize,
+    /// Module replays a stored verdict about the whole replay vouched for
+    /// ([`KernelGate::admits_replay`]): their declarations were neither
+    /// checked nor asked about one by one.
+    pub replay_hits: usize,
 }
 
 impl Counts {
@@ -80,6 +84,7 @@ impl Counts {
             hashed: self.hashed - earlier.hashed,
             statements_checked: self.statements_checked - earlier.statements_checked,
             statement_hits: self.statement_hits - earlier.statement_hits,
+            replay_hits: self.replay_hits - earlier.replay_hits,
         }
     }
 }
@@ -87,6 +92,8 @@ impl Counts {
 /// The name a statement verdict is stored under. Names are metadata
 /// (`docs/cache-v1-design.md` §8) and replay has none to give.
 pub const STATEMENT_ENTRY: &str = "<statement>";
+/// The name column of a whole-replay verdict ([`KernelGate::replay_accepted`]).
+pub const REPLAY_ENTRY: &str = "<replay>";
 
 struct Inner {
     store: Store,
@@ -420,6 +427,22 @@ impl KernelGate for Cache {
     /// in a context whose interfaces hash thus": the interface hash covers
     /// the statement and, through its references, everything the statement
     /// check reads (`merkle::statement_key`).
+    /// A whole module replay, keyed by its caller (the bytes and the world
+    /// under them, `docs/module-dag-design.md` §13). Its interface hashes are
+    /// not taken: the prefix absorbs them lazily if a later declaration asks.
+    fn admits_replay(&self, key: &[u8; 32]) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        let hit = inner.store.contains(key);
+        if hit {
+            inner.counts.replay_hits += 1;
+        }
+        hit
+    }
+
+    fn replay_accepted(&self, key: &[u8; 32]) {
+        self.inner.borrow_mut().store.insert(*key, *key, REPLAY_ENTRY);
+    }
+
     fn admits_statement(&self, psi: &GlobalCtx, binding: &heather_kernel::term::GlobalBinding) -> bool {
         let mut inner = self.inner.borrow_mut();
         let hit = match inner.statement_key(psi, binding) {

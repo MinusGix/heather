@@ -304,7 +304,7 @@ module.exports = grammar({
     head_index_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('value', $._head_expression), '[', field('index', $._expression), ']',
     )),
-    head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._head_expression)),
+    head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._head_expression)),
     head_binary_expression: $ => choice(
       ...headBinary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...headBinary($, ['∨'], PREC.OR, 'right'),
@@ -386,7 +386,7 @@ module.exports = grammar({
       choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._declaration_type),
       ',', field('body', $._declaration_type),
     )),
-    declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._declaration_type)),
+    declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._declaration_type)),
 
     // A `let`/`have` annotation runs up to the binder's `=`, so, as in the
     // compiler (parser.rs `no_eq`), it is a declaration type without the
@@ -421,7 +421,7 @@ module.exports = grammar({
       choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._annotation_type),
       ',', field('body', $._annotation_type),
     )),
-    annotation_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._annotation_type)),
+    annotation_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._annotation_type)),
 
     _expression: $ => choice(
       $.identifier,
@@ -617,7 +617,7 @@ module.exports = grammar({
     function_type: $ => prec.right(PREC.ARROW, seq(
       choice($.binder_group, $.implicit_binder_group, $._expression), choice('->', '→'), $._expression,
     )),
-    prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._expression)),
+    prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._expression)),
     binary_expression: $ => choice(
       ...binary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...binary($, ['∨'], PREC.OR, 'right'),

@@ -12,10 +12,11 @@ use std::process::{Command, Stdio};
 
 use heather_cli::showcase;
 
-/// One `write-elf` of cat through the library gate's image store, over the
-/// gate's world (`--world lib`, `docs/library-world-design.md` §3), so its
-/// closure replays what the gate built; the suite runs the gate first and
-/// this target after it (`PREREQUISITES` in scripts/run-test-targets.mjs). In the suite's stale lanes it replays images an earlier
+/// One `write-elf` of cat through the library gate's image store, whose
+/// closure replays what the gate built (every module is keyed by its own
+/// closure, `docs/module-dag-design.md`); the suite runs the gate first and
+/// starts this target once the images it replays are built
+/// (`PREREQUISITES` in scripts/run-test-targets.mjs). In the suite's stale lanes it replays images an earlier
 /// build wrote, as the gate does: without that, every compiler edit made
 /// this test rebuild the whole closure from source.
 fn write_cat(output: &Path) {
@@ -29,8 +30,7 @@ fn write_elf(file: &str, source: &str, output: &Path) -> std::process::Output {
     cmd.current_dir(&root)
         .args(["write-elf", file, source, "-o"])
         .arg(output)
-        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES)
-        .args(["--world", "lib"]);
+        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }

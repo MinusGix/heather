@@ -1,11 +1,11 @@
 ---
 title: Build a dozen GNU-compatible tools natively and test them against GNU
-status: open
+status: closed
 labels: [native,examples,tests]
 area: heather-in-heather
 milestone: [hih-tools]
 created: 2026-10-26
-updated: 2026-10-28
+updated: 2026-10-31
 ---
 
 Round 10 of `docs/native-real-programs-plan.md` (§2, §6), and the round that
@@ -42,3 +42,4 @@ Rounds 1–9 of the plan: [[native-source-bytes]], [[native-compile-capacity]],
 - 2026-10-28: cat's test dies at the CPU rail whenever its certificate is
   checked cold, after any library edit ([[native-tool-test-cold-certificate-rail]]);
   more tools in `native_tools.rs` meet the same rail.
+- 2026-10-31: 2026-10-31: Closed by Minus's decision (docs/compiler-milestones-proposal.md §8): hih-tools closes at the nine tools built, kept as a regression corpus. grep -F moves to [[native-compiled-procedures]], sort and tac to [[native-heap-arena]]; basename, dirname, rev and cmp are left for anyone who wants them.

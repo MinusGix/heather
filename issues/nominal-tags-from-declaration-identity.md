@@ -1,10 +1,10 @@
 ---
 title: Derive nominal tags from the declaration, not from how many inductives came before it
-status: open
+status: closed
 labels: [elaboration,inductives,caching]
 area: infrastructure
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-30
 ---
 
 An inductive's nominal tag is the count of inductives the elaborator
@@ -50,3 +50,7 @@ remaps.
 - **`docs/library-world-design.md`** §4: this is the first of the two
   changes that would let a process load only its closure; the second is
   the early cutoff observing only what the closure contributes.
+
+## Log
+
+- 2026-10-30: Done on [[module-dag-build]]: `types::declaration_tag` hashes `module::Name` (the IWf shape is `D#shape`), a collision is refused naming both (`a_tag_collision_is_refused_naming_both`), and `next_tag` is gone; the image format version is bumped. A tag is a compact `NatLit` either way, so its magnitude costs conversion nothing (`docs/module-dag-design.md` §3).

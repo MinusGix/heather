@@ -1,0 +1,126 @@
+// Probes of the cast edges (lib/std/algebra/morphism.hthr, the `…_hom`
+// values beside each target type) as `mono` reads them
+// (lib/std/tactic/cast.hthr; docs/casting-design.md §6.4). Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import cast; import mono; import omega; import ring; import linarith;
+import relation_props; import algebra_rel; import semiring; import ordered_field; import morphism; import dyadic;
+
+// An image of an operation is read as the operation of the images, on
+// either side, and the order between the images then splits as usual.
+theorem add_left(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x, hy: c.rat() <= y): (a + c).rat() <= x + y { by mono() }
+theorem add_right(a, c: Dyadic, x, y: Rat, hx: x <= a.rat(), hy: y <= c.rat()): x + y <= (a + c).rat() { by mono() }
+theorem neg_left(a: Dyadic, x: Rat, h: x <= a.rat()): (-a).rat() <= -x { by mono() }
+theorem mul_left(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x, hy: c.rat() <= y, ha: 0 <= a.rat(), hc: 0 <= c.rat()): (a * c).rat() <= x * y { by mono() }
+theorem strict_left(a, c: Dyadic, x, y: Rat, hx: a.rat() < x, hy: c.rat() <= y): (a + c).rat() < x + y { by mono() }
+// Nested operations move layer by layer.
+theorem nested(a, b, c: Dyadic, x, y, z: Rat, ha: a.rat() <= x, hb: b.rat() <= y, hc: c.rat() <= z, hb0: 0 <= b.rat(), hc0: 0 <= c.rat()): (a + b * c).rat() <= x + y * z { by mono() }
+// A subtraction is a sum by definition: the image of `a - c` pushes to a
+// sum, and the other side's `x - y` is read as `x + -y` to meet it.
+theorem sub_left(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x, hy: y <= c.rat()): (a - c).rat() <= x - y { by mono() }
+theorem sub_right(a, c: Dyadic, x, y: Rat, hx: x <= a.rat(), hy: c.rat() <= y): x - y <= (a - c).rat() { by mono() }
+// An order between two images of one edge is the order of what they are
+// images of, so a `Dyadic::Le` fact closes a `Rat` goal.
+theorem order(a, b: Dyadic, h: a <= b): a.rat() <= b.rat() { by mono() }
+theorem order_strict(a, b: Dyadic, h: a < b): a.rat() < b.rat() { by mono() }
+// The other edges.
+theorem real_add(p, q: Rat, x, y: CReal, hp: CReal::ofRat(p) <= x, hq: CReal::ofRat(q) <= y): CReal::ofRat(p + q) <= x + y { by mono() }
+theorem int_add(m, n: Int, x, y: Rat, hm: Rat::ofInt(m) <= x, hn: Rat::ofInt(n) <= y): Rat::ofInt(m + n) <= x + y { by mono() }
+// An image of an image: `≈` is carried through the outer edge.
+theorem two_edges(a, c: Dyadic, x, y: CReal, hx: CReal::ofRat(a.rat()) <= x, hy: CReal::ofRat(c.rat()) <= y): CReal::ofRat((a + c).rat()) <= x + y { by mono() }
+
+// A fact stated with its casts read another way closes the goal: the
+// images pushed to the leaves on one side and not the other.
+theorem pushed_fact(a, b, c: Dyadic, x: Rat, h: a.rat() + b.rat() * c.rat() <= x): (a + b * c).rat() <= x { by mono() }
+
+// `cast_from(h)`: the goal from `h`, the two agreeing once their casts are
+// read, with `h` pushed in, pulled out, at a carrier an edge maps in (one
+// or two edges deep), or an `≈`.
+theorem from_pushed(a, b, c: Dyadic, x: Rat, h: a.rat() + b.rat() * c.rat() <= x): (a + b * c).rat() <= x { by cast_from(h) }
+theorem from_pulled(a, c: Dyadic, x: Rat, h: (a + c).rat() <= x): a.rat() + c.rat() <= x { by cast_from(h) }
+theorem from_source(a, b: Dyadic, h: a <= b): a.rat() <= b.rat() { by cast_from(h) }
+theorem from_two_edges(a, b: Dyadic, h: a < b): CReal::ofRat(a.rat()) < CReal::ofRat(b.rat()) { by cast_from(h) }
+theorem from_same(a, c: Dyadic): (a + c).rat() ≈ a.rat() + c.rat() { by cast_from(Rat::same_refl(a.rat() + c.rat())) }
+// An `Int` fact read at `Rat`: the numeral `1` at `Rat` is `Rat::ofInt`'s
+// image of `Int`'s, so `m + 1` pushes to `ofInt(m) + 1`.
+theorem from_int(m, n: Int, h: m + 1 <= n): Rat::ofInt(m) + 1 <= Rat::ofInt(n) { by cast_from(h) }
+
+// `cast_to(S, prove)`: the goal stated as wanted, proved by `prove`.
+theorem to_pushed(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x, hy: c.rat() <= y): (a + c).rat() <= x + y { by cast_to(a.rat() + c.rat() <= x + y, mono()) }
+theorem to_source(a, b: Dyadic, x: Rat, h: a <= b): a.rat() <= b.rat() { by cast_to(a <= b, assumption()) }
+
+// `ring` and `linarith` read an image of an operation through its edge's
+// law, as `mono` does: the image is an atom defined by the law's right side.
+theorem ring_add(a, c: Dyadic): (a + c).rat() ≈ c.rat() + a.rat() { ring }
+theorem ring_mul(a, b, c: Dyadic): (a * (b + c)).rat() ≈ a.rat() * b.rat() + a.rat() * c.rat() { ring }
+theorem ring_neg(a: Dyadic): (-a).rat() + a.rat() ≈ 0 { ring }
+theorem ring_int(m, n: Int): Rat::ofInt(m * n + m) ≈ Rat::ofInt(m) * (Rat::ofInt(n) + 1) { ring }
+theorem ring_two_edges(a, c: Dyadic): CReal::ofRat((a + c).rat()) ≈ CReal::ofRat(a.rat()) + CReal::ofRat(c.rat()) { ring }
+theorem linarith_add(a, c: Dyadic, x: Rat, h: a.rat() <= x, k: c.rat() <= x): (a + c).rat() <= x + x { linarith }
+theorem linarith_real(p, q: Rat, x: CReal, h: CReal::ofRat(p) + CReal::ofRat(q) < x): CReal::ofRat(p + q) < x { linarith }
+// `omega` decides at `Int`, and the `Int` fact is read at `Rat` through the
+// edge: `Rat::ofInt(m + 1)` is `Rat::ofInt(m) + 1`.
+theorem omega_then_linarith(m, n: Int, h: m < n): Rat::ofInt(m) + 1 <= Rat::ofInt(n) {
+    let k: (m + 1 <= n) = omega;
+    linarith(Rat::ofInt_le(m + 1, n, k))
+}
+// Subtraction is the add law at a negation, and `0` and `1` are the
+// images of the source's.
+theorem ring_sub(a, c: Dyadic): (a - c).rat() ≈ a.rat() - c.rat() { ring }
+theorem ring_sub_int(m, n: Int): Rat::ofInt(m - n) + Rat::ofInt(n) ≈ Rat::ofInt(m) { ring }
+theorem ring_zero(a: Dyadic): (a * 0).rat() ≈ 0 { ring }
+theorem ring_one(a: Dyadic): (a * 1).rat() ≈ a.rat() { ring }
+theorem from_sub(a, c: Dyadic, x: Rat, h: a.rat() - c.rat() <= x): (a - c).rat() <= x { by cast_from(h) }
+theorem from_zero(a: Dyadic, x: Rat, h: a.rat() + 0 <= x): (a + 0).rat() <= x { by cast_from(h) }
+theorem from_one(a: Dyadic, x: Rat, h: a.rat() * 1 <= x): (a * 1).rat() <= x { by cast_from(h) }
+
+// `Nat → Int` is an edge (`Int::ofNat_hom`, a semiring morphism): `ring`
+// at `Int` reads `OfNat(m + n)` and `(m * n).int()` by its laws, and
+// `cast_from` carries a `Nat` fact to `Int`, or on to `Rat`.
+theorem nat_ring_add(m, n: Nat): OfNat(m + n) * OfNat(2) = OfNat(m) * OfNat(2) + OfNat(n) * OfNat(2) { ring }
+theorem nat_ring_mul(m, n: Nat): (m * n + m).int() = m.int() * (n.int() + OfNat(1)) { ring }
+theorem nat_linarith(m, n: Nat, x: Int, h: OfNat(m) + OfNat(n) <= x): OfNat(m + n) <= x { linarith }
+theorem nat_ring_rat(m, n: Nat): Rat::ofInt(OfNat(m * n)) ≈ Rat::ofInt(OfNat(m)) * Rat::ofInt(OfNat(n)) { ring }
+theorem nat_from(m, n: Nat, h: m <= n): m.int() <= n.int() { by cast_from(h) }
+theorem nat_from_add(m, n: Nat, h: m + 1 <= n): m.int() + OfNat(1) <= n.int() { by cast_from(h) }
+theorem nat_from_mul(m, n: Nat, h: m * n < n): OfNat(m) * OfNat(n) < OfNat(n) { by cast_from(h) }
+theorem nat_from_rat(m, n: Nat, h: m <= n): Rat::ofInt(OfNat(m)) <= Rat::ofInt(OfNat(n)) { by cast_from(h) }
+theorem nat_from_pulled(m, k: Nat, x: Int, h: m.int() + k.int() <= x): (m + k).int() <= x { by cast_from(h) }
+
+// A goal at `Dyadic` is lowered: an order between two values is reflected
+// from the order of their images (`le_of_map_law`), so a `Rat` fact, or a
+// `Rat` statement proved there, carries to it.
+theorem lower_from(a, b: Dyadic, h: a.rat() + b.rat() <= 0): a + b <= 0 { by cast_from(h) }
+theorem lower_neg(hi: Dyadic, hn: hi < 0): 0 < -hi { by cast_from(Rat::neg_lt(x := hi.rat(), y := Dyadic::rat(0), h := hn)) }
+theorem lower_to(a, b, c: Dyadic, h: a <= b): a + c <= b + c { by cast_to(a.rat() + c.rat() <= b.rat() + c.rat(), mono()) }
+theorem dyadic_up(a, b: Dyadic, h: a + b <= 0): a.rat() + b.rat() <= 0 { by cast_from(h) }
+
+// A definition that is an image under another name (`Finite::val` is
+// `x.dyadic().rat()`) is read as the image it unfolds to.
+fn image_of(a: Dyadic) → Rat { a.rat() }
+theorem ring_wrapper(a, c: Dyadic): image_of(a) + image_of(c) ≈ (a + c).rat() { ring }
+theorem ring_wrapper_fact(a, c: Dyadic, h: image_of(a) + image_of(c) ≈ 0): (a + c).rat() ≈ 0 { ring(h) }
+
+// A law reads an image as what it is, not as anything ring-equal to it.
+// expect-error: it is not an identity of commutative rings
+theorem ring_wrong(a, c: Dyadic): (a * c).rat() ≈ a.rat() + c.rat() { ring }
+
+// The edges as values: their laws are their fields.
+theorem field_add(a, c: Dyadic): (a + c).rat() ≈ a.rat() + c.rat() { OrderedRingHom::add_law<Dyadic, Rat>(Dyadic::rat_hom(), a, c) }
+theorem field_reflect(p, q: Rat, h: CReal::ofRat(p) <= CReal::ofRat(q)): p <= q { OrderedRingHom::le_of_map_law<Rat, CReal>(CReal::ofRat_hom(), p, q, h) }
+
+// An image with no law for its operation stays an atom, and the goal is
+// reported as `mono` reports any goal it cannot prove.
+// expect-error: mono: nothing proves this goal
+theorem no_law(a: Dyadic, p: Nat, x: Rat, h: a.rat() <= x): a.down(p).rat() <= x { by mono() }
+// Casts read differently are still the same statement or nothing: a fact
+// that differs by more than its casts does not carry.
+// expect-error: cast_from: the fact and the goal differ once their casts are read
+theorem from_other(a, c: Dyadic, x: Rat, h: (a * c).rat() <= x): a.rat() + c.rat() <= x { by cast_from(h) }
+// The failure names where the two first differ once their casts are read:
+// here the right sides, `x` against `y`.
+// expect-error: has this instead
+theorem from_differ(a, c: Dyadic, x, y: Rat, h: (a + c).rat() <= x): a.rat() + c.rat() <= y { by cast_from(h) }
+// The facts must still be there: a cast step does not invent a bound.
+// expect-error: mono: nothing proves this goal
+theorem no_fact(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x): (a + c).rat() <= x + y { by mono() }
