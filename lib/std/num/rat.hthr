@@ -2238,16 +2238,31 @@ theorem Rat::root_below({g, x: Rat}, nn: 0 <= x, pos: 0 < g, lt: x < g * g): ∃
     Exists(hi, And(nlinarith(ht, lt, pos, hi_nn), And(hi_nn, nlinarith(ht, sq))))
 }
 
-// `|R - q| <= u·q + e` at a nonnegative `q`, as its two affine sides.
-theorem Rat::sides_of_abs({R, q, u, e: Rat}, nn: 0 <= q, h: (R - q).abs() <= u * q.abs() + e): R <= q + u * q + e ∧ q - u * q - e <= R {
+// `|R - q| <= u·|q| + e` at a nonnegative `q`, as two affine bounds in `q`
+// (lib/std/num/float/float_real.hthr reads them at a real through the
+// interval around it).
+theorem Rat::sides_of_abs({R, q, u, e: Rat}, nn: 0 <= q, h: (R - q).abs() <= u * q.abs() + e): R <= (1 + u) * q + e ∧ (1 - u) * q + -e <= R {
     let uq: (u * q.abs() ≈ u * q) = Rat::mul_respects(u.same_refl(), q.abs_of_nonneg(nn));
     And(linarith((R - q).le_abs(), h, uq), linarith((R - q).neg_le_abs(), h, uq))
 }
 
-// `|R - q| <= u·|q| + e` at a nonpositive `q`, as its two affine sides.
-theorem Rat::sides_of_abs_nonpos({R, q, u, e: Rat}, np: q <= 0, h: (R - q).abs() <= u * q.abs() + e): R <= q - u * q + e ∧ q + u * q - e <= R {
+// `|R - q| <= u·|q| + e` at a nonpositive `q`, as two affine bounds in `q`.
+theorem Rat::sides_of_abs_nonpos({R, q, u, e: Rat}, np: q <= 0, h: (R - q).abs() <= u * q.abs() + e): R <= (1 - u) * q + e ∧ (1 + u) * q + -e <= R {
     let uq: (u * q.abs() ≈ u * -q) = Rat::mul_respects(u.same_refl(), q.abs_of_nonpos(np));
     And(linarith((R - q).le_abs(), h, uq), linarith((R - q).neg_le_abs(), h, uq))
+}
+
+// Their slopes `1 ± u` are nonnegative while `0 <= u <= 1`.
+theorem Rat::slopes_nonneg({u: Rat}, u_nn: 0 <= u, u_le: u <= 1): 0 <= 1 - u ∧ 0 <= 1 + u { And(linarith(u_le), linarith(u_nn)) }
+
+// Ranges below zero, read as absolute values.
+theorem Rat::neg_nonpos_of_pos({m: Rat}, h: 0 < m): -m <= 0 { linarith(h) }
+
+theorem Rat::abs_le_of_between({q, M: Rat}, lo: -M <= q, np: q <= 0): q.abs() <= M { linarith(q.abs_of_nonpos(np), lo) }
+
+theorem Rat::abs_between_neg({q, m, M: Rat}, pos: 0 < m, lo: -M <= q, hi: q <= -m): m <= q.abs() ∧ q.abs() <= M {
+    let e = q.abs_of_nonpos(linarith(hi, pos));
+    And(linarith(e, hi), linarith(e, lo))
 }
 
 // The roots from below approach `|q|` from each side
