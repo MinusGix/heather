@@ -126,6 +126,11 @@ and 6.3M steps). `read_#_part` took 5 s. This is most of the "rest" column
 for the large tools. Case: `native/elf-cold-head-n` (heavy) carries it at
 mid size.
 
+**Update 2026-10-31:** on master f9c6e9d the reads were 5.7 s (`bytes`),
+1.2 s (`entry`) and 2.0 s (`part`) of `cat_files_tool`'s 86 s, linear in the
+code. The literals were the larger per-size constants; they are cut and the
+run is 65 s (`issues/native-certificate-literal-cost.md`).
+
 ## T4. lib/native's cold gate child (owners: `issues/native-gate-child-cold-at-rail.md`, `issues/native-lemma-kernel-steps.md`)
 
 At 302 CPU-s (299 user plus 3 system), the child is over the suite's 300 s
