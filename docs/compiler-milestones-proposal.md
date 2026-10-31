@@ -1,7 +1,7 @@
 # Compiler milestones, reconsidered: ordinary Heather compiles
 
-Status: **proposal, 2026-10-31, for Minus's decision.** Nothing here is built,
-and `docs/roadmap.md` is unchanged until the decisions in §7 are made. Written
+Status: **proposal, 2026-10-31; thesis adopted by Minus, §8 items 2–6 open.** Nothing here is built,
+and `docs/roadmap.md` is unchanged until the decisions in §8 are made. Written
 on master `cb5331c`, after `hih-tools` reached nine of its fourteen tools.
 
 Minus's ask (2026-10-31): Minus is not sure that building out the remaining tools
@@ -43,15 +43,25 @@ directions all come back to the same gap, so the plan closes it:
   its output, so this changes no trust, and it speeds up the step that the
   current cost profile says is the slowest (§5, milestone `hih-self`
   re-scoped).
+- Proofs **compose against interfaces, not code**: a definition can be
+  used through its equations and lemmas without being unfolded, automation
+  finds a type's lemmas in registries instead of hard-coded tables, loops
+  and procedures come with invariant and contract rules, and large proofs
+  keep their sharing so they need no hand staging. Minus added this
+  direction on 2026-10-31 ("it should be easy to prove your specific
+  properties without needing to think about lots of code, and even the
+  automation should try to be modular") (§6, milestone
+  `lang-proof-modularity`).
 
 **`hih-tools` stops being a target and becomes a regression corpus.** It
 would close at the nine tools that are built. Every later round's "done
 when" rewrites some of them in the new surface, and they must still pass
 their GNU tests. `grep -F` and `sort` come back as the first customers of
-procedures and of the heap, not as tools for their own sake (§6).
+procedures and of the heap, not as tools for their own sake (§7).
 
-The order of the rounds is in §6. The first two rounds (the sequencing
-design, and the native front end's design) can start now in parallel.
+The order of the rounds is in §7. The first rounds (the sequencing design,
+the proof-modularity design, and the native front end's design) can start
+now in parallel.
 
 ---
 
@@ -335,9 +345,81 @@ the above, sits in the native lane, and makes every compiled program
 smaller. It is the first optimisation pass that is a Heather function with
 its proof, which is what `hih-passes` asks for.
 
+## 6. Proofs: compose against interfaces (`lang-proof-modularity`)
+
+Minus's second ask (2026-10-31): proving a specific property should not
+mean thinking about lots of code, and automation should be modular too,
+for reasoning and for cost. Today both fail for the same reason: **every
+`fn` is transparent everywhere**, so the elaborator, the kernel and every
+tactic see a definition's whole body, and nothing marks the facts a client
+is meant to use instead.
+
+### 6.1 What it costs today
+
+`docs/proof-patterns.md` is, read one way, a list of the places where
+proofs are not modular, each with the workaround the rounds found:
+
+- "Split a long proof into stage theorems with written statements": one
+  composed theorem took 80 s, the same stages took 0.2 s each. The
+  elaborator loses the sharing a composed proof has
+  (`frontend-large-proof-composition-cost`: 68.9 s of frontend against
+  7.5 s of kernel on one certificate).
+- "Never compare two separately computed values by `refl`" and "prove at a
+  neutral parameter, instantiate at the literal": conversion unfolds
+  definitions in lockstep because nothing says it should not.
+- A proof whose state λ holds many lets makes every later let dearer, and
+  nothing says which let (`let-fanout-diagnostic`).
+- The `wc` proof of 2026-10 needed `split_all; all_goals { bv_omega }` per
+  field and a hand copy of the step (`docs/native-programs-read-like-programs-design.md`
+  §1); `cat_implements` reasons about the `Source` tree statement by
+  statement.
+
+Automation is monolithic in the same way. `mono` reads a hard-coded carrier
+table (`mono_carriers` in `lib/std/tactic/mono.hthr`), so a new ordered
+type gets `mono` by editing the tactic. `ring`, `linarith` and `norm_num`
+each have their own way of being told about a carrier. A tactic that
+proves a goal about `f` does it by unfolding `f`, so its cost grows with
+`f`'s code rather than with the fact asked for.
+
+### 6.2 What it proposes
+
+- **Definitions with an interface.** A `fn` can be declared so that
+  clients use it through generated equations (its unfolding equations, as
+  `decreases` functions already get, `docs/decreases-unfolding-design.md`)
+  and the lemmas proved about it, while conversion outside its module does
+  not unfold it unless a proof says `unfold f`. Evaluation still runs it
+  (closed verdicts by `refl` keep working), so this is about what a proof
+  sees, not about what computes. Theorems are already opaque
+  (`docs/have-design.md`); this extends the boundary to definitions.
+- **Lemma registries that automation reads.** One declaration-side
+  mechanism (an attribute or a registry entry beside the lemma) says "this
+  is a monotonicity law", "this is a step equation", "this is a ring
+  morphism". `mono`, `norm_num`, `ring`'s atoms, `rewrite` sets and the
+  later `tac-general` tactics read it through the host interface. A new
+  type gets automation by registering its lemmas, and a tactic proving a
+  fact about `f` uses `f`'s registered lemmas instead of its body.
+- **Rules for loops and procedures.** Every loop of §3 comes with an
+  invariant rule: `inv(init)` and `inv(s) → inv(step(s, x))` give
+  `inv(result)`. A procedure of N2 comes with its contract, proved once and
+  cited at every call. Then the spec of `count_words` is an invariant and a
+  step lemma, and a property of a native tool is proved about its Heather
+  function, not about its `Source`.
+- **Sharing kept, staging automatic.** The elaborator keeps the sharing of
+  a large composed proof (`frontend-large-proof-composition-cost`), reports
+  the `let` that multiplies a slow proof (`let-fanout-diagnostic`), and
+  where it must stage, it stages by itself. The proof-patterns rule "split
+  into stage theorems" then retires.
+- **Modular automation is also cheaper automation.** A tactic that proves
+  a generic lemma once at neutral parameters and instantiates it (the rule
+  of `docs/proof-patterns.md` §1) should do that by itself, and memoise
+  results per goal within a declaration.
+
+Each round's "done when" names the `docs/proof-patterns.md` rules it
+retires, so the guide shrinks as the milestone lands.
+
 ---
 
-## 6. The rounds, in order
+## 7. The rounds, in order
 
 Each round is one thread. "Beside" names rounds whose footprints are
 disjoint enough to run at the same time (`docs/roadmap.md`, Parallel
@@ -355,11 +437,18 @@ lanes).
 | R8 | `hih-native-heather` | **N2: procedures** | compiled calls with frames on the process stack, derived contracts, a register convention; `io-image-process-stack` finished | one helper called from several sites is compiled once; a non-tail recursive function compiles; `grep -F` is built with a shared line-buffer helper | R5 | R7 |
 | R9 | `hih-native-heather` | **N4: the heap** | a short design section first, then the bump arena, `datarepr` cells for `List` and trees, arena exhaustion as a defined exit | `sort` (lines into a list) and `tac` are written as ordinary Heather and pass GNU tests | R8 | R10 |
 | R10 | `hih-passes` | **first pass in Heather** | constant folding and dead-node removal over FunctionIR regions, proved once to preserve `eval`, run inside `Source::compile` | the regression tools build with smaller code and unchanged GNU results; the proof is one theorem, not per program | — | any |
+| P1 | `lang-proof-modularity` | **proof-modularity design** | design note: interface definitions (what conversion may unfold, where, and the `unfold` escape), the registry mechanism and which tactics read it first, invariant and contract rules, and which `proof-patterns` rules each piece retires | decided by Minus; P2–P5 filed | — | R1, R4 |
+| P2 | `lang-proof-modularity` | **interface definitions** | generated equations, no unfolding outside the module unless asked, tactics and `rewrite` use the equations | one library module (the interval or layout lemmas) re-proved through equations with fewer conversion steps in `--timings`; one proof-patterns rule retired | P1 | R2, R5 |
+| P3 | `lang-proof-modularity` | **lemma registries** | one registration mechanism; `mono` and `norm_num` read it in place of their tables | a new carrier gets `mono` and `norm_num` by registering lemmas, with no edit to the tactics; `mono_carriers` is gone | P1 (the host interface it reads exists) | R5, R8 |
+| P4 | `lang-proof-modularity` | **loop and procedure rules** | invariant rules generated beside §3's loops; contracts of N2's procedures cited at calls | `count_words`'s spec is an invariant and a step lemma in a few lines; a property of a rewritten tool (R6) is proved about its Heather function | R3 (R8 for procedures) | R7 |
+| P5 | `lang-proof-modularity` | **sharing and staging** | `frontend-large-proof-composition-cost`'s acceptance, `let-fanout-diagnostic`, staging done by the elaborator where it must stage | the nested 100-node certificate checks near the staged spelling's cost; "split into stage theorems" retires from proof-patterns | P1 | any |
 | R11 | `hih-self` | **S2: the compiler compiles itself** | `Source::compile` and its checks compiled by N1–N4; `write-elf` runs the binary in place of the fork's evaluation | `write-elf` builds the corpus through it; `scripts/perf ab` shows the fork's read-back counters gone, with the kernel check unchanged | R9 | — |
 
-R1 and R4 can start today. R10 can start today in the native lane. After
-R1, the language lane (R2, R3) and the native lane (R5, R8, R9) run side by
-side and meet at R6.
+R1, P1 and R4 can start today, as can R10 in the native lane. After the
+designs, three lanes run side by side: the language lane (R2, R3), the
+proof lane (P2, P3, P5, which touch the elaborator core and the tactics, so
+P2 and R2 should not run at the same moment), and the native lane (R5, R8,
+R9). They meet at R6 and P4.
 
 **Kept running beside them, pulled by these rounds.** The certificate cost
 that grows with the program (next-areas item 1,
@@ -369,7 +458,7 @@ cuts code size, which lowers that cost. Lemma search, the monoid
 normaliser, ML and export are in other lanes and are not affected by this
 proposal.
 
-### 6.1 What happens to the open native issues
+### 7.1 What happens to the open native issues
 
 | issue | under this proposal |
 |---|---|
@@ -380,15 +469,18 @@ proposal.
 | `datarepr-separation`, `memory-bound-certificates` | R9 (metering after it) |
 | `native-procedure-contracts`, `io-image-process-stack`, `native-register-moves-and-convention` | R8 |
 | `prelude-option-and-friends` (layer 2), `pipeline-operator`, `function-composition-operator` | R1 decides whether they are still needed after binding statements |
-| `tactic-composition-ergonomics` | stays separate: it is about proof scripts (`split_all; all_goals {…}`), not about binding results |
+| `tactic-composition-ergonomics` | stays separate: it is about proof scripts (`split_all; all_goals {…}`), not about binding results; P1 says whether registries change it |
+| `frontend-large-proof-composition-cost`, `let-fanout-diagnostic` | P5 |
+| `mono-class-laws`, `monotonicity-tactic` | P3 decides what remains |
 | `native-decimal-io-proved`, `native-compile-stat` | unchanged, not scheduled |
 
 ---
 
-## 7. Decisions for Minus
+## 8. Decisions for Minus
 
 1. **Adopt the thesis** (§2): native programs become ordinary Heather
-   functions, and the builder becomes the compiler's back half.
+   functions, and the builder becomes the compiler's back half. *Adopted
+   (Minus, 2026-10-31), with proof composition added as §6.*
 2. **`hih-tools`**: close it at the nine built tools as a regression corpus
    (recommended), or keep its "done when" and finish the remaining five
    alongside.
@@ -399,15 +491,18 @@ proposal.
 4. **The lexer before the heap** (R7 before R9): the first Heather-in-Heather
    program would stream tokens with no allocation. The alternative is to
    wait for the heap and have the lexer return a token list.
-5. **Roadmap shape**: add `lang-sequencing` (area `language`, pulled by
-   `heather-in-heather` and `tactics`) and `hih-native-heather` with
+5. **Interface definitions** (§6.2): opt-in per definition (recommended,
+   so nothing that computes by conversion today breaks), or the default for
+   exported definitions with an opt-out.
+6. **Roadmap shape**: add `lang-sequencing` and `lang-proof-modularity`
+   (area `language`, pulled by `heather-in-heather` and `tactics`) and `hih-native-heather` with
    `nh-front`, `nh-procedures`, `nh-effects`, `nh-heap` as submilestones;
    re-scope `hih-first-alloc` into `nh-heap`; give `hih-self` the
    submilestones `self-lexer` and `self-compiler`. Once you decide, the
    roadmap rows, the log line and the issues go on this PR before it
    merges.
 
-## 8. Risks, and what would change the order
+## 9. Risks, and what would change the order
 
 - **Elaborator cost of lowered loops.** A `for` lowered to a fold inside a
   large function may hit the elaborator whnf cost that computed-from-code
@@ -423,8 +518,7 @@ proposal.
   section. If arena allocation turns out to need the separation-logic
   footprints (`wp-view-separating-product`) before anything runs, R7 and R10
   still deliver, and R11 waits.
-- **"Composing" may mean proofs too.** This proposal reads Minus's "less
-  painful composing" as composing computations. If it also means composing
-  large proofs (stage theorems instead of one big one, for cost reasons:
-  `frontend-large-proof-composition-cost`), that is an elaborator-cost
-  round that fits in the language lane beside R2.
+- **Interface definitions can break proofs that rely on conversion.** Many
+  library proofs close by `refl` or `trivial` through a definition. Opt-in
+  per definition keeps them working; P2 migrates one module and measures
+  before anything becomes a default.
