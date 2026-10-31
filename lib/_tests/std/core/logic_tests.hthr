@@ -1,0 +1,40 @@
+// Probes of `And` passed where a match-defined predicate is expected, with an
+// implicit the predicate mentions still to infer
+// (issues/and-at-match-predicate-implicit-level-mismatch.md). The argument's
+// type `And<P, Q>` and the parameter's `I.Has(?x)` are two applications with
+// different heads; their arguments have nothing to pair, and pairing them
+// taught `?x := Q` (a type where a `Nat` belongs) for the kernel to refuse.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import nat;
+
+inductive Iv { B(lo: Nat, hi: Nat), W }
+
+fn Iv::Has(self I: Iv, x: Nat) → Type { match I { B(lo, hi) => lo <= x ∧ x <= hi, W => True } }
+// An arm that does not mention `x` at all: the implicit's only witness is the
+// expected type.
+fn Iv::Pair(self I: Iv, x: Nat) → Type { match I { B(_, _) => And<Nat, Nat>, W => True } }
+
+theorem keepx(I: Iv, {x: Nat}, h: I.Has(x)): I.Has(x) { h }
+theorem keep_pair(I: Iv, {x: Nat}, h: I.Pair(x)): I.Pair(x) { h }
+
+// The issue's case: `x` comes from the expected type.
+theorem has_inferred(lo, hi, x: Nat, l: lo <= x, h: x <= hi): B(lo, hi).Has(x) { keepx(B(lo, hi), And(l, h)) }
+theorem pair_inferred(lo, hi, x: Nat): B(lo, hi).Pair(x) { keep_pair(B(lo, hi), And(lo, hi)) }
+
+// Its controls, accepted before the fix as well.
+theorem has_written(lo, hi, x: Nat, l: lo <= x, h: x <= hi): B(lo, hi).Has(x) { keepx(B(lo, hi), x := x, h := And(l, h)) }
+theorem has_checked(lo, hi, x: Nat, l: lo <= x, h: x <= hi): B(lo, hi).Has(x) { And(l, h) }
+theorem has_bound(lo, hi, x: Nat, l: lo <= x, h: x <= hi): B(lo, hi).Has(x) {
+    let b: (B(lo, hi).Has(x)) = And(l, h);
+    keepx(B(lo, hi), b)
+}
+
+// With no expected type, nothing names `x`: the call says so, rather than
+// guessing from the conjunction's second type and leaving the kernel to
+// refuse it.
+// expect-error: could not infer the implicit argument `x` of `keepx`
+theorem has_unanchored(lo, hi, x: Nat, l: lo <= x, h: x <= hi): B(lo, hi).Has(x) {
+    let y = keepx(B(lo, hi), And(l, h));
+    y
+}

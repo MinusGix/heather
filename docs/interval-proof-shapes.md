@@ -115,5 +115,6 @@ four commutations of it), `Dyadic::rat_nonneg` beside `rat_pos`,
 
 Found on the way: an `And` passed for a match-defined predicate at an
 inferred implicit is refused by the kernel with `LevelMismatch`
-([[and-at-match-predicate-implicit-level-mismatch]]); `mul_box_has` binds
-the pair with a typed `let`.
+([[and-at-match-predicate-implicit-level-mismatch]]); fixed 2026-10-31 (the
+unifier paired the arguments of two applications with different heads), and
+`mul_box_has_in` now passes the pair directly.

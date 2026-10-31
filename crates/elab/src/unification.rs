@@ -191,6 +191,28 @@ impl<'a> U<'a> {
         }
     }
 
+    /// Are a pattern spine's head and a subject spine's head two **different
+    /// atoms** — distinct locals, distinct committed globals, or one of each?
+    /// Neither kind is a meta, so no solution makes them one: the spines are
+    /// different applications, and their arguments have nothing to pair. A
+    /// pattern's committed global sits `n` above its committed index, and a
+    /// partially known subject's `m` above its own; one of the subject's
+    /// metas (below `m`) is not an atom. Locals compare at the same depth on
+    /// both sides. Anything else (a projection, a λ, a meta) is not decided
+    /// here.
+    fn distinct_heads(&self, pat: &Term, subj: &Term, n: u32) -> bool {
+        let m = self.subject_metas.map_or(0, |(m, _)| m);
+        match (pat, subj) {
+            (Term::Var(a), Term::Var(b)) => a != b,
+            (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) => {
+                a.0 >= n && b.0 >= m && a.0 - n != b.0 - m
+            }
+            (Term::Var(_), Term::GlobalTm { var, .. }) => var.0 >= m,
+            (Term::GlobalTm { var, .. }, Term::Var(_)) => var.0 >= n,
+            _ => false,
+        }
+    }
+
     /// No head can be read: every `app@` spine is refused by
     /// [`matching_value_spine`], and nothing else changes.
     #[cfg(test)]
@@ -626,6 +648,17 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             {
                 return;
             }
+            // Nor are two rigid spines with different heads, at any length:
+            // `Has2(B(lo, hi), ?x)` against `And<Nat, Nat>` paired the
+            // predicate's argument with the conjunction's second type and
+            // taught `?x := ⌜Nat⌝`, which the expected type would have
+            // solved as `x`
+            // (issues/and-at-match-predicate-implicit-level-mismatch.md).
+            // As above, a δ-step may still make them meet; that is the
+            // whnf retry's to find.
+            if u.distinct_heads(head, spine_head(s), n) {
+                return;
+            }
             unify_tm(u, f1, f2, n, d, sols);
             unify_tm(u, a1, a2, n, d, sols);
         }
@@ -922,6 +955,14 @@ fn flex_spine(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [So
     for (p, a) in pargs.into_iter().zip(sargs) {
         unify_tm(u, p, a, n, d, sols);
     }
+}
+
+/// The head of an application spine (`t` itself when it is no application).
+fn spine_head(mut t: &Term) -> &Term {
+    while let Some((fun, _)) = spelling::app_of(t) {
+        t = fun;
+    }
+    t
 }
 
 /// Is the spine's head a global, the one head δ can unfold?
