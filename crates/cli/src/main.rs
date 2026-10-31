@@ -100,7 +100,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--build-jobs <n> [--build-only]] [--unbuilt] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--build-jobs <n> [--build-only] [--build-first <dir>]... [--build-times <file.tsv>]] [--unbuilt] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
@@ -165,6 +165,16 @@ struct Opts {
     build_jobs: Option<usize>,
     /// `--build-only`: stop after `--build-jobs`' builds.
     build_only: bool,
+    /// `--build-times <file.tsv>`: a row per module `--build-jobs` built,
+    /// with when it became ready, started and finished and the import that
+    /// readied it, so the chain that set the build step's length can be
+    /// read back (`docs/module-dag-design.md` §12).
+    build_times: Option<PathBuf>,
+    /// `--build-first <dir>`: among modules ready to build, those below a
+    /// named directory and their closures start before the rest, so a
+    /// reader waiting on that folder's images (the test runner's native
+    /// gates) is released while the rest of the step still runs.
+    build_first: Vec<PathBuf>,
     /// `--unbuilt`: name the modules of the load that have no image yet,
     /// one per line, and exit 1 when there are any; nothing is elaborated
     /// (the plan `--build-jobs` schedules from, [`BuildPlan`]). The test
@@ -193,6 +203,8 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         world: None,
         build_jobs: None,
         build_only: false,
+        build_times: None,
+        build_first: Vec::new(),
         unbuilt: false,
     };
     let mut files = Vec::new();
@@ -274,6 +286,14 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
             opts.build_only = true;
             continue;
         }
+        if a == "--build-first" {
+            opts.build_first.push(PathBuf::from(it.next().ok_or("`--build-first` needs a directory")?));
+            continue;
+        }
+        if a == "--build-times" {
+            opts.build_times = Some(PathBuf::from(it.next().ok_or("`--build-times` needs a file")?));
+            continue;
+        }
         if a == "--unbuilt" {
             opts.unbuilt = true;
             continue;
@@ -344,6 +364,9 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
     }
     if opts.build_only && opts.build_jobs.is_none() {
         return Err("`--build-only` needs `--build-jobs`".into());
+    }
+    if (opts.build_times.is_some() || !opts.build_first.is_empty()) && opts.build_jobs.is_none() {
+        return Err("`--build-times` and `--build-first` need `--build-jobs`".into());
     }
     if opts.only.is_some() && !opts.cache {
         return Err("`--only` replays the rest of the module from the cache: pass `--cache` (or `--cache-dir`)".into());
@@ -1071,10 +1094,27 @@ fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jo
     for i in (0..n).rev() {
         chain[i] = plan.modules()[i].src.len() + dependents[i].iter().map(|&d| chain[d]).max().unwrap_or(0);
     }
+    // `--build-first`: the modules below a named directory, and their
+    // closures (an importer comes after its imports, so walking back reaches
+    // every import after its importers).
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let firsts: Vec<PathBuf> = opts.build_first.iter().map(|d| canon(d)).collect();
+    let mut first = vec![false; n];
+    for i in (0..n).rev() {
+        first[i] |= firsts.iter().any(|d| canon(&plan.modules()[i].path).starts_with(d));
+        if first[i] {
+            for d in plan.imports(i).collect::<Vec<_>>() {
+                first[d] = true;
+            }
+        }
+    }
     let exe = std::env::current_exe().expect("the running binary");
     let logs = std::env::temp_dir().join(format!("heather-build-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&logs);
     let mut started = vec![false; n];
+    // Seconds since the step began: when each module started and finished.
+    let clock = std::time::Instant::now();
+    let (mut start, mut end) = (vec![None; n], vec![None::<f64>; n]);
     let mut running: Vec<(usize, std::process::Child, PathBuf)> = Vec::new();
     let (mut built, mut failed) = (0usize, Vec::new());
     loop {
@@ -1082,11 +1122,12 @@ fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jo
         while running.len() < jobs {
             let Some(i) = (0..n)
                 .filter(|&i| !started[i] && plan.state(i) == BuildState::Ready)
-                .max_by_key(|&i| (chain[i], std::cmp::Reverse(i)))
+                .max_by_key(|&i| (first[i], chain[i], std::cmp::Reverse(i)))
             else {
                 break;
             };
             started[i] = true;
+            start[i] = Some(clock.elapsed().as_secs_f64());
             let m = &plan.modules()[i];
             let log = logs.join(format!("{}.log", m.name));
             let mut cmd = std::process::Command::new(&exe);
@@ -1120,6 +1161,7 @@ fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jo
         };
         let (i, mut child, log) = finished;
         let status = child.wait();
+        end[i] = Some(clock.elapsed().as_secs_f64());
         if status.as_ref().is_ok_and(|s| s.success()) {
             built += 1;
         } else {
@@ -1135,6 +1177,25 @@ fn build_ahead(opts: &Opts, search: &[PathBuf], modules: Vec<loader::Module>, jo
         let _ = std::fs::remove_file(&log);
     }
     let _ = std::fs::remove_dir(&logs);
+    if let Some(path) = &opts.build_times {
+        // A module was ready when the last of its imports built here finished
+        // (at the start if none was); the gap to its start is the wait for a
+        // job. Following `readied_by` back from the last row is the chain
+        // that set the step's length.
+        let mut rows: Vec<usize> = (0..n).filter(|&i| end[i].is_some()).collect();
+        rows.sort_by(|&a, &b| end[a].partial_cmp(&end[b]).expect("finite"));
+        let mut tsv = String::from("module\tready_s\tstart_s\tend_s\twall_s\treadied_by\n");
+        for i in rows {
+            let by = plan.imports(i).filter(|&d| end[d].is_some()).max_by(|&a, &b| end[a].partial_cmp(&end[b]).expect("finite"));
+            let ready = by.and_then(|d| end[d]).unwrap_or(0.0);
+            let (s, e) = (start[i].expect("started"), end[i].expect("finished"));
+            let by = by.map_or("-".to_string(), |d| plan.modules()[d].name.to_string());
+            tsv.push_str(&format!("{}\t{ready:.1}\t{s:.1}\t{e:.1}\t{:.1}\t{by}\n", plan.modules()[i].name, e - s));
+        }
+        if let Err(e) = std::fs::write(path, tsv) {
+            eprintln!("build: cannot write `{}`: {e}", path.display());
+        }
+    }
     for f in &failed {
         eprintln!("build: {f}");
     }

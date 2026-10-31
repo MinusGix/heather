@@ -346,6 +346,29 @@ refreshing the plan as each finishes. `--build-only`
 stops there. A module that fails is reported with the tail of its output; its
 dependents stay unbuilt, and the ordinary check that follows reports it.
 
+`--build-first <dir>` (repeatable) starts the modules below the named
+directories, and their closures, before any other ready module. The gate
+names `lib/native` and `lib/_tests/native`, the folders the test runner
+waits on before it starts the native gates. `--build-times <file.tsv>`
+writes a row per built module: when it became ready (the end of the
+last import built in this run), when it started and finished, and the
+import that readied it. Following `readied_by` back from the last row
+gives the chain that set the step's length, and the gap between `ready_s`
+and `start_s` is time spent waiting for a job.
+
+Measured cold on a 4-CPU cloud box (master f9c6e9d, gate settings, 218
+modules), the step is CPU-bound, not chain-bound: about 820 CPU-s in about
+220 s of wall, within a tenth of the four-core floor. The longest chain ran
+through the interval tactics to `interval_tactic_real_tests`, and part of it
+was waiting for a job. The native chain (`native_compile` through
+`native_compile_correct`) was done by 89 s, and no native module took more
+than about 12 s. Ordered by source bytes alone, the native folders' modules
+still waited behind the std test chains and were last built at about 200 s.
+With `--build-first` they were built by about 99 s, and the step's length
+and CPU did not change (`issues/native-closure-builds-first.md`). So
+splitting a long module does not shorten this step: the step has no chain
+to shorten, and each new module adds a closure replay.
+
 The price is replay: each build process replays its module's closure, so the
 build step replays every closure once (§2's sum, about eighteen times the
 module count over the library) where folder children replayed about three
