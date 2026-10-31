@@ -1951,6 +1951,121 @@ theorem Nat::ldiv_mod(self n: Nat, d: Pos<Nat>): n.ldiv(d).rem() = n.mod(d) {
     sym(n.div_mod_unique(d, n.ldiv(d).quot(), n.ldiv(d).rem(), n.ldiv_parts(d), n.ldiv_rem_lt(d, d_pos := d_pos)).right)
 }
 
+// ---------------------------------------------------------------------------
+// Integer square root. `isqrt` takes the root `r` of `⌊n/4⌋` first; the root
+// of `n` is then `2r` or `2r + 1`, and one comparison of `(2r + 1)²` with `n`
+// picks it. A step is a multiplication and a comparison, which the kernel
+// evaluates on numerals directly, so a root of `b` bits costs `b` steps, as
+// `ldiv` costs one per quotient bit. The numerator is the fuel. The
+// specification is `IsRoot`, `r² <= n < (r + 1)²` (`isqrt_spec`).
+
+fn Nat::IsRoot(n, r: Nat) → Type { r * r <= n ∧ n < Succ(r) * Succ(r) }
+
+fn Nat::quarter(self n: Nat) → Nat { n.half().half() }
+
+fn Nat::isqrt_pick(n, r: Nat, c: Succ(r * 2) * Succ(r * 2) <= n ∨ ¬(Succ(r * 2) * Succ(r * 2) <= n)) → Nat {
+    match c { Inl(_) => Succ(r * 2), Inr(_) => r * 2 }
+}
+
+fn Nat::isqrt_step(n, r: Nat) → Nat { Nat::isqrt_pick(n, r, (Succ(r * 2) * Succ(r * 2)).le_dec(n)) }
+
+fn Nat::isqrt_fuel(self n, fuel: Nat) → Nat {
+    match fuel {
+        Zero => 0,
+        Succ(f) => match n {
+            Zero => 0,
+            Succ(k) => Nat::isqrt_step(Succ(k), Succ(k).quarter().isqrt_fuel(f)),
+        },
+    }
+}
+
+fn Nat::isqrt(self n: Nat) → Nat { n.isqrt_fuel(n) }
+
+theorem Nat::mul_four(self q: Nat): q * 4 = (q + q) + (q + q) {
+    calc {
+        q * 4
+            = (q * 2) * 2 := sym(q.mul_assoc(2, 2)),
+            = (q * 2) + (q * 2) := (q * 2).mul_two(),
+            = (q + q) + (q + q) := Nat::cong(λ (w: Nat) => w + w, q.mul_two()),
+    }
+}
+
+theorem Nat::sq_double(self r: Nat): (r * 2) * (r * 2) = (r * r) * 4 { Nat::mul_shuffle(r, 2, r, 2) }
+
+theorem Nat::succ_double(self r: Nat): Succ(Succ(r * 2)) = Succ(r) * 2 {
+    calc {
+        Succ(Succ(r * 2))
+            = Succ(Succ(r + r)) := Nat::cong(λ (w: Nat) => Succ(Succ(w)), r.mul_two()),
+            = Succ(r) + Succ(r) := sym(Nat::cong_succ(r.add_succ_left(r))),
+            = Succ(r) * 2 := sym(Succ(r).mul_two()),
+    }
+}
+
+// `n` lies in `[4q, 4q + 4)` for `q = ⌊n/4⌋`.
+theorem Nat::quarter_mul_le(self n: Nat): n.quarter() * 4 <= n {
+    let h = n.half();
+    let q = h.half();
+    let a: (q + q <= h) = h.half_add_le();
+    let b: ((q + q) + (q + q) <= h + h) = (q + q).add_le_mono(h, q + q, h, a, a);
+    j(sym(q.mul_four()), λ y _ => y <= n, ((q + q) + (q + q)).le_trans(h + h, n, b, n.half_add_le()))
+}
+
+theorem Nat::lt_succ_quarter_mul(self n: Nat): n < Succ(n.quarter()) * 4 {
+    let h = n.half();
+    let q = h.half();
+    let A = Succ(q + q);
+    let a: (h <= A) = h.le_succ_half_add();
+    let b: (h + h <= A + A) = h.add_le_mono(A, h, A, a, a);
+    let c: (n <= Succ(A + A)) = n.le_trans(Succ(h + h), Succ(A + A), n.le_succ_half_add(), Nat::le_succ_succ(h + h, A + A, b));
+    let e = calc {
+        Succ(Succ(A + A))
+            = Succ(A) + Succ(A) := sym(Nat::cong_succ(A.add_succ_left(A))),
+            = (Succ(q) + Succ(q)) + (Succ(q) + Succ(q)) := sym(Nat::cong(λ (w: Nat) => w + w, Nat::cong_succ(q.add_succ_left(q)))),
+            = Succ(q) * 4 := sym(Succ(q).mul_four()),
+    };
+    j(e, λ y _ => Succ(n) <= y, Nat::le_succ_succ(n, Succ(A + A), c))
+}
+
+theorem Nat::isqrt_pick_spec(n, r: Nat, c: Succ(r * 2) * Succ(r * 2) <= n ∨ ¬(Succ(r * 2) * Succ(r * 2) <= n), ih: Nat::IsRoot(n.quarter(), r)):
+    Nat::IsRoot(n, Nat::isqrt_pick(n, r, c))
+{
+    let q = n.quarter();
+    let s = Succ(r);
+    match c {
+        Inl(le) => {
+            let up: (Succ(q) * 4 <= (s * s) * 4) = Nat::mul_le_mono_r(4, Succ(q), s * s, ih.right);
+            let lt: (n < (s * s) * 4) = n.lt_of_lt_of_le(Succ(q) * 4, (s * s) * 4, n.lt_succ_quarter_mul(), up);
+            let sq: (n < (s * 2) * (s * 2)) = j(sym(s.sq_double()), λ y _ => n < y, lt);
+            And(le, j(sym(r.succ_double()), λ y _ => n < y * y, sq))
+        },
+        Inr(nle) => {
+            let down: ((r * r) * 4 <= q * 4) = Nat::mul_le_mono_r(4, r * r, q, ih.left);
+            let le: ((r * r) * 4 <= n) = ((r * r) * 4).le_trans(q * 4, n, down, n.quarter_mul_le());
+            And(j(sym(r.sq_double()), λ y _ => y <= n, le), Nat::lt_of_not_le(n, Succ(r * 2) * Succ(r * 2), nle))
+        },
+    }
+}
+
+theorem Nat::isqrt_fuel_spec(self fuel: Nat): (n: Nat) → n <= fuel → Nat::IsRoot(n, n.isqrt_fuel(fuel)) {
+    match fuel {
+        Zero => λ n => match n {
+            Zero => λ _ => And(trivial, trivial),
+            Succ(_) => λ bad => false_elim(bad),
+        },
+        Succ(f, ih) => λ n => match n {
+            Zero => λ _ => And(trivial, trivial),
+            Succ(k) => λ le => {
+                let toward: (Succ(k).quarter() <= k) = Succ(k).quarter().le_trans(Succ(k).half(), k, Succ(k).half().half_le(), k.half_succ_le());
+                let below: (Succ(k).quarter() <= f) = Succ(k).quarter().le_trans(k, f, toward, le);
+                Nat::isqrt_pick_spec(Succ(k), Succ(k).quarter().isqrt_fuel(f), (Succ(Succ(k).quarter().isqrt_fuel(f) * 2) * Succ(Succ(k).quarter().isqrt_fuel(f) * 2)).le_dec(Succ(k)),
+                    ih(Succ(k).quarter(), below))
+            },
+        },
+    }
+}
+
+theorem Nat::isqrt_spec(self n: Nat): Nat::IsRoot(n, n.isqrt()) { n.isqrt_fuel_spec(n, n.le_refl()) }
+
 // The decision, evaluated at a known order.
 theorem Nat::leb_true(self n, m: Nat, h: n <= m): n.leb(m) = True { eq_true_of_is_true(n.leb(m), n.leb_complete(m, h)) }
 theorem Nat::leb_false(self n, m: Nat, h: m < n): n.leb(m) = False {

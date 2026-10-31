@@ -1,11 +1,11 @@
 ---
 title: Square root of a float, correctly rounded
-status: open
+status: closed
 labels: [mathematics,floating-point]
 area: mathematics
 milestone: [math-float]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-10-31
 ---
 
 The last operation of `float-arith` (`docs/floating-point-design.md` §7.1,
@@ -49,3 +49,17 @@ division) and its specification `r² ≤ n < (r + 1)²`, proved in `nat.hthr`
 `Finite::sqrt` and `Float::sqrt` exist with a value theorem in one of the two
 forms above, the sign and special-value theorems, and literal tests at
 binary16.
+
+## Resolution (2026-10-31)
+
+Done in `lib/std/num/float/arith.hthr`, design §14.1, with neither of the two
+forms above: `RoundsTo` reads the exact value only through comparisons with
+half-unit grid points, so the value theorem is `RoundsTo` itself at every
+rational in `√x`'s cell (`Format::SqrtCell`: on the same side of every grid
+point as `√x`, each comparison read through squares). `Finite::sqrt_correct`
+proves it in every mode; `cell_iff_approx` shows the cell is exactly what the
+rounding reads and `sqrt_witness_cell` that it is never empty. `Nat::isqrt`
+with `isqrt_spec` is in `nat.hthr`; sign and special-value theorems and
+binary16/binary32 literal tests are in. When `float-reals` lands, the reals'
+`√x` lies in its own cell and the statement transfers; the standard model for
+a root waits on that.

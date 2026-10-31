@@ -566,7 +566,7 @@ roadmap's.
 | 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, and the constants (`zero`, `min_subnormal`, `min_normal`, `max_finite`) canonical for every format. Landed; §10. |
 | 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. Landed; §13. |
-| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed except sqrt, §14; sqrt is [float-sqrt](../issues/float-sqrt.md). |
+| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed, §14; sqrt §14.1. |
 | 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
 | later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. |
@@ -1002,6 +1002,62 @@ Observations:
 - `Fin(b)` in a position with no expected type resolves to another
   constructor named `Fin`; the special-value theorems write `Float::Fin`.
 
+
+### 14.1 Square root ([float-sqrt](../issues/float-sqrt.md))
+
+Landed 2026-10-31 in the same module, closing `float-arith`. The square root
+of a float is irrational in general, so it has no rational exact value to
+hand `RoundsTo`, and the issue offered two statements: `RoundsTo` at the
+reals (waits on `float-reals`), or a second relation `RoundsToSqrt` with
+every clause rewritten (duplicates `RoundsTo` and its laws). Neither was
+needed.
+
+**The statement: a cell, not a value.** Every clause of `RoundsTo` compares
+the exact value only with half-unit grid points: floats, midpoints of
+neighbouring floats (a float is two half-units, so their midpoint is a grid
+point), the overflow threshold `F.ovf()` and zero. So a correct rounding of
+`√x` is the same thing as a correct rounding of any rational on the same side
+of every grid point as `√x`. `Format::SqrtCell(x, y)` says `y` is such a
+rational, with each comparison against `√x` read as one against `x` through
+`Format::RootLe(m, x)` (`m ≤ 0 ∨ grid(m)² ≤ x`) and `RootLt` (`m < 0 ∨
+grid(m)² < x`):
+
+    (m: Int) → (grid(m) ≤ y ↔ RootLe(m, x)) ∧ (grid(m) < y ↔ RootLt(m, x))
+
+The value theorem is `Finite::sqrt_correct(a, mode, nan, nn: 0 ≤ a.val(),
+y, cell: F.SqrtCell(a.val(), y)): RoundsTo(F, mode, y, a.sqrt(…))`: one
+relation, all of `RoundsTo`'s laws (uniqueness, the error model) apply at any
+`y` in the cell. The cell is never empty (`Finite::sqrt_witness_cell`, a
+quarter-unit point when the root is inexact) and is exactly what the rounding
+reads: given the root's description `SqrtApprox(x, h, st)` (`Approx` with
+every bound squared), `SqrtCell(x, y) ↔ Approx(y, h, st)`
+(`Format::cell_iff_approx`). When `float-reals` states `RoundsTo` over an
+ordered field, the reals' `√x` lies in its own cell and the theorem transfers
+by the same argument; until then the cell is the honest form at `Rat`. A test
+applies the theorem at a literal: binary16 `√2` rounds `1.414213563`.
+
+**The computation.** `√x` in half-units is the root of `x / 2^(2(qmin-1))
+= mag · 2^(bexp + 2 - qmin)`. Writing that as `N / 2^dn` (`sqrt_n`,
+`sqrt_dn`; the exponent's positive part scales `N` up), `h =
+isqrt(⌊N / 2^dn⌋)` and the root is exact when `h² · 2^dn = N`
+(`sqrt_h`, `sqrt_st`, proved as `Finite::sqrt_approx_mag`). Then
+`F.round_h(mode, h, st)` rounds it, as every other operation does
+(`Finite::sqrt_abs`, the root of the magnitude in every format).
+`Nat::isqrt` is in `nat.hthr`: the root `r` of `⌊n/4⌋` first, then `2r`
+or `2r + 1` by one comparison of `(2r + 1)²` with `n`, so a root of `b` bits
+costs `b` steps; `isqrt_spec` proves `IsRoot`, `r² ≤ n < (r + 1)²`, by hand
+like `ldiv`. Binary16 and binary32 roots evaluate by `refl`.
+
+**Signs and specials.** IEEE 754 §9.2 (§6.3 for the zero): `√-0 = -0`
+(`sqrt_neg_zero`), a negative nonzero is NaN (`sqrt_neg`), a nonnegative
+root carries `+` (`sqrt_sign`), `√+∞ = +∞`, `√-∞` is NaN and NaN propagates
+(`Float::sqrt_inf`, `sqrt_neg_inf`, `sqrt_nan`). Like division, `sqrt` takes
+the format's NaN evidence (default `trivial`); a format without NaN uses
+`sqrt_abs`.
+
+Left for later: the standard model for a root (`|r - √x| ≤ u·√x`) needs
+`√x` as a value, so it waits on `float-reals` with the transfer; a cell
+member `y` already gets `model_of` at `y`.
 
 ## 15. Literals (`float-literal-entry`)
 
