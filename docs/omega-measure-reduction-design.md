@@ -665,3 +665,39 @@ that no unfolding takes apart, a bare atom) are in
 `lib/_tests/std/tactic/omega_tests.hthr`. The library's hand-written
 decompositions in modules that do not import omega (the x86 asm tables,
 FunctionIR evaluation) are left as they are.
+
+## 18. Fields of a record constructed in place, and guards as equations (2026-10-31)
+
+`issues/decreases-measure-record-field-unspelled.md`. A `decreases s.m`
+measure at the self-call `f(CdState(s.m - 1, Cons(s.m, s.out)))` is the
+read `fst(snd(pair(…)))`: the field off a record *value*. Three gaps stood
+between it and the default `omega`, and the record-free control
+(`decreases m` over two parameters) shared the third:
+
+- **The speller had no case for it.** §10's `Speller::field_read` types its
+  receiver off a spine, and a pair is no spine; `projection_reduct` takes a
+  δ-transparent weak head, which goes past the field's value (`s.m - 1`)
+  into `sub`'s eliminator. `Speller::value_field_read` (display.rs) now
+  projects by syntax (`spelling::project_value`: every projection meets a
+  pair, no reduction): for reading the read is spelled as written,
+  `CdState(sub(s.m, 1), …).m`; for a source spelling it is the component
+  itself, which re-elaborates to a term the read converts to by Σ-β.
+- **`omega` reflected it as an atom with no spelling** — the same weak-head
+  overshoot in `projection_reduct`, and `field_as_put` declines a receiver
+  that is not a call. `field_as_put_within` now takes the syntactic
+  component first, so the read is reflected as `s.m - 1` and §16's split
+  applies.
+- **The arm's equation was not a fact.** `match h: Nat::leb(s.m, 0)` binds
+  `h: leb(s.m, 0) = False`, and §17's round read only `b.IsTrue()`. A Bool
+  equation `b = True`/`b = False` is now a guard proved true/false
+  (`guard_eq_true`/`guard_eq_false`, `bool_equation` in omega_cert.rs). For
+  the *lifted* obligation (`docs/termination-measures-design.md` §4) to see
+  it, `measure::arithmetic_fact` admits an arm equation at `True`/`False`
+  beside `<`/`<=` facts, so `measure_local_evidence` quantifies it; its
+  trial elaboration still decides whether the fact is used.
+
+The repro checks with no `on`, lifted. Its unfolding companion stays
+declined for §3 of the unfolding design's own reason (a `match` with an
+equation binding). Probes, the false-claim control included, are in
+`lib/_tests/std/tactic/omega_tests.hthr` (`guard_eq_*`,
+`field_of_constructed_record`, `count_down`).

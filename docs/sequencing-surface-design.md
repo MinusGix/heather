@@ -816,6 +816,9 @@ Each loop's body is elaborated once, as its step's declaration.
   `omega` cannot spell it. Without `match h:`, the arm has no fact about the
   condition (`__dec_scrut : Bool` only). Hence §5.3's separate parameters
   and equation binder (`issues/decreases-measure-record-field-unspelled.md`).
+  Since fixed (`docs/omega-measure-reduction-design.md` §18): with `match h:`
+  a record state's obligation spells and closes by the default `omega`, as
+  P5's does without its `on`.
 - **P5, `while` with parameter state.** `cd_loop(m, out) decreases m` with
   `match h: m.leb(0)` and an `on ?dec1` discharge checks, and
   `cd_loop(3, Nil) = [1, 2, 3]` by `refl`. `cd_loop_unfold` is refused,

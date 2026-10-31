@@ -1018,6 +1018,11 @@ theorem guard_negated({b: Bool}, h: ¬b.IsTrue(), k: (!b).IsTrue() → False): F
 
 theorem guard_open({b: Bool}, h: b.IsTrue(), k: b.IsTrue() → False): False { k(h) }
 
+// A guard stated as an equation, what a `match h: b { … }` arm binds.
+theorem guard_eq_true({b: Bool}, h: b = True, k: b.IsTrue() → False): False { k(j(sym(h), λ w _ => w.IsTrue(), trivial)) }
+
+theorem guard_eq_false({b: Bool}, h: b = False, k: (!b).IsTrue() → False): False { k(j(sym(h), λ w _ => (!w).IsTrue(), trivial)) }
+
 // A guard goal, refuted from its negation.
 theorem guard_goal({b: Bool}, k: (!b).IsTrue() → False): b.IsTrue() {
     match b as λ x => ((!x).IsTrue() → False) → x.IsTrue() {

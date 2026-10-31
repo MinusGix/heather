@@ -1391,6 +1391,17 @@ fn field_as_put_within(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) ->
         }
         Rc::new(out)
     }
+    // A read off a record constructed in place (a `decreases` measure at a
+    // self-call's argument, `CdState(s.m - 1, …).m`) is the component as
+    // put, by syntax: no receiver to unfold, and a weak head of the read
+    // would unfold the field's value on into its eliminator
+    // (issues/decreases-measure-record-field-unspelled.md).
+    if let Some(field) = crate::spelling::project_value(tm) {
+        if is_field_read(elab, field) {
+            return field_as_put_within(elab, cx, field, depth.checked_sub(1)?);
+        }
+        return Some(Rc::clone(field));
+    }
     let named = elab.named_field_read(tm);
     let (_, receiver) = named.clone().unwrap_or_else(|| projection_path(tm));
     if !head_is_global(receiver) {
@@ -3400,6 +3411,29 @@ fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
     }
 }
 
+/// `(b, v)` for a fact `b = True` (`v`) or `b = False` at `Bool`: what a
+/// `match h: n.leb(m) { … }` arm binds, read as the guard `b.IsTrue()` or
+/// `(!b).IsTrue()` (issues/decreases-measure-record-field-unspelled.md).
+/// A side that is itself a literal is no guard.
+fn bool_equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Rc<Term>, bool)> {
+    let decoded = crate::inductive::decoded(ty);
+    let Type::Id { ty, lhs, rhs, .. } = &*decoded else {
+        return None;
+    };
+    if elab.display_type(cx, ty) != "Bool" {
+        return None;
+    }
+    let literal = |t: &Term| match elab.spell_term_clean(cx, t).as_deref() {
+        Some("True") => Some(true),
+        Some("False") => Some(false),
+        _ => None,
+    };
+    if literal(lhs).is_some() {
+        return None;
+    }
+    Some((Rc::clone(lhs), literal(rhs)?))
+}
+
 /// A guard a round reads: `evidence` proves `term.IsTrue()` when `positive`
 /// and `(!term).IsTrue()` otherwise; `negated` evidence proves
 /// `¬term.IsTrue()` instead.
@@ -3409,6 +3443,9 @@ struct GuardItem {
     term: Rc<Term>,
     positive: bool,
     negated: bool,
+    /// `evidence` is the equation `term = True` (`positive`) or
+    /// `term = False`, what a `match h: b { … }` arm binds.
+    equation: bool,
 }
 
 struct GuardEmitter<'a> {
@@ -3434,7 +3471,7 @@ impl GuardEmitter<'_> {
     }
 
     fn item(evidence: &str, term: &Rc<Term>, positive: bool) -> GuardItem {
-        GuardItem { evidence: evidence.to_string(), term: Rc::clone(term), positive, negated: false }
+        GuardItem { evidence: evidence.to_string(), term: Rc::clone(term), positive, negated: false, equation: false }
     }
 
     /// The guards in `items`, the first taken apart and the rest after it,
@@ -3447,6 +3484,12 @@ impl GuardEmitter<'_> {
         let item = items.remove(0);
         let h = item.evidence.clone();
         let then = |front: Vec<GuardItem>, rest: &[GuardItem]| front.into_iter().chain(rest.iter().cloned()).collect::<Vec<_>>();
+        if item.equation {
+            let x = self.name(GUARD_PART);
+            let body = self.emit(then(vec![Self::item(&x, &item.term, item.positive)], &items), budget);
+            let rule = if item.positive { "omega::guard_eq_true" } else { "omega::guard_eq_false" };
+            return format!("{}({h}, {x} ⊢ {body})", self.rule(rule));
+        }
         if item.negated {
             let x = self.name(GUARD_PART);
             let body = self.emit(then(vec![Self::item(&x, &item.term, false)], &items), budget);
@@ -3550,13 +3593,17 @@ fn split_bool_guards(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
                 None => (fact.name.clone(), Rc::clone(b)),
             };
             readable |= guard_reads_by_structure(elab, &b);
-            items.push(GuardItem { evidence, term: b, positive: true, negated: false });
+            items.push(GuardItem { evidence, term: b, positive: true, negated: false, equation: false });
             settles.push(fact.name);
         } else if let Some(domain) = negated_domain(elab, cx, &fact.ty)
             && let Some(b) = is_true_arg(elab, &domain)
         {
             readable |= guard_reads_by_structure(elab, b) || unfold_guard(elab, cx, b).is_some();
-            items.push(GuardItem { evidence: fact.name.clone(), term: Rc::clone(b), positive: false, negated: true });
+            items.push(GuardItem { evidence: fact.name.clone(), term: Rc::clone(b), positive: false, negated: true, equation: false });
+            settles.push(fact.name);
+        } else if let Some((b, value)) = bool_equation(elab, cx, &fact.ty) {
+            readable |= guard_reads_by_structure(elab, &b) || unfold_guard(elab, cx, &b).is_some();
+            items.push(GuardItem { evidence: fact.name.clone(), term: b, positive: value, negated: false, equation: true });
             settles.push(fact.name);
         }
     }

@@ -148,6 +148,14 @@ pub(crate) fn select_scope<'a>(scope: &'a [Binder], goal: &Ty, evidence: Option<
 }
 
 pub(crate) fn arithmetic_fact(ty: &Ty, goal: &Ty, scope: &[Binder]) -> bool {
+    let shares = || scope.iter().any(|b| mentions_ty(goal, &b.name) && mentions_ty(ty, &b.name));
+    // A `match h: n.leb(m) { … }` arm's equation, which `omega` reads as the
+    // guard it states (issues/decreases-measure-record-field-unspelled.md).
+    if let TyKind::Eq(_, rhs) = &ty.kind {
+        let literal = matches!(&rhs.kind, ExprKind::Var(name)
+            if matches!(name.rsplit("::").next(), Some("True" | "False")));
+        return literal && shares();
+    }
     let TyKind::OfExpr(e) = &ty.kind else { return false; };
     let ExprKind::App { head, .. } = &e.kind else { return false; };
     let relation = match &head.kind {
@@ -155,7 +163,7 @@ pub(crate) fn arithmetic_fact(ty: &Ty, goal: &Ty, scope: &[Binder]) -> bool {
         ExprKind::OpSymbol { symbol, .. } => matches!(symbol.as_str(), "<" | "<="),
         _ => false,
     };
-    relation && scope.iter().any(|b| mentions_ty(goal, &b.name) && mentions_ty(ty, &b.name))
+    relation && shares()
 }
 
 /// A stored field type at the scrutinee's type arguments: type parameters are
