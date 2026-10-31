@@ -50,3 +50,7 @@ both and computes by `refl`. Refusals name their reason: an ambiguous
 
 - **[[sequencing-surface-design]]** owns the classes' shape (`Bind`, `Pure`, no laws as fields).
 - **[[binding-statements]]** is the first customer.
+
+## Log
+
+- 2026-10-31: 2026-10-31: Decide [[parametric-type-families]] first: if <A> parameters become kernel families, pieces 1-2 here shrink or disappear and this round becomes its first step.

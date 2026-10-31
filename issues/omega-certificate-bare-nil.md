@@ -36,3 +36,7 @@ holds as terms.
 ## Done when
 
 The repro checks, and a probe in `lib/_tests` pins it.
+
+## Log
+
+- 2026-10-31: 2026-10-31: One instance of the class [[certificates-as-terms]] removes.

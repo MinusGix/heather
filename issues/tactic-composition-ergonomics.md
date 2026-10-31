@@ -35,3 +35,4 @@ metaprograms, and future tactics uniformly.
 
 - 2026-10-01: 2026-10-01: a customer from [[automatic-author-surface]]. wc.hthr's newline_is_space and wc_next_lines split cleanly with split_all, but some leaves close by refl and others by a contradiction among the comparison facts (bv_omega). One leaf body can't do both, so they stay hand-written. Wanted: an alternation leaf (try refl, else bv_omega) with defined failure behaviour.
 - 2026-10-31: `tac-in-heather` is marked done in docs/roadmap.md (a Heather `split_all` closes the Rust one's goals), so this issue no longer serves it; it stays open in area `tactics` with no milestone.
+- 2026-10-31: 2026-10-31: [[proof-scripts-as-tac-blocks]] proposes absorbing this: once proof scripts are Tac blocks, the concise forms become library combinators rather than grammar.
