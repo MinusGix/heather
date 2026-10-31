@@ -14,6 +14,10 @@ import bool;
 import native_alloc;
 import native_structured;
 import linux_x86_64_image;
+import native_tool_words;
+import native_tool_words_program;
+import function_ir_eval;
+import linux_trees;
 
 // An exit's status computed into a temporary, the first word.
 theorem exit_three(): run(exit(num(3))).source() = Source(functions := [], buffers := [], words := 1, main := Then(Stmt::leaf([Const(64, 0, 3)]), Exit(0))) {
@@ -161,3 +165,41 @@ fn count_then_loop() → Tool {
 }
 
 theorem count_then_loop_compiles(): refused_slots(count_then_loop().source()) = [] { refl }
+
+// ---------------------------------------------------------------------------
+// Calling a reflected word function (issues/native-build-reflected-helpers.md)
+
+// `raise_letter` called on a buffer's first byte, the result the exit
+// status: the tool's program is the one `heather reflect` wrote.
+fn raised_status(bytes: List<BitVec(8)>) → Tool {
+    program(raise_letter_native_program(), buffer_of(bytes, λ b =>
+        run(local(num(0), λ r => compute(call(0, [b.at(num(0))], r)) ++ exit(r.get())))))
+}
+
+// A call is a FunctionIR `Call`, its program the source's functions.
+theorem raised_status_lowered(byte: BitVec(8)): raised_status([byte]).source() = Source(functions := raise_letter_native_program(),
+    buffers := [Buffer(1, [byte])], words := 3,
+    main := Then(Stmt::leaf([Const(64, 0, 0)]), Then(Compute(Sequence(Region::bare([Const(64, 2, 0), BufferLoad(1, 0, 2)]), Call(0, [1], 0))), Exit(0)))) {
+    refl
+}
+
+// What it exits with is the Heather function's value at the byte, for any
+// byte: the source's meaning is `program_eval`'s, its words kept as
+// numbers, and the program is `raise_letter` by evaluation
+// (`raise_letter_native_agrees`).
+theorem raised_status_tree(byte: BitVec(8)): raised_status([byte]).source().tree([], 0)
+    = Ret(BitVec::ofNat(program_eval(raise_letter_native_program(), 0, [byte_word(byte)]).toNat())) { refl }
+
+fn exited_with(status: BitVec(64)) → ITree<BitVec(64)>(Events::linux()) { Ret(status) }
+
+theorem raised_status_runs(byte: BitVec(8)): raised_status([byte]).source().tree([], 0) = Ret(raise_letter(byte_word(byte))) {
+    trans(raised_status_tree(byte), trans(
+        cong_fn<BitVec(64), ITree<BitVec(64)>(Events::linux())>(λ (w: BitVec(64)) => exited_with(BitVec::ofNat(w.toNat())),
+            raise_letter_native_agrees(byte_word(byte))),
+        cong_fn<BitVec(64), ITree<BitVec(64)>(Events::linux())>(exited_with, BitVec::ofNat_toNat(64, raise_letter(byte_word(byte))))))
+}
+
+// Not compiled yet: the compiler takes no call region (statement 2, a
+// sequence ending in the call), and `write-elf` refuses a tool with a
+// program. Calls compile as procedures in issues/native-compiled-procedures.md.
+theorem raised_status_refused(): refused_slots(raised_status([BitVec::ofNat(97)]).source()) = [2, 0, 0, 1, 0] { refl }

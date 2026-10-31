@@ -93,6 +93,11 @@ inductive Calc {
     Store(buf: Buf, index: Val, value: Val),
     Choose(condition: Val, arms: Bool → Calc),
     Passes(bound: Val, state: List<Var>, body: Var → Calc, stop: Val, ran_out: Var),
+    // Function `callee` of the tool's program (`program`) on the words
+    // `arguments`, its result into `result`: a FunctionIR `Call`, so the
+    // value is `program_eval`'s and a function `heather reflect` wrote is
+    // read as the Heather function it reflects (its `_agrees` theorem).
+    Apply(callee: Nat, arguments: List<Val>, result: Var),
 }
 
 // A statement. `When` and the loops test their value's being nonzero. A
@@ -136,6 +141,10 @@ inductive Act {
 inductive Tool {
     Run(main: Act),
     WithBuffer(capacity: Nat, initial: List<BitVec(8)>, body: Buf → Tool),
+    // The FunctionIR functions its `Apply`s call, for what follows: the
+    // source's `functions`, as `program_eval` orders them (the last listed
+    // is function 0).
+    WithProgram(functions: List<Function>, body: Tool),
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +237,8 @@ fn run(main: Act) → Tool { Run(main) }
 fn buffer(capacity: Nat, body: Buf → Tool) → Tool { WithBuffer(capacity, [], body) }
 // A buffer holding `bytes` from the start, as long as they are.
 fn buffer_of(bytes: List<BitVec(8)>, body: Buf → Tool) → Tool { WithBuffer(bytes.len(), bytes, body) }
+// The program the tool's `call`s name (`heather reflect` writes one).
+fn program(functions: List<Function>, body: Tool) → Tool { WithProgram(functions, body) }
 
 // Pure statements (`Calc`), written as `Act`'s are; `compute` runs one.
 fn Var::assign(self var: Var, value: Val) → Calc { Assign(var, value) }
@@ -243,6 +254,7 @@ fn choose(condition: Val, yes, no: Calc) → Calc { Choose(condition, Calc::pair
 fn only_if(condition: Val, yes: Calc) → Calc { Choose(condition, Calc::pair(yes, Nothing)) }
 fn passes(bound: Val, state: List<Var>, body: Var → Calc, stop: Val, ran_out: Var) → Calc { Passes(bound, state, body, stop, ran_out) }
 fn compute(calc: Calc) → Act { Calculate(calc) }
+fn call(callee: Nat, arguments: List<Val>, result: Var) → Calc { Apply(callee, arguments, result) }
 
 // The body for each index from 0 below `count`, read once before the
 // first pass; the index and the words `state` are the passes' state, so
@@ -471,6 +483,20 @@ fn List::joined(self pieces: List<Piece>) → StructuredRegion {
 // A word's id.
 fn List::ids(self vars: List<Var>) → List<Nat> { vars.map(λ (x: Var) => x.id) }
 
+// Values placed one after another, each into ids of its own.
+record PlacedAll { nodes: List<Node>, ids: List<Nat>, next: Nat }
+
+fn List::placed_words(self values: List<Val>, next: Nat) → PlacedAll {
+    match values {
+        Nil => PlacedAll([], [], next),
+        Cons(v, rest) => {
+            let p = v.placed(True, next);
+            let r = rest.placed_words(p.next);
+            PlacedAll(p.nodes ++ r.nodes, Cons(p.id, r.ids), r.next)
+        },
+    }
+}
+
 // Every loop's count in the region, the loops inside others' too.
 fn StructuredRegion::counts(self region: StructuredRegion) → List<Nat> {
     match region {
@@ -512,6 +538,10 @@ fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
         Choose(condition, arms) => {
             let t = condition.test().placed(True, next);
             [Nodes(t.nodes), Part(Conditional(Ports([]), t.id, Ports([]), Ports([]), arms(True).pieces(t.next).merged().joined(), arms(False).pieces(t.next).merged().joined()))]
+        },
+        Apply(callee, arguments, result) => {
+            let a = arguments.placed_words(next);
+            [Nodes(a.nodes), Part(Call(callee, a.ids, result.id))]
         },
         Passes(bound, state, body, stop, ran_out) => {
             let b = bound.placed(True, next);
@@ -684,15 +714,19 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
 // ---------------------------------------------------------------------------
 // Tools as sources
 
-// A tool's buffers in order and its statement.
-record Opened { buffers: List<Buffer>, main: Act }
+// A tool's buffers in order, its program and its statement.
+record Opened { buffers: List<Buffer>, functions: List<Function>, main: Act }
 
 fn Tool::opened(self t: Tool, buf: Nat) → Opened {
     match t {
-        Run(main) => Opened([], main),
+        Run(main) => Opened([], [], main),
         WithBuffer(capacity, initial, body) => {
             let rest = body(Buf(buf, capacity)).opened(Succ(buf));
-            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.main)
+            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.functions, rest.main)
+        },
+        WithProgram(functions, body) => {
+            let rest = body.opened(buf);
+            Opened(rest.buffers, functions ++ rest.functions, rest.main)
         },
     }
 }
@@ -701,5 +735,6 @@ fn Tool::opened(self t: Tool, buf: Nat) → Opened {
 // included.
 fn Tool::source(self t: Tool) → Source {
     let o = t.opened(0);
-    Source::of(o.buffers, o.main.items(0).lowered())
+    let main = o.main.items(0).lowered();
+    Source(functions := o.functions, buffers := o.buffers, words := main.word_bound(), main := main)
 }

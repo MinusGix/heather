@@ -304,11 +304,14 @@ theorem Act::lowered_of(self a: Act, next: Nat, g: List<Node>, f: List<Stmt> →
     trans(cong_fn<Packing, Stmt>(λ k => k.stmt(), packs([])), closed)
 }
 
-// The tool's source, from its statement's lowering.
-theorem Tool::source_of(self t: Tool, buffers: List<Buffer>, main: Stmt, opened: t.opened(0).buffers = buffers, lowered: t.opened(0).main.lowered_at(0) = main):
+// The tool's source, from its statement's lowering, when it has no program.
+theorem Tool::source_of(self t: Tool, buffers: List<Buffer>, main: Stmt, plain: t.opened(0).functions = [], opened: t.opened(0).buffers = buffers,
+    lowered: t.opened(0).main.lowered_at(0) = main):
     t.source() = Source::of(buffers, main) {
-    j(opened, λ b _ => t.source() = Source::of(b, main),
-        j(lowered, λ m _ => t.source() = Source::of(t.opened(0).buffers, m), refl))
+    j(plain, λ f _ => t.source() = Source(functions := f, buffers := buffers, words := main.word_bound(), main := main),
+        j(opened, λ b _ => t.source() = Source(functions := t.opened(0).functions, buffers := b, words := main.word_bound(), main := main),
+            j(lowered, λ m _ => t.source() = Source(functions := t.opened(0).functions, buffers := t.opened(0).buffers, words := m.word_bound(), main := m),
+                refl)))
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +336,8 @@ fn Val::size(self v: Val) → Nat {
     }
 }
 
+fn List::sizes(self values: List<Val>) → Nat { match values { Nil => 0, Cons(v, rest) => v.size() + rest.sizes() } }
+
 // A pure statement's values and statements, its binders met from `next`
 // as `Calc::pieces` meets them.
 fn Calc::size(self c: Calc, next: Nat) → Nat {
@@ -344,6 +349,7 @@ fn Calc::size(self c: Calc, next: Nat) → Nat {
         Store(_, index, value) => Succ(index.size() + value.size()),
         Choose(condition, arms) => Succ(condition.size() + (arms(True).size(next) + arms(False).size(next))),
         Passes(bound, state, body, stop, _) => Succ(bound.size() + (state.len() + (body(Var(next)).size(next) + stop.size()))),
+        Apply(_, arguments, _) => Succ(arguments.sizes()),
     }
 }
 

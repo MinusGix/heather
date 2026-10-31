@@ -1,0 +1,13 @@
+// Word functions the builder's tools call (issues/native-build-reflected-
+// helpers.md): ordinary Heather functions over 64-bit words, which
+// `heather reflect` writes as FunctionIR programs with the theorem that
+// each evaluates to its function (native_tool_words_program). A tool calls
+// one by `call` (native_build), and a proof about the tool reads the call's
+// result as the function's value.
+import bitvec;
+import bool;
+
+// A byte raised to upper case where it is a lower-case ASCII letter.
+fn raise_letter(c: BitVec(64)) → BitVec(64) {
+    match c.sub(BitVec::ofNat(97)).unsigned_lt_bit(BitVec::ofNat(26)) { True => c.sub(BitVec::ofNat(32)), False => c }
+}
