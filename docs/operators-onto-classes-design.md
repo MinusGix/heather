@@ -726,3 +726,63 @@ Suite 1419 → 1432.
   is free too.
 
 Suite 1432 → 1439.
+
+## 17. Postscript (2026-10-31): constraints sharing a symbol at one carrier
+
+`<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>` used to be
+refused by §5.1: each constraint installed `≈`, `+` and `*`, so each symbol
+named two binders. The library answered with combined classes that added
+nothing but the pairing (`OrderedFieldOfInt`), which is the pattern Minus
+asked to retire (issues/constraints-sharing-indices.md).
+
+**Linking alone is not enough.** Pointing the second constraint's slots at
+the first's binders makes both dictionaries range over one `≈`, one `+`, one
+`*`, and works while the two classes share no ancestor. These two do:
+both reach `CommRing`, and two dictionaries are two locals, so
+`OrderedField::zero_lt_one` speaks about `#constraint0.unit` and
+`CommRingOfInt::of_int_one` about `#constraint1.multiplicative.unit`. No
+choice of which dictionary a bare `A.unit` reads fixes that, because a
+lemma mixing the two classes' laws is stated over both copies.
+
+**So the constraints become one dictionary.** `merge_linked_constraints`
+(crates/elab/src/traits.rs) runs before a declaration's attempts begin,
+between items where Ψ may grow:
+
+- Anonymous inline constraints whose every index slot is a symbol, at one
+  carrier (the written type arguments agree), and sharing a symbol, form a
+  group. A class written twice in a group is left to §5.2.
+- The group becomes one constraint at a synthesized class named by its
+  parents sorted, `CommRingOfInt+OrderedField`: its parameters are the first
+  parent's, one value parameter per distinct symbol, `extends` every parent
+  linked through those parameters, and no fields of its own. Class
+  flattening dedups the shared ancestor, which is the diamond collapse class
+  declarations already rely on, so `CommRing` occurs once and both parents
+  are reached from the one dictionary by upcast.
+- The class is made in the module that first asks for it and found by name
+  after that; the sort means written order does not make a second class.
+  A class of that name linked differently is refused by name.
+- The merged binder stands where the earliest member was written, and
+  `expand_constraints` then treats it as any one constraint: the symbols are
+  installed once.
+
+**At a concrete carrier the dictionary is assembled from the parents.** The
+merged class has no instances. Resolution's step 2b (`join_parents`,
+crates/elab/src/resolve.rs) reads each parent's type off the goal's own
+arguments (its applied spelling, where unsolved operations are still goals
+that the parents' searches solve by unification as a registry candidate
+would), resolves it, and builds the record taking every field from the first
+parent that has it. That checks at `Rat` and `CReal` because their canonical
+instances already share the ancestor by reference (traits-design §4). At an
+open carrier with no merged dictionary in scope the fields need not agree,
+and the kernel gate refuses the assembly. A closed answer is queued for the
+canonical table, so a carrier pays for its assembly once.
+
+`linarith`'s certificate section now writes the two constraints, and
+`OrderedFieldOfInt` and its two instances are gone. Probes:
+lib/_tests/std/algebra/ordered_field_tests.hthr.
+
+**Left open** (issues/merged-constraint-class-identity.md). Two modules
+that do not import each other can each synthesize the class, and a third
+importing both sees two classes of one name; nothing in the library does
+that yet. A *named* constraint (`requires m: …`) does not merge, since its
+body reaches the dictionary by name.

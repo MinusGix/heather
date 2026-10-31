@@ -1900,10 +1900,6 @@ instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
     archimedean := Rat::archimedean,
 }
 
-// Its integers named too (std/ordered_field's `OrderedFieldOfInt`), which is
-// what `linarith`'s certificates are checked against.
-instance OrderedFieldOfInt<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {}
-
 // A square is nonnegative (`OrderedField::sq_nonneg`), named at the carrier
 // so a hint can cite it: `nlinarith(Rat::sq_nonneg(a - b))`.
 theorem Rat::sq_nonneg(self x: Rat): 0 <= x * x { OrderedField::sq_nonneg(x) }

@@ -2276,10 +2276,6 @@ instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CRea
     archimedean := CReal::archimedean,
 }
 
-// Its integers named too (std/ordered_field's `OrderedFieldOfInt`), which is
-// what `linarith`'s certificates are checked against.
-instance OrderedFieldOfInt<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {}
-
 // A square is nonnegative (`OrderedField::sq_nonneg`), named at the carrier
 // so a hint can cite it: `nlinarith(CReal::sq_nonneg(a - b))`.
 theorem CReal::sq_nonneg(self x: CReal): 0 <= x * x { OrderedField::sq_nonneg(x) }

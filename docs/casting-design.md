@@ -875,9 +875,12 @@ carrier spelling or morphism parameter is handed to them.
   `nat_cast_add`/`_mul`, `int_cast_add`/`_mul` (through
   `int_cast_sub_nat_nat`, following `Int::add`'s own cases), all up to `≈`.
 - **The dictionary is built, not assumed.** `CommRing::with_ints()` and
-  `OrderedField::with_ints()` build the `CommRingOfInt` /
-  `OrderedFieldOfInt` record from the class in scope, with `of_int :=
-  Ring::int_cast`. The combined classes stay what the tactics' soundness
+  `OrderedField::with_ints()` build the `CommRingOfInt` record from the
+  class in scope, with `of_int := Ring::int_cast` (2026-10-31: the
+  `OrderedFieldOfInt` record `OrderedField::with_ints` built before is
+  gone; linarith's lemmas take `OrderedField(…) + CommRingOfInt(…)`, one
+  dictionary assembled from the section's field and this,
+  issues/constraints-sharing-indices.md). The combined classes stay what the tactics' soundness
   theorems are stated over (`RingExpr::sound_rel`, linarith's
   certificate lemmas); at a class carrier they are now a derived value, so
   §5.6's retirement of them as *parameters* holds.

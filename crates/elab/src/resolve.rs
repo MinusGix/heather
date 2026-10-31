@@ -23,7 +23,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type};
 use heather_kernel::typing;
-use heather_syntax::{Expr, ExprKind, Span};
+use heather_syntax::{Expr, ExprKind, Span, TyKind};
 
 use crate::{Cx, ElabError, Elaborator, oracle, stats};
 
@@ -324,6 +324,7 @@ impl Elaborator {
         // (`docs/per-instantiation-type-codes-design.md` §4.2, amended
         // 2026-09-10; `docs/wf-shape-code-design.md` §4). One head unspell at
         // the entry, so the whole search sees one spelling.
+        let spelled = goal;
         let inline = self.unspell_here(goal);
         let goal = inline.as_ref().unwrap_or(goal);
         let depth = self.resolve_depth.get();
@@ -418,6 +419,9 @@ impl Elaborator {
             tr.push(line(depth, "head", head.to_string()));
         }
         if cands.is_empty() {
+            if let Some(t) = self.join_parents(cx, &ind, &ckey, spelled, goal, lvl, prefer, span, depth, tr) {
+                return Some(t);
+            }
             tr.push(line(
                 depth,
                 "no-instance",
@@ -500,7 +504,141 @@ impl Elaborator {
             *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
             self.attempt.check_notes.borrow_mut().truncate(notes_mark);
         }
-        None
+        self.join_parents(cx, &ind, &ckey, spelled, goal, lvl, prefer, span, depth, tr)
+    }
+
+    /// Step 2b: a **merged** class — the one a declaration's constraints
+    /// sharing symbols at one carrier became (`merge_linked_constraints`,
+    /// issues/constraints-sharing-indices.md) — has no instances of its own,
+    /// and is assembled from its parents' at the goal: each parent's type is
+    /// read off the goal's own arguments, resolved, and every field of the
+    /// merged record is read off the first parent that has it.
+    ///
+    /// At a concrete carrier the parents' shared ancestor is one canonical
+    /// instance reached by reference from both (traits-design §4), so the
+    /// fields agree and the record checks; at an open carrier with no merged
+    /// dictionary in scope they need not, and the kernel gate below says no.
+    /// A closed answer is queued for the canonical table like any derivation,
+    /// so a carrier pays for its assembly once.
+    #[allow(clippy::too_many_arguments)]
+    fn join_parents(
+        &self,
+        cx: &Cx,
+        ind: &crate::inductive::Inductive,
+        ckey: &str,
+        spelled: &Type,
+        goal: &Type,
+        lvl: &Level,
+        prefer: Option<&str>,
+        span: Span,
+        depth: usize,
+        tr: &mut Vec<TraceLine>,
+    ) -> Option<Term> {
+        if !ind.name.contains('+') || !ind.is_record {
+            return None;
+        }
+        let class = self.traits.class(ckey)?.clone();
+        if class.is_kinded() {
+            return None;
+        }
+        // The goal's arguments: off its applied spelling when it arrived
+        // spelled (unsolved operations stay goals there, which the parents'
+        // searches solve by unification as a registry candidate would), else
+        // matched off the inline lowering.
+        let read = match spelled {
+            Type::El { tm, .. } => match self.gen_app_of(tm) {
+                Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) if tag == ind.tag => Some(args),
+                _ => None,
+            },
+            _ => None,
+        };
+        let args = match read {
+            Some(args) => args,
+            None => self.instance_match(cx, ind, goal, 0, 0)?.1,
+        };
+        let np = class.params.len();
+        if args.len() != np + class.valparams.len() {
+            return None;
+        }
+        let parts: Vec<&str> = ind.name.split('+').collect();
+        let mut tcx = cx.clone();
+        let mut parents: Vec<(String, Rc<crate::inductive::Inductive>)> = Vec::new();
+        // The parents are the ancestors the name lists; a transitive ancestor
+        // need not even be nameable from here.
+        let bare = |n: &str| n.rsplit("::").next().unwrap_or(n).to_string();
+        for (k, a) in class
+            .ancestors
+            .iter()
+            .filter(|a| a.path.is_empty() && parts.contains(&bare(&a.name).as_str()))
+            .enumerate()
+        {
+            let akey = self.key_of(&a.name)?;
+            let ainfo = self.traits.class(&akey)?;
+            if !parts.contains(&ainfo.name.as_str()) {
+                continue;
+            }
+            let aind = self.types.inductive(&akey)?.clone();
+            // The parent's arguments are the merged class's own, by name: its
+            // type arguments are the class's parameters and its index the
+            // class's value parameters (`merge_linked_constraints` writes
+            // nothing else).
+            let mut aargs: Vec<Rc<Term>> = Vec::new();
+            for t in &a.args {
+                let TyKind::Named { name, args: targs } = &t.kind else { return None };
+                if !targs.is_empty() {
+                    return None;
+                }
+                aargs.push(Rc::clone(&args[class.params.iter().position(|p| p == name)?]));
+            }
+            for e in &a.index {
+                let ExprKind::Var(name) = &e.kind else { return None };
+                let at = class.valparams.iter().position(|v| v.name == *name)?;
+                aargs.push(Rc::clone(&args[np + at]));
+            }
+            let (aty, alvl) = self.instance_type_at(cx, aind.tag, &aargs)?;
+            tr.push(line(depth, "join", format!("`{}` from `{}`", ind.name, ainfo.name)));
+            self.resolve_depth.set(depth + 1);
+            let shown = ainfo.name.clone();
+            let got = self.resolve_goal(cx, &aty, &alvl, &shown, prefer, span, tr);
+            self.resolve_depth.set(depth);
+            let got = got?;
+            let alias = format!("#join{k}");
+            tcx.aliases.push(Rc::new(crate::Alias {
+                name: alias.clone(),
+                depth: cx.names.len(),
+                term: Rc::new(got),
+                ty: aty,
+                level: alvl,
+                skel: None,
+                spliced: None,
+                shifted: Default::default(),
+            }));
+            parents.push((alias, aind));
+        }
+        let mut fields = Vec::with_capacity(ind.ctors[0].fields.len());
+        for (n, _) in &ind.ctors[0].fields {
+            let n = n.clone()?;
+            let (alias, _) = parents
+                .iter()
+                .find(|(_, p)| p.ctors[0].fields.iter().any(|(m, _)| m.as_deref() == Some(n.as_str())))?;
+            fields.push(Expr {
+                kind: ExprKind::Dot {
+                    recv: Box::new(Expr { kind: ExprKind::Var(alias.clone()), span }),
+                    name: n,
+                    tyargs: Vec::new(),
+                    args: None,
+                    named: Vec::new(),
+                },
+                span,
+            });
+        }
+        let t = self.build_ctor(&tcx, ind, 0, &fields, goal, lvl, span).ok()?;
+        if !self.checks_at(cx, &t, goal, lvl) {
+            tr.push(line(depth, "rejected", "the parents' fields disagree here".to_string()));
+            return None;
+        }
+        self.record_derived(goal, lvl, prefer);
+        Some(t)
     }
 
     /// Steps 3 to 5 at a goal that is not a class: **computation**, the
