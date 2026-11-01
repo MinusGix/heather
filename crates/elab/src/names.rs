@@ -473,6 +473,19 @@ impl Names {
             .find_map(|layer| layer.surface_decls.get(name))
     }
 
+    /// Is the global `module`'s `name` a `def` used as a value: a
+    /// [`Decl::value`] whose parameters, if any, are all implicit
+    /// (docs/value-definitions-design.md §2.3)? Read off the layer that
+    /// registered it, so a same-named declaration of another module is never
+    /// consulted.
+    pub(crate) fn is_value(&self, module: &str, name: &str) -> bool {
+        let key = qkey(module, name);
+        self.layers()
+            .find(|layer| layer.globals.contains_key(&key))
+            .and_then(|layer| layer.surface_decls.get(name))
+            .is_some_and(|d| d.value && d.params.iter().all(|p| p.implicit))
+    }
+
     pub(crate) fn commit_global(&mut self, abs: u32, reg: GlobalRegistration) {
         let GlobalRegistration {
             name,

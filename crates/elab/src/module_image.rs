@@ -1317,6 +1317,7 @@ fn put_ty(w: &mut Writer, ty: &Ty) {
         TyKind::TyCode { ctx } => { w.byte(10); w.string(ctx); }
         TyKind::Code { ctx, ty } => { w.byte(11); w.string(ctx); put_ty(w, ty); }
         TyKind::Splice { name } => { w.byte(12); w.string(name); }
+        TyKind::TypeOf(expr) => { w.byte(13); put_expr(w, expr); }
     }
 }
 
@@ -1340,6 +1341,7 @@ fn get_ty(r: &mut Reader<'_>) -> Result<Ty, ModuleImageDecodeError> {
             10 => TyKind::TyCode { ctx: r.string()? },
             11 => TyKind::Code { ctx: r.string()?, ty: Box::new(get_ty(r)?) },
             12 => TyKind::Splice { name: r.string()? },
+            13 => TyKind::TypeOf(Box::new(get_expr(r)?)),
             tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "surface type", tag }),
         };
         Ok(Ty { kind, span })
@@ -1642,7 +1644,14 @@ fn get_param(r: &mut Reader<'_>) -> Result<Param, ModuleImageDecodeError> {
 }
 
 fn put_decl(w: &mut Writer, decl: &Decl) {
-    w.byte(match decl.kind { DeclKind::Fn => 0, DeclKind::Theorem => 1, DeclKind::Axiom => 2 });
+    // A `def` is a `Fn` with the value flag, tagged 3: an image written
+    // before `def` existed never holds the tag, so it still decodes.
+    w.byte(match decl.kind {
+        DeclKind::Fn if decl.value => 3,
+        DeclKind::Fn => 0,
+        DeclKind::Theorem => 1,
+        DeclKind::Axiom => 2,
+    });
     w.bool(decl.is_meta);
     w.bool(decl.is_evidence);
     w.option(decl.elaborates.as_ref(), |w, slot| {
@@ -1663,12 +1672,13 @@ fn put_decl(w: &mut Writer, decl: &Decl) {
 }
 
 fn get_decl(r: &mut Reader<'_>) -> Result<Decl, ModuleImageDecodeError> {
-    let kind = match r.byte()? {
-        0 => DeclKind::Fn, 1 => DeclKind::Theorem, 2 => DeclKind::Axiom,
+    let (kind, value) = match r.byte()? {
+        0 => (DeclKind::Fn, false), 1 => (DeclKind::Theorem, false), 2 => (DeclKind::Axiom, false),
+        3 => (DeclKind::Fn, true),
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "declaration kind", tag }),
     };
     Ok(Decl {
-        kind, is_meta: r.bool()?, is_evidence: r.bool()?, elaborates: r.option(|r| Ok(SlotPath {
+        kind, value, is_meta: r.bool()?, is_evidence: r.bool()?, elaborates: r.option(|r| Ok(SlotPath {
             family: r.string()?, name: r.string()?, span: get_span(r)?,
         }))?, name: r.string()?, tyvars: r.vec(|r| Ok(TyParam {
             name: r.string()?, level: r.u64()?, span: get_span(r)?,
@@ -2866,7 +2876,9 @@ mod tests {
                  fn Box::get<A>(self b: Box<A>) -> A { match b { Wrap(x) => x } }\n\
                  theorem get_zero(): Wrap(0).get<Nat>() = 0 { refl }\n\
                  fn id(x: Nat) -> Nat { x }\n\
-                 theorem id_zero(): id(0) = 0 { refl }",
+                 theorem id_zero(): id(0) = 0 { refl }\n\
+                 def five: Nat = 5;\n\
+                 def six = Succ(five);",
                 identity,
             )
             .expect("build test delta");

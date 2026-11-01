@@ -561,6 +561,12 @@ passes a `Setup` value. An identifier before `fn` is not otherwise a valid
 item, and the existing modifier keywords (`meta fn`) are matched first, so an
 unknown prefix is "`runtme` is not a generator in scope".
 
+Built 2026-11-01 (`docs/value-definitions-design.md` §3), with one change:
+the generator receives the declaration's **name**, a `String`, in front of the
+written arguments (`runtime("f", setup)`), and calls `lookup` for its
+`GlobalRef`, since a `GlobalRef` is issued by a run and none exists before
+it starts.
+
 This is the first syntax-carrying form of `scoped-declaration-generators`:
 the generator receives an already elaborated declaration, the case that issue
 distinguishes from lowering syntax first. Alternatives: `generate

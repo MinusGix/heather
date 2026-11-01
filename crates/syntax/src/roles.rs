@@ -232,7 +232,8 @@ impl<'a> Walk<'a> {
                     self.ty(a);
                 }
             }
-            TyKind::Named { .. } | TyKind::Nat | TyKind::Ctx | TyKind::Splice { .. } => {}
+            // A `def`'s inferred type is its value, walked as its body.
+            TyKind::Named { .. } | TyKind::Nat | TyKind::Ctx | TyKind::Splice { .. } | TyKind::TypeOf(_) => {}
             TyKind::Univ { .. } => {
                 // `Type<n>` writes a numeral; `Type` alone writes nothing.
                 if let Some(open) = self.lt_in(t.span.start, t.span.end) {
@@ -473,6 +474,10 @@ impl<'a> Walk<'a> {
         match it {
             Item::Decl(d) => self.decl(d),
             Item::Generate(g) => self.expr(&g.generator),
+            Item::Prefixed(p) => {
+                self.expr(&p.generator);
+                self.decl(&p.decl);
+            }
             Item::Inductive(i) => {
                 if !i.params.is_empty() {
                     self.list_bare("inductive-params", i.span, &i.name);

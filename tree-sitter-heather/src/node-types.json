@@ -242,6 +242,10 @@
         "named": true
       },
       {
+        "type": "prefixed_declaration",
+        "named": true
+      },
+      {
         "type": "record_declaration",
         "named": true
       },
@@ -251,6 +255,10 @@
       },
       {
         "type": "theorem_declaration",
+        "named": true
+      },
+      {
+        "type": "value_declaration",
         "named": true
       }
     ]
@@ -4934,6 +4942,50 @@
     }
   },
   {
+    "type": "prefixed_declaration",
+    "named": true,
+    "fields": {
+      "arguments": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "argument_list",
+            "named": true
+          }
+        ]
+      },
+      "declaration": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "function_declaration",
+            "named": true
+          },
+          {
+            "type": "theorem_declaration",
+            "named": true
+          },
+          {
+            "type": "value_declaration",
+            "named": true
+          }
+        ]
+      },
+      "generator": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "propagation_expression",
     "named": true,
     "fields": {
@@ -5744,6 +5796,100 @@
     }
   },
   {
+    "type": "value_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "qualified_identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "declaration_big_operator_type",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_inverse_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "type_parameters",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "value_parameters",
     "named": true,
     "fields": {},
@@ -5998,6 +6144,10 @@
   },
   {
     "type": "decreasing",
+    "named": false
+  },
+  {
+    "type": "def",
     "named": false
   },
   {

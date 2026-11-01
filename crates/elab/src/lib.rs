@@ -1769,6 +1769,17 @@ fn slice_source(file: &heather_syntax::File, src: &str, idx: usize, plan: &ItemP
     }
 }
 
+/// The refusal of a declaration's own name used as a value. A declaration
+/// with no value parameters (a `def`, or a parameterless `fn`) has no
+/// recursive call to make at all (docs/value-definitions-design.md §2.1).
+fn self_name_refusal(selfref: &SelfRef, name: &str) -> String {
+    if selfref.params.len() == selfref.n_tyvars {
+        format!("`{name}` refers to itself, and a value (a `def`, or a `fn` without parameters) is not recursive")
+    } else {
+        format!("`{name}` can only be used here as a saturated recursive call")
+    }
+}
+
 fn item_timing_name(item: &Item) -> String {
     match item {
         Item::Decl(decl) => decl.name.clone(),
@@ -1782,6 +1793,7 @@ fn item_timing_name(item: &Item) -> String {
         }
         Item::Import(import) => format!("import {}", import.module),
         Item::Generate(g) => format!("generate {}", host::tactic_name(&g.generator)),
+        Item::Prefixed(p) => p.decl.name.clone(),
     }
 }
 
@@ -2387,6 +2399,7 @@ impl Elaborator {
                 Item::Decl(d) => {
                     Some((d.name.clone(), d.decreases.is_some(), i))
                 }
+                Item::Prefixed(p) => Some((p.decl.name.clone(), false, i)),
                 _ => None,
             })
             .collect();
@@ -2452,6 +2465,7 @@ impl Elaborator {
             Item::Datarepr(d) => stats::timed(stats::Timer::Lower, || self.elab_datarepr(d)),
             Item::Impl(i) => stats::timed(stats::Timer::Lower, || self.elab_impl(i)),
             Item::Generate(g) => self.elab_generate(g),
+            Item::Prefixed(p) => self.elab_prefixed(p),
             Item::Import(_) => Ok(()),
         }
     }
@@ -4113,6 +4127,24 @@ impl Elaborator {
         Ok(cx)
     }
 
+    /// A `def`'s value with no written type, inferred: its term, which is
+    /// the body, and its type, which is the statement
+    /// (docs/value-definitions-design.md §2.2). A value whose type inference
+    /// cannot find is refused with the spelling that fixes it.
+    fn infer_value(&self, cx: &Cx, decl: &Decl, e: &Expr) -> R<(Term, Type, Level)> {
+        self.elab_infer(cx, e).map_err(|error| match error {
+            ElabError::Elab { msg, span } if msg.contains("infer") => ElabError::Elab {
+                msg: format!(
+                    "{msg} (`{}` has no written type, so its value must infer one: write it \
+                     as `def {}: T = …;`)",
+                    decl.name, decl.name
+                ),
+                span,
+            },
+            other => other,
+        })
+    }
+
     fn check_decl(
         &mut self,
         decl: &Decl,
@@ -4393,7 +4425,23 @@ impl Elaborator {
         if has_implicit_mark(&decl.result) {
             return err(IMPLICIT_MARK_REFUSED, decl.result.span);
         }
-        let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
+        // `def x = e;` (docs/value-definitions-design.md §2.2): the type is
+        // `e`'s, so `e` is inferred once and is the body as well.
+        let inferred = match &decl.result.kind {
+            TyKind::TypeOf(e)
+                if decl.value
+                    && decl.body.stmts.is_empty()
+                    && decl.body.ons.is_empty()
+                    && decl.body.result.span == e.span =>
+            {
+                Some(self.infer_value(&cx, decl, e)?)
+            }
+            _ => None,
+        };
+        let (res_ty, res_lvl) = match &inferred {
+            Some((_, ty, level)) => (ty.clone(), level.clone()),
+            None => self.elab_ty(&cx, &decl.result)?,
+        };
         drop(decl_type);
         *self.attempt.telescope.borrow_mut() = cx.names.clone();
         // The graph records what the checked proof/body references, not names
@@ -4413,6 +4461,9 @@ impl Elaborator {
         let body = if decl.kind == DeclKind::Axiom {
             self.solve_goals(&[], &decl.name)?;
             None
+        } else if let Some((term, _, _)) = inferred {
+            self.solve_goals(&decl.body.ons, &decl.name)?;
+            Some(term)
         } else {
             // A `decreases` declaration never reaches here: `elab_measure_decl`
             // has already replaced it by the family of `measure.rs`.
@@ -4974,6 +5025,14 @@ impl Elaborator {
             // *is* a code, and `El ⌜T⌝ ⇝ T` makes a written type and a decoded
             // one convertible rather than merely equal-looking.
             TyKind::OfExpr(e) => self.expr_elab().lower_expression_type(self, cx, e, ty.span),
+            // A `def`'s type, inferred from its value
+            // (docs/value-definitions-design.md §2.2). `check_decl` reads the
+            // value once for both; this is every other reading of the stored
+            // declaration.
+            TyKind::TypeOf(e) => {
+                let (_, ty, level) = self.elab_infer(cx, e)?;
+                Ok((ty, level))
+            }
             _ => self
                 .expr_elab()
                 .type_form(self, cx, ty)
@@ -5044,6 +5103,7 @@ impl Elaborator {
         capture_slots: bool,
     ) -> R<Term> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
+        self.refuse_value_call(cx, e)?;
         // A corecursive body's two positions, a node and a child
         // (docs/codata-elaborator-design.md §5.2).
         if let Some(site) = cx.corec.as_ref()
@@ -6813,7 +6873,35 @@ impl Elaborator {
         self.elab_infer_uncached(cx, e, expected)
     }
 
+    /// `x()` where `x` is a `def`: a value is used as `x`, so the empty call
+    /// is refused rather than read as the value
+    /// (docs/value-definitions-design.md §2.3). A call with arguments applies
+    /// a function-typed value and is not this.
+    fn refuse_value_call(&self, cx: &Cx, e: &Expr) -> R<()> {
+        let ExprKind::App { head, args, named, .. } = &e.kind else { return Ok(()) };
+        if !args.is_empty() || !named.is_empty() {
+            return Ok(());
+        }
+        let ExprKind::Var(name) = &head.kind else { return Ok(()) };
+        if cx.names.iter().any(|n| n == name)
+            || cx.aliases.iter().any(|a| a.name == *name)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
+        {
+            return Ok(());
+        }
+        let NameRes::Found(module) = self.resolve_name(name) else { return Ok(()) };
+        let base = name.strip_prefix(&format!("{module}::")).unwrap_or(name);
+        if self.names.is_value(&module, base) {
+            return err(
+                format!("`{name}` is a value (a `def`), not a function: write `{name}`, without `()`"),
+                e.span,
+            );
+        }
+        Ok(())
+    }
+
     fn elab_infer_uncached(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        self.refuse_value_call(cx, e)?;
         if let ExprKind::App { head, .. } = &e.kind {
             if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::BY_TACTIC) {
                 return err(
@@ -8945,11 +9033,8 @@ impl Elaborator {
         // because `params_of` finds no global for a self-name and the arity
         // complaint below would otherwise deny a declaration the reader is
         // looking at (issues/recursive-self-call-type-arguments.md).
-        if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
-            return err(
-                format!("`{name}` can only be used here as a saturated recursive call"),
-                span,
-            );
+        if let Some(selfref) = cx.selfref.as_ref().filter(|s| s.matches(name)) {
+            return err(self_name_refusal(selfref, name), span);
         }
         let params = self.params_of(name);
         let n_ty = params.iter().take_while(|p| p.is_type).count();
@@ -9775,11 +9860,8 @@ impl Elaborator {
         }
         // The enclosing declaration's own name: only a saturated, guarded
         // *call* means anything (it is the induction hypothesis, not a value).
-        if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
-            return err(
-                format!("`{name}` can only be used here as a saturated recursive call"),
-                span,
-            );
+        if let Some(selfref) = cx.selfref.as_ref().filter(|s| s.matches(name)) {
+            return err(self_name_refusal(selfref, name), span);
         }
         let resolved_global = self
             .key_of(self.instance_alias(name))

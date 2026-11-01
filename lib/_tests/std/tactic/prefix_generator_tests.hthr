@@ -1,0 +1,121 @@
+// Probes of declaration-prefix generators (docs/value-definitions-design.md
+// §3): a prefixed `fn` or `theorem` is published as written and then read by
+// its generator; a prefixed `def` is handed to its generator, which
+// declares it. The refusals: an unknown prefix, a prefix that is not a
+// generator, a rewrite that forgets the name, a failing generator, each
+// publishing nothing. Tests, not library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+
+fn accepted_ref(name: String, c: Checked<GlobalRef>) → Tac<GlobalRef> {
+    match c {
+        Accepted(g) => Pure(g),
+        Refused(why) => fail("`" ++ name ++ "`: " ++ why, []),
+    }
+}
+
+fn accepted_handle(c: Checked<Handle>) → Tac<Handle> {
+    match c {
+        Accepted(h) => Pure(h),
+        Refused(why) => fail(why, []),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Consuming: `at_zero fn f(n: Nat) → T` declares `f::at_zero: f(0) = v`,
+// with `v` the weak head of `f(0)`, proved by `rfl`. The function is
+// already published when the generator runs, so `lookup` finds it.
+
+// The weak head of `e`, as a handle: `e`'s handle is read off the
+// equation `e = e`, and `Whnf` reduces it.
+fn weak_head(e: Expr) → Tac<Handle> {
+    as_type(Equation(e, e)).bind(λ c => accepted_handle(c)).bind(λ eq =>
+    view(eq).bind(λ v => match v {
+        HEq(lhs, _) => whnf(lhs).bind(λ c => accepted_handle(c)),
+        _ => fail("not an equation", []),
+    }))
+}
+
+fn at_zero(name: String) → Tac<List<Decl>> {
+    lookup(name).bind(λ c => accepted_ref(name, c)).bind(λ f =>
+    lookup("tactic::rfl").bind(λ c => accepted_ref("tactic::rfl", c)).bind(λ rfl => {
+        let call = Expr::App(Global(f), NatLit(0));
+        weak_head(call).bind(λ v => Pure([
+            Decl(AsTheorem, name ++ "::at_zero", [], Equation(call, Hd(v)), Expr::App(Expr::App(Global(rfl), Blank), Blank)),
+        ]))
+    }))
+}
+
+at_zero fn double(n: Nat) → Nat { n + n }
+
+theorem double_at_zero(): double(0) = 0 { double::at_zero }
+
+// The function itself is published as written.
+theorem double_two(): double(2) = 4 {}
+
+// With written arguments after the name: `scaled(k) def x = v;` declares
+// `x = v * k`, a rewrite whose generator computes on the value.
+fn scaled(name: String, v: Nat, k: Nat) → Tac<List<Decl>> {
+    infer(NatLit(0)).bind(λ c => accepted_handle(c)).bind(λ nat =>
+    Pure([Decl(AsValue, name, [], Hd(nat), NatLit(v * k))]))
+}
+
+scaled(3) def nine = 3;
+
+theorem nine_is(): nine = 9 {}
+
+// A rewritten value is a value: no `()`.
+// expect-error: `nine` is a value (a `def`), not a function
+theorem nine_called(): nine() = 9 {}
+
+// ---------------------------------------------------------------------------
+// Refusals. Each publishes nothing: the declaration under the prefix is
+// not declared either.
+
+// expect-error: `runtme` is not a generator in scope
+runtme fn typo(n: Nat) → Nat { n }
+
+// expect-error: unbound name `typo`
+theorem typo_used(): typo(1) = 1 {}
+
+fn not_a_generator(name: String) → Nat { 0 }
+
+// expect-error: the generator's call is ill-typed
+not_a_generator fn plain(n: Nat) → Nat { n }
+
+// expect-error: unbound name `plain`
+theorem plain_used(): plain(1) = 1 {}
+
+// A rewrite must declare the name it rewrites.
+fn forgetful(name: String, v: Nat) → Tac<List<Decl>> { Pure([]) }
+
+// expect-error: the generator did not declare `kept`
+forgetful def kept = 3;
+
+// A consuming generator that fails takes the declaration with it.
+fn refusing(name: String) → Tac<List<Decl>> { fail("refused `" ++ name ++ "`", []) }
+
+// expect-error: refused `lost`
+refusing fn lost(n: Nat) → Nat { n }
+
+// expect-error: unbound name `lost`
+theorem lost_used(): lost(1) = 1 {}
+
+// A value takes no parameters.
+fn param_value(name: String) → Tac<List<Decl>> {
+    infer(NatLit(0)).bind(λ c => accepted_handle(c)).bind(λ nat =>
+    assume(Hd(nat), "n", None).bind(λ c => match c {
+        Refused(why) => fail(why, []),
+        Accepted(n) => Pure([Decl(AsValue, name ++ "::v", [Param(n.ref, False)], Hd(nat), Local(n.ref))]),
+    }))
+}
+
+// expect-error: a value (`AsValue`) takes no parameters
+param_value fn holder(n: Nat) → Nat { n }

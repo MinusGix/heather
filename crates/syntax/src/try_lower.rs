@@ -41,7 +41,7 @@ fn fail<T>(span: Span, msg: &str) -> R<T> { Err(ParseError { span, msg: msg.into
 fn ty_children(t: &mut Ty, f: &mut impl FnMut(&mut Expr)) {
     match &mut t.kind {
         TyKind::Eq(a,b) => { f(a); f(b); }
-        TyKind::OfExpr(e) | TyKind::Fin(e) => f(e),
+        TyKind::OfExpr(e) | TyKind::Fin(e) | TyKind::TypeOf(e) => f(e),
         TyKind::Named { args, .. } => for t in args { ty_children(t,f); },
         TyKind::Vec { elem, len } => { ty_children(elem,f); f(len); }
         TyKind::Squash(t) | TyKind::Code { ty: t, .. } => ty_children(t,f),
@@ -92,7 +92,7 @@ fn children(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
 fn ty_visit(t: &Ty, f: &mut impl FnMut(&Expr)) {
     match & t.kind {
         TyKind::Eq(a,b) => { f(a); f(b); }
-        TyKind::OfExpr(e) | TyKind::Fin(e) => f(e),
+        TyKind::OfExpr(e) | TyKind::Fin(e) | TyKind::TypeOf(e) => f(e),
         TyKind::Named { args, .. } => for t in args { ty_visit(t,f); },
         TyKind::Vec { elem, len } => { ty_visit(elem,f); f(len); }
         TyKind::Squash(t) | TyKind::Code { ty: t, .. } => ty_visit(t,f),

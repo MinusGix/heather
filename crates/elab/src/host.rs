@@ -343,6 +343,8 @@ pub struct CtorView {
 #[derive(Clone, Debug)]
 pub struct DeclView {
     pub theorem: bool,
+    /// `AsValue`: a `def`, which takes no parameters.
+    pub value: bool,
     pub name: String,
     pub params: Vec<(u64, bool)>,
     pub result: RExpr,
@@ -618,8 +620,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                     Ok((x, self.nat_of("decl_param_implicit", vec![d, self.lit(j)])? != 0))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
+            let form = self.nat_of("decl_form", vec![d])?;
             decls.push(DeclView {
-                theorem: self.nat_of("decl_form", vec![d])? == 0,
+                theorem: form == 0,
+                value: form == 2,
                 name: self.string(self.call("decl_name", vec![d])?)?,
                 params,
                 result: self.expr(self.call("decl_result", vec![d])?, &mut budget)?,
@@ -1338,6 +1342,7 @@ impl Run {
 /// world the run was in.
 pub(crate) struct Member {
     theorem: bool,
+    value: bool,
     name: String,
     params: Vec<(String, bool, Type, Level)>,
     result: (Type, Level),
@@ -3111,13 +3116,18 @@ impl Elaborator {
     /// source would be. The group is one transaction: a member refused
     /// rolls back the ones before it.
     pub(crate) fn elab_generate(&mut self, g: &heather_syntax::ast::GenerateItem) -> R<()> {
-        let shown = tactic_name(&g.generator);
-        let (members, psi) = self.run_generator(&g.generator, g.span)?;
+        let label = format!("generate {}", tactic_name(&g.generator));
+        let (members, psi) = self.run_generator(&g.generator, &label, g.span)?;
+        self.publish_members(&members, psi, &label, g.span)
+    }
+
+    /// Publish a generator's checked group, every member or none.
+    fn publish_members(&mut self, members: &[Member], psi: usize, label: &str, span: Span) -> R<()> {
         self.session_transaction(|me| {
-            for m in &members {
-                me.publish_member(m, psi, g.span).map_err(|e| match e {
+            for m in members {
+                me.publish_member(m, psi, span).map_err(|e| match e {
                     crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
-                        msg: format!("`generate {shown}`: the generated `{}` was refused: {msg}", m.name),
+                        msg: format!("`{label}`: the generated `{}` was refused: {msg}", m.name),
                         span,
                     },
                     other => other,
@@ -3127,12 +3137,139 @@ impl Elaborator {
         })
     }
 
+    /// A declaration under a prefix generator, `P(args) fn f …` or
+    /// `P(args) def x = e;` (docs/value-definitions-design.md §3). The
+    /// generator is called with what the declaration hands it in front of
+    /// the written arguments, `P(name, args)` for a `fn` or `theorem` and
+    /// `P(name, value, args)` for a `def`, and run as `generate` runs its
+    /// generator.
+    ///
+    /// A `fn` or `theorem` is **consumed**: elaborated and published as
+    /// written, then read by the generator (by name, with `lookup`). A `def`
+    /// is **rewritten**: the declaration as written is not published; the
+    /// generator receives its value (at the type its parameter asks for: a
+    /// `String` as data, an `Expr` quoted), and its group must declare the
+    /// name. Either way the item is one transaction.
+    pub(crate) fn elab_prefixed(&mut self, p: &heather_syntax::ast::PrefixedItem) -> R<()> {
+        use heather_syntax::ast::{Block, ExprKind, Stmt, TyKind};
+        let d = &p.decl;
+        let prefix = match &p.generator.kind {
+            ExprKind::Var(n) => n.clone(),
+            ExprKind::App { head, .. } => match &head.kind {
+                ExprKind::Var(n) => n.clone(),
+                _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+            },
+            _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+        };
+        let form = if d.value { "def" } else if d.kind == heather_syntax::ast::DeclKind::Theorem { "theorem" } else { "fn" };
+        let label = format!("{prefix} {form} {}", d.name);
+        if !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_)) {
+            return err(
+                format!(
+                    "`{prefix}` is not a generator in scope: a name before `{form}` is a \
+                     generator, a function returning `tactic::Tac<List<tactic::Decl>>` \
+                     (docs/value-definitions-design.md §3)"
+                ),
+                p.generator.span,
+            );
+        }
+        let name = Expr { kind: ExprKind::Str(d.name.clone()), span: d.span };
+        let mut handed = vec![name];
+        if d.value {
+            if !d.tyvars.is_empty() || !d.params.is_empty() {
+                return err(
+                    format!("`{label}`: a rewritten `def` cannot have type parameters yet"),
+                    d.span,
+                );
+            }
+            let value = (*d.body.result).clone();
+            // The written type, if any, is the value's: `{ let x: T = e; x }`.
+            let value = match &d.result.kind {
+                TyKind::TypeOf(_) => value,
+                _ => {
+                    let local = d.name.rsplit("::").next().unwrap_or(&d.name).to_string();
+                    let span = value.span;
+                    Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![Stmt::Let {
+                                name: local.clone(),
+                                ty: Some(d.result.clone()),
+                                expr: value,
+                                span,
+                                opaque: false,
+                            }],
+                            result: Box::new(Expr { kind: ExprKind::Var(local), span }),
+                            ons: Vec::new(),
+                            span,
+                        })),
+                        span,
+                    }
+                }
+            };
+            handed.push(value);
+        }
+        let generator = match &p.generator.kind {
+            ExprKind::App { head, args, named, explicit, goal_oriented } => Expr {
+                kind: ExprKind::App {
+                    head: head.clone(),
+                    args: handed.into_iter().chain(args.iter().cloned()).collect(),
+                    named: named.clone(),
+                    explicit: *explicit,
+                    goal_oriented: *goal_oriented,
+                },
+                span: p.generator.span,
+            },
+            _ => Expr {
+                kind: ExprKind::App {
+                    head: Box::new(p.generator.clone()),
+                    args: handed,
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span: p.generator.span,
+            },
+        };
+        self.session_transaction(|me| {
+            if !d.value {
+                me.elab_decl(d)?;
+            }
+            // A prefix's call is `P(name, args)` or `P(name, value, args)`,
+            // which the refusal says, since the writer did not spell it.
+            let convention = if d.value {
+                format!("a generator prefixing a `def` is called as `{prefix}(name, value, …)`")
+            } else {
+                format!("a generator prefixing a `{form}` is called as `{prefix}(name, …)`")
+            };
+            let (members, psi) = me.run_generator(&generator, &label, p.span).map_err(|e| match e {
+                crate::ElabError::Elab { msg, span } if !msg.starts_with(&format!("`{label}`")) => crate::ElabError::Elab {
+                    msg: format!("`{label}`: the declaration's call of its generator is refused ({convention}): {msg}"),
+                    span,
+                },
+                crate::ElabError::Elab { msg, span } if msg.contains("the generator's call is ill-typed") => {
+                    crate::ElabError::Elab { msg: format!("{msg}; {convention}"), span }
+                }
+                other => other,
+            })?;
+            if d.value && !members.iter().any(|m| m.name == d.name) {
+                return err(
+                    format!(
+                        "`{label}`: the generator did not declare `{}`: a generator prefixing a \
+                         `def` rewrites it, so its group declares the name",
+                        d.name
+                    ),
+                    p.span,
+                );
+            }
+            me.publish_members(&members, psi, &label, p.span)
+        })
+    }
+
     /// Run a generator to its declarations, each read back and checked as
     /// far as the run can (its body against its statement), and the number
     /// of globals of the world they were built in.
-    fn run_generator(&self, generator: &Expr, span: Span) -> R<(Vec<Member>, usize)> {
-        let shown = tactic_name(generator);
-        let fail = |msg: String| err(format!("`generate {shown}`: {msg}"), span);
+    fn run_generator(&self, generator: &Expr, label: &str, span: Span) -> R<(Vec<Member>, usize)> {
+        let fail = |msg: String| err(format!("`{label}`: {msg}"), span);
         let cx = Cx::empty();
         let world = self.goal_psi();
         let (closed, quoted) = self.protocol_value(&cx, &world, generator, "host_generator", "generate", span)?;
@@ -3140,6 +3277,16 @@ impl Elaborator {
         let Type::Pi { dom_level, cod_level, dom, cod } = runs else {
             return err("`tactic::host_generator` takes nothing", span);
         };
+        // The call is run before anything else reads it, and elaboration
+        // leaves a mismatch for the kernel to find, so the kernel checks it
+        // first: a value of the wrong type is refused here instead of being
+        // evaluated into a stuck answer.
+        if let Err(e) = self.kernel_check_term(&world, Layer::Code, &LocalCtx::nil(), &closed, &dom, &dom_level) {
+            return fail(format!(
+                "the generator's call is ill-typed: it is not a `tactic::Tac<List<tactic::Decl>>` \
+                 of these arguments ({e:?})"
+            ));
+        }
         let tree = Term::App { fun: Rc::new(head), dom_level, cod_level, dom, cod, arg: Rc::new(closed) };
         let arena = ValueArena::new();
         let reader = Reader::new(&world, &arena);
@@ -3166,6 +3313,9 @@ impl Elaborator {
             return Err(format!("`{name}` is not a declaration's name"));
         }
         let at = |why: String| format!("`{name}`: {why}");
+        if d.value && !d.params.is_empty() {
+            return Err(at("a value (`AsValue`) takes no parameters; a function is `AsFunction`".into()));
+        }
         let mut parent = 0;
         let mut params = Vec::with_capacity(d.params.len());
         for &(x, implicit) in &d.params {
@@ -3196,7 +3346,7 @@ impl Elaborator {
         let unsolved = |what: &str| at(format!("its {what} mentions a hole nothing solved"));
         let result = run.committed_ty(&result).ok_or_else(|| unsolved("statement"))?;
         let body = run.committed_tm(&body.term).ok_or_else(|| unsolved("body"))?;
-        Ok(Member { theorem: d.theorem, name: name.clone(), params, result: (result, level), body })
+        Ok(Member { theorem: d.theorem, value: d.value, name: name.clone(), params, result: (result, level), body })
     }
 
     /// Elaborate one generated declaration from its skeleton (see
@@ -3225,6 +3375,7 @@ impl Elaborator {
             kind: if m.theorem { DeclKind::Theorem } else { DeclKind::Fn },
             is_meta: false,
             is_evidence: false,
+            value: m.value,
             elaborates: None,
             name: m.name.clone(),
             tyvars: Vec::new(),
