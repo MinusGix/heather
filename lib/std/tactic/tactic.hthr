@@ -102,6 +102,12 @@ inductive Head {
     HMatch(scrut: Handle),
     // A hole nothing has solved yet.
     HHole,
+    // A λ, by its domain; `Open` reaches its body (a definition's body, as
+    // `Body` hands it out, is one per parameter).
+    HLam(dom: Handle),
+    // A constructor value: its type, the constructor's number and name, and
+    // its fields in declaration order (`WcState(a, b, c)`, `True`).
+    HCtor(ty: GlobalRef, ctor: Nat, name: String, fields: List<Handle>),
     HOther,
 }
 
@@ -133,6 +139,16 @@ record Split { id: Nat, branches: List<Branch> }
 record FieldInfo { name: String, ty: Option<Handle> }
 
 record CtorInfo { name: String, fields: List<FieldInfo>, ctor: Option<Handle> }
+
+// A `match` with its arms, as `Arms` answers it
+// (docs/runtime-fn-setups-design.md §3.2): the scrutinee, one arm per
+// constructor in declaration order, and the arguments the match is applied
+// to (a `match h:` is applied to `refl`, its arms taking the equation). An
+// arm's `body` is a function of the constructor's payload, which `Open`
+// reaches; a constructor with no fields still takes one (it reads nothing).
+record ArmInfo { ctor: String, body: Handle }
+
+record MatchInfo { scrut: Handle, arms: List<ArmInfo>, args: List<Handle> }
 
 // ---------------------------------------------------------------------------
 // Declarations, as a generator builds them (design §19).
@@ -174,7 +190,8 @@ inductive Req {
     // The type of a term.
     Infer(e: Expr),
     // Introduce the binder of a function type, by its head normal form: a
-    // fresh local of its domain, and its body under that local.
+    // fresh local of its domain, and its body under that local. A handle to
+    // a `λ` (`HLam`) opens the same way, its body a term under the local.
     Open(h: Handle, name: String),
     // A name, resolved and elaborated where the `by` is (not where the
     // tactic is declared), as a handle to the term.
@@ -227,6 +244,15 @@ inductive Req {
     // End a generator's run by publishing `decls` where the `generate` is.
     // A tactic's `by` refuses it: only `generate` publishes.
     Publish(decls: List<Decl>),
+    // A definition's elaborated value: a handle to the term the elaborator
+    // built for `fn g`, its parameters as `λ`s. Refused, with the reason, for
+    // a global with no body (a theorem, an axiom). A subterm the body shares
+    // is the same handle wherever `View` meets it in one scope, so a reader
+    // can memoise on handles (docs/runtime-fn-setups-design.md §3.2).
+    Body(g: GlobalRef),
+    // The `match` a handle stands for, with its arms (`MatchInfo`); refused
+    // for anything else, and for a match this host does not present yet.
+    Arms(h: Handle),
 }
 
 inductive Never {}
@@ -256,6 +282,8 @@ fn Resp(r: Req) → Type {
         AsType(_) => Checked<Handle>,
         Holes(_, _) => Checked<List<Handle>>,
         Publish(_) => Never,
+        Body(_) => Checked<Handle>,
+        Arms(_) => Checked<MatchInfo>,
     }
 }
 
@@ -309,6 +337,10 @@ fn as_type(e: Expr) → Tac<Checked<Handle>> { Ask(AsType(e), λ c => Pure(c)) }
 
 fn holes(e: Expr, n: Nat) → Tac<Checked<List<Handle>>> { Ask(Holes(e, n), λ c => Pure(c)) }
 
+fn body(g: GlobalRef) → Tac<Checked<Handle>> { Ask(Body(g), λ c => Pure(c)) }
+
+fn arms(h: Handle) → Tac<Checked<MatchInfo>> { Ask(Arms(h), λ c => Pure(c)) }
+
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
 }
@@ -331,6 +363,7 @@ inductive Answer {
     ALocal(c: Checked<LocalInfo>),
     ACtors(c: Checked<List<CtorInfo>>),
     AHoles(c: Checked<List<Handle>>),
+    AArms(c: Checked<MatchInfo>),
 }
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
@@ -358,6 +391,8 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         AsType(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Holes(_, _) => match a { AHoles(c) => Fits(c), _ => Mismatch },
         Publish(_) => Mismatch,
+        Body(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Arms(_) => match a { AArms(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -713,6 +748,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`. 10: `Hole`. 11: `Mark`.
 // 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
+// 22: `Body`. 23: `Arms`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -738,6 +774,8 @@ fn host_tag(t: Tac<Expr>) → Nat {
             AsType(_) => 19,
             Publish(_) => 20,
             Holes(_, _) => 21,
+            Body(_) => 22,
+            Arms(_) => 23,
         },
     }
 }
@@ -768,8 +806,8 @@ fn host_rhs(t: Tac<Expr>) → Expr {
     }
 }
 
-// The handle `Open`, `View`, `Whnf` and `Hole` are about; `Match`'s function
-// type; the goal `Cases` and `Constructor` split.
+// The handle `Open`, `View`, `Whnf`, `Hole` and `Arms` are about; `Match`'s
+// function type; the goal `Cases` and `Constructor` split; `Body`'s global.
 fn host_handle(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -782,6 +820,8 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Cases(_, goal) => goal.id,
             Constructor(goal) => goal.id,
             Ctors(ty) => ty.id,
+            Body(g) => g.id,
+            Arms(h) => h.id,
             _ => 0,
         },
     }
@@ -1039,13 +1079,39 @@ fn host_head_hole() → Answer { AHead(HHole) }
 
 fn host_head_other() → Answer { AHead(HOther) }
 
-// One more argument of a `HGlobal`, `HLocal` or `HField` head.
+fn host_head_lam(dom: Nat) → Answer { AHead(HLam(Handle(dom))) }
+
+fn host_head_ctor(ty: Nat, ctor: Nat, name: String) → Answer { AHead(HCtor(GlobalRef(ty), ctor, name, [])) }
+
+// `Arms`' answer: the scrutinee, then one arm at a time, then the
+// arguments.
+fn host_arms(scrut: Nat) → Answer { AArms(Accepted(MatchInfo(Handle(scrut), [], []))) }
+
+fn host_arms_arm(a: Answer, ctor: String, body: Nat) → Answer {
+    match a {
+        AArms(c) => match c { Accepted(m) => AArms(Accepted(MatchInfo(m.scrut, m.arms ++ [ArmInfo(ctor, Handle(body))], m.args))), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_arms_arg(a: Answer, h: Nat) → Answer {
+    match a {
+        AArms(c) => match c { Accepted(m) => AArms(Accepted(MatchInfo(m.scrut, m.arms, m.args ++ [Handle(h)]))), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_no_arms(why: String) → Answer { AArms(Refused(why)) }
+
+// One more argument of a `HGlobal`, `HLocal` or `HField` head, or field of
+// a `HCtor`.
 fn host_head_arg(a: Answer, h: Nat) → Answer {
     match a {
         AHead(v) => match v {
             HGlobal(g, name, args) => AHead(HGlobal(g, name, args ++ [Handle(h)])),
             HLocal(x, args) => AHead(HLocal(x, args ++ [Handle(h)])),
             HField(r, name, args) => AHead(HField(r, name, args ++ [Handle(h)])),
+            HCtor(ty, i, name, fields) => AHead(HCtor(ty, i, name, fields ++ [Handle(h)])),
             _ => a,
         },
         _ => a,
