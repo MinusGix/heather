@@ -1,8 +1,11 @@
 # `runtime fn` setups: what a setup is, what it checks, how it is proved once, how it lowers
 
-Status: **proposed, 2026-10-31, for Minus to decide (§14).** Round R4 of
-`docs/compiler-milestones-proposal.md` (issue `runtime-fn-setups-design`,
-milestone `nh-front`). Nothing here is built. Written on master `f9a1a59`.
+Status: **decided 2026-10-31 (§14, as recommended); R5a built 2026-11-01.**
+Round R4 of `docs/compiler-milestones-proposal.md` (issue
+`runtime-fn-setups-design`, milestone `nh-front`). Written on master
+`f9a1a59`. R5a (§13) built `rt`, its meaning, the host requests and the
+reflector, and ran V1–V5; §16 records what that changed in §3.2 and §4.1.
+Read §16 before the sections it amends.
 
 The proposal (§4) fixed the frame: an ordinary `fn` is kerneltime
 mathematics and never runs; a function crosses to the machine only when it is
@@ -295,6 +298,10 @@ inductive Tm {
 record Fun { params: List<Ty>, result: Ty, body: Tm }
 record Program { funs: List<Fun>, entry: Nat }
 ```
+
+*As built (§16): operands are variables (A-normal form), records are
+`Named(i)` codes read from a table, `match h:` is its own node `IfEq`, and
+there is no `Measured` node. The file is `lib/native/runtime/rt.hthr`.*
 
 The constructors mirror the elaborated forms node for node, including the
 recursion shapes R3 emits. Nothing in `rt` is a FunctionIR concept (ports,
@@ -704,6 +711,11 @@ record; `Agrees` grows a second conjunct. Nothing in N1 blocks it.
 If V1–V3 show the pin cannot be conversion for some construct, that construct
 starts certifying (§6.3's lifecycle) and the note is corrected.
 
+*Results (R5a, 2026-11-01; `lib/_tests/native/runtime/rt_tests.hthr`):* V1,
+V2, V4 and V5 hold, every pin by `refl`; V3 holds for `foldl` and, for
+`decreases`, up to the generated unfolding equation (§16.3). V6 moves to R5b,
+where the lowering it fixes the invariant of is designed.
+
 ---
 
 ## 13. Rounds and issues
@@ -781,3 +793,84 @@ lowering emits `Source` directly, never through the builder (§10);
 - **R3's shapes may move.** The `rt` loop nodes mirror the sequencing
   design's §5 lowering. If R3 changes a shape, `rt` follows; the pin catches
   any mismatch as a refused conversion, not as a wrong program.
+
+---
+
+## 16. What R5a found (2026-11-01)
+
+R5a built `lib/native/runtime/rt.hthr` (the language and its meaning),
+`lib/native/runtime/rt_reflect.hthr` (the reflector) and the host requests
+(`crates/elab/src/host.rs`, `lib/std/tactic/tactic.hthr`). Four things
+differ from §3.2 and §4.1, each forced by something the kernel or the
+elaborator does.
+
+### 16.1 The meaning is typed by synthesis, and the casts vanish
+
+`Tm::ty(w, Γ)` computes a node's code; `Tm::sem(w)(Γ, env)` lives at that
+code's semantics. Variables need no cast (their code is the context's);
+casts sit only where two codes must agree (an operand at a primitive's
+parameter, the second branch at the first's, an argument at a callee's
+parameter) and go along `Ty::equation`, data that evaluates to `refl` at two
+closed codes. So §15's first risk did not materialise: no per-signature
+interpreter is needed. The pin is `refl` for straight-line code, calls,
+connectives, records, `foldl` and convoys, and a wrong reflection is refused
+(`leaf_misreflects`).
+
+### 16.2 A-normal form, and records by name
+
+- **Operands are variables.** `Prim`, `Call`, `Make`, `Field`, `Fold` and
+  `If`'s scrutinee name de Bruijn indices; every intermediate value is a
+  `Let`. `Tm` then has no `List<Tm>` field, which the kernel route does not
+  lower yet (`nested-inductives-container-fields`), and a value read twice is
+  one `Let`, which is what the lowering wants anyway (a port).
+- **Records are `Named(i)`.** A record type lowers to a Σ spine behind a
+  nominal `sEq` tag that no surface term spells
+  (`docs/inductive-tier0-lowering.md` §3.3), so a structural `Rec(fs)` code
+  cannot mean the record type. The meaning instead takes a table of
+  `RecInfo { T, fields, mk, get }`, as it takes a table of callee meanings,
+  and `Make`/`Field` go through `mk`/`get`; at a concrete table both reduce
+  to the constructor and the projections, so V2's pin is `refl` with no
+  `encode`/`decode`. A record's fields are flat (words, bits, bytes): the
+  table cannot refer to itself.
+
+### 16.3 Convoys and measured recursion
+
+- `match h: c` elaborates to the match at a convoyed motive applied to
+  `refl` (`matching::plan_convoy`), which does not convert with a plain
+  match. `rt` has `IfEq`, whose meaning is that convoy (`Tm::convoy`); the
+  arms' equation is erased. A plain `If` is refused against a convoy
+  (`safe_pred_plain_if`).
+- **There is no `Measured` node.** A `decreases` function's recursive call
+  is `f#rec`'s ih applied to the new arguments *and a proof* of the measure's
+  decrease, which the kernel does not treat as irrelevant and the reflection
+  does not carry. So a self-call reflects as `Call` of the function itself,
+  answered from the table by `f`, and the body pins by `refl` against the
+  body as written (`count_down_body_reflects`). The step from `body[f]` to
+  `f` is the generated `f_unfold`
+  (`docs/decreases-unfolding-design.md`): the measured pin is
+  `refl` composed with that theorem, still generated, never hand-written.
+  For a body whose test is a `match h:`, which is every native loop,
+  `f_unfold` is refused today: `issues/decreases-unfold-convoy-scrutinee.md`.
+  The lowering of a measured function consumes `f_unfold` and the
+  obligations (`f#obl_N`) as its evidence, in R5b.
+
+### 16.4 The host requests, and sharing
+
+- `Body(g)`, `HLam(dom)` with `Open` on a `λ`, and `HCtor(ty, i, name,
+  fields)` (constructor values, by the display's own recogniser) are as
+  §3.2 proposed.
+- The `match` is a request, `Arms(h)`, rather than an `HCases` head: `View`
+  keeps `HMatch` for the tactics that read it. An arm is a handle to a `λ`
+  over the constructor's payload, which `Open` reaches; a `match h:` lists
+  its `refl` argument and its arms take the equation as a second `λ`. Only
+  two-constructor matches are presented so far.
+- One handle per shared subterm per scope (`Run::issue_shared`). But the
+  elaborated bodies do not share let-bound values: each use is its own copy
+  (`issues/elaborated-let-sharing-lost.md`). The reflector therefore numbers
+  values (a node over already-bound operands is bound once), as the Rust
+  reflector does, and its output is DAG-shaped either way; what remains
+  exponential in an SSA chain is the number of requests it makes, until
+  that issue is fixed.
+- `Bytes(cap)`'s capacity is not in the type: the reflector writes
+  `Bytes(0)` and the capacity becomes a setup choice (a generator argument).
+
