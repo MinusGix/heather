@@ -1,0 +1,78 @@
+// Probes of facts on demand's two language pieces
+// (docs/facts-on-demand-design.md §3–§4): a search rule — an evidence rule
+// whose premise runs a tactic — and the `Synth` request through `request`,
+// which answers `None` where a plain `:= infer` would be an error.
+// The axes of docs/testing-generated-terms.md: a literal and a neutral
+// operand, a fact from the caller's hypotheses, a plain rule beside a search
+// rule, and negative controls. Tests, not library: nothing outside
+// lib/_tests imports this module.
+import logic;
+import bool;
+import nat;
+import option;
+import omega;
+import list;
+import string;
+import tactic;
+import fact_request;
+
+// A fact about two numbers, with two producers: a plain rule for one shape
+// and a search rule, by omega, for everything else.
+fn Fits(i: Nat, n: Nat) → Type { i < n }
+
+evidence theorem Fits::of_double({i: Nat}, {n: Nat}, h: Fits(i, n) := infer): Fits(i + i, n + n) { omega }
+evidence theorem Fits::by_omega({i: Nat}, {n: Nat}, h: i < n := omega): Fits(i, n) { h }
+
+theorem asks(i: Nat, n: Nat, h: Fits(i, n) := infer): Fits(i, n) { h }
+
+// Computation answers a closed goal before any rule.
+theorem closed(): Fits(3, 8) { asks(3, 8) }
+// The search rule's omega reads the caller's hypotheses.
+theorem from_local(k: Nat, hk: k < 4): Fits(k, 8) { asks(k, 8) }
+theorem sum(a: Nat, b: Nat, ha: a < 4, hb: b < 4): Fits(a + b, 8) { asks(a + b, 8) }
+// The plain rule is tried first, and its premise is found by the search rule.
+theorem doubled(k: Nat, hk: k < 4): Fits(k + k, 4 + 4) { asks(k + k, 4 + 4) }
+
+// No producer proves a false fact: the search rule is tried and fails.
+// expect-error: no instance for `Fits(k, 4)`
+theorem too_big(k: Nat, hk: k < 8): Fits(k, 4) { asks(k, 4) }
+
+// `request`, from a tactic: the found proof, or a fallback, or `None`.
+fn found_or(fallback: Tac<Expr>) → Tac<Expr> {
+    goal().bind(λ g => request_in(g, [fallback], 16).bind(λ o => match o {
+        Some(e) => Pure(e),
+        None => fail("no evidence, and no fallback proved it", []),
+    }))
+}
+
+fn nothing() → Tac<Expr> { fail("nothing", []) }
+
+theorem by_request(k: Nat, hk: k < 4): Fits(k, 8) { by found_or(nothing()) }
+
+// A goal no producer knows falls to the fallback, here `reflexivity`.
+theorem by_fallback(k: Nat): k = k { by found_or(reflexivity()) }
+
+// A fallback that runs out of budget proves nothing: `spin(n)` asks `n`
+// questions before it proves anything.
+fn spin(n: Nat) → Tac<Expr> { match n { Zero => reflexivity(), Succ(m) => goal().bind(λ _ => spin(m)) } }
+
+// expect-error: no evidence, and no fallback proved it
+theorem over_budget(k: Nat): k = k { by found_or(spin(100)) }
+
+theorem within_budget(k: Nat): k = k { by found_or(spin(4)) }
+
+// A fallback sees the goal's locals.
+fn sym_of_local() → Tac<Expr> { assumption() }
+theorem sees_locals(k: Nat, hk: 2 = k): 2 = k { by found_or(sym_of_local()) }
+
+// A fallback's answer is checked at the goal before it counts: a proof of
+// something else is no answer.
+fn wrong() → Tac<Expr> { lookup("closed").bind(λ c => match c { Accepted(g) => Pure(Global(g)), Refused(why) => fail(why, []) }) }
+
+// expect-error: no evidence, and no fallback proved it
+theorem checked_answer(k: Nat): k = k { by found_or(wrong()) }
+
+// `Synth` answers a class goal as `:= infer` does, composed instances
+// included, at a closed and at an open carrier.
+fn decided() → Decide<Nat::Le(2, 3)> { by found_or(nothing()) }
+fn decided_open(n: Nat, m: Nat) → Decide<Nat::Le(n, m) ∧ Nat::Le(m, n)> { by found_or(nothing()) }

@@ -918,3 +918,21 @@ the reads were quadratic in the spine over a large type.
 
 What is left of a `mono` call at a class carrier is evaluating the tactic
 between requests and `apply`'s `Match`, the same as at a concrete carrier.
+
+## 21. Asking the resolver: `Synth` (2026-11-01)
+
+`Synth(goal: Handle) → Checked<Handle>` runs the search a `:= infer`
+parameter runs (`Elaborator::resolve_goal`) at the type the handle stands
+for, in the handle's scope: locals, the derived table, instances, and at a
+proposition computation and the evidence rules, search rules last. It is
+refused, with the search's trace as the reason, when nothing answers, and a
+refused search leaves nothing (`SearchMark`). The type must mention no
+unsolved hole: the search's trials are the elaborator's own and know
+nothing of a run's holes.
+
+Its first customer is facts on demand (`docs/facts-on-demand-design.md` §4):
+a generator that asks for a fact must hear "none" rather than fail, which
+neither `:= infer` nor a parameter default can say. `lib/std/tactic/fact_request.hthr`'s
+`request` is `Synth`, then the requester's budgeted fallbacks. A Heather
+tactic that wants instance search or the evidence rules (a `positivity`
+written in Heather, say) can use it the same way.
