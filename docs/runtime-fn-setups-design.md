@@ -471,7 +471,10 @@ A table from globals to `rt::Op`, each with its FunctionIR node and its case of
 `sound`: `BitVec::add`/`sub`/`band`/`bor`/`bxor`, shifts, `eq_bit`,
 `unsigned_lt_bit`, `signed_lt_bit` (FunctionIR's nodes today), `Bool::and`,
 `or`, `not`, `Bool::word`, `zero_extend`/`truncate` between widths, and the
-byte reads and writes of a `Bytes` value at a word index. Multiplication,
+byte reads and writes of a `Bytes` value at a word index (`rt`'s `Get` and
+`Set`, meaning `List::byte_at` and `List::with_byte`, landed with the
+`Unique` fact; a write is in place where `lib/lang/facts/write_facts.hthr`'s
+plan carries `Unique`, `docs/facts-on-demand-design.md` §7). Multiplication,
 division and remainder have no FunctionIR node yet; the decimal formatter
 needs them or a loop, so `function-ir-alu-core` gains them as N1's first
 back-half addition. The table is a library value, so a later setup (or P3's
@@ -682,6 +685,13 @@ the old version unobservable. All of it fits the record: same `rt`, a stricter
 default's cases for everything it lowers the same way, which is the
 composition `scoped-declaration-generators` asks for ("a generator may return
 evidence consumed by another") in its simplest form.
+
+The judgment's first form is built: `Program::owned` in
+`lib/lang/facts/unique.hthr` is the uniqueness check over `rt` writes, with
+parameters owned and calls as moves, and `Unique::of_owned` reads each
+write's fact off its verdict (`docs/facts-on-demand-design.md` §7). What
+remains for R12 is the surface (borrows a user writes) and the lowering's
+`sound`.
 
 **Constant time.** Judgment: no `If`, `Case`, loop bound or buffer index
 depends on a parameter marked secret (a marked parameter is a generator
