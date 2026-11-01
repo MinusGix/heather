@@ -115,7 +115,7 @@ impl Op {
                     head = fun;
                 }
                 args.reverse();
-                (*head == **op).then_some(args)
+                same_dictionary_read(head, op).then_some(args)
             }
         }
     }
@@ -136,9 +136,28 @@ impl Op {
             Op::GlobalAfter(name, prefix) => {
                 crate::omega_cert::named_args(elab, op, name).is_some_and(|args| args.len() == *prefix)
             }
-            Op::Term(term) => *op == **term,
+            Op::Term(term) => same_dictionary_read(op, term),
         }
     }
+}
+
+/// Is `tm` the dictionary read `want` (`K.inv`, `K.unit`), as written or as
+/// a parent class's definition reaches it? A predicate defined in a parent
+/// class's section (`AbsLe`, from `OrderedAddGroup`) reads its operations
+/// off the parent dictionary, which at `K` is a record built from `K`'s own
+/// fields: `fst(snd(…(pair(…))))`, whose component, read by syntax alone, is
+/// the field `K.inv` is (issues/ring-atom-mentions-class-constant.md).
+fn same_dictionary_read(tm: &Term, want: &Term) -> bool {
+    if *tm == *want {
+        return true;
+    }
+    let mut cur = tm;
+    let mut read = false;
+    while let Some(component) = crate::spelling::project_value(cur) {
+        cur = component;
+        read = true;
+    }
+    read && crate::spelling::same_projection(cur, want)
 }
 
 /// A class carrier's integers (docs/casting-design.md §16): a type
@@ -1307,10 +1326,10 @@ impl Reifier<'_> {
     /// writes for its coefficients).
     fn rel_numeral(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<Z> {
         if let Some(ints) = &ops.class {
-            if *tm == ints.zero {
+            if same_dictionary_read(tm, &ints.zero) {
                 return Some(0);
             }
-            if *tm == ints.one {
+            if same_dictionary_read(tm, &ints.one) {
                 return Some(1);
             }
         }
