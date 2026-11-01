@@ -151,7 +151,8 @@ A corecursive function into an indexed codata type is coinduction proper:
   `refl`, so `out(f(ā)) ≡` the body's node with each `inl` seed unfolded one
   step, as in the unindexed case.
 
-Nested guards stay refused (`issues/codata-nested-guards.md`).
+Nested guards stay refused here (`issues/codata-nested-guards-indexed.md`);
+unindexed codata has them (`docs/codata-elaborator-design.md` §5.4).
 
 ## 7. What stays out
 

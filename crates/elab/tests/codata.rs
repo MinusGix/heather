@@ -169,6 +169,54 @@ fn existing_function_child_in_a_corecursive_step() {
     );
 }
 
+// §5.4 — constructors nested above a self-call: the carrier grows one
+// pending-node layer per extra constructor, and each layer's observation
+// computes by β under `out`, back to the definition itself after the last
+// (`tl(tl(pairs(n))) = pairs(…)` by `refl`). Literal and neutral seeds; two
+// and three layers; a nested node under a function child whose answer it
+// captures, and a `match` there with an existing tree in one arm (the
+// `echo` that `function_children_and_dependent_domains` writes with a phase
+// seed); an existing function child one layer down, and an answer captured
+// by the pending node as the next seed; and an open element type.
+#[test]
+fn nested_constructors_above_a_self_call() {
+    elab(&format!(
+        "{STREAM}
+         fn pairs(n: Nat) -> Stream {{ SCons(n, SCons(Succ(n), pairs(Succ(Succ(n))))) }}
+         fn triples(n: Nat) -> Stream {{ SCons(n, SCons(n, SCons(Succ(n), triples(Succ(n))))) }}
+         theorem pairs_lit(): nth(pairs(0), 5) = 5 {{ refl }}
+         theorem pairs_open(n: Nat): hd(tl(pairs(n))) = Succ(n) {{ refl }}
+         theorem pairs_back(n: Nat): tl(tl(pairs(n))) = pairs(Succ(Succ(n))) {{ refl }}
+         theorem triples_lit(): nth(triples(4), 4) = 5 {{ refl }}
+         theorem triples_back(n: Nat): tl(tl(tl(triples(n)))) = triples(Succ(n)) {{ refl }}
+         inductive Cmd {{ Ask, Say(v: Nat) }}
+         codata Tree {{ Ret(r: Nat), Tau(t: Tree), Vis(c: Cmd, k: Nat -> Tree) }}
+         fn echo(acc: Nat) -> Tree {{
+             Vis(Ask, λ n => match n {{ Zero => Ret(acc), Succ(_) => Tau(echo(add(n, acc))) }})
+         }}
+         fn answer(t: Tree, n: Nat) -> Tree {{ match t {{ Vis(_, k) => k(n), _ => t }} }}
+         fn tau_next(t: Tree) -> Tree {{ match t {{ Tau(u) => u, _ => t }} }}
+         fn ret_of(t: Tree) -> Nat {{ match t {{ Ret(r) => r, _ => 0 }} }}
+         theorem echo_lit(): tau_next(answer(echo(1), 2)) = echo(3) {{ refl }}
+         theorem echo_open(a: Nat, m: Nat): tau_next(answer(echo(a), Succ(m))) = echo(add(Succ(m), a)) {{ refl }}
+         theorem echo_stops(a: Nat): ret_of(answer(echo(a), 0)) = a {{ refl }}
+         fn chats(v: Nat) -> Tree {{ Vis(Say(v), λ f => Tau(Vis(Say(f), λ g => chats(add(g, v))))) }}
+         theorem chats_back(v: Nat, a: Nat, b: Nat): answer(tau_next(answer(chats(v), a)), b) = chats(add(b, v)) {{ refl }}
+         codata Two {{ Node(k: Nat -> Two, t: Two) }}
+         fn kid2(x: Two, n: Nat) -> Two {{ match x {{ Node(k, _) => k(n) }} }}
+         fn next2(x: Two) -> Two {{ match x {{ Node(_, t) => t }} }}
+         fn walk(k: Nat -> Two) -> Two {{ Node(k, Node(k, walk(k))) }}
+         theorem walk_k(k: Nat -> Two, n: Nat): kid2(next2(walk(k)), n) = k(n) {{ refl }}
+         theorem walk_back(k: Nat -> Two): next2(next2(walk(k))) = walk(k) {{ refl }}
+         codata Seq<A> {{ Cons(h: A, t: Seq<A>) }}
+         fn shd<A>(s: Seq<A>) -> A {{ match s {{ Cons(h, _) => h }} }}
+         fn stl<A>(s: Seq<A>) -> Seq<A> {{ match s {{ Cons(_, t) => t }} }}
+         fn alt<A>(a: A, b: A) -> Seq<A> {{ Cons(a, Cons(b, alt(a, b))) }}
+         theorem alt_open<A>(a: A, b: A): shd(stl(stl(stl(alt(a, b))))) = b {{ refl }}
+         theorem alt_back<A>(a: A, b: A): stl(stl(alt(a, b))) = alt(a, b) {{ refl }}"
+    ));
+}
+
 // The open element type: type parameters on the declaration and on a
 // corecursive function, with the arguments inferred from a codata argument.
 #[test]
@@ -324,12 +372,27 @@ fn self_call_under_an_observation_is_refused() {
     assert!(msg.contains("is not guarded"), "{msg}");
 }
 
+// A call inside a tree that is not one of the declaration's constructors
+// is corecursion *up to* that function, which the guard does not take, even
+// where nested constructors above it would be accepted.
 #[test]
-fn nested_guard_is_refused_with_its_issue() {
-    let msg = elab_err(&format!(
-        "{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, SCons(n, bad(n))) }}"
-    ));
-    assert!(msg.contains("issues/codata-nested-guards.md"), "{msg}");
+fn self_call_inside_an_existing_tree_is_refused() {
+    let msg = elab_err(&format!("{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, tl(SCons(n, bad(n)))) }}"));
+    assert!(msg.contains("issues/codata-corecursion-up-to.md"), "{msg}");
+    let msg = elab_err(&format!("{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, SCons(hd(bad(n)), bad(n))) }}"));
+    assert!(msg.contains("is not guarded"), "{msg}");
+}
+
+// A nested layer's observation is computed, not guessed: a wrong one is
+// refused by the kernel, and the tree two layers down is not the seed one
+// layer down.
+#[test]
+fn nested_wrong_observation_is_refused() {
+    let pairs = "fn pairs(n: Nat) -> Stream { SCons(n, SCons(Succ(n), pairs(Succ(Succ(n))))) }";
+    let msg = elab_err(&format!("{STREAM}\n{pairs}\ntheorem wrong(n: Nat): hd(tl(pairs(n))) = n {{ refl }}"));
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    let msg = elab_err(&format!("{STREAM}\n{pairs}\ntheorem wrong(n: Nat): tl(pairs(n)) = pairs(Succ(n)) {{ refl }}"));
+    assert!(msg.contains("NotConvertible"), "{msg}");
 }
 
 #[test]

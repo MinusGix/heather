@@ -34,7 +34,7 @@ Scope:
 
 Codata is not the representation in this round: the Leibniz product is
 corecursion up to `+`, which Heather's guard refuses
-(`issues/codata-nested-guards.md`). Revisit when that issue lands.
+(`issues/codata-corecursion-up-to.md`). Revisit when that issue lands.
 
 ## What it assumes from elsewhere
 - **[[finite-sums-and-products]]** and **[[finite-difference-calculus]]**:

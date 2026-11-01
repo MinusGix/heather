@@ -171,6 +171,14 @@ fn a_use_needs_its_index() {
     assert!(msg.contains("index argument(s)"), "{msg}");
 }
 
+// Nested constructors above a self-call are generated for unindexed codata
+// only (codata-elaborator-design §5.4); an indexed one names its issue.
+#[test]
+fn nested_guard_is_refused_with_its_issue() {
+    let msg = elab_err(&format!("{STREAM}\nfn bad(s: Stream) -> SBisim(s, s) {{ Same(refl, Same(refl, bad(tl(tl(s))))) }}"));
+    assert!(msg.contains("issues/codata-nested-guards-indexed.md"), "{msg}");
+}
+
 // The β rule is not a guess: a wrong observation is refused by the kernel.
 #[test]
 fn wrong_observation_is_refused() {

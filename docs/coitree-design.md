@@ -252,8 +252,9 @@ is on `Bisim`. `bind_cong_l` and `bind_cong_r` fix one side.
 ### 7.6 What is not here
 
 - **Up-to techniques** (a corecursive call under `trans` or `bind`). The
-  `codata` surface's guard is one constructor (codata §5); every proof here
-  is written so its self-calls sit directly under one.
+  `codata` surface's guard is constructors (codata §5.2, §5.4), not
+  functions; every proof here is written so its self-calls sit under one
+  (`issues/codata-corecursion-up-to.md`).
 
 ### 7.7 Cost
 

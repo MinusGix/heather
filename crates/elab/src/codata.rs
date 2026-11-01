@@ -238,9 +238,8 @@ fn slim_ty(t: &Rc<Type>) -> Rc<Type> {
 
 /// One child of a constructor, as its positions see it (§2).
 /// The first corecursive call inside `e`, which is not itself one: a call
-/// under a *second* constructor needs a carrier that remembers the pending
-/// constructor, which this round's one-step `corec` does not build
-/// (issues/codata-nested-guards.md).
+/// under a *second* constructor needs a carrier layer that remembers the
+/// pending constructor (§5.4), and a call inside any other tree is unguarded.
 fn nested_self_call(selfref: &SelfRef, e: &Expr) -> Option<Span> {
     let mut nested = None;
     crate::surface::walk_expr(e, &mut |x| {
@@ -253,11 +252,20 @@ fn nested_self_call(selfref: &SelfRef, e: &Expr) -> Option<Span> {
 
 fn nested_guard_msg(name: &str) -> String {
     format!(
-        "this call to `{name}` sits under a second constructor: a corecursive call \
-         must be a *direct* child of the constructor the step returns, and nesting \
-         one constructor inside another before the call is not supported yet — \
-         name the inner layer as a seed state of its own instead \
-         (issues/codata-nested-guards.md)"
+        "this call to `{name}` sits inside a tree that is not a constructor of the \
+         definition's own type: a corecursive call must be a child of the constructor \
+         the step returns, or of constructors nested inside it (`C(…, D(…, {name}(…)))`), \
+         and corecursion *up to* a function is not supported \
+         (issues/codata-corecursion-up-to.md)"
+    )
+}
+
+fn nested_indexed_msg(name: &str) -> String {
+    format!(
+        "this call to `{name}` sits under a second constructor of an indexed codata type: \
+         nested constructors above a corecursive call are generated for unindexed codata \
+         only so far — name the inner layer as a seed state of its own instead \
+         (issues/codata-nested-guards-indexed.md)"
     )
 }
 
@@ -625,6 +633,11 @@ impl Carrier {
 /// telescope).
 pub(crate) struct CorecSite {
     pub(crate) selfref: Rc<SelfRef>,
+    /// The carrier's layers, `C₀ = X` (the varying tuple, or its indexed
+    /// family) up to `C_d = X + F(C_{d-1})`, `d` the number of constructors
+    /// nested above a self-call past the first (§5.4). `carrier` is the
+    /// last; with nothing nested there is the one layer.
+    levels: Vec<Carrier>,
     depth: usize,
     ind: Rc<Inductive>,
     /// `⟦D⟧(g)`, the result type (`g = ⟨⟩` unindexed).
@@ -2075,9 +2088,32 @@ impl Elaborator {
         } else {
             Carrier { fam: vtuple.shift_local(1), level: vtuple_level.clone() }
         };
+        // Constructors nested above a self-call (§5.4): the carrier grows one
+        // pending-node layer per extra constructor, `C₀ = X`, `C_{j+1} = X +
+        // F(C_j)`. Indexed codata keeps the one-layer carrier, and a nested
+        // call there is refused where it sits.
+        let nest = if p.indexed { 0 } else { self.corec_nesting(cx, selfref, &ind, &body).saturating_sub(1) };
+        let mut levels = vec![carrier];
+        for j in 0..nest {
+            let below = &levels[j];
+            let f = self.step_ty(&p, 1, below);
+            let f_level = Self::node_level(&p, below);
+            let x = &levels[0];
+            levels.push(Carrier {
+                fam: Type::Sum {
+                    lhs_level: x.level.clone(),
+                    rhs_level: f_level.clone(),
+                    lhs: Rc::new(x.fam.clone()),
+                    rhs: Rc::new(f),
+                },
+                level: Level::max(x.level.clone(), f_level).normalize().canonical(),
+            });
+        }
+        let carrier = levels.last().expect("level 0").clone();
         let step_ty = self.step_ty(&p, 0, &carrier);
         let kf = Level::join(carrier.level.clone(), p.lw.clone());
         Ok(Some(Rc::new(CorecSite {
+            levels,
             selfref: Rc::clone(selfref),
             depth,
             ind: Rc::clone(&ind),
@@ -2091,6 +2127,36 @@ impl Elaborator {
             rank,
             names,
         })))
+    }
+
+    /// The longest chain of `ind`'s constructors in `e`, one inside another
+    /// in argument position, whose innermost one has a corecursive call
+    /// among its arguments' subterms. One is the ordinary guard; each more
+    /// is a pending-node layer of the carrier (§5.4). Names are resolved as
+    /// constructors without the body's own binders, so a local shadowing a
+    /// constructor can only overcount, which costs an unused layer.
+    fn corec_nesting(&self, cx: &Cx, selfref: &SelfRef, ind: &Inductive, e: &Expr) -> usize {
+        // (chain length, whether `e` holds a self-call), one pass.
+        fn go(el: &Elaborator, cx: &Cx, selfref: &SelfRef, ind: &Inductive, e: &Expr) -> (usize, bool) {
+            let mut best = 0;
+            let mut calls = surface_self_call(selfref, e).is_some();
+            crate::surface::for_each_child(e, &mut |c| {
+                let (b, k) = go(el, cx, selfref, ind, c);
+                best = best.max(b);
+                calls |= k;
+            });
+            if calls && el.codata_ctor_app(cx, ind, e).is_some() && surface_self_call(selfref, e).is_none() {
+                best += 1;
+            }
+            (best, calls)
+        }
+        go(self, cx, selfref, ind, e).0
+    }
+
+    /// The level of a node `F(C) = Σ(s : S). Π(p : P s). C + ⟦D⟧` over the
+    /// carrier `C`.
+    fn node_level(p: &MParts, carrier: &Carrier) -> Level {
+        Level::join(p.ls.clone(), Level::join(p.lp.clone(), Level::join(carrier.level.clone(), p.lw.clone())))
     }
 
     /// The body's expected type and level under `site`.
@@ -2127,11 +2193,51 @@ impl Elaborator {
             };
             subst = subst.extended(Rc::new(t));
         }
-        let mut step = b.apply_local(&subst);
+        let nest = site.levels.len() - 1;
+        let mut step = if nest == 0 {
+            b.apply_local(&subst)
+        } else {
+            // A nested carrier (§5.4): `case x { inl(v) => the body at v;
+            // inr(node) => node, its children moved up a layer }`. The body
+            // reads its varying parameters off the case's binder.
+            let mut subst = embed(&base, (n + 3) as u32);
+            for (j, r) in site.rank.iter().enumerate() {
+                let t = match r {
+                    None => Term::Var(LocalVar((n - 1 - j + 3) as u32)),
+                    Some(r) => tuple_proj(nv, *r, Term::Var(LocalVar(0))),
+                };
+                subst = subst.extended(Rc::new(t));
+            }
+            let x = &site.levels[0];
+            let below = &site.levels[nest - 1];
+            Term::Case {
+                lhs_level: x.level.clone(),
+                rhs_level: Self::node_level(&p, below),
+                motive_level: site.step_level.clone(),
+                lhs: Rc::new(x.at(2, &triv())),
+                rhs: Rc::new(self.step_ty(&p, 2, below)),
+                motive: Rc::new(self.step_ty(&p, 3, &site.carrier)),
+                case_l: Rc::new(b.apply_local(&subst)),
+                case_r: Rc::new(self.corec_lift(&p, &site.levels, nest - 1, 3, var(0))),
+                scrut: var(0),
+            }
+        };
         let vt = self.carrier_tuple(&site.vtuple, nv, &mut |r| {
             let j = site.rank.iter().position(|x| *x == Some(r)).expect("a varying parameter");
             Ok(Rc::new(Term::Var(LocalVar((n - 1 - j) as u32))))
         })?;
+        let vt = if nest == 0 {
+            vt
+        } else {
+            let below = &site.levels[nest - 1];
+            Term::Inl {
+                lhs_level: site.levels[0].level.clone(),
+                rhs_level: Self::node_level(&p, below),
+                lhs: Rc::new(site.levels[0].at(0, &triv())),
+                rhs: Rc::new(self.step_ty(&p, 0, below)),
+                val: Rc::new(vt),
+            }
+        };
         let seed = if p.indexed {
             let li = p.sig.idx_level.clone();
             step = Term::J {
@@ -2227,7 +2333,8 @@ impl Elaborator {
         let Some(p) = MParts::read(&site.d_ty.shift_local(by), &cx.gamma) else {
             return err("internal: a codata declaration did not lower to its `M` encoding", e.span);
         };
-        let carrier = site.carrier.under(by);
+        let levels: Vec<Carrier> = site.levels.iter().map(|c| c.under(by)).collect();
+        let carrier = levels.last().expect("level 0").clone();
         let step_here = site.step_ty.shift_local(by);
         let at = |want: &Type, wlvl: &Level| -> bool {
             *expected == *want || {
@@ -2237,10 +2344,16 @@ impl Elaborator {
             }
         };
         let _ = lvl;
-        let child_idx = self.corec_child_index(cx, &p, &carrier, 0, expected, e.span);
+        // The child position `expected` is, and at which layer of the
+        // carrier: the body's own children are at the top one, a nested
+        // node's one lower (§5.4).
+        let child_of = |cx: &Cx, d: u32, expected: &Type| -> Option<(usize, Rc<Term>)> {
+            (0..levels.len()).rev().find_map(|j| self.corec_child_index(cx, &p, &levels[j], d, expected, e.span).map(|i| (j, i)))
+        };
+        let child_idx = child_of(cx, 0, expected);
         let self_call = surface_self_call(&site.selfref, e);
         if let Some((args, _)) = self_call {
-            let Some(idx) = child_idx else {
+            let Some((j, idx)) = child_idx else {
                 return err(
                     format!(
                         "this call to `{}` is not guarded: a corecursive call must be a child of the \
@@ -2259,33 +2372,68 @@ impl Elaborator {
                     e.span,
                 );
             }
-            let seed = self.corec_seed(cx, site, &p, &carrier, &idx, &args, e.span)?;
+            let seed = self.corec_seed(cx, site, &p, &levels[0], &idx, &args, e.span)?;
+            // Above the first layer a seed is the left summand, `X ⊂ X + F(…)`.
+            let seed = match j {
+                0 => seed,
+                _ => Term::Inl {
+                    lhs_level: levels[0].level.clone(),
+                    rhs_level: Self::node_level(&p, &levels[j - 1]),
+                    lhs: Rc::new(levels[0].at(0, &idx)),
+                    rhs: Rc::new(self.step_ty(&p, 0, &levels[j - 1])),
+                    val: Rc::new(seed),
+                },
+            };
             return Ok(Some(Term::Inl {
-                lhs_level: carrier.level.clone(),
+                lhs_level: levels[j].level.clone(),
                 rhs_level: p.lw.clone(),
-                lhs: Rc::new(carrier.at(0, &idx)),
+                lhs: Rc::new(levels[j].at(0, &idx)),
                 rhs: Rc::new(p.d_of(0, idx)),
                 val: Rc::new(seed),
             }));
         }
         let control = matches!(e.kind, ExprKind::Match { .. } | ExprKind::Block(..));
-        if let Some(idx) = child_idx {
+        if let Some((j, idx)) = child_idx {
             if control {
                 return Ok(None);
             }
-            // An existing tree — which must not itself corecurse: a self-call
-            // under a *second* constructor needs a carrier that remembers
-            // the pending constructor, which this round's one-step `corec`
-            // does not build (issues/codata-nested-guards.md).
             if let Some(at) = nested_self_call(&site.selfref, e) {
+                // A constructor nested above a self-call is a pending node:
+                // the seed `inr(node)` of the layer below, whose step emits
+                // the node (§5.4).
+                if j > 0
+                    && let Some((i, args)) = self.codata_ctor_app(cx, &site.ind, e)
+                {
+                    let below = &levels[j - 1];
+                    let node = self.corec_node(cx, &p, &site.ind, below, i, &args, e.span)?;
+                    let pending = Term::Inr {
+                        lhs_level: levels[0].level.clone(),
+                        rhs_level: Self::node_level(&p, below),
+                        lhs: Rc::new(levels[0].at(0, &idx)),
+                        rhs: Rc::new(self.step_ty(&p, 0, below)),
+                        val: Rc::new(node),
+                    };
+                    return Ok(Some(Term::Inl {
+                        lhs_level: levels[j].level.clone(),
+                        rhs_level: p.lw.clone(),
+                        lhs: Rc::new(levels[j].at(0, &idx)),
+                        rhs: Rc::new(p.d_of(0, idx)),
+                        val: Rc::new(pending),
+                    }));
+                }
+                // Indexed codata does not nest yet, and anything else that
+                // corecurses inside an existing tree is unguarded.
+                if p.indexed && self.codata_ctor_app(cx, &site.ind, e).is_some() {
+                    return err(nested_indexed_msg(&site.selfref.written_name), at);
+                }
                 return err(nested_guard_msg(&site.selfref.written_name), at);
             }
             let d_here = p.d_of(0, Rc::clone(&idx));
             let t = self.elab_check(cx, e, &d_here, &p.lw)?;
             return Ok(Some(Term::Inr {
-                lhs_level: carrier.level.clone(),
+                lhs_level: levels[j].level.clone(),
                 rhs_level: p.lw.clone(),
-                lhs: Rc::new(carrier.at(0, &idx)),
+                lhs: Rc::new(levels[j].at(0, &idx)),
                 rhs: Rc::new(d_here),
                 val: Rc::new(t),
             }));
@@ -2300,7 +2448,8 @@ impl Elaborator {
         {
             let mut cy = cx.clone();
             cy.push("#y".into(), (*dom).clone(), dom_level.clone());
-            if let Some(idx) = self.corec_child_index(&cy, &p, &carrier, 1, &cod, e.span) {
+            if let Some((j, idx)) = child_of(&cy, 1, &cod) {
+                let carrier = &levels[j];
                 if let Some(at) = nested_self_call(&site.selfref, e) {
                     return err(nested_guard_msg(&site.selfref.written_name), at);
                 }
@@ -2319,7 +2468,7 @@ impl Elaborator {
                 };
                 return Ok(Some(Term::Lam {
                     dom_level,
-                    cod_level: site.child_level.clone(),
+                    cod_level: Level::join(carrier.level.clone(), p.lw.clone()),
                     dom,
                     body: Rc::new(Term::Inr {
                         lhs_level: carrier.level.clone(),
@@ -2337,39 +2486,9 @@ impl Elaborator {
         if control {
             return Ok(None);
         }
-        let tlvl = site.child_level.clone();
-        let child_at = |d: u32, label: Rc<Term>, pos: Rc<Term>| {
-            self.child_sum(&p, &carrier, d, p.next_tm(d, label, pos))
-        };
         // A node: a constructor of the declaration itself.
         if let Some((i, args)) = self.codata_ctor_app(cx, &site.ind, e) {
-            let (label, comps, tails, children) = self.ctor_parts(
-                cx,
-                &site.ind,
-                i,
-                &p,
-                &args,
-                &mut |cx, arg, at| Ok(Rc::new(self.elab_check(cx, arg, at, &tlvl)?)),
-                &child_at,
-                &tlvl,
-                e.span,
-            )?;
-            let label = Rc::new(label);
-            let target = |d: u32, pos: Rc<Term>| child_at(d, Rc::new(label.shift_local(d)), pos);
-            let kids = p.kids_lam(0, Rc::clone(&label), &comps, &tails, &target, &tlvl, &mut |r, d, y, _| {
-                Ok(match &children[r] {
-                    KidVal::Tm(t) => t.shift_local(d),
-                    KidVal::Fn(f, dom) => checked_app(
-                        Rc::new(f.shift_local(d)),
-                        p.lp.clone(),
-                        tlvl.clone(),
-                        Rc::new(dom.shift_local(d)),
-                        Rc::new(target(d + 1, p.position(&comps, &tails, d + 1, r, var(0)))),
-                        y,
-                    ),
-                })
-            })?;
-            return Ok(Some(self.step_pair(&p, 0, label, &carrier, kids)));
+            return Ok(Some(self.corec_node(cx, &p, &site.ind, &carrier, i, &args, e.span)?));
         }
         // Anything else is a tree that already exists, and the node is its
         // first one: `(λo. ⟨fst o, λq. inr(snd o q)⟩) (out t)`.
@@ -2411,6 +2530,123 @@ impl Elaborator {
             cod: Rc::new(step_here.shift_local(1)),
             arg: Rc::new(p.out(0, t)),
         }))
+    }
+
+    /// A node of the step at the carrier layer `carrier`: the constructor
+    /// `ind.ctors[i]` applied to `args`, its children checked at `carrier +
+    /// ⟦D⟧` (which brings them back to [`Self::corec_check`]).
+    #[allow(clippy::too_many_arguments)]
+    fn corec_node(&self, cx: &Cx, p: &MParts, ind: &Inductive, carrier: &Carrier, i: usize, args: &[&Expr], span: Span) -> R<Term> {
+        let tlvl = Level::join(carrier.level.clone(), p.lw.clone());
+        let child_at = |d: u32, label: Rc<Term>, pos: Rc<Term>| {
+            self.child_sum(p, carrier, d, p.next_tm(d, label, pos))
+        };
+        let (label, comps, tails, children) = self.ctor_parts(
+            cx,
+            ind,
+            i,
+            p,
+            args,
+            &mut |cx, arg, at| Ok(Rc::new(self.elab_check(cx, arg, at, &tlvl)?)),
+            &child_at,
+            &tlvl,
+            span,
+        )?;
+        let label = Rc::new(label);
+        let target = |d: u32, pos: Rc<Term>| child_at(d, Rc::new(label.shift_local(d)), pos);
+        let kids = p.kids_lam(0, Rc::clone(&label), &comps, &tails, &target, &tlvl, &mut |r, d, y, _| {
+            Ok(match &children[r] {
+                KidVal::Tm(t) => t.shift_local(d),
+                KidVal::Fn(f, dom) => checked_app(
+                    Rc::new(f.shift_local(d)),
+                    p.lp.clone(),
+                    tlvl.clone(),
+                    Rc::new(dom.shift_local(d)),
+                    Rc::new(target(d + 1, p.position(&comps, &tails, d + 1, r, var(0)))),
+                    y,
+                ),
+            })
+        })?;
+        Ok(self.step_pair(p, 0, label, carrier, kids))
+    }
+
+    /// `C_j ⊂ C_{j+1}` on `c : C_j`, at depth `k` (unindexed, §5.4): a seed
+    /// stays a seed, and a pending node's children move up a layer.
+    fn corec_embed(&self, p: &MParts, levels: &[Carrier], j: usize, k: u32, c: Rc<Term>) -> Term {
+        let x = &levels[0];
+        let f_j = || Rc::new(self.step_ty(p, k, &levels[j]));
+        if j == 0 {
+            return Term::Inl {
+                lhs_level: x.level.clone(),
+                rhs_level: Self::node_level(p, &levels[0]),
+                lhs: Rc::new(x.at(k, &triv())),
+                rhs: f_j(),
+                val: c,
+            };
+        }
+        Term::Case {
+            lhs_level: x.level.clone(),
+            rhs_level: Self::node_level(p, &levels[j - 1]),
+            motive_level: levels[j + 1].level.clone(),
+            lhs: Rc::new(x.at(k, &triv())),
+            rhs: Rc::new(self.step_ty(p, k, &levels[j - 1])),
+            motive: Rc::new(levels[j + 1].at(k + 1, &triv())),
+            case_l: Rc::new(Term::Inl {
+                lhs_level: x.level.clone(),
+                rhs_level: Self::node_level(p, &levels[j]),
+                lhs: Rc::new(x.at(k + 1, &triv())),
+                rhs: Rc::new(self.step_ty(p, k + 1, &levels[j])),
+                val: var(0),
+            }),
+            case_r: Rc::new(Term::Inr {
+                lhs_level: x.level.clone(),
+                rhs_level: Self::node_level(p, &levels[j]),
+                lhs: Rc::new(x.at(k + 1, &triv())),
+                rhs: Rc::new(self.step_ty(p, k + 1, &levels[j])),
+                val: Rc::new(self.corec_lift(p, levels, j - 1, k + 1, var(0))),
+            }),
+            scrut: c,
+        }
+    }
+
+    /// `F(C_j) → F(C_{j+1})` on the node `n`, at depth `k`: the same label,
+    /// each child moved along [`Self::corec_embed`].
+    fn corec_lift(&self, p: &MParts, levels: &[Carrier], j: usize, k: u32, n: Rc<Term>) -> Term {
+        let up = &levels[j + 1];
+        let lw = p.lw.clone();
+        let label = Rc::new(Term::FstAt { pair: Rc::clone(&n) });
+        // Under `λ q`, at depth `k + 1`: the child `snd n q : C_j + ⟦D⟧`.
+        let child = Rc::new(Term::AppAt { fun: Rc::new(Term::SndAt { pair: Rc::new(n.shift_local(1)) }), arg: var(0) });
+        let case = Term::Case {
+            lhs_level: levels[j].level.clone(),
+            rhs_level: lw.clone(),
+            motive_level: Level::join(up.level.clone(), lw.clone()),
+            lhs: Rc::new(levels[j].at(k + 1, &triv())),
+            rhs: Rc::new(p.d_of(k + 1, triv())),
+            motive: Rc::new(self.child_sum(p, up, k + 2, triv())),
+            case_l: Rc::new(Term::Inl {
+                lhs_level: up.level.clone(),
+                rhs_level: lw.clone(),
+                lhs: Rc::new(up.at(k + 2, &triv())),
+                rhs: Rc::new(p.d_of(k + 2, triv())),
+                val: Rc::new(self.corec_embed(p, levels, j, k + 2, var(0))),
+            }),
+            case_r: Rc::new(Term::Inr {
+                lhs_level: up.level.clone(),
+                rhs_level: lw.clone(),
+                lhs: Rc::new(up.at(k + 2, &triv())),
+                rhs: Rc::new(p.d_of(k + 2, triv())),
+                val: var(0),
+            }),
+            scrut: child,
+        };
+        let kids = Term::Lam {
+            dom_level: p.lp.clone(),
+            cod_level: Level::join(up.level.clone(), lw),
+            dom: Rc::new(p.pos_at(k, Rc::clone(&label))),
+            body: Rc::new(case),
+        };
+        self.step_pair(p, k, label, up, kids)
     }
 
     /// A corecursive call's seed at a child of index `idx` (scoped at `cx`):

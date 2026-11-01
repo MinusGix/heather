@@ -84,8 +84,9 @@ From `docs/coitree-design.md` and the code under `lib/std/itree/`:
 **What is missing** is the coinductive `rec`. The codata surface cannot
 write it as a direct corecursion: a non-tail self-call sits under a `bind`,
 which is not a constructor, so it is not a guarded call
-(`docs/codata-elaborator-design.md` §5.2; `issues/codata-nested-guards.md`
-covers only calls under a *second constructor*, which this is not). The
+(`docs/codata-elaborator-design.md` §5.2; nested constructors, §5.4, cover
+only calls under a *second constructor*, which this is not; a call under a
+function is `issues/codata-corecursion-up-to.md`). The
 standard way around that is Coq's ITrees `interp_mrec`: run a loop whose
 state is the pending tree, and at a call replace the call with the body
 bound to the call's continuation. `iter` supplies the guard, so nothing new
