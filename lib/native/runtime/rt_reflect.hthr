@@ -354,7 +354,6 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // A function: its parameters (the body's leading `λ`s), its result's code,
 // and its body as a term.

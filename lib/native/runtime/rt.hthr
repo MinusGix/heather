@@ -379,7 +379,7 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
                 yes.sem(w, g, env), Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), no.sem(w, g, env))),
         Make(i, args) => λ g env => w.tys(i).mk(Tm::fields(w, g, env, w.tys(i).fields, args)),
         Field(i, k, of) => λ g env =>
-            Ty::at(w.tys(i).fields, k).of_flat(w.tys, 
+            Ty::at(w.tys(i).fields, k).of_flat(w.tys,
                 Ty::flat_nth(w.tys(i).fields, w.tys(i).get(Ty::cast(w.tys, Ty::at(g, of), Named(i), Env::get(w.tys, g, env, of))), k)),
         Call(f, args) => λ g env =>
             Tm::apply(w, g, env, Sig::at(w.sigs, f).result, Sig::at(w.sigs, f).params, Sig::get(w.tys, w.sigs, w.callees, f), args),
