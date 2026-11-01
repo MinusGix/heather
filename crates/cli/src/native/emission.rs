@@ -358,7 +358,8 @@ impl Inits<'_> {
         let chunk = lowered::CHUNK as u64;
         // Six items save RSP twice and the depth (`Prog::saves_rsp`), and two
         // store each byte while there is room.
-        let mut at = 6;
+        const SAVED: usize = 6;
+        let mut at = SAVED;
         let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}, {}().depth) = {} {{ refl }}\n", self.src, writer.program(at));
         let mut starts = Vec::with_capacity(self.shapes.len());
         for (j, &(capacity, len)) in self.shapes.iter().enumerate() {
@@ -398,10 +399,10 @@ impl Inits<'_> {
                 Prog::inits_of({layout}, Buffer({capacity}, {p}_it_{j}_0()), {p}_bl_{}(), {j}, {from}, {to}, {end}, {p}_it_{j}_0_is(), {p}_in_{}_is())\n}}\n",
                 j + 1, j + 1));
         }
-        let start = writer.program(2);
+        let start = writer.program(SAVED);
         text.push_str(&format!("theorem {p}_entry(): {src}().entry({LOW}, {homes}) = {end} {{\n    \
             {src}().entry_of({LOW}, {homes}, {start}, {end}, {p}_entry_saved(), {p}_in_0_is())\n}}\n", src = self.src, homes = self.homes, LOW = super::elf::LOW));
-        writer.cuts.insert(2);
+        writer.cuts.insert(SAVED);
         writer.theorems.push_str(&text);
         Ok(())
     }

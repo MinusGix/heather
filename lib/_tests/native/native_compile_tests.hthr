@@ -255,13 +255,13 @@ fn summing() → Source {
 // How many items of the program are named `name`, and how many call label
 // `label`.
 fn Prog::named(self p: Prog, name: Nat) → Nat {
-    match p { Start => 0, At(before, m, _) => match m.leb(name) && name.leb(m) { True => Succ(before.named(name)), False => before.named(name) } }
+    match p { Start => 0, At(before, m, _) => match m.same(name) { True => Succ(before.named(name)), False => before.named(name) } }
 }
 fn Prog::calls_of(self p: Prog, label: Nat) → Nat {
     match p {
         Start => 0,
         At(before, _, item) => match item {
-            CallTo(l) => match l.leb(label) && label.leb(l) { True => Succ(before.calls_of(label)), False => before.calls_of(label) },
+            CallTo(l) => match l.same(label) { True => Succ(before.calls_of(label)), False => before.calls_of(label) },
             _ => before.calls_of(label),
         },
     }

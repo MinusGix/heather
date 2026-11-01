@@ -1364,7 +1364,7 @@ theorem Gprs::holding_scratch(self g: Gprs, g2: Gprs, keeps: g2.KeepsScratch(g),
     g.Holding(registers, values) → g2.Holding(registers, values) {
     match values {
         Nil => λ _ _ _ _ => trivial,
-        Cons(value, rest) => λ registers => match registers {
+        Cons(_, rest) => λ registers => match registers {
             Nil => λ _ _ _ => trivial,
             Cons(register, more) => λ outside clear holding => {
                 let out = Bool::is_true_and(register.absent_from(home_pool()), gprs_outside(more, home_pool()), outside);
@@ -1695,7 +1695,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
     λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
         t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
-            runs(n)(n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
+            runs(n, n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
         s, here, resident, ⟨zero, ⟨argv, sym(top)⟩⟩)
 }
 
