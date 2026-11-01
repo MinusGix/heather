@@ -483,7 +483,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
     let [at, kind, reason, first, second] = *why else {
         return format!("`{symbol}` did not compile, and `Source::refusal` names no reason");
     };
-    let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", 6 => "an argument", _ => "the program" };
+    let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", 6 => "an argument", 7 => "a procedure call", _ => "the program" };
     let reason = match reason {
         0 => format!("a {} region the compiler does not take: a node not at width 64 or reading a word not written before it, \
             a branch on a bit that may not be its word's low bit, a loop not in counted form, or a call (native_structured)",
@@ -502,6 +502,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         11 => format!("S4's lowering refused node {first} of the leaf alone"),
         12 => "the words' homes fail the allocation's check (`Source::allocation_ok`): the allocator's proposal is wrong, a bug in it".into(),
         13 => "a loop whose words live after it include one it moves or counts with, or whose leaves do not compile".into(),
+        14 => format!("procedure {first} is called, and calls are not compiled yet (docs/native-procedures-design.md §7)"),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }

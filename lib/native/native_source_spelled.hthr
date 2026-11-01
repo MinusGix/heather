@@ -102,6 +102,8 @@ fn Stmt::spelled_stmt(self s: Stmt) → Option<List<Nat>> {
         Repeat(body, again) => Some([4, again]).spell_then(body.spelled_stmt()),
         Exit(status) => Some([5, status]),
         Arg(index, buf, len) => Some([6, index, buf, len]),
+        // Not compiled yet (docs/native-procedures-design.md §7).
+        Perform(_, _, _) => None,
     }
 }
 
@@ -116,9 +118,9 @@ fn List::spell_buffers(self buffers: List<Buffer>) → List<Nat> {
 fn Source::spelled(self src: Source) → List<Nat> {
     match src.functions {
         Cons(_, _) => [0],
-        Nil => match src.main.spelled_stmt() {
+        Nil => match src.procedures { Cons(_, _) => [0], Nil => match src.main.spelled_stmt() {
             None => [0],
             Some(main) => Cons(1, Cons(src.words, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), main)))),
-        },
+        } },
     }
 }
