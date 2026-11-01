@@ -137,8 +137,7 @@ theorem LocatedAddGroup::abs_le_intro(x, e: K, l: K.inv(e) <= x, r: x <= e): Abs
 
 // A bound is nonnegative: `-e <= z <= e`.
 theorem LocatedAddGroup::abs_le_nonneg(z, e: K, hz: AbsLe(z, e)): K.unit <= e {
-    let l: (K.inv(e) <= z) = hz.left;
-    linarith(l, hz.right)
+    linarith(hz.left, hz.right)
 }
 
 // Anything `≈ 0` is below a nonnegative bound.
@@ -148,8 +147,7 @@ theorem LocatedAddGroup::abs_le_zero(z, e: K, hz: z ≈ K.unit, he: K.unit <= e)
 
 // A bound moves along `≈` in the bounded term and up in the bound.
 theorem LocatedAddGroup::abs_le_weaken(z, z2, e, e2: K, h: AbsLe(z, e), hz: z ≈ z2, he: e <= e2): AbsLe(z2, e2) {
-    let l: (K.inv(e) <= z) = h.left;
-    LocatedAddGroup::abs_le_intro(z2, e2, linarith(l, hz, he), linarith(h.right, hz, he))
+    LocatedAddGroup::abs_le_intro(z2, e2, linarith(h.left, hz, he), linarith(h.right, hz, he))
 }
 
 // The triangle inequality, for a term that is a sum of two (three) bounded
@@ -157,26 +155,20 @@ theorem LocatedAddGroup::abs_le_weaken(z, z2, e, e2: K, h: AbsLe(z, e), hz: z �
 theorem LocatedAddGroup::abs_le_sum2(a, b, r, x, y, c: K, ha: AbsLe(a, x), hb: AbsLe(b, y), hr: r ≈ a + b,
     hc: x + y <= c): AbsLe(r, c)
 {
-    let la: (K.inv(x) <= a) = ha.left;
-    let lb: (K.inv(y) <= b) = hb.left;
-    LocatedAddGroup::abs_le_intro(r, c, linarith(la, lb, hr, hc), linarith(ha.right, hb.right, hr, hc))
+    LocatedAddGroup::abs_le_intro(r, c, linarith(ha.left, hb.left, hr, hc), linarith(ha.right, hb.right, hr, hc))
 }
 
 theorem LocatedAddGroup::abs_le_sum3(a, b, c, r, x, y, z, w: K, ha: AbsLe(a, x), hb: AbsLe(b, y), hc: AbsLe(c, z),
     hr: r ≈ a + b + c, hw: x + y + z <= w): AbsLe(r, w)
 {
-    let la: (K.inv(x) <= a) = ha.left;
-    let lb: (K.inv(y) <= b) = hb.left;
-    let lc: (K.inv(z) <= c) = hc.left;
-    LocatedAddGroup::abs_le_intro(r, w, linarith(la, lb, lc, hr, hw), linarith(ha.right, hb.right, hc.right, hr, hw))
+    LocatedAddGroup::abs_le_intro(r, w, linarith(ha.left, hb.left, hc.left, hr, hw), linarith(ha.right, hb.right, hc.right, hr, hw))
 }
 
 // Bounds multiply, with no sign split: the four products `(x ± a)(y ± b)`
 // are nonnegative.
 theorem OrderedField::abs_le_mul(a, b, x, y: K, ha: AbsLe(a, x), hb: AbsLe(b, y)): AbsLe(a * b, x * y) {
-    let la: (K.inv(x) <= a) = ha.left;
-    let lb: (K.inv(y) <= b) = hb.left;
-    LocatedAddGroup::abs_le_intro(a * b, x * y, nlinarith(la, ha.right, lb, hb.right), nlinarith(la, ha.right, lb, hb.right))
+    LocatedAddGroup::abs_le_intro(a * b, x * y, nlinarith(ha.left, ha.right, hb.left, hb.right),
+        nlinarith(ha.left, ha.right, hb.left, hb.right))
 }
 
 // Every element has a bound, computed from it: `|c| <= c² + 1`, from

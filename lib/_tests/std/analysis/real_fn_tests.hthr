@@ -27,12 +27,12 @@ theorem Disc::maps_square(x: K): MapsTo(Disc, Disc, λ (y: K) => y * y) {
 
 // `DerivOn` is not vacuous: the identity's derivative is not `0`. At `ε =
 // 1/2` the modulus `δ` would give `|δ - 0 - 0| <= δ/2`, so `δ <= δ/2`,
-// against `δ > 0`. (`t` is the half, named: `ring` and `linarith` cannot
-// yet read an atom that mentions the class's own constants.)
-theorem Disc::half_bound_absurd(d, t: K, pd: K.unit < d, ht: t + t ≈ K.multiplicative.unit,
-    up: d + K.inv(K.unit) + K.inv(K.unit * (d + K.inv(K.unit))) <= t * d): False
+// against `δ > 0`.
+theorem Disc::half_bound_absurd(d: K, pd: K.unit < d,
+    up: d + K.inv(K.unit) + K.inv(K.unit * (d + K.inv(K.unit))) <= OrderedField::half(K.multiplicative.unit) * d): False
 {
-    let s2: (t * d + t * d ≈ d) = ring(ht);
+    let ht = OrderedField::half_add(K.multiplicative.unit);
+    let s2: (OrderedField::half(K.multiplicative.unit) * d + OrderedField::half(K.multiplicative.unit) * d ≈ d) = ring(ht);
     let bad: (d < d) = linarith(up, s2, pd);
     K.lt_irrefl(d, bad)
 }
@@ -46,10 +46,34 @@ theorem Disc::id_deriv_not_zero(x: K): ¬(DerivOn(Everywhere, λ (y: K) => y, λ
         let a = hd(OrderedField::half(K.multiplicative.unit), OrderedField::half_pos(K.multiplicative.unit, K.zero_lt_one));
         let r = a.proof.right(K.unit, a.witness, a.witness, trivial, trivial, Disc::near_zero(a.witness, a.proof.left),
             StrictOrder::le_refl(a.witness));
-        Disc::half_bound_absurd(a.witness, OrderedField::half(K.multiplicative.unit), a.proof.left,
-            OrderedField::half_add(K.multiplicative.unit), r.right)
+        Disc::half_bound_absurd(a.witness, a.proof.left, r.right)
     }
 }
+
+// Atoms that mention the class's own constants
+// (issues/ring-atom-mentions-class-constant.md): a function applied to
+// `K.multiplicative.unit`, the witness of an `∃` whose producer takes it,
+// and a range product, whose operation is the section's `*`.
+theorem class_constant_atom(d: K, s: OrderedField::half(K.multiplicative.unit) + OrderedField::half(K.multiplicative.unit) ≈ K.multiplicative.unit):
+    OrderedField::half(K.multiplicative.unit) * d + OrderedField::half(K.multiplicative.unit) * d ≈ d
+{ ring(s) }
+
+theorem class_constant_witness(d: K): K.unit < d → K.unit < d + d {
+    λ h => {
+        let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+        let b = OrderedField::below_both(OrderedField::half(K.multiplicative.unit), K.multiplicative.unit,
+            OrderedField::half_pos(K.multiplicative.unit, o), o);
+        let k: (b.witness * d + d * b.witness ≈ (b.witness + b.witness) * d) = ring;
+        linarith(h, b.proof.left)
+    }
+}
+
+theorem class_range_product(x: K, n: Nat): (∏ j < n, x) * x ≈ (∏ j < Succ(n), x) { ring }
+
+// expect-error: differ by
+theorem class_constant_atom_not_identity(d: K):
+    OrderedField::half(K.multiplicative.unit) * d + d ≈ d
+{ ring }
 
 }
 
