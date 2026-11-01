@@ -160,14 +160,14 @@ caller:     RAX := [room]; TEST; JE deep      ; no room: exit(call_depth_status)
             RSP := [frame]
             each saved word: RAX := home; RSP -= 8; [RSP] := RAX
             each arg word into its argument register (word_to)
-            [frame] := RSP - 8                ; the callee's frame: its return address
             CALL P                            ; return address pushed
             each saved word, last first: RAX := [RSP]; RSP += 8; home := RAX
             [frame] := RSP
             [room] := [room] + 1
             each result register into its result word's home (word_from)
 
-P:          each argument register into its parameter's home (word_from)
+P:          [frame] := RSP                    ; its frame: the return address
+            each argument register into its parameter's home (word_from)
             body                              ; compiled with its results live
             each result into its result register (word_to)
             RSP := [frame]
