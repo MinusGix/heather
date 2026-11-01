@@ -20,6 +20,6 @@ fn eu_layout() → Layout { exit_unless().layout(low(), Homes::slots(exit_unless
 
 // A `Repeat`'s body is a `Branch`, which no `Then` join fits.
 // expect-error: `trivial` proves `True`, but `IsTrue(is_then(left((exit_unless).main)))` is expected here
-theorem branch_is_no_then(): exit_unless().main.left().emit(Start, eu_layout(), [], 0) = Exit(2).emit(Start, eu_layout(), [], 0) {
-    Stmt::emit_then_of(exit_unless().main.left(), trivial, Start, eu_layout(), [], 0, Compiled(Start, 0), refl)
+theorem branch_is_no_then(): exit_unless().main.left().emits(Start, eu_layout(), [], [], 0) = Exit(2).emits(Start, eu_layout(), [], [], 0) {
+    Stmt::emits_then_of(exit_unless().main.left(), trivial, Start, eu_layout(), [], [], 0, Compiled(Start, 0), refl)
 }

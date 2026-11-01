@@ -15,6 +15,7 @@ import native_compile_homes;
 import native_alloc;
 import native_compile_steps;
 import native_compile_segments;
+import function_ir_pass;
 import function_ir_eval;
 import linux_calls;
 import linux_trees;
@@ -207,40 +208,43 @@ theorem Target::count_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf)
 // What a write's code claims: from the statement's start, write(fd, buffer
 // + min(from, capacity), min(len, capacity - that)), and on from its end
 // with each answer decoded into the environment.
-theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, fd, buf, from, len, result, cap, names: Nat,
+theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, known: List<Fact>, knows: env.Knows(known), fd, buf, from, len, result, cap, names: Nat,
     in_fd: fd < t.words, in_from: from < t.words, in_len: len < t.words, in_result: result < t.words,
     found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
-    within: p.writes(t.layout(), out, fd, buf, from, len, result, cap, names).prog.Within(t.program),
+    within: p.writes(t.layout(), known, out, fd, buf, from, len, result, cap, names).prog.Within(t.program),
     tree: WriteResult → ITree<BitVec(64)>(Events::linux()),
     next: (a: WriteResult) → LinuxCmd::Answers(Writes(fd, buf, from, len, result).cmd(env), a) →
-        t.At(prog_len(p.writes(t.layout(), out, fd, buf, from, len, result, cap, names).prog), out, tree(a), Writes(fd, buf, from, len, result).answer(env, a))):
-    t.At(prog_len(p), live_before([fd, from, len], result, out), Vis(Writes(fd, buf, from, len, result).cmd(env), tree), env) {
+        t.At(prog_len(p.writes(t.layout(), known, out, fd, buf, from, len, result, cap, names).prog), out, tree(a), Writes(fd, buf, from, len, result).answer(env, a))):
+    t.At(prog_len(p), live_before(known.unknown([fd, from, len]), result, out), Vis(Writes(fd, buf, from, len, result).cmd(env), tree), env) {
     let layout = t.layout();
-    let live = live_before([fd, from, len], result, out);
-    let m_fd: Mem(fd, live) = live_before_reads([fd, from, len], result, out, fd, Inl(refl));
-    let m_from: Mem(from, live) = live_before_reads([fd, from, len], result, out, from, Inr(Inl(refl)));
-    let m_len: Mem(len, live) = live_before_reads([fd, from, len], result, out, len, Inr(Inr(Inl(refl))));
-    let sub = λ (i: Nat) (m: Mem(i, out)) (ne: i ≠ result) => live_before_keeps([fd, from, len], result, out, i, m, ne);
+    let live = live_before(known.unknown([fd, from, len]), result, out);
+    let m_fd: env.Reads(known, live, fd) = env.reads_of(known, knows, [fd, from, len], live, fd, Inl(refl),
+        λ i m => live_before_reads(known.unknown([fd, from, len]), result, out, i, m));
+    let m_from: env.Reads(known, live, from) = env.reads_of(known, knows, [fd, from, len], live, from, Inr(Inl(refl)),
+        λ i m => live_before_reads(known.unknown([fd, from, len]), result, out, i, m));
+    let m_len: env.Reads(known, live, len) = env.reads_of(known, knows, [fd, from, len], live, len, Inr(Inr(Inl(refl))),
+        λ i m => live_before_reads(known.unknown([fd, from, len]), result, out, i, m));
+    let sub = λ (i: Nat) (m: Mem(i, out)) (ne: i ≠ result) => live_before_keeps(known.unknown([fd, from, len]), result, out, i, m, ne);
     let shape = Writes(fd, buf, from, len, result);
     let c = shape.cmd(env);
     let bytes = span(env.buffer(buf), env.number(from), env.number(len));
     let clamped = env.number(from).min(cap);
-    let w0 = p.word_to(layout, from, R8);
+    let w0 = p.known_to(layout, known, from, R8);
     let w1 = then(w0, Block([MovRI(R9, BitVec::ofNat(cap))]));
     let start = w1.clamp(R8, R9, Succ(names));
     let w2 = then(start, Block([SubRR(R9, R8)]));
-    let w3 = w2.word_to(layout, len, Rdx);
+    let w3 = w2.known_to(layout, known, len, Rdx);
     let room = w3.clamp(Rdx, R9, Succ(Succ(names)));
     let asking: List<Instruction> = [MovRI(Rsi, layout.buffer_at(buf)), AddRR(Rsi, R8), MovRI(Rax, BitVec::ofNat(1))];
     let w4 = then(room, Block(asking));
-    let w5 = w4.word_to(layout, fd, Rdi);
+    let w5 = w4.known_to(layout, known, fd, Rdi);
     let asked = then(w5, Syscall);
     let w_asked = asked.word_from_within(layout, out, result, Rax, t.program, within);
     let w_w5 = w5.within_before(0, Syscall, t.program, w_asked);
-    let w_w4 = w4.word_to_within(layout, fd, Rdi, t.program, w_w5);
+    let w_w4 = w4.known_to_within(layout, known, fd, Rdi, t.program, w_w5);
     let w_room = room.within_before(0, Block(asking), t.program, w_w4);
     let w_w3 = w3.clamp_within(Rdx, R9, Succ(Succ(names)), t.program, w_room);
-    let w_w2 = w2.word_to_within(layout, len, Rdx, t.program, w_w3);
+    let w_w2 = w2.known_to_within(layout, known, len, Rdx, t.program, w_w3);
     let w_start = start.within_before(0, Block([SubRR(R9, R8)]), t.program, w_w2);
     let w_w1 = w1.clamp_within(R8, R9, Succ(names), t.program, w_start);
     let w_w0 = w0.within_before(0, Block([MovRI(R9, BitVec::ofNat(cap))]), t.program, w_w1);
@@ -257,9 +261,9 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, f
     let q5 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → call_pre(MachineState(g, f, rip, m));
     let at_w5 = t.goes_weaken(prog_len(w5), Vis(c, tree), call_pre, λ (s: MachineState<X86Memory(t.r.profile)>) => q5(s.gprs, s.memory), called,
         λ s held => held(s.flags, s.rip));
-    let at_w4 = t.goes_word_to(live, env, w4, fd, Rdi, in_fd, m_fd, w_w5, Vis(c, tree), q5, at_w5);
+    let at_w4 = t.goes_known_to(live, env, w4, known, fd, Rdi, in_fd, m_fd, w_w5, Vis(c, tree), q5, at_w5);
     let post4 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-        q5(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_word(env, fd), u.gprs)), u.memory);
+        q5(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_known(known, env, fd), u.gprs)), u.memory);
     let at_room0 = t.goes_block(room, 0, asking, w_w4, Vis(c, tree), post4, at_w4);
     // At the request: the offset and the count clamped.
     let q_room = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
@@ -286,13 +290,13 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, f
     let q_w2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         ((read_gpr(R8, g).toNat() = clamped) ∧ (read_gpr(R9, g).toNat() = cap - clamped));
     let at_w2 = t.goes_weaken(prog_len(w2), Vis(c, tree), λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            room_pre(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.rbx_word(env, len), s.gprs)), s.memory),
+            room_pre(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.rbx_known(known, env, len), s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => q_w2(s.gprs, s.memory),
-        t.goes_word_to(live, env, w2, len, Rdx, in_len, m_len, w_w3, Vis(c, tree), room_pre, at_w3), λ s held => {
+        t.goes_known_to(live, env, w2, known, len, Rdx, in_len, m_len, w_w3, Vis(c, tree), room_pre, at_w3), λ s held => {
             let word = env.word(len);
             let r9 = read_gpr(R9, s.gprs);
             let both: (word.toNat().min(r9.toNat()) = env.number(len).min(cap - clamped)) =
-                eq2(λ (x: Nat) (y: Nat) => x.min(y), t.held_number(live, env, s.gprs, s.memory, held.left, len, m_len, in_len), held.right.right);
+                eq2(λ (x: Nat) (y: Nat) => x.min(y), t.reads_number(live, env, s.gprs, s.memory, held.left, known, len, m_len, in_len), held.right.right);
             ⟨held.left, ⟨λ kept => ⟨held.left, ⟨held.right.left, trans(sym(BitVec::clamp_kept(word, r9, kept)), both)⟩⟩,
                 λ bound => ⟨held.left, ⟨held.right.left, trans(sym(BitVec::clamp_bound(word, r9, bound)), both)⟩⟩⟩⟩
         });
@@ -333,10 +337,10 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, f
         });
     t.goes_weaken(prog_len(p), Vis(c, tree),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            q_w0(write_gpr(R8, env.word(from), write_gpr(Rbx, layout.rbx_word(env, from), s.gprs)), s.memory),
+            q_w0(write_gpr(R8, env.word(from), write_gpr(Rbx, layout.rbx_known(known, env, from), s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
-        t.goes_word_to(live, env, p, from, R8, in_from, m_from, w_w0, Vis(c, tree), q_w0, at_w0),
-        λ s held => ⟨held, ⟨held, t.held_number(live, env, s.gprs, s.memory, held, from, m_from, in_from)⟩⟩)
+        t.goes_known_to(live, env, p, known, from, R8, in_from, m_from, w_w0, Vis(c, tree), q_w0, at_w0),
+        λ s held => ⟨held, ⟨held, t.reads_number(live, env, s.gprs, s.memory, held, known, from, m_from, in_from)⟩⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -838,28 +842,30 @@ theorem Target::scratch_inside(self t: Target, k: Nat, short: k <= t.caps.larges
 // What a read's code claims: from the statement's start, read(fd, scratch,
 // min(len, capacity)), and on from its end with each answer decoded into
 // the environment.
-theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, fd, buf, len, result, cap, names: Nat,
+theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, known: List<Fact>, knows: env.Knows(known), fd, buf, len, result, cap, names: Nat,
     in_fd: fd < t.words, in_len: len < t.words, in_result: result < t.words,
     found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
-    within: p.reads(t.layout(), out, fd, buf, len, result, cap, names).prog.Within(t.program),
+    within: p.reads(t.layout(), known, out, fd, buf, len, result, cap, names).prog.Within(t.program),
     tree: ReadResult → ITree<BitVec(64)>(Events::linux()),
     next: (a: ReadResult) → LinuxCmd::Answers(Reads(fd, buf, len, result).cmd(env), a) →
-        t.At(prog_len(p.reads(t.layout(), out, fd, buf, len, result, cap, names).prog), out, tree(a), Reads(fd, buf, len, result).answer(env, a))):
-    t.At(prog_len(p), live_before([fd, len], result, out), Vis(Reads(fd, buf, len, result).cmd(env), tree), env) {
+        t.At(prog_len(p.reads(t.layout(), known, out, fd, buf, len, result, cap, names).prog), out, tree(a), Reads(fd, buf, len, result).answer(env, a))):
+    t.At(prog_len(p), live_before(known.unknown([fd, len]), result, out), Vis(Reads(fd, buf, len, result).cmd(env), tree), env) {
     let layout = t.layout();
-    let live = live_before([fd, len], result, out);
-    let m_fd: Mem(fd, live) = live_before_reads([fd, len], result, out, fd, Inl(refl));
-    let m_len: Mem(len, live) = live_before_reads([fd, len], result, out, len, Inr(Inl(refl)));
-    let sub = λ (i: Nat) (m: Mem(i, out)) (ne: i ≠ result) => live_before_keeps([fd, len], result, out, i, m, ne);
+    let live = live_before(known.unknown([fd, len]), result, out);
+    let m_fd: env.Reads(known, live, fd) = env.reads_of(known, knows, [fd, len], live, fd, Inl(refl),
+        λ i m => live_before_reads(known.unknown([fd, len]), result, out, i, m));
+    let m_len: env.Reads(known, live, len) = env.reads_of(known, knows, [fd, len], live, len, Inr(Inl(refl)),
+        λ i m => live_before_reads(known.unknown([fd, len]), result, out, i, m));
+    let sub = λ (i: Nat) (m: Mem(i, out)) (ne: i ≠ result) => live_before_keeps(known.unknown([fd, len]), result, out, i, m, ne);
     let shape = Reads(fd, buf, len, result);
     let c = shape.cmd(env);
     let most = env.number(len).min(env.buffer(buf).len());
-    let r0 = p.word_to(layout, len, Rdx);
+    let r0 = p.known_to(layout, known, len, Rdx);
     let r1 = then(r0, Block([MovRI(R9, BitVec::ofNat(cap))]));
     let clamped = r1.clamp(Rdx, R9, Succ(names));
     let asking: List<Instruction> = [MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))];
     let r2 = then(clamped, Block(asking));
-    let r3 = r2.word_to(layout, fd, Rdi);
+    let r3 = r2.known_to(layout, known, fd, Rdi);
     let asked = then(r3, Syscall);
     let done = Succ(Succ(Succ(names)));
     let tested0 = then(asked, Block([TestRR(Rax, Rax)]));
@@ -875,7 +881,7 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, fd
     let w_tested0 = tested0.within_before(0, Jcc(S, done), t.program, w_tested);
     let w_asked = asked.within_before(0, Block([TestRR(Rax, Rax)]), t.program, w_tested0);
     let w_r3 = r3.within_before(0, Syscall, t.program, w_asked);
-    let w_r2 = r2.word_to_within(layout, fd, Rdi, t.program, w_r3);
+    let w_r2 = r2.known_to_within(layout, known, fd, Rdi, t.program, w_r3);
     let w_clamped = clamped.within_before(0, Block(asking), t.program, w_r2);
     let w_r1 = r1.clamp_within(Rdx, R9, Succ(names), t.program, w_clamped);
     let w_r0 = r0.within_before(0, Block([MovRI(R9, BitVec::ofNat(cap))]), t.program, w_r1);
@@ -904,9 +910,9 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, fd
     let q3 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => (f: Flags) → (rip: BitVec(64)) → call_pre(MachineState(g, f, rip, m));
     let at_r3 = t.goes_weaken(prog_len(r3), Vis(c, tree), call_pre, λ (s: MachineState<X86Memory(t.r.profile)>) => q3(s.gprs, s.memory), called,
         λ s held => held(s.flags, s.rip));
-    let at_r2 = t.goes_word_to(live, env, r2, fd, Rdi, in_fd, m_fd, w_r3, Vis(c, tree), q3, at_r3);
+    let at_r2 = t.goes_known_to(live, env, r2, known, fd, Rdi, in_fd, m_fd, w_r3, Vis(c, tree), q3, at_r3);
     let post2 = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
-        q3(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_word(env, fd), u.gprs)), u.memory);
+        q3(write_gpr(Rdi, env.word(fd), write_gpr(Rbx, layout.rbx_known(known, env, fd), u.gprs)), u.memory);
     let at_clamped0 = t.goes_block(clamped, 0, asking, w_r2, Vis(c, tree), post2, at_r2);
     // At the request: the count clamped.
     let q_cl = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rdx, g).toNat() = env.number(len).min(cap));
@@ -961,8 +967,8 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, fd
         });
     t.goes_weaken(prog_len(p), Vis(c, tree),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            q_r0(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.rbx_word(env, len), s.gprs)), s.memory),
+            q_r0(write_gpr(Rdx, env.word(len), write_gpr(Rbx, layout.rbx_known(known, env, len), s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
-        t.goes_word_to(live, env, p, len, Rdx, in_len, m_len, w_r0, Vis(c, tree), q_r0, at_r0),
-        λ s held => ⟨held, ⟨held, t.held_number(live, env, s.gprs, s.memory, held, len, m_len, in_len)⟩⟩)
+        t.goes_known_to(live, env, p, known, len, Rdx, in_len, m_len, w_r0, Vis(c, tree), q_r0, at_r0),
+        λ s held => ⟨held, ⟨held, t.reads_number(live, env, s.gprs, s.memory, held, known, len, m_len, in_len)⟩⟩)
 }

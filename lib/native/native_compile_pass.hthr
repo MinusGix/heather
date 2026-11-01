@@ -112,6 +112,53 @@ theorem Env::computes_optimised(self env: Env, nodes: List<Node>, out: List<Nat>
 }
 
 // ---------------------------------------------------------------------------
+// What a leaf leaves known
+
+// The facts settled: each word's number as the last node writing it left
+// it, the facts holding of the valuation the nodes ran to.
+theorem List::settled_knows(self facts: List<Fact>, nodes: List<Node>, env: Env, after: Valuation()):
+    facts.Hold(after) → env.settle(after, nodes_write_ports(nodes)).Knows(facts.settled(nodes)) {
+    match facts {
+        Nil => λ _ => trivial,
+        Cons(f, rest) => λ held => {
+            let later = rest.settled_knows(nodes, env, after, held.right);
+            let settled = env.settle(after, nodes_write_ports(nodes));
+            let number = Env::settle_number(nodes, env, after, f.id);
+            (match nodes.last_width(f.id) as λ l => settled.number(f.id) = (match l as λ _ => Nat { None => env.number(f.id), Some(w) => after(w, f.id).toNat() }) →
+                    settled.Knows(match l as λ _ => List<Fact> {
+                        None => rest.settled(nodes),
+                        Some(w) => match Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) as λ _ => List<Fact> {
+                            True => Cons(f, rest.settled(nodes)),
+                            False => rest.settled(nodes),
+                        },
+                    }) {
+                None => λ _ => later,
+                Some(w) => λ at => (match Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) as λ b =>
+                        (Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64))) = b →
+                        settled.Knows(match b as λ _ => List<Fact> { True => Cons(f, rest.settled(nodes)), False => rest.settled(nodes) }) {
+                    True => λ fits => {
+                        let both = Bool::is_true_and(Succ(f.value).leb(Nat::pow(2, w)), Succ(f.value).leb(Nat::pow(2, 64)), j(sym(fits), λ b _ => b.IsTrue(), trivial));
+                        let narrow: (f.value < Nat::pow(2, w)) = Succ(f.value).leb_sound(Nat::pow(2, w), both.left);
+                        let word: (f.value < Nat::pow(2, 64)) = Succ(f.value).leb_sound(Nat::pow(2, 64), both.right);
+                        let value: (after(w, f.id).toNat() = f.value) = trans(cong_fn<BitVec(w), Nat>(λ x => x.toNat(), held.left(w)),
+                            BitVec::toNat_ofNat(w, f.value, narrow));
+                        ⟨⟨trans(at, value), word⟩, later⟩
+                    },
+                    False => λ _ => later,
+                })(refl),
+            })(number)
+        },
+    }
+}
+
+// What a leaf leaves known holds of the environment it leaves.
+theorem Env::computes_knows(self env: Env, nodes: List<Node>): env.computes(nodes).Knows(nodes.leaves_known()) {
+    let after = run_nodes(nodes, env.valuation(), env.buffers);
+    nodes.learned([]).settled_knows(nodes, Env(env.words, after.buffers, env.args), after.values,
+        nodes.learned_holds([], env.valuation(), env.buffers, trivial))
+}
+
+// ---------------------------------------------------------------------------
 // The claim between statements reads only what is live
 
 // Environments with the same buffers and command line and the same live
