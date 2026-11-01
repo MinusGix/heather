@@ -397,7 +397,6 @@ theorem CReal::cauchy_core({x, y, z: CReal}, p, q, r, e1, e2, e3, MS, MT, PT, W1
     And(up, dn)
 }
 
-
 // The Cauchy product at one index `N` far enough out for a slack 2^-m.
 theorem Series::cauchy_near(self s: Series, t, w, S, T, W: Series,
     hs: (i: Nat) → s.term(i).abs() <= S.term(i), ht: (k: Nat) → t.term(k).abs() <= T.term(k),
