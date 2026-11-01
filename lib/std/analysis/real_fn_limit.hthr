@@ -1,0 +1,218 @@
+// Two derivative rules that build on the mean value inequality
+// (lib/std/analysis/real_fn.hthr; issues/exp-log-inverse.md):
+//
+// - **Uniform limits** (`DerivOn::of_approx`). If `f` and `g` are uniform
+//   limits on a convex `D` of `F(n)` and its derivatives `G(n)`, and `g` is
+//   uniformly continuous, then `g` is `f`'s derivative. The remainder of `f`
+//   at `x, y` is the remainder of `u(s) = F(n)(s) - G(n)(x)·s` plus three
+//   approximation errors; `u`'s derivative `G(n)(s) - G(n)(x)` is within
+//   `2ε + e` of zero on the points within `h` of `x` (two approximations and
+//   `g`'s modulus), so the mean value inequality bounds `u`'s increment by
+//   `(2ε + e)·h`. The `ε` is then dropped (`abs_le_of_forall_pos`): the
+//   modulus is `g`'s, independent of `n`, which is what makes the derivative
+//   uniform. This is how a power series is differentiated inside its
+//   radius: its partial sums are polynomials (`DerivOn::poly`).
+// - **Reciprocals** (`DerivOn::recip`). With `u·v = 1` on `D`, `v`'s
+//   derivative is `-v²·u'`. Its remainder is `-v(x)v(y)·R_u -
+//   v(x)·u'(x)·(y - x)·(v(y) - v(x))`, and `v(y) - v(x) = -v(x)v(y)·(u(y) -
+//   u(x))` is `O(h)` by `u`'s local Lipschitz bound, so no continuity of `v`
+//   is assumed beyond its bound.
+//
+// Both are stated over a section's ordered field `K`, as in real_fn.
+
+import logic;
+import nat;
+import int;
+import list;
+import relation;
+import relation_props;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import big_operator;
+import ring;
+import omega;
+import linarith;
+import real_fn;
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+// A derivative on a domain is one on any part of it.
+theorem DerivOn::restrict(D, E: K → Type, f, g: K → K, sub: (x: K) → E(x) → D(x), hd: DerivOn(D, f, g)): DerivOn(E, f, g) {
+    λ e pe => {
+        let a = hd(e, pe);
+        Exists(a.witness, And(a.proof.left, λ x y h ex ey hxy hh => a.proof.right(x, y, h, sub(x, ex), sub(y, ey), hxy, hh)))
+    }
+}
+
+// The points of a convex domain within `h` of `x` are a convex domain.
+theorem ConvexOn::near(D: K → Type, hD: ConvexOn(D), x, h: K): ConvexOn(λ (s: K) => D(s) ∧ AbsLe(s + K.inv(x), h)) {
+    λ a b z da db az zb => {
+        let la: (K.inv(h) <= a + K.inv(x)) = da.right.left;
+        let rb: (b + K.inv(x) <= h) = db.right.right;
+        And(hD(a, b, z, da.left, db.left, az, zb), LocatedAddGroup::abs_le_intro(z + K.inv(x), h, linarith(la, az), linarith(rb, zb)))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Uniform limits.
+
+// The estimate at one approximant `φ`, `ψ`, `ε`-close to `f`, `g` on `D`,
+// with `g` within `e` of `g(x)` at the points within `h` of `x`.
+theorem DerivOn::of_approx_step(D: K → Type, f, g, p, q: K → K, e, w, x, y, h: K, hD: ConvexOn(D), hp: DerivOn(D, p, q),
+    pw: K.unit < w, cf: (s: K) → D(s) → AbsLe(f(s) + K.inv(p(s)), w), cg: (s: K) → D(s) → AbsLe(g(s) + K.inv(q(s)), w),
+    near: (s: K) → D(s) → AbsLe(s + K.inv(x), h) → AbsLe(g(s) + K.inv(g(x)), e),
+    dx: D(x), dy: D(y), hxy: AbsLe(y + K.inv(x), h)):
+    AbsLe(f(y) + K.inv(f(x)) + K.inv(g(x) * (y + K.inv(x))), e * h + w * (h + h + h + K.multiplicative.unit + K.multiplicative.unit))
+{
+    let hn: (K.unit <= h) = LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy);
+    let E = λ (s: K) => D(s) ∧ AbsLe(s + K.inv(x), h);
+    let c = K.inv(q(x));
+    let du: DerivOn(E, λ (s: K) => p(s) + c * s, λ (s: K) => q(s) + c * K.multiplicative.unit) =
+        DerivOn::add(E, p, q, λ (s: K) => c * s, λ (s: K) => c * K.multiplicative.unit,
+            DerivOn::restrict(D, E, p, q, λ s es => es.left, hp), DerivOn::scale(E, c, λ (s: K) => s, λ (s: K) => K.multiplicative.unit, DerivOn::id(E)));
+    let M = w + e + w;
+    let hb: BoundedOn(E, λ (s: K) => q(s) + c * K.multiplicative.unit, M) = And(
+        linarith(StrictOrder::le_of_lt(K.unit, w, pw), LocatedAddGroup::abs_le_nonneg(g(x) + K.inv(g(x)), e, near(x, dx, LocatedAddGroup::abs_le_zero(x + K.inv(x), h, ring, hn)))),
+        λ s es => {
+            let a = cg(s, es.left);
+            let b = near(s, es.left, es.right);
+            let d = cg(x, dx);
+            let al: (K.inv(w) <= g(s) + K.inv(q(s))) = a.left;
+            let bl: (K.inv(e) <= g(s) + K.inv(g(x))) = b.left;
+            let dl: (K.inv(w) <= g(x) + K.inv(q(x))) = d.left;
+            LocatedAddGroup::abs_le_intro(q(s) + c * K.multiplicative.unit, M, linarith(a.right, bl, dl), linarith(al, b.right, d.right))
+        });
+    let ex: E(x) = And(dx, LocatedAddGroup::abs_le_zero(x + K.inv(x), h, ring, hn));
+    let ey: E(y) = And(dy, hxy);
+    let lip = DerivOn::lipschitz(E, λ (s: K) => p(s) + c * s, λ (s: K) => q(s) + c * K.multiplicative.unit, M,
+        ConvexOn::near(D, hD, x, h), du, hb);
+    let r = lip.right(x, y, h, ex, ey, hxy);
+    let rl: (K.inv(M * h) <= p(y) + c * y + K.inv(p(x) + c * x)) = r.left;
+    let rr: (p(y) + c * y + K.inv(p(x) + c * x) <= M * h) = r.right;
+    let fy = cf(y, dy);
+    let fx = cf(x, dx);
+    let fyl: (K.inv(w) <= f(y) + K.inv(p(y))) = fy.left;
+    let fxl: (K.inv(w) <= f(x) + K.inv(p(x))) = fx.left;
+    let m = OrderedField::abs_le_mul(g(x) + K.inv(q(x)), y + K.inv(x), w, h, cg(x, dx), hxy);
+    let ml: (K.inv(w * h) <= (g(x) + K.inv(q(x))) * (y + K.inv(x))) = m.left;
+    LocatedAddGroup::abs_le_intro(f(y) + K.inv(f(x)) + K.inv(g(x) * (y + K.inv(x))),
+        e * h + w * (h + h + h + K.multiplicative.unit + K.multiplicative.unit),
+        linarith(rl, fyl, fx.right, m.right), linarith(rr, fy.right, fxl, ml))
+}
+
+// The derivative of a uniform limit: `F(n) → f` and `G(n) → g` uniformly on
+// a convex `D`, each `G(n)` the derivative of `F(n)`, and `g` uniformly
+// continuous. The modulus at `e` is `g`'s.
+theorem DerivOn::of_approx(D: K → Type, f, g: K → K, F, G: Nat → K → K, hD: ConvexOn(D), hg: UnifContOn(D, g),
+    hd: (n: Nat) → DerivOn(D, F(n), G(n)),
+    close: (w: K) → K.unit < w → ∃ n: Nat, ((s: K) → D(s) → AbsLe(f(s) + K.inv(F(n, s)), w)) ∧
+        ((s: K) → D(s) → AbsLe(g(s) + K.inv(G(n, s)), w))):
+    DerivOn(D, f, g)
+{
+    λ e pe => {
+        let a = hg(e, pe);
+        Exists(a.witness, And(a.proof.left, λ x y h dx dy hxy hh => {
+            let hn: (K.unit <= h) = LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy);
+            let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+            let near = λ (s: K) (ds: D(s)) (hs: AbsLe(s + K.inv(x), h)) => {
+                let l: (K.inv(h) <= s + K.inv(x)) = hs.left;
+                a.proof.right(x, s, dx, ds, LocatedAddGroup::abs_le_intro(s + K.inv(x), a.witness, linarith(l, hh), linarith(hs.right, hh)))
+            };
+            OrderedField::abs_le_of_forall_pos(f(y) + K.inv(f(x)) + K.inv(g(x) * (y + K.inv(x))), e * h,
+                h + h + h + K.multiplicative.unit + K.multiplicative.unit, linarith(hn, o), λ w pw => {
+                    let n = close(w, pw);
+                    DerivOn::of_approx_step(D, f, g, F(n.witness), G(n.witness), e, w, x, y, h, hD, hd(n.witness), pw,
+                        n.proof.left, n.proof.right, near, dx, dy, hxy)
+                })
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reciprocals.
+
+// A negated term has the same bound.
+theorem LocatedAddGroup::abs_le_neg(z, e: K, hz: AbsLe(z, e)): AbsLe(K.inv(z), e) {
+    let l: (K.inv(e) <= z) = hz.left;
+    LocatedAddGroup::abs_le_intro(K.inv(z), e, linarith(hz.right), linarith(l))
+}
+
+// The estimate. `R` is `u`'s remainder, `L` its increment's bound; `C` is
+// the product of the bounds on `v(x)`, `u'(x)`, `v(x)v(y)` and `u`'s
+// Lipschitz constant.
+theorem DerivOn::recip_step(u, u1, v: K → K, B, N, e, e1, d, x, y, h: K, hn: K.unit <= h, pB: K.unit <= B, pN: K.unit <= N,
+    ix: u(x) * v(x) ≈ K.multiplicative.unit, iy: u(y) * v(y) ≈ K.multiplicative.unit,
+    vx: AbsLe(v(x), B), vy: AbsLe(v(y), B), nx: AbsLe(u1(x), N), hxy: AbsLe(y + K.inv(x), h), hh: h <= d,
+    ru: AbsLe(u(y) + K.inv(u(x)) + K.inv(u1(x) * (y + K.inv(x))), e1 * h),
+    lu: AbsLe(u(y) + K.inv(u(x)), (N + K.multiplicative.unit) * h),
+    b1: B * B * e1 <= OrderedField::half(e), b2: B * N * (B * B * (N + K.multiplicative.unit)) * d <= OrderedField::half(e)):
+    AbsLe(v(y) + K.inv(v(x)) + K.inv(K.inv(v(x) * v(x) * u1(x)) * (y + K.inv(x))), e * h)
+{
+    let e2 = OrderedField::half(e);
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let vv = OrderedField::abs_le_mul(v(x), v(y), B, B, vx, vy);
+    let ey: (v(x) * (u(y) * v(y)) ≈ v(x)) = ring(iy);
+    let exx: (v(y) * (u(x) * v(x)) ≈ v(y)) = ring(ix);
+    let dv: (v(y) + K.inv(v(x)) ≈ K.inv(v(x) * v(y) * (u(y) + K.inv(u(x))))) = ring(ey, exx);
+    let t1 = OrderedField::abs_le_mul(v(x) * v(y), u(y) + K.inv(u(x)) + K.inv(u1(x) * (y + K.inv(x))), B * B, e1 * h, vv, ru);
+    let bdv = OrderedField::abs_le_mul(v(x) * v(y), u(y) + K.inv(u(x)), B * B, (N + K.multiplicative.unit) * h, vv, lu);
+    let vu = OrderedField::abs_le_mul(v(x), u1(x), B, N, vx, nx);
+    let vuh = OrderedField::abs_le_mul(v(x) * u1(x), y + K.inv(x), B * N, h, vu, hxy);
+    let t2 = OrderedField::abs_le_mul(v(x) * u1(x) * (y + K.inv(x)), v(x) * v(y) * (u(y) + K.inv(u(x))),
+        B * N * h, B * B * ((N + K.multiplicative.unit) * h), vuh, bdv);
+    let C = B * N * (B * B * (N + K.multiplicative.unit));
+    let pC: (K.unit <= C) = OrderedField::mul_nonneg(B * N, B * B * (N + K.multiplicative.unit),
+        OrderedField::mul_nonneg(B, N, pB, pN),
+        OrderedField::mul_nonneg(B * B, N + K.multiplicative.unit, OrderedField::mul_nonneg(B, B, pB, pB), linarith(pN, o)));
+    let q1: (B * B * e1 * h <= e2 * h) = OrderedField::mul_le_mono_r(B * B * e1, e2, h, b1, hn);
+    let ch: (C * h <= C * d) = OrderedField::mul_le_mono_l(h, d, C, hh, pC);
+    let chh: (C * h * h <= C * d * h) = OrderedField::mul_le_mono_r(C * h, C * d, h, ch, hn);
+    let q2: (C * d * h <= e2 * h) = OrderedField::mul_le_mono_r(C * d, e2, h, b2, hn);
+    let s = OrderedField::half_add(e);
+    let s2: (e2 * h + e2 * h ≈ e * h) = ring(s);
+    let t2e: (B * N * h * (B * B * ((N + K.multiplicative.unit) * h)) ≈ C * h * h) = ring;
+    LocatedAddGroup::abs_le_sum2(K.inv(v(x) * v(y) * (u(y) + K.inv(u(x)) + K.inv(u1(x) * (y + K.inv(x))))),
+        v(x) * u1(x) * (y + K.inv(x)) * (v(x) * v(y) * (u(y) + K.inv(u(x)))),
+        v(y) + K.inv(v(x)) + K.inv(K.inv(v(x) * v(x) * u1(x)) * (y + K.inv(x))),
+        B * B * (e1 * h), B * N * h * (B * B * ((N + K.multiplicative.unit) * h)), e * h,
+        LocatedAddGroup::abs_le_neg(v(x) * v(y) * (u(y) + K.inv(u(x)) + K.inv(u1(x) * (y + K.inv(x)))), B * B * (e1 * h), t1),
+        t2,
+        ring(dv), linarith(q1, chh, q2, s2, t2e))
+}
+
+// The reciprocal rule: `u·v = 1` on `D`, `v` bounded by `B` and `u'` by `N`,
+// give `v' = -v²·u'`.
+theorem DerivOn::recip(D: K → Type, u, u1, v: K → K, B, N: K, hu: DerivOn(D, u, u1), hv: BoundedOn(D, v, B), hn: BoundedOn(D, u1, N),
+    inv: (x: K) → D(x) → u(x) * v(x) ≈ K.multiplicative.unit):
+    DerivOn(D, v, λ (x: K) => K.inv(v(x) * v(x) * u1(x)))
+{
+    λ e pe => {
+        let p2 = OrderedField::half_pos(e, pe);
+        let pB = hv.left;
+        let pN = hn.left;
+        let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+        let C = B * N * (B * B * (N + K.multiplicative.unit));
+        let pC: (K.unit <= C) = OrderedField::mul_nonneg(B * N, B * B * (N + K.multiplicative.unit),
+            OrderedField::mul_nonneg(B, N, pB, pN),
+            OrderedField::mul_nonneg(B * B, N + K.multiplicative.unit, OrderedField::mul_nonneg(B, B, pB, pB), linarith(pN, o)));
+        let b1 = OrderedField::shrink(B * B, OrderedField::half(e), OrderedField::mul_nonneg(B, B, pB, pB), p2);
+        let au = hu(b1.witness, b1.proof.left);
+        let al = DerivOn::local_lipschitz(D, u, u1, N, hu, hn);
+        let b2 = OrderedField::shrink(C, OrderedField::half(e), pC, p2);
+        let a3 = OrderedField::below_both(au.witness, al.witness, au.proof.left, al.proof.left);
+        let ad = OrderedField::below_both(a3.witness, b2.witness, a3.proof.left, b2.proof.left);
+        Exists(ad.witness, And(ad.proof.left, λ x y h dx dy hxy hd => {
+            let h3 = PseudoOrder::le_trans(h, ad.witness, a3.witness, hd, ad.proof.right.left);
+            let h2 = PseudoOrder::le_trans(h, ad.witness, b2.witness, hd, ad.proof.right.right);
+            DerivOn::recip_step(u, u1, v, B, N, e, b1.witness, b2.witness, x, y, h,
+                LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy), pB, pN, inv(x, dx), inv(y, dy),
+                hv.right(x, dx), hv.right(y, dy), hn.right(x, dx), hxy, h2,
+                au.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, a3.witness, au.witness, h3, a3.proof.right.left)),
+                al.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, a3.witness, al.witness, h3, a3.proof.right.right)),
+                b1.proof.right, b2.proof.right)
+        }))
+    }
+}
+
+}

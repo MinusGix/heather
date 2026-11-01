@@ -1,0 +1,1007 @@
+// atanh at the reals, its derivative, and exp(2·atanh t)·(1 - t) = 1 + t
+// (issues/exp-log-inverse.md).
+//
+// On `D = [-1/2, 1/2]` atanh is the limit of its polynomials
+// (`OrderedField::atanh_poly`, real_atanh.hthr) at `c_k = 1/(2k+1)`. To
+// make the limit a total function the argument is first clamped into `D`
+// (`CReal::atanh_clamp`, from `abs`, so nothing is decided), where the
+// tails are below `2^-m` and the polynomials a regular sequence. Its
+// derivative `1/(1 - t²)` is `g(t)`, the inverse of `1 - κ(t)²` for the
+// clamp `κ`, which is at least 1/2.
+//
+// - `atanh' = g` by the uniform-limit rule (`DerivOn::of_approx`): the
+//   polynomials' derivatives `G_n(t) = Σ_{k<n} t^(2k)` have `g - G_n =
+//   g·t^(2n)` by the geometric identity, and `g` is Lipschitz, its own
+//   derivative `-g²·(-2t)` coming from the reciprocal rule.
+// - `exp(2·atanh t)·(1 - t)²·g(t)` has derivative zero, so it is its value
+//   1 at `t = 0`, and `(1 + t)(1 - t)·g = 1` turns that into the identity.
+//
+// Then exp(log q) = q (`CReal::exp_log_rat`): `Series::atanh2(A, B)` is
+// 2·atanh((A - B)/(A + B)) as a real (`CReal::atanh2_real`), so exp of it is
+// A/B (`CReal::exp_atanh2`, for A <= 3B and B <= 3A); exp(e·ln 2) = 2^e
+// from `exp_add` (`CReal::exp_nat_ln2`), and `log_frac`'s binade split
+// multiplies the two back to the fraction (`CReal::exp_log_frac`).
+
+import logic;
+import bool;
+import nat;
+import int;
+import relation;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import big_operator;
+import creal;
+import creal_lipschitz;
+import series;
+import elementary;
+import exp_law;
+import elementary_real;
+import real_fn;
+import real_fn_limit;
+import real_atanh;
+import real_exp;
+import omega;
+import tactic;
+import linarith;
+import ring;
+
+// ---------------------------------------------------------------------------
+// One half, and the clamp into [-1/2, 1/2].
+
+fn CReal::half_r() → CReal { CReal::ofRat(Rat::inv_succ(1)) }
+
+theorem CReal::half_r_pos(): 0 < CReal::half_r() {
+    let hq: (0 < Rat::inv_succ(1)) = Rat::inv_succ_pos(1);
+    let l: (CReal::ofRat(0) < CReal::ofRat(Rat::inv_succ(1))) = CReal::ofRat_lt(hq);
+    l
+}
+
+theorem CReal::half_r_add(): CReal::half_r() + CReal::half_r() ≈ 1 {
+    let hf0: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
+    CReal::same_trans(CReal::same_sym(CReal::ofRat_add(Rat::inv_succ(1), Rat::inv_succ(1))), CReal::ofRat_respects(hf0))
+}
+
+fn CReal::atanh_D(t: CReal) → Type { Within(<=, -CReal::half_r(), t, CReal::half_r()) }
+
+fn CReal::clamp_min(t: CReal) → CReal { CReal::half_r() * (CReal::half_r() + t + -((t + -CReal::half_r()).abs())) }
+
+fn CReal::atanh_clamp(t: CReal) → CReal {
+    CReal::half_r() * (CReal::clamp_min(t) + -CReal::half_r() + (CReal::clamp_min(t) + CReal::half_r()).abs())
+}
+
+theorem CReal::atanh_clamp_in(t: CReal): AbsLe(CReal::atanh_clamp(t), CReal::half_r()) {
+    let H = CReal::half_r();
+    let pH = CReal::half_r_pos();
+    let s = CReal::half_r_add();
+    let m = CReal::clamp_min(t);
+    let mu: (m ≈ H * (H + t + -((t + -H).abs()))) = CReal::same_refl(m);
+    let ku0: (CReal::atanh_clamp(t) ≈ H * (m + -H + (m + H).abs())) = CReal::same_refl(CReal::atanh_clamp(t));
+    let a1: (t + -H <= (t + -H).abs()) = (t + -H).le_abs();
+    let mle: (m <= H) = {
+        let k: (H * (H + t + -((t + -H).abs())) <= H * (H + H)) =
+            OrderedField::mul_le_mono_l(H + t + -((t + -H).abs()), H + H, H, linarith(a1), CReal::le_of_lt(pH));
+        let k2: (H * (H + H) ≈ H) = ring(s);
+        linarith(k, k2, mu)
+    };
+    let up: ((m + H).abs() <= H + H + H + -m) = CReal::abs_le(linarith(pH), linarith(mle));
+    let lo: (-(m + H) <= (m + H).abs()) = (m + H).neg_le_abs();
+    let ku: (H * (m + -H + (m + H).abs()) <= H * (H + H)) =
+        OrderedField::mul_le_mono_l(m + -H + (m + H).abs(), H + H, H, linarith(up), CReal::le_of_lt(pH));
+    let kl: (H * (-(H + H)) <= H * (m + -H + (m + H).abs())) =
+        OrderedField::mul_le_mono_l(-(H + H), m + -H + (m + H).abs(), H, linarith(lo), CReal::le_of_lt(pH));
+    let e1: (H * (H + H) ≈ H) = ring(s);
+    let e2: (H * (-(H + H)) ≈ -H) = ring(s);
+    let lo2: (-H <= CReal::atanh_clamp(t)) = linarith(kl, e2, ku0);
+    LocatedAddGroup::abs_le_intro(CReal::atanh_clamp(t), H, lo2, linarith(ku, e1, ku0))
+}
+
+theorem CReal::atanh_clamp_id(t: CReal, dt: CReal::atanh_D(t)): CReal::atanh_clamp(t) ≈ t {
+    let H = CReal::half_r();
+    let s = CReal::half_r_add();
+    let l: (-H <= t) = dt.left;
+    let a: ((t + -H).abs() ≈ -(t + -H)) = (t + -H).abs_of_nonpos(linarith(dt.right));
+    let mu: (CReal::clamp_min(t) ≈ H * (H + t + -((t + -H).abs()))) = CReal::same_refl(CReal::clamp_min(t));
+    let ku0: (CReal::atanh_clamp(t) ≈ H * (CReal::clamp_min(t) + -H + (CReal::clamp_min(t) + H).abs())) = CReal::same_refl(CReal::atanh_clamp(t));
+    let ha: (H * (t + -H).abs() ≈ H * -(t + -H)) = CReal::mul_respects(H.same_refl(), a);
+    let st: ((H + H) * t ≈ 1 * t) = CReal::mul_respects(s, t.same_refl());
+    let m: (CReal::clamp_min(t) ≈ t) = linarith(ha, st, mu);
+    let b: ((CReal::clamp_min(t) + H).abs() ≈ CReal::clamp_min(t) + H) = (CReal::clamp_min(t) + H).abs_of_nonneg(linarith(m, l));
+    let hb: (H * (CReal::clamp_min(t) + H).abs() ≈ H * (CReal::clamp_min(t) + H)) = CReal::mul_respects(H.same_refl(), b);
+    let sm: ((H + H) * CReal::clamp_min(t) ≈ 1 * CReal::clamp_min(t)) = CReal::mul_respects(s, CReal::clamp_min(t).same_refl());
+    let k: (CReal::atanh_clamp(t) ≈ t) = linarith(hb, sm, m, ku0);
+    k
+}
+
+// ---------------------------------------------------------------------------
+// The polynomials at the reals, and their limit.
+
+fn CReal::atanh_coef(k: Nat) → CReal { CReal::ofRat(Rat::inv_succ(k + k)) }
+
+fn CReal::atanh_n(n: Nat, t: CReal) → CReal { OrderedField::atanh_poly(λ k => CReal::atanh_coef(k), n, t) }
+
+theorem CReal::atanh_coef_mul(k: Nat): CReal::atanh_coef(k) * CReal::ofRat(Rat::ofInt(OfNat(Succ(k + k)))) ≈ 1 {
+    let q: (Rat::inv_succ(k + k) * Rat::ofInt(OfNat(Succ(k + k))) ≈ 1) = omega;
+    CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(Rat::inv_succ(k + k), Rat::ofInt(OfNat(Succ(k + k))))), CReal::ofRat_respects(q))
+}
+
+theorem CReal::atanh_coef_le(k: Nat): AbsLe(CReal::atanh_coef(k), 1) {
+    let p: (CReal::ofRat(0) <= CReal::ofRat(Rat::inv_succ(k + k))) = CReal::ofRat_le(Rat::le_of_lt(Rat::inv_succ_pos(k + k)));
+    let u: (CReal::ofRat(Rat::inv_succ(k + k)) <= CReal::ofRat(1)) = CReal::ofRat_le(Rat::inv_succ_le_one(k + k));
+    let lo: (-1 <= CReal::atanh_coef(k)) = linarith(p);
+    LocatedAddGroup::abs_le_intro(CReal::atanh_coef(k), 1, lo, u)
+}
+
+// `(1/2)^m` is `2^-m`.
+theorem CReal::half_r_pow(m: Nat): OrderedField::npow(CReal::half_r(), m) ≈ CReal::ofRat(Rat::inv_pow2(m)) {
+    match m {
+        Zero => {
+            let q: (Rat::inv_pow2(0) ≈ 1) = omega;
+            let k: (OrderedField::npow(CReal::half_r(), Zero) ≈ CReal::ofRat(1)) = CReal::same_refl(1);
+            CReal::same_trans(k, CReal::ofRat_respects(Rat::same_sym(q)))
+        },
+        Succ(i) => {
+            let ih = CReal::half_r_pow(i);
+            let h2 = Rat::inv_pow2_half(i);
+            let hf0: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
+            let q: (Rat::inv_pow2(i + 1) ≈ Rat::inv_pow2(i) * Rat::inv_succ(1)) = ring(h2, hf0);
+            let k: (OrderedField::npow(CReal::half_r(), Succ(i)) ≈ OrderedField::npow(CReal::half_r(), i) * CReal::half_r()) =
+                CReal::same_refl(OrderedField::npow(CReal::half_r(), Succ(i)));
+            let m2 = CReal::mul_respects(ih, CReal::half_r().same_refl());
+            CReal::same_trans(k, CReal::same_trans(m2, CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(Rat::inv_pow2(i), Rat::inv_succ(1))),
+                CReal::ofRat_respects(Rat::same_sym(q)))))
+        },
+    }
+}
+
+theorem CReal::half_r_le_one(): CReal::half_r() <= 1 { linarith(CReal::half_r_add(), CReal::half_r_pos()) }
+
+// The tail from `m` on, at a point of `D`.
+theorem CReal::atanh_tail(t: CReal, ht: AbsLe(t, CReal::half_r()), m, j: Nat):
+    AbsLe(CReal::atanh_n(m + j, t) + -CReal::atanh_n(m, t), CReal::ofRat(Rat::inv_pow2(m)))
+{
+    let H = CReal::half_r();
+    let s = CReal::half_r_add();
+    let hr: (H + H <= 1) = linarith(s);
+    let a = OrderedField::atanh_tail(λ k => CReal::atanh_coef(k), λ k => CReal::atanh_coef_le(k), H, t, ht, hr, m, j);
+    let pj: (0 <= OrderedField::npow(H, m + j)) = OrderedField::npow_nonneg(H, CReal::le_of_lt(CReal::half_r_pos()), m + j);
+    let hp = CReal::half_r_pow(m);
+    LocatedAddGroup::abs_le_weaken(CReal::atanh_n(m + j, t) + -CReal::atanh_n(m, t), CReal::atanh_n(m + j, t) + -CReal::atanh_n(m, t),
+        OrderedField::npow(H, m) + -OrderedField::npow(H, m + j), CReal::ofRat(Rat::inv_pow2(m)), a,
+        CReal::same_refl(CReal::atanh_n(m + j, t) + -CReal::atanh_n(m, t)), linarith(pj, hp))
+}
+
+theorem CReal::atanh_regular(t: CReal): CReal::Regular(λ n => CReal::atanh_n(n, CReal::atanh_clamp(t))) {
+    let x = CReal::atanh_clamp(t);
+    let hx = CReal::atanh_clamp_in(t);
+    λ m n => match m.le_total(n) {
+        Inl(_) => {
+            let e: (m + (n - m) = n) = omega;
+            let a = j(e, λ v _ => AbsLe(CReal::atanh_n(v, x) + -CReal::atanh_n(m, x), CReal::ofRat(Rat::inv_pow2(m))),
+                CReal::atanh_tail(x, hx, m, n - m));
+            let al: (-CReal::ofRat(Rat::inv_pow2(m)) <= CReal::atanh_n(n, x) + -CReal::atanh_n(m, x)) = a.left;
+            let pn: (CReal::ofRat(0) <= CReal::ofRat(Rat::inv_pow2(n))) = CReal::ofRat_le(Rat::inv_pow2_nonneg(n));
+            let sum = CReal::ofRat_add(Rat::inv_pow2(m), Rat::inv_pow2(n));
+            let lo: (-CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n)) <= CReal::atanh_n(m, x) - CReal::atanh_n(n, x)) = linarith(a.right, pn, sum);
+            let hi: (CReal::atanh_n(m, x) - CReal::atanh_n(n, x) <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = linarith(al, pn, sum);
+            let r: ((CReal::atanh_n(m, x) - CReal::atanh_n(n, x)).abs() <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = CReal::abs_le(lo, hi);
+            r
+        },
+        Inr(_) => {
+            let e: (n + (m - n) = m) = omega;
+            let a = j(e, λ v _ => AbsLe(CReal::atanh_n(v, x) + -CReal::atanh_n(n, x), CReal::ofRat(Rat::inv_pow2(n))),
+                CReal::atanh_tail(x, hx, n, m - n));
+            let al: (-CReal::ofRat(Rat::inv_pow2(n)) <= CReal::atanh_n(m, x) + -CReal::atanh_n(n, x)) = a.left;
+            let pm: (CReal::ofRat(0) <= CReal::ofRat(Rat::inv_pow2(m))) = CReal::ofRat_le(Rat::inv_pow2_nonneg(m));
+            let sum = CReal::ofRat_add(Rat::inv_pow2(m), Rat::inv_pow2(n));
+            let lo: (-CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n)) <= CReal::atanh_n(m, x) - CReal::atanh_n(n, x)) = linarith(al, pm, sum);
+            let hi: (CReal::atanh_n(m, x) - CReal::atanh_n(n, x) <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = linarith(a.right, pm, sum);
+            let r: ((CReal::atanh_n(m, x) - CReal::atanh_n(n, x)).abs() <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = CReal::abs_le(lo, hi);
+            r
+        },
+    }
+}
+
+// atanh at the reals, clamped into [-1/2, 1/2].
+fn CReal::atanh(t: CReal) → CReal { CReal::lim(λ n => CReal::atanh_n(n, CReal::atanh_clamp(t)), CReal::atanh_regular(t)) }
+
+// On `D` the n-th polynomial is within `2^-n`.
+theorem CReal::atanh_near(t: CReal, dt: CReal::atanh_D(t), n: Nat):
+    AbsLe(CReal::atanh(t) + -CReal::atanh_n(n, t), CReal::ofRat(Rat::inv_pow2(n)))
+{
+    let c = CReal::lim_converges(λ k => CReal::atanh_n(k, CReal::atanh_clamp(t)), CReal::atanh_regular(t), n);
+    let z = CReal::atanh_n(n, CReal::atanh_clamp(t)) - CReal::atanh(t);
+    let up: (z <= CReal::ofRat(Rat::inv_pow2(n))) = CReal::le_trans(z.le_abs(), c);
+    let lo: (-z <= CReal::ofRat(Rat::inv_pow2(n))) = CReal::le_trans(z.neg_le_abs(), c);
+    let r: (CReal::atanh_n(n, CReal::atanh_clamp(t)) ≈ CReal::atanh_n(n, t)) =
+        OrderedField::atanh_poly_respects(λ k => CReal::atanh_coef(k), CReal::atanh_clamp(t), t, CReal::atanh_clamp_id(t, dt), n);
+    let lo2: (-CReal::ofRat(Rat::inv_pow2(n)) <= CReal::atanh(t) + -CReal::atanh_n(n, t)) = linarith(up, r);
+    LocatedAddGroup::abs_le_intro(CReal::atanh(t) + -CReal::atanh_n(n, t), CReal::ofRat(Rat::inv_pow2(n)), lo2, linarith(lo, r))
+}
+
+// ---------------------------------------------------------------------------
+// 1/(1 - t²), as the inverse of 1 - κ(t)², which is at least 1/2.
+
+fn CReal::atanh_den(t: CReal) → CReal { 1 + -(CReal::atanh_clamp(t) * CReal::atanh_clamp(t)) }
+
+theorem CReal::atanh_den_ge(t: CReal): CReal::half_r() <= CReal::atanh_den(t) {
+    let H = CReal::half_r();
+    let k = CReal::atanh_clamp(t);
+    let hk = CReal::atanh_clamp_in(t);
+    let sq = OrderedField::abs_le_mul(k, k, H, H, hk, hk);
+    let sqr: (k * k <= H * H) = sq.right;
+    let hh: (H * H <= H * 1) = OrderedField::mul_le_mono_l(H, 1, H, CReal::half_r_le_one(), CReal::le_of_lt(CReal::half_r_pos()));
+    let u: (CReal::atanh_den(t) ≈ 1 + -(k * k)) = CReal::same_refl(CReal::atanh_den(t));
+    linarith(sqr, hh, u, CReal::half_r_add())
+}
+
+theorem CReal::atanh_den_apart(t: CReal): CReal::atanh_den(t).Apart(0) {
+    Inr(CReal::lt_of_lt_of_le(CReal::half_r_pos(), CReal::atanh_den_ge(t)))
+}
+
+fn CReal::atanh_g(t: CReal) → CReal { CReal::atanh_den(t).inv(h := CReal::atanh_den_apart(t)) }
+
+theorem CReal::atanh_g_mul(t: CReal): CReal::atanh_den(t) * CReal::atanh_g(t) ≈ 1 {
+    CReal::atanh_den(t).mul_inv(h := CReal::atanh_den_apart(t))
+}
+
+theorem CReal::atanh_den_pos(t: CReal): 0 < CReal::atanh_den(t) { CReal::lt_of_lt_of_le(CReal::half_r_pos(), CReal::atanh_den_ge(t)) }
+
+theorem CReal::atanh_g_pos(t: CReal): 0 < CReal::atanh_g(t) {
+    let m = CReal::atanh_g_mul(t);
+    CReal::pos_of_mul_pos(CReal::atanh_den_pos(t), CReal::lt_of_lt_of_le(CReal::zero_lt_one(), CReal::le_of_same(CReal::same_sym(m))))
+}
+
+theorem CReal::atanh_g_half(t: CReal): CReal::atanh_g(t) * CReal::half_r() <= 1 {
+    let g = CReal::atanh_g(t);
+    let a: (g * CReal::half_r() <= g * CReal::atanh_den(t)) =
+        OrderedField::mul_le_mono_l(CReal::half_r(), CReal::atanh_den(t), g, CReal::atanh_den_ge(t), CReal::le_of_lt(CReal::atanh_g_pos(t)));
+    let m = CReal::atanh_g_mul(t);
+    let gd = CReal::same_trans(CReal::mul_comm(g, CReal::atanh_den(t)), m);
+    CReal::le_trans(a, CReal::le_of_same(gd))
+}
+
+theorem CReal::atanh_g_le(t: CReal): AbsLe(CReal::atanh_g(t), CReal::ofRat(1) + CReal::ofRat(1)) {
+    let g = CReal::atanh_g(t);
+    let pg = CReal::atanh_g_pos(t);
+    let a = CReal::atanh_g_half(t);
+    let s: (g * (CReal::half_r() + CReal::half_r()) ≈ g * 1) = CReal::mul_respects(g.same_refl(), CReal::half_r_add());
+    let lo: (-(CReal::ofRat(1) + CReal::ofRat(1)) <= g) = linarith(pg);
+    let hi: (g <= CReal::ofRat(1) + CReal::ofRat(1)) = linarith(a, s);
+    LocatedAddGroup::abs_le_intro(g, CReal::ofRat(1) + CReal::ofRat(1), lo, hi)
+}
+
+fn CReal::atanh_u(t: CReal) → CReal { 1 + -(t * t) }
+
+fn CReal::atanh_u1(t: CReal) → CReal { -(t + t) }
+
+theorem CReal::atanh_u_g(t: CReal, dt: CReal::atanh_D(t)): CReal::atanh_u(t) * CReal::atanh_g(t) ≈ 1 {
+    let c = CReal::atanh_clamp_id(t, dt);
+    let du: (CReal::atanh_den(t) ≈ 1 + -(CReal::atanh_clamp(t) * CReal::atanh_clamp(t))) = CReal::same_refl(CReal::atanh_den(t));
+    let uu: (CReal::atanh_u(t) ≈ 1 + -(t * t)) = CReal::same_refl(CReal::atanh_u(t));
+    let d: (CReal::atanh_den(t) ≈ CReal::atanh_u(t)) = ring(c, du, uu);
+    CReal::same_trans(CReal::mul_respects(CReal::same_sym(d), CReal::atanh_g(t).same_refl()), CReal::atanh_g_mul(t))
+}
+
+theorem CReal::atanh_D_id(): BoundedOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => t, CReal::half_r()) {
+    And(CReal::le_of_lt(CReal::half_r_pos()), λ t dt => dt)
+}
+
+theorem CReal::atanh_D_convex(): ConvexOn(λ (t: CReal) => CReal::atanh_D(t)) { ConvexOn::within(-CReal::half_r(), CReal::half_r()) }
+
+theorem CReal::two_nonneg(): CReal::ofRat(0) <= CReal::ofRat(1) + CReal::ofRat(1) {
+    let o: (CReal::ofRat(0) < CReal::ofRat(1)) = CReal::zero_lt_one();
+    linarith(o)
+}
+
+theorem CReal::const_bounded(D: CReal → Type): BoundedOn(D, λ (t: CReal) => CReal::ofRat(1), CReal::ofRat(1)) {
+    let o: (CReal::ofRat(0) < CReal::ofRat(1)) = CReal::zero_lt_one();
+    let lo: (-CReal::ofRat(1) <= CReal::ofRat(1)) = linarith(o);
+    And(CReal::le_of_lt(o), λ t dt => LocatedAddGroup::abs_le_intro(CReal::ofRat(1), CReal::ofRat(1), lo, CReal::le_refl(CReal::ofRat(1))))
+}
+
+theorem CReal::atanh_u_deriv(): DerivOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh_u(t), λ (t: CReal) => CReal::atanh_u1(t)) {
+    let D = λ (t: CReal) => CReal::atanh_D(t);
+    let H = CReal::half_r();
+    let sq = DerivOn::mul(D, λ (t: CReal) => t, λ (t: CReal) => CReal::ofRat(1), λ (t: CReal) => t, λ (t: CReal) => CReal::ofRat(1), H, H, CReal::ofRat(1), CReal::ofRat(1),
+        DerivOn::id(D), DerivOn::id(D), CReal::atanh_D_id(), CReal::atanh_D_id(), CReal::const_bounded(D), CReal::const_bounded(D));
+    let s = DerivOn::add(D, λ (t: CReal) => 1, λ (t: CReal) => 0, λ (t: CReal) => -1 * (t * t), λ (t: CReal) => -1 * (1 * t + t * 1),
+        DerivOn::const(D, 1), DerivOn::scale(D, -1, λ (t: CReal) => t * t, λ (t: CReal) => 1 * t + t * 1, sq));
+    DerivOn::congr(D, λ (t: CReal) => 1 + -1 * (t * t), λ (t: CReal) => CReal::atanh_u(t),
+        λ (t: CReal) => 0 + -1 * (1 * t + t * 1), λ (t: CReal) => CReal::atanh_u1(t),
+        λ t dt => { let k: (1 + -1 * (t * t) ≈ 1 + -(t * t)) = ring; k },
+        λ t dt => { let k: (0 + -1 * (1 * t + t * 1) ≈ -(t + t)) = ring; k }, s)
+}
+
+theorem CReal::atanh_u1_bounded(): BoundedOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh_u1(t), CReal::ofRat(1)) {
+    let o: (CReal::ofRat(0) < CReal::ofRat(1)) = CReal::zero_lt_one();
+    And(CReal::le_of_lt(o), λ t dt => {
+        let l: (-CReal::half_r() <= t) = dt.left;
+        let s = CReal::half_r_add();
+        let lo: (-CReal::ofRat(1) <= -(t + t)) = linarith(dt.right, s);
+        let hi: (-(t + t) <= CReal::ofRat(1)) = linarith(l, s);
+        LocatedAddGroup::abs_le_intro(CReal::atanh_u1(t), CReal::ofRat(1), lo, hi)
+    })
+}
+
+fn CReal::atanh_g1(t: CReal) → CReal { -(CReal::atanh_g(t) * CReal::atanh_g(t) * CReal::atanh_u1(t)) }
+
+theorem CReal::atanh_g_deriv(): DerivOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh_g(t), λ (t: CReal) => CReal::atanh_g1(t)) {
+    let D = λ (t: CReal) => CReal::atanh_D(t);
+    DerivOn::recip(D, λ (t: CReal) => CReal::atanh_u(t), λ (t: CReal) => CReal::atanh_u1(t), λ (t: CReal) => CReal::atanh_g(t), CReal::ofRat(1) + CReal::ofRat(1), CReal::ofRat(1),
+        CReal::atanh_u_deriv(), And(CReal::two_nonneg(), λ t dt => CReal::atanh_g_le(t)), CReal::atanh_u1_bounded(),
+        λ t dt => CReal::atanh_u_g(t, dt))
+}
+
+theorem CReal::atanh_g1_bounded(): BoundedOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh_g1(t), CReal::ofRat(4)) {
+    let o: (CReal::ofRat(0) < CReal::ofRat(1)) = CReal::zero_lt_one();
+    let p: (CReal::ofRat(0) <= CReal::ofRat(4)) = linarith(o);
+    And(p, λ t dt => {
+        let a = OrderedField::abs_le_mul(CReal::atanh_g(t), CReal::atanh_g(t), 1 + 1, 1 + 1, CReal::atanh_g_le(t), CReal::atanh_g_le(t));
+        let b = OrderedField::abs_le_mul(CReal::atanh_g(t) * CReal::atanh_g(t), CReal::atanh_u1(t), (1 + 1) * (1 + 1), CReal::ofRat(1), a,
+            CReal::atanh_u1_bounded().right(t, dt));
+        let n = LocatedAddGroup::abs_le_neg(CReal::atanh_g(t) * CReal::atanh_g(t) * CReal::atanh_u1(t), (1 + 1) * (1 + 1) * CReal::ofRat(1), b);
+        let nl: (-((1 + 1) * (1 + 1) * CReal::ofRat(1)) <= CReal::atanh_g1(t)) = n.left;
+        let nr: (CReal::atanh_g1(t) <= (1 + 1) * (1 + 1) * CReal::ofRat(1)) = n.right;
+        let lo: (-CReal::ofRat(4) <= CReal::atanh_g1(t)) = linarith(nl);
+        LocatedAddGroup::abs_le_intro(CReal::atanh_g1(t), CReal::ofRat(4), lo, linarith(nr))
+    })
+}
+
+theorem CReal::atanh_g_cont(): UnifContOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh_g(t)) {
+    let D = λ (t: CReal) => CReal::atanh_D(t);
+    LipschitzOn::unif_cont(D, λ (t: CReal) => CReal::atanh_g(t), CReal::ofRat(4),
+        DerivOn::lipschitz(D, λ (t: CReal) => CReal::atanh_g(t), λ (t: CReal) => CReal::atanh_g1(t), CReal::ofRat(4),
+            CReal::atanh_D_convex(), CReal::atanh_g_deriv(), CReal::atanh_g1_bounded()))
+}
+
+// ---------------------------------------------------------------------------
+// atanh′ = 1/(1 - t²) on D.
+
+theorem CReal::atanh_n_deriv(n: Nat): DerivOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh_n(n, t),
+    λ (t: CReal) => OrderedField::geom_sq_poly(n, t))
+{
+    DerivOn::atanh_poly(λ (t: CReal) => CReal::atanh_D(t), CReal::half_r(), CReal::atanh_D_id(), λ k => CReal::atanh_coef(k),
+        λ k => CReal::atanh_coef_mul(k), n)
+}
+
+// The approximants at `n + 1` once `(1/2)^n <= w`.
+theorem CReal::atanh_close(w: CReal, n: Nat, hn: OrderedField::npow(CReal::half_r(), n) <= w, t: CReal, dt: CReal::atanh_D(t)):
+    AbsLe(CReal::atanh(t) + -CReal::atanh_n(Succ(n), t), w) ∧ AbsLe(CReal::atanh_g(t) + -OrderedField::geom_sq_poly(Succ(n), t), w)
+{
+    let H = CReal::half_r();
+    let s = CReal::half_r_add();
+    let pH: (0 <= H) = CReal::le_of_lt(CReal::half_r_pos());
+    let pn: (0 <= OrderedField::npow(H, n)) = OrderedField::npow_nonneg(H, pH, n);
+    let un: (OrderedField::npow(H, Succ(n)) ≈ OrderedField::npow(H, n) * H) = CReal::same_refl(OrderedField::npow(H, Succ(n)));
+    let hm: (OrderedField::npow(H, n) * H <= OrderedField::npow(H, n) * 1) = OrderedField::mul_le_mono_l(H, 1, OrderedField::npow(H, n), CReal::half_r_le_one(), pn);
+    let hp = CReal::half_r_pow(Succ(n));
+    let a = CReal::atanh_near(t, dt, Succ(n));
+    let first = LocatedAddGroup::abs_le_weaken(CReal::atanh(t) + -CReal::atanh_n(Succ(n), t), CReal::atanh(t) + -CReal::atanh_n(Succ(n), t),
+        CReal::ofRat(Rat::inv_pow2(Succ(n))), w, a, CReal::same_refl(CReal::atanh(t) + -CReal::atanh_n(Succ(n), t)), linarith(hp, un, hm, hn));
+    let m = Succ(n);
+    let gm: (OrderedField::geom_sq_poly(m, t) * (1 + -(t * t)) ≈ 1 + -OrderedField::npow(t, m + m)) = OrderedField::geom_sq_mul(m, t);
+    let ug: ((1 + -(t * t)) * CReal::atanh_g(t) ≈ 1) = CReal::atanh_u_g(t, dt);
+    let eq: (CReal::atanh_g(t) + -OrderedField::geom_sq_poly(m, t) ≈ CReal::atanh_g(t) * OrderedField::npow(t, m + m)) = ring(gm, ug);
+    let b = OrderedField::abs_le_mul(CReal::atanh_g(t), OrderedField::npow(t, m + m), CReal::ofRat(1) + CReal::ofRat(1), OrderedField::npow(H, m + m),
+        CReal::atanh_g_le(t), OrderedField::npow_abs_le(t, H, dt, m + m));
+    let il: (OrderedField::npow(H, m.add(m)) <= OrderedField::npow(H, m)) = OrderedField::npow_index_le(H, pH, CReal::half_r_le_one(), m, m);
+    let two: ((H + H) * OrderedField::npow(H, n) ≈ 1 * OrderedField::npow(H, n)) = CReal::mul_respects(s, OrderedField::npow(H, n).same_refl());
+    let second = LocatedAddGroup::abs_le_weaken(CReal::atanh_g(t) * OrderedField::npow(t, m + m), CReal::atanh_g(t) + -OrderedField::geom_sq_poly(m, t),
+        (CReal::ofRat(1) + CReal::ofRat(1)) * OrderedField::npow(H, m + m), w, b, CReal::same_sym(eq), linarith(il, un, two, hn));
+    And(first, second)
+}
+
+theorem CReal::atanh_deriv(): DerivOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh(t), λ (t: CReal) => CReal::atanh_g(t)) {
+    let H = CReal::half_r();
+    let s = CReal::half_r_add();
+    let pH: (0 <= H) = CReal::le_of_lt(CReal::half_r_pos());
+    let hr: (H + H <= 1) = linarith(s);
+    DerivOn::of_approx(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh(t), λ (t: CReal) => CReal::atanh_g(t),
+        λ n t => CReal::atanh_n(n, t), λ n t => OrderedField::geom_sq_poly(n, t), CReal::atanh_D_convex(), CReal::atanh_g_cont(),
+        λ n => CReal::atanh_n_deriv(n),
+        λ w pw => {
+            let n = OrderedField::npow_small(H, pH, hr, w, pw);
+            Exists(Succ(n.witness), And(λ t dt => (CReal::atanh_close(w, n.witness, n.proof, t, dt)).left,
+                λ t dt => (CReal::atanh_close(w, n.witness, n.proof, t, dt)).right))
+        })
+}
+
+// ---------------------------------------------------------------------------
+// exp(2·atanh t)·(1 - t) = 1 + t on D.
+
+theorem CReal::atanh_bound(t: CReal, dt: CReal::atanh_D(t)): AbsLe(CReal::atanh(t), 1) {
+    let a = CReal::atanh_near(t, dt, 0);
+    let z: (CReal::atanh_n(0, t) ≈ 0) = CReal::same_refl(0);
+    let q: (Rat::inv_pow2(0) ≈ 1) = omega;
+    let qe = CReal::ofRat_respects(q);
+    let al: (-CReal::ofRat(Rat::inv_pow2(0)) <= CReal::atanh(t) + -CReal::atanh_n(0, t)) = a.left;
+    let lo: (-1 <= CReal::atanh(t)) = linarith(al, z, qe);
+    LocatedAddGroup::abs_le_intro(CReal::atanh(t), 1, lo, linarith(a.right, z, qe))
+}
+
+theorem CReal::atanh_n_zero(n: Nat): CReal::atanh_n(n, 0) ≈ 0 {
+    match n {
+        Zero => CReal::same_refl(0),
+        Succ(m) => {
+            let ih = CReal::atanh_n_zero(m);
+            let x = OrderedField::npow(CReal::ofRat(0), m + m);
+            let t0: (CReal::atanh_coef(m) * (x * 0) ≈ 0) =
+                CReal::same_trans(CReal::mul_respects(CReal::atanh_coef(m).same_refl(), x.mul_zero()), CReal::atanh_coef(m).mul_zero());
+            let k: (CReal::atanh_n(m, 0) + CReal::atanh_coef(m) * (x * 0) ≈ 0) = CReal::same_trans(CReal::add_respects(ih, t0), CReal::add_zero(0));
+            k
+        },
+    }
+}
+
+theorem CReal::atanh_D_zero(): CReal::atanh_D(0) {
+    let p = CReal::half_r_pos();
+    let lo: (-CReal::half_r() <= 0) = linarith(p);
+    And(lo, CReal::le_of_lt(p))
+}
+
+theorem CReal::atanh_zero(): CReal::atanh(0) ≈ 0 {
+    let xs = λ (n: Nat) => CReal::atanh_n(n, CReal::atanh_clamp(0));
+    let c = CReal::lim_converges(xs, CReal::atanh_regular(0));
+    let k = CReal::atanh_clamp_id(0, CReal::atanh_D_zero());
+    let hs = λ (n: Nat) => {
+        let r: (CReal::atanh_n(n, CReal::atanh_clamp(0)) ≈ CReal::atanh_n(n, 0)) =
+            OrderedField::atanh_poly_respects(λ k => CReal::atanh_coef(k), CReal::atanh_clamp(0), 0, k, n);
+        let e: (xs(n) ≈ 0) = CReal::same_trans(r, CReal::atanh_n_zero(n));
+        e
+    };
+    let l = CReal::limit_respects(hs, CReal::same_refl(CReal::atanh(0)), c, xs := xs, ys := λ (n: Nat) => CReal::ofRat(0));
+    CReal::limit_unique(l, CReal::limit_const(CReal::ofRat(0)))
+}
+
+theorem CReal::atanh_g_zero(): CReal::atanh_g(0) ≈ 1 {
+    let ug = CReal::atanh_u_g(0, CReal::atanh_D_zero());
+    let n0: (-(CReal::ofRat(0) * CReal::ofRat(0)) ≈ CReal::ofRat(0)) = CReal::same_trans(CReal::neg_respects(CReal::mul_zero(0)), CReal::neg_zero());
+    let u0: (CReal::atanh_u(0) ≈ 1) = CReal::same_trans(CReal::add_respects(CReal::same_refl(1), n0), CReal::add_zero(1));
+    CReal::same_trans(CReal::same_sym(CReal::one_mul(CReal::atanh_g(0))),
+        CReal::same_trans(CReal::mul_respects(CReal::same_sym(u0), CReal::atanh_g(0).same_refl()), ug))
+}
+
+theorem CReal::atanh_g_bounded(): BoundedOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh_g(t), CReal::ofRat(1) + CReal::ofRat(1)) {
+    And(CReal::two_nonneg(), λ t dt => CReal::atanh_g_le(t))
+}
+
+fn CReal::atanh_L(t: CReal) → CReal { 1 + -1 * t }
+
+theorem CReal::atanh_L_bounded(): BoundedOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => 1 + -1 * t, CReal::ofRat(1) + CReal::ofRat(1)) {
+    And(CReal::two_nonneg(), λ t dt => {
+        let l: (-CReal::half_r() <= t) = dt.left;
+        let s = CReal::half_r_add();
+        let p = CReal::half_r_pos();
+        let lo: (-(CReal::ofRat(1) + CReal::ofRat(1)) <= 1 + -1 * t) = linarith(dt.right, s, p);
+        let hi: (1 + -1 * t <= CReal::ofRat(1) + CReal::ofRat(1)) = linarith(l, s, p);
+        LocatedAddGroup::abs_le_intro(1 + -1 * t, CReal::ofRat(1) + CReal::ofRat(1), lo, hi)
+    })
+}
+
+theorem CReal::atanh_L1_bounded(): BoundedOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => 0 + -1 * 1, CReal::ofRat(1)) {
+    let o: (CReal::ofRat(0) < CReal::ofRat(1)) = CReal::zero_lt_one();
+    let lo: (-CReal::ofRat(1) <= 0 + -1 * 1) = linarith(o);
+    let hi: (0 + -1 * 1 <= CReal::ofRat(1)) = linarith(o);
+    And(CReal::le_of_lt(o), λ t dt => LocatedAddGroup::abs_le_intro(0 + -1 * 1, CReal::ofRat(1), lo, hi))
+}
+
+// exp(2·atanh t)·(1 - t)²·g(t) has derivative zero on D.
+fn CReal::atanh_G(t: CReal) → CReal {
+    CReal::exp(CReal::atanh(t) + CReal::atanh(t)) * (((1 + -1 * t) * (1 + -1 * t)) * CReal::atanh_g(t))
+}
+
+fn CReal::atanh_G1(t: CReal) → CReal {
+    (CReal::exp(CReal::atanh(t) + CReal::atanh(t)) * (CReal::atanh_g(t) + CReal::atanh_g(t))) * (((1 + -1 * t) * (1 + -1 * t)) * CReal::atanh_g(t))
+    + CReal::exp(CReal::atanh(t) + CReal::atanh(t)) * (((0 + -1 * 1) * (1 + -1 * t) + (1 + -1 * t) * (0 + -1 * 1)) * CReal::atanh_g(t)
+        + ((1 + -1 * t) * (1 + -1 * t)) * CReal::atanh_g1(t))
+}
+
+theorem CReal::atanh_G_deriv(): DerivOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh_G(t), λ (t: CReal) => CReal::atanh_G1(t)) {
+    let D = λ (t: CReal) => CReal::atanh_D(t);
+    let one = CReal::ofRat(1);
+    let two = CReal::ofRat(1) + CReal::ofRat(1);
+    let two2 = CReal::ofRat(2);
+    let A = λ (t: CReal) => CReal::atanh(t);
+    let g = λ (t: CReal) => CReal::atanh_g(t);
+    let L: CReal → CReal = λ t => 1 + -1 * t;
+    let L1: CReal → CReal = λ t => 0 + -1 * 1;
+    let E = λ (x: CReal) => Within(<=, -two2, x, two2);
+    let hf = DerivOn::add(D, A, g, A, g, CReal::atanh_deriv(), CReal::atanh_deriv());
+    let gB = CReal::atanh_g_bounded();
+    let bg2 = BoundedOn::add(D, g, g, two, two, gB, gB);
+    let hm: MapsTo(D, E, λ (t: CReal) => CReal::atanh(t) + CReal::atanh(t)) = λ t dt => {
+        let b = CReal::atanh_bound(t, dt);
+        let bl: (-1 <= CReal::atanh(t)) = b.left;
+        let lo: (-two2 <= CReal::atanh(t) + CReal::atanh(t)) = linarith(bl);
+        let hi: (CReal::atanh(t) + CReal::atanh(t) <= two2) = linarith(b.right);
+        And(lo, hi)
+    };
+    let eb = CReal::exp_bounded_within(-two2, two2);
+    let hE = DerivOn::chain(D, E, λ (t: CReal) => CReal::atanh(t) + CReal::atanh(t), λ (t: CReal) => CReal::atanh_g(t) + CReal::atanh_g(t),
+        λ (x: CReal) => CReal::exp(x), λ (x: CReal) => CReal::exp(x), two + two, CReal::exp(two2), hm, hf,
+        CReal::exp_deriv_within(-two2, two2), bg2, eb);
+    let bE: BoundedOn(D, λ (t: CReal) => CReal::exp(CReal::atanh(t) + CReal::atanh(t)), CReal::exp(two2)) =
+        And(eb.left, λ t dt => eb.right(CReal::atanh(t) + CReal::atanh(t), hm(t, dt)));
+    let bE1 = BoundedOn::mul(D, λ (t: CReal) => CReal::exp(CReal::atanh(t) + CReal::atanh(t)), λ (t: CReal) => CReal::atanh_g(t) + CReal::atanh_g(t),
+        CReal::exp(two2), two + two, bE, bg2);
+    let hL = DerivOn::add(D, λ (t: CReal) => 1, λ (t: CReal) => 0, λ (t: CReal) => -1 * t, λ (t: CReal) => -1 * 1,
+        DerivOn::const(D, 1), DerivOn::scale(D, -1, λ (t: CReal) => t, λ (t: CReal) => 1, DerivOn::id(D)));
+    let bL = CReal::atanh_L_bounded();
+    let bL1 = CReal::atanh_L1_bounded();
+    let hP = DerivOn::mul(D, L, L1, L, L1, two, two, one, one, hL, hL, bL, bL, bL1, bL1);
+    let bP = BoundedOn::mul(D, L, L, two, two, bL, bL);
+    let bP1 = BoundedOn::add(D, λ (t: CReal) => L1(t) * L(t), λ (t: CReal) => L(t) * L1(t), one * two, two * one,
+        BoundedOn::mul(D, L1, L, one, two, bL1, bL), BoundedOn::mul(D, L, L1, two, one, bL, bL1));
+    let P = λ (t: CReal) => L(t) * L(t);
+    let P1 = λ (t: CReal) => L1(t) * L(t) + L(t) * L1(t);
+    let g1 = λ (t: CReal) => CReal::atanh_g1(t);
+    let hW = DerivOn::mul(D, P, P1, g, g1, two * two, two, one * two + two * one, CReal::ofRat(4), hP, CReal::atanh_g_deriv(),
+        bP, gB, bP1, CReal::atanh_g1_bounded());
+    let bW = BoundedOn::mul(D, P, g, two * two, two, bP, gB);
+    let bW1 = BoundedOn::add(D, λ (t: CReal) => P1(t) * g(t), λ (t: CReal) => P(t) * g1(t), (one * two + two * one) * two, (two * two) * CReal::ofRat(4),
+        BoundedOn::mul(D, P1, g, one * two + two * one, two, bP1, gB), BoundedOn::mul(D, P, g1, two * two, CReal::ofRat(4), bP, CReal::atanh_g1_bounded()));
+    DerivOn::mul(D, λ (t: CReal) => CReal::exp(CReal::atanh(t) + CReal::atanh(t)),
+        λ (t: CReal) => CReal::exp(CReal::atanh(t) + CReal::atanh(t)) * (CReal::atanh_g(t) + CReal::atanh_g(t)),
+        λ (t: CReal) => P(t) * g(t), λ (t: CReal) => P1(t) * g(t) + P(t) * g1(t),
+        CReal::exp(two2), two * two * two, CReal::exp(two2) * (two + two), (one * two + two * one) * two + (two * two) * CReal::ofRat(4),
+        hE, hW, bE, bW, bE1, bW1)
+}
+
+// The algebra, over plain variables: with `(1 - t²)·g = 1` and `g' =
+// 2t·g²`, the derivative is `2E·g·(1 - t)·((1 - t²)·g - 1) = 0`.
+theorem CReal::atanh_G1_alg(E, g, g1, t: CReal, ug: (1 + -(t * t)) * g ≈ 1, g1u: g1 ≈ -(g * g * -(t + t))):
+    (E * (g + g)) * (((1 + -1 * t) * (1 + -1 * t)) * g)
+        + E * (((0 + -1 * 1) * (1 + -1 * t) + (1 + -1 * t) * (0 + -1 * 1)) * g + ((1 + -1 * t) * (1 + -1 * t)) * g1) ≈ 0
+{
+    ring(ug, g1u)
+}
+
+theorem CReal::atanh_G1_zero(t: CReal, dt: CReal::atanh_D(t)): CReal::atanh_G1(t) ≈ 0 {
+    CReal::atanh_G1_alg(CReal::exp(CReal::atanh(t) + CReal::atanh(t)), CReal::atanh_g(t), CReal::atanh_g1(t), t,
+        CReal::atanh_u_g(t, dt), CReal::same_refl(CReal::atanh_g1(t)))
+}
+
+theorem CReal::atanh_G_zero(): CReal::atanh_G(0) ≈ 1 {
+    let a0 = CReal::atanh_zero();
+    let e: (CReal::exp(CReal::atanh(0) + CReal::atanh(0)) ≈ 1) =
+        CReal::same_trans(CReal::exp_respects(CReal::same_trans(CReal::add_respects(a0, a0), CReal::add_zero(0))), CReal::exp_zero());
+    let l0: (1 + -1 * CReal::ofRat(0) ≈ 1) = CReal::same_trans(CReal::add_respects(CReal::same_refl(1), CReal::mul_zero(-1)), CReal::add_zero(1));
+    let p0: ((1 + -1 * CReal::ofRat(0)) * (1 + -1 * CReal::ofRat(0)) ≈ 1) = CReal::same_trans(CReal::mul_respects(l0, l0), CReal::mul_one(1));
+    let w0: (((1 + -1 * CReal::ofRat(0)) * (1 + -1 * CReal::ofRat(0))) * CReal::atanh_g(0) ≈ 1) =
+        CReal::same_trans(CReal::mul_respects(p0, CReal::atanh_g_zero()), CReal::mul_one(1));
+    CReal::same_trans(CReal::mul_respects(e, w0), CReal::mul_one(1))
+}
+
+theorem CReal::exp_atanh_alg(E, g, t: CReal, ug: (1 + -(t * t)) * g ≈ 1, G: E * (((1 + -1 * t) * (1 + -1 * t)) * g) ≈ 1): E * (1 + -t) ≈ 1 + t {
+    ring(ug, G)
+}
+
+// The identity: exp(2·atanh t)·(1 - t) = 1 + t on [-1/2, 1/2].
+theorem CReal::exp_atanh(t: CReal, dt: CReal::atanh_D(t)): CReal::exp(CReal::atanh(t) + CReal::atanh(t)) * (1 + -t) ≈ 1 + t {
+    let c = DerivOn::const_of_zero(λ (s: CReal) => CReal::atanh_D(s), λ (s: CReal) => CReal::atanh_G(s), λ (s: CReal) => CReal::atanh_G1(s),
+        CReal::atanh_D_convex(), CReal::atanh_G_deriv(), λ s ds => CReal::atanh_G1_zero(s, ds), 0, t, CReal::atanh_D_zero(), dt);
+    let gt: (CReal::atanh_G(t) ≈ 1) = CReal::same_trans(CReal::same_sym(c), CReal::atanh_G_zero());
+    let gu: (CReal::atanh_G(t) ≈ CReal::exp(CReal::atanh(t) + CReal::atanh(t)) * (((1 + -1 * t) * (1 + -1 * t)) * CReal::atanh_g(t))) =
+        CReal::same_refl(CReal::atanh_G(t));
+    CReal::exp_atanh_alg(CReal::exp(CReal::atanh(t) + CReal::atanh(t)), CReal::atanh_g(t), t, CReal::atanh_u_g(t, dt),
+        CReal::same_trans(CReal::same_sym(gu), gt))
+}
+
+// ---------------------------------------------------------------------------
+// log_rat's series is 2·atanh, at t = (A - B)/(A + B).
+
+fn Series::atanh_t(A, B: Nat) → Rat { Rat::ofInt(A.int() - B.int()) * Rat::inv_succ(A + B - 1) }
+
+// gap² is (A - B)², as rationals.
+theorem Series::atanh_X_sq(A, B: Nat): Rat::ofInt(OfNat(Series::atanh_X(A, B))) ≈ Rat::ofInt(A.int() - B.int()) * Rat::ofInt(A.int() - B.int()) {
+    let g = Series::atanh_gap(A, B);
+    let gd: (g = (A - B) + (B - A)) = refl;
+    let sq: (Rat::ofInt(OfNat(Series::atanh_X(A, B))) ≈ Rat::ofInt(OfNat(g)) * Rat::ofInt(OfNat(g))) =
+        Rat::same_refl(Rat::ofInt(OfNat(Series::atanh_X(A, B))));
+    match B.le_total(A) {
+        Inl(ba) => {
+            let e: (g.int() = A.int() - B.int()) = omega(gd, ba);
+            let r: (Rat::ofInt(OfNat(g)) ≈ Rat::ofInt(A.int() - B.int())) =
+                j(e, λ v _ => Rat::ofInt(OfNat(g)) ≈ Rat::ofInt(v), Rat::same_refl(Rat::ofInt(OfNat(g))));
+            ring(sq, r)
+        },
+        Inr(ab) => {
+            let e: (g.int() = B.int() - A.int()) = omega(gd, ab);
+            let r: (Rat::ofInt(OfNat(g)) ≈ Rat::ofInt(B.int() - A.int())) =
+                j(e, λ v _ => Rat::ofInt(OfNat(g)) ≈ Rat::ofInt(v), Rat::same_refl(Rat::ofInt(OfNat(g))));
+            let n: (Rat::ofInt(B.int() - A.int()) ≈ -Rat::ofInt(A.int() - B.int())) = omega;
+            ring(sq, r, n)
+        },
+    }
+}
+
+// One ratio: c_k·ratio(k) = t²·c_(k+1), every factor cleared by its
+// reciprocal.
+theorem Series::atanh_ratio_step(A, B: Nat, pos: 0 < A + B, k: Nat):
+    Rat::inv_succ(k + k) * Series::atanh_ratio(Series::atanh_X(A, B), Series::atanh_m(A, B), k)
+        ≈ (Series::atanh_t(A, B) * Series::atanh_t(A, B)) * Rat::inv_succ(Succ(k) + Succ(k))
+{
+    let X = Series::atanh_X(A, B);
+    let m = Series::atanh_m(A, B);
+    let N = 2 * (m * k) + 3 * m + 2 * k + 2;
+    let p = Rat::inv_succ(k + k);
+    let q = Rat::inv_succ(Succ(k) + Succ(k));
+    let r = Rat::inv_succ(N);
+    let s = Rat::inv_succ(A + B - 1);
+    let d = Rat::ofInt(A.int() - B.int());
+    let Xr = Rat::ofInt(OfNat(X));
+    let K1 = Rat::ofInt(OfNat(Succ(k + k)));
+    let K3 = Rat::ofInt(OfNat(Succ(Succ(k) + Succ(k))));
+    let M1 = Rat::ofInt(OfNat(m + 1));
+    let S = Rat::ofInt(OfNat(A + B));
+    let f1: (p * K1 ≈ 1) = omega;
+    let f2: (q * K3 ≈ 1) = omega;
+    let f3: (r * Rat::ofInt(OfNat(Succ(N))) ≈ 1) = omega;
+    let n4: (Succ(N) = (m + 1) * Succ(Succ(k) + Succ(k))) = ring;
+    let f4: (Rat::ofInt(OfNat(Succ(N))) ≈ M1 * K3) = j(sym(n4), λ v _ => Rat::ofInt(OfNat(v)) ≈ M1 * K3, Rat::same_refl(M1 * K3));
+    let n5: (X * Succ(k + k) = 2 * (X * k) + X) = ring;
+    let f5: (Series::atanh_ratio(X, m, k) ≈ Xr * K1 * r) = j(n5, λ v _ => Rat::ofInt(OfNat(v)) * r ≈ Xr * K1 * r, Rat::same_refl(Xr * K1 * r));
+    let f6: (Xr ≈ d * d) = Series::atanh_X_sq(A, B);
+    let f7: (s * S ≈ 1) = omega(pos);
+    let one: (1 * 1 <= (A + B) * (A + B)) = Nat::mul_le_mono(1, A + B, 1, A + B, omega(pos), omega(pos));
+    let em: (m = (A + B) * (A + B) - 1) = refl;
+    let n8: (m + 1 = (A + B) * (A + B)) = omega(one, em);
+    let f8: (M1 ≈ S * S) = j(sym(n8), λ v _ => Rat::ofInt(OfNat(v)) ≈ S * S, Rat::same_refl(S * S));
+    let tt: (Series::atanh_t(A, B) ≈ d * s) = Rat::same_refl(d * s);
+    let g1: (Rat::ofInt(OfNat(A + B - 1)) + 1 ≈ S) = omega(pos);
+    let g2: (Rat::ofInt(OfNat(m)) + 1 ≈ M1) = omega;
+    let c = A + B - 1;
+    let u = Rat::ofInt(OfNat(c));
+    let ec: (A + B = c + 1) = omega(pos);
+    let sq1: ((c + 1) * (c + 1) = c * c + c + c + 1) = ring;
+    let n9: (m = c * c + c + c) = j(sym(ec), λ v _ => v * v - 1 = c * c + c + c, omega(sq1));
+    let g3: (Rat::ofInt(OfNat(m)) ≈ u * u + u + u) = j(sym(n9), λ v _ => Rat::ofInt(OfNat(v)) ≈ u * u + u + u, omega);
+    let rr: (r ≈ s * s * q) = ring(f3, f4, f8, f7, f2, g1, g2, g3);
+    let e2: (p * Series::atanh_ratio(X, m, k) ≈ Xr * r) = ring(f1, f5);
+    let e3: (Xr * r ≈ d * d * (s * s * q)) = ring(f6, rr);
+    let e4: ((Series::atanh_t(A, B) * Series::atanh_t(A, B)) * q ≈ d * d * (s * s * q)) = ring(tt);
+    let fin: (p * Series::atanh_ratio(X, m, k) ≈ (Series::atanh_t(A, B) * Series::atanh_t(A, B)) * q) = Rat::same_trans(e2, Rat::same_trans(e3, Rat::same_sym(e4)));
+    fin
+}
+
+fn Series::atanh_c(k: Nat) → Rat { Rat::inv_succ(k + k) }
+
+// The k-th term is 2·t^(2k+1)/(2k+1).
+theorem Series::atanh2_term(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1, k: Nat):
+    (Series::atanh2(A, B, small)).term(k) ≈ Series::atanh_c(k) * OrderedField::npow(Series::atanh_t(A, B), Succ(k + k))
+        + Series::atanh_c(k) * OrderedField::npow(Series::atanh_t(A, B), Succ(k + k))
+{
+    let t = Series::atanh_t(A, B);
+    match k {
+        Zero => {
+            let d = A.int() - B.int();
+            let f: ((Series::atanh2(A, B, small)).term(0) ≈ Rat::ofInt(d + d) * Rat::inv_succ(A + B - 1)) =
+                Rat::same_refl(Rat::ofInt(d + d) * Rat::inv_succ(A + B - 1));
+            let a = Rat::ofInt_add(d, d);
+            let i0: (Series::atanh_c(0) ≈ 1) = omega;
+            let u: (OrderedField::npow(t, Succ(0 + 0)) ≈ 1 * t) = Rat::same_refl(1 * t);
+            let tt: (t ≈ Rat::ofInt(d) * Rat::inv_succ(A + B - 1)) = Rat::same_refl(t);
+            let k0: ((Series::atanh2(A, B, small)).term(0) ≈ Series::atanh_c(0) * OrderedField::npow(t, Succ(0 + 0))
+                + Series::atanh_c(0) * OrderedField::npow(t, Succ(0 + 0))) = ring(f, a, i0, u, tt);
+            k0
+        },
+        Succ(i) => {
+            let s = Series::atanh2(A, B, small);
+            let ih = Series::atanh2_term(A, B, pos, small, i);
+            let st = Series::atanh_ratio_step(A, B, pos, i);
+            let r = Series::atanh_ratio(Series::atanh_X(A, B), Series::atanh_m(A, B), i);
+            let un: (s.term(Succ(i)) ≈ s.term(i) * r) = Rat::same_refl(s.term(Succ(i)));
+            let ix = OrderedField::npow_index(t, Succ(Succ(i) + Succ(i)), Succ(Succ(Succ(i + i))), omega);
+            let pw: (OrderedField::npow(t, Succ(Succ(Succ(i + i)))) ≈ OrderedField::npow(t, Succ(i + i)) * t * t) =
+                Rat::same_refl(OrderedField::npow(t, Succ(Succ(Succ(i + i)))));
+            let cs: (Series::atanh_c(i) ≈ Rat::inv_succ(i + i)) = Rat::same_refl(Series::atanh_c(i));
+            let cs2: (Series::atanh_c(Succ(i)) ≈ Rat::inv_succ(Succ(i) + Succ(i))) = Rat::same_refl(Series::atanh_c(Succ(i)));
+            let k1: (s.term(Succ(i)) ≈ Series::atanh_c(Succ(i)) * OrderedField::npow(t, Succ(Succ(i) + Succ(i)))
+                + Series::atanh_c(Succ(i)) * OrderedField::npow(t, Succ(Succ(i) + Succ(i)))) = ring(un, ih, st, ix, pw, cs, cs2);
+            k1
+        },
+    }
+}
+
+// The partial sums are twice atanh's polynomials.
+theorem Series::atanh2_sum(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1, n: Nat):
+    (Series::atanh2(A, B, small)).sum(n) ≈ OrderedField::atanh_poly(λ k => Series::atanh_c(k), n, Series::atanh_t(A, B))
+        + OrderedField::atanh_poly(λ k => Series::atanh_c(k), n, Series::atanh_t(A, B))
+{
+    let t = Series::atanh_t(A, B);
+    match n {
+        Zero => {
+            let k: ((Series::atanh2(A, B, small)).sum(0) ≈ 0 + 0) = omega;
+            k
+        },
+        Succ(i) => {
+            let s = Series::atanh2(A, B, small);
+            let ih = Series::atanh2_sum(A, B, pos, small, i);
+            let tm = Series::atanh2_term(A, B, pos, small, i);
+            let us: (s.sum(Succ(i)) ≈ s.sum(i) + s.term(i)) = Rat::same_refl(s.sum(Succ(i)));
+            let ua: (OrderedField::atanh_poly(λ k => Series::atanh_c(k), Succ(i), t) ≈ OrderedField::atanh_poly(λ k => Series::atanh_c(k), i, t)
+                + Series::atanh_c(i) * OrderedField::npow(t, Succ(i + i))) = Rat::same_refl(OrderedField::atanh_poly(λ k => Series::atanh_c(k), Succ(i), t));
+            let k: (s.sum(Succ(i)) ≈ OrderedField::atanh_poly(λ k => Series::atanh_c(k), Succ(i), t)
+                + OrderedField::atanh_poly(λ k => Series::atanh_c(k), Succ(i), t)) = ring(us, ih, tm, ua);
+            k
+        },
+    }
+}
+
+// ofRat carries powers and the polynomials.
+theorem CReal::npow_ofRat(q: Rat, n: Nat): OrderedField::npow(CReal::ofRat(q), n) ≈ CReal::ofRat(OrderedField::npow(q, n)) {
+    match n {
+        Zero => CReal::same_refl(CReal::ofRat(1)),
+        Succ(m) => CReal::same_trans(CReal::mul_respects(CReal::npow_ofRat(q, m), CReal::ofRat(q).same_refl()),
+            CReal::same_sym(CReal::ofRat_mul(OrderedField::npow(q, m), q))),
+    }
+}
+
+theorem CReal::atanh_n_ofRat(q: Rat, n: Nat):
+    CReal::atanh_n(n, CReal::ofRat(q)) ≈ CReal::ofRat(OrderedField::atanh_poly(λ k => Series::atanh_c(k), n, q))
+{
+    match n {
+        Zero => CReal::same_refl(CReal::ofRat(0)),
+        Succ(m) => {
+            let ih = CReal::atanh_n_ofRat(q, m);
+            let p = CReal::npow_ofRat(q, Succ(m + m));
+            let t = CReal::mul_respects(CReal::same_refl(CReal::atanh_coef(m)), p);
+            let e = CReal::same_trans(t, CReal::same_sym(CReal::ofRat_mul(Series::atanh_c(m), OrderedField::npow(q, Succ(m + m)))));
+            CReal::same_trans(CReal::add_respects(ih, e),
+                CReal::same_sym(CReal::ofRat_add(OrderedField::atanh_poly(λ k => Series::atanh_c(k), m, q), Series::atanh_c(m) * OrderedField::npow(q, Succ(m + m)))))
+        },
+    }
+}
+
+// The series' real is within 2^-m of twice atanh at T, for every m.
+theorem CReal::atanh2_close(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1,
+    dT: CReal::atanh_D(CReal::ofRat(Series::atanh_t(A, B))), m: Nat):
+    AbsLe((Series::atanh2(A, B, small)).real() + -(CReal::atanh(CReal::ofRat(Series::atanh_t(A, B))) + CReal::atanh(CReal::ofRat(Series::atanh_t(A, B)))),
+        CReal::ofRat(Rat::inv_pow2(m)))
+{
+    let s = Series::atanh2(A, B, small);
+    let T = CReal::ofRat(Series::atanh_t(A, B));
+    let N = s.index(Succ(m));
+    let hs = s.index_start(Succ(m));
+    let ab = s.above(N, hs);
+    let be = s.below(N, hs);
+    let es = CReal::ofRat_le(s.err_small(Succ(m), N, N.le_refl()));
+    let near = CReal::atanh_near(T, dT, N);
+    let nl: (-CReal::ofRat(Rat::inv_pow2(N)) <= CReal::atanh(T) + -CReal::atanh_n(N, T)) = near.left;
+    let ix: (N = s.start + ((Succ(m) + 1) + s.scale().width())) = refl;
+    let pN = CReal::ofRat_le(Rat::inv_pow2_antitone(Succ(m) + 1, N, omega(ix)));
+    let sr = CReal::ofRat_respects(Series::atanh2_sum(A, B, pos, small, N));
+    let P = OrderedField::atanh_poly(λ k => Series::atanh_c(k), N, Series::atanh_t(A, B));
+    let sa = CReal::ofRat_add(P, P);
+    let an = CReal::atanh_n_ofRat(Series::atanh_t(A, B), N);
+    let h1 = Rat::inv_pow2_half(Succ(m));
+    let h0 = Rat::inv_pow2_half(m);
+    let pp: (0 < Rat::inv_pow2(Succ(m) + 1)) = Rat::inv_pow2_pos(Succ(m) + 1);
+    let q: (Rat::inv_pow2(Succ(m) + 1) + Rat::inv_pow2(Succ(m) + 1) + Rat::inv_pow2(Succ(m) + 1) <= Rat::inv_pow2(m)) = linarith(h1, h0, pp);
+    let qc = CReal::ofRat_le(q);
+    let lo: (-CReal::ofRat(Rat::inv_pow2(m)) <= s.real() + -(CReal::atanh(T) + CReal::atanh(T))) = linarith(be, es, near.right, pN, sr, sa, an, qc);
+    let hi: (s.real() + -(CReal::atanh(T) + CReal::atanh(T)) <= CReal::ofRat(Rat::inv_pow2(m))) = linarith(ab, es, nl, pN, sr, sa, an, qc);
+    LocatedAddGroup::abs_le_intro(s.real() + -(CReal::atanh(T) + CReal::atanh(T)), CReal::ofRat(Rat::inv_pow2(m)), lo, hi)
+}
+
+// A real within every 2^-m of zero is zero.
+theorem CReal::zero_of_pow2_close(z: CReal, h: (m: Nat) → AbsLe(z, CReal::ofRat(Rat::inv_pow2(m)))): z ≈ 0 {
+    let H = CReal::half_r();
+    let pH: (0 <= H) = CReal::le_of_lt(CReal::half_r_pos());
+    let hr: (H + H <= 1) = linarith(CReal::half_r_add());
+    let o: (CReal::ofRat(0) < CReal::ofRat(1)) = CReal::zero_lt_one();
+    let r = OrderedField::abs_le_of_forall_pos(z, 0, 1, CReal::le_of_lt(o), λ e pe => {
+        let n = OrderedField::npow_small(H, pH, hr, e, pe);
+        let hp = CReal::half_r_pow(n.witness);
+        let b = h(n.witness);
+        let bl: (-CReal::ofRat(Rat::inv_pow2(n.witness)) <= z) = b.left;
+        let lo: (-(0 + e * 1) <= z) = linarith(bl, hp, n.proof);
+        let hi: (z <= 0 + e * 1) = linarith(b.right, hp, n.proof);
+        LocatedAddGroup::abs_le_intro(z, 0 + e * 1, lo, hi)
+    });
+    let rl: (-0 <= z) = r.left;
+    let rr: (z <= 0) = r.right;
+    linarith(rl, rr)
+}
+
+// log_rat's series at a balanced binade is twice the real atanh.
+theorem CReal::atanh2_real(A, B: Nat, pos: 0 < A + B, small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1,
+    dT: CReal::atanh_D(CReal::ofRat(Series::atanh_t(A, B)))):
+    (Series::atanh2(A, B, small)).real() ≈ CReal::atanh(CReal::ofRat(Series::atanh_t(A, B))) + CReal::atanh(CReal::ofRat(Series::atanh_t(A, B)))
+{
+    let z = CReal::zero_of_pow2_close((Series::atanh2(A, B, small)).real() + -(CReal::atanh(CReal::ofRat(Series::atanh_t(A, B))) + CReal::atanh(CReal::ofRat(Series::atanh_t(A, B)))),
+        λ m => CReal::atanh2_close(A, B, pos, small, dT, m));
+    linarith(z)
+}
+
+// ---------------------------------------------------------------------------
+// exp of the series: exp(2·atanh t)·B = A at t = (A - B)/(A + B).
+
+// t is in [-1/2, 1/2] once each of A, B is at most three times the other.
+theorem Series::atanh_t_in(A, B: Nat, pos: 0 < A + B, ha: A <= B + B + B, hb: B <= A + A + A):
+    -Rat::inv_succ(1) <= Series::atanh_t(A, B) ∧ Series::atanh_t(A, B) <= Rat::inv_succ(1)
+{
+    let s = Rat::inv_succ(A + B - 1);
+    let S = Rat::ofInt(OfNat(A + B));
+    let d = Rat::ofInt(A.int() - B.int());
+    let a = Rat::ofInt(OfNat(A));
+    let b = Rat::ofInt(OfNat(B));
+    let f7: (s * S ≈ 1) = omega(pos);
+    let ps: (0 <= s) = Rat::le_of_lt(Rat::inv_succ_pos(A + B - 1));
+    let h2: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
+    let es: (S ≈ a + b) = omega;
+    let ed: (d ≈ a + -b) = omega;
+    let ra: (a <= b + b + b) = omega(ha);
+    let rb: (b <= a + a + a) = omega(hb);
+    let tt: (Series::atanh_t(A, B) ≈ d * s) = Rat::same_refl(d * s);
+    let up: (0 <= (S + -(d + d)) * s) = Rat::mul_nonneg(linarith(es, ed, ra), ps);
+    let dn: (0 <= (S + d + d) * s) = Rat::mul_nonneg(linarith(es, ed, rb), ps);
+    let e1: ((S + -(d + d)) * s ≈ 1 + -(d * s + d * s)) = ring(f7);
+    let e2: ((S + d + d) * s ≈ 1 + (d * s + d * s)) = ring(f7);
+    And(linarith(dn, e2, tt, h2), linarith(up, e1, tt, h2))
+}
+
+theorem CReal::atanh_t_D(A, B: Nat, pos: 0 < A + B, ha: A <= B + B + B, hb: B <= A + A + A):
+    CReal::atanh_D(CReal::ofRat(Series::atanh_t(A, B)))
+{
+    let w = Series::atanh_t_in(A, B, pos, ha, hb);
+    let lo = CReal::ofRat_le(w.left);
+    let n = CReal::ofRat_neg(Rat::inv_succ(1));
+    let hu: (CReal::half_r() ≈ CReal::ofRat(Rat::inv_succ(1))) = CReal::same_refl(CReal::half_r());
+    let l: (-CReal::half_r() <= CReal::ofRat(Series::atanh_t(A, B))) = linarith(lo, n, hu);
+    And(l, CReal::ofRat_le(w.right))
+}
+
+theorem CReal::exp_atanh2_alg(E, T, S, a, b: CReal, h: E * (1 + -T) ≈ 1 + T, hT: T * S ≈ a + -b, hS: S ≈ a + b): E * b ≈ a {
+    let k1: (E * S + -(E * (T * S)) ≈ S + T * S) = ring(h);
+    let k2: (E * (T * S) ≈ E * (a + -b)) = CReal::mul_respects(E.same_refl(), hT);
+    let k3: (E * S ≈ E * (a + b)) = CReal::mul_respects(E.same_refl(), hS);
+    linarith(k1, k2, k3, hT, hS)
+}
+
+theorem CReal::exp_atanh2(A, B: Nat, pos: 0 < A + B, ha: A <= B + B + B, hb: B <= A + A + A,
+    small: Series::atanh_X(A, B) + Series::atanh_X(A, B) <= Series::atanh_m(A, B) + 1):
+    CReal::exp((Series::atanh2(A, B, small)).real()) * CReal::ofRat(Rat::ofInt(OfNat(B))) ≈ CReal::ofRat(Rat::ofInt(OfNat(A)))
+{
+    let t = Series::atanh_t(A, B);
+    let T = CReal::ofRat(t);
+    let dT = CReal::atanh_t_D(A, B, pos, ha, hb);
+    let id = CReal::exp_atanh(T, dT);
+    let s = Rat::inv_succ(A + B - 1);
+    let S = Rat::ofInt(OfNat(A + B));
+    let a = Rat::ofInt(OfNat(A));
+    let b = Rat::ofInt(OfNat(B));
+    let f7: (s * S ≈ 1) = omega(pos);
+    let ed: (Rat::ofInt(A.int() - B.int()) ≈ a + -b) = omega;
+    let tt: (t ≈ Rat::ofInt(A.int() - B.int()) * s) = Rat::same_refl(t);
+    let rT: (t * S ≈ a + -b) = ring(f7, ed, tt);
+    let rS: (S ≈ a + b) = omega;
+    let cT: (T * CReal::ofRat(S) ≈ CReal::ofRat(a) + -CReal::ofRat(b)) =
+        CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(t, S)), CReal::same_trans(CReal::ofRat_respects(rT),
+            CReal::same_trans(CReal::ofRat_add(a, -b), CReal::add_respects(CReal::ofRat(a).same_refl(), CReal::ofRat_neg(b)))));
+    let cS: (CReal::ofRat(S) ≈ CReal::ofRat(a) + CReal::ofRat(b)) = CReal::same_trans(CReal::ofRat_respects(rS), CReal::ofRat_add(a, b));
+    let e = CReal::exp_atanh2_alg(CReal::exp(CReal::atanh(T) + CReal::atanh(T)), T, CReal::ofRat(S), CReal::ofRat(a), CReal::ofRat(b), id, cT, cS);
+    let er = CReal::exp_respects(CReal::atanh2_real(A, B, pos, small, dT));
+    CReal::same_trans(CReal::mul_respects(er, CReal::ofRat(b).same_refl()), e)
+}
+
+// ---------------------------------------------------------------------------
+// exp(log q) = q.
+
+theorem CReal::exp_ln2(): CReal::exp(CReal::ln2()) * CReal::ofRat(Rat::ofInt(OfNat(1))) ≈ CReal::ofRat(Rat::ofInt(OfNat(2))) {
+    CReal::exp_atanh2(2, 1, omega, omega, omega, trivial)
+}
+
+theorem CReal::exp_ln2_alg(E, one, two: CReal, h: E * one ≈ two, h1: one ≈ 1): E ≈ two { ring(h, h1) }
+
+theorem CReal::exp_nat_alg(x, L, m: CReal, h: x ≈ m + 1): x * L ≈ m * L + L { ring(h) }
+
+theorem CReal::exp_nat_ln2(n: Nat): CReal::exp(CReal::ofRat(Rat::ofInt(OfNat(n))) * CReal::ln2()) ≈ CReal::ofRat(Rat::ofInt(OfNat(Nat::pow(2, n)))) {
+    let L = CReal::ln2();
+    match n {
+        Zero => CReal::same_trans(CReal::exp_respects(CReal::zero_mul(L)), CReal::exp_zero()),
+        Succ(m) => {
+            let ih = CReal::exp_nat_ln2(m);
+            let x = CReal::ofRat(Rat::ofInt(OfNat(Succ(m))));
+            let y = CReal::ofRat(Rat::ofInt(OfNat(m)));
+            let r: (Rat::ofInt(OfNat(Succ(m))) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
+            let xr: (x ≈ y + 1) = CReal::same_trans(CReal::ofRat_respects(r), CReal::ofRat_add(Rat::ofInt(OfNat(m)), 1));
+            let a = CReal::exp_respects(CReal::exp_nat_alg(x, L, y, xr));
+            let b = CReal::exp_add(y * L, L);
+            let two = CReal::exp_ln2_alg(CReal::exp(L), CReal::ofRat(Rat::ofInt(OfNat(1))), CReal::ofRat(Rat::ofInt(OfNat(2))), CReal::exp_ln2(),
+                CReal::same_refl(1));
+            let c = CReal::mul_respects(ih, two);
+            let d = CReal::same_sym(CReal::ofRat_mul(Rat::ofInt(OfNat(Nat::pow(2, m))), Rat::ofInt(OfNat(2))));
+            CReal::same_trans(a, CReal::same_trans(b, CReal::same_trans(c, d)))
+        },
+    }
+}
+
+theorem Binade::neg_mul_alg(x, L: CReal): (-x) * L ≈ -(x * L) { ring }
+
+theorem Binade::exp_log_alg1(E, X, P, b, a: CReal, h1: E * (b * P) ≈ a, h2: X ≈ E * P): X * b ≈ a { ring(h1, h2) }
+
+theorem Binade::exp_log_alg2(E, X, P, Q, b, a: CReal, h1: E * b ≈ a * P, h2: X ≈ E * Q, h3: Q * P ≈ 1): X * b ≈ a { ring(h1, h2, h3) }
+
+// At a binade: exp(2·atanh t + e·log 2)·b = a.
+theorem Binade::exp_log_at(a, b: Nat, c: b.width() <= a.width() ∨ ¬(b.width() <= a.width()), h: (Binade::at(a, b, c)).Balanced()):
+    CReal::exp(((Binade::at(a, b, c)).series(h)).real() + CReal::ofRat(Rat::ofInt((Binade::at(a, b, c)).e)) * CReal::ln2())
+        * CReal::ofRat(Rat::ofInt(OfNat(b))) ≈ CReal::ofRat(Rat::ofInt(OfNat(a)))
+{
+    let L = CReal::ln2();
+    (match c as λ c => (h: (Binade::at(a, b, c)).Balanced()) →
+        CReal::exp(((Binade::at(a, b, c)).series(h)).real() + CReal::ofRat(Rat::ofInt((Binade::at(a, b, c)).e)) * L)
+            * CReal::ofRat(Rat::ofInt(OfNat(b))) ≈ CReal::ofRat(Rat::ofInt(OfNat(a))) {
+        Inl(_) => λ h => {
+            let d = a.width() - b.width();
+            let P = Nat::pow(2, d);
+            let hl: (a < b * P + b * P) = h.left;
+            let hr: (b * P < a + a) = h.right;
+            let s = Series::atanh2(a, b * P, Series::atanh_close(a, b * P, hl, hr));
+            let e1 = CReal::exp_atanh2(a, b * P, omega(hr), omega(hl), omega(hr), Series::atanh_close(a, b * P, hl, hr));
+            let m1: (CReal::ofRat(Rat::ofInt(OfNat(b * P))) ≈ CReal::ofRat(Rat::ofInt(OfNat(b))) * CReal::ofRat(Rat::ofInt(OfNat(P)))) =
+                CReal::ofRat_mul(Rat::ofInt(OfNat(b)), Rat::ofInt(OfNat(P)));
+            let e1b = CReal::same_trans(CReal::mul_respects(CReal::exp(s.real()).same_refl(), CReal::same_sym(m1)), e1);
+            let x = CReal::exp_add(s.real(), CReal::ofRat(Rat::ofInt(OfNat(d))) * L);
+            let x2 = CReal::same_trans(x, CReal::mul_respects(CReal::exp(s.real()).same_refl(), CReal::exp_nat_ln2(d)));
+            Binade::exp_log_alg1(CReal::exp(s.real()), CReal::exp(s.real() + CReal::ofRat(Rat::ofInt(OfNat(d))) * L),
+                CReal::ofRat(Rat::ofInt(OfNat(P))), CReal::ofRat(Rat::ofInt(OfNat(b))), CReal::ofRat(Rat::ofInt(OfNat(a))), e1b, x2)
+        },
+        Inr(_) => λ h => {
+            let d = b.width() - a.width();
+            let P = Nat::pow(2, d);
+            let hl: (a * P < b + b) = h.left;
+            let hr: (b < a * P + a * P) = h.right;
+            let s = Series::atanh2(a * P, b, Series::atanh_close(a * P, b, hl, hr));
+            let e1 = CReal::exp_atanh2(a * P, b, omega(hr), omega(hl), omega(hr), Series::atanh_close(a * P, b, hl, hr));
+            let m1: (CReal::ofRat(Rat::ofInt(OfNat(a * P))) ≈ CReal::ofRat(Rat::ofInt(OfNat(a))) * CReal::ofRat(Rat::ofInt(OfNat(P)))) =
+                CReal::ofRat_mul(Rat::ofInt(OfNat(a)), Rat::ofInt(OfNat(P)));
+            let e1b = CReal::same_trans(e1, m1);
+            let y = CReal::ofRat(Rat::ofInt(OfNat(d))) * L;
+            let neg: (CReal::ofRat(Rat::ofInt(-(d.int()))) * L ≈ -y) =
+                CReal::same_trans(CReal::mul_respects(CReal::ofRat_neg(Rat::ofInt(OfNat(d))), L.same_refl()), Binade::neg_mul_alg(CReal::ofRat(Rat::ofInt(OfNat(d))), L));
+            let x = CReal::exp_add(s.real(), CReal::ofRat(Rat::ofInt(-(d.int()))) * L);
+            let x2 = CReal::same_trans(x, CReal::mul_respects(CReal::exp(s.real()).same_refl(), CReal::exp_respects(neg)));
+            let inv = CReal::same_trans(CReal::mul_respects(CReal::exp(-y).same_refl(), CReal::same_sym(CReal::exp_nat_ln2(d))), CReal::exp_neg_mul(y));
+            Binade::exp_log_alg2(CReal::exp(s.real()), CReal::exp(s.real() + CReal::ofRat(Rat::ofInt(-(d.int()))) * L),
+                CReal::ofRat(Rat::ofInt(OfNat(P))), CReal::exp(-y), CReal::ofRat(Rat::ofInt(OfNat(b))), CReal::ofRat(Rat::ofInt(OfNat(a))), e1b, x2, inv)
+        },
+    })(h)
+}
+
+theorem CReal::exp_log_frac(a, b: Nat, pa: 0 < a, pb: 0 < b):
+    CReal::exp(CReal::log_frac(a, b, pa, pb)) * CReal::ofRat(Rat::ofInt(OfNat(b))) ≈ CReal::ofRat(Rat::ofInt(OfNat(a)))
+{
+    Binade::exp_log_at(a, b, b.width().le_dec(a.width()), Binade::of_close(a, b, pa, pb))
+}
+
+theorem CReal::exp_log_alg(E, Q, D, N, I: CReal, h: E * D ≈ N, hq: Q * D ≈ N, hi: D * I ≈ 1): E ≈ Q { ring(h, hq, hi) }
+
+theorem CReal::natAbs_int_of_pos(v: Int, h: 0 < v): v.natAbs().int() = v {
+    (match v as λ w => 0 < w → w.natAbs().int() = w {
+        OfNat(_) => λ _ => refl,
+        NegSucc(_) => λ hn => false_elim(hn),
+    })(h)
+}
+
+// exp(log q) = q for every positive rational.
+theorem CReal::exp_log_rat(q: Rat, pos: 0 < q): CReal::exp(CReal::log_rat(q, pos)) ≈ CReal::ofRat(q) {
+    let a = q.num.natAbs();
+    let b = q.den;
+    let e = CReal::exp_log_frac(a, b, q.num_abs_pos(pos), q.den_pos);
+    let pb: (0 < b) = q.den_pos;
+    let np = Rat::num_pos(pos);
+    let nn: (q.num.natAbs().int() = q.num) = CReal::natAbs_int_of_pos(q.num, np);
+    let ei: (q.num * b.int() * 1 = a.int() * (b.int() * 1)) = ring(nn);
+    let hq: (q * Rat::ofInt(OfNat(b)) ≈ Rat::ofInt(OfNat(a))) = ei;
+    let hi: (Rat::ofInt(OfNat(b)) * Rat::inv_succ(b - 1) ≈ 1) = omega(pb);
+    let cq = CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(q, Rat::ofInt(OfNat(b)))), CReal::ofRat_respects(hq));
+    let ci = CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(Rat::ofInt(OfNat(b)), Rat::inv_succ(b - 1))), CReal::ofRat_respects(hi));
+    CReal::exp_log_alg(CReal::exp(CReal::log_rat(q, pos)), CReal::ofRat(q), CReal::ofRat(Rat::ofInt(OfNat(b))), CReal::ofRat(Rat::ofInt(OfNat(a))),
+        CReal::ofRat(Rat::inv_succ(b - 1)), e, cq, ci)
+}
