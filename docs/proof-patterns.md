@@ -87,6 +87,13 @@ property of Heather.
   ([[recursion-guard-takes-nearest-parameter-match]]); split in a helper.
 - A motive-less nested match on a `Cons` tail needs a written motive
   ([[nested-match-on-list-tail-motive]]).
+- **Don't match on a large theorem call's result.** `match lemma(..) as
+  .. { Exists(f, fh) => .. }`, or a match on `w.left` for `let w =
+  lemma(..)`, makes the elaborator and the kernel unfold the proof (an
+  order of magnitude more steps in `eft.hthr`; a split on a small lemma
+  is cheap). Pass the proof to a helper theorem that matches on its
+  parameter, or move the result with `j` over an equation:
+  [[match-on-proof-call-cost]].
 - `absurd` needs a constructor clash; `False` goes by `false_elim`.
 - Tier-2 laws through `Vis` are not provable with `=` (no funext): state
   them up to the tree's equivalence.
