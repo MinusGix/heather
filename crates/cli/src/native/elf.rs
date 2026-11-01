@@ -330,7 +330,7 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
+    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), refl, {p}_fits(), {p}_short(),
         top, depth, placed, s, entry, rsp,
         j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), deep, args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
@@ -364,7 +364,7 @@ theorem {p}_laid(): {p}_code().laid_out().IsTrue() {{
 }}
 
 theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{
-    {src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), {p}_emitted(), {p}_laid())
+    {src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), refl, {p}_emitted(), {p}_laid())
 }}
 
 // Its data segment, in whole pages, within the profile's limit; its words,

@@ -54,7 +54,7 @@ import omega;
 // with a data segment of `size`, at its entry with the command line `args`
 // on its stack, simulates the source run with `args`.
 theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
-    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    compiled: src.compile(io_data_low(), homes) = Some(program), bare: src.procedures = Nil, fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
@@ -79,7 +79,7 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
         let high: ((stack.low.toNat() + stack.size).leb(a.toNat()) = True) = Nat::leb_true(stack.low.toNat() + stack.size, a.toNat(), omega(found.left, ceiling));
         j(sym(high), λ b _ => (match b { True => data.read(s.memory, a), False => None<BitVec(8)> }) = Some(byte), found.right)
     };
-    native_compile_correct(src, r, homes, fits, program, compiled, io_entry(), s, trans(entry, start), resident, zero,
+    native_compile_correct(src, r, homes, fits, program, compiled, bare, io_entry(), s, trans(entry, start), resident, zero,
         stack, refl, omega(floor, low, placed.above), omega(low, placed.above, placed.canonical),
         DataRegion::process_stack_entry(size, top, depth, placed, s.gprs, rsp), deep, args,
         argv_at_kept(data.above(top), s.memory, data.above(stack.low.toNat() + stack.size), s.memory, above, read_gpr(Rsp, s.gprs), args, argv))
@@ -89,7 +89,7 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
 // program's bytes with a segment of `size`, whose header is 232 bytes
 // whatever their length.
 theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
-    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    compiled: src.compile(io_data_low(), homes) = Some(program), bare: src.procedures = Nil, fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
@@ -98,6 +98,6 @@ theorem Source::elf_file_simulates(self src: Source, size: Nat, within: size <= 
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
     let length = 232 + assemble(no_fills(), program, Nil).len();
-    src.elf_simulates(size, within, program, homes, compiled, fits, short, io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size),
+    src.elf_simulates(size, within, program, homes, compiled, bare, fits, short, io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size),
         io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), top, depth, placed, s, entry, rsp, loaded, deep, args, argv)
 }
