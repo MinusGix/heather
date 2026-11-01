@@ -2,7 +2,8 @@
 
 Status: **proposed 2026-10-31**, slice 1 landing with it; revised
 2026-11-01 to caller-saves and a callee that starts from zero (§2, §3),
-which is what the proof can carry. Owner:
+which is what the proof can carry. Slice 2 (the compile and its proof)
+landed 2026-11-01. Owner:
 `issues/native-compiled-procedures.md` (milestone `nh-procedures`, round R8
 of `docs/compiler-milestones-proposal.md`). It draws in
 `issues/native-procedure-contracts.md` and
@@ -261,7 +262,13 @@ the frame's base in `frame`.
    but for the handler it now quantifies over.
 2. **The compile and its proof**: §4 and §5. Done when a source with a
    helper called from two sites and a non-tail recursion compiles and the
-   compile is proved.
+   compile is proved. Landed: the call site's code as claims of trees
+   (`lib/native/native_compile_perform.hthr`), `Target::Hosts` (the
+   program holds every procedure and the shared exit), `Source::calls_at`
+   (every call at every depth, by induction on the depth, each callee's
+   body by its own `Stmt::emit_runs`), and `native_compile_correct` for
+   every source; probes in `lib/_tests/native/native_compile_tests.hthr`
+   (one body, three call sites, and the refusals 14 and 15).
 3. **`write-elf` and the builder**: a `proc` form in `native_build` whose
    words the builder numbers, `Source::spelled` and the Rust mirrors
    (`crates/cli/src/native`), and an ELF test that runs the recursion.
