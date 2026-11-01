@@ -896,3 +896,12 @@ nested binds, and `regex`'s ten-link tower is ten statements.
   `cd_loop(3, Nil) = [1, 2, 3]` by `refl`. `cd_loop_unfold` is refused,
   because the lifted obligation depends on the match equation
   (`unfolding-computed-scrutinee`).
+8. **Over `Tac`, a bind costs more in the gate than the method call did.**
+   `Bind::seq` is generic in `M`, and `Tac` (a tier-2 declaration) has no
+   type code function, so `M := λ A. ⌜Tac<El A>⌝` and every `M(X)` in the
+   call is a β-redex over `Tac`'s whole code, compared structurally against
+   the inline `Tac<X>`. A ported tactic module's declarations roughly double
+   their gate counters (shape: a constant per bind proportional to `Tac`'s
+   lowering). `Option` has a code function and pays nothing.
+   `issues/tier2-type-code-functions.md` owns the fix; the lowering itself
+   need not change.
