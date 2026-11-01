@@ -160,7 +160,9 @@ impl Reader<'_> {
 /// `[0]` (not a builder's), or one that does not read back.
 fn main_of(numbers: &[u64]) -> Option<(u64, Stmt)> {
     let mut r = Reader { numbers, at: 0 };
-    if r.next()? == 0 { return None; }
+    // A source with procedures (`[2]`) is allocated on the fork: this
+    // mirror walks `main` only.
+    if r.next()? != 1 { return None; }
     let words = r.next()?;
     for _ in 0..r.next()? {
         r.next()?;

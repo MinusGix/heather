@@ -212,6 +212,7 @@ fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().words, {src}().capacit
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
+fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len()] }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -248,7 +249,11 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     }
     // The program a part at a time, each read on its own, so a read holds
     // one part's values and not the program's.
-    let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?)?;
+    let [first, procedures] = numbers(&fork, &probe, &format!("{p}_first"))?[..] else {
+        return Err(format!("`{symbol}`'s procedures did not read back"));
+    };
+    let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?,
+        first, (procedures > 0).then_some(src.as_str()))?;
     // The parts over the homes, and the check's verdict on them. The refusal
     // here: once this module is elaborated, the fork reads only its names.
     let state = |fork: &mut Elaborator, parts: &str, spelled: &[u64]| -> Result<(String, Vec<u64>), String> {
@@ -286,7 +291,7 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     }
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
-    let emission::Stated { theorems: statements, items, lens, mut cuts, spans } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
+    let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
         Some(emission::Checks { src: &src, homes: &homes, sets: &live_sets }))?;
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
@@ -337,6 +342,21 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
 {lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::process({p}_size(), top, depth).linux(), src.denote(args), s),\n        {simulated})"))
     };
+    // How the program is the compile: `main` and exit 0 (`Source::compile_of`),
+    // or with procedures `main` past their labels, then exit 0, the
+    // procedures and the shared exit (`Source::compile_calls_of`).
+    let (emitted, compiles) = match &calls {
+        None => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
+    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
+        cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
+}}
+"), format!("{src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), refl, {p}_emitted(), {p}_laid())")),
+        Some(emission::CallsStated { main, names, procedures, after }) => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})) {{
+    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})), {p}_e_0())
+}}
+"), format!("{src}().compile_calls_of({LOW}, {homes}, {src}().procedures.head_or(Procedure([], [], Exit(0))), {src}().procedures.tail(), {p}_code(), {main}, {procedures}, {names}, {after},
+        {p}_allocated(), refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")),
+    };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
 import {root};
@@ -350,11 +370,7 @@ import {root};
 // the statement tree at a time.
 {statements}
 theorem {p}_allocated(): {src}().allocation_ok({homes}).IsTrue() {{ j(sym({p}_allocation_is()), λ b _ => b.IsTrue(), trivial) }}
-theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
-    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
-        cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
-}}
-
+{emitted}
 // Its layout, by a table of its labels checked a stretch at a time.
 {table}{layout}
 theorem {p}_holes(): {p}_code().no_holes().IsTrue() {{ trivial }}
@@ -364,7 +380,7 @@ theorem {p}_laid(): {p}_code().laid_out().IsTrue() {{
 }}
 
 theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{
-    {src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), refl, {p}_emitted(), {p}_laid())
+    {compiles}
 }}
 
 // Its data segment, in whole pages, within the profile's limit; its words,
@@ -377,7 +393,7 @@ theorem {p}_fits(): Layout::of({LOW}, {src}().words, {src}().capacities(), {home
 }}
 
 // The bytes, a piece at a time from the last item.
-", count = items.len(), layout = labels::layout(p, &offsets, &cuts));
+", count = items.len(), layout = labels::layout(p, &offsets, &cuts), emitted = emitted, compiles = compiles);
     text.push_str(&labels::byte_pieces(p, &pieces, &bytes, items.len(), &offsets));
     text.push_str(&format!("
 fn {p}_header() → List<BitVec(8)> {{ [{}] }}

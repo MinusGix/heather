@@ -252,6 +252,16 @@ fn summing() → Source {
         procedures := [sum()], depth := 5)
 }
 
+// The sum of 0..n by one call from `main`, at most `depth` calls deep:
+// the sum of 0..20 nests 21 calls, so at depth 20 the innermost is one too
+// deep and the program exits 139 (`call_depth_status`).
+fn summing_to(n, depth: Nat) → Source {
+    Source(functions := [], buffers := [], words := 10,
+        main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [sum()], depth := depth)
+}
+fn summing_twenty() → Source { summing_to(20, 21) }
+fn summing_shallow() → Source { summing_to(20, 20) }
+
 // How many items of the program are named `name`, and how many call label
 // `label`.
 fn Prog::named(self p: Prog, name: Nat) → Nat {

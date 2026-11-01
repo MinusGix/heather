@@ -1297,7 +1297,14 @@ fn Stmt::shape(self s: Stmt, m: Shape) → Shape {
     }
 }
 
-fn Source::shape(self src: Source) → List<Nat> { src.main.shape(Shape(0, [])).numbers }
+// The label name `main` is emitted from: 0, or past the procedures' and
+// the shared exit's with procedures (`Source::compile_calls`).
+fn Source::main_names(self src: Source) → Nat { match src.procedures { Nil => 0, Cons(_, _) => Succ(src.procedures.len()) } }
+
+fn Source::shape(self src: Source) → List<Nat> { src.main.shape(Shape(src.main_names(), [])).numbers }
+
+// The label name after `main`, as the shape counts it.
+fn Source::main_end_names(self src: Source) → Nat { src.main.shape(Shape(src.main_names(), [])).names }
 
 // A program as a reader takes it: how many numbers its items are, the items
 // (`Prog::numbers`), then their lengths.
@@ -1309,6 +1316,12 @@ fn Prog::reading(self p: Prog) → List<Nat> { p.numbers().reading_of(asm_lens(p
 // emit.
 fn Stmt::emission_reading(self s: Stmt, layout: Layout, out: List<Nat>, names: Nat) → List<Nat> {
     match s.emit(Start, layout, out, names) { None => [], Some(c) => Cons(c.names, c.prog.reading()) }
+}
+
+// The procedures' code at `Start`, from label name `names`, read as a
+// part's is; nothing if one does not compile.
+fn List::procedures_reading(self procs: List<Procedure>, layout: Layout, names: Nat) → List<Nat> {
+    match procs.procedures_code(Start, layout, 0, names) { None => [], Some(c) => Cons(c.names, c.prog.reading()) }
 }
 
 // A statement's parts, by position, for stating a piece of the tree by its

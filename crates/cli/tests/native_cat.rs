@@ -203,6 +203,30 @@ fn wider_leaves_run() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Procedures compile and run (docs/native-procedures-design.md): a
+/// non-tail recursive sum called from two sites, its body emitted once;
+/// and the sum of 0..20 at depth 20, whose innermost call is one too deep
+/// and exits 139 (`call_depth_status`).
+#[test]
+fn procedures_run() {
+    let dir = scratch("procedures");
+    for (source, status, why) in [
+        ("summing", 9, "the sums of 0..2 and 0..3 add to 9"),
+        ("summing_shallow", 139, "a call past the depth exits 139"),
+    ] {
+        let binary = dir.join(source);
+        let result = write_elf(PROBES, source, &binary);
+        assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        let (code, out) = run(&binary, b"", Stdio::piped());
+        assert_eq!((code, out.len()), (Some(status), 0), "`{source}`: {why}");
+    }
+    let certificate = std::fs::read_to_string(dir.join("summing.certificate.hthr")).unwrap();
+    for statement in ["theorem summing_elf_procedures()", "compile_calls_of("] {
+        assert!(certificate.contains(statement), "the certificate states `{statement}`");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Structured regions compile inside a leaf: `tr a-z A-Z` maps the bytes it
 /// read with one loop region, a conditional in its body, and writes them
 /// back; regions the compile does not take are refused with their reason

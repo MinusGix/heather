@@ -92,23 +92,37 @@ impl Part {
 /// (`Stmt::emission_reading`, the label name after it first) or the items
 /// around parts (`Prog::reading`). `programs[r]` spells read `r`'s program,
 /// at `Start`, for reading its bytes once the labels are known (`bytes`).
-pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Vec<bool>, programs: Vec<String>, root: Part }
+pub(super) struct Plan { pub text: String, pub reads: Vec<String>, pub whole: Vec<bool>, programs: Vec<String>, root: Part, exit: usize, calls: Option<Calls> }
+
+/// A source with procedures: the reads of the procedures' code after the
+/// exit (`List::procedures_reading`) and of the shared exit after them.
+struct Calls { procedures: usize, deep: usize }
 
 /// `shape` is `Source::shape`'s list (the preorder reversed, three numbers a
 /// node); `source`, `entry` and `layout` spell the main statement, the
-/// program it is emitted after, and the layout.
-pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u64]) -> Result<Plan, String> {
+/// program it is emitted after, and the layout. With `procedures` (the
+/// source's spelling, for a source with procedures) the main statement
+/// starts at label name `first` (`Source::main_names`), and the
+/// procedures' code and the shared exit are read after the exit.
+pub(super) fn plan(p: &str, source: &str, entry: &str, layout: &str, shape: &[u64], first: u64, procedures: Option<&str>) -> Result<Plan, String> {
     if shape.len() % 3 != 0 { return Err(malformed()); }
     let records: Vec<[u64; 3]> = shape.rchunks(3).map(|r| [r[2], r[1], r[0]]).collect();
     let mut at = records.iter();
     let tree = Shape::read(&mut at, &mut 0)?;
-    if at.next().is_some() || tree.names != 0 { return Err(malformed()); }
+    if at.next().is_some() || tree.names != first { return Err(malformed()); }
     let text = format!("fn {p}_s_0() → Stmt {{ {source} }}\nfn {p}_o_0() → List<Nat> {{ [] }}\n");
     let mut planner = Planner { p, layout, text, reads: Vec::new(), whole: Vec::new(), programs: Vec::new(), parts: 1 };
     planner.read("entry", entry.to_string());
     let root = planner.part(&tree, 0)?;
-    planner.read("exit", "then(then(Start, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)".into());
-    Ok(Plan { text: planner.text, reads: planner.reads, whole: planner.whole, programs: planner.programs, root })
+    let exit = planner.read("exit", "then(then(Start, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall)".into());
+    let calls = procedures.map(|src| {
+        let names = format!("{src}().main_end_names()");
+        let procedures = planner.push("procedures", true, format!("{src}().procedures.procedures_reading({layout}, {names})"),
+            format!("{src}().procedures.procedures_code(Start, {layout}, 0, {names}).map(λ (c: Compiled) => c.prog).unwrap_or(Start)"));
+        let deep = planner.read("deep", format!("Start.deep_exit({layout})"));
+        Calls { procedures, deep }
+    });
+    Ok(Plan { text: planner.text, reads: planner.reads, whole: planner.whole, programs: planner.programs, root, exit, calls })
 }
 
 struct Planner<'a> { p: &'a str, layout: &'a str, text: String, reads: Vec<String>, whole: Vec<bool>, programs: Vec<String>, parts: usize }
@@ -200,7 +214,13 @@ impl Reading {
 /// lengths; the item counts the program's literal must be cut at, where
 /// each statement's programs start and end (`code` writes the literal); and
 /// each read's program and items, for reading the bytes (`byte_reads`).
-pub(super) struct Stated { pub theorems: String, pub items: Vec<(u64, String)>, pub lens: Vec<u64>, pub cuts: BTreeSet<usize>, pub spans: Vec<Span> }
+pub(super) struct Stated { pub theorems: String, pub items: Vec<(u64, String)>, pub lens: Vec<u64>, pub cuts: BTreeSet<usize>, pub spans: Vec<Span>, pub calls: Option<CallsStated> }
+
+/// With procedures: `{p}_e_0`'s program and the label name after it,
+/// `{p}_procedures` (the procedures' code after its exit, by `refl`) and
+/// the label name after them, and `{p}_deep` (the shared exit after them
+/// is `{p}_code()`).
+pub(super) struct CallsStated { pub main: String, pub names: u64, pub procedures: String, pub after: u64 }
 
 /// A read's program, spelled at `Start`, and where its items are in the
 /// whole: the first, and how many.
@@ -222,7 +242,7 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
         items.extend(reading.items.iter().cloned());
         lens.extend(reading.lens.iter().copied());
     }
-    let (entered, main) = (starts[1], *starts.last().unwrap());
+    let (entered, main) = (starts[1], starts[plan.exit]);
     let parts: String = plan.text.lines().filter(|line| line.starts_with(&format!("fn {p}_s_")) || line.starts_with(&format!("fn {p}_o_")))
         .map(|line| format!("{line}\n")).collect();
     let mut writer = Writer { p, layout, readings: &readings, starts: &starts, cuts: BTreeSet::from([0, entered, main, items.len()]), theorems: parts };
@@ -230,13 +250,27 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
         Some(inits) => inits.state(&mut writer, entered)?,
         None => writer.theorems.push_str(&format!("theorem {p}_entry(): {entry} = {} {{ refl }}\n", writer.program(entered))),
     }
-    let (start, end, _) = writer.part(&plan.root)?;
+    let (start, end, names) = writer.part(&plan.root)?;
     if start != entered || end != main { return Err(out_of_order()); }
+    let calls = match &plan.calls {
+        None => None,
+        Some(Calls { procedures, deep }) => {
+            let (from, to) = (writer.end(plan.exit), writer.end(*procedures));
+            if writer.starts[*procedures] != from || writer.starts[*deep] != to || writer.end(*deep) != items.len() { return Err(out_of_order()); }
+            let after = writer.readings[*procedures].names.ok_or_else(out_of_order)?;
+            writer.cuts.extend([from, to]);
+            let (main_prog, procs_prog) = (writer.program(main), writer.program(to));
+            let src = checks.as_ref().map(|c| c.src).ok_or_else(out_of_order)?;
+            writer.theorems.push_str(&format!("theorem {p}_procedures(): {src}().procedures.procedures_code({}, {layout}, 0, {names}) = Some(Compiled({procs_prog}, {after})) {{ refl }}\n\
+                theorem {p}_deep(): {procs_prog}.deep_exit({layout}) = {p}_code() {{ refl }}\n", writer.program(from)));
+            Some(CallsStated { main: main_prog, names, procedures: procs_prog, after })
+        }
+    };
     if let Some(checks) = checks { writer.theorems.push_str(&checks.state(p, &plan.root)?); }
     for k in (0..items.len()).step_by(STRETCH) { writer.cuts.insert(k); }
     let spans = plan.programs.into_iter().zip(&readings).zip(&starts)
         .map(|((program, reading), &start)| Span { program, start, count: reading.items.len() }).collect();
-    Ok(Stated { theorems: writer.theorems, items, lens, cuts: writer.cuts, spans })
+    Ok(Stated { theorems: writer.theorems, items, lens, cuts: writer.cuts, spans, calls })
 }
 
 /// Items a byte read takes at most.

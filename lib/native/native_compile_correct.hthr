@@ -796,6 +796,40 @@ theorem Source::compile_of(self src: Source, low: BitVec(64), homes: Homes, prog
         }) = Some(program), ran))
 }
 
+// The same with procedures: `main` emitted from past the procedures' and
+// the shared exit's labels, the procedures after its exit 0, and the shared
+// exit, laid out (`Source::compile_calls`).
+theorem Source::compile_calls_of(self src: Source, low: BitVec(64), homes: Homes, first: Procedure, rest: List<Procedure>, program, main, procs: Prog, names, after: Nat,
+    allocated: src.allocation_ok(homes).IsTrue(), calls: src.procedures = Cons(first, rest),
+    emitted: src.main.emit(src.entry(low, homes), src.layout(low, homes), [], src.layout(low, homes).deep_label()) = Some(Compiled(main, names)),
+    code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes), 0, names) = Some(Compiled(procs, after)),
+    whole: procs.deep_exit(src.layout(low, homes)) = program, laid: program.laid_out().IsTrue()):
+    src.compile(low, homes) = Some(program) {
+    let layout = src.layout(low, homes);
+    let laid_here = j(sym(eq_true_of_is_true(program.laid_out(), laid)),
+        λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(program) }) = Some(program), refl);
+    let finished = j(sym(whole), λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(program), laid_here);
+    let after_main = j(sym(code), λ o _ => (match o {
+            None => None,
+            Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
+        }) = Some(program), finished);
+    let ran: (src.compile_calls(low, homes) = Some(program)) = j(sym(emitted), λ o _ => (match o {
+            None => None,
+            Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), layout, 0, c.names) {
+                None => None,
+                Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
+            },
+        }) = Some(program), after_main);
+    j(sym(eq_true_of_is_true(src.allocation_ok(homes), allocated)), λ a _ => (match a as λ _ => Option<Prog> {
+            False => None,
+            True => match src.procedures { Nil => match src.main.emit(src.entry(low, homes), layout, [], 0) { None => None, Some(c) => c.prog.finish() }, Cons(_, _) => src.compile_calls(low, homes) },
+        }) = Some(program),
+        j(sym(calls), λ ps _ => (match ps as λ _ => Option<Prog> {
+            Nil => match src.main.emit(src.entry(low, homes), layout, [], 0) { None => None, Some(c) => c.prog.finish() },
+            Cons(_, _) => src.compile_calls(low, homes),
+        }) = Some(program), ran))
+}
+
 // A statement's emission from its parts', so a reader can state a long
 // program's a piece at a time (`heather write-elf`): one declaration per
 // leaf, or per part small enough to evaluate whole, and these to join them.
