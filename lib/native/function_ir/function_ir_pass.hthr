@@ -5,7 +5,7 @@
 // after it.
 //
 // Folding runs forward with what the nodes so far are known to leave in
-// each word at every width (`Known`): a `Const`'s value, a `Move` of a known
+// each word at every width (`Fact`): a `Const`'s value, a `Move` of a known
 // word, a comparison of two known words (its bit), and `BitAnd`, `BitOr` or
 // `BitXor` of two known bits. Such a node becomes a `Const` of that value
 // at its own port. Removal runs backward: a node that touches no buffer,
@@ -135,27 +135,27 @@ theorem BitVec::bxor_bits(x, y: Bool): (w: Nat) → BitVec::ofNat(x.bit(), n := 
 // What the nodes so far are known to leave
 
 // Word `id` holds `value`'s bits at every width.
-record Known { id: Nat, value: Nat }
+record Fact { id: Nat, value: Nat }
 
-fn List::known(self facts: List<Known>, id: Nat) → Option<Nat> {
+fn List::known(self facts: List<Fact>, id: Nat) → Option<Nat> {
     match facts { Nil => None, Cons(f, rest) => match id.matches(f.id) { True => Some(f.value), False => rest.known(id) } }
 }
 
 // A known bit.
-fn List::known_bit(self facts: List<Known>, id: Nat) → Option<Bool> {
+fn List::known_bit(self facts: List<Fact>, id: Nat) → Option<Bool> {
     match facts.known(id) { None => None, Some(n) => n.as_bit() }
 }
 
 // The facts but those about `id`, which a node has just written.
-fn List::forget(self facts: List<Known>, id: Nat) → List<Known> {
+fn List::forget(self facts: List<Fact>, id: Nat) → List<Fact> {
     match facts { Nil => Nil, Cons(f, rest) => match id.matches(f.id) { True => rest.forget(id), False => Cons(f, rest.forget(id)) } }
 }
 
-fn List::Hold(self facts: List<Known>, values: Valuation()) → Type {
+fn List::Hold(self facts: List<Fact>, values: Valuation()) → Type {
     match facts { Nil => True, Cons(f, rest) => ((w: Nat) → values(w, f.id) = BitVec::ofNat(f.value)) ∧ rest.Hold(values) }
 }
 
-theorem List::known_holds(self facts: List<Known>, values: Valuation()): facts.Hold(values) → (id, k: Nat) → facts.known(id) = Some(k) →
+theorem List::known_holds(self facts: List<Fact>, values: Valuation()): facts.Hold(values) → (id, k: Nat) → facts.known(id) = Some(k) →
     (w: Nat) → values(w, id) = BitVec::ofNat(k) {
     match facts {
         Nil => λ _ id k none => absurd(none),
@@ -169,7 +169,7 @@ theorem List::known_holds(self facts: List<Known>, values: Valuation()): facts.H
     }
 }
 
-theorem List::known_bit_holds(self facts: List<Known>, values: Valuation(), held: facts.Hold(values), id: Nat, b: Bool,
+theorem List::known_bit_holds(self facts: List<Fact>, values: Valuation(), held: facts.Hold(values), id: Nat, b: Bool,
     found: facts.known_bit(id) = Some(b)): (w: Nat) → values(w, id) = BitVec::ofNat(b.bit()) {
     (match facts.known(id) as λ o => facts.known(id) = o → (match o { None => None, Some(n) => n.as_bit() }) = Some(b) →
             (w: Nat) → values(w, id) = BitVec::ofNat(b.bit()) {
@@ -179,12 +179,12 @@ theorem List::known_bit_holds(self facts: List<Known>, values: Valuation(), held
 }
 
 // Facts about words a step leaves alone still hold after it.
-theorem List::forget_holds(self facts: List<Known>, values, after: Valuation(), o: Nat,
+theorem List::forget_holds(self facts: List<Fact>, values, after: Valuation(), o: Nat,
     kept: (w, id: Nat) → id ≠ o → after(w, id) = values(w, id)): facts.Hold(values) → facts.forget(o).Hold(after) {
     match facts {
         Nil => λ _ => trivial,
         Cons(f, rest) => λ held => (match o.eq_dec(f.id) as λ d =>
-                List::Hold(match (match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) as λ _ => List<Known> { True => rest.forget(o), False => Cons(f, rest.forget(o)) }, after) {
+                List::Hold(match (match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) as λ _ => List<Fact> { True => rest.forget(o), False => Cons(f, rest.forget(o)) }, after) {
             Inl(_) => rest.forget_holds(values, after, o, kept, held.right),
             Inr(ne) => ⟨λ w => trans(kept(w, f.id, λ e => ne(sym(e))), held.left(w)), rest.forget_holds(values, after, o, kept, held.right)⟩,
         }),
@@ -211,18 +211,18 @@ theorem Option::both_elim<A, B>(x, y: Option<A>, f: A → A → Option<B>, v: B,
 }
 
 // A comparison of two known words, at the node's width.
-fn List::compared(self facts: List<Known>, left, right: Nat, decide: Nat → Nat → Bool) → Option<Nat> {
+fn List::compared(self facts: List<Fact>, left, right: Nat, decide: Nat → Nat → Bool) → Option<Nat> {
     Option::both(facts.known(left), facts.known(right), λ a c => Some(decide(a, c).bit()))
 }
 
 // A bitwise operation of two known bits.
-fn List::combined(self facts: List<Known>, left, right: Nat, op: Bool → Bool → Bool) → Option<Nat> {
+fn List::combined(self facts: List<Fact>, left, right: Nat, op: Bool → Bool → Bool) → Option<Nat> {
     Option::both(facts.known_bit(left), facts.known_bit(right), λ x y => Some(op(x, y).bit()))
 }
 
 // The number whose bits the node leaves in its output at every width, where
 // the facts say.
-fn Node::folded(self node: Node, facts: List<Known>) → Option<Nat> {
+fn Node::folded(self node: Node, facts: List<Fact>) → Option<Nat> {
     match node {
         Const(_, _, value) => Some(value),
         Move(_, _, source) => facts.known(source),
@@ -243,7 +243,7 @@ fn Node::folded(self node: Node, facts: List<Known>) → Option<Nat> {
 }
 
 // A comparison folds to its bit.
-theorem List::compared_value(self facts: List<Known>, values: Valuation(), held: facts.Hold(values), width, left, right, v: Nat,
+theorem List::compared_value(self facts: List<Fact>, values: Valuation(), held: facts.Hold(values), width, left, right, v: Nat,
     decide: BitVec(width) → BitVec(width) → Bool, folded: facts.compared(left, right, λ a c => decide(BitVec::ofNat(a), BitVec::ofNat(c))) = Some(v)):
     (w: Nat) → bit_value(decide(values(width, left), values(width, right)), w) = BitVec::ofNat(v) {
     Option::both_elim(facts.known(left), facts.known(right), λ a c => Some(decide(BitVec::ofNat(a), BitVec::ofNat(c)).bit()), v,
@@ -258,7 +258,7 @@ theorem List::compared_value(self facts: List<Known>, values: Valuation(), held:
 }
 
 // A bitwise operation of two bits folds to its bit.
-theorem List::combined_value(self facts: List<Known>, values: Valuation(), held: facts.Hold(values), left, right, v: Nat,
+theorem List::combined_value(self facts: List<Fact>, values: Valuation(), held: facts.Hold(values), left, right, v: Nat,
     op: Bool → Bool → Bool, apply: (w: Nat) → BitVec(w) → BitVec(w) → BitVec(w),
     bits: (x, y: Bool) → (w: Nat) → apply(w, BitVec::ofNat(x.bit()), BitVec::ofNat(y.bit())) = BitVec::ofNat(op(x, y).bit()),
     folded: facts.combined(left, right, op) = Some(v)):
@@ -274,7 +274,7 @@ theorem List::combined_value(self facts: List<Known>, values: Valuation(), held:
 }
 
 // What a node folds to is its value, at every width.
-theorem Node::folded_value(self node: Node, facts: List<Known>, values: Valuation(), held: facts.Hold(values), v: Nat, folded: node.folded(facts) = Some(v)):
+theorem Node::folded_value(self node: Node, facts: List<Fact>, values: Valuation(), held: facts.Hold(values), v: Nat, folded: node.folded(facts) = Some(v)):
     (w: Nat) → node.value(values)(w) = BitVec::ofNat(v) {
     (match node as λ n => n.folded(facts) = Some(v) → (w: Nat) → n.value(values)(w) = BitVec::ofNat(v) {
         Const(_, _, value) => λ same w => cong_fn<Nat, BitVec(w)>(λ n => BitVec::ofNat(n), Option::some_inj(value, v, same)),
@@ -302,7 +302,7 @@ theorem Node::folded_value(self node: Node, facts: List<Known>, values: Valuatio
 }
 
 // Only a node that touches no buffer folds.
-theorem Node::folded_pure(self node: Node, facts: List<Known>, v: Nat, folded: node.folded(facts) = Some(v)): node.pure().IsTrue() {
+theorem Node::folded_pure(self node: Node, facts: List<Fact>, v: Nat, folded: node.folded(facts) = Some(v)): node.pure().IsTrue() {
     (match node as λ n => n.folded(facts) = Some(v) → n.pure().IsTrue() {
         Const(_, _, _) => λ _ => trivial,
         Move(_, _, _) => λ _ => trivial,
@@ -436,24 +436,24 @@ theorem Node::run_keeps(self node: Node, values: Valuation(), buffers: Buffers()
 
 // A node folded where the facts say what it leaves: a `Const` of that, at
 // its port.
-fn Node::fold(self node: Node, facts: List<Known>) → Node {
+fn Node::fold(self node: Node, facts: List<Fact>) → Node {
     match node.folded(facts) { None => node, Some(v) => Const(node_output(node).width, node_output(node).id, v) }
 }
 
 // The facts after the node.
-fn Node::learn(self node: Node, facts: List<Known>) → List<Known> {
+fn Node::learn(self node: Node, facts: List<Fact>) → List<Fact> {
     match node.folded(facts) {
         None => facts.forget(node_output(node).id),
-        Some(v) => Cons(Known(node_output(node).id, v), facts.forget(node_output(node).id)),
+        Some(v) => Cons(Fact(node_output(node).id, v), facts.forget(node_output(node).id)),
     }
 }
 
-fn List::folded(self nodes: List<Node>, facts: List<Known>) → List<Node> {
+fn List::folded(self nodes: List<Node>, facts: List<Fact>) → List<Node> {
     match nodes { Nil => Nil, Cons(node, rest) => Cons(node.fold(facts), rest.folded(node.learn(facts))) }
 }
 
 // A folded node writes the port it did.
-theorem Node::fold_output(self node: Node, facts: List<Known>): node_output(node.fold(facts)) = node_output(node) {
+theorem Node::fold_output(self node: Node, facts: List<Fact>): node_output(node.fold(facts)) = node_output(node) {
     match node.folded(facts) as λ o => node_output(match o as λ _ => Node { None => node, Some(v) => Const(node_output(node).width, node_output(node).id, v) }) = node_output(node) {
         None => refl,
         Some(_) => refl,
@@ -463,7 +463,7 @@ theorem Node::fold_output(self node: Node, facts: List<Known>): node_output(node
 // One node: folded, from a valuation the same as the one the facts hold
 // of, it runs to the same buffers and the same valuation, and its facts
 // hold after it.
-theorem Node::fold_runs(self node: Node, facts: List<Known>, values, other: Valuation(), buffers: Buffers(), held: facts.Hold(values),
+theorem Node::fold_runs(self node: Node, facts: List<Fact>, values, other: Valuation(), buffers: Buffers(), held: facts.Hold(values),
     same: Valuation::Same(values, other)):
     (node.fold(facts).run(other, buffers).buffers = node.run(values, buffers).buffers)
         ∧ (Valuation::Same(node.run(values, buffers).values, node.fold(facts).run(other, buffers).values)
@@ -474,7 +474,7 @@ theorem Node::fold_runs(self node: Node, facts: List<Known>, values, other: Valu
     (match node.folded(facts) as λ f => node.folded(facts) = f →
             (match f as λ _ => Node { None => node, Some(v) => Const(node_output(node).width, o, v) }.run(other, buffers).buffers = after.buffers)
             ∧ (Valuation::Same(after.values, match f as λ _ => Node { None => node, Some(v) => Const(node_output(node).width, o, v) }.run(other, buffers).values)
-            ∧ List::Hold(match f as λ _ => List<Known> { None => facts.forget(o), Some(v) => Cons(Known(o, v), facts.forget(o)) }, after.values)) {
+            ∧ List::Hold(match f as λ _ => List<Fact> { None => facts.forget(o), Some(v) => Cons(Fact(o, v), facts.forget(o)) }, after.values)) {
         None => λ _ => {
             let alike = node.runs_alike(values, other, buffers, λ id _ w => same(w, id));
             ⟨alike.left, ⟨λ w id => match id.eq_dec(o) {
@@ -486,7 +486,7 @@ theorem Node::fold_runs(self node: Node, facts: List<Known>, values, other: Valu
             let value = node.folded_value(facts, values, held, v, found);
             j(sym(node.run_pure(values, buffers, node.folded_pure(facts, v, found))), λ s _ =>
                     (buffers = s.buffers) ∧ (Valuation::Same(s.values, Valuation::set(other, o, λ w => BitVec::ofNat(v)))
-                    ∧ List::Hold(Cons(Known(o, v), facts.forget(o)), s.values)),
+                    ∧ List::Hold(Cons(Fact(o, v), facts.forget(o)), s.values)),
                 ⟨refl, ⟨Valuation::set_same(values, other, same, o, node.value(values), λ w => BitVec::ofNat(v), λ w => sym(value(w))),
                     ⟨λ w => trans(Valuation::set_here(values, o, node.value(values), w), value(w)),
                         facts.forget_holds(values, node.step(values), o, λ w id ne => Valuation::set_other(values, o, node.value(values), w, id, ne), held)⟩⟩⟩)
@@ -495,7 +495,7 @@ theorem Node::fold_runs(self node: Node, facts: List<Known>, values, other: Valu
 }
 
 // A schedule folded runs as it did: the same buffers, the same valuation.
-theorem List::folded_runs(self nodes: List<Node>): (facts: List<Known>) → (values, other: Valuation()) → (buffers: Buffers()) →
+theorem List::folded_runs(self nodes: List<Node>): (facts: List<Fact>) → (values, other: Valuation()) → (buffers: Buffers()) →
     facts.Hold(values) → Valuation::Same(values, other) →
     (run_nodes(nodes.folded(facts), other, buffers).buffers = run_nodes(nodes, values, buffers).buffers)
         ∧ Valuation::Same(run_nodes(nodes, values, buffers).values, run_nodes(nodes.folded(facts), other, buffers).values) {
@@ -528,7 +528,7 @@ fn List::last_width(self nodes: List<Node>, i: Nat) → Option<Nat> {
     }
 }
 
-theorem List::folded_last(self nodes: List<Node>): (facts: List<Known>) → (i: Nat) → nodes.folded(facts).last_width(i) = nodes.last_width(i) {
+theorem List::folded_last(self nodes: List<Node>): (facts: List<Fact>) → (i: Nat) → nodes.folded(facts).last_width(i) = nodes.last_width(i) {
     match nodes {
         Nil => λ facts i => refl,
         Cons(node, rest) => λ facts i => eq2(λ (l: Option<Nat>) (p: Port) => match l as λ _ => Option<Nat> {
@@ -727,4 +727,25 @@ theorem List::optimised_runs(self nodes: List<Node>, out: List<Nat>, values: Val
 // And each of those words is last written at the width it was.
 theorem List::optimised_last(self nodes: List<Node>, out: List<Nat>, i: Nat, m: Mem(i, out)): nodes.optimised(out).last_width(i) = nodes.last_width(i) {
     trans(nodes.folded([]).pruned_last(out, i, m), nodes.folded_last([], i))
+}
+
+// ---------------------------------------------------------------------------
+// What a leaf leaves known
+
+// The facts after the nodes, as folding them learns them.
+fn List::learned(self nodes: List<Node>, facts: List<Fact>) → List<Fact> {
+    match nodes { Nil => facts, Cons(node, rest) => rest.learned(node.learn(facts)) }
+}
+
+// They hold of the valuation the nodes run to.
+theorem List::learned_holds(self nodes: List<Node>): (facts: List<Fact>) → (values: Valuation()) → (buffers: Buffers()) →
+    facts.Hold(values) → nodes.learned(facts).Hold(run_nodes(nodes, values, buffers).values) {
+    match nodes {
+        Nil => λ facts values buffers held => held,
+        Cons(node, rest) => λ facts values buffers held => {
+            let step = node.fold_runs(facts, values, values, buffers, held, λ w id => refl);
+            let after = node.run(values, buffers);
+            rest.learned_holds(node.learn(facts), after.values, after.buffers, step.right.right)
+        },
+    }
 }
