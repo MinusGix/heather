@@ -2969,7 +2969,7 @@ impl Elaborator {
     /// that a use site which needs the same `ā` for a *different* definition
     /// over the same telescope — a record's projections (§13) — asks the one
     /// question rather than re-matching.
-    fn instance_match(
+    pub(crate) fn instance_match(
         &self,
         cx: &Cx,
         ind: &Inductive,
@@ -3139,6 +3139,22 @@ impl Elaborator {
     /// each `App`'s annotations read off the definition's own `Π` as it is
     /// walked — which is where a dependent telescope's later domains come
     /// from.
+    /// `El (app(D#tycode_fn^δ; ā))` with its level: the type of declaration
+    /// `tag` at arguments recovered from another of its instantiations
+    /// ([`Self::instance_match`]). A merged class's dictionary is assembled at
+    /// its parents' types read this way (`Elaborator::join_parents`).
+    pub(crate) fn instance_type_at(&self, cx: &Cx, tag: u32, args: &[Rc<Term>]) -> Option<(Type, Level)> {
+        let entry = self.ty_code_fn_now(tag, 0)?;
+        let mut cur = weakened(&entry.stmt, cx, 0);
+        for arg in args {
+            let Type::Pi { cod, .. } = cur else { return None };
+            cur = cod.apply_local(&id_subst_at(cx, 0).extended(Rc::clone(arg)));
+        }
+        let Type::Ty(level) = cur else { return None };
+        let spine = self.gen_spine(cx, tag, args, 0, 0)?;
+        Some((Type::El { level: level.clone(), tm: Rc::new(spine) }, level))
+    }
+
     fn gen_spine(&self, cx: &Cx, tag: u32, args: &[Rc<Term>], d: u32, g: u32) -> Option<Term> {
         let entry = self.ty_code_fn_now(tag, g)?;
         let mut head = self.gen_ref_deeper(cx, GenDef::TyCodeFn(tag), d)?;
