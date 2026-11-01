@@ -5,7 +5,7 @@ labels: [mathematics,reals,floating-point,design]
 area: mathematics
 milestone: [math-float]
 created: 2026-10-20
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 Owns the roadmap's `math-float` milestone (`docs/roadmap.md`): binary
@@ -91,3 +91,4 @@ of the area.
   relation, no reals), `Nat::isqrt` in `nat.hthr`, the IEEE signs and specials.
   `float-arith` is done. Design §14.1.
 - 2026-10-31: round 5 begins (`float-eft`): `lib/std/num/float/eft.hthr` with Sterbenz, grid preservation, the nearest addition error and Fast2Sum ([[float-eft-sterbenz-fast2sum]]); TwoSum, TwoProduct, Veltkamp and Kahan filed as [[float-eft-two-sum]], [[float-eft-two-product]], [[float-eft-veltkamp]], [[float-kahan-summation]]. Design §19.
+- 2026-11-01: TwoProduct (by fma, off the subnormal grid) and TwoSum (no order between the operands, `|a + b|` in range) land in `eft.hthr` ([[float-eft-two-product]], [[float-eft-two-sum]], closed); Veltkamp and Kahan remain. Design §19.

@@ -567,7 +567,7 @@ roadmap's.
 | 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. Landed; §13. |
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed, §14; sqrt §14.1. |
-| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. Started: Sterbenz, the nearest addition error and Fast2Sum landed, §19; the rest is filed. |
+| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. Sterbenz, the nearest addition error, Fast2Sum, TwoProduct and TwoSum landed, §19; Veltkamp and Kahan are filed. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
 | later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); the search ends from a real clear of the grid ([float-round-real-termination](../issues/float-round-real-termination.md), `round_real_apart`); the Padé gap for exp and log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md). The operations, the square root, the error model at every real and the root of a real landed, §17; the ordered-field transfer is [float-reals-ordered-field](../issues/float-reals-ordered-field.md). |
 | later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)); `Float::exp`/`Float::log` over every float with the §9.2 specials. |
@@ -1617,7 +1617,7 @@ and at the midpoint `1 + 2^-24` on the first box, where rounding down (at
 
 ## 19. Error-free transformations (`float-eft`)
 
-Round 5's first part. Module: `lib/std/num/float/eft.hthr`, tests in
+Round 5's first two parts. Module: `lib/std/num/float/eft.hthr`, tests in
 `lib/_tests/std/num/float/eft_tests.hthr`. Issue
 [float-eft-sterbenz-fast2sum](../issues/float-eft-sterbenz-fast2sum.md);
 the rest of the milestone is
@@ -1690,11 +1690,64 @@ finite. The tests run it at binary16 (`1 + 3·2^-12` splits as `1 + 2^-10`
 and `-2^-12`) and refute both hypotheses' necessity on concrete values:
 Sterbenz's range (`1 - 3·2^-12` is a tie) and Fast2Sum's order (`2^-24 + 1`).
 
+**TwoProduct** (`Finite::two_product`, `two_product_exact`), round 5's
+second part with TwoSum ([float-eft-two-product](../issues/float-eft-two-product.md)).
+`p = ○(a·b)` in a nearest mode and `e = fma(a, b, -p)` in any mode give
+`e = a·b - p` exactly when the product's quantum `qa + qb` is `c >= 0`
+above `qmin` (`hc`) and `|a·b|` is at most the largest float (`range`).
+The exact product is `±(ma·mb)` cells of `2^(c+1)` half-units
+(`Format::prod_grid`, `prod_cells`), a grid no float need have, so the
+representability step is `Format::rep_fit`: a value on the grid of
+exponent `c` with fewer than `top` cells and inside the limit is a float,
+whatever the operands' exponents (it goes straight to `down_exact`). The
+error is on that grid (`nbr_grid` when the cut's exponent is above `c`; when
+it is at or below `c` the product is itself a float and the error is 0), and
+`round.hthr`'s `nearest_err` bounds it by the cut's spacing `2^e`; since
+`ma·mb < top²` and the product is at least `top · 2^e`, the spacing is below
+`top · 2^(c+1)`, so the error fits (`Format::prod_err_pos`). The tests
+split `(1 + 2^-10)²` into `1 + 2^-9` and `2^-20` (a subnormal), and refute
+the grid hypothesis on `(1025 · 2^-22)²`, whose error is below the subnormal
+grid.
+
+**TwoSum** (`Finite::two_sum`, `two_sum_exact`;
+[float-eft-two-sum](../issues/float-eft-two-sum.md)). `s = ○(a + b)` and
+`a1 = ○(s - b)` in a nearest mode, then `b1 = s - a1`, `da = a - a1`,
+`db = b - b1` and `t = da + db` in any mode, with no order between `|a|`
+and `|b|` and `|a + b|` at most the largest float. `Finite::two_sum_H`
+splits on the order:
+
+- `|a| <= |b|`: Fast2Sum on `(b, a)` makes `s - b` a float, so `a1 = s - b`,
+  `s - a1 = b` and `a - a1` is the error of `s`.
+- `|b| <= |a|`, `a >= 0` (`Format::two_sum_pos`; the other sign by
+  negation, `two_sum_neg`): with `b >= 0`, `a <= s <= 2a` and `2b <= s`
+  (the float `2b`, or `2b` past every float, which the range excludes), so
+  `s/2 <= a1 <= s`
+  and both `s - a1` and `a - a1` are Sterbenz differences (in the least
+  binade, grid values below `s`). With `b < 0` and `2|b| >= a`, or in the
+  least binade, `a + b` is a float, so `s = a + b`, `a1 = a`
+  (`two_sum_on_float`). Otherwise `a/2 <= s <= a` and `s <= a1 <= 2s`:
+  Sterbenz twice.
+
+Every case reads a nearest float against one candidate float
+(`Finite::near_ge`, `near_le`). Then `db = b - b1` is minus the error of
+`a1` (`add_err_H` at `s + (-b)`), and `da + db = (a + b) - s`, the error of
+`s`. The range hypothesis is the only overflow assumption and it is used
+once, in the `2b` step; each intermediate is assumed finite by its
+equation. The tests split `3·2^-12 + 1` (the order Fast2Sum refuses) and
+`2^-24 + 1`, and show an upward `s` breaks it: `da = 2^-24 - 2^-10` is not
+a float.
+
 Observations:
 
 - `omega` cannot see through a projection of an existential (`r.witness`):
   it stops with "could not spell an integer expression". Matching the
   existential with `Exists(f, fh)` binds a variable it can read.
+- Matching on a large theorem call's result (or on a projection of a
+  let bound to one) unfolds the proof in the elaborator and the kernel. The
+  sign flips (`two_sum_neg` through `two_sum_unflip`, `fast_two_sum_H` and
+  `mul_err_H` through `Finite::neg_exists` and `j`) and `two_sum`'s tail
+  are shaped around it ([[match-on-proof-call-cost]],
+  `docs/proof-patterns.md` §4).
 - `Rat::not_le_of_lt` needs both points named when its strict fact is
   `trivial` (closed values carry no inferable shape).
 - The `Nat`/`Int` facts here are about the float grid (`OnGrid` is a
