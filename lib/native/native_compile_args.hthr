@@ -850,7 +850,7 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
         let argv2 = argv_at_kept(t.argv(), m1, t.argv(), m2, t.kept_store(m1, so + 8, bytes, fits2), rsp, t.args, argv1);
         let argv3 = argv_at_kept(t.argv(), m2, t.argv(), m3, t.kept_store(m2, so + 16, bytes3, fits3), rsp, t.args, argv2);
         let argv = j(sym(slot), λ y _ => ArgvAt(t.argv(), m3, y, t.args), argv3);
-        let frames: FramesAt(t.framesv(), m3, t.frames, t.frame()) = j(sym(bare), λ fs _ => FramesAt(t.framesv(), m3, fs, t.frame()), trivial);
+        let frames: t.FramesAt(m3, t.frames, t.index) = j(sym(bare), λ fs _ => t.FramesAt(m3, fs, t.index), trivial);
         let keeps = layout.keeps_agree(t.start_env(), zero, w3, t.keeps_zero(), λ q under => {
             let low: (q < so) = omega(under, stack);
             trans(below3(q, omega(low)), trans(below2(q, omega(low)), t.r.cells_outside(zero, so, bytes, q, Inl(low))))

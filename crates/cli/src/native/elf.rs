@@ -330,7 +330,7 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     let header_literal: Vec<String> = head.iter().map(|b| format!("@bitvec::BitVec::ofNat(8, {b})")).collect();
 
     // Of the literal, then of the source by its equation.
-    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), refl, {p}_fits(), {p}_short(),
+    let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
         top, depth, placed, s, entry, rsp,
         j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), deep, args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
@@ -503,7 +503,8 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         11 => format!("S4's lowering refused node {first} of the leaf alone"),
         12 => "the words' homes fail the allocation's check (`Source::allocation_ok`): the allocator's proposal is wrong, a bug in it".into(),
         13 => "a loop whose words live after it include one it moves or counts with, or whose leaves do not compile".into(),
-        14 => format!("procedure {first} is called, and calls are not compiled yet (docs/native-procedures-design.md §7)"),
+        14 => format!("the call of procedure {first} does not fit: no such procedure, other counts of arguments or results than it takes, more than six, a word past the slots, more saved words than slots, or a result not apart from what is live after it"),
+        15 => format!("procedure {first} does not compile (`Procedure::code`)"),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }

@@ -134,10 +134,8 @@ fn Layout::Keeps(self layout: Layout, env: Env, v: Nat → BitVec(8)) → Type {
 // does writes.
 fn Target::argv(self t: Target) → ByteReadAccess<X86Memory(t.r.profile)> { t.r.profile.data().above(t.stack.low.toNat() + t.stack.size) }
 
-// The running frame's address, and the frames read only from there up,
-// which only a call's pushes below it write.
+// The running frame's address.
 fn Target::frame(self t: Target) → BitVec(64) { t.stack.at(t.index) }
-fn Target::framesv(self t: Target) → ByteReadAccess<X86Memory(t.r.profile)> { t.r.profile.data().above(t.frame().toNat()) }
 
 // Where an offset of the stack is.
 theorem Target::stack_toNat(self t: Target, i: Nat, inside: i <= t.stack.size): t.stack.at(i).toNat() = t.stack.low.toNat() + i {
@@ -151,20 +149,23 @@ theorem Target::frame_toNat(self t: Target): t.frame().toNat() = t.stack.low.toN
     t.stack_toNat(t.index, inside)
 }
 
-// Words read in order from `address` up, each as its eight bytes.
-fn FramesAt<M>(data: ByteReadAccess<M>, memory: M, words: List<BitVec(64)>) → BitVec(64) → Type {
+// Words of the stack in order from offset `i` up.
+fn Target::FramesAt(self t: Target, m: X86Memory(t.r.profile), words: List<BitVec(64)>) → Nat → Type {
     match words {
         Nil => λ _ => True,
-        Cons(word, rest) => λ address => WordBytesAt(data, memory, address, word) ∧ FramesAt(data, memory, rest, next_rip(address, 8)),
+        Cons(word, rest) => λ i => (i + 8 <= t.stack.size) ∧
+            ((read_word(t.io().data, m, t.stack.at(i)) = Some(word)) ∧ t.FramesAt(m, rest, i + 8)),
     }
 }
 
-theorem frames_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAccess<M>, later: M, kept: ReadsKept(data, memory, other, later),
-    words: List<BitVec(64)>): (address: BitVec(64)) → FramesAt(data, memory, words, address) → FramesAt(other, later, words, address) {
+// Words read alike at every offset from `i` up keep them.
+theorem Target::frames_kept(self t: Target, m, later: X86Memory(t.r.profile), i: Nat,
+    kept: (k: Nat) → i <= k → k + 8 <= t.stack.size → read_word(t.io().data, later, t.stack.at(k)) = read_word(t.io().data, m, t.stack.at(k)),
+    words: List<BitVec(64)>): (k: Nat) → i <= k → t.FramesAt(m, words, k) → t.FramesAt(later, words, k) {
     match words {
-        Nil => λ address _ => trivial,
-        Cons(word, rest) => λ address at => ⟨word_bytes_at_kept(data, memory, other, later, kept, address, word, at.left),
-            frames_at_kept(data, memory, other, later, kept, rest, next_rip(address, 8), at.right)⟩,
+        Nil => λ k _ _ => trivial,
+        Cons(word, rest) => λ k above at => ⟨at.left, ⟨trans(kept(k, above, at.left), at.right.left),
+            t.frames_kept(m, later, i, kept, rest, k + 8, omega(above), at.right.right)⟩⟩,
     }
 }
 
@@ -172,7 +173,7 @@ theorem frames_at_kept<M>(data: ByteReadAccess<M>, memory: M, other: ByteReadAcc
 // up.
 fn Target::Framing(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
     (word_in(v, t.layout().frame_offset()) = t.frame()) ∧
-    ((word_in(v, t.layout().room_offset()).toNat() = t.room) ∧ FramesAt(t.framesv(), m, t.frames, t.frame()))
+    ((word_in(v, t.layout().room_offset()).toNat() = t.room) ∧ t.FramesAt(m, t.frames, t.index))
 }
 
 // The command line at the RSP its slot holds, and the activation…
@@ -466,12 +467,30 @@ theorem Target::kept_store(self t: Target, m: X86Memory(t.r.profile), q: Nat, by
     t.kept_above(m, q, bytes, fits, t.stack.low.toNat() + t.stack.size, high)
 }
 
-// …and the frames, above the frame.
-theorem Target::kept_frames(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= t.r.size):
-    ReadsKept(t.framesv(), m, t.framesv(), t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
-    let value = t.frame_toNat();
-    let high: (t.r.low.toNat() + t.r.size <= t.frame().toNat()) = omega(t.stack_above, value);
-    t.kept_above(m, q, bytes, fits, t.frame().toNat(), high)
+// …and the stack's words, above the region.
+theorem Target::stack_read_store(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= t.r.size,
+    k: Nat, inside: k + 8 <= t.stack.size):
+    read_word(t.io().data, t.r.profile.store(m, next_rip(t.r.low, q), bytes), t.stack.at(k)) = read_word(t.io().data, m, t.stack.at(k)) {
+    let after = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
+    read_word_agree(t.io().data, after, m, t.stack.at(k), λ b short => {
+        let a = next_rip(t.stack.at(k), b);
+        let value: (a.toNat() = t.stack.low.toNat() + (k + b)) =
+            trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), rip_compose(t.stack.low, k, b)), t.stack_toNat(k + b, omega(inside, short)));
+        let outside: ((p: Nat) → p < bytes.len() → BitVec::space(64).same(next_rip(next_rip(t.r.low, q), p), a) = False) = λ p below =>
+            BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(next_rip(t.r.low, q), p), a, λ same => {
+                let region: (next_rip(next_rip(t.r.low, q), p).toNat() = t.r.low.toNat() + (q + p)) =
+                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), rip_compose(t.r.low, q, p)), t.r.toNat_at(q + p, omega(below, fits)));
+                let here: (a.toNat() = t.r.low.toNat() + (q + p)) = trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), sym(same)), region);
+                false_elim(omega(here, value, below, fits, t.stack_above))
+            });
+        t.r.profile.read_agree(m, after.cells, a, t.r.profile.store_outside(m, next_rip(t.r.low, q), bytes, a, outside))
+    })
+}
+
+theorem Target::frames_store(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= t.r.size,
+    words: List<BitVec(64)>, i: Nat, at: t.FramesAt(m, words, i)): t.FramesAt(t.r.profile.store(m, next_rip(t.r.low, q), bytes), words, i) {
+    t.frames_kept(m, t.r.profile.store(m, next_rip(t.r.low, q), bytes), i, λ k _ inside => t.stack_read_store(m, q, bytes, fits, k, inside),
+        words, i, i.le_refl(), at)
 }
 
 // A word slot ends below the RSP slot.
@@ -491,7 +510,6 @@ theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memor
     let size: (q + bytes.len() <= t.r.size) = omega(fits, t.stack_fits());
     let after = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
     let kept = t.kept_store(m, q, bytes, size);
-    let kept_frames = t.kept_frames(m, q, bytes, size);
     let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k _ => t.r.cells_outside(v, q, bytes, so + k, Inr(omega(fits))));
     let frame: (word_in(w, so + 8) = word_in(v, so + 8)) = word_in_agree(w, v, so + 8, λ k _ => t.r.cells_outside(v, q, bytes, so + 8 + k, Inr(omega(fits))));
     let room: (word_in(w, so + 16) = word_in(v, so + 16)) = word_in_agree(w, v, so + 16, λ k _ => t.r.cells_outside(v, q, bytes, so + 16 + k, Inr(omega(fits))));
@@ -499,7 +517,7 @@ theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memor
         argv_at_kept(t.argv(), m, t.argv(), after, kept, word_in(v, so), t.args, stacking.left)),
      ⟨trans(frame, stacking.right.left),
       ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room), stacking.right.right.left),
-       frames_at_kept(t.framesv(), m, t.framesv(), after, kept_frames, t.frames, t.frame(), stacking.right.right.right)⟩⟩⟩
+       t.frames_store(m, q, bytes, size, t.frames, t.index, stacking.right.right.right)⟩⟩⟩
 }
 
 theorem Target::stacked_store(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,

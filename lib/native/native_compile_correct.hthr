@@ -29,6 +29,8 @@ import native_compile_opens;
 import native_compile_homes;
 import native_compile_structured;
 import native_compile_pass;
+import native_compile_perform;
+import native_compile_frames;
 import native_structured;
 import native_structured_meaning;
 import native_alloc;
@@ -41,6 +43,9 @@ import linux_x86_64_sim;
 import itree;
 import x86_64;
 import x86_64_stack;
+import x86_64_store;
+import x86_64_stack_runs;
+import linux_calls;
 import x86_64_block;
 import x86_64_asm;
 import x86_64_asm_runs;
@@ -135,88 +140,6 @@ theorem Prog::within_closes(self p: Prog, layout: Layout, out: List<Nat>, fd, re
     p.within_trans(c0, whole, p.within_then(0, Block([MovRI(Rax, BitVec::ofNat(3))])),
         c0.within_trans(c1, whole, c0.within_word_to(layout, fd, Rdi),
             c1.within_trans(asked, whole, c1.within_then(0, Syscall), asked.within_word_from(layout, out, result, Rax))))
-}
-
-// A call's code from its start (`Prog::performs`).
-theorem Prog::within_words_to(layout: Layout, ids: List<Nat>): (registers: List<Gpr>) → (p: Prog) → p.Within(p.words_to(layout, ids, registers)) {
-    match ids {
-        Nil => λ registers p => p.within_self(),
-        Cons(id, rest) => λ registers => match registers {
-            Nil => λ p => p.within_self(),
-            Cons(register, more) => λ p => p.within_trans(p.word_to(layout, id, register), p.word_to(layout, id, register).words_to(layout, rest, more),
-                p.within_word_to(layout, id, register), Prog::within_words_to(layout, rest, more, p.word_to(layout, id, register))),
-        },
-    }
-}
-
-theorem Prog::within_words_from(layout: Layout, out: List<Nat>, ids: List<Nat>): (registers: List<Gpr>) → (p: Prog) → p.Within(p.words_from(layout, out, ids, registers)) {
-    match ids {
-        Nil => λ registers p => p.within_self(),
-        Cons(id, rest) => λ registers => match registers {
-            Nil => λ p => p.within_self(),
-            Cons(register, more) => λ p => {
-                let one = p.word_from(layout, out.minus(rest), id, register);
-                p.within_trans(one, one.words_from(layout, out, rest, more), p.within_word_from(layout, out.minus(rest), id, register),
-                    Prog::within_words_from(layout, out, rest, more, one))
-            },
-        },
-    }
-}
-
-theorem Prog::within_word_home(self p: Prog, layout: Layout, id: Nat, register: Gpr): p.Within(p.word_home(layout, id, register)) {
-    (match layout.homes.home(id) as λ h => p.Within(match h {
-        InSlot => p.word_store(layout, id, register),
-        InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
-    }) {
-        InSlot => Exists(2, refl),
-        InReg(_) => Exists(1, refl),
-    })
-}
-
-theorem Prog::within_pushes(layout: Layout, ids: List<Nat>): (p: Prog) → p.Within(p.pushes(layout, ids)) {
-    match ids {
-        Nil => λ p => p.within_self(),
-        Cons(id, rest) => λ p => {
-            let loaded = p.word_to(layout, id, Rax);
-            let pushed = then(then(loaded, Block([rsp_down()])), Spill(StackStore(Rax, BitVec::ofNat(0))));
-            p.within_trans(loaded, pushed.pushes(layout, rest), p.within_word_to(layout, id, Rax),
-                loaded.within_trans(pushed, pushed.pushes(layout, rest), Exists(2, refl), Prog::within_pushes(layout, rest, pushed)))
-        },
-    }
-}
-
-theorem Prog::within_pops(layout: Layout, ids: List<Nat>): (p: Prog) → p.Within(p.pops(layout, ids)) {
-    match ids {
-        Nil => λ p => p.within_self(),
-        Cons(id, rest) => λ p => {
-            let popped = then(then(p, Reload(StackLoad(Rax, BitVec::ofNat(0)))), Block([rsp_up()]));
-            let homed = popped.word_home(layout, id, Rax);
-            p.within_trans(popped, homed.pops(layout, rest), Exists(2, refl),
-                popped.within_trans(homed, homed.pops(layout, rest), popped.within_word_home(layout, id, Rax), Prog::within_pops(layout, rest, homed)))
-        },
-    }
-}
-
-theorem Prog::within_performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>):
-    p.Within(p.performs(layout, out, index, args, results)) {
-    let whole = p.performs(layout, out, index, args, results);
-    let saved = out.minus(results);
-    let room = then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))).branch_label(Rax, layout.deep_label());
-    let less = then(then(room, Block([AddRI8(Rax, BitVec::ofNat(0xff)), MovRI(Rbx, layout.room_at())])), Store(WordStore(Rbx, Rax)));
-    let framed = then(then(less, Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx)));
-    let pushed = framed.pushes(layout, saved);
-    let passed = pushed.words_to(layout, args, call_registers());
-    let called = then(passed, CallTo(layout.procedure_label(index)));
-    let popped = called.pops(layout, saved.rev());
-    let back = then(then(popped, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
-    let more = then(then(then(then(back, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))), Block([AddRI8(Rax, BitVec::ofNat(1))])),
-        Store(WordStore(Rbx, Rax)));
-    p.within_trans(framed, whole, Exists(8, refl),
-        framed.within_trans(pushed, whole, Prog::within_pushes(layout, saved, framed),
-            pushed.within_trans(passed, whole, Prog::within_words_to(layout, args, call_registers(), pushed),
-                passed.within_trans(called, whole, passed.within_then(0, CallTo(layout.procedure_label(index))),
-                    called.within_trans(popped, whole, Prog::within_pops(layout, saved.rev(), called),
-                        popped.within_trans(more, whole, Exists(6, refl), Prog::within_words_from(layout, out, results, call_registers(), more)))))))
 }
 
 // What a statement compiles to starts where it was given its start.
@@ -1118,12 +1041,8 @@ theorem Source::entry_of(self src: Source, low: BitVec(64), homes: Homes, p, q: 
     j(sym(saved), λ x _ => x.inits(src.layout(low, homes), src.buffers, 0) = q, filled)
 }
 
-// The compiled program, from its first byte with its code resident, its
-// region zero, a stack above the region whose top is RSP and deep enough
-// for the source's calls, and the command line `args` at RSP above the
-// stack, simulates the source run with `args` at every fuel, whatever homes
-// the compile was given: it checked them (`Source::allocation_ok`).
-theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
+// A source without procedures: `main` from label 0, no call fitting.
+theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
     compiled: src.compile(r.low, homes) = Some(program), bare: src.procedures = Nil, origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
     here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
     zero: r.Holds(λ _ => zero_byte(), s.memory),
@@ -1184,4 +1103,628 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
             })(refl)
         },
     })(refl, trans(sym(src.compile_bare(r.low, homes, bare)), compiled))
+}
+
+// ---------------------------------------------------------------------------
+// The procedures in the program
+
+// Procedure `index` is in `whole` as its compile put it: it fits, its body
+// emits after its way in from some prefix, and its way out is in `whole`.
+fn Procedure::Hosted(self proc: Procedure, layout: Layout, index: Nat, whole: Prog) → Type {
+    Exists<Prog>(λ pre => Exists<Nat>(λ names => Exists<Compiled>(λ b =>
+        (proc.fits(layout) = True) ∧ ((proc.body.emit(proc.entry_code(pre, layout, index), layout, proc.results, names) = Some(b)) ∧
+        proc.exit_code(b.prog, layout).Within(whole)))))
+}
+
+// The program holds every procedure of the target, and the shared exit of
+// a call too deep.
+fn Target::Hosts(self t: Target) → Type {
+    ((i: Nat) → (proc: Procedure) → t.procedures.nth(i) = Some(proc) → proc.Hosted(t.layout(), i, t.program)) ∧
+        Exists<Prog>(λ dp => dp.deep_exit(t.layout()).Within(t.program))
+}
+
+theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, index, names: Nat, c: Compiled, code: proc.code(p, layout, index, names) = Some(c)):
+    (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+    (match proc.fits(layout) as λ f => proc.fits(layout) = f → (match f {
+            False => None,
+            True => match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) {
+                None => None,
+                Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)),
+            },
+        }) = Some(c) → (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+        False => λ _ none => absurd(none),
+        True => λ fits same0 => (match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) as λ o =>
+                proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) = o →
+                (match o { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(c) →
+                (whole: Prog) → c.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(c.prog) {
+            None => λ _ none => absurd(none),
+            Some(b) => λ emitted same => j(Option::some_inj(Compiled(proc.exit_code(b.prog, layout), b.names), c, same),
+                λ x _ => (whole: Prog) → x.prog.Within(whole) → proc.Hosted(layout, index, whole) ∧ p.Within(x.prog),
+                λ whole w => {
+                    let stored = then(then(p.label(layout.procedure_label(index)), Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
+                    let entry = proc.entry_code(p, layout, index);
+                    let w_stored: p.Within(stored) = Exists(3, refl);
+                    let w_entry: p.Within(entry) = p.within_trans(stored, entry, w_stored,
+                        Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), stored));
+                    let w_body: p.Within(b.prog) = p.within_trans(entry, b.prog, w_entry, proc.body.emit_extends(layout, entry, proc.results, names, b, emitted));
+                    let moved = b.prog.words_to(layout, proc.results, call_registers());
+                    let w_moved: b.prog.Within(moved) = Prog::within_words_to(layout, proc.results, call_registers(), b.prog);
+                    let w_exit: moved.Within(proc.exit_code(b.prog, layout)) = Exists(3, refl);
+                    ⟨Exists(p, Exists(names, Exists(b, ⟨fits, ⟨emitted, w⟩⟩))),
+                        p.within_trans(b.prog, proc.exit_code(b.prog, layout), w_body, b.prog.within_trans(moved, proc.exit_code(b.prog, layout), w_moved, w_exit))⟩
+                }),
+        })(refl, same0),
+    })(refl, code)
+}
+
+// Each procedure from `index` on is in a program its code is in, procedure
+// `i` of them at label `index + i`.
+theorem List::procedures_hosted(self procs: List<Procedure>, layout: Layout): (p: Prog) → (index, names: Nat) → (d: Compiled) →
+    procs.procedures_code(p, layout, index, names) = Some(d) → (whole: Prog) → d.prog.Within(whole) →
+    p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → procs.nth(i) = Some(proc) → proc.Hosted(layout, index + i, whole)) {
+    match procs {
+        Nil => λ p index names d code whole w => j(Option::some_inj(Compiled(p, names), d, code), λ x _ => p.Within(x.prog) ∧
+                ((i: Nat) → (proc: Procedure) → List::nth<Procedure>(Nil, i) = Some(proc) → proc.Hosted(layout, index + i, whole)),
+            ⟨p.within_self(), λ i proc none => absurd(none)⟩),
+        Cons(first, rest) => λ p index names d => (match first.code(p, layout, index, names) as λ o => first.code(p, layout, index, names) = o →
+                (match o { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) }) = Some(d) →
+                (whole: Prog) → d.prog.Within(whole) →
+                p.Within(d.prog) ∧ ((i: Nat) → (proc: Procedure) → Cons(first, rest).nth(i) = Some(proc) → proc.Hosted(layout, index + i, whole)) {
+            None => λ _ none => absurd(none),
+            Some(c) => λ code others whole w => {
+                let later = rest.procedures_hosted(layout)(c.prog, Succ(index), c.names, d, others, whole, w);
+                let here = first.code_hosted(p, layout, index, names, c, code, whole, c.prog.within_trans(d.prog, whole, later.left, w));
+                ⟨p.within_trans(c.prog, d.prog, here.right, later.left), λ i => match i as λ i => (proc: Procedure) → Cons(first, rest).nth(i) = Some(proc) →
+                        proc.Hosted(layout, index + i, whole) {
+                    Zero => λ proc same => j(Option::some_inj(first, proc, same), λ x _ => x.Hosted(layout, index, whole), here.left),
+                    Succ(k) => λ proc found => j(Nat::add_succ_left(index, k), λ x _ => proc.Hosted(layout, x, whole), later.right(k, proc, found)),
+                }⟩
+            },
+        })(refl),
+    }
+}
+
+// What `compile_calls` built: `main` emitted, exit 0 after it in the
+// program, and the program hosting every procedure and the shared exit.
+fn Source::CallsBuilt(self src: Source, low: BitVec(64), homes: Homes, program: Prog) → Type {
+    let layout = src.layout(low, homes);
+    Exists<Compiled>(λ c => (src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) = Some(c)) ∧
+        (then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).Within(program) ∧
+        (((i: Nat) → (proc: Procedure) → src.procedures.nth(i) = Some(proc) → proc.Hosted(layout, i, program)) ∧
+        (Exists<Prog>(λ dp => dp.deep_exit(layout).Within(program)) ∧ program.laid_out().IsTrue()))))
+}
+
+theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, program: Prog, compiled: src.compile_calls(low, homes) = Some(program)):
+    src.CallsBuilt(low, homes, program) {
+    let layout = src.layout(low, homes);
+    let exit0 = λ (q: Prog) => then(then(q, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
+    let laid = src.calls_laid(low, homes, program, compiled);
+    (match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) as λ o => src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) = o →
+            (match o {
+                None => None,
+                Some(c) => match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
+                    None => None,
+                    Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
+                },
+            }) = Some(program) → src.CallsBuilt(low, homes, program) {
+        None => λ _ none => absurd(none),
+        Some(c) => λ emitted => (match src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) as λ o =>
+                src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) = o → (match o {
+                    None => None,
+                    Some(d) => match d.prog.deep_exit(layout).laid_out() { False => None, True => Some(d.prog.deep_exit(layout)) },
+                }) = Some(program) → src.CallsBuilt(low, homes, program) {
+            None => λ _ none => absurd(none),
+            Some(d) => λ code same => {
+                let whole = d.prog.deep_exit(layout);
+                (match whole.laid_out() as λ b => (match b { False => None, True => Some(whole) }) = Some(program) → src.CallsBuilt(low, homes, program) {
+                    False => λ none => absurd(none),
+                    True => λ same2 => j(Option::some_inj(whole, program, same2), λ x _ => src.CallsBuilt(low, homes, x), {
+                        let w_d: d.prog.Within(whole) = Exists(3, refl);
+                        let hosted = src.procedures.procedures_hosted(layout)(exit0(c.prog), 0, c.names, d, code, whole, w_d);
+                        let laid2: whole.laid_out().IsTrue() = j(Option::some_inj(whole, program, same2), λ x _ => x.laid_out().IsTrue() → whole.laid_out().IsTrue(), λ l => l)(laid);
+                        Exists(c, ⟨emitted, ⟨exit0(c.prog).within_trans(d.prog, whole, hosted.left, w_d),
+                            ⟨λ i proc found => j(Nat::add_left_zero(i), λ x _ => proc.Hosted(layout, x, whole), hosted.right(i, proc, found)),
+                            ⟨Exists(d.prog, whole.within_self()), laid2⟩⟩⟩⟩)
+                    }),
+                })(same)
+            },
+        })(refl),
+    })(refl, compiled)
+}
+
+// ---------------------------------------------------------------------------
+// The call's checks, read off
+
+theorem Nat::same_as_eq(self n: Nat, m: Nat, same: n.same_as(m).IsTrue()): n = m {
+    let both = Bool::is_true_and(n.leb(m), m.leb(n), same);
+    let a: (n <= m) = Nat::leb_sound(n, m, both.left);
+    let b: (m <= n) = Nat::leb_sound(m, n, both.right);
+    let e: (n = m) = omega(a, b);
+    e
+}
+
+theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) → layout.words_fit(ids).IsTrue() → Mem(i, ids) → i < layout.words {
+    match ids {
+        Nil => λ i _ never => false_elim(never),
+        Cons(id, rest) => λ i fit m => {
+            let both = Bool::is_true_and(layout.word_fits(id), layout.words_fit(rest), fit);
+            match m as λ _ => i < layout.words {
+                Inl(e) => j(sym(e), λ x _ => x < layout.words, Nat::leb_sound(Succ(id), layout.words, both.left)),
+                Inr(later) => layout.words_fit_mem(rest, i, both.right, later),
+            }
+        },
+    }
+}
+
+// What a fitting call gives the proof: its procedure, and each check.
+fn Layout::CallFits(self layout: Layout, out: List<Nat>, args, results: List<Nat>, proc: Procedure) → Type {
+    (args.len() = proc.params.len()) ∧ ((results.len() = proc.results.len()) ∧ ((args.len() <= 6) ∧ ((results.len() <= 6) ∧
+        (layout.words_fit(args ++ (results ++ out.minus(results))).IsTrue() ∧ ((out.minus(results).len() <= layout.words) ∧
+        layout.homes.moves_apart(out, results).IsTrue())))))
+}
+
+theorem Layout::call_fits_parts(self layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>, fit: layout.call_fits(out, index, args, results).IsTrue()):
+    Exists<Procedure>(λ proc => (layout.procedures.nth(index) = Some(proc)) ∧ layout.CallFits(out, args, results, proc)) {
+    (match layout.procedures.nth(index) as λ o => layout.procedures.nth(index) = o → Bool::IsTrue(match o as λ _ => Bool {
+            None => False,
+            Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
+                (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
+                (out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results)))))),
+        }) → Exists<Procedure>(λ proc => (layout.procedures.nth(index) = Some(proc)) ∧ layout.CallFits(out, args, results, proc)) {
+        None => λ _ no => false_elim(no),
+        Some(proc) => λ found f => {
+            let b1 = Bool::is_true_and(args.len().same_as(proc.params.len()), results.len().same_as(proc.results.len()) &&
+                (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
+                (out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results))))), f);
+            let b2 = Bool::is_true_and(results.len().same_as(proc.results.len()), args.len().leb(6) && (results.len().leb(6) &&
+                (layout.words_fit(args ++ (results ++ out.minus(results))) &&
+                (out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results)))), b1.right);
+            let b3 = Bool::is_true_and(args.len().leb(6), results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
+                (out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results))), b2.right);
+            let b4 = Bool::is_true_and(results.len().leb(6), layout.words_fit(args ++ (results ++ out.minus(results))) &&
+                (out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results)), b3.right);
+            let b5 = Bool::is_true_and(layout.words_fit(args ++ (results ++ out.minus(results))),
+                out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results), b4.right);
+            let b6 = Bool::is_true_and(out.minus(results).len().leb(layout.words), layout.homes.moves_apart(out, results), b5.right);
+            Exists(proc, ⟨found, ⟨args.len().same_as_eq(proc.params.len(), b1.left), ⟨results.len().same_as_eq(proc.results.len(), b2.left),
+                ⟨Nat::leb_sound(args.len(), 6, b3.left), ⟨Nat::leb_sound(results.len(), 6, b4.left), ⟨b5.left,
+                ⟨Nat::leb_sound(out.minus(results).len(), layout.words, b6.left), b6.right⟩⟩⟩⟩⟩⟩⟩)
+        },
+    })(refl, fit)
+}
+
+// What a procedure that fits gives the proof.
+fn Procedure::FitsParts(self proc: Procedure, layout: Layout) → Type {
+    proc.body.checks(layout.homes, proc.results).IsTrue() ∧ (proc.body.live_in(layout.homes, proc.results).within(proc.params).IsTrue() ∧
+        (layout.homes.moves_apart(proc.body.live_in(layout.homes, proc.results), proc.params).IsTrue() ∧
+        (layout.words_fit(proc.params ++ proc.results).IsTrue() ∧ ((proc.params.len() <= 6) ∧ (proc.results.len() <= 6)))))
+}
+
+theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.fits(layout) = True): proc.FitsParts(layout) {
+    let entry = proc.body.live_in(layout.homes, proc.results);
+    (match proc.body.checked(layout.homes, proc.results) as λ o => proc.body.checked(layout.homes, proc.results) = o → (match o as λ _ => Bool {
+            None => False,
+            Some(_) => entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
+                (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)))),
+        }) = True → proc.FitsParts(layout) {
+        None => λ _ none => absurd(none),
+        Some(l) => λ got same => {
+            let sound = proc.body.checked_sound(layout.homes, proc.results, l, got);
+            let f: Bool::IsTrue(entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
+                (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6))))) =
+                j(sym(same), λ v _ => v.IsTrue(), trivial);
+            let b1 = Bool::is_true_and(entry.within(proc.params), layout.homes.moves_apart(entry, proc.params) &&
+                (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6))), f);
+            let b2 = Bool::is_true_and(layout.homes.moves_apart(entry, proc.params),
+                layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)), b1.right);
+            let b3 = Bool::is_true_and(layout.words_fit(proc.params ++ proc.results), proc.params.len().leb(6) && proc.results.len().leb(6), b2.right);
+            let b4 = Bool::is_true_and(proc.params.len().leb(6), proc.results.len().leb(6), b3.right);
+            ⟨sound.right, ⟨b1.left, ⟨b2.left, ⟨b3.left, ⟨Nat::leb_sound(proc.params.len(), 6, b4.left), Nat::leb_sound(proc.results.len(), 6, b4.right)⟩⟩⟩⟩⟩
+        },
+    })(refl, fits)
+}
+
+// A call's tree, its procedure found.
+theorem Source::performs_found(self src: Source, call: Answers(), n, d, index: Nat, proc: Procedure, found: src.procedures.nth(index) = Some(proc),
+    args, results: List<Nat>, env: Env):
+    src.performs(call, n, Succ(d))(index, args, results, env) =
+        ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)), λ flow => proc.leave(env, results, flow)) {
+    j(sym(found), λ o _ => (match o as λ _ => ITree<Flow>(Events::linux()) {
+            None => Ret(Onward(env)),
+            Some(p) => ITree::map(Events::linux(), p.body.denote(call, src.performs(call, n, d), n, p.enter(env, args)), λ flow => p.leave(env, results, flow)),
+        }) = ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)), λ flow => proc.leave(env, results, flow)),
+        refl)
+}
+
+// ---------------------------------------------------------------------------
+// Small facts the call reads
+
+// Words read only the file.
+theorem Env::words_at_words(self env: Env, ids: List<Nat>, buffers: Buffers(), args: List<List<BitVec(8)>>):
+    Env(env.words, buffers, args).words_at(ids) = env.words_at(ids) {
+    match ids {
+        Nil => refl,
+        Cons(id, rest) => cong_fn<List<BitVec(64)>, List<BitVec(64)>>(λ ws => Cons(env.word(id), ws), env.words_at_words(rest, buffers, args)),
+    }
+}
+
+theorem List::onto_mem<A>(self xs: List<A>, a: A): (acc: List<A>) → Mem(a, xs.onto(acc)) → Mem(a, xs) ∨ Mem(a, acc) {
+    match xs {
+        Nil => λ acc m => Inr(m),
+        Cons(h, rest) => λ acc m => match rest.onto_mem(a, Cons(h, acc), m) as λ _ => Mem(a, Cons(h, rest)) ∨ Mem(a, acc) {
+            Inl(r) => Inl(Inr(r)),
+            Inr(c) => match c as λ _ => Mem(a, Cons(h, rest)) ∨ Mem(a, acc) { Inl(e) => Inl(Inl(e)), Inr(r) => Inr(r) },
+        },
+    }
+}
+
+// What registers no word lives in hold, but RAX, RBX and RSP, kept.
+theorem Gprs::holding_scratch(self g: Gprs, g2: Gprs, keeps: g2.KeepsScratch(g), values: List<BitVec(64)>):
+    (registers: List<Gpr>) → gprs_outside(registers, home_pool()).IsTrue() → gprs_outside(registers, [Rax, Rbx, Rsp]).IsTrue() →
+    g.Holding(registers, values) → g2.Holding(registers, values) {
+    match values {
+        Nil => λ _ _ _ _ => trivial,
+        Cons(value, rest) => λ registers => match registers {
+            Nil => λ _ _ _ => trivial,
+            Cons(register, more) => λ outside clear holding => {
+                let out = Bool::is_true_and(register.absent_from(home_pool()), gprs_outside(more, home_pool()), outside);
+                let cl = Bool::is_true_and(register.absent_from([Rax, Rbx, Rsp]), gprs_outside(more, [Rax, Rbx, Rsp]), clear);
+                ⟨trans(keeps(register, out.left, cl.left), holding.left), g.holding_scratch(g2, keeps, rest, more, out.right, cl.right, holding.right)⟩
+            },
+        },
+    }
+}
+
+// A near call's push, as a store to the stack.
+theorem Target::call_pushed(self t: Target, s: MachineState<X86Memory(t.r.profile)>, displacement: BitVec(32), i: Nat,
+    rsp: read_gpr(Rsp, s.gprs) = t.stack.at(i + 8)):
+    call_near_after(t.stack.writes, displacement, s).memory = t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5))) {
+    let pushed: (push_address(s.gprs) = t.stack.at(i)) =
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp), push_at(t.stack.low, i));
+    j(t.stack_writes, λ w _ => (w.store(s.memory, push_address(s.gprs), word_bytes(next_rip(s.rip, 5))) =
+            t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5)))) →
+            (t.stack.writes.store(s.memory, push_address(s.gprs), word_bytes(next_rip(s.rip, 5))) =
+            t.r.profile.store(s.memory, t.stack.at(i), word_bytes(next_rip(s.rip, 5)))), λ e => e)(
+        cong_fn<BitVec(64), X86Memory(t.r.profile)>(λ a => t.r.profile.store(s.memory, a, word_bytes(next_rip(s.rip, 5))), pushed))
+}
+
+// ---------------------------------------------------------------------------
+// Every call runs as the call
+
+// No room: the shared exit, as the source's call past the depth.
+theorem Target::perform_deep(self t: Target, src: Source, call: Answers(), n: Nat, room: t.room = 0, hosts: t.Hosts()):
+    t.Calls(call, src.performs(call, n, 0)) {
+    let layout = t.layout();
+    λ p out index args results fit within apart n2 env k exits next => {
+        let dp = hosts.right.witness;
+        let w_deep = hosts.right.proof;
+        let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
+            Prog::At(dp, layout.deep_label(), Block([])).within_trans(dp.deep_exit(layout), t.program, Exists(2, refl), w_deep);
+        let e = p.call_enters(layout);
+        let saved = out.minus(results);
+        let pu = e.pushes(layout, saved);
+        let pa = pu.words_to(layout, args, call_registers());
+        let w_pa = pa.within_before(0, CallTo(layout.procedure_label(index)), t.program, then(pa, CallTo(layout.procedure_label(index))).within_trans(
+            then(pa, CallTo(layout.procedure_label(index))).pops(layout, saved.rev()), t.program,
+            Prog::within_pops(layout, saved.rev(), then(pa, CallTo(layout.procedure_label(index)))),
+            then(pa, CallTo(layout.procedure_label(index))).pops(layout, saved.rev()).within_trans(
+                then(pa, CallTo(layout.procedure_label(index))).pops(layout, saved.rev()).call_leaves(layout), t.program, Exists(6, refl),
+                then(pa, CallTo(layout.procedure_label(index))).pops(layout, saved.rev()).call_leaves(layout).within_trans(
+                    p.performs(layout, out, index, args, results), t.program,
+                    Prog::within_words_from(layout, out, results, call_registers(), then(pa, CallTo(layout.procedure_label(index))).pops(layout, saved.rev()).call_leaves(layout)),
+                    within))));
+        let w_e = e.within_trans(pu, t.program, Prog::within_pushes(layout, saved, e),
+            pu.within_trans(pa, t.program, Prog::within_words_to(layout, args, call_registers(), pu), w_pa));
+        let tree: ITree<BitVec(64)>(Events::linux()) = k(Exited(call_depth_status()));
+        t.goes_call_enter(args.union(saved), env, p, w_e, w_dl.witness, dp, Block([]), w_dl.proof, tree,
+            λ _ => t.goes_deep(dp, w_deep, tree, λ _ => True, λ s at exited => exits(call_depth_status(), s, at, exited)),
+            λ d2 roomy more => absurd(trans(sym(room), more)))
+    }
+}
+
+// Room for one more: the frame entered, the words saved, the arguments
+// passed, the call, the callee's body by the depth below, the return, the
+// words restored, the frame left, and the results taken.
+theorem Target::perform_call(self t: Target, src: Source, call: Answers(), n, d: Nat, room: t.room = Succ(d), tp: t.procedures = src.procedures,
+    hosts: t.Hosts(), ih: (c: Target) → c.procedures = src.procedures → c.Hosts() → c.room = d → c.Calls(call, src.performs(call, n, d))):
+    t.Calls(call, src.performs(call, n, Succ(d))) {
+    let layout = t.layout();
+    let regs = call_registers();
+    λ p out index args results fit within apart n2 env k exits next => {
+        let parts = layout.call_fits_parts(out, index, args, results, fit);
+        let proc = parts.witness;
+        let found = parts.proof.left;
+        let fp = parts.proof.right;
+        let found_src: (src.procedures.nth(index) = Some(proc)) = trans(cong_fn<List<Procedure>, Option<Procedure>>(λ ps => ps.nth(index), sym(tp)), found);
+        let saved = out.minus(results);
+        let live = args.union(saved);
+        let names_fit = fp.right.right.right.right.left;
+        let inside_args = λ (i: Nat) (m: Mem(i, args)) => layout.words_fit_mem(args ++ (results ++ saved), i, names_fit, args.mem_append_l(results ++ saved, i, m));
+        let inside_results = λ (i: Nat) (m: Mem(i, results)) => layout.words_fit_mem(args ++ (results ++ saved), i, names_fit,
+            args.mem_append_r(results ++ saved, i, results.mem_append_l(saved, i, m)));
+        let inside_saved = λ (i: Nat) (m: Mem(i, saved)) => layout.words_fit_mem(args ++ (results ++ saved), i, names_fit,
+            args.mem_append_r(results ++ saved, i, results.mem_append_r(saved, i, m)));
+        // The procedure in the program.
+        let hosted = hosts.left(index, proc, found);
+        let pre_i = hosted.witness;
+        let names_i = hosted.proof.witness;
+        let b_i = hosted.proof.proof.witness;
+        let fits_eq = hosted.proof.proof.proof.left;
+        let emitted_i = hosted.proof.proof.proof.right.left;
+        let w_exit = hosted.proof.proof.proof.right.right;
+        let pf = proc.fits_parts(layout, fits_eq);
+        let entry_live = proc.body.live_in(t.homes, proc.results);
+        let lbl = Prog::At(pre_i, Succ(index), Block([]));
+        let stored = then(then(lbl, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
+        let entry = proc.entry_code(pre_i, layout, index);
+        let moved = b_i.prog.words_to(layout, proc.results, regs);
+        let w_b: b_i.prog.Within(t.program) = b_i.prog.within_trans(moved, t.program, Prog::within_words_to(layout, proc.results, regs, b_i.prog),
+            moved.within_trans(proc.exit_code(b_i.prog, layout), t.program, Exists(3, refl), w_exit));
+        let w_entry: entry.Within(t.program) = entry.within_trans(b_i.prog, t.program, proc.body.emit_extends(layout, entry, proc.results, names_i, b_i, emitted_i), w_b);
+        let w_lbl: lbl.Within(t.program) = lbl.within_trans(stored, t.program, Exists(2, refl),
+            stored.within_trans(entry, t.program, Prog::within_words_from(layout, entry_live, proc.params, regs, stored), w_entry));
+        let inside_params = λ (i: Nat) (m: Mem(i, proc.params)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.right.right.right.left,
+            proc.params.mem_append_l(proc.results, i, m));
+        let inside_proc_results = λ (i: Nat) (m: Mem(i, proc.results)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.right.right.right.left,
+            proc.params.mem_append_r(proc.results, i, m));
+        // The call's code in the program.
+        let e = p.call_enters(layout);
+        let pu = e.pushes(layout, saved);
+        let pa = pu.words_to(layout, args, regs);
+        let ca = then(pa, CallTo(layout.procedure_label(index)));
+        let po = ca.pops(layout, saved.rev());
+        let le = po.call_leaves(layout);
+        let w_le: le.Within(t.program) = le.within_trans(p.performs(layout, out, index, args, results), t.program,
+            Prog::within_words_from(layout, out, results, regs, le), within);
+        let w_po: po.Within(t.program) = po.within_trans(le, t.program, Exists(6, refl), w_le);
+        let w_ca: ca.Within(t.program) = ca.within_trans(po, t.program, Prog::within_pops(layout, saved.rev(), ca), w_po);
+        let w_pa: pa.Within(t.program) = pa.within_before(0, CallTo(layout.procedure_label(index)), t.program, w_ca);
+        let w_pu: pu.Within(t.program) = pu.within_trans(pa, t.program, Prog::within_words_to(layout, args, regs, pu), w_pa);
+        let w_e: e.Within(t.program) = e.within_trans(pu, t.program, Prog::within_pushes(layout, saved, e), w_pu);
+        let dp = hosts.right.witness;
+        let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
+            Prog::At(dp, layout.deep_label(), Block([])).within_trans(dp.deep_exit(layout), t.program, Exists(2, refl), hosts.right.proof);
+        // The trees: the callee's body, then the continuation through the leave.
+        let callee_tree = proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args));
+        let k2 = λ (flow: Flow) => k(proc.leave(env, results, flow));
+        let tree: ITree<BitVec(64)>(Events::linux()) =
+            ITree::bind(Events::linux(), ITree::map(Events::linux(), callee_tree, λ flow => proc.leave(env, results, flow)), k);
+        let tree2: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), callee_tree, k2);
+        let same: ITree::Same(Events::linux(), tree, tree2) =
+            ITree::bind_assoc(Events::linux(), callee_tree, λ (flow: Flow) => Ret(proc.leave(env, results, flow)), k);
+        let main: t.At(prog_len(p), live, tree2, env) = λ s0 here0 resident0 held0 => {
+            let env_args: (env.args = t.args) = t.held_args(live, env, s0.gprs, s0.memory, held0);
+            let back_mem = λ (x: Nat) (m: Mem(x, saved.rev().onto(Nil))) => match saved.rev().onto_mem(x, Nil, m) as λ _ => Mem(x, saved) {
+                Inl(r) => saved.mem_rev(x, r),
+                Inr(never) => false_elim(never),
+            };
+            let enter = λ (d2: Nat) (roomy: d2 * (8 * (t.words + 1)) <= t.index) (eq: t.room = Succ(d2)) => {
+                let u = t.activation(t.index, t.frames, d2, t.framed, roomy);
+                let d_eq: (d2 = d) = omega(eq, room);
+                let s_le: (saved.len() <= t.words) = fp.right.right.right.right.right.left;
+                let was0: (Succ(d2) * (8 * (t.words + 1)) <= t.index) = j(eq, λ r _ => r * (8 * (t.words + 1)) <= t.index, t.roomy);
+                let was1: ((8 * (t.words + 1)) * Succ(d2) <= t.index) = j(Nat::mul_comm(Succ(d2), 8 * (t.words + 1)), λ v _ => v <= t.index, was0);
+                let was: ((8 * (t.words + 1)) * d2 + 8 * (t.words + 1) <= t.index) = was1;
+                let comm: (d2 * (8 * (t.words + 1)) = (8 * (t.words + 1)) * d2) = Nat::mul_comm(d2, 8 * (t.words + 1));
+                let room8: (8 * saved.len() + 8 <= t.index) = omega(was, s_le);
+                let roomy2: (d2 * (8 * (t.words + 1)) <= t.index - 8 * saved.len() - 8) = omega(was, s_le, comm);
+                let j_eq: (t.index - 8 * saved.len() - 8 + 8 = t.index - 8 * saved.len()) = omega(room8);
+                let top_eq: (t.index - 8 * saved.len() + 8 * saved.len() = t.index) = omega(room8);
+                let below_i2: (t.index - 8 * saved.len() - 8 + 8 <= t.index) = omega(room8);
+                let fits_i2: (t.index - 8 * saved.len() - 8 + 8 <= t.stack.size) = omega(room8, t.framed);
+                let low0: (t.index - 8 * saved.len() - 8 <= t.stack.size) = omega(room8, t.framed);
+                let framed0: (t.index - 8 * saved.len() - 8 + 8 * Nil<BitVec(64)>.len() <= t.stack.size) = low0;
+                let sv = env.words_at(saved.onto(Nil));
+                let va = env.words_at(args);
+                let ret = next_rip(t.origin, prog_len(pa) + 5);
+                let svlen: (sv.len() = saved.len()) = trans(env.words_at_len(saved.onto(Nil)), saved.onto_len(Nil));
+                let lens: ((sv ++ t.frames).len() = sv.len() + t.frames.len()) = sv.len_append(t.frames);
+                let framed2: (t.index - 8 * saved.len() - 8 + 8 * Succ((sv ++ t.frames).len()) <= t.stack.size) = omega(lens, svlen, room8, t.framed);
+                let top2: (t.index - 8 * saved.len() - 8 + 8 + 8 * sv.len() = t.index) = omega(svlen, room8);
+                let long_params: (proc.params.len() <= va.len()) = omega(env.words_at_len(args), fp.left);
+                let c = u.activation(t.index - 8 * saved.len() - 8, Cons(ret, sv ++ t.frames), d2, framed2, roomy2);
+                // After the return.
+                let mixed = λ (after: Env) => Env(env.words, after.buffers, env.args);
+                let lp = saved.rev().onto(Nil);
+                let w = t.activation(t.index - 8 * saved.len() - 8, Nil, d2, framed0, roomy2);
+                let popped_eq: (t.index - 8 * saved.len() - 8 + 8 + 8 * saved.rev().len() = t.index) = omega(saved.rev_len(), room8);
+                let onto_eq: (saved.onto(Nil) = saved.rev()) = trans(saved.onto_rev(Nil), saved.rev().append_nil());
+                let returned = λ (after: Env) => {
+                    let aw = after.words_at(proc.results);
+                    let tk = k2(Onward(after));
+                    let keep = λ (g: Gprs) (g2: Gprs) (h: g.Holding(regs, aw)) (ks: g2.KeepsScratch(g)) => g.holding_scratch(g2, ks, aw, regs, trivial, trivial, h);
+                    let res_le6: (results.len() <= regs.len()) = fp.right.right.right.left;
+                    let res_le_aw: (results.len() <= aw.len()) = omega(after.words_at_len(proc.results), fp.right.left);
+                    let gf = t.goes_words_from(out, tk, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(out, mixed(after).set_words(results, aw), g, m), results)(
+                        regs, aw, le, lp, mixed(after),
+                        λ i m => saved.rev().mem_onto(i, Nil, saved.rev().mem_rev(i, j(sym(saved.rev_involutive()), λ x _ => Mem(i, x), m))),
+                        inside_results, fp.right.right.right.right.right.right, trivial, trivial, res_le6, res_le_aw, within,
+                        next(mixed(after).set_words(results, aw)));
+                    let wf = t.goes_weaken(prog_len(le), tk,
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(lp, mixed(after), s.gprs, s.memory) ∧ (s.gprs.Holding(regs, aw) ∧
+                            ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, mixed(after).set_words(results, aw), g2, m2) → t.Spares(s.gprs, g2) →
+                                t.Held(out, mixed(after).set_words(results, aw), g2, m2))),
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(lp, mixed(after), s.gprs, s.memory) ∧ s.gprs.Holding(regs, aw),
+                        gf, λ s pre => ⟨pre.left, ⟨pre.right, λ g2 m2 h2 _ => h2⟩⟩);
+                    let cl = t.goes_call_leave(lp, mixed(after), po, d2, eq, t.index - 8 * saved.len() - 8, framed0, roomy2,
+                        λ (g: Gprs) => g.Holding(regs, aw), keep, w_le, tk, wf);
+                    let leave = t.goes_weaken(prog_len(po), tk,
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => w.Held(lp, mixed(after), s.gprs, s.memory) ∧ ((read_gpr(Rsp, s.gprs) = t.frame()) ∧
+                            (t.FramesAt(s.memory, t.frames, t.index) ∧ s.gprs.Holding(regs, aw))),
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => w.Held(lp, mixed(after), s.gprs, s.memory) ∧
+                            ((read_gpr(Rsp, s.gprs) = t.stack.at(t.index - 8 * saved.len() - 8 + 8 + 8 * saved.rev().len())) ∧
+                            (t.FramesAt(s.memory, t.frames, t.index - 8 * saved.len() - 8 + 8 + 8 * saved.rev().len()) ∧ s.gprs.Holding(regs, aw))),
+                        cl, λ s pre => ⟨pre.left, ⟨trans(pre.right.left, cong_fn<Nat, BitVec(64)>(λ x => t.stack.at(x), popped_eq)),
+                            ⟨j(popped_eq, λ x _ => t.FramesAt(s.memory, t.frames, x), pre.right.right.left), pre.right.right.right⟩⟩⟩);
+                    let pops = w.goes_pops(mixed(after), tk, λ (g: Gprs) => g.Holding(regs, aw), keep, saved.rev())(ca, Nil, t.index - 8 * saved.len() - 8 + 8, t.frames,
+                        λ i m => {
+                            let ms = saved.mem_rev(i, m);
+                            ⟨inside_saved(i, ms), t.held_number(live, env, s0.gprs, s0.memory, held0, i, args.union_right(saved, i, ms), inside_saved(i, ms))⟩
+                        },
+                        λ x mx y my kk ax ay => t.held_shared(live, env, s0.gprs, s0.memory, held0, x, y,
+                            args.union_right(saved, x, back_mem(x, mx)), args.union_right(saved, y, back_mem(y, my)), kk, ax, ay),
+                        w_po, leave);
+                    c.goes_callee_return(after, b_i.prog, proc.results, tk, w_exit, inside_proc_results, ret, sv ++ t.frames, refl, framed0,
+                        λ s rip_s resident_s held_w rsp_w frames_w holding_w => {
+                            let held_m = w.held_like(Nil, after, mixed(after), s.gprs, s.memory, held_w,
+                                ⟨λ i never => false_elim(never), ⟨refl, trans(w.held_args(Nil, after, s.gprs, s.memory, held_w), sym(env_args))⟩⟩);
+                            let frames_r = j(onto_eq, λ ids _ => t.FramesAt(s.memory, env.words_at(ids) ++ t.frames, t.index - 8 * saved.len() - 8 + 8), frames_w);
+                            let frames_m = j(sym(env.words_at_words(saved.rev(), after.buffers, env.args)),
+                                λ ws _ => t.FramesAt(s.memory, ws ++ t.frames, t.index - 8 * saved.len() - 8 + 8), frames_r);
+                            pops(s, rip_s, resident_s, ⟨held_m, ⟨rsp_w, ⟨frames_m, holding_w⟩⟩⟩)
+                        })
+                };
+                let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, d_eq))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.left)(
+                    n, proc.enter(env, args), k2, exits, returned);
+                let next_c = c.at_like(prog_len(entry), entry_live, tree2, proc.enter(env, args), env.set_words(proc.params, va),
+                    env.entered_like(proc.params, entry_live, va, long_params, entry_live.within_mem(proc.params, pf.right.left)), body);
+                // The call.
+                let q2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => u.Held(live, env, g, m) ∧ ((read_gpr(Rsp, g) = t.stack.at(t.index - 8 * saved.len())) ∧
+                    (t.FramesAt(m, sv, t.index - 8 * saved.len()) ∧ g.Holding(regs, va)));
+                let displacement = asm_jump_of(asm_labels(t.program), prog_len(pa), CallTo(Succ(index)));
+                let called = t.io().goes_callto(t.program, t.origin, t.stack, t.stack_writes, t.code_fits(), w_ca.witness, pa, 0, Succ(index), w_ca.proof,
+                    prog_len(pre_i), t.program.lands_call(t.laid, w_ca.witness, pa, 0, index, w_ca.proof, w_lbl.witness, pre_i, Block([]), w_lbl.proof),
+                    tree2, λ (s: MachineState<X86Memory(t.r.profile)>) => q2(s.gprs, s.memory), λ _ => t.index - 8 * saved.len() - 8,
+                    λ s pre => ⟨trans(pre.right.left, cong_fn<Nat, BitVec(64)>(λ x => t.stack.at(x), sym(j_eq))), fits_i2⟩,
+                    λ s pre => {
+                        let rsp8: (read_gpr(Rsp, s.gprs) = t.stack.at(t.index - 8 * saved.len() - 8 + 8)) =
+                            trans(pre.right.left, cong_fn<Nat, BitVec(64)>(λ x => t.stack.at(x), sym(j_eq)));
+                        let entered = u.goes_callee_entry(live, env, pre_i, proc, index, t.index - 8 * saved.len() - 8, Cons(ret, sv ++ t.frames), framed2, roomy2, va,
+                            tree2, w_entry, inside_params, pf.right.right.left, pf.right.left, pf.right.right.right.right.left, long_params, next_c);
+                        λ v here resident post => {
+                            let mem_eq: (v.memory = t.r.profile.store(s.memory, t.stack.at(t.index - 8 * saved.len() - 8), word_bytes(next_rip(s.rip, 5)))) =
+                                trans(cong_fn<MachineState<X86Memory(t.r.profile)>, X86Memory(t.r.profile)>(λ x => x.memory, post.left),
+                                    t.call_pushed(s, displacement, t.index - 8 * saved.len() - 8, rsp8));
+                            let gprs_eq: (v.gprs = write_gpr(Rsp, push_address(s.gprs), s.gprs)) =
+                                cong_fn<MachineState<X86Memory(t.r.profile)>, Gprs>(λ x => x.gprs, post.left);
+                            let stored_m = t.r.profile.store(s.memory, t.stack.at(t.index - 8 * saved.len() - 8), word_bytes(next_rip(s.rip, 5)));
+                            let held_st = u.held_scratch(live, env, s.gprs, stored_m,
+                                u.held_stack_store(live, env, s.gprs, s.memory, pre.left, t.index - 8 * saved.len() - 8, below_i2, next_rip(s.rip, 5)),
+                                Rsp, push_address(s.gprs), trivial);
+                            let held_v = j(sym(gprs_eq), λ g _ => u.Held(live, env, g, v.memory),
+                                j(sym(mem_eq), λ mm _ => u.Held(live, env, write_gpr(Rsp, push_address(s.gprs), s.gprs), mm), held_st));
+                            let frames_t = j(sym(top2), λ x _ => t.FramesAt(s.memory, t.frames, x), u.held_frames(live, env, s.gprs, s.memory, pre.left));
+                            let frames_sv = j(sym(j_eq), λ x _ => t.FramesAt(s.memory, sv, x), pre.right.right.left);
+                            let frames_rest = t.frames_append(s.memory, sv, t.frames, t.index - 8 * saved.len() - 8 + 8, frames_sv, frames_t);
+                            let le8: (t.index - 8 * saved.len() - 8 + 8 <= t.index - 8 * saved.len() - 8 + 8) = omega();
+                            let frames_st = t.frames_stack_store(s.memory, t.index - 8 * saved.len() - 8, fits_i2, next_rip(s.rip, 5), sv ++ t.frames,
+                                t.index - 8 * saved.len() - 8 + 8, le8, frames_rest);
+                            let frames_v: t.FramesAt(v.memory, Cons(ret, sv ++ t.frames), t.index - 8 * saved.len() - 8) =
+                                ⟨fits_i2, ⟨post.right.right, j(sym(mem_eq), λ mm _ => t.FramesAt(mm, sv ++ t.frames, t.index - 8 * saved.len() - 8 + 8), frames_st)⟩⟩;
+                            let holding_v = j(sym(gprs_eq), λ g _ => g.Holding(regs, va), s.gprs.holding_write(Rsp, push_address(s.gprs), va, regs, trivial, pre.right.right.right));
+                            entered(v, here, resident, ⟨held_v, ⟨post.right.left, ⟨frames_v, holding_v⟩⟩⟩)
+                        }
+                    });
+                // The arguments into their registers, and the saved words pushed.
+                let wt = u.goes_words_to(live, env, tree2, q2, args)(regs, pu, λ i m => ⟨inside_args(i, m), args.union_left(saved, i, m)⟩, trivial, trivial, w_pa, called);
+                let wto = t.goes_weaken(prog_len(pu), tree2,
+                    λ (s: MachineState<X86Memory(t.r.profile)>) => u.Held(live, env, s.gprs, s.memory) ∧
+                        ((g2: Gprs) → u.Held(live, env, g2, s.memory) → env.InRegisters(g2, args, regs) → g2.KeepsOutside(s.gprs, regs) → q2(g2, s.memory)),
+                    λ (s: MachineState<X86Memory(t.r.profile)>) => u.Held(live, env, s.gprs, s.memory) ∧
+                        ((read_gpr(Rsp, s.gprs) = t.stack.at(t.index - 8 * saved.len())) ∧ t.FramesAt(s.memory, sv, t.index - 8 * saved.len())),
+                    wt, λ s pre => ⟨pre.left, λ g2 h2 inreg ko => ⟨h2, ⟨trans(ko(Rsp, trivial), pre.right.left), ⟨pre.right.right, inreg⟩⟩⟩⟩);
+                let pushed = u.goes_pushes(live, env, tree2, saved)(e, t.index, Nil, λ i m => ⟨inside_saved(i, m), args.union_right(saved, i, m)⟩,
+                    omega(room8), refl, w_pu, wto);
+                t.goes_weaken(prog_len(e), tree2,
+                    λ (s: MachineState<X86Memory(t.r.profile)>) => u.Held(live, env, s.gprs, s.memory) ∧
+                        ((read_gpr(Rsp, s.gprs) = t.stack.at(t.index)) ∧ t.FramesAt(s.memory, env.words_at(Nil), t.index)),
+                    λ (s: MachineState<X86Memory(t.r.profile)>) => u.Held(live, env, s.gprs, s.memory) ∧ (read_gpr(Rsp, s.gprs) = t.frame()),
+                    pushed, λ s pre => ⟨pre.left, ⟨pre.right, trivial⟩⟩)
+            };
+            t.goes_call_enter(live, env, p, w_e, w_dl.witness, dp, Block([]), w_dl.proof, tree2,
+                λ zero => absurd(trans(sym(room), zero)), enter)(s0, here0, resident0, held0)
+        };
+        j(sym(src.performs_found(call, n, d, index, proc, found_src, args, results, env)),
+            λ tr _ => t.At(prog_len(p), live, ITree::bind(Events::linux(), tr, k), env),
+            t.site().goes_same(t.io(), prog_len(p), tree, tree2, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), same, main))
+    }
+}
+
+// Every call at depth `d` runs as the call, by induction on the depth.
+theorem Source::calls_at(self src: Source, call: Answers(), n: Nat, d: Nat):
+    (t: Target) → t.procedures = src.procedures → t.Hosts() → t.room = d → t.Calls(call, src.performs(call, n, d)) {
+    match d {
+        Zero => λ t tp hosts room => t.perform_deep(src, call, n, room, hosts),
+        Succ(d1) => λ t tp hosts room => t.perform_call(src, call, n, d1, room, tp, hosts, src.calls_at(call, n, d1)),
+    }
+}
+
+// A source with procedures: `main` from past their labels, every call by
+// the depth (`Source::calls_at`).
+theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
+    allocated: src.allocation_ok(homes).IsTrue(), compiled: src.compile_calls(r.low, homes) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
+    here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
+    zero: r.Holds(λ _ => zero_byte(), s.memory),
+    stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
+    stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(r.profile.linux(), src.denote(args), s) {
+    let call = program_eval(src.functions);
+    let layout = src.layout(r.low, homes);
+    let entry = src.entry(r.low, homes);
+    let ok = src.allocation_sound(homes, allocated);
+    let ok2 = ok.right;
+    let built = src.calls_built(r.low, homes, program, compiled);
+    let c = built.witness;
+    let emitted = built.proof.left;
+    let w_whole = built.proof.right.left;
+    let framed: (stack.size + 8 * 0 <= stack.size) = omega();
+    let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.proof.right.right.right.right, args,
+        src.procedures, stack, stack_writes, stack_above, stack_canonical, stack.size, [], src.depth, framed, deep);
+    let hosts: t.Hosts() = ⟨built.proof.right.right.left, built.proof.right.right.right.left⟩;
+    let once: (src.depth * 1 <= src.depth * (8 * (src.words + 1))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 1), omega());
+    let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
+    let live = src.main.live_in(homes, []);
+    let saved = Start.saves_rsp(layout, src.depth);
+    let w_c: c.prog.Within(program) = c.prog.within_trans(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
+        program, Exists(2, refl), w_whole);
+    let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, n, src.depth, t, refl, hosts, refl),
+        entry, [], layout.deep_label(), c, emitted, w_c, ok2.right);
+    let w_entry = entry.within_trans(c.prog, program, src.main.emit_extends(layout, entry, [], layout.deep_label(), c, emitted), w_c);
+    let w_saved = saved.within_trans(entry, program, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
+    let caps = λ (k: Nat) => {
+        let shifted: (0 + k = k) = omega();
+        cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)
+    };
+    let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
+        sim_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
+    let after = λ (end: Env) => t.goes_finish(c.prog, w_whole, Ret(BitVec::zero()),
+        λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
+        λ u at exited => sim_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
+    let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
+    λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
+        t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
+            runs(n)(n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
+        s, here, resident, ⟨zero, ⟨argv, sym(top)⟩⟩)
+}
+
+// The compiled program, from its first byte with its code resident, its
+// region zero, a stack above the region whose top is RSP and deep enough
+// for the source's calls, and the command line `args` at RSP above the
+// stack, simulates the source run with `args` at every fuel, whatever homes
+// the compile was given: it checked them (`Source::allocation_ok`).
+theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
+    compiled: src.compile(r.low, homes) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
+    here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
+    zero: r.Holds(λ _ => zero_byte(), s.memory),
+    stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
+    stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(r.profile.linux(), src.denote(args), s) {
+    let bare: Option<Prog> = match src.main.emit(src.entry(r.low, homes), src.layout(r.low, homes), [], 0) { None => None, Some(c) => c.prog.finish() };
+    (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {
+            False => None,
+            True => match src.procedures { Nil => bare, Cons(_, _) => src.compile_calls(r.low, homes) },
+        }) = Some(program) → SimProgram(r.profile.linux(), src.denote(args), s) {
+        False => λ _ none => absurd(none),
+        True => λ allocated => (match src.procedures as λ ps => src.procedures = ps →
+                (match ps { Nil => bare, Cons(_, _) => src.compile_calls(r.low, homes) }) = Some(program) → SimProgram(r.profile.linux(), src.denote(args), s) {
+            Nil => λ none _ => native_compile_correct_bare(src, r, homes, fits, program, compiled, none, origin, s, here, resident, zero,
+                stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
+            Cons(_, _) => λ _ calls => native_compile_correct_calls(src, r, homes, fits, program, j(sym(allocated), λ v _ => v.IsTrue(), trivial), calls,
+                origin, s, here, resident, zero, stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
+        })(refl),
+    })(refl, compiled)
 }
