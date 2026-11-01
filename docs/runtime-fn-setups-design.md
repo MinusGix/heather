@@ -1,6 +1,6 @@
 # `runtime fn` setups: what a setup is, what it checks, how it is proved once, how it lowers
 
-Status: **decided 2026-10-31 (§14, as recommended); R5a built 2026-11-01.**
+Status: **decided 2026-10-31 (§14, as recommended); R5a built 2026-11-01; R5b's V6 2026-11-01.**
 Round R4 of `docs/compiler-milestones-proposal.md` (issue
 `runtime-fn-setups-design`, milestone `nh-front`). Written on master
 `f9a1a59`. R5a (§13) built `rt`, its meaning, the host requests and the
@@ -722,6 +722,12 @@ V2, V4 and V5 hold, every pin by `refl`; V3 holds for `foldl` and, for
 `decreases`, up to the generated unfolding equation (§16.3). V6 moves to R5b,
 where the lowering it fixes the invariant of is designed.
 
+*Results (R5b, 2026-11-01; `lib/_tests/native/runtime/rt_lower_tests.hthr`):*
+V6 holds. The `Add` and `If` cases (with variables and `Let`, which every
+program has) are proved once by induction over `Tm` (`Tm::lower_sound`,
+§16.5). V3's measured pin now reaches the function, because `count_down_unfold`
+exists (§16.3).
+
 ---
 
 ## 13. Rounds and issues
@@ -856,7 +862,9 @@ connectives, records, `foldl` and convoys, and a wrong reflection is refused
   (`docs/decreases-unfolding-design.md`): the measured pin is
   `refl` composed with that theorem, still generated, never hand-written.
   For a body whose test is a `match h:`, which is every native loop,
-  `f_unfold` is refused today: `issues/decreases-unfold-convoy-scrutinee.md`.
+  `f_unfold` was refused at first. R5b fixed it
+  (`issues/decreases-unfold-convoy-scrutinee.md`), and
+  `count_down_reflects` is that composition.
   The lowering of a measured function consumes `f_unfold` and the
   obligations (`f#obl_N`) as its evidence, in R5b.
 
@@ -879,4 +887,42 @@ connectives, records, `foldl` and convoys, and a wrong reflection is refused
   that issue is fixed.
 - `Bytes(cap)`'s capacity is not in the type: the reflector writes
   `Bytes(0)` and the capacity becomes a setup choice (a generator argument).
+
+### 16.5 V6: the lowering's invariant (R5b, 2026-11-01)
+
+`lib/native/runtime/rt_lower.hthr` lowers a term, in a context of one port
+per variable and from a fresh id `next`, to a structured region, the port that
+holds its value, and the next fresh id. `Tm::lower_sound` states what every
+case owes. Its premises: the environment holds (each port holds its
+variable's encoding, a word at its width and a bit as `ofBool`) and every port
+is below `next`. Its conclusion: after `StructuredRegion::eval`, `next` has
+grown, every id below the old `next` is kept, and the result port holds the
+encoded `Tm::sem`. The theorem is stated over the total evaluator, so
+FunctionIR's `program_eval_computes` carries it to the relational semantics
+the back half consumes. What V6 settled:
+
+- **The lowering decides what the meaning casts.** Wherever the meaning reads
+  a value at another code, the lowering asks `Ty::check` for the equation and
+  refuses without it, and the proof carries the encoding along that equation
+  (`Ty::cast_holds`). So `sound` has no `judge(p) = Ok` hypothesis. An accepted
+  lowering is typed, and `judge` (§5) only reports reasons. The record in §2.1
+  keeps its shape, with the hypothesis unused.
+- **`Keeps` makes it compose.** A `Let` body reads its context after the bound
+  term's region ran, and the two arms of a branch start from the same
+  valuation. The first arm's fresh ids sit below the second's, and both move
+  their result to one port above both.
+- **The chain is one `Option::and_then` per check**, each continuation a named
+  function where it is not recursive. The proof walks the same chain with
+  `Option::and_then_elim`, which hands each step its equation (`port_at(…) =
+  Some(p)`, `Ty::at(g, a) = Word(w)`). The match compiler never has to see
+  inside `Tm::lower`.
+- **Per program nothing is proved.** `pick_agrees` and `twice_agrees`
+  instantiate the theorem at an evaluated lowering, and the meaning lands on
+  the Heather function by conversion. A wrong claim and an `Add` lowered to a
+  `Sub` node are both refused.
+
+The cases to come are the remaining primitives, `Lit`, `IfEq`, records, calls
+and `Fold` (§6.3's table). After them comes the `Fun` wrapper, which binds
+parameters with `Valuation::bind` and reads the result with `Function::eval`.
+That wrapper is §6.1's `Agrees`.
 
