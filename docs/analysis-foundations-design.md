@@ -601,6 +601,12 @@ commutative ring (no division):
   it is a finite-sum identity. The continuous Taylor theorem is its scaling
   limit, and that is the right way round to think about it.
 
+Built in `lib/std/algebra/difference.hthr`. One lemma carries Pascal's rule
+through a weighted sum (`Semiring::pascal_range`), and the binomial
+theorem, Newton's formula and layer B's Leibniz rule are each that lemma
+and an induction. A power is spelled as the product of its copies,
+`∏ j < n, r`, so `ring` reads its induction step.
+
 ## 5. Layer B: Hurwitz series and jets
 
 This is the representation of §3.4, made concrete. A series over a
@@ -669,6 +675,13 @@ holds up to `o(h)`, which is the definition of differentiability in §7.
   while the reasoning representation is `Hurwitz<A>`, and the truncation
   homomorphism links the two. A coefficient checked "by `refl`" is a jet
   computation.
+
+**As built** (`lib/std/algebra/hurwitz.hthr`), the ring laws of the
+product are coinductive rather than combinatorial. Each holds at the head by
+`ring` at the coefficients, and the Leibniz rule turns the law at index
+`n + 1` into the same law at index `n` for the derivatives, so one induction
+on the index, over all series at once, proves commutativity, associativity
+and the unit law. No multinomial identity is needed for associativity.
 
 **Several variables are iterated series.** `Hurwitz<A>` is generic over a
 commutative ring at its relation, so `Hurwitz<Hurwitz<Rat>>` is series in

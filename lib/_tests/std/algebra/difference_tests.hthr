@@ -1,0 +1,92 @@
+// Probes of `lib/std/algebra/difference.hthr` (issues/finite-difference-calculus.md):
+// the difference calculus at `Nat`, `Int` and `Rat`, at open sequences and
+// at closed ones, with negative controls. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import list; import relation;
+import relation_props; import algebra_rel; import semiring; import ordered_field;
+import big_operator; import difference; import rat; import creal;
+import omega; import ring; import tactic;
+
+// Binomial coefficients compute, and vanish past the top.
+theorem choose_five_two(): Nat::choose(5, 2) = 10 { refl }
+theorem choose_past(): Nat::choose(3, 5) = 0 { refl }
+theorem choose_row(): ∑ i < 5, Nat::choose(4, i) = 16 { refl }
+
+// The binomial theorem, proved once at a commutative semiring, at the three
+// carriers: open at `Nat` and `Int` (`=`), open at `Rat` (`≈`), and closed.
+theorem nat_binomial(a, b, n: Nat):
+    ∏ k < n, (a + b) = ∑ i < Succ(n), Semiring::of_nat<Nat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
+{ CommSemiring::binomial(a, b, n) }
+theorem int_binomial(a, b: Int, n: Nat):
+    ∏ k < n, (a + b) = ∑ i < Succ(n), Semiring::of_nat<Int>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
+{ CommSemiring::binomial(a, b, n) }
+theorem rat_binomial(a, b: Rat, n: Nat):
+    ∏ k < n, (a + b) ≈ ∑ i < Succ(n), Semiring::of_nat<Rat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b)
+{ CommSemiring::binomial(a, b, n) }
+theorem nat_binomial_closed(): ∏ k < 4, (2 + 3) = ∑ i < 5, Nat::choose(4, i) * (Nat::pow(2, i) * Nat::pow(3, 4 - i)) { refl }
+// The freshman's dream is false: the coefficients are needed.
+theorem not_freshman(): ¬((a, b: Nat) → ∏ k < 2, (a + b) = (∏ k < 2, a) + ∏ k < 2, b) { λ h => absurd(h(1, 1)) }
+
+// Vandermonde, open and closed.
+theorem vandermonde_open(a, b, n: Nat): ∑ i < Succ(n), a.choose(i) * b.choose(n - i) = (a + b).choose(n) { Nat::vandermonde(a, b, n) }
+theorem vandermonde_closed(): ∑ i < 3, Nat::choose(3, i) * Nat::choose(4, 2 - i) = 21 { refl }
+
+// Telescoping at an open sequence of integers, and its order form at `Rat`.
+theorem int_telescope(n: Nat, f: Nat → Int): ∑ k < n, GroupRel::delta(≈, +, f, k) = f(n) + Int::neg(f(0)) {
+    GroupRel::telescope(≈, +, n, f)
+}
+theorem rat_mean_value(n: Nat, f, g: Nat → Rat, h: (k: Nat) → Nat::Lt(k, n) → GroupRel::delta(≈, +, f, k) <= g(k)):
+    f(n) + Rat::neg(f(0)) <= ∑ k < n, g(k)
+{ LocatedAddGroup::telescope_le(n, f, g, h) }
+// Closed: the differences of the squares are the odd numbers.
+fn sq(k: Nat) → Int { OfNat(k * k) }
+theorem odd_differences(): ∑ k < 5, GroupRel::delta(≈, +, sq, k) = OfNat(25) { refl }
+
+// The geometric sum at `Int` and at `Rat`, and closed at `r = 2`.
+theorem int_geometric(r: Int, n: Nat): (OfNat(1) + Int::neg(r)) * ∑ k < n, ∏ j < k, r = OfNat(1) + Int::neg(∏ j < n, r) {
+    CommRing::geometric(r, n)
+}
+theorem rat_geometric(r: Rat, n: Nat): (1 + Rat::neg(r)) * ∑ k < n, ∏ j < k, r ≈ 1 + Rat::neg(∏ j < n, r) {
+    CommRing::geometric(r, n)
+}
+theorem geometric_closed(): ∑ k < 5, ∏ j < k, OfNat(2) = OfNat(31) { refl }
+
+// Summation by parts at `Rat`.
+theorem rat_by_parts(n: Nat, f, g: Nat → Rat):
+    ∑ k < n, f(k) * GroupRel::delta(≈, +, g, k)
+        ≈ (f(n) * g(n) + Rat::neg(f(0) * g(0))) + Rat::neg(∑ k < n, GroupRel::delta(≈, +, f, k) * g(Succ(k)))
+{ CommRing::sum_by_parts(n, f, g) }
+
+// The power sums at `Int`, open, and their closed instances.
+theorem int_sum_id(n: Nat): Ring::nat_cast<Int>(2) * ∑ k < n, Ring::nat_cast<Int>(k)
+    = Ring::nat_cast<Int>(n) * (Ring::nat_cast<Int>(n) + Int::neg(OfNat(1)))
+{ CommRing::sum_id<Int>(n) }
+theorem int_sum_squares(n: Nat): Ring::nat_cast<Int>(6) * ∑ k < n, Ring::nat_cast<Int>(k) * Ring::nat_cast<Int>(k)
+    = Ring::nat_cast<Int>(n) * (Ring::nat_cast<Int>(n) + Int::neg(OfNat(1))) * (Ring::nat_cast<Int>(n) + Ring::nat_cast<Int>(n) + Int::neg(OfNat(1)))
+{ CommRing::sum_squares<Int>(n) }
+theorem squares_closed(): ∑ k < 5, k * k = 30 { refl }
+// A falling factorial at a closed point, and the difference law at one.
+theorem falling_closed(): Ring::falling(OfNat(5), 3) = OfNat(60) { refl }
+theorem delta_falling_closed(): GroupRel::delta(≈, +, λ i => Ring::falling(Ring::nat_cast<Int>(i), 3), 4) = OfNat(3) * Ring::falling(OfNat(4), 2) { refl }
+
+// Newton's formula at an open sequence of rationals, and at a closed one:
+// the cubes are recovered from their differences at zero.
+theorem rat_newton(n: Nat, f: Nat → Rat): f(n) ≈ ∑ k < Succ(n), Semiring::of_nat<Rat>(n.choose(k)) * GroupRel::delta_pow(≈, +, k, f, 0) {
+    CommRing::newton(n, f)
+}
+fn cube(k: Nat) → Int { OfNat(k * k * k) }
+theorem cube_differences(): GroupRel::delta_pow(≈, +, 3, cube, 0) = OfNat(6) { refl }
+theorem cube_newton(): ∑ k < 5, Semiring::of_nat<Int>(Nat::choose(4, k)) * GroupRel::delta_pow(≈, +, k, cube, 0) = OfNat(64) { refl }
+// The fourth difference of a cube is zero; a negative control, it is not one.
+theorem cube_fourth(): GroupRel::delta_pow(≈, +, 4, cube, 0) = OfNat(0) { refl }
+theorem cube_fourth_not_one(): ¬(GroupRel::delta_pow(≈, +, 4, cube, 0) = OfNat(1)) { λ h => omega(trans(sym(h), cube_fourth())) }
+
+// The geometric bound at `Rat`, at the ratio one half.
+theorem rat_geometric_le(x: Nat → Rat, n: Nat, step: (k: Nat) → Nat::Le(n, k) → x(Succ(k)) <= x(k) * Rat::inv_succ(1), j: Nat):
+    x(n + j) <= x(n) * ∏ i < j, Rat::inv_succ(1)
+{ OrderedField::geometric_le(x, Rat::inv_succ(1), n, Rat::le_of_lt(Rat::inv_succ_pos(1)), step, j) }
+
+// The residual check of issues/analysis-vertical-slice.md step 1, with the
+// denominators cleared: for `y = 8 - 4ε + ε²`, `y·y + 8·ε·y - 64` is `ε⁴`
+// (so the slice's `F(x₂, ε) ≈ ε⁴/64`), by `ring` at `CReal`.
+theorem slice_residual(e, y: CReal, hy: y ≈ 8 - 4 * e + e * e): y * y + 8 * e * y - 64 ≈ e * e * e * e { ring(hy) }

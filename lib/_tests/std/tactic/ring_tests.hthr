@@ -141,7 +141,12 @@ theorem class_hyp_product(x, y: K, h: x * y ≈ K.multiplicative.unit): x * (y *
 theorem class_not_identity(x, y: K): (x + y) * (x + y) ≈ x * x + y * y { ring }
 }
 
-// A commutative ring is enough for `ring`.
+// A commutative ring is enough for `ring`. The ring's own naturals at a
+// numeral (`Ring::nat_cast<R>(2)`) are its constants.
 section<R: CommRing(≈, +, *)> {
 theorem comm_ring_class(x, y: R): x * y + y * x ≈ y * (x + x) { ring }
+theorem class_nat_cast(x: R): Ring::nat_cast<R>(2) * x ≈ x + x { ring }
+theorem class_nat_cast_zero(x: R): Ring::nat_cast<R>(0) * x + x ≈ x { ring }
+// expect-error: differ by
+theorem class_nat_cast_wrong(x: R): Ring::nat_cast<R>(3) * x ≈ x + x { ring }
 }

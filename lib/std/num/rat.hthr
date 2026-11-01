@@ -2136,6 +2136,18 @@ theorem Rat::range_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → k < n → 0 <=
     LocatedAddGroup::range_nonneg(n, f, h)
 }
 
+// `2^-j`, written `1/(ones(j) + 1)`, is the `j`-th power of a half.
+theorem Rat::half_pow(j: Nat): ∏ i < j, Rat::inv_succ(1) ≈ Rat::inv_succ(j.ones()) {
+    match j {
+        Zero => Rat::same_refl(1),
+        Succ(i) => calc {
+            (∏ k < i, Rat::inv_succ(1)) * Rat::inv_succ(1)
+                ≈ Rat::inv_succ(i.ones()) * Rat::inv_succ(1) := Rat::mul_respects(Rat::half_pow(i), Rat::inv_succ(1).same_refl()),
+                ≈ Rat::inv_succ(Succ(i).ones()) := Rat::inv_succ_mul(i.ones(), 1),
+        },
+    }
+}
+
 // Products distribute over differences.
 theorem Rat::sub_mul(self a, b, c: Rat): (a - b) * c ≈ a * c - b * c { ring }
 

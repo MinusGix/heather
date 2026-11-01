@@ -1,0 +1,584 @@
+// The difference calculus: the exact discrete calculus of sequences
+// `Nat → A` (issues/finite-difference-calculus.md;
+// docs/analysis-foundations-design.md §4, layer A′).
+//
+// The forward difference `Δf(k) = f(k+1) - f(k)` (`GroupRel::delta`) is to
+// a sequence what the derivative is to a function, and its laws are the
+// calculus's with no limit taken and no remainder left:
+//
+// - the fundamental theorem is telescoping, `∑_{k<n} Δf(k) ≈ f(n) - f(0)`
+//   (`GroupRel::telescope`), at any abelian group, with its order form
+//   (`LocatedAddGroup::telescope_le`: `Δf ≤ g` gives `f(n) - f(0) ≤ ∑ g`),
+//   the discrete mean value inequality;
+// - the product rule is summation by parts (`CommRing::sum_by_parts`);
+// - the monomials of `Δ` are the falling factorials
+//   `x^{\underline m} = x (x-1) ⋯ (x-m+1)` (`Ring::falling`), with
+//   `Δ k^{\underline{m+1}} = (m+1) k^{\underline m}`, so their sums are
+//   closed forms (`Ring::falling_sum`);
+// - the geometric sum, multiplied out, `(1 - r) ∑_{k<n} r^k ≈ 1 - r^n`
+//   (`CommRing::geometric`);
+// - Taylor's theorem is Newton's forward-difference formula,
+//   `f(n) ≈ ∑_{k≤n} C(n,k) Δ^k f(0)` (`CommRing::newton`): exact, a
+//   finite-sum identity.
+//
+// Binomial coefficients enter a semiring through `Semiring::of_nat`, the
+// sum of `n` ones, which every semiring has (`Ring::of_nat_cast` agrees with
+// a ring's `nat_cast`). One lemma carries Pascal's rule through a sum
+// (`Semiring::pascal_range`); the binomial theorem (`CommSemiring::binomial`),
+// Newton's formula and the Leibniz rule of Hurwitz series
+// (`hurwitz::Hurwitz::leibniz`) are each that lemma and an induction.
+// Vandermonde's identity is `Nat::vandermonde`.
+//
+// Spelling. A power is the product of its copies, `∏ j < n, r`: `ring`
+// reads its successor step as one more factor, as it reads a sum's
+// (crates/elab/src/range_sum.rs), so a proof by induction over powers is
+// `ring` and the hypothesis. Negation is the additive group's `A.inv`.
+
+import logic;
+import nat;
+import int;
+import omega;
+import list;
+import relation;
+import relation_props;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import big_operator;
+import ring;
+import tactic;
+
+// ---------------------------------------------------------------------------
+// At an abelian group: the difference and telescoping.
+
+section<A: GroupRel(same, add) + Commutative(same, add)>(same as ≈: A → A → Type, add as +: A → A → A) {
+
+fn GroupRel::delta(f: Nat → A, k: Nat) → A { f(Succ(k)) + A.inv(f(k)) }
+
+// The `m`-th difference, `Δ^m f`: the next one is the difference of the
+// difference, so `Δ^{m+1} f = Δ^m (Δ f)` holds by computation.
+fn GroupRel::delta_pow(m: Nat, f: Nat → A) → Nat → A {
+    match m { Zero => f, Succ(j) => GroupRel::delta_pow(same, add, j, λ k => GroupRel::delta(same, add, f, k)) }
+}
+
+// `(a - b) + (c - a) ≈ c - b`, the step of every telescoping sum.
+theorem GroupRel::sub_add_sub(a, b, c: A): (a + A.inv(b)) + (c + A.inv(a)) ≈ c + A.inv(b) {
+    calc {
+        (a + A.inv(b)) + (c + A.inv(a))
+            ≈ (c + A.inv(a)) + (a + A.inv(b)) := A.comm(a + A.inv(b), c + A.inv(a)),
+            ≈ c + (A.inv(a) + (a + A.inv(b))) := A.assoc(c, A.inv(a), a + A.inv(b)),
+            ≈ c + ((A.inv(a) + a) + A.inv(b)) := rel_cong(A.rel_sym((A.inv(a) + a) + A.inv(b), A.inv(a) + (a + A.inv(b)), A.assoc(A.inv(a), a, A.inv(b)))),
+            ≈ c + (A.unit + A.inv(b)) := rel_cong(A.inv_l(a)),
+            ≈ c + A.inv(b) := rel_cong(A.unit_l(A.inv(b))),
+    }
+}
+
+// The fundamental theorem of the difference calculus.
+theorem GroupRel::telescope(n: Nat, f: Nat → A):
+    MonoidRel::range(add, n, λ k => GroupRel::delta(same, add, f, k)) ≈ f(n) + A.inv(f(0))
+{
+    match n {
+        Zero => A.rel_sym(f(0) + A.inv(f(0)), A.unit, A.inv_r(f(0))),
+        Succ(m) => calc {
+            MonoidRel::range(add, m, λ k => GroupRel::delta(same, add, f, k)) + GroupRel::delta(same, add, f, m)
+                ≈ (f(m) + A.inv(f(0))) + GroupRel::delta(same, add, f, m) := rel_cong(GroupRel::telescope(same, add, m, f)),
+                ≈ f(Succ(m)) + A.inv(f(0)) := GroupRel::sub_add_sub(same, add, f(m), f(0), f(Succ(m))),
+        },
+    }
+}
+
+}
+
+// The order form, the discrete mean value inequality: differences bounded
+// termwise bound the total change by their sum.
+section<A: LocatedAddGroup(≈, <, <=, +)> {
+
+theorem LocatedAddGroup::telescope_le(n: Nat, f, g: Nat → A):
+    ((k: Nat) → Nat::Lt(k, n) → GroupRel::delta(≈, +, f, k) <= g(k)) → f(n) + A.inv(f(0)) <= MonoidRel::range(+, n, g)
+{
+    λ h => StrictOrder::le_respects(MonoidRel::range(+, n, λ k => GroupRel::delta(≈, +, f, k)), f(n) + A.inv(f(0)),
+        MonoidRel::range(+, n, g), MonoidRel::range(+, n, g),
+        GroupRel::telescope(≈, +, n, f), A.rel_refl(MonoidRel::range(+, n, g)),
+        LocatedAddGroup::range_le(n, λ k => GroupRel::delta(≈, +, f, k), g, h))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// At a semiring: the naturals, and Pascal's rule through a sum.
+
+section<A: Semiring(≈, +, *)> {
+
+// `n` as the sum of `n` ones.
+fn Semiring::of_nat(n: Nat) → A { ∑ k < n, A.multiplicative.unit }
+
+theorem Semiring::of_nat_add(a, b: Nat): Semiring::of_nat<A>(Nat::add(a, b)) ≈ Semiring::of_nat<A>(a) + Semiring::of_nat<A>(b) {
+    MonoidRel::range_add(+, a, b, λ k => A.multiplicative.unit)
+}
+
+theorem Semiring::of_nat_one(): Semiring::of_nat<A>(1) ≈ A.multiplicative.unit {
+    MonoidRel::range_one(+, λ k => A.multiplicative.unit)
+}
+
+theorem Semiring::of_nat_one_mul(x: A): Semiring::of_nat<A>(1) * x ≈ x {
+    A.rel_trans(Semiring::of_nat<A>(1) * x, A.multiplicative.unit * x, x,
+        rel_cong(Semiring::of_nat_one<A>()), A.multiplicative.unit_l(x))
+}
+
+theorem Semiring::of_nat_zero_mul(x: A): Semiring::of_nat<A>(0) * x ≈ A.unit { A.zero_mul(x) }
+
+theorem Semiring::of_nat_add_mul(a, b: Nat, x: A):
+    Semiring::of_nat<A>(Nat::add(a, b)) * x ≈ Semiring::of_nat<A>(a) * x + Semiring::of_nat<A>(b) * x
+{
+    A.rel_trans(Semiring::of_nat<A>(Nat::add(a, b)) * x, (Semiring::of_nat<A>(a) + Semiring::of_nat<A>(b)) * x,
+        Semiring::of_nat<A>(a) * x + Semiring::of_nat<A>(b) * x,
+        rel_cong(Semiring::of_nat_add<A>(a, b)), A.distrib_r(Semiring::of_nat<A>(a), Semiring::of_nat<A>(b), x))
+}
+
+// `x + (y + z) ≈ y + (x + z)`.
+theorem Semiring::add_left_comm(x, y, z: A): x + (y + z) ≈ y + (x + z) {
+    calc {
+        x + (y + z)
+            ≈ (x + y) + z := A.rel_sym((x + y) + z, x + (y + z), A.assoc(x, y, z)),
+            ≈ (y + x) + z := rel_cong(A.comm(x, y)),
+            ≈ y + (x + z) := A.assoc(y, x, z),
+    }
+}
+
+// Pascal's rule summed: a range of `C(n+1, i)`-weighted terms is the range
+// of `C(n, i)`-weighted terms shifted by one plus the unshifted one. With
+// `H(i) = a^i b^{n+1-i}` it is the binomial theorem's step, with
+// `H(i) = Δ^i f(0)` Newton's, with `H(i) = f_i g_{n+1-i}` the Leibniz rule.
+theorem Semiring::pascal_range(n, N: Nat, h: Nat → A):
+    ∑ i < Succ(N), Semiring::of_nat<A>(Succ(n).choose(i)) * h(i)
+        ≈ (∑ i < N, Semiring::of_nat<A>(n.choose(i)) * h(Succ(i))) + ∑ i < Succ(N), Semiring::of_nat<A>(n.choose(i)) * h(i)
+{
+    let q = ∑ i < N, Semiring::of_nat<A>(n.choose(i)) * h(Succ(i));
+    let r = ∑ i < N, Semiring::of_nat<A>(n.choose(Succ(i))) * h(Succ(i));
+    let head: (Semiring::of_nat<A>(n.choose(0)) * h(0) ≈ h(0)) =
+        j(sym(n.choose_zero_r()), λ w _ => Semiring::of_nat<A>(w) * h(0) ≈ h(0), Semiring::of_nat_one_mul(h(0)));
+    let halves: ((∑ i < N, (Semiring::of_nat<A>(n.choose(i)) * h(Succ(i)) + Semiring::of_nat<A>(n.choose(Succ(i))) * h(Succ(i)))) ≈ q + r) =
+        CommMonoidRel::range_op(≈, +, N, λ i => Semiring::of_nat<A>(n.choose(i)) * h(Succ(i)),
+            λ i => Semiring::of_nat<A>(n.choose(Succ(i))) * h(Succ(i)));
+    let top: (Semiring::of_nat<A>(Succ(n).choose(0)) * h(0) ≈ h(0)) = Semiring::of_nat_one_mul(h(0));
+    calc {
+        ∑ i < Succ(N), Semiring::of_nat<A>(Succ(n).choose(i)) * h(i)
+            ≈ Semiring::of_nat<A>(Succ(n).choose(0)) * h(0) + ∑ i < N, Semiring::of_nat<A>(Succ(n).choose(Succ(i))) * h(Succ(i))
+                := MonoidRel::range_succ_l(+, N, λ i => Semiring::of_nat<A>(Succ(n).choose(i)) * h(i)),
+            ≈ h(0) + ∑ i < N, Semiring::of_nat<A>(Succ(n).choose(Succ(i))) * h(Succ(i)) := rel_cong(top),
+            ≈ h(0) + ∑ i < N, (Semiring::of_nat<A>(n.choose(i)) * h(Succ(i)) + Semiring::of_nat<A>(n.choose(Succ(i))) * h(Succ(i)))
+                := rel_cong(MonoidRel::range_cong(+, N, λ i => Semiring::of_nat<A>(Succ(n).choose(Succ(i))) * h(Succ(i)),
+                    λ i => Semiring::of_nat<A>(n.choose(i)) * h(Succ(i)) + Semiring::of_nat<A>(n.choose(Succ(i))) * h(Succ(i)),
+                    λ i _ => Semiring::of_nat_add_mul(n.choose(i), n.choose(Succ(i)), h(Succ(i))))),
+            ≈ h(0) + (q + r)
+:= rel_cong(halves),
+            ≈ q + (h(0) + r) := Semiring::add_left_comm(h(0), q, r),
+            ≈ q + (Semiring::of_nat<A>(n.choose(0)) * h(0) + r) := rel_cong(A.rel_sym(Semiring::of_nat<A>(n.choose(0)) * h(0), h(0), head)),
+            ≈ q + ∑ i < Succ(N), Semiring::of_nat<A>(n.choose(i)) * h(i)
+                := rel_cong(A.rel_sym(∑ i < Succ(N), Semiring::of_nat<A>(n.choose(i)) * h(i), Semiring::of_nat<A>(n.choose(0)) * h(0) + r,
+                    MonoidRel::range_succ_l(+, N, λ i => Semiring::of_nat<A>(n.choose(i)) * h(i)))),
+    }
+}
+
+// The square case, `N = n + 1`: the last unshifted term is `C(n, n+1) = 0`.
+theorem Semiring::pascal_step(n: Nat, h: Nat → A):
+    ∑ i < Succ(Succ(n)), Semiring::of_nat<A>(Succ(n).choose(i)) * h(i)
+        ≈ (∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(Succ(i))) + ∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(i)
+{
+    let q = ∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(Succ(i));
+    let x = ∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(i);
+    let past: (Semiring::of_nat<A>(n.choose(Succ(n))) * h(Succ(n)) ≈ A.unit) =
+        j(sym(n.choose_eq_zero(Succ(n), n.lt_succ_self())), λ w _ => Semiring::of_nat<A>(w) * h(Succ(n)) ≈ A.unit,
+            Semiring::of_nat_zero_mul(h(Succ(n))));
+    let pascal: (∑ i < Succ(Succ(n)), Semiring::of_nat<A>(Succ(n).choose(i)) * h(i)
+        ≈ q + (x + Semiring::of_nat<A>(n.choose(Succ(n))) * h(Succ(n)))) = Semiring::pascal_range(n, Succ(n), h);
+    calc {
+        ∑ i < Succ(Succ(n)), Semiring::of_nat<A>(Succ(n).choose(i)) * h(i)
+            ≈ q + (x + Semiring::of_nat<A>(n.choose(Succ(n))) * h(Succ(n))) := pascal,
+            ≈ q + (x + A.unit) := rel_cong(past),
+            ≈ q + x := rel_cong(A.unit_r(x)),
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// At a commutative semiring: the binomial theorem.
+
+section<A: CommSemiring(≈, +, *)> {
+
+// The two reshufflings of the binomial step: one more factor of `a` joins
+// `a^i`, one more of `b` joins `b^{n-i}`.
+theorem CommSemiring::mul_into_l(c, p, q, a: A): (c * (p * q)) * a ≈ c * ((p * a) * q) {
+    calc {
+        (c * (p * q)) * a
+            ≈ c * ((p * q) * a) := A.multiplicative.assoc(c, p * q, a),
+            ≈ c * (p * (q * a)) := rel_cong(A.multiplicative.assoc(p, q, a)),
+            ≈ c * (p * (a * q)) := rel_cong(A.commutative.comm(q, a)),
+            ≈ c * ((p * a) * q) := rel_cong(A.rel_sym((p * a) * q, p * (a * q), A.multiplicative.assoc(p, a, q))),
+    }
+}
+
+theorem CommSemiring::mul_into_r(c, p, q, b: A): (c * (p * q)) * b ≈ c * (p * (q * b)) {
+    calc {
+        (c * (p * q)) * b
+            ≈ c * ((p * q) * b) := A.multiplicative.assoc(c, p * q, b),
+            ≈ c * (p * (q * b)) := rel_cong(A.multiplicative.assoc(p, q, b)),
+    }
+}
+
+theorem CommSemiring::binomial_b_step(c, a, b: A, m, i: Nat, hi: i < Succ(m)):
+    (c * ((∏ k < i, a) * ∏ k < Nat::sub(m, i), b)) * b ≈ c * ((∏ k < i, a) * ∏ k < Nat::sub(Succ(m), i), b)
+{
+    let e: ((∏ k < Nat::sub(m, i), b) * b ≈ ∏ k < Nat::sub(Succ(m), i), b) =
+        MonoidRel::range_eq(*, Succ(Nat::sub(m, i)), Nat::sub(Succ(m), i), λ k => b,
+            omega(i.le_add(m, omega(hi)), i.le_add(Succ(m), omega(hi))));
+    A.rel_trans((c * ((∏ k < i, a) * ∏ k < Nat::sub(m, i), b)) * b, c * ((∏ k < i, a) * ((∏ k < Nat::sub(m, i), b) * b)),
+        c * ((∏ k < i, a) * ∏ k < Nat::sub(Succ(m), i), b),
+        CommSemiring::mul_into_r(c, ∏ k < i, a, ∏ k < Nat::sub(m, i), b, b), rel_cong(e))
+}
+
+// `(a + b)^n ≈ ∑_{i≤n} C(n,i) a^i b^{n-i}`.
+theorem CommSemiring::binomial(a, b: A, n: Nat):
+    ∏ k < n, (a + b) ≈ ∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * ((∏ k < i, a) * ∏ k < Nat::sub(n, i), b)
+{
+    match n {
+        Zero => {
+            let one = A.multiplicative.unit;
+            let only: (∑ i < 1, Semiring::of_nat<A>(Nat::choose(0, i)) * ((∏ k < i, a) * ∏ k < Nat::sub(0, i), b)
+                ≈ Semiring::of_nat<A>(1) * (one * one)) =
+                MonoidRel::range_one(+, λ i => Semiring::of_nat<A>(Nat::choose(0, i)) * ((∏ k < i, a) * ∏ k < Nat::sub(0, i), b));
+            A.rel_sym(∑ i < 1, Semiring::of_nat<A>(Nat::choose(0, i)) * ((∏ k < i, a) * ∏ k < Nat::sub(0, i), b), one, calc {
+                ∑ i < 1, Semiring::of_nat<A>(Nat::choose(0, i)) * ((∏ k < i, a) * ∏ k < Nat::sub(0, i), b)
+                    ≈ Semiring::of_nat<A>(1) * (one * one) := only,
+                    ≈ one * one := Semiring::of_nat_one_mul(one * one),
+                    ≈ one := A.multiplicative.unit_l(one),
+            })
+        },
+        Succ(m) => {
+            let c = λ (i: Nat) => Semiring::of_nat<A>(m.choose(i));
+            let t = λ (i: Nat) => (∏ k < i, a) * ∏ k < Nat::sub(m, i), b;
+            let h = λ (i: Nat) => (∏ k < i, a) * ∏ k < Nat::sub(Succ(m), i), b;
+            let s = ∑ i < Succ(m), c(i) * t(i);
+            let q = ∑ i < Succ(m), c(i) * h(Succ(i));
+            let x = ∑ i < Succ(m), c(i) * h(i);
+            let with_a: (s * a ≈ q) = A.rel_trans(s * a, ∑ i < Succ(m), (c(i) * t(i)) * a, q,
+                Semiring::range_mul_r(Succ(m), λ i => c(i) * t(i), a),
+                MonoidRel::range_cong(+, Succ(m), λ i => (c(i) * t(i)) * a, λ i => c(i) * h(Succ(i)),
+                    λ i _ => CommSemiring::mul_into_l(c(i), ∏ k < i, a, ∏ k < Nat::sub(m, i), b, a)));
+            let with_b: (s * b ≈ x) = A.rel_trans(s * b, ∑ i < Succ(m), (c(i) * t(i)) * b, x,
+                Semiring::range_mul_r(Succ(m), λ i => c(i) * t(i), b),
+                MonoidRel::range_cong(+, Succ(m), λ i => (c(i) * t(i)) * b, λ i => c(i) * h(i),
+                    λ i hi => CommSemiring::binomial_b_step(c(i), a, b, m, i, hi)));
+            let ih: (∏ k < m, (a + b) ≈ s) = CommSemiring::binomial(a, b, m);
+            let pascal: (∑ i < Succ(Succ(m)), Semiring::of_nat<A>(Succ(m).choose(i)) * h(i) ≈ q + x) =
+                Semiring::pascal_step(m, h);
+            calc {
+                (∏ k < m, (a + b)) * (a + b)
+                    ≈ s * (a + b) := rel_cong(ih),
+                    ≈ s * a + s * b := A.distrib_l(s, a, b),
+                    ≈ q + s * b := rel_cong(with_a),
+                    ≈ q + x := rel_cong(with_b),
+                    ≈ ∑ i < Succ(Succ(m)), Semiring::of_nat<A>(Succ(m).choose(i)) * h(i)
+                        := A.rel_sym(∑ i < Succ(Succ(m)), Semiring::of_nat<A>(Succ(m).choose(i)) * h(i), q + x, pascal),
+            }
+        },
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// At a ring: the semiring's naturals are the ring's.
+
+section<A: Ring(≈, +, *)> {
+
+theorem Ring::of_nat_cast(n: Nat): Semiring::of_nat<A>(n) ≈ Ring::nat_cast<A>(n) {
+    match n {
+        Zero => A.rel_refl(A.unit),
+        Succ(m) => calc {
+            Semiring::of_nat<A>(m) + A.multiplicative.unit
+                ≈ Ring::nat_cast<A>(m) + A.multiplicative.unit := rel_cong(Ring::of_nat_cast(m)),
+                ≈ Ring::nat_cast<A>(Succ(m))
+                    := A.rel_sym(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(m) + A.multiplicative.unit, Ring::nat_cast_succ<A>(m)),
+        },
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// At a commutative ring: summation by parts, the geometric sum, falling
+// factorials, Newton's formula.
+
+section<A: CommRing(≈, +, *)> {
+
+// `semiring`'s successor law, restated at this section's operations: the
+// ring's own, which `ring` reads as its atoms' operations, rather than the
+// projections of the `Ring` dictionary it was proved at.
+theorem CommRing::nat_cast_succ(n: Nat): Ring::nat_cast<A>(Succ(n)) ≈ Ring::nat_cast<A>(n) + A.multiplicative.unit {
+    Ring::nat_cast_succ<A>(n)
+}
+
+// Summation by parts (Abel): `∑ f·Δg ≈ [f g]_0^n - ∑ Δf·g(·+1)`, the
+// product rule `Δ(fg)(k) = f(k)·Δg(k) + Δf(k)·g(k+1)` telescoped.
+theorem CommRing::sum_by_parts(n: Nat, f, g: Nat → A):
+    ∑ k < n, f(k) * GroupRel::delta(≈, +, g, k)
+        ≈ (f(n) * g(n) + A.inv(f(0) * g(0))) + A.inv(∑ k < n, GroupRel::delta(≈, +, f, k) * g(Succ(k)))
+{
+    match n {
+        Zero => ring,
+        Succ(m) => {
+            let dg: (GroupRel::delta(≈, +, g, m) ≈ g(Succ(m)) + A.inv(g(m))) = A.rel_refl(g(Succ(m)) + A.inv(g(m)));
+            let df: (GroupRel::delta(≈, +, f, m) ≈ f(Succ(m)) + A.inv(f(m))) = A.rel_refl(f(Succ(m)) + A.inv(f(m)));
+            ring(CommRing::sum_by_parts(m, f, g), dg, df)
+        },
+    }
+}
+
+// The geometric sum, multiplied out: no division, so no apartness.
+theorem CommRing::geometric(r: A, n: Nat):
+    (A.multiplicative.unit + A.inv(r)) * ∑ k < n, ∏ j < k, r ≈ A.multiplicative.unit + A.inv(∏ j < n, r)
+{
+    match n {
+        Zero => ring,
+        Succ(m) => ring(CommRing::geometric(r, m)),
+    }
+}
+
+// The falling factorial `x^{\underline m} = x (x - 1) ⋯ (x - m + 1)`.
+fn Ring::falling(x: A, m: Nat) → A { ∏ j < m, x + A.inv(Ring::nat_cast<A>(j)) }
+
+theorem Ring::falling_cong(x, y: A, m: Nat, h: x ≈ y): Ring::falling(x, m) ≈ Ring::falling(y, m) {
+    MonoidRel::range_cong(*, m, λ j => x + A.inv(Ring::nat_cast<A>(j)), λ j => y + A.inv(Ring::nat_cast<A>(j)),
+        λ j _ => { let e: (x + A.inv(Ring::nat_cast<A>(j)) ≈ y + A.inv(Ring::nat_cast<A>(j))) = rel_cong(h); e })
+}
+
+// Peeling the first factor: `(x+1)^{\underline{m+1}} ≈ (x+1)·x^{\underline m}`.
+theorem Ring::falling_succ(x: A, m: Nat):
+    Ring::falling(x + A.multiplicative.unit, Succ(m)) ≈ (x + A.multiplicative.unit) * Ring::falling(x, m)
+{
+    let one = A.multiplicative.unit;
+    let peel: (Ring::falling(x + one, Succ(m)) ≈ ((x + one) + A.inv(A.unit)) * ∏ j < m, (x + one) + A.inv(Ring::nat_cast<A>(Succ(j)))) =
+        MonoidRel::range_succ_l(*, m, λ j => (x + one) + A.inv(Ring::nat_cast<A>(j)));
+    let shifted: (∏ j < m, (x + one) + A.inv(Ring::nat_cast<A>(Succ(j))) ≈ Ring::falling(x, m)) =
+        MonoidRel::range_cong(*, m, λ j => (x + one) + A.inv(Ring::nat_cast<A>(Succ(j))), λ j => x + A.inv(Ring::nat_cast<A>(j)),
+            λ j _ => { let e: ((x + one) + A.inv(Ring::nat_cast<A>(Succ(j))) ≈ x + A.inv(Ring::nat_cast<A>(j))) = ring(CommRing::nat_cast_succ<A>(j)); e });
+    let head: ((x + one) + A.inv(A.unit) ≈ x + one) = ring;
+    calc {
+        Ring::falling(x + one, Succ(m))
+            ≈ ((x + one) + A.inv(A.unit)) * ∏ j < m, (x + one) + A.inv(Ring::nat_cast<A>(Succ(j))) := peel,
+            ≈ (x + one) * ∏ j < m, (x + one) + A.inv(Ring::nat_cast<A>(Succ(j))) := rel_cong(head),
+            ≈ (x + one) * Ring::falling(x, m) := rel_cong(shifted),
+    }
+}
+
+// The falling factorials are the monomials of `Δ`:
+// `Δ k^{\underline{m+1}} ≈ (m+1)·k^{\underline m}`.
+theorem Ring::delta_falling(m, k: Nat):
+    GroupRel::delta(≈, +, λ i => Ring::falling(Ring::nat_cast<A>(i), Succ(m)), k)
+        ≈ Ring::nat_cast<A>(Succ(m)) * Ring::falling(Ring::nat_cast<A>(k), m)
+{
+    let one = A.multiplicative.unit;
+    let x = Ring::nat_cast<A>(k);
+    let up: (Ring::falling(Ring::nat_cast<A>(Succ(k)), Succ(m)) ≈ (x + one) * Ring::falling(x, m)) =
+        A.rel_trans(Ring::falling(Ring::nat_cast<A>(Succ(k)), Succ(m)), Ring::falling(x + one, Succ(m)), (x + one) * Ring::falling(x, m),
+            Ring::falling_cong(Ring::nat_cast<A>(Succ(k)), x + one, Succ(m), Ring::nat_cast_succ<A>(k)),
+            Ring::falling_succ(x, m));
+    let down: (Ring::falling(x, Succ(m)) ≈ Ring::falling(x, m) * (x + A.inv(Ring::nat_cast<A>(m)))) =
+        A.rel_refl(Ring::falling(x, Succ(m)));
+    let step: (GroupRel::delta(≈, +, λ i => Ring::falling(Ring::nat_cast<A>(i), Succ(m)), k)
+        ≈ Ring::falling(Ring::nat_cast<A>(Succ(k)), Succ(m)) + A.inv(Ring::falling(x, Succ(m)))) =
+        A.rel_refl(Ring::falling(Ring::nat_cast<A>(Succ(k)), Succ(m)) + A.inv(Ring::falling(x, Succ(m))));
+    ring(step, up, down, CommRing::nat_cast_succ<A>(m))
+}
+
+// A falling factorial vanishes at zero: its first factor is `0 - 0`.
+theorem Ring::falling_zero(m: Nat): Ring::falling(A.unit, Succ(m)) ≈ A.unit {
+    let peel: (Ring::falling(A.unit, Succ(m)) ≈ (A.unit + A.inv(A.unit)) * ∏ j < m, A.unit + A.inv(Ring::nat_cast<A>(Succ(j)))) =
+        MonoidRel::range_succ_l(*, m, λ j => A.unit + A.inv(Ring::nat_cast<A>(j)));
+    ring(peel)
+}
+
+// Sums of falling factorials in closed form:
+// `∑_{k<n} (m+1)·k^{\underline m} ≈ n^{\underline{m+1}}`.
+theorem Ring::falling_sum(n, m: Nat):
+    ∑ k < n, Ring::nat_cast<A>(Succ(m)) * Ring::falling(Ring::nat_cast<A>(k), m) ≈ Ring::falling(Ring::nat_cast<A>(n), Succ(m))
+{
+    let f = λ (i: Nat) => Ring::falling(Ring::nat_cast<A>(i), Succ(m));
+    let as_deltas: (∑ k < n, Ring::nat_cast<A>(Succ(m)) * Ring::falling(Ring::nat_cast<A>(k), m) ≈ ∑ k < n, GroupRel::delta(≈, +, f, k)) =
+        MonoidRel::range_cong(+, n, λ k => Ring::nat_cast<A>(Succ(m)) * Ring::falling(Ring::nat_cast<A>(k), m), λ k => GroupRel::delta(≈, +, f, k),
+            λ k _ => A.rel_sym(GroupRel::delta(≈, +, f, k), Ring::nat_cast<A>(Succ(m)) * Ring::falling(Ring::nat_cast<A>(k), m), Ring::delta_falling(m, k)));
+    let tele: (∑ k < n, GroupRel::delta(≈, +, f, k) ≈ Ring::falling(Ring::nat_cast<A>(n), Succ(m)) + A.inv(Ring::falling(A.unit, Succ(m)))) =
+        GroupRel::telescope(≈, +, n, f);
+    ring(as_deltas, tele, Ring::falling_zero<A>(m))
+}
+
+// The low falling factorials multiplied out.
+theorem Ring::falling_one(x: A): Ring::falling(x, 1) ≈ x {
+    let e: (Ring::falling(x, 1) ≈ A.multiplicative.unit * (x + A.inv(A.unit))) = A.rel_refl(Ring::falling(x, 1));
+    ring(e)
+}
+
+theorem Ring::falling_two(x: A): Ring::falling(x, 2) ≈ x * (x + A.inv(A.multiplicative.unit)) {
+    let e: (Ring::falling(x, 2) ≈ (A.multiplicative.unit * (x + A.inv(A.unit))) * (x + A.inv(A.multiplicative.unit))) =
+        A.rel_refl(Ring::falling(x, 2));
+    ring(e)
+}
+
+theorem Ring::falling_three(x: A):
+    Ring::falling(x, 3) ≈ x * (x + A.inv(A.multiplicative.unit)) * (x + A.inv(Ring::nat_cast<A>(2)))
+{
+    let e: (Ring::falling(x, 3) ≈ Ring::falling(x, 2) * (x + A.inv(Ring::nat_cast<A>(2)))) = A.rel_refl(Ring::falling(x, 3));
+    ring(e, Ring::falling_two(x))
+}
+
+// The power sums, multiplied out: `2 ∑_{k<n} k ≈ n (n - 1)` and
+// `6 ∑_{k<n} k² ≈ n (n - 1) (2n - 1)`, from `k = k^{\underline 1}` and
+// `k² = k^{\underline 2} + k^{\underline 1}`.
+theorem CommRing::sum_id(n: Nat):
+    Ring::nat_cast<A>(2) * ∑ k < n, Ring::nat_cast<A>(k) ≈ Ring::nat_cast<A>(n) * (Ring::nat_cast<A>(n) + A.inv(A.multiplicative.unit))
+{
+    let sums: (∑ k < n, Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1) ≈ Ring::falling(Ring::nat_cast<A>(n), 2)) = Ring::falling_sum(n, 1);
+    let terms: (∑ k < n, Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1) ≈ ∑ k < n, Ring::nat_cast<A>(2) * Ring::nat_cast<A>(k)) =
+        MonoidRel::range_cong(+, n, λ k => Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1), λ k => Ring::nat_cast<A>(2) * Ring::nat_cast<A>(k),
+            λ k _ => { let e: (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1) ≈ Ring::nat_cast<A>(2) * Ring::nat_cast<A>(k)) = rel_cong(Ring::falling_one(Ring::nat_cast<A>(k))); e });
+    let pull: (Ring::nat_cast<A>(2) * ∑ k < n, Ring::nat_cast<A>(k) ≈ ∑ k < n, Ring::nat_cast<A>(2) * Ring::nat_cast<A>(k)) = Semiring::mul_range_l(Ring::nat_cast<A>(2), n, λ k => Ring::nat_cast<A>(k));
+    ring(sums, terms, pull, Ring::falling_two(Ring::nat_cast<A>(n)))
+}
+
+theorem CommRing::sum_squares(n: Nat):
+    Ring::nat_cast<A>(6) * ∑ k < n, Ring::nat_cast<A>(k) * Ring::nat_cast<A>(k)
+        ≈ Ring::nat_cast<A>(n) * (Ring::nat_cast<A>(n) + A.inv(A.multiplicative.unit))
+            * (Ring::nat_cast<A>(n) + Ring::nat_cast<A>(n) + A.inv(A.multiplicative.unit))
+{
+    let cubes: (∑ k < n, (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2)) ≈ Ring::falling(Ring::nat_cast<A>(n), 3)) = Ring::falling_sum(n, 2);
+    let squares: (∑ k < n, (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1)) ≈ Ring::falling(Ring::nat_cast<A>(n), 2)) = Ring::falling_sum(n, 1);
+    let terms: (∑ k < n, Ring::nat_cast<A>(6) * (Ring::nat_cast<A>(k) * Ring::nat_cast<A>(k)) ≈ ∑ k < n, (Ring::nat_cast<A>(2) * (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2)) + Ring::nat_cast<A>(3) * (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1)))) =
+        MonoidRel::range_cong(+, n, λ k => Ring::nat_cast<A>(6) * (Ring::nat_cast<A>(k) * Ring::nat_cast<A>(k)), λ k => Ring::nat_cast<A>(2) * (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2)) + Ring::nat_cast<A>(3) * (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1)),
+            λ k _ => { let e: (Ring::nat_cast<A>(6) * (Ring::nat_cast<A>(k) * Ring::nat_cast<A>(k)) ≈ Ring::nat_cast<A>(2) * (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2)) + Ring::nat_cast<A>(3) * (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1))) =
+                ring(Ring::falling_two(Ring::nat_cast<A>(k)), Ring::falling_one(Ring::nat_cast<A>(k))); e });
+    let parts: (∑ k < n, (Ring::nat_cast<A>(2) * (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2)) + Ring::nat_cast<A>(3) * (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1))) ≈ (∑ k < n, Ring::nat_cast<A>(2) * (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2))) + ∑ k < n, Ring::nat_cast<A>(3) * (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1))) =
+        CommMonoidRel::range_op(≈, +, n, λ k => Ring::nat_cast<A>(2) * (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2)), λ k => Ring::nat_cast<A>(3) * (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1)));
+    let pull2: (Ring::nat_cast<A>(2) * ∑ k < n, (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2)) ≈ ∑ k < n, Ring::nat_cast<A>(2) * (Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2))) = Semiring::mul_range_l(Ring::nat_cast<A>(2), n, λ k => Ring::nat_cast<A>(3) * Ring::falling(Ring::nat_cast<A>(k), 2));
+    let pull3: (Ring::nat_cast<A>(3) * ∑ k < n, (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1)) ≈ ∑ k < n, Ring::nat_cast<A>(3) * (Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1))) = Semiring::mul_range_l(Ring::nat_cast<A>(3), n, λ k => Ring::nat_cast<A>(2) * Ring::falling(Ring::nat_cast<A>(k), 1));
+    let pull6: (Ring::nat_cast<A>(6) * ∑ k < n, Ring::nat_cast<A>(k) * Ring::nat_cast<A>(k) ≈ ∑ k < n, Ring::nat_cast<A>(6) * (Ring::nat_cast<A>(k) * Ring::nat_cast<A>(k))) = Semiring::mul_range_l(Ring::nat_cast<A>(6), n, λ k => Ring::nat_cast<A>(k) * Ring::nat_cast<A>(k));
+    ring(cubes, squares, terms, parts, pull2, pull3, pull6, Ring::falling_three(Ring::nat_cast<A>(n)), Ring::falling_two(Ring::nat_cast<A>(n)))
+}
+
+// Newton's forward-difference formula, the discrete Taylor theorem:
+// `f(n) ≈ ∑_{k≤n} C(n,k)·Δ^k f(0)`, exactly.
+theorem CommRing::newton(n: Nat, f: Nat → A):
+    f(n) ≈ ∑ k < Succ(n), Semiring::of_nat<A>(n.choose(k)) * GroupRel::delta_pow(≈, +, k, f, 0)
+{
+    match n {
+        Zero => A.rel_sym(∑ k < 1, Semiring::of_nat<A>(Nat::choose(0, k)) * GroupRel::delta_pow(≈, +, k, f, 0), f(0),
+            A.rel_trans(∑ k < 1, Semiring::of_nat<A>(Nat::choose(0, k)) * GroupRel::delta_pow(≈, +, k, f, 0),
+                Semiring::of_nat<A>(1) * f(0), f(0),
+                MonoidRel::range_one(+, λ k => Semiring::of_nat<A>(Nat::choose(0, k)) * GroupRel::delta_pow(≈, +, k, f, 0)),
+                Semiring::of_nat_one_mul(f(0)))),
+        Succ(m) => {
+            let h = λ (i: Nat) => GroupRel::delta_pow(≈, +, i, f, 0);
+            let df = λ (k: Nat) => GroupRel::delta(≈, +, f, k);
+            let x = ∑ k < Succ(m), Semiring::of_nat<A>(m.choose(k)) * h(k);
+            let q = ∑ k < Succ(m), Semiring::of_nat<A>(m.choose(k)) * h(Succ(k));
+            let at_f: (f(m) ≈ x) = CommRing::newton(m, f);
+            let at_df: (df(m) ≈ q) = CommRing::newton(m, df);
+            let pascal: (∑ k < Succ(Succ(m)), Semiring::of_nat<A>(Succ(m).choose(k)) * h(k) ≈ q + x) =
+                Semiring::pascal_step(m, h);
+            let step: (df(m) ≈ f(Succ(m)) + A.inv(f(m))) = A.rel_refl(f(Succ(m)) + A.inv(f(m)));
+            let sum: (f(Succ(m)) ≈ q + x) = ring(at_f, at_df, step);
+            A.rel_trans(f(Succ(m)), q + x, ∑ k < Succ(Succ(m)), Semiring::of_nat<A>(Succ(m).choose(k)) * h(k),
+                sum, A.rel_sym(∑ k < Succ(Succ(m)), Semiring::of_nat<A>(Succ(m).choose(k)) * h(k), q + x, pascal))
+        },
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// At an ordered field: the geometric bound, the geometric sum's order
+// companion. A sequence whose every step past `n` is at most `q ≥ 0` times
+// the last is at most `x(n) q^j` after `j` more (`Series::decay` at
+// `q = 1/2`).
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+theorem OrderedField::geometric_le(x: Nat → A, q: A, n: Nat, hq: A.unit <= q,
+    step: (k: Nat) → Nat::Le(n, k) → x(Succ(k)) <= x(k) * q, j: Nat):
+    x(Nat::add(n, j)) <= x(n) * ∏ i < j, q
+{
+    match j {
+        Zero => StrictOrder::le_of_same(x(n), x(n) * A.multiplicative.unit,
+            A.rel_sym(x(n) * A.multiplicative.unit, x(n), A.multiplicative.unit_r(x(n)))),
+        Succ(i) => {
+            let p = ∏ k < i, q;
+            PseudoOrder::le_trans(x(Succ(Nat::add(n, i))), x(Nat::add(n, i)) * q, x(n) * (p * q),
+                step(Nat::add(n, i), n.le_add_l(i)),
+                StrictOrder::le_of_same_r(x(Nat::add(n, i)) * q, (x(n) * p) * q, x(n) * (p * q),
+                    A.rel_sym((x(n) * p) * q, x(n) * (p * q), A.multiplicative.assoc(x(n), p, q)),
+                    OrderedField::mul_le_mono_r(x(Nat::add(n, i)), x(n) * p, q,
+                        OrderedField::geometric_le(x, q, n, hq, step, i), hq)))
+        },
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// At `Nat`: Vandermonde's identity, by the same Pascal step as the binomial
+// theorem. It lives here rather than in `nat`, which this module imports.
+
+theorem Nat::of_nat_self(c: Nat): Semiring::of_nat<Nat>(c) = c {
+    match c { Zero => refl, Succ(m) => Nat::cong_succ(Nat::of_nat_self(m)) }
+}
+
+theorem Nat::vandermonde(a, b, n: Nat): ∑ i < Succ(n), a.choose(i) * b.choose(n - i) = (a + b).choose(n) {
+    match a {
+        Zero => {
+            let none: (∑ i < n, Nat::choose(0, Succ(i)) * b.choose(n - Succ(i)) = 0) =
+                MonoidRel::range_unit(+, n, λ i => Nat::choose(0, Succ(i)) * b.choose(n - Succ(i)), λ i _ => b.choose(n - Succ(i)).mul_left_zero());
+            calc {
+            ∑ i < Succ(n), Nat::choose(0, i) * b.choose(n - i)
+                = Nat::choose(0, 0) * b.choose(n - 0) + ∑ i < n, Nat::choose(0, Succ(i)) * b.choose(n - Succ(i))
+                    := MonoidRel::range_succ_l(+, n, λ i => Nat::choose(0, i) * b.choose(n - i)),
+                = Nat::choose(0, 0) * b.choose(n - 0) + 0
+                    := prelude::cong(none),
+                = b.choose(n - 0) := b.choose(n - 0).mul_left_one(),
+                = b.choose(n) := prelude::cong(Nat::sub_zero(n)),
+                = (0 + b).choose(n) := prelude::cong(sym(b.add_left_zero())),
+            }
+        },
+        Succ(p) => match n {
+            Zero => calc {
+                ∑ i < 1, Succ(p).choose(i) * b.choose(0 - i)
+                    = 0 + 1 * b.choose(0) := refl,
+                    = 0 + 1 * 1 := prelude::cong(b.choose_zero_r()),
+                    = (Succ(p) + b).choose(0) := sym(Nat::choose_zero_r(Succ(p) + b)),
+            },
+            Succ(m) => {
+                let h = λ (i: Nat) => b.choose(Succ(m) - i);
+                let cast: ((c: Nat) → (x: Nat) → c * x = Semiring::of_nat<Nat>(c) * x) =
+                    λ c x => prelude::cong(sym(Nat::of_nat_self(c)));
+                calc {
+                    ∑ i < Succ(Succ(m)), Succ(p).choose(i) * b.choose(Succ(m) - i)
+                        = ∑ i < Succ(Succ(m)), Semiring::of_nat<Nat>(Succ(p).choose(i)) * h(i)
+                            := MonoidRel::range_cong(+, Succ(Succ(m)), λ i => Succ(p).choose(i) * b.choose(Succ(m) - i),
+                                λ i => Semiring::of_nat<Nat>(Succ(p).choose(i)) * h(i), λ i _ => cast(Succ(p).choose(i), h(i))),
+                        = (∑ i < Succ(m), Semiring::of_nat<Nat>(p.choose(i)) * h(Succ(i))) + ∑ i < Succ(Succ(m)), Semiring::of_nat<Nat>(p.choose(i)) * h(i)
+                            := Semiring::pascal_range<Nat>(p, Succ(m), h),
+                        = (∑ i < Succ(m), p.choose(i) * b.choose(m - i)) + ∑ i < Succ(Succ(m)), Semiring::of_nat<Nat>(p.choose(i)) * h(i)
+                            := prelude::cong(sym(MonoidRel::range_cong(+, Succ(m), λ i => p.choose(i) * b.choose(m - i),
+                                λ i => Semiring::of_nat<Nat>(p.choose(i)) * h(Succ(i)), λ i _ => cast(p.choose(i), h(Succ(i)))))),
+                        = (∑ i < Succ(m), p.choose(i) * b.choose(m - i)) + ∑ i < Succ(Succ(m)), p.choose(i) * b.choose(Succ(m) - i)
+                            := prelude::cong(sym(MonoidRel::range_cong(+, Succ(Succ(m)), λ i => p.choose(i) * b.choose(Succ(m) - i),
+                                λ i => Semiring::of_nat<Nat>(p.choose(i)) * h(i), λ i _ => cast(p.choose(i), h(i))))),
+                        = (p + b).choose(m) + ∑ i < Succ(Succ(m)), p.choose(i) * b.choose(Succ(m) - i) := prelude::cong(Nat::vandermonde(p, b, m)),
+                        = (p + b).choose(m) + (p + b).choose(Succ(m)) := prelude::cong(Nat::vandermonde(p, b, Succ(m))),
+                        = Succ(p + b).choose(Succ(m)) := refl,
+                        = (Succ(p) + b).choose(Succ(m)) := prelude::cong(sym(p.add_succ_left(b))),
+                }
+            },
+        },
+    }
+}
