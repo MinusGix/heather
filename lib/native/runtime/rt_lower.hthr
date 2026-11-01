@@ -392,9 +392,7 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
         Lit(_, _) => λ g ports next => trivial,
         Prim(op, args) => λ g ports next => match op {
             Add(width) => Tm::lower_add_sound(w, g, ports, next, width, args),
-            Sub(_) => trivial, Band(_) => trivial, Bor(_) => trivial, Bxor(_) => trivial,
-            Eq(_) => trivial, Ult(_) => trivial, Slt(_) => trivial,
-            Conj => trivial, Disj => trivial, Neg => trivial, Zext(_, _) => trivial,
+            _ => trivial,
         },
         Let(e, body) => λ g ports next => {
             let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Let(e, body), w, g, ports, next, r);
