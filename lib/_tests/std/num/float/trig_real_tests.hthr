@@ -1,0 +1,31 @@
+// Probes of sin and cos at rational and real arguments
+// (lib/std/num/float/trig_law.hthr, elementary_real.hthr) and their laws.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import creal; import creal_lipschitz; import dyadic; import interval; import creal_interval; import series; import elementary; import exp_law; import trig_law; import elementary_real; import tactic; import interval_tactic;
+
+// `by intervals()` reads `CReal::sin(x)` and `CReal::cos(x)` as leaves
+// enclosed through `x`'s terms.
+theorem sin_real_one(): CReal::ofRat(Rat(841, 1000)) < CReal::sin(CReal::ofRat(1)) { by intervals() }
+theorem cos_real_one(): CReal::cos(CReal::ofRat(1)) < CReal::ofRat(Rat(541, 1000)) { by intervals() }
+theorem sin_real_sum(): CReal::sin(CReal::ofRat(Rat(1, 2)) + CReal::ofRat(Rat(1, 2))) < CReal::ofRat(Rat(842, 1000)) { by intervals() }
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem sin_real_not_above(): CReal::ofRat(Rat(842, 1000)) < CReal::sin(CReal::ofRat(1)) { by intervals() }
+
+// The laws at open arguments.
+theorem sin_law_open(x, y: CReal): CReal::sin(x + y) ≈ CReal::sin(x) * CReal::cos(y) + CReal::cos(x) * CReal::sin(y) { CReal::sin_add(x, y) }
+theorem cos_law_open(x, y: CReal): CReal::cos(x + y) ≈ CReal::cos(x) * CReal::cos(y) - CReal::sin(x) * CReal::sin(y) { CReal::cos_add(x, y) }
+theorem pythagoras_open(x: CReal): CReal::sin(x) * CReal::sin(x) + CReal::cos(x) * CReal::cos(x) ≈ 1 { CReal::sin_sq_add_cos_sq(x) }
+theorem sin_odd_open(x: CReal): CReal::sin(-x) ≈ -CReal::sin(x) { CReal::sin_neg(x) }
+theorem cos_even_open(x: CReal): CReal::cos(-x) ≈ CReal::cos(x) { CReal::cos_neg(x) }
+// At rationals.
+theorem sin_rat_law(a, b: Rat): CReal::sin_rat(a + b) ≈ CReal::sin_rat(a) * CReal::cos_rat(b) + CReal::cos_rat(a) * CReal::sin_rat(b) { CReal::sin_rat_add(a, b) }
+theorem cos_rat_law(a, b: Rat): CReal::cos_rat(a + b) ≈ CReal::cos_rat(a) * CReal::cos_rat(b) - CReal::sin_rat(a) * CReal::sin_rat(b) { CReal::cos_rat_add(a, b) }
+theorem sin_real_rat(q: Rat): CReal::sin(CReal::ofRat(q)) ≈ CReal::sin_rat(q) { CReal::sin_ofRat(q) }
+// A negative control: sin is not constant, so sin(0) and sin(1) are apart.
+theorem sin_not_flat(): ¬(CReal::sin_rat(0) ≈ CReal::sin_rat(1)) {
+    λ e => {
+        let lt: (CReal::sin_rat(0) < CReal::sin_rat(1)) = by intervals();
+        CReal::lt_irrefl(CReal::sin_rat(0), CReal::lt_respects(CReal::sin_rat(0).same_refl(), CReal::same_sym(e), lt))
+    }
+}

@@ -1349,9 +1349,24 @@ independent, so a goal that needs the dependency (`x - x`) widens. Left:
 - `log`, by the atanh series after reducing the argument, and argument
   reduction for `exp`, `sin` and `cos`, whose cost is otherwise linear in
   the argument ([[interval-log-and-reduction]]);
-- the functions at real arguments, and their laws (`exp(a + b) ≈ exp(a) ·
-  exp(b)`, `sin² + cos² ≈ 1`), which want continuity and `CReal` series
-  ([[elementary-functions-at-reals]]).
+- `exp(log q) ≈ q`, and log's laws ([[exp-log-inverse]]).
+
+exp, sin and cos are done at real arguments
+([[elementary-functions-at-reals]]):
+
+- **exp.** `exp(a + b) ≈ exp(a) · exp(b)` at rationals, as a Cauchy product
+  of the two series (`lib/std/num/float/exp_law.hthr`). `CReal::exp` is
+  `exp_rat` extended by its Lipschitz bound on bounded sets
+  (`lib/std/num/creal_lipschitz.hthr`). It comes with the law,
+  monotonicity, and a leaf `CReal::exp_real_box` that the tactic reads at
+  `CReal::exp(x)` (`lib/std/num/float/elementary_real.hthr`).
+- **sin and cos.** Their addition laws at rationals come from exp's
+  coefficient identity, signed by σ, γ (`lib/std/num/float/trig_law.hthr`).
+  The same extension carries them to the reals, with parity and
+  `sin² + cos² ≈ 1`. Their leaves, `sin_real_box` and `cos_real_box`, are
+  the enclosure at the argument's n-th term, padded by the Lipschitz bound.
+  That pad grows with the argument's magnitude until argument reduction
+  lands.
 
 ## 17. Floats at the reals (`float-reals`)
 
