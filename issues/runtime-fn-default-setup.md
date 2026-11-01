@@ -13,14 +13,25 @@ setup's pure fragment.
 
 ## Scope
 
-- The generator, written in Heather, as [[runtime-fn-setups-design]] decides it.
-- The default setup's pure fragment and its lowering into `Source` leaves and FunctionIR regions, with an agreement certificate in `compile-x86`'s `_agrees` form.
-- `compile-x86`'s Rust reflector (`crates/elab/src/function_ir_source/`) is retired onto the Heather generator.
+Narrowed by `docs/runtime-fn-setups-design.md` (§13) to slice R5d, the
+integration round. The other slices have their own issues:
+[[runtime-body-reflection-requests]] and [[runtime-fn-reflected-language]]
+(R5a), [[runtime-default-setup-soundness]] (R5b),
+[[declaration-prefix-generators]] (R5c).
 
-## Done when
-
-A `wc` step over a `WcState` record and the decimal formatter, marked `runtime fn`, compile into a tool that passes its GNU test, and `compile-x86`'s examples pass through the Heather generator.
+- The `runtime` generator (design §2.2): reflect, judge in the elaborator for
+  located refusals, publish `f::rt`, `f::judged`, `f::reflects`, `f::code` and
+  `instance Compile(f)` as one group.
+- `compile-x86 file f` requires `runtime fn f` and reads the `Compile(f)` instance in place
+  of the Rust reflector's `_agrees` (design §10); the `examples/x86-native`
+  files gain the prefix (from [[runtime-compile-opt-in]]: `mix.hthr` opts in
+  explicitly, and unmarked functions are refused with an actionable message).
+- `crates/elab/src/function_ir_source/` deleted once every example passes
+  through the generator.
+- `heather reflect`'s output ([[native-build-reflected-helpers]], landed as calls to a reflected FunctionIR program) comes from a `Compile(f)` instance instead of the Rust reflector, so a tool's pure parts are runtime fns.
 
 ## What it assumes from elsewhere
+
+- **[[runtime-default-setup-soundness]]** owns `Setup`, the judgment, the lowering and `sound`; **[[runtime-fn-reflected-language]]** owns `rt` and the reflector.
 
 - **[[pure-imperative-statements]]** owns the imperative spellings. Until it lands, the fragment's examples are written with `match` and recursion.

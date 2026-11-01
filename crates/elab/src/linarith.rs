@@ -5,7 +5,7 @@
 //! The tactic is an untrusted searcher in front of
 //! `lib/std/tactic/linarith.hthr`. It reads the goal and the facts — the
 //! written ones, then the context's — as `<`, `<=` and `≈` at one carrier
-//! with an `OrderedFieldOfInt` instance (`Rat`, `CReal`), each side a linear
+//! with `OrderedField` and `CommRingOfInt` instances (`Rat`, `CReal`), each side a linear
 //! form over `ring`'s monomials (`crate::ring::FieldReading`), and looks for
 //! a nonnegative combination of the facts and the goal's negation that is a
 //! contradiction, by Fourier–Motzkin elimination. The certificate does not
@@ -102,7 +102,7 @@ fn stated(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Stated> {
 
 /// An ordered field that is a class carrier: a type parameter `K` whose
 /// field is a dictionary in scope (`section<K: OrderedField(≈, <, <=, +,
-/// *)>`), with no `OrderedFieldOfInt` instance. Its integers are the ones
+/// *)>`), with no carrier instances. Its integers are the ones
 /// every ring has, packaged by `ordered_field::OrderedField::with_ints<K>()`,
 /// whose call's implicit arguments name `K`'s `≈`, `<`, `<=` as the section
 /// binds them. The certificate gets the dictionary in scope
@@ -1457,14 +1457,16 @@ impl Elaborator {
             heather_syntax::ExprKind::Var(name) => name.clone(),
             _ => format!("hypothesis {}", i + 1),
         };
-        let class = self.key_of("ordered_field::OrderedFieldOfInt");
-        // A carrier with an instance, or a class carrier (`ClassField`).
-        let supported = |carrier: &Type| {
-            let Some(class) = &class else { return false };
-            match self.carrier_of_ty(cx, carrier, span) {
-                Some(key) => !self.traits.instances_answering(class, Some(&key.key)).is_empty(),
-                None => ClassField::of(self, cx, carrier).is_some(),
-            }
+        // The certificate lemmas' constraint is `OrderedField + CommRingOfInt`,
+        // one dictionary assembled at the carrier from its two instances
+        // (issues/constraints-sharing-indices.md), so both have to be there;
+        // or a class carrier (`ClassField`), whose integers are put in scope.
+        let classes = [self.key_of("ordered_field::OrderedField"), self.key_of("semiring::CommRingOfInt")];
+        let supported = |carrier: &Type| match self.carrier_of_ty(cx, carrier, span) {
+            Some(key) => classes.iter().all(|class| {
+                class.as_ref().is_some_and(|class| !self.traits.instances_answering(class, Some(&key.key)).is_empty())
+            }),
+            None => ClassField::of(self, cx, carrier).is_some(),
         };
         // The carrier: the goal's, else the first written fact's, else the
         // first context fact's that is at a supported carrier. `Int` and
@@ -1503,14 +1505,14 @@ impl Elaborator {
             });
         let Some((carrier_ty, carrier_level)) = carrier else {
             return Err(err(format!(
-                "`linarith` proves `<`, `<=`, `≈` or `¬(a < b)` at an ordered field with an `OrderedFieldOfInt` \
-                 instance, or any goal from contradictory facts there; the goal is `{shown_goal}`"
+                "`linarith` proves `<`, `<=`, `≈` or `¬(a < b)` at an ordered field with `OrderedField` \
+                 and `CommRingOfInt` instances, or any goal from contradictory facts there; the goal is `{shown_goal}`"
             )));
         };
         let carrier_shown = spell(&carrier_ty);
         if !supported(&carrier_ty) {
             return Err(err(format!(
-                "`linarith` needs an `OrderedFieldOfInt` instance at `{carrier_shown}` (the order laws its \
+                "`linarith` needs `OrderedField` and `CommRingOfInt` instances at `{carrier_shown}` (the order laws its \
                  certificate is checked against, and the carrier's numerals as coefficients)"
             )));
         }
@@ -1687,8 +1689,9 @@ impl Elaborator {
             let fact = &problem.facts[f];
             inner.aliases.push(alias(fact.alias.clone(), Rc::new(fact.term.clone()), fact.ty.clone(), fact.level.clone()));
         }
-        // At a class carrier the lemmas' `OrderedFieldOfInt` is the field
-        // with the integers every ring has, found in scope.
+        // At a class carrier the lemmas' dictionary is assembled from the
+        // section's ordered field and the integers every ring has, put in
+        // scope here (issues/constraints-sharing-indices.md).
         if let Some(field) = &class_field {
             inner = self
                 .class_dictionary_scope(
@@ -1696,8 +1699,8 @@ impl Elaborator {
                     &problem.carrier,
                     CLASS_FIELD,
                     (&field.ints, &field.ty, &field.level),
-                    "ordered_field::OrderedFieldOfInt",
-                    "ordered_field::OrderedField",
+                    "semiring::CommRingOfInt",
+                    "semiring::CommRing",
                 )
                 .ok_or_else(|| err(format!("`{tactic}` could not put `{carrier_shown}`'s integers in scope")))?;
         }

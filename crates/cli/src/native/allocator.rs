@@ -9,7 +9,9 @@
 //! grew with the tool past the rail (issues/native-allocator-cost.md).
 //!
 //! It is the Heather allocator step for step, its lists kept in the same
-//! order, so it proposes the same homes; `native_alloc.hthr` stays the
+//! order, so it proposes the same homes, structured regions included
+//! (`Homes::region_needs`, `region_graph`, `StructuredRegion::weighed`;
+//! issues/native-region-spelling.md); `native_alloc.hthr` stays the
 //! definition, and `tests` hold the two to agreeing.
 
 /// Registers in the home pool (`home_pool`).
@@ -20,8 +22,20 @@ const LOOP_WEIGHT: u64 = 7;
 #[derive(Clone)]
 struct Node { output: u64, reads: Vec<u64> }
 
+/// A structured region (`StructuredRegion`), as the allocator reads it:
+/// a dataflow leaf is its nodes.
+enum Region {
+    Leaf(Vec<Node>),
+    Sequence(Vec<Node>, Box<Region>),
+    Compose(Box<Region>, Box<Region>),
+    Conditional(u64, Box<Region>, Box<Region>),
+    Call { arguments: Vec<u64>, result: u64 },
+    Loop { inputs: Vec<u64>, bound: u64, parameters: Vec<u64>, count: u64, body: Box<Region>, exit: u64, next: Vec<u64>, outputs: Vec<u64>, exhausted: u64 },
+}
+
 enum Stmt {
     Leaf(Vec<Node>),
+    Region(Region),
     Invoke { reads: Vec<u64>, result: u64 },
     Then(Box<Stmt>, Box<Stmt>),
     Branch(u64, Box<Stmt>, Box<Stmt>),
@@ -58,15 +72,56 @@ impl Reader<'_> {
         })
     }
 
+    fn ids(&mut self) -> Option<Vec<u64>> {
+        let count = self.next()? as usize;
+        self.take(count)
+    }
+
+    /// A leaf's nodes, its ports skipped (`Region::spelled_body`).
+    fn body(&mut self) -> Option<Vec<Node>> {
+        self.skip_ports()?;
+        let count = self.next()? as usize;
+        let nodes = (0..count).map(|_| self.node()).collect::<Option<Vec<_>>>()?;
+        self.skip_ports()?;
+        Some(nodes)
+    }
+
+    /// `StructuredRegion::spelled_tagged`.
+    fn region(&mut self) -> Option<Region> {
+        Some(match self.next()? {
+            0 => Region::Leaf(self.body()?),
+            1 => Region::Sequence(self.body()?, Box::new(self.region()?)),
+            2 => Region::Compose(Box::new(self.region()?), Box::new(self.region()?)),
+            3 => {
+                self.skip_ports()?;
+                let condition = self.next()?;
+                self.skip_ports()?;
+                self.skip_ports()?;
+                Region::Conditional(condition, Box::new(self.region()?), Box::new(self.region()?))
+            }
+            4 => {
+                self.next()?;
+                let arguments = self.ids()?;
+                Region::Call { arguments, result: self.next()? }
+            }
+            5 => {
+                let inputs = self.ids()?;
+                let bound = self.next()?;
+                let parameters = self.ids()?;
+                let count = self.next()?;
+                let body = Box::new(self.region()?);
+                let exit = self.next()?;
+                let next = self.ids()?;
+                let outputs = self.ids()?;
+                Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted: self.next()? }
+            }
+            _ => return None,
+        })
+    }
+
     fn stmt(&mut self) -> Option<Stmt> {
         Some(match self.next()? {
-            0 => {
-                self.skip_ports()?;
-                let count = self.next()? as usize;
-                let nodes = (0..count).map(|_| self.node()).collect::<Option<Vec<_>>>()?;
-                self.skip_ports()?;
-                Stmt::Leaf(nodes)
-            }
+            0 => Stmt::Leaf(self.body()?),
             1 => {
                 let tag = self.next()?;
                 let f = self.take(match tag { 0 => 4, 1 => 5, 2 => 3, 3 => 2, 4 => 4, 5 => 3, _ => return None })?;
@@ -95,6 +150,7 @@ impl Reader<'_> {
                 let f = self.take(3)?;
                 Stmt::Arg { index: f[0], len: f[2] }
             }
+            7 => Stmt::Region(self.region()?),
             _ => return None,
         })
     }
@@ -140,6 +196,32 @@ fn loop_after(again: u64, set: &[u64], out: &[u64]) -> Vec<u64> {
     v
 }
 
+// A loop's code, as native_alloc spells it: `moves`, `loop_entry`,
+// `loop_zero`, `loop_down`, `loop_stop`.
+fn moves(to: &[u64], from: &[u64]) -> Vec<Node> { to.iter().zip(from).map(|(&t, &f)| Node { output: t, reads: vec![f] }).collect() }
+
+fn loop_entry(bound: u64, count: u64, inputs: &[u64], parameters: &[u64]) -> Vec<Node> {
+    let mut v = vec![Node { output: count, reads: vec![bound] }];
+    v.extend(moves(parameters, inputs));
+    v
+}
+
+fn loop_zero(count: u64, exhausted: u64) -> Vec<Node> {
+    vec![Node { output: exhausted, reads: vec![] }, Node { output: exhausted, reads: vec![count, exhausted] }]
+}
+
+fn loop_down(count: u64, exhausted: u64) -> Vec<Node> {
+    vec![Node { output: exhausted, reads: vec![] }, Node { output: count, reads: vec![count, exhausted] }]
+}
+
+fn loop_stop(exhausted: u64) -> Vec<Node> { vec![Node { output: exhausted, reads: vec![] }] }
+
+fn with_head(head: u64, rest: Vec<u64>) -> Vec<u64> {
+    let mut v = vec![head];
+    v.extend(rest);
+    v
+}
+
 /// `List::put`: the `i`-th entry replaced, `pad` filling out to it.
 fn put<T: Clone>(xs: &mut Vec<T>, i: usize, x: T, pad: T) {
     if xs.len() <= i { xs.resize(i + 1, pad); }
@@ -154,10 +236,44 @@ impl Homes {
     fn home(&self, id: u64) -> Option<u64> { self.of.get(id as usize).copied().flatten() }
 }
 
+/// `Homes::region_needs`: the set live before, a loop's head set (its
+/// count's) joined with what its head needs.
+fn region_needs(r: &Region, homes: &Homes, out: &[u64], sets: &mut Vec<Vec<u64>>) -> Vec<u64> {
+    match r {
+        Region::Leaf(nodes) => nodes_live_in(nodes, out),
+        Region::Sequence(prefix, rest) => {
+            let after = region_needs(rest, homes, out, sets);
+            nodes_live_in(prefix, &after)
+        }
+        Region::Compose(prefix, rest) => {
+            let after = region_needs(rest, homes, out, sets);
+            region_needs(prefix, homes, &after, sets)
+        }
+        Region::Conditional(condition, yes, no) => {
+            let n = region_needs(no, homes, out, sets);
+            let y = region_needs(yes, homes, out, sets);
+            with_head(*condition, union(&y, &n))
+        }
+        Region::Call { .. } => out.to_vec(),
+        Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } => {
+            let set = homes.loop_set(*count).to_vec();
+            let done = nodes_live_in(&moves(outputs, parameters), out);
+            let stop = nodes_live_in(&loop_stop(*exhausted), &done);
+            let down = nodes_live_in(&loop_down(*count, *exhausted), &set);
+            let b = region_needs(body, homes, &nodes_live_in(&moves(parameters, next), &with_head(*exit, union(&stop, &down))), sets);
+            let head = nodes_live_in(&loop_zero(*count, *exhausted), &with_head(*exhausted, union(&b, &done)));
+            let had = sets.get(*count as usize).cloned().unwrap_or_else(|| set.clone());
+            put(sets, *count as usize, union(&had, &head), vec![]);
+            nodes_live_in(&loop_entry(*bound, *count, inputs, parameters), &set)
+        }
+    }
+}
+
 /// `Stmt::needs`: the set live before, and the loop sets grown.
 fn needs(s: &Stmt, homes: &Homes, out: &[u64], sets: &mut Vec<Vec<u64>>) -> Vec<u64> {
     match s {
         Stmt::Leaf(nodes) => nodes_live_in(nodes, out),
+        Stmt::Region(r) => region_needs(r, homes, out, sets),
         Stmt::Invoke { reads, result } => live_before(reads, *result, out),
         Stmt::Then(first, rest) => {
             let after = needs(rest, homes, out, sets);
@@ -209,17 +325,53 @@ fn written(of: &mut Vec<Vec<bool>>, id: u64, out: &[u64]) {
     put(of, id as usize, row, vec![]);
 }
 
+/// `leaf_graph`: a leaf's writes both ways, a node at a time and its
+/// results last; the set live before it.
+fn leaf_graph(nodes: &[Node], out: &[u64], of: &mut Vec<Vec<bool>>) -> Vec<u64> {
+    for node in nodes { written(of, node.output, out); }
+    nodes.iter().rev().fold(out.to_vec(), |after, node| {
+        let live = live_before(&node.reads, node.output, &after);
+        written(of, node.output, &after);
+        live
+    })
+}
+
+/// `Homes::region_graph`.
+fn region_graph(r: &Region, homes: &Homes, out: &[u64], of: &mut Vec<Vec<bool>>) -> Vec<u64> {
+    match r {
+        Region::Leaf(nodes) => leaf_graph(nodes, out, of),
+        Region::Sequence(prefix, rest) => {
+            let after = region_graph(rest, homes, out, of);
+            leaf_graph(prefix, &after, of)
+        }
+        Region::Compose(prefix, rest) => {
+            let after = region_graph(rest, homes, out, of);
+            region_graph(prefix, homes, &after, of)
+        }
+        Region::Conditional(condition, yes, no) => {
+            let n = region_graph(no, homes, out, of);
+            let y = region_graph(yes, homes, out, of);
+            with_head(*condition, union(&y, &n))
+        }
+        Region::Call { .. } => out.to_vec(),
+        Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } => {
+            let set = homes.loop_set(*count).to_vec();
+            let done = leaf_graph(&moves(outputs, parameters), out, of);
+            let stop = leaf_graph(&loop_stop(*exhausted), &done, of);
+            let down = leaf_graph(&loop_down(*count, *exhausted), &set, of);
+            let moved = leaf_graph(&moves(parameters, next), &with_head(*exit, union(&stop, &down)), of);
+            let b = region_graph(body, homes, &moved, of);
+            leaf_graph(&loop_zero(*count, *exhausted), &with_head(*exhausted, union(&b, &done)), of);
+            leaf_graph(&loop_entry(*bound, *count, inputs, parameters), &set, of)
+        }
+    }
+}
+
 /// `Stmt::graph`: the set live before, the rows grown.
 fn graph(s: &Stmt, homes: &Homes, out: &[u64], of: &mut Vec<Vec<bool>>) -> Vec<u64> {
     match s {
-        Stmt::Leaf(nodes) => {
-            for node in nodes { written(of, node.output, out); }
-            nodes.iter().rev().fold(out.to_vec(), |after, node| {
-                let live = live_before(&node.reads, node.output, &after);
-                written(of, node.output, &after);
-                live
-            })
-        }
+        Stmt::Leaf(nodes) => leaf_graph(nodes, out, of),
+        Stmt::Region(r) => region_graph(r, homes, out, of),
         Stmt::Invoke { reads, result } => {
             written(of, *result, out);
             live_before(reads, *result, out)
@@ -252,14 +404,44 @@ fn bump(weights: &mut Vec<u64>, id: u64, by: u64) {
     put(weights, id as usize, w + by, 0);
 }
 
+fn nodes_weights(nodes: &[Node], scale: u64, w: &mut Vec<u64>) {
+    for node in nodes {
+        bump(w, node.output, scale);
+        for r in &node.reads { bump(w, *r, scale); }
+    }
+}
+
+/// `StructuredRegion::weighed`: a loop's body and its count's ticking
+/// `LOOP_WEIGHT` heavier.
+fn region_weights(r: &Region, scale: u64, w: &mut Vec<u64>) {
+    match r {
+        Region::Leaf(nodes) => nodes_weights(nodes, scale, w),
+        Region::Sequence(prefix, rest) => { nodes_weights(prefix, scale, w); region_weights(rest, scale, w); }
+        Region::Compose(prefix, rest) => { region_weights(prefix, scale, w); region_weights(rest, scale, w); }
+        Region::Conditional(condition, yes, no) => { bump(w, *condition, scale); region_weights(yes, scale, w); region_weights(no, scale, w); }
+        Region::Call { arguments, result } => { bump(w, *result, scale); for a in arguments { bump(w, *a, scale); } }
+        Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } => {
+            let inner = scale + LOOP_WEIGHT;
+            nodes_weights(&loop_entry(*bound, *count, inputs, parameters), scale, w);
+            region_weights(body, inner, w);
+            bump(w, *exit, inner);
+            let mut passes = loop_zero(*count, *exhausted);
+            passes.extend(moves(parameters, next));
+            passes.extend(loop_down(*count, *exhausted));
+            nodes_weights(&passes, inner, w);
+            let mut after = loop_stop(*exhausted);
+            after.extend(moves(outputs, parameters));
+            nodes_weights(&after, scale, w);
+        }
+    }
+}
+
 /// `Stmt::weights`: reads and writes counted, a loop's body `LOOP_WEIGHT` more than
 /// what holds it.
 fn weights(s: &Stmt, scale: u64, w: &mut Vec<u64>) {
     match s {
-        Stmt::Leaf(nodes) => for node in nodes {
-            bump(w, node.output, scale);
-            for r in &node.reads { bump(w, *r, scale); }
-        },
+        Stmt::Leaf(nodes) => nodes_weights(nodes, scale, w),
+        Stmt::Region(r) => region_weights(r, scale, w),
         Stmt::Invoke { reads, result } => {
             bump(w, *result, scale);
             for r in reads { bump(w, *r, scale); }

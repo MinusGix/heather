@@ -1443,6 +1443,41 @@ theorem Nat::fact_pos(n: Nat): 0 < n.fact() {
     }
 }
 
+// Binomial coefficients, by Pascal's rule (issues/finite-difference-calculus.md).
+// `Succ(m).choose(Succ(j)) = m.choose(j) + m.choose(Succ(j))` and
+// `Succ(m).choose(0) = 1` hold by computation: the two equations every sum
+// over binomial coefficients steps by (`difference::Semiring::pascal_range`).
+// At an open `n`, `n.choose(0) = 1` is `choose_zero_r`.
+fn Nat::choose(self n, k: Nat) → Nat {
+    match n {
+        Zero => match k { Zero => 1, Succ(_) => 0 },
+        Succ(m) => match k { Zero => 1, Succ(j) => m.choose(j) + m.choose(Succ(j)) },
+    }
+}
+
+theorem Nat::choose_zero_r(self n: Nat): n.choose(0) = 1 { match n { Zero => refl, Succ(_) => refl } }
+
+theorem Nat::choose_pascal(self m, j: Nat): Succ(m).choose(Succ(j)) = m.choose(j) + m.choose(Succ(j)) { refl }
+
+// Past the top the coefficient vanishes.
+theorem Nat::choose_eq_zero(self n, k: Nat): n < k → n.choose(k) = 0 {
+    match n {
+        Zero => match k { Zero => λ h => false_elim(h), Succ(_) => λ h => refl },
+        Succ(m) => match k {
+            Zero => λ h => false_elim(h),
+            Succ(j) => λ h => j(sym(m.choose_eq_zero(Succ(j), Succ(m).le_succ_r(j, h))),
+                λ w _ => m.choose(j) + w = 0, m.choose_eq_zero(j, h)),
+        },
+    }
+}
+
+theorem Nat::choose_self(self n: Nat): n.choose(n) = 1 {
+    match n {
+        Zero => refl,
+        Succ(m) => j(sym(m.choose_eq_zero(Succ(m), Nat::le_refl(Succ(m)))), λ w _ => m.choose(m) + w = 1, m.choose_self()),
+    }
+}
+
 // Evidence rules (docs/positivity-evidence-design.md §6 A). A `:= infer`
 // positivity premise with no proof in scope backchains through these, each
 // premise searched the same way, so `0 < x * (y + 1)` is found from `0 < x`.

@@ -340,7 +340,39 @@ impl Elaborator {
 
     /// The innermost dictionary in scope whose class is `tkey` or a descendant
     /// of it, with its index expressed **at that class**.
+    ///
+    /// A **merged** class (constraints sharing symbols at one carrier,
+    /// issues/constraints-sharing-indices.md) has no dictionary of its own in
+    /// a scope that holds its parents' — a section's `K: OrderedField(…)`
+    /// beside the `CommRingOfInt` a tactic put in scope — so its index is
+    /// read off theirs, each slot from the first parent that fills it.
     pub(crate) fn scope_dict_index(&self, cx: &Cx, tkey: &str) -> Option<Vec<Option<Expr>>> {
+        let own = self.scope_dict_index_own(cx, tkey);
+        if own.is_some() {
+            return own;
+        }
+        let class = self.traits.class(tkey)?;
+        if !class.name.contains('+') {
+            return None;
+        }
+        let parts: Vec<&str> = class.name.split('+').collect();
+        let bare = |n: &str| n.rsplit("::").next().unwrap_or(n).to_string();
+        let mut out: Vec<Option<Expr>> = vec![None; class.valparams.len()];
+        for a in class.ancestors.iter().filter(|a| a.path.is_empty() && parts.contains(&bare(&a.name).as_str())) {
+            let Some(akey) = self.key_of(&a.name) else { continue };
+            let Some(got) = self.scope_dict_index_own(cx, &akey) else { continue };
+            for (e, g) in a.index.iter().zip(got) {
+                let ExprKind::Var(nm) = &e.kind else { continue };
+                let Some(at) = class.valparams.iter().position(|v| v.name == *nm) else { continue };
+                if out[at].is_none() {
+                    out[at] = g;
+                }
+            }
+        }
+        out.iter().any(Option::is_some).then_some(out)
+    }
+
+    fn scope_dict_index_own(&self, cx: &Cx, tkey: &str) -> Option<Vec<Option<Expr>>> {
         for d in cx.dicts.iter().rev() {
             let Some(dkey) = self.key_of(&d.class) else {
                 continue;

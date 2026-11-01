@@ -167,8 +167,17 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     // A builder's tool (`Tool`, native_build) is lowered a part at a time
     // (`parts`); any other source is read as a literal whole.
     let tool_probe = format!("{p}_tool");
-    let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n");
-    let is_tool = elab.fork().elab_module_source(&tool_probe, &tool_text).is_ok();
+    let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n\
+        fn {p}_functions() → Nat {{ {symbol}().opened(0).functions.len() }}\n");
+    let mut tool_fork = elab.fork();
+    let is_tool = tool_fork.elab_module_source(&tool_probe, &tool_text).is_ok();
+    // A tool that calls functions (`call`, native_build) has a meaning, the
+    // calls' `program_eval`, but no code yet: calls compile as procedures
+    // (issues/native-compiled-procedures.md).
+    if is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_functions")).map_err(|e| format!("`{symbol}` (functions): {e}"))? != 0 {
+        return Err(format!("`{symbol}` calls functions of its program, and calls do not compile yet (issues/native-compiled-procedures.md)"));
+    }
+    drop(tool_fork);
     let source = if is_tool { format!("{symbol}().source()") } else { format!("{symbol}()") };
     let (src, lowered, lowered_is, shapes) = if is_tool {
         let stated = tool_parts(&elab, p, symbol, &root, &imports)?;
@@ -474,7 +483,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
     let [at, kind, reason, first, second] = *why else {
         return format!("`{symbol}` did not compile, and `Source::refusal` names no reason");
     };
-    let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", 6 => "an argument", _ => "the program" };
+    let kind = match kind { 0 => "a computation", 1 => "a call", 2 => "a branch", 3 => "a loop", 4 => "an exit", 6 => "an argument", 7 => "a procedure call", _ => "the program" };
     let reason = match reason {
         0 => format!("a {} region the compiler does not take: a node not at width 64 or reading a word not written before it, \
             a branch on a bit that may not be its word's low bit, a loop not in counted form, or a call (native_structured)",
@@ -493,6 +502,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         11 => format!("S4's lowering refused node {first} of the leaf alone"),
         12 => "the words' homes fail the allocation's check (`Source::allocation_ok`): the allocator's proposal is wrong, a bug in it".into(),
         13 => "a loop whose words live after it include one it moves or counts with, or whose leaves do not compile".into(),
+        14 => format!("procedure {first} is called, and calls are not compiled yet (docs/native-procedures-design.md §7)"),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }

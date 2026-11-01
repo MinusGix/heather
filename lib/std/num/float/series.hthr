@@ -34,6 +34,7 @@ import ordered_field;
 import semiring;
 import rat;
 import big_operator;
+import difference;
 import creal;
 import dyadic;
 import interval;
@@ -121,35 +122,22 @@ theorem Series::sum_close(self s: Series, n, l: Nat, hs: s.start <= n, h: n <= l
     Rat::le_trans((s.sum(l) - s.sum(n)).abs().le_add_nonneg(s.err(l), s.err_nonneg(l)), moved)
 }
 
+// One step past `start` at least halves the error.
+theorem Series::err_half(self s: Series, k: Nat, hk: s.start <= k): s.err(Succ(k)) <= s.err(k) * Rat::inv_succ(1) {
+    let t = s.term(k).abs();
+    let half: (t <= (t + t) * Rat::inv_succ(1)) = Rat::le_of_same(ring);
+    Rat::le_trans(s.err_step(k, hk), half)
+}
+
 // Geometric decay: `j` steps past `start` divide the error by `2^j`, written
-// `1/(ones(j) + 1)`.
+// `1/(ones(j) + 1)`. The geometric bound at the ratio one half
+// (`difference::OrderedField::geometric_le`).
 theorem Series::decay(self s: Series, n: Nat, hs: s.start <= n, j: Nat): s.err(n + j) <= s.err(n) * Rat::inv_succ(j.ones()) {
-    match j {
-        Zero => Rat::le_of_same(Rat::same_sym(s.err(n).mul_one())),
-        Succ(i) => {
-            let m = n + i;
-            let hm: (s.start <= m) = s.start.le_trans(n, m, hs, n.le_add_l(i));
-            let x = s.err(n) * Rat::inv_succ(i.ones());
-            let h = Rat::inv_succ(1);
-            let e = s.err(Succ(m));
-            let step: (e <= s.term(m).abs()) = s.err_step(m, hm);
-            let halves = calc {
-                x * h + x * h ≈ x * (h + h) := Rat::same_sym(x.mul_add_distr(h, h)),
-                ≈ x * Rat::inv_succ(0) := Rat::mul_respects(x.same_refl(), Rat::inv_succ_half(0)),
-                ≈ x := x.mul_one(),
-            };
-            let double = calc {
-                e + e <= s.term(m).abs() + s.term(m).abs() := by mono(),
-                <= x := s.decay(n, hs, i),
-                ≈ x * h + x * h := Rat::same_sym(halves),
-            };
-            calc {
-                e <= x * h := Rat::le_of_double_le(double),
-                ≈ s.err(n) * (Rat::inv_succ(i.ones()) * h) := s.err(n).mul_assoc(Rat::inv_succ(i.ones()), h),
-                ≈ s.err(n) * Rat::inv_succ(Succ(i).ones()) := Rat::mul_respects(s.err(n).same_refl(), Rat::inv_succ_mul(i.ones(), 1)),
-            }
-        },
-    }
+    let h = Rat::inv_succ(1);
+    let bound: (s.err(n + j) <= s.err(n) * ∏ i < j, h) =
+        OrderedField::geometric_le(λ k => s.err(k), h, n, Rat::le_of_lt(Rat::inv_succ_pos(1)),
+            λ k hk => s.err_half(k, s.start.le_trans(n, k, hs, hk)), j);
+    Rat::le_trans(bound, Rat::le_of_same(Rat::mul_respects(s.err(n).same_refl(), Rat::half_pow(j))))
 }
 
 // The error at `start` is at most twice its term's numerator.

@@ -4,7 +4,7 @@ status: open
 labels: [compiler, typeclass, design]
 area: heather-in-heather
 created: 2026-07-22
-updated: 2026-10-28
+updated: 2026-10-31
 ---
 
 The certifying-compilation contract: a function is compilable iff it has a
@@ -51,3 +51,5 @@ bespoke; revisit once the kernel exists.
 - 2026-08-14: Datarepr keying answered (docs/datarepr-design.md §4, RECOMMENDED): Repr keys on the spec inductive's elaborated declaration, Impl on (fn's .code identity, repr name) — the same intensional bargain as Compile, for the same cache-predictability reason; definitionally-equal-but-distinct types bridge only by explicit certified conversion Impls.
 - 2026-08-25: The first concrete native-target owner is [[x86-64-machine-model]]: it defines the canonical relational target contract and typed-instruction/encoding seam downstream of FunctionIR. This issue continues to own source-function-to-IR certificate packaging; it assumes only that a later lowering can target that separately reviewed machine relation.
 - 2026-10-28: Tracker tidy: dropped `blocked-by: [ir-simulate-design]`, closed since the 2026-08-01 round above. What stays open here is the class layer and the `CallCtx` descriptor. Context since: native code is now one compiler proved once (`docs/native-program-logic-design.md`, B2 retired the per-function path on 2026-10-24), so a per-function `Compile` instance is no longer how native programs get their certificates; whether this issue's remaining scope still has a customer is worth asking before a round picks it up.
+- 2026-10-31: 2026-10-31: Closed as superseded by `docs/runtime-fn-setups-design.md` §9.3. Nothing is left of the class layer: the published `f::runtime : Compiled(f)` record is the instance, keyed on `f`'s syntax by construction (re-reflected on every re-elaboration, pinned against the current `f`); resolution-from-main is the reflected program's explicit callee list; target indexing was struck on 2026-08-07; `CallCtx` specialization is a setup lowering's business if one wants it (N2).
+- 2026-10-31: 2026-10-31: Reopened and narrowed, same day (Minus asked about the class). The class stays: `docs/runtime-fn-setups-design.md` §9.3 makes `Compile(f)` an operation-indexed class keyed on the function (code plus its agreement with `f`). A setup's `runtime` generator publishes `instance Compile(f)`; a hand-written instance is accepted with no setup; a call finds its callee by instance search. Coherence is one instance per function, with the setup as content, not key. Still open here: `CallCtx` specialization and generic code (`where Compile(A::add)`). The superseded closing note above is wrong on the class layer.

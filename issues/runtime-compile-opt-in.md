@@ -1,10 +1,10 @@
 ---
 title: Require explicit Compile instances or runtime derivation markers
-status: open
+status: closed
 labels: [compiler,frontend,metaprogramming]
 area: heather-in-heather
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-10-31
 ---
 
 ## Decision
@@ -41,3 +41,7 @@ logical execution mode or a privileged bypass of the compiler contract.
 - [[runtime-extern-c-abi]] owns ABI selection and foreign boundary semantics.
 
 - 2026-09-07: The intended marker implementation is a Heather declaration generator, not a dedicated Rust annotation handler. [[scoped-declaration-generators]] owns that mechanism, using [[host-elaboration-interface]]. It generates the ordinary function/Compile instance through checked publication; runtime_fn remains a provisional library name.
+
+## Log
+
+- 2026-10-31: 2026-10-31: Closed as superseded by `docs/runtime-fn-setups-design.md` §9. The decided policy carries over unchanged: explicit opt-in, no automatic fallback, the marker a library generator (`runtime fn f`, a declaration-prefix generator, [[declaration-prefix-generators]]). The open acceptance items (unmarked rejection, `examples/x86-native/mix.hthr` opting in, stale certificates on edit) move to [[runtime-fn-default-setup]].

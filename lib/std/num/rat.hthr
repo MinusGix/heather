@@ -1900,10 +1900,6 @@ instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
     archimedean := Rat::archimedean,
 }
 
-// Its integers named too (std/ordered_field's `OrderedFieldOfInt`), which is
-// what `linarith`'s certificates are checked against.
-instance OrderedFieldOfInt<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {}
-
 // A square is nonnegative (`OrderedField::sq_nonneg`), named at the carrier
 // so a hint can cite it: `nlinarith(Rat::sq_nonneg(a - b))`.
 theorem Rat::sq_nonneg(self x: Rat): 0 <= x * x { OrderedField::sq_nonneg(x) }
@@ -2138,6 +2134,18 @@ theorem Rat::range_le(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) 
 
 theorem Rat::range_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → k < n → 0 <= f(k)): 0 <= MonoidRel::range(+, n, f) {
     LocatedAddGroup::range_nonneg(n, f, h)
+}
+
+// `2^-j`, written `1/(ones(j) + 1)`, is the `j`-th power of a half.
+theorem Rat::half_pow(j: Nat): ∏ i < j, Rat::inv_succ(1) ≈ Rat::inv_succ(j.ones()) {
+    match j {
+        Zero => Rat::same_refl(1),
+        Succ(i) => calc {
+            (∏ k < i, Rat::inv_succ(1)) * Rat::inv_succ(1)
+                ≈ Rat::inv_succ(i.ones()) * Rat::inv_succ(1) := Rat::mul_respects(Rat::half_pow(i), Rat::inv_succ(1).same_refl()),
+                ≈ Rat::inv_succ(Succ(i).ones()) := Rat::inv_succ_mul(i.ones(), 1),
+        },
+    }
 }
 
 // Products distribute over differences.

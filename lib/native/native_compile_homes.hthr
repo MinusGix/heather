@@ -258,6 +258,12 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
             False => λ _ none => absurd(none),
             True => λ ok same => ⟨sym(Option::some_inj(live_before([index], len, out), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
         })(refl),
+        Perform(_, args, results) => λ out l => (match homes.all_apart(results, out) as λ b => homes.all_apart(results, out) = b →
+                (match b { False => None, True => Some(args.union(out.minus(results))) }) = Some(l) →
+                (l = args.union(out.minus(results))) ∧ homes.all_apart(results, out).IsTrue() {
+            False => λ _ none => absurd(none),
+            True => λ ok same => ⟨sym(Option::some_inj(args.union(out.minus(results)), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
+        })(refl),
     }
 }
 

@@ -1,10 +1,10 @@
 ---
 title: Two constraints over the same operations, without a combined class
-status: open
+status: closed
 labels: [traits,frontend,design]
 area: language
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-10-31
 ---
 
 A declaration cannot say `A: OrderedField(≈, <, <=, +, *)` and
@@ -63,3 +63,22 @@ first.
   declares it, as an empty-bodied `instance OrderedFieldOfInt<Rat>(…) {}`
   is assembled today. The linking patch alone is not landed: it would turn
   this refusal into the confusing mismatch above.
+- 2026-10-31: Done as one dictionary (Minus chose it over landing the
+  link alone). Inline constraints sharing a symbol at one carrier merge
+  before the declaration elaborates (`merge_linked_constraints`,
+  crates/elab/src/traits.rs) into one constraint at a synthesized class
+  named by its parents sorted (`CommRingOfInt+OrderedField`): parameters
+  of the first parent, one index per distinct symbol, `extends` each parent,
+  no fields, so class flattening keeps `CommRing` once. Resolution
+  assembles it at a concrete carrier from the parents' instances
+  (`join_parents`, crates/elab/src/resolve.rs, step 2b), each field from
+  the first parent that has it; at `Rat` and `CReal` that checks because
+  their instances share the ancestor by reference. `linarith`'s section
+  writes the two constraints; `OrderedFieldOfInt` and its instances are
+  gone. Design: docs/operators-onto-classes-design.md §17. Probes:
+  lib/_tests/std/algebra/ordered_field_tests.hthr (laws from both
+  classes combined, either written order, one parent's lemma through it,
+  `Rat`/`CReal`/explicit `<Rat>`, a section, two carriers still refused).
+  Left: two modules that do not import each other can each synthesize the
+  class, and named `requires` constraints do not merge
+  ([[merged-constraint-class-identity]]).

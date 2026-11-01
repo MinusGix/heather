@@ -29,7 +29,10 @@ import ordered_field;
 import ring;
 import omega;
 
-section<A: OrderedFieldOfInt(≈, <, <=, +, *)> {
+// One dictionary: the two constraints share `≈`, `+` and `*` at `A`, so they
+// are one `CommRingOfInt+OrderedField` with one `CommRing` under both
+// (issues/constraints-sharing-indices.md).
+section<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)> {
 
 // ---------------------------------------------------------------------------
 // Coefficients: the carrier's positive numerals.

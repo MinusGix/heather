@@ -1,6 +1,6 @@
 ---
 title: Let the builder write loop and conditional regions
-status: open
+status: closed
 labels: [native,x86]
 area: heather-in-heather
 milestone: [nh-front]
@@ -29,3 +29,8 @@ statements.
 ## Log
 
 - 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Moved to nh-front: [[runtime-fn-setups-design]] folds this in or closes it.
+<<<<<<< HEAD
+- 2026-10-31: 2026-10-31: `docs/runtime-fn-setups-design.md` §10: kept as a near-term builder ergonomics win. Once R5 lands, loops and conditionals a `runtime fn` can express are written there and lowered to `Loop`/`Conditional` by the default setup; the builder forms retire with the builder in R6.
+=======
+- 2026-10-31: Done on branch claude/project-thread-xhabhy: `Calc` (native_build) writes assignments, byte stores, `choose`/`only_if` and `passes`/`count_up` over words, and `compute` runs one as a statement lowered to one scoped region (a Conditional, a counted Loop over its state words in place). tr's byte map is one such loop and write-elf compiles it; lowerings, scoping, a negative control (a pass reading a word outside its state) and runs are fixed in lib/_tests/native/native_build_tests.hthr. Found on the way: native_alloc keys loop sets by the loop's control word, and builder siblings number from the same `next`, so a count could share a later `do … while`'s test-bit id and be live after its own loop (refused, reason 13); the builder clears every count after its loop.
+>>>>>>> origin/master
