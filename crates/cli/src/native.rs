@@ -244,6 +244,8 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         text.push_str(&verified::owner_imports(&program));
         text.push_str(&verified::program_text(&prefix, &program));
         text.push_str(&verified::agreement_text(&prefix, &program));
+        // Laid out as `heather fmt` lays out the library it is checked into.
+        let text = heather_syntax::fmt::format_source(&text);
         let unchecked = output.with_extension("unchecked.hthr");
         if unchecked.symlink_metadata().is_ok() {
             std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;

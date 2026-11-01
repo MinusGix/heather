@@ -42,7 +42,6 @@ theorem raise_letter_native_fn0_agrees(a0: BitVec(64)): raise_letter_native_fn0(
     trans(raise_letter_native_fn0_expanded(raise_letter_native_sources(), a0), raise_letter_native_fn0_expands(a0))
 }
 
-
 theorem raise_letter_native_sourced(): program_sourced(raise_letter_native_program(), raise_letter_native_sources()) {
     ⟨λ (words: List<BitVec(64)>) (fits: words.len() = 1) => spread(1, λ (ws: List<BitVec(64)>) => raise_letter_native_fn0().eval(raise_letter_native_sources(), ws) = raise_letter_native_sources()(0, ws),
             λ a0 => raise_letter_native_fn0_agrees(a0), words, fits),
