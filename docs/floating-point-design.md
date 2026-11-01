@@ -1346,9 +1346,9 @@ never exact, so `3 · (1/3) <= 1` is refused at every precision; the probes
 pin the refusal). Products of an interval with itself are bounded as if
 independent, so a goal that needs the dependency (`x - x`) widens. Left:
 
-- `log`, by the atanh series after reducing the argument, and argument
-  reduction for `exp`, `sin` and `cos`, whose cost is otherwise linear in
-  the argument ([[interval-log-and-reduction]]);
+- argument reduction for `exp`, whose cost is otherwise linear in the
+  argument, and range reduction for `sin` and `cos` by π (halving landed,
+  below) ([[interval-log-and-reduction]]);
 - `exp(log q) ≈ q`, and log's laws ([[exp-log-inverse]]).
 
 exp, sin and cos are done at real arguments
@@ -1363,10 +1363,26 @@ exp, sin and cos are done at real arguments
 - **sin and cos.** Their addition laws at rationals come from exp's
   coefficient identity, signed by σ, γ (`lib/std/num/float/trig_law.hthr`).
   The same extension carries them to the reals, with parity and
-  `sin² + cos² ≈ 1`. Their leaves, `sin_real_box` and `cos_real_box`, are
-  the enclosure at the argument's n-th term, padded by the Lipschitz bound.
-  That pad grows with the argument's magnitude until argument reduction
-  lands.
+  `sin² + cos² ≈ 1`. sin² + cos² = 1 at rationals bounds both by 1, so
+  their Lipschitz modulus is 2·exp_reach(1) whatever the argument
+  (`CReal::trig_lip`).
+- **The sin and cos leaves reduce the argument by halving.**
+  `sin_real_box` and `cos_real_box` scale x by 2^-k, k the width of x's
+  bound, so the reduced argument is below 1. They enclose sin and cos
+  there, at the argument's n-th term padded by the constant modulus, and
+  double back k times by the addition laws at y = y
+  (`TrigBox::double`, `CReal::trig_reduced_has`). No π is needed.
+  - A doubling at most quadruples a width, so the base reads 2k + 16 bits
+    finer, at 2k more bits of precision.
+  - The base argument is one product x·2^-k. Nested halvings cost more terms
+    than the checker affords.
+  - Each base series runs at the term trimmed of its trailing zero bits
+    (`Dyadic::trim`). A short argument read at 2^-n would otherwise pay for
+    n bits in every ratio.
+  - `sin(10)`, `cos(10)`, `sin(30)` and `cos(100)` close by `intervals()`.
+    `sin(1000)` does not close at the default precision.
+  - Range reduction by π stays open ([[interval-log-and-reduction]]). It
+    would shorten the doublings, not the base series.
 
 ## 17. Floats at the reals (`float-reals`)
 
