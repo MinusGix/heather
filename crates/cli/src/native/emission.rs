@@ -356,9 +356,10 @@ impl Inits<'_> {
     fn state(&self, writer: &mut Writer<'_>, entered: usize) -> Result<(), String> {
         let (p, layout) = (writer.p, writer.layout);
         let chunk = lowered::CHUNK as u64;
-        // Two items save RSP, and two store each byte while there is room.
-        let mut at = 2;
-        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}) = {} {{ refl }}\n", writer.program(at));
+        // Six items save RSP twice and the depth (`Prog::saves_rsp`), and two
+        // store each byte while there is room.
+        let mut at = 6;
+        let mut text = format!("theorem {p}_entry_saved(): Start.saves_rsp({layout}, {}().depth) = {} {{ refl }}\n", self.src, writer.program(at));
         let mut starts = Vec::with_capacity(self.shapes.len());
         for (j, &(capacity, len)) in self.shapes.iter().enumerate() {
             starts.push(at);

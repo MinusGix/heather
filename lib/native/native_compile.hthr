@@ -110,7 +110,13 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // `Layout::of` computes from the homes once: every leaf reads them several
 // times, and recomputing the two filters there dominated the compile's
 // evaluation (issues/native-leaf-pool-per-leaf.md).
-record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr> }
+// The procedures are the table a call names (docs/native-procedures-design.md).
+record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
+    procedures: List<Procedure> := [] }
+
+fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
+    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures)
+}
 
 // Word `id` has a slot.
 fn Layout::word_fits(self layout: Layout, id: Nat) → Bool { Succ(id).leb(layout.words) }
@@ -128,13 +134,12 @@ fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.words + layo
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
 fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
 fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
-// The current activation's frame address, and how many calls are in
-// progress (docs/native-procedures-design.md §4.1): zero at entry, as the
-// region starts.
+// The running activation's frame address, and how many calls deeper it may
+// go (docs/native-procedures-design.md §4.1).
 fn Layout::frame_offset(self layout: Layout) → Nat { layout.stack_offset() + 8 }
 fn Layout::frame_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.frame_offset()) }
-fn Layout::used_offset(self layout: Layout) → Nat { layout.stack_offset() + 16 }
-fn Layout::used_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.used_offset()) }
+fn Layout::room_offset(self layout: Layout) → Nat { layout.stack_offset() + 16 }
+fn Layout::room_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.room_offset()) }
 fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 24 }
 
 // ---------------------------------------------------------------------------
@@ -450,10 +455,12 @@ fn Prog::call(self p: Prog, layout: Layout, out: List<Nat>, shape: CallShape, na
 
 // RSP as the process starts, saved to the slot past the scratch range: the
 // command line is above it (`ArgvAt`), and no statement keeps a register.
-// It is `main`'s frame too, saved to the frame slot.
-fn Prog::saves_rsp(self p: Prog, layout: Layout) → Prog {
+// It is `main`'s frame too, saved to the frame slot, and `depth` calls are
+// room left (docs/native-procedures-design.md §4.1).
+fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
     let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
-    then(then(saved, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)))
+    let framed = then(then(saved, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
+    then(then(framed, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
 }
 
 // RDX the saved RSP, R9 argc, RCX the index; past argc a JAE to `past`.
@@ -767,10 +774,10 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
-fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.words, src.capacities(), homes) }
+fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.words, src.capacities(), homes).with_procedures(src.procedures) }
 
 fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
-    Start.saves_rsp(src.layout(low, homes)).inits(src.layout(low, homes), src.buffers, 0)
+    Start.saves_rsp(src.layout(low, homes), src.depth).inits(src.layout(low, homes), src.buffers, 0)
 }
 
 fn Prog::finish(self p: Prog) → Option<Prog> {

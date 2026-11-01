@@ -40,6 +40,7 @@ import linux_x86_64_io;
 import linux_x86_64_sim;
 import itree;
 import x86_64;
+import x86_64_stack;
 import x86_64_block;
 import x86_64_asm;
 import x86_64_asm_runs;
@@ -952,20 +953,24 @@ theorem Prog::inits_of(layout: Layout, b: Buffer, rest: List<Buffer>, buf: Nat, 
     j(sym(first), λ x _ => x.inits(layout, rest, Succ(buf)) = r, others)
 }
 
-theorem Source::entry_of(self src: Source, low: BitVec(64), homes: Homes, p, q: Prog, saved: Start.saves_rsp(src.layout(low, homes)) = p,
+theorem Source::entry_of(self src: Source, low: BitVec(64), homes: Homes, p, q: Prog, saved: Start.saves_rsp(src.layout(low, homes), src.depth) = p,
     filled: p.inits(src.layout(low, homes), src.buffers, 0) = q): src.entry(low, homes) = q {
     j(sym(saved), λ x _ => x.inits(src.layout(low, homes), src.buffers, 0) = q, filled)
 }
 
 // The compiled program, from its first byte with its code resident, its
-// region zero and the command line `args` at RSP above the region,
-// simulates the source run with `args` at every fuel, whatever homes the
-// compile was given: it checked them (`Source::allocation_ok`).
+// region zero, a stack above the region whose top is RSP and deep enough
+// for the source's calls, and the command line `args` at RSP above the
+// stack, simulates the source run with `args` at every fuel, whatever homes
+// the compile was given: it checked them (`Source::allocation_ok`).
 theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size, program: Prog,
     compiled: src.compile(r.low, homes) = Some(program), origin: BitVec(64), s: MachineState<X86Memory(r.profile)>,
     here: s.rip = next_rip(origin, 0), resident: r.profile.linux().site(program, origin).Resident(s.memory),
-    zero: r.Holds(λ _ => zero_byte(), s.memory), args: List<List<BitVec(8)>>,
-    argv: ArgvAt(r.profile.data().above(r.low.toNat() + r.size), s.memory, read_gpr(Rsp, s.gprs), args)):
+    zero: r.Holds(λ _ => zero_byte(), s.memory),
+    stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
+    stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_eval(src.functions);
     let layout = src.layout(r.low, homes);
@@ -989,10 +994,13 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
                         True => λ laid same => (j(Option::some_inj(whole, program, same),
                             λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimProgram(r.profile.linux(), src.denote(args), s),
                             λ at_whole => {
+                                let framed: (stack.size + 8 * 0 <= stack.size) = omega();
                                 let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
-                                    read_gpr(Rsp, s.gprs), [], 0);
+                                    src.procedures, stack, stack_writes, stack_above, stack_canonical, stack.size, [], src.depth, framed, deep);
+                                let once: (src.depth * 1 <= src.depth * (8 * (src.words + 1))) = Nat::mul_le_mono_l(src.depth, 1, 8 * (src.words + 1), omega());
+                                let small: (src.depth < Nat::pow(2, 64)) = omega(once, deep, stack_canonical, canonical_below_top());
                                 let live = src.main.live_in(homes, []);
-                                let saved = Start.saves_rsp(layout);
+                                let saved = Start.saves_rsp(layout, src.depth);
                                 let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
                                 let w_entry = entry.within_trans(c.prog, whole, src.main.emit_extends(layout, entry, [], 0, c, emitted), Exists(2, refl));
                                 let w_saved = saved.within_trans(entry, whole, Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
@@ -1006,10 +1014,10 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
                                     λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
                                     λ u at exited => sim_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
                                 let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
-                                λ n => t.goes_start(live, ok2.left, refl, refl, Start, w_saved, tree(n),
+                                λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
                                     t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
                                         runs(n)(n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
-                                    s, here, at_whole, ⟨zero, ⟨argv, refl⟩⟩)
+                                    s, here, at_whole, ⟨zero, ⟨argv, sym(top)⟩⟩)
                             }))(resident),
                     })(refl)
                 },
