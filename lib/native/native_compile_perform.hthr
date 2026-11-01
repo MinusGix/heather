@@ -555,6 +555,22 @@ theorem Target::frames_append(self t: Target, m: X86Memory(t.r.profile), xs: Lis
     }
 }
 
+// A push's arithmetic, stated over bare numbers: omega in the push's own
+// context reads every hypothesis there, the claims of trees included.
+theorem push_arith(j, len, done, index, frames, size: Nat, room: 8 * Succ(len) <= j, deep: j + 8 * done = index, framed: index + 8 * frames <= size):
+    (8 <= j) ∧ ((j - 8 * Succ(len) = (j - 8) - 8 * len) ∧ ((8 * len <= j - 8) ∧ (((j - 8) + 8 * Succ(done) = index) ∧
+    (((j - 8) + 8 <= size) ∧ ((j = (j - 8) + 8) ∧ (((j - 8) + 0 = j - 8) ∧ ((j - 8) + 8 <= index))))))) {
+    let a: (8 <= j) = omega(room);
+    let b: (j - 8 * Succ(len) = (j - 8) - 8 * len) = omega(a);
+    let c: (8 * len <= j - 8) = omega(room);
+    let d: ((j - 8) + 8 * Succ(done) = index) = omega(deep, a);
+    let e: ((j - 8) + 8 <= size) = omega(a, deep, framed);
+    let f: (j = (j - 8) + 8) = omega(a);
+    let g: ((j - 8) + 0 = j - 8) = omega();
+    let h: ((j - 8) + 8 <= index) = omega(a, deep);
+    ⟨a, ⟨b, ⟨c, ⟨d, ⟨e, ⟨f, ⟨g, h⟩⟩⟩⟩⟩⟩⟩
+}
+
 // The words `ids` pushed, from RSP at offset `j` down, below what pushes
 // before them left (`done`, the last pushed first).
 theorem Target::goes_pushes(self t: Target, live: List<Nat>, env: Env, tree: ITree<BitVec(64)>(Events::linux()), ids: List<Nat>):
@@ -576,10 +592,10 @@ theorem Target::goes_pushes(self t: Target, live: List<Nat>, env: Env, tree: ITr
             let w_pushed = pushed.within_trans(pushed.pushes(layout, rest), t.program, Prog::within_pushes(layout, rest, pushed), within);
             let w_down = down.within_before(0, Spill(spill), t.program, w_pushed);
             let w_loaded = loaded.within_before(0, Block(rsp_down()), t.program, w_down);
-            let low: (8 <= j) = omega(room);
+            let ar = push_arith(j, rest.len(), done.len(), t.index, t.frames.len(), t.stack.size, room, deep, t.framed);
             let j2 = j - 8;
-            let shift: (j - 8 * Succ(rest.len()) = j2 - 8 * rest.len()) = omega(low);
-            let later = t.goes_pushes(live, env, tree, rest, pushed, j2, Cons(id, done), λ i m => ok(i, Inr(m)), omega(room), omega(deep, low),
+            let shift: (j - 8 * Succ(rest.len()) = j2 - 8 * rest.len()) = ar.right.left;
+            let later = t.goes_pushes(live, env, tree, rest, pushed, j2, Cons(id, done), λ i m => ok(i, Inr(m)), ar.right.right.left, ar.right.right.right.left,
                 within,
                 j(shift, λ k _ => t.GoesR(prog_len(pushed.pushes(layout, rest)), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
                     ((read_gpr(Rsp, g) = t.stack.at(k)) ∧ t.FramesAt(m, env.words_at(rest.onto(Cons(id, done))), k))), next));
@@ -597,8 +613,10 @@ theorem Target::goes_pushes(self t: Target, live: List<Nat>, env: Env, tree: ITr
                 λ (u: MachineState<X86Memory(t.r.profile)>) => q1(u.gprs, u.memory), moved, λ u h => h);
             let inside = ok(id, Inl(refl));
             let word = t.goes_word_to(live, env, p, id, Rax, inside.left, inside.right, w_loaded, tree, q1, moved2);
-            let fits: (j2 + 8 <= t.stack.size) = omega(low, deep, t.framed);
-            let back: (j = j2 + 8) = omega(low);
+            let fits: (j2 + 8 <= t.stack.size) = ar.right.right.right.right.left;
+            let back: (j = j2 + 8) = ar.right.right.right.right.right.left;
+            let zero: (j2 + 0 = j2) = ar.right.right.right.right.right.right.left;
+            let below: (j2 + 8 <= t.index) = ar.right.right.right.right.right.right.right;
             t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
                     q1(write_gpr(Rax, env.word(id), write_gpr(Rbx, layout.rbx_word(env, id), u.gprs)), u.memory),
                 λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
@@ -610,12 +628,11 @@ theorem Target::goes_pushes(self t: Target, live: List<Nat>, env: Env, tree: ITr
                 let g2 = g_down(g1);
                 let rsp: (read_gpr(Rsp, g2) = t.stack.at(j2)) = trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.sub(BitVec::ofNat(8)), held.right.left),
                     trans(cong_fn<Nat, BitVec(64)>(λ k => t.stack.at(k).sub(BitVec::ofNat(8)), back), push_at(t.stack.low, j2)));
-                let zero: (j2 + 0 = j2) = omega();
                 let address: (stack_address(g2, BitVec::ofNat(0)) = t.stack.at(j2)) =
                     trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(0, n := 8).sign_extend(56)), rsp),
                         trans(displaced_at(t.stack.low, j2, BitVec::ofNat(0), refl), rip_count(t.stack.low, zero)));
                 let m2 = t.r.profile.store(m, t.stack.at(j2), word_bytes(w));
-                let kept = t.held_stack_store(live, env, g, m, held.left, j2, omega(low, deep), w);
+                let kept = t.held_stack_store(live, env, g, m, held.left, j2, below, w);
                 let held2: t.Held(live, env, g2, m2) = t.held_scratch(live, env, write_gpr(Rbx, BitVec::ofNat(8), g1), m2,
                     t.held_scratch(live, env, g1, m2, t.held_scratch(live, env, write_gpr(Rbx, layout.rbx_word(env, id), g), m2,
                         t.held_scratch(live, env, g, m2, kept, Rbx, layout.rbx_word(env, id), trivial), Rax, w, trivial), Rbx, BitVec::ofNat(8), trivial),
