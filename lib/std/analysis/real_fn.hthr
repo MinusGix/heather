@@ -34,9 +34,8 @@
 // polynomials. A derivative bounded by `M` makes the function Lipschitz at
 // the scale of its modulus with constant `M + 1` (`DerivOn::local_lipschitz`):
 // that is the only regularity the product and chain rules spend. The global
-// mean value inequality (`|g| <= M` on `[a, b]` gives `L = M`) is the
-// telescoping of these local steps and waits for the difference calculus
-// (issues/finite-difference-calculus.md).
+// mean value inequality (`|g| <= M` on a convex domain gives `L = M`,
+// `DerivOn::mvi`) chains these local steps, at the end of the file.
 //
 // The product and chain rules take bounds on the functions and derivatives
 // involved as hypotheses rather than deriving them: on an unbounded domain
