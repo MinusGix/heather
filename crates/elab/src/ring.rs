@@ -93,7 +93,11 @@ struct RelCarrier {
 /// the term it is.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Op {
+    /// A global, after the arguments it takes before its operands: a generic
+    /// carrier's operation (`hurwitz::Hurwitz::add` at `Hurwitz<Int>`) is
+    /// applied to its section's parameters first.
     Global(String),
+    GlobalAfter(String, usize),
     Term(Rc<Term>),
 }
 
@@ -102,6 +106,7 @@ impl Op {
     fn args<'t>(&self, elab: &Elaborator, tm: &'t Term) -> Option<Vec<&'t Rc<Term>>> {
         match self {
             Op::Global(name) => named_args(elab, tm, name),
+            Op::GlobalAfter(name, prefix) => named_args(elab, tm, name).and_then(|args| (args.len() > *prefix).then(|| args[*prefix..].to_vec())),
             Op::Term(op) => {
                 let mut args = Vec::new();
                 let mut head = tm;
@@ -118,8 +123,20 @@ impl Op {
     /// The global this operation is, where it is one.
     fn global(&self) -> Option<&str> {
         match self {
-            Op::Global(name) => Some(name),
+            Op::Global(name) | Op::GlobalAfter(name, _) => Some(name),
             Op::Term(_) => None,
+        }
+    }
+
+    /// Is `op`, unapplied, this operation: the global itself, or the class
+    /// carrier's operation term as it stands.
+    fn is(&self, elab: &Elaborator, op: &Term) -> bool {
+        match self {
+            Op::Global(name) => crate::range_sum::op_is(elab, op, name),
+            Op::GlobalAfter(name, prefix) => {
+                crate::omega_cert::named_args(elab, op, name).is_some_and(|args| args.len() == *prefix)
+            }
+            Op::Term(term) => *op == **term,
         }
     }
 }
@@ -321,7 +338,7 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
     let Type::El { tm, .. } = ty else {
         return None;
     };
-    let ops = rel_carrier(elab, cx, &rel.carrier, span)?;
+    let ops = rel_carrier(elab, cx, &rel.carrier, Some(tm), span)?;
     if ops.same.args(elab, tm)?.len() != 2 {
         return None;
     }
@@ -336,7 +353,7 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
 
 /// A carrier with a `CommRingOfInt` instance, its spelling and designated
 /// operations; else a class carrier ([`class_carrier`]).
-fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, span: Span) -> Option<RelCarrier> {
+fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term>, span: Span) -> Option<RelCarrier> {
     let Some(carrier) = elab.carrier_of_ty(cx, carrier_ty, span) else {
         return class_carrier(elab, cx, carrier_ty);
     };
@@ -344,9 +361,20 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, span: Span) -> Opt
     if elab.traits.instances_answering(&class, Some(&carrier.key)).is_empty() {
         return None;
     }
-    let op = |sym: &str, fixity| elab.designated(sym, fixity, &carrier.key).map(Op::Global);
+    // A generic carrier's operations take its section's parameters before
+    // their operands; the goal's relation shows how many, and the carrier's
+    // other designations are read as coming from the same section. A
+    // reading with no goal (`linarith`'s) is at a carrier with no parameters.
+    let same = elab.designated("≈", OpFixity::Infix, &carrier.key)?;
+    let prefix = match goal { Some(goal) => named_args(elab, goal, &same)?.len().checked_sub(2)?, None => 0 };
+    let op = |sym: &str, fixity| {
+        elab.designated(sym, fixity, &carrier.key).map(|name| if prefix == 0 { Op::Global(name) } else { Op::GlobalAfter(name, prefix) })
+    };
+    // A carrier with parameters may spell short (`Hurwitz<…>`); the
+    // certificate names it in full.
+    let source = elab.spell_type_clean(cx, carrier_ty).filter(|s| !s.contains('…')).or_else(|| elab.spell_type_source(cx, carrier_ty))?;
     Some(RelCarrier {
-        source: elab.spell_type_clean(cx, carrier_ty)?,
+        source,
         same: op("≈", OpFixity::Infix)?,
         add: op("+", OpFixity::Infix),
         sub: op("-", OpFixity::Infix),
@@ -422,7 +450,7 @@ pub(crate) struct Reciprocal {
 
 impl<'a> FieldReading<'a> {
     pub(crate) fn at(elab: &'a Elaborator, cx: &'a Cx, carrier_ty: &Type, level: Level, span: Span) -> Option<Self> {
-        let ops = rel_carrier(elab, cx, carrier_ty, span)?;
+        let ops = rel_carrier(elab, cx, carrier_ty, None, span)?;
         Some(FieldReading {
             reifier: Reifier {
                 elab,
@@ -913,14 +941,16 @@ impl Reifier<'_> {
 
     /// A range sum at a successor bound is its last term added on, a range
     /// product its last factor multiplied on (`crate::range_sum`); the
-    /// carrier's own `+` or `*` only.
+    /// carrier's own `+` or `*` only, a global's or a class carrier's.
     fn range_step(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Option<Syn>, String> {
+        let int_ops = (Op::Global("int::Int::add".into()), Op::Global("int::Int::mul".into()));
+        let nat_ops = (Op::Global("nat::Nat::add".into()), Op::Global("nat::Nat::mul".into()));
         let (add, mul) = match &self.carrier {
-            Carrier::Int => (Some("int::Int::add"), Some("int::Int::mul")),
-            Carrier::Nat => (Some("nat::Nat::add"), Some("nat::Nat::mul")),
-            Carrier::Rel(ops) => (ops.add.as_ref().and_then(Op::global), ops.mul.as_ref().and_then(Op::global)),
+            Carrier::Int => (Some(&int_ops.0), Some(&int_ops.1)),
+            Carrier::Nat => (Some(&nat_ops.0), Some(&nat_ops.1)),
+            Carrier::Rel(ops) => (ops.add.as_ref(), ops.mul.as_ref()),
         };
-        let is = |op: &Term, name: Option<&str>| name.is_some_and(|name| crate::range_sum::op_is(self.elab, op, name));
+        let is = |op: &Term, ring_op: Option<&Op>| ring_op.is_some_and(|ring_op| ring_op.is(self.elab, op));
         if let Some(op) = crate::range_sum::empty(self.elab, tm) {
             return Ok(if is(&op, add) {
                 Some(Syn::Const(0))
@@ -1354,7 +1384,9 @@ impl Reifier<'_> {
         // An atom that does not spell (a field read such as `x.seq(n)`,
         // issues/ring-field-read-atom-spelling.md) is named by an alias
         // bound to the term itself when the atom list is elaborated.
-        let spelled = self.elab.spell_term_source(self.cx, tm);
+        // So is one whose spelling does not parse: a range sum at a class
+        // carrier spells its operation as the operator variable (`#op+@…`).
+        let spelled = self.elab.spell_term_source(self.cx, tm).filter(|source| parse_expr(source).is_ok());
         if let Some(source) = &spelled
             && let Some(index) = self.atoms.iter().position(|atom| !atom.named && atom.source == *source)
         {
@@ -1414,6 +1446,13 @@ fn trailing_integer(source: &str) -> Option<Z> {
     let digits_at = body.rfind(|c: char| !c.is_ascii_digit())? + 1;
     let digits: Z = body[digits_at..].parse().ok()?;
     let head = &body[..digits_at];
+    // A ring's own naturals at a numeral, `semiring::Ring::nat_cast<K>(2)`
+    // (what `difference`'s falling factorials and binomial sums write): the
+    // class carrier's constant, which is `Ring::int_cast<K>(OfNat(2))` by
+    // computation, as the caller's conversion confirms.
+    if head.ends_with(">(") && head.rsplit_once("::nat_cast<").is_some_and(|(path, _)| path.ends_with("Ring")) {
+        return (closed == 1).then_some(digits);
+    }
     let value = if head.ends_with("OfNat(") {
         digits
     } else if head.ends_with("NegSucc(") {

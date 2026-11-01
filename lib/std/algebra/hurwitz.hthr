@@ -1,0 +1,617 @@
+// Hurwitz series: calculus in coinductive form
+// (issues/formal-power-series.md; docs/analysis-foundations-design.md §3.4, §5).
+//
+// A series over a commutative ring is its coefficient function in the
+// Hurwitz convention: `coeff(n)` stands for the `n`-th derivative at the
+// point, with no factorial (Keigher 1997; Pavlović and Escardó 1998). Then
+//
+// - the derivative is the shift (`Hurwitz::d`) and the antiderivative with
+//   a given value is prepending it (`Hurwitz::cons`), so the fundamental
+//   theorem of calculus is two laws that hold by definition;
+// - the product is binomial convolution over the antidiagonal
+//   (`MonoidRel::antidiag`, the hook transseries generalise, §11), and the
+//   derivative is a derivation of it: the Leibniz rule is Pascal's rule
+//   summed (`difference::Semiring::pascal_step`);
+// - the proof principle is bisimulation (`Hurwitz::coind`): two series
+//   related by a relation that relates their heads and is closed under the
+//   derivative are equal coefficientwise. It is a theorem, proved by
+//   induction on the index, so no codata is needed;
+// - a differential equation with a head is a definition: `exp(a·t)` has
+//   head `1` and derivative `a·exp(a·t)`, `sin` and `cos` have heads `0`
+//   and `1` and derivatives `cos` and `-sin`. Their laws are short
+//   coinductive proofs (`Hurwitz::exp_add`, `Hurwitz::sin_sq_add_cos_sq`),
+//   over any commutative ring, `ℤ` included.
+//
+// The ring laws of the product are coinductive too: each holds at the head
+// by `ring` at the coefficients, and its derivative is the same law at the
+// derivatives through the Leibniz rule, so one induction on the index over
+// all series at once proves it (`Hurwitz::mul_comm`, `Hurwitz::mul_assoc`).
+//
+// Codata is not the representation (§3.4): the Leibniz product is
+// corecursion up to `+`, which the guard refuses
+// (issues/codata-nested-guards.md). A coefficient function shares nothing,
+// so this is the representation to reason in; jets (`Hurwitz::SameUpTo`)
+// are the truncations to compute with.
+
+import logic;
+import nat;
+import int;
+import omega;
+import list;
+import pair;
+import relation;
+import relation_props;
+import algebra_rel;
+import semiring;
+import big_operator;
+import difference;
+import ring;
+import tactic;
+
+record Hurwitz<A> { coeff: Nat → A }
+
+section<A: CommRing(≈, +, *)> {
+
+// Coefficientwise equality, the series' `≈`.
+fn Hurwitz::Same(f, g: Hurwitz<A>) → Type { (n: Nat) → f.coeff(n) ≈ g.coeff(n) }
+
+theorem Hurwitz::same_refl(f: Hurwitz<A>): Hurwitz::Same(f, f) { λ n => A.rel_refl(f.coeff(n)) }
+
+theorem Hurwitz::same_sym(f, g: Hurwitz<A>, h: Hurwitz::Same(f, g)): Hurwitz::Same(g, f) {
+    λ n => A.rel_sym(f.coeff(n), g.coeff(n), h(n))
+}
+
+theorem Hurwitz::same_trans(f, g, k: Hurwitz<A>, h1: Hurwitz::Same(f, g), h2: Hurwitz::Same(g, k)): Hurwitz::Same(f, k) {
+    λ n => A.rel_trans(f.coeff(n), g.coeff(n), k.coeff(n), h1(n), h2(n))
+}
+
+// ---------------------------------------------------------------------------
+// The operations.
+
+// The constant `c`: its value is `c`, every derivative is zero.
+fn Hurwitz::constant(c: A) → Hurwitz<A> { Hurwitz { coeff: λ n => match n { Zero => c, Succ(_) => A.unit } } }
+
+fn Hurwitz::zero() → Hurwitz<A> { Hurwitz { coeff: λ n => A.unit } }
+
+fn Hurwitz::one() → Hurwitz<A> { Hurwitz::constant(A.multiplicative.unit) }
+
+fn Hurwitz::add(f, g: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => f.coeff(n) + g.coeff(n) } }
+
+fn Hurwitz::neg(f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => A.inv(f.coeff(n)) } }
+
+fn Hurwitz::scale(c: A, f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => c * f.coeff(n) } }
+
+// The derivative is the shift.
+fn Hurwitz::d(f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => f.coeff(Succ(n)) } }
+
+// The antiderivative of `f` with value `c` at the point.
+fn Hurwitz::cons(c: A, f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => match n { Zero => c, Succ(m) => f.coeff(m) } } }
+
+// The product is binomial convolution: `(fg)_n = ∑_{i+j=n} C(n,i) f_i g_j`.
+fn Hurwitz::mul(f, g: Hurwitz<A>) → Hurwitz<A> {
+    Hurwitz { coeff: λ n => MonoidRel::antidiag(+, n, λ i j => Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(j))) }
+}
+
+// ---------------------------------------------------------------------------
+// The fundamental theorem of calculus, by definition.
+
+theorem Hurwitz::d_cons(c: A, f: Hurwitz<A>): Hurwitz::Same(Hurwitz::d(Hurwitz::cons(c, f)), f) { Hurwitz::same_refl(f) }
+
+theorem Hurwitz::cons_d(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::cons(f.coeff(0), Hurwitz::d(f)), f) {
+    λ n => match n { Zero => A.rel_refl(f.coeff(0)), Succ(m) => A.rel_refl(f.coeff(Succ(m))) }
+}
+
+// ---------------------------------------------------------------------------
+// Bisimulation. A relation that relates heads and is closed under the
+// derivative relates only equal series: at index `n`, by induction on `n`
+// over every related pair at once.
+
+theorem Hurwitz::coind(R: Hurwitz<A> → Hurwitz<A> → Type,
+    head: (f, g: Hurwitz<A>) → R(f, g) → f.coeff(0) ≈ g.coeff(0),
+    step: (f, g: Hurwitz<A>) → R(f, g) → R(Hurwitz::d(f), Hurwitz::d(g)),
+    n: Nat): (f, g: Hurwitz<A>) → R(f, g) → f.coeff(n) ≈ g.coeff(n)
+{
+    match n {
+        Zero => head,
+        Succ(m) => λ f g r => Hurwitz::coind(R, head, step, m, Hurwitz::d(f), Hurwitz::d(g), step(f, g, r)),
+    }
+}
+
+// The principle at one pair: equal heads and equal derivatives.
+theorem Hurwitz::ext(f, g: Hurwitz<A>, h0: f.coeff(0) ≈ g.coeff(0), hd: Hurwitz::Same(Hurwitz::d(f), Hurwitz::d(g))): Hurwitz::Same(f, g) {
+    λ n => match n { Zero => h0, Succ(m) => hd(m) }
+}
+
+// A series whose derivative vanishes is its constant.
+theorem Hurwitz::constant_of_d(f: Hurwitz<A>, hd: Hurwitz::Same(Hurwitz::d(f), Hurwitz::zero())): Hurwitz::Same(f, Hurwitz::constant(f.coeff(0))) {
+    Hurwitz::ext(f, Hurwitz::constant(f.coeff(0)), A.rel_refl(f.coeff(0)), hd)
+}
+
+// A linear equation `F' = c·F` has one solution with a given head.
+theorem Hurwitz::linear_unique_at(c: A, F, G: Hurwitz<A>,
+    hF: Hurwitz::Same(Hurwitz::d(F), Hurwitz::scale(c, F)), hG: Hurwitz::Same(Hurwitz::d(G), Hurwitz::scale(c, G)),
+    h0: F.coeff(0) ≈ G.coeff(0), n: Nat): F.coeff(n) ≈ G.coeff(n)
+{
+    match n {
+        Zero => h0,
+        Succ(m) => calc {
+            F.coeff(Succ(m))
+                ≈ c * F.coeff(m) := hF(m),
+                ≈ c * G.coeff(m) := rel_cong(Hurwitz::linear_unique_at(c, F, G, hF, hG, h0, m)),
+                ≈ G.coeff(Succ(m)) := A.rel_sym(G.coeff(Succ(m)), c * G.coeff(m), hG(m)),
+        },
+    }
+}
+
+theorem Hurwitz::linear_unique(c: A, F, G: Hurwitz<A>,
+    hF: Hurwitz::Same(Hurwitz::d(F), Hurwitz::scale(c, F)), hG: Hurwitz::Same(Hurwitz::d(G), Hurwitz::scale(c, G)),
+    h0: F.coeff(0) ≈ G.coeff(0)): Hurwitz::Same(F, G)
+{
+    λ n => Hurwitz::linear_unique_at(c, F, G, hF, hG, h0, n)
+}
+
+// ---------------------------------------------------------------------------
+// The Leibniz rule: the derivative is a derivation of the product.
+
+theorem Hurwitz::leibniz_at(f, g: Hurwitz<A>, n: Nat):
+    Hurwitz::mul(f, g).coeff(Succ(n)) ≈ Hurwitz::mul(Hurwitz::d(f), g).coeff(n) + Hurwitz::mul(f, Hurwitz::d(g)).coeff(n)
+{
+    let h = λ (i: Nat) => f.coeff(i) * g.coeff(Nat::sub(Succ(n), i));
+    let pascal: (Hurwitz::mul(f, g).coeff(Succ(n))
+        ≈ (∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(Succ(i))) + ∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(i)) =
+        Semiring::pascal_step(n, h);
+    let shifted: (∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(i) ≈ Hurwitz::mul(f, Hurwitz::d(g)).coeff(n)) =
+        MonoidRel::range_cong(+, Succ(n), λ i => Semiring::of_nat<A>(n.choose(i)) * h(i),
+            λ i => Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Succ(Nat::sub(n, i)))),
+            λ i hi => {
+                let e: (Nat::sub(Succ(n), i) = Succ(Nat::sub(n, i))) = omega(i.le_add(n, omega(hi)), i.le_add(Succ(n), omega(hi)));
+                j(e, λ w _ => Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(Succ(n), i)))
+                    ≈ Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(w)),
+                    A.rel_refl(Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(Succ(n), i)))))
+            });
+    calc {
+        Hurwitz::mul(f, g).coeff(Succ(n))
+            ≈ (∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(Succ(i))) + ∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(i) := pascal,
+            ≈ (∑ i < Succ(n), Semiring::of_nat<A>(n.choose(i)) * h(Succ(i))) + Hurwitz::mul(f, Hurwitz::d(g)).coeff(n) := rel_cong(shifted),
+    }
+}
+
+theorem Hurwitz::leibniz(f, g: Hurwitz<A>):
+    Hurwitz::Same(Hurwitz::d(Hurwitz::mul(f, g)), Hurwitz::add(Hurwitz::mul(Hurwitz::d(f), g), Hurwitz::mul(f, Hurwitz::d(g))))
+{
+    λ n => Hurwitz::leibniz_at(f, g, n)
+}
+
+// ---------------------------------------------------------------------------
+// The product's laws at one coefficient. The ones that hold termwise are
+// direct; the rest are coinductive (below).
+
+// The head of a product is the product of the heads.
+theorem Hurwitz::mul_head(f, g: Hurwitz<A>): Hurwitz::mul(f, g).coeff(0) ≈ f.coeff(0) * g.coeff(0) {
+    let e: (Hurwitz::mul(f, g).coeff(0) ≈ A.unit + Semiring::of_nat<A>(1) * (f.coeff(0) * g.coeff(0))) =
+        A.rel_refl(Hurwitz::mul(f, g).coeff(0));
+    let o: (Semiring::of_nat<A>(1) ≈ A.multiplicative.unit) = Semiring::of_nat_one<A>();
+    ring(e, o)
+}
+
+theorem Hurwitz::mul_respects_at(f, f2, g, g2: Hurwitz<A>, hf: Hurwitz::Same(f, f2), hg: Hurwitz::Same(g, g2), n: Nat):
+    Hurwitz::mul(f, g).coeff(n) ≈ Hurwitz::mul(f2, g2).coeff(n)
+{
+    MonoidRel::range_cong(+, Succ(n), λ i => Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(n, i))),
+        λ i => Semiring::of_nat<A>(n.choose(i)) * (f2.coeff(i) * g2.coeff(Nat::sub(n, i))),
+        λ i _ => {
+            let e: (Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(n, i)))
+                ≈ Semiring::of_nat<A>(n.choose(i)) * (f2.coeff(i) * g2.coeff(Nat::sub(n, i)))) = ring(hf(i), hg(Nat::sub(n, i)));
+            e
+        })
+}
+
+theorem Hurwitz::mul_respects(f, f2, g, g2: Hurwitz<A>, hf: Hurwitz::Same(f, f2), hg: Hurwitz::Same(g, g2)):
+    Hurwitz::Same(Hurwitz::mul(f, g), Hurwitz::mul(f2, g2))
+{
+    λ n => Hurwitz::mul_respects_at(f, f2, g, g2, hf, hg, n)
+}
+
+theorem Hurwitz::mul_add_at(f, g, k: Hurwitz<A>, n: Nat):
+    Hurwitz::mul(Hurwitz::add(f, g), k).coeff(n) ≈ Hurwitz::mul(f, k).coeff(n) + Hurwitz::mul(g, k).coeff(n)
+{
+    let c = λ (i: Nat) => Semiring::of_nat<A>(n.choose(i));
+    let terms: (Hurwitz::mul(Hurwitz::add(f, g), k).coeff(n)
+        ≈ ∑ i < Succ(n), (c(i) * (f.coeff(i) * k.coeff(Nat::sub(n, i))) + c(i) * (g.coeff(i) * k.coeff(Nat::sub(n, i))))) =
+        MonoidRel::range_cong(+, Succ(n), λ i => c(i) * ((f.coeff(i) + g.coeff(i)) * k.coeff(Nat::sub(n, i))),
+            λ i => c(i) * (f.coeff(i) * k.coeff(Nat::sub(n, i))) + c(i) * (g.coeff(i) * k.coeff(Nat::sub(n, i))),
+            λ i _ => {
+                let e: (Semiring::of_nat<A>(n.choose(i)) * ((f.coeff(i) + g.coeff(i)) * k.coeff(Nat::sub(n, i)))
+                    ≈ Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * k.coeff(Nat::sub(n, i))) + Semiring::of_nat<A>(n.choose(i)) * (g.coeff(i) * k.coeff(Nat::sub(n, i)))) = ring;
+                e
+            });
+    A.rel_trans(Hurwitz::mul(Hurwitz::add(f, g), k).coeff(n),
+        ∑ i < Succ(n), (c(i) * (f.coeff(i) * k.coeff(Nat::sub(n, i))) + c(i) * (g.coeff(i) * k.coeff(Nat::sub(n, i)))),
+        Hurwitz::mul(f, k).coeff(n) + Hurwitz::mul(g, k).coeff(n),
+        terms,
+        CommMonoidRel::range_op(≈, +, Succ(n), λ i => c(i) * (f.coeff(i) * k.coeff(Nat::sub(n, i))), λ i => c(i) * (g.coeff(i) * k.coeff(Nat::sub(n, i)))))
+}
+
+// A scalar factor leaves the product.
+theorem Hurwitz::mul_scale_at(a: A, f, g: Hurwitz<A>, n: Nat):
+    Hurwitz::mul(Hurwitz::scale(a, f), g).coeff(n) ≈ a * Hurwitz::mul(f, g).coeff(n)
+{
+    let c = λ (i: Nat) => Semiring::of_nat<A>(n.choose(i));
+    let terms: (Hurwitz::mul(Hurwitz::scale(a, f), g).coeff(n) ≈ ∑ i < Succ(n), a * (c(i) * (f.coeff(i) * g.coeff(Nat::sub(n, i))))) =
+        MonoidRel::range_cong(+, Succ(n), λ i => c(i) * ((a * f.coeff(i)) * g.coeff(Nat::sub(n, i))),
+            λ i => a * (c(i) * (f.coeff(i) * g.coeff(Nat::sub(n, i)))),
+            λ i _ => {
+                let e: (Semiring::of_nat<A>(n.choose(i)) * ((a * f.coeff(i)) * g.coeff(Nat::sub(n, i)))
+                    ≈ a * (Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(n, i))))) = ring;
+                e
+            });
+    A.rel_trans(Hurwitz::mul(Hurwitz::scale(a, f), g).coeff(n), ∑ i < Succ(n), a * (c(i) * (f.coeff(i) * g.coeff(Nat::sub(n, i)))),
+        a * Hurwitz::mul(f, g).coeff(n), terms,
+        A.rel_sym(a * Hurwitz::mul(f, g).coeff(n), ∑ i < Succ(n), a * (c(i) * (f.coeff(i) * g.coeff(Nat::sub(n, i)))),
+            Semiring::mul_range_l(a, Succ(n), λ i => c(i) * (f.coeff(i) * g.coeff(Nat::sub(n, i))))))
+}
+
+// A factor that is zero makes the product zero.
+theorem Hurwitz::mul_zero_l_at(f, g: Hurwitz<A>, hf: Hurwitz::Same(f, Hurwitz::zero()), n: Nat): Hurwitz::mul(f, g).coeff(n) ≈ A.unit {
+    MonoidRel::range_unit(+, Succ(n), λ i => Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(n, i))),
+        λ i _ => {
+            let z: (f.coeff(i) ≈ A.unit) = hf(i);
+            let e: (Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(n, i))) ≈ A.unit) = ring(z);
+            e
+        })
+}
+
+// ---------------------------------------------------------------------------
+// The coinductive laws: the head by `ring`, the derivative by the Leibniz
+// rule and the same law one index down, over all series at once.
+
+theorem Hurwitz::mul_comm_at(n: Nat): (f, g: Hurwitz<A>) → Hurwitz::mul(f, g).coeff(n) ≈ Hurwitz::mul(g, f).coeff(n) {
+    match n {
+        Zero => λ f g => ring(Hurwitz::mul_head(f, g), Hurwitz::mul_head(g, f)),
+        Succ(m) => λ f g => ring(Hurwitz::leibniz_at(f, g, m), Hurwitz::leibniz_at(g, f, m),
+            Hurwitz::mul_comm_at(m, Hurwitz::d(f), g), Hurwitz::mul_comm_at(m, f, Hurwitz::d(g))),
+    }
+}
+
+theorem Hurwitz::mul_comm(f, g: Hurwitz<A>): Hurwitz::Same(Hurwitz::mul(f, g), Hurwitz::mul(g, f)) { λ n => Hurwitz::mul_comm_at(n, f, g) }
+
+theorem Hurwitz::mul_add_r_at(f, g, k: Hurwitz<A>, n: Nat):
+    Hurwitz::mul(f, Hurwitz::add(g, k)).coeff(n) ≈ Hurwitz::mul(f, g).coeff(n) + Hurwitz::mul(f, k).coeff(n)
+{
+    ring(Hurwitz::mul_comm_at(n, f, Hurwitz::add(g, k)), Hurwitz::mul_add_at(g, k, f, n), Hurwitz::mul_comm_at(n, g, f), Hurwitz::mul_comm_at(n, k, f))
+}
+
+theorem Hurwitz::mul_assoc_at(n: Nat): (f, g, k: Hurwitz<A>) →
+    Hurwitz::mul(Hurwitz::mul(f, g), k).coeff(n) ≈ Hurwitz::mul(f, Hurwitz::mul(g, k)).coeff(n)
+{
+    match n {
+        Zero => λ f g k => ring(Hurwitz::mul_head(Hurwitz::mul(f, g), k), Hurwitz::mul_head(f, g),
+            Hurwitz::mul_head(f, Hurwitz::mul(g, k)), Hurwitz::mul_head(g, k)),
+        Succ(m) => λ f g k => {
+            let fg = Hurwitz::mul(f, g);
+            let gk = Hurwitz::mul(g, k);
+            let left: (Hurwitz::mul(Hurwitz::d(fg), k).coeff(m)
+                ≈ Hurwitz::mul(Hurwitz::add(Hurwitz::mul(Hurwitz::d(f), g), Hurwitz::mul(f, Hurwitz::d(g))), k).coeff(m)) =
+                Hurwitz::mul_respects_at(Hurwitz::d(fg), Hurwitz::add(Hurwitz::mul(Hurwitz::d(f), g), Hurwitz::mul(f, Hurwitz::d(g))), k, k,
+                    Hurwitz::leibniz(f, g), Hurwitz::same_refl(k), m);
+            let right: (Hurwitz::mul(f, Hurwitz::d(gk)).coeff(m)
+                ≈ Hurwitz::mul(f, Hurwitz::add(Hurwitz::mul(Hurwitz::d(g), k), Hurwitz::mul(g, Hurwitz::d(k)))).coeff(m)) =
+                Hurwitz::mul_respects_at(f, f, Hurwitz::d(gk), Hurwitz::add(Hurwitz::mul(Hurwitz::d(g), k), Hurwitz::mul(g, Hurwitz::d(k))),
+                    Hurwitz::same_refl(f), Hurwitz::leibniz(g, k), m);
+            ring(Hurwitz::leibniz_at(fg, k, m), Hurwitz::leibniz_at(f, gk, m), left, right,
+                Hurwitz::mul_add_at(Hurwitz::mul(Hurwitz::d(f), g), Hurwitz::mul(f, Hurwitz::d(g)), k, m),
+                Hurwitz::mul_add_r_at(f, Hurwitz::mul(Hurwitz::d(g), k), Hurwitz::mul(g, Hurwitz::d(k)), m),
+                Hurwitz::mul_assoc_at(m, Hurwitz::d(f), g, k), Hurwitz::mul_assoc_at(m, f, Hurwitz::d(g), k),
+                Hurwitz::mul_assoc_at(m, f, g, Hurwitz::d(k)))
+        },
+    }
+}
+
+theorem Hurwitz::mul_assoc(f, g, k: Hurwitz<A>): Hurwitz::Same(Hurwitz::mul(Hurwitz::mul(f, g), k), Hurwitz::mul(f, Hurwitz::mul(g, k))) {
+    λ n => Hurwitz::mul_assoc_at(n, f, g, k)
+}
+
+// `1` is the product's unit: its derivative is zero.
+theorem Hurwitz::one_mul_at(n: Nat): (f: Hurwitz<A>) → Hurwitz::mul(Hurwitz::one(), f).coeff(n) ≈ f.coeff(n) {
+    let one = Hurwitz::one<A>();
+    match n {
+        Zero => λ f => {
+            let h: (Hurwitz::mul(one, f).coeff(0) ≈ A.multiplicative.unit * f.coeff(0)) = Hurwitz::mul_head(one, f);
+            ring(h)
+        },
+        Succ(m) => λ f => {
+            let l: (Hurwitz::mul(one, f).coeff(Succ(m)) ≈ Hurwitz::mul(Hurwitz::d(one), f).coeff(m) + Hurwitz::mul(one, Hurwitz::d(f)).coeff(m)) =
+                Hurwitz::leibniz_at(one, f, m);
+            let z: (Hurwitz::mul(Hurwitz::d(one), f).coeff(m) ≈ A.unit) = Hurwitz::mul_zero_l_at(Hurwitz::d(one), f, λ i => A.rel_refl(A.unit), m);
+            let r: (Hurwitz::mul(one, Hurwitz::d(f)).coeff(m) ≈ f.coeff(Succ(m))) = Hurwitz::one_mul_at(m, Hurwitz::d(f));
+            ring(l, z, r)
+        },
+    }
+}
+
+theorem Hurwitz::one_mul(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::mul(Hurwitz::one(), f), f) { λ n => Hurwitz::one_mul_at(n, f) }
+
+// The additive laws hold coefficientwise, and the rest of the ring follows.
+theorem Hurwitz::add_respects(f, f2, g, g2: Hurwitz<A>, hf: Hurwitz::Same(f, f2), hg: Hurwitz::Same(g, g2)):
+    Hurwitz::Same(Hurwitz::add(f, g), Hurwitz::add(f2, g2))
+{
+    λ n => { let e: (f.coeff(n) + g.coeff(n) ≈ f2.coeff(n) + g2.coeff(n)) = ring(hf(n), hg(n)); e }
+}
+
+theorem Hurwitz::add_assoc(f, g, k: Hurwitz<A>): Hurwitz::Same(Hurwitz::add(Hurwitz::add(f, g), k), Hurwitz::add(f, Hurwitz::add(g, k))) {
+    λ n => A.assoc(f.coeff(n), g.coeff(n), k.coeff(n))
+}
+
+theorem Hurwitz::add_comm(f, g: Hurwitz<A>): Hurwitz::Same(Hurwitz::add(f, g), Hurwitz::add(g, f)) { λ n => A.comm(f.coeff(n), g.coeff(n)) }
+
+theorem Hurwitz::zero_add(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::add(Hurwitz::zero(), f), f) { λ n => A.unit_l(f.coeff(n)) }
+
+theorem Hurwitz::add_zero(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::add(f, Hurwitz::zero()), f) { λ n => A.unit_r(f.coeff(n)) }
+
+theorem Hurwitz::neg_add(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::add(Hurwitz::neg(f), f), Hurwitz::zero()) { λ n => A.inv_l(f.coeff(n)) }
+
+theorem Hurwitz::add_neg(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::add(f, Hurwitz::neg(f)), Hurwitz::zero()) { λ n => A.inv_r(f.coeff(n)) }
+
+theorem Hurwitz::neg_respects(f, g: Hurwitz<A>, h: Hurwitz::Same(f, g)): Hurwitz::Same(Hurwitz::neg(f), Hurwitz::neg(g)) {
+    λ n => A.inv_respects(f.coeff(n), g.coeff(n), h(n))
+}
+
+theorem Hurwitz::mul_one(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::mul(f, Hurwitz::one()), f) {
+    Hurwitz::same_trans(Hurwitz::mul(f, Hurwitz::one()), Hurwitz::mul(Hurwitz::one(), f), f, Hurwitz::mul_comm(f, Hurwitz::one()), Hurwitz::one_mul(f))
+}
+
+theorem Hurwitz::zero_mul(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::mul(Hurwitz::zero(), f), Hurwitz::zero()) {
+    λ n => Hurwitz::mul_zero_l_at(Hurwitz::zero(), f, Hurwitz::same_refl(Hurwitz::zero()), n)
+}
+
+theorem Hurwitz::mul_zero(f: Hurwitz<A>): Hurwitz::Same(Hurwitz::mul(f, Hurwitz::zero()), Hurwitz::zero()) {
+    Hurwitz::same_trans(Hurwitz::mul(f, Hurwitz::zero()), Hurwitz::mul(Hurwitz::zero(), f), Hurwitz::zero(), Hurwitz::mul_comm(f, Hurwitz::zero()), Hurwitz::zero_mul(f))
+}
+
+theorem Hurwitz::distrib_l(f, g, k: Hurwitz<A>):
+    Hurwitz::Same(Hurwitz::mul(f, Hurwitz::add(g, k)), Hurwitz::add(Hurwitz::mul(f, g), Hurwitz::mul(f, k)))
+{
+    λ n => Hurwitz::mul_add_r_at(f, g, k, n)
+}
+
+theorem Hurwitz::distrib_r(f, g, k: Hurwitz<A>):
+    Hurwitz::Same(Hurwitz::mul(Hurwitz::add(f, g), k), Hurwitz::add(Hurwitz::mul(f, k), Hurwitz::mul(g, k)))
+{
+    λ n => Hurwitz::mul_add_at(f, g, k, n)
+}
+
+// The constants are a copy of the ring: `constant` is a ring homomorphism.
+theorem Hurwitz::constant_add(a, b: A): Hurwitz::Same(Hurwitz::constant(a + b), Hurwitz::add(Hurwitz::constant(a), Hurwitz::constant(b))) {
+    λ n => match n { Zero => A.rel_refl(a + b), Succ(_) => A.rel_sym(A.unit + A.unit, A.unit, A.unit_l(A.unit)) }
+}
+
+theorem Hurwitz::constant_mul(a, b: A): Hurwitz::Same(Hurwitz::constant(a * b), Hurwitz::mul(Hurwitz::constant(a), Hurwitz::constant(b))) {
+    let ca = Hurwitz::constant(a);
+    let cb = Hurwitz::constant(b);
+    Hurwitz::ext(Hurwitz::constant(a * b), Hurwitz::mul(ca, cb), A.rel_sym(Hurwitz::mul(ca, cb).coeff(0), a * b, Hurwitz::mul_head(ca, cb)), λ m => {
+        let l: (Hurwitz::mul(ca, cb).coeff(Succ(m)) ≈ Hurwitz::mul(Hurwitz::d(ca), cb).coeff(m) + Hurwitz::mul(ca, Hurwitz::d(cb)).coeff(m)) =
+            Hurwitz::leibniz_at(ca, cb, m);
+        let z1: (Hurwitz::mul(Hurwitz::d(ca), cb).coeff(m) ≈ A.unit) = Hurwitz::mul_zero_l_at(Hurwitz::d(ca), cb, λ i => A.rel_refl(A.unit), m);
+        let z2: (Hurwitz::mul(ca, Hurwitz::d(cb)).coeff(m) ≈ A.unit) = A.rel_trans(Hurwitz::mul(ca, Hurwitz::d(cb)).coeff(m),
+            Hurwitz::mul(Hurwitz::d(cb), ca).coeff(m), A.unit, Hurwitz::mul_comm_at(m, ca, Hurwitz::d(cb)),
+            Hurwitz::mul_zero_l_at(Hurwitz::d(cb), ca, λ i => A.rel_refl(A.unit), m));
+        let e: (A.unit ≈ Hurwitz::mul(ca, cb).coeff(Succ(m))) = ring(l, z1, z2);
+        e
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Definitions by differential equations.
+
+// `exp(a·t)`: head `1`, derivative `a·exp(a·t)`; its coefficients are the
+// powers of `a`.
+fn Hurwitz::exp(a: A) → Hurwitz<A> { Hurwitz { coeff: λ n => ∏ k < n, a } }
+
+theorem Hurwitz::d_exp(a: A): Hurwitz::Same(Hurwitz::d(Hurwitz::exp(a)), Hurwitz::scale(a, Hurwitz::exp(a))) {
+    λ n => A.commutative.comm(∏ k < n, a, a)
+}
+
+// The addition law, `exp(a·t)·exp(b·t) ≈ exp((a+b)·t)`: both sides solve
+// `F' = (a+b)·F` with head `1`. Read at one coefficient it is the binomial
+// theorem.
+theorem Hurwitz::exp_add(a, b: A): Hurwitz::Same(Hurwitz::mul(Hurwitz::exp(a), Hurwitz::exp(b)), Hurwitz::exp(a + b)) {
+    let ea = Hurwitz::exp(a);
+    let eb = Hurwitz::exp(b);
+    let F = Hurwitz::mul(ea, eb);
+    let hF: Hurwitz::Same(Hurwitz::d(F), Hurwitz::scale(a + b, F)) = λ n => {
+        let lb: (F.coeff(Succ(n)) ≈ Hurwitz::mul(Hurwitz::d(ea), eb).coeff(n) + Hurwitz::mul(ea, Hurwitz::d(eb)).coeff(n)) =
+            Hurwitz::leibniz_at(ea, eb, n);
+        let l: (Hurwitz::mul(Hurwitz::d(ea), eb).coeff(n) ≈ Hurwitz::mul(Hurwitz::scale(a, ea), eb).coeff(n)) =
+            Hurwitz::mul_respects_at(Hurwitz::d(ea), Hurwitz::scale(a, ea), eb, eb, Hurwitz::d_exp(a), Hurwitz::same_refl(eb), n);
+        let r: (Hurwitz::mul(ea, Hurwitz::d(eb)).coeff(n) ≈ Hurwitz::mul(Hurwitz::scale(b, eb), ea).coeff(n)) =
+            A.rel_trans(Hurwitz::mul(ea, Hurwitz::d(eb)).coeff(n), Hurwitz::mul(Hurwitz::d(eb), ea).coeff(n), Hurwitz::mul(Hurwitz::scale(b, eb), ea).coeff(n),
+                Hurwitz::mul_comm_at(n, ea, Hurwitz::d(eb)),
+                Hurwitz::mul_respects_at(Hurwitz::d(eb), Hurwitz::scale(b, eb), ea, ea, Hurwitz::d_exp(b), Hurwitz::same_refl(ea), n));
+        let sa: (Hurwitz::mul(Hurwitz::scale(a, ea), eb).coeff(n) ≈ a * F.coeff(n)) = Hurwitz::mul_scale_at(a, ea, eb, n);
+        let sb: (Hurwitz::mul(Hurwitz::scale(b, eb), ea).coeff(n) ≈ b * Hurwitz::mul(eb, ea).coeff(n)) = Hurwitz::mul_scale_at(b, eb, ea, n);
+        let cm: (Hurwitz::mul(eb, ea).coeff(n) ≈ F.coeff(n)) = Hurwitz::mul_comm_at(n, eb, ea);
+        let e: (F.coeff(Succ(n)) ≈ (a + b) * F.coeff(n)) = ring(lb, l, r, sa, sb, cm);
+        e
+    };
+    let one = A.multiplicative.unit;
+    let h0: (F.coeff(0) ≈ one) = A.rel_trans(F.coeff(0), one * one, one, Hurwitz::mul_head(ea, eb), A.multiplicative.unit_l(one));
+    Hurwitz::linear_unique(a + b, F, Hurwitz::exp(a + b), hF, Hurwitz::d_exp(a + b), h0)
+}
+
+// `sin` and `cos` together: heads `0` and `1`, `sin' = cos`, `cos' = -sin`.
+fn Hurwitz::sin_cos_at(n: Nat) → Pair<A, A> {
+    match n {
+        Zero => Pair(A.unit, A.multiplicative.unit),
+        Succ(m) => Pair(Hurwitz::sin_cos_at<A>(m).snd, A.inv(Hurwitz::sin_cos_at<A>(m).fst)),
+    }
+}
+
+fn Hurwitz::sin() → Hurwitz<A> { Hurwitz { coeff: λ n => Hurwitz::sin_cos_at<A>(n).fst } }
+
+fn Hurwitz::cos() → Hurwitz<A> { Hurwitz { coeff: λ n => Hurwitz::sin_cos_at<A>(n).snd } }
+
+theorem Hurwitz::d_sin(): Hurwitz::Same(Hurwitz::d(Hurwitz::sin<A>()), Hurwitz::cos<A>()) { Hurwitz::same_refl(Hurwitz::cos<A>()) }
+
+theorem Hurwitz::d_cos(): Hurwitz::Same(Hurwitz::d(Hurwitz::cos<A>()), Hurwitz::neg(Hurwitz::sin<A>())) { Hurwitz::same_refl(Hurwitz::neg(Hurwitz::sin<A>())) }
+
+// `sin² + cos² ≈ 1`: its derivative is `2 sin cos - 2 cos sin ≈ 0` and its
+// head is `1`.
+theorem Hurwitz::sin_sq_add_cos_sq():
+    Hurwitz::Same(Hurwitz::add(Hurwitz::mul(Hurwitz::sin<A>(), Hurwitz::sin<A>()), Hurwitz::mul(Hurwitz::cos<A>(), Hurwitz::cos<A>())), Hurwitz::one<A>())
+{
+    let s = Hurwitz::sin<A>();
+    let c = Hurwitz::cos<A>();
+    let F = Hurwitz::add(Hurwitz::mul(s, s), Hurwitz::mul(c, c));
+    let flat: Hurwitz::Same(Hurwitz::d(F), Hurwitz::zero()) = λ n => {
+        let minus: Hurwitz::Same(Hurwitz::neg(s), Hurwitz::scale(A.inv(A.multiplicative.unit), s)) = λ i => {
+            let e: (A.inv(s.coeff(i)) ≈ A.inv(A.multiplicative.unit) * s.coeff(i)) = ring;
+            e
+        };
+        let ns: (Hurwitz::mul(Hurwitz::neg(s), c).coeff(n) ≈ A.inv(A.multiplicative.unit) * Hurwitz::mul(s, c).coeff(n)) =
+            A.rel_trans(Hurwitz::mul(Hurwitz::neg(s), c).coeff(n), Hurwitz::mul(Hurwitz::scale(A.inv(A.multiplicative.unit), s), c).coeff(n),
+                A.inv(A.multiplicative.unit) * Hurwitz::mul(s, c).coeff(n),
+                Hurwitz::mul_respects_at(Hurwitz::neg(s), Hurwitz::scale(A.inv(A.multiplicative.unit), s), c, c, minus, Hurwitz::same_refl(c), n),
+                Hurwitz::mul_scale_at(A.inv(A.multiplicative.unit), s, c, n));
+        let ls: (Hurwitz::mul(s, s).coeff(Succ(n)) ≈ Hurwitz::mul(c, s).coeff(n) + Hurwitz::mul(s, c).coeff(n)) = Hurwitz::leibniz_at(s, s, n);
+        let lc: (Hurwitz::mul(c, c).coeff(Succ(n)) ≈ Hurwitz::mul(Hurwitz::neg(s), c).coeff(n) + Hurwitz::mul(c, Hurwitz::neg(s)).coeff(n)) =
+            Hurwitz::leibniz_at(c, c, n);
+        let c1: (Hurwitz::mul(c, s).coeff(n) ≈ Hurwitz::mul(s, c).coeff(n)) = Hurwitz::mul_comm_at(n, c, s);
+        let c2: (Hurwitz::mul(c, Hurwitz::neg(s)).coeff(n) ≈ Hurwitz::mul(Hurwitz::neg(s), c).coeff(n)) = Hurwitz::mul_comm_at(n, c, Hurwitz::neg(s));
+        let e: (Hurwitz::mul(s, s).coeff(Succ(n)) + Hurwitz::mul(c, c).coeff(Succ(n)) ≈ A.unit) = ring(ls, lc, ns, c1, c2);
+        e
+    };
+    let hs: (Hurwitz::mul(s, s).coeff(0) ≈ A.unit * A.unit) = Hurwitz::mul_head(s, s);
+    let hc: (Hurwitz::mul(c, c).coeff(0) ≈ A.multiplicative.unit * A.multiplicative.unit) = Hurwitz::mul_head(c, c);
+    let h0: (Hurwitz::mul(s, s).coeff(0) + Hurwitz::mul(c, c).coeff(0) ≈ A.multiplicative.unit) = ring(hs, hc);
+    Hurwitz::same_trans(F, Hurwitz::constant(F.coeff(0)), Hurwitz::one<A>(), Hurwitz::constant_of_d(F, flat),
+        Hurwitz::ext(Hurwitz::constant(F.coeff(0)), Hurwitz::one<A>(), h0, λ i => A.rel_refl(A.unit)))
+}
+
+// ---------------------------------------------------------------------------
+// Jets: series up to order `N`, equal when their first `N + 1`
+// coefficients are. A product's coefficient `n` reads only coefficients up
+// to `n`, so truncation respects the product: `Jet(A, N)` is a quotient
+// ring, and `N = 1` is the dual numbers.
+
+fn Hurwitz::SameUpTo(N: Nat, f, g: Hurwitz<A>) → Type { (n: Nat) → Nat::Le(n, N) → f.coeff(n) ≈ g.coeff(n) }
+
+theorem Hurwitz::up_to_of_same(N: Nat, f, g: Hurwitz<A>, h: Hurwitz::Same(f, g)): Hurwitz::SameUpTo(N, f, g) { λ n _ => h(n) }
+
+theorem Hurwitz::add_up_to(N: Nat, f, f2, g, g2: Hurwitz<A>, hf: Hurwitz::SameUpTo(N, f, f2), hg: Hurwitz::SameUpTo(N, g, g2)):
+    Hurwitz::SameUpTo(N, Hurwitz::add(f, g), Hurwitz::add(f2, g2))
+{
+    λ n hn => {
+        let a: (f.coeff(n) ≈ f2.coeff(n)) = hf(n, hn);
+        let b: (g.coeff(n) ≈ g2.coeff(n)) = hg(n, hn);
+        let e: (f.coeff(n) + g.coeff(n) ≈ f2.coeff(n) + g2.coeff(n)) = ring(a, b);
+        e
+    }
+}
+
+theorem Hurwitz::mul_up_to(N: Nat, f, f2, g, g2: Hurwitz<A>, hf: Hurwitz::SameUpTo(N, f, f2), hg: Hurwitz::SameUpTo(N, g, g2)):
+    Hurwitz::SameUpTo(N, Hurwitz::mul(f, g), Hurwitz::mul(f2, g2))
+{
+    λ n hn => MonoidRel::range_cong(+, Succ(n), λ i => Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(n, i))),
+        λ i => Semiring::of_nat<A>(n.choose(i)) * (f2.coeff(i) * g2.coeff(Nat::sub(n, i))),
+        λ i hi => {
+            let e: (Semiring::of_nat<A>(n.choose(i)) * (f.coeff(i) * g.coeff(Nat::sub(n, i)))
+                ≈ Semiring::of_nat<A>(n.choose(i)) * (f2.coeff(i) * g2.coeff(Nat::sub(n, i)))) =
+                ring(hf(i, omega(hi, hn)), hg(Nat::sub(n, i), omega(hn, i.le_add(n, omega(hi)))));
+            e
+        })
+}
+
+// The dual numbers' product: value times value, and the product rule.
+theorem Hurwitz::mul_first(f, g: Hurwitz<A>): Hurwitz::mul(f, g).coeff(1) ≈ f.coeff(1) * g.coeff(0) + f.coeff(0) * g.coeff(1) {
+    let l: (Hurwitz::mul(f, g).coeff(1) ≈ Hurwitz::mul(Hurwitz::d(f), g).coeff(0) + Hurwitz::mul(f, Hurwitz::d(g)).coeff(0)) =
+        Hurwitz::leibniz_at(f, g, 0);
+    let a: (Hurwitz::mul(Hurwitz::d(f), g).coeff(0) ≈ f.coeff(1) * g.coeff(0)) = Hurwitz::mul_head(Hurwitz::d(f), g);
+    let b: (Hurwitz::mul(f, Hurwitz::d(g)).coeff(0) ≈ f.coeff(0) * g.coeff(1)) = Hurwitz::mul_head(f, Hurwitz::d(g));
+    ring(l, a, b)
+}
+
+}
+
+// Series over a commutative ring are a commutative ring at their `≈`, so
+// they nest: `Hurwitz<Hurwitz<A>>` is series in two variables
+// (docs/analysis-foundations-design.md §5, "several variables are iterated
+// series").
+instance<A: CommRing(≈, +, *)> CommRing<Hurwitz<A>>(Hurwitz::Same<A>, Hurwitz::add<A>, Hurwitz::mul<A>) {
+    rel_refl := λ f => Hurwitz::same_refl(f),
+    rel_sym := λ f g h => Hurwitz::same_sym(f, g, h),
+    rel_trans := λ f g k h1 h2 => Hurwitz::same_trans(f, g, k, h1, h2),
+    respects2 := λ f f2 hf g g2 hg => Hurwitz::add_respects(f, f2, g, g2, hf, hg),
+    assoc := λ f g k => Hurwitz::add_assoc(f, g, k),
+    unit := Hurwitz::zero<A>(),
+    unit_l := λ f => Hurwitz::zero_add(f),
+    unit_r := λ f => Hurwitz::add_zero(f),
+    comm := λ f g => Hurwitz::add_comm(f, g),
+    multiplicative := MonoidRel {
+        rel_refl: λ f => Hurwitz::same_refl(f),
+        rel_sym: λ f g h => Hurwitz::same_sym(f, g, h),
+        rel_trans: λ f g k h1 h2 => Hurwitz::same_trans(f, g, k, h1, h2),
+        respects2: λ f f2 hf g g2 hg => Hurwitz::mul_respects(f, f2, g, g2, hf, hg),
+        assoc: λ f g k => Hurwitz::mul_assoc(f, g, k),
+        unit: Hurwitz::one<A>(),
+        unit_l: λ f => Hurwitz::one_mul(f),
+        unit_r: λ f => Hurwitz::mul_one(f),
+    },
+    distrib_l := λ f g k => Hurwitz::distrib_l(f, g, k),
+    distrib_r := λ f g k => Hurwitz::distrib_r(f, g, k),
+    zero_mul := λ f => Hurwitz::zero_mul(f),
+    mul_zero := λ f => Hurwitz::mul_zero(f),
+    inv := λ f => Hurwitz::neg(f),
+    inv_l := λ f => Hurwitz::neg_add(f),
+    inv_r := λ f => Hurwitz::add_neg(f),
+    inv_respects := λ f g h => Hurwitz::neg_respects(f, g, h),
+    commutative := Commutative { comm: λ f g => Hurwitz::mul_comm(f, g) },
+}
+
+// With its integers the constants', so `ring` works on series.
+instance<A: CommRing(≈, +, *)> CommRingOfInt<Hurwitz<A>>(Hurwitz::Same<A>, Hurwitz::add<A>, Hurwitz::mul<A>) {
+    rel_refl := λ f => Hurwitz::same_refl(f),
+    rel_sym := λ f g h => Hurwitz::same_sym(f, g, h),
+    rel_trans := λ f g k h1 h2 => Hurwitz::same_trans(f, g, k, h1, h2),
+    respects2 := λ f f2 hf g g2 hg => Hurwitz::add_respects(f, f2, g, g2, hf, hg),
+    assoc := λ f g k => Hurwitz::add_assoc(f, g, k),
+    unit := Hurwitz::zero<A>(),
+    unit_l := λ f => Hurwitz::zero_add(f),
+    unit_r := λ f => Hurwitz::add_zero(f),
+    comm := λ f g => Hurwitz::add_comm(f, g),
+    multiplicative := MonoidRel {
+        rel_refl: λ f => Hurwitz::same_refl(f),
+        rel_sym: λ f g h => Hurwitz::same_sym(f, g, h),
+        rel_trans: λ f g k h1 h2 => Hurwitz::same_trans(f, g, k, h1, h2),
+        respects2: λ f f2 hf g g2 hg => Hurwitz::mul_respects(f, f2, g, g2, hf, hg),
+        assoc: λ f g k => Hurwitz::mul_assoc(f, g, k),
+        unit: Hurwitz::one<A>(),
+        unit_l: λ f => Hurwitz::one_mul(f),
+        unit_r: λ f => Hurwitz::mul_one(f),
+    },
+    distrib_l := λ f g k => Hurwitz::distrib_l(f, g, k),
+    distrib_r := λ f g k => Hurwitz::distrib_r(f, g, k),
+    zero_mul := λ f => Hurwitz::zero_mul(f),
+    mul_zero := λ f => Hurwitz::mul_zero(f),
+    inv := λ f => Hurwitz::neg(f),
+    inv_l := λ f => Hurwitz::neg_add(f),
+    inv_r := λ f => Hurwitz::add_neg(f),
+    inv_respects := λ f g h => Hurwitz::neg_respects(f, g, h),
+    commutative := Commutative { comm: λ f g => Hurwitz::mul_comm(f, g) },
+    of_int := λ c => Hurwitz::constant(Ring::int_cast<A>(c)),
+    of_int_zero := Hurwitz::ext(Hurwitz::constant(Ring::int_cast<A>(OfNat(0))), Hurwitz::zero<A>(), A.rel_refl(A.unit), λ m => A.rel_refl(A.unit)),
+    of_int_one := Hurwitz::same_refl(Hurwitz::one<A>()),
+    of_int_add := λ a b => Hurwitz::same_trans(Hurwitz::constant(Ring::int_cast<A>(Int::add(a, b))),
+        Hurwitz::constant(Ring::int_cast<A>(a) + Ring::int_cast<A>(b)), Hurwitz::add(Hurwitz::constant(Ring::int_cast<A>(a)), Hurwitz::constant(Ring::int_cast<A>(b))),
+        Hurwitz::ext(Hurwitz::constant(Ring::int_cast<A>(Int::add(a, b))), Hurwitz::constant(Ring::int_cast<A>(a) + Ring::int_cast<A>(b)),
+            Ring::int_cast_add<A>(a, b), λ m => A.rel_refl(A.unit)),
+        Hurwitz::constant_add(Ring::int_cast<A>(a), Ring::int_cast<A>(b))),
+    of_int_mul := λ a b => Hurwitz::same_trans(Hurwitz::constant(Ring::int_cast<A>(Int::mul(a, b))),
+        Hurwitz::constant(Ring::int_cast<A>(a) * Ring::int_cast<A>(b)), Hurwitz::mul(Hurwitz::constant(Ring::int_cast<A>(a)), Hurwitz::constant(Ring::int_cast<A>(b))),
+        Hurwitz::ext(Hurwitz::constant(Ring::int_cast<A>(Int::mul(a, b))), Hurwitz::constant(Ring::int_cast<A>(a) * Ring::int_cast<A>(b)),
+            Ring::int_cast_mul<A>(a, b), λ m => A.rel_refl(A.unit)),
+        Hurwitz::constant_mul(Ring::int_cast<A>(a), Ring::int_cast<A>(b))),
+}
+
+designation ≈ at Hurwitz := Hurwitz::Same
+designation + at Hurwitz := Hurwitz::add
+designation * at Hurwitz := Hurwitz::mul

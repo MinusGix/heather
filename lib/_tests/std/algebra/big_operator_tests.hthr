@@ -128,6 +128,15 @@ theorem ring_gauss_step(n: Nat, h: (∑ k < n, Rat::ofInt(OfNat(k))) * 2 ≈ Rat
 // A negative control: the last term is not dropped.
 // expect-error: it is not an identity of commutative rings
 theorem ring_no_drop(n: Nat, f: Nat → Rat): ∑ k < n + 1, f(k) ≈ ∑ k < n, f(k) { ring }
+// At a class carrier the same two readings, at the section's own `+` and
+// `*` (issues/finite-difference-calculus.md: induction over a generic sum).
+section<R: CommRing(≈, +, *)> {
+theorem ring_class_empty(f: Nat → R): ∑ k < 0, f(k) ≈ R.unit { ring }
+theorem ring_class_last(n: Nat, f: Nat → R): ∑ k < Succ(n), f(k) ≈ f(n) + ∑ k < n, f(k) { ring }
+theorem ring_class_power(r: R, n: Nat): ∏ k < Nat::add(n, 1), r ≈ r * ∏ k < n, r { ring }
+// expect-error: it is not an identity of commutative rings
+theorem ring_class_no_drop(n: Nat, f: Nat → R): ∑ k < Succ(n), f(k) ≈ ∑ k < n, f(k) { ring }
+}
 theorem linarith_step(n: Nat, f: Nat → Rat, h: ∑ k < n, f(k) <= 1, hf: f(n) <= 2): ∑ k < n + 1, f(k) <= 3 { linarith }
 theorem omega_step(n: Nat, f: Nat → Nat, h: (∑ k < n, f(k)) <= n * 3, hf: f(n) <= 3): (∑ k < n + 1, f(k)) <= n * 3 + 3 { omega }
 theorem omega_int_step(n: Nat, f: Nat → Int, h: ∑ k < n, f(k) <= OfNat(3), hf: f(n) <= OfNat(2)): ∑ k < n + 1, f(k) <= OfNat(5) { omega }
