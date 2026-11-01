@@ -1222,6 +1222,15 @@ impl Elaborator {
         Some((head, args))
     }
 
+    /// A lowered constructor value as the tactic host's `View` presents it:
+    /// its declaration, the constructor's number, and its fields in
+    /// declaration order. The display's own reader ([`Speller::ctor_fields`]),
+    /// so what a diagnostic spells as `C(…)` is what a view presents.
+    pub(crate) fn view_ctor(&self, cx: &Cx, t: &Term) -> Option<(Rc<crate::inductive::Inductive>, usize, Vec<Rc<Term>>)> {
+        let (ind, i, fields) = self.speller(cx).ctor_fields(t)?;
+        Some((ind, i, fields?))
+    }
+
     /// A field read a record's declaration left inline, `fst(snd(…(r)))`,
     /// as the record value `r` and the field's name: the recogniser behind
     /// the speller's `r.name` (`Speller::field_read`), shared with the tactic

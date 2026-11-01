@@ -495,6 +495,8 @@ fn view_dispatches_on_the_goal() {
                  HMatch(_) => fail(\"a stuck match\", Nil),
                  HHole => fail(\"a hole\", Nil),
                  HField(_, name, _) => fail(\"a field \" ++ name, Nil),
+                 HLam(_) => fail(\"a function\", Nil),
+                 HCtor(_, _, name, _) => fail(\"a constructor \" ++ name, Nil),
                  HOther => fail(\"other\", Nil),
              }
          }

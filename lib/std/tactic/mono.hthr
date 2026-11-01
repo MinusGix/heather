@@ -154,7 +154,7 @@ fn mono_nat() → MonoCarrier {
     ], [], None)
 }
 
-fn mono_carriers() → List<MonoCarrier> { [mono_rat(), mono_creal(), mono_int(), mono_nat()] }
+def mono_carriers: List<MonoCarrier> = [mono_rat(), mono_creal(), mono_int(), mono_nat()];
 
 // An operation of a class carrier: the dictionary's argument at a position
 // (0 is the carrier, then the class's index: `OrderedField<A>(≈, <, <=, +,
@@ -943,7 +943,7 @@ fn mono_not_order<A>(target: Handle) → Tac<A> {
 // or a class dictionary's in scope.
 fn mono_find(g: GoalInfo, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
     match rel {
-        KGlobal(id) => mono_carrier(mono_carriers(), GlobalRef(id), given).bind(λ c => match c {
+        KGlobal(id) => mono_carrier(mono_carriers, GlobalRef(id), given).bind(λ c => match c {
             Some(M) => Pure(Some(M)),
             None => mono_class_carrier(g.locals, rel, given),
         }),

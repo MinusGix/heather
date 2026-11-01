@@ -1,0 +1,270 @@
+// Probes of the reflected language `rt` (`lib/native/runtime/rt.hthr`) and
+// its reflector (`rt_reflect.hthr`): the verification items V1–V5 of
+// docs/runtime-fn-setups-design.md §12. Each example states its reflection
+// twice, once checked against the reflector's output from the real
+// elaborated body (`reflects_as`) and once pinned to the function by `refl`
+// (`<f>_reflects`), the pin a `runtime fn` publishes. Tests, not library:
+// nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import rt;
+import rt_reflect;
+
+// ---------------------------------------------------------------------------
+// V1: straight-line code and a call (examples/x86-native/calls.hthr).
+
+fn leaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    left.add(right).bxor(BitVec::ofNat(0x0123456789abcdef))
+}
+
+fn caller(left: BitVec(64), right: BitVec(64)) → BitVec(64) { leaf(left, right) }
+
+// The context is the parameters, the last one variable 0: `right` is 0.
+fn leaf_rt() → Fun {
+    Fun([Word(64), Word(64)], Word(64),
+        Let(Prim(Add(64), [1, 0]), Let(Lit(Word(64), 0x0123456789abcdef), Prim(Bxor(64), [1, 0]))))
+}
+
+fn caller_rt() → Fun { Fun([Word(64), Word(64)], Word(64), Call(0, [1, 0])) }
+
+fn calls_world() → World {
+    World(RecInfo::none, [leaf_rt().sig(), caller_rt().sig()], Pair(leaf, Pair(caller, trivial)))
+}
+
+theorem calls_reflected(): True { by reflects_as(["leaf", "caller"], [], [leaf_rt(), caller_rt()]) }
+
+theorem leaf_reflects(a, b: BitVec(64)): leaf_rt().meaning(calls_world())(a, b) = leaf(a, b) { refl }
+
+theorem caller_reflects(a, b: BitVec(64)): caller_rt().meaning(calls_world())(a, b) = caller(a, b) { refl }
+
+// The negative control: another function's reflection does not pin.
+// expect-error(kernel): the kernel rejected `leaf_misreflects`: NotConvertible
+theorem leaf_misreflects(a, b: BitVec(64)): caller_rt().meaning(calls_world())(b, a) = leaf(a, b) { refl }
+
+// ---------------------------------------------------------------------------
+// V1: branches, a `Bool` helper, and connectives
+// (examples/x86-native/branches.hthr). `a && b` reflects as `Prim(Conj)`,
+// whose meaning is `Bool::and` itself, so the pin splits nothing.
+
+fn unequal(a, b: BitVec(64)) → Bool {
+    match a.unsigned_lt_bit(b) {
+        False => b.unsigned_lt_bit(a),
+        True => a.unsigned_lt_bit(b),
+    }
+}
+
+fn either(a, b: BitVec(64)) → BitVec(64) {
+    match a.unsigned_lt_bit(b) || (b.eq_bit(BitVec::ofNat(7)) && !a.signed_lt_bit(b)) {
+        False => a.bxor(b),
+        True => match unequal(b, a.add(b)) { False => a, True => b.sub(a) },
+    }
+}
+
+fn calls_either(a, b: BitVec(64)) → BitVec(64) { either(b, a).add(a) }
+
+fn unequal_rt() → Fun {
+    Fun([Word(64), Word(64)], Bit,
+        Let(Prim(Ult(64), [1, 0]), If(0, Prim(Ult(64), [2, 1]), Prim(Ult(64), [1, 2]))))
+}
+
+fn either_rt() → Fun {
+    Fun([Word(64), Word(64)], Word(64),
+        Let(Prim(Ult(64), [1, 0]),
+        Let(Lit(Word(64), 7),
+        Let(Prim(Eq(64), [2, 0]),
+        Let(Prim(Slt(64), [4, 3]),
+        Let(Prim(Neg, [0]),
+        Let(Prim(Conj, [2, 0]),
+        Let(Prim(Disj, [5, 0]),
+        If(0,
+            Let(Prim(Add(64), [8, 7]), Let(Call(0, [8, 0]), If(0, Prim(Sub(64), [9, 10]), Var(10)))),
+            Prim(Bxor(64), [8, 7]))))))))))
+}
+
+fn calls_either_rt() → Fun {
+    Fun([Word(64), Word(64)], Word(64), Let(Call(1, [0, 1]), Prim(Add(64), [0, 2])))
+}
+
+fn branches_world() → World {
+    World(RecInfo::none, [unequal_rt().sig(), either_rt().sig(), calls_either_rt().sig()],
+        Pair(unequal, Pair(either, Pair(calls_either, trivial))))
+}
+
+theorem branches_reflected(): True {
+    by reflects_as(["unequal", "either", "calls_either"], [], [unequal_rt(), either_rt(), calls_either_rt()])
+}
+
+theorem unequal_reflects(a, b: BitVec(64)): unequal_rt().meaning(branches_world())(a, b) = unequal(a, b) { refl }
+
+theorem either_reflects(a, b: BitVec(64)): either_rt().meaning(branches_world())(a, b) = either(a, b) { refl }
+
+theorem calls_either_reflects(a, b: BitVec(64)): calls_either_rt().meaning(branches_world())(a, b) = calls_either(a, b) { refl }
+
+// ---------------------------------------------------------------------------
+// V1/V5: shared values (examples/x86-native/sharing.hthr). Each let-bound
+// value, and each call, is bound once however often it is read.
+
+fn sleaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) { left.sub(right) }
+
+fn scaller(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    let saved = left.bor(right);
+    let first = sleaf(right, left);
+    let second = sleaf(left, right);
+    let shared = first.add(saved);
+    shared.add(shared).add(first.add(first.add(second)))
+}
+
+fn sleaf_rt() → Fun { Fun([Word(64), Word(64)], Word(64), Prim(Sub(64), [1, 0])) }
+
+fn scaller_rt() → Fun {
+    Fun([Word(64), Word(64)], Word(64),
+        Let(Call(0, [0, 1]),                  // first
+        Let(Prim(Bor(64), [2, 1]),            // saved
+        Let(Prim(Add(64), [1, 0]),            // shared
+        Let(Prim(Add(64), [0, 0]),
+        Let(Call(0, [5, 4]),                  // second
+        Let(Prim(Add(64), [4, 0]),
+        Let(Prim(Add(64), [5, 0]),
+            Prim(Add(64), [3, 0])))))))))
+}
+
+fn sharing_world() → World {
+    World(RecInfo::none, [sleaf_rt().sig(), scaller_rt().sig()], Pair(sleaf, Pair(scaller, trivial)))
+}
+
+theorem sharing_reflected(): True { by reflects_as(["sleaf", "scaller"], [], [sleaf_rt(), scaller_rt()]) }
+
+theorem scaller_reflects(a, b: BitVec(64)): scaller_rt().meaning(sharing_world())(a, b) = scaller(a, b) { refl }
+
+// ---------------------------------------------------------------------------
+// V2: a record through `Make` and `Field`. Record types are nominal, so the
+// meaning reads the record's type, constructor and fields from a table; the
+// pin is still `refl`.
+
+record WcState { lines: BitVec(64), words: BitVec(64), inside: Bool }
+
+fn wc_step(s: WcState, nl: Bool, space: Bool) → WcState {
+    WcState(lines := s.lines.add(match nl { False => BitVec::ofNat(0), True => BitVec::ofNat(1) }),
+            words := match !space && !s.inside { False => s.words, True => s.words.add(BitVec::ofNat(1)) },
+            inside := !space)
+}
+
+fn wc_tys(i: Nat) → RecInfo {
+    RecInfo(WcState, [Word(64), Word(64), Bit],
+        λ t => WcState(t.fst, t.snd.fst, t.snd.snd.fst),
+        λ s => Pair(s.lines, Pair(s.words, Pair(s.inside, trivial))))
+}
+
+fn wc_step_rt() → Fun {
+    Fun([Named(0), Bit, Bit], Named(0),
+        Let(Field(0, 0, 2),
+        Let(If(2, Lit(Word(64), 1), Lit(Word(64), 0)),
+        Let(Prim(Add(64), [1, 0]),
+        Let(Prim(Neg, [3]),
+        Let(Field(0, 2, 6),
+        Let(Prim(Neg, [0]),
+        Let(Prim(Conj, [2, 0]),
+        Let(If(0, Let(Field(0, 1, 9), Let(Lit(Word(64), 1), Prim(Add(64), [1, 0]))), Field(0, 1, 9)),
+            Make(0, [5, 0, 4]))))))))))
+}
+
+fn wc_world() → World { World(wc_tys, [wc_step_rt().sig()], Pair(wc_step, trivial)) }
+
+theorem wc_reflected(): True { by reflects_as(["wc_step"], ["WcState"], [wc_step_rt()]) }
+
+theorem wc_step_reflects(s: WcState, nl, space: Bool): wc_step_rt().meaning(wc_world())(s, nl, space) = wc_step(s, nl, space) { refl }
+
+// ---------------------------------------------------------------------------
+// V3: `foldl` of a named step, the step answered from the table (so it is
+// not unfolded), equal to the body's `foldl` up to η.
+
+fn sum_step(acc: BitVec(64), b: BitVec(8)) → BitVec(64) { acc.add(b.zero_extend(56)) }
+
+fn sum(xs: List<BitVec(8)>, start: BitVec(64)) → BitVec(64) { xs.foldl(sum_step, start) }
+
+fn sum_step_rt() → Fun { Fun([Word(64), Word(8)], Word(64), Let(Prim(Zext(8, 56), [0]), Prim(Add(64), [2, 0]))) }
+
+fn sum_rt() → Fun { Fun([Bytes(0), Word(64)], Word(64), Fold(1, 0, 0)) }
+
+fn sum_world() → World { World(RecInfo::none, [sum_step_rt().sig(), sum_rt().sig()], Pair(sum_step, Pair(sum, trivial))) }
+
+theorem sum_reflected(): True { by reflects_as(["sum_step", "sum"], [], [sum_step_rt(), sum_rt()]) }
+
+theorem sum_step_reflects(acc: BitVec(64), b: BitVec(8)): sum_step_rt().meaning(sum_world())(acc, b) = sum_step(acc, b) { refl }
+
+theorem sum_reflects(xs: List<BitVec(8)>, s: BitVec(64)): sum_rt().meaning(sum_world())(xs, s) = sum(xs, s) { refl }
+
+// ---------------------------------------------------------------------------
+// V4: a `match h:` convoy. The equation is erased from the reflection and
+// convoyed back by `IfEq`'s meaning; a plain `If` does not convert with it.
+
+fn safe_pred(n: BitVec(64)) → BitVec(64) {
+    match h: n.eq_bit(BitVec::ofNat(0)) { True => n, False => n.sub(BitVec::ofNat(1)) }
+}
+
+fn safe_pred_rt() → Fun {
+    Fun([Word(64)], Word(64),
+        Let(Lit(Word(64), 0), Let(Prim(Eq(64), [1, 0]), IfEq(0, Var(2), Let(Lit(Word(64), 1), Prim(Sub(64), [3, 0]))))))
+}
+
+fn safe_pred_world() → World { World(RecInfo::none, [safe_pred_rt().sig()], Pair(safe_pred, trivial)) }
+
+theorem safe_pred_reflected(): True { by reflects_as(["safe_pred"], [], [safe_pred_rt()]) }
+
+theorem safe_pred_reflects(n: BitVec(64)): safe_pred_rt().meaning(safe_pred_world())(n) = safe_pred(n) { refl }
+
+// expect-error(kernel): the kernel rejected `safe_pred_plain_if`: NotConvertible
+theorem safe_pred_plain_if(n: BitVec(64)):
+    Fun([Word(64)], Word(64),
+        Let(Lit(Word(64), 0), Let(Prim(Eq(64), [1, 0]), If(0, Var(2), Let(Lit(Word(64), 1), Prim(Sub(64), [3, 0])))))).meaning(safe_pred_world())(n)
+        = safe_pred(n) { refl }
+
+// ---------------------------------------------------------------------------
+// V3: `decreases` recursion. A self-call is a `Call` of the function itself,
+// answered from the table by the function, so the body pins by `refl`
+// against the body as written, convoy included. `f(xs) = body[f]` is the
+// generated `f_unfold`; for a `match h:` body that equation is refused
+// today (`issues/decreases-unfold-convoy-scrutinee.md`), which is why the
+// pin below stops at the body.
+
+fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+fn count_down_rt() → Fun {
+    Fun([Word(64), Word(64)], Word(64),
+        Let(Lit(Word(64), 0), Let(Prim(Eq(64), [2, 0]),
+            IfEq(0, Var(2), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [4, 0]), Let(Prim(Add(64), [4, 5]), Call(0, [1, 0]))))))))
+}
+
+fn count_down_world() → World { World(RecInfo::none, [count_down_rt().sig()], Pair(count_down, trivial)) }
+
+theorem count_down_body_reflects(n, acc: BitVec(64)): count_down_rt().meaning(count_down_world())(n, acc) =
+    match h: n.eq_bit(BitVec::ofNat(0)) { True => acc, False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)) } { refl }
+
+// ---------------------------------------------------------------------------
+// Refusals name their reason.
+
+fn helper(a: BitVec(64)) → BitVec(64) { a.add(a) }
+
+fn uses_helper(a: BitVec(64)) → BitVec(64) { helper(a).sub(a) }
+
+// expect-error: `helper` is an ordinary fn: mark it `runtime fn`
+theorem helper_refused(): True { by reflects_as(["uses_helper"], [], []) }
+
+// expect-error: has no body to read
+theorem theorem_refused(): True { by reflects_as(["leaf_reflects"], [], []) }

@@ -4,7 +4,7 @@ status: open
 labels: [reals,intervals,float]
 area: mathematics
 created: 2026-10-27
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 `CReal::exp_rat`, `sin_rat` and `cos_rat` (`lib/std/num/float/elementary.hthr`,
@@ -38,3 +38,7 @@ Scope:
 ## Log
 
 - 2026-10-31: 2026-10-31: log at positive rationals landed by the binade reduction (`Binade::of`, log 2 = 2·atanh(1/3)) and is an `Enclosed` leaf through `RealExpr::enclosed` ([[creal-compress-and-transcendentals]]); its statement as exp's inverse stays open. exp's halving reduction and sin/cos range reduction are still open here.
+- 2026-11-01: sin and cos reduce by halving, not by π. The leaves scale x by 2^-k, k = width of its bound, enclose sin and cos there and double back k times by the addition laws on intervals (`CReal::trig_reduced`, elementary_real.hthr). `sin(10)`, `cos(10)`, `sin(30)` and `cos(100)` close by `intervals()`.
+  - Two costs had to go first. The Lipschitz modulus grew like exp(2B); it is now a constant 2·exp_reach(1), from |sin|, |cos| <= 1 (trig_law.hthr). The base series also ran at a term read at 2^-57 that still carried its trailing zero bits; it now runs at the term after `Dyadic::trim`.
+  - `sin(1000)` does not close at the default precision.
+  - Left here: π reduction for sin and cos, which would cut the doublings, and exp's halving reduction.

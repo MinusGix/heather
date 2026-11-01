@@ -68,11 +68,31 @@ pub enum Item {
     /// declaration, so the import DAG is readable without elaborating
     /// anything.
     Import(ImportItem),
+    /// `runtime fn f(…)`, `regex def is_hex = "…";` — a declaration under a
+    /// **prefix generator** (docs/value-definitions-design.md §3).
+    Prefixed(PrefixedItem),
     /// `generate g(args);` — run the Heather generator `g(args)`, a
     /// `tactic::Tac<List<tactic::Decl>>`, and publish the declarations it
     /// builds in this module, every one of them or none
     /// (docs/host-elaboration-interface-design.md §19).
     Generate(GenerateItem),
+}
+
+/// `P fn f(…) …`, `P(args) theorem t(…) …`, `P def x = e;`
+/// ([`Item::Prefixed`]). `generator` is `P` or `P(args)` as written; the
+/// elaborator appends what the declaration hands it (the declared name, and
+/// for a `def` its value), runs it as `generate` runs its generator, and
+/// publishes the group (docs/value-definitions-design.md §3).
+///
+/// A prefixed `fn` or `theorem` is **consumed**: it is published as written
+/// first, and the generator reads it by name. A prefixed `def` is
+/// **rewritten**: it is not published as written; its value goes to the
+/// generator, whose group must declare the name.
+#[derive(Debug, Clone)]
+pub struct PrefixedItem {
+    pub generator: Expr,
+    pub decl: Decl,
+    pub span: Span,
 }
 
 /// `generate g(args);` ([`Item::Generate`]). The generator is an expression
@@ -158,6 +178,7 @@ impl Item {
             Item::Impl(x) => x.span,
             Item::Import(x) => x.span,
             Item::Generate(x) => x.span,
+            Item::Prefixed(x) => x.span,
         }
     }
 
@@ -182,6 +203,7 @@ impl Item {
                 panic!("expected a declaration, found `impl {}`", i.op)
             }
             Item::Generate(_) => panic!("expected a declaration, found `generate`"),
+            Item::Prefixed(p) => panic!("expected a declaration, found a prefixed `{}`", p.decl.name),
         }
     }
 }
@@ -433,6 +455,13 @@ pub struct Decl {
     /// carry it, and the elaborator refuses one with a parameter search could
     /// not fill.
     pub is_evidence: bool,
+    /// `def name: T = e;` — a **value definition** (issues/value-definitions.md,
+    /// docs/value-definitions-design.md). Its kind is [`DeclKind::Fn`] with no
+    /// written parameters, so it is elaborated, gated, imaged and unfolded
+    /// exactly as a nullary `fn` is; the flag is what a use site reads to
+    /// refuse `name()` (a value is used as `name`), and what diagnostics and
+    /// the module image keep.
+    pub value: bool,
     /// `meta fn map_code(g: Ctx) for vec.map -> …` — the elaboration **slot**
     /// this template fills (docs/meta-def-registration-design.md §2.1). A
     /// `meta fn` without one is registered but never dispatched: the clause,
@@ -710,6 +739,10 @@ pub enum TyKind {
     /// `$a` in type position — a `TyCode` binder used as a type inside a
     /// quote payload (a `GlobalTy` reference after elaboration).
     Splice { name: String },
+    /// The type of an expression, inferred: the result type of `def x = e;`
+    /// written without one (docs/value-definitions-design.md §2.2). Only
+    /// the parser makes it; there is no surface spelling.
+    TypeOf(Box<Expr>),
 }
 
 /// One field of a record literal: `unit: 0`. The span is the whole

@@ -20,8 +20,9 @@
 // sin and cos are `sin_rat`, `cos_rat` extended the same way, with one
 // modulus `CReal::trig_lip` (trig_law.hthr): `sin_add`, `cos_add`,
 // `sin_neg`, `cos_neg`, `sin_sq_add_cos_sq`, and the leaves `sin_real_box`,
-// `cos_real_box`, which pad the enclosure at the argument's n-th term by
-// the Lipschitz bound over the 2^-n to x.
+// `cos_real_box`, which halve the argument below 1, pad the enclosure at
+// its n-th term by the Lipschitz bound over the 2^-n to it, and double
+// back by the addition laws (argument reduction, below).
 
 import logic;
 import bool;
@@ -470,94 +471,140 @@ theorem Interval::pad_has(I: Interval, W: Dyadic, w: Rat, {y, z: CReal}, hW: w <
     }(hy)
 }
 
-// The pad is computed in dyadics, from exp_reach's upper ends as exp's
-// enclosure at its start bounds them (`Series::enclose`): the exact
-// rationals of `CReal::trig_lip` grow past what evaluation affords.
+// The pad is `trig_lip`'s 2·exp_reach(1), at most 6: a literal, so the
+// leaf never evaluates exp's series for it.
+theorem CReal::exp_reach_one(): CReal::exp_reach(1) <= 3 { Rat::le_of_bool(CReal::exp_reach(1), 3, refl) }
 
-fn Dyadic::above(q: Rat, p: Nat) → Dyadic { Dyadic::floor_rat(q, p) + CReal::radius(p) }
-
-theorem Dyadic::above_ge(q: Rat, p: Nat): q <= (Dyadic::above(q, p)).rat() {
-    let f = Dyadic::floor_rat(q, p);
-    let c = Dyadic::floor_rat_close(q, p);
-    let e: ((f + CReal::radius(p)).rat() ≈ f.rat() + Rat::inv_pow2(p)) = Rat::same_trans(f.rat_add(CReal::radius(p)), Rat::add_respects(f.rat().same_refl(), CReal::radius_rat(p)));
-    let r: (q <= (f + CReal::radius(p)).rat()) = linarith(c, (f.rat() - q).neg_le_abs(), e);
-    r
-}
-
-fn CReal::reach_up(B: Rat, p: Nat) → Dyadic {
-    match (Series::exp(B)).enclose(0, p) { Bnd(_, hi) => hi, Whole => Dyadic::above(CReal::exp_reach(B), p) }
-}
-
-theorem CReal::reach_up_ge(B: Rat, p: Nat): CReal::exp_reach(B) <= (CReal::reach_up(B, p)).rat() {
-    let E = Series::exp(B);
-    let n = E.start;
-    let t = E.term(n);
-    let r = CReal::exp_reach(B);
-    let b = E.box_has(p, n);
-    let er: (r ≈ E.sum(n) + (t.abs() + t.abs())) = Rat::same_refl(r);
-    let lo: (CReal::ofRat(E.sum(n) - (t.abs() + t.abs())) <= CReal::ofRat(r)) = CReal::ofRat_le(linarith(t.abs_nonneg(), er));
-    let hi: (CReal::ofRat(r) <= CReal::ofRat(E.sum(n) + (t.abs() + t.abs()))) = CReal::le_of_same(CReal::ofRat_respects(er));
-    let h: ((E.enclose(0, p)).HasReal(CReal::ofRat(r))) = Interval::widen_has(E.box(n, p).term, E.box(n, p).sum, p, b.left, b.right, lo, hi);
-    match E.enclose(0, p) as λ K => K.HasReal(CReal::ofRat(r)) → r <= (match K { Bnd(_, hi) => hi, Whole => Dyadic::above(r, p) }).rat() {
-        Bnd(_, _) => λ k => CReal::le_of_ofRat_le(k.right),
-        Whole => λ _ => Dyadic::above_ge(r, p),
-    }(h)
-}
-
-fn CReal::trig_pad(self x: CReal, n, p: Nat) → Dyadic {
-    let A = x.bound_rat().abs();
-    let S = Dyadic::above(A, p) * CReal::reach_up(A, p);
-    CReal::reach_up(A + A, p) * ((Dyadic(1, 0) + S) + S) * CReal::radius(n)
-}
+fn CReal::trig_pad(self x: CReal, n, p: Nat) → Dyadic { Dyadic(6, 0) * CReal::radius(n) }
 
 theorem CReal::trig_pad_le(self x: CReal, n, p: Nat): CReal::trig_lip(x.bound_rat()) * Rat::inv_pow2(n) <= (x.trig_pad(n, p)).rat() {
     let B = x.bound_rat();
-    let A = B.abs();
-    let Ad = Dyadic::above(A, p);
-    let R1 = CReal::reach_up(A, p);
-    let R2 = CReal::reach_up(A + A, p);
-    let S = Ad * R1;
-    let T = (Dyadic(1, 0) + S) + S;
     let g = Rat::inv_pow2(n);
-    let hA: (0 <= A) = B.abs_nonneg();
-    let r1 = CReal::exp_reach_nonneg(A, hA);
-    let r2 = CReal::exp_reach_nonneg(A + A, linarith(hA));
-    let a1 = Dyadic::above_ge(A, p);
-    let u1 = CReal::reach_up_ge(A, p);
-    let u2 = CReal::reach_up_ge(A + A, p);
-    let sS: (S.rat() ≈ Ad.rat() * R1.rat()) = Ad.rat_mul(R1);
-    let sr: (CReal::sin_reach(B) <= Ad.rat() * R1.rat()) = Rat::mul_le_mul(a1, u1, hA, r1);
-    let eT: (T.rat() ≈ (1 + S.rat()) + S.rat()) = Rat::same_trans((Dyadic(1, 0) + S).rat_add(S), Rat::add_respects(Rat::same_trans((Dyadic(1, 0)).rat_add(S), Rat::add_respects(Dyadic::rat_one(), S.rat().same_refl())), S.rat().same_refl()));
-    let c: (CReal::cos_reach(B) ≈ 1 + CReal::sin_reach(B)) = Rat::same_refl(CReal::cos_reach(B));
-    let ns = CReal::sin_reach_nonneg(B);
-    let cT: (CReal::cos_reach(B) + CReal::sin_reach(B) <= T.rat()) = linarith(sr, sS, eT, c);
-    let nc: (0 <= CReal::cos_reach(B) + CReal::sin_reach(B)) = linarith(ns, c);
-    let L: (CReal::trig_lip(B) <= R2.rat() * T.rat()) = Rat::mul_le_mul(u2, cT, r2, nc);
-    let Lg: (CReal::trig_lip(B) * g <= (R2.rat() * T.rat()) * g) = Rat::mul_le_mono_r(L, Rat::inv_pow2_nonneg(n));
-    let eW: ((R2 * T * CReal::radius(n)).rat() ≈ (R2.rat() * T.rat()) * g) = Rat::same_trans((R2 * T).rat_mul(CReal::radius(n)),
-        Rat::mul_respects(R2.rat_mul(T), CReal::radius_rat(n)));
-    let r: (CReal::trig_lip(B) * g <= (R2 * T * CReal::radius(n)).rat()) = Rat::le_trans(Lg, Rat::le_of_same(Rat::same_sym(eW)));
-    r
+    let eL: (CReal::trig_lip(B) ≈ CReal::exp_reach(1) + CReal::exp_reach(1)) = Rat::same_refl(CReal::trig_lip(B));
+    let six: ((Dyadic(6, 0)).rat() ≈ 6) = Rat::same_refl(6);
+    let L: (CReal::trig_lip(B) <= (Dyadic(6, 0)).rat()) = linarith(CReal::exp_reach_one(), eL, six);
+    let Lg: (CReal::trig_lip(B) * g <= (Dyadic(6, 0)).rat() * g) = Rat::mul_le_mono_r(L, Rat::inv_pow2_nonneg(n));
+    let eW: ((Dyadic(6, 0) * CReal::radius(n)).rat() ≈ (Dyadic(6, 0)).rat() * g) = Rat::same_trans((Dyadic(6, 0)).rat_mul(CReal::radius(n)),
+        Rat::mul_respects((Dyadic(6, 0)).rat().same_refl(), CReal::radius_rat(n)));
+    Rat::le_trans(Lg, Rat::le_of_same(Rat::same_sym(eW)))
 }
 
-fn CReal::sin_enclose(self x: CReal, n, p: Nat) → Interval { ((CReal::sin_box(x.at(n))).at(n, p)).pad(x.trig_pad(n, p)) }
+// The series run at the term trimmed of its trailing zero bits
+// (`Dyadic::trim`): a short argument read at `2^-n` costs its own bits, not n.
+fn CReal::point(self x: CReal, n: Nat) → Rat { ((x.seq(n)).trim()).rat() }
 
-fn CReal::cos_enclose(self x: CReal, n, p: Nat) → Interval { ((CReal::cos_box(x.at(n))).at(n, p)).pad(x.trig_pad(n, p)) }
+theorem CReal::point_close(self x: CReal, n: Nat):
+    (x.point(n)).abs() <= x.bound_rat() ∧ CReal::ofRat(x.point(n) - Rat::inv_pow2(n)) <= x ∧ x <= CReal::ofRat(x.point(n) + Rat::inv_pow2(n))
+{
+    let t: (x.point(n) ≈ x.at(n)) = (x.seq(n)).trim_same();
+    let g = Rat::inv_pow2(n);
+    let a = Rat::le_trans(Rat::le_of_same(Rat::abs_respects(t)), x.bound_le(n));
+    let t1: (x.at(n) - g ≈ x.point(n) - g) = linarith(t);
+    let t2: (x.at(n) + g ≈ x.point(n) + g) = linarith(t);
+    And(a, And(CReal::le_respects(CReal::ofRat_respects(t1), CReal::same_refl(x), x.term_sub_le(n)),
+        CReal::le_respects(CReal::same_refl(x), CReal::ofRat_respects(t2), x.le_term_add(n))))
+}
+
+fn CReal::sin_enclose(self x: CReal, n, p: Nat) → Interval { ((CReal::sin_box(x.point(n))).at(n, p)).pad(x.trig_pad(n, p)) }
+
+fn CReal::cos_enclose(self x: CReal, n, p: Nat) → Interval { ((CReal::cos_box(x.point(n))).at(n, p)).pad(x.trig_pad(n, p)) }
 
 theorem CReal::sin_enclose_has(self x: CReal, n, p: Nat): x.sin_enclose(n, p).HasReal(CReal::sin(x)) {
     let B = x.bound_rat();
-    let q = x.at(n);
-    let d = CReal::sin_dev(x, q, Rat::inv_pow2(n), B, λ i => x.bound_le(i), x.bound_le(n), x.term_sub_le(n), x.le_term_add(n));
+    let q = x.point(n);
+    let c = x.point_close(n);
+    let d = CReal::sin_dev(x, q, Rat::inv_pow2(n), B, λ i => x.bound_le(i), c.left, c.right.left, c.right.right);
     Interval::pad_has((CReal::sin_box(q)).at(n, p), x.trig_pad(n, p), CReal::trig_lip(B) * Rat::inv_pow2(n), x.trig_pad_le(n, p), (CReal::sin_box(q)).has(n, p), d.left, d.right)
 }
 
 theorem CReal::cos_enclose_has(self x: CReal, n, p: Nat): x.cos_enclose(n, p).HasReal(CReal::cos(x)) {
     let B = x.bound_rat();
-    let q = x.at(n);
-    let d = CReal::cos_dev(x, q, Rat::inv_pow2(n), B, λ i => x.bound_le(i), x.bound_le(n), x.term_sub_le(n), x.le_term_add(n));
+    let q = x.point(n);
+    let c = x.point_close(n);
+    let d = CReal::cos_dev(x, q, Rat::inv_pow2(n), B, λ i => x.bound_le(i), c.left, c.right.left, c.right.right);
     Interval::pad_has((CReal::cos_box(q)).at(n, p), x.trig_pad(n, p), CReal::trig_lip(B) * Rat::inv_pow2(n), x.trig_pad_le(n, p), (CReal::cos_box(q)).has(n, p), d.left, d.right)
 }
 
-fn CReal::sin_real_box(x: CReal) → Enclosed { Enclosed(CReal::sin(x), λ n p => x.sin_enclose(n, p), λ n p => x.sin_enclose_has(n, p)) }
+// ---------------------------------------------------------------------------
+// Argument reduction. The series at a large argument has large terms and
+// loses its bits to cancellation, and costs more steps the larger the
+// argument, past what the checker's evaluation affords. So the leaves halve the
+// argument k times, until it is below 1, enclose sin and cos there, and
+// double back k times:
+//
+//     sin(y + y) ≈ sin(y)cos(y) + cos(y)sin(y)
+//     cos(y + y) ≈ cos(y)cos(y) - sin(y)sin(y)
+//
+// which are the addition laws at y = y, so each doubling is the checker's
+// own products and sums, and needs no π. A doubling at most quadruples an
+// enclosure's width, so the base reads the argument 2k + 16 bits finer, at
+// 2k more bits of precision. The base argument is x·2^-k, one product:
+// halving k times over nests k products, whose terms cost more than the
+// checker's evaluation affords.
 
-fn CReal::cos_real_box(x: CReal) → Enclosed { Enclosed(CReal::cos(x), λ n p => x.cos_enclose(n, p), λ n p => x.cos_enclose_has(n, p)) }
+fn CReal::scaled(self x: CReal, e: Nat) → CReal { x * CReal::ofRat(Rat::inv_pow2(e)) }
+
+// One step finer is half: x·2^-(e+1) + x·2^-(e+1) ≈ x·2^-e.
+theorem CReal::scaled_twice(self x: CReal, e: Nat): x.scaled(e + 1) + x.scaled(e + 1) ≈ x.scaled(e) {
+    let h = CReal::ofRat(Rat::inv_pow2(e + 1));
+    let two: (h + h ≈ CReal::ofRat(Rat::inv_pow2(e))) = CReal::same_trans(CReal::same_sym(CReal::ofRat_add(Rat::inv_pow2(e + 1), Rat::inv_pow2(e + 1))), CReal::ofRat_respects(Rat::inv_pow2_half(e)));
+    let d: (x * h + x * h ≈ x * (h + h)) = CReal::same_sym(x.mul_add_distr(h, h));
+    CReal::same_trans(d, CReal::mul_respects(CReal::same_refl(x), two))
+}
+
+theorem CReal::scaled_zero(self x: CReal): x.scaled(0) ≈ x {
+    let o: (CReal::ofRat(Rat::inv_pow2(0)) ≈ 1) = CReal::ofRat_respects(omega);
+    CReal::same_trans(CReal::mul_respects(CReal::same_refl(x), o), x.mul_one())
+}
+
+record TrigBox { s: Interval, c: Interval }
+
+fn TrigBox::double(self b: TrigBox, p: Nat) → TrigBox {
+    TrigBox(b.s.mul(b.c, p).add(b.c.mul(b.s, p), p), b.c.mul(b.c, p).sub(b.s.mul(b.s, p), p))
+}
+
+// The enclosures at x·2^-e, from m doublings of those at x·2^-(e+m): the
+// argument is scaled once, at the bottom, not halved m times over.
+fn CReal::trig_reduced(self x: CReal, e, m, n, p: Nat) → TrigBox {
+    match m { Zero => TrigBox((x.scaled(e)).sin_enclose(n, p), (x.scaled(e)).cos_enclose(n, p)), Succ(j) => (x.trig_reduced(e + 1, j, n, p)).double(p) }
+}
+
+theorem CReal::trig_reduced_has(self x: CReal, n, p, m: Nat): (e: Nat) →
+    (x.trig_reduced(e, m, n, p)).s.HasReal(CReal::sin(x.scaled(e))) ∧ (x.trig_reduced(e, m, n, p)).c.HasReal(CReal::cos(x.scaled(e)))
+{
+    match m {
+        Zero => λ e => And((x.scaled(e)).sin_enclose_has(n, p), (x.scaled(e)).cos_enclose_has(n, p)),
+        Succ(j) => λ e => {
+            let y = x.scaled(e + 1);
+            let b = x.trig_reduced(e + 1, j, n, p);
+            let ih = x.trig_reduced_has(n, p, j, e + 1);
+            let hs: ((b.double(p)).s.HasReal(CReal::sin(y) * CReal::cos(y) + CReal::cos(y) * CReal::sin(y))) =
+                Interval::add_has_real(b.s.mul(b.c, p), b.c.mul(b.s, p), p, Interval::mul_has_real(b.s, b.c, p, ih.left, ih.right), Interval::mul_has_real(b.c, b.s, p, ih.right, ih.left));
+            let hc: ((b.double(p)).c.HasReal(CReal::cos(y) * CReal::cos(y) - CReal::sin(y) * CReal::sin(y))) =
+                Interval::sub_has_real(b.c.mul(b.c, p), b.s.mul(b.s, p), p, Interval::mul_has_real(b.c, b.c, p, ih.right, ih.right), Interval::mul_has_real(b.s, b.s, p, ih.left, ih.left));
+            let t = x.scaled_twice(e);
+            let es: (CReal::sin(y) * CReal::cos(y) + CReal::cos(y) * CReal::sin(y) ≈ CReal::sin(x.scaled(e))) = CReal::same_trans(CReal::same_sym(y.sin_add(y)), CReal::sin_respects(t));
+            let ec: (CReal::cos(y) * CReal::cos(y) - CReal::sin(y) * CReal::sin(y) ≈ CReal::cos(x.scaled(e))) = CReal::same_trans(CReal::same_sym(y.cos_add(y)), CReal::cos_respects(t));
+            And(Interval::has_real_respects((b.double(p)).s, es, hs), Interval::has_real_respects((b.double(p)).c, ec, hc))
+        },
+    }
+}
+
+// Halvings enough to bring the argument's bound below 1.
+fn CReal::trig_steps(self x: CReal) → Nat { x.bound().width() }
+
+fn CReal::trig_at(self x: CReal, n, p: Nat) → TrigBox {
+    let k = x.trig_steps();
+    x.trig_reduced(0, k, (n + (k + k)) + 16, p + (k + k))
+}
+
+theorem CReal::trig_at_has(self x: CReal, n, p: Nat): (x.trig_at(n, p)).s.HasReal(CReal::sin(x)) ∧ (x.trig_at(n, p)).c.HasReal(CReal::cos(x)) {
+    let k = x.trig_steps();
+    let h = x.trig_reduced_has((n + (k + k)) + 16, p + (k + k), k, 0);
+    let z = x.scaled_zero();
+    And(Interval::has_real_respects((x.trig_at(n, p)).s, CReal::sin_respects(z), h.left), Interval::has_real_respects((x.trig_at(n, p)).c, CReal::cos_respects(z), h.right))
+}
+
+fn CReal::sin_real_box(x: CReal) → Enclosed { Enclosed(CReal::sin(x), λ n p => (x.trig_at(n, p)).s, λ n p => (x.trig_at_has(n, p)).left) }
+
+fn CReal::cos_real_box(x: CReal) → Enclosed { Enclosed(CReal::cos(x), λ n p => (x.trig_at(n, p)).c, λ n p => (x.trig_at_has(n, p)).right) }

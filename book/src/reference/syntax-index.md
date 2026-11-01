@@ -14,6 +14,9 @@ import        ::= import module ;
 item          ::= fn name type-params? requires? params -> type decreases? block
                 | theorem name type-params? requires? params : type decreases? block
                 | axiom name type-params? requires? params : type ;
+                | def name type-params? (: type)? = expr ;
+                | generator args? (fn ... | theorem ... | def ...)
+                | generate generator args? ;
                 | inductive name type-params? value-params? index? { ctors }
                 | record name type-params? value-params? { fields }
                 | class name <params> value-params? extends? { fields }

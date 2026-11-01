@@ -1,11 +1,11 @@
 ---
 title: ring and linarith refuse an atom that mentions the class carrier's own constants
-status: open
+status: closed
 labels: [tactics,proofs,ergonomics]
 area: tactics
 milestone: [tac-arith]
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 At a section's class carrier (`section<K: OrderedField(≈, <, <=, +, *)>`),
@@ -48,3 +48,16 @@ a predicate defined in a parent class's section (`AbsLe`, from
 through the parent dictionary's projection path rather than `K.inv`. The
 workaround is to restate the hypothesis with a `let l: (K.inv(e) <= z) =
 h.left;` ascription.
+
+## Log
+
+- 2026-11-01: The three `ring` shapes already checked on master: the
+  difference-calculus round (PR #332) names an atom whose spelling does not
+  parse by an alias, the route this issue proposed. The `linarith` gap is
+  fixed here: ring's reifier compares a dictionary operation through a
+  parent class's record (`same_dictionary_read`, docs/casting-design.md
+  §16), so `AbsLe(z, e).left` reads as `-e <= z`. The `let l: (K.inv(e) <=
+  z) = h.left` ascriptions in `real_fn.hthr` and the named half in
+  `real_fn_tests.hthr` are gone; probes in `real_fn_tests.hthr`
+  (`class_constant_…`, `class_range_product`) and `linarith_tests.hthr`
+  (`class_parent_…`).

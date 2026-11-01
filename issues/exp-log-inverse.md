@@ -1,6 +1,6 @@
 ---
 title: Prove exp(log q) ≈ q, and log's laws
-status: open
+status: closed
 labels: [mathematics,reals]
 area: mathematics
 milestone: [float-transcendental]
@@ -39,3 +39,8 @@ Routes:
   The Cauchy-product machinery in lib/std/num/float/exp_law.hthr
   (`Rat::cauchy_gap`, over term functions) is the analytic half of the
   product step.
+
+## Log
+
+- 2026-11-01: 2026-11-01: Toward the derivative route. In place now: the mean value inequality and `DerivOn::const_of_zero` (real_fn.hthr), exp′ = exp at the reals (`CReal::exp_deriv`, lib/std/analysis/real_exp.hthr), and the product and chain rules. Missing: atanh as a real function on |t| <= r < 1 with derivative 1/(1 - t²), which needs a power series to be differentiable inside its radius, and the bridge from `Series::atanh2(A, B)` to Σ t^(2k+1)/(2k+1) at t = (A - B)/(A + B). The second PR of the thread "Prove the mean value inequality and exp(log q) = q" takes these on.
+- 2026-11-01: Done: `CReal::exp_log_rat(q, pos): exp(log_rat(q, pos)) ≈ ofRat(q)` for every rational q > 0 (lib/std/analysis/real_log.hthr), by the derivative route. atanh is a real function on [-1/2, 1/2], the limit of its polynomials at a clamped argument (`CReal::atanh`), with `atanh′ = 1/(1 - t²)` (`CReal::atanh_deriv`) from the uniform-limit rule `DerivOn::of_approx` and the reciprocal rule `DerivOn::recip` (lib/std/analysis/real_fn_limit.hthr; the polynomials are lib/std/analysis/real_atanh.hthr, over any OrderedField). Then `exp(2·atanh t)(1 - t)²/(1 - t²)` has derivative zero, which gives `CReal::exp_atanh`: exp(2·atanh t)·(1 - t) ≈ 1 + t. `CReal::atanh2_real` reads `Series::atanh2(A, B)` as 2·atanh((A - B)/(A + B)), `CReal::exp_nat_ln2` is exp(e·ln 2) = 2^e, and `CReal::exp_log_frac` puts them together per binade. log(exp a), log at real arguments and log(x·y) moved to [[log-exp-inverse]].

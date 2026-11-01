@@ -1,0 +1,45 @@
+// Probes of `lib/std/analysis/real_log.hthr`: atanh at the reals, the
+// identity exp(2·atanh t)·(1 - t) = 1 + t, and exp(log q) = q, read at
+// concrete points. Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import list; import relation; import relation_props; import algebra;
+import algebra_rel; import order; import semiring; import ordered_field; import big_operator; import omega; import tactic;
+import ring; import linarith; import rat; import creal; import creal_lipschitz; import series; import elementary; import exp_law;
+import elementary_real; import real_fn; import real_fn_limit; import real_atanh; import real_exp; import real_log;
+
+// exp(log q) = q at a literal argument, an integer and 1/3.
+theorem exp_log_three(): CReal::exp(CReal::log_rat(3, omega)) ≈ CReal::ofRat(3) {
+    CReal::exp_log_rat(3, omega)
+}
+
+theorem exp_log_third(pos: 0 < Rat::inv_succ(2)): CReal::exp(CReal::log_rat(Rat::inv_succ(2), pos)) ≈ CReal::ofRat(Rat::inv_succ(2)) {
+    CReal::exp_log_rat(Rat::inv_succ(2), pos)
+}
+
+// At a neutral rational.
+theorem exp_log_any(q: Rat, pos: 0 < q): CReal::exp(CReal::log_rat(q, pos)) ≈ CReal::ofRat(q) {
+    CReal::exp_log_rat(q, pos)
+}
+
+// exp(e·log 2) = 2^e at a literal exponent.
+theorem exp_three_ln2(): CReal::exp(CReal::ofRat(Rat::ofInt(OfNat(3))) * CReal::ln2()) ≈ CReal::ofRat(Rat::ofInt(OfNat(Nat::pow(2, 3)))) {
+    CReal::exp_nat_ln2(3)
+}
+
+// atanh at 0 and its derivative on [-1/2, 1/2].
+theorem atanh_at_zero(): CReal::atanh(0) ≈ 0 { CReal::atanh_zero() }
+
+theorem atanh_has_deriv(): DerivOn(λ (t: CReal) => CReal::atanh_D(t), λ (t: CReal) => CReal::atanh(t), λ (t: CReal) => CReal::atanh_g(t)) {
+    CReal::atanh_deriv()
+}
+
+// The identity at a neutral point of the interval.
+theorem exp_atanh_any(t: CReal, dt: CReal::atanh_D(t)): CReal::exp(CReal::atanh(t) + CReal::atanh(t)) * (1 + -t) ≈ 1 + t {
+    CReal::exp_atanh(t, dt)
+}
+
+// exp(log q) is not q + 1: the law is not vacuous at q = 1.
+// expect-error (kernel)
+theorem exp_log_one_wrong(): CReal::exp(CReal::log_rat(1, omega)) ≈ CReal::ofRat(2) {
+    CReal::exp_log_rat(1, omega)
+}

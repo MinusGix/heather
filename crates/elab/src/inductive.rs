@@ -5491,7 +5491,7 @@ pub(crate) fn occurs(t: &Ty, name: &str) -> Option<Span> {
         // A decoded expression (`m.carrier`). Scanned by *name*, conservatively:
         // a mention anywhere counts as an occurrence, since there is no type
         // structure here to read polarity off (docs/surface-universe.md §4).
-        TyKind::OfExpr(e) => expr_mentions(e, name).then_some(t.span),
+        TyKind::OfExpr(e) | TyKind::TypeOf(e) => expr_mentions(e, name).then_some(t.span),
         TyKind::Eq(..) => None,
         TyKind::Named { name: n, args } => {
             if n == name {
@@ -5557,7 +5557,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
             TyKind::Squash(inner) => recursive_fn(inner, name),
             // Not a `Π` by shape, so not what this check is looking for; a
             // self-occurrence inside it is `occurs`' business.
-            TyKind::OfExpr(..) => None,
+            TyKind::OfExpr(..) | TyKind::TypeOf(..) => None,
             // `Fin(n)` is not a `Π` by shape and its length is a term, so
             // there is no function field to find here.
             TyKind::Nat | TyKind::Eq(..) | TyKind::Univ { .. } | TyKind::Fin(_) => None,

@@ -72,6 +72,45 @@ fn f<A: Monoid>(x: A) -> A { ... }
 fn g<A>(x: A) -> A requires m: Monoid<A> { ... }
 ```
 
+## Values
+
+`def` names a value. It takes no parameter list and is used without `()`;
+its type may be written or inferred from the value.
+
+```heather
+def five: Nat = 5;
+def six = Succ(five);                    // six : Nat, inferred
+def empty<A>: List<A> = Nil;             // type parameters are implicit
+def add_five: Nat -> Nat = λ x => x + five;
+def five_is: (five = 5) = refl;          // an equation type is parenthesised
+
+theorem six_is(): six = 6 {}
+```
+
+A value unfolds as a `fn` does, so closed facts about it hold by computation.
+`five()` is refused (a value is not a function), and a value cannot refer to
+itself.
+
+## Declaration prefixes
+
+A name before `fn`, `theorem` or `def` is a **generator** that runs over the
+declaration: an ordinary library function returning
+`tactic::Tac<List<tactic::Decl>>`, like the one `generate g(args);` runs. It is
+called with the declaration's name (and, for a `def`, its value) before any
+arguments written after the prefix.
+
+```text
+at_zero fn double(n: Nat) -> Nat { n + n }   // at_zero("double"): publishes double::at_zero
+regex def is_hex = "[0-9a-f]+";              // regex("is_hex", "[0-9a-f]+")
+runtime(owned) fn f(…) -> T { … }            // runtime("f", owned)
+```
+
+A prefixed `fn` or `theorem` is published as written and then read by its
+generator. A prefixed `def` is handed to its generator instead, which must
+declare the name: `regex` parses the string and declares `is_hex` as the
+expression's meaning and `is_hex::term` as the expression. Either way the
+generator's declarations are published with it, or the whole item is refused.
+
 ## Termination
 
 Structural recursion is inferred from a recursive `match`. When that is not

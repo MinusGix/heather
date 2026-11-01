@@ -34,9 +34,8 @@
 // polynomials. A derivative bounded by `M` makes the function Lipschitz at
 // the scale of its modulus with constant `M + 1` (`DerivOn::local_lipschitz`):
 // that is the only regularity the product and chain rules spend. The global
-// mean value inequality (`|g| <= M` on `[a, b]` gives `L = M`) is the
-// telescoping of these local steps and waits for the difference calculus
-// (issues/finite-difference-calculus.md).
+// mean value inequality (`|g| <= M` on a convex domain gives `L = M`,
+// `DerivOn::mvi`) chains these local steps, at the end of the file.
 //
 // The product and chain rules take bounds on the functions and derivatives
 // involved as hypotheses rather than deriving them: on an unbounded domain
@@ -137,8 +136,7 @@ theorem LocatedAddGroup::abs_le_intro(x, e: K, l: K.inv(e) <= x, r: x <= e): Abs
 
 // A bound is nonnegative: `-e <= z <= e`.
 theorem LocatedAddGroup::abs_le_nonneg(z, e: K, hz: AbsLe(z, e)): K.unit <= e {
-    let l: (K.inv(e) <= z) = hz.left;
-    linarith(l, hz.right)
+    linarith(hz.left, hz.right)
 }
 
 // Anything `≈ 0` is below a nonnegative bound.
@@ -148,8 +146,7 @@ theorem LocatedAddGroup::abs_le_zero(z, e: K, hz: z ≈ K.unit, he: K.unit <= e)
 
 // A bound moves along `≈` in the bounded term and up in the bound.
 theorem LocatedAddGroup::abs_le_weaken(z, z2, e, e2: K, h: AbsLe(z, e), hz: z ≈ z2, he: e <= e2): AbsLe(z2, e2) {
-    let l: (K.inv(e) <= z) = h.left;
-    LocatedAddGroup::abs_le_intro(z2, e2, linarith(l, hz, he), linarith(h.right, hz, he))
+    LocatedAddGroup::abs_le_intro(z2, e2, linarith(h.left, hz, he), linarith(h.right, hz, he))
 }
 
 // The triangle inequality, for a term that is a sum of two (three) bounded
@@ -157,26 +154,20 @@ theorem LocatedAddGroup::abs_le_weaken(z, z2, e, e2: K, h: AbsLe(z, e), hz: z �
 theorem LocatedAddGroup::abs_le_sum2(a, b, r, x, y, c: K, ha: AbsLe(a, x), hb: AbsLe(b, y), hr: r ≈ a + b,
     hc: x + y <= c): AbsLe(r, c)
 {
-    let la: (K.inv(x) <= a) = ha.left;
-    let lb: (K.inv(y) <= b) = hb.left;
-    LocatedAddGroup::abs_le_intro(r, c, linarith(la, lb, hr, hc), linarith(ha.right, hb.right, hr, hc))
+    LocatedAddGroup::abs_le_intro(r, c, linarith(ha.left, hb.left, hr, hc), linarith(ha.right, hb.right, hr, hc))
 }
 
 theorem LocatedAddGroup::abs_le_sum3(a, b, c, r, x, y, z, w: K, ha: AbsLe(a, x), hb: AbsLe(b, y), hc: AbsLe(c, z),
     hr: r ≈ a + b + c, hw: x + y + z <= w): AbsLe(r, w)
 {
-    let la: (K.inv(x) <= a) = ha.left;
-    let lb: (K.inv(y) <= b) = hb.left;
-    let lc: (K.inv(z) <= c) = hc.left;
-    LocatedAddGroup::abs_le_intro(r, w, linarith(la, lb, lc, hr, hw), linarith(ha.right, hb.right, hc.right, hr, hw))
+    LocatedAddGroup::abs_le_intro(r, w, linarith(ha.left, hb.left, hc.left, hr, hw), linarith(ha.right, hb.right, hc.right, hr, hw))
 }
 
 // Bounds multiply, with no sign split: the four products `(x ± a)(y ± b)`
 // are nonnegative.
 theorem OrderedField::abs_le_mul(a, b, x, y: K, ha: AbsLe(a, x), hb: AbsLe(b, y)): AbsLe(a * b, x * y) {
-    let la: (K.inv(x) <= a) = ha.left;
-    let lb: (K.inv(y) <= b) = hb.left;
-    LocatedAddGroup::abs_le_intro(a * b, x * y, nlinarith(la, ha.right, lb, hb.right), nlinarith(la, ha.right, lb, hb.right))
+    LocatedAddGroup::abs_le_intro(a * b, x * y, nlinarith(ha.left, ha.right, hb.left, hb.right),
+        nlinarith(ha.left, ha.right, hb.left, hb.right))
 }
 
 // Every element has a bound, computed from it: `|c| <= c² + 1`, from
@@ -623,6 +614,208 @@ theorem DerivOn::poly(D: K → Type, R: K, hb: BoundedOn(D, λ x => x, R), n: Na
 {
     DerivOn::range(D, n, λ k x => c(k) * OrderedField::npow(x, k), λ k x => c(k) * OrderedField::npow_deriv(x, k),
         λ k hk => DerivOn::scale(D, c(k), λ x => OrderedField::npow(x, k), λ x => OrderedField::npow_deriv(x, k), DerivOn::pow(D, R, hb, k)))
+}
+
+// ---------------------------------------------------------------------------
+// The mean value inequality (issues/mean-value-inequality.md).
+//
+// A derivative bounded by `M` on a convex domain makes the function
+// `M`-Lipschitz there. The local bound at `ε` (`local_lipschitz_eps`: the
+// constant is `M + ε` over steps no longer than the modulus `δ`) is chained
+// along `[x, y]` in steps of `δ/2`, by induction on how many such steps fit
+// (`mvi_steps`); the number comes from the Archimedean property
+// (`OrderedField::archimedean_mul`); and the `ε` is dropped at the end, since
+// a bound `c + ε·w` for every `ε > 0` is a bound `c`
+// (`OrderedField::le_of_forall_pos`). Which of `x`, `y` is the smaller is
+// never decided: the two cases only ever prove a `≤`, which
+// `StrictOrder::le_by_cases` may split on.
+
+// Between any two points of the domain lies every point between them.
+fn ConvexOn(D: K → Type) → Type { (x, y, z: K) → D(x) → D(y) → x <= z → z <= y → D(z) }
+
+theorem ConvexOn::within(a, b: K): ConvexOn(λ (x: K) => Within(<=, a, x, b)) {
+    λ x y z dx dy xz zy => And(PseudoOrder::le_trans(a, x, z, dx.left, xz), PseudoOrder::le_trans(z, y, b, zy, dy.right))
+}
+
+// The local Lipschitz bound at any `ε`: `|f(y) - f(x)| <= (M + ε)·h` over
+// steps `h` within the modulus at `ε`.
+theorem DerivOn::local_lipschitz_eps(D: K → Type, f, g: K → K, M, e: K, pe: K.unit < e, hd: DerivOn(D, f, g), hb: BoundedOn(D, g, M)):
+    ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(f(y) + K.inv(f(x)), (M + e) * h))
+{
+    let a = hd(e, pe);
+    Exists(a.witness, And(a.proof.left, λ x y h dx dy hxy hh => {
+        let r = a.proof.right(x, y, h, dx, dy, hxy, hh);
+        let lin = OrderedField::abs_le_mul(g(x), y + K.inv(x), M, h, hb.right(x, dx), hxy);
+        let le: (e * h + M * h <= (M + e) * h) = StrictOrder::le_of_same(e * h + M * h, (M + e) * h, ring);
+        LocatedAddGroup::abs_le_sum2(f(y) + K.inv(f(x)) + K.inv(g(x) * (y + K.inv(x))), g(x) * (y + K.inv(x)),
+            f(y) + K.inv(f(x)), e * h, M * h, (M + e) * h, r, lin, ring, le)
+    }))
+}
+
+// A nonnegative difference bounds itself.
+theorem LocatedAddGroup::abs_le_self(x, y: K, xy: x <= y): AbsLe(y + K.inv(x), y + K.inv(x)) {
+    LocatedAddGroup::abs_le_intro(y + K.inv(x), y + K.inv(x), linarith(xy), StrictOrder::le_refl(y + K.inv(x)))
+}
+
+// A two-sided bound may be proved by cases on the order of two points: each
+// side is a `≤`, which needs no decision.
+theorem LocatedAddGroup::abs_le_by_cases(z, e, u, v: K, below: u < v → AbsLe(z, e), above: v <= u → AbsLe(z, e)): AbsLe(z, e) {
+    let lo = StrictOrder::le_by_cases(K.inv(e), z, u, v, λ h => { let l: (K.inv(e) <= z) = below(h).left; l },
+        λ h => { let l: (K.inv(e) <= z) = above(h).left; l });
+    let hi = StrictOrder::le_by_cases(z, e, u, v, λ h => below(h).right, λ h => above(h).right);
+    LocatedAddGroup::abs_le_intro(z, e, lo, hi)
+}
+
+// One step of the chain: `[x, y]` split at `z = x + δ/2`, the first piece by
+// the local bound, the rest by the count below.
+theorem DerivOn::mvi_split(f: K → K, L, x, y, z, s: K, hz: z ≈ x + s,
+    first: AbsLe(f(z) + K.inv(f(x)), L * s), rest: AbsLe(f(y) + K.inv(f(z)), L * (y + K.inv(z)))):
+    AbsLe(f(y) + K.inv(f(x)), L * (y + K.inv(x)))
+{
+    let le: (L * (y + K.inv(z)) + L * s <= L * (y + K.inv(x))) =
+        StrictOrder::le_of_same(L * (y + K.inv(z)) + L * s, L * (y + K.inv(x)), ring(hz));
+    LocatedAddGroup::abs_le_sum2(f(y) + K.inv(f(z)), f(z) + K.inv(f(x)), f(y) + K.inv(f(x)),
+        L * (y + K.inv(z)), L * s, L * (y + K.inv(x)), rest, first, ring, le)
+}
+
+// The chain of steps. Given the local bound at scale `d`, any `x <= y` in
+// the domain at most `n` half-steps apart have `|f(y) - f(x)| <= L·(y - x)`.
+// Cotransitivity places `y - x` against `d/2 < d`: below `d` the local bound
+// applies at once; above `d/2` the first half-step is cut off and the rest
+// is `n - 1` half-steps (at `n = 0` it cannot be above `d/2`).
+theorem DerivOn::mvi_steps(D: K → Type, f: K → K, L, d: K, hD: ConvexOn(D), pd: K.unit < d,
+    loc: (x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d → AbsLe(f(y) + K.inv(f(x)), L * h), n: Nat):
+    (x, y: K) → D(x) → D(y) → x <= y → y + K.inv(x) <= K.of_nat(n) * OrderedField::half(d) →
+        AbsLe(f(y) + K.inv(f(x)), L * (y + K.inv(x)))
+{
+    match n {
+        Zero => λ x y dx dy xy span => {
+            let s = OrderedField::half(d);
+            let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
+            let sd: (s < d) = OrderedField::half_lt(d, pd);
+            let z0: (K.of_nat(Zero) ≈ K.unit) = K.of_nat_zero;
+            let w: (K.of_nat(Zero) * s ≈ K.unit) = ring(z0);
+            let close: (y + K.inv(x) <= d) = linarith(span, w, sd, ps);
+            loc(x, y, y + K.inv(x), dx, dy, LocatedAddGroup::abs_le_self(x, y, xy), close)
+        },
+        Succ(m) => λ x y dx dy xy span => {
+            let s = OrderedField::half(d);
+            let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
+            let sd: (s < d) = OrderedField::half_lt(d, pd);
+            match K.rel_cotrans(s, d, y + K.inv(x), sd) {
+                Inr(close) => loc(x, y, y + K.inv(x), dx, dy, LocatedAddGroup::abs_le_self(x, y, xy), StrictOrder::le_of_lt(y + K.inv(x), d, close)),
+                Inl(far) => {
+                    let su: (K.of_nat(Succ(m)) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
+                    let w: (K.of_nat(Succ(m)) * s ≈ K.of_nat(m) * s + s) = ring(su);
+                    let xz: (x <= x + s) = linarith(ps);
+                    let zy: (x + s <= y) = linarith(far);
+                    let dz = hD(x, y, x + s, dx, dy, xz, zy);
+                    let near: AbsLe((x + s) + K.inv(x), s) = LocatedAddGroup::abs_le_intro((x + s) + K.inv(x), s, linarith(ps), linarith(ps));
+                    let first = loc(x, x + s, s, dx, dz, near, StrictOrder::le_of_lt(s, d, sd));
+                    let left: (y + K.inv(x + s) <= K.of_nat(m) * s) = linarith(span, w);
+                    let rest = DerivOn::mvi_steps(D, f, L, d, hD, pd, loc, m, x + s, y, dz, dy, zy, left);
+                    DerivOn::mvi_split(f, L, x, y, x + s, s, K.rel_refl(x + s), first, rest)
+                },
+            }
+        },
+    }
+}
+
+// The Archimedean property, scaled: any `a` is below some `n·d`, `d > 0`.
+theorem OrderedField::archimedean_mul(a, d: K, pd: K.unit < d): ∃ n: Nat, a <= K.of_nat(n) * d {
+    let r = K.recip(d, Inr(pd));
+    let pr: (K.unit < r) = OrderedField::recip_pos(d, Inr(pd), pd);
+    let m: (d * r ≈ K.multiplicative.unit) = K.mul_recip(d, Inr(pd));
+    let n = K.archimedean(a * r);
+    let lt: (a * r * d < K.of_nat(n.witness) * d) = OrderedField::mul_lt_mono_r(a * r, K.of_nat(n.witness), d, n.proof, pd);
+    let back: (a * r * d ≈ a) = ring(m);
+    Exists(n.witness, StrictOrder::le_of_lt(a, K.of_nat(n.witness) * d, linarith(lt, back)))
+}
+
+// A bound `c + ε·w` for every `ε > 0`, with `w >= 0`, is a bound `c`: were
+// `c < z`, the `ε` with `w·ε <= (z - c)/2` would put `z` below itself.
+theorem OrderedField::forall_pos_step(z, c, w, e: K, hz: z <= c + e * w, he: w * e <= OrderedField::half(z + K.inv(c)),
+    gap: c < z): False
+{
+    let hl = OrderedField::half_lt(z + K.inv(c), OrderedAddGroup::sub_pos(c, z, gap));
+    let bad: (z < z) = linarith(hz, he, hl);
+    K.lt_irrefl(z, bad)
+}
+
+theorem OrderedField::le_of_forall_pos(z, c, w: K, pw: K.unit <= w, h: (e: K) → K.unit < e → z <= c + e * w): z <= c {
+    K.le_of_not_lt(z, c, λ gap => {
+        let s = OrderedField::shrink(w, OrderedField::half(z + K.inv(c)), pw,
+            OrderedField::half_pos(z + K.inv(c), OrderedAddGroup::sub_pos(c, z, gap)));
+        OrderedField::forall_pos_step(z, c, w, s.witness, h(s.witness, s.proof.left), s.proof.right, gap)
+    })
+}
+
+theorem OrderedField::abs_le_of_forall_pos(z, c, w: K, pw: K.unit <= w, h: (e: K) → K.unit < e → AbsLe(z, c + e * w)): AbsLe(z, c) {
+    let hi = OrderedField::le_of_forall_pos(z, c, w, pw, λ e pe => h(e, pe).right);
+    let lo = OrderedField::le_of_forall_pos(K.inv(z), c, w, pw, λ e pe => {
+        let l: (K.inv(c + e * w) <= z) = h(e, pe).left;
+        let r: (K.inv(z) <= c + e * w) = linarith(l);
+        r
+    });
+    LocatedAddGroup::abs_le_intro(z, c, linarith(lo), hi)
+}
+
+// The mean value inequality at `ε`: `|f(y) - f(x)| <= (M + ε)·(y - x)`.
+theorem DerivOn::mvi_eps(D: K → Type, f, g: K → K, M, e: K, pe: K.unit < e, hD: ConvexOn(D), hd: DerivOn(D, f, g),
+    hb: BoundedOn(D, g, M), x, y: K, dx: D(x), dy: D(y), xy: x <= y):
+    AbsLe(f(y) + K.inv(f(x)), (M + e) * (y + K.inv(x)))
+{
+    let a = DerivOn::local_lipschitz_eps(D, f, g, M, e, pe, hd, hb);
+    let n = OrderedField::archimedean_mul(y + K.inv(x), OrderedField::half(a.witness), OrderedField::half_pos(a.witness, a.proof.left));
+    DerivOn::mvi_steps(D, f, M + e, a.witness, hD, a.proof.left, a.proof.right, n.witness, x, y, dx, dy, xy, n.proof)
+}
+
+// The mean value inequality: a derivative bounded by `M` on a convex domain
+// bounds the function's increments by `M·(y - x)`.
+theorem DerivOn::mvi(D: K → Type, f, g: K → K, M: K, hD: ConvexOn(D), hd: DerivOn(D, f, g), hb: BoundedOn(D, g, M),
+    x, y: K, dx: D(x), dy: D(y), xy: x <= y): AbsLe(f(y) + K.inv(f(x)), M * (y + K.inv(x)))
+{
+    OrderedField::abs_le_of_forall_pos(f(y) + K.inv(f(x)), M * (y + K.inv(x)), y + K.inv(x), linarith(xy), λ e pe =>
+        LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), (M + e) * (y + K.inv(x)), M * (y + K.inv(x)) + e * (y + K.inv(x)),
+            DerivOn::mvi_eps(D, f, g, M, e, pe, hD, hd, hb, x, y, dx, dy, xy), K.rel_refl(f(y) + K.inv(f(x))),
+            StrictOrder::le_of_same((M + e) * (y + K.inv(x)), M * (y + K.inv(x)) + e * (y + K.inv(x)), ring)))
+}
+
+// With the order of the two points not given: `|y - x| <= h` gives
+// `|f(y) - f(x)| <= M·h`, either way round.
+theorem DerivOn::lipschitz(D: K → Type, f, g: K → K, M: K, hD: ConvexOn(D), hd: DerivOn(D, f, g), hb: BoundedOn(D, g, M)):
+    LipschitzOn(D, f, M)
+{
+    And(hb.left, λ x y h dx dy hxy => {
+        let l: (K.inv(h) <= y + K.inv(x)) = hxy.left;
+        LocatedAddGroup::abs_le_by_cases(f(y) + K.inv(f(x)), M * h, y, x,
+            λ yx => {
+                let r = DerivOn::mvi(D, f, g, M, hD, hd, hb, y, x, dy, dx, StrictOrder::le_of_lt(y, x, yx));
+                let rl: (K.inv(M * (x + K.inv(y))) <= f(x) + K.inv(f(y))) = r.left;
+                let le: (M * (x + K.inv(y)) <= M * h) = OrderedField::mul_le_mono_l(x + K.inv(y), h, M, linarith(l), hb.left);
+                LocatedAddGroup::abs_le_intro(f(y) + K.inv(f(x)), M * h, linarith(r.right, le), linarith(rl, le))
+            },
+            λ xy => {
+                let r = DerivOn::mvi(D, f, g, M, hD, hd, hb, x, y, dx, dy, xy);
+                let le: (M * (y + K.inv(x)) <= M * h) = OrderedField::mul_le_mono_l(y + K.inv(x), h, M, hxy.right, hb.left);
+                LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), M * (y + K.inv(x)), M * h, r,
+                    K.rel_refl(f(y) + K.inv(f(x))), le)
+            })
+    })
+}
+
+// A zero derivative on a convex domain makes the function constant there.
+theorem DerivOn::const_of_zero(D: K → Type, f, g: K → K, hD: ConvexOn(D), hd: DerivOn(D, f, g),
+    hz: (x: K) → D(x) → g(x) ≈ K.unit, x, y: K, dx: D(x), dy: D(y)): f(x) ≈ f(y)
+{
+    let hb: BoundedOn(D, g, K.unit) = And(StrictOrder::le_refl(K.unit), λ t dt =>
+        LocatedAddGroup::abs_le_zero(g(t), K.unit, hz(t, dt), StrictOrder::le_refl(K.unit)));
+    let w = (y + K.inv(x)) * (y + K.inv(x)) + K.multiplicative.unit;
+    let lip = DerivOn::lipschitz(D, f, g, K.unit, hD, hd, hb);
+    let r = lip.right(x, y, w, dx, dy, OrderedField::abs_le_sq_succ(y + K.inv(x)));
+    let rl: (K.inv(K.unit * w) <= f(y) + K.inv(f(x))) = r.left;
+    linarith(rl, r.right)
 }
 
 }
