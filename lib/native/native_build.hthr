@@ -9,6 +9,11 @@
 // store a byte, branch and loop on a value being nonzero, read, write,
 // open, close, copy a command-line argument and exit. A procedure is an ordinary Heather function returning an `Act`, so
 // it is inlined where it is called (`write_all`, `each_read`, `for_count`).
+// A pure statement (`Calc`: assignments, byte stores, branches and bounded
+// loops over words) runs as one statement, `compute`, and lowers to one
+// structured region the compiler takes inside a leaf as written: a
+// `Conditional` for a branch, a counted `Loop` for a loop
+// (issues/native-build-loop-regions.md).
 //
 // `Tool::source` lowers a tool. It numbers the words in the order their
 // binders are met, and gives each statement temporaries past them, which are
@@ -66,6 +71,35 @@ inductive Val {
     ByteAt(buf: Buf, index: Val),
 }
 
+// A pure statement: words and bytes only, no call to Linux. It lowers to
+// one structured region (`Calc::region`) that the compiler takes inside a
+// leaf as it is written (native_structured's `StructuredRegion::scoped`):
+// every node at width 64, a branch on a comparison's bit, a loop in
+// counted form. `Choose` lowers to a `Conditional`, `Passes` to a `Loop`.
+//
+// `Passes` makes at most `bound` passes over the words `state`: each runs
+// `body` on the passes left (counted down from `bound`), then ends the loop
+// if `stop` is nonzero, and `ran_out` is then 1 if the passes ran out
+// first, else 0. A pass sees only its own words: it reads the state, the
+// passes left and the words it binds, and what it writes to any other word
+// is lost (its valuation is its own, `StructuredRegion::eval`). So every
+// word a pass reads goes in its state, even one it never changes; `ran_out`
+// is not one of them.
+inductive Calc {
+    Nothing,
+    Both(parts: Bool → Calc),
+    Fresh(init: Val, body: Var → Calc),
+    Assign(var: Var, value: Val),
+    Store(buf: Buf, index: Val, value: Val),
+    Choose(condition: Val, arms: Bool → Calc),
+    Passes(bound: Val, state: List<Var>, body: Var → Calc, stop: Val, ran_out: Var),
+    // Function `callee` of the tool's program (`program`) on the words
+    // `arguments`, its result into `result`: a FunctionIR `Call`, so the
+    // value is `program_eval`'s and a function `heather reflect` wrote is
+    // read as the Heather function it reflects (its `_agrees` theorem).
+    Apply(callee: Nat, arguments: List<Val>, result: Var),
+}
+
 // A statement. `When` and the loops test their value's being nonzero. A
 // statement with two parts holds them as a function of a `Bool`, `True` the
 // first: `Act` has a function field (`Let`'s body), so no constructor may
@@ -98,6 +132,8 @@ inductive Act {
     // the last argument, `len` minus one (`Env::arg`).
     ArgTo(index: Val, buf: Buf, len: Var),
     Quit(status: Val),
+    // A pure statement, one structured region.
+    Calculate(calc: Calc),
 }
 
 // Its buffers, each bound for what follows, and the statement it runs;
@@ -105,6 +141,10 @@ inductive Act {
 inductive Tool {
     Run(main: Act),
     WithBuffer(capacity: Nat, initial: List<BitVec(8)>, body: Buf → Tool),
+    // The FunctionIR functions its `Apply`s call, for what follows: the
+    // source's `functions`, as `program_eval` orders them (the last listed
+    // is function 0).
+    WithProgram(functions: List<Function>, body: Tool),
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +177,7 @@ fn Val::truth(self v: Val) → Val { match v.is_bit() { True => v, False => Not(
 
 // A bitwise operation's width: one bit over two bits, else a word.
 fn Val::width_of(left, right: Val) → Nat { match left.is_bit() && right.is_bit() { True => 1, False => 64 } }
+fn Val::width_at(wide: Bool, left, right: Val) → Nat { match wide { True => 64, False => Val::width_of(left, right) } }
 
 // ---------------------------------------------------------------------------
 // Writing them
@@ -196,6 +237,32 @@ fn run(main: Act) → Tool { Run(main) }
 fn buffer(capacity: Nat, body: Buf → Tool) → Tool { WithBuffer(capacity, [], body) }
 // A buffer holding `bytes` from the start, as long as they are.
 fn buffer_of(bytes: List<BitVec(8)>, body: Buf → Tool) → Tool { WithBuffer(bytes.len(), bytes, body) }
+// The program the tool's `call`s name (`heather reflect` writes one).
+fn program(functions: List<Function>, body: Tool) → Tool { WithProgram(functions, body) }
+
+// Pure statements (`Calc`), written as `Act`'s are; `compute` runs one.
+fn Var::assign(self var: Var, value: Val) → Calc { Assign(var, value) }
+fn Buf::store(self buf: Buf, index: Val, value: Val) → Calc { Store(buf, index, value) }
+
+fn Calc::pair(yes, no: Calc) → Bool → Calc { λ b => match b { True => yes, False => no } }
+fn Calc::then(self first: Calc, rest: Calc) → Calc { Both(Calc::pair(first, rest)) }
+designation ++ at Calc := Calc::then
+
+fn nothing() → Calc { Nothing }
+fn fresh(init: Val, body: Var → Calc) → Calc { Fresh(init, body) }
+fn choose(condition: Val, yes, no: Calc) → Calc { Choose(condition, Calc::pair(yes, no)) }
+fn only_if(condition: Val, yes: Calc) → Calc { Choose(condition, Calc::pair(yes, Nothing)) }
+fn passes(bound: Val, state: List<Var>, body: Var → Calc, stop: Val, ran_out: Var) → Calc { Passes(bound, state, body, stop, ran_out) }
+fn compute(calc: Calc) → Act { Calculate(calc) }
+fn call(callee: Nat, arguments: List<Val>, result: Var) → Calc { Apply(callee, arguments, result) }
+
+// The body for each index from 0 below `count`, read once before the
+// first pass; the index and the words `state` are the passes' state, so
+// the body reads only them and the words it binds.
+fn count_up(count: Val, state: List<Var>, body: Var → Calc) → Calc {
+    fresh(num(0), λ i => fresh(num(0), λ out =>
+        passes(count, Cons(i, state), λ _ => body(i) ++ i.assign(i.get() + num(1)), num(0), out)))
+}
 
 // ---------------------------------------------------------------------------
 // Procedures, inlined where they are called
@@ -243,72 +310,75 @@ record Placed { nodes: List<Node>, id: Nat, next: Nat }
 fn Placed::over(self a: Placed, b: Placed, node: Node, at: Nat) → Placed { Placed(a.nodes ++ b.nodes ++ [node], at, b.next) }
 
 // The value computed into `next` (a word's value is where it is), each part
-// into an id of its own past it.
-fn Val::place(self v: Val, next: Nat) → Placed {
+// into an id of its own past it; `wide`, every node at width 64, a bit as
+// the word 0 or 1 (`Calc`'s regions).
+fn Val::placed(self v: Val, wide: Bool, next: Nat) → Placed {
     match v {
         Number(value) => Placed([Const(64, next, value)], next, Succ(next)),
         Held(var) => Placed([], var.id, next),
         Sum(left, right) => {
-            let a = left.place(Succ(next));
-            let b = right.place(a.next);
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
             a.over(b, Add(64, next, a.id, b.id), next)
         },
         Difference(left, right) => {
-            let a = left.place(Succ(next));
-            let b = right.place(a.next);
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
             a.over(b, Sub(64, next, a.id, b.id), next)
         },
         BitsAnd(left, right) => {
-            let a = left.place(Succ(next));
-            let b = right.place(a.next);
-            a.over(b, BitAnd(Val::width_of(left, right), next, a.id, b.id), next)
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, BitAnd(Val::width_at(wide, left, right), next, a.id, b.id), next)
         },
         BitsOr(left, right) => {
-            let a = left.place(Succ(next));
-            let b = right.place(a.next);
-            a.over(b, BitOr(Val::width_of(left, right), next, a.id, b.id), next)
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, BitOr(Val::width_at(wide, left, right), next, a.id, b.id), next)
         },
         BitsXor(left, right) => {
-            let a = left.place(Succ(next));
-            let b = right.place(a.next);
-            a.over(b, BitXor(Val::width_of(left, right), next, a.id, b.id), next)
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, BitXor(Val::width_at(wide, left, right), next, a.id, b.id), next)
         },
         ShiftedLeft(value, amount) => {
-            let a = value.place(Succ(next));
+            let a = value.placed(wide, Succ(next));
             a.over(Placed([], 0, a.next), ShiftLeft(64, next, a.id, amount), next)
         },
         ShiftedRight(value, amount) => {
-            let a = value.place(Succ(next));
+            let a = value.placed(wide, Succ(next));
             a.over(Placed([], 0, a.next), LogicalShiftRight(64, next, a.id, amount), next)
         },
         Lower(left, right) => {
-            let a = left.place(Succ(next));
-            let b = right.place(a.next);
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
             a.over(b, UnsignedLessThan(64, next, a.id, b.id), next)
         },
         LowerSigned(left, right) => {
-            let a = left.place(Succ(next));
-            let b = right.place(a.next);
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
             a.over(b, SignedLessThan(64, next, a.id, b.id), next)
         },
         Equals(left, right) => {
-            let a = left.place(Succ(next));
-            let b = right.place(a.next);
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
             a.over(b, Equal(64, next, a.id, b.id), next)
         },
         Not(value) => {
-            let a = value.place(Succ(next));
-            match value.is_bit() {
+            let a = value.placed(wide, Succ(next));
+            match value.is_bit() && !wide {
                 True => a.over(Placed([Const(1, a.next, 1)], a.next, Succ(a.next)), BitXor(1, next, a.id, a.next), next),
                 False => a.over(Placed([Const(64, a.next, 0)], a.next, Succ(a.next)), Equal(64, next, a.id, a.next), next),
             }
         },
         ByteAt(buf, index) => {
-            let a = index.place(Succ(next));
+            let a = index.placed(wide, Succ(next));
             a.over(Placed([], 0, a.next), BufferLoad(next, buf.id, a.id), next)
         },
     }
 }
+
+fn Val::place(self v: Val, next: Nat) → Placed { v.placed(False, next) }
 
 // The node with its output at `dest`.
 fn Node::output_to(self node: Node, dest: Nat) → Node {
@@ -349,6 +419,142 @@ fn Val::assigned(self v: Val, dest, next: Nat) → List<Node> {
     let p = v.place(next);
     p.nodes.into_dest(dest, v.width(), p.id)
 }
+
+// ---------------------------------------------------------------------------
+// Pure statements as one region
+
+// A value as a bit a region may branch on (native_structured's `Scope::bit`):
+// a comparison's own, a constant's 0 or 1, else the word compared with zero
+// twice.
+fn Val::compares(self v: Val) → Bool {
+    match v { Lower(_, _) => True, LowerSigned(_, _) => True, Equals(_, _) => True, Not(_) => True, _ => False }
+}
+
+fn Val::test(self v: Val) → Val {
+    match v {
+        Number(value) => Number(match value { Zero => 0, Succ(_) => 1 }),
+        _ => match v.compares() { True => v, False => Not(Not(v)) },
+    }
+}
+
+// The nodes, all at width 64, that set `dest` to the value, temporaries
+// from `next`.
+fn Val::assigned_wide(self v: Val, dest, next: Nat) → List<Node> {
+    let p = v.placed(True, next);
+    p.nodes.into_dest(dest, 64, p.id)
+}
+
+// A run of nodes, or a region.
+inductive Piece { Nodes(nodes: List<Node>), Part(region: StructuredRegion) }
+
+// A piece before others: a run of nodes joins the run after it, and an
+// empty run is dropped.
+fn Piece::onto(self p: Piece, rest: List<Piece>) → List<Piece> {
+    match p {
+        Nodes(nodes) => match nodes {
+            Nil => rest,
+            Cons(_, _) => match rest {
+                Nil => [p],
+                Cons(q, more) => match q { Nodes(after) => Cons(Nodes(nodes ++ after), more), Part(_) => Cons(p, rest) },
+            },
+        },
+        Part(_) => Cons(p, rest),
+    }
+}
+
+fn List::merged(self pieces: List<Piece>) → List<Piece> {
+    match pieces { Nil => [], Cons(p, rest) => p.onto(rest.merged()) }
+}
+
+fn Region::bare(nodes: List<Node>) → Region { Region(Ports([]), nodes, Ports([])) }
+
+// The pieces one after the other: a run of nodes the leaf of a `Sequence`,
+// a region the first of a `Compose`; nothing an empty leaf.
+fn List::joined(self pieces: List<Piece>) → StructuredRegion {
+    match pieces {
+        Nil => Dataflow(Region::bare([])),
+        Cons(p, rest) => match p {
+            Nodes(nodes) => match rest { Nil => Dataflow(Region::bare(nodes)), Cons(_, _) => Sequence(Region::bare(nodes), rest.joined()) },
+            Part(r) => match rest { Nil => r, Cons(_, _) => Compose(r, rest.joined()) },
+        },
+    }
+}
+
+// A word's id.
+fn List::ids(self vars: List<Var>) → List<Nat> { vars.map(λ (x: Var) => x.id) }
+
+// Values placed one after another, each into ids of its own.
+record PlacedAll { nodes: List<Node>, ids: List<Nat>, next: Nat }
+
+fn List::placed_words(self values: List<Val>, next: Nat) → PlacedAll {
+    match values {
+        Nil => PlacedAll([], [], next),
+        Cons(v, rest) => {
+            let p = v.placed(True, next);
+            let r = rest.placed_words(p.next);
+            PlacedAll(p.nodes ++ r.nodes, Cons(p.id, r.ids), r.next)
+        },
+    }
+}
+
+// Every loop's count in the region, the loops inside others' too.
+fn StructuredRegion::counts(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(_) => [],
+        Sequence(_, continuation) => continuation.counts(),
+        Compose(prefix, continuation) => prefix.counts() ++ continuation.counts(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.counts() ++ when_false.counts(),
+        Call(_, _, _) => [],
+        Loop(_, _, _, count, body, _, _, _, _) => Cons(count, body.counts()),
+    }
+}
+
+// Each id cleared: a word written, so dead before.
+fn List::cleared(self ids: List<Nat>) → List<Node> { ids.map(λ (id: Nat) => Const(64, id, 0)) }
+
+// The statement's pieces, temporaries from `next`. A branch tests its bit,
+// its arms' temporaries past the bit's; a loop's bound is placed first,
+// then come its count and exit bit, the pass's temporaries past them, and
+// the pass ends with its exit bit computed. Its state words are its
+// inputs, parameters, next state and outputs all at once, so the loop
+// updates them in place and moves nothing. After the loop its counts are
+// cleared: the allocator keys a loop's live set by its count, and a later
+// loop testing a word of the same id (a sibling numbers its words from the
+// same `next`) shares the set (native_alloc's `Source::loop_sets`), which
+// would make the count live after the loop that counts with it, and the
+// compiler refuses a loop that clobbers a word live after it
+// (native_structured's `loop_keeps`). Cleared, a count is dead there.
+fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
+    match c {
+        Nothing => [],
+        Both(parts) => parts(True).pieces(next) ++ parts(False).pieces(next),
+        Fresh(init, body) => Cons(Nodes(init.assigned_wide(next, Succ(next))), body(Var(next)).pieces(Succ(next))),
+        Assign(var, value) => [Nodes(value.assigned_wide(var.id, next))],
+        Store(buf, index, value) => {
+            let i = index.placed(True, next);
+            let v = value.placed(True, i.next);
+            [Nodes(i.nodes ++ v.nodes ++ [BufferStore(v.next, buf.id, i.id, v.id)])]
+        },
+        Choose(condition, arms) => {
+            let t = condition.test().placed(True, next);
+            [Nodes(t.nodes), Part(Conditional(Ports([]), t.id, Ports([]), Ports([]), arms(True).pieces(t.next).merged().joined(), arms(False).pieces(t.next).merged().joined()))]
+        },
+        Apply(callee, arguments, result) => {
+            let a = arguments.placed_words(next);
+            [Nodes(a.nodes), Part(Call(callee, a.ids, result.id))]
+        },
+        Passes(bound, state, body, stop, ran_out) => {
+            let b = bound.placed(True, next);
+            let count = b.next;
+            let exit = Succ(count);
+            let pass = body(Var(count)).pieces(Succ(exit)) ++ [Nodes(stop.test().placed(True, exit).nodes)];
+            let r = Loop(state.ids(), b.id, state.ids(), count, pass.merged().joined(), exit, state.ids(), state.ids(), ran_out.id);
+            [Nodes(b.nodes), Part(r), Nodes(r.counts().cleared())]
+        },
+    }
+}
+
+fn Calc::region(self c: Calc, next: Nat) → StructuredRegion { c.pieces(next).merged().joined() }
 
 // ---------------------------------------------------------------------------
 // Statements as nodes and control
@@ -501,21 +707,26 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
             let s = status.place(next);
             s.nodes.ops() ++ [Do(Exit(s.id))]
         },
+        Calculate(calc) => [Do(Compute(calc.region(next)))],
     }
 }
 
 // ---------------------------------------------------------------------------
 // Tools as sources
 
-// A tool's buffers in order and its statement.
-record Opened { buffers: List<Buffer>, main: Act }
+// A tool's buffers in order, its program and its statement.
+record Opened { buffers: List<Buffer>, functions: List<Function>, main: Act }
 
 fn Tool::opened(self t: Tool, buf: Nat) → Opened {
     match t {
-        Run(main) => Opened([], main),
+        Run(main) => Opened([], [], main),
         WithBuffer(capacity, initial, body) => {
             let rest = body(Buf(buf, capacity)).opened(Succ(buf));
-            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.main)
+            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.functions, rest.main)
+        },
+        WithProgram(functions, body) => {
+            let rest = body.opened(buf);
+            Opened(rest.buffers, functions ++ rest.functions, rest.main)
         },
     }
 }
@@ -524,5 +735,6 @@ fn Tool::opened(self t: Tool, buf: Nat) → Opened {
 // included.
 fn Tool::source(self t: Tool) → Source {
     let o = t.opened(0);
-    Source::of(o.buffers, o.main.items(0).lowered())
+    let main = o.main.items(0).lowered();
+    Source(functions := o.functions, buffers := o.buffers, words := main.word_bound(), main := main)
 }

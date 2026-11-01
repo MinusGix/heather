@@ -167,8 +167,17 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     // A builder's tool (`Tool`, native_build) is lowered a part at a time
     // (`parts`); any other source is read as a literal whole.
     let tool_probe = format!("{p}_tool");
-    let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n");
-    let is_tool = elab.fork().elab_module_source(&tool_probe, &tool_text).is_ok();
+    let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n\
+        fn {p}_functions() → Nat {{ {symbol}().opened(0).functions.len() }}\n");
+    let mut tool_fork = elab.fork();
+    let is_tool = tool_fork.elab_module_source(&tool_probe, &tool_text).is_ok();
+    // A tool that calls functions (`call`, native_build) has a meaning, the
+    // calls' `program_eval`, but no code yet: calls compile as procedures
+    // (issues/native-compiled-procedures.md).
+    if is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_functions")).map_err(|e| format!("`{symbol}` (functions): {e}"))? != 0 {
+        return Err(format!("`{symbol}` calls functions of its program, and calls do not compile yet (issues/native-compiled-procedures.md)"));
+    }
+    drop(tool_fork);
     let source = if is_tool { format!("{symbol}().source()") } else { format!("{symbol}()") };
     let (src, lowered, lowered_is, shapes) = if is_tool {
         let stated = tool_parts(&elab, p, symbol, &root, &imports)?;
