@@ -272,6 +272,21 @@ the frame's base in `frame`.
 3. **`write-elf` and the builder**: a `proc` form in `native_build` whose
    words the builder numbers, `Source::spelled` and the Rust mirrors
    (`crates/cli/src/native`), and an ELF test that runs the recursion.
+   Landed: `Source::spelled` spells `Perform` (tag 8) and a source with
+   procedures (`[2]`, its depth after its words, its procedures after its
+   buffers), and the Rust readback prints them. `write-elf` emits `main`
+   from `Source::main_names`, reads the procedures' code
+   (`List::procedures_reading`) and the shared exit after `main`'s exit,
+   states the first by one `refl` and the second as `{p}_code()`, and
+   proves the compile by `Source::compile_calls_of`. The builder has `proc`
+   (a `Proc` gives the body its index and its parameters' and results'
+   words, numbered from 0; the results are set to zero first, so a body
+   reads no word but its parameters), `perform` and `depth`; a tool with
+   procedures is lowered whole, as a literal, since the part-at-a-time
+   lowering walks `main` only. The Rust allocator mirror walks `main` only,
+   so a source with procedures is allocated on the fork. `procedures_run`
+   (`crates/cli/tests/native_cat.rs`) runs the recursive sum, a call past
+   the depth, and a builder tool summing its input by recursion.
 4. **`grep -F`**, with the line-buffer helper a procedure, against GNU's
    tests under `LC_ALL=C`. Its helper loops, so the allocators' loop sets
    cover procedure bodies first (§4.3).

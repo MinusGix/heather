@@ -168,7 +168,8 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     // (`parts`); any other source is read as a literal whole.
     let tool_probe = format!("{p}_tool");
     let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n\
-        fn {p}_functions() → Nat {{ {symbol}().opened(0).functions.len() }}\n");
+        fn {p}_functions() → Nat {{ {symbol}().opened(0).functions.len() }}\n\
+        fn {p}_procedures() → Nat {{ {symbol}().opened(0).procedures.len() }}\n");
     let mut tool_fork = elab.fork();
     let is_tool = tool_fork.elab_module_source(&tool_probe, &tool_text).is_ok();
     // A tool that calls functions (`call`, native_build) has a meaning, the
@@ -177,9 +178,12 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     if is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_functions")).map_err(|e| format!("`{symbol}` (functions): {e}"))? != 0 {
         return Err(format!("`{symbol}` calls functions of its program, and calls do not compile yet (issues/native-compiled-procedures.md)"));
     }
+    // A tool with procedures is lowered whole, as a literal like any source:
+    // the part-at-a-time lowering (`parts`) walks `main` only.
+    let in_parts = is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_procedures")).map_err(|e| format!("`{symbol}` (procedures): {e}"))? == 0;
     drop(tool_fork);
     let source = if is_tool { format!("{symbol}().source()") } else { format!("{symbol}()") };
-    let (src, lowered, lowered_is, shapes) = if is_tool {
+    let (src, lowered, lowered_is, shapes) = if in_parts {
         let stated = tool_parts(&elab, p, symbol, &root, &imports)?;
         (format!("{p}_lowered"), stated.defs, stated.theorems, Some(stated.shapes))
     } else {
@@ -187,7 +191,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         // every probe and statement below names the source, and a builder's
         // lowering would otherwise be evaluated again in each.
         let spelling = format!("{p}_spelling");
-        let spelling_text = format!("import {root};\n{imports}\nfn {p}_spelled() → List<Nat> {{ {symbol}().spelled() }}\n");
+        let spelling_text = format!("import {root};\n{imports}\nfn {p}_spelled() → List<Nat> {{ {source}.spelled() }}\n");
         let mut fork = elab.fork();
         fork.elab_module_source(&spelling, &spelling_text).map_err(|e| e.render(&spelling_text))?;
         let spelled = {
@@ -197,7 +201,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         drop(fork);
         match lowered::literal(p, &spelled).map_err(|e| format!("`{symbol}` did not read back: {e}"))? {
             Some((text, shapes)) => {
-                let theorem = format!("theorem {p}_lowered_is(): {symbol}() = {p}_lowered() {{ refl }}\n");
+                let theorem = format!("theorem {p}_lowered_is(): {source} = {p}_lowered() {{ refl }}\n");
                 (format!("{p}_lowered"), text, theorem, Some(shapes))
             }
             None => (symbol.to_string(), String::new(), String::new(), None),
