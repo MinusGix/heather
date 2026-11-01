@@ -1173,6 +1173,12 @@ impl statements::BlockCheckingElab for Elaborator {
 }
 
 impl matching::MotiveSynthesisElab for Elaborator {
+    fn generalizes_an_index(&self, cx: &Cx, scrutinee_type: &Type) -> bool {
+        let var = |idx: &Term| matches!(idx, Term::Var(_));
+        self.iwf_of_at(cx, scrutinee_type).is_some_and(|(_, fam)| var(&fam.idx))
+            || self.indexed_of_at(cx, scrutinee_type).is_some_and(|(_, fam)| var(&fam.idx))
+    }
+
     fn read_motive_type(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
         self.whnf(cx, ty, span).ok()
     }
@@ -5540,6 +5546,35 @@ impl Elaborator {
                         Some(h) => run(&gcx, Some(h))?,
                     };
                     return Ok(self.instantiate_generalized(cx, elim, gen_ty, &positions));
+                }
+                // An alias whose type is about the scrutinee rides along as a
+                // convoy, so each arm sees it at its constructor (design §7.2).
+                let dependents = if eqbind.is_none() {
+                    self.dependent_aliases(cx, arms, &scrut_t)
+                } else {
+                    Vec::new()
+                };
+                if !dependents.is_empty() {
+                    let (gen_ty, gen_lvl) = self.alias_generalized(&dependents, expected, lvl);
+                    let motive = matching::synthesize_motive(
+                        self, cx, &scrut_t, &scrut_ty, &scrut_lvl, &gen_ty, e.span,
+                    );
+                    let arms = self.wrap_alias_arms(arms, &dependents);
+                    let run = |mcx: &Cx, eq: Option<&str>| match eq {
+                        None => self.elab_match(
+                            mcx, *form, *generated, &arms, scrut_t.clone(), &scrut_ty, &scrut_lvl,
+                            motive.clone(), gen_lvl.clone(), e.span,
+                        ),
+                        Some(h) => self.elab_convoy(
+                            mcx, *form, *generated, h, &arms, scrut_t.clone(), &scrut_ty,
+                            &scrut_lvl, motive.clone(), &gen_lvl, &gen_ty, e.span,
+                        ),
+                    };
+                    let elim = match eqbind {
+                        None => self.elab_match_pending(cx, &scrut_ty, &run)?,
+                        Some(h) => run(cx, Some(h))?,
+                    };
+                    return Ok(self.instantiate_aliases(cx, elim, gen_ty, &dependents));
                 }
                 let motive = matching::synthesize_motive(
                     self, cx, &scrut_t, &scrut_ty, &scrut_lvl, expected, e.span,

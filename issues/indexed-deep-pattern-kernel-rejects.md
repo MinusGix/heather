@@ -1,6 +1,6 @@
 ---
 title: A deep pattern on an indexed family's recursive field: the elaborator accepts, the kernel refuses
-status: open
+status: closed
 labels: [elaboration,match,patterns,defect]
 area: language
 created: 2026-11-01
@@ -26,3 +26,7 @@ The inner generated match is on a field of the arm's value local. Its synthesize
 
 ## Done when
 - The repro checks with no written motive, and a negative control (a wrong index in the annotation) is refused by the elaborator, not the kernel.
+
+## Log
+
+- 2026-11-01: Fixed (design §7.1, indexed paragraph). The cause was not a missing index generalization: generalize_index already generalized the field's index variable, but it also rewrote the outer value's projection annotations, so fst x claimed a type at the new index. When the route generalizes an index, the rebuild uses the unannotated pair@/fst@/snd@ spelling with only the root annotated. Tests: nested_match_patterns.rs (deep pattern, hand-written nested match, a wrong goal refused at the annotation). Remaining display gap: the rebuilt value has no surface spelling, so a wrong annotation's refusal is located but reported as the kernel's. The IWf route has no such refusal, because the stored index needs match h:.

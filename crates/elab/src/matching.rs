@@ -29,6 +29,12 @@ pub(crate) trait MotiveSynthesisElab {
         scrutinee_type: &Type,
         scrutinee_level: &Level,
     ) -> bool;
+    /// Whether the scrutinee's type is an indexed family whose index the
+    /// route will generalize (`generalize_index`), which rewrites every
+    /// occurrence of the index in the motive, annotations included.
+    fn generalizes_an_index(&self, _cx: &Cx, _scrutinee_type: &Type) -> bool {
+        false
+    }
 }
 
 /// The declaration-local state which must disappear when a motive candidate
@@ -649,7 +655,8 @@ pub(crate) fn synthesize_motive(
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
     let _phase = crate::stats::guard(crate::stats::Timer::Matching);
-    let rewrap = field_rewrap(cx, scrutinee);
+    let indexed = elab.generalizes_an_index(cx, scrutinee_type);
+    let rewrap = field_rewrap(cx, scrutinee, indexed);
     if let Some(motive) = abstract_scrut(expected, scrutinee, &rewrap) {
         return motive;
     }
@@ -950,20 +957,71 @@ fn w_child_rewrap(cx: &Cx, term: &Term) -> Option<Vec<(Term, Term)>> {
     Some(vec![(Term::Var(*f), children), (Term::Var(*c), proj(true, 1))])
 }
 
-fn field_rewrap(cx: &Cx, scrutinee: &Term) -> Rewrap {
+fn field_rewrap(cx: &Cx, scrutinee: &Term, indexed: bool) -> Rewrap {
     if let Some((base, tuple)) = child_rewrap(scrutinee) {
         return Rewrap::Child(vec![(base, tuple)]);
     }
     if let Some(bases) = w_child_rewrap(cx, scrutinee) {
         return Rewrap::Child(bases);
     }
-    match tier0_field_rewrap(cx, scrutinee) {
+    match tier0_field_rewrap(cx, scrutinee, indexed) {
         Some((base, replacement)) => Rewrap::Field(base, replacement),
         None => Rewrap::None,
     }
 }
 
-fn tier0_field_rewrap(cx: &Cx, scrutinee: &Term) -> Option<(Term, Term)> {
+/// [`tier0_field_rewrap`]'s rebuild in the unannotated spelling, from an
+/// annotated projection chain `fst(sndⁿ(x))` on a local `x`: `⟨fst x, …
+/// ⟨z, sndⁿ⁺¹ x⟩⟩` with `pair@`/`fst@`/`snd@`, the root annotated with `x`'s
+/// own type.
+fn unannotated_field_rewrap(cx: &Cx, scrutinee: &Term) -> Option<(Term, Term)> {
+    let Term::Fst { pair, .. } = scrutinee else { return None };
+    let mut depth = 0u32;
+    let mut base = Rc::clone(pair);
+    while let Term::Snd { pair, .. } = &*base {
+        depth += 1;
+        base = Rc::clone(pair);
+    }
+    let Term::Var(x) = &*base else { return None };
+    let root_ty = cx.gamma.entries.nth_inner(x.0)?.ty.shift_local(x.0 + 2);
+    let x1 = Term::Var(LocalVar(x.0 + 1));
+    let snds = |n: u32| {
+        let mut t = x1.clone();
+        for _ in 0..n {
+            t = Term::SndAt { pair: Rc::new(t) };
+        }
+        t
+    };
+    let mut replacement = Term::PairAt {
+        ty: None,
+        fst: Rc::new(Term::Var(LocalVar(0))),
+        snd: Rc::new(Term::SndAt { pair: Rc::new(snds(depth)) }),
+    };
+    for k in (0..depth).rev() {
+        replacement = Term::PairAt {
+            ty: None,
+            fst: Rc::new(Term::FstAt { pair: Rc::new(snds(k)) }),
+            snd: Rc::new(replacement),
+        };
+    }
+    if let Term::PairAt { ty, .. } = &mut replacement {
+        *ty = Some(Rc::new(root_ty));
+    }
+    Some(((*base).clone(), replacement))
+}
+
+fn tier0_field_rewrap(cx: &Cx, scrutinee: &Term, indexed: bool) -> Option<(Term, Term)> {
+    // A field of an indexed family's value, at an index the route is about to
+    // generalize. The annotated rebuild would carry the value's own index in
+    // every projection's annotation, and generalizing the index rewrites
+    // those too, so `fst x` would claim a type at the new index while `x`
+    // keeps the old one: a kernel refusal behind an accepted arm
+    // (issues/indexed-deep-pattern-kernel-rejects.md). The unannotated
+    // spelling has the index only in the root's annotation, which is the one
+    // place it should move.
+    if indexed && let Some(rewrap) = unannotated_field_rewrap(cx, scrutinee) {
+        return Some(rewrap);
+    }
     // The checked spelling's η-expansion is the same shape with **no**
     // annotation below the root (`docs/intro-by-type-design.md` §4.2): every
     // inner `pair@` is a field of the one above it, so it is in checking

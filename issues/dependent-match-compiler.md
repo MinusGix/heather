@@ -60,3 +60,4 @@ issues each slice closes.
 - 2026-10-31: Slice 2 (match-refines-computed-scrutinee) done on PR #318 (§5.1).
 - 2026-10-31: Slice 6 (match-equation-indexed-family) done on PR #318 (§9.1). Slice 5 blocked on the W child spelling (match-clause-equations' log).
 - 2026-11-01: Slice 5 landed (design §7.1): the motive's child rewrap for Wf and W plain children; match-clause-equations, eqbind-deep-pattern-kernel-rejects and nested-match-on-list-tail-motive closed. Follow-ups filed or logged: [[indexed-deep-pattern-kernel-rejects]], [[deep-pattern-dependent-later-field]]. Slice 7 (sweep) remains.
+- 2026-11-01: Follow-ups closed 2026-11-01: indexed-deep-pattern-kernel-rejects (unannotated rebuild under index generalization) and deep-pattern-dependent-later-field (dependent aliases convoyed, design §7.2).

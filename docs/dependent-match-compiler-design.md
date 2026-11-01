@@ -8,7 +8,7 @@ position, and compiles nested patterns to case trees with per-clause
 equations. Its "done when" is this note, decided by Minus, with the slices
 filed.
 
-**Status: decided (2026-10-31, §13); slices 4, 1, 3, 2, 6 and 5 implemented (§8.1, §4.3.1, §6.1, §5.1, §9.1, §7.1); slice 7, the sweep, remains.** No kernel change is needed and none is
+**Status: decided (2026-10-31, §13); slices 4, 1, 3, 2, 6 and 5 implemented (§8.1, §4.3.1, §6.1, §5.1, §9.1, §7.1–7.2); slice 7, the sweep, remains.** No kernel change is needed and none is
 proposed. Everything here is elaborator front end over the route lowerings
 that already exist.
 
@@ -486,17 +486,51 @@ list, and the swapped equation as a negative control),
 `lib/_tests/std/data/tree_tests.hthr` (either child of a `Node`) and
 `lib/_tests/std/itree/itree_tests.hthr` (`Tau(Tau(u))`, `Tau(Ret(r))`).
 
-Not covered, each filed:
+Not covered: a **function child**. Matching on `k(e)` would need `f'` rebuilt
+at one point only. That is not a conversion, and nothing asks for it yet.
 
-- A **function child**: matching on `k(e)` would need `f'` rebuilt at one
-  point only. That is not a conversion, and nothing asks for it yet.
-- **Indexed families**: the inner motive must generalize the index with the
-  value (`indexed-deep-pattern-kernel-rejects`).
-- A **payload field that a later field's type depends on**
-  (`deep-pattern-dependent-later-field`). This one is not about children
-  at all. The later field's alias keeps its unrefined type, so the fix is
-  to convoy dependent aliases.
+**Indexed families** (2026-11-01, `indexed-deep-pattern-kernel-rejects`).
+The route generalizes the field's index variable over the whole motive
+(`generalize_index`), annotations included. The annotated rebuild carries
+the outer value's own index in every projection annotation, so `fst x`
+ended up claiming a type at the new index while `x` kept the old one. When
+the route will generalize an index (`generalizes_an_index`), the rebuild
+uses the unannotated spelling, `pair@`/`fst@`/`snd@`. Only the root keeps
+an annotation, `x`'s own type, and that is the one place the index should
+move. The IWf route needs nothing here. Its stored index field is not the
+child's index definitionally, so a goal that relies on it is refused at the
+source, and `match h:` (§9.1) is what gives the equation. One known gap:
+the rebuilt value has no surface spelling. When a wrong annotation is
+refused, the refusal is located at the annotation but cannot show the
+arm's type.
 
+### 7.2 Dependent aliases ride along (2026-11-01)
+
+`Mk(Ask, k)` over `Mk(c: Cmd, k: Resp(c) -> Nat)` compiles to a match on the
+column `#c` inside the `Mk` arm. Nothing refined `k`: an alias is a term, not
+a binder, so neither §5's hypothesis rule nor the motive reaches it. The arm
+was checked as if `k : Nat -> Nat`, and the kernel saw `k : Resp(#c) -> Nat`
+(`deep-pattern-dependent-later-field`).
+
+A motive-less match in checking position now finds the aliases whose type
+contains the scrutinee and that an arm names. It generalizes them into the
+goal as `Π(k : Resp(z) -> Nat). goal`, wraps each arm in `λ k =>`, and
+applies the match back to the aliases. This is §5's rule over aliases, with
+the convoy spelled the way `generalize_expected` spells it for locals.
+
+There are two exceptions:
+
+- **An arm names the scrutinee.** Such an arm speaks of the scrutinee
+  unrefined: a name is not rebound to the arm's constructor. So whatever
+  the arm pairs it with must stay unrefined too, and `g(c, k)` checks only
+  at `c`'s own type. A deep pattern's column cannot be named, so the
+  exception never blocks the case the rule is for.
+- **`match h:`.** This follows §5.1's reason.
+
+Probes are in `crates/elab/tests/nested_match_patterns.rs`. They cover the
+`Box` example computing at a literal and an open `k`, a `_` arm, a
+hand-written nested match, the named-scrutinee exception, and a refusal
+at the wrong answer type.
 ## 8. Unfolding through a convoyed match
 
 The walk (`docs/decreases-unfolding-design.md` §3) re-matches a variable `v`
