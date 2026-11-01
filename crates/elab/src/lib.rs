@@ -79,6 +79,7 @@ mod access;
 mod application;
 pub mod arithmetic;
 mod attempt;
+mod binding;
 pub mod cutsat;
 mod cutsat_cert;
 pub mod omega;
@@ -1419,9 +1420,16 @@ impl application::ImplicitApplicationElab for Elaborator {
         // nothing does: in `unsigned_le(9, b)` the width comes from `b`, so
         // `9` is a byte (docs/native-programs-read-like-programs-design.md S3).
         let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_));
+        // A binding statement's continuation (`Bind::seq(e, λ #bindN => rest)`,
+        // docs/sequencing-surface-design.md §2.2) waits for the expected type:
+        // the rest of the block is checked at the carrier's `M(B)`, never
+        // inferred from its first token, so that `Pure(match … { … })` at the
+        // end of a block checks as it would without the bind.
+        let continuation = matches!(&argument.kind, ExprKind::Lam { binders, .. }
+            if binders.len() == 1 && binders[0].name.starts_with("#bind"));
         application::ArgumentClass {
-            checking_only: annotated_lambda || literal || self.is_checking_only(cx, argument),
-            fallback_infer: annotated_lambda || literal || self.deferral_can_fall_back(cx, argument),
+            checking_only: annotated_lambda || literal || continuation || self.is_checking_only(cx, argument),
+            fallback_infer: annotated_lambda || literal || continuation || self.deferral_can_fall_back(cx, argument),
         }
     }
 
@@ -5102,6 +5110,26 @@ impl Elaborator {
         skel: Option<&Skel>,
         capture_slots: bool,
     ) -> R<Term> {
+        if let Some((input, discards)) = binding::generated(e) {
+            return self
+                .elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
+                .map_err(|error| self.restate_bind_error(cx, input, discards, error));
+        }
+        self.elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
+    }
+
+    /// [`Self::elab_check_skel_slots`], below the binding-statement restatement.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_check_skel_slots_written(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+        lvl: &Level,
+        hint: Option<(&str, &str)>,
+        skel: Option<&Skel>,
+        capture_slots: bool,
+    ) -> R<Term> {
         let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
         self.refuse_value_call(cx, e)?;
         // A corecursive body's two positions, a node and a child
@@ -6855,6 +6883,16 @@ impl Elaborator {
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
     fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        if let Some((input, discards)) = binding::generated(e) {
+            return self
+                .elab_infer_at_written(cx, e, expected)
+                .map_err(|error| self.restate_bind_error(cx, input, discards, error));
+        }
+        self.elab_infer_at_written(cx, e, expected)
+    }
+
+    /// [`Self::elab_infer_at`], below the binding-statement restatement.
+    fn elab_infer_at_written(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         if let Some(receiver) = cx.dot_receiver.as_ref().and_then(|r| r.inference(cx, e)) {
             if let Some(result) = receiver.get() {
                 // A failed inference must still be allowed to check against

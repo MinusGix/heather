@@ -1,10 +1,10 @@
 # One sequencing surface: binding over a carrier, local state and loops
 
-Status: **proposal, for Minus's decision.** Round R1 of
-`docs/compiler-milestones-proposal.md` (§3, §7; milestone `lang-sequencing`),
-issue `issues/sequencing-surface-design.md`. Written on master `3099a7d`.
-Nothing here is built. §11 lists the decisions, §12 what R2 and R3 take from
-this note.
+Status: **decided (2026-10-31); layer 1 built (R2, 2026-11-01).** Round R1
+of `docs/compiler-milestones-proposal.md` (§3, §7; milestone
+`lang-sequencing`), issue `issues/sequencing-surface-design.md`. Written on
+master `3099a7d`. §11 lists the decisions, §12 what R2 and R3 take from this
+note, and §13 what building R2 changed. Layer 2 (R3) is not built yet.
 
 Constraints from Minus's decisions on the proposal (2026-10-31), not
 reopened here:
@@ -783,6 +783,73 @@ binds nests `k` binders, which is the hand-written tower's cost, quadratic
 at worst by the representation's bound on a binder-per-link chain (the
 `let/under` bench, PR #199), and never worse than the tower it replaces.
 Each loop's body is elaborated once, as its step's declaration.
+
+## 13. R2 as built (2026-11-01)
+
+Layer 1 landed for `issues/binding-statements.md`. Probes:
+`lib/_tests/std/core/binding_statements_tests.hthr`; parse-level refusals:
+`crates/syntax/tests/binding_statements.rs`. What building it changed from
+§2–§3 and §12, each with its reason:
+
+1. **The lowering is in the parser, not in `elab_stmts`.** §3.4 put it in
+   the elaborator because the carrier comes from the expected type. It does
+   not need to: the lowered term is an ordinary call of a prelude function,
+   `Bind::seq(e, λ x => rest)`, and *application elaboration* finds the
+   carrier (`M(B) ≟` the expected type, `M(A) ≟` `e`'s type) and resolves
+   `Bind<M>` as any `:= infer` parameter. So the parser does it, in
+   `crates/syntax/src/try_lower.rs`, which now runs one continuation-passing
+   walk for two protocols: `?` (scoped to the function or λ body, blocks
+   transparent) and binds (scoped to the **block**: every block is lowered
+   when it closes, so an inner block in value position is a scope of its own
+   with its own carrier, §2.2, and a λ body likewise). `let x <- e;` is the
+   nested bind at a `let`'s right side, `let x = (<- e);`, and `e;` the same
+   at a private `#seqN` name. Nothing downstream learns a new node, so the
+   walks §3.4 listed (`count_holes`, `scan_splices`, `expr_mentions`) are
+   untouched. The elaborator keeps two small pieces: it schedules the
+   generated continuation after the expected type (a `#bind` λ is
+   checking-only, `classify_application_argument`), so that the rest of a
+   block checks at `M(B)` instead of being inferred from its first token; and
+   on the failure path only, it restates a carrier-search error at the bound
+   expression in the statement's terms (`crates/elab/src/binding.rs`).
+2. **The second class is `Pointed<M>`, not `Pure<M>`.** Both classes live in
+   the implicit prelude (as `CollectionLiteral` does for `[…]`, so the syntax
+   has one protocol identity), which means every module sees them, and a
+   class's record constructor is named after it: `Pure` would have taken
+   `Tac::Pure` from every tactic module
+   (`docs/higher-kinded-classes-design.md` §5.2). The prelude also defines the
+   two calls the lowering writes, `Bind::seq` and `Pointed::ret`.
+3. **The carrier is the first bound expression's when that determines one,
+   else the expected type's.** §2.2 ordered them the other way. The
+   application walk unifies argument types before the expected result, so a
+   block whose first computation is an `Option` and whose expected type is
+   `List<…>` is refused at its *result* ("this has type `List<Nat>`, but
+   `Option<Nat>` is expected here"), not at the computation with §10's
+   "the block's carrier is `List`" wording. The two orders agree whenever
+   the block is well typed; only that refusal's site differs. A computation
+   that does not determine its constructor (`Pointed::ret(3)`) still takes
+   the expected type's.
+4. **A non-tail `match` whose arms bind is in inference position.** As for
+   `?`, such a match is packaged (each arm ends in `Pointed::ret`) and bound
+   once, which makes it `Bind::seq`'s first argument, where nothing gives it
+   a motive: `let r = match c { True => (<- x) + 1, False => 0 };` is
+   refused with the motive message. A tail match, a match whose scrutinee
+   alone binds (`Pure(match <- e { … })`), and arms written as computations
+   all work. §5.5's join point would retire it, and R3 needs it anyway.
+5. **Instances at `Option` and `Tac` only.** `Result`, `Parser<T, ·>` and
+   `ITree<E, ·>` vary in an argument that is not alone, so their instances
+   are at a λ carrier, which `issues/class-instance-at-lambda-carrier.md`
+   owns. The parser-combinator customer waits on it; `regex.hthr`'s
+   generator chain is the second customer instead.
+6. **`?` for `Option` (§3.5) is not built.** The parser lowers `?` to
+   `result::Result::and_then` before any type is known, and choosing
+   `Option::and_then` instead is type-directed. It stays in the issue.
+7. **The discarded-result lint (§3.1) is not built.** `e;` at a non-`True`
+   result is accepted silently.
+
+The helpers of §2.3 landed as `List::for_m`, `List::traverse` (both over the
+classes, structural) and `Tac::or_fail`. `when` waited for a customer. `mono`
+was ported: its 75 `.bind(` sites are now statements, `match <- e` and
+nested binds, and `regex`'s ten-link tower is ten statements.
 
 ## Appendix: probes (run on `3099a7d`, `heather check -L lib`)
 

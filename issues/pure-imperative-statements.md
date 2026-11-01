@@ -5,7 +5,7 @@ labels: [frontend,syntax,elaboration,ergonomics]
 area: language
 milestone: [lang-sequencing]
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 Round R3 of `docs/compiler-milestones-proposal.md` (§3.1, §3.3, §7): local state and loops in pure functions.
@@ -35,3 +35,7 @@ R3a: `wc`'s step is written imperatively, and its facts are proved by the existi
 
 - **[[sequencing-surface-design]]** owns the lowering.
 - **[[loop-invariant-rules]]** owns the invariant rule over these loops.
+
+## Log
+
+- 2026-11-01: Layer 1 landed ([[binding-statements]], docs/sequencing-surface-design.md §13): the lowering is in the parser's continuation walk (try_lower.rs), scoped per block. Statement if/match here needs the join points of [[bind-in-non-tail-match-arms]].

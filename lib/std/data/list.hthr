@@ -203,6 +203,27 @@ fn List::foldl<A, B>(self xs: List<A>, f: B → A → B, z: B) → B {
     }
 }
 
+// A left fold whose step is a computation in a carrier `M`: the binding
+// counterpart of `foldl`, and what a `for` loop in a carrier block lowers to
+// (docs/sequencing-surface-design.md §6.1). Each step runs after the
+// previous one, in list order.
+fn List::for_m<A, S>(self xs: List<A>, {M: Type → Type}, s: S, step: S → A → M(S),
+    b: Bind<M> := infer, p: Pointed<M> := infer) → M(S) {
+    match xs {
+        Nil => p.pure(s),
+        Cons(h, t) => b.bind(step(s, h), λ next => t.for_m(next, step)),
+    }
+}
+
+// Run `f` at every element in order and collect the results.
+fn List::traverse<A, B>(self xs: List<A>, {M: Type → Type}, f: A → M(B),
+    b: Bind<M> := infer, p: Pointed<M> := infer) → M(List<B>) {
+    match xs {
+        Nil => p.pure(Nil),
+        Cons(h, t) => b.bind(f(h), λ y => b.bind(t.traverse(f), λ ys => p.pure(Cons(y, ys)))),
+    }
+}
+
 // TODO: this should go in general file
 theorem cong_fn<A, B>(g: A → B, {a, b: A}, p: a = b): g(a) = g(b) {
     rewrite(p, refl)
