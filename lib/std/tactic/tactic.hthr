@@ -218,6 +218,12 @@ inductive Req {
     // End a generator's run by publishing `decls` where the `generate` is.
     // A tactic's `by` refuses it: only `generate` publishes.
     Publish(decls: List<Decl>),
+    // A term of the type `goal` stands for, found by the search `:= infer`
+    // runs (docs/traits-layer2-design.md, docs/facts-on-demand-design.md):
+    // the locals, the derived table and the instances, and at a proposition
+    // computation and the evidence rules, search rules last. Refused, with
+    // the search's trace, when nothing answers; a refusal leaves nothing.
+    Synth(goal: Handle),
 }
 
 inductive Never {}
@@ -247,6 +253,7 @@ fn Resp(r: Req) → Type {
         AsType(_) => Checked<Handle>,
         Holes(_, _) => Checked<List<Handle>>,
         Publish(_) => Never,
+        Synth(_) => Checked<Handle>,
     }
 }
 
@@ -300,6 +307,8 @@ fn as_type(e: Expr) → Tac<Checked<Handle>> { Ask(AsType(e), λ c => Pure(c)) }
 
 fn holes(e: Expr, n: Nat) → Tac<Checked<List<Handle>>> { Ask(Holes(e, n), λ c => Pure(c)) }
 
+fn synth(goal: Handle) → Tac<Checked<Handle>> { Ask(Synth(goal), λ c => Pure(c)) }
+
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
 }
@@ -349,6 +358,7 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         AsType(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Holes(_, _) => match a { AHoles(c) => Fits(c), _ => Mismatch },
         Publish(_) => Mismatch,
+        Synth(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -704,6 +714,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`. 10: `Hole`. 11: `Mark`.
 // 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
+// 22: `Synth`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -729,6 +740,7 @@ fn host_tag(t: Tac<Expr>) → Nat {
             AsType(_) => 19,
             Publish(_) => 20,
             Holes(_, _) => 21,
+            Synth(_) => 22,
         },
     }
 }
@@ -773,6 +785,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Cases(_, goal) => goal.id,
             Constructor(goal) => goal.id,
             Ctors(ty) => ty.id,
+            Synth(goal) => goal.id,
             _ => 0,
         },
     }

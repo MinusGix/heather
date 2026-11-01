@@ -736,6 +736,13 @@ impl Elaborator {
             })
             .map(|rule| rule.global.clone())
             .collect();
+        // A **search rule** (docs/facts-on-demand-design.md §3) is a rule
+        // with a premise that runs a tactic, `h: P := omega`: a producer that
+        // may cost a search. Every plain rule is tried first, in canonical
+        // order, and the search rules after them, so a goal a cheap producer
+        // answers never pays for a search.
+        let (mut rules, search): (Vec<_>, Vec<_>) = rules.into_iter().partition(|g| !self.is_search_rule(g));
+        rules.extend(search);
         if rules.is_empty() {
             tr.push(line(
                 depth,
@@ -923,11 +930,30 @@ impl Elaborator {
         lvl: &Level,
         span: Span,
     ) -> Result<Term, ElabError> {
-        let e = Expr {
+        let mut e = Expr {
             kind: ExprKind::Var(global.to_string()),
             span,
         };
+        // A bare reference fills implicits and solver parameters but leaves
+        // a defaulted parameter to a call (docs/named-arguments-design.md
+        // §9.6), so a search rule is built as the call that names nothing:
+        // its tactic premises run as their defaults, in the goal's context.
+        if self.is_search_rule(global) {
+            e = Expr {
+                kind: ExprKind::App { head: Box::new(e), args: Vec::new(), named: Vec::new(), explicit: false, goal_oriented: false },
+                span,
+            };
+        }
         self.elab_check(cx, &e, goal, lvl)
+    }
+
+    /// Does the global have a defaulted parameter: is it, as an evidence
+    /// rule, a search rule (docs/facts-on-demand-design.md §3)? Read off the
+    /// declaration's parameter table, so nothing new is stored in an image.
+    pub(crate) fn is_search_rule(&self, global: &str) -> bool {
+        self.names
+            .global(global)
+            .is_some_and(|info| info.params.iter().any(|p| p.default.is_some()))
     }
 
     /// Step 1b: answer the goal from a *child* dictionary in scope

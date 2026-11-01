@@ -1,0 +1,67 @@
+// Compiling checked reads with facts found on demand
+// (docs/facts-on-demand-design.md §5): which reads keep their check, from
+// which producer each dropped one's fact came, the budget as a knob, and a
+// user lemma as a producer. `Compiled::runs` says each result is correct;
+// these say what the compiler made of each program. Tests, not library:
+// nothing outside lib/_tests imports this module.
+import logic;
+import nat;
+import list;
+import option;
+import string;
+import tactic;
+import checked_reads;
+import in_bounds;
+import read_facts;
+
+// Four reads of a buffer of 8 words, at arguments a0 ≤ 7 and a1 ≤ 3:
+// - a clamped index: the range analysis proves it;
+// - a1 + 4 ≤ 7: the range analysis proves it;
+// - a0 + (7 - a0), always 7, which the analysis bounds by 14: only the
+//   exhaustive check, over the 32 argument lists, proves it;
+// - a0 + a1, which reaches 10: nothing proves it, and it keeps its check.
+fn demo() → Prog { Prog(8, [7, 3], [Clamp(Arg(0), 7), Add(Arg(1), Const(4)), Add(Arg(0), Sub(Const(7), Arg(0))), Add(Arg(0), Arg(1))]) }
+
+generate compile_reads(demo(), "demo_compiled", 4096);
+
+theorem demo_code(): Compiled::code(demo_compiled()) =
+    [Unchecked(Clamp(Arg(0), 7)), Unchecked(Add(Arg(1), Const(4))), Unchecked(Add(Arg(0), Sub(Const(7), Arg(0)))), Checked(Add(Arg(0), Arg(1)))] { refl }
+
+// The kept check is a real one: at a0 = 7, a1 = 3 the read traps, and the
+// compiled code traps with it.
+theorem demo_traps(): run_compiled([1, 2, 3, 4, 5, 6, 7, 8], 8, [7, 3], Compiled::code(demo_compiled())) = None { refl }
+theorem demo_reads(): run_compiled([1, 2, 3, 4, 5, 6, 7, 8], 8, [1, 2], Compiled::code(demo_compiled())) = Some(2 + 7 + 8 + 4) { refl }
+
+// The budget is the compiler's knob: 32 argument lists is more than a budget
+// of 16 allows, so the third read keeps its check.
+generate compile_reads(demo(), "demo_frugal", 16);
+
+theorem frugal_checks(): checks_in(Compiled::code(demo_frugal())) = 2 { refl }
+
+// A program whose every read the analysis proves needs no search at all.
+fn clamped() → Prog { Prog(4, [100], [Clamp(Arg(0), 3), Clamp(Sub(Arg(0), Const(1)), 2)]) }
+
+generate compile_reads(clamped(), "clamped_compiled", 0);
+
+theorem clamped_checks(): checks_in(Compiled::code(clamped_compiled())) = 0 { refl }
+
+// A user lemma is a producer: a read over a box too large to search
+// (101 × 101 lists, at a budget of 0), which the analysis bounds too
+// coarsely, is proved here once, and the compiler finds it. Declared after
+// the programs above, so they did not see it.
+fn wide() → Prog { Prog(101, [100, 100], [Add(Arg(0), Sub(Arg(1), Arg(1)))]) }
+
+theorem sub_self(n: Nat): n - n = 0 { match n { Zero => refl, Succ(_, ih) => ih } }
+
+evidence theorem wide_read(): InBounds(101, [100, 100], Add(Arg(0), Sub(Arg(1), Arg(1)))) {
+    λ args w => j(sym(sub_self(word_at(args, 1))), λ z _ => word_at(args, 0) + z < 101, w(0))
+}
+
+generate compile_reads(wide(), "wide_compiled", 0);
+
+theorem wide_checks(): checks_in(Compiled::code(wide_compiled())) = 0 { refl }
+
+// The compiled program means what the program means, at accepted arguments.
+theorem demo_correct(xs, args: List<Nat>, w: Within(args, [7, 3])): run_compiled(xs, 8, args, Compiled::code(demo_compiled())) = demo().run(xs, args) {
+    demo_compiled().runs(xs, args, w)
+}

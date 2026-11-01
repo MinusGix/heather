@@ -306,8 +306,11 @@ fn sum_prefix(xs: Bytes(4096), k: Nat) → BitVec(64) { … xs[i] … }   // i <
 // gone, proved; not found → the check stays.
 ```
 
-Nothing exists. It needs facts as classes, a fact-requesting pass, and the
-host interface's tactic calls from inside a compiler (§4, question 7).
+A prototype exists over a small language of checked reads
+(`docs/facts-on-demand-design.md`): a generator asks for `InBounds` per
+read, the producers (a verified range analysis, user lemmas) answer first,
+the compiler's own budgeted exhaustive check after them, and a read with no
+proof keeps its check. Over `rt` code it waits on `runtime fn` reflection.
 
 ---
 
@@ -384,7 +387,7 @@ decides.
 | back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
 | `rt` and setups | designed (PR #325) | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | designed (setups note §9.3) | `issues/compile-typeclass-design.md` |
-| facts as classes, fact search | this document | to file after Minus answers §4 |
+| facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads | `docs/facts-on-demand-design.md`, `issues/facts-on-demand.md`; `Unique` is `issues/unique-fact.md` |
 | DSL languages | this document | to file after §4 question 1 |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |
 | ownership | direction issue | `issues/ownership-discipline-over-code.md`, milestone `nh-ownership` |
@@ -499,6 +502,12 @@ instance(f) NoAlias(f, i) := by search(budget := small) { alias_tactic }   // an
 - **Cost.** A fact that is cheap for its producer (the borrow check already
   ran) stays cheap; a searched fact is budgeted per request, and the budget
   is a knob (`optimize(aggressive)`, Q8).
+
+The first prototype of this section is `docs/facts-on-demand-design.md`: a
+fact is a proposition whose producers are evidence rules (no coherence is
+needed, since no one observes which proof was found), a producer that
+searches is an evidence rule whose premise runs a tactic, and a generator
+asks with the `Synth` host request, hearing `None` when nothing is found.
 
 ### 6.3 Questions still open
 
