@@ -1,0 +1,72 @@
+// Asking for a fact, and learning there is none (docs/facts-on-demand-design.md
+// §4; docs/compilation-vision.md §6.2).
+//
+// A compiler that wants a fact — this read is in bounds, this buffer is not
+// aliased — asks for it from a generator, where an optimization that finds
+// no proof is skipped rather than an error. `request` is that ask:
+//
+// 1. The search `:= infer` runs (the `Synth` request): the locals, the
+//    instances, computation, and the evidence rules about the fact, plain
+//    rules first and search rules after them. These are the fact's
+//    producers, registered by whoever can produce it cheaply.
+// 2. The requester's own fallbacks, each a tactic run at the goal with at
+//    most `fuel` requests (`budgeted`), its result checked at the goal
+//    before it counts. The requester pays for these, so it chooses them and
+//    their budget.
+//
+// `None` is the answer when nothing is found: a failed or exhausted search
+// skips the optimization. Nothing a producer or a fallback says is trusted:
+// a proof is checked here, and again by the kernel with the declaration it
+// ends up in.
+import list;
+import logic;
+import nat;
+import option;
+import string;
+import tactic;
+
+// `t`, allowed at most `fuel` requests: a search with a budget. Past it, the
+// search fails as out of budget.
+fn budgeted<A>(fuel: Nat, t: Tac<A>) → Tac<A> {
+    match fuel {
+        Zero => match t { Pure(a) => Pure(a), Ask(_, _) => fail("out of budget", []) },
+        Succ(f) => match t { Pure(a) => Pure(a), Ask(r, k) => Ask(r, λ x => budgeted(f, k(x))) },
+    }
+}
+
+// `e`, if it is a term of the type `goal` stands for.
+fn proves(goal: Handle, e: Expr) → Tac<Option<Expr>> {
+    infer(e).bind(λ c => match c {
+        Refused(_) => Pure(None),
+        Accepted(ty) => defeq(Hd(ty), Hd(goal)).bind(λ same => match same { True => Pure(Some(e)), False => Pure(None) }),
+    })
+}
+
+// Each fallback runs at the goal with its own budget, which counts every
+// request it makes, the goal questions `focus` answers included.
+fn request_fallbacks(g: GoalInfo, ts: List<Tac<Expr>>, fuel: Nat) → Tac<Option<Expr>> {
+    match ts {
+        Nil => Pure(None),
+        Cons(t, rest) => attempt(focus(g, budgeted(fuel, t))).bind(λ o => match o {
+            Done(e) => proves(g.target, e).bind(λ found => match found {
+                Some(p) => Pure(Some(p)),
+                None => request_fallbacks(g, rest, fuel),
+            }),
+            Failed(_, _) => request_fallbacks(g, rest, fuel),
+        }),
+    }
+}
+
+// A proof of `g`'s statement, from its producers or else from one of
+// `fallbacks` within `fuel` requests each; `None` if there is none. The
+// fallbacks see `g`'s locals.
+fn request_in(g: GoalInfo, fallbacks: List<Tac<Expr>>, fuel: Nat) → Tac<Option<Expr>> {
+    synth(g.target).bind(λ c => match c {
+        Accepted(h) => Pure(Some(Hd(h))),
+        Refused(_) => request_fallbacks(g, fallbacks, fuel),
+    })
+}
+
+// `request_in` at a statement with no locals of its own: what a generator,
+// which has no goal, asks.
+fn request(goal: Handle, fallbacks: List<Tac<Expr>>, fuel: Nat) → Tac<Option<Expr>> { request_in(GoalInfo(goal, []), fallbacks, fuel) }

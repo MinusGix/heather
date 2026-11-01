@@ -1,0 +1,1403 @@
+// A call's code, as claims of trees (docs/native-procedures-design.md §4–§5;
+// issues/native-compiled-procedures.md, slice 2): the pieces
+// `native_compile_correct` chains into a call's claim and a procedure's.
+//
+// A call changes the activation: the room slot one less, the words the
+// caller saves and the return address pushed below its frame, the callee's
+// frame stored, and all of it undone on the way back. Each piece here says
+// what its code does to the claim between statements (`Target::Held`) at
+// the activation it runs in (`Target::activation`: the same target, its
+// frame, frames and room replaced).
+import native_source;
+import native_compile;
+import native_compile_facts;
+import native_compile_region;
+import native_compile_homes;
+import native_compile_segments;
+import native_compile_steps;
+import native_compile_frames;
+import native_compile_structured;
+import function_ir_eval;
+import native_alloc;
+import linux_calls;
+import linux_trees;
+import linux_x86_64_io;
+import linux_x86_64_byte_memory;
+import linux_x86_64_sim;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_byte_memory;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack;
+import x86_64_stack_runs;
+import memory;
+import bitvec;
+import bitvec_signed;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The activation
+
+// The same target running another activation.
+fn Target::activation(self t: Target, index: Nat, frames: List<BitVec(64)>, room: Nat, framed: index + 8 * frames.len() <= t.stack.size,
+    roomy: room * (8 * (t.words + 1)) <= index) → Target {
+    Target(t.r, t.words, t.caps, t.homes, t.homed, t.fits, t.program, t.origin, t.laid, t.args, t.procedures, t.stack, t.stack_writes,
+        t.stack_above, t.stack_canonical, index, frames, room, framed, roomy)
+}
+
+// The frames, read off the claim.
+theorem Target::held_frames(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
+    t.FramesAt(m, t.frames, t.index) {
+    held.proof.left.proof.right.right.right.right.right.right
+}
+
+// The frame slot, read off the claim.
+theorem Target::held_frame_slot(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
+    word_in(held.proof.left.witness, t.layout().frame_offset()) = t.frame() {
+    held.proof.left.proof.right.right.right.right.left
+}
+
+// Other frames, where the stack holds them.
+theorem Target::held_reframed(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    frames: List<BitVec(64)>, framed: t.index + 8 * frames.len() <= t.stack.size, at: t.FramesAt(m, frames, t.index)):
+    t.activation(t.index, frames, t.room, framed, t.roomy).Held(live, env, g, m) {
+    let pp = held.proof.left.proof;
+    Exists(held.witness, ⟨Exists(held.proof.left.witness, ⟨pp.left, ⟨pp.right.left, ⟨pp.right.right.left, ⟨pp.right.right.right.left,
+        ⟨pp.right.right.right.right.left, ⟨pp.right.right.right.right.right.left, at⟩⟩⟩⟩⟩⟩), held.proof.right⟩)
+}
+
+// ---------------------------------------------------------------------------
+// The region's slots
+
+// A word of the region, read at its address.
+theorem Target::read_at(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile), holds: t.r.Holds(v, m), q: Nat, fits: q + 8 <= t.r.size):
+    (next_rip(t.r.low, q).toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(t.r.profile.data(), m, next_rip(t.r.low, q)) = Some(word_in(v, q))) {
+    let base = next_rip(t.r.low, q);
+    let o = λ (k: Nat) => t.r.profile.read(m, next_rip(base, k));
+    let g = λ (k: Nat) => t.r.buffer(v).get(q + k);
+    let b = λ (k: Nat) (short: k < 8) => t.r.buffer_read(v, m, holds, q, k, Nat::le_trans(Succ(q + k), q + 8, t.r.size, q.add_le_mono_l(Succ(k), 8, short), fits));
+    let read: (read_word(t.r.profile.data(), m, base) = Some(word_in(v, q))) =
+        word_of_eight(o(0), o(1), o(2), o(3), o(4), o(5), o(6), o(7), g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7),
+            b(0, trivial), b(1, trivial), b(2, trivial), b(3, trivial), b(4, trivial), b(5, trivial), b(6, trivial), b(7, trivial));
+    let value = t.r.toNat_at(q, q.le_of_add_le(8, t.r.size, fits));
+    let low = t.r.low.toNat();
+    let ends: (low + (q + 8) <= Nat::pow(2, 47)) = Nat::le_trans(low + (q + 8), low + t.r.size, Nat::pow(2, 47),
+        low.add_le_mono_l(q + 8, t.r.size, fits), t.r.canonical);
+    ⟨j(sym(value), λ x _ => x + 8 <= Nat::pow(2, 47), j(sym(low.add_assoc(q, 8)), λ x _ => x <= Nat::pow(2, 47), ends)), read⟩
+}
+
+// The frame slot stored: the activation with its frame at offset `index`
+// of the stack and the frames from there those given.
+theorem Target::held_frame_store(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    index: Nat, frames: List<BitVec(64)>, framed: index + 8 * frames.len() <= t.stack.size, roomy: t.room * (8 * (t.words + 1)) <= index,
+    at: t.FramesAt(m, frames, index)):
+    t.activation(index, frames, t.room, framed, roomy).Held(live, env, g, t.r.profile.store(m, t.layout().frame_at(), word_bytes(t.stack.at(index)))) {
+    let layout = t.layout();
+    let words = held.witness;
+    let v = held.proof.left.witness;
+    let pp = held.proof.left.proof;
+    let so = layout.stack_offset();
+    let fo = so + 8;
+    let word = t.stack.at(index);
+    let bytes = word_bytes(word);
+    let eight: (bytes.len() = 8) = refl;
+    let slots: (so + 24 <= t.r.size) = t.fits;
+    let fits: (fo + bytes.len() <= t.r.size) = omega(slots, eight);
+    let w = t.r.buffer(v).set_span(fo, bytes.to_vector()).cells;
+    let m2 = t.r.profile.store(m, next_rip(t.r.low, fo), bytes);
+    let u = t.activation(index, frames, t.room, framed, roomy);
+    let stack: (so = layout.scratch_offset() + (t.caps.largest() + 1)) = refl;
+    let keeps = layout.keeps_agree(env.with_words(words), v, w, pp.right.left, λ p under => t.r.cells_outside(v, fo, bytes, p, Inl(omega(under, stack))));
+    let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k short => t.r.cells_outside(v, fo, bytes, so + k, Inl(omega(short))));
+    let room: (word_in(w, so + 16) = word_in(v, so + 16)) =
+        word_in_agree(w, v, so + 16, λ k _ => t.r.cells_outside(v, fo, bytes, so + 16 + k, Inr(omega(eight))));
+    let frame: (word_in(w, fo) = word) = t.r.x86_word_stored(v, fo, word);
+    let holds = t.r.store_holds(v, m, pp.left, fo, bytes, fits);
+    let argv = j(sym(slot), λ y _ => ArgvAt(t.argv(), m2, y, t.args),
+        argv_at_kept(t.argv(), m, t.argv(), m2, t.kept_store(m, fo, bytes, fits), word_in(v, so), t.args, pp.right.right.right.left));
+    let placed: u.Placed(env.with_words(words), m2) = Exists(w, ⟨holds, ⟨keeps, ⟨pp.right.right.left, ⟨argv, ⟨frame,
+        ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room), pp.right.right.right.right.right.left), t.frames_store(m, fo, bytes, fits, frames, index, at)⟩⟩⟩⟩⟩⟩);
+    j(sym(t.at_rip(fo, omega(slots))), λ a _ => u.Held(live, env, g, t.r.profile.store(m, a, bytes)), Exists(words, ⟨placed, held.proof.right⟩))
+}
+
+// The room slot stored.
+theorem Target::held_room_store(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    room: Nat, word: BitVec(64), value: word.toNat() = room, roomy: room * (8 * (t.words + 1)) <= t.index):
+    t.activation(t.index, t.frames, room, t.framed, roomy).Held(live, env, g, t.r.profile.store(m, t.layout().room_at(), word_bytes(word))) {
+    let layout = t.layout();
+    let words = held.witness;
+    let v = held.proof.left.witness;
+    let pp = held.proof.left.proof;
+    let so = layout.stack_offset();
+    let ro = so + 16;
+    let bytes = word_bytes(word);
+    let eight: (bytes.len() = 8) = refl;
+    let slots: (so + 24 <= t.r.size) = t.fits;
+    let fits: (ro + bytes.len() <= t.r.size) = omega(slots, eight);
+    let w = t.r.buffer(v).set_span(ro, bytes.to_vector()).cells;
+    let m2 = t.r.profile.store(m, next_rip(t.r.low, ro), bytes);
+    let u = t.activation(t.index, t.frames, room, t.framed, roomy);
+    let stack: (so = layout.scratch_offset() + (t.caps.largest() + 1)) = refl;
+    let keeps = layout.keeps_agree(env.with_words(words), v, w, pp.right.left, λ p under => t.r.cells_outside(v, ro, bytes, p, Inl(omega(under, stack))));
+    let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k short => t.r.cells_outside(v, ro, bytes, so + k, Inl(omega(short))));
+    let frame: (word_in(w, so + 8) = word_in(v, so + 8)) =
+        word_in_agree(w, v, so + 8, λ k short => t.r.cells_outside(v, ro, bytes, so + 8 + k, Inl(omega(short))));
+    let stored: (word_in(w, ro) = word) = t.r.x86_word_stored(v, ro, word);
+    let holds = t.r.store_holds(v, m, pp.left, ro, bytes, fits);
+    let argv = j(sym(slot), λ y _ => ArgvAt(t.argv(), m2, y, t.args),
+        argv_at_kept(t.argv(), m, t.argv(), m2, t.kept_store(m, ro, bytes, fits), word_in(v, so), t.args, pp.right.right.right.left));
+    let placed: u.Placed(env.with_words(words), m2) = Exists(w, ⟨holds, ⟨keeps, ⟨pp.right.right.left, ⟨argv,
+        ⟨trans(frame, pp.right.right.right.right.left), ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), stored), value),
+         t.frames_store(m, ro, bytes, fits, t.frames, t.index, pp.right.right.right.right.right.right)⟩⟩⟩⟩⟩⟩);
+    j(sym(t.at_rip(ro, omega(slots))), λ a _ => u.Held(live, env, g, t.r.profile.store(m, a, bytes)), Exists(words, ⟨placed, held.proof.right⟩))
+}
+
+// ---------------------------------------------------------------------------
+// The stack's words
+
+// A word stored to the stack at offset `i`: nothing of the region moves…
+theorem Target::stack_store_cells(self t: Target, m: X86Memory(t.r.profile), i: Nat, fits: i + 8 <= t.stack.size, word: BitVec(64), y: BitVec(64),
+    low: y.toNat() < t.stack.low.toNat()): t.r.profile.store(m, t.stack.at(i), word_bytes(word)).cells(y) = m.cells(y) {
+    t.r.profile.store_outside(m, t.stack.at(i), word_bytes(word), y, λ p below =>
+        BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(t.stack.at(i), p), y, λ same => {
+            let value: (next_rip(t.stack.at(i), p).toNat() = t.stack.low.toNat() + (i + p)) =
+                trans(cong_fn<BitVec(64), Nat>(λ a => a.toNat(), rip_compose(t.stack.low, i, p)), t.stack_toNat(i + p, omega(fits, below)));
+            let here: (y.toNat() = t.stack.low.toNat() + (i + p)) = trans(cong_fn<BitVec(64), Nat>(λ a => a.toNat(), sym(same)), value);
+            false_elim(omega(here, low))
+        }))
+}
+
+theorem Target::stack_store_holds(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile), holds: t.r.Holds(v, m), i: Nat,
+    fits: i + 8 <= t.stack.size, word: BitVec(64)): t.r.Holds(v, t.r.profile.store(m, t.stack.at(i), word_bytes(word))) {
+    λ p inside => {
+        let value: (next_rip(t.r.low, p).toNat() = t.r.low.toNat() + p) = t.r.toNat_at(p, Nat::le_of_lt(p, t.r.size, inside));
+        trans(t.stack_store_cells(m, i, fits, word, next_rip(t.r.low, p), omega(value, inside, t.stack_above)), holds(p, inside))
+    }
+}
+
+// …nor anything read above a floor past it…
+theorem Target::stack_store_above(self t: Target, m: X86Memory(t.r.profile), i: Nat, fits: i + 8 <= t.stack.size, word: BitVec(64),
+    floor: Nat, high: t.stack.low.toNat() + (i + 8) <= floor):
+    ReadsKept(t.r.profile.data().above(floor), m, t.r.profile.data().above(floor), t.r.profile.store(m, t.stack.at(i), word_bytes(word))) {
+    let after = t.r.profile.store(m, t.stack.at(i), word_bytes(word));
+    λ a byte got => {
+        let found = t.r.profile.data().above_read(floor, m, a, byte, got);
+        let outside: ((p: Nat) → p < 8 → BitVec::space(64).same(next_rip(t.stack.at(i), p), a) = False) = λ p below =>
+            BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(t.stack.at(i), p), a, λ same => {
+                let value: (next_rip(t.stack.at(i), p).toNat() = t.stack.low.toNat() + (i + p)) =
+                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), rip_compose(t.stack.low, i, p)), t.stack_toNat(i + p, omega(fits, below)));
+                let here: (a.toNat() = t.stack.low.toNat() + (i + p)) = trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), sym(same)), value);
+                false_elim(omega(here, found.left, below, high))
+            });
+        let read: (t.r.profile.read(after, a) = Some(byte)) =
+            trans(t.r.profile.read_agree(m, after.cells, a, t.r.profile.store_outside(m, t.stack.at(i), word_bytes(word), a, outside)), found.right);
+        let up: (floor.leb(a.toNat()) = True) = Nat::leb_true(floor, a.toNat(), found.left);
+        j(sym(up), λ b _ => (match b { True => t.r.profile.read(after, a), False => None<BitVec(8)> }) = Some(byte), read)
+    }
+}
+
+// …nor the stack's words above it, and it reads back.
+theorem Target::stack_store_apart(self t: Target, m: X86Memory(t.r.profile), i, k: Nat, fits: i + 8 <= t.stack.size, k_fits: k + 8 <= t.stack.size,
+    apart: WordsApart(i, k), word: BitVec(64)):
+    read_word(t.io().data, t.r.profile.store(m, t.stack.at(i), word_bytes(word)), t.stack.at(k)) = read_word(t.io().data, m, t.stack.at(k)) {
+    j(t.stack_writes, λ ws _ => read_word(t.io().data, ws.store(m, t.stack.at(i), word_bytes(word)), t.stack.at(k)) = read_word(t.io().data, m, t.stack.at(k)),
+        t.stack.apart(m, i, k, fits, k_fits, apart, word))
+}
+
+theorem Target::stack_store_read(self t: Target, m: X86Memory(t.r.profile), i: Nat, fits: i + 8 <= t.stack.size, word: BitVec(64)):
+    read_word(t.io().data, t.r.profile.store(m, t.stack.at(i), word_bytes(word)), t.stack.at(i)) = Some(word) {
+    j(t.stack_writes, λ ws _ => read_word(t.io().data, ws.store(m, t.stack.at(i), word_bytes(word)), t.stack.at(i)) = Some(word),
+        t.stack.stored(m, i, fits, word))
+}
+
+theorem Target::frames_stack_store(self t: Target, m: X86Memory(t.r.profile), i: Nat, fits: i + 8 <= t.stack.size, word: BitVec(64),
+    words: List<BitVec(64)>, k: Nat, above: i + 8 <= k, at: t.FramesAt(m, words, k)):
+    t.FramesAt(t.r.profile.store(m, t.stack.at(i), word_bytes(word)), words, k) {
+    t.frames_kept(m, t.r.profile.store(m, t.stack.at(i), word_bytes(word)), k,
+        λ l from inside => t.stack_store_apart(m, i, l, fits, inside, Inl(omega(above, from)), word), words, k, k.le_refl(), at)
+}
+
+// So a word pushed below the frame keeps the claim.
+theorem Target::held_stack_store(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    i: Nat, below: i + 8 <= t.index, word: BitVec(64)): t.Held(live, env, g, t.r.profile.store(m, t.stack.at(i), word_bytes(word))) {
+    let pp = held.proof.left.proof;
+    let fits: (i + 8 <= t.stack.size) = omega(below, t.framed);
+    let m2 = t.r.profile.store(m, t.stack.at(i), word_bytes(word));
+    let top = t.stack.low.toNat() + t.stack.size;
+    let argv = argv_at_kept(t.argv(), m, t.argv(), m2, t.stack_store_above(m, i, fits, word, top, omega(fits)),
+        word_in(held.proof.left.witness, t.layout().stack_offset()), t.args, pp.right.right.right.left);
+    Exists(held.witness, ⟨Exists(held.proof.left.witness, ⟨t.stack_store_holds(held.proof.left.witness, m, pp.left, i, fits, word), ⟨pp.right.left,
+        ⟨pp.right.right.left, ⟨argv, ⟨pp.right.right.right.right.left, ⟨pp.right.right.right.right.right.left,
+         t.frames_stack_store(m, i, fits, word, t.frames, t.index, below, pp.right.right.right.right.right.right)⟩⟩⟩⟩⟩⟩), held.proof.right⟩)
+}
+
+// ---------------------------------------------------------------------------
+// Counts
+
+// One down…
+theorem word_down(y: BitVec(64)): next_rip(y, 1).sub(BitVec::ofNat(1)) = y {
+    trans(sym(BitVec::iter_sub_eq_sub(64, next_rip(y, 1), BitVec::ofNat(1))), BitVec::iterate_add_sub_cancel(64, 1, y))
+}
+
+theorem count_down(x: BitVec(64), d: Nat, value: x.toNat() = Succ(d)): x.sub(BitVec::ofNat(1)).toNat() = d {
+    let bound: (x.toNat() < Nat::pow(2, 64)) = BitVec::toNat_lt_pow(64, x);
+    let y: BitVec(64) = BitVec::ofNat(d);
+    let y_value: (y.toNat() = d) = BitVec::toNat_ofNat(64, d, omega(bound, value));
+    let up: (next_rip(y, 1).toNat() = y.toNat() + 1) = BitVec::offset_toNat(64, y, 1, omega(bound, value, y_value));
+    let same: (next_rip(y, 1) = x) = trans(sym(BitVec::ofNat_toNat(64, next_rip(y, 1))),
+        trans(cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), omega(up, y_value, value)), BitVec::ofNat_toNat(64, x)));
+    j(same, λ z _ => z.sub(BitVec::ofNat(1)).toNat() = d, trans(cong_fn<BitVec(64), Nat>(λ z => z.toNat(), word_down(y)), y_value))
+}
+
+// …and one up.
+theorem count_up(x: BitVec(64), d: Nat, value: x.toNat() = d, small: Succ(d) < Nat::pow(2, 64)):
+    x.add(BitVec::ofNat(1, n := 8).sign_extend(56)).toNat() = Succ(d) {
+    let added: (x.add(BitVec::ofNat(1, n := 8).sign_extend(56)) = next_rip(x, 0 + 1)) = displaced_at(x, 0, BitVec::ofNat(1), refl);
+    trans(cong_fn<BitVec(64), Nat>(λ z => z.toNat(), added), trans(BitVec::offset_toNat(64, x, 1, omega(value, small)), omega(value)))
+}
+
+// ---------------------------------------------------------------------------
+// Scratch registers
+
+// A register no word lives in, written.
+theorem Target::held_scratch(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    register: Gpr, value: BitVec(64), outside: register.absent_from(home_pool()).IsTrue()): t.Held(live, env, write_gpr(register, value, g), m) {
+    t.held_unused(live, env, g, m, held, register, value, t.homes.unused(register, outside))
+}
+
+// ---------------------------------------------------------------------------
+// A call's way in
+
+// The room tested: none left, to the shared exit; otherwise one less, and
+// RSP the frame.
+theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Prog, within: p.call_enters(t.layout()).Within(t.program),
+    deep_k: Nat, deep_before: Prog, deep_item: Asm, deep_at: asm_back(t.program, deep_k) = Prog::At(deep_before, t.layout().deep_label(), deep_item),
+    tree: ITree<BitVec(64)>(Events::linux()),
+    zero: t.room = 0 → t.Goes(prog_len(deep_before), tree, λ _ => True),
+    more: (d: Nat) → (roomy: d * (8 * (t.words + 1)) <= t.index) → t.room = Succ(d) →
+        t.GoesR(prog_len(p.call_enters(t.layout())), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
+            t.activation(t.index, t.frames, d, t.framed, roomy).Held(live, env, g, m) ∧ (read_gpr(Rsp, g) = t.frame()))):
+    t.At(prog_len(p), live, tree, env) {
+    let layout = t.layout();
+    let so = layout.stack_offset();
+    let slots: (so + 24 <= t.r.size) = t.fits;
+    let p1 = then(p, Block([MovRI(Rbx, layout.room_at())]));
+    let p2 = then(p1, Load(WordLoad(Rax, Rbx)));
+    let p3 = p2.test_label(Rax);
+    let room = p2.branch_label(Rax, layout.deep_label());
+    let down: List<Instruction> = [MovRI(Rbx, BitVec::ofNat(1)), SubRR(Rax, Rbx), MovRI(Rbx, layout.room_at())];
+    let l1 = then(room, Block(down));
+    let less = then(l1, Store(WordStore(Rbx, Rax)));
+    let f1 = then(less, Block([MovRI(Rbx, layout.frame_at())]));
+    let w_f1 = f1.within_before(0, Load(WordLoad(Rsp, Rbx)), t.program, within);
+    let w_less = less.within_before(0, Block([MovRI(Rbx, layout.frame_at())]), t.program, w_f1);
+    let w_l1 = l1.within_before(0, Store(WordStore(Rbx, Rax)), t.program, w_less);
+    let w_room = room.within_before(0, Block(down), t.program, w_l1);
+    let w_p3 = p3.within_before(0, Jcc(E, layout.deep_label()), t.program, w_room);
+    let w_p2 = p2.within_before(0, Block([TestRR(Rax, Rax)]), t.program, w_p3);
+    let w_p1 = p1.within_before(0, Load(WordLoad(Rax, Rbx)), t.program, w_p2);
+    let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        ((read_gpr(Rax, g).toNat() = t.room) ∧ (f.zf = is_zero_bits(64, read_gpr(Rax, g).band(read_gpr(Rax, g)))));
+    // One less, past the JE.
+    let fall = λ (d: Nat) (same: t.room = Succ(d)) => {
+        let fewer: (d * (8 * (t.words + 1)) <= Succ(d) * (8 * (t.words + 1))) = Nat::mul_le_mono_r(8 * (t.words + 1), d, Succ(d), omega());
+        let was: (Succ(d) * (8 * (t.words + 1)) <= t.index) = j(same, λ r _ => r * (8 * (t.words + 1)) <= t.index, t.roomy);
+        let roomy: (d * (8 * (t.words + 1)) <= t.index) = Nat::le_trans(d * (8 * (t.words + 1)), Succ(d) * (8 * (t.words + 1)), t.index, fewer, was);
+        let u = t.activation(t.index, t.frames, d, t.framed, roomy);
+        let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => u.Held(live, env, g, m) ∧ (read_gpr(Rsp, g) = t.frame());
+        let post = λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory);
+        let loaded = t.goes_load(f1, 0, WordLoad(Rsp, Rbx), within, tree, post, more(d, roomy, same));
+        let at_load: MachineState<X86Memory(t.r.profile)> → Type = λ s => Exists<BitVec(64)>(λ word =>
+            (read_gpr(Rbx, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+            ((read_word(t.site().data, s.memory, read_gpr(Rbx, s.gprs)) = Some(word)) ∧ post(word_load_after(WordLoad(Rsp, Rbx), word, s))));
+        let moved = t.goes_block(less, 0, [MovRI(Rbx, layout.frame_at())], w_f1, tree, at_load, loaded);
+        let at_move = λ (s: MachineState<X86Memory(t.r.profile)>) => at_load(execute_block_normal([MovRI(Rbx, layout.frame_at())], s));
+        let stored = t.goes_store(l1, 0, WordStore(Rbx, Rax), w_less, tree, at_move, moved);
+        let at_store = λ (s: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(Rbx) = True) ∧
+            (t.writes().writable(s.memory, read_gpr(Rbx, s.gprs), 8) ∧
+            (t.site().Resident(word_store_after(t.writes(), WordStore(Rbx, Rax), s).memory) ∧ at_move(word_store_after(t.writes(), WordStore(Rbx, Rax), s))));
+        let lessened = t.goes_block(room, 0, down, w_l1, tree, at_store, stored);
+        let entered: t.Goes(prog_len(room), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => pre(s.gprs, s.flags, s.memory) ∧
+                (condition_holds(E, s.flags) = False)) = λ s here resident held => lessened(s, here, resident, {
+                let g = s.gprs;
+                let m = s.memory;
+                let rax = read_gpr(Rax, g).sub(BitVec::ofNat(1));
+                let value: (rax.toNat() = d) = count_down(read_gpr(Rax, g), d, trans(held.left.right.left, same));
+                let bytes = word_bytes(rax);
+                let ro = so + 16;
+                let fo = so + 8;
+                let m2 = t.r.profile.store(m, layout.room_at(), bytes);
+                let g1 = write_gpr(Rbx, layout.room_at(), write_gpr(Rax, rax, write_gpr(Rbx, BitVec::ofNat(1), g)));
+                let g2 = write_gpr(Rbx, layout.frame_at(), g1);
+                let held1: u.Held(live, env, g, m2) = t.held_room_store(live, env, g, m, held.left.left, d, rax, value, roomy);
+                let held2: u.Held(live, env, g2, m2) = u.held_scratch(live, env, g1, m2, u.held_scratch(live, env, write_gpr(Rax, rax, write_gpr(Rbx, BitVec::ofNat(1), g)), m2,
+                    u.held_scratch(live, env, write_gpr(Rbx, BitVec::ofNat(1), g), m2, u.held_scratch(live, env, g, m2, held1, Rbx, BitVec::ofNat(1), trivial),
+                        Rax, rax, trivial), Rbx, layout.room_at(), trivial), Rbx, layout.frame_at(), trivial);
+                let v = held2.proof.left.witness;
+                let fits_f: (fo + 8 <= t.r.size) = omega(slots);
+                let read = u.read_at(v, m2, held2.proof.left.proof.left, fo, fits_f);
+                let frame: (word_in(v, fo) = t.frame()) = u.held_frame_slot(live, env, g2, m2, held2);
+                let rip_f = sym(t.at_rip(fo, omega(slots)));
+                let read_f: (read_word(t.site().data, m2, layout.frame_at()) = Some(t.frame())) =
+                    j(rip_f, λ a _ => read_word(t.site().data, m2, a) = Some(t.frame()),
+                        trans(read.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), frame)));
+                let canonical_f: (layout.frame_at().toNat() + 8 <= Nat::pow(2, 47)) = j(rip_f, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left);
+                let last: at_move(word_store_after(t.writes(), WordStore(Rbx, Rax), execute_block_normal(down, s))) =
+                    Exists(t.frame(), ⟨canonical_f, ⟨read_f, ⟨u.held_scratch(live, env, g2, m2, held2, Rsp, t.frame(), trivial), refl⟩⟩⟩);
+                let rip_r = sym(t.at_rip(ro, omega(slots)));
+                ⟨refl, ⟨j(rip_r, λ a _ => t.writes().writable(m, a, 8), t.writable(m, ro, 8, omega(slots))),
+                    ⟨j(rip_r, λ a _ => t.site().Resident(t.r.profile.store(m, a, bytes)), t.store_resident(m, ro, bytes, omega(slots), resident)), last⟩⟩⟩
+            });
+        entered
+    };
+    let lands = t.program.lands_jcc(t.laid, w_room.witness, p3, 0, E, t.procedures.len(), w_room.proof, deep_k, deep_before, deep_item, deep_at);
+    let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_room.witness, p3, 0, E, layout.deep_label(), w_room.proof,
+        prog_len(deep_before), lands, tree, pre,
+        λ u here resident held => (match t.room as λ r => t.room = r → Sim(t.io(), tree, u) {
+            Zero => λ z => zero(z)(u, here, resident, trivial),
+            Succ(d) => λ same => absurd(trans(sym(held.right), trans(held.left.right.right, test_self_nonzero(64, read_gpr(Rax, u.gprs),
+                j(sym(trans(held.left.right.left, same)), λ n _ => 0 < n, omega()))))),
+        })(refl),
+        λ u here resident held => (match t.room as λ r => t.room = r → Sim(t.io(), tree, u) {
+            Zero => λ z => absurd(trans(sym(test_self_zero(64, read_gpr(Rax, u.gprs), trans(held.left.right.left, z))),
+                trans(sym(held.left.right.right), held.right))),
+            Succ(d) => λ same => fall(d, same)(u, here, resident, held),
+        })(refl));
+    let at_jcc = λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory);
+    let flagged = t.goes_block(p2, 0, [TestRR(Rax, Rax)], w_p3, tree, at_jcc, jumped);
+    let at_test = λ (u: MachineState<X86Memory(t.r.profile)>) => at_jcc(execute_block_normal([TestRR(Rax, Rax)], u));
+    let loaded = t.goes_load(p1, 0, WordLoad(Rax, Rbx), w_p2, tree, at_test, flagged);
+    let at_load: MachineState<X86Memory(t.r.profile)> → Type = λ u => Exists<BitVec(64)>(λ word =>
+        (read_gpr(Rbx, u.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        ((read_word(t.site().data, u.memory, read_gpr(Rbx, u.gprs)) = Some(word)) ∧ at_test(word_load_after(WordLoad(Rax, Rbx), word, u))));
+    let moved = t.goes_block(p, 0, [MovRI(Rbx, layout.room_at())], w_p1, tree, at_load, loaded);
+    λ s here resident held => {
+        let g = s.gprs;
+        let m = s.memory;
+        let ro = so + 16;
+        let v = held.proof.left.witness;
+        let word = word_in(v, ro);
+        let read = t.read_at(v, m, held.proof.left.proof.left, ro, omega(slots));
+        let rip_r = sym(t.at_rip(ro, omega(slots)));
+        let g1 = write_gpr(Rbx, layout.room_at(), g);
+        let held1 = t.held_scratch(live, env, write_gpr(Rbx, layout.room_at(), g), m, t.held_scratch(live, env, g, m, held, Rbx, layout.room_at(), trivial),
+            Rax, word, trivial);
+        moved(s, here, resident, Exists(word, ⟨j(rip_r, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left),
+            ⟨j(rip_r, λ a _ => read_word(t.site().data, m, a) = Some(word), read.right),
+             ⟨held1, ⟨held.proof.left.proof.right.right.right.right.right.left, refl⟩⟩⟩⟩))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Where a call's pieces start, inside what they build
+
+// A call's code from its start (`Prog::performs`).
+theorem Prog::within_words_to(layout: Layout, ids: List<Nat>): (registers: List<Gpr>) → (p: Prog) → p.Within(p.words_to(layout, ids, registers)) {
+    match ids {
+        Nil => λ registers p => p.within_self(),
+        Cons(id, rest) => λ registers => match registers {
+            Nil => λ p => p.within_self(),
+            Cons(register, more) => λ p => p.within_trans(p.word_to(layout, id, register), p.word_to(layout, id, register).words_to(layout, rest, more),
+                p.within_word_to(layout, id, register), Prog::within_words_to(layout, rest, more, p.word_to(layout, id, register))),
+        },
+    }
+}
+
+theorem Prog::within_words_from(layout: Layout, out: List<Nat>, ids: List<Nat>): (registers: List<Gpr>) → (p: Prog) → p.Within(p.words_from(layout, out, ids, registers)) {
+    match ids {
+        Nil => λ registers p => p.within_self(),
+        Cons(id, rest) => λ registers => match registers {
+            Nil => λ p => p.within_self(),
+            Cons(register, more) => λ p => {
+                let one = p.word_from(layout, out.minus(rest), id, register);
+                p.within_trans(one, one.words_from(layout, out, rest, more), p.within_word_from(layout, out.minus(rest), id, register),
+                    Prog::within_words_from(layout, out, rest, more, one))
+            },
+        },
+    }
+}
+
+theorem Prog::within_word_home(self p: Prog, layout: Layout, id: Nat, register: Gpr): p.Within(p.word_home(layout, id, register)) {
+    (match layout.homes.home(id) as λ h => p.Within(match h {
+        InSlot => p.word_store(layout, id, register),
+        InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+    }) {
+        InSlot => Exists(2, refl),
+        InReg(_) => Exists(1, refl),
+    })
+}
+
+theorem Prog::within_pushes(layout: Layout, ids: List<Nat>): (p: Prog) → p.Within(p.pushes(layout, ids)) {
+    match ids {
+        Nil => λ p => p.within_self(),
+        Cons(id, rest) => λ p => {
+            let loaded = p.word_to(layout, id, Rax);
+            let pushed = then(then(loaded, Block(rsp_down())), Spill(StackStore(Rax, BitVec::ofNat(0))));
+            p.within_trans(loaded, pushed.pushes(layout, rest), p.within_word_to(layout, id, Rax),
+                loaded.within_trans(pushed, pushed.pushes(layout, rest), Exists(2, refl), Prog::within_pushes(layout, rest, pushed)))
+        },
+    }
+}
+
+theorem Prog::within_pops(layout: Layout, ids: List<Nat>): (p: Prog) → p.Within(p.pops(layout, ids)) {
+    match ids {
+        Nil => λ p => p.within_self(),
+        Cons(id, rest) => λ p => {
+            let popped = then(then(p, Reload(StackLoad(Rax, BitVec::ofNat(0)))), Block([rsp_up()]));
+            let homed = popped.word_home(layout, id, Rax);
+            p.within_trans(popped, homed.pops(layout, rest), Exists(2, refl),
+                popped.within_trans(homed, homed.pops(layout, rest), popped.within_word_home(layout, id, Rax), Prog::within_pops(layout, rest, homed)))
+        },
+    }
+}
+
+theorem Prog::within_performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>):
+    p.Within(p.performs(layout, out, index, args, results)) {
+    let whole = p.performs(layout, out, index, args, results);
+    let saved = out.minus(results);
+    let framed = p.call_enters(layout);
+    let pushed = framed.pushes(layout, saved);
+    let passed = pushed.words_to(layout, args, call_registers());
+    let called = then(passed, CallTo(layout.procedure_label(index)));
+    let popped = called.pops(layout, saved.rev());
+    let more = popped.call_leaves(layout);
+    p.within_trans(framed, whole, Exists(8, refl),
+        framed.within_trans(pushed, whole, Prog::within_pushes(layout, saved, framed),
+            pushed.within_trans(passed, whole, Prog::within_words_to(layout, args, call_registers(), pushed),
+                passed.within_trans(called, whole, passed.within_then(0, CallTo(layout.procedure_label(index))),
+                    called.within_trans(popped, whole, Prog::within_pops(layout, saved.rev(), called),
+                        popped.within_trans(more, whole, Exists(6, refl), Prog::within_words_from(layout, out, results, call_registers(), more)))))))
+}
+
+// ---------------------------------------------------------------------------
+// The stack forms, as `Target::goes_store` has the region's
+
+// A word spilled where the stack has room.
+theorem Target::goes_spill(self t: Target, before: Prog, name: Nat, store: StackStore, within: Prog::At(before, name, Spill(store)).Within(t.program),
+    tree: ITree<BitVec(64)>(Events::linux()), post: MachineState<X86Memory(t.r.profile)> → Type, next: t.Goes(prog_len(before) + 5, tree, post)):
+    t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat>(λ i => (stack_address(s.gprs, store.offset) = t.stack.at(i)) ∧
+        ((i + 8 <= t.stack.size) ∧ post(store.after(t.writes(), s))))) {
+    let moves = t.site().moves_spill(t.stack, t.code_fits(), within.witness, before, name, store, within.proof,
+        λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat>(λ i => (stack_address(s.gprs, store.offset) = t.stack.at(i)) ∧
+            ((i + 8 <= t.stack.size) ∧ post(store.after(t.stack.writes, s)))), post, λ s held => held);
+    let linux = j(t.stack_writes, λ ws _ => t.site().Moves(ws, prog_len(before), prog_len(before) + 5,
+        λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat>(λ i => (stack_address(s.gprs, store.offset) = t.stack.at(i)) ∧
+            ((i + 8 <= t.stack.size) ∧ post(store.after(ws, s)))), post), moves);
+    t.io().goes_after(t.program, t.origin, prog_len(before), prog_len(before) + 5, tree,
+        λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat>(λ i => (stack_address(s.gprs, store.offset) = t.stack.at(i)) ∧
+            ((i + 8 <= t.stack.size) ∧ post(store.after(t.writes(), s)))), post, linux, next)
+}
+
+// A word reloaded from where the stack holds it.
+theorem Target::goes_reload(self t: Target, before: Prog, name: Nat, load: StackLoad, within: Prog::At(before, name, Reload(load)).Within(t.program),
+    tree: ITree<BitVec(64)>(Events::linux()), post: MachineState<X86Memory(t.r.profile)> → Type, next: t.Goes(prog_len(before) + 5, tree, post)):
+    t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat>(λ i => (stack_address(s.gprs, load.offset) = t.stack.at(i)) ∧
+        ((i + 8 <= t.stack.size) ∧ Exists<BitVec(64)>(λ word => (read_word(t.site().data, s.memory, t.stack.at(i)) = Some(word)) ∧
+            post(load.after(word, s)))))) {
+    let pre: MachineState<X86Memory(t.r.profile)> → Type = λ s => Exists<Nat>(λ i => (stack_address(s.gprs, load.offset) = t.stack.at(i)) ∧
+        ((i + 8 <= t.stack.size) ∧ Exists<BitVec(64)>(λ word => (read_word(t.site().data, s.memory, t.stack.at(i)) = Some(word)) ∧
+            post(load.after(word, s)))));
+    let moves = t.site().moves_reload(t.stack, t.code_fits(), within.witness, before, name, load, within.proof, pre, post, λ s held => held);
+    t.io().goes_after(t.program, t.origin, prog_len(before), prog_len(before) + 5, tree, pre, post,
+        j(t.stack_writes, λ ws _ => t.site().Moves(ws, prog_len(before), prog_len(before) + 5, pre, post), moves), next)
+}
+
+// ---------------------------------------------------------------------------
+// Pushes and pops
+
+// `xs` reversed onto `acc`: what a run of pushes leaves above the stack
+// pointer, the last pushed first.
+fn List::onto<A>(self xs: List<A>, acc: List<A>) → List<A> { match xs { Nil => acc, Cons(h, rest) => rest.onto(Cons(h, acc)) } }
+
+theorem List::onto_rev<A>(self xs: List<A>): (acc: List<A>) → xs.onto(acc) = xs.rev() ++ acc {
+    match xs {
+        Nil => λ acc => refl,
+        Cons(h, rest) => λ acc => trans(rest.onto_rev(Cons(h, acc)), sym(rest.rev().append_assoc(Cons(h, Nil), acc))),
+    }
+}
+
+theorem List::onto_len<A>(self xs: List<A>): (acc: List<A>) → xs.onto(acc).len() = xs.len() + acc.len() {
+    match xs {
+        Nil => λ acc => sym(acc.len().add_left_zero()),
+        Cons(h, rest) => λ acc => {
+            let later: (Cons(h, rest).onto(acc).len() = rest.len() + Succ(acc.len())) = rest.onto_len(Cons(h, acc));
+            let goal: (Cons(h, rest).onto(acc).len() = Succ(rest.len()) + acc.len()) = omega(later);
+            goal
+        },
+    }
+}
+
+theorem Env::words_at_len(self env: Env, ids: List<Nat>): env.words_at(ids).len() = ids.len() {
+    match ids { Nil => refl, Cons(_, rest) => cong_fn<Nat, Nat>(λ n => Succ(n), env.words_at_len(rest)) }
+}
+
+// Frames one after another.
+theorem Target::frames_append(self t: Target, m: X86Memory(t.r.profile), xs: List<BitVec(64)>): (ys: List<BitVec(64)>) → (i: Nat) →
+    t.FramesAt(m, xs, i) → t.FramesAt(m, ys, i + 8 * xs.len()) → t.FramesAt(m, xs ++ ys, i) {
+    match xs {
+        Nil => λ ys i _ at => { let same: (i + 8 * 0 = i) = omega(); j(same, λ k _ => t.FramesAt(m, ys, k), at) },
+        Cons(x, rest) => λ ys i first second => ⟨first.left, ⟨first.right.left,
+            t.frames_append(m, rest, ys, i + 8, first.right.right, {
+                let same: (i + 8 * Succ(rest.len()) = (i + 8) + 8 * rest.len()) = omega();
+                j(same, λ k _ => t.FramesAt(m, ys, k), second)
+            })⟩⟩,
+    }
+}
+
+// A push's arithmetic, stated over bare numbers: omega in the push's own
+// context reads every hypothesis there, the claims of trees included.
+theorem push_arith(j, len, done, index, frames, size: Nat, room: 8 * Succ(len) <= j, deep: j + 8 * done = index, framed: index + 8 * frames <= size):
+    (8 <= j) ∧ ((j - 8 * Succ(len) = (j - 8) - 8 * len) ∧ ((8 * len <= j - 8) ∧ (((j - 8) + 8 * Succ(done) = index) ∧
+    (((j - 8) + 8 <= size) ∧ ((j = (j - 8) + 8) ∧ (((j - 8) + 0 = j - 8) ∧ ((j - 8) + 8 <= index))))))) {
+    let a: (8 <= j) = omega(room);
+    let b: (j - 8 * Succ(len) = (j - 8) - 8 * len) = omega(a);
+    let c: (8 * len <= j - 8) = omega(room);
+    let d: ((j - 8) + 8 * Succ(done) = index) = omega(deep, a);
+    let e: ((j - 8) + 8 <= size) = omega(a, deep, framed);
+    let f: (j = (j - 8) + 8) = omega(a);
+    let g: ((j - 8) + 0 = j - 8) = omega();
+    let h: ((j - 8) + 8 <= index) = omega(a, deep);
+    ⟨a, ⟨b, ⟨c, ⟨d, ⟨e, ⟨f, ⟨g, h⟩⟩⟩⟩⟩⟩⟩
+}
+
+// The words `ids` pushed, from RSP at offset `j` down, below what pushes
+// before them left (`done`, the last pushed first).
+theorem Target::goes_pushes(self t: Target, live: List<Nat>, env: Env, tree: ITree<BitVec(64)>(Events::linux()), ids: List<Nat>):
+    (p: Prog) → (j: Nat) → (done: List<Nat>) → ((i: Nat) → Mem(i, ids) → (i < t.words) ∧ Mem(i, live)) →
+    8 * ids.len() <= j → j + 8 * done.len() = t.index → p.pushes(t.layout(), ids).Within(t.program) →
+    t.GoesR(prog_len(p.pushes(t.layout(), ids)), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        ((read_gpr(Rsp, g) = t.stack.at(j - 8 * ids.len())) ∧ t.FramesAt(m, env.words_at(ids.onto(done)), j - 8 * ids.len()))) →
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        ((read_gpr(Rsp, g) = t.stack.at(j)) ∧ t.FramesAt(m, env.words_at(done), j))) {
+    let layout = t.layout();
+    match ids {
+        Nil => λ p top done _ _ _ _ next => j(Nat::sub_zero(top), λ k _ => t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
+            t.Held(live, env, g, m) ∧ ((read_gpr(Rsp, g) = t.stack.at(k)) ∧ t.FramesAt(m, env.words_at(done), k))), next),
+        Cons(id, rest) => λ p j done ok room deep within next => {
+            let loaded = p.word_to(layout, id, Rax);
+            let down = then(loaded, Block(rsp_down()));
+            let spill = StackStore(Rax, BitVec::ofNat(0));
+            let pushed = then(down, Spill(spill));
+            let w_pushed = pushed.within_trans(pushed.pushes(layout, rest), t.program, Prog::within_pushes(layout, rest, pushed), within);
+            let w_down = down.within_before(0, Spill(spill), t.program, w_pushed);
+            let w_loaded = loaded.within_before(0, Block(rsp_down()), t.program, w_down);
+            let ar = push_arith(j, rest.len(), done.len(), t.index, t.frames.len(), t.stack.size, room, deep, t.framed);
+            let j2 = j - 8;
+            let shift: (j - 8 * Succ(rest.len()) = j2 - 8 * rest.len()) = ar.right.left;
+            let later = t.goes_pushes(live, env, tree, rest, pushed, j2, Cons(id, done), λ i m => ok(i, Inr(m)), ar.right.right.left, ar.right.right.right.left,
+                within,
+                j(shift, λ k _ => t.GoesR(prog_len(pushed.pushes(layout, rest)), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+                    ((read_gpr(Rsp, g) = t.stack.at(k)) ∧ t.FramesAt(m, env.words_at(rest.onto(Cons(id, done))), k))), next));
+            let q2 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+                ((read_gpr(Rsp, g) = t.stack.at(j2)) ∧ t.FramesAt(m, env.words_at(Cons(id, done)), j2));
+            let post = λ (u: MachineState<X86Memory(t.r.profile)>) => q2(u.gprs, u.memory);
+            let spilled = t.goes_spill(down, 0, spill, w_pushed, tree, post, later);
+            let at_spill: MachineState<X86Memory(t.r.profile)> → Type = λ u => Exists<Nat>(λ i => (stack_address(u.gprs, spill.offset) = t.stack.at(i)) ∧
+                ((i + 8 <= t.stack.size) ∧ post(spill.after(t.writes(), u))));
+            let moved = t.goes_block(loaded, 0, rsp_down(), w_down, tree, at_spill, spilled);
+            let g_down = λ (g: Gprs) => write_gpr(Rsp, read_gpr(Rsp, g).sub(BitVec::ofNat(8)), write_gpr(Rbx, BitVec::ofNat(8), g));
+            let q1: Gprs → X86Memory(t.r.profile) → Type = λ g m => Exists<Nat>(λ i => (stack_address(g_down(g), BitVec::ofNat(0)) = t.stack.at(i)) ∧
+                ((i + 8 <= t.stack.size) ∧ q2(g_down(g), t.writes().store(m, stack_address(g_down(g), BitVec::ofNat(0)), word_bytes(read_gpr(Rax, g_down(g)))))));
+            let moved2 = t.goes_weaken(prog_len(loaded), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => at_spill(execute_block_normal(rsp_down(), u)),
+                λ (u: MachineState<X86Memory(t.r.profile)>) => q1(u.gprs, u.memory), moved, λ u h => h);
+            let inside = ok(id, Inl(refl));
+            let word = t.goes_word_to(live, env, p, id, Rax, inside.left, inside.right, w_loaded, tree, q1, moved2);
+            let fits: (j2 + 8 <= t.stack.size) = ar.right.right.right.right.left;
+            let back: (j = j2 + 8) = ar.right.right.right.right.right.left;
+            let zero: (j2 + 0 = j2) = ar.right.right.right.right.right.right.left;
+            let below: (j2 + 8 <= t.index) = ar.right.right.right.right.right.right.right;
+            t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
+                    q1(write_gpr(Rax, env.word(id), write_gpr(Rbx, layout.rbx_word(env, id), u.gprs)), u.memory),
+                λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
+                    ((read_gpr(Rsp, u.gprs) = t.stack.at(j)) ∧ t.FramesAt(u.memory, env.words_at(done), j)), word, λ u held => {
+                let g = u.gprs;
+                let m = u.memory;
+                let w = env.word(id);
+                let g1 = write_gpr(Rax, w, write_gpr(Rbx, layout.rbx_word(env, id), g));
+                let g2 = g_down(g1);
+                let rsp: (read_gpr(Rsp, g2) = t.stack.at(j2)) = trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.sub(BitVec::ofNat(8)), held.right.left),
+                    trans(cong_fn<Nat, BitVec(64)>(λ k => t.stack.at(k).sub(BitVec::ofNat(8)), back), push_at(t.stack.low, j2)));
+                let address: (stack_address(g2, BitVec::ofNat(0)) = t.stack.at(j2)) =
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(0, n := 8).sign_extend(56)), rsp),
+                        trans(displaced_at(t.stack.low, j2, BitVec::ofNat(0), refl), rip_count(t.stack.low, zero)));
+                let m2 = t.r.profile.store(m, t.stack.at(j2), word_bytes(w));
+                let kept = t.held_stack_store(live, env, g, m, held.left, j2, below, w);
+                let held2: t.Held(live, env, g2, m2) = t.held_scratch(live, env, write_gpr(Rbx, BitVec::ofNat(8), g1), m2,
+                    t.held_scratch(live, env, g1, m2, t.held_scratch(live, env, write_gpr(Rbx, layout.rbx_word(env, id), g), m2,
+                        t.held_scratch(live, env, g, m2, kept, Rbx, layout.rbx_word(env, id), trivial), Rax, w, trivial), Rbx, BitVec::ofNat(8), trivial),
+                    Rsp, read_gpr(Rsp, g1).sub(BitVec::ofNat(8)), trivial);
+                let above: t.FramesAt(m, env.words_at(done), j2 + 8) = j(back, λ k _ => t.FramesAt(m, env.words_at(done), k), held.right.right);
+                let frames: t.FramesAt(m2, env.words_at(Cons(id, done)), j2) = ⟨fits, ⟨t.stack_store_read(m, j2, fits, w),
+                    t.frames_stack_store(m, j2, fits, w, env.words_at(done), j2 + 8, (j2 + 8).le_refl(), above)⟩⟩;
+                ⟨held.left, Exists(j2, ⟨address, ⟨fits, j(sym(address), λ a _ => q2(g2, t.r.profile.store(m, a, word_bytes(w))), ⟨held2, ⟨rsp, frames⟩⟩)⟩⟩)⟩
+            })
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A call's arguments, into the call registers
+
+// The registers hold the values, pairwise (as many as both lists have)…
+fn Gprs::holding_from(self g: Gprs, values: List<BitVec(64)>) → List<Gpr> → Type {
+    match values {
+        Nil => λ _ => True,
+        Cons(value, rest) => λ registers => match registers { Nil => True, Cons(register, more) => (read_gpr(register, g) = value) ∧ g.holding_from(rest)(more) },
+    }
+}
+fn Gprs::Holding(self g: Gprs, registers: List<Gpr>, values: List<BitVec(64)>) → Type { g.holding_from(values)(registers) }
+
+// …and the words.
+fn Env::InRegisters(self env: Env, g: Gprs, ids: List<Nat>, registers: List<Gpr>) → Type { g.Holding(registers, env.words_at(ids)) }
+
+// Every register but RBX and `registers` reads in `g2` as in `g`.
+fn Gprs::KeepsOutside(self g2: Gprs, g: Gprs, registers: List<Gpr>) → Type {
+    (x: Gpr) → x.absent_from(Cons(Rbx, registers)).IsTrue() → read_gpr(x, g2) = read_gpr(x, g)
+}
+
+// No register of the list is in the pool.
+fn gprs_outside(registers: List<Gpr>, pool: List<Gpr>) → Bool {
+    match registers { Nil => True, Cons(register, rest) => register.absent_from(pool) && gprs_outside(rest, pool) }
+}
+
+// `Prog::words_to` into registers no word lives in, distinct and apart from
+// RBX: the words held, the registers hold them, and nothing else but RBX moves.
+theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: ITree<BitVec(64)>(Events::linux()), q: Gprs → X86Memory(t.r.profile) → Type,
+    ids: List<Nat>): (registers: List<Gpr>) → (p: Prog) → ((i: Nat) → Mem(i, ids) → (i < t.words) ∧ Mem(i, live)) →
+    gprs_outside(registers, home_pool()).IsTrue() → gprs_distinct(Cons(Rbx, registers)).IsTrue() →
+    p.words_to(t.layout(), ids, registers).Within(t.program) → t.GoesR(prog_len(p.words_to(t.layout(), ids, registers)), tree, q) →
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        ((g2: Gprs) → t.Held(live, env, g2, m) → env.InRegisters(g2, ids, registers) → g2.KeepsOutside(g, registers) → q(g2, m))) {
+    let layout = t.layout();
+    match ids {
+        Nil => λ registers p _ _ _ _ next => t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory),
+            λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
+                ((g2: Gprs) → t.Held(live, env, g2, u.memory) → env.InRegisters(g2, Nil, registers) → g2.KeepsOutside(u.gprs, registers) → q(g2, u.memory)),
+            next, λ u h => h.right(u.gprs, h.left, trivial, λ x _ => refl)),
+        Cons(id, rest) => λ registers => match registers {
+            Nil => λ p _ _ _ _ next => t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory),
+                λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
+                    ((g2: Gprs) → t.Held(live, env, g2, u.memory) → env.InRegisters(g2, Cons(id, rest), Nil) → g2.KeepsOutside(u.gprs, Nil) → q(g2, u.memory)),
+                next, λ u h => h.right(u.gprs, h.left, trivial, λ x _ => refl)),
+            Cons(register, more) => λ p ok scratch distinct within next => {
+                let loaded = p.word_to(layout, id, register);
+                let w_loaded = loaded.within_trans(loaded.words_to(layout, rest, more), t.program, Prog::within_words_to(layout, rest, more, loaded), within);
+                let outside = Bool::is_true_and(register.absent_from(home_pool()), gprs_outside(more, home_pool()), scratch);
+                let apart = Bool::is_true_and(Rbx.absent_from(Cons(register, more)), gprs_distinct(Cons(register, more)), distinct);
+                let own = Bool::is_true_and(register.absent_from(more), gprs_distinct(more), apart.right);
+                let rbx_rest: Rbx.absent_from(more).IsTrue() = Rbx.absent_rest(register, more, apart.left);
+                let distinct2: gprs_distinct(Cons(Rbx, more)).IsTrue() = Bool::is_true_and_intro(Rbx.absent_from(more), gprs_distinct(more), rbx_rest, own.right);
+                let later = t.goes_words_to(live, env, tree, q, rest, more, loaded, λ i m => ok(i, Inr(m)), outside.right, distinct2, within, next);
+                let w = env.word(id);
+                let inside = ok(id, Inl(refl));
+                let q1 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+                    ((g2: Gprs) → t.Held(live, env, g2, m) → env.InRegisters(g2, rest, more) → g2.KeepsOutside(g, more) → q(g2, m));
+                let word = t.goes_word_to(live, env, p, id, register, inside.left, inside.right, w_loaded, tree, q1, later);
+                t.goes_weaken(prog_len(p), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
+                        q1(write_gpr(register, w, write_gpr(Rbx, layout.rbx_word(env, id), u.gprs)), u.memory),
+                    λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, u.gprs, u.memory) ∧
+                        ((g2: Gprs) → t.Held(live, env, g2, u.memory) → env.InRegisters(g2, Cons(id, rest), Cons(register, more)) → g2.KeepsOutside(u.gprs, Cons(register, more)) → q(g2, u.memory)),
+                    word, λ u held => {
+                    let g = u.gprs;
+                    let m = u.memory;
+                    let g0 = write_gpr(Rbx, layout.rbx_word(env, id), g);
+                    let g1 = write_gpr(register, w, g0);
+                    let held1: t.Held(live, env, g1, m) = t.held_scratch(live, env, g0, m, t.held_scratch(live, env, g, m, held.left, Rbx, layout.rbx_word(env, id), trivial),
+                        register, w, outside.left);
+                    ⟨held.left, ⟨held1, λ g2 held2 passed keeps => {
+                        let not_rbx: (register.same(Rbx) = False) = Rbx.absent_head(register, more, apart.left);
+                        let away: register.absent_from(Cons(Rbx, more)).IsTrue() = Bool::is_true_and_intro(!register.same(Rbx), register.absent_from(more),
+                            j(sym(not_rbx), λ b _ => (!b).IsTrue(), trivial), own.left);
+                        let mine: (read_gpr(register, g2) = w) = trans(keeps(register, away), read_gpr_after_write(register, w, g0));
+                        held.right(g2, held2, ⟨mine, passed⟩, λ x absent => {
+                            let parts = Bool::is_true_and(!x.same(Rbx), x.absent_from(Cons(register, more)), absent);
+                            let x_rest: x.absent_from(more).IsTrue() = x.absent_rest(register, more, parts.right);
+                            trans(keeps(x, Bool::is_true_and_intro(!x.same(Rbx), x.absent_from(more), parts.left, x_rest)),
+                                trans(read_gpr_other(register, x, w, g0, x.absent_head(register, more, parts.right)),
+                                    read_gpr_other(Rbx, x, layout.rbx_word(env, id), g, x.absent_head(Rbx, Cons(register, more), absent))))
+                        })
+                    }⟩⟩
+                })
+            },
+        },
+    }
+}
+
+// A CALL to label `Succ(n)` lands where that label's item starts.
+theorem Prog::lands_call(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat, n: Nat,
+    at: asm_back(p, k) = At(before, name, CallTo(Succ(n))), label_k: Nat, label: Prog, item: Asm,
+    label_at: asm_back(p, label_k) = At(label, Succ(n), item)):
+    NearLands(prog_len(before), asm_jump_of(asm_labels(p), prog_len(before), CallTo(Succ(n))), prog_len(label)) {
+    let lands = call_lands(asm_labels(p), k, p, before, name, Succ(n), p.laid_out_lands(laid), at);
+    j(label_target(label_k, p, label, n, item, p.laid_out_unique(laid), label_at),
+        λ to _ => NearLands(prog_len(before), asm_jump_of(asm_labels(p), prog_len(before), CallTo(Succ(n))), to), lands)
+}
+
+// ---------------------------------------------------------------------------
+// Words sharing a home
+
+// Two live words in one register hold one number.
+theorem Target::held_shared(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    x, y: Nat, mx: Mem(x, live), my: Mem(y, live), k: Nat, at_x: t.homes.home(x) = InReg(k), at_y: t.homes.home(y) = InReg(k)): env.number(x) = env.number(y) {
+    let words = held.witness;
+    let values = home_values(g);
+    let read: ((i: Nat) → Mem(i, live) → t.homes.home(i) = InReg(k) → (values.get_or(k, BitVec::zero()).toNat() = env.number(i))) = λ i mi at =>
+        j(at, λ h _ => (match h { InSlot => words.get_or(i, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) = env.number(i), held.proof.right(i, mi));
+    trans(sym(read(x, mx, at_x)), read(y, my, at_y))
+}
+
+// Into its register, where every other word of `out` in that register holds
+// the same number.
+theorem Target::held_reg_shared(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
+    held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), k: Nat, at: t.homes.home(id) = InReg(k),
+    shared: (i: Nat) → Mem(i, out) → i ≠ id → t.homes.home(i) = InReg(k) → env.number(i) = w.toNat()):
+    t.Held(out, env.set_word(id, w), write_gpr(home_register(k), w, g), m) {
+    let words = held.witness;
+    let inside = t.homes.in_pool(t.homed, id, k, at);
+    let values = home_values(g).put(k, w, BitVec::zero());
+    let written: (home_values(write_gpr(home_register(k), w, g)) = values) = home_values_write(w, g, k, inside);
+    let before: ((i: Nat) → Mem(i, out) → i ≠ id → (h: Home) → t.homes.home(i) = h →
+        ((match h { InSlot => words.get_or(i, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) = env.number(i))) =
+        λ i m2 ne h at_i => j(at_i, λ x _ => (match x { InSlot => words.get_or(i, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) = env.number(i),
+            held.proof.right(i, sub(i, m2, ne)));
+    let agrees: t.homes.Agrees(out, env.set_word(id, w), words, values) = λ i m2 => match i.eq_dec(id) {
+        Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words, values) = env.set_word(id, w).number(x),
+            j(sym(at), λ h _ => (match h { InSlot => words.get_or(id, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) =
+                env.set_word(id, w).number(id),
+                trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(k, BitVec::zero(), w,
+                    List::put_here(k, home_values(g), w, BitVec::zero()))), sym(env.number_set_here(id, w))))),
+        Inr(ne) => (match t.homes.home(i) as λ h => t.homes.home(i) = h →
+                (match h { InSlot => words.get_or(i, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) = env.set_word(id, w).number(i) {
+            InSlot => λ at_i => trans(before(i, m2, ne, InSlot, at_i), sym(env.number_set_other(id, w, i, ne))),
+            InReg(r) => λ at_i => match r.eq_dec(k) {
+                Inl(e) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(r, BitVec::zero(), w,
+                        j(sym(e), λ x _ => values.nth(x) = Some(w), List::put_here(k, home_values(g), w, BitVec::zero())))),
+                    trans(sym(shared(i, m2, ne, j(e, λ x _ => t.homes.home(i) = InReg(x), at_i))), sym(env.number_set_other(id, w, i, ne)))),
+                Inr(apart) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), List::put_other(k, home_values(g), w, BitVec::zero(), r, apart)),
+                    trans(before(i, m2, ne, InReg(r), at_i), sym(env.number_set_other(id, w, i, ne)))),
+            },
+        })(refl),
+    };
+    j(sym(written), λ vs _ => Exists<List<Nat>>(λ ws => t.Placed(env.set_word(id, w).with_words(ws), m) ∧ t.homes.Agrees(out, env.set_word(id, w), ws, vs)),
+        Exists(words, ⟨held.proof.left, agrees⟩))
+}
+
+// A word set to the number it had: alike everywhere.
+theorem Env::like_set_same(self env: Env, id: Nat, w: BitVec(64), value: w.toNat() = env.number(id), live: List<Nat>): env.set_word(id, w).Like(env, live) {
+    ⟨λ i _ => match i.eq_dec(id) {
+        Inl(e) => j(sym(e), λ x _ => env.set_word(id, w).number(x) = env.number(x), trans(env.number_set_here(id, w), value)),
+        Inr(ne) => env.number_set_other(id, w, i, ne),
+    }, ⟨refl, refl⟩⟩
+}
+
+// ---------------------------------------------------------------------------
+// The shared exit of a call too deep
+
+theorem Target::goes_deep(self t: Target, dp: Prog, within: dp.deep_exit(t.layout()).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    pre: MachineState<X86Memory(t.r.profile)> → Type,
+    exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, call_depth_status()) → Sim(t.io(), tree, s)):
+    t.Goes(prog_len(dp), tree, pre) {
+    let set_list: List<Instruction> = [MovRI(Rdi, call_depth_status()), MovRI(Rax, BitVec::ofNat(60))];
+    let lab = dp.label(t.layout().deep_label());
+    let set = then(lab, Block(set_list));
+    let w_set = set.within_before(0, Syscall, t.program, within);
+    let w_lab = lab.within_before(0, Block(set_list), t.program, w_set);
+    let called = t.io().goes_exit(t.program, t.origin, t.code_fits(), within.witness, set, 0, within.proof, tree, call_depth_status(), exits);
+    let moved = t.goes_block(lab, 0, set_list, w_set, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(u, call_depth_status()), called);
+    let into = t.goes_weaken(prog_len(lab), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(execute_block_normal(set_list, u), call_depth_status()),
+        λ (u: MachineState<X86Memory(t.r.profile)>) => True, moved, λ s _ => ⟨refl, refl⟩);
+    let labelled = t.goes_block(dp, t.layout().deep_label(), [], w_lab, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => True, into);
+    t.goes_weaken(prog_len(dp), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => True, pre, labelled, λ s _ => trivial)
+}
+
+// ---------------------------------------------------------------------------
+// Pops
+
+// The stack's words where code that reads none of them leaves it.
+fn Target::StackKept(self t: Target, m, m2: X86Memory(t.r.profile)) → Type {
+    (k: Nat) → k + 8 <= t.stack.size → read_word(t.io().data, m2, t.stack.at(k)) = read_word(t.io().data, m, t.stack.at(k))
+}
+
+// Every register no word lives in but RAX, RBX and RSP reads as it did.
+fn Gprs::KeepsScratch(self g2: Gprs, g: Gprs) → Type {
+    (x: Gpr) → x.absent_from(home_pool()).IsTrue() → x.absent_from([Rax, Rbx, Rsp]).IsTrue() → read_gpr(x, g2) = read_gpr(x, g)
+}
+
+theorem Target::spares_scratch(self t: Target, g, g2: Gprs, spares: t.Spares(g, g2)): g2.KeepsScratch(g) {
+    λ x outside clear => spares(x, t.homes.unused(x, outside), x.absent_head(Rbx, [Rsp], x.absent_rest(Rax, [Rbx, Rsp], clear)))
+}
+
+theorem Prog::word_home_slot(self p: Prog, layout: Layout, id: Nat, register: Gpr, slot: layout.homes.home(id) = InSlot):
+    p.word_home(layout, id, register) = p.word_store(layout, id, register) {
+    j(sym(slot), λ h _ => (match h { InSlot => p.word_store(layout, id, register), InReg(k) => then(p, Block([MovRR(home_register(k), register)])) }) =
+        p.word_store(layout, id, register), refl)
+}
+
+theorem Prog::word_home_reg(self p: Prog, layout: Layout, id: Nat, register: Gpr, k: Nat, at: layout.homes.home(id) = InReg(k)):
+    p.word_home(layout, id, register) = then(p, Block([MovRR(home_register(k), register)])) {
+    j(sym(at), λ h _ => (match h { InSlot => p.word_store(layout, id, register), InReg(r) => then(p, Block([MovRR(home_register(r), register)])) }) =
+        then(p, Block([MovRR(home_register(k), register)])), refl)
+}
+
+// A word put back in its home from `register`, which holds it: the word
+// held again where `out` is live, every other word of `out` in its
+// register holding the same number.
+theorem Target::goes_word_home(self t: Target, live, out: List<Nat>, env: Env, p: Prog, id: Nat, register: Gpr, inside: id < t.words,
+    rbx: Rbx.same(register) = False, sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live),
+    shared: (k: Nat) → t.homes.home(id) = InReg(k) → (i: Nat) → Mem(i, out) → i ≠ id → t.homes.home(i) = InReg(k) → env.number(i) = env.number(id),
+    value: env.word(id).toNat() = env.number(id),
+    within: p.word_home(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_home(t.layout(), id, register)), tree, q)):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ ((read_gpr(register, g) = env.word(id)) ∧
+        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env, g2, m2) → t.Spares(g, g2) → t.StackKept(m, m2) → q(g2, m2)))) {
+    let layout = t.layout();
+    let goal = λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ ((read_gpr(register, s.gprs) = env.word(id)) ∧
+        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env, g2, m2) → t.Spares(s.gprs, g2) → t.StackKept(s.memory, m2) → q(g2, m2)));
+    (match t.homes.home(id) as λ h => t.homes.home(id) = h → t.Goes(prog_len(p), tree, goal) {
+        InSlot => λ slot => {
+            let code = p.word_home_slot(layout, id, register, slot);
+            let a = layout.word_at(id);
+            let stored = t.goes_word_store(p, id, register, inside, j(code, λ x _ => x.Within(t.program), within), tree, q,
+                j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
+            t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
+                    q(write_gpr(Rbx, a, s.gprs), t.r.profile.store(s.memory, a, word_bytes(read_gpr(register, write_gpr(Rbx, a, s.gprs))))),
+                goal, stored, λ s held => {
+                    let g = s.gprs;
+                    let m = s.memory;
+                    let w = read_gpr(register, g);
+                    let kept_value: (read_gpr(register, write_gpr(Rbx, a, g)) = w) = read_gpr_other(Rbx, register, a, g, rbx);
+                    let number: (w.toNat() = env.number(id)) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), held.right.left), value);
+                    let m2 = t.r.profile.store(m, a, word_bytes(w));
+                    let set = t.held_slot_set(live, out, env, id, w, g, m, held.left, sub, slot, inside);
+                    let back: t.Held(out, env, g, m2) = t.held_like(out, env.set_word(id, w), env, g, m2, set, env.like_set_same(id, w, number, out));
+                    let fits: (8 * id + word_bytes(w).len() <= t.r.size) = t.slot_fits(id, inside);
+                    let kept: t.StackKept(m, m2) = j(sym(t.word_rip(id, inside)), λ x _ => t.StackKept(m, t.r.profile.store(m, x, word_bytes(w))),
+                        λ k inside_k => t.stack_read_store(m, 8 * id, word_bytes(w), fits, k, inside_k));
+                    j(sym(kept_value), λ v _ => q(write_gpr(Rbx, a, g), t.r.profile.store(m, a, word_bytes(v))),
+                        held.right.right(write_gpr(Rbx, a, g), m2, t.held_scratch(out, env, g, m2, back, Rbx, a, trivial),
+                            λ x _ apart_x => read_gpr_other(Rbx, x, a, g, apart_x), kept))
+                })
+        },
+        InReg(k) => λ at => {
+            let code = p.word_home_reg(layout, id, register, k, at);
+            let moved = t.goes_block(p, 0, [MovRR(home_register(k), register)], j(code, λ x _ => x.Within(t.program), within), tree,
+                λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
+            t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
+                    q(execute_block_normal([MovRR(home_register(k), register)], s).gprs, execute_block_normal([MovRR(home_register(k), register)], s).memory),
+                goal, moved, λ s held => {
+                    let g = s.gprs;
+                    let m = s.memory;
+                    let w = read_gpr(register, g);
+                    let number: (w.toNat() = env.number(id)) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), held.right.left), value);
+                    let set = t.held_reg_shared(live, out, env, id, w, g, m, held.left, sub, k, at,
+                        λ i mi ne at_i => trans(shared(k, at, i, mi, ne, at_i), sym(number)));
+                    held.right.right(write_gpr(home_register(k), w, g), m,
+                        t.held_like(out, env.set_word(id, w), env, write_gpr(home_register(k), w, g), m, set, env.like_set_same(id, w, number, out)),
+                        λ x unused _ => read_gpr_other(home_register(k), x, w, g, t.home_apart(id, k, at, x, unused)),
+                        λ k2 _ => refl)
+                })
+        },
+    })(refl)
+}
+
+theorem List::mem_onto_acc<A>(self xs: List<A>, a: A): (acc: List<A>) → Mem(a, acc) → Mem(a, xs.onto(acc)) {
+    match xs { Nil => λ acc m => m, Cons(h, rest) => λ acc m => rest.mem_onto_acc(a, Cons(h, acc), Inr(m)) }
+}
+
+theorem List::mem_onto<A>(self xs: List<A>, a: A): (acc: List<A>) → Mem(a, xs) → Mem(a, xs.onto(acc)) {
+    match xs {
+        Nil => λ acc never => false_elim(never),
+        Cons(h, rest) => λ acc m => match m { Inl(e) => rest.mem_onto_acc(a, Cons(h, acc), Inl(e)), Inr(later) => rest.mem_onto(a, Cons(h, acc), later) },
+    }
+}
+
+// The words `ids` popped into their homes from RSP at offset `j` up, where
+// the stack holds them and then `rest`; any two of them, or of the words
+// already held, in one register hold one number.
+theorem Target::goes_pops(self t: Target, env: Env, tree: ITree<BitVec(64)>(Events::linux()), q: Gprs → Type,
+    keep: (g, g2: Gprs) → q(g) → g2.KeepsScratch(g) → q(g2), ids: List<Nat>):
+    (p: Prog) → (live: List<Nat>) → (j: Nat) → (rest: List<BitVec(64)>) →
+    ((i: Nat) → Mem(i, ids) → (i < t.words) ∧ (env.word(i).toNat() = env.number(i))) →
+    ((x: Nat) → Mem(x, ids.onto(live)) → (y: Nat) → Mem(y, ids.onto(live)) → (k: Nat) → t.homes.home(x) = InReg(k) → t.homes.home(y) = InReg(k) →
+        env.number(x) = env.number(y)) →
+    p.pops(t.layout(), ids).Within(t.program) →
+    t.GoesR(prog_len(p.pops(t.layout(), ids)), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(ids.onto(live), env, g, m) ∧
+        ((read_gpr(Rsp, g) = t.stack.at(j + 8 * ids.len())) ∧ (t.FramesAt(m, rest, j + 8 * ids.len()) ∧ q(g)))) →
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        ((read_gpr(Rsp, g) = t.stack.at(j)) ∧ (t.FramesAt(m, env.words_at(ids) ++ rest, j) ∧ q(g)))) {
+    let layout = t.layout();
+    match ids {
+        Nil => λ p live j rest _ _ _ next => next,
+        Cons(id, more) => λ p live j rest ok shares within next => {
+            let load = StackLoad(Rax, BitVec::ofNat(0));
+            let loaded = then(p, Reload(load));
+            let upped = then(loaded, Block([rsp_up()]));
+            let homed = upped.word_home(layout, id, Rax);
+            let w_homed = homed.within_trans(homed.pops(layout, more), t.program, Prog::within_pops(layout, more, homed), within);
+            let w_upped = upped.within_trans(homed, t.program, upped.within_word_home(layout, id, Rax), w_homed);
+            let w_loaded = loaded.within_before(0, Block([rsp_up()]), t.program, w_upped);
+            let shift: (j + 8 + 8 * more.len() = j + 8 * Succ(more.len())) = omega();
+            let inside = ok(id, Inl(refl));
+            let after = Cons(id, live);
+            let later = t.goes_pops(env, tree, q, keep, more, homed, after, j + 8, rest, λ i m => ok(i, Inr(m)), shares, within,
+                j(sym(shift), λ n _ => t.GoesR(prog_len(homed.pops(layout, more)), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(more.onto(after), env, g, m) ∧
+                    ((read_gpr(Rsp, g) = t.stack.at(n)) ∧ (t.FramesAt(m, rest, n) ∧ q(g)))), next));
+            let q_home = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(after, env, g, m) ∧
+                ((read_gpr(Rsp, g) = t.stack.at(j + 8)) ∧ (t.FramesAt(m, env.words_at(more) ++ rest, j + 8) ∧ q(g)));
+            let home = t.goes_word_home(live, after, env, upped, id, Rax, inside.left, refl, λ i m ne => match m { Inl(e) => false_elim(ne(e)), Inr(m2) => m2 },
+                λ k at i mi ne at_i => shares(i, more.mem_onto_acc(i, after, mi), id, more.mem_onto_acc(id, after, Inl(refl)), k, at_i, at),
+                inside.right, w_homed, tree, q_home, later);
+            let p_home = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ ((read_gpr(Rax, g) = env.word(id)) ∧
+                ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(after, env, g2, m2) → t.Spares(g, g2) → t.StackKept(m, m2) → q_home(g2, m2)));
+            let up = t.goes_block(loaded, 0, [rsp_up()], w_upped, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => p_home(u.gprs, u.memory), home);
+            let post = λ (u: MachineState<X86Memory(t.r.profile)>) => p_home(execute_block_normal([rsp_up()], u).gprs, execute_block_normal([rsp_up()], u).memory);
+            let reloaded = t.goes_reload(p, 0, load, w_loaded, tree, post, up);
+            t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat>(λ i => (stack_address(s.gprs, load.offset) = t.stack.at(i)) ∧
+                    ((i + 8 <= t.stack.size) ∧ Exists<BitVec(64)>(λ word => (read_word(t.site().data, s.memory, t.stack.at(i)) = Some(word)) ∧
+                        post(load.after(word, s))))),
+                λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+                    ((read_gpr(Rsp, s.gprs) = t.stack.at(j)) ∧ (t.FramesAt(s.memory, env.words_at(Cons(id, more)) ++ rest, j) ∧ q(s.gprs))),
+                reloaded, λ s held => {
+                    let g = s.gprs;
+                    let m = s.memory;
+                    let w = env.word(id);
+                    let frames = held.right.right.left;
+                    let g1 = write_gpr(Rax, w, g);
+                    let g2 = write_gpr(Rsp, read_gpr(Rsp, g1).add(BitVec::ofNat(8, n := 8).sign_extend(56)), g1);
+                    let zero: (j + 0 = j) = omega();
+                    let address: (stack_address(g, BitVec::ofNat(0)) = t.stack.at(j)) =
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(0, n := 8).sign_extend(56)), held.right.left),
+                            trans(displaced_at(t.stack.low, j, BitVec::ofNat(0), refl), rip_count(t.stack.low, zero)));
+                    let eight: (j + BitVec::ofNat(8, n := 8).toNat() = j + 8) = refl;
+                    let rsp2: (read_gpr(Rsp, g2) = t.stack.at(j + 8)) = trans(read_gpr_after_write(Rsp, read_gpr(Rsp, g1).add(BitVec::ofNat(8, n := 8).sign_extend(56)), g1),
+                        trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(8, n := 8).sign_extend(56)), held.right.left),
+                            trans(displaced_at(t.stack.low, j, BitVec::ofNat(8), refl), rip_count(t.stack.low, eight))));
+                    let held2: t.Held(live, env, g2, m) = t.held_scratch(live, env, g1, m, t.held_scratch(live, env, g, m, held.left, Rax, w, trivial),
+                        Rsp, read_gpr(Rsp, g1).add(BitVec::ofNat(8, n := 8).sign_extend(56)), trivial);
+                    let rax2: (read_gpr(Rax, g2) = w) = trans(read_gpr_other(Rsp, Rax, read_gpr(Rsp, g1).add(BitVec::ofNat(8, n := 8).sign_extend(56)), g1, refl),
+                        read_gpr_after_write(Rax, w, g));
+                    let then_home: p_home(g2, m) = ⟨held2, ⟨rax2, λ g3 m3 held3 spares kept => {
+                        let rsp3: (read_gpr(Rsp, g3) = t.stack.at(j + 8)) = trans(spares(Rsp, t.homes.unused(Rsp, trivial), refl), rsp2);
+                        let frames3 = t.frames_kept(m, m3, j + 8, λ k _ inside_k => kept(k, inside_k), env.words_at(more) ++ rest, j + 8, (j + 8).le_refl(),
+                            frames.right.right);
+                        let scratch: g3.KeepsScratch(g) = λ x outside clear => trans(t.spares_scratch(g2, g3, spares, x, outside, clear),
+                            trans(read_gpr_other(Rsp, x, read_gpr(Rsp, g1).add(BitVec::ofNat(8, n := 8).sign_extend(56)), g1,
+                                    x.absent_head(Rsp, Nil, x.absent_rest(Rbx, [Rsp], x.absent_rest(Rax, [Rbx, Rsp], clear)))),
+                                read_gpr_other(Rax, x, w, g, x.absent_head(Rax, [Rbx, Rsp], clear))));
+                        ⟨held3, ⟨rsp3, ⟨frames3, keep(g, g3, held.right.right.right, scratch)⟩⟩⟩
+                    }⟩⟩;
+                    Exists(j, ⟨address, ⟨frames.left, Exists(w, ⟨frames.right.left, then_home⟩)⟩⟩)
+                })
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registers into homes
+
+theorem Target::spares_trans(self t: Target, g, g2, g3: Gprs, a: t.Spares(g, g2), b: t.Spares(g2, g3)): t.Spares(g, g3) {
+    λ x unused rbx => trans(b(x, unused, rbx), a(x, unused, rbx))
+}
+
+// What registers no word lives in hold, kept.
+theorem Target::holding_spares(self t: Target, g, g2: Gprs, spares: t.Spares(g, g2), values: List<BitVec(64)>):
+    (registers: List<Gpr>) → gprs_outside(registers, home_pool()).IsTrue() → Rbx.absent_from(registers).IsTrue() → g.Holding(registers, values) → g2.Holding(registers, values) {
+    match values {
+        Nil => λ _ _ _ _ => trivial,
+        Cons(value, rest) => λ registers => match registers {
+            Nil => λ _ _ _ => trivial,
+            Cons(register, more) => λ outside rbx holding => {
+                let out = Bool::is_true_and(register.absent_from(home_pool()), gprs_outside(more, home_pool()), outside);
+                ⟨trans(spares(register, t.homes.unused(register, out.left), trans(Rbx.same_comm(register), Rbx.absent_head(register, more, rbx))), holding.left),
+                    t.holding_spares(g, g2, spares, rest, more, out.right, Rbx.absent_rest(register, more, rbx), holding.right)⟩
+            },
+        },
+    }
+}
+
+theorem List::mem_minus_nil(self out: List<Nat>, i: Nat, m: Mem(i, out)): Mem(i, out.minus(Nil)) {
+    out.mem_filter_of(λ (id: Nat) => absent(id, Nil), i, refl, m)
+}
+
+theorem List::mem_minus_cons(self out: List<Nat>, rest: List<Nat>, i, id: Nat, m: Mem(i, out.minus(rest)), ne: i ≠ id): Mem(i, out.minus(Cons(id, rest))) {
+    let kept: (absent(i, rest) = True) = out.mem_filter_holds(i, λ (x: Nat) => absent(x, rest), m);
+    let differs: (i.differs(id) = True) = (match i.eq_dec(id) as λ d => (match d { Inl(_) => False, Inr(_) => True }) = True {
+        Inl(e) => false_elim(ne(e)),
+        Inr(_) => refl,
+    });
+    out.mem_filter_of(λ (x: Nat) => absent(x, Cons(id, rest)), i,
+        j(sym(kept), λ b _ => i.differs(id) && b = True, j(sym(differs), λ b _ => b && True = True, refl)),
+        out.mem_filter(i, λ (x: Nat) => absent(x, rest), m))
+}
+
+// `Prog::words_from` from registers holding `values`, as many as the words:
+// the words set to them where `out` is live.
+theorem Target::goes_words_from(self t: Target, out: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), q: Gprs → X86Memory(t.r.profile) → Type,
+    ids: List<Nat>): (registers: List<Gpr>) → (values: List<BitVec(64)>) → (p: Prog) → (live: List<Nat>) → (env: Env) →
+    ((i: Nat) → Mem(i, out.minus(ids)) → Mem(i, live)) → ((i: Nat) → Mem(i, ids) → i < t.words) → t.homes.moves_apart(out, ids).IsTrue() →
+    gprs_outside(registers, home_pool()).IsTrue() → Rbx.absent_from(registers).IsTrue() → ids.len() <= registers.len() → ids.len() <= values.len() →
+    p.words_from(t.layout(), out, ids, registers).Within(t.program) → t.GoesR(prog_len(p.words_from(t.layout(), out, ids, registers)), tree, q) →
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (g.Holding(registers, values) ∧
+        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env.set_words(ids, values), g2, m2) → t.Spares(g, g2) → q(g2, m2)))) {
+    let layout = t.layout();
+    match ids {
+        Nil => λ registers values p live env sub _ _ _ _ _ _ _ next => t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory),
+            λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (s.gprs.Holding(registers, values) ∧
+                ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env, g2, m2) → t.Spares(s.gprs, g2) → q(g2, m2))),
+            next, λ s held => held.right.right(s.gprs, s.memory, t.held_sub(out, live, env, s.gprs, s.memory, held.left, λ i m => sub(i, out.mem_minus_nil(i, m))),
+                λ x _ _ => refl)),
+        Cons(id, rest) => λ registers => match registers {
+            Nil => λ _ _ _ _ _ _ _ _ _ short => false_elim(Nat::not_succ_le_zero(rest.len(), short)),
+            Cons(register, more) => λ values => match values {
+                Nil => λ _ _ _ _ _ _ _ _ _ none => false_elim(Nat::not_succ_le_zero(rest.len(), none)),
+                Cons(value, vs) => λ p live env sub inside apart outside rbx short long within next => {
+                    let out1 = out.minus(rest);
+                    let stepped = p.word_from(layout, out1, id, register);
+                    let w_step = stepped.within_trans(stepped.words_from(layout, out, rest, more), t.program, Prog::within_words_from(layout, out, rest, more, stepped), within);
+                    let aparts = Bool::is_true_and(t.homes.apart(id, out1), t.homes.moves_apart(out, rest), apart);
+                    let outs = Bool::is_true_and(register.absent_from(home_pool()), gprs_outside(more, home_pool()), outside);
+                    let env1 = env.set_word(id, value);
+                    let later = t.goes_words_from(out, tree, q, rest, more, vs, stepped, out1, env1, λ i m => m, λ i m => inside(i, Inr(m)), aparts.right,
+                        outs.right, Rbx.absent_rest(register, more, rbx), omega(short), omega(long), within, next);
+                    let q1 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(out1, env1, g, m) ∧ (g.Holding(more, vs) ∧
+                        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env1.set_words(rest, vs), g2, m2) → t.Spares(g, g2) → q(g2, m2)));
+                    let moved = t.goes_word_from(live, out1, env, p, id, register, inside(id, Inl(refl)), trans(Rbx.same_comm(register), Rbx.absent_head(register, more, rbx)),
+                        λ i m ne => sub(i, out.mem_minus_cons(rest, i, id, m, ne)), aparts.left, w_step, tree, q1, later);
+                    t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+                            ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out1, env.set_word(id, read_gpr(register, s.gprs)), g2, m2) → t.Spares(s.gprs, g2) → q1(g2, m2)),
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ (s.gprs.Holding(Cons(register, more), Cons(value, vs)) ∧
+                            ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env.set_words(Cons(id, rest), Cons(value, vs)), g2, m2) → t.Spares(s.gprs, g2) → q(g2, m2))),
+                        moved, λ s held => ⟨held.left, λ g2 m2 held2 spares => ⟨j(held.right.left.left, λ v _ => t.Held(out1, env.set_word(id, v), g2, m2), held2),
+                            ⟨t.holding_spares(s.gprs, g2, spares, vs, more, outs.right, Rbx.absent_rest(register, more, rbx), held.right.left.right),
+                            λ g3 m3 held3 spares3 => held.right.right(g3, m3, held3, t.spares_trans(s.gprs, g2, g3, spares, spares3))⟩⟩⟩)
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A call's way out
+
+// A room one past `d` still counts in a word.
+theorem Target::room_small(self t: Target, d: Nat, succ: t.room = Succ(d)): Succ(d) < Nat::pow(2, 64) {
+    let was: (Succ(d) * (8 * (t.words + 1)) <= t.index) = j(succ, λ r _ => r * (8 * (t.words + 1)) <= t.index, t.roomy);
+    let one_le: (1 * Succ(d) <= (8 * (t.words + 1)) * Succ(d)) = Nat::mul_le_mono_r(Succ(d), 1, 8 * (t.words + 1), omega());
+    let one: (Succ(d) <= Succ(d) * (8 * (t.words + 1))) = j(Nat::mul_comm(8 * (t.words + 1), Succ(d)), λ x _ => Succ(d) <= x,
+        j(Nat::mul_left_one(Succ(d)), λ x _ => x <= (8 * (t.words + 1)) * Succ(d), one_le));
+    let below: (Succ(d) <= t.index) = Nat::le_trans(Succ(d), Succ(d) * (8 * (t.words + 1)), t.index, one, was);
+    omega(below, t.framed, t.stack_canonical, canonical_below_top())
+}
+
+// `Prog::call_leaves`, from the callee's frame at offset `index` with no
+// words above it and one less room, RSP back at the caller's frame and the
+// caller's frames there: the caller's activation again.
+theorem Target::goes_call_leave(self t: Target, live: List<Nat>, env: Env, p: Prog, d: Nat, succ: t.room = Succ(d),
+    index: Nat, framed: index + 8 * Nil<BitVec(64)>.len() <= t.stack.size, roomy: d * (8 * (t.words + 1)) <= index,
+    q: Gprs → Type, keep: (g, g2: Gprs) → q(g) → g2.KeepsScratch(g) → q(g2),
+    within: p.call_leaves(t.layout()).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.GoesR(prog_len(p.call_leaves(t.layout())), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ q(g))):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.activation(index, Nil, d, framed, roomy).Held(live, env, g, m) ∧
+        ((read_gpr(Rsp, g) = t.frame()) ∧ (t.FramesAt(m, t.frames, t.index) ∧ q(g)))) {
+    let layout = t.layout();
+    let so = layout.stack_offset();
+    let fo = so + 8;
+    let ro = so + 16;
+    let slots: (so + 24 <= t.r.size) = t.fits;
+    let u = t.activation(index, Nil, d, framed, roomy);
+    let fewer: (d * (8 * (t.words + 1)) <= Succ(d) * (8 * (t.words + 1))) = Nat::mul_le_mono_r(8 * (t.words + 1), d, Succ(d), omega());
+    let was: (Succ(d) * (8 * (t.words + 1)) <= t.index) = j(succ, λ r _ => r * (8 * (t.words + 1)) <= t.index, t.roomy);
+    let roomy_d: (d * (8 * (t.words + 1)) <= t.index) = Nat::le_trans(d * (8 * (t.words + 1)), Succ(d) * (8 * (t.words + 1)), t.index, fewer, was);
+    let v1 = t.activation(t.index, t.frames, d, t.framed, roomy_d);
+    let small: (Succ(d) < Nat::pow(2, 64)) = t.room_small(d, succ);
+    let f1 = then(p, Block([MovRI(Rbx, layout.frame_at())]));
+    let back = then(f1, Store(WordStore(Rbx, Rsp)));
+    let r1 = then(back, Block([MovRI(Rbx, layout.room_at())]));
+    let r2 = then(r1, Load(WordLoad(Rax, Rbx)));
+    let r3 = then(r2, Block([AddRI8(Rax, BitVec::ofNat(1))]));
+    let w_r3 = r3.within_before(0, Store(WordStore(Rbx, Rax)), t.program, within);
+    let w_r2 = r2.within_before(0, Block([AddRI8(Rax, BitVec::ofNat(1))]), t.program, w_r3);
+    let w_r1 = r1.within_before(0, Load(WordLoad(Rax, Rbx)), t.program, w_r2);
+    let w_back = back.within_before(0, Block([MovRI(Rbx, layout.room_at())]), t.program, w_r1);
+    let w_f1 = f1.within_before(0, Store(WordStore(Rbx, Rsp)), t.program, w_back);
+    let final_post = λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ q(s.gprs);
+    let st2 = t.goes_store(r3, 0, WordStore(Rbx, Rax), within, tree, final_post, next);
+    let a3 = λ (s: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(Rbx) = True) ∧ (t.writes().writable(s.memory, read_gpr(Rbx, s.gprs), 8) ∧
+        (t.site().Resident(word_store_after(t.writes(), WordStore(Rbx, Rax), s).memory) ∧ final_post(word_store_after(t.writes(), WordStore(Rbx, Rax), s))));
+    let add = t.goes_block(r2, 0, [AddRI8(Rax, BitVec::ofNat(1))], w_r3, tree, a3, st2);
+    let a2 = λ (s: MachineState<X86Memory(t.r.profile)>) => a3(execute_block_normal([AddRI8(Rax, BitVec::ofNat(1))], s));
+    let ld = t.goes_load(r1, 0, WordLoad(Rax, Rbx), w_r2, tree, a2, add);
+    let a1: MachineState<X86Memory(t.r.profile)> → Type = λ s => Exists<BitVec(64)>(λ word => (read_gpr(Rbx, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        ((read_word(t.site().data, s.memory, read_gpr(Rbx, s.gprs)) = Some(word)) ∧ a2(word_load_after(WordLoad(Rax, Rbx), word, s))));
+    let mv2 = t.goes_block(back, 0, [MovRI(Rbx, layout.room_at())], w_r1, tree, a1, ld);
+    let a1s = λ (s: MachineState<X86Memory(t.r.profile)>) => a1(execute_block_normal([MovRI(Rbx, layout.room_at())], s));
+    let st1 = t.goes_store(f1, 0, WordStore(Rbx, Rsp), w_back, tree, a1s, mv2);
+    let a0 = λ (s: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(Rbx) = True) ∧ (t.writes().writable(s.memory, read_gpr(Rbx, s.gprs), 8) ∧
+        (t.site().Resident(word_store_after(t.writes(), WordStore(Rbx, Rsp), s).memory) ∧ a1s(word_store_after(t.writes(), WordStore(Rbx, Rsp), s))));
+    let mv1 = t.goes_block(p, 0, [MovRI(Rbx, layout.frame_at())], w_f1, tree, a0, st1);
+    λ s here resident held => {
+        let g = s.gprs;
+        let m = s.memory;
+        let rip_f = sym(t.at_rip(fo, omega(slots)));
+        let rip_r = sym(t.at_rip(ro, omega(slots)));
+        let frame_bytes = word_bytes(t.frame());
+        let m2 = t.r.profile.store(m, layout.frame_at(), word_bytes(read_gpr(Rsp, g)));
+        let stored1: v1.Held(live, env, g, t.r.profile.store(m, layout.frame_at(), frame_bytes)) =
+            u.held_frame_store(live, env, g, m, held.left, t.index, t.frames, t.framed, roomy_d, held.right.right.left);
+        let held1: v1.Held(live, env, g, m2) = j(sym(held.right.left), λ x _ => v1.Held(live, env, g, t.r.profile.store(m, layout.frame_at(), word_bytes(x))), stored1);
+        let g1 = write_gpr(Rbx, layout.frame_at(), g);
+        let g3 = write_gpr(Rbx, layout.room_at(), g1);
+        let held3: v1.Held(live, env, g3, m2) = v1.held_scratch(live, env, g1, m2, v1.held_scratch(live, env, g, m2, held1, Rbx, layout.frame_at(), trivial),
+            Rbx, layout.room_at(), trivial);
+        let v = held3.proof.left.witness;
+        let ro_fits: (ro + 8 <= t.r.size) = omega(slots);
+        let read = v1.read_at(v, m2, held3.proof.left.proof.left, ro, ro_fits);
+        let word = word_in(v, ro);
+        let counted: (word.toNat() = d) = held3.proof.left.proof.right.right.right.right.right.left;
+        let word2 = word.add(BitVec::ofNat(1, n := 8).sign_extend(56));
+        let up: (word2.toNat() = t.room) = trans(count_up(word, d, counted, small), sym(succ));
+        let g4 = write_gpr(Rax, word, g3);
+        let g5 = write_gpr(Rax, word2, g4);
+        let held5: v1.Held(live, env, g5, m2) = v1.held_scratch(live, env, g4, m2, v1.held_scratch(live, env, g3, m2, held3, Rax, word, trivial), Rax, word2, trivial);
+        let m3 = t.r.profile.store(m2, layout.room_at(), word_bytes(word2));
+        let held_t: t.Held(live, env, g5, m3) = v1.held_room_store(live, env, g5, m2, held5, t.room, word2, up, t.roomy);
+        let scratch: g5.KeepsScratch(g) = λ x outside clear => {
+            let rax: (Rax.same(x) = False) = x.absent_head(Rax, [Rbx, Rsp], clear);
+            let rbx: (Rbx.same(x) = False) = x.absent_head(Rbx, [Rsp], x.absent_rest(Rax, [Rbx, Rsp], clear));
+            trans(read_gpr_other(Rax, x, word2, g4, rax), trans(read_gpr_other(Rax, x, word, g3, rax),
+                trans(read_gpr_other(Rbx, x, layout.room_at(), g1, rbx), read_gpr_other(Rbx, x, layout.frame_at(), g, rbx))))
+        };
+        let resident2 = j(rip_f, λ a _ => t.site().Resident(t.r.profile.store(m, a, word_bytes(read_gpr(Rsp, g)))),
+            t.store_resident(m, fo, word_bytes(read_gpr(Rsp, g)), omega(slots), resident));
+        let resident3 = j(rip_r, λ a _ => t.site().Resident(t.r.profile.store(m2, a, word_bytes(word2))),
+            t.store_resident(m2, ro, word_bytes(word2), omega(slots), resident2));
+        mv1(s, here, resident, ⟨refl, ⟨j(rip_f, λ a _ => t.writes().writable(m, a, 8), t.writable(m, fo, 8, omega(slots))), ⟨resident2,
+            Exists(word, ⟨j(rip_r, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left),
+                ⟨j(rip_r, λ a _ => read_word(t.site().data, m2, a) = Some(word), read.right),
+                    ⟨refl, ⟨j(rip_r, λ a _ => t.writes().writable(m2, a, 8), t.writable(m2, ro, 8, omega(slots))),
+            ⟨resident3, ⟨held_t, keep(g, g5, held.right.right.right, scratch)⟩⟩⟩⟩⟩⟩)⟩⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Words set in order
+
+theorem Env::set_words_outside(self env: Env, ids: List<Nat>): (words: List<BitVec(64)>) → (i: Nat) → absent(i, ids).IsTrue() →
+    env.set_words(ids, words).number(i) = env.number(i) {
+    match ids {
+        Nil => λ words i _ => refl,
+        Cons(id, rest) => λ words => match words {
+            Nil => λ i _ => refl,
+            Cons(w, ws) => λ i none => {
+                let parts = Bool::is_true_and(i.differs(id), absent(i, rest), none);
+                trans(env.set_word(id, w).set_words_outside(rest, ws, i, parts.right), env.number_set_other(id, w, i, i.differs_ne(id, parts.left)))
+            },
+        },
+    }
+}
+
+theorem Env::set_words_buffers(self env: Env, ids: List<Nat>): (words: List<BitVec(64)>) → (env.set_words(ids, words).buffers = env.buffers) ∧ (env.set_words(ids, words).args = env.args) {
+    match ids {
+        Nil => λ words => ⟨refl, refl⟩,
+        Cons(id, rest) => λ words => match words { Nil => ⟨refl, refl⟩, Cons(w, ws) => env.set_word(id, w).set_words_buffers(rest, ws) },
+    }
+}
+
+// Two environments with the same words set read alike on them.
+theorem Env::set_words_agree(ids: List<Nat>): (a, b: Env) → (words: List<BitVec(64)>) → ids.len() <= words.len() → (i: Nat) → Mem(i, ids) →
+    a.set_words(ids, words).number(i) = b.set_words(ids, words).number(i) {
+    match ids {
+        Nil => λ a b words _ i never => false_elim(never),
+        Cons(id, rest) => λ a b words => match words {
+            Nil => λ long => false_elim(Nat::not_succ_le_zero(rest.len(), long)),
+            Cons(w, ws) => λ long i m => (match absent(i, rest) as λ x => absent(i, rest) = x →
+                    a.set_word(id, w).set_words(rest, ws).number(i) = b.set_word(id, w).set_words(rest, ws).number(i) {
+                False => λ f => Env::set_words_agree(rest, a.set_word(id, w), b.set_word(id, w), ws, omega(long), i, absent_false_mem(i, rest, f)),
+                True => λ tr => {
+                    let none: absent(i, rest).IsTrue() = Bool::is_true_of_eq(tr);
+                    let same: (i = id) = match m { Inl(e) => e, Inr(later) => false_elim(absent_mem(i, rest, none, i, later)(refl)) };
+                    let here = λ (e: Env) => trans(e.set_word(id, w).set_words_outside(rest, ws, i, none),
+                        j(sym(same), λ x _ => e.set_word(id, w).number(x) = w.toNat(), e.number_set_here(id, w)));
+                    trans(here(a), sym(here(b)))
+                },
+            })(refl),
+        },
+    }
+}
+
+// The callee's environment, on the words its body needs: what the caller's
+// words set to the arguments read there.
+theorem Env::entered_like(self env: Env, params, entry: List<Nat>, values: List<BitVec(64)>, long: params.len() <= values.len(),
+    within: (i: Nat) → Mem(i, entry) → Mem(i, params)): env.set_words(params, values).Like(Env(Nil, env.buffers, env.args).set_words(params, values), entry) {
+    let mine = env.set_words_buffers(params, values);
+    let theirs = Env(Nil, env.buffers, env.args).set_words_buffers(params, values);
+    ⟨λ i m => Env::set_words_agree(params, env, Env(Nil, env.buffers, env.args), values, long, i, within(i, m)),
+        ⟨trans(mine.left, sym(theirs.left)), trans(mine.right, sym(theirs.right))⟩⟩
+}
+
+// A register outside the list, written: the list holds what it held.
+theorem Gprs::holding_write(self g: Gprs, register: Gpr, value: BitVec(64), values: List<BitVec(64)>):
+    (registers: List<Gpr>) → register.absent_from(registers).IsTrue() → g.Holding(registers, values) → write_gpr(register, value, g).Holding(registers, values) {
+    match values {
+        Nil => λ _ _ _ => trivial,
+        Cons(v, vs) => λ registers => match registers {
+            Nil => λ _ _ => trivial,
+            Cons(r, more) => λ absent holding => ⟨trans(read_gpr_other(register, r, value, g, trans(register.same_comm(r), register.absent_head(r, more, absent))), holding.left),
+                g.holding_write(register, value, vs, more, register.absent_rest(r, more, absent), holding.right)⟩,
+        },
+    }
+}
+
+// The command line, read off the claim.
+theorem Target::held_args(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)): env.args = t.args {
+    held.proof.left.proof.right.right.left
+}
+
+// ---------------------------------------------------------------------------
+// The callee's way in and out
+
+// At procedure `index`'s label, RSP at offset `index2` of the stack with
+// `frames2` there and the call registers holding `values`: its frame
+// stored, the callee's activation, and its parameters set to the values
+// where its body needs them.
+theorem Target::goes_callee_entry(self t: Target, live: List<Nat>, env: Env, pre: Prog, proc: Procedure, index, index2: Nat, frames2: List<BitVec(64)>,
+    framed2: index2 + 8 * frames2.len() <= t.stack.size, roomy2: t.room * (8 * (t.words + 1)) <= index2, values: List<BitVec(64)>,
+    tree: ITree<BitVec(64)>(Events::linux()), within: proc.entry_code(pre, t.layout(), index).Within(t.program),
+    inside: (i: Nat) → Mem(i, proc.params) → i < t.words, apart: t.homes.moves_apart(proc.body.live_in(t.homes, proc.results), proc.params).IsTrue(),
+    covered: proc.body.live_in(t.homes, proc.results).within(proc.params).IsTrue(),
+    short: proc.params.len() <= 6, long: proc.params.len() <= values.len(),
+    next: t.activation(index2, frames2, t.room, framed2, roomy2).At(prog_len(proc.entry_code(pre, t.layout(), index)), proc.body.live_in(t.homes, proc.results),
+        tree, env.set_words(proc.params, values))):
+    t.Goes(prog_len(pre), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
+        ((read_gpr(Rsp, s.gprs) = t.stack.at(index2)) ∧ (t.FramesAt(s.memory, frames2, index2) ∧ s.gprs.Holding(call_registers(), values)))) {
+    let layout = t.layout();
+    let c = t.activation(index2, frames2, t.room, framed2, roomy2);
+    let entry = proc.body.live_in(t.homes, proc.results);
+    let so = layout.stack_offset();
+    let fo = so + 8;
+    let slots: (so + 24 <= t.r.size) = t.fits;
+    let lab = pre.label(layout.procedure_label(index));
+    let f1 = then(lab, Block([MovRI(Rbx, layout.frame_at())]));
+    let framed = then(f1, Store(WordStore(Rbx, Rsp)));
+    let w_framed = framed.within_trans(framed.words_from(layout, entry, proc.params, call_registers()), t.program,
+        Prog::within_words_from(layout, entry, proc.params, call_registers(), framed), within);
+    let w_f1 = f1.within_before(0, Store(WordStore(Rbx, Rsp)), t.program, w_framed);
+    let w_lab = lab.within_before(0, Block([MovRI(Rbx, layout.frame_at())]), t.program, w_f1);
+    let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => c.Held(entry, env.set_words(proc.params, values), g, m);
+    let six: (call_registers().len() = 6) = refl;
+    let none: ((i: Nat) → Mem(i, entry.minus(proc.params)) → Mem(i, Nil<Nat>)) = λ i m => {
+        let kept: (absent(i, proc.params) = True) = entry.mem_filter_holds(i, λ (x: Nat) => absent(x, proc.params), m);
+        let wider = entry.within_mem(proc.params, covered, i, entry.mem_filter(i, λ (x: Nat) => absent(x, proc.params), m));
+        false_elim(absent_mem(i, proc.params, Bool::is_true_of_eq(kept), i, wider)(refl))
+    };
+    let wf = c.goes_words_from(entry, tree, q, proc.params, call_registers(), values, framed, Nil, env, none, inside, apart, trivial, trivial,
+        omega(short, six), long, within, next);
+    let p_wf = λ (s: MachineState<X86Memory(t.r.profile)>) => c.Held(Nil, env, s.gprs, s.memory) ∧ (s.gprs.Holding(call_registers(), values) ∧
+        ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → c.Held(entry, env.set_words(proc.params, values), g2, m2) → c.Spares(s.gprs, g2) → q(g2, m2)));
+    let st = t.goes_store(f1, 0, WordStore(Rbx, Rsp), w_framed, tree, p_wf, wf);
+    let a1 = λ (s: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(Rbx) = True) ∧ (t.writes().writable(s.memory, read_gpr(Rbx, s.gprs), 8) ∧
+        (t.site().Resident(word_store_after(t.writes(), WordStore(Rbx, Rsp), s).memory) ∧ p_wf(word_store_after(t.writes(), WordStore(Rbx, Rsp), s))));
+    let mv = t.goes_block(lab, 0, [MovRI(Rbx, layout.frame_at())], w_f1, tree, a1, st);
+    let a0 = λ (s: MachineState<X86Memory(t.r.profile)>) => a1(execute_block_normal([MovRI(Rbx, layout.frame_at())], s));
+    let lb = t.goes_block(pre, layout.procedure_label(index), [], w_lab, tree, a0, mv);
+    λ s here resident held => {
+        let g = s.gprs;
+        let m = s.memory;
+        let rip_f = sym(t.at_rip(fo, omega(slots)));
+        let g1 = write_gpr(Rbx, layout.frame_at(), g);
+        let m2 = t.r.profile.store(m, layout.frame_at(), word_bytes(read_gpr(Rsp, g)));
+        let stored: c.Held(live, env, g, t.r.profile.store(m, layout.frame_at(), word_bytes(t.stack.at(index2)))) =
+            t.held_frame_store(live, env, g, m, held.left, index2, frames2, framed2, roomy2, held.right.right.left);
+        let held2: c.Held(live, env, g, m2) = j(sym(held.right.left), λ x _ => c.Held(live, env, g, t.r.profile.store(m, layout.frame_at(), word_bytes(x))), stored);
+        let held3: c.Held(Nil, env, g1, m2) = c.held_scratch(Nil, env, g, m2, c.held_sub(Nil, live, env, g, m2, held2, λ i never => false_elim(never)), Rbx, layout.frame_at(), trivial);
+        let holding: g1.Holding(call_registers(), values) = g.holding_write(Rbx, layout.frame_at(), values, call_registers(), trivial, held.right.right.right);
+        lb(s, here, resident, ⟨refl, ⟨j(rip_f, λ a _ => t.writes().writable(m, a, 8), t.writable(m, fo, 8, omega(slots))),
+            ⟨j(rip_f, λ a _ => t.site().Resident(t.r.profile.store(m, a, word_bytes(read_gpr(Rsp, g)))), t.store_resident(m, fo, word_bytes(read_gpr(Rsp, g)), omega(slots), resident)),
+             ⟨held3, ⟨holding, λ g2 m3 h _ => h⟩⟩⟩⟩⟩)
+    }
+}
+
+// Past the body, its results live: into the call registers, RSP the
+// frame, and RET to the address on top, the frame popped, every word
+// of the callee's dead, and the stack above as it was.
+theorem Target::goes_callee_return(self t: Target, after: Env, b: Prog, results: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()),
+    within: then(then(then(b.words_to(t.layout(), results, call_registers()), Block([MovRI(Rbx, t.layout().frame_at())])), Load(WordLoad(Rsp, Rbx))), Ret).Within(t.program),
+    inside: (i: Nat) → Mem(i, results) → i < t.words, ret: BitVec(64), rest: List<BitVec(64)>, top: t.frames = Cons(ret, rest),
+    framed0: t.index + 8 * Nil<BitVec(64)>.len() <= t.stack.size,
+    back: (s: MachineState<X86Memory(t.r.profile)>) → s.rip = ret → t.site().Resident(s.memory) →
+        t.activation(t.index, Nil, t.room, framed0, t.roomy).Held(Nil, after, s.gprs, s.memory) → read_gpr(Rsp, s.gprs) = t.stack.at(t.index + 8) →
+        t.FramesAt(s.memory, rest, t.index + 8) → s.gprs.Holding(call_registers(), after.words_at(results)) → Sim(t.io(), tree, s)):
+    t.At(prog_len(b), results, tree, after) {
+    let layout = t.layout();
+    let so = layout.stack_offset();
+    let fo = so + 8;
+    let slots: (so + 24 <= t.r.size) = t.fits;
+    let p1 = b.words_to(layout, results, call_registers());
+    let p2 = then(p1, Block([MovRI(Rbx, layout.frame_at())]));
+    let p3 = then(p2, Load(WordLoad(Rsp, Rbx)));
+    let w_p3 = p3.within_before(0, Ret, t.program, within);
+    let w_p2 = p2.within_before(0, Load(WordLoad(Rsp, Rbx)), t.program, w_p3);
+    let w_p1 = p1.within_before(0, Block([MovRI(Rbx, layout.frame_at())]), t.program, w_p2);
+    let p_ret = λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(results, after, s.gprs, s.memory) ∧
+        ((read_gpr(Rsp, s.gprs) = t.frame()) ∧ s.gprs.Holding(call_registers(), after.words_at(results)));
+    let returned = t.io().goes_ret(t.program, t.origin, t.stack, t.stack_writes, t.code_fits(), within.witness, p3, 0, within.proof, tree, p_ret,
+        λ _ => t.index, λ _ => ret,
+        λ s held => {
+            let frames = j(top, λ fs _ => t.FramesAt(s.memory, fs, t.index), t.held_frames(results, after, s.gprs, s.memory, held.left));
+            ⟨held.right.left, ⟨frames.left, frames.right.left⟩⟩
+        },
+        λ s held resident => {
+            let g = s.gprs;
+            let g2 = write_gpr(Rsp, read_gpr(Rsp, g).add(BitVec::ofNat(8)), g);
+            let frames = j(top, λ fs _ => t.FramesAt(s.memory, fs, t.index), t.held_frames(results, after, g, s.memory, held.left));
+            let u = t.activation(t.index, Nil, t.room, framed0, t.roomy);
+            let reframed: u.Held(Nil, after, g, s.memory) = t.held_reframed(Nil, after, g, s.memory,
+                t.held_sub(Nil, results, after, g, s.memory, held.left, λ i never => false_elim(never)), Nil, framed0, trivial);
+            back(return_near_after(ret, s), refl, resident, u.held_scratch(Nil, after, g, s.memory, reframed, Rsp, read_gpr(Rsp, g).add(BitVec::ofNat(8)), trivial),
+                trans(read_gpr_after_write(Rsp, read_gpr(Rsp, g).add(BitVec::ofNat(8)), g),
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(8)), held.right.left), pop_at(t.stack.low, t.index))),
+                frames.right.right, g.holding_write(Rsp, read_gpr(Rsp, g).add(BitVec::ofNat(8)), after.words_at(results), call_registers(), trivial, held.right.right))
+        });
+    let loaded = t.goes_load(p2, 0, WordLoad(Rsp, Rbx), w_p3, tree, p_ret, returned);
+    let a2: MachineState<X86Memory(t.r.profile)> → Type = λ s => Exists<BitVec(64)>(λ word => (read_gpr(Rbx, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        ((read_word(t.site().data, s.memory, read_gpr(Rbx, s.gprs)) = Some(word)) ∧ p_ret(word_load_after(WordLoad(Rsp, Rbx), word, s))));
+    let moved = t.goes_block(p1, 0, [MovRI(Rbx, layout.frame_at())], w_p2, tree, a2, loaded);
+    let q: Gprs → X86Memory(t.r.profile) → Type = λ (g: Gprs) (m: X86Memory(t.r.profile)) => Exists<BitVec(64)>(λ word =>
+        (read_gpr(Rbx, write_gpr(Rbx, layout.frame_at(), g)).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        ((read_word(t.site().data, m, read_gpr(Rbx, write_gpr(Rbx, layout.frame_at(), g))) = Some(word)) ∧
+         (t.Held(results, after, write_gpr(Rsp, word, write_gpr(Rbx, layout.frame_at(), g)), m) ∧
+          ((read_gpr(Rsp, write_gpr(Rsp, word, write_gpr(Rbx, layout.frame_at(), g))) = t.frame()) ∧
+           write_gpr(Rsp, word, write_gpr(Rbx, layout.frame_at(), g)).Holding(call_registers(), after.words_at(results))))));
+    let moved2 = t.goes_weaken(prog_len(p1), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => a2(execute_block_normal([MovRI(Rbx, layout.frame_at())], s)),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory), moved, λ s h => h);
+    let words = t.goes_words_to(results, after, tree, q, results, call_registers(), b, λ i m => ⟨inside(i, m), m⟩, trivial, trivial, w_p1, moved2);
+    t.goes_weaken(prog_len(b), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(results, after, s.gprs, s.memory) ∧
+            ((g2: Gprs) → t.Held(results, after, g2, s.memory) → after.InRegisters(g2, results, call_registers()) → g2.KeepsOutside(s.gprs, call_registers()) → q(g2, s.memory)),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(results, after, s.gprs, s.memory), words,
+        λ s held => ⟨held, λ g2 held2 passed _ => {
+            let m = s.memory;
+            let g3 = write_gpr(Rbx, layout.frame_at(), g2);
+            let g4 = write_gpr(Rsp, t.frame(), g3);
+            let v = held2.proof.left.witness;
+            let read = t.read_at(v, m, held2.proof.left.proof.left, fo, omega(slots));
+            let frame: (word_in(v, fo) = t.frame()) = t.held_frame_slot(results, after, g2, m, held2);
+            let rip_f = sym(t.at_rip(fo, omega(slots)));
+            Exists(t.frame(), ⟨j(rip_f, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left),
+                ⟨j(rip_f, λ a _ => read_word(t.site().data, m, a) = Some(t.frame()), trans(read.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), frame))),
+                 ⟨t.held_scratch(results, after, g3, m, t.held_scratch(results, after, g2, m, held2, Rbx, layout.frame_at(), trivial), Rsp, t.frame(), trivial),
+                  ⟨read_gpr_after_write(Rsp, t.frame(), g3),
+                   g3.holding_write(Rsp, t.frame(), after.words_at(results), call_registers(), trivial,
+                       g2.holding_write(Rbx, layout.frame_at(), after.words_at(results), call_registers(), trivial, passed))⟩⟩⟩⟩)
+        }⟩)
+}

@@ -102,8 +102,7 @@ fn Stmt::spelled_stmt(self s: Stmt) → Option<List<Nat>> {
         Repeat(body, again) => Some([4, again]).spell_then(body.spelled_stmt()),
         Exit(status) => Some([5, status]),
         Arg(index, buf, len) => Some([6, index, buf, len]),
-        // Not compiled yet (docs/native-procedures-design.md §7).
-        Perform(_, _, _) => None,
+        Perform(procedure, args, results) => Some(Cons(8, Cons(procedure, Cons(args.len(), List::append(args, Cons(results.len(), results)))))),
     }
 }
 
@@ -114,13 +113,32 @@ fn List::spell_buffers(self buffers: List<Buffer>) → List<Nat> {
     }
 }
 
-// `[1]`, its words, its buffers' count and each buffer, then `main`; or `[0]`.
+// Each procedure: its parameters' count and ids, its results' count and
+// ids, then its body.
+fn List::spell_procedures(self procs: List<Procedure>) → Option<List<Nat>> {
+    match procs {
+        Nil => Some([]),
+        Cons(proc, rest) => Some(Cons(proc.params.len(), List::append(proc.params, Cons(proc.results.len(), proc.results))))
+            .spell_then(proc.body.spelled_stmt()).spell_then(rest.spell_procedures()),
+    }
+}
+
+// `[1]`, its words, its buffers' count and each buffer, then `main`; with
+// procedures `[2]`, its words, its depth, its buffers, the procedures'
+// count and each procedure, then `main`; or `[0]`.
 fn Source::spelled(self src: Source) → List<Nat> {
     match src.functions {
         Cons(_, _) => [0],
-        Nil => match src.procedures { Cons(_, _) => [0], Nil => match src.main.spelled_stmt() {
-            None => [0],
-            Some(main) => Cons(1, Cons(src.words, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), main)))),
-        } },
+        Nil => match src.procedures {
+            Cons(_, _) => match Some(Cons(2, Cons(src.words, Cons(src.depth, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), [src.procedures.len()]))))))
+                    .spell_then(src.procedures.spell_procedures()).spell_then(src.main.spelled_stmt()) {
+                None => [0],
+                Some(spelled) => spelled,
+            },
+            Nil => match src.main.spelled_stmt() {
+                None => [0],
+                Some(main) => Cons(1, Cons(src.words, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), main)))),
+            },
+        },
     }
 }

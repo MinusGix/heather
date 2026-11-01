@@ -1,0 +1,126 @@
+// Compiling a checked-reads program with the facts found on demand
+// (docs/facts-on-demand-design.md §5).
+//
+// `generate compile_reads(p, "name", budget);` publishes `fn name() →
+// Compiled(p)`: each of `p`'s reads with a proof that it is in bounds where
+// one is found, and its check kept where none is. For each read it asks for
+// `InBounds` (lib/std/tactic/fact_request.hthr): the fact's producers first
+// (lib/lang/facts/in_bounds.hthr: user lemmas, then the range analysis),
+// then this compiler's own fallback, the exhaustive check over at most
+// `budget` argument lists. A read nothing proves keeps its check, which
+// `Compiled::runs` says is always correct; the compiled program is the
+// ordinary declaration the host checks, and the kernel with it.
+import list;
+import logic;
+import nat;
+import option;
+import string;
+import tactic;
+import fact_request;
+import checked_reads;
+import in_bounds;
+
+fn fail_reads<A>(why: String) → Tac<A> { fail("compile_reads: " ++ why, []) }
+
+fn global_of(name: String) → Tac<Expr> {
+    lookup(name).bind(λ c => match c { Accepted(g) => Pure(Global(g)), Refused(why) => fail_reads(why) })
+}
+
+fn apps_of(f: Expr, args: List<Expr>) → Expr {
+    match args { Nil => f, Cons(a, rest) => apps_of(App(f, a), rest) }
+}
+
+// The program's parts, as functions the generator can name.
+fn prog_len(p: Prog) → Nat { p.len }
+fn prog_bounds(p: Prog) → List<Nat> { p.bounds }
+fn prog_read_count(p: Prog) → Nat { p.reads.len() }
+fn prog_read(p: Prog, i: Nat) → Ix { p.reads.nth(i).unwrap_or(Const(0)) }
+
+// How many reads the program has, found by comparing the count with each
+// numeral in turn: a program is small, and this asks the elaborator nothing
+// but definitional equalities.
+fn read_count_from(count: Expr, i: Nat, fuel: Nat) → Tac<Nat> {
+    match fuel {
+        Zero => fail_reads("more reads than the walk allows"),
+        Succ(f) => defeq(count, NatLit(i)).bind(λ same => match same { True => Pure(i), False => read_count_from(count, Succ(i), f) }),
+    }
+}
+
+// What the generator builds a compiled program from, as functions it can
+// name (`Lookup` names functions, not constructors).
+fn read_found(len: Nat, bounds: List<Nat>, ix: Ix, fact: InBounds(len, bounds, ix)) → Site(len, bounds) { Site(ix, Some(fact)) }
+fn read_kept(len: Nat, bounds: List<Nat>, ix: Ix) → Site(len, bounds) { Site(ix, None) }
+fn sites_cons(len: Nat, bounds: List<Nat>, s: Site(len, bounds), rest: List<Site(len, bounds)>) → List<Site(len, bounds)> { Cons(s, rest) }
+fn sites_nil(len: Nat, bounds: List<Nat>) → List<Site(len, bounds)> { Nil }
+fn compiled_of(p: Prog, sites: List<Site(p.len, p.bounds)>, same: erase(p.len, p.bounds, sites) = p.reads) → Compiled(p) { Compiled(sites, same) }
+theorem read_facts_true(): True { trivial }
+// The published declaration's type (`Lookup` names a type as a type, which
+// an `Expr` cannot apply).
+fn CompiledProg(p: Prog) → Type { Compiled(p) }
+
+record ReadGlobals { in_bounds: Expr, exhaustion: Expr, triv: Expr, found: Expr, kept: Expr, cons: Expr, nil: Expr }
+
+fn read_globals() → Tac<ReadGlobals> {
+    global_of("InBounds").bind(λ a => global_of("InBounds::by_exhaustion").bind(λ b => global_of("read_facts_true").bind(λ c =>
+    global_of("read_found").bind(λ d => global_of("read_kept").bind(λ e => global_of("sites_cons").bind(λ f =>
+    global_of("sites_nil").bind(λ g => Pure(ReadGlobals(a, b, c, d, e, f, g)))))))))
+}
+
+// The compiler's own fallback: the exhaustive check, within the budget.
+fn exhaustive(gs: ReadGlobals, len, bounds, ix: Expr, budget: Nat) → Tac<Expr> {
+    Pure(apps_of(gs.exhaustion, [len, bounds, ix, NatLit(budget), gs.triv]))
+}
+
+fn whnf_all(hs: List<Handle>) → Tac<List<Expr>> {
+    match hs {
+        Nil => Pure([]),
+        Cons(h, rest) => whnf(h).bind(λ c => match c {
+            Refused(why) => fail_reads(why),
+            Accepted(w) => whnf_all(rest).bind(λ ws => Pure(Cons(Hd(w), ws))),
+        }),
+    }
+}
+
+// The statement `InBounds(len, bounds, ix)`, its arguments in head normal
+// form: the producers are keyed by their arguments' heads, which a read
+// written as `prog_read(p, 2)` does not show until it is reduced
+// (docs/facts-on-demand-design.md §5).
+fn in_bounds_goal(gs: ReadGlobals, len, bounds, ix: Expr) → Tac<Checked<Handle>> {
+    as_type(apps_of(gs.in_bounds, [len, bounds, ix])).bind(λ c => match c {
+        Refused(why) => Pure(Refused(why)),
+        Accepted(written) => view(written).bind(λ v => match v {
+            HGlobal(_, _, args) => whnf_all(args).bind(λ ws => as_type(apps_of(gs.in_bounds, ws))),
+            _ => Pure(Accepted(written)),
+        }),
+    })
+}
+
+// One read, with the fact found for it if any.
+fn site_for(gs: ReadGlobals, len, bounds, ix: Expr, budget: Nat) → Tac<Expr> {
+    in_bounds_goal(gs, len, bounds, ix).bind(λ c => match c {
+        Refused(why) => fail_reads(why),
+        Accepted(goal) => request(goal, [exhaustive(gs, len, bounds, ix, budget)], 64).bind(λ found => Pure(match found {
+            Some(fact) => apps_of(gs.found, [len, bounds, ix, fact]),
+            None => apps_of(gs.kept, [len, bounds, ix]),
+        })),
+    })
+}
+
+// Reads `i` to `i + n` of the program `p`.
+fn sites_for(gs: ReadGlobals, read: Expr, p, len, bounds: Expr, i: Nat, n: Nat, budget: Nat) → Tac<Expr> {
+    match n {
+        Zero => Pure(apps_of(gs.nil, [len, bounds])),
+        Succ(m) => site_for(gs, len, bounds, apps_of(read, [p, NatLit(i)]), budget).bind(λ s =>
+            sites_for(gs, read, p, len, bounds, Succ(i), m, budget).bind(λ ss => Pure(apps_of(gs.cons, [len, bounds, s, ss])))),
+    }
+}
+
+fn compile_reads(p: Expr, name: String, budget: Nat) → Tac<List<Decl>> {
+    read_globals().bind(λ gs =>
+    global_of("prog_len").bind(λ len_of => global_of("prog_bounds").bind(λ bounds_of =>
+    global_of("prog_read_count").bind(λ count_of => global_of("prog_read").bind(λ read =>
+    global_of("CompiledProg").bind(λ ty => global_of("compiled_of").bind(λ mk => global_of("tactic::rfl").bind(λ rfl =>
+    read_count_from(App(count_of, p), 0, 1024).bind(λ n =>
+    sites_for(gs, read, p, App(len_of, p), App(bounds_of, p), 0, n, budget).bind(λ sites =>
+    Pure([Decl(AsFunction, name, [], App(ty, p), apps_of(mk, [p, sites, apps_of(rfl, [Blank, Blank])]))])))))))))))
+}

@@ -160,6 +160,7 @@ fn mebibyte_buffer_runs_as_cat() {
 /// import none of the certificate's modules.
 const PROBES: &str = "lib/_tests/native/native_compile_tests.hthr";
 const STRUCTURED: &str = "lib/_tests/native/native_structured_tests.hthr";
+const BUILT: &str = "lib/_tests/native/native_build_tests.hthr";
 
 /// A program that is not cat gets the compiler's theorem with no proof of
 /// its own: `head -c 10` copies ten bytes of any longer input and exits 0.
@@ -200,6 +201,37 @@ fn wider_leaves_run() {
     let (code, out) = run(&mixed, b"abcdef", Stdio::piped());
     assert_eq!(out, b"Abcdef", "the first byte stored back, less 32");
     assert_eq!(code, Some((97 + 98 + 99 + 100) % 256), "it exits with the first four bytes' sum");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Procedures compile and run (docs/native-procedures-design.md): a
+/// non-tail recursive sum called from two sites, its body emitted once;
+/// the sum of 0..20 at depth 20, whose innermost call is one too deep and
+/// exits 139 (`call_depth_status`); and a builder tool (`proc`,
+/// native_build) summing 0..n for the n bytes it reads, at most 64 calls
+/// deep.
+#[test]
+fn procedures_run() {
+    let dir = scratch("procedures");
+    let many = [b'a'; 64];
+    for (module, source, input, status, why) in [
+        (PROBES, "summing", &b""[..], 9, "the sums of 0..2 and 0..3 add to 9"),
+        (PROBES, "summing_shallow", &b""[..], 139, "a call past the depth exits 139"),
+        (BUILT, "summed_input", &b"hello"[..], 15, "five bytes read sum 0..5"),
+        (BUILT, "summed_input", &many[..], 139, "sixty-four bytes read nest sixty-five calls, one past the depth"),
+    ] {
+        let binary = dir.join(source);
+        if !binary.exists() {
+            let result = write_elf(module, source, &binary);
+            assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        }
+        let (code, out) = run(&binary, input, Stdio::piped());
+        assert_eq!((code, out.len()), (Some(status), 0), "`{source}`: {why}");
+    }
+    let certificate = std::fs::read_to_string(dir.join("summing.certificate.hthr")).unwrap();
+    for statement in ["theorem summing_elf_procedures()", "compile_calls_of("] {
+        assert!(certificate.contains(statement), "the certificate states `{statement}`");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

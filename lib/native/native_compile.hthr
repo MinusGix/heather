@@ -111,7 +111,13 @@ fn List::largest(self sizes: List<Nat>) → Nat {
 // `Layout::of` computes from the homes once: every leaf reads them several
 // times, and recomputing the two filters there dominated the compile's
 // evaluation (issues/native-leaf-pool-per-leaf.md).
-record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr> }
+// The procedures are the table a call names (docs/native-procedures-design.md).
+record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
+    procedures: List<Procedure> := [] }
+
+fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
+    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures)
+}
 
 // Word `id` has a slot.
 fn Layout::word_fits(self layout: Layout, id: Nat) → Bool { Succ(id).leb(layout.words) }
@@ -129,7 +135,13 @@ fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.words + layo
 fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
 fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
 fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
-fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 8 }
+// The running activation's frame address, and how many calls deeper it may
+// go (docs/native-procedures-design.md §4.1).
+fn Layout::frame_offset(self layout: Layout) → Nat { layout.stack_offset() + 8 }
+fn Layout::frame_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.frame_offset()) }
+fn Layout::room_offset(self layout: Layout) → Nat { layout.stack_offset() + 16 }
+fn Layout::room_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.room_offset()) }
+fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 24 }
 
 // ---------------------------------------------------------------------------
 // Words in and out of their slots
@@ -488,8 +500,12 @@ fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, s
 
 // RSP as the process starts, saved to the slot past the scratch range: the
 // command line is above it (`ArgvAt`), and no statement keeps a register.
-fn Prog::saves_rsp(self p: Prog, layout: Layout) → Prog {
-    then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)))
+// It is `main`'s frame too, saved to the frame slot, and `depth` calls are
+// room left (docs/native-procedures-design.md §4.1).
+fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
+    let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
+    let framed = then(then(saved, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
+    then(then(framed, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
 }
 
 // RDX the saved RSP, R9 argc, RCX the index; past argc a JAE to `past`.
@@ -717,6 +733,108 @@ fn Prog::tests(self p: Prog, layout: Layout, condition: Nat, else_name: Nat) →
     p.bit_to(layout, condition, Rax).branch_label(Rax, else_name)
 }
 
+// ---------------------------------------------------------------------------
+// Calls (docs/native-procedures-design.md §4)
+
+// The argument and result registers, in order.
+fn call_registers() → List<Gpr> { [Rdi, Rsi, Rdx, Rcx, R8, R9] }
+
+// Procedure `index`'s label, and the shared exit of a call too deep: the
+// labels below `main`'s own (§4.2).
+fn Layout::procedure_label(self layout: Layout, index: Nat) → Nat { Succ(index) }
+fn Layout::deep_label(self layout: Layout) → Nat { Succ(layout.procedures.len()) }
+
+// RSP down a word, through RBX, and up one.
+fn rsp_down() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8)), SubRR(Rsp, Rbx)] }
+fn rsp_up() → Instruction { AddRI8(Rsp, BitVec::ofNat(8)) }
+
+// Each word into its register, in order.
+fn Prog::words_to(self p: Prog, layout: Layout, ids: List<Nat>, registers: List<Gpr>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => match registers { Nil => p, Cons(register, more) => p.word_to(layout, id, register).words_to(layout, rest, more) },
+    }
+}
+
+// Each register into its word's home, `out` live after them all: each word
+// with `out` but the words still to come live after it.
+fn Prog::words_from(self p: Prog, layout: Layout, out: List<Nat>, ids: List<Nat>, registers: List<Gpr>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => match registers {
+            Nil => p,
+            Cons(register, more) => p.word_from(layout, out.minus(rest), id, register).words_from(layout, out, rest, more),
+        },
+    }
+}
+
+// `register` put in the word's home, whether or not it is live.
+fn Prog::word_home(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
+    match layout.homes.home(id) {
+        InSlot => p.word_store(layout, id, register),
+        InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+    }
+}
+
+// Each word pushed from its home, through RAX…
+fn Prog::pushes(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => then(then(p.word_to(layout, id, Rax), Block(rsp_down())), Spill(StackStore(Rax, BitVec::ofNat(0)))).pushes(layout, rest),
+    }
+}
+
+// …and each popped back into its home, the last pushed first.
+fn Prog::pops(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => then(then(p, Reload(StackLoad(Rax, BitVec::ofNat(0)))), Block([rsp_up()])).word_home(layout, id, Rax).pops(layout, rest),
+    }
+}
+
+// A call's way in: no room left, the shared exit; otherwise one less room
+// and RSP the frame…
+fn Prog::call_enters(self p: Prog, layout: Layout) → Prog {
+    let room = then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))).branch_label(Rax, layout.deep_label());
+    let less = then(then(room, Block([MovRI(Rbx, BitVec::ofNat(1)), SubRR(Rax, Rbx), MovRI(Rbx, layout.room_at())])), Store(WordStore(Rbx, Rax)));
+    then(then(less, Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx)))
+}
+
+// …and out: the frame and the room as they were.
+fn Prog::call_leaves(self p: Prog, layout: Layout) → Prog {
+    let back = then(then(p, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
+    then(then(then(then(back, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))), Block([AddRI8(Rax, BitVec::ofNat(1))])),
+        Store(WordStore(Rbx, Rax)))
+}
+
+// A call of procedure `index`, `out` live after it: in, the words needed
+// after it pushed, the arguments in their registers, the CALL; then the
+// saved words popped, out, and the results put in their homes.
+fn Prog::performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) → Prog {
+    let saved = out.minus(results);
+    let passed = p.call_enters(layout).pushes(layout, saved).words_to(layout, args, call_registers());
+    then(passed, CallTo(layout.procedure_label(index))).pops(layout, saved.rev()).call_leaves(layout).words_from(layout, out, results, call_registers())
+}
+
+fn Nat::same_as(self n: Nat, m: Nat) → Bool { n.leb(m) && m.leb(n) }
+
+// Each word apart from what is live after it in `words_from`.
+fn Homes::moves_apart(self homes: Homes, out, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(id, rest) => homes.apart(id, out.minus(rest)) && homes.moves_apart(out, rest) }
+}
+
+// What a call needs to be emitted: its procedure, as many arguments and
+// results as it takes, at most six of each, and every word it names and
+// saves in the file, at most a word per word of the file saved.
+fn Layout::call_fits(self layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) → Bool {
+    match layout.procedures.nth(index) {
+        None => False,
+        Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
+            (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
+            (out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results)))))),
+    }
+}
+
 // A structured region (native_structured), `out` live after it: a leaf
 // as `computes`; a sequence's leaf then the rest, a composition's parts in
 // order, each with what the rest needs live after it; a conditional as a
@@ -875,8 +993,7 @@ fn Stmt::emits(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, known: Lis
             True => Some(Compiled(p.exits(layout, known, status), names)),
         },
         Arg(index, buf, len) => p.arg(layout, out, index, buf, len, names),
-        // Not compiled yet (docs/native-procedures-design.md §7, slice 2).
-        Perform(_, _, _) => None,
+        Perform(index, args, results) => layout.call_fits(out, index, args, results).guard(Some(Compiled(p.performs(layout, out, index, args, results), names))),
     }
 }
 
@@ -885,10 +1002,10 @@ fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat)
 
 // The program: the initial bytes, `main`, then exit 0, checked for its
 // homes and its layout.
-fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.words, src.capacities(), homes) }
+fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.words, src.capacities(), homes).with_procedures(src.procedures) }
 
 fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
-    Start.saves_rsp(src.layout(low, homes)).inits(src.layout(low, homes), src.buffers, 0)
+    Start.saves_rsp(src.layout(low, homes), src.depth).inits(src.layout(low, homes), src.buffers, 0)
 }
 
 fn Prog::finish(self p: Prog) → Option<Prog> {
@@ -896,10 +1013,82 @@ fn Prog::finish(self p: Prog) → Option<Prog> {
     match whole.laid_out() { False => None, True => Some(whole) }
 }
 
+// Procedure `index` (docs/native-procedures-design.md §4.2), checked
+// first (§4.3): its body's homes with its results live after it, its body
+// reading only its parameters, each parameter apart from what is live after
+// it, and every word it names in the file. At its label RSP, at the return
+// address, is its frame; the arguments go to its parameters' homes, the
+// body runs, the results go to their registers, RSP is its frame again,
+// and it returns.
+fn Procedure::fits(self proc: Procedure, layout: Layout) → Bool {
+    let entry = proc.body.live_in(layout.homes, proc.results);
+    match proc.body.checked(layout.homes, proc.results) {
+        None => False,
+        Some(_) => entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
+            (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)))),
+    }
+}
+
+// Its way in: the label, the frame stored, the arguments into the
+// parameters' homes…
+fn Procedure::entry_code(self proc: Procedure, p: Prog, layout: Layout, index: Nat) → Prog {
+    then(then(p.label(layout.procedure_label(index)), Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)))
+        .words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers())
+}
+
+// …and out, after its body: the results into their registers, RSP the
+// frame, and RET.
+fn Procedure::exit_code(self proc: Procedure, p: Prog, layout: Layout) → Prog {
+    then(then(then(p.words_to(layout, proc.results, call_registers()), Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx))), Ret)
+}
+
+fn Procedure::code(self proc: Procedure, p: Prog, layout: Layout, index, names: Nat) → Option<Compiled> {
+    match proc.fits(layout) {
+        False => None,
+        True => match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) {
+            None => None,
+            Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)),
+        },
+    }
+}
+
+// The procedures from `index` on, each after the last.
+fn List::procedures_code(self procs: List<Procedure>, p: Prog, layout: Layout, index, names: Nat) → Option<Compiled> {
+    match procs {
+        Nil => Some(Compiled(p, names)),
+        Cons(proc, rest) => match proc.code(p, layout, index, names) { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) },
+    }
+}
+
+// The exit of a call past the depth.
+fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
+    then(then(p.label(layout.deep_label()), Block([MovRI(Rdi, call_depth_status()), MovRI(Rax, BitVec::ofNat(60))])), Syscall)
+}
+
+// A source with procedures: `main` naming its labels past theirs and the
+// shared exit's, then exit 0, each procedure, and the shared exit.
+fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
+    let layout = src.layout(low, homes);
+    match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) {
+        None => None,
+        Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
+                layout, 0, c.names) {
+            None => None,
+            Some(d) => {
+                let whole = d.prog.deep_exit(layout);
+                match whole.laid_out() { False => None, True => Some(whole) }
+            },
+        },
+    }
+}
+
 fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
     match src.allocation_ok(homes) {
         False => None,
-        True => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
+        True => match src.procedures {
+            Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
+            Cons(_, _) => src.compile_calls(low, homes),
+        },
     }
 }
 
@@ -915,7 +1104,8 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 // A refusal is `[at, kind, reason, first, second]`: `at` numbers every
 // statement but `Then` from 1, in source order (a `Branch` or `Repeat`
 // before its arms); `kind` is 0 a computation, 1 a call, 2 a branch, 3 a
-// loop, 4 an exit, 5 the program as a whole, 6 an argument; the reasons, with what
+// loop, 4 an exit, 5 the program as a whole, 6 an argument, 7 a call of a
+// procedure; the reasons, with what
 // `first` and `second` hold:
 //
 //   0  a structured region the compiler does not take
@@ -940,6 +1130,11 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<P
 //  11  S4's lowering refused a node alone (its position in the leaf)
 //  13  a loop whose words live after it are ones it moves or counts with,
 //      or whose leaves do not compile
+//  14  a call that does not fit (`Layout::call_fits`: no such procedure,
+//      other counts of arguments or results than it takes, more than six,
+//      a word past the slots, more saved words than slots, or a result
+//      not apart from what is live after it) (the procedure)
+//  15  a procedure that does not compile (`Procedure::code`) (its index)
 //
 // Reasons 1, 2, 3 and 6 come only from an all-pure leaf with a node not at
 // width 64: one with every node wide compiles a node at a time.
@@ -1132,7 +1327,16 @@ fn Stmt::scan(self s: Stmt, layout: Layout, out: List<Nat>, at: Nat) → Compile
         },
         Exit(status) => CompileScan::of(at, 4, ids_refusal(layout, [status])),
         Arg(index, buf, len) => CompileScan::of(at, 6, buffer_refusal(layout, [index, len], buf)),
-        Perform(procedure, _, _) => CompileScan::of(at, 7, [14, procedure, 0]),
+        Perform(procedure, args, results) => CompileScan::of(at, 7,
+            match layout.call_fits(out, procedure, args, results) { False => [14, procedure, 0], True => [] }),
+    }
+}
+
+// The first procedure from `index` on that does not compile alone.
+fn List::procedures_refusal(self procs: List<Procedure>, layout: Layout, index: Nat) → List<Nat> {
+    match procs {
+        Nil => [],
+        Cons(proc, rest) => match proc.code(Start, layout, index, 0) { None => [15, index, 0], Some(_) => rest.procedures_refusal(layout, Succ(index)) },
     }
 }
 
@@ -1141,7 +1345,10 @@ fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes) → List<Nat
         Refused(why) => why,
         Passed(_) => match src.allocation_ok(homes) {
             False => [0, 5, 12, 0, 0],
-            True => match src.compile(low, homes) { None => [0, 5, 9, 0, 0], Some(_) => [] },
+            True => match src.procedures.procedures_refusal(src.layout(low, homes), 0) {
+                Cons(reason, details) => Cons(0, Cons(5, Cons(reason, details))),
+                Nil => match src.compile(low, homes) { None => [0, 5, 9, 0, 0], Some(_) => [] },
+            },
         },
     }
 }
@@ -1217,7 +1424,14 @@ fn Stmt::shape(self s: Stmt, m: Shape) → Shape {
     }
 }
 
-fn Source::shape(self src: Source) → List<Nat> { src.main.shape(Shape(0, [])).numbers }
+// The label name `main` is emitted from: 0, or past the procedures' and
+// the shared exit's with procedures (`Source::compile_calls`).
+fn Source::main_names(self src: Source) → Nat { match src.procedures { Nil => 0, Cons(_, _) => Succ(src.procedures.len()) } }
+
+fn Source::shape(self src: Source) → List<Nat> { src.main.shape(Shape(src.main_names(), [])).numbers }
+
+// The label name after `main`, as the shape counts it.
+fn Source::main_end_names(self src: Source) → Nat { src.main.shape(Shape(src.main_names(), [])).names }
 
 // A program as a reader takes it: how many numbers its items are, the items
 // (`Prog::numbers`), then their lengths.
@@ -1229,6 +1443,21 @@ fn Prog::reading(self p: Prog) → List<Nat> { p.numbers().reading_of(asm_lens(p
 // emit.
 fn Stmt::emission_reading(self s: Stmt, layout: Layout, out: List<Nat>, known: List<Fact>, names: Nat) → List<Nat> {
     match s.emits(Start, layout, out, known, names) { None => [], Some(c) => Cons(c.names, c.prog.reading()) }
+}
+
+// Procedure `i`, or a stand-in past the last.
+fn List::procedure_or(self procs: List<Procedure>, i: Nat) → Procedure { procs.drop(i).head_or(Procedure([], [], Exit(0))) }
+
+// Each procedure's body's shape (`Source::shape`), its count of numbers
+// first, the label names running on from `names`, the end of `main`'s.
+fn List::procedures_shapes(self procs: List<Procedure>, names: Nat) → List<Nat> {
+    match procs {
+        Nil => [],
+        Cons(proc, rest) => {
+            let m = proc.body.shape(Shape(names, []));
+            Cons(m.numbers.len(), List::append(m.numbers, rest.procedures_shapes(m.names)))
+        },
+    }
 }
 
 // A statement's parts, by position, for stating a piece of the tree by its

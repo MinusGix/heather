@@ -168,7 +168,8 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     // (`parts`); any other source is read as a literal whole.
     let tool_probe = format!("{p}_tool");
     let tool_text = format!("import {root};\n{imports}\nfn {p}_is_tool() → Tool {{ {symbol}() }}\n\
-        fn {p}_functions() → Nat {{ {symbol}().opened(0).functions.len() }}\n");
+        fn {p}_functions() → Nat {{ {symbol}().opened(0).functions.len() }}\n\
+        fn {p}_procedures() → Nat {{ {symbol}().opened(0).procedures.len() }}\n");
     let mut tool_fork = elab.fork();
     let is_tool = tool_fork.elab_module_source(&tool_probe, &tool_text).is_ok();
     // A tool that calls functions (`call`, native_build) has a meaning, the
@@ -177,9 +178,12 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
     if is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_functions")).map_err(|e| format!("`{symbol}` (functions): {e}"))? != 0 {
         return Err(format!("`{symbol}` calls functions of its program, and calls do not compile yet (issues/native-compiled-procedures.md)"));
     }
+    // A tool with procedures is lowered whole, as a literal like any source:
+    // the part-at-a-time lowering (`parts`) walks `main` only.
+    let in_parts = is_tool && function_ir_source::evaluate_number(&tool_fork, &format!("{tool_probe}::{p}_procedures")).map_err(|e| format!("`{symbol}` (procedures): {e}"))? == 0;
     drop(tool_fork);
     let source = if is_tool { format!("{symbol}().source()") } else { format!("{symbol}()") };
-    let (src, lowered, lowered_is, shapes) = if is_tool {
+    let (src, lowered, lowered_is, shapes) = if in_parts {
         let stated = tool_parts(&elab, p, symbol, &root, &imports)?;
         (format!("{p}_lowered"), stated.defs, stated.theorems, Some(stated.shapes))
     } else {
@@ -187,7 +191,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         // every probe and statement below names the source, and a builder's
         // lowering would otherwise be evaluated again in each.
         let spelling = format!("{p}_spelling");
-        let spelling_text = format!("import {root};\n{imports}\nfn {p}_spelled() → List<Nat> {{ {symbol}().spelled() }}\n");
+        let spelling_text = format!("import {root};\n{imports}\nfn {p}_spelled() → List<Nat> {{ {source}.spelled() }}\n");
         let mut fork = elab.fork();
         fork.elab_module_source(&spelling, &spelling_text).map_err(|e| e.render(&spelling_text))?;
         let spelled = {
@@ -197,7 +201,7 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         drop(fork);
         match lowered::literal(p, &spelled).map_err(|e| format!("`{symbol}` did not read back: {e}"))? {
             Some((text, shapes)) => {
-                let theorem = format!("theorem {p}_lowered_is(): {symbol}() = {p}_lowered() {{ refl }}\n");
+                let theorem = format!("theorem {p}_lowered_is(): {source} = {p}_lowered() {{ refl }}\n");
                 (format!("{p}_lowered"), text, theorem, Some(shapes))
             }
             None => (symbol.to_string(), String::new(), String::new(), None),
@@ -212,6 +216,8 @@ fn {p}_room() → List<Nat> {{ [Layout::of({LOW}, {src}().words, {src}().capacit
 fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
+fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len()] }}
+fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -248,7 +254,12 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     }
     // The program a part at a time, each read on its own, so a read holds
     // one part's values and not the program's.
-    let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?)?;
+    let [first, procedures] = numbers(&fork, &probe, &format!("{p}_first"))?[..] else {
+        return Err(format!("`{symbol}`'s procedures did not read back"));
+    };
+    let bodies = if procedures > 0 { numbers(&fork, &probe, &format!("{p}_bodies"))? } else { Vec::new() };
+    let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?,
+        first, (procedures > 0).then_some((src.as_str(), &bodies[..])))?;
     // The parts over the homes, and the check's verdict on them. The refusal
     // here: once this module is elaborated, the fork reads only its names.
     let state = |fork: &mut Elaborator, parts: &str, spelled: &[u64]| -> Result<(String, Vec<u64>), String> {
@@ -286,7 +297,7 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     }
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
-    let emission::Stated { theorems: statements, items, lens, mut cuts, spans } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
+    let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
         Some(emission::Checks { src: &src, homes: &homes, sets: &live_sets }))?;
     let length = lens.iter().sum::<u64>() as usize;
     if HEADER + length > MAX_FILE {
@@ -332,10 +343,25 @@ fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
     // Of the literal, then of the source by its equation.
     let simulated = format!("{src}().elf_file_simulates({p}_size(), {p}_within(), {p}_code(), {homes}, {p}_compiles(), {p}_fits(), {p}_short(),
         top, depth, placed, s, entry, rsp,
-        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), args, argv)");
+        j(sym({p}_written({p}_code(), {p}_compiles())), λ f _ => s.memory.LoadedFrom({p}_size(), f), loaded), deep, args, argv)");
     let (lowered_is, simulates) = if lowered.is_empty() { (String::new(), simulated) } else {
         (format!("// `{symbol}` as `write-elf` read it, a literal; what follows compiles the literal.
 {lowered}{lowered_is}"), format!("j(sym({p}_lowered_is()), λ src _ => SimProgram(X86Profile::process({p}_size(), top, depth).linux(), src.denote(args), s),\n        {simulated})"))
+    };
+    // How the program is the compile: `main` and exit 0 (`Source::compile_of`),
+    // or with procedures `main` past their labels, then exit 0, the
+    // procedures and the shared exit (`Source::compile_calls_of`).
+    let (emitted, compiles) = match &calls {
+        None => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
+    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
+        cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
+}}
+"), format!("{src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), refl, {p}_emitted(), {p}_laid())")),
+        Some(emission::CallsStated { main, names, procedures, after }) => (format!("theorem {p}_emitted(): {src}().main.emit({entry}, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})) {{
+    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {layout}, [], {layout}.deep_label()) = Some(Compiled({main}, {names})), {p}_e_0())
+}}
+"), format!("{src}().compile_calls_of({LOW}, {homes}, {src}().procedures.head_or(Procedure([], [], Exit(0))), {src}().procedures.tail(), {p}_code(), {main}, {procedures}, {names}, {after},
+        {p}_allocated(), refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")),
     };
     let mut text = format!("// `{symbol}` compiled into the I/O profile's ELF, as `heather write-elf` writes
 // it: generated, and checked by the kernel.
@@ -350,11 +376,7 @@ import {root};
 // the statement tree at a time.
 {statements}
 theorem {p}_allocated(): {src}().allocation_ok({homes}).IsTrue() {{ j(sym({p}_allocation_is()), λ b _ => b.IsTrue(), trivial) }}
-theorem {p}_emitted(): {src}().main.emit({entry}, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()) {{
-    j(sym({p}_entry()), λ x _ => {src}().main.emit(x, {src}().layout({LOW}, {homes}), [], 0).map(λ (c: Compiled) => {finish}) = Some({p}_code()),
-        cong_fn<Option<Compiled>, Option<Prog>>(λ o => o.map(λ (c: Compiled) => {finish}), {p}_e_0()))
-}}
-
+{emitted}
 // Its layout, by a table of its labels checked a stretch at a time.
 {table}{layout}
 theorem {p}_holes(): {p}_code().no_holes().IsTrue() {{ trivial }}
@@ -364,7 +386,7 @@ theorem {p}_laid(): {p}_code().laid_out().IsTrue() {{
 }}
 
 theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{
-    {src}().compile_of({LOW}, {homes}, {p}_code(), {p}_allocated(), {p}_emitted(), {p}_laid())
+    {compiles}
 }}
 
 // Its data segment, in whole pages, within the profile's limit; its words,
@@ -377,7 +399,7 @@ theorem {p}_fits(): Layout::of({LOW}, {src}().words, {src}().capacities(), {home
 }}
 
 // The bytes, a piece at a time from the last item.
-", count = items.len(), layout = labels::layout(p, &offsets, &cuts));
+", count = items.len(), layout = labels::layout(p, &offsets, &cuts), emitted = emitted, compiles = compiles);
     text.push_str(&labels::byte_pieces(p, &pieces, &bytes, items.len(), &offsets));
     text.push_str(&format!("
 fn {p}_header() → List<BitVec(8)> {{ [{}] }}
@@ -406,13 +428,14 @@ theorem {p}_short(): 232 + assemble(no_fills(), {p}_code(), []).len() <= 65536 {
 }}
 
 // The process Linux makes of the file written, at its entry with `depth`
-// bytes of stack below RSP and the command line `args` on the stack above,
+// bytes of stack below RSP, enough for the source's calls, and the command
+// line `args` on the stack above,
 // simulates `{symbol}`'s tree run with `args` (`Source::elf_file_simulates`,
 // from `native_compile_correct`).
 theorem {p}_simulates(top, depth: Nat, placed: StackPlaced({p}_size(), top, depth),
     s: MachineState<X86Memory(X86Profile::process({p}_size(), top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
-    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), args: List<List<BitVec(8)>>,
-    argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(io_data_end({p}_size())), s.memory, read_gpr(Rsp, s.gprs), args)):
+    loaded: s.memory.LoadedFrom({p}_size(), {p}_file()), deep: {src}().depth * (8 * ({src}().words + 1)) <= depth, args: List<List<BitVec(8)>>,
+    argv: ArgvAt(X86Profile::process({p}_size(), top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
     SimProgram(X86Profile::process({p}_size(), top, depth).linux(), {source}.denote(args), s) {{
     {simulates}
 }}
@@ -502,7 +525,8 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         11 => format!("S4's lowering refused node {first} of the leaf alone"),
         12 => "the words' homes fail the allocation's check (`Source::allocation_ok`): the allocator's proposal is wrong, a bug in it".into(),
         13 => "a loop whose words live after it include one it moves or counts with, or whose leaves do not compile".into(),
-        14 => format!("procedure {first} is called, and calls are not compiled yet (docs/native-procedures-design.md §7)"),
+        14 => format!("the call of procedure {first} does not fit: no such procedure, other counts of arguments or results than it takes, more than six, a word past the slots, more saved words than slots, or a result not apart from what is live after it"),
+        15 => format!("procedure {first} does not compile (`Procedure::code`)"),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }

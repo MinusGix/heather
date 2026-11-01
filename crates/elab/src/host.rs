@@ -388,6 +388,8 @@ pub enum Request {
     Body(u64),
     /// The `match` a handle stands for, with its arms.
     Arms(u64),
+    /// A type's handle, to be inhabited by `:= infer`'s search.
+    Synth(u64),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -863,6 +865,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             }
             22 => Ok(Step::Ask(Request::Body(self.nat_of("host_handle", vec![tree])?))),
             23 => Ok(Step::Ask(Request::Arms(self.nat_of("host_handle", vec![tree])?))),
+            24 => Ok(Step::Ask(Request::Synth(self.nat_of("host_handle", vec![tree])?))),
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1686,6 +1689,7 @@ impl Elaborator {
                 Request::Holes(e, n) => Answer::Holes(refusable(self.holes_request(run, &e, n))?),
                 Request::Body(g) => Answer::Handle(refusable(self.body_request(run, g))?),
                 Request::Arms(h) => Answer::Arms(refusable(self.arms_request(run, h))?),
+                Request::Synth(h) => Answer::Handle(refusable(self.synth_request(run, h, span))?),
                 Request::Publish(decls) if run.generator => return Ok(Ended::Published(decls)),
                 Request::Publish(_) => return Err("only `generate` publishes declarations; a tactic cannot".into()),
             };
@@ -2266,6 +2270,32 @@ impl Elaborator {
             out.push(h);
         }
         Ok(out)
+    }
+
+    /// `Synth(goal)`: the search a `:= infer` parameter runs, at the type
+    /// `goal` stands for, in its scope (docs/facts-on-demand-design.md §4).
+    /// This is how a generator asks for a fact and learns that there is
+    /// none: the search's failure is a refusal carrying its trace, and a
+    /// refused search leaves nothing behind ([`crate::resolve::SearchMark`]).
+    /// The type must mention no unsolved hole: the search's trials are the
+    /// elaborator's, which know nothing of a run's holes.
+    fn synth_request(&self, run: &mut Run, h: u64, span: Span) -> Result<u64, Fault> {
+        let unsolved = || Fault::Ill("`Synth` needs a type that mentions no unsolved hole".into());
+        let (at, ty, level) = match run.held(h)? {
+            (s, Held::Type(t, l)) => (s, run.committed_ty(&t).ok_or_else(unsolved)?, l),
+            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
+        };
+        let cx = run.cx(at)?;
+        let spelled = self.spell_type_clean(&cx, &ty).unwrap_or_else(|| "the goal".to_string());
+        let mark = crate::resolve::SearchMark::of(self);
+        let mut trace = Vec::new();
+        match self.resolve_goal(&cx, &ty, &level, &spelled, None, span, &mut trace) {
+            Some(t) => Ok(run.issue(at, Held::Term(t, ty, level))),
+            None => {
+                mark.rollback(self);
+                Err(Fault::Ill(format!("no evidence for `{spelled}` — the search:{}", crate::resolve::render_trace(&trace))))
+            }
+        }
     }
 
     fn hole_request(&self, run: &mut Run, h: u64) -> Result<u64, Fault> {

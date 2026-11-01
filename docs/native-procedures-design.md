@@ -2,7 +2,8 @@
 
 Status: **proposed 2026-10-31**, slice 1 landing with it; revised
 2026-11-01 to caller-saves and a callee that starts from zero (§2, §3),
-which is what the proof can carry. Owner:
+which is what the proof can carry. Slice 2 (the compile and its proof)
+landed 2026-11-01. Owner:
 `issues/native-compiled-procedures.md` (milestone `nh-procedures`, round R8
 of `docs/compiler-milestones-proposal.md`). It draws in
 `issues/native-procedure-contracts.md` and
@@ -160,14 +161,14 @@ caller:     RAX := [room]; TEST; JE deep      ; no room: exit(call_depth_status)
             RSP := [frame]
             each saved word: RAX := home; RSP -= 8; [RSP] := RAX
             each arg word into its argument register (word_to)
-            [frame] := RSP - 8                ; the callee's frame: its return address
             CALL P                            ; return address pushed
             each saved word, last first: RAX := [RSP]; RSP += 8; home := RAX
             [frame] := RSP
             [room] := [room] + 1
             each result register into its result word's home (word_from)
 
-P:          each argument register into its parameter's home (word_from)
+P:          [frame] := RSP                    ; its frame: the return address
+            each argument register into its parameter's home (word_from)
             body                              ; compiled with its results live
             each result into its result register (word_to)
             RSP := [frame]
@@ -261,13 +262,43 @@ the frame's base in `frame`.
    but for the handler it now quantifies over.
 2. **The compile and its proof**: §4 and §5. Done when a source with a
    helper called from two sites and a non-tail recursion compiles and the
-   compile is proved.
+   compile is proved. Landed: the call site's code as claims of trees
+   (`lib/native/native_compile_perform.hthr`), `Target::Hosts` (the
+   program holds every procedure and the shared exit), `Source::calls_at`
+   (every call at every depth, by induction on the depth, each callee's
+   body by its own `Stmt::emit_runs`), and `native_compile_correct` for
+   every source; probes in `lib/_tests/native/native_compile_tests.hthr`
+   (one body, three call sites, and the refusals 14 and 15).
 3. **`write-elf` and the builder**: a `proc` form in `native_build` whose
    words the builder numbers, `Source::spelled` and the Rust mirrors
    (`crates/cli/src/native`), and an ELF test that runs the recursion.
+   Landed: `Source::spelled` spells `Perform` (tag 8) and a source with
+   procedures (`[2]`, its depth after its words, its procedures after its
+   buffers), and the Rust readback prints them. `write-elf` emits `main`
+   from `Source::main_names`, reads the procedures' code
+   (`List::procedures_reading`) and the shared exit after `main`'s exit,
+   states the first by one `refl` and the second as `{p}_code()`, and
+   proves the compile by `Source::compile_calls_of`. The builder has `proc`
+   (a `Proc` gives the body its index and its parameters' and results'
+   words, numbered from 0; the results are set to zero first, so a body
+   reads no word but its parameters), `perform` and `depth`; a tool with
+   procedures is lowered whole, as a literal, since the part-at-a-time
+   lowering walks `main` only. The Rust allocator mirror walks `main` only,
+   so a source with procedures is allocated on the fork. `procedures_run`
+   (`crates/cli/tests/native_cat.rs`) runs the recursive sum, a call past
+   the depth, and a builder tool summing its input by recursion.
 4. **`grep -F`**, with the line-buffer helper a procedure, against GNU's
    tests under `LC_ALL=C`. Its helper loops, so the allocators' loop sets
-   cover procedure bodies first (§4.3).
+   cover procedure bodies first (§4.3). Landed: the allocators pass every
+   procedure's body after `main` (`List::bodies_needs` for the loop sets,
+   `bodies_graph` and `bodies_weights` for the colouring), and the
+   colouring falls back to the slots when a body fails the check
+   (`Homes::or_else`). `write-elf` states each procedure's body a part at
+   a time, as `main`'s (`Procedure::code_of`, `List::procedures_code_of`).
+   `grep_f_tool` (`lib/native/native_tools.hthr`) tests and writes a line
+   by one procedure called from two sites, and
+   `compiled_grep_f_runs_as_gnu_grep` runs it beside GNU's. What is left
+   for larger tools: `issues/native-procedures-write-elf-capacity.md`.
 
 ## 8. Left open, each with an owner
 

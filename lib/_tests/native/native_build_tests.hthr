@@ -203,3 +203,37 @@ theorem raised_status_runs(byte: BitVec(8)): raised_status([byte]).source().tree
 // sequence ending in the call), and `write-elf` refuses a tool with a
 // program. Calls compile as procedures in issues/native-compiled-procedures.md.
 theorem raised_status_refused(): refused_slots(raised_status([BitVec::ofNat(97)]).source()) = [2, 0, 0, 1, 0] { refl }
+
+// ---------------------------------------------------------------------------
+// Procedures (docs/native-procedures-design.md)
+
+// The sum of 0..n by a non-tail recursion: the parameter is read after the
+// call. Its words are its own, numbered from 0.
+fn sum_of(rest: Nat → Tool) → Tool {
+    proc(1, 1, λ p => branch(p.param(0).get().equals(num(0)),
+            p.result(0).set(num(0)),
+            local(num(0), λ inner => perform(p.index, [p.param(0).get() - num(1)], [inner]) ++ p.result(0).set(inner.get() + p.param(0).get()))),
+        rest)
+}
+
+// The sum of 0..10, from two sites: 55 and then 55 + 21.
+fn summed_twice() → Tool {
+    depth(12, sum_of(λ sum => run(local(num(0), λ a => local(num(0), λ b =>
+        perform(sum, [num(10)], [a]) ++ perform(sum, [num(6)], [b]) ++ exit(a.get() + b.get()))))))
+}
+
+// Lowered: one procedure whose body calls itself, its result set to zero
+// first; `main` calls it twice.
+theorem summed_twice_procedures(): summed_twice().source().procedures.len() = 1 { refl }
+theorem summed_twice_depth(): summed_twice().source().depth = 12 { refl }
+theorem summed_twice_runs(): summed_twice().source().tree([], 0) = Ret(BitVec::ofNat(76)) { refl }
+theorem summed_twice_compiles(): refused_slots(summed_twice().source()) = [] { refl }
+
+// The sum of 0..n for n the bytes read from standard input, as an exit
+// status, at most 64 calls deep: the sum of 0..n nests n + 1 calls, so 64
+// bytes or more nest one too deep, and it exits 139.
+fn summed_input() → Tool {
+    depth(64, sum_of(λ sum => buffer(80, λ b => run(local(num(0), λ got =>
+        read(stdin(), b, num(80), got) ++ local(num(0), λ r => perform(sum, [got.get()], [r]) ++ exit(r.get())))))))
+}
+theorem summed_input_compiles(): refused_slots(summed_input().source()) = [] { refl }
