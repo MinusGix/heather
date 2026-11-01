@@ -194,7 +194,7 @@ name of its body, which `f_unfold` exposes.
   (the probe's three laws). Up to `Eutt` the useful form is
   `f(x) ≈ bind(f#body(x), f)` with calls answered by `f`. That form needs the
   eutt `bind` congruence (`issues/coitree-eutt-bind-cong.md`), which becomes
-  a prerequisite.
+  a prerequisite. *(`Eutt::bind_cong` landed 2026-11-01.)*
 - **`CoTree::Returns(t, b)`**: a record of a count `n` and
   `after(n, t) = ORet(b)`. This is the only place a natural number appears,
   and it is existential. Literal runs prove it with a count and `refl`.
@@ -342,8 +342,8 @@ needed. Every theorem below is proved once, over any `D`, `E` and body.
   `rec_total`'s witness.
 - **Not built**: `rec_refines` against `Program::rec`, which is
   `issues/coitree-rec-program-bridge.md` (§4.4: only non-tail native
-  recursion needs it), and the eutt-level `f(x) ≈ bind(body(x), f)`, which
-  waits on `coitree-eutt-bind-cong`.
+  recursion needs it), and the eutt-level `f(x) ≈ bind(body(x), f)`, whose
+  prerequisite `Eutt::bind_cong` landed 2026-11-01.
 
 **The customer.** `Tm::step_co` is `Tm::step` with each recursive
 reduction as a call. `Option` is gone, because it only ever stood for
