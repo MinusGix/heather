@@ -338,35 +338,37 @@ theorem Stmt::grows(self s: Stmt, call: Answers(), perform, perform2: Performs()
 // ---------------------------------------------------------------------------
 // Procedures (docs/native-procedures-design.md)
 
-// Its parameters and results, words of its own; the words it owns, each
-// given back to its caller as the caller had it; and its body.
-record Procedure { params: List<Nat>, results: List<Nat>, locals: List<Nat>, body: Stmt }
+// Its parameters and results, words of its own, and its body.
+record Procedure { params: List<Nat>, results: List<Nat>, body: Stmt }
 
-// The words `ids` set to `numbers` in order, as far as both go.
-fn Env::set_numbers(self env: Env, ids: List<Nat>, numbers: List<Nat>) → Env {
+// The words `ids` set to `words` in order, as far as both go.
+fn Env::set_words(self env: Env, ids: List<Nat>, words: List<BitVec(64)>) → Env {
     match ids {
         Nil => env,
-        Cons(id, rest) => match numbers {
+        Cons(id, rest) => match words {
             Nil => env,
-            Cons(k, more) => Env(env.words.put(id, k, 0), env.buffers, env.args).set_numbers(rest, more),
+            Cons(word, more) => env.set_word(id, word).set_words(rest, more),
         },
     }
 }
 
-// The words' numbers, in order.
-fn Env::numbers(self env: Env, ids: List<Nat>) → List<Nat> {
-    match ids { Nil => [], Cons(id, rest) => Cons(env.number(id), env.numbers(rest)) }
+// The words, in order.
+fn Env::words_at(self env: Env, ids: List<Nat>) → List<BitVec(64)> {
+    match ids { Nil => [], Cons(id, rest) => Cons(env.word(id), env.words_at(rest)) }
 }
 
-// The callee starts with the caller's words, its parameters given the
-// arguments' numbers, all read before any is set.
-fn Procedure::enter(self proc: Procedure, caller: Env, args: List<Nat>) → Env { caller.set_numbers(proc.params, caller.numbers(args)) }
+// The callee starts with every word zero but its parameters, each given its
+// argument's word, all read before any is set; the buffers and the command
+// line are the caller's.
+fn Procedure::enter(self proc: Procedure, caller: Env, args: List<Nat>) → Env {
+    Env(Nil, caller.buffers, caller.args).set_words(proc.params, caller.words_at(args))
+}
 
-// It returns with its locals as the caller had them, then each result
+// It returns to the caller's words with its own buffers, each result
 // copied out to its word; an exit goes on out.
 fn Procedure::leave(self proc: Procedure, caller: Env, results: List<Nat>, flow: Flow) → Flow {
     match flow {
-        Onward(after) => Onward(after.set_numbers(proc.locals, caller.numbers(proc.locals)).set_numbers(results, after.numbers(proc.results))),
+        Onward(after) => Onward(Env(caller.words, after.buffers, caller.args).set_words(results, after.words_at(proc.results))),
         Exited(status) => Exited(status),
     }
 }

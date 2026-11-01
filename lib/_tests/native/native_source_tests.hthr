@@ -2,9 +2,9 @@
 // says: each probe is a source whose exit status is what its calls
 // computed, evaluated by `Source::tree` and its silent steps stripped. A
 // recursion that uses its own word after the call (not a tail loop), the
-// depth exit one call past the source's depth, a callee's locals given
-// back to the caller, and a buffer the callee writes, which the caller
-// sees.
+// depth exit one call past the source's depth, the caller's words given
+// back whatever the callee wrote, a callee that starts from zero, and a
+// buffer the callee writes, which the caller sees.
 import native_source;
 import function_ir;
 import list;
@@ -27,7 +27,7 @@ fn sum_body() → Stmt {
                 Then(Perform(0, [5], [6]), ops([Add(64, 2, 6, 1)])))))
 }
 
-fn sum() → Procedure { Procedure(params := [1], results := [2], locals := [1, 2, 3, 4, 5, 6], body := sum_body()) }
+fn sum() → Procedure { Procedure(params := [1], results := [2], body := sum_body()) }
 
 // sum(k) into word 7, then exit with `status`.
 fn summing(k, depth, status: Nat) → Source {
@@ -44,8 +44,8 @@ theorem sum_zero(): exits(summing(0, 1, 7), 0) { refl }
 theorem sum_too_deep(): exits(summing(4, 4, 7), 139) { refl }
 theorem sum_no_depth(): exits(summing(0, 0, 7), 139) { refl }
 
-// A word the callee owns is the caller's again after the call: word 1 is
-// `sum`'s parameter, and `main` set it first.
+// The caller's words are its own again after the call: word 1 is `sum`'s
+// parameter, and `main` set it first.
 fn kept() → Source {
     Source(functions := [], buffers := [], words := 8,
         main := Then(ops([Const(64, 0, 3), Const(64, 1, 9)]), Then(Perform(0, [0], [7]), Exit(1))),
@@ -66,7 +66,7 @@ theorem helper_twice(): exits(twice(), 9) { refl }
 
 // A buffer is shared: the callee stores a byte, the caller reads it.
 fn poke() → Procedure {
-    Procedure(params := [1], results := [], locals := [1, 2, 3],
+    Procedure(params := [1], results := [],
         body := ops([Const(64, 2, 0), BufferStore(3, 0, 2, 1)]))
 }
 
@@ -77,6 +77,18 @@ fn shared() → Source {
 }
 
 theorem buffer_shared(): exits(shared(), 42) { refl }
+
+// A callee reads a word it was not given as zero: `peek` returns word 3,
+// which `main` set to 8.
+fn peek() → Procedure { Procedure(params := [], results := [3], body := ops([])) }
+
+fn fresh() → Source {
+    Source(functions := [], buffers := [], words := 5,
+        main := Then(ops([Const(64, 3, 8)]), Then(Perform(0, [], [4]), Exit(4))),
+        procedures := [peek()], depth := 1)
+}
+
+theorem callee_starts_zero(): exits(fresh(), 0) { refl }
 
 // A call to no procedure does nothing.
 fn missing() → Source {
