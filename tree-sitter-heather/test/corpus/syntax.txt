@@ -844,3 +844,53 @@ fn m(a: Nat) -> X { match @eq_dec(a, a) { Inl(_) => 0 } }
               (identifier)
               (identifier))
             (number)))))))
+
+==================
+Value definitions and declaration prefixes
+==================
+
+def five: Nat = 5;
+def six = Succ(five);
+def p: (a = b) = h;
+regex def is_hex = "[0-9a-f]+";
+runtime(owned) fn f(n: Nat) -> Nat { n }
+
+---
+
+(source_file
+  (value_declaration
+    (qualified_identifier)
+    (identifier)
+    (number))
+  (value_declaration
+    (qualified_identifier)
+    (call_expression
+      (identifier)
+      (argument_list
+        (identifier))))
+  (value_declaration
+    (qualified_identifier)
+    (binary_expression
+      (identifier)
+      (identifier))
+    (identifier))
+  (prefixed_declaration
+    (identifier)
+    (value_declaration
+      (qualified_identifier)
+      (string)))
+  (prefixed_declaration
+    (identifier)
+    (argument_list
+      (identifier))
+    (function_declaration
+      (qualified_identifier)
+      (parameter_list
+        (parameter
+          (parameter_run
+            (parameter_name
+              (identifier))
+            (identifier))))
+      (identifier)
+      (block
+        (identifier)))))

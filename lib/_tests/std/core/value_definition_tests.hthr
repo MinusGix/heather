@@ -1,0 +1,52 @@
+// Probes of `def`, the value definition (docs/value-definitions-design.md
+// §2): a named value used without `()`, with its type written or inferred,
+// unfolding like the nullary `fn` it is kernel-side. Tests, not library:
+// nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+
+def five: Nat = 5;
+
+// The type is inferred from the value.
+def six = Succ(five);
+
+// A closed verdict by computation, through both definitions.
+theorem six_is(): six = 6 {}
+
+theorem six_unfolds(): six = Succ(five) { refl }
+
+// A polymorphic value: its type parameter is implicit, so it is still used
+// bare, and inference fills it.
+def empty<A>: List<A> = Nil;
+
+def no_nats: List<Nat> = empty;
+
+theorem empty_len(): no_nats.len() = 0 {}
+
+// A function-typed value is applied like any function.
+def add_five: Nat → Nat = λ x => x + five;
+
+theorem add_five_one(): add_five(1) = 6 {}
+
+// An equation type is written in parentheses: a `def`'s annotation stops at
+// its `=`, as a `let`'s does.
+def five_is: (five = 5) = refl;
+
+// Negative control: the value is not any number.
+// expect-error(kernel): `refl` needs both sides to be definitionally equal
+theorem six_wrong(): six = 7 { refl }
+
+// A value is not a function: the empty call is refused.
+// expect-error: `five` is a value (a `def`), not a function
+theorem called(): five() = 5 {}
+
+// A value whose type inference cannot find needs it written.
+// expect-error: write it as `def ambiguous: T = …;`
+def ambiguous = Nil;
+
+// A value cannot refer to itself: it is not recursive.
+// expect-error: `looped` refers to itself, and a value
+def looped: Nat = Succ(looped);

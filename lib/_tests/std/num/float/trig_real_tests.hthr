@@ -29,3 +29,15 @@ theorem sin_not_flat(): ¬(CReal::sin_rat(0) ≈ CReal::sin_rat(1)) {
         CReal::lt_irrefl(CReal::sin_rat(0), CReal::lt_respects(CReal::sin_rat(0).same_refl(), CReal::same_sym(e), lt))
     }
 }
+
+// Past the unreduced leaf's reach (a real near 10 ran it out of fuel):
+// sin(10) = -0.5440…, cos(10) = -0.8390…, sin(30) = -0.9880…, cos(100) = 0.8623….
+theorem sin_real_ten(): CReal::sin(CReal::ofRat(10)) < CReal::ofRat(Rat(-543, 1000)) { by intervals() }
+theorem cos_real_ten(): CReal::ofRat(Rat(-840, 1000)) < CReal::cos(CReal::ofRat(10)) { by intervals() }
+theorem sin_real_thirty(): CReal::sin(CReal::ofRat(30)) < CReal::ofRat(Rat(-987, 1000)) { by intervals() }
+theorem cos_real_hundred(): CReal::ofRat(Rat(862, 1000)) < CReal::cos(CReal::ofRat(100)) { by intervals() }
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem sin_real_ten_not_below(): CReal::sin(CReal::ofRat(10)) < CReal::ofRat(Rat(-545, 1000)) { by intervals() }
+// An argument that is no short dyadic: 31/3 - 1/3 is read through a sum of
+// two thirds, so nothing trims and the series pay for every bit.
+theorem sin_real_ten_sum(): CReal::sin(CReal::ofRat(Rat(31, 3)) - CReal::ofRat(Rat(1, 3))) < CReal::ofRat(Rat(-543, 1000)) { by intervals() }

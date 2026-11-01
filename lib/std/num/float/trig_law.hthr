@@ -17,9 +17,10 @@
 //
 // Bounds: sin(d) and cos(d) - 1 are within |d|·exp_reach(D) of 0 for
 // |d| <= D, from exp(d)'s terms past the first (`sin_rat_small`,
-// `cos_rat_sub_one`); with the addition laws that gives one Lipschitz
-// modulus for both (`CReal::trig_lip`), which `RatLip` extends to the reals
-// (elementary_real.hthr).
+// `cos_rat_sub_one`). sin² + cos² = 1 puts both in [-1, 1], and with the
+// addition laws that gives one Lipschitz modulus for both, 2·exp_reach(1)
+// whatever the argument (`CReal::trig_lip`), which `RatLip` extends to the
+// reals (elementary_real.hthr).
 
 import logic;
 import bool;
@@ -808,11 +809,8 @@ theorem CReal::cos_rat_sub_one(d, D: Rat, hd: d.abs() <= D):
 }
 
 // ---------------------------------------------------------------------------
-// Bounds on a bounded set, and the Lipschitz bound from the addition laws:
-// with d = a - b,
-//
-//     sin(a) - sin(b) = sin(b)·(cos(d) - 1) + cos(b)·sin(d)
-//     cos(a) - cos(b) = cos(b)·(cos(d) - 1) - sin(b)·sin(d)
+// Bounds on a bounded set: |sin| and |cos - 1| within the series' own
+// reach, before sin² + cos² = 1 gives the unit bounds below.
 
 fn CReal::sin_reach(B: Rat) → Rat { B.abs() * CReal::exp_reach(B.abs()) }
 
@@ -852,76 +850,6 @@ theorem CReal::cos_rat_bound(b, B: Rat, hb: b.abs() <= B):
     let l2: (CReal::ofRat(-CReal::cos_reach(B)) <= x) = linarith(s.left, CReal::ofRat_le(lo));
     let h2: (x <= CReal::ofRat(CReal::cos_reach(B))) = linarith(s.right, CReal::ofRat_le(hi));
     And(l2, h2)
-}
-
-fn CReal::trig_lip(B: Rat) → Rat { CReal::exp_reach(B.abs() + B.abs()) * (CReal::cos_reach(B) + CReal::sin_reach(B)) }
-
-theorem CReal::trig_lip_nonneg(B: Rat): 0 <= CReal::trig_lip(B) {
-    let A = B.abs();
-    let s = CReal::sin_reach_nonneg(B);
-    let c: (CReal::cos_reach(B) ≈ 1 + CReal::sin_reach(B)) = Rat::same_refl(CReal::cos_reach(B));
-    let p: (0 <= CReal::cos_reach(B) + CReal::sin_reach(B)) = linarith(s, c);
-    Rat::mul_nonneg(CReal::exp_reach_nonneg(A + A, linarith(B.abs_nonneg())), p)
-}
-
-// The pieces common to both bounds: d = a - b small, the moduli unfolded.
-theorem CReal::trig_lip_parts(B, a, b: Rat, ha: a.abs() <= B, hb: b.abs() <= B):
-    (a - b).abs() <= B.abs() + B.abs()
-    ∧ CReal::trig_lip(B) * (a - b).abs() ≈ ((a - b).abs() * CReal::exp_reach(B.abs() + B.abs())) * CReal::cos_reach(B) + ((a - b).abs() * CReal::exp_reach(B.abs() + B.abs())) * CReal::sin_reach(B)
-{
-    let d = a - b;
-    let hd: (d.abs() <= B.abs() + B.abs()) = Rat::abs_le(linarith(a.neg_le_abs(), b.le_abs(), ha, hb, B.le_abs()), linarith(a.le_abs(), b.neg_le_abs(), ha, hb, B.le_abs()));
-    let u: (CReal::trig_lip(B) ≈ CReal::exp_reach(B.abs() + B.abs()) * (CReal::cos_reach(B) + CReal::sin_reach(B))) = Rat::same_refl(CReal::trig_lip(B));
-    let r: (CReal::trig_lip(B) * d.abs() ≈ (d.abs() * CReal::exp_reach(B.abs() + B.abs())) * CReal::cos_reach(B) + (d.abs() * CReal::exp_reach(B.abs() + B.abs())) * CReal::sin_reach(B)) = ring(u);
-    And(hd, r)
-}
-
-theorem CReal::sin_rat_lip(B, a, b: Rat, ha: a.abs() <= B, hb: b.abs() <= B):
-    CReal::ofRat(-(CReal::trig_lip(B) * (a - b).abs())) <= CReal::sin_rat(a) - CReal::sin_rat(b)
-        ∧ CReal::sin_rat(a) - CReal::sin_rat(b) <= CReal::ofRat(CReal::trig_lip(B) * (a - b).abs())
-{
-    let d = a - b;
-    let A = B.abs();
-    let parts = CReal::trig_lip_parts(B, a, b, ha, hb);
-    let e = d.abs() * CReal::exp_reach(A + A);
-    let he: (0 <= e) = Rat::mul_nonneg(d.abs_nonneg(), CReal::exp_reach_nonneg(A + A, linarith(B.abs_nonneg())));
-    let sd = CReal::sin_rat_small(d, A + A, parts.left);
-    let cd = CReal::cos_rat_sub_one(d, A + A, parts.left);
-    let sb = CReal::sin_rat_bound(b, B, hb);
-    let cb = CReal::cos_rat_bound(b, B, hb);
-    let m1 = CReal::mul_dev(e, CReal::sin_reach(B), he, cd.left, cd.right, sb.left, sb.right);
-    let m2 = CReal::mul_dev(e, CReal::cos_reach(B), he, sd.left, sd.right, cb.left, cb.right);
-    let law = CReal::sin_rat_add(b, d);
-    let re: (a ≈ b + d) = ring;
-    let ra = CReal::sin_rat_respects(re);
-    let L = CReal::ofRat_respects(parts.right);
-    let lo: (CReal::ofRat(-(CReal::trig_lip(B) * d.abs())) <= CReal::sin_rat(a) - CReal::sin_rat(b)) = linarith(m1.left, m2.left, law, ra, L);
-    let hi: (CReal::sin_rat(a) - CReal::sin_rat(b) <= CReal::ofRat(CReal::trig_lip(B) * d.abs())) = linarith(m1.right, m2.right, law, ra, L);
-    And(lo, hi)
-}
-
-theorem CReal::cos_rat_lip(B, a, b: Rat, ha: a.abs() <= B, hb: b.abs() <= B):
-    CReal::ofRat(-(CReal::trig_lip(B) * (a - b).abs())) <= CReal::cos_rat(a) - CReal::cos_rat(b)
-        ∧ CReal::cos_rat(a) - CReal::cos_rat(b) <= CReal::ofRat(CReal::trig_lip(B) * (a - b).abs())
-{
-    let d = a - b;
-    let A = B.abs();
-    let parts = CReal::trig_lip_parts(B, a, b, ha, hb);
-    let e = d.abs() * CReal::exp_reach(A + A);
-    let he: (0 <= e) = Rat::mul_nonneg(d.abs_nonneg(), CReal::exp_reach_nonneg(A + A, linarith(B.abs_nonneg())));
-    let sd = CReal::sin_rat_small(d, A + A, parts.left);
-    let cd = CReal::cos_rat_sub_one(d, A + A, parts.left);
-    let sb = CReal::sin_rat_bound(b, B, hb);
-    let cb = CReal::cos_rat_bound(b, B, hb);
-    let m1 = CReal::mul_dev(e, CReal::cos_reach(B), he, cd.left, cd.right, cb.left, cb.right);
-    let m2 = CReal::mul_dev(e, CReal::sin_reach(B), he, sd.left, sd.right, sb.left, sb.right);
-    let law = CReal::cos_rat_add(b, d);
-    let re: (a ≈ b + d) = ring;
-    let ra = CReal::cos_rat_respects(re);
-    let L = CReal::ofRat_respects(parts.right);
-    let lo: (CReal::ofRat(-(CReal::trig_lip(B) * d.abs())) <= CReal::cos_rat(a) - CReal::cos_rat(b)) = linarith(m1.left, m2.right, law, ra, L);
-    let hi: (CReal::cos_rat(a) - CReal::cos_rat(b) <= CReal::ofRat(CReal::trig_lip(B) * d.abs())) = linarith(m1.right, m2.left, law, ra, L);
-    And(lo, hi)
 }
 
 // ---------------------------------------------------------------------------
@@ -981,4 +909,153 @@ theorem CReal::sin_rat_neg(a: Rat): CReal::sin_rat(-a) ≈ -CReal::sin_rat(a) {
 
 theorem CReal::cos_rat_neg(a: Rat): CReal::cos_rat(-a) ≈ CReal::cos_rat(a) {
     Series::cos(-a).same_terms(Series::cos(a), λ k => Series::cos_term_neg(a, k))
+}
+
+// ---------------------------------------------------------------------------
+// sin² + cos² = 1 at rationals, so both lie in [-1, 1]; and with that, one
+// Lipschitz modulus for both that does not grow with the argument:
+// |d| <= 1 reads the addition laws at d = a - b, as
+//
+//     sin(a) - sin(b) = sin(b)·(cos(d) - 1) + cos(b)·sin(d)
+//     cos(a) - cos(b) = cos(b)·(cos(d) - 1) - sin(b)·sin(d)
+//
+// with each bracket within |d|·exp_reach(1); |d| > 1 is the unit bounds.
+
+theorem CReal::sin_sq_add_cos_sq_rat(a: Rat): CReal::sin_rat(a) * CReal::sin_rat(a) + CReal::cos_rat(a) * CReal::cos_rat(a) ≈ 1 {
+    let z: (a + -a ≈ 0) = ring;
+    let one: (CReal::cos_rat(a + -a) ≈ 1) = CReal::same_trans(CReal::cos_rat_respects(z), CReal::cos_rat_zero());
+    let law = CReal::cos_rat_add(a, -a);
+    let c: (CReal::cos_rat(a) * CReal::cos_rat(-a) ≈ CReal::cos_rat(a) * CReal::cos_rat(a)) = CReal::mul_respects(CReal::same_refl(CReal::cos_rat(a)), CReal::cos_rat_neg(a));
+    let s: (CReal::sin_rat(a) * CReal::sin_rat(-a) ≈ CReal::sin_rat(a) * (-CReal::sin_rat(a))) = CReal::mul_respects(CReal::same_refl(CReal::sin_rat(a)), CReal::sin_rat_neg(a));
+    linarith(one, law, c, s)
+}
+
+// A real whose square is at most 1 lies in [-1, 1].
+theorem CReal::unit_of_sq({s: CReal}, h: s * s <= 1): -1 <= s ∧ s <= 1 {
+    let o: (CReal::ofRat(0) <= CReal::ofRat(1)) = CReal::ofRat_le(omega);
+    let i: (CReal::ofRat(1) ≈ 1) = CReal::ofRat_respects(Rat::same_refl(1));
+    let h1: (s * s <= CReal::ofRat(1) * CReal::ofRat(1)) = linarith(h, i);
+    let h2: ((-s) * (-s) <= CReal::ofRat(1) * CReal::ofRat(1)) = linarith(h, i);
+    let up = CReal::le_of_sq_le(o, h1);
+    let dn = CReal::le_of_sq_le(o, h2);
+    And(linarith(dn, i), linarith(up, i))
+}
+
+theorem CReal::sin_rat_unit(a: Rat): -1 <= CReal::sin_rat(a) ∧ CReal::sin_rat(a) <= 1 {
+    let c = CReal::cos_rat(a);
+    let h: (CReal::sin_rat(a) * CReal::sin_rat(a) <= 1) = linarith(CReal::sin_sq_add_cos_sq_rat(a), c.sq_nonneg());
+    CReal::unit_of_sq(h)
+}
+
+theorem CReal::cos_rat_unit(a: Rat): -1 <= CReal::cos_rat(a) ∧ CReal::cos_rat(a) <= 1 {
+    let s = CReal::sin_rat(a);
+    let h: (CReal::cos_rat(a) * CReal::cos_rat(a) <= 1) = linarith(CReal::sin_sq_add_cos_sq_rat(a), s.sq_nonneg());
+    CReal::unit_of_sq(h)
+}
+
+// The modulus: 2·exp_reach(1), whatever the ball (the argument is kept so
+// it is a `RatLip` modulus).
+fn CReal::trig_lip(B: Rat) → Rat { CReal::exp_reach(1) + CReal::exp_reach(1) }
+
+theorem CReal::exp_reach_one_ge(): 1 <= CReal::exp_reach(1) {
+    let b = CReal::exp_rat_bound(0, 1, omega);
+    CReal::le_of_ofRat_le(linarith(b.right, CReal::exp_rat_zero()))
+}
+
+theorem CReal::trig_lip_nonneg(B: Rat): 0 <= CReal::trig_lip(B) {
+    let r = CReal::exp_reach_one_ge();
+    let e: (CReal::trig_lip(B) ≈ CReal::exp_reach(1) + CReal::exp_reach(1)) = Rat::same_refl(CReal::trig_lip(B));
+    linarith(r, e)
+}
+
+// Both differences, as a function of the two products' bounds: the shared
+// half of `sin_rat_lip` and `cos_rat_lip`.
+theorem CReal::trig_lip_close({u: CReal}, d: Rat, B: Rat,
+    small: d.abs() <= 1 → CReal::ofRat(-(d.abs() * CReal::exp_reach(1) * 1 + d.abs() * CReal::exp_reach(1) * 1)) <= u ∧ u <= CReal::ofRat(d.abs() * CReal::exp_reach(1) * 1 + d.abs() * CReal::exp_reach(1) * 1),
+    unit: -2 <= u ∧ u <= 2):
+    CReal::ofRat(-(CReal::trig_lip(B) * d.abs())) <= u ∧ u <= CReal::ofRat(CReal::trig_lip(B) * d.abs())
+{
+    let R = CReal::exp_reach(1);
+    let e: (CReal::trig_lip(B) * d.abs() ≈ d.abs() * R * 1 + d.abs() * R * 1) = Rat::same_trans(Rat::mul_respects(Rat::same_refl(R + R), d.abs().same_refl()), ring);
+    let E = CReal::ofRat_respects(e);
+    match d.abs().le_total(1) {
+        Inl(h) => {
+            let b = small(h);
+            And(linarith(b.left, E), linarith(b.right, E))
+        },
+        Inr(h) => {
+            let r = CReal::exp_reach_one_ge();
+            let L = CReal::trig_lip(B);
+            let eL: (L ≈ R + R) = Rat::same_refl(L);
+            let g: (L * 1 <= L * d.abs()) = Rat::mul_le_mono_l(h, CReal::trig_lip_nonneg(B));
+            let two: (2 <= L * d.abs()) = linarith(g, eL, r);
+            let t = CReal::ofRat_le(two);
+            let o: (CReal::ofRat(2) ≈ 2) = CReal::ofRat_respects(Rat::same_refl(2));
+            And(linarith(unit.left, t, o), linarith(unit.right, t, o))
+        },
+    }
+}
+
+theorem CReal::sin_rat_lip(B, a, b: Rat, ha: a.abs() <= B, hb: b.abs() <= B):
+    CReal::ofRat(-(CReal::trig_lip(B) * (a - b).abs())) <= CReal::sin_rat(a) - CReal::sin_rat(b)
+        ∧ CReal::sin_rat(a) - CReal::sin_rat(b) <= CReal::ofRat(CReal::trig_lip(B) * (a - b).abs())
+{
+    let d = a - b;
+    let ua = CReal::sin_rat_unit(a);
+    let ub = CReal::sin_rat_unit(b);
+    let unit: (-2 <= CReal::sin_rat(a) - CReal::sin_rat(b) ∧ CReal::sin_rat(a) - CReal::sin_rat(b) <= 2) = And(linarith(ua.left, ub.right), linarith(ua.right, ub.left));
+    CReal::trig_lip_close(d, B, λ hd => {
+        let e = d.abs() * CReal::exp_reach(1);
+        let he: (0 <= e) = Rat::mul_nonneg(d.abs_nonneg(), CReal::exp_reach_nonneg(1, omega));
+        let sd = CReal::sin_rat_small(d, 1, hd);
+        let cd = CReal::cos_rat_sub_one(d, 1, hd);
+        let sb = CReal::sin_rat_unit(b);
+        let cb = CReal::cos_rat_unit(b);
+        let o: (CReal::ofRat(1) ≈ 1) = CReal::ofRat_respects(Rat::same_refl(1));
+        let on = CReal::ofRat_neg(1);
+        let sl: (CReal::ofRat(-1) <= CReal::sin_rat(b)) = linarith(sb.left, o, on);
+        let sh: (CReal::sin_rat(b) <= CReal::ofRat(1)) = linarith(sb.right, o);
+        let cl: (CReal::ofRat(-1) <= CReal::cos_rat(b)) = linarith(cb.left, o, on);
+        let ch: (CReal::cos_rat(b) <= CReal::ofRat(1)) = linarith(cb.right, o);
+        let m1 = CReal::mul_dev(e, 1, he, cd.left, cd.right, sl, sh);
+        let m2 = CReal::mul_dev(e, 1, he, sd.left, sd.right, cl, ch);
+        let law = CReal::sin_rat_add(b, d);
+        let re: (a ≈ b + d) = ring;
+        let ra = CReal::sin_rat_respects(re);
+        let lo: (CReal::ofRat(-(d.abs() * CReal::exp_reach(1) * 1 + d.abs() * CReal::exp_reach(1) * 1)) <= CReal::sin_rat(a) - CReal::sin_rat(b)) = linarith(m1.left, m2.left, law, ra);
+        let hi: (CReal::sin_rat(a) - CReal::sin_rat(b) <= CReal::ofRat(d.abs() * CReal::exp_reach(1) * 1 + d.abs() * CReal::exp_reach(1) * 1)) = linarith(m1.right, m2.right, law, ra);
+        And(lo, hi)
+    }, unit)
+}
+
+theorem CReal::cos_rat_lip(B, a, b: Rat, ha: a.abs() <= B, hb: b.abs() <= B):
+    CReal::ofRat(-(CReal::trig_lip(B) * (a - b).abs())) <= CReal::cos_rat(a) - CReal::cos_rat(b)
+        ∧ CReal::cos_rat(a) - CReal::cos_rat(b) <= CReal::ofRat(CReal::trig_lip(B) * (a - b).abs())
+{
+    let d = a - b;
+    let ua = CReal::cos_rat_unit(a);
+    let ub = CReal::cos_rat_unit(b);
+    let unit: (-2 <= CReal::cos_rat(a) - CReal::cos_rat(b) ∧ CReal::cos_rat(a) - CReal::cos_rat(b) <= 2) = And(linarith(ua.left, ub.right), linarith(ua.right, ub.left));
+    CReal::trig_lip_close(d, B, λ hd => {
+        let e = d.abs() * CReal::exp_reach(1);
+        let he: (0 <= e) = Rat::mul_nonneg(d.abs_nonneg(), CReal::exp_reach_nonneg(1, omega));
+        let sd = CReal::sin_rat_small(d, 1, hd);
+        let cd = CReal::cos_rat_sub_one(d, 1, hd);
+        let sb = CReal::sin_rat_unit(b);
+        let cb = CReal::cos_rat_unit(b);
+        let o: (CReal::ofRat(1) ≈ 1) = CReal::ofRat_respects(Rat::same_refl(1));
+        let on = CReal::ofRat_neg(1);
+        let sl: (CReal::ofRat(-1) <= CReal::sin_rat(b)) = linarith(sb.left, o, on);
+        let sh: (CReal::sin_rat(b) <= CReal::ofRat(1)) = linarith(sb.right, o);
+        let cl: (CReal::ofRat(-1) <= CReal::cos_rat(b)) = linarith(cb.left, o, on);
+        let ch: (CReal::cos_rat(b) <= CReal::ofRat(1)) = linarith(cb.right, o);
+        let m1 = CReal::mul_dev(e, 1, he, cd.left, cd.right, cl, ch);
+        let m2 = CReal::mul_dev(e, 1, he, sd.left, sd.right, sl, sh);
+        let law = CReal::cos_rat_add(b, d);
+        let re: (a ≈ b + d) = ring;
+        let ra = CReal::cos_rat_respects(re);
+        let lo: (CReal::ofRat(-(d.abs() * CReal::exp_reach(1) * 1 + d.abs() * CReal::exp_reach(1) * 1)) <= CReal::cos_rat(a) - CReal::cos_rat(b)) = linarith(m1.left, m2.right, law, ra);
+        let hi: (CReal::cos_rat(a) - CReal::cos_rat(b) <= CReal::ofRat(d.abs() * CReal::exp_reach(1) * 1 + d.abs() * CReal::exp_reach(1) * 1)) = linarith(m1.right, m2.left, law, ra);
+        And(lo, hi)
+    }, unit)
 }

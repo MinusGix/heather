@@ -343,6 +343,8 @@ pub struct CtorView {
 #[derive(Clone, Debug)]
 pub struct DeclView {
     pub theorem: bool,
+    /// `AsValue`: a `def`, which takes no parameters.
+    pub value: bool,
     pub name: String,
     pub params: Vec<(u64, bool)>,
     pub result: RExpr,
@@ -382,6 +384,10 @@ pub enum Request {
     Holes(RExpr, u64),
     /// A generator's declarations, which end its run.
     Publish(Vec<DeclView>),
+    /// A global's elaborated value, by its reference.
+    Body(u64),
+    /// The `match` a handle stands for, with its arms.
+    Arms(u64),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -400,7 +406,22 @@ pub enum HeadView {
     Match(u64),
     /// A hole nothing has solved.
     Hole,
+    /// A λ, by a handle to its domain.
+    Lam(u64),
+    /// A constructor value: its type's reference, the constructor's number
+    /// and name, and its fields in declaration order.
+    Ctor(u64, u64, String, Vec<u64>),
     Other,
+}
+
+/// A `match` with its arms, as `Arms` answers it (`tactic::MatchInfo`): the
+/// scrutinee, each constructor's name and a handle to its arm as a function
+/// of the payload, and the arguments the match is applied to.
+#[derive(Clone, Debug)]
+pub struct ArmsView {
+    pub scrut: u64,
+    pub arms: Vec<(String, u64)>,
+    pub args: Vec<u64>,
 }
 
 /// An answer, at the request's own kind. `Err` carries the reason a request
@@ -426,6 +447,7 @@ pub enum Answer {
     Ctors(Result<Vec<CtorView>, String>),
     /// The holes `Holes` made.
     Holes(Result<Vec<u64>, String>),
+    Arms(Result<ArmsView, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -618,8 +640,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                     Ok((x, self.nat_of("decl_param_implicit", vec![d, self.lit(j)])? != 0))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
+            let form = self.nat_of("decl_form", vec![d])?;
             decls.push(DeclView {
-                theorem: self.nat_of("decl_form", vec![d])? == 0,
+                theorem: form == 0,
+                value: form == 2,
                 name: self.string(self.call("decl_name", vec![d])?)?,
                 params,
                 result: self.expr(self.call("decl_result", vec![d])?, &mut budget)?,
@@ -679,6 +703,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                     HeadView::Lit(n) => return self.call("host_head_lit", vec![self.lit(*n)]),
                     HeadView::Match(s) => return self.call("host_head_match", vec![self.lit(*s)]),
                     HeadView::Hole => return self.call("host_head_hole", vec![]),
+                    HeadView::Lam(dom) => return self.call("host_head_lam", vec![self.lit(*dom)]),
+                    HeadView::Ctor(ty, i, name, fields) => {
+                        (self.call("host_head_ctor", vec![self.lit(*ty), self.lit(*i), self.string_value(name)?])?, fields)
+                    }
                     HeadView::Other => return self.call("host_head_other", vec![]),
                     HeadView::Global(g, name, args) => {
                         (self.call("host_head_global", vec![self.lit(*g), self.string_value(name)?])?, args)
@@ -751,6 +779,17 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(out)
             }
             Answer::Holes(Err(why)) => self.call("host_no_holes", vec![self.string_value(why)?]),
+            Answer::Arms(Ok(m)) => {
+                let mut out = self.call("host_arms", vec![self.lit(m.scrut)])?;
+                for (ctor, body) in &m.arms {
+                    out = self.call("host_arms_arm", vec![out, self.string_value(ctor)?, self.lit(*body)])?;
+                }
+                for h in &m.args {
+                    out = self.call("host_arms_arg", vec![out, self.lit(*h)])?;
+                }
+                Ok(out)
+            }
+            Answer::Arms(Err(why)) => self.call("host_no_arms", vec![self.string_value(why)?]),
         }
     }
 
@@ -822,6 +861,8 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Holes(e, self.nat_of("host_hole_count", vec![tree])?)))
             }
+            22 => Ok(Step::Ask(Request::Body(self.nat_of("host_handle", vec![tree])?))),
+            23 => Ok(Step::Ask(Request::Arms(self.nat_of("host_handle", vec![tree])?))),
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -966,6 +1007,12 @@ struct Run {
     /// and valid while the hole solutions it was made under stand
     /// ([`Reading`]).
     readings: std::collections::HashMap<(usize, RExpr), Reading>,
+    /// Handles issued for subterms, by scope and the subterm's address, so
+    /// a subterm a term shares (a block's `let` is an alias, not a binder)
+    /// is one handle wherever a view meets it in that scope
+    /// (docs/runtime-fn-setups-design.md §3.2). The `Rc` held here keeps the
+    /// address from being reused while the run lasts.
+    shared: std::collections::HashMap<(usize, usize), (Rc<Term>, u64)>,
 }
 
 /// A remembered reification: the world it was made in (its terms are
@@ -1074,6 +1121,7 @@ impl Run {
             span,
             generator,
             readings: std::collections::HashMap::new(),
+            shared: std::collections::HashMap::new(),
         }
     }
 
@@ -1208,6 +1256,18 @@ impl Run {
         self.issue_in(scope, 0, held)
     }
 
+    /// A handle to a committed subterm `t` of a term held in `scope`: the
+    /// same handle each time the same shared subterm is met there.
+    fn issue_shared(&mut self, scope: usize, t: &Rc<Term>, ty: Type, level: Level) -> u64 {
+        let key = (scope, Rc::as_ptr(t) as usize);
+        if let Some((_, h)) = self.shared.get(&key) {
+            return *h;
+        }
+        let h = self.issue(scope, Held::Term((**t).clone(), ty, level));
+        self.shared.insert(key, (Rc::clone(t), h));
+        h
+    }
+
     /// Issue a handle to something in the world of `world` holes.
     fn issue_in(&mut self, scope: usize, world: usize, held: Held) -> u64 {
         self.held.push(Issued { scope, world, held });
@@ -1338,6 +1398,7 @@ impl Run {
 /// world the run was in.
 pub(crate) struct Member {
     theorem: bool,
+    value: bool,
     name: String,
     params: Vec<(String, bool, Type, Level)>,
     result: (Type, Level),
@@ -1623,6 +1684,8 @@ impl Elaborator {
                 Request::Ctors(h) => Answer::Ctors(refusable(self.ctors_request(run, h))?),
                 Request::AsType(e) => Answer::Handle(refusable(self.as_type_request(run, &e))?),
                 Request::Holes(e, n) => Answer::Holes(refusable(self.holes_request(run, &e, n))?),
+                Request::Body(g) => Answer::Handle(refusable(self.body_request(run, g))?),
+                Request::Arms(h) => Answer::Arms(refusable(self.arms_request(run, h))?),
                 Request::Publish(decls) if run.generator => return Ok(Ended::Published(decls)),
                 Request::Publish(_) => return Err("only `generate` publishes declarations; a tactic cannot".into()),
             };
@@ -1969,7 +2032,7 @@ impl Elaborator {
     fn open_request(&self, run: &mut Run, h: u64, name: String) -> Result<OpenedView, Fault> {
         let (at, ty) = match run.held(h)? {
             (s, Held::Type(t, _)) => (s, t),
-            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
+            (s, Held::Term(t, ty, _)) => return self.open_lam(run, h, s, &t, &ty, name),
         };
         let cx = run.cx(at)?;
         let ty = run.partial_ty(&ty);
@@ -2000,6 +2063,96 @@ impl Elaborator {
         let ty = run.issue_in(at, world, Held::Type((*dom).clone(), dom_level));
         let body = run.issue_in(scope, world, Held::Type((*cod).clone(), cod_level));
         Ok(OpenedView { local: LocalView { id, name, ty }, body, dependent })
+    }
+
+    /// `Open` of a handle to a λ (a definition's body, a `match` arm): a
+    /// local of its domain, and its body under it, as a term at the
+    /// codomain of the λ's type.
+    fn open_lam(&self, run: &mut Run, h: u64, at: usize, t: &Term, ty: &Type, name: String) -> Result<OpenedView, Fault> {
+        let not_lam = || Fault::Ill(format!("handle {h} stands for a term that is not a λ"));
+        let t = run.committed_tm(t).ok_or_else(not_lam)?;
+        let Term::Lam { dom, dom_level, body, .. } = &t else { return Err(not_lam()) };
+        let cx = run.cx(at)?;
+        let ty = run.committed_ty(ty).ok_or_else(not_lam)?;
+        let pi = self
+            .goal_oracle()
+            .whnf_type(&cx.gamma, &ty)
+            .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?;
+        let Type::Pi { cod, cod_level, .. } = pi else { return Err(not_lam()) };
+        let dependent = crate::unification::strengthen_tm(&cx.gamma, body, 1).is_none();
+        let mut inner = cx.clone();
+        inner.push(name.clone(), (**dom).clone(), dom_level.clone());
+        let id = run.next_id();
+        let position = inner.gamma.len() - 1;
+        run.scopes.push(Scope { parent: Some(at), cx: inner, world: 0, locals: vec![id] });
+        let scope = run.scopes.len() - 1;
+        run.opened.push((scope, position));
+        let ty = run.issue(at, Held::Type((**dom).clone(), dom_level.clone()));
+        let body = run.issue(scope, Held::Term((**body).clone(), (*cod).clone(), cod_level));
+        Ok(OpenedView { local: LocalView { id, name, ty }, body, dependent })
+    }
+
+    /// `Body(g)`: the elaborated value of the definition `g` stands for, at
+    /// the root. Only a closed, monomorphic definition with a body has one:
+    /// a theorem's proof is discarded once checked and an axiom has none.
+    fn body_request(&self, run: &mut Run, g: u64) -> Result<u64, Fault> {
+        let key = run.globals.get(g as usize).cloned().ok_or_else(|| Fault::Ill(format!("{g} is not a global this run issued")))?;
+        let GlobalKey::At(abs) = key else {
+            return Err(Fault::Ill("a type or a kernel former has no body to read".into()));
+        };
+        let name = self.global_name_at(abs).unwrap_or_else(|| "this global".into());
+        let world = self.goal_psi();
+        let len = world.bindings.len();
+        let Some(GlobalBinding::Tm { ctx, ty, level, body, .. }) = world.bindings.get(abs) else {
+            return Err(Fault::Ill(format!("`{name}` is not a term")));
+        };
+        let Some(body) = body else {
+            return Err(Fault::Ill(format!("`{name}` has no body to read: a theorem's proof is not kept, and an axiom has none")));
+        };
+        if !ctx.entries.is_empty() || matches!(**ty, Type::UPi { .. }) {
+            return Err(Fault::Ill(format!("`{name}` is universe-polymorphic or context-dependent, and its body is not read yet")));
+        }
+        let shift = (len - abs) as u32;
+        Ok(run.issue(0, Held::Term(body.shift_global(shift), ty.shift_global(shift), level.clone())))
+    }
+
+    /// `Arms(h)`: the `match` `h` stands for, scrutinee and arms. A tier-0
+    /// match on a two-constructor inductive (`Bool`) is one kernel `Case`,
+    /// its arms the cases under the payload's binder; each is handed out as
+    /// a λ over the payload. A `match h:` is that `Case` applied to `refl`,
+    /// and the application's argument is listed. Wider matches nest `Case`s
+    /// and are refused until a reader needs them.
+    fn arms_request(&self, run: &mut Run, h: u64) -> Result<ArmsView, Fault> {
+        let (at, held) = run.held(h)?;
+        let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a match"))) };
+        let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let mut spine = Vec::new();
+        let mut head = &t;
+        while let Term::AppAt { fun, arg } = head {
+            spine.push(arg);
+            head = fun;
+        }
+        spine.reverse();
+        let Term::Case { lhs, rhs, lhs_level, rhs_level, motive_level, case_l, case_r, scrut, .. } = head else {
+            return Err(Fault::Ill("it is not a `match`".into()));
+        };
+        let (sty, slevel) = self.kernel_type(run, at, scrut).ok_or_else(|| Fault::Ill("its scrutinee has no type".into()))?;
+        let ind = self.display_tag_of(&sty).filter(|ind| ind.ctors.len() == 2)
+            .ok_or_else(|| Fault::Ill("only a `match` on a type with two constructors is presented yet".into()))?;
+        let s = run.issue_shared(at, scrut, sty, slevel);
+        let mut arms = Vec::with_capacity(2);
+        for (ctor, (dom, dom_level, case)) in ind.ctors.iter().zip([(lhs, lhs_level, case_l), (rhs, rhs_level, case_r)]) {
+            let lam = Term::Lam { dom_level: dom_level.clone(), cod_level: motive_level.clone(), dom: Rc::clone(dom), body: Rc::clone(case) };
+            let (aty, alevel) = self.kernel_type(run, at, &lam)
+                .ok_or_else(|| Fault::Ill("an arm does not type as a function of its payload".into()))?;
+            arms.push((ctor.name.clone(), run.issue(at, Held::Term(lam, aty, alevel))));
+        }
+        let mut args = Vec::with_capacity(spine.len());
+        for a in spine {
+            let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
+            args.push(run.issue_shared(at, a, aty, alevel));
+        }
+        Ok(ArmsView { scrut: s, arms, args })
     }
 
     /// A name, elaborated where the `by` is. Elaboration may leave notes and
@@ -2276,11 +2429,11 @@ impl Elaborator {
         let (fun, args) = crate::spelling::app_spine(t);
         let (record, name) = self.field_read_parts(&run.scopes[at].cx, fun)?;
         let (rty, rlevel) = self.kernel_type(run, at, record)?;
-        let r = run.issue(at, Held::Term((**record).clone(), rty, rlevel));
+        let r = run.issue_shared(at, record, rty, rlevel);
         let mut handles = Vec::with_capacity(args.len());
         for a in args {
             let (ty, level) = self.kernel_type(run, at, a)?;
-            handles.push(run.issue(at, Held::Term((**a).clone(), ty, level)));
+            handles.push(run.issue_shared(at, a, ty, level));
         }
         Some(HeadView::Field(r, name, handles))
     }
@@ -2296,9 +2449,23 @@ impl Elaborator {
         }
         if let Term::Case { scrut, .. } | Term::ElimNat { scrut, .. } = crate::goal_combinators::head_match(t) {
             return match self.kernel_type(run, at, scrut) {
-                Some((ty, level)) => HeadView::Match(run.issue(at, Held::Term((**scrut).clone(), ty, level))),
+                Some((ty, level)) => HeadView::Match(run.issue_shared(at, scrut, ty, level)),
                 None => HeadView::Other,
             };
+        }
+        if let Term::Lam { dom, dom_level, .. } = t {
+            return HeadView::Lam(run.issue(at, Held::Type((**dom).clone(), dom_level.clone())));
+        }
+        if let Some((ind, i, fields)) = self.view_ctor(&run.scopes[at].cx, t) {
+            let mut handles = Vec::with_capacity(fields.len());
+            for f in &fields {
+                let Some((ty, level)) = self.kernel_type(run, at, f) else {
+                    return HeadView::Other;
+                };
+                handles.push(run.issue_shared(at, f, ty, level));
+            }
+            let name = ind.ctors[i].name.clone();
+            return HeadView::Ctor(run.global_ref(GlobalKey::Type(ind.tag)), i as u64, name, handles);
         }
         // A β-redex is shown as its contractum, as the diagnostics spell it:
         // an instantiated λ (a lemma's `f(k)` at `f := λ x => …`) is a call
@@ -2321,7 +2488,7 @@ impl Elaborator {
             let Some((ty, level)) = self.kernel_type(run, at, a) else {
                 return HeadView::Other;
             };
-            handles.push(run.issue(at, Held::Term((**a).clone(), ty, level)));
+            handles.push(run.issue_shared(at, a, ty, level));
         }
         match head {
             crate::display::CallHead::Field(name) | crate::display::CallHead::Global(name, _) => {
@@ -3111,13 +3278,18 @@ impl Elaborator {
     /// source would be. The group is one transaction: a member refused
     /// rolls back the ones before it.
     pub(crate) fn elab_generate(&mut self, g: &heather_syntax::ast::GenerateItem) -> R<()> {
-        let shown = tactic_name(&g.generator);
-        let (members, psi) = self.run_generator(&g.generator, g.span)?;
+        let label = format!("generate {}", tactic_name(&g.generator));
+        let (members, psi) = self.run_generator(&g.generator, &label, g.span)?;
+        self.publish_members(&members, psi, &label, g.span)
+    }
+
+    /// Publish a generator's checked group, every member or none.
+    fn publish_members(&mut self, members: &[Member], psi: usize, label: &str, span: Span) -> R<()> {
         self.session_transaction(|me| {
-            for m in &members {
-                me.publish_member(m, psi, g.span).map_err(|e| match e {
+            for m in members {
+                me.publish_member(m, psi, span).map_err(|e| match e {
                     crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
-                        msg: format!("`generate {shown}`: the generated `{}` was refused: {msg}", m.name),
+                        msg: format!("`{label}`: the generated `{}` was refused: {msg}", m.name),
                         span,
                     },
                     other => other,
@@ -3127,12 +3299,139 @@ impl Elaborator {
         })
     }
 
+    /// A declaration under a prefix generator, `P(args) fn f …` or
+    /// `P(args) def x = e;` (docs/value-definitions-design.md §3). The
+    /// generator is called with what the declaration hands it in front of
+    /// the written arguments, `P(name, args)` for a `fn` or `theorem` and
+    /// `P(name, value, args)` for a `def`, and run as `generate` runs its
+    /// generator.
+    ///
+    /// A `fn` or `theorem` is **consumed**: elaborated and published as
+    /// written, then read by the generator (by name, with `lookup`). A `def`
+    /// is **rewritten**: the declaration as written is not published; the
+    /// generator receives its value (at the type its parameter asks for: a
+    /// `String` as data, an `Expr` quoted), and its group must declare the
+    /// name. Either way the item is one transaction.
+    pub(crate) fn elab_prefixed(&mut self, p: &heather_syntax::ast::PrefixedItem) -> R<()> {
+        use heather_syntax::ast::{Block, ExprKind, Stmt, TyKind};
+        let d = &p.decl;
+        let prefix = match &p.generator.kind {
+            ExprKind::Var(n) => n.clone(),
+            ExprKind::App { head, .. } => match &head.kind {
+                ExprKind::Var(n) => n.clone(),
+                _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+            },
+            _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+        };
+        let form = if d.value { "def" } else if d.kind == heather_syntax::ast::DeclKind::Theorem { "theorem" } else { "fn" };
+        let label = format!("{prefix} {form} {}", d.name);
+        if !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_)) {
+            return err(
+                format!(
+                    "`{prefix}` is not a generator in scope: a name before `{form}` is a \
+                     generator, a function returning `tactic::Tac<List<tactic::Decl>>` \
+                     (docs/value-definitions-design.md §3)"
+                ),
+                p.generator.span,
+            );
+        }
+        let name = Expr { kind: ExprKind::Str(d.name.clone()), span: d.span };
+        let mut handed = vec![name];
+        if d.value {
+            if !d.tyvars.is_empty() || !d.params.is_empty() {
+                return err(
+                    format!("`{label}`: a rewritten `def` cannot have type parameters yet"),
+                    d.span,
+                );
+            }
+            let value = (*d.body.result).clone();
+            // The written type, if any, is the value's: `{ let x: T = e; x }`.
+            let value = match &d.result.kind {
+                TyKind::TypeOf(_) => value,
+                _ => {
+                    let local = d.name.rsplit("::").next().unwrap_or(&d.name).to_string();
+                    let span = value.span;
+                    Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![Stmt::Let {
+                                name: local.clone(),
+                                ty: Some(d.result.clone()),
+                                expr: value,
+                                span,
+                                opaque: false,
+                            }],
+                            result: Box::new(Expr { kind: ExprKind::Var(local), span }),
+                            ons: Vec::new(),
+                            span,
+                        })),
+                        span,
+                    }
+                }
+            };
+            handed.push(value);
+        }
+        let generator = match &p.generator.kind {
+            ExprKind::App { head, args, named, explicit, goal_oriented } => Expr {
+                kind: ExprKind::App {
+                    head: head.clone(),
+                    args: handed.into_iter().chain(args.iter().cloned()).collect(),
+                    named: named.clone(),
+                    explicit: *explicit,
+                    goal_oriented: *goal_oriented,
+                },
+                span: p.generator.span,
+            },
+            _ => Expr {
+                kind: ExprKind::App {
+                    head: Box::new(p.generator.clone()),
+                    args: handed,
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span: p.generator.span,
+            },
+        };
+        self.session_transaction(|me| {
+            if !d.value {
+                me.elab_decl(d)?;
+            }
+            // A prefix's call is `P(name, args)` or `P(name, value, args)`,
+            // which the refusal says, since the writer did not spell it.
+            let convention = if d.value {
+                format!("a generator prefixing a `def` is called as `{prefix}(name, value, …)`")
+            } else {
+                format!("a generator prefixing a `{form}` is called as `{prefix}(name, …)`")
+            };
+            let (members, psi) = me.run_generator(&generator, &label, p.span).map_err(|e| match e {
+                crate::ElabError::Elab { msg, span } if !msg.starts_with(&format!("`{label}`")) => crate::ElabError::Elab {
+                    msg: format!("`{label}`: the declaration's call of its generator is refused ({convention}): {msg}"),
+                    span,
+                },
+                crate::ElabError::Elab { msg, span } if msg.contains("the generator's call is ill-typed") => {
+                    crate::ElabError::Elab { msg: format!("{msg}; {convention}"), span }
+                }
+                other => other,
+            })?;
+            if d.value && !members.iter().any(|m| m.name == d.name) {
+                return err(
+                    format!(
+                        "`{label}`: the generator did not declare `{}`: a generator prefixing a \
+                         `def` rewrites it, so its group declares the name",
+                        d.name
+                    ),
+                    p.span,
+                );
+            }
+            me.publish_members(&members, psi, &label, p.span)
+        })
+    }
+
     /// Run a generator to its declarations, each read back and checked as
     /// far as the run can (its body against its statement), and the number
     /// of globals of the world they were built in.
-    fn run_generator(&self, generator: &Expr, span: Span) -> R<(Vec<Member>, usize)> {
-        let shown = tactic_name(generator);
-        let fail = |msg: String| err(format!("`generate {shown}`: {msg}"), span);
+    fn run_generator(&self, generator: &Expr, label: &str, span: Span) -> R<(Vec<Member>, usize)> {
+        let fail = |msg: String| err(format!("`{label}`: {msg}"), span);
         let cx = Cx::empty();
         let world = self.goal_psi();
         let (closed, quoted) = self.protocol_value(&cx, &world, generator, "host_generator", "generate", span)?;
@@ -3140,6 +3439,16 @@ impl Elaborator {
         let Type::Pi { dom_level, cod_level, dom, cod } = runs else {
             return err("`tactic::host_generator` takes nothing", span);
         };
+        // The call is run before anything else reads it, and elaboration
+        // leaves a mismatch for the kernel to find, so the kernel checks it
+        // first: a value of the wrong type is refused here instead of being
+        // evaluated into a stuck answer.
+        if let Err(e) = self.kernel_check_term(&world, Layer::Code, &LocalCtx::nil(), &closed, &dom, &dom_level) {
+            return fail(format!(
+                "the generator's call is ill-typed: it is not a `tactic::Tac<List<tactic::Decl>>` \
+                 of these arguments ({e:?})"
+            ));
+        }
         let tree = Term::App { fun: Rc::new(head), dom_level, cod_level, dom, cod, arg: Rc::new(closed) };
         let arena = ValueArena::new();
         let reader = Reader::new(&world, &arena);
@@ -3166,6 +3475,9 @@ impl Elaborator {
             return Err(format!("`{name}` is not a declaration's name"));
         }
         let at = |why: String| format!("`{name}`: {why}");
+        if d.value && !d.params.is_empty() {
+            return Err(at("a value (`AsValue`) takes no parameters; a function is `AsFunction`".into()));
+        }
         let mut parent = 0;
         let mut params = Vec::with_capacity(d.params.len());
         for &(x, implicit) in &d.params {
@@ -3196,7 +3508,7 @@ impl Elaborator {
         let unsolved = |what: &str| at(format!("its {what} mentions a hole nothing solved"));
         let result = run.committed_ty(&result).ok_or_else(|| unsolved("statement"))?;
         let body = run.committed_tm(&body.term).ok_or_else(|| unsolved("body"))?;
-        Ok(Member { theorem: d.theorem, name: name.clone(), params, result: (result, level), body })
+        Ok(Member { theorem: d.theorem, value: d.value, name: name.clone(), params, result: (result, level), body })
     }
 
     /// Elaborate one generated declaration from its skeleton (see
@@ -3225,6 +3537,7 @@ impl Elaborator {
             kind: if m.theorem { DeclKind::Theorem } else { DeclKind::Fn },
             is_meta: false,
             is_evidence: false,
+            value: m.value,
             elaborates: None,
             name: m.name.clone(),
             tyvars: Vec::new(),

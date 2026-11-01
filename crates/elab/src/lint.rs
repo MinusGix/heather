@@ -187,6 +187,10 @@ pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
         }
         Item::Impl(i) => datarepr_body(&i.body, &mut out),
         Item::Generate(g) => expr(&g.generator, &mut out),
+        Item::Prefixed(p) => {
+            expr(&p.generator, &mut out);
+            decl(&p.decl, &mut out);
+        }
         Item::Import(_) => {}
     }
     out
@@ -259,6 +263,8 @@ fn ty(t: &Ty, out: &mut Vec<Finding>) {
             expr(b, out);
         }
         TyKind::OfExpr(e) | TyKind::Fin(e) => expr(e, out),
+        // A `def`'s inferred type is its value, linted as its body.
+        TyKind::TypeOf(_) => {}
         TyKind::Named { args, .. } => args.iter().for_each(|a| ty(a, out)),
         TyKind::Squash(inner) => ty(inner, out),
         TyKind::Vec { elem, len } => {
@@ -614,6 +620,7 @@ impl BinderUses {
                 self.expr(b);
             }
             TyKind::OfExpr(e) | TyKind::Fin(e) => self.expr(e),
+            TyKind::TypeOf(_) => {}
             TyKind::Named { args, .. } => args.iter().for_each(|a| self.ty(a)),
             TyKind::Squash(inner) => self.ty(inner),
             TyKind::Vec { elem, len } => {

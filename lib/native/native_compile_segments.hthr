@@ -16,6 +16,7 @@ import native_compile_region;
 import native_compile_homes;
 import native_alloc;
 import native_compile_steps;
+import function_ir_pass;
 import linux_calls;
 import linux_trees;
 import linux_x86_64_io;
@@ -328,6 +329,111 @@ theorem Target::goes_word_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
     })(refl)
 }
 
+// What RBX holds once a word a statement reads is in a register: the
+// number of a known word, otherwise as `word_to` leaves it.
+fn Layout::rbx_known(self layout: Layout, known: List<Fact>, env: Env, id: Nat) → BitVec(64) {
+    match known.known(id) { None => layout.rbx_word(env, id), Some(v) => BitVec::ofNat(v) }
+}
+
+// A word a statement reads into a register: known, with the number the
+// environment has, or live.
+fn Env::Reads(self env: Env, known: List<Fact>, live: List<Nat>, id: Nat) → Type {
+    match known.known(id) { None => Mem(id, live), Some(v) => (env.number(id) = v) ∧ (v < Nat::pow(2, 64)) }
+}
+
+// A known word's number, and that it is a word.
+theorem Env::knows_known(self env: Env, known: List<Fact>): env.Knows(known) → (id, v: Nat) → known.known(id) = Some(v) →
+    (env.number(id) = v) ∧ (v < Nat::pow(2, 64)) {
+    match known {
+        Nil => λ _ id v none => absurd(none),
+        Cons(f, rest) => λ knows id v found => (match id.eq_dec(f.id) as λ d =>
+                (match (match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) as λ _ => Option<Nat> { True => Some(f.value), False => rest.known(id) }) = Some(v) →
+                (env.number(id) = v) ∧ (v < Nat::pow(2, 64)) {
+            Inl(e) => λ same => {
+                let value: (f.value = v) = Option::some_inj(f.value, v, same);
+                j(sym(e), λ x _ => (env.number(x) = v) ∧ (v < Nat::pow(2, 64)),
+                    j(value, λ y _ => (env.number(f.id) = y) ∧ (y < Nat::pow(2, 64)), knows.left))
+            },
+            Inr(_) => λ later => env.knows_known(rest, knows.right, id, v, later),
+        })(found),
+    }
+}
+
+// An id the known facts do not name is among the unknown ones.
+theorem List::unknown_mem(self known: List<Fact>, id: Nat, none: known.known(id) = None, ids: List<Nat>): Mem(id, ids) → Mem(id, known.unknown(ids)) {
+    match ids {
+        Nil => λ never => false_elim(never),
+        Cons(i, rest) => λ m => (match known.known(i) as λ o => known.known(i) = o →
+                Mem(id, match o as λ _ => List<Nat> { None => Cons(i, known.unknown(rest)), Some(_) => known.unknown(rest) }) {
+            None => λ _ => match m { Inl(e) => Inl(e), Inr(later) => Inr(known.unknown_mem(id, none, rest, later)) },
+            Some(v) => λ found => match m {
+                Inl(e) => absurd(trans(sym(found), trans(cong_fn<Nat, Option<Nat>>(λ x => known.known(x), sym(e)), none))),
+                Inr(later) => known.unknown_mem(id, none, rest, later),
+            },
+        })(refl),
+    }
+}
+
+// A word a statement reads, given the facts it knows and that the words it
+// does not know are live.
+theorem Env::reads_of(self env: Env, known: List<Fact>, knows: env.Knows(known), ids, live: List<Nat>, id: Nat, m: Mem(id, ids),
+    unknown: (i: Nat) → Mem(i, known.unknown(ids)) → Mem(i, live)): env.Reads(known, live, id) {
+    (match known.known(id) as λ o => known.known(id) = o → (match o as λ _ => Type { None => Mem(id, live), Some(v) => (env.number(id) = v) ∧ (v < Nat::pow(2, 64)) }) {
+        None => λ none => unknown(id, known.unknown_mem(id, none, ids, m)),
+        Some(v) => λ found => env.knows_known(known, knows, id, v, found),
+    })(refl)
+}
+
+// A read word's number fits it.
+theorem Target::reads_number(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    known: List<Fact>, id: Nat, reads: env.Reads(known, live, id), inside: id < t.words): env.word(id).toNat() = env.number(id) {
+    (match known.known(id) as λ o => (match o as λ _ => Type { None => Mem(id, live), Some(v) => (env.number(id) = v) ∧ (v < Nat::pow(2, 64)) }) →
+            env.word(id).toNat() = env.number(id) {
+        None => λ holds => t.held_number(live, env, g, m, held, id, holds, inside),
+        Some(v) => λ known_v => BitVec::toNat_ofNat(64, env.number(id), j(sym(known_v.left), λ x _ => x < Nat::pow(2, 64), known_v.right)),
+    })(reads)
+}
+
+theorem Prog::within_known_to(self p: Prog, layout: Layout, known: List<Fact>, id: Nat, register: Gpr): p.Within(p.known_to(layout, known, id, register)) {
+    (match known.known(id) as λ o => p.Within(match o {
+        None => p.word_to(layout, id, register),
+        Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])),
+    }) {
+        None => p.within_word_to(layout, id, register),
+        Some(_) => Exists(1, refl),
+    })
+}
+
+theorem Prog::known_to_within(self p: Prog, layout: Layout, known: List<Fact>, id: Nat, register: Gpr, program: Prog,
+    within: p.known_to(layout, known, id, register).Within(program)): p.Within(program) {
+    p.within_trans(p.known_to(layout, known, id, register), program, p.within_known_to(layout, known, id, register), within)
+}
+
+// The word in `register`, a word the statement reads: its number put there
+// where it is known, otherwise read from its home (`goes_word_to`).
+theorem Target::goes_known_to(self t: Target, live: List<Nat>, env: Env, p: Prog, known: List<Fact>, id: Nat, register: Gpr, inside: id < t.words,
+    reads: env.Reads(known, live, id), within: p.known_to(t.layout(), known, id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.known_to(t.layout(), known, id, register)), tree, q)):
+    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+        q(write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().rbx_known(known, env, id), g)), m)) {
+    let layout = t.layout();
+    (match known.known(id) as λ o =>
+            (match o as λ _ => Type { None => Mem(id, live), Some(v) => (env.number(id) = v) ∧ (v < Nat::pow(2, 64)) }) →
+            (match o as λ _ => Prog { None => p.word_to(layout, id, register), Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])) }).Within(t.program) →
+            t.GoesR(prog_len(match o as λ _ => Prog { None => p.word_to(layout, id, register), Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])) }), tree, q) →
+            t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
+                q(write_gpr(register, env.word(id), write_gpr(Rbx, match o as λ _ => BitVec(64) { None => layout.rbx_word(env, id), Some(v) => BitVec::ofNat(v) }, g)), m)) {
+        None => λ holds w n => t.goes_word_to(live, env, p, id, register, inside, holds, w, tree, q, n),
+        Some(v) => λ known_v w n => {
+            let moved = t.goes_block(p, 0, [MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)], w, tree,
+                λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), n);
+            let value: (env.word(id) = BitVec::ofNat(v)) = cong_fn<Nat, BitVec(64)>(λ x => BitVec::ofNat(x), known_v.left);
+            λ s here resident held => moved(s, here, resident,
+                j(value, λ x _ => q(write_gpr(register, x, write_gpr(Rbx, BitVec::ofNat(v), s.gprs)), s.memory), held.right))
+        },
+    })(reads, within, next)
+}
+
 // `register` stored to the word's slot.
 theorem Target::goes_word_store(self t: Target, p: Prog, id: Nat, register: Gpr, inside: id < t.words,
     within: p.word_store(t.layout(), id, register).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
@@ -550,11 +656,11 @@ theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, c
 }
 
 // exit(status), every exit with the word meeting the tree.
-theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, status: Nat, inside: status < t.words, holds: Mem(status, live),
-    within: p.exits(t.layout(), status).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, known: List<Fact>, status: Nat, inside: status < t.words, holds: env.Reads(known, live, status),
+    within: p.exits(t.layout(), known, status).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, env.word(status)) → Sim(t.io(), tree, s)):
     t.At(prog_len(p), live, tree, env) {
-    let word = p.word_to(t.layout(), status, Rdi);
+    let word = p.known_to(t.layout(), known, status, Rdi);
     let set = then(word, Block([MovRI(Rax, BitVec::ofNat(60))]));
     let w_set = set.within_before(0, Syscall, t.program, within);
     let w_word = word.within_before(0, Block([MovRI(Rax, BitVec::ofNat(60))]), t.program, w_set);
@@ -563,11 +669,11 @@ theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, s
         λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(u, env.word(status)), called);
     let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
         (read_gpr(Rax, write_gpr(Rax, BitVec::ofNat(60), g)) = BitVec::ofNat(60)) ∧ (read_gpr(Rdi, write_gpr(Rax, BitVec::ofNat(60), g)) = env.word(status));
-    let loaded = t.goes_word_to(live, env, p, status, Rdi, inside, holds, w_word, tree, q,
+    let loaded = t.goes_known_to(live, env, p, known, status, Rdi, inside, holds, w_word, tree, q,
         t.goes_weaken(prog_len(word), tree, λ (u: MachineState<X86Memory(t.r.profile)>) => LinuxExits(execute_block_normal([MovRI(Rax, BitVec::ofNat(60))], u), env.word(status)),
             λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), moved, λ u held => held));
     t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
-            q(write_gpr(Rdi, env.word(status), write_gpr(Rbx, t.layout().rbx_word(env, status), s.gprs)), s.memory),
+            q(write_gpr(Rdi, env.word(status), write_gpr(Rbx, t.layout().rbx_known(known, env, status), s.gprs)), s.memory),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory), loaded, λ s held => ⟨held, ⟨refl, refl⟩⟩)
 }
 

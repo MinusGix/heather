@@ -1391,7 +1391,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
                 scan_splices(a, menv, out)?;
                 scan_splices(b, menv, out)
             }
-            TyKind::OfExpr(e) => scan_splices(e, menv, out),
+            TyKind::OfExpr(e) | TyKind::TypeOf(e) => scan_splices(e, menv, out),
             TyKind::Named { args, .. } => args.iter().try_for_each(|a| walk_ty(a, menv, out)),
             TyKind::Vec { elem, len } => {
                 walk_ty(elem, menv, out)?;

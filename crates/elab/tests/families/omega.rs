@@ -61,3 +61,5 @@ mod tactic_split_all;
 mod tactic_splits;
 #[path = "../tactic_generate.rs"]
 mod tactic_generate;
+#[path = "../value_definitions.rs"]
+mod value_definitions;

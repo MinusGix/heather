@@ -209,4 +209,11 @@ theorem class_antisymm(x, y: K, h: x <= y, k: y <= x): x ≈ y { linarith }
 theorem class_product(x, y: K, h: K.unit <= x, k: K.unit <= y): K.unit <= x * y { nlinarith }
 // expect-error: `linarith` could not prove
 theorem class_not_entailed(x, y: K, h: x <= y): x < y { linarith }
+// A predicate defined in a parent class's section reads `K.inv` off the
+// parent's dictionary, a record built from `K`'s fields: it is still the
+// negation (issues/ring-atom-mentions-class-constant.md).
+theorem class_parent_predicate(z, e: K, h: AbsLe(z, e)): K.unit <= e { linarith(h.left, h.right) }
+theorem class_parent_close(x, y, e: K, h: Close(x, y, e)): y < x + e { linarith(h.left) }
+// expect-error: `linarith` could not prove
+theorem class_parent_not_entailed(z, e: K, h: AbsLe(z, e)): K.unit < e { linarith(h.left, h.right) }
 }

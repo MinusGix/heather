@@ -9,6 +9,7 @@ import native_compile;
 import native_compile_correct;
 import native_alloc;
 import function_ir;
+import function_ir_pass;
 import linux_x86_64_image;
 import bitvec;
 import list;
@@ -174,29 +175,43 @@ theorem exit_unless_shape(): exit_unless().shape() = [4, 4, 0, 4, 4, 0, 4, 2, 3,
 
 // A part read back is its emission at `Start`: the label name after it,
 // then how many numbers its items are, the items and their lengths.
-theorem exit3_exit_reading(): Exit(0).emission_reading(slotted(exit3()), [], 5) =
-    Cons(5, Start.exits(slotted(exit3()), 0).reading()) { refl }
-theorem far_exit_reads_nothing(): Exit(64).emission_reading(slotted(far_exit()), [], 0) = [] { refl }
+theorem exit3_exit_reading(): Exit(0).emission_reading(slotted(exit3()), [], [], 5) =
+    Cons(5, Start.exits(slotted(exit3()), [], 0).reading()) { refl }
+theorem far_exit_reads_nothing(): Exit(64).emission_reading(slotted(far_exit()), [], [], 0) = [] { refl }
+
+// What a leaf leaves known: each word a constant ends in, newest first, and
+// only a number its width holds (300 is not one byte, so the call after it
+// reads that word from its home).
+theorem leaves_known_constants(): List::leaves_known([Const(64, 0, 3), Const(8, 1, 7)]) = [Fact(1, 7), Fact(0, 3)] { refl }
+theorem leaves_known_fits(): List::leaves_known([Const(8, 1, 300)]) = [] { refl }
+
+// A leaf the call or exit after it reads known words from: the exit takes
+// the 3 the leaf puts in word 0 as an immediate, and the leaf, with nothing
+// then live after it, writes nothing (function_ir_pass, `Stmt::pair_known`).
+theorem exit3_carries(): exit3().main.left().carried(exit3().main.right(), slotted(exit3()).homes, []) = [Fact(0, 3)] { refl }
+theorem exit3_exits_known(): exit3().main.emit(Start, slotted(exit3()), [], 0) =
+    Some(Compiled(Start.leaf(slotted(exit3()), [], []).unwrap_or(Start).exits(slotted(exit3()), [Fact(0, 3)], 0), 0)) { refl }
 
 // The joins `write-elf` states a long emission with, each at the part it
 // fits, in a checking position over a statement given by its parts' names;
-// a `Then`'s first part with what its rest needs live (word 0, the exit's).
-theorem exit3_by_parts(): exit3().main.emit(Start, slotted(exit3()), [], 0) = exit3().main.right().emit(
-        Start.leaf(slotted(exit3()), [0], [Const(64, 0, 3)]).unwrap_or(Start), slotted(exit3()), [], 0) {
-    Stmt::emit_then_of(exit3().main, trivial, Start, slotted(exit3()), [], 0,
-        Compiled(Start.leaf(slotted(exit3()), [0], [Const(64, 0, 3)]).unwrap_or(Start), 0), refl)
+// a `Then`'s first part with what its rest needs live given what it leaves
+// known (nothing: the exit takes word 0 as an immediate), the rest with that.
+theorem exit3_by_parts(): exit3().main.emits(Start, slotted(exit3()), [], [], 0) = exit3().main.right().emits(
+        Start.leaf(slotted(exit3()), [], []).unwrap_or(Start), slotted(exit3()), [], [Fact(0, 3)], 0) {
+    Stmt::emits_then_of(exit3().main, trivial, Start, slotted(exit3()), [], [], 0,
+        Compiled(Start.leaf(slotted(exit3()), [], []).unwrap_or(Start), 0), refl)
 }
 
 // The loop around a branch, from its parts': each arm exits at its own
 // start, and a `Repeat` and a `Branch` take label names 1 to 4.
 fn eu_layout() → Layout { slotted(exit_unless()) }
-fn eu_yes() → Prog { Start.label(1).tests(eu_layout(), 0, 3).exits(eu_layout(), 1) }
-fn eu_no() → Prog { eu_yes().else_label(3, 4).exits(eu_layout(), 2) }
-theorem exit_unless_by_parts(): exit_unless().main.emit(Start, eu_layout(), [], 0) =
+fn eu_yes() → Prog { Start.label(1).tests(eu_layout(), 0, 3).exits(eu_layout(), [], 1) }
+fn eu_no() → Prog { eu_yes().else_label(3, 4).exits(eu_layout(), [], 2) }
+theorem exit_unless_by_parts(): exit_unless().main.emits(Start, eu_layout(), [], [], 0) =
     Some(Compiled(then(eu_no().join_label(4).tests(eu_layout(), 0, 2), Jmp(1)).label(2), 4)) {
-    Stmt::emit_repeat_of(exit_unless().main, trivial, Start, eu_layout(), trivial, [], 0, Compiled(eu_no().join_label(4), 4),
-        Stmt::emit_branch_of(exit_unless().main.left(), trivial, Start.label(1), eu_layout(), trivial,
-            exit_unless().main.loop_out(eu_layout().homes, []), 2, Compiled(eu_yes(), 4), Compiled(eu_no(), 4), refl, refl))
+    Stmt::emits_repeat_of(exit_unless().main, trivial, Start, eu_layout(), trivial, [], [], 0, Compiled(eu_no().join_label(4), 4),
+        Stmt::emits_branch_of(exit_unless().main.left(), trivial, Start.label(1), eu_layout(), trivial,
+            exit_unless().main.loop_out(eu_layout().homes, []), [], 2, Compiled(eu_yes(), 4), Compiled(eu_no(), 4), refl, refl))
 }
 
 // A byte node takes label names (its bounds check's), so the leaf after it

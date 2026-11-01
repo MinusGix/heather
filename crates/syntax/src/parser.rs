@@ -900,6 +900,7 @@ impl Parser {
             kind: DeclKind::Theorem,
             is_meta: false,
             is_evidence: true,
+            value: false,
             elaborates: None,
             name: format!("{}::pos", d.name),
             tyvars: d.tyvars.clone(),
@@ -993,6 +994,15 @@ impl Parser {
                                   head is open (docs/host-elaboration-interface-design.md §19)"
                                 .into(),
                             span: g.span,
+                        })
+                    }
+                    Item::Prefixed(p) => {
+                        return Err(ParseError {
+                            msg: "a prefixed declaration cannot be in a section yet: its \
+                                  generator runs at the module's empty context, as a \
+                                  `generate` does (docs/value-definitions-design.md §3)"
+                                .into(),
+                            span: p.span,
                         })
                     }
                 }
@@ -1250,6 +1260,10 @@ impl Parser {
                 msg: "a `generate` cannot yet inherit an `assuming` telescope".into(),
                 span: g.span,
             }),
+            Item::Prefixed(p) => Err(ParseError {
+                msg: "a prefixed declaration cannot yet inherit an `assuming` telescope".into(),
+                span: p.span,
+            }),
         }
     }
 
@@ -1312,7 +1326,68 @@ impl Parser {
                  (issues/requires-placement-syntax.md)"
             ));
         }
+        // `runtime fn f(…)`, `runtime(owned) fn f(…)`, `regex def x = "…";` —
+        // a declaration under a prefix generator
+        // (docs/value-definitions-design.md §3). A name before a declaration
+        // keyword, or a name applied, is not otherwise an item, so this reads
+        // nothing that used to parse. The modifier keywords are matched first.
+        if let TokKind::Ident(w) = self.peek()
+            && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence")
+            && (matches!(self.nth(1), TokKind::LParen)
+                || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))
+                // `a b fn f`: two prefixes, read as one so it is refused as such.
+                || (matches!(self.nth(1), TokKind::Ident(_))
+                    && matches!(self.nth(2), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))))
+        {
+            return Ok(Item::Prefixed(self.prefixed()?));
+        }
         Ok(Item::Decl(self.decl()?))
+    }
+
+    /// `P decl` or `P(args) decl` ([`Item::Prefixed`]). One prefix: a second
+    /// name before the declaration is refused, since composing generators is
+    /// open (issues/scoped-declaration-generators.md). The declaration under
+    /// it is a `fn`, a `theorem` or a `def`.
+    fn prefixed(&mut self) -> R<PrefixedItem> {
+        let start = self.peek_span();
+        let (name, name_span) = self.ident("a generator's name")?;
+        let mut generator = Expr { kind: ExprKind::Var(name.clone()), span: name_span };
+        if matches!(self.peek(), TokKind::LParen) {
+            self.bump();
+            let (args, named, close) = self.call_args()?;
+            generator = Expr {
+                kind: ExprKind::App { head: Box::new(generator), args, named, explicit: false, goal_oriented: false },
+                span: name_span.join(close),
+            };
+        }
+        if let TokKind::Ident(w) = self.peek()
+            && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence")
+        {
+            let w = w.clone();
+            return self.err(&format!(
+                "one generator prefixes a declaration: `{name} {w} …` stacks two, and how \
+                 generators compose is open (issues/scoped-declaration-generators.md)"
+            ));
+        }
+        let decl = self.decl()?;
+        if decl.is_meta || decl.is_evidence || decl.kind == DeclKind::Axiom {
+            let what = if decl.is_meta {
+                "a `meta fn`"
+            } else if decl.is_evidence {
+                "an `evidence theorem`"
+            } else {
+                "an `axiom`"
+            };
+            return Err(ParseError {
+                msg: format!(
+                    "a generator prefixes a `fn`, a `theorem` or a `def`, not {what} \
+                     (docs/value-definitions-design.md §3)"
+                ),
+                span: start.join(decl.span),
+            });
+        }
+        let span = start.join(decl.span);
+        Ok(PrefixedItem { generator, decl, span })
     }
 
     /// `class C<A> extends P<A>, Q<A> { f: T, … }`
@@ -2153,6 +2228,7 @@ impl Parser {
                 kind: DeclKind::Theorem,
                 is_meta: false,
                 is_evidence: true,
+            value: false,
                 elaborates: None,
                 name: format!("{name}::{field}_positive"),
                 tyvars: params.iter().map(|p| TyParam { name: p.clone(), level: 0, span: fspan }).collect(),
@@ -2575,12 +2651,21 @@ impl Parser {
         if is_evidence {
             self.bump();
         } else if self.at_kw("evidence")
-            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn" || s == "axiom" || s == "meta")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn" || s == "axiom" || s == "meta" || s == "def")
         {
             return self.err(
                 "`evidence` marks a `theorem`: a rule is a proof `:= infer` applies \
                  (docs/positivity-evidence-design.md §6 A)",
             );
+        }
+        // `def name: T = e;` — a value definition
+        // (docs/value-definitions-design.md §2). Contextual like every
+        // keyword here: only `def` followed by a name, at an item's head.
+        if self.at_kw("def") && matches!(self.nth(1), TokKind::Ident(_)) {
+            if is_meta {
+                return self.err("`meta` marks a `fn`: a `def` is an ordinary value");
+            }
+            return self.value_decl(start, propagation_start);
         }
         let kind = if self.eat_kw("fn") {
             DeclKind::Fn
@@ -2591,7 +2676,7 @@ impl Parser {
         } else if is_meta {
             return self.err("`meta` marks a `fn`: write `meta fn name(…)`");
         } else {
-            return self.err("expected `fn`, `theorem`, `axiom`, or `inductive`");
+            return self.err("expected `fn`, `theorem`, `def`, `axiom`, or `inductive`");
         };
         // A declaration head is the one *binding* position where a qualified
         // name is legal: `fn List::nth(…)` attaches the declaration to a
@@ -2716,7 +2801,88 @@ impl Parser {
         crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, is_evidence, elaborates, name, tyvars, params, result, decreases, body, span })
+        Ok(Decl { kind, is_meta, is_evidence, value: false, elaborates, name, tyvars, params, result, decreases, body, span })
+    }
+
+    /// `def name<A>: T = e;`, `def name = e;` (docs/value-definitions-design.md
+    /// §2). A value is a [`DeclKind::Fn`] with no written parameters and the
+    /// [`Decl::value`] flag; its body is the block `{ e }`. Without `: T` the
+    /// result is [`TyKind::TypeOf`] the value. Type parameters and inline
+    /// constraints are allowed (they are implicit, so the value is still used
+    /// bare); a written parameter list is refused with the two spellings it
+    /// could have meant.
+    fn value_decl(&mut self, start: Span, propagation_start: usize) -> R<Decl> {
+        self.bump(); // `def`
+        let (name, name_span) = self.qual_ident("definition name")?;
+        if name.matches("::").count() > 1 {
+            return Err(ParseError {
+                msg: format!(
+                    "`{name}` has more than one qualifier: a member is attached to \
+                     exactly one type, `Type::member`"
+                ),
+                span: name_span,
+            });
+        }
+        let (tyvars, constraints) = self.typaram_list()?;
+        if matches!(self.peek(), TokKind::LParen) {
+            return self.err(&format!(
+                "a `def` names a value and takes no parameters: write a function as \
+                 `fn {name}(…) -> T {{ … }}`, or a function-typed value as \
+                 `def {name}: A -> B = λ x => …;`"
+            ));
+        }
+        if self.at_kw("requires") {
+            return self.err(
+                "a `def` takes no `requires` list: constrain its type parameters inline \
+                 (`def unit<A: Monoid>: A = …;`)",
+            );
+        }
+        let leading = constraints.len();
+        let params = constraints;
+        // The annotation, and only the annotation, with a top-level `=`
+        // suppressed: `let`'s rule, so `def x: Nat = 5;` reads its value and
+        // an equation type is written in parentheses.
+        let annotated = if matches!(self.peek(), TokKind::Colon) {
+            self.bump();
+            Some(self.with_record_lit(true, |p| p.with_eq(true, |p| p.ty()))?)
+        } else {
+            None
+        };
+        if matches!(self.peek(), TokKind::LBrace) {
+            return self.err("a `def`'s value follows `=`: `def name: T = e;`");
+        }
+        self.expect_eq("`def` value")?;
+        let saved = self.propagation_depth;
+        self.propagation_depth = 1;
+        let value = self.expr();
+        self.propagation_depth = saved;
+        let value = value?;
+        let end = self.expect(&TokKind::Semi, "`;` to end the `def`")?;
+        let result = match annotated {
+            Some(t) => t,
+            None => Ty { kind: TyKind::TypeOf(Box::new(value.clone())), span: value.span },
+        };
+        let vspan = value.span;
+        let body = Block { stmts: Vec::new(), result: Box::new(value), ons: Vec::new(), span: vspan };
+        let body = if self.propagation_count != propagation_start {
+            crate::try_lower::reject_type(&result)?;
+            crate::try_lower::block(body, &mut self.next_hygienic)?
+        } else { body };
+        let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
+        Ok(Decl {
+            kind: DeclKind::Fn,
+            is_meta: false,
+            is_evidence: false,
+            value: true,
+            elaborates: None,
+            name,
+            tyvars,
+            params,
+            result,
+            decreases: None,
+            body,
+            span: start.join(end),
+        })
     }
 
     // -- blocks and statements ----------------------------------------------
@@ -8112,3 +8278,7 @@ mod tests {
         assert!(e.msg.contains("a `Pos<A>` field needs a name"), "{}", e.msg);
     }
 }
+
+/// The words a declaration (or its modifier) starts with: what may follow a
+/// prefix generator's name ([`Parser::prefixed`]).
+const DECL_WORDS: &[&str] = &["fn", "theorem", "def", "meta", "evidence", "axiom"];

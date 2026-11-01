@@ -80,3 +80,61 @@ theorem f2s_not_sum({F: Format}, a, b, s: Finite(F), le: b.val().abs() <= a.val(
 {
     Finite::fast_two_sum(a, b, s, True, NearestEven, le, hs)
 }
+
+// TwoProduct on (1 + 2^-10)²: p = 1 + 2^-9, e = 2^-20, from fma.
+fn one_up2() → Finite(binary16()) { h16(False, 1026, 14, trivial) }
+fn e20() → Finite(binary16()) { h16(False, 16, 0, trivial) }
+theorem tp_p(): one_up().mul(one_up()) = Float::Fin(one_up2()) { refl }
+theorem tp_e(): one_up().fma(one_up(), -one_up2()) = Float::Fin(e20()) { refl }
+theorem tp_exact(): one_up2().val() + e20().val() ≈ one_up().val() * one_up().val() {
+    Finite::two_product_exact(one_up(), one_up(), one_up2(), e20(), True, NearestEven, 4, refl, trivial, refl, refl)
+}
+// The fma may round in any mode: the error is a float.
+theorem tp_up(): (one_up().fma(one_up(), -one_up2(), mode := TowardNeg)).Exact(one_up().val() * one_up().val() - one_up2().val()) {
+    Finite::two_product(one_up(), one_up(), one_up2(), True, TowardNeg, 4, refl, trivial, refl)
+}
+// Negative control: below the subnormal grid the product error is not a
+// float. (1025 · 2^-22)² rounds to 2^-24 and leaves 2049 · 2^-44.
+fn sub_a() → Finite(binary16()) { h16(False, 1025, 2, trivial) }
+theorem tp_under_p(): sub_a().mul(sub_a()) = Float::Fin(tiny()) { refl }
+theorem tp_needs_grid(): ¬(∃ f: Finite(binary16()), f.val() ≈ sub_a().val() * sub_a().val() - tiny().val()) {
+    λ r => {
+        let v = sub_a().val() * sub_a().val() - tiny().val();
+        let ex = (binary16()).round_rat_of_rep(NearestEven, v, r);
+        let c: ((binary16()).round_rat(NearestEven, v) = Float::Fin(Finite::zero(binary16(), False))) = refl;
+        let e: ((Finite::zero(binary16(), False)).val() ≈ v) = j(c, λ o _ => o.Exact(v), ex);
+        Rat::not_le_of_lt(x := (Finite::zero(binary16(), False)).val(), y := v, h := trivial)(Rat::le_of_same(Rat::same_sym(e)))
+    }
+}
+
+// TwoSum on 3·2^-12 + 1, the order Fast2Sum needs reversed: s = 1 + 2^-10,
+// a1 = 2^-10, b1 = 1, da = -2^-12, db = 0, t = -2^-12.
+fn pzero() → Finite(binary16()) { Finite::zero(binary16(), False) }
+theorem ts_s(): b3().add(one()) = Float::Fin(one_up()) { refl }
+theorem ts_a1(): one_up().sub(one()) = Float::Fin(ulp1()) { refl }
+theorem ts_b1(): one_up().sub(ulp1()) = Float::Fin(one()) { refl }
+theorem ts_da(): b3().sub(ulp1()) = Float::Fin(neg_q()) { refl }
+theorem ts_db(): one().sub(one()) = Float::Fin(pzero()) { refl }
+theorem ts_t(): neg_q().add(pzero()) = Float::Fin(neg_q()) { refl }
+theorem ts_exact(): one_up().val() + neg_q().val() ≈ b3().val() + one().val() {
+    Finite::two_sum_exact(b3(), one(), one_up(), ulp1(), one(), neg_q(), pzero(), neg_q(), True, NearestEven, trivial, refl, refl, refl, refl, refl, refl)
+}
+// The last four steps may round in any mode (downward, `1 - 1` is -0).
+fn nzero() → Finite(binary16()) { Finite::zero(binary16(), True) }
+theorem ts_down(): (neg_q().add(nzero(), mode := TowardNeg)).Exact((b3().val() + one().val()) - one_up().val()) {
+    Finite::two_sum(b3(), one(), one_up(), ulp1(), one(), neg_q(), nzero(), True, TowardNeg, trivial, refl, refl, refl, refl, refl)
+}
+// TwoSum also recovers the error Fast2Sum lost on 2^-24 + 1: s = 1, t = 2^-24.
+theorem ts_tiny(): one().val() + tiny().val() ≈ tiny().val() + one().val() {
+    Finite::two_sum_exact(tiny(), one(), one(), pzero(), one(), tiny(), pzero(), tiny(), True, NearestEven, trivial, refl, refl, refl, refl, refl, refl)
+}
+// Negative control: with `s` rounded upward, 2^-24 + 1 gives s = 1 + 2^-10,
+// a1 = 2^-10, and `da = 2^-24 - 2^-10` needs 15 bits: it rounds to -2^-10.
+theorem ts_up_s(): tiny().add(one(), mode := TowardPos) = Float::Fin(one_up()) { refl }
+theorem ts_needs_nearest(): ¬(tiny().sub(ulp1())).Exact(tiny().val() - ulp1().val()) {
+    λ ex => {
+        let c: (tiny().sub(ulp1()) = Float::Fin(-ulp1())) = refl;
+        let e: ((-ulp1()).val() ≈ tiny().val() - ulp1().val()) = j(c, λ o _ => o.Exact(tiny().val() - ulp1().val()), ex);
+        Rat::not_le_of_lt(x := (-ulp1()).val(), y := tiny().val() - ulp1().val(), h := trivial)(Rat::le_of_same(Rat::same_sym(e)))
+    }
+}
