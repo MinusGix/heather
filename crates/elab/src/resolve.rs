@@ -23,7 +23,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type};
 use heather_kernel::typing;
-use heather_syntax::{Expr, ExprKind, Span};
+use heather_syntax::{Expr, ExprKind, Span, TyKind};
 
 use crate::{Cx, ElabError, Elaborator, oracle, stats};
 
@@ -324,6 +324,7 @@ impl Elaborator {
         // (`docs/per-instantiation-type-codes-design.md` §4.2, amended
         // 2026-09-10; `docs/wf-shape-code-design.md` §4). One head unspell at
         // the entry, so the whole search sees one spelling.
+        let spelled = goal;
         let inline = self.unspell_here(goal);
         let goal = inline.as_ref().unwrap_or(goal);
         let depth = self.resolve_depth.get();
@@ -343,6 +344,14 @@ impl Elaborator {
         //    the goal type would have been minted from nothing.
         if let Some(t) = self.derived_hit(cx, goal, prefer) {
             return Some(t);
+        }
+        // A merged class's assembly is minted at its applied spelling (step
+        // 2b), which the inline lowering does not convert to within the
+        // table's lookup fuel.
+        if inline.is_some() && self.tag_of(goal).is_some_and(|i| i.name.contains('+')) {
+            if let Some(t) = self.joined_hit(cx, spelled, prefer) {
+                return Some(t);
+            }
         }
 
         // 1. Ascending scopes: locals innermost-first, then `let` aliases.
@@ -418,6 +427,9 @@ impl Elaborator {
             tr.push(line(depth, "head", head.to_string()));
         }
         if cands.is_empty() {
+            if let Some(t) = self.join_parents(cx, &ind, &ckey, spelled, goal, lvl, prefer, span, depth, tr) {
+                return Some(t);
+            }
             tr.push(line(
                 depth,
                 "no-instance",
@@ -500,7 +512,141 @@ impl Elaborator {
             *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
             self.attempt.check_notes.borrow_mut().truncate(notes_mark);
         }
-        None
+        self.join_parents(cx, &ind, &ckey, spelled, goal, lvl, prefer, span, depth, tr)
+    }
+
+    /// Step 2b: a **merged** class — the one a declaration's constraints
+    /// sharing symbols at one carrier became (`merge_linked_constraints`,
+    /// issues/constraints-sharing-indices.md) — has no instances of its own,
+    /// and is assembled from its parents' at the goal: each parent's type is
+    /// read off the goal's own arguments, resolved, and every field of the
+    /// merged record is read off the first parent that has it.
+    ///
+    /// At a concrete carrier the parents' shared ancestor is one canonical
+    /// instance reached by reference from both (traits-design §4), so the
+    /// fields agree and the record checks; at an open carrier with no merged
+    /// dictionary in scope they need not, and the kernel gate below says no.
+    /// A closed answer is queued for the canonical table like any derivation,
+    /// so a carrier pays for its assembly once.
+    #[allow(clippy::too_many_arguments)]
+    fn join_parents(
+        &self,
+        cx: &Cx,
+        ind: &crate::inductive::Inductive,
+        ckey: &str,
+        spelled: &Type,
+        goal: &Type,
+        lvl: &Level,
+        prefer: Option<&str>,
+        span: Span,
+        depth: usize,
+        tr: &mut Vec<TraceLine>,
+    ) -> Option<Term> {
+        if !ind.name.contains('+') || !ind.is_record {
+            return None;
+        }
+        let class = self.traits.class(ckey)?.clone();
+        if class.is_kinded() {
+            return None;
+        }
+        // The goal's arguments: off its applied spelling when it arrived
+        // spelled (unsolved operations stay goals there, which the parents'
+        // searches solve by unification as a registry candidate would), else
+        // matched off the inline lowering.
+        let read = match spelled {
+            Type::El { tm, .. } => match self.gen_app_of(tm) {
+                Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) if tag == ind.tag => Some(args),
+                _ => None,
+            },
+            _ => None,
+        };
+        let args = match read {
+            Some(args) => args,
+            None => self.instance_match(cx, ind, goal, 0, 0)?.1,
+        };
+        let np = class.params.len();
+        if args.len() != np + class.valparams.len() {
+            return None;
+        }
+        let parts: Vec<&str> = ind.name.split('+').collect();
+        let mut tcx = cx.clone();
+        let mut parents: Vec<(String, Rc<crate::inductive::Inductive>)> = Vec::new();
+        // The parents are the ancestors the name lists; a transitive ancestor
+        // need not even be nameable from here.
+        let bare = |n: &str| n.rsplit("::").next().unwrap_or(n).to_string();
+        for (k, a) in class
+            .ancestors
+            .iter()
+            .filter(|a| a.path.is_empty() && parts.contains(&bare(&a.name).as_str()))
+            .enumerate()
+        {
+            let akey = self.key_of(&a.name)?;
+            let ainfo = self.traits.class(&akey)?;
+            if !parts.contains(&ainfo.name.as_str()) {
+                continue;
+            }
+            let aind = self.types.inductive(&akey)?.clone();
+            // The parent's arguments are the merged class's own, by name: its
+            // type arguments are the class's parameters and its index the
+            // class's value parameters (`merge_linked_constraints` writes
+            // nothing else).
+            let mut aargs: Vec<Rc<Term>> = Vec::new();
+            for t in &a.args {
+                let TyKind::Named { name, args: targs } = &t.kind else { return None };
+                if !targs.is_empty() {
+                    return None;
+                }
+                aargs.push(Rc::clone(&args[class.params.iter().position(|p| p == name)?]));
+            }
+            for e in &a.index {
+                let ExprKind::Var(name) = &e.kind else { return None };
+                let at = class.valparams.iter().position(|v| v.name == *name)?;
+                aargs.push(Rc::clone(&args[np + at]));
+            }
+            let (aty, alvl) = self.instance_type_at(cx, aind.tag, &aargs)?;
+            tr.push(line(depth, "join", format!("`{}` from `{}`", ind.name, ainfo.name)));
+            self.resolve_depth.set(depth + 1);
+            let shown = ainfo.name.clone();
+            let got = self.resolve_goal(cx, &aty, &alvl, &shown, prefer, span, tr);
+            self.resolve_depth.set(depth);
+            let got = got?;
+            let alias = format!("#join{k}");
+            tcx.aliases.push(Rc::new(crate::Alias {
+                name: alias.clone(),
+                depth: cx.names.len(),
+                term: Rc::new(got),
+                ty: aty,
+                level: alvl,
+                skel: None,
+                spliced: None,
+                shifted: Default::default(),
+            }));
+            parents.push((alias, aind));
+        }
+        let mut fields = Vec::with_capacity(ind.ctors[0].fields.len());
+        for (n, _) in &ind.ctors[0].fields {
+            let n = n.clone()?;
+            let (alias, _) = parents
+                .iter()
+                .find(|(_, p)| p.ctors[0].fields.iter().any(|(m, _)| m.as_deref() == Some(n.as_str())))?;
+            fields.push(Expr {
+                kind: ExprKind::Dot {
+                    recv: Box::new(Expr { kind: ExprKind::Var(alias.clone()), span }),
+                    name: n,
+                    tyargs: Vec::new(),
+                    args: None,
+                    named: Vec::new(),
+                },
+                span,
+            });
+        }
+        let t = self.build_ctor(&tcx, ind, 0, &fields, goal, lvl, span).ok()?;
+        if !self.checks_at(cx, &t, goal, lvl) {
+            tr.push(line(depth, "rejected", "the parents' fields disagree here".to_string()));
+            return None;
+        }
+        self.record_joined(cx, spelled, lvl, prefer);
+        Some(t)
     }
 
     /// Steps 3 to 5 at a goal that is not a class: **computation**, the
@@ -984,6 +1130,65 @@ impl Elaborator {
         Some(self.derived_ref(cx, d.abs))
     }
 
+    /// [`Self::derived_hit`] for a merged class's assembly (step 2b), at the
+    /// goal's applied spelling and in the goal world: a table entry's
+    /// committed globals sit `global_padding` further out there. A
+    /// tactic's certificate is elaborated with goals in flight, which is
+    /// where nearly every such call is.
+    fn joined_hit(&self, cx: &Cx, spelled: &Type, prefer: Option<&str>) -> Option<Term> {
+        let now = self.psi.bindings.len() as u32;
+        let pad = self.global_padding();
+        let d = self
+            .traits
+            .derived()
+            .iter()
+            .filter(|d| heads_may_agree(d.head.as_deref(), prefer))
+            .find(|d| {
+                let ty = d.ty.shift_global(now - d.at);
+                let ty = if pad == 0 { ty } else { weaken_global_below(&ty, pad) };
+                self.derived_conv(cx, &ty, spelled, &d.level)
+            })?;
+        Some(self.derived_ref(cx, d.abs))
+    }
+
+    /// Queue a merged class's assembly for the canonical table. Unlike
+    /// [`Self::record_derived`] it accepts a goal met with goals in flight:
+    /// the type is read out of the goal world (its committed globals
+    /// renumbered down past the arena, refused if it mentions a goal) and
+    /// out of the call's Γ (refused if it mentions a local), so the mint
+    /// re-runs the search in the empty context of the committed Ψ.
+    fn record_joined(&self, cx: &Cx, spelled: &Type, lvl: &Level, prefer: Option<&str>) {
+        if !matches!(cx.gamma.base, heather_kernel::term::CtxBase::Nil) {
+            return;
+        }
+        let n = cx.gamma.entries.len() as u32;
+        let Some(local) = crate::unification::strengthen_ty(&LocalCtx::nil(), spelled, n) else {
+            return;
+        };
+        let pad = self.global_padding();
+        let closed = if pad == 0 {
+            local
+        } else {
+            let down = local.apply_global(&heather_kernel::subst::GlobalSubst {
+                entries: (0..pad).map(|_| heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::Zero))).collect(),
+            });
+            if weaken_global_below(&down, pad) != local {
+                return;
+            }
+            down
+        };
+        if !self.type_is_closed(&closed, lvl) {
+            return;
+        }
+        let mut pending = self.pending_derived.borrow_mut();
+        if pending.iter().any(|(t, l, _, head)| {
+            heads_may_agree(head.as_deref(), prefer) && self.derived_conv(&Cx::empty(), t, &closed, l)
+        }) {
+            return;
+        }
+        pending.push((closed, lvl.clone(), self.psi.bindings.len() as u32, prefer.map(str::to_string)));
+    }
+
     /// `u^δ` for a minted global, the same construction [`Elaborator::resolve`]
     /// makes for a written name: the goals sit innermost, so a committed
     /// binding is that much further out, and a closed statement's delayed
@@ -1261,4 +1466,10 @@ impl Measure {
                 .iter()
                 .all(|(b, n)| other.occurrences.get(b).is_some_and(|m| n <= m))
     }
+}
+
+/// A committed-world type read into a goal world `pad` arena entries deep:
+/// every global moves `pad` further out, since the arena sits innermost.
+fn weaken_global_below(t: &Type, pad: u32) -> Type {
+    t.shift_global(pad)
 }

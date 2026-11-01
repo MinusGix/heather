@@ -172,8 +172,8 @@ impl ClassInts {
 
 impl Elaborator {
     /// `cx` with a class carrier's derived dictionary `value` in scope (a
-    /// `CommRingOfInt` or `OrderedFieldOfInt` at `K`, built by
-    /// `CommRing::with_ints`, `OrderedField::with_ints`), so the generic
+    /// `CommRingOfInt` at `K`, built by `CommRing::with_ints` or
+    /// `OrderedField::with_ints`), so the generic
     /// lemmas a certificate names find it: bound as a `let` named `name`,
     /// which instance search consults, and declared as a binder of `class`
     /// at `carrier` whose indices are those of the scope's own dictionary

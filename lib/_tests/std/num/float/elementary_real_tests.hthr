@@ -1,0 +1,25 @@
+// Probes of exp at real arguments (lib/std/num/float/elementary_real.hthr)
+// and its laws. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import creal; import creal_lipschitz; import dyadic; import interval; import creal_interval; import series; import elementary; import exp_law; import elementary_real; import tactic; import interval_tactic;
+
+// `by intervals()` reads `CReal::exp(x)` as a leaf enclosed through `x`'s
+// own terms: at a real built from rationals, and under the checker's
+// operations.
+theorem exp_real_one(): CReal::ofRat(Rat(2718, 1000)) < CReal::exp(CReal::ofRat(1)) { by intervals() }
+theorem exp_real_third(): CReal::exp(CReal::ofRat(Rat(1, 3))) < CReal::ofRat(Rat(14, 10)) { by intervals() }
+theorem exp_real_sum(): CReal::exp(CReal::ofRat(Rat(1, 2)) + CReal::ofRat(Rat(1, 2))) < 3 { by intervals() }
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem exp_real_not_below(): CReal::exp(CReal::ofRat(1)) < CReal::ofRat(Rat(2718, 1000)) { by intervals() }
+
+// The laws at open arguments.
+theorem exp_law_open(x, y: CReal): CReal::exp(x + y) ≈ CReal::exp(x) * CReal::exp(y) { CReal::exp_add(x, y) }
+theorem exp_mono_open({x, y: CReal}, h: x < y): CReal::exp(x) < CReal::exp(y) { CReal::exp_lt(h) }
+theorem exp_inverse_open(x: CReal): CReal::exp(-x) * CReal::exp(x) ≈ 1 { CReal::exp_neg_mul(x) }
+// exp(1)·exp(1) is exp(2), at rationals and at reals.
+theorem exp_rat_two(): CReal::exp_rat(1 + 1) ≈ CReal::exp_rat(1) * CReal::exp_rat(1) { CReal::exp_rat_add(1, 1) }
+theorem exp_real_rat(q: Rat): CReal::exp(CReal::ofRat(q)) ≈ CReal::exp_rat(q) { CReal::exp_ofRat(q) }
+// A negative control: exp is not constant, so exp(0) and exp(1) are apart.
+theorem exp_not_flat(): ¬(CReal::exp_rat(0) ≈ CReal::exp_rat(1)) {
+    λ e => CReal::lt_irrefl(CReal::exp_rat(0), CReal::lt_respects(CReal::exp_rat(0).same_refl(), CReal::same_sym(e), CReal::exp_rat_lt(Rat::zero_lt_one())))
+}

@@ -26,6 +26,9 @@ const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower
     "x86_64_fetched_code", "x86_64_stack", "x86_64_asm", "x86_64_asm_runs", "x86_64_stack_runs", "bitvec", "bool", "list",
     "logic", "nat", "option"];
 
+/// What a program and its agreement need (`heather reflect`'s module).
+pub(super) const PROGRAM_IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_compile", "bitvec", "bool", "list", "logic", "nat", "option"];
+
 /// The program for `source` when the verified lowering's fragment covers it.
 pub(super) fn reflect(elab: &Elaborator, source: &str) -> Result<function_ir_source::ReflectedProgram, String> {
     function_ir_source::reflect_program(elab, source).map_err(|e| e.to_string())
@@ -38,39 +41,9 @@ pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &f
     let f = program.root;
     let mut definitions = String::new();
     for name in IMPORTS { definitions.push_str(&format!("import {name};\n")); }
-    let mut owners: Vec<&str> = program.functions.iter().filter_map(|function| function.source_name.rsplit_once("::").map(|(owner, _)| owner)).collect();
-    owners.sort();
-    owners.dedup();
-    for owner in owners { definitions.push_str(&format!("import {owner};\n")); }
-    definitions.push_str(&format!("\n// The program, function `k` the one with `k` after it: {}.\n", program.functions.iter().map(|function| function.source_name.as_str()).collect::<Vec<_>>().join(", ")));
-    // Each function by name; a loop's pieces too, so that its agreement
-    // meets the program at them (`loop_then_eval`).
-    for (k, function) in program.functions.iter().enumerate() {
-        let name = format!("{prefix}_fn{k}");
-        let text = match &function.looped {
-            Some(looped) => {
-                definitions.push_str(&format!("fn {name}_loop_body() → StructuredRegion {{\n    {}\n}}\n\n", looped.body.render()));
-                definitions.push_str(&format!("fn {name}_loop_post() → StructuredRegion {{\n    {}\n}}\n\n", looped.post.render()));
-                if let Some(prefix) = looped.measured.as_ref().and_then(|measured| measured.prefix.as_ref()) {
-                    definitions.push_str(&format!("fn {name}_loop_bound() → StructuredRegion {{\n    {}\n}}\n\n", prefix.render()));
-                }
-                format!("Function(parameters := [{}], body := {}, result := {})", parameters(function.arity), loop_function_body(&name, looped), function.result)
-            }
-            None => function.render(),
-        };
-        definitions.push_str(&format!("fn {name}() → Function {{\n    {text}\n}}\n\n"));
-    }
-    // The exported function is the last, so the first the program lists;
-    // the others answer its calls.
-    // The program's first functions, each list the last one's with one
-    // more: what each function's emission starts from.
+    definitions.push_str(&owner_imports(program));
+    definitions.push_str(&program_text(prefix, program));
     let m = program.functions.len();
-    for k in 0..m {
-        let earlier = if k == 0 { "Nil".to_string() } else { format!("{prefix}_first_{}()", k - 1) };
-        definitions.push_str(&format!("fn {prefix}_first_{k}() → List<Function> {{ Cons({prefix}_fn{k}(), {earlier}) }}\n"));
-    }
-    definitions.push_str(&format!("fn {prefix}_program() → List<Function> {{ {prefix}_first_{}() }}\n\n", m - 1));
-
     // Evaluated on a fork, which only defines: the certificate's statements
     // are the session's to check.
     let probe = format!("{module}_probe");
@@ -130,43 +103,11 @@ fn {prefix}_entry() → Nat {{ asm_labels({prefix}_code())({}) }}
         return Err("the functions' emissions do not make the code".into());
     }
 
-    // Each function proved on its own, its calls answered by its callees'
-    // sources; then the program by `program_eval_sources`.
-    let sources = format!("{prefix}_sources()");
-    let mut answers = "BitVec::zero()".to_string();
-    for (k, function) in program.functions.iter().enumerate().rev() {
-        let words: Vec<String> = (0..function.arity).map(|i| format!("words.word({i})")).collect();
-        answers = format!("match g{k} {{ Zero => {}, Succ(g{}) => {answers} }}", function.answer(&words), k + 1);
-    }
-    let mut agreements = format!("// What each function computes: its source, a loop's bound its fuel.
-fn {prefix}_sources() → Answers() {{
-    λ (g0: Nat) (words: List<BitVec(64)>) => {answers}
-}}
-
-");
-    let mut sourced = "trivial".to_string();
-    for (k, function) in program.functions.iter().enumerate() {
-        agreements.push_str(&function_agreement(&format!("{prefix}_fn{k}"), &sources, function));
-        let arguments = arguments(function.arity);
-        let at = if function.arity == 0 { format!("{prefix}_fn{k}_agrees()") } else { format!("λ {} => {prefix}_fn{k}_agrees({})", arguments.join(" "), arguments.join(", ")) };
-        sourced = format!("⟨λ (words: List<BitVec(64)>) (fits: words.len() = {n}) => spread({n}, λ (ws: List<BitVec(64)>) => {prefix}_fn{k}().eval({sources}, ws) = {sources}({k}, ws),
-            {at}, words, fits),
-        {sourced}⟩", n = function.arity);
-    }
+    let agreement = agreement_text(prefix, program);
     let parameters = arguments(root.arity);
     let typed = typed(&parameters);
     let list = format!("[{}]", parameters.join(", "));
     let call = root.answer(&parameters);
-    let agreement = format!("{agreements}
-theorem {prefix}_sourced(): program_sourced({prefix}_program(), {sources}) {{
-    {sourced}
-}}
-
-// The program's function {f} evaluates to the source function.
-theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {list}) = {call} {{
-    program_eval_sources({prefix}_program(), {prefix}_evaluable(), {sources}, {prefix}_sourced(), {f}, {list}, trivial)
-}}
-");
     let mut text = definitions;
     // The code is stated as the literal the lowering computes, a function at
     // a time, each function's emission its own statement from the literal
@@ -220,8 +161,6 @@ theorem {prefix}_lowers(): lower_program({prefix}_program(), {prefix}_placement(
 }}
 ", last = m - 1, labels = before.2, layout = layout(prefix, items.len())));
     text.push_str(&format!("
-theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{ trivial }}
-
 {agreement}
 // The published bytes, a piece at a time from the last item: no one
 // statement evaluates more of the code than a piece.
@@ -246,6 +185,96 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
 ", label = f + 1, room = 72 * (f + 1), comma = if parameters.is_empty() { "" } else { ", " },
         arguments = parameters.join(", ")));
     Ok(Compiled { text, bytes, entry })
+}
+
+/// The program's agreement with its source: `{prefix}_evaluable`, each
+/// function's agreement, and `{prefix}_agrees`, the program's root
+/// function evaluating to the source function (`program_eval_sources`).
+pub(super) fn agreement_text(prefix: &str, program: &function_ir_source::ReflectedProgram) -> String {
+    let root = &program.functions[program.root];
+    let f = program.root;
+    // Each function proved on its own, its calls answered by its callees'
+    // sources; then the program by `program_eval_sources`.
+    let sources = format!("{prefix}_sources()");
+    let mut answers = "BitVec::zero()".to_string();
+    for (k, function) in program.functions.iter().enumerate().rev() {
+        let words: Vec<String> = (0..function.arity).map(|i| format!("words.word({i})")).collect();
+        answers = format!("match g{k} {{ Zero => {}, Succ(g{}) => {answers} }}", function.answer(&words), k + 1);
+    }
+    let mut agreements = format!("// What each function computes: its source, a loop's bound its fuel.
+fn {prefix}_sources() → Answers() {{
+    λ (g0: Nat) (words: List<BitVec(64)>) => {answers}
+}}
+
+");
+    let mut sourced = "trivial".to_string();
+    for (k, function) in program.functions.iter().enumerate() {
+        agreements.push_str(&function_agreement(&format!("{prefix}_fn{k}"), &sources, function));
+        let arguments = arguments(function.arity);
+        let at = if function.arity == 0 { format!("{prefix}_fn{k}_agrees()") } else { format!("λ {} => {prefix}_fn{k}_agrees({})", arguments.join(" "), arguments.join(", ")) };
+        sourced = format!("⟨λ (words: List<BitVec(64)>) (fits: words.len() = {n}) => spread({n}, λ (ws: List<BitVec(64)>) => {prefix}_fn{k}().eval({sources}, ws) = {sources}({k}, ws),
+            {at}, words, fits),
+        {sourced}⟩", n = function.arity);
+    }
+    let parameters = arguments(root.arity);
+    let typed = typed(&parameters);
+    let list = format!("[{}]", parameters.join(", "));
+    let call = root.answer(&parameters);
+    format!("theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{ trivial }}
+
+{agreements}
+theorem {prefix}_sourced(): program_sourced({prefix}_program(), {sources}) {{
+    {sourced}
+}}
+
+// The program's function {f} evaluates to the source function.
+theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {list}) = {call} {{
+    program_eval_sources({prefix}_program(), {prefix}_evaluable(), {sources}, {prefix}_sourced(), {f}, {list}, trivial)
+}}
+")
+}
+
+/// `import` lines for the modules the program's functions come from.
+pub(super) fn owner_imports(program: &function_ir_source::ReflectedProgram) -> String {
+    let mut owners: Vec<&str> = program.functions.iter().filter_map(|function| function.source_name.rsplit_once("::").map(|(owner, _)| owner)).collect();
+    owners.sort();
+    owners.dedup();
+    owners.iter().map(|owner| format!("import {owner};\n")).collect()
+}
+
+/// The program's definitions: each function `{prefix}_fn{k}()` (a loop's
+/// pieces too), the lists `{prefix}_first_{k}()` and `{prefix}_program()`.
+pub(super) fn program_text(prefix: &str, program: &function_ir_source::ReflectedProgram) -> String {
+    let mut definitions = String::new();
+    definitions.push_str(&format!("\n// The program, function `k` the one with `k` after it: {}.\n", program.functions.iter().map(|function| function.source_name.as_str()).collect::<Vec<_>>().join(", ")));
+    // Each function by name; a loop's pieces too, so that its agreement
+    // meets the program at them (`loop_then_eval`).
+    for (k, function) in program.functions.iter().enumerate() {
+        let name = format!("{prefix}_fn{k}");
+        let text = match &function.looped {
+            Some(looped) => {
+                definitions.push_str(&format!("fn {name}_loop_body() → StructuredRegion {{\n    {}\n}}\n\n", looped.body.render()));
+                definitions.push_str(&format!("fn {name}_loop_post() → StructuredRegion {{\n    {}\n}}\n\n", looped.post.render()));
+                if let Some(prefix) = looped.measured.as_ref().and_then(|measured| measured.prefix.as_ref()) {
+                    definitions.push_str(&format!("fn {name}_loop_bound() → StructuredRegion {{\n    {}\n}}\n\n", prefix.render()));
+                }
+                format!("Function(parameters := [{}], body := {}, result := {})", parameters(function.arity), loop_function_body(&name, looped), function.result)
+            }
+            None => function.render(),
+        };
+        definitions.push_str(&format!("fn {name}() → Function {{\n    {text}\n}}\n\n"));
+    }
+    // The exported function is the last, so the first the program lists;
+    // the others answer its calls.
+    // The program's first functions, each list the last one's with one
+    // more: what each function's emission starts from.
+    let m = program.functions.len();
+    for k in 0..m {
+        let earlier = if k == 0 { "Nil".to_string() } else { format!("{prefix}_first_{}()", k - 1) };
+        definitions.push_str(&format!("fn {prefix}_first_{k}() → List<Function> {{ Cons({prefix}_fn{k}(), {earlier}) }}\n"));
+    }
+    definitions.push_str(&format!("fn {prefix}_program() → List<Function> {{ {prefix}_first_{}() }}\n\n", m - 1));
+    definitions
 }
 
 /// Function `name`'s agreement with its source, its calls answered by

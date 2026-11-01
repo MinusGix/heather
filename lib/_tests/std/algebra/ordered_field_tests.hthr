@@ -93,3 +93,47 @@ theorem field_mul_add_add<A: OrderedField(≈, <, <=, +, *)>(a, b, c, d: A): (a 
 theorem field_mul_comm<A: OrderedField(≈, <, <=, +, *)>(x, y: A): x * y ≈ y * x { A.commutative.comm(x, y) }
 theorem creal_neg_mul_neg(x, y: CReal): -x * -y ≈ x * y { Ring::neg_mul_neg(x, y) }
 theorem creal_interchange(a, b, c, d: CReal): (a * b) * (c * d) ≈ (a * c) * (b * d) { CommMonoidRel::interchange(≈, *, a, b, c, d) }
+
+// ---------------------------------------------------------------------------
+// Two constraints sharing `≈`, `+` and `*` at one carrier are one dictionary
+// (issues/constraints-sharing-indices.md, docs/operators-onto-classes-design.md
+// §17). `zero_lt_one` is `OrderedField`'s, over its `unit`; `of_int_one` is
+// `CommRingOfInt`'s, over its `multiplicative.unit`: they combine only if
+// both classes' `CommRing` is one.
+theorem both_one_pos<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>(x: A):
+    A.unit < A.of_int(OfNat(1))
+{
+    StrictOrder::lt_respects_r(A.unit, A.multiplicative.unit, A.of_int(OfNat(1)),
+        A.rel_sym(A.of_int(OfNat(1)), A.multiplicative.unit, A.of_int_one), A.zero_lt_one)
+}
+
+// Written in the other order it is the same dictionary, so the call passes it on.
+theorem both_one_pos_swapped<A: CommRingOfInt(≈, +, *) + OrderedField(≈, <, <=, +, *)>(x: A):
+    A.unit < A.of_int(OfNat(1))
+{
+    both_one_pos(x)
+}
+
+// One parent's lemmas apply through it.
+theorem both_of_nat_pos<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>(x: A, n: Nat):
+    A.unit < A.of_nat(Succ(n))
+{
+    OrderedField::of_nat_pos(x, n)
+}
+
+// At a concrete carrier the dictionary is assembled from the two instances.
+theorem both_at_rat(q: Rat): Rat::Lt(0, Rat::ofInt(OfNat(1))) { both_one_pos(q) }
+theorem both_at_creal(x: CReal): CReal::Lt(0, CReal::ofRat(Rat::ofInt(OfNat(1)))) { both_one_pos(x) }
+theorem both_at_rat_explicit(q: Rat): Rat::Lt(0, Rat::ofInt(OfNat(1))) { both_one_pos<Rat>(q) }
+
+// A section's constraint merges the same way.
+section<B: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)> {
+theorem both_in_section(x: B): B.unit < B.of_int(OfNat(1)) { both_one_pos(x) }
+}
+theorem both_in_section_at_rat(q: Rat): Rat::Lt(0, Rat::ofInt(OfNat(1))) { both_in_section(q) }
+
+// At two carriers the symbols name two things, which §5.1 still refuses.
+// expect-error: `≈` is already this declaration's body spelling
+theorem two_carriers<A: OrderedField(≈, <, <=, +, *), B: CommRingOfInt(≈, +, *)>(x: A, y: B): x ≈ x {
+    A.rel_refl(x)
+}
