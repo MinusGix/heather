@@ -131,7 +131,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `float-rounding` | mathematics | done | `RoundsTo` for the five IEEE modes, one executable rounding on a dyadic plus sticky proved to satisfy it, its uniqueness, successor/predecessor with spacing, and the mode laws (landed, design §11–§12). | math-float |
 | `float-error` | mathematics | done | The standard model (relative error at most `u` in the normal range), the subnormal absolute bound, `ulp`, and γ-composition (landed, design §13). | math-float |
 | `float-arith` | mathematics | done | Add, sub, mul, fma, div, sqrt and format conversion, each with value, signed-zero and special-value theorems. | math-float |
-| `float-eft` | mathematics | open | Sterbenz, Fast2Sum, TwoSum, TwoProduct, Veltkamp splitting and Kahan summation are proved. | math-float |
+| `float-eft` | mathematics | done | Sterbenz, Fast2Sum, TwoSum, TwoProduct, Veltkamp splitting, the recursive sum's bound and Kahan's compensated step are proved (landed, design §19; Kahan's whole-loop bound is `float-kahan-bound`). | math-float |
 | `float-bits` | mathematics | open | Bit-level encode/decode with the round trip, the OCP storage formats, NaN payload policies and exception flags. Not needed for `math-float` to be done. | math-float |
 | `float-reals` | mathematics | done | Rounding is stated at `CReal` through a transfer lemma to any ordered field: faithful rounding computes, and correct rounding computes from apartness from the breakpoints. Not needed for `math-float` to be done. | math-float |
 | `float-transcendental` | mathematics | open | Correctly rounded `exp` and `log`, from a `CReal` series plus a Padé apartness proof. Not needed for `math-float` to be done. | math-float |

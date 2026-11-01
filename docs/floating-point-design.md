@@ -567,7 +567,7 @@ roadmap's.
 | 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. Landed; §13. |
 | 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed, §14; sqrt §14.1. |
-| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. Sterbenz, the nearest addition error, Fast2Sum, TwoProduct and TwoSum landed, §19; Veltkamp and Kahan are filed. |
+| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. All landed, §19: Veltkamp at normal `x`, the recursive sum's `γ(n-1)` bound and Kahan's exact correction step; Kahan's whole-loop bound and subnormal Veltkamp are filed. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
 | later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); the search ends from a real clear of the grid ([float-round-real-termination](../issues/float-round-real-termination.md), `round_real_apart`); the Padé gap for exp and log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md). The operations, the square root, the error model at every real and the root of a real landed, §17; the ordered-field transfer is [float-reals-ordered-field](../issues/float-reals-ordered-field.md). |
 | later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)); `Float::exp`/`Float::log` over every float with the §9.2 specials. |
@@ -1633,8 +1633,9 @@ and at the midpoint `1 + 2^-24` on the first box, where rounding down (at
 
 ## 19. Error-free transformations (`float-eft`)
 
-Round 5's first two parts. Module: `lib/std/num/float/eft.hthr`, tests in
-`lib/_tests/std/num/float/eft_tests.hthr`. Issue
+Round 5. Modules: `lib/std/num/float/eft.hthr` and (summation)
+`lib/std/num/float/summation.hthr`, tests beside them in
+`lib/_tests/std/num/float/eft_tests.hthr` and `summation_tests.hthr`. Issue
 [float-eft-sterbenz-fast2sum](../issues/float-eft-sterbenz-fast2sum.md);
 the rest of the milestone is
 [float-eft-two-sum](../issues/float-eft-two-sum.md),
@@ -1753,6 +1754,70 @@ equation. The tests split `3·2^-12 + 1` (the order Fast2Sum refuses) and
 `2^-24 + 1`, and show an upward `s` breaks it: `da = 2^-24 - 2^-10` is not
 a float.
 
+**Veltkamp splitting** (`Finite::veltkamp`;
+[float-eft-veltkamp](../issues/float-eft-veltkamp.md)). With `C = 2^s + 1`
+a float (`cv`), `1 <= s <= frac`, `g = ○(C·x)` and `d = ○(x - g)` in a
+nearest mode, then `xh = g + d` and `xl = x - xh` in any mode, at a normal
+`x` (`half <= x.mag`) with `|C·x|` in range: `xh + xl = x` exactly, `xh` is
+on the grid `s` exponents above `x`'s (`OnGrid(x.bexp + s, xh.H())`, so at
+most `prec - s` significant bits), and `|xl|` is at most `2^(x.bexp + s)`
+half-units, half that grid's spacing (so `s` bits; the sign absorbs the
+missing one). "Representable on `k` bits" is stated as a grid and a bound
+rather than a new predicate: the grid is what Dekker's product reads.
+
+At half-units, for `x > 0` with `m = x.mag`, `c = x.bexp`,
+`Q = 2^(c+s+1)` (`Format::veltkamp_pos`):
+
+- `C·x = m·(S + 1)·2^(c+1) >= half·Q` (`vk_gq`), so `g >= half·Q` and
+  `g.bexp >= c + s` (`Finite::bexp_ge`).
+- `|g - C·x| <= Q` (`vk_gerr`: `C·x` is on the grid `c`, below `top·Q`).
+- `g - x >= half·Q` (`vk_kq`): at `m = half` the product
+  `half·(S + 1)·2^(c+1)` is a float (`vk_gexact`, through `down_exact`); above
+  it the error bound leaves room.
+- So `d <= -half·Q` and `d.bexp >= c + s` (`vk_db`); `g + d` is a float by
+  Sterbenz on `(g, -d)`, using `half_float(g)` (`vk_xh`), and on the grid
+  `c + s` as a sum of two floats there.
+- `x - (g + d)` is `d`'s rounding error (`add_err_H` at `x + (-g)`), and it
+  is at most `Q/2`: `-d` is nearest to `g - x <= top·Q` on the grid `c + s`
+  (`Format::near_err_at`), and at `g - x = top·Q` the target is itself a
+  float, so the error is 0 (`vk_bound_at`).
+
+A negative `x` is the same at `-x`, `-g`, `-d` (`Format::veltkamp_H`, read
+back by `Finite::vk_unflip`); `veltkamp_tail` makes the last two steps
+exact in any mode (`Finite::add_exact_H`, `sub_exact_H`). The tests split
+`1537·2^-10` at `s = 5` into `1.5` and `2^-10` (and its negation with
+upward tails), and show `d` rounded toward zero breaks the bound: `xl =
+-31·2^-10` against a half-spacing of `16·2^-10`. A subnormal `x` is not
+covered ([float-veltkamp-subnormal](../issues/float-veltkamp-subnormal.md)).
+
+**The recursive sum** (`Format::rec_sum_error`, in `summation.hthr`;
+[float-kahan-summation](../issues/float-kahan-summation.md)). Addition
+obeys Higham's standard model with no underflow term: below the least
+normal the sum of two floats is on the grid of exponent 0 and no larger
+than the least normal, so it is a float (`Finite::add_small_rep`, through
+`rep_on_grid`), and `|○(a + b) - (a + b)| <= u·|a + b|` holds everywhere in
+range, in every mode (`Finite::add_rel_error`). `List::RecSum(xs, mode, a,
+s)` says `s` is `○(… ○(a + x₁) … + xₙ)` with every exact partial sum in
+range; then `|s - ∑| <= γ(n)·∑|xᵢ|` over the `n + 1` summands
+(`rec_sum_of`, by induction with the accumulator generalized). Each step
+is one inequality (`Format::rec_sum_step`): with `G = γ(m)` for the rest
+and `u` for this step, `G·(|r| + T) + u·|X| <= (G + u + G·u)·|X| + G·T`,
+and `γ(m) + u + γ(m)·u <= γ(m + 1)` is `gamma_add` with `u <= γ(1)`. The
+products are named values so `linarith` reads them as monomials. The test
+sums `1 + 2^-11 + 2^-11` (two ties to even, error `2^-10`) and shows
+`γ(1)` would not cover it.
+
+**Kahan's step** (`Finite::kahan_step`). Kahan's correction
+`c' = (t - s) - y` is Fast2Sum with the last subtraction reversed: when
+`|y| <= |s|` and `t = ○(s + y)` in a nearest mode, `t - s` is exact
+(`fast_two_sum`), `c'` is minus `t`'s error (`add_error`, negated), and so
+`t - c' = s + y`, in any mode for the two subtractions. Out of order
+(`s = 3·2^-12`, `y = 1`) the test shows `t - s` rounds and the identity
+fails. The algorithm does not ensure the order, so the whole loop's
+`(2u + O(n·u²))·∑|xᵢ|` (Higham, Theorem 4.8) goes through the standard
+model on every step, not through this lemma; it is filed design-first as
+[float-kahan-bound](../issues/float-kahan-bound.md).
+
 Observations:
 
 - `omega` cannot see through a projection of an existential (`r.witness`):
@@ -1768,3 +1833,14 @@ Observations:
   `trivial` (closed values carry no inferable shape).
 - The `Nat`/`Int` facts here are about the float grid (`OnGrid` is a
   float's cell spacing), so they stay in the float module.
+- Veltkamp's first draft, one proof with a long `let` chain, cost about two
+  minutes and its error bound ran out of memory; split into lemmas that
+  take each fact as a parameter it is about a second a lemma. Two causes
+  besides length: an annotation that differs from the term's type by a
+  `down` (`(h·Q).int() <= g.H()` for a term at `(F.down(h·Q)).H()`) made
+  the checker evaluate `down`, and `omega` over `Nat` products whose
+  factors are `pow` terms re-read their structure. Restating the
+  arithmetic over variables (`vk_kt_arith`, `vk_kn_arith`) took
+  `vk_bound` from twenty seconds to a third of one.
+- A self-call that varies a parameter inside `∃` is refused for a
+  `Type`-valued `fn` (`RecSum`), so `List::RecSum_of` is curried by hand.
