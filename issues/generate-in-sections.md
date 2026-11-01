@@ -4,7 +4,7 @@ status: open
 labels: [metaprogramming,elaboration]
 area: tactics
 created: 2026-10-28
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 `generate g(args);` is refused inside a `section` and under `assuming`
@@ -28,3 +28,4 @@ scope), so the refusal is the gap, not a design choice.
 ## Log
 
 - 2026-10-31: `tac-host-interface` is marked done in docs/roadmap.md (its "done when" is met), so this issue no longer serves it; it stays open in area `tactics` with no milestone.
+- 2026-11-01: Declaration prefixes (`P fn f`, [[declaration-prefix-generators]]) are refused in sections and under `assuming` for the same reason; lifting this lifts both.

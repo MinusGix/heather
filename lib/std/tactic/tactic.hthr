@@ -145,8 +145,17 @@ record CtorInfo { name: String, fields: List<FieldInfo>, ctor: Option<Handle> }
 // A declaration's parameters are locals the generator made with `Assume`,
 // each under the one before it; its statement `result` and its `body` live
 // under the last. A parameter is implicit (`{x: T}`) when its flag says so.
+// `AsValue` is a `def`, a value with no parameters
+// (docs/value-definitions-design.md).
+//
+// The same group is what a declaration-prefix generator publishes
+// (`runtime fn f …`, `regex def x = "…";`, value-definitions design §3): it is
+// called with the declaration's name (a `String`), for a `def` its value,
+// then the arguments written after the prefix. A prefixed `fn` or `theorem`
+// is already published when it runs (`lookup(name)` finds it); a prefixed
+// `def` is not, and the group must declare that name.
 
-inductive DeclForm { AsTheorem, AsFunction }
+inductive DeclForm { AsTheorem, AsFunction, AsValue }
 
 record Param { x: LocalRef, implicit: Bool }
 
@@ -862,7 +871,7 @@ fn decls_at(ds: List<Decl>, i: Nat) → Decl {
 fn host_decl(t: Tac<Expr>, i: Nat) → Decl { decls_at(host_decls(t), i) }
 
 // 0: a theorem. 1: a function.
-fn decl_form(d: Decl) → Nat { match d.form { AsTheorem => 0, AsFunction => 1 } }
+fn decl_form(d: Decl) → Nat { match d.form { AsTheorem => 0, AsFunction => 1, AsValue => 2 } }
 
 fn decl_name(d: Decl) → String { d.name }
 
