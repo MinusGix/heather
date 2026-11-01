@@ -53,6 +53,69 @@ impl Reader<'_> {
         Ok(format!("{name}({})", join(&self.take(fields)?)))
     }
 
+    fn ids(&mut self) -> Result<String, String> {
+        let count = self.next()? as usize;
+        Ok(format!("[{}]", join(&self.take(count)?)))
+    }
+
+    /// A dataflow leaf's ports and nodes (`Region::spelled_body`), and how
+    /// many nodes it has.
+    fn body(&mut self) -> Result<(String, usize), String> {
+        let inputs = self.ports()?;
+        let count = self.next()? as usize;
+        let nodes = (0..count).map(|_| self.node()).collect::<Result<Vec<_>, String>>()?;
+        let outputs = self.ports()?;
+        Ok((format!("Region({inputs}, [{}], {outputs})", nodes.join(", ")), count))
+    }
+
+    /// A region as `StructuredRegion::spelled_tagged` spells it, and how
+    /// many regions and nodes it holds.
+    fn region(&mut self) -> Result<(String, usize), String> {
+        Ok(match self.next()? {
+            0 => {
+                let (body, n) = self.body()?;
+                (format!("Dataflow({body})"), 1 + n)
+            }
+            1 => {
+                let (prefix, n) = self.body()?;
+                let (rest, m) = self.region()?;
+                (format!("Sequence({prefix}, {rest})"), 1 + n + m)
+            }
+            2 => {
+                let (first, n) = self.region()?;
+                let (rest, m) = self.region()?;
+                (format!("Compose({first}, {rest})"), 1 + n + m)
+            }
+            3 => {
+                let inputs = self.ports()?;
+                let condition = self.next()?;
+                let arguments = self.ports()?;
+                let outputs = self.ports()?;
+                let (yes, n) = self.region()?;
+                let (no, m) = self.region()?;
+                (format!("Conditional({inputs}, {condition}, {arguments}, {outputs}, {yes}, {no})"), 1 + n + m)
+            }
+            4 => {
+                let callee = self.next()?;
+                let arguments = self.ids()?;
+                (format!("Call({callee}, {arguments}, {})", self.next()?), 1)
+            }
+            5 => {
+                let inputs = self.ids()?;
+                let bound = self.next()?;
+                let parameters = self.ids()?;
+                let count = self.next()?;
+                let (body, n) = self.region()?;
+                let exit = self.next()?;
+                let next = self.ids()?;
+                let outputs = self.ids()?;
+                let exhausted = self.next()?;
+                (format!("Loop({inputs}, {bound}, {parameters}, {count}, {body}, {exit}, {next}, {outputs}, {exhausted})"), 1 + n)
+            }
+            tag => return Err(format!("region tag {tag}")),
+        })
+    }
+
     fn call(&mut self) -> Result<String, String> {
         let (name, fields) = match self.next()? {
             0 => ("Reads", 4),
@@ -82,11 +145,8 @@ impl Printer<'_> {
     pub fn stmt(&mut self) -> Result<(String, usize), String> {
         let (text, size) = match self.reader.next()? {
             0 => {
-                let inputs = self.reader.ports()?;
-                let count = self.reader.next()? as usize;
-                let nodes = (0..count).map(|_| self.reader.node()).collect::<Result<Vec<_>, String>>()?;
-                let outputs = self.reader.ports()?;
-                (format!("Compute(Dataflow(Region({inputs}, [{}], {outputs})))", nodes.join(", ")), 1 + count)
+                let (body, count) = self.reader.body()?;
+                (format!("Compute(Dataflow({body}))"), 1 + count)
             }
             1 => (format!("Invoke({})", self.reader.call()?), 1),
             2 => {
@@ -107,6 +167,10 @@ impl Printer<'_> {
             }
             5 => (format!("Exit({})", self.reader.next()?), 1),
             6 => (format!("Arg({})", join(&self.reader.take(3)?)), 1),
+            7 => {
+                let (region, size) = self.reader.region()?;
+                (format!("Compute({region})"), size)
+            }
             tag => return Err(format!("statement tag {tag}")),
         };
         if size <= LIMIT { return Ok((text, size)); }
@@ -119,8 +183,7 @@ impl Printer<'_> {
 
 /// The definitions of `{p}_lowered()`, the source `numbers` spell, and its
 /// buffers' capacities and initial lengths; `None` when the source spelled
-/// itself `[0]` (functions, or a region past a dataflow leaf), which is
-/// compiled as it is.
+/// itself `[0]` (a source with functions), which is compiled as it is.
 pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u64, usize)>)>, String> {
     let mut printer = Printer { reader: Reader { numbers, at: 0 }, p, defs: String::new(), count: 0 };
     if printer.reader.next()? == 0 { return Ok(None); }

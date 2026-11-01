@@ -28,8 +28,7 @@ integration round. The other slices have their own issues:
   explicitly, and unmarked functions are refused with an actionable message).
 - `crates/elab/src/function_ir_source/` deleted once every example passes
   through the generator.
-- The builder's reflected-helper form ([[native-build-reflected-helpers]])
-  takes a function with a `Compile` instance, so a tool's pure parts are runtime fns.
+- `heather reflect`'s output ([[native-build-reflected-helpers]], landed as calls to a reflected FunctionIR program) comes from a `Compile(f)` instance instead of the Rust reflector, so a tool's pure parts are runtime fns.
 
 ## What it assumes from elsewhere
 

@@ -917,68 +917,19 @@ theorem OrderedField::archimedean_recip(x: A, hx: A.unit < x):
 }
 
 // ---------------------------------------------------------------------------
-// An ordered field with its integers named: `OrderedField` and `semiring`'s
-// `CommRingOfInt` over the same ring. Nothing is added; the class exists so
-// that one constraint names both (two constraints cannot install `≈`, `+`
-// and `*` twice), which is what `linarith`'s certificate lemmas need: the
-// order laws to combine facts, and the carrier's numerals as coefficients
-// (lib/std/tactic/linarith.hthr). `Rat` and `CReal` have it.
-class OrderedFieldOfInt<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
-    add as +: A → A → A, mul as *: A → A → A)
-    extends OrderedField<A>(same, lt, le, add, mul), CommRingOfInt<A>(same, add, mul)
-{}
-
-// An ordered field with the integers every ring has named (semiring's
-// `Ring::int_cast`): what `linarith`'s certificate lemmas take, so that
-// `linarith` runs at a class carrier (`section<K: OrderedField(…)>`) with
-// no carrier instance (issues/cast-reading-at-class-carrier.md). Every field
-// is the ordered field's own but the integers'.
+// The integers every ring has (semiring's `Ring::int_cast`), named at an
+// ordered field: what `linarith` puts in scope at a class carrier
+// (`section<K: OrderedField(…)>`) with no carrier instance
+// (issues/cast-reading-at-class-carrier.md). The certificate lemmas'
+// constraint, `OrderedField(…) + CommRingOfInt(…)`, is one dictionary
+// assembled from this and the section's own
+// (issues/constraints-sharing-indices.md). Here rather than as
+// `CommRing::with_ints<K>()` at the call so that the call's implicit
+// arguments name the field's `≈`, `<` and `<=` as the section binds them.
 section<A: OrderedField(≈, <, <=, +, *)> {
 
-fn OrderedField::with_ints() → OrderedFieldOfInt<A>(≈, <, <=, +, *) {
-    OrderedFieldOfInt {
-        rel_refl: A.rel_refl,
-        rel_sym: A.rel_sym,
-        rel_trans: A.rel_trans,
-        lt_irrefl: A.lt_irrefl,
-        lt_trans: A.lt_trans,
-        lt_respects: A.lt_respects,
-        lt_tight: A.lt_tight,
-        le_of_not_lt: A.le_of_not_lt,
-        not_lt_of_le: A.not_lt_of_le,
-        respects2: λ x x2 hx y y2 hy => A.rel_trans(x + y, x2 + y, x2 + y2, rel_cong(hx), rel_cong(hy)),
-        assoc: A.assoc,
-        unit: A.unit,
-        unit_l: A.unit_l,
-        unit_r: A.unit_r,
-        inv: A.inv,
-        inv_l: A.inv_l,
-        inv_r: A.inv_r,
-        inv_respects: A.inv_respects,
-        comm: A.comm,
-        add_lt_mono_r: A.add_lt_mono_r,
-        rel_cotrans: A.rel_cotrans,
-        multiplicative: A.multiplicative,
-        distrib_l: A.distrib_l,
-        distrib_r: A.distrib_r,
-        zero_mul: A.zero_mul,
-        mul_zero: A.mul_zero,
-        commutative: A.commutative,
-        of_nat: A.of_nat,
-        recip: A.recip,
-        mul_recip: A.mul_recip,
-        zero_lt_one: A.zero_lt_one,
-        mul_pos: A.mul_pos,
-        pos_of_mul_pos: A.pos_of_mul_pos,
-        of_nat_zero: A.of_nat_zero,
-        of_nat_succ: A.of_nat_succ,
-        archimedean: A.archimedean,
-        of_int: Ring::int_cast,
-        of_int_zero: A.rel_refl(A.unit),
-        of_int_one: A.rel_refl(A.multiplicative.unit),
-        of_int_add: λ a b => Ring::int_cast_add(a, b),
-        of_int_mul: λ a b => Ring::int_cast_mul(a, b),
-    }
+fn OrderedField::with_ints() → CommRingOfInt<A>(≈, +, *) {
+    CommRing::with_ints()
 }
 
 }

@@ -12,8 +12,10 @@
 // checked; at `CReal` a `CReal::ofRat(q)` is an exact leaf and anything else
 // a real enclosed from its terms, except that `CReal::exp_rat(q)`,
 // `sin_rat(q)` and `cos_rat(q)` are read as leaves with enclosures of their
-// own (`RBox`, from `elementary`) when those names resolve where the tactic
-// runs. A leaf that does not compute (a variable)
+// own (`RBox`, from `elementary`), and so are `CReal::exp(x)`, `sin(x)` and
+// `cos(x)` at a real `x` (from `elementary_real`, enclosed through `x`'s
+// terms), when those names
+// resolve where the tactic runs. A leaf that does not compute (a variable)
 // leaves the verdict stuck, and the tactic says so. `eval` spells each node
 // as the operation it read, so the proof's type converts to the goal as
 // written.
@@ -101,7 +103,8 @@ fn interval_try_box(head, box: String, rest: List<IntervalBox>) → Tac<List<Int
 
 fn interval_boxes() → Tac<List<IntervalBox>> {
     interval_try_box("CReal::exp_rat", "CReal::exp_box", Nil).bind(λ a => interval_try_box("CReal::sin_rat", "CReal::sin_box", a).bind(λ b =>
-        interval_try_box("CReal::cos_rat", "CReal::cos_box", b)))
+        interval_try_box("CReal::cos_rat", "CReal::cos_box", b).bind(λ c => interval_try_box("CReal::exp", "CReal::exp_real_box", c).bind(λ d =>
+        interval_try_box("CReal::sin", "CReal::sin_real_box", d).bind(λ e => interval_try_box("CReal::cos", "CReal::cos_real_box", e))))))
 }
 
 fn interval_heads() → Tac<IntervalHeads> {

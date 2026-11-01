@@ -143,9 +143,11 @@ theorem mixed_bytes_compiles(): refused(mixed_bytes()) = [] { refl }
 theorem byte_leaves_compile(): refused(byte_leaves()) = [] { refl }
 
 // A byte node beside a node at width 1: refused, naming the narrow node; and
-// a byte node whose buffer the source does not have.
+// a byte node whose buffer the source does not have. The exit reads the
+// narrow node's word, so the leaf's pass (function_ir_pass) cannot drop it
+// as dead.
 fn narrow_mixed_leaf() → Source {
-    Source::of([Buffer(4)], ops([BufferLoad(1, 0, 0), BitXor(1, 2, 1, 1)]))
+    Source::of([Buffer(4)], Then(ops([BufferLoad(1, 0, 0), BitXor(1, 2, 1, 1)]), Exit(2)))
 }
 fn missing_buffer_leaf() → Source { Source::of([Buffer(4)], ops([Const(64, 0, 0), BufferLoad(1, 3, 0)])) }
 

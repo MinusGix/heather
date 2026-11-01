@@ -29,4 +29,5 @@ Minus has decided the note, and [[runtime-fn-default-setup]] states its scope ag
 
 ## Log
 
+- 2026-10-31: [[native-build-loop-regions]] and [[native-build-reflected-helpers]] closed (2026-10-31): the builder's `Calc` regions, `heather reflect`, and calls to reflected programs.
 - 2026-10-31: 2026-10-31: Design note written: `docs/runtime-fn-setups-design.md` (PR on `claude/project-thread-spds80`). A setup is a record (judgment with reasons, lowering, `sound` proved once) over one reflected language `rt`; reflection is a Heather generator over new host requests; each function is tied to its reflection by one pin by conversion, and the lowering is proved once (route 2). Six decisions in §14 wait on Minus. Follow-ups filed: [[runtime-body-reflection-requests]], [[runtime-fn-reflected-language]], [[runtime-default-setup-soundness]], [[declaration-prefix-generators]], [[function-ir-multi-word-calls]], [[runtime-nat-checked-arithmetic]]; [[runtime-fn-default-setup]] narrowed to the integration slice.

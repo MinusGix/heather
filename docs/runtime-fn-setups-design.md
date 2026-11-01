@@ -630,14 +630,15 @@ opting in) moving to `runtime-fn-default-setup`, and
 
 ## 10. The builder and `compile-x86` on the way
 
-- **Now (sibling round).** `native-build-reflected-helpers` and
-  `native-build-loop-regions` are being built: a builder form that inlines a
-  reflected word function's region (through the Rust reflector) and builder
-  forms for `Loop` and `Conditional` regions. They are the near-term way to
-  write a tool's pure parts as Heather functions, and their builder-facing
-  form survives R5: in R5 the helper form takes a function with a `Compile` instance instead
-  of a function the Rust reflector reads, and the loop-region forms become
-  unnecessary for code a runtime fn can express.
+- **Landed (2026-10-31).** `native-build-reflected-helpers` and
+  `native-build-loop-regions` closed: the builder has `Calc` regions, and
+  `heather reflect <file> <fn>` writes a word function's FunctionIR program
+  with `<fn>_native_agrees` as a checked module, which a tool calls through a
+  FunctionIR `Call` (compiling once `native-compiled-procedures` lands). In
+  R5, `heather reflect` is what the Heather generator replaces: the tool-side
+  form (`program(…)`, `call(k, args, r)`) stays, and the program it names
+  comes from a `Compile(f)` instance instead of the Rust reflector. The
+  `Calc` forms become unnecessary for code a runtime fn can express.
 - **R5 (N1).** The Heather generator replaces the Rust reflector.
   `compile-x86 file f` requires a `Compile(f)` instance (from `runtime fn f` or by hand), and runs
   the existing `lower_program`/`compiled_returns` chain with that instance's

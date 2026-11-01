@@ -20,3 +20,7 @@ not inlined.
 ## Done when
 
 A helper called from several sites is emitted once, a non-tail recursive function compiles, and `grep -F` passes GNU tests under `LC_ALL=C`.
+
+## Log
+
+- 2026-10-31: A builder tool can call a reflected word function now (`call`, `program`; [[native-build-reflected-helpers]]): such a tool is refused by write-elf until calls compile here, and is a ready customer (lib/_tests/native/native_build_tests.hthr's `raised_status`).
