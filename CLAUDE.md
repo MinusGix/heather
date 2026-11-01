@@ -139,6 +139,13 @@
   `docs/testing-generated-terms.md` — vary all four axes (literal *and*
   neutral scrutinee, an **open** element type, a *checking* position and not
   only computation, and a negative control); defects have hidden behind each.
+- **Compilation design starts from `docs/compilation-vision.md`**: the
+  settled principles (certificate logical, everything else operational;
+  untrusted search over checked witnesses; prove the generator, not the
+  copies; disciplines as libraries; opt-in, syntax-keyed `Compile(f)`) and
+  the picture (languages producing `Compile(f)`, facts as side-proofs the
+  compiler finds). A native, `runtime fn`, `Compile`, `datarepr` or pass
+  round reads it before designing, and extends it rather than re-deriving it.
 - **Writing proofs: `docs/proof-patterns.md`** has the rules rounds kept
   rediscovering (closed verdicts as `b = True` by `refl`, never `refl`
   between two computations, neutral parameters, stage theorems, what `omega`
