@@ -1,0 +1,29 @@
+// Probes of `lib/std/analysis/real_exp.hthr`: exp's derivative and the mean
+// value inequality it gives, read on concrete intervals. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import list; import relation; import relation_props; import algebra;
+import algebra_rel; import order; import semiring; import ordered_field; import big_operator; import omega; import tactic;
+import ring; import linarith; import rat; import creal; import series; import elementary; import exp_law; import elementary_real; import real_fn; import real_exp;
+
+// On [0, 1], exp is its own derivative and exp(1)-Lipschitz.
+theorem exp_unit_deriv(x: CReal): DerivOn(λ (y: CReal) => Within(<=, 0, y, 1), λ (y: CReal) => CReal::exp(y), λ (y: CReal) => CReal::exp(y)) {
+    CReal::exp_deriv_within(0, 1)
+}
+
+theorem exp_unit_increment(a, b: CReal, da: Within(<=, 0, a, 1), db: Within(<=, 0, b, 1), ab: a <= b):
+    AbsLe(CReal::exp(b) + -CReal::exp(a), CReal::exp(1) * (b + -a))
+{
+    DerivOn::mvi(λ (y: CReal) => Within(<=, 0, y, 1), λ (y: CReal) => CReal::exp(y), λ (y: CReal) => CReal::exp(y), CReal::exp(1),
+        ConvexOn::within(0, 1), CReal::exp_deriv_within(0, 1), CReal::exp_bounded_within(0, 1), a, b, da, db, ab)
+}
+
+// The second-order bound at a real argument.
+theorem exp_quadratic(h: CReal, hk: AbsLe(h, CReal::ofRat(Rat::inv_succ(3)))):
+    AbsLe(CReal::exp(h) - 1 - h, CReal::ofRat(CReal::exp_reach(1)) * (CReal::ofRat(Rat::inv_succ(3)) * CReal::ofRat(Rat::inv_succ(3))))
+{
+    let q: (Rat::inv_succ(3) + Rat::inv_succ(3) <= 1) = omega;
+    let k2: (CReal::ofRat(Rat::inv_succ(3)) + CReal::ofRat(Rat::inv_succ(3)) <= 1) =
+        CReal::le_trans(CReal::le_of_same(CReal::same_sym(CReal::ofRat_add(Rat::inv_succ(3), Rat::inv_succ(3)))), CReal::ofRat_le(q));
+    CReal::exp_sub_lin(h, CReal::ofRat(Rat::inv_succ(3)), hk, k2)
+}
