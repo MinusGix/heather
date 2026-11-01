@@ -8,7 +8,7 @@ position, and compiles nested patterns to case trees with per-clause
 equations. Its "done when" is this note, decided by Minus, with the slices
 filed.
 
-**Status: decided (2026-10-31, §13); slices 4, 1, 3, 2 and 6 implemented (§8.1, §4.3.1, §6.1, §5.1, §9.1); slice 5 blocked (`match-clause-equations`' log).** No kernel change is needed and none is
+**Status: decided (2026-10-31, §13); slices 4, 1, 3, 2, 6 and 5 implemented (§8.1, §4.3.1, §6.1, §5.1, §9.1, §7.1); slice 7, the sweep, remains.** No kernel change is needed and none is
 proposed. Everything here is elaborator front end over the route lowerings
 that already exist.
 
@@ -431,6 +431,72 @@ annotation, which is the same class of defect as the closed
 The `decreases` walk then needs no special case for nested patterns. It
 sees nested convoyed matches on variables (§8).
 
+### 7.1 As landed: the inner scrutinee is a child read (2026-11-01)
+
+§7 assumed that the column `#c` is a local which `#e₁` mentions. It is not.
+On a recursive type, the binder for a recursive field is an **alias**: a read
+out of the arm's children, not a kernel binder and not a subterm of the
+goal. The goal and `#e₁` spell the constructor value through the children
+themselves:
+
+| lowering | the binder `rest` | the goal spells the value as |
+|---|---|---|
+| tier 1, `Wf` (`List`, binary trees) | `nth(⟦D⟧; Sᵐ(b); cs'; ι_t)`, tier-1 note §6.3 | `sup_f(ℓ; cs')` |
+| tier 2, `W`, plain child (`Tau`) | `⟨f' ⟨⟩, c⟩`, tier-2 note §7 | `⟨sup(ℓ; f'), c⟩` |
+
+So abstracting `rest` found no occurrence. Synthesis then fell back to the
+constant motive, and the inner arms were checked against a goal that still
+spoke of the unrefined value. That was the root of both P4 and
+`nested-match-on-list-tail-motive`. The 2026-10-31 log blamed a missing
+`Empty`-domain η and called the slice blocked. That diagnosis was wrong:
+it described tier 2's *leaf*, and a leaf has no recursive binder to match
+on.
+
+The fix is the one the tier-0 field match already uses (`field_rewrap`,
+`docs/goal-motive-synthesis-design.md` §5). Abstract the locals the read is
+built from, each rebuilt around `z`, together with the scrutinee itself and
+under one binder:
+
+- **`Wf`.** `cs' ↦ ⟨fst cs', … ⟨z, sndᵗ⁺¹ cs'⟩⟩`, with `z` at position `t`.
+  At `z := nth(cs'; ι_t)` this is `cs'` again: `nth` reduces at a
+  `Succ`-headed length whatever the tuple is, and then Σ-η applies. The
+  children are a tuple, not a function, so no η at a function space is
+  asked for.
+- **`W`, plain child.** `f' ↦ λ(y : P ℓ). fst z` and `c ↦ snd z`. At
+  `z := ⟨f' ⟨⟩, c⟩` the first is `f'` by Π-η and `Unit`-η (a plain child's
+  positions are `Unit`, tier-2 note §2.3), and the second holds by Σ-β. The
+  rebuilt pair is well typed because `snd z : El(canon(fst z))`, and
+  `canon(sup(ℓ; λy. fst z))` takes its plain branch to exactly that.
+
+The planted terms are checked, not trusted, as for every
+`abstract_local_with` caller. The motive's instance at the scrutinee is the
+goal only up to the conversions named above, and the kernel re-checks it.
+Both rewrites are recognized by shape. A `Wf` read is recognized by
+rebuilding the `nth` schema and comparing it, so nothing that merely
+resembles a read is taken apart.
+
+What this covers falls out of the one entry point. `synthesize_motive` is
+where the generated inner match, the hypotheses generalized into the goal
+(§5) and the convoy equation (§4) all get their motive. So `h` is the
+clause equation at the leaf (P4), hypotheses about the scrutinee are
+refined through every level, and a hand-written nested match on a `Cons`
+tail needs no motive. Probes are in `lib/_tests/std/data/list_tests.hthr`
+(an open element type, three deep, a hypothesis, a goal naming the whole
+list, and the swapped equation as a negative control),
+`lib/_tests/std/data/tree_tests.hthr` (either child of a `Node`) and
+`lib/_tests/std/itree/itree_tests.hthr` (`Tau(Tau(u))`, `Tau(Ret(r))`).
+
+Not covered, each filed:
+
+- A **function child**: matching on `k(e)` would need `f'` rebuilt at one
+  point only. That is not a conversion, and nothing asks for it yet.
+- **Indexed families**: the inner motive must generalize the index with the
+  value (`indexed-deep-pattern-kernel-rejects`).
+- A **payload field that a later field's type depends on**
+  (`deep-pattern-dependent-later-field`). This one is not about children
+  at all. The later field's alias keeps its unrefined type, so the fix is
+  to convoy dependent aliases.
+
 ## 8. Unfolding through a convoyed match
 
 The walk (`docs/decreases-unfolding-design.md` §3) re-matches a variable `v`
@@ -590,7 +656,7 @@ open element type (`docs/testing-generated-terms.md`).
 | 2. Generalize locals at a computed scrutinee (§5) | `match-refines-computed-scrutinee` | P1; `split-all-revise-hypotheses` (its splits go through the front end); `cov-window-in-theorem-arms`' first half |
 | 3. Constant motive from any arm; `match h:` in inference position (§6) | `match-infers-constant-motive` | P3 (sequencing P2) |
 | 4. Unfolding through a convoyed match (§8) | `unfolding-through-convoyed-match` | `unfolding-computed-scrutinee`, P5; unblocks R3b of `pure-imperative-statements` |
-| 5. Clause equations (§7) | `match-clause-equations` | P4 / `eqbind-deep-pattern-kernel-rejects` |
+| 5. Clause equations (§7, landed as §7.1) | `match-clause-equations` | P4 / `eqbind-deep-pattern-kernel-rejects`, `nested-match-on-list-tail-motive` |
 | 6. Packed equation on indexed families (§9) | `match-equation-indexed-family` | the §4 refusal of the equation-split design |
 | 7. Motive and convoy sweep (§10) | `match-motive-sweep` | `match-motive-surface-audit`'s census, `uncurried-recursions-library-sweep`'s remaining motives, most of `lint-match-function-application`'s sites |
 

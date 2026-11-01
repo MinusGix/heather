@@ -5,7 +5,7 @@
 // not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5). Moved from
 // crates/elab/tests/lib_std_itree.rs; the refusals stay there.
-import logic; import nat; import list; import omega; import itree;
+import logic; import nat; import list; import omega; import itree; import option;
 
 // Which constructor a tree is, to tell trees apart.
 fn shape<R>(E: Events, t: ITree<R>(E)) → Nat { match t { Ret(_) => 0, Tau(_) => 1, Vis(_, _) => 2, Cut => 3 } }
@@ -65,5 +65,22 @@ theorem tau_not_leaf(E: Events): ¬(ITree::Same<Nat>(E, Tau(Ret(1)), Ret(1))) {
     λ h => {
         let shapes: (0 = 1) = cong_fn(λ (t: ITree<Nat>(E)) => shape(E, t), h.at);
         omega(shapes)
+    }
+}
+
+// A deep pattern under `Tau`, the tier-2 plain child: the binder is
+// `⟨f' ⟨⟩, c⟩`, and the motive rebuilds the children function and the leaf
+// proof around `z` (docs/dependent-match-compiler-design.md §7.1). Open events
+// and an open result type.
+theorem deep_tau<R>(E: Events, P: ITree<R>(E) → Type): (t: ITree<R>(E)) → P(t) → Nat {
+    λ t => λ p => match t {
+        Tau(Tau(u)) => { let q: P(Tau(Tau(u))) = p; 0 },
+        _ => 1
+    }
+}
+theorem deep_tau_eq<R>(E: Events): (t: ITree<R>(E)) → Option<R> {
+    λ t => match h: t {
+        Tau(Ret(r)) => { let k: (t = Tau(Ret(r))) = h; Some(r) },
+        _ => None
     }
 }

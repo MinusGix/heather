@@ -467,7 +467,7 @@ fn decode_near_control(bytes: List<BitVec(8)>) → Option<NearControlDecode(byte
             },
             Inr(_) => match opcode.eq_dec(BitVec::ofNat(0x0f)) {
                 Inr(_) => None,
-                Inl(first_exact) => match tail as λ rest => Option<NearControlDecode(Cons(opcode, rest))> {
+                Inl(first_exact) => match tail {
                     Nil => None,
                     Cons(second, rest) => match read_condition_opcode(second, near_condition_opcode) {
                         None => None,

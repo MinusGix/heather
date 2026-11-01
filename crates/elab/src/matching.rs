@@ -797,14 +797,173 @@ fn stuck_scrutinees(term: &Term, out: &mut Vec<Term>, budget: &mut u32) {
     }
 }
 
-fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Option<(Term, Term)>) -> Option<Type> {
-    goal.abstract_local(scrutinee).or_else(|| {
-        let (base, replacement) = rewrap.as_ref()?;
-        goal.abstract_local_with(base, replacement)
-    })
+fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Rewrap) -> Option<Type> {
+    match rewrap {
+        // A child read and the constructor value it reads from are two
+        // spellings of one value, so both are abstracted under the one `z`: a
+        // goal that names the child and the value together is specialized at
+        // both, never half (`docs/goal-motive-synthesis-design.md` §4.4).
+        Rewrap::Child(bases) => {
+            let mut pats = vec![(scrutinee.clone(), Term::Var(LocalVar(0)))];
+            pats.extend(bases.iter().cloned());
+            goal.abstract_local_with_all(&pats)
+        }
+        Rewrap::Field(base, replacement) => goal
+            .abstract_local(scrutinee)
+            .or_else(|| goal.abstract_local_with(base, replacement)),
+        Rewrap::None => goal.abstract_local(scrutinee),
+    }
 }
 
-fn field_rewrap(cx: &Cx, scrutinee: &Term) -> Option<(Term, Term)> {
+/// What a goal mentions in place of the scrutinee, rebuilt around `z`
+/// (`docs/goal-motive-synthesis-design.md` §5).
+#[derive(Debug)]
+enum Rewrap {
+    None,
+    /// A tier-0 field: the value it projects from, rebuilt as a pair around
+    /// `z`. Tried only when the scrutinee itself does not occur.
+    Field(Term, Term),
+    /// A recursive binder of a `Wf` or `W` arm, which is a read out of the
+    /// arm's children and not a subterm of the goal's constructor value: each
+    /// local the read is built from, rebuilt around `z`. Abstracted together
+    /// with the scrutinee (docs/dependent-match-compiler-design.md §7.1).
+    Child(Vec<(Term, Term)>),
+}
+
+/// A `Wf` arm's recursive binder: `nth^l(⟦D⟧; Succ^m(base); cs; ι_t)` over a
+/// children tuple `cs` that is a local (docs/inductive-tier1-wf-lowering.md
+/// §6.3). Recognized by rebuilding the schema and comparing, so nothing that
+/// merely resembles it is taken apart. Returns the level, the element type,
+/// the length, `cs` and `t`.
+pub(crate) fn child_read(term: &Term) -> Option<(Level, Rc<Type>, Rc<Term>, Rc<Term>, usize)> {
+    let Term::App { fun, arg: idx, .. } = term else { return None };
+    let Term::App { fun: recursion, dom, arg: cs, .. } = &**fun else { return None };
+    let Term::ElimNat { .. } = &**recursion else { return None };
+    let Type::Vec { level, elem, len } = &**dom else { return None };
+    if !matches!(&**cs, Term::Var(_)) {
+        return None;
+    }
+    let mut t = 0;
+    let mut at = &**idx;
+    loop {
+        match at {
+            Term::Inr { val, .. } => {
+                t += 1;
+                at = val;
+            }
+            Term::Inl { .. } => break,
+            _ => return None,
+        }
+    }
+    let mut rest = &**len;
+    for _ in 0..=t {
+        let Term::Succ(k) = rest else { return None };
+        rest = k;
+    }
+    let rebuilt = heather_kernel::term::nth(level, elem, len, Rc::clone(cs), Rc::clone(idx));
+    (rebuilt == *term).then(|| (level.clone(), Rc::clone(elem), Rc::clone(len), Rc::clone(cs), t))
+}
+
+/// The children tuple `cs` rebuilt around `z` at position `t`, scoped in
+/// `Γ, z`: `⟨fst cs, ⟨fst (snd cs), … ⟨z, snd^{t+1} cs⟩⟩⟩`. At `z := nth(cs;
+/// ι_t)` it is `cs` again by `nth`'s reduction at a `Succ`-headed length and
+/// Σ-η, which is the whole reason a `Wf` child needs no transport: the
+/// children are a tuple, not a function, so no η at a function space is
+/// asked for (contrast tier 2's leaf, docs/inductive-tier2-w-lowering.md
+/// §2.1).
+fn child_rewrap(term: &Term) -> Option<(Term, Term)> {
+    let (level, elem, len, cs, t) = child_read(term)?;
+    fn rebuild(level: &Level, elem: &Type, len: &Term, cs: Term, t: usize) -> Term {
+        let Term::Succ(k) = len else { unreachable!("child_read checked t + 1 successors") };
+        let fst_ty = Rc::new(elem.clone());
+        let snd_ty = Rc::new(Type::Vec {
+            level: level.clone(),
+            elem: Rc::new(elem.shift_local(1)),
+            len: Rc::new(k.shift_local(1)),
+        });
+        let proj = |snd: bool, pair: &Term| {
+            let (fst_level, snd_level) = (level.clone(), level.clone());
+            let (fst_ty, snd_ty, pair) = (Rc::clone(&fst_ty), Rc::clone(&snd_ty), Rc::new(pair.clone()));
+            if snd {
+                Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair }
+            } else {
+                Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair }
+            }
+        };
+        let (fst, snd) = if t == 0 {
+            (Term::Var(LocalVar(0)), proj(true, &cs))
+        } else {
+            (proj(false, &cs), rebuild(level, elem, k, proj(true, &cs), t - 1))
+        };
+        Term::Pair {
+            fst_level: level.clone(),
+            snd_level: level.clone(),
+            fst_ty,
+            snd_ty,
+            fst: Rc::new(fst),
+            snd: Rc::new(snd),
+        }
+    }
+    let base = (*cs).clone();
+    let tuple = rebuild(&level, &elem.shift_local(1), &len.shift_local(1), cs.shift_local(1), t);
+    Some((base, tuple))
+}
+
+/// A `W` arm's plain recursive binder, `t := ⟨f' ⟨⟩, c⟩`
+/// (docs/inductive-tier2-w-lowering.md §7): the children function `f'` and
+/// the leaf-predicate proof `c` are locals, and the goal spells the value as
+/// `⟨sup(ℓ; f'), c⟩`. Rebuilt around `z` as `f' := λ(y : P ℓ). fst z` and `c :=
+/// snd z`. At `z := t` the first is `f'` again by Π-η and `Unit`-η (the
+/// positions of a plain child are `Unit`, §2.3) and the second by Σ-β, and
+/// `snd z : El(canon(fst z))` is the proof the rebuilt tree needs, since
+/// `canon(sup(ℓ; λy. fst z))` takes its plain branch to `canon(fst z)`. No
+/// leaf is involved, so no η at an `Empty` domain is asked for (§2.1): a
+/// leaf has no recursive binder to match on.
+fn w_child_rewrap(cx: &Cx, term: &Term) -> Option<Vec<(Term, Term)>> {
+    let Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } = term else { return None };
+    if !matches!(&**fst_ty, Type::W { .. }) {
+        return None;
+    }
+    let (Term::AppAt { fun, arg } | Term::App { fun, arg, .. }) = &**fst else { return None };
+    let (Term::Var(f), Term::Var(c)) = (&**fun, &**snd) else { return None };
+    if !matches!(&**arg, Term::Triv { .. }) {
+        return None;
+    }
+    let f_ty = cx.gamma.entries.nth_inner(f.0)?.ty.shift_local(f.0 + 1);
+    let Type::Pi { dom_level, cod_level, dom, .. } = f_ty else { return None };
+    let proj = |second: bool, by: u32| {
+        let (fst_level, snd_level) = (fst_level.clone(), snd_level.clone());
+        let (fst_ty, snd_ty) = (Rc::new(fst_ty.shift_local(by)), Rc::new(snd_ty.shift_local_above(by, 1)));
+        let pair = Rc::new(Term::Var(LocalVar(by - 1)));
+        if second {
+            Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair }
+        } else {
+            Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair }
+        }
+    };
+    let children = Term::Lam {
+        dom_level,
+        cod_level,
+        dom: Rc::new(dom.shift_local(1)),
+        body: Rc::new(proj(false, 2)),
+    };
+    Some(vec![(Term::Var(*f), children), (Term::Var(*c), proj(true, 1))])
+}
+
+fn field_rewrap(cx: &Cx, scrutinee: &Term) -> Rewrap {
+    if let Some((base, tuple)) = child_rewrap(scrutinee) {
+        return Rewrap::Child(vec![(base, tuple)]);
+    }
+    if let Some(bases) = w_child_rewrap(cx, scrutinee) {
+        return Rewrap::Child(bases);
+    }
+    match tier0_field_rewrap(cx, scrutinee) {
+        Some((base, replacement)) => Rewrap::Field(base, replacement),
+        None => Rewrap::None,
+    }
+}
+
+fn tier0_field_rewrap(cx: &Cx, scrutinee: &Term) -> Option<(Term, Term)> {
     // The checked spelling's η-expansion is the same shape with **no**
     // annotation below the root (`docs/intro-by-type-design.md` §4.2): every
     // inner `pair@` is a field of the one above it, so it is in checking

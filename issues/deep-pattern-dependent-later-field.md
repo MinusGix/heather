@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,inductives,diagnostics]
 area: language
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 ---
 
 `match b { Mk(Ask, k) => k(3), _ => 0 }` over
@@ -29,3 +29,7 @@ nested `match` written out. A kernel rejection is neither.
 
 The `Box` example either computes (`h(Mk(Ask, λ n => n)) = 3` by `refl`) or
 is refused by the elaborator with a message naming `k`'s dependency on `c`.
+
+## Log
+
+- 2026-11-01: 2026-11-01, checked during match-clause-equations: still a kernel NotConvertible after the child rewrap. The root is not the motive's abstraction. The generated inner match on c leaves k's alias at type Resp(c) while the arm believes it is refined, so the fix is to convoy aliases whose types mention the column (design §7.1, not covered).
