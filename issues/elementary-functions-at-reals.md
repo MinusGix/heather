@@ -1,10 +1,10 @@
 ---
 title: exp, sin, cos at real arguments, and their laws
-status: open
+status: closed
 labels: [reals]
 area: mathematics
 created: 2026-10-27
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 `CReal::exp_rat`, `sin_rat`, `cos_rat` (`lib/std/num/float/elementary.hthr`)
@@ -43,3 +43,13 @@ Scope:
   - `lib/std/num/float/elementary_real.hthr`: `CReal::exp`, with `exp_ofRat`, `exp_respects`, `exp_add`, `exp_neg_mul`, `exp_le`, `exp_lt`, `exp_pos`, `exp_dev`, and the checker leaf `exp_real_box`, which `by intervals()` reads at `CReal::exp(x)` for any real x (probes in lib/_tests/std/num/float/elementary_real_tests.hthr).
 
   Still owed here: sin and cos at real arguments, and their laws (the addition formulas and sin² + cos² ≈ 1), next in the same thread; and `exp(log q) ≈ q`. The last is not cheap: log is 2·atanh(t) + e·log 2, and exp(e·log 2) = 2^e follows from `exp_add`, but exp(2·atanh t) = (1+t)/(1-t) needs either derivatives with ODE uniqueness ([[real-functions-and-derivatives]]) or composition of power series ([[formal-power-series]], [[power-series-evaluation]]).
+- 2026-11-01: sin and cos are done at real arguments, with their laws (thread "Define exp, sin and cos at the reals", second PR), so the scope is complete:
+
+    - `lib/std/num/float/trig_law.hthr` proves the addition laws at rationals, `CReal::sin_rat_add` and `cos_rat_add`. sin's and cos's series are exp's at odd and even places, signed by σ = 0, 1, 0, -1, … and γ = 1, 0, -1, 0, …, and these signs obey the addition formulas themselves (`Series::pattern_add`). With exp's coefficient identity, each degree's coefficient splits over the antidiagonal (`Series::sin_prod_term`, `cos_prod_term`). The Cauchy product is now stated over term functions (`Rat::cauchy_gap`, `Rat::cauchy_square`, exp_law.hthr), and `CReal::cauchy2_near` closes two products against one partial sum. The file also has:
+      - parity (`sin_rat_neg`, `cos_rat_neg`);
+      - small-argument bounds (`sin_rat_small`, `cos_rat_sub_one`);
+      - one Lipschitz modulus for both, `CReal::trig_lip`, from the addition laws.
+    - `RatLip::ext_odd` and `ext_even` (creal_lipschitz.hthr) carry parity to the reals.
+    - `lib/std/num/float/elementary_real.hthr` adds `CReal::sin` and `CReal::cos`, with `sin_add`, `cos_add`, `sin_neg`, `cos_neg`, `sin_sq_add_cos_sq` (sin² + cos² ≈ 1) and `sin_dev`/`cos_dev`. Their checker leaves, `sin_real_box` and `cos_real_box`, are the rational enclosure at the argument's n-th term, padded by the Lipschitz bound. The pad is computed in dyadics from exp's enclosures, because the exact `trig_lip` rationals run out of kernel fuel. The pad still grows with the argument's bound: a real near 10 already runs out. A tighter leaf would use the addition law at the term, with |sin|, |cos| <= 1, or argument reduction ([[interval-log-and-reduction]]).
+
+  `exp(log q) ≈ q` moves to [[exp-log-inverse]].

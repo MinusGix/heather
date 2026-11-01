@@ -200,3 +200,80 @@ theorem RatLip::ext_respects(self F: RatLip, {x, y: CReal}, h: x ≈ y): F.ext(x
     };
     CReal::le_antisymm(CReal::le_of_slack(λ m => near(m).left), CReal::le_of_slack(λ m => near(m).right))
 }
+
+// An odd or even function at rationals extends to an odd or even one: at
+// the j-th term q of x, -x is within 2^-j of -q, and both sides are within
+// lip·2^-j of their values there.
+theorem RatLip::ext_odd(self F: RatLip, h: (q: Rat) → F.f(-q) ≈ -F.f(q), x: CReal): F.ext(-x) ≈ -F.ext(x) {
+    let y = -x;
+    let B = x.bound_rat() + y.bound_rat();
+    let L = F.lip(B);
+    let hL = F.lip_nonneg(B);
+    let rx = x.bound_rat_nonneg();
+    let ry = y.bound_rat_nonneg();
+    let hx = λ (i: Nat) => {
+        let r: (x.at(i).abs() <= B) = linarith(x.bound_le(i), ry);
+        r
+    };
+    let hy = λ (i: Nat) => {
+        let r: (y.at(i).abs() <= B) = linarith(y.bound_le(i), rx);
+        r
+    };
+    let near = λ (m: Nat) => {
+        let j = (m + 1) + L.abs_ceil().width();
+        let g = Rat::inv_pow2(j);
+        let q = x.at(j);
+        let xl: (CReal::ofRat(q - g) <= x) = x.term_sub_le(j);
+        let xh: (x <= CReal::ofRat(q + g)) = x.le_term_add(j);
+        let yl: (CReal::ofRat(-q - g) <= y) = linarith(xh);
+        let yh: (y <= CReal::ofRat(-q + g)) = linarith(xl);
+        let hq: ((-q).abs() <= B) = Rat::le_trans(Rat::le_of_same(q.abs_neg()), hx(j));
+        let dx = F.ext_dev(x, q, g, B, hx, hx(j), xl, xh);
+        let dy = F.ext_dev(y, -q, g, B, hy, hq, yl, yh);
+        let s: (L * g <= Rat::inv_pow2(m + 1)) = RatLip::scaled(L, hL, m + 1, j, omega);
+        let h0 = Rat::inv_pow2_half(m);
+        let tot: (L * g + L * g <= Rat::inv_pow2(m)) = linarith(s, h0);
+        let o = h(q);
+        let up: (F.ext(y) <= -F.ext(x) + CReal::ofRat(Rat::inv_pow2(m))) = linarith(dy.right, dx.right, o, CReal::ofRat_le(tot));
+        let dn: (-F.ext(x) <= F.ext(y) + CReal::ofRat(Rat::inv_pow2(m))) = linarith(dy.left, dx.left, o, CReal::ofRat_le(tot));
+        And(up, dn)
+    };
+    CReal::le_antisymm(CReal::le_of_slack(λ m => near(m).left), CReal::le_of_slack(λ m => near(m).right))
+}
+
+theorem RatLip::ext_even(self F: RatLip, h: (q: Rat) → F.f(-q) ≈ F.f(q), x: CReal): F.ext(-x) ≈ F.ext(x) {
+    let y = -x;
+    let B = x.bound_rat() + y.bound_rat();
+    let L = F.lip(B);
+    let hL = F.lip_nonneg(B);
+    let rx = x.bound_rat_nonneg();
+    let ry = y.bound_rat_nonneg();
+    let hx = λ (i: Nat) => {
+        let r: (x.at(i).abs() <= B) = linarith(x.bound_le(i), ry);
+        r
+    };
+    let hy = λ (i: Nat) => {
+        let r: (y.at(i).abs() <= B) = linarith(y.bound_le(i), rx);
+        r
+    };
+    let near = λ (m: Nat) => {
+        let j = (m + 1) + L.abs_ceil().width();
+        let g = Rat::inv_pow2(j);
+        let q = x.at(j);
+        let xl: (CReal::ofRat(q - g) <= x) = x.term_sub_le(j);
+        let xh: (x <= CReal::ofRat(q + g)) = x.le_term_add(j);
+        let yl: (CReal::ofRat(-q - g) <= y) = linarith(xh);
+        let yh: (y <= CReal::ofRat(-q + g)) = linarith(xl);
+        let hq: ((-q).abs() <= B) = Rat::le_trans(Rat::le_of_same(q.abs_neg()), hx(j));
+        let dx = F.ext_dev(x, q, g, B, hx, hx(j), xl, xh);
+        let dy = F.ext_dev(y, -q, g, B, hy, hq, yl, yh);
+        let s: (L * g <= Rat::inv_pow2(m + 1)) = RatLip::scaled(L, hL, m + 1, j, omega);
+        let h0 = Rat::inv_pow2_half(m);
+        let tot: (L * g + L * g <= Rat::inv_pow2(m)) = linarith(s, h0);
+        let o = h(q);
+        let up: (F.ext(y) <= F.ext(x) + CReal::ofRat(Rat::inv_pow2(m))) = linarith(dy.right, dx.left, o, CReal::ofRat_le(tot));
+        let dn: (F.ext(x) <= F.ext(y) + CReal::ofRat(Rat::inv_pow2(m))) = linarith(dy.left, dx.right, o, CReal::ofRat_le(tot));
+        And(up, dn)
+    };
+    CReal::le_antisymm(CReal::le_of_slack(λ m => near(m).left), CReal::le_of_slack(λ m => near(m).right))
+}
