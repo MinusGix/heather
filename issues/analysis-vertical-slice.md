@@ -6,7 +6,7 @@ area: mathematics
 milestone: [math-reals]
 blocked-by: [finite-difference-calculus, formal-power-series, asymptotic-relations, valued-rings-and-newton, certified-expansions, taylor-model-enclosures, regular-perturbation-expansions]
 created: 2026-10-27
-updated: 2026-10-28
+updated: 2026-11-01
 ---
 
 The acceptance test that runs through every layer of
@@ -70,3 +70,4 @@ whole-library gate.
   Minus's decision: the proper design of each layer, not the minimum for one
   case. Step 6 waits for Taylor models rather than shipping the polynomial
   case first.
+- 2026-11-01: Step 1 ([[finite-difference-calculus]], closed): layer A′ landed; the residual check `y·y + 8·ε·y − 64 ≈ ε⁴` at `CReal` is `slice_residual` in lib/_tests/std/algebra/difference_tests.hthr. Step 2 ([[formal-power-series]]) first round: the probe "is `Hurwitz<Hurwitz<Rat>>` accepted by the class system" is yes (`nested_one` in hurwitz_tests); Newton doubling for inverses is `Hurwitz::newton_inv_lifts` (order `2^k` after `k` steps, at any commutative ring); Newton for roots of a polynomial is still open there.

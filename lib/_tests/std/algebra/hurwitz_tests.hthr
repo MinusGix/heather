@@ -54,3 +54,11 @@ fn at_three() → Hurwitz<Int> { Hurwitz::cons(OfNat(3), Hurwitz::one()) }
 theorem square_value(): Hurwitz::mul(at_three(), at_three()).coeff(0) = OfNat(9) { refl }
 theorem square_derivative(): Hurwitz::mul(at_three(), at_three()).coeff(1) = OfNat(6) { refl }
 theorem dual_product(f, g: Hurwitz<Rat>): Hurwitz::mul(f, g).coeff(1) ≈ f.coeff(1) * g.coeff(0) + f.coeff(0) * g.coeff(1) { Hurwitz::mul_first(f, g) }
+// Newton lifting inverts `exp(t)` (all ones) to `exp(-t)` at `Int`.
+theorem newton_exp_coeffs(): Pair(Hurwitz::newton_inv_iter(2, Hurwitz::exp<Int>(OfNat(1)), Hurwitz::constant<Int>(OfNat(1))).coeff(2),
+    Hurwitz::newton_inv_iter(2, Hurwitz::exp<Int>(OfNat(1)), Hurwitz::constant<Int>(OfNat(1))).coeff(3)) = Pair(OfNat(1), NegSucc(0)) { refl }
+// One step is order 2 only: the true inverse has `1` at index 2.
+theorem newton_one_step_short(): Hurwitz::newton_inv_iter(1, Hurwitz::exp<Int>(OfNat(1)), Hurwitz::constant<Int>(OfNat(1))).coeff(2) = NegSucc(0) { refl }
+theorem newton_exp_order(n: Nat, hn: Nat::Lt(n, 8)):
+    Hurwitz::inv_error(Hurwitz::exp<Int>(OfNat(1)), Hurwitz::newton_inv_iter(3, Hurwitz::exp<Int>(OfNat(1)), Hurwitz::constant<Int>(OfNat(1)))).coeff(n) = OfNat(0)
+{ Hurwitz::newton_inv_lifts<Int>(3, Hurwitz::exp<Int>(OfNat(1)), OfNat(1), refl, n, hn) }

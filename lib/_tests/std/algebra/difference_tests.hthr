@@ -4,7 +4,7 @@
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import nat; import int; import list; import relation;
 import relation_props; import algebra_rel; import semiring; import ordered_field;
-import big_operator; import difference; import rat;
+import big_operator; import difference; import rat; import creal;
 import omega; import ring; import tactic;
 
 // Binomial coefficients compute, and vanish past the top.
@@ -85,3 +85,8 @@ theorem cube_fourth_not_one(): ¬(GroupRel::delta_pow(≈, +, 4, cube, 0) = OfNa
 theorem rat_geometric_le(x: Nat → Rat, n: Nat, step: (k: Nat) → Nat::Le(n, k) → x(Succ(k)) <= x(k) * Rat::inv_succ(1), j: Nat):
     x(n + j) <= x(n) * ∏ i < j, Rat::inv_succ(1)
 { OrderedField::geometric_le(x, Rat::inv_succ(1), n, Rat::le_of_lt(Rat::inv_succ_pos(1)), step, j) }
+
+// The residual check of issues/analysis-vertical-slice.md step 1, with the
+// denominators cleared: for `y = 8 - 4ε + ε²`, `y·y + 8·ε·y - 64` is `ε⁴`
+// (so the slice's `F(x₂, ε) ≈ ε⁴/64`), by `ring` at `CReal`.
+theorem slice_residual(e, y: CReal, hy: y ≈ 8 - 4 * e + e * e): y * y + 8 * e * y - 64 ≈ e * e * e * e { ring(hy) }
