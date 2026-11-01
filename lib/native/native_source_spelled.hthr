@@ -5,9 +5,8 @@
 // literal the kernel checks equal to the source by `refl`, then compiles
 // the literal, so a tool's lowering is evaluated once and not again in
 // every statement of the certificate (crates/cli/src/native/elf.rs). A
-// region other than a dataflow leaf, or a source with functions, is spelled
-// `[0]`, and `write-elf` then compiles the source as it is. Untrusted: a
-// misspelling is a literal the kernel refuses.
+// source with functions is spelled `[0]`, and `write-elf` then compiles the
+// source as it is. Untrusted: a misspelling is a literal the kernel refuses.
 import native_source;
 import function_ir;
 import bitvec;
@@ -56,15 +55,28 @@ fn CallShape::spelled_call(self shape: CallShape) → List<Nat> {
     }
 }
 
-// `None` for a region that is not a dataflow leaf.
-fn StructuredRegion::spelled_region(self region: StructuredRegion) → Option<List<Nat>> {
+// A dataflow leaf's ports and nodes.
+fn Region::spelled_body(self body: Region) → List<Nat> {
+    List::append(body.inputs.spelled_ports(), Cons(body.nodes.len(), List::append(body.nodes.spell_nodes(), body.outputs.spelled_ports())))
+}
+
+fn List::spell_ids(self ids: List<Nat>) → List<Nat> { Cons(ids.len(), ids) }
+
+// A region's tag, then its fields in order, its parts' in prefix order:
+// 0 a leaf, 1 a sequence, 2 a composition, 3 a conditional, 4 a call, 5 a
+// loop (issues/native-region-spelling.md).
+fn StructuredRegion::spelled_tagged(self region: StructuredRegion) → List<Nat> {
     match region {
-        Dataflow(body) => Some(List::append(body.inputs.spelled_ports(), Cons(body.nodes.len(), List::append(body.nodes.spell_nodes(), body.outputs.spelled_ports())))),
-        Sequence(_, _) => None,
-        Compose(_, _) => None,
-        Conditional(_, _, _, _, _, _) => None,
-        Call(_, _, _) => None,
-        Loop(_, _, _, _, _, _, _, _, _) => None,
+        Dataflow(body) => Cons(0, body.spelled_body()),
+        Sequence(prefix, continuation) => Cons(1, List::append(prefix.spelled_body(), continuation.spelled_tagged())),
+        Compose(prefix, continuation) => Cons(2, List::append(prefix.spelled_tagged(), continuation.spelled_tagged())),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => Cons(3, List::append(inputs.spelled_ports(),
+            Cons(condition, List::append(arguments.spelled_ports(), List::append(outputs.spelled_ports(),
+                List::append(when_true.spelled_tagged(), when_false.spelled_tagged())))))),
+        Call(callee, arguments, result) => Cons(4, Cons(callee, List::append(arguments.spell_ids(), [result]))),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => Cons(5, List::append(inputs.spell_ids(),
+            Cons(bound, List::append(parameters.spell_ids(), Cons(count, List::append(body.spelled_tagged(),
+                Cons(exit, List::append(next.spell_ids(), List::append(outputs.spell_ids(), [exhausted]))))))))),
     }
 }
 
@@ -75,7 +87,15 @@ fn Option::spell_then(self first: Option<List<Nat>>, rest: Option<List<Nat>>) �
 // A statement's tag, then its fields, a statement's in prefix order.
 fn Stmt::spelled_stmt(self s: Stmt) → Option<List<Nat>> {
     match s {
-        Compute(region) => Some([0]).spell_then(region.spelled_region()),
+        // A leaf as it always was; any other region tagged.
+        Compute(region) => match region {
+            Dataflow(body) => Some(Cons(0, body.spelled_body())),
+            Sequence(_, _) => Some(Cons(7, region.spelled_tagged())),
+            Compose(_, _) => Some(Cons(7, region.spelled_tagged())),
+            Conditional(_, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
+            Call(_, _, _) => Some(Cons(7, region.spelled_tagged())),
+            Loop(_, _, _, _, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
+        },
         Invoke(shape) => Some(Cons(1, shape.spelled_call())),
         Then(first, rest) => Some([2]).spell_then(first.spelled_stmt()).spell_then(rest.spelled_stmt()),
         Branch(condition, yes, no) => Some([3, condition]).spell_then(yes.spelled_stmt()).spell_then(no.spelled_stmt()),

@@ -2071,6 +2071,231 @@ impl Elaborator {
         }
     }
 
+    /// Inline constraints that **share a symbol at one carrier** become one
+    /// constraint at a synthesized class extending them all
+    /// (issues/constraints-sharing-indices.md).
+    ///
+    /// `<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>` names one
+    /// `≈`, one `+` and one `*`, and both classes reach `CommRing` over them.
+    /// Two dictionaries would hold two `CommRing`s, and a lemma mixing laws
+    /// from both sides would be stated over two different units; linking the
+    /// second constraint's index to the first's binders shares the
+    /// operations but not the ancestor. One dictionary of the class
+    /// `CommRingOfInt+OrderedField`, whose `extends` flattens the shared
+    /// ancestor once, is what the writer meant: both classes are reached from
+    /// it by upcast, through one `CommRing`. A concrete carrier assembles it
+    /// from its two instances at resolution ([`Elaborator::join_parents`]),
+    /// which is sound there because the carrier's canonical instances already
+    /// share their ancestors by reference.
+    ///
+    /// The class is synthesized in this module the first time a declaration
+    /// asks for it and found by name after that. Its parents are sorted by
+    /// name, so the constraint's written order does not make a second class.
+    /// Only anonymous constraints whose every index slot is a symbol merge;
+    /// anything else is left to [`Self::expand_constraints`] unchanged.
+    pub(crate) fn merge_linked_constraints(&mut self, decl: &Decl) -> R<Option<Decl>> {
+        // Each candidate: (position, its class reference, the class, the
+        // carrier as written).
+        let mut cands: Vec<(usize, ClassRef, Rc<ClassInfo>, Vec<String>)> = Vec::new();
+        for (i, p) in decl.params.iter().enumerate() {
+            if p.solver.is_none() || !p.name.starts_with("#constraint") {
+                continue;
+            }
+            let Some(r) = self.class_ref_of_ty(&p.ty) else { continue };
+            let Some(class) = self.lookup_class(&r.name) else { continue };
+            if class.valparams.is_empty()
+                || class.is_kinded()
+                || r.index.len() != class.valparams.len()
+                || !r.index.iter().all(|a| matches!(a.kind, ExprKind::OpSymbol { .. }))
+            {
+                continue;
+            }
+            let carrier = r.args.iter().map(render_ty).collect();
+            cands.push((i, r, class, carrier));
+        }
+        if cands.len() < 2 {
+            return Ok(None);
+        }
+        let symbols_of = |r: &ClassRef| -> Vec<String> {
+            r.index
+                .iter()
+                .filter_map(|a| match &a.kind {
+                    ExprKind::OpSymbol { symbol, .. } => Some(symbol.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Connected components under "same carrier, a symbol in common".
+        let n = cands.len();
+        let mut comp: Vec<usize> = (0..n).collect();
+        fn root(comp: &mut [usize], mut i: usize) -> usize {
+            while comp[i] != i {
+                comp[i] = comp[comp[i]];
+                i = comp[i];
+            }
+            i
+        }
+        for a in 0..n {
+            for b in a + 1..n {
+                if cands[a].3 != cands[b].3 {
+                    continue;
+                }
+                let sa = symbols_of(&cands[a].1);
+                if symbols_of(&cands[b].1).iter().any(|s| sa.contains(s)) {
+                    let (ra, rb) = (root(&mut comp, a), root(&mut comp, b));
+                    comp[rb] = ra;
+                }
+            }
+        }
+        let roots: Vec<usize> = (0..n).map(|i| root(&mut comp, i)).collect();
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for i in 0..n {
+            match groups.iter_mut().find(|g| roots[g[0]] == roots[i]) {
+                Some(g) => g.push(i),
+                None => groups.push(vec![i]),
+            }
+        }
+        groups.retain(|g| g.len() >= 2);
+        if groups.is_empty() {
+            return Ok(None);
+        }
+        let mut params = decl.params.clone();
+        let mut drop: Vec<usize> = Vec::new();
+        for g in groups {
+            let mut members: Vec<&(usize, ClassRef, Rc<ClassInfo>, Vec<String>)> =
+                g.iter().map(|&k| &cands[k]).collect();
+            // A class written twice is §5.2's business, not a merge.
+            if members
+                .iter()
+                .enumerate()
+                .any(|(i, m)| members[..i].iter().any(|q| q.2.name == m.2.name))
+            {
+                continue;
+            }
+            members.sort_by(|a, b| a.2.name.cmp(&b.2.name));
+            let first = members[0];
+            let span = decl.params[first.0].span;
+            // The merged class's parameters are its first parent's, and every
+            // other parent's are renamed onto them positionally; the carriers
+            // agree, so the arities do.
+            let cparams = first.2.params.clone();
+            if members.iter().any(|m| m.2.params.len() != cparams.len()) {
+                continue;
+            }
+            // One value parameter per distinct symbol, in first-occurrence
+            // order over the sorted parents, under its first parent's name.
+            let mut syms: Vec<String> = Vec::new();
+            let mut sym_exprs: Vec<Expr> = Vec::new();
+            let mut valparams: Vec<Param> = Vec::new();
+            let mut extends: Vec<ClassRef> = Vec::new();
+            for m in &members {
+                let sub: HashMap<String, Ty> = m
+                    .2
+                    .params
+                    .iter()
+                    .cloned()
+                    .zip(cparams.iter().map(|p| Ty {
+                        kind: TyKind::Named { name: p.clone(), args: vec![] },
+                        span,
+                    }))
+                    .collect();
+                let mut index: Vec<Expr> = Vec::new();
+                for (v, a) in m.2.valparams.iter().zip(m.1.index.iter()) {
+                    let ExprKind::OpSymbol { symbol, .. } = &a.kind else { unreachable!() };
+                    let k = match syms.iter().position(|s| s == symbol) {
+                        Some(k) => k,
+                        None => {
+                            let mut name = v.name.clone();
+                            if valparams.iter().any(|q: &Param| q.name == name)
+                                || cparams.contains(&name)
+                            {
+                                name = format!("{name}_{}", valparams.len());
+                            }
+                            syms.push(symbol.clone());
+                            sym_exprs.push(a.clone());
+                            valparams.push(Param {
+                                name,
+                                ty: subst_ty(&sub, &v.ty),
+                                symbol: None,
+                                default: None,
+                                solver: None,
+                                ..v.clone()
+                            });
+                            syms.len() - 1
+                        }
+                    };
+                    index.push(var(&valparams[k].name, span));
+                }
+                // By key, so the join can find the parent from a module that
+                // does not import it by its bare name.
+                let pkey = self.key_of(&m.1.name).unwrap_or_else(|| m.1.name.clone());
+                extends.push(ClassRef {
+                    name: pkey,
+                    args: cparams
+                        .iter()
+                        .map(|p| Ty { kind: TyKind::Named { name: p.clone(), args: vec![] }, span })
+                        .collect(),
+                    index,
+                    path: Vec::new(),
+                    span,
+                });
+            }
+            let name = members.iter().map(|m| m.2.name.as_str()).collect::<Vec<_>>().join("+");
+            match self.lookup_class(&name) {
+                // Found by name: the same parents, linked the same way, or a
+                // different linking that this declaration cannot share.
+                Some(have) => {
+                    let same = have.valparams.len() == valparams.len()
+                        && extends.iter().all(|e| {
+                            have.ancestors.iter().any(|a| {
+                                a.path.is_empty()
+                                    && a.name == e.name
+                                    && a.index.iter().map(render_expr).eq(e.index.iter().map(render_expr))
+                            })
+                        });
+                    if !same {
+                        return err(
+                            format!(
+                                "these constraints share symbols at one carrier, so they are one \
+                                 dictionary of `{name}`; that class is already in scope with \
+                                 its parents' indices linked differently. Write the shared \
+                                 symbols in the same slots (issues/constraints-sharing-indices.md)"
+                            ),
+                            span,
+                        );
+                    }
+                }
+                None => self.elab_class(&ClassDecl {
+                    name: name.clone(),
+                    params: cparams.clone(),
+                    kinds: vec![None; cparams.len()],
+                    valparams,
+                    extends,
+                    fields: Vec::new(),
+                    span,
+                })?,
+            }
+            let p = &mut params[first.0];
+            p.ty = heather_syntax::class_ty(name, first.1.args.clone(), sym_exprs, p.ty.span);
+            // The merged binder stands where the earliest member was written.
+            let earliest = members.iter().map(|m| m.0).min().expect("a group has members");
+            if earliest != first.0 {
+                params.swap(earliest, first.0);
+            }
+            drop.extend(members.iter().map(|m| m.0).filter(|&i| i != earliest));
+        }
+        if drop.is_empty() {
+            return Ok(None);
+        }
+        let params = params
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !drop.contains(i))
+            .map(|(_, p)| p)
+            .collect();
+        Ok(Some(Decl { params, ..decl.clone() }))
+    }
+
     /// The constraint binders' desugaring
     /// (docs/operation-indexed-classes-design.md §4, §4.1).
     ///

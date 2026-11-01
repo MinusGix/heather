@@ -26,3 +26,7 @@ others, such as a borrow-checked one that gives the compiler extra proofs.
 ## Done when
 
 Minus has decided the note, and [[runtime-fn-default-setup]] states its scope against it. [[native-build-loop-regions]] and [[native-build-reflected-helpers]] are folded in or closed.
+
+## Log
+
+- 2026-10-31: [[native-build-loop-regions]] and [[native-build-reflected-helpers]] closed (2026-10-31): the builder's `Calc` regions, `heather reflect`, and calls to reflected programs.

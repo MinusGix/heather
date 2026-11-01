@@ -270,9 +270,14 @@ Two pieces make it pleasant:
   `refl`, one cheap declaration), and compiles that literal. The builder's
   evaluation then never adds to the emission check's cost.
 
-**Status.** Done (`issues/native-source-builder.md`), except reflected
-helpers (`issues/native-build-reflected-helpers.md`): a helper is a Heather
-function over the builder's values for now. `lib/native/native_build.hthr`
+**Status.** Done (`issues/native-source-builder.md`). Reflected helpers
+landed as calls, not inlined regions (`issues/native-build-reflected-helpers.md`,
+2026-10-31): `heather reflect` writes a word function's program and its
+agreement theorem as a module, a tool names the program and `call`s it, and
+a proof reads the call's result as the function's value; calls compile with
+`issues/native-compiled-procedures.md`. Pure statements (`Calc`: branches
+and bounded loops over words) lower to one structured region
+(`issues/native-build-loop-regions.md`). `lib/native/native_build.hthr`
 binds words and buffers with Heather lambdas and cuts its nodes into leaves
 as the compiler takes them (`List::takes`): S4's register leaves where they
 fit, round 4's node-at-a-time leaves for byte nodes and in-place updates. cat, tr, yes, `head -c` and `wc -l` are written with it

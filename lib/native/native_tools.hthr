@@ -30,12 +30,18 @@ fn cat_tool_256() → Tool { cat_tool(256) }
 // ---------------------------------------------------------------------------
 // tr a-z A-Z
 
+// The buffer's first `count` bytes, each raised where it is a lower-case
+// letter: one bounded loop over the index, a region the compiler takes
+// whole (issues/native-build-loop-regions.md).
+fn raise_bytes(buf: Buf, count: Val) → Calc {
+    count_up(count, [], λ i => fresh(buf.at(i.get()), λ c =>
+        only_if((c.get() - num(97)).below(num(26)), buf.store(i.get(), c.get() - num(32)))))
+}
+
 // Each byte read raised where it is a lower-case letter, then written.
 fn tr_upper(capacity: Nat) → Tool {
     buffer(capacity, λ buf => run(each_read(stdin(), buf, λ n =>
-        for_count(n.get(), λ i => local(buf.at(i.get()), λ c =>
-            when((c.get() - num(97)).below(num(26)), buf.put(i.get(), c.get() - num(32)))))
-        ++ write_all(stdout(), buf, n.get()))))
+        compute(raise_bytes(buf, n.get())) ++ write_all(stdout(), buf, n.get()))))
 }
 
 fn tr_upper_tool() → Tool { tr_upper(256) }

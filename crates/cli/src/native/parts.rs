@@ -34,7 +34,7 @@ struct Shape { kind: u64, next: u64, children: Vec<Shape>, weight: u64 }
 impl Shape {
     fn read(records: &mut std::slice::Iter<'_, [u64; 3]>) -> Result<Shape, String> {
         let &[kind, next, own] = records.next().ok_or("the tool's shape ended early")?;
-        let arity = match kind { 1 | 5 => 2, 2 | 6 | 7 => 1, 0 | 3 | 4 | 8..=13 => 0, _ => return Err(format!("statement kind {kind}")) };
+        let arity = match kind { 1 | 5 => 2, 2 | 6 | 7 => 1, 0 | 3 | 4 | 8..=14 => 0, _ => return Err(format!("statement kind {kind}")) };
         let children = (0..arity).map(|_| Shape::read(records)).collect::<Result<Vec<_>, _>>()?;
         let weight = 1 + own + children.iter().map(|c| c.weight).sum::<u64>();
         Ok(Shape { kind, next, children, weight })
@@ -103,7 +103,7 @@ pub(super) fn state(p: &str, tool: &str, plan: Plan, trace: &[u64], buffers: &[u
     defs.push_str(&buffers.defs);
     defs.push_str(&format!("fn {p}_lowered() → Source {{ Source::of({list}, {p}_w_0()) }}\n", list = buffers.list));
     theorems.push_str(&format!("theorem {p}_buffers_is(): {tool}.opened(0).buffers = {list} {{ refl }}\n\
-        theorem {p}_lowered_is(): {tool}.source() = {p}_lowered() {{ {tool}.source_of({list}, {p}_w_0(), {p}_buffers_is(), {p}_l_0()) }}\n", list = buffers.list));
+        theorem {p}_lowered_is(): {tool}.source() = {p}_lowered() {{ {tool}.source_of({list}, {p}_w_0(), refl, {p}_buffers_is(), {p}_l_0()) }}\n", list = buffers.list));
     Ok(Stated { defs, theorems, shapes: buffers.shapes })
 }
 

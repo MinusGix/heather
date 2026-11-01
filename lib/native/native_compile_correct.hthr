@@ -28,6 +28,7 @@ import native_compile_args;
 import native_compile_opens;
 import native_compile_homes;
 import native_compile_structured;
+import native_compile_pass;
 import native_structured;
 import native_structured_meaning;
 import native_alloc;
@@ -149,7 +150,7 @@ theorem Stmt::emit_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: Li
     s.emit(p, layout, out, names) = Some(c) → p.Within(c.prog) {
     match s {
         Compute(region) => match region {
-            Dataflow(body) => λ p out names c emitted => p.within_computes(layout, out, body.nodes, names, c, emitted),
+            Dataflow(body) => λ p out names c emitted => p.within_computes_best(layout, out, body.nodes, names, c, emitted),
             Sequence(prefix, continuation) => λ p out names c emitted => Sequence(prefix, continuation).region_extends(layout, p, out, names, c, emitted),
             Compose(prefix, continuation) => λ p out names c emitted => Compose(prefix, continuation).region_extends(layout, p, out, names, c, emitted),
             Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ p out names c emitted => Conditional(inputs, condition, arguments, outputs, when_true, when_false).region_extends(layout, p, out, names, c, emitted),
@@ -389,7 +390,7 @@ theorem Stmt::emit_runs(self s: Stmt, t: Target, call: Answers(), perform: Perfo
     let layout = t.layout();
     match s {
         Compute(region) => match region {
-            Dataflow(body) => λ p out names c emitted within checked n env k exits next => t.goes_computes(out, env, p, body.nodes, names, c, emitted, within,
+            Dataflow(body) => λ p out names c emitted within checked n env k exits next => t.goes_computes_best(out, env, p, body.nodes, names, c, emitted, within,
                 k(Onward(env.compute(call, Dataflow(body)))), checked, next(env.compute(call, Dataflow(body)))),
             Sequence(prefix, continuation) => λ p out names c emitted within checked => Sequence(prefix, continuation).region_runs(t, call, p, out, names, c, emitted, within, checked),
             Compose(prefix, continuation) => λ p out names c emitted within checked => Compose(prefix, continuation).region_runs(t, call, p, out, names, c, emitted, within, checked),

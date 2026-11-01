@@ -10,6 +10,14 @@ import function_ir;
 import list;
 import bitvec;
 import itree;
+import bool;
+import native_alloc;
+import native_structured;
+import linux_x86_64_image;
+import native_tool_words;
+import native_tool_words_program;
+import function_ir_eval;
+import linux_trees;
 
 // An exit's status computed into a temporary, the first word.
 theorem exit_three(): run(exit(num(3))).source() = Source(functions := [], buffers := [], words := 1, main := Then(Stmt::leaf([Const(64, 0, 3)]), Exit(0))) {
@@ -62,3 +70,136 @@ fn two_args() → List<List<BitVec(8)>> { [[BitVec::ofNat(116)], [BitVec::ofNat(
 // argv[1] is two bytes long; past the last argument the length is minus one.
 theorem arg_length_runs(): arg_length(1).source().tree(two_args(), 0) = Ret(BitVec::ofNat(2)) { refl }
 theorem arg_past_last_runs(): arg_length(2).source().tree(two_args(), 0) = Ret(missing_word()) { refl }
+
+// ---------------------------------------------------------------------------
+// Pure statements as one region (issues/native-build-loop-regions.md)
+
+fn region_low() → BitVec(64) { io_data_low() }
+fn refused_slots(src: Source) → List<Nat> { src.refusal(region_low(), Homes::slots(src)) }
+
+// tr's byte map over a buffer's first `count` bytes: each raised where it
+// is a lower-case letter. The index is the loop's only state.
+fn raise_bytes(b: Buf, count: Val) → Calc {
+    count_up(count, [], λ i => fresh(b.at(i.get()), λ c =>
+        only_if((c.get() - num(97)).below(num(26)), b.store(i.get(), c.get() - num(32)))))
+}
+
+// "aB" raised, the first byte the exit status.
+fn shout() → Tool {
+    buffer_of([BitVec::ofNat(97), BitVec::ofNat(66)], λ b => run(compute(raise_bytes(b, num(2))) ++ exit(b.at(num(0)))))
+}
+
+// The map as written: the index (word 0) and the bit the loop leaves
+// (word 1) set, the bound placed (word 2), then a loop over the index in
+// place, its count word 3 and its exit bit word 4, the pass's words from 5:
+// the byte loaded and tested, the branch on the test's bit, the index
+// bumped, the exit bit cleared; after the loop its count is cleared
+// (`Calc::pieces`). Every node at width 64.
+fn shout_pass() → StructuredRegion {
+    Sequence(Region::bare([BufferLoad(5, 0, 0), Const(64, 8, 97), Sub(64, 7, 5, 8), Const(64, 9, 26), UnsignedLessThan(64, 6, 7, 9)]),
+        Compose(Conditional(Ports([]), 6, Ports([]), Ports([]),
+                Dataflow(Region::bare([Const(64, 11, 32), Sub(64, 10, 5, 11), BufferStore(12, 0, 0, 10)])), Dataflow(Region::bare([]))),
+            Dataflow(Region::bare([Const(64, 6, 1), Add(64, 0, 0, 6), Const(64, 4, 0)]))))
+}
+
+fn shout_map() → StructuredRegion {
+    Sequence(Region::bare([Const(64, 0, 0), Const(64, 1, 0), Const(64, 2, 2)]),
+        Compose(Loop([0], 2, [0], 3, shout_pass(), 4, [0], [0], 1), Dataflow(Region::bare([Const(64, 3, 0)]))))
+}
+
+theorem shout_lowered(): shout().source() = Source(functions := [], buffers := [Buffer(2, [BitVec::ofNat(97), BitVec::ofNat(66)])], words := 13,
+    main := Then(Compute(shout_map()), Then(Stmt::leaf([Const(64, 1, 0)]), Then(Stmt::leaf([BufferLoad(0, 0, 1)]), Exit(0))))) {
+    refl
+}
+
+// The compiler takes it as written, and it runs: 'a' raised to 'A'.
+theorem shout_scoped(): shout_map().scopes() = True { refl }
+theorem shout_compiles(): refused_slots(shout().source()) = [] { refl }
+theorem shout_runs(): shout().source().tree([], 0) = Ret(BitVec::ofNat(65)) { refl }
+
+// A count the program does not know: the same region, its bound the open
+// count, and still scoped.
+fn raised(n: Nat) → StructuredRegion { raise_bytes(Buf(0, 2), num(n)).region(0) }
+
+theorem raised_open(n: Nat): raised(n) = Sequence(Region::bare([Const(64, 0, 0), Const(64, 1, 0), Const(64, 2, n)]),
+    Compose(Loop([0], 2, [0], 3, shout_pass(), 4, [0], [0], 1), Dataflow(Region::bare([Const(64, 3, 0)])))) {
+    refl
+}
+
+theorem raised_scoped(n: Nat): raised(n).scopes() = True { refl }
+
+// A pass reads only its state: one reading a word bound outside the loop
+// is not scoped, so the compiler would refuse it; the word in the state,
+// it is. The branch tests a word, not a comparison: compared with zero twice.
+fn lowered_by(b: Buf, state: Bool) → Calc {
+    fresh(num(32), λ gap => count_up(num(2), match state { True => [gap], False => [] }, λ i =>
+        only_if(gap.get(), b.store(i.get(), b.at(i.get()) - gap.get()))))
+}
+
+theorem leaky_unscoped(): lowered_by(Buf(0, 2), False).region(0).scopes() = False { refl }
+theorem kept_scoped(): lowered_by(Buf(0, 2), True).region(0).scopes() = True { refl }
+
+// A loop that stops: a word counted up until it is 2, at most `bound`
+// passes; the exit status the bit the loop leaves plus twice the word
+// (added, not shifted: S4 refuses a shift node alone,
+// issues/function-ir-x86-shift-legalization.md).
+fn stops(bound: Nat) → Tool {
+    run(local(num(0), λ x => local(num(0), λ out =>
+        compute(passes(num(bound), [x], λ _ => x.assign(x.get() + num(1)), x.get().equals(num(2)), out))
+            ++ exit(out.get() + (x.get() + x.get())))))
+}
+
+// Stopped at 2 with passes left: 0 + 2·2; run out after one pass: 1 + 2·1.
+theorem stops_early(): stops(3).source().tree([], 0) = Ret(BitVec::ofNat(4)) { refl }
+theorem stops_ran_out(): stops(1).source().tree([], 0) = Ret(BitVec::ofNat(3)) { refl }
+theorem stops_compiles(): refused_slots(stops(3).source()) = [] { refl }
+
+// A loop's count shares its id with a later loop's test bit (both numbered
+// from the same `next`): the later loop's live set is the first's too, and
+// the count is cleared after the first, so it compiles. Here the count is
+// word 3, and so is the bit the `do … while` after it tests (tr's write
+// after its byte map is the same shape, `write_all`).
+fn count_then_loop() → Tool {
+    run(local(num(3), λ n => compute(count_up(n.get(), [], λ _ => nothing()))
+        ++ local(num(0), λ _ => local(num(0), λ _ => do_while(n.set(num(0)), n.get())))))
+}
+
+theorem count_then_loop_compiles(): refused_slots(count_then_loop().source()) = [] { refl }
+
+// ---------------------------------------------------------------------------
+// Calling a reflected word function (issues/native-build-reflected-helpers.md)
+
+// `raise_letter` called on a buffer's first byte, the result the exit
+// status: the tool's program is the one `heather reflect` wrote.
+fn raised_status(bytes: List<BitVec(8)>) → Tool {
+    program(raise_letter_native_program(), buffer_of(bytes, λ b =>
+        run(local(num(0), λ r => compute(call(0, [b.at(num(0))], r)) ++ exit(r.get())))))
+}
+
+// A call is a FunctionIR `Call`, its program the source's functions.
+theorem raised_status_lowered(byte: BitVec(8)): raised_status([byte]).source() = Source(functions := raise_letter_native_program(),
+    buffers := [Buffer(1, [byte])], words := 3,
+    main := Then(Stmt::leaf([Const(64, 0, 0)]), Then(Compute(Sequence(Region::bare([Const(64, 2, 0), BufferLoad(1, 0, 2)]), Call(0, [1], 0))), Exit(0)))) {
+    refl
+}
+
+// What it exits with is the Heather function's value at the byte, for any
+// byte: the source's meaning is `program_eval`'s, its words kept as
+// numbers, and the program is `raise_letter` by evaluation
+// (`raise_letter_native_agrees`).
+theorem raised_status_tree(byte: BitVec(8)): raised_status([byte]).source().tree([], 0)
+    = Ret(BitVec::ofNat(program_eval(raise_letter_native_program(), 0, [byte_word(byte)]).toNat())) { refl }
+
+fn exited_with(status: BitVec(64)) → ITree<BitVec(64)>(Events::linux()) { Ret(status) }
+
+theorem raised_status_runs(byte: BitVec(8)): raised_status([byte]).source().tree([], 0) = Ret(raise_letter(byte_word(byte))) {
+    trans(raised_status_tree(byte), trans(
+        cong_fn<BitVec(64), ITree<BitVec(64)>(Events::linux())>(λ (w: BitVec(64)) => exited_with(BitVec::ofNat(w.toNat())),
+            raise_letter_native_agrees(byte_word(byte))),
+        cong_fn<BitVec(64), ITree<BitVec(64)>(Events::linux())>(exited_with, BitVec::ofNat_toNat(64, raise_letter(byte_word(byte))))))
+}
+
+// Not compiled yet: the compiler takes no call region (statement 2, a
+// sequence ending in the call), and `write-elf` refuses a tool with a
+// program. Calls compile as procedures in issues/native-compiled-procedures.md.
+theorem raised_status_refused(): refused_slots(raised_status([BitVec::ofNat(97)]).source()) = [2, 0, 0, 1, 0] { refl }

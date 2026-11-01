@@ -113,6 +113,7 @@ lib/
       float/     float dyadic round error arith
     bitvec/      bitvec bitvec_nat bitvec_bytes byte
     algebra/     algebra algebra_rel semiring ordered_field order
+    analysis/    real_fn (functions on an ordered field and their derivatives)
     relation/    relation relation_props relation_function
     data/        list vector bounded_list tree certified_lookup
       set/       finite_set list_setoid list_finite_set tree_finite_set

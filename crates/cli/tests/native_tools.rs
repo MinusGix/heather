@@ -5,7 +5,8 @@
 //! `heather write-elf`, run as Linux processes beside GNU's
 //! (issues/native-source-bytes.md, issues/native-source-builder.md,
 //! issues/native-source-argv.md, issues/native-compile-other-calls.md,
-//! issues/native-decimal-io.md).
+//! issues/native-decimal-io.md), and `heather reflect`'s program of a word
+//! function a tool calls (issues/native-build-reflected-helpers.md).
 //! None has
 //! a theorem of its own: `lib/native/native_tools.hthr` holds only the
 //! tools, and `native_compile_correct` is the proof of each.
@@ -489,5 +490,27 @@ fn compiled_decimals_round_trip_the_widest_words() {
         assert!(out.is_empty(), "with nothing printed");
     }
 
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `heather reflect` writes the checked-in program of `raise_letter` again,
+/// byte for byte (lib/native/native_tool_words_program.hthr): the library
+/// gate checks that module's agreement against the function, and this that
+/// it is what the command writes now (issues/native-build-reflected-helpers.md).
+#[test]
+fn reflected_word_program_is_current() {
+    let root = showcase::repo_root();
+    let dir = scratch("reflect");
+    let output = dir.join("native_tool_words_program.hthr");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather"))
+        .current_dir(&root)
+        .args(["reflect", "lib/native/native_tool_words.hthr", "raise_letter", "-o"]).arg(&output)
+        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES)
+        .output().unwrap();
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    assert!(!output.with_extension("unchecked.hthr").exists(), "no unchecked module is left");
+    let written = std::fs::read_to_string(&output).unwrap();
+    let checked_in = std::fs::read_to_string(root.join("lib/native/native_tool_words_program.hthr")).unwrap();
+    assert!(written == checked_in, "lib/native/native_tool_words_program.hthr is stale: regenerate it with `heather reflect lib/native/native_tool_words.hthr raise_letter -o …`");
     std::fs::remove_dir_all(dir).unwrap();
 }

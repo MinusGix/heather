@@ -3,7 +3,7 @@
 Date: 2026-10-27. Owner: [linarith-ordered-fields](../issues/linarith-ordered-fields.md).
 
 - [`lib/std/tactic/linarith.hthr`](../lib/std/tactic/linarith.hthr): the
-  certificate lemmas, generic over `OrderedFieldOfInt`, checked once.
+  certificate lemmas, generic over `OrderedField + CommRingOfInt`, checked once.
 - `crates/elab/src/linarith.rs`: the tactic — reading, elimination, the
   certificate's text.
 - `lib/_tests/std/tactic/linarith_tests.hthr`: probes at `Rat` and `CReal`,
@@ -21,7 +21,7 @@ theorem absurd(x: Rat, h1: x < 0, h2: 0 < x): False { linarith(h1, h2) }
 ```
 
 `linarith` proves `a <= b`, `a < b`, `a ≈ b` or `¬(a < b)` at a carrier
-with an `OrderedFieldOfInt` instance (`Rat`, `CReal`) when it follows
+with `OrderedField` and `CommRingOfInt` instances (`Rat`, `CReal`) when it follows
 linearly from the facts; with facts that contradict each other it proves any
 goal. A fact is a `<`, `<=`, `≈` or `¬(x < y)` at the goal's carrier, its
 type read through a head β-redex as `omega` reads one (a pattern-bound
@@ -69,12 +69,16 @@ so it costs nothing more, and it proves `a < b` too, which no refutation
 can at `CReal`: there `<` is positive data. Nothing in the certificate
 decides an order, and nothing unfolds the carrier.
 
-**The interface.** `OrderedFieldOfInt` (lib/std/algebra/ordered_field.hthr)
-is `OrderedField` and `CommRingOfInt` over the same ring, with nothing added.
-The lemmas need both — the order laws to combine facts, the carrier's
-integers to state coefficients `ring` reads as numerals — and one constraint
-cannot be written as two: each would install `≈`, `+` and `*` again. Its
-instances sit right after `OrderedField<Rat>` and `OrderedField<CReal>`.
+**The interface.** The section's constraint is
+`<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>`. The lemmas need
+both: the order laws to combine facts, and the carrier's integers to state
+coefficients `ring` reads as numerals. The two constraints share `≈`, `+` and
+`*` at `A`, so they are one dictionary of the synthesized class
+`CommRingOfInt+OrderedField`, with `CommRing` once under both
+(docs/operators-onto-classes-design.md §17). At `Rat` and `CReal` it is
+assembled from the carrier's two instances. Until 2026-10-31 this was a
+hand-written combined class, `OrderedFieldOfInt`, with an empty instance at
+each carrier; issues/constraints-sharing-indices.md retired it.
 `rat.hthr` imports `linarith` (which imports neither carrier), so the laws
 after the instance use it: `Rat::neg_gap`, `le_add_shift` and
 `sub_le_shift`, which existed only to state such steps, are one call each.
@@ -86,7 +90,8 @@ difference is written `hi + -lo`, not `hi - lo`: when a generic lemma's
 application is checked, its statement is matched against the expected type
 to fix the class's operations before the instance is found, and that match
 does not unfold `Rat::sub` to the lemma's `b + A.inv(a)` (it fails as "no
-instance for `OrderedFieldOfInt<A>(…)`").
+instance for `OrderedFieldOfInt<A>(…)`", in the class's day; now the
+same shape names `CommRingOfInt+OrderedField`).
 
 ## 3. The search
 
@@ -249,7 +254,8 @@ the monomial. That is what the rationals' order laws needed:
 are applied to a fixed point; atoms defined in terms of each other are a
 refusal.
 
-**Choosing the route.** An ordered-field goal (`OrderedFieldOfInt`) is read
+**Choosing the route.** An ordered-field goal (`OrderedField` and
+`CommRingOfInt` at the carrier) is read
 at its field first, since its order unfolds to one at `Int`; then an
 integral goal; for any other goal the first written fact (else context
 fact) that reads either way decides. When the field reading finds no
