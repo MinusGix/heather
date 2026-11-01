@@ -134,7 +134,15 @@ inductive Act {
     Quit(status: Val),
     // A pure statement, one structured region.
     Calculate(calc: Calc),
+    // A call of the tool's procedure `procedure` (`proc`): each argument
+    // placed, then the call, its results into `results`
+    // (docs/native-procedures-design.md).
+    CallProc(procedure: Nat, args: List<Val>, results: List<Var>),
 }
+
+// A procedure as its body sees it: its own index, to call itself, and its
+// parameters and results, words of its own numbered from 0.
+record Proc { index: Nat, params: List<Var>, results: List<Var> }
 
 // Its buffers, each bound for what follows, and the statement it runs;
 // running off the end exits 0.
@@ -145,6 +153,13 @@ inductive Tool {
     // source's `functions`, as `program_eval` orders them (the last listed
     // is function 0).
     WithProgram(functions: List<Function>, body: Tool),
+    // A procedure of `params` parameters and `results` results, for what
+    // follows, which gets its index to call (procedures are numbered in
+    // order); its body gets it as a `Proc`.
+    WithProc(params: Nat, results: Nat, body: Proc → Act, rest: Nat → Tool),
+    // Calls nest at most `depth` deep (`Source.depth`); a call deeper exits
+    // 139.
+    WithDepth(depth: Nat, body: Tool),
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +254,12 @@ fn buffer(capacity: Nat, body: Buf → Tool) → Tool { WithBuffer(capacity, [],
 fn buffer_of(bytes: List<BitVec(8)>, body: Buf → Tool) → Tool { WithBuffer(bytes.len(), bytes, body) }
 // The program the tool's `call`s name (`heather reflect` writes one).
 fn program(functions: List<Function>, body: Tool) → Tool { WithProgram(functions, body) }
+// A procedure for what follows (`perform` calls it).
+fn proc(params: Nat, results: Nat, body: Proc → Act, rest: Nat → Tool) → Tool { WithProc(params, results, body, rest) }
+fn depth(depth: Nat, body: Tool) → Tool { WithDepth(depth, body) }
+fn perform(procedure: Nat, args: List<Val>, results: List<Var>) → Act { CallProc(procedure, args, results) }
+fn Proc::param(self p: Proc, i: Nat) → Var { p.params.nth(i).unwrap_or(Var(0)) }
+fn Proc::result(self p: Proc, i: Nat) → Var { p.results.nth(i).unwrap_or(Var(0)) }
 
 // Pure statements (`Calc`), written as `Act`'s are; `compute` runs one.
 fn Var::assign(self var: Var, value: Val) → Calc { Assign(var, value) }
@@ -708,33 +729,76 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
             s.nodes.ops() ++ [Do(Exit(s.id))]
         },
         Calculate(calc) => [Do(Compute(calc.region(next)))],
+        CallProc(procedure, args, results) => {
+            let a = args.placed_words(next);
+            a.nodes.ops() ++ [Do(Perform(procedure, a.ids, results.ids()))]
+        },
     }
 }
 
 // ---------------------------------------------------------------------------
 // Tools as sources
 
-// A tool's buffers in order, its program and its statement.
-record Opened { buffers: List<Buffer>, functions: List<Function>, main: Act }
+// A tool's buffers in order, its program, its statement, and its
+// procedures and depth.
+record Opened { buffers: List<Buffer>, functions: List<Function>, main: Act, procedures: List<Procedure>, depth: Nat }
 
-fn Tool::opened(self t: Tool, buf: Nat) → Opened {
+// `count` words from `first`.
+fn Nat::vars_from(self first: Nat, count: Nat) → List<Var> { match count { Zero => [], Succ(k) => Cons(Var(first), Succ(first).vars_from(k)) } }
+
+// Procedure `index`: its parameters the words from 0, its results the
+// next, each set to zero first (so the body reads no word but its
+// parameters), then its body, its words from past them.
+fn Proc::lowered(index, params, results: Nat, body: Proc → Act) → Procedure {
+    let ps = Nat::vars_from(0, params);
+    let rs = params.vars_from(results);
+    Procedure(params := ps.ids(), results := rs.ids(),
+        body := (rs.map(λ (r: Var) => Op(Const(64, r.id, 0))) ++ body(Proc(index, ps, rs)).items(params + results)).lowered())
+}
+
+// `procs` procedures before it.
+fn Tool::opened_at(self t: Tool, buf: Nat, procs: Nat) → Opened {
     match t {
-        Run(main) => Opened([], [], main),
+        Run(main) => Opened([], [], main, [], 0),
         WithBuffer(capacity, initial, body) => {
-            let rest = body(Buf(buf, capacity)).opened(Succ(buf));
-            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.functions, rest.main)
+            let rest = body(Buf(buf, capacity)).opened_at(Succ(buf), procs);
+            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.functions, rest.main, rest.procedures, rest.depth)
         },
         WithProgram(functions, body) => {
-            let rest = body.opened(buf);
-            Opened(rest.buffers, functions ++ rest.functions, rest.main)
+            let rest = body.opened_at(buf, procs);
+            Opened(rest.buffers, functions ++ rest.functions, rest.main, rest.procedures, rest.depth)
+        },
+        WithProc(params, results, body, after) => {
+            let rest = after(procs).opened_at(buf, Succ(procs));
+            Opened(rest.buffers, rest.functions, rest.main, Cons(Proc::lowered(procs, params, results, body), rest.procedures), rest.depth)
+        },
+        WithDepth(depth, body) => {
+            let rest = body.opened_at(buf, procs);
+            Opened(rest.buffers, rest.functions, rest.main, rest.procedures, depth)
         },
     }
 }
+
+fn Tool::opened(self t: Tool, buf: Nat) → Opened { t.opened_at(buf, 0) }
+
+// The words a procedure names.
+fn List::procedures_bound(self procs: List<Procedure>) → Nat {
+    match procs { Nil => 0, Cons(proc, rest) => (proc.params ++ proc.results).word_bound().max(proc.body.word_bound()).max(rest.procedures_bound()) }
+}
+
+// A tool's words: `main`'s, and its procedures' when it has them; its
+// depth only when it has procedures. Without, the source is the one
+// before procedures (`Tool::source_of`, native_build_parts).
+fn List::tool_words(self procs: List<Procedure>, main: Stmt) → Nat {
+    match procs { Nil => main.word_bound(), Cons(_, _) => main.word_bound().max(procs.procedures_bound()) }
+}
+fn List::tool_depth(self procs: List<Procedure>, depth: Nat) → Nat { match procs { Nil => 0, Cons(_, _) => depth } }
 
 // A tool's source declares the words its lowering names, temporaries
 // included.
 fn Tool::source(self t: Tool) → Source {
     let o = t.opened(0);
     let main = o.main.items(0).lowered();
-    Source(functions := o.functions, buffers := o.buffers, words := main.word_bound(), main := main)
+    Source(functions := o.functions, buffers := o.buffers, words := o.procedures.tool_words(main), main := main,
+        procedures := o.procedures, depth := o.procedures.tool_depth(o.depth))
 }

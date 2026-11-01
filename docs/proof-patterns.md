@@ -64,7 +64,10 @@ property of Heather.
   `Lay::of(3).cap`), so a failure there is a missing fact, not an atom.
 - **It reads every hypothesis in scope.** Keep its context small: put
   arithmetic in small lemmas, never `omega` inside a stretch or with `Rat`
-  facts in scope. `omega(h, …)` names the load-bearing facts; whether it
+  facts in scope. Inside a claim of trees (a `Goes` built from nested
+  lets and lambdas) even a one-fact `omega` read the whole context and
+  took minutes; stating the step's arithmetic as a lemma over bare
+  numbers (native_compile_perform's `push_arith`) made it free. `omega(h, …)` names the load-bearing facts; whether it
   should read *only* those is [[omega-listed-facts-only]], an open decision.
 - **It needs a checking position:** `let k: (T) = omega(…);`. Where
   nothing is expected the refusal says so (as for `ring`, `linarith`,

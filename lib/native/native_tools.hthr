@@ -1,7 +1,8 @@
 // cat and the tools past it (docs/native-real-programs-plan.md, rounds 1,
 // 5, 6, 7 and 9): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, `echo` and
-// `yes STR` over the command line, `cat FILE…`, and `wc [-clw]` and
-// `head -n N` over decimals (`native_decimal`), written with the builder
+// `yes STR` over the command line, `cat FILE…`, `wc [-clw]` and
+// `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
+// a procedure (docs/native-procedures-design.md), written with the builder
 // (`native_build`) and lowered to sources `heather write-elf` compiles.
 // `native_compile_correct` is the proof of every one, so none has a theorem
 // of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
@@ -325,3 +326,48 @@ fn head_n(capacity: Nat) → Tool {
 }
 
 fn head_n_tool() → Tool { head_n(1024) }
+
+// ---------------------------------------------------------------------------
+// grep -F PATTERN
+
+// GNU's `grep -F PATTERN` over stdin in the C locale (`LC_ALL=C`): each
+// line that holds the pattern's bytes, compared exactly, written to stdout
+// with its newline (an empty pattern is in every line), and a last line
+// without a newline written with one; the exit status 0 if a line was
+// written, 1 if none, 2 with no pattern. A line longer than the line
+// buffer, a pattern longer than its buffer, a failed read and a failed
+// write exit 2. GNU's options, its file arguments, and a pattern holding a
+// newline (which GNU reads as two patterns) are not here.
+//
+// A line is tested and written by one procedure, `finish`, called where a
+// newline ends a line and where the input ends inside one: its code is
+// emitted once (docs/native-procedures-design.md).
+fn grep_f(capacity, line_cap, pat_cap: Nat) → Tool {
+    buffer(capacity, λ data => buffer(line_cap, λ line => buffer(pat_cap, λ pat => buffer_of([BitVec::ofNat(10)], λ newline =>
+    depth(1, proc(2, 1, λ p =>
+        // The line's first `len` bytes hold the pattern's `plen` at some
+        // `i`: the bytes from `i` agree while `j` counts them.
+        local(num(0), λ i => loop_while(p.result(0).get().not().and_also((i.get() + p.param(1).get()).below(p.param(0).get() + num(1))),
+            local(num(0), λ j => loop_while(j.get().below(p.param(1).get()).and_also(line.at(i.get() + j.get()).equals(pat.at(j.get()))),
+                    j.set(j.get() + num(1)))
+                ++ when(j.get().equals(p.param(1).get()), p.result(0).set(num(1))))
+            ++ i.set(i.get() + num(1))))
+        ++ when(p.result(0).get(),
+            write_span(stdout(), line, num(0), p.param(0).get(), λ _ => exit(num(2)))
+            ++ write_span(stdout(), newline, num(0), num(1), λ _ => exit(num(2)))),
+    λ finish => run(local(num(0), λ plen => local(num(0), λ any => local(num(0), λ len => local(num(0), λ found =>
+        arg(num(1), pat, plen)
+        ++ when(plen.get().negative(), exit(num(2)))
+        ++ when(num(pat_cap).below(plen.get()), exit(num(2)))
+        ++ local(num(0), λ n => do_while(
+            read(stdin(), data, data.size(), n)
+            ++ when(n.get().negative(), exit(num(2)))
+            ++ for_count(n.get(), λ k => local(data.at(k.get()), λ c => branch(c.get().equals(num(10)),
+                perform(finish, [len.get(), plen.get()], [found]) ++ any.set(any.get().or_else(found.get())) ++ len.set(num(0)),
+                when(len.get().equals(num(line_cap)), exit(num(2))) ++ line.put(len.get(), c.get()) ++ len.set(len.get() + num(1))))),
+            n.get()))
+        ++ when(len.get(), perform(finish, [len.get(), plen.get()], [found]) ++ any.set(any.get().or_else(found.get())))
+        ++ exit(num(1) - any.get()))))))))))))
+}
+
+fn grep_f_tool() → Tool { grep_f(256, 1024, 256) }

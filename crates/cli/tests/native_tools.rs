@@ -1,6 +1,7 @@
 //! `tr a-z A-Z`, `yes`, `head -c 10`, `wc -l`, `echo` and `yes STR` over
 //! the command line, `cat FILE…` over open and close, and `wc [-clw]` and
-//! `head -n N` over decimal output and input, written with the builder (`native_build`),
+//! `head -n N` over decimal output and input, and `grep -F PATTERN` over a
+//! procedure (issues/native-compiled-procedures.md), written with the builder (`native_build`),
 //! compiled by the effectful source compiler and written as ELFs by
 //! `heather write-elf`, run as Linux processes beside GNU's
 //! (issues/native-source-bytes.md, issues/native-source-builder.md,
@@ -512,5 +513,40 @@ fn reflected_word_program_is_current() {
     let written = std::fs::read_to_string(&output).unwrap();
     let checked_in = std::fs::read_to_string(root.join("lib/native/native_tool_words_program.hthr")).unwrap();
     assert!(written == checked_in, "lib/native/native_tool_words_program.hthr is stale: regenerate it with `heather reflect lib/native/native_tool_words.hthr raise_letter -o …`");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `grep -F PATTERN` against GNU's under `LC_ALL=C`: the lines written and
+/// the exit status, over lines of a two-letter alphabet, random bytes (no
+/// NUL, which GNU reads as a binary file, and a newline at least every 200
+/// bytes, inside the tool's line buffer), an unterminated last line, and
+/// patterns empty, short, long and past ASCII. Its line test is a procedure
+/// called from two sites (docs/native-procedures-design.md).
+#[test]
+fn compiled_grep_f_runs_as_gnu_grep() {
+    let dir = scratch("grep");
+    let binary = dir.join("grep");
+    write_tool("grep_f_tool", &binary);
+
+    let mut random = Bytes::seeded("grep");
+    let letters = random.take(30000, |r| b"ab\n"[(r % 3) as usize]);
+    let mut bytes = Vec::with_capacity(70000);
+    for k in 0..70000 {
+        bytes.push(if k % 200 == 199 { b'\n' } else { random.next() as u8 % 255 + 1 });
+    }
+    let picked = bytes[1000..1003].to_vec();
+    let patterns: Vec<Vec<u8>> = vec![b"ab".to_vec(), b"aba".to_vec(), b"".to_vec(), b"b".to_vec(), b"abababab".to_vec(), picked, vec![0xe9, b'a']];
+    for input in [&b""[..], b"ab\nba\naab\n", b"no newline ab", b"\n\n\n", &letters, &bytes] {
+        for pattern in &patterns {
+            let (code, out) = run(&mut with_args(&binary, std::slice::from_ref(pattern)), input, Stdio::piped());
+            let mut gnu = with_args("grep", &[b"-F".to_vec(), b"--".to_vec(), pattern.clone()]);
+            let (gnu_code, gnu_out) = run(gnu.env("LC_ALL", "C"), input, Stdio::piped());
+            assert_eq!(code, gnu_code, "grep -F's status is GNU's (pattern {pattern:?}, {} bytes in)", input.len());
+            assert!(out == gnu_out, "grep -F writes GNU's lines (pattern {pattern:?}, {} bytes in)", input.len());
+        }
+    }
+    let (code, _) = run(&mut Command::new(&binary), b"ab\n", Stdio::piped());
+    assert_eq!(code, Some(2), "with no pattern it exits 2, as GNU's does");
+
     std::fs::remove_dir_all(dir).unwrap();
 }

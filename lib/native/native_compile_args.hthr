@@ -273,7 +273,7 @@ theorem Target::arg_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, ar
             ((t.site().data.read(m, read_gpr(Rsi, g)) = Some(c)) ∧ ArgByte(arg, i, c)))) = λ byte got which =>
         Exists(byte, ⟨j(sym(rsi), λ x _ => x.toNat() < Nat::pow(2, 47), low),
             ⟨j(sym(rsi), λ x _ => t.site().data.read(m, x) = Some(byte),
-                t.r.profile.data().above_read(t.r.low.toNat() + t.r.size, m, a, byte, got).right), which⟩⟩);
+                t.r.profile.data().above_read(t.stack.low.toNat() + t.stack.size, m, a, byte, got).right), which⟩⟩);
     match i.lt_or_ge(arg.len()) {
         Inl(below) => {
             let present = arg.nth_present(i, below);
@@ -476,7 +476,7 @@ theorem Target::goes_arg_loop(self t: Target, v: Nat → BitVec(8), buf, cap: Na
 
 // The command line read above the region is read alike by the machine.
 theorem Target::argv_reads(self t: Target, m: X86Memory(t.r.profile)): ReadsKept(t.argv(), m, t.r.profile.data(), m) {
-    λ a byte got => t.r.profile.data().above_read(t.r.low.toNat() + t.r.size, m, a, byte, got).right
+    λ a byte got => t.r.profile.data().above_read(t.stack.low.toNat() + t.stack.size, m, a, byte, got).right
 }
 
 // The saved RSP, read at its slot.
@@ -574,7 +574,7 @@ theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p
         let arg = present.witness;
         let got_env: (env.args.nth(k) = Some(arg)) = j(sym(same), λ a _ => a.nth(k) = Some(arg), present.proof);
         let stacking = held.left.right;
-        let entry = argv_from_nth(t.argv(), m, rsp, t.args, 1, k, arg, present.proof, stacking.right.right);
+        let entry = argv_from_nth(t.argv(), m, rsp, t.args, 1, k, arg, present.proof, stacking.left.right.right);
         let pointer = entry.witness;
         let room = entry.proof.right.left;
         let slot_word = word_bytes_at_read(t.r.profile.data(), m, argv_slot(rsp, 1 + k), pointer,
@@ -617,7 +617,7 @@ theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p
             loading);
         let address: (read_gpr(Rbx, execute_block_normal(slots, u).gprs) = argv_slot(rsp, 1 + k)) = trans(
             argv_slot_sum(read_gpr(Rcx, u.gprs), read_gpr(Rdx, u.gprs), k, argc, held.right.right.left,
-                under, j(sym(held.right.left), λ y _ => y.toNat() + 8 * (argc + 2) <= Nat::pow(2, 47), stacking.left)),
+                under, j(sym(held.right.left), λ y _ => y.toNat() + 8 * (argc + 2) <= Nat::pow(2, 47), stacking.left.left)),
             cong_fn<BitVec(64), BitVec(64)>(λ y => argv_slot(y, 1 + k), held.right.left));
         let cells = t.arg_cells_start(v, buf, cap, arg, pointer, m, held.left.left, stacking, entry.proof.right.right);
         let regs_at: t.ArgAt(v, buf, cap, arg, pointer, 0, vals, write_gpr(Rdi, layout.buffer_at(buf), write_gpr(R9, BitVec::ofNat(cap),
@@ -713,7 +713,7 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
             ((read_gpr(Rdx, g) = rsp) ∧ ((read_gpr(R9, g) = word_of_nat(64, argc)) ∧ ((read_gpr(Rcx, g) = env.word(index)) ∧ (home_values(g) = vals))));
         let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => Q3(g, m) ∧ (f.cf = read_gpr(Rcx, g).borrow_sub_bit(read_gpr(R9, g)));
         let order = λ (g: Gprs) (m: X86Memory(t.r.profile)) (q: Q3(g, m)) => {
-            let room = q.left.right.left;
+            let room = q.left.right.left.left;
             count_borrow(read_gpr(Rcx, g), read_gpr(R9, g), k, argc,
                 trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), q.right.right.right.left), k_value),
                 trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), q.right.right.left), toNat_word_of_nat(64, argc, omega(room, top))))
@@ -755,7 +755,7 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
         let saved = t.goes_load(c0, 0, WordLoad(Rdx, Rbx), w_c1, tree, post_rsp, counting);
         let stacked = placed_v.right.right.right;
         let argc_word = word_bytes_at_read(t.r.profile.data(), m0, rsp, word_of_nat(64, argc),
-            word_bytes_at_kept(t.argv(), m0, t.r.profile.data(), m0, t.argv_reads(m0), rsp, word_of_nat(64, argc), stacked.right.left));
+            word_bytes_at_kept(t.argv(), m0, t.r.profile.data(), m0, t.argv_reads(m0), rsp, word_of_nat(64, argc), stacked.left.right.left));
         let stack = t.read_stack(v, m0, placed_v.left);
         t.goes_block(p, 0, [MovRI(Rbx, layout.stack_at())], w_c0, tree,
             λ (w: MachineState<X86Memory(t.r.profile)>) => Exists<BitVec(64)>(λ word =>
@@ -782,44 +782,109 @@ theorem Target::keeps_zero(self t: Target): t.layout().Keeps(t.start_env(), λ _
         sym(cells_replicate(v, zero_byte(), cap, t.layout().buffer_offset(b), λ i _ => refl)))⟩
 }
 
-// RSP saved to its slot: a region of zeros, with the command line above it,
-// holds the start.
-theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slotted(live).IsTrue(), p: Prog,
-    within: p.saves_rsp(t.layout()).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    next: t.At(prog_len(p.saves_rsp(t.layout())), live, tree, t.start_env())):
+// RSP saved to its slot and to the frame slot, and the depth to the room
+// slot: a region of zeros, with the command line above it, holds the
+// start, and `main` is the activation running, at the stack's top with no
+// frames under it and `depth` calls of room (docs/native-procedures-design.md §5).
+theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slotted(live).IsTrue(), bare: t.frames = Nil,
+    depth: Nat, deep: t.room = depth, small: depth < Nat::pow(2, 64),
+    p: Prog, within: p.saves_rsp(t.layout(), depth).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(p.saves_rsp(t.layout(), depth)), live, tree, t.start_env())):
     t.Goes(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.r.Holds(λ _ => zero_byte(), s.memory) ∧
-        ArgvAt(t.argv(), s.memory, read_gpr(Rsp, s.gprs), t.args)) {
+        (ArgvAt(t.argv(), s.memory, read_gpr(Rsp, s.gprs), t.args) ∧ (read_gpr(Rsp, s.gprs) = t.frame()))) {
     let layout = t.layout();
     let so = layout.stack_offset();
+    let store = WordStore(Rbx, Rsp);
+    let store3 = WordStore(Rbx, Rax);
+    let d: BitVec(64) = BitVec::ofNat(depth);
+    let set3: List<Instruction> = [MovRI(Rbx, layout.room_at()), MovRI(Rax, d)];
     let mov = then(p, Block([MovRI(Rbx, layout.stack_at())]));
+    let saved = then(mov, Store(store));
+    let mov2 = then(saved, Block([MovRI(Rbx, layout.frame_at())]));
+    let framed = then(mov2, Store(store));
+    let mov3 = then(framed, Block(set3));
     let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(live, t.start_env(), u.gprs, u.memory);
-    let stored = t.goes_store(mov, 0, WordStore(Rbx, Rsp), within, tree, post, next);
-    let moved = t.goes_block(p, 0, [MovRI(Rbx, layout.stack_at())], mov.within_before(0, Store(WordStore(Rbx, Rsp)), t.program, within), tree,
-        λ (u: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(Rbx) = True) ∧ (t.writes().writable(u.memory, read_gpr(Rbx, u.gprs), 8) ∧
-            (t.site().Resident(word_store_after(t.writes(), WordStore(Rbx, Rsp), u).memory) ∧ post(word_store_after(t.writes(), WordStore(Rbx, Rsp), u)))),
-        stored);
+    let pre_store = λ (st: WordStore) (q: MachineState<X86Memory(t.r.profile)> → Type) (u: MachineState<X86Memory(t.r.profile)>) =>
+        (store_base_plain(Rbx) = True) ∧ (t.writes().writable(u.memory, read_gpr(Rbx, u.gprs), 8) ∧
+        (t.site().Resident(word_store_after(t.writes(), st, u).memory) ∧ q(word_store_after(t.writes(), st, u))));
+    let w_mov3 = mov3.within_before(0, Store(store3), t.program, within);
+    let w_framed = framed.within_before(0, Block(set3), t.program, w_mov3);
+    let w_mov2 = mov2.within_before(0, Store(store), t.program, w_framed);
+    let w_saved = saved.within_before(0, Block([MovRI(Rbx, layout.frame_at())]), t.program, w_mov2);
+    let w_mov = mov.within_before(0, Store(store), t.program, w_saved);
+    let stored3 = t.goes_store(mov3, 0, store3, within, tree, post, next);
+    let moved3 = t.goes_block(framed, 0, set3, w_mov3, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_store(store3, post, u), stored3);
+    let mid2 = λ (u: MachineState<X86Memory(t.r.profile)>) => pre_store(store3, post, execute_block_normal(set3, u));
+    let stored2 = t.goes_store(mov2, 0, store, w_framed, tree, mid2, moved3);
+    let moved2 = t.goes_block(saved, 0, [MovRI(Rbx, layout.frame_at())], w_mov2, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_store(store, mid2, u), stored2);
+    let mid = λ (u: MachineState<X86Memory(t.r.profile)>) => pre_store(store, mid2, execute_block_normal([MovRI(Rbx, layout.frame_at())], u));
+    let stored1 = t.goes_store(mov, 0, store, w_saved, tree, mid, moved2);
+    let moved1 = t.goes_block(p, 0, [MovRI(Rbx, layout.stack_at())], w_mov, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_store(store, mid, u), stored1);
     λ s here resident held => {
         let m = s.memory;
         let rsp = read_gpr(Rsp, s.gprs);
         let bytes = word_bytes(rsp);
+        let bytes3 = word_bytes(d);
         let zero = λ (_: Nat) => zero_byte();
-        let fits: (so + 8 <= t.r.size) = t.stack_fits();
+        let slots: (so + 24 <= t.r.size) = t.fits;
+        let fits: (so + 8 <= t.r.size) = omega(slots);
+        let fits2: ((so + 8) + 8 <= t.r.size) = omega(slots);
+        let fits3: ((so + 16) + 8 <= t.r.size) = omega(slots);
         let stack: (so = layout.scratch_offset() + (t.caps.largest() + 1)) = refl;
-        let w = t.r.buffer(zero).set_span(so, bytes.to_vector()).cells;
-        let after = t.r.profile.store(m, next_rip(t.r.low, so), bytes);
-        let slot: (word_in(w, so) = rsp) = t.r.x86_word_stored(zero, so, rsp);
-        let argv = j(sym(slot), λ y _ => ArgvAt(t.argv(), after, y, t.args),
-            argv_at_kept(t.argv(), m, t.argv(), after, t.kept_store(m, so, bytes, fits), rsp, t.args, held.right));
-        let keeps = layout.keeps_agree(t.start_env(), zero, w, t.keeps_zero(), λ q under => {
+        let w1 = t.r.buffer(zero).set_span(so, bytes.to_vector()).cells;
+        let w2 = t.r.buffer(w1).set_span(so + 8, bytes.to_vector()).cells;
+        let w3 = t.r.buffer(w2).set_span(so + 16, bytes3.to_vector()).cells;
+        let m1 = t.r.profile.store(m, next_rip(t.r.low, so), bytes);
+        let m2 = t.r.profile.store(m1, next_rip(t.r.low, so + 8), bytes);
+        let m3 = t.r.profile.store(m2, next_rip(t.r.low, so + 16), bytes3);
+        let below2 = λ (q: Nat) (below: q < so + 8) => t.r.cells_outside(w1, so + 8, bytes, q, Inl(below));
+        let below3 = λ (q: Nat) (below: q < so + 16) => t.r.cells_outside(w2, so + 16, bytes3, q, Inl(below));
+        let slot: (word_in(w3, so) = rsp) = trans(word_in_agree(w3, w2, so, λ k short => below3(so + k, omega(short))),
+            trans(word_in_agree(w2, w1, so, λ k short => below2(so + k, omega(short))), t.r.x86_word_stored(zero, so, rsp)));
+        let frame_slot: (word_in(w3, so + 8) = t.frame()) = trans(word_in_agree(w3, w2, so + 8, λ k short => below3((so + 8) + k, omega(short))),
+            trans(t.r.x86_word_stored(w1, so + 8, rsp), held.right.right));
+        let room_word: (word_in(w3, so + 16) = d) = t.r.x86_word_stored(w2, so + 16, d);
+        let room_is: (word_in(w3, so + 16).toNat() = t.room) =
+            trans(trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room_word), BitVec::toNat_ofNat(64, depth, small)), sym(deep));
+        let argv1 = argv_at_kept(t.argv(), m, t.argv(), m1, t.kept_store(m, so, bytes, fits), rsp, t.args, held.right.left);
+        let argv2 = argv_at_kept(t.argv(), m1, t.argv(), m2, t.kept_store(m1, so + 8, bytes, fits2), rsp, t.args, argv1);
+        let argv3 = argv_at_kept(t.argv(), m2, t.argv(), m3, t.kept_store(m2, so + 16, bytes3, fits3), rsp, t.args, argv2);
+        let argv = j(sym(slot), λ y _ => ArgvAt(t.argv(), m3, y, t.args), argv3);
+        let frames: t.FramesAt(m3, t.frames, t.index) = j(sym(bare), λ fs _ => t.FramesAt(m3, fs, t.index), trivial);
+        let keeps = layout.keeps_agree(t.start_env(), zero, w3, t.keeps_zero(), λ q under => {
             let low: (q < so) = omega(under, stack);
-            t.r.cells_outside(zero, so, bytes, q, Inl(low))
+            trans(below3(q, omega(low)), trans(below2(q, omega(low)), t.r.cells_outside(zero, so, bytes, q, Inl(low))))
         });
-        let placed: t.Placed(t.start_env(), after) = Exists(w, ⟨t.r.store_holds(zero, m, held.left, so, bytes, fits), ⟨keeps, ⟨refl, argv⟩⟩⟩);
-        let g1 = write_gpr(Rbx, layout.stack_at(), s.gprs);
-        let goal = λ (a: BitVec(64)) => t.writes().writable(m, a, 8) ∧
-            (t.site().Resident(t.r.profile.store(m, a, bytes)) ∧ t.Held(live, t.start_env(), g1, t.r.profile.store(m, a, bytes)));
-        let at_goal: goal(next_rip(t.r.low, so)) = ⟨t.writable(m, so, 8, fits), ⟨t.store_resident(m, so, bytes, fits, resident),
-            t.held_placed(live, t.start_env(), g1, after, placed, slotted)⟩⟩;
-        moved(s, here, resident, ⟨refl, j(sym(t.at_rip(so, so.le_of_add_le(8, t.r.size, fits))), λ a _ => goal(a), at_goal)⟩)
+        let holds3 = t.r.store_holds(w2, m2, t.r.store_holds(w1, m1, t.r.store_holds(zero, m, held.left, so, bytes, fits), so + 8, bytes, fits2),
+            so + 16, bytes3, fits3);
+        let placed: t.Placed(t.start_env(), m3) = Exists(w3, ⟨holds3, ⟨keeps, ⟨refl, ⟨argv, ⟨frame_slot, ⟨room_is, frames⟩⟩⟩⟩⟩⟩);
+        let g2 = write_gpr(Rbx, layout.frame_at(), write_gpr(Rbx, layout.stack_at(), s.gprs));
+        let g3 = write_gpr(Rax, d, write_gpr(Rbx, layout.room_at(), g2));
+        let third = λ (c: BitVec(64)) => t.writes().writable(m2, c, 8) ∧
+            (t.site().Resident(t.r.profile.store(m2, c, bytes3)) ∧ t.Held(live, t.start_env(), g3, t.r.profile.store(m2, c, bytes3)));
+        let r1 = t.store_resident(m, so, bytes, fits, resident);
+        let r2 = t.store_resident(m1, so + 8, bytes, fits2, r1);
+        let at_third: third(next_rip(t.r.low, so + 16)) = ⟨t.writable(m2, so + 16, 8, fits3),
+            ⟨t.store_resident(m2, so + 16, bytes3, fits3, r2), t.held_placed(live, t.start_env(), g3, m3, placed, slotted)⟩⟩;
+        let c3: third(layout.room_at()) = j(sym(t.at_rip(so + 16, omega(slots))), λ c _ => third(c), at_third);
+        let second = λ (b: BitVec(64)) => t.writes().writable(m1, b, 8) ∧ (t.site().Resident(t.r.profile.store(m1, b, bytes)) ∧
+            ((store_base_plain(Rbx) = True) ∧ (t.writes().writable(t.r.profile.store(m1, b, bytes), layout.room_at(), 8) ∧
+            (t.site().Resident(t.r.profile.store(t.r.profile.store(m1, b, bytes), layout.room_at(), bytes3)) ∧
+             t.Held(live, t.start_env(), g3, t.r.profile.store(t.r.profile.store(m1, b, bytes), layout.room_at(), bytes3))))));
+        let at_second: second(next_rip(t.r.low, so + 8)) = ⟨t.writable(m1, so + 8, 8, fits2), ⟨r2, ⟨refl, c3⟩⟩⟩;
+        let c2: second(layout.frame_at()) = j(sym(t.at_rip(so + 8, omega(slots))), λ b _ => second(b), at_second);
+        let goal = λ (a: BitVec(64)) => t.writes().writable(m, a, 8) ∧ (t.site().Resident(t.r.profile.store(m, a, bytes)) ∧
+            ((store_base_plain(Rbx) = True) ∧ (t.writes().writable(t.r.profile.store(m, a, bytes), layout.frame_at(), 8) ∧
+            (t.site().Resident(t.r.profile.store(t.r.profile.store(m, a, bytes), layout.frame_at(), bytes)) ∧
+            ((store_base_plain(Rbx) = True) ∧ (t.writes().writable(t.r.profile.store(t.r.profile.store(m, a, bytes), layout.frame_at(), bytes), layout.room_at(), 8) ∧
+            (t.site().Resident(t.r.profile.store(t.r.profile.store(t.r.profile.store(m, a, bytes), layout.frame_at(), bytes), layout.room_at(), bytes3)) ∧
+             t.Held(live, t.start_env(), g3,
+                t.r.profile.store(t.r.profile.store(t.r.profile.store(m, a, bytes), layout.frame_at(), bytes), layout.room_at(), bytes3)))))))));
+        let at_goal: goal(next_rip(t.r.low, so)) = ⟨t.writable(m, so, 8, fits), ⟨r1, ⟨refl, j(sym(t.at_rip(so + 8, omega(slots))),
+            λ b _ => t.writes().writable(m1, b, 8) ∧ (t.site().Resident(t.r.profile.store(m1, b, bytes)) ∧
+            ((store_base_plain(Rbx) = True) ∧ (t.writes().writable(t.r.profile.store(m1, b, bytes), layout.room_at(), 8) ∧
+            (t.site().Resident(t.r.profile.store(t.r.profile.store(m1, b, bytes), layout.room_at(), bytes3)) ∧
+             t.Held(live, t.start_env(), g3, t.r.profile.store(t.r.profile.store(m1, b, bytes), layout.room_at(), bytes3)))))), at_second)⟩⟩⟩;
+        moved1(s, here, resident, ⟨refl, j(sym(t.at_rip(so, omega(slots))), λ a _ => goal(a), at_goal)⟩)
     }
 }

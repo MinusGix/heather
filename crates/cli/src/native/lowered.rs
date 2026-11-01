@@ -171,6 +171,11 @@ impl Printer<'_> {
                 let (region, size) = self.reader.region()?;
                 (format!("Compute({region})"), size)
             }
+            8 => {
+                let procedure = self.reader.next()?;
+                let args = self.reader.ids()?;
+                (format!("Perform({procedure}, {args}, {})", self.reader.ids()?), 1)
+            }
             tag => return Err(format!("statement tag {tag}")),
         };
         if size <= LIMIT { return Ok((text, size)); }
@@ -184,17 +189,34 @@ impl Printer<'_> {
 /// The definitions of `{p}_lowered()`, the source `numbers` spell, and its
 /// buffers' capacities and initial lengths; `None` when the source spelled
 /// itself `[0]` (a source with functions), which is compiled as it is.
+/// A source with procedures spells itself `[2]`, its depth after its words
+/// and its procedures after its buffers.
 pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u64, usize)>)>, String> {
     let mut printer = Printer { reader: Reader { numbers, at: 0 }, p, defs: String::new(), count: 0 };
-    if printer.reader.next()? == 0 { return Ok(None); }
+    let tag = printer.reader.next()?;
+    if tag == 0 { return Ok(None); }
+    if tag > 2 { return Err(format!("source tag {tag}")); }
     let words = printer.reader.next()?;
+    let depth = if tag == 2 { Some(printer.reader.next()?) } else { None };
     let count = printer.reader.next()? as usize;
     let buffers = buffers(p, &mut printer.reader, count)?;
+    let mut calls = String::new();
+    if let Some(depth) = depth {
+        let count = printer.reader.next()? as usize;
+        let mut procedures = Vec::with_capacity(count);
+        for _ in 0..count {
+            let params = printer.reader.ids()?;
+            let results = printer.reader.ids()?;
+            let (body, _) = printer.stmt()?;
+            procedures.push(format!("Procedure(params := {params}, results := {results}, body := {body})"));
+        }
+        calls = format!(", procedures := [{}], depth := {depth}", procedures.join(", "));
+    }
     let (main, _) = printer.stmt()?;
     if printer.reader.at != numbers.len() {
         return Err("the spelled source ran past its statement".into());
     }
-    Ok(Some((format!("{}{}fn {p}_lowered() → Source {{ Source(functions := [], buffers := {}, words := {words}, main := {main}) }}\n",
+    Ok(Some((format!("{}{}fn {p}_lowered() → Source {{ Source(functions := [], buffers := {}, words := {words}, main := {main}{calls}) }}\n",
         buffers.defs, printer.defs, buffers.list), buffers.shapes)))
 }
 
