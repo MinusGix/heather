@@ -563,6 +563,7 @@ pub(crate) fn has_implicit_mark(ty: &Ty) -> bool {
         | TyKind::Eq(..)
         | TyKind::Univ { .. }
         | TyKind::OfExpr(_)
+        | TyKind::TypeOf(_)
         | TyKind::Fin(_)
         | TyKind::Ctx
         | TyKind::TyCode { .. }

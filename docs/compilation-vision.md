@@ -277,10 +277,14 @@ regex def is_hex = "[0-9a-f]+";
 // meaning of its term.
 ```
 
-Nothing of this exists. It needs the `Compile` class (§9.3 of the setups
-note), a proper value `def` (`value-definitions`), prefix generators that may
-rewrite the declaration they prefix (`declaration-prefix-generators`), and a
-DFA runner with its own `Compile` instance (an `rt` function, compiled once).
+The frontend half exists (2026-11-01, `docs/value-definitions-design.md` §4):
+`def`, prefix generators that rewrite the `def` they prefix, and
+`lib/std/text/regex.hthr`, whose `regex def is_hex = "[0-9a-f]+";` publishes
+`is_hex` as `Regex::accepts` of the parsed term (a Brzozowski-derivative
+meaning) and `is_hex::term`, tied by definition. Still missing: the `Compile`
+class (§9.3 of the setups note), and a DFA compiler with its soundness and a
+runner with its own `Compile` instance (an `rt` function, compiled once),
+issue `regex-dfa-compiler`.
 
 ### 3.4 A restricted dialect
 
@@ -388,7 +392,7 @@ decides.
 | `rt` and setups | designed (PR #325) | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | designed (setups note §9.3) | `issues/compile-typeclass-design.md` |
 | facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads | `docs/facts-on-demand-design.md`, `issues/facts-on-demand.md`; `Unique` is `issues/unique-fact.md` |
-| DSL languages | this document | to file after §4 question 1 |
+| DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |
 | ownership | direction issue | `issues/ownership-discipline-over-code.md`, milestone `nh-ownership` |
 | certified passes | probe passed | `docs/certified-pass-algebra-probe.md`, `function-ir-pass-in-heather` |

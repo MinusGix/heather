@@ -781,3 +781,50 @@ theorem Dyadic::rat_abs(self d: Dyadic): d.abs().rat() ≈ d.rat().abs() {
     let num: (d.mant.abs() * P = (d.mant * P).abs()) = rewrite(e, refl);
     d.abs().rat().same_of_parts(d.rat().abs(), num, refl)
 }
+
+// ---------------------------------------------------------------------------
+// Trimming: the same value with its mantissa's trailing zero bits moved into
+// the exponent. A term read at `2^-n` carries `n` such bits even when the
+// value is short (`5/8` read at `2^-57`), and a series evaluated at that
+// rational pays for every one of them in its ratios' numerators and
+// denominators; trimmed, it pays for the value's own bits.
+
+fn Dyadic::trim_nat(k, m: Nat, e: Int) → Dyadic {
+    match k {
+        Zero => Dyadic(OfNat(m), e),
+        Succ(j) => match m.even_dec() { Inl(_) => Dyadic::trim_nat(j, m.half(), e + OfNat(1)), Inr(_) => Dyadic(OfNat(m), e) },
+    }
+}
+
+theorem Dyadic::half_shift(m: Nat, e: Int, h: Nat::Even(m)): Dyadic(OfNat(m.half()), e + OfNat(1)) ≈ Dyadic(OfNat(m), e) {
+    let s = (Dyadic(OfNat(m.half()), e)).rat_shift_split(1);
+    let hh: (m.half() + m.half() = m) = m.half_add_half(h);
+    let q: (OfNat(m.half()) * Nat::pow(2, 1).int() = OfNat(m)) = omega(hh);
+    j(q, λ y _ => Dyadic(OfNat(m.half()), e + OfNat(1)) ≈ Dyadic(y, e), s)
+}
+
+theorem Dyadic::trim_nat_same(k: Nat): (m: Nat) → (e: Int) → Dyadic::trim_nat(k, m, e) ≈ Dyadic(OfNat(m), e) {
+    match k {
+        Zero => λ m e => Dyadic::same_refl(Dyadic(OfNat(m), e)),
+        Succ(j) => λ m e => match m.even_dec() as λ D => Dyadic::Same(match D { Inl(_) => Dyadic::trim_nat(j, m.half(), e + OfNat(1)), Inr(_) => Dyadic(OfNat(m), e) }, Dyadic(OfNat(m), e)) {
+            Inl(h) => Dyadic::same_trans(Dyadic::trim_nat_same(j, m.half(), e + OfNat(1)), Dyadic::half_shift(m, e, h)),
+            Inr(_) => Dyadic::same_refl(Dyadic(OfNat(m), e)),
+        },
+    }
+}
+
+fn Dyadic::trim(self d: Dyadic) → Dyadic {
+    match d.mant {
+        OfNat(m) => Dyadic::trim_nat(m.width(), m, d.exp),
+        NegSucc(m) => -Dyadic::trim_nat(Succ(m).width(), Succ(m), d.exp),
+    }
+}
+
+theorem Dyadic::trim_same(self d: Dyadic): d.trim() ≈ d {
+    match d {
+        Dyadic(a, e) => match a as λ b => Dyadic(b, e).trim() ≈ Dyadic(b, e) {
+            OfNat(m) => Dyadic::trim_nat_same(m.width(), m, e),
+            NegSucc(m) => Dyadic::neg_respects(Dyadic::trim_nat_same(Succ(m).width(), Succ(m), e)),
+        },
+    }
+}

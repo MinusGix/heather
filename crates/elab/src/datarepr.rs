@@ -1585,7 +1585,7 @@ pub(crate) fn mentions_free_ty(t: &Ty, names: &[String], bound: &mut Vec<String>
         | TyKind::TyCode { .. }
         | TyKind::Splice { .. } => false,
         TyKind::Eq(a, b) => mentions_free(a, names, bound) || mentions_free(b, names, bound),
-        TyKind::OfExpr(e) => mentions_free(e, names, bound),
+        TyKind::OfExpr(e) | TyKind::TypeOf(e) => mentions_free(e, names, bound),
         // A `Named`'s head is a *type* name; the statement's binders are
         // values, so only the arguments can mention one.
         TyKind::Named { args, .. } => args.iter().any(|a| mentions_free_ty(a, names, bound)),

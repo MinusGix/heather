@@ -5,7 +5,7 @@ labels: [native,compiler,metaprogramming]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 Round R5 of `docs/compiler-milestones-proposal.md` (§4.2 N1, §7): the `runtime fn` generator and the default
@@ -35,3 +35,7 @@ integration round. The other slices have their own issues:
 - **[[runtime-default-setup-soundness]]** owns `Setup`, the judgment, the lowering and `sound`; **[[runtime-fn-reflected-language]]** owns `rt` and the reflector.
 
 - **[[pure-imperative-statements]]** owns the imperative spellings. Until it lands, the fragment's examples are written with `match` and recursion.
+
+## Log
+
+- 2026-11-01: The prefix mechanism R5d uses is built ([[declaration-prefix-generators]]): `runtime` is called as `runtime("f", setup…)` after `f` is published, and `lookup("f")` gives its `GlobalRef` (docs/value-definitions-design.md §3.2).

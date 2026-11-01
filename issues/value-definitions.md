@@ -1,6 +1,6 @@
 ---
 title: A proper def: named values, not nullary fns
-status: open
+status: closed
 labels: [frontend,syntax,language]
 area: language
 created: 2026-11-01
@@ -30,3 +30,7 @@ declared name, and a `Compile` instance.
 
 `def` declarations elaborate and are used without `()`, a library constant
 is migrated as an example, and a prefixed `def` reaches its generator.
+
+## Log
+
+- 2026-11-01: DONE (docs/value-definitions-design.md §2). `def name<A>: T = e;` and `def name = e;` parse to a `DeclKind::Fn` with no written parameters and the new `Decl::value` flag, so a value is elaborated, gated, imaged and unfolded exactly as a nullary `fn` (closed verdicts by `refl` work through it; a nullary `fn` was already a global of type `T`, so `five` and `five()` both elaborated before). An omitted type is `TyKind::TypeOf(e)`, inferred once in `check_decl` (the value is the body); other readers of the stored declaration infer again. Use sites are bare; `five()` is refused across modules ("is a value (a `def`), not a function"), read off the registering layer. A value naming itself is refused as not recursive. Image: decl-kind tag 3 and surface-type tag 13, both new tags, so older images still decode; the round-trip unit test carries both. LSP lists a def as a constant; tree-sitter has `value_declaration`. Migrated example: `mono_carriers` (lib/std/tactic/mono.hthr). Probes: lib/_tests/std/core/value_definition_tests.hthr; parser refusals and the cross-module case: crates/elab/tests/value_definitions.rs. A prefixed `def` reaches its generator ([[declaration-prefix-generators]]).

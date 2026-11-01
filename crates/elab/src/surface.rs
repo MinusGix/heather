@@ -459,7 +459,7 @@ mod count_holes_impl {
                 expr(a, n);
                 expr(b, n);
             }
-            TyKind::OfExpr(e) => expr(e, n),
+            TyKind::OfExpr(e) | TyKind::TypeOf(e) => expr(e, n),
             TyKind::Named { args, .. } => args.iter().for_each(|a| ty(a, n)),
             TyKind::Fn { dom, cod, .. } => {
                 ty(dom, n);

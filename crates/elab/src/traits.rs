@@ -824,6 +824,7 @@ fn rename_ty(m: &Ren, t: &Ty) -> Ty {
         TyKind::Ctx => TyKind::Ctx,
         TyKind::Eq(a, b) => TyKind::Eq(Box::new(rename_expr(m, a)), Box::new(rename_expr(m, b))),
         TyKind::OfExpr(e) => TyKind::OfExpr(Box::new(rename_expr(m, e))),
+        TyKind::TypeOf(e) => TyKind::TypeOf(Box::new(rename_expr(m, e))),
         TyKind::Named { name, args } => TyKind::Named {
             name: ren(m, name),
             args: args.iter().map(|a| rename_ty(m, a)).collect(),
@@ -3022,6 +3023,7 @@ impl Elaborator {
                     kind: m.kind,
                     is_meta: m.is_meta,
                     is_evidence: m.is_evidence,
+                    value: m.value,
                     elaborates: m.elaborates.clone(),
                     name: full,
                     tyvars: d
@@ -3867,6 +3869,7 @@ impl Elaborator {
             kind,
             is_meta: false,
             is_evidence: false,
+            value: false,
             elaborates: None,
             name: name.to_string(),
             tyvars: d.tyvars.clone(),

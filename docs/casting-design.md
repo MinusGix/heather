@@ -893,6 +893,16 @@ carrier spelling or morphism parameter is handed to them.
   (the concrete carriers, as before) or a term compared by equality (the
   section's locals, which have no spelling). linarith's `ClassField` does
   the same for `OrderedField::with_ints`, adding `<` and `<=`.
+  The comparison reads through a parent class's dictionary (2026-11-01,
+  issues/ring-atom-mentions-class-constant.md): a predicate defined in a
+  parent's section (`AbsLe`, from `OrderedAddGroup`) reads `inv` off the
+  parent dictionary, which at `K` is a record built from `K`'s fields, so
+  the operation arrives as `fst(snd(…(pair(…))))`. `same_dictionary_read`
+  takes that chain's component by syntax alone (`spelling::project_value`,
+  no δ step) and compares it with the field read `K.inv` is, up to the
+  projections' annotations. Atoms that mention `K`'s constants
+  (`half(K.multiplicative.unit)`, a range product's `#op*@…`) have no
+  parsing spelling and are named by aliases (`atom_alias`).
 - **Certificates name it.** The certificate source cannot spell the
   section's operations, so each tactic binds the built dictionary for the
   certificate's elaboration: an alias (`__ring_ints`, `__lin_ints`) the
