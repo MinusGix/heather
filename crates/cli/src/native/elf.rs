@@ -217,6 +217,7 @@ fn {p}_shape() → List<Nat> {{ {src}().shape() }}
 fn {p}_homes_spelled() → List<Nat> {{ {src}().homes().spelled() }}
 fn {p}_lowered_spelled() → List<Nat> {{ {src}().spelled() }}
 fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len()] }}
+fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().main_end_names()) }}
 ");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
@@ -256,8 +257,9 @@ fn {p}_first() → List<Nat> {{ [{src}().main_names(), {src}().procedures.len()]
     let [first, procedures] = numbers(&fork, &probe, &format!("{p}_first"))?[..] else {
         return Err(format!("`{symbol}`'s procedures did not read back"));
     };
+    let bodies = if procedures > 0 { numbers(&fork, &probe, &format!("{p}_bodies"))? } else { Vec::new() };
     let plan = emission::plan(p, &format!("{src}().main"), &entry, &layout, &numbers(&fork, &probe, &format!("{p}_shape"))?,
-        first, (procedures > 0).then_some(src.as_str()))?;
+        first, (procedures > 0).then_some((src.as_str(), &bodies[..])))?;
     // The parts over the homes, and the check's verdict on them. The refusal
     // here: once this module is elaborated, the fork reads only its names.
     let state = |fork: &mut Elaborator, parts: &str, spelled: &[u64]| -> Result<(String, Vec<u64>), String> {

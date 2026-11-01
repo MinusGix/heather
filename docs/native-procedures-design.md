@@ -289,7 +289,16 @@ the frame's base in `frame`.
    the depth, and a builder tool summing its input by recursion.
 4. **`grep -F`**, with the line-buffer helper a procedure, against GNU's
    tests under `LC_ALL=C`. Its helper loops, so the allocators' loop sets
-   cover procedure bodies first (§4.3).
+   cover procedure bodies first (§4.3). Landed: the allocators pass every
+   procedure's body after `main` (`List::bodies_needs` for the loop sets,
+   `bodies_graph` and `bodies_weights` for the colouring), and the
+   colouring falls back to the slots when a body fails the check
+   (`Homes::or_else`). `write-elf` states each procedure's body a part at
+   a time, as `main`'s (`Procedure::code_of`, `List::procedures_code_of`).
+   `grep_f_tool` (`lib/native/native_tools.hthr`) tests and writes a line
+   by one procedure called from two sites, and
+   `compiled_grep_f_runs_as_gnu_grep` runs it beside GNU's. What is left
+   for larger tools: `issues/native-procedures-write-elf-capacity.md`.
 
 ## 8. Left open, each with an owner
 

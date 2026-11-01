@@ -830,6 +830,30 @@ theorem Source::compile_calls_of(self src: Source, low: BitVec(64), homes: Homes
         }) = Some(program), ran))
 }
 
+// A procedure's code from its parts', so `heather write-elf` states a long
+// body a part at a time: it fits, its way in, its body's emission, and its
+// way out.
+theorem Procedure::code_of(self proc: Procedure, p, entry, body, out: Prog, layout: Layout, index, names, after: Nat,
+    fits: proc.fits(layout) = True, entered: proc.entry_code(p, layout, index) = entry,
+    emitted: proc.body.emit(entry, layout, proc.results, names) = Some(Compiled(body, after)), left: proc.exit_code(body, layout) = out):
+    proc.code(p, layout, index, names) = Some(Compiled(out, after)) {
+    j(sym(fits), λ f _ => (match f as λ _ => Option<Compiled> {
+            False => None,
+            True => match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) },
+        }) = Some(Compiled(out, after)),
+        j(sym(entered), λ e _ => (match proc.body.emit(e, layout, proc.results, names) { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(Compiled(out, after)),
+            j(sym(emitted), λ o _ => (match o { None => None, Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)) }) = Some(Compiled(out, after)),
+                j(left, λ x _ => Some(Compiled(proc.exit_code(body, layout), after)) = Some(Compiled(x, after)), refl))))
+}
+
+// The procedures' code from the first's and the rest's.
+theorem List::procedures_code_of(self procs: List<Procedure>, first: Procedure, rest: List<Procedure>, is: procs = Cons(first, rest), p: Prog, layout: Layout, index, names: Nat,
+    c, d: Compiled, here: first.code(p, layout, index, names) = Some(c), later: rest.procedures_code(c.prog, layout, Succ(index), c.names) = Some(d)):
+    procs.procedures_code(p, layout, index, names) = Some(d) {
+    j(sym(is), λ ps _ => ps.procedures_code(p, layout, index, names) = Some(d),
+        j(sym(here), λ o _ => (match o { None => None, Some(x) => rest.procedures_code(x.prog, layout, Succ(index), x.names) }) = Some(d), later))
+}
+
 // A statement's emission from its parts', so a reader can state a long
 // program's a piece at a time (`heather write-elf`): one declaration per
 // leaf, or per part small enough to evaluate whole, and these to join them.

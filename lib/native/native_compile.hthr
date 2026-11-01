@@ -1318,10 +1318,19 @@ fn Stmt::emission_reading(self s: Stmt, layout: Layout, out: List<Nat>, names: N
     match s.emit(Start, layout, out, names) { None => [], Some(c) => Cons(c.names, c.prog.reading()) }
 }
 
-// The procedures' code at `Start`, from label name `names`, read as a
-// part's is; nothing if one does not compile.
-fn List::procedures_reading(self procs: List<Procedure>, layout: Layout, names: Nat) → List<Nat> {
-    match procs.procedures_code(Start, layout, 0, names) { None => [], Some(c) => Cons(c.names, c.prog.reading()) }
+// Procedure `i`, or a stand-in past the last.
+fn List::procedure_or(self procs: List<Procedure>, i: Nat) → Procedure { procs.drop(i).head_or(Procedure([], [], Exit(0))) }
+
+// Each procedure's body's shape (`Source::shape`), its count of numbers
+// first, the label names running on from `names`, the end of `main`'s.
+fn List::procedures_shapes(self procs: List<Procedure>, names: Nat) → List<Nat> {
+    match procs {
+        Nil => [],
+        Cons(proc, rest) => {
+            let m = proc.body.shape(Shape(names, []));
+            Cons(m.numbers.len(), List::append(m.numbers, rest.procedures_shapes(m.names)))
+        },
+    }
 }
 
 // A statement's parts, by position, for stating a piece of the tree by its
