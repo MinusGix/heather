@@ -264,16 +264,23 @@ inductive Regex { Chr(c: BitVec(8)), Seq(a, b: Regex), Alt(a, b: Regex), Star(r:
 fn Regex::matches(self r: Regex, s: List<BitVec(8)>) → Bool { … }          // the meaning
 fn Regex::dfa(self r: Regex) → Dfa { … }                                    // the compiler
 theorem Regex::dfa_sound(r: Regex, s): r.dfa().run(s) = r.matches(s) { … }  // once
-instance(r: Regex) Compile(λ s => r.matches(s)) := r.dfa().compile_with(Regex::dfa_sound(r))
 
-fn is_hex(s: List<BitVec(8)>) → Bool { regex!("[0-9a-f]+").matches(s) }
-// a runtime fn calling is_hex finds Compile(is_hex) through the regex instance:
-// a table-driven DFA, not a reflected backtracking matcher.
+// The user writes a declaration under the language's generator (Minus, 2026-11-01):
+regex def is_hex = "[0-9a-f]+";
+// `regex` is a declaration-prefix generator like `runtime`, but it may ALTER the
+// value: it parses the string into a Regex term and publishes
+//   def is_hex::term: Regex = Plus(Range('0', '9') | Range('a', 'f'))
+//   fn  is_hex(s: List<BitVec(8)>) → Bool = is_hex::term().matches(s)       // the meaning, by definition
+//   instance Compile(is_hex) := is_hex::term().dfa().compile_with(Regex::dfa_sound(is_hex::term()))
+// a runtime fn calling is_hex finds Compile(is_hex): a table-driven DFA, not a
+// reflected backtracking matcher. No pin is needed, because is_hex IS the
+// meaning of its term.
 ```
 
 Nothing of this exists. It needs the `Compile` class (§9.3 of the setups
-note), instances parameterized by a term, and a DFA runner with its own
-`Compile` instance (an `rt` function, compiled once).
+note), a proper value `def` (`value-definitions`), prefix generators that may
+rewrite the declaration they prefix (`declaration-prefix-generators`), and a
+DFA runner with its own `Compile` instance (an `rt` function, compiled once).
 
 ### 3.4 A restricted dialect
 
@@ -385,3 +392,118 @@ decides.
 | representations | v1 built | `docs/datarepr-design.md` |
 | specialization (`CallCtx`) | sketched | `docs/sketches/surface-v3.md` §1, §3 |
 | contracts across calls | direction issue | `issues/proof-carrying-function-analysis.md` |
+
+---
+
+## 6. Minus's answers (2026-11-01), and where they leave the questions
+
+- **DSL declarations** (§3.3): a language's generator prefixes a declaration
+  and may alter its value: `regex def is_hex = "[0-9a-f]+";`, parsed by the
+  `regex` generator into a term, published as the term's meaning plus its
+  `Compile` instance. Needs a proper `def` (`value-definitions`).
+- **The `simd` sketch** (§3.4) is the right shape.
+- **Q1, `Language` as the unit**: "plausibly", with the reasoning asked for.
+  It is §6.1 below.
+- **Q2, the subject of a fact**: both, and they interrelate. Sometimes a
+  mathematical fact about the function is wanted, sometimes a fact on the
+  code; one may be derived from the other.
+- **Q3, which facts**: open classes. Standard *dispatch methods* do not
+  materialise until requested: not every function needs every fact, so a
+  fact is produced on demand. A borrow-checked function produces "is this
+  aliased" cheaply; for any other function the request goes to a function or
+  tactic that may fail. To the compiler it is an opaque, usually cheap proof
+  (§6.2).
+- **Q4, contracts across calls**: unsure; stays open.
+- **Q5, tactics in the compiler**: yes, in Heather. General correctness
+  proofs (proved once, never executed per program) sit beside proof search.
+  There is no strong boundary between a check ("is there an alias") and a
+  search for a proof of it: an LLVM-style check is a search with a tight
+  budget. Both are tuned and fuel-bounded (§6.2).
+- **Q10, representations**: a separate axis; each language decides how it
+  uses a `datarepr`. For runtime code the lean is *invisibly generic*:
+  `runtime fn`s are generic over the representations of the spec types they
+  use, and the choice flows down from `main` (or the program's root), which
+  carries a set of defaults. Unsettled.
+
+### 6.1 Is `Language` the unit? (Q1, the reasoning)
+
+Yes, with one split that the `regex def` form makes visible: **a language and
+a frontend are different things.**
+
+- A **language** is what has a compiler proved once: a term type, a meaning,
+  a judgment, a compiler at some code level, and its soundness theorem.
+  `Regex` with `dfa_sound` is one; `rt` with a setup's `sound` is one.
+- A **frontend** is how a declaration becomes a term of a language, and how
+  the declared name is tied to the term's meaning. There are three ways, and
+  they differ exactly in what has to be checked per declaration:
+  1. *Definitional* (`regex def`): the generator defines the name as the
+     term's meaning, so the tie is a definition and costs nothing.
+  2. *Reflective* (`runtime fn`): the user wrote an ordinary body, the
+     generator reflects it into a term, and the tie is the pin
+     `term.meaning = f` by conversion (setups note §4.3).
+  3. *By hand*: the user writes the term, or the code and its proof
+     directly (a hand `Compile` instance).
+- A **setup** is then a language over `rt`'s terms with its own judgment and
+  compiler: the default setup, `owned`, `simd`, `ct`. A dialect is a setup
+  whose judgment is stricter.
+
+What the split buys:
+
+- **One soundness shape for everything that compiles**, so the compiler and
+  the facts machinery treat a DSL, a setup and a dialect alike.
+- **Languages compile into languages.** A DSL may lower its terms to `rt`
+  terms (a parser grammar to an `rt` loop) and reuse `rt`'s compiler; the
+  two soundness theorems compose. A tower is a chain of small statements
+  (principle 6).
+- **Frontends are where syntax lives.** The prefix generator owns parsing
+  (`regex`'s string, `simd`'s lane annotation) and naming, so a language
+  never needs elaborator support of its own.
+- **Facts attach to languages.** A language whose judgment proves
+  non-aliasing offers the `NoAlias` dispatch method for every function it
+  compiled (§6.2).
+
+What it costs, honestly: `Language` must be generic over its code level
+(FunctionIR, `Source`, machine) and over the facts it offers, so the record
+is larger than the setups note's `Setup`, and the one soundness shape is
+really a family indexed by the code level. The setups note's `Setup` is the
+FunctionIR-level member of that family. That is the only real cost, and it
+is the price of a DSL being able to emit vector instructions directly.
+
+### 6.2 Facts on demand: dispatch methods, and checks as searches
+
+From Q3 and Q5 together:
+
+```heather
+// A fact is an open class over a function (or a code position, Q2).
+class NoAlias<F>(f: F, arg: Nat) { proof: … }        // a proposition, its proof
+
+// Producers register a dispatch method, not a proof: nothing is built
+// until a pass asks.
+instance(f) NoAlias(f, i) given Owned(f) := owned_noalias(f, i)   // cheap: read off the borrow check
+instance(f) NoAlias(f, i) := by search(budget := small) { alias_tactic }   // anything else: may fail
+```
+
+- **Lazy.** A fact is resolved when a pass asks for it, so a program pays
+  only for the facts its optimizations want. Instance search is the
+  dispatch: the most specific producer (the language that compiled `f`)
+  first, the generic search last.
+- **A check is a search with a budget.** An LLVM-style alias check and a
+  tactic that searches for a proof of non-aliasing are the same request at
+  different fuel. A *verified* check (a decision procedure proved sound
+  once) answers by evaluation, so its proof is one `refl`; an unverified
+  search answers with a proof the kernel checks. A failed or exhausted
+  search means the optimization is skipped.
+- **Opaque to the compiler.** A pass sees a proof of the proposition it
+  needs, never how it was found, so producers can improve without touching
+  passes.
+- **Cost.** A fact that is cheap for its producer (the borrow check already
+  ran) stays cheap; a searched fact is budgeted per request, and the budget
+  is a knob (`optimize(aggressive)`, Q8).
+
+### 6.3 Questions still open
+
+Q4 (contracts across calls), Q6 (how abstract the target is), Q8 (who pays
+for search by default), Q9 (`CallCtx`), Q10's details (how representation
+defaults flow from `main`, and what "invisibly generic" costs in
+specialization), Q11 (notation: now answered for DSLs by prefix generators
+that parse a string or a block), Q12.
