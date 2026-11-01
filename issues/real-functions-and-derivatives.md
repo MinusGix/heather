@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,constructive]
 area: mathematics
 milestone: [math-reals, ml-descent]
 created: 2026-10-21
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 Functions on `CReal` with a modulus of continuity, Lipschitz bounds, and a
@@ -29,3 +29,4 @@ can proceed at its own pace.
 
 - 2026-10-27: docs/analysis-foundations-design.md §7.2 proposes Bishop's uniform derivative stated as a uniform first-order expansion ([[certified-expansions]]), with the rules from jet identities ([[formal-power-series]]) plus remainder lemmas ([[asymptotic-relations]]), and the mean value inequality by telescoping. The derivative is the `C¹` instance of the differential-structure interface ([[differential-structures]], §3.1); Lipschitz functions with the Edalat–Lieutier interval derivative are its lax instance.
 - 2026-10-31: First round: `lib/std/analysis/real_fn.hthr`. It is stated once over `K: OrderedField` and read at `Rat` and `CReal` in `lib/_tests/std/analysis/real_fn_tests.hthr`. Predicates: `BoundedOn`, `LipschitzOn` (it quantifies over the bound `h` with `|y - x| <= h`, so no `abs` is needed), `UnifContOn`, `MapsTo`, and Bishop's uniform `DerivOn(D, f, g)`. Moduli are data, and "a positive below both" comes from cotransitivity (`OrderedField::below_both`), with no `min`. Rules: const, id, add, scale, product, chain, finite sums, powers (`npow` with `npow_deriv`, so the exponent never truncates) and polynomials. A bounded derivative gives a local Lipschitz bound `M + 1` at the modulus scale. The product and chain rules take bounds on the factors and derivatives as hypotheses. The refutation `¬ DerivOn(id, 0)` keeps the definition from being vacuous. Left for later rounds: the mean value inequality ([[mean-value-inequality]]); `exp`, `log`, `tanh` and `sqrt` as real functions (`exp` meets [[elementary-functions-at-reals]], whose `CReal::extend` from a Rat-Lipschitz function is the bridge to `LipschitzOn` at `K = CReal`); the Edalat–Lieutier lax instance; and the [[differential-structures]] interface over `DerivOn`. Found along the way: [[ring-atom-mentions-class-constant]] and [[nested-exists-match-cost]].
+- 2026-11-01: 2026-11-01: The mean value inequality is done ([[mean-value-inequality]]): `DerivOn::mvi`, `DerivOn::lipschitz` and `DerivOn::const_of_zero`. exp′ = exp at the reals is lib/std/analysis/real_exp.hthr (`CReal::exp_deriv` on any domain where exp is bounded, `exp_deriv_within` and `exp_lipschitz_within` on intervals), from the second-order bound `CReal::exp_sub_lin`: |exp(h) - 1 - h| <= C·k² for |h| <= k <= 1/2. Still open here: log, tanh and sqrt as real functions; uniqueness of the derivative; and the derivative of a power series inside its radius, which atanh needs for [[exp-log-inverse]].

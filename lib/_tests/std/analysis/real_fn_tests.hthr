@@ -103,3 +103,20 @@ theorem rat_double_cont(x: Rat): UnifContOn(rat_disc, λ (y: Rat) => y + y) {
         LocatedAddGroup::abs_le_weaken(b - a, b - a, h, 1 * h, hab, (b - a).same_refl(), Rat::le_of_same(ring)));
     LipschitzOn::unif_cont(rat_disc, λ (y: Rat) => y + y, 1 + 1, LipschitzOn::add(rat_disc, λ (y: Rat) => y, λ (y: Rat) => y, 1, 1, id, id))
 }
+
+// The mean value inequality at the reals: x·x on the disc, whose derivative
+// 1·y + y·1 is bounded there, is Lipschitz with that bound.
+theorem creal_square_lipschitz(x: CReal): LipschitzOn(creal_disc, λ (y: CReal) => y * y, (1 * 1 + 1) * 1 + 1 * (1 * 1 + 1)) {
+    let c = BoundedOn::const(creal_disc, 1);
+    let i = Disc::bounded(x);
+    let b = BoundedOn::add(creal_disc, λ (y: CReal) => 1 * y, λ (y: CReal) => y * 1, (1 * 1 + 1) * 1, 1 * (1 * 1 + 1),
+        BoundedOn::mul(creal_disc, λ (y: CReal) => 1, λ (y: CReal) => y, 1 * 1 + 1, 1, c, i),
+        BoundedOn::mul(creal_disc, λ (y: CReal) => y, λ (y: CReal) => 1, 1, 1 * 1 + 1, i, c));
+    DerivOn::lipschitz(creal_disc, λ (y: CReal) => y * y, λ (y: CReal) => 1 * y + y * 1, (1 * 1 + 1) * 1 + 1 * (1 * 1 + 1),
+        ConvexOn::within(-1, 1), creal_square(x), b)
+}
+
+// A zero derivative makes a function constant, at the rationals.
+theorem rat_const_of_zero(f: Rat → Rat, hd: DerivOn(rat_disc, f, λ (y: Rat) => 0), a, b: Rat, da: rat_disc(a), db: rat_disc(b)): f(a) ≈ f(b) {
+    DerivOn::const_of_zero(rat_disc, f, λ (y: Rat) => 0, ConvexOn::within(-1, 1), hd, λ y dy => Rat::same_refl(0), a, b, da, db)
+}
