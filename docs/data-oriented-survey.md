@@ -248,6 +248,13 @@ precondition [[kernel-arena-terms-frozen-prefix]] item 5 names and the chokepoin
 bounds issue and as a consideration for the arena decision, not as its own
 round.
 
+**Status (2026-11-02).** Half of the 14% was not the side table's probe but
+its keep-alive: an eviction dropped the last strong reference to a dead
+subtree and paid its free on cold memory. Keys are now `Weak` and the
+marker shares the slot's cache line; perf ab, calc_parser cold: wall −18%,
+kernel gate −12%, max RSS −20%, all separating. The node header remains the
+lever for what is left ([[bounds-metadata-taxes-one-shot-checking]]).
+
 ## 5. Per-call allocations in substitution
 
 **Where.** `crates/kernel/src/subst.rs`.
