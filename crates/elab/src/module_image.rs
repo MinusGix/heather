@@ -36,6 +36,17 @@ use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 const MAGIC: &[u8; 8] = b"HTHMOD\0\x1e";
 const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1b";
 
+/// The two encodings' versions, image then interface: what a module cache
+/// key covers, so a bump of either is a clean miss for every reader rather
+/// than a stored image whose header still answers for its key while its
+/// body no longer decodes (`issues/library-gate-native-tests-fresh-box-rail.md`).
+pub fn image_format() -> [u8; 16] {
+    let mut out = [0; 16];
+    out[..8].copy_from_slice(MAGIC);
+    out[8..].copy_from_slice(INTERFACE_MAGIC);
+    out
+}
+
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
 /// generous enough for Heather's present standard library without making a
