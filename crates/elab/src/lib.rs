@@ -1645,6 +1645,18 @@ fn self_name_refusal(selfref: &SelfRef, name: &str) -> String {
     }
 }
 
+/// Append to a refusal of a member's self-reference, written by its bare
+/// base name, the global that name would otherwise have meant
+/// (issues/self-reference-hides-same-named-global.md). `note` is
+/// [`Elaborator::self_shadow_note`]'s; errors other than a surface refusal
+/// pass through unchanged.
+fn with_self_shadow_note(e: ElabError, note: Option<&str>) -> ElabError {
+    match (e, note) {
+        (ElabError::Elab { msg, span }, Some(note)) => ElabError::Elab { msg: format!("{msg}\n{note}"), span },
+        (e, _) => e,
+    }
+}
+
 fn item_timing_name(item: &Item) -> String {
     match item {
         Item::Decl(decl) => decl.name.clone(),
@@ -2654,6 +2666,53 @@ impl Elaborator {
     /// reinterpreted by it (docs/repr-access-spellings-design.md §5).
     fn key_of(&self, name: &str) -> Option<String> {
         self.key_of_kinds(name, names::ANY_KIND)
+    }
+
+    /// [`recursion::elab_self_call`], with a refusal *of the call* — one at
+    /// the call itself or one naming the callee, not an error inside an
+    /// argument that happens to surface here — noted with the global the
+    /// written name hides ([`Self::self_shadow_note`]).
+    fn self_call_noted(&self, cx: &Cx, written: &str, args: &[Expr], explicit: bool, span: Span) -> R<(Term, Type, Level)> {
+        recursion::elab_self_call(self, cx, args, explicit, span).map_err(|e| {
+            let ElabError::Elab { msg, span: at } = &e else { return e };
+            let selfref = cx.selfref.as_ref().expect("a self-call has a self-reference");
+            if *at != span && !msg.contains(&format!("`{}`", selfref.name)) {
+                return e;
+            }
+            let note = self.self_shadow_note(selfref, written);
+            with_self_shadow_note(e, note.as_deref())
+        })
+    }
+
+    /// Inside a member `T::name`, the bare `name` is the member's own
+    /// self-reference, checked before any global, so a top-level `name` is
+    /// hidden there. When `written` is that bare spelling and a declaration
+    /// of the name does resolve outside the member, the note naming it and
+    /// the qualified spelling that reaches it
+    /// (issues/self-reference-hides-same-named-global.md). `None` for a
+    /// non-member, the qualified spelling, or a name nothing else declares.
+    fn self_shadow_note(&self, selfref: &SelfRef, written: &str) -> Option<String> {
+        if selfref.name == selfref.written_name || written != selfref.name {
+            return None;
+        }
+        let key = self.key_of(self.instance_alias(written))?;
+        if key == selfref.written_name || key.ends_with(&format!("::{}", selfref.written_name)) {
+            return None;
+        }
+        // The module-qualified spelling, offered only when it reaches the
+        // same declaration from here.
+        let reach = split_qual(&key)
+            .map(|(module, _)| qkey(module, written))
+            .filter(|spelling| self.key_of(spelling).as_deref() == Some(key.as_str()));
+        let member = &selfref.written_name;
+        let hides = format!(
+            "note: inside the member `{member}`, the bare name `{written}` is `{member}` itself \
+             (its self-reference), which hides the declaration `{key}`"
+        );
+        Some(match reach {
+            Some(spelling) => format!("{hides}; write `{spelling}` to reach it"),
+            None => hides,
+        })
     }
 
     /// [`Self::key_of`] with the candidate set restricted by declaration kind.
@@ -5359,8 +5418,13 @@ impl Elaborator {
                 // same way (issues/elab-match-refines-hypothesis-kernel-
                 // rejects.md): they join the generalized positions, so each
                 // arm sees them at its constructor.
+                // Only the `match` that is the recursion generalizes: a case
+                // split on a parameter every self-call passes unchanged
+                // leaves the enclosing guard standing (`guard_param`), and
+                // its arms' calls vary nothing of its own.
                 let dec = recursion::descends_on_param(cx, &scrut_t);
-                let mut positions = match dec {
+                let guard = recursion::guard_param(cx, &scrut_t, arms);
+                let mut positions = match guard {
                     Some(dec) => self.varying_params(cx, arms, dec),
                     None => Vec::new(),
                 };
@@ -5384,7 +5448,7 @@ impl Elaborator {
                     let arms = self.wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
                     let mut gcx = cx.clone();
-                    if let Some(dec) = dec {
+                    if let Some(dec) = guard {
                         gcx.generalized = Some(Rc::new(generalize::Generalization {
                             dec,
                             positions: Rc::clone(&positions),
@@ -7445,7 +7509,7 @@ impl Elaborator {
                         "the termination guard reads *which position* decreases, so a                          self-call's arguments stay where the declaration put them",
                         named,
                     )?;
-                    return recursion::elab_self_call(self, cx, args, *explicit, e.span);
+                    return self.self_call_noted(cx, n, args, *explicit, e.span);
                 }
                 let (name, t, ty, lvl, mask) = self.elab_ty_app(cx, callee, tyargs, head.span)?;
                 let params = self.params_of(&name);
@@ -7755,7 +7819,7 @@ impl Elaborator {
                     return self.infer_ctor(cx, &ind, i, args, e.span);
                 }
                 if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
-                    return recursion::elab_self_call(self, cx, args, *explicit, e.span);
+                    return self.self_call_noted(cx, name, args, *explicit, e.span);
                 }
                 // A *value* head — a local, or an alias. With a skeleton it
                 // applies with skeleton-directed insertion
@@ -9208,7 +9272,8 @@ impl Elaborator {
         // complaint below would otherwise deny a declaration the reader is
         // looking at (issues/recursive-self-call-type-arguments.md).
         if let Some(selfref) = cx.selfref.as_ref().filter(|s| s.matches(name)) {
-            return err(self_name_refusal(selfref, name), span);
+            let note = self.self_shadow_note(selfref, name);
+            return err(self_name_refusal(selfref, name), span).map_err(|e| with_self_shadow_note(e, note.as_deref()));
         }
         let params = self.params_of(name);
         let n_ty = params.iter().take_while(|p| p.is_type).count();
@@ -10045,7 +10110,8 @@ impl Elaborator {
         // The enclosing declaration's own name: only a saturated, guarded
         // *call* means anything (it is the induction hypothesis, not a value).
         if let Some(selfref) = cx.selfref.as_ref().filter(|s| s.matches(name)) {
-            return err(self_name_refusal(selfref, name), span);
+            let note = self.self_shadow_note(selfref, name);
+            return err(self_name_refusal(selfref, name), span).map_err(|e| with_self_shadow_note(e, note.as_deref()));
         }
         let resolved_global = self
             .key_of(self.instance_alias(name))

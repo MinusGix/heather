@@ -123,6 +123,8 @@ impl Elaborator {
             Some((c, a)) => (c, a.as_slice()),
             None => (cx, arms),
         };
+        let split = crate::recursion::case_split(cx, &scrut_t, arms);
+        let cx = split.as_ref().unwrap_or(cx);
         let head = self.whnf(cx, scrut_ty, span)?;
         // An indexed family in family form (docs/inductive-indexed-lowering.md
         // §6) — checked on the *raw* type, since whnf at a literal index
@@ -271,7 +273,7 @@ impl Elaborator {
         // some other term), the enclosing arm's guard — if any — still stands,
         // possibly *extended* by this match (§ course-of-values below).
         let dec = if ih.is_none() {
-            crate::recursion::descends_on_param(cx, &scrut_t)
+            crate::recursion::guard_param(cx, &scrut_t, arms)
         } else {
             None
         };

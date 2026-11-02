@@ -1,0 +1,41 @@
+// A member's bare base name is its own self-reference, checked before any
+// global, so inside `T::name` a top-level `name` is hidden. A refusal of the
+// self-reference names the declaration it hides and the qualified spelling
+// that reaches it (`issues/self-reference-hides-same-named-global.md`).
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import nat; import logic;
+
+fn Sim() → Nat { 0 }
+record Prog { n: Nat }
+
+// The qualified spelling reaches the global from inside the member.
+fn Prog::Sim(self p: Prog) → Nat { self_reference_tests::Sim() }
+theorem sim_reached(): Prog::Sim(Prog { n: 3 }) = 0 { refl }
+
+// The issue's probe. Not guarded: the bare name is the member, called
+// outside any `match`.
+record Spec { n: Nat }
+// expect-error: which hides the declaration `self_reference_tests::Sim`; write `self_reference_tests::Sim` to reach it
+fn Spec::Sim(self p: Spec) → Nat { Sim() }
+
+// Used as a value rather than called.
+fn Halt() → Nat { 2 }
+// expect-error: which hides the declaration `self_reference_tests::Halt`; write `self_reference_tests::Halt` to reach it
+fn Prog::Halt(self p: Prog) → Nat → Nat { Halt }
+
+// A prelude name: the hint is the `prelude::` idiom (docs/sections-design.md).
+inductive Box { mk(n: Nat) }
+// expect-error: which hides the declaration `prelude::cong`; write `prelude::cong` to reach it
+theorem Box::cong(a: Box, b: Box, h: a = b): Box::mk(0) = Box::mk(0) { cong(Box::mk, refl) }
+
+// Guarded, but the argument does not descend: the refusal names the
+// argument, and the note still says what the bare name hid.
+inductive Chain { end, link(next: Chain) }
+fn depth(c: Chain) → Nat { 0 }
+// expect-error: write `self_reference_tests::depth` to reach it
+fn Chain::depth(self c: Chain) → Nat { match c { end => 0, link(next) => depth(c) } }
+
+// A member whose base name nothing else declares keeps the plain refusal.
+// expect-error: `Lonely` is not structurally guarded: it must occur inside a `match` on one of `Lonely`'s own parameters
+fn Prog::Lonely(self p: Prog) → Nat { Lonely(p) }
