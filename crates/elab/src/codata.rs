@@ -965,7 +965,7 @@ impl Elaborator {
         let ty_ls = Type::Ty(ls.clone());
         let shape_stmt = Type::Pi { dom_level: li.clone(), cod_level: Level::succ(ls.clone()), dom: Rc::clone(&ity), cod: Rc::new(ty_ls) };
         let shape_body = Term::Lam { dom_level: li.clone(), cod_level: Level::succ(ls.clone()), dom: Rc::clone(&ity), body: Rc::new(shape_code) };
-        let lvl1 = Level::max(li.clone(), Level::succ(ls.clone())).normalize().canonical();
+        let lvl1 = Level::max(li.clone(), Level::succ(ls.clone()));
         if !self.push_m_def(GenDef::MShape(ind.tag), ind, &tel, shape_stmt, lvl1, shape_body, span) {
             return;
         }
@@ -984,7 +984,7 @@ impl Elaborator {
         let tel1: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(1), l.clone())).collect();
         let ity1 = Rc::new(ity.shift_global(1));
         let pos_cod = Type::Pi { dom_level: ls.clone(), cod_level: Level::succ(lp.clone()), dom: Rc::clone(&s_ty), cod: Rc::new(Type::Ty(lp.clone())) };
-        let lvl_s = Level::max(ls.clone(), Level::succ(lp.clone())).normalize().canonical();
+        let lvl_s = Level::max(ls.clone(), Level::succ(lp.clone()));
         let pos_stmt = Type::Pi { dom_level: li.clone(), cod_level: lvl_s.clone(), dom: Rc::clone(&ity1), cod: Rc::new(pos_cod) };
         let pos_body = Term::Lam {
             dom_level: li.clone(),
@@ -992,7 +992,7 @@ impl Elaborator {
             dom: Rc::clone(&ity1),
             body: Rc::new(Term::Lam { dom_level: ls.clone(), cod_level: Level::succ(lp.clone()), dom: Rc::clone(&s_ty), body: Rc::new(ptree.shift_global(1)) }),
         };
-        let lvl2 = Level::max(li.clone(), lvl_s).normalize().canonical();
+        let lvl2 = Level::max(li.clone(), lvl_s);
         if !self.push_m_def(GenDef::MPos(ind.tag), ind, &tel1, pos_stmt, lvl2, pos_body, span) || !indexed {
             return;
         }
@@ -1010,9 +1010,9 @@ impl Elaborator {
         let ity2 = Rc::new(ity.shift_global(2));
         let i3 = Rc::new(ity2.shift_local(3));
         let next_p = Type::Pi { dom_level: lp.clone(), cod_level: li.clone(), dom: Rc::clone(&p_ty), cod: Rc::clone(&i3) };
-        let lvl_p = Level::max(lp.clone(), li.clone()).normalize().canonical();
+        let lvl_p = Level::max(lp.clone(), li.clone());
         let next_s = Type::Pi { dom_level: ls.clone(), cod_level: lvl_p.clone(), dom: Rc::clone(&s_ty), cod: Rc::new(next_p) };
-        let lvl_sp = Level::max(ls.clone(), lvl_p.clone()).normalize().canonical();
+        let lvl_sp = Level::max(ls.clone(), lvl_p.clone());
         let next_stmt = Type::Pi { dom_level: li.clone(), cod_level: lvl_sp.clone(), dom: Rc::clone(&ity2), cod: Rc::new(next_s) };
         let next_body = Term::Lam {
             dom_level: li.clone(),
@@ -1025,7 +1025,7 @@ impl Elaborator {
                 body: Rc::new(Term::Lam { dom_level: lp.clone(), cod_level: li.clone(), dom: p_ty, body: Rc::new(sig.next.shift_global(2)) }),
             }),
         };
-        let lvl3 = Level::max(li, lvl_sp).normalize().canonical();
+        let lvl3 = Level::max(li, lvl_sp);
         let _ = self.push_m_def(GenDef::MNext(ind.tag), ind, &tel2, next_stmt, lvl3, next_body, span);
     }
 
@@ -1037,7 +1037,7 @@ impl Elaborator {
         for (dom, dom_level) in tel.iter().rev() {
             body = Term::Lam { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::new(dom.clone()), body: Rc::new(body) };
             ty = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::new(dom.clone()), cod: Rc::new(ty) };
-            level = Level::max(dom_level.clone(), level).normalize().canonical();
+            level = Level::max(dom_level.clone(), level);
         }
         self.push_gen_def(key, &ind.name, ty, level, body, span).is_ok()
     }
@@ -1297,7 +1297,7 @@ impl Elaborator {
         let (mut acc, mut acc_lvl) = tys.pop().expect("an index telescope is nonempty");
         while let Some((t, l)) = tys.pop() {
             acc = Type::Sigma { fst_level: l.clone(), snd_level: acc_lvl.clone(), fst: Rc::new(t), snd: Rc::new(acc) };
-            acc_lvl = Level::max(l, acc_lvl).normalize().canonical();
+            acc_lvl = Level::max(l, acc_lvl);
         }
         Ok((acc, acc_lvl))
     }
@@ -2027,7 +2027,7 @@ impl Elaborator {
                 let (mut acc, mut lvl) = comps.pop().expect("nonempty");
                 while let Some((c, l)) = comps.pop() {
                     acc = Type::Sigma { fst_level: l.clone(), snd_level: lvl.clone(), fst: Rc::new(c), snd: Rc::new(acc) };
-                    lvl = Level::max(l, lvl).normalize().canonical();
+                    lvl = Level::max(l, lvl);
                 }
                 (acc, lvl)
             }
@@ -2084,7 +2084,7 @@ impl Elaborator {
                     rhs: var(1),
                 }),
             };
-            Carrier { fam, level: Level::max(vtuple_level.clone(), li).normalize().canonical() }
+            Carrier { fam, level: Level::max(vtuple_level.clone(), li) }
         } else {
             Carrier { fam: vtuple.shift_local(1), level: vtuple_level.clone() }
         };
@@ -2106,7 +2106,7 @@ impl Elaborator {
                     lhs: Rc::new(x.fam.clone()),
                     rhs: Rc::new(f),
                 },
-                level: Level::max(x.level.clone(), f_level).normalize().canonical(),
+                level: Level::max(x.level.clone(), f_level),
             });
         }
         let carrier = levels.last().expect("level 0").clone();

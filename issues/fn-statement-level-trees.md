@@ -1,6 +1,6 @@
 ---
 title: A fn statement's Π levels are raw ⊔ trees, copied into every App annotation read off it
-status: open
+status: closed
 labels: [elaboration,representation,performance]
 area: language
 created: 2026-09-15
@@ -13,3 +13,4 @@ Found by the 2026-09-15 spelling design pass (docs/closed-argument-and-parameter
 
 - 2026-09-15: 2026-09-15, measured and NOT landed: canonicalizing the join and the seed at lib.rs's closing loop alone (two lines, part B of the spelling round) against the part-A binary on one box, W=1, calc_parser.hthr: whole-file 77.74 → 77.08 s and maxrss flat (noise), but close_body's misses 7 318 → 15 255 and the Pi/Pi row 8 421 / 0.72 s → 21 070 / 1.30 s. The other side of those comparisons (a callee's codomain instantiated by the kernel, or a Π built by another emitter) still carries the raw tree, so pairs that were syntactically equal now differ in level spelling and fall to the value domain — spell both sides alike or neither. The fix is canonical levels at every Π/λ level-slot emitter in the elaborator (and the kernel's instantiation preserving canonicity), landed as one slice with the level profile of every emitter audited, not at one site. Reverted; the issue stays open with this as its datum.
 - 2026-11-02: 2026-11-02: [[kernel-compact-level]] proposes levels canonical by construction. That would remove this issue's blocker, the per-emitter spelling mismatch that doubled misses when one emitter canonicalized.
+- 2026-11-02: 2026-11-02: Resolved by construction in [[kernel-compact-level]]. `Level::max` now returns the canonical join, so the closing loop's raw `Level::max(dom_lvl, stmt_lvl)` no longer builds a quadratic `⊔` tree. The other side of every comparison is canonical too, which removes the per-emitter spelling mismatch that doubled misses in 2026-09-15's one-site attempt. The elaborator's redundant `.normalize().canonical()` calls are removed. Closing.

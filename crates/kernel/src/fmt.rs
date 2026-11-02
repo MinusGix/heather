@@ -127,25 +127,35 @@ pub fn write_exact(sink: &mut impl fmt::Write, value: &impl fmt::Debug) -> fmt::
 }
 
 impl fmt::Debug for Level {
+    /// The canonical spelling: a numeral, `ℓi`, `n+ℓi`, or a left-nested
+    /// join `((k ⊔ ℓi) ⊔ n+ℓj)` with the constant first and the variables
+    /// in ascending order — what `LevelNf::canonical` always spelt, so a
+    /// level that was already canonical prints as it did.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         node(f, |f| {
-            // Collapse `1 + (1 + …)` prefixes into a numeral.
-            let mut n = 0u64;
-            let mut cur = self;
-            while let Level::Succ(inner) = cur {
-                n += 1;
-                cur = inner;
+            let Some((konst, vars)) = self.parts() else { return f.write_str("ω") };
+            for _ in 1..(konst.is_some() as usize + vars.len()) {
+                f.write_str("(")?;
             }
-            if n > 0 && !matches!(cur, Level::Zero) {
-                write!(f, "{n}+")?;
+            let mut first = true;
+            if let Some(k) = konst {
+                write!(f, "{k}")?;
+                first = false;
             }
-            match cur {
-                Level::Zero => write!(f, "{n}"),
-                Level::Var(v) => write!(f, "ℓ{}", v.0),
-                Level::Max(a, b) => write!(f, "({a:?} ⊔ {b:?})"),
-                Level::Omega => f.write_str("ω"),
-                Level::Succ(_) => unreachable!(),
+            for (v, n) in vars {
+                if !first {
+                    f.write_str(" ⊔ ")?;
+                }
+                if n > 0 {
+                    write!(f, "{n}+")?;
+                }
+                write!(f, "ℓ{}", v.0)?;
+                if !first {
+                    f.write_str(")")?;
+                }
+                first = false;
             }
+            Ok(())
         })
     }
 }

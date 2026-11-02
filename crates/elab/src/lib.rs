@@ -442,18 +442,7 @@ fn subject_text(e: &Expr) -> Option<String> {
 /// so this is exact for them and falls back to the kernel's bounded `Debug`
 /// for an elaborator-built one.
 fn show_level(l: &Level) -> String {
-    let mut n = 0u64;
-    let mut cur = l;
-    loop {
-        match cur {
-            Level::Zero => return n.to_string(),
-            Level::Succ(inner) => {
-                n += 1;
-                cur = inner;
-            }
-            _ => return format!("{l:?}"),
-        }
-    }
+    l.as_constant().map_or_else(|| format!("{l:?}"), |n| n.to_string())
 }
 
 /// `True` in a rendered type, wherever the kernel wrote its `Unit^0` spelling
