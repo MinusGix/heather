@@ -64,3 +64,4 @@ Sequencing: before [[grind-e-matching]], which reworks the core anyway
 ## Log
 
 - 2026-11-02: Built (Minus approved the same day): `lib/std/data/egraph.hthr`, `docs/grind-design.md` §8. `EGraph<Op, J>` with `add`/`fresh`/`union`/`close` over any operator, explanations through `PathAlg<J, P>`, and soundness against a denotation (`Agrees`, preserved by `empty`/`fresh`/`add`/`union`/`close`; `same_class_sound`). grind runs on it. Probes in `lib/_tests/std/data/egraph_tests.hthr`, including `by_classes`, which proves an equation from a class with no explanation. Not built: the `≈` path algebra, and a value theorem for a hash-consed `add`.
+- 2026-11-02: Follow-ups filed (Minus asked 2026-11-02): [[egraph-setoid-path-algebra]], [[egraph-add-value-theorem]], [[egraph-scaling-structures]].

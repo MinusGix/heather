@@ -258,7 +258,9 @@ once ([egraph-library](../issues/egraph-library.md)). It is
   operator and congruence reads only the function.
 
 What the library does not have yet: a `≈` path algebra with `Proper`
-congruences (a setoid client builds it from `PathAlg`), a theorem that a
-hash-consed `add` returns a node of the requested value (clients that need
-it use `fresh`), and union by rank or a signature table (§5).
+congruences ([egraph-setoid-path-algebra](../issues/egraph-setoid-path-algebra.md)),
+a theorem that a hash-consed `add` returns a node of the requested value
+([egraph-add-value-theorem](../issues/egraph-add-value-theorem.md); clients
+that need it use `fresh`), and union by rank or a signature table
+([egraph-scaling-structures](../issues/egraph-scaling-structures.md), §5).
 
