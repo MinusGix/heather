@@ -5,7 +5,10 @@
 // They are written in the shapes the default `runtime fn` setup lowers
 // (docs/runtime-fn-setups-design.md §7.4): `for` over a list, `let mut`
 // locals, statement `if` and `match`, and `mut self` calls on the world
-// (docs/effects-capabilities-design.md). No function here recurses, so
+// (docs/effects-capabilities-design.md). The calls are the word-level ones
+// `rt_io` reflects (`Io::read_into` into a buffer the program keeps,
+// `Io::write_from` of a span), so the reads and writes here are the
+// machine's, results and errnos as words. No function here recurses, so
 // nothing needs procedures. A line is a `List<BitVec(8)>` and the input a
 // `List<List<BitVec(8)>>`, which the setup will lay out as arena cells
 // (`native_arena`): `Cons` is a cell written at the arena's top, `Nil` the
@@ -34,11 +37,14 @@ import list;
 import option;
 import pair;
 import bool;
+import algebra;
 import bitvec;
 import linux_calls;
 import linux_world;
+import native_source;
+import rt_io;
 
-fn newline() → BitVec(8) { BitVec::ofNat(10) }
+fn newline() → BitVec(8) { 10 }
 
 // ---------------------------------------------------------------------------
 // Reading lines
@@ -57,8 +63,8 @@ fn LineReader::feed(self r: LineReader, bytes: List<BitVec(8)>, keep_newline: Bo
     let mut done = r.done;
     let mut open = r.open;
     for c in bytes {
-        if c.eq_bit(newline()) = Bool::True {
-            if keep_newline = Bool::True { open := open ++ [c] }
+        if c.eq_bit(newline()) = True {
+            if keep_newline = True { open := open ++ [c] }
             done := List::Cons(open, done);
             open := []
         } else {
@@ -79,51 +85,73 @@ fn List::lines_last_first(self bytes: List<BitVec(8)>, keep_newline: Bool) → L
     LineReader::empty().feed(bytes, keep_newline).lines()
 }
 
-// Standard input read to its end, `capacity` bytes at a time, as lines,
-// the last first; `None` if a read fails. `passes` bounds the reads, as a
-// source's `Repeat` is bounded by its fuel.
-fn Io::read_lines(mut self io: Io, capacity: Nat, keep_newline: Bool, passes: List<Nat>) → Option<List<List<BitVec(8)>>> {
+// Standard input read to its end into `buf`, at most `capacity` bytes at a
+// time, as lines, the last first; `None` if a read fails. `passes` bounds
+// the reads, as a source's `Repeat` is bounded by its fuel. (A failed read
+// leaves the loop through a flag: `return` is refused in a `mut self`
+// method for now, issues/mut-self-early-return.md.)
+fn Io::read_lines(mut self io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), keep_newline: Bool, passes: List<Nat>)
+    → Option<List<List<BitVec(8)>>>
+{
     let mut r = LineReader::empty();
-    let mut failed = Bool::False;
+    let mut held = buf;
+    let mut failed: Bool = False;
     for _ in passes {
-        let got = io.read(Io::stdin(), capacity);
-        match got {
-            ReadFailed(_) => { failed := Bool::True; break },
-            ReadBytes(bytes) => {
-                if bytes.len() = 0 { break }
-                r := r.feed(bytes, keep_newline)
-            },
-        }
+        let got = io.read_into(Io::stdin(), held, capacity);
+        if got.result.signed_lt_bit(0) = True { failed := True; break }
+        if got.result.eq_bit(0) = True { break }
+        held := got.buf;
+        r := r.feed(span(got.buf, 0, got.result.toNat()), keep_newline)
     }
     match failed { True => None, False => Some(r.lines()) }
 }
 
 // ---------------------------------------------------------------------------
-// tac
+// Writing lines
+
+// The bytes written to stdout, a write at a time, again for what is left
+// until all are sent: whether all of it went. A failed write, or running out
+// of passes, is `False`. The length is the buffer's length word.
+fn Io::write_bytes(mut self io: Io, bytes: List<BitVec(8)>, passes: List<Nat>) → Bool {
+    let len: BitVec(64) = BitVec::ofNat(bytes.len());
+    let mut sent: BitVec(64) = 0;
+    let mut failed: Bool = False;
+    for _ in passes {
+        if sent.eq_bit(len) = True { break }
+        let wrote = io.write_from(Io::stdout(), bytes, sent, len.sub(sent));
+        if wrote.signed_lt_bit(0) = True { failed := True; break }
+        sent := sent.add(wrote)
+    }
+    failed.not().and(sent.eq_bit(len))
+}
 
 // Each line written to stdout in the list's order: whether every write went.
 fn Io::write_lines(mut self io: Io, lines: List<List<BitVec(8)>>, passes: List<Nat>) → Bool {
-    let mut ok = Bool::True;
+    let mut ok: Bool = True;
     for line in lines {
-        let wrote = io.write_all(Io::stdout(), line, passes);
-        if wrote = Bool::False { ok := Bool::False; break }
+        let wrote = io.write_bytes(line, passes);
+        if wrote = False { ok := False; break }
     }
     ok
 }
+
+// ---------------------------------------------------------------------------
+// tac
 
 // GNU's `tac` over stdin: its lines, each with its newline, written last
 // first, and a last line without a newline written first and as it is
 // ("a\nb" gives "ba\n"). A failed read or write exits 1. Reading conses
 // each line onto the ones before it, so the list read is already the
-// output's order.
-fn Io::tac(mut self io: Io, capacity: Nat, passes: List<Nat>) → BitVec(64) {
-    let mut status: BitVec(64) = BitVec::ofNat(0);
-    let read = io.read_lines(capacity, Bool::True, passes);
+// output's order. `buf` is the read buffer, `capacity` the most one read
+// asks for.
+fn Io::tac(mut self io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), passes: List<Nat>) → BitVec(64) {
+    let mut status: BitVec(64) = 0;
+    let read = io.read_lines(buf, capacity, True, passes);
     match read {
-        None => { status := BitVec::ofNat(1) },
+        None => { status := 1 },
         Some(lines) => {
             let ok = io.write_lines(lines, passes);
-            if ok = Bool::False { status := BitVec::ofNat(1) }
+            if ok = False { status := 1 }
         },
     }
     status
@@ -139,15 +167,15 @@ fn List::bytes_before(self a: List<BitVec(8)>, b: List<BitVec(8)>) → Bool {
     let mut rest = b;
     for x in a {
         match rest {
-            Nil => { return Bool::False },
+            Nil => { return False },
             Cons(y, more) => {
-                if x.unsigned_lt_bit(y) = Bool::True { return Bool::True }
-                if y.unsigned_lt_bit(x) = Bool::True { return Bool::False }
+                if x.unsigned_lt_bit(y) = True { return True }
+                if y.unsigned_lt_bit(x) = True { return False }
                 rest := more
             },
         }
     }
-    match rest { Nil => Bool::False, Cons(_, _) => Bool::True }
+    match rest { Nil => False, Cons(_, _) => True }
 }
 
 // A line and its place in the list (counted from 1), or the place 0 for
@@ -161,9 +189,10 @@ fn LinePick::before(self a: LinePick, b: LinePick) → Bool {
     a.line.bytes_before(b.line).or(b.line.bytes_before(a.line).not().and(Succ(a.at).leb(b.at)))
 }
 
-// The least line after `last` (every line, when `last` is none), or none.
-// One walk down the list, keeping the best so far beside its place.
-fn List::least_after(self lines: List<List<BitVec(8)>>, last: LinePick) → LinePick {
+// The line of `lines` that comes next after this one in the order (the
+// least of all, from none), or none after the last. One walk down the list,
+// keeping the best so far beside its place.
+fn LinePick::next_in(self last: LinePick, lines: List<List<BitVec(8)>>) → LinePick {
     let mut best = LinePick::none();
     let mut at = 0;
     for line in lines {
@@ -171,22 +200,24 @@ fn List::least_after(self lines: List<List<BitVec(8)>>, last: LinePick) → Line
         let here = LinePick(at, line);
         let later = last.at.same(0).or(last.before(here));
         let better = best.at.same(0).or(here.before(best));
-        if later.and(better) = Bool::True { best := here }
+        if later.and(better) = True { best := here }
     }
     best
 }
 
 // The lines written to stdout in order, each with a newline: as many walks
-// as there are lines, each writing the least line after the one written
+// as there are lines, each writing the line next after the one written
 // before it. The list is only read, so sorting allocates nothing, which
 // keeps the arena write-once. Whether every write went.
 fn Io::write_sorted(mut self io: Io, lines: List<List<BitVec(8)>>, passes: List<Nat>) → Bool {
-    let mut ok = Bool::True;
+    let mut ok: Bool = True;
     let mut last = LinePick::none();
     for _ in lines {
-        let next = lines.least_after(last);
-        let wrote = io.write_all(Io::stdout(), next.line ++ [newline()], passes);
-        if wrote = Bool::False { ok := Bool::False; break }
+        let next = last.next_in(lines);
+        let wrote = io.write_bytes(next.line, passes);
+        if wrote = False { ok := False; break }
+        let ended = io.write_bytes([newline()], passes);
+        if ended = False { ok := False; break }
         last := next
     }
     ok
@@ -195,14 +226,14 @@ fn Io::write_sorted(mut self io: Io, lines: List<List<BitVec(8)>>, passes: List<
 // GNU's `sort` over stdin in the C locale (`LC_ALL=C`): its lines, each
 // written with a newline (a last line without one gets one), in byte
 // order. A failed read or write exits 2, as GNU's does.
-fn Io::sort(mut self io: Io, capacity: Nat, passes: List<Nat>) → BitVec(64) {
-    let mut status: BitVec(64) = BitVec::ofNat(0);
-    let read = io.read_lines(capacity, Bool::False, passes);
+fn Io::sort(mut self io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), passes: List<Nat>) → BitVec(64) {
+    let mut status: BitVec(64) = 0;
+    let read = io.read_lines(buf, capacity, False, passes);
     match read {
-        None => { status := BitVec::ofNat(2) },
+        None => { status := 2 },
         Some(lines) => {
             let ok = io.write_sorted(lines, passes);
-            if ok = Bool::False { status := BitVec::ofNat(2) }
+            if ok = False { status := 2 }
         },
     }
     status

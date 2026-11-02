@@ -9,6 +9,7 @@ import nat;
 import list;
 import option;
 import bool;
+import algebra;
 import bitvec;
 import itree;
 import linux_calls;
@@ -19,7 +20,8 @@ import native_build;
 import native_heap_tools;
 import line_tools;
 
-fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+// A read buffer of `n` bytes.
+fn zeros(n: Nat) → List<BitVec(8)> { List::replicate(0, n) }
 
 // What a run shows: its status and the bytes it wrote to stdout.
 record Outcome { status: BitVec(64), out: List<BitVec(8)> }
@@ -35,49 +37,49 @@ fn piped(chunks: List<List<BitVec(8)>>) → Io { Io::of(World::piped(chunks)) }
 
 // "a\n" then "bc" then "\nd": three reads, a line across two of them, and a
 // last line with no newline.
-fn three_chunks() → Io { piped([[b(97), b(10)], [b(98), b(99)], [b(10), b(100)]]) }
+fn three_chunks() → Io { piped([[97, 10], [98, 99], [10, 100]]) }
 
 // "b\n\na\nb\n" in one read: lines alike, and an empty line.
-fn alike() → Io { piped([[b(98), b(10), b(10), b(97), b(10), b(98), b(10)]]) }
+fn alike() → Io { piped([[98, 10, 10, 97, 10, 98, 10]]) }
 
 // "ab\na\nB": a line before every longer line it begins, and bytes compared
 // unsigned ('B' < 'a').
-fn prefixes() → Io { piped([[b(97), b(98), b(10), b(97), b(10), b(66)]]) }
+fn prefixes() → Io { piped([[97, 98, 10, 97, 10, 66]]) }
 
 // ---------------------------------------------------------------------------
 // Reading lines
 
-theorem lines_kept(): List::lines_last_first([b(97), b(10), b(98)], Bool::True) = [[b(98)], [b(97), b(10)]] { refl }
-theorem lines_dropped(): List::lines_last_first([b(97), b(10), b(98)], Bool::False) = [[b(98)], [b(97)]] { refl }
-theorem lines_empty(): List::lines_last_first([], Bool::True) = [] { refl }
+theorem lines_kept(): List::lines_last_first([97, 10, 98], True) = [[98], [97, 10]] { refl }
+theorem lines_dropped(): List::lines_last_first([97, 10, 98], False) = [[98], [97]] { refl }
+theorem lines_empty(): List::lines_last_first([], True) = [] { refl }
 // A lone newline is one empty line.
-theorem lines_blank(): List::lines_last_first([b(10)], Bool::False) = [[]] { refl }
+theorem lines_blank(): List::lines_last_first([10], False) = [[]] { refl }
 
 // Neutral reader: no bytes leave it as it is, and a byte that is not a
 // newline joins the open line whatever came before.
 theorem feed_nothing(r: LineReader, k: Bool): r.feed([], k) = r { refl }
-theorem feed_byte(r: LineReader, k: Bool): r.feed([b(97)], k) = LineReader(r.done, r.open ++ [b(97)]) { refl }
-theorem feed_newline(r: LineReader): r.feed([b(10)], Bool::False) = LineReader(List::Cons(r.open, r.done), []) { refl }
+theorem feed_byte(r: LineReader, k: Bool): r.feed([97], k) = LineReader(r.done, r.open ++ [97]) { refl }
+theorem feed_newline(r: LineReader): r.feed([10], False) = LineReader(List::Cons(r.open, r.done), []) { refl }
 
 // ---------------------------------------------------------------------------
 // The byte order
 
-theorem before_less(): List::bytes_before([b(97)], [b(98)]) = Bool::True { refl }
-theorem before_prefix(): List::bytes_before([b(97)], [b(97), b(98)]) = Bool::True { refl }
-theorem before_longer(): List::bytes_before([b(97), b(98)], [b(97)]) = Bool::False { refl }
-theorem before_self(): List::bytes_before([b(97), b(98)], [b(97), b(98)]) = Bool::False { refl }
+theorem before_less(): List::bytes_before([97], [98]) = True { refl }
+theorem before_prefix(): List::bytes_before([97], [97, 98]) = True { refl }
+theorem before_longer(): List::bytes_before([97, 98], [97]) = False { refl }
+theorem before_self(): List::bytes_before([97, 98], [97, 98]) = False { refl }
 // Unsigned: 0xff comes after 'a'.
-theorem before_unsigned(): List::bytes_before([b(255)], [b(97)]) = Bool::False { refl }
+theorem before_unsigned(): List::bytes_before([255], [97]) = False { refl }
 // The empty line comes before every other, and not before itself.
-theorem before_empty(x: BitVec(8), xs: List<BitVec(8)>): List::bytes_before([], List::Cons(x, xs)) = Bool::True { refl }
-theorem before_empty_self(): List::bytes_before([], []) = Bool::False { refl }
+theorem before_empty(x: BitVec(8), xs: List<BitVec(8)>): List::bytes_before([], List::Cons(x, xs)) = True { refl }
+theorem before_empty_self(): List::bytes_before([], []) = False { refl }
 
 // ---------------------------------------------------------------------------
 // tac
 
-theorem tac_three(): Outcome::of(Io::tac(three_chunks(), 4, List::range(8)))
-    = Outcome(BitVec::ofNat(0), [b(100), b(98), b(99), b(10), b(97), b(10)]) { refl }
-theorem tac_nothing(): Outcome::of(Io::tac(piped([]), 4, List::range(4))) = Outcome(BitVec::ofNat(0), []) { refl }
+theorem tac_three(): Outcome::of(Io::tac(three_chunks(), zeros(4), 4, List::range(8)))
+    = Outcome(0, [100, 98, 99, 10, 97, 10]) { refl }
+theorem tac_nothing(): Outcome::of(Io::tac(piped([]), zeros(4), 4, List::range(4))) = Outcome(0, []) { refl }
 
 // A world whose reads fail: nothing written, status 1.
 fn broken() → World() {
@@ -89,30 +91,30 @@ fn broken() → World() {
         StatCmd(_) => StatFailed(2),
     }
 }
-theorem tac_read_fails(): Outcome::of(Io::tac(Io::of(broken()), 4, List::range(4))) = Outcome(BitVec::ofNat(1), []) { refl }
+theorem tac_read_fails(): Outcome::of(Io::tac(Io::of(broken()), zeros(4), 4, List::range(4))) = Outcome(1, []) { refl }
 
 // A world whose writes fail: status 1.
 fn deaf() → World() {
     λ past c => match c {
-        ReadCmd(_, _) => match Exchange::reads(past) { Zero => ReadBytes([b(97), b(10)]), Succ(_) => ReadBytes([]) },
+        ReadCmd(_, _) => match Exchange::reads(past) { Zero => ReadBytes([97, 10]), Succ(_) => ReadBytes([]) },
         WriteCmd(_, _) => WriteFailed(5),
         OpenCmd(_) => OpenFailed(2),
         CloseCmd(_) => Closed,
         StatCmd(_) => StatFailed(2),
     }
 }
-theorem tac_write_fails(): Outcome::of(Io::tac(Io::of(deaf()), 4, List::range(4))).status = BitVec::ofNat(1) { refl }
+theorem tac_write_fails(): Outcome::of(Io::tac(Io::of(deaf()), zeros(4), 4, List::range(4))).status = 1 { refl }
 
 // ---------------------------------------------------------------------------
 // sort
 
-theorem sort_alike(): Outcome::of(Io::sort(alike(), 8, List::range(8)))
-    = Outcome(BitVec::ofNat(0), [b(10), b(97), b(10), b(98), b(10), b(98), b(10)]) { refl }
-theorem sort_prefixes(): Outcome::of(Io::sort(prefixes(), 8, List::range(8)))
-    = Outcome(BitVec::ofNat(0), [b(66), b(10), b(97), b(10), b(97), b(98), b(10)]) { refl }
-theorem sort_nothing(): Outcome::of(Io::sort(piped([]), 4, List::range(4))) = Outcome(BitVec::ofNat(0), []) { refl }
-theorem sort_read_fails(): Outcome::of(Io::sort(Io::of(broken()), 4, List::range(4))) = Outcome(BitVec::ofNat(2), []) { refl }
-theorem sort_write_fails(): Outcome::of(Io::sort(Io::of(deaf()), 4, List::range(4))).status = BitVec::ofNat(2) { refl }
+theorem sort_alike(): Outcome::of(Io::sort(alike(), zeros(8), 8, List::range(8)))
+    = Outcome(0, [10, 97, 10, 98, 10, 98, 10]) { refl }
+theorem sort_prefixes(): Outcome::of(Io::sort(prefixes(), zeros(8), 8, List::range(8)))
+    = Outcome(0, [66, 10, 97, 10, 97, 98, 10]) { refl }
+theorem sort_nothing(): Outcome::of(Io::sort(piped([]), zeros(4), 4, List::range(4))) = Outcome(0, []) { refl }
+theorem sort_read_fails(): Outcome::of(Io::sort(Io::of(broken()), zeros(4), 4, List::range(4))) = Outcome(2, []) { refl }
+theorem sort_write_fails(): Outcome::of(Io::sort(Io::of(deaf()), zeros(4), 4, List::range(4))).status = 2 { refl }
 
 // ---------------------------------------------------------------------------
 // The builder tools, read against the same worlds. A builder tool's source
@@ -125,6 +127,6 @@ theorem sort_write_fails(): Outcome::of(Io::sort(Io::of(deaf()), 4, List::range(
 // tools pass (crates/cli/tests/native_tools.rs) are what the literal probes
 // above transcribe.
 
-theorem tac_line(): Outcome::of(Io::tac(piped([[b(97), b(10)]]), 2, List::range(4))) = Outcome(BitVec::ofNat(0), [b(97), b(10)]) { refl }
-theorem tac_source_line(): tac(2, 16).outcome(piped([[b(97), b(10)]]), 16) = Some(Outcome(BitVec::ofNat(0), [b(97), b(10)])) { refl }
-theorem tac_source_nothing(): tac(2, 16).outcome(piped([]), 16) = Some(Outcome(BitVec::ofNat(0), [])) { refl }
+theorem tac_line(): Outcome::of(Io::tac(piped([[97, 10]]), zeros(2), 2, List::range(4))) = Outcome(0, [97, 10]) { refl }
+theorem tac_source_line(): tac(2, 16).outcome(piped([[97, 10]]), 16) = Some(Outcome(0, [97, 10])) { refl }
+theorem tac_source_nothing(): tac(2, 16).outcome(piped([]), 16) = Some(Outcome(0, [])) { refl }

@@ -131,24 +131,26 @@ fn rt_literal(h: Handle) → Tac<Nat> {
 
 // Whether a type is `BitVec(8)`.
 fn Known::is_byte(self k: Known, h: Handle) → Tac<Bool> {
-    view(h).bind(λ v => match v {
+    let v <- view(h);
+    match v {
         HGlobal(g, _, args) => match g.id.same(k.bitvec) {
-            True => match args { Cons(w, _) => rt_literal(w).bind(λ n => Pure(n.same(8))), Nil => Pure(False) },
+            True => match args { Cons(w, _) => { let n <- rt_literal(w); Pure(n.same(8)) }, Nil => Pure(False) },
             False => Pure(False),
         },
         _ => Pure(False),
-    })
+    }
 }
 
 // Whether a type is `List<BitVec(8)>`.
 fn Known::is_bytes(self k: Known, h: Handle) → Tac<Bool> {
-    view(h).bind(λ v => match v {
+    let v <- view(h);
+    match v {
         HGlobal(g, _, args) => match g.id.same(k.list) {
             True => match args { Cons(a, _) => k.is_byte(a), Nil => Pure(False) },
             False => Pure(False),
         },
         _ => Pure(False),
-    })
+    }
 }
 
 fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {

@@ -310,7 +310,12 @@ The parts that do not wait on R6:
 - **The customers, written.** `lib/native/runtime/line_tools.hthr` has
   `Io::tac` and `Io::sort` as ordinary Heather over `Io`: `let mut`, `for`
   over lists, statement `if` and `match`, and `mut self` reads and writes.
-  Nothing in them recurses, so none needs procedures. The input is read
+  The calls are `rt_io`'s word-level ones (`Io::read_into` into a buffer
+  the program keeps, `Io::write_from` of a span), so they will reflect
+  through `ETm`. A line written out of the arena is then a span of the arena
+  buffer, so a `Bytes` value has to be lowerable as a view (buffer, offset,
+  length), not only as a whole buffer. Nothing in them recurses, so none
+  needs procedures. The input is read
   into a `LineReader`, whose finished lines are consed last first, the
   order the arena holds them in. `tac` writes that list as it is. `sort`
   writes it in byte order by the builder's selection, one walk per line,
