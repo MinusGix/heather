@@ -71,4 +71,9 @@ the refusal, the negative control, and the structural controls).
 Not covered: a parameter whose *type* mentions a varied one (generalized by
 dependency closure in `generalize::varying_params`) is not itself treated as
 varied by the surface planner; a `let` bound from such a parameter alone
-above the `match` would still be stale. No library code has the shape.
+above the `match` would still be stale.
+
+Audit: a whole-library `heather check` with the fix raised no
+`recursion-by-measure` note and no new error outside `lib/_tests`'s expected
+refusals, so no library `fn` had the shape (grind's `saturate` had already
+been rewritten match-first).
