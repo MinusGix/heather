@@ -869,7 +869,7 @@ impl Elaborator {
         mlvl: Level,
         span: Span,
     ) -> R<Term> {
-        let dec = crate::recursion::descends_on_param(cx, &scrut);
+        let dec = crate::recursion::guard_param(cx, &scrut, arms);
         let Some(p) = WParts::read(scrut_ty, &cx.gamma) else {
             return err("internal: a tier-2 declaration did not lower to its `W` encoding", span);
         };

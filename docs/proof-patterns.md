@@ -107,9 +107,13 @@ property of Heather.
   (`docs/ih-generalization-design.md`), but not for a self-call under an
   `∃` in a `Type`-valued `fn`; curry that one by hand (`summation.hthr`'s
   `List::RecSum_of`, [[ih-generalization-under-exists]]).
-- The guard is the nearest `match` on a parameter: a self-call under a case
-  split on another parameter is refused
-  ([[recursion-guard-takes-nearest-parameter-match]]); split in a helper.
+- A case split on another parameter inside a recursion is fine: the guard
+  is the `match` a self-call descends through
+  ([[recursion-guard-takes-nearest-parameter-match]]). Not yet in a theorem
+  about the split parameter, whose ih mentions it; split in a helper there
+  ([[recursion-case-split-dependent-ih]]). The outermost `match` on a
+  parameter is still the guard even when nothing descends through it
+  ([[recursion-outer-match-takes-guard-without-descent]]).
 - A motive-less nested match on a `Cons` tail needs a written motive
   ([[nested-match-on-list-tail-motive]]).
 - **Don't match on a large theorem call's result.** `match lemma(..) as

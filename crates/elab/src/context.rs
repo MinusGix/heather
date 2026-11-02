@@ -97,6 +97,11 @@ pub(crate) struct Cx {
     /// elaborate — only so an unguarded self-call there can say that codata
     /// has no structural order (docs/codata-elaborator-design.md §4).
     pub(crate) codata_match: Option<Rc<str>>,
+    /// The `match`es on a parameter, inside the recursion, that were passed
+    /// over as case splits (`recursion::guard_param`), each with the guard
+    /// that stood through it — only so a self-call that descends neither can
+    /// name every `match` it was checked against. Empty outside them.
+    pub(crate) case_splits: Rc<Vec<(usize, Rc<crate::recursion::Guard>)>>,
     /// The enclosing matches whose arm equation is pending: in scope for the
     /// readers of hypotheses, not yet in Γ
     /// (docs/dependent-match-compiler-design.md §4.3). A reader records the
@@ -242,6 +247,7 @@ impl Cx {
             corec: None,
             friend: None,
             codata_match: None,
+            case_splits: Rc::new(Vec::new()),
             pending_eqs: Rc::new(Vec::new()),
             arm_type_probe: None,
         }
@@ -306,6 +312,7 @@ impl Cx {
             corec: None,
             friend: None,
             codata_match: None,
+            case_splits: Rc::new(Vec::new()),
             pending_eqs: Rc::new(Vec::new()),
             arm_type_probe: None,
         }

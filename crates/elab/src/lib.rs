@@ -5359,8 +5359,13 @@ impl Elaborator {
                 // same way (issues/elab-match-refines-hypothesis-kernel-
                 // rejects.md): they join the generalized positions, so each
                 // arm sees them at its constructor.
+                // Only the `match` that is the recursion generalizes: a case
+                // split on a parameter every self-call passes unchanged
+                // leaves the enclosing guard standing (`guard_param`), and
+                // its arms' calls vary nothing of its own.
                 let dec = recursion::descends_on_param(cx, &scrut_t);
-                let mut positions = match dec {
+                let guard = recursion::guard_param(cx, &scrut_t, arms);
+                let mut positions = match guard {
                     Some(dec) => self.varying_params(cx, arms, dec),
                     None => Vec::new(),
                 };
@@ -5384,7 +5389,7 @@ impl Elaborator {
                     let arms = self.wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
                     let mut gcx = cx.clone();
-                    if let Some(dec) = dec {
+                    if let Some(dec) = guard {
                         gcx.generalized = Some(Rc::new(generalize::Generalization {
                             dec,
                             positions: Rc::clone(&positions),

@@ -1360,7 +1360,7 @@ impl Elaborator {
 
         let (shape, slvl) = fam.shape();
         let spine = self.spine(shape, slvl, n, span)?;
-        let dec = crate::recursion::descends_on_param(cx, &scrut);
+        let dec = crate::recursion::guard_param(cx, &scrut, arms);
         // The index a recursion may vary: the family's own when it is a
         // parameter, or a member's, under its member constructor
         // (docs/mutual-inductive-design.md §5).
