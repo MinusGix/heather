@@ -376,7 +376,7 @@ impl Elaborator {
         let n = tel.len() as u32;
         let tel_vars: Vec<Rc<Term>> = (0..n).map(|k| Rc::new(Term::Var(LocalVar(n - 1 - k)))).collect();
         let (l, li) = (sig.level.clone(), sig.idx_level.clone());
-        let lvl = |a: &Level, b: &Level| Level::max(a.clone(), b.clone()).normalize().canonical();
+        let lvl = |a: &Level, b: &Level| Level::max(a.clone(), b.clone());
         // n : Π(x : S). Nat.
         let ar_stmt = Type::Pi {
             dom_level: l.clone(),

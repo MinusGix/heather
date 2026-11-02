@@ -1591,7 +1591,7 @@ impl Elaborator {
                 dom: Rc::new(dom.clone()),
                 cod: Rc::new(ty),
             };
-            ty_level = Level::max(dom_level.clone(), ty_level).normalize().canonical();
+            ty_level = Level::max(dom_level.clone(), ty_level);
         }
         Some(CodeFnAt { template, l, targs, ty, ty_level, body })
     }
@@ -4645,7 +4645,7 @@ fn wrap_tel(tel: &[(Type, Level)], inner: Type, inner_level: Level) -> (Type, Le
             dom: Rc::new(dom.clone()),
             cod: Rc::new(ty),
         };
-        level = Level::max(dom_level.clone(), level).normalize().canonical();
+        level = Level::max(dom_level.clone(), level);
     }
     (ty, level)
 }
@@ -4662,7 +4662,7 @@ fn wrap_tel_lam(tel: &[(Type, Level)], inner: Term, inner_level: Level) -> Term 
             dom: Rc::new(dom.clone()),
             body: Rc::new(body),
         };
-        level = Level::max(dom_level.clone(), level).normalize().canonical();
+        level = Level::max(dom_level.clone(), level);
     }
     body
 }

@@ -25,7 +25,7 @@
 // fails, it does not leave goals open.
 //
 // The laws are the carriers' own theorems, named in `mono_carriers`, or the
-// classes' (`OrderedAddGroup::add_le_mono_l`, …), named in `mono_classes`,
+// classes' (`OrderedAddMonoid::add_le_mono_l`, …), named in `mono_classes`,
 // whose dictionary `apply` finds in scope the way a call does; a name that
 // does not resolve where the tactic runs is skipped, so a client that does
 // not import `creal` pays nothing for it. `mono_with(hs)` takes the facts the
@@ -176,55 +176,81 @@ fn class_law(strict: Bool, op: ClassOp, moves: List<Nat>, lemma: String) → Cla
 
 fn class_sign(strict: Bool, op: ClassOp, lemma: String) → ClassSign { ClassSign(strict, op, lemma) }
 
-// Translation and negation, at every group.
-fn mono_group_laws() → List<ClassLaw> {
+// Translation, at every ordered monoid.
+fn mono_monoid_laws() → List<ClassLaw> {
     [
-        class_law(False, Index(4), [1], "OrderedAddGroup::add_le_mono_l"),
-        class_law(False, Index(4), [0], "OrderedAddGroup::add_le_mono_r"),
-        class_law(True, Index(4), [1], "OrderedAddGroup::add_lt_mono_l"),
-        class_law(True, Field("inv"), [1], "OrderedAddGroup::neg_lt"),
+        class_law(False, Index(4), [1], "OrderedAddMonoid::add_le_mono_l"),
+        class_law(False, Index(4), [0], "OrderedAddMonoid::add_le_mono_r"),
+        class_law(True, Index(4), [1], "OrderedAddMonoid::add_lt_mono_l"),
     ]
+}
+
+// What a group adds: negation.
+fn mono_neg_law() → List<ClassLaw> {
+    [class_law(True, Field("inv"), [1], "OrderedAddGroup::neg_lt")]
 }
 
 // What locatedness adds: both summands at once, a strict and a weak bound
-// together, and negation at `<=`.
+// together, and a sum's terms.
 fn mono_located_laws() → List<ClassLaw> {
     [
-        class_law(False, Index(4), [0, 1], "LocatedAddGroup::add_le_mono"),
-        class_law(False, Field("inv"), [1], "LocatedAddGroup::neg_le"),
-        class_law(True, Index(4), [0, 1], "LocatedAddGroup::add_lt_le_mono"),
-        class_law(False, Named("MonoidRel::range"), [2], "LocatedAddGroup::range_le"),
+        class_law(False, Index(4), [0, 1], "LocatedAddMonoid::add_le_mono"),
+        class_law(True, Index(4), [0, 1], "LocatedAddMonoid::add_lt_le_mono"),
+        class_law(False, Named("MonoidRel::range"), [2], "LocatedAddMonoid::range_le"),
     ]
 }
 
-fn mono_field_laws() → List<ClassLaw> {
+// Negation at `<=`, which needs both.
+fn mono_located_neg_law() → List<ClassLaw> {
+    [class_law(False, Field("inv"), [1], "LocatedAddGroup::neg_le")]
+}
+
+fn mono_group_laws() → List<ClassLaw> { mono_monoid_laws() ++ mono_neg_law() }
+
+fn mono_located_group_laws() → List<ClassLaw> {
+    mono_group_laws() ++ mono_located_laws() ++ mono_located_neg_law()
+}
+
+// Products by a nonnegative or positive factor, at every ordered semiring.
+fn mono_semiring_laws() → List<ClassLaw> {
     [
-        class_law(False, Index(5), [1], "OrderedField::mul_le_mono_l"),
-        class_law(False, Index(5), [0], "OrderedField::mul_le_mono_r"),
-        class_law(False, Index(5), [0, 1], "OrderedField::mul_le_mul"),
-        class_law(True, Index(5), [1], "OrderedField::mul_lt_mono_l"),
-        class_law(True, Index(5), [0], "OrderedField::mul_lt_mono_r"),
+        class_law(False, Index(5), [1], "OrderedSemiring::mul_le_mono_l"),
+        class_law(False, Index(5), [0], "OrderedSemiring::mul_le_mono_r"),
+        class_law(False, Index(5), [0, 1], "OrderedSemiring::mul_le_mul"),
+        class_law(True, Index(5), [1], "OrderedSemiring::mul_lt_mono_l"),
+        class_law(True, Index(5), [0], "OrderedSemiring::mul_lt_mono_r"),
+    ]
+}
+
+fn mono_located_signs() → List<ClassSign> {
+    [
+        class_sign(True, Index(4), "OrderedAddMonoid::add_pos"),
+        class_sign(False, Index(4), "LocatedAddMonoid::add_nonneg"),
+        class_sign(False, Named("MonoidRel::range"), "LocatedAddMonoid::range_nonneg"),
+    ]
+}
+
+fn mono_semiring_signs() → List<ClassSign> {
+    mono_located_signs() ++ [
+        class_sign(False, Index(5), "OrderedSemiring::mul_nonneg"),
+        class_sign(True, Index(5), "OrderedSemiring::mul_pos"),
     ]
 }
 
 // The classes, strongest first.
 fn mono_classes() → List<MonoClass> {
     [
-        MonoClass("OrderedField", 2, 3, mono_group_laws() ++ mono_located_laws() ++ mono_field_laws(), [
-            class_sign(True, Index(4), "OrderedAddGroup::add_pos"),
-            class_sign(False, Index(4), "LocatedAddGroup::add_nonneg"),
-            class_sign(False, Named("MonoidRel::range"), "LocatedAddGroup::range_nonneg"),
-            class_sign(False, Index(5), "OrderedField::mul_nonneg"),
-            class_sign(True, Index(5), "OrderedField::mul_pos_of_pos"),
-            class_sign(True, Field("recip"), "OrderedField::recip_pos"),
+        MonoClass("OrderedField", 2, 3, mono_located_group_laws() ++ mono_semiring_laws(),
+            mono_semiring_signs() ++ [class_sign(True, Field("recip"), "OrderedField::recip_pos")]),
+        MonoClass("OrderedRing", 2, 3, mono_located_group_laws() ++ mono_semiring_laws(), mono_semiring_signs()),
+        MonoClass("OrderedSemiring", 2, 3, mono_monoid_laws() ++ mono_located_laws() ++ mono_semiring_laws(), mono_semiring_signs()),
+        MonoClass("LocatedAddGroup", 2, 3, mono_located_group_laws(), mono_located_signs()),
+        MonoClass("LocatedAddMonoid", 2, 3, mono_monoid_laws() ++ mono_located_laws(), mono_located_signs()),
+        MonoClass("OrderedAddGroup", 2, 3, mono_group_laws() ++ [class_law(True, Index(4), [0, 1], "OrderedAddMonoid::add_lt_mono")], [
+            class_sign(True, Index(4), "OrderedAddMonoid::add_pos"),
         ]),
-        MonoClass("LocatedAddGroup", 2, 3, mono_group_laws() ++ mono_located_laws(), [
-            class_sign(True, Index(4), "OrderedAddGroup::add_pos"),
-            class_sign(False, Index(4), "LocatedAddGroup::add_nonneg"),
-            class_sign(False, Named("MonoidRel::range"), "LocatedAddGroup::range_nonneg"),
-        ]),
-        MonoClass("OrderedAddGroup", 2, 3, mono_group_laws() ++ [class_law(True, Index(4), [0, 1], "OrderedAddGroup::add_lt_mono")], [
-            class_sign(True, Index(4), "OrderedAddGroup::add_pos"),
+        MonoClass("OrderedAddMonoid", 2, 3, mono_monoid_laws() ++ [class_law(True, Index(4), [0, 1], "OrderedAddMonoid::add_lt_mono")], [
+            class_sign(True, Index(4), "OrderedAddMonoid::add_pos"),
         ]),
         MonoClass("PseudoOrder", 2, 3, [], []),
         MonoClass("StrictOrder", 2, 3, [], []),

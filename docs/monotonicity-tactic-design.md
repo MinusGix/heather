@@ -168,8 +168,8 @@ local, which `View` presents as `HField(record, name, args)`
   keyed by what those are at this dictionary: the comparison of two sides'
   operations is over a key that is a global, a local or a field name.
 - **The laws.** They are the classes' theorems, stated once, by the weakest
-  class that proves them (`OrderedAddGroup::add_le_mono_l`,
-  `LocatedAddGroup::neg_le`, `OrderedField::mul_le_mono_l`), and a class's
+  class that proves them (`OrderedAddMonoid::add_le_mono_l`,
+  `LocatedAddGroup::neg_le`, `OrderedSemiring::mul_le_mono_l`), and a class's
   table is its ancestors' rows and its own. `apply` uses them unchanged:
   `Match` fills a class lemma's dictionary and the indices its conclusion
   does not mention from the dictionary in scope, upcast where the lemma's
@@ -177,7 +177,7 @@ local, which `View` presents as `HField(record, name, args)`
   field read's record is its argument 0, so `A.inv(x)` moves at position 1.
 - **What the classes lacked.** `≤` monotonicity of a product needs a
   nonnegative factor, and the class has only `pos_of_mul_pos` at a positive
-  one: `OrderedField::pos_of_mul_pos_nonneg` places a nonnegative `z` with
+  one: `OrderedSemiring::pos_of_mul_pos_nonneg` places a nonnegative `z` with
   `0 < z·d` by cotransitivity (either `(z + 1)·d` is positive too, or `d` is
   negative and `z·(-d) < 0` puts `z` below zero), and `mul_le_mono_l/r`,
   `mul_nonneg` and `mul_le_mul` follow. Sums got their sign laws and the mixed

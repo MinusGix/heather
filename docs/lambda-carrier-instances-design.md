@@ -373,7 +373,7 @@ written at a declaration and one learned at a use site are the same term.
 ### 7.6 Where the pieces are
 
 - `Inductive::varies` (`crates/elab/src/inductive.rs`). It is in the module
-  image, which is why the magic moved (`HTHMOD …\x1d`, `HTHIFC …\x1a`).
+  image, which is why the magic moved (`HTHMOD …\x1e`, `HTHIFC …\x1b`).
   The parser reads `varies` (`varies_clause`).
 - `Elaborator::slot_view`, `check_slot_lambda`, `code_fn_prefix` and the
   free `slot_lambda` (`crates/elab/src/gendefs.rs`): the constructor at a

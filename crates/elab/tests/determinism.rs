@@ -103,7 +103,10 @@ fn same_source_elaborates_identically() {
 /// Moved 2026-11-01 by the prelude's binding-statement classes and calls
 /// (`Bind`, `Pointed`, `Bind::seq`, `Pointed::ret`;
 /// `docs/sequencing-surface-design.md` §13).
-const NAT_SUITE_GOLDEN: u64 = 0x8c87a05b7b89029e;
+/// Moved 2026-11-02 by canonical levels (`issues/kernel-compact-level.md`):
+/// every level prints as its normal form, so a `⊔` tree the elaborator built
+/// raw (`(0 ⊔ 0)`, a statement's quadratic join) now prints collapsed.
+const NAT_SUITE_GOLDEN: u64 = 0x3c6f5da0b7bbdeae;
 
 #[test]
 fn nat_suite_golden_hash() {

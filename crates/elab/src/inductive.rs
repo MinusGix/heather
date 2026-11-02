@@ -424,7 +424,7 @@ pub(crate) fn sum_of_payloads(parts: Vec<(Type, Level)>) -> Option<(Type, Level)
     // measured at ~2/3 of a large lowered type's remaining node mass
     // (issues/wf-field-conversion-cost.md, 2026-08-13). `canonical` is
     // `equiv`-preserving by construction, so this is a spelling change only.
-    sum_of_payloads_joined(parts, |l, r| Level::max(l, r).normalize().canonical())
+    sum_of_payloads_joined(parts, |l, r| Level::max(l, r))
 }
 
 /// [`sum_of_payloads`] with each `+`'s level spelled by `join(lhs, rhs)`.
@@ -2205,7 +2205,7 @@ impl Elaborator {
                 dom: Rc::new(Type::Ty(l.clone())),
                 body: Rc::new(t),
             };
-            cod_level = Level::max(dom_level, cod_level).normalize().canonical();
+            cod_level = Level::max(dom_level, cod_level);
         }
         Ok(t)
     }
@@ -2741,7 +2741,7 @@ impl Elaborator {
             };
             // Canonical join — [`Self::lower_shape`]'s note: the raw `Max`
             // tree compounds per field and is copied into every Σ level slot.
-            acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
+            acc_lvl = Level::max(lvl, acc_lvl);
         }
         Ok((acc, acc_lvl, domains))
     }
