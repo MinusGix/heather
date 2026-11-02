@@ -255,9 +255,10 @@ specs ("had the program read instead…").
 In order:
 
 1. **`rt` capability types and an `Invoke` node** (setups design §8, N3).
-   The reflector reads `Io::call(io, c)` (or each named op) as `Invoke(op,
-   cap, args)`. Its meaning is the world-threading function, and `Io` is a
-   `Ty` the setup lays out as no words.
+   *Built as a computation layer, not a `Ty` (§8):* `ETm` with `Invoke`
+   over pure `Tm`, in `lib/native/runtime/rt_io.hthr`. What is left of the
+   item is the reflector reading an `io`-threading body into `Invoke`s
+   (§8.3).
 2. **`rt` to `Source`.** Runs of pure statements become `Compute` leaves
    through N1's lowering, `Invoke`s become `Invoke` statements, and loops
    holding `Invoke`s become `Repeat`. `sound` is `Io::Reads` of the
@@ -291,3 +292,76 @@ reversed:
    out not to update** (§2.2). The alternative is a call-site marker
    (`io.read!(…)`), which the sequencing design ruled out for readability.
    *Taken: implicit, as designed.*
+4. **The capability is the world a computation layer threads, not an `rt`
+   type** (§8.1), against setups design §8's "rt gains capability types".
+   *Taken: linearity by construction.*
+
+## 8. Capabilities in `rt`: the computation layer
+
+`lib/native/runtime/rt_io.hthr`, probes in
+`lib/_tests/native/runtime/rt_io_tests.hthr`.
+
+### 8.1 Why a layer and not a type
+
+Setups design §8 had `rt` gain capability types: `Io` a `Ty`, laid out as
+no words, with a linearity judgment refusing a term that copies or drops
+one. That judgment is a second type system inside the reflector's output,
+and every pure `Tm` former (`Let`, records, `If`) would need a rule for it.
+
+The layer instead follows the source's own split
+(`docs/native-effect-source-design.md` §11) and call-by-push-value: values
+are pure `Tm`, unchanged; computations are `ETm`:
+
+- `Pure(t)`: return a value, world unchanged;
+- `Let(e, body)`: bind a pure value;
+- `Invoke(e, args, body)`: one call to Linux on variables, its results
+  bound in order for `body`.
+
+`ETm::sem(w)(g)(env)` is `Io → Mutated<Io, R>`: the world is threaded by
+the meaning, never named by a term. No `ETm` can copy, store or drop the
+capability, so N3 (setups design §5.1) holds by construction and the
+default judgment needs no linearity clause; item 3 of §6 becomes the
+reflector refusing a body that does not thread `io` straight through.
+
+### 8.2 Effects are word-level calls
+
+`Effect` is `Reads(cap)`, `Writes(cap)`, `Opens(cap)`, `Closes`, each with
+operand and result codes (`Effect::params`, `Effect::results`) in `rt`'s
+`Ty`: words and `Bytes(cap)` buffers, as `Source`'s `CallShape`s are. A
+read lands its bytes in a named buffer (`fill`) and returns a count or a
+negated errno; a write names a span. `Effect::sem` is *defined by* the
+word-level `mut self` methods effectful code calls (`Io::read_into`,
+`Io::write_from`, `Io::open_path`, `Io::close_fd`), so a pin unfolds onto
+the elaborated body node for node: `echo_reflects`, an `EFun` against the
+surface `Io::echo_once`, holds by `refl`, and a stale-buffer variant is
+refused by the kernel (the negative control).
+
+### 8.3 The reflector (next slice)
+
+The surface body is a chain of `Mutated` lets: each `io.m(…)` elaborates to
+`let p = m(io_k, …); io_{k+1} = p.after; … p.value …`. The reflector:
+
+1. walks the `.after` chain from the result back to the `io` parameter,
+   which gives the call order;
+2. refuses a call whose world is not the chain's current one (a stale or
+   copied `io`), and any use of an `io_k` other than as the next call's
+   world — this is the linearity check, located at the call;
+3. reads each call's operands as pure `Tm`s (the existing value-numbering
+   reflector) and binds them with `Let`s before the `Invoke`;
+4. maps `.value` projections (`p.value.buf`, `p.value.result`) to the
+   `Invoke`-bound variables, keying repeated occurrences of one call by its
+   reflected operand levels, as pure `rt` keys repeated subterms.
+
+### 8.4 Known limits
+
+- **Branching over the world.** A statement `if` that calls on `io` in a
+  branch joins per variable (`imperative.rs`), so the elaborated body
+  projects `io` and each other variable out of the branch's tuple. An
+  `EIf(c, a, b)` whose meaning branches on the whole `Mutated` needs a
+  commuting conversion to agree with that by `refl`; either the lowering
+  joins the world with the values or the pin goes through an equation.
+- **Loops.** `for` over a body with `Invoke`s needs `ERepeat` and the loop
+  lemma of §6 item 2.
+- **Callees.** An effectful callee (`EFun` calling `EFun`) is not modelled;
+  `ETm::plain_world()` is the world with no callees.
+

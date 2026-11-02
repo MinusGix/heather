@@ -1,0 +1,224 @@
+// Effectful `rt`: computations over the one world capability
+// (docs/effects-capabilities-design.md §8; docs/runtime-fn-setups-design.md
+// §8, N3; issues/effects-uniqueness-surface.md).
+//
+// A `runtime fn` that talks to Linux is a `mut self` method over `Io`
+// (`linux_world`): its meaning is `Io → args → Mutated<Io, R>`, world
+// threading. Its reflection is an `ETm`, a computation, over pure `rt`
+// terms (`Tm`), values:
+//
+// - `Pure(t)` returns a value and leaves the world as it is;
+// - `Let(e, body)` binds a pure value and goes on;
+// - `Invoke(e, args, body)` makes one call to Linux at word-level operands
+//   (`Effect`) and binds what the call returns (a count, a buffer it
+//   filled) for the rest.
+//
+// The capability is **not a value of `rt`**. It is the world the
+// computation threads, so no term can name it, copy it, store it in a record
+// or drop it halfway: capability linearity, the default setup's N3 clause
+// (docs/runtime-fn-setups-design.md §5.1), holds by construction, and the
+// reflector's job is to read a body that threads `io` straight through, and
+// refuse one that does not. This is the source's own split
+// (docs/native-effect-source-design.md §11): values are total and pure
+// (`Tm`, lowered to FunctionIR), computations are the layer over them
+// (`ETm`, lowered to `Source` statements), Levy's call-by-push-value.
+//
+// The calls are machine-shaped, as `Source`'s `CallShape`s are: a read
+// names a buffer and lands its bytes in it (`fill`), a write names a span
+// of one, a result is a count or a negated errno in a word. The word-level
+// methods here (`Io::read_into`, …) are what effectful runtime code calls,
+// and `Effect::sem` is defined by them, so a pin unfolds onto the
+// elaborated body node for node, as pure `rt`'s does.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import linux_calls;
+import linux_world;
+import native_source;
+import rt;
+
+// ---------------------------------------------------------------------------
+// Word-level calls: Linux as the machine sees it
+
+// What a read into a buffer returns: the buffer with the bytes landed at
+// its start, and the count, or the errno negated.
+record ReadInto { buf: List<BitVec(8)>, result: BitVec(64) }
+
+// The result word of an answer: a count, or the errno negated
+// (`CallShape::answer`).
+fn Io::write_word(r: WriteResult) → BitVec(64) {
+    match r { Wrote(n) => count_word(n), WriteFailed(e) => errno_word(e) }
+}
+fn Io::open_word(r: OpenResult) → BitVec(64) {
+    match r { Opened(fd) => count_word(fd), OpenFailed(e) => errno_word(e) }
+}
+fn Io::close_word(r: CloseResult) → BitVec(64) {
+    match r { Closed => count_word(0), CloseFailed(e) => errno_word(e) }
+}
+fn Io::landed(buf: List<BitVec(8)>, r: ReadResult) → ReadInto {
+    match r {
+        ReadBytes(bytes) => ReadInto(fill(buf, bytes), count_word(bytes.len())),
+        ReadFailed(e) => ReadInto(buf, errno_word(e)),
+    }
+}
+
+// `read(fd, buf, max)`: at most `max` bytes, and no more than the buffer
+// holds.
+fn Io::read_into(mut self io: Io, fd: BitVec(64), buf: List<BitVec(8)>, max: BitVec(64)) → ReadInto {
+    let r = io.read(fd, max.toNat().min(buf.len()));
+    Io::landed(buf, r)
+}
+
+// `write(fd, buf + from, len)`.
+fn Io::write_from(mut self io: Io, fd: BitVec(64), buf: List<BitVec(8)>, from: BitVec(64), len: BitVec(64)) → BitVec(64) {
+    let r = io.write(fd, span(buf, from.toNat(), len.toNat()));
+    Io::write_word(r)
+}
+
+// `open(path)`: the path's first `len` bytes, up to a NUL.
+fn Io::open_path(mut self io: Io, path: List<BitVec(8)>, len: BitVec(64)) → BitVec(64) {
+    let r = io.open(path.take(len.toNat()).before_nul());
+    Io::open_word(r)
+}
+
+fn Io::close_fd(mut self io: Io, fd: BitVec(64)) → BitVec(64) {
+    let r = io.close(fd);
+    Io::close_word(r)
+}
+
+// ---------------------------------------------------------------------------
+// Effects: the calls `rt` knows, with their operand and result codes
+
+inductive Effect {
+    // fd, buffer, most bytes → the buffer after, the result.
+    Reads(cap: Nat),
+    // fd, buffer, from, length → the result.
+    Writes(cap: Nat),
+    // path buffer, length → the descriptor or errno.
+    Opens(cap: Nat),
+    // fd → 0 or errno.
+    Closes,
+}
+
+fn Effect::params(self e: Effect) → List<Ty> {
+    match e {
+        Reads(c) => [Word(64), Bytes(c), Word(64)],
+        Writes(c) => [Word(64), Bytes(c), Word(64), Word(64)],
+        Opens(c) => [Bytes(c), Word(64)],
+        Closes => [Word(64)],
+    }
+}
+
+fn Effect::results(self e: Effect) → List<Ty> {
+    match e { Reads(c) => [Bytes(c), Word(64)], Writes(_) => [Word(64)], Opens(_) => [Word(64)], Closes => [Word(64)] }
+}
+
+// A curried function of a signature's operands into any type.
+fn Ty::ArrowsTo(tys: Nat → RecInfo, ps: List<Ty>, R: Type) → Type {
+    match ps { Nil => R, Cons(p, rest) => p.sem(tys) → Ty::ArrowsTo(tys, rest, R) }
+}
+
+// What an effect does, as a world-threading function: the word-level call,
+// its answer as the tuple of its result codes.
+fn Effect::sem(self e: Effect, tys: Nat → RecInfo) → Io → Ty::ArrowsTo(tys, e.params(), Mutated<Io, Ty::Flats(e.results())>) {
+    match e {
+        Reads(_) => λ io (fd: BitVec(64)) (buf: List<BitVec(8)>) (max: BitVec(64)) =>
+            Mutated(Io::read_into(io, fd, buf, max).after,
+                Pair(Io::read_into(io, fd, buf, max).value.buf, Pair(Io::read_into(io, fd, buf, max).value.result, trivial))),
+        Writes(_) => λ io (fd: BitVec(64)) (buf: List<BitVec(8)>) (from: BitVec(64)) (len: BitVec(64)) =>
+            Mutated(Io::write_from(io, fd, buf, from, len).after, Pair(Io::write_from(io, fd, buf, from, len).value, trivial)),
+        Opens(_) => λ io (path: List<BitVec(8)>) (len: BitVec(64)) =>
+            Mutated(Io::open_path(io, path, len).after, Pair(Io::open_path(io, path, len).value, trivial)),
+        Closes => λ io (fd: BitVec(64)) =>
+            Mutated(Io::close_fd(io, fd).after, Pair(Io::close_fd(io, fd).value, trivial)),
+    }
+}
+
+// An effect applied to variables, each cast to its operand's code; the
+// default world-preserving answer where operands run out (refused by every
+// judgment).
+fn Effect::apply(w: rt::World, g: List<Ty>, env: rt::Env(w.tys, g), R: Type, d: R, ps: List<Ty>)
+    → Ty::ArrowsTo(w.tys, ps, R) → List<Nat> → R
+{
+    match ps {
+        Nil => λ f vs => f,
+        Cons(p, rest) => λ f vs => match vs {
+            Nil => d,
+            Cons(v, more) => Effect::apply(w, g, env, R, d, rest, f(Ty::cast(w.tys, Ty::at(g, v), p, Env::get(w.tys, g, env, v))), more),
+        },
+    }
+}
+
+// A call's results bound in order onto the context: the last is variable 0.
+fn Effect::push(tys: Nat → RecInfo, rs: List<Ty>) → (g: List<Ty>) → rt::Env(tys, g) → Ty::Flats(rs) → rt::Env(tys, Ty::bind_onto(rs, g)) {
+    match rs {
+        Nil => λ g env _ => env,
+        Cons(r, rest) => λ g env t => Effect::push(tys, rest, Cons(r, g), Pair(r.of_flat(tys, t.fst), env), t.snd),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Computations
+
+inductive ETm {
+    // A value, the world unchanged.
+    Pure(t: Tm),
+    // A pure value bound once: `body` sees it as variable 0.
+    Let(e: Tm, body: ETm),
+    // One call on variables; `body` sees its results bound in order.
+    Invoke(e: Effect, args: List<Nat>, body: ETm),
+}
+
+// The code a computation returns.
+fn ETm::ty(self t: ETm, w: rt::World, g: List<Ty>) → Ty {
+    match t {
+        Pure(v) => v.ty(w, g),
+        Let(e, body) => body.ty(w, Cons(e.ty(w, g), g)),
+        Invoke(e, _, body) => body.ty(w, Ty::bind_onto(e.results(), g)),
+    }
+}
+
+// The meaning: a world-threading function, at the code it returns.
+fn ETm::sem(self t: ETm, w: rt::World) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Mutated<Io, t.ty(w, g).sem(w.tys)> {
+    match t {
+        Pure(v) => λ g env io => Mutated(io, v.sem(w, g, env)),
+        Let(e, body) => λ g env io => body.sem(w, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
+        Invoke(e, args, body) => λ g env io =>
+            body.sem(w, Ty::bind_onto(e.results(), g),
+                Effect::push(w.tys, e.results(), g, env,
+                    Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                        e.params(), e.sem(w.tys, io), args).value),
+                Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                    e.params(), e.sem(w.tys, io), args).after),
+    }
+}
+
+// An effectful function: a `mut self` method over `Io`, its operands
+// pure codes.
+record EFun { params: List<Ty>, result: Ty, body: ETm }
+
+// `Ty::curry` into any type.
+fn EFun::curry(w: rt::World, r: Ty, ps: List<Ty>)
+    → (g: List<Ty>) → rt::Env(w.tys, g) → (rt::Env(w.tys, Ty::bind_onto(ps, g)) → Mutated<Io, r.sem(w.tys)>)
+    → Ty::ArrowsTo(w.tys, ps, Mutated<Io, r.sem(w.tys)>)
+{
+    match ps {
+        Nil => λ g env k => k(env),
+        Cons(p, rest) => λ g env k => λ (x: p.sem(w.tys)) => EFun::curry(w, r, rest, Cons(p, g), Pair(x, env), k),
+    }
+}
+
+fn EFun::meaning(self f: EFun, w: rt::World) → Io → Ty::ArrowsTo(w.tys, f.params, Mutated<Io, f.result.sem(w.tys)>) {
+    λ io => EFun::curry(w, f.result, f.params, Nil, trivial, λ env =>
+        Mutated(f.body.sem(w, Ty::bind_onto(f.params, Nil), env, io).after,
+            Ty::cast(w.tys, f.body.ty(w, Ty::bind_onto(f.params, Nil)), f.result,
+                f.body.sem(w, Ty::bind_onto(f.params, Nil), env, io).value)))
+}
+
+// A world with no callees and no records: what an effectful function that
+// calls nothing else reads.
+fn ETm::plain_world() → rt::World { rt::World(RecInfo::none, [], trivial) }
