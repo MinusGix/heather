@@ -91,20 +91,40 @@ impl Elaborator {
     pub(crate) fn withheld_note(&self, error: ElabError, psi: &GlobalCtx, ty: &Type, body: Option<&Term>) -> ElabError {
         let Some(withheld) = psi.withheld.as_deref() else { return error };
         let len = psi.bindings.len();
+        // Absolute indices of the globals the statement and proof mention,
+        // and of those their statements mention in turn: a lemma cited at
+        // an open call carries the call in its type, not in the proof's
+        // syntax.
         let mut seen = std::collections::BTreeSet::new();
+        let mut direct = Vec::new();
         let mut record = |i: u32| {
-            seen.insert(i);
+            if (i as usize) < len {
+                direct.push(len - 1 - i as usize);
+            }
             Some(i)
         };
         ty.reindex_global(&mut record);
         if let Some(body) = body {
             body.reindex_global(&mut record);
         }
+        for at in direct {
+            if !seen.insert(at) {
+                continue;
+            }
+            if let Some(heather_kernel::term::GlobalBinding::Tm { ty, .. }) = psi.bindings.get(at) {
+                ty.reindex_global(&mut |j: u32| {
+                    if (j as usize) < at {
+                        seen.insert(at - 1 - j as usize);
+                    }
+                    Some(j)
+                });
+            }
+        }
         let mut lines = Vec::new();
         for (key, info) in self.interfaces.iter() {
             let Some(global) = self.names.global(key) else { continue };
             let abs = global.abs as usize;
-            if withheld.arity(abs).is_none() || abs >= len || !seen.contains(&((len - 1 - abs) as u32)) {
+            if withheld.arity(abs).is_none() || abs >= len || !seen.contains(&abs) {
                 continue;
             }
             let cite = if info.equations.is_empty() {
@@ -343,12 +363,12 @@ impl Elaborator {
         let ExprKind::Match { scrut, arms, .. } = &decl.body.result.kind else { return Ok(made) };
         let ExprKind::Var(scrut_name) = &scrut.kind else { return Ok(made) };
         let Some(at) = decl.params.iter().position(|p| &p.name == scrut_name) else { return Ok(made) };
-        let TyKind::Named { name: ind_name, args: ind_args } = &decl.params[at].ty.kind else { return Ok(made) };
         // The constructors with their field types, at the parameter's type
         // arguments. `Nat` is the kernel's, not a declared inductive.
-        let ctors: Vec<(String, Vec<Ty>)> = if ind_name == "Nat" && ind_args.is_empty() && self.lookup_inductive("Nat").is_none() {
+        let ctors: Vec<(String, Vec<Ty>)> = if matches!(decl.params[at].ty.kind, TyKind::Nat) {
             vec![("Zero".into(), Vec::new()), ("Succ".into(), vec![decl.params[at].ty.clone()])]
         } else {
+            let TyKind::Named { name: ind_name, args: ind_args } = &decl.params[at].ty.kind else { return Ok(made) };
             let Some(ind) = self.lookup_inductive(ind_name).cloned() else { return Ok(made) };
             if ind.params.len() != ind_args.len() {
                 return Ok(made);

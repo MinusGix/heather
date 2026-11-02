@@ -1825,10 +1825,13 @@ pub struct GlobalCtx {
     pub sealed: SealedProofs,
     /// The elaborator's **interface boundary**
     /// (`docs/interface-definitions-design.md` §3): definitions whose body
-    /// this world withholds at open arguments. `None` everywhere but in the
-    /// elaborator's own semantic worlds; the trusted check never sets it, so
-    /// what the kernel accepts does not depend on it. Like
-    /// [`GlobalCtx::sealed`] it is not part of any binding.
+    /// this world withholds at open arguments. `None` but in the
+    /// elaborator's worlds for a module that imports interface definitions,
+    /// and in the gate's Ψ for that module's declarations. Withholding only
+    /// removes δ-steps (a gluing unfolds the body ordinary δ would), so it
+    /// can make the kernel refuse more, never accept more. Like
+    /// [`GlobalCtx::sealed`] it is not part of any binding, so the
+    /// verdict cache mixes it into its check key (`crates/cache`).
     pub withheld: Option<Rc<Withheld>>,
 }
 

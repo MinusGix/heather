@@ -68,16 +68,16 @@ theorem Interval::point_has(d: Dyadic): Interval::point(d).Has(d.rat()) { And(d.
 // zero need no corner search: the product runs from the lower bounds'
 // product to the upper bounds'.
 
-fn Interval::neg(self I: Interval) → Interval { match I { Bnd(lo, hi) => Bnd(-hi, -lo), Whole => Whole } }
+interface fn Interval::neg(self I: Interval) → Interval { match I { Bnd(lo, hi) => Bnd(-hi, -lo), Whole => Whole } }
 
-fn Interval::add(self I, J: Interval, p: Nat) → Interval {
+interface fn Interval::add(self I, J: Interval, p: Nat) → Interval {
     match I {
         Bnd(a, b) => match J { Bnd(c, d) => Bnd((a + c).down(p), (b + d).up(p)), Whole => Whole },
         Whole => Whole,
     }
 }
 
-fn Interval::sub(self I, J: Interval, p: Nat) → Interval { I.add(J.neg(), p) }
+interface fn Interval::sub(self I, J: Interval, p: Nat) → Interval { I.add(J.neg(), p) }
 
 fn Interval::mul_lo(a, b, c, d: Dyadic) → Dyadic { (a * c).min(a * d).min((b * c).min(b * d)) }
 
@@ -92,7 +92,7 @@ fn Interval::mul_bnd(a, b, c, d: Dyadic, p: Nat) → Interval {
     }
 }
 
-fn Interval::mul(self I, J: Interval, p: Nat) → Interval {
+interface fn Interval::mul(self I, J: Interval, p: Nat) → Interval {
     match I {
         Bnd(a, b) => match J { Bnd(c, d) => Interval::mul_bnd(a, b, c, d, p), Whole => Whole },
         Whole => Whole,
@@ -447,7 +447,7 @@ theorem Interval::of_rat_has(q: Rat, p: Nat): Interval::of_rat(q, p).Has(q) {
     Interval::has_respects(Interval::of_rat(q, p), Interval::of_rat_same(q), Interval::mul_has(Interval::of_int(q.num), Interval::recip_point(Dyadic(q.den.int(), 0), p), p, num, den))
 }
 
-fn Interval::npow(self I: Interval, n, p: Nat) → Interval { match n { Zero => Interval::of_int(1), Succ(k) => I.npow(k, p).mul(I, p) } }
+interface fn Interval::npow(self I: Interval, n, p: Nat) → Interval { match n { Zero => Interval::of_int(1), Succ(k) => I.npow(k, p).mul(I, p) } }
 
 theorem Interval::npow_has(I: Interval, n, p: Nat, {x: Rat}, h: I.Has(x)): I.npow(n, p).Has(x.npow(n)) {
     match n {

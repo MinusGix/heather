@@ -34,7 +34,10 @@ theorem of_rat_contract(q: Rat, p: Nat): Interval::of_rat(q, p).Has(q) { Interva
 // bound, and the whole line is the answer.
 theorem recip_neg_three(): Interval::point(Dyadic(-3, 0)).recip(4) = Bnd(Dyadic(-22, -6), Dyadic(-21, -6)) { refl }
 theorem recip_around_zero(): Bnd(Dyadic(-1, 0), Dyadic(1, 0)).recip(8) = Whole { refl }
-theorem whole_absorbs(p: Nat): Whole.add(Interval::of_int(1), p) = Whole { refl }
+// At an open precision the sum is not closed, so outside its module
+// `Interval::add` (an interface definition) does not unfold: the arm
+// equation says what it is.
+theorem whole_absorbs(p: Nat): Whole.add(Interval::of_int(1), p) = Whole { Interval::add_unfold_Whole(Interval::of_int(1), p) }
 
 // Products: the corner search with a negative factor, and the direct form
 // when both are above zero. [-1, 2]·[3, 4] is [-4, 8].
@@ -72,3 +75,34 @@ theorem exact_third(): Rat(1, 3) * 3 <= 1 { IntervalExpr::le_of_search(IMul(thir
 
 // The contract at an open expression and precision.
 theorem encloses(e: IntervalExpr, p: Nat): e.enclose(p).Has(e.eval()) { e.enclose_has(p) }
+
+// Interface definitions (docs/interface-definitions-design.md): `neg`,
+// `add`, `sub`, `mul` and `npow` are interface definitions of `interval`.
+// Here, outside that module, a call at closed arguments still computes (the
+// verdicts above, and `cube` below), but a call at an open argument is an
+// atom even when its scrutinee is a constructor. A goal over one is closed by
+// a generated equation, or by a proof that declares `unfolding`.
+// expect-error(kernel): `Interval::neg` is an interface definition of `interval`
+theorem neg_open_refl(lo, hi: Dyadic): Bnd(lo, hi).neg() = Bnd(-hi, -lo) { refl }
+theorem neg_open_cited(lo, hi: Dyadic): Bnd(lo, hi).neg() = Bnd(-hi, -lo) { Interval::neg_unfold_Bnd(lo, hi) }
+theorem neg_open_unfolding(lo, hi: Dyadic): Bnd(lo, hi).neg() = Bnd(-hi, -lo) unfolding Interval::neg { refl }
+
+// A checking position: a lemma's statement over the open call is not its
+// arm, and the arm equation moves it there.
+// expect-error(kernel): `Interval::neg` is an interface definition of `interval`
+theorem neg_has_open(lo, hi: Dyadic, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(-hi, -lo).Has(-x) { Interval::neg_has(Bnd(lo, hi), h) }
+theorem neg_has_cited(lo, hi: Dyadic, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(-hi, -lo).Has(-x) {
+    rewrite(Interval::neg_unfold_Bnd(lo, hi), in := Interval::neg_has(Bnd(lo, hi), h))
+}
+
+// A neutral scrutinee: `npow` recurses on its exponent, so it has no
+// whole-body `npow_unfold` (that is not `refl` at an open exponent), only
+// one equation per arm.
+// expect-error(kernel): `Interval::npow` is an interface definition of `interval`
+theorem npow_succ_refl(I: Interval, k, p: Nat): I.npow(Succ(k), p) = I.npow(k, p).mul(I, p) { refl }
+theorem npow_succ_cited(I: Interval, k, p: Nat): I.npow(Succ(k), p) = I.npow(k, p).mul(I, p) { Interval::npow_unfold_Succ(I, k, p) }
+theorem cube(): Interval::point(Dyadic(2, 0)).npow(3, 8) = Interval::point(Dyadic(8, 0)) { refl }
+
+// `unfolding` names interface definitions only.
+// expect-error: `Interval::point` is not an interface definition
+theorem point_unfolding(d: Dyadic): Interval::point(d) = Bnd(d, d) unfolding Interval::point { refl }

@@ -7,10 +7,22 @@
 //! application makes its spine reach the declaration's arity, and every
 //! argument reads no free local variable, it is glued to its body exactly as
 //! [`Eval::global_tm`] glues a definition, and from there it computes as one.
-//! The syntax reducer's rule is `reduce::withheld_call`; the two agree on
-//! every argument this walk can classify, and where it cannot (a budget
-//! spent, a value form it does not open) it answers "open", so the value
-//! machine is never the more permissive of the two.
+//!
+//! Closedness is decided by **forcing**: an argument is forced to its weak
+//! head and its parts are walked, forced in turn, from a work list under a
+//! node budget. A lazy argument is usually a computation in flight (an
+//! induction hypothesis, a call of another definition), which only forcing
+//! can classify; a call at closed arguments computes once it reads them
+//! anyway. A binder's body cannot be forced and is classified by its
+//! syntax and environment instead ([`closed_clo`]). Anything the walk does
+//! not open, a spent budget and an evaluation error all answer "open":
+//! unknown means atom.
+//!
+//! The syntax reducer's rule is `reduce::withheld_call`, which asks only
+//! that the argument terms be syntactically closed. The two can differ on an
+//! argument that names a variable and does not read it (`K(0, x)`): the
+//! value machine glues there and the reducer does not. Both only ever
+//! unfold the body ordinary δ would, so either is sound.
 
 use super::Eval;
 use crate::value::{Elim, Head, Lookup, TmClo, VNeutral, Val};
@@ -18,6 +30,12 @@ use crate::value::{Elim, Head, Lookup, TmClo, VNeutral, Val};
 /// Value nodes the closedness walk visits per call before it answers
 /// "open". Generous next to the literals a verdict is stated over.
 const CLOSED_NODES: u32 = 1 << 14;
+
+/// One step of the closedness walk.
+enum Item<'v> {
+    Clo(&'v TmClo<'v>),
+    Val(&'v Val<'v>),
+}
 
 impl<'a, 'v> Eval<'a, 'v> {
     /// `n` glued to its withheld body, when `n` is a call of a withheld
@@ -46,10 +64,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         if arity == 0 || args.len() != arity {
             return None;
         }
-        let mut budget = CLOSED_NODES;
-        if !subst.terms.iter().all(|v| closed_val(v, &mut budget))
-            || !args.iter().all(|a| closed_clo(a, 0, &mut budget))
-        {
+        let mut work: Vec<Item<'v>> = subst.terms.iter().map(|v| Item::Val(*v)).collect();
+        work.extend(args.iter().map(|a| Item::Clo(*a)));
+        if !self.closed(work) {
             return None;
         }
         let body = std::sync::Arc::clone(self.defs.withheld_body_unshifted(*var)?);
@@ -61,10 +78,95 @@ impl<'a, 'v> Eval<'a, 'v> {
         let glued = self.arena.neutral(VNeutral { head: n.head.clone(), spine: n.spine, unfold: Some(unfold) });
         Some(self.arena.val(Val::Neutral(glued)))
     }
+
+    /// Whether every item reads no free local variable, forcing what it
+    /// visits (module docs). Iterative, so a long closed list costs no
+    /// native depth.
+    fn closed(&mut self, mut work: Vec<Item<'v>>) -> bool {
+        let mut budget = CLOSED_NODES;
+        while let Some(item) = work.pop() {
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
+            let v = match item {
+                Item::Val(v) => v,
+                Item::Clo(c) => match self.force(c) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                },
+            };
+            if !parts(v, &mut work, &mut budget) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Push `v`'s parts onto the walk; `false` when `v` is open or of a form the
+/// walk does not open.
+fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>, budget: &mut u32) -> bool {
+    macro_rules! push {
+        ($($c:expr),*) => {{ $(work.push(Item::Clo($c));)* }};
+    }
+    match v {
+        Val::TmNat
+        | Val::TmTy(_)
+        | Val::TmUnit { .. }
+        | Val::TmEmpty { .. }
+        | Val::TmSEmpty { .. }
+        | Val::Zero
+        | Val::Triv { .. }
+        | Val::BoxTy(_)
+        | Val::BoxTm(_) => {}
+        Val::TmSquash { ty, .. } => push!(ty),
+        Val::TmSum { lhs, rhs, .. } => push!(lhs, rhs),
+        Val::TmVec { elem, len, .. } => push!(elem, len),
+        Val::TmFin { len } => push!(len),
+        Val::TmId { ty, lhs, rhs, .. } | Val::TmSEq { ty, lhs, rhs, .. } => push!(ty, lhs, rhs),
+        Val::Succ(p) => push!(p),
+        Val::NatRun { tail, .. } => push!(tail),
+        Val::BitRun { tail, tail_len, .. } => push!(tail, tail_len),
+        Val::Refl { tm, .. } | Val::SRefl { tm, .. } | Val::Squash { tm, .. } => push!(tm),
+        Val::Pair { fst, snd, .. } => push!(fst, snd),
+        Val::Inl { val, .. } | Val::Inr { val, .. } => push!(val),
+        Val::Sup { label, children, .. } | Val::Supi { label, children, .. } => push!(label, children),
+        Val::Supf { arity, label, children, .. } => push!(arity, label, children),
+        // Universe and context binders bind no local variable.
+        Val::ULam { body, .. } | Val::CtxLam { body, .. } | Val::TyLam { body, .. } => push!(body),
+        // A term binder's body cannot be forced: its syntax decides.
+        Val::Lam { body, .. } => return closed_clo(body, 1, budget),
+        Val::TmPi { dom, cod, .. } => return { push!(dom); closed_clo(cod, 1, budget) },
+        Val::TmSigma { fst, snd, .. } => return { push!(fst); closed_clo(snd, 1, budget) },
+        Val::TmW { shape, pos, .. } => return { push!(shape); closed_clo(pos, 1, budget) },
+        Val::Neutral(n) => match &n.head {
+            Head::Var(_) | Head::BaseVar(_) | Head::Stuck(_) => return false,
+            Head::BoxedGlobalTy(_) | Head::BoxedGlobalTm(_) => {}
+            // A global the force left neutral: opaque, sealed, or a
+            // withheld call that stayed withheld. Closed when its universe
+            // substitution and its arguments are.
+            Head::Global { subst, .. } => {
+                work.extend(subst.terms.iter().map(|t| Item::Val(*t)));
+                for e in n.spine.iter_rev() {
+                    match e {
+                        Elim::App { arg, .. } => work.push(Item::Clo(*arg)),
+                        Elim::UApp { .. } => {}
+                        _ => return false,
+                    }
+                }
+            }
+        },
+        // Folds, codata and the rarer type codes are not opened: unknown
+        // is open.
+        _ => return false,
+    }
+    true
 }
 
 /// Whether the closure `c`, under `pending` binders of its own, reads no
-/// free local variable. A spent budget answers `false`.
+/// free local variable, by its syntax and environment, without forcing.
+/// A spent budget answers `false`.
 fn closed_clo<'v>(c: &'v TmClo<'v>, pending: u32, budget: &mut u32) -> bool {
     if *budget == 0 {
         return false;
@@ -87,71 +189,40 @@ fn closed_clo<'v>(c: &'v TmClo<'v>, pending: u32, budget: &mut u32) -> bool {
                 }
             })
         }
-        // A value under a binder ignores it: values are ambient.
-        TmClo::Val(v) => closed_val(v, budget),
-        TmClo::Elim { head, elim } => closed_clo(head, 0, budget) && closed_elim(elim, budget),
+        TmClo::Val(v) => {
+            // A value under a binder ignores it: values are ambient. Walk
+            // it without forcing (there is no machine here).
+            let mut work = Vec::new();
+            if !parts(v, &mut work, budget) {
+                return false;
+            }
+            work.into_iter().all(|item| match item {
+                Item::Clo(c) => closed_clo(c, 0, budget),
+                Item::Val(v) => closed_clo_val(v, budget),
+            })
+        }
+        TmClo::Elim { head, elim } => {
+            closed_clo(head, 0, budget)
+                && match elim {
+                    Elim::App { arg, .. } => closed_clo(arg, 0, budget),
+                    Elim::UApp { .. } => true,
+                    // Motives, branches and type arguments are not opened
+                    // here: unknown is open.
+                    _ => false,
+                }
+        }
     }
 }
 
-fn closed_elim<'v>(e: &'v Elim<'v>, budget: &mut u32) -> bool {
-    match e {
-        Elim::App { arg, .. } => closed_clo(arg, 0, budget),
-        Elim::UApp { .. } => true,
-        // Motives, branches and type arguments are not opened: unknown is
-        // open.
-        _ => false,
-    }
-}
-
-fn closed_val<'v>(v: &'v Val<'v>, budget: &mut u32) -> bool {
+fn closed_clo_val<'v>(v: &'v Val<'v>, budget: &mut u32) -> bool {
     if *budget == 0 {
         return false;
     }
     *budget -= 1;
-    macro_rules! c {
-        ($x:expr, $p:expr) => {
-            closed_clo($x, $p, budget)
-        };
-    }
-    match v {
-        Val::TmNat
-        | Val::TmTy(_)
-        | Val::TmUnit { .. }
-        | Val::TmEmpty { .. }
-        | Val::TmSEmpty { .. }
-        | Val::Zero
-        | Val::Triv { .. }
-        | Val::BoxTy(_)
-        | Val::BoxTm(_) => true,
-        Val::TmSquash { ty, .. } => c!(ty, 0),
-        Val::TmPi { dom, cod, .. } => c!(dom, 0) && c!(cod, 1),
-        Val::TmSigma { fst, snd, .. } => c!(fst, 0) && c!(snd, 1),
-        Val::TmW { shape, pos, .. } => c!(shape, 0) && c!(pos, 1),
-        Val::TmSum { lhs, rhs, .. } => c!(lhs, 0) && c!(rhs, 0),
-        Val::TmVec { elem, len, .. } => c!(elem, 0) && c!(len, 0),
-        Val::TmFin { len } => c!(len, 0),
-        Val::TmId { ty, lhs, rhs, .. } | Val::TmSEq { ty, lhs, rhs, .. } => c!(ty, 0) && c!(lhs, 0) && c!(rhs, 0),
-        Val::Succ(p) => c!(p, 0),
-        Val::NatRun { tail, .. } => c!(tail, 0),
-        Val::BitRun { tail, tail_len, .. } => c!(tail, 0) && c!(tail_len, 0),
-        Val::Refl { tm, .. } | Val::SRefl { tm, .. } | Val::Squash { tm, .. } => c!(tm, 0),
-        Val::Pair { fst, snd, .. } => c!(fst, 0) && c!(snd, 0),
-        Val::Inl { val, .. } | Val::Inr { val, .. } => c!(val, 0),
-        Val::Sup { label, children, .. } | Val::Supi { label, children, .. } => c!(label, 0) && c!(children, 0),
-        Val::Supf { arity, label, children, .. } => c!(arity, 0) && c!(label, 0) && c!(children, 0),
-        Val::Lam { body, .. } => c!(body, 1),
-        // Universe and context binders bind no local variable.
-        Val::ULam { body, .. } | Val::CtxLam { body, .. } | Val::TyLam { body, .. } => c!(body, 0),
-        Val::Neutral(n) => match &n.head {
-            Head::Var(_) | Head::BaseVar(_) | Head::Stuck(_) => false,
-            Head::BoxedGlobalTy(_) | Head::BoxedGlobalTm(_) => true,
-            Head::Global { subst, .. } => {
-                subst.terms.iter().all(|t| closed_val(t, budget))
-                    && n.spine.iter_rev().all(|e| closed_elim(e, budget))
-            }
-        },
-        // Folds, induction hypotheses, codata and the rarer type codes are
-        // not opened: unknown is open.
-        _ => false,
-    }
+    let mut work = Vec::new();
+    parts(v, &mut work, budget)
+        && work.into_iter().all(|item| match item {
+            Item::Clo(c) => closed_clo(c, 0, budget),
+            Item::Val(v) => closed_clo_val(v, budget),
+        })
 }
