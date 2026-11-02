@@ -55,9 +55,20 @@ pub(crate) const RETURN: &str = "\0return";
 pub const NEXT: &str = "\0next";
 pub const BRK: &str = "\0brk";
 pub const RET: &str = "\0ret";
+/// A method call on a mutable local, `let p = x.m(a);` or `x.m(a);`
+/// (§8.2): the parser's candidate, `\0mutcall(x.m(a))`, which the block
+/// declaring `x` claims. A claimed call is `\0mutated(x.m(a))`: the
+/// elaborator binds `p` to its value and `x` to the receiver after it when
+/// the method returns `Mutated`, and reads it as an ordinary call when not.
+/// An unclaimed candidate (its receiver is not mutable here: reached
+/// through a λ, or shadowed) is an ordinary call.
+pub const MUTCALL: &str = "\0mutcall";
+pub const MUTATED: &str = "\0mutated";
 /// A function body after a loop that may `return`: `\0after(#forN, { rest })`,
 /// the loop's `Return` value or else the rest.
 pub const AFTER: &str = "\0after";
+
+fn call_marked(marker: &str, input: Expr, span: Span) -> Expr { marked(marker, input, span) }
 
 fn fail<T>(span: Span, msg: impl Into<String>) -> R<T> { Err(ParseError { span, msg: msg.into() }) }
 
@@ -90,6 +101,53 @@ pub(crate) fn unit(span: Span) -> Expr { var(UNIT, span) }
 
 fn is_unit(e: &Expr) -> bool { matches!(&e.kind, ExprKind::Var(n) if n == UNIT) }
 
+/// A statement body's result, which has none.
+pub(crate) fn is_unit_result(e: &Expr) -> bool { is_unit(e) }
+
+/// A statement body that ends in a method call on a mutable local, `{
+/// x.m(a) }`: the call is the body's last statement, as `x.m(a);` would
+/// be, and the body has no value.
+fn statement_tail(b: &mut Block) {
+    if !ends_in_method_call(b) { return; }
+    let ExprKind::Var(n) = &b.result.kind else { return };
+    let seq = format!("#seq{}", &n["#tail".len()..]);
+    if let Some(Stmt::Let { name, .. }) = b.stmts.last_mut() { *name = seq; }
+    b.result = Box::new(unit(b.result.span));
+}
+
+/// Does a block end in a method call on a mutable local, `{ …; x.m(a) }`
+/// (the parser's `#tail` binding of it)? Such a block is a statement body
+/// where one is wanted, and its value where a value is.
+pub(crate) fn ends_in_method_call(b: &Block) -> bool {
+    let ExprKind::Var(n) = &b.result.kind else { return false };
+    n.starts_with("#tail")
+        && matches!(b.stmts.last(), Some(Stmt::Let { name, expr, .. })
+            if name == n && (unmark(expr, MUTCALL).is_some() || unmark(expr, MUTATED).is_some()))
+}
+
+/// The receiver a method-call candidate may update.
+fn mut_receiver(call: &Expr) -> Option<&str> {
+    match &call.kind {
+        ExprKind::Dot { recv, .. } => match &recv.kind {
+            ExprKind::Var(x) => Some(x),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Does a declaration's body `return` anywhere?
+pub(crate) fn has_return(b: &Block) -> bool {
+    let e = Expr { kind: ExprKind::Block(Box::new(b.clone())), span: b.span };
+    let mut found = false;
+    walk(&e, &mut |x| {
+        if matches!(&x.kind, ExprKind::App { head, .. } if matches!(&head.kind, ExprKind::Var(n) if n == RETURN || n == RET)) {
+            found = true;
+        }
+    });
+    found
+}
+
 /// The type annotation an assignment checks at: the type of the local's
 /// current value.
 fn type_of(name: &str, span: Span) -> Ty { Ty { kind: TyKind::TypeOf(Box::new(var(name, span))), span } }
@@ -99,7 +157,7 @@ fn type_of(name: &str, span: Span) -> Ty { Ty { kind: TyKind::TypeOf(Box::new(va
 fn has_markers(b: &Block) -> bool {
     b.stmts.iter().any(|s| matches!(s, Stmt::Let { expr, .. }
         if unmark(expr, MUT).is_some() || unmark(expr, ASSIGN).is_some() || unmark(expr, STMT).is_some()
-            || unmark_for(expr).is_some()))
+            || unmark_for(expr).is_some() || unmark(expr, MUTCALL).is_some()))
         || is_unit(&b.result)
 }
 
@@ -233,6 +291,10 @@ fn assigned(b: &Block, out: &mut Vec<String>) {
         let Stmt::Let { name, expr, .. } = s else { continue };
         if unmark(expr, ASSIGN).is_some() {
             if !out.contains(name) { out.push(name.clone()); }
+        } else if let Some(x) = unmark(expr, MUTCALL).or_else(|| unmark(expr, MUTATED)).and_then(mut_receiver) {
+            // A method call on a mutable local may update it: the scope
+            // threads it, whether or not the method turns out to (§8.2).
+            if !out.iter().any(|n| n == x) { out.push(x.to_string()); }
         } else if let Some(form) = unmark(expr, STMT) {
             assigned_by_form(form, out);
         }
@@ -332,6 +394,18 @@ fn lower_in_env(mut b: Block, outer: &[String], next: &mut usize) -> R<(Block, V
                             opaque: false,
                         });
                     }
+                } else if let Some(call) = unmark(&expr, MUTCALL)
+                    && mut_receiver(call).is_some_and(|x| env.iter().any(|n| n == x))
+                {
+                    // This block's own mutable local: claimed (§8.2). The
+                    // elaborator rebinds the receiver; a later `let` of the
+                    // same name shadows it as usual.
+                    let call = call.clone();
+                    let mine = name.clone();
+                    if mine != mut_receiver(&call).unwrap_or("") {
+                        env.retain(|n| *n != mine);
+                    }
+                    stmts.push(Stmt::Let { name, ty, expr: call_marked(MUTATED, call, span), span, opaque });
                 } else if unmark(&expr, STMT).is_some_and(form_has_exit) || exit_of(&Stmt::Let { name: name.clone(), ty: None, expr: expr.clone(), span, opaque }).is_some() {
                     // An exit, or a form holding one, is the enclosing loop's
                     // to lower in tail position ([`tail`]).
@@ -410,12 +484,14 @@ fn join(form: &Expr, v: &str, env: &[String], next: &mut usize) -> R<Expr> {
             return fail(arm.body.span, "a statement `match` arm is a braced block of statements: `P => { x := e }`");
         };
         let empty = body.stmts.is_empty() && matches!(body.result.kind, ExprKind::AutoRefl);
+        let mut body = body.clone();
+        statement_tail(&mut body);
         if !is_unit(&body.result) && !empty {
             return fail(body.result.span,
                 "a statement body ends in a statement, not a value: this `if`/`match` assigns locals, \
                  so its branches have no result");
         }
-        let mut lowered = lower_in((**body).clone(), env, next)?;
+        let mut lowered = lower_in(*body, env, next)?;
         let span = lowered.result.span;
         lowered.result = Box::new(var(v, span));
         arm.body = Expr { kind: ExprKind::Block(Box::new(lowered)), span: arm.body.span };

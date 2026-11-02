@@ -76,3 +76,10 @@ fn Bind::seq<A, B>({M: Type → Type}, m: M(A), k: A → M(B), d: Bind<M> := inf
 fn Pointed::ret<A>({M: Type → Type}, a: A, d: Pointed<M> := infer) → M(A) {
     d.pure(a)
 }
+
+// What a `mut self` method returns (docs/sequencing-surface-design.md §8.2):
+// its receiver after the call, and the call's value. `let p = x.m(a);` on a
+// `let mut` local `x` binds `p` to the value and `x` to the receiver after
+// it, so a capability is a local the calls on it update, and the code stays
+// pure. In the prelude so that the parser's lowering has one record to name.
+record Mutated<S, R> { after: S, value: R }

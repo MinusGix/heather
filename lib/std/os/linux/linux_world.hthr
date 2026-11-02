@@ -1,0 +1,195 @@
+// Linux as a capability: effectful code as pure code over a world
+// (docs/effects-capabilities-design.md; issues/effects-uniqueness-surface.md;
+// docs/sequencing-surface-design.md §8).
+//
+// A program that talks to Linux takes an `Io` and updates it: `let r =
+// io.read(fd, n);` on a `let mut io` is an ordinary call of a `mut self`
+// method, which returns the answer and the world after it
+// (`Mutated<Io, ReadResult>`), so the code stays pure and its meaning is
+// world threading (`effects-direction`). Nobody writes a monad.
+//
+// An `Io` is a **world**, the environment's strategy, and the **exchanges
+// so far**. The world answers a call from the history, so it is every
+// deterministic environment there is (a terminal that echoes, a file that
+// grows, a disk that fails on the third write): a function of the history
+// is the most general strategy, and nothing about Linux is assumed. The
+// history is what the program did, newest first, and is how a theorem
+// states it (`Io::sent`: the bytes it wrote to a descriptor). At run time
+// the capability is nothing: a compiled program performs the calls, and the
+// history is only the meaning (`runtime fn` setups lay `Io` out as no
+// words; docs/runtime-fn-setups-design.md §8).
+//
+// The tree reading. A tree over Linux's calls (`Source::tree`, a spec) is
+// read against a world by `Io::against`: each command is put to the world
+// and answered, as the compiled program's calls are by Linux. A capability
+// program `f` agrees with a tree `t` when the reading is `f` against every
+// world (`Io::Reads(t, f)`). That is how a compiled program's tree and the
+// function it was compiled from are tied: the tree's reading at every world
+// is the function, so the tree is what the function does. `Io::reads_bind`
+// is sequencing's case, `ITree::run_state_bind`'s statement for this
+// handler, proved once.
+import logic;
+import nat;
+import list;
+import option;
+import bool;
+import bitvec;
+import itree;
+import linux_calls;
+import linux_trees;
+
+// ---------------------------------------------------------------------------
+// Worlds and capabilities
+
+// One call and its answer.
+record Exchange { cmd: LinuxCmd<Nat>, answer: cmd.Resp() }
+
+// The environment: how it answers a call, given every exchange before it
+// (newest first).
+fn World() → Type { List<Exchange> → (c: LinuxCmd<Nat>) → c.Resp() }
+
+// The capability: a world and the exchanges so far, newest first.
+record Io { world: World(), past: List<Exchange> }
+
+// A world before any call.
+fn Io::of(world: World()) → Io { Io(world, []) }
+
+// Put a call to the world: its answer, and the world after it.
+fn Io::call(mut self io: Io, c: LinuxCmd<Nat>) → c.Resp() {
+    let a = io.world(io.past, c);
+    io := Io(io.world, Cons(Exchange(c, a), io.past));
+    a
+}
+
+fn Io::stdin() → BitVec(64) { BitVec::ofNat(0) }
+fn Io::stdout() → BitVec(64) { BitVec::ofNat(1) }
+fn Io::stderr() → BitVec(64) { BitVec::ofNat(2) }
+
+// Linux's calls (`linux_calls`), each one call of the world.
+fn Io::read(mut self io: Io, fd: BitVec(64), max: Nat) → ReadResult { io.call(ReadCmd(fd, max)) }
+fn Io::write(mut self io: Io, fd: BitVec(64), bytes: List<BitVec(8)>) → WriteResult { io.call(WriteCmd(fd, bytes)) }
+fn Io::open(mut self io: Io, path: List<BitVec(8)>) → OpenResult { io.call(OpenCmd(path)) }
+fn Io::close(mut self io: Io, fd: BitVec(64)) → CloseResult { io.call(CloseCmd(fd)) }
+fn Io::stat(mut self io: Io, target: StatTarget) → StatResult { io.call(StatCmd(target)) }
+
+// Every byte of `bytes` written to `fd`, a write at a time, for at most
+// `passes.len()` writes: whether all of it went. A failed write, or running
+// out of passes, is `False`.
+fn Io::write_all(mut self io: Io, fd: BitVec(64), bytes: List<BitVec(8)>, passes: List<Nat>) → Bool {
+    let mut left = bytes;
+    let mut ok: Bool = Bool::False;
+    for _ in passes {
+        if left.len() = 0 { ok := Bool::True; break }
+        let r = io.write(fd, left);
+        match r {
+            Wrote(n) => { left := left.drop(n) },
+            WriteFailed(_) => { break },
+        }
+    }
+    if left.len() = 0 { ok := Bool::True }
+    ok
+}
+
+// ---------------------------------------------------------------------------
+// What a program did: its history, oldest first
+
+fn Exchange::sent(self e: Exchange, fd: BitVec(64)) → List<BitVec(8)> { e.cmd.sent(fd)(e.answer) }
+fn Exchange::received(self e: Exchange, fd: BitVec(64)) → List<BitVec(8)> { e.cmd.received(fd)(e.answer) }
+
+// The bytes the program has written to `fd`, and read from it, in order.
+fn Io::sent(self io: Io, fd: BitVec(64)) → List<BitVec(8)> {
+    io.past.foldl(λ acc (e: Exchange) => e.sent(fd) ++ acc, [])
+}
+fn Io::received(self io: Io, fd: BitVec(64)) → List<BitVec(8)> {
+    io.past.foldl(λ acc (e: Exchange) => e.received(fd) ++ acc, [])
+}
+
+// ---------------------------------------------------------------------------
+// Scripted worlds
+
+// How many reads the history holds.
+fn Exchange::reads(past: List<Exchange>) → Nat {
+    match past {
+        Nil => 0,
+        Cons(e, rest) => match e.cmd {
+            ReadCmd(_, _) => Succ(Exchange::reads(rest)),
+            WriteCmd(_, _) => Exchange::reads(rest),
+            OpenCmd(_) => Exchange::reads(rest),
+            CloseCmd(_) => Exchange::reads(rest),
+            StatCmd(_) => Exchange::reads(rest),
+        },
+    }
+}
+
+// A world whose input is `chunks`: the k-th read answers the k-th chunk, cut
+// to the size asked for, and every read past the last answers the end of
+// the input. Every write goes whole, opens and stats fail with ENOENT, and
+// closes succeed. A test's environment: a pipe into the program and a
+// terminal that takes everything.
+fn World::piped(chunks: List<List<BitVec(8)>>) → World() {
+    λ past c => match c {
+        ReadCmd(_, max) => ReadBytes(chunks.nth(Exchange::reads(past)).unwrap_or([]).take(max)),
+        WriteCmd(_, bytes) => Wrote(bytes.len()),
+        OpenCmd(_) => OpenFailed(2),
+        CloseCmd(_) => Closed,
+        StatCmd(_) => StatFailed(2),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The tree reading
+
+// A tree read against a world: its commands put to it in order, and the
+// value it returns with the world after them; `None` where it is cut.
+fn Io::against<R>(t: ITree<R>(Events::linux()), io: Io) → Option<Mutated<Io, R>> {
+    match t {
+        Ret(r) => Some(Mutated(io, r)),
+        Tau(u) => Io::against(u, io),
+        Vis(c, k) => Io::against(k(Io::call(io, c).value), Io::call(io, c).after),
+        Cut => None,
+    }
+}
+
+// The tree is what the capability program does, at every world.
+fn Io::Reads<R>(t: ITree<R>(Events::linux()), f: Io → Mutated<Io, R>) → Type {
+    (io: Io) → Io::against(t, io) = Some(f(io))
+}
+
+theorem Io::against_ret<R>(r: R, io: Io): Io::against<R>(Ret(r), io) = Some(Mutated(io, r)) { refl }
+
+// A call issued is the call put to the world.
+theorem Io::against_trigger(c: LinuxCmd<Nat>, io: Io):
+    Io::against(ITree::trigger(Events::linux(), c), io) = Some(Io::call(io, c)) { refl }
+
+// Sequencing is reading one tree after the other, from the world the first
+// leaves.
+theorem Io::against_bind<A, B>(t: ITree<A>(Events::linux()), h: A → ITree<B>(Events::linux())):
+    (io: Io) → Io::against(ITree::bind(Events::linux(), t, h), io)
+        = Io::against(t, io).and_then(λ m => Io::against(h(m.value), m.after))
+{
+    match t {
+        Ret(_) => λ io => refl,
+        Tau(u) => λ io => Io::against_bind(u, h, io),
+        Vis(c, k) => λ io => Io::against_bind(k(Io::call(io, c).value), h, Io::call(io, c).after),
+        Cut => λ io => refl,
+    }
+}
+
+// A call reads as the capability call.
+theorem Io::reads_trigger(c: LinuxCmd<Nat>): Io::Reads(ITree::trigger(Events::linux(), c), λ io => Io::call(io, c)) {
+    λ io => Io::against_trigger(c, io)
+}
+
+theorem Io::reads_ret<R>(r: R): Io::Reads<R>(Ret(r), λ io => Mutated(io, r)) { λ io => refl }
+
+// `let a = f(io); g(a)(io)` reads as the trees in sequence: the agreement of
+// a capability program with its tree is proved construct by construct.
+theorem Io::reads_bind<A, B>(t: ITree<A>(Events::linux()), f: Io → Mutated<Io, A>,
+    h: A → ITree<B>(Events::linux()), g: A → Io → Mutated<Io, B>,
+    rt: Io::Reads(t, f), rh: (a: A) → Io::Reads(h(a), g(a))):
+    Io::Reads(ITree::bind(Events::linux(), t, h), λ io => g(f(io).value, f(io).after))
+{
+    λ io => trans(Io::against_bind(t, h, io),
+        j(sym(rt(io)), λ o q => o.and_then(λ m => Io::against(h(m.value), m.after)) = Some(g(f(io).value, f(io).after)),
+            rh(f(io).value, f(io).after)))
+}

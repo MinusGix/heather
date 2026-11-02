@@ -295,3 +295,68 @@ fn doubled_unless_big(xs: List<Nat>) → Nat {
 }
 theorem doubled_unless_big_lit(): doubled_unless_big([1, 2]) = 6 { refl }
 theorem doubled_unless_big_returns(): doubled_unless_big([1, 200, 2]) = 0 { refl }
+
+// ---------------------------------------------------------------------------
+// `mut self` methods (§8.2): a call on a `let mut` local updates it
+
+record Counter { n: Nat, log: List<Nat> }
+
+// The kernel type returns the receiver beside the result:
+// `Counter → Nat → Mutated<Counter, Nat>`.
+fn Counter::tick(mut self c: Counter, by: Nat) → Nat {
+    c := Counter(c.n + by, Cons(by, c.log));
+    c.n
+}
+theorem tick_kernel(c: Counter): Counter::tick(c, 1).value = c.n + 1 { refl }
+theorem tick_after(c: Counter): Counter::tick(c, 1).after = Counter(c.n + 1, Cons(1, c.log)) { refl }
+
+// A `mut self` method calling another on its own receiver.
+fn Counter::bump(mut self c: Counter) → True { c.tick(1); }
+
+// `let a = c.tick(2);` binds the value and updates `c`; `c.tick(3);` is a
+// statement.
+fn run_counter(start: Nat) → Nat {
+    let mut c = Counter(start, []);
+    let a = c.tick(2);
+    c.tick(3);
+    c.bump();
+    a + c.n
+}
+theorem run_counter_lit(): run_counter(10) = 12 + 16 { refl }
+theorem run_counter_neutral(s: Nat): run_counter(s) = (s + 2) + (s + 2 + 3 + 1) { refl }
+
+// The receiver is loop state when a loop body calls on it.
+fn counted(xs: List<Nat>) → List<Nat> {
+    let mut c = Counter(0, []);
+    for x in xs { c.tick(x); }
+    c.log
+}
+theorem counted_lit(): counted([1, 2, 3]) = [3, 2, 1] { refl }
+
+// A statement `if` whose body is the call, with and without the `;`.
+fn branch_tick(b: Bool) → Nat {
+    let mut c = Counter(0, []);
+    if b = Bool::True { c.tick(5) }
+    if b = Bool::True { c.tick(1); }
+    c.n
+}
+theorem branch_tick_t(): branch_tick(Bool::True) = 6 { refl }
+theorem branch_tick_f(): branch_tick(Bool::False) = 0 { refl }
+
+// With an early exit.
+fn tick_until_zero(xs: List<Nat>) → Nat {
+    let mut c = Counter(0, []);
+    for x in xs {
+        if x = 0 { break }
+        c.tick(x);
+    }
+    c.n
+}
+theorem tick_until_zero_lit(): tick_until_zero([1, 2, 0, 5]) = 3 { refl }
+
+// A `mut` parameter is a local copy; the call is the function's value.
+fn tick_tail(mut c: Counter) → Nat { c.tick(4) }
+theorem tick_tail_lit(): tick_tail(Counter(1, [])) = 5 { refl }
+
+// Called on a local that is not `mut`, the method gives the record.
+theorem tick_plain(c: Counter): (λ (d: Counter) => d.tick(1))(c).value = c.n + 1 { refl }
