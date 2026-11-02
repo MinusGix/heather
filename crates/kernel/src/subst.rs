@@ -124,8 +124,11 @@
 //! of the answer: a node counted shared that is visited once costs a table
 //! entry and changes nothing else, so the memo changes allocation and work,
 //! never syntax. Each entry holds a keep-alive clone of its key, so an
-//! address cannot be reused while the memo lives; it is dropped when the
-//! call returns.
+//! address cannot be reused while the memo lives; the entries are dropped
+//! when the call returns (the emptied tables go back to a per-thread pool).
+//! A `Var` leaf is shared by construction ([`Term::var_rc`]), so it is
+//! mapped before the memo is asked, and enters it only when it became a
+//! payload: that is the one leaf result worth sharing across paths.
 //!
 //! Every mapper whose output depends on the node and depths alone opts in
 //! ([`Mapper::memo`]): the global and universe operations as much as the
@@ -210,10 +213,95 @@ impl GlobalSubst {
 /// node (the change counter is replayed on a hit, so the parent shares or
 /// rebuilds exactly as it would have). The first `Rc` of each entry is the
 /// keep-alive for the address in its key.
-#[derive(Default)]
+///
+/// The tables come from a per-thread pool ([`MEMO_POOL`]) and go back to it,
+/// emptied with their capacity kept, when the call ends: a traversal that
+/// memoizes anything otherwise grew both from empty, rehash by rehash, on
+/// every call (`issues/subst-per-call-allocations.md`). Emptying drops the
+/// keep-alives exactly when dropping the memo did, so no address outlives
+/// its call in a pooled table.
 struct NodeMemo {
-    terms: PtrMap<(usize, Depths), (Rc<Term>, Rc<Term>, bool)>,
-    types: PtrMap<(usize, Depths), (Rc<Type>, Rc<Type>, bool)>,
+    terms: TermMemo,
+    types: TypeMemo,
+}
+
+type TermMemo = PtrMap<(usize, Depths), (Rc<Term>, Rc<Term>, bool)>;
+type TypeMemo = PtrMap<(usize, Depths), (Rc<Type>, Rc<Type>, bool)>;
+
+/// Tables kept per thread: enough for the nesting a traversal reaches (a
+/// payload lifted inside a substitution starts its own shifts), not one per
+/// call ever made.
+const MEMO_POOL_TABLES: usize = 8;
+
+/// The largest table the pool keeps. Emptying a table costs its capacity,
+/// not its length, so one huge call's table would tax every small call
+/// after it; past this it is freed, as before the pool.
+const MEMO_POOL_MAX_CAPACITY: usize = 1 << 12;
+
+thread_local! {
+    static MEMO_POOL: std::cell::RefCell<(Vec<TermMemo>, Vec<TypeMemo>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
+
+impl Default for NodeMemo {
+    fn default() -> NodeMemo {
+        // `try_with`: a traversal run from another thread-local's destructor
+        // gets fresh tables rather than a panic.
+        MEMO_POOL
+            .try_with(|pool| {
+                let mut pool = pool.borrow_mut();
+                NodeMemo {
+                    terms: pool.0.pop().unwrap_or_default(),
+                    types: pool.1.pop().unwrap_or_default(),
+                }
+            })
+            .unwrap_or_else(|_| NodeMemo { terms: PtrMap::default(), types: PtrMap::default() })
+    }
+}
+
+impl Drop for NodeMemo {
+    fn drop(&mut self) {
+        // Emptied before the pool is borrowed: dropping the keep-alives runs
+        // arbitrary `Drop`s, none of which may find the pool borrowed.
+        fn keep<K, V>(table: &mut PtrMap<K, V>) -> bool {
+            let cap = table.capacity();
+            if cap == 0 || cap > MEMO_POOL_MAX_CAPACITY {
+                return false;
+            }
+            // `clear` on an empty table still sweeps its control bytes.
+            if !table.is_empty() {
+                table.clear();
+            }
+            true
+        }
+        let keep_terms = keep(&mut self.terms);
+        let keep_types = keep(&mut self.types);
+        if !keep_terms && !keep_types {
+            return;
+        }
+        // Only emptied tables are moved in; a table the pool has no room for
+        // is handed back out and freed after the borrow ends.
+        let terms = keep_terms.then(|| std::mem::take(&mut self.terms));
+        let types = keep_types.then(|| std::mem::take(&mut self.types));
+        let _spare = MEMO_POOL.try_with(|pool| {
+            let mut pool = pool.borrow_mut();
+            let terms = match terms {
+                Some(t) if pool.0.len() < MEMO_POOL_TABLES => {
+                    pool.0.push(t);
+                    None
+                }
+                t => t,
+            };
+            let types = match types {
+                Some(t) if pool.1.len() < MEMO_POOL_TABLES => {
+                    pool.1.push(t);
+                    None
+                }
+                t => t,
+            };
+            (terms, types)
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -463,7 +551,7 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     // does not even apply — the node really is different).
     if let Some(r) = m.pre_tm(t, at) {
         m.note();
-        return Rc::new(r);
+        return r.into_rc();
     }
     if m.skip_tm(t, at) {
         #[cfg(debug_assertions)]
@@ -479,8 +567,35 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
         }
         return Rc::clone(t);
     }
-    // As in `sub_ty`.
     let key = (Rc::as_ptr(t) as usize, at);
+    // `Var` leaves are shared by construction (`Term::var_rc`), so their
+    // count says nothing about a second path, and mapping one costs less
+    // than a table probe. Mapped first, then: a variable that stays a
+    // variable is a shared leaf again, and only one that became a payload
+    // goes through the memo, so a payload reached along two paths is still
+    // one node (and counts the same hit it always did).
+    if let Term::Var(_) = **t {
+        let before = *m.changes();
+        let mapped = map_term(t, m, at);
+        if *m.changes() == before {
+            return shared_tm::<M>(t, mapped);
+        }
+        if let Term::Var(_) = mapped {
+            return mapped.into_rc();
+        }
+        if Rc::strong_count(t) == 1 {
+            return Rc::new(mapped);
+        }
+        let Some(memo) = m.memo() else { return Rc::new(mapped) };
+        if let Some((_, out, _)) = memo.terms.get(&key) {
+            crate::stats::subst_memo_hits(1);
+            return Rc::clone(out);
+        }
+        let out = Rc::new(mapped);
+        memo.terms.insert(key, (Rc::clone(t), Rc::clone(&out), true));
+        return out;
+    }
+    // As in `sub_ty`.
     let shared = Rc::strong_count(t) > 1 && m.memo().is_some();
     if shared {
         if let Some((_, out, changed)) = m.memo().and_then(|memo| memo.terms.get(&key)) {
@@ -507,7 +622,7 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     let before = *m.changes();
     let mapped = map_term(t, m, at);
     let changed = *m.changes() != before;
-    let out = if changed { Rc::new(mapped) } else { shared_tm::<M>(t, mapped) };
+    let out = if changed { mapped.into_rc() } else { shared_tm::<M>(t, mapped) };
     if shared {
         if let Some(memo) = m.memo() {
             memo.terms.insert(key, (Rc::clone(t), Rc::clone(&out), changed));
@@ -2217,9 +2332,9 @@ impl LocalSubst {
             CtxBase::Nil => SubstTail::Empty { len: m, base: CtxBase::Nil },
             CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
         };
-        let terms = (0..m)
-            .map(|j| Rc::new(Term::Var(LocalVar(m - 1 - j))))
-            .collect();
+        // Shared leaves: `|Γ|` refcount increments, not `|Γ|` allocations
+        // (`issues/subst-per-call-allocations.md`).
+        let terms = Term::var_rcs_descending(m);
         LocalSubst { tail, terms }
     }
 

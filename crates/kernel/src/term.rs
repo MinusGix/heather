@@ -259,6 +259,71 @@ pub enum Type {
     },
 }
 
+/// How many local variable leaves each thread interns ([`Term::var_rc`]).
+/// Indices at or above it are allocated per call, as before: Γ is rarely
+/// that long, and a bound keeps a thread's table small.
+const INTERNED_LOCAL_VARS: u32 = 4096;
+
+thread_local! {
+    /// This thread's shared `Var(i)` leaves, grown on demand up to
+    /// [`INTERNED_LOCAL_VARS`]. Per thread so that the kernel workers do not
+    /// contend on one refcount per index; a leaf is an ordinary `Rc` and may
+    /// still move to another thread with the term holding it.
+    static LOCAL_VAR_LEAVES: std::cell::RefCell<Vec<Rc<Term>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Term {
+    /// A shared `Var(i)` leaf (`issues/subst-per-call-allocations.md`): an
+    /// interned `Rc` for an index below [`INTERNED_LOCAL_VARS`], a fresh
+    /// one above it. Sharing a leaf changes no syntax, only identity, and
+    /// identity is only ever read by memos that already key on the scope
+    /// (typing), answer leaves before their table (bounds), or skip leaves
+    /// (substitution, `subst.rs` §Keeping a shared DAG shared).
+    pub fn var_rc(i: u32) -> Rc<Term> {
+        if i >= INTERNED_LOCAL_VARS {
+            return Rc::new(Term::Var(LocalVar(i)));
+        }
+        LOCAL_VAR_LEAVES.with(|leaves| {
+            let mut leaves = leaves.borrow_mut();
+            Self::grow_var_leaves(&mut leaves, i + 1);
+            Rc::clone(&leaves[i as usize])
+        })
+    }
+
+    /// `[Var(m - 1), …, Var(0)]`: the payloads of `id(Γ)` for `|Γ| = m`,
+    /// one table borrow for all of them.
+    pub fn var_rcs_descending(m: u32) -> Vec<Rc<Term>> {
+        if m > INTERNED_LOCAL_VARS {
+            return (0..m).map(|j| Term::var_rc(m - 1 - j)).collect();
+        }
+        LOCAL_VAR_LEAVES.with(|leaves| {
+            let mut leaves = leaves.borrow_mut();
+            Self::grow_var_leaves(&mut leaves, m);
+            leaves[..m as usize].iter().rev().cloned().collect()
+        })
+    }
+
+    fn grow_var_leaves(leaves: &mut Vec<Rc<Term>>, len: u32) {
+        let have = leaves.len() as u32;
+        if have < len {
+            // Grow geometrically, so a context deepening one binder at a time
+            // does not come back here per binder.
+            let want = len.max(have * 2).max(64).min(INTERNED_LOCAL_VARS);
+            leaves.extend((have..want).map(|i| Rc::new(Term::Var(LocalVar(i)))));
+        }
+    }
+
+    /// `Rc::new(self)`, except that a `Var` leaf comes from the shared table
+    /// ([`Term::var_rc`]) instead of a fresh allocation.
+    #[inline]
+    pub fn into_rc(self) -> Rc<Term> {
+        match self {
+            Term::Var(LocalVar(i)) => Term::var_rc(i),
+            t => Rc::new(t),
+        }
+    }
+}
+
 /// Terms `s, t` (sort `Exp`).
 #[derive(Clone, Eq)]
 pub enum Term {
