@@ -15,6 +15,7 @@ pub mod lexer;
 pub mod parser;
 pub mod roles;
 mod try_lower;
+mod imperative;
 
 pub use ast::*;
 pub use parser::{class_ty, parse_file, pos_carrier, ParseError, BY_TACTIC, POS_RESULT, POS_SEARCH};
@@ -22,3 +23,5 @@ pub use fmt::format_source;
 pub use roles::{argument_lists, token_roles, ArgumentLists, Delims, TokenRole};
 
 pub use try_lower::without_decrease_labels;
+pub use try_lower::{BIND_SEQ, POINTED_RET};
+pub use imperative::{LOOP, PROJ, STATE};

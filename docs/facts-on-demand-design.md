@@ -3,7 +3,7 @@
 Status: prototype landed 2026-11-01. It extends `docs/compilation-vision.md`
 §6.2 ("facts on demand: dispatch methods, and checks as searches") and does
 not re-derive it. Tracking issue: [facts-on-demand](../issues/facts-on-demand.md);
-the second fact, `Unique`, is [unique-fact](../issues/unique-fact.md).
+the second fact, `Unique` over `rt` (§7), is [unique-fact](../issues/unique-fact.md).
 
 §6.2 asks for four things. A fact is an open class with several producers.
 Producers are lazy and run cheapest first, with the generic search last. A
@@ -20,6 +20,7 @@ a small language whose compiler drops bounds checks.
 | a budget | `budgeted` (§4) | library |
 | a compiler proved once over any facts | proof-carrying sites (§5) | pattern; `lib/lang/facts/checked_reads.hthr` |
 | the first fact, `InBounds` | `lib/lang/facts/in_bounds.hthr`, `read_facts.hthr` | library |
+| the second fact, `Unique` over `rt` (§7) | `lib/lang/facts/unique.hthr`, `write_facts.hthr` | library, plus `rt`'s byte read and write |
 
 ## 1. What a fact is
 
@@ -224,33 +225,89 @@ At a budget of 16, the third read keeps its check. A read over a box of
 101 × 101 points at budget 0 is proved by a user lemma declared beside it.
 A program whose every read the analysis proves needs no search at all.
 
-## 7. `Unique`, designed, and why it waits
+## 7. The second fact: `Unique` over `rt`
 
-`Unique(p, k)` would say that the buffer the `k`th update consumes is not
-read again: neither it nor anything sharing its storage. The consumer is
-in-place update. The producers follow the same pattern as `InBounds`:
+Built 2026-11-01, once `rt` had landed (`lib/native/runtime/rt.hthr`).
+Code: `lib/lang/facts/unique.hthr` (the fact, its producers, the plan a
+lowering consumes) and `lib/lang/facts/write_facts.hthr` (the generator that
+asks for it); probes in `lib/_tests/lang/facts/write_facts_tests.hthr`.
 
-- **The setup's judgment**, as a plain rule: `Unique::of_owned({p}, {k},
-  o: Owned(p) := infer)`, where `Owned(p)` is a linearity check that
-  evaluates to `True` for a program that uses each buffer once. This is
-  §6.2's "a borrow-checked function produces 'is this aliased' cheaply",
-  keyed on the judgment of the setup that compiled `p`.
-- **A per-site liveness check** as the compiler's fallback, verified by
-  evaluation: no later op reads the consumed buffer or an alias of it.
+**The write.** `rt` gained a byte read and a byte write of a `Bytes` value
+at a `Word(64)` index, `Op::Get(cap)` and `Op::Set(cap)`. They mean
+`List::byte_at` and `List::with_byte`, which a `runtime fn` writes and the
+reflector reads, so the pin stays `refl` (`bump_reflects` in
+`lib/_tests/native/runtime/rt_tests.hthr`). Out of range, the read is 0 and
+the write changes nothing. `rt` is pure, so a write means a new buffer.
+Whether the lowering may build that buffer in the old one's storage is the
+fact's question, not the meaning's.
 
-What it needs that `InBounds` did not is a semantics in which aliasing can be
-observed. An in-place update is only wrong because another name sees the
-write, so the compiler's theorem has to be stated against a store of slots,
-with a map from buffer names to slots. The invariant is that every live name
-reads its slot's contents. Proving that is a simulation with an invariant
-over liveness, a different size of proof from the reads compiler's
-per-site lemma.
+**The statement.** `Unique(p, f, k)`: the `k`th write of function `f` of
+program `p` consumes a buffer that nothing reads after the write. "Nothing"
+covers the name itself and every name that may share its storage. It is an
+equation of a computed verdict, `p.unique_at(f, k) = True`. An equation is
+deliberate: the search's computation step (`trivial` at a goal that
+reduces to `True`) never answers it, so its producers run in their order
+and are not short-circuited by an evaluation of the whole verdict.
 
-That store is what `rt` and the ownership setup define
-(`docs/runtime-fn-setups-design.md`, `issues/ownership-discipline-over-code.md`).
-A toy store built here would be thrown away once they land. So `Unique` is
-filed ([unique-fact](../issues/unique-fact.md)) to be built over `rt`'s
-memory once there is one. Everything in §2 to §5 carries over unchanged.
+The verdict is a liveness analysis over ANF with storage identities:
+
+- Each variable has a set of storage identities. A parameter, or a value a
+  node makes, has its own identity, which is its level. A `let` alias, a
+  record built from it (`Make`), a field of a record (`Field`), a branch
+  result, or a call or fold result has the identities of what it may be.
+  Two names can share storage only if their identities meet. A made value
+  whose level a later variable repeats only adds sharing that is not there,
+  so the analysis can be too cautious but never too bold.
+- At a write, the old buffer's class is every variable whose identities
+  meet the consumed one's. What runs after the write is the bodies of the
+  `let`s it sits inside, innermost first. The write is dead (`ok`) if none
+  of those bodies reads a variable of the class. The other arm of a
+  branch does not count, and what runs after the branch does.
+- **Parameters are owned.** A function owns its buffer parameters: a caller
+  moves a buffer into a call and does not read it afterwards. The entry's
+  caller, outside the program, is assumed to do the same. So a call, or a
+  fold's start (moved into the step), is a consuming use, checked like a
+  write. Its buffers must also be pairwise apart, since a callee owning two
+  parameters that are one buffer would corrupt the other by writing one,
+  and a fold's start must be apart from the buffer it folds. A write whose
+  buffer may be a parameter is unique only if the function owns its
+  parameters, meaning every call of it in the program moves (`p.owns(f)`).
+
+**Producers**, cheapest first:
+
+1. **The ownership judgment.** `Owned(p)` holds when every consuming use of
+   every function in the program is dead. A program that passes it
+   publishes the verdict once, as an `evidence theorem`
+   (`good_owned` in the probes, by `Owned::by_check`; a runtime setup would
+   publish it beside its `judge`). The plain rule `Unique::of_owned({p},
+   {f}, {k}, o: Owned(p) := infer)` reads every write's fact off that
+   verdict without evaluating anything per site. It is proved once: a
+   conjunction over functions and uses gives each write and each callee's
+   ownership.
+2. **The per-site check.** `Unique::by_check(p, f, k, h)`, where `h` is the
+   one write's verdict closed by evaluation. The planner asks for it as its
+   fallback when the program fails the judgment as a whole, because some
+   other write keeps its old buffer.
+
+**The consumer.** `generate plan_writes(p, f, "name", fallback)` publishes a
+`WritePlan(p, f)`: one `WriteSite` per write, in order, each carrying an
+`Option<Unique(p, f, k)>`. With a proof the write is `InPlace`; without one
+it is `Copied`. Coverage is pinned by `refl`. The probes show the three
+routes. `good` publishes its verdict, so its write is in place with the
+fallback off. `mixed` contains a function that reads its old buffer, so it
+publishes no verdict: its other write is in place only through the
+fallback, and the bad write is copied. In `leaky` a caller reads a buffer
+after moving it, so the callee's write is copied whatever is asked.
+
+**What is left to the lowering.** The theorem that an in-place write is
+correct needs a store: buffers as slots, names mapped to slots, and the
+invariant that every live name reads its slot. That store is the runtime
+setup's lowering of `Bytes` to a buffer plus a length
+(`issues/runtime-default-setup-soundness.md`). Its `sound` takes the plan's
+proofs as hypotheses at exactly the sites marked `InPlace`, so it is proved
+once for any facts, as `Compiled::runs` was. That theorem, and the
+calling-convention half that gives a callee its buffers, are tracked in
+[unique-fact](../issues/unique-fact.md).
 
 ## 8. What is open
 
@@ -262,9 +319,9 @@ memory once there is one. Everything in §2 to §5 carries over unchanged.
   rest are the requester's fallbacks, as here. (c) is enough for now.
 - **A `fact` marker**, if facts and ordinary propositions ever need to
   behave differently. Nothing in this round needed one.
-- **Facts over `rt` code.** `InBounds` is over a toy language. Once
-  `runtime fn` reflects bodies (`issues/runtime-fn-reflected-language.md`),
-  the same request runs over `rt` reads, and a call's facts (Q9, `CallCtx`)
+- **`InBounds` over `rt` code.** `InBounds` is over a toy language, while
+  `Unique` (§7) is over `rt`. Moving `InBounds` to `rt`'s `Get` needs an
+  index analysis over `rt` words. A call's facts (Q9, `CallCtx`) would then
   become locals of the request.
 - **Contracts across calls** (Q4) are untouched.
 - **Cost** was not measured, since this is not a performance round. Each

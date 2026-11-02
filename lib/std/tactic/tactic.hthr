@@ -300,12 +300,24 @@ fn Tac::bind<A, B>(self t: Tac<A>, f: A → Tac<B>) → Tac<B> {
     match t { Pure(a) => f(a), Ask(r, k) => Ask(r, λ x => k(x).bind(f)) }
 }
 
+// `Tac` is a carrier of binding statements (docs/sequencing-surface-design.md
+// §2.3): `let g <- goal();` is `goal().bind(λ g => …)`.
+instance Bind<Tac> { bind := Tac::bind }
+instance Pointed<Tac> { pure := λ {A} a => Pure(a) }
+
 fn goal() → Tac<GoalInfo> { Ask(Goal, λ g => Pure(g)) }
 
 fn defeq(a: Expr, b: Expr) → Tac<Bool> { Ask(Defeq(a, b), λ same => Pure(same)) }
 
 fn fail<A>(msg: String, notes: List<Note>) → Tac<A> {
     Ask(Fail(msg, notes), λ never => match never {})
+}
+
+// A checked result's value, or a failure that prefixes the refusal's reason:
+// the `Refused(why) => fail(prefix ++ why, [])` match as one call, so that
+// `let h <- infer(e).or_fail("mono: ");` reads as a statement.
+fn Tac::or_fail<A>(self t: Tac<Checked<A>>, prefix: String) → Tac<A> {
+    t.bind(λ c => match c { Accepted(a) => Pure(a), Refused(why) => fail(prefix ++ why, []) })
 }
 
 fn infer(e: Expr) → Tac<Checked<Handle>> { Ask(Infer(e), λ c => Pure(c)) }

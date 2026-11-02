@@ -2,14 +2,14 @@
   "keywords": [
     "Code", "Ctx", "TyCode", "Type", "apply", "as", "at", "axiom", "calc", "class", "code", "codata",
     "all_goals", "datarepr", "designation", "else", "evidence", "export", "extends", "fn", "for", "fun", "if",
-    "give", "have", "impl", "import", "inductive", "infer", "instance", "j", "let", "match",
+    "give", "have", "impl", "import", "inductive", "infer", "instance", "j", "let", "match", "mut",
     "meta", "mk", "on", "postfix", "prefix", "record", "refl", "by",
     "requires", "assuming", "section", "self", "split", "split_all",
     "theorem", "generate", "def", "Squash", "squash_ind", "decreases", "decreasing", "with"
   ],
   "punctuation": [
     "(", ")", "{", "}", "[", "]", "⟨", "⟩", "|", ",", ":", ";", "@", "$", ".", "->", "→",
-    "=>", "⊢", "|-", "=", ":=", "::", ">", "λ", "∥", "⟦", "⟧"
+    "=>", "⊢", "|-", "=", ":=", "::", ">", "λ", "∥", "⟦", "⟧", "<-", "←"
   ],
   "fixed_operators": [
     "+", "-", "!", "++", "*", "<", "<=", "&&", "||", "∙", "⊔", "≈", "¬", "∧", "∨", "↔",

@@ -232,10 +232,8 @@ theorem safe_pred_plain_if(n: BitVec(64)):
 // ---------------------------------------------------------------------------
 // V3: `decreases` recursion. A self-call is a `Call` of the function itself,
 // answered from the table by the function, so the body pins by `refl`
-// against the body as written, convoy included. `f(xs) = body[f]` is the
-// generated `f_unfold`; for a `match h:` body that equation is refused
-// today (`issues/decreases-unfold-convoy-scrutinee.md`), which is why the
-// pin below stops at the body.
+// against the body as written, convoy included, and `f(xs) = body[f]` is
+// the generated `f_unfold`, so the pin reaches the function itself.
 
 fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
     match h: n.eq_bit(BitVec::ofNat(0)) {
@@ -255,6 +253,36 @@ fn count_down_world() → World { World(RecInfo::none, [count_down_rt().sig()], 
 
 theorem count_down_body_reflects(n, acc: BitVec(64)): count_down_rt().meaning(count_down_world())(n, acc) =
     match h: n.eq_bit(BitVec::ofNat(0)) { True => acc, False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)) } { refl }
+
+theorem count_down_reflects(n, acc: BitVec(64)): count_down_rt().meaning(count_down_world())(n, acc) = count_down(n, acc) {
+    trans(count_down_body_reflects(n, acc), sym(count_down_unfold(n, acc)))
+}
+
+// ---------------------------------------------------------------------------
+// A byte read and a byte write. A write is a primitive returning the new
+// buffer; whether it may reuse the old one's storage is the `Unique` fact's
+// question (lib/lang/facts/unique.hthr), not the meaning's.
+
+fn bump(xs: List<BitVec(8)>, i: BitVec(64)) → BitVec(8) {
+    let ys = xs.with_byte(i, xs.byte_at(i).add(BitVec::ofNat(1)));
+    ys.byte_at(BitVec::ofNat(0))
+}
+
+fn bump_rt() → Fun {
+    Fun([Bytes(0), Word(64)], Word(8),
+        Let(Prim(Get(0), [1, 0]),
+        Let(Lit(Word(8), 1),
+        Let(Prim(Add(8), [1, 0]),
+        Let(Prim(Set(0), [4, 3, 0]),
+        Let(Lit(Word(64), 0),
+            Prim(Get(0), [1, 0])))))))
+}
+
+fn bump_world() → World { World(RecInfo::none, [bump_rt().sig()], Pair(bump, trivial)) }
+
+theorem bump_reflected(): True { by reflects_as(["bump"], [], [bump_rt()]) }
+
+theorem bump_reflects(xs: List<BitVec(8)>, i: BitVec(64)): bump_rt().meaning(bump_world())(xs, i) = bump(xs, i) { refl }
 
 // ---------------------------------------------------------------------------
 // Refusals name their reason.

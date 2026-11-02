@@ -391,7 +391,7 @@ decides.
 | back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
 | `rt` and setups | designed (PR #325) | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | designed (setups note §9.3) | `issues/compile-typeclass-design.md` |
-| facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads | `docs/facts-on-demand-design.md`, `issues/facts-on-demand.md`; `Unique` is `issues/unique-fact.md` |
+| facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
 | DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |
 | ownership | direction issue | `issues/ownership-discipline-over-code.md`, milestone `nh-ownership` |

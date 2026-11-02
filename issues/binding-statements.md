@@ -1,11 +1,11 @@
 ---
 title: Bind results in blocks over any carrier with a bind (let x <- e;)
-status: open
+status: closed
 labels: [frontend,syntax,elaboration,ergonomics]
 area: language
 milestone: [lang-sequencing]
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 Round R2 of `docs/compiler-milestones-proposal.md` (§3.1, §7): binding statements over any carrier, as
@@ -36,3 +36,19 @@ Against `docs/sequencing-surface-design.md` (§2, §3, §10, §12):
 ## Log
 
 - 2026-10-31: R2a landed ([[higher-kinded-classes]], docs/higher-kinded-classes-design.md §5): instances write implicit binders (pure := λ {A} a => …, no implicit-λ insertion); a class named Pure has a record constructor Pure that collides with Tac's Pure, so choose the name or qualify before the classes enter the library; a Result instance waits on [[class-instance-at-lambda-carrier]].
+- 2026-11-01: Built (layer 1, docs/sequencing-surface-design.md §13). `let x <- e;` (`←`,
+  annotated, `{ … }` destructuring, `_`), `e;`, `(<- e)` and `match <- e`,
+  lowered in the parser (`crates/syntax/src/try_lower.rs`, one walk shared with
+  `?`, scoped to the block) to the prelude's `Bind::seq`; the carrier is found by
+  application elaboration. Classes `Bind<M>` and `Pointed<M>` in the prelude (not
+  `Pure`: it would take `Tac::Pure` from every tactic module); instances at
+  `Option` and `Tac`; `List::for_m`, `List::traverse`, `Tac::or_fail`. Refusals
+  name their reason (`crates/elab/src/binding.rs`); probes in
+  `lib/_tests/std/core/binding_statements_tests.hthr`. `mono.hthr` has no
+  `.bind(` left (75 sites before), and `regex.hthr`'s generator is statements.
+  Grammar and inventory updated; parser.c regeneration is
+  [[tree-sitter-binding-statements]]. Not built: `?` for `Option` (type-directed,
+  logged on [[prelude-option-and-friends]]), the discarded-result lint
+  ([[discarded-bind-result-lint]]), a nested bind in a non-tail match arm
+  ([[bind-in-non-tail-match-arms]]); `Result`/`Parser`/`ITree` instances wait on
+  [[class-instance-at-lambda-carrier]].

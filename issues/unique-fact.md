@@ -47,3 +47,29 @@ that would be discarded.
 
 - 2026-11-01: Filed from the facts-on-demand prototype, which built
   `InBounds` end to end and designed this one (design §7).
+- 2026-11-01: The fact and its producers built over `rt` (design §7,
+  rewritten). `rt` has a byte read and a byte write (`Op::Get`, `Op::Set`:
+  `List::byte_at`, `List::with_byte`), reflected and pinned by `refl`.
+  `lib/lang/facts/unique.hthr` states `Unique(p, f, k)` as a verdict:
+  liveness over ANF with storage identities through lets, records, fields,
+  branches, calls and folds. Parameters are owned, so calls and fold starts
+  are moves. The ownership judgment `Owned(p)` is published once and read
+  by the plain rule `Unique::of_owned`, proved once. The per-site check
+  `Unique::by_check` is the planner's fallback.
+  `lib/lang/facts/write_facts.hthr` publishes a `WritePlan` of proof-carrying
+  sites. All three routes are probed in
+  `lib/_tests/lang/facts/write_facts_tests.hthr`.
+
+## What is left
+
+- **The in-place lowering and its theorem**, with the plan's proofs as
+  hypotheses at the `InPlace` sites. This is the runtime setup's: it lowers
+  `Bytes` to a buffer plus a length
+  ([[runtime-default-setup-soundness]]), and its store is where "every live
+  name reads its slot" is stated. That is acceptance item 2.
+- **The calling convention's half.** A callee may write its parameter in
+  place only because callers move. The lowering has to pass the buffer
+  itself (no copy) at a call whose `Pass` verdict holds, and copy at one
+  whose verdict fails.
+- **A setup publishing `Owned` itself.** Today a test declares the verdict.
+  A runtime setup would publish it beside `judge(p) = Ok`.

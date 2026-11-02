@@ -1,0 +1,207 @@
+// Summation error (docs/floating-point-design.md §19): the recursive sum's
+// bound and Kahan's compensated step.
+//
+// Addition obeys the standard model with no underflow term: below the
+// least normal a sum of two floats is on the finest grid and no larger than
+// a float there, so it is exact (`Finite::add_rel_error`). The recursive
+// sum `s₁ = x₁, sₖ = ○(sₖ₋₁ + xₖ)` of `n` floats is then within
+// `γ(n - 1)·∑|xᵢ|` of the exact sum in every mode (Higham, Accuracy and
+// Stability of Numerical Algorithms, §4.2): each step's `u` composes with
+// the rest by `γ(m) + u + γ(m)·u <= γ(m + 1)` (`Format::rec_sum_error`).
+//
+// Kahan's step `y = x - c, t = ○(s + y), c' = (t - s) - y` is Fast2Sum with
+// the last subtraction reversed: when `|y| <= |s|` and `t` is a nearest
+// rounding, `t - s` and `c'` are exact and `t - c' = s + y`
+// (`Finite::kahan_step`). The whole-loop bound `(2u + O(n·u²))·∑|xᵢ|` is
+// issues/float-kahan-bound.md.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import linarith;
+import list;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+import float;
+import round;
+import error;
+import arith;
+import eft;
+
+// ---------------------------------------------------------------------------
+// Addition's model.
+
+// Below the least normal a sum of two floats is a float.
+theorem Finite::add_small_rep({F: Format}, a, b: Finite(F), small: (a.val() + b.val()).abs() <= (Finite::min_normal(F)).val()):
+    ∃ f: Finite(F), f.H() = a.H() + b.H()
+{
+    let mn = Finite::min_normal(F);
+    let X = a.H() + b.H();
+    let ex: (a.val() + b.val() ≈ F.grid(X)) = Rat::same_trans(Rat::add_respects(a.val_grid(), b.val_grid()), F.grid_add(a.H(), b.H()));
+    let gm = mn.val_grid();
+    let gn: (-F.grid(X) ≈ F.grid(-X)) = Rat::same_sym(Dyadic(X, F.qmin() - 1).rat_neg());
+    let gmn: (-F.grid(mn.H()) ≈ F.grid(-mn.H())) = Rat::same_sym(Dyadic(mn.H(), F.qmin() - 1).rat_neg());
+    let q1: (a.val() + b.val() <= (a.val() + b.val()).abs()) = (a.val() + b.val()).le_abs();
+    let q2: (-(a.val() + b.val()) <= (a.val() + b.val()).abs()) = (a.val() + b.val()).neg_le_abs();
+    let hi: (X <= mn.H()) = F.le_of_grid_le(X, mn.H(), linarith(ex, gm, q1, small));
+    let lo: (-mn.H() <= X) = F.le_of_grid_le(-mn.H(), X, linarith(ex, gm, gmn, q2, small));
+    let eh: (mn.H() = (mn.units() * 2).int()) = Finite::H_pos(mn, refl);
+    let og: OnGrid(0, X) = on_grid_add(0, a.H(), b.H(), Finite::H_on_grid(a, 0, omega), Finite::H_on_grid(b, 0, omega));
+    F.rep_on_grid(mn, X, og, omega(hi, eh), omega(lo, eh))
+}
+
+// Higham's standard model for addition, with no underflow term: a sum in
+// range rounds in any mode to within `u·|a + b|`.
+theorem Finite::add_rel_error({F: Format}, a, b, r: Finite(F), mode: Mode, range: (a.val() + b.val()).abs() <= (Finite::max_finite(F)).val(),
+    h: a.add(b, mode := mode) = Float::Fin(r)): (r.val() - (a.val() + b.val())).abs() <= F.u(mode) * (a.val() + b.val()).abs()
+{
+    let X = a.val() + b.val();
+    let hr = j(h, λ o _ => RoundsTo(F, mode, X, o), Finite::add_correct(a, b, mode));
+    match Rat::le_total((Finite::min_normal(F)).val(), X.abs()) as λ _ => (r.val() - X).abs() <= F.u(mode) * X.abs() {
+        Inl(normal) => F.relative_error(mode, X, r, range, normal, hr),
+        Inr(small) => match Finite::add_small_rep(a, b, small) as λ _ => (r.val() - X).abs() <= F.u(mode) * X.abs() {
+            Exists(f, fh) => {
+                let ga = a.val_grid();
+                let gb = b.val_grid();
+                let sab = F.grid_add(a.H(), b.H());
+                let v = Finite::val_of_H(f, a.H() + b.H(), fh);
+                let ev: (f.val() ≈ X) = Rat::le_antisymm(linarith(v, sab, ga, gb), linarith(v, sab, ga, gb));
+                let er: (r.val() ≈ X) = j(h, λ o _ => o.Exact(X), F.exact_of_rounds(mode, X, a.add(b, mode := mode), f, ev, Finite::add_correct(a, b, mode)));
+                let z: ((r.val() - X).abs() ≈ 0) = Rat::same_trans(Rat::abs_respects(Rat::sub_respects(er, X.same_refl())), X.abs_sub_self());
+                let nn = Rat::mul_nonneg(Rat::le_of_lt(F.u_pos(mode)), X.abs_nonneg());
+                Rat::le_respects(Rat::same_sym(z), (F.u(mode) * X.abs()).same_refl(), nn)
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The recursive sum.
+
+// `∑ xᵢ` and `∑ |xᵢ|` over a list of floats.
+fn List::val_sum({F: Format}, self xs: List<Finite(F)>) → Rat { match xs { Nil => 0, Cons(y, t) => y.val() + t.val_sum() } }
+fn List::abs_sum({F: Format}, self xs: List<Finite(F)>) → Rat { match xs { Nil => 0, Cons(y, t) => y.val().abs() + t.abs_sum() } }
+
+theorem List::abs_sum_nonneg({F: Format}, self xs: List<Finite(F)>): 0 <= xs.abs_sum() {
+    match xs as λ l => 0 <= l.abs_sum() {
+        Nil => Rat::le_refl(0),
+        Cons(y, t) => { let ih = t.abs_sum_nonneg(); let ay = y.val().abs_nonneg(); let r: (0 <= y.val().abs() + t.abs_sum()) = linarith(ih, ay); r },
+    }
+}
+
+// `s` is the recursive sum of `a` then `xs` in `mode`, every step's exact
+// sum in range: `s₀ = a`, `sₖ = ○(sₖ₋₁ + xₖ)`. Curried, so the accumulator
+// can vary under the `∃`.
+fn List::RecSum_of({F: Format}, self xs: List<Finite(F)>, mode: Mode) → Finite(F) → Finite(F) → Type {
+    match xs {
+        Nil => λ (a: Finite(F)) (s: Finite(F)) => a = s,
+        Cons(y, t) => λ (a: Finite(F)) (s: Finite(F)) =>
+            ∃ r: Finite(F), (a.val() + y.val()).abs() <= (Finite::max_finite(F)).val() ∧ a.add(y, mode := mode) = Float::Fin(r) ∧ t.RecSum_of(mode)(r, s),
+    }
+}
+fn List::RecSum({F: Format}, self xs: List<Finite(F)>, mode: Mode, a, s: Finite(F)) → Type { xs.RecSum_of(mode)(a, s) }
+
+// One step's arithmetic: `γ(m)` after the step and `u` at it compose to
+// `γ(m + 1)` (named values, so `linarith` reads the products as monomials).
+theorem Format::rec_sum_step(self F: Format, mode: Mode, m: Nat, ok: m + 1 < F.u_den(mode), D, E, R, X, A, T: Rat,
+    ih: D <= F.gamma(mode, m) * (R.abs() + T), e2: E <= F.u(mode) * X.abs(), rx: R.abs() <= X.abs() + E, xa: X.abs() <= A, tn: 0 <= T):
+    D + E <= F.gamma(mode, m + 1) * (A + T)
+{
+    let G = F.gamma(mode, m);
+    let K = F.gamma(mode, m + 1);
+    let U = F.u(mode);
+    let gn: (0 <= G) = F.gamma_nonneg(mode, m);
+    let kn: (0 <= K) = F.gamma_nonneg(mode, m + 1);
+    let un: (0 <= U) = Rat::le_of_lt(F.u_pos(mode));
+    let xn: (0 <= X.abs()) = X.abs_nonneg();
+    let ga = F.gamma_add(mode, m, 1, ok);
+    let u1 = F.u_le_gamma(mode);
+    let gu: (G * U <= G * F.gamma(mode, 1)) = Rat::mul_le_mono_l(u1, gn);
+    let gk: (G <= K) = F.gamma_mono(mode, m, m + 1, omega, ok);
+    let c4: (G + U + G * U <= K) = linarith(ga, u1, gu);
+    let p1: (G * R.abs() <= G * (X.abs() + U * X.abs())) = Rat::mul_le_mono_l(linarith(rx, e2), gn);
+    let p2: ((G + U + G * U) * X.abs() <= K * X.abs()) = Rat::mul_le_mono_r(c4, xn);
+    let p3: (K * X.abs() <= K * A) = Rat::mul_le_mono_l(xa, kn);
+    let p4: (G * T <= K * T) = Rat::mul_le_mono_r(gk, tn);
+    linarith(ih, e2, p1, p2, p3, p4)
+}
+
+// The recursive sum after `a`: within `γ(n)·(|a| + ∑|xᵢ|)` of `a + ∑ xᵢ`,
+// for `n` the number of additions.
+theorem Format::rec_sum_of(self F: Format, mode: Mode, xs: List<Finite(F)>):
+    (a, s: Finite(F)) → xs.RecSum(mode, a, s) → xs.len() < F.u_den(mode) →
+        (s.val() - (a.val() + xs.val_sum())).abs() <= F.gamma(mode, xs.len()) * (a.val().abs() + xs.abs_sum())
+{
+    match xs as λ l => (a, s: Finite(F)) → l.RecSum(mode, a, s) → l.len() < F.u_den(mode) →
+        (s.val() - (a.val() + l.val_sum())).abs() <= F.gamma(mode, l.len()) * (a.val().abs() + l.abs_sum()) {
+        Nil => λ a s h _ => {
+            let e: (s.val() - (a.val() + 0) ≈ a.val() - a.val()) = j(h, λ v _ => v.val() - (a.val() + 0) ≈ a.val() - a.val(), Rat::le_antisymm(linarith, linarith));
+            let z: ((s.val() - (a.val() + 0)).abs() ≈ 0) = Rat::same_trans(Rat::abs_respects(e), a.val().abs_sub_self());
+            let nn = Rat::mul_nonneg(F.gamma_nonneg(mode, 0), Rat::le_trans(a.val().abs_nonneg(), Rat::le_of_same(Rat::same_sym((a.val().abs()).add_zero()))));
+            Rat::le_respects(Rat::same_sym(z), (F.gamma(mode, 0) * (a.val().abs() + 0)).same_refl(), nn)
+        },
+        Cons(y, t) => λ a s h okc => match h as λ _ => (s.val() - (a.val() + (y.val() + t.val_sum()))).abs() <= F.gamma(mode, Succ(t.len())) * (a.val().abs() + (y.val().abs() + t.abs_sum())) {
+            Exists(r, hr) => {
+                let X = a.val() + y.val();
+                let V = t.val_sum();
+                let T = t.abs_sum();
+                let ih = F.rec_sum_of(mode, t)(r, s, hr.right.right, omega(okc));
+                let e2 = Finite::add_rel_error(a, y, r, mode, hr.left, hr.right.left);
+                // `s - (a + (y + V)) = (s - (r + V)) + (r - X)`.
+                let sp: (s.val() - (a.val() + (y.val() + V)) ≈ (s.val() - (r.val() + V)) + (r.val() - X)) = Rat::le_antisymm(linarith, linarith);
+                let tri = Rat::le_respects(Rat::same_sym(Rat::abs_respects(sp)), ((s.val() - (r.val() + V)).abs() + (r.val() - X).abs()).same_refl(),
+                    (s.val() - (r.val() + V)).abs_triangle(r.val() - X));
+                // `|r| <= |X| + |r - X|`.
+                let rp: (r.val() ≈ X + (r.val() - X)) = Rat::le_antisymm(linarith, linarith);
+                let rx = Rat::le_respects(Rat::same_sym(Rat::abs_respects(rp)), (X.abs() + (r.val() - X).abs()).same_refl(), X.abs_triangle(r.val() - X));
+                let xa = a.val().abs_triangle(y.val());
+                let st = F.rec_sum_step(mode, t.len(), omega(okc), (s.val() - (r.val() + V)).abs(), (r.val() - X).abs(), r.val(), X,
+                    a.val().abs() + y.val().abs(), T, ih, e2, rx, xa, t.abs_sum_nonneg());
+                linarith(tri, st)
+            },
+        },
+    }
+}
+
+// The recursive sum `s₁ = x₁, sₖ = ○(sₖ₋₁ + xₖ)` of `n + 1` floats, every
+// partial sum in range, is within `γ(n)·∑|xᵢ|` of the exact sum, in every
+// mode (Higham, eq. 4.4).
+theorem Format::rec_sum_error(self F: Format, mode: Mode, x: Finite(F), xs: List<Finite(F)>, s: Finite(F),
+    h: xs.RecSum(mode, x, s), ok: xs.len() < F.u_den(mode)):
+    (s.val() - (Cons(x, xs)).val_sum()).abs() <= F.gamma(mode, xs.len()) * (Cons(x, xs)).abs_sum()
+{
+    F.rec_sum_of(mode, xs)(x, s, h, ok)
+}
+
+// ---------------------------------------------------------------------------
+// Kahan's compensated step.
+
+// Kahan's correction `c = (t - s) - y`: when `|y| <= |s|` and `t = ○(s + y)`
+// in a nearest mode, `t - s` and then `c` are exact in any mode, and `c` is
+// minus `t`'s rounding error, so `t - c = s + y`.
+theorem Finite::kahan_step({F: Format}, s, y, t, z, c: Finite(F), even: Bool, mode: Mode, le: y.val().abs() <= s.val().abs(),
+    ht: s.add(y, mode := Mode::nearest(even)) = Float::Fin(t), hz: t.sub(s, mode := mode) = Float::Fin(z), hc: z.sub(y, mode := mode) = Float::Fin(c)):
+    t.val() - c.val() ≈ s.val() + y.val()
+{
+    let ez: (z.val() ≈ t.val() - s.val()) = j(hz, λ o _ => o.Exact(t.val() - s.val()), Finite::fast_two_sum(s, y, t, even, mode, le, ht));
+    let e: (t.val() - (s.val() + y.val()) ≈ z.val() - y.val()) = Rat::le_antisymm(linarith(ez), linarith(ez));
+    let hr = F.rounds_respects(mode, t.val() - (s.val() + y.val()), z.val() - y.val(), e, z.sub(y, mode := mode), Finite::sub_correct(z, y, mode));
+    let er = Finite::add_error(s, y, t, even, ht);
+    let neg: (∃ f: Finite(F), f.val() ≈ t.val() - (s.val() + y.val())) = match er as λ _ => ∃ f: Finite(F), f.val() ≈ t.val() - (s.val() + y.val()) {
+        Exists(f, fe) => { let vn = Finite::val_neg(f); Exists(-f, Rat::le_antisymm(linarith(vn, fe), linarith(vn, fe))) },
+    };
+    let ec: (c.val() ≈ t.val() - (s.val() + y.val())) = match neg as λ _ => c.val() ≈ t.val() - (s.val() + y.val()) {
+        Exists(f, fe) => j(hc, λ o _ => o.Exact(t.val() - (s.val() + y.val())), F.exact_of_rounds(mode, t.val() - (s.val() + y.val()), z.sub(y, mode := mode), f, fe, hr)),
+    };
+    Rat::le_antisymm(linarith(ec), linarith(ec))
+}

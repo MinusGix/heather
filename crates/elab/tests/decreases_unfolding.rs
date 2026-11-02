@@ -222,12 +222,12 @@ fn a_self_call_under_a_lambda_is_refused_but_the_function_still_checks() {
 }
 
 #[test]
-fn a_match_on_a_computed_scrutinee_is_outside_the_walk() {
-    // `merge`'s `match nat::Nat::le_dec(x, y)`: the anchors do not reduce past a
-    // stuck scrutinee, and equating the arms would need the body rendered
-    // into the motive. Amends §3, which had claimed `merge`.
-    let msg = elab_err(
-        r#"
+fn a_match_on_a_computed_scrutinee_is_spelled_on_both_sides() {
+    // `merge`'s `match nat::Nat::le_dec(x, y)`: the anchors do not reduce past
+    // a stuck scrutinee, so the walk spells the match on both sides at a
+    // motive generalizing the scrutinee (§3's second amendment;
+    // issues/decreases-unfold-convoy-scrutinee.md). Outside the walk before.
+    ok(r#"
         theorem succ_add_le(a, b: Nat): Succ(a + b) <= Succ(a) + b {
             match b { Zero => nat::Nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
         }
@@ -245,10 +245,30 @@ fn a_match_on_a_computed_scrutinee_is_outside_the_walk() {
             on ?dec1 := succ_add_le(xt.len(), yt.len());
             on ?dec2 := nat::Nat::le_refl(Succ(xt.len()) + yt.len());
         }
-        theorem cite(xs, ys: List<Nat>): merge(xs, ys) = merge(xs, ys) { merge_unfold(xs, ys) }
-        "#,
-    );
-    assert!(msg.contains("scrutinee is not a variable"), "{msg}");
+        theorem cite(x, y: Nat, xt, yt: List<Nat>): merge(Cons(x, xt), Cons(y, yt)) = match nat::Nat::le_dec(x, y) {
+            Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
+            Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
+        } { merge_unfold(Cons(x, xt), Cons(y, yt)) }
+    "#);
+}
+
+#[test]
+fn a_convoy_on_a_computed_scrutinee_gets_its_equation() {
+    // `match h: c`, the loop test of every measured `runtime fn`: the
+    // obligation reads `h`, whose type names the walk's alias of `c`; the
+    // lifted obligation states it about `c` itself, and the walk spells the
+    // convoy on both sides (issues/decreases-unfold-convoy-scrutinee.md).
+    ok(r#"
+        fn cd(n, acc: Nat) -> Nat decreases n {
+            match h: n.leb(0) {
+                True => acc,
+                False => cd(n - 1, acc + n),
+            }
+        }
+        theorem cite(n, acc: Nat): cd(n, acc) = match h: n.leb(0) { True => acc, False => cd(n - 1, acc + n) } {
+            cd_unfold(n, acc)
+        }
+    "#);
 }
 
 // -- back inside the walk -----------------------------------------------------

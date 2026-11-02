@@ -79,6 +79,8 @@ mod access;
 mod application;
 pub mod arithmetic;
 mod attempt;
+mod binding;
+mod loops;
 pub mod cutsat;
 mod cutsat_cert;
 pub mod omega;
@@ -1419,9 +1421,16 @@ impl application::ImplicitApplicationElab for Elaborator {
         // nothing does: in `unsigned_le(9, b)` the width comes from `b`, so
         // `9` is a byte (docs/native-programs-read-like-programs-design.md S3).
         let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_));
+        // A binding statement's continuation (`Bind::seq(e, λ #bindN => rest)`,
+        // docs/sequencing-surface-design.md §2.2) waits for the expected type:
+        // the rest of the block is checked at the carrier's `M(B)`, never
+        // inferred from its first token, so that `Pure(match … { … })` at the
+        // end of a block checks as it would without the bind.
+        let continuation = matches!(&argument.kind, ExprKind::Lam { binders, .. }
+            if binders.len() == 1 && binders[0].name.starts_with("#bind"));
         application::ArgumentClass {
-            checking_only: annotated_lambda || literal || self.is_checking_only(cx, argument),
-            fallback_infer: annotated_lambda || literal || self.deferral_can_fall_back(cx, argument),
+            checking_only: annotated_lambda || literal || continuation || self.is_checking_only(cx, argument),
+            fallback_infer: annotated_lambda || literal || continuation || self.deferral_can_fall_back(cx, argument),
         }
     }
 
@@ -3603,6 +3612,11 @@ impl Elaborator {
         // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,
         // the declaration itself, and — for a `fn` whose body the walk of §3
         // handles — the unfolding companions.
+        // `for` loops lift into a named step over a fold, and the
+        // declaration is the family that results (crates/elab/src/loops.rs).
+        if loops::has_loop(decl) {
+            return self.session_transaction(|me| me.elab_loop_decl(decl));
+        }
         if decl.decreases.is_some() {
             return self.session_transaction(|me| me.elab_measure_decl(decl));
         }
@@ -3779,6 +3793,32 @@ impl Elaborator {
                 })
             }
         }
+    }
+
+    /// A declaration whose body holds `for` loops: each loop's step and
+    /// state, then the declaration over folds (crates/elab/src/loops.rs).
+    /// Each part goes through [`Self::elab_decl`], so a step with loops of
+    /// its own is lowered the same way.
+    fn elab_loop_decl(&mut self, decl: &Decl) -> R<()> {
+        let family = loops::lower(decl, self)?;
+        for part in &family.parts {
+            match part {
+                loops::Part::State(d) => self.elab_inductive(d)?,
+                loops::Part::Decl(d) => self.elab_decl(d)?,
+            }
+        }
+        // §7.1: always attempted, and never a reason to refuse `f` — the
+        // generated statement is untrusted, so a refusal is recorded for a
+        // later `f_unfold` reference to report.
+        if let Err(e) = self.elab_decl_one(&family.unfold, None) {
+            self.unfold_refusals.borrow_mut().insert(family.unfold.name.clone(), format!("the generated `{}` was refused ({e})", family.unfold.name));
+        }
+        // Designated last: the generated parts above are spelled with the
+        // minted names, which a designation takes out of the surface.
+        for (designed, minted) in &family.designations {
+            self.designate_access(designed, minted);
+        }
+        Ok(())
     }
 
     /// `fn f(x̄) -> T decreases e { body }` is not one declaration but the
@@ -5093,6 +5133,26 @@ impl Elaborator {
     /// of leaking goals, derived instances, warnings, or mismatch notes.
     #[allow(clippy::too_many_arguments)]
     fn elab_check_skel_slots(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+        lvl: &Level,
+        hint: Option<(&str, &str)>,
+        skel: Option<&Skel>,
+        capture_slots: bool,
+    ) -> R<Term> {
+        if let Some((input, discards)) = binding::generated(e) {
+            return self
+                .elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
+                .map_err(|error| self.restate_bind_error(cx, input, discards, error));
+        }
+        self.elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
+    }
+
+    /// [`Self::elab_check_skel_slots`], below the binding-statement restatement.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_check_skel_slots_written(
         &self,
         cx: &Cx,
         e: &Expr,
@@ -6855,6 +6915,16 @@ impl Elaborator {
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
     fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        if let Some((input, discards)) = binding::generated(e) {
+            return self
+                .elab_infer_at_written(cx, e, expected)
+                .map_err(|error| self.restate_bind_error(cx, input, discards, error));
+        }
+        self.elab_infer_at_written(cx, e, expected)
+    }
+
+    /// [`Self::elab_infer_at`], below the binding-statement restatement.
+    fn elab_infer_at_written(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         if let Some(receiver) = cx.dot_receiver.as_ref().and_then(|r| r.inference(cx, e)) {
             if let Some(result) = receiver.get() {
                 // A failed inference must still be allowed to check against

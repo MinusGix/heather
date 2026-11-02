@@ -1,10 +1,10 @@
 ---
 title: No unfolding equation for a decreases body that matches with `match h:` on a call
-status: open
+status: closed
 labels: [frontend,elaboration,proofs,termination]
 area: language
 milestone: [nh-front]
-code: crates/elab/src/measure.rs:1885 @ 40b9f3f
+code: crates/elab/src/measure.rs (Respell::match_spelled, lift_obligation)
 created: 2026-11-01
 updated: 2026-11-01
 ---
@@ -51,3 +51,32 @@ parameter types and statement instead of quantifying over it, or keep it as
 a `let` in the lifted body and parameter telescope. Done when
 `count_down_unfold` exists and `rt_tests.hthr`'s measured pin goes through
 to `count_down` itself.
+
+## Log
+
+**2026-11-01 (R5b).** Fixed, in two layers; the issue's diagnosis was the
+first of them.
+
+- **Lifted obligations substitute let aliases.** A scope `Binder` now
+  carries the value of a block `let` (the walk's `__dec_scrut_N` among them,
+  not a `let` whose value calls a member). `lift_obligation` substitutes it
+  into the later binders' types and the statement instead of quantifying
+  over it, and keeps it as a `let` in the lifted body; `select_scope`
+  follows a selected alias's value to the binders it mentions. So
+  `count_down#obl_1` states `h: eq_bit(n, ofNat(0)) = False`.
+- **The unfolding walk spells a match neither side reduces into.** With
+  the obligation lifted, the walk refused next at the `match h:` itself
+  ("a `match` with a written motive or equation binding"), and a computed
+  scrutinee was outside it altogether (`merge`, the old negative control).
+  `Respell::match_spelled` proves such a match by the match once more, at a
+  motive spelling both sides with the scrutinee generalized (and, for a
+  convoy, the equation: `(e: c = s) → L(s, e) = R(s, e)`, applied to
+  `refl`); each arm's `let`s travel with its renderings. At the anchor only
+  (the motive needs the result type).
+
+`count_down_unfold` exists, and `rt_tests.hthr`'s `count_down_reflects`
+pins the measured body to `count_down` itself. `merge_unfold` exists too;
+`crates/elab/tests/decreases_unfolding.rs` turns its old negative control
+into a positive test and adds a `match h: n.leb(0)` one. Still refused: a
+written motive, a `_` arm around a recursive call, and a computed match
+below the anchor (inside an argument).

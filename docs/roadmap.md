@@ -87,8 +87,6 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | milestone | area | status | done when | parent |
 |---|---|---|---|---|
 | `hih-program-logic` | heather-in-heather | open | Native code's meaning is stated against interaction trees through one program logic, and a compiler from an effectful source to x86-64 is proved correct against it once, replacing the hand-proved per-program stack. |  |
-| `hih-pl-spec` | heather-in-heather | open | Linux's calls and answers are a tree container, and `Sim` (the machine produces exactly a tree's traces) is bridged both ways to `LinuxRuns`, with `tr`'s spec written as a tree. | hih-program-logic |
-| `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item (syscalls and proved pieces included) and one loop rule are sound once, probed for elaborator cost. | hih-program-logic |
 | `hih-pl-source` | heather-in-heather | open | An effectful source denotes Linux trees, compiles to x86-64 by a Heather function, and the compiler's correctness theorem is proved once. | hih-program-logic |
 | `hih-pl-first-program` | heather-in-heather | done | `tr` is built through the verified compiler with no per-program proof (the per-function certificate path was retired in B2, 2026-10-24). | hih-program-logic |
 | `hih-tools` | heather-in-heather | done | Small GNU-compatible tools are built by `write-elf` through the verified compiler with no per-program proof, and pass tests against GNU under `LC_ALL=C`. Closed at nine (`cat`, `cat FILE…`, `head -c`, `head -n`, `yes`, `yes STR`, `echo`, `tr`, `wc`), which stay as a regression corpus; `grep -F`, `sort` and `tac` move to `nh-procedures` and `nh-heap` (2026-10-31, `docs/compiler-milestones-proposal.md` §8). | hih-program-logic |
@@ -106,6 +104,8 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `nh-effects` | heather-in-heather | open | A `runtime fn` talks to the system through `uniq` capabilities in the sequencing surface, denoting trees through `Source`; `cat FILE…`, `wc` and `head -n` are rewritten in it and pass their GNU tests. | hih-native-heather |
 | `nh-heap` | heather-in-heather | open | A `runtime fn` builds and reads lists and trees in an arena through `datarepr`, with exhaustion a defined exit; `sort` and `tac` pass their GNU tests. | hih-native-heather |
 | `nh-ownership` | heather-in-heather | open | A second setup checks Rust-style ownership over reflected code, is proved sound once against the byte memory model, and the compiler uses its evidence for in-place updates and frees. | hih-native-heather |
+| `hih-pl-spec` | heather-in-heather | open | Linux's calls and answers are a tree container, and `Sim` (the machine produces exactly a tree's traces) is bridged both ways to `LinuxRuns`, with `tr`'s spec written as a tree. | hih-native-heather |
+| `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item (syscalls and proved pieces included) and one loop rule are sound once, probed for elaborator cost. | hih-native-heather |
 | `hih-kernel-model` | heather-in-heather | open | A model of the kernel's reduction in Heather states the facts its accelerations rely on, and proves them, so that an optimisation checked nightly can be promoted to proven (`docs/kernel-model-design.md`). |  |
 | `hih-km-probe` | heather-in-heather | done | The fold classifier's probe is sound: a run that is not blocked on a probe variable is, at the same fuel, the run of every instance (`Tm::whnf_inst`, `Tm::whnf_inst_settled`). | hih-kernel-model |
 | `hih-km-runs` | heather-in-heather | done | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs (`Tm::fold_affine`, `Tm::fold_affine_peeled`, `Tm::fold_sync`). | hih-kernel-model |
@@ -131,7 +131,7 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `float-rounding` | mathematics | done | `RoundsTo` for the five IEEE modes, one executable rounding on a dyadic plus sticky proved to satisfy it, its uniqueness, successor/predecessor with spacing, and the mode laws (landed, design §11–§12). | math-float |
 | `float-error` | mathematics | done | The standard model (relative error at most `u` in the normal range), the subnormal absolute bound, `ulp`, and γ-composition (landed, design §13). | math-float |
 | `float-arith` | mathematics | done | Add, sub, mul, fma, div, sqrt and format conversion, each with value, signed-zero and special-value theorems. | math-float |
-| `float-eft` | mathematics | open | Sterbenz, Fast2Sum, TwoSum, TwoProduct, Veltkamp splitting and Kahan summation are proved. | math-float |
+| `float-eft` | mathematics | done | Sterbenz, Fast2Sum, TwoSum, TwoProduct, Veltkamp splitting, the recursive sum's bound and Kahan's compensated step are proved (landed, design §19; Kahan's whole-loop bound is `float-kahan-bound`). | math-float |
 | `float-bits` | mathematics | open | Bit-level encode/decode with the round trip, the OCP storage formats, NaN payload policies and exception flags. Not needed for `math-float` to be done. | math-float |
 | `float-reals` | mathematics | done | Rounding is stated at `CReal` through a transfer lemma to any ordered field: faithful rounding computes, and correct rounding computes from apartness from the breakpoints. Not needed for `math-float` to be done. | math-float |
 | `float-transcendental` | mathematics | open | Correctly rounded `exp` and `log`, from a `CReal` series plus a Padé apartness proof. Not needed for `math-float` to be done. | math-float |
@@ -245,14 +245,16 @@ and above all a way to track allocations.
   [function-ir-x86-proof-scaling](../issues/function-ir-x86-proof-scaling.md)).
 
 **Milestones.** `hih-program-logic` first, since every later program is
-written on it (submilestones `hih-pl-spec`, `hih-pl-wp`, `hih-pl-source`,
-`hih-pl-first-program`; it waits on `it-core` and burns the hand-proved
+written on it (submilestones `hih-pl-source` and `hih-pl-first-program`;
+`hih-pl-spec` and `hih-pl-wp` moved under `hih-native-heather` on
+2026-11-01, as the spec and program logic its setups are proved against; it waits on `it-core` and burns the hand-proved
 process stack first; its `hih-tools` made native programs real tools,
 `docs/native-real-programs-plan.md`, and closed at nine of them). Since
 2026-10-31 the direction is `docs/compiler-milestones-proposal.md`:
 ordinary Heather compiles. `hih-native-heather` grows the compiler by
 language feature and by setup (`nh-front`, `nh-procedures`, `nh-effects`,
-`nh-heap`, `nh-ownership`), with its rounds in that document's §7, and
+`nh-heap`, `nh-ownership`; `hih-pl-spec` and `hih-pl-wp` are the Linux spec
+and weakest precondition it is proved against), with its rounds in that document's §7, and
 `hih-memory` (submilestones `hih-memory-model`, `hih-alloc-metering`; its
 first allocation is `nh-heap`) underneath. `hih-passes` can proceed in
 parallel because it is meta-layer work; its first round is
@@ -645,4 +647,5 @@ separate machines do not slow each other's tests.
   without a milestone.
 - 2026-10-31: Minus re-aimed the compiler work (`docs/compiler-milestones-proposal.md`, §8 records the decisions). `hih-tools` closes at nine tools as a regression corpus. `hih-native-heather` is added (`runtime fn` setups: `nh-front`, `nh-procedures`, `nh-effects`, `nh-heap`, `nh-ownership`), and `hih-first-alloc` moves into `nh-heap`. `hih-self` gets `self-lexer` and `self-compiler`. `language` gains `lang-sequencing` (binding over any carrier) and `lang-proof-modularity` (opt-in interface definitions). Ownership is the second setup by Minus's lean, to be confirmed when its round starts.
 - 2026-10-31: `float-reals` marked done: `RoundsTo` and the error model's transfer stated once over any ordered field with a morphism from `Rat` (`RoundsToReal` its `CReal` reading), faithful rounding of an enclosed real that always ends, correct rounding from the grid gap (`docs/floating-point-design.md` §17–§18, issues/float-reals-ordered-field.md).
+- 2026-11-01: `hih-pl-spec` and `hih-pl-wp` move from `hih-program-logic` to `hih-native-heather` (Minus, after the daily step-back review): with the compiler work re-aimed at `runtime fn` setups, they had no milestone pulling on them, and they are the Linux spec and the program logic that the setups' one-time soundness proofs (`nh-effects`, `nh-procedures`, `nh-heap`) are stated against. Their "done when" and their issues' milestone tags are unchanged; `hih-program-logic` keeps `hih-pl-source` and the done `hih-pl-first-program` and `hih-tools`.
 - 2026-11-01: `it-coinductive` marked done: its submilestones had landed, and the last open issues under it closed on this round's PR (`Eutt::bind_cong`, issues/coitree-eutt-bind-cong.md; nested constructors above a corecursive call, `docs/codata-elaborator-design.md` §5.4). Indexed nesting and corecursion up to friendly functions are filed without a milestone (issues/codata-nested-guards-indexed.md, issues/codata-corecursion-up-to.md).

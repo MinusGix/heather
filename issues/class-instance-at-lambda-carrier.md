@@ -5,7 +5,7 @@ labels: [design,elaboration,traits,unification]
 area: language
 milestone: [lang-sequencing]
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 
 A class instance whose carrier is a **λ** constructor — the shape a `Result`
@@ -46,3 +46,7 @@ Abstracting a chosen argument is not first-order any more.
 `twice` (the probe in `lib/_tests/std/core/type_constructor_tests.hthr`)
 computes at a `Result` value through a `Bind` instance, and the chosen
 route is recorded in the design note.
+
+## Log
+
+- 2026-11-01: Binding statements landed (docs/sequencing-surface-design.md §13): the Result, Parser and ITree carriers are the customers this issue now blocks; the parser-combinator port waits here.
