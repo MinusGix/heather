@@ -1,0 +1,152 @@
+// A bump arena for builder tools: cells allocated bottom up from one
+// buffer in the data segment, a word holding how much of it is used, and
+// running out a defined exit (docs/native-heap-arena-design.md §2, §3;
+// issues/native-heap-arena.md).
+//
+// The arena is an ordinary `Source` buffer, so nothing here is new to the
+// compiler: an allocation is a comparison and an add on the top word, a
+// cell's fields are byte stores and loads, and running out branches to a
+// statement the tool gives, which exits. A cell is named by its offset plus
+// one, so the word 0 names no cell (`Nil`), and a name fits in four bytes
+// for any arena the data segment holds (`io_data_limit`, 1 GiB).
+//
+// The compiler takes no shift yet (issues/function-ir-x86-shift-
+// legalization.md), so a name's bytes cannot be cut out of its word cheaply:
+// a loop testing bits is past one declaration's fuel in `write-elf`, and the
+// same tests unrolled are past its memory. So a name the arena writes is
+// kept as its bytes all along (`Name`): the next cell's name and the open
+// payload's length are counted up a byte at a time with a carry, the way
+// they grow, and a list's name is a copy of the next name taken when a
+// cell is opened onto it. Reading a name back is cheap without shifts (each byte doubled
+// into place), so a name read from a cell is a word. Names and lengths
+// here have three bytes, which hold any arena up to 16 MiB; the fourth is
+// zero.
+//
+// The cells a list is made of are laid out as `native_arena` says (a
+// `List<List<BitVec(8)>>` cell: the next cell's name, the payload's length,
+// then the payload's bytes), and only ever written while they are the top
+// of the arena: a list is grown by consing a cell onto it, never changed
+// in place. That is the discipline `native_arena`'s representation
+// theorems speak of (`ArenaRef::cons_abs`, `ArenaRef::extend_abs`). Nothing
+// here is proved: like every builder tool, an arena tool's meaning is the
+// `Source` it lowers to, and `native_compile_correct` speaks of that.
+
+import native_build;
+import list;
+import bitvec;
+import bool;
+import nat;
+
+// A number below 2^24 kept as its three bytes, least significant first.
+// No word holds the number beside them: every word a loop updates stays
+// live across the loop, and what is live is what `write-elf`'s certificate
+// pays for (docs/native-heap-arena-design.md §3.1), so where the number is
+// wanted as a word the tool keeps it from what it knows (the top).
+record Name { b0: Var, b1: Var, b2: Var }
+
+// A name, zero, for the body.
+fn name(body: Name → Act) → Act {
+    local(num(0), λ b0 => local(num(0), λ b1 => local(num(0), λ b2 => body(Name(b0, b1, b2)))))
+}
+
+// One name made the other.
+fn Name::copy(self to: Name, from: Name) → Act {
+    to.b0.set(from.b0.get()) ++ to.b1.set(from.b1.get()) ++ to.b2.set(from.b2.get())
+}
+
+fn Name::clear(self n: Name) → Act {
+    n.b0.set(num(0)) ++ n.b1.set(num(0)) ++ n.b2.set(num(0))
+}
+
+// The name grown by `k` (below 256), the carry going up a byte at a time.
+fn Name::bump(self n: Name, k: Nat) → Act {
+    n.b0.set(n.b0.get() + num(k))
+    ++ when(n.b0.get().below(num(256)).not(),
+        n.b0.set(n.b0.get() - num(256)) ++ n.b1.set(n.b1.get() + num(1))
+        ++ when(n.b1.get().equals(num(256)), n.b1.set(num(0)) ++ n.b2.set(n.b2.get() + num(1))))
+}
+
+// The buffer the cells live in; the word holding how many of its bytes are
+// used; the name the next cell would get (the top plus one); and the length
+// of the open cell's payload so far.
+record Arena { buf: Buf, top: Var, next: Name, length: Name }
+
+// The arena empty, for the body.
+fn with_arena(buf: Buf, body: Arena → Act) → Act {
+    local(num(0), λ top => name(λ next => name(λ length =>
+        next.bump(1) ++ body(Arena(buf, top, next, length)))))
+}
+
+// Its bytes free.
+fn Arena::room(self a: Arena) → Val { a.buf.size() - a.top.get() }
+
+// One byte stored at the top, the open cell's payload growing by one;
+// `full` if none is free. `full` is expected to exit.
+fn Arena::push(self a: Arena, byte: Val, full: Act) → Act {
+    branch(a.room().below(num(1)), full,
+        a.buf.put(a.top.get(), byte) ++ a.top.set(a.top.get() + num(1)) ++ a.next.bump(1) ++ a.length.bump(1))
+}
+
+// A name's four bytes at offset `at`.
+fn Arena::put_name(self a: Arena, at: Val, n: Name) → Act {
+    local(at, λ p => a.buf.put(p.get(), n.b0.get()) ++ a.buf.put(p.get() + num(1), n.b1.get())
+        ++ a.buf.put(p.get() + num(2), n.b2.get()) ++ a.buf.put(p.get() + num(3), num(0)))
+}
+
+// The word doubled `n` times: a shift left by `n`, as additions, in a loop
+// (so the statement is small for the compiler however large `n` is).
+fn doubled(t: Var, n: Nat) → Act {
+    local(num(n), λ left => loop_while(left.get(), t.set(t.get() + t.get()) ++ left.set(left.get() - num(1))))
+}
+
+// The number a name's three bytes at offset `at` hold, into `into`: the
+// high byte first, doubled into place by each byte below it.
+fn Arena::get_name(self a: Arena, at: Val, into: Var) → Act {
+    local(at, λ p =>
+        into.set(a.buf.at(p.get() + num(2))) ++ doubled(into, 8)
+        ++ into.set(into.get() + a.buf.at(p.get() + num(1))) ++ doubled(into, 8)
+        ++ into.set(into.get() + a.buf.at(p.get())))
+}
+
+// ---------------------------------------------------------------------------
+// Lists of byte strings (`native_arena`'s line cells)
+
+// A cell's offset, from its name.
+fn cell_at(cell: Val) → Val { cell - num(1) }
+
+// The cell after this one, and the length of its payload, into `into`;
+// where its payload starts.
+fn Arena::next_of(self a: Arena, cell: Val, into: Var) → Act { a.get_name(cell_at(cell), into) }
+fn Arena::length_of(self a: Arena, cell: Val, into: Var) → Act { a.get_name(cell_at(cell) + num(4), into) }
+fn Arena::payload(self a: Arena, cell: Val) → Val { cell_at(cell) + num(8) }
+
+// A cell opened at the top onto the list `list` (its name's bytes, and the
+// name as a word in `head`), which it then heads: its header (the list's
+// name and a zero length) written, its payload empty, and `list` and `head`
+// made its name. Bytes `push`ed after it are its payload until it is
+// closed. `full` if the header has no room.
+fn Arena::open_cell(self a: Arena, list: Name, head: Var, full: Act) → Act {
+    branch(a.room().below(num(8)), full,
+        a.put_name(a.top.get(), list)
+        ++ a.put_name(a.top.get() + num(4), a.length)
+        ++ list.copy(a.next) ++ head.set(a.top.get() + num(1))
+        ++ a.top.set(a.top.get() + num(8)) ++ a.next.bump(8))
+}
+
+// The open cell, named `cell`, closed: its payload's length (what was
+// pushed since it opened) written, and the count started again.
+fn Arena::close_cell(self a: Arena, cell: Val) → Act {
+    a.put_name(cell_at(cell) + num(4), a.length) ++ a.length.clear()
+}
+
+// The body on each cell of the list from `list`, first to last, with the
+// length of the cell's payload. A list grown by consing at the top of the
+// arena (`read_lines`'s) lies in it newest first and cell against cell, so
+// a cell's payload ends where the cell before it in the list starts, and the
+// first one's at the top: its length is read off where the walk has been,
+// with no name read back from the cell.
+fn Arena::each(self a: Arena, list: Val, body: Var → Var → Act) → Act {
+    local(list, λ p => local(a.top.get(), λ end => local(num(0), λ len => loop_while(p.get(),
+        len.set(end.get() - a.payload(p.get())) ++ body(p, len)
+        ++ end.set(cell_at(p.get())) ++ a.next_of(p.get(), p)))))
+}

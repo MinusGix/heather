@@ -295,6 +295,16 @@ fn {p}_bodies() → List<Nat> {{ {src}().procedures.procedures_shapes({src}().ma
             None => return Err(refused(symbol, &numbers(&fork, &parts, &format!("{p}_refusal"))?)),
         }
     }
+    // Each part's live-out set as a literal, read on the fork: spelled from
+    // its parent's, a part's set is otherwise worked out again from the
+    // root in every declaration that reads it, which for a part deep in
+    // nested loops is past one declaration's fuel (`native_heap_tools`'
+    // tac and sort, docs/native-heap-arena-design.md §3). From a literal
+    // parent the kernel checks a part's set in one step down the tree: the
+    // joins (`Stmt::emits_then_of` and its siblings) compare it with its
+    // spelling over the parent's literal.
+    let mut plan = plan;
+    plan.text = emission::live_literals(p, &plan.text, |name| numbers(&fork, &parts, name))?;
     // The literal in stretches, each its own definition on the one before,
     // cut too wherever a statement of the emission starts or ends.
     let emission::Stated { theorems: statements, items, lens, mut cuts, spans, calls } = emission::state(p, &entry, &layout, plan, readings, shapes.as_deref().map(|shapes| emission::Inits { src: &src, homes: &homes, shapes }),
