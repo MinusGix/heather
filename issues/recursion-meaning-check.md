@@ -46,3 +46,38 @@ conversion.
 - The library passes in refusal mode.
 - Costs stated as a shape: one conversion per constructor per recursive
   definition.
+
+## Log
+
+- 2026-11-02: Step 1 built in review mode. `heather check --review` states
+  `f#meaning: f(x̄) = { body }` for every structurally recursive `fn`
+  (crates/elab/src/meaning.rs), proves it by splitting the parameter the
+  self-calls descended on, gates it inline and rolls it back. A
+  `NotConvertible` refusal is the `recursion-meaning` lint's "does not
+  unfold to its source"; out of fuel, a refused statement or one that does
+  not elaborate is "could not decide". Plans, cheapest first: the recursed
+  parameter split 1–5 levels deep along a single recursive field
+  (course-of-values windows: `Nat::half` at 2, utf8 `decode` at 5); then
+  each parameter the body case-splits on, around it (#389's `inner`, whose
+  outer split is evaluated outside the recursor). Branching types split one
+  level only (a deeper split is exponential: `Tm::open_at` exhausted the
+  rail before the cap). The call is the positional one a caller writes, so a
+  constraint's dictionary is resolved, not passed (`mconcat`, the
+  `MonoidRel`/`Ring` section functions).
+  crates/elab/tests/recursion_meaning_check.rs reproduces the stale-let and
+  #389 varied-branch miscompiles with the planner switched off
+  (`skip_recursion_plan`, test-only), shows each computing the wrong value
+  by `refl`, and shows both reported.
+
+  **Library report (whole `lib/`, review mode):** no definition differs. What
+  remains undecided is listed below; step 2 (a refusal) waits on it.
+  - Out of fuel (8): the large tactic metaprograms `attempt_from`, `rt_go`,
+    `Act::traced`, `solutions`, `mono_class_carrier`, `mono_prove`,
+    `norm_num_reify`, `interval_reify`. The equation is one δ step on each
+    side; the cost is conversion over their bodies.
+  - Not stated (4): `Stmt::weights` (its body calls a local helper,
+    `bump_all`, that the restated body cannot see), `Scope::nodes` (the
+    recursed parameter's type is not one the split can name),
+    `Hurwitz::sin_cos_at` (a `Pair` constructor whose expected type the
+    restated body loses), `RingExpr::atom_rel` (an instance search the
+    statement's telescope does not answer).

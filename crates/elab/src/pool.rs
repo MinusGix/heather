@@ -478,6 +478,17 @@ impl KernelPool {
         self.workers
     }
 
+    /// Set the width for an **inline** stretch in the middle of a pass and
+    /// return the old one, leaving anything already queued where it is. At
+    /// width 1 the gate sites run the kernel themselves and never touch the
+    /// queue, so a caller that needs one verdict now — the meaning check,
+    /// whose statement is gated and rolled back (`meaning.rs`) — narrows to 1,
+    /// gates, and restores. Unlike [`Self::set_workers`], this is not a
+    /// quiescent-only operation, because nothing it runs is queued.
+    pub(crate) fn swap_width(&mut self, workers: usize) -> usize {
+        std::mem::replace(&mut self.workers, workers.max(1))
+    }
+
     /// Whether a gate site should run the kernel itself rather than queue.
     pub(crate) fn is_inline(&self) -> bool {
         self.workers <= 1
