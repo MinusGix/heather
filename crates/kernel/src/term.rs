@@ -1813,7 +1813,7 @@ impl GlobalBinding {
 /// compares it structurally, and it is only ever extended at declaration
 /// granularity. Appending to a shared context copies at most one bounded tail
 /// rather than the entire prefix.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct GlobalCtx {
     pub bindings: GlobalBindings,
     /// Sealed proofs: the bodies of opaque bindings that may be unsealed at
@@ -1833,6 +1833,20 @@ pub struct GlobalCtx {
     /// [`GlobalCtx::sealed`] it is not part of any binding, so the
     /// verdict cache mixes it into its check key (`crates/cache`).
     pub withheld: Option<Rc<Withheld>>,
+}
+
+/// Ψ prints as it did before it had a boundary when it has none, so the
+/// printed form a world without interfaces hashes to is unchanged
+/// (`crates/elab/tests/determinism.rs`).
+impl std::fmt::Debug for GlobalCtx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("GlobalCtx");
+        s.field("bindings", &self.bindings).field("sealed", &self.sealed);
+        if let Some(w) = &self.withheld {
+            s.field("withheld", w);
+        }
+        s.finish()
+    }
 }
 
 /// Definitions a world withholds, by absolute Ψ index, each with its

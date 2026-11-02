@@ -297,7 +297,12 @@ re-checked either way, as they should be.
   inside a recursive helper (`IntervalExpr::lt_search`): there the
   arguments are induction hypotheses and calls in flight, which only
   forcing can classify. Forcing is what the call would do anyway once it
-  reads them.
+  reads them. A binder's body is read as syntax, and the environment
+  entries it uses are forced like arguments.
+- **The walk visits each node once.** A real number's closures capture
+  the same computations many times over; walked as a tree, the closed
+  `sin`/`cos` verdicts of `trig_real_tests` spent the node budget and were
+  refused. A visited set makes the walk linear in the shared graph.
 - **`refl` is the gate's** (§3, §9.2).
 - **Not withheld yet**: the gate's other entry points (generated
   definitions, quotation, well-founded probes) and replay, and the

@@ -13,8 +13,8 @@
 //! node budget. A lazy argument is usually a computation in flight (an
 //! induction hypothesis, a call of another definition), which only forcing
 //! can classify; a call at closed arguments computes once it reads them
-//! anyway. A binder's body cannot be forced and is classified by its
-//! syntax and environment instead ([`closed_clo`]). Anything the walk does
+//! anyway. A binder's body cannot be forced: its syntax is read, and the
+//! environment entries it uses are forced like arguments ([`binder`]). Anything the walk does
 //! not open, a spent budget and an evaluation error all answer "open":
 //! unknown means atom.
 //!
@@ -84,7 +84,17 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// native depth.
     fn closed(&mut self, mut work: Vec<Item<'v>>) -> bool {
         let mut budget = CLOSED_NODES;
+        // Values are shared graphs (a real number's closures capture the
+        // same computations many times over), so each node is visited once.
+        let mut seen: std::collections::HashSet<*const ()> = std::collections::HashSet::new();
         while let Some(item) = work.pop() {
+            let at = match &item {
+                Item::Clo(c) => *c as *const TmClo<'v> as *const (),
+                Item::Val(v) => *v as *const Val<'v> as *const (),
+            };
+            if !seen.insert(at) {
+                continue;
+            }
             if budget == 0 {
                 return false;
             }
@@ -96,7 +106,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     Err(_) => return false,
                 },
             };
-            if !parts(v, &mut work, &mut budget) {
+            if !parts(v, &mut work) {
                 return false;
             }
         }
@@ -106,7 +116,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
 /// Push `v`'s parts onto the walk; `false` when `v` is open or of a form the
 /// walk does not open.
-fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>, budget: &mut u32) -> bool {
+fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>) -> bool {
     macro_rules! push {
         ($($c:expr),*) => {{ $(work.push(Item::Clo($c));)* }};
     }
@@ -136,10 +146,10 @@ fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>, budget: &mut u32) -> bool
         // Universe and context binders bind no local variable.
         Val::ULam { body, .. } | Val::CtxLam { body, .. } | Val::TyLam { body, .. } => push!(body),
         // A term binder's body cannot be forced: its syntax decides.
-        Val::Lam { body, .. } => return closed_clo(body, 1, budget),
-        Val::TmPi { dom, cod, .. } => return { push!(dom); closed_clo(cod, 1, budget) },
-        Val::TmSigma { fst, snd, .. } => return { push!(fst); closed_clo(snd, 1, budget) },
-        Val::TmW { shape, pos, .. } => return { push!(shape); closed_clo(pos, 1, budget) },
+        Val::Lam { body, .. } => return binder(body, 1, work),
+        Val::TmPi { dom, cod, .. } => return { push!(dom); binder(cod, 1, work) },
+        Val::TmSigma { fst, snd, .. } => return { push!(fst); binder(snd, 1, work) },
+        Val::TmW { shape, pos, .. } => return { push!(shape); binder(pos, 1, work) },
         Val::Neutral(n) => match &n.head {
             Head::Var(_) | Head::BaseVar(_) | Head::Stuck(_) => return false,
             Head::BoxedGlobalTy(_) | Head::BoxedGlobalTm(_) => {}
@@ -151,7 +161,7 @@ fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>, budget: &mut u32) -> bool
                 for e in n.spine.iter_rev() {
                     match e {
                         Elim::App { arg, .. } => work.push(Item::Clo(*arg)),
-                        Elim::UApp { .. } => {}
+                        Elim::UApp { .. } | Elim::Fst { .. } | Elim::Snd { .. } => {}
                         _ => return false,
                     }
                 }
@@ -164,14 +174,12 @@ fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>, budget: &mut u32) -> bool
     true
 }
 
-/// Whether the closure `c`, under `pending` binders of its own, reads no
-/// free local variable, by its syntax and environment, without forcing.
-/// A spent budget answers `false`.
-fn closed_clo<'v>(c: &'v TmClo<'v>, pending: u32, budget: &mut u32) -> bool {
-    if *budget == 0 {
-        return false;
-    }
-    *budget -= 1;
+/// Classify a binder's body `c`, under `pending` binders of its own,
+/// without forcing it: its syntax reads its own binders and the entries of
+/// its environment, and those entries, which sit under no binder, go on the
+/// work list to be forced like any argument. `false` when it reads a base
+/// variable or is of a form the walk does not open.
+fn binder<'v>(c: &'v TmClo<'v>, pending: u32, work: &mut Vec<Item<'v>>) -> bool {
     match c {
         TmClo::Syn { env, body } => {
             // Every `u^δ` carries a substitution tail, so `has_tail` is no
@@ -184,45 +192,20 @@ fn closed_clo<'v>(c: &'v TmClo<'v>, pending: u32, budget: &mut u32) -> bool {
                     return true;
                 }
                 match env.lookup(i - pending) {
-                    Lookup::Bound(entry) => closed_clo(entry, 0, budget),
+                    Lookup::Bound(entry) => {
+                        work.push(Item::Clo(entry));
+                        true
+                    }
                     Lookup::Base(_) => false,
                 }
             })
         }
+        // A value under a binder ignores it: values are ambient.
         TmClo::Val(v) => {
-            // A value under a binder ignores it: values are ambient. Walk
-            // it without forcing (there is no machine here).
-            let mut work = Vec::new();
-            if !parts(v, &mut work, budget) {
-                return false;
-            }
-            work.into_iter().all(|item| match item {
-                Item::Clo(c) => closed_clo(c, 0, budget),
-                Item::Val(v) => closed_clo_val(v, budget),
-            })
+            work.push(Item::Val(v));
+            true
         }
-        TmClo::Elim { head, elim } => {
-            closed_clo(head, 0, budget)
-                && match elim {
-                    Elim::App { arg, .. } => closed_clo(arg, 0, budget),
-                    Elim::UApp { .. } => true,
-                    // Motives, branches and type arguments are not opened
-                    // here: unknown is open.
-                    _ => false,
-                }
-        }
+        TmClo::Elim { .. } => false,
     }
 }
 
-fn closed_clo_val<'v>(v: &'v Val<'v>, budget: &mut u32) -> bool {
-    if *budget == 0 {
-        return false;
-    }
-    *budget -= 1;
-    let mut work = Vec::new();
-    parts(v, &mut work, budget)
-        && work.into_iter().all(|item| match item {
-            Item::Clo(c) => closed_clo(c, 0, budget),
-            Item::Val(v) => closed_clo_val(v, budget),
-        })
-}
