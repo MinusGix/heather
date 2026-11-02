@@ -4,8 +4,9 @@ Issue: [grind-port](../issues/grind-port.md) (milestone `tac-general`).
 Round 1 built `lib/std/tactic/grind.hthr`, the `Spine` host request, and the
 probes in `lib/_tests/std/tactic/grind_tests.hthr`. Round 2 added lemmas
 instantiated by e-matching, the `Say` host request and `grind_report` (§9).
-Round 2½ proves lemmas' premises at their instances (§11), and the
-reader takes conjunctions and records of equations apart (§12).
+Round 2½ proves lemmas' premises at their instances (§11), the
+reader takes conjunctions and records of equations apart (§12), and a
+pattern's argument may match up to a definitional step (§13).
 
 The milestone asks for "a general-purpose rewriting and congruence-closure
 tactic (grind-like) [that] closes the routine goals that today need hand
@@ -203,6 +204,7 @@ proof reconstruction.
 | R1 (done) | `Spine`; congruence closure over the goal's equations and hints at their instances; proof by explanation; the graph as the failure | the hand `trans`/`cong` steps of a library proof close by `grind_with` with its lemmas as hints, and a failure names the missing equation's classes |
 | R2 (done, §9) | e-matching ([grind-e-matching](../issues/grind-e-matching.md)): equations under binders, from the locals and a hint list, instantiated by matching their patterns against the graph's terms modulo the classes; the used hints reported on success | `grind_using(["List::append_assoc", "List::append_nil"], [])` closes an append tower with no instance written, and `grind_report` says which it used |
 | R2½ (done, §11) | premises ([grind-lemma-premises](../issues/grind-lemma-premises.md)): a binder no side binds and nothing depends on is proved at the instance, by the graph, a local or hint, or `Synth` | an order premise by a local and an equation premise by the graph close, and the report names an unproved premise |
+| R2¾ (done, §13) | definitional equalities ([grind-definitional-equalities](../issues/grind-definitional-equalities.md)): a pattern's argument matched up to `Defeq`, its free binder drawn from the graph; both sides of a lemma as patterns | `Int::neg_add`'s `Succ` step closes by `grind_using` with the four lemmas its `calc` cites |
 | R3 | constructor facts and disequalities ([grind-constructor-facts](../issues/grind-constructor-facts.md)): injectivity, disjointness, `≠` hypotheses, `False` goals | `Cons(a, as) = Cons(b, bs)` gives `a = b`, and `Nil = Cons(x, xs)` closes any goal |
 | R4 | case splits and theories ([grind-splits-and-theories](../issues/grind-splits-and-theories.md)): split on a `match` scrutinee in the graph (`split_all`'s `Cases`), and exchange equalities with `omega`/`ring` | a goal needing a `Bool` case split and a linear fact closes, and the failure is the decision tree |
 
@@ -321,7 +323,8 @@ are now atoms of their constructor's key in the graph too, which is what
 lets a pattern find them.
 
 The side is the left one unless it is a bare binder (it would match every
-node) or misses a binder; then the right one. A lemma neither of whose sides
+node) or misses a binder; then the right one. (Since §13, both sides that
+qualify are patterns.) A lemma neither of whose sides
 binds every binder has a premise (`n = 0 → f(n) = n`); round 2 set it
 aside, and §11 proves it at the instance.
 
@@ -352,7 +355,7 @@ It stops for three reasons, each a line of the failure:
   new terms every round (`f(n) = f(g(n))`) would go on forever.
 
 Each lemma's line says how many matches it had and how many instances were
-added, or that its pattern never matched a term of the graph; that is the
+added, or that its patterns never matched a term of the graph; that is the
 report's answer to "which hint was useless" on failure.
 
 No heuristics yet: every lemma is matched against every node every round,
@@ -593,3 +596,91 @@ record), `conj_open`, `conj_premise`, `conj_checking`, and the refusals
 `conj_no_equation`, `dependent_unread`, `exists_unread`, `iff_unread`, in
 `lib/_tests/std/tactic/grind_tests.hthr`. `exists_unread` and `iff_unread`
 would close if read, so they discriminate.
+
+## 13. Definitional equalities (round 2¾, 2026-11-02)
+
+Issue: [grind-definitional-equalities](../issues/grind-definitional-equalities.md).
+The sweep (§10) found `Int::neg_add`'s `Succ` step stopped by two
+equalities the kernel accepts by computation and the graph did not see:
+the goal holds `OfNat(Succ(k))` where `Int::add_isucc` speaks of
+`b.isucc()`, and the induction hypothesis holds `-OfNat(k)` where
+`Int::ipred_negOfNat` speaks of `Int::negOfNat(n)`. Both are true only by
+unfolding a definition at a constructor (`isucc(OfNat(n))` is
+`OfNat(Succ(n))`; `neg(OfNat(n))` is `negOfNat(n)`), and neither side is a
+term the graph holds before the instance that needs it, so comparing the
+graph's existing nodes pairwise (the issue's option 2) would not find them,
+and grind has no reducible transparency to normalise by (option 3).
+
+### 13.1 Near matches
+
+The issue's option 1, made to work when the item's binder is not yet
+bound. The library gains `ematch_loose` (`lib/std/data/egraph.hthr`): an
+item the client allows that meets a class none of whose members it matches
+is **left**, with the node it met, and the match goes on past it; at most
+one item per match, never the root. grind allows the applications in
+argument positions that are whole subterms of the side (`isucc(b)` in
+`a + isucc(b)`). A near match binds everything but the binders only the
+left item mentions.
+
+grind resolves a near match by `Defeq`: the item's subterm, abstracted over
+the lemma's binders (`Lam` over the opened telescope, each binder applied
+to the node it met, a premise to a hole), against the node. With no free
+binder that is one question. With one, the binder is drawn from the
+graph's whole terms, in node order, as e-matching draws every binder from
+the graph: `isucc(b) ≡ OfNat(Succ(k))` at `b := OfNat(k)`, a term the
+induction hypothesis put there; `negOfNat(n) ≡ -OfNat(k)` at `n := k`. A
+near match with more than one free binder is skipped
+([grind-near-match-binders](../issues/grind-near-match-binders.md)).
+`Mark`/`Restore` around each question keep a hole a premise left from
+being solved by it.
+
+A resolved near match is an instance like any other (premises proved at
+it, read from its `infer`red type), with one more edge: from the item's
+instance, found under the instance's side by the path from the pattern's
+root to the item, to the node it was compared with, justified by
+`grind::defn(x, y, refl)`, which the kernel checks by computation. The
+edge carries the lemma's name, so `grind_report` names the lemma.
+Congruence does the rest: `a + isucc(OfNat(k))` and `a + OfNat(Succ(k))`
+meet once `isucc(OfNat(k))` and `OfNat(Succ(k))` do.
+
+Cost: a candidate costs one `Defeq` (plus `Mark` and `Restore`), so a
+round asks at most `grind_defeq_budget()` (256) of them, and a near match
+is tried once per candidate: `Defeq` reads terms, not classes, so a
+candidate that failed fails again (`NearTried` keeps how far each near
+match's candidates went). Matching keeps its shape; a near match is a
+branch where a strict one would have ended.
+
+### 13.2 Both sides
+
+`Int::add_ipred`'s left side, `a + b.ipred()`, has no instance in the
+`neg_add` graph: the term that needs it is the right side,
+`(-a + -OfNat(k)).ipred()`, which `neg_isucc` and the hypothesis produce.
+A lemma now matches by every side that qualifies as a pattern (§9.2),
+whichever the graph holds; an instance found from either is one instance
+(`known` compares the lemma and its binders' classes). This doubles the
+matching and is what equations already were: added both ways. Each root
+is matched in an evaluation of its own (`settled`), and congruence closing
+is one pass per evaluation: a graph of four dozen terms outgrew one
+evaluation's fuel closing in one piece.
+
+### 13.3 What it closes
+
+`Int::neg_add`'s `Succ` step, stated as `int.hthr`'s `calc` states it,
+closes by `grind_using` with `Int::add_isucc`, `Int::neg_isucc`,
+`Int::add_ipred` and `Int::ipred_negOfNat` (probe `neg_add_succ`; the
+report shows two of `add_isucc`'s instances and one of `add_ipred`'s found
+up to a definitional step). `int.hthr` keeps its hand proof for the reason
+`memory.hthr` does (§11.4): the integers sit below most of the library, and
+importing grind there puts the tactic library in every client's closure.
+Probes at an open element type (`[a] ++ xs` against `Cons(a, ys)`; `[] ++ ys`
+against `xs`, found from the right side's pattern), a checking position,
+and a negative control (`[b] ++ xs`, which no term makes `Cons(a, ys)`) are
+in `lib/_tests/std/tactic/grind_tests.hthr`; the library's own probes of
+`ematch_loose` in `lib/_tests/std/data/egraph_tests.hthr`.
+
+Not done: the issue's option 2 (pairs of nodes compared by `Defeq` after a
+dry round) is not needed by any probe yet, and a near match's candidates
+are every whole term of the graph in order, with no key on the item's head
+or the candidate's type to skip the hopeless ones; both are where to look
+if a client spends the budget.
+

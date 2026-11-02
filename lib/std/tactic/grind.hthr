@@ -13,8 +13,12 @@
 // one side is read as a pattern, and each of its matches among the graph's
 // terms, up to the classes, adds the lemma at that instance, in rounds,
 // until the goal closes or no new instance turns up (e-matching,
-// docs/grind-design.md §9). `grind_report` also says, on success, which
-// hints the proof cites.
+// docs/grind-design.md §9). Every side of a lemma that can be a pattern is
+// one, and a pattern's argument may match up to a definitional step: where
+// `a + isucc(b)` meets `a + OfNat(Succ(k))`, `Defeq` finds `b := OfNat(k)`
+// among the graph's terms, and the instance comes with the edge
+// `isucc(OfNat(k)) = OfNat(Succ(k))` by `refl` (§13). `grind_report` also
+// says, on success, which hints the proof cites.
 //
 // Terms are read as the kernel has them, a head applied to arguments
 // (`Spine`): an argument the function's type is dependent at (a type
@@ -118,16 +122,35 @@ record Graph { eg: EGraph<GOp, Fact>, info: List<GInfo>, atoms: List<AtomEntry> 
 
 record Interned { g: Graph, node: Nat }
 
-// A lemma: an equation under binders, its proof, and the pattern its
-// instances are found by (one side, its variables the binders, then one
-// wildcard per subterm the pattern does not read). A binder the pattern does
-// not bind is a premise, proved at each instance. `matched` and `added`
-// count its matches and the instances added, for the report.
-record Lemma { name: String, proof: Expr, binders: Nat, premises: Nat, pat: Pattern<GQ>, matched: Nat, added: Nat }
+// One side of a lemma read as a pattern (its variables the binders, then
+// one wildcard per subterm the pattern does not read): whether it is the
+// left side, each item's subterm where it is a whole one, and which items a
+// near match may leave to `Defeq` (an application in an argument position).
+record LPat { pat: Pattern<GQ>, left: Bool, terms: List<Option<Handle>>, slack: List<Bool> }
 
-// An instance tried: the lemma's number, and the nodes its binders met
-// (`None` at a premise).
-record Inst { lemma: Nat, args: List<Option<Nat>> }
+// A near match tried (docs/grind-design.md §13): the pattern, the item left
+// and the node it met, the nodes the binders met, and how many of the
+// graph's nodes were tried as the item's free binder. `Defeq` reads terms,
+// not classes, so a candidate that failed fails again.
+record NearTried { pat: Nat, item: Nat, node: Nat, args: List<Option<Nat>>, upto: Nat }
+
+// A lemma: an equation under binders, its proof, the patterns its instances
+// are found by (each side that binds every binder something depends on),
+// and its binders' locals (the patterns' terms are under them). A binder a
+// pattern does not bind is a premise, proved at each instance. `matched`,
+// `added` and `defined` count its matches, the instances added and the ones
+// of those found up to a definitional step, for the report; `tried` is the
+// near matches tried.
+record Lemma { name: String, proof: Expr, binders: Nat, premises: Nat, pats: List<LPat>, refs: List<LocalRef>, matched: Nat, added: Nat, defined: Nat, tried: List<NearTried> }
+
+// Where an instance found by a near match meets the node it was matched
+// against by `Defeq`: the instance's side the pattern is (`left`), the path
+// from that side's node down to the item left, and the node.
+record DefAt { left: Bool, path: List<Nat>, node: Nat }
+
+// An instance tried: the lemma's number, the nodes its binders met (`None`
+// at a premise), and, for one a near match found, its definitional step.
+record Inst { lemma: Nat, args: List<Option<Nat>>, def: Option<DefAt> }
 
 // An instance waiting on a premise not proved yet, and the note that says
 // which: it is tried again after each round that adds instances, since an
@@ -221,13 +244,16 @@ fn atom_search(es: List<AtomEntry>, key: AtomKey, h: Handle, ask: List<Nat>) →
 // Proofs: the library's explanation, folded into terms.
 
 // The lemmas a proof cites.
-record GrindLaws { trans: GlobalRef, sym: GlobalRef, cong: GlobalRef, congr: GlobalRef, congr_fun: GlobalRef, rfl: GlobalRef }
+record GrindLaws { trans: GlobalRef, sym: GlobalRef, cong: GlobalRef, congr: GlobalRef, congr_fun: GlobalRef, rfl: GlobalRef, defn: GlobalRef }
 
 fn sym_of(l: GrindLaws, p: Expr) → Expr { apps(Global(l.sym), [Blank, Blank, Blank, p]) }
 
 fn trans_of(l: GrindLaws, p: Expr, q: Expr) → Expr { apps(Global(l.trans), [Blank, Blank, Blank, Blank, p, q]) }
 
 fn rfl_of(l: GrindLaws, e: Expr) → Expr { apps(Global(l.rfl), [Blank, e]) }
+
+// `x = y` where the two are one by computation: `refl`, at that type.
+fn defn_of(l: GrindLaws, x: Expr, y: Expr) → Expr { apps(Global(l.defn), [Blank, x, y, rfl_of(l, x)]) }
 
 fn given_of(l: GrindLaws, f: Fact, forward: Bool) → Expr {
     match forward { True => f.proof, False => sym_of(l, f.proof) }
@@ -506,13 +532,17 @@ fn gq_test(g: Graph, q: GQ, op: GOp, s: Subst) → Option<Subst> {
 }
 
 // A pattern being read: its items, its variables so far (the binders come
-// first), and the item just read.
-record PB { items: List<PItem<GQ>>, vars: Nat, at: Nat }
+// first), the item just read, and, for each item that is a whole subterm
+// of the side, that subterm (under the lemma's opened binders).
+record PB { items: List<PItem<GQ>>, vars: Nat, at: Nat, terms: List<Option<Handle>> }
 
-fn pb_push(b: PB, it: PItem<GQ>) → PB { PB(b.items ++ [it], b.vars, b.items.len()) }
+fn pb_push(b: PB, it: PItem<GQ>) → PB { PB(b.items ++ [it], b.vars, b.items.len(), b.terms ++ [None]) }
 
 // A variable no binder is: what the pattern does not read.
-fn pb_wild(b: PB) → PB { PB(b.items ++ [PVar(b.vars)], Succ(b.vars), b.items.len()) }
+fn pb_wild(b: PB) → PB { PB(b.items ++ [PVar(b.vars)], Succ(b.vars), b.items.len(), b.terms ++ [None]) }
+
+// The item just read is the whole term `h`.
+fn pb_term(b: PB, h: Handle) → PB { PB(b.items, b.vars, b.at, b.terms.update(b.at, λ _ => Some(h))) }
 
 fn binder_index(xs: List<Nat>, id: Nat, i: Nat) → Option<Nat> {
     match xs { Nil => None, Cons(x, rest) => match x.same(id) { True => Some(i), False => binder_index(rest, id, Succ(i)) } }
@@ -538,7 +568,7 @@ fn pat_leaf(b: PB, binders: List<Nat>, v: Head) → PB {
 record DepVar { b: PB, v: Nat }
 
 fn dep_var(b: PB, binders: List<Nat>, v: Head) → DepVar {
-    let wild = DepVar(PB(b.items, Succ(b.vars), b.at), b.vars);
+    let wild = DepVar(PB(b.items, Succ(b.vars), b.at, b.terms), b.vars);
     match v {
         HLocal(x, args) => match args {
             Nil => match binder_index(binders, x.id, 0) { Some(k) => DepVar(b, k), None => wild },
@@ -557,7 +587,7 @@ fn pat_read(fuel: Nat, binders: List<Nat>, b: PB, t: PRead) → Tac<PB> {
     match fuel {
         Zero => Pure(pb_wild(b)),
         Succ(f) => match t {
-            PTerm(h) => spine(h).bind(λ c => match c {
+            PTerm(h) => pat_then(spine(h).bind(λ c => match c {
                 Refused(_) => Pure(pb_wild(b)),
                 Accepted(sp) => match sp.args {
                     Cons(_, _) => view(sp.head).bind(λ v => pat_read(f, binders, pat_leaf(b, binders, v), PArgs(sp.args))),
@@ -569,7 +599,7 @@ fn pat_read(fuel: Nat, binders: List<Nat>, b: PB, t: PRead) → Tac<PB> {
                         _ => Pure(pat_leaf(b, binders, v)),
                     }),
                 },
-            }),
+            }), λ x => Pure(pb_term(x, h))),
             PArgs(args) => match args {
                 Nil => Pure(b),
                 Cons(a, rest) => {
@@ -625,42 +655,77 @@ fn usable(b: PB, deps: List<Bool>) → Bool {
 
 // A lemma's binders opened, whether something after each depends on it, and
 // the statement under them.
-record Tele { ids: List<Nat>, deps: List<Bool>, body: Handle }
+record Tele { ids: List<Nat>, deps: List<Bool>, body: Handle, refs: List<LocalRef> }
 
-fn open_binders(fuel: Nat, ty: Handle, ids: List<Nat>, deps: List<Bool>) → Tac<Tele> {
+fn open_binders(fuel: Nat, ty: Handle, ids: List<Nat>, deps: List<Bool>, refs: List<LocalRef>) → Tac<Tele> {
     match fuel {
-        Zero => Pure(Tele(ids, deps, ty)),
+        Zero => Pure(Tele(ids, deps, ty, refs)),
         Succ(f) => view(ty).bind(λ v => match v {
             HPi(_) => open(ty, "x").bind(λ c => match c {
-                Refused(_) => Pure(Tele(ids, deps, ty)),
-                Accepted(o) => open_binders(f, o.body, ids ++ [o.local.ref.id], deps ++ [o.dependent]),
+                Refused(_) => Pure(Tele(ids, deps, ty, refs)),
+                Accepted(o) => open_binders(f, o.body, ids ++ [o.local.ref.id], deps ++ [o.dependent], refs ++ [o.local.ref]),
             }),
-            _ => Pure(Tele(ids, deps, ty)),
+            _ => Pure(Tele(ids, deps, ty, refs)),
         }),
     }
 }
 
 fn read_pattern(binders: List<Nat>, side: Handle) → Tac<PB> {
-    pat_read(1024, binders, PB([], binders.len(), 0), PTerm(side))
+    pat_read(1024, binders, PB([], binders.len(), 0, []), PTerm(side))
 }
 
-fn lemma_at(name: String, proof: Expr, n: Nat, b: PB) → Lemma {
-    Lemma(name, proof, n, unbound_count(b.items, n), Pattern(b.items, b.at, b.vars), 0, 0)
+// The items that are arguments of an application.
+fn arg_items(is: List<PItem<GQ>>) → List<Nat> {
+    match is {
+        Nil => [],
+        Cons(it, rest) => match it {
+            POp(q, ks) => match q {
+                QApp => match ks.nth(1) { Some(a) => Cons(a, arg_items(rest)), None => arg_items(rest) },
+                _ => arg_items(rest),
+            },
+            PVar(_) => arg_items(rest),
+        },
+    }
 }
 
-// The lemma `proof : ty`, its pattern the left side, or the right one when
-// the left is a bare binder or misses a binder something depends on; the
-// binders it leaves are its premises. `None` when neither side is a pattern.
+fn nat_in(xs: List<Nat>, n: Nat) → Bool { match xs { Nil => False, Cons(x, rest) => x.same(n).or(nat_in(rest, n)) } }
+
+fn is_app_item(o: Option<PItem<GQ>>) → Bool {
+    match o { Some(it) => match it { POp(q, _) => match q { QApp => True, _ => False }, PVar(_) => False }, None => False }
+}
+
+fn is_some_handle(o: Option<Option<Handle>>) → Bool { match o { Some(x) => match x { Some(_) => True, None => False }, None => False } }
+
+// The items a near match may leave: whole applications in argument
+// positions (`isucc(b)` in `a + isucc(b)`), never the root or a function.
+fn slack_items(b: PB) → List<Bool> {
+    let args = arg_items(b.items);
+    List::range(b.items.len()).map(λ i => nat_in(args, i).and(is_app_item(b.items.nth(i))).and(is_some_handle(b.terms.nth(i))))
+}
+
+fn lpat_of(b: PB, left: Bool) → LPat { LPat(Pattern(b.items, b.at, b.vars), left, b.terms, slack_items(b)) }
+
+fn lemma_at(name: String, proof: Expr, t: Tele, b: PB, ps: List<LPat>) → Lemma {
+    Lemma(name, proof, t.ids.len(), unbound_count(b.items, t.ids.len()), ps, t.refs, 0, 0, 0, [])
+}
+
+// The lemma `proof : ty`, its patterns the sides that are one (`usable`):
+// both, when both are, so that an instance is found from whichever side the
+// graph holds (docs/grind-design.md §13); the binders the first leaves are
+// its premises. `None` when neither side is a pattern.
 fn lemma_of(name: String, proof: Expr, ty: Handle) → Tac<Option<Lemma>> {
-    open_binders(64, ty, [], []).bind(λ t => sides_of(t.body).bind(λ o => match o {
+    open_binders(64, ty, [], [], []).bind(λ t => sides_of(t.body).bind(λ o => match o {
         None => Pure(None),
-        Some(p) => read_pattern(t.ids, p.fst).bind(λ lb => match usable(lb, t.deps) {
-            True => Pure(Some(lemma_at(name, proof, t.ids.len(), lb))),
-            False => read_pattern(t.ids, p.snd).bind(λ rb => match usable(rb, t.deps) {
-                True => Pure(Some(lemma_at(name, proof, t.ids.len(), rb))),
-                False => Pure(None),
-            }),
-        }),
+        Some(p) => read_pattern(t.ids, p.fst).bind(λ lb => read_pattern(t.ids, p.snd).bind(λ rb => Pure(match usable(lb, t.deps) {
+            True => match usable(rb, t.deps) {
+                True => Some(lemma_at(name, proof, t, lb, [lpat_of(lb, True), lpat_of(rb, False)])),
+                False => Some(lemma_at(name, proof, t, lb, [lpat_of(lb, True)])),
+            },
+            False => match usable(rb, t.deps) {
+                True => Some(lemma_at(name, proof, t, rb, [lpat_of(rb, False)])),
+                False => None,
+            },
+        }))),
     }))
 }
 
@@ -863,20 +928,72 @@ fn known(g: Graph, seen: List<Inst>, k: Nat, a: List<Option<Nat>>) → Bool {
 
 // The matches of lemma `k` not seen before (up to the classes of what its
 // binders met).
-fn new_insts(g: Graph, k: Nat, n: Nat, ms: List<EMatched>, seen: List<Inst>) → List<Inst> {
+fn new_insts(g: Graph, k: Nat, n: Nat, ms: List<Subst>, seen: List<Inst>) → List<Inst> {
     match ms {
         Nil => [],
         Cons(m, rest) => {
-            let a = m.s.at.take(n);
+            let a = m.at.take(n);
             match known(g, seen, k, a) {
                 True => new_insts(g, k, n, rest, seen),
-                False => Cons(Inst(k, a), new_insts(g, k, n, rest, Cons(Inst(k, a), seen))),
+                False => Cons(Inst(k, a, None), new_insts(g, k, n, rest, Cons(Inst(k, a, None), seen))),
             }
         },
     }
 }
 
-record Found { insts: List<Inst>, lemmas: List<Lemma> }
+// A near match of lemma `lemma`'s pattern number `pat`: the node its root
+// met, what it binds, and the item it left and the node that item met.
+record Near { lemma: Nat, pat: Nat, root: Nat, s: Subst, slack: Slack }
+
+fn strict_of(ms: List<LooseMatched>) → List<Subst> {
+    match ms {
+        Nil => [],
+        Cons(m, rest) => match m.l.slack { None => Cons(m.l.s, strict_of(rest)), Some(_) => strict_of(rest) },
+    }
+}
+
+fn opts_same(a: List<Option<Nat>>, b: List<Option<Nat>>) → Bool {
+    match a {
+        Nil => match b { Nil => True, Cons(_, _) => False },
+        Cons(x, ar) => match b {
+            Nil => False,
+            Cons(y, br) => match x {
+                None => match y { None => opts_same(ar, br), Some(_) => False },
+                Some(m) => match y { None => False, Some(k) => m.same(k).and(opts_same(ar, br)) },
+            },
+        },
+    }
+}
+
+fn same_near(n: Nat, a: Near, b: Near) → Bool {
+    a.slack.item.same(b.slack.item).and(a.slack.node.same(b.slack.node)).and(opts_same(a.s.at.take(n), b.s.at.take(n)))
+}
+
+fn near_in(n: Nat, ns: List<Near>, x: Near) → Bool {
+    match ns { Nil => False, Cons(y, rest) => same_near(n, y, x).or(near_in(n, rest, x)) }
+}
+
+// The near matches of pattern `j` of lemma `k` (of `n` binders), each once
+// by the nodes its binders and its item met: `Defeq` reads terms.
+fn nears_of(k: Nat, j: Nat, n: Nat, ms: List<LooseMatched>, seen: List<Near>) → List<Near> {
+    match ms {
+        Nil => [],
+        Cons(m, rest) => match m.l.slack {
+            None => nears_of(k, j, n, rest, seen),
+            Some(sl) => {
+                let x = Near(k, j, m.root, m.l.s, sl);
+                match near_in(n, seen, x) {
+                    True => nears_of(k, j, n, rest, seen),
+                    False => Cons(x, nears_of(k, j, n, rest, Cons(x, seen))),
+                }
+            },
+        },
+    }
+}
+
+fn flag_at(fs: List<Bool>, i: Nat) → Bool { match fs.nth(i) { Some(b) => b, None => False } }
+
+record Found { insts: List<Inst>, lemmas: List<Lemma>, nears: List<Near> }
 
 // Continue with `t` once `n` is computed. The host gives the evaluation
 // between two requests a fixed fuel, and a round's pure work (closing the
@@ -885,20 +1002,270 @@ record Found { insts: List<Inst>, lemmas: List<Lemma> }
 // that work, makes the piece its own evaluation.
 fn settled<A>(n: Nat, t: Tac<A>) → Tac<A> { defeq(NatLit(n), NatLit(n)).bind(λ _ => t) }
 
-fn round_insts(g: Graph, table: List<List<Nat>>, ls: List<Lemma>, k: Nat, seen: List<Inst>, cap: Nat) → Tac<Found> {
-    match ls {
-        Nil => Pure(Found([], [])),
-        Cons(lm, rest) => {
-            let ms = g.eg.ematch(λ q op s => gq_test(g, q, op, s), table, lm.pat);
-            let fresh = new_insts(g, k, lm.binders, ms, seen).take(cap);
-            let here = Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pat, lm.matched + ms.len(), lm.added);
-            settled(here.matched + fresh.len(), round_insts(g, table, rest, Succ(k), seen ++ fresh, cap.sub(fresh.len())).bind(λ tail =>
-                Pure(Found(fresh ++ tail.insts, Cons(here, tail.lemmas)))))
+// What one lemma's patterns found: new instances, matches, near matches.
+record PatFound { insts: List<Inst>, matched: Nat, nears: List<Near> }
+
+// Pattern `lp` (number `j` of lemma `k`, of `n` binders) matched root by
+// root, each root its own evaluation (`settled`): its new instances (at
+// most `cap`), its matches, and its near matches, each once.
+fn root_insts(g: Graph, table: List<List<Nat>>, k: Nat, n: Nat, lp: LPat, j: Nat, roots: List<Nat>, seen: List<Inst>, cap: Nat, acc: PatFound) → Tac<PatFound> {
+    match roots {
+        Nil => Pure(acc),
+        Cons(r, rest) => {
+            let ms = g.eg.ematch_loose_at(λ q op s => gq_test(g, q, op, s), λ i => flag_at(lp.slack, i), table, lp.pat, r);
+            let strict = strict_of(ms);
+            let fresh = new_insts(g, k, n, strict, seen).take(cap);
+            let nears = nears_of(k, j, n, ms, acc.nears);
+            settled(strict.len() + fresh.len() + nears.len(), root_insts(g, table, k, n, lp, j, rest, seen ++ fresh, cap.sub(fresh.len()), PatFound(acc.insts ++ fresh, acc.matched + strict.len(), acc.nears ++ nears)))
         },
     }
 }
 
-fn bump_added(lm: Lemma) → Lemma { Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pat, lm.matched, Succ(lm.added)) }
+fn on_pat<A>(t: Tac<PatFound>, k: PatFound → Tac<A>) → Tac<A> { t.bind(k) }
+
+fn pats_insts(g: Graph, table: List<List<Nat>>, k: Nat, n: Nat, ps: List<LPat>, j: Nat, seen: List<Inst>, cap: Nat) → Tac<PatFound> {
+    match ps {
+        Nil => Pure(PatFound([], 0, [])),
+        Cons(lp, rest) => on_pat(root_insts(g, table, k, n, lp, j, List::range(g.eg.size()), seen, cap, PatFound([], 0, [])), λ here =>
+            on_pat(pats_insts(g, table, k, n, rest, Succ(j), seen ++ here.insts, cap.sub(here.insts.len())), λ tail =>
+                Pure(PatFound(here.insts ++ tail.insts, here.matched + tail.matched, here.nears ++ tail.nears)))),
+    }
+}
+
+fn with_matched(lm: Lemma, n: Nat) → Lemma { Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pats, lm.refs, lm.matched + n, lm.added, lm.defined, lm.tried) }
+
+fn with_tried(lm: Lemma, t: NearTried) → Lemma { Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pats, lm.refs, lm.matched, lm.added, lm.defined, Cons(t, lm.tried)) }
+
+fn round_insts(g: Graph, table: List<List<Nat>>, ls: List<Lemma>, k: Nat, seen: List<Inst>, cap: Nat) → Tac<Found> {
+    match ls {
+        Nil => Pure(Found([], [], [])),
+        Cons(lm, rest) => pats_insts(g, table, k, lm.binders, lm.pats, 0, seen, cap).bind(λ pf =>
+            round_insts(g, table, rest, Succ(k), seen ++ pf.insts, cap.sub(pf.insts.len())).bind(λ tail =>
+                Pure(Found(pf.insts ++ tail.insts, Cons(with_matched(lm, pf.matched), tail.lemmas), pf.nears ++ tail.nears)))),
+    }
+}
+
+fn bump_added(lm: Lemma, def: Bool) → Lemma {
+    Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pats, lm.refs, lm.matched, Succ(lm.added), match def { True => Succ(lm.defined), False => lm.defined }, lm.tried)
+}
+
+// ---------------------------------------------------------------------------
+// Near matches: a lemma's instance up to a definitional step
+// (docs/grind-design.md §13, issues/grind-definitional-equalities.md).
+//
+// A near match left one item of a pattern, an application in an argument
+// position (`isucc(b)` in `a + isucc(b)`), at a node no member of whose
+// class the item matches (`OfNat(Succ(k))`). It is an instance when the
+// item, at what the match bound, is that node by `Defeq`; a binder only
+// the item binds is drawn from the graph's terms, as e-matching draws every
+// binder (`b := OfNat(k)`). The instance is then added as any other, with
+// one more edge: the item's instance and the node, by `defn` below, whose
+// `refl` the kernel checks by computation. At most one binder is drawn,
+// and a round asks at most `grind_defeq_budget()` such questions.
+
+theorem defn<A>(x: A, y: A, h: x = y): x = y { h }
+
+fn grind_defeq_budget() → Nat { 256 }
+
+// The variables an item and the items below it bind.
+fn item_vars(is: List<PItem<GQ>>, fuel: Nat, i: Nat) → List<Nat> {
+    match fuel {
+        Zero => [],
+        Succ(f) => match is.nth(i) {
+            None => [],
+            Some(it) => match it {
+                PVar(v) => [v],
+                POp(q, ks) => match q {
+                    QDep(v) => Cons(v, concat_map(ks, λ c => item_vars(is, f, c))),
+                    _ => concat_map(ks, λ c => item_vars(is, f, c)),
+                },
+            },
+        },
+    }
+}
+
+// Items to visit, each with the kid positions that lead to it.
+fn kids_with(ks: List<Nat>, j: Nat, path: List<Nat>) → List<Pair<Nat, List<Nat>>> {
+    match ks { Nil => [], Cons(c, rest) => Cons(Pair(c, path ++ [j]), kids_with(rest, Succ(j), path)) }
+}
+
+// The kid positions from an item in `todo` down to item `to`.
+fn path_to(is: List<PItem<GQ>>, fuel: Nat, todo: List<Pair<Nat, List<Nat>>>, to: Nat) → Option<List<Nat>> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match todo {
+            Nil => None,
+            Cons(p, rest) => match p.fst.same(to) {
+                True => Some(p.snd),
+                False => match is.nth(p.fst) {
+                    Some(it) => match it {
+                        POp(_, ks) => path_to(is, f, rest ++ kids_with(ks, 0, p.snd), to),
+                        PVar(_) => path_to(is, f, rest, to),
+                    },
+                    None => path_to(is, f, rest, to),
+                },
+            },
+        },
+    }
+}
+
+// The node a path of kid positions leads to from node `n`.
+fn walk(g: EGraph<GOp, Fact>, n: Nat, path: List<Nat>) → Option<Nat> {
+    match path {
+        Nil => Some(n),
+        Cons(j, rest) => match g.node(n) {
+            None => None,
+            Some(nd) => match nd.kids.nth(j) { None => None, Some(c) => walk(g, c, rest) },
+        },
+    }
+}
+
+fn lams(rs: List<LocalRef>, body: Expr) → Expr { match rs { Nil => body, Cons(r, rest) => Lam(r, lams(rest, body)) } }
+
+// Binder `i`'s argument: the node it met, the candidate `c` at binder `u`,
+// and a hole at a binder neither (a premise; the item does not mention it).
+fn arg_expr(g: Graph, s: Subst, u: Nat, c: Expr, i: Nat) → Expr {
+    match s.get(i) {
+        Some(n) => expr_at(g, n),
+        None => match i.same(u) { True => c, False => Blank },
+    }
+}
+
+// The item's subterm `h` (under the lemma's binders) at what the match
+// bound, and `c` at binder `u`.
+fn sub_instance(g: Graph, lm: Lemma, h: Handle, s: Subst, u: Nat, c: Expr) → Expr {
+    apps(lams(lm.refs, Hd(h)), List::range(lm.binders).map(λ i => arg_expr(g, s, u, c, i)))
+}
+
+// `Defeq`, its solutions forgotten: the question is asked, not answered by
+// solving a hole the item's premises left.
+fn defeq_undone(a: Expr, b: Expr) → Tac<Bool> {
+    mark().bind(λ m => defeq(a, b).bind(λ same => restore(m).bind(λ _ => Pure(same))))
+}
+
+// The first of the candidates `cs` at which the item is the node, the
+// budget left, and how far the candidates were tried.
+record Pick { found: Option<Nat>, left: Nat, upto: Nat }
+
+fn pick_candidate(g: Graph, lm: Lemma, h: Handle, s: Subst, u: Nat, target: Expr, cs: List<Nat>, budget: Nat, upto: Nat) → Tac<Pick> {
+    match cs {
+        Nil => Pure(Pick(None, budget, upto)),
+        Cons(c, rest) => match budget {
+            Zero => Pure(Pick(None, 0, c)),
+            Succ(b) => defeq_undone(sub_instance(g, lm, h, s, u, expr_at(g, c)), target).bind(λ same => match same {
+                True => Pure(Pick(Some(c), b, Succ(c))),
+                False => pick_candidate(g, lm, h, s, u, target, rest, b, Succ(c)),
+            }),
+        },
+    }
+}
+
+
+// How far this near match's candidates were tried before (0: never).
+fn tried_upto(ts: List<NearTried>, j: Nat, item: Nat, node: Nat, args: List<Option<Nat>>) → Nat {
+    match ts {
+        Nil => 0,
+        Cons(t, rest) => match t.pat.same(j).and(t.item.same(item)).and(t.node.same(node)).and(opts_same(t.args, args)) {
+            True => t.upto,
+            False => tried_upto(rest, j, item, node, args),
+        },
+    }
+}
+
+fn is_whole(g: Graph, i: Nat) → Bool { match g.info.nth(i) { Some(n) => n.whole, None => False } }
+
+fn nats_once(xs: List<Nat>, seen: List<Nat>) → List<Nat> {
+    match xs {
+        Nil => [],
+        Cons(x, rest) => match nat_in(seen, x) { True => nats_once(rest, seen), False => Cons(x, nats_once(rest, Cons(x, seen))) },
+    }
+}
+
+// The instance a near match found at the binders' nodes `a`. One like it
+// may have been added already (from the other side's pattern): it is added
+// again for its definitional edge, which is new, and reading it again adds
+// no term. A near match is resolved once (`NearTried`), so this repeats
+// nothing.
+fn near_inst(nr: Near, lp: LPat, path: List<Nat>, a: List<Option<Nat>>) → Option<Inst> {
+    Some(Inst(nr.lemma, a, Some(DefAt(lp.left, path, nr.slack.node))))
+}
+
+// What resolving a near match gives: the instance, if any, the lemma with
+// the near match recorded as tried, and the budget left.
+record Resolved { inst: Option<Inst>, lemma: Lemma, left: Nat }
+
+fn resolve_at(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat>, seen: List<Inst>, budget: Nat) → Tac<Resolved> {
+    let item = nr.slack.item;
+    let node = nr.slack.node;
+    let args = nr.s.at.take(lm.binders);
+    let vars = nats_once(item_vars(lp.pat.items, Succ(lp.pat.items.len()), item), []);
+    let free = vars.filter(λ v => Succ(v).leb(lm.binders).and(match nr.s.get(v) { None => True, Some(_) => False }));
+    let from = tried_upto(lm.tried, nr.pat, item, node, args);
+    let skip: Tac<Resolved> = Pure(Resolved(None, lm, budget));
+    let target = expr_at(g, node);
+    match free {
+        Nil => match from {
+            Succ(_) => skip,
+            Zero => match budget {
+                Zero => skip,
+                Succ(b) => defeq_undone(sub_instance(g, lm, h, nr.s, lm.binders, Blank), target).bind(λ same =>
+                    Pure(Resolved(match same { True => near_inst(nr, lp, path, args), False => None }, with_tried(lm, NearTried(nr.pat, item, node, args, 1)), b))),
+            },
+        },
+        Cons(u, more) => match more {
+            Cons(_, _) => skip,
+            Nil => {
+                let cs = List::range(g.info.len()).filter(λ c => from.leb(c).and(is_whole(g, c)));
+                match cs {
+                    Nil => skip,
+                    Cons(_, _) => pick_candidate(g, lm, h, nr.s, u, target, cs, budget, g.info.len()).bind(λ pk =>
+                        Pure(Resolved(match pk.found {
+                            None => None,
+                            Some(c) => near_inst(nr, lp, path, args.update(u, λ _ => Some(c))),
+                        }, with_tried(lm, NearTried(nr.pat, item, node, args, pk.upto)), pk.left))),
+                }
+            },
+        },
+    }
+}
+
+fn opt_handle(o: Option<Option<Handle>>) → Option<Handle> { match o { Some(x) => x, None => None } }
+
+fn resolve_near(g: Graph, lm: Lemma, nr: Near, seen: List<Inst>, budget: Nat) → Tac<Resolved> {
+    match lm.pats.nth(nr.pat) {
+        None => Pure(Resolved(None, lm, budget)),
+        Some(lp) => match opt_handle(lp.terms.nth(nr.slack.item)) {
+            None => Pure(Resolved(None, lm, budget)),
+            Some(h) => match path_to(lp.pat.items, Succ(lp.pat.items.len()), [Pair(lp.pat.root, [])], nr.slack.item) {
+                None => Pure(Resolved(None, lm, budget)),
+                Some(path) => resolve_at(g, lm, nr, lp, h, path, seen, budget),
+            },
+        },
+    }
+}
+
+fn on_resolved<A>(t: Tac<Resolved>, k: Resolved → Tac<A>) → Tac<A> { t.bind(k) }
+
+// Each near match resolved, in order, while the budget lasts: the instances
+// found, and the lemmas with what was tried.
+fn resolve_nears(g: Graph, ls: List<Lemma>, ns: List<Near>, seen: List<Inst>, budget: Nat, out: List<Inst>) → Tac<Found> {
+    match ns {
+        Nil => Pure(Found(out, ls, [])),
+        Cons(nr, rest) => match budget {
+            Zero => Pure(Found(out, ls, [])),
+            Succ(b) => match ls.nth(nr.lemma) {
+                None => resolve_nears(g, ls, rest, seen, Succ(b), out),
+                Some(lm) => on_resolved(settled(rest.len(), resolve_near(g, lm, nr, seen, Succ(b))), λ r => {
+                    let ls2 = ls.update(nr.lemma, λ _ => r.lemma);
+                    match r.inst {
+                        None => resolve_nears(g, ls2, rest, seen, r.left, out),
+                        Some(i) => resolve_nears(g, ls2, rest, Cons(i, seen), r.left, out ++ [i]),
+                    }
+                }),
+            },
+        },
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Concluding.
@@ -907,8 +1274,8 @@ fn law(name: String) → Tac<GlobalRef> { lookup(name).or_fail("grind: `" ++ nam
 
 fn grind_laws() → Tac<GrindLaws> {
     law("trans").bind(λ t => law("sym").bind(λ s => law("cong").bind(λ c =>
-    law("grind::congr").bind(λ cr => law("grind::congr_fun").bind(λ cf => law("tactic::rfl").bind(λ r =>
-    Pure(GrindLaws(t, s, c, cr, cf, r))))))))
+    law("grind::congr").bind(λ cr => law("grind::congr_fun").bind(λ cf => law("tactic::rfl").bind(λ r => law("grind::defn").bind(λ d =>
+    Pure(GrindLaws(t, s, c, cr, cf, r, d)))))))))
 }
 
 // The names of the facts a path cites, by the same explanation the proof is.
@@ -937,12 +1304,17 @@ fn names_once(ns: List<String>, done: List<String>) → List<String> {
     }
 }
 
+// How many instances a near match found, up to a definitional step.
+fn defined_note(n: Nat) → String {
+    match n { Zero => "", Succ(_) => ", " ++ decimal_name(Succ(n), n) ++ " of them up to a definitional step" }
+}
+
 fn lemma_notes(ls: List<Lemma>) → List<Note> {
     match ls {
         Nil => [],
-        Cons(lm, rest) => Cons(match lm.matched {
-            Zero => Tried(lm.name, "its pattern never matched a term of the graph"),
-            Succ(_) => Tried(lm.name, decimal_name(Succ(lm.matched), lm.matched) ++ " matches, " ++ decimal_name(Succ(lm.added), lm.added) ++ " instances added"),
+        Cons(lm, rest) => Cons(match lm.matched + lm.added {
+            Zero => Tried(lm.name, "its patterns never matched a term of the graph"),
+            Succ(_) => Tried(lm.name, decimal_name(Succ(lm.matched), lm.matched) ++ " matches, " ++ decimal_name(Succ(lm.added), lm.added) ++ " instances added" ++ defined_note(lm.defined)),
         }, lemma_notes(rest)),
     }
 }
@@ -986,9 +1358,25 @@ fn stuck(g: Graph, fs: Facts, lhs: Nat, rhs: Nat, why: String) → Tac<Expr> {
     fail("grind: the two sides are not in one class", stuck_notes(g, lhs, rhs, Facts(fs.g, fs.read ++ lemmas, fs.skipped, fs.lemmas, fs.seen, fs.offered, fs.locals, fs.givens, fs.pending)))
 }
 
-fn closed(fs: Facts) → Facts {
-    with_graph(fs, Graph(fs.g.eg.close(gop_same, Succ(fs.g.eg.size())), fs.g.info, fs.g.atoms))
+// The graph closed under congruence, one pass per evaluation (`settled`):
+// a pass compares every node's signature with the earlier ones, and the
+// passes of a graph of a few dozen terms outgrow one evaluation's fuel
+// together.
+fn close_passes(eg: EGraph<GOp, Fact>, fuel: Nat) → Tac<EGraph<GOp, Fact>> {
+    match fuel {
+        Zero => Pure(eg),
+        Succ(f) => {
+            let g2 = eg.congruence_pass(gop_same, sigs_from(eg, eg.nodes, 0), []);
+            settled(g2.edges.len(), match g2.edges.len().same(eg.edges.len()) { True => Pure(g2), False => close_passes(g2, f) })
+        },
+    }
 }
+
+fn closed(fs: Facts) → Tac<Facts> {
+    close_passes(fs.g.eg, Succ(fs.g.eg.size())).bind(λ eg => Pure(with_graph(fs, Graph(eg, fs.g.info, fs.g.atoms))))
+}
+
+fn on_closed<A>(t: Tac<Facts>, k: Facts → Tac<A>) → Tac<A> { t.bind(k) }
 
 // ---------------------------------------------------------------------------
 // Instances: a lemma applied to the nodes its binders met, each premise
@@ -1010,15 +1398,16 @@ fn by_graph(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
     sides_of(ty).bind(λ o => match o {
         None => Pure(Premised(fs, None, [])),
         Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => {
-            let c = closed(with_graph(fs, y.g));
-            let cx = class_of(c.g, x.node);
-            let cy = class_of(c.g, y.node);
-            settled(cx + cy, match cx.same(cy) {
-                False => Pure(Premised(c, None, [])),
-                True => match c.g.eg.explain(proof_alg(l, c.g), x.node, y.node) {
-                    None => Pure(Premised(c, None, [])),
-                    Some(pf) => Pure(Premised(c, Some(pf), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns })),
-                },
+            on_closed(closed(with_graph(fs, y.g)), λ c => {
+                let cx = class_of(c.g, x.node);
+                let cy = class_of(c.g, y.node);
+                settled(cx + cy, match cx.same(cy) {
+                    False => Pure(Premised(c, None, [])),
+                    True => match c.g.eg.explain(proof_alg(l, c.g), x.node, y.node) {
+                        None => Pure(Premised(c, None, [])),
+                        Some(pf) => Pure(Premised(c, Some(pf), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns })),
+                    },
+                })
             })
         })),
     })
@@ -1090,7 +1479,22 @@ fn build(l: GrindLaws, fs: Facts, name: String, pr: Expr, uses: List<String>, as
 
 // Add the instance's equation, or set it aside to wait on its premise; one
 // the kernel's type of does not make an equation of is left out.
-fn on_built(bd: Building, i: Inst, lm: Lemma) → Tac<Facts> {
+fn is_def(o: Option<DefAt>) → Bool { match o { Some(_) => True, None => False } }
+
+// The definitional edge of an instance a near match found: from the node
+// the path leads to under the instance's side (`left` or `right`) to the
+// node the item met, by `defn`, which the kernel checks by computation.
+fn with_definition(l: GrindLaws, g: Graph, i: Inst, name: String, left: Nat, right: Nat) → Graph {
+    match i.def {
+        None => g,
+        Some(d) => match walk(g.eg, match d.left { True => left, False => right }, d.path) {
+            None => g,
+            Some(m) => Graph(g.eg.union(m, d.node, Fact(defn_of(l, expr_at(g, m), expr_at(g, d.node)), name, [])), g.info, g.atoms),
+        },
+    }
+}
+
+fn on_built(l: GrindLaws, bd: Building, i: Inst, lm: Lemma) → Tac<Facts> {
     let fs = bd.fs;
     match bd.b {
         BDrop => Pure(fs),
@@ -1100,7 +1504,7 @@ fn on_built(bd: Building, i: Inst, lm: Lemma) → Tac<Facts> {
             Accepted(ty) => sides_of(ty).bind(λ o => match o {
                 None => Pure(fs),
                 Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
-                    Pure(Facts(Graph(y.g.eg.union(x.node, y.node, Fact(pr, lm.name, uses)), y.g.info, y.g.atoms), fs.read, fs.skipped, fs.lemmas.update(i.lemma, bump_added), fs.seen, fs.offered, fs.locals, fs.givens, fs.pending)))),
+                    Pure(Facts(with_definition(l, Graph(y.g.eg.union(x.node, y.node, Fact(pr, lm.name, uses)), y.g.info, y.g.atoms), i, lm.name, x.node, y.node), fs.read, fs.skipped, fs.lemmas.update(i.lemma, λ m => bump_added(m, is_def(i.def))), fs.seen, fs.offered, fs.locals, fs.givens, fs.pending)))),
             }),
         }),
     }
@@ -1111,7 +1515,7 @@ fn add_insts(l: GrindLaws, fs: Facts, is: List<Inst>) → Tac<Facts> {
         Nil => Pure(fs),
         Cons(i, rest) => match fs.lemmas.nth(i.lemma) {
             None => add_insts(l, fs, rest),
-            Some(lm) => build(l, fs, lm.name, lm.proof, [], i.args, 0).bind(λ bd => on_built(bd, i, lm)).bind(λ f2 => add_insts(l, f2, rest)),
+            Some(lm) => build(l, fs, lm.name, lm.proof, [], i.args, 0).bind(λ bd => on_built(l, bd, i, lm)).bind(λ f2 => add_insts(l, f2, rest)),
         },
     }
 }
@@ -1138,9 +1542,8 @@ fn on_found(t: Tac<Found>, k: Found → Tac<Expr>) → Tac<Expr> { t.bind(k) }
 // more (at most `rounds` times), or fail with what it holds.
 fn saturate(rounds: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, lhs: Nat, rhs: Nat) → Tac<Expr> {
     match rounds {
-        Zero => settle(report, l, closed(fs0), lhs, rhs, "stopped after " ++ decimal_name(Succ(done), done) ++ " rounds"),
-        Succ(r) => {
-            let fs = closed(fs0);
+        Zero => on_closed(closed(fs0), λ fs => settle(report, l, fs, lhs, rhs, "stopped after " ++ decimal_name(Succ(done), done) ++ " rounds")),
+        Succ(r) => on_closed(closed(fs0), λ fs => {
             let g = fs.g;
             match class_of(g, lhs).same(class_of(g, rhs)) {
                 True => proved(report, l, fs, lhs, rhs),
@@ -1148,17 +1551,19 @@ fn saturate(rounds: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, lhs:
                     Nil => stuck(g, fs, lhs, rhs, ""),
                     Cons(_, _) => {
                         let table = g.eg.class_table();
-                        settled(table.len() + g.eg.edges.len(), on_found(round_insts(g, table, fs.lemmas, 0, fs.seen, grind_round_cap()), λ found => {
-                            let next = Facts(g, fs.read, fs.skipped, found.lemmas, fs.seen ++ found.insts, fs.offered, fs.locals, fs.givens, fs.pending);
-                            match found.insts {
+                        settled(table.len() + g.eg.edges.len(), on_found(round_insts(g, table, fs.lemmas, 0, fs.seen, grind_round_cap()), λ strict =>
+                            on_found(resolve_nears(g, strict.lemmas, strict.nears, fs.seen ++ strict.insts, grind_defeq_budget(), []), λ near => {
+                            let insts = strict.insts ++ near.insts;
+                            let next = Facts(g, fs.read, fs.skipped, near.lemmas, fs.seen ++ insts, fs.offered, fs.locals, fs.givens, fs.pending);
+                            match insts {
                                 Nil => stuck(g, next, lhs, rhs, match done { Zero => "no instance in the graph", Succ(_) => "no new instance after " ++ decimal_name(Succ(done), done) ++ " rounds" }),
-                                Cons(_, _) => add_insts(l, with_pending(next, []), found.insts ++ next.pending.map(λ p => p.inst)).bind(λ fs2 => saturate(r, Succ(done), report, l, fs2, lhs, rhs)),
+                                Cons(_, _) => add_insts(l, with_pending(next, []), insts ++ next.pending.map(λ p => p.inst)).bind(λ fs2 => saturate(r, Succ(done), report, l, fs2, lhs, rhs)),
                             }
-                        }))
+                        })))
                     },
                 },
             }
-        },
+        }),
     }
 }
 

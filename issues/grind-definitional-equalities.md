@@ -1,6 +1,6 @@
 ---
 title: grind: terms equal by definition alone stay in different classes
-status: open
+status: closed
 labels: [tactics]
 area: tactics
 milestone: [tac-general]
@@ -38,3 +38,7 @@ up to conversion. Options, cheapest first:
 
 Done when `neg_add`'s `Succ` step closes by `grind_using` with the four
 lemmas its `calc` cites.
+
+## Log
+
+- 2026-11-02: Done (thread "Let grind use definitional equalities"). The issue's option 1, with the item's free binder drawn from the graph: `ematch_loose` in the e-graph library leaves one item at a class none of whose members it matches (a near match), and grind resolves it by `Defeq` of the item's subterm, abstracted over the lemma's binders, against the node, adding the instance and a `grind::defn` edge (`refl`, checked by computation). Both sides of a lemma are now patterns, since `add_ipred`'s instance is found from its right side. Congruence closing runs one pass per evaluation. `neg_add`'s `Succ` step closes by `grind_using` with its four lemmas (probe `neg_add_succ`); `int.hthr` keeps its hand proof (closure). More than one free binder: [[grind-near-match-binders]]. Design: `docs/grind-design.md` §13.
