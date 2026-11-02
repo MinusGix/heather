@@ -12,25 +12,31 @@ use heather_kernel::term::{CtxEntry, LocalCtx, Term, Type};
 use heather_syntax::{Expr, ExprKind, Ty};
 
 use crate::recursion::{Guard, SelfRef};
+use crate::spine::{Binders, Spine};
 use crate::{R, Skel, quote};
 
 /// Elaboration context: kernel Γ plus the parallel name list
 /// (`names[j]` names `gamma.entries[j]`, outermost first).
+///
+/// Every per-binder column is a persistent [`Spine`] (or [`Binders`]), as Γ's
+/// own entries are, so a clone, which every probe, retry and diagnostic takes,
+/// is a handful of refcount bumps rather than a copy of every name
+/// (issues/elab-cx-persistent-binders.md).
 #[derive(Clone)]
 pub(crate) struct Cx {
     /// One enclosing dot call's chain, shared by lookup and its cloned
     /// desugared argument. Only source dots are keyed by span: desugaring
     /// builds applications, so generated nodes cannot alias this key.
     pub(crate) dot_receiver: Option<Rc<DotReceivers>>,
-    pub(crate) names: Vec<String>,
+    /// Parallel to `gamma.entries`: each binder's written name and the
+    /// implicitness skeleton of its *written* type, where it had one
+    /// (docs/implicit-binders-design.md §3.1; [`Binders::skel`]). Maintained
+    /// by [`Cx::push`] (defaulting the skeleton to `None`) and
+    /// [`Cx::push_skel`] — one push path, so the two cannot desync. Nothing
+    /// in a skeleton is subject to substitution or shifting (§3.2), so
+    /// entries are never updated.
+    pub(crate) names: Binders,
     pub(crate) gamma: LocalCtx,
-    /// Parallel to `names`/`gamma.entries`: the implicitness skeleton of the
-    /// binder's *written* type, where it had one
-    /// (docs/implicit-binders-design.md §3.1). Maintained by [`Cx::push`]
-    /// (defaulting `None`) and [`Cx::push_skel`] — one push path, so the
-    /// vectors cannot desync. Nothing in a skeleton is subject to
-    /// substitution or shifting (§3.2), so entries are never updated.
-    pub(crate) skels: Vec<Option<Rc<Skel>>>,
     /// The declaration being elaborated, once its telescope is in scope.
     pub(crate) selfref: Option<Rc<SelfRef>>,
     /// Set inside a `Succ(k)` arm; `None` outside every such arm, where a
@@ -43,11 +49,11 @@ pub(crate) struct Cx {
     pub(crate) generalized: Option<Rc<crate::generalize::Generalization>>,
     /// `let` bindings in scope, outermost first. Not kernel binders: an alias
     /// is inlined at each use, so `Γ` is unchanged.
-    pub(crate) aliases: Vec<Rc<Alias>>,
+    pub(crate) aliases: Spine<Rc<Alias>>,
     /// An `inductive`'s type parameters, while its field types are being
     /// lowered at an instantiation. Empty everywhere else: type parameters are
     /// monomorphized, so they never survive into a kernel term.
-    pub(crate) tyvars: Vec<TyVar>,
+    pub(crate) tyvars: Spine<TyVar>,
     /// Class dictionaries in scope, outermost first, **as written**
     /// (docs/operation-indexed-classes-design.md §5, ladder step 2). A value
     /// index is never searched for; where it is not already ground it comes
@@ -55,12 +61,12 @@ pub(crate) struct Cx {
     /// pins it, and that index is a surface expression valid in this very
     /// context. Empty for every declaration with no class binder, which is what
     /// keeps the whole mechanism off code that has nothing to do with classes.
-    pub(crate) dicts: Vec<Rc<DictBinder>>,
+    pub(crate) dicts: Spine<Rc<DictBinder>>,
     /// Index names that a *repeated* constraint left bound to nothing
     /// (`docs/operation-indexed-classes-design.md` §5.2), with the refusal
     /// each one owes. Consulted only where the answer would otherwise have
     /// been "unbound name".
-    pub(crate) index_ambiguity: Vec<(String, String)>,
+    pub(crate) index_ambiguity: Spine<(String, String)>,
     /// Operator symbols a constraint binder **installed**, as (symbol, the
     /// index binder's generated name) — the first rung of a symbol's
     /// resolution (docs/operators-onto-classes-design.md §4, §5).
@@ -71,7 +77,7 @@ pub(crate) struct Cx {
     /// operator. Later entries shadow earlier ones. Empty for every
     /// declaration that names no symbol, which is every declaration written
     /// before this round.
-    pub(crate) op_locals: Vec<(String, String)>,
+    pub(crate) op_locals: Spine<(String, String)>,
     /// The meta-layer binder environment, present exactly while a `meta fn`'s
     /// body — or a quote payload inside it — elaborates
     /// (docs/in-language-map-design.md §5). `None` everywhere else, which is
@@ -92,14 +98,15 @@ type ReceiverInference = OnceCell<R<(Term, Type, Level)>>;
 
 pub(crate) struct DotReceivers {
     gamma: LocalCtx,
-    aliases: Vec<Rc<Alias>>,
+    aliases: Spine<Rc<Alias>>,
     inferred: RefCell<BTreeMap<(usize, usize), Rc<ReceiverInference>>>,
 }
 
 impl DotReceivers {
     fn matches(&self, cx: &Cx) -> bool {
         cx.gamma == self.gamma && cx.aliases.len() == self.aliases.len()
-            && cx.aliases.iter().zip(&self.aliases).all(|(a, b)| Rc::ptr_eq(a, b))
+            && (cx.aliases.ptr_eq(&self.aliases)
+                || cx.aliases.iter_inner().zip(self.aliases.iter_inner()).all(|(a, b)| Rc::ptr_eq(a, b)))
     }
 
     pub(crate) fn inference(&self, cx: &Cx, e: &Expr) -> Option<Rc<ReceiverInference>> {
@@ -205,17 +212,16 @@ impl Cx {
     pub(crate) fn empty() -> Cx {
         Cx {
             dot_receiver: None,
-            names: vec![],
+            names: Binders::default(),
             gamma: LocalCtx::nil(),
-            skels: vec![],
             selfref: None,
             guard: None,
             generalized: None,
-            aliases: vec![],
-            tyvars: vec![],
-            dicts: vec![],
-            index_ambiguity: vec![],
-            op_locals: vec![],
+            aliases: Spine::new(),
+            tyvars: Spine::new(),
+            dicts: Spine::new(),
+            index_ambiguity: Spine::new(),
+            op_locals: Spine::new(),
             meta: None,
             corec: None,
             codata_match: None,
@@ -248,9 +254,8 @@ impl Cx {
         };
         Cx {
             dot_receiver: None,
-            names: self.names.iter().map(|n| hide(n)).collect(),
+            names: self.names.renamed(hide),
             gamma: self.gamma.clone(),
-            skels: self.skels.clone(),
             selfref: None,
             guard: None,
             generalized: None,
@@ -275,9 +280,9 @@ impl Cx {
                 .iter()
                 .map(|t| TyVar { name: hide(&t.name), ..t.clone() })
                 .collect(),
-            dicts: vec![],
-            index_ambiguity: vec![],
-            op_locals: vec![],
+            dicts: Spine::new(),
+            index_ambiguity: Spine::new(),
+            op_locals: Spine::new(),
             meta: None,
             corec: None,
             codata_match: None,
@@ -325,7 +330,6 @@ impl Cx {
         out.dot_receiver = None;
         out.names.truncate(n);
         out.gamma.entries = self.gamma.entries.prefix(n);
-        out.skels.truncate(n);
         out
     }
 
@@ -340,12 +344,11 @@ impl Cx {
         skel: Option<Rc<Skel>>,
     ) {
         self.dot_receiver = None;
-        self.names.push(name);
+        self.names.push(name, skel);
         self.gamma.entries.push(CtxEntry {
             ty: Rc::new(ty),
             level,
         });
-        self.skels.push(skel);
     }
 }
 
@@ -416,7 +419,6 @@ mod tests {
         cx.push("y".into(), Type::Nat, Level::Zero);
 
         assert_eq!(cx.names.len(), cx.gamma.entries.len());
-        assert_eq!(cx.skels.len(), cx.gamma.entries.len());
     }
 
     #[test]
@@ -429,7 +431,6 @@ mod tests {
         let prefix = cx.prefix(1);
         assert_eq!(prefix.names, ["x"]);
         assert_eq!(prefix.gamma.entries.len(), 1);
-        assert_eq!(prefix.skels.len(), 1);
-        assert_eq!(prefix.op_locals, [("+".into(), "#plus".into())]);
+        assert_eq!(prefix.op_locals, [(String::from("+"), String::from("#plus"))]);
     }
 }

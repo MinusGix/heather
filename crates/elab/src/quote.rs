@@ -895,8 +895,8 @@ impl Elaborator {
         let ExprKind::Var(name) = &source.kind else {
             return err("`emit_code` expects a named meta function", source.span);
         };
-        if cx.names.iter().any(|local| local == name)
-            || cx.aliases.iter().any(|local| local.name == *name)
+        if cx.names.iter_inner().any(|local| local == name)
+            || cx.aliases.iter_inner().any(|local| local.name == *name)
             || cx.selfref.as_ref().is_some_and(|local| local.matches(name))
         {
             return err(

@@ -117,7 +117,7 @@ pub(super) struct DeclAttempt {
     /// outermost binders when it locates a refusal no recorded site
     /// explains, and so the names its note uses for them
     /// (`Elaborator::refused_site_cx`).
-    pub(super) telescope: RefCell<Vec<String>>,
+    pub(super) telescope: RefCell<crate::spine::Binders>,
 }
 
 /// [`DeclAttempt::instance_matches`]' key past the subject type: the tag, the

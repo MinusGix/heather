@@ -224,7 +224,7 @@ struct Speller<'a> {
     /// `cx.names` extended with one entry per binder the walk has descended
     /// under, so a `Var` under a printed `Π` resolves to the name just chosen
     /// for it.
-    names: RefCell<Vec<String>>,
+    names: RefCell<crate::spine::Binders>,
     nodes: Cell<u32>,
     fallbacks: Cell<u32>,
     /// Spell globals so the result can be **re-parsed** rather than only read.
@@ -285,18 +285,20 @@ impl Speller<'_> {
     /// spelling here comes back to `t`.
     fn alias(&self, t: &Term) -> Option<String> {
         let names = self.names.borrow();
-        let aliases = &self.cx.aliases;
-        aliases.iter().enumerate().rev().find_map(|(k, a)| {
+        // Innermost first, so the aliases bound after `a` are the ones
+        // already passed.
+        let mut later_aliases: Vec<&str> = Vec::new();
+        self.cx.aliases.iter_inner().find_map(|a| {
+            let shadowed_by_alias = later_aliases.contains(&a.name.as_str());
+            later_aliases.push(&a.name);
             // A context can carry an alias bound deeper than its own names
             // (one cut back to a prefix); that alias is not in scope here.
-            let later = names.get(a.depth..)?;
-            // The term first: it is the test that almost always fails, and
-            // the shadowing scan is quadratic in the aliases in scope.
-            if !shifted_projection(&a.term, later.len() as u32, t) {
+            let later = names.len().checked_sub(a.depth)?;
+            // The term first: it is the test that almost always fails.
+            if !shifted_projection(&a.term, later as u32, t) {
                 return None;
             }
-            let shadowed = later.iter().any(|n| *n == a.name)
-                || aliases[k + 1..].iter().any(|b| b.name == a.name);
+            let shadowed = shadowed_by_alias || names.iter_inner().take(later).any(|n| n == a.name);
             let written = a.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
             (written && !shadowed).then(|| a.name.clone())
         })
@@ -321,8 +323,8 @@ impl Speller<'_> {
     /// preference list not already in scope, else `x{n}`.
     fn fresh(&self) -> String {
         let names = self.names.borrow();
-        let used = |candidate: &str| names.iter().any(|n| n == candidate)
-            || self.cx.aliases.iter().any(|a| a.name == candidate);
+        let used = |candidate: &str| names.contains(candidate)
+            || self.cx.aliases.iter_inner().any(|a| a.name == candidate);
         for cand in ["x", "y", "z", "a", "b", "c"] {
             if !used(cand) {
                 return cand.to_string();
@@ -368,7 +370,7 @@ impl Speller<'_> {
 
     /// Spell `body` under one binder named `name`.
     fn under(&self, name: &str, body: &Type, d: u32) -> String {
-        self.names.borrow_mut().push(name.to_string());
+        self.names.borrow_mut().push(name, None);
         let s = self.ty(body, d + 1);
         self.names.borrow_mut().pop();
         s
@@ -628,7 +630,7 @@ impl Speller<'_> {
             Term::Lam { dom, body, .. } => {
                 let dom_s = self.ty(dom, d + 1);
                 let name = self.fresh();
-                self.names.borrow_mut().push(name.clone());
+                self.names.borrow_mut().push(name.as_str(), None);
                 let body_s = self.tm(body, d + 1);
                 self.names.borrow_mut().pop();
                 format!("λ ({name}: {dom_s}) => {body_s}")
@@ -1119,8 +1121,7 @@ impl Speller<'_> {
     /// of the scope this display knows about.
     fn var(&self, i: u32) -> Option<String> {
         let names = self.names.borrow();
-        let pos = names.len().checked_sub(1 + i as usize)?;
-        names.get(pos).cloned()
+        names.nth_inner(i as usize).map(str::to_string)
     }
 
     /// A global's written name and how each of its parameters is shown.

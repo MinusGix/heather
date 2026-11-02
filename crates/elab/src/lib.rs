@@ -97,6 +97,7 @@ mod code;
 mod codata;
 mod constructor;
 mod context;
+mod spine;
 mod defaults;
 mod datarepr;
 mod diagnostics;
@@ -2722,8 +2723,8 @@ impl Elaborator {
             },
             _ => return Ok(None),
         };
-        if cx.names.iter().any(|n| n == name)
-            || cx.aliases.iter().any(|a| a.name == *name)
+        if cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
             || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
         {
             return Ok(None);
@@ -4120,7 +4121,7 @@ impl Elaborator {
         }
         let decl_type = stats::guard(stats::Timer::DeclType);
         let mut cx = Cx::empty();
-        cx.index_ambiguity = ambiguous;
+        cx.index_ambiguity = ambiguous.into();
         // The constraint slots' symbols, checked against each other on the way
         // in: §5.2's uniqueness rule runs over the symbol namespace by any mix
         // of slots and `as` (issues/binder-symbol-as-notation.md), and one loop
@@ -5991,7 +5992,7 @@ impl Elaborator {
         let mut next = 0;
         for fact in facts {
             if let ExprKind::Var(name) = &fact.kind {
-                if cx.names.contains(name) || cx.aliases.iter().any(|alias| alias.name == *name) {
+                if cx.names.contains(name) || cx.aliases.iter_inner().any(|alias| alias.name == *name) {
                     continue;
                 }
             }
@@ -5999,7 +6000,7 @@ impl Elaborator {
             let name = loop {
                 let name = format!("__omega_fact_{next}");
                 next += 1;
-                if !inner.names.contains(&name) && !inner.aliases.iter().any(|alias| alias.name == name) {
+                if !inner.names.contains(&name) && !inner.aliases.iter_inner().any(|alias| alias.name == name) {
                     break name;
                 }
             };
@@ -6724,8 +6725,8 @@ impl Elaborator {
             return Ok(());
         }
         let ExprKind::Var(name) = &head.kind else { return Ok(()) };
-        if cx.names.iter().any(|n| n == name)
-            || cx.aliases.iter().any(|a| a.name == *name)
+        if cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
             || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
         {
             return Ok(());
@@ -7603,7 +7604,7 @@ impl Elaborator {
                 // a same-named *global*'s mask or hint table, which is the
                 // §4.2 params-passed-not-recovered rule (a local `f` must
                 // not borrow a global `f`'s metadata).
-                if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name)
+                if cx.names.iter_inner().any(|n| n == name) || cx.aliases.iter_inner().any(|a| a.name == *name)
                 {
                     let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
                     let skel = self.value_skel(cx, name);
@@ -8612,7 +8613,7 @@ impl Elaborator {
         };
         let checks = self.attempt.check_notes.borrow();
         let refls = self.attempt.refl_notes.borrow();
-        let none = Vec::new();
+        let none = crate::spine::Binders::default();
         let (k, written) = checks.iter().map(|n| &n.cx).chain(refls.iter().map(|n| &n.cx))
             .map(|c| (shared(c), &c.names))
             .max_by_key(|(k, _)| *k)
@@ -8622,7 +8623,7 @@ impl Elaborator {
         for i in 0..gamma.entries.len() {
             let entry = gamma.entries.get(i)?;
             let name = match (i < k).then(|| written.get(i)).flatten().or_else(|| telescope.get(i)) {
-                Some(name) => name.clone(),
+                Some(name) => name.to_string(),
                 None => ["x", "y", "z", "a", "b", "c"]
                     .iter()
                     .map(|n| n.to_string())
@@ -8638,8 +8639,8 @@ impl Elaborator {
     /// combinator? The library's own `bool::decide` is the one global that
     /// does not count (see the checking arm).
     fn decide_shadowed(&self, cx: &Cx) -> bool {
-        cx.names.iter().any(|n| n == "decide")
-            || cx.aliases.iter().any(|a| a.name == "decide")
+        cx.names.iter_inner().any(|n| n == "decide")
+            || cx.aliases.iter_inner().any(|a| a.name == "decide")
             || cx.selfref.as_ref().is_some_and(|s| s.matches("decide"))
             || self
                 .key_of("decide")
@@ -8772,8 +8773,8 @@ impl Elaborator {
     /// this: `member_head` asks `ambient_reading_survives`,
     /// docs/receiver-member-resolution-design.md §2.)
     fn shadowed(&self, cx: &Cx, name: &str) -> bool {
-        cx.names.iter().any(|n| n == name)
-            || cx.aliases.iter().any(|a| a.name == *name)
+        cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
             || self.lookup_global(name).is_some()
             // The declaration's own name. It is not in `globals` until it is
             // checked, so without this a `fn map` could not recurse: its
@@ -9682,8 +9683,8 @@ impl Elaborator {
         // Locals and `let` aliases, innermost first. An alias bound at depth
         // `d` shadows every binder at position `< d` and is shadowed by the
         // rest, which is what compares the two here.
-        let local_pos = cx.names.iter().rposition(|n| n == name);
-        let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+        let local_pos = cx.names.lookup(name);
+        let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
         match (local_pos, alias) {
             (Some(pos), Some(a)) if a.depth <= pos => return Ok(self.local(cx, pos)),
             (_, Some(a)) => {

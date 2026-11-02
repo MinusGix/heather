@@ -195,7 +195,7 @@ impl MatchDicts {
         }
         let mut out: Vec<(Type, Level)> = Vec::new();
         if ind.params.len() == 1 {
-            for d in cx.dicts.iter().rev() {
+            for d in cx.dicts.iter_inner() {
                 let Ok((carrier, clvl)) = el.elab_ty(cx, &d.carrier) else { continue };
                 let Some(index) = el.scope_index(cx, &ind.name, &carrier, &clvl) else { continue };
                 let targs = [(carrier, clvl)];
@@ -1539,7 +1539,7 @@ impl Elaborator {
         // A type's name is quoted as the type (`generate congruences(Tm)`).
         if let heather_syntax::ast::ExprKind::Var(name) = &e.kind
             && !self.shadowed(cx, name)
-            && !cx.names.iter().any(|n| n == name)
+            && !cx.names.iter_inner().any(|n| n == name)
             && self.lookup_inductive(name).is_some_and(|ind| ind.params.is_empty() && ind.valparams.is_empty())
         {
             let written = heather_syntax::ast::Ty {
@@ -1558,7 +1558,7 @@ impl Elaborator {
         // insert them.
         if let heather_syntax::ast::ExprKind::Var(name) = &e.kind
             && !self.shadowed(cx, name)
-            && !cx.names.iter().any(|n| n == name)
+            && !cx.names.iter_inner().any(|n| n == name)
             && let Some((term, ty, level)) = self.raw_global(name)
             && !(level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level))
         {
@@ -1744,7 +1744,7 @@ impl Elaborator {
             }
             let entry = cx.gamma.entries.get(i).expect("a context entry below its length");
             let ty = run.issue(0, Held::Type(entry.ty.shift_local((n - i) as u32), entry.level.clone()));
-            locals.push(LocalView { id: i as u64, name: cx.names.get(i).cloned().unwrap_or_else(|| "_".to_string()), ty });
+            locals.push(LocalView { id: i as u64, name: cx.names.get(i).map(str::to_string).unwrap_or_else(|| "_".to_string()), ty });
         }
         locals.extend(lets.map(|(_, l)| l));
         GoalView { target: 0, locals }
@@ -1759,10 +1759,11 @@ impl Elaborator {
     /// without being handed it.
     fn issue_lets(&self, cx: &Cx, run: &mut Run) {
         let n = cx.names.len();
-        for (k, alias) in cx.aliases.iter().enumerate() {
-            let Some(later) = cx.names.get(alias.depth..) else { continue };
-            let shadowed = later.iter().any(|m| *m == alias.name)
-                || cx.aliases[k + 1..].iter().any(|b| b.name == alias.name);
+        let aliases: Vec<_> = cx.aliases.iter().collect();
+        for (k, alias) in aliases.iter().enumerate() {
+            let Some(later) = n.checked_sub(alias.depth) else { continue };
+            let shadowed = cx.names.iter_inner().take(later).any(|m| m == alias.name)
+                || aliases[k + 1..].iter().any(|b| b.name == alias.name);
             let written = alias.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
             if shadowed || !written {
                 continue;
@@ -2164,7 +2165,7 @@ impl Elaborator {
             return Err(format!("`{name}` is not a name"));
         }
         let root = &run.scopes[0].cx;
-        if !root.names.iter().any(|n| n == name) {
+        if !root.names.iter_inner().any(|n| n == name) {
             if let Some((term, ty, level)) = self.raw_global(name) {
                 let n = root.gamma.len() as u32;
                 return Ok(run.issue(0, Held::Term(term.shift_local(n), ty.shift_local(n), level)));
@@ -3205,7 +3206,7 @@ impl Elaborator {
                 run.opened.push((scope, p));
                 locals.push(id);
                 let entry = bcx.gamma.entries.get(p).expect("a context entry below its length");
-                let name = bcx.names.get(p).cloned().unwrap_or_else(|| "_".to_string());
+                let name = bcx.names.get(p).map(str::to_string).unwrap_or_else(|| "_".to_string());
                 shown.push((id, name, entry.ty.shift_local((len - p) as u32), entry.level.clone()));
             }
             run.scopes.push(Scope { parent: Some(at), cx: bcx, world: 0, locals });
@@ -3516,7 +3517,7 @@ impl Elaborator {
             }
             let cx = run.cx(s).map_err(|f| at(f.msg()))?;
             let entry = cx.gamma.entries.get(i).expect("an introduced local");
-            let shown = cx.names.get(i).filter(|n| is_name(n) && !n.contains("::")).cloned().unwrap_or_else(|| format!("x{}", params.len()));
+            let shown = cx.names.get(i).filter(|n| is_name(n) && !n.contains("::")).map(str::to_string).unwrap_or_else(|| format!("x{}", params.len()));
             params.push((shown, implicit, (*entry.ty).clone(), entry.level.clone()));
             parent = s;
         }

@@ -52,7 +52,7 @@ impl Elaborator {
     /// the identifier half is the parameter-list checks that were already
     /// there, unchanged.
     pub(crate) fn check_symbol_free(
-        installed: &[(String, String)],
+        installed: &crate::spine::Spine<(String, String)>,
         sym: &str,
         span: Span,
     ) -> R<()> {
@@ -106,7 +106,7 @@ impl Elaborator {
         //    before any type is looked at: inside `<A: Monoid(+)>` the `+` is
         //    the bound index and nothing else, at every carrier.
         if fixity == OpFixity::Infix
-            && let Some((_, n)) = cx.op_locals.iter().rev().find(|(s, _)| s == sym)
+            && let Some((_, n)) = cx.op_locals.iter_inner().find(|(s, _)| s == sym)
         {
             return Ok(n.clone());
         }
@@ -181,8 +181,8 @@ impl Elaborator {
         if let Some(fb) = fb
             && (self.lookup_global(fb).is_some()
                 || self.ctor_of(fb).is_some()
-                || cx.names.iter().any(|n| n == fb)
-                || cx.aliases.iter().any(|a| a.name == fb))
+                || cx.names.iter_inner().any(|n| n == fb)
+                || cx.aliases.iter_inner().any(|a| a.name == fb))
         {
             if let Some((head, from)) = &uncovered_carrier {
                 let note = format!(
@@ -419,7 +419,7 @@ impl Elaborator {
     /// teaches the call its carrier — so a program written before this round
     /// could start refusing. With it, such a file runs byte-identical code.
     pub(crate) fn symbol_needs_a_carrier(&self, cx: &Cx, sym: &str, fixity: OpFixity) -> bool {
-        (fixity != OpFixity::Infix || !cx.op_locals.iter().any(|(s, _)| s == sym))
+        (fixity != OpFixity::Infix || !cx.op_locals.iter_inner().any(|(s, _)| s == sym))
             && self.traits.has_designation_for(fixity, sym)
     }
 }

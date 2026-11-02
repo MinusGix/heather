@@ -579,7 +579,7 @@ pub(crate) fn elab_self_call(
                     let usable = preds.len().min(comps.len());
                     let names: Vec<String> = preds[..usable]
                         .iter()
-                        .map(|predecessor| format!("`{}`", cx.names[*predecessor]))
+                        .map(|predecessor| format!("`{}`", &cx.names[*predecessor]))
                         .collect();
                     if usable == 1 {
                         (

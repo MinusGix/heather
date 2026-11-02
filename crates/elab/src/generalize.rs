@@ -206,7 +206,7 @@ impl Elaborator {
             .copied()
             .filter(|&q| {
                 !machinery(q)
-                    && (named.contains(&cx.names[q])
+                    && (named.iter().any(|n| n == &cx.names[q])
                         || expected.abstract_local(&Term::Var(LocalVar((m - 1 - q) as u32))).is_some())
             })
             .collect();
@@ -280,10 +280,10 @@ impl Elaborator {
                 let binders = positions
                     .iter()
                     .map(|&p| LamBinder {
-                        name: if bound.contains(&cx.names[p].as_str()) {
-                            format!("#{}", cx.names[p])
+                        name: if bound.contains(&&cx.names[p]) {
+                            format!("#{}", &cx.names[p])
                         } else {
-                            cx.names[p].clone()
+                            cx.names[p].to_string()
                         },
                         ty: None,
                         implicit: false,

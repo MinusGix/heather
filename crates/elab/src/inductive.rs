@@ -1580,7 +1580,7 @@ impl Elaborator {
         args: &[Ty],
         span: Span,
     ) -> R<(Type, Level)> {
-        if let Some(p) = cx.tyvars.iter().rev().find(|p| p.name == name) {
+        if let Some(p) = cx.tyvars.iter_inner().find(|p| p.name == name) {
             if !args.is_empty() {
                 return err(format!("type parameter `{name}` takes no arguments"), span);
             }
@@ -1643,7 +1643,7 @@ impl Elaborator {
             // shadowing rules. Type parameters and declared types retain
             // their existing precedence, including in declaration fields
             // lowered over a use site's context.
-            if cx.aliases.iter().any(|alias| alias.name == name) {
+            if cx.aliases.iter_inner().any(|alias| alias.name == name) {
                 if !args.is_empty() {
                     return err(format!("type alias `{name}` takes no type arguments"), span);
                 }
@@ -2447,14 +2447,12 @@ impl Elaborator {
         // (issues/binder-symbol-as-notation.md — the symbol is scoped to the
         // binder's scope, and for a class head that scope is the class body).
         // Empty for every declaration whose head writes no `as`.
-        fcx.op_locals = ind.op_symbols.clone();
+        fcx.op_locals = ind.op_symbols.iter().cloned().collect();
         // The use site's binders and `let` aliases stay in Γ, where the
         // arguments are scoped, but out of reach by name: a field spelling
         // `y()` means the declaration's `y`, not a parameter `y` of whatever
         // function names the type (issues/named-type-lowering-per-mention.md).
-        for name in &mut fcx.names {
-            *name = "#use-site".into();
-        }
+        fcx.names = fcx.names.renamed(|_| "#use-site".into());
         fcx.aliases.clear();
         let depth = cx.names.len();
         fcx.tyvars = ind
