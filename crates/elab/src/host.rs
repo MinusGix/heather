@@ -392,6 +392,9 @@ pub enum Request {
     Synth(u64),
     /// A term's application spine, by its handle.
     Spine(u64),
+    /// What a run says about itself, rendered like `Fail`'s message and
+    /// notes, and reported only if the run succeeds.
+    Say(String, Vec<NoteView>),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -627,8 +630,8 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         }
     }
 
-    /// A failure's message and notes.
-    fn failure(&self) -> Result<Request, String> {
+    /// A failure's message and notes, or what `Say` says.
+    fn failure(&self) -> Result<(String, Vec<NoteView>), String> {
         let tree = self.tree;
         let msg = self.string(self.call("host_failure", vec![tree])?)?;
         let count = self.nat_of("host_note_count", vec![tree])?;
@@ -637,7 +640,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         for i in 0..count {
             notes.push(self.note(self.call("host_note", vec![tree, self.lit(i)])?, &mut budget)?);
         }
-        Ok(Request::Fail(msg, notes))
+        Ok((msg, notes))
     }
 
     /// `Publish`'s declarations, one at a time and each part by itself.
@@ -829,7 +832,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let b = self.expr(self.call("host_rhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Defeq(a, b)))
             }
-            3 => Ok(Step::Ask(self.failure()?)),
+            3 => {
+                let (msg, notes) = self.failure()?;
+                Ok(Step::Ask(Request::Fail(msg, notes)))
+            }
             4 => {
                 let mut budget = READ_BUDGET;
                 Ok(Step::Ask(Request::Infer(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
@@ -887,6 +893,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             23 => Ok(Step::Ask(Request::Arms(self.nat_of("host_handle", vec![tree])?))),
             24 => Ok(Step::Ask(Request::Synth(self.nat_of("host_handle", vec![tree])?))),
             25 => Ok(Step::Ask(Request::Spine(self.nat_of("host_handle", vec![tree])?))),
+            26 => {
+                let (msg, notes) = self.failure()?;
+                Ok(Step::Ask(Request::Say(msg, notes)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1037,6 +1047,8 @@ struct Run {
     /// (docs/runtime-fn-setups-design.md §3.2). The `Rc` held here keeps the
     /// address from being reused while the run lasts.
     shared: std::collections::HashMap<(usize, usize), (Rc<Term>, u64)>,
+    /// What the run said (`Say`), reported at its span once it succeeds.
+    said: Vec<String>,
 }
 
 /// A remembered reification: the world it was made in (its terms are
@@ -1146,6 +1158,7 @@ impl Run {
             generator,
             readings: std::collections::HashMap::new(),
             shared: std::collections::HashMap::new(),
+            said: Vec::new(),
         }
     }
 
@@ -1657,7 +1670,15 @@ impl Elaborator {
         run.issue_quoted(quoted);
         self.issue_lets(cx, &mut run);
         match self.drive(&mut run, speaker) {
-            Ok(Ended::Result(e)) => self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg)),
+            Ok(Ended::Result(e)) => {
+                let proof = self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg))?;
+                // What the run said is reported only now that it succeeded,
+                // as one warning: the lints are kept one per span.
+                if !run.said.is_empty() {
+                    self.emit_lint(crate::Lint::TacticReport, format!("`by {shown}`: {}", run.said.join("\n")), span);
+                }
+                Ok(proof)
+            }
             Ok(Ended::Published(_)) => fail("only `generate` publishes declarations".into()),
             Err(msg) => fail(msg),
         }
@@ -1710,6 +1731,11 @@ impl Elaborator {
                 Request::Arms(h) => Answer::Arms(refusable(self.arms_request(run, h))?),
                 Request::Synth(h) => Answer::Handle(refusable(self.synth_request(run, h, span))?),
                 Request::Spine(h) => Answer::Spine(refusable(self.spine_request(run, h))?),
+                Request::Say(msg, notes) => {
+                    let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
+                    run.said.push(format!("{msg}{rendered}"));
+                    Answer::Unit
+                }
                 Request::Publish(decls) if run.generator => return Ok(Ended::Published(decls)),
                 Request::Publish(_) => return Err("only `generate` publishes declarations; a tactic cannot".into()),
             };

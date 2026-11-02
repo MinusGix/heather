@@ -50,6 +50,37 @@ theorem explain_reversed(): opt_same(g0().explain(trace_alg(), 1, 0), Some([107]
 theorem explain_congruence(): opt_same((g0().close(op_same, 5)).explain(trace_alg(), 3, 4), Some([1000, 7, 0])) = True { refl }
 theorem explain_none(): opt_same((g0().close(op_same, 5)).explain(trace_alg(), 2, 3), None) = True { refl }
 
+// E-matching, with the operators as their own pattern operators.
+fn op_test(q: Op, o: Op, s: Subst) → Option<Subst> { match q.same(o) { True => Some(s), False => None } }
+
+fn count(g: EGraph<Op, Nat>, p: Pattern<Op>) → Nat { (g.ematch(op_test, g.class_table(), p)).len() }
+
+// `f(x, c)`, `f(b, x)` and `f(x, x)`: items numbered, the root last.
+fn f_x_c() → Pattern<Op> { Pattern([PVar(0), POp(K(2), []), POp(F, [0, 1])], 2, 1) }
+fn f_b_x() → Pattern<Op> { Pattern([POp(K(1), []), PVar(0), POp(F, [0, 1])], 2, 1) }
+fn f_x_x() → Pattern<Op> { Pattern([PVar(0), POp(F, [0, 0])], 1, 1) }
+
+// The graph of `g0` without its equation.
+fn g1() → EGraph<Op, Nat> {
+    let x = EGraph::empty<Op, Nat>().add(op_same, K(0), []);
+    let y = x.g.add(op_same, K(1), []);
+    let z = y.g.add(op_same, K(2), []);
+    let p = z.g.add(op_same, F, [x.id, z.id]);
+    p.g.add(op_same, F, [y.id, z.id]).g
+}
+
+// A variable matches anything; a constant only its own class, which the
+// equation `a = b` widens; a variable twice only one class twice.
+theorem ematch_var(): count(g1(), f_x_c()).same(2) = True { refl }
+theorem ematch_const(): count(g1(), f_b_x()).same(1) = True { refl }
+theorem ematch_by_class(): count(g0(), f_b_x()).same(2) = True { refl }
+theorem ematch_twice(): count(g0(), f_x_x()).same(0) = True { refl }
+// The two matches of `f(x, c)` bind `x` to `a` and `b`: apart in `g1`, one
+// class in `g0`, which is how a client tells a new instance from a seen one.
+fn bound(g: EGraph<Op, Nat>) → List<List<Option<Nat>>> { (g.ematch(op_test, g.class_table(), f_x_c())).map(λ m => m.s.at) }
+theorem ematch_apart(): (match bound(g1()) { Cons(a, rest) => match rest { Cons(b, _) => g1().subst_same(a, b), Nil => True }, Nil => True }) = False { refl }
+theorem ematch_same(): (match bound(g0()) { Cons(a, rest) => match rest { Cons(b, _) => g0().subst_same(a, b), Nil => False }, Nil => False }) = True { refl }
+
 // The soundness theorems at work: the graph above, read with `a`, `b`, `c`
 // for the constants and any `f` for the operator, proves `f(a, c) = f(b, c)`
 // from `a = b`, with no explanation built: the class is the proof.

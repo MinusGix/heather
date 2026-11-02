@@ -1,6 +1,6 @@
 ---
 title: grind: instantiate equations under binders by e-matching, and report the hints used
-status: open
+status: closed
 labels: [tactics,metaprogramming]
 area: tactics
 milestone: [tac-general]
@@ -39,3 +39,14 @@ instance written, and says which ones it used.
   here: only that an instance is one more equation with a proof.
 - **[[lemma-selection-and-search]]** owns the hint-pool selection language.
   Assumed here: only that a hint list can be given.
+
+## Log
+
+- 2026-11-02: LANDED (PR #358, round 2 of docs/grind-design.md §9).
+  - `grind_using(names, hints)` and `grind_report(names, hints)`: every equation under binders among the locals, hints and named lemmas is a lemma, instantiated by matching one side (the left unless it is a bare binder or misses one) against the graph up to the classes. Rounds: close, check, add every new instance (dedup by the classes the binders met), at most 8 rounds and 64 instances a round.
+  - The matching is the e-graph library's (`EGraph::ematch`, `Pattern<Q>`, a client `test` that may bind variables an operator carries; probes in `lib/_tests/std/data/egraph_tests.hthr`). Its soundness theorem is [[egraph-ematch-soundness]].
+  - Success report: the `Say` host request (tag 26), one `tactic-report` warning at the `by`, only when the run succeeds; `grind_report` names the hints the proof cites (folded from the same explanation as the proof) and the ones it does not.
+  - Failure: each lemma's matches and instances added, or "its pattern never matched", and why matching stopped (no new instance / round budget).
+  - Acceptance: `((a ++ b) ++ c) ++ d = a ++ (b ++ (c ++ d))` by `grind_using(["List::append_assoc"], [])`, also with `append_nil`, at `Nat`, and a `len`-of-appends tower over two lemmas; `grind_report` says "the proof uses List::append_assoc; not used: List::append_nil".
+  - Not done: premises (a binder neither side binds; set aside with a note), trigger selection or relevance filtering, `Expr` hints with implicit parameters (they elaborate to holes at the `by`; use names).
+  - Found a miscompile on the way: [[recursion-let-reads-changing-parameter]].

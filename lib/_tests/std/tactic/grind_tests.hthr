@@ -1,7 +1,7 @@
 // Probes of `lib/std/tactic/grind.hthr`: congruence closure over the goal's
-// equations and the hints, and its refusals, which report the graph. Tests,
-// not library: nothing outside lib/_tests imports this module
-// (docs/test-value-audit.md §4.5).
+// equations, the hints and the lemmas they instantiate, and its refusals,
+// which report the graph. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import char; import string; import tactic; import grind;
 
 // Equations chained, and turned around.
@@ -37,13 +37,37 @@ theorem in_let(f: Nat → Nat, a, b: Nat, h: a = b): f(b) = f(a) {
 }
 fn under_lambda(f: Nat → Nat, a, b: Nat, h: a = b) → Nat → f(a) = f(b) { λ n => by grind() }
 
+// Lemmas: equations under binders, instantiated by matching one side
+// against the graph (round 2). A local lemma, then the append tower of
+// issues/grind-e-matching.md from the lemmas by name with no instance
+// written: at an open element type, with a lemma that does not apply, two
+// lemmas over two types (`len` of appends, then `+`), and at `Nat` with a
+// closed list among the terms.
+theorem local_lemma(f: Nat → Nat, k: (n: Nat) → f(n) = n, a: Nat): f(f(a)) = a { by grind() }
+theorem tower<A>(a, b, c, d: List<A>): ((a ++ b) ++ c) ++ d = a ++ (b ++ (c ++ d)) { by grind_using(["List::append_assoc"], []) }
+theorem tower_nil<A>(a, b, c: List<A>): ((a ++ []) ++ b) ++ c = a ++ (b ++ c) { by grind_using(["List::append_assoc", "List::append_nil"], []) }
+theorem tower_lens<A>(a, b, c: List<A>): ((a ++ b) ++ c).len() = a.len() + (b.len() + c.len()) { by grind_using(["List::len_append", "Nat::add_assoc"], []) }
+theorem tower_closed(xs, ys, zs: List<Nat>): ((xs ++ ys) ++ zs) ++ [1, 2] = xs ++ (ys ++ (zs ++ [1, 2])) { by grind_using(["List::append_assoc"], []) }
+// The report of the lemmas used (a `tactic-report` warning): here
+// `List::append_assoc`, and not `List::append_nil`.
+theorem reported<A>(a, b, c: List<A>): (a ++ b) ++ c = a ++ (b ++ c) { by grind_report(["List::append_assoc", "List::append_nil"], []) }
+
 // The two sides in different classes: the failure is the graph.
 // expect-error: grind: the two sides are not in one class
 theorem not_closed(f: Nat → Nat, a, b: Nat, h: f(a) = b): f(b) = a { by grind() }
-// An equation under binders is not instantiated (that is e-matching); the
-// report says so and asks for an instance.
-// expect-error: an equation under binders, not read
-theorem binders_not_read(f: Nat → Nat, k: (n: Nat) → f(n) = n, a: Nat): f(f(a)) = a { by grind() }
+// A lemma whose pattern meets nothing in the graph: the report says which.
+// expect-error: its pattern never matched
+theorem never_matched(f, g: Nat → Nat, k: (n: Nat) → g(n) = n, a: Nat): f(a) = a { by grind() }
+// A premise: neither side binds `h`, so the lemma is set aside (proving
+// premises is a later round).
+// expect-error: neither side mentions every binder
+theorem premise(f: Nat → Nat, k: (n: Nat) → n = 0 → f(n) = n, a: Nat): f(a) = a { by grind() }
+// Instances that only make terms of one class: matching runs dry.
+// expect-error: no new instance after 2 rounds
+theorem runs_dry(f: Nat → Nat, k: (n: Nat) → f(n) = f(f(n)), a: Nat): f(a) = a { by grind() }
+// Instances that make new terms every round: the round budget ends it.
+// expect-error: stopped after 8 rounds
+theorem keeps_growing(f, g: Nat → Nat, k: (n: Nat) → f(n) = f(g(n)), a: Nat): f(a) = a { by grind() }
 // A congruence is not injectivity: `f(a) = f(b)` says nothing of `a` and `b`.
 // expect-error: grind: the two sides are not in one class
 theorem not_injective(f: Nat → Nat, a, b: Nat, h: f(a) = f(b)): a = b { by grind() }

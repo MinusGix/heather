@@ -950,3 +950,19 @@ type is refused, and a term that is no application is its own head.
 Its first customer is `grind` (`docs/grind-design.md` §3), whose graph
 nodes are the kernel's curried applications, with dependent arguments kept
 in the head.
+
+## 23. Saying something on success: `Say` (2026-11-02)
+
+`Say(msg: String, notes: List<Note>) → True` records a message and notes,
+rendered as `Fail` renders them, and the host reports what a run said as
+one `tactic-report` warning (`Lint::TacticReport`) at the `by`, once the
+run's result checks as the goal's proof. A run that fails reports only its
+failure, so a note can never contradict the outcome. Several `Say`s in one
+run are one warning, their texts in order (the warning channel keeps one
+warning of a lint per span).
+
+Before it, a tactic could only speak by failing. Its first customer is
+`grind_report` (`docs/grind-design.md` §9.4), which says which hints its
+proof cites, so the call can be narrowed: the used-subset report of
+[lemma-selection-and-search](../issues/lemma-selection-and-search.md) piece 3.
+A generator's run (`generate`) says nothing yet: its `Say`s are dropped.

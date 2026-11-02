@@ -25,6 +25,9 @@
 // the classes with no checker after it (a compiler's value numbering) cites
 // those; one that hands its `explain` evidence to the kernel needs nothing.
 //
+// A pattern's instances among the graph's terms, up to the classes, are
+// found by `ematch` (e-matching), for a client that instantiates lemmas.
+//
 // Costs, as shapes: a node is found by a scan of the nodes (hash-consing is
 // linear per add), a class by a list lookup, and `union` relabels the
 // classes list; a congruence pass compares every application's signature
@@ -351,6 +354,144 @@ fn EGraph::explain<Op, J, P>(self g: EGraph<Op, J>, alg: PathAlg<J, P>, a: Nat, 
 // The nodes of class `c`.
 fn EGraph::members<Op, J>(self g: EGraph<Op, J>, c: Nat) → List<Nat> {
     List::range(g.nodes.len()).filter(λ i => g.find(i).same(c))
+}
+
+// ---------------------------------------------------------------------------
+// E-matching: the instances of a pattern among the graph's terms, up to its
+// classes.
+//
+// A pattern is a term over the client's pattern operators `Q`, with
+// variables. It is held as items numbered like the graph's nodes, each
+// naming its children by number: a pattern is a tree, but a type nested in
+// its own `List` is not lowered yet. The client's `test` says whether a
+// pattern operator matches a graph operator, and may bind variables the
+// operator itself carries (grind's dependent argument is part of its
+// operator); otherwise the children are matched in order. A variable binds
+// the node it meets, and meets again only nodes of the same class.
+//
+// The pattern's root is matched against each node as it is, and every other
+// item against any member of the class of the node it meets. So a match is
+// an instance of the pattern whose root is a node of the graph and whose
+// other subterms are in the classes the graph says, and the same instance
+// may come back once per node of a class the root's children meet; a
+// client keeps the ones it has not seen (by the classes its variables are
+// bound to). Costs, as shapes: every node is tried as the root, and every
+// item below it scans a class.
+
+inductive PItem<Q> { PVar(v: Nat), POp(q: Q, kids: List<Nat>) }
+
+// The items, the root's number, and how many variables there are.
+record Pattern<Q> { items: List<PItem<Q>>, root: Nat, vars: Nat }
+
+// What a match binds: each variable's node, once it is bound.
+record Subst { at: List<Option<Nat>> }
+
+fn Subst::empty(n: Nat) → Subst { Subst(List::replicate(None, n)) }
+
+// The node variable `v` is bound to.
+fn Subst::get(self s: Subst, v: Nat) → Option<Nat> {
+    match s.at.nth(v) { None => None, Some(o) => o }
+}
+
+// Variable `v` meets node `n`: bound to it if it is free, kept if it is
+// bound in `n`'s class, and no match otherwise.
+fn EGraph::bind<Op, J>(self g: EGraph<Op, J>, s: Subst, v: Nat, n: Nat) → Option<Subst> {
+    match s.at.nth(v) {
+        None => None,
+        Some(o) => match o {
+            None => Some(Subst(s.at.update(v, λ _ => Some(n)))),
+            Some(m) => match g.same_class(m, n) { True => Some(s), False => None },
+        },
+    }
+}
+
+// Each class's nodes, by the class's number, made once per search.
+fn table_from(cls: List<Nat>, i: Nat, t: List<List<Nat>>) → List<List<Nat>> {
+    match cls {
+        Nil => t,
+        Cons(c, rest) => table_from(rest, Succ(i), t.update(c, λ ms => ms ++ [i])),
+    }
+}
+
+fn EGraph::class_table<Op, J>(self g: EGraph<Op, J>) → List<List<Nat>> {
+    table_from(g.cls, 0, List::replicate([], g.cls.len()))
+}
+
+fn table_members(t: List<List<Nat>>, c: Nat) → List<Nat> {
+    match t.nth(c) { None => [], Some(ms) => ms }
+}
+
+fn opt_list<A>(o: Option<A>) → List<A> { match o { None => [], Some(a) => [a] } }
+
+fn concat_map<A, B>(xs: List<A>, f: A → List<B>) → List<B> {
+    match xs { Nil => [], Cons(x, rest) => f(x) ++ concat_map(rest, f) }
+}
+
+// What is left to match: item `item` against node `node`'s class, against
+// the node itself, or items against nodes pairwise.
+inductive EMatch { MClass(item: Nat, node: Nat), MNode(item: Nat, node: Nat), MKids(items: List<Nat>, nodes: List<Nat>) }
+
+fn EGraph::ematch_go<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, p: Pattern<Q>, table: List<List<Nat>>, fuel: Nat, t: EMatch, s: Subst) → List<Subst> {
+    match fuel {
+        Zero => [],
+        Succ(f) => match t {
+            MClass(i, n) => match p.items.nth(i) {
+                None => [],
+                Some(it) => match it {
+                    PVar(v) => opt_list(g.bind(s, v, n)),
+                    POp(_, _) => concat_map(table_members(table, g.find(n)), λ m => g.ematch_go(test, p, table, f, MNode(i, m), s)),
+                },
+            },
+            MNode(i, m) => match p.items.nth(i) {
+                None => [],
+                Some(it) => match it {
+                    PVar(v) => opt_list(g.bind(s, v, m)),
+                    POp(q, ks) => match g.node(m) {
+                        None => [],
+                        Some(nd) => match test(q, nd.op, s) {
+                            None => [],
+                            Some(s2) => g.ematch_go(test, p, table, f, MKids(ks, nd.kids), s2),
+                        },
+                    },
+                },
+            },
+            MKids(is, ns) => match is {
+                Nil => match ns { Nil => [s], Cons(_, _) => [] },
+                Cons(i, ir) => match ns {
+                    Nil => [],
+                    Cons(n, nr) => concat_map(g.ematch_go(test, p, table, f, MClass(i, n), s), λ s2 => g.ematch_go(test, p, table, f, MKids(ir, nr), s2)),
+                },
+            },
+        },
+    }
+}
+
+// The matches of `p` with its root at node `n`.
+fn EGraph::ematch_at<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, table: List<List<Nat>>, p: Pattern<Q>, n: Nat) → List<Subst> {
+    g.ematch_go(test, p, table, Succ(Succ(4 * p.items.len())), MNode(p.root, n), Subst::empty(p.vars))
+}
+
+// A match, with the node its root met.
+record EMatched { root: Nat, s: Subst }
+
+// Every match of `p`, root by root. `table` is `g.class_table()`, made once
+// for the patterns searched together.
+fn EGraph::ematch<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, table: List<List<Nat>>, p: Pattern<Q>) → List<EMatched> {
+    concat_map(List::range(g.size()), λ n => g.ematch_at(test, table, p, n).map(λ s => EMatched(n, s)))
+}
+
+// Do two substitutions bind each of the first `n` variables in one class?
+fn EGraph::subst_same<Op, J>(self g: EGraph<Op, J>, a: List<Option<Nat>>, b: List<Option<Nat>>) → Bool {
+    match a {
+        Nil => match b { Nil => True, Cons(_, _) => False },
+        Cons(x, ar) => match b {
+            Nil => False,
+            Cons(y, br) => match x {
+                None => match y { None => g.subst_same(ar, br), Some(_) => False },
+                Some(m) => match y { None => False, Some(k) => g.same_class(m, k).and(g.subst_same(ar, br)) },
+            },
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------

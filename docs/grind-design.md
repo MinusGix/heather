@@ -2,7 +2,8 @@
 
 Issue: [grind-port](../issues/grind-port.md) (milestone `tac-general`).
 Round 1 built `lib/std/tactic/grind.hthr`, the `Spine` host request, and the
-probes in `lib/_tests/std/tactic/grind_tests.hthr`.
+probes in `lib/_tests/std/tactic/grind_tests.hthr`. Round 2 added lemmas
+instantiated by e-matching, the `Say` host request and `grind_report` (§9).
 
 The milestone asks for "a general-purpose rewriting and congruence-closure
 tactic (grind-like) [that] closes the routine goals that today need hand
@@ -197,17 +198,16 @@ proof reconstruction.
 
 | round | builds | done when |
 |---|---|---|
-| R1 (this) | `Spine`; congruence closure over the goal's equations and hints at their instances; proof by explanation; the graph as the failure | the hand `trans`/`cong` steps of a library proof close by `grind_with` with its lemmas as hints, and a failure names the missing equation's classes |
-| R2 | e-matching ([grind-e-matching](../issues/grind-e-matching.md)): equations under binders, from the locals and a hint list, instantiated by matching their patterns against the graph's terms modulo the classes; the used hints reported on success | `grind_with([List::append_assoc, List::append_nil])` closes an append tower with no instance written, and reports which hints it used |
+| R1 (done) | `Spine`; congruence closure over the goal's equations and hints at their instances; proof by explanation; the graph as the failure | the hand `trans`/`cong` steps of a library proof close by `grind_with` with its lemmas as hints, and a failure names the missing equation's classes |
+| R2 (done, §9) | e-matching ([grind-e-matching](../issues/grind-e-matching.md)): equations under binders, from the locals and a hint list, instantiated by matching their patterns against the graph's terms modulo the classes; the used hints reported on success | `grind_using(["List::append_assoc", "List::append_nil"], [])` closes an append tower with no instance written, and `grind_report` says which it used |
 | R3 | constructor facts and disequalities ([grind-constructor-facts](../issues/grind-constructor-facts.md)): injectivity, disjointness, `≠` hypotheses, `False` goals | `Cons(a, as) = Cons(b, bs)` gives `a = b`, and `Nil = Cons(x, xs)` closes any goal |
 | R4 | case splits and theories ([grind-splits-and-theories](../issues/grind-splits-and-theories.md)): split on a `match` scrutinee in the graph (`split_all`'s `Cases`), and exchange equalities with `omega`/`ring` | a goal needing a `Bool` case split and a linear fact closes, and the failure is the decision tree |
 
 The graph's pure half is now a generic library (§8).
 
-R2 needs one host addition: a tactic can only report on failure today. The
-used-subset report ([lemma-selection-and-search](../issues/lemma-selection-and-search.md)
-piece 3) wants a note on success, a request that records notes without ending
-the run; R2 designs it.
+R2 added one host request, `Say`: a tactic could only report on failure,
+and the used-subset report ([lemma-selection-and-search](../issues/lemma-selection-and-search.md)
+piece 3) is a note on success (§9.4).
 
 ## 7. Rejected alternatives
 
@@ -257,10 +257,133 @@ once ([egraph-library](../issues/egraph-library.md)). It is
   `GDepOp(arg)` with child `[f]`, so a dependent argument is part of the
   operator and congruence reads only the function.
 
-What the library does not have yet: a `≈` path algebra with `Proper`
+- **E-matching** (round 2, §9.2): `Pattern<Q>` (items numbered like nodes,
+  since a type nested in its own `List` is not lowered yet), a client
+  `test: Q → Op → Subst → Option<Subst>` that may bind variables an
+  operator carries, `ematch(test, table, p)` over every root, and
+  `subst_same` to tell a new instance from a seen one by classes.
+
+What the library does not have yet: a soundness theorem for e-matching
+([egraph-ematch-soundness](../issues/egraph-ematch-soundness.md)), a `≈` path algebra with `Proper`
 congruences ([egraph-setoid-path-algebra](../issues/egraph-setoid-path-algebra.md)),
 a theorem that a hash-consed `add` returns a node of the requested value
 ([egraph-add-value-theorem](../issues/egraph-add-value-theorem.md); clients
 that need it use `fresh`), and union by rank or a signature table
 ([egraph-scaling-structures](../issues/egraph-scaling-structures.md), §5).
 
+## 9. Lemmas by e-matching (round 2, 2026-11-02)
+
+Issue: [grind-e-matching](../issues/grind-e-matching.md).
+
+### 9.1 The surface
+
+| call | facts |
+|---|---|
+| `grind()` | the goal's locals |
+| `grind_with(hints)` | the locals, and the facts the terms `hints` prove |
+| `grind_using(names, hints)` | the above, and the lemmas `names` names, resolved where the `by` is (`"List::append_assoc"`) |
+| `grind_report(names, hints)` | `grind_using`, and on success a `tactic-report` warning naming the hints and lemmas the proof cites and the ones it does not |
+
+Any fact whose statement is an equation under binders, a local
+(`k: (n: Nat) → f(n) = n`), a hint or a named lemma, is a **lemma**. Before
+round 2 such a fact was reported as "not read"; now it is instantiated:
+
+```
+theorem tower<A>(a, b, c, d: List<A>): ((a ++ b) ++ c) ++ d = a ++ (b ++ (c ++ d)) {
+    by grind_using(["List::append_assoc"], [])
+}
+theorem lens<A>(a, b, c: List<A>): ((a ++ b) ++ c).len() = a.len() + (b.len() + c.len()) {
+    by grind_using(["List::len_append", "Nat::add_assoc"], [])
+}
+```
+
+Names rather than terms because a lemma written as an `Expr` hint is
+elaborated at the `by`, where its implicit parameters become holes the
+hint's type then mentions; a name resolves to the global with its whole
+telescope, so every binder is a pattern variable.
+
+### 9.2 Patterns and matching
+
+A lemma's type is opened binder by binder (`Open`), and one side of its
+equation is read as a **pattern** the way a term is read into the graph
+(§2): a binder is a variable, a global, local, literal or constructor is an
+atom of its key (`QKey`), an application is `QApp`, and an application to a
+dependent argument is `QDep(v)`, whose argument (part of the graph's
+operator) binds variable `v`. A term only `Defeq` could compare (a λ, a
+type built from a binder) is a **wildcard**, a variable no binder is. A
+constructor atom matches at any instance of its type's parameters, so the
+pattern `Nil` meets `Nil<Nat>`; the parameters are bound elsewhere (the
+`QDep` of `append`) or the instance's type refuses it. Nullary constructors
+are now atoms of their constructor's key in the graph too, which is what
+lets a pattern find them.
+
+The side is the left one unless it is a bare binder (it would match every
+node) or misses a binder; then the right one. A lemma neither of whose sides
+binds every binder has a premise (`n = 0 → f(n) = n`); it is set aside with
+a note, since proving premises is not this round's.
+
+Matching is the library's (`EGraph::ematch`, §8): every node is tried as the
+root, matched as it is, and every item below the root is matched against
+any member of the class of the node it meets, so `f(b, x)` matches
+`f(a, c)` once `a = b`. A variable meets again only nodes of its first
+node's class. All of it is evaluation; the host is asked nothing until an
+instance is added.
+
+### 9.3 Rounds
+
+`saturate` closes the graph and checks the goal. If the sides are apart, each
+lemma's matches are listed, and the ones whose binders meet classes no
+earlier instance of that lemma met are added: the lemma applied to the
+matched nodes' terms, `infer`red, its sides read into the graph and joined
+by a `Fact` named after the lemma. An instance the kernel's type of does
+not make an equation of (an ill-typed match through a wildcard) is dropped.
+Then the graph is closed again, up to **8 rounds**, at most **64 new
+instances a round**.
+
+It stops for three reasons, each a line of the failure:
+
+- the sides meet: the proof is the explanation, as in round 1;
+- a round finds no new instance ("no new instance after k rounds", or "no
+  instance in the graph"): matching ran dry, so more rounds cannot help;
+- the round budget is spent ("stopped after 8 rounds"): a lemma that makes
+  new terms every round (`f(n) = f(g(n))`) would go on forever.
+
+Each lemma's line says how many matches it had and how many instances were
+added, or that its pattern never matched a term of the graph; that is the
+report's answer to "which hint was useless" on failure.
+
+No heuristics yet: every lemma is matched against every node every round,
+with no trigger selection, no relevance filter, and no orientation (a
+lemma's equation is added both ways, as any equation is). The dedup is by
+classes, so an instance whose arguments only met new members of old classes
+is not added twice. This is the first cost to watch (§5): a round is a
+match of every pattern against every node, each item scanning a class.
+
+### 9.4 Saying what was used: `Say`
+
+`Say(msg, notes)` (tag 26, answered with `True`) records a message and
+notes rendered as `Fail` renders them, and the host reports them as one
+`tactic-report` warning at the `by`, **only if the run's result is the
+goal's proof**. A run that says something and then fails reports only its
+failure (`crates/elab/tests/tactic_host.rs`,
+`say_reports_only_a_run_that_succeeds`). The lint is a warning, not an
+error, so a library may keep a `grind_report` in place; its job is the
+narrowing a reader (or a model at the hint interface) does next:
+
+```
+warning: `by grind_report(…)`: grind: the proof uses List::append_assoc; not used: List::append_nil
+```
+
+The used names come from the same explanation the proof does, folded
+through a second path algebra (`cited_alg`, the names of the given facts
+along the path), so the report is exactly what the proof term cites. Locals
+the proof cites are named separately ("and the locals k, h").
+
+### 9.5 Found on the way
+
+A `let` above a recursive `match`, bound from a parameter the self-call
+changes, keeps the top call's value: `saturate`'s first draft bound the
+closed graph above `match rounds` and found the same instances every round.
+The elaborator accepts the shape and computes the wrong function
+([recursion-let-reads-changing-parameter](../issues/recursion-let-reads-changing-parameter.md));
+`saturate` now matches on `rounds` first.
