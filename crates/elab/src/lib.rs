@@ -3396,8 +3396,8 @@ impl Elaborator {
             let self_ref = recursion::SelfRef::of_decl(decl);
             match recursion::plan(&self_ref, &decl.body) {
                 recursion::RecursionPlan::Structural => {}
-                recursion::RecursionPlan::ByMeasure { dec, read, name } => {
-                    return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name);
+                recursion::RecursionPlan::ByMeasure { dec, read, name, from } => {
+                    return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name, from);
                 }
                 recursion::RecursionPlan::Misplaced { dec, msg } => {
                     let misplaced = Some((self_ref.name.clone(), dec, msg));
@@ -3421,21 +3421,33 @@ impl Elaborator {
         dec: usize,
         read: Span,
         name: &str,
+        from: usize,
     ) -> R<()> {
         let fname = &self_ref.name;
         let param = &self_ref.params[dec].0;
-        let what = if name == param {
+        let source = &self_ref.params[from].0;
+        let what = if from != dec {
+            format!(
+                "`{name}`, bound from `{source}` above the recursive `match`, is read inside \
+                 it, and the recursive call passes `{source}` a different value \
+                 (issues/recursion-let-reads-changing-parameter.md)"
+            )
+        } else if name == param {
             format!("`{param}` is read inside its own recursive `match`")
         } else {
             format!("`{name}`, bound from `{param}` above the recursive `match`, is read inside it")
+        };
+        let keep = if from != dec {
+            format!("bind `{name}` inside each arm that reads it")
+        } else {
+            "name this level's value by its pattern (`Succ(k)`, `Cons(h, t)`)".to_string()
         };
         let refuse = |why: &str| {
             err(
                 format!(
                     "{what}: the structural lowering compiles the recursion at the `match`, \
                      so there it would be the value `{fname}` was first called with, not this \
-                     level's. {why} Or name this level's value by its pattern (`Succ(k)`, \
-                     `Cons(h, t)`) (issues/fn-recursion-means-the-function.md)"
+                     level's. {why} Or {keep} (issues/fn-recursion-means-the-function.md)"
                 ),
                 read,
             )
@@ -3483,9 +3495,8 @@ impl Elaborator {
             format!(
                 "{what}, so `{fname}` is compiled as if it had been declared `decreases`: it \
                  computes what it says, but at a symbolic argument it no longer unfolds by \
-                 conversion; cite `{fname}_unfold` for that, or name this level's value by \
-                 its pattern to keep the structural lowering \
-                 (issues/fn-recursion-means-the-function.md)"
+                 conversion; cite `{fname}_unfold` for that, or {keep} to keep the \
+                 structural lowering (issues/fn-recursion-means-the-function.md)"
             ),
             read,
         );

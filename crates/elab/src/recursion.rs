@@ -60,6 +60,32 @@ pub(crate) fn recurses_on(self_ref: &SelfRef, arms: &[heather_syntax::Arm], dec:
     found
 }
 
+/// The parameters other than `dec` that a self-call in `arms` passes at
+/// anything but the parameter itself — the ones ih generalization quantifies
+/// (`generalize`), and indices an indexed `match` rebinds. Syntactic, like
+/// [`recurses_on`].
+fn varied_params(self_ref: &SelfRef, arms: &[heather_syntax::Arm], dec: usize) -> Vec<usize> {
+    let mut varied = Vec::new();
+    for arm in arms {
+        crate::surface::walk_expr(&arm.body, &mut |e| {
+            let Some((args, explicit)) = surface_self_call(self_ref, e) else { return };
+            let positions = (self_ref.n_tyvars..self_ref.params.len())
+                .filter(|&p| explicit || !self_ref.params[p].1);
+            for (slot, position) in positions.enumerate() {
+                let Some(arg) = args.get(slot) else { break };
+                let own = &self_ref.params[position].0;
+                if position != dec
+                    && !matches!(&arg.kind, ExprKind::Var(v) if v == own)
+                    && !varied.contains(&position)
+                {
+                    varied.push(position);
+                }
+            }
+        });
+    }
+    varied
+}
+
 /// How a `fn` without `decreases` is lowered
 /// (issues/fn-recursion-means-the-function.md).
 ///
@@ -75,9 +101,13 @@ pub(crate) enum RecursionPlan {
     Structural,
     /// A recursive `match` on parameter `dec` reads `dec`, or a name bound
     /// from it above the `match`, inside its arms (first at `read`, through
-    /// `name`). The structural lowering would see the top call's value there;
-    /// a measure on `dec` sees this level's, so that is the lowering.
-    ByMeasure { dec: usize, read: Span, name: String },
+    /// `name`, bound from parameter `from`). Or it reads a name bound above
+    /// it from a parameter `from` its self-calls pass a *different* value
+    /// (issues/recursion-let-reads-changing-parameter.md): the ih
+    /// generalizes `from` itself, but not a value computed from it outside
+    /// the `match`. The structural lowering would see the top call's value
+    /// there; a measure on `dec` sees this level's, so that is the lowering.
+    ByMeasure { dec: usize, read: Span, name: String, from: usize },
     /// A recursive `match` on `dec` is somewhere the structural lowering
     /// cannot put the recursion, and the measure lowering has no unfolding
     /// equation for (docs/decreases-unfolding-design.md §3). Refused with
@@ -88,12 +118,15 @@ pub(crate) enum RecursionPlan {
 }
 
 /// A name in scope during [`plan`]: the parameters its value depends on, and
-/// which parameter it *is*, if it is one.
+/// which parameter it *is*, if it is one. `stale`: inside a recursive
+/// `match`'s arms, the name was bound above the `match` from a parameter its
+/// self-calls vary, so it holds the top call's value (the varied parameter).
 #[derive(Clone)]
 struct Bound {
     name: String,
     deps: Vec<usize>,
     param: Option<usize>,
+    stale: Option<usize>,
 }
 
 fn lookup<'a>(scope: &'a [Bound], name: &str) -> Option<&'a Bound> {
@@ -105,6 +138,7 @@ fn bind_names(scope: &mut Vec<Bound>, names: impl IntoIterator<Item = String>) {
         name,
         deps: Vec::new(),
         param: None,
+        stale: None,
     }));
 }
 
@@ -180,7 +214,7 @@ fn bind_statement(
         Stmt::Let { name, expr, .. } => {
             visit(expr, scope);
             let deps = deps(expr, scope);
-            scope.push(Bound { name: name.clone(), deps, param: None });
+            scope.push(Bound { name: name.clone(), deps, param: None, stale: None });
         }
         Stmt::LetRecord { fields, expr, .. } => {
             visit(expr, scope);
@@ -191,6 +225,7 @@ fn bind_statement(
                 name,
                 deps: deps.clone(),
                 param: None,
+                stale: None,
             }));
         }
         Stmt::LetCode { .. } => {}
@@ -200,7 +235,7 @@ fn bind_statement(
 struct Planner<'a> {
     self_ref: &'a SelfRef,
     misplaced: Option<(usize, String)>,
-    read: Option<(usize, Span, String)>,
+    read: Option<(usize, Span, String, usize)>,
 }
 
 impl Planner<'_> {
@@ -285,12 +320,33 @@ impl Planner<'_> {
             self.misplaced.get_or_insert((dec, msg));
             return;
         }
+        // A name bound above the `match` from a parameter the self-calls
+        // vary is evaluated once, at the top call's value of it; the varied
+        // parameter itself is the ih's generalized binder, so reading *it*
+        // is this level's value (issues/recursion-let-reads-changing-parameter.md).
+        let varied = varied_params(self.self_ref, arms, dec);
+        let above: Vec<Bound> = scope
+            .iter()
+            .map(|b| Bound {
+                stale: b
+                    .param
+                    .is_none()
+                    .then(|| b.deps.iter().copied().find(|p| varied.contains(p)))
+                    .flatten(),
+                ..b.clone()
+            })
+            .collect();
         for arm in arms {
-            let mut inner = scope.to_vec();
+            let mut inner = above.clone();
             bind_names(&mut inner, arm_names(arm));
             reads(&arm.body, &inner, &mut |b, span| {
-                if b.deps.contains(&dec) && self.read.is_none() {
-                    self.read = Some((dec, span, b.name.clone()));
+                if self.read.is_some() {
+                    return;
+                }
+                if b.deps.contains(&dec) {
+                    self.read = Some((dec, span, b.name.clone(), dec));
+                } else if let Some(from) = b.stale {
+                    self.read = Some((dec, span, b.name.clone(), from));
                 }
             });
         }
@@ -303,7 +359,7 @@ pub(crate) fn plan(self_ref: &SelfRef, body: &heather_syntax::Block) -> Recursio
         .params
         .iter()
         .enumerate()
-        .map(|(i, (name, _))| Bound { name: name.clone(), deps: vec![i], param: Some(i) })
+        .map(|(i, (name, _))| Bound { name: name.clone(), deps: vec![i], param: Some(i), stale: None })
         .collect();
     let mut planner = Planner { self_ref, misplaced: None, read: None };
     let body = Expr {
@@ -313,7 +369,7 @@ pub(crate) fn plan(self_ref: &SelfRef, body: &heather_syntax::Block) -> Recursio
     planner.walk(&body, true, &scope, &[]);
     match (planner.misplaced, planner.read) {
         (Some((dec, msg)), _) => RecursionPlan::Misplaced { dec, msg },
-        (None, Some((dec, read, name))) => RecursionPlan::ByMeasure { dec, read, name },
+        (None, Some((dec, read, name, from))) => RecursionPlan::ByMeasure { dec, read, name, from },
         (None, None) => RecursionPlan::Structural,
     }
 }
