@@ -110,7 +110,7 @@ fn failure_lists_what_was_tried() {
 #[test]
 fn say_reports_only_a_run_that_succeeds() {
     let mut e = elaborator();
-    let src = "import tactic;\nimport nat;\n
+    let src = "import tactic;\nimport nat;\nimport list;\nimport string;\n
          fn told() → tactic::Tac<tactic::Expr> {
              say(\"used h\", [Tried(\"twice\", \"the same\")]).bind(λ _ => say(\"and again\", []).bind(λ _ => assumption()))
          }
@@ -121,7 +121,7 @@ fn say_reports_only_a_run_that_succeeds() {
     assert_eq!(warnings[0].lint, heather_elab::Lint::TacticReport);
     assert_eq!(warnings[0].msg, "`by told`: used h\n  tried twice: the same\nand again");
     let mut e = elaborator();
-    let failing = "import tactic;\nimport nat;\n
+    let failing = "import tactic;\nimport nat;\nimport list;\nimport string;\n
          fn told() → tactic::Tac<tactic::Expr> { say(\"used h\", []).bind(λ _ => assumption()) }
          theorem t(n: Nat, h: n = 4): n = 3 { by told }";
     let msg = message(e.elab_source(failing).expect_err("the run fails"));
