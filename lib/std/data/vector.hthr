@@ -7,23 +7,22 @@ import logic;
 import nat;
 
 fn snoc<A>({n: Nat}, xs: [A; n], x: A) → [A; Succ(n)] {
-    (match n as λ k => [A; k] → [A; Succ(k)] {
-        Zero => λ xs => [x],
-        Succ(_, ih) => λ xs => cons(head(xs), ih(tail(xs))),
-    })(xs)
+    match n {
+        Zero => [x],
+        Succ(_, ih) => cons(head(xs), ih(tail(xs))),
+    }
 }
 
 fn reverse<A>({n: Nat}, xs: [A; n]) → [A; n] {
-    (match n as λ k => [A; k] → [A; k] {
-        Zero => λ xs => [],
-        Succ(_, ih) => λ xs => snoc(ih(tail(xs)), head(xs)),
-    })(xs)
+    match n {
+        Zero => [],
+        Succ(_, ih) => snoc(ih(tail(xs)), head(xs)),
+    }
 }
 
 theorem reverse_snoc<A>(n: Nat): (xs: [A; n]) → (x: A) →
         reverse(snoc(xs, x)) = cons(x, reverse(xs)) {
-    match n as λ k => (xs: [A; k]) → (x: A) →
-            reverse(snoc(xs, x)) = cons(x, reverse(xs)) {
+    match n {
         Zero => λ xs x => refl,
         Succ(_, ih) => λ xs x => {
             let step: (snoc(reverse(snoc(tail(xs), x)), head(xs)) = snoc(cons(x, reverse(tail(xs))), head(xs))) =
@@ -34,7 +33,7 @@ theorem reverse_snoc<A>(n: Nat): (xs: [A; n]) → (x: A) →
 }
 
 theorem reverse_reverse<A>(n: Nat): (xs: [A; n]) → reverse(reverse(xs)) = xs {
-    match n as λ k => (xs: [A; k]) → reverse(reverse(xs)) = xs {
+    match n {
         Zero => λ xs => refl,
         Succ(k, ih) => λ xs => {
             let inner: (cons(head(xs), reverse(reverse(tail(xs)))) = cons(head(xs), tail(xs))) =

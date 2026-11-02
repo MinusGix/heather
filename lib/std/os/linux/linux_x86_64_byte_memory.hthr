@@ -88,17 +88,16 @@ theorem DataRegion::store_holds(self r: DataRegion, v: Nat → BitVec(8), m: X86
             let machine: (after.cells(next_rip(r.low, p)) = m.cells(next_rip(r.low, p))) =
                 r.profile.store_outside(m, base, bytes, next_rip(r.low, p), λ t below =>
                     r.apart(q, bytes.len(), p, 1, fits, omega(inside), away)(t, 0, below, trivial));
-            let apart: ((t: Nat) → t < bytes.len() → Nat::space().same(q + t, p) = False) = match away as λ _ =>
-                    ((t: Nat) → t < bytes.len() → Nat::space().same(q + t, p) = False) {
+            let apart: ((t: Nat) → t < bytes.len() → Nat::space().same(q + t, p) = False) = match away {
                 Inl(above) => λ t below => Nat::space_laws().same_false(Nat::space(), q + t, p, λ same => false_elim(omega(same, below, above))),
                 Inr(under) => λ t below => Nat::space_laws().same_false(Nat::space(), q + t, p, λ same => false_elim(omega(same, under))),
             };
             let buffer: (r.buffer(w).get(p) = r.buffer(v).get(p)) = r.buffer(v).get_set_span_outside(q, bytes.to_vector(), p, apart);
             trans(machine, trans(holds(p, inside), sym(buffer)))
         };
-        match p.lt_or_ge(q) as λ _ => after.cells(next_rip(r.low, p)) = r.buffer(w).get(p) {
+        match p.lt_or_ge(q) {
             Inl(under) => outside(Inr(under)),
-            Inr(from) => match p.lt_or_ge(q + bytes.len()) as λ _ => after.cells(next_rip(r.low, p)) = r.buffer(w).get(p) {
+            Inr(from) => match p.lt_or_ge(q + bytes.len()) {
                 Inr(past) => outside(Inl(past)),
                 Inl(within) => {
                     let t = p - q;

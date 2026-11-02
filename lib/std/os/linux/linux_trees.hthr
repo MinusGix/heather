@@ -109,7 +109,7 @@ fn LinuxCmd::forget(self c: LinuxCmd<Nat>) → LinuxCmd<True> {
 
 // The answer is the same answer.
 fn LinuxCmd::forget_answer(self c: LinuxCmd<Nat>) → c.Resp() → c.forget().Resp() {
-    match c as λ d => d.Resp() → d.forget().Resp() {
+    match c {
         ReadCmd(_, _) => λ r => r,
         WriteCmd(_, _) => λ r => r,
         OpenCmd(_) => λ r => r,
@@ -223,7 +223,7 @@ fn LinuxCmd::sized(self c: LinuxCmd<True>, max: Nat) → LinuxCmd<Nat> {
     }
 }
 fn LinuxCmd::sized_answer(self c: LinuxCmd<True>, max: Nat) → c.sized(max).Resp() → c.Resp() {
-    match c as λ d => d.sized(max).Resp() → d.Resp() {
+    match c {
         ReadCmd(_, _) => λ r => r,
         WriteCmd(_, _) => λ r => r,
         OpenCmd(_) => λ r => r,
@@ -247,8 +247,7 @@ theorem LinuxCmd::sized_forget_call<R>(c: LinuxCmd<True>, max: Nat): Trace::forg
 theorem LinuxCmd::sized_forget_answer<R>(c: LinuxCmd<True>, max: Nat): (b: c.sized(max).Resp()) →
     (rest: Trace<R>(Events::linux())) →
     Trace::forget<R>(TAns(c.sized(max), b, rest)) = TAns(c, c.sized_answer(max, b), Trace::forget(rest)) {
-    match c as λ d => (b: d.sized(max).Resp()) → (rest: Trace<R>(Events::linux())) →
-            Trace::forget<R>(TAns(d.sized(max), b, rest)) = TAns(d, d.sized_answer(max, b), Trace::forget(rest)) {
+    match c {
         ReadCmd(_, _) => λ _ _ => refl, WriteCmd(_, _) => λ _ _ => refl, OpenCmd(_) => λ _ _ => refl,
         CloseCmd(_) => λ _ _ => refl, StatCmd(_) => λ _ _ => refl,
     }

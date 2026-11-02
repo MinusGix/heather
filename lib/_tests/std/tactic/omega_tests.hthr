@@ -271,6 +271,40 @@ fn count_down(s: CdState) → CdState decreases s.m {
         False => count_down(CdState(s.m - 1, Cons(s.m, s.out))),
     }
 }
+// Its unfolding equation goes through the convoy, with the lifted
+// obligation quantifying the equation (docs/dependent-match-compiler-design.md §8).
+theorem count_down_step(s: CdState, h: s.m.leb(0) = False):
+    count_down(s) = (match h: Nat::leb(s.m, 0) {
+        True => s,
+        False => count_down(CdState(s.m - 1, Cons(s.m, s.out))),
+    }) { count_down_unfold(s) }
+// A plain `match` on a computed scrutinee owes each arm its equation, and
+// `omega` reads it there though nothing names it
+// (docs/dependent-match-compiler-design.md §4, issues/match-equation-in-every-arm.md):
+// in a theorem, and in a `decreases` body whose obligation needs the guard,
+// whose unfolding equation still states the match as written.
+theorem guard_unnamed_in_arm(a, b: Nat, h: b < a): a.leb(b) = False {
+    match a.leb(b) { True => { let no: False = omega; match no {} }, False => refl }
+}
+theorem guards_unnamed_nested(a, b, c: Nat): a - b <= a + c {
+    match a.leb(b) { True => match b.leb(c) { True => omega, False => omega }, False => omega }
+}
+// A hypothesis containing the computed scrutinee is refined in each arm
+// (design §5, issues/match-refines-computed-scrutinee.md): in the `False`
+// arm `h` is `False = True`.
+theorem guard_hypothesis_refined(n: Nat, h: n.leb(3) = True): n <= 3 {
+    match n.leb(3) { True => omega, False => absurd(h) }
+}
+fn half(n: Nat) → Nat decreases n {
+    match Nat::leb(n, 1) {
+        True => 0,
+        False => Succ(half(n - 2)),
+    }
+}
+theorem half_step(n: Nat, h: n.leb(1) = False): half(n) = Succ(half(n - 2)) {
+    j(h, λ b _ => half(n) = (match b { True => 0, False => Succ(half(n - 2)) }), half_unfold(n))
+}
+theorem half_seven(): half(7) = 3 { refl }
 // Through a Bool definition and its `let`s, at the top and inside a guard.
 fn ordered(n, m: Nat) → Bool { let le = n.leb(m); le && !m.leb(n) }
 theorem guard_definition(n, m: Nat, h: ordered(n, m).IsTrue()): n < m { omega }
@@ -291,3 +325,9 @@ fn parity(n: Nat) → Bool { match n { Zero => True, Succ(k) => !parity(k) } }
 theorem guard_unreadable(n: Nat, h: parity(n).IsTrue()): n = 0 { omega }
 // expect-error: `omega` got stuck
 theorem guard_bare_atom(r: Bool, n: Nat, h: r.IsTrue()): n = 0 { omega }
+// An arm's unnamed equation is a fact like any other: it proves no more than
+// the guard says.
+// expect-error: `omega` got stuck
+theorem guard_unnamed_false(a, b: Nat): a.leb(b) = False {
+    match a.leb(b) { True => { let no: False = omega; match no {} }, False => refl }
+}

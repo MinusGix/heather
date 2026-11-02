@@ -110,16 +110,16 @@ theorem X86Profile::read_at(self x: X86Profile, m: X86Memory(x), a: BitVec(64), 
 theorem X86Profile::read_agree(self x: X86Profile, m: X86Memory(x), cells: BitVec(64) → BitVec(8), a: BitVec(64), same: cells(a) = m.cells(a)):
     x.read(X86Memory(cells := cells, perms := m.perms, relied := m.relied), a) = x.read(m, a) {
     let other: X86Memory(x) = X86Memory(cells := cells, perms := m.perms, relied := m.relied);
-    (match x.perm(m, a).read as λ s => (x.perm(m, a).read = s) → x.read(other, a) = x.read(m, a) {
-        True => λ readable => trans(x.read_at(other, a, readable),
+    match readable: x.perm(m, a).read {
+        True => trans(x.read_at(other, a, readable),
             trans(cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), same), sym(x.read_at(m, a, readable)))),
-        False => λ refused => {
-            let none: ((n: X86Memory(x)) → x.perm(n, a).read = False → x.read(n, a) = None<BitVec(8)>) = λ n refused =>
-                j(sym(x.at(n).read_refused(a, refused)), λ r _ =>
+        False => {
+            let none: ((n: X86Memory(x)) → x.perm(n, a).read = False → x.read(n, a) = None<BitVec(8)>) = λ n readable =>
+                j(sym(x.at(n).read_refused(a, readable)), λ r _ =>
                     (match r { Ok(byte) => Some(byte), Err(_) => None }) = None<BitVec(8)>, refl);
-            trans(none(other, refused), sym(none(m, refused)))
+            trans(none(other, readable), sym(none(m, readable)))
         },
-    })(refl)
+    }
 }
 
 // Eight reads that agree read the same word.
@@ -227,7 +227,7 @@ theorem DataRegion::apart(self r: DataRegion, i, k, l, n: Nat, fi: i + k <= r.si
     let at_i = r.toNat_at(i, omega(fi));
     let at_l = r.toNat_at(l, omega(fl));
     let top = canonical_below_top();
-    match ordered as λ _ => BitVec::space(64).Apart(next_rip(r.low, i), k, next_rip(r.low, l), n) {
+    match ordered {
         Inl(below) => BitVec::space_apart(64, next_rip(r.low, i), k, next_rip(r.low, l), n, omega(at_i, at_l, below),
             omega(at_l, fl, r.canonical, top)),
         Inr(above) => BitVec::space_apart_above(64, next_rip(r.low, i), k, next_rip(r.low, l), n, omega(at_i, at_l, above),
@@ -239,7 +239,7 @@ theorem DataRegion::apart(self r: DataRegion, i, k, l, n: Nat, fi: i + k <= r.si
 theorem DataRegion::read_stored(self r: DataRegion, m: X86Memory(r.profile), i: Nat, bytes: List<BitVec(8)>,
     fits: i + bytes.len() <= r.size, p: Nat, byte: BitVec(8), found: bytes.nth(p) = Some(byte)):
     r.profile.read(r.profile.store(m, next_rip(r.low, i), bytes), next_rip(next_rip(r.low, i), p)) = Some(byte) {
-    let inside: (p < bytes.len()) = match p.lt_or_ge(bytes.len()) as λ _ => p < bytes.len() {
+    let inside: (p < bytes.len()) = match p.lt_or_ge(bytes.len()) {
         Inl(below) => below,
         Inr(past) => absurd(trans(sym(found), bytes.nth_past_end(p, past))),
     };

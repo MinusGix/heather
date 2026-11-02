@@ -1606,6 +1606,9 @@ impl Elaborator {
             }
         }
         let Some((source, cited)) = found else {
+            // Stuck: an arm equation not yet in scope might be the missing
+            // fact (docs/dependent-match-compiler-design.md §4.3.1).
+            self.want_match_equations(cx);
             // An order that unfolds to one at `Int` (`Rat::Le` is a
             // cross-multiplication) may follow there with products as
             // monomials, as `ring` falls back to the unfolded equation.

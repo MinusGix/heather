@@ -27,7 +27,7 @@ meta fn map_code(g: Ctx) for vec.map → Code(g |-
 ) {
     code {
         fun (A: Type<0>) => fun (B: Type<0>) => fun (f: A → B) => fun (k: Nat) =>
-            match k as λ z => [A; z] → [B; z] {
+            match k {
                 Zero => fun (v: [A; 0]) => [],
                 Succ(zk, ih) => fun (v: [A; Succ(zk)]) =>
                     cons(f(head(v)), ih(tail(v))),
@@ -58,7 +58,7 @@ meta fn fold_code(g: Ctx) for vec.fold → Code(g |-
     code {
         fun (A: Type<0>) => fun (B: Type<0>) => fun (z: B) =>
             fun (f: A → B → B) => fun (k: Nat) =>
-                match k as λ w => [A; w] → B {
+                match k {
                     Zero => fun (v: [A; 0]) => z,
                     Succ(zk, ih) => fun (v: [A; Succ(zk)]) =>
                         f(head(v), ih(tail(v))),
@@ -100,7 +100,7 @@ meta fn tabulate_code(g: Ctx) for vec.tabulate → Code(g |-
 ) {
     code {
         fun (B: Type<0>) => fun (k: Nat) =>
-            match k as λ z => (Fin(z) → B) → [B; z] {
+            match k {
                 Zero => fun (f: Fin(0) → B) => [],
                 Succ(zk, ih) => fun (f: Fin(Succ(zk)) → B) =>
                     cons(f(FZ), ih(fun (i: Fin(zk)) => f(FS(i)))),
@@ -146,7 +146,7 @@ meta fn nth_code(g: Ctx) for vec.nth → Code(g |-
 ) {
     code {
         fun (A: Type<0>) => fun (k: Nat) =>
-            match k as λ z => [A; z] → Fin(z) → A {
+            match k {
                 Zero => fun (v: [A; 0]) => fun (i: Fin(0)) => match i { },
                 Succ(zk, ih) => fun (v: [A; Succ(zk)]) => fun (i: Fin(Succ(zk))) =>
                     match i {

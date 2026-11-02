@@ -102,3 +102,51 @@ fn vector_still(v: [Nat; 3]) → [Nat; 3] { v }
 // not supply yet (list-literal-left-of-append).
 // expect-error: `++` has no meaning here
 theorem literal_left_of_append(): [1] ++ [2] = [1, 2] { refl }
+
+// Deep patterns and nested matches below a `Cons`: the tail binder is a read
+// out of the arm's children tuple, not a subterm of the goal's `Cons(x, rest)`,
+// so the motive rebuilds the tuple around the inner scrutinee
+// (docs/dependent-match-compiler-design.md §7.1). At an open element type.
+fn deep_mk<A>(a: A) → List<A> { [a, a, a] }
+
+// The equation `h` is the clause's whole equation at the leaf, with nothing
+// composed by hand (issues/eqbind-deep-pattern-kernel-rejects.md).
+theorem deep_clause_eq<A>(a: A): Option<A> {
+    match h: deep_mk<A>(a) {
+        Cons(x, Cons(y, t)) => { let k: (deep_mk<A>(a) = Cons(x, Cons(y, t))) = h; Some(y) },
+        _ => None
+    }
+}
+theorem deep_clause_eq_three<A>(a: A): Option<A> {
+    match h: deep_mk<A>(a) {
+        Cons(x, Cons(y, Cons(z, t))) => { let k: (deep_mk<A>(a) = Cons(x, Cons(y, Cons(z, t)))) = h; Some(z) },
+        _ => None
+    }
+}
+// A hypothesis about the scrutinee is refined through both levels.
+theorem deep_hyp_refined<A>(P: List<A> → Type): (xs: List<A>) → P(xs) → Option<A> {
+    λ xs => λ p => match xs {
+        Cons(x, Cons(y, t)) => { let q: P(Cons(x, Cons(y, t))) = p; Some(y) },
+        _ => None
+    }
+}
+// A motive-less nested match on the tail specializes a goal that names the
+// whole list (issues/nested-match-on-list-tail-motive.md).
+theorem tail_goal_refined<A>(f: List<A> → Nat, P: Nat → Type): (xs: List<A>) → P(f(xs)) → Nat {
+    λ xs => match xs {
+        Nil => λ _ => 0,
+        Cons(x, rest) => match rest {
+            Nil => λ q => { let k: P(f([x])) = q; 0 },
+            Cons(_, _) => λ _ => 1,
+        },
+    }
+}
+// The equation names the binders in their places: swapping them is refused
+// by the elaborator, at the annotation, not by the kernel.
+// expect-error: but `deep_mk(a) = Cons(y, Cons(x, t))` is expected here
+theorem deep_clause_eq_swapped<A>(a: A): Option<A> {
+    match h: deep_mk<A>(a) {
+        Cons(x, Cons(y, t)) => { let k: (deep_mk<A>(a) = Cons(y, Cons(x, t))) = h; Some(y) },
+        _ => None
+    }
+}

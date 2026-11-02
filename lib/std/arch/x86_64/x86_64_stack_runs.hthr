@@ -154,8 +154,8 @@ theorem Site::moves_branch_on<M>(self site: Site<M>, writes: ByteWrites<M>, fits
         let post_s = λ (t: MachineState<M>) => post(t.gprs, t.memory);
         let kept = λ (b: Bool) (taken: test.taken(s.gprs) = b) =>
             j(sym(stepped.left), λ g _ => pre(g, s.memory) ∧ test.taken(g) = b, ⟨holds, taken⟩);
-        (match test.taken(s.gprs) as λ z => test.taken(s.gprs) = z → site.Arrives(writes, s, prog_len(no_end), post_s) {
-            False => λ nonzero => {
+        match nonzero: test.taken(s.gprs) {
+            False => {
                 let v_rip: (v.rip = next_rip(site.origin, prog_len(tested) + 6)) =
                     trans(near_if_not_taken_rip(test.cc(), displacement, u, trans(stepped.right, nonzero)),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 6), u_rip),
@@ -169,14 +169,14 @@ theorem Site::moves_branch_on<M>(self site: Site<M>, writes: ByteWrites<M>, fits
                 site.arrives_after(writes, s, v, prog_len(no_end), post_s, entry,
                     site.arrives_after(writes, v, w, prog_len(no_end), post_s, arm.proof.left, jumped))
             },
-            True => λ zero => {
+            True => {
                 let v_rip: (v.rip = next_rip(site.origin, prog_len(yes_end) + 5)) =
-                    trans(near_if_taken_rip(test.cc(), displacement, u, trans(stepped.right, zero)),
+                    trans(near_if_taken_rip(test.cc(), displacement, u, trans(stepped.right, nonzero)),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
                             jumps_forward(site.origin, prog_len(tested), 6, displacement, prog_len(yes_end) + 5, else_lands)));
-                site.arrives_after(writes, s, v, prog_len(no_end), post_s, entry, no(v, v_rip, resident, kept(True, zero)))
+                site.arrives_after(writes, s, v, prog_len(no_end), post_s, entry, no(v, v_rip, resident, kept(True, nonzero)))
             },
-        })(refl)
+        }
     }
 }
 
@@ -259,22 +259,22 @@ theorem Site::moves_test<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fil
         let v = execute_near_control(control, u);
         let entry = machine_steps_of_fetched(site.fetch, site.data, writes, s, v,
             fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step)));
-        (match register.tests_zero(s.gprs) as λ z => register.tests_zero(s.gprs) = z → site.Arrives(writes, s, to, post) {
-            False => λ nonzero => {
+        match nonzero: register.tests_zero(s.gprs) {
+            False => {
                 let v_rip: (v.rip = next_rip(site.origin, prog_len(tested) + 6)) =
                     trans(near_if_not_taken_rip(E, displacement, u, nonzero),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 6), u_rip),
                             rip_compose(site.origin, prog_len(tested), 6)));
                 site.arrives_after(writes, s, v, to, post, entry, yes(v, v_rip, resident, ⟨holds, nonzero⟩))
             },
-            True => λ zero => {
+            True => {
                 let v_rip: (v.rip = next_rip(site.origin, else_to)) =
-                    trans(near_if_taken_rip(E, displacement, u, zero),
+                    trans(near_if_taken_rip(E, displacement, u, nonzero),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
                             jumps_forward(site.origin, prog_len(tested), 6, displacement, else_to, else_lands)));
-                site.arrives_after(writes, s, v, to, post, entry, no(v, v_rip, resident, ⟨holds, zero⟩))
+                site.arrives_after(writes, s, v, to, post, entry, no(v, v_rip, resident, ⟨holds, nonzero⟩))
             },
-        })(refl)
+        }
     }
 }
 

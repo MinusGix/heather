@@ -71,8 +71,7 @@ theorem ports_args(values: Valuation(), ids: List<Nat>): (registers: List<Gpr>) 
     PortsAt(values, word_ports(ids), registers, gprs) → ArgsIn(words_of(values, ids), registers, gprs) {
     match ids {
         Nil => λ registers gprs _ => trivial,
-        Cons(id, rest) => λ registers gprs => match registers as λ r =>
-            PortsAt(values, word_ports(Cons(id, rest)), r, gprs) → ArgsIn(words_of(values, Cons(id, rest)), r, gprs) {
+        Cons(id, rest) => λ registers gprs => match registers {
             Nil => λ no => false_elim(no),
             Cons(register, later) => λ placed => ⟨sym(placed.left), ports_args(values, rest, later, gprs, placed.right)⟩,
         },
@@ -83,8 +82,7 @@ theorem args_ports(values: Valuation(), ids: List<Nat>): (registers: List<Gpr>) 
     ArgsIn(words_of(values, ids), registers, gprs) → PortsAt(values, word_ports(ids), registers, gprs) {
     match ids {
         Nil => λ registers gprs _ => trivial,
-        Cons(id, rest) => λ registers gprs => match registers as λ r =>
-            ArgsIn(words_of(values, Cons(id, rest)), r, gprs) → PortsAt(values, word_ports(Cons(id, rest)), r, gprs) {
+        Cons(id, rest) => λ registers gprs => match registers {
             Nil => λ no => false_elim(no),
             Cons(register, later) => λ placed => ⟨sym(placed.left), args_ports(values, rest, later, gprs, placed.right)⟩,
         },
@@ -100,8 +98,7 @@ theorem args_after_write(words: List<BitVec(64)>): (registers: List<Gpr>) → (g
     writer.misses(registers).IsTrue() → ArgsIn(words, registers, gprs) → ArgsIn(words, registers, write_gpr(writer, value, gprs)) {
     match words {
         Nil => λ registers gprs writer value _ _ => trivial,
-        Cons(word, rest) => λ registers gprs writer value => match registers as λ r =>
-            writer.misses(r).IsTrue() → ArgsIn(Cons(word, rest), r, gprs) → ArgsIn(Cons(word, rest), r, write_gpr(writer, value, gprs)) {
+        Cons(word, rest) => λ registers gprs writer value => match registers {
             Nil => λ _ no => false_elim(no),
             Cons(register, later) => λ misses held => {
                 let both = Bool::is_true_and(!writer.same(register), writer.misses(later), misses);
@@ -255,7 +252,7 @@ theorem call_restores(values: Valuation(), file: File, result: Nat, before, afte
     represents: file.Represents(values, before), rax: read_gpr(Rax, after) = values(64, result),
     kept: Kept(callee_kept(), before, after), rsp: read_gpr(Rsp, after) = read_gpr(Rsp, before)):
     file.write(Rax, Some(Held(result, Word))).Represents(values, restore(saved_registers(), before, after)) {
-    ⟨λ query => match query as λ q => SlotRep(values, file.write(Rax, Some(Held(result, Word))).at(q), read_gpr(q, restore(saved_registers(), before, after))) {
+    ⟨λ query => match query {
         Rax => sym(rax),
         Rcx => represents.left(Rcx), Rdx => represents.left(Rdx),
         Rbx => j(sym(kept.left), λ w _ => SlotRep(values, file.at(Rbx), w), represents.left(Rbx)),
@@ -775,11 +772,10 @@ fn File::branch_test(self file: File, condition: Nat) → Option<Tested(file, co
     match file.find(Held(condition, Bit)) {
         Some(found) => Some(Tested(Nonzero(found.register),
             λ values g represents => found.register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents)))),
-        None => (match known_comparison(file.known, condition) as λ o =>
-            known_comparison(file.known, condition) = o → Option<Tested(file, condition)> {
-            None => λ _ => None,
-            Some(compared) => λ known => file.compare_test(condition, compared, known),
-        })(refl),
+        None => match known: known_comparison(file.known, condition) {
+            None => None,
+            Some(compared) => file.compare_test(condition, compared, known),
+        },
     }
 }
 
@@ -890,15 +886,11 @@ theorem emit_kept_nodes_emits<M>(site: Site<M>, laid: site.program.laid_out().Is
         }) {
         None => λ _ => trivial,
         Some(lowered) => λ keeps =>
-            (match leaves_all(lowered.code, callee_saved()) as λ b => leaves_all(lowered.code, callee_saved()) = b →
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHold(values, nodes), match b {
-                    False => None,
-                    True => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
-                }) {
-                False => λ _ => trivial,
-                True => λ left => kept_block_emits<M>(site, laid, stack, values, d, s0, prog, file, NodesHold(values, nodes), lowered,
+            match left: leaves_all(lowered.code, callee_saved()) {
+                False => trivial,
+                True => kept_block_emits<M>(site, laid, stack, values, d, s0, prog, file, NodesHold(values, nodes), lowered,
                     keeps, is_true_of_eq(leaves_all(lowered.code, callee_saved()), left), skip_nodes(nodes, placement), names),
-            })(refl),
+            },
     })(lower_nodes_keeps<M>(values, nodes, placement, file))
 }
 
@@ -1010,20 +1002,9 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
     let ports = word_ports(arguments);
     let order = file.call_moves(arguments);
     let out_file = file.write(Rax, Some(Held(result, Word)));
-    (match Succ(callee).leb(bound) as λ b => Succ(callee).leb(bound) = b →
-        MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match b {
-            False => None,
-            True => match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
-                None => None,
-                Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
-                    False => None,
-                    True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
-                },
-            },
-        }) {
-        False => λ _ => trivial,
-        True => λ under =>
-            (match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved =>
+    match under: Succ(callee).leb(bound) {
+        False => trivial,
+        True => (match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved =>
                 MayKeep<M>(values, file, True, moved) →
                 MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match moved {
                     None => None,
@@ -1034,14 +1015,9 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
                 }) {
                 None => λ _ => trivial,
                 Some(moves) => λ keeps =>
-                    (match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) as λ c =>
-                        (moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved())) = c →
-                        MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match c {
-                            False => None,
-                            True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
-                        }) {
-                        False => λ _ => trivial,
-                        True => λ checked => {
+                    match checked: moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
+                        False => trivial,
+                        True => {
                             let both = Bool::is_true_and(moves.file.outputs_check(ports, argument_registers()),
                                 leaves_all(moves.code, callee_saved()),
                                 is_true_of_eq(moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()),
@@ -1051,9 +1027,9 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
                                 Succ(callee).leb_sound(bound, is_true_of_eq(Succ(callee).leb(bound), under)),
                                 moves, keeps, both.left, both.right)
                         },
-                    })(refl),
+                    },
             })(move_outputs_keeps<M>(values, ArgumentMove::ports(order), file, ArgumentMove::registers(order))),
-    })(refl)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1129,20 +1105,16 @@ theorem loop_entry_with_sound<M>(values: Valuation(), file: File, registers: Loo
         }) {
         None => λ _ => trivial,
         Some(head) => λ head_ok =>
-            (match placed && (kept && registers.apart()) as λ c => (placed && (kept && registers.apart())) = c →
-                MayLoopEntry<M>(values, file, inputs, limit, parameters, count, match c {
-                    False => None,
-                    True => Some(LoopEntry(registers, moves.code, head)),
-                }) {
-                False => λ _ => trivial,
-                True => λ checked => {
+            match checked: placed && (kept && registers.apart()) {
+                False => trivial,
+                True => {
                     let all = Bool::is_true_and(placed, kept && registers.apart(), is_true_of_eq(placed && (kept && registers.apart()), checked));
                     let rest = Bool::is_true_and(kept, registers.apart(), all.right);
                     ⟨moves_into<M>(values, file, Cons(limit, inputs), into, moves, keeps, all.left, rest.left),
                      ⟨λ pass g args => head_ok(pass, g, args_ports(pass, Cons(count, parameters), into, g, args)),
                       registers.apart_sound(rest.right)⟩⟩
                 },
-            })(refl),
+            },
     })(λ pass g placed_at => input_file_represents(pass, g, word_ports(Cons(count, parameters)), into, placed_at))
 }
 
@@ -1163,11 +1135,7 @@ theorem loop_entry_at_sound<M>(values: Valuation(), file: File, registers: LoopR
 theorem loop_entry_sound<M>(values: Valuation(), file: File, inputs: List<Nat>, limit: Nat, parameters: List<Nat>, count: Nat,
     placement: List<Place>):
     MayLoopEntry<M>(values, file, inputs, limit, parameters, count, file.loop_entry(inputs, limit, parameters, count, placement)) {
-    match loop_registers(parameters.len(), placement) as λ o =>
-        MayLoopEntry<M>(values, file, inputs, limit, parameters, count, match o {
-            None => None,
-            Some(registers) => file.loop_entry_at(registers, inputs, limit, parameters, count),
-        }) {
+    match loop_registers(parameters.len(), placement) {
         None => trivial,
         Some(registers) => loop_entry_at_sound<M>(values, file, registers, inputs, limit, parameters, count),
     }
@@ -1214,14 +1182,9 @@ theorem loop_exit_out_sound<M>(file: File, register: Gpr, leave, back: Lowered,
         }) {
         None => λ _ => trivial,
         Some(after) => λ after_ok =>
-            (match found && (leave_placed && (leave_kept && (back_placed && back_kept))) as λ c =>
-                (found && (leave_placed && (leave_kept && (back_placed && back_kept)))) = c →
-                MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, match c {
-                    False => None,
-                    True => Some(LoopExit(register, leave.code, back.code, after)),
-                }) {
-                False => λ _ => trivial,
-                True => λ checked => {
+            match checked: found && (leave_placed && (leave_kept && (back_placed && back_kept))) {
+                False => trivial,
+                True => {
                     let first = Bool::is_true_and(found, leave_placed && (leave_kept && (back_placed && back_kept)),
                         is_true_of_eq(found && (leave_placed && (leave_kept && (back_placed && back_kept))), checked));
                     let second = Bool::is_true_and(leave_placed, leave_kept && (back_placed && back_kept), first.right);
@@ -1234,7 +1197,7 @@ theorem loop_exit_out_sound<M>(file: File, register: Gpr, leave, back: Lowered,
                             fourth.left, fourth.right),
                        λ values g args flag => after_ok(values, g, ⟨flag, args_ports(values, outputs, registers.state, g, args)⟩)⟩⟩⟩
                 },
-            })(refl),
+            },
     })(λ values g placed => input_file_represents(values, g, ports, into, placed))
 }
 
@@ -1256,14 +1219,7 @@ theorem loop_exit_back_sound<M>(file: File, register: Gpr, leave: Lowered, leave
 
 theorem loop_exit_sound<M>(file: File, registers: LoopRegisters, count, exit: Nat, next, outputs: List<Nat>, exhausted: Nat):
     MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, file.loop_exit(registers, count, exit, next, outputs, exhausted)) {
-    match file.find(Held(exit, Bit)) as λ o =>
-        MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, match o {
-            None => None,
-            Some(found) => match file.move_outputs(word_ports(next), registers.state) {
-                None => None,
-                Some(leave) => file.loop_exit_back(found.register, leave, registers, count, exit, next, outputs, exhausted),
-            },
-        }) {
+    match file.find(Held(exit, Bit)) {
         None => trivial,
         Some(found) =>
             (match file.move_outputs(word_ports(next), registers.state) as λ o =>
@@ -1802,19 +1758,7 @@ theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, sit
                     continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, first.prog, first.file, first.placement, first.names)),
             })(prefix.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, file, placement, names)),
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ prog file placement names =>
-            match file.branch_test(condition) as λ located =>
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file,
-                    StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
-                    match located {
-                        None => None,
-                        Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) {
-                            None => None,
-                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
-                                None => None,
-                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
-                            },
-                        },
-                    }) {
+            match file.branch_test(condition) {
                 None => trivial,
                 Some(tested) =>
                     (match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) as λ y =>
@@ -2191,18 +2135,9 @@ theorem grows_trans(prog: Prog, first: Emitted, within: prog.Within(first.prog),
 
 theorem emit_kept_nodes_grows(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat):
     Grows(prog, emit_kept_nodes(prog, file, nodes, placement, names)) {
-    match lower_nodes(nodes, placement, file) as λ lowered => Grows(prog, match lowered {
-        None => None,
-        Some(l) => match leaves_all(l.code, callee_saved()) {
-            False => None,
-            True => Some(Emitted(At(prog, 0, Block(l.code)), l.file, skip_nodes(nodes, placement), names)),
-        },
-    }) {
+    match lower_nodes(nodes, placement, file) {
         None => trivial,
-        Some(lowered) => match leaves_all(lowered.code, callee_saved()) as λ b => Grows(prog, match b {
-            False => None,
-            True => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
-        }) {
+        Some(lowered) => match leaves_all(lowered.code, callee_saved()) {
             False => trivial,
             True => prog.within_then(0, Block(lowered.code)),
         },
@@ -2214,27 +2149,11 @@ theorem File::emit_call_grows(self file: File, prog: Prog, callee: Nat, argument
     let ports = word_ports(arguments);
     let order = file.call_moves(arguments);
     let out_file = file.write(Rax, Some(Held(result, Word)));
-    match Succ(callee).leb(bound) as λ b => Grows(prog, match b {
-        False => None,
-        True => match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
-            None => None,
-            Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
-                False => None,
-                True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
-            },
-        },
-    }) {
+    match Succ(callee).leb(bound) {
         False => trivial,
-        True => match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved => Grows(prog, match moved {
-            None => None,
-            Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
-                False => None,
-                True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
-            },
-        }) {
+        True => match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
             None => trivial,
-            Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) as λ c =>
-                Grows(prog, match c { False => None, True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)) }) {
+            Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
                 False => trivial,
                 True => call_within(prog, moves.code, callee),
             },
@@ -2247,10 +2166,7 @@ theorem loop_close_grows(prog: Prog, entry: LoopEntry, names: Nat, pass: Emitted
     Grows(prog, pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names)) {
     let tested = loop_tested(prog, entry, names);
     let opened: prog.Within(tested) = Exists(4, refl);
-    match pass.file.loop_exit(entry.registers, count, exit, next, outputs, exhausted) as λ e => Grows(prog, match e {
-        None => None,
-        Some(out) => Some(Emitted(loop_done(pass.prog, entry.registers, out, names), out.out, pass.placement, pass.names)),
-    }) {
+    match pass.file.loop_exit(entry.registers, count, exit, next, outputs, exhausted) {
         None => trivial,
         Some(out) => {
             let closed: pass.prog.Within(loop_done(pass.prog, entry.registers, out, names)) = Exists(12, refl);
@@ -2285,16 +2201,7 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
                     continuation.emit_calls_grows(bound, first.prog, first.file, first.placement, first.names)),
             })(prefix.emit_calls_grows(bound, prog, file, placement, names)),
         Conditional(_, condition, _, _, when_true, when_false) => λ prog file placement names =>
-            match file.branch_test(condition) as λ located => Grows(prog, match located {
-                None => None,
-                Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) {
-                    None => None,
-                    Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
-                        None => None,
-                        Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
-                    },
-                },
-            }) {
+            match file.branch_test(condition) {
                 None => trivial,
                 Some(tested) => {
                     let test = tested.test;
@@ -2331,14 +2238,7 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, bound:
         Call(callee, arguments, result) => λ prog file placement names =>
             file.emit_call_grows(prog, callee, arguments, result, placement, names, bound),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ prog file placement names =>
-            match file.loop_entry(inputs, limit, parameters, count, placement) as λ e => Grows(prog, match e {
-                None => None,
-                Some(entry) => match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest,
-                    Succ(Succ(Succ(Succ(names)))), bound) {
-                    None => None,
-                    Some(pass) => pass.loop_close(entry.registers, count, exit, next, outputs, exhausted, names),
-                },
-            }) {
+            match file.loop_entry(inputs, limit, parameters, count, placement) {
                 None => trivial,
                 Some(entry) =>
                     (match body.emit_calls(loop_tested(prog, entry, names), entry.head, entry.registers.rest, Succ(Succ(Succ(Succ(names)))),
@@ -2538,10 +2438,7 @@ fn lower_program_planned(functions: List<Function>) → Option<Prog> { lower_pro
 // The last function answers the calls of it.
 theorem program_callees_last(last: Function, earlier: List<Function>, arguments: List<BitVec(64)>, result: BitVec(64)):
     program_callees(Cons(last, earlier))(earlier.len(), arguments, result) → last.Computes(program_callees(earlier), arguments, result) {
-    match earlier.len().eq_dec(earlier.len()) as λ dec => (match dec as λ _ => Type {
-        Inl(_) => last.Computes(program_callees(earlier), arguments, result),
-        Inr(_) => program_callees(earlier)(earlier.len(), arguments, result),
-    }) → last.Computes(program_callees(earlier), arguments, result) {
+    match earlier.len().eq_dec(earlier.len()) {
         Inl(_) => λ held => held,
         Inr(differs) => λ _ => false_elim(differs(refl)),
     }
@@ -2551,10 +2448,7 @@ theorem program_callees_last(last: Function, earlier: List<Function>, arguments:
 theorem program_callees_earlier(last: Function, earlier: List<Function>, f: Nat, differs: f ≠ earlier.len(),
     arguments: List<BitVec(64)>, result: BitVec(64)):
     program_callees(Cons(last, earlier))(f, arguments, result) → program_callees(earlier)(f, arguments, result) {
-    match f.eq_dec(earlier.len()) as λ dec => (match dec as λ _ => Type {
-        Inl(_) => last.Computes(program_callees(earlier), arguments, result),
-        Inr(_) => program_callees(earlier)(f, arguments, result),
-    }) → program_callees(earlier)(f, arguments, result) {
+    match f.eq_dec(earlier.len()) {
         Inl(same) => λ _ => false_elim(differs(same)),
         Inr(_) => λ held => held,
     }

@@ -71,7 +71,7 @@ theorem Format::rounds_beyond(self F: Format, mode: Mode, y, x: Rat, yx: y <= x,
     let fits = λ (fy: F.Fits(y)) => λ (has: F.specials.has_inf().IsTrue()) => false_elim<x.abs() < F.ovf()>(F.fits_not_over(y, fy, has, ov(has)));
     let pos: (0 < y) = Rat::lt_of_le_of_lt(Rat::le_of_same(Rat::same_sym(Finite::zero_val(F))), ex(Finite::zero(F, False)));
     match r as λ r0 => RoundsTo(F, mode, y, r0) → RoundsTo(F, mode, x, r0) {
-        Fin(f) => match mode as λ md => RoundsTo(F, md, y, Fin(f)) → RoundsTo(F, md, x, Fin(f)) {
+        Fin(f) => match mode {
             NearestEven => λ h => And(And(Finite::nearest_beyond(y, x, yx, ex, f, h.left.left),
                 λ g ng => Inl(Finite::nearest_same_beyond(y, x, yx, ex, f, g, h.left.left, ng))), fits(h.right)),
             NearestAway => λ h => And(And(Finite::nearest_beyond(y, x, yx, ex, f, h.left.left),
@@ -88,20 +88,20 @@ theorem Format::rounds_beyond(self F: Format, mode: Mode, y, x: Rat, yx: y <= x,
             TowardZero => λ h => And(λ _ => Finite::below_beyond(y, x, yx, ex, f, h.left(Rat::le_of_lt(pos))),
                 λ np => false_elim(Rat::lt_irrefl(0, Rat::lt_of_lt_of_le(pos, Rat::le_trans(yx, np))))),
         },
-        Inf(n, has) => match mode as λ md => RoundsTo(F, md, y, Inf(n, has)) → RoundsTo(F, md, x, Inf(n, has)) {
-            NearestEven => match n as λ b => RoundsTo(F, NearestEven, y, Inf(b, has)) → RoundsTo(F, NearestEven, x, Inf(b, has)) {
+        Inf(n, has) => match mode {
+            NearestEven => match n {
                 False => λ (h: F.ovf() <= y) => Rat::le_trans(h, yx),
                 True => λ (h: y <= -F.ovf()) => false_elim(F.ovf_not_both(y, ov(has), h)),
             },
-            NearestAway => match n as λ b => RoundsTo(F, NearestAway, y, Inf(b, has)) → RoundsTo(F, NearestAway, x, Inf(b, has)) {
+            NearestAway => match n {
                 False => λ (h: F.ovf() <= y) => Rat::le_trans(h, yx),
                 True => λ (h: y <= -F.ovf()) => false_elim(F.ovf_not_both(y, ov(has), h)),
             },
-            TowardPos => match n as λ b => RoundsTo(F, TowardPos, y, Inf(b, has)) → RoundsTo(F, TowardPos, x, Inf(b, has)) {
+            TowardPos => match n {
                 False => λ _ => exx,
                 True => λ h => h,
             },
-            TowardNeg => match n as λ b => RoundsTo(F, TowardNeg, y, Inf(b, has)) → RoundsTo(F, TowardNeg, x, Inf(b, has)) {
+            TowardNeg => match n {
                 False => λ h => h,
                 True => λ (h: F.Undercuts(y)) => false_elim(F.not_exceeds_undercuts(y, ex, h)),
             },
@@ -292,16 +292,16 @@ theorem Format::sc_pick_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base,
     let W = F.window(j, c);
     let x = Rat::scaled(base, bp, mant, exp);
     let fb = F.round_rat_correct(mode, x);
-    match lo as λ o => RoundsTo(F, mode, x, F.sc_pick(mode, base, bp, mant, exp, j, c, h, st, o, hi)) {
+    match lo {
         None => fb,
-        Some(pl) => match hi as λ o => RoundsTo(F, mode, x, F.sc_pick(mode, base, bp, mant, exp, j, c, h, st, Some(pl), o)) {
+        Some(pl) => match hi {
             None => fb,
             Some(ph) => {
-                let low: (j = 0 ∨ (F.win_lo(j, c)).val() <= x) = match pl as λ _ => j = 0 ∨ (F.win_lo(j, c)).val() <= x {
+                let low: (j = 0 ∨ (F.win_lo(j, c)).val() <= x) = match pl {
                     Inl(z) => Inl(z),
                     Inr(t) => Inr(Rat::le_respects(Rat::same_sym(F.win_lo_grid(j, c)), x.same_refl(), W.cut_le(x, h, st, a, F.top().int(), omega(t)))),
                 };
-                let high: (j + c = F.span ∨ x < (F.win_hi(j, c)).val()) = match ph as λ _ => j + c = F.span ∨ x < (F.win_hi(j, c)).val() {
+                let high: (j + c = F.span ∨ x < (F.win_hi(j, c)).val()) = match ph {
                     Inl(t) => Inl(omega(t, jc)),
                     Inr(t) => Inr(Rat::lt_respects(x.same_refl(), Rat::same_sym(F.win_hi_grid(j, c)),
                         W.cut_gt(x, h, st, a, (F.top() * Nat::pow(2, c)).int(), omega(t)))),
@@ -322,7 +322,7 @@ theorem Format::sc_quot_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base,
     let dp = F.sc_den_pos(base, bp, exp, j, c);
     match s as λ s0 => DivMod::Spec(N, D, s0) → RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_quot(mode, base, bp, mant, exp, j, c, s0)) {
         MkDivMod(h, r) => λ (sp: (h * D + r = N) ∧ (D <= 0 ∨ r < D)) => {
-            let bound: (r < D) = match sp.right as λ _ => r < D { Inl(z) => omega(z, dp), Inr(lt) => lt };
+            let bound: (r < D) = match sp.right { Inl(z) => omega(z, dp), Inr(lt) => lt };
             F.sc_pick_ok(mode, base, bp, mant, exp, j, c, h, match r { Zero => False, Succ(_) => True }, jc,
                 F.sc_approx(base, bp, mant, exp, j, c, h, r, sp.left, bound), F.low_ok(j, h), F.high_ok(j, c, h))
         },
@@ -339,7 +339,7 @@ theorem Format::sc_over_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base,
     let W = F.window(j, c);
     let x = Rat::scaled(base, bp, mant, exp);
     let fb = F.round_rat_correct(mode, x);
-    match top as λ t => RoundsTo(F, mode, x, F.sc_over(mode, base, bp, mant, exp, j, c, t)) {
+    match top {
         Inr(_) => fb,
         Inl(tp) => {
             let L = Nat::pow_sq(2, F.sc_fuel(c));
@@ -393,7 +393,7 @@ theorem Format::sc_div_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, 
     let N = F.sc_num(base, mant, exp, j, c);
     let D = F.sc_den(base, exp, j, c);
     let fuel = F.sc_fuel(c);
-    match fits as λ fd => RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_div(mode, base, bp, mant, exp, j, c, fd)) {
+    match fits {
         Inl(lt) => {
             let lt2: (N < D * Nat::pow(2, fuel)) = j(Nat::pow_sq_eq(2, fuel), λ v _ => Succ(N) <= D * v, lt);
             F.sc_quot_ok(mode, base, bp, mant, exp, j, c, jc, N.ldiv_fuel(D, fuel), Nat::ldiv_fuel_bounded(fuel, N, D, lt2))
@@ -405,7 +405,7 @@ theorem Format::sc_div_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, 
 theorem Format::sc_at_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat,
     jc: j + c <= F.span ∨ ¬(j + c <= F.span)): RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_at(mode, base, bp, mant, exp, j, c, jc))
 {
-    match jc as λ d => RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_at(mode, base, bp, mant, exp, j, c, d)) {
+    match jc {
         Inl(le) => F.sc_div_ok(mode, base, bp, mant, exp, j, c, le,
             Succ(F.sc_num(base, mant, exp, j, c)).le_dec(F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))),
         Inr(_) => F.round_rat_correct(mode, Rat::scaled(base, bp, mant, exp)),
@@ -457,7 +457,7 @@ theorem Rat::dy_exact_reflects(s: Bool, m: Nat, q: Int, base: Nat, bp: 1 <= base
         Nat::cong(λ (v: Nat) => (m * X) * v, Nat::pow_sq_eq(base, exp.neg_part())));
     let rr: (R = (mant * Pb) * Y) = trans(Nat::cong(λ (v: Nat) => (mant * v) * Nat::pow_sq(2, q.neg_part()), Nat::pow_sq_eq(base, exp.pos_part())),
         Nat::cong(λ (v: Nat) => (mant * Pb) * v, Nat::pow_sq_eq(2, q.neg_part())));
-    match s as λ t => Reflects(Dyadic(match t { False => m.int(), True => -m.int() }, q).rat() ≈ Rat::scaled(base, bp, mant, exp), Rat::dy_exact(t, m, q, base, mant, exp)) {
+    match s {
         False => reflects_iff(reflects_and(L.leb_reflects(R), R.leb_reflects(L)),
             λ both => {
                 let e: ((m * X) * Qb = (mant * Pb) * Y) = omega(both, lr, rr);
@@ -492,7 +492,7 @@ fn Float::exact_scaled({F: Format}, self r: Float(F), base, mant: Nat, exp: Int)
 theorem Float::exact_scaled_reflects({F: Format}, r: Float(F), base: Nat, bp: 1 <= base, mant: Nat, exp: Int):
     Reflects(r.Denotes(Rat::scaled(base, bp, mant, exp)), r.exact_scaled(base, mant, exp))
 {
-    match r as λ r0 => Reflects(r0.Denotes(Rat::scaled(base, bp, mant, exp)), r0.exact_scaled(base, mant, exp)) {
+    match r {
         Fin(f) => Rat::dy_exact_reflects(f.neg, f.mag, f.q(), base, bp, mant, exp),
         Inf(_, _) => And(λ (no: bool::False = bool::True) => absurd(no), λ _ v => v),
         NaN(_) => And(λ (no: bool::False = bool::True) => absurd(no), λ _ v => v),

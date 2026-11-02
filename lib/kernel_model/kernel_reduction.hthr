@@ -318,7 +318,7 @@ theorem Tm::app_k_unblocked(ev: Tm → Option<Tm>, a: Tm, r: Option<Tm>,
         h: Tm::Unblocked(Tm::app_k(ev, a, r))): Tm::Unblocked(r) {
     match r as λ y => Tm::Unblocked(Tm::app_k(ev, a, y)) → Tm::Unblocked(y) {
         None => λ q => trivial,
-        Some(v) => match v as λ y => Tm::Unblocked(Tm::app_head(ev, a, y)) → Tm::Unblocked(Some(y)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(_) => λ q => absurd(q),
             Lam(_) => λ q => refl,
@@ -337,7 +337,7 @@ theorem Tm::rec_k_unblocked(ev: Tm → Option<Tm>, z, s: Tm, r: Option<Tm>,
         h: Tm::Unblocked(Tm::rec_k(ev, z, s, r))): Tm::Unblocked(r) {
     match r as λ y => Tm::Unblocked(Tm::rec_k(ev, z, s, y)) → Tm::Unblocked(y) {
         None => λ q => trivial,
-        Some(v) => match v as λ y => Tm::Unblocked(Tm::rec_head(ev, z, s, y)) → Tm::Unblocked(Some(y)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(_) => λ q => absurd(q),
             Lam(_) => λ q => refl,
@@ -356,7 +356,7 @@ theorem Tm::proj_k_unblocked(ev: Tm → Option<Tm>, p: Proj, r: Option<Tm>,
         h: Tm::Unblocked(Tm::proj_k(ev, p, r))): Tm::Unblocked(r) {
     match r as λ y => Tm::Unblocked(Tm::proj_k(ev, p, y)) → Tm::Unblocked(y) {
         None => λ q => trivial,
-        Some(v) => match v as λ y => Tm::Unblocked(Tm::proj_head(ev, p, y)) → Tm::Unblocked(Some(y)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(_) => λ q => absurd(q),
             Lam(_) => λ q => refl,
@@ -423,9 +423,7 @@ theorem Tm::app_k_inst(P: Option<Tm> → Type, stuck: (x: Nat) → (a: Tm) → P
             Tm::app_k(ev, a.inst(sub), y.map(λ (v: Tm) => v.inst(sub)))
                 = Tm::app_k(ev, a, y).map(λ (v: Tm) => v.inst(sub)) {
         None => λ q => refl,
-        Some(v) => match v as λ y => P(Tm::app_head(ev, a, y)) →
-                Tm::app_head(ev, a.inst(sub), y.inst(sub))
-                    = Tm::app_head(ev, a, y).map(λ (w: Tm) => w.inst(sub)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(x) => λ q => false_elim(stuck(x, a, q)),
             Lam(b) => λ q => j(b.inst_open_at(sub, closed, 0, a),
@@ -451,9 +449,7 @@ theorem Tm::rec_k_inst(P: Option<Tm> → Type, stuck: (x: Nat) → (z, s: Tm) �
             Tm::rec_k(ev, z.inst(sub), s.inst(sub), y.map(λ (v: Tm) => v.inst(sub)))
                 = Tm::rec_k(ev, z, s, y).map(λ (v: Tm) => v.inst(sub)) {
         None => λ q => refl,
-        Some(v) => match v as λ y => P(Tm::rec_head(ev, z, s, y)) →
-                Tm::rec_head(ev, z.inst(sub), s.inst(sub), y.inst(sub))
-                    = Tm::rec_head(ev, z, s, y).map(λ (w: Tm) => w.inst(sub)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(x) => λ q => false_elim(stuck(x, z, s, q)),
             Lam(_) => λ q => refl,
@@ -477,9 +473,7 @@ theorem Tm::proj_k_inst(P: Option<Tm> → Type, stuck: (x: Nat) → (p: Proj) �
             Tm::proj_k(ev, p, y.map(λ (v: Tm) => v.inst(sub)))
                 = Tm::proj_k(ev, p, y).map(λ (v: Tm) => v.inst(sub)) {
         None => λ q => refl,
-        Some(v) => match v as λ y => P(Tm::proj_head(ev, p, y)) →
-                Tm::proj_head(ev, p, y.inst(sub))
-                    = Tm::proj_head(ev, p, y).map(λ (w: Tm) => w.inst(sub)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(x) => λ q => false_elim(stuck(x, p, q)),
             Lam(_) => λ q => refl,
@@ -514,8 +508,7 @@ fn Tm::Commutes(ev: Tm → Option<Tm>, sub: Nat → Tm) → Type { Tm::CommutesO
 theorem Tm::step_inst(ev: Tm → Option<Tm>, sub: Nat → Tm,
         closed: (a: Nat) → sub(a).Lc(0), value: (a: Nat) → sub(a).Value(),
         ih: Tm::Commutes(ev, sub)): Tm::Commutes(Tm::step(ev), sub) {
-    λ t => match t as λ y => Tm::Unblocked(Tm::step(ev, y)) →
-            Tm::step(ev, y.inst(sub)) = Tm::step(ev, y).map(λ (v: Tm) => v.inst(sub)) {
+    λ t => match t {
         Bv(_) => λ q => refl,
         Fv(a) => λ q => Tm::step_value(ev, sub(a), value(a)),
         Lam(_) => λ q => refl,
@@ -545,7 +538,7 @@ theorem Tm::step_inst(ev: Tm → Option<Tm>, sub: Nat → Tm,
 // result, and an instance runs out of fuel exactly where the probe did.
 theorem Tm::whnf_inst(sub: Nat → Tm, closed: (a: Nat) → sub(a).Lc(0),
         value: (a: Nat) → sub(a).Value(), fuel: Nat): Tm::Commutes(Tm::whnf(fuel), sub) {
-    match fuel as λ z => Tm::Commutes(Tm::whnf(z), sub) {
+    match fuel {
         Zero => λ t q => refl,
         Succ(g, ih) => Tm::step_inst(Tm::whnf(g), sub, closed, value, ih),
     }
@@ -581,7 +574,7 @@ theorem Tm::app_k_settled(ev: Tm → Option<Tm>, a: Tm, r: Option<Tm>,
         h: Tm::Settled(Tm::app_k(ev, a, r))): Tm::Settled(r) {
     match r as λ y => Tm::Settled(Tm::app_k(ev, a, y)) → Tm::Settled(y) {
         None => λ q => trivial,
-        Some(v) => match v as λ y => Tm::Settled(Tm::app_head(ev, a, y)) → Tm::Settled(Some(y)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(_) => λ q => absurd(q),
             Lam(_) => λ q => refl,
@@ -600,7 +593,7 @@ theorem Tm::rec_k_settled(ev: Tm → Option<Tm>, z, s: Tm, r: Option<Tm>,
         h: Tm::Settled(Tm::rec_k(ev, z, s, r))): Tm::Settled(r) {
     match r as λ y => Tm::Settled(Tm::rec_k(ev, z, s, y)) → Tm::Settled(y) {
         None => λ q => trivial,
-        Some(v) => match v as λ y => Tm::Settled(Tm::rec_head(ev, z, s, y)) → Tm::Settled(Some(y)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(_) => λ q => absurd(q),
             Lam(_) => λ q => refl,
@@ -619,7 +612,7 @@ theorem Tm::proj_k_settled(ev: Tm → Option<Tm>, p: Proj, r: Option<Tm>,
         h: Tm::Settled(Tm::proj_k(ev, p, r))): Tm::Settled(r) {
     match r as λ y => Tm::Settled(Tm::proj_k(ev, p, y)) → Tm::Settled(y) {
         None => λ q => trivial,
-        Some(v) => match v as λ y => Tm::Settled(Tm::proj_head(ev, p, y)) → Tm::Settled(Some(y)) {
+        Some(v) => match v {
             Bv(_) => λ q => refl,
             Fv(_) => λ q => absurd(q),
             Lam(_) => λ q => refl,
@@ -637,8 +630,7 @@ theorem Tm::proj_k_settled(ev: Tm → Option<Tm>, p: Proj, r: Option<Tm>,
 theorem Tm::step_inst_settled(ev: Tm → Option<Tm>, sub: Nat → Tm,
         closed: (a: Nat) → sub(a).Lc(0),
         ih: Tm::CommutesOn(Tm::Settled, ev, sub)): Tm::CommutesOn(Tm::Settled, Tm::step(ev), sub) {
-    λ t => match t as λ y => Tm::Settled(Tm::step(ev, y)) →
-            Tm::step(ev, y.inst(sub)) = Tm::step(ev, y).map(λ (v: Tm) => v.inst(sub)) {
+    λ t => match t {
         Bv(_) => λ q => refl,
         Fv(_) => λ q => absurd(q),
         Lam(_) => λ q => refl,
@@ -666,7 +658,7 @@ theorem Tm::step_inst_settled(ev: Tm → Option<Tm>, sub: Nat → Tm,
 // The probe lemma for any closed instantiation, on settled runs.
 theorem Tm::whnf_inst_settled(sub: Nat → Tm, closed: (a: Nat) → sub(a).Lc(0), fuel: Nat):
         Tm::CommutesOn(Tm::Settled, Tm::whnf(fuel), sub) {
-    match fuel as λ z => Tm::CommutesOn(Tm::Settled, Tm::whnf(z), sub) {
+    match fuel {
         Zero => λ t q => refl,
         Succ(g, ih) => Tm::step_inst_settled(Tm::whnf(g), sub, closed, ih),
     }
@@ -727,8 +719,8 @@ theorem Tm::probe_step(s: Tm, ground: s.Ground(), fuel: Nat,
       λ y p => Tm::whnf(fuel, App(App(y, kv), ihv))
           = Tm::whnf(fuel, Tm::probe(s)).map(λ (v: Tm) => v.inst(Tm::probe_sub(kv, ihv))),
       Tm::whnf_inst(Tm::probe_sub(kv, ihv),
-          λ a => match a as λ b => Tm::probe_sub(kv, ihv, b).Lc(0) { Zero => k_closed, Succ(_) => ih_closed },
-          λ a => match a as λ b => Tm::probe_sub(kv, ihv, b).Value() { Zero => k_value, Succ(_) => ih_value },
+          λ a => match a { Zero => k_closed, Succ(_) => ih_closed },
+          λ a => match a { Zero => k_value, Succ(_) => ih_value },
           fuel, Tm::probe(s), unblocked))
 }
 
@@ -743,6 +735,6 @@ theorem Tm::probe_step_settled(s: Tm, ground: s.Ground(), fuel: Nat,
       λ y p => Tm::whnf(fuel, App(App(y, kv), ihv))
           = Tm::whnf(fuel, Tm::probe(s)).map(λ (v: Tm) => v.inst(Tm::probe_sub(kv, ihv))),
       Tm::whnf_inst_settled(Tm::probe_sub(kv, ihv),
-          λ a => match a as λ b => Tm::probe_sub(kv, ihv, b).Lc(0) { Zero => k_closed, Succ(_) => ih_closed },
+          λ a => match a { Zero => k_closed, Succ(_) => ih_closed },
           fuel, Tm::probe(s), settled))
 }

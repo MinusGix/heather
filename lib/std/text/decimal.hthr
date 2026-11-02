@@ -31,14 +31,14 @@ fn decimal_line(n: Nat) → List<BitVec(8)> { decimal(n) ++ [BitVec::ofNat(10)] 
 
 theorem leb_yes(a, b: Nat, h: a <= b): a.leb(b) = True { bool::eq_true_of_is_true(a.leb(b), a.leb_complete(b, h)) }
 theorem leb_no(a, b: Nat, h: b < a): a.leb(b) = False {
-    (match a.leb(b) as λ found => (a.leb(b) = found) → found = False {
-        True => λ yes => {
+    match yes: a.leb(b) {
+        True => {
             let wrong: (a <= b) = a.leb_sound(b, rewrite(yes, trivial));
             let never: False = omega;
             false_elim(never)
         },
-        False => λ _ => refl,
-    })(refl)
+        False => refl,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -61,35 +61,35 @@ theorem decimal_more(fuel, m: Nat, big: 10 <= m):
 
 theorem decimal_two(fuel, m: Nat, lo: 10 <= m, hi: m <= 99, room: 1 <= fuel):
     decimal_digits(fuel, m) = [digit(m.div(10)), digit(m.mod(10))] {
-    (match fuel as λ f => (1 <= f) → decimal_digits(f, m) = [digit(m.div(10)), digit(m.mod(10))] {
-        Zero => λ room => false_elim(room),
-        Succ(rest) => λ _ => {
+    match fuel {
+        Zero => false_elim(room),
+        Succ(rest) => {
             let top: (m.div(10) <= 9) = m.div_lt_of_lt_mul(10, 10, hi);
             trans(decimal_more(rest, m, lo), @cong(λ (xs: List<BitVec(8)>) => xs ++ [digit(m.mod(10))],
                 decimal_digits(rest, m.div(10)), [digit(m.div(10))], decimal_one(rest, m.div(10), top)))
         },
-    })(room)
+    }
 }
 
 theorem decimal_three(fuel, m: Nat, lo: 100 <= m, hi: m <= 999, room: 2 <= fuel):
     decimal_digits(fuel, m) = [digit(m.div(10).div(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
-    (match fuel as λ f => (2 <= f) → decimal_digits(f, m) = [digit(m.div(10).div(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
-        Zero => λ room => false_elim(room),
-        Succ(rest) => λ room => {
+    match fuel {
+        Zero => false_elim(room),
+        Succ(rest) => {
             let lo2: (10 <= m.div(10)) = m.le_div_of_mul_le(10, 10, lo);
             let hi2: (m.div(10) <= 99) = m.div_lt_of_lt_mul(10, 100, hi);
             let room2: (1 <= rest) = omega;
             trans(decimal_more(rest, m, omega), @cong(λ (xs: List<BitVec(8)>) => xs ++ [digit(m.mod(10))],
                 decimal_digits(rest, m.div(10)), [digit(m.div(10).div(10)), digit(m.div(10).mod(10))], decimal_two(rest, m.div(10), lo2, hi2, room2)))
         },
-    })(room)
+    }
 }
 
 theorem decimal_four(fuel, m: Nat, lo: 1000 <= m, hi: m <= 9999, room: 3 <= fuel):
     decimal_digits(fuel, m) = [digit(m.div(10).div(10).div(10)), digit(m.div(10).div(10).mod(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
-    (match fuel as λ f => (3 <= f) → decimal_digits(f, m) = [digit(m.div(10).div(10).div(10)), digit(m.div(10).div(10).mod(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
-        Zero => λ room => false_elim(room),
-        Succ(rest) => λ room => {
+    match fuel {
+        Zero => false_elim(room),
+        Succ(rest) => {
             let lo2: (100 <= m.div(10)) = m.le_div_of_mul_le(10, 100, lo);
             let hi2: (m.div(10) <= 999) = m.div_lt_of_lt_mul(10, 1000, hi);
             let room2: (2 <= rest) = omega;
@@ -98,7 +98,7 @@ theorem decimal_four(fuel, m: Nat, lo: 1000 <= m, hi: m <= 9999, room: 3 <= fuel
                 [digit(m.div(10).div(10).div(10)), digit(m.div(10).div(10).mod(10)), digit(m.div(10).mod(10))],
                 decimal_three(rest, m.div(10), lo2, hi2, room2)))
         },
-    })(room)
+    }
 }
 
 // `n` divided by ten `k` times.
@@ -132,14 +132,13 @@ theorem tens_lead(j, m: Nat, lead: 1 <= tens(j, m.div(10))): 10 <= m {
 fn Leads(k, m: Nat) → Type { match k { Zero => True, Succ(_) => 1 <= tens(k, m) } }
 
 theorem decimal_places(k: Nat): (fuel, m: Nat) → k <= fuel → tens(k, m) <= 9 → Leads(k, m) → decimal_digits(fuel, m) = places(Succ(k), m) {
-    match k as λ w => (fuel, m: Nat) → w <= fuel → tens(w, m) <= 9 → Leads(w, m) → decimal_digits(fuel, m) = places(Succ(w), m) {
+    match k {
         Zero => λ fuel m room top lead => {
             let single: (m <= 9) = top;
             let below: (m < 10) = omega;
             trans(decimal_one(fuel, m, single), cong_fn<Nat, List<BitVec(8)>>(λ d => [digit(d)], sym(Nat::mod_of_lt(m, 10, below))))
         },
-        Succ(j) => λ fuel m => match fuel as λ f => Succ(j) <= f → tens(Succ(j), m) <= 9 → Leads(Succ(j), m) →
-                decimal_digits(f, m) = places(Succ(Succ(j)), m) {
+        Succ(j) => λ fuel m => match fuel {
             Zero => λ room => false_elim(room),
             Succ(rest) => λ room top lead => {
                 let inner: Leads(j, m.div(10)) = match j as λ i => (1 <= tens(i, m.div(10))) → Leads(i, m.div(10)) {
@@ -154,14 +153,14 @@ theorem decimal_places(k: Nat): (fuel, m: Nat) → k <= fuel → tens(k, m) <= 9
 }
 
 theorem ten_pow_positive(k: Nat): 0 < Nat::pow(10, k) {
-    match k as λ w => 0 < Nat::pow(10, w) {
+    match k {
         Zero => trivial,
         Succ(j) => { let below = ten_pow_positive(j); let grown: (0 < Nat::pow(10, j) * 10) = omega; grown },
     }
 }
 // `tens` is division by a power of ten.
 theorem tens_is_div(k: Nat): (n: Nat) → tens(k, n) = n.div(Nat::pow(10, k)) {
-    match k as λ w => (n: Nat) → tens(w, n) = n.div(Nat::pow(10, w)) {
+    match k {
         Zero => λ n => sym(Nat::div_one(n)),
         Succ(j) => λ n => trans(tens_is_div(j, n.div(10)),
             trans(Nat::div_div(n, 10, Nat::pow(10, j), b_pos := ten_pow_positive(j)),

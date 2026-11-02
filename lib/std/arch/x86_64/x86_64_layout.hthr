@@ -56,20 +56,16 @@ theorem layout_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64),
     CodeResident(fetch, memory, layout_code(pieces, last), next_rip(origin, at)) →
     (i: Nat) → CodeResident(fetch, memory, layout_piece(pieces, last, i), next_rip(origin, layout_at(at, lens, i))) {
     match pieces {
-        Nil => λ lens measured at resident i => match i as λ k => CodeResident(fetch, memory, layout_piece(Nil, last, k),
-                next_rip(origin, layout_at(at, lens, k))) {
+        Nil => λ lens measured at resident i => match i {
             Zero => resident,
             Succ(_) => trivial,
         },
-        Cons(piece, rest) => λ lens => match lens as λ ls => LayoutMeasured(Cons(piece, rest), ls) → (at: Nat) →
-                CodeResident(fetch, memory, layout_code(Cons(piece, rest), last), next_rip(origin, at)) →
-                (i: Nat) → CodeResident(fetch, memory, layout_piece(Cons(piece, rest), last, i), next_rip(origin, layout_at(at, ls, i))) {
+        Cons(piece, rest) => λ lens => match lens {
             Nil => λ measured => false_elim(measured),
             Cons(len, more) => λ measured at resident => {
                 let parts = resident_split_at(fetch, memory, piece, layout_code(rest, last), origin, at, resident);
                 let moved = rewrite(measured.left, in := parts.right);
-                λ i => match i as λ k => CodeResident(fetch, memory, layout_piece(Cons(piece, rest), last, k),
-                        next_rip(origin, layout_at(at, Cons(len, more), k))) {
+                λ i => match i {
                     Zero => parts.left,
                     Succ(k) => layout_resident(fetch, memory, origin, last, rest, more, measured.right, at + len, moved, k),
                 }
@@ -83,12 +79,11 @@ theorem layout_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64),
 theorem layout_len_from(last: List<BitVec(8)>, pieces: List<List<BitVec(8)>>):
     (lens: List<Nat>) → LayoutMeasured(pieces, lens) → (at: Nat) → at + layout_code(pieces, last).len() = layout_end(at, lens) + last.len() {
     match pieces {
-        Nil => λ lens => match lens as λ ls => LayoutMeasured(Nil, ls) → (at: Nat) → at + last.len() = layout_end(at, ls) + last.len() {
+        Nil => λ lens => match lens {
             Nil => λ measured at => refl,
             Cons(_, _) => λ measured => false_elim(measured),
         },
-        Cons(piece, rest) => λ lens => match lens as λ ls => LayoutMeasured(Cons(piece, rest), ls) → (at: Nat) →
-                at + (piece ++ layout_code(rest, last)).len() = layout_end(at, ls) + last.len() {
+        Cons(piece, rest) => λ lens => match lens {
             Nil => λ measured => false_elim(measured),
             Cons(len, more) => λ measured at => {
                 let r = layout_code(rest, last).len();
@@ -123,8 +118,8 @@ theorem chunks_same(n: Nat, chunks: List<List<BitVec(8)>>): (bytes: List<BitVec(
 // A layout placed further on: every offset moves by as much.
 theorem layout_shift(lens: List<Nat>): (at, base, i: Nat) → layout_at(at + base, lens, i) = at + layout_at(base, lens, i) {
     match lens {
-        Nil => λ at base i => match i as λ k => layout_at(at + base, Nil, k) = at + layout_at(base, Nil, k) { Zero => refl, Succ(_) => refl },
-        Cons(len, more) => λ at base i => match i as λ k => layout_at(at + base, Cons(len, more), k) = at + layout_at(base, Cons(len, more), k) {
+        Nil => λ at base i => match i { Zero => refl, Succ(_) => refl },
+        Cons(len, more) => λ at base i => match i {
             Zero => refl,
             Succ(k) => trans(cong_fn<Nat, Nat>(λ b => layout_at(b, more, k), Nat::add_assoc(at, base, len)), layout_shift(more, at, base + len, k)),
         },

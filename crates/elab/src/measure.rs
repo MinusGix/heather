@@ -103,6 +103,39 @@ pub(crate) struct Lowered {
 pub(crate) struct Family {
     pub(crate) obligations: Vec<Lowered>,
     pub(crate) decls: Vec<Lowered>,
+    /// How many matches the lowering could give an equation of its own
+    /// ([`AutoEqs`]), numbered in walk order.
+    pub(crate) auto_candidates: usize,
+}
+
+/// Which `match`es on a computed scrutinee, with a recursive call in an arm
+/// and no written equation, the body rewrite gives the equation
+/// `__dec_meqN : e = pattern` (docs/dependent-match-compiler-design.md §4,
+/// §8). A lifted obligation is stated over the telescope this rewrite
+/// writes, not over the elaborator's context, so its arm's equation has to
+/// be a binder there. The equation stays only where an obligation reads
+/// it: the declaration is lowered with [`AutoEqs::All`], and again with
+/// [`AutoEqs::Only`] the ones its lifted obligations quantify.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AutoEqs {
+    Off,
+    All,
+    Only(Vec<usize>),
+}
+
+impl AutoEqs {
+    fn admits(&self, n: usize) -> bool {
+        match self {
+            AutoEqs::Off => false,
+            AutoEqs::All => true,
+            AutoEqs::Only(ns) => ns.contains(&n),
+        }
+    }
+}
+
+/// The candidate number of an [`AutoEqs`] equation binder.
+pub(crate) fn auto_eq_index(name: &str) -> Option<usize> {
+    name.strip_prefix("__dec_meq")?.parse().ok()
 }
 
 /// Type information supplied by ordinary elaboration: constructor fields and
@@ -158,12 +191,13 @@ pub(crate) fn select_scope<'a>(scope: &'a [Binder], goal: &Ty, evidence: Option<
 
 pub(crate) fn arithmetic_fact(ty: &Ty, goal: &Ty, scope: &[Binder]) -> bool {
     let shares = || scope.iter().any(|b| mentions_ty(goal, &b.name) && mentions_ty(ty, &b.name));
-    // A `match h: n.leb(m) { … }` arm's equation, which `omega` reads as the
-    // guard it states (issues/decreases-measure-record-field-unspelled.md).
-    if let TyKind::Eq(_, rhs) = &ty.kind {
-        let literal = matches!(&rhs.kind, ExprKind::Var(name)
-            if matches!(name.rsplit("::").next(), Some("True" | "False")));
-        return literal && shares();
+    // A `match h: e { … }` arm's equation: `omega` reads `n.leb(m) = False`
+    // as the guard it states (issues/decreases-measure-record-field-unspelled.md)
+    // and `n = Succ(k)` as arithmetic. Any arm equation is a candidate; the
+    // trial elaboration decides whether it is used
+    // (docs/dependent-match-compiler-design.md §8).
+    if let TyKind::Eq(..) = &ty.kind {
+        return shares();
     }
     let TyKind::OfExpr(e) = &ty.kind else { return false; };
     let ExprKind::App { head, .. } = &e.kind else { return false; };
@@ -551,6 +585,7 @@ pub(crate) fn lower(
     omega_available: bool,
     tys: &dyn BinderTys,
     lift: bool,
+    auto: &AutoEqs,
 ) -> R<Family> {
     let span = measure.span;
     let params = value_params(decl);
@@ -570,6 +605,9 @@ pub(crate) fn lower(
         next: 1,
         eqs: 0,
         refinements: Vec::new(),
+        scrut_aliases: Vec::new(),
+        auto_eqs: auto.clone(),
+        auto_n: 0,
         scope: scope_of(decl),
         sites: Vec::new(),
         obls: Vec::new(),
@@ -581,6 +619,7 @@ pub(crate) fn lower(
     if let Some(error) = state.error.take() {
         return Err(error);
     }
+    let auto_candidates = state.auto_n;
     let sites = state.sites;
     let obligations: Vec<Lowered> = state.obls.into_iter().flatten().collect();
     // A lifted obligation takes its `on` with it; every other discharge —
@@ -760,6 +799,7 @@ pub(crate) fn lower(
     };
 
     Ok(Family {
+        auto_candidates,
         obligations,
         decls: vec![
             Lowered {
@@ -930,6 +970,9 @@ pub(crate) fn lower_group(
             next: 1,
             eqs: 0,
             refinements: Vec::new(),
+            scrut_aliases: Vec::new(),
+            auto_eqs: AutoEqs::Off,
+            auto_n: 0,
             scope: scope_of(m.decl),
             sites: Vec::new(),
             obls: Vec::new(),
@@ -1208,6 +1251,7 @@ pub(crate) fn lower_group(
     Ok(Family {
         obligations,
         decls,
+        auto_candidates: 0,
     })
 }
 
@@ -1281,6 +1325,16 @@ struct Rewrite<'a> {
     /// reader expects inside the arm — and transported back through the
     /// equations to the ih's own hypothesis (§3 of the design).
     refinements: Vec<(String, Expr, String)>,
+    /// The computed scrutinees this walk let-bound as `__dec_scrut_N`, with
+    /// the expression each stands for. A `match` on one states its arms'
+    /// equations about the expression, not the name: a lifted `f#obl_N`
+    /// quantifies the equation without the `let`, and there the name would
+    /// be an unrelated parameter (docs/dependent-match-compiler-design.md §8).
+    scrut_aliases: Vec<(String, Expr)>,
+    /// [`AutoEqs`]: which candidates get an equation, and the next
+    /// candidate's number.
+    auto_eqs: AutoEqs,
+    auto_n: usize,
     /// The binders in scope at the node being walked, outermost first.
     scope: Vec<Binder>,
     sites: Vec<(Span, String, String, Option<String>)>,
@@ -1290,7 +1344,7 @@ struct Rewrite<'a> {
     error: Option<crate::ElabError>,
 }
 
-impl Rewrite<'_> {
+impl<'a> Rewrite<'a> {
     fn fail(&mut self, msg: String, span: Span) {
         if self.error.is_none() {
             self.error = Some(crate::ElabError::Elab { msg, span });
@@ -1796,6 +1850,77 @@ impl Rewrite<'_> {
         stages
     }
 
+    /// A copy whose output is read and whose bookkeeping is thrown away: it
+    /// spells a subterm exactly as `f#body` spells it (same obligation
+    /// numbering, same transports) without advancing this walk.
+    /// Whether a match is an [`AutoEqs`] candidate: a plain `match`
+    /// without an equation binding, on a computed scrutinee (let-aliased
+    /// by the time it is walked), with an arm that calls a member.
+    fn auto_candidate(&self, form: MatchForm, scrut: &Expr, eqbind: &Option<String>, arms: &[Arm]) -> bool {
+        form == MatchForm::Match
+            && eqbind.is_none()
+            && matches!(&scrut.kind, ExprKind::Var(v) if self.scrut_aliases.iter().any(|(n, _)| n == v))
+            && arms.iter().any(|a| self.calls_member(&a.body))
+    }
+
+    /// Whether `e` calls a member of this recursion.
+    pub(crate) fn calls_member(&self, e: &Expr) -> bool {
+        let mut found = false;
+        crate::surface::walk_expr(e, &mut |x| {
+            if let ExprKind::App { head, .. } = &x.kind {
+                let callee = match &head.kind {
+                    ExprKind::TyApp { head, .. } => &head.kind,
+                    other => other,
+                };
+                if matches!(callee, ExprKind::Var(n) if self.members.iter().any(|m| &m.name == n)) {
+                    found = true;
+                }
+            }
+        });
+        found
+    }
+
+    fn fork(&self) -> Rewrite<'a> {
+        Rewrite {
+            decl: self.decl,
+            name: self.name,
+            params: self.params,
+            measure: self.measure,
+            ons: self.ons,
+            omega_available: self.omega_available,
+            tys: self.tys,
+            lift: self.lift,
+            members: self.members,
+            caller: self.caller,
+            next: self.next,
+            eqs: self.eqs,
+            refinements: self.refinements.clone(),
+            scrut_aliases: self.scrut_aliases.clone(),
+            auto_eqs: self.auto_eqs.clone(),
+            auto_n: self.auto_n,
+            scope: self.scope.clone(),
+            sites: self.sites.clone(),
+            obls: self.obls.iter().map(|_| None).collect(),
+            error: None,
+        }
+    }
+
+    /// The `__dec_scrut_N` name the `match` arm of [`Self::expr`] gives a
+    /// computed scrutinee, bound in scope as that arm binds it. `None` where
+    /// that arm binds nothing (an untypable scrutinee).
+    fn bind_scrut_alias(&mut self, node: &Expr, scrut: &Expr) -> Option<String> {
+        let ty = self.scrut_ty(scrut)?;
+        let mut name = format!("__dec_scrut_{}", scrut.span.start);
+        while self.scope.iter().any(|b| b.name == name)
+            || mentions_context(node, &name)
+            || self.ons.iter().any(|o| mentions_context(&o.expr, &name))
+        { name.push('_'); }
+        let value = (!self.members.iter().any(|m| mentions_context(scrut, &m.name))).then(|| scrut.clone());
+        self.scope.push(Binder { name: name.clone(), ty: Some(ty), value });
+        self.scrut_aliases.push((name.clone(), scrut.clone()));
+        Some(name)
+    }
+
     /// A `match` on a variable the (refined) measure mentions is given an
     /// equation binding, so that each arm can state the obligation at the
     /// pattern and transport it back (module docs). Arms whose patterns are
@@ -1929,6 +2054,7 @@ impl Rewrite<'_> {
                     if let ExprKind::Match { scrut, .. } = &mut matched.kind {
                         **scrut = var(&name, span);
                     }
+                    self.scrut_aliases.push((name.clone(), (**scrut).clone()));
                     return self.expr(&Expr { kind: ExprKind::Block(Box::new(Block {
                         stmts: vec![Stmt::Let { name, ty: Some(ty), expr: (**scrut).clone(), span, opaque: false }],
                         result: Box::new(matched), ons: Vec::new(), span,
@@ -1942,7 +2068,17 @@ impl Rewrite<'_> {
                 if refine.is_some() {
                     self.eqs += 1;
                 }
-                let eqbind = eqbind.clone().or(refine.clone());
+                let mut eqbind = eqbind.clone().or(refine.clone());
+                // A match on a computed scrutinee whose arms recurse may
+                // owe its arms the equation (design §4): number it, and bind
+                // one where the policy admits it.
+                if self.auto_candidate(*form, scrut, &eqbind, arms) {
+                    let n = self.auto_n;
+                    self.auto_n += 1;
+                    if self.auto_eqs.admits(n) {
+                        eqbind = Some(format!("__dec_meq{n}"));
+                    }
+                }
                 let scrut_ty = self.scrut_ty(scrut);
                 let arms = arms
                     .iter()
@@ -1957,7 +2093,15 @@ impl Rewrite<'_> {
                         let n = self.scope.len();
                         self.bind_arm(a, scrut_ty.as_ref());
                         if let Some(eq) = &eqbind {
-                            let ty = pattern_expr(a, span).map(|p| eq_ty((**scrut).clone(), p, span));
+                            // Stated about the alias's value, so that a
+                            // query reading it as a fact (`omega` over
+                            // `leb(n, 1) = False`) sees its locals.
+                            let stated = match &scrut.kind {
+                                ExprKind::Var(v) => self.scrut_aliases.iter().rev()
+                                    .find(|(n, _)| n == v).map(|(_, e)| e.clone()),
+                                _ => None,
+                            }.unwrap_or_else(|| (**scrut).clone());
+                            let ty = pattern_expr(a, span).map(|p| eq_ty(stated.clone(), p, span));
                             self.scope.push(Binder { name: eq.clone(), ty, value: None });
                         }
                         let mut arm = a.clone();
@@ -2582,6 +2726,13 @@ struct Respell<'a> {
     lets: Vec<Stmt>,
     fresh: usize,
     span: Span,
+    /// Inside an arm of a match on a computed scrutinee or with an equation
+    /// binding (`convoy_at_anchor`), the anchors are no longer the whole
+    /// declaration: `f#rec(…)` does not reduce into the arm, because its
+    /// scrutinee is stuck. They are the arm's own bodies instead: the
+    /// rewritten one (`f#body`'s spelling, with `__dec_k`/`__dec_ih`/`__dec_h`
+    /// still free) and the source one. `None` at the top.
+    anchors: Option<(Expr, Expr)>,
 }
 
 impl Respell<'_> {
@@ -2621,6 +2772,9 @@ impl Respell<'_> {
     /// The left anchor: `f#body(a, g1, x̄, h1)`, or `f#rec(Succ(e), x̄, p)`.
     fn anchor_l(&self, ext: Option<(&str, &Expr)>, hyp: &Expr) -> Expr {
         let span = self.span;
+        if let Some((rewritten, _)) = &self.anchors {
+            return self.inferable(self.sigma_apply_ext(&self.instantiate(rewritten, hyp, false), ext), ext);
+        }
         let mut args = match self.mode {
             Mode::Ext => vec![var(A, span), var(G1, span)],
             Mode::Unfold => vec![succ(self.measure_at(ext), span)],
@@ -2639,6 +2793,13 @@ impl Respell<'_> {
     /// binder reaches it).
     fn anchor_r(&self, ext: Option<(&str, &Expr)>, hyp: &Expr) -> Expr {
         let span = self.span;
+        if let Some((rewritten, source)) = &self.anchors {
+            let at = match self.mode {
+                Mode::Ext => self.sigma_apply_ext(&self.instantiate(rewritten, hyp, true), ext),
+                Mode::Unfold => self.sigma_apply_ext(source, ext),
+            };
+            return self.inferable(at, ext);
+        }
         match self.mode {
             Mode::Ext => {
                 let mut args = vec![var(B, span), var(G2, span)];
@@ -2648,6 +2809,51 @@ impl Respell<'_> {
             }
             Mode::Unfold => self.sigma_apply_ext(self.source, ext),
         }
+    }
+
+    /// A piece of `f#body`'s body at one anchor: `__dec_k`, `__dec_ih` and
+    /// `__dec_h` replaced by what that anchor applies `f#body` to. For
+    /// `f_unfold`'s left anchor `f#rec(Succ(e), x̄, p)` that is the measure,
+    /// the recursor at it, and `p`; for `f#ext` it is `a, g1, h1` on the left
+    /// and `b, g2, h2` on the right.
+    fn instantiate(&self, rewritten: &Expr, hyp: &Expr, right: bool) -> Expr {
+        let span = self.span;
+        let (k, ih) = match self.mode {
+            Mode::Ext if right => (var(B, span), var(G2, span)),
+            Mode::Ext => (var(A, span), var(G1, span)),
+            // The recursor at the bound, applied to nothing more: every use
+            // of `__dec_ih` in the rewritten body is a call, so this is
+            // `f#rec(e, ȳ, p)` at each, with no λ to annotate.
+            Mode::Unfold => (
+                self.rw.measure.clone(),
+                app(self.cref(&rec_name(&self.decl.name)), vec![self.rw.measure.clone()], span),
+            ),
+        };
+        subst(rewritten, &[(K, &k), (IH, &ih), (H, hyp)], &mut Vec::new())
+    }
+
+    /// An arm body standing as an anchor sits on one side of the motive's
+    /// `=`, an inference position: a plain `match` there is given the
+    /// constant motive at the result type it is checked against in the arm.
+    fn inferable(&self, e: Expr, ext: Option<(&str, &Expr)>) -> Expr {
+        let span = self.span;
+        let mut e = e;
+        if let ExprKind::Match { motive: motive @ None, .. } = &mut e.kind {
+            let mut ty = self.sigma_apply_ty(&self.decl.result);
+            if let Some((v, pat)) = ext {
+                ty = subst_surface_ty(&ty, v, pat);
+            }
+            *motive = Some(Box::new(lam(&["_"], ty_lit(ty, span), span)));
+        }
+        e
+    }
+
+    fn sigma_apply_ty(&self, ty: &Ty) -> Ty {
+        let mut out = ty.clone();
+        for (v, pat) in &self.sigma {
+            out = subst_surface_ty(&out, v, pat);
+        }
+        out
     }
 
     /// The generalized bound hypotheses at measure `m`, in `hyps` order.
@@ -2813,12 +3019,21 @@ impl Respell<'_> {
                 // A computed scrutinee, or an equation binding: neither side
                 // reduces into an arm, so both are spelled out (§3's
                 // amendment; issues/decreases-unfold-convoy-scrutinee.md).
+                // A computed scrutinee with no equation written goes through
+                // the alias the rewrite gave it, which carries its
+                // [`AutoEqs`] equation where an obligation reads one.
+                if eqbind.is_none() && !matches!(scrut.kind, ExprKind::Var(_)) && !self.has_self_call(scrut) {
+                    return self.convoy_at_anchor(e, scrut, None, arms);
+                }
                 if eqbind.is_some() || !matches!(scrut.kind, ExprKind::Var(_)) {
                     return self.match_spelled(e, scrut, eqbind.as_deref(), arms);
                 }
                 let ExprKind::Var(v) = &scrut.kind else {
-                    return Err("a `match` whose scrutinee is not a variable".into());
+                    return self.convoy_at_anchor(e, scrut, eqbind.as_deref(), arms);
                 };
+                if eqbind.is_some() {
+                    return self.convoy_at_anchor(e, scrut, eqbind.as_deref(), arms);
+                }
                 if self.sigma.iter().any(|(n, _)| n == v) {
                     return Err("a second `match` on an already-refined variable".into());
                 }
@@ -2871,7 +3086,6 @@ impl Respell<'_> {
         } else {
             None
         };
-        let matched = alias.as_ref().map(|n| var(n, span)).unwrap_or_else(|| (*scrut).clone());
         let mut walked = Vec::new();
         for a in arms {
             if a.default {
@@ -2882,7 +3096,8 @@ impl Respell<'_> {
             let depth = self.rw.scope.len();
             self.rw.bind_arm(a, scrut_ty.as_ref());
             if let Some(eq) = eqbind {
-                let ty = pattern_expr(a, span).map(|p| eq_ty(matched.clone(), p, span));
+                // About the scrutinee itself, as `Rewrite::expr` states it.
+                let ty = pattern_expr(a, span).map(|p| eq_ty((*scrut).clone(), p, span));
                 self.rw.scope.push(Binder { name: eq.to_string(), ty, value: None });
             }
             let inner = self.walk(&a.body, false);
@@ -2987,7 +3202,8 @@ impl Respell<'_> {
         let ext = Some((v, &sv));
         let m_at_s = self.measure_at(ext);
         let generalize = mentions(&m_at_s, &s);
-        if !generalize && !self.args(ext).iter().any(|a| mentions(a, &s)) {
+        let in_arm = self.anchors.as_ref().is_some_and(|(l, r)| mentions(l, v) || mentions(r, v));
+        if !generalize && !in_arm && !self.args(ext).iter().any(|a| mentions(a, &s)) {
             return Err(
                 "a `match` on a variable neither the measure nor an argument mentions".into(),
             );
@@ -3083,6 +3299,233 @@ impl Respell<'_> {
         Ok(Triple {
             lhs: self.anchor_l(None, &outer_hyps[0]),
             rhs: self.anchor_r(None, outer_hyps.last().expect("a hypothesis")),
+            proof,
+        })
+    }
+
+    /// A `match` at the anchor whose scrutinee is computed, or which binds its
+    /// equation (docs/dependent-match-compiler-design.md §8). Neither anchor
+    /// reduces into an arm, because the scrutinee is stuck, so both sides
+    /// are spelled out as the match itself at a fresh scrutinee `s`, and the
+    /// match is re-matched on `s`:
+    ///
+    /// ```text
+    /// (match e as λ s => (q: e = s) → L(s, q) = R(s, q) {
+    ///     C(x̄) => λ h => ⟨the arm's walk, its anchors the two arm bodies⟩
+    /// })(refl)
+    /// ```
+    ///
+    /// `L(s, q)` is `f#body`'s own spelling of the match (a fork of the
+    /// rewrite renders it) at the anchor's arguments, convoyed at `s` and
+    /// applied to `q`; `R(s, q)` is the source's. At `s := e, q := refl` each
+    /// is its side's match again, and at `C(x̄)` each steps to its arm. A match
+    /// with no equation binding is the same without `q`.
+    fn convoy_at_anchor(
+        &mut self,
+        node: &Expr,
+        scrut: &Expr,
+        eq: Option<&str>,
+        arms: &[Arm],
+    ) -> Result<Triple, String> {
+        let span = self.span;
+        if arms.iter().any(|a| a.default) {
+            return Err("a `_` arm around a recursive call".into());
+        }
+        // `f#body`'s spelling of this match, with its `__dec_scrut_N` let (if
+        // any) substituted back: the let is an alias, so the match is on the
+        // expression either way.
+        let rendered = self.rw.fork().expr(node);
+        let rendered = match &rendered.kind {
+            ExprKind::Block(b) if b.ons.is_empty() => {
+                let mut result = (*b.result).clone();
+                for st in b.stmts.iter().rev() {
+                    let Stmt::Let { name, expr, .. } = st else {
+                        return Err("a rendered `match` this walk cannot read".into());
+                    };
+                    result = subst(&result, &[(name.as_str(), expr)], &mut Vec::new());
+                }
+                result
+            }
+            _ => rendered,
+        };
+        let ExprKind::Match { scrut: r_scrut, arms: r_arms, eqbind: r_eq, .. } = &rendered.kind else {
+            return Err("a rendered `match` this walk cannot read".into());
+        };
+        // `f#body`'s spelling may bind an equation the source does not (an
+        // [`AutoEqs`] candidate a lifted obligation reads): each side's
+        // convoy carries its own, and the proof generalizes over `q` when
+        // either does.
+        let eq_l: Option<String> = r_eq.clone();
+        let eq_r: Option<String> = match self.mode {
+            Mode::Ext => eq_l.clone(),
+            Mode::Unfold => eq.map(str::to_string),
+        };
+        let eq_any: Option<String> = eq_l.clone().or_else(|| eq_r.clone());
+        if r_arms.len() != arms.len() {
+            return Err("a rendered `match` this walk cannot read".into());
+        }
+        // The enclosing refinements' equations, which the rendered spelling
+        // still names: bound to `refl` at their patterns, as a leaf binds them
+        // (§5 of the unfolding note), by `let`s around this proof, so that the
+        // motive below can mention them too.
+        let mut eq_map: Vec<(String, Expr)> = Vec::new();
+        for (_, pat, eq_name) in self.rw.refinements.clone() {
+            let at = self.sigma_apply(&pat);
+            let name = self.fresh("eq");
+            self.lets.push(Stmt::Let {
+                name: name.clone(),
+                ty: Some(eq_ty(at.clone(), at, span)),
+                expr: Expr { kind: ExprKind::Refl, span },
+                span,
+                opaque: false,
+            });
+            eq_map.push((eq_name, var(&name, span)));
+        }
+        let rebind = |e: &Expr| {
+            let map: Vec<(&str, &Expr)> = eq_map.iter().map(|(n, v)| (n.as_str(), v)).collect();
+            subst(e, &map, &mut Vec::new())
+        };
+        let result_ty = self.sigma_apply_ty(&self.decl.result);
+        let hyp_l = self.hyps[0].clone();
+        let hyp_r = self.hyps.last().expect("a hypothesis per side").clone();
+        let e_src = self.sigma_apply(scrut);
+        let e_rw = rebind(&self.sigma_apply(r_scrut));
+        let z = self.fresh("z");
+        // `(match s as λ z => (e = z) → T { C(x̄) => λ h => b })(q)`, or the
+        // same without the equation.
+        let conv = |on: &Expr, e: &Expr, bodies: Vec<Expr>, eq: Option<&str>, q: Option<&Expr>| {
+            let q = eq.and(q);
+            let motive_ty = match eq {
+                Some(_) => arrow(None, eq_ty(e.clone(), var(&z, span), span), result_ty.clone(), span),
+                None => result_ty.clone(),
+            };
+            let conv_arms = arms
+                .iter()
+                .zip(bodies)
+                .map(|(a, b)| Arm {
+                    ctor: a.ctor.clone(),
+                    default: false,
+                    binders: a.binders.clone(),
+                    body: match eq {
+                        Some(h) => lam(&[h], b, span),
+                        None => b,
+                    },
+                    span: a.span,
+                })
+                .collect();
+            let m = Expr {
+                kind: ExprKind::Match {
+                    form: MatchForm::Match,
+                    generated: false,
+                    scrut: Box::new(on.clone()),
+                    eqbind: None,
+                    motive: Some(Box::new(lam(&[&z], ty_lit(motive_ty, span), span))),
+                    arms: conv_arms,
+                },
+                span,
+            };
+            match q {
+                Some(q) => app(m, vec![q.clone()], span),
+                None => m,
+            }
+        };
+        let l_bodies: Vec<Expr> = r_arms
+            .iter()
+            .map(|a| rebind(&self.sigma_apply(&self.instantiate(&a.body, &hyp_l, false))))
+            .collect();
+        let r_bodies: Vec<Expr> = match self.mode {
+            Mode::Ext => r_arms
+                .iter()
+                .map(|a| rebind(&self.sigma_apply(&self.instantiate(&a.body, &hyp_r, true))))
+                .collect(),
+            Mode::Unfold => arms.iter().map(|a| self.sigma_apply(&a.body)).collect(),
+        };
+        let s = self.fresh("s");
+        let q = self.fresh("q");
+        let (sv, qv) = (var(&s, span), var(&q, span));
+        let qa = eq_any.as_ref().map(|_| &qv);
+        let goal = eq_ty(
+            conv(&sv, &e_rw, l_bodies, eq_l.as_deref(), qa),
+            conv(&sv, &e_src, r_bodies, eq_r.as_deref(), qa),
+            span,
+        );
+        let goal = match &eq_any {
+            Some(_) => arrow(Some(q.clone()), eq_ty(e_src.clone(), sv.clone(), span), goal, span),
+            None => goal,
+        };
+        let motive = lam(&[&s], ty_lit(goal, span), span);
+        // The rewrite's bookkeeping, as its own `match` arm keeps it: the
+        // alias, then per arm the pattern's binders and the equation.
+        let depth = self.rw.scope.len();
+        if !matches!(scrut.kind, ExprKind::Var(_))
+            && let Some(alias) = self.rw.bind_scrut_alias(node, scrut)
+            && self.rw.auto_candidate(MatchForm::Match, &var(&alias, span), &eq.map(str::to_string), arms)
+        {
+            // The rewrite numbered this candidate as it rendered it; keep
+            // the nested ones' numbers in step.
+            self.rw.auto_n += 1;
+        }
+        let scrut_ty = self.rw.scrut_ty(scrut);
+        let stated = match &scrut.kind {
+            ExprKind::Var(v) => self.rw.scrut_aliases.iter().rev()
+                .find(|(n, _)| n == v).map(|(_, e)| e.clone()),
+            _ => None,
+        }
+        .unwrap_or_else(|| scrut.clone());
+        let mut out = Vec::new();
+        for (a, ra) in arms.iter().zip(r_arms) {
+            let arm_depth = self.rw.scope.len();
+            self.rw.bind_arm(a, scrut_ty.as_ref());
+            if let Some(h) = &eq_any {
+                let ty = pattern_expr(a, span).map(|p| eq_ty(stated.clone(), p, span));
+                self.rw.scope.push(Binder { name: h.to_string(), ty, value: None });
+            }
+            let saved_lets = std::mem::take(&mut self.lets);
+            let saved_anchors = self.anchors.replace((rebind(&ra.body), a.body.clone()));
+            let inner = self.walk(&a.body, true);
+            self.anchors = saved_anchors;
+            let stmts = std::mem::replace(&mut self.lets, saved_lets);
+            self.rw.scope.truncate(arm_depth);
+            let inner = inner?;
+            let proof = Expr {
+                kind: ExprKind::Block(Box::new(Block {
+                    stmts,
+                    result: Box::new(inner.proof),
+                    ons: Vec::new(),
+                    span,
+                })),
+                span,
+            };
+            out.push(Arm {
+                ctor: a.ctor.clone(),
+                default: false,
+                binders: a.binders.clone(),
+                body: match &eq_any {
+                    Some(h) => lam(&[h], proof, span),
+                    None => proof,
+                },
+                span: a.span,
+            });
+        }
+        self.rw.scope.truncate(depth);
+        let matched = Expr {
+            kind: ExprKind::Match {
+                form: MatchForm::Match,
+                generated: false,
+                scrut: Box::new(e_src.clone()),
+                eqbind: None,
+                motive: Some(Box::new(motive)),
+                arms: out,
+            },
+            span,
+        };
+        let proof = match &eq_any {
+            Some(_) => app(matched, vec![Expr { kind: ExprKind::Refl, span }], span),
+            None => matched,
+        };
+        Ok(Triple {
+            lhs: self.anchor_l(None, &hyp_l),
+            rhs: self.anchor_r(None, &hyp_r),
             proof,
         })
     }
@@ -3234,6 +3677,7 @@ pub(crate) fn companions(
     measure: &Expr,
     omega_available: bool,
     tys: &dyn BinderTys,
+    auto: &AutoEqs,
 ) -> Result<Vec<Lowered>, String> {
     let span = measure.span;
     // §7: `fn` only. A `theorem` is opaque, so `f(ȳ)` in the equation's
@@ -3289,6 +3733,9 @@ pub(crate) fn companions(
         next: 1,
         eqs: 0,
         refinements: Vec::new(),
+        scrut_aliases: Vec::new(),
+        auto_eqs: auto.clone(),
+        auto_n: 0,
         scope: scope_of(decl),
         sites: Vec::new(),
         obls: Vec::new(),
@@ -3318,6 +3765,7 @@ pub(crate) fn companions(
         lets: Vec::new(),
         fresh: 0,
         span,
+        anchors: None,
     };
     let ext_proof = ext.walk(&source, true)?;
     let ext_sites = std::mem::take(&mut ext.rw.sites);
@@ -3607,6 +4055,7 @@ pub(crate) fn companions(
         lets: Vec::new(),
         fresh: 0,
         span,
+        anchors: None,
     };
     let unfold_proof = unfold.walk(&source, true)?;
     let unfold_sites = std::mem::take(&mut unfold.rw.sites);

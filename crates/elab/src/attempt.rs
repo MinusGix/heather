@@ -116,6 +116,12 @@ pub(super) struct DeclAttempt {
     /// every level doubled the work per level of nesting — `step_mono`'s
     /// three levels cost 8.5x its elaboration (2026-09-17).
     pub(super) motive_redundancy_probe: Cell<bool>,
+    /// The pending match equations (docs/dependent-match-compiler-design.md
+    /// §4.3): the next identity to hand out, and the identities a reader of
+    /// hypotheses (`omega`, `linarith`) asked for while their match's arms
+    /// elaborated without the equation.
+    pub(super) match_eq_next: Cell<u32>,
+    pub(super) match_eq_wanted: RefCell<Vec<u32>>,
     /// The declaration's parameter names, in telescope order: the kernel's
     /// outermost binders when it locates a refusal no recorded site
     /// explains, and so the names its note uses for them
@@ -154,6 +160,7 @@ impl DeclAttempt {
         self.instance_matches.get_mut().clear();
         self.char_literals.get_mut().clear();
         self.emitted_entries.get_mut().clear();
+        self.match_eq_wanted.get_mut().clear();
         self.goal_arena.prepare();
     }
 

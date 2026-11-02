@@ -315,7 +315,7 @@ theorem Finite::neg_neg({F: Format}, self x: Finite(F)): -(-x) = x {
 }
 
 theorem Finite::dyadic_neg({F: Format}, self x: Finite(F)): (-x).dyadic() ≈ -x.dyadic() {
-    match x.neg as λ s => Dyadic(match !s { False => x.mag.int(), True => -x.mag.int() }, x.q()) ≈ -Dyadic(match s { False => x.mag.int(), True => -x.mag.int() }, x.q()) {
+    match x.neg {
         False => Dyadic(-x.mag.int(), x.q()).same_refl(),
         True => j(sym(x.mag.int().neg_neg()), λ m _ => Dyadic(x.mag.int(), x.q()) ≈ Dyadic(m, x.q()), Dyadic(x.mag.int(), x.q()).same_refl()),
     }
@@ -477,7 +477,7 @@ fn Finite::max_finite(F: Format) → Finite(F) {
 fn Finite::ulp({F: Format}, self x: Finite(F)) → Dyadic { Dyadic(1, x.q()) }
 
 theorem Finite::zero_dyadic(F: Format, neg: Bool): (Finite::zero(F, neg)).dyadic() ≈ 0 {
-    match neg as λ s => Dyadic(match s { False => OfNat(0), True => -OfNat(0) }, F.qmin() + OfNat(0)) ≈ 0 {
+    match neg {
         False => Dyadic::zero_mant(F.qmin() + OfNat(0)),
         True => Dyadic::zero_mant(F.qmin() + OfNat(0)),
     }

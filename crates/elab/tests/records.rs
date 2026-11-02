@@ -370,18 +370,19 @@ fn the_vector_methods_still_work() {
 // actionable: supply the motive and the field projects.
 #[test]
 fn a_builtin_arity_message_does_not_assert_a_vector_receiver() {
-    // Every arm binds, which is what keeps the receiver's type from inferring
-    // at all: since 2026-08-17 a motive-less `match` with a non-binding arm
-    // takes its motive from that arm
-    // (`issues/match-arg-of-polymorphic-callee-needs-motive.md`), so the
-    // `match n { Zero => mk(), … }` this probe used to use now elaborates —
-    // and a receiver that infers is not a receiver nobody has looked at.
+    // No arm infers, which is what keeps the receiver's type from inferring
+    // at all: since 2026-08-17 a motive-less `match` takes its motive from a
+    // non-binding arm (`issues/match-arg-of-polymorphic-callee-needs-motive.md`),
+    // and since 2026-10-31 from any arm whose type lives outside its binders
+    // (docs/dependent-match-compiler-design.md §6), so the `mk()` arms this
+    // probe used to use now elaborate — and a receiver that infers is not a
+    // receiver nobody has looked at. An unannotated `λ` infers nothing.
     let e = bad(r#"
         record Box { fold: (n: Nat) -> Nat }
         inductive Two { L(v: Nat), R(v: Nat) }
         fn mk() -> Box { Box(λ (n: Nat) => n) }
         fn probe(t: Two) -> Nat {
-            match t { L(v) => mk(), R(v) => mk() }.fold(Zero)
+            match t { L(v) => λ x => x, R(v) => λ x => x }.fold(Zero)
         }
         "#);
     assert!(e.contains("needs a motive"), "{e}");
@@ -393,7 +394,7 @@ fn a_builtin_arity_message_does_not_assert_a_vector_receiver() {
         inductive Two { L(v: Nat), R(v: Nat) }
         fn mk() -> Nat { Zero }
         fn probe(t: Two) -> Nat {
-            match t { L(v) => mk(), R(v) => mk() }.fold(Zero)
+            match t { L(v) => λ x => x, R(v) => λ x => x }.fold(Zero)
         }
         "#);
     assert!(e.contains("needs a motive"), "{e}");
@@ -406,7 +407,7 @@ fn a_builtin_arity_message_does_not_assert_a_vector_receiver() {
         inductive Two { L(v: Nat), R(v: Nat) }
         fn mk() -> Box { Box(λ (n: Nat) => n) }
         fn probe(t: Two) -> Nat {
-            match t { L(v) => mk(), R(v) => mk() }.head(3)
+            match t { L(v) => λ x => x, R(v) => λ x => x }.head(3)
         }
         "#);
     assert!(e.contains("needs a motive"), "{e}");

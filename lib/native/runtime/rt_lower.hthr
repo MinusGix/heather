@@ -233,13 +233,12 @@ theorem branch_holds(t: Ty, tys: Nat → RecInfo, values: Valuation(), condition
     call: Answers(), out: Nat, b: Bool, yes, no: t.sem(tys), h: values(1, condition).head_bit() = b,
     held_true: t.Holds(tys, when_true.eval(call, values), out, yes), held_false: t.Holds(tys, when_false.eval(call, values), out, no)):
     t.Holds(tys, branch(condition, when_true, when_false).eval(call, values), out, match b { False => no, True => yes }) {
-    (match b as λ x => values(1, condition).head_bit() = x →
-        t.Holds(tys, branch(condition, when_true, when_false).eval(call, values), out, match x { False => no, True => yes }) {
-        True => λ e => t.holds_at(tys, when_true.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out, out,
-            λ wd => branch_true(values, condition, when_true, when_false, call, e, wd, out), yes, held_true),
-        False => λ e => t.holds_at(tys, when_false.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out, out,
-            λ wd => branch_false(values, condition, when_true, when_false, call, e, wd, out), no, held_false),
-    })(h)
+    match b {
+        True => t.holds_at(tys, when_true.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out, out,
+            λ wd => branch_true(values, condition, when_true, when_false, call, h, wd, out), yes, held_true),
+        False => t.holds_at(tys, when_false.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out, out,
+            λ wd => branch_false(values, condition, when_true, when_false, call, h, wd, out), no, held_false),
+    }
 }
 
 // ---------------------------------------------------------------------------

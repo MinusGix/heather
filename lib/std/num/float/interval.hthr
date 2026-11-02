@@ -450,7 +450,7 @@ theorem Interval::of_rat_has(q: Rat, p: Nat): Interval::of_rat(q, p).Has(q) {
 fn Interval::npow(self I: Interval, n, p: Nat) → Interval { match n { Zero => Interval::of_int(1), Succ(k) => I.npow(k, p).mul(I, p) } }
 
 theorem Interval::npow_has(I: Interval, n, p: Nat, {x: Rat}, h: I.Has(x)): I.npow(n, p).Has(x.npow(n)) {
-    match n as λ k => I.npow(k, p).Has(x.npow(k)) {
+    match n {
         Zero => Interval::point_has(Dyadic(1, 0)),
         Succ(k) => Interval::mul_has(I.npow(k, p), I, p, Interval::npow_has(I, k, p, h), h),
     }
@@ -538,7 +538,7 @@ fn IntervalExpr::enclose(self e: IntervalExpr, p: Nat) → Interval {
 }
 
 theorem IntervalExpr::enclose_has(self e: IntervalExpr, p: Nat): e.enclose(p).Has(e.eval()) {
-    match e as λ f => f.enclose(p).Has(f.eval()) {
+    match e {
         ILit(q) => Interval::of_rat_has(q, p),
         IAdd(a, b) => Interval::add_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),
         ISub(a, b) => Interval::sub_has(a.enclose(p), b.enclose(p), p, a.enclose_has(p), b.enclose_has(p)),

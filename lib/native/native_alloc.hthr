@@ -858,8 +858,7 @@ fn Homes::spelled(self homes: Homes) → List<Nat> { Cons(homes.of.len(), homes.
 theorem absent_false_mem(id: Nat, ids: List<Nat>): absent(id, ids) = False → Mem(id, ids) {
     match ids {
         Nil => λ no => absurd(no),
-        Cons(x, rest) => (match id.eq_dec(x) as λ d => Bool::and(match d { Inl(_) => False, Inr(_) => True }, absent(id, rest)) = False →
-            Mem(id, Cons(x, rest)) {
+        Cons(x, rest) => (match id.eq_dec(x) {
             Inl(e) => λ _ => Inl(e),
             Inr(_) => λ no => Inr(absent_false_mem(id, rest, no)),
         }),
@@ -874,10 +873,10 @@ theorem List::holds_mem(self ids: List<Nat>, id: Nat, held: ids.holds(id) = True
 }
 
 theorem List::mem_holds(self ids: List<Nat>, id: Nat, m: Mem(id, ids)): ids.holds(id) = True {
-    (match absent(id, ids) as λ b => absent(id, ids) = b → !b = True {
-        True => λ none => false_elim(absent_mem(id, ids, j(sym(none), λ b _ => b.IsTrue(), trivial), id, m, refl)),
-        False => λ _ => refl,
-    })(refl)
+    match none: absent(id, ids) {
+        True => false_elim(absent_mem(id, ids, j(sym(none), λ b _ => b.IsTrue(), trivial), id, m, refl)),
+        False => refl,
+    }
 }
 
 theorem List::within_mem(self a: List<Nat>, b: List<Nat>): a.within(b).IsTrue() → (i: Nat) → Mem(i, a) → Mem(i, b) {
@@ -966,7 +965,7 @@ theorem List::leaf_checked_inside(self nodes: List<Node>, loops: List<List<Nat>>
             Option::Inside(match o { None => None, Some(live) => apart(live) }, m) {
         None => λ never => false_elim(never),
         Some(live) => λ inside => j(sym(nodes_writes(nodes).all_apart_slots(loops, out)),
-            λ b _ => Option::Inside(match b as λ _ => Option<List<Nat>> { False => None, True => Some(live) }, m), inside),
+            λ b _ => Option::Inside(match b { False => None, True => Some(live) }, m), inside),
     })(nodes.nodes_checked_inside(loops, out, m, so, sw))
 }
 
@@ -1112,7 +1111,7 @@ theorem Stmt::checked_wide(self s: Stmt, loops: List<List<Nat>>, m: List<Nat>, w
                 None => λ never => false_elim(never),
                 Some(b) => λ inside => {
                     let within = b.within_of_inside(set, λ i x => j(sym(is_m), λ k _ => Mem(i, k), inside(i, x)));
-                    j(sym(within), λ w _ => Option::Inside(match w as λ _ => Option<List<Nat>> { False => None, True => Some(set) }, m), set_in)
+                    j(sym(within), λ w _ => Option::Inside(match w { False => None, True => Some(set) }, m), set_in)
                 },
             })(body.checked_wide(loops, m, wide, loop_after(again, set, out), after_in, λ i x => sw(i, Inr(x))))
         },
@@ -1122,7 +1121,7 @@ theorem Stmt::checked_wide(self s: Stmt, loops: List<List<Nat>>, m: List<Nat>, w
             Inr(never) => false_elim(never),
         }, so),
         Perform(_, args, results) => λ out so sw => j(sym(results.all_apart_slots(loops, out)),
-            λ b _ => Option::Inside(match b as λ _ => Option<List<Nat>> { False => None, True => Some(args.union(out.minus(results))) }, m),
+            λ b _ => Option::Inside(match b { False => None, True => Some(args.union(out.minus(results))) }, m),
             args.inside_union(out.minus(results), m, λ i x => sw(i, args.mem_append_l(results, i, x)), out.inside_minus(results, m, so))),
     }
 }
@@ -1145,7 +1144,7 @@ theorem List::wide_set(self m: List<Nat>, again: Nat, x: Mem(again, m)): Homes([
 // Every word in its slot passes when the check finds the loop sets closed.
 theorem Source::slots_ok(self src: Source, loops: List<List<Nat>>, live: List<Nat>, got: src.main.checked(Homes([], loops), []) = Some(live)):
     src.allocation_ok(Homes([], loops)).IsTrue() {
-    j(sym(got), λ o _ => Bool::IsTrue(match o as λ _ => Bool { None => False, Some(l) => Homes([], loops).slotted(l) }),
+    j(sym(got), λ o _ => Bool::IsTrue(match o { None => False, Some(l) => Homes([], loops).slotted(l) }),
         j(sym(live.slotted_slots(loops)), λ b _ => b.IsTrue(), trivial))
 }
 
@@ -1160,7 +1159,7 @@ theorem Source::wide_ok(self src: Source): src.allocation_ok(Homes([], src.main.
 
 theorem Source::closed_or_wide_ok(self src: Source, loops: List<List<Nat>>): src.allocation_ok(Homes([], src.closed_or_wide(loops))).IsTrue() {
     (match src.main.checked(Homes([], loops), []) as λ o => src.main.checked(Homes([], loops), []) = o →
-            src.allocation_ok(Homes([], match o as λ _ => List<List<Nat>> { None => src.main.words().wide(), Some(_) => loops })).IsTrue() {
+            src.allocation_ok(Homes([], match o { None => src.main.words().wide(), Some(_) => loops })).IsTrue() {
         None => λ _ => src.wide_ok(),
         Some(live) => λ got => src.slots_ok(loops, live, got),
     })(refl)
@@ -1172,7 +1171,7 @@ theorem Source::loop_sets_ok(self src: Source, fuel: Nat): (loops: List<List<Nat
         Succ(more, ih) => λ loops => {
             let sets = src.needs_sets(loops);
             match sets.sets_within(loops) as λ b => src.allocation_ok(Homes([],
-                    match b as λ _ => List<List<Nat>> { True => src.closed_or_wide(loops), False => src.loop_sets(more, sets) })).IsTrue() {
+                    match b { True => src.closed_or_wide(loops), False => src.loop_sets(more, sets) })).IsTrue() {
                 True => src.closed_or_wide_ok(loops),
                 False => ih(sets),
             }
@@ -1185,8 +1184,8 @@ theorem Homes::slots_ok(src: Source): src.allocation_ok(Homes::slots(src)).IsTru
 theorem Homes::or_else_ok(self homes: Homes, src: Source, fallback: Homes, ok: src.allocation_ok(fallback).IsTrue()):
     src.allocation_ok(homes.or_else(src, fallback)).IsTrue() {
     (match src.allocation_ok(homes) as λ b => src.allocation_ok(homes) = b →
-            src.allocation_ok(match b as λ _ => Homes { True => match src.procedures.bodies_check(homes) { True => homes, False => fallback }, False => fallback }).IsTrue() {
-        True => λ passed => match src.procedures.bodies_check(homes) as λ c => src.allocation_ok(match c as λ _ => Homes { True => homes, False => fallback }).IsTrue() {
+            src.allocation_ok(match b { True => match src.procedures.bodies_check(homes) { True => homes, False => fallback }, False => fallback }).IsTrue() {
+        True => λ passed => match src.procedures.bodies_check(homes) {
             True => j(sym(passed), λ b _ => b.IsTrue(), trivial),
             False => ok,
         },

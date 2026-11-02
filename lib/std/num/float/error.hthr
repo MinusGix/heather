@@ -53,13 +53,13 @@ fn Mode::err_exp(self m: Mode, b: Nat) → Nat {
 }
 
 theorem Mode::err_exp_conj(self m: Mode, b: Nat): m.conj().err_exp(b) = m.err_exp(b) {
-    match m as λ md => md.conj().err_exp(b) = md.err_exp(b) {
+    match m {
         NearestEven => refl, NearestAway => refl, TowardPos => refl, TowardNeg => refl, TowardZero => refl,
     }
 }
 
 theorem Mode::conj_conj(self m: Mode): m.conj().conj() = m {
-    match m as λ md => md.conj().conj() = md {
+    match m {
         NearestEven => refl, NearestAway => refl, TowardPos => refl, TowardNeg => refl, TowardZero => refl,
     }
 }
@@ -140,7 +140,7 @@ theorem Format::nbr_in_cell(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Appro
     let bd = F.down_is_below(x, h, st, a);
     let c = F.cut_in_cell(h, st, below);
     let pp: (0 < Nat::pow(2, Succ(d.bexp))) = Nat::pow_pos(a := 2, n := Succ(d.bexp));
-    match nb as λ _ => d.H() <= r.H() ∧ r.H() <= d.H() + Nat::pow(2, Succ(d.bexp)).int() {
+    match nb {
         Inl(br) => {
             let e = Finite::below_unique(x, r, d, br, bd);
             let l1 = Finite::H_le_of_le(r, d, Rat::le_of_same(e));
@@ -281,7 +281,7 @@ theorem Format::rounding_error(self F: Format, mode: Mode, x: Rat, r: Finite(F),
     hr: RoundsTo(F, mode, x, Fin(r))): (r.val() - x).abs() <= F.err_at(mode, x)
 {
     let a = F.rat_approx(x);
-    match x.abs_cases() as λ _ => (r.val() - x).abs() <= F.err_at(mode, x) {
+    match x.abs_cases() {
         Inl(p) => F.rounding_error_nonneg(mode, x, F.rat_h(x), F.rat_st(x), F.approx_respects(x.abs(), x, F.rat_h(x), F.rat_st(x), p.right, a),
             Rat::le_respects(p.right, (Finite::max_finite(F)).val().same_refl(), range), r, hr),
         Inr(n) => {
@@ -300,7 +300,7 @@ theorem Format::rounding_error(self F: Format, mode: Mode, x: Rat, r: Finite(F),
 // of one for the nearest modes.
 theorem Format::err_le_ulp(self F: Format, mode: Mode, x: Rat): F.err_at(mode, x) <= F.ulp_at(x) {
     let b = (F.down(F.rat_h(x))).bexp;
-    let le: (Nat::pow(2, mode.err_exp(b)) <= Nat::pow(2, Succ(b))) = match mode as λ md => Nat::pow(2, md.err_exp(b)) <= Nat::pow(2, Succ(b)) {
+    let le: (Nat::pow(2, mode.err_exp(b)) <= Nat::pow(2, Succ(b))) = match mode {
         NearestEven => Nat::pow_le_pow_r(2, b, Succ(b), trivial, omega),
         NearestAway => Nat::pow_le_pow_r(2, b, Succ(b), trivial, omega),
         TowardPos => Nat::pow(2, Succ(b)).le_refl(), TowardNeg => Nat::pow(2, Succ(b)).le_refl(), TowardZero => Nat::pow(2, Succ(b)).le_refl(),
@@ -314,7 +314,7 @@ theorem Format::err_half_ulp(self F: Format, even: Bool, x: Rat): F.err_at(Mode:
     let halves: (F.grid(Nat::pow(2, b).int()) + F.grid(Nat::pow(2, b).int()) ≈ F.ulp_at(x)) =
         Rat::same_trans(j(dbl, λ v _ => F.grid(Nat::pow(2, b).int()) + F.grid(Nat::pow(2, b).int()) ≈ F.grid(v), F.grid_add(Nat::pow(2, b).int(), Nat::pow(2, b).int())),
             Rat::same_sym((F.down(F.rat_h(x))).ulp_grid()));
-    match even as λ e => F.err_at(Mode::nearest(e), x) + F.err_at(Mode::nearest(e), x) ≈ F.ulp_at(x) { True => halves, False => halves }
+    match even { True => halves, False => halves }
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +327,7 @@ fn Format::u_den(self F: Format, mode: Mode) → Nat {
 }
 
 evidence theorem Format::u_den_pos({F: Format}, {mode: Mode}): 0 < F.u_den(mode) {
-    match mode as λ md => 0 < F.u_den(md) {
+    match mode {
         NearestEven => Format::top_pos(F := F), NearestAway => Format::top_pos(F := F), TowardPos => Format::half_pos(F := F),
         TowardNeg => Format::half_pos(F := F), TowardZero => Format::half_pos(F := F),
     }
@@ -363,7 +363,7 @@ theorem Format::err_le_u(self F: Format, mode: Mode, b: Nat, y: Rat, h: F.grid((
     let scaled = λ (c: Nat) (k: Nat) (ck: c * Nat::pow(2, k) = F.half() * Nat::pow(2, Succ(b))) =>
         Rat::le_respects(Rat::same_sym(F.grid_scale(c, Nat::pow(2, k).int())), y.same_refl(),
             j(sym(Int::cong_ofnat(ck)), λ v _ => F.grid(v) <= y, h));
-    match mode as λ md => F.grid(Nat::pow(2, md.err_exp(b)).int()) <= F.u(md) * y {
+    match mode {
         NearestEven => Rat::le_div_of_mul_le(F.top(), scaled(F.top(), b, near)),
         NearestAway => Rat::le_div_of_mul_le(F.top(), scaled(F.top(), b, near)),
         TowardPos => Rat::le_div_of_mul_le(F.half(), scaled(F.half(), Succ(b), refl)),
@@ -378,7 +378,7 @@ theorem Finite::normal_mag({F: Format}, d: Finite(F), pos: d.neg = False, big: (
     let mn: ((Finite::min_normal(F)).H() = ((F.half() * Nat::pow(2, 0)) * 2).int()) = refl;
     let dh = Finite::H_pos(d, pos);
     let c = F.canonical_elim(d.mag, d.bexp, d.ok);
-    match c.right.right.left as λ _ => F.half() <= d.mag {
+    match c.right.right.left {
         Inl(z) => {
             let p: (Nat::pow(2, d.bexp) = 1) = j(sym(z), λ b _ => Nat::pow(2, b) = 1, refl);
             let du: (d.units() = d.mag * Nat::pow(2, d.bexp)) = refl;
@@ -453,7 +453,7 @@ theorem Finite::bexp_zero_of_small({F: Format}, d: Finite(F), pos: d.neg = False
         Zero => λ e => e,
         Succ(k) => λ e => {
             let c = F.canonical_elim(d.mag, d.bexp, d.ok);
-            let hm: (F.half() <= d.mag) = match c.right.right.left as λ _ => F.half() <= d.mag { Inl(z) => false_elim(omega(z, e)), Inr(h) => h };
+            let hm: (F.half() <= d.mag) = match c.right.right.left { Inl(z) => false_elim(omega(z, e)), Inr(h) => h };
             let P = Nat::pow(2, d.bexp);
             let pk: (P = Nat::pow(2, k) * 2) = Nat::cong(λ (w: Nat) => Nat::pow(2, w), e);
             let one = Nat::one_le_pow(2, k, trivial);
@@ -482,13 +482,13 @@ theorem Format::subnormal_error(self F: Format, mode: Mode, x: Rat, r: Finite(F)
 }
 
 theorem Format::u_pos(self F: Format, mode: Mode): 0 < F.u(mode) {
-    match mode as λ md => 0 < F.u(md) { NearestEven => omega, NearestAway => omega, TowardPos => omega, TowardNeg => omega, TowardZero => omega }
+    match mode { NearestEven => omega, NearestAway => omega, TowardPos => omega, TowardNeg => omega, TowardZero => omega }
 }
 
 theorem Format::u_le_one(self F: Format, mode: Mode): F.u(mode) <= 1 {
     let t = Format::top_pos(F := F);
     let h = Format::half_pos(F := F);
-    match mode as λ md => F.u(md) <= 1 { NearestEven => omega(t), NearestAway => omega(t), TowardPos => omega(h), TowardNeg => omega(h), TowardZero => omega(h) }
+    match mode { NearestEven => omega(t), NearestAway => omega(t), TowardPos => omega(h), TowardNeg => omega(h), TowardZero => omega(h) }
 }
 
 theorem Format::eta_nonneg(self F: Format, mode: Mode): 0 <= F.eta(mode) {
@@ -500,7 +500,7 @@ theorem Format::error_bound(self F: Format, mode: Mode, x: Rat, r: Finite(F), ra
     hr: RoundsTo(F, mode, x, Fin(r))): (r.val() - x).abs() <= F.u(mode) * x.abs() + F.eta(mode)
 {
     let ux = Rat::mul_nonneg(Rat::le_of_lt(F.u_pos(mode)), x.abs_nonneg());
-    match Rat::le_total((Finite::min_normal(F)).val(), x.abs()) as λ _ => (r.val() - x).abs() <= F.u(mode) * x.abs() + F.eta(mode) {
+    match Rat::le_total((Finite::min_normal(F)).val(), x.abs()) {
         Inl(normal) => Rat::le_trans(F.relative_error(mode, x, r, range, normal, hr), (F.u(mode) * x.abs()).le_add_nonneg(F.eta(mode), F.eta_nonneg(mode))),
         Inr(small) => Rat::le_trans(F.subnormal_error(mode, x, r, small, hr),
             Rat::le_respects((F.eta(mode)).zero_add(), (F.u(mode) * x.abs() + F.eta(mode)).same_refl(), Rat::add_le_mono_r(0, F.u(mode) * x.abs(), F.eta(mode), ux))),
@@ -574,7 +574,7 @@ theorem Format::gamma_mono(self F: Format, mode: Mode, m, n: Nat, mn: m <= n, ok
 
 // One rounding is within `γ(1)`: `u <= u / (1 - u)`.
 theorem Format::u_le_gamma(self F: Format, mode: Mode): F.u(mode) <= F.gamma(mode, 1) {
-    let two: (2 <= F.u_den(mode)) = match mode as λ md => 2 <= F.u_den(md) {
+    let two: (2 <= F.u_den(mode)) = match mode {
         NearestEven => Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top()),
         NearestAway => Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top()),
         TowardPos => F.two_le_half(), TowardNeg => F.two_le_half(), TowardZero => F.two_le_half(),
@@ -621,7 +621,7 @@ fn List::AllAbsLe(self ds: List<Rat>, u: Rat) → Type { match ds { Nil => True,
 theorem Format::gamma_prod_of(self F: Format, mode: Mode, ds: List<Rat>):
     ds.AllAbsLe(F.u(mode)) → ds.len() < F.u_den(mode) → (ds.prod_one_add() - 1).abs() <= F.gamma(mode, ds.len())
 {
-    match ds as λ l => l.AllAbsLe(F.u(mode)) → l.len() < F.u_den(mode) → (l.prod_one_add() - 1).abs() <= F.gamma(mode, l.len()) {
+    match ds {
         Nil => λ _ _ => Rat::le_respects(Rat::same_sym(Rat::abs_sub_self(1)), Rat::same_refl(F.gamma(mode, 0)), F.gamma_nonneg(mode, 0)),
         Cons(d, t) => λ al okc => {
             let ih = F.gamma_prod_of(mode, t)(al.right, omega(okc));

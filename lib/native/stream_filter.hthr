@@ -76,7 +76,7 @@ theorem filter_state_snoc<C>(step: C → BitVec(8) → Filtered<C>, front: List<
 // A byte emits at most one byte, so the output is never longer than the
 // input: the process writes it in place, behind the read.
 theorem emitted_byte_len(emit: Option<BitVec(8)>): emitted_byte(emit).len() <= 1 {
-    match emit as λ e => emitted_byte(e).len() <= 1 { None => trivial, Some(_) => trivial }
+    match emit { None => trivial, Some(_) => trivial }
 }
 theorem filter_emitted_len<C>(step: C → BitVec(8) → Filtered<C>, bytes: List<BitVec(8)>):
     (s: C) → filter_emitted(step, bytes, s).len() <= bytes.len() {
@@ -178,15 +178,15 @@ fn first_run<A>(pieces: List<List<A>>) → Nat { match pieces { Nil => 0, Cons(p
 fn inside_runs<A>(inside: Bool, pieces: List<List<A>>) → Nat { match inside { True => first_run(pieces), False => 0 } }
 
 theorem onto_first_runs<A>(x: A, pieces: List<List<A>>): runs_of(List::onto_first(x, pieces)) + first_run(pieces) = Succ(runs_of(pieces)) {
-    match pieces as λ ps => runs_of(List::onto_first(x, ps)) + first_run(ps) = Succ(runs_of(ps)) {
+    match pieces {
         Nil => refl,
-        Cons(piece, rest) => match piece as λ p => Succ(runs_of(rest)) + first_run(Cons(p, rest)) = Succ(runs_of(Cons(p, rest))) {
+        Cons(piece, rest) => match piece {
             Nil => refl, Cons(_, _) => refl,
         },
     }
 }
 theorem onto_first_starts<A>(x: A, pieces: List<List<A>>): first_run(List::onto_first(x, pieces)) = 1 {
-    match pieces as λ ps => first_run(List::onto_first(x, ps)) = 1 { Nil => refl, Cons(_, _) => refl }
+    match pieces { Nil => refl, Cons(_, _) => refl }
 }
 
 // One byte: what the count and the flag do, against what the pieces count and
@@ -211,7 +211,7 @@ theorem counts_runs<C>(g: C → BitVec(8) → C, count: C → Nat, inside: C →
     flag: (s: C) → (b: BitVec(8)) → inside(g(s, b)) = !sep(b), bytes: List<BitVec(8)>):
     (s: C) → count(fold_bytes(g, bytes, s)) + inside_runs(inside(s), bytes.split_by(sep)) = count(s) + runs_of(bytes.split_by(sep)) {
     match bytes {
-        Nil => λ s => match inside(s) as λ i => count(s) + inside_runs<BitVec(8)>(i, [Nil]) = count(s) + 0 { True => refl, False => refl },
+        Nil => λ s => match inside(s) { True => refl, False => refl },
         Cons(b, rest) => λ s => {
             let ih = counts_runs(g, count, inside, sep, grows, flag, rest, g(s, b));
             let flagged = rewrite(flag(s, b), in := ih);

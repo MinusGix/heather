@@ -240,10 +240,10 @@ theorem decide_bit_false<P: Decide>(h: decide_bit<P>() = False): ¬P { P.reflect
 // Case analysis on a decided bit, with what each side says as evidence: the
 // proof shape for a function an evidence-free `if` defines.
 theorem decide_bit_split<P: Decide>(M: Bool → Type, yes: P → M(True), no: ¬P → M(False)): M(decide_bit<P>()) {
-    (match decide_bit<P>() as λ c => (decide_bit<P>() = c) → M(c) {
-        True => λ e => yes(decide_bit_true<P>(e)),
-        False => λ e => no(decide_bit_false<P>(e)),
-    })(refl)
+    match e: decide_bit<P>() {
+        True => yes(decide_bit_true<P>(e)),
+        False => no(decide_bit_false<P>(e)),
+    }
 }
 
 // Reflection (issues/reflection-through-decide-instances.md): a closed

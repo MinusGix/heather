@@ -70,15 +70,14 @@ fn pop<A>(xs: BoundedList<A>) →
     Outcome<Pair<A, BoundedList<A>>, BoundedList<A>>
 {
     let { capacity := limit, contents := contents, fit := fit } = xs;
-    (match contents as λ ys => ∥ys.len() <= limit∥ →
-        Outcome<Pair<A, BoundedList<A>>, BoundedList<A>> {
-        Nil => λ fit => Underflow(BoundedList<A>(
+    match contents {
+        Nil => Underflow(BoundedList<A>(
             capacity := limit,
             contents := Nil<A>,
             fit := fit,
         )),
-        Cons(head, tail) => λ fit => Success(Pair(head, bounded_tail(limit, tail, fit))),
-    })(fit)
+        Cons(head, tail) => Success(Pair(head, bounded_tail(limit, tail, fit))),
+    }
 }
 
 // A small stack program. A pop's returned element is intentionally discarded

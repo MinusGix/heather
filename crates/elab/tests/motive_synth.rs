@@ -121,15 +121,41 @@ fn only_one_arm_has_to_bind_nothing() {
     ));
 }
 
-// Negative control: every arm binds, so no arm can name the type without a
-// branch context, and the message is the one that asks for the motive.
+// Every arm binds, and an arm's type that lives outside its binders names the
+// motive (docs/dependent-match-compiler-design.md §6). The probe this
+// replaces asked for a motive here.
 #[test]
-fn every_arm_binding_still_asks_for_a_motive() {
-    let e = bad(&format!(
+fn an_arm_that_binds_names_the_motive_when_its_type_does_not_mention_its_binders() {
+    ok(&format!(
         "{LIST}
          inductive Two<A> {{ L(v: A), R(v: A) }}
          fn probe<A>(t: Two<List<A>>) -> Nat {{
              len(match t {{ L(v) => v, R(v) => v }})
+         }}
+         fn first_binder_dependent(n: Nat) -> Nat {{
+             let k = match n {{ Succ(m) => m, Zero => 0 }};
+             k
+         }}
+         theorem at_a_literal(): first_binder_dependent(3) = 2 {{ refl }}
+         fn reads_its_equation(b: Bool2) -> Nat {{
+             let k = match h: b {{ True2 => 0, False2 => {{ let q: (b = False2) = h; 1 }} }};
+             k
+         }}
+         theorem the_equation_computes(): reads_its_equation(False2) = 1 {{ refl }}"
+    ));
+}
+
+// Negative control: an arm whose type mentions its own binder names no
+// motive, and when every arm's does the message asks for the motive.
+#[test]
+fn an_arm_type_mentioning_its_binder_still_asks_for_a_motive() {
+    let e = bad(&format!(
+        "{LIST}
+         inductive Two {{ L(v: Nat), R(v: Nat) }}
+         theorem same(n: Nat): n = n {{ refl }}
+         fn probe(t: Two) -> Nat {{
+             let p = match t {{ L(v) => same(v), R(v) => same(v) }};
+             0
          }}"
     ));
     assert!(e.contains("needs a motive"), "{e}");

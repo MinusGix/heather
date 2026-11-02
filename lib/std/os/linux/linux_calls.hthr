@@ -73,7 +73,7 @@ fn LinuxCmd::Resp<Size>(self c: LinuxCmd<Size>) → Type {
 // or fewer (none at the end of the input); a prefix of a write's bytes; a
 // descriptor below 2^31; a whole `struct stat`; or an errno.
 fn LinuxCmd::Answers(self c: LinuxCmd<Nat>) → c.Resp() → Type {
-    match c as λ d => d.Resp() → Type {
+    match c {
         ReadCmd(_, max) => λ (r: ReadResult) => match r {
             ReadBytes(bytes) => bytes.len() <= max,
             ReadFailed(errno) => Errno(errno),
@@ -100,7 +100,7 @@ fn LinuxCmd::Answers(self c: LinuxCmd<Nat>) → c.Resp() → Type {
 // What a call sent to `fd`, and what it read from it: the first `count` of a
 // write's bytes, and a read's bytes.
 fn LinuxCmd::sent<Size>(self c: LinuxCmd<Size>, fd: BitVec(64)) → c.Resp() → List<BitVec(8)> {
-    match c as λ d => d.Resp() → List<BitVec(8)> {
+    match c {
         ReadCmd(_, _) => λ _ => Nil,
         WriteCmd(to, bytes) => λ (r: WriteResult) => match to.eq_dec(fd) {
             Inl(_) => match r { Wrote(count) => bytes.take(count), WriteFailed(_) => Nil },
@@ -112,7 +112,7 @@ fn LinuxCmd::sent<Size>(self c: LinuxCmd<Size>, fd: BitVec(64)) → c.Resp() →
     }
 }
 fn LinuxCmd::received<Size>(self c: LinuxCmd<Size>, fd: BitVec(64)) → c.Resp() → List<BitVec(8)> {
-    match c as λ d => d.Resp() → List<BitVec(8)> {
+    match c {
         ReadCmd(from, _) => λ (r: ReadResult) => match from.eq_dec(fd) {
             Inl(_) => match r { ReadBytes(bytes) => bytes, ReadFailed(_) => Nil },
             Inr(_) => Nil,

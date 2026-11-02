@@ -127,15 +127,12 @@ theorem Homes::leaf_checked_sound(self homes: Homes, nodes: List<Node>, out, l: 
 theorem Scope::wide_of(nodes: List<Node>): (s, t: Scope) → s.nodes(nodes) = Some(t) → nodes_wide(nodes).IsTrue() {
     match nodes {
         Nil => λ s t _ => trivial,
-        Cons(node, rest) => λ s t => (match node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) as λ b =>
-                node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) = b →
-                (match b { False => None, True => s.put(node_output(node).id, s.clean(node)).nodes(rest) }) = Some(t) →
-                (node.wide() && nodes_wide(rest)).IsTrue() {
-            False => λ _ none => absurd(none),
-            True => λ ok got => Bool::is_true_and_intro(node.wide(), nodes_wide(rest),
+        Cons(node, rest) => λ s t => (match ok: node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) {
+            False => λ none => absurd(none),
+            True => λ got => Bool::is_true_and_intro(node.wide(), nodes_wide(rest),
                 Bool::is_true_and(node.wide(), s.all_defined(function_ir_eval::Node::reads(node)), j(sym(ok), λ b _ => b.IsTrue(), trivial)).left,
                 Scope::wide_of(rest, s.put(node_output(node).id, s.clean(node)), t, got)),
-        })(refl),
+        }),
     }
 }
 
@@ -203,8 +200,7 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Ans
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ env x h => {
             let parts = absent_append(x, when_true.touches(), when_false.touches(), h);
-            match env.bit(condition) as λ b => (match b as λ _ => Env { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }).number(x) =
-                    env.number(x) {
+            match env.bit(condition) {
                 False => when_false.meaning_frame(call, env, x, parts.right),
                 True => when_true.meaning_frame(call, env, x, parts.left),
             }
@@ -237,10 +233,10 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Ans
 
 theorem Option::and_then_with<A, B, R>({o: Option<A>}, {f: A → Option<B>}, {c: B}, h: o.and_then(f) = Some(c),
     k: (a: A) → o = Some(a) → f(a) = Some(c) → R): R {
-    (match o as λ q => q.and_then(f) = Some(c) → ((a: A) → q = Some(a) → f(a) = Some(c) → R) → R {
-        None => λ none _ => absurd(none),
-        Some(a) => λ got k2 => k2(a, refl, got),
-    })(h, k)
+    match o {
+        None => absurd(h),
+        Some(a) => k(a, refl, h),
+    }
 }
 
 // The value is `w`, whatever it is.
@@ -254,10 +250,10 @@ theorem Option::and_then_canon<A, B>({o: Option<A>}, {f: A → Option<B>}, {c: B
 }
 
 theorem Bool::guard_with<B, R>({b: Bool}, {o: Option<B>}, {c: B}, h: b.guard(o) = Some(c), k: b.IsTrue() → o = Some(c) → R): R {
-    (match b as λ q => q.guard(o) = Some(c) → (q.IsTrue() → o = Some(c) → R) → R {
-        False => λ none _ => absurd(none),
-        True => λ got k2 => k2(trivial, got),
-    })(h, k)
+    match b {
+        False => absurd(h),
+        True => k(trivial, h),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -295,10 +291,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
                 r
             })
         },
-        Conditional(_, condition, _, _, when_true, when_false) => λ s t => (match s.bit(condition) as λ b => (match b as λ _ => Option<Scope> {
-                False => None,
-                True => when_true.scoped(s).and_then(λ a => when_false.scoped(s).and_then(λ c => Some(a.join(c)))),
-            }) = Some(t) → when_true.Ok() ∧ when_false.Ok() {
+        Conditional(_, condition, _, _, when_true, when_false) => λ s t => (match s.bit(condition) {
             False => λ none => absurd(none),
             True => λ scoped => {
                 let chain: (when_true.scoped(s).and_then(λ a => when_false.scoped(s).and_then(λ c => Some(a.join(c)))) = Some(t)) = scoped;
@@ -313,16 +306,9 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
             let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
             let goal = body.Ok() ∧ (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
                 Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue()));
-            (match (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() as λ b => (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() = b →
-                    (match b as λ _ => Option<Scope> {
-                        False => None,
-                        True => body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) as λ _ => Option<Scope> {
-                            False => None,
-                            True => Some(s.looped(outputs, exhausted)),
-                        }),
-                    }) = Some(t) → goal {
-                False => λ _ none => absurd(none),
-                True => λ ok scoped => {
+            (match ok: (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() {
+                False => λ none => absurd(none),
+                True => λ scoped => {
                     let parts = Bool::is_true_and(s.defined(bound) && s.all_defined(inputs), r.loop_shape(), j(sym(ok), λ b _ => b.IsTrue(), trivial));
                     let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
                     let chain: (body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) as λ _ => Option<Scope> {
@@ -340,7 +326,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
                         g
                     })
                 },
-            })(refl)
+            })
         },
     }
 }
@@ -534,7 +520,7 @@ theorem Env::steps_moves(to: List<Nat>): (from: List<Nat>) → moves_ordered(to,
                     let parts = Bool::is_true_and(x.differs(t), absent(x, ts), h);
                     trans(ih.left(x, parts.right), env.plain_other(node, trivial, x, x.differs_ne(t, parts.left)))
                 },
-                ⟨λ x m => match x.eq_dec(t) as λ _ => r.number(x) = Valuation::set(rest, t, word)(64, x).toNat() {
+                ⟨λ x m => match x.eq_dec(t) {
                     Inl(e) => j(sym(e), λ y _ => r.number(y) = Valuation::set(rest, t, word)(64, y).toNat(),
                         trans(ih.left(t, a.left), trans(env.plain_here(node, trivial),
                             sym(cong_fn(λ (w: BitVec(64)) => w.toNat(), Valuation::set_here(rest, t, word, 64)))))),
@@ -686,7 +672,7 @@ theorem Env::looped_at(self env: Env, e: LoopState, outputs: List<Nat>, exhauste
         λ x ne out_absent => {
             let fresh: absent(x, port_ids(ports)).IsTrue() = j(sym(ids_eq), λ l _ => absent(x, l).IsTrue(),
                 absent_append_intro(x, outputs, [exhausted], out_absent, Bool::is_true_and_intro(x.differs(exhausted), True,
-                    (match x.eq_dec(exhausted) as λ d => Bool::IsTrue(match d as λ _ => Bool { Inl(_) => False, Inr(_) => True }) {
+                    (match x.eq_dec(exhausted) {
                         Inl(eq) => false_elim(ne(eq)),
                         Inr(_) => trivial,
                     }), trivial)));
@@ -710,7 +696,7 @@ theorem loop_keeps_mem(out: List<Nat>, outputs: List<Nat>, exhausted: Nat, clobb
     }
 }
 
-theorem Bool::true_of(self b: Bool, h: b.IsTrue()): b = True { (match b as λ c => c.IsTrue() → c = True { False => λ f => false_elim(f), True => λ _ => refl })(h) }
+theorem Bool::true_of(self b: Bool, h: b.IsTrue()): b = True { match b { False => false_elim(h), True => refl } }
 
 // A pass's own valuation agrees with an environment holding the pass's
 // state in the parameters and its count.
@@ -721,8 +707,7 @@ theorem Env::pass_agrees(self env: Env, parameters: List<Nat>, count, m: Nat, st
     let pv = Valuation::bind(base, parameters, state);
     let len: (state.len() = parameters.len()) = trans(sym(cong_fn<List<BitVec(64)>, Nat>(λ l => l.len(), held)), words_of_len(env.valuation(), parameters));
     let word_m: (BitVec::ofNat(m, n := 64) = env.word(count)) = cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), sym(counted));
-    λ x def => match Bool::is_true_or(parameters.holds(x), x.matches(count), def) as λ _ =>
-            (pv(64, x) = env.word(x)) ∧ (Bool::IsTrue(Bool::True) → pv(1, x).head_bit() = env.bit(x)) {
+    λ x def => match Bool::is_true_or(parameters.holds(x), x.matches(count), def) {
         Inl(held_x) => {
             let mx = parameters.holds_mem(x, Bool::true_of(parameters.holds(x), held_x));
             let w: (pv(64, x) = env.word(x)) = j(held, λ st _ => Valuation::bind(base, parameters, st)(64, x) = env.word(x),
@@ -742,7 +727,7 @@ theorem Env::pass_agrees(self env: Env, parameters: List<Nat>, count, m: Nat, st
 theorem Exists::with<A, R>(P: A → Type, e: Exists<A>(P), k: (a: A) → P(a) → R): R { k(e.witness, e.proof) }
 
 theorem Nat::differs_of_ne(self a, b: Nat, ne: a ≠ b): a.differs(b).IsTrue() {
-    match a.eq_dec(b) as λ d => Bool::IsTrue(match d as λ _ => Bool { Inl(_) => False, Inr(_) => True }) {
+    match a.eq_dec(b) {
         Inl(eq) => false_elim(ne(eq)),
         Inr(_) => trivial,
     }
@@ -751,7 +736,7 @@ theorem Nat::differs_of_ne(self a, b: Nat, ne: a ≠ b): a.differs(b).IsTrue() {
 theorem moves_wide(to: List<Nat>): (from: List<Nat>) → nodes_wide(moves(to, from)).IsTrue() {
     match to {
         Nil => λ from => trivial,
-        Cons(t, ts) => λ from => match from as λ f => nodes_wide(moves(Cons(t, ts), f)).IsTrue() {
+        Cons(t, ts) => λ from => match from {
             Nil => trivial,
             Cons(f, fs) => Bool::is_true_and_intro(Move(64, t, f).wide(), nodes_wide(moves(ts, fs)), trivial, moves_wide(ts, fs)),
         },
@@ -766,7 +751,7 @@ theorem Env::words_kept(self a: Env, b: Env, ids: List<Nat>, same: (x: Nat) → 
 
 theorem Homes::region_live_of(self homes: Homes, region: StructuredRegion, out, l: List<Nat>, got: homes.region_checked(region, out) = Some(l)):
     l = homes.region_live(region, out) {
-    j(sym(got), λ o _ => l = match o as λ _ => List<Nat> { None => out, Some(x) => x }, refl)
+    j(sym(got), λ o _ => l = match o { None => out, Some(x) => x }, refl)
 }
 
 // ---------------------------------------------------------------------------
@@ -1112,24 +1097,23 @@ theorem Target::loop_goes(self t: Target, call: Answers(), inputs: List<Nat>, bo
                 let r: (eo.number(i) = looped.number(i)) = trans(os.left(i, fresh), trans(le.right.right.right.right(i, wide), sym(lp.others(i, ne, fresh))));
                 r
             };
-            let like: eo.Like(looped, out) = ⟨λ i mi => match i.eq_dec(exhausted) as λ _ => eo.number(i) = looped.number(i) {
+            let like: eo.Like(looped, out) = ⟨λ i mi => match i.eq_dec(exhausted) {
                     Inl(e) => j(sym(e), λ y _ => eo.number(y) = looped.number(y), at_exhausted),
-                    Inr(ne) => (match absent(i, outputs) as λ b => absent(i, outputs) = b → eo.number(i) = looped.number(i) {
-                        False => λ held_out => at_output(i, ne, outputs.holds_mem(i, cong_fn<Bool, Bool>(λ b => !b, held_out))),
-                        True => λ fresh => {
-                            let fresh_t: absent(i, outputs).IsTrue() = j(sym(fresh), λ b _ => b.IsTrue(), trivial);
+                    Inr(ne) => match held_out: absent(i, outputs) {
+                        False => at_output(i, ne, outputs.holds_mem(i, cong_fn<Bool, Bool>(λ b => !b, held_out))),
+                        True => {
+                            let fresh_t: absent(i, outputs).IsTrue() = j(sym(held_out), λ b _ => b.IsTrue(), trivial);
                             let cl = match Bool::is_true_or(i.matches(exhausted) || outputs.holds(i), absent(i, Cons(count, parameters ++ body.touches())), keeps(i, mi))
                                     as λ _ => absent(i, Cons(count, parameters ++ body.touches())).IsTrue() {
-                                Inl(either) => match Bool::is_true_or(i.matches(exhausted), outputs.holds(i), either)
-                                        as λ _ => absent(i, Cons(count, parameters ++ body.touches())).IsTrue() {
+                                Inl(either) => match Bool::is_true_or(i.matches(exhausted), outputs.holds(i), either) {
                                     Inl(same) => false_elim(ne(i.matches_eq(exhausted, same))),
-                                    Inr(holds) => false_elim(j(fresh, λ b _ => (!b).IsTrue(), holds)),
+                                    Inr(holds) => false_elim(j(held_out, λ b _ => (!b).IsTrue(), holds)),
                                 },
                                 Inr(a) => a,
                             };
                             at_other(i, ne, fresh_t, cl)
                         },
-                    })(refl),
+                    },
                 },
                 ⟨trans(os.right.right.left, trans(le.left, sym(lp.buffers))), trans(os.right.right.right, trans(le.right.left, sym(lp.args)))⟩⟩;
             t.leaf_goes(out, moves(outputs, parameters), dj, k.d.names, c, k.c_is, within, done, h.done_ok, moves_wide(outputs, parameters), now, tree,
@@ -1228,10 +1212,10 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
                             λ (set: env.bit(condition) = True) => t.at_sub(prog_len(tested), yl, arms, tree, env, λ i m => Inr(yl.union_left(nl, i, m)),
                                 run_yes(env, tree, t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), w_joined, tree, out, when_true.meaning(call, env),
                                     j(set, λ bit _ => t.At(prog_len(nc.prog), out, tree,
-                                        match bit as λ _ => Env { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next)))),
+                                        match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next)))),
                             λ (clear: env.bit(condition) = False) => t.at_sub(prog_len(jumped), nl, arms, tree, env, λ i m => Inr(yl.union_right(nl, i, m)),
                                 run_no(env, tree, j(clear, λ bit _ => t.At(prog_len(nc.prog), out, tree,
-                                    match bit as λ _ => Env { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next))));
+                                    match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next))));
                         r
                     })(within))
             })))))

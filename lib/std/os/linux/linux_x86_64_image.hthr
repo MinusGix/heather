@@ -201,14 +201,14 @@ theorem io_no_carry(k: Nat, inside: k < 65536): next_rip(BitVec::ofNat(0x400000)
     let word = next_rip(BitVec::ofNat(0x400000), k);
     let top: (0x400000 + 65537 <= Nat::pow(2, 64)) = Nat::leb_sound(0x400000 + 65537, Nat::pow(2, 64), trivial);
     let value: (word.toNat() = 0x400000 + k) = BitVec::ofNat_offset_toNat(64, 0x400000, k, omega(inside, top));
-    (match word.carry_add_bit(BitVec::ofNat(1)) as λ found => (word.carry_add_bit(BitVec::ofNat(1)) = found) → found = False {
-        False => λ _ => refl,
-        True => λ carried => {
+    match carried: word.carry_add_bit(BitVec::ofNat(1)) {
+        False => refl,
+        True => {
             let over = BitVec::carry_add_of_bit_true(64, word, BitVec::ofNat(1), carried);
             let spelled = j(value, λ a _ => Nat::pow(2, 64) <= a + 1, over);
             false_elim(omega(spelled, inside, top))
         },
-    })(refl)
+    }
 }
 
 // Code at file offset `k` onward is resident at `0x400000 + k`: one

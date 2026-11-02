@@ -523,7 +523,7 @@ theorem Dyadic::mant_zero(self d: Dyadic, h: d ≈ 0): d.mant = 0 {
     let cross: ((d.mant * p) * OfNat(1) = OfNat(0) * q) = h;
     let eqn: (d.mant * p = OfNat(0)) = omega(cross, Int::zero_mul(q));
     match d.mant as λ m => m * p = OfNat(0) → m = OfNat(0) {
-        OfNat(n) => match n as λ k => OfNat(k) * p = OfNat(0) → OfNat(k) = OfNat(0) {
+        OfNat(n) => match n {
             Zero => λ _ => refl,
             Succ(k) => λ e => false_elim(omega(e, OfNat(Succ(k)).mul_pos(p, trivial, p_pos := pp))),
         },
@@ -689,9 +689,7 @@ theorem Dyadic::recip_bounds(self d: Dyadic, p: Nat, pos: 0 < d):
     match d.mant as λ v => 0 < Dyadic(v, d.exp) →
         Dyadic(v, d.exp).recip_down(p).rat() <= Dyadic(v, d.exp).rat().recip() ∧ Dyadic(v, d.exp).rat().recip() <= Dyadic(v, d.exp).recip_up(p).rat()
     {
-        OfNat(n) => match n as λ k => 0 < Dyadic(OfNat(k), d.exp) →
-            Dyadic(OfNat(k), d.exp).recip_down(p).rat() <= Dyadic(OfNat(k), d.exp).rat().recip() ∧ Dyadic(OfNat(k), d.exp).rat().recip() <= Dyadic(OfNat(k), d.exp).recip_up(p).rat()
-        {
+        OfNat(n) => match n {
             Zero => λ h => false_elim(Dyadic::lt_irrefl(0, Dyadic::lt_respects(Dyadic::same_refl(0), Dyadic::zero_mant(d.exp), h))),
             Succ(j) => λ _ => And(Dyadic::recip_down_at(Succ(j), d.exp, p, trivial), Dyadic::recip_up_at(Succ(j), d.exp, p, trivial)),
         },
@@ -742,7 +740,7 @@ theorem Dyadic::le_of_le_bool(self a, b: Dyadic, h: a.le_bool(b).IsTrue()): a <=
 
 // The sign read off the mantissa, with no comparison.
 fn Dyadic::nonneg_dec(self d: Dyadic) → 0 <= d ∨ ¬(0 <= d) {
-    match d.mant as λ v => 0 <= Dyadic(v, d.exp) ∨ ¬(0 <= Dyadic(v, d.exp)) {
+    match d.mant {
         OfNat(n) => Inl(Rat::le_respects(x := Dyadic(0, d.exp).rat(), x2 := Dyadic::rat(0), y := Dyadic(OfNat(n), d.exp).rat(), y2 := Dyadic(OfNat(n), d.exp).rat(),
             hx := Dyadic::zero_mant(d.exp), hy := Rat::same_refl(Dyadic(OfNat(n), d.exp).rat()), h := Dyadic::le_of_mant_le(0, OfNat(n), d.exp, trivial))),
         NegSucc(n) => Inr(λ h => Dyadic::not_lt_of_le(h, Dyadic::lt_respects(Dyadic(NegSucc(n), d.exp).same_refl(), Dyadic::zero_mant(d.exp),
@@ -861,7 +859,7 @@ fn Dyadic::trim(self d: Dyadic) → Dyadic {
 
 theorem Dyadic::trim_same(self d: Dyadic): d.trim() ≈ d {
     match d {
-        Dyadic(a, e) => match a as λ b => Dyadic(b, e).trim() ≈ Dyadic(b, e) {
+        Dyadic(a, e) => match a {
             OfNat(m) => Dyadic::trim_nat_same(m.width(), m, e),
             NegSucc(m) => Dyadic::neg_respects(Dyadic::trim_nat_same(Succ(m).width(), Succ(m), e)),
         },

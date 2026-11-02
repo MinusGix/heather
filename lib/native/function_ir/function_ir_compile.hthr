@@ -83,7 +83,7 @@ theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(fu
             let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
             let ih = program_eval_sources(earlier, parts.right, sources, sourced.right);
             (match f.eq_dec(earlier.len()) as λ d =>
-                arity_fits(match d as λ _ => Option<Nat> { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
+                arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
                     words.len()).IsTrue() →
                 (match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }) =
                     sources(f, words) {
@@ -187,7 +187,7 @@ theorem loop_eval_agrees(step: Valuation() → Valuation(), parameters: List<Nat
                 j(rebound, λ st _ => finish(loop_eval(step, parameters, count, exit, next, r, st)) = run(r, st), earlier);
             (match after(1, exit).head_bit() as λ b =>
                 (match b { False => run(r, state), True => finish(LoopEnd(state, False)) }) = run(Succ(r), words_of(v, parameters)) →
-                finish(match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, r, state),
+                finish(match b { False => loop_eval(step, parameters, count, exit, next, r, state),
                     True => LoopEnd(state, False) }) = run(Succ(r), words_of(v, parameters)) {
                 False => λ passed => trans(later, passed),
                 True => λ passed => passed,
@@ -249,7 +249,7 @@ theorem loop_eval_agrees_measured(step: Valuation() → Valuation(), parameters:
                 (match after(1, exit).head_bit() as λ b =>
                     (match b { False => finish(loop_eval(step, parameters, count, exit, next, r, following)),
                         True => finish(LoopEnd(following, False)) }) = run(Succ(r), words_of(v, parameters), h) →
-                    finish(match b as λ _ => LoopEnd { False => loop_eval(step, parameters, count, exit, next, r, following),
+                    finish(match b { False => loop_eval(step, parameters, count, exit, next, r, following),
                         True => LoopEnd(following, False) }) = run(Succ(r), words_of(v, parameters), h) {
                     False => λ passed => passed,
                     True => λ passed => passed,
@@ -294,7 +294,7 @@ theorem emit_functions_next(last: Function, earlier: List<Function>, placement: 
     EmitsAs(emit_functions(Cons(last, earlier), placement, names), next_prog, next_rest, next_labels) {
     (match emit_functions(earlier, placement, names) as λ out =>
         EmitsAs(out, prog, rest, labels) →
-        EmitsAs(match out as λ _ => Option<Emitted> { None => None, Some(b) => last.emit(b.prog, earlier.len(), b.placement, b.names) },
+        EmitsAs(match out { None => None, Some(b) => last.emit(b.prog, earlier.len(), b.placement, b.names) },
             next_prog, next_rest, next_labels) {
         None => λ held => Option::none_ne_some(prog, held.left, EmitsAs(None, next_prog, next_rest, next_labels)),
         Some(b) => λ held => j(sym(Option::some_inj(b.prog, prog, held.left)),
@@ -316,7 +316,7 @@ theorem lower_program_emitted(functions: List<Function>, placement: List<Place>,
         EmitsAs(out, prog, rest, labels) →
         (match out as λ _ => Option<Prog> {
             None => None,
-            Some(o) => match o.prog.laid_out() as λ _ => Option<Prog> { False => None, True => Some(o.prog) },
+            Some(o) => match o.prog.laid_out() { False => None, True => Some(o.prog) },
         }) = Some(prog) {
         None => λ held => Option::none_ne_some(prog, held.left, None<Prog>() = Some(prog)),
         Some(o) => λ held => j(sym(Option::some_inj(o.prog, prog, held.left)),

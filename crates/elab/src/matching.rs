@@ -7,7 +7,7 @@
 
 use std::sync::Arc as Rc;
 
-use heather_kernel::level::Level;
+use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, Expr, ExprKind, LamBinder, MatchForm, Span, Ty, TyKind};
 
@@ -29,6 +29,12 @@ pub(crate) trait MotiveSynthesisElab {
         scrutinee_type: &Type,
         scrutinee_level: &Level,
     ) -> bool;
+    /// Whether the scrutinee's type is an indexed family whose index the
+    /// route will generalize (`generalize_index`), which rewrites every
+    /// occurrence of the index in the motive, annotations included.
+    fn generalizes_an_index(&self, _cx: &Cx, _scrutinee_type: &Type) -> bool {
+        false
+    }
 }
 
 /// The declaration-local state which must disappear when a motive candidate
@@ -68,6 +74,66 @@ pub(crate) trait ConstantMotiveElab: MatchSpeculationState {
         motive_level: Level,
         span: Span,
     ) -> R<Term>;
+
+    /// [`Self::lower_constant_match`] with the arms' equation bound as `h`
+    /// (a convoy). Only the elaborator implements it.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_constant_convoy(
+        &self,
+        _cx: &Cx,
+        _form: MatchForm,
+        _generated: bool,
+        _h: &str,
+        _arms: &[Arm],
+        _scrutinee: Term,
+        _scrutinee_type: &Type,
+        _scrutinee_level: &Level,
+        _motive: Type,
+        _motive_level: Level,
+        _result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        err("an equation binding has no constant-motive lowering here", span)
+    }
+}
+
+/// The sink of an arm-type probe (docs/dependent-match-compiler-design.md
+/// §6). The probe lowers the match at a constant marker motive; the first arm
+/// body checked against the marker whose inferred type lives outside the
+/// arm's binders is recorded here, and the probe stops.
+pub(crate) struct ArmTypeProbe {
+    /// The context length at the `match`.
+    pub(crate) base: usize,
+    pub(crate) found: std::sync::Mutex<Option<(Type, Level)>>,
+}
+
+/// The marker level: a universe variable no declaration binds.
+pub(crate) const ARM_PROBE_LEVEL: Level = Level::Var(UnivVar(u32::MAX - 1));
+
+/// The marker motive's type, `Unit` at the marker level. Closed, so shifting
+/// and substitution leave it alone, and in whnf.
+pub(crate) fn arm_probe_marker() -> Type {
+    Type::Unit { level: ARM_PROBE_LEVEL }
+}
+
+/// Whether `ty` mentions the marker level (an arm that returned its own
+/// `ih`, whose type is the marker): such a type names no motive.
+pub(crate) fn mentions_marker(ty: &Type) -> bool {
+    ty.shift_univ_above(1, u32::MAX - 1) != *ty
+}
+
+/// `ty`, inferred under `extra` binders past the probe's base, strengthened
+/// past them; `None` if it mentions one.
+pub(crate) fn strengthen_past(ty: &Type, gamma: &heather_kernel::term::LocalCtx, extra: usize) -> Option<Type> {
+    if extra == 0 {
+        return Some(ty.clone());
+    }
+    let mut sub = LocalSubst::id(gamma);
+    for _ in 0..extra {
+        sub = sub.extended(Rc::new(Term::Zero));
+    }
+    let base = ty.apply_local(&sub);
+    (base.shift_local(extra as u32) == *ty).then_some(base)
 }
 
 /// The outcome of trying to infer a constant match motive.
@@ -217,6 +283,23 @@ pub(crate) fn infer_match_constant_motive(
     generated: bool,
     span: Span,
 ) -> MotiveInference<(Term, Type, Level), ElabError> {
+    infer_match_constant_motive_eq(elab, cx, form, scrutinee, arms, None, generated, span)
+}
+
+/// [`infer_match_constant_motive`], for a match that may bind its equation
+/// (`match h: e { … }` in inference position, design §6): the motive is the
+/// constant one and the arms are lowered as a convoy.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn infer_match_constant_motive_eq(
+    elab: &(impl ConstantMotiveElab + ?Sized),
+    cx: &Cx,
+    form: MatchForm,
+    scrutinee: &Expr,
+    arms: &[Arm],
+    eqbind: Option<&str>,
+    generated: bool,
+    span: Span,
+) -> MotiveInference<(Term, Type, Level), ElabError> {
     // Match speculation's phase column (`docs/instrumentation-design.md` §5):
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
@@ -237,6 +320,14 @@ pub(crate) fn infer_match_constant_motive(
                 None
             }
         });
+    // Any arm, in its own binder context: the match is lowered once at the
+    // marker motive, and the first arm whose type lives outside its binders
+    // names the motive (design §6).
+    let named = named.or_else(|| {
+        let found = probe_arm_type(elab, cx, form, scrutinee, arms, eqbind, generated, span);
+        speculation.rollback();
+        found
+    });
     drop(probe);
     let Some((ty, level)) = named else {
         return MotiveInference::Declined;
@@ -244,18 +335,34 @@ pub(crate) fn infer_match_constant_motive(
     let attempt: R<(Term, Type, Level)> = (|| {
         let (scrutinee_term, scrutinee_type, scrutinee_level) =
             elab.infer_motive_expr(cx, scrutinee)?;
-        let term = elab.lower_constant_match(
-            cx,
-            form,
-            generated,
-            arms,
-            scrutinee_term,
-            &scrutinee_type,
-            &scrutinee_level,
-            ty.shift_local(1),
-            level.clone(),
-            span,
-        )?;
+        let term = match eqbind {
+            None => elab.lower_constant_match(
+                cx,
+                form,
+                generated,
+                arms,
+                scrutinee_term,
+                &scrutinee_type,
+                &scrutinee_level,
+                ty.shift_local(1),
+                level.clone(),
+                span,
+            )?,
+            Some(h) => elab.lower_constant_convoy(
+                cx,
+                form,
+                generated,
+                h,
+                arms,
+                scrutinee_term,
+                &scrutinee_type,
+                &scrutinee_level,
+                ty.shift_local(1),
+                level.clone(),
+                &ty,
+                span,
+            )?,
+        };
         Ok((term, ty, level))
     })();
     match attempt {
@@ -265,6 +372,48 @@ pub(crate) fn infer_match_constant_motive(
         }
         Err(_) => MotiveInference::Declined,
     }
+}
+
+/// Lower the match once at the marker motive with an [`ArmTypeProbe`] in
+/// its context, and read back the first arm type that lives outside its
+/// arm's binders. The lowering's result and effects are discarded by the
+/// caller's rollback; a route that cannot run at the marker simply finds
+/// nothing.
+#[allow(clippy::too_many_arguments)]
+fn probe_arm_type(
+    elab: &(impl ConstantMotiveElab + ?Sized),
+    cx: &Cx,
+    form: MatchForm,
+    scrutinee: &Expr,
+    arms: &[Arm],
+    eqbind: Option<&str>,
+    generated: bool,
+    span: Span,
+) -> Option<(Type, Level)> {
+    if eqbind.is_none() && arms.iter().all(|a| a.binders.is_empty()) {
+        // The non-binding search above already tried every arm.
+        return None;
+    }
+    let (scrutinee_term, scrutinee_type, scrutinee_level) =
+        elab.infer_motive_expr(cx, scrutinee).ok()?;
+    let sink = Rc::new(ArmTypeProbe {
+        base: cx.gamma.len(),
+        found: std::sync::Mutex::new(None),
+    });
+    let mut pcx = cx.clone();
+    pcx.arm_type_probe = Some(Rc::clone(&sink));
+    let marker = arm_probe_marker();
+    let _ = match eqbind {
+        None => elab.lower_constant_match(
+            &pcx, form, generated, arms, scrutinee_term, &scrutinee_type, &scrutinee_level,
+            marker, ARM_PROBE_LEVEL, span,
+        ),
+        Some(h) => elab.lower_constant_convoy(
+            &pcx, form, generated, h, arms, scrutinee_term, &scrutinee_type, &scrutinee_level,
+            marker.clone(), ARM_PROBE_LEVEL, &marker, span,
+        ),
+    };
+    sink.found.lock().ok()?.take()
 }
 
 /// Discover a constant motive for the parser-generated `if` match.
@@ -506,7 +655,8 @@ pub(crate) fn synthesize_motive(
     // a motive probe elaborates the arms and rolls them back, and that work is
     // invisible in every other attribution.
     let _phase = crate::stats::guard(crate::stats::Timer::Matching);
-    let rewrap = field_rewrap(cx, scrutinee);
+    let indexed = elab.generalizes_an_index(cx, scrutinee_type);
+    let rewrap = field_rewrap(cx, scrutinee, indexed);
     if let Some(motive) = abstract_scrut(expected, scrutinee, &rewrap) {
         return motive;
     }
@@ -654,14 +804,224 @@ fn stuck_scrutinees(term: &Term, out: &mut Vec<Term>, budget: &mut u32) {
     }
 }
 
-fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Option<(Term, Term)>) -> Option<Type> {
-    goal.abstract_local(scrutinee).or_else(|| {
-        let (base, replacement) = rewrap.as_ref()?;
-        goal.abstract_local_with(base, replacement)
-    })
+fn abstract_scrut(goal: &Type, scrutinee: &Term, rewrap: &Rewrap) -> Option<Type> {
+    match rewrap {
+        // A child read and the constructor value it reads from are two
+        // spellings of one value, so both are abstracted under the one `z`: a
+        // goal that names the child and the value together is specialized at
+        // both, never half (`docs/goal-motive-synthesis-design.md` §4.4).
+        Rewrap::Child(bases) => {
+            let mut pats = vec![(scrutinee.clone(), Term::Var(LocalVar(0)))];
+            pats.extend(bases.iter().cloned());
+            goal.abstract_local_with_all(&pats)
+        }
+        Rewrap::Field(base, replacement) => goal
+            .abstract_local(scrutinee)
+            .or_else(|| goal.abstract_local_with(base, replacement)),
+        Rewrap::None => goal.abstract_local(scrutinee),
+    }
 }
 
-fn field_rewrap(cx: &Cx, scrutinee: &Term) -> Option<(Term, Term)> {
+/// What a goal mentions in place of the scrutinee, rebuilt around `z`
+/// (`docs/goal-motive-synthesis-design.md` §5).
+#[derive(Debug)]
+enum Rewrap {
+    None,
+    /// A tier-0 field: the value it projects from, rebuilt as a pair around
+    /// `z`. Tried only when the scrutinee itself does not occur.
+    Field(Term, Term),
+    /// A recursive binder of a `Wf` or `W` arm, which is a read out of the
+    /// arm's children and not a subterm of the goal's constructor value: each
+    /// local the read is built from, rebuilt around `z`. Abstracted together
+    /// with the scrutinee (docs/dependent-match-compiler-design.md §7.1).
+    Child(Vec<(Term, Term)>),
+}
+
+/// A `Wf` arm's recursive binder: `nth^l(⟦D⟧; Succ^m(base); cs; ι_t)` over a
+/// children tuple `cs` that is a local (docs/inductive-tier1-wf-lowering.md
+/// §6.3). Recognized by rebuilding the schema and comparing, so nothing that
+/// merely resembles it is taken apart. Returns the level, the element type,
+/// the length, `cs` and `t`.
+pub(crate) fn child_read(term: &Term) -> Option<(Level, Rc<Type>, Rc<Term>, Rc<Term>, usize)> {
+    let Term::App { fun, arg: idx, .. } = term else { return None };
+    let Term::App { fun: recursion, dom, arg: cs, .. } = &**fun else { return None };
+    let Term::ElimNat { .. } = &**recursion else { return None };
+    let Type::Vec { level, elem, len } = &**dom else { return None };
+    if !matches!(&**cs, Term::Var(_)) {
+        return None;
+    }
+    let mut t = 0;
+    let mut at = &**idx;
+    loop {
+        match at {
+            Term::Inr { val, .. } => {
+                t += 1;
+                at = val;
+            }
+            Term::Inl { .. } => break,
+            _ => return None,
+        }
+    }
+    let mut rest = &**len;
+    for _ in 0..=t {
+        let Term::Succ(k) = rest else { return None };
+        rest = k;
+    }
+    let rebuilt = heather_kernel::term::nth(level, elem, len, Rc::clone(cs), Rc::clone(idx));
+    (rebuilt == *term).then(|| (level.clone(), Rc::clone(elem), Rc::clone(len), Rc::clone(cs), t))
+}
+
+/// The children tuple `cs` rebuilt around `z` at position `t`, scoped in
+/// `Γ, z`: `⟨fst cs, ⟨fst (snd cs), … ⟨z, snd^{t+1} cs⟩⟩⟩`. At `z := nth(cs;
+/// ι_t)` it is `cs` again by `nth`'s reduction at a `Succ`-headed length and
+/// Σ-η, which is the whole reason a `Wf` child needs no transport: the
+/// children are a tuple, not a function, so no η at a function space is
+/// asked for (contrast tier 2's leaf, docs/inductive-tier2-w-lowering.md
+/// §2.1).
+fn child_rewrap(term: &Term) -> Option<(Term, Term)> {
+    let (level, elem, len, cs, t) = child_read(term)?;
+    fn rebuild(level: &Level, elem: &Type, len: &Term, cs: Term, t: usize) -> Term {
+        let Term::Succ(k) = len else { unreachable!("child_read checked t + 1 successors") };
+        let fst_ty = Rc::new(elem.clone());
+        let snd_ty = Rc::new(Type::Vec {
+            level: level.clone(),
+            elem: Rc::new(elem.shift_local(1)),
+            len: Rc::new(k.shift_local(1)),
+        });
+        let proj = |snd: bool, pair: &Term| {
+            let (fst_level, snd_level) = (level.clone(), level.clone());
+            let (fst_ty, snd_ty, pair) = (Rc::clone(&fst_ty), Rc::clone(&snd_ty), Rc::new(pair.clone()));
+            if snd {
+                Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair }
+            } else {
+                Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair }
+            }
+        };
+        let (fst, snd) = if t == 0 {
+            (Term::Var(LocalVar(0)), proj(true, &cs))
+        } else {
+            (proj(false, &cs), rebuild(level, elem, k, proj(true, &cs), t - 1))
+        };
+        Term::Pair {
+            fst_level: level.clone(),
+            snd_level: level.clone(),
+            fst_ty,
+            snd_ty,
+            fst: Rc::new(fst),
+            snd: Rc::new(snd),
+        }
+    }
+    let base = (*cs).clone();
+    let tuple = rebuild(&level, &elem.shift_local(1), &len.shift_local(1), cs.shift_local(1), t);
+    Some((base, tuple))
+}
+
+/// A `W` arm's plain recursive binder, `t := ⟨f' ⟨⟩, c⟩`
+/// (docs/inductive-tier2-w-lowering.md §7): the children function `f'` and
+/// the leaf-predicate proof `c` are locals, and the goal spells the value as
+/// `⟨sup(ℓ; f'), c⟩`. Rebuilt around `z` as `f' := λ(y : P ℓ). fst z` and `c :=
+/// snd z`. At `z := t` the first is `f'` again by Π-η and `Unit`-η (the
+/// positions of a plain child are `Unit`, §2.3) and the second by Σ-β, and
+/// `snd z : El(canon(fst z))` is the proof the rebuilt tree needs, since
+/// `canon(sup(ℓ; λy. fst z))` takes its plain branch to `canon(fst z)`. No
+/// leaf is involved, so no η at an `Empty` domain is asked for (§2.1): a
+/// leaf has no recursive binder to match on.
+fn w_child_rewrap(cx: &Cx, term: &Term) -> Option<Vec<(Term, Term)>> {
+    let Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } = term else { return None };
+    if !matches!(&**fst_ty, Type::W { .. }) {
+        return None;
+    }
+    let (Term::AppAt { fun, arg } | Term::App { fun, arg, .. }) = &**fst else { return None };
+    let (Term::Var(f), Term::Var(c)) = (&**fun, &**snd) else { return None };
+    if !matches!(&**arg, Term::Triv { .. }) {
+        return None;
+    }
+    let f_ty = cx.gamma.entries.nth_inner(f.0)?.ty.shift_local(f.0 + 1);
+    let Type::Pi { dom_level, cod_level, dom, .. } = f_ty else { return None };
+    let proj = |second: bool, by: u32| {
+        let (fst_level, snd_level) = (fst_level.clone(), snd_level.clone());
+        let (fst_ty, snd_ty) = (Rc::new(fst_ty.shift_local(by)), Rc::new(snd_ty.shift_local_above(by, 1)));
+        let pair = Rc::new(Term::Var(LocalVar(by - 1)));
+        if second {
+            Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair }
+        } else {
+            Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair }
+        }
+    };
+    let children = Term::Lam {
+        dom_level,
+        cod_level,
+        dom: Rc::new(dom.shift_local(1)),
+        body: Rc::new(proj(false, 2)),
+    };
+    Some(vec![(Term::Var(*f), children), (Term::Var(*c), proj(true, 1))])
+}
+
+fn field_rewrap(cx: &Cx, scrutinee: &Term, indexed: bool) -> Rewrap {
+    if let Some((base, tuple)) = child_rewrap(scrutinee) {
+        return Rewrap::Child(vec![(base, tuple)]);
+    }
+    if let Some(bases) = w_child_rewrap(cx, scrutinee) {
+        return Rewrap::Child(bases);
+    }
+    match tier0_field_rewrap(cx, scrutinee, indexed) {
+        Some((base, replacement)) => Rewrap::Field(base, replacement),
+        None => Rewrap::None,
+    }
+}
+
+/// [`tier0_field_rewrap`]'s rebuild in the unannotated spelling, from an
+/// annotated projection chain `fst(sndⁿ(x))` on a local `x`: `⟨fst x, …
+/// ⟨z, sndⁿ⁺¹ x⟩⟩` with `pair@`/`fst@`/`snd@`, the root annotated with `x`'s
+/// own type.
+fn unannotated_field_rewrap(cx: &Cx, scrutinee: &Term) -> Option<(Term, Term)> {
+    let Term::Fst { pair, .. } = scrutinee else { return None };
+    let mut depth = 0u32;
+    let mut base = Rc::clone(pair);
+    while let Term::Snd { pair, .. } = &*base {
+        depth += 1;
+        base = Rc::clone(pair);
+    }
+    let Term::Var(x) = &*base else { return None };
+    let root_ty = cx.gamma.entries.nth_inner(x.0)?.ty.shift_local(x.0 + 2);
+    let x1 = Term::Var(LocalVar(x.0 + 1));
+    let snds = |n: u32| {
+        let mut t = x1.clone();
+        for _ in 0..n {
+            t = Term::SndAt { pair: Rc::new(t) };
+        }
+        t
+    };
+    let mut replacement = Term::PairAt {
+        ty: None,
+        fst: Rc::new(Term::Var(LocalVar(0))),
+        snd: Rc::new(Term::SndAt { pair: Rc::new(snds(depth)) }),
+    };
+    for k in (0..depth).rev() {
+        replacement = Term::PairAt {
+            ty: None,
+            fst: Rc::new(Term::FstAt { pair: Rc::new(snds(k)) }),
+            snd: Rc::new(replacement),
+        };
+    }
+    if let Term::PairAt { ty, .. } = &mut replacement {
+        *ty = Some(Rc::new(root_ty));
+    }
+    Some(((*base).clone(), replacement))
+}
+
+fn tier0_field_rewrap(cx: &Cx, scrutinee: &Term, indexed: bool) -> Option<(Term, Term)> {
+    // A field of an indexed family's value, at an index the route is about to
+    // generalize. The annotated rebuild would carry the value's own index in
+    // every projection's annotation, and generalizing the index rewrites
+    // those too, so `fst x` would claim a type at the new index while `x`
+    // keeps the old one: a kernel refusal behind an accepted arm
+    // (issues/indexed-deep-pattern-kernel-rejects.md). The unannotated
+    // spelling has the index only in the root's annotation, which is the one
+    // place it should move.
+    if indexed && let Some(rewrap) = unannotated_field_rewrap(cx, scrutinee) {
+        return Some(rewrap);
+    }
     // The checked spelling's η-expansion is the same shape with **no**
     // annotation below the root (`docs/intro-by-type-design.md` §4.2): every
     // inner `pair@` is a field of the one above it, so it is in checking

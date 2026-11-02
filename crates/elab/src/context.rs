@@ -97,6 +97,17 @@ pub(crate) struct Cx {
     /// elaborate — only so an unguarded self-call there can say that codata
     /// has no structural order (docs/codata-elaborator-design.md §4).
     pub(crate) codata_match: Option<Rc<str>>,
+    /// The enclosing matches whose arm equation is pending: in scope for the
+    /// readers of hypotheses, not yet in Γ
+    /// (docs/dependent-match-compiler-design.md §4.3). A reader records the
+    /// identities here as wanted, and a match whose arms then fail is
+    /// elaborated again as its convoy. Empty outside every match.
+    pub(crate) pending_eqs: Rc<Vec<u32>>,
+    /// Set while a motive-less `match` probes its arms for a constant motive
+    /// (`matching::probe_arm_type`, docs/dependent-match-compiler-design.md
+    /// §6): an arm body checked against the probe's marker type is inferred
+    /// instead, and its type recorded if it lives outside the arm.
+    pub(crate) arm_type_probe: Option<Rc<crate::matching::ArmTypeProbe>>,
 }
 
 type ReceiverInference = OnceCell<R<(Term, Type, Level)>>;
@@ -231,6 +242,8 @@ impl Cx {
             corec: None,
             friend: None,
             codata_match: None,
+            pending_eqs: Rc::new(Vec::new()),
+            arm_type_probe: None,
         }
     }
 
@@ -293,6 +306,8 @@ impl Cx {
             corec: None,
             friend: None,
             codata_match: None,
+            pending_eqs: Rc::new(Vec::new()),
+            arm_type_probe: None,
         }
     }
 
