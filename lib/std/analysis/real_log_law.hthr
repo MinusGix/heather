@@ -1,0 +1,432 @@
+// log at real arguments, and its laws (issues/log-exp-inverse.md).
+//
+// `CReal::log_rat` is the atanh sum at a positive rational, and
+// `CReal::exp_log_rat` (real_log.hthr) is exp(log q) = q. Everything here is
+// read back through exp's injectivity (`CReal::exp_inj`, from
+// `CReal::exp_lt`): two reals with the same exp are the same real.
+//
+// - Above a positive rational `a`, log is (1/a)-Lipschitz
+//   (`CReal::log_rat_sub_le`): if log Q - log P = d > 0 then
+//   Q = P·exp(d) >= P·(1 + d), so a·d <= P·d <= Q - P. Only exp(d) >= 1 + d
+//   at d >= 0 is needed (`CReal::exp_ge_add_one`).
+// - Clamping the argument up to `a` (`Rat::clamp_up`, from `abs`, so nothing
+//   is decided) makes log a function on every rational with one Lipschitz
+//   constant, which `RatLip::ext` extends to the reals.
+// - `CReal::log(x)` reads the lower bound `1/(k+1)` from `0 < x`
+//   (`CReal::pos_gap`) and extends the log clamped there.
+//   `exp(log x) = x` comes from the estimate the extension is built on,
+//   and every other law from injectivity.
+
+import logic;
+import bool;
+import nat;
+import int;
+import relation;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import big_operator;
+import creal;
+import creal_lipschitz;
+import series;
+import elementary;
+import exp_law;
+import elementary_real;
+import real_fn;
+import real_fn_limit;
+import real_atanh;
+import real_exp;
+import real_log;
+import omega;
+import tactic;
+import linarith;
+import ring;
+
+// ---------------------------------------------------------------------------
+// The clamp max(q, a), from abs.
+
+fn Rat::clamp_up(self q, a: Rat) → Rat { (q + a + (q - a).abs()) * Rat::inv_succ(1) }
+
+theorem Rat::clamp_up_of_le(self q, a: Rat, h: a <= q): q.clamp_up(a) ≈ q {
+    let ab = (q - a).abs_of_nonneg(linarith(h));
+    let r: ((q + a + (q - a).abs()) * Rat::inv_succ(1) ≈ q) = ring(ab);
+    r
+}
+
+theorem Rat::clamp_up_of_ge(self q, a: Rat, h: q <= a): q.clamp_up(a) ≈ a {
+    let ab = (q - a).abs_of_nonpos(linarith(h));
+    let r: ((q + a + (q - a).abs()) * Rat::inv_succ(1) ≈ a) = ring(ab);
+    r
+}
+
+theorem Rat::clamp_up_ge(self q, a: Rat): a <= q.clamp_up(a) {
+    match Rat::le_total(q, a) {
+        Inl(h) => Rat::le_of_same(Rat::same_sym(q.clamp_up_of_ge(a, h))),
+        Inr(h) => Rat::le_trans(h, Rat::le_of_same(Rat::same_sym(q.clamp_up_of_le(a, h)))),
+    }
+}
+
+theorem Rat::clamp_up_lip(p, q, a: Rat): (p.clamp_up(a) - q.clamp_up(a)).abs() <= (p - q).abs() {
+    let u = Rat::le_abs(p - q);
+    let w = Rat::neg_le_abs(p - q);
+    match Rat::le_total(p, a) {
+        Inl(hp) => {
+            let cp = p.clamp_up_of_ge(a, hp);
+            match Rat::le_total(q, a) {
+                Inl(hq) => {
+                    let cq = q.clamp_up_of_ge(a, hq);
+                    Rat::abs_le(linarith(cp, cq, u, w), linarith(cp, cq, u, w))
+                },
+                Inr(hq) => {
+                    let cq = q.clamp_up_of_le(a, hq);
+                    Rat::abs_le(linarith(cp, cq, u, w, hp, hq), linarith(cp, cq, u, w, hp, hq))
+                },
+            }
+        },
+        Inr(hp) => {
+            let cp = p.clamp_up_of_le(a, hp);
+            match Rat::le_total(q, a) {
+                Inl(hq) => {
+                    let cq = q.clamp_up_of_ge(a, hq);
+                    Rat::abs_le(linarith(cp, cq, u, w, hp, hq), linarith(cp, cq, u, w, hp, hq))
+                },
+                Inr(hq) => {
+                    let cq = q.clamp_up_of_le(a, hq);
+                    Rat::abs_le(linarith(cp, cq, u, w), linarith(cp, cq, u, w))
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// exp(d) >= 1 + d at d >= 0.
+
+theorem CReal::exp_ge_alg_pos(E, D: CReal, r, t, g, w: Rat, h1: CReal::ofRat(1 + r) <= E, h2: D <= CReal::ofRat(t + g),
+    hr: r ≈ t - g, hw: g + g ≈ w): 1 + D <= E + CReal::ofRat(w)
+{
+    let k: (t + g <= (1 + r) + w - 1) = linarith(hr, hw);
+    linarith(h1, h2, CReal::ofRat_le(k))
+}
+
+theorem CReal::exp_ge_alg_neg(E, D: CReal, r, t, g, w: Rat, h1: 1 <= E, h2: D <= CReal::ofRat(t + g),
+    hr: r ≈ t - g, hw: g + g ≈ w, r0: r <= 0): 1 + D <= E + CReal::ofRat(w)
+{
+    let k: (t + g <= w) = linarith(hr, hw, r0);
+    linarith(h1, h2, CReal::ofRat_le(k))
+}
+
+theorem CReal::exp_ge_add_one(d: CReal, hd: 0 <= d): 1 + d <= CReal::exp(d) {
+    CReal::le_of_slack(λ m => {
+        let j = m + 1;
+        let t = d.at(j);
+        let g = Rat::inv_pow2(j);
+        let r = t - g;
+        let lo: (CReal::ofRat(r) <= d) = d.term_sub_le(j);
+        let hi: (d <= CReal::ofRat(t + g)) = d.le_term_add(j);
+        let hw: (g + g ≈ Rat::inv_pow2(m)) = Rat::inv_pow2_half(m);
+        let hr: (r ≈ t - g) = Rat::same_refl(r);
+        match Rat::le_total(0, r) {
+            Inl(r0) => {
+                let e1 = CReal::exp_rat_ge(r, r0);
+                let e2 = CReal::le_of_same(CReal::same_sym(CReal::exp_ofRat(r)));
+                let e3 = CReal::exp_le(lo);
+                CReal::exp_ge_alg_pos(CReal::exp(d), d, r, t, g, Rat::inv_pow2(m), CReal::le_trans(e1, CReal::le_trans(e2, e3)), hi, hr, hw)
+            },
+            Inr(r0) => {
+                let e0 = CReal::le_trans(CReal::le_of_same(CReal::same_sym(CReal::exp_zero())), CReal::exp_le(hd));
+                CReal::exp_ge_alg_neg(CReal::exp(d), d, r, t, g, Rat::inv_pow2(m), e0, hi, hr, hw, r0)
+            },
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// log is (1/a)-Lipschitz above a.
+
+theorem CReal::log_lip_alg(Pr, Qr, D, E, Eu, Ev, A, Lr, S: CReal, h1: 1 + D <= E, h2: Ev ≈ Eu * E, h3: Eu ≈ Pr, h4: Ev ≈ Qr,
+    hA: A <= Pr, hA0: 0 <= A, hD: 0 <= D, hL: 0 <= Lr, aL: Lr * A ≈ 1, hs: Qr + -Pr <= S): D <= Lr * S
+{
+    let pP: (0 <= Pr) = CReal::le_trans(hA0, hA);
+    let m1: (Pr * (1 + D) <= Pr * E) = CReal::mul_le_mono_l(h1, pP);
+    let q: (Pr * E ≈ Qr) = ring(h2, h3, h4);
+    let m2: (Pr * D <= S) = linarith(m1, q, hs);
+    let m3: (A * D <= Pr * D) = CReal::mul_le_mono_r(hA, hD);
+    let m4: (Lr * (A * D) <= Lr * S) = CReal::mul_le_mono_l(CReal::le_trans(m3, m2), hL);
+    let e: (D ≈ Lr * (A * D)) = ring(aL);
+    CReal::le_trans(CReal::le_of_same(e), m4)
+}
+
+theorem CReal::log_rat_sub_le(P, Q, a, L: Rat, pP: 0 < P, pQ: 0 < Q, ha: 0 <= a, hL: 0 <= L, aL: L * a ≈ 1, hP: a <= P):
+    CReal::log_rat(Q, pQ) - CReal::log_rat(P, pP) <= CReal::ofRat(L * (Q - P).abs())
+{
+    let u = CReal::log_rat(P, pP);
+    let v = CReal::log_rat(Q, pQ);
+    let d = v - u;
+    let s = (Q - P).abs();
+    λ bad => {
+        let ls0: (L * 0 <= L * s) = Rat::mul_le_mono_l((Q - P).abs_nonneg(), hL);
+        let ls: (CReal::ofRat(0) <= CReal::ofRat(L * s)) = CReal::ofRat_le(linarith(ls0));
+        let d0: (0 <= d) = CReal::le_of_lt(CReal::lt_of_le_of_lt(ls, bad));
+        let t1 = CReal::exp_ge_add_one(d, d0);
+        let vd: (v ≈ u + d) = ring;
+        let ev = CReal::same_trans(CReal::exp_respects(vd), CReal::exp_add(u, d));
+        let hs: (CReal::ofRat(Q) + -CReal::ofRat(P) <= CReal::ofRat(s)) = linarith(CReal::ofRat_le(Rat::le_abs(Q - P)));
+        let cL: (CReal::ofRat(L) * CReal::ofRat(a) ≈ 1) = CReal::same_trans(CReal::same_sym(CReal::ofRat_mul(L, a)), CReal::ofRat_respects(aL));
+        let f = CReal::log_lip_alg(CReal::ofRat(P), CReal::ofRat(Q), d, CReal::exp(d), CReal::exp(u), CReal::exp(v), CReal::ofRat(a), CReal::ofRat(L),
+            CReal::ofRat(s), t1, ev, CReal::exp_log_rat(P, pP), CReal::exp_log_rat(Q, pQ), CReal::ofRat_le(hP), CReal::ofRat_le(ha), d0,
+            CReal::ofRat_le(hL), cL, hs);
+        let f2: (d <= CReal::ofRat(L * s)) = CReal::le_trans(f, CReal::le_of_same(CReal::same_sym(CReal::ofRat_mul(L, s))));
+        CReal::lt_irrefl(d, CReal::lt_of_le_of_lt(f2, bad))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// log clamped up to 1/(k+1), as a Lipschitz function on the rationals.
+
+fn CReal::log_lo(k: Nat) → Rat { Rat::inv_succ(k) }
+
+fn CReal::log_L(k: Nat) → Rat { Rat::ofInt(OfNat(Succ(k))) }
+
+theorem CReal::log_L_mul(k: Nat): CReal::log_L(k) * CReal::log_lo(k) ≈ 1 { omega }
+
+theorem CReal::log_L_nonneg(k: Nat): 0 <= CReal::log_L(k) { omega }
+
+theorem CReal::log_lo_nonneg(k: Nat): 0 <= CReal::log_lo(k) { omega }
+
+theorem CReal::clamp_pos(k: Nat, q: Rat): 0 < q.clamp_up(CReal::log_lo(k)) {
+    Rat::lt_of_lt_of_le(Rat::inv_succ_pos(k), q.clamp_up_ge(CReal::log_lo(k)))
+}
+
+fn CReal::log_clamped(k: Nat, q: Rat) → CReal { CReal::log_rat(q.clamp_up(CReal::log_lo(k)), CReal::clamp_pos(k, q)) }
+
+theorem CReal::log_clamped_bound(k: Nat, p, q: Rat):
+    CReal::ofRat(-(CReal::log_L(k) * (p - q).abs())) <= CReal::log_clamped(k, p) - CReal::log_clamped(k, q)
+        ∧ CReal::log_clamped(k, p) - CReal::log_clamped(k, q) <= CReal::ofRat(CReal::log_L(k) * (p - q).abs())
+{
+    let a = CReal::log_lo(k);
+    let L = CReal::log_L(k);
+    let P = p.clamp_up(a);
+    let Q = q.clamp_up(a);
+    let hL = CReal::log_L_nonneg(k);
+    let ha = CReal::log_lo_nonneg(k);
+    let aL = CReal::log_L_mul(k);
+    let up = CReal::log_rat_sub_le(Q, P, a, L, CReal::clamp_pos(k, q), CReal::clamp_pos(k, p), ha, hL, aL, q.clamp_up_ge(a));
+    let dn = CReal::log_rat_sub_le(P, Q, a, L, CReal::clamp_pos(k, p), CReal::clamp_pos(k, q), ha, hL, aL, p.clamp_up_ge(a));
+    let c1: (L * (P - Q).abs() <= L * (p - q).abs()) = Rat::mul_le_mono_l(Rat::clamp_up_lip(p, q, a), hL);
+    let sc: ((Q - P).abs() ≈ (P - Q).abs()) = Rat::abs_sub_comm(Q, P);
+    let c2: (L * (Q - P).abs() <= L * (p - q).abs()) = Rat::le_trans(Rat::le_of_same(Rat::mul_respects(L.same_refl(), sc)), c1);
+    let u: (CReal::log_clamped(k, p) - CReal::log_clamped(k, q) <= CReal::ofRat(L * (p - q).abs())) = CReal::le_trans(up, CReal::ofRat_le(c1));
+    let w: (CReal::log_clamped(k, q) - CReal::log_clamped(k, p) <= CReal::ofRat(L * (p - q).abs())) = CReal::le_trans(dn, CReal::ofRat_le(c2));
+    And(linarith(w), u)
+}
+
+fn CReal::log_lipschitz(k: Nat) → RatLip {
+    RatLip(λ q => CReal::log_clamped(k, q), λ B => CReal::log_L(k), λ B => CReal::log_L_nonneg(k), λ B p q hp hq => CReal::log_clamped_bound(k, p, q))
+}
+
+// ---------------------------------------------------------------------------
+// log at a positive real.
+
+fn CReal::log_gap(self x: CReal, h: 0 < x) → Nat { (CReal::pos_gap(h)).witness }
+
+fn CReal::log(self x: CReal, h: 0 < x := infer) → CReal { CReal::log_lipschitz(x.log_gap(h)).ext(x) }
+
+theorem CReal::log_gap_le(self x: CReal, h: 0 < x): CReal::ofRat(CReal::log_lo(x.log_gap(h))) <= x {
+    let g = CReal::pos_gap(h);
+    let k = g.witness;
+    let s = g.proof.witness;
+    let hg = g.proof.proof;
+    CReal::le_of_slack(λ m => {
+        let n = s + m;
+        let h1: (Rat::inv_succ(k) <= x.at(n)) = hg(n, omega);
+        let an: (Rat::inv_pow2(n) <= Rat::inv_pow2(m)) = Rat::inv_pow2_antitone(m, n, omega);
+        let r: (Rat::inv_succ(k) <= (x.at(n) - Rat::inv_pow2(n)) + Rat::inv_pow2(m)) = linarith(h1, an);
+        let t = x.term_sub_le(n);
+        let goal: (CReal::ofRat(Rat::inv_succ(k)) <= x + CReal::ofRat(Rat::inv_pow2(m))) = linarith(CReal::ofRat_le(r), t);
+        goal
+    })
+}
+
+// ---------------------------------------------------------------------------
+// exp(log x) = x.
+
+// Above `a`, the clamp of a rational within `e` of `x` is within `e` of `x`.
+theorem CReal::clamp_up_near(q, a, e: Rat, x: CReal, he: 0 <= e, ha: CReal::ofRat(a) <= x, lo: CReal::ofRat(q - e) <= x,
+    hi: x <= CReal::ofRat(q + e)): AbsLe(CReal::ofRat(q.clamp_up(a)) - x, CReal::ofRat(e))
+{
+    match Rat::le_total(q, a) {
+        Inl(h) => {
+            let c = CReal::ofRat_respects(q.clamp_up_of_ge(a, h));
+            let qa = CReal::ofRat_le(h);
+            let e0 = CReal::ofRat_le(he);
+            let l: (-CReal::ofRat(e) <= CReal::ofRat(q.clamp_up(a)) - x) = linarith(c, qa, lo);
+            let r: (CReal::ofRat(q.clamp_up(a)) - x <= CReal::ofRat(e)) = linarith(c, ha, e0);
+            LocatedAddGroup::abs_le_intro(CReal::ofRat(q.clamp_up(a)) - x, CReal::ofRat(e), l, r)
+        },
+        Inr(h) => {
+            let c = CReal::ofRat_respects(q.clamp_up_of_le(a, h));
+            let l: (-CReal::ofRat(e) <= CReal::ofRat(q.clamp_up(a)) - x) = linarith(c, lo);
+            let r: (CReal::ofRat(q.clamp_up(a)) - x <= CReal::ofRat(e)) = linarith(c, hi);
+            LocatedAddGroup::abs_le_intro(CReal::ofRat(q.clamp_up(a)) - x, CReal::ofRat(e), l, r)
+        },
+    }
+}
+
+theorem Rat::clamp_up_bound(q, a, B: Rat, hq: q.abs() <= B, ha0: 0 <= a, ha1: a <= 1): -(B + 1) <= q.clamp_up(a) ∧ q.clamp_up(a) <= B + 1 {
+    let u = Rat::le_abs(q);
+    let w = Rat::neg_le_abs(q);
+    match Rat::le_total(q, a) {
+        Inl(h) => {
+            let c = q.clamp_up_of_ge(a, h);
+            And(linarith(c, ha0, u, w, hq), linarith(c, ha1, u, w, hq))
+        },
+        Inr(h) => {
+            let c = q.clamp_up_of_le(a, h);
+            And(linarith(c, u, w, hq), linarith(c, u, w, hq))
+        },
+    }
+}
+
+// exp(lM + δ) - x as the three pieces the estimate bounds.
+theorem CReal::exp_log_split(E, X, M, D, x: CReal, h: E ≈ M * X): E - x ≈ M * (X - 1 - D) + M * D + (M - x) { ring(h) }
+
+theorem CReal::exp_log_shift(y, l: CReal): y ≈ l + (y - l) { ring }
+
+// The rational side of the estimate: BM·C·k² + BM·k + e <= (3·BM·L + 1)·e
+// for k = L·e <= 1/2 and 0 <= C <= 3.
+theorem Rat::exp_log_budget(BM, C, L, e: Rat, hB: 0 <= BM, hC0: 0 <= C, hC: C <= 3, hL: 0 <= L, he: 0 <= e, hk: L * e <= Rat::inv_pow2(1)):
+    BM * (C * ((L * e) * (L * e))) + BM * (L * e) + e <= ((BM * L) * 3 + 1) * e
+{
+    let k = L * e;
+    let k0: (0 <= k) = Rat::mul_nonneg(hL, he);
+    let h1: (k * k <= k * Rat::inv_pow2(1)) = Rat::mul_le_mono_l(hk, k0);
+    let h2: (C * (k * k) <= C * (k * Rat::inv_pow2(1))) = Rat::mul_le_mono_l(h1, hC0);
+    let kh0: (0 <= k * Rat::inv_pow2(1)) = Rat::mul_nonneg(k0, Rat::inv_pow2_nonneg(1));
+    let h3: (C * (k * Rat::inv_pow2(1)) <= 3 * (k * Rat::inv_pow2(1))) = Rat::mul_le_mono_r(hC, kh0);
+    let h4: (BM * (C * (k * k)) <= BM * (3 * (k * Rat::inv_pow2(1)))) = Rat::mul_le_mono_l(Rat::le_trans(h2, h3), hB);
+    let bk0: (0 <= BM * k) = Rat::mul_nonneg(hB, k0);
+    let hh: (Rat::inv_pow2(1) + Rat::inv_pow2(1) ≈ 1) = Rat::inv_pow2_half(0);
+    let e1: (BM * (3 * (k * Rat::inv_pow2(1))) + BM * k + e ≈ ((BM * k) * 5) * Rat::inv_pow2(1) + e) = ring(hh);
+    let e2: (((BM * L) * 3 + 1) * e ≈ (BM * k) * 3 + e) = ring;
+    linarith(h4, bk0, e1, e2)
+}
+
+theorem CReal::exp_log_tot_alg(Bm, Cr, Kr, A, X, Y, Z, E, W: CReal, m1: Y ≈ Kr * Kr, m2: X ≈ Cr * Y, m3: A ≈ Bm * X, m4: Z ≈ Bm * Kr,
+    h: A + Z + E <= W): Bm * (Cr * (Kr * Kr)) + Bm * Kr + E <= W
+{
+    let eq: (Bm * (Cr * (Kr * Kr)) + Bm * Kr + E ≈ A + Z + E) = ring(m1, m2, m3, m4);
+    CReal::le_trans(CReal::le_of_same(eq), h)
+}
+
+theorem CReal::exp_log_near(k: Nat, x: CReal, hx: CReal::ofRat(CReal::log_lo(k)) <= x, m: Nat):
+    AbsLe(CReal::exp(CReal::log_lipschitz(k).ext(x)) - x, CReal::ofRat(Rat::inv_pow2(m)))
+{
+    let F = CReal::log_lipschitz(k);
+    let a = CReal::log_lo(k);
+    let L = CReal::log_L(k);
+    let hL = CReal::log_L_nonneg(k);
+    let Bx = x.bound_rat();
+    let BM = Bx + 1;
+    let Lc = (BM * L) * 3 + 1;
+    let j = (m + Lc.abs_ceil().width()) + (1 + L.abs_ceil().width());
+    let e = Rat::inv_pow2(j);
+    let he = Rat::inv_pow2_nonneg(j);
+    let q = x.at(j);
+    let M = q.clamp_up(a);
+    let pM = CReal::clamp_pos(k, q);
+    let lM = CReal::log_rat(M, pM);
+    let lo: (CReal::ofRat(q - e) <= x) = x.term_sub_le(j);
+    let hi: (x <= CReal::ofRat(q + e)) = x.le_term_add(j);
+    let dev = F.ext_dev(x, q, e, Bx, λ i => x.bound_le(i), x.bound_le(j), lo, hi);
+    let y = F.ext(x);
+    let dl: (CReal::ofRat(-(L * e)) <= y - lM) = dev.left;
+    let dr: (y - lM <= CReal::ofRat(L * e)) = dev.right;
+    let D = y - lM;
+    let kk = L * e;
+    let dl2: (-CReal::ofRat(kk) <= D) = linarith(dl);
+    let hk: AbsLe(D, CReal::ofRat(kk)) = LocatedAddGroup::abs_le_intro(D, CReal::ofRat(kk), dl2, dr);
+    let s1: (L * e <= Rat::inv_pow2(1)) = RatLip::scaled(L, hL, 1, j, omega);
+    let half: (Rat::inv_pow2(1) + Rat::inv_pow2(1) ≈ 1) = Rat::inv_pow2_half(0);
+    let k2r: (kk + kk <= 1) = linarith(s1, half);
+    let k2: (CReal::ofRat(kk) + CReal::ofRat(kk) <= 1) = linarith(CReal::ofRat_le(k2r));
+    let sl = CReal::exp_sub_lin(D, CReal::ofRat(kk), hk, k2);
+    let C = CReal::exp_reach(1);
+    let ee = CReal::same_trans(CReal::exp_respects(CReal::exp_log_shift(y, lM)),
+        CReal::same_trans(CReal::exp_add(lM, D), CReal::mul_respects(CReal::exp_log_rat(M, pM), CReal::exp(D).same_refl())));
+    let cx = CReal::clamp_up_near(q, a, e, x, he, hx, lo, hi);
+    let bq = Rat::clamp_up_bound(q, a, Bx, x.bound_le(j), CReal::log_lo_nonneg(k), Rat::inv_succ_le_one(k));
+    let bl: (-CReal::ofRat(BM) <= CReal::ofRat(M)) = linarith(CReal::ofRat_le(bq.left));
+    let bM: AbsLe(CReal::ofRat(M), CReal::ofRat(BM)) = LocatedAddGroup::abs_le_intro(CReal::ofRat(M), CReal::ofRat(BM),
+        bl, CReal::ofRat_le(bq.right));
+    let p1 = OrderedField::abs_le_mul(CReal::ofRat(M), CReal::exp(D) - 1 - D, CReal::ofRat(BM), CReal::ofRat(C) * (CReal::ofRat(kk) * CReal::ofRat(kk)), bM, sl);
+    let p2 = OrderedField::abs_le_mul(CReal::ofRat(M), D, CReal::ofRat(BM), CReal::ofRat(kk), bM, hk);
+    let sp = CReal::exp_log_split(CReal::exp(y), CReal::exp(D), CReal::ofRat(M), D, x, ee);
+    let bud = Rat::exp_log_budget(BM, C, L, e, omega, CReal::exp_reach_nonneg(1, omega), CReal::exp_reach_one(), hL, he, s1);
+    let bm0: (0 <= BM) = omega;
+    let bl0: (0 <= BM * L) = Rat::mul_nonneg(bm0, hL);
+    let lc0: (0 <= Lc) = linarith(bl0);
+    let sc: (Lc * e <= Rat::inv_pow2(m)) = RatLip::scaled(Lc, lc0, m, j, omega);
+    let tot: (CReal::ofRat(BM) * (CReal::ofRat(C) * (CReal::ofRat(kk) * CReal::ofRat(kk))) + CReal::ofRat(BM) * CReal::ofRat(kk) + CReal::ofRat(e)
+        <= CReal::ofRat(Rat::inv_pow2(m))) = {
+        let eqs = CReal::same_trans(CReal::ofRat_add(BM * (C * (kk * kk)) + BM * kk, e),
+            CReal::add_respects(CReal::ofRat_add(BM * (C * (kk * kk)), BM * kk), CReal::ofRat(e).same_refl()));
+        let tr = CReal::le_of_same_l(CReal::same_sym(eqs), CReal::ofRat_le(Rat::le_trans(bud, sc)));
+        CReal::exp_log_tot_alg(CReal::ofRat(BM), CReal::ofRat(C), CReal::ofRat(kk), CReal::ofRat(BM * (C * (kk * kk))), CReal::ofRat(C * (kk * kk)),
+            CReal::ofRat(kk * kk), CReal::ofRat(BM * kk), CReal::ofRat(e), CReal::ofRat(Rat::inv_pow2(m)),
+            CReal::ofRat_mul(kk, kk), CReal::ofRat_mul(C, kk * kk), CReal::ofRat_mul(BM, C * (kk * kk)), CReal::ofRat_mul(BM, kk), tr)
+    };
+    LocatedAddGroup::abs_le_sum3(CReal::ofRat(M) * (CReal::exp(D) - 1 - D), CReal::ofRat(M) * D, CReal::ofRat(M) - x, CReal::exp(y) - x,
+        CReal::ofRat(BM) * (CReal::ofRat(C) * (CReal::ofRat(kk) * CReal::ofRat(kk))), CReal::ofRat(BM) * CReal::ofRat(kk), CReal::ofRat(e),
+        CReal::ofRat(Rat::inv_pow2(m)), p1, p2, cx, sp, tot)
+}
+
+theorem CReal::same_of_sub_zero(E, x: CReal, h: E - x ≈ 0): E ≈ x { ring(h) }
+
+theorem CReal::exp_log_clamped(k: Nat, x: CReal, hx: CReal::ofRat(CReal::log_lo(k)) <= x): CReal::exp(CReal::log_lipschitz(k).ext(x)) ≈ x {
+    CReal::same_of_sub_zero(CReal::exp(CReal::log_lipschitz(k).ext(x)), x,
+        CReal::zero_of_pow2_close(CReal::exp(CReal::log_lipschitz(k).ext(x)) - x, λ m => CReal::exp_log_near(k, x, hx, m)))
+}
+
+// exp(log x) = x at every positive real.
+theorem CReal::exp_log(self x: CReal, h: 0 < x): CReal::exp(x.log(h := h)) ≈ x { CReal::exp_log_clamped(x.log_gap(h), x, x.log_gap_le(h)) }
+
+// ---------------------------------------------------------------------------
+// Injectivity, and the laws it gives.
+
+theorem CReal::exp_inj({u, v: CReal}, h: CReal::exp(u) ≈ CReal::exp(v)): u ≈ v {
+    CReal::same_of_not_apart(λ ap => match ap {
+        Inl(lt) => CReal::lt_irrefl(CReal::exp(v), CReal::lt_of_same_l(CReal::same_sym(h), CReal::exp_lt(lt))),
+        Inr(lt) => CReal::lt_irrefl(CReal::exp(u), CReal::lt_of_same_l(h, CReal::exp_lt(lt))),
+    })
+}
+
+// The value does not depend on the positivity evidence, and respects `≈`.
+theorem CReal::log_respects({x, y: CReal}, hx: 0 < x, hy: 0 < y, h: x ≈ y): x.log(h := hx) ≈ y.log(h := hy) {
+    CReal::exp_inj(CReal::same_trans(CReal::exp_log(x, hx), CReal::same_trans(h, CReal::same_sym(CReal::exp_log(y, hy)))))
+}
+
+theorem CReal::log_ofRat(q: Rat, pos: 0 < q, h: 0 < CReal::ofRat(q)): (CReal::ofRat(q)).log(h := h) ≈ CReal::log_rat(q, pos) {
+    CReal::exp_inj(CReal::same_trans(CReal::exp_log(CReal::ofRat(q), h), CReal::same_sym(CReal::exp_log_rat(q, pos))))
+}
+
+theorem CReal::log_exp(self a: CReal): (CReal::exp(a)).log(h := CReal::exp_pos(a)) ≈ a { CReal::exp_inj(CReal::exp_log(CReal::exp(a), CReal::exp_pos(a))) }
+
+theorem CReal::log_mul({x, y: CReal}, hx: 0 < x, hy: 0 < y): (x * y).log(h := CReal::mul_pos(hx, hy)) ≈ x.log(h := hx) + y.log(h := hy) {
+    let p = CReal::mul_pos(hx, hy);
+    let r = CReal::same_trans(CReal::exp_add(x.log(h := hx), y.log(h := hy)), CReal::mul_respects(CReal::exp_log(x, hx), CReal::exp_log(y, hy)));
+    CReal::exp_inj(CReal::same_trans(CReal::exp_log(x * y, p), CReal::same_sym(r)))
+}
+
+theorem CReal::log_one(h: 0 < CReal::ofRat(1)): (CReal::ofRat(1)).log(h := h) ≈ 0 {
+    CReal::exp_inj(CReal::same_trans(CReal::exp_log(CReal::ofRat(1), h), CReal::same_sym(CReal::exp_zero())))
+}
+
+// log is monotone: if log y < log x then y < x by exp_lt.
+theorem CReal::log_le({x, y: CReal}, hx: 0 < x, hy: 0 < y, h: x <= y): x.log(h := hx) <= y.log(h := hy) {
+    λ bad => h(CReal::lt_respects(CReal::exp_log(y, hy), CReal::exp_log(x, hx), CReal::exp_lt(bad)))
+}
