@@ -289,9 +289,12 @@ module.exports = grammar({
     assignment_statement: $ => seq(field('name', $.identifier), ':=', field('value', $._expression), ';'),
     // A statement `if`/`match`: its bodies are statements, and it needs no
     // `;` (§5.1).
-    statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement),
+    statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement, $.while_statement),
     // `for x in xs { body }` (§5.2): `in` is contextual.
     for_statement: $ => seq('for', field('binder', $.identifier), 'in', field('iterable', $._head_expression), field('body', $.block)),
+    // `while c decreases m { body }` (§5.3): a recursive function over the
+    // locals the body assigns, `m` its measure.
+    while_statement: $ => seq('while', field('condition', $._head_expression), 'decreases', field('measure', $._head_expression), field('body', $.block)),
     // `break;`, `continue;`, `return e;` in a `for` body (§5.2): contextual
     // words, statements only before `;` or `}`.
     exit_statement: $ => choice(seq('break', ';'), seq('continue', ';'), seq('return', field('value', $._expression), ';')),

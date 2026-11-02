@@ -175,16 +175,35 @@ pub(crate) fn select_scope<'a>(scope: &'a [Binder], goal: &Ty, evidence: Option<
             && (mentions_ty(goal, &b.name)
                 || evidence.is_some_and(|e| mentions_context(e, &b.name)))
     }).collect();
-    for i in (0..scope.len()).rev() {
-        if !needed[i] { continue; }
-        let ty = scope[i].ty.as_ref()?;
-        let value = scope[i].value.as_ref();
-        for j in (0..i).rev() {
-            if mentions_ty(ty, &scope[j].name) || value.is_some_and(|v| mentions_context(v, &scope[j].name)) {
-                if scope[j + 1..].iter().any(|b| b.name == scope[j].name) { return None; }
-                needed[j] = true;
+    loop {
+        for i in (0..scope.len()).rev() {
+            if !needed[i] { continue; }
+            let ty = scope[i].ty.as_ref()?;
+            let value = scope[i].value.as_ref();
+            for j in (0..i).rev() {
+                if mentions_ty(ty, &scope[j].name) || value.is_some_and(|v| mentions_context(v, &scope[j].name)) {
+                    if scope[j + 1..].iter().any(|b| b.name == scope[j].name) { return None; }
+                    needed[j] = true;
+                }
             }
         }
+        // An equation in scope about a needed binder — a `match h: e` arm's
+        // `h` — is a fact the obligation may need even where neither the
+        // goal nor the evidence names it: an argument passed through a `let`
+        // alias reaches the goal as the alias, and the arm's equation about
+        // the parameter behind it would otherwise be left out.
+        let mut grew = false;
+        for i in 0..scope.len() {
+            if needed[i] || scope[i + 1..].iter().any(|c| c.name == scope[i].name) { continue; }
+            let Some(ty) = &scope[i].ty else { continue };
+            if !matches!(ty.kind, TyKind::Eq(..)) { continue; }
+            let about = (0..scope.len()).any(|j| needed[j] && mentions_ty(ty, &scope[j].name));
+            if about {
+                needed[i] = true;
+                grew = true;
+            }
+        }
+        if !grew { break; }
     }
     Some(scope.iter().zip(needed).filter_map(|(b, needed)| needed.then_some(b)).collect())
 }

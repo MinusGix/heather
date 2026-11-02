@@ -1012,3 +1012,43 @@ and `List::for_in` (both in `lib/std/data/list.hthr`). What departs from
    `break` and `continue` are its own.
 6. **Not built yet:** labels, `return` from a nested or conditional loop,
    ranges, `while`, and the `List::for_in_invariant` theorem (§7.2).
+
+## 16. `while` as built (2026-11-02)
+
+`while c decreases m { body }`, following §5.3. What departs from it:
+
+1. **The parser reuses the `for` marker.** A `while` is `\0for(\0while(
+   decide_bit<c>(), m), λ #whileN => body)`, so its locals are threaded,
+   read back and left as residuals exactly as a `for`'s are. The condition
+   is decided as a plain `if` decides it. `while` is a statement only
+   where a `while` statement can start, so it stays usable as a name.
+2. **`f::run` takes the state as separate parameters and returns the
+   state**, a single local's own type or `f::State`, so the loop reads back
+   like a `for`. The body is **hoisted above the condition's match**:
+   `fn f#run(c̄, v̄) → S decreases m { body′; match h: decide_bit<c>() {
+   True => f#run(c̄, v̄′), False => v̄ } }`. The body is pure, so the `False`
+   arm ignoring its `let`s changes nothing. Keeping the `let`s out of the
+   arm keeps them out of the shapes the unfolding companions handle worst.
+3. **The body is put in SSA form** (`crates/elab/src/alpha.rs`): each
+   top-level `let` that rebinds a name gets a fresh `name__N`, along with
+   every later occurrence of it. Without this, `m := m - 1` makes the
+   measure's `m` read the new value (the obligation becomes `m < m`), and
+   the unfolding companions decline shadowed binders. Both are `decreases`
+   bugs that hand-written functions hit too
+   (`issues/decreases-shadowed-let.md`).
+4. **`f::run_unfold` is generated** (§7.3's dependency, unfolding over a
+   computed scrutinee, has landed). It needed one fix in `measure.rs`: a
+   lifted obligation's telescope now includes an equation binder about a
+   binder it needs. An argument passed through a `let` alias otherwise
+   reached the goal as the alias, and the arm's `h` about the parameter
+   behind it was dropped (`lib/_tests/std/core/decreases_unfolding_tests.hthr`).
+5. **The obligation is `omega`'s.** It reads the condition from
+   `h : decide_bit<c>() = True`, so a module with a `while` imports `omega`
+   and `int`, as any `decreases` function does. A body that does not
+   decrease the measure is refused at its obligation. The message still
+   suggests `on ?dec1 := …`, which a `while` cannot yet name (no loop
+   labels).
+6. **Not built yet:** `break`/`continue`/`return` in a `while` (refused at
+   parse time), the fuelled form, a `while` inside a `decreases` function
+   or holding a `for` (the generated `f#run` is a `decreases` function, and
+   loops in those are refused), and labels.

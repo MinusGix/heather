@@ -118,3 +118,21 @@ fn an_early_exit_leaves_only_the_loop_markers() {
         }
     }
 }
+
+#[test]
+fn a_while_names_its_measure_and_does_not_exit_yet() {
+    for (src, says) in [
+        // A `while` is a recursive function: its measure is required.
+        ("fn f(n: Nat) -> Nat { let mut m = n; while 1 <= m { m := m - 1 } m }", "names what it decreases"),
+        // Early exit threads `ForStep` through `f::run` (§5.3), not built yet.
+        ("fn f(n: Nat) -> Nat { let mut m = n; while 1 <= m decreases m { if c { break } m := m - 1 } m }",
+         "in a `while` are not built yet"),
+        // Like a `for`, a `while` that assigns nothing computes nothing.
+        ("fn f(n: Nat) -> Nat { while 1 <= n decreases n { } n }", "computes nothing"),
+    ] {
+        let error = parse_file(src).unwrap_err();
+        assert!(error.msg.contains(says), "{src}: {}", error.msg);
+    }
+    // `while` stays a name where it is not a statement.
+    parse_file("fn f(while: Nat) -> Nat { while }").unwrap_or_else(|e| panic!("{}", e.msg));
+}

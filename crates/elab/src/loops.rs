@@ -26,6 +26,12 @@
 //! The step and state are designated `f::step` and `f::State` (with several
 //! loops, `f::loop1_step`, …; §5.4), the spellings proofs cite.
 //!
+//! A `while c decreases m { body }` arrives as the same marker over the
+//! header `\0while(decide_bit<c>(), m)` and lifts to `fn f#run(c̄, v̄) → S
+//! decreases m`, the body hoisted above `match h: decide_bit<c>() { True =>
+//! f#run(c̄, v̄'), False => v̄ }` in SSA form ([`crate::alpha::ssa`]), and the
+//! loop to `f#run(c̄, v̄)`; designated `f::run` and `f::run_unfold` (§5.3).
+//!
 //! Nothing here is trusted: a wrong capture or type is refused by the
 //! checker at the generated declaration.
 
@@ -184,12 +190,14 @@ impl<'a> Lift<'a> {
         self.tys.infer_local(self.decl, &[], &selected, e)
     }
 
-    fn names(&mut self) -> (String, String, String, String) {
+    /// The minted and designed names of the next loop's function (`step`
+    /// for a `for`, `run` for a `while`) and state record (§5.4).
+    fn names(&mut self, word: &str) -> (String, String, String, String) {
         self.next += 1;
         let (step, state) = if self.loops == 1 {
-            ("step".to_string(), "State".to_string())
+            (word.to_string(), "State".to_string())
         } else {
-            (format!("loop{}_step", self.next), format!("loop{}_State", self.next))
+            (format!("loop{}_{word}", self.next), format!("loop{}_State", self.next))
         };
         (
             format!("{}#{step}", self.decl.name),
@@ -346,6 +354,9 @@ impl<'a> Lift<'a> {
     /// state is a single local.
     fn lift(&mut self, e: &Expr, scope: &[Local]) -> R<(Expr, bool, Option<Expr>)> {
         let (iter, x, body, vars) = loop_parts(e).expect("a loop");
+        if let Some((cond, measure)) = while_parts(iter) {
+            return self.lift_while(e, scope, cond, measure);
+        }
         let span = e.span;
         let typed = self.typed(scope);
         let ty_of = |n: &str| typed.iter().rev().find(|b| b.name == n);
@@ -401,7 +412,7 @@ impl<'a> Lift<'a> {
             };
             captures.push((b.name.clone(), t));
         }
-        let (step, state, step_designed, state_designed) = self.names();
+        let (step, state, step_designed, state_designed) = self.names("step");
         let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
         let single = vars.len() == 1;
         let state_ty = if single { state_tys[0].clone() } else { named_ty(&state, tyargs.clone(), span) };
@@ -454,26 +465,7 @@ impl<'a> Lift<'a> {
             if !exits {
                 *body.result = call(var(&state, end), vars.iter().map(|v| var(v, end)).collect(), end);
             }
-            self.parts.push(Part::State(InductiveDecl {
-                name: state.clone(),
-                params: self.decl.tyvars.iter().map(|t| t.name.clone()).collect(),
-                valparams: vec![],
-                varies: None,
-                ctors: vec![CtorDecl {
-                    name: state.clone(),
-                    fields: vars
-                        .iter()
-                        .zip(&state_tys)
-                        .map(|(v, t)| FieldDecl { name: Some(v.to_string()), ty: t.clone(), default: None, span })
-                        .collect(),
-                    result: None,
-                    span,
-                }],
-                is_record: true,
-                is_codata: false,
-                index: None,
-                span,
-            }));
+            self.push_state(&state, &vars, &state_tys, span);
             self.designations.push((state_designed, state.clone()));
         }
         params.push(param(&x.name, elem.clone(), span));
@@ -522,6 +514,154 @@ impl<'a> Lift<'a> {
         };
         Ok((fold, single, exits.then_some(init)))
     }
+}
+
+impl Lift<'_> {
+    /// Lift one `while c decreases m { body }` (§5.3): the recursive
+    /// `f#run(c̄, v̄) → S decreases m { match __while_h: decide_bit<c>() { True =>
+    /// { body; f#run(c̄, v̄) }, False => v̄ } }`, the state as separate
+    /// parameters so the measure obligation reads them plainly, its result
+    /// the state as a `for`'s step returns it. The match's equation is what
+    /// the obligation's `omega` reads the condition from.
+    fn lift_while(&mut self, e: &Expr, scope: &[Local], cond: &Expr, measure: &Expr) -> R<(Expr, bool, Option<Expr>)> {
+        let (_, x, body, vars) = loop_parts(e).expect("a loop");
+        let span = e.span;
+        let typed = self.typed(scope);
+        let ty_of = |n: &str| typed.iter().rev().find(|b| b.name == n);
+        let mut state_tys = Vec::new();
+        for v in &vars {
+            match ty_of(v).and_then(|b| b.ty.clone()) {
+                Some(t) => state_tys.push(t),
+                None => {
+                    return err(
+                        format!("the type of `{v}`, which this `while` assigns, could not be recovered: annotate \
+                                 it, `let mut {v}: T = …;`"),
+                        span,
+                    );
+                }
+            }
+        }
+        // Captures: what the body, the condition or the measure reads.
+        let whole = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
+        let mut captures: Vec<(String, Ty)> = Vec::new();
+        for (i, b) in typed.iter().enumerate() {
+            if typed[i + 1..].iter().any(|c| c.name == b.name)
+                || b.name == x.name
+                || vars.contains(&b.name.as_str())
+                || b.name.starts_with('#')
+                || !(measure::mentions_context(&whole, &b.name)
+                    || measure::mentions_context(cond, &b.name)
+                    || measure::mentions_context(measure, &b.name))
+            {
+                continue;
+            }
+            let Some(t) = b.ty.clone() else {
+                return err(
+                    format!("the type of `{}`, which this `while` reads, could not be recovered: annotate its \
+                             `let`", b.name),
+                    span,
+                );
+            };
+            captures.push((b.name.clone(), t));
+        }
+        let (run, state, run_designed, state_designed) = self.names("run");
+        let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
+        let single = vars.len() == 1;
+        let state_ty = if single { state_tys[0].clone() } else { named_ty(&state, tyargs, span) };
+        let state_of = |at: Span| {
+            let args: Vec<Expr> = vars.iter().map(|v| var(v, at)).collect();
+            if single { args.into_iter().next().expect("one local") } else { call(var(&state, at), args, at) }
+        };
+        if !single {
+            self.push_state(&state, &vars, &state_tys, span);
+            self.designations.push((state_designed, state.clone()));
+        }
+        let mut params: Vec<Param> = self.decl.params.iter().filter(|p| p.solver.is_some()).cloned().collect();
+        params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+        params.extend(vars.iter().zip(&state_tys).map(|(v, t)| param(v, t.clone(), span)));
+        let args = |at: Span| -> Vec<Expr> {
+            captures.iter().map(|(n, _)| var(n, at)).chain(vars.iter().map(|v| var(v, at))).collect()
+        };
+        // The body runs before the condition's match, in SSA form: the
+        // `decreases` lowering reads a name by its last binding, so a body
+        // that rebinds `m` would have the measure's `m` read the new value,
+        // and its unfolding companions decline shadowed binders. Hoisted
+        // above the match, the lets are what every arm sees; the `False` arm
+        // ignores them (the body is pure), and the match's equation is about
+        // the parameters, which the obligation compares.
+        let mut again = body.clone();
+        let end = again.result.span;
+        *again.result = call(var(&run, end), args(end), end);
+        let telescope: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        crate::alpha::ssa(&mut again, &telescope);
+        let next = std::mem::replace(&mut *again.result, var("", end));
+        *again.result = Expr {
+            kind: ExprKind::Match {
+                form: MatchForm::Match,
+                generated: true,
+                scrut: Box::new(cond.clone()),
+                eqbind: Some("__while_h".into()),
+                motive: None,
+                arms: vec![
+                    Arm { ctor: "True".into(), default: false, binders: vec![], body: next, span },
+                    Arm { ctor: "False".into(), default: false, binders: vec![], body: state_of(span), span },
+                ],
+            },
+            span,
+        };
+        self.parts.push(Part::Decl(Decl {
+            kind: DeclKind::Fn,
+            is_meta: false,
+            is_evidence: false,
+            value: false,
+            elaborates: None,
+            name: run.clone(),
+            tyvars: self.decl.tyvars.clone(),
+            params,
+            result: state_ty,
+            decreases: Some(measure.clone()),
+            body: again,
+            span,
+        }));
+        // A `decreases` function's equation, `f#run_unfold`, is a member
+        // proofs cite too (§7.3).
+        self.designations.push((measure::unfold_name(&run_designed), measure::unfold_name(&run)));
+        self.designations.push((run_designed, run.clone()));
+        Ok((call(var(&run, span), args(span), span), single, None))
+    }
+
+    /// `record f#State { v₁: T₁, … }`, the state of a loop with several locals.
+    fn push_state(&mut self, state: &str, vars: &[&str], tys: &[Ty], span: Span) {
+        self.parts.push(Part::State(InductiveDecl {
+            name: state.to_string(),
+            params: self.decl.tyvars.iter().map(|t| t.name.clone()).collect(),
+            valparams: vec![],
+            varies: None,
+            ctors: vec![CtorDecl {
+                name: state.to_string(),
+                fields: vars
+                    .iter()
+                    .zip(tys)
+                    .map(|(v, t)| FieldDecl { name: Some(v.to_string()), ty: t.clone(), default: None, span })
+                    .collect(),
+                result: None,
+                span,
+            }],
+            is_record: true,
+            is_codata: false,
+            index: None,
+            span,
+        }));
+    }
+}
+
+/// `\0while(cond, measure)`: a `while`'s header in a loop marker's list.
+fn while_parts(e: &Expr) -> Option<(&Expr, &Expr)> {
+    let ExprKind::App { head, args, .. } = &e.kind else { return None };
+    if args.len() != 2 || !matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::WHILE) {
+        return None;
+    }
+    Some((&args[0], &args[1]))
 }
 
 /// `\0after(#forN, rest)`: the loop's name and the rest of the body.
