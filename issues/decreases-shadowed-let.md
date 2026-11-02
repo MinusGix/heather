@@ -42,3 +42,4 @@ shadowed binders.
   `select_scope` learned to include an equation binder about a needed
   binder, so an argument passed through a non-shadowing `let` keeps the
   arm's equation (`alias_before`, `alias_inside` in the same probe file).
+- 2026-11-02: The binder-identity fix direction is generalised to the recursion planner in [[recursion-on-elaborated-terms]] (docs/elaborator-principles-survey.md §6).
