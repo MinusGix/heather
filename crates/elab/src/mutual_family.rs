@@ -560,6 +560,7 @@ fn members_decl(first: &str, heads: &[MemberHead]) -> InductiveDecl {
         name: members_name(first),
         params: Vec::new(),
         valparams: Vec::new(),
+        varies: None,
         ctors: heads
             .iter()
             .map(|h| CtorDecl {
@@ -691,6 +692,7 @@ fn family_decl(first: &str, heads: &[MemberHead]) -> R<(InductiveDecl, Vec<Membe
         name: fam,
         params,
         valparams: Vec::new(),
+        varies: None,
         ctors,
         is_record: false,
         is_codata: false,

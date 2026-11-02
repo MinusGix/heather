@@ -1,8 +1,10 @@
 # Instances at a carrier that is not `Head<…, A>`
 
-Status: **decided** 2026-11-02 (Minus): route 5, the type declares its
-varying slot, built on route 4's partial-application carriers. §7 is the
-design being built; §1–§6 are the comparison that led to it. Tracking issue:
+Status: **built** 2026-11-02. Minus chose route 5 (the type declares its
+varying slot), built on route 4's partial-application carriers. §7 is the
+design as built; §1–§6 are the comparison that led to it. Probes:
+`lib/_tests/std/core/type_constructor_tests.hthr`,
+`lib/_tests/std/core/binding_statements_tests.hthr`. Tracking issue:
 `issues/class-instance-at-lambda-carrier.md`. Builds on
 `docs/higher-kinded-classes-design.md` (R2a) and
 `docs/sequencing-surface-design.md` §13 (binding statements).
@@ -283,15 +285,15 @@ inductive Result<A, E> varies A { Ok(value: A), Err(error: E) }
 ```
 
 `varies X` is a contextual clause after the parameter lists (and before an
-index telescope or the body), on `inductive`, `record` and `codata`. `X`
-names a type parameter, or a value parameter whose type is a universe.
+index telescope or the body), on `inductive` and `record`. `X` names a type
+parameter. A value parameter, an indexed declaration or a `codata` one is
+refused for now, since none of them has a code function to abstract a
+parameter of.
 
-**Default.** With no clause, the slot is the last type-level argument of the
-declaration's spine (type parameters, then universe-typed value parameters).
-For every declaration that infers today the default is the slot the
-approximation already abstracts, so nothing changes for them. `CoTree<R>(E)`
-gets `R` by default: `E: Events` is not type-level, so it is never the
-slot.
+**Default.** With no clause the slot is the last type parameter, which is
+the argument the aligned-spine approximation already abstracts, so no
+declaration that inferred before changes. A declaration with value
+parameters (`Box(A: Type)`) keeps the aligned rule unchanged.
 
 ### 7.2 The constructor at a slot
 
@@ -339,5 +341,44 @@ written at a declaration and one learned at a use site are the same term.
   constructor is the λ over the inline lowering, as today; its per-use cost
   stays with `issues/tier2-type-code-functions.md`. CoTree additionally
   needs `constructor_spelling` to learn codata and value parameters.
-- The tree-sitter grammar learns `varies` when its parser is next
-  regenerated.
+- The tree-sitter grammar has `varies_clause`. Its `parser.c` is
+  regenerated with the binding statements
+  (`issues/tree-sitter-binding-statements.md`).
+- Instances at the λ carrier are written `λ (A: Type) => Result<A, E>`. A
+  section `Result<·, E>` would be shorter, but `·` is not a type yet.
+
+### 7.5 What building it found
+
+1. **A carrier argument's own code applications were never unspelled.**
+   `unspell_ty_deep` substitutes a code function's arguments into its
+   template and stopped there. When an argument is itself a type
+   constructor (`Bind(app(Res2#tycode_fn; ?E))`), the template applies it
+   (`M(A)` in a field), and the substituted instance still holds
+   `El(app(app(Res2#tycode_fn; ?E); A))`. The pattern side kept that code
+   spelling, the subject side was inline, and an instance binder (`E`) was
+   never learned from the goal. The instance is now unspelled again when an
+   argument is headed by a code function.
+2. **A head meta solved to a λ was paired positionally.** Once `?M := λ A.
+   Result<A, Bool>`, a later `?M(?B) ≟ Result<Nat, Bool>` (a nested
+   `Bind::seq` checked against the outer one's `M(B)`) went through the
+   application congruence. That congruence pairs `?B` with `Bool`, the
+   argument the λ *fixes*. Now the solved head is substituted and the redex
+   contracted before any pairing. An η-short solution never met this,
+   because its spine lines up with the subject's.
+3. **The reader in the unifier is two places, not one.** A subject already
+   in the reference spelling reaches `unify_tm`'s application congruence
+   without passing `unify_ty`'s re-spelling arm, so the slot rule
+   (`slot_pair`) sits in both.
+
+### 7.6 Where the pieces are
+
+- `Inductive::varies` (`crates/elab/src/inductive.rs`). It is in the module
+  image, which is why the magic moved (`HTHMOD …\x1d`, `HTHIFC …\x1a`).
+  The parser reads `varies` (`varies_clause`).
+- `Elaborator::slot_view`, `check_slot_lambda`, `code_fn_prefix` and the
+  free `slot_lambda` (`crates/elab/src/gendefs.rs`): the constructor at a
+  slot, as the unifier, a written λ and a partial application make it.
+- `U::slot_view` and `slot_pair` (`crates/elab/src/unification.rs`).
+- `check_generic_former_value` (partial application) in `inductive.rs`.
+- `check_lambda_carrier` (the unreachable-carrier refusal), and the λ
+  cases of `head_name` and `expr_var_count`, in `crates/elab/src/traits.rs`.

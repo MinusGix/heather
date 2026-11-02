@@ -52,10 +52,11 @@ impl Elaborator {
             let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
             let respell = |t: &Type| self.respell_ty(cx, t);
             let constructor = |t: &Type| self.constructor_spelling(cx, t, argument.span);
+            let slot_view = |t: &Term| self.slot_view(t);
             let u = U {
                 gamma: &cx.gamma, subject_metas: Some((n, sols)),
                 type_args: &type_args, canonical_head: &canonical_head, respell: &respell,
-                constructor: &constructor,
+                constructor: &constructor, slot_view: &slot_view,
             };
             unify_ty_root(&u, &pattern, &subject, k, 0, &mut inner);
             // Even an unused implicit must be determined; zonking only the

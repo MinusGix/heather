@@ -109,14 +109,19 @@ module.exports = grammar({
 
     inductive_declaration: $ => seq(
       choice('inductive', 'codata'), field('name', $.identifier), optional($.type_parameters),
-      optional($.value_parameters), optional(seq(':', field('index', $._expression))),
+      optional($.value_parameters), optional($.varies_clause),
+      optional(seq(':', field('index', $._expression))),
       field('body', $.constructor_list),
     ),
 
     record_declaration: $ => seq(
       'record', field('name', $.identifier), optional($.type_parameters),
-      optional($.value_parameters), field('body', $.field_list),
+      optional($.value_parameters), optional($.varies_clause), field('body', $.field_list),
     ),
+
+    // `varies A`: the parameter a type constructor over the declaration
+    // abstracts (docs/lambda-carrier-instances-design.md §7.1).
+    varies_clause: $ => seq('varies', field('parameter', $.identifier)),
 
     class_declaration: $ => seq(
       'class', field('name', $.identifier), optional($.type_parameters),
