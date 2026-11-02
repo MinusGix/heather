@@ -952,7 +952,7 @@ Local state, statement forms and `for` over lists. What departs from §4–§7:
 7. **`f_unfold` is generated for functions with a loop**, not yet for every
    function with a layer-2 statement. It is always attempted and never a
    reason to refuse `f`.
-8. **Not built yet:** `break`/`continue`/`return` (`ForStep`, `List::for_in`),
+8. **Not built yet:** `break`/`continue`/`return` (`ForStep`, `List::for_in`; built since, §15),
    ranges, labels, `while` (both kinds), loops in a carrier scope (§6),
    assignment to field paths, `mut self`, destructuring `for` binders, and
    loops under a `match` arm that binds. A `for` iterates a `List` only.
@@ -963,3 +963,41 @@ Local state, statement forms and `for` over lists. What departs from §4–§7:
    (`issues/split-all-nested-if-omega-kernel-refusal.md`). Facts by `refl`
    at a neutral state work (the probes in
    `lib/_tests/std/core/imperative_statements_tests.hthr`).
+
+## 15. Early exit as built (2026-11-02)
+
+`break`, `continue` and `return e` in a `for` body, over §5.2's `ForStep`
+and `List::for_in` (both in `lib/std/data/list.hthr`). What departs from
+§5.2:
+
+1. **Exits lower in tail position, in the parser.** `break;`, `continue;`
+   and `return e;` are statements only before `;` or `}`, so the words stay
+   usable as names elsewhere. A loop body that holds an exit is lowered by
+   `tail` (`crates/syntax/src/imperative.rs`): a statement form that exits
+   takes the rest of the body into each of its arms, so the body becomes
+   one expression whose leaves are `\0next(v̄)`, `\0brk(v̄)` and
+   `\0ret(e)`. The elaborator turns the leaves into `ForStep::Next(s)`,
+   `ForStep::Break(s)` and `ForStep::Return(e)`, and the loop into
+   `xs.for_in(step, init)`. A body with no exit still uses `foldl`.
+2. **After the loop the state is read once**, as `#forN#s =
+   #forN.state(init)`, where `ForStep::state` keeps `Next`'s and `Break`'s
+   state and gives `init` for `Return`. Every local the loop assigns is then
+   read from `#forN#s`.
+3. **A returning loop splits the function body.** The parser nests the rest
+   of the body after such a loop in `\0after(#forN, rest)`, and the
+   elaborator builds `match #forN { Return(r) => r, _ => rest }`, so
+   `find_index` computes by `refl` both ways (P3). The step's `R` is the
+   function's result type when the body may `return`, and otherwise the
+   state's own type, which no leaf ever builds.
+4. **A stateless search is a loop.** A `for` that assigns no local but may
+   `return` has a state record with no fields, whose one value is the
+   constructor itself.
+5. **Refused, each at parse time:** an exit outside any loop, a statement
+   after an exit in the same block ("nothing after `break` runs"), `return`
+   outside a `for`, and a returning loop that is not a statement of the
+   function's own body (nested in another loop or in a statement form). The
+   last needs the enclosing step to carry the `Return` out, which is §6.3's
+   agreement between `?` and `return` and not built yet. A nested loop's
+   `break` and `continue` are its own.
+6. **Not built yet:** labels, `return` from a nested or conditional loop,
+   ranges, `while`, and the `List::for_in_invariant` theorem (§7.2).

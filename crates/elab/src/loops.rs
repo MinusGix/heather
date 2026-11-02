@@ -30,8 +30,8 @@
 //! checker at the generated declaration.
 
 use heather_syntax::{
-    Arm, Block, CtorDecl, Decl, DeclKind, Expr, ExprKind, FieldDecl, InductiveDecl, LamBinder, Param,
-    ParamOrigin, Span, Stmt, Ty, TyKind,
+    Arm, Block, CtorDecl, Decl, DeclKind, Expr, ExprKind, FieldDecl, InductiveDecl, LamBinder, MatchForm, Param,
+    ParamOrigin, Pat, Span, Stmt, Ty, TyKind,
 };
 
 use crate::measure::{self, Binder, BinderTys};
@@ -54,7 +54,7 @@ pub(crate) struct Family {
 
 fn loop_parts(e: &Expr) -> Option<(&Expr, &LamBinder, &Block, Vec<&str>)> {
     let ExprKind::App { head, args, .. } = &e.kind else { return None };
-    if args.len() < 3 || !matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::LOOP) {
+    if args.len() < 2 || !matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::LOOP) {
         return None;
     }
     let ExprKind::Lam { binders, body } = &args[1].kind else { return None };
@@ -200,10 +200,18 @@ impl<'a> Lift<'a> {
     }
 
     /// One block: its statements in order, with the scope they extend.
-    fn block(&mut self, mut b: Block, scope: &mut Vec<Local>) -> R<Block> {
+    fn block(&mut self, b: Block, scope: &mut Vec<Local>) -> R<Block> {
+        self.block_after(b, scope, Vec::new())
+    }
+
+    /// [`Self::block`] with the loops before it already lowered: `results`
+    /// names them for the `\0proj`s in `b` (the rest of a body after a loop
+    /// that may `return`, which the parser nests in `\0after`).
+    fn block_after(&mut self, mut b: Block, scope: &mut Vec<Local>, mut results: Vec<(String, bool)>) -> R<Block> {
         let mut stmts = Vec::with_capacity(b.stmts.len());
-        // A loop's name, the number of locals in its state, for its `\0proj`s.
-        let mut results: Vec<(String, bool)> = Vec::new();
+        // `results`: a loop's name, whether its state is a single local, for
+        // its `\0proj`s. With an early exit, the state is read through
+        // `#forN#s := #forN.state(init)`, bound once right after the loop.
         let all = std::mem::take(&mut b.stmts);
         // Whether a loop follows statement `i`, which then needs every local
         // before it typed.
@@ -213,17 +221,33 @@ impl<'a> Lift<'a> {
         for (i, s) in all.into_iter().enumerate() {
             match s {
                 Stmt::Let { name, ty, expr, span, opaque } => {
+                    let mut alias = None;
                     let expr = if let Some(read) = self.proj(&expr, &results) {
                         read
                     } else if loop_parts(&expr).is_some() {
-                        let (lowered, single) = self.lift(&expr, scope)?;
-                        results.push((name.clone(), single));
+                        let (lowered, single, exit_init) = self.lift(&expr, scope)?;
+                        match exit_init {
+                            Some(init) => {
+                                let s = format!("{name}#s");
+                                results.push((s.clone(), single));
+                                alias = Some((s, init));
+                            }
+                            None => results.push((name.clone(), single)),
+                        }
                         lowered
                     } else {
                         self.expr(expr, scope)?
                     };
                     scope.push(Local { name: name.clone(), written: ty.clone(), value: Some(expr.clone()) });
-                    stmts.push(Stmt::Let { name, ty, expr, span, opaque });
+                    stmts.push(Stmt::Let { name: name.clone(), ty, expr, span, opaque });
+                    if let Some((s, init)) = alias {
+                        let read = Expr {
+                            kind: ExprKind::Dot { recv: Box::new(var(&name, span)), name: "state".into(), tyargs: vec![], args: Some(vec![init]), named: vec![] },
+                            span,
+                        };
+                        scope.push(Local { name: s.clone(), written: None, value: Some(read.clone()) });
+                        stmts.push(Stmt::Let { name: s, ty: None, expr: read, span, opaque: false });
+                    }
                 }
                 other => {
                     if let Stmt::LetRecord { span, .. } | Stmt::LetCode { span, .. } = &other
@@ -237,7 +261,36 @@ impl<'a> Lift<'a> {
         }
         b.stmts = stmts;
         let result = std::mem::replace(&mut *b.result, var("", b.span));
-        *b.result = self.expr(result, scope)?;
+        *b.result = match after_parts(&result) {
+            // The loop's `Return` is the function's value; anything else
+            // runs the rest of the body.
+            Some((l, rest)) => {
+                let span = result.span;
+                let rest = match &rest.kind {
+                    ExprKind::Block(rb) => {
+                        let mut inner = scope.clone();
+                        let rb = self.block_after((**rb).clone(), &mut inner, results.clone())?;
+                        Expr { span: rest.span, kind: ExprKind::Block(Box::new(rb)) }
+                    }
+                    _ => self.expr(rest.clone(), scope)?,
+                };
+                Expr {
+                    kind: ExprKind::Match {
+                        form: MatchForm::Match,
+                        generated: true,
+                        scrut: Box::new(var(&l, span)),
+                        eqbind: None,
+                        motive: None,
+                        arms: vec![
+                            Arm { ctor: "Return".into(), default: false, binders: vec![Pat::Var { name: "#r".into(), span }], body: var("#r", span), span },
+                            Arm { ctor: "_".into(), default: true, binders: vec![], body: rest, span },
+                        ],
+                    },
+                    span,
+                }
+            }
+            None => self.expr(result, scope)?,
+        };
         Ok(b)
     }
 
@@ -248,8 +301,8 @@ impl<'a> Lift<'a> {
             return None;
         }
         let (ExprKind::Var(l), ExprKind::Var(v)) = (&args[0].kind, &args[1].kind) else { return None };
-        let (_, single) = results.iter().rev().find(|(n, _)| n == l)?;
-        let state = var(l, e.span);
+        let (found, single) = results.iter().rev().find(|(n, _)| n == l || *n == format!("{l}#s"))?;
+        let state = var(found, e.span);
         Some(if *single {
             state
         } else {
@@ -291,7 +344,7 @@ impl<'a> Lift<'a> {
 
     /// Lift one loop (module docs): returns its replacement and whether its
     /// state is a single local.
-    fn lift(&mut self, e: &Expr, scope: &[Local]) -> R<(Expr, bool)> {
+    fn lift(&mut self, e: &Expr, scope: &[Local]) -> R<(Expr, bool, Option<Expr>)> {
         let (iter, x, body, vars) = loop_parts(e).expect("a loop");
         let span = e.span;
         let typed = self.typed(scope);
@@ -359,9 +412,29 @@ impl<'a> Lift<'a> {
         params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
         let mut body = body.clone();
         let end = body.result.span;
+        // A body that exits early ends in a tree of `\0next`/`\0brk`/`\0ret`
+        // leaves (the parser's tail lowering): the step returns `ForStep`.
+        let exits = has_leaf(&body.result, &[heather_syntax::NEXT, heather_syntax::BRK, heather_syntax::RET]);
+        let returns = has_leaf(&body.result, &[heather_syntax::RET]);
+        // No locals (a stateless search that `return`s): the state is the
+        // record with no fields, its one value the constructor itself.
+        let state_of = |args: Vec<Expr>, at: Span| if single { args.into_iter().next().expect("one local") } else if args.is_empty() { var(&state, at) } else { call(var(&state, at), args, at) };
+        if exits {
+            let result = std::mem::replace(&mut *body.result, var("", end));
+            *body.result = leaves(result, &|m, args, at| {
+                let ctor = match m {
+                    _ if m == heather_syntax::NEXT => "ForStep::Next",
+                    _ if m == heather_syntax::BRK => "ForStep::Break",
+                    _ => return call(var("ForStep::Return", at), args, at),
+                };
+                call(var(ctor, at), vec![state_of(args, at)], at)
+            });
+        }
         if single {
             params.push(param(vars[0], state_ty.clone(), span));
-            *body.result = var(vars[0], end);
+            if !exits {
+                *body.result = var(vars[0], end);
+            }
         } else {
             params.push(param(s, state_ty.clone(), span));
             let reads: Vec<Stmt> = vars
@@ -378,7 +451,9 @@ impl<'a> Lift<'a> {
                 })
                 .collect();
             body.stmts.splice(0..0, reads);
-            *body.result = call(var(&state, end), vars.iter().map(|v| var(v, end)).collect(), end);
+            if !exits {
+                *body.result = call(var(&state, end), vars.iter().map(|v| var(v, end)).collect(), end);
+            }
             self.parts.push(Part::State(InductiveDecl {
                 name: state.clone(),
                 params: self.decl.tyvars.iter().map(|t| t.name.clone()).collect(),
@@ -401,6 +476,14 @@ impl<'a> Lift<'a> {
             self.designations.push((state_designed, state.clone()));
         }
         params.push(param(&x.name, elem.clone(), span));
+        // `ForStep<S, R>`: `R` is the function's result where the body may
+        // `return`, and otherwise never built, so the state's own type.
+        let step_ty = if exits {
+            let r = if returns { self.decl.result.clone() } else { state_ty.clone() };
+            named_ty("ForStep", vec![state_ty.clone(), r], span)
+        } else {
+            state_ty.clone()
+        };
         self.parts.push(Part::Decl(Decl {
             kind: DeclKind::Fn,
             is_meta: false,
@@ -410,7 +493,7 @@ impl<'a> Lift<'a> {
             name: step.clone(),
             tyvars: self.decl.tyvars.clone(),
             params,
-            result: state_ty.clone(),
+            result: step_ty,
             decreases: None,
             body,
             span,
@@ -430,12 +513,58 @@ impl<'a> Lift<'a> {
             },
             span,
         };
-        let init = if single { var(vars[0], span) } else { call(var(&state, span), vars.iter().map(|v| var(v, span)).collect(), span) };
+        let init = state_of(vars.iter().map(|v| var(v, span)).collect(), span);
+        let member = if exits { "for_in" } else { "foldl" };
         let fold = Expr {
-            kind: ExprKind::Dot { recv: Box::new(iter.clone()), name: "foldl".into(), tyargs: vec![], args: Some(vec![lam, init]), named: vec![] },
+            kind: ExprKind::Dot { recv: Box::new(iter.clone()), name: member.into(), tyargs: vec![], args: Some(vec![lam, init.clone()]), named: vec![] },
             span,
         };
-        Ok((fold, single))
+        Ok((fold, single, exits.then_some(init)))
+    }
+}
+
+/// `\0after(#forN, rest)`: the loop's name and the rest of the body.
+fn after_parts(e: &Expr) -> Option<(String, &Expr)> {
+    let ExprKind::App { head, args, .. } = &e.kind else { return None };
+    if args.len() != 2 || !matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::AFTER) {
+        return None;
+    }
+    let ExprKind::Var(l) = &args[0].kind else { return None };
+    Some((l.clone(), &args[1]))
+}
+
+/// The marker of a leaf call `\0next(…)` and the like.
+fn leaf_of<'e>(e: &'e Expr, markers: &[&str]) -> Option<(&'e str, &'e [Expr])> {
+    let ExprKind::App { head, args, .. } = &e.kind else { return None };
+    let ExprKind::Var(n) = &head.kind else { return None };
+    markers.contains(&n.as_str()).then_some((n.as_str(), args.as_slice()))
+}
+
+fn has_leaf(e: &Expr, markers: &[&str]) -> bool {
+    let mut found = false;
+    crate::surface::walk_expr(e, &mut |x| found |= leaf_of(x, markers).is_some());
+    found
+}
+
+/// Rewrite the leaves of a tail-lowered body: they sit in the result of a
+/// block or of a `match` arm, and nowhere else.
+fn leaves(e: Expr, f: &dyn Fn(&str, Vec<Expr>, Span) -> Expr) -> Expr {
+    let markers = [heather_syntax::NEXT, heather_syntax::BRK, heather_syntax::RET];
+    if let Some((m, args)) = leaf_of(&e, &markers) {
+        return f(m, args.to_vec(), e.span);
+    }
+    let span = e.span;
+    match e.kind {
+        ExprKind::Block(mut b) => {
+            let r = std::mem::replace(&mut *b.result, var("", span));
+            *b.result = leaves(r, f);
+            Expr { kind: ExprKind::Block(b), span }
+        }
+        ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
+            let arms = arms.into_iter().map(|mut a| { a.body = leaves(a.body, f); a }).collect();
+            Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms }, span }
+        }
+        kind => Expr { kind, span },
     }
 }
 
