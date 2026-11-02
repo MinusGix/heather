@@ -1,6 +1,6 @@
 ---
 title: A generic e-graph library: proof forest, congruence closure over any operator, interpretations, and its soundness theorem
-status: open
+status: closed
 labels: [tactics,stdlib,design]
 area: tactics
 milestone: [tac-general]
@@ -60,3 +60,7 @@ Sequencing: before [[grind-e-matching]], which reworks the core anyway
 ## What it assumes from elsewhere
 - **[[grind-port]]** owns grind and its reading of terms. Assumed here: only
   that the pure half can move under it unchanged in behaviour.
+
+## Log
+
+- 2026-11-02: Built (Minus approved the same day): `lib/std/data/egraph.hthr`, `docs/grind-design.md` §8. `EGraph<Op, J>` with `add`/`fresh`/`union`/`close` over any operator, explanations through `PathAlg<J, P>`, and soundness against a denotation (`Agrees`, preserved by `empty`/`fresh`/`add`/`union`/`close`; `same_class_sound`). grind runs on it. Probes in `lib/_tests/std/data/egraph_tests.hthr`, including `by_classes`, which proves an equation from a class with no explanation. Not built: the `≈` path algebra, and a value theorem for a hash-consed `add`.

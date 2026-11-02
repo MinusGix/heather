@@ -20,7 +20,9 @@
 // the graph: each step is an equation it was given (or its `sym`) or a
 // congruence (`cong`, `congr_fun`, `congr` below, over the explanations of
 // the steps' parts), joined by `trans`. The kernel checks the term at the
-// `by`; the graph is never trusted.
+// `by`; the graph is never trusted. The graph is the e-graph library's
+// (`lib/std/data/egraph.hthr`) over grind's operators, and the proof its
+// explanation folded through `proof_alg`.
 //
 // When they do not, the failure is the graph itself: the class of each side,
 // every class of more than one term with its members, and which locals were

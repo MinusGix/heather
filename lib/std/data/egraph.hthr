@@ -1,6 +1,6 @@
 // E-graphs: terms up to equations, closed under congruence, with the
 // reason each pair of classes met (issues/egraph-library.md,
-// docs/grind-design.md §2a).
+// docs/grind-design.md §8).
 //
 // A graph holds nodes, each an operator applied to earlier nodes (`ENode`),
 // numbered from 0 in the order they were added. Every node is in a class,
@@ -58,18 +58,24 @@ fn EGraph::size<Op, J>(self g: EGraph<Op, J>) → Nat { g.nodes.len() }
 
 // A node's class, by its representative; a number past the nodes is a class
 // of its own.
-fn EGraph::find<Op, J>(self g: EGraph<Op, J>, i: Nat) → Nat {
-    match g.cls.nth(i) { Some(c) => c, None => i }
-}
+fn find_in(o: Option<Nat>, i: Nat) → Nat { match o { Some(c) => c, None => i } }
+
+fn EGraph::find<Op, J>(self g: EGraph<Op, J>, i: Nat) → Nat { find_in(g.cls.nth(i), i) }
+
+// One of two graphs. Both arguments are left unevaluated until chosen, so a
+// recursive call as the one not chosen costs nothing; the soundness proofs
+// below go through it rather than through a `match` on a computed `Bool`.
+fn EGraph::choose<Op, J>(b: Bool, x: EGraph<Op, J>, y: EGraph<Op, J>) → EGraph<Op, J> { match b { True => x, False => y } }
 
 fn EGraph::same_class<Op, J>(self g: EGraph<Op, J>, a: Nat, b: Nat) → Bool { g.find(a).same(g.find(b)) }
 
 fn EGraph::node<Op, J>(self g: EGraph<Op, J>, i: Nat) → Option<ENode<Op>> { g.nodes.nth(i) }
 
-// A new node, in a class of its own, whatever nodes are already there.
+// A new node, in a class of its own, whatever nodes are already there. (Its
+// class is named by its position in the classes list, which is its number in
+// any graph these functions built.)
 fn EGraph::fresh<Op, J>(self g: EGraph<Op, J>, op: Op, kids: List<Nat>) → Added<Op, J> {
-    let i = g.nodes.len();
-    Added(EGraph(g.nodes ++ [ENode(op, kids)], g.cls ++ [i], g.edges), i)
+    Added(EGraph(g.nodes ++ [ENode(op, kids)], g.cls ++ [g.cls.len()], g.edges), g.nodes.len())
 }
 
 fn nats_same(xs: List<Nat>, ys: List<Nat>) → Bool {
@@ -92,25 +98,28 @@ fn node_among<Op>(ns: List<ENode<Op>>, eq_op: Op → Op → Bool, op: Op, kids: 
 
 // The node `op` applied to `kids`, made once: an existing node with the same
 // operator and the same children (by number) is that node.
-fn EGraph::add<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, op: Op, kids: List<Nat>) → Added<Op, J> {
-    match node_among(g.nodes, eq_op, op, kids, 0) {
-        Some(i) => Added(g, i),
-        None => g.fresh(op, kids),
-    }
+fn EGraph::add_at<Op, J>(self g: EGraph<Op, J>, found: Option<Nat>, op: Op, kids: List<Nat>) → Added<Op, J> {
+    match found { Some(i) => Added(g, i), None => g.fresh(op, kids) }
 }
 
+fn EGraph::add<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, op: Op, kids: List<Nat>) → Added<Op, J> {
+    g.add_at(node_among(g.nodes, eq_op, op, kids, 0), op, kids)
+}
+
+fn pick(b: Bool, x: Nat, y: Nat) → Nat { match b { True => x, False => y } }
+
 // One representative renamed: `c` becomes `cu` when it is `cv`.
-fn relabel(cu: Nat, cv: Nat, c: Nat) → Nat { match c.same(cv) { True => cu, False => c } }
+fn relabel(cu: Nat, cv: Nat, c: Nat) → Nat { pick(c.same(cv), cu, c) }
+
+// Class `cv` renamed `cu`, with an edge from `u` to `v` for the reason `w`.
+fn EGraph::relabelled<Op, J>(self g: EGraph<Op, J>, cu: Nat, cv: Nat, u: Nat, v: Nat, w: Why<J>) → EGraph<Op, J> {
+    EGraph(g.nodes, g.cls.map(λ c => relabel(cu, cv, c)), g.edges ++ [Edge(u, v, w)])
+}
 
 // The classes of `u` and `v` merged, for the reason `w`; the graph as it was
 // when they are one class already.
 fn EGraph::merge<Op, J>(self g: EGraph<Op, J>, u: Nat, v: Nat, w: Why<J>) → EGraph<Op, J> {
-    let cu = g.find(u);
-    let cv = g.find(v);
-    match cu.same(cv) {
-        True => g,
-        False => EGraph(g.nodes, g.cls.map(λ c => relabel(cu, cv, c)), g.edges ++ [Edge(u, v, w)]),
-    }
+    EGraph::choose(g.find(u).same(g.find(v)), g, g.relabelled(g.find(u), g.find(v), u, v, w))
 }
 
 // `u` and `v` are equal, because of `j`.
@@ -132,14 +141,18 @@ fn EGraph::kids_congruent<Op, J>(self g: EGraph<Op, J>, xs: List<Nat>, ys: List<
 // Are nodes `t` and `s` the same operator over children pairwise in one
 // class? This is what licenses a congruence merge, checked at the graph the
 // merge is made in.
-fn EGraph::congruent<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, t: Nat, s: Nat) → Bool {
-    match g.node(t) {
+fn EGraph::congruent_opt<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, ot: Option<ENode<Op>>, os: Option<ENode<Op>>) → Bool {
+    match ot {
         None => False,
-        Some(nt) => match g.node(s) {
+        Some(nt) => match os {
             None => False,
             Some(ns) => eq_op(nt.op, ns.op).and(g.kids_congruent(nt.kids, ns.kids)),
         },
     }
+}
+
+fn EGraph::congruent<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, t: Nat, s: Nat) → Bool {
+    g.congruent_opt(eq_op, g.node(t), g.node(s))
 }
 
 // A node's signature: its operator and its children's classes.
@@ -165,12 +178,16 @@ fn sig_twin<Op>(seen: List<Sig<Op>>, eq_op: Op → Op → Bool, s: Sig<Op>) → 
 
 // Merge `t` and `s` if they are congruent in `g`.
 fn EGraph::merge_congruent<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, t: Nat, s: Nat) → EGraph<Op, J> {
-    match g.congruent(eq_op, t, s) { True => g.merge(t, s, Cong), False => g }
+    EGraph::choose(g.congruent(eq_op, t, s), g.merge(t, s, Cong), g)
+}
+
+fn EGraph::step_at<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, o: Option<Nat>, n: Nat) → EGraph<Op, J> {
+    match o { Some(t) => g.merge_congruent(eq_op, t, n), None => g }
 }
 
 // The merge, if any, that one signature calls for.
 fn EGraph::congruence_step<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, seen: List<Sig<Op>>, s: Sig<Op>) → EGraph<Op, J> {
-    match sig_twin(seen, eq_op, s) { Some(t) => g.merge_congruent(eq_op, t, s.node), None => g }
+    g.step_at(eq_op, sig_twin(seen, eq_op, s), s.node)
 }
 
 // One pass: every node merged with the first earlier node whose signature it
@@ -189,10 +206,7 @@ fn EGraph::close<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, fuel: 
         Zero => g,
         Succ(f) => {
             let g2 = g.congruence_pass(eq_op, sigs_from(g, g.nodes, 0), []);
-            match g2.edges.len().same(g.edges.len()) {
-                True => g2,
-                False => g2.close(eq_op, f),
-            }
+            EGraph::choose(g2.edges.len().same(g.edges.len()), g2, g2.close(eq_op, f))
         },
     }
 }
@@ -337,4 +351,202 @@ fn EGraph::explain<Op, J, P>(self g: EGraph<Op, J>, alg: PathAlg<J, P>, a: Nat, 
 // The nodes of class `c`.
 fn EGraph::members<Op, J>(self g: EGraph<Op, J>, c: Nat) → List<Nat> {
     List::range(g.nodes.len()).filter(λ i => g.find(i).same(c))
+}
+
+// ---------------------------------------------------------------------------
+// Soundness.
+//
+// A denotation gives each node a value, and an interpretation gives each
+// operator a function of its children's values. The graph's nodes agree
+// with them when every node's value is its operator applied to its
+// children's; its classes agree when every node's value is its
+// representative's. Merging two nodes of equal value, and closing under
+// congruence, keep both; so in a graph built that way, two nodes of one
+// class have one value (`EGraph::same_class_sound`). Nothing here depends on
+// the justifications: a client that only reads classes cites these
+// theorems, and one that reads explanations has its evidence checked.
+
+fn EGraph::NodesAgree<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A, interp: Op → List<A> → A) → Type {
+    (i: Nat) → (n: ENode<Op>) → g.nodes.nth(i) = Some(n) → den(i) = interp(n.op, n.kids.map(den))
+}
+
+fn EGraph::ClassesAgree<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A) → Type {
+    (i: Nat) → den(i) = den(g.find(i))
+}
+
+fn EGraph::Agrees<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A, interp: Op → List<A> → A) → Type {
+    And<g.NodesAgree(den, interp), g.ClassesAgree(den)>
+}
+
+theorem and_true_left(a: Bool, b: Bool): a.and(b) = True → a = True {
+    match a { False => λ h => absurd(h), True => λ _ => refl }
+}
+
+theorem and_true_right(a: Bool, b: Bool): a.and(b) = True → b = True {
+    match a { False => λ h => absurd(h), True => λ h => h }
+}
+
+// Two nodes of one class have one value.
+theorem EGraph::same_class_sound<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A, ca: g.ClassesAgree(den), a: Nat, b: Nat, h: g.same_class(a, b) = True): den(a) = den(b) {
+    trans(ca(a), trans(cong_fn<Nat, A>(den, Nat::same_sound(g.find(a), g.find(b), h)), sym(ca(b))))
+}
+
+theorem EGraph::choose_agrees<Op, J, A>(den: Nat → A, interp: Op → List<A> → A, b: Bool, x: EGraph<Op, J>, y: EGraph<Op, J>, hx: x.Agrees(den, interp), hy: y.Agrees(den, interp)): (EGraph::choose(b, x, y)).Agrees(den, interp) {
+    match b { True => hx, False => hy }
+}
+
+// A representative renamed keeps its value, when the two classes have one.
+theorem relabel_agrees<A>(den: Nat → A, cu: Nat, cv: Nat, e: den(cu) = den(cv), c: Nat, b: Bool): c.same(cv) = b → den(c) = den(pick(b, cu, c)) {
+    match b {
+        True => λ hb => trans(cong_fn<Nat, A>(den, Nat::same_sound(c, cv, hb)), sym(e)),
+        False => λ _ => refl,
+    }
+}
+
+fn opt_relabel(cu: Nat, cv: Nat, o: Option<Nat>) → Option<Nat> {
+    match o { Some(c) => Some(relabel(cu, cv, c)), None => None }
+}
+
+theorem relabel_nth(cu: Nat, cv: Nat, cls: List<Nat>): (i: Nat) → cls.map(λ c => relabel(cu, cv, c)).nth(i) = opt_relabel(cu, cv, cls.nth(i)) {
+    match cls {
+        Nil => λ i => refl,
+        Cons(_, rest) => λ i => match i { Zero => refl, Succ(k) => relabel_nth(cu, cv, rest, k) },
+    }
+}
+
+theorem find_relabel_agrees<A>(den: Nat → A, cu: Nat, cv: Nat, e: den(cu) = den(cv), i: Nat, o: Option<Nat>): den(i) = den(find_in(o, i)) → den(i) = den(find_in(opt_relabel(cu, cv, o), i)) {
+    match o {
+        None => λ hi => hi,
+        Some(c) => λ hi => trans(hi, relabel_agrees(den, cu, cv, e, c, c.same(cv), refl)),
+    }
+}
+
+theorem EGraph::relabelled_agrees<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A, interp: Op → List<A> → A, ag: g.Agrees(den, interp), cu: Nat, cv: Nat, e: den(cu) = den(cv), u: Nat, v: Nat, w: Why<J>): (g.relabelled(cu, cv, u, v, w)).Agrees(den, interp) {
+    And(ag.left, λ i => j(sym(relabel_nth(cu, cv, g.cls, i)), λ x _ => den(i) = den(find_in(x, i)), find_relabel_agrees(den, cu, cv, e, i, g.cls.nth(i), ag.right(i))))
+}
+
+// Merging two nodes of one value.
+theorem EGraph::merge_agrees<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A, interp: Op → List<A> → A, ag: g.Agrees(den, interp), u: Nat, v: Nat, w: Why<J>, e: den(u) = den(v)): (g.merge(u, v, w)).Agrees(den, interp) {
+    let ec: (den(g.find(u)) = den(g.find(v))) = trans(sym(ag.right(u)), trans(e, ag.right(v)));
+    EGraph::choose_agrees(den, interp, g.find(u).same(g.find(v)), g, g.relabelled(g.find(u), g.find(v), u, v, w), ag, g.relabelled_agrees(den, interp, ag, g.find(u), g.find(v), ec, u, v, w))
+}
+
+theorem EGraph::union_agrees<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A, interp: Op → List<A> → A, ag: g.Agrees(den, interp), u: Nat, v: Nat, x: J, e: den(u) = den(v)): (g.union(u, v, x)).Agrees(den, interp) {
+    g.merge_agrees(den, interp, ag, u, v, Given(x), e)
+}
+
+// Children pairwise in one class have pairwise one value.
+theorem EGraph::kids_agree<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A, ca: g.ClassesAgree(den), xs: List<Nat>): (ys: List<Nat>) → g.kids_congruent(xs, ys) = True → xs.map(den) = ys.map(den) {
+    match xs {
+        Nil => λ ys => match ys { Nil => λ _ => refl, Cons(_, _) => λ h => absurd(h) },
+        Cons(x, xr) => λ ys => match ys {
+            Nil => λ h => absurd(h),
+            Cons(y, yr) => λ h => trans(
+                cong_fn<A, List<A>>(λ a => Cons(a, xr.map(den)), g.same_class_sound(den, ca, x, y, and_true_left(g.same_class(x, y), g.kids_congruent(xr, yr), h))),
+                cong_fn<List<A>, List<A>>(λ t => Cons(den(y), t), g.kids_agree(den, ca, xr, yr, and_true_right(g.same_class(x, y), g.kids_congruent(xr, yr), h)))),
+        },
+    }
+}
+
+// Congruent nodes have one value.
+theorem EGraph::congruent_opt_agrees<Op, J, A>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, sound_op: (a: Op, b: Op) → eq_op(a, b) = True → a = b, den: Nat → A, interp: Op → List<A> → A, ca: g.ClassesAgree(den), t: Nat, s: Nat, ot: Option<ENode<Op>>):
+    (os: Option<ENode<Op>>) → ((n: ENode<Op>) → ot = Some(n) → den(t) = interp(n.op, n.kids.map(den))) → ((n: ENode<Op>) → os = Some(n) → den(s) = interp(n.op, n.kids.map(den))) → g.congruent_opt(eq_op, ot, os) = True → den(t) = den(s)
+{
+    match ot {
+        None => λ os ht hs h => absurd(h),
+        Some(nt) => λ os => match os {
+            None => λ ht hs h => absurd(h),
+            Some(ns) => λ ht hs h => {
+                let both = eq_op(nt.op, ns.op).and(g.kids_congruent(nt.kids, ns.kids));
+                let oq: (nt.op = ns.op) = sound_op(nt.op, ns.op, and_true_left(eq_op(nt.op, ns.op), g.kids_congruent(nt.kids, ns.kids), h));
+                let kq: (nt.kids.map(den) = ns.kids.map(den)) = g.kids_agree(den, ca, nt.kids, ns.kids, and_true_right(eq_op(nt.op, ns.op), g.kids_congruent(nt.kids, ns.kids), h));
+                trans(ht(nt, refl), trans(trans(cong_fn<Op, A>(λ o => interp(o, nt.kids.map(den)), oq), cong_fn<List<A>, A>(λ l => interp(ns.op, l), kq)), sym(hs(ns, refl))))
+            },
+        },
+    }
+}
+
+// A choice of two graphs, each sound where it is chosen.
+theorem EGraph::choose_agrees_by<Op, J, A>(den: Nat → A, interp: Op → List<A> → A, b: Bool, x: EGraph<Op, J>, y: EGraph<Op, J>): (b = True → x.Agrees(den, interp)) → (b = False → y.Agrees(den, interp)) → (EGraph::choose(b, x, y)).Agrees(den, interp) {
+    match b { True => λ hx _ => hx(refl), False => λ _ hy => hy(refl) }
+}
+
+theorem EGraph::merge_congruent_agrees<Op, J, A>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, sound_op: (a: Op, b: Op) → eq_op(a, b) = True → a = b, den: Nat → A, interp: Op → List<A> → A, ag: g.Agrees(den, interp), t: Nat, s: Nat): (g.merge_congruent(eq_op, t, s)).Agrees(den, interp) {
+    EGraph::choose_agrees_by(den, interp, g.congruent(eq_op, t, s), g.merge(t, s, Cong), g,
+        λ h => g.merge_agrees(den, interp, ag, t, s, Cong, g.congruent_opt_agrees(eq_op, sound_op, den, interp, ag.right, t, s, g.node(t), g.node(s), ag.left(t), ag.left(s), h)),
+        λ _ => ag)
+}
+
+theorem EGraph::step_at_agrees<Op, J, A>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, sound_op: (a: Op, b: Op) → eq_op(a, b) = True → a = b, den: Nat → A, interp: Op → List<A> → A, ag: g.Agrees(den, interp), n: Nat, o: Option<Nat>): (g.step_at(eq_op, o, n)).Agrees(den, interp) {
+    match o { Some(t) => g.merge_congruent_agrees(eq_op, sound_op, den, interp, ag, t, n), None => ag }
+}
+
+// A congruence pass keeps a graph sound, whatever signatures drive it.
+theorem pass_agrees<Op, J, A>(eq_op: Op → Op → Bool, sound_op: (a: Op, b: Op) → eq_op(a, b) = True → a = b, den: Nat → A, interp: Op → List<A> → A, sigs: List<Sig<Op>>):
+    (g: EGraph<Op, J>) → (seen: List<Sig<Op>>) → g.Agrees(den, interp) → (g.congruence_pass(eq_op, sigs, seen)).Agrees(den, interp)
+{
+    match sigs {
+        Nil => λ g seen ag => ag,
+        Cons(s, rest) => λ g seen ag => pass_agrees(eq_op, sound_op, den, interp, rest, g.congruence_step(eq_op, seen, s), Cons(s, seen),
+            g.step_at_agrees(eq_op, sound_op, den, interp, ag, s.node, sig_twin(seen, eq_op, s))),
+    }
+}
+
+// Closing under congruence keeps a graph sound.
+theorem close_agrees<Op, J, A>(eq_op: Op → Op → Bool, sound_op: (a: Op, b: Op) → eq_op(a, b) = True → a = b, den: Nat → A, interp: Op → List<A> → A, fuel: Nat):
+    (g: EGraph<Op, J>) → g.Agrees(den, interp) → (g.close(eq_op, fuel)).Agrees(den, interp)
+{
+    match fuel {
+        Zero => λ g ag => ag,
+        Succ(f) => λ g ag => {
+            let g2 = g.congruence_pass(eq_op, sigs_from(g, g.nodes, 0), []);
+            let a2: (g2.Agrees(den, interp)) = pass_agrees(eq_op, sound_op, den, interp, sigs_from(g, g.nodes, 0), g, [], ag);
+            EGraph::choose_agrees(den, interp, g2.edges.len().same(g.edges.len()), g2, g2.close(eq_op, f), a2, close_agrees(eq_op, sound_op, den, interp, f, g2, a2))
+        },
+    }
+}
+
+// The empty graph is sound, and so is a graph after a new node whose value
+// is its operator applied to its children's.
+theorem EGraph::empty_agrees<Op, J, A>(den: Nat → A, interp: Op → List<A> → A): (EGraph::empty<Op, J>()).Agrees(den, interp) {
+    And(λ i n none => absurd(none), λ i => refl)
+}
+
+// An element appended: below the old end the list reads as before, and at
+// the old end it reads the new element.
+theorem nth_snoc_cases<A>(xs: List<A>, y: A): (i: Nat) → Or<(xs ++ [y]).nth(i) = xs.nth(i), And<i = xs.len(), (xs ++ [y]).nth(i) = Some(y)>> {
+    match xs {
+        Nil => λ i => match i { Zero => Inr(And(refl, refl)), Succ(_) => Inl(refl) },
+        Cons(_, t) => λ i => match i {
+            Zero => Inl(refl),
+            Succ(k) => match nth_snoc_cases(t, y, k) {
+                Inl(p) => Inl(p),
+                Inr(q) => Inr(And(cong_fn<Nat, Nat>(λ n => Succ(n), q.left), q.right)),
+            },
+        },
+    }
+}
+
+theorem EGraph::fresh_agrees<Op, J, A>(self g: EGraph<Op, J>, den: Nat → A, interp: Op → List<A> → A, ag: g.Agrees(den, interp), op: Op, kids: List<Nat>, hn: den(g.nodes.len()) = interp(op, kids.map(den))): (g.fresh(op, kids)).g.Agrees(den, interp) {
+    And(λ i m hm => match nth_snoc_cases(g.nodes, ENode(op, kids), i) {
+            Inl(p) => ag.left(i, m, trans(sym(p), hm)),
+            Inr(q) => {
+                let at: (den(i) = interp(op, kids.map(den))) = j(sym(q.left), λ k _ => den(k) = interp(op, kids.map(den)), hn);
+                let same: (ENode(op, kids) = m) = Option::some_inj(ENode(op, kids), m, trans(sym(q.right), hm));
+                j(same, λ z _ => den(i) = interp(z.op, z.kids.map(den)), at)
+            },
+        },
+        λ i => match nth_snoc_cases(g.cls, g.cls.len(), i) {
+            Inl(p) => j(sym(p), λ o _ => den(i) = den(find_in(o, i)), ag.right(i)),
+            Inr(q) => j(sym(q.right), λ o _ => den(i) = den(find_in(o, i)), cong_fn<Nat, A>(den, q.left)),
+        })
+}
+
+theorem add_at_agrees<Op, J, A>(g: EGraph<Op, J>, den: Nat → A, interp: Op → List<A> → A, ag: g.Agrees(den, interp), op: Op, kids: List<Nat>, hn: den(g.nodes.len()) = interp(op, kids.map(den)), found: Option<Nat>): (g.add_at(found, op, kids)).g.Agrees(den, interp) {
+    match found { Some(_) => ag, None => g.fresh_agrees(den, interp, ag, op, kids, hn) }
+}
+
+// Adding a node keeps a graph sound, given the value it would have if new.
+theorem EGraph::add_agrees<Op, J, A>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, den: Nat → A, interp: Op → List<A> → A, ag: g.Agrees(den, interp), op: Op, kids: List<Nat>, hn: den(g.nodes.len()) = interp(op, kids.map(den))): (g.add(eq_op, op, kids)).g.Agrees(den, interp) {
+    add_at_agrees(g, den, interp, ag, op, kids, hn, node_among(g.nodes, eq_op, op, kids, 0))
 }

@@ -49,3 +49,47 @@ theorem explain_given(): opt_same(g0().explain(trace_alg(), 0, 1), Some([7])) = 
 theorem explain_reversed(): opt_same(g0().explain(trace_alg(), 1, 0), Some([107])) = True { refl }
 theorem explain_congruence(): opt_same((g0().close(op_same, 5)).explain(trace_alg(), 3, 4), Some([1000, 7, 0])) = True { refl }
 theorem explain_none(): opt_same((g0().close(op_same, 5)).explain(trace_alg(), 2, 3), None) = True { refl }
+
+// The soundness theorems at work: the graph above, read with `a`, `b`, `c`
+// for the constants and any `f` for the operator, proves `f(a, c) = f(b, c)`
+// from `a = b`, with no explanation built: the class is the proof.
+fn val(a: Nat, b: Nat, c: Nat, n: Nat) → Nat { match n { Zero => a, Succ(m) => match m { Zero => b, Succ(_) => c } } }
+
+fn interp(f: Nat → Nat → Nat, a: Nat, b: Nat, c: Nat, o: Op, xs: List<Nat>) → Nat {
+    match o {
+        K(n) => val(a, b, c, n),
+        F => match xs { Nil => 0, Cons(x, rest) => match rest { Nil => 0, Cons(y, _) => f(x, y) } },
+    }
+}
+
+fn den(f: Nat → Nat → Nat, a: Nat, b: Nat, c: Nat, i: Nat) → Nat {
+    match i { Zero => a, Succ(i1) => match i1 { Zero => b, Succ(i2) => match i2 { Zero => c, Succ(i3) => match i3 { Zero => f(a, c), Succ(_) => f(b, c) } } } }
+}
+
+theorem op_same_sound(x: Op, y: Op): op_same(x, y) = True → x = y {
+    match x {
+        K(n) => match y { K(m) => λ h => cong_fn<Nat, Op>(λ k => K(k), Nat::same_sound(n, m, h)), F => λ h => absurd(h) },
+        F => match y { K(_) => λ h => absurd(h), F => λ _ => refl },
+    }
+}
+
+theorem by_classes(f: Nat → Nat → Nat, a: Nat, b: Nat, c: Nat, h: a = b): f(a, c) = f(b, c) {
+    let d = λ (i: Nat) => den(f, a, b, c, i);
+    let it = λ (o: Op) (xs: List<Nat>) => interp(f, a, b, c, o, xs);
+    let e0 = EGraph::empty<Op, Nat>();
+    let s0 = EGraph::empty_agrees<Op, Nat, Nat>(d, it);
+    let x = e0.add(op_same, K(0), []);
+    let s1 = e0.add_agrees(op_same, d, it, s0, K(0), [], refl);
+    let y = x.g.add(op_same, K(1), []);
+    let s2 = x.g.add_agrees(op_same, d, it, s1, K(1), [], refl);
+    let z = y.g.add(op_same, K(2), []);
+    let s3 = y.g.add_agrees(op_same, d, it, s2, K(2), [], refl);
+    let p = z.g.add(op_same, F, [0, 2]);
+    let s4 = z.g.add_agrees(op_same, d, it, s3, F, [0, 2], refl);
+    let q = p.g.add(op_same, F, [1, 2]);
+    let s5 = p.g.add_agrees(op_same, d, it, s4, F, [1, 2], refl);
+    let u = q.g.union(0, 1, 7);
+    let s6 = q.g.union_agrees(d, it, s5, 0, 1, 7, h);
+    let s7 = close_agrees(op_same, op_same_sound, d, it, 5, u, s6);
+    (u.close(op_same, 5)).same_class_sound(d, s7.right, 3, 4, refl)
+}

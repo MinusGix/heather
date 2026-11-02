@@ -202,12 +202,7 @@ proof reconstruction.
 | R3 | constructor facts and disequalities ([grind-constructor-facts](../issues/grind-constructor-facts.md)): injectivity, disjointness, `≠` hypotheses, `False` goals | `Cons(a, as) = Cons(b, bs)` gives `a = b`, and `Nil = Cons(x, xs)` closes any goal |
 | R4 | case splits and theories ([grind-splits-and-theories](../issues/grind-splits-and-theories.md)): split on a `match` scrutinee in the graph (`split_all`'s `Cases`), and exchange equalities with `omega`/`ring` | a goal needing a `Bool` case split and a linear fact closes, and the failure is the decision tree |
 
-Before R2, the graph's pure half moves into a generic library
-([egraph-library](../issues/egraph-library.md)): a proof forest generic in
-its justification, congruence closure over any operator with decidable
-equality, and interpretations of a path (proof terms, the report, `≈`),
-with a soundness theorem against a denotation so that clients with no
-checker after them (a compiler's value numbering) are proved once.
+The graph's pure half is now a generic library (§8).
 
 R2 needs one host addition: a tactic can only report on failure today. The
 used-subset report ([lemma-selection-and-search](../issues/lemma-selection-and-search.md)
@@ -229,3 +224,41 @@ the run; R2 designs it.
   η-expands, `f(a, ?9) = f(b, ?9)` against `?2 = ?3`); the proof passes the
   functions and arguments explicitly. Not filed: explicit arguments are what a
   proof should carry anyway.
+
+## 8. The e-graph library (2026-11-02)
+
+Minus asked for the e-graph to be generic, for other parts of the system
+that identify terms up to equations, and so that its correctness is proved
+once ([egraph-library](../issues/egraph-library.md)). It is
+`lib/std/data/egraph.hthr`, and grind runs on it.
+
+- **`EGraph<Op, J>`**: nodes `ENode<Op> { op, kids }` numbered as added,
+  each node's class representative, and the merge edges. `add` hash-conses
+  (same operator by the caller's `eq_op`, same children by number), `fresh`
+  does not; `union(u, v, j)` merges with a justification of any type;
+  `close(eq_op, fuel)` closes under congruence. A congruence merge is
+  checked against the graph it is made in (`congruent`), so signatures only
+  propose candidates and the soundness proof never reasons about them.
+- **Explanations** fold the unique path through a `PathAlg<J, P>`
+  (`refl`, `given(j, forward)`, `cong(from, to, kid evidence)`, `trans`).
+  grind's `proof_alg` builds proof terms; the probes fold a printable trace.
+- **Soundness**, over a denotation `den: Nat → A` and an interpretation
+  `interp: Op → List<A> → A`: `Agrees` is "every node's value is its
+  operator applied to its children's" and "every node's value is its
+  representative's". `empty_agrees`, `fresh_agrees`, `add_agrees` (given the
+  new node's value), `union_agrees` (given the two values are equal) and
+  `close_agrees` (given `eq_op` is sound) preserve it, and
+  `same_class_sound` reads an equation off one class. The probe
+  `by_classes` (`lib/_tests/std/data/egraph_tests.hthr`) proves
+  `f(a, c) = f(b, c)` from `a = b` with no explanation built: the class is
+  the proof. Only soundness is proved; no client needs completeness.
+- **grind's instance**: operators `GAtomOp(n)` (atoms are told apart by
+  grind, by key and `Defeq`), `GAppOp` with children `[f, a]`, and
+  `GDepOp(arg)` with child `[f]`, so a dependent argument is part of the
+  operator and congruence reads only the function.
+
+What the library does not have yet: a `≈` path algebra with `Proper`
+congruences (a setoid client builds it from `PathAlg`), a theorem that a
+hash-consed `add` returns a node of the requested value (clients that need
+it use `fresh`), and union by rank or a signature table (§5).
+
