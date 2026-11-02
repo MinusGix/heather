@@ -220,10 +220,31 @@ builds.
   holds by `refl`, as `tl(from(n)) = from(Succ(n))` does. A nested node is
   not definitionally the constructor written in the source (no η, §4): its
   observation is.
-- **Indexed codata keeps one layer** this round: a nested call there is
-  refused with `issues/codata-nested-guards-indexed.md`. The indexed carrier
-  carries an equation per seed (`docs/codata-indexed-design.md` §6), and a
-  pending node sits at its child's index, not the step's.
+- **Indexed codata** (added 2026-11-02, `issues/codata-nested-guards-indexed.md`):
+  the layers are families over the index,
+
+  ```
+  C₀(i) = X(i) = Σ(v : V). Id(I; g[v]; i)
+  C_{j+1}(i) = X(i) + F(C_j)(i)
+  F(C)(i) = Σ(s : S(i)). Π(p : P(i, s)). C(o(i, s, p)) + ⟦D⟧(o(i, s, p))
+  ```
+
+  (the kernel's `m_step_ty` over `C`). Only a seed carries an equation; a
+  pending node needs none, since it is built at its child's index `o(g, s,
+  p)` and not the step's `g`. So the node's parts are read there
+  (`MParts::reindexed`): its payload is checked at the child's index and
+  its own children at theirs, and a self-call under it is the coinduction
+  hypothesis at that index, checked by conversion as at the top. The
+  step's `J` along the carrier's equation moves the `inl` arm only, `case x
+  { inl(v) ⇒ J(…; body[v]; snd v); inr(node) ⇒ lift(node) }`, the `inr`
+  arm being at `i` already; `lift` and `embed` take the index they work at
+  and read each child's own. The node's index is read the way the child
+  wrote it (`written_index`: a named signature's `D#mnext` unfolded and
+  the projections out of the step's index read off, no other global
+  unfolded), so a wrong payload is reported at its own `refl` with both
+  sides spelled. `tails(tl(s), tl(s), tails(s, s, sb_two(s))) =
+  sb_two(tl(tl(s)))` holds by `refl`, `J` computing at `refl` under the
+  `inl` arm one layer down.
 
 ## 6. Layers
 
@@ -263,7 +284,12 @@ certgen refuses codata (§1).
   `match` arm that is an existing tree; a bare function child one layer
   down; an open element type; wrong observations at a layer refused by the
   kernel. `lib/_tests/std/itree/coitree_tests.hthr` has the same over
-  `CoTree`, and `codata_indexed.rs` the indexed refusal.
+  `CoTree` and a `Bisim` that matches two observations per step;
+  `codata_indexed.rs` has the indexed cases (two and three layers at
+  literal and neutral indices, `Seq<A>`, `match` in step position, a
+  function child whose domain is read at the pending node's index, and
+  controls: a nested call at the wrong index, a wrong payload, a wrong
+  observation).
 
 Plus a module-image round trip (`codata_round_trips_through_images`): the
 declaration, its constructors and a corecursive function written to an
@@ -275,6 +301,6 @@ image, replayed, and used from an importing module.
 2. **The library** (design §10 step 5): the coinductive `ITree` with `bind`
    and `iter`, `approx` into the finite tree, `Bisim`, eutt, and the bridge
    `Bisim ⇔ Π n. Same(approx n t, approx n u)`.
-3. ~~**Nested guards**~~: done for unindexed codata (§5.4); indexed is
-   `issues/codata-nested-guards-indexed.md`.
+3. ~~**Nested guards**~~: done (§5.4), unindexed 2026-11-01 and indexed
+   2026-11-02.
 4. ~~Codes for `M`~~: done (`docs/kernel-m-codes-design.md`).
