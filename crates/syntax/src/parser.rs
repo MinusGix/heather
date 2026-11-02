@@ -163,6 +163,9 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             propagation_count: 0,
             propagation_depth: 0,
             elseless_if: false,
+            mut_params: Vec::new(),
+            pending_mut: None,
+            mutables: Vec::new(),
             range_header: false,
         };
     let mut items = Vec::new();
@@ -214,6 +217,19 @@ struct Parser {
     /// may omit its `else` (docs/sequencing-surface-design.md §4). Taken by
     /// the `if` it reaches first, so nothing nested inherits it.
     elseless_if: bool,
+    /// `mut x: T` and `mut self x: T` parameters of the parameter list just
+    /// read, by name, with whether each is the receiver
+    /// (docs/sequencing-surface-design.md §8.2). Taken by [`Parser::decl`].
+    mut_params: Vec<(String, bool)>,
+    /// The `mut` parameters the next block opened is the body of: it binds
+    /// each as a `let mut` local, and a `mut self` one is returned beside the
+    /// result. Taken by the first [`Parser::block_body`].
+    pending_mut: Option<Vec<(String, bool)>>,
+    /// The `let mut` locals and `mut` parameters lexically in scope, innermost
+    /// last: a method call on one of them may update it, so the parser marks
+    /// it a candidate ([`crate::imperative::MUTCALL`]) for the scope that
+    /// declared the local to claim.
+    mutables: Vec<String>,
     /// Parsing a `for` header, where `a..b` is a range (§5.2).
     range_header: bool,
     /// Suppress the record literal `D { … }` (docs/surface-records.md §6.1).
@@ -386,7 +402,8 @@ fn render_owner(e: &Expr) -> Option<String> {
 /// A braced block that ends in a statement: the body of a statement form
 /// (docs/sequencing-surface-design.md §4).
 fn is_statement_body(e: &Expr) -> bool {
-    matches!(&e.kind, ExprKind::Block(b) if matches!(&b.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT))
+    matches!(&e.kind, ExprKind::Block(b) if matches!(&b.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT)
+        || crate::imperative::ends_in_method_call(b))
 }
 
 /// `{}`, which elsewhere is an empty proof block (`ExprKind::AutoRefl`).
@@ -410,7 +427,8 @@ fn is_imperative_statement(s: &Stmt) -> bool {
     matches!(s, Stmt::Let { expr, .. } if matches!(&expr.kind, ExprKind::App { head, args, .. }
         if matches!(&head.kind, ExprKind::Var(n)
             if (!args.is_empty() && (n == crate::imperative::ASSIGN || n == crate::imperative::STMT
-                || n == crate::imperative::FOR || n == crate::imperative::RETURN))
+                || n == crate::imperative::FOR || n == crate::imperative::RETURN
+                || (n == crate::imperative::MUTCALL && matches!(s, Stmt::Let { name, .. } if name.starts_with("#seq")))))
                 || (args.is_empty() && (n == crate::imperative::BREAK || n == crate::imperative::CONTINUE)))))
 }
 
@@ -449,6 +467,10 @@ pub fn positivity_ty(name: &str, span: Span) -> Ty {
 /// The search a `fn f(…) → Pos<A>` body's positivity is proved by:
 /// `positivity`, with a failure that says how to prove it by hand
 /// (`on ?pos := …;`). Reserved like omega's own `__` branch markers.
+/// The prelude record a `mut self` method returns: its receiver after the
+/// call, and the call's value (docs/sequencing-surface-design.md §8.2).
+pub const MUTATED_RECORD: &str = "Mutated";
+
 pub const POS_RESULT: &str = "__pos_result";
 
 /// What fills a `Pos<A>` record field's fact when a construction leaves it
@@ -2535,6 +2557,22 @@ impl Parser {
                 // names it, so a record method reads the Rust way; there is no
                 // third reading, which is what keeps a parameter merely named
                 // `self` from silently not being the subject.
+                // `mut x: T`, `mut self x: T` (docs/sequencing-surface-design.md
+                // §8.2): the body may reassign `x`, and a `mut self`
+                // receiver comes back out beside the result. Contextual: a
+                // parameter named `mut` is still `mut: T`.
+                let is_mut = self.at_kw("mut") && matches!(self.nth(1), TokKind::Ident(_));
+                let mut_sp = self.peek_span();
+                if is_mut {
+                    if implicit {
+                        return Err(ParseError {
+                            msg: "an implicit parameter cannot be `mut`: it has no argument slot \
+                                  to update".into(),
+                            span: mut_sp,
+                        });
+                    }
+                    self.bump();
+                }
                 let is_self = self.at_kw("self");
                 let self_sp = self.peek_span();
                 if is_self {
@@ -2583,6 +2621,9 @@ impl Parser {
                 // *same* symbol is the ordinary uniqueness rule, which the
                 // elaborator runs per spelling.
                 let symbol = self.binder_symbol(&pname)?;
+                if is_mut {
+                    self.mut_params.push((pname.clone(), is_self));
+                }
                 names.push((pname, psp, is_self, symbol));
                 if !(matches!(self.peek(), TokKind::Comma)
                     && matches!(self.nth(1), TokKind::Ident(_)))
@@ -2767,7 +2808,9 @@ impl Parser {
         let mut requires = constraints;
         requires.extend(self.requires_list()?);
         let leading = requires.len();
+        self.mut_params.clear();
         let params = self.param_list(requires)?;
+        let mut_params = std::mem::take(&mut self.mut_params);
         // `for vec.map` — the elaboration slot this template fills
         // (docs/meta-def-registration-design.md §2.1). The parse point is
         // unambiguous: what follows a parameter list is `->` or `:`, never an
@@ -2803,7 +2846,23 @@ impl Parser {
         // The declaration's body block follows immediately, so a `{` here
         // opens it, not a record literal in the last endpoint of a
         // `theorem t: a = D { … }` (docs/surface-records.md §6.1).
-        let result = self.with_record_lit(true, |p| p.ty())?;
+        let mut result = self.with_record_lit(true, |p| p.ty())?;
+        // A `mut self` method returns its receiver beside its result
+        // (docs/sequencing-surface-design.md §8.2): `fn Io::read(mut self io:
+        // Io, …) → R` has kernel type `Io → … → Mutated<Io, R>`.
+        let mut_self = mut_params.iter().find(|(_, s)| *s).map(|(n, _)| n.clone());
+        if !mut_params.is_empty() && kind != DeclKind::Fn {
+            return Err(ParseError {
+                msg: "only a `fn` takes `mut` parameters: a theorem's parameters are not updated".into(),
+                span: result.span,
+            });
+        }
+        if let Some(receiver) = &mut_self {
+            let receiver_ty = params.iter().find(|p| &p.name == receiver).map(|p| p.ty.clone())
+                .expect("a `mut self` parameter is in the list");
+            let span = result.span;
+            result = Ty { kind: TyKind::Named { name: MUTATED_RECORD.into(), args: vec![receiver_ty, result] }, span };
+        }
         // `decreases e` — a termination measure, before the body. Contextual,
         // like `requires`: an identifier can never follow a complete result
         // type, so the word is unambiguous here. The body's `{` must not be
@@ -2844,7 +2903,9 @@ impl Parser {
         } else {
             let saved = self.propagation_depth;
             self.propagation_depth = usize::from(!is_meta && kind == DeclKind::Fn);
+            self.pending_mut = (!mut_params.is_empty()).then(|| mut_params.clone());
             let body = self.block();
+            self.pending_mut = None;
             self.propagation_depth = saved;
             body?
         };
@@ -2856,6 +2917,13 @@ impl Parser {
         crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
         crate::try_lower::reject_bind_in_type(&result)?;
         for p in &params { crate::try_lower::reject_bind_in_type(&p.ty)?; }
+        if mut_self.is_some() && crate::imperative::has_return(&body) {
+            return Err(ParseError {
+                msg: "`return` is not supported in a `mut self` method yet: its receiver goes back \
+                      out beside the result, which an early exit would skip".into(),
+                span: body.span,
+            });
+        }
         let body = crate::imperative::lower_returns(body);
         crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
@@ -2957,6 +3025,28 @@ impl Parser {
     }
 
     fn block_body(&mut self, open: Span) -> R<Block> {
+        let pending = self.pending_mut.take();
+        let saved = self.mutables.len();
+        if let Some(ps) = &pending {
+            self.mutables.extend(ps.iter().map(|(n, _)| n.clone()));
+        }
+        let block = self.block_body_in(open, pending);
+        self.mutables.truncate(saved);
+        let block = crate::imperative::lower_block(block?, &mut self.next_hygienic)?;
+        crate::try_lower::binds_in_block(block, &mut self.next_hygienic)
+    }
+
+    /// Is `e` a method call on a `let mut` local or `mut` parameter in
+    /// scope: one that may update its receiver (§8.2)?
+    fn mut_receiver(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Dot { recv, args: Some(_), .. }
+            if matches!(&recv.kind, ExprKind::Var(x) if self.mutables.contains(x)))
+    }
+
+    /// [`Self::block_body`] before its layer-2 statements and binds are
+    /// lowered: the statements, and a `mut` parameter list's bindings when
+    /// this is a function's body.
+    fn block_body_in(&mut self, open: Span, pending: Option<Vec<(String, bool)>>) -> R<Block> {
         let mut stmts = Vec::new();
         // `{}` — an empty proof block, whose result is the elaborator's one
         // speculative `refl` (issues/auto-refl-empty-block.md). Read here,
@@ -2975,9 +3065,45 @@ impl Parser {
             });
         }
         let parsed = self.block_statements(&mut stmts)?;
-        let block = self.block_tail(open, stmts, parsed)?;
-        let block = crate::imperative::lower_block(block, &mut self.next_hygienic)?;
-        crate::try_lower::binds_in_block(block, &mut self.next_hygienic)
+        let mut block = self.block_tail(open, stmts, parsed)?;
+        // A result that updates its receiver is bound first, so the local
+        // is updated before the block ends (§8.2).
+        if self.mut_receiver(&block.result) {
+            let span = block.result.span;
+            let name = self.hygienic("tail");
+            let call = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
+            block.stmts.push(Stmt::Let {
+                name, ty: None, expr: crate::imperative::marked(crate::imperative::MUTCALL, call, span), span, opaque: false,
+            });
+        }
+        if let Some(ps) = pending {
+            // `mut x` is `let mut x = x;` at the body's head; a `mut self`
+            // receiver is returned beside the body's value,
+            // `Mutated(x, value)`.
+            let mut head: Vec<Stmt> = ps.iter().map(|(n, _)| {
+                let x = Expr { kind: ExprKind::Var(n.clone()), span: open };
+                Stmt::Let { name: n.clone(), ty: None, expr: crate::imperative::marked(crate::imperative::MUT, x, open), span: open, opaque: false }
+            }).collect();
+            head.append(&mut block.stmts);
+            block.stmts = head;
+            if let Some((receiver, _)) = ps.iter().find(|(_, s)| *s) {
+                let span = block.result.span;
+                let value = if crate::imperative::is_unit_result(&block.result) {
+                    Expr { kind: ExprKind::Var("trivial".into()), span }
+                } else {
+                    let name = self.hygienic("value");
+                    let value = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
+                    block.stmts.push(Stmt::Let { name: name.clone(), ty: None, expr: value, span, opaque: false });
+                    Expr { kind: ExprKind::Var(name), span }
+                };
+                let var = |n: &str| Expr { kind: ExprKind::Var(n.into()), span };
+                block.result = Box::new(Expr {
+                    kind: ExprKind::App { head: Box::new(var(MUTATED_RECORD)), args: vec![var(receiver), value], named: vec![], explicit: false, goal_oriented: false },
+                    span,
+                });
+            }
+        }
+        Ok(block)
     }
 
     /// [`Self::block_body`] after its statements: the result (`parsed` when
@@ -3272,7 +3398,19 @@ impl Parser {
         self.expect_eq("`let` binding")?;
         let expr = self.expr()?;
         let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
-        let expr = if mutable { let span = expr.span; crate::imperative::marked(crate::imperative::MUT, expr, span) } else { expr };
+        let expr = if mutable {
+            let span = expr.span;
+            crate::imperative::marked(crate::imperative::MUT, expr, span)
+        } else if ty.is_none() && self.mut_receiver(&expr) {
+            // `let p = x.m(a);` on a mutable `x` (§8.2).
+            let span = expr.span;
+            crate::imperative::marked(crate::imperative::MUTCALL, expr, span)
+        } else {
+            expr
+        };
+        if mutable {
+            self.mutables.push(name.clone());
+        }
         Ok(Stmt::Let { name, ty, expr, span: start.join(end), opaque: false })
     }
 
@@ -3546,10 +3684,17 @@ impl Parser {
             let span = expr.span.join(end);
             let marked = expr.span;
             let name = self.hygienic("seq");
+            // `x.m(a);` on a mutable `x` updates it (§8.2); any other
+            // expression statement is a bind.
+            let expr = if self.mut_receiver(&expr) {
+                crate::imperative::marked(crate::imperative::MUTCALL, expr, marked)
+            } else {
+                crate::try_lower::bind_marker(expr, marked)
+            };
             stmts.push(Stmt::Let {
                 name,
                 ty: None,
-                expr: crate::try_lower::bind_marker(expr, marked),
+                expr,
                 span,
                 opaque: false,
             });

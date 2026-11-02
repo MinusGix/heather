@@ -146,3 +146,36 @@ fn a_range_is_written_only_in_a_for_header() {
     let error = parse_file("fn f(n: Nat) -> Nat { let r = 0..n; 0 }").unwrap_err();
     assert!(error.msg.contains("a range only in a `for` header"), "{}", error.msg);
 }
+
+#[test]
+fn a_mut_self_method_returns_its_receiver_beside_its_result() {
+    // `fn C::tick(mut self c: C, …) → R` has result `Mutated<C, R>`, and its
+    // body ends in `Mutated(c, value)` (docs/sequencing-surface-design.md §8.2).
+    let parsed = format!("{:?}", parse_file("fn C::tick(mut self c: C, n: Nat) -> Nat { c := g(c, n); n }").unwrap());
+    assert!(parsed.contains("\"Mutated\""), "{parsed}");
+    // A plain `mut` parameter is a local copy: the result is unchanged.
+    let parsed = format!("{:?}", parse_file("fn f(mut c: C) -> Nat { c := g(c); h(c) }").unwrap());
+    assert!(!parsed.contains("\"Mutated\""), "{parsed}");
+}
+
+#[test]
+fn a_mut_parameter_is_refused_where_nothing_is_updated() {
+    for (src, says) in [
+        ("theorem t(mut n: Nat): n = n { refl }", "only a `fn` takes `mut` parameters"),
+        ("fn f({mut n: Nat}) -> Nat { n }", "an implicit parameter cannot be `mut`"),
+        ("fn C::f(mut self c: C, xs: List<Nat>) -> Nat { for x in xs { return x; } 0 }", "`return` is not supported in a `mut self` method"),
+    ] {
+        let error = parse_file(src).unwrap_err();
+        assert!(error.msg.contains(says), "{src}: {}", error.msg);
+    }
+}
+
+#[test]
+fn a_method_call_on_a_mutable_local_is_claimed_by_its_block() {
+    // Claimed: the elaborator binds the receiver after the call.
+    let parsed = format!("{:?}", parse_file("fn f(c: C) -> Nat { let mut c = c; let a = c.tick(1); c.tick(2); a }").unwrap());
+    assert!(parsed.contains("\\0mutated") && !parsed.contains("\\0mutcall"), "{parsed}");
+    // Not mutable: an ordinary call, unmarked.
+    let parsed = format!("{:?}", parse_file("fn f(c: C) -> Nat { let a = c.tick(1); a }").unwrap());
+    assert!(!parsed.contains("\\0mut"), "{parsed}");
+}

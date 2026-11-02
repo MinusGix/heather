@@ -1,0 +1,133 @@
+// Probes of Linux as a capability (`linux_world`;
+// docs/effects-capabilities-design.md): `mut self` calls on a `let mut io`,
+// a program written over them, and its agreement with the hand-built
+// `Source` cat (`native_cat`) when both are read against the same world.
+// Literal and neutral worlds, a checking position, and the negative
+// controls the surface refuses. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import option;
+import bool;
+import bitvec;
+import itree;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import native_source;
+import native_cat;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// stdin: "hi" then "!" then the end of the input.
+fn piped() → Io { Io::of(World::piped([[b(104), b(105)], [b(33)]])) }
+
+// ---------------------------------------------------------------------------
+// Calls on a `let mut` capability
+
+// Two reads: the second sees the world the first left.
+record TwoReads { first: ReadResult, second: ReadResult, calls: Nat }
+fn two_reads(io: Io) → TwoReads {
+    let mut io = io;
+    let first = io.read(Io::stdin(), 8);
+    let second = io.read(Io::stdin(), 8);
+    TwoReads(first, second, io.past.len())
+}
+
+theorem two_reads_lit(): two_reads(piped()) = TwoReads(ReadBytes([b(104), b(105)]), ReadBytes([b(33)]), 2) { refl }
+
+// A read cut to the size asked for.
+theorem read_cut(): Io::read(piped(), Io::stdin(), 1).value = ReadBytes([b(104)]) { refl }
+
+// Neutral world: the answer is the world's, at the empty history, and the
+// call is recorded.
+theorem read_neutral(w: World(), n: Nat):
+    Io::read(Io::of(w), Io::stdin(), n).value = w([], ReadCmd(Io::stdin(), n)) { refl }
+theorem read_records(w: World(), n: Nat):
+    Io::read(Io::of(w), Io::stdin(), n).after.past = [Exchange(ReadCmd(Io::stdin(), n), w([], ReadCmd(Io::stdin(), n)))] { refl }
+
+// A statement call: `io.write(…);` discards the answer and keeps the world.
+fn greet(mut io: Io) → List<BitVec(8)> {
+    io.write(Io::stdout(), [b(104)]);
+    io.write(Io::stdout(), [b(105)]);
+    io.sent(Io::stdout())
+}
+theorem greet_lit(): greet(piped()) = [b(104), b(105)] { refl }
+
+// In checking position: the answer's type is the method's declared result.
+theorem write_checks(io: Io): Io::write(io, Io::stdout(), []).value = io.world(io.past, WriteCmd(Io::stdout(), [])) { refl }
+
+// ---------------------------------------------------------------------------
+// cat over the capability
+
+// GNU cat with no arguments: read stdin a buffer at a time and write each
+// chunk whole to stdout, until the end of the input (status 0) or a failed
+// read or write (status 1). `passes` bounds both loops, as a source's
+// `Repeat` is bounded by its fuel.
+fn Io::cat(mut self io: Io, capacity: Nat, passes: List<Nat>) → BitVec(64) {
+    let mut status: BitVec(64) = BitVec::ofNat(0);
+    for _ in passes {
+        let r = io.read(Io::stdin(), capacity);
+        match r {
+            ReadFailed(_) => { status := BitVec::ofNat(1); break },
+            ReadBytes(bytes) => {
+                if bytes.len() = 0 { break }
+                let ok = io.write_all(Io::stdout(), bytes, passes);
+                if ok = Bool::False { status := BitVec::ofNat(1); break }
+            },
+        }
+    }
+    status
+}
+
+theorem cat_status(): Io::cat(piped(), 256, List::range(4)).value = BitVec::ofNat(0) { refl }
+theorem cat_copies(): Io::cat(piped(), 256, List::range(4)).after.sent(Io::stdout()) = [b(104), b(105), b(33)] { refl }
+// A buffer smaller than a chunk: the chunk is read in pieces of its size.
+theorem cat_small_buffer(): Io::cat(piped(), 1, List::range(4)).after.sent(Io::stdout()) = [b(104), b(33)] { refl }
+
+// A failing write: the world refuses every write.
+fn deaf() → World() {
+    λ past c => match c {
+        ReadCmd(_, _) => ReadBytes([b(1)]),
+        WriteCmd(_, _) => WriteFailed(5),
+        OpenCmd(_) => OpenFailed(2),
+        CloseCmd(_) => Closed,
+        StatCmd(_) => StatFailed(2),
+    }
+}
+theorem cat_write_fails(): Io::cat(Io::of(deaf()), 8, List::range(3)).value = BitVec::ofNat(1) { refl }
+
+// ---------------------------------------------------------------------------
+// The surface cat and the hand-built `Source` cat agree
+
+// Read against the same world, `native_cat`'s source (written statement by
+// statement in the effectful layer) and the capability program above make
+// the same calls with the same answers, in the same order, and exit with the
+// same status: the two reach `Mutated` values that are equal, history and
+// all. The source's tree is what `write-elf` compiles, so this is the
+// agreement a `runtime fn` setup will prove once (`Io::reads_bind`) checked
+// here at one world.
+theorem cat_agrees_piped():
+    Io::against(cat(256).tree([], 4), piped()) = Some(Io::cat(piped(), 256, List::range(4))) { refl }
+theorem cat_agrees_failing():
+    Io::against(cat(8).tree([], 3), Io::of(deaf())) = Some(Io::cat(Io::of(deaf()), 8, List::range(3))) { refl }
+
+// ---------------------------------------------------------------------------
+// Refusals
+
+// A statement call of a method that does not update its receiver discards
+// its value.
+fn Io::history(self io: Io) → Nat { io.past.len() }
+// expect-error: does not update `io` (`history` is not a `mut self` method), so this statement discards its value
+fn discards(mut io: Io) → Nat {
+    io.history();
+    0
+}
+
+// A `mut self` call through a λ cannot update the local outside it.
+// expect-error: `read` is a `mut self` method, so it updates its receiver, and `io` cannot be updated here
+fn through_lambda(mut io: Io) → Nat {
+    let f = λ (n: Nat) => { let r = io.read(Io::stdin(), n); r };
+    0
+}

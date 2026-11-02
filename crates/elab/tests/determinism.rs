@@ -106,7 +106,7 @@ fn same_source_elaborates_identically() {
 /// Moved 2026-11-02 by canonical levels (`issues/kernel-compact-level.md`):
 /// every level prints as its normal form, so a `⊔` tree the elaborator built
 /// raw (`(0 ⊔ 0)`, a statement's quadratic join) now prints collapsed.
-const NAT_SUITE_GOLDEN: u64 = 0x3c6f5da0b7bbdeae;
+const NAT_SUITE_GOLDEN: u64 = 0x35d628263c402e26;
 
 #[test]
 fn nat_suite_golden_hash() {

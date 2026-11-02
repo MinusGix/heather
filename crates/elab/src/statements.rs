@@ -113,6 +113,9 @@ pub(crate) fn elaborate<'s>(
     for (index, statement) in statements.iter().enumerate() {
         match statement {
             Stmt::Let { opaque: true, .. } => return Ok((cx, values, &statements[index..])),
+            Stmt::Let { name, ty: None, expr, span, .. } if let Some((call, claimed)) = method_on_mutable(expr) => {
+                values.extend(elaborate_mut_call(elab, &mut cx, name, call, claimed, *span)?);
+            }
             Stmt::Let { name, ty, expr, .. } => {
                 values.extend(elaborate_let(elab, &mut cx, name, ty.as_ref(), expr)?);
             }
@@ -129,6 +132,88 @@ pub(crate) fn elaborate<'s>(
         }
     }
     Ok((cx, values, &[]))
+}
+
+/// A method call on a mutable local (docs/sequencing-surface-design.md §8.2,
+/// [`heather_syntax::MUTCALL`]): the call, and whether the local's own block
+/// claimed it.
+fn method_on_mutable(e: &Expr) -> Option<(&Expr, bool)> {
+    let ExprKind::App { head, args, .. } = &e.kind else { return None };
+    let ExprKind::Var(n) = &head.kind else { return None };
+    let claimed = if n == heather_syntax::MUTATED { true } else if n == heather_syntax::MUTCALL { false } else { return None };
+    match args.as_slice() {
+        [call] => Some((call, claimed)),
+        _ => None,
+    }
+}
+
+/// `let p = x.m(a);` or the statement `x.m(a);` (at a `#seq` name) on a
+/// mutable `x`. A method returning `Mutated` (a `mut self` method) binds `p`
+/// to the value and `x` to the receiver after the call, both projections of
+/// the one call, so a use of either keeps it; any other method is an
+/// ordinary `let`.
+fn elaborate_mut_call(
+    elab: &impl StatementElab,
+    cx: &mut Cx,
+    name: &str,
+    call: &Expr,
+    claimed: bool,
+    span: Span,
+) -> R<Option<LetValue>> {
+    let ExprKind::Dot { recv, name: method, .. } = &call.kind else {
+        unreachable!("the parser marks method calls only")
+    };
+    let ExprKind::Var(receiver) = &recv.kind else { unreachable!("the parser marks calls on a local only") };
+    let statement = name.starts_with("#seq");
+    let (term, ty, level) = elab.infer_statement_expression(cx, call)?;
+    let record = elab
+        .record_for_destructuring(cx, &ty, span)
+        .filter(|r| r.name == heather_syntax::MUTATED_RECORD);
+    let Some(record) = record else {
+        if statement {
+            return err(
+                format!(
+                    "`{receiver}.{method}(…)` does not update `{receiver}` (`{method}` is not a `mut self` \
+                     method), so this statement discards its value: bind it with `let`"
+                ),
+                span,
+            );
+        }
+        let value = LetValue::new(Rc::new(term), ty, level);
+        cx.aliases.push(Rc::new(value.alias(name.to_string(), cx.names.len(), None)));
+        return Ok(Some(value));
+    };
+    if !claimed {
+        return err(
+            format!(
+                "`{method}` is a `mut self` method, so it updates its receiver, and `{receiver}` cannot be \
+                 updated here: call it on a `let mut` local of this function's own blocks (not through a λ), \
+                 or call `{method}` by its qualified name for the `Mutated` record"
+            ),
+            span,
+        );
+    }
+    let whole = LetValue::new(Rc::new(term), ty.clone(), level);
+    let mut bind = |cx: &mut Cx, alias: &str, index: usize| -> R<()> {
+        let (term, ty, level) =
+            elab.project_destructured_field(cx, &record, &ty, Rc::clone(&whole.term), index, span)?;
+        cx.aliases.push(Rc::new(Alias {
+            spliced: Some(Rc::clone(&whole.spliced)),
+            skel: None,
+            name: alias.to_string(),
+            depth: cx.names.len(),
+            term: Rc::new(term),
+            ty,
+            level,
+            shifted: Default::default(),
+        }));
+        Ok(())
+    };
+    bind(cx, receiver, 0)?;
+    if !statement {
+        bind(cx, name, 1)?;
+    }
+    Ok(Some(whole))
 }
 
 /// A written `let`'s value (a record `let`'s whole right side), kept until
