@@ -19,7 +19,7 @@ use crate::sha256::{Sha256, hex, sha256};
 use crate::{ELABORATOR_SEMANTICS, KERNEL_SEMANTICS};
 
 const MAGIC: &[u8; 8] = b"HTHCACH\x06";
-const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/3\0";
+const DOMAIN_KEY: &[u8] = b"heather/module-cache-key/4\0";
 const DOMAIN_INTERFACE: &[u8] = b"heather/module-interface/1\0";
 const DOMAIN_SEMANTICS: &[u8] = b"heather/module-semantics/1\0";
 const DOMAIN_RELOCATED: &[u8] = b"heather/module-relocated/1\0";
@@ -109,6 +109,14 @@ impl ModuleCacheKey {
     /// checking options and the ordered dependency interfaces. The producing
     /// build is recorded in the artifact instead ([`SemanticsIdentity`]), so
     /// a source that has not changed keeps one key across compiler edits.
+    ///
+    /// The image and interface encodings' versions are part of it: after a
+    /// format bump no stored image answers for a key. Before, the planner
+    /// (`recorded_interface`, which reads the header alone) counted an image
+    /// of the old format as built while every load rejected it, so under
+    /// [`ImageFreshness::AcceptStale`] the gate's build step left the whole
+    /// closure above the first such module to one folder process, which met
+    /// the CPU rail (`issues/library-gate-native-tests-fresh-box-rail.md`).
     pub fn for_source(
         module: &str,
         source: &str,
@@ -117,6 +125,7 @@ impl ModuleCacheKey {
     ) -> Self {
         let mut h = Sha256::new();
         h.update(DOMAIN_KEY);
+        h.update(&heather_elab::image_format());
         put_bytes(&mut h, module.as_bytes());
         h.update(&sha256(source.as_bytes()));
         h.update(&[match lint_profile {
@@ -147,6 +156,8 @@ impl SourceKey {
     pub fn for_source(module: &str, source: &str, lint_profile: LintProfile) -> Self {
         let mut h = Sha256::new();
         h.update(DOMAIN_SOURCE);
+        // A candidate of another format could not be decoded to be moved.
+        h.update(&heather_elab::image_format());
         put_bytes(&mut h, module.as_bytes());
         h.update(&sha256(source.as_bytes()));
         h.update(&[match lint_profile {
@@ -844,14 +855,21 @@ impl ModuleImageCache {
     /// alone: what a planner chains the keys of the modules above it from,
     /// without decoding anything (`docs/module-dag-design.md` §12). `None`
     /// when there is no image this freshness would load, or it records
-    /// refusals of another build (which no session replays). Unchecked: a
-    /// damaged image is found by the load that follows, which elaborates
-    /// the module instead.
+    /// refusals of another build (which no session replays), or its semantic
+    /// section is of an encoding this build does not decode. Otherwise
+    /// unchecked: a damaged image is found by the load that follows, which
+    /// elaborates the module instead. The format is read because what counts
+    /// as built here must be what a load accepts: an image the planner counts
+    /// and every load rejects leaves its whole upper closure to the process
+    /// that loads it, one module there rebuilt and every key above it moved
+    /// (`issues/library-gate-native-tests-fresh-box-rail.md`). The key covers
+    /// the format too ([`ModuleCacheKey::for_source`]), so this only meets
+    /// an image written at its key with another section.
     pub fn recorded_interface(&self, key: ModuleCacheKey, freshness: ImageFreshness) -> Option<[u8; 32]> {
         let mut file = std::fs::File::open(self.path(key)).ok()?;
-        let mut head = [0u8; HEADER];
+        let mut head = [0u8; HEADER + 8];
         file.read_exact(&mut head).ok()?;
-        if &head[..8] != MAGIC || head[8..40] != key.0 {
+        if &head[..8] != MAGIC || head[8..40] != key.0 || head[HEADER..] != heather_elab::image_format()[..8] {
             return None;
         }
         let current = head[40..72] == SemanticsIdentity::current().0;

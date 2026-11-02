@@ -161,7 +161,7 @@ mod representations;
 pub mod resolve;
 mod session;
 pub use module_delta::{ItemSlice, ModuleDelta, ModuleDependencyIdentity, ModuleReplayError, SliceReport};
-pub use module_image::{ModuleImageDecodeError, ModuleImageLimits};
+pub use module_image::{ModuleImageDecodeError, ModuleImageLimits, image_format};
 pub use session::SemanticImage;
 mod slots;
 mod statements;

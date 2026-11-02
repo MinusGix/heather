@@ -338,6 +338,17 @@ holds that key (`semantic::BuildPlan`). The planner uses the session's own
 canonical order (`canon_over`), so the two agree on every key; a module
 whose build does not land at the planned key is not retried.
 
+"Built" here has to mean what a load accepts, or the closure above a
+module the planner counts and the load refuses falls to whichever process
+loads it, one folder child elaborating it all under one CPU rail. The key
+covers the image and interface encodings' versions, so a format bump is a
+miss for planner and load alike, and the header read also checks the
+semantic section's version. Until 2026-11-02 neither did: under the stale
+lane, after #359/#360 bumped the format, a seeded store's old images read
+as built while every load rejected them, and `lib/_tests/native`'s child
+met the rail on #358, #359 and #366
+(`issues/library-gate-native-tests-fresh-box-rail.md`).
+
 `heather check --build-jobs N` runs the planner over the load before
 checking and starts a `heather check` of the module's file (with the
 parent's `--expectations` and image policy) for each ready module, up to N

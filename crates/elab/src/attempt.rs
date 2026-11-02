@@ -214,6 +214,8 @@ impl DeclAttempt {
             slot_probe_target,
             motive_speculation,
             motive_redundancy_probe,
+            match_eq_next,
+            match_eq_wanted,
             telescope,
         } = self;
         AttemptMark {
@@ -232,6 +234,8 @@ impl DeclAttempt {
             slot_probe_target: slot_probe_target.get(),
             motive_speculation: motive_speculation.get(),
             motive_redundancy_probe: motive_redundancy_probe.get(),
+            match_eq_next: match_eq_next.get(),
+            match_eq_wanted: match_eq_wanted.borrow().len(),
             telescope: telescope.borrow().clone(),
         }
     }
@@ -267,6 +271,8 @@ impl DeclAttempt {
             slot_probe_target,
             motive_speculation,
             motive_redundancy_probe,
+            match_eq_next,
+            match_eq_wanted,
             telescope,
         } = self;
         op_fallback_notes.borrow_mut().truncate(mark.op_fallback_notes);
@@ -287,6 +293,10 @@ impl DeclAttempt {
         slot_probe_target.set(mark.slot_probe_target);
         motive_speculation.set(mark.motive_speculation);
         motive_redundancy_probe.set(mark.motive_redundancy_probe);
+        // As the clone probe did before #372: a probe's match equations,
+        // handed out or asked for, go with it.
+        match_eq_next.set(mark.match_eq_next);
+        match_eq_wanted.borrow_mut().truncate(mark.match_eq_wanted);
         *telescope.borrow_mut() = mark.telescope;
     }
 }
@@ -308,6 +318,8 @@ pub(super) struct AttemptMark {
     slot_probe_target: Option<Span>,
     motive_speculation: bool,
     motive_redundancy_probe: bool,
+    match_eq_next: u32,
+    match_eq_wanted: usize,
     telescope: crate::spine::Binders,
 }
 
