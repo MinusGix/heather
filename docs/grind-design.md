@@ -515,11 +515,17 @@ The failure lists the pending instances, the first four by their premise:
 
 | proof | before | now |
 |---|---|---|
-| `Memory::set_set_comm` | three branches of two or three `trans`/`get_set_*` instances each | each `by grind_using(["Memory::get_set_hit", "Memory::get_set_other"], [])`; the premises are the branch's locals, over another memory by `Defeq` |
-| `commit_chain` (parser diagnostics) | three branches of three instances, each premise a derived term | each `grind_using` of the three `commit_*` lemmas with the one derived fact as a hint |
+| `commit_chain` (parser diagnostics) | three branches of three instances, each premise a derived term | replaced: each branch is a `grind_using` of the three `commit_*` lemmas with the one derived fact as a hint |
+| `Memory::set_set_comm` | three branches of two or three `trans`/`get_set_*` instances each | closes, each branch as `by grind_using(["Memory::get_set_hit", "Memory::get_set_other"], [])` (the probe `set_set_hit_other`); the premises are the branch's locals, over another memory by `Defeq`. **Not replaced** |
 
-The `absurd` branch of `set_set_comm` (`True = False` from the two locals)
-stays by hand: it needs constructor facts (R3).
+`set_set_comm` keeps its hand proof: `memory.hthr` is the byte memory model
+under the whole native stack, and importing grind there puts the tactic
+library (`tactic`, `derive`, `egraph`, `grind`) into the closure of every
+module and Rust test that loads the model, for one theorem. Its `absurd`
+branch (`True = False` from the two locals) would stay by hand anyway: it
+needs constructor facts (R3). `parser_diagnostics` already imported
+`omega`; it now imports `grind`, and the two Rust tests that list the parser
+library's closure by hand list grind's.
 
 ### 11.5 Not done
 
