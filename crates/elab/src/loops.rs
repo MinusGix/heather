@@ -149,7 +149,7 @@ impl<'a> Lift<'a> {
                 Some(t) => Some(t.clone()),
                 None => l.value.as_ref().and_then(|v| self.infer(&out, v)),
             };
-            out.push(Binder { name: l.name.clone(), ty });
+            out.push(Binder { name: l.name.clone(), ty, value: None });
         }
         out
     }
