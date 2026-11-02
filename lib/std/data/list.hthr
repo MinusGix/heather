@@ -630,6 +630,23 @@ theorem List::len_range(n: Nat): List::range(n).len() = n {
     }
 }
 
+// `[a, a + 1, …, a + n - 1]`, built at the end as `range` is: `a..b` in a
+// `for` header is `List::range_from(a, b - a)`
+// (docs/sequencing-surface-design.md §5.2).
+fn List::range_from(a, n: Nat) → List<Nat> {
+    match n {
+        Zero => Nil,
+        Succ(k) => List::range_from(a, k) ++ Cons(a + k, Nil),
+    }
+}
+
+theorem List::len_range_from(a, n: Nat): List::range_from(a, n).len() = n {
+    match n {
+        Zero => {},
+        Succ(k) => trans(List::range_from(a, k).len_append(Cons(a + k, Nil)), Nat::cong_succ(List::len_range_from(a, k))),
+    }
+}
+
 fn List::zip<A, B>(self xs: List<A>) → List<B> → List<Pair<A, B>> {
     match xs {
         Nil => λ (ys: List<B>) => Nil,

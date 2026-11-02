@@ -1052,3 +1052,13 @@ and `List::for_in` (both in `lib/std/data/list.hthr`). What departs from
    parse time), the fuelled form, a `while` inside a `decreases` function
    or holding a `for` (the generated `f#run` is a `decreases` function, and
    loops in those are refused), and labels.
+
+## 17. Ranges as built (2026-11-02)
+
+`for i in a..b` is `List::range_from(a, b - a)` (new in `list.hthr`, with
+`len_range_from`, built at the end as `range` is), and `for i in 0..n` is
+`List::range(n)`, so the loop is an ordinary `for`. That keeps
+`List::len_range` and the native counting lemmas in reach. `..` is not a
+token. The parser reads two `.`s as a range only while parsing a `for`
+header, and anywhere else it refuses them with a message pointing at
+`range_from`. No `Range` type exists, as §5.2 planned.

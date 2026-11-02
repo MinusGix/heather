@@ -357,3 +357,32 @@ fn stuck(n: Nat) → Nat {
     while 1 <= m decreases m { k := k + 1 }
     k
 }
+
+// ---- Ranges in a `for` header (§5.2) ----
+
+// `0..n` is `List::range(n)`, so the loop is a fold over it.
+fn triangle(n: Nat) → Nat {
+    let mut s = 0;
+    for i in 0..n { s := s + i }
+    s
+}
+theorem triangle_lit(): triangle(4) = 6 { refl }
+theorem triangle_is(n: Nat): triangle(n) = List::range(n).foldl(triangle::step, 0) { refl }
+
+// `a..b` is `List::range_from(a, b - a)`: empty when `b ≤ a`, and bounds
+// that are any expression.
+fn span_sum(a, b: Nat) → Nat {
+    let mut s = 0;
+    for i in a..b { s := s + i }
+    s
+}
+theorem span_sum_lit(): span_sum(3, 6) = 12 { refl }
+theorem span_sum_empty(): span_sum(6, 3) = 0 { refl }
+theorem span_sum_is(a, b: Nat): span_sum(a, b) = List::range_from(a, b - a).foldl(span_sum::step, 0) { refl }
+
+fn upto_len(xs: List<Nat>) → Nat {
+    let mut s = 0;
+    for i in 1..xs.len() { s := s + i }
+    s
+}
+theorem upto_len_lit(): upto_len([7, 7, 7]) = 3 { refl }
