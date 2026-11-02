@@ -36,6 +36,8 @@ import list;
 import logic;
 import nat;
 import option;
+import tactic;
+import grind;
 
 // ---------------------------------------------------------------------------
 // The meaning
@@ -532,7 +534,7 @@ theorem Env::compose_same(env, e1, m2: Env, mid, final: State, first, more: List
     let kb = Env::settle_kept(more, b, final.values);
     let k0 = Env::settle_kept(first, x0, final.values);
     let k1 = Env::settle_kept(first, Env(env.words, mid.buffers, env.args), mid.values);
-    let args_same: (env.args = e1.args) = trans(sym(k1.right), h1.right.right);
+    let args_same: (env.args = e1.args) = by grind();
     let numbers = λ (i: Nat) => (match absent(i, port_ids(more)) as λ c => absent(i, port_ids(more)) = c →
             a.settle(final.values, more).number(i) = b.settle(final.values, more).number(i) {
         True => λ h => {
@@ -544,7 +546,7 @@ theorem Env::compose_same(env, e1, m2: Env, mid, final: State, first, more: List
         False => λ h => Env::settle_written(more, a, b, final.values, i, absent_false_mem(i, port_ids(more), h)),
     })(refl);
     let alike: a.settle(final.values, more).Same(b.settle(final.values, more)) =
-        ⟨numbers, ⟨trans(ka.left, trans(k0.left, sym(kb.left))), trans(ka.right, trans(k0.right, trans(args_same, sym(kb.right))))⟩⟩;
+        ⟨numbers, ⟨by grind(), by grind()⟩⟩;
     j(sym(Env::settle_append(first, more, x0, final.values)), λ e _ => e.Same(m2), a.settle(final.values, more).same_trans(b.settle(final.values, more), m2, alike, h2))
 }
 

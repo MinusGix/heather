@@ -966,3 +966,27 @@ Before it, a tactic could only speak by failing. Its first customer is
 proof cites, so the call can be narrowed: the used-subset report of
 [lemma-selection-and-search](../issues/lemma-selection-and-search.md) piece 3.
 A generator's run (`generate`) says nothing yet: its `Say`s are dropped.
+
+## 24. A value's fields: `Fields` (2026-11-02)
+
+`Fields(e: Expr) → Checked<Projected>` takes a term of a non-indexed
+inductive type with one constructor (a record, `∧`) apart into its fields:
+the type, as the reference `Lookup` answers for its name, and for each field
+its name (its position where it has none) and a handle to its projection,
+the term `e.name` elaborates to (`project_field`), whose type is the
+field's. The type is read as written, unspelled, or once in head normal
+form, so a definition whose value is a `∧` (`a.Same(b)`) is taken apart
+too. Refused for any other type, and for one with a field a later field's
+type mentions (`∃`'s `witness`, whose `proof` is a fact about the value
+rather than one of its own): that is the `Σ`'s second component depending
+on its binder.
+
+```heather
+record FieldProj { name: String, term: Handle }
+record Projected { ty: GlobalRef, fields: List<FieldProj> }
+```
+
+`Expr` has no projection form, and none is needed: a tactic cites a field by
+the handle. Its first customer is `grind`, which reads a conjunction or a
+record of equations as its fields (`docs/grind-design.md` §12); `omega`'s
+Rust `local_facts` does the same for `∧` alone, inside the elaborator.

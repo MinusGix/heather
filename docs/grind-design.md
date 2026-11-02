@@ -4,7 +4,8 @@ Issue: [grind-port](../issues/grind-port.md) (milestone `tac-general`).
 Round 1 built `lib/std/tactic/grind.hthr`, the `Spine` host request, and the
 probes in `lib/_tests/std/tactic/grind_tests.hthr`. Round 2 added lemmas
 instantiated by e-matching, the `Say` host request and `grind_report` (§9).
-Round 2½ proves lemmas' premises at their instances (§11).
+Round 2½ proves lemmas' premises at their instances (§11), and the
+reader takes conjunctions and records of equations apart (§12).
 
 The milestone asks for "a general-purpose rewriting and congruence-closure
 tactic (grind-like) [that] closes the routine goals that today need hand
@@ -405,7 +406,7 @@ across the areas, each equational step restated as a probe and given to
 | (`Int`) | `(a + b) + c = b + (c + a)` | closes from `add_assoc` and `add_comm` | none |
 | `Float::same_of_squeeze` | `n = m` from `n = k`, `k = False`, `m = False` | closes | none |
 | `Float::same_of_squeeze` | `m = False`, `m = True` ⊢ anything | the report shows `True` and `False` in one class, and stops | **constructor facts** (R3) |
-| `Env::compose_same` | `trans(ka.left, trans(k0.left, sym(kb.left)))` | nothing read | **conjunctions**: the equations are fields of `∧`/record locals |
+| `Env::compose_same` | `trans(ka.left, trans(k0.left, sym(kb.left)))` | nothing read | **conjunctions**: the equations are fields of `∧`/record locals (§12) |
 | `commit_chain` | each branch | premises proved by derived terms (`Succ(a).le_trans(b, c, first, bc)`) | **premises**, some needing a search (`Synth`) |
 | `BitVec::sub_bits_cons_leaf` | each of eight branches | per branch, after a `Bool` split and computation | **case splits** (R4) and definitional steps |
 
@@ -542,3 +543,53 @@ library's closure by hand list grind's.
   caps; if one is, a cheap key on the premise's head before `Defeq` is the
   first thing to add.
 
+
+## 12. Conjunctions and records (2026-11-02)
+
+Issue: [grind-read-conjunctions](../issues/grind-read-conjunctions.md). The
+sweep (§10) found `Env::compose_same`'s chains citing `ka.left`,
+`h1.right.right`: equations that are fields of `∧` and record locals, which
+the reader listed as "not equations, not read".
+
+A fact that reads as neither an equation nor a lemma is now taken apart by
+a new host request, `Fields` (host design §24): a term of a non-indexed
+inductive with one constructor comes back as its fields, each a handle to
+its projection, the term `k.left` elaborates to. Each field is a fact of its
+own, named `k.left`, proved by its projection (`Hd` of the handle), and read
+the way any fact is: an equation into the graph, an equation under binders
+as a lemma (`Env::Same`'s `(i: Nat) → a.number(i) = b.number(i)`), a field
+of fields taken apart again, up to the reader's depth of 64 and 4096 facts
+under one local. A field that is none of these is kept for the premises
+(§11.2) with no line of its own, so `h: (a < n) ∧ True` proves a lemma's
+`a < n`. A fact none of whose fields reads as anything is reported as
+before (a local in the "not equations" line), so a data local (`env: Env`)
+costs one `Fields` per record layer and says nothing new.
+
+Two kinds stay whole, as the issue asks:
+
+- **`∃`** and any record with a field a later field's type mentions:
+  `Fields` refuses it. `k.proof: P(k.witness)` is a fact about the
+  value, and reading it would put the projection `k.witness` in the
+  graph as an opaque atom; the issue leaves that to a design of its own.
+- **`↔`**: its directions are implications between propositions, not
+  equations between terms; `Fields` answers the type's reference, and grind
+  compares it with `Lookup("Iff")`. (A direction concluding an equation
+  would otherwise be read as a lemma with a premise.)
+
+The reader is no longer one recursive function: a function can only call
+the ones declared above it, so `read_fact` reads a fact alone
+(`read_one`), takes it apart (`expand`), flattens fields of fields with a
+work list (`leaves`), and reads the leaves (`read_leaves`).
+
+`Env::compose_same`'s `args_same` and its two field chains are `by grind()`
+now (`lib/native/native_structured_meaning.hthr` imports `grind`; `tactic`
+was in the native closure already). Its `numbers` branch stays by hand: it
+chooses between frame lemmas by a dependent `match` on `absent(i, …)`,
+which is case splits (R4) territory.
+
+Probes: `conj`, `conj_nested`, `conj_defined` (through a definition whose
+value is a `∧`), `conj_lemma`, `conj_hint`, `conj_record` (a value-parameter
+record), `conj_open`, `conj_premise`, `conj_checking`, and the refusals
+`conj_no_equation`, `dependent_unread`, `exists_unread`, `iff_unread`, in
+`lib/_tests/std/tactic/grind_tests.hthr`. `exists_unread` and `iff_unread`
+would close if read, so they discriminate.

@@ -1,6 +1,6 @@
 ---
 title: grind: read the equations inside a conjunction or a record of them
-status: open
+status: closed
 labels: [tactics]
 area: tactics
 milestone: [tac-general]
@@ -24,3 +24,13 @@ reads constructor equations the other way.
 
 Done when `theorem conj(a, b, c: Nat, k: a = b ∧ b = c): a = c { by grind() }`
 closes and `compose_same`'s `args_same` and field chains close by grind.
+
+## Log
+
+- 2026-11-02: Done (thread "Teach grind to read conjunctions"). A new host
+  request, `Fields(e)`, answers a one-constructor value's fields as handles
+  to their projections (host design §24); grind reads each as the fact
+  `k.left`, recursively, up to the reader's depth, and keeps a field that
+  is nothing for the premises. `∃` (a field a later one mentions) and `↔`
+  stay whole. `conj` closes, and `Env::compose_same`'s `args_same` and both
+  field chains are `by grind()`. Design: `docs/grind-design.md` §12.
