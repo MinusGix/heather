@@ -26,4 +26,4 @@ type). Done when the refusal is an `// expect-error:` probe in
 Also here: an annotated `let p: T = x.m(a);` is not a candidate (the
 answer is annotated after the call), and `return` inside a `mut self`
 body is refused (the `\0after` route would have to wrap the `Return` value
-in `Mutated` too).
+in `Mutated` too; lifted 2026-11-02 by `issues/mut-self-early-return.md`).

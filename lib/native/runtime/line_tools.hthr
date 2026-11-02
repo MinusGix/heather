@@ -87,23 +87,21 @@ fn List::lines_last_first(self bytes: List<BitVec(8)>, keep_newline: Bool) → L
 
 // Standard input read to its end into `buf`, at most `capacity` bytes at a
 // time, as lines, the last first; `None` if a read fails. `passes` bounds
-// the reads, as a source's `Repeat` is bounded by its fuel. (A failed read
-// leaves the loop through a flag: `return` is refused in a `mut self`
-// method for now, issues/mut-self-early-return.md.)
+// the reads, as a source's `Repeat` is bounded by its fuel. A failed read
+// returns at once, with the world as that read left it.
 fn Io::read_lines(mut self io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), keep_newline: Bool, passes: List<Nat>)
     → Option<List<List<BitVec(8)>>>
 {
     let mut r = LineReader::empty();
     let mut held = buf;
-    let mut failed: Bool = False;
     for _ in passes {
         let got = io.read_into(Io::stdin(), held, capacity);
-        if got.result.signed_lt_bit(0) = True { failed := True; break }
+        if got.result.signed_lt_bit(0) = True { return None }
         if got.result.eq_bit(0) = True { break }
         held := got.buf;
         r := r.feed(span(got.buf, 0, got.result.toNat()), keep_newline)
     }
-    match failed { True => None, False => Some(r.lines()) }
+    Some(r.lines())
 }
 
 // ---------------------------------------------------------------------------
@@ -115,24 +113,22 @@ fn Io::read_lines(mut self io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), k
 fn Io::write_bytes(mut self io: Io, bytes: List<BitVec(8)>, passes: List<Nat>) → Bool {
     let len: BitVec(64) = BitVec::ofNat(bytes.len());
     let mut sent: BitVec(64) = 0;
-    let mut failed: Bool = False;
     for _ in passes {
         if sent.eq_bit(len) = True { break }
         let wrote = io.write_from(Io::stdout(), bytes, sent, len.sub(sent));
-        if wrote.signed_lt_bit(0) = True { failed := True; break }
+        if wrote.signed_lt_bit(0) = True { return False }
         sent := sent.add(wrote)
     }
-    failed.not().and(sent.eq_bit(len))
+    sent.eq_bit(len)
 }
 
 // Each line written to stdout in the list's order: whether every write went.
 fn Io::write_lines(mut self io: Io, lines: List<List<BitVec(8)>>, passes: List<Nat>) → Bool {
-    let mut ok: Bool = True;
     for line in lines {
         let wrote = io.write_bytes(line, passes);
-        if wrote = False { ok := False; break }
+        if wrote = False { return False }
     }
-    ok
+    True
 }
 
 // ---------------------------------------------------------------------------

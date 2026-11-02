@@ -140,18 +140,6 @@ fn mut_receiver(call: &Expr) -> Option<&str> {
     }
 }
 
-/// Does a declaration's body `return` anywhere?
-pub(crate) fn has_return(b: &Block) -> bool {
-    let e = Expr { kind: ExprKind::Block(Box::new(b.clone())), span: b.span };
-    let mut found = false;
-    walk(&e, &mut |x| {
-        if matches!(&x.kind, ExprKind::App { head, .. } if matches!(&head.kind, ExprKind::Var(n) if n == RETURN || n == RET)) {
-            found = true;
-        }
-    });
-    found
-}
-
 /// The type annotation an assignment checks at: the type of the local's
 /// current value.
 fn type_of(name: &str, span: Span) -> Ty { Ty { kind: TyKind::TypeOf(Box::new(var(name, span))), span } }
@@ -534,6 +522,47 @@ pub(crate) fn lower_returns(mut body: Block) -> Block {
     let inner = Expr { span: inner.span, kind: ExprKind::Block(Box::new(inner)) };
     body.result = Box::new(call(AFTER, vec![var(&name, span), inner], span));
     body
+}
+
+/// A `mut self` method's returns, after [`lower_returns`]: each `\0ret(e)`
+/// leaf of a returning loop becomes `\0ret(Mutated(x, e))` over the
+/// receiver `x`, so the loop's `Return` is the method's whole result. The
+/// leaf reads `x` where it stands, which is the receiver as the body has
+/// threaded it so far: the loop carries it as state when the body calls on
+/// it or assigns it. A returning loop is a statement of the body, or of a
+/// `\0after` rest below one; one anywhere else is refused after this by
+/// [`reject_residue`], as in pure code.
+pub(crate) fn return_receiver(body: &mut Block, receiver: &str, record: &str) {
+    for s in &mut body.stmts {
+        let Stmt::Let { expr, .. } = s else { continue };
+        if !is_loop(expr) || !returns(expr) { continue; }
+        let ExprKind::App { args, .. } = &mut expr.kind else { continue };
+        let Some(ExprKind::Lam { body: lam, .. }) = args.get_mut(1).map(|a| &mut a.kind) else { continue };
+        wrap_ret_leaves(lam, receiver, record);
+    }
+    if let ExprKind::App { head, args, .. } = &mut body.result.kind
+        && matches!(&head.kind, ExprKind::Var(n) if n == AFTER)
+        && let Some(ExprKind::Block(rest)) = args.get_mut(1).map(|a| &mut a.kind)
+    {
+        return_receiver(rest, receiver, record);
+    }
+}
+
+/// The leaves of a tail-lowered loop body sit in the result of a block or
+/// of a `match` arm, and nowhere else (the tree [`tail`] builds).
+fn wrap_ret_leaves(e: &mut Expr, receiver: &str, record: &str) {
+    match &mut e.kind {
+        ExprKind::App { head, args, .. } if matches!(&head.kind, ExprKind::Var(n) if n == RET) && args.len() == 1 => {
+            let span = args[0].span;
+            let value = std::mem::replace(&mut args[0], unit(span));
+            args[0] = call(record, vec![var(receiver, span), value], span);
+        }
+        ExprKind::Block(b) => wrap_ret_leaves(&mut b.result, receiver, record),
+        ExprKind::Match { arms, .. } => {
+            for a in arms { wrap_ret_leaves(&mut a.body, receiver, record); }
+        }
+        _ => {}
+    }
 }
 
 fn is_loop(e: &Expr) -> bool {
