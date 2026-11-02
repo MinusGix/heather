@@ -487,7 +487,7 @@ impl Elaborator {
             span: decl.span,
         })?;
         let (want, want_lvl) = Self::close_meta_ty(&sig, want_res, want_res_lvl);
-        if want_lvl.normalize() != lvl.normalize() {
+        if want_lvl != *lvl {
             return err(
                 format!(
                     "`{}` expects a signature at level {want_lvl:?}, and this one is at \
@@ -653,7 +653,7 @@ impl Elaborator {
         else {
             unreachable!("a `meta fn`'s statement is a code type")
         };
-        if level.normalize() != want_level.normalize() {
+        if *level != want_level {
             return err(
                 format!(
                     "`{}`'s payload lives at a different level than the slot's \
@@ -1029,7 +1029,6 @@ impl Elaborator {
         // ingredient becomes its Tarski code wherever the order puts it —
         // however many there are — which is what the old two-code prefix
         // hard-coded.
-        let zero = Level::Zero.normalize();
         let mut applied_args: Vec<Term> = Vec::with_capacity(md.order.len());
         for &pos in &md.order {
             let iname = spec.ingredients[pos].name;
@@ -1049,7 +1048,7 @@ impl Elaborator {
                     // The template binds `(A: Type<0>)`: a type at a higher
                     // level, or with no code in the Tarski universe, is an
                     // instance this level-0 slice honestly cannot take.
-                    if level.normalize() != zero {
+                    if **level != Level::Zero {
                         return Ok(None);
                     }
                     let Some(code) = crate::code::code_of(ty) else {

@@ -83,13 +83,11 @@ fn refuse<T>(what: &str) -> R<T> {
 }
 
 fn lvl(l: &Level) -> R<Lvl> {
-    Ok(Lvl(match l {
-        Level::Zero => 0,
-        Level::Succ(l) => lvl(l)?.0 + 1,
-        Level::Max(a, b) => lvl(a)?.0.max(lvl(b)?.0),
-        Level::Var(_) => return refuse("universe variable (level polymorphism)"),
-        Level::Omega => return refuse("level ω"),
-    }))
+    // Levels are canonical, so a variable-free one is a constant.
+    match l {
+        Level::Omega => refuse("level ω"),
+        _ => l.as_constant().map(Lvl).map_or_else(|| refuse("universe variable (level polymorphism)"), Ok),
+    }
 }
 
 fn app(f: Hx, args: Vec<Hx>) -> Hx {

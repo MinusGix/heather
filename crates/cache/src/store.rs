@@ -39,7 +39,10 @@ use crate::sha256::{hex, unhex};
 /// collide — the domain strings bumped with them — but a silently unmatchable
 /// entry is a cache that quietly does nothing, and the version line makes it
 /// say so instead.
-pub const FORMAT: &str = "2";
+///
+/// `3`: levels are canonical and hashed as their normal form
+/// (`issues/kernel-compact-level.md`); the domain strings bumped with it.
+pub const FORMAT: &str = "3";
 
 /// The file within the cache directory.
 ///
