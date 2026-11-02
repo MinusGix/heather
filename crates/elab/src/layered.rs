@@ -110,28 +110,64 @@ impl Hasher for PreHashed {
     }
 }
 
-type IndexMap = HashMap<u64, Hits, BuildHasherDefault<PreHashed>>;
-
-/// The sealed layers of one run that hold a key with a given index hash, as
-/// positions in [`Sealed::layers`], ascending.
-enum Hits {
-    One(u32),
-    Many(Box<[u32]>),
+/// One table of one run: per key hash, the run's sealed layers holding a
+/// key with that hash, as positions in [`Sealed::layers`], ascending. Almost
+/// every hash names one layer, stored inline; [`MANY`] marks a position in
+/// `many` instead, which keeps a map entry at twelve bytes.
+#[derive(Default)]
+struct Table {
+    map: HashMap<u64, u32, BuildHasherDefault<PreHashed>>,
+    many: Vec<Box<[u32]>>,
 }
 
-impl Hits {
-    fn as_slice(&self) -> &[u32] {
-        match self {
-            Hits::One(i) => std::slice::from_ref(i),
-            Hits::Many(is) => is,
-        }
+/// The tag of a [`Table::map`] value that indexes [`Table::many`].
+const MANY: u32 = 1 << 31;
+
+impl Table {
+    fn hits(&self, h: u64) -> Option<&[u32]> {
+        let v = self.map.get(&h)?;
+        Some(if v & MANY == 0 { std::slice::from_ref(v) } else { &self.many[(v & !MANY) as usize] })
     }
 
-    fn then(&self, newer: &Hits) -> Hits {
-        let mut all = Vec::with_capacity(self.as_slice().len() + newer.as_slice().len());
-        all.extend_from_slice(self.as_slice());
-        all.extend_from_slice(newer.as_slice());
-        Hits::Many(all.into_boxed_slice())
+    fn hit_lists(&self) -> impl Iterator<Item = (u64, &[u32])> {
+        self.map.keys().map(|&h| (h, self.hits(h).expect("own key")))
+    }
+
+    fn insert(&mut self, h: u64, hits: &[u32]) {
+        let v = if let [one] = hits {
+            *one
+        } else {
+            let i = u32::try_from(self.many.len()).expect("fewer than 2³¹ shared hashes");
+            self.many.push(hits.into());
+            i | MANY
+        };
+        self.map.insert(h, v);
+    }
+
+    /// `self` followed by the newer table `newer`.
+    fn then(&self, newer: &Table) -> Table {
+        let mut out = Table {
+            map: HashMap::with_capacity_and_hasher(self.map.len() + newer.map.len(), Default::default()),
+            many: Vec::new(),
+        };
+        let mut both = Vec::new();
+        for (h, old) in self.hit_lists() {
+            match newer.hits(h) {
+                Some(new) => {
+                    both.clear();
+                    both.extend_from_slice(old);
+                    both.extend_from_slice(new);
+                    out.insert(h, &both);
+                }
+                None => out.insert(h, old),
+            }
+        }
+        for (h, new) in newer.hit_lists() {
+            if !self.map.contains_key(&h) {
+                out.insert(h, new);
+            }
+        }
+        out
     }
 }
 
@@ -148,18 +184,16 @@ pub(crate) trait Layer: Clone + Default {
 /// which key hashes. Immutable once built.
 struct Run {
     layers: u32,
-    tables: Box<[IndexMap]>,
+    tables: Box<[Table]>,
 }
 
 impl Run {
     fn of<L: Layer>(position: u32, layer: &L) -> Run {
         let tables = (0..L::TABLES)
             .map(|table| {
-                let mut map = IndexMap::default();
-                layer.keys(table, &mut |h| {
-                    map.insert(h, Hits::One(position));
-                });
-                map
+                let mut out = Table::default();
+                layer.keys(table, &mut |h| out.insert(h, &[position]));
+                out
             })
             .collect();
         Run { layers: 1, tables }
@@ -167,30 +201,7 @@ impl Run {
 
     /// `self` followed by the newer run `newer`.
     fn then(&self, newer: &Run) -> Run {
-        let tables = self.tables.iter().zip(newer.tables.iter())
-            .map(|(old, new)| {
-                let mut map = IndexMap::with_capacity_and_hasher(old.len() + new.len(), Default::default());
-                for (h, hits) in old {
-                    let hits = match new.get(h) {
-                        Some(newer) => hits.then(newer),
-                        None => match hits {
-                            Hits::One(i) => Hits::One(*i),
-                            Hits::Many(is) => Hits::Many(is.clone()),
-                        },
-                    };
-                    map.insert(*h, hits);
-                }
-                for (h, hits) in new {
-                    if !old.contains_key(h) {
-                        map.insert(*h, match hits {
-                            Hits::One(i) => Hits::One(*i),
-                            Hits::Many(is) => Hits::Many(is.clone()),
-                        });
-                    }
-                }
-                map
-            })
-            .collect();
+        let tables = self.tables.iter().zip(newer.tables.iter()).map(|(old, new)| old.then(new)).collect();
         Run { layers: self.layers + newer.layers, tables }
     }
 }
@@ -303,8 +314,8 @@ impl<L: Layer> Layered<L> {
         let h = index_hash(key);
         let sealed: &'a Sealed<L> = &self.sealed;
         for run in sealed.runs.iter().rev() {
-            if let Some(hits) = run.tables[table].get(&h) {
-                for &i in hits.as_slice().iter().rev() {
+            if let Some(hits) = run.tables[table].hits(h) {
+                for &i in hits.iter().rev() {
                     if let Some(found) = probe(&sealed.layers[i as usize]) {
                         return Some(found);
                     }
@@ -326,8 +337,8 @@ impl<L: Layer> Layered<L> {
         let h = index_hash(key);
         let sealed: &'a Sealed<L> = &self.sealed;
         sealed.runs.iter()
-            .filter_map(move |run| run.tables[table].get(&h))
-            .flat_map(move |hits| hits.as_slice().iter().map(move |&i| sealed.layers[i as usize].as_ref()))
+            .filter_map(move |run| run.tables[table].hits(h))
+            .flat_map(move |hits| hits.iter().map(move |&i| sealed.layers[i as usize].as_ref()))
             .chain(std::iter::once(self.current.as_ref()))
     }
 
@@ -343,7 +354,7 @@ impl<L: Layer> Layered<L> {
 
     /// Does any sealed layer hold a key in `table`?
     pub(crate) fn sealed_holds_any(&self, table: usize) -> bool {
-        self.sealed.runs.iter().any(|run| !run.tables[table].is_empty())
+        self.sealed.runs.iter().any(|run| !run.tables[table].map.is_empty())
     }
 }
 
