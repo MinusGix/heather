@@ -95,8 +95,8 @@ theorem LabelTable::item_not_named(self t: LabelTable, i, here, k: Nat, name: Na
     Succ(i).leb(t.index_of(Succ(k))).IsTrue() → (!(Succ(k).leb(name) && name.leb(Succ(k)))).IsTrue() {
     match name {
         Zero => λ _ _ => trivial,
-        Succ(l) => λ ok past => (match asm_same(k, l) as λ b => asm_same(k, l) = b → (!b).IsTrue() {
-            True => λ same => {
+        Succ(l) => λ ok past => match same: asm_same(k, l) {
+            True => {
                 let parts = Bool::is_true_and(asm_same(t.name_at(i), Succ(l)),
                     (asm_same(t.index_of(Succ(l)), i) && asm_same(t.offset_of(Succ(l)), here)) && (item_lands(t.labels(), here, item) && t.targets_ok(item)), ok);
                 let named = Bool::is_true_and(asm_same(t.index_of(Succ(l)), i) && asm_same(t.offset_of(Succ(l)), here),
@@ -107,8 +107,8 @@ theorem LabelTable::item_not_named(self t: LabelTable, i, here, k: Nat, name: Na
                 let over = j(index_k, λ x _ => Succ(i).leb(x).IsTrue(), past);
                 false_elim(Nat::leb_lt_le_absurd(i, i, over, j(sym(Nat::leb_refl(i)), λ b _ => b.IsTrue(), trivial)))
             },
-            False => λ _ => trivial,
-        })(refl),
+            False => trivial,
+        },
     }
 }
 
@@ -186,9 +186,8 @@ theorem LabelTable::target_at(self t: LabelTable, q: Prog): (depth, end, k: Nat)
                         (item_lands(t.labels(), here, item) && t.targets_ok(item)), rest.left);
                 let name_i = asm_same_eq(t.name_at(i), name, eq_true_of_is_true(asm_same(t.name_at(i), name), item_parts.left));
                 let found = asm_same_eq(t.name_at(t.index_of(Succ(k))), Succ(k), eq_true_of_is_true(asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)), names));
-                (match asm_same(name, Succ(k)) as λ b => asm_same(name, Succ(k)) = b →
-                        (match b { True => prog_len(before), False => asm_target(before, Succ(k)) }) = t.offset_of(Succ(k)) {
-                    True => λ same => {
+                match same: asm_same(name, Succ(k)) {
+                    True => {
                         let is = asm_same_eq(name, Succ(k), same);
                         let named = j(is, λ x _ => t.item_ok(i, here, x, item).IsTrue(), rest.left);
                         let named_parts = Bool::is_true_and(asm_same(t.name_at(i), Succ(k)),
@@ -199,18 +198,17 @@ theorem LabelTable::target_at(self t: LabelTable, q: Prog): (depth, end, k: Nat)
                         trans(t.checked_len(before, i, here, rest.right),
                             sym(asm_same_eq(t.offset_of(Succ(k)), here, eq_true_of_is_true(asm_same(t.offset_of(Succ(k)), here), offset))))
                     },
-                    False => λ differs => (match Succ(t.index_of(Succ(k))).leb(i) as λ b => Succ(t.index_of(Succ(k))).leb(i) = b →
-                            asm_target(before, Succ(k)) = t.offset_of(Succ(k)) {
-                        True => λ below => t.target_at(before, i, here, k, rest.right, j(sym(below), λ b _ => b.IsTrue(), trivial), names),
-                        False => λ not_below => {
-                            let le = Nat::leb_not_lt(t.index_of(Succ(k)), i, j(sym(not_below), λ b _ => b.not().IsTrue(), trivial));
+                    False => match below: Succ(t.index_of(Succ(k))).leb(i) {
+                        True => t.target_at(before, i, here, k, rest.right, j(sym(below), λ b _ => b.IsTrue(), trivial), names),
+                        False => {
+                            let le = Nat::leb_not_lt(t.index_of(Succ(k)), i, j(sym(below), λ b _ => b.not().IsTrue(), trivial));
                             let at_i = asm_same_eq(t.index_of(Succ(k)), i,
                                 eq_true_of_is_true(asm_same(t.index_of(Succ(k)), i), Bool::is_true_and_intro(t.index_of(Succ(k)).leb(i), i.leb(t.index_of(Succ(k))), within, le)));
                             let same_name = trans(sym(name_i), trans(sym(cong(at_i, f := λ (x: Nat) => t.name_at(x))), found));
-                            absurd(trans(sym(j(same_name, λ x _ => asm_same(name, x) = True, asm_same_self(name))), differs))
+                            absurd(trans(sym(j(same_name, λ x _ => asm_same(name, x) = True, asm_same_self(name))), same))
                         },
-                    })(refl),
-                })(refl)
+                    },
+                }
             },
         },
     }
@@ -236,20 +234,19 @@ theorem LabelTable::has_named(self t: LabelTable, q: Prog): (depth, end, k: Nat)
                         (item_lands(t.labels(), here, item) && t.targets_ok(item)), rest.left);
                 let name_i = asm_same_eq(t.name_at(i), name, eq_true_of_is_true(asm_same(t.name_at(i), name), item_parts.left));
                 let found = asm_same_eq(t.name_at(t.index_of(Succ(k))), Succ(k), eq_true_of_is_true(asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)), names));
-                (match asm_same(Succ(k), name) as λ b => asm_same(Succ(k), name) = b → (!(!b && before.lacks(Succ(k)))).IsTrue() {
-                    True => λ _ => trivial,
-                    False => λ differs => (match Succ(t.index_of(Succ(k))).leb(i) as λ b => Succ(t.index_of(Succ(k))).leb(i) = b →
-                            (!before.lacks(Succ(k))).IsTrue() {
-                        True => λ below => t.has_named(before, i, here, k, rest.right, j(sym(below), λ b _ => b.IsTrue(), trivial), names),
-                        False => λ not_below => {
-                            let le = Nat::leb_not_lt(t.index_of(Succ(k)), i, j(sym(not_below), λ b _ => b.not().IsTrue(), trivial));
+                match differs: asm_same(Succ(k), name) {
+                    True => trivial,
+                    False => match below: Succ(t.index_of(Succ(k))).leb(i) {
+                        True => t.has_named(before, i, here, k, rest.right, j(sym(below), λ b _ => b.IsTrue(), trivial), names),
+                        False => {
+                            let le = Nat::leb_not_lt(t.index_of(Succ(k)), i, j(sym(below), λ b _ => b.not().IsTrue(), trivial));
                             let at_i = asm_same_eq(t.index_of(Succ(k)), i,
                                 eq_true_of_is_true(asm_same(t.index_of(Succ(k)), i), Bool::is_true_and_intro(t.index_of(Succ(k)).leb(i), i.leb(t.index_of(Succ(k))), within, le)));
                             let same_name = trans(sym(found), trans(cong(at_i, f := λ (x: Nat) => t.name_at(x)), name_i));
                             absurd(trans(sym(j(same_name, λ x _ => asm_same(Succ(k), x) = True, asm_same_self(Succ(k)))), differs))
                         },
-                    })(refl),
-                })(refl)
+                    },
+                }
             },
         },
     }

@@ -873,10 +873,10 @@ theorem List::holds_mem(self ids: List<Nat>, id: Nat, held: ids.holds(id) = True
 }
 
 theorem List::mem_holds(self ids: List<Nat>, id: Nat, m: Mem(id, ids)): ids.holds(id) = True {
-    (match absent(id, ids) as λ b => absent(id, ids) = b → !b = True {
-        True => λ none => false_elim(absent_mem(id, ids, j(sym(none), λ b _ => b.IsTrue(), trivial), id, m, refl)),
-        False => λ _ => refl,
-    })(refl)
+    match none: absent(id, ids) {
+        True => false_elim(absent_mem(id, ids, j(sym(none), λ b _ => b.IsTrue(), trivial), id, m, refl)),
+        False => refl,
+    }
 }
 
 theorem List::within_mem(self a: List<Nat>, b: List<Nat>): a.within(b).IsTrue() → (i: Nat) → Mem(i, a) → Mem(i, b) {

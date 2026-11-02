@@ -127,15 +127,12 @@ theorem Homes::leaf_checked_sound(self homes: Homes, nodes: List<Node>, out, l: 
 theorem Scope::wide_of(nodes: List<Node>): (s, t: Scope) → s.nodes(nodes) = Some(t) → nodes_wide(nodes).IsTrue() {
     match nodes {
         Nil => λ s t _ => trivial,
-        Cons(node, rest) => λ s t => (match node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) as λ b =>
-                node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) = b →
-                (match b { False => None, True => s.put(node_output(node).id, s.clean(node)).nodes(rest) }) = Some(t) →
-                (node.wide() && nodes_wide(rest)).IsTrue() {
-            False => λ _ none => absurd(none),
-            True => λ ok got => Bool::is_true_and_intro(node.wide(), nodes_wide(rest),
+        Cons(node, rest) => λ s t => (match ok: node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) {
+            False => λ none => absurd(none),
+            True => λ got => Bool::is_true_and_intro(node.wide(), nodes_wide(rest),
                 Bool::is_true_and(node.wide(), s.all_defined(function_ir_eval::Node::reads(node)), j(sym(ok), λ b _ => b.IsTrue(), trivial)).left,
                 Scope::wide_of(rest, s.put(node_output(node).id, s.clean(node)), t, got)),
-        })(refl),
+        }),
     }
 }
 
@@ -309,16 +306,9 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
             let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
             let goal = body.Ok() ∧ (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
                 Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue()));
-            (match (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() as λ b => (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() = b →
-                    (match b as λ _ => Option<Scope> {
-                        False => None,
-                        True => body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) {
-                            False => None,
-                            True => Some(s.looped(outputs, exhausted)),
-                        }),
-                    }) = Some(t) → goal {
-                False => λ _ none => absurd(none),
-                True => λ ok scoped => {
+            (match ok: (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() {
+                False => λ none => absurd(none),
+                True => λ scoped => {
                     let parts = Bool::is_true_and(s.defined(bound) && s.all_defined(inputs), r.loop_shape(), j(sym(ok), λ b _ => b.IsTrue(), trivial));
                     let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
                     let chain: (body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) as λ _ => Option<Scope> {
@@ -336,7 +326,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
                         g
                     })
                 },
-            })(refl)
+            })
         },
     }
 }
@@ -1109,21 +1099,21 @@ theorem Target::loop_goes(self t: Target, call: Answers(), inputs: List<Nat>, bo
             };
             let like: eo.Like(looped, out) = ⟨λ i mi => match i.eq_dec(exhausted) {
                     Inl(e) => j(sym(e), λ y _ => eo.number(y) = looped.number(y), at_exhausted),
-                    Inr(ne) => (match absent(i, outputs) as λ b => absent(i, outputs) = b → eo.number(i) = looped.number(i) {
-                        False => λ held_out => at_output(i, ne, outputs.holds_mem(i, cong_fn<Bool, Bool>(λ b => !b, held_out))),
-                        True => λ fresh => {
-                            let fresh_t: absent(i, outputs).IsTrue() = j(sym(fresh), λ b _ => b.IsTrue(), trivial);
+                    Inr(ne) => match held_out: absent(i, outputs) {
+                        False => at_output(i, ne, outputs.holds_mem(i, cong_fn<Bool, Bool>(λ b => !b, held_out))),
+                        True => {
+                            let fresh_t: absent(i, outputs).IsTrue() = j(sym(held_out), λ b _ => b.IsTrue(), trivial);
                             let cl = match Bool::is_true_or(i.matches(exhausted) || outputs.holds(i), absent(i, Cons(count, parameters ++ body.touches())), keeps(i, mi))
                                     as λ _ => absent(i, Cons(count, parameters ++ body.touches())).IsTrue() {
                                 Inl(either) => match Bool::is_true_or(i.matches(exhausted), outputs.holds(i), either) {
                                     Inl(same) => false_elim(ne(i.matches_eq(exhausted, same))),
-                                    Inr(holds) => false_elim(j(fresh, λ b _ => (!b).IsTrue(), holds)),
+                                    Inr(holds) => false_elim(j(held_out, λ b _ => (!b).IsTrue(), holds)),
                                 },
                                 Inr(a) => a,
                             };
                             at_other(i, ne, fresh_t, cl)
                         },
-                    })(refl),
+                    },
                 },
                 ⟨trans(os.right.right.left, trans(le.left, sym(lp.buffers))), trans(os.right.right.right, trans(le.right.left, sym(lp.args)))⟩⟩;
             t.leaf_goes(out, moves(outputs, parameters), dj, k.d.names, c, k.c_is, within, done, h.done_ok, moves_wide(outputs, parameters), now, tree,

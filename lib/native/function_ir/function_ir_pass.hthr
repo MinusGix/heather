@@ -550,10 +550,10 @@ theorem Bool::is_true_or_r(self a: Bool, b: Bool, h: b.IsTrue()): (a || b).IsTru
 
 // An id of a list is not absent from it.
 theorem present_of_mem(id: Nat, ids: List<Nat>, m: Mem(id, ids)): (!absent(id, ids)).IsTrue() {
-    (match absent(id, ids) as λ b => absent(id, ids) = b → (!b).IsTrue() {
-        True => λ none => false_elim(absent_mem(id, ids, j(sym(none), λ b _ => b.IsTrue(), trivial), id, m, refl)),
-        False => λ _ => trivial,
-    })(refl)
+    match none: absent(id, ids) {
+        True => false_elim(absent_mem(id, ids, j(sym(none), λ b _ => b.IsTrue(), trivial), id, m, refl)),
+        False => trivial,
+    }
 }
 
 theorem Nat::differs_true(self a: Nat, b: Nat, ne: a ≠ b): a.differs(b) = True {
@@ -658,17 +658,13 @@ theorem List::pruned_runs(self nodes: List<Node>, out: List<Nat>): (values, othe
 theorem List::needs_unwritten(self nodes: List<Node>, out: List<Nat>, i: Nat, m: Mem(i, out)): nodes.last_width(i) = None → nodes.needs(out, i).IsTrue() {
     match nodes {
         Nil => λ _ => present_of_mem(i, out, m),
-        Cons(node, rest) => (match rest.last_width(i) as λ l => rest.last_width(i) = l →
-                (match l as λ _ => Option<Nat> {
-                    Some(w) => Some(w),
-                    None => match i.matches(node_output(node).id) { True => Some(node_output(node).width), False => None },
-                }) = None → Cons(node, rest).needs(out, i).IsTrue() {
-            Some(_) => λ _ some => absurd(some),
-            None => λ unwritten => match i.eq_dec(node_output(node).id) {
+        Cons(node, rest) => (match unwritten: rest.last_width(i) {
+            Some(_) => λ some => absurd(some),
+            None => match i.eq_dec(node_output(node).id) {
                 Inl(_) => λ some => absurd(some),
                 Inr(ne) => λ _ => node.needs_later(rest, out, i, ne, rest.needs_unwritten(out, i, m, unwritten)),
             },
-        })(refl),
+        }),
     }
 }
 
@@ -688,14 +684,14 @@ theorem List::pruned_last(self nodes: List<Node>, out: List<Nat>, i: Nat, m: Mem
                     List::last_width(match d { True => kept, False => Cons(node, kept) }, i) = step(rest.last_width(i)) {
                 True => λ drop => {
                     let gone = node.dropped(kept, out, drop);
-                    (match rest.last_width(i) as λ l => rest.last_width(i) = l → kept.last_width(i) = step(l) {
-                        Some(w) => λ at => trans(same, at),
-                        None => λ at => match i.eq_dec(o) as λ _ => kept.last_width(i) = step(None) {
+                    match at: rest.last_width(i) {
+                        Some(w) => trans(same, at),
+                        None => match i.eq_dec(o) as λ _ => kept.last_width(i) = step(None) {
                             Inl(e) => false_elim(gone.right(j(e, λ x _ => kept.needs(out, x).IsTrue(), kept.needs_unwritten(out, i, m, trans(same, at))))),
                             Inr(ne) => trans(trans(same, at), sym(cong_fn<Bool, Option<Nat>>(λ b => match b { True => Some(node_output(node).width), False => None },
                                 i.matches_false(o, ne)))),
                         },
-                    })(refl)
+                    }
                 },
                 False => λ _ => cong_fn<Option<Nat>, Option<Nat>>(step, same),
             })(refl)

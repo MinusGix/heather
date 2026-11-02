@@ -25,17 +25,14 @@ theorem toNat_add(n: Nat, a, b: BitVec(n),
 // The machine's unsigned test decides the same strict bound as Nat.
 theorem unsigned_lt_nat(n: Nat, a, b: BitVec(n)):
     a.unsigned_lt_bit(b) = Succ(a.toNat()).leb(b.toNat()) {
-    (match a.unsigned_lt_bit(b) as λ found =>
-        (a.unsigned_lt_bit(b) = found) →
-        found = Succ(a.toNat()).leb(b.toNat()) {
-        True => λ yes => sym(bool::eq_true_of_is_true(Succ(a.toNat()).leb(b.toNat()), Succ(a.toNat()).leb_complete(b.toNat(), BitVec::borrow_sub_of_bit_true(n, a, b, yes)))),
-        False => λ no => (match Succ(a.toNat()).leb(b.toNat()) as λ found =>
-            (Succ(a.toNat()).leb(b.toNat()) = found) → bool::False = found {
-            False => λ same => refl,
-            True => λ yes => absurd(trans(sym(no), BitVec::borrow_sub_bit_of_borrow(n, a, b,
-                Succ(a.toNat()).leb_sound(b.toNat(), rewrite(yes, trivial))))),
-        })(refl),
-    })(refl)
+    match yes: a.unsigned_lt_bit(b) {
+        True => sym(bool::eq_true_of_is_true(Succ(a.toNat()).leb(b.toNat()), Succ(a.toNat()).leb_complete(b.toNat(), BitVec::borrow_sub_of_bit_true(n, a, b, yes)))),
+        False => match same: Succ(a.toNat()).leb(b.toNat()) {
+            False => refl,
+            True => absurd(trans(sym(yes), BitVec::borrow_sub_bit_of_borrow(n, a, b,
+                Succ(a.toNat()).leb_sound(b.toNat(), rewrite(same, trivial))))),
+        },
+    }
 }
 
 theorem strict_complement(n: Nat): (m: Nat) → Succ(n).leb(m) = m.leb(n).not() {

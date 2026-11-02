@@ -1233,10 +1233,10 @@ theorem BitVec::ne_of_eq_bit(n: Nat, x, y: BitVec(n), differ: x.eq_bit(y) = Fals
     λ same => absurd(trans(sym(differ), BitVec::eq_bit_of_eq(n, x, y, same)))
 }
 theorem BitVec::eq_bit_of_ne(n: Nat, x, y: BitVec(n), differ: x ≠ y): x.eq_bit(y) = False {
-    (match x.eq_bit(y) as λ c => (x.eq_bit(y) = c) → c = False {
-        True => λ same => false_elim(differ(BitVec::eq_of_eq_bit(n, x, y, same))),
-        False => λ _ => refl,
-    })(refl)
+    match same: x.eq_bit(y) {
+        True => false_elim(differ(BitVec::eq_of_eq_bit(n, x, y, same))),
+        False => refl,
+    }
 }
 
 // Equality decides by `eq_bit`, the bit a step branches on, the way the

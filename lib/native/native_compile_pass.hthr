@@ -131,10 +131,8 @@ theorem List::settled_knows(self facts: List<Fact>, nodes: List<Node>, env: Env,
                         },
                     }) {
                 None => λ _ => later,
-                Some(w) => λ at => (match Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) as λ b =>
-                        (Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64))) = b →
-                        settled.Knows(match b { True => Cons(f, rest.settled(nodes)), False => rest.settled(nodes) }) {
-                    True => λ fits => {
+                Some(w) => λ at => match fits: Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) {
+                    True => {
                         let both = Bool::is_true_and(Succ(f.value).leb(Nat::pow(2, w)), Succ(f.value).leb(Nat::pow(2, 64)), j(sym(fits), λ b _ => b.IsTrue(), trivial));
                         let narrow: (f.value < Nat::pow(2, w)) = Succ(f.value).leb_sound(Nat::pow(2, w), both.left);
                         let word: (f.value < Nat::pow(2, 64)) = Succ(f.value).leb_sound(Nat::pow(2, 64), both.right);
@@ -142,8 +140,8 @@ theorem List::settled_knows(self facts: List<Fact>, nodes: List<Node>, env: Env,
                             BitVec::toNat_ofNat(w, f.value, narrow));
                         ⟨⟨trans(at, value), word⟩, later⟩
                     },
-                    False => λ _ => later,
-                })(refl),
+                    False => later,
+                },
             })(number)
         },
     }
@@ -182,11 +180,10 @@ theorem Prog::within_computes_best(self p: Prog, layout: Layout, out: List<Nat>,
                 True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
             }) = Some(c) → p.Within(c.prog) {
         False => λ e => p.within_computes(layout, out, nodes, names, c, e),
-        True => (match p.computes(layout, out, better, names) as λ o => p.computes(layout, out, better, names) = o →
-                (match o as λ _ => Option<Compiled> { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) }) = Some(c) → p.Within(c.prog) {
-            None => λ _ e => p.within_computes(layout, out, nodes, names, c, e),
-            Some(d) => λ at e => j(Option::some_inj(d, c, e), λ x _ => p.Within(x.prog), p.within_computes(layout, out, better, names, d, at)),
-        })(refl),
+        True => (match at: p.computes(layout, out, better, names) {
+            None => λ e => p.within_computes(layout, out, nodes, names, c, e),
+            Some(d) => λ e => j(Option::some_inj(d, c, e), λ x _ => p.Within(x.prog), p.within_computes(layout, out, better, names, d, at)),
+        }),
     })(emitted)
 }
 
@@ -206,11 +203,9 @@ theorem Target::goes_computes_best(self t: Target, out: List<Nat>, env: Env, p: 
                 True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
             }) = Some(c) → t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
         False => λ _ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
-        True => λ passed => (match p.computes(layout, out, better, names) as λ o => p.computes(layout, out, better, names) = o →
-                (match o as λ _ => Option<Compiled> { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) }) = Some(c) →
-                t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
-            None => λ _ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
-            Some(d) => λ at e => {
+        True => λ passed => (match at: p.computes(layout, out, better, names) {
+            None => λ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
+            Some(d) => λ e => {
                 let same: (d = c) = Option::some_inj(d, c, e);
                 let parts = Bool::is_true_and(t.homes.nodes_apart(better, out) && t.homes.all_apart(nodes_writes(better), out),
                     nodes_live_in(better, out).within(nodes_live_in(nodes, out)), j(sym(passed), λ b _ => b.IsTrue(), trivial));
@@ -228,6 +223,6 @@ theorem Target::goes_computes_best(self t: Target, out: List<Nat>, env: Env, p: 
                     λ s h => t.held_sub(nodes_live_in(better, out), nodes_live_in(nodes, out), env, s.gprs, s.memory, h,
                         nodes_live_in(better, out).within_mem(nodes_live_in(nodes, out), parts.right)))
             },
-        })(refl),
+        }),
     })(refl, emitted)
 }

@@ -755,13 +755,13 @@ theorem List::mem_filter<A>(self xs: List<A>, a: A, p: A → Bool):
 theorem List::mem_filter_holds<A>(self xs: List<A>, a: A, p: A → Bool): Mem(a, xs.filter(p)) → p(a) = True {
     match xs {
         Nil => λ m => false_elim(m),
-        Cons(h, t) => (match p(h) as λ b => p(h) = b → Mem(a, match b { True => Cons(h, t.filter(p)), False => t.filter(p) }) → p(a) = True {
-            True => λ kept m => match m {
+        Cons(h, t) => (match kept: p(h) {
+            True => λ m => match m {
                 Inl(e) => trans(cong_fn(p, e), kept),
                 Inr(m2) => t.mem_filter_holds(a, p, m2),
             },
-            False => λ _ m => t.mem_filter_holds(a, p, m),
-        })(refl),
+            False => λ m => t.mem_filter_holds(a, p, m),
+        }),
     }
 }
 

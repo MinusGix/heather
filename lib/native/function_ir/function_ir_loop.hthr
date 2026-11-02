@@ -239,12 +239,11 @@ theorem loop_readable_byte<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: Readon
     cursor: Nat, carry: C, open: buffer.length.leb(cursor) = False,
     readable: LoopReadable(Succ(rest), region, buffer, needle, cursor, carry)):
     Exists<BitVec(8)>(λ byte => ReadsByte(buffer, cursor, byte)) {
-    (match buffer.read(buffer.base + cursor) as λ found => (buffer.read(buffer.base + cursor) = found) →
-            Exists<BitVec(8)>(λ byte => ReadsByte(buffer, cursor, byte)) {
-        None => λ denied => false_elim(j(loop_run_denied(rest, region, buffer, needle, cursor, carry, open, denied),
+    match denied: buffer.read(buffer.base + cursor) {
+        None => false_elim(j(loop_run_denied(rest, region, buffer, needle, cursor, carry, open, denied),
             λ outcome _ => LoopFinishedNormally(outcome), readable)),
-        Some(byte) => λ present => Exists(byte, present),
-    })(refl)
+        Some(byte) => Exists(byte, denied),
+    }
 }
 
 // ---------------------------------------------------------------------------

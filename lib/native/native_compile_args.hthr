@@ -93,10 +93,10 @@ theorem byte_tests_zero(byte: BitVec(8), zero: byte = BitVec::ofNat(0)):
 theorem byte_tests_nonzero(byte: BitVec(8), nonzero: Not(byte = BitVec::ofNat(0))):
     is_zero_bits(64, byte.zero_extend(56).band(byte.zero_extend(56))) = False {
     let value: (byte.zero_extend(56).toNat() = byte.toNat()) = BitVec::concat_zero_toNat(8, 56, byte);
-    let positive: (0 < byte.toNat()) = (match byte.toNat() as λ n => byte.toNat() = n → 0 < n {
-        Zero => λ none => false_elim(nonzero(trans(sym(BitVec::ofNat_toNat(8, byte)), cong_fn<Nat, BitVec(8)>(λ n => BitVec::ofNat(n), none)))),
-        Succ(_) => λ _ => omega(),
-    })(refl);
+    let positive: (0 < byte.toNat()) = match none: byte.toNat() {
+        Zero => false_elim(nonzero(trans(sym(BitVec::ofNat_toNat(8, byte)), cong_fn<Nat, BitVec(8)>(λ n => BitVec::ofNat(n), none)))),
+        Succ(_) => omega(),
+    };
     test_self_nonzero(64, byte.zero_extend(56), j(sym(value), λ n _ => 0 < n, positive))
 }
 

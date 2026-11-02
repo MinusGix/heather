@@ -382,10 +382,10 @@ theorem Memory::set_span_comm<A, C>(self m: Memory<A, C>, laws: SpaceLaws<A>(m.s
 
 theorem SpaceLaws::same_false<A>(space: Space<A>, self laws: SpaceLaws<A>(space), x, y: A, differ: x ≠ y):
     space.same(x, y) = False {
-    (match space.same(x, y) as λ s => (space.same(x, y) = s) → s = False {
-        True => λ hit => false_elim(differ(laws.sound(x, y, hit))),
-        False => λ miss => refl,
-    })(refl)
+    match hit: space.same(x, y) {
+        True => false_elim(differ(laws.sound(x, y, hit))),
+        False => refl,
+    }
 }
 
 // The span's permission premise: the bit `allowed` picks is set at each of
@@ -496,11 +496,8 @@ theorem Memory::refused_from_some<A, C>(k: Nat): (m: Memory<A, C>) → (allowed:
     m.refused_from(allowed, a, i, k) = Some(x) → FirstRefused<A, C>(m, allowed, a, i, k, x) {
     match k {
         Zero => λ m allowed a i x none => absurd(none),
-        Succ(j, ih) => λ m allowed a i x => (match allowed(m.perms(m.space.offset(a, i))) as λ s =>
-                (allowed(m.perms(m.space.offset(a, i))) = s) →
-                (match s { True => m.refused_from(allowed, a, Succ(i), j), False => Some(m.space.offset(a, i)) }) = Some(x) →
-                FirstRefused<A, C>(m, allowed, a, i, Succ(j), x) {
-            True => λ set found => {
+        Succ(j, ih) => λ m allowed a i x => (match set: allowed(m.perms(m.space.offset(a, i))) {
+            True => λ found => {
                 let later: FirstRefused<A, C>(m, allowed, a, Succ(i), j, x) = ih(m, allowed, a, Succ(i), x, found);
                 FirstRefused(index := later.index, low := omega(later.low), high := omega(later.high), at := later.at,
                     clear := later.clear, before := λ q low below => (match Nat::eq_dec(q, i) {
@@ -508,12 +505,12 @@ theorem Memory::refused_from_some<A, C>(k: Nat): (m: Memory<A, C>) → (allowed:
                         Inr(other) => later.before(q, omega(low, other), below),
                     }))
             },
-            False => λ cleared found => {
+            False => λ found => {
                 let at: (m.space.offset(a, i) = x) = inj(found);
                 FirstRefused(index := i, low := { omega }, high := { omega }, at := sym(at),
-                    clear := rewrite(sym(at), cleared), before := λ q low below => false_elim(omega(low, below)))
+                    clear := rewrite(sym(at), set), before := λ q low below => false_elim(omega(low, below)))
             },
-        })(refl)
+        })
     }
 }
 

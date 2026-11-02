@@ -456,13 +456,8 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
                 rip_advance(origin, state.rip, here, word_load_bytes(load).len(), rip), holds, trace_of, valid, short, got.proof.right)
         },
         Store(store) => λ code reach honest goes passed t v state cur rip holds trace_of valid short =>
-            (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
-                (match b as λ _ => Type {
-                    True => view.Stores(v, read_gpr(store.base, state.gprs), word_bytes(read_gpr(store.source, state.gprs)),
-                        λ w => then(passed, t, w, word_store_after(linux_writes(io), store, state))),
-                    False => False,
-                }) → RunsAs(io, cur, state) {
-                True => λ plain held => {
+            (match plain: store_base_plain(store.base) {
+                True => λ held => {
                     let after = word_store_after(linux_writes(io), store, state);
                     let stored = sound.stores(v, state.memory, read_gpr(store.base, state.gprs), word_bytes(read_gpr(store.source, state.gprs)),
                         λ w => then(passed, t, w, after), holds, held);
@@ -472,8 +467,8 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
                     wp_after(io, view, origin, tr, here + 3, then, goes, passed, t, stored.right.right.witness, state, after, cur, steps,
                         rip_advance(origin, state.rip, here, 3, rip), stored.right.right.proof.left, trace_of, valid, short, stored.right.right.proof.right)
                 },
-                False => λ _ never => false_elim(never),
-            })(refl),
+                False => λ never => false_elim(never),
+            }),
         LoadByte(load) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
             let got = sound.byte(v, state.memory, read_gpr(load.base, state.gprs),
                 λ byte => then(passed, t, v, byte_load_after(load, byte, state)), holds, held);
@@ -488,13 +483,8 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
                 rip_advance(origin, state.rip, here, byte_load_bytes(load).len(), rip), holds, trace_of, valid, short, got.proof.right.right)
         },
         StoreByte(store) => λ code reach honest goes passed t v state cur rip holds trace_of valid short =>
-            (match store_base_plain(store.base) as λ b => store_base_plain(store.base) = b →
-                (match b as λ _ => Type {
-                    True => view.Stores(v, read_gpr(store.base, state.gprs), [imm_byte0(read_gpr(store.source, state.gprs))],
-                        λ w => then(passed, t, w, byte_store_after(linux_writes(io), store, state))),
-                    False => False,
-                }) → RunsAs(io, cur, state) {
-                True => λ plain held => {
+            (match plain: store_base_plain(store.base) {
+                True => λ held => {
                     let after = byte_store_after(linux_writes(io), store, state);
                     let stored = sound.stores(v, state.memory, read_gpr(store.base, state.gprs), [imm_byte0(read_gpr(store.source, state.gprs))],
                         λ w => then(passed, t, w, after), holds, held);
@@ -504,8 +494,8 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
                     wp_after(io, view, origin, tr, here + 3, then, goes, passed, t, stored.right.right.witness, state, after, cur, steps,
                         rip_advance(origin, state.rip, here, 3, rip), stored.right.right.proof.left, trace_of, valid, short, stored.right.right.proof.right)
                 },
-                False => λ _ never => false_elim(never),
-            })(refl),
+                False => λ never => false_elim(never),
+            }),
         Jcc(cc, target) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
             let d = near_rel(here + 6, labels(target));
             let jcc = JumpIfNear(cc, d);
@@ -514,16 +504,16 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
             let steps = linux_steps_of_fetched(io, state, after, fetched_steps_one(io.fetch, io.data, state, after,
                 near_fetched_step(io.fetch, io.data, jcc, state, resident)));
             runs_as_back(io, cur, state, after, steps,
-                (match condition_holds(cc, state.flags) as λ b => condition_holds(cc, state.flags) = b → RunsAs(io, cur, after) {
-                    True => λ yes => leaves(passed, t, v, after, cur,
+                match yes: condition_holds(cc, state.flags) {
+                    True => leaves(passed, t, v, after, cur,
                         held.left(yes)(after, trans(near_if_taken_rip(cc, d, state, yes),
                             trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, d), rip),
                                 wp_lands(origin, labels, here, 6, Jcc(cc, target), labels(target), reach))), refl),
                         holds, trace_of, valid, short),
-                    False => λ no => goes(passed, t, v, after, cur,
-                        trans(near_if_not_taken_rip(cc, d, state, no), rip_advance(origin, state.rip, here, 6, rip)),
-                        holds, trace_of, valid, short, held.right(no)),
-                })(refl))
+                    False => goes(passed, t, v, after, cur,
+                        trans(near_if_not_taken_rip(cc, d, state, yes), rip_advance(origin, state.rip, here, 6, rip)),
+                        holds, trace_of, valid, short, held.right(yes)),
+                })
         },
         Jmp(target) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
             let d = near_rel(here + 5, labels(target));

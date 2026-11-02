@@ -318,12 +318,10 @@ theorem Target::goes_word_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
     q: Gprs → X86Memory(t.r.profile) → Type, next: t.GoesR(prog_len(p.word_to(t.layout(), id, register)), tree, q)):
     t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         q(write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().rbx_word(env, id), g)), m)) {
-    (match t.homes.home(id) as λ h => t.homes.home(id) = h →
-            t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
-                q(write_gpr(register, env.word(id), write_gpr(Rbx, t.layout().rbx_word(env, id), g)), m)) {
-        InSlot => λ slot => t.goes_word_to_slot(live, env, p, id, register, inside, holds, slot, within, tree, q, next),
-        InReg(k) => λ at => t.goes_word_to_reg(live, env, p, id, register, holds, k, at, within, tree, q, next),
-    })(refl)
+    match slot: t.homes.home(id) {
+        InSlot => t.goes_word_to_slot(live, env, p, id, register, inside, holds, slot, within, tree, q, next),
+        InReg(k) => t.goes_word_to_reg(live, env, p, id, register, holds, k, slot, within, tree, q, next),
+    }
 }
 
 // What RBX holds once a word a statement reads is in a register: the
@@ -360,14 +358,13 @@ theorem Env::knows_known(self env: Env, known: List<Fact>): env.Knows(known) →
 theorem List::unknown_mem(self known: List<Fact>, id: Nat, none: known.known(id) = None, ids: List<Nat>): Mem(id, ids) → Mem(id, known.unknown(ids)) {
     match ids {
         Nil => λ never => false_elim(never),
-        Cons(i, rest) => λ m => (match known.known(i) as λ o => known.known(i) = o →
-                Mem(id, match o { None => Cons(i, known.unknown(rest)), Some(_) => known.unknown(rest) }) {
-            None => λ _ => match m { Inl(e) => Inl(e), Inr(later) => Inr(known.unknown_mem(id, none, rest, later)) },
-            Some(v) => λ found => match m {
+        Cons(i, rest) => λ m => match found: known.known(i) {
+            None => match m { Inl(e) => Inl(e), Inr(later) => Inr(known.unknown_mem(id, none, rest, later)) },
+            Some(v) => match m {
                 Inl(e) => absurd(trans(sym(found), trans(cong_fn<Nat, Option<Nat>>(λ x => known.known(x), sym(e)), none))),
                 Inr(later) => known.unknown_mem(id, none, rest, later),
             },
-        })(refl),
+        },
     }
 }
 
@@ -375,10 +372,10 @@ theorem List::unknown_mem(self known: List<Fact>, id: Nat, none: known.known(id)
 // does not know are live.
 theorem Env::reads_of(self env: Env, known: List<Fact>, knows: env.Knows(known), ids, live: List<Nat>, id: Nat, m: Mem(id, ids),
     unknown: (i: Nat) → Mem(i, known.unknown(ids)) → Mem(i, live)): env.Reads(known, live, id) {
-    (match known.known(id) as λ o => known.known(id) = o → (match o as λ _ => Type { None => Mem(id, live), Some(v) => (env.number(id) = v) ∧ (v < Nat::pow(2, 64)) }) {
-        None => λ none => unknown(id, known.unknown_mem(id, none, ids, m)),
-        Some(v) => λ found => env.knows_known(known, knows, id, v, found),
-    })(refl)
+    match none: known.known(id) {
+        None => unknown(id, known.unknown_mem(id, none, ids, m)),
+        Some(v) => env.knows_known(known, knows, id, v, none),
+    }
 }
 
 // A read word's number fits it.
@@ -462,11 +459,11 @@ theorem Target::goes_word_store(self t: Target, p: Prog, id: Nat, register: Gpr,
 // A home register is apart from every register no word lives in.
 theorem Target::home_apart(self t: Target, id, k: Nat, at: t.homes.home(id) = InReg(k), x: Gpr, unused: t.homes.uses(x) = False):
     home_register(k).same(x) = False {
-    (match home_register(k).same(x) as λ b => home_register(k).same(x) = b → b = False {
-        True => λ e => absurd(trans(sym(unused), trans(cong_fn<Gpr, Bool>(λ r => t.homes.uses(r), sym(home_register(k).same_sound(x, e))),
+    match e: home_register(k).same(x) {
+        True => absurd(trans(sym(unused), trans(cong_fn<Gpr, Bool>(λ r => t.homes.uses(r), sym(home_register(k).same_sound(x, e))),
             t.homes.used(id, k, at)))),
-        False => λ _ => refl,
-    })(refl)
+        False => refl,
+    }
 }
 
 // `register` put in a word's home where `out` is live after: the word set,
@@ -482,20 +479,20 @@ theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env:
     let layout = t.layout();
     let goal = λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧
         ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(after, env.set_word(id, read_gpr(register, s.gprs)), g2, m2) → t.Spares(s.gprs, g2) → q(g2, m2));
-    (match out.holds(id) as λ b => out.holds(id) = b → t.Goes(prog_len(p), tree, goal) {
-        False => λ dead_out => {
-            let dead: (after.holds(id) = False) = (match after.holds(id) as λ b => after.holds(id) = b → b = False {
-                True => λ e => absurd(trans(sym(dead_out), out.mem_holds(id, narrow(id, after.holds_mem(id, e))))),
-                False => λ _ => refl,
-            })(refl);
+    match dead_out: out.holds(id) {
+        False => {
+            let dead: (after.holds(id) = False) = match e: after.holds(id) {
+                True => absurd(trans(sym(dead_out), out.mem_holds(id, narrow(id, after.holds_mem(id, e))))),
+                False => refl,
+            };
             let n = j(p.word_from_dead(layout, out, id, register, dead_out), λ x _ => t.GoesR(prog_len(x), tree, q), next);
             t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => q(s.gprs, s.memory), goal, n,
                 λ s held => held.right(s.gprs, s.memory, t.held_dead(live, after, env, id, read_gpr(register, s.gprs), s.gprs, s.memory, held.left, sub, dead),
                     λ x _ _ => refl))
         },
-        True => λ live_id => (match t.homes.home(id) as λ h => t.homes.home(id) = h → t.Goes(prog_len(p), tree, goal) {
-            InSlot => λ slot => {
-                let code = p.word_from_slot(layout, out, id, register, live_id, slot);
+        True => match slot: t.homes.home(id) {
+            InSlot => {
+                let code = p.word_from_slot(layout, out, id, register, dead_out, slot);
                 let a = layout.word_at(id);
                 let stored = t.goes_word_store(p, id, register, inside, j(code, λ x _ => x.Within(t.program), within), tree, q,
                     j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
@@ -509,8 +506,8 @@ theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env:
                                 λ x _ apart_x => read_gpr_other(Rbx, x, a, s.gprs, apart_x)))
                     })
             },
-            InReg(k) => λ at => {
-                let code = p.word_from_reg(layout, out, id, register, live_id, k, at);
+            InReg(k) => {
+                let code = p.word_from_reg(layout, out, id, register, dead_out, k, slot);
                 let moved = t.goes_block(p, 0, [MovRR(home_register(k), register)], j(code, λ x _ => x.Within(t.program), within), tree,
                     λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
                 t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
@@ -518,12 +515,12 @@ theorem Target::goes_word_into(self t: Target, live, out, after: List<Nat>, env:
                     goal, moved, λ s held => {
                         let w = read_gpr(register, s.gprs);
                         held.right(write_gpr(home_register(k), w, s.gprs), s.memory,
-                            t.held_reg_set(live, after, env, id, w, s.gprs, s.memory, held.left, sub, k, at, apart),
-                            λ x unused _ => read_gpr_other(home_register(k), x, w, s.gprs, t.home_apart(id, k, at, x, unused)))
+                            t.held_reg_set(live, after, env, id, w, s.gprs, s.memory, held.left, sub, k, slot, apart),
+                            λ x unused _ => read_gpr_other(home_register(k), x, w, s.gprs, t.home_apart(id, k, slot, x, unused)))
                     })
             },
-        })(refl),
-    })(refl)
+        },
+    }
 }
 
 // …over the whole of `out`.

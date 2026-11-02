@@ -49,10 +49,10 @@ theorem Nat::same_comm(self n: Nat): (m: Nat) → n.same(m) = m.same(n) {
 }
 
 theorem Nat::same_false(self n: Nat, m: Nat, ne: n ≠ m): n.same(m) = False {
-    (match n.same(m) as λ b => n.same(m) = b → b = False {
-        True => λ e => false_elim(ne(n.same_sound(m, e))),
-        False => λ _ => refl,
-    })(refl)
+    match e: n.same(m) {
+        True => false_elim(ne(n.same_sound(m, e))),
+        False => refl,
+    }
 }
 
 theorem Nat::differs_of_ne(self a: Nat, b: Nat, ne: a ≠ b): a.differs(b) = True {
@@ -90,13 +90,13 @@ theorem Gpr::absent_rest(self register: Gpr, other: Gpr, rest: List<Gpr>, absent
 theorem List::mem_filter_of<A>(self xs: List<A>, p: A → Bool, a: A, keep: p(a) = True): Mem(a, xs) → Mem(a, xs.filter(p)) {
     match xs {
         Nil => λ never => never,
-        Cons(h, rest) => λ m => (match p(h) as λ b => p(h) = b → Mem(a, match b { True => Cons(h, rest.filter(p)), False => rest.filter(p) }) {
-            True => λ _ => match m { Inl(e) => Inl(e), Inr(later) => Inr(rest.mem_filter_of(p, a, keep, later)) },
-            False => λ dropped => match m {
+        Cons(h, rest) => λ m => match dropped: p(h) {
+            True => match m { Inl(e) => Inl(e), Inr(later) => Inr(rest.mem_filter_of(p, a, keep, later)) },
+            False => match m {
                 Inl(e) => absurd(trans(sym(dropped), j(e, λ x _ => p(x) = True, keep))),
                 Inr(later) => rest.mem_filter_of(p, a, keep, later),
             },
-        })(refl),
+        },
     }
 }
 
@@ -105,11 +105,11 @@ theorem List::union_left(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, a)):
 }
 
 theorem List::union_right(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, b)): Mem(i, a.union(b)) {
-    (match absent(i, a) as λ x => absent(i, a) = x → Mem(i, a.union(b)) {
-        True => λ none => a.mem_append_r(b.filter(λ (id: Nat) => absent(id, a)), i,
+    match none: absent(i, a) {
+        True => a.mem_append_r(b.filter(λ (id: Nat) => absent(id, a)), i,
             b.mem_filter_of(λ (id: Nat) => absent(id, a), i, none, m)),
-        False => λ some => a.union_left(b, i, absent_false_mem(i, a, some)),
-    })(refl)
+        False => a.union_left(b, i, absent_false_mem(i, a, none)),
+    }
 }
 
 // A word of `out` other than the one written is live before the write.
@@ -134,25 +134,18 @@ theorem Homes::nodes_checked_sound(self homes: Homes, out: List<Nat>, nodes: Lis
         Cons(node, rest) => λ l => {
             let id = node_output(node).id;
             let reads = function_ir_eval::Node::reads(node);
-            (match homes.nodes_checked(rest, out) as λ o => homes.nodes_checked(rest, out) = o →
-                    (match o {
-                        None => None,
-                        Some(after) => match homes.apart(id, after) { False => None, True => Some(live_before(reads, id, after)) },
-                    }) = Some(l) →
-                    (l = live_before(reads, id, nodes_live_in(rest, out))) ∧ (homes.apart(id, nodes_live_in(rest, out)) && homes.nodes_apart(rest, out)).IsTrue() {
-                None => λ _ none => absurd(none),
-                Some(after) => λ got => {
+            (match got: homes.nodes_checked(rest, out) {
+                None => λ none => absurd(none),
+                Some(after) => {
                     let inner = homes.nodes_checked_sound(out, rest, after, got);
-                    (match homes.apart(id, after) as λ b => homes.apart(id, after) = b →
-                            (match b { False => None, True => Some(live_before(reads, id, after)) }) = Some(l) →
-                            (l = live_before(reads, id, nodes_live_in(rest, out))) ∧ (homes.apart(id, nodes_live_in(rest, out)) && homes.nodes_apart(rest, out)).IsTrue() {
-                        False => λ _ none => absurd(none),
-                        True => λ ok same => j(inner.left, λ a _ => (l = live_before(reads, id, a)) ∧ (homes.apart(id, a) && homes.nodes_apart(rest, out)).IsTrue(),
+                    (match ok: homes.apart(id, after) {
+                        False => λ none => absurd(none),
+                        True => λ same => j(inner.left, λ a _ => (l = live_before(reads, id, a)) ∧ (homes.apart(id, a) && homes.nodes_apart(rest, out)).IsTrue(),
                             ⟨sym(Option::some_inj(live_before(reads, id, after), l, same)),
                              Bool::is_true_and_intro(homes.apart(id, after), homes.nodes_apart(rest, out), j(sym(ok), λ v _ => v.IsTrue(), trivial), inner.right)⟩),
-                    })(refl)
+                    })
                 },
-            })(refl)
+            })
         },
     }
 }
@@ -170,14 +163,9 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
     s.checked(homes, out) = Some(l) → (l = s.live_in(homes, out)) ∧ s.checks(homes, out).IsTrue() {
     match s {
         Compute(region) => match region {
-            Dataflow(body) => λ out l => (match homes.nodes_checked(body.nodes, out) as λ o => homes.nodes_checked(body.nodes, out) = o →
-                    (match o {
-                        None => None,
-                        Some(live) => match homes.all_apart(nodes_writes(body.nodes), out) { False => None, True => Some(live) },
-                    }) = Some(l) →
-                    (l = nodes_live_in(body.nodes, out)) ∧ (homes.nodes_apart(body.nodes, out) && homes.all_apart(nodes_writes(body.nodes), out)).IsTrue() {
-                None => λ _ none => absurd(none),
-                Some(live) => λ got => {
+            Dataflow(body) => λ out l => (match got: homes.nodes_checked(body.nodes, out) {
+                None => λ none => absurd(none),
+                Some(live) => {
                     let inner = homes.nodes_checked_sound(out, body.nodes, live, got);
                     (match homes.all_apart(nodes_writes(body.nodes), out) as λ b => homes.all_apart(nodes_writes(body.nodes), out) = b →
                             (match b { False => None, True => Some(live) }) = Some(l) →
@@ -188,7 +176,7 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
                                 j(sym(ok), λ v _ => v.IsTrue(), trivial))⟩,
                     })(refl)
                 },
-            })(refl),
+            }),
             Sequence(a, b) => λ out l same => homes.region_checked_sound(Sequence(a, b), out, l, same),
             Compose(a, b) => λ out l same => homes.region_checked_sound(Compose(a, b), out, l, same),
             Conditional(a, b, c, d, e, f) => λ out l same => homes.region_checked_sound(Conditional(a, b, c, d, e, f), out, l, same),
@@ -201,28 +189,19 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
             False => λ _ none => absurd(none),
             True => λ ok same => ⟨sym(Option::some_inj(live_before(shape.reads(), shape.result(), out), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
         })(refl),
-        Then(first, rest) => λ out l => (match rest.checked(homes, out) as λ o => rest.checked(homes, out) = o →
-                (match o { None => None, Some(mid) => first.checked(homes, mid) }) = Some(l) →
-                (l = first.live_in(homes, rest.live_in(homes, out))) ∧ (first.checks(homes, rest.live_in(homes, out)) && rest.checks(homes, out)).IsTrue() {
-            None => λ _ none => absurd(none),
-            Some(mid) => λ got_rest got_first => {
+        Then(first, rest) => λ out l => (match got_rest: rest.checked(homes, out) {
+            None => λ none => absurd(none),
+            Some(mid) => λ got_first => {
                 let r = rest.checked_sound(homes, out, mid, got_rest);
                 let f = j(r.left, λ a _ => (l = first.live_in(homes, a)) ∧ first.checks(homes, a).IsTrue(), first.checked_sound(homes, mid, l, got_first));
                 ⟨f.left, Bool::is_true_and_intro(first.checks(homes, rest.live_in(homes, out)), rest.checks(homes, out), f.right, r.right)⟩
             },
-        })(refl),
-        Branch(condition, yes, no) => λ out l => (match yes.checked(homes, out) as λ o => yes.checked(homes, out) = o →
-                (match o {
-                    None => None,
-                    Some(y) => match no.checked(homes, out) { None => None, Some(n) => Some(Cons(condition, y.union(n))) },
-                }) = Some(l) →
-                (l = Cons(condition, yes.live_in(homes, out).union(no.live_in(homes, out)))) ∧ (yes.checks(homes, out) && no.checks(homes, out)).IsTrue() {
-            None => λ _ none => absurd(none),
-            Some(y) => λ got_yes => (match no.checked(homes, out) as λ o => no.checked(homes, out) = o →
-                    (match o { None => None, Some(n) => Some(Cons(condition, y.union(n))) }) = Some(l) →
-                    (l = Cons(condition, yes.live_in(homes, out).union(no.live_in(homes, out)))) ∧ (yes.checks(homes, out) && no.checks(homes, out)).IsTrue() {
-                None => λ _ none => absurd(none),
-                Some(n) => λ got_no same => {
+        }),
+        Branch(condition, yes, no) => λ out l => (match got_yes: yes.checked(homes, out) {
+            None => λ none => absurd(none),
+            Some(y) => (match got_no: no.checked(homes, out) {
+                None => λ none => absurd(none),
+                Some(n) => λ same => {
                     let ys = yes.checked_sound(homes, out, y, got_yes);
                     let ns = no.checked_sound(homes, out, n, got_no);
                     let e1 = j(ys.left, λ a _ => Cons(condition, y.union(n)) = Cons(condition, a.union(n)), refl);
@@ -230,16 +209,14 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
                     ⟨trans(sym(Option::some_inj(Cons(condition, y.union(n)), l, same)), e2),
                      Bool::is_true_and_intro(yes.checks(homes, out), no.checks(homes, out), ys.right, ns.right)⟩
                 },
-            })(refl),
-        })(refl),
+            }),
+        }),
         Repeat(body, again) => λ out l => {
             let set = homes.loop_set(again);
             let after = loop_after(again, set, out);
-            (match body.checked(homes, after) as λ o => body.checked(homes, after) = o →
-                    (match o { None => None, Some(b) => match b.within(set) { False => None, True => Some(set) } }) = Some(l) →
-                    (l = set) ∧ (body.live_in(homes, after).within(set) && body.checks(homes, after)).IsTrue() {
-                None => λ _ none => absurd(none),
-                Some(b) => λ got => {
+            (match got: body.checked(homes, after) {
+                None => λ none => absurd(none),
+                Some(b) => {
                     let bs = body.checked_sound(homes, after, b, got);
                     (match b.within(set) as λ w => b.within(set) = w → (match w { False => None, True => Some(set) }) = Some(l) →
                             (l = set) ∧ (body.live_in(homes, after).within(set) && body.checks(homes, after)).IsTrue() {
@@ -249,7 +226,7 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
                                 j(bs.left, λ a _ => a.within(set).IsTrue(), j(sym(inside), λ v _ => v.IsTrue(), trivial)), bs.right)⟩,
                     })(refl)
                 },
-            })(refl)
+            })
         },
         Exit(status) => λ out l same => ⟨sym(Option::some_inj([status], l, same)), trivial⟩,
         Arg(index, _, len) => λ out l => (match homes.apart(len, out) as λ b => homes.apart(len, out) = b →
@@ -453,17 +430,16 @@ theorem kept_filter(pool: List<Gpr>, p: Gpr → Bool, before, after: Gprs, regis
     Kept(pool.filter(p), before, after) → Mem(register, pool) → read_gpr(register, after) = read_gpr(register, before) {
     match pool {
         Nil => λ _ never => false_elim(never),
-        Cons(h, rest) => (match p(h) as λ b => p(h) = b → Kept(match b { True => Cons(h, rest.filter(p)), False => rest.filter(p) }, before, after) →
-                Mem(register, Cons(h, rest)) → read_gpr(register, after) = read_gpr(register, before) {
-            True => λ _ kept m => match m {
+        Cons(h, rest) => (match dropped: p(h) {
+            True => λ kept m => match m {
                 Inl(e) => j(sym(e), λ x _ => read_gpr(x, after) = read_gpr(x, before), kept.left),
                 Inr(later) => kept_filter(rest, p, before, after, register, chosen, kept.right, later),
             },
-            False => λ dropped kept m => match m {
+            False => λ kept m => match m {
                 Inl(e) => absurd(trans(sym(dropped), j(e, λ x _ => p(x) = True, chosen))),
                 Inr(later) => kept_filter(rest, p, before, after, register, chosen, kept, later),
             },
-        })(refl),
+        }),
     }
 }
 
@@ -522,10 +498,10 @@ theorem Target::held_regs(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs
 theorem Target::held_unused(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
     register: Gpr, value: BitVec(64), unused: t.homes.uses(register) = False): t.Held(live, env, write_gpr(register, value, g), m) {
     t.held_regs(live, env, g, write_gpr(register, value, g), m, held, λ k inside used =>
-        read_gpr_other(register, home_register(k), value, g, (match register.same(home_register(k)) as λ b => register.same(home_register(k)) = b → b = False {
-            True => λ e => absurd(trans(sym(unused), trans(cong_fn<Gpr, Bool>(λ r => t.homes.uses(r), register.same_sound(home_register(k), e)), used))),
-            False => λ _ => refl,
-        })(refl)))
+        read_gpr_other(register, home_register(k), value, g, match e: register.same(home_register(k)) {
+            True => absurd(trans(sym(unused), trans(cong_fn<Gpr, Bool>(λ r => t.homes.uses(r), register.same_sound(home_register(k), e)), used))),
+            False => refl,
+        }))
 }
 
 // Code that keeps every register a word lives in.
@@ -539,14 +515,13 @@ theorem Target::held_kept(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs
 theorem Homes::slotted_home(self homes: Homes, ids: List<Nat>): homes.slotted(ids).IsTrue() → (i: Nat) → Mem(i, ids) → homes.home(i) = InSlot {
     match ids {
         Nil => λ _ i never => false_elim(never),
-        Cons(id, rest) => (match homes.home(id) as λ h => homes.home(id) = h →
-                (match h { InSlot => homes.slotted(rest), InReg(_) => False }).IsTrue() → (i: Nat) → Mem(i, Cons(id, rest)) → homes.home(i) = InSlot {
-            InSlot => λ at slotted i m => match m {
+        Cons(id, rest) => (match at: homes.home(id) {
+            InSlot => λ slotted i m => match m {
                 Inl(e) => j(sym(e), λ x _ => homes.home(x) = InSlot, at),
                 Inr(later) => homes.slotted_home(rest, slotted, i, later),
             },
-            InReg(_) => λ _ never => false_elim(never),
-        })(refl),
+            InReg(_) => λ never => false_elim(never),
+        }),
     }
 }
 

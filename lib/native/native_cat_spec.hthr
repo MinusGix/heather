@@ -411,14 +411,12 @@ theorem cat_write_answer(args: List<List<BitVec(8)>>, call: Answers(), perform: 
     match a {
         Wrote(count) => λ (valid: count <= span(buf, sent, left).len()) => {
             let wrote: (count <= left) = j(cat_span_len(buf, sent, left, { omega }), λ x _ => count <= x, valid);
-            (match left - count as λ d => (left - count = d) →
-                    cat_write_after(call, perform, n, k, m, Onward(cat_wrote(args, c, r, sent, count_word(count).toNat(), w7, w8, buf)),
-                        cat_spec_wrote(st, pending, f1, Wrote(count))) {
-                Zero => λ done => cat_wrote_done(args, call, perform, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
+            match done: left - count {
+                Zero => cat_wrote_done(args, call, perform, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
                     st, pending, owed, count, wrote, done, f1, enough),
-                Succ(_) => λ more => cat_wrote_more(args, call, perform, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
-                    st, pending, owed, f1, enough, count, wrote, j(sym(more), λ x _ => 0 < x, trivial)),
-            })(refl)
+                Succ(_) => cat_wrote_more(args, call, perform, n, k, m, c, r, sent, left, w7, w8, buf, size, pos, small, sums, fits,
+                    st, pending, owed, f1, enough, count, wrote, j(sym(done), λ x _ => 0 < x, trivial)),
+            }
         },
         WriteFailed(e) => λ (valid: Errno(e)) => cat_write_fails(args, call, perform, n, k, m, c, r, sent, w7, w8, buf, st, pending, f1, e, valid),
     }

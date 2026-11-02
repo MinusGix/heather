@@ -772,11 +772,10 @@ fn File::branch_test(self file: File, condition: Nat) → Option<Tested(file, co
     match file.find(Held(condition, Bit)) {
         Some(found) => Some(Tested(Nonzero(found.register),
             λ values g represents => found.register.tests_zero_bit(g, values(1, condition), found.at.rep(values, g, represents)))),
-        None => (match known_comparison(file.known, condition) as λ o =>
-            known_comparison(file.known, condition) = o → Option<Tested(file, condition)> {
-            None => λ _ => None,
-            Some(compared) => λ known => file.compare_test(condition, compared, known),
-        })(refl),
+        None => match known: known_comparison(file.known, condition) {
+            None => None,
+            Some(compared) => file.compare_test(condition, compared, known),
+        },
     }
 }
 
@@ -887,15 +886,11 @@ theorem emit_kept_nodes_emits<M>(site: Site<M>, laid: site.program.laid_out().Is
         }) {
         None => λ _ => trivial,
         Some(lowered) => λ keeps =>
-            (match leaves_all(lowered.code, callee_saved()) as λ b => leaves_all(lowered.code, callee_saved()) = b →
-                MayEmitIn<M>(site, stack, values, d, s0, prog, file, NodesHold(values, nodes), match b {
-                    False => None,
-                    True => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
-                }) {
-                False => λ _ => trivial,
-                True => λ left => kept_block_emits<M>(site, laid, stack, values, d, s0, prog, file, NodesHold(values, nodes), lowered,
+            match left: leaves_all(lowered.code, callee_saved()) {
+                False => trivial,
+                True => kept_block_emits<M>(site, laid, stack, values, d, s0, prog, file, NodesHold(values, nodes), lowered,
                     keeps, is_true_of_eq(leaves_all(lowered.code, callee_saved()), left), skip_nodes(nodes, placement), names),
-            })(refl),
+            },
     })(lower_nodes_keeps<M>(values, nodes, placement, file))
 }
 
@@ -1007,20 +1002,9 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
     let ports = word_ports(arguments);
     let order = file.call_moves(arguments);
     let out_file = file.write(Rax, Some(Held(result, Word)));
-    (match Succ(callee).leb(bound) as λ b => Succ(callee).leb(bound) = b →
-        MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match b {
-            False => None,
-            True => match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) {
-                None => None,
-                Some(moves) => match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
-                    False => None,
-                    True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
-                },
-            },
-        }) {
-        False => λ _ => trivial,
-        True => λ under =>
-            (match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved =>
+    match under: Succ(callee).leb(bound) {
+        False => trivial,
+        True => (match file.move_outputs(ArgumentMove::ports(order), ArgumentMove::registers(order)) as λ moved =>
                 MayKeep<M>(values, file, True, moved) →
                 MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match moved {
                     None => None,
@@ -1031,14 +1015,9 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
                 }) {
                 None => λ _ => trivial,
                 Some(moves) => λ keeps =>
-                    (match moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) as λ c =>
-                        (moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved())) = c →
-                        MayEmitIn<M>(site, stack, values, d, s0, prog, file, facts, match c {
-                            False => None,
-                            True => Some(Emitted(call_prog(prog, moves.code, callee), out_file, placement, names)),
-                        }) {
-                        False => λ _ => trivial,
-                        True => λ checked => {
+                    match checked: moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()) {
+                        False => trivial,
+                        True => {
                             let both = Bool::is_true_and(moves.file.outputs_check(ports, argument_registers()),
                                 leaves_all(moves.code, callee_saved()),
                                 is_true_of_eq(moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()),
@@ -1048,9 +1027,9 @@ theorem File::emit_call_emits<M>(self file: File, site: Site<M>, laid: site.prog
                                 Succ(callee).leb_sound(bound, is_true_of_eq(Succ(callee).leb(bound), under)),
                                 moves, keeps, both.left, both.right)
                         },
-                    })(refl),
+                    },
             })(move_outputs_keeps<M>(values, ArgumentMove::ports(order), file, ArgumentMove::registers(order))),
-    })(refl)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1126,20 +1105,16 @@ theorem loop_entry_with_sound<M>(values: Valuation(), file: File, registers: Loo
         }) {
         None => λ _ => trivial,
         Some(head) => λ head_ok =>
-            (match placed && (kept && registers.apart()) as λ c => (placed && (kept && registers.apart())) = c →
-                MayLoopEntry<M>(values, file, inputs, limit, parameters, count, match c {
-                    False => None,
-                    True => Some(LoopEntry(registers, moves.code, head)),
-                }) {
-                False => λ _ => trivial,
-                True => λ checked => {
+            match checked: placed && (kept && registers.apart()) {
+                False => trivial,
+                True => {
                     let all = Bool::is_true_and(placed, kept && registers.apart(), is_true_of_eq(placed && (kept && registers.apart()), checked));
                     let rest = Bool::is_true_and(kept, registers.apart(), all.right);
                     ⟨moves_into<M>(values, file, Cons(limit, inputs), into, moves, keeps, all.left, rest.left),
                      ⟨λ pass g args => head_ok(pass, g, args_ports(pass, Cons(count, parameters), into, g, args)),
                       registers.apart_sound(rest.right)⟩⟩
                 },
-            })(refl),
+            },
     })(λ pass g placed_at => input_file_represents(pass, g, word_ports(Cons(count, parameters)), into, placed_at))
 }
 
@@ -1207,14 +1182,9 @@ theorem loop_exit_out_sound<M>(file: File, register: Gpr, leave, back: Lowered,
         }) {
         None => λ _ => trivial,
         Some(after) => λ after_ok =>
-            (match found && (leave_placed && (leave_kept && (back_placed && back_kept))) as λ c =>
-                (found && (leave_placed && (leave_kept && (back_placed && back_kept)))) = c →
-                MayLoopExit<M>(file, registers, count, exit, next, outputs, exhausted, match c {
-                    False => None,
-                    True => Some(LoopExit(register, leave.code, back.code, after)),
-                }) {
-                False => λ _ => trivial,
-                True => λ checked => {
+            match checked: found && (leave_placed && (leave_kept && (back_placed && back_kept))) {
+                False => trivial,
+                True => {
                     let first = Bool::is_true_and(found, leave_placed && (leave_kept && (back_placed && back_kept)),
                         is_true_of_eq(found && (leave_placed && (leave_kept && (back_placed && back_kept))), checked));
                     let second = Bool::is_true_and(leave_placed, leave_kept && (back_placed && back_kept), first.right);
@@ -1227,7 +1197,7 @@ theorem loop_exit_out_sound<M>(file: File, register: Gpr, leave, back: Lowered,
                             fourth.left, fourth.right),
                        λ values g args flag => after_ok(values, g, ⟨flag, args_ports(values, outputs, registers.state, g, args)⟩)⟩⟩⟩
                 },
-            })(refl),
+            },
     })(λ values g placed => input_file_represents(values, g, ports, into, placed))
 }
 

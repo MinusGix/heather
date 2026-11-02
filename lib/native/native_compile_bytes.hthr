@@ -61,14 +61,12 @@ theorem Env::buffer_byte_is(self env: Env, buf, i: Nat): buffer_byte(env.buffers
 theorem Env::buffer_stored_here(self env: Env, buf, i: Nat, c: BitVec(8)):
     Env(env.words, store_byte(env.buffers, buf, i, c), env.args).buffer(buf) = env.buffer(buf).update(i, λ _ => c) {
     let f = λ (bytes: List<BitVec(8)>) => bytes.update(i, λ _ => c);
-    (match env.buffers.nth(buf) as λ o => env.buffers.nth(buf) = o →
-            (match env.buffers.update(buf, f).nth(buf) as λ _ => List<BitVec(8)> { None => Nil, Some(bytes) => bytes }) =
-            (match o as λ _ => List<BitVec(8)> { None => Nil, Some(bytes) => bytes }).update(i, λ _ => c) {
-        None => λ none => j(sym(env.buffers.nth_update_none(buf, f, none)),
+    match none: env.buffers.nth(buf) {
+        None => j(sym(env.buffers.nth_update_none(buf, f, none)),
             λ x _ => (match x as λ _ => List<BitVec(8)> { None => Nil, Some(bytes) => bytes }) = Nil.update(i, λ _ => c), refl),
-        Some(bytes) => λ some => j(sym(env.buffers.nth_update_here(buf, f, bytes, some)),
+        Some(bytes) => j(sym(env.buffers.nth_update_here(buf, f, bytes, none)),
             λ x _ => (match x as λ _ => List<BitVec(8)> { None => Nil, Some(bytes) => bytes }) = bytes.update(i, λ _ => c), refl),
-    })(refl)
+    }
 }
 
 theorem Env::buffer_stored_other(self env: Env, buf, i: Nat, c: BitVec(8), b: Nat, ne: b ≠ buf):
@@ -529,52 +527,35 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
     λ node => match node {
         BufferLoad(output, buf, index) => λ apart => {
             let live = live_before([index], output, out);
-            (match layout.words_fit([output, index]) as λ b => layout.words_fit([output, index]) = b → (match b {
-                False => None,
-                True => match layout.capacities.nth(buf) { None => None, Some(cap) => Some(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names))) },
-            }) = Some(c) → c.prog.Within(t.program) → t.At(prog_len(c.prog), out, tree, env.computes([BufferLoad(output, buf, index)])) →
-                t.At(prog_len(p), live, tree, env) {
-                False => λ _ none => absurd(none),
-                True => λ fit => {
+            (match fit: layout.words_fit([output, index]) {
+                False => λ none => absurd(none),
+                True => {
                     let ok = Bool::is_true_and(layout.word_fits(output), layout.word_fits(index) && True, j(sym(fit), λ v _ => v.IsTrue(), trivial));
                     let ok2 = Bool::is_true_and(layout.word_fits(index), True, ok.right);
-                    (match t.caps.nth(buf) as λ o => t.caps.nth(buf) = o →
-                            (match o { None => None, Some(cap) => Some(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names))) }) = Some(c) →
-                            c.prog.Within(t.program) → t.At(prog_len(c.prog), out, tree, env.computes([BufferLoad(output, buf, index)])) →
-                            t.At(prog_len(p), live, tree, env) {
-                        None => λ _ none => absurd(none),
-                        Some(cap) => λ found same => j(Option::some_inj(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names)), c, same),
+                    (match found: t.caps.nth(buf) {
+                        None => λ none => absurd(none),
+                        Some(cap) => λ same => j(Option::some_inj(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names)), c, same),
                             λ x _ => x.prog.Within(t.program) → t.At(prog_len(x.prog), out, tree, env.computes([BufferLoad(output, buf, index)])) →
                                 t.At(prog_len(p), live, tree, env),
                             λ within next => t.goes_loads(live, out, env, env.computes([BufferLoad(output, buf, index)]), p, output, buf, index, cap, names,
                                 layout.word_inside(output, ok.left), layout.word_inside(index, ok2.left), live_before_reads([index], output, out, index, Inl(refl)),
                                 λ i m ne => live_before_keeps([index], output, out, i, m, ne), apart, found, within, tree,
                                 env.computes_load(output, buf, index), next)),
-                    })(refl)
+                    })
                 },
-            })(refl)
+            })
         },
         BufferStore(output, buf, index, value) => λ apart => {
             let live = live_before([index, value], output, out);
-            (match layout.words_fit([output, index, value]) as λ b => layout.words_fit([output, index, value]) = b → (match b {
-                False => None,
-                True => match layout.capacities.nth(buf) {
-                    None => None,
-                    Some(cap) => Some(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names)))),
-                },
-            }) = Some(c) → c.prog.Within(t.program) → t.At(prog_len(c.prog), out, tree, env.computes([BufferStore(output, buf, index, value)])) →
-                t.At(prog_len(p), live, tree, env) {
-                False => λ _ none => absurd(none),
-                True => λ fit => {
+            (match fit: layout.words_fit([output, index, value]) {
+                False => λ none => absurd(none),
+                True => {
                     let ok = Bool::is_true_and(layout.word_fits(output), layout.word_fits(index) && (layout.word_fits(value) && True), j(sym(fit), λ v _ => v.IsTrue(), trivial));
                     let ok2 = Bool::is_true_and(layout.word_fits(index), layout.word_fits(value) && True, ok.right);
                     let ok3 = Bool::is_true_and(layout.word_fits(value), True, ok2.right);
-                    (match t.caps.nth(buf) as λ o => t.caps.nth(buf) = o →
-                            (match o { None => None, Some(cap) => Some(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names)))) }) = Some(c) →
-                            c.prog.Within(t.program) → t.At(prog_len(c.prog), out, tree, env.computes([BufferStore(output, buf, index, value)])) →
-                            t.At(prog_len(p), live, tree, env) {
-                        None => λ _ none => absurd(none),
-                        Some(cap) => λ found same => j(Option::some_inj(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names))), c, same),
+                    (match found: t.caps.nth(buf) {
+                        None => λ none => absurd(none),
+                        Some(cap) => λ same => j(Option::some_inj(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names))), c, same),
                             λ x _ => x.prog.Within(t.program) → t.At(prog_len(x.prog), out, tree, env.computes([BufferStore(output, buf, index, value)])) →
                                 t.At(prog_len(p), live, tree, env),
                             λ within next => t.goes_stores(live, out, env, env.computes([BufferStore(output, buf, index, value)]), p, output, buf, index, value, cap, names,
@@ -583,9 +564,9 @@ theorem Target::goes_byte_node(self t: Target, out: List<Nat>, env: Env, p: Prog
                                 live_before_reads([index, value], output, out, value, Inr(Inl(refl))),
                                 λ i m ne => live_before_keeps([index, value], output, out, i, m, ne), apart, found, within, tree,
                                 env.computes_store(output, buf, index, value), next)),
-                    })(refl)
+                    })
                 },
-            })(refl)
+            })
         },
         _ => λ _ none => absurd(none),
     }

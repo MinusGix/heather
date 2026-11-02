@@ -31,14 +31,14 @@ fn decimal_line(n: Nat) → List<BitVec(8)> { decimal(n) ++ [BitVec::ofNat(10)] 
 
 theorem leb_yes(a, b: Nat, h: a <= b): a.leb(b) = True { bool::eq_true_of_is_true(a.leb(b), a.leb_complete(b, h)) }
 theorem leb_no(a, b: Nat, h: b < a): a.leb(b) = False {
-    (match a.leb(b) as λ found => (a.leb(b) = found) → found = False {
-        True => λ yes => {
+    match yes: a.leb(b) {
+        True => {
             let wrong: (a <= b) = a.leb_sound(b, rewrite(yes, trivial));
             let never: False = omega;
             false_elim(never)
         },
-        False => λ _ => refl,
-    })(refl)
+        False => refl,
+    }
 }
 
 // ---------------------------------------------------------------------------
