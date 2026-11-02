@@ -613,6 +613,8 @@ impl Lift<'_> {
         self.parts.push(Part::Decl(Decl {
             kind: DeclKind::Fn,
             is_meta: false,
+            is_interface: false,
+            unfolding: Vec::new(),
             is_evidence: false,
             value: false,
             elaborates: None,
