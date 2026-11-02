@@ -166,18 +166,15 @@ theorem writes_from_unique<M>(io: LinuxIo<M>, memory: M, buffer: BitVec(64), lef
 theorem c_strings_alike(left: List<BitVec(8)>): (right: List<BitVec(8)>) → (source: Nat → Option<BitVec(8)>) →
     CStringFrom(left, source) → CStringFrom(right, source) → left = right {
     match left {
-        Nil => λ right source here there => (match right as λ r => CStringFrom(r, source) → (Nil<BitVec(8)> = r) {
-            Nil => λ _ => refl,
-            Cons(y, ys) => λ there =>
-                false_elim(there.right.left(Option::some_inj(y, BitVec::ofNat(0), trans(sym(there.left), here)))),
-        })(there),
-        Cons(x, xs) => λ right source here there => (match right as λ r => CStringFrom(r, source) → (Cons(x, xs) = r) {
-            Nil => λ there =>
-                false_elim(here.right.left(Option::some_inj(x, BitVec::ofNat(0), trans(sym(here.left), there)))),
-            Cons(y, ys) => λ there =>
-                List::cons_eq(xs, ys, x, y, Option::some_inj(x, y, trans(sym(here.left), there.left)),
+        Nil => λ right source here there => match right {
+            Nil => refl,
+            Cons(y, ys) => false_elim(there.right.left(Option::some_inj(y, BitVec::ofNat(0), trans(sym(there.left), here)))),
+        },
+        Cons(x, xs) => λ right source here there => match right {
+            Nil => false_elim(here.right.left(Option::some_inj(x, BitVec::ofNat(0), trans(sym(here.left), there)))),
+            Cons(y, ys) => List::cons_eq(xs, ys, x, y, Option::some_inj(x, y, trans(sym(here.left), there.left)),
                     c_strings_alike(xs, ys, λ i => source(Succ(i)), here.right.right, there.right.right)),
-        })(there),
+        },
     }
 }
 
@@ -380,10 +377,10 @@ theorem event_determines<M>(io: LinuxIo<M>, event, other: LinuxEvent, rest, more
     left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
     claimed: ClaimAt(io, event, rest, left), ran: RunAt(io, other, more, right), response: SameResponse(event, other)):
     Cons(event, rest) = Cons(other, more) {
-    (match event as λ e => ClaimAt(io, e, rest, left) → SameResponse(e, other) → Cons(e, rest) = Cons(other, more) {
-        CallEvent(c, a) => λ cl r => call_determines(io, c, a, rest, more, left, right, same, tails, cl, other, ran, r),
-        ExitEvent(status) => λ cl r => exit_determines(io, status, rest, more, left, right, same, cl, other, ran, r),
-    })(claimed, response)
+    match event {
+        CallEvent(c, a) => call_determines(io, c, a, rest, more, left, right, same, tails, claimed, other, ran, response),
+        ExitEvent(status) => exit_determines(io, status, rest, more, left, right, same, claimed, other, ran, response),
+    }
 }
 // ---------------------------------------------------------------------------
 // The run is the run: from related states, a claimed run and any actual run

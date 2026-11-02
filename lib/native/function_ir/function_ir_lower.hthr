@@ -714,16 +714,16 @@ theorem BinaryOp::bit_written(self op: BinaryOp, values: Valuation(), output, le
     let x = values(1, left);
     let y = values(1, right);
     let extended = λ (c: BitVec(1)) => c.zero_extend(63);
-    (match op as λ o => o.BitHolds(values, output, left, right) → values(1, output).zero_extend(63) = o.apply(a, b) {
-        OpAdd => λ never => false_elim(never),
-        OpSub => λ never => false_elim(never),
-        OpAnd => λ held => trans(cong_fn(extended, held), trans(sym(BitVec::band_zero_extend(1, 63, x, y)),
+    match op {
+        OpAdd => false_elim(holds),
+        OpSub => false_elim(holds),
+        OpAnd => trans(cong_fn(extended, holds), trans(sym(BitVec::band_zero_extend(1, 63, x, y)),
             rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.band(q), left_rep, right_rep))),
-        OpOr => λ held => trans(cong_fn(extended, held), trans(sym(BitVec::bor_zero_extend(1, 63, x, y)),
+        OpOr => trans(cong_fn(extended, holds), trans(sym(BitVec::bor_zero_extend(1, 63, x, y)),
             rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.bor(q), left_rep, right_rep))),
-        OpXor => λ held => trans(cong_fn(extended, held), trans(sym(BitVec::bxor_zero_extend(1, 63, x, y)),
+        OpXor => trans(cong_fn(extended, holds), trans(sym(BitVec::bxor_zero_extend(1, 63, x, y)),
             rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.bxor(q), left_rep, right_rep))),
-    })(holds)
+    }
 }
 
 fn bits_after(op: BinaryOp, moved: Lowered, destination: Gpr, output, left, right: Nat,

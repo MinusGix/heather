@@ -180,14 +180,13 @@ theorem filter_sends_write<C>(input, output: BitVec(64), step: C → BitVec(8) �
     let next = λ (x: Step<FilterAt<C>, BitVec(64)>) => ITree::iter_next(Events::linux_spec(), m, λ a => filter_pass(input, output, step, a), x);
     let later = filter_emitted(step, Trace::received<True, BitVec(64)>(input, rest), s);
     let sends: (written_bytes(pending, w) ++ Trace::sent<True, BitVec(64)>(output, rest) = pending ++ later) =
-        (match w as λ x => IsTrace(Events::linux_spec(), ITree::bind(Events::linux_spec(), filter_wrote(s, pending, x), next), rest) →
-                written_bytes(pending, x) ++ Trace::sent<True, BitVec(64)>(output, rest) = pending ++ later {
-            Wrote(count) => λ it => trans(
-                cong_fn(λ (bytes: List<BitVec(8)>) => pending.take(count) ++ bytes, ih(Writing(s, pending.drop(count)), rest, it, returns)),
+        match w {
+            Wrote(count) => trans(
+                cong_fn(λ (bytes: List<BitVec(8)>) => pending.take(count) ++ bytes, ih(Writing(s, pending.drop(count)), rest, sub, returns)),
                 trans(sym(List::append_assoc(pending.take(count), pending.drop(count), later)),
                     cong_fn(λ (bytes: List<BitVec(8)>) => bytes ++ later, List::take_append_drop(pending, count)))),
-            WriteFailed(_) => λ it => false_elim(filter_failed_return(rest, it, returns)),
-        })(sub);
+            WriteFailed(_) => false_elim(filter_failed_return(rest, sub, returns)),
+        };
     trans(cong_fn(λ (bytes: List<BitVec(8)>) => bytes ++ Trace::sent<True, BitVec(64)>(output, rest), write_sent<True>(output, pending, w)),
         sends)
 }

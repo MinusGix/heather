@@ -184,10 +184,10 @@ fn asm_lands(labels: Nat → Nat, l: Prog, size, to: Nat) → Bool {
 }
 theorem asm_jump_lands(labels: Nat → Nat, l: Prog, size, to: Nat, same: asm_lands(labels, l, size, to) = True):
     JumpsForward(asm_at(l), size, asm_jump(labels, l), to) {
-    (match l as λ m => asm_lands(labels, m, size, to) = True → JumpsForward(asm_at(m), size, asm_jump(labels, m), to) {
-        Start => λ no => absurd_of(no, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
-        At(before, _, item) => λ yes => asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to, yes),
-    })(same)
+    match l {
+        Start => absurd_of(same, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
+        At(before, _, item) => asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to, same),
+    }
 }
 fn asm_item_lands_back(labels: Nat → Nat, here, size: Nat, item: Asm, to: Nat) → Bool {
     asm_same(here + size + asm_jump_of(labels, here, item).sign_extend(32).toNat(), to + Nat::pow(2, 64))
@@ -197,11 +197,10 @@ fn asm_lands_back_to(labels: Nat → Nat, l: Prog, size, to: Nat) → Bool {
 }
 theorem asm_jump_lands_back(labels: Nat → Nat, l: Prog, size, to: Nat, same: asm_lands_back_to(labels, l, size, to) = True):
     JumpsBack(asm_at(l), size, asm_jump(labels, l), to) {
-    (match l as λ m => asm_lands_back_to(labels, m, size, to) = True → JumpsBack(asm_at(m), size, asm_jump(labels, m), to) {
-        Start => λ no => absurd_of(no, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
-        At(before, _, item) => λ yes =>
-            asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to + Nat::pow(2, 64), yes),
-    })(same)
+    match l {
+        Start => absurd_of(same, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
+        At(before, _, item) => asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to + Nat::pow(2, 64), same),
+    }
 }
 
 // Label `l` found in `p`: the one as many items from its end as `l` is
@@ -223,47 +222,47 @@ fn FillsFit(p: Prog, fills: Nat → List<BitVec(8)>) → Type {
 }
 theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat, item: Asm, fits: FillsFit(At(before, name, item), fills)):
     FillsFit(before, fills) {
-    (match item as λ it => FillsFit(At(before, name, it), fills) → FillsFit(before, fills) {
-        Block(_) => λ f => f,
-        Code(_) => λ f => f,
-        Load(_) => λ f => f,
-        Store(_) => λ f => f,
-        LoadByte(_) => λ f => f,
-        StoreByte(_) => λ f => f,
-        Jcc(_, _) => λ f => f,
-        Jmp(_) => λ f => f,
-        Syscall => λ f => f,
-        Proved(_, _, _, _) => λ f => f,
-        CallTo(_) => λ f => f,
-        Ret => λ f => f,
-        Spill(_) => λ f => f,
-        Reload(_) => λ f => f,
-        Piece(_, _, _) => λ f => f,
-        Refer(_, _, _) => λ f => f,
-        Hole(_, _) => λ f => f.right,
-    })(fits)
+    match item {
+        Block(_) => fits,
+        Code(_) => fits,
+        Load(_) => fits,
+        Store(_) => fits,
+        LoadByte(_) => fits,
+        StoreByte(_) => fits,
+        Jcc(_, _) => fits,
+        Jmp(_) => fits,
+        Syscall => fits,
+        Proved(_, _, _, _) => fits,
+        CallTo(_) => fits,
+        Ret => fits,
+        Spill(_) => fits,
+        Reload(_) => fits,
+        Piece(_, _, _) => fits,
+        Refer(_, _, _) => fits,
+        Hole(_, _) => fits.right,
+    }
 }
 theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, before: Prog, name: Nat, item: Asm,
     fits: FillsFit(At(before, name, item), fills)): asm_bytes(fills, labels, here, item).len() = asm_len(item) {
-    (match item as λ it => FillsFit(At(before, name, it), fills) → asm_bytes(fills, labels, here, it).len() = asm_len(it) {
-        Block(instructions) => λ _ => block_length_is(instructions),
-        Code(_) => λ _ => refl,
-        Load(_) => λ _ => refl,
-        Store(_) => λ _ => refl,
-        LoadByte(_) => λ _ => refl,
-        StoreByte(_) => λ _ => refl,
-        Jcc(_, _) => λ _ => refl,
-        Jmp(_) => λ _ => refl,
-        Syscall => λ _ => refl,
-        Proved(_, _, _, measured) => λ _ => measured,
-        CallTo(_) => λ _ => refl,
-        Ret => λ _ => refl,
-        Spill(_) => λ _ => refl,
-        Reload(_) => λ _ => refl,
-        Piece(_, _, measured) => λ _ => measured,
-        Refer(_, _, measured) => λ _ => measured(labels, here),
-        Hole(_, _) => λ f => f.left,
-    })(fits)
+    match item {
+        Block(instructions) => block_length_is(instructions),
+        Code(_) => refl,
+        Load(_) => refl,
+        Store(_) => refl,
+        LoadByte(_) => refl,
+        StoreByte(_) => refl,
+        Jcc(_, _) => refl,
+        Jmp(_) => refl,
+        Syscall => refl,
+        Proved(_, _, _, measured) => measured,
+        CallTo(_) => refl,
+        Ret => refl,
+        Spill(_) => refl,
+        Reload(_) => refl,
+        Piece(_, _, measured) => measured,
+        Refer(_, _, measured) => measured(labels, here),
+        Hole(_, _) => fits.left,
+    }
 }
 theorem asm_len_step(code, bytes: List<BitVec(8)>, before, len: Nat, code_is: code.len() = before, bytes_is: bytes.len() = len):
     (code ++ bytes).len() = before + len {

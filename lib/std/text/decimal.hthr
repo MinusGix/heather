@@ -61,35 +61,35 @@ theorem decimal_more(fuel, m: Nat, big: 10 <= m):
 
 theorem decimal_two(fuel, m: Nat, lo: 10 <= m, hi: m <= 99, room: 1 <= fuel):
     decimal_digits(fuel, m) = [digit(m.div(10)), digit(m.mod(10))] {
-    (match fuel as λ f => (1 <= f) → decimal_digits(f, m) = [digit(m.div(10)), digit(m.mod(10))] {
-        Zero => λ room => false_elim(room),
-        Succ(rest) => λ _ => {
+    match fuel {
+        Zero => false_elim(room),
+        Succ(rest) => {
             let top: (m.div(10) <= 9) = m.div_lt_of_lt_mul(10, 10, hi);
             trans(decimal_more(rest, m, lo), @cong(λ (xs: List<BitVec(8)>) => xs ++ [digit(m.mod(10))],
                 decimal_digits(rest, m.div(10)), [digit(m.div(10))], decimal_one(rest, m.div(10), top)))
         },
-    })(room)
+    }
 }
 
 theorem decimal_three(fuel, m: Nat, lo: 100 <= m, hi: m <= 999, room: 2 <= fuel):
     decimal_digits(fuel, m) = [digit(m.div(10).div(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
-    (match fuel as λ f => (2 <= f) → decimal_digits(f, m) = [digit(m.div(10).div(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
-        Zero => λ room => false_elim(room),
-        Succ(rest) => λ room => {
+    match fuel {
+        Zero => false_elim(room),
+        Succ(rest) => {
             let lo2: (10 <= m.div(10)) = m.le_div_of_mul_le(10, 10, lo);
             let hi2: (m.div(10) <= 99) = m.div_lt_of_lt_mul(10, 100, hi);
             let room2: (1 <= rest) = omega;
             trans(decimal_more(rest, m, omega), @cong(λ (xs: List<BitVec(8)>) => xs ++ [digit(m.mod(10))],
                 decimal_digits(rest, m.div(10)), [digit(m.div(10).div(10)), digit(m.div(10).mod(10))], decimal_two(rest, m.div(10), lo2, hi2, room2)))
         },
-    })(room)
+    }
 }
 
 theorem decimal_four(fuel, m: Nat, lo: 1000 <= m, hi: m <= 9999, room: 3 <= fuel):
     decimal_digits(fuel, m) = [digit(m.div(10).div(10).div(10)), digit(m.div(10).div(10).mod(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
-    (match fuel as λ f => (3 <= f) → decimal_digits(f, m) = [digit(m.div(10).div(10).div(10)), digit(m.div(10).div(10).mod(10)), digit(m.div(10).mod(10)), digit(m.mod(10))] {
-        Zero => λ room => false_elim(room),
-        Succ(rest) => λ room => {
+    match fuel {
+        Zero => false_elim(room),
+        Succ(rest) => {
             let lo2: (100 <= m.div(10)) = m.le_div_of_mul_le(10, 100, lo);
             let hi2: (m.div(10) <= 999) = m.div_lt_of_lt_mul(10, 1000, hi);
             let room2: (2 <= rest) = omega;
@@ -98,7 +98,7 @@ theorem decimal_four(fuel, m: Nat, lo: 1000 <= m, hi: m <= 9999, room: 3 <= fuel
                 [digit(m.div(10).div(10).div(10)), digit(m.div(10).div(10).mod(10)), digit(m.div(10).mod(10))],
                 decimal_three(rest, m.div(10), lo2, hi2, room2)))
         },
-    })(room)
+    }
 }
 
 // `n` divided by ten `k` times.

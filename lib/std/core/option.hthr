@@ -38,5 +38,5 @@ theorem Option::none_ne_some<A>(a: A, p: None<A>() = Some(a), T: Type): T {
 // chain gives for every value the option holds.
 theorem Option::and_then_elim<A, B>(P: Option<B> → Type, none: P(None), o: Option<A>, f: A → Option<B>,
     some: (v: A) → o = Some(v) → P(f(v))): P(o.and_then(f)) {
-    (match o as λ q => ((v: A) → q = Some(v) → P(f(v))) → P(q.and_then(f)) { None => λ _ => none, Some(v) => λ k => k(v, refl) })(some)
+    match o { None => none, Some(v) => some(v, refl) }
 }

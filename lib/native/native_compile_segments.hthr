@@ -609,11 +609,11 @@ theorem bit_tests_zero(k: Nat):
 }
 
 theorem Bool::clear_of_not(b, z: Bool, is: z = !b, set: z = True): b = False {
-    (match b as λ c => z = !c → c = False { False => λ _ => refl, True => λ e => absurd(trans(sym(set), e)) })(is)
+    match b { False => refl, True => absurd(trans(sym(set), is)) }
 }
 
 theorem Bool::set_of_not(b, z: Bool, is: z = !b, clear: z = False): b = True {
-    (match b as λ c => z = !c → c = True { False => λ e => absurd(trans(sym(clear), e)), True => λ _ => refl })(is)
+    match b { False => absurd(trans(sym(clear), is)), True => refl }
 }
 
 // A bit tested: on past the JE where it is set, to the label it names where

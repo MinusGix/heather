@@ -233,10 +233,10 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Ans
 
 theorem Option::and_then_with<A, B, R>({o: Option<A>}, {f: A → Option<B>}, {c: B}, h: o.and_then(f) = Some(c),
     k: (a: A) → o = Some(a) → f(a) = Some(c) → R): R {
-    (match o as λ q => q.and_then(f) = Some(c) → ((a: A) → q = Some(a) → f(a) = Some(c) → R) → R {
-        None => λ none _ => absurd(none),
-        Some(a) => λ got k2 => k2(a, refl, got),
-    })(h, k)
+    match o {
+        None => absurd(h),
+        Some(a) => k(a, refl, h),
+    }
 }
 
 // The value is `w`, whatever it is.
@@ -250,10 +250,10 @@ theorem Option::and_then_canon<A, B>({o: Option<A>}, {f: A → Option<B>}, {c: B
 }
 
 theorem Bool::guard_with<B, R>({b: Bool}, {o: Option<B>}, {c: B}, h: b.guard(o) = Some(c), k: b.IsTrue() → o = Some(c) → R): R {
-    (match b as λ q => q.guard(o) = Some(c) → (q.IsTrue() → o = Some(c) → R) → R {
-        False => λ none _ => absurd(none),
-        True => λ got k2 => k2(trivial, got),
-    })(h, k)
+    match b {
+        False => absurd(h),
+        True => k(trivial, h),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -696,7 +696,7 @@ theorem loop_keeps_mem(out: List<Nat>, outputs: List<Nat>, exhausted: Nat, clobb
     }
 }
 
-theorem Bool::true_of(self b: Bool, h: b.IsTrue()): b = True { (match b as λ c => c.IsTrue() → c = True { False => λ f => false_elim(f), True => λ _ => refl })(h) }
+theorem Bool::true_of(self b: Bool, h: b.IsTrue()): b = True { match b { False => false_elim(h), True => refl } }
 
 // A pass's own valuation agrees with an environment holding the pass's
 // state in the parameters and its count.

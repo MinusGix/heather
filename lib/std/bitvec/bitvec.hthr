@@ -80,34 +80,31 @@ fn BitVec::set({n: Nat}, self x: BitVec(n), i: Fin(n), b: Bool) → BitVec(n) {
 // Pointwise logic
 
 fn BitVec::complement({n: Nat}, self x: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) {
-        Zero => λ x => BitVec::nil(),
-        Succ(_, ih) => λ x => ih(x.tail_bits()).cons_bit(!x.head_bit()),
-    })(x)
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => ih(x.tail_bits()).cons_bit(!x.head_bit()),
+    }
 }
 
 fn BitVec::band({n: Nat}, self x, y: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) → BitVec(k) {
-        Zero => λ x y => BitVec::nil(),
-        Succ(_, ih) => λ x y =>
-            ih(x.tail_bits(), y.tail_bits()).cons_bit(x.head_bit() && y.head_bit()),
-    })(x, y)
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => ih(x.tail_bits(), y.tail_bits()).cons_bit(x.head_bit() && y.head_bit()),
+    }
 }
 
 fn BitVec::bor({n: Nat}, self x, y: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) → BitVec(k) {
-        Zero => λ x y => BitVec::nil(),
-        Succ(_, ih) => λ x y =>
-            ih(x.tail_bits(), y.tail_bits()).cons_bit(x.head_bit() || y.head_bit()),
-    })(x, y)
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => ih(x.tail_bits(), y.tail_bits()).cons_bit(x.head_bit() || y.head_bit()),
+    }
 }
 
 fn BitVec::bxor({n: Nat}, self x, y: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) → BitVec(k) {
-        Zero => λ x y => BitVec::nil(),
-        Succ(_, ih) => λ x y =>
-            ih(x.tail_bits(), y.tail_bits()).cons_bit(x.head_bit().xor(y.head_bit())),
-    })(x, y)
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => ih(x.tail_bits(), y.tail_bits()).cons_bit(x.head_bit().xor(y.head_bit())),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,10 +175,10 @@ fn BitVec::sign_extend({n: Nat}, extra: Nat, self x: BitVec(Succ(n))) → BitVec
 // Unsigned and signed interpretation
 
 fn BitVec::toNat({n: Nat}, self x: BitVec(n)) → Nat {
-    (match n as λ k => BitVec(k) → Nat {
-        Zero => λ x => 0,
-        Succ(_, ih) => λ x => Nat::of_bit(x.head_bit()) + ih(x.tail_bits()).twice(),
-    })(x)
+    match n {
+        Zero => 0,
+        Succ(_, ih) => Nat::of_bit(x.head_bit()) + ih(x.tail_bits()).twice(),
+    }
 }
 
 // Construction from a natural, in work bounded by the WIDTH rather than the
@@ -231,10 +228,10 @@ fn BitVec::ofNat({n: Nat}, x: Nat) → BitVec(n) {
 }
 
 fn BitVec::sign_bit({n: Nat}, self x: BitVec(n)) → Bool {
-    (match n as λ k => BitVec(k) → Bool {
-        Zero => λ x => False,
-        Succ(k) => λ x => x.get(BitVec::last_index(k)),
-    })(x)
+    match n {
+        Zero => False,
+        Succ(k) => x.get(BitVec::last_index(k)),
+    }
 }
 
 fn BitVec::toInt({n: Nat}, self x: BitVec(n)) → Int {
@@ -253,23 +250,23 @@ fn BitVec::signed_lt({n: Nat}, self a, b: BitVec(n)) → Type { a.toInt().Lt(b.t
 // Modular arithmetic and reusable ALU predicates
 
 fn BitVec::increment({n: Nat}, self x: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) {
-        Zero => λ x => BitVec::nil(),
-        Succ(_, ih) => λ x => match x.head_bit() {
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => match x.head_bit() {
             False => x.tail_bits().cons_bit(True),
             True => ih(x.tail_bits()).cons_bit(False),
         },
-    })(x)
+    }
 }
 
 fn BitVec::decrement({n: Nat}, self x: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) {
-        Zero => λ x => BitVec::nil(),
-        Succ(_, ih) => λ x => match x.head_bit() {
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => match x.head_bit() {
             False => ih(x.tail_bits()).cons_bit(True),
             True => x.tail_bits().cons_bit(False),
         },
-    })(x)
+    }
 }
 
 fn BitVec::iterate_increment({n: Nat}, self x: BitVec(n), count: Nat) → BitVec(n) {
@@ -787,10 +784,10 @@ fn BitVec::unsigned_le_bit({n: Nat}, self a, b: BitVec(n)) → Bool { !b.unsigne
 // so a closed comparison costs the width and never the operands' magnitude
 // (docs/native-programs-read-like-programs-design.md §3, S3).
 fn BitVec::eq_bit({n: Nat}, self a, b: BitVec(n)) → Bool {
-    (match n as λ k => BitVec(k) → BitVec(k) → Bool {
-        Zero => λ x y => True,
-        Succ(_, ih) => λ x y => BitVec::bool_eq(x.head_bit(), y.head_bit()) && ih(x.tail_bits(), y.tail_bits()),
-    })(a, b)
+    match n {
+        Zero => True,
+        Succ(_, ih) => BitVec::bool_eq(a.head_bit(), b.head_bit()) && ih(a.tail_bits(), b.tail_bits()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -899,10 +896,10 @@ instance(n: Nat, a, b: BitVec(n)) Decide<BitVec::signed_le(a, b)> {
 // Shifts. Vacated bits are zero except for arithmetic right shift.
 
 fn BitVec::init({n: Nat}, self x: BitVec(Succ(n))) → BitVec(n) {
-    (match n as λ k => BitVec(Succ(k)) → BitVec(k) {
-        Zero => λ x => BitVec::nil(),
-        Succ(_, ih) => λ x => ih(x.tail_bits()).cons_bit(x.head_bit()),
-    })(x)
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => ih(x.tail_bits()).cons_bit(x.head_bit()),
+    }
 }
 
 fn BitVec::snoc({n: Nat}, self x: BitVec(n), b: Bool) → BitVec(Succ(n)) {
@@ -913,24 +910,24 @@ fn BitVec::snoc({n: Nat}, self x: BitVec(n), b: Bool) → BitVec(Succ(n)) {
 }
 
 fn BitVec::shift_left_one({n: Nat}, self x: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) {
-        Zero => λ x => BitVec::nil(),
-        Succ(_) => λ x => x.init().cons_bit(False),
-    })(x)
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_) => x.init().cons_bit(False),
+    }
 }
 
 fn BitVec::shift_right_one({n: Nat}, self x: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) {
-        Zero => λ x => BitVec::nil(),
-        Succ(_) => λ x => x.tail_bits().snoc(False),
-    })(x)
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_) => x.tail_bits().snoc(False),
+    }
 }
 
 fn BitVec::arithmetic_shift_right_one({n: Nat}, self x: BitVec(n)) → BitVec(n) {
-    (match n as λ k => BitVec(k) → BitVec(k) {
-        Zero => λ x => BitVec::nil(),
-        Succ(_) => λ x => x.tail_bits().snoc(x.sign_bit()),
-    })(x)
+    match n {
+        Zero => BitVec::nil(),
+        Succ(_) => x.tail_bits().snoc(x.sign_bit()),
+    }
 }
 
 fn BitVec::shift_left({n: Nat}, self x: BitVec(n), count: Nat) → BitVec(n) {

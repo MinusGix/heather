@@ -302,23 +302,23 @@ theorem Node::folded_value(self node: Node, facts: List<Fact>, values: Valuation
 
 // Only a node that touches no buffer folds.
 theorem Node::folded_pure(self node: Node, facts: List<Fact>, v: Nat, folded: node.folded(facts) = Some(v)): node.pure().IsTrue() {
-    (match node as λ n => n.folded(facts) = Some(v) → n.pure().IsTrue() {
-        Const(_, _, _) => λ _ => trivial,
-        Move(_, _, _) => λ _ => trivial,
-        Add(_, _, _, _) => λ _ => trivial,
-        Sub(_, _, _, _) => λ _ => trivial,
-        BitAnd(_, _, _, _) => λ _ => trivial,
-        BitOr(_, _, _, _) => λ _ => trivial,
-        BitXor(_, _, _, _) => λ _ => trivial,
-        ShiftLeft(_, _, _, _) => λ _ => trivial,
-        LogicalShiftRight(_, _, _, _) => λ _ => trivial,
-        ArithmeticShiftRight(_, _, _, _) => λ _ => trivial,
-        UnsignedLessThan(_, _, _, _) => λ _ => trivial,
-        SignedLessThan(_, _, _, _) => λ _ => trivial,
-        Equal(_, _, _, _) => λ _ => trivial,
-        BufferLoad(_, _, _) => λ none => absurd(none),
-        BufferStore(_, _, _, _) => λ none => absurd(none),
-    })(folded)
+    match node {
+        Const(_, _, _) => trivial,
+        Move(_, _, _) => trivial,
+        Add(_, _, _, _) => trivial,
+        Sub(_, _, _, _) => trivial,
+        BitAnd(_, _, _, _) => trivial,
+        BitOr(_, _, _, _) => trivial,
+        BitXor(_, _, _, _) => trivial,
+        ShiftLeft(_, _, _, _) => trivial,
+        LogicalShiftRight(_, _, _, _) => trivial,
+        ArithmeticShiftRight(_, _, _, _) => trivial,
+        UnsignedLessThan(_, _, _, _) => trivial,
+        SignedLessThan(_, _, _, _) => trivial,
+        Equal(_, _, _, _) => trivial,
+        BufferLoad(_, _, _) => absurd(folded),
+        BufferStore(_, _, _, _) => absurd(folded),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -410,24 +410,24 @@ theorem Node::runs_alike(self node: Node, values, other: Valuation(), buffers: B
 // A node writes only its output.
 theorem Node::run_keeps(self node: Node, values: Valuation(), buffers: Buffers(), w, id: Nat, ne: id ≠ node_output(node).id):
     node.run(values, buffers).values(w, id) = values(w, id) {
-    (match node as λ n => id ≠ node_output(n).id → n.run(values, buffers).values(w, id) = values(w, id) {
-        Const(width, output, value) => λ ne => Valuation::set_other(values, output, Const(width, output, value).value(values), w, id, ne),
-        Move(width, output, source) => λ ne => Valuation::set_other(values, output, Move(width, output, source).value(values), w, id, ne),
-        Add(width, output, left, right) => λ ne => Valuation::set_other(values, output, Add(width, output, left, right).value(values), w, id, ne),
-        Sub(width, output, left, right) => λ ne => Valuation::set_other(values, output, Sub(width, output, left, right).value(values), w, id, ne),
-        BitAnd(width, output, left, right) => λ ne => Valuation::set_other(values, output, BitAnd(width, output, left, right).value(values), w, id, ne),
-        BitOr(width, output, left, right) => λ ne => Valuation::set_other(values, output, BitOr(width, output, left, right).value(values), w, id, ne),
-        BitXor(width, output, left, right) => λ ne => Valuation::set_other(values, output, BitXor(width, output, left, right).value(values), w, id, ne),
-        ShiftLeft(width, output, value, amount) => λ ne => Valuation::set_other(values, output, ShiftLeft(width, output, value, amount).value(values), w, id, ne),
-        LogicalShiftRight(width, output, value, amount) => λ ne => Valuation::set_other(values, output, LogicalShiftRight(width, output, value, amount).value(values), w, id, ne),
-        ArithmeticShiftRight(width, output, value, amount) => λ ne => Valuation::set_other(values, output, ArithmeticShiftRight(width, output, value, amount).value(values), w, id, ne),
-        UnsignedLessThan(width, output, left, right) => λ ne => Valuation::set_other(values, output, UnsignedLessThan(width, output, left, right).value(values), w, id, ne),
-        SignedLessThan(width, output, left, right) => λ ne => Valuation::set_other(values, output, SignedLessThan(width, output, left, right).value(values), w, id, ne),
-        Equal(width, output, left, right) => λ ne => Valuation::set_other(values, output, Equal(width, output, left, right).value(values), w, id, ne),
-        BufferLoad(output, buffer, index) => λ ne => Valuation::set_other(values, output, load_value(buffers, buffer, index, values), w, id, ne),
-        BufferStore(output, buffer, index, value) => λ ne => Valuation::set_other(values, output,
+    match node {
+        Const(width, output, value) => Valuation::set_other(values, output, Const(width, output, value).value(values), w, id, ne),
+        Move(width, output, source) => Valuation::set_other(values, output, Move(width, output, source).value(values), w, id, ne),
+        Add(width, output, left, right) => Valuation::set_other(values, output, Add(width, output, left, right).value(values), w, id, ne),
+        Sub(width, output, left, right) => Valuation::set_other(values, output, Sub(width, output, left, right).value(values), w, id, ne),
+        BitAnd(width, output, left, right) => Valuation::set_other(values, output, BitAnd(width, output, left, right).value(values), w, id, ne),
+        BitOr(width, output, left, right) => Valuation::set_other(values, output, BitOr(width, output, left, right).value(values), w, id, ne),
+        BitXor(width, output, left, right) => Valuation::set_other(values, output, BitXor(width, output, left, right).value(values), w, id, ne),
+        ShiftLeft(width, output, value, amount) => Valuation::set_other(values, output, ShiftLeft(width, output, value, amount).value(values), w, id, ne),
+        LogicalShiftRight(width, output, value, amount) => Valuation::set_other(values, output, LogicalShiftRight(width, output, value, amount).value(values), w, id, ne),
+        ArithmeticShiftRight(width, output, value, amount) => Valuation::set_other(values, output, ArithmeticShiftRight(width, output, value, amount).value(values), w, id, ne),
+        UnsignedLessThan(width, output, left, right) => Valuation::set_other(values, output, UnsignedLessThan(width, output, left, right).value(values), w, id, ne),
+        SignedLessThan(width, output, left, right) => Valuation::set_other(values, output, SignedLessThan(width, output, left, right).value(values), w, id, ne),
+        Equal(width, output, left, right) => Valuation::set_other(values, output, Equal(width, output, left, right).value(values), w, id, ne),
+        BufferLoad(output, buffer, index) => Valuation::set_other(values, output, load_value(buffers, buffer, index, values), w, id, ne),
+        BufferStore(output, buffer, index, value) => Valuation::set_other(values, output,
             load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values), w, id, ne),
-    })(ne)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -541,7 +541,7 @@ theorem List::folded_last(self nodes: List<Node>): (facts: List<Fact>) → (i: N
 // Removing dead nodes
 
 theorem Bool::is_true_or_l(self a: Bool, b: Bool, h: a.IsTrue()): (a || b).IsTrue() {
-    (match a as λ x => x.IsTrue() → (x || b).IsTrue() { True => λ _ => trivial, False => λ no => false_elim(no) })(h)
+    match a { True => trivial, False => false_elim(h) }
 }
 
 theorem Bool::is_true_or_r(self a: Bool, b: Bool, h: b.IsTrue()): (a || b).IsTrue() {

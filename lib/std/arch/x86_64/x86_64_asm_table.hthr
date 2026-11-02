@@ -171,10 +171,10 @@ theorem LabelTable::target_at(self t: LabelTable, q: Prog): (depth, end, k: Nat)
     Succ(t.index_of(Succ(k))).leb(depth).IsTrue() → asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)).IsTrue() →
     asm_target(q, Succ(k)) = t.offset_of(Succ(k)) {
     match q {
-        Start => λ depth end k ok within _ => false_elim((match depth as λ d => t.checked(Start, d, end).IsTrue() → Succ(t.index_of(Succ(k))).leb(d).IsTrue() → logic::False {
-            Zero => λ _ no => no,
-            Succ(_) => λ bad _ => bad,
-        })(ok, within)),
+        Start => λ depth end k ok within _ => false_elim(match depth {
+            Zero => within,
+            Succ(_) => ok,
+        }),
         At(before, name, item) => λ depth => match depth {
             Zero => λ end k no _ _ => false_elim(no),
             Succ(i) => λ end k ok within names => {
@@ -219,10 +219,10 @@ theorem LabelTable::has_named(self t: LabelTable, q: Prog): (depth, end, k: Nat)
     Succ(t.index_of(Succ(k))).leb(depth).IsTrue() → asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)).IsTrue() →
     (!q.lacks(Succ(k))).IsTrue() {
     match q {
-        Start => λ depth end k ok within _ => false_elim((match depth as λ d => t.checked(Start, d, end).IsTrue() → Succ(t.index_of(Succ(k))).leb(d).IsTrue() → logic::False {
-            Zero => λ _ no => no,
-            Succ(_) => λ bad _ => bad,
-        })(ok, within)),
+        Start => λ depth end k ok within _ => false_elim(match depth {
+            Zero => within,
+            Succ(_) => ok,
+        }),
         At(before, name, item) => λ depth => match depth {
             Zero => λ end k no _ _ => false_elim(no),
             Succ(i) => λ end k ok within names => {

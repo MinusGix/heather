@@ -287,10 +287,10 @@ fn Float::exp_total({F: Format}, self x: Float(F), mode: Mode := NearestEven) �
 theorem Float::exp_total_correct({F: Format}, a: Finite(F), mode: Mode):
     RoundsToReal(F, mode, CReal::exp_rat(a.val()), Float::exp_total(Float::Fin(a), mode := mode))
 {
-    match a.mag as λ m => (em: a.mag = m) → RoundsToReal(F, mode, CReal::exp_rat(a.val()), (match m as λ m0 => a.mag = m0 → Float(F) {
-            Zero => λ _ => F.round_exact(mode, 1, False),
-            Succ(k) => λ em0 => F.exp_fin_total(mode, a, Finite::val_ne_zero(a, k, em0)),
-        })(em))
+    match a.mag as λ m => (em: a.mag = m) → RoundsToReal(F, mode, CReal::exp_rat(a.val()), match m {
+            Zero => F.round_exact(mode, 1, False),
+            Succ(k) => F.exp_fin_total(mode, a, Finite::val_ne_zero(a, k, em)),
+        })
     {
         Zero => λ em => {
             let one: RoundsTo(F, mode, Dyadic::rat(1), F.round_exact(mode, 1, False)) = F.round_exact_correct(mode, 1, False);

@@ -139,7 +139,7 @@ theorem names_unique_back(k: Nat): (p: Prog) → p.fresh_names(k).IsTrue() → a
 }
 
 theorem not_true_false(b: Bool, no: (!b).IsTrue()): b = False {
-    (match b as λ c => (!c).IsTrue() → c = False { False => λ _ => refl, True => λ absent => false_elim(absent) })(no)
+    match b { False => refl, True => false_elim(no) }
 }
 
 theorem lacks_label(name, k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) → p.lacks(name).IsTrue() →

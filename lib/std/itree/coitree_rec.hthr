@@ -166,11 +166,10 @@ theorem CoTree::answered_map(D: Events, E: Events, P: (d: D.Cmd) → D.Resp(d) �
     F: Events::sum(D, E).Resp(c) → Type, G: Events::sum(D, E).Resp(c) → Type, f: (a: Events::sum(D, E).Resp(c)) → F(a) → G(a),
     h: CoTree::Answered(D, E, P, c, F)): CoTree::Answered(D, E, P, c, G)
 {
-    (match c as λ c2 => (F2: Events::sum(D, E).Resp(c2) → Type) → (G2: Events::sum(D, E).Resp(c2) → Type) →
-            ((a: Events::sum(D, E).Resp(c2)) → F2(a) → G2(a)) → CoTree::Answered(D, E, P, c2, F2) → CoTree::Answered(D, E, P, c2, G2) {
-        Inl(d) => λ F2 G2 f2 h2 => λ a p => f2(a, h2(a, p)),
-        Inr(_) => λ F2 G2 f2 h2 => trivial,
-    })(F, G, f, h)
+    match c {
+        Inl(d) => λ a p => f(a, h(a, p)),
+        Inr(_) => trivial,
+    }
 }
 
 // `SafeObs(m, o)`: for `m` steps of the pending tree, every return satisfies
@@ -518,19 +517,19 @@ theorem CoTree::rec_total(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Re
 
 // The value an observation known to be a return holds.
 fn Obs::value<R>(E: Events, o: Obs<R>(E), w: R, e: o = ORet(w)) → R {
-    (match o as λ o2 => o2 = ORet(w) → R {
-        ORet(r) => λ _ => r,
-        OTau(_) => λ e2 => absurd(e2),
-        OVis(_, _) => λ e2 => absurd(e2),
-    })(e)
+    match o {
+        ORet(r) => r,
+        OTau(_) => absurd(e),
+        OVis(_, _) => absurd(e),
+    }
 }
 
 theorem Obs::value_eq<R>(E: Events, o: Obs<R>(E), w: R, e: o = ORet(w)): Obs::value(E, o, w, e) = w {
-    (match o as λ o2 => (e2: o2 = ORet(w)) → Obs::value(E, o2, w, e2) = w {
-        ORet(r) => λ e2 => Obs::ret_same(E, ORet(r), r, w, refl, e2, λ x => r = x, refl),
-        OTau(_) => λ e2 => absurd(e2),
-        OVis(_, _) => λ e2 => absurd(e2),
-    })(e)
+    match o {
+        ORet(r) => Obs::ret_same(E, ORet(r), r, w, refl, e, λ x => r = x, refl),
+        OTau(_) => absurd(e),
+        OVis(_, _) => absurd(e),
+    }
 }
 
 // The value a terminating computation returns, read off the tree by running

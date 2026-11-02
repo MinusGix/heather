@@ -807,13 +807,11 @@ theorem certifies_operands_transport(rex, modrm: BitVec(8),
     rm_exact: rm0 = rm, reg_exact: reg0 = reg):
     CertifiesOperands(rex, modrm, result, rm, reg)
 {
-    (match result as λ actual =>
-            CertifiesOperands(rex, modrm, actual, rm0, reg0) →
-            CertifiesOperands(rex, modrm, actual, rm, reg) {
-        None => λ impossible => false_elim(impossible),
-        Some(_) => λ found => And(trans(found.left, rm_exact),
-            trans(found.right, reg_exact)),
-    })(certified)
+    match result {
+        None => false_elim(certified),
+        Some(_) => And(trans(certified.left, rm_exact),
+            trans(certified.right, reg_exact)),
+    }
 }
 
 fn decode_operands_from_fields(rex, modrm: BitVec(8),
@@ -1709,11 +1707,9 @@ theorem rr_encoding_exact(bytes: List<BitVec(8)>, opcode: Nat, rm, reg: Gpr,
     encoding: RrEncoding(bytes, opcode, rm, reg)):
     bytes = rr_bytes(opcode, rm, reg)
 {
-    (match bytes as λ actual => RrEncoding(actual, opcode, rm, reg) →
-            actual = rr_bytes(opcode, rm, reg) {
-        Nil => λ impossible => false_elim(impossible),
-        Cons(rex, tail1) => λ first =>
-            (match tail1 as λ rest =>
+    match bytes {
+        Nil => false_elim(encoding),
+        Cons(rex, tail1) => (match tail1 as λ rest =>
                     RrEncoding(Cons(rex, rest), opcode, rm, reg) →
                     Cons(rex, rest) = rr_bytes(opcode, rm, reg) {
                 Nil => λ impossible => false_elim(impossible),
@@ -1736,8 +1732,8 @@ theorem rr_encoding_exact(bytes: List<BitVec(8)>, opcode: Nat, rm, reg: Gpr,
                                     false_elim(impossible),
                             })(third),
                     })(second),
-            })(first),
-    })(encoding)
+            })(encoding),
+    }
 }
 
 theorem decode_instruction_of_rr_encoding(bytes: List<BitVec(8)>, opcode: Nat,

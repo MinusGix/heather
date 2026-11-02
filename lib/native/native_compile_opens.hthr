@@ -157,15 +157,14 @@ theorem List::before_nul_goes(self xs: List<BitVec(8)>): (i: Nat) → (c: BitVec
         Cons(h, rest) => λ i c got nonzero => (match h.toNat() as λ n => h.toNat() = n →
                 i <= (match n as λ _ => List<BitVec(8)> { Zero => Nil, Succ(_) => Cons(h, rest.before_nul()) }).len() →
                 (match n as λ _ => List<BitVec(8)> { Zero => Nil, Succ(_) => Cons(h, rest.before_nul()) }).nth(i) = Some(c) {
-            Zero => λ zero under => (match i as λ j => Cons(h, rest).nth(j) = Some(c) → j <= 0 → Cons(h, rest).take(0).nth(j) = Some(c) {
-                Zero => λ same _ => false_elim(nonzero(trans(sym(Option::some_inj(h, c, same)), byte_nul_of_nat(h, zero)))),
-                Succ(j) => λ _ over => false_elim(Nat::not_succ_le_zero(j, over)),
-            })(got, under),
-            Succ(_) => λ positive under => (match i as λ j => Cons(h, rest).nth(j) = Some(c) → j <= Succ(rest.before_nul().len()) →
-                    Cons(h, rest.before_nul()).nth(j) = Some(c) {
-                Zero => λ same _ => same,
-                Succ(j) => λ later under2 => rest.before_nul_goes(j, c, later, nonzero, Nat::le_of_succ_succ(j, rest.before_nul().len(), under2)),
-            })(got, under),
+            Zero => λ zero under => match i {
+                Zero => false_elim(nonzero(trans(sym(Option::some_inj(h, c, got)), byte_nul_of_nat(h, zero)))),
+                Succ(j) => false_elim(Nat::not_succ_le_zero(j, under)),
+            },
+            Succ(_) => λ positive under => match i {
+                Zero => got,
+                Succ(j) => rest.before_nul_goes(j, c, got, nonzero, Nat::le_of_succ_succ(j, rest.before_nul().len(), under)),
+            },
         })(refl),
     }
 }

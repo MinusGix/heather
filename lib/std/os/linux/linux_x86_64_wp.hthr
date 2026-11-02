@@ -321,10 +321,10 @@ theorem wp_succ_lt(a, b: Nat, less: Succ(a) < b): a < b { omega }
 
 theorem wp_shorter_answered(passed: Bool, c: LinuxCmd<Nat>, a: c.Resp(), rest, tr: Trace<BitVec(64)>(Events::linux()),
     short: wp_shorter(passed, TAns(c, a, rest), tr)): wp_shorter(True, rest, tr) {
-    (match passed as λ p => wp_shorter(p, TAns(c, a, rest), tr) → wp_shorter(True, rest, tr) {
-        False => λ same => j(same, λ y _ => Trace::len(Events::linux(), rest) < Trace::len(Events::linux(), y), Trace::len(Events::linux(), rest).lt_succ_self()),
-        True => λ less => wp_succ_lt(Trace::len(Events::linux(), rest), Trace::len(Events::linux(), tr), less),
-    })(short)
+    match passed {
+        False => j(short, λ y _ => Trace::len(Events::linux(), rest) < Trace::len(Events::linux(), y), Trace::len(Events::linux(), rest).lt_succ_self()),
+        True => wp_succ_lt(Trace::len(Events::linux(), rest), Trace::len(Events::linux(), tr), short),
+    }
 }
 
 // What the leaves must give: from where each ends, its post holding and the
@@ -698,10 +698,10 @@ theorem Callee::returns_by<M, V>(self k: Callee<M, V>, io: LinuxIo<M>, view: Vie
     λ ret v s rip holds pre t cur trace_of valid back => wp_runs(io, view, sound, origin, fills, labels, contracts, callees, l, n,
         wp_returned(k, ret, v, s), fits, rest, code, reach, honest, cur,
         λ passed t2 w e cur2 done e_holds it2 valid2 short =>
-            (match passed as λ p => wp_returned(k, ret, v, s, p, t2, w, e) → wp_shorter(p, cur2, cur) → RunsAs(io, cur2, e) {
-                False => λ returned same => j(sym(same), λ y _ => RunsAs(io, y, e), back(w, e, returned.left, e_holds, returned.right)),
-                True => λ never _ => false_elim(never),
-            })(done, short),
+            match passed {
+                False => j(sym(short), λ y _ => RunsAs(io, y, e), back(w, e, done.left, e_holds, done.right)),
+                True => false_elim(done),
+            },
         t, v, s, rip, holds, trace_of, valid, body(ret, v, s, holds, pre, t))
 }
 

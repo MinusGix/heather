@@ -934,10 +934,8 @@ theorem Binade::exp_log_at(a, b: Nat, c: b.width() <= a.width() ∨ ¬(b.width()
         * CReal::ofRat(Rat::ofInt(OfNat(b))) ≈ CReal::ofRat(Rat::ofInt(OfNat(a)))
 {
     let L = CReal::ln2();
-    (match c as λ c => (h: (Binade::at(a, b, c)).Balanced()) →
-        CReal::exp(((Binade::at(a, b, c)).series(h)).real() + CReal::ofRat(Rat::ofInt((Binade::at(a, b, c)).e)) * L)
-            * CReal::ofRat(Rat::ofInt(OfNat(b))) ≈ CReal::ofRat(Rat::ofInt(OfNat(a))) {
-        Inl(_) => λ h => {
+    match c {
+        Inl(_) => {
             let d = a.width() - b.width();
             let P = Nat::pow(2, d);
             let hl: (a < b * P + b * P) = h.left;
@@ -952,7 +950,7 @@ theorem Binade::exp_log_at(a, b: Nat, c: b.width() <= a.width() ∨ ¬(b.width()
             Binade::exp_log_alg1(CReal::exp(s.real()), CReal::exp(s.real() + CReal::ofRat(Rat::ofInt(OfNat(d))) * L),
                 CReal::ofRat(Rat::ofInt(OfNat(P))), CReal::ofRat(Rat::ofInt(OfNat(b))), CReal::ofRat(Rat::ofInt(OfNat(a))), e1b, x2)
         },
-        Inr(_) => λ h => {
+        Inr(_) => {
             let d = b.width() - a.width();
             let P = Nat::pow(2, d);
             let hl: (a * P < b + b) = h.left;
@@ -971,7 +969,7 @@ theorem Binade::exp_log_at(a, b: Nat, c: b.width() <= a.width() ∨ ¬(b.width()
             Binade::exp_log_alg2(CReal::exp(s.real()), CReal::exp(s.real() + CReal::ofRat(Rat::ofInt(-(d.int()))) * L),
                 CReal::ofRat(Rat::ofInt(OfNat(P))), CReal::exp(-y), CReal::ofRat(Rat::ofInt(OfNat(b))), CReal::ofRat(Rat::ofInt(OfNat(a))), e1b, x2, inv)
         },
-    })(h)
+    }
 }
 
 theorem CReal::exp_log_frac(a, b: Nat, pa: 0 < a, pb: 0 < b):
@@ -983,10 +981,10 @@ theorem CReal::exp_log_frac(a, b: Nat, pa: 0 < a, pb: 0 < b):
 theorem CReal::exp_log_alg(E, Q, D, N, I: CReal, h: E * D ≈ N, hq: Q * D ≈ N, hi: D * I ≈ 1): E ≈ Q { ring(h, hq, hi) }
 
 theorem CReal::natAbs_int_of_pos(v: Int, h: 0 < v): v.natAbs().int() = v {
-    (match v as λ w => 0 < w → w.natAbs().int() = w {
-        OfNat(_) => λ _ => refl,
-        NegSucc(_) => λ hn => false_elim(hn),
-    })(h)
+    match v {
+        OfNat(_) => refl,
+        NegSucc(_) => false_elim(h),
+    }
 }
 
 // exp(log q) = q for every positive rational.

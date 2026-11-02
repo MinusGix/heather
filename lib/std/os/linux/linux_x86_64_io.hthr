@@ -620,11 +620,11 @@ fn LinuxRuns<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> �
 theorem linux_runs_after_linux_steps<M>(io: LinuxIo<M>, events: List<LinuxEvent>, before, middle: MachineState<M>,
     steps: LinuxSteps(io, before, middle), runs: LinuxRuns(io, events, middle)):
     LinuxRuns(io, events, before) {
-    (match events as λ list => LinuxRuns(io, list, middle) → LinuxRuns(io, list, before) {
-        Nil => λ never => never,
-        Cons(_, _) => λ found => Exists(found.witness,
-            ⟨linux_steps_trans(io, before, middle, found.witness, steps, found.proof.left), found.proof.right⟩),
-    })(runs)
+    match events {
+        Nil => runs,
+        Cons(_, _) => Exists(runs.witness,
+            ⟨linux_steps_trans(io, before, middle, runs.witness, steps, runs.proof.left), runs.proof.right⟩),
+    }
 }
 
 theorem linux_runs_after_steps<M>(io: LinuxIo<M>, events: List<LinuxEvent>, before, middle: MachineState<M>,

@@ -14,17 +14,17 @@ import nat;
 import vector;
 
 fn BitVec::bytes_le(k: Nat, self w: BitVec(8 * k)) → [BitVec(8); k] {
-    (match k as λ j => BitVec(8 * j) → [BitVec(8); j] {
-        Zero => λ w => [],
-        Succ(j, ih) => λ w => cons(w.take_low(8, 8 * j), ih(w.drop_low(8, 8 * j))),
-    })(w)
+    match k {
+        Zero => [],
+        Succ(j, ih) => cons(w.take_low(8, 8 * j), ih(w.drop_low(8, 8 * j))),
+    }
 }
 
 fn BitVec::of_bytes_le({k: Nat}, bytes: [BitVec(8); k]) → BitVec(8 * k) {
-    (match k as λ j => [BitVec(8); j] → BitVec(8 * j) {
-        Zero => λ bytes => BitVec::nil(),
-        Succ(_, ih) => λ bytes => head(bytes).concat(ih(tail(bytes))),
-    })(bytes)
+    match k {
+        Zero => BitVec::nil(),
+        Succ(_, ih) => head(bytes).concat(ih(tail(bytes))),
+    }
 }
 
 fn BitVec::bytes_be(k: Nat, self w: BitVec(8 * k)) → [BitVec(8); k] { reverse(w.bytes_le(k)) }

@@ -1085,35 +1085,32 @@ theorem List::procedures_code_of(self procs: List<Procedure>, first: Procedure, 
 theorem Stmt::emits_then_of(self s: Stmt, is: s.is_then().IsTrue(), p: Prog, layout: Layout, out: List<Nat>, known: List<Fact>, names: Nat, c: Compiled,
     left: s.left().emits(p, layout, s.right().live_with(layout.homes, s.left().carried(s.right(), layout.homes, out), out), s.left().first_known(known), names) = Some(c)):
     s.emits(p, layout, out, known, names) = s.right().emits(c.prog, layout, out, s.left().carried(s.right(), layout.homes, out), c.names) {
-    (match s as λ t => t.is_then().IsTrue() →
-            t.left().emits(p, layout, t.right().live_with(layout.homes, t.left().carried(t.right(), layout.homes, out), out), t.left().first_known(known), names) = Some(c) →
-            t.emits(p, layout, out, known, names) = t.right().emits(c.prog, layout, out, t.left().carried(t.right(), layout.homes, out), c.names) {
-        Then(first, rest) => λ _ h => j(sym(h), λ o _ => (match o as λ _ => Option<Compiled> {
+    match s {
+        Then(first, rest) => j(sym(left), λ o _ => (match o as λ _ => Option<Compiled> {
                 None => None,
                 Some(d) => rest.emits(d.prog, layout, out, first.carried(rest, layout.homes, out), d.names),
             }) = rest.emits(c.prog, layout, out, first.carried(rest, layout.homes, out), c.names), refl),
-        Compute(_) => λ no _ => false_elim(no),
-        Invoke(_) => λ no _ => false_elim(no),
-        Branch(_, _, _) => λ no _ => false_elim(no),
-        Repeat(_, _) => λ no _ => false_elim(no),
-        Exit(_) => λ no _ => false_elim(no),
-        Arg(_, _, _) => λ no _ => false_elim(no),
-        Perform(_, _, _) => λ no _ => false_elim(no),
-    })(is, left)
+        Compute(_) => false_elim(is),
+        Invoke(_) => false_elim(is),
+        Branch(_, _, _) => false_elim(is),
+        Repeat(_, _) => false_elim(is),
+        Exit(_) => false_elim(is),
+        Arg(_, _, _) => false_elim(is),
+        Perform(_, _, _) => false_elim(is),
+    }
 }
 
 theorem Stmt::emits_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), p: Prog, layout: Layout, fits: layout.word_fits(s.word()).IsTrue(), out: List<Nat>, known: List<Fact>, names: Nat,
     b: Compiled, body: s.left().emits(p.label(Succ(names)), layout, s.loop_out(layout.homes, out), Nil, Succ(Succ(names))) = Some(b)):
     s.emits(p, layout, out, known, names) = Some(Compiled(then(b.prog.tests(layout, s.word(), Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)) {
-    (match s as λ t => t.is_repeat().IsTrue() → layout.word_fits(t.word()).IsTrue() → t.left().emits(p.label(Succ(names)), layout, t.loop_out(layout.homes, out), Nil, Succ(Succ(names))) = Some(b) →
-            t.emits(p, layout, out, known, names) = Some(Compiled(then(b.prog.tests(layout, t.word(), Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)) {
-        Repeat(inner, again) => λ _ f h => {
+    match s {
+        Repeat(inner, again) => {
             let closed = Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names));
-            let ran = j(sym(h), λ o _ => (match o as λ _ => Option<Compiled> {
+            let ran = j(sym(body), λ o _ => (match o as λ _ => Option<Compiled> {
                     None => None,
                     Some(d) => Some(Compiled(then(d.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), d.names)),
                 }) = closed, refl);
-            j(sym(eq_true_of_is_true(layout.word_fits(again), f)), λ w _ => (match w as λ _ => Option<Compiled> {
+            j(sym(eq_true_of_is_true(layout.word_fits(again), fits)), λ w _ => (match w as λ _ => Option<Compiled> {
                     False => None,
                     True => match inner.emits(p.label(Succ(names)), layout, Repeat(inner, again).loop_out(layout.homes, out), Nil, Succ(Succ(names))) {
                         None => None,
@@ -1121,38 +1118,35 @@ theorem Stmt::emits_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), p: Prog,
                     },
                 }) = closed, ran)
         },
-        Compute(_) => λ no _ _ => false_elim(no),
-        Invoke(_) => λ no _ _ => false_elim(no),
-        Then(_, _) => λ no _ _ => false_elim(no),
-        Branch(_, _, _) => λ no _ _ => false_elim(no),
-        Exit(_) => λ no _ _ => false_elim(no),
-        Arg(_, _, _) => λ no _ _ => false_elim(no),
-        Perform(_, _, _) => λ no _ _ => false_elim(no),
-    })(is, fits, body)
+        Compute(_) => false_elim(is),
+        Invoke(_) => false_elim(is),
+        Then(_, _) => false_elim(is),
+        Branch(_, _, _) => false_elim(is),
+        Exit(_) => false_elim(is),
+        Arg(_, _, _) => false_elim(is),
+        Perform(_, _, _) => false_elim(is),
+    }
 }
 
 theorem Stmt::emits_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), p: Prog, layout: Layout, fits: layout.word_fits(s.word()).IsTrue(), out: List<Nat>, known: List<Fact>, names: Nat,
     y, n: Compiled, yes: s.left().emits(p.tests(layout, s.word(), Succ(names)), layout, out, Nil, Succ(Succ(names))) = Some(y),
     no: s.right().emits(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, y.names) = Some(n)):
     s.emits(p, layout, out, known, names) = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)) {
-    (match s as λ t => t.is_branch().IsTrue() → layout.word_fits(t.word()).IsTrue() →
-            t.left().emits(p.tests(layout, t.word(), Succ(names)), layout, out, Nil, Succ(Succ(names))) = Some(y) →
-            t.right().emits(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, y.names) = Some(n) →
-            t.emits(p, layout, out, known, names) = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)) {
-        Branch(condition, first, second) => λ _ f hy hn => {
+    match s {
+        Branch(condition, first, second) => {
             let joined = Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names));
-            let second_ran = j(sym(hn), λ o _ => (match o as λ _ => Option<Compiled> {
+            let second_ran = j(sym(no), λ o _ => (match o as λ _ => Option<Compiled> {
                     None => None,
                     Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
                 }) = joined, refl);
-            let first_ran = j(sym(hy), λ o _ => (match o as λ _ => Option<Compiled> {
+            let first_ran = j(sym(yes), λ o _ => (match o as λ _ => Option<Compiled> {
                     None => None,
                     Some(d) => match second.emits(d.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, d.names) {
                         None => None,
                         Some(e) => Some(Compiled(e.prog.join_label(Succ(Succ(names))), e.names)),
                     },
                 }) = joined, second_ran);
-            j(sym(eq_true_of_is_true(layout.word_fits(condition), f)), λ w _ => (match w as λ _ => Option<Compiled> {
+            j(sym(eq_true_of_is_true(layout.word_fits(condition), fits)), λ w _ => (match w as λ _ => Option<Compiled> {
                     False => None,
                     True => match first.emits(p.tests(layout, condition, Succ(names)), layout, out, Nil, Succ(Succ(names))) {
                         None => None,
@@ -1163,14 +1157,14 @@ theorem Stmt::emits_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), p: Prog,
                     },
                 }) = joined, first_ran)
         },
-        Compute(_) => λ no _ _ _ => false_elim(no),
-        Invoke(_) => λ no _ _ _ => false_elim(no),
-        Then(_, _) => λ no _ _ _ => false_elim(no),
-        Repeat(_, _) => λ no _ _ _ => false_elim(no),
-        Exit(_) => λ no _ _ _ => false_elim(no),
-        Arg(_, _, _) => λ no _ _ _ => false_elim(no),
-        Perform(_, _, _) => λ no _ _ _ => false_elim(no),
-    })(is, fits, yes, no)
+        Compute(_) => false_elim(is),
+        Invoke(_) => false_elim(is),
+        Then(_, _) => false_elim(is),
+        Repeat(_, _) => false_elim(is),
+        Exit(_) => false_elim(is),
+        Arg(_, _, _) => false_elim(is),
+        Perform(_, _, _) => false_elim(is),
+    }
 }
 
 // The allocation's check from its parts', for the same reader: what
@@ -1179,55 +1173,53 @@ theorem Stmt::emits_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), p: Prog,
 // a time too.
 theorem Stmt::checked_then_of(self s: Stmt, is: s.is_then().IsTrue(), homes: Homes, out, mid, l: List<Nat>,
     rest: s.right().checked(homes, out) = Some(mid), first: s.left().checked(homes, mid) = Some(l)): s.checked(homes, out) = Some(l) {
-    (match s as λ t => t.is_then().IsTrue() → t.right().checked(homes, out) = Some(mid) → t.left().checked(homes, mid) = Some(l) → t.checked(homes, out) = Some(l) {
-        Then(f, r) => λ _ hr hf => j(sym(hr), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(m) => f.checked(homes, m) }) = Some(l), hf),
-        Compute(_) => λ no _ _ => false_elim(no),
-        Invoke(_) => λ no _ _ => false_elim(no),
-        Branch(_, _, _) => λ no _ _ => false_elim(no),
-        Repeat(_, _) => λ no _ _ => false_elim(no),
-        Exit(_) => λ no _ _ => false_elim(no),
-        Arg(_, _, _) => λ no _ _ => false_elim(no),
-        Perform(_, _, _) => λ no _ _ => false_elim(no),
-    })(is, rest, first)
+    match s {
+        Then(f, r) => j(sym(rest), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(m) => f.checked(homes, m) }) = Some(l), first),
+        Compute(_) => false_elim(is),
+        Invoke(_) => false_elim(is),
+        Branch(_, _, _) => false_elim(is),
+        Repeat(_, _) => false_elim(is),
+        Exit(_) => false_elim(is),
+        Arg(_, _, _) => false_elim(is),
+        Perform(_, _, _) => false_elim(is),
+    }
 }
 
 theorem Stmt::checked_branch_of(self s: Stmt, is: s.is_branch().IsTrue(), homes: Homes, out, y, n: List<Nat>,
     yes: s.left().checked(homes, out) = Some(y), no: s.right().checked(homes, out) = Some(n)): s.checked(homes, out) = Some(Cons(s.word(), y.union(n))) {
-    (match s as λ t => t.is_branch().IsTrue() → t.left().checked(homes, out) = Some(y) → t.right().checked(homes, out) = Some(n) →
-            t.checked(homes, out) = Some(Cons(t.word(), y.union(n))) {
-        Branch(c, ys, ns) => λ _ hy hn => j(sym(hy), λ o _ => (match o as λ _ => Option<List<Nat>> {
+    match s {
+        Branch(c, ys, ns) => j(sym(yes), λ o _ => (match o as λ _ => Option<List<Nat>> {
                 None => None,
                 Some(a) => match ns.checked(homes, out) { None => None, Some(b) => Some(Cons(c, a.union(b))) },
             }) = Some(Cons(c, y.union(n))),
-            j(sym(hn), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(b) => Some(Cons(c, y.union(b))) }) = Some(Cons(c, y.union(n))), refl)),
-        Compute(_) => λ no _ _ => false_elim(no),
-        Invoke(_) => λ no _ _ => false_elim(no),
-        Then(_, _) => λ no _ _ => false_elim(no),
-        Repeat(_, _) => λ no _ _ => false_elim(no),
-        Exit(_) => λ no _ _ => false_elim(no),
-        Arg(_, _, _) => λ no _ _ => false_elim(no),
-        Perform(_, _, _) => λ no _ _ => false_elim(no),
-    })(is, yes, no)
+            j(sym(no), λ o _ => (match o as λ _ => Option<List<Nat>> { None => None, Some(b) => Some(Cons(c, y.union(b))) }) = Some(Cons(c, y.union(n))), refl)),
+        Compute(_) => false_elim(is),
+        Invoke(_) => false_elim(is),
+        Then(_, _) => false_elim(is),
+        Repeat(_, _) => false_elim(is),
+        Exit(_) => false_elim(is),
+        Arg(_, _, _) => false_elim(is),
+        Perform(_, _, _) => false_elim(is),
+    }
 }
 
 theorem Stmt::checked_repeat_of(self s: Stmt, is: s.is_repeat().IsTrue(), homes: Homes, out, b: List<Nat>,
     body: s.left().checked(homes, loop_after(s.word(), homes.loop_set(s.word()), out)) = Some(b), within: b.within(homes.loop_set(s.word())) = True):
     s.checked(homes, out) = Some(homes.loop_set(s.word())) {
-    (match s as λ t => t.is_repeat().IsTrue() → t.left().checked(homes, loop_after(t.word(), homes.loop_set(t.word()), out)) = Some(b) →
-            b.within(homes.loop_set(t.word())) = True → t.checked(homes, out) = Some(homes.loop_set(t.word())) {
-        Repeat(bd, again) => λ _ hb hw => j(sym(hb), λ o _ => (match o as λ _ => Option<List<Nat>> {
+    match s {
+        Repeat(bd, again) => j(sym(body), λ o _ => (match o as λ _ => Option<List<Nat>> {
                 None => None,
                 Some(x) => match x.within(homes.loop_set(again)) { False => None, True => Some(homes.loop_set(again)) },
             }) = Some(homes.loop_set(again)),
-            j(sym(hw), λ w _ => (match w as λ _ => Option<List<Nat>> { False => None, True => Some(homes.loop_set(again)) }) = Some(homes.loop_set(again)), refl)),
-        Compute(_) => λ no _ _ => false_elim(no),
-        Invoke(_) => λ no _ _ => false_elim(no),
-        Then(_, _) => λ no _ _ => false_elim(no),
-        Branch(_, _, _) => λ no _ _ => false_elim(no),
-        Exit(_) => λ no _ _ => false_elim(no),
-        Arg(_, _, _) => λ no _ _ => false_elim(no),
-        Perform(_, _, _) => λ no _ _ => false_elim(no),
-    })(is, body, within)
+            j(sym(within), λ w _ => (match w as λ _ => Option<List<Nat>> { False => None, True => Some(homes.loop_set(again)) }) = Some(homes.loop_set(again)), refl)),
+        Compute(_) => false_elim(is),
+        Invoke(_) => false_elim(is),
+        Then(_, _) => false_elim(is),
+        Branch(_, _, _) => false_elim(is),
+        Exit(_) => false_elim(is),
+        Arg(_, _, _) => false_elim(is),
+        Perform(_, _, _) => false_elim(is),
+    }
 }
 
 theorem Source::allocation_of(self src: Source, homes: Homes, l: List<Nat>, fits: homes.fits() = True, checked: src.main.checked(homes, []) = Some(l),
