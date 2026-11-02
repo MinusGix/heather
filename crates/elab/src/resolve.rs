@@ -136,7 +136,7 @@ pub(crate) struct PositivityRun {
 /// can be undone: its dependency edges, its checking notes, and (an `omega`
 /// inside `positivity`) its named atom lists, warnings and Omega reports.
 pub(crate) struct SearchMark {
-    dependencies: std::collections::BTreeSet<String>,
+    dependencies: usize,
     notes: usize,
     goals: usize,
     warnings: usize,
@@ -147,7 +147,7 @@ pub(crate) struct SearchMark {
 impl SearchMark {
     pub(crate) fn of(e: &Elaborator) -> Self {
         SearchMark {
-            dependencies: e.attempt.direct_dependencies.borrow().clone(),
+            dependencies: e.attempt.direct_dependencies.borrow().mark(),
             notes: e.attempt.check_notes.borrow().len(),
             goals: e.attempt.goal_arena.mark(),
             warnings: e.pass.warnings.borrow().len(),
@@ -157,7 +157,7 @@ impl SearchMark {
     }
 
     pub(crate) fn rollback(self, e: &Elaborator) {
-        *e.attempt.direct_dependencies.borrow_mut() = self.dependencies;
+        e.attempt.direct_dependencies.borrow_mut().rollback(self.dependencies);
         e.attempt.check_notes.borrow_mut().truncate(self.notes);
         e.attempt.goal_arena.rollback(self.goals);
         e.pass.warnings.borrow_mut().truncate(self.warnings);
@@ -452,7 +452,7 @@ impl Elaborator {
             // Candidate construction elaborates a real global reference, but
             // a rejected candidate is search state rather than part of the
             // winning term. Only the accepted branch may publish its edges.
-            let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
+            let dependency_mark = self.attempt.direct_dependencies.borrow().mark();
             // Likewise its checking mismatches: a candidate built at the goal
             // records one wherever it is not of the goal type, and that is
             // the search answering "no", not a site the gate could later
@@ -509,7 +509,7 @@ impl Elaborator {
                 }
                 Err(e) => tr.push(line(depth + 1, "rejected", e.message())),
             }
-            *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
+            self.attempt.direct_dependencies.borrow_mut().rollback(dependency_mark);
             self.attempt.check_notes.borrow_mut().truncate(notes_mark);
         }
         self.join_parents(cx, &ind, &ckey, spelled, goal, lvl, prefer, span, depth, tr)

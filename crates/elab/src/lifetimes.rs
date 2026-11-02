@@ -5,14 +5,24 @@
 //! (`docs/implicit-state-machines-survey.md` §1), and each class has exactly
 //! one rule for what a clone gets and one for what a rollback does:
 //!
-//! | Group | Clone | Rollback |
-//! |-------|-------|----------|
-//! | [`CommittedWorld`] (`committed`) | shared, copy on write | `SessionCheckpoint::restore` |
-//! | [`ModulePass`] (`pass`) | field by field, in [`ModulePass`]'s own `Clone` | [`ModulePass::roll_back_to`], field by field |
-//! | `DeclAttempt` (`attempt`) | deep copy | `DeclAttempt::{prepare, finish}` |
-//! | [`DynamicScope`] (`scope`) | copied: a clone inherits the extent it was taken in | the snapshot's; a site restores the *outer* value with [`Elaborator::scoped`] |
-//! | [`Policy`] (`policy`) | copied, collectors shared | the snapshot's (a declaration never changes it) |
-//! | [`Memos`] (`memos`) | copied | the snapshot's; [`Memos::clear_positional`] on every Ψ rollback |
+//! | Group | Clone | Rollback | Probe ([`Elaborator::probe`]) |
+//! |-------|-------|----------|-------|
+//! | [`CommittedWorld`] (`committed`) | shared, copy on write | `SessionCheckpoint::restore` | untouched: no cell, and a probe holds `&self` |
+//! | [`ModulePass`] (`pass`) | field by field, in [`ModulePass`]'s own `Clone` | [`ModulePass::roll_back_to`], field by field | [`ModulePass::probe_mark`]: logs cut back, field by field |
+//! | `DeclAttempt` (`attempt`) | deep copy | `DeclAttempt::{prepare, finish}` | `DeclAttempt::{mark, restore}`: logs cut back, cells restored, field by field |
+//! | [`DynamicScope`] (`scope`) | copied: a clone inherits the extent it was taken in | the snapshot's; a site restores the *outer* value with [`Elaborator::scoped`] | [`DynamicScope::cells`]: every cell put back |
+//! | [`Policy`] (`policy`) | copied, collectors shared | the snapshot's (a declaration never changes it) | untouched (only `&mut` changes it) |
+//! | [`Memos`] (`memos`) | copied | the snapshot's; [`Memos::clear_positional`] on every Ψ rollback | kept: a function of committed state, which a probe cannot change |
+//!
+//! A *probe* is speculative elaboration through `&self` whose effects are all
+//! discarded: does this operand infer, what type does it have. It used to run
+//! on `self.clone()`, which deep-copied the attempt's logs — a fifth of cold
+//! elaboration on operator-heavy files
+//! (`issues/elab-probe-clone-copies-attempt.md`). Since a probe holds only
+//! `&self`, everything it can change sits behind a cell, so it runs in place
+//! and is then cut back: O(fields), not O(what the attempt has recorded).
+//! The probe column is that rule per group; the groups' `mark`s destructure
+//! every field, so a new cell has to pick it.
 //!
 //! [`Elaborator::restore_from_clone`] is "restore every group but the module
 //! pass, and let the module pass decide field by field", and it destructures
@@ -166,6 +176,66 @@ impl ModulePass {
     }
 }
 
+/// Where a probe started in the module pass: the lengths of the logs a
+/// `&self` path appends to ([`ModulePass::probe_mark`]).
+pub(crate) struct PassMark {
+    warnings: usize,
+    omega_reports: usize,
+    omega_failure_reports: usize,
+    pending_derived: usize,
+    journal: Option<(usize, usize)>,
+}
+
+impl ModulePass {
+    /// Mark the pass for a probe. Spelled field by field: a probe holds
+    /// `&self`, so only a cell can change, and each cell either is a log cut
+    /// back by [`Self::probe_restore`] or is written only on `&mut` paths.
+    pub(crate) fn probe_mark(&self) -> PassMark {
+        let ModulePass {
+            // `submit` and `join` take `&mut`.
+            kernel_pool: _,
+            // Consulted only at the gate sites, which take `&mut`.
+            kernel_replay: _,
+            module_journal,
+            // A plain field.
+            slice_plan: _,
+            // The item loop's, set on `&mut` paths.
+            container_decls: _,
+            container_at: _,
+            warnings,
+            omega_reports,
+            omega_failure_reports,
+            pending_derived,
+            // Written by the `decreases` walk, on `&mut` paths.
+            unfold_refusals: _,
+            // A plain field.
+            export_proofs: _,
+        } = self;
+        PassMark {
+            warnings: warnings.borrow().len(),
+            omega_reports: omega_reports.borrow().len(),
+            omega_failure_reports: omega_failure_reports.borrow().len(),
+            pending_derived: pending_derived.borrow().len(),
+            journal: module_journal.borrow().as_ref().map(|j| (j.events.len(), j.items.len())),
+        }
+    }
+
+    /// Cut the pass's logs back to `mark`. A clone probe dropped all of
+    /// these with the clone, the omega failure reports included (a
+    /// declaration rollback keeps those; a probe's search is nobody's
+    /// diagnostic).
+    pub(crate) fn probe_restore(&self, mark: PassMark) {
+        self.warnings.borrow_mut().truncate(mark.warnings);
+        self.omega_reports.borrow_mut().truncate(mark.omega_reports);
+        self.omega_failure_reports.borrow_mut().truncate(mark.omega_failure_reports);
+        self.pending_derived.borrow_mut().truncate(mark.pending_derived);
+        if let (Some((events, items)), Some(journal)) = (mark.journal, self.module_journal.borrow_mut().as_mut()) {
+            journal.events.truncate(events);
+            journal.items.truncate(items);
+        }
+    }
+}
+
 /// What a clone of a module pass gets. Spelled field by field so that a new
 /// field has to choose.
 impl Clone for ModulePass {
@@ -302,6 +372,88 @@ pub(crate) struct DynamicScope {
     pub(crate) ring_depth: Cell<usize>,
 }
 
+/// The values of [`DynamicScope`]'s cells, for a probe to put back
+/// ([`DynamicScope::cells`]). The plain fields need nothing: a probe holds
+/// `&self`.
+pub(crate) struct ScopeCells {
+    misplaced_recursion: Option<(String, usize, String)>,
+    resolution_scopes: Vec<Rc<names::Scope>>,
+    generated_depth: usize,
+    quote_depth: u32,
+    meta_pushed: Vec<GlobalBinding>,
+    expr_depth: usize,
+    resolve_depth: usize,
+    positivity: Option<resolve::PositivityRun>,
+    rule_citation: Option<String>,
+    by_quoting: Option<Rc<host::Quoting>>,
+    host_leaves: Option<Rc<RefCell<host::Leaves>>>,
+    omega_depth: usize,
+    omega_settled_guards: Vec<Vec<String>>,
+    ring_depth: usize,
+}
+
+impl DynamicScope {
+    /// Every cell's value, for [`Self::put_cells`]. Each is set for an
+    /// extent and put back when it ends, so a probe that returns normally
+    /// leaves them as it found them; this is for the paths that do not (an
+    /// early `?` between a `set` and its reset), which a clone used to
+    /// swallow. The vectors are stacks a few entries deep.
+    pub(crate) fn cells(&self) -> ScopeCells {
+        let DynamicScope {
+            member_owner: _,
+            misplaced_recursion,
+            instance_scope: _,
+            impl_provenance: _,
+            resolution_scopes,
+            generated_depth,
+            quote_depth,
+            meta_pushed,
+            expr_depth,
+            resolve_depth,
+            positivity,
+            rule_citation,
+            by_quoting,
+            host_leaves,
+            omega_depth,
+            omega_settled_guards,
+            ring_depth,
+        } = self;
+        ScopeCells {
+            misplaced_recursion: misplaced_recursion.borrow().clone(),
+            resolution_scopes: resolution_scopes.borrow().clone(),
+            generated_depth: generated_depth.get(),
+            quote_depth: quote_depth.get(),
+            meta_pushed: meta_pushed.borrow().clone(),
+            expr_depth: expr_depth.get(),
+            resolve_depth: resolve_depth.get(),
+            positivity: positivity.borrow().clone(),
+            rule_citation: rule_citation.borrow().clone(),
+            by_quoting: by_quoting.borrow().clone(),
+            host_leaves: host_leaves.borrow().clone(),
+            omega_depth: omega_depth.get(),
+            omega_settled_guards: omega_settled_guards.borrow().clone(),
+            ring_depth: ring_depth.get(),
+        }
+    }
+
+    pub(crate) fn put_cells(&self, cells: ScopeCells) {
+        *self.misplaced_recursion.borrow_mut() = cells.misplaced_recursion;
+        *self.resolution_scopes.borrow_mut() = cells.resolution_scopes;
+        self.generated_depth.set(cells.generated_depth);
+        self.quote_depth.set(cells.quote_depth);
+        *self.meta_pushed.borrow_mut() = cells.meta_pushed;
+        self.expr_depth.set(cells.expr_depth);
+        self.resolve_depth.set(cells.resolve_depth);
+        *self.positivity.borrow_mut() = cells.positivity;
+        *self.rule_citation.borrow_mut() = cells.rule_citation;
+        *self.by_quoting.borrow_mut() = cells.by_quoting;
+        *self.host_leaves.borrow_mut() = cells.host_leaves;
+        self.omega_depth.set(cells.omega_depth);
+        *self.omega_settled_guards.borrow_mut() = cells.omega_settled_guards;
+        self.ring_depth.set(cells.ring_depth);
+    }
+}
+
 /// Configuration a driver sets once, before or between modules: the gate
 /// oracle, the fuel, the lint profile, opt-in collectors. A declaration
 /// never changes it, so a rollback has nothing to undo; collectors are
@@ -434,7 +586,54 @@ impl<T> ScopeCell for RefCell<T> {
     }
 }
 
+/// Where a probe started: one mark per group a probe can change
+/// ([`Elaborator::probe`]).
+struct ProbeMark {
+    pass: PassMark,
+    attempt: attempt::AttemptMark,
+    scope: ScopeCells,
+}
+
+/// Puts the elaborator back when the probe ends, by return or by unwind.
+struct ProbeGuard<'a> {
+    elab: &'a Elaborator,
+    mark: Option<ProbeMark>,
+}
+
+impl Drop for ProbeGuard<'_> {
+    fn drop(&mut self) {
+        let ProbeMark { pass, attempt, scope } = self.mark.take().expect("restored once");
+        // Innermost first is all a nested probe needs, and a guard's scope
+        // gives it.
+        self.elab.scope.put_cells(scope);
+        self.elab.attempt.restore(attempt);
+        self.elab.pass.probe_restore(pass);
+    }
+}
+
 impl Elaborator {
+    /// Run `body` — speculative elaboration through `&self` — and then
+    /// take back everything it changed: the goals it allocated or solved,
+    /// the notes, dependencies and warnings it recorded, the cells it left
+    /// set. What `self.clone()` and dropping the clone gave, at O(fields)
+    /// instead of O(everything the attempt has recorded) (the module doc's
+    /// probe column; `issues/elab-probe-clone-copies-attempt.md`).
+    ///
+    /// Read whatever the probe's answer depends on *inside* `body`: a type
+    /// it inferred may mention a goal the restore frees. The caches in
+    /// [`Memos`] keep what the probe computed, as they are not semantic.
+    pub(crate) fn probe<Out>(&self, body: impl FnOnce() -> Out) -> Out {
+        let _guard = ProbeGuard {
+            elab: self,
+            mark: Some(ProbeMark {
+                pass: self.pass.probe_mark(),
+                attempt: self.attempt.mark(),
+                scope: self.scope.cells(),
+            }),
+        };
+        body()
+    }
+
     /// Run `body` with one [`DynamicScope`] field set to `value`, then put
     /// the *outer* value back, error or not (`body`'s result is bound before
     /// the restore). `field` names the field: `|s| &mut s.member_owner`.

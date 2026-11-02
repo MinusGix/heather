@@ -143,6 +143,24 @@ pub(super) struct GoalArena {
     /// slot's context, type and body again (a long `let` chain of `linarith`
     /// steps paid that per step, `issues/library-gate-module-cold-rail.md`).
     slot_bindings: RefCell<Vec<GlobalBinding>>,
+    /// While a [`GoalCheckpoint`] is open: each in-place change to a goal
+    /// that already existed (a solution, a statement spelling), with what it
+    /// overwrote, so [`Self::restore`] can put it back. Goals pushed after
+    /// the checkpoint need no entry — they are cut off whole.
+    undo: RefCell<Vec<(usize, GoalState, Option<String>)>>,
+    /// How many checkpoints are open; nothing is logged at zero.
+    checkpoints: Cell<u32>,
+}
+
+/// [`GoalArena::checkpoint`]'s answer: how many goals there were, how long
+/// the undo log was, and every cell's value.
+pub(super) struct GoalCheckpoint {
+    len: usize,
+    undo: usize,
+    promoted_seen: u32,
+    requested_base: u32,
+    restart_enabled: bool,
+    frozen: bool,
 }
 
 /// The one goal effect expression leaves may perform.
@@ -186,6 +204,7 @@ impl GoalArena {
         self.frozen.set(false);
         self.delta_world.get_mut().take();
         self.slot_bindings.get_mut().clear();
+        self.undo.get_mut().clear();
     }
 
     /// The elaborator's padded Ψ moved: the δ world is rebuilt from the new
@@ -236,6 +255,56 @@ impl GoalArena {
     /// A rollback point for expression mechanisms that probe by elaborating.
     pub(super) fn mark(&self) -> usize {
         self.entries.borrow().len()
+    }
+
+    /// The rollback point of a speculative probe ([`crate::Elaborator::probe`]):
+    /// [`Self::mark`], plus everything else a probe holding `&self` can
+    /// change — a solution or spelling written into an existing goal, a
+    /// restart request, the freeze. Must be [`Self::restore`]d, innermost
+    /// first.
+    pub(super) fn checkpoint(&self) -> GoalCheckpoint {
+        self.checkpoints.set(self.checkpoints.get() + 1);
+        GoalCheckpoint {
+            len: self.mark(),
+            undo: self.undo.borrow().len(),
+            promoted_seen: self.promoted_seen.get(),
+            requested_base: self.requested_base.get(),
+            restart_enabled: self.restart_enabled.get(),
+            frozen: self.frozen.get(),
+        }
+    }
+
+    /// Put the arena back as it was at `checkpoint`. Whether the probe
+    /// allocated a goal, which frees its slot for another one.
+    pub(super) fn restore(&self, checkpoint: GoalCheckpoint) -> bool {
+        let undone: Vec<_> = self.undo.borrow_mut().drain(checkpoint.undo..).collect();
+        {
+            let mut entries = self.entries.borrow_mut();
+            for (index, state, spelling) in undone.into_iter().rev() {
+                if let Some(goal) = entries.get_mut(index) {
+                    goal.state = state;
+                    goal.statement_spelling = spelling;
+                }
+            }
+        }
+        let allocated = self.entries.borrow().len() > checkpoint.len;
+        if allocated {
+            self.rollback(checkpoint.len);
+        }
+        self.promoted_seen.set(checkpoint.promoted_seen);
+        self.requested_base.set(checkpoint.requested_base);
+        self.restart_enabled.set(checkpoint.restart_enabled);
+        self.frozen.set(checkpoint.frozen);
+        self.checkpoints.set(self.checkpoints.get() - 1);
+        allocated
+    }
+
+    /// Log goal `index`'s state and spelling before it is changed in place,
+    /// if a checkpoint is open.
+    fn log_change(&self, goal: &Goal, index: usize) {
+        if self.checkpoints.get() > 0 {
+            self.undo.borrow_mut().push((index, goal.state.clone(), goal.statement_spelling.clone()));
+        }
     }
 
     /// Discard every goal allocated after `mark`, including its source key.
@@ -550,21 +619,26 @@ impl GoalArena {
 
     pub(super) fn solve_named(&self, name: &str, term: Term) {
         let mut goals = self.entries.borrow_mut();
-        let goal = goals
-            .iter_mut()
-            .find(|goal| goal.name == name)
+        let index = goals
+            .iter()
+            .position(|goal| goal.name == name)
             .expect("goal was selected before its solution was elaborated");
-        goal.solve(term);
+        self.log_change(&goals[index], index);
+        goals[index].solve(term);
     }
 
     pub(super) fn solve(&self, index: usize, term: Term) {
-        self.entries.borrow_mut()[index].solve(term);
+        let mut goals = self.entries.borrow_mut();
+        self.log_change(&goals[index], index);
+        goals[index].solve(term);
     }
 
     pub(super) fn set_statement_spelling(&self, span: Span, key: &str, spelling: String) {
         let spans = self.spans.borrow();
         if let Some(&index) = spans.get(&(span.start, span.end, Some(key.to_owned()))) {
-            self.entries.borrow_mut()[index].statement_spelling = Some(spelling);
+            let mut goals = self.entries.borrow_mut();
+            self.log_change(&goals[index], index);
+            goals[index].statement_spelling = Some(spelling);
         }
     }
 
@@ -745,5 +819,34 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn checkpoint_restores_solutions_allocations_and_cells() {
+        let mut arena = GoalArena::default();
+        arena.configure(3, 0);
+        let cx = Cx::empty();
+        let hole = |name: &str, start: usize| {
+            arena
+                .allocate(&cx, Some(name), None, Type::Nat, Level::Zero, Span { start, end: start + 1 }, None, None)
+                .unwrap()
+        };
+        hole("kept", 0);
+        let outer = arena.checkpoint();
+        arena.solve(0, Term::Zero);
+        hole("probed", 2);
+        let inner = arena.checkpoint();
+        arena.solve(1, Term::Zero);
+        arena.freeze();
+        assert!(!arena.restore(inner));
+        assert_eq!(arena.outstanding().len(), 1, "the inner solution is undone, the outer one stays");
+        assert!(arena.restore(outer));
+        assert_eq!(arena.mark(), 1);
+        assert_eq!(arena.outstanding().len(), 1, "the outer solution is undone");
+        assert!(arena.undo.borrow().is_empty());
+        assert_eq!(arena.checkpoints.get(), 0);
+        // Unfrozen, and the probed hole's source key is free again.
+        hole("again", 2);
+        assert_eq!(arena.mark(), 2);
     }
 }

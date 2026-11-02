@@ -1600,12 +1600,16 @@ impl Elaborator {
             return Ok(Some(self.quoted(&q, cx, Held::Term(term.shift_local(root), ty.shift_local(root), level), e.span)?));
         }
         q.plain.set(Some(e.span));
-        let probe = self.clone().elab_infer(cx, e);
-        q.plain.set(None);
-        match probe {
-            Err(_) => return Ok(None),
-            Ok((_, ty, level)) if level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level) => return Ok(None),
-            Ok(_) => {}
+        let plain = self.probe(|| {
+            let inferred = self.elab_infer(cx, e);
+            q.plain.set(None);
+            match inferred {
+                Err(_) => true,
+                Ok((_, ty, level)) => level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level),
+            }
+        });
+        if plain {
+            return Ok(None);
         }
         // Inferred for real, with quoting off: what is quoted is an
         // ordinary term, and its dependencies and notes are this
@@ -3093,8 +3097,8 @@ impl Elaborator {
             let skeleton = Skeleton::Constructor(expr);
             let mut runs = Vec::with_capacity(2);
             for placeholder in [Term::Zero, Term::Succ(Rc::new(Term::Zero))] {
-                let probe = self.clone();
-                let (built, leaves) = probe.build(&cx, &skeleton, &ty, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, span);
+                let (built, leaves) =
+                    self.probe(|| self.build(&cx, &skeleton, &ty, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, span));
                 built.map_err(|e| Fault::Ill(format!("`{}`: {}", ctor.name, elab_message(e))))?;
                 let Leaves::Record { seen, .. } = leaves else { unreachable!("a recording run stays one") };
                 runs.push(seen);
@@ -3283,8 +3287,8 @@ impl Elaborator {
         let cx = run.cx(at)?;
         let mut runs = Vec::with_capacity(2);
         for placeholder in [Term::Zero, Term::Succ(Rc::new(Term::Zero))] {
-            let probe = self.clone();
-            let (built, leaves) = probe.build(&cx, &skeleton, &goal, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, run.span);
+            let (built, leaves) =
+                self.probe(|| self.build(&cx, &skeleton, &goal, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, run.span));
             built.map_err(|e| Fault::Ill(elab_message(e)))?;
             let Leaves::Record { seen, .. } = leaves else { unreachable!("a recording run stays one") };
             let seen: Option<Vec<_>> = seen.into_iter().collect();
