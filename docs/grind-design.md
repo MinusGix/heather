@@ -202,6 +202,13 @@ proof reconstruction.
 | R3 | constructor facts and disequalities ([grind-constructor-facts](../issues/grind-constructor-facts.md)): injectivity, disjointness, `≠` hypotheses, `False` goals | `Cons(a, as) = Cons(b, bs)` gives `a = b`, and `Nil = Cons(x, xs)` closes any goal |
 | R4 | case splits and theories ([grind-splits-and-theories](../issues/grind-splits-and-theories.md)): split on a `match` scrutinee in the graph (`split_all`'s `Cases`), and exchange equalities with `omega`/`ring` | a goal needing a `Bool` case split and a linear fact closes, and the failure is the decision tree |
 
+Before R2, the graph's pure half moves into a generic library
+([egraph-library](../issues/egraph-library.md)): a proof forest generic in
+its justification, congruence closure over any operator with decidable
+equality, and interpretations of a path (proof terms, the report, `≈`),
+with a soundness theorem against a denotation so that clients with no
+checker after them (a compiler's value numbering) are proved once.
+
 R2 needs one host addition: a tactic can only report on failure today. The
 used-subset report ([lemma-selection-and-search](../issues/lemma-selection-and-search.md)
 piece 3) wants a note on success, a request that records notes without ending
