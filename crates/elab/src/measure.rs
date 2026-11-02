@@ -175,6 +175,8 @@ pub(crate) fn select_scope<'a>(scope: &'a [Binder], goal: &Ty, evidence: Option<
             && (mentions_ty(goal, &b.name)
                 || evidence.is_some_and(|e| mentions_context(e, &b.name)))
     }).collect();
+    // Only where the goal reads an alias (below).
+    let through_alias = (0..scope.len()).any(|i| needed[i] && scope[i].value.is_some());
     loop {
         for i in (0..scope.len()).rev() {
             if !needed[i] { continue; }
@@ -191,7 +193,10 @@ pub(crate) fn select_scope<'a>(scope: &'a [Binder], goal: &Ty, evidence: Option<
         // `h` — is a fact the obligation may need even where neither the
         // goal nor the evidence names it: an argument passed through a `let`
         // alias reaches the goal as the alias, and the arm's equation about
-        // the parameter behind it would otherwise be left out.
+        // the parameter behind it would otherwise be left out. Only then: a
+        // goal over the parameters themselves gets its arms' equations by
+        // the companions' own transport, which an extra hypothesis breaks.
+        if !through_alias { break; }
         let mut grew = false;
         for i in 0..scope.len() {
             if needed[i] || scope[i + 1..].iter().any(|c| c.name == scope[i].name) { continue; }
