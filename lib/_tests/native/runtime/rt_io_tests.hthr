@@ -1,0 +1,67 @@
+// Probes of effectful `rt` (`rt_io`; docs/effects-capabilities-design.md §8):
+// a `mut self` method over `Io`, its computation written as `ETm`, and the
+// pin `meaning = f` by `refl` at a neutral world and neutral operands, the
+// equation a `runtime fn` publishes. Plus the meaning run at a scripted
+// world, and a negative control. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import linux_calls;
+import linux_world;
+import rt;
+import rt_io;
+
+// Read up to 64 bytes from stdin into the buffer, and write what came back
+// to stdout: the write's result word.
+fn Io::echo_once(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
+    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+    let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
+    w
+}
+
+// Its computation. Variables, innermost first, are noted at each node.
+fn echo_rt() → EFun {
+    EFun([Bytes(64)], Word(64),
+        // buf
+        Let(Lit(Word(64), 0),
+        // stdin, buf
+        Let(Lit(Word(64), 64),
+        // max, stdin, buf
+        Invoke(Reads(64), [1, 2, 0],
+        // result, buf′, max, stdin, buf
+        Let(Lit(Word(64), 1),
+        // stdout, result, buf′, …
+        Let(Lit(Word(64), 0),
+        // zero, stdout, result, buf′, …
+        Invoke(Writes(64), [1, 3, 0, 2],
+        // written, …
+        Pure(Var(0)))))))))
+}
+
+// The pin: the computation means the method, world and all, at every world
+// and buffer.
+theorem echo_reflects(io: Io, buf: List<BitVec(8)>):
+    echo_rt().meaning(ETm::plain_world())(io)(buf) = Io::echo_once(io, buf) { refl }
+
+// Run at a piped world: "hi" comes back out.
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn piped() → Io { Io::of(World::piped([[b(104), b(105)]])) }
+fn zeros() → List<BitVec(8)> { List::replicate(BitVec::ofNat(0), 64) }
+
+theorem echo_writes(): echo_rt().meaning(ETm::plain_world())(piped())(zeros()).after.sent(Io::stdout()) = [b(104), b(105)] { refl }
+theorem echo_result(): echo_rt().meaning(ETm::plain_world())(piped())(zeros()).value = BitVec::ofNat(2) { refl }
+
+// A computation whose write names the buffer before the read filled it is
+// another program: the pin refuses it.
+fn echo_stale_rt() → EFun {
+    EFun([Bytes(64)], Word(64),
+        Let(Lit(Word(64), 0), Let(Lit(Word(64), 64), Invoke(Reads(64), [1, 2, 0],
+        Let(Lit(Word(64), 1), Let(Lit(Word(64), 0), Invoke(Writes(64), [1, 7, 0, 2], Pure(Var(0)))))))))
+}
+// expect-error(kernel): the kernel rejected `echo_stale_misreflects`: NotConvertible
+theorem echo_stale_misreflects(io: Io, buf: List<BitVec(8)>):
+    echo_stale_rt().meaning(ETm::plain_world())(io)(buf) = Io::echo_once(io, buf) { refl }
