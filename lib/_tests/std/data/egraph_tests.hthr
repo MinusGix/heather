@@ -1,0 +1,51 @@
+// Probes of `lib/std/data/egraph.hthr`: closures computed by evaluation, at
+// an operator type of their own, and explanations folded into a printable
+// trace. Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import egraph;
+
+// A tiny term language: constants by number, and one binary operator `f`.
+inductive Op { K(n: Nat), F }
+
+fn Op::same(self a: Op, b: Op) → Bool {
+    match a {
+        K(n) => match b { K(m) => n.same(m), F => False },
+        F => match b { K(_) => False, F => True },
+    }
+}
+
+fn op_same(a: Op, b: Op) → Bool { a.same(b) }
+
+// a = 0, b = 1, c = 2, f(a, c) = 3, f(b, c) = 4, then a = b given.
+fn g0() → EGraph<Op, Nat> {
+    let x = EGraph::empty<Op, Nat>().add(op_same, K(0), []);
+    let y = x.g.add(op_same, K(1), []);
+    let z = y.g.add(op_same, K(2), []);
+    let p = z.g.add(op_same, F, [x.id, z.id]);
+    let q = p.g.add(op_same, F, [y.id, z.id]);
+    q.g.union(0, 1, 7)
+}
+
+// Hash-consing: the same operator over the same children is one node.
+theorem add_shares(): (g0().add(op_same, F, [0, 2])).id.same(3) = True { refl }
+// The given equation alone does not reach the applications; closing does.
+theorem before_close(): g0().same_class(3, 4) = False { refl }
+theorem after_close(): (g0().close(op_same, 5)).same_class(3, 4) = True { refl }
+// Nothing else meets.
+theorem apart(): (g0().close(op_same, 5)).same_class(2, 3) = False { refl }
+
+fn opt_same(o: Option<List<Nat>>, p: Option<List<Nat>>) → Bool {
+    match o { None => match p { None => True, Some(_) => False }, Some(xs) => match p { None => False, Some(ys) => nats_same(xs, ys) } }
+}
+
+// A trace of an explanation: the given fact's number (negated as `100 +`
+// when turned round), `0` for a node equal to itself, a congruence as `1000`
+// plus its children's traces.
+fn trace_alg() → PathAlg<Nat, List<Nat>> {
+    PathAlg(λ _ => [0], λ j fwd => match fwd { True => [j], False => [100 + j] }, λ _ _ ks => Cons(1000, ks.map(λ k => k.proof).foldl(λ acc p => acc ++ p, [])), λ p q => p ++ q)
+}
+
+theorem explain_given(): opt_same(g0().explain(trace_alg(), 0, 1), Some([7])) = True { refl }
+theorem explain_reversed(): opt_same(g0().explain(trace_alg(), 1, 0), Some([107])) = True { refl }
+theorem explain_congruence(): opt_same((g0().close(op_same, 5)).explain(trace_alg(), 3, 4), Some([1000, 7, 0])) = True { refl }
+theorem explain_none(): opt_same((g0().close(op_same, 5)).explain(trace_alg(), 2, 3), None) = True { refl }

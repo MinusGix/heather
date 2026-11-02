@@ -1,0 +1,340 @@
+// E-graphs: terms up to equations, closed under congruence, with the
+// reason each pair of classes met (issues/egraph-library.md,
+// docs/grind-design.md §2a).
+//
+// A graph holds nodes, each an operator applied to earlier nodes (`ENode`),
+// numbered from 0 in the order they were added. Every node is in a class,
+// named by a representative node (`find`). Classes meet in two ways: a
+// client says two nodes are equal and why (`union`, with a justification of
+// any type `J`), or two nodes with the same operator whose children are
+// pairwise in one class are merged by congruence (`close`).
+//
+// Each meeting of two classes records one edge. Merging only distinct
+// classes keeps the edges a forest, so two nodes of one class are joined by
+// exactly one path, and `explain` folds that path through a `PathAlg`: a
+// client's own evidence, built from its `refl`, its given facts (either way
+// round), `trans`, and a congruence from its children's evidence. A tactic
+// folds it into a proof term (`lib/std/tactic/grind.hthr`); the same path
+// can be printed, or folded into `≈` evidence.
+//
+// The graph is generic in the operator (compared by an `eq_op` the caller
+// passes, which only has to be sound) and in the justification. Its
+// soundness is proved once, against any denotation of the nodes that agrees
+// with an interpretation of the operators: `EGraph::find_sound` and
+// `EGraph::same_class_sound` at the end of this module. A client that uses
+// the classes with no checker after it (a compiler's value numbering) cites
+// those; one that hands its `explain` evidence to the kernel needs nothing.
+//
+// Costs, as shapes: a node is found by a scan of the nodes (hash-consing is
+// linear per add), a class by a list lookup, and `union` relabels the
+// classes list; a congruence pass compares every application's signature
+// with the earlier ones (quadratic in the nodes), and `close` repeats passes
+// until one merges nothing. Enough for the tens of terms a goal holds.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+
+// An operator applied to child nodes, by their numbers.
+record ENode<Op> { op: Op, kids: List<Nat> }
+
+// Why two classes met: a fact a client gave, or congruence of the two nodes.
+inductive Why<J> { Given(j: J), Cong }
+
+record Edge<J> { u: Nat, v: Nat, why: Why<J> }
+
+// The nodes, each node's class representative, and the edges, oldest first.
+record EGraph<Op, J> { nodes: List<ENode<Op>>, cls: List<Nat>, edges: List<Edge<J>> }
+
+// A graph and a node of it.
+record Added<Op, J> { g: EGraph<Op, J>, id: Nat }
+
+fn EGraph::empty<Op, J>() → EGraph<Op, J> { EGraph([], [], []) }
+
+fn EGraph::size<Op, J>(self g: EGraph<Op, J>) → Nat { g.nodes.len() }
+
+// A node's class, by its representative; a number past the nodes is a class
+// of its own.
+fn EGraph::find<Op, J>(self g: EGraph<Op, J>, i: Nat) → Nat {
+    match g.cls.nth(i) { Some(c) => c, None => i }
+}
+
+fn EGraph::same_class<Op, J>(self g: EGraph<Op, J>, a: Nat, b: Nat) → Bool { g.find(a).same(g.find(b)) }
+
+fn EGraph::node<Op, J>(self g: EGraph<Op, J>, i: Nat) → Option<ENode<Op>> { g.nodes.nth(i) }
+
+// A new node, in a class of its own, whatever nodes are already there.
+fn EGraph::fresh<Op, J>(self g: EGraph<Op, J>, op: Op, kids: List<Nat>) → Added<Op, J> {
+    let i = g.nodes.len();
+    Added(EGraph(g.nodes ++ [ENode(op, kids)], g.cls ++ [i], g.edges), i)
+}
+
+fn nats_same(xs: List<Nat>, ys: List<Nat>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, xr) => match ys { Nil => False, Cons(y, yr) => x.same(y).and(nats_same(xr, yr)) },
+    }
+}
+
+// The first node of `ns` (numbered from `i`) that is `op` applied to `kids`.
+fn node_among<Op>(ns: List<ENode<Op>>, eq_op: Op → Op → Bool, op: Op, kids: List<Nat>, i: Nat) → Option<Nat> {
+    match ns {
+        Nil => None,
+        Cons(n, rest) => match eq_op(n.op, op).and(nats_same(n.kids, kids)) {
+            True => Some(i),
+            False => node_among(rest, eq_op, op, kids, Succ(i)),
+        },
+    }
+}
+
+// The node `op` applied to `kids`, made once: an existing node with the same
+// operator and the same children (by number) is that node.
+fn EGraph::add<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, op: Op, kids: List<Nat>) → Added<Op, J> {
+    match node_among(g.nodes, eq_op, op, kids, 0) {
+        Some(i) => Added(g, i),
+        None => g.fresh(op, kids),
+    }
+}
+
+// One representative renamed: `c` becomes `cu` when it is `cv`.
+fn relabel(cu: Nat, cv: Nat, c: Nat) → Nat { match c.same(cv) { True => cu, False => c } }
+
+// The classes of `u` and `v` merged, for the reason `w`; the graph as it was
+// when they are one class already.
+fn EGraph::merge<Op, J>(self g: EGraph<Op, J>, u: Nat, v: Nat, w: Why<J>) → EGraph<Op, J> {
+    let cu = g.find(u);
+    let cv = g.find(v);
+    match cu.same(cv) {
+        True => g,
+        False => EGraph(g.nodes, g.cls.map(λ c => relabel(cu, cv, c)), g.edges ++ [Edge(u, v, w)]),
+    }
+}
+
+// `u` and `v` are equal, because of `j`.
+fn EGraph::union<Op, J>(self g: EGraph<Op, J>, u: Nat, v: Nat, j: J) → EGraph<Op, J> { g.merge(u, v, Given(j)) }
+
+// ---------------------------------------------------------------------------
+// Congruence.
+
+fn EGraph::finds<Op, J>(self g: EGraph<Op, J>, ks: List<Nat>) → List<Nat> { ks.map(λ k => g.find(k)) }
+
+// Are the children of two nodes pairwise in one class?
+fn EGraph::kids_congruent<Op, J>(self g: EGraph<Op, J>, xs: List<Nat>, ys: List<Nat>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, xr) => match ys { Nil => False, Cons(y, yr) => g.same_class(x, y).and(g.kids_congruent(xr, yr)) },
+    }
+}
+
+// Are nodes `t` and `s` the same operator over children pairwise in one
+// class? This is what licenses a congruence merge, checked at the graph the
+// merge is made in.
+fn EGraph::congruent<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, t: Nat, s: Nat) → Bool {
+    match g.node(t) {
+        None => False,
+        Some(nt) => match g.node(s) {
+            None => False,
+            Some(ns) => eq_op(nt.op, ns.op).and(g.kids_congruent(nt.kids, ns.kids)),
+        },
+    }
+}
+
+// A node's signature: its operator and its children's classes.
+record Sig<Op> { node: Nat, op: Op, kids: List<Nat> }
+
+fn sigs_from<Op, J>(g: EGraph<Op, J>, ns: List<ENode<Op>>, i: Nat) → List<Sig<Op>> {
+    match ns {
+        Nil => [],
+        Cons(n, rest) => Cons(Sig(i, n.op, g.finds(n.kids)), sigs_from(g, rest, Succ(i))),
+    }
+}
+
+// The first signature seen that `s` repeats.
+fn sig_twin<Op>(seen: List<Sig<Op>>, eq_op: Op → Op → Bool, s: Sig<Op>) → Option<Nat> {
+    match seen {
+        Nil => None,
+        Cons(t, rest) => match eq_op(t.op, s.op).and(nats_same(t.kids, s.kids)) {
+            True => Some(t.node),
+            False => sig_twin(rest, eq_op, s),
+        },
+    }
+}
+
+// Merge `t` and `s` if they are congruent in `g`.
+fn EGraph::merge_congruent<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, t: Nat, s: Nat) → EGraph<Op, J> {
+    match g.congruent(eq_op, t, s) { True => g.merge(t, s, Cong), False => g }
+}
+
+// The merge, if any, that one signature calls for.
+fn EGraph::congruence_step<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, seen: List<Sig<Op>>, s: Sig<Op>) → EGraph<Op, J> {
+    match sig_twin(seen, eq_op, s) { Some(t) => g.merge_congruent(eq_op, t, s.node), None => g }
+}
+
+// One pass: every node merged with the first earlier node whose signature it
+// repeats. Signatures are read at the start of the pass and only find
+// candidates; each merge is checked against the graph it is made in.
+fn EGraph::congruence_pass<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, sigs: List<Sig<Op>>, seen: List<Sig<Op>>) → EGraph<Op, J> {
+    match sigs {
+        Nil => g,
+        Cons(s, rest) => g.congruence_step(eq_op, seen, s).congruence_pass(eq_op, rest, Cons(s, seen)),
+    }
+}
+
+// Passes until one merges nothing, at most `fuel` of them.
+fn EGraph::close<Op, J>(self g: EGraph<Op, J>, eq_op: Op → Op → Bool, fuel: Nat) → EGraph<Op, J> {
+    match fuel {
+        Zero => g,
+        Succ(f) => {
+            let g2 = g.congruence_pass(eq_op, sigs_from(g, g.nodes, 0), []);
+            match g2.edges.len().same(g.edges.len()) {
+                True => g2,
+                False => g2.close(eq_op, f),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Explanations.
+
+// One step along an edge, from its `u` to its `v` when `forward`.
+record Step<J> { edge: Edge<J>, forward: Bool }
+
+fn Step::from<J>(self s: Step<J>) → Nat { match s.forward { True => s.edge.u, False => s.edge.v } }
+
+fn Step::to<J>(self s: Step<J>) → Nat { match s.forward { True => s.edge.v, False => s.edge.u } }
+
+// A node the search reached, the steps that reached it (last first), and
+// the number of the edge it came by (one past the last for the start).
+record Frame<J> { at: Nat, path: List<Step<J>>, came: Nat }
+
+fn step_from<J>(e: Edge<J>, at: Nat) → Option<Step<J>> {
+    match e.u.same(at) {
+        True => Some(Step(e, True)),
+        False => match e.v.same(at) { True => Some(Step(e, False)), False => None },
+    }
+}
+
+fn neighbours<J>(es: List<Edge<J>>, k: Nat, fr: Frame<J>, stack: List<Frame<J>>) → List<Frame<J>> {
+    match es {
+        Nil => stack,
+        Cons(e, rest) => match k.same(fr.came) {
+            True => neighbours(rest, Succ(k), fr, stack),
+            False => match step_from(e, fr.at) {
+                Some(s) => neighbours(rest, Succ(k), fr, Cons(Frame(s.to(), Cons(s, fr.path), k), stack)),
+                None => neighbours(rest, Succ(k), fr, stack),
+            },
+        },
+    }
+}
+
+fn path_search<J>(fuel: Nat, es: List<Edge<J>>, stack: List<Frame<J>>, to: Nat) → Option<List<Step<J>>> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match stack {
+            Nil => None,
+            Cons(fr, rest) => match fr.at.same(to) {
+                True => Some(fr.path.rev()),
+                False => path_search(f, es, neighbours(es, 0, fr, rest), to),
+            },
+        },
+    }
+}
+
+// The path from `a` to `b` along the edges, if they are in one class.
+fn EGraph::path<Op, J>(self g: EGraph<Op, J>, a: Nat, b: Nat) → Option<List<Step<J>>> {
+    let n = g.edges.len();
+    path_search(Succ(Succ(n + n)), g.edges, [Frame(a, [], n)], b)
+}
+
+// Evidence that child `from` equals child `to`.
+record KidProof<P> { from: Nat, to: Nat, proof: P }
+
+// How a client builds evidence of `a = b` from a path: a node equal to
+// itself; a given fact, as given (`True`) or turned round; congruence of two
+// nodes from the evidence for their children, in order; and two steps
+// joined.
+record PathAlg<J, P> { refl: Nat → P, given: J → Bool → P, cong: Nat → Nat → List<KidProof<P>> → P, trans: P → P → P }
+
+// What `explain_go` is asked: two nodes, the steps of a path, or the pairs
+// of children of a congruence. One function answers all three, so the
+// explanation of a congruence can ask for its children's.
+inductive Explain<J> { Equal(a: Nat, b: Nat), Steps(ss: List<Step<J>>), Kids(xs: List<Nat>, ys: List<Nat>) }
+
+fn proofs_cons<P>(p: Option<List<KidProof<P>>>, rest: Option<List<KidProof<P>>>) → Option<List<KidProof<P>>> {
+    match p { None => None, Some(ps) => match rest { None => None, Some(rs) => Some(ps ++ rs) } }
+}
+
+fn one_proof<P>(from: Nat, to: Nat, p: Option<P>) → Option<List<KidProof<P>>> {
+    match p { None => None, Some(x) => Some([KidProof(from, to, x)]) }
+}
+
+fn first_proof<P>(o: Option<List<KidProof<P>>>) → Option<P> {
+    match o { None => None, Some(ps) => match ps { Nil => None, Cons(p, _) => Some(p.proof) } }
+}
+
+// Where a path ends: its last step's end, or `d` for no step.
+fn step_last<J>(ss: List<Step<J>>, d: Nat) → Nat {
+    match ss { Nil => d, Cons(s, rest) => step_last(rest, s.to()) }
+}
+
+fn kids_of<Op>(o: Option<ENode<Op>>) → List<Nat> { match o { None => [], Some(n) => n.kids } }
+
+fn joined<P>(alg_trans: P → P → P, first: Option<P>, rest: Option<P>) → Option<P> {
+    match first { None => None, Some(p) => match rest { None => None, Some(r) => Some(alg_trans(p, r)) } }
+}
+
+fn EGraph::explain_go<Op, J, P>(self g: EGraph<Op, J>, alg: PathAlg<J, P>, fuel: Nat, q: Explain<J>) → Option<List<KidProof<P>>> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match q {
+            Equal(a, b) => match a.same(b) {
+                True => Some([KidProof(a, b, alg.refl(a))]),
+                False => match g.path(a, b) {
+                    None => None,
+                    Some(ss) => g.explain_go(alg, f, Steps(ss)),
+                },
+            },
+            Steps(ss) => match ss {
+                Nil => None,
+                Cons(s, rest) => {
+                    let from = s.from();
+                    let to = s.to();
+                    let first: Option<P> = match s.edge.why {
+                        Given(j) => Some(alg.given(j, s.forward)),
+                        Cong => match g.explain_go(alg, f, Kids(kids_of(g.node(from)), kids_of(g.node(to)))) {
+                            None => None,
+                            Some(ks) => Some(alg.cong(from, to, ks)),
+                        },
+                    };
+                    match rest {
+                        Nil => one_proof(from, to, first),
+                        Cons(_, _) => one_proof(from, step_last(rest, to), joined(alg.trans, first, first_proof(g.explain_go(alg, f, Steps(rest))))),
+                    }
+                },
+            },
+            Kids(xs, ys) => match xs {
+                Nil => Some([]),
+                Cons(x, xr) => match ys {
+                    Nil => None,
+                    Cons(y, yr) => proofs_cons(g.explain_go(alg, f, Equal(x, y)), g.explain_go(alg, f, Kids(xr, yr))),
+                },
+            },
+        },
+    }
+}
+
+// Evidence of `a = b`, built by `alg` along the path between them, if they
+// are in one class.
+fn EGraph::explain<Op, J, P>(self g: EGraph<Op, J>, alg: PathAlg<J, P>, a: Nat, b: Nat) → Option<P> {
+    let n = g.nodes.len();
+    first_proof(g.explain_go(alg, Succ(Succ(n * (g.edges.len() + 2))), Equal(a, b)))
+}
+
+// The nodes of class `c`.
+fn EGraph::members<Op, J>(self g: EGraph<Op, J>, c: Nat) → List<Nat> {
+    List::range(g.nodes.len()).filter(λ i => g.find(i).same(c))
+}
