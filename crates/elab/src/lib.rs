@@ -1153,6 +1153,23 @@ impl recursion::SelfCallElab for Elaborator {
             _ => None,
         }
     }
+
+    fn apply_self_call_implicit(
+        &self,
+        cx: &Cx,
+        name: &str,
+        params: Rc<Vec<ParamMeta>>,
+        head: Term,
+        ty: Type,
+        level: Level,
+        args: &[Expr],
+        mask: &[bool],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        application::apply_implicit(
+            self, cx, name, params, true, 0, false, head, ty, level, args, mask, None, false, span,
+        )
+    }
 }
 
 impl vec::SurfaceVecElab for Elaborator {
@@ -3394,7 +3411,13 @@ impl Elaborator {
                 if self.lookup_inductive(name).is_some_and(|i| i.codata));
         if decl.kind == DeclKind::Fn && !corecursive {
             let self_ref = recursion::SelfRef::of_decl(decl);
-            match recursion::plan(&self_ref, &decl.body) {
+            let types: Vec<Option<&Ty>> = decl
+                .tyvars
+                .iter()
+                .map(|_| None)
+                .chain(decl.params.iter().map(|p| Some(&p.ty)))
+                .collect();
+            match recursion::plan(&self_ref, &types, &decl.body) {
                 recursion::RecursionPlan::Structural => {}
                 recursion::RecursionPlan::ByMeasure { dec, read, name, from } => {
                     return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name, from);
@@ -3502,7 +3525,19 @@ impl Elaborator {
         );
         let mut by_measure = decl.clone();
         by_measure.decreases = Some(measure);
-        self.session_transaction(|me| me.elab_measure_decl(&by_measure))
+        // The source wrote no `decreases`: a refusal that names it says why
+        // the declaration is under one, and what keeps it structural.
+        self.session_transaction(|me| me.elab_measure_decl(&by_measure)).map_err(|e| match e {
+            ElabError::Elab { msg, span } if msg.contains("under `decreases`") => ElabError::Elab {
+                msg: format!(
+                    "{msg}\n(`{fname}` is compiled as if declared `decreases` because {what}; \
+                     or {keep} to keep the structural lowering, \
+                     issues/fn-recursion-means-the-function.md)"
+                ),
+                span,
+            },
+            other => other,
+        })
     }
 
     /// One ordinary declaration, with `obligations` the measure-obligation

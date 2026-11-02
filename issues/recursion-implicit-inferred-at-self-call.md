@@ -1,6 +1,6 @@
 ---
 title: An implicit parameter a structural self-call would infer anew is refused only by the kernel
-status: open
+status: closed
 labels: [elaboration,recursion,diagnostics]
 area: language
 created: 2026-11-02
@@ -42,3 +42,32 @@ ih's domain (likely the same class as
 
 Acceptance: `g` is either refused at the call with the `@` spelling, or
 computes `g(1, 0, refl) = 10`; a probe in `crates/elab/tests/recursion_meaning.rs`.
+
+## Resolution (2026-11-02)
+
+Generalized (Minus's call). `generalize::varying_params`' dependency closure
+now runs to a fixpoint both ways: forward as before, and **backward for a
+value implicit**: an earlier `{q}` (not an index the scrutinee's type
+mentions) that a generalized parameter's type mentions is generalized too.
+`recursion::elab_self_call` then applies the ih through the ordinary
+implicit-inserting engine (`SelfCallElab::apply_self_call_implicit` →
+`application::apply_implicit`), so an omitted generalized implicit is
+inferred from the varied arguments after it. One with no varied argument
+after it keeps the old refusal ("pass it explicitly (`@f(…)`)").
+
+`recursion::plan` mirrors the closure by name over the written parameter
+types, so a `let` bound above the `match` from such an implicit is stale like
+any varied value: it takes the measure route, which passes every parameter
+and so refuses the call without `@`; that refusal now says why the
+declaration is under a `decreases` and names the structural spelling.
+
+The mismatched `refl` was not a recursion gap: any `refl` checked at a
+non-equation (`fn k(e, x, f: (h: e = x + 10) → Nat) { f(refl) }`) is refused
+by the kernel with a located, spelled `refl needs both sides…` note, the
+designed route.
+
+`g` above computes `@g(1, 0, 0, refl) = 10` (and at a neutral `x`) when the
+call's equation argument has an inferable type; a bare `refl` there is
+deferred and refused with "write the call fully explicitly", since `refl`
+checks only against a known equation. Pinned in
+`crates/elab/tests/recursion_meaning.rs`.

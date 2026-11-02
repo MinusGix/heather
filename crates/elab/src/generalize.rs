@@ -61,7 +61,9 @@ impl Elaborator {
     /// Which of the declaration's parameters a self-call inside `arms` passes
     /// at something other than the parameter itself, closed under dependency
     /// (a later parameter whose type mentions a generalized one is generalized
-    /// too, since its type is only right at the generalized value). Ascending.
+    /// too, since its type is only right at the generalized value; and an
+    /// earlier value implicit a generalized one's type mentions, which the
+    /// self-call infers). Ascending.
     ///
     /// Name-based, and therefore a sizing decision only (module docs).
     pub(crate) fn varying_params(&self, cx: &Cx, arms: &[Arm], dec: usize) -> Vec<usize> {
@@ -108,26 +110,43 @@ impl Elaborator {
         if varying.is_empty() {
             return varying;
         }
-        varying.sort_unstable();
-        // Dependency closure, in declaration order so it is transitive: a
-        // parameter's type is scoped in the prefix before it, where a
-        // generalized parameter `q < p` is `Var(p - 1 - q)`.
-        let first = varying[0];
-        for p in first + 1..s.params.len() {
-            if varying.contains(&p) {
-                continue;
+        // Dependency closure, to a fixpoint (a parameter's type is scoped in
+        // the prefix before it, where parameter `q < p` is `Var(p - 1 - q)`):
+        //
+        // - forward: a later parameter whose type mentions a generalized one
+        //   is generalized too, since its type is only right at the
+        //   generalized value;
+        // - backward, for a value implicit: an earlier `{q}` that a
+        //   generalized parameter's type mentions is determined by the
+        //   varied arguments (`g(k, x + 10, refl)` at `h: e = x` means
+        //   `e := x + 10`), so it is generalized and the self-call infers it
+        //   (issues/recursion-implicit-inferred-at-self-call.md). Kept
+        //   unchanged, the ih would see the top call's `e`.
+        let mentions = |p: usize, q: usize| {
+            q < p
+                && cx.gamma.entries.get(p).is_some_and(|entry| {
+                    entry.ty.abstract_local(&Term::Var(LocalVar((p - 1 - q) as u32))).is_some()
+                })
+        };
+        loop {
+            let before = varying.len();
+            for p in s.n_tyvars..s.params.len() {
+                if varying.contains(&p) || p == dec {
+                    continue;
+                }
+                let forward = varying.iter().any(|&q| mentions(p, q));
+                // An index the scrutinee's type mentions is rebound by the
+                // indexed route, never generalized (above).
+                let backward = s.params[p].1
+                    && !fixed.contains(&p)
+                    && varying.iter().any(|&q| mentions(q, p));
+                if forward || backward {
+                    varying.push(p);
+                }
             }
-            let Some(entry) = cx.gamma.entries.get(p) else { break };
-            let depends = varying
-                .iter()
-                .filter(|&&q| q < p)
-                .any(|&q| entry.ty.abstract_local(&Term::Var(LocalVar((p - 1 - q) as u32))).is_some());
-            // `p == dec` cannot happen: the scrutinee's dependencies were
-            // excluded above, so nothing it depends on is in `varying`.
-            if !depends || p == dec {
-                continue;
+            if varying.len() == before {
+                break;
             }
-            varying.push(p);
         }
         varying.sort_unstable();
         varying

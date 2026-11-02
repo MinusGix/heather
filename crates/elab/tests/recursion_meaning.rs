@@ -213,6 +213,51 @@ fn a_parameter_varied_only_through_its_type_keeps_its_value() {
     assert_eq!(notes, 0);
 }
 
+// -- An implicit the self-call determines -------------------------------------
+//
+// issues/recursion-implicit-inferred-at-self-call.md: `{e}` comes before the
+// varied `x` and `h: e = x` ties them, so `g(k, x + 10, p)` means
+// `e := x + 10`. Kept unchanged, the ih would see the top call's `e` (and
+// only the kernel refused); generalized, the call infers it.
+
+const G: &str = "fn g(n: Nat, x: Nat, {e: Nat}, h: e = x) -> Nat {
+    match n { Zero => e, Succ(k) => { let p: (plus(x, 10) = plus(x, 10)) = refl; g(k, plus(x, 10), p) } }
+}\n";
+
+#[test]
+fn an_implicit_the_self_call_determines_is_inferred_anew() {
+    let notes = ok(&format!(
+        "{G}theorem g_1(): @g(1, 0, 0, refl) = 10 {{ refl }}
+         theorem g_2(x: Nat): @g(2, x, x, refl) = plus(plus(x, 10), 10) {{ refl }}
+         fn g3(n: Nat, x: Nat, {{e: Nat}}, h: e = x) -> Nat {{
+             match n {{ Zero => e, Succ(k) => @g3(k, plus(x, 10), plus(x, 10), refl) }}
+         }}
+         theorem g3_1(): @g3(1, 0, 0, refl) = 10 {{ refl }}"
+    ));
+    assert_eq!(notes, 0);
+    // The negative control: the top call's `e`.
+    let mut e = base();
+    support::assert_refused(
+        &mut e,
+        "m",
+        &format!("{IMPORTS}{PLUS}{G}theorem wrong(): @g(1, 0, 0, refl) = 0 {{ refl }}"),
+        support::Refusal::Kernel,
+    );
+}
+
+#[test]
+fn a_let_bound_from_an_inferred_implicit_is_refused_with_the_structural_spelling() {
+    // The measure route passes every parameter, so it cannot take a call
+    // that leaves the implicit out; the refusal says why it was chosen.
+    refused(
+        "fn g2(n: Nat, x: Nat, {e: Nat}, h: e = x) -> Nat {
+             let y = e;
+             match n { Zero => y, Succ(k) => { let p: (plus(x, 10) = plus(x, 10)) = refl; g2(k, plus(x, 10), p) } }
+         }",
+        "bind `y` inside each arm that reads it",
+    );
+}
+
 #[test]
 fn reading_the_varied_parameter_itself_keeps_the_structural_lowering() {
     // The ih's generalized binder is this level's value, and so is a `let`
