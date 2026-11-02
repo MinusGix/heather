@@ -86,7 +86,8 @@ write it as a direct corecursion: a non-tail self-call sits under a `bind`,
 which is not a constructor, so it is not a guarded call
 (`docs/codata-elaborator-design.md` §5.2; nested constructors, §5.4, cover
 only calls under a *second constructor*, which this is not; a call under a
-function is `issues/codata-corecursion-up-to.md`). The
+friend, §5.5, takes friends of the definition's own type, and `bind` changes
+the tree's result type: `issues/codata-up-to-friends-round-2.md`). The
 standard way around that is Coq's ITrees `interp_mrec`: run a loop whose
 state is the pending tree, and at a call replace the call with the body
 bound to the call's continuation. `iter` supplies the guard, so nothing new

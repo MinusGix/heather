@@ -473,6 +473,16 @@ impl Names {
             .find_map(|layer| layer.surface_decls.get(name))
     }
 
+    /// The surface declaration of the global `module`'s `name`, read off the
+    /// layer that registered it (so a same-named declaration of another
+    /// module is never consulted).
+    pub(crate) fn surface_decl_in(&self, module: &str, name: &str) -> Option<&Decl> {
+        let key = qkey(module, name);
+        self.layers()
+            .find(|layer| layer.globals.contains_key(&key))
+            .and_then(|layer| layer.surface_decls.get(name))
+    }
+
     /// Is the global `module`'s `name` a `def` used as a value: a
     /// [`Decl::value`] whose parameters, if any, are all implicit
     /// (docs/value-definitions-design.md §2.3)? Read off the layer that
