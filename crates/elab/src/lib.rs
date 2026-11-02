@@ -3729,6 +3729,9 @@ impl Elaborator {
     /// `f` — elaborated in order. Each member is an ordinary declaration
     /// checked the ordinary way, so nothing the generator writes is trusted.
     fn elab_measure_decl(&mut self, decl: &Decl) -> R<()> {
+        // The lowering reads names by their last binding, so a `let m = m - 1`
+        // would shadow the measure's `m` (issues/decreases-shadowed-let.md).
+        let decl = &measure::deshadowed(decl);
         let measure = decl.decreases.clone().expect("a measure declaration");
         measure::check_shape(decl, &measure)?;
         // The wrapper spells `nat::Nat::Lt`, `nat::Nat::le_trans` and `nat::Nat::lt_succ_self`;
@@ -3845,6 +3848,10 @@ impl Elaborator {
     /// checked the ordinary way, so nothing the generator writes is trusted.
     fn elab_measure_group(&mut self, members: &[&Decl]) -> R<()> {
         let span = members[0].span;
+        // As `elab_measure_decl`: every name in a member's body means one binder.
+        let owned: Vec<Decl> = members.iter().map(|d| measure::deshadowed(d)).collect();
+        let members: Vec<&Decl> = owned.iter().collect();
+        let members = &members[..];
         let mut gm: Vec<measure::GroupMember<'_>> = Vec::new();
         for d in members {
             let measure = d.decreases.clone().expect("a measure declaration");

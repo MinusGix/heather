@@ -628,9 +628,9 @@ to the node it met, a premise to a hole), against the node. With no free
 binder that is one question. With one, the binder is drawn from the
 graph's whole terms, in node order, as e-matching draws every binder from
 the graph: `isucc(b) ≡ OfNat(Succ(k))` at `b := OfNat(k)`, a term the
-induction hypothesis put there; `negOfNat(n) ≡ -OfNat(k)` at `n := k`. A
-near match with more than one free binder is skipped
-([grind-near-match-binders](../issues/grind-near-match-binders.md)).
+induction hypothesis put there; `negOfNat(n) ≡ -OfNat(k)` at `n := k`.
+More free binders than one are asked about with holes (§13.4), which is
+also tried first for one.
 `Mark`/`Restore` around each question keep a hole a premise left from
 being solved by it.
 
@@ -683,4 +683,43 @@ dry round) is not needed by any probe yet, and a near match's candidates
 are every whole term of the graph in order, with no key on the item's head
 or the candidate's type to skip the hopeless ones; both are where to look
 if a client spends the budget.
+
+### 13.4 Several free binders (2026-11-02)
+
+Issue: [grind-near-match-binders](../issues/grind-near-match-binders.md).
+Drawing every free binder from the graph is a power of its size, so a near
+match whose item leaves several binders free (`f(Cons(x, ys))` against
+`f([a] ++ xs)`, or a free type binder, `List::len<?A>(?xs)`) asks the host
+instead, the issue's first option. `Holes` at the lemma's proof makes one
+hole per binder, each at its binder's type over the arguments before it;
+the item, at the nodes the match bound and the holes elsewhere, is compared
+with the node by `Defeq`, which solves what the comparison determines
+(`?x := a`, `?ys := [] ++ xs`, and `?A := Bool` from the types alone).
+Each solution is then looked up among the graph's nodes, whole terms in
+order and then the atoms that are not whole (a type argument, read as part
+of an operator), by `Defeq` again (`[] ++ xs` is `xs`). The holes are
+forgotten (`Mark`/`Restore`), and the instance at the nodes found is asked
+once more with no hole: that is the question its `defn` edge stands for,
+so an instance the kernel would refuse is never added, whatever a partial
+solution's lookup let through.
+
+A hole the comparison leaves unsolved (`len([] ++ ?xs)` against
+`near_len(bs)`: the unifier stops at two stuck matches; `isucc(?b)` against
+`OfNat(Succ(k))`) or a solution no node is ends the question. With one
+free binder, the binder is then drawn from the graph's terms as before
+(§13.1), so nothing the earlier rounds closed is lost; with more it is
+left. The hole question is asked once per near match (`NearTried.asked`):
+its answer reads terms, not classes.
+
+Cost: one `Defeq` for the question, at most one per node for each
+solution's lookup, and one to confirm, all from the round's budget; a round
+whose budget runs out mid-question asks it again next round.
+
+Not done: a solution that is no node of the graph (the instance would bring
+a new term) is not interned, and a question answered before the node it
+needs was added is not asked again
+([grind-near-match-new-terms](../issues/grind-near-match-new-terms.md)).
+Probes: `near_two`, `near_two_checking`, `near_two_closed`, `near_type`,
+`near_drawn` and the negative control `near_two_refused` in
+`lib/_tests/std/tactic/grind_tests.hthr`.
 

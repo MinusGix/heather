@@ -49,3 +49,7 @@ A design note decided by Minus, stating which of the issues above it
 retires, with the first slice filed. Probes for the `LetCode` and
 `MatchCode` shadowing readings above, as accepted or refused, either way
 with the right meaning.
+
+## Log
+
+- 2026-11-02: Step 1's renamer exists since #393: `alpha::deshadow` (used by the `decreases` lowering via `measure::deshadowed`). The structural planner does not run over it yet.

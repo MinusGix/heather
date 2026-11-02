@@ -5,9 +5,10 @@
 //! shadows. A field or member name (`.x`, `x := e` in a record literal, a
 //! named argument's name) is not a local and is kept.
 //!
-//! Used to put a generated body in SSA form where a consumer reads names by
-//! their last binding (`crate::loops`' `while`, whose `decreases` obligations
-//! mention the parameters).
+//! Used to put a generated body in SSA form (`crate::loops`' `while`, whose
+//! condition is placed after the body's `let`s and reads the parameters),
+//! and to deshadow a `decreases` body ([`deshadow`]), whose lowering reads
+//! names by their last binding.
 
 use heather_syntax::{Block, Expr, ExprKind, Pat, Stmt, Ty, TyKind};
 
@@ -182,4 +183,259 @@ pub(crate) fn ssa(b: &mut Block, bound: &[String]) {
 fn mentions(b: &Block, name: &str) -> bool {
     let e = Expr { kind: ExprKind::Block(Box::new(b.clone())), span: b.span };
     crate::measure::mentions_context(&e, name)
+}
+
+/// `body` with every binder that shadows a name already in scope — a
+/// parameter in `bound`, or an enclosing or earlier binder — renamed to a
+/// fresh `name__N` across its own scope: block `let`s, `let { … }`
+/// patterns, `match` arm binders and equation binders, and λ binders, at
+/// any depth. Siblings that reuse a name (two arms both binding `k`) do not
+/// shadow each other and are kept. The result is alpha-equivalent to
+/// `body`, and every name in it means one binder wherever it is read.
+///
+/// `decreases` reads names by their last binding: its measure is stated
+/// over the parameters, and a lifted obligation's telescope is a list of
+/// binders by name, so a `let m = m - 1` that shadowed the measured `m`
+/// made the call's obligation `m < m` (issues/decreases-shadowed-let.md).
+/// The lowering deshadows the body first, so neither has to track scopes.
+pub(crate) fn deshadow(body: &mut Block, bound: &[String]) {
+    let whole = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
+    let mut taken: Vec<String> = bound.to_vec();
+    collect_names(&whole, &mut taken);
+    let mut d = Deshadow { env: bound.to_vec(), taken, whole, fresh: 0 };
+    d.block(body);
+}
+
+/// Every local name `e` binds or reads, for [`deshadow`]'s fresh names.
+fn collect_names(e: &Expr, out: &mut Vec<String>) {
+    crate::surface::walk_expr(e, &mut |x| match &x.kind {
+        ExprKind::Var(n) => out.push(n.clone()),
+        ExprKind::Lam { binders, .. } => out.extend(binders.iter().map(|b| b.name.clone())),
+        ExprKind::Block(b) => for s in &b.stmts {
+            match s {
+                Stmt::Let { name, .. } | Stmt::LetCode { name, .. } => out.push(name.clone()),
+                Stmt::LetRecord { fields, .. } => for f in fields { crate::measure::pat_names(&f.pat, out); },
+            }
+        },
+        ExprKind::Match { eqbind, arms, .. } => {
+            out.extend(eqbind.iter().cloned());
+            for a in arms { for p in &a.binders { crate::measure::pat_names(p, out); } }
+        }
+        ExprKind::MatchCode { arms, .. } => {
+            for a in arms { for p in &a.binders { crate::measure::pat_names(p, out); } }
+        }
+        _ => {}
+    });
+}
+
+struct Deshadow {
+    /// The names in scope at the walk's position, innermost last.
+    env: Vec<String>,
+    /// Every name the body mentions or binds, and each fresh one handed out.
+    taken: Vec<String>,
+    /// The body as given, for names in positions [`collect_names`] skips.
+    whole: Expr,
+    fresh: usize,
+}
+
+impl Deshadow {
+    /// The name a binder `name` is bound under: itself, unless it shadows.
+    fn binder(&mut self, name: &str) -> Option<String> {
+        if name == "_" || !self.env.iter().any(|n| n == name) {
+            return None;
+        }
+        let to = loop {
+            self.fresh += 1;
+            let candidate = format!("{name}__{}", self.fresh);
+            if !self.taken.contains(&candidate) && !crate::measure::mentions_context(&self.whole, &candidate) {
+                break candidate;
+            }
+        };
+        self.taken.push(to.clone());
+        Some(to)
+    }
+
+    fn block(&mut self, b: &mut Block) {
+        let depth = self.env.len();
+        for i in 0..b.stmts.len() {
+            let (first, rest) = b.stmts.split_at_mut(i + 1);
+            let s = &mut first[i];
+            // The statement's own value and annotation are read in the scope
+            // before its binders.
+            let mut names: Vec<String> = Vec::new();
+            match s {
+                Stmt::Let { name, ty, expr, .. } => {
+                    if let Some(t) = ty { self.ty(t); }
+                    self.expr(expr);
+                    names.push(name.clone());
+                }
+                Stmt::LetCode { name, expr, .. } => {
+                    self.expr(expr);
+                    names.push(name.clone());
+                }
+                Stmt::LetRecord { fields, expr, .. } => {
+                    self.expr(expr);
+                    for f in fields.iter() { crate::measure::pat_names(&f.pat, &mut names); }
+                }
+            }
+            for name in names {
+                if let Some(to) = self.binder(&name) {
+                    match s {
+                        Stmt::Let { name: n, .. } | Stmt::LetCode { name: n, .. } => *n = to.clone(),
+                        Stmt::LetRecord { fields, .. } => for f in fields.iter_mut() { rename_pat(&mut f.pat, &name, &to); },
+                    }
+                    for later in rest.iter_mut() { rename_stmt(later, &name, &to); }
+                    rename_expr(&mut b.result, &name, &to);
+                    for on in &mut b.ons { rename_expr(&mut on.expr, &name, &to); }
+                    self.env.push(to);
+                } else {
+                    self.env.push(name);
+                }
+            }
+        }
+        self.expr(&mut b.result);
+        for on in &mut b.ons { self.expr(&mut on.expr); }
+        self.env.truncate(depth);
+    }
+
+    /// Bind `names` (already renamed in place where they shadow) over `body`,
+    /// renaming each shadowing one in it first.
+    fn under(&mut self, pats: &mut [Pat], body: &mut Expr) {
+        let depth = self.env.len();
+        let mut names = Vec::new();
+        for p in pats.iter() { crate::measure::pat_names(p, &mut names); }
+        for name in names {
+            if let Some(to) = self.binder(&name) {
+                for p in pats.iter_mut() { rename_pat(p, &name, &to); }
+                rename_expr(body, &name, &to);
+                self.env.push(to);
+            } else {
+                self.env.push(name);
+            }
+        }
+        self.expr(body);
+        self.env.truncate(depth);
+    }
+
+    fn ty(&mut self, t: &mut Ty) {
+        match &mut t.kind {
+            TyKind::Eq(a, b) => { self.expr(a); self.expr(b); }
+            TyKind::OfExpr(e) | TyKind::Fin(e) | TyKind::TypeOf(e) => self.expr(e),
+            TyKind::Named { args, .. } => for a in args { self.ty(a); },
+            TyKind::Vec { elem, len } => { self.ty(elem); self.expr(len); }
+            TyKind::Squash(inner) | TyKind::Code { ty: inner, .. } => self.ty(inner),
+            TyKind::Fn { binder, dom, cod, .. } => {
+                self.ty(dom);
+                let depth = self.env.len();
+                if let Some(name) = binder.clone() {
+                    if let Some(to) = self.binder(&name) {
+                        *binder = Some(to.clone());
+                        rename_ty(cod, &name, &to);
+                        self.env.push(to);
+                    } else {
+                        self.env.push(name);
+                    }
+                }
+                self.ty(cod);
+                self.env.truncate(depth);
+            }
+            TyKind::Nat | TyKind::Univ { .. } | TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
+        }
+    }
+
+    fn expr(&mut self, e: &mut Expr) {
+        match &mut e.kind {
+            ExprKind::Var(_)
+            | ExprKind::OpSymbol { .. }
+            | ExprKind::Univ { .. }
+            | ExprKind::Num(_)
+            | ExprKind::Scaled(_)
+            | ExprKind::Char(_)
+            | ExprKind::Str(_)
+            | ExprKind::ArgSlot(_)
+            | ExprKind::Refl
+            | ExprKind::AutoRefl
+            | ExprKind::Hole(_) => {}
+            ExprKind::App { head, args, named, .. } => {
+                self.expr(head);
+                for a in args { self.expr(a); }
+                for n in named { self.expr(&mut n.expr); }
+            }
+            ExprKind::TyApp { head, args } => {
+                self.expr(head);
+                for a in args { self.ty(a); }
+            }
+            ExprKind::Lam { binders, body } => {
+                let depth = self.env.len();
+                for i in 0..binders.len() {
+                    if let Some(t) = &mut binders[i].ty { self.ty(t); }
+                    let name = binders[i].name.clone();
+                    if let Some(to) = self.binder(&name) {
+                        binders[i].name = to.clone();
+                        for later in &mut binders[i + 1..] {
+                            if let Some(t) = &mut later.ty { rename_ty(t, &name, &to); }
+                            // A later binder of the same name is renamed with
+                            // the rest of its scope; it then shadows `to`.
+                            if later.name == name { later.name = to.clone(); }
+                        }
+                        rename_expr(body, &name, &to);
+                        self.env.push(to);
+                    } else {
+                        self.env.push(name);
+                    }
+                }
+                self.expr(body);
+                self.env.truncate(depth);
+            }
+            ExprKind::CollectionLit(xs) => for x in xs { self.expr(x); },
+            ExprKind::Eq(a, b) => { self.expr(a); self.expr(b); }
+            ExprKind::TyLit(t) => self.ty(t),
+            ExprKind::Match { scrut, eqbind, motive, arms, .. } => {
+                self.expr(scrut);
+                if let Some(m) = motive { self.expr(m); }
+                let depth = self.env.len();
+                if let Some(name) = eqbind.clone() {
+                    if let Some(to) = self.binder(&name) {
+                        *eqbind = Some(to.clone());
+                        for a in arms.iter_mut() {
+                            for p in &mut a.binders { rename_pat(p, &name, &to); }
+                            rename_expr(&mut a.body, &name, &to);
+                        }
+                        self.env.push(to);
+                    } else {
+                        self.env.push(name);
+                    }
+                }
+                for a in arms { self.under(&mut a.binders, &mut a.body); }
+                self.env.truncate(depth);
+            }
+            ExprKind::MatchCode { scrut, motive, arms } => {
+                self.expr(scrut);
+                self.ty(motive);
+                for a in arms { self.under(&mut a.binders, &mut a.body); }
+            }
+            ExprKind::Dot { recv, tyargs, args, named, .. } => {
+                self.expr(recv);
+                for t in tyargs { self.ty(t); }
+                if let Some(xs) = args { for x in xs { self.expr(x); } }
+                for n in named { self.expr(&mut n.expr); }
+            }
+            ExprKind::Index { recv, idx } => { self.expr(recv); self.expr(idx); }
+            ExprKind::RecordLit { tyargs, fields, .. } => {
+                for t in tyargs { self.ty(t); }
+                for f in fields { self.expr(&mut f.expr); }
+            }
+            ExprKind::RecordUpdate { base, fields } => {
+                self.expr(base);
+                for f in fields { self.expr(&mut f.expr); }
+            }
+            ExprKind::Block(b) => self.block(b),
+            ExprKind::Quote(x) | ExprKind::Splice(x) => self.expr(x),
+            ExprKind::J { proof, motive, case } => {
+                self.expr(proof);
+                self.expr(motive);
+                self.expr(case);
+            }
+        }
+    }
 }
