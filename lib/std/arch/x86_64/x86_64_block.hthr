@@ -213,14 +213,11 @@ record ShortControlDecode(bytes: List<BitVec(8)>) {
 fn decode_short_control(bytes: List<BitVec(8)>) →
     Option<ShortControlDecode(bytes)>
 {
-    match bytes as λ actual => Option<ShortControlDecode(actual)> {
+    match bytes {
         Nil => None,
-        Cons(opcode, tail1) => match tail1 as λ rest =>
-                Option<ShortControlDecode(Cons(opcode, rest))> {
+        Cons(opcode, tail1) => match tail1 {
             Nil => None,
-            Cons(displacement, tail2) => match tail2 as λ rest =>
-                    Option<ShortControlDecode(
-                        Cons(opcode, Cons(displacement, rest)))> {
+            Cons(displacement, tail2) => match tail2 {
                 Cons(_, _) => None,
                 Nil => match opcode.eq_dec(BitVec::ofNat(0xeb)) {
                     Inl(opcode_exact) => Some(ShortControlDecode(
@@ -430,16 +427,15 @@ record Rel32Decode(bytes: List<BitVec(8)>) {
 }
 
 fn decode_rel32(bytes: List<BitVec(8)>) → Option<Rel32Decode(bytes)> {
-    match bytes as λ actual => Option<Rel32Decode(actual)> {
+    match bytes {
         Nil => None,
-        Cons(b0, t0) => match t0 as λ r0 => Option<Rel32Decode(Cons(b0, r0))> {
+        Cons(b0, t0) => match t0 {
             Nil => None,
-            Cons(b1, t1) => match t1 as λ r1 => Option<Rel32Decode(Cons(b0, Cons(b1, r1)))> {
+            Cons(b1, t1) => match t1 {
                 Nil => None,
-                Cons(b2, t2) => match t2 as λ r2 => Option<Rel32Decode(Cons(b0, Cons(b1, Cons(b2, r2))))> {
+                Cons(b2, t2) => match t2 {
                     Nil => None,
-                    Cons(b3, t3) => match t3 as λ r3 =>
-                            Option<Rel32Decode(Cons(b0, Cons(b1, Cons(b2, Cons(b3, r3)))))> {
+                    Cons(b3, t3) => match t3 {
                         Cons(_, _) => None,
                         Nil => Some(Rel32Decode(displacement := rel32_of_bytes(b0, b1, b2, b3),
                             decoding := sym(rel32_bytes_of(b0, b1, b2, b3)))),
@@ -456,7 +452,7 @@ record NearControlDecode(bytes: List<BitVec(8)>) {
 }
 
 fn decode_near_control(bytes: List<BitVec(8)>) → Option<NearControlDecode(bytes)> {
-    match bytes as λ actual => Option<NearControlDecode(actual)> {
+    match bytes {
         Nil => None,
         Cons(opcode, tail) => match opcode.eq_dec(BitVec::ofNat(0xe9)) {
             Inl(exact) => match decode_rel32(tail) {
@@ -498,8 +494,8 @@ fn NearControlDecodes(control: NearControl) → Type {
 }
 
 theorem decode_near_control_complete(control: NearControl): NearControlDecodes(control) {
-    match control as λ found => NearControlDecodes(found) {
-        JumpIfNear(cc, displacement) => match cc as λ k => NearControlDecodes(JumpIfNear(k, displacement)) {
+    match control {
+        JumpIfNear(cc, displacement) => match cc {
             O => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(O, value)), rel32_round_trip(displacement)),
             NO => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(NO, value)), rel32_round_trip(displacement)),
             B => cong_fn(λ (value: BitVec(32)) => Some(JumpIfNear(B, value)), rel32_round_trip(displacement)),

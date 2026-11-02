@@ -320,11 +320,7 @@ theorem known_value_holds(values: Valuation(), id, value: Nat, known: List<Known
 {
     match known {
         Nil => λ absent _ => absurd(absent),
-        Cons(here, rest) => match here as λ k =>
-            (match k {
-                Constant(other, v) => match other.same(id) { False => known_value(rest, id), True => Some(v) },
-                Compared(_, _, _, _) => known_value(rest, id),
-            }) = Some(value) → k.Holds(values) ∧ KnownHold(values, rest) → values(64, id) = BitVec::ofNat(value) {
+        Cons(here, rest) => match here {
             Constant(other, v) => (match other.same(id) as λ b => other.same(id) = b →
                 (match b { False => known_value(rest, id), True => Some(v) }) = Some(value) →
                 (values(64, other) = BitVec::ofNat(v)) ∧ KnownHold(values, rest) → values(64, id) = BitVec::ofNat(value) {
@@ -359,15 +355,7 @@ theorem known_comparison_holds(values: Valuation(), id: Nat, compared: Compariso
 {
     match known {
         Nil => λ absent _ => absurd(absent),
-        Cons(here, rest) => match here as λ k =>
-            (match k {
-                Constant(_, _) => known_comparison(rest, id),
-                Compared(other, op, left, right) => match other.same(id) {
-                    False => known_comparison(rest, id),
-                    True => Some(Comparison(op, left, right)),
-                },
-            }) = Some(compared) → k.Holds(values) ∧ KnownHold(values, rest) →
-            compared.op.Holds(values, id, compared.left, compared.right) {
+        Cons(here, rest) => match here {
             Constant(_, _) => λ found holds => known_comparison_holds(values, id, compared, rest, found, holds.right),
             Compared(other, op, left, right) => (match other.same(id) as λ b => other.same(id) = b →
                 (match b { False => known_comparison(rest, id), True => Some(Comparison(op, left, right)) }) = Some(compared) →
@@ -454,8 +442,7 @@ theorem File::place_from_keeps<M>(self file: File, values: Valuation(), held: He
     MayKeep<M>(values, file, True, file.place_from(held, destination, found))
 {
     match found {
-        None => match held.kind as λ k => MayKeep<M>(values, file, True,
-            match k { Word => file.load_known(held.id, destination), Bit => None }) {
+        None => match held.kind {
             Word => file.load_known_keeps<M>(values, held.id, destination),
             Bit => trivial,
         },
@@ -708,20 +695,9 @@ theorem File::binary_keeps<M>(self file: File, values: Valuation(), op: BinaryOp
             },
         }) {
         False => λ _ => file.binary_left_keeps<M>(values, op, destination, output, left, right),
-        True => λ commutes => match file.found_at(Held(right, Word), destination) as λ at =>
-            MayKeep<M>(values, file, op.Holds(values, output, left, right), match at {
-                None => file.binary_left(op, destination, output, left, right),
-                Some(here) => match file.find(Held(left, Word)) {
-                    None => file.binary_left(op, destination, output, left, right),
-                    Some(found) => binary_after(op, Lowered([], file), destination, output, right, left, Some(here), Some(found)),
-                },
-            }) {
+        True => λ commutes => match file.found_at(Held(right, Word), destination) {
             None => file.binary_left_keeps<M>(values, op, destination, output, left, right),
-            Some(here) => match file.find(Held(left, Word)) as λ f =>
-                MayKeep<M>(values, file, op.Holds(values, output, left, right), match f {
-                    None => file.binary_left(op, destination, output, left, right),
-                    Some(found) => binary_after(op, Lowered([], file), destination, output, right, left, Some(here), Some(found)),
-                }) {
+            Some(here) => match file.find(Held(left, Word)) {
                 None => file.binary_left_keeps<M>(values, op, destination, output, left, right),
                 Some(found) => keeps_weaken<M>(values, file, op.Holds(values, output, right, left),
                     op.Holds(values, output, left, right),
@@ -1063,15 +1039,7 @@ theorem File::add_known_keeps<M>(self file: File, values: Valuation(), destinati
             },
         }) {
         None => λ _ => trivial,
-        Some(moved) => λ moved_keeps => match moved.file.found_at(Held(operand, Word), destination) as λ at =>
-            MayKeep<M>(values, file, facts, match at {
-                None => None,
-                Some(_) => match add_immediate(destination, value) {
-                    None => None,
-                    Some(instruction) => Some(moved.then(Lowered([instruction],
-                        moved.file.write(destination, Some(Held(output, Word)))))),
-                },
-            }) {
+        Some(moved) => λ moved_keeps => match moved.file.found_at(Held(operand, Word), destination) {
             None => trivial,
             Some(here) => (match add_immediate(destination, value) as λ o => add_immediate(destination, value) = o →
                 MayKeep<M>(values, file, facts, match o {
@@ -1107,16 +1075,7 @@ theorem File::add_keeps<M>(self file: File, values: Valuation(), destination: Gp
     MayKeep<M>(values, file, OpAdd.Holds(values, output, left, right), file.add(destination, output, left, right))
 {
     let holds = OpAdd.Holds(values, output, left, right);
-    match file.find(Held(right, Word)) as λ f => MayKeep<M>(values, file, holds, match f {
-        Some(_) => file.binary(OpAdd, destination, output, left, right),
-        None => match known_value(file.known, right) {
-            Some(value) => file.add_known(destination, output, left, value),
-            None => match known_value(file.known, left) {
-                Some(value) => file.add_known(destination, output, right, value),
-                None => None,
-            },
-        },
-    }) {
+    match file.find(Held(right, Word)) {
         Some(_) => file.binary_keeps<M>(values, OpAdd, destination, output, left, right),
         None => (match known_value(file.known, right) as λ o => known_value(file.known, right) = o →
             MayKeep<M>(values, file, holds, match o {
@@ -1664,14 +1623,7 @@ theorem move_outputs_keeps<M>(values: Valuation(), entries: List<Port>):
         Cons(port, rest) => λ file registers => match registers {
             Nil => trivial,
             Cons(register, later) =>
-                match Kind::of_width(port.width) as λ kind =>
-                    MayKeep<M>(values, file, True, match kind {
-                        None => None,
-                        Some(k) => match file.place(Held(port.id, k), register) {
-                            None => None,
-                            Some(moved) => moved.then_option(moved.file.move_outputs(rest, later)),
-                        },
-                    }) {
+                match Kind::of_width(port.width) {
                     None => trivial,
                     Some(k) =>
                         (match file.place(Held(port.id, k), register) as λ placed =>

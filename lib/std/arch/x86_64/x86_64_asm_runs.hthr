@@ -37,7 +37,7 @@ theorem asm_back_start(k: Nat): asm_back(Start, k) = Start {
 theorem asm_back_back(k: Nat): (p: Prog) → (j: Nat) → asm_back(asm_back(p, k), j) = asm_back(p, j + k) {
     match k {
         Zero => λ p j => refl,
-        Succ(i) => λ p => match p as λ x => (j: Nat) → asm_back(asm_back(x, Succ(i)), j) = asm_back(x, j + Succ(i)) {
+        Succ(i) => λ p => match p {
             Start => λ j => asm_back_start(j),
             At(before, _, _) => λ j => asm_back_back(i, before, j),
         },
@@ -73,7 +73,7 @@ fn Prog::no_holes(self p: Prog) → Bool {
 theorem Prog::no_holes_fit(self p: Prog): p.no_holes().IsTrue() → FillsFit(p, no_fills()) {
     match p {
         Start => λ _ => trivial,
-        At(before, name, item) => match item as λ it => At(before, name, it).no_holes().IsTrue() → FillsFit(At(before, name, it), no_fills()) {
+        At(before, name, item) => match item {
             Block(_) => λ ok => before.no_holes_fit(ok),
             Code(_) => λ ok => before.no_holes_fit(ok),
             Load(_) => λ ok => before.no_holes_fit(ok),
@@ -127,9 +127,7 @@ theorem names_unique_back(k: Nat): (p: Prog) → p.fresh_names(k).IsTrue() → a
         Zero => λ p _ rest => rest,
         Succ(j) => λ p => match p {
             Start => λ _ rest => rest,
-            At(before, name, item) => match name as λ nm =>
-                At(before, nm, item).fresh_names(Succ(j)).IsTrue() → asm_back(before, j).names_unique().IsTrue() →
-                At(before, nm, item).names_unique().IsTrue() {
+            At(before, name, item) => match name {
                 Zero => λ fresh rest => names_unique_back(j, before, fresh, rest),
                 Succ(n) => λ fresh rest => {
                     let parts = Bool::is_true_and(before.lacks(Succ(n)), before.fresh_names(j), fresh);
@@ -152,8 +150,7 @@ theorem lacks_label(name, k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) →
                 j(at, λ x _ => x.lacks(name).IsTrue(), lacks));
             not_true_false(name.leb(n) && n.leb(name), here.left)
         },
-        Succ(i) => λ p => match p as λ x => (q: Prog) → (n: Nat) → (item: Asm) → x.lacks(name).IsTrue() →
-                asm_back(x, Succ(i)) = At(q, n, item) → (name.leb(n) && n.leb(name)) = False {
+        Succ(i) => λ p => match p {
             Start => λ q n item _ no => absurd(no),
             At(before, m, _) => λ q n item lacks at =>
                 lacks_label(name, i, before, q, n, item,
@@ -169,11 +166,9 @@ theorem label_target(k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) → p.na
     match k {
         Zero => λ p q n item _ at => j(sym(at), λ x _ => asm_target(x, Succ(n)) = prog_len(q),
             j(sym(n.leb_refl()), λ b _ => (match b && b { True => prog_len(q), False => asm_target(q, Succ(n)) }) = prog_len(q), refl)),
-        Succ(i) => λ p => match p as λ x => (q: Prog) → (n: Nat) → (item: Asm) → x.names_unique().IsTrue() →
-                asm_back(x, Succ(i)) = At(q, Succ(n), item) → asm_target(x, Succ(n)) = prog_len(q) {
+        Succ(i) => λ p => match p {
             Start => λ q n item _ no => absurd(no),
-            At(before, m, it) => λ q n item => match m as λ x => At(before, x, it).names_unique().IsTrue() →
-                    asm_back(before, i) = At(q, Succ(n), item) → asm_target(At(before, x, it), Succ(n)) = prog_len(q) {
+            At(before, m, it) => λ q n item => match m {
                 Zero => λ unique at => label_target(i, before, q, n, item, unique, at),
                 Succ(l) => λ unique at => {
                     let both = Bool::is_true_and(before.lacks(Succ(l)), before.names_unique(), unique);
@@ -213,9 +208,7 @@ theorem jcc_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat
             asm_lands_forward(prog_len(before), 6, asm_jump_of(labels, prog_len(before), Jcc(cc, target)), labels(target),
                 eq_true_of_is_true(item_lands(labels, prog_len(before), Jcc(cc, target)), here.left))
         },
-        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (cc: ConditionCode) → (target: Nat) →
-                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, Jcc(cc, target)) →
-                JumpsForward(prog_len(before), 6, asm_jump_of(labels, prog_len(before), Jcc(cc, target)), labels(target)) {
+        Succ(i) => λ p => match p {
             Start => λ before name cc target _ no => absurd(no),
             At(earlier, _, item) => λ before name cc target lands at =>
                 jcc_lands(labels, i, earlier, before, name, cc, target,
@@ -252,9 +245,7 @@ theorem call_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Na
                 Inr(yes) => Inr(asm_lands_back(prog_len(before), 5, displacement, labels(target), eq_true_of_is_true(behind, yes))),
             }
         },
-        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (target: Nat) →
-                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, CallTo(target)) →
-                NearLands(prog_len(before), asm_jump_of(labels, prog_len(before), CallTo(target)), labels(target)) {
+        Succ(i) => λ p => match p {
             Start => λ before name target _ no => absurd(no),
             At(earlier, _, item) => λ before name target lands at =>
                 call_lands(labels, i, earlier, before, name, target,
@@ -278,9 +269,7 @@ theorem jmp_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat
                 Inr(yes) => Inr(asm_lands_back(prog_len(before), 5, displacement, labels(target), eq_true_of_is_true(behind, yes))),
             }
         },
-        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (target: Nat) →
-                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, Jmp(target)) →
-                NearLands(prog_len(before), asm_jump_of(labels, prog_len(before), Jmp(target)), labels(target)) {
+        Succ(i) => λ p => match p {
             Start => λ before name target _ no => absurd(no),
             At(earlier, _, item) => λ before name target lands at =>
                 jmp_lands(labels, i, earlier, before, name, target,

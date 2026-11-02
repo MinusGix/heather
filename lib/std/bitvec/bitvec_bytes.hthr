@@ -32,7 +32,7 @@ fn BitVec::bytes_be(k: Nat, self w: BitVec(8 * k)) → [BitVec(8); k] { reverse(
 fn BitVec::of_bytes_be({k: Nat}, bytes: [BitVec(8); k]) → BitVec(8 * k) { BitVec::of_bytes_le(reverse(bytes)) }
 
 theorem BitVec::of_bytes_le_bytes_le(k: Nat): (w: BitVec(8 * k)) → BitVec::of_bytes_le(w.bytes_le(k)) = w {
-    match k as λ j => (w: BitVec(8 * j)) → BitVec::of_bytes_le(w.bytes_le(j)) = w {
+    match k {
         Zero => λ w => refl,
         Succ(j, ih) => λ w => {
             let rest: (w.take_low(8, 8 * j).concat(BitVec::of_bytes_le(w.drop_low(8, 8 * j).bytes_le(j))) =
@@ -43,7 +43,7 @@ theorem BitVec::of_bytes_le_bytes_le(k: Nat): (w: BitVec(8 * k)) → BitVec::of_
 }
 
 theorem BitVec::bytes_le_of_bytes_le(k: Nat): (bytes: [BitVec(8); k]) → BitVec::of_bytes_le(bytes).bytes_le(k) = bytes {
-    match k as λ j => (bytes: [BitVec(8); j]) → BitVec::of_bytes_le(bytes).bytes_le(j) = bytes {
+    match k {
         Zero => λ bytes => refl,
         Succ(j, ih) => λ bytes => {
             let word = head(bytes).concat(BitVec::of_bytes_le(tail(bytes)));

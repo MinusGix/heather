@@ -173,9 +173,9 @@ theorem Finite::sub_self({F: Format}, a: Finite(F), mode: Mode): a.sub(a, mode :
 // The sign of a dyadic built from a sign bit and a magnitude is that bit, or
 // `z` at zero.
 theorem Finite::sign_or_parts(s: Bool, m: Nat, e: Int): Dyadic(match s { False => m.int(), True => -m.int() }, e).sign_or(s) = s {
-    match s as λ t => Dyadic(match t { False => m.int(), True => -m.int() }, e).sign_or(t) = t {
-        False => match m as λ k => Dyadic(k.int(), e).sign_or(False) = False { Zero => refl, Succ(_) => refl },
-        True => match m as λ k => Dyadic(-k.int(), e).sign_or(True) = True { Zero => refl, Succ(_) => refl },
+    match s {
+        False => match m { Zero => refl, Succ(_) => refl },
+        True => match m { Zero => refl, Succ(_) => refl },
     }
 }
 
@@ -186,19 +186,19 @@ theorem Finite::sign_or_mul_parts(s, t: Bool, m, n: Nat, e: Int):
 {
     let left_zero = λ (y: Int) (z: Bool) => j(sym(Int::zero_mul(y)), λ v _ => Dyadic(v, e).sign_or(z) = z, refl);
     let right_zero = λ (x: Int) (z: Bool) => j(sym(x.mul_zero()), λ v _ => Dyadic(v, e).sign_or(z) = z, refl);
-    match m as λ k => Dyadic((match s { False => k.int(), True => -k.int() }) * (match t { False => n.int(), True => -n.int() }), e).sign_or(s.xor(t)) = s.xor(t) {
-        Zero => match s as λ u => Dyadic((match u { False => OfNat(0), True => -OfNat(0) }) * (match t { False => n.int(), True => -n.int() }), e).sign_or(u.xor(t)) = u.xor(t) {
+    match m {
+        Zero => match s {
             False => left_zero(match t { False => n.int(), True => -n.int() }, t),
             True => left_zero(match t { False => n.int(), True => -n.int() }, !t),
         },
-        Succ(i) => match n as λ k => Dyadic((match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match t { False => k.int(), True => -k.int() }), e).sign_or(s.xor(t)) = s.xor(t) {
-            Zero => match t as λ u => Dyadic((match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match u { False => OfNat(0), True => -OfNat(0) }), e).sign_or(s.xor(u)) = s.xor(u) {
+        Succ(i) => match n {
+            Zero => match t {
                 False => right_zero(match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }, s.xor(False)),
                 True => right_zero(match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }, s.xor(True)),
             },
-            Succ(l) => match s as λ u => Dyadic((match u { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match t { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(u.xor(t)) = u.xor(t) {
-                False => match t as λ w => Dyadic(OfNat(Succ(i)) * (match w { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(w) = w { False => refl, True => refl },
-                True => match t as λ w => Dyadic(-OfNat(Succ(i)) * (match w { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(!w) = !w { False => refl, True => refl },
+            Succ(l) => match s {
+                False => match t { False => refl, True => refl },
+                True => match t { False => refl, True => refl },
             },
         },
     }
@@ -391,7 +391,7 @@ theorem Format::approx_of_cell(self F: Format, x, y: Rat, h: Nat, st: Bool, a: F
         False => λ (e: x ≈ F.grid_sq(h.int())) => {
             let c = cell(h.int());
             let ge: (F.grid(h.int()) <= y) = c.left.mpr(Inr(Rat::le_of_same(Rat::same_sym(e))));
-            let not_gt: ¬(F.grid(h.int()) < y) = λ lt => match c.right.mp(lt) as λ _ => False {
+            let not_gt: ¬(F.grid(h.int()) < y) = λ lt => match c.right.mp(lt) {
                 Inl(neg) => false_elim(omega(neg)),
                 Inr(sq) => Rat::lt_irrefl(F.grid_sq(h.int()), Rat::lt_respects(F.grid_sq(h.int()).same_refl(), e, sq)),
             };
@@ -399,7 +399,7 @@ theorem Format::approx_of_cell(self F: Format, x, y: Rat, h: Nat, st: Bool, a: F
         },
         True => λ (b: F.grid_sq(h.int()) < x ∧ x < F.grid_sq(h.int() + 1)) => {
             let lt: (F.grid(h.int()) < y) = cell(h.int()).right.mpr(Inr(b.left));
-            let not_le: ¬(F.grid(h.int() + 1) <= y) = λ le => match cell(h.int() + 1).left.mp(le) as λ _ => False {
+            let not_le: ¬(F.grid(h.int() + 1) <= y) = λ le => match cell(h.int() + 1).left.mp(le) {
                 Inl(np) => false_elim(omega(np)),
                 Inr(sq) => Rat::not_le_of_lt(b.right, sq),
             };
@@ -415,15 +415,15 @@ theorem Format::cell_of_approx(self F: Format, x, y: Rat, h: Nat, st: Bool, a: F
         let le_iff: (F.grid(m) <= y ↔ F.RootLe(m, x)) = Iff(
             mp := λ (le: F.grid(m) <= y) => {
                 let mh: (m <= h.int()) = F.le_cut(y, h, st, ay, m, le);
-                match Int::le_dec(m, 0) as λ _ => F.RootLe(m, x) {
+                match Int::le_dec(m, 0) {
                     Inl(np) => Inl(np),
                     Inr(pos) => Inr(Rat::le_trans(F.grid_sq_le(m, h.int(), omega(pos), mh), bounds.left)),
                 }
             },
             mpr := λ (r: F.RootLe(m, x)) => {
-                let mh: (m <= h.int()) = match r as λ _ => m <= h.int() {
+                let mh: (m <= h.int()) = match r {
                     Inl(np) => omega(np),
-                    Inr(sq) => match Int::le_dec(m, h.int()) as λ _ => m <= h.int() {
+                    Inr(sq) => match Int::le_dec(m, h.int()) {
                         Inl(ok) => ok,
                         Inr(over) => false_elim(Rat::not_le_of_lt(Rat::lt_of_lt_of_le(bounds.right, F.grid_sq_le(h.int() + 1, m, omega, omega(over))), sq)),
                     },
@@ -432,19 +432,19 @@ theorem Format::cell_of_approx(self F: Format, x, y: Rat, h: Nat, st: Bool, a: F
             });
         let lt_iff: (F.grid(m) < y ↔ F.RootLt(m, x)) = Iff(
             mp := λ (lt: F.grid(m) < y) => {
-                let mb: (m < h.int() + Nat::of_bit(st).int()) = match Int::le_dec(h.int() + Nat::of_bit(st).int(), m) as λ _ => m < h.int() + Nat::of_bit(st).int() {
+                let mb: (m < h.int() + Nat::of_bit(st).int()) = match Int::le_dec(h.int() + Nat::of_bit(st).int(), m) {
                     Inl(ge) => false_elim(Rat::not_le_of_lt(lt, F.cut_ge(y, h, st, ay, m, ge))),
                     Inr(no) => omega(no),
                 };
-                match Int::le_dec(0, m) as λ _ => F.RootLt(m, x) {
+                match Int::le_dec(0, m) {
                     Inl(nn) => Inr(F.sqrt_lt_of_below(x, h, st, a, m, nn, mb)),
                     Inr(neg) => Inl(omega(neg)),
                 }
             },
             mpr := λ (r: F.RootLt(m, x)) => {
-                let mb: (m < h.int() + Nat::of_bit(st).int()) = match r as λ _ => m < h.int() + Nat::of_bit(st).int() {
+                let mb: (m < h.int() + Nat::of_bit(st).int()) = match r {
                     Inl(neg) => omega(neg),
-                    Inr(sq) => match Int::le_dec(h.int() + Nat::of_bit(st).int(), m) as λ _ => m < h.int() + Nat::of_bit(st).int() {
+                    Inr(sq) => match Int::le_dec(h.int() + Nat::of_bit(st).int(), m) {
                         Inl(ge) => false_elim(Rat::not_lt_of_le(F.sqrt_le_of_above(x, h, st, a, m, ge), sq)),
                         Inr(no) => omega(no),
                     },
@@ -466,7 +466,7 @@ theorem Format::cell_zero(self F: Format, x, y: Rat, zx: x ≈ 0, cell: F.SqrtCe
     let zz: Rat::Same(Rat::mul(0, 0), 0) = omega;
     let sq0: (F.grid_sq(0) ≈ 0) = Rat::same_trans(Rat::mul_respects(g0, g0), zz);
     let ge: (F.grid(0) <= y) = c.left.mpr(Inl(Int::le_refl(0)));
-    let not_gt: ¬(F.grid(0) < y) = λ lt => match c.right.mp(lt) as λ _ => False {
+    let not_gt: ¬(F.grid(0) < y) = λ lt => match c.right.mp(lt) {
         Inl(neg) => false_elim(omega(neg)),
         Inr(sq) => Rat::lt_irrefl(0, Rat::lt_respects(sq0, zx, sq)),
     };
@@ -485,7 +485,7 @@ theorem Format::witness_approx(self F: Format, h: Nat, st: Bool): F.Approx(F.sqr
         let r: (Dyadic(k * 2, g - 1).rat() ≈ Dyadic(k, g).rat()) = j(ex, λ v _ => Dyadic(k * Nat::pow(2, 1).int(), g - 1) ≈ Dyadic(k, v), Dyadic::align(k, g - 1, 1));
         r
     };
-    match st as λ s => F.Approx(F.sqrt_witness(h, s), h, s) {
+    match st {
         False => F.grid(h.int()).same_refl(),
         True => {
             let lo: (Dyadic(h.int() * 2, g - 1).rat() < Dyadic(h.int() * 2 + 1, g - 1).rat()) = Dyadic::lt_of_mant_lt(h.int() * 2, h.int() * 2 + 1, g - 1, omega);
@@ -553,7 +553,7 @@ theorem Finite::sqrt_approx_mag({F: Format}, a: Finite(F)): F.SqrtApprox(Dyadic(
     let e1: (Succ(h).int() = h.int() + 1) = omega;
     let sq1: (F.grid_sq(h.int() + 1) ≈ Dyadic(((Succ(h) * Succ(h)) * D).int(), c).rat()) =
         j(e1, λ v _ => F.grid_sq(v) ≈ Dyadic(((Succ(h) * Succ(h)) * D).int(), c).rat(), Rat::same_trans(F.grid_sq_dyadic(Succ(h).int()), gs(Succ(h) * Succ(h))));
-    match Succ((h * h) * D).le_dec(N) as λ dd => F.SqrtApprox(Dyadic(a.mag.int(), a.q()).rat(), h, match dd { Inl(_) => True, Inr(_) => False }) {
+    match Succ((h * h) * D).le_dec(N) {
         Inr(nlt) => {
             let eq: ((h * h) * D = N) = omega(nlt, below);
             let at: (F.grid_sq(h.int()) ≈ Dyadic(N.int(), c).rat()) = j(eq, λ v _ => F.grid_sq(h.int()) ≈ Dyadic(v.int(), c).rat(), sq0);
@@ -572,7 +572,7 @@ theorem Finite::val_of_mag_zero({F: Format}, a: Finite(F), em: a.mag = 0): a.val
     let z: (Dyadic(0, a.q()).rat() ≈ 0) = Rat::same_trans(x := Dyadic(0, a.q()).rat(), y := Dyadic::rat(0), z := 0, hxy := Dyadic::zero_mant(a.q()), hyz := Dyadic::rat_zero());
     let pm: (Dyadic(a.mag.int(), a.q()).rat() ≈ 0) = j(sym(em), λ k _ => Dyadic(k.int(), a.q()).rat() ≈ 0, z);
     let nm: (Dyadic(-a.mag.int(), a.q()).rat() ≈ 0) = j(sym(em), λ k _ => Dyadic(-k.int(), a.q()).rat() ≈ 0, z);
-    match a.neg as λ s => Dyadic(match s { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat() ≈ 0 { False => pm, True => nm }
+    match a.neg { False => pm, True => nm }
 }
 
 theorem Finite::val_neg_lt({F: Format}, a: Finite(F), ea: a.neg = True, k: Nat, em: a.mag = Succ(k)): a.val() < 0 {
@@ -633,9 +633,9 @@ theorem Finite::sqrt_correct({F: Format}, a: Finite(F), mode: Mode, nan: F.speci
 {
     let ay = F.approx_of_cell(a.val(), y, a.sqrt_h(), a.sqrt_st(), a.sqrt_approx(nn), cell);
     let main: RoundsTo(F, mode, y, a.sqrt_abs(mode := mode)) = F.round_h_correct(mode, y, a.sqrt_h(), a.sqrt_st(), ay);
-    match a.neg as λ s => a.neg = s → RoundsTo(F, mode, y, match s as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }) {
+    match a.neg as λ s => a.neg = s → RoundsTo(F, mode, y, match s { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }) {
         False => λ _ => main,
-        True => λ ea => match a.mag as λ k => a.mag = k → RoundsTo(F, mode, y, match k as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) }) {
+        True => λ ea => match a.mag as λ k => a.mag = k → RoundsTo(F, mode, y, match k { Zero => Float::Fin(a), Succ(_) => NaN(nan) }) {
             Zero => λ em => {
                 let xz = Finite::val_of_mag_zero(a, em);
                 let yz = F.cell_zero(a.val(), y, xz, cell);
@@ -649,20 +649,20 @@ theorem Finite::sqrt_correct({F: Format}, a: Finite(F), mode: Mode, nan: F.speci
 // A nonnegative root carries `+`; `√-0 = -0`; the root of a negative nonzero
 // is NaN.
 theorem Finite::sqrt_sign({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), pos: a.neg = False): (a.sqrt(mode := mode, nan := nan)).SignIs(False) {
-    j(sym(pos), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }).SignIs(False),
+    j(sym(pos), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }).SignIs(False),
         F.round_h_sign(mode, a.sqrt_h(), a.sqrt_st()))
 }
 
 theorem Finite::sqrt_neg_zero({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), neg: a.neg = True, z: a.mag = 0): a.sqrt(mode := mode, nan := nan) = Float::Fin(a) {
     let inner = j(sym(z), λ m _ => (match m as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) }) = Float::Fin(a), refl);
-    j(sym(neg), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }) = Float::Fin(a), inner)
+    j(sym(neg), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }) = Float::Fin(a), inner)
 }
 
 theorem Finite::sqrt_neg({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), neg: a.neg = True, k: Nat, nz: a.mag = Succ(k)):
     (a.sqrt(mode := mode, nan := nan)).is_nan() = True
 {
     let inner = j(sym(nz), λ m _ => (match m as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) }).is_nan() = True, refl);
-    j(sym(neg), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }).is_nan() = True, inner)
+    j(sym(neg), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }).is_nan() = True, inner)
 }
 
 // ---------------------------------------------------------------------------
@@ -767,23 +767,23 @@ fn Float::convert({F: Format}, self x: Float(F), G: Format, mode: Mode := Neares
     }
 }
 
-theorem Bool::xor_self(self b: Bool): b.xor(b) = False { match b as λ c => c.xor(c) = False { False => refl, True => refl } }
+theorem Bool::xor_self(self b: Bool): b.xor(b) = False { match b { False => refl, True => refl } }
 
-theorem Bool::xor_not(self b: Bool): b.xor(!b) = True { match b as λ c => c.xor(!c) = True { False => refl, True => refl } }
+theorem Bool::xor_not(self b: Bool): b.xor(!b) = True { match b { False => refl, True => refl } }
 
 // NaN propagates through every operation.
 theorem Float::add_nan({F: Format}, x: Float(F), h: F.specials.has_nan().IsTrue(), mode: Mode): (x.add(NaN(h), mode := mode)).is_nan() = True ∧ (Float::add(NaN(h), x, mode := mode)).is_nan() = True {
-    And(match x as λ y => (y.add(NaN(h), mode := mode)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+    And(match x { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
 }
 
 theorem Float::mul_nan({F: Format}, x: Float(F), h: F.specials.has_nan().IsTrue(), mode: Mode): (x.mul(NaN(h), mode := mode)).is_nan() = True ∧ (Float::mul(NaN(h), x, mode := mode)).is_nan() = True {
-    And(match x as λ y => (y.mul(NaN(h), mode := mode)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+    And(match x { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
 }
 
 theorem Float::div_nan({F: Format}, x: Float(F), h, nan: F.specials.has_nan().IsTrue(), mode: Mode):
     (x.div(NaN(h), mode := mode, nan := nan)).is_nan() = True ∧ (Float::div(NaN(h), x, mode := mode, nan := nan)).is_nan() = True
 {
-    And(match x as λ y => (y.div(NaN(h), mode := mode, nan := nan)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+    And(match x { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
 }
 
 // Infinities: same-signed ones add, opposite ones are invalid.
@@ -822,7 +822,7 @@ theorem Float::div_zero_zero({F: Format}, a, b: Finite(F), za: a.mag = 0, zb: b.
 {
     let inner = j(sym(za), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) }).is_nan() = True, refl);
     j(sym(zb), λ m _ => (match m as λ _ => Float(F) {
-        Zero => match a.mag as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
+        Zero => match a.mag { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
         Succ(_) => a.div(b, mode := mode),
     }).is_nan() = True, inner)
 }
@@ -834,7 +834,7 @@ theorem Float::div_by_zero_inf({F: Format}, a, b: Finite(F), k: Nat, na: a.mag =
         j(sym(is_true_dec_yes(F.specials.has_inf(), has)), λ c _ => (match c as λ _ => Float(F) { Inl(hh) => Inf(a.neg.xor(b.neg), hh), Inr(_) => NaN(nan) }) = Inf(a.neg.xor(b.neg), has), refl);
     let inner = j(sym(na), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) }) = Inf(a.neg.xor(b.neg), has), dz);
     j(sym(zb), λ m _ => (match m as λ _ => Float(F) {
-        Zero => match a.mag as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
+        Zero => match a.mag { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
         Succ(_) => a.div(b, mode := mode),
     }) = Inf(a.neg.xor(b.neg), has), inner)
 }

@@ -51,9 +51,7 @@ theorem lookup_sound<K, V>(Valid: K → V → Type,
     query: K, entries: List<CertifiedEntry<K, V>(Valid)>, value: V):
     lookup(Valid, equal, query, entries) = Some(value) → Valid(query, value)
 {
-    match entries as λ actual =>
-            lookup(Valid, equal, query, actual) = Some(value) →
-            Valid(query, value) {
+    match entries {
         Nil => λ success => false_elim(lookup_none_ne_some(value, success)),
         Cons(entry, tail) => match equal(query, entry.key) {
             Inl(key_exact) => λ success =>

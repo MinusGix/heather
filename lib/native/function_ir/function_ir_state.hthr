@@ -170,7 +170,7 @@ theorem loop_run_empty(run_step: Valuation() → Buffers() → State, step: Valu
                     (match b as λ _ => LoopState {
                         False => loop_run(run_step, parameters, count, exit, next, rest, words_of(after, next), Nil),
                         True => LoopState(LoopEnd(words_of(after, next), False), Nil),
-                    }) = LoopState(match b as λ _ => LoopEnd {
+                    }) = LoopState(match b {
                         False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
                         True => LoopEnd(words_of(after, next), False),
                     }, Nil) {
@@ -180,7 +180,7 @@ theorem loop_run_empty(run_step: Valuation() → Buffers() → State, step: Valu
             j(sym(same(before)), λ s _ => (match s.values(1, exit).head_bit() as λ _ => LoopState {
                     False => loop_run(run_step, parameters, count, exit, next, rest, words_of(s.values, next), s.buffers),
                     True => LoopState(LoopEnd(words_of(s.values, next), False), s.buffers),
-                }) = LoopState(match after(1, exit).head_bit() as λ _ => LoopEnd {
+                }) = LoopState(match after(1, exit).head_bit() {
                     False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
                     True => LoopEnd(words_of(after, next), False),
                 }, Nil), ends)
@@ -233,16 +233,16 @@ theorem StructuredRegion::run_empty(self region: StructuredRegion, call: Answers
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ values => {
             let b = values(1, condition).head_bit();
             let nil_either: ((match b as λ _ => Buffers() { False => Nil, True => Nil }) = Nil) =
-                match b as λ c => (match c as λ _ => Buffers() { False => Nil, True => Nil }) = Nil { False => refl, True => refl };
+                match b { False => refl, True => refl };
             j(sym(when_false.run_empty(call, values)), λ f _ => State(λ w id => match b {
                         False => f.values(w, id),
                         True => when_true.run(call, values, Nil).values(w, id),
-                    }, match b as λ _ => Buffers() { False => f.buffers, True => when_true.run(call, values, Nil).buffers }) =
+                    }, match b { False => f.buffers, True => when_true.run(call, values, Nil).buffers }) =
                     State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), Nil),
                 j(sym(when_true.run_empty(call, values)), λ t _ => State(λ w id => match b {
                             False => when_false.eval(call, values)(w, id),
                             True => t.values(w, id),
-                        }, match b as λ _ => Buffers() { False => Nil, True => t.buffers }) =
+                        }, match b { False => Nil, True => t.buffers }) =
                         State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), Nil),
                     cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), held),
                         nil_either)))

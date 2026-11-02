@@ -56,7 +56,7 @@ theorem Nat::same_false(self n: Nat, m: Nat, ne: n ≠ m): n.same(m) = False {
 }
 
 theorem Nat::differs_of_ne(self a: Nat, b: Nat, ne: a ≠ b): a.differs(b) = True {
-    (match a.eq_dec(b) as λ d => (match d { Inl(_) => False, Inr(_) => True }) = True {
+    (match a.eq_dec(b) {
         Inl(e) => false_elim(ne(e)),
         Inr(_) => refl,
     })
@@ -162,8 +162,8 @@ theorem Homes::nodes_checked_sound(self homes: Homes, out: List<Nat>, nodes: Lis
 // A region's check finds what is live before it.
 theorem Homes::region_checked_sound(self homes: Homes, region: StructuredRegion, out, l: List<Nat>, got: homes.region_checked(region, out) = Some(l)):
     (l = homes.region_live(region, out)) ∧ Bool::IsTrue(match homes.region_checked(region, out) { None => False, Some(_) => True }) {
-    ⟨j(sym(got), λ o _ => l = (match o as λ _ => List<Nat> { None => out, Some(live) => live }), refl),
-        j(sym(got), λ o _ => Bool::IsTrue(match o as λ _ => Bool { None => False, Some(_) => True }), trivial)⟩
+    ⟨j(sym(got), λ o _ => l = (match o { None => out, Some(live) => live }), refl),
+        j(sym(got), λ o _ => Bool::IsTrue(match o { None => False, Some(_) => True }), trivial)⟩
 }
 
 theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l: List<Nat>) →
@@ -272,7 +272,7 @@ theorem Source::allocation_sound(self src: Source, homes: Homes, ok: src.allocat
     homes.fits().IsTrue() ∧ (homes.slotted(src.main.live_in(homes, [])).IsTrue() ∧ src.main.checks(homes, []).IsTrue()) {
     let parts = Bool::is_true_and(homes.fits(), match src.main.checked(homes, []) { None => False, Some(live) => homes.slotted(live) }, ok);
     ⟨parts.left, (match src.main.checked(homes, []) as λ o => src.main.checked(homes, []) = o →
-            Bool::IsTrue(match o as λ _ => Bool { None => False, Some(live) => homes.slotted(live) }) →
+            Bool::IsTrue(match o { None => False, Some(live) => homes.slotted(live) }) →
             homes.slotted(src.main.live_in(homes, [])).IsTrue() ∧ src.main.checks(homes, []).IsTrue() {
         None => λ _ no => false_elim(no),
         Some(live) => λ got slotted => {
@@ -618,8 +618,7 @@ theorem Target::held_dead(self t: Target, live, out: List<Nat>, env: Env, id: Na
 // Another word's number where the written slot is put.
 theorem Homes::number_put_other(self homes: Homes, i, id: Nat, words: List<Nat>, k: Nat, values: List<BitVec(64)>, ne: i ≠ id):
     homes.number(i, words.put(id, k, 0), values) = homes.number(i, words, values) {
-    (match homes.home(i) as λ h => (match h { InSlot => words.put(id, k, 0).get_or(i, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) =
-            (match h { InSlot => words.get_or(i, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) {
+    (match homes.home(i) {
         InSlot => List::put_other(id, words, k, 0, i, ne),
         InReg(_) => refl,
     })

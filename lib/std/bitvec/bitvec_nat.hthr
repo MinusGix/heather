@@ -118,8 +118,7 @@ theorem scale_twice(p, d: Nat): (p * 2) * d = (p * d).twice() {
 // A value splits at its low `n` bits: how the bytes of a word read back.
 theorem toNat_take_drop(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
     x.toNat() = x.take_low(n, m).toNat() + Nat::pow(2, n) * x.drop_low(n, m).toNat() {
-    match n as λ k => (m: Nat) → (x: BitVec(m + k)) →
-        x.toNat() = x.take_low(k, m).toNat() + Nat::pow(2, k) * x.drop_low(k, m).toNat() {
+    match n {
         Zero => λ m x => sym(trans(Nat::add_left_zero(1 * x.toNat()), Nat::mul_left_one(x.toNat()))),
         Succ(k, ih) => λ m x => {
             let tail = x.tail_bits();

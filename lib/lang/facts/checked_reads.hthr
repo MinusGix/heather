@@ -114,7 +114,7 @@ theorem read_checked_in(xs: List<Nat>, len, i: Nat, h: i < len): read_checked(xs
 theorem Site::compile_runs({len: Nat}, {bounds: List<Nat>}, self s: Site(len, bounds), xs, args: List<Nat>, w: Within(args, bounds)):
     s.compile().run(xs, len, args) = read_checked(xs, len, s.ix.eval(args))
 {
-    (match s.fact as λ o => (match o { None => Checked(s.ix), Some(_) => Unchecked(s.ix) }).run(xs, len, args) = read_checked(xs, len, s.ix.eval(args)) {
+    (match s.fact {
         None => refl,
         Some(fact) => sym(read_checked_in(xs, len, s.ix.eval(args), fact(args, w))),
     })
@@ -123,7 +123,7 @@ theorem Site::compile_runs({len: Nat}, {bounds: List<Nat>}, self s: Site(len, bo
 theorem compile_sites_runs(len: Nat, bounds: List<Nat>, xs, args: List<Nat>, w: Within(args, bounds), sites: List<Site(len, bounds)>):
     run_compiled(xs, len, args, compile_sites(len, bounds, sites)) = sum_reads(xs, len, args, erase(len, bounds, sites))
 {
-    match sites as λ ss => run_compiled(xs, len, args, compile_sites(len, bounds, ss)) = sum_reads(xs, len, args, erase(len, bounds, ss)) {
+    match sites {
         Nil => refl,
         Cons(s, rest) => j(sym(s.compile_runs(xs, args, w)), λ o _ => o.and_then(λ v => run_compiled(xs, len, args, compile_sites(len, bounds, rest)).map(λ t => v + t))
                 = read_checked(xs, len, s.ix.eval(args)).and_then(λ v => sum_reads(xs, len, args, erase(len, bounds, rest)).map(λ t => v + t)),

@@ -8,7 +8,7 @@ position, and compiles nested patterns to case trees with per-clause
 equations. Its "done when" is this note, decided by Minus, with the slices
 filed.
 
-**Status: decided (2026-10-31, §13); slices 4, 1, 3, 2, 6 and 5 implemented (§8.1, §4.3.1, §6.1, §5.1, §9.1, §7.1–7.2); slice 7, the sweep, remains.** No kernel change is needed and none is
+**Status: decided (2026-10-31, §13); all seven slices implemented (§8.1, §4.3.1, §6.1, §5.1, §9.1, §7.1–7.2; slice 7, the sweep, in `match-motive-sweep`'s log).** No kernel change is needed and none is
 proposed. Everything here is elaborator front end over the route lowerings
 that already exist.
 

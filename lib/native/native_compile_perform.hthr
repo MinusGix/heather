@@ -1032,7 +1032,7 @@ theorem List::mem_minus_nil(self out: List<Nat>, i: Nat, m: Mem(i, out)): Mem(i,
 
 theorem List::mem_minus_cons(self out: List<Nat>, rest: List<Nat>, i, id: Nat, m: Mem(i, out.minus(rest)), ne: i ≠ id): Mem(i, out.minus(Cons(id, rest))) {
     let kept: (absent(i, rest) = True) = out.mem_filter_holds(i, λ (x: Nat) => absent(x, rest), m);
-    let differs: (i.differs(id) = True) = (match i.eq_dec(id) as λ d => (match d { Inl(_) => False, Inr(_) => True }) = True {
+    let differs: (i.differs(id) = True) = (match i.eq_dec(id) {
         Inl(e) => false_elim(ne(e)),
         Inr(_) => refl,
     });

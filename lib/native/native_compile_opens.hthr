@@ -119,8 +119,7 @@ theorem List::before_nul_nth(self xs: List<BitVec(8)>): (k: Nat) → (c: BitVec(
                 (match n as λ _ => List<BitVec(8)> { Zero => Nil, Succ(_) => Cons(h, rest.before_nul()) }).nth(k) = Some(c) →
                 (Cons(h, rest).nth(k) = Some(c)) ∧ Not(c = BitVec::ofNat(0)) {
             Zero => λ _ none => absurd(none),
-            Succ(_) => λ positive => match k as λ j => Cons(h, rest.before_nul()).nth(j) = Some(c) →
-                    (Cons(h, rest).nth(j) = Some(c)) ∧ Not(c = BitVec::ofNat(0)) {
+            Succ(_) => λ positive => match k {
                 Zero => λ same => ⟨same, λ zero => {
                     let back: (h = c) = Option::some_inj(h, c, same);
                     absurd(trans(sym(positive), byte_nul_nat(h, trans(back, zero))))

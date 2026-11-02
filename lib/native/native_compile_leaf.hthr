@@ -232,9 +232,7 @@ theorem Prog::within_leaf_lowered(self loaded: Prog, layout: Layout, out: List<N
     code: Option<List<Instruction>>, q: Prog, stored: loaded.leaf_lowered(layout, out, nodes, words, code) = Some(q)): loaded.Within(q) {
     (match code as λ c => loaded.leaf_lowered(layout, out, nodes, words, c) = Some(q) → loaded.Within(q) {
         None => λ none => absurd(none),
-        Some(instructions) => (match leaves_all(instructions, layout.taken) as λ b =>
-                (match b { False => None, True => then(loaded, Block(instructions)).ports_from(layout, out, nodes_write_ports(nodes), words, layout.leaf_outputs(nodes)) }) =
-                    Some(q) → loaded.Within(q) {
+        Some(instructions) => (match leaves_all(instructions, layout.taken) {
             False => λ none => absurd(none),
             True => λ more => loaded.within_trans(then(loaded, Block(instructions)), q, loaded.within_then(0, Block(instructions)),
                 Prog::ports_from_within(layout, out, nodes_write_ports(nodes), words, layout.leaf_outputs(nodes), then(loaded, Block(instructions)), q, more)),

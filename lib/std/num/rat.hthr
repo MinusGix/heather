@@ -413,7 +413,7 @@ theorem Rat::mul_nonneg_of_nonpos({x, y: Rat}, hx: x <= 0, hy: y <= 0): 0 <= x *
 
 theorem Rat::recip_parts_nonneg(a: Int, d: Pos<Nat>, h: 0 <= a): 0 <= Rat::recip_parts(a, d) {
     match a as λ v => 0 <= v → 0 <= Rat::recip_parts(v, d) {
-        OfNat(n) => match n as λ k => 0 <= OfNat(k) → 0 <= Rat::recip_parts(OfNat(k), d) {
+        OfNat(n) => match n {
             Zero => λ _ => Rat::le_refl(0),
             Succ(k) => λ _ => {
                 let num: ((Rat(d.int(), Succ(k))).num = d.int()) = refl;
@@ -426,7 +426,7 @@ theorem Rat::recip_parts_nonneg(a: Int, d: Pos<Nat>, h: 0 <= a): 0 <= Rat::recip
 
 theorem Rat::recip_parts_nonpos(a: Int, d: Pos<Nat>, h: a <= 0): Rat::recip_parts(a, d) <= 0 {
     match a as λ v => v <= 0 → Rat::recip_parts(v, d) <= 0 {
-        OfNat(n) => match n as λ k => OfNat(k) <= 0 → Rat::recip_parts(OfNat(k), d) <= 0 {
+        OfNat(n) => match n {
             Zero => λ _ => Rat::le_refl(0),
             Succ(_) => λ bad => false_elim(omega(bad)),
         },
@@ -862,7 +862,7 @@ theorem Rat::recip_le_recip({x, y: Rat}, hx: 0 < x, h: x <= y): y.recip() <= x.r
 // The reciprocal is odd: the numerator's sign moves to the new numerator.
 theorem Rat::recip_neg(self x: Rat): (-x).recip() ≈ -x.recip() {
     match x.num as λ a => Rat::recip_parts(-a, x.den) ≈ -Rat::recip_parts(a, x.den) {
-        OfNat(n) => match n as λ k => Rat::recip_parts(-OfNat(k), x.den) ≈ -Rat::recip_parts(OfNat(k), x.den) {
+        OfNat(n) => match n {
             Zero => refl,
             Succ(_) => refl,
         },
@@ -1919,21 +1919,21 @@ theorem Rat::sub_le_sub({a, b, c, d: Rat}, h1: a <= b, h2: c <= d): a - d <= b -
 }
 
 theorem Rat::le_of_sub_le_sub_r(self x, a, b: Rat, h: a - x <= b - x): a <= b {
-    match a.le_dec(b) as λ _ => a <= b {
+    match a.le_dec(b) {
         Inl(le) => le,
         Inr(no) => false_elim(Rat::not_le_of_lt(x := b - x, y := a - x, h := x.sub_lt_sub_r(b, a, Rat::lt_of_not_le(x := b, y := a, h := no)))(h)),
     }
 }
 
 theorem Rat::le_of_sub_le_sub_l(self x, a, b: Rat, h: x - b <= x - a): a <= b {
-    match a.le_dec(b) as λ _ => a <= b {
+    match a.le_dec(b) {
         Inl(le) => le,
         Inr(no) => false_elim(Rat::not_le_of_lt(x := x - a, y := x - b, h := x.sub_lt_sub_l(b, a, Rat::lt_of_not_le(x := b, y := a, h := no)))(h)),
     }
 }
 
 theorem Rat::abs_of_nonneg(self a: Rat, h: 0 <= a): a.abs() ≈ a {
-    match a.abs_cases() as λ _ => a.abs() ≈ a {
+    match a.abs_cases() {
         Inl(c) => c.right,
         Inr(c) => false_elim(Rat::not_le_of_lt(x := a, y := 0, h := c.left)(h)),
     }
@@ -1976,7 +1976,7 @@ theorem Rat::same_of_dist_above(self x, a, b: Rat, xb: x <= b, ba: b <= a, d: (a
 }
 
 theorem Rat::lt_of_add_lt_add_r(self x, y, z: Rat, h: x + z < y + z): x < y {
-    match y.le_dec(x) as λ _ => x < y {
+    match y.le_dec(x) {
         Inl(le) => false_elim(Rat::not_le_of_lt(x := x + z, y := y + z, h := h)(y.add_le_mono_r(x, z, le))),
         Inr(no) => Rat::lt_of_not_le(x := x, y := y, h := no),
     }
@@ -2031,11 +2031,11 @@ theorem Rat::le_of_double_le({x, y: Rat}, h: x + x <= y + y): x <= y {
 // For `g < f`: `x` at least as close to `f` as to `g` is at or above their
 // midpoint, and `y` at least as close to `g` is at or below it.
 theorem Rat::mid_le_of_dist({g, f, x: Rat}, lt: g < f, d: (f - x).abs() <= (g - x).abs()): g + f <= x + x {
-    match f.le_total(x) as λ _ => g + f <= x + x {
+    match f.le_total(x) {
         Inl(fx) => Rat::add_le_mono(h1 := Rat::le_of_lt(Rat::lt_of_lt_of_le(lt, fx)), h2 := fx),
         Inr(xf) => {
             let df = (f - x).abs_of_nonneg(Rat::sub_nonneg(x := f, y := x, h := xf));
-            match g.le_total(x) as λ _ => g + f <= x + x {
+            match g.le_total(x) {
                 Inl(gx) => {
                     let dg = Rat::same_trans(g.abs_sub_comm(x), (x - g).abs_of_nonneg(Rat::sub_nonneg(x := x, y := g, h := gx)));
                     Rat::le_mid_of_sub_le(x := x, a := g, b := f, h := Rat::le_respects(df, dg, d))
@@ -2050,11 +2050,11 @@ theorem Rat::mid_le_of_dist({g, f, x: Rat}, lt: g < f, d: (f - x).abs() <= (g - 
 }
 
 theorem Rat::le_mid_of_dist({g, f, y: Rat}, lt: g < f, d: (g - y).abs() <= (f - y).abs()): y + y <= g + f {
-    match y.le_total(g) as λ _ => y + y <= g + f {
+    match y.le_total(g) {
         Inl(yg) => Rat::add_le_mono(h1 := yg, h2 := Rat::le_of_lt(Rat::lt_of_le_of_lt(yg, lt))),
         Inr(gy) => {
             let dg = Rat::same_trans(g.abs_sub_comm(y), (y - g).abs_of_nonneg(Rat::sub_nonneg(x := y, y := g, h := gy)));
-            match y.le_total(f) as λ _ => y + y <= g + f {
+            match y.le_total(f) {
                 Inl(yf) => {
                     let df = (f - y).abs_of_nonneg(Rat::sub_nonneg(x := f, y := y, h := yf));
                     Rat::mid_le_of_sub_le(x := y, a := g, b := f, h := Rat::le_respects(dg, df, d))

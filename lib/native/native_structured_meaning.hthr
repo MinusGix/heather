@@ -116,7 +116,7 @@ theorem Env::settle_at(ports: List<Port>): (a, b: Env) → (va, vb: Valuation())
         Cons(port, rest) => λ a b va vb i same at => {
             let pa = Env(a.words.put(port.id, va(port.width, port.id).toNat(), 0), a.buffers, a.args);
             let pb = Env(b.words.put(port.id, vb(port.width, port.id).toNat(), 0), b.buffers, b.args);
-            let put_same: (pa.number(i) = pb.number(i)) = match i.eq_dec(port.id) as λ _ => pa.number(i) = pb.number(i) {
+            let put_same: (pa.number(i) = pb.number(i)) = match i.eq_dec(port.id) {
                 Inl(e) => j(e, λ x _ => Env(a.words.put(x, va(port.width, x).toNat(), 0), a.buffers, a.args).number(i) =
                         Env(b.words.put(x, vb(port.width, x).toNat(), 0), b.buffers, b.args).number(i),
                     trans(Env::number_put(a.words, a.buffers, a.args, i, va(port.width, i).toNat()),
@@ -209,9 +209,7 @@ theorem Node::run_wide_on(self node: Node, values, other: Valuation(), buffers: 
     (node.run(values, buffers).buffers = node.run(other, buffers).buffers) ∧
         (node.run(values, buffers).values(node_output(node).width, node_output(node).id) =
             node.run(other, buffers).values(node_output(node).width, node_output(node).id)) {
-    match node as λ n => ((x: Nat) → Mem(x, function_ir_eval::Node::reads(n)) → values(64, x) = other(64, x)) → n.wide().IsTrue() →
-        (n.run(values, buffers).buffers = n.run(other, buffers).buffers) ∧
-        (n.run(values, buffers).values(node_output(n).width, node_output(n).id) = n.run(other, buffers).values(node_output(n).width, node_output(n).id)) {
+    match node {
         Const(width, output, value) => λ _ _ => ⟨refl, Const(width, output, value).step_here_same(values, other, width, refl)⟩,
         Move(width, output, source) => λ same h => ⟨refl, Move(width, output, source).step_here_same(values, other, width,
             wide_at(values, other, width, source, h, same(source, Inl(refl))))⟩,
@@ -282,28 +280,28 @@ theorem Scope::all_defined_mem(self s: Scope, ids: List<Nat>): s.all_defined(ids
 }
 
 theorem Scope::put_defined_here(self s: Scope, id: Nat, clean: Bool): s.put(id, clean).defined(id).IsTrue() {
-    match id.eq_dec(id) as λ d => Bool::IsTrue((match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) || s.defined(id)) {
+    match id.eq_dec(id) {
         Inl(_) => trivial,
         Inr(ne) => false_elim(ne(refl)),
     }
 }
 
 theorem Scope::put_loose_here(self s: Scope, id: Nat, clean: Bool): s.put(id, clean).loose(id) = !clean {
-    match id.eq_dec(id) as λ d => (match (match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) as λ _ => Bool { True => !clean, False => s.loose(id) }) = !clean {
+    match id.eq_dec(id) {
         Inl(_) => refl,
         Inr(ne) => false_elim(ne(refl)),
     }
 }
 
 theorem Scope::put_defined_other(self s: Scope, id: Nat, clean: Bool, x: Nat, ne: x ≠ id): s.put(id, clean).defined(x) = s.defined(x) {
-    match x.eq_dec(id) as λ d => ((match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) || s.defined(x)) = s.defined(x) {
+    match x.eq_dec(id) {
         Inl(e) => false_elim(ne(e)),
         Inr(_) => refl,
     }
 }
 
 theorem Scope::put_loose_other(self s: Scope, id: Nat, clean: Bool, x: Nat, ne: x ≠ id): s.put(id, clean).loose(x) = s.loose(x) {
-    match x.eq_dec(id) as λ d => (match (match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) as λ _ => Bool { True => !clean, False => s.loose(x) }) = s.loose(x) {
+    match x.eq_dec(id) {
         Inl(e) => false_elim(ne(e)),
         Inr(_) => refl,
     }
@@ -313,8 +311,7 @@ theorem Scope::put_loose_other(self s: Scope, id: Nat, clean: Bool, x: Nat, ne: 
 theorem Scope::clean_coherent(self s: Scope, node: Node, values: Valuation(), env: Env, agrees: Valuation::Agrees(values, env, s), buffers: Buffers()):
     s.clean(node).IsTrue() →
     node.run(values, buffers).values(1, node_output(node).id).head_bit() = node.run(values, buffers).values(64, node_output(node).id).head_bit() {
-    match node as λ n => s.clean(n).IsTrue() →
-        n.run(values, buffers).values(1, node_output(n).id).head_bit() = n.run(values, buffers).values(64, node_output(n).id).head_bit() {
+    match node {
         Const(width, output, value) => λ _ =>
             trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(values, output, Const(width, output, value).value(values), 1)),
                 sym(cong_fn(λ (x: BitVec(64)) => x.head_bit(), Valuation::set_here(values, output, Const(width, output, value).value(values), 64)))),
@@ -390,8 +387,7 @@ theorem Scope::steps_agree(nodes: List<Node>): (s, t: Scope) → s.nodes(nodes) 
                             let is_clean = not_not_holds(clean, j(s.put_loose_here(out.id, clean), λ b _ => (!b).IsTrue(), nl));
                             trans(s.clean_coherent(node, values, env, agrees, env.buffers, is_clean), cong_fn(λ (x: BitVec(64)) => x.head_bit(), word_here))
                         }⟩;
-                    let agrees_first: Valuation::Agrees(run1.values, first, put) = λ x def => match x.eq_dec(out.id) as λ _ =>
-                            (run1.values(64, x) = first.word(x)) ∧ ((!put.loose(x)).IsTrue() → run1.values(1, x).head_bit() = first.bit(x)) {
+                    let agrees_first: Valuation::Agrees(run1.values, first, put) = λ x def => match x.eq_dec(out.id) {
                         Inl(e) => j(sym(e), λ y _ => (run1.values(64, y) = first.word(y)) ∧ ((!put.loose(y)).IsTrue() → run1.values(1, y).head_bit() = first.bit(y)), here),
                         Inr(ne) => {
                             let a = agrees(x, j(s.put_defined_other(out.id, clean, x, ne), λ b _ => b.IsTrue(), def));
@@ -465,7 +461,7 @@ theorem absent_append_intro(x: Nat, xs, ys: List<Nat>): absent(x, xs).IsTrue() �
 }
 
 theorem Nat::matches_false(self a: Nat, b: Nat, ne: a ≠ b): a.matches(b) = False {
-    match a.eq_dec(b) as λ d => (match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) = False {
+    match a.eq_dec(b) {
         Inl(e) => false_elim(ne(e)),
         Inr(_) => refl,
     }
@@ -496,7 +492,7 @@ theorem StructuredRegion::run_frame(self region: StructuredRegion, call: Answers
             trans(continuation.run_frame(call, mid.values, mid.buffers, w, x, parts.right), prefix.run_frame(call, values, buffers, w, x, parts.left))
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ values buffers w x =>
-            match values(1, condition).head_bit() as λ b => absent(x, port_ids(match b as λ _ => List<Port> {
+            match values(1, condition).head_bit() as λ b => absent(x, port_ids(match b {
                     False => when_false.written(call, values, buffers),
                     True => when_true.written(call, values, buffers),
                 })).IsTrue() →
@@ -590,10 +586,7 @@ theorem loop_run_len(step: Valuation() → Buffers() → State, parameters: List
         Succ(rest) => λ state buffers sl => {
             let after = step(pass_valuation(parameters, count, Succ(rest), state), buffers);
             let wl: (words_of(after.values, next).len() = n) = trans(words_of_len(after.values, next), nl);
-            match after.values(1, exit).head_bit() as λ b => (match b as λ _ => LoopState {
-                    False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
-                    True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
-                }).end.state.len() = n {
+            match after.values(1, exit).head_bit() {
                 False => loop_run_len(step, parameters, count, exit, next, n, nl, rest, words_of(after.values, next), after.buffers, wl),
                 True => wl,
             }
@@ -720,8 +713,7 @@ theorem StructuredRegion::loop_settles(env: Env, values: Valuation(), s: Scope, 
         ⟨trans(Valuation::set_here(bound, exhausted, bv, 64), sym(bit_word_at)),
             λ _ => trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(bound, exhausted, bv, 1)),
                 sym(cong_fn(λ (x: BitVec(64)) => x.head_bit(), bit_word_at)))⟩;
-    let agrees_after: Valuation::Agrees(v, m, s.looped(outputs, exhausted)) = λ x def => match x.eq_dec(exhausted) as λ _ =>
-            (v(64, x) = m.word(x)) ∧ ((!s.looped(outputs, exhausted).loose(x)).IsTrue() → v(1, x).head_bit() = m.bit(x)) {
+    let agrees_after: Valuation::Agrees(v, m, s.looped(outputs, exhausted)) = λ x def => match x.eq_dec(exhausted) {
         Inl(eq) => j(sym(eq), λ y _ => (v(64, y) = m.word(y)) ∧ ((!s.looped(outputs, exhausted).loose(y)).IsTrue() → v(1, y).head_bit() = m.bit(y)),
             exhausted_goal),
         Inr(ne) => (match outputs.holds(x) as λ b => outputs.holds(x) = b →
@@ -753,7 +745,7 @@ theorem StructuredRegion::loop_settles(env: Env, values: Valuation(), s: Scope, 
                 let out_absent = outputs.holds_false_absent(x, not_held);
                 let fresh: absent(x, port_ids(ports)).IsTrue() = j(sym(ids_eq), λ l _ => absent(x, l).IsTrue(),
                     absent_append_intro(x, outputs, [exhausted], out_absent, Bool::is_true_and_intro(x.differs(exhausted), True,
-                        (match x.eq_dec(exhausted) as λ d => Bool::IsTrue(match d as λ _ => Bool { Inl(_) => False, Inr(_) => True }) {
+                        (match x.eq_dec(exhausted) {
                             Inl(eq) => false_elim(ne(eq)),
                             Inr(_) => trivial,
                         }), trivial)));
@@ -763,7 +755,7 @@ theorem StructuredRegion::loop_settles(env: Env, values: Valuation(), s: Scope, 
                 let a = agrees(x, sdef);
                 ⟨trans(frame(64), trans(a.left, sym(kept_word))),
                     λ nl => trans(cong_fn(λ (y: BitVec(1)) => y.head_bit(), frame(1)),
-                        trans(a.right(j(key, λ b _ => (!(match b as λ _ => Bool { True => False, False => s.loose(x) })).IsTrue(), nl)),
+                        trans(a.right(j(key, λ b _ => (!(match b { True => False, False => s.loose(x) })).IsTrue(), nl)),
                             sym(cong_fn(λ (y: BitVec(64)) => y.head_bit(), kept_word))))⟩
             },
         })(refl),
@@ -896,13 +888,13 @@ theorem StructuredRegion::faithful(self region: StructuredRegion, call: Answers(
                             let wt = when_true.run(call, values, env.buffers);
                             let wf = when_false.run(call, values, env.buffers);
                             let g = λ (b: Bool) (c: Bool) => Settles(
-                                State(λ w id => match b as λ _ => BitVec(w) { False => wf.values(w, id), True => wt.values(w, id) },
-                                    match b as λ _ => Buffers() { False => wf.buffers, True => wt.buffers }),
-                                match b as λ _ => List<Port> { False => when_false.written(call, values, env.buffers), True => when_true.written(call, values, env.buffers) },
-                                match c as λ _ => Env { False => when_false.meaning(call, env), True => when_true.meaning(call, env) },
+                                State(λ w id => match b { False => wf.values(w, id), True => wt.values(w, id) },
+                                    match b { False => wf.buffers, True => wt.buffers }),
+                                match b { False => when_false.written(call, values, env.buffers), True => when_true.written(call, values, env.buffers) },
+                                match c { False => when_false.meaning(call, env), True => when_true.meaning(call, env) },
                                 env, t);
                             let both: g(values(1, condition).head_bit(), values(1, condition).head_bit()) =
-                                match values(1, condition).head_bit() as λ b => g(b, b) {
+                                match values(1, condition).head_bit() {
                                     False => ⟨no.left, ⟨no.right.left, j(t_is, λ u _ => Valuation::Agrees(wf.values, when_false.meaning(call, env), u),
                                         ta.agrees_join_right(fb, wf.values, when_false.meaning(call, env), no.right.right))⟩⟩,
                                     True => ⟨yes.left, ⟨yes.right.left, j(t_is, λ u _ => Valuation::Agrees(wt.values, when_true.meaning(call, env), u),
@@ -920,7 +912,7 @@ theorem StructuredRegion::faithful(self region: StructuredRegion, call: Answers(
             (match (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() as λ b => (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() = b →
                     (match b as λ _ => Option<Scope> {
                         False => None,
-                        True => body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) as λ _ => Option<Scope> {
+                        True => body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) {
                             False => None,
                             True => Some(s.looped(outputs, exhausted)),
                         }),

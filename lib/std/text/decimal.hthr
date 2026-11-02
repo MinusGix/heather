@@ -132,14 +132,13 @@ theorem tens_lead(j, m: Nat, lead: 1 <= tens(j, m.div(10))): 10 <= m {
 fn Leads(k, m: Nat) → Type { match k { Zero => True, Succ(_) => 1 <= tens(k, m) } }
 
 theorem decimal_places(k: Nat): (fuel, m: Nat) → k <= fuel → tens(k, m) <= 9 → Leads(k, m) → decimal_digits(fuel, m) = places(Succ(k), m) {
-    match k as λ w => (fuel, m: Nat) → w <= fuel → tens(w, m) <= 9 → Leads(w, m) → decimal_digits(fuel, m) = places(Succ(w), m) {
+    match k {
         Zero => λ fuel m room top lead => {
             let single: (m <= 9) = top;
             let below: (m < 10) = omega;
             trans(decimal_one(fuel, m, single), cong_fn<Nat, List<BitVec(8)>>(λ d => [digit(d)], sym(Nat::mod_of_lt(m, 10, below))))
         },
-        Succ(j) => λ fuel m => match fuel as λ f => Succ(j) <= f → tens(Succ(j), m) <= 9 → Leads(Succ(j), m) →
-                decimal_digits(f, m) = places(Succ(Succ(j)), m) {
+        Succ(j) => λ fuel m => match fuel {
             Zero => λ room => false_elim(room),
             Succ(rest) => λ room top lead => {
                 let inner: Leads(j, m.div(10)) = match j as λ i => (1 <= tens(i, m.div(10))) → Leads(i, m.div(10)) {
@@ -154,14 +153,14 @@ theorem decimal_places(k: Nat): (fuel, m: Nat) → k <= fuel → tens(k, m) <= 9
 }
 
 theorem ten_pow_positive(k: Nat): 0 < Nat::pow(10, k) {
-    match k as λ w => 0 < Nat::pow(10, w) {
+    match k {
         Zero => trivial,
         Succ(j) => { let below = ten_pow_positive(j); let grown: (0 < Nat::pow(10, j) * 10) = omega; grown },
     }
 }
 // `tens` is division by a power of ten.
 theorem tens_is_div(k: Nat): (n: Nat) → tens(k, n) = n.div(Nat::pow(10, k)) {
-    match k as λ w => (n: Nat) → tens(w, n) = n.div(Nat::pow(10, w)) {
+    match k {
         Zero => λ n => sym(Nat::div_one(n)),
         Succ(j) => λ n => trans(tens_is_div(j, n.div(10)),
             trans(Nat::div_div(n, 10, Nat::pow(10, j), b_pos := ten_pow_positive(j)),

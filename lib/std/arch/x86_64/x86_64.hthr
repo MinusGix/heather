@@ -1154,17 +1154,13 @@ fn decode_opcode_reference(bytes: List<BitVec(8)>, opcode: Nat) →
 }
 
 fn decode_bytes_reference(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
-    match bytes as λ actual => Option<ByteDecode(actual)> {
+    match bytes {
         Nil => None,
-        Cons(prefix, tail1) => match tail1 as λ rest =>
-                Option<ByteDecode(Cons(prefix, rest))> {
+        Cons(prefix, tail1) => match tail1 {
             Nil => None,
-            Cons(opcode, tail2) => match tail2 as λ rest =>
-                    Option<ByteDecode(Cons(prefix, Cons(opcode, rest)))> {
+            Cons(opcode, tail2) => match tail2 {
                 Nil => None,
-                Cons(modrm, tail3) => match tail3 as λ rest =>
-                        Option<ByteDecode(Cons(prefix,
-                            Cons(opcode, Cons(modrm, rest))))> {
+                Cons(modrm, tail3) => match tail3 {
                     Nil => decode_opcode_reference(
                         Cons(prefix, Cons(opcode, Cons(modrm, Nil))),
                         opcode.toNat()),
@@ -1264,8 +1260,7 @@ fn interpret_rr_opcode(rex, opcode, modrm: BitVec(8),
     RrOpcodeMatches(opcode, form) →
     ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil))))
 {
-    match form as λ actual => RrOpcodeMatches(opcode, actual) →
-            ByteDecode(Cons(rex, Cons(opcode, Cons(modrm, Nil)))) {
+    match form {
         AddRmReg => λ exact => ByteDecode(
             instruction := AddRR(found.rm, found.reg),
             decoding := Inl(And(found.rex_exact, And(exact, found.modrm_exact)))),
@@ -1422,17 +1417,13 @@ theorem decode_rr_opcode_complete(form: RrOpcode, rm, reg: Gpr):
 }
 
 fn decode_rr_bytes(bytes: List<BitVec(8)>) → Option<ByteDecode(bytes)> {
-    match bytes as λ actual => Option<ByteDecode(actual)> {
+    match bytes {
         Nil => None,
-        Cons(rex, tail1) => match tail1 as λ rest =>
-                Option<ByteDecode(Cons(rex, rest))> {
+        Cons(rex, tail1) => match tail1 {
             Nil => None,
-            Cons(opcode, tail2) => match tail2 as λ rest =>
-                    Option<ByteDecode(Cons(rex, Cons(opcode, rest)))> {
+            Cons(opcode, tail2) => match tail2 {
                 Nil => None,
-                Cons(modrm, tail3) => match tail3 as λ rest =>
-                        Option<ByteDecode(Cons(rex,
-                            Cons(opcode, Cons(modrm, rest))))> {
+                Cons(modrm, tail3) => match tail3 {
                     Nil => decode_opcode_direct(rex, opcode, modrm),
                     Cons(_, _) => None,
                 },
@@ -2203,14 +2194,14 @@ fn next_rip(current: BitVec(64), length: Nat) → BitVec(64) {
 }
 
 fn xor_bits(n: Nat) → BitVec(n) → Bool {
-    match n as λ k => BitVec(k) → Bool {
+    match n {
         Zero => λ x => False,
         Succ(k, ih) => λ x => x.head_bit().xor(ih(x.tail_bits())),
     }
 }
 
 fn is_zero_bits(n: Nat) → BitVec(n) → Bool {
-    match n as λ k => BitVec(k) → Bool {
+    match n {
         Zero => λ x => True,
         Succ(k, ih) => λ x =>
             x.head_bit().not() && ih(x.tail_bits()),
@@ -2249,11 +2240,11 @@ fn sub_flags(left, right: BitVec(64)) → Flags {
 // `a.eq_bit(b)` at every width, with no borrow law, because a zero
 // difference counts back up to the subtrahend (`iterate_sub_add`).
 theorem zero_bits_zero(n: Nat): is_zero_bits(n, BitVec::zero(n := n)) = True {
-    match n as λ k => is_zero_bits(k, BitVec::zero(n := k)) = True { Zero => refl, Succ(_, ih) => ih }
+    match n { Zero => refl, Succ(_, ih) => ih }
 }
 
 theorem zero_of_zero_bits(n: Nat): (x: BitVec(n)) → is_zero_bits(n, x) = True → x = BitVec::zero() {
-    match n as λ k => (x: BitVec(k)) → is_zero_bits(k, x) = True → x = BitVec::zero() {
+    match n {
         Zero => λ x _ => refl,
         Succ(k, ih) => λ x zero => {
             let rest = is_zero_bits(k, x.tail_bits());

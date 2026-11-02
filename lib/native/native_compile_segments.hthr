@@ -144,10 +144,7 @@ theorem Prog::within_word_from(self p: Prog, layout: Layout, out: List<Nat>, id:
         },
     }) {
         False => p.within_self(),
-        True => (match layout.homes.home(id) as λ h => p.Within(match h {
-            InSlot => p.word_store(layout, id, register),
-            InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
-        }) {
+        True => (match layout.homes.home(id) {
             InSlot => Exists(2, refl),
             InReg(_) => Exists(1, refl),
         }),
@@ -364,7 +361,7 @@ theorem List::unknown_mem(self known: List<Fact>, id: Nat, none: known.known(id)
     match ids {
         Nil => λ never => false_elim(never),
         Cons(i, rest) => λ m => (match known.known(i) as λ o => known.known(i) = o →
-                Mem(id, match o as λ _ => List<Nat> { None => Cons(i, known.unknown(rest)), Some(_) => known.unknown(rest) }) {
+                Mem(id, match o { None => Cons(i, known.unknown(rest)), Some(_) => known.unknown(rest) }) {
             None => λ _ => match m { Inl(e) => Inl(e), Inr(later) => Inr(known.unknown_mem(id, none, rest, later)) },
             Some(v) => λ found => match m {
                 Inl(e) => absurd(trans(sym(found), trans(cong_fn<Nat, Option<Nat>>(λ x => known.known(x), sym(e)), none))),
@@ -419,10 +416,10 @@ theorem Target::goes_known_to(self t: Target, live: List<Nat>, env: Env, p: Prog
     let layout = t.layout();
     (match known.known(id) as λ o =>
             (match o as λ _ => Type { None => Mem(id, live), Some(v) => (env.number(id) = v) ∧ (v < Nat::pow(2, 64)) }) →
-            (match o as λ _ => Prog { None => p.word_to(layout, id, register), Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])) }).Within(t.program) →
-            t.GoesR(prog_len(match o as λ _ => Prog { None => p.word_to(layout, id, register), Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])) }), tree, q) →
+            (match o { None => p.word_to(layout, id, register), Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])) }).Within(t.program) →
+            t.GoesR(prog_len(match o { None => p.word_to(layout, id, register), Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])) }), tree, q) →
             t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
-                q(write_gpr(register, env.word(id), write_gpr(Rbx, match o as λ _ => BitVec(64) { None => layout.rbx_word(env, id), Some(v) => BitVec::ofNat(v) }, g)), m)) {
+                q(write_gpr(register, env.word(id), write_gpr(Rbx, match o { None => layout.rbx_word(env, id), Some(v) => BitVec::ofNat(v) }, g)), m)) {
         None => λ holds w n => t.goes_word_to(live, env, p, id, register, inside, holds, w, tree, q, n),
         Some(v) => λ known_v w n => {
             let moved = t.goes_block(p, 0, [MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)], w, tree,

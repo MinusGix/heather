@@ -40,7 +40,7 @@ theorem Stmt::sim_branch_true<B>(condition: Nat, yes, no: Stmt, call: Answers(),
     h: env.bit(condition) = True, g: ITree::LinuxSimK(K, yes.denote(call, perform, n, env), v)):
     ITree::LinuxSimK(K, Branch(condition, yes, no).denote(call, perform, n, env), v)
 {
-    j(sym(h), λ b _ => ITree::LinuxSimK(K, match b as λ _ => ITree<Flow>(Events::linux()) {
+    j(sym(h), λ b _ => ITree::LinuxSimK(K, match b {
         True => yes.denote(call, perform, n, env),
         False => no.denote(call, perform, n, env),
     }, v), g)
@@ -51,7 +51,7 @@ theorem Stmt::sim_branch_false<B>(condition: Nat, yes, no: Stmt, call: Answers()
     h: env.bit(condition) = False, g: ITree::LinuxSimK(K, no.denote(call, perform, n, env), v)):
     ITree::LinuxSimK(K, Branch(condition, yes, no).denote(call, perform, n, env), v)
 {
-    j(sym(h), λ b _ => ITree::LinuxSimK(K, match b as λ _ => ITree<Flow>(Events::linux()) {
+    j(sym(h), λ b _ => ITree::LinuxSimK(K, match b {
         True => yes.denote(call, perform, n, env),
         False => no.denote(call, perform, n, env),
     }, v), g)
@@ -62,7 +62,7 @@ theorem Flow::pass_again<B>(env: Env, again: Nat, I: Env → ITree<B>(Events::li
     K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
     h: env.bit(again) = True, i: I(env, v)): ITree::StepK(Events::linux_spec(), I, K, Onward(env).pass(again), v)
 {
-    j(sym(h), λ b _ => ITree::StepK(Events::linux_spec(), I, K, match b as λ _ => Step<Env, Flow> {
+    j(sym(h), λ b _ => ITree::StepK(Events::linux_spec(), I, K, match b {
         True => Continue(env),
         False => Break(Onward(env)),
     }, v), i)
@@ -72,7 +72,7 @@ theorem Flow::pass_leaves<B>(env: Env, again: Nat, I: Env → ITree<B>(Events::l
     K: Flow → ITree<B>(Events::linux_spec()) → Type, v: ITree<B>(Events::linux_spec()),
     h: env.bit(again) = False, g: K(Onward(env), v)): ITree::StepK(Events::linux_spec(), I, K, Onward(env).pass(again), v)
 {
-    j(sym(h), λ b _ => ITree::StepK(Events::linux_spec(), I, K, match b as λ _ => Step<Env, Flow> {
+    j(sym(h), λ b _ => ITree::StepK(Events::linux_spec(), I, K, match b {
         True => Continue(env),
         False => Break(Onward(env)),
     }, v), g)

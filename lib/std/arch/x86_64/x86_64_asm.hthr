@@ -284,8 +284,7 @@ theorem asm_resident_from<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64
     p: Prog): FillsFit(p, fills) → (last: List<BitVec(8)>) → CodeResident(fetch, memory, asm_code(fills, labels, p) ++ last, next_rip(origin, at)) →
     (k: Nat) → CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(p, k)), next_rip(origin, at + asm_at(asm_back(p, k)))) {
     match p {
-        Start => λ fits last resident k => match k as λ i => CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(Start, i)),
-                next_rip(origin, at + asm_at(asm_back(Start, i)))) {
+        Start => λ fits last resident k => match k {
             Zero => trivial,
             Succ(_) => trivial,
         },
@@ -296,8 +295,7 @@ theorem asm_resident_from<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64
             let parts = resident_split_at(fetch, memory, code, bytes ++ last, origin, at, moved);
             let fits_before = fills_fit_before(fills, before, name, item, fits);
             let here = rewrite(asm_code_len(fills, labels, before, fits_before), in := parts.right);
-            λ k => match k as λ i => CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(At(before, name, item), i)),
-                    next_rip(origin, at + asm_at(asm_back(At(before, name, item), i)))) {
+            λ k => match k {
                 Zero => resident_split_at(fetch, memory, bytes, last, origin, at + prog_len(before), here).left,
                 Succ(i) => asm_resident_from(fetch, memory, origin, fills, labels, at, before, fits_before, bytes ++ last, moved, i),
             }
@@ -332,7 +330,7 @@ theorem asm_code_back(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, k: Na
     asm_code(fills, labels, p) = asm_code(fills, labels, asm_back(p, k)) ++ asm_code_after(fills, labels, p, k) {
     match k {
         Zero => λ p => sym(List::append_nil(asm_code(fills, labels, p))),
-        Succ(j) => λ p => match p as λ x => asm_code(fills, labels, x) = asm_code(fills, labels, asm_back(x, Succ(j))) ++ asm_code_after(fills, labels, x, Succ(j)) {
+        Succ(j) => λ p => match p {
             Start => refl,
             At(before, _, item) => {
                 let bytes = asm_bytes(fills, labels, prog_len(before), item);
@@ -345,7 +343,7 @@ theorem asm_code_back(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, k: Na
 theorem fills_fit_back(fills: Nat → List<BitVec(8)>, k: Nat): (p: Prog) → FillsFit(p, fills) → FillsFit(asm_back(p, k), fills) {
     match k {
         Zero => λ p fits => fits,
-        Succ(j) => λ p => match p as λ x => FillsFit(x, fills) → FillsFit(asm_back(x, Succ(j)), fills) {
+        Succ(j) => λ p => match p {
             Start => λ fits => fits,
             At(before, name, item) => λ fits => fills_fit_back(fills, j, before, fills_fit_before(fills, before, name, item, fits)),
         },

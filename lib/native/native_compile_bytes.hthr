@@ -52,10 +52,7 @@ fn DataRegion::stored_cells(self r: DataRegion, v: Nat → BitVec(8), q: Nat, by
 
 // A byte node reads the buffer the environment names.
 theorem Env::buffer_byte_is(self env: Env, buf, i: Nat): buffer_byte(env.buffers, buf, i) = env.buffer(buf).get_or(i, BitVec::zero()) {
-    match env.buffers.nth(buf) as λ o => (match o as λ _ => BitVec(8) {
-                None => BitVec::zero(),
-                Some(bytes) => match bytes.nth(i) as λ _ => BitVec(8) { None => BitVec::zero(), Some(byte) => byte },
-            }) = (match o as λ _ => List<BitVec(8)> { None => Nil, Some(bytes) => bytes }).get_or(i, BitVec::zero()) {
+    match env.buffers.nth(buf) {
         None => refl,
         Some(_) => refl,
     }

@@ -52,16 +52,16 @@ fn LinuxRun<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> →
 // Two calls got the same answer: the same kind of call, answered alike.
 // Requests are not compared; they are what is proved equal.
 fn SameAnswer(c: LinuxCmd<Nat>) → c.Resp() → (d: LinuxCmd<Nat>) → d.Resp() → Type {
-    match c as λ x => x.Resp() → (d: LinuxCmd<Nat>) → d.Resp() → Type {
-        ReadCmd(_, _) => λ (result: ReadResult) d => match d as λ y => y.Resp() → Type {
+    match c {
+        ReadCmd(_, _) => λ (result: ReadResult) d => match d {
             ReadCmd(_, _) => λ (other: ReadResult) => result = other, _ => λ _ => False },
-        WriteCmd(_, _) => λ (result: WriteResult) d => match d as λ y => y.Resp() → Type {
+        WriteCmd(_, _) => λ (result: WriteResult) d => match d {
             WriteCmd(_, _) => λ (other: WriteResult) => result = other, _ => λ _ => False },
-        OpenCmd(_) => λ (result: OpenResult) d => match d as λ y => y.Resp() → Type {
+        OpenCmd(_) => λ (result: OpenResult) d => match d {
             OpenCmd(_) => λ (other: OpenResult) => result = other, _ => λ _ => False },
-        CloseCmd(_) => λ (result: CloseResult) d => match d as λ y => y.Resp() → Type {
+        CloseCmd(_) => λ (result: CloseResult) d => match d {
             CloseCmd(_) => λ (other: CloseResult) => result = other, _ => λ _ => False },
-        StatCmd(_) => λ (result: StatResult) d => match d as λ y => y.Resp() → Type {
+        StatCmd(_) => λ (result: StatResult) d => match d {
             StatCmd(_) => λ (other: StatResult) => result = other, _ => λ _ => False },
     }
 }
@@ -85,7 +85,7 @@ fn SameResponses(claim: List<LinuxEvent>) → List<LinuxEvent> → Type {
 }
 
 theorem same_answer_refl(c: LinuxCmd<Nat>): (a: c.Resp()) → SameAnswer(c, a, c, a) {
-    match c as λ x => (a: x.Resp()) → SameAnswer(x, a, x, a) {
+    match c {
         ReadCmd(_, _) => λ _ => refl, WriteCmd(_, _) => λ _ => refl, OpenCmd(_) => λ _ => refl,
         CloseCmd(_) => λ _ => refl, StatCmd(_) => λ _ => refl,
     }
@@ -107,9 +107,7 @@ theorem linux_steps_meet<M>(io: LinuxIo<M>, n: Nat): (m: Nat) → (left, right, 
     SameDefinedState<M>(left, right) → LinuxStepsN(io, n, left, left_at) → LinuxStepsN(io, m, right, right_at) →
     LinuxSyscallAt(io, left_at) → LinuxSyscallAt(io, right_at) → SameDefinedState<M>(left_at, right_at) {
     match n {
-        Zero => λ m => match m as λ k => (left, right, left_at, right_at: MachineState<M>) →
-                SameDefinedState<M>(left, right) → LinuxStepsN(io, Zero, left, left_at) → LinuxStepsN(io, k, right, right_at) →
-                LinuxSyscallAt(io, left_at) → LinuxSyscallAt(io, right_at) → SameDefinedState<M>(left_at, right_at) {
+        Zero => λ m => match m {
             Zero => λ left right left_at right_at same here there _ _ =>
                 j(there, λ state _ => SameDefinedState<M>(left_at, state),
                     j(here, λ state _ => SameDefinedState<M>(state, right), same)),
@@ -117,9 +115,7 @@ theorem linux_steps_meet<M>(io: LinuxIo<M>, n: Nat): (m: Nat) → (left, right, 
                 false_elim(syscall_excludes_step(io.fetch, io.data, linux_writes(io), left, right, there.witness, same,
                     j(sym(here), λ state _ => LinuxSyscallAt(io, state), call), there.proof.left)),
         },
-        Succ(k) => λ m => match m as λ k2 => (left, right, left_at, right_at: MachineState<M>) →
-                SameDefinedState<M>(left, right) → LinuxStepsN(io, Succ(k), left, left_at) → LinuxStepsN(io, k2, right, right_at) →
-                LinuxSyscallAt(io, left_at) → LinuxSyscallAt(io, right_at) → SameDefinedState<M>(left_at, right_at) {
+        Succ(k) => λ m => match m {
             Zero => λ left right left_at right_at same here there _ call =>
                 false_elim(syscall_excludes_step(io.fetch, io.data, linux_writes(io), right, left, here.witness,
                     sym(same),
@@ -144,15 +140,11 @@ theorem lists_read_alike(source: Nat → Option<BitVec(8)>, left: List<BitVec(8)
     ((i: Nat) → (byte: BitVec(8)) → left.nth(i) = Some(byte) → source(i) = Some(byte)) →
     ((i: Nat) → (byte: BitVec(8)) → right.nth(i) = Some(byte) → source(i) = Some(byte)) → left = right {
     match left {
-        Nil => λ right => match right as λ r => (0 = r.len()) →
-                ((i: Nat) → (byte: BitVec(8)) → List::nth(Nil<BitVec(8)>, i) = Some(byte) → source(i) = Some(byte)) →
-                ((i: Nat) → (byte: BitVec(8)) → r.nth(i) = Some(byte) → source(i) = Some(byte)) → (Nil<BitVec(8)> = r) {
+        Nil => λ right => match right {
             Nil => λ _ _ _ => refl,
             Cons(_, ys) => λ length _ _ => false_elim(Nat::zero_ne_succ(ys.len(), length)),
         },
-        Cons(x, xs) => λ right => match right as λ r => (Succ(xs.len()) = r.len()) →
-                ((i: Nat) → (byte: BitVec(8)) → Cons(x, xs).nth(i) = Some(byte) → source(i) = Some(byte)) →
-                ((i: Nat) → (byte: BitVec(8)) → r.nth(i) = Some(byte) → source(i) = Some(byte)) → (Cons(x, xs) = r) {
+        Cons(x, xs) => λ right => match right {
             Nil => λ length _ _ => false_elim(Nat::succ_ne_zero(xs.len(), length)),
             Cons(y, ys) => λ length first second =>
                 List::cons_eq(xs, ys, x, y,
@@ -211,14 +203,12 @@ theorem stat_numbers_differ<M>(left, right: MachineState<M>, same: SameDefinedSt
 theorem stat_targets_related<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
     target: StatTarget): (other: StatTarget) → StatAsked(io, left, target) → StatAsked(io, right, other) → target = other {
     match target {
-        StatPath(path) => λ other => match other as λ o => StatAsked(io, left, StatPath(path)) → StatAsked(io, right, o) →
-                StatPath(path) = o {
+        StatPath(path) => λ other => match other {
             StatPath(path2) => λ here there => cong_fn(λ (p: List<BitVec(8)>) => StatPath(p),
                 paths_related(io, left, right, same, path, path2, here.right.right.right, there.right.right.right)),
             StatFd(_) => λ here there => false_elim(stat_numbers_differ(left, right, same, here.left, there.left)),
         },
-        StatFd(fd) => λ other => match other as λ o => StatAsked(io, left, StatFd(fd)) → StatAsked(io, right, o) →
-                StatFd(fd) = o {
+        StatFd(fd) => λ other => match other {
             StatPath(_) => λ here there => false_elim(stat_numbers_differ(right, left, sym(same), there.left, here.left)),
             StatFd(fd2) => λ here there => cong_fn(λ (f: BitVec(64)) => StatFd(f),
                 trans(sym(here.right), trans(register_related(Rdi, left, right, same), there.right))),
@@ -230,13 +220,13 @@ theorem stat_targets_related<M>(io: LinuxIo<M>, left, right: MachineState<M>, sa
 // One syscall. The claim's side of an event, as `LinuxRuns` spells it.
 
 fn ClaimAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
-    match event as λ _ => Type {
+    match event {
         CallEvent(c, a) => LinuxAnswered(io, at, c, a, LinuxRuns(io, rest)),
         ExitEvent(status) => LinuxExits(at, status) ∧ (rest = Nil),
     }
 }
 fn RunAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
-    match event as λ _ => Type {
+    match event {
         CallEvent(c, a) => LinuxAsks(io, at, c) ∧ LinuxResumed(io, at, c, a, LinuxRun(io, rest)),
         ExitEvent(status) => LinuxExits(at, status) ∧ (rest = Nil),
     }
@@ -284,11 +274,8 @@ theorem descriptors_related<M>(left, right: MachineState<M>, same: SameDefinedSt
 theorem call_meets<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
     c: LinuxCmd<Nat>): (a: c.Resp()) → (d: LinuxCmd<Nat>) → (b: d.Resp()) →
     LinuxAsks(io, left, c) → LinuxAsks(io, right, d) → SameAnswer(c, a, d, b) → CallEvent(c, a) = CallEvent(d, b) {
-    match c as λ x => (a: x.Resp()) → (d: LinuxCmd<Nat>) → (b: d.Resp()) →
-            LinuxAsks(io, left, x) → LinuxAsks(io, right, d) → SameAnswer(x, a, d, b) → CallEvent(x, a) = CallEvent(d, b) {
-        ReadCmd(fd, max) => λ (a: ReadResult) d => match d as λ y => (b: y.Resp()) →
-                LinuxAsks(io, left, ReadCmd(fd, max)) → LinuxAsks(io, right, y) → SameAnswer(ReadCmd(fd, max), a, y, b) →
-                CallEvent(ReadCmd(fd, max), a) = CallEvent(y, b) {
+    match c {
+        ReadCmd(fd, max) => λ (a: ReadResult) d => match d {
             ReadCmd(fd2, max2) => λ (b: ReadResult) here there (answer: a = b) => {
                 let fds: (fd = fd2) = descriptors_related(left, right, same, fd, fd2, here.right.left, there.right.left);
                 let maxes: (max = max2) = trans(sym(here.right.right),
@@ -302,9 +289,7 @@ theorem call_meets<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDe
             CloseCmd(_) => λ _ _ _ never => false_elim(never),
             StatCmd(_) => λ _ _ _ never => false_elim(never),
         },
-        WriteCmd(fd, bytes) => λ (a: WriteResult) d => match d as λ y => (b: y.Resp()) →
-                LinuxAsks(io, left, WriteCmd(fd, bytes)) → LinuxAsks(io, right, y) → SameAnswer(WriteCmd(fd, bytes), a, y, b) →
-                CallEvent(WriteCmd(fd, bytes), a) = CallEvent(y, b) {
+        WriteCmd(fd, bytes) => λ (a: WriteResult) d => match d {
             WriteCmd(fd2, bytes2) => λ (b: WriteResult) here there (answer: a = b) => {
                 let fds: (fd = fd2) = descriptors_related(left, right, same, fd, fd2, here.right.left, there.right.left);
                 let length: (bytes.len() = bytes2.len()) = trans(sym(here.right.right.left),
@@ -325,9 +310,7 @@ theorem call_meets<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDe
             CloseCmd(_) => λ _ _ _ never => false_elim(never),
             StatCmd(_) => λ _ _ _ never => false_elim(never),
         },
-        OpenCmd(path) => λ (a: OpenResult) d => match d as λ y => (b: y.Resp()) →
-                LinuxAsks(io, left, OpenCmd(path)) → LinuxAsks(io, right, y) → SameAnswer(OpenCmd(path), a, y, b) →
-                CallEvent(OpenCmd(path), a) = CallEvent(y, b) {
+        OpenCmd(path) => λ (a: OpenResult) d => match d {
             OpenCmd(path2) => λ (b: OpenResult) here there (answer: a = b) => {
                 let paths: (path = path2) = paths_related(io, left, right, same, path, path2,
                     here.right.right.right, there.right.right.right);
@@ -339,9 +322,7 @@ theorem call_meets<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDe
             CloseCmd(_) => λ _ _ _ never => false_elim(never),
             StatCmd(_) => λ _ _ _ never => false_elim(never),
         },
-        CloseCmd(fd) => λ (a: CloseResult) d => match d as λ y => (b: y.Resp()) →
-                LinuxAsks(io, left, CloseCmd(fd)) → LinuxAsks(io, right, y) → SameAnswer(CloseCmd(fd), a, y, b) →
-                CallEvent(CloseCmd(fd), a) = CallEvent(y, b) {
+        CloseCmd(fd) => λ (a: CloseResult) d => match d {
             CloseCmd(fd2) => λ (b: CloseResult) here there (answer: a = b) =>
                 trans(cong_fn(λ (f: BitVec(64)) => CallEvent(CloseCmd(f), a), descriptors_related(left, right, same, fd, fd2, here.right, there.right)),
                     cong_fn(λ (r: CloseResult) => CallEvent(CloseCmd(fd2), r), answer)),
@@ -350,9 +331,7 @@ theorem call_meets<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDe
             OpenCmd(_) => λ _ _ _ never => false_elim(never),
             StatCmd(_) => λ _ _ _ never => false_elim(never),
         },
-        StatCmd(target) => λ (a: StatResult) d => match d as λ y => (b: y.Resp()) →
-                LinuxAsks(io, left, StatCmd(target)) → LinuxAsks(io, right, y) → SameAnswer(StatCmd(target), a, y, b) →
-                CallEvent(StatCmd(target), a) = CallEvent(y, b) {
+        StatCmd(target) => λ (a: StatResult) d => match d {
             StatCmd(target2) => λ (b: StatResult) here there (answer: a = b) =>
                 trans(cong_fn(λ (t: StatTarget) => CallEvent(StatCmd(t), a),
                         stat_targets_related(io, left, right, same, target, target2, here, there)),
@@ -371,8 +350,7 @@ theorem call_determines<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, a: c.Resp(), rest, 
     left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
     claimed: ClaimAt(io, CallEvent(c, a), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
     SameResponse(CallEvent(c, a), other) → Cons(CallEvent(c, a), rest) = Cons(other, more) {
-    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(CallEvent(c, a), o) →
-            Cons(CallEvent(c, a), rest) = Cons(o, more) {
+    λ other => match other {
         CallEvent(d, b) => λ ran response => {
             let events: (CallEvent(c, a) = CallEvent(d, b)) =
                 call_meets(io, left, right, same, c, a, d, b, claimed.left.left, ran.left, response);
@@ -388,8 +366,7 @@ theorem exit_determines<M>(io: LinuxIo<M>, status: BitVec(64), rest, more: List<
     left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
     claimed: ClaimAt(io, ExitEvent(status), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
     SameResponse(ExitEvent(status), other) → Cons(ExitEvent(status), rest) = Cons(other, more) {
-    λ other => match other as λ o => RunAt(io, o, more, right) → SameResponse(ExitEvent(status), o) →
-            Cons(ExitEvent(status), rest) = Cons(o, more) {
+    λ other => match other {
         ExitEvent(status2) => λ ran _ =>
             List::cons_eq(rest, more, ExitEvent(status), ExitEvent(status2),
                 cong_fn(λ (s: BitVec(64)) => ExitEvent(s),
@@ -416,9 +393,7 @@ theorem linux_runs_determine<M>(io: LinuxIo<M>, claim: List<LinuxEvent>): (run: 
     LinuxRuns(io, claim, left) → LinuxRun(io, run, right) → SameResponses(claim, run) → claim = run {
     match claim {
         Nil => λ run left right same never _ _ => false_elim(never),
-        Cons(event, rest) => λ run => match run as λ r => (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
-                LinuxRuns(io, Cons(event, rest), left) → LinuxRun(io, r, right) → SameResponses(Cons(event, rest), r) →
-                Cons(event, rest) = r {
+        Cons(event, rest) => λ run => match run {
             Nil => λ left right same claimed ran never => false_elim(never),
             Cons(other, more) => λ left right same claimed ran responses => {
                 let at_left = claimed.witness;

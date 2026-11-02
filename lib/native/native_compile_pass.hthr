@@ -58,7 +58,7 @@ theorem Env::settle_buffers(ports: List<Port>): (env: Env) → (after: Valuation
 // A word after the results settle: as the last node writing it left it, at
 // its width, or as it was.
 theorem Env::settle_number(nodes: List<Node>): (env: Env) → (after: Valuation()) → (i: Nat) →
-    env.settle(after, nodes_write_ports(nodes)).number(i) = match nodes.last_width(i) as λ _ => Nat { None => env.number(i), Some(w) => after(w, i).toNat() } {
+    env.settle(after, nodes_write_ports(nodes)).number(i) = match nodes.last_width(i) { None => env.number(i), Some(w) => after(w, i).toNat() } {
     match nodes {
         Nil => λ env after i => refl,
         Cons(node, rest) => λ env after i => {
@@ -68,12 +68,10 @@ theorem Env::settle_number(nodes: List<Node>): (env: Env) → (after: Valuation(
             trans(later, match rest.last_width(i) as λ l => (match l as λ _ => Nat { None => put.number(i), Some(w) => after(w, i).toNat() }) =
                     (match (match l as λ _ => Option<Nat> {
                         Some(w) => Some(w),
-                        None => match i.matches(port.id) as λ _ => Option<Nat> { True => Some(port.width), False => None },
-                    }) as λ _ => Nat { None => env.number(i), Some(w) => after(w, i).toNat() }) {
+                        None => match i.matches(port.id) { True => Some(port.width), False => None },
+                    }) { None => env.number(i), Some(w) => after(w, i).toNat() }) {
                 Some(w) => refl,
-                None => match i.eq_dec(port.id) as λ d =>
-                        put.number(i) = (match (match (match d as λ _ => Bool { Inl(_) => True, Inr(_) => False }) as λ _ => Option<Nat> {
-                            True => Some(port.width), False => None }) as λ _ => Nat { None => env.number(i), Some(w) => after(w, i).toNat() }) {
+                None => match i.eq_dec(port.id) {
                     Inl(e) => j(e, λ x _ => Env(env.words.put(x, after(port.width, x).toNat(), 0), env.buffers, env.args).number(i) = after(port.width, i).toNat(),
                         Env::number_put(env.words, env.buffers, env.args, i, after(port.width, i).toNat())),
                     Inr(ne) => Env::number_put_other(env.words, env.buffers, env.args, port.id, after(port.width, port.id).toNat(), i, ne),
@@ -98,14 +96,14 @@ theorem Env::computes_optimised(self env: Env, nodes: List<Node>, out: List<Nat>
     ⟨trans(kept_a.left, trans(runs.left, sym(kept_b.left))), ⟨trans(kept_a.right, sym(kept_b.right)), λ i m => {
         let same = match nodes.last_width(i) as λ l =>
                 (match l as λ _ => Nat { None => Env(env.words, a.buffers, env.args).number(i), Some(w) => a.values(w, i).toNat() }) =
-                (match l as λ _ => Nat { None => Env(env.words, b.buffers, env.args).number(i), Some(w) => b.values(w, i).toNat() }) {
+                (match l { None => Env(env.words, b.buffers, env.args).number(i), Some(w) => b.values(w, i).toNat() }) {
             None => refl,
             Some(w) => cong_fn<BitVec(w), Nat>(λ x => x.toNat(), runs.right(i, m, w)),
         };
         trans(Env::settle_number(better, Env(env.words, a.buffers, env.args), a.values, i),
             trans(j(sym(nodes.optimised_last(out, i, m)), λ l _ =>
                     (match l as λ _ => Nat { None => Env(env.words, a.buffers, env.args).number(i), Some(w) => a.values(w, i).toNat() }) =
-                    (match nodes.last_width(i) as λ _ => Nat { None => Env(env.words, b.buffers, env.args).number(i), Some(w) => b.values(w, i).toNat() }),
+                    (match nodes.last_width(i) { None => Env(env.words, b.buffers, env.args).number(i), Some(w) => b.values(w, i).toNat() }),
                     same),
                 sym(Env::settle_number(nodes, Env(env.words, b.buffers, env.args), b.values, i))))
     }⟩⟩
@@ -124,10 +122,10 @@ theorem List::settled_knows(self facts: List<Fact>, nodes: List<Node>, env: Env,
             let later = rest.settled_knows(nodes, env, after, held.right);
             let settled = env.settle(after, nodes_write_ports(nodes));
             let number = Env::settle_number(nodes, env, after, f.id);
-            (match nodes.last_width(f.id) as λ l => settled.number(f.id) = (match l as λ _ => Nat { None => env.number(f.id), Some(w) => after(w, f.id).toNat() }) →
-                    settled.Knows(match l as λ _ => List<Fact> {
+            (match nodes.last_width(f.id) as λ l => settled.number(f.id) = (match l { None => env.number(f.id), Some(w) => after(w, f.id).toNat() }) →
+                    settled.Knows(match l {
                         None => rest.settled(nodes),
-                        Some(w) => match Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) as λ _ => List<Fact> {
+                        Some(w) => match Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) {
                             True => Cons(f, rest.settled(nodes)),
                             False => rest.settled(nodes),
                         },
@@ -135,7 +133,7 @@ theorem List::settled_knows(self facts: List<Fact>, nodes: List<Node>, env: Env,
                 None => λ _ => later,
                 Some(w) => λ at => (match Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) as λ b =>
                         (Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64))) = b →
-                        settled.Knows(match b as λ _ => List<Fact> { True => Cons(f, rest.settled(nodes)), False => rest.settled(nodes) }) {
+                        settled.Knows(match b { True => Cons(f, rest.settled(nodes)), False => rest.settled(nodes) }) {
                     True => λ fits => {
                         let both = Bool::is_true_and(Succ(f.value).leb(Nat::pow(2, w)), Succ(f.value).leb(Nat::pow(2, 64)), j(sym(fits), λ b _ => b.IsTrue(), trivial));
                         let narrow: (f.value < Nat::pow(2, w)) = Succ(f.value).leb_sound(Nat::pow(2, w), both.left);
@@ -181,7 +179,7 @@ theorem Prog::within_computes_best(self p: Prog, layout: Layout, out: List<Nat>,
             && nodes_live_in(better, out).within(nodes_live_in(nodes, out)) as λ g =>
             (match g as λ _ => Option<Compiled> {
                 False => p.computes(layout, out, nodes, names),
-                True => match p.computes(layout, out, better, names) as λ _ => Option<Compiled> { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
+                True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
             }) = Some(c) → p.Within(c.prog) {
         False => λ e => p.within_computes(layout, out, nodes, names, c, e),
         True => (match p.computes(layout, out, better, names) as λ o => p.computes(layout, out, better, names) = o →
@@ -205,7 +203,7 @@ theorem Target::goes_computes_best(self t: Target, out: List<Nat>, env: Env, p: 
     (match guard as λ g => guard = g →
             (match g as λ _ => Option<Compiled> {
                 False => p.computes(layout, out, nodes, names),
-                True => match p.computes(layout, out, better, names) as λ _ => Option<Compiled> { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
+                True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
             }) = Some(c) → t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
         False => λ _ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
         True => λ passed => (match p.computes(layout, out, better, names) as λ o => p.computes(layout, out, better, names) = o →

@@ -432,10 +432,7 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
     wp_reaches(labels, here, item).IsTrue() → wp_item_honest(io, view, origin, labels, contracts, callees, item) →
     WpGoes(io, view, origin, tr, here + asm_len(item), then) →
     WpGoes(io, view, origin, tr, here, wp_item(io, view, origin, labels, contracts, callees, post, here, item, then)) {
-    match item as λ it => ((v: V) → (m: M) → view.Holds(v, m) → CodeResident(io.fetch, m, asm_bytes(fills, labels, here, it), next_rip(origin, here))) →
-            wp_reaches(labels, here, it).IsTrue() → wp_item_honest(io, view, origin, labels, contracts, callees, it) →
-            WpGoes(io, view, origin, tr, here + asm_len(it), then) →
-            WpGoes(io, view, origin, tr, here, wp_item(io, view, origin, labels, contracts, callees, post, here, it, then)) {
+    match item {
         Block(instructions) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
             let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, canonical_block_bytes(instructions), a), code(v, state.memory, holds));
             let ran = block_steps(io.fetch, io.data, instructions, state, resident);
@@ -633,11 +630,7 @@ theorem wp_run_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M, 
     WpGoes(io, view, origin, tr, prog_len(asm_back(l, n)), wp_run(io, view, origin, labels, contracts, callees, post, l, n, then)) {
     match n {
         Zero => λ l fits rest code reach honest then goes => goes,
-        Succ(m) => λ l => match l as λ x => FillsFit(x, fills) → (rest: List<BitVec(8)>) →
-                ((v: V) → (mem: M) → view.Holds(v, mem) → CodeResident(io.fetch, mem, asm_code(fills, labels, x) ++ rest, next_rip(origin, 0))) →
-                wp_reach(labels, x, Succ(m)).IsTrue() → WpHonest(io, view, origin, labels, contracts, callees, x, Succ(m)) → (then: Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type) →
-                WpGoes(io, view, origin, tr, prog_len(x), then) →
-                WpGoes(io, view, origin, tr, prog_len(asm_back(x, Succ(m))), wp_run(io, view, origin, labels, contracts, callees, post, x, Succ(m), then)) {
+        Succ(m) => λ l => match l {
             Start => λ fits rest code reach honest then goes => goes,
             At(before, name, item) => λ fits rest code reach honest then goes => {
                 let fits_before = fills_fit_before(fills, before, name, item, fits);

@@ -85,7 +85,7 @@ theorem Format::rounds_of_same_fin(self F: Format, mode: Mode, x: Rat, f, g: Fin
     match mode as λ md => RoundsTo(F, md, x, Fin(g)) → RoundsTo(F, md, x, Fin(f)) {
         NearestEven => λ (a: Finite::NearestEven(x, g) ∧ F.Fits(x)) => {
             let m: (f.mag = g.mag) = Finite::mag_of_same_val(f, g, e);
-            And(And(Finite::nearest_of_same(x, f, g, e, a.left.left), λ h nh => match a.left.right(h, nh) as λ _ => h.val() ≈ f.val() ∨ Nat::Even(f.mag) {
+            And(And(Finite::nearest_of_same(x, f, g, e, a.left.left), λ h nh => match a.left.right(h, nh) {
                 Inl(s) => Inl(Rat::same_trans(s, ge)),
                 Inr(ev) => Inr(j(sym(m), λ v _ => Nat::Even(v), ev)),
             }), a.right)
@@ -94,12 +94,12 @@ theorem Format::rounds_of_same_fin(self F: Format, mode: Mode, x: Rat, f, g: Fin
             And(And(Finite::nearest_of_same(x, f, g, e, a.left.left),
                 λ h nh => Rat::le_respects(h.val().abs().same_refl(), Rat::abs_respects(x := g.val(), x2 := f.val(), hx := ge), a.left.right(h, nh))), a.right),
         TowardPos => λ (a: Finite::Above(x, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, g) ∧ F.Exceeds(x))) =>
-            match a as λ _ => Finite::Above(x, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, f) ∧ F.Exceeds(x)) {
+            match a {
                 Inl(ab) => Inl(Finite::above_of_same(x, f, g, e, ab)),
                 Inr(c) => Inr(And(c.left, And(Finite::below_of_same(x, f, g, e, c.right.left), c.right.right))),
             },
         TowardNeg => λ (a: Finite::Below(x, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(x, g) ∧ F.Undercuts(x))) =>
-            match a as λ _ => Finite::Below(x, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(x, f) ∧ F.Undercuts(x)) {
+            match a {
                 Inl(bl) => Inl(Finite::below_of_same(x, f, g, e, bl)),
                 Inr(c) => Inr(And(c.left, And(Finite::above_of_same(x, f, g, e, c.right.left), c.right.right))),
             },
@@ -148,12 +148,12 @@ theorem Float::same_of_squeeze({F: Format}, r, s, t: Float(F), rt: Float::Same(r
             Fin(_) => λ (no: False) _ => false_elim(no),
             Inf(k, hk) => λ (e: n = k) st0 => match s as λ s0 => Float::Le(Float::Inf(n, hn), s0) → Float::Le(s0, Float::Inf(k, hk)) → Float::Same(Float::Inf(n, hn), s0) {
                 Fin(_) => λ (a: n = bool::True) (b: k = bool::False) => absurd(trans(trans(sym(b), sym(e)), a)),
-                Inf(m, _) => λ (a: n = bool::True ∨ m = bool::False) (b: m = bool::True ∨ k = bool::False) => match a as λ _ => n = m {
-                    Inl(nt) => match b as λ _ => n = m {
+                Inf(m, _) => λ (a: n = bool::True ∨ m = bool::False) (b: m = bool::True ∨ k = bool::False) => match a {
+                    Inl(nt) => match b {
                         Inl(mt) => trans(nt, sym(mt)),
                         Inr(kf) => absurd(trans(trans(sym(kf), sym(e)), nt)),
                     },
-                    Inr(mf) => match b as λ _ => n = m {
+                    Inr(mf) => match b {
                         Inl(mt) => absurd(trans(sym(mf), mt)),
                         Inr(kf) => trans(e, trans(kf, sym(mf))),
                     },
@@ -178,7 +178,7 @@ fn Float::agree({F: Format}, self a, b: Float(F)) → Bool {
 
 theorem Float::same_of_agree({F: Format}, a, b: Float(F), h: a.agree(b).IsTrue()): Float::Same(a, b) {
     match a as λ a0 => a0.agree(b).IsTrue() → Float::Same(a0, b) {
-        Fin(f) => match b as λ b0 => Float::Fin(f).agree(b0).IsTrue() → Float::Same(Float::Fin(f), b0) {
+        Fin(f) => match b {
             Fin(g) => λ k => {
                 let both = f.dyadic().le_bool(g.dyadic()).is_true_and(g.dyadic().le_bool(f.dyadic()), k);
                 Rat::le_antisymm(x := f.val(), y := g.val(), hxy := f.dyadic().le_of_le_bool(g.dyadic(), both.left), hyx := g.dyadic().le_of_le_bool(f.dyadic(), both.right))
@@ -186,11 +186,11 @@ theorem Float::same_of_agree({F: Format}, a, b: Float(F), h: a.agree(b).IsTrue()
             Inf(_, _) => λ no => false_elim(no),
             NaN(_) => λ no => false_elim(no),
         },
-        Inf(n, hn) => match b as λ b0 => Float::Inf(n, hn).agree(b0).IsTrue() → Float::Same(Float::Inf(n, hn), b0) {
+        Inf(n, hn) => match b {
             Fin(_) => λ no => false_elim(no),
-            Inf(m, _) => match n as λ c => Bool::IsTrue(match c { False => !m, True => m }) → c = m {
-                False => match m as λ d => Bool::IsTrue(!d) → bool::False = d { False => λ _ => refl, True => λ no => false_elim(no) },
-                True => match m as λ d => Bool::IsTrue(d) → bool::True = d { False => λ no => false_elim(no), True => λ _ => refl },
+            Inf(m, _) => match n {
+                False => match m { False => λ _ => refl, True => λ no => false_elim(no) },
+                True => match m { False => λ no => false_elim(no), True => λ _ => refl },
             },
             NaN(_) => λ no => false_elim(no),
         },
@@ -375,8 +375,8 @@ fn Format::round_dyadic_win(self F: Format, mode: Mode, d: Dyadic) → Float(F) 
 }
 
 theorem Format::round_dyadic_win_correct(self F: Format, mode: Mode, d: Dyadic): RoundsTo(F, mode, d.rat(), F.round_dyadic_win(mode, d)) {
-    match d as λ d0 => RoundsTo(F, mode, d0.rat(), F.round_dyadic_win(mode, d0)) {
-        Dyadic(mant, exp) => match mant as λ m0 => RoundsTo(F, mode, Dyadic(m0, exp).rat(), F.round_dyadic_win(mode, Dyadic(m0, exp))) {
+    match d {
+        Dyadic(mant, exp) => match mant {
             OfNat(m) => {
                 let e: (Dyadic(OfNat(m), exp).rat() ≈ Rat::scaled(2, trivial, m, exp)) = Rat::same_refl(Rat::scaled(2, trivial, m, exp));
                 F.rounds_respects(mode, Dyadic(OfNat(m), exp).rat(), Rat::scaled(2, trivial, m, exp), e, F.round_hex(mode, m, exp), F.round_hex_correct(mode, m, exp))
@@ -515,7 +515,7 @@ theorem Format::cell_rounds(self F: Format, mode: Mode, h: Int, q: Rat, l: F.gri
 }
 
 theorem Dyadic::le_bool_of_le(self a, b: Dyadic, h: a <= b): a.le_bool(b).IsTrue() {
-    match a.le_dec(b) as λ c => Bool::IsTrue(match c { Inl(_) => True, Inr(_) => False }) {
+    match a.le_dec(b) {
         Inl(_) => trivial,
         Inr(no) => false_elim(no(h)),
     }
@@ -524,17 +524,17 @@ theorem Dyadic::le_bool_of_le(self a, b: Dyadic, h: a <= b): a.le_bool(b).IsTrue
 // Two floats of one value agree.
 theorem Float::agree_of_same({F: Format}, a, b: Float(F), h: Float::Same(a, b)): a.agree(b).IsTrue() {
     match a as λ a0 => Float::Same(a0, b) → a0.agree(b).IsTrue() {
-        Fin(f) => match b as λ b0 => Float::Same(Float::Fin(f), b0) → Float::Fin(f).agree(b0).IsTrue() {
+        Fin(f) => match b {
             Fin(g) => λ (e: f.val() ≈ g.val()) => f.dyadic().le_bool(g.dyadic()).is_true_and_intro(g.dyadic().le_bool(f.dyadic()),
                 f.dyadic().le_bool_of_le(g.dyadic(), Rat::le_of_same(e)), g.dyadic().le_bool_of_le(f.dyadic(), Rat::le_of_same(Rat::same_sym(e)))),
             Inf(_, _) => λ no => false_elim(no),
             NaN(_) => λ no => false_elim(no),
         },
-        Inf(n, hn) => match b as λ b0 => Float::Same(Float::Inf(n, hn), b0) → Float::Inf(n, hn).agree(b0).IsTrue() {
+        Inf(n, hn) => match b {
             Fin(_) => λ no => false_elim(no),
-            Inf(m, _) => match n as λ c => c = m → Bool::IsTrue(match c { False => !m, True => m }) {
-                False => match m as λ d => bool::False = d → Bool::IsTrue(!d) { False => λ _ => trivial, True => λ no => absurd(no) },
-                True => match m as λ d => bool::True = d → Bool::IsTrue(d) { False => λ no => absurd(sym(no)), True => λ _ => trivial },
+            Inf(m, _) => match n {
+                False => match m { False => λ _ => trivial, True => λ no => absurd(no) },
+                True => match m { False => λ no => absurd(sym(no)), True => λ _ => trivial },
             },
             NaN(_) => λ no => false_elim(no),
         },
@@ -800,11 +800,11 @@ fn Format::Faithful(self F: Format, q: Rat, r: Float(F)) → Type { RoundsTo(F, 
 // every one at or above `q` at or above its rounding up.
 theorem Format::le_of_down(self F: Format, q: Rat, d: Float(F), hd: RoundsTo(F, TowardNeg, q, d), g: Finite(F), gq: g.val() <= q): Float::Le(Float::Fin(g), d) {
     match d as λ d0 => RoundsTo(F, TowardNeg, q, d0) → Float::Le(Float::Fin(g), d0) {
-        Fin(f) => λ (h: Finite::Below(q, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(q, f) ∧ F.Undercuts(q))) => match h as λ _ => g.val() <= f.val() {
+        Fin(f) => λ (h: Finite::Below(q, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(q, f) ∧ F.Undercuts(q))) => match h {
             Inl(b) => b.right(g, gq),
             Inr(w) => false_elim(Rat::not_lt_of_le(gq, w.right.right(g))),
         },
-        Inf(n, hn) => match n as λ n0 => RoundsTo(F, TowardNeg, q, Float::Inf(n0, hn)) → Float::Le(Float::Fin(g), Float::Inf(n0, hn)) {
+        Inf(n, hn) => match n {
             False => λ no => false_elim(no),
             True => λ (u: F.Undercuts(q)) => false_elim(Rat::not_lt_of_le(gq, u(g))),
         },
@@ -814,11 +814,11 @@ theorem Format::le_of_down(self F: Format, q: Rat, d: Float(F), hd: RoundsTo(F, 
 
 theorem Format::le_of_up(self F: Format, q: Rat, u: Float(F), hu: RoundsTo(F, TowardPos, q, u), g: Finite(F), qg: q <= g.val()): Float::Le(u, Float::Fin(g)) {
     match u as λ u0 => RoundsTo(F, TowardPos, q, u0) → Float::Le(u0, Float::Fin(g)) {
-        Fin(f) => λ (h: Finite::Above(q, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(q, f) ∧ F.Exceeds(q))) => match h as λ _ => f.val() <= g.val() {
+        Fin(f) => λ (h: Finite::Above(q, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(q, f) ∧ F.Exceeds(q))) => match h {
             Inl(a) => a.right(g, qg),
             Inr(w) => false_elim(Rat::not_lt_of_le(qg, w.right.right(g))),
         },
-        Inf(n, hn) => match n as λ n0 => RoundsTo(F, TowardPos, q, Float::Inf(n0, hn)) → Float::Le(Float::Inf(n0, hn), Float::Fin(g)) {
+        Inf(n, hn) => match n {
             False => λ (e: F.Exceeds(q)) => false_elim(Rat::not_lt_of_le(qg, e(g))),
             True => λ no => false_elim(no),
         },
@@ -849,30 +849,30 @@ theorem Float::not_le_nan({F: Format}, a: Float(F), h: F.specials.has_nan().IsTr
 
 theorem Float::le_trans({F: Format}, a, b, c: Float(F), ab: Float::Le(a, b), bc: Float::Le(b, c)): Float::Le(a, c) {
     match a as λ a0 => Float::Le(a0, b) → Float::Le(b, c) → Float::Le(a0, c) {
-        Fin(f) => match b as λ b0 => Float::Le(Float::Fin(f), b0) → Float::Le(b0, c) → Float::Le(Float::Fin(f), c) {
-            Fin(g) => λ (fg: f.val() <= g.val()) => match c as λ c0 => Float::Le(Float::Fin(g), c0) → Float::Le(Float::Fin(f), c0) {
+        Fin(f) => match b {
+            Fin(g) => λ (fg: f.val() <= g.val()) => match c {
                 Fin(h) => λ (gh: g.val() <= h.val()) => Rat::le_trans(fg, gh),
                 Inf(_, _) => λ m => m,
                 NaN(_) => λ no => false_elim(no),
             },
-            Inf(n, hn) => λ (nf: n = bool::False) => match c as λ c0 => Float::Le(Float::Inf(n, hn), c0) → Float::Le(Float::Fin(f), c0) {
+            Inf(n, hn) => λ (nf: n = bool::False) => match c {
                 Fin(_) => λ (nt: n = bool::True) => absurd(trans(sym(nf), nt)),
-                Inf(m, _) => λ (w: n = bool::True ∨ m = bool::False) => match w as λ _ => m = bool::False { Inl(nt) => absurd(trans(sym(nf), nt)), Inr(mf) => mf },
+                Inf(m, _) => λ (w: n = bool::True ∨ m = bool::False) => match w { Inl(nt) => absurd(trans(sym(nf), nt)), Inr(mf) => mf },
                 NaN(_) => λ no => false_elim(no),
             },
             NaN(_) => λ no => false_elim(no),
         },
-        Inf(k, hk) => match b as λ b0 => Float::Le(Float::Inf(k, hk), b0) → Float::Le(b0, c) → Float::Le(Float::Inf(k, hk), c) {
-            Fin(g) => λ (kt: k = bool::True) => match c as λ c0 => Float::Le(Float::Fin(g), c0) → Float::Le(Float::Inf(k, hk), c0) {
+        Inf(k, hk) => match b {
+            Fin(g) => λ (kt: k = bool::True) => match c {
                 Fin(_) => λ _ => kt,
                 Inf(_, _) => λ _ => Inl(kt),
                 NaN(_) => λ no => false_elim(no),
             },
-            Inf(n, hn) => λ (w1: k = bool::True ∨ n = bool::False) => match c as λ c0 => Float::Le(Float::Inf(n, hn), c0) → Float::Le(Float::Inf(k, hk), c0) {
-                Fin(_) => λ (nt: n = bool::True) => match w1 as λ _ => k = bool::True { Inl(kt) => kt, Inr(nf) => absurd(trans(sym(nf), nt)) },
-                Inf(m, _) => λ (w2: n = bool::True ∨ m = bool::False) => match w1 as λ _ => k = bool::True ∨ m = bool::False {
+            Inf(n, hn) => λ (w1: k = bool::True ∨ n = bool::False) => match c {
+                Fin(_) => λ (nt: n = bool::True) => match w1 { Inl(kt) => kt, Inr(nf) => absurd(trans(sym(nf), nt)) },
+                Inf(m, _) => λ (w2: n = bool::True ∨ m = bool::False) => match w1 {
                     Inl(kt) => Inl(kt),
-                    Inr(nf) => match w2 as λ _ => k = bool::True ∨ m = bool::False { Inl(nt) => absurd(trans(sym(nf), nt)), Inr(mf) => Inr(mf) },
+                    Inr(nf) => match w2 { Inl(nt) => absurd(trans(sym(nf), nt)), Inr(mf) => Inr(mf) },
                 },
                 NaN(_) => λ no => false_elim(no),
             },
@@ -894,7 +894,7 @@ theorem Format::faithful_of_squeeze(self F: Format, q: Rat, t, d, u: Float(F), h
             Inr(qg) => Inr(F.rounds_of_same(TowardPos, q, Float::Fin(g), u,
                 Float::same_of_squeeze(Float::Fin(g), u, Float::Fin(g), g.val().same_refl(), tu0, F.le_of_up(q, u, hu, g, qg)), hu)),
         },
-        Inf(n, hn) => match n as λ n0 => Float::Le(d, Float::Inf(n0, hn)) → Float::Le(Float::Inf(n0, hn), u) → F.Faithful(q, Float::Inf(n0, hn)) {
+        Inf(n, hn) => match n {
             False => λ _ tu0 => Inr(F.rounds_of_same(TowardPos, q, Float::Inf(False, hn), u,
                 Float::same_of_squeeze(Float::Inf(False, hn), u, Float::Inf(False, hn), refl, tu0, F.rounds_le_top(TowardPos, q, u, hu, hn)), hu)),
             True => λ dt0 _ => Inl(F.rounds_of_same(TowardNeg, q, Float::Inf(True, hn), d,
@@ -915,16 +915,16 @@ fn Float::le_bool({F: Format}, self a, b: Float(F)) → Bool {
 
 theorem Float::le_of_le_bool({F: Format}, a, b: Float(F), h: a.le_bool(b).IsTrue()): Float::Le(a, b) {
     match a as λ a0 => a0.le_bool(b).IsTrue() → Float::Le(a0, b) {
-        Fin(f) => match b as λ b0 => Float::Fin(f).le_bool(b0).IsTrue() → Float::Le(Float::Fin(f), b0) {
+        Fin(f) => match b {
             Fin(g) => λ k => f.dyadic().le_of_le_bool(g.dyadic(), k),
-            Inf(m, _) => match m as λ d => Bool::IsTrue(!d) → d = bool::False { False => λ _ => refl, True => λ no => false_elim(no) },
+            Inf(m, _) => match m { False => λ _ => refl, True => λ no => false_elim(no) },
             NaN(_) => λ no => false_elim(no),
         },
-        Inf(n, hn) => match b as λ b0 => Float::Inf(n, hn).le_bool(b0).IsTrue() → Float::Le(Float::Inf(n, hn), b0) {
-            Fin(_) => match n as λ d => Bool::IsTrue(d) → d = bool::True { False => λ no => false_elim(no), True => λ _ => refl },
-            Inf(m, _) => match n as λ d => Bool::IsTrue(d || !m) → d = bool::True ∨ m = bool::False {
+        Inf(n, hn) => match b {
+            Fin(_) => match n { False => λ no => false_elim(no), True => λ _ => refl },
+            Inf(m, _) => match n {
                 True => λ _ => Inl(refl),
-                False => match m as λ e => Bool::IsTrue(bool::False || !e) → bool::False = bool::True ∨ e = bool::False { False => λ _ => Inr(refl), True => λ no => false_elim(no) },
+                False => match m { False => λ _ => Inr(refl), True => λ no => false_elim(no) },
             },
             NaN(_) => λ no => false_elim(no),
         },
@@ -934,18 +934,18 @@ theorem Float::le_of_le_bool({F: Format}, a, b: Float(F), h: a.le_bool(b).IsTrue
 
 theorem Float::le_bool_of_le({F: Format}, a, b: Float(F), h: Float::Le(a, b)): a.le_bool(b).IsTrue() {
     match a as λ a0 => Float::Le(a0, b) → a0.le_bool(b).IsTrue() {
-        Fin(f) => match b as λ b0 => Float::Le(Float::Fin(f), b0) → Float::Fin(f).le_bool(b0).IsTrue() {
+        Fin(f) => match b {
             Fin(g) => λ (le: f.val() <= g.val()) => f.dyadic().le_bool_of_le(g.dyadic(), le),
-            Inf(m, _) => match m as λ d => d = bool::False → Bool::IsTrue(!d) { False => λ _ => trivial, True => λ no => absurd(no) },
+            Inf(m, _) => match m { False => λ _ => trivial, True => λ no => absurd(no) },
             NaN(_) => λ no => false_elim(no),
         },
-        Inf(n, hn) => match b as λ b0 => Float::Le(Float::Inf(n, hn), b0) → Float::Inf(n, hn).le_bool(b0).IsTrue() {
-            Fin(_) => match n as λ d => d = bool::True → Bool::IsTrue(d) { False => λ no => absurd(sym(no)), True => λ _ => trivial },
-            Inf(m, _) => match n as λ d => d = bool::True ∨ m = bool::False → Bool::IsTrue(d || !m) {
+        Inf(n, hn) => match b {
+            Fin(_) => match n { False => λ no => absurd(sym(no)), True => λ _ => trivial },
+            Inf(m, _) => match n {
                 True => λ _ => trivial,
-                False => match m as λ e => bool::False = bool::True ∨ e = bool::False → Bool::IsTrue(bool::False || !e) {
+                False => match m {
                     False => λ _ => trivial,
-                    True => λ (w: bool::False = bool::True ∨ bool::True = bool::False) => match w as λ _ => Bool::IsTrue(bool::False || !bool::True) { Inl(no) => absurd(sym(no)), Inr(no) => absurd(no) },
+                    True => λ (w: bool::False = bool::True ∨ bool::True = bool::False) => match w { Inl(no) => absurd(sym(no)), Inr(no) => absurd(no) },
                 },
             },
             NaN(_) => λ no => false_elim(no),
@@ -1008,8 +1008,8 @@ theorem Format::down_le_up(self F: Format, lo, hi: Rat, w: hi - lo < F.grid(2), 
     match s as λ s0 => RoundsTo(F, TowardPos, lo, s0) → Float::Le(r, s0) {
         Fin(g) => λ (hs0: Finite::Above(lo, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(lo, g) ∧ F.Exceeds(lo))) =>
             match r as λ r0 => RoundsTo(F, TowardNeg, hi, r0) → Float::Le(r0, Float::Fin(g)) {
-                Fin(f) => λ (hr0: Finite::Below(hi, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(hi, f) ∧ F.Undercuts(hi))) => match hr0 as λ _ => f.val() <= g.val() {
-                    Inl(bh) => match hs0 as λ _ => f.val() <= g.val() {
+                Fin(f) => λ (hr0: Finite::Below(hi, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(hi, f) ∧ F.Undercuts(hi))) => match hr0 {
+                    Inl(bh) => match hs0 {
                         Inl(al) => {
                             let fh: (f.val() <= hi) = bh.left;
                             let lg: (lo <= g.val()) = al.left;
@@ -1024,13 +1024,13 @@ theorem Format::down_le_up(self F: Format, lo, hi: Rat, w: hi - lo < F.grid(2), 
                     },
                     Inr(sat) => sat.right.left.right(g, Rat::le_of_lt(sat.right.right(g))),
                 },
-                Inf(n, hn) => match n as λ n0 => RoundsTo(F, TowardNeg, hi, Float::Inf(n0, hn)) → Float::Le(Float::Inf(n0, hn), Float::Fin(g)) {
+                Inf(n, hn) => match n {
                     False => λ no => false_elim(no),
                     True => λ _ => refl,
                 },
                 NaN(_) => λ no => false_elim(no),
             }(hr),
-        Inf(m, hm) => match m as λ m0 => RoundsTo(F, TowardPos, lo, Float::Inf(m0, hm)) → Float::Le(r, Float::Inf(m0, hm)) {
+        Inf(m, hm) => match m {
             False => λ _ => F.rounds_le_top(TowardNeg, hi, r, hr, hm),
             True => λ no => false_elim(no),
         },
