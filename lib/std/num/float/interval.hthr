@@ -169,9 +169,9 @@ theorem Interval::add_bnd_has_in(a, b, c, d: Dyadic, p: Nat, x, y: K, hx: Bnd(a,
     Bnd(Dyadic::add(a, c).down(p), Dyadic::add(b, d).up(p)).HasIn(hom, x + y)
 {
     let low: (map(Dyadic::add(a, c).rat()) <= x + y) = StrictOrder::le_of_same_l(map(Dyadic::add(a, c).rat()), map(a.rat()) + map(c.rat()), x + y, Interval::image_add<K>(hom, a, c),
-        LocatedAddGroup::add_le_mono(map(a.rat()), x, map(c.rat()), y, hx.left, hy.left));
+        LocatedAddMonoid::add_le_mono(map(a.rat()), x, map(c.rat()), y, hx.left, hy.left));
     let high: (x + y <= map(Dyadic::add(b, d).rat())) = StrictOrder::le_of_same_r(x + y, map(b.rat()) + map(d.rat()), map(Dyadic::add(b, d).rat()), Interval::image_add<K>(hom, b, d),
-        LocatedAddGroup::add_le_mono(x, map(b.rat()), y, map(d.rat()), hx.right, hy.right));
+        LocatedAddMonoid::add_le_mono(x, map(b.rat()), y, map(d.rat()), hx.right, hy.right));
     let both: (Bnd(Dyadic::add(a, c), Dyadic::add(b, d)).HasIn(hom, x + y)) = And(low, high);
     Interval::round_out_has_in(hom, Dyadic::add(a, c), Dyadic::add(b, d), p, x + y, both)
 }
@@ -200,17 +200,17 @@ theorem Interval::between_l_in(z, c, d: Dyadic, y: K, hy: Bnd(c, d).HasIn(hom, y
         Inl(pos) => {
             let hz: (K.unit <= Z) = StrictOrder::le_of_same_l(K.unit, map(0), Z, K.rel_sym(map(0), K.unit, hom.map_zero), hom.map_le(0, z.rat(), pos));
             let l: (map(Dyadic::mul(z, c).rat()) <= Z * y) = StrictOrder::le_of_same_l(map(Dyadic::mul(z, c).rat()), Z * map(c.rat()), Z * y, Interval::image_mul<K>(hom, z, c),
-                OrderedField::mul_le_mono_l(map(c.rat()), y, Z, hy.left, hz));
+                OrderedSemiring::mul_le_mono_l(map(c.rat()), y, Z, hy.left, hz));
             let r: (Z * y <= map(Dyadic::mul(z, d).rat())) = StrictOrder::le_of_same_r(Z * y, Z * map(d.rat()), map(Dyadic::mul(z, d).rat()), Interval::image_mul<K>(hom, z, d),
-                OrderedField::mul_le_mono_l(y, map(d.rat()), Z, hy.right, hz));
+                OrderedSemiring::mul_le_mono_l(y, map(d.rat()), Z, hy.right, hz));
             And(Inl(l), Inr(r))
         },
         Inr(neg) => {
             let hz: (Z <= K.unit) = StrictOrder::le_of_same_r(Z, map(0), K.unit, K.rel_sym(map(0), K.unit, hom.map_zero), hom.map_le(z.rat(), 0, neg));
             let l: (map(Dyadic::mul(z, d).rat()) <= Z * y) = StrictOrder::le_of_same_l(map(Dyadic::mul(z, d).rat()), Z * map(d.rat()), Z * y, Interval::image_mul<K>(hom, z, d),
-                OrderedField::mul_le_mono_l_nonpos(y, map(d.rat()), Z, hy.right, hz));
+                OrderedRing::mul_le_mono_l_nonpos(y, map(d.rat()), Z, hy.right, hz));
             let r: (Z * y <= map(Dyadic::mul(z, c).rat())) = StrictOrder::le_of_same_r(Z * y, Z * map(c.rat()), map(Dyadic::mul(z, c).rat()), Interval::image_mul<K>(hom, z, c),
-                OrderedField::mul_le_mono_l_nonpos(map(c.rat()), y, Z, hy.left, hz));
+                OrderedRing::mul_le_mono_l_nonpos(map(c.rat()), y, Z, hy.left, hz));
             And(Inr(l), Inl(r))
         },
     }
@@ -252,11 +252,11 @@ theorem Interval::mul_box_has_in(a, b, c, d: Dyadic, p: Nat, x, y: K, hx: Bnd(a,
     let hi_a: (A * y <= H) = PseudoOrder::le_trans(A * y, map(ha.rat()), H, Interval::corner_hi_in(hom, a, c, d, A * y, ba.right), hom.map_le(ha.rat(), hi.rat(), ha.le_max_of(hb, ha.rat(), Inl(ha.rat().le_refl()))));
     let hi_b: (B * y <= H) = PseudoOrder::le_trans(B * y, map(hb.rat()), H, Interval::corner_hi_in(hom, b, c, d, B * y, bb.right), hom.map_le(hb.rat(), hi.rat(), ha.le_max_of(hb, hb.rat(), Inr(hb.rat().le_refl()))));
     let low: (L <= x * y) = StrictOrder::le_by_cases(L, x * y, y, K.unit,
-        λ neg => PseudoOrder::le_trans(L, B * y, x * y, lo_b, OrderedField::mul_le_mono_r_nonpos(x, B, y, hx.right, StrictOrder::le_of_lt(y, K.unit, neg))),
-        λ pos => PseudoOrder::le_trans(L, A * y, x * y, lo_a, OrderedField::mul_le_mono_r(A, x, y, hx.left, pos)));
+        λ neg => PseudoOrder::le_trans(L, B * y, x * y, lo_b, OrderedRing::mul_le_mono_r_nonpos(x, B, y, hx.right, StrictOrder::le_of_lt(y, K.unit, neg))),
+        λ pos => PseudoOrder::le_trans(L, A * y, x * y, lo_a, OrderedSemiring::mul_le_mono_r(A, x, y, hx.left, pos)));
     let high: (x * y <= H) = StrictOrder::le_by_cases(x * y, H, y, K.unit,
-        λ neg => PseudoOrder::le_trans(x * y, A * y, H, OrderedField::mul_le_mono_r_nonpos(A, x, y, hx.left, StrictOrder::le_of_lt(y, K.unit, neg)), hi_a),
-        λ pos => PseudoOrder::le_trans(x * y, B * y, H, OrderedField::mul_le_mono_r(x, B, y, hx.right, pos), hi_b));
+        λ neg => PseudoOrder::le_trans(x * y, A * y, H, OrderedRing::mul_le_mono_r_nonpos(A, x, y, hx.left, StrictOrder::le_of_lt(y, K.unit, neg)), hi_a),
+        λ pos => PseudoOrder::le_trans(x * y, B * y, H, OrderedSemiring::mul_le_mono_r(x, B, y, hx.right, pos), hi_b));
     Interval::round_out_has_in(hom, lo, hi, p, x * y, And(low, high))
 }
 
@@ -268,9 +268,9 @@ theorem Interval::mul_pos_has_in(a, b, c, d: Dyadic, p: Nat, ha: Dyadic::Le(0, a
     let ha0: (K.unit <= A) = StrictOrder::le_of_same_l(K.unit, map(0), A, K.rel_sym(map(0), K.unit, hom.map_zero), hom.map_le(0, a.rat(), Dyadic::rat_nonneg(ha)));
     let hc0: (K.unit <= C) = StrictOrder::le_of_same_l(K.unit, map(0), C, K.rel_sym(map(0), K.unit, hom.map_zero), hom.map_le(0, c.rat(), Dyadic::rat_nonneg(hc)));
     let low: (map(Dyadic::mul(a, c).rat()) <= x * y) = StrictOrder::le_of_same_l(map(Dyadic::mul(a, c).rat()), A * C, x * y, Interval::image_mul<K>(hom, a, c),
-        OrderedField::mul_le_mul(A, x, C, y, hx.left, hy.left, ha0, hc0));
+        OrderedSemiring::mul_le_mul(A, x, C, y, hx.left, hy.left, ha0, hc0));
     let high: (x * y <= map(Dyadic::mul(b, d).rat())) = StrictOrder::le_of_same_r(x * y, map(b.rat()) * map(d.rat()), map(Dyadic::mul(b, d).rat()), Interval::image_mul<K>(hom, b, d),
-        OrderedField::mul_le_mul(x, map(b.rat()), y, map(d.rat()), hx.right, hy.right, PseudoOrder::le_trans(K.unit, A, x, ha0, hx.left), PseudoOrder::le_trans(K.unit, C, y, hc0, hy.left)));
+        OrderedSemiring::mul_le_mul(x, map(b.rat()), y, map(d.rat()), hx.right, hy.right, PseudoOrder::le_trans(K.unit, A, x, ha0, hx.left), PseudoOrder::le_trans(K.unit, C, y, hc0, hy.left)));
     let both: (Bnd(Dyadic::mul(a, c), Dyadic::mul(b, d)).HasIn(hom, x * y)) = And(low, high);
     Interval::round_out_has_in(hom, Dyadic::mul(a, c), Dyadic::mul(b, d), p, x * y, both)
 }

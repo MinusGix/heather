@@ -49,6 +49,9 @@ as `Group`'s inverse is. The algebra is not restated: the additive group is
 | `LocatedAddGroup` | `OrderedAddGroup` and `PseudoOrder` | a sum's gap splitting between summands, a bound's positivity, `≤` bounds |
 | `OrderedField(≈, <, ≤, +, *)` | `semiring`'s `CommRing` (one `multiplicative.unit`), `of_nat`, the reciprocal `recip` at apartness, `0 < 1`, `mul_pos`, `pos_of_mul_pos`, Archimedean | strict monotonicity of products, uniqueness and invariance of the reciprocal |
 
+> **Since 2026-11-02** (`docs/ordered-algebra-design.md`): `0 < 1` and the products' laws moved down to `OrderedSemiring`, in their monotone forms (a positive factor keeps and reflects `<`), and `mul_pos`/`pos_of_mul_pos` are theorems there. `OrderedField` extends `OrderedRing` and keeps `recip`, `of_nat` and Archimedean. The table and the text below describe the field as first built.
+
+
 Two decisions in that table are worth their reasons.
 
 **The `<` laws are fields, not the `Irreflexive`/`Transitive` parents.**
@@ -88,7 +91,7 @@ The interface first restated the ring laws as fields of its own (`zero`,
   `A.multiplicative.*`, commutativity `A.commutative.comm`, distributivity
   `distrib_l`/`distrib_r`, and `Ring::mul_neg`, `neg_mul`, `neg_mul_neg` and
   the field `mul_zero` replace the re-proved copies. Congruence of `*` is
-  `OrderedField::mul_respects`, one projection of the tagged semigroup's
+  `OrderedSemiring::mul_respects`, one projection of the tagged semigroup's
   `Respects2`.
 - The field's reciprocal is `recip` (law `mul_recip`), because `inv` is the
   additive group's, inherited untagged; its theorems are `recip_unique`,
