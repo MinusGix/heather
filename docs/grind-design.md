@@ -4,6 +4,7 @@ Issue: [grind-port](../issues/grind-port.md) (milestone `tac-general`).
 Round 1 built `lib/std/tactic/grind.hthr`, the `Spine` host request, and the
 probes in `lib/_tests/std/tactic/grind_tests.hthr`. Round 2 added lemmas
 instantiated by e-matching, the `Say` host request and `grind_report` (§9).
+Round 2½ proves lemmas' premises at their instances (§11).
 
 The milestone asks for "a general-purpose rewriting and congruence-closure
 tactic (grind-like) [that] closes the routine goals that today need hand
@@ -200,6 +201,7 @@ proof reconstruction.
 |---|---|---|
 | R1 (done) | `Spine`; congruence closure over the goal's equations and hints at their instances; proof by explanation; the graph as the failure | the hand `trans`/`cong` steps of a library proof close by `grind_with` with its lemmas as hints, and a failure names the missing equation's classes |
 | R2 (done, §9) | e-matching ([grind-e-matching](../issues/grind-e-matching.md)): equations under binders, from the locals and a hint list, instantiated by matching their patterns against the graph's terms modulo the classes; the used hints reported on success | `grind_using(["List::append_assoc", "List::append_nil"], [])` closes an append tower with no instance written, and `grind_report` says which it used |
+| R2½ (done, §11) | premises ([grind-lemma-premises](../issues/grind-lemma-premises.md)): a binder no side binds and nothing depends on is proved at the instance, by the graph, a local or hint, or `Synth` | an order premise by a local and an equation premise by the graph close, and the report names an unproved premise |
 | R3 | constructor facts and disequalities ([grind-constructor-facts](../issues/grind-constructor-facts.md)): injectivity, disjointness, `≠` hypotheses, `False` goals | `Cons(a, as) = Cons(b, bs)` gives `a = b`, and `Nil = Cons(x, xs)` closes any goal |
 | R4 | case splits and theories ([grind-splits-and-theories](../issues/grind-splits-and-theories.md)): split on a `match` scrutinee in the graph (`split_all`'s `Cases`), and exchange equalities with `omega`/`ring` | a goal needing a `Bool` case split and a linear fact closes, and the failure is the decision tree |
 
@@ -319,8 +321,8 @@ lets a pattern find them.
 
 The side is the left one unless it is a bare binder (it would match every
 node) or misses a binder; then the right one. A lemma neither of whose sides
-binds every binder has a premise (`n = 0 → f(n) = n`); it is set aside with
-a note, since proving premises is not this round's.
+binds every binder has a premise (`n = 0 → f(n) = n`); round 2 set it
+aside, and §11 proves it at the instance.
 
 Matching is the library's (`EGraph::ematch`, §8): every node is tried as the
 root, matched as it is, and every item below the root is matched against
@@ -441,4 +443,102 @@ Two defects the sweep found in grind itself are fixed here:
 No library proof was replaced. The proofs grind closes today are the ones
 whose instances are written out, and a `grind_with` naming those instances
 is no shorter than the hand `trans` chain. The replacements come with
-premises.
+premises (§11.4).
+
+## 11. Premises (round 2½, 2026-11-02)
+
+Issue: [grind-lemma-premises](../issues/grind-lemma-premises.md). The
+sweep (§10) found premises the commonest reason a named lemma could not be
+used: `Memory::get_set_hit` needs `m.space.same(a, x) = True`, which the
+branch proving the goal already has.
+
+### 11.1 Which binders are premises
+
+`Open` says of each binder whether the rest of the statement depends on it.
+A side is a pattern when it binds every binder something depends on (and is
+not a bare binder); a binder it leaves unbound and nothing depends on is a
+**premise**. A binder no side binds that a later premise or the conclusion
+mentions (`(n, m: Nat) → n < m → f(n) = n`'s `m`, an `∃` in disguise) is
+depended on, so neither side is a pattern and the lemma is set aside as in
+round 2. A side that binds a proof argument (`xs.get(i, h)`) matches it like
+any other binder.
+
+### 11.2 Proving one at an instance
+
+The instance is built left to right: a matched binder is its node's term,
+and at a premise the partial application is `infer`red, its type's domain
+read (`View`, or the head normal form), and that statement proved, in this
+order:
+
+1. **by the graph**, when it is an equation: its sides are read in, the
+   graph is closed, and if they meet, the explanation is the proof (as the
+   goal's is). A premise `p(a) = True` holds from `p(b) = True` and `a = b`
+   this way, where no local is it.
+2. **by a local or a hint**, up to `Defeq`: every local of the goal, then
+   every hint that is no equation. `Defeq` is what lets
+   `m.set(z, e).space.same(y, x) = True` be the branch's
+   `m.space.same(y, x) = True`: the two are one only by computing `set`'s
+   `space`. A hint that is no equation was "not read" before this round; it
+   is now kept for the premises, which is how a derived fact reaches one
+   (`Succ(a).le_trans(b, c, first, bc)`).
+3. **by `Synth`**, the `:= infer` search: instances, computation, and the
+   evidence rules of [facts-on-demand](facts-on-demand-design.md). A closed
+   `0 < 3` is proved here.
+
+Nothing about a premise's proof is trusted: the finished instance is
+`infer`red before its equation is read, and the kernel checks the whole
+proof at the `by`. The names a premise's proof cites (the graph's facts, the
+local or the hint) travel with the instance's edge (`Fact::uses`), so
+`grind_report` names them as used.
+
+### 11.3 Waiting instances
+
+A premise not proved now may be later: an equation premise whose sides a
+later instance merges. An instance with an unproved premise is recorded as
+seen (matching does not find it again) and kept **pending**, with a note of
+the premise it lacks. After each round that adds instances, the pending ones
+are tried again after the new ones, against the grown graph. A round that
+finds no new instance stops as before, since the graph is then the one the
+pending instances were last tried against.
+
+The failure lists the pending instances, the first four by their premise:
+
+```text
+  tried k: a lemma, instantiated by matching, its premise proved at each instance
+  tried k: 2 matches, 0 instances added
+  tried premises: 1 instance not added: a premise was not proved
+  at `a = 0`
+    tried k, premise 1: not proved: its sides are not in one class, no local or hint is it, and the instance search finds none
+```
+
+### 11.4 What the sweep's blocked proofs became
+
+| proof | before | now |
+|---|---|---|
+| `commit_chain` (parser diagnostics) | three branches of three instances, each premise a derived term | replaced: each branch is a `grind_using` of the three `commit_*` lemmas with the one derived fact as a hint |
+| `Memory::set_set_comm` | three branches of two or three `trans`/`get_set_*` instances each | closes, each branch as `by grind_using(["Memory::get_set_hit", "Memory::get_set_other"], [])` (the probe `set_set_hit_other`); the premises are the branch's locals, over another memory by `Defeq`. **Not replaced** |
+
+`set_set_comm` keeps its hand proof: `memory.hthr` is the byte memory model
+under the whole native stack, and importing grind there puts the tactic
+library (`tactic`, `derive`, `egraph`, `grind`) into the closure of every
+module and Rust test that loads the model, for one theorem. Its `absurd`
+branch (`True = False` from the two locals) would stay by hand anyway: it
+needs constructor facts (R3). `parser_diagnostics` already imported
+`omega`; it now imports `grind`, and the two Rust tests that list the parser
+library's closure by hand list grind's.
+
+### 11.5 Not done
+
+- **A premise tactic.** A `grind_by(names, hints, t)` running a caller's
+  tactic at an unproved premise was tried and left out: with
+  `apply(Nat::le_trans, assumption())` on `commit_chain`'s first branch it
+  changed which other instances were added in a way not yet understood,
+  while the hint route above closes the same proofs. Filed as
+  [grind-premise-tactic](../issues/grind-premise-tactic.md).
+- **Premises by a decider.** An order premise that needs arithmetic
+  (`p < k + i` from `i <= p`) is `omega`'s; that is the theory exchange of R4.
+- **Cost.** Each premise asks one `Defeq` per local and hint, and an
+  equation premise closes the graph once more. No client is near the round
+  caps; if one is, a cheap key on the premise's head before `Defeq` is the
+  first thing to add.
+

@@ -14,6 +14,13 @@ const MODULES: &[(&str, &str)] = &[
     ("int", include_str!("../../../lib/std/num/int.hthr")),
     ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ("result", include_str!("../../../lib/std/core/result.hthr")),
+    // grind's closure: `parser_diagnostics::commit_chain` is proved by it.
+    ("char", include_str!("../../../lib/std/text/char.hthr")),
+    ("string", include_str!("../../../lib/std/text/string.hthr")),
+    ("tactic", include_str!("../../../lib/std/tactic/tactic.hthr")),
+    ("derive", include_str!("../../../lib/std/tactic/derive.hthr")),
+    ("egraph", include_str!("../../../lib/std/data/egraph.hthr")),
+    ("grind", include_str!("../../../lib/std/tactic/grind.hthr")),
 ];
 
 /// Standard library and parser library alike come back as replayed semantic
