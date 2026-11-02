@@ -7,6 +7,9 @@ import result;
 import option;
 import int;
 import omega;
+import string;
+import tactic;
+import grind;
 import parser_core::{Cursor, Failure, Reply, Parser, observe};
 import parser_contracts::{Bound, Consumes};
 
@@ -137,13 +140,10 @@ theorem no_total_progress(a, b, c: Nat, first: a.Lt(b) → False, second: b.Lt(c
 theorem commit_chain<T>(source: List<T>, a, b, c: Nat, ab: a.Le(b), bc: b.Le(c), error: Failure<T>(source)):
     commit_offsets(source, a, b, commit_offsets(source, b, c, error)) = commit_offsets(source, a, c, error) {
     or_elim(Succ(a).le_dec(b),
-        λ first => trans(commit_later(source, a, b, commit_offsets(source, b, c, error), first),
-            trans(commit_absorbs(source, b, c, error), sym(commit_later(source, a, c, error, Succ(a).le_trans(b, c, first, bc))))),
+        λ first => by grind_using(["commit_later", "commit_not_later", "commit_absorbs"], [Succ(a).le_trans(b, c, first, bc)]),
         λ first => or_elim(Succ(b).le_dec(c),
-            λ second => trans(commit_not_later(source, a, b, commit_offsets(source, b, c, error), first),
-                trans(commit_later(source, b, c, error, second), sym(commit_later(source, a, c, error, Succ(a).le_trans(Succ(b), c, ab, second))))),
-            λ second => trans(commit_not_later(source, a, b, commit_offsets(source, b, c, error), first),
-                trans(commit_not_later(source, b, c, error, second), sym(commit_not_later(source, a, c, error, no_total_progress(a, b, c, first, second)))))))
+            λ second => by grind_using(["commit_later", "commit_not_later", "commit_absorbs"], [Succ(a).le_trans(Succ(b), c, ab, second)]),
+            λ second => by grind_using(["commit_later", "commit_not_later", "commit_absorbs"], [no_total_progress(a, b, c, first, second)])))
 }
 
 // Explicit commitment preserves consumption bounds on successes.

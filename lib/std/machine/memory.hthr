@@ -29,6 +29,9 @@ import bitvec;
 import bitvec_nat;
 import bitvec_bytes;
 import vector;
+import tactic;
+import string;
+import grind;
 
 // ---------------------------------------------------------------------------
 // Address spaces
@@ -319,15 +322,12 @@ theorem Memory::set_set_comm<A, C>(self m: Memory<A, C>, laws: SpaceLaws<A>(m.sp
             True => λ yx => (match m.space.same(z, x) as λ t => (m.space.same(z, x) = t) →
                     m.set(z, e).set(y, d).get(x) = m.set(y, d).set(z, e).get(x) {
                 True => λ zx => absurd(trans(sym(other), laws.same_trans(m.space, yx, zx))),
-                False => λ zx => trans(m.set(z, e).get_set_hit(y, x, d, yx),
-                    sym(trans(m.set(y, d).get_set_other(z, x, e, zx), m.get_set_hit(y, x, d, yx)))),
+                False => λ zx => by grind_using(["Memory::get_set_hit", "Memory::get_set_other"], []),
             })(refl),
             False => λ yx => (match m.space.same(z, x) as λ t => (m.space.same(z, x) = t) →
                     m.set(z, e).set(y, d).get(x) = m.set(y, d).set(z, e).get(x) {
-                True => λ zx => trans(trans(m.set(z, e).get_set_other(y, x, d, yx), m.get_set_hit(z, x, e, zx)),
-                    sym(m.set(y, d).get_set_hit(z, x, e, zx))),
-                False => λ zx => trans(trans(m.set(z, e).get_set_other(y, x, d, yx), m.get_set_other(z, x, e, zx)),
-                    sym(trans(m.set(y, d).get_set_other(z, x, e, zx), m.get_set_other(y, x, d, yx)))),
+                True => λ zx => by grind_using(["Memory::get_set_hit", "Memory::get_set_other"], []),
+                False => λ zx => by grind_using(["Memory::get_set_hit", "Memory::get_set_other"], []),
             })(refl),
         })(refl))
 }

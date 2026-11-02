@@ -1,6 +1,6 @@
 ---
 title: grind: instantiate lemmas with premises, proving each premise at the instance
-status: open
+status: closed
 labels: [tactics,metaprogramming]
 area: tactics
 milestone: [tac-general]
@@ -36,3 +36,7 @@ an unproved premise.
 - **[[grind-e-matching]]** owns the matching and the rounds. Assumed here:
   only that an instance is a lemma applied to the matched terms.
 - **[[facts-on-demand]]**-style `Synth` answers the non-equation premises.
+
+## Log
+
+- 2026-11-02: Done (docs/grind-design.md §11). A binder no side binds and nothing depends on (`Open`'s flag) is a premise, proved at each instance in order: an equation by the graph (sides read in, graph closed, the explanation), any premise by a local or a hint that is no equation (`Defeq`; non-equation hints are now kept for premises rather than "not read"), or by `Synth`. An instance whose premise is not proved is pending and retried after each round that adds instances; the failure lists pending instances by the premise each lacks. Probes in lib/_tests/std/tactic/grind_tests.hthr: `premise_local` (`<` by a local), `premise_graph` (equation by the graph, no local is it), `premise_synth`, `premise_later` (waits a round), `premise_hint`, `set_set_hit_other`, `premise_reported`, `premise_unproved` (the report names `k, premise 1`) and `premise_exists` (refused). A premise tactic (`grind_by`) was prototyped and left out: [[grind-premise-tactic]].
