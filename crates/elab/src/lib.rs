@@ -130,6 +130,7 @@ mod goal_combinators;
 mod goals;
 pub mod host;
 mod indexed;
+mod interfaces;
 mod infinitary;
 mod inductive;
 mod spelling;
@@ -579,6 +580,8 @@ pub struct CommittedWorld {
     representations: Shared<Representations>,
     provenance: Shared<provenance::Provenance>,
     meta_programs: Shared<MetaPrograms>,
+    /// Interface definitions by global key (`interfaces.rs`).
+    interfaces: Shared<interfaces::Interfaces>,
 }
 
 impl CommittedWorld {
@@ -592,6 +595,7 @@ impl CommittedWorld {
             representations: Shared::new(Representations::default()),
             provenance: Shared::new(provenance::Provenance::default()),
             meta_programs: Shared::new(MetaPrograms::default()),
+            interfaces: Shared::new(interfaces::Interfaces::default()),
         }
     }
 }
@@ -2559,6 +2563,11 @@ impl Elaborator {
             }
         }
         self.names.enter_scope(scope);
+        // The interface boundary is per module: the definitions this module
+        // declares are transparent in it, every other module's are withheld.
+        if !self.interfaces.is_empty() {
+            self.refresh_delta_psi();
+        }
         Ok(())
     }
 
@@ -3483,6 +3492,19 @@ impl Elaborator {
             self.evidence_shape(decl)?;
             self.elab_decl_one(decl, None)?;
             return self.register_evidence(decl);
+        }
+        // An `interface fn` is elaborated as the `fn` it is, then registered,
+        // with its unfolding equations beside it
+        // (docs/interface-definitions-design.md).
+        if decl.is_interface {
+            self.interface_shape(decl)?;
+            let mut plain = decl.clone();
+            plain.is_interface = false;
+            return self.session_transaction(|me| {
+                me.elab_decl_owned(&plain)?;
+                me.interface_equations(decl)?;
+                me.register_interface(decl)
+            });
         }
         // `decreases e` is not one declaration but a family of them
         // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,
@@ -10453,8 +10475,15 @@ impl Elaborator {
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
     fn refresh_delta_psi(&mut self) {
         self.attempt.goal_arena.invalidate_delta_world();
+        // The interface boundary (`interfaces.rs`): the elaborator's worlds
+        // withhold other modules' interface definitions; `psi`, the gate's,
+        // never does.
+        let withheld = self.withheld_policy();
         if self.global_padding() == 0 {
-            self.delta_psi = self.psi.clone();
+            self.delta_psi = match withheld {
+                Some(w) => Shared::new(self.psi.withholding(Some(w))),
+                None => self.psi.clone(),
+            };
             return;
         }
         let placeholder = GlobalBinding::Tm {
@@ -10464,7 +10493,11 @@ impl Elaborator {
             level: Level::Zero,
             body: None,
         };
-        *self.delta_psi = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+        let padded = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+        *self.delta_psi = match withheld {
+            Some(w) => padded.withholding(Some(w)),
+            None => padded,
+        };
     }
 }
 

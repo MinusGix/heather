@@ -3751,6 +3751,7 @@ impl Elaborator {
             kind: if m.theorem { DeclKind::Theorem } else { DeclKind::Fn },
             is_meta: false,
             is_evidence: false,
+            is_interface: false,
             value: m.value,
             elaborates: None,
             name: m.name.clone(),

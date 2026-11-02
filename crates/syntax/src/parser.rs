@@ -961,6 +961,7 @@ impl Parser {
             kind: DeclKind::Theorem,
             is_meta: false,
             is_evidence: true,
+            is_interface: false,
             value: false,
             elaborates: None,
             name: format!("{}::pos", d.name),
@@ -1393,7 +1394,7 @@ impl Parser {
         // keyword, or a name applied, is not otherwise an item, so this reads
         // nothing that used to parse. The modifier keywords are matched first.
         if let TokKind::Ident(w) = self.peek()
-            && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence")
+            && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence" | "interface")
             && (matches!(self.nth(1), TokKind::LParen)
                 || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))
                 // `a b fn f`: two prefixes, read as one so it is refused as such.
@@ -1422,7 +1423,7 @@ impl Parser {
             };
         }
         if let TokKind::Ident(w) = self.peek()
-            && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence")
+            && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence" | "interface")
         {
             let w = w.clone();
             return self.err(&format!(
@@ -2290,6 +2291,7 @@ impl Parser {
                 kind: DeclKind::Theorem,
                 is_meta: false,
                 is_evidence: true,
+                is_interface: false,
             value: false,
                 elaborates: None,
                 name: format!("{name}::{field}_positive"),
@@ -2754,6 +2756,26 @@ impl Parser {
                  (docs/positivity-evidence-design.md §6 A)",
             );
         }
+        // `interface fn` — an interface definition
+        // (docs/interface-definitions-design.md §1). Contextual: only the word
+        // directly before a declaration keyword is the modifier.
+        let is_interface = !is_meta
+            && !is_evidence
+            && self.at_kw("interface")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn");
+        if is_interface {
+            self.bump();
+        } else if !is_meta
+            && !is_evidence
+            && self.at_kw("interface")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "theorem" || s == "def" || s == "axiom" || s == "meta")
+        {
+            return self.err(
+                "`interface` marks a `fn`: a theorem is already opaque to its clients, and a \
+                 `def` or `axiom` has no arguments a call could leave open \
+                 (docs/interface-definitions-design.md §1)",
+            );
+        }
         // `def name: T = e;` — a value definition
         // (docs/value-definitions-design.md §2). Contextual like every
         // keyword here: only `def` followed by a name, at an item's head.
@@ -2928,7 +2950,7 @@ impl Parser {
         crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, is_evidence, value: false, elaborates, name, tyvars, params, result, decreases, body, span })
+        Ok(Decl { kind, is_meta, is_evidence, is_interface, value: false, elaborates, name, tyvars, params, result, decreases, body, span })
     }
 
     /// `def name<A>: T = e;`, `def name = e;` (docs/value-definitions-design.md
@@ -3000,6 +3022,7 @@ impl Parser {
             kind: DeclKind::Fn,
             is_meta: false,
             is_evidence: false,
+            is_interface: false,
             value: true,
             elaborates: None,
             name,
@@ -8899,4 +8922,4 @@ mod tests {
 
 /// The words a declaration (or its modifier) starts with: what may follow a
 /// prefix generator's name ([`Parser::prefixed`]).
-const DECL_WORDS: &[&str] = &["fn", "theorem", "def", "meta", "evidence", "axiom"];
+const DECL_WORDS: &[&str] = &["fn", "theorem", "def", "meta", "evidence", "axiom", "interface"];

@@ -460,6 +460,12 @@ pub struct Decl {
     /// carry it, and the elaborator refuses one with a parameter search could
     /// not fill.
     pub is_evidence: bool,
+    /// `interface fn` — an **interface definition**
+    /// (docs/interface-definitions-design.md): outside its module, a proof
+    /// reaches its body only through its generated equations, its lemmas or
+    /// an `unfold f;`, while a call at closed arguments still computes. Only
+    /// a `fn` may carry it.
+    pub is_interface: bool,
     /// `def name: T = e;` — a **value definition** (issues/value-definitions.md,
     /// docs/value-definitions-design.md). Its kind is [`DeclKind::Fn`] with no
     /// written parameters, so it is elaborated, gated, imaged and unfolded

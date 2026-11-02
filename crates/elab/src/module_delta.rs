@@ -350,6 +350,8 @@ pub(crate) enum DeltaEvent {
     },
     Derived(DerivedInst),
     Evidence(EvidenceRule),
+    /// An interface definition (`interfaces.rs`), by global key.
+    Interface { key: String, module: String, arity: u32 },
     Repr {
         key: DatareprKey,
         name: String,
@@ -606,6 +608,16 @@ impl Elaborator {
     pub(crate) fn semantic_commit_evidence(&mut self, rule: EvidenceRule) {
         self.record_module_event(|| DeltaEvent::Evidence(rule.clone()));
         self.traits.commit_evidence(rule);
+    }
+
+    pub(crate) fn semantic_commit_interface(&mut self, key: String, info: crate::interfaces::InterfaceInfo) {
+        self.record_module_event(|| DeltaEvent::Interface {
+            key: key.clone(),
+            module: info.module.clone(),
+            arity: info.arity,
+        });
+        self.interfaces.commit(key, info);
+        self.refresh_delta_psi();
     }
 
     pub(crate) fn semantic_commit_derived(&mut self, info: DerivedInst) {
@@ -1388,6 +1400,9 @@ impl Elaborator {
             DeltaEvent::Designation { key, info } => self.semantic_commit_designation(key, info),
             DeltaEvent::Derived(info) => self.semantic_commit_derived(info),
             DeltaEvent::Evidence(rule) => self.semantic_commit_evidence(rule),
+            DeltaEvent::Interface { key, module, arity } => {
+                self.semantic_commit_interface(key, crate::interfaces::InterfaceInfo { module, arity });
+            }
             DeltaEvent::Repr { key, name, info, monomorph, obligations } => {
                 self.semantic_commit_repr(key, name, info, monomorph, obligations);
             }
@@ -1436,6 +1451,7 @@ impl Elaborator {
             DeltaEvent::Derived(info)
                 if self.traits.derived().iter().any(|old| old.abs == info.abs) => Some("derived-instance"),
             DeltaEvent::Evidence(rule) if self.traits.has_evidence(&rule.global) => Some("evidence-rule"),
+            DeltaEvent::Interface { key, .. } if self.interfaces.get(key).is_some() => Some("interface"),
             DeltaEvent::Repr { key, name, monomorph, .. }
                 if self.representations.for_spec(key).is_some()
                     || self.representations.has_name(name)

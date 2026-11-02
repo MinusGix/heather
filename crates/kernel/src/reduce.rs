@@ -202,6 +202,39 @@ impl<'a> Defs<'a> {
     /// type). `None` for a declaration, an out-of-scope index, or an opaque
     /// environment.
     pub(crate) fn body(&self, v: GlobalVar) -> Option<Rc<Term>> {
+        if self.withheld(v).is_some() {
+            return None;
+        }
+        self.body_of(v)
+    }
+
+    /// [`Defs::body`] whatever the interface boundary says: the body a
+    /// saturated closed call of a withheld definition unfolds to.
+    pub(crate) fn withheld_body(&self, v: GlobalVar) -> Option<Rc<Term>> {
+        self.withheld(v)?;
+        self.body_of(v)
+    }
+
+    /// The arity `v` is withheld at by this world's interface boundary
+    /// ([`crate::term::GlobalCtx::withheld`]), or `None` when it is not
+    /// withheld. A withheld definition is not a definition to [`Defs::body`],
+    /// [`Defs::body_unshifted`] or [`Defs::is_defined`]: it unfolds only
+    /// through [`Defs::withheld_body`] at a call of this many arguments none
+    /// of which reads a free local variable
+    /// (`docs/interface-definitions-design.md` §3).
+    pub fn withheld(&self, v: GlobalVar) -> Option<u32> {
+        let psi = self.psi?;
+        let w = psi.withheld.as_ref()?;
+        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        w.arity(i)
+    }
+
+    /// `v`'s absolute index in this world's Ψ.
+    pub(crate) fn absolute(&self, v: GlobalVar) -> Option<usize> {
+        self.psi?.bindings.len().checked_sub(1 + v.0 as usize)
+    }
+
+    fn body_of(&self, v: GlobalVar) -> Option<Rc<Term>> {
         let psi = self.psi?;
         let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
         let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
@@ -223,6 +256,14 @@ impl<'a> Defs<'a> {
     /// (`docs/lazy-global-offset-design.md`). `None` on the same three
     /// conditions as [`Defs::body`].
     pub(crate) fn body_unshifted(&self, v: GlobalVar) -> Option<&'a Rc<Term>> {
+        if self.withheld(v).is_some() {
+            return None;
+        }
+        self.withheld_body_unshifted(v)
+    }
+
+    /// [`Defs::body_unshifted`] whatever the interface boundary says.
+    pub(crate) fn withheld_body_unshifted(&self, v: GlobalVar) -> Option<&'a Rc<Term>> {
         let psi = self.psi?;
         let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
         let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
@@ -279,6 +320,9 @@ impl<'a> Defs<'a> {
     /// Whether `v` is a definition here — the head test the conversion
     /// heuristic keys on, without paying for the rescoped body.
     pub fn is_defined(&self, v: GlobalVar) -> bool {
+        if self.withheld(v).is_some() {
+            return false;
+        }
         let Some(psi) = self.psi else { return false };
         let Some(i) = psi.bindings.len().checked_sub(1 + v.0 as usize) else {
             return false;
@@ -635,7 +679,75 @@ fn unseal_spine(t: &Term, defs: Defs<'_>) -> Option<Term> {
     })
 }
 
+/// The withheld definition at the head of `t` when `t` is a call of it that
+/// may unfold: saturated (at least its arity of term arguments) and closed
+/// (those arguments read no free local variable and carry no substitution
+/// tail). `docs/interface-definitions-design.md` §3; the value machine's
+/// rule is `Eval::glue_withheld`, and the two agree on every argument the
+/// value machine can classify.
+pub(crate) fn withheld_call(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
+    let mut args: Vec<&Rc<Term>> = Vec::new();
+    let mut cur = t;
+    let (var, _) = loop {
+        match cur {
+            Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
+                args.push(arg);
+                cur = fun;
+            }
+            Term::UApp { fun, .. } | Term::CtxApp { fun, .. } | Term::TyApp { fun, .. } => cur = fun,
+            Term::GlobalTm { var, subst } => break (*var, subst),
+            _ => return None,
+        }
+    };
+    let arity = defs.withheld(var)? as usize;
+    if arity == 0 || args.len() < arity {
+        return None;
+    }
+    // `args` runs outermost first, so the call's own arguments are its last
+    // `arity` entries; any before them are applied to its result.
+    let closed = args[args.len() - arity..].iter().all(|a| {
+        let u = crate::bounds::term_local_use(a);
+        u.bound == 0 && !u.has_tail
+    });
+    closed.then_some(var)
+}
+
+/// `t` with the head of its application spine, a withheld global at a call
+/// [`withheld_call`] accepts, replaced by its body.
+fn unfold_withheld(t: &Term, defs: Defs<'_>) -> Option<Term> {
+    let var = withheld_call(t, defs)?;
+    fn rebuild(t: &Term, defs: Defs<'_>, var: GlobalVar) -> Option<Term> {
+        Some(match t {
+            Term::GlobalTm { var: v, subst } if *v == var => {
+                crate::withheld::note(defs, var);
+                defs.withheld_body(var)?.apply_local(subst)
+            }
+            Term::App { fun, dom_level, cod_level, dom, cod, arg } => Term::App {
+                fun: Rc::new(rebuild(fun, defs, var)?),
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+                arg: Rc::clone(arg),
+            },
+            Term::AppAt { fun, arg } => Term::AppAt { fun: Rc::new(rebuild(fun, defs, var)?), arg: Rc::clone(arg) },
+            Term::UApp { fun, levels } => Term::UApp { fun: Rc::new(rebuild(fun, defs, var)?), levels: levels.clone() },
+            Term::CtxApp { fun, ctx } => Term::CtxApp { fun: Rc::new(rebuild(fun, defs, var)?), ctx: ctx.clone() },
+            Term::TyApp { fun, arg } => Term::TyApp { fun: Rc::new(rebuild(fun, defs, var)?), arg: Rc::clone(arg) },
+            _ => return None,
+        })
+    }
+    rebuild(t, defs, var)
+}
+
 fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
+    // A saturated closed call of a withheld definition unfolds its head, as a
+    // definition's `u^δ` would; any other application of one stays stuck.
+    if matches!(t, Term::App { .. } | Term::AppAt { .. }) {
+        if let Some(next) = unfold_withheld(t, defs) {
+            return Some(next);
+        }
+    }
     match t {
         // δ: `u^δ ⇝ t[δ]` for a definition `u := t`. Opaque at layer c,
         // where `defs` is `Defs::opaque()` — see [`Defs`].
