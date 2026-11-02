@@ -4,7 +4,7 @@ status: open
 labels: [kernel,representation,performance,parallelism,design,conversion,evaluator]
 area: kernel
 created: 2026-09-11
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 Evaluate replacing the kernel's `Rc`-owned term trees with arena-indexed terms over a frozen prefix, so that (a) the value-domain and term allocation constant goes away at the representation level rather than one pool at a time, and (b) independent declarations of one module can be kernel-checked in parallel without atomic reference counts.
@@ -74,3 +74,4 @@ BEFORE COLUMN, this box, this tree (note section 2): certificate warm, release -
 
 SURPRISE, filed not exploited: the type memo answers 1.3% of its lookups (163 k of 12.7 M) — every other lookup pays a probe, a force, an allocation and an insert. [[type-value-memo-hit-rate]]; its four rates should be recorded before the arena slice makes the counter stop meaning "allocations".
 - 2026-10-30: The design pass's prototype slice landed (arena-resident Val/VTy/VNeutral plus the value-domain Elim cells): kernel gate −18 to −23% on the cloud box, peak RSS unchanged. Before/after in [[value-cache-memo-in-arena]] (closed).
+- 2026-11-02: Trigger check from the data-oriented survey (2026-11-02, `docs/data-oriented-survey.md` §8). In cold gdb-sampled checks, 32–42% of samples have an allocator frame on top. Most of that is elaborator-side copying of non-term data ([[elab-probe-clone-copies-attempt]], [[elab-cx-persistent-binders]]), so the ≥15% Term/Type trigger has not fired. Re-read it once those two land. [[kernel-compact-level]] (Term 128 → ~80 B) and [[subst-per-call-allocations]] are the representation-preserving steps that shrink the term share without the rewrite.
