@@ -5,7 +5,7 @@ labels: [tooling,elaboration,metaprogramming,design]
 area: tactics
 milestone: [tac-general]
 created: 2026-08-05
-updated: 2026-08-06
+updated: 2026-11-02
 ---
 
 From the 2026-08-05 riff under [[ai-facing-tooling]]: the plan to
@@ -43,3 +43,4 @@ e-graph never enters the trusted story.
 ## Log
 
 - 2026-08-06: Cross-ref (2026-08-06): [[parallel-checking-and-caching]]'s rung-2 trace format was sharpened to a goal-keyed decision tree with a deterministic reconstructor; the e-graph this issue hands back on failure should be (a serialization of) that same object, so grind's design inherits the three format rules recorded there.
+- 2026-11-02: Round 1 (`docs/grind-design.md`): `lib/std/tactic/grind.hthr`, written in Heather on the host interface. `grind()` / `grind_with([e, …])` prove an equation by congruence closure over the goal's equations and hints given at their instances; the proof is the explanation path (`trans`/`sym`/`cong`/`grind::congr`/`grind::congr_fun`), checked by the kernel at the `by`. Terms are read by a new host request `Spine` (every argument, with dependence; dependent arguments stay in the head); constructor values through `Ctors`' function. The failure is the graph: each side's class, every class with its members, what was read and what was not, and the one equation that would close it. Probes in `lib/_tests/std/tactic/grind_tests.hthr`, including the two hand-built steps of `Format::down_of_le`. Next rounds filed: [[grind-e-matching]] (with the used-hint report), [[grind-constructor-facts]], [[grind-splits-and-theories]].

@@ -936,3 +936,17 @@ neither `:= infer` nor a parameter default can say. `lib/std/tactic/fact_request
 `request` is `Synth`, then the requester's budgeted fallbacks. A Heather
 tactic that wants instance search or the evidence rules (a `positivity`
 written in Heather, say) can use it the same way.
+
+## 22. A term's whole spine: `Spine` (2026-11-02)
+
+`Spine(h: Handle) → Checked<SpineInfo>` reads the term a handle stands for
+as a head applied to arguments, peeling the kernel's applications with
+nothing reduced: every argument in order, implicit ones and type arguments
+included, each with whether the function's type is dependent at it. `View`
+lists only the arguments a call writes, which is right for display; a
+tactic that compares or rebuilds applications needs the kernel's list. A
+type is refused, and a term that is no application is its own head.
+
+Its first customer is `grind` (`docs/grind-design.md` §3), whose graph
+nodes are the kernel's curried applications, with dependent arguments kept
+in the head.
