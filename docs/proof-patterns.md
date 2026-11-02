@@ -8,11 +8,15 @@ property of Heather.
 
 ## 1. Closed facts: evaluate once, in the kernel
 
-- **State a closed verdict as `b = True` by `refl`.** The kernel evaluates
-  `b` once. `b.IsTrue()` by `trivial` or `decide` costs about twice that,
-  because the elaborator evaluates `b` too, and at native scale the gap is
-  not a constant (cat FILE's allocation check passed 12 GiB as `trivial`,
-  0.6M steps as `refl`): [[closed-verdict-evaluated-twice]].
+- **A closed verdict is evaluated once, by the kernel, in any of its three
+  spellings**: `b = True` by `refl`, `b.IsTrue()` by `trivial`, or
+  `b.IsTrue()` by `decide`. `trivial` reads its expected type only within a
+  small step budget and leaves a verdict past it to the gate; `decide`'s
+  application no longer reduces the goal once its `P` is solved. A false
+  verdict is still reported at the `trivial` or `decide` that claimed it,
+  the elaborator reducing it only after the gate refused
+  ([[closed-verdict-evaluated-twice]], closed; the probes are
+  `lib/_tests/std/core/closed_verdict_tests.hthr`).
 - **Never compare two separately computed values by `refl`.** Conversion
   unfolds both sides in lockstep, a δ-step on each side per step. Small
   lists cost about three single evaluations; an allocation's `Homes = Homes`

@@ -854,6 +854,30 @@ impl expr::ExpectedTypeDiagnosticsElab for Elaborator {
     }
 }
 
+impl expr::UnitCheckingElab for Elaborator {
+    fn read_expected_type_within(&self, cx: &Cx, expected: &Type, span: Span) -> R<Option<Type>> {
+        // Budget first: a head the value machine reaches within it is read
+        // as before, through the registry-aware read, at no more than the
+        // budget again. Only a spent budget is "a verdict still to compute".
+        match self
+            .semantic_oracle()
+            .bounded(diagnostics::VERDICT_READ_STEPS)
+            .whnf_type(&cx.gamma, expected)
+        {
+            Ok(_) => self.whnf(cx, expected, span).map(Some),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn defer_unit_verdict(&self, cx: &Cx, expected: &Type, span: Span) {
+        self.attempt.trivial_uses.borrow_mut().push(attempt::TrivialUse {
+            span,
+            cx: Rc::new(cx.clone()),
+            expected: expected.clone(),
+        });
+    }
+}
+
 impl expr::RecursiveCheckingElab for Elaborator {
     fn check_expression(
         &self,
@@ -5592,7 +5616,7 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                self.expr_elab().check_unit_form(self, cx, expected, e.span)
+                self.expr_elab().check_unit_form(self, cx, expected, lvl, e.span)
             }
             // `decide` — proof by reflection at a decided goal
             // (docs/reflection-through-decide-instances-design.md §4). Sugar
@@ -8573,6 +8597,7 @@ impl Elaborator {
             };
             let (embed, embed_ty, embed_level) =
                 self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
+            let since = self.attempt.trivial_uses.borrow().len();
             let (out, _, _) = application::apply_explicit(
                 self,
                 cx,
@@ -8584,6 +8609,7 @@ impl Elaborator {
                 embed_level,
                 std::slice::from_ref(e),
             )?;
+            self.settle_deferred_units(since)?;
             return Ok(self.reduced_embedding(cx, out));
         }
         // A numeral is the leaf case of
@@ -8791,7 +8817,7 @@ impl Elaborator {
         // at the `on` (issues/elab-accepts-conjunction-for-equation.md).
         let conversion = matches!(e, TypeError::NotConvertible | TypeError::HeadMismatch);
         if conversion
-            && let Some((note, at)) = self.refused_decide()
+            && let Some((note, at)) = self.refused_decide().or_else(|| self.refused_trivial())
         {
             return ElabError::Kernel {
                 decl: decl.to_string(),
@@ -9131,6 +9157,37 @@ impl Elaborator {
                     u.span,
                 )
             })
+        })
+    }
+
+    /// After a `NotConvertible` at the gate: the first `trivial` left unread
+    /// ([`expr::UnitCheckingElab`]) whose expected type, reduced now under
+    /// the gate's own budget, is not `True`. [`Self::refused_decide`]'s
+    /// counterpart: the reduction runs only on the failure path, and an
+    /// inconclusive one stays silent.
+    fn refused_trivial(&self) -> Option<(String, Span)> {
+        let uses = self.attempt.trivial_uses.borrow();
+        if uses.is_empty() {
+            return None;
+        }
+        let oracle = oracle::SemanticOracle::in_world(self.goal_psi(), self.policy.fuel);
+        uses.iter().find_map(|u| {
+            let head = oracle.whnf_type(&u.cx.gamma, &u.expected).ok()?;
+            if matches!(head, Type::Unit { .. }) {
+                return None;
+            }
+            let goal = self.display_type(&u.cx, &u.expected);
+            let reduct = match self.display_type_clean(&u.cx, &head) {
+                Some(r) if r != goal => format!(", which reduces to `{r}`"),
+                _ => String::new(),
+            };
+            Some((
+                format!(
+                    "`trivial` proves `True`, but `{goal}` is expected here{reduct}: \
+                     the verdict is false, or not closed enough to compute"
+                ),
+                u.span,
+            ))
         })
     }
 
@@ -9726,6 +9783,17 @@ impl Elaborator {
             // Preserve named relations and operation applications before
             // unfolding a transparent relation into its definition.
             self.unify_root(cx, result_ty, expected, n, sols, span);
+            // The expected type's weak head can teach only the metas the
+            // result type still mentions: unification records into the
+            // pattern's metas and nowhere else. Once it mentions none, the
+            // read would learn nothing, and at a closed verdict it is the
+            // verdict's whole evaluation, which the kernel is about to run
+            // again — `decide_yes(refl)` at `heavy(300).IsTrue()`, whose
+            // result `P` the line above has just solved
+            // (issues/closed-verdict-evaluated-twice.md).
+            if zonked(result_ty, n, sols).is_some() {
+                return Ok(());
+            }
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
             self.unify_root(cx, result_ty, &head, n, sols, span);

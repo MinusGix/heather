@@ -105,6 +105,12 @@ pub(crate) const DISPLAY_DECODE_STEPS: usize = 32;
 /// do, so it may only pay for the disagreements that are cheap to decide.
 pub(crate) const REFL_NOTE_FUEL: u64 = 1 << 12;
 
+/// The steps `trivial` may spend reading its expected type before leaving it
+/// to the gate (`issues/closed-verdict-evaluated-twice.md`): enough for any
+/// type that is `True` as written or one definition away, far below what a
+/// closed verdict over a computation costs, which the kernel then runs once.
+pub(crate) const VERDICT_READ_STEPS: u64 = 1 << 12;
+
 /// Maximum stuck positions considered during goal motive synthesis.
 pub(crate) const STUCK_CANDIDATES: u32 = 64;
 

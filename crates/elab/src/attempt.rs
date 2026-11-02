@@ -61,6 +61,11 @@ pub(super) struct DeclAttempt {
     /// whose decision then re-reduces to the wrong side is the refusal, and
     /// the report names its instance (`docs/reflection-through-decide-instances-design.md` §4).
     pub(super) decide_uses: RefCell<Vec<DecideUse>>,
+    /// Every `trivial` emitted at an expected type its budgeted read did not
+    /// reach the head of — a closed verdict left to the gate
+    /// (`issues/closed-verdict-evaluated-twice.md`). Consulted, like
+    /// [`Self::decide_uses`], only if the gate says `NotConvertible`.
+    pub(super) trivial_uses: RefCell<Vec<TrivialUse>>,
     /// Resolved ordinary globals actually inserted while elaborating the
     /// declaration body. Stored by qualified identity, never basename. A
     /// [`DependencySet`] so that a probe or a rejected search candidate can
@@ -153,6 +158,7 @@ impl DeclAttempt {
         self.member_receivers.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
+        self.trivial_uses.get_mut().clear();
         self.telescope.get_mut().clear();
         self.direct_dependencies.get_mut().clear();
         self.children_annotations.get_mut().clear();
@@ -183,6 +189,7 @@ impl DeclAttempt {
         self.member_receivers.get_mut().clear();
         self.refl_notes.get_mut().clear();
         self.decide_uses.get_mut().clear();
+        self.trivial_uses.get_mut().clear();
         self.telescope.get_mut().clear();
     }
 
@@ -202,6 +209,7 @@ impl DeclAttempt {
             member_receivers,
             refl_notes,
             decide_uses,
+            trivial_uses,
             direct_dependencies,
             goal_arena,
             children_annotations,
@@ -226,6 +234,7 @@ impl DeclAttempt {
             member_receivers: member_receivers.borrow().len(),
             refl_notes: refl_notes.borrow().len(),
             decide_uses: decide_uses.borrow().len(),
+            trivial_uses: trivial_uses.borrow().len(),
             direct_dependencies: direct_dependencies.borrow().mark(),
             goal_arena: goal_arena.checkpoint(),
             children_annotations: children_annotations.borrow().len(),
@@ -261,6 +270,7 @@ impl DeclAttempt {
             member_receivers,
             refl_notes,
             decide_uses,
+            trivial_uses,
             direct_dependencies,
             goal_arena,
             children_annotations,
@@ -282,6 +292,7 @@ impl DeclAttempt {
         member_receivers.borrow_mut().truncate(mark.member_receivers);
         refl_notes.borrow_mut().truncate(mark.refl_notes);
         decide_uses.borrow_mut().truncate(mark.decide_uses);
+        trivial_uses.borrow_mut().truncate(mark.trivial_uses);
         direct_dependencies.borrow_mut().rollback(mark.direct_dependencies);
         if goal_arena.restore(mark.goal_arena) {
             instance_matches.borrow_mut().clear();
@@ -310,6 +321,7 @@ pub(super) struct AttemptMark {
     member_receivers: usize,
     refl_notes: usize,
     decide_uses: usize,
+    trivial_uses: usize,
     direct_dependencies: usize,
     goal_arena: GoalCheckpoint,
     children_annotations: usize,
@@ -374,6 +386,16 @@ pub(super) struct DecideUse {
     pub(super) index: Term,
     pub(super) goal: String,
     pub(super) instance: String,
+}
+
+/// A `trivial` whose expected type was left unread
+/// ([`DeclAttempt::trivial_uses`]): the expected type in its context, so the
+/// failure path can reduce it under the gate's budget and say what it is.
+#[derive(Clone)]
+pub(super) struct TrivialUse {
+    pub(super) span: Span,
+    pub(super) cx: Rc<Cx>,
+    pub(super) expected: Type,
 }
 
 /// One checking site met in checking-falls-back-to-inference position: what

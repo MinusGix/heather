@@ -181,6 +181,7 @@ impl Elaborator {
             };
             let (embed, embed_ty, embed_level) =
                 self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
+            let since = self.attempt.trivial_uses.borrow().len();
             let (out, _, _) = application::apply_explicit(
                 self,
                 cx,
@@ -192,6 +193,7 @@ impl Elaborator {
                 embed_level,
                 std::slice::from_ref(literal),
             )?;
+            self.settle_deferred_units(since)?;
             Ok(self.reduced_embedding(cx, out))
         })())
     }
@@ -207,6 +209,42 @@ impl Elaborator {
     /// character), or the value the field returns when it is a constructor.
     /// A dictionary that is a local (`<A: Numeral>`) does not unfold, and the
     /// term stays as it was.
+    /// Decide, here, every `trivial` recorded since `since` that left its
+    /// verdict to the gate ([`crate::expr::UnitCheckingElab`]). A literal's
+    /// embedding is reduced before it is emitted ([`Self::reduced_embedding`]),
+    /// and a reduct can drop an argument its field ignores — `HexLiteral`'s
+    /// `ofHex` takes the `trivial` that the carrier holds the value and never
+    /// reads it — so the gate would never see the `⟨⟩` it was left to judge
+    /// (`issues/closed-verdict-evaluated-twice.md`).
+    pub(crate) fn settle_deferred_units(&self, since: usize) -> R<()> {
+        let uses = self.attempt.trivial_uses.borrow();
+        let Some(pending) = uses.get(since..).filter(|p| !p.is_empty()) else {
+            return Ok(());
+        };
+        let oracle = self.semantic_oracle();
+        for u in pending {
+            match oracle.whnf_type(&u.cx.gamma, &u.expected) {
+                Ok(Type::Unit { .. }) => {}
+                Ok(_) => {
+                    return Err(ElabError::Elab {
+                        msg: format!(
+                            "`trivial` proves `True`, but `{}` is expected here",
+                            self.display_type(&u.cx, &u.expected)
+                        ),
+                        span: u.span,
+                    });
+                }
+                Err(_) => {
+                    return Err(ElabError::Elab {
+                        msg: "out of fuel reducing a type".into(),
+                        span: u.span,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn reduced_embedding(&self, cx: &Cx, out: Term) -> Term {
         let oracle = self.goal_oracle();
         let mut last = None;
@@ -473,6 +511,7 @@ impl Elaborator {
                 });
             };
             let dict = Rc::new(dict);
+            let since = self.attempt.trivial_uses.borrow().len();
             let apply = |name: &str, index, args: &[Expr]| -> R<Term> {
                 let (embed, embed_ty, embed_level) = self.project_field(cx, &ind, &goal, Rc::clone(&dict), index, span)?;
                 let (out, _, _) = application::apply_explicit(
@@ -489,6 +528,7 @@ impl Elaborator {
                 Ok(out)
             };
             let out = apply(field_name, field, args)?;
+            self.settle_deferred_units(since)?;
             let checked = match check {
                 Some((name, index)) => Some(apply(name, index, &args[..1])?),
                 None => None,
