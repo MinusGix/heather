@@ -129,6 +129,25 @@ fn a_while_names_its_measure_and_does_not_exit_yet() {
          "in a `while` are not built yet"),
         // Like a `for`, a `while` that assigns nothing computes nothing.
         ("fn f(n: Nat) -> Nat { while 1 <= n decreases n { } n }", "computes nothing"),
+    ] {
+        let error = parse_file(src).unwrap_err();
+        assert!(error.msg.contains(says), "{src}: {}", error.msg);
+    }
+    // `while` stays a name where it is not a statement.
+    parse_file("fn f(while: Nat) -> Nat { while }").unwrap_or_else(|e| panic!("{}", e.msg));
+}
+
+#[test]
+fn a_range_is_written_only_in_a_for_header() {
+    let parsed = format!("{:?}", parse_file("fn f(n: Nat) -> Nat { let mut s = 0; for i in 0..n { s := s + i } s }").unwrap());
+    assert!(parsed.contains("List::range\""), "{parsed}");
+    let parsed = format!("{:?}", parse_file("fn f(a, b: Nat) -> Nat { let mut s = 0; for i in a..b { s := s + i } s }").unwrap());
+    assert!(parsed.contains("List::range_from"), "{parsed}");
+    let error = parse_file("fn f(n: Nat) -> Nat { let r = 0..n; 0 }").unwrap_err();
+    assert!(error.msg.contains("a range only in a `for` header"), "{}", error.msg);
+}
+
+#[test]
 fn a_mut_self_method_returns_its_receiver_beside_its_result() {
     // `fn C::tick(mut self c: C, …) → R` has result `Mutated<C, R>`, and its
     // body ends in `Mutated(c, value)` (docs/sequencing-surface-design.md §8.2).
@@ -149,18 +168,6 @@ fn a_mut_parameter_is_refused_where_nothing_is_updated() {
         let error = parse_file(src).unwrap_err();
         assert!(error.msg.contains(says), "{src}: {}", error.msg);
     }
-    // `while` stays a name where it is not a statement.
-    parse_file("fn f(while: Nat) -> Nat { while }").unwrap_or_else(|e| panic!("{}", e.msg));
-}
-
-#[test]
-fn a_range_is_written_only_in_a_for_header() {
-    let parsed = format!("{:?}", parse_file("fn f(n: Nat) -> Nat { let mut s = 0; for i in 0..n { s := s + i } s }").unwrap());
-    assert!(parsed.contains("List::range\""), "{parsed}");
-    let parsed = format!("{:?}", parse_file("fn f(a, b: Nat) -> Nat { let mut s = 0; for i in a..b { s := s + i } s }").unwrap());
-    assert!(parsed.contains("List::range_from"), "{parsed}");
-    let error = parse_file("fn f(n: Nat) -> Nat { let r = 0..n; 0 }").unwrap_err();
-    assert!(error.msg.contains("a range only in a `for` header"), "{}", error.msg);
 }
 
 #[test]

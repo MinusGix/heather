@@ -386,6 +386,7 @@ fn upto_len(xs: List<Nat>) → Nat {
     s
 }
 theorem upto_len_lit(): upto_len([7, 7, 7]) = 3 { refl }
+
 // ---------------------------------------------------------------------------
 // `mut self` methods (§8.2): a call on a `let mut` local updates it
 
