@@ -1,0 +1,119 @@
+// Probes of `lib/std/tactic/grind.hthr`: congruence closure over the goal's
+// equations, the hints and the lemmas they instantiate, and its refusals,
+// which report the graph. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import char; import string; import tactic; import int; import grind; import memory;
+
+// Equations chained, and turned around.
+theorem chain(a, b, c, d: Nat, h1: a = b, h2: c = b, h3: c = d): a = d { by grind() }
+// Congruence: an argument, the function, both, and under several layers.
+theorem arg(f: Nat → Nat, a, b: Nat, h: a = b): f(a) = f(b) { by grind() }
+theorem fun_and_arg(f, g: Nat → Nat, a, b: Nat, hf: f = g, ha: a = b): f(a) = g(b) { by grind() }
+theorem two_args(f: Nat → Nat → Nat, a, b, c, d: Nat, h1: a = b, h2: c = d): f(a, c) = f(b, d) { by grind() }
+theorem partial(f: Nat → Nat → Nat, a, b, c: Nat, h1: a = b, h2: f(b, c) = c): f(a, c) = c { by grind() }
+// A fixed point reached through the graph rather than given: `f(a) = a`
+// makes `f(f(a))` a member of `a`'s class.
+theorem fixed_point(f: Nat → Nat, a: Nat, h: f(a) = a): f(f(f(a))) = a { by grind() }
+// An open element type, and type arguments read as part of the head.
+theorem open_type<A>(f: A → A, x, y: A, h: x = y): f(f(x)) = f(f(y)) { by grind() }
+theorem open_lists<A>(xs, ys, zs: List<A>, h: xs = ys): (xs ++ zs).len() = (ys ++ zs).len() { by grind() }
+// Constructor values, read as their constructor applied to the fields.
+theorem ctor_fields(x, y: Nat, xs, ys: List<Nat>, h1: x = y, h2: xs = ys): Cons(x, xs) = Cons(y, ys) { by grind() }
+theorem ctor_option<A>(x, y: A, h: x = y): Some(x) = Some(y) { by grind() }
+// Hints: a lemma at its instance, and a local's consequence.
+theorem hint_lemma(xs: List<Nat>): xs ++ [] = xs { by grind_with([List::append_nil(xs)]) }
+theorem hint_local(f: Nat → Nat, k: (n: Nat) → f(n) = n, a: Nat): f(f(a)) = a { by grind_with([k(a)]) }
+// The shape of `Format::down_of_le`'s two hand-built steps
+// (lib/std/num/float/eft.hthr), with the two lemmas as hints: a `trans` of a
+// `cong` and an instance, and the same again under a product.
+theorem down_of_le_steps(h, k, b, e: Nat, s: Succ(b) = (b - e) + Succ(e), hk: h = k * Nat::pow(2, Succ(b))): h = (k * Nat::pow(2, b - e)) * Nat::pow(2, Succ(e)) {
+    by grind_with([Nat::pow_add(2, b - e, Succ(e)), sym(k.mul_assoc(Nat::pow(2, b - e), Nat::pow(2, Succ(e))))])
+}
+// A checking position: the goal comes from a `let`'s annotation, and from
+// the codomain of a λ.
+theorem in_let(f: Nat → Nat, a, b: Nat, h: a = b): f(b) = f(a) {
+    let p: (f(a) = f(b)) = by grind();
+    sym(p)
+}
+fn under_lambda(f: Nat → Nat, a, b: Nat, h: a = b) → Nat → f(a) = f(b) { λ n => by grind() }
+
+// Lemmas: equations under binders, instantiated by matching one side
+// against the graph (round 2). A local lemma, then the append tower of
+// issues/grind-e-matching.md from the lemmas by name with no instance
+// written: at an open element type, with a lemma that does not apply, two
+// lemmas over two types (`len` of appends, then `+`), and at `Nat` with a
+// closed list among the terms.
+theorem local_lemma(f: Nat → Nat, k: (n: Nat) → f(n) = n, a: Nat): f(f(a)) = a { by grind() }
+theorem tower<A>(a, b, c, d: List<A>): ((a ++ b) ++ c) ++ d = a ++ (b ++ (c ++ d)) { by grind_using(["List::append_assoc"], []) }
+theorem tower_nil<A>(a, b, c: List<A>): ((a ++ []) ++ b) ++ c = a ++ (b ++ c) { by grind_using(["List::append_assoc", "List::append_nil"], []) }
+theorem tower_lens<A>(a, b, c: List<A>): ((a ++ b) ++ c).len() = a.len() + (b.len() + c.len()) { by grind_using(["List::len_append", "Nat::add_assoc"], []) }
+theorem tower_closed(xs, ys, zs: List<Nat>): ((xs ++ ys) ++ zs) ++ [1, 2] = xs ++ (ys ++ (zs ++ [1, 2])) { by grind_using(["List::append_assoc"], []) }
+// A commutative lemma among them (its instances turn every sum round), and
+// a round whose matching outgrew one evaluation's fuel until each lemma's
+// matching was made its own (`settled`); it stops one definitional step
+// short (`-OfNat(k)` is `Int::negOfNat(k)` only by computation,
+// issues/grind-definitional-equalities.md).
+theorem regroup(a, b, c: Int): (a + b) + c = b + (c + a) { by grind_using(["Int::add_assoc", "Int::add_comm"], []) }
+// expect-error: no new instance after 2 rounds
+theorem neg_add_step(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(k).isucc()) = -a + Int::negOfNat(k).ipred() {
+    by grind_using(["Int::add_isucc", "Int::neg_isucc", "Int::add_ipred", "Int::ipred_negOfNat"], [])
+}
+// The report of the lemmas used (a `tactic-report` warning): here
+// `List::append_assoc`, and not `List::append_nil`.
+theorem reported<A>(a, b, c: List<A>): (a ++ b) ++ c = a ++ (b ++ c) { by grind_report(["List::append_assoc", "List::append_nil"], []) }
+
+// Lemmas with premises (issues/grind-lemma-premises.md): the binders no
+// side binds are proved at each instance. An order premise by a local; an
+// equation premise by the graph, where no local is it (`p(a)` is `p(b)` only
+// through `a = b`); a closed premise by the instance search; and a premise
+// that only holds once an earlier instance has merged its sides, so the
+// instance waits and is tried again.
+theorem premise_local(f, g: Nat → Nat, n: Nat, k: (i: Nat) → i < n → f(i) = g(i), a: Nat, h: a < n): f(a) = g(a) { by grind() }
+theorem premise_graph(f: Nat → Nat, p: Nat → Bool, k: (x: Nat) → p(x) = True → f(x) = x, a, b: Nat, hb: p(b) = True, ab: a = b): f(a) = b { by grind() }
+theorem premise_synth(f: Nat → Nat, k: (n: Nat) → 0 < n → f(n) = 1): f(3) = 1 { by grind() }
+theorem premise_later(f, g: Nat → Nat, p: Nat → Bool, k: (x: Nat) → p(x) = True → f(x) = x, e: (x: Nat) → g(x) = x, a: Nat, hb: p(a) = True): f(g(a)) = a { by grind() }
+// The shape of `Memory::set_set_comm`'s branches (lib/std/machine/memory.hthr):
+// `get_set_hit` and `get_set_other` by name, their `same` premises the
+// branch's locals, read over another memory with the same space by `Defeq`.
+theorem set_set_hit_other<A, C>(m: Memory<A, C>, x, y, z: A, d, e: C, yx: m.space.same(y, x) = True, zx: m.space.same(z, x) = False):
+    m.set(z, e).set(y, d).get(x) = m.set(y, d).set(z, e).get(x) {
+    by grind_using(["Memory::get_set_hit", "Memory::get_set_other"], [])
+}
+// A premise no local is, by a hint that is no equation (a derived order
+// fact).
+theorem premise_hint(f, g: Nat → Nat, n: Nat, k: (i: Nat) → Succ(i).Le(n) → f(i) = g(i), a, b: Nat, ab: Succ(a).Le(b), bn: b.Le(n)): f(a) = g(a) {
+    by grind_with([Succ(a).le_trans(b, n, ab, bn)])
+}
+// The report names the locals the premises cite.
+theorem premise_reported(f, g: Nat → Nat, n: Nat, k: (i: Nat) → i < n → f(i) = g(i), a: Nat, h: a < n): f(a) = g(a) { by grind_report([], []) }
+
+// The two sides in different classes: the failure is the graph.
+// expect-error: grind: the two sides are not in one class
+theorem not_closed(f: Nat → Nat, a, b: Nat, h: f(a) = b): f(b) = a { by grind() }
+// A lemma whose pattern meets nothing in the graph: the report says which.
+// expect-error: its pattern never matched
+theorem never_matched(f, g: Nat → Nat, k: (n: Nat) → g(n) = n, a: Nat): f(a) = a { by grind() }
+// A premise the instance cannot prove: `a = 0` is in no class, no local and
+// no instance, so the instance waits and the report names the premise.
+// expect-error: k, premise 1
+theorem premise_unproved(f: Nat → Nat, k: (n: Nat) → n = 0 → f(n) = n, a: Nat): f(a) = a { by grind() }
+// A binder only a premise mentions (`∃`-like): no side binds it and the
+// premise depends on it, so the lemma is set aside.
+// expect-error: neither side mentions every binder
+theorem premise_exists(f: Nat → Nat, k: (n, m: Nat) → n < m → f(n) = n, a: Nat): f(a) = a { by grind() }
+// Instances that only make terms of one class: matching runs dry.
+// expect-error: no new instance after 2 rounds
+theorem runs_dry(f: Nat → Nat, k: (n: Nat) → f(n) = f(f(n)), a: Nat): f(a) = a { by grind() }
+// Instances that make new terms every round: the round budget ends it.
+// expect-error: stopped after 8 rounds
+theorem keeps_growing(f, g: Nat → Nat, k: (n: Nat) → f(n) = f(g(n)), a: Nat): f(a) = a { by grind() }
+// A congruence is not injectivity: `f(a) = f(b)` says nothing of `a` and `b`.
+// expect-error: grind: the two sides are not in one class
+theorem not_injective(f: Nat → Nat, a, b: Nat, h: f(a) = f(b)): a = b { by grind() }
+// Only equations are goals.
+// expect-error: grind: the goal is not an equation
+theorem not_equation(a, b: Nat, h: a = b): a <= b { by grind() }
+// A hint that is no equation is kept for the premises, and closes nothing
+// by itself.
+// expect-error: hint 0: not an equation: kept for the premises
+theorem order_hint(a, b, c: Nat, h: a <= b): a = c { by grind_with([h]) }

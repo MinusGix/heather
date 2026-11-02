@@ -23,6 +23,7 @@ import int;
 import list;
 import relation;
 import relation_props;
+import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
@@ -115,7 +116,7 @@ theorem OrderedField::npow_nonneg(r: K, p0: K.unit <= r, n: Nat): K.unit <= Orde
             let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
             StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o)
         },
-        Succ(m) => OrderedField::mul_nonneg(OrderedField::npow(r, m), r, OrderedField::npow_nonneg(r, p0, m), p0),
+        Succ(m) => OrderedSemiring::mul_nonneg(OrderedField::npow(r, m), r, OrderedField::npow_nonneg(r, p0, m), p0),
     }
 }
 
@@ -128,7 +129,7 @@ theorem OrderedField::npow_index_le(r: K, p0: K.unit <= r, r1: r <= K.multiplica
         Succ(i) => {
             let ih = OrderedField::npow_index_le(r, p0, r1, a, i);
             let le: (OrderedField::npow(r, a.add(i)) * r <= OrderedField::npow(r, a.add(i)) * K.multiplicative.unit) =
-                OrderedField::mul_le_mono_l(r, K.multiplicative.unit, OrderedField::npow(r, a.add(i)), r1, OrderedField::npow_nonneg(r, p0, a.add(i)));
+                OrderedSemiring::mul_le_mono_l(r, K.multiplicative.unit, OrderedField::npow(r, a.add(i)), r1, OrderedField::npow_nonneg(r, p0, a.add(i)));
             let u: (OrderedField::npow(r, a.add(Succ(i))) ≈ OrderedField::npow(r, a.add(i)) * r) = K.rel_refl(OrderedField::npow(r, a.add(i)) * r);
             linarith(le, ih, u)
         },
@@ -170,7 +171,7 @@ theorem OrderedField::atanh_tail(c: Nat → K, hc1: (k: Nat) → AbsLe(c(k), K.m
             let r1: (r <= K.multiplicative.unit) = linarith(hr, p0);
             let tm = OrderedField::atanh_term_le(c, hc1, r, t, ht, r1, m.add(i));
             let gap: (K.unit <= OrderedField::npow(r, m.add(i)) * (K.multiplicative.unit + K.inv(r + r))) =
-                OrderedField::mul_nonneg(OrderedField::npow(r, m.add(i)), K.multiplicative.unit + K.inv(r + r),
+                OrderedSemiring::mul_nonneg(OrderedField::npow(r, m.add(i)), K.multiplicative.unit + K.inv(r + r),
                     OrderedField::npow_nonneg(r, p0, m.add(i)), linarith(hr));
             let ua: (OrderedField::atanh_poly(c, m.add(Succ(i)), t) ≈ OrderedField::atanh_poly(c, m.add(i), t) + c(m.add(i)) * OrderedField::npow(t, Succ((m.add(i)).add(m.add(i))))) =
                 K.rel_refl(OrderedField::atanh_poly(c, m.add(Succ(i)), t));
@@ -202,9 +203,9 @@ theorem OrderedField::npow_mul_nat(r: K, p0: K.unit <= r, hr: r + r <= K.multipl
             let r1: (r <= K.multiplicative.unit) = linarith(hr, p0);
             let one = OrderedField::npow_le_one(r, p0, r1, m);
             let a: (r * (OrderedField::npow(r, m) * K.of_nat(m)) <= r * K.multiplicative.unit) =
-                OrderedField::mul_le_mono_l(OrderedField::npow(r, m) * K.of_nat(m), K.multiplicative.unit, r, ih, p0);
+                OrderedSemiring::mul_le_mono_l(OrderedField::npow(r, m) * K.of_nat(m), K.multiplicative.unit, r, ih, p0);
             let b: (r * OrderedField::npow(r, m) <= r * K.multiplicative.unit) =
-                OrderedField::mul_le_mono_l(OrderedField::npow(r, m), K.multiplicative.unit, r, one, p0);
+                OrderedSemiring::mul_le_mono_l(OrderedField::npow(r, m), K.multiplicative.unit, r, one, p0);
             let k0: (OrderedField::npow(r, m) * r * K.of_nat(Succ(m)) ≈ r * (OrderedField::npow(r, m) * K.of_nat(m)) + r * OrderedField::npow(r, m)) = ring(s);
             let k: (OrderedField::npow(r, Succ(m)) * K.of_nat(Succ(m)) ≈ r * (OrderedField::npow(r, m) * K.of_nat(m)) + r * OrderedField::npow(r, m)) = k0;
             linarith(k, a, b, hr)
@@ -219,12 +220,12 @@ theorem OrderedField::npow_small(r: K, p0: K.unit <= r, hr: r + r <= K.multiplic
     let q = K.recip(w, Inr(pw));
     let m: (w * q ≈ K.multiplicative.unit) = K.mul_recip(w, Inr(pw));
     let n = K.archimedean(q);
-    let big: (w * q < w * K.of_nat(n.witness)) = OrderedField::mul_lt_mono_l(q, K.of_nat(n.witness), w, n.proof, pw);
+    let big: (w * q < w * K.of_nat(n.witness)) = OrderedSemiring::mul_lt_mono_l(q, K.of_nat(n.witness), w, n.proof, pw);
     let pn = OrderedField::of_nat_nonneg(w, n.witness);
     let le = OrderedField::npow_mul_nat(r, p0, hr, n.witness);
     Exists(n.witness, K.le_of_not_lt(OrderedField::npow(r, n.witness), w, λ back => {
         let up: (w * K.of_nat(n.witness) <= OrderedField::npow(r, n.witness) * K.of_nat(n.witness)) =
-            OrderedField::mul_le_mono_r(w, OrderedField::npow(r, n.witness), K.of_nat(n.witness), StrictOrder::le_of_lt(w, OrderedField::npow(r, n.witness), back), pn);
+            OrderedSemiring::mul_le_mono_r(w, OrderedField::npow(r, n.witness), K.of_nat(n.witness), StrictOrder::le_of_lt(w, OrderedField::npow(r, n.witness), back), pn);
         let bad: (w * K.of_nat(n.witness) < w * K.of_nat(n.witness)) = linarith(big, m, up, le);
         K.lt_irrefl(w * K.of_nat(n.witness), bad)
     }))

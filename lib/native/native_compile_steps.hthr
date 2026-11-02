@@ -177,16 +177,16 @@ theorem Site::moves_jcc<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fill
         let u = execute_near_control(control, s);
         let jumped = machine_steps_of_fetched(site.fetch, site.data, writes, s, u, fetched_steps_one(site.fetch, site.data, s, u,
             Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), refl⟩)));
-        (match condition_holds(cc, s.flags) as λ b => condition_holds(cc, s.flags) = b → site.Arrives(writes, s, to, post) {
-            True => λ yes => site.arrives_after(writes, s, u, to, post, jumped, taken(u,
+        match yes: condition_holds(cc, s.flags) {
+            True => site.arrives_after(writes, s, u, to, post, jumped, taken(u,
                 trans(near_if_taken_rip(cc, displacement, s, yes),
                     trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), here),
                         jumps_forward(site.origin, prog_len(before), 6, displacement, landing, lands))),
                 resident, ⟨holds, yes⟩)),
-            False => λ no => site.arrives_after(writes, s, u, to, post, jumped, fall(u,
-                trans(near_if_not_taken_rip(cc, displacement, s, no), site.rip_after(s, prog_len(before), 6, here)),
-                resident, ⟨holds, no⟩)),
-        })(refl)
+            False => site.arrives_after(writes, s, u, to, post, jumped, fall(u,
+                trans(near_if_not_taken_rip(cc, displacement, s, yes), site.rip_after(s, prog_len(before), 6, here)),
+                resident, ⟨holds, yes⟩)),
+        }
     }
 }
 
@@ -239,15 +239,15 @@ theorem LinuxIo::goes_jcc<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(
         let jumped = linux_steps_of_fetched(io, s, u, fetched_steps_one(io.fetch, io.data, s, u,
             Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), refl⟩)));
         sim_back(io, t, s, u, jumped,
-            (match condition_holds(cc, s.flags) as λ b => condition_holds(cc, s.flags) = b → Sim(io, t, u) {
-                True => λ yes => taken(u,
+            match yes: condition_holds(cc, s.flags) {
+                True => taken(u,
                     trans(near_if_taken_rip(cc, displacement, s, yes),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), here),
                             jumps_forward(origin, prog_len(before), 6, displacement, landing, lands))),
                     resident, ⟨holds, yes⟩),
-                False => λ no => fall(u, trans(near_if_not_taken_rip(cc, displacement, s, no), site.rip_after(s, prog_len(before), 6, here)),
-                    resident, ⟨holds, no⟩),
-            })(refl))
+                False => fall(u, trans(near_if_not_taken_rip(cc, displacement, s, yes), site.rip_after(s, prog_len(before), 6, here)),
+                    resident, ⟨holds, yes⟩),
+            })
     }
 }
 

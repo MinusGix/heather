@@ -187,7 +187,7 @@ theorem loop_run_next<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: ReadonlyByt
 theorem loop_run_end<C>(region: ReadonlyLoop<C>, buffer: ReadonlyBytes, needle: BitVec(8), cursor: Nat, carry: C,
     ended: buffer.length.leb(cursor) = True):
     (budget: Nat) → loop_run(budget, region, buffer, needle, cursor, carry) = End(cursor, budget, carry) {
-    λ budget => match budget as λ b => loop_run(b, region, buffer, needle, cursor, carry) = End(cursor, b, carry) {
+    λ budget => match budget {
         Zero => trans(loop_run_last(region, buffer, needle, cursor, carry),
             j(sym(ended), λ e _ => loop_after_last(cursor, carry, e) = End(cursor, 0, carry), refl)),
         Succ(rest) => trans(loop_run_next(rest, region, buffer, needle, cursor, carry),
@@ -239,12 +239,11 @@ theorem loop_readable_byte<C>(rest: Nat, region: ReadonlyLoop<C>, buffer: Readon
     cursor: Nat, carry: C, open: buffer.length.leb(cursor) = False,
     readable: LoopReadable(Succ(rest), region, buffer, needle, cursor, carry)):
     Exists<BitVec(8)>(λ byte => ReadsByte(buffer, cursor, byte)) {
-    (match buffer.read(buffer.base + cursor) as λ found => (buffer.read(buffer.base + cursor) = found) →
-            Exists<BitVec(8)>(λ byte => ReadsByte(buffer, cursor, byte)) {
-        None => λ denied => false_elim(j(loop_run_denied(rest, region, buffer, needle, cursor, carry, open, denied),
+    match denied: buffer.read(buffer.base + cursor) {
+        None => false_elim(j(loop_run_denied(rest, region, buffer, needle, cursor, carry, open, denied),
             λ outcome _ => LoopFinishedNormally(outcome), readable)),
-        Some(byte) => λ present => Exists(byte, present),
-    })(refl)
+        Some(byte) => Exists(byte, denied),
+    }
 }
 
 // ---------------------------------------------------------------------------

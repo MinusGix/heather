@@ -201,7 +201,10 @@ These are for R2 (`issues/binding-statements.md`) and for Minus.
    abstracts `E`. A `Result` instance over `λ A => Result<A, E>` is refused
    at the declaration today (the binder `E` is not seen in a λ carrier, and
    a λ has no head for the canonical name). There are two ways out, and
-   [[class-instance-at-lambda-carrier]] owns the choice. One is to put the
+   [[class-instance-at-lambda-carrier]] owns the choice. *Decided and built
+   2026-11-02: the type declares its slot (`inductive Result<A, E> varies
+   A`), and instances sit at `λ (A: Type) => Result<A, E>`
+   (`docs/lambda-carrier-instances-design.md` §7).* One is to put the
    varying argument last (`Result<E, A>`, Haskell's `Either e a`), which
    the approximation then handles. The other is λ-carrier instances plus a
    use-site rule that picks `λ A => Result<A, E>`, which is no longer

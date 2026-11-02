@@ -458,6 +458,7 @@ impl<'a> Lift<'a> {
                 name: state.clone(),
                 params: self.decl.tyvars.iter().map(|t| t.name.clone()).collect(),
                 valparams: vec![],
+                varies: None,
                 ctors: vec![CtorDecl {
                     name: state.clone(),
                     fields: vars

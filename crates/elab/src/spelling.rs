@@ -159,7 +159,7 @@ pub(crate) fn tuple_fields(
             continue;
         }
         let field = Term::FstAt { pair: Rc::clone(&cur) };
-        let alias = cx.aliases.iter().rev().find_map(|a| {
+        let alias = cx.aliases.iter_inner().find_map(|a| {
             let shift = cx.names.len().checked_sub(a.depth)? as u32;
             let term = Rc::new(a.term.shift_local(shift));
             let shifted = Rc::new(term.shift_local(under));

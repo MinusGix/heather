@@ -432,7 +432,7 @@ impl Elaborator {
     /// allocation identity).
     fn children_annotation(&self, cx: &Cx, d_ty: &Type) -> (Rc<Type>, Rc<Type>) {
         let depth = (cx.gamma.entries.len(), self.lowering_scope());
-        let at = self.emits_at_forms(cx);
+        let at = self.emits_at_forms();
         if let Some((_, _, _, emit, under)) = self
             .attempt
             .children_annotations
@@ -2386,7 +2386,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             &whole,
             &e.cx.gamma,
             heather_kernel::reduce::Defs::transparent(&e.el.psi),
-            e.el.fuel,
+            e.el.policy.fuel,
         )
         .expect("the reference reduces");
         let (sref, aref) = e.el.wf_slot_refs(&e.cx, shape, arity).expect("T's slots are named");
@@ -2636,7 +2636,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
             &whole,
             &e.cx.gamma,
             heather_kernel::reduce::Defs::transparent(&e.el.psi),
-            e.el.fuel,
+            e.el.policy.fuel,
         )
         .expect("the reference reduces");
         let Type::Sum { lhs, rhs, .. } = &stepped else {
@@ -2671,7 +2671,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
             &sref,
             &e.cx.gamma,
             heather_kernel::reduce::Defs::transparent(&e.el.psi),
-            e.el.fuel,
+            e.el.policy.fuel,
         )
         .expect("the reference reduces");
         let Type::Sum { lhs, rhs, .. } = &stepped else {

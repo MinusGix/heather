@@ -20,6 +20,24 @@ pub(crate) trait SelfCallElab: ExplicitArgElab {
     fn self_call_application_params(&self, name: &str) -> Rc<Vec<ParamMeta>>;
     /// The declaration `name`'s [`RecursionPlan::Misplaced`], if it has one.
     fn misplaced_recursion(&self, name: &str) -> Option<(usize, String)>;
+    /// Apply the ih to the varied arguments, inferring the generalized
+    /// implicits the call leaves out (`mask[i]`: the ih's `i`th Π is one) by
+    /// the ordinary implicit-inserting application engine.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_self_call_implicit(
+        &self,
+        _cx: &Cx,
+        _name: &str,
+        _params: Rc<Vec<ParamMeta>>,
+        _head: Term,
+        _ty: Type,
+        _level: Level,
+        _args: &[Expr],
+        _mask: &[bool],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        err("internal: this elaborator cannot infer a self-call's implicits", span)
+    }
 }
 
 /// Is `scrut` (already elaborated) exactly one of the enclosing declaration's
@@ -60,6 +78,76 @@ pub(crate) fn recurses_on(self_ref: &SelfRef, arms: &[heather_syntax::Arm], dec:
     found
 }
 
+/// The parameters other than `dec` whose value a self-call in `arms` changes:
+/// those it passes at anything but the parameter itself (the ones ih
+/// generalization quantifies, `generalize`, and indices an indexed `match`
+/// rebinds), and the value implicits generalization adds by dependency, which
+/// the call leaves out and so infers anew
+/// (issues/recursion-implicit-inferred-at-self-call.md). A parameter added
+/// only because its type mentions a varied one is passed as itself, so its
+/// value does not change and it is not listed. Syntactic, like
+/// [`recurses_on`]; `types[p]` is parameter `p`'s written type (`None` for a
+/// type parameter).
+fn varied_params(
+    self_ref: &SelfRef,
+    types: &[Option<&Ty>],
+    arms: &[heather_syntax::Arm],
+    dec: usize,
+) -> Vec<usize> {
+    let mut varied = Vec::new();
+    for arm in arms {
+        crate::surface::walk_expr(&arm.body, &mut |e| {
+            let Some((args, explicit)) = surface_self_call(self_ref, e) else { return };
+            let positions = (self_ref.n_tyvars..self_ref.params.len())
+                .filter(|&p| explicit || !self_ref.params[p].1);
+            for (slot, position) in positions.enumerate() {
+                let Some(arg) = args.get(slot) else { break };
+                let own = &self_ref.params[position].0;
+                if position != dec
+                    && !matches!(&arg.kind, ExprKind::Var(v) if v == own)
+                    && !varied.contains(&position)
+                {
+                    varied.push(position);
+                }
+            }
+        });
+    }
+    // `generalize::varying_params`' dependency closure, by name.
+    let mentions = |p: usize, q: usize| {
+        q < p
+            && types
+                .get(p)
+                .copied()
+                .flatten()
+                .is_some_and(|t| crate::measure::mentions_ty(t, &self_ref.params[q].0))
+    };
+    let mut closure = varied.clone();
+    loop {
+        let before = closure.len();
+        for p in self_ref.n_tyvars..self_ref.params.len() {
+            if closure.contains(&p) || p == dec {
+                continue;
+            }
+            let forward = closure.iter().any(|&q| mentions(p, q));
+            let backward = self_ref.params[p].1
+                && !mentions(dec, p)
+                && closure.iter().any(|&q| mentions(q, p));
+            if forward || backward {
+                closure.push(p);
+            }
+        }
+        if closure.len() == before {
+            break;
+        }
+    }
+    for p in closure {
+        if self_ref.params[p].1 && !varied.contains(&p) {
+            varied.push(p);
+        }
+    }
+    varied
+}
+
 /// How a `fn` without `decreases` is lowered
 /// (issues/fn-recursion-means-the-function.md).
 ///
@@ -75,9 +163,13 @@ pub(crate) enum RecursionPlan {
     Structural,
     /// A recursive `match` on parameter `dec` reads `dec`, or a name bound
     /// from it above the `match`, inside its arms (first at `read`, through
-    /// `name`). The structural lowering would see the top call's value there;
-    /// a measure on `dec` sees this level's, so that is the lowering.
-    ByMeasure { dec: usize, read: Span, name: String },
+    /// `name`, bound from parameter `from`). Or it reads a name bound above
+    /// it from a parameter `from` its self-calls pass a *different* value
+    /// (issues/recursion-let-reads-changing-parameter.md): the ih
+    /// generalizes `from` itself, but not a value computed from it outside
+    /// the `match`. The structural lowering would see the top call's value
+    /// there; a measure on `dec` sees this level's, so that is the lowering.
+    ByMeasure { dec: usize, read: Span, name: String, from: usize },
     /// A recursive `match` on `dec` is somewhere the structural lowering
     /// cannot put the recursion, and the measure lowering has no unfolding
     /// equation for (docs/decreases-unfolding-design.md §3). Refused with
@@ -88,12 +180,15 @@ pub(crate) enum RecursionPlan {
 }
 
 /// A name in scope during [`plan`]: the parameters its value depends on, and
-/// which parameter it *is*, if it is one.
+/// which parameter it *is*, if it is one. `stale`: inside a recursive
+/// `match`'s arms, the name was bound above the `match` from a parameter its
+/// self-calls vary, so it holds the top call's value (the varied parameter).
 #[derive(Clone)]
 struct Bound {
     name: String,
     deps: Vec<usize>,
     param: Option<usize>,
+    stale: Option<usize>,
 }
 
 fn lookup<'a>(scope: &'a [Bound], name: &str) -> Option<&'a Bound> {
@@ -105,6 +200,7 @@ fn bind_names(scope: &mut Vec<Bound>, names: impl IntoIterator<Item = String>) {
         name,
         deps: Vec::new(),
         param: None,
+        stale: None,
     }));
 }
 
@@ -180,7 +276,7 @@ fn bind_statement(
         Stmt::Let { name, expr, .. } => {
             visit(expr, scope);
             let deps = deps(expr, scope);
-            scope.push(Bound { name: name.clone(), deps, param: None });
+            scope.push(Bound { name: name.clone(), deps, param: None, stale: None });
         }
         Stmt::LetRecord { fields, expr, .. } => {
             visit(expr, scope);
@@ -191,6 +287,7 @@ fn bind_statement(
                 name,
                 deps: deps.clone(),
                 param: None,
+                stale: None,
             }));
         }
         Stmt::LetCode { .. } => {}
@@ -199,8 +296,9 @@ fn bind_statement(
 
 struct Planner<'a> {
     self_ref: &'a SelfRef,
+    types: &'a [Option<&'a Ty>],
     misplaced: Option<(usize, String)>,
-    read: Option<(usize, Span, String)>,
+    read: Option<(usize, Span, String, usize)>,
 }
 
 impl Planner<'_> {
@@ -285,12 +383,33 @@ impl Planner<'_> {
             self.misplaced.get_or_insert((dec, msg));
             return;
         }
+        // A name bound above the `match` from a parameter the self-calls
+        // vary is evaluated once, at the top call's value of it; the varied
+        // parameter itself is the ih's generalized binder, so reading *it*
+        // is this level's value (issues/recursion-let-reads-changing-parameter.md).
+        let varied = varied_params(self.self_ref, self.types, arms, dec);
+        let above: Vec<Bound> = scope
+            .iter()
+            .map(|b| Bound {
+                stale: b
+                    .param
+                    .is_none()
+                    .then(|| b.deps.iter().copied().find(|p| varied.contains(p)))
+                    .flatten(),
+                ..b.clone()
+            })
+            .collect();
         for arm in arms {
-            let mut inner = scope.to_vec();
+            let mut inner = above.clone();
             bind_names(&mut inner, arm_names(arm));
             reads(&arm.body, &inner, &mut |b, span| {
-                if b.deps.contains(&dec) && self.read.is_none() {
-                    self.read = Some((dec, span, b.name.clone()));
+                if self.read.is_some() {
+                    return;
+                }
+                if b.deps.contains(&dec) {
+                    self.read = Some((dec, span, b.name.clone(), dec));
+                } else if let Some(from) = b.stale {
+                    self.read = Some((dec, span, b.name.clone(), from));
                 }
             });
         }
@@ -298,14 +417,19 @@ impl Planner<'_> {
 }
 
 /// Decide how a `fn` without `decreases` is lowered ([`RecursionPlan`]).
-pub(crate) fn plan(self_ref: &SelfRef, body: &heather_syntax::Block) -> RecursionPlan {
+/// `types[p]`: parameter `p`'s written type, `None` for a type parameter.
+pub(crate) fn plan(
+    self_ref: &SelfRef,
+    types: &[Option<&Ty>],
+    body: &heather_syntax::Block,
+) -> RecursionPlan {
     let scope: Vec<Bound> = self_ref
         .params
         .iter()
         .enumerate()
-        .map(|(i, (name, _))| Bound { name: name.clone(), deps: vec![i], param: Some(i) })
+        .map(|(i, (name, _))| Bound { name: name.clone(), deps: vec![i], param: Some(i), stale: None })
         .collect();
-    let mut planner = Planner { self_ref, misplaced: None, read: None };
+    let mut planner = Planner { self_ref, types, misplaced: None, read: None };
     let body = Expr {
         kind: ExprKind::Block(Box::new(body.clone())),
         span: body.span,
@@ -313,7 +437,7 @@ pub(crate) fn plan(self_ref: &SelfRef, body: &heather_syntax::Block) -> Recursio
     planner.walk(&body, true, &scope, &[]);
     match (planner.misplaced, planner.read) {
         (Some((dec, msg)), _) => RecursionPlan::Misplaced { dec, msg },
-        (None, Some((dec, read, name))) => RecursionPlan::ByMeasure { dec, read, name },
+        (None, Some((dec, read, name, from))) => RecursionPlan::ByMeasure { dec, read, name, from },
         (None, None) => RecursionPlan::Structural,
     }
 }
@@ -442,10 +566,15 @@ pub(crate) fn elab_self_call(
     }
 
     let (args, spill) = args.split_at(positions.len());
-    // A generalized parameter that the call cannot pass — an implicit one at
-    // a call without `@` — has no argument to apply the ih to.
+    // A generalized parameter the call does not pass (an implicit one at a
+    // call without `@`) is inferred where the ih is applied, like an implicit
+    // at any call: from the varied arguments after it, whose types it is
+    // generalized for (issues/recursion-implicit-inferred-at-self-call.md).
+    // With no varied argument after it there is nothing to infer it from.
     if let Some(generalized) = &guard.generalized
-        && let Some(&missing) = generalized.iter().find(|p| !positions.contains(p))
+        && let Some(&missing) = generalized.iter().find(|&&p| {
+            !positions.contains(&p) && !generalized.iter().any(|&q| q > p && positions.contains(&q))
+        })
     {
         return err(
             format!(
@@ -579,7 +708,7 @@ pub(crate) fn elab_self_call(
                     let usable = preds.len().min(comps.len());
                     let names: Vec<String> = preds[..usable]
                         .iter()
-                        .map(|predecessor| format!("`{}`", cx.names[*predecessor]))
+                        .map(|predecessor| format!("`{}`", &cx.names[*predecessor]))
                         .collect();
                     if usable == 1 {
                         (
@@ -787,7 +916,30 @@ pub(crate) fn elab_self_call(
             })
             .collect();
         let varied: Vec<Expr> = varied.into_iter().cloned().collect();
-        application::apply_explicit(elab, cx, Some(name), Rc::new(metas), 0, term, ty, level, &varied)?
+        let mask: Vec<bool> = generalized.iter().map(|p| !positions.contains(p)).collect();
+        if mask.iter().any(|&omitted| omitted) {
+            elab.apply_self_call_implicit(cx, name, Rc::new(metas), term, ty, level, &varied, &mask, span)
+                .map_err(|e| match e {
+                    crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
+                        msg: format!(
+                            "{msg}\n(the recursive call leaves out `{name}`'s implicit {}, which \
+                             the arguments it varies determine; pass it with \
+                             `@{name}(…)` if they do not)",
+                            generalized
+                                .iter()
+                                .zip(&mask)
+                                .filter(|(_, m)| **m)
+                                .map(|(&p, _)| format!("`{}`", self_ref.params[p].0))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        span,
+                    },
+                    other => other,
+                })?
+        } else {
+            application::apply_explicit(elab, cx, Some(name), Rc::new(metas), 0, term, ty, level, &varied)?
+        }
     };
     if spill.is_empty() {
         return Ok((term, ty, level));

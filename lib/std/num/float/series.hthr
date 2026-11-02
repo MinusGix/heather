@@ -377,7 +377,7 @@ theorem Series::settle_has(self s: Series, p, fuel: Nat): (b: SeriesBox) → (k:
 {
     match fuel {
         Zero => λ b k hk ht hq => Interval::widen_has(b.term, b.sum, p, ht, hq, s.below(k, hk), s.above(k, hk)),
-        Succ(f, ih) => λ b k hk ht hq => match b.term.small(p) as λ c => (match c { True => Interval::widen(b.term, b.sum, p), False => s.settle(s.box_step(b, k, p), Succ(k), p, f) }).HasReal(s.real()) {
+        Succ(f, ih) => λ b k hk ht hq => match b.term.small(p) {
             True => Interval::widen_has(b.term, b.sum, p, ht, hq, s.below(k, hk), s.above(k, hk)),
             False => ih(s.box_step(b, k, p), Succ(k), s.start.le_succ_r(k, hk),
                 Interval::mul_has(b.term, Interval::of_rat(s.ratio(k), p), p, ht, Interval::of_rat_has(s.ratio(k), p)),

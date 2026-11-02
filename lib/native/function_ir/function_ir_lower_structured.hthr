@@ -52,9 +52,9 @@ theorem slot_meet_left(values: Valuation(), word: BitVec(64), left, right: Optio
     SlotRep(values, left, word) → SlotRep(values, slot_meet(left, right), word) {
     match left {
         None => λ _ => trivial,
-        Some(a) => λ rep => match right as λ r => SlotRep(values, slot_meet(Some(a), r), word) {
+        Some(a) => λ rep => match right {
             None => trivial,
-            Some(b) => match a.eq_dec(b) as λ d => SlotRep(values, match d { Inl(_) => Some(a), Inr(_) => None }, word) {
+            Some(b) => match a.eq_dec(b) {
                 Inl(_) => rep,
                 Inr(_) => trivial,
             },
@@ -66,9 +66,9 @@ theorem slot_meet_right(values: Valuation(), word: BitVec(64), left, right: Opti
     SlotRep(values, right, word) → SlotRep(values, slot_meet(left, right), word) {
     match left {
         None => λ _ => trivial,
-        Some(a) => match right as λ r => SlotRep(values, r, word) → SlotRep(values, slot_meet(Some(a), r), word) {
+        Some(a) => match right {
             None => λ _ => trivial,
-            Some(b) => λ rep => match a.eq_dec(b) as λ d => SlotRep(values, match d { Inl(_) => Some(a), Inr(_) => None }, word) {
+            Some(b) => λ rep => match a.eq_dec(b) {
                 Inl(same) => j(sym(same), λ h _ => h.Rep(values, word), rep),
                 Inr(_) => trivial,
             },
@@ -338,19 +338,7 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
                     continuation.emit_emits<M>(site, laid, values, first.prog, first.file, first.placement, first.names)),
             })(prefix.emit_emits<M>(site, laid, values, prog, file, placement, names)),
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ prog file placement names =>
-            match file.find(Held(condition, Bit)) as λ located =>
-                MayEmit<M>(site, values, prog, file,
-                    StructuredRegionHolds(values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
-                    match located {
-                        None => None,
-                        Some(found) => match when_true.emit(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names))) {
-                            None => None,
-                            Some(yes) => match when_false.emit(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names) {
-                                None => None,
-                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
-                            },
-                        },
-                    }) {
+            match file.find(Held(condition, Bit)) {
                 None => trivial,
                 Some(found) =>
                     (match when_true.emit(prog.branch_label(found.register, Succ(names)), file, placement, Succ(Succ(names))) as λ y =>

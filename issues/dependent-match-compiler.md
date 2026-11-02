@@ -1,10 +1,10 @@
 ---
 title: One dependent-match compiler: motive by abstraction, the equation always in scope, clause equations
-status: open
+status: closed
 labels: [design,elaboration,match,proofs]
 area: language
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-02
 ---
 
 Item 2 of the fundamental-improvements memo of 2026-10-31 (Claude Doc, https://claude.ai/artifact/Y2Jo9y9Mgd52QdguvaL43s): every `match` generalizes its scrutinee, refines whatever
@@ -40,3 +40,25 @@ enlarge terms.
 
 A design note decided by Minus, with its slices filed, naming which open
 issues each slice closes.
+
+## Slices (docs/dependent-match-compiler-design.md §11)
+
+1. [[match-equation-in-every-arm]]
+2. [[match-refines-computed-scrutinee]]
+3. [[match-infers-constant-motive]]
+4. [[unfolding-through-convoyed-match]]
+5. [[match-clause-equations]] (owns [[eqbind-deep-pattern-kernel-rejects]])
+6. [[match-equation-indexed-family]]
+7. [[match-motive-sweep]]
+
+## Log
+
+- 2026-10-31: Design note docs/dependent-match-compiler-design.md, awaiting Minus's decision (§13). Census of 1443 written motives: 601 hand-carried hypotheses, 339 non-dependent, 259 equation convoys, 244 dependent goals. A `--review` sample finds 180 of 379 already redundant. Six probes on master (§2.1), one of them a new elaborator-accepts/kernel-rejects defect. Seven slices filed.
+- 2026-10-31: Decided: equation only when read, anonymous equation unspellable, order 4 (landed) → 1, 3, 2, 5, 6, 7 (design §13).
+- 2026-10-31: Slice 1 (match-equation-in-every-arm) done on PR #318: the anonymous arm equation, in the term only when an arm needs it (§4.3.1).
+- 2026-10-31: Slice 3 (match-infers-constant-motive) done on PR #318 (§6.1).
+- 2026-10-31: Slice 2 (match-refines-computed-scrutinee) done on PR #318 (§5.1).
+- 2026-10-31: Slice 6 (match-equation-indexed-family) done on PR #318 (§9.1). Slice 5 blocked on the W child spelling (match-clause-equations' log).
+- 2026-11-01: Slice 5 landed (design §7.1): the motive's child rewrap for Wf and W plain children; match-clause-equations, eqbind-deep-pattern-kernel-rejects and nested-match-on-list-tail-motive closed. Follow-ups filed or logged: [[indexed-deep-pattern-kernel-rejects]], [[deep-pattern-dependent-later-field]]. Slice 7 (sweep) remains.
+- 2026-11-01: Follow-ups closed 2026-11-01: indexed-deep-pattern-kernel-rejects (unannotated rebuild under index generalization) and deep-pattern-dependent-later-field (dependent aliases convoyed, design §7.2).
+- 2026-11-02: Slice 7 landed (sweep, see match-motive-sweep). All seven slices are done; remaining follow-ups are match-convoy-rewrite-sweep and review-lint-redundant-motive-on-generated.

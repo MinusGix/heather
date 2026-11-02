@@ -550,3 +550,112 @@ fn compiled_grep_f_runs_as_gnu_grep() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A process on `input`, its exit code and what it wrote to stderr; stdout
+/// is dropped.
+fn run_stderr(program: &mut Command, input: &[u8]) -> (Option<i32>, Vec<u8>) {
+    let mut child = program.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let input = input.to_vec();
+    let writer = std::thread::spawn(move || { let _ = stdin.write_all(&input); });
+    let out = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    (out.status.code(), out.stderr)
+}
+
+/// Lines of random lengths up to `longest` over `alphabet` (random bytes
+/// but the newline when it is empty), `count` of them, the last without its
+/// newline when `open_end`.
+fn random_lines(random: &mut Bytes, count: usize, longest: u64, alphabet: &[u8], open_end: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    for k in 0..count {
+        let len = random.next() % (longest + 1);
+        for _ in 0..len {
+            let r = random.next();
+            out.push(if alphabet.is_empty() { (r % 255) as u8 + (((r % 255) as u8 >= b'\n') as u8) } else { alphabet[(r % alphabet.len() as u64) as usize] });
+        }
+        if !(open_end && k + 1 == count) {
+            out.push(b'\n');
+        }
+    }
+    out
+}
+
+/// `tac` against GNU's: its lines last first, over nothing, blank lines, a
+/// last line with no newline (which GNU writes first, as it is), lines
+/// longer than the tool's read buffer (so a line is read in parts into its
+/// arena cell), and random bytes. Its lines are a list in an arena
+/// (docs/native-heap-arena-design.md); running out of it is a defined exit,
+/// GNU's message and status 1, which GNU's does not meet at these sizes.
+#[test]
+fn compiled_tac_runs_as_gnu_tac() {
+    let dir = scratch("tac");
+    let binary = dir.join("tac");
+    write_program("lib/native/native_heap_tools.hthr", "tac_tool", &binary, false);
+
+    let mut random = Bytes::seeded("tac");
+    let letters = random_lines(&mut random, 3000, 12, b"ab", false);
+    let long = random_lines(&mut random, 40, 9000, b"xyz \t", true);
+    let bytes = random_lines(&mut random, 500, 300, b"", true);
+    for input in [&b""[..], b"\n", b"a", b"a\n", b"a\nb\nc\n", b"a\nb", b"\n\n\n", b"x\n\ny", &letters, &long, &bytes] {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(Command::new("tac").env("LC_ALL", "C"), input, Stdio::piped());
+        assert_eq!(code, Some(0), "tac exits 0 ({} bytes in)", input.len());
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "tac writes GNU's lines ({} bytes in)", input.len());
+    }
+
+    let huge = vec![b'a'; 1100000];
+    let (code, err) = run_stderr(&mut Command::new(&binary), &huge);
+    assert_eq!(code, Some(1), "running out of arena exits 1");
+    assert_eq!(err, b"tac: memory exhausted\n", "with GNU's message");
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no\nroom\n", Stdio::from(full.try_clone().unwrap()));
+        let (gnu_code, _) = run(&mut Command::new("tac"), b"no\nroom\n", Stdio::from(full));
+        assert_eq!(code, Some(1), "a failed write exits 1");
+        assert_eq!(code, gnu_code, "as GNU's does");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `sort` against GNU's under `LC_ALL=C`: lines ordered by their bytes
+/// unsigned, a prefix first, alike lines kept, a last line without a
+/// newline given one, over nothing, blank lines, prefixes, duplicates, bytes
+/// past ASCII and lines longer than the read buffer. Its lines are a list in
+/// an arena it never changes (docs/native-heap-arena-design.md §3);
+/// running out of it exits 2 with GNU's message.
+#[test]
+fn compiled_sort_runs_as_gnu_sort() {
+    let dir = scratch("sort");
+    let binary = dir.join("sort");
+    write_program("lib/native/native_heap_tools.hthr", "sort_tool", &binary, false);
+
+    let mut random = Bytes::seeded("sort");
+    let letters = random_lines(&mut random, 1500, 6, b"abc", false);
+    let long = random_lines(&mut random, 30, 9000, b"ab", true);
+    let bytes = random_lines(&mut random, 400, 40, b"", true);
+    let fixed: &[&[u8]] = &[b"", b"\n", b"a", b"b\na\n", b"abc\nab\na\nabd\n", b"b\nb\na\nb", b"\n\nz\n\n", b"\xff\n\x01\na\n\x80", b"same\nsame\nsame\n"];
+    for input in fixed.iter().copied().chain([&letters[..], &long, &bytes]) {
+        let (code, out) = run(&mut Command::new(&binary), input, Stdio::piped());
+        let (gnu_code, gnu_out) = run(Command::new("sort").env("LC_ALL", "C"), input, Stdio::piped());
+        assert_eq!(code, Some(0), "sort exits 0 ({} bytes in)", input.len());
+        assert_eq!(code, gnu_code, "as GNU's does");
+        assert!(out == gnu_out, "sort writes GNU's lines ({} bytes in)", input.len());
+    }
+
+    let huge = vec![b'a'; 1100000];
+    let (code, err) = run_stderr(&mut Command::new(&binary), &huge);
+    assert_eq!(code, Some(2), "running out of arena exits 2");
+    assert_eq!(err, b"sort: memory exhausted\n", "with GNU's message");
+
+    if let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") {
+        let (code, _) = run(&mut Command::new(&binary), b"no\nroom\n", Stdio::from(full.try_clone().unwrap()));
+        let (gnu_code, _) = run(Command::new("sort").env("LC_ALL", "C"), b"no\nroom\n", Stdio::from(full));
+        assert_eq!(code, Some(2), "a failed write exits 2");
+        assert_eq!(code, gnu_code, "as GNU's does");
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

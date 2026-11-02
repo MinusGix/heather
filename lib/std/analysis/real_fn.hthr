@@ -54,6 +54,7 @@ import int;
 import list;
 import relation;
 import relation_props;
+import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
@@ -88,7 +89,7 @@ theorem OrderedField::half_add(e: K): OrderedField::half(e) + OrderedField::half
 theorem OrderedField::half_pos(e: K, he: K.unit < e): K.unit < OrderedField::half(e) {
     let r: (K.unit < K.recip(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos(e)))) =
         OrderedField::recip_pos(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos(e)), OrderedField::two_pos(e));
-    K.mul_pos(e, K.recip(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos(e))), he, r)
+    OrderedSemiring::mul_pos(e, K.recip(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos(e))), he, r)
 }
 
 theorem OrderedField::half_lt(e: K, he: K.unit < e): OrderedField::half(e) < e {
@@ -120,7 +121,7 @@ theorem OrderedField::shrink(c, e: K, hc: K.unit <= c, he: K.unit < e):
     let r = K.recip(c + K.multiplicative.unit, Inr(pc));
     let m: ((c + K.multiplicative.unit) * r ≈ K.multiplicative.unit) = K.mul_recip(c + K.multiplicative.unit, Inr(pc));
     let pr: (K.unit < r) = OrderedField::recip_pos(c + K.multiplicative.unit, Inr(pc), pc);
-    let per: (K.unit < e * r) = K.mul_pos(e, r, he, pr);
+    let per: (K.unit < e * r) = OrderedSemiring::mul_pos(e, r, he, pr);
     let k: (c * (e * r) + e * r ≈ e) = ring(m);
     Exists(e * r, And(per, linarith(k, per)))
 }
@@ -173,10 +174,10 @@ theorem OrderedField::abs_le_mul(a, b, x, y: K, ha: AbsLe(a, x), hb: AbsLe(b, y)
 // Every element has a bound, computed from it: `|c| <= c² + 1`, from
 // `(c - 1)² >= 0` and `c² >= 0` (and the same at `-c`).
 theorem OrderedField::abs_le_sq_succ(c: K): AbsLe(c, c * c + K.multiplicative.unit) {
-    let s: (K.unit <= c * c) = OrderedField::sq_nonneg(c);
+    let s: (K.unit <= c * c) = OrderedRing::sq_nonneg(c);
     let s1: (K.unit <= (c + K.inv(K.multiplicative.unit)) * (c + K.inv(K.multiplicative.unit))) =
-        OrderedField::sq_nonneg(c + K.inv(K.multiplicative.unit));
-    let s2: (K.unit <= (c + K.multiplicative.unit) * (c + K.multiplicative.unit)) = OrderedField::sq_nonneg(c + K.multiplicative.unit);
+        OrderedRing::sq_nonneg(c + K.inv(K.multiplicative.unit));
+    let s2: (K.unit <= (c + K.multiplicative.unit) * (c + K.multiplicative.unit)) = OrderedRing::sq_nonneg(c + K.multiplicative.unit);
     LocatedAddGroup::abs_le_intro(c, c * c + K.multiplicative.unit, linarith(s, s2), linarith(s, s1))
 }
 
@@ -219,7 +220,7 @@ theorem LipschitzOn::unif_cont(D: K → Type, f: K → K, L: K, hl: LipschitzOn(
 theorem LipschitzOn::comp(D, E: K → Type, f, g: K → K, L, M: K, hm: MapsTo(D, E, f),
     hf: LipschitzOn(D, f, L), hg: LipschitzOn(E, g, M)): LipschitzOn(D, λ x => g(f(x)), M * L)
 {
-    And(OrderedField::mul_nonneg(M, L, hg.left, hf.left), λ x y h dx dy hxy => {
+    And(OrderedSemiring::mul_nonneg(M, L, hg.left, hf.left), λ x y h dx dy hxy => {
         let step: AbsLe(g(f(y)) + K.inv(g(f(x))), M * (L * h)) =
             hg.right(f(x), f(y), L * h, hm(x, dx), hm(y, dy), hf.right(x, y, h, dx, dy, hxy));
         let re: (M * (L * h) ≈ (M * L) * h) = ring;
@@ -231,7 +232,7 @@ theorem LipschitzOn::comp(D, E: K → Type, f, g: K → K, L, M: K, hm: MapsTo(D
 theorem LipschitzOn::add(D: K → Type, f, g: K → K, L, M: K, hf: LipschitzOn(D, f, L), hg: LipschitzOn(D, g, M)):
     LipschitzOn(D, λ x => f(x) + g(x), L + M)
 {
-    And(LocatedAddGroup::add_nonneg(L, M, hf.left, hg.left), λ x y h dx dy hxy => {
+    And(LocatedAddMonoid::add_nonneg(L, M, hf.left, hg.left), λ x y h dx dy hxy => {
         let le: (L * h + M * h <= (L + M) * h) = StrictOrder::le_of_same(L * h + M * h, (L + M) * h, ring);
         LocatedAddGroup::abs_le_sum2(f(y) + K.inv(f(x)), g(y) + K.inv(g(x)), (f(y) + g(y)) + K.inv(f(x) + g(x)),
             L * h, M * h, (L + M) * h, hf.right(x, y, h, dx, dy, hxy), hg.right(x, y, h, dx, dy, hxy), ring, le)
@@ -260,7 +261,7 @@ theorem DerivOn::congr(D: K → Type, f, f2, g, g2: K → K, hf: (x: K) → D(x)
 
 // The remainder bound `ε·h` is nonnegative wherever it is asked for.
 theorem DerivOn::bound_nonneg(x, y, h, e: K, pe: K.unit < e, hxy: AbsLe(y + K.inv(x), h)): K.unit <= e * h {
-    OrderedField::mul_nonneg(e, h, StrictOrder::le_of_lt(K.unit, e, pe), LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy))
+    OrderedSemiring::mul_nonneg(e, h, StrictOrder::le_of_lt(K.unit, e, pe), LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy))
 }
 
 theorem DerivOn::const(D: K → Type, c: K): DerivOn(D, λ x => c, λ x => K.unit) {
@@ -313,7 +314,7 @@ theorem DerivOn::scale(D: K → Type, c: K, f, g: K → K, hf: DerivOn(D, f, g))
                     let m = OrderedField::abs_le_mul(c, f(y) + K.inv(f(x)) + K.inv(g(x) * (y + K.inv(x))),
                         c * c + K.multiplicative.unit, e2 * h, bc, r);
                     let up: ((c * c + K.multiplicative.unit) * e2 * h <= e * h) =
-                        OrderedField::mul_le_mono_r((c * c + K.multiplicative.unit) * e2, e, h, a2.right,
+                        OrderedSemiring::mul_le_mono_r((c * c + K.multiplicative.unit) * e2, e, h, a2.right,
                             LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy));
                     LocatedAddGroup::abs_le_weaken(c * (f(y) + K.inv(f(x)) + K.inv(g(x) * (y + K.inv(x)))),
                         c * f(y) + K.inv(c * f(x)) + K.inv((c * g(x)) * (y + K.inv(x))),
@@ -357,8 +358,8 @@ theorem DerivOn::chain_step(f, f1, g, g1: K → K, M, N, e, e1, e3, x, y, h: K, 
     let e2 = OrderedField::half(e);
     let t = OrderedField::abs_le_mul(g1(f(x)), f(y) + K.inv(f(x)) + K.inv(f1(x) * (y + K.inv(x))), N, e3 * h, nx, rf);
     let q1: ((M + K.multiplicative.unit) * e1 * h <= e2 * h) =
-        OrderedField::mul_le_mono_r((M + K.multiplicative.unit) * e1, e2, h, b1, hn);
-    let q2: (N * e3 * h <= e2 * h) = OrderedField::mul_le_mono_r(N * e3, e2, h, b3, hn);
+        OrderedSemiring::mul_le_mono_r((M + K.multiplicative.unit) * e1, e2, h, b1, hn);
+    let q2: (N * e3 * h <= e2 * h) = OrderedSemiring::mul_le_mono_r(N * e3, e2, h, b3, hn);
     let s = OrderedField::half_add(e);
     let s2: (e2 * h + e2 * h ≈ e * h) = ring(s);
     LocatedAddGroup::abs_le_sum2(g(f(y)) + K.inv(g(f(x))) + K.inv(g1(f(x)) * (f(y) + K.inv(f(x)))),
@@ -392,7 +393,7 @@ theorem DerivOn::chain_close(D, E: K → Type, f, f1, g, g1: K → K, M, N, e: K
         let lip = a0.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, a0.witness, hu, au.proof.right.left));
         let small: ((M + K.multiplicative.unit) * h <= ag.witness) = PseudoOrder::le_trans((M + K.multiplicative.unit) * h,
             (M + K.multiplicative.unit) * bc.witness, ag.witness,
-            OrderedField::mul_le_mono_l(h, bc.witness, M + K.multiplicative.unit,
+            OrderedSemiring::mul_le_mono_l(h, bc.witness, M + K.multiplicative.unit,
                 PseudoOrder::le_trans(h, ad.witness, bc.witness, hd, ad.proof.right.right), pL), bc.proof.right);
         DerivOn::chain_step(f, f1, g, g1, M, N, e, b1.witness, b3.witness, x, y, h,
             LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy),
@@ -446,10 +447,10 @@ theorem DerivOn::mul_step(f, f1, g, g1: K → K, A, B, M, N, e, e1, e3, x, y, h:
     let t2 = OrderedField::abs_le_mul(f(x), g(y) + K.inv(g(x)) + K.inv(g1(x) * (y + K.inv(x))), A, e3 * h, ax, rg);
     let t3 = OrderedField::abs_le_mul(f(y) + K.inv(f(x)), g(y) + K.inv(g(x)),
         (M + K.multiplicative.unit) * h, (N + K.multiplicative.unit) * h, lipf, lipg);
-    let q1: (B * e1 * h <= e4 * h) = OrderedField::mul_le_mono_r(B * e1, e4, h, c1, hn);
-    let q2: (A * e3 * h <= e4 * h) = OrderedField::mul_le_mono_r(A * e3, e4, h, c3, hn);
+    let q1: (B * e1 * h <= e4 * h) = OrderedSemiring::mul_le_mono_r(B * e1, e4, h, c1, hn);
+    let q2: (A * e3 * h <= e4 * h) = OrderedSemiring::mul_le_mono_r(A * e3, e4, h, c3, hn);
     let q3: ((M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h * h <= e2 * h) =
-        OrderedField::mul_le_mono_r((M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h, e2, h, q3a, hn);
+        OrderedSemiring::mul_le_mono_r((M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h, e2, h, q3a, hn);
     let s4h = OrderedField::half_add(e2);
     let s4: (e4 * h + e4 * h ≈ e2 * h) = ring(s4h);
     let s2h = OrderedField::half_add(e);
@@ -503,7 +504,7 @@ theorem DerivOn::mul_close(D: K → Type, f, f1, g, g1: K → K, A, B, M, N, e: 
             c1.proof.right, c3.proof.right,
             PseudoOrder::le_trans((M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h,
                 (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * cc.witness, OrderedField::half(e),
-                OrderedField::mul_le_mono_l(h, cc.witness, (M + K.multiplicative.unit) * (N + K.multiplicative.unit),
+                OrderedSemiring::mul_le_mono_l(h, cc.witness, (M + K.multiplicative.unit) * (N + K.multiplicative.unit),
                     PseudoOrder::le_trans(h, ad.witness, cc.witness, hd, ad.proof.right.right), pP), cc.proof.right))
     }))
 }
@@ -524,7 +525,7 @@ theorem DerivOn::mul(D: K → Type, f, f1, g, g1: K → K, A, B, M, N: K, hf: De
         let pM: (K.unit <= M + K.multiplicative.unit) = linarith(mm, o);
         let pN: (K.unit <= N + K.multiplicative.unit) = linarith(nn, o);
         let pP: (K.unit <= (M + K.multiplicative.unit) * (N + K.multiplicative.unit)) =
-            OrderedField::mul_nonneg(M + K.multiplicative.unit, N + K.multiplicative.unit, pM, pN);
+            OrderedSemiring::mul_nonneg(M + K.multiplicative.unit, N + K.multiplicative.unit, pM, pN);
         let al = DerivOn::local_lipschitz(D, f, f1, M, hf, bf1);
         let bl = DerivOn::local_lipschitz(D, g, g1, N, hg, bg1);
         let c1 = OrderedField::shrink(B, OrderedField::half(OrderedField::half(e)), bg.left, p4);
@@ -555,13 +556,13 @@ theorem BoundedOn::const(D: K → Type, c: K): BoundedOn(D, λ x => c, c * c + K
 theorem BoundedOn::add(D: K → Type, f, g: K → K, A, B: K, bf: BoundedOn(D, f, A), bg: BoundedOn(D, g, B)):
     BoundedOn(D, λ x => f(x) + g(x), A + B)
 {
-    And(LocatedAddGroup::add_nonneg(A, B, bf.left, bg.left), λ x dx => LocatedAddGroup::abs_le_add(f(x), g(x), A, B, bf.right(x, dx), bg.right(x, dx)))
+    And(LocatedAddMonoid::add_nonneg(A, B, bf.left, bg.left), λ x dx => LocatedAddGroup::abs_le_add(f(x), g(x), A, B, bf.right(x, dx), bg.right(x, dx)))
 }
 
 theorem BoundedOn::mul(D: K → Type, f, g: K → K, A, B: K, bf: BoundedOn(D, f, A), bg: BoundedOn(D, g, B)):
     BoundedOn(D, λ x => f(x) * g(x), A * B)
 {
-    And(OrderedField::mul_nonneg(A, B, bf.left, bg.left), λ x dx => OrderedField::abs_le_mul(f(x), g(x), A, B, bf.right(x, dx), bg.right(x, dx)))
+    And(OrderedSemiring::mul_nonneg(A, B, bf.left, bg.left), λ x dx => OrderedField::abs_le_mul(f(x), g(x), A, B, bf.right(x, dx), bg.right(x, dx)))
 }
 
 // On a domain where `|x| <= R`, `|xⁿ| <= Rⁿ`.
@@ -777,7 +778,7 @@ theorem OrderedField::archimedean_mul(a, d: K, pd: K.unit < d): ∃ n: Nat, a <=
     let pr: (K.unit < r) = OrderedField::recip_pos(d, Inr(pd), pd);
     let m: (d * r ≈ K.multiplicative.unit) = K.mul_recip(d, Inr(pd));
     let n = K.archimedean(a * r);
-    let lt: (a * r * d < K.of_nat(n.witness) * d) = OrderedField::mul_lt_mono_r(a * r, K.of_nat(n.witness), d, n.proof, pd);
+    let lt: (a * r * d < K.of_nat(n.witness) * d) = OrderedSemiring::mul_lt_mono_r(a * r, K.of_nat(n.witness), d, n.proof, pd);
     let back: (a * r * d ≈ a) = ring(m);
     Exists(n.witness, StrictOrder::le_of_lt(a, K.of_nat(n.witness) * d, linarith(lt, back)))
 }
@@ -842,12 +843,12 @@ theorem DerivOn::lipschitz(D: K → Type, f, g: K → K, M: K, hD: ConvexOn(D), 
             λ yx => {
                 let r = DerivOn::mvi(D, f, g, M, hD, hd, hb, y, x, dy, dx, StrictOrder::le_of_lt(y, x, yx));
                 let rl: (K.inv(M * (x + K.inv(y))) <= f(x) + K.inv(f(y))) = r.left;
-                let le: (M * (x + K.inv(y)) <= M * h) = OrderedField::mul_le_mono_l(x + K.inv(y), h, M, linarith(l), hb.left);
+                let le: (M * (x + K.inv(y)) <= M * h) = OrderedSemiring::mul_le_mono_l(x + K.inv(y), h, M, linarith(l), hb.left);
                 LocatedAddGroup::abs_le_intro(f(y) + K.inv(f(x)), M * h, linarith(r.right, le), linarith(rl, le))
             },
             λ xy => {
                 let r = DerivOn::mvi(D, f, g, M, hD, hd, hb, x, y, dx, dy, xy);
-                let le: (M * (y + K.inv(x)) <= M * h) = OrderedField::mul_le_mono_l(y + K.inv(x), h, M, hxy.right, hb.left);
+                let le: (M * (y + K.inv(x)) <= M * h) = OrderedSemiring::mul_le_mono_l(y + K.inv(x), h, M, hxy.right, hb.left);
                 LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), M * (y + K.inv(x)), M * h, r,
                     K.rel_refl(f(y) + K.inv(f(x))), le)
             })

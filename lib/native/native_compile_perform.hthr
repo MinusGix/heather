@@ -364,16 +364,16 @@ theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Pr
     let lands = t.program.lands_jcc(t.laid, w_room.witness, p3, 0, E, t.procedures.len(), w_room.proof, deep_k, deep_before, deep_item, deep_at);
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_room.witness, p3, 0, E, layout.deep_label(), w_room.proof,
         prog_len(deep_before), lands, tree, pre,
-        λ u here resident held => (match t.room as λ r => t.room = r → Sim(t.io(), tree, u) {
-            Zero => λ z => zero(z)(u, here, resident, trivial),
-            Succ(d) => λ same => absurd(trans(sym(held.right), trans(held.left.right.right, test_self_nonzero(64, read_gpr(Rax, u.gprs),
-                j(sym(trans(held.left.right.left, same)), λ n _ => 0 < n, omega()))))),
-        })(refl),
-        λ u here resident held => (match t.room as λ r => t.room = r → Sim(t.io(), tree, u) {
-            Zero => λ z => absurd(trans(sym(test_self_zero(64, read_gpr(Rax, u.gprs), trans(held.left.right.left, z))),
+        λ u here resident held => match z: t.room {
+            Zero => zero(z)(u, here, resident, trivial),
+            Succ(d) => absurd(trans(sym(held.right), trans(held.left.right.right, test_self_nonzero(64, read_gpr(Rax, u.gprs),
+                j(sym(trans(held.left.right.left, z)), λ n _ => 0 < n, omega()))))),
+        },
+        λ u here resident held => match z: t.room {
+            Zero => absurd(trans(sym(test_self_zero(64, read_gpr(Rax, u.gprs), trans(held.left.right.left, z))),
                 trans(sym(held.left.right.right), held.right))),
-            Succ(d) => λ same => fall(d, same)(u, here, resident, held),
-        })(refl));
+            Succ(d) => fall(d, z)(u, here, resident, held),
+        });
     let at_jcc = λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory);
     let flagged = t.goes_block(p2, 0, [TestRR(Rax, Rax)], w_p3, tree, at_jcc, jumped);
     let at_test = λ (u: MachineState<X86Memory(t.r.profile)>) => at_jcc(execute_block_normal([TestRR(Rax, Rax)], u));
@@ -777,17 +777,16 @@ theorem Target::held_reg_shared(self t: Target, live, out: List<Nat>, env: Env, 
                 env.set_word(id, w).number(id),
                 trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(k, BitVec::zero(), w,
                     List::put_here(k, home_values(g), w, BitVec::zero()))), sym(env.number_set_here(id, w))))),
-        Inr(ne) => (match t.homes.home(i) as λ h => t.homes.home(i) = h →
-                (match h { InSlot => words.get_or(i, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) = env.set_word(id, w).number(i) {
-            InSlot => λ at_i => trans(before(i, m2, ne, InSlot, at_i), sym(env.number_set_other(id, w, i, ne))),
-            InReg(r) => λ at_i => match r.eq_dec(k) {
+        Inr(ne) => match at_i: t.homes.home(i) {
+            InSlot => trans(before(i, m2, ne, InSlot, at_i), sym(env.number_set_other(id, w, i, ne))),
+            InReg(r) => match r.eq_dec(k) {
                 Inl(e) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(r, BitVec::zero(), w,
                         j(sym(e), λ x _ => values.nth(x) = Some(w), List::put_here(k, home_values(g), w, BitVec::zero())))),
                     trans(sym(shared(i, m2, ne, j(e, λ x _ => t.homes.home(i) = InReg(x), at_i))), sym(env.number_set_other(id, w, i, ne)))),
                 Inr(apart) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), List::put_other(k, home_values(g), w, BitVec::zero(), r, apart)),
                     trans(before(i, m2, ne, InReg(r), at_i), sym(env.number_set_other(id, w, i, ne)))),
             },
-        })(refl),
+        },
     };
     j(sym(written), λ vs _ => Exists<List<Nat>>(λ ws => t.Placed(env.set_word(id, w).with_words(ws), m) ∧ t.homes.Agrees(out, env.set_word(id, w), ws, vs)),
         Exists(words, ⟨held.proof.left, agrees⟩))
@@ -864,8 +863,8 @@ theorem Target::goes_word_home(self t: Target, live, out: List<Nat>, env: Env, p
     let layout = t.layout();
     let goal = λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory) ∧ ((read_gpr(register, s.gprs) = env.word(id)) ∧
         ((g2: Gprs) → (m2: X86Memory(t.r.profile)) → t.Held(out, env, g2, m2) → t.Spares(s.gprs, g2) → t.StackKept(s.memory, m2) → q(g2, m2)));
-    (match t.homes.home(id) as λ h => t.homes.home(id) = h → t.Goes(prog_len(p), tree, goal) {
-        InSlot => λ slot => {
+    match slot: t.homes.home(id) {
+        InSlot => {
             let code = p.word_home_slot(layout, id, register, slot);
             let a = layout.word_at(id);
             let stored = t.goes_word_store(p, id, register, inside, j(code, λ x _ => x.Within(t.program), within), tree, q,
@@ -889,8 +888,8 @@ theorem Target::goes_word_home(self t: Target, live, out: List<Nat>, env: Env, p
                             λ x _ apart_x => read_gpr_other(Rbx, x, a, g, apart_x), kept))
                 })
         },
-        InReg(k) => λ at => {
-            let code = p.word_home_reg(layout, id, register, k, at);
+        InReg(k) => {
+            let code = p.word_home_reg(layout, id, register, k, slot);
             let moved = t.goes_block(p, 0, [MovRR(home_register(k), register)], j(code, λ x _ => x.Within(t.program), within), tree,
                 λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory), j(code, λ x _ => t.GoesR(prog_len(x), tree, q), next));
             t.goes_weaken(prog_len(p), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
@@ -900,15 +899,15 @@ theorem Target::goes_word_home(self t: Target, live, out: List<Nat>, env: Env, p
                     let m = s.memory;
                     let w = read_gpr(register, g);
                     let number: (w.toNat() = env.number(id)) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), held.right.left), value);
-                    let set = t.held_reg_shared(live, out, env, id, w, g, m, held.left, sub, k, at,
-                        λ i mi ne at_i => trans(shared(k, at, i, mi, ne, at_i), sym(number)));
+                    let set = t.held_reg_shared(live, out, env, id, w, g, m, held.left, sub, k, slot,
+                        λ i mi ne at_i => trans(shared(k, slot, i, mi, ne, at_i), sym(number)));
                     held.right.right(write_gpr(home_register(k), w, g), m,
                         t.held_like(out, env.set_word(id, w), env, write_gpr(home_register(k), w, g), m, set, env.like_set_same(id, w, number, out)),
-                        λ x unused _ => read_gpr_other(home_register(k), x, w, g, t.home_apart(id, k, at, x, unused)),
+                        λ x unused _ => read_gpr_other(home_register(k), x, w, g, t.home_apart(id, k, slot, x, unused)),
                         λ k2 _ => refl)
                 })
         },
-    })(refl)
+    }
 }
 
 theorem List::mem_onto_acc<A>(self xs: List<A>, a: A): (acc: List<A>) → Mem(a, acc) → Mem(a, xs.onto(acc)) {
@@ -1032,7 +1031,7 @@ theorem List::mem_minus_nil(self out: List<Nat>, i: Nat, m: Mem(i, out)): Mem(i,
 
 theorem List::mem_minus_cons(self out: List<Nat>, rest: List<Nat>, i, id: Nat, m: Mem(i, out.minus(rest)), ne: i ≠ id): Mem(i, out.minus(Cons(id, rest))) {
     let kept: (absent(i, rest) = True) = out.mem_filter_holds(i, λ (x: Nat) => absent(x, rest), m);
-    let differs: (i.differs(id) = True) = (match i.eq_dec(id) as λ d => (match d { Inl(_) => False, Inr(_) => True }) = True {
+    let differs: (i.differs(id) = True) = (match i.eq_dec(id) {
         Inl(e) => false_elim(ne(e)),
         Inr(_) => refl,
     });
@@ -1221,17 +1220,16 @@ theorem Env::set_words_agree(ids: List<Nat>): (a, b: Env) → (words: List<BitVe
         Nil => λ a b words _ i never => false_elim(never),
         Cons(id, rest) => λ a b words => match words {
             Nil => λ long => false_elim(Nat::not_succ_le_zero(rest.len(), long)),
-            Cons(w, ws) => λ long i m => (match absent(i, rest) as λ x => absent(i, rest) = x →
-                    a.set_word(id, w).set_words(rest, ws).number(i) = b.set_word(id, w).set_words(rest, ws).number(i) {
-                False => λ f => Env::set_words_agree(rest, a.set_word(id, w), b.set_word(id, w), ws, omega(long), i, absent_false_mem(i, rest, f)),
-                True => λ tr => {
-                    let none: absent(i, rest).IsTrue() = Bool::is_true_of_eq(tr);
+            Cons(w, ws) => λ long i m => match f: absent(i, rest) {
+                False => Env::set_words_agree(rest, a.set_word(id, w), b.set_word(id, w), ws, omega(long), i, absent_false_mem(i, rest, f)),
+                True => {
+                    let none: absent(i, rest).IsTrue() = Bool::is_true_of_eq(f);
                     let same: (i = id) = match m { Inl(e) => e, Inr(later) => false_elim(absent_mem(i, rest, none, i, later)(refl)) };
                     let here = λ (e: Env) => trans(e.set_word(id, w).set_words_outside(rest, ws, i, none),
                         j(sym(same), λ x _ => e.set_word(id, w).number(x) = w.toNat(), e.number_set_here(id, w)));
                     trans(here(a), sym(here(b)))
                 },
-            })(refl),
+            },
         },
     }
 }

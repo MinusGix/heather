@@ -41,7 +41,7 @@ fn Ix::hi(self e: Ix, bounds: List<Nat>) → Nat {
 }
 
 theorem Ix::hi_sound(self e: Ix, args, bounds: List<Nat>, w: Within(args, bounds)): e.eval(args) <= e.hi(bounds) {
-    match e as λ x => x.eval(args) <= x.hi(bounds) {
+    match e {
         Const(n) => n.le_refl(),
         Arg(k) => w(k),
         Add(a, b) => Nat::add_le_mono(a.eval(args), a.hi(bounds), b.eval(args), b.hi(bounds), a.hi_sound(args, bounds, w), b.hi_sound(args, bounds, w)),
@@ -89,10 +89,10 @@ fn Ix::exhausts(self e: Ix, len: Nat, bounds: List<Nat>, budget: Nat) → Bool {
 
 theorem upto_all_sound(b: Nat): (q: Nat → Bool) → upto_all(b, q).IsTrue() → (v: Nat) → v <= b → q(v).IsTrue() {
     match b {
-        Zero => λ q h v => match v as λ u => u <= 0 → q(u).IsTrue() { Zero => λ _ => h, Succ(_) => λ le => false_elim(le) },
+        Zero => λ q h v => match v { Zero => λ _ => h, Succ(_) => λ le => false_elim(le) },
         Succ(k, ih) => λ q h v => {
             let parts = Bool::is_true_and(q(0), upto_all(k, λ u => q(Succ(u))), h);
-            match v as λ u => u <= Succ(k) → q(u).IsTrue() {
+            match v {
                 Zero => λ _ => parts.left,
                 Succ(u) => λ le => ih(λ x => q(Succ(x)), parts.right, u, le),
             }
@@ -112,7 +112,7 @@ fn Fits(bounds: List<Nat>) → List<Nat> → Type {
 theorem all_within_sound(bounds: List<Nat>): (p: List<Nat> → Bool) → all_within(bounds, p).IsTrue() → (vs: List<Nat>) → Fits(bounds, vs) → p(vs).IsTrue() {
     match bounds {
         Nil => λ p h vs fits => j(sym(fits), λ ws _ => p(ws).IsTrue(), h),
-        Cons(b, bs) => λ p h vs => match vs as λ ws => Fits(Cons(b, bs), ws) → p(ws).IsTrue() {
+        Cons(b, bs) => λ p h vs => match vs {
             Nil => λ no => false_elim(no),
             Cons(v, rest) => λ fits => all_within_sound(bs, λ (r: List<Nat>) => p(Cons(v, r)),
                 upto_all_sound(b, λ (u: Nat) => all_within(bs, λ (r: List<Nat>) => p(Cons(u, r))), h, v, fits.left), rest, fits.right),
@@ -126,7 +126,7 @@ fn pad(args, bounds: List<Nat>) → List<Nat> {
 }
 
 theorem word_at_succ(args: List<Nat>, k: Nat): word_at(args, Succ(k)) = word_at(args.tail(), k) {
-    match args as λ xs => word_at(xs, Succ(k)) = word_at(xs.tail(), k) { Nil => refl, Cons(_, _) => refl }
+    match args { Nil => refl, Cons(_, _) => refl }
 }
 
 theorem within_tail(args: List<Nat>, b: Nat, bs: List<Nat>, w: Within(args, Cons(b, bs))): Within(args.tail(), bs) {
@@ -147,7 +147,7 @@ theorem Nat::eq_zero_of_le_zero(self n: Nat, h: n <= 0): n = 0 {
 theorem pad_word(bounds: List<Nat>): (args: List<Nat>) → Within(args, bounds) → (k: Nat) → word_at(pad(args, bounds), k) = word_at(args, k) {
     match bounds {
         Nil => λ args w k => sym(word_at(args, k).eq_zero_of_le_zero(w(k))),
-        Cons(b, bs) => λ args w k => match k as λ i => word_at(pad(args, Cons(b, bs)), i) = word_at(args, i) {
+        Cons(b, bs) => λ args w k => match k {
             Zero => refl,
             Succ(i) => trans(pad_word(bs, args.tail(), within_tail(args, b, bs, w), i), sym(word_at_succ(args, i))),
         },
@@ -156,7 +156,7 @@ theorem pad_word(bounds: List<Nat>): (args: List<Nat>) → Within(args, bounds) 
 
 // An index reads its arguments only through `word_at`.
 theorem Ix::eval_ext(self e: Ix, a, b: List<Nat>, same: (k: Nat) → word_at(a, k) = word_at(b, k)): e.eval(a) = e.eval(b) {
-    match e as λ x => x.eval(a) = x.eval(b) {
+    match e {
         Const(_) => refl,
         Arg(k) => same(k),
         Add(x, y) => trans(Nat::cong(λ (n: Nat) => n + y.eval(a), x.eval_ext(a, b, same)), Nat::cong(λ (n: Nat) => x.eval(b) + n, y.eval_ext(a, b, same))),

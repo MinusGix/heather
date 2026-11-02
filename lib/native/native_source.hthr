@@ -187,7 +187,7 @@ fn CallShape::cmd(self shape: CallShape, env: Env) → LinuxCmd<Nat> {
 // count or a descriptor in the result word, or the errno negated; a read's
 // or a stat's bytes landed in its buffer.
 fn CallShape::answer(self shape: CallShape, env: Env) → shape.cmd(env).Resp() → Env {
-    match shape as λ s => s.cmd(env).Resp() → Env {
+    match shape {
         Reads(_, buf, _, result) => λ (r: ReadResult) => match r {
             ReadBytes(bytes) => env.set_buffer(buf, fill(env.buffer(buf), bytes)).set_word(result, count_word(bytes.len())),
             ReadFailed(errno) => env.set_word(result, errno_word(errno)),
@@ -311,15 +311,13 @@ theorem Stmt::grows(self s: Stmt, call: Answers(), perform, perform2: Performs()
             λ flow => match flow { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) },
             λ flow => match flow { Onward(next) => rest.denote(call, perform2, Succ(n), next), Exited(status) => Ret(Exited(status)) },
             first.grows(call, perform, perform2, below, n, env),
-            λ flow => match flow as λ f => ITree::Below(Events::linux(),
-                    match f as λ _ => ITree<Flow>(Events::linux()) { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) },
-                    match f as λ _ => ITree<Flow>(Events::linux()) { Onward(next) => rest.denote(call, perform2, Succ(n), next), Exited(status) => Ret(Exited(status)) }) {
+            λ flow => match flow {
                 Onward(e) => rest.grows(call, perform, perform2, below, n, e),
                 Exited(_) => refl,
             }),
         Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b =>
                 ITree::Below(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) { True => yes.denote(call, perform, n, env), False => no.denote(call, perform, n, env) },
-                    match b as λ _ => ITree<Flow>(Events::linux()) { True => yes.denote(call, perform2, Succ(n), env), False => no.denote(call, perform2, Succ(n), env) }) {
+                    match b { True => yes.denote(call, perform2, Succ(n), env), False => no.denote(call, perform2, Succ(n), env) }) {
             True => yes.grows(call, perform, perform2, below, n, env),
             False => no.grows(call, perform, perform2, below, n, env),
         },
@@ -492,7 +490,7 @@ theorem Source::performs_grows(self src: Source, call: Answers(), n: Nat, depth:
                         Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
                             λ flow => proc.leave(env, results, flow)),
                     },
-                    match o as λ _ => ITree<Flow>(Events::linux()) {
+                    match o {
                         None => Ret(Onward(env)),
                         Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, Succ(n), d), Succ(n), proc.enter(env, args)),
                             λ flow => proc.leave(env, results, flow)),

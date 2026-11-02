@@ -155,6 +155,12 @@ claimed are *not* in the fragment:
   every obligation hole twice more (a named hole is single-use). `gcd`, `runs`
   and a nested-`match` polymorphic list function are in; **`merge` is out**, and
   is the negative control that says so.
+  **Amended again (2026-10-31):** a computed scrutinee, and a `match h:`
+  equation binding, are back in. The walk spells both sides of the match
+  out at a fresh scrutinee and re-matches on it, rendering `f#body`'s side
+  with a fork of the rewrite. Obligations are lifted, so the render carries
+  no holes (`docs/dependent-match-compiler-design.md` §8). `merge` is now a
+  positive test.
 - **An obligation left to `omega`.** See §4: `omega` is not a function of the
   goal alone, so the *first* implementation had to refuse such a body. Lifting
   the obligation (§4, "resolved by lifting") puts `halve_steps` and

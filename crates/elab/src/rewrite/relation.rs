@@ -1282,8 +1282,8 @@ impl<'a> RelationRewrite<'a> {
             let name = format!("__rewrite_{}", self.serial);
             self.serial += 1;
             if !self.cx.names.contains(&name)
-                && !self.cx.aliases.iter().any(|a| a.name == name)
-                && !self.cx.tyvars.iter().any(|a| a.name == name)
+                && !self.cx.aliases.iter_inner().any(|a| a.name == name)
+                && !self.cx.tyvars.iter_inner().any(|a| a.name == name)
             {
                 return name;
             }

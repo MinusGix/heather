@@ -33,8 +33,19 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x1c";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x19";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x1e";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1b";
+
+/// The two encodings' versions, image then interface: what a module cache
+/// key covers, so a bump of either is a clean miss for every reader rather
+/// than a stored image whose header still answers for its key while its
+/// body no longer decodes (`issues/library-gate-native-tests-fresh-box-rail.md`).
+pub fn image_format() -> [u8; 16] {
+    let mut out = [0; 16];
+    out[..8].copy_from_slice(MAGIC);
+    out[8..].copy_from_slice(INTERFACE_MAGIC);
+    out
+}
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -495,11 +506,9 @@ impl<'a> Reader<'a> {
 }
 
 mod tag {
-    pub const LEVEL_VAR: u8 = 0;
-    pub const LEVEL_ZERO: u8 = 1;
-    pub const LEVEL_SUCC: u8 = 2;
-    pub const LEVEL_MAX: u8 = 3;
+    // 0–3 were the tree spelling before levels were canonical.
     pub const LEVEL_OMEGA: u8 = 4;
+    pub const LEVEL_NF: u8 = 5;
 
     pub const LAYER_VAR: u8 = 0;
     pub const LAYER_CODE: u8 = 1;
@@ -519,33 +528,42 @@ mod tag {
     pub const SHARED: u8 = 0xff;
 }
 
+/// A level as its canonical parts: `ω`, or the optional constant and the
+/// `(ℓ, n)` terms. Decoding rebuilds through [`Level::of_parts`], so no image
+/// can produce a non-canonical level.
 fn put_level(w: &mut Writer, level: &Level) {
     w.nodes += 1;
-    match level {
-        Level::Var(var) => {
-            w.byte(tag::LEVEL_VAR);
-            w.u32(var.0);
+    let Some((konst, vars)) = level.parts() else { return w.byte(tag::LEVEL_OMEGA) };
+    w.byte(tag::LEVEL_NF);
+    match konst {
+        Some(k) => {
+            w.byte(1);
+            w.u64(k);
         }
-        Level::Zero => w.byte(tag::LEVEL_ZERO),
-        Level::Succ(level) => {
-            w.byte(tag::LEVEL_SUCC);
-            put_level(w, level);
-        }
-        Level::Max(left, right) => {
-            w.byte(tag::LEVEL_MAX);
-            put_level(w, left);
-            put_level(w, right);
-        }
-        Level::Omega => w.byte(tag::LEVEL_OMEGA),
+        None => w.byte(0),
+    }
+    w.len(vars.len());
+    for (var, n) in vars {
+        w.u32(var.0);
+        w.u64(n);
     }
 }
 
 fn get_level(r: &mut Reader<'_>) -> Result<Level, ModuleImageDecodeError> {
     r.node(|r| match r.byte()? {
-        tag::LEVEL_VAR => Ok(Level::Var(UnivVar(r.u32()?))),
-        tag::LEVEL_ZERO => Ok(Level::Zero),
-        tag::LEVEL_SUCC => Ok(Level::Succ(Rc::new(get_level(r)?))),
-        tag::LEVEL_MAX => Ok(Level::Max(Rc::new(get_level(r)?), Rc::new(get_level(r)?))),
+        tag::LEVEL_NF => {
+            let konst = match r.byte()? {
+                0 => None,
+                1 => Some(r.u64()?),
+                tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "level constant", tag }),
+            };
+            let len = r.len()?;
+            let mut vars = Vec::with_capacity(len);
+            for _ in 0..len {
+                vars.push((UnivVar(r.u32()?), r.u64()?));
+            }
+            Ok(Level::of_parts(konst, vars))
+        }
         tag::LEVEL_OMEGA => Ok(Level::Omega),
         tag => Err(ModuleImageDecodeError::InvalidTag { sort: "level", tag }),
     })
@@ -1860,6 +1878,7 @@ fn put_inductive(w: &mut Writer, info: &Inductive) {
     w.nodes += 1;
     w.string(&info.name); put_scope(w, &info.scope); w.u32(info.tag);
     w.vec(&info.params, |w, name| w.string(name));
+    w.option(info.varies.as_ref(), |w, k| w.u32(*k as u32));
     w.vec(&info.valparams, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
     w.vec(&info.op_symbols, |w, (symbol, name)| { w.string(symbol); w.string(name); });
     w.vec(&info.ctors, put_ctor); w.bool(info.recursive); w.bool(info.is_record); w.bool(info.codata);
@@ -1881,6 +1900,7 @@ fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError
     r.node(|r| Ok(Inductive {
         name: r.string()?, scope: Rc::new(get_scope(r)?), tag: r.u32()?,
         params: r.vec(Reader::string)?,
+        varies: r.option(|r| Ok(r.u32()? as usize))?,
         valparams: r.vec(|r| Ok((r.string()?, get_ty(r)?)))?,
         op_symbols: r.vec(|r| Ok((r.string()?, r.string()?)))?,
         ctors: r.vec(get_ctor)?, recursive: r.bool()?, is_record: r.bool()?, codata: r.bool()?,

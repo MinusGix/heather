@@ -635,3 +635,116 @@ fn a_nullary_constructor_reads_as_a_pattern_not_a_binder() {
         "#,
     );
 }
+
+// ---------------------------------------------------------------------------
+// A deep pattern on an indexed family (issues/indexed-deep-pattern-kernel-
+// rejects.md, docs/dependent-match-compiler-design.md §7.1). The inner match
+// generalizes the field's index, and the rebuilt outer value must keep its
+// own index in its projections; the elaborator used to accept these arms and
+// the kernel refuse them.
+// ---------------------------------------------------------------------------
+
+const VEC_FAMILY: &str = r#"
+inductive VF : (n: Nat) -> Type { VFNil: VF(0), VFCons(n: Nat, x: Nat, xs: VF(n)): VF(Succ(n)) }
+"#;
+
+#[test]
+fn a_deep_pattern_on_an_indexed_family_refines_the_goal_at_both_levels() {
+    ok(&format!(
+        r#"{VEC_FAMILY}
+        theorem deep(P: (m: Nat) -> VF(m) -> Type): (m: Nat) -> (v: VF(m)) -> P(m, v) -> Nat {{
+            λ m => λ v => λ p => match v {{
+                VFCons(k, x, VFCons(j, y, ys)) => {{
+                    let q: P(Succ(Succ(j)), VFCons(Succ(j), x, VFCons(j, y, ys))) = p; y
+                }},
+                _ => 1
+            }}
+        }}
+        theorem nested(P: (m: Nat) -> VF(m) -> Type): (m: Nat) -> (v: VF(m)) -> P(m, v) -> Nat {{
+            λ m => λ v => match v {{
+                VFCons(k, x, xs) => match xs {{
+                    VFCons(j, y, ys) => λ p => {{
+                        let q: P(Succ(Succ(j)), VFCons(Succ(j), x, VFCons(j, y, ys))) = p; y
+                    }},
+                    VFNil => λ p => {{ let q: P(1, VFCons(0, x, VFNil)) = p; x }},
+                }},
+                VFNil => λ p => 0
+            }}
+        }}
+        "#
+    ));
+}
+
+#[test]
+fn a_deep_pattern_on_an_indexed_family_still_refuses_a_wrong_goal() {
+    // The refined hypothesis is about the outer value at its own index, not
+    // the inner field. The refusal is located at the annotation and names the
+    // written type; today the elaborator's own probe of the arm type is
+    // inconclusive and the kernel's verdict is reported at that site
+    // (issues/indexed-deep-pattern-kernel-rejects.md's log).
+    let msg = bad(&format!(
+        r#"{VEC_FAMILY}
+        theorem wrong(P: (m: Nat) -> VF(m) -> Type): (m: Nat) -> (v: VF(m)) -> P(m, v) -> Nat {{
+            λ m => λ v => λ p => match v {{
+                VFCons(k, x, VFCons(j, y, ys)) => {{ let q: P(j, ys) = p; y }},
+                _ => 1
+            }}
+        }}
+        "#
+    ));
+    assert!(
+        msg.contains("is expected here") || msg.contains("does not convert to `P(#idx, ys)`"),
+        "{msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A deep pattern at a field that a later field's type depends on
+// (issues/deep-pattern-dependent-later-field.md, design §7.2): the later
+// field's alias rides through the generated match as a convoy, so in the
+// `Ask` arm `k : Resp(Ask) → Nat`, in the term and not only in the
+// elaborator's view.
+// ---------------------------------------------------------------------------
+
+const DEPENDENT_BOX: &str = r#"
+inductive Cmd { Ask, Tell }
+inductive Flag { Up, Down }
+fn Resp(c: Cmd) -> Type { match c { Ask => Nat, Tell => Flag } }
+inductive Box { Mk(c: Cmd, k: Resp(c) -> Nat), Nope }
+"#;
+
+#[test]
+fn a_deep_pattern_refines_a_later_field_that_depends_on_it() {
+    ok(&format!(
+        r#"{DEPENDENT_BOX}
+        fn h(b: Box) -> Nat {{ match b {{ Mk(Ask, k) => k(3), Mk(Tell, k) => k(Up), Nope => 0 }} }}
+        theorem h_ask(): h(Mk(Ask, λ n => n)) = 3 {{ refl }}
+        theorem h_tell(): h(Mk(Tell, λ f => match f {{ Up => 1, Down => 2 }})) = 1 {{ refl }}
+        theorem h_open(k: Nat -> Nat): h(Mk(Ask, k)) = k(3) {{ refl }}
+        fn d(b: Box) -> Nat {{ match b {{ Mk(Ask, k) => k(3), _ => 0 }} }}
+        theorem d_ask(k: Nat -> Nat): d(Mk(Ask, k)) = k(3) {{ refl }}
+        theorem d_tell(k: Flag -> Nat): d(Mk(Tell, k)) = 0 {{ refl }}
+        "#
+    ));
+    // A hand-written nested match on the field refines the later field the
+    // same way, unless an arm names the field itself: that arm speaks of the
+    // field unrefined, so its partner stays at the field's own type.
+    ok(&format!(
+        r#"{DEPENDENT_BOX}
+        fn n(b: Box) -> Nat {{ match b {{ Mk(c, k) => match c {{ Ask => k(5), Tell => 0 }}, Nope => 0 }} }}
+        theorem n_ask(k: Nat -> Nat): n(Mk(Ask, k)) = k(5) {{ refl }}
+        fn g(c: Cmd, k: Resp(c) -> Nat) -> Nat {{ 7 }}
+        fn u(b: Box) -> Nat {{ match b {{ Mk(c, k) => match c {{ Ask => g(c, k), Tell => 0 }}, Nope => 0 }} }}
+        "#
+    ));
+}
+
+#[test]
+fn a_refined_later_field_is_refused_at_the_wrong_answer_type() {
+    let msg = bad(&format!(
+        r#"{DEPENDENT_BOX}
+        fn h(b: Box) -> Nat {{ match b {{ Mk(Ask, k) => k(Up), _ => 0 }} }}
+        "#
+    ));
+    assert!(msg.contains("`Up` is a constructor of `Flag`, which is not the expected type"), "{msg}");
+}

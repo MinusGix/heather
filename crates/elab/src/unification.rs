@@ -172,6 +172,13 @@ pub(super) struct U<'a> {
     /// cannot give, asked only by an applied meta's pattern
     /// (issues/higher-kinded-classes.md). `None` declines.
     pub(super) constructor: &'a dyn Fn(&Type) -> Option<Type>,
+    /// A re-spelled subject `El(app(D#tycode_fn^δ; ā))` read as the type
+    /// constructor at `D`'s declared slot and the argument there
+    /// ([`crate::Elaborator::slot_view`],
+    /// docs/lambda-carrier-instances-design.md §7.3 reader 2), asked only by
+    /// an applied meta of one argument. `None` declines, and the aligned
+    /// spine's head-plus-leading-arguments rule applies.
+    pub(super) slot_view: &'a dyn Fn(&Term) -> Option<(Term, Term)>,
 }
 
 impl<'a> U<'a> {
@@ -224,6 +231,7 @@ impl<'a> U<'a> {
             canonical_head: &|_, _| None,
             respell: &|_| None,
             constructor: &|_| None,
+            slot_view: &|_| None,
         }
     }
 }
@@ -455,6 +463,15 @@ pub(super) fn unify_ty(
                 flex_spine(u, tm, &c.apply_local(&embed(u.gamma, d)), n, d, sols);
                 return;
             }
+            // `?M(p)` against a declaration with a declared slot: `?M` is the
+            // constructor at that slot and `p` its argument there, rather than
+            // the head with the leading arguments.
+            if flex
+                && let Some(Type::El { tm: r, .. }) = &respelled
+                && slot_pair(u, tm, r, n, d, sols)
+            {
+                return;
+            }
             if let Some(r @ Type::El { .. }) = respelled {
                 let r = match u.subject_metas {
                     Some((m, _)) => r.shift_global(m),
@@ -618,6 +635,34 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             let mut head = pat;
             while let Some((fun, _)) = spelling::app_of(head) {
                 head = fun;
+            }
+            // A head meta already solved to a λ — a constructor at a
+            // declared slot, `λ A. Result<A, E>` — is substituted and the
+            // redex contracted first: paired positionally, `?M(?B) ≟
+            // Result<Nat, Bool>` would teach `?B := Bool`, the argument the
+            // λ fixes (docs/lambda-carrier-instances-design.md §7.3).
+            if let Term::GlobalTm { var, .. } = head
+                && var.0 < n
+                && sols[var.0 as usize].solved().is_some_and(|t| matches!(&**t, Term::Lam { .. }))
+            {
+                let p2 = partially_zonked_tm(pat, n, sols, u.gamma);
+                if let Some(r) = spelling::beta_head(&p2) {
+                    return unify_tm(u, &r, subj, n, d, sols);
+                }
+            }
+            // `?M(p)` against a declaration's code spine with a declared
+            // slot: the constructor at that slot, not the aligned spine's
+            // head plus leading arguments
+            // (docs/lambda-carrier-instances-design.md §7.3 reader 2).
+            if let Term::GlobalTm { var, .. } = head
+                && var.0 < n
+                && sols[var.0 as usize].solved().is_none()
+                && spine_len(pat) == 1
+                && matches!(spine_head(s), Term::GlobalTm { .. })
+                && let Some(s0) = u.subject_tm(s, d)
+                && slot_pair(u, pat, &s0, n, d, sols)
+            {
+                return;
             }
             //
             // Align the value spine against a rigid global or local head.
@@ -957,6 +1002,30 @@ fn flex_spine(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [So
     }
 }
 
+/// `?M(p) ≟ D<ā>` at `D`'s declared slot `s`: learn `?M` as the constructor
+/// at `s` and pair `p` with `a_s` ([`U::slot_view`]). `subj` is the subject's
+/// code spine already strengthened to `gamma` (and, under
+/// [`U::subject_metas`], in the committed world), as [`U::subject_tm`] and the
+/// re-spelling arm hand it over. `false`, learning nothing, when the pattern
+/// is not a meta applied to one argument or `D` declares no slot.
+fn slot_pair(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) -> bool {
+    let Some((pfun, parg)) = spelling::app_of(pat) else { return false };
+    if !matches!(&**pfun, Term::GlobalTm { var, .. } if var.0 < n) {
+        return false;
+    }
+    let Some((c, a)) = (u.slot_view)(subj) else { return false };
+    let lift = |t: Term| {
+        let t = match u.subject_metas {
+            Some((m, _)) => t.shift_global(m),
+            None => t,
+        };
+        t.apply_local(&embed(u.gamma, d))
+    };
+    unify_tm(u, pfun, &lift(c), n, d, sols);
+    unify_tm(u, parg, &lift(a), n, d, sols);
+    true
+}
+
 /// The head of an application spine (`t` itself when it is no application).
 fn spine_head(mut t: &Term) -> &Term {
     while let Some((fun, _)) = spelling::app_of(t) {
@@ -1043,6 +1112,18 @@ pub(super) fn partially_zonked(dom: &Type, n: u32, sols: &[Sol], gamma: &LocalCt
     // The substitution consumes n slots, so first weaken the identity region
     // by n. Its payloads already live in the retained scratch world.
     dom.shift_global_above(n, n).apply_global(&GlobalSubst { entries })
+}
+
+/// [`partially_zonked`] for a term: solved slots substituted, unsolved ones
+/// kept in the scratch world.
+fn partially_zonked_tm(t: &Term, n: u32, sols: &[Sol], gamma: &LocalCtx) -> Term {
+    let entries = (0..n).rev().map(|slot| GlobalEntry::Tm(Rc::new(
+        match sols[slot as usize].solved() {
+            Some(t) => t.shift_global(n),
+            None => Term::GlobalTm { var: heather_kernel::term::GlobalVar(slot), subst: LocalSubst::id(gamma) },
+        }
+    ))).collect();
+    t.shift_global_above(n, n).apply_global(&GlobalSubst { entries })
 }
 
 /// [`zonked`] for a *term* — same two-marker test, same guarantee: `Some`

@@ -425,6 +425,12 @@ assigned local, which `split_all` handles consistently (it splits every
 occurrence of a comparison, `docs/native-programs-read-like-programs-design.md`
 §2). The alternative is a join tuple, which proofs would have to project.
 
+*Amended (2026-10-31):* probe P2's refusal is gone. A motive-less `match`
+in inference position now takes its constant motive from any arm whose type
+lives outside its binders (`docs/dependent-match-compiler-design.md` §6.1).
+The annotation is optional wherever some arm's type names `T`. The walk can
+keep writing it, since it knows the type and the annotation costs nothing.
+
 ### 5.2 Loops: a named step, then a fold
 
 The **state** of a loop is the `mut` locals its body assigns. A loop that
@@ -839,7 +845,12 @@ Layer 1 landed for `issues/binding-statements.md`. Probes:
    `ITree<E, ·>` vary in an argument that is not alone, so their instances
    are at a λ carrier, which `issues/class-instance-at-lambda-carrier.md`
    owns. The parser-combinator customer waits on it; `regex.hthr`'s
-   generator chain is the second customer instead.
+   generator chain is the second customer instead. *2026-11-02: Result's
+   instances landed at `λ (A: Type) => Result<A, E>` with `inductive
+   Result<A, E> varies A`, and `Parser<T>` is now a valid carrier as a
+   partial application (`docs/lambda-carrier-instances-design.md` §7). The
+   CoTree/ITree carrier still waits on codata type constructors
+   (`issues/codata-type-constructor-carrier.md`).*
 6. **`?` for `Option` (§3.5) is not built.** The parser lowers `?` to
    `result::Result::and_then` before any type is known, and choosing
    `Option::and_then` instead is type-directed. It stays in the issue.

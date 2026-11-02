@@ -195,14 +195,9 @@ theorem pick_succ_comm<P, Q, R, S>(d1: Or<P, Q>, d2: Or<R, S>, n: Nat):
     or_pick(d1, or_pick(d2, n, Succ(n)), Succ(or_pick(d2, n, Succ(n))))
         = or_pick(d2, or_pick(d1, n, Succ(n)), Succ(or_pick(d1, n, Succ(n))))
 {
-    match d1 as λ z =>
-        or_pick(z, or_pick(d2, n, Succ(n)), Succ(or_pick(d2, n, Succ(n))))
-            = or_pick(d2, or_pick(z, n, Succ(n)), Succ(or_pick(z, n, Succ(n))))
-    {
+    match d1 {
         Inl(p) =>
-            match d2 as λ w =>
-                Succ(or_pick(w, n, Succ(n))) = or_pick(w, Succ(n), Succ(Succ(n)))
-            {
+            match d2 {
                 Inl(r) => refl,
                 Inr(s) => refl,
             },

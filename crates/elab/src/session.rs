@@ -73,8 +73,7 @@ impl SessionCheckpoint {
         // Absolute Ψ positions may be reused after rollback. A cached answer
         // for a removed declaration must not become the answer for its future
         // replacement at the same index.
-        elab.result_only_memo.borrow_mut().clear();
-        elab.named_type_memo.borrow_mut().clear();
+        elab.memos.clear_positional();
     }
 }
 
@@ -105,13 +104,13 @@ impl Elaborator {
         ModulePassCheckpoint {
             committed: SessionCheckpoint::capture(self),
             journal: self
-                .module_journal
+                .pass.module_journal
                 .borrow()
                 .as_ref()
                 .map(|journal| (journal.events.len(), journal.items.len())),
-            warnings: self.warnings.borrow().len(),
-            omega_reports: self.omega_reports.borrow().len(),
-            omega_failure_reports: self.omega_failure_reports.borrow().len(),
+            warnings: self.pass.warnings.borrow().len(),
+            omega_reports: self.pass.omega_reports.borrow().len(),
+            omega_failure_reports: self.pass.omega_failure_reports.borrow().len(),
             rows: crate::stats::rows_mark(),
         }
     }
@@ -122,19 +121,19 @@ impl Elaborator {
     pub(crate) fn restore_module_pass(&mut self, mark: ModulePassCheckpoint) {
         mark.committed.restore(self);
         if let Some((events, items)) = mark.journal
-            && let Some(journal) = self.module_journal.borrow_mut().as_mut()
+            && let Some(journal) = self.pass.module_journal.borrow_mut().as_mut()
         {
             journal.events.truncate(events);
             journal.items.truncate(items);
         }
-        self.warnings.borrow_mut().truncate(mark.warnings);
-        self.omega_reports.borrow_mut().truncate(mark.omega_reports);
-        self.omega_failure_reports
+        self.pass.warnings.borrow_mut().truncate(mark.warnings);
+        self.pass.omega_reports.borrow_mut().truncate(mark.omega_reports);
+        self.pass.omega_failure_reports
             .borrow_mut()
             .truncate(mark.omega_failure_reports);
-        self.pending_derived.borrow_mut().clear();
-        self.container_decls.borrow_mut().clear();
-        self.instance_scope.clear();
+        self.pass.pending_derived.borrow_mut().clear();
+        self.pass.container_decls.borrow_mut().clear();
+        self.scope.instance_scope.clear();
         crate::stats::truncate_rows(mark.rows);
     }
 
@@ -172,7 +171,7 @@ impl Elaborator {
     ) -> R<T> {
         let checkpoint = SessionCheckpoint::capture(self);
         let journal_mark = self
-            .module_journal
+            .pass.module_journal
             .borrow()
             .as_ref()
             .map(|journal| (journal.events.len(), journal.items.len()));
@@ -180,7 +179,7 @@ impl Elaborator {
         if result.is_err() {
             checkpoint.restore(self);
             if let Some((events, items)) = journal_mark
-                && let Some(journal) = self.module_journal.borrow_mut().as_mut()
+                && let Some(journal) = self.pass.module_journal.borrow_mut().as_mut()
             {
                 journal.events.truncate(events);
                 journal.items.truncate(items);

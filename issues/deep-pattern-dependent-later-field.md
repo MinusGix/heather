@@ -1,10 +1,10 @@
 ---
 title: Deep pattern at a field a later field depends on is a kernel rejection
-status: open
+status: closed
 labels: [frontend,elaboration,inductives,diagnostics]
 area: language
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 ---
 
 `match b { Mk(Ask, k) => k(3), _ => 0 }` over
@@ -29,3 +29,8 @@ nested `match` written out. A kernel rejection is neither.
 
 The `Box` example either computes (`h(Mk(Ask, λ n => n)) = 3` by `refl`) or
 is refused by the elaborator with a message naming `k`'s dependency on `c`.
+
+## Log
+
+- 2026-11-01: 2026-11-01, checked during match-clause-equations: still a kernel NotConvertible after the child rewrap. The root is not the motive's abstraction. The generated inner match on c leaves k's alias at type Resp(c) while the arm believes it is refined, so the fix is to convoy aliases whose types mention the column (design §7.1, not covered).
+- 2026-11-01: Fixed (design §7.2): a motive-less match convoys aliases whose type contains the scrutinee and that an arm names, unless an arm names the scrutinee itself (that arm speaks of it unrefined) or under match h:. The Box example computes (h(Mk(Ask, λ n => n)) = 3 by refl, and at an open k); tests in nested_match_patterns.rs.

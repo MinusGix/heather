@@ -4,7 +4,7 @@ status: open
 labels: [frontend, elaboration, performance, modules]
 area: language
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-11-02
 ---
 
 Filed off the modules implementing round's bench flag (2026-08-05,
@@ -42,3 +42,7 @@ than fixed).
   resolution, only its cost.
 - **[[frontend-benchmarks]]** owns the harness and baselines; the numbers
   above are against the 2026-08-04 baseline, pre-re-save.
+
+## Log
+
+- 2026-11-02: Related, filed 2026-11-02: [[layered-registry-lookups]]. Every registry miss scans one sealed layer per module (names, types, provenance, gendefs); names.rs is 3.5–4.7% of cold samples (docs/data-oriented-survey.md §6). Interning the keys, as this issue proposes, would make that scan cheaper but would not remove it.

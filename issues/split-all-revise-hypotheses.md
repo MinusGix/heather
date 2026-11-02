@@ -4,7 +4,7 @@ status: open
 labels: [tactics,proofs,elaboration]
 area: tactics
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-31
 ---
 
 When `split_all` splits a scrutinee, the motive covers only the goal. A
@@ -24,3 +24,7 @@ specialized type, simplified. A premise can then be written as an ordinary
 parameter.
 
 Related: [[split-all-reduce-defined-heads]].
+
+## Log
+
+- 2026-10-31: 2026-10-31: slice 2 of dependent-match-compiler refines hypotheses at a computed scrutinee in the elaborator's motive-less match, but split_all's Cases (host.rs cases_request) builds its own motive from the goal alone, so this stays open. The fix is to generalize the about-the-scrutinee locals there the way refined_by_occurrence selects them, every one (a tactic leaf may read any).

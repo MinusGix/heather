@@ -5,7 +5,7 @@ labels: [native,compiler,proofs]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-11-01
+updated: 2026-11-02
 ---
 
 Slice R5b of `docs/runtime-fn-setups-design.md` (§2, §5–§7): the `Setup`
@@ -60,3 +60,24 @@ function by instantiating the theorem; a wrong claim and an `Add` lowered
 to a `Sub` node refused). Next: the remaining primitives, `Lit`, `IfEq`,
 records, calls and `Fold` (§6.3's table), and the `Fun`/`Program` wrapper
 from parameters bound by `Valuation::bind` to `Function::eval`.
+
+**2026-11-02 (R5b round 2).** `rt_lower.hthr` gains literals, the
+primitives FunctionIR has nodes for (word `+ - & | ^`, `== <u <s`, `&& || !`
+on bits), `IfEq` (lowered and proved as `If`, by `Tm::convoy_match`), calls
+at a signature of 64-bit words, and the function wrapper `Fun::lower` /
+`Fun::lower_sound`, from `Function::eval` to `Fun::meaning` (design §16.6).
+The theorem now assumes `Tm::CallsAgree(w, call)`: every word-signature
+function is answered with its meaning (`Ty::Answers`), which is exactly what
+`Fun::lower_sound` concludes of a function, so a program discharges it
+function by function. Probes instantiate the wrapper at the reflector's
+`leaf`, `caller` and `safe_pred`; a `!` lowered against a zero constant fails
+the `Neg` case.
+
+Still to do for N1, each with its obstacle (§16.6): the program wrapper
+(`CallsAgree` below a bound, as `program_eval` answers function `i` only by
+the ones before it); records (a variable's encoding spans several ports, and
+`Make` needs `get(mk(t)) = t`, which η for pairs should give by `refl`);
+`Fold` and the byte primitives (buffers are read as empty by
+`StructuredRegion::eval`, so the theorem moves to `function_ir_state`'s run);
+`zero_extend` (no node, `function-ir-alu-core`).
+

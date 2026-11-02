@@ -195,12 +195,11 @@ theorem Prog::ports_to_within(layout: Layout, ports: List<Port>): (registers: Li
         Nil => λ registers p q some => j(Option::some_inj(p, q, some), λ x _ => p.Within(x), p.within_self()),
         Cons(port, rest) => λ registers => match registers {
             Nil => λ p q none => absurd(none),
-            Cons(register, later) => λ p q => (match p.port_to(layout, port, register) as λ o => p.port_to(layout, port, register) = o →
-                (match o { None => None, Some(r) => r.ports_to(layout, rest, later) }) = Some(q) → p.Within(q) {
-                None => λ _ none => absurd(none),
-                Some(r) => λ one more => p.within_trans(r, q, p.port_to_kind(layout, port, register, r, one).right,
+            Cons(register, later) => λ p q => (match one: p.port_to(layout, port, register) {
+                None => λ none => absurd(none),
+                Some(r) => λ more => p.within_trans(r, q, p.port_to_kind(layout, port, register, r, one).right,
                     Prog::ports_to_within(layout, rest, later, r, q, more)),
-            })(refl),
+            }),
         },
     }
 }
@@ -216,12 +215,11 @@ theorem Prog::ports_from_within(layout: Layout, out: List<Nat>, ports: List<Port
             Nil => λ p q none => absurd(none),
             Cons(register, later) => match words {
                 Nil => λ p q none => absurd(none),
-                Cons(word, others) => λ p q => (match layout.word_fits(word) as λ fits => layout.word_fits(word) = fits →
-                    (match fits { False => None, True => p.word_from(layout, out, word, register).ports_from(layout, out, rest, others, later) }) = Some(q) → p.Within(q) {
-                    False => λ _ none => absurd(none),
-                    True => λ _ more => p.within_trans(p.word_from(layout, out, word, register), q, p.within_word_from(layout, out, word, register),
+                Cons(word, others) => λ p q => (match layout.word_fits(word) {
+                    False => λ none => absurd(none),
+                    True => λ more => p.within_trans(p.word_from(layout, out, word, register), q, p.within_word_from(layout, out, word, register),
                         Prog::ports_from_within(layout, out, rest, others, later, p.word_from(layout, out, word, register), q, more)),
-                })(refl),
+                }),
             },
         },
     }
@@ -232,9 +230,7 @@ theorem Prog::within_leaf_lowered(self loaded: Prog, layout: Layout, out: List<N
     code: Option<List<Instruction>>, q: Prog, stored: loaded.leaf_lowered(layout, out, nodes, words, code) = Some(q)): loaded.Within(q) {
     (match code as λ c => loaded.leaf_lowered(layout, out, nodes, words, c) = Some(q) → loaded.Within(q) {
         None => λ none => absurd(none),
-        Some(instructions) => (match leaves_all(instructions, layout.taken) as λ b =>
-                (match b { False => None, True => then(loaded, Block(instructions)).ports_from(layout, out, nodes_write_ports(nodes), words, layout.leaf_outputs(nodes)) }) =
-                    Some(q) → loaded.Within(q) {
+        Some(instructions) => (match leaves_all(instructions, layout.taken) {
             False => λ none => absurd(none),
             True => λ more => loaded.within_trans(then(loaded, Block(instructions)), q, loaded.within_then(0, Block(instructions)),
                 Prog::ports_from_within(layout, out, nodes_write_ports(nodes), words, layout.leaf_outputs(nodes), then(loaded, Block(instructions)), q, more)),
@@ -253,13 +249,11 @@ theorem Prog::within_leaf_into(self p: Prog, layout: Layout, out: List<Nat>, nod
             Some(loaded) => loaded.leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs))),
         } }) = Some(q) → p.Within(q) {
         False => λ none => absurd(none),
-        True => (match p.ports_to(layout, inputs, ins) as λ o => p.ports_to(layout, inputs, ins) = o →
-                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
-                p.Within(q) {
-            None => λ _ none => absurd(none),
-            Some(loaded) => λ loaded_is stored => p.within_trans(loaded, q, Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
+        True => (match loaded_is: p.ports_to(layout, inputs, ins) {
+            None => λ none => absurd(none),
+            Some(loaded) => λ stored => p.within_trans(loaded, q, Prog::ports_to_within(layout, inputs, ins, p, loaded, loaded_is),
                 loaded.within_leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs)), q, stored)),
-        })(refl),
+        }),
     })(emitted)
 }
 
@@ -318,13 +312,9 @@ theorem Target::goes_ports_to(self t: Target, live: List<Nat>, env: Env, tree: I
         },
         Cons(port, rest) => λ registers => match registers {
             Nil => λ _ p q none => absurd(none),
-            Cons(register, later) => λ unused p q => (match p.port_to(t.layout(), port, register) as λ o => p.port_to(t.layout(), port, register) = o →
-                (match o { None => None, Some(r) => r.ports_to(t.layout(), rest, later) }) = Some(q) → q.Within(t.program) →
-                (post: Gprs → X86Memory(t.r.profile) → Type) → t.GoesR(prog_len(q), tree, post) →
-                t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
-                    post(t.ports_gprs(env, rest, later, t.port_gprs(env, port, register, g)), m)) {
-                None => λ _ none => absurd(none),
-                Some(r) => λ one more within post next => {
+            Cons(register, later) => λ unused p q => (match one: p.port_to(t.layout(), port, register) {
+                None => λ none => absurd(none),
+                Some(r) => λ more within post next => {
                     let w_r = r.within_trans(q, t.program, Prog::ports_to_within(t.layout(), rest, later, r, q, more), within);
                     let after = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ post(t.ports_gprs(env, rest, later, g), m);
                     let head = t.goes_port_to(live, env, p, r, port, register, holds(port, Inl(refl)), one, w_r, tree, after,
@@ -336,7 +326,7 @@ theorem Target::goes_ports_to(self t: Target, live: List<Nat>, env: Env, tree: I
                         head, λ s held => ⟨held.left, ⟨t.held_kind(live, env, Kind::of_width(port.width), port.id, register, s.gprs, s.memory, held.left,
                             unused(register, Inl(refl))), held.right⟩⟩)
                 },
-            })(refl),
+            }),
         },
     }
 }
@@ -405,13 +395,9 @@ theorem Target::inputs_at(self t: Target, env: Env, values: Valuation(), written
         Nil => λ registers p q _ _ _ _ g => trivial,
         Cons(port, rest) => λ registers => match registers {
             Nil => λ p q none => absurd(none),
-            Cons(register, later) => λ p q => (match p.port_to(t.layout(), port, register) as λ o => p.port_to(t.layout(), port, register) = o →
-                (match o { None => None, Some(r) => r.ports_to(t.layout(), rest, later) }) = Some(q) →
-                ports_absent(Cons(port, rest), written).IsTrue() → Rbx.absent_from(Cons(register, later)).IsTrue() →
-                gprs_distinct(Cons(register, later)).IsTrue() → (g: Gprs) →
-                PortsAt(values, Cons(port, rest), Cons(register, later), t.ports_gprs(env, Cons(port, rest), Cons(register, later), g)) {
-                None => λ _ none => absurd(none),
-                Some(r) => λ one more absents rbx distinct g => {
+            Cons(register, later) => λ p q => (match one: p.port_to(t.layout(), port, register) {
+                None => λ none => absurd(none),
+                Some(r) => λ more absents rbx distinct g => {
                     let kinds = p.port_to_kind(t.layout(), port, register, r, one).left;
                     let absent_parts = Bool::is_true_and(absent(port.id, written), ports_absent(rest, written), absents);
                     let distinct_parts = Bool::is_true_and(register.absent_from(later), gprs_distinct(later), distinct);
@@ -428,7 +414,7 @@ theorem Target::inputs_at(self t: Target, env: Env, values: Valuation(), written
                      t.inputs_at(env, values, written, agree, rest, later, r, q, more, absent_parts.right, Rbx.absent_rest(register, later, rbx),
                         distinct_parts.right, loaded)⟩
                 },
-            })(refl),
+            }),
         },
     }
 }
@@ -497,15 +483,9 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
             Nil => λ p q env none => absurd(none),
             Cons(register, later) => match words {
                 Nil => λ p q env none => absurd(none),
-                Cons(word, others) => λ p q env => (match t.layout().word_fits(word) as λ fits => t.layout().word_fits(word) = fits →
-                    (match fits { False => None, True => p.word_from(t.layout(), out, word, register).ports_from(t.layout(), out, rest, others, later) }) = Some(q) →
-                    q.Within(t.program) → Rbx.absent_from(Cons(register, later)).IsTrue() → ((r: Gpr) → Mem(r, Cons(register, later)) → t.homes.uses(r) = False) →
-                    t.homes.all_apart(Cons(word, others), out).IsTrue() →
-                    t.At(prog_len(q), out, tree, env.settle_into(values, Cons(port, rest), Cons(word, others))) →
-                    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(out.minus(Cons(word, others)), env, g, m) ∧
-                        PortsAt(values, Cons(port, rest), Cons(register, later), g)) {
-                    False => λ _ none => absurd(none),
-                    True => λ fits more within rbx unused apart next => {
+                Cons(word, others) => λ p q env => (match fits: t.layout().word_fits(word) {
+                    False => λ none => absurd(none),
+                    True => λ more within rbx unused apart next => {
                         let inside = t.layout().word_inside(word, j(sym(fits), λ b _ => b.IsTrue(), trivial));
                         let layout = t.layout();
                         let stored = p.word_from(layout, out, word, register);
@@ -538,7 +518,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
                                     Rbx.absent_mem(later, Rbx.absent_rest(register, later, rbx), r, k)), held.right.right)⟩
                             }⟩)
                     },
-                })(refl),
+                }),
             },
         },
     }
@@ -578,14 +558,11 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
             let parts2 = Bool::is_true_and(ports_absent(inputs, nodes_writes(nodes)), gprs_distinct(Cons(Rbx, ins)) && Rbx.absent_from(outs), parts.right);
             let parts3 = Bool::is_true_and(gprs_distinct(Cons(Rbx, ins)), Rbx.absent_from(outs), parts2.right);
             let distinct = Bool::is_true_and(Rbx.absent_from(ins), gprs_distinct(ins), parts3.left);
-            (match p.ports_to(layout, inputs, ins) as λ o => p.ports_to(layout, inputs, ins) = o →
-                (match o { None => None, Some(loaded) => loaded.leaf_lowered(layout, out, nodes, words, region.lower(ins, outs, place_into(outs))) }) = Some(q) →
-                t.At(prog_len(p), live, tree, env) {
-                None => λ _ none => absurd(none),
-                Some(loaded) => λ loaded_is => (match region.lower(ins, outs, place_into(outs)) as λ c => region.lower(ins, outs, place_into(outs)) = c →
-                    loaded.leaf_lowered(layout, out, nodes, words, c) = Some(q) → t.At(prog_len(p), live, tree, env) {
-                    None => λ _ none => absurd(none),
-                    Some(code) => λ lowered => (match leaves_all(code, layout.taken) as λ b => leaves_all(code, layout.taken) = b →
+            (match loaded_is: p.ports_to(layout, inputs, ins) {
+                None => λ none => absurd(none),
+                Some(loaded) => (match lowered: region.lower(ins, outs, place_into(outs)) {
+                    None => λ none => absurd(none),
+                    Some(code) => (match leaves_all(code, layout.taken) as λ b => leaves_all(code, layout.taken) = b →
                         (match b { False => None, True => then(loaded, Block(code)).ports_from(layout, out, outputs, words, outs) }) = Some(q) →
                         t.At(prog_len(p), live, tree, env) {
                         False => λ _ none => absurd(none),
@@ -621,8 +598,8 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
                                     parts2.left, distinct.left, distinct.right, s.gprs)⟩⟩)
                         },
                     })(refl),
-                })(refl),
-            })(refl)
+                }),
+            })
         },
     })(refl, emitted)
 }
@@ -660,21 +637,19 @@ theorem ports_outside_mem(ports: List<Port>, written: List<Nat>): (port: Port) �
     Mem(port, ports) ∧ absent(port.id, written).IsTrue() {
     match ports {
         Nil => λ port never => false_elim(never),
-        Cons(first, rest) => λ port => (match absent(first.id, written) as λ b => absent(first.id, written) = b →
-                Mem(port, match b { False => ports_outside(rest, written), True => Cons(first, ports_outside(rest, written)) }) →
-                Mem(port, Cons(first, rest)) ∧ absent(port.id, written).IsTrue() {
-            False => λ _ m => {
+        Cons(first, rest) => λ port => (match kept: absent(first.id, written) {
+            False => λ m => {
                 let later = ports_outside_mem(rest, written, port, m);
                 ⟨Inr(later.left), later.right⟩
             },
-            True => λ kept m => match m {
+            True => λ m => match m {
                 Inl(e) => ⟨Inl(e), j(sym(trans(cong_fn<Port, Bool>(λ x => absent(x.id, written), e), kept)), λ b _ => b.IsTrue(), trivial)⟩,
                 Inr(later) => {
                     let more = ports_outside_mem(rest, written, port, later);
                     ⟨Inr(more.left), more.right⟩
                 },
             },
-        })(refl),
+        }),
     }
 }
 

@@ -2137,7 +2137,7 @@ inductive Bal : (s: Shape) -> Type {
             &ty,
             &inline,
             &l,
-            t.el.fuel,
+            t.el.policy.fuel,
         )
         .expect("the reference and inline spellings convert");
     }

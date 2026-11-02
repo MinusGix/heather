@@ -23,6 +23,7 @@ import logic;
 import nat;
 import int;
 import relation_props;
+import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
@@ -47,7 +48,7 @@ theorem lin_num_pos(x: A, n: Nat): A.unit < A.of_int(OfNat(Succ(n))) {
         Zero => lin_one_pos(x),
         Succ(m) => StrictOrder::lt_respects_r(A.unit, A.of_int(OfNat(Succ(m))) + A.of_int(OfNat(1)), A.of_int(OfNat(Succ(Succ(m)))),
             A.rel_sym(A.of_int(OfNat(Succ(Succ(m)))), A.of_int(OfNat(Succ(m))) + A.of_int(OfNat(1)), A.of_int_add(OfNat(Succ(m)), OfNat(1))),
-            OrderedAddGroup::add_pos(A.of_int(OfNat(Succ(m))), A.of_int(OfNat(1)), lin_num_pos(x, m), lin_one_pos(x))),
+            OrderedAddMonoid::add_pos(A.of_int(OfNat(Succ(m))), A.of_int(OfNat(1)), lin_num_pos(x, m), lin_one_pos(x))),
     }
 }
 
@@ -62,7 +63,7 @@ theorem lin_zero_le(x: A): A.unit <= A.unit { StrictOrder::le_refl(A.unit) }
 
 theorem lin_le_part(a, b: A, h: a <= b): A.unit <= b + A.inv(a) {
     StrictOrder::le_respects(a + A.inv(a), A.unit, b + A.inv(a), b + A.inv(a), A.inv_r(a), A.rel_refl(b + A.inv(a)),
-        OrderedAddGroup::add_le_mono_r(a, b, A.inv(a), h))
+        OrderedAddMonoid::add_le_mono_r(a, b, A.inv(a), h))
 }
 
 theorem lin_lt_part(a, b: A, h: a < b): A.unit < b + A.inv(a) { OrderedAddGroup::sub_pos(a, b, h) }
@@ -83,16 +84,16 @@ theorem lin_same_part_rev(a, b: A, h: a ≈ b): A.unit <= a + A.inv(b) {
 
 // A part scaled by a positive coefficient.
 theorem lin_scale_le(k, x: A, hk: A.unit < k, hx: A.unit <= x): A.unit <= k * x {
-    OrderedField::mul_nonneg(k, x, StrictOrder::le_of_lt(A.unit, k, hk), hx)
+    OrderedSemiring::mul_nonneg(k, x, StrictOrder::le_of_lt(A.unit, k, hk), hx)
 }
 
-theorem lin_scale_lt(k, x: A, hk: A.unit < k, hx: A.unit < x): A.unit < k * x { A.mul_pos(k, x, hk, hx) }
+theorem lin_scale_lt(k, x: A, hk: A.unit < k, hx: A.unit < x): A.unit < k * x { OrderedSemiring::mul_pos(k, x, hk, hx) }
 
 // A denominator is positive when its reciprocal is: `s·d ≈ 1` with `s`
 // positive (`Rat::inv_succ(n)`, or a fact `0 < x⁻¹`). This is how a row is
 // scaled by the denominator a reciprocal in it clears.
 theorem lin_den_pos(s, d: A, hs: A.unit < s, e: s * d ≈ A.of_int(OfNat(1))): A.unit < d {
-    A.pos_of_mul_pos(s, d, hs, StrictOrder::lt_respects_r(A.unit, A.of_int(OfNat(1)), s * d, A.rel_sym(s * d, A.of_int(OfNat(1)), e),
+    OrderedSemiring::pos_of_mul_pos(s, d, hs, StrictOrder::lt_respects_r(A.unit, A.of_int(OfNat(1)), s * d, A.rel_sym(s * d, A.of_int(OfNat(1)), e),
         lin_one_pos(s)))
 }
 
@@ -100,19 +101,19 @@ theorem lin_den_pos(s, d: A, hs: A.unit < s, e: s * d ≈ A.of_int(OfNat(1))): A
 // Sums of parts: strict as soon as one summand is.
 
 theorem lin_add_le_le(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x + y {
-    LocatedAddGroup::add_nonneg(x, y, hx, hy)
+    LocatedAddMonoid::add_nonneg(x, y, hx, hy)
 }
 
 theorem lin_add_lt_le(x, y: A, hx: A.unit < x, hy: A.unit <= y): A.unit < x + y {
-    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddGroup::add_lt_le_mono(A.unit, x, A.unit, y, hx, hy))
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddMonoid::add_lt_le_mono(A.unit, x, A.unit, y, hx, hy))
 }
 
 theorem lin_add_le_lt(x, y: A, hx: A.unit <= x, hy: A.unit < y): A.unit < x + y {
-    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddGroup::add_le_lt_mono(A.unit, x, A.unit, y, hx, hy))
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddMonoid::add_le_lt_mono(A.unit, x, A.unit, y, hx, hy))
 }
 
 theorem lin_add_lt_lt(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y {
-    OrderedAddGroup::add_pos(x, y, hx, hy)
+    OrderedAddMonoid::add_pos(x, y, hx, hy)
 }
 
 theorem lin_weaken(s: A, h: A.unit < s): A.unit <= s { StrictOrder::le_of_lt(A.unit, s, h) }
@@ -123,7 +124,7 @@ theorem lin_weaken(s: A, h: A.unit < s): A.unit <= s { StrictOrder::le_of_lt(A.u
 
 theorem lin_le_of_sub_nonneg(a, b: A, h: A.unit <= b + A.inv(a)): a <= b {
     StrictOrder::le_respects(A.unit + a, a, (b + A.inv(a)) + a, b, A.unit_l(a), OrderedAddGroup::sub_add_cancel(b, a),
-        OrderedAddGroup::add_le_mono_r(A.unit, b + A.inv(a), a, h))
+        OrderedAddMonoid::add_le_mono_r(A.unit, b + A.inv(a), a, h))
 }
 
 theorem lin_finish_le(a, b, k, s: A, hk: A.unit < k, hs: A.unit <= s, e: k * (b + A.inv(a)) ≈ s): a <= b {
@@ -131,11 +132,11 @@ theorem lin_finish_le(a, b, k, s: A, hk: A.unit < k, hs: A.unit <= s, e: k * (b 
         StrictOrder::le_respects(A.unit, A.unit, s, k * (b + A.inv(a)), A.rel_refl(A.unit), A.rel_sym(k * (b + A.inv(a)), s, e), hs);
     lin_le_of_sub_nonneg(a, b, A.le_of_not_lt(A.unit, b + A.inv(a), λ below => A.not_lt_of_le(A.unit, k * (b + A.inv(a)), scaled,
         StrictOrder::lt_respects_r(k * (b + A.inv(a)), k * A.unit, A.unit, A.mul_zero(k),
-            OrderedField::mul_lt_mono_l(b + A.inv(a), A.unit, k, below, hk)))))
+            OrderedSemiring::mul_lt_mono_l(b + A.inv(a), A.unit, k, below, hk)))))
 }
 
 theorem lin_finish_lt(a, b, k, s: A, hk: A.unit < k, hs: A.unit < s, e: k * (b + A.inv(a)) ≈ s): a < b {
-    OrderedAddGroup::lt_of_sub_pos(a, b, A.pos_of_mul_pos(k, b + A.inv(a), hk,
+    OrderedAddGroup::lt_of_sub_pos(a, b, OrderedSemiring::pos_of_mul_pos(k, b + A.inv(a), hk,
         StrictOrder::lt_respects_r(A.unit, s, k * (b + A.inv(a)), A.rel_sym(k * (b + A.inv(a)), s, e), hs)))
 }
 
@@ -153,11 +154,11 @@ theorem lin_not_lt_of_le(a, b: A, h: b <= a): ¬(a < b) { A.not_lt_of_le(b, a, h
 // squares are parts too, and `a <= b` is read back from a refutation of
 // `b < a`, so the goal's negation can be multiplied like a fact.
 
-theorem nlin_mul_le(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x * y { OrderedField::mul_nonneg(x, y, hx, hy) }
+theorem nlin_mul_le(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x * y { OrderedSemiring::mul_nonneg(x, y, hx, hy) }
 
-theorem nlin_mul_lt(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x * y { A.mul_pos(x, y, hx, hy) }
+theorem nlin_mul_lt(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x * y { OrderedSemiring::mul_pos(x, y, hx, hy) }
 
-theorem nlin_sq(x: A): A.unit <= x * x { OrderedField::sq_nonneg(x) }
+theorem nlin_sq(x: A): A.unit <= x * x { OrderedRing::sq_nonneg(x) }
 
 theorem nlin_le_of_refute(a, b: A, h: ¬(b < a)): a <= b { A.le_of_not_lt(a, b, h) }
 

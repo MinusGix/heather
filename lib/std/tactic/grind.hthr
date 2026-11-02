@@ -1,0 +1,1088 @@
+// `grind`: congruence closure over the goal's equations and the lemmas it
+// instantiates, with a certified proof when it closes the goal and the state
+// it built when it does not (issues/grind-port.md, docs/grind-design.md).
+//
+// `by grind()` proves an equation `l = r` from the equations among the goal's
+// locals; `by grind_with([e, …])` adds the equations the terms `e` prove
+// (a lemma at its instance, `List::append_nil(xs)`, or a local's
+// consequence, `h(3)`), and `by grind_using(["List::append_assoc"], [e, …])`
+// adds lemmas by name. The tactic builds an e-graph: every term the
+// equations and the goal mention, its subterms, and their classes under the
+// equations closed by congruence (`f(a) = g(b)` once `f = g` and `a = b`).
+// An equation under binders (a local, a hint or a named lemma) is a lemma:
+// one side is read as a pattern, and each of its matches among the graph's
+// terms, up to the classes, adds the lemma at that instance, in rounds,
+// until the goal closes or no new instance turns up (e-matching,
+// docs/grind-design.md §9). `grind_report` also says, on success, which
+// hints the proof cites.
+//
+// Terms are read as the kernel has them, a head applied to arguments
+// (`Spine`): an argument the function's type is dependent at (a type
+// argument) is part of the head and compared as it is, every other one is a
+// position congruence reads. A constructor value is read as its constructor
+// applied to its fields. A term read no further is an atom, and two atoms
+// are one node when they are the same global, local or literal, or are
+// definitionally equal (`Defeq`).
+//
+// When the two sides land in one class, the proof is the path between them in
+// the graph: each step is an equation it was given (or its `sym`) or a
+// congruence (`cong`, `congr_fun`, `congr` below, over the explanations of
+// the steps' parts), joined by `trans`. The kernel checks the term at the
+// `by`; the graph is never trusted. The graph is the e-graph library's
+// (`lib/std/data/egraph.hthr`) over grind's operators, and the proof its
+// explanation folded through `proof_alg`.
+//
+// When they do not, the failure is the graph itself: the class of each side,
+// every class of more than one term with its members, which locals were
+// read as equations and which were not, and each lemma's matches. One
+// equation between a member of each side's class closes the goal; the
+// report is there so a reader (a person, or a model at the hint interface)
+// can name it and rerun with it as a hint.
+//
+// A lemma's binder neither side binds and nothing depends on is a premise
+// (`hit: same(a, x) = True`, `h: i < n`), proved at each instance: an
+// equation by the graph, any premise by a local or a hint that is no
+// equation (`Defeq`), or by the instance search (`Synth`); an instance whose
+// premise is not proved waits and is tried again after later rounds
+// (docs/grind-design.md §11).
+//
+// Not yet: case splits, constructor injectivity and disjointness,
+// disequalities, and relations other than `=`. Each is a later round of
+// docs/grind-design.md §6.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+import derive;
+import pair;
+import egraph;
+
+// Congruence of an application in both places, and in the function alone.
+// (`cong`, the prelude's, is the argument alone.)
+theorem congr<A, B>({f: A → B}, {g: A → B}, {a: A}, {b: A}, hf: f = g, ha: a = b): f(a) = g(b) {
+    j(hf, λ h q => f(a) = h(b), j(ha, λ y q => f(a) = f(y), refl))
+}
+
+theorem congr_fun<A, B>({f: A → B}, {g: A → B}, {a: A}, hf: f = g): f(a) = g(a) {
+    j(hf, λ h q => f(a) = h(a), refl)
+}
+
+// ---------------------------------------------------------------------------
+// The graph: an e-graph of the library (`lib/std/data/egraph.hthr`) over
+// grind's operators, with what grind keeps beside each node.
+
+// How an atom is compared: by the global, local or literal it is (decided
+// here), or, for a constructor function and any other term, by `Defeq`
+// against the atoms of the same key.
+inductive AtomKey { KGlobal(id: Nat), KLocal(id: Nat), KLit(n: Nat), KCtor(ty: Nat, i: Nat), KOther }
+
+// The operators: atom number `n` (atoms are told apart here, so the graph
+// sees each as an operator of its own); a function applied to an argument,
+// the node's two children; and a function applied to an argument its type
+// is dependent at, which is part of the operator (`arg`, a node) so that
+// congruence reads only the function.
+inductive GOp { GAtomOp(n: Nat), GAppOp, GDepOp(arg: Nat) }
+
+fn gop_same(a: GOp, b: GOp) → Bool {
+    match a {
+        GAtomOp(n) => match b { GAtomOp(m) => n.same(m), _ => False },
+        GAppOp => match b { GAppOp => True, _ => False },
+        GDepOp(x) => match b { GDepOp(y) => x.same(y), _ => False },
+    }
+}
+
+// The operators of a lemma's pattern: an atom of a key (a global, local,
+// literal or constructor; a term compared only by `Defeq` is a wildcard in
+// a pattern), an application, and an application to a dependent argument,
+// whose argument (part of the graph's operator) binds variable `v`.
+inductive GQ { QKey(key: AtomKey), QApp, QDep(v: Nat) }
+
+// An equation given: its proof, its name for the report, and the names the
+// proofs of its premises cite (a lemma's instance; `[]` for any other).
+record Fact { proof: Expr, name: String, uses: List<String> }
+
+// Beside each node: the term as a tactic cites it, and whether it is a term
+// the equations or the goal mention (a partial application inside one is
+// not, and is left out of the report).
+record GInfo { expr: Expr, whole: Bool }
+
+// An atom: how it is compared, its handle, and its node.
+record AtomEntry { key: AtomKey, h: Handle, node: Nat }
+
+record Graph { eg: EGraph<GOp, Fact>, info: List<GInfo>, atoms: List<AtomEntry> }
+
+record Interned { g: Graph, node: Nat }
+
+// A lemma: an equation under binders, its proof, and the pattern its
+// instances are found by (one side, its variables the binders, then one
+// wildcard per subterm the pattern does not read). A binder the pattern does
+// not bind is a premise, proved at each instance. `matched` and `added`
+// count its matches and the instances added, for the report.
+record Lemma { name: String, proof: Expr, binders: Nat, premises: Nat, pat: Pattern<GQ>, matched: Nat, added: Nat }
+
+// An instance tried: the lemma's number, and the nodes its binders met
+// (`None` at a premise).
+record Inst { lemma: Nat, args: List<Option<Nat>> }
+
+// An instance waiting on a premise not proved yet, and the note that says
+// which: it is tried again after each round that adds instances, since an
+// equation the graph did not have may be there by then.
+record Pend { inst: Inst, note: Note }
+
+// A hint that is no equation: a fact a premise may be (`i < n`, or a
+// derived `Succ(a).le_trans(b, c, first, bc)`), by its proof, name and type.
+record Given { proof: Expr, name: String, ty: Handle }
+
+// The graph with the facts read: a note for each equation read or set aside,
+// the names of the locals that are no equation, the lemmas to instantiate,
+// the instances tried, the names of the hints given (for the report of
+// which ones the proof used), the goal's locals and the hints that are no
+// equation (a premise may be one), and the instances waiting on a premise.
+record Facts { g: Graph, read: List<Note>, skipped: List<String>, lemmas: List<Lemma>, seen: List<Inst>, offered: List<String>, locals: List<LocalInfo>, givens: List<Given>, pending: List<Pend> }
+
+fn with_graph(fs: Facts, g: Graph) → Facts { Facts(g, fs.read, fs.skipped, fs.lemmas, fs.seen, fs.offered, fs.locals, fs.givens, fs.pending) }
+
+fn with_pending(fs: Facts, ps: List<Pend>) → Facts { Facts(fs.g, fs.read, fs.skipped, fs.lemmas, fs.seen, fs.offered, fs.locals, fs.givens, ps) }
+
+fn graph_empty() → Graph { Graph(EGraph::empty<GOp, Fact>(), [], []) }
+
+fn class_of(g: Graph, i: Nat) → Nat { g.eg.find(i) }
+
+fn expr_at(g: Graph, i: Nat) → Expr {
+    match g.info.nth(i) { Some(n) => n.expr, None => NatLit(0) }
+}
+
+// Mark node `i` as the term `h`, mentioned whole: the report and the proof
+// cite it by `h`, as it was written, rather than by the node's structure.
+fn mark_whole(g: Graph, i: Nat, h: Handle) → Graph {
+    Graph(g.eg, g.info.update(i, λ n => GInfo(Hd(h), True)), g.atoms)
+}
+
+// The graph after an `add`: a new node gets its information.
+fn with_added(g: Graph, a: Added<GOp, Fact>, e: Expr) → Interned {
+    match a.id.same(g.info.len()) {
+        True => Interned(Graph(a.g, g.info ++ [GInfo(e, False)], g.atoms), a.id),
+        False => Interned(Graph(a.g, g.info, g.atoms), a.id),
+    }
+}
+
+// The node of `f` applied to `a`, made once.
+fn app_node(g: Graph, f: Nat, a: Nat, dependent: Bool) → Interned {
+    let e = App(expr_at(g, f), expr_at(g, a));
+    match dependent {
+        False => with_added(g, g.eg.add(gop_same, GAppOp, [f, a]), e),
+        True => with_added(g, g.eg.add(gop_same, GDepOp(a), [f]), e),
+    }
+}
+
+fn new_atom(g: Graph, h: Handle, key: AtomKey) → Interned {
+    let a = g.eg.fresh(GAtomOp(g.atoms.len()), []);
+    Interned(Graph(a.g, g.info ++ [GInfo(Hd(h), False)], g.atoms ++ [AtomEntry(key, h, a.id)]), a.id)
+}
+
+// Two keys: `Some(b)` when the keys decide whether the atoms are one, `None`
+// when `Defeq` does.
+fn key_decides(a: AtomKey, b: AtomKey) → Option<Bool> {
+    match a {
+        KGlobal(x) => match b { KGlobal(y) => Some(x.same(y)), _ => Some(False) },
+        KLocal(x) => match b { KLocal(y) => Some(x.same(y)), _ => Some(False) },
+        KLit(x) => match b { KLit(y) => Some(x.same(y)), _ => Some(False) },
+        KCtor(t, i) => match b { KCtor(u, k) => match t.same(u).and(i.same(k)) { True => None, False => Some(False) }, _ => Some(False) },
+        KOther => match b { KOther => None, _ => Some(False) },
+    }
+}
+
+// The atom an atom of `key` is decided to be, and the atoms `Defeq` has to
+// compare it with.
+record AtomSearch { found: Option<Nat>, ask: List<Nat> }
+
+fn atom_search(es: List<AtomEntry>, key: AtomKey, h: Handle, ask: List<Nat>) → AtomSearch {
+    match es {
+        Nil => AtomSearch(None, ask),
+        Cons(e, rest) => match key_decides(key, e.key) {
+            Some(b) => match b {
+                True => AtomSearch(Some(e.node), []),
+                False => atom_search(rest, key, h, ask),
+            },
+            None => match h.id.same(e.h.id) {
+                True => AtomSearch(Some(e.node), []),
+                False => atom_search(rest, key, h, ask ++ [e.node]),
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proofs: the library's explanation, folded into terms.
+
+// The lemmas a proof cites.
+record GrindLaws { trans: GlobalRef, sym: GlobalRef, cong: GlobalRef, congr: GlobalRef, congr_fun: GlobalRef, rfl: GlobalRef }
+
+fn sym_of(l: GrindLaws, p: Expr) → Expr { apps(Global(l.sym), [Blank, Blank, Blank, p]) }
+
+fn trans_of(l: GrindLaws, p: Expr, q: Expr) → Expr { apps(Global(l.trans), [Blank, Blank, Blank, Blank, p, q]) }
+
+fn rfl_of(l: GrindLaws, e: Expr) → Expr { apps(Global(l.rfl), [Blank, e]) }
+
+fn given_of(l: GrindLaws, f: Fact, forward: Bool) → Expr {
+    match forward { True => f.proof, False => sym_of(l, f.proof) }
+}
+
+// Congruence of node `from` and node `to` from their children's evidence:
+// `cong` when the functions are one node, `congr_fun` when the arguments
+// are (or the argument is part of the operator), `congr` otherwise. The
+// functions and arguments are passed explicitly: as holes, an equation
+// between partial applications does not unify (docs/grind-design.md §7).
+fn cong_of(l: GrindLaws, g: Graph, from: Nat, ks: List<KidProof<Expr>>) → Expr {
+    match ks {
+        Nil => NatLit(0),
+        Cons(kf, rest) => match rest {
+            Nil => match g.eg.node(from) {
+                Some(n) => match n.op {
+                    GDepOp(x) => apps(Global(l.congr_fun), [Blank, Blank, expr_at(g, kf.from), expr_at(g, kf.to), expr_at(g, x), kf.proof]),
+                    _ => NatLit(0),
+                },
+                None => NatLit(0),
+            },
+            Cons(ka, _) => match kf.from.same(kf.to) {
+                True => apps(Global(l.cong), [Blank, Blank, expr_at(g, kf.from), Blank, Blank, ka.proof]),
+                False => match ka.from.same(ka.to) {
+                    True => apps(Global(l.congr_fun), [Blank, Blank, expr_at(g, kf.from), expr_at(g, kf.to), expr_at(g, ka.from), kf.proof]),
+                    False => apps(Global(l.congr), [Blank, Blank, expr_at(g, kf.from), expr_at(g, kf.to), expr_at(g, ka.from), expr_at(g, ka.to), kf.proof, ka.proof]),
+                },
+            },
+        },
+    }
+}
+
+fn proof_alg(l: GrindLaws, g: Graph) → PathAlg<Fact, Expr> {
+    PathAlg(λ n => rfl_of(l, expr_at(g, n)), λ f fwd => given_of(l, f, fwd), λ from _ ks => cong_of(l, g, from, ks), λ p q => trans_of(l, p, q))
+}
+
+// ---------------------------------------------------------------------------
+// The report when the sides are not in one class.
+
+fn grind_num(n: Nat) → String { "#" ++ decimal_name(Succ(n), n) }
+
+// The whole terms among nodes `ms`, as cited.
+fn whole_of(g: Graph, ms: List<Nat>) → List<Expr> {
+    match ms {
+        Nil => [],
+        Cons(m, rest) => match g.info.nth(m) {
+            Some(n) => match n.whole { True => Cons(n.expr, whole_of(g, rest)), False => whole_of(g, rest) },
+            None => whole_of(g, rest),
+        },
+    }
+}
+
+fn member_notes(es: List<Expr>, c: String) → List<Note> {
+    match es {
+        Nil => [],
+        Cons(e, rest) => Cons(Under(At(e, Tried("member", "of class " ++ c))), member_notes(rest, c)),
+    }
+}
+
+fn exprs_count(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => Succ(exprs_count(rest)) } }
+
+// Every class of more than one whole term, by its representative, from the
+// graph's class table (`rows`, class `c` first): one pass, where reading
+// each class's members off the class list would be cubic in the nodes.
+fn class_notes(g: Graph, rows: List<List<Nat>>, c: Nat) → List<Note> {
+    match rows {
+        Nil => [],
+        Cons(ms, rest) => {
+            let ws = whole_of(g, ms);
+            let n = exprs_count(ws);
+            match n {
+                Zero => class_notes(g, rest, Succ(c)),
+                Succ(k) => match k {
+                    Zero => class_notes(g, rest, Succ(c)),
+                    Succ(_) => Cons(Tried("class " ++ grind_num(c), decimal_name(Succ(n), n) ++ " terms"), member_notes(ws, grind_num(c)))
+                        ++ class_notes(g, rest, Succ(c)),
+                },
+            }
+        },
+    }
+}
+
+// The names of the locals that are not equations, as one line.
+fn names_line(ns: List<String>) → String {
+    match ns {
+        Nil => "",
+        Cons(n, rest) => match rest { Nil => n, Cons(_, _) => n ++ ", " ++ names_line(rest) },
+    }
+}
+
+fn stuck_notes(g: Graph, l: Nat, r: Nat, fs: Facts) → List<Note> {
+    let cl = grind_num(class_of(g, l));
+    let cr = grind_num(class_of(g, r));
+    let skipped: List<Note> = match fs.skipped { Nil => [], Cons(_, _) => [Tried("not equations, not read", names_line(fs.skipped))] };
+    Cons(At(expr_at(g, l), Tried("the left side", "in class " ++ cl)),
+    Cons(At(expr_at(g, r), Tried("the right side", "in class " ++ cr)),
+        class_notes(g, g.eg.class_table(), 0) ++ fs.read ++ skipped
+            ++ [Tried("to close it", "one more equation between a member of " ++ cl ++ " and a member of " ++ cr ++ ", as a hint: `grind_with([…])`")]))
+}
+
+// ---------------------------------------------------------------------------
+// Reading terms into the graph.
+
+fn atom_key(v: Head) → AtomKey {
+    match v {
+        HGlobal(g, _, args) => match args { Nil => KGlobal(g.id), Cons(_, _) => KOther },
+        HLocal(x, args) => match args { Nil => KLocal(x.id), Cons(_, _) => KOther },
+        HLit(n) => KLit(n),
+        _ => KOther,
+    }
+}
+
+// The first of `ask` that `Defeq` finds is `h`.
+fn atom_among(g: Graph, h: Handle, ask: List<Nat>) → Tac<Option<Nat>> {
+    match ask {
+        Nil => Pure(None),
+        Cons(i, rest) => defeq(Hd(h), expr_at(g, i)).bind(λ same => match same {
+            True => Pure(Some(i)),
+            False => atom_among(g, h, rest),
+        }),
+    }
+}
+
+// The atom node of `h`, read under `key`.
+fn atom(g: Graph, h: Handle, key: AtomKey) → Tac<Interned> {
+    let s = atom_search(g.atoms, key, h, []);
+    match s.found {
+        Some(i) => Pure(Interned(g, i)),
+        None => atom_among(g, h, s.ask).bind(λ o => match o {
+            Some(i) => Pure(Interned(g, i)),
+            None => Pure(new_atom(g, h, key)),
+        }),
+    }
+}
+
+// The fields of a constructor value, as arguments of its function.
+fn field_args(hs: List<Handle>) → List<SpineArg> {
+    match hs { Nil => [], Cons(h, rest) => Cons(SpineArg(h, False), field_args(rest)) }
+}
+
+// A term read, marked as one the equations or the goal mention.
+fn whole(h: Handle, t: Tac<Interned>) → Tac<Interned> { t.bind(λ r => Pure(Interned(mark_whole(r.g, r.node, h), r.node))) }
+
+fn then(t: Tac<Interned>, k: Interned → Tac<Interned>) → Tac<Interned> { t.bind(k) }
+
+// A term, or the arguments still to apply to node `at`.
+inductive Intern { ITerm(h: Handle), IArgs(at: Nat, args: List<SpineArg>) }
+
+// A constructor value's function, when `Ctors` builds one.
+fn ctor_fn(cs: List<CtorInfo>, i: Nat) → Option<Handle> {
+    match cs.nth(i) { None => None, Some(c) => c.ctor }
+}
+
+// How a term whose spine has no arguments is read: as its constructor's
+// function applied to its fields, or as an atom.
+inductive Leaf { LCtor(ty: Nat, i: Nat, fields: List<Handle>), LAtom(key: AtomKey) }
+
+fn leaf_of(v: Head) → Leaf {
+    match v {
+        HCtor(ty, i, _, fields) => match fields { Nil => LAtom(KCtor(ty.id, i)), Cons(_, _) => LCtor(ty.id, i, fields) },
+        _ => LAtom(atom_key(v)),
+    }
+}
+
+fn ctor_leaf(g: Graph, h: Handle, ty: Nat, i: Nat) → Tac<Option<Interned>> {
+    infer(Hd(h)).bind(λ c => match c {
+        Refused(_) => Pure(None),
+        Accepted(t) => ctors(t).bind(λ cs => match cs {
+            Refused(_) => Pure(None),
+            Accepted(infos) => match ctor_fn(infos, i) {
+                None => Pure(None),
+                Some(fh) => atom(g, fh, KCtor(ty, i)).bind(λ a => Pure(Some(a))),
+            },
+        }),
+    })
+}
+
+fn intern(fuel: Nat, g: Graph, t: Intern) → Tac<Interned> {
+    match fuel {
+        Zero => fail("grind: a term nests deeper than the reader's fuel", []),
+        Succ(f) => match t {
+            ITerm(h) => whole(h, spine(h).bind(λ c => match c {
+                Accepted(sp) => match sp.args {
+                    Cons(_, _) => view(sp.head).bind(λ v => atom(g, sp.head, atom_key(v))).bind(λ hd => intern(f, hd.g, IArgs(hd.node, sp.args))),
+                    Nil => view(h).bind(λ v => match leaf_of(v) {
+                        LAtom(key) => atom(g, h, key),
+                        LCtor(ty, i, fields) => ctor_leaf(g, h, ty, i).bind(λ o => match o {
+                            None => atom(g, h, KOther),
+                            Some(fnode) => intern(f, fnode.g, IArgs(fnode.node, field_args(fields))),
+                        }),
+                    }),
+                },
+                Refused(_) => atom(g, h, KOther),
+            })),
+            IArgs(at, args) => match args {
+                Nil => Pure(Interned(g, at)),
+                Cons(a, rest) => then(match a.dependent {
+                    True => view(a.arg).bind(λ v => atom(g, a.arg, atom_key(v))),
+                    False => intern(f, g, ITerm(a.arg)),
+                }, λ x => {
+                    let n = app_node(x.g, at, x.node, a.dependent);
+                    intern(f, n.g, IArgs(n.node, rest))
+                }),
+            },
+        },
+    }
+}
+
+fn read_term(g: Graph, h: Handle) → Tac<Interned> { intern(4096, g, ITerm(h)) }
+
+// Is `ty` an equation under binders (`(n: Nat) → f(n) = n`)?
+fn concludes_equation(fuel: Nat, ty: Handle) → Tac<Bool> {
+    match fuel {
+        Zero => Pure(False),
+        Succ(f) => view(ty).bind(λ v => match v {
+            HEq(_, _) => Pure(True),
+            HPi(_) => open(ty, "_").bind(λ c => match c {
+                Refused(_) => Pure(False),
+                Accepted(o) => concludes_equation(f, o.body),
+            }),
+            _ => Pure(False),
+        }),
+    }
+}
+
+// The two sides of an equation, as written or once in head normal form.
+fn sides_of(ty: Handle) → Tac<Option<Pair<Handle, Handle>>> {
+    view(ty).bind(λ v => match v {
+        HEq(l, r) => Pure(Some(Pair(l, r))),
+        _ => whnf(ty).bind(λ c => match c {
+            Refused(_) => Pure(None),
+            Accepted(w) => view(w).bind(λ wv => match wv {
+                HEq(l, r) => Pure(Some(Pair(l, r))),
+                _ => Pure(None),
+            }),
+        }),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Lemmas: equations under binders, instantiated by e-matching.
+//
+// A lemma's type is opened binder by binder, and one side of its equation is
+// read as a pattern (`Pattern<GQ>`, the e-graph library's) the way a term is
+// read into the graph: a binder is a variable, a global, local, literal or
+// constructor is an atom of its key, an application is `QApp` or `QDep`,
+// and a term only `Defeq` could compare (a λ, a type built from a binder) is
+// a wildcard. Its matches are the graph's terms that are instances of that
+// side up to the classes; each new one is the lemma applied to the nodes
+// its binders met, an equation like any other once the kernel's type of it
+// is read.
+
+// Does a pattern's atom of key `a` match the graph's atom of key `b`? A
+// constructor matches at any instance of its type's parameters (they are
+// bound elsewhere in the pattern, or by the instance's type).
+fn key_same(a: AtomKey, b: AtomKey) → Bool {
+    match a {
+        KCtor(t, i) => match b { KCtor(u, k) => t.same(u).and(i.same(k)), _ => False },
+        _ => match key_decides(a, b) { Some(x) => x, None => False },
+    }
+}
+
+// Does pattern operator `q` match the graph's operator `op`?
+fn gq_test(g: Graph, q: GQ, op: GOp, s: Subst) → Option<Subst> {
+    match q {
+        QKey(k) => match op {
+            GAtomOp(n) => match g.atoms.nth(n) {
+                None => None,
+                Some(e) => match key_same(k, e.key) { True => Some(s), False => None },
+            },
+            _ => None,
+        },
+        QApp => match op { GAppOp => Some(s), _ => None },
+        QDep(v) => match op { GDepOp(x) => g.eg.bind(s, v, x), _ => None },
+    }
+}
+
+// A pattern being read: its items, its variables so far (the binders come
+// first), and the item just read.
+record PB { items: List<PItem<GQ>>, vars: Nat, at: Nat }
+
+fn pb_push(b: PB, it: PItem<GQ>) → PB { PB(b.items ++ [it], b.vars, b.items.len()) }
+
+// A variable no binder is: what the pattern does not read.
+fn pb_wild(b: PB) → PB { PB(b.items ++ [PVar(b.vars)], Succ(b.vars), b.items.len()) }
+
+fn binder_index(xs: List<Nat>, id: Nat, i: Nat) → Option<Nat> {
+    match xs { Nil => None, Cons(x, rest) => match x.same(id) { True => Some(i), False => binder_index(rest, id, Succ(i)) } }
+}
+
+fn pb_key(b: PB, k: AtomKey) → PB {
+    match k { KOther => pb_wild(b), _ => pb_push(b, POp(QKey(k), [])) }
+}
+
+// A term with no arguments, read as a pattern item.
+fn pat_leaf(b: PB, binders: List<Nat>, v: Head) → PB {
+    match v {
+        HLocal(x, args) => match args {
+            Nil => match binder_index(binders, x.id, 0) { Some(k) => pb_push(b, PVar(k)), None => pb_key(b, KLocal(x.id)) },
+            Cons(_, _) => pb_wild(b),
+        },
+        HCtor(ty, i, _, _) => pb_key(b, KCtor(ty.id, i)),
+        _ => pb_key(b, atom_key(v)),
+    }
+}
+
+// The variable a dependent argument binds: its binder's, or a wildcard.
+record DepVar { b: PB, v: Nat }
+
+fn dep_var(b: PB, binders: List<Nat>, v: Head) → DepVar {
+    let wild = DepVar(PB(b.items, Succ(b.vars), b.at), b.vars);
+    match v {
+        HLocal(x, args) => match args {
+            Nil => match binder_index(binders, x.id, 0) { Some(k) => DepVar(b, k), None => wild },
+            Cons(_, _) => wild,
+        },
+        _ => wild,
+    }
+}
+
+// A term, or the arguments still to apply to the item just read.
+inductive PRead { PTerm(h: Handle), PArgs(args: List<SpineArg>) }
+
+fn pat_then(t: Tac<PB>, k: PB → Tac<PB>) → Tac<PB> { t.bind(k) }
+
+fn pat_read(fuel: Nat, binders: List<Nat>, b: PB, t: PRead) → Tac<PB> {
+    match fuel {
+        Zero => Pure(pb_wild(b)),
+        Succ(f) => match t {
+            PTerm(h) => spine(h).bind(λ c => match c {
+                Refused(_) => Pure(pb_wild(b)),
+                Accepted(sp) => match sp.args {
+                    Cons(_, _) => view(sp.head).bind(λ v => pat_read(f, binders, pat_leaf(b, binders, v), PArgs(sp.args))),
+                    Nil => view(h).bind(λ v => match v {
+                        HCtor(ty, i, _, fields) => match fields {
+                            Nil => Pure(pb_key(b, KCtor(ty.id, i))),
+                            Cons(_, _) => pat_read(f, binders, pb_key(b, KCtor(ty.id, i)), PArgs(field_args(fields))),
+                        },
+                        _ => Pure(pat_leaf(b, binders, v)),
+                    }),
+                },
+            }),
+            PArgs(args) => match args {
+                Nil => Pure(b),
+                Cons(a, rest) => {
+                    let hd = b.at;
+                    match a.dependent {
+                        True => view(a.arg).bind(λ v => {
+                            let d = dep_var(b, binders, v);
+                            pat_read(f, binders, pb_push(d.b, POp(QDep(d.v), [hd])), PArgs(rest))
+                        }),
+                        False => pat_then(pat_read(f, binders, b, PTerm(a.arg)), λ x => pat_read(f, binders, pb_push(x, POp(QApp, [hd, x.at])), PArgs(rest))),
+                    }
+                },
+            },
+        },
+    }
+}
+
+// Does item list `is` bind variable `v`?
+fn binds(is: List<PItem<GQ>>, v: Nat) → Bool {
+    match is {
+        Nil => False,
+        Cons(it, rest) => match it {
+            PVar(w) => w.same(v).or(binds(rest, v)),
+            POp(q, _) => match q { QDep(w) => w.same(v).or(binds(rest, v)), _ => binds(rest, v) },
+        },
+    }
+}
+
+fn binds_below(is: List<PItem<GQ>>, n: Nat) → Bool {
+    match n { Zero => True, Succ(k) => binds(is, k).and(binds_below(is, k)) }
+}
+
+// Does item list `is` bind every binder from number `k` on that something
+// after it depends on (`deps`, one flag per binder)? One nothing depends on
+// is a premise (`h: i < n`, `hit: same(a, x) = True`): it is proved at the
+// instance rather than matched. A binder only a premise mentions (`∃`-like)
+// is depended on and unbound, so the side is no pattern.
+fn binds_needed(is: List<PItem<GQ>>, deps: List<Bool>, k: Nat) → Bool {
+    match deps { Nil => True, Cons(d, rest) => d.not().or(binds(is, k)).and(binds_needed(is, rest, Succ(k))) }
+}
+
+// How many of the first `n` binders the items leave unbound: the premises.
+fn unbound_count(is: List<PItem<GQ>>, n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => match binds(is, k) { True => unbound_count(is, k), False => Succ(unbound_count(is, k)) } }
+}
+
+// A side is a pattern when it binds every binder something depends on and
+// is more than one.
+fn usable(b: PB, deps: List<Bool>) → Bool {
+    let bare: Bool = match b.items.nth(b.at) { Some(it) => match it { PVar(_) => True, POp(_, _) => False }, None => True };
+    bare.not().and(binds_needed(b.items, deps, 0))
+}
+
+// A lemma's binders opened, whether something after each depends on it, and
+// the statement under them.
+record Tele { ids: List<Nat>, deps: List<Bool>, body: Handle }
+
+fn open_binders(fuel: Nat, ty: Handle, ids: List<Nat>, deps: List<Bool>) → Tac<Tele> {
+    match fuel {
+        Zero => Pure(Tele(ids, deps, ty)),
+        Succ(f) => view(ty).bind(λ v => match v {
+            HPi(_) => open(ty, "x").bind(λ c => match c {
+                Refused(_) => Pure(Tele(ids, deps, ty)),
+                Accepted(o) => open_binders(f, o.body, ids ++ [o.local.ref.id], deps ++ [o.dependent]),
+            }),
+            _ => Pure(Tele(ids, deps, ty)),
+        }),
+    }
+}
+
+fn read_pattern(binders: List<Nat>, side: Handle) → Tac<PB> {
+    pat_read(1024, binders, PB([], binders.len(), 0), PTerm(side))
+}
+
+fn lemma_at(name: String, proof: Expr, n: Nat, b: PB) → Lemma {
+    Lemma(name, proof, n, unbound_count(b.items, n), Pattern(b.items, b.at, b.vars), 0, 0)
+}
+
+// The lemma `proof : ty`, its pattern the left side, or the right one when
+// the left is a bare binder or misses a binder something depends on; the
+// binders it leaves are its premises. `None` when neither side is a pattern.
+fn lemma_of(name: String, proof: Expr, ty: Handle) → Tac<Option<Lemma>> {
+    open_binders(64, ty, [], []).bind(λ t => sides_of(t.body).bind(λ o => match o {
+        None => Pure(None),
+        Some(p) => read_pattern(t.ids, p.fst).bind(λ lb => match usable(lb, t.deps) {
+            True => Pure(Some(lemma_at(name, proof, t.ids.len(), lb))),
+            False => read_pattern(t.ids, p.snd).bind(λ rb => match usable(rb, t.deps) {
+                True => Pure(Some(lemma_at(name, proof, t.ids.len(), rb))),
+                False => Pure(None),
+            }),
+        }),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Reading the facts.
+
+fn facts_note(acc: Facts, n: Note) → Facts { Facts(acc.g, acc.read ++ [n], acc.skipped, acc.lemmas, acc.seen, acc.offered, acc.locals, acc.givens, acc.pending) }
+
+// `n` things, as a count with its noun.
+fn counted(n: Nat, one: String, many: String) → String {
+    decimal_name(Succ(n), n) ++ " " ++ match n { Succ(Zero) => one, _ => many }
+}
+
+fn lemma_read(lm: Lemma) → String {
+    match lm.premises {
+        Zero => "a lemma, instantiated by matching",
+        Succ(Zero) => "a lemma, instantiated by matching, its premise proved at each instance",
+        Succ(_) => "a lemma, instantiated by matching, its " ++ decimal_name(Succ(lm.premises), lm.premises) ++ " premises proved at each instance",
+    }
+}
+
+// One fact: `proof` of the statement `ty`, called `name`: an equation, read
+// into the graph; an equation under binders, a lemma to instantiate; or,
+// for a local, nothing, named only in the report's last line (a hint that
+// is no equation has a line of its own).
+fn read_fact(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) → Tac<Facts> {
+    sides_of(ty).bind(λ o => match o {
+        None => concludes_equation(64, ty).bind(λ q => match q {
+            True => lemma_of(name, proof, ty).bind(λ ol => match ol {
+                None => Pure(facts_note(acc, Tried(name, "an equation under binders, not instantiated: neither side mentions every binder the rest of the statement depends on"))),
+                Some(lm) => Pure(Facts(acc.g, acc.read ++ [Tried(name, lemma_read(lm))], acc.skipped, acc.lemmas ++ [lm], acc.seen, acc.offered, acc.locals, acc.givens, acc.pending)),
+            }),
+            False => match local {
+                True => Pure(Facts(acc.g, acc.read, acc.skipped ++ [name], acc.lemmas, acc.seen, acc.offered, acc.locals, acc.givens, acc.pending)),
+                False => Pure(Facts(acc.g, acc.read ++ [Tried(name, "not an equation: kept for the premises")], acc.skipped, acc.lemmas, acc.seen, acc.offered, acc.locals, acc.givens ++ [Given(proof, name, ty)], acc.pending)),
+            },
+        }),
+        Some(p) => read_term(acc.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
+            Pure(Facts(Graph(y.g.eg.union(x.node, y.node, Fact(proof, name, [])), y.g.info, y.g.atoms), acc.read ++ [Tried(name, "read as an equation")], acc.skipped, acc.lemmas, acc.seen, acc.offered, acc.locals, acc.givens, acc.pending)))),
+    })
+}
+
+fn read_locals(acc: Facts, ls: List<LocalInfo>) → Tac<Facts> {
+    match ls {
+        Nil => Pure(acc),
+        Cons(l, rest) => read_fact(acc, Local(l.ref), l.name, l.ty, True).bind(λ a => read_locals(a, rest)),
+    }
+}
+
+fn offer(acc: Facts, name: String) → Facts { Facts(acc.g, acc.read, acc.skipped, acc.lemmas, acc.seen, acc.offered ++ [name], acc.locals, acc.givens, acc.pending) }
+
+fn read_hints(acc: Facts, hs: List<Expr>, k: Nat) → Tac<Facts> {
+    match hs {
+        Nil => Pure(acc),
+        Cons(e, rest) => {
+            let name = "hint " ++ decimal_name(Succ(k), k);
+            infer(e).bind(λ c => match c {
+                Refused(why) => fail("grind: " ++ name ++ " does not elaborate: " ++ why, []),
+                Accepted(ty) => read_fact(offer(acc, name), e, name, ty, False).bind(λ a => read_hints(a, rest, Succ(k))),
+            })
+        },
+    }
+}
+
+// Lemmas by name, resolved where the `by` is.
+fn read_names(acc: Facts, ns: List<String>) → Tac<Facts> {
+    match ns {
+        Nil => Pure(acc),
+        Cons(n, rest) => resolve(n).bind(λ c => match c {
+            Refused(why) => fail("grind: `" ++ n ++ "` does not resolve: " ++ why, []),
+            Accepted(h) => infer(Hd(h)).bind(λ t => match t {
+                Refused(why) => fail("grind: `" ++ n ++ "` has no type: " ++ why, []),
+                Accepted(ty) => read_fact(offer(acc, n), Hd(h), n, ty, False).bind(λ a => read_names(a, rest)),
+            }),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Instantiating: rounds of matching every lemma against the closed graph.
+
+// How many rounds of matching, and how many new instances one round adds.
+fn grind_rounds() → Nat { 8 }
+
+fn grind_round_cap() → Nat { 64 }
+
+fn known(g: Graph, seen: List<Inst>, k: Nat, a: List<Option<Nat>>) → Bool {
+    match seen {
+        Nil => False,
+        Cons(i, rest) => match i.lemma.same(k).and(g.eg.subst_same(i.args, a)) { True => True, False => known(g, rest, k, a) },
+    }
+}
+
+// The matches of lemma `k` not seen before (up to the classes of what its
+// binders met).
+fn new_insts(g: Graph, k: Nat, n: Nat, ms: List<EMatched>, seen: List<Inst>) → List<Inst> {
+    match ms {
+        Nil => [],
+        Cons(m, rest) => {
+            let a = m.s.at.take(n);
+            match known(g, seen, k, a) {
+                True => new_insts(g, k, n, rest, seen),
+                False => Cons(Inst(k, a), new_insts(g, k, n, rest, Cons(Inst(k, a), seen))),
+            }
+        },
+    }
+}
+
+record Found { insts: List<Inst>, lemmas: List<Lemma> }
+
+// Continue with `t` once `n` is computed. The host gives the evaluation
+// between two requests a fixed fuel, and a round's pure work (closing the
+// graph, matching every lemma against every node) outgrows it on a graph of
+// a few dozen terms; asking about `n`, a number that depends on one piece of
+// that work, makes the piece its own evaluation.
+fn settled<A>(n: Nat, t: Tac<A>) → Tac<A> { defeq(NatLit(n), NatLit(n)).bind(λ _ => t) }
+
+fn round_insts(g: Graph, table: List<List<Nat>>, ls: List<Lemma>, k: Nat, seen: List<Inst>, cap: Nat) → Tac<Found> {
+    match ls {
+        Nil => Pure(Found([], [])),
+        Cons(lm, rest) => {
+            let ms = g.eg.ematch(λ q op s => gq_test(g, q, op, s), table, lm.pat);
+            let fresh = new_insts(g, k, lm.binders, ms, seen).take(cap);
+            let here = Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pat, lm.matched + ms.len(), lm.added);
+            settled(here.matched + fresh.len(), round_insts(g, table, rest, Succ(k), seen ++ fresh, cap.sub(fresh.len())).bind(λ tail =>
+                Pure(Found(fresh ++ tail.insts, Cons(here, tail.lemmas)))))
+        },
+    }
+}
+
+fn bump_added(lm: Lemma) → Lemma { Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pat, lm.matched, Succ(lm.added)) }
+
+// ---------------------------------------------------------------------------
+// Concluding.
+
+fn law(name: String) → Tac<GlobalRef> { lookup(name).or_fail("grind: `" ++ name ++ "`: ") }
+
+fn grind_laws() → Tac<GrindLaws> {
+    law("trans").bind(λ t => law("sym").bind(λ s => law("cong").bind(λ c =>
+    law("grind::congr").bind(λ cr => law("grind::congr_fun").bind(λ cf => law("tactic::rfl").bind(λ r =>
+    Pure(GrindLaws(t, s, c, cr, cf, r))))))))
+}
+
+// The names of the facts a path cites, by the same explanation the proof is.
+fn cited_alg() → PathAlg<Fact, List<String>> {
+    PathAlg(λ _ => [], λ f _ => Cons(f.name, f.uses), λ _ _ ks => concat_map(ks, λ k => k.proof), λ p q => p ++ q)
+}
+
+fn chars_same(xs: List<Char>, ys: List<Char>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, xr) => match ys { Nil => False, Cons(y, yr) => x.code.same(y.code).and(chars_same(xr, yr)) },
+    }
+}
+
+fn name_in(ns: List<String>, n: String) → Bool {
+    match ns { Nil => False, Cons(m, rest) => chars_same(m.chars, n.chars).or(name_in(rest, n)) }
+}
+
+fn names_once(ns: List<String>, done: List<String>) → List<String> {
+    match ns {
+        Nil => [],
+        Cons(n, rest) => match name_in(done, n) {
+            False => Cons(n, names_once(rest, Cons(n, done))),
+            True => names_once(rest, done),
+        },
+    }
+}
+
+fn lemma_notes(ls: List<Lemma>) → List<Note> {
+    match ls {
+        Nil => [],
+        Cons(lm, rest) => Cons(match lm.matched {
+            Zero => Tried(lm.name, "its pattern never matched a term of the graph"),
+            Succ(_) => Tried(lm.name, decimal_name(Succ(lm.matched), lm.matched) ++ " matches, " ++ decimal_name(Succ(lm.added), lm.added) ++ " instances added"),
+        }, lemma_notes(rest)),
+    }
+}
+
+// What `grind_report` says: the hints and named lemmas the proof cites,
+// the locals it cites, and the hints it does not, so the call can be
+// narrowed to the ones it used.
+fn say_used(fs: Facts, used: List<String>) → Tac<True> {
+    let cited = fs.offered.filter(λ n => name_in(used, n));
+    let unused = fs.offered.filter(λ n => name_in(used, n).not());
+    let locals = used.filter(λ n => name_in(fs.offered, n).not());
+    let hints: String = match cited { Nil => "none of the hints", Cons(_, _) => names_line(cited) };
+    let rest: String = match locals { Nil => "", Cons(_, _) => ", and the locals " ++ names_line(locals) };
+    let not: String = match unused { Nil => "", Cons(_, _) => "; not used: " ++ names_line(unused) };
+    say("grind: the proof uses " ++ hints ++ rest ++ not, [])
+}
+
+fn finish_with(report: Bool, fs: Facts, used: List<String>, p: Expr) → Tac<Expr> {
+    match report {
+        False => Pure(p),
+        True => Tac::bind(say_used(fs, used), λ _ => Pure(p)),
+    }
+}
+
+// The instances waiting on a premise, the first few by the premise each
+// is missing.
+fn pending_notes(ps: List<Pend>) → List<Note> {
+    match ps {
+        Nil => [],
+        Cons(_, _) => {
+            let n = ps.len();
+            let shown = ps.take(4).map(λ p => p.note);
+            let more: List<Note> = match n.sub(4) { Zero => [], Succ(k) => [Tried("premises", "and " ++ counted(Succ(k), "more instance", "more instances") ++ " waiting on one")] };
+            Cons(Tried("premises", counted(n, "instance", "instances") ++ " not added: a premise was not proved"), shown ++ more)
+        },
+    }
+}
+
+fn stuck(g: Graph, fs: Facts, lhs: Nat, rhs: Nat, why: String) → Tac<Expr> {
+    let lemmas: List<Note> = match fs.lemmas { Nil => [], Cons(_, _) => lemma_notes(fs.lemmas) ++ pending_notes(fs.pending) ++ [Tried("matching", why)] };
+    fail("grind: the two sides are not in one class", stuck_notes(g, lhs, rhs, Facts(fs.g, fs.read ++ lemmas, fs.skipped, fs.lemmas, fs.seen, fs.offered, fs.locals, fs.givens, fs.pending)))
+}
+
+fn closed(fs: Facts) → Facts {
+    with_graph(fs, Graph(fs.g.eg.close(gop_same, Succ(fs.g.eg.size())), fs.g.info, fs.g.atoms))
+}
+
+// ---------------------------------------------------------------------------
+// Instances: a lemma applied to the nodes its binders met, each premise
+// proved in order.
+//
+// A premise is proved at the instance, where it mentions only the matched
+// terms: an equation by the graph (its sides read in, the graph closed, and
+// the explanation if they meet), and any premise by a local whose type it is
+// up to `Defeq` (a branch's `hit: same(a, x) = True`, whose `same` may be
+// spelled over another memory with the same space) or by `Synth`, the
+// `:= infer` search (instances, computation, facts-on-demand's evidence
+// rules). Nothing is trusted: the instance is `infer`red, and the kernel
+// checks the proof it ends up in.
+
+// A premise's proof, the names it cites, and the facts after reading it.
+record Premised { fs: Facts, proof: Option<Expr>, uses: List<String> }
+
+fn by_graph(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
+    sides_of(ty).bind(λ o => match o {
+        None => Pure(Premised(fs, None, [])),
+        Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => {
+            let c = closed(with_graph(fs, y.g));
+            let cx = class_of(c.g, x.node);
+            let cy = class_of(c.g, y.node);
+            settled(cx + cy, match cx.same(cy) {
+                False => Pure(Premised(c, None, [])),
+                True => match c.g.eg.explain(proof_alg(l, c.g), x.node, y.node) {
+                    None => Pure(Premised(c, None, [])),
+                    Some(pf) => Pure(Premised(c, Some(pf), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns })),
+                },
+            })
+        })),
+    })
+}
+
+fn by_local(ty: Handle, ls: List<Given>) → Tac<Option<Given>> {
+    match ls {
+        Nil => Pure(None),
+        Cons(lo, rest) => defeq(Hd(ty), Hd(lo.ty)).bind(λ same => match same { True => Pure(Some(lo)), False => by_local(ty, rest) }),
+    }
+}
+
+fn on_premised(t: Tac<Premised>, k: Premised → Tac<Premised>) → Tac<Premised> { t.bind(k) }
+
+// The premise `ty`: by the graph, by a local, or by `Synth`.
+fn prove_premise(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
+    on_premised(by_graph(l, fs, ty), λ pg => match pg.proof {
+        Some(_) => Pure(pg),
+        None => by_local(ty, pg.fs.locals.map(λ lo => Given(Local(lo.ref), lo.name, lo.ty)) ++ pg.fs.givens).bind(λ ol => match ol {
+            Some(gv) => Pure(Premised(pg.fs, Some(gv.proof), [gv.name])),
+            None => synth(ty).bind(λ c => match c {
+                Accepted(h) => Pure(Premised(pg.fs, Some(Hd(h)), [])),
+                Refused(_) => Pure(Premised(pg.fs, None, [])),
+            }),
+        }),
+    })
+}
+
+// The domain of a function type, as written or once in head normal form.
+fn pi_domain(ty: Handle) → Tac<Option<Handle>> {
+    view(ty).bind(λ v => match v {
+        HPi(d) => Pure(Some(d)),
+        _ => whnf(ty).bind(λ c => match c {
+            Refused(_) => Pure(None),
+            Accepted(w) => view(w).bind(λ wv => match wv { HPi(d) => Pure(Some(d)), _ => Pure(None) }),
+        }),
+    })
+}
+
+// What instantiating gives: the instance's proof and the names its
+// premises' proofs cite; a premise not proved, by a note that says which;
+// or nothing, where the match is ill-typed (through a wildcard).
+inductive Built { BProof(proof: Expr, uses: List<String>), BMiss(note: Note), BDrop }
+
+record Building { fs: Facts, b: Built }
+
+fn premise_name(name: String, k: Nat) → String { name ++ ", premise " ++ decimal_name(Succ(Succ(k)), Succ(k)) }
+
+// `pr` applied to the rest of an instance's arguments: a matched node's
+// term, or a premise's proof (the `k`th premise next).
+fn build(l: GrindLaws, fs: Facts, name: String, pr: Expr, uses: List<String>, as: List<Option<Nat>>, k: Nat) → Tac<Building> {
+    match as {
+        Nil => Pure(Building(fs, BProof(pr, uses))),
+        Cons(o, rest) => match o {
+            Some(n) => build(l, fs, name, App(pr, expr_at(fs.g, n)), uses, rest, k),
+            None => infer(pr).bind(λ c => match c {
+                Refused(_) => Pure(Building(fs, BDrop)),
+                Accepted(ty) => pi_domain(ty).bind(λ od => match od {
+                    None => Pure(Building(fs, BDrop)),
+                    Some(dom) => prove_premise(l, fs, dom).bind(λ pm => match pm.proof {
+                        None => Pure(Building(pm.fs, BMiss(At(Hd(dom), Tried(premise_name(name, k), "not proved: its sides are not in one class, no local or hint is it, and the instance search finds none"))))),
+                        Some(pp) => build(l, pm.fs, name, App(pr, pp), uses ++ pm.uses, rest, Succ(k)),
+                    }),
+                }),
+            }),
+        },
+    }
+}
+
+// Add the instance's equation, or set it aside to wait on its premise; one
+// the kernel's type of does not make an equation of is left out.
+fn on_built(bd: Building, i: Inst, lm: Lemma) → Tac<Facts> {
+    let fs = bd.fs;
+    match bd.b {
+        BDrop => Pure(fs),
+        BMiss(n) => Pure(with_pending(fs, fs.pending ++ [Pend(i, n)])),
+        BProof(pr, uses) => infer(pr).bind(λ c => match c {
+            Refused(_) => Pure(fs),
+            Accepted(ty) => sides_of(ty).bind(λ o => match o {
+                None => Pure(fs),
+                Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
+                    Pure(Facts(Graph(y.g.eg.union(x.node, y.node, Fact(pr, lm.name, uses)), y.g.info, y.g.atoms), fs.read, fs.skipped, fs.lemmas.update(i.lemma, bump_added), fs.seen, fs.offered, fs.locals, fs.givens, fs.pending)))),
+            }),
+        }),
+    }
+}
+
+fn add_insts(l: GrindLaws, fs: Facts, is: List<Inst>) → Tac<Facts> {
+    match is {
+        Nil => Pure(fs),
+        Cons(i, rest) => match fs.lemmas.nth(i.lemma) {
+            None => add_insts(l, fs, rest),
+            Some(lm) => build(l, fs, lm.name, lm.proof, [], i.args, 0).bind(λ bd => on_built(bd, i, lm)).bind(λ f2 => add_insts(l, f2, rest)),
+        },
+    }
+}
+
+// The proof of `l = r` from a closed graph whose classes hold both sides.
+fn proved(report: Bool, l: GrindLaws, fs: Facts, lhs: Nat, rhs: Nat) → Tac<Expr> {
+    match fs.g.eg.explain(proof_alg(l, fs.g), lhs, rhs) {
+        None => fail("grind: the two sides are in one class, but no path between them was found", []),
+        Some(p) => finish_with(report, fs, names_once(match fs.g.eg.explain(cited_alg(), lhs, rhs) { None => [], Some(ns) => ns }, []), p),
+    }
+}
+
+// A closed graph: proved, or stuck for the reason `why`.
+fn settle(report: Bool, l: GrindLaws, fs: Facts, lhs: Nat, rhs: Nat, why: String) → Tac<Expr> {
+    match class_of(fs.g, lhs).same(class_of(fs.g, rhs)) {
+        True => proved(report, l, fs, lhs, rhs),
+        False => stuck(fs.g, fs, lhs, rhs, why),
+    }
+}
+
+fn on_found(t: Tac<Found>, k: Found → Tac<Expr>) → Tac<Expr> { t.bind(k) }
+
+// Close the graph; prove `l = r` from it, or instantiate the lemmas once
+// more (at most `rounds` times), or fail with what it holds.
+fn saturate(rounds: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, lhs: Nat, rhs: Nat) → Tac<Expr> {
+    match rounds {
+        Zero => settle(report, l, closed(fs0), lhs, rhs, "stopped after " ++ decimal_name(Succ(done), done) ++ " rounds"),
+        Succ(r) => {
+            let fs = closed(fs0);
+            let g = fs.g;
+            match class_of(g, lhs).same(class_of(g, rhs)) {
+                True => proved(report, l, fs, lhs, rhs),
+                False => match fs.lemmas {
+                    Nil => stuck(g, fs, lhs, rhs, ""),
+                    Cons(_, _) => {
+                        let table = g.eg.class_table();
+                        settled(table.len() + g.eg.edges.len(), on_found(round_insts(g, table, fs.lemmas, 0, fs.seen, grind_round_cap()), λ found => {
+                            let next = Facts(g, fs.read, fs.skipped, found.lemmas, fs.seen ++ found.insts, fs.offered, fs.locals, fs.givens, fs.pending);
+                            match found.insts {
+                                Nil => stuck(g, next, lhs, rhs, match done { Zero => "no instance in the graph", Succ(_) => "no new instance after " ++ decimal_name(Succ(done), done) ++ " rounds" }),
+                                Cons(_, _) => add_insts(l, with_pending(next, []), found.insts ++ next.pending.map(λ p => p.inst)).bind(λ fs2 => saturate(r, Succ(done), report, l, fs2, lhs, rhs)),
+                            }
+                        }))
+                    },
+                },
+            }
+        },
+    }
+}
+
+// `grind_run`: the goal's two sides, its locals, the lemmas `names` names
+// and the facts `hints` prove, saturated.
+fn grind_run(names: List<String>, hints: List<Expr>, report: Bool) → Tac<Expr> {
+    goal().bind(λ gl => sides_of(gl.target).bind(λ o => match o {
+        None => fail("grind: the goal is not an equation", [At(Hd(gl.target), Tried("the goal", "not an equation"))]),
+        Some(p) => grind_laws().bind(λ l =>
+            read_term(graph_empty(), p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
+            read_locals(Facts(y.g, [], [], [], [], [], gl.locals, [], []), gl.locals).bind(λ fs => read_hints(fs, hints, 0).bind(λ fs2 =>
+            read_names(fs2, names).bind(λ fs3 =>
+            saturate(grind_rounds(), 0, report, l, fs3, x.node, y.node))))))),
+    }))
+}
+
+// `grind_using(names, hints)`: prove the goal, an equation, from the
+// equations among its locals, the lemmas `names` names (resolved where the
+// `by` is: `"List::append_assoc"`) and the facts `hints` prove, closed under
+// congruence. An equation under binders, among any of them, is a lemma: its
+// instances are found by matching one side against the graph's terms, in
+// rounds, until the goal closes or no new instance turns up.
+fn grind_using(names: List<String>, hints: List<Expr>) → Tac<Expr> { grind_run(names, hints, False) }
+
+// `grind_report(names, hints)`: `grind_using`, which on success also says
+// which of the hints and named lemmas its proof cites and which it does not
+// (a `tactic-report` warning), so the call can be narrowed to those it used.
+fn grind_report(names: List<String>, hints: List<Expr>) → Tac<Expr> { grind_run(names, hints, True) }
+
+// `grind_with(hints)`: `grind_using` with no lemma named.
+fn grind_with(hints: List<Expr>) → Tac<Expr> { grind_run([], hints, False) }
+
+// `grind()`: from the goal's locals alone.
+fn grind() → Tac<Expr> { grind_run([], [], False) }

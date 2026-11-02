@@ -339,6 +339,25 @@ pub(super) fn state(p: &str, entry: &str, layout: &str, plan: Plan, readings: Ve
 /// Items a byte read takes at most.
 const READ: usize = 256;
 
+/// The plan's definitions with every part's live-out set (`{p}_o_{id}`)
+/// replaced by the literal `read` gives for it, so no declaration works a
+/// set out from the root again.
+pub(super) fn live_literals(p: &str, text: &str, mut read: impl FnMut(&str) -> Result<Vec<u64>, String>) -> Result<String, String> {
+    let prefix = format!("fn {p}_o_");
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        match line.strip_prefix(&prefix).and_then(|rest| rest.split_once("()")) {
+            Some((id, _)) if id.bytes().all(|b| b.is_ascii_digit()) => {
+                let name = format!("{p}_o_{id}");
+                let set: Vec<String> = read(&name)?.iter().map(u64::to_string).collect();
+                out.push_str(&format!("fn {name}() → List<Nat> {{ [{}] }}\n", set.join(", ")));
+            }
+            _ => out.push_str(line),
+        }
+    }
+    Ok(out)
+}
+
 /// The bytes a read at a time, on the fork that read the parts, once the
 /// labels are known: each read's program at `Start` again, encoded with its
 /// offsets carried down from where its items end in the whole

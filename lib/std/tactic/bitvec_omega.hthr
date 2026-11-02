@@ -187,10 +187,10 @@ theorem unsigned_of_true(n: Nat, a, b: BitVec(n), h: a.toNat() < b.toNat()): a.u
 }
 
 theorem unsigned_of_false(n: Nat, a, b: BitVec(n), h: b.toNat() <= a.toNat()): a.unsigned_lt_bit(b) = bool::False {
-    (match a.unsigned_lt_bit(b) as λ flag => (a.unsigned_lt_bit(b) = flag) → flag = bool::False {
-        False => λ same => refl,
-        True => λ yes => false_elim(Nat::lt_irrefl(a.toNat(), Nat::le_trans(Succ(a.toNat()), b.toNat(), a.toNat(), unsigned_true(n, a, b, yes), h))),
-    })(refl)
+    match same: a.unsigned_lt_bit(b) {
+        False => refl,
+        True => false_elim(Nat::lt_irrefl(a.toNat(), Nat::le_trans(Succ(a.toNat()), b.toNat(), a.toNat(), unsigned_true(n, a, b, same), h))),
+    }
 }
 
 // The equality bit, read the same way: what `split_all` states at a split of

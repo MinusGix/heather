@@ -403,11 +403,10 @@ theorem Prog::within_one_node(self p: Prog, layout: Layout, out: List<Nat>, node
             True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
             False => p.byte_node(layout, out, node, names),
         }) = Some(c) → p.Within(c.prog) {
-        True => (match p.node_alone(layout, out, node) as λ o => p.node_alone(layout, out, node) = o →
-                (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → p.Within(c.prog) {
-            None => λ _ none => absurd(none),
-            Some(q) => λ alone same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog), p.within_node_alone(layout, out, node, q, alone)),
-        })(refl),
+        True => (match alone: p.node_alone(layout, out, node) {
+            None => λ none => absurd(none),
+            Some(q) => λ same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog), p.within_node_alone(layout, out, node, q, alone)),
+        }),
         False => p.within_byte_node(layout, out, names, c, node),
     })(emitted)
 }
@@ -422,16 +421,15 @@ theorem Target::goes_one_node(self t: Target, out: List<Nat>, env: Env, p: Prog,
             True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
             False => p.byte_node(layout, out, node, names),
         }) = Some(c) → t.At(prog_len(p), live, tree, env) {
-        True => λ pure => (match p.node_alone(layout, out, node) as λ o => p.node_alone(layout, out, node) = o →
-                (match o { None => None, Some(q) => Some(Compiled(q, names)) }) = Some(c) → t.At(prog_len(p), live, tree, env) {
-            None => λ _ none => absurd(none),
-            Some(q) => λ alone same => {
+        True => λ pure => (match alone: p.node_alone(layout, out, node) {
+            None => λ none => absurd(none),
+            Some(q) => λ same => {
                 let c_is = Option::some_inj(Compiled(q, names), c, same);
                 t.goes_node_alone(out, env, p, q, node, j(sym(pure), λ b _ => b.IsTrue(), trivial), apart, alone,
                     j(sym(c_is), λ x _ => x.prog.Within(t.program), within), tree,
                     j(sym(c_is), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes([node])), next))
             },
-        })(refl),
+        }),
         False => λ _ byte => t.goes_byte_node(out, env, p, names, c, tree, node, apart, byte, within, next),
     })(refl, emitted)
 }
@@ -440,13 +438,11 @@ theorem Prog::within_each_node(layout: Layout, out: List<Nat>, nodes: List<Node>
     p.each_node(layout, out, nodes, names) = Some(c) → p.Within(c.prog) {
     match nodes {
         Nil => λ p names c some => j(Option::some_inj(Compiled(p, names), c, some), λ x _ => p.Within(x.prog), p.within_self()),
-        Cons(node, rest) => λ p names c => (match p.one_node(layout, nodes_live_in(rest, out), node, names) as λ o =>
-                p.one_node(layout, nodes_live_in(rest, out), node, names) = o →
-                (match o { None => None, Some(d) => d.prog.each_node(layout, out, rest, d.names) }) = Some(c) → p.Within(c.prog) {
-            None => λ _ none => absurd(none),
-            Some(d) => λ one more => p.within_trans(d.prog, c.prog, p.within_one_node(layout, nodes_live_in(rest, out), node, names, d, one),
+        Cons(node, rest) => λ p names c => (match one: p.one_node(layout, nodes_live_in(rest, out), node, names) {
+            None => λ none => absurd(none),
+            Some(d) => λ more => p.within_trans(d.prog, c.prog, p.within_one_node(layout, nodes_live_in(rest, out), node, names, d, one),
                 Prog::within_each_node(layout, out, rest, d.prog, d.names, c, more)),
-        })(refl),
+        }),
     }
 }
 
@@ -459,18 +455,15 @@ theorem Target::goes_each_node(self t: Target, tree: ITree<BitVec(64)>(Events::l
             j(sym(Option::some_inj(Compiled(p, names), c, some)), λ x _ => t.At(prog_len(x.prog), out, tree, env), next),
         Cons(node, rest) => λ env p names c => {
             let after = nodes_live_in(rest, out);
-            (match p.one_node(t.layout(), after, node, names) as λ o => p.one_node(t.layout(), after, node, names) = o →
-                (match o { None => None, Some(d) => d.prog.each_node(t.layout(), out, rest, d.names) }) = Some(c) → c.prog.Within(t.program) →
-                t.homes.nodes_apart(Cons(node, rest), out).IsTrue() →
-                t.At(prog_len(c.prog), out, tree, env.steps(Cons(node, rest))) → t.At(prog_len(p), nodes_live_in(Cons(node, rest), out), tree, env) {
-                None => λ _ none => absurd(none),
-                Some(d) => λ one more within apart next => {
+            (match one: p.one_node(t.layout(), after, node, names) {
+                None => λ none => absurd(none),
+                Some(d) => λ more within apart next => {
                     let parts = Bool::is_true_and(t.homes.apart(node_output(node).id, after), t.homes.nodes_apart(rest, out), apart);
                     let w_d = d.prog.within_trans(c.prog, t.program, Prog::within_each_node(t.layout(), out, rest, d.prog, d.names, c, more), within);
                     t.goes_one_node(after, env, p, names, d, tree, node, parts.left, one, w_d,
                         t.goes_each_node(tree, out, rest, env.computes([node]), d.prog, d.names, c, more, within, parts.right, next))
                 },
-            })(refl)
+            })
         },
     }
 }
@@ -524,11 +517,10 @@ theorem Target::goes_computes(self t: Target, out: List<Nat>, env: Env, p: Prog,
             t.goes_leaf(out, env, p, q, nodes, leafed.right, w_q, tree, aparts.right,
                 j(ran, λ s _ => t.At(prog_len(q), out, tree, Env(env.words, s.buffers, env.args).settle(s.values, nodes_write_ports(nodes))), next_q))
         },
-        None => λ _ => (match nodes_wide(nodes) as λ b => nodes_wide(nodes) = b →
-                (match b { True => p.each_node(layout, out, nodes, names), False => None }) = Some(c) → t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
-            True => λ wide each => t.goes_each_node(tree, out, nodes, env, p, names, c, each, within, aparts.left,
+        None => λ _ => (match wide: nodes_wide(nodes) {
+            True => λ each => t.goes_each_node(tree, out, nodes, env, p, names, c, each, within, aparts.left,
                 j(env.computes_steps(nodes, j(sym(wide), λ b _ => b.IsTrue(), trivial)), λ e _ => t.At(prog_len(c.prog), out, tree, e), next)),
-            False => λ _ none => absurd(none),
-        })(refl),
+            False => λ none => absurd(none),
+        }),
     })(refl, emitted)
 }

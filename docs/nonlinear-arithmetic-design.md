@@ -41,7 +41,7 @@ its own extension of `by intervals()` (§8).
 The library's nonlinear inequalities fall into three shapes:
 
 - **Monotonicity of products**: `a·c <= b·d` from `a <= b`, `c <= d` and
-  signs. Examples are `OrderedField::mul_le_mul`, `Rat::mul_le_mono_r`, the
+  signs. Examples are `OrderedSemiring::mul_le_mul`, `Rat::mul_le_mono_r`, the
   float error bounds in `lib/std/num/float/round.hthr` and the containment
   lemmas in `interval.hthr`. These are products of two facts.
 - **Squares**: `0 <= x·x`, `2ab <= a² + b²`, and regularity estimates where an
@@ -64,7 +64,7 @@ built from parts by the order laws:
 
 | part | proved by | sign |
 |---|---|---|
-| `pᵢ·pⱼ` | `OrderedField::mul_nonneg` / `mul_pos` (`Int::`, `Nat::` at those) | `> 0` if both strict, else `≥ 0` |
+| `pᵢ·pⱼ` | `OrderedSemiring::mul_nonneg` / `mul_pos` (`Int::`, `Nat::` at those) | `> 0` if both strict, else `≥ 0` |
 | `t·t` | `sq_nonneg(t)` (new, §4.5) | `≥ 0` |
 | `m` with even exponents (`x²y²`) | `sq_nonneg` of its root | `≥ 0` |
 | a hint `h: 0 <= e` / `0 < e` | the hint itself | as written |
@@ -247,7 +247,7 @@ strict fact stays strong enough to cancel a positive factor. No squares at
 
 ### 4.5 Library lemmas the round adds
 
-- `OrderedField::sq_nonneg(x): 0 <= x * x`. It is constructive. Suppose
+- `OrderedRing::sq_nonneg(x): 0 <= x * x`. It is constructive. Suppose
   `h: x·x < 0`. If `x < 0`, then `0 < x·x` (a product of negatives), which
   contradicts `h`. So `¬(x < 0)`, so `0 <= x` by `le_of_not_lt`. Then
   `0 <= x·x` by `mul_nonneg`, which contradicts `h` again. No decision on the

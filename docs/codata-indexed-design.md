@@ -151,8 +151,9 @@ A corecursive function into an indexed codata type is coinduction proper:
   `refl`, so `out(f(ā)) ≡` the body's node with each `inl` seed unfolded one
   step, as in the unindexed case.
 
-Nested guards stay refused here (`issues/codata-nested-guards-indexed.md`);
-unindexed codata has them (`docs/codata-elaborator-design.md` §5.4).
+Constructors nested above a call are generated here as for unindexed
+codata, with the carrier's layers as families over the index and each
+pending node at its child's index (`docs/codata-elaborator-design.md` §5.4).
 
 ## 7. What stays out
 
@@ -179,3 +180,10 @@ unindexed codata has them (`docs/codata-elaborator-design.md` §5.4).
   observation by `refl`.
 
 Plus an image round trip and a goal display (`b : SBisim(s, tl(s))`).
+
+Nested constructors above a call (codata-elaborator §5.4) are on the same
+axes: `nested_constructors_above_a_self_call` (two and three layers, literal
+and neutral, back to the definition by `refl`),
+`nested_constructors_in_checking_positions` (`Seq<A>`, `match` in step
+position, a function child at the pending node's index) and
+`nested_controls_are_refused`.

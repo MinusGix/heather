@@ -63,17 +63,11 @@ theorem other_errno_plus_four(e: Nat, error: Errno(e), other: Not(e = eintr())):
     (match e as λ k => (1 <= k) → Not(k = eintr()) → (5 <= k → is_zero_bits(64, errno_word(k).add(BitVec::ofNat(4))) = False) →
             is_zero_bits(64, errno_word(k).add(BitVec::ofNat(4))) = False {
         Zero => λ low _ _ => false_elim({ let z: (1 <= 0) = low; omega }),
-        Succ(a) => match a as λ k1 => (1 <= Succ(k1)) → Not(Succ(k1) = eintr()) →
-                (5 <= Succ(k1) → is_zero_bits(64, errno_word(Succ(k1)).add(BitVec::ofNat(4))) = False) →
-                is_zero_bits(64, errno_word(Succ(k1)).add(BitVec::ofNat(4))) = False {
+        Succ(a) => match a {
             Zero => λ _ _ _ => refl,
-            Succ(b) => match b as λ k2 => (1 <= Succ(Succ(k2))) → Not(Succ(Succ(k2)) = eintr()) →
-                    (5 <= Succ(Succ(k2)) → is_zero_bits(64, errno_word(Succ(Succ(k2))).add(BitVec::ofNat(4))) = False) →
-                    is_zero_bits(64, errno_word(Succ(Succ(k2))).add(BitVec::ofNat(4))) = False {
+            Succ(b) => match b {
                 Zero => λ _ _ _ => refl,
-                Succ(c) => match c as λ k3 => (1 <= Succ(Succ(Succ(k3)))) → Not(Succ(Succ(Succ(k3))) = eintr()) →
-                        (5 <= Succ(Succ(Succ(k3))) → is_zero_bits(64, errno_word(Succ(Succ(Succ(k3)))).add(BitVec::ofNat(4))) = False) →
-                        is_zero_bits(64, errno_word(Succ(Succ(Succ(k3)))).add(BitVec::ofNat(4))) = False {
+                Succ(c) => match c {
                     Zero => λ _ _ _ => refl,
                     Succ(d) => λ _ not_eintr big => match d as λ k4 => Not(Succ(Succ(Succ(Succ(k4)))) = eintr()) →
                             (5 <= Succ(Succ(Succ(Succ(k4)))) → is_zero_bits(64, errno_word(Succ(Succ(Succ(Succ(k4))))).add(BitVec::ofNat(4))) = False) →
@@ -458,7 +452,7 @@ fn LinuxRequests<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>) → T
 // What Linux may leave in the buffer besides an answer: anything up to the
 // buffer's length after a failed read or stat, nothing otherwise.
 fn LinuxLeaves(c: LinuxCmd<Nat>) → c.Resp() → List<BitVec(8)> → Type {
-    match c as λ d => d.Resp() → List<BitVec(8)> → Type {
+    match c {
         ReadCmd(_, max) => λ (r: ReadResult) junk => match r {
             ReadBytes(_) => junk = Nil,
             ReadFailed(_) => junk.len() <= max,
@@ -477,7 +471,7 @@ fn LinuxLeaves(c: LinuxCmd<Nat>) → c.Resp() → List<BitVec(8)> → Type {
 // `junk` and the given RCX and R11.
 fn linux_answered<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>) →
     c.Resp() → List<BitVec(8)> → BitVec(64) → BitVec(64) → MachineState<M> {
-    match c as λ d => d.Resp() → List<BitVec(8)> → BitVec(64) → BitVec(64) → MachineState<M> {
+    match c {
         ReadCmd(_, _) => λ (r: ReadResult) junk rcx r11 => match r {
             ReadBytes(bytes) => linux_read_return(io, at, bytes, rcx, r11),
             ReadFailed(errno) => linux_read_failed_return(io, at, errno, junk, rcx, r11),
@@ -527,7 +521,7 @@ fn linux_buffer(c: LinuxCmd<Nat>, gprs: Gprs) → Option<BitVec(64)> {
     }
 }
 fn linux_stored(c: LinuxCmd<Nat>) → c.Resp() → List<BitVec(8)> → List<BitVec(8)> {
-    match c as λ d => d.Resp() → List<BitVec(8)> → List<BitVec(8)> {
+    match c {
         ReadCmd(_, _) => λ (r: ReadResult) junk => match r { ReadBytes(bytes) => bytes, ReadFailed(_) => junk },
         WriteCmd(_, _) => λ _ _ => Nil,
         OpenCmd(_) => λ _ _ => Nil,
@@ -543,8 +537,7 @@ fn linux_left<M>(io: LinuxIo<M>, memory: M, c: LinuxCmd<Nat>, gprs: Gprs, a: c.R
 theorem linux_answered_memory<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>): (a: c.Resp()) →
     (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) →
     linux_answered(io, at, c, a, junk, rcx, r11).memory = linux_left(io, at.memory, c, at.gprs, a, junk) {
-    match c as λ d => (a: d.Resp()) → (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) →
-            linux_answered(io, at, d, a, junk, rcx, r11).memory = linux_left(io, at.memory, d, at.gprs, a, junk) {
+    match c {
         ReadCmd(_, _) => λ (r: ReadResult) junk rcx r11 => match r { ReadBytes(_) => refl, ReadFailed(_) => refl },
         WriteCmd(_, _) => λ (r: WriteResult) junk rcx r11 => match r { Wrote(_) => refl, WriteFailed(_) => refl },
         OpenCmd(_) => λ _ junk rcx r11 => refl,
@@ -554,8 +547,7 @@ theorem linux_answered_memory<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCm
 }
 theorem linux_answered_rip<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>): (a: c.Resp()) →
     (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) → linux_answered(io, at, c, a, junk, rcx, r11).rip = next_rip(at.rip, 2) {
-    match c as λ d => (a: d.Resp()) → (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) →
-            linux_answered(io, at, d, a, junk, rcx, r11).rip = next_rip(at.rip, 2) {
+    match c {
         ReadCmd(_, _) => λ (r: ReadResult) junk rcx r11 => match r { ReadBytes(_) => refl, ReadFailed(_) => refl },
         WriteCmd(_, _) => λ (r: WriteResult) junk rcx r11 => match r { Wrote(_) => refl, WriteFailed(_) => refl },
         OpenCmd(_) => λ _ junk rcx r11 => refl,
@@ -566,7 +558,7 @@ theorem linux_answered_rip<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<N
 
 // Nothing left behind is always one choice.
 theorem linux_leaves_nil(c: LinuxCmd<Nat>): (a: c.Resp()) → LinuxLeaves(c, a, Nil) {
-    match c as λ d => (a: d.Resp()) → LinuxLeaves(d, a, Nil) {
+    match c {
         ReadCmd(_, _) => λ (r: ReadResult) => match r { ReadBytes(_) => refl, ReadFailed(_) => trivial },
         WriteCmd(_, _) => λ _ => refl,
         OpenCmd(_) => λ _ => refl,
@@ -587,8 +579,7 @@ theorem linux_resumes_mono<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<N
 theorem linux_answered_respects<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>): (a: c.Resp()) → (junk: List<BitVec(8)>) →
     (rcx, r11: BitVec(64)) →
     PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, λ state => linux_answered(io, state, c, a, junk, rcx, r11)) {
-    match c as λ d => (a: d.Resp()) → (junk: List<BitVec(8)>) → (rcx, r11: BitVec(64)) →
-            PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, λ state => linux_answered(io, state, d, a, junk, rcx, r11)) {
+    match c {
         ReadCmd(_, _) => λ (r: ReadResult) junk rcx r11 => match r {
             ReadBytes(bytes) => same_defined_respects<M>(λ state => linux_read_return(io, state, bytes, rcx, r11), λ state => refl),
             ReadFailed(errno) =>
@@ -629,11 +620,11 @@ fn LinuxRuns<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → MachineState<M> �
 theorem linux_runs_after_linux_steps<M>(io: LinuxIo<M>, events: List<LinuxEvent>, before, middle: MachineState<M>,
     steps: LinuxSteps(io, before, middle), runs: LinuxRuns(io, events, middle)):
     LinuxRuns(io, events, before) {
-    (match events as λ list => LinuxRuns(io, list, middle) → LinuxRuns(io, list, before) {
-        Nil => λ never => never,
-        Cons(_, _) => λ found => Exists(found.witness,
-            ⟨linux_steps_trans(io, before, middle, found.witness, steps, found.proof.left), found.proof.right⟩),
-    })(runs)
+    match events {
+        Nil => runs,
+        Cons(_, _) => Exists(runs.witness,
+            ⟨linux_steps_trans(io, before, middle, runs.witness, steps, runs.proof.left), runs.proof.right⟩),
+    }
 }
 
 theorem linux_runs_after_steps<M>(io: LinuxIo<M>, events: List<LinuxEvent>, before, middle: MachineState<M>,

@@ -1447,8 +1447,8 @@ impl Elaborator {
         // The reading and the certificate name `ring`'s and this library's
         // lemmas, which a client that imports only `linarith` does not see
         // (`resolve_declared_kinds`' overlay).
-        self.ring_depth.set(self.ring_depth.get() + 1);
-        let _depth = Depth(&self.ring_depth);
+        self.scope.ring_depth.set(self.scope.ring_depth.get() + 1);
+        let _depth = Depth(&self.scope.ring_depth);
         let source_cx = crate::omega_cert::source_context(cx);
         let cx = source_cx.as_ref();
         let spell = |ty: &Type| self.spell_type_clean(cx, ty).unwrap_or_else(|| self.display_type(cx, ty));
@@ -1606,6 +1606,9 @@ impl Elaborator {
             }
         }
         let Some((source, cited)) = found else {
+            // Stuck: an arm equation not yet in scope might be the missing
+            // fact (docs/dependent-match-compiler-design.md §4.3.1).
+            self.want_match_equations(cx);
             // An order that unfolds to one at `Int` (`Rat::Le` is a
             // cross-multiplication) may follow there with products as
             // monomials, as `ring` falls back to the unfolded equation.

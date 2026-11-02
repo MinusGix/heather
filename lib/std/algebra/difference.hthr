@@ -41,6 +41,7 @@ import omega;
 import list;
 import relation;
 import relation_props;
+import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
@@ -99,7 +100,7 @@ theorem LocatedAddGroup::telescope_le(n: Nat, f, g: Nat → A):
     λ h => StrictOrder::le_respects(MonoidRel::range(+, n, λ k => GroupRel::delta(≈, +, f, k)), f(n) + A.inv(f(0)),
         MonoidRel::range(+, n, g), MonoidRel::range(+, n, g),
         GroupRel::telescope(≈, +, n, f), A.rel_refl(MonoidRel::range(+, n, g)),
-        LocatedAddGroup::range_le(n, λ k => GroupRel::delta(≈, +, f, k), g, h))
+        LocatedAddMonoid::range_le(n, λ k => GroupRel::delta(≈, +, f, k), g, h))
 }
 
 }
@@ -517,7 +518,7 @@ theorem OrderedField::geometric_le(x: Nat → A, q: A, n: Nat, hq: A.unit <= q,
                 step(Nat::add(n, i), n.le_add_l(i)),
                 StrictOrder::le_of_same_r(x(Nat::add(n, i)) * q, (x(n) * p) * q, x(n) * (p * q),
                     A.rel_sym((x(n) * p) * q, x(n) * (p * q), A.multiplicative.assoc(x(n), p, q)),
-                    OrderedField::mul_le_mono_r(x(Nat::add(n, i)), x(n) * p, q,
+                    OrderedSemiring::mul_le_mono_r(x(Nat::add(n, i)), x(n) * p, q,
                         OrderedField::geometric_le(x, q, n, hq, step, i), hq)))
         },
     }

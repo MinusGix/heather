@@ -147,6 +147,59 @@ fn dependent_telescope() {
     );
 }
 
+// Constructors nested above a corecursive call (codata-elaborator-design
+// §5.4): the carrier's layers are families over the index, and a pending
+// node sits at its child's index. Two and three layers, observed back to the
+// definition by `refl` at neutral and literal indices.
+#[test]
+fn nested_constructors_above_a_self_call() {
+    elab(&format!(
+        "{STREAM}
+         fn sb_two(s: Stream) -> SBisim(s, s) {{ Same(refl, Same(refl, sb_two(tl(tl(s))))) }}
+         theorem two_back(s: Stream): tails(tl(s), tl(s), tails(s, s, sb_two(s))) = sb_two(tl(tl(s))) {{ refl }}
+         theorem two_heads(s: Stream): heads(tl(s), tl(s), tails(s, s, sb_two(s))) = refl {{ refl }}
+         theorem two_lit(): tails(from(1), from(1), tails(from(0), from(0), sb_two(from(0)))) = sb_two(from(2)) {{ refl }}
+         codata Count : (n: Nat) -> Type {{ Tick(at: Nat, ok: at = n, next: Count(Succ(n))) }}
+         fn here(n: Nat, c: Count(n)) -> Nat {{ match c {{ Tick(a, _, _) => a }} }}
+         fn later(n: Nat, c: Count(n)) -> Count(Succ(n)) {{ match c {{ Tick(_, _, k) => k }} }}
+         fn count3(n: Nat) -> Count(n) {{ Tick(n, refl, Tick(Succ(n), refl, Tick(Succ(Succ(n)), refl, count3(Succ(Succ(Succ(n))))))) }}
+         theorem three_lit(): here(4, later(3, later(2, count3(2)))) = 4 {{ refl }}
+         theorem three_open(n: Nat): here(Succ(n), later(n, count3(n))) = Succ(n) {{ refl }}
+         theorem three_back(n: Nat): later(Succ(Succ(n)), later(Succ(n), later(n, count3(n)))) = count3(Succ(Succ(Succ(n)))) {{ refl }}"
+    ));
+}
+
+// The open element type, `match` in step position above a nested pending
+// node (symmetry two observations per step), and a function child whose
+// domain is read at the pending node's own index (`Fin(Succ(Succ(n)))`, not
+// the step's `Fin(Succ(n))`).
+#[test]
+fn nested_constructors_in_checking_positions() {
+    elab(&format!(
+        "{STREAM}
+         fn sb_sym2(s: Stream, t: Stream, b: SBisim(s, t)) -> SBisim(t, s) {{
+             match b {{ Same(h, k) => match k {{ Same(h2, k2) =>
+                 Same(sym(h), Same(sym(h2), sb_sym2(tl(tl(s)), tl(tl(t)), k2))) }} }}
+         }}
+         theorem sym2_back(s: Stream): tails(tl(s), tl(s), tails(s, s, sb_sym2(s, s, sb_refl(s))))
+             = sb_sym2(tl(tl(s)), tl(tl(s)), tails(tl(s), tl(s), tails(s, s, sb_refl(s)))) {{ refl }}
+         codata Seq<A> {{ Cons(h: A, t: Seq<A>) }}
+         fn shd<A>(s: Seq<A>) -> A {{ match s {{ Cons(h, _) => h }} }}
+         fn stl<A>(s: Seq<A>) -> Seq<A> {{ match s {{ Cons(_, t) => t }} }}
+         codata Bis<A> : (s: Seq<A>) -> (t: Seq<A>) -> Type {{
+             Both(h: shd(s) = shd(t), k: Bis<A>(stl(s), stl(t))),
+         }}
+         fn bis_k<A>(s: Seq<A>, t: Seq<A>, b: Bis<A>(s, t)) -> Bis<A>(stl(s), stl(t)) {{ match b {{ Both(_, k) => k }} }}
+         fn bis_two<A>(s: Seq<A>) -> Bis<A>(s, s) {{ Both(refl, Both(refl, bis_two(stl(stl(s))))) }}
+         theorem bis_two_back<A>(s: Seq<A>): bis_k(stl(s), stl(s), bis_k(s, s, bis_two(s))) = bis_two(stl(stl(s))) {{ refl }}
+         codata Fan(w: Nat) : (n: Nat) -> Type {{ F(k: (i: Fin(Succ(n))) -> Fan(w, Succ(n))) }}
+         fn kid(w: Nat, n: Nat, f: Fan(w, n), i: Fin(Succ(n))) -> Fan(w, Succ(n)) {{ match f {{ F(k) => k(i) }} }}
+         fn fan2(w: Nat, n: Nat) -> Fan(w, n) {{ F(λ i => F(λ j => fan2(w, Succ(Succ(n))))) }}
+         theorem fan2_back(w: Nat, n: Nat, i: Fin(Succ(n)), j: Fin(Succ(Succ(n)))):
+             kid(w, Succ(n), kid(w, n, fan2(w, n), i), j) = fan2(w, Succ(Succ(n))) {{ refl }}"
+    ));
+}
+
 // -- negative controls -------------------------------------------------------
 
 // The coinduction hypothesis is used only at the index it was stated at.
@@ -171,12 +224,24 @@ fn a_use_needs_its_index() {
     assert!(msg.contains("index argument(s)"), "{msg}");
 }
 
-// Nested constructors above a self-call are generated for unindexed codata
-// only (codata-elaborator-design §5.4); an indexed one names its issue.
+// A nested call is the coinduction hypothesis too: only at its child's
+// index. A pending node's payload is checked at the child's index, not the
+// step's. And a nested layer's observation is computed: a wrong one is
+// refused by the kernel.
 #[test]
-fn nested_guard_is_refused_with_its_issue() {
-    let msg = elab_err(&format!("{STREAM}\nfn bad(s: Stream) -> SBisim(s, s) {{ Same(refl, Same(refl, bad(tl(tl(s))))) }}"));
-    assert!(msg.contains("issues/codata-nested-guards-indexed.md"), "{msg}");
+fn nested_controls_are_refused() {
+    let msg = elab_err(&format!("{STREAM}\nfn bad(s: Stream) -> SBisim(s, s) {{ Same(refl, Same(refl, bad(tl(s)))) }}"));
+    assert!(msg.contains("result index must be the child's"), "{msg}");
+    let count = "codata Count : (n: Nat) -> Type { Tick(at: Nat, ok: at = n, next: Count(Succ(n))) }
+         fn later(n: Nat, c: Count(n)) -> Count(Succ(n)) { match c { Tick(_, _, k) => k } }";
+    let msg = elab_err(&format!("{count}\nfn bad(n: Nat) -> Count(n) {{ Tick(n, refl, Tick(n, refl, bad(Succ(Succ(n))))) }}"));
+    assert!(msg.contains("`refl` needs both sides to be definitionally equal, but `n` and `Succ(n)` are not"), "{msg}");
+    let msg = elab_err(&format!(
+        "{STREAM}
+         fn sb_two(s: Stream) -> SBisim(s, s) {{ Same(refl, Same(refl, sb_two(tl(tl(s))))) }}
+         theorem wrong(s: Stream): tails(s, s, sb_two(s)) = sb_two(tl(s)) {{ refl }}"
+    ));
+    assert!(msg.contains("NotConvertible"), "{msg}");
 }
 
 // The β rule is not a guess: a wrong observation is refused by the kernel.

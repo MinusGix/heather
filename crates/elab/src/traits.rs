@@ -475,6 +475,13 @@ fn head_name(t: &Ty) -> Option<&str> {
         // name at the end of its spine.
         TyKind::OfExpr(e) => match &e.kind {
             ExprKind::App { head, .. } | ExprKind::TyApp { head, .. } => spine_head(head),
+            // A λ carrier's head is its body's: `λ (A: Type) => Result<A, E>`
+            // keys and names its instances as `Result`'s
+            // (docs/lambda-carrier-instances-design.md §7.3).
+            ExprKind::Lam { binders, body } if binders.len() == 1 => match &body.kind {
+                ExprKind::TyApp { head, .. } => spine_head(head),
+                _ => None,
+            },
             _ => None,
         },
         _ => None,
@@ -1217,7 +1224,7 @@ fn expr_size(e: &Expr) -> usize {
 /// How often `v` occurs as a bare name in `t` — the second half of Paterson's
 /// condition, which is what refuses `C<A> requires C<Pair<A, A>>` even where
 /// the sizes happen to agree.
-fn ty_var_count(t: &Ty, v: &str) -> usize {
+pub(crate) fn ty_var_count(t: &Ty, v: &str) -> usize {
     match &t.kind {
         TyKind::Named { name, args } => {
             (name == v && args.is_empty()) as usize
@@ -1256,6 +1263,17 @@ fn expr_var_count(e: &Expr, v: &str) -> usize {
         }
         ExprKind::Var(name) => (name == v) as usize,
         ExprKind::Eq(a, b) => expr_var_count(a, v) + expr_var_count(b, v),
+        // A λ carrier, `λ (A: Type) => Result<A, E>`
+        // (docs/lambda-carrier-instances-design.md §7.3): its body's free
+        // occurrences, unless a binder shadows `v`.
+        ExprKind::Lam { binders, body } => {
+            if binders.iter().any(|b| b.name == v) {
+                0
+            } else {
+                binders.iter().filter_map(|b| b.ty.as_ref()).map(|t| ty_var_count(t, v)).sum::<usize>()
+                    + expr_var_count(body, v)
+            }
+        }
         _ => 0,
     }
 }
@@ -1583,6 +1601,7 @@ impl Elaborator {
             name: d.name.clone(),
             params: rec_params,
             valparams: rec_valparams,
+            varies: None,
             ctors: vec![ctor],
             is_record: true,
             is_codata: false,
@@ -3046,7 +3065,7 @@ impl Elaborator {
                 // members after it (design §4.2): a member cannot reference
                 // itself or a later one by short name.
                 member_names.push(m.name.clone());
-                self.instance_scope
+                self.scope.instance_scope
                     .push((m.name.clone(), format!("{prefix}::{}", m.name)));
             }
         }
@@ -3054,7 +3073,7 @@ impl Elaborator {
         // On the failure path the whole snapshot is restored, which clears it
         // too.
         let r = self.assemble_instance(d, &class, &head, &head_key, &prefix, &class_ty, &written);
-        self.instance_scope.clear();
+        self.scope.instance_scope.clear();
         r?;
         let global = qkey(self.names.module(), &prefix);
         let info = InstanceInfo { global, written, index, parameterized };
@@ -3707,6 +3726,7 @@ impl Elaborator {
     ///   index receives an alpha-stable registry component and is recovered by
     ///   the same candidate-head unification as a binder in the carrier.
     fn check_binders(&self, d: &InstanceDecl) -> R<()> {
+        self.check_lambda_carrier(d)?;
         let head = class_ref_written(&d.class);
         // A binder absent from the head is usually one of three wishes, and the
         // message routes all three: two have a spelling that works and the third
@@ -3757,6 +3777,54 @@ impl Elaborator {
             {
                 return err(routes("value binder", &p.name), p.span);
             }
+        }
+        Ok(())
+    }
+
+    /// A kinded class's carrier written as a λ must be one a use site can
+    /// learn: the constructor at a declaration's **declared slot**,
+    /// `λ (A: Type) => Result<A, E>` for `inductive Result<A, E> varies A`
+    /// (docs/lambda-carrier-instances-design.md §7.3). The unifier only ever
+    /// solves `?M(a) ≟ D<…>` to that constructor, so an instance at any
+    /// other λ would be an entry no inferred goal reaches — the same
+    /// unreachability [`Self::check_binders`] refuses for a binder.
+    fn check_lambda_carrier(&self, d: &InstanceDecl) -> R<()> {
+        if !self.traits.maybe_kinded(&d.class.name) {
+            return Ok(());
+        }
+        for arg in &d.class.args {
+            let TyKind::OfExpr(e) = &arg.kind else { continue };
+            let ExprKind::Lam { binders, body } = &e.kind else { continue };
+            let carrier = render_expr(e);
+            let named = crate::inductive::named_head(body)
+                .and_then(|(name, targs)| Some((name, targs, self.lookup_inductive(name)?.clone())));
+            let reason = match (binders.as_slice(), named) {
+                ([b], Some((name, targs, ind))) if !b.implicit && targs.len() == ind.params.len() => {
+                    let slot = ind.varies.unwrap_or(ind.params.len().saturating_sub(1));
+                    match crate::gendefs::slot_of_lambda(&b.name, targs) {
+                        Some(s) if s == slot => continue,
+                        _ => format!(
+                            "a use site learns `{name}`'s constructor at its declared slot, \
+                             `{}`{}, and only that one, so it would never select this \
+                             instance. Abstract `{}` alone (`λ ({}: Type) => {name}<…>`), \
+                             or name the constructor as a type-level `fn`",
+                            ind.params.get(slot).map_or("?", String::as_str),
+                            if ind.varies.is_some() { " (its `varies`)" } else { " (the last parameter)" },
+                            ind.params.get(slot).map_or("?", String::as_str),
+                            ind.params.get(slot).map_or("?", String::as_str),
+                        ),
+                    }
+                }
+                _ => "a use site learns a type constructor only as a declaration's \
+                      constructor at its declared slot (`λ (A: Type) => D<…, A, …>`), so it \
+                      would never select this instance. Name the constructor as a \
+                      type-level `fn` instead"
+                    .to_string(),
+            };
+            return err(
+                format!("an instance at the carrier `{carrier}` is unreachable: {reason}"),
+                arg.span,
+            );
         }
         Ok(())
     }

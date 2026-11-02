@@ -811,7 +811,7 @@ impl Elaborator {
         // here, to `args`, for every branch below.
         let mut cx = cx.clone();
         let tyvars = self.field_scope_cx(&cx, ind, args, &[]).tyvars;
-        cx.tyvars.extend(tyvars);
+        cx.tyvars.extend(tyvars.iter().cloned());
         let cx = &cx;
         // The function domains' one level `lp` (§1.3), read at a generic
         // payload, where the written indices are checked too.

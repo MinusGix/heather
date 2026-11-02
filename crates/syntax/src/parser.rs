@@ -2132,6 +2132,7 @@ impl Parser {
         let (name, _) = self.ident("record name")?;
         let params = self.tyvar_list()?;
         let valparams = self.valparam_list(false)?;
+        let varies = self.varies_clause()?;
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();
         let mut facts = Vec::new();
@@ -2280,6 +2281,7 @@ impl Parser {
             name,
             params,
             valparams,
+            varies,
             ctors: vec![ctor],
             is_record: true,
             is_codata: false,
@@ -2365,6 +2367,18 @@ impl Parser {
         Ok(params)
     }
 
+    /// `varies A` after a declaration's parameter lists, or nothing
+    /// (docs/lambda-carrier-instances-design.md §7.1). `varies` is contextual:
+    /// it is read only here, so it stays an ordinary identifier everywhere else.
+    fn varies_clause(&mut self) -> R<Option<(String, Span)>> {
+        if !self.at_kw("varies") {
+            return Ok(None);
+        }
+        self.bump();
+        let (name, span) = self.ident("the varying parameter's name after `varies`")?;
+        Ok(Some((name, span)))
+    }
+
     /// `<A, B>` after a declaration name, or nothing.
     fn tyvar_list(&mut self) -> R<Vec<String>> {
         let mut params = Vec::new();
@@ -2397,6 +2411,7 @@ impl Parser {
         // `record` form this round (docs/surface-value-parameters.md §6), and a
         // named rejection beats `expected `{`, found LParen`.
         let valparams = self.valparam_list(false)?;
+        let varies = self.varies_clause()?;
         // `: (n: Nat) -> Type` — an index telescope
         // (docs/inductive-indexed-lowering.md §2). Parsed with the ordinary
         // type grammar; its shape is the elaborator's to validate.
@@ -2450,6 +2465,7 @@ impl Parser {
             name,
             params,
             valparams,
+            varies,
             ctors,
             is_record: false,
             is_codata,

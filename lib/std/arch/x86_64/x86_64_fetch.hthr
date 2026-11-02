@@ -101,12 +101,10 @@ theorem readable_tail<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),
     byte: BitVec(8), rest: List<BitVec(8)>,
     reads: ReadableBytes(access, memory, Cons(byte, rest), start)):
     ReadableBytes(access, memory, rest, next_rip(start, 1)) {
-    (match rest as λ remaining =>
-        ReadableBytes(access, memory, Cons(byte, remaining), start) →
-        ReadableBytes(access, memory, remaining, next_rip(start, 1)) {
-        Nil => λ _ => trivial,
-        Cons(_, _) => λ evidence => evidence.right.right.right,
-    })(reads)
+    match rest {
+        Nil => trivial,
+        Cons(_, _) => reads.right.right.right,
+    }
 }
 
 theorem readable_head_same<M>(access: FetchAccess<M>, memory: M, start: BitVec(64),

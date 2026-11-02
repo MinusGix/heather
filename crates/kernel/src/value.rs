@@ -2528,12 +2528,13 @@ mod tests {
         // must ride inside the enum `Val::Pair` already sizes: a `u128` would
         // raise the alignment to 16 and round every value up, which is why
         // §3.4's preferred `WIDTH_CAP` is not the one that shipped.
-        assert_eq!(std::mem::size_of::<Val<'_>>(), 88);
+        assert_eq!(std::mem::size_of::<Val<'_>>(), 72);
         // Types and eliminations ride the evaluator's and conversion's
         // recursion; a former with many components keeps them behind one
-        // pointer (`VIWfSig`) instead of growing every one.
-        assert_eq!(std::mem::size_of::<VTy<'_>>(), 72);
-        assert_eq!(std::mem::size_of::<Elim<'_>>(), 128);
+        // pointer (`VIWfSig`) instead of growing every one. A `Level` is two
+        // words (`issues/kernel-compact-level.md`).
+        assert_eq!(std::mem::size_of::<VTy<'_>>(), 56);
+        assert_eq!(std::mem::size_of::<Elim<'_>>(), 104);
     }
 
     #[test]

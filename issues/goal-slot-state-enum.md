@@ -1,6 +1,6 @@
 ---
 title: Goal slot state as one enum (Open/Solved/Proved/Transparent)
-status: open
+status: closed
 labels: [elaboration,refactor,state-machine]
 area: infrastructure
 created: 2026-11-02
@@ -24,3 +24,7 @@ Replace `Goal`'s `solution`/`proved`/`transparent` triple with one state enum.
 ## Related
 
 Filed together from the implicit-state-machines survey (`docs/implicit-state-machines-survey.md`, 2026-11-02, ranked there): [[elab-field-lifetimes-explicit]], [[module-pass-state-machine]], [[kernel-psi-bound-cache]], [[decl-attempt-lifecycle]], [[kernel-checker-mode-enum]].
+
+## Log
+
+- 2026-11-02: LANDED: `GoalState { Open, Solved, Proved, Transparent(term, Transparent) }` replaces the triple in `crates/elab/src/goals.rs`; `lifted()` matches on it (no `expect`), `outstanding`/`reports`/`named` ask `is_open()`, and `Goal::solve` debug-asserts the slot was open. No `is_lifted()` accessor: its only reader, `lifted()`, matches the two lifted states directly. No behaviour change.

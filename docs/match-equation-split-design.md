@@ -264,6 +264,12 @@ Two residues, stated rather than discovered later:
 
 ## 4. Decision 2: refused on an indexed family
 
+*Superseded (2026-11-01):* the equation binding on an indexed family is the
+index packed with the value, `⟨i, e⟩ = ⟨idx(C, x̄), C(x̄)⟩` at
+`Σ(j: I). F(j)`, which is one type (`docs/dependent-match-compiler-design.md`
+§9.1). The refusal below is the history of why the plain `e = pat` was not
+the answer.
+
 `match h : e { … }` where `e`'s type is an indexed or forded family is a named
 error:
 

@@ -53,6 +53,9 @@ pub enum Lint {
     /// (`0.1` at a binary float), decided by the carrier's `DecimalLiteral`
     /// instance (docs/floating-point-design.md §15).
     InexactLiteral,
+    /// What a tactic says about a run that succeeded (`tactic::say`): an
+    /// account a reader acts on, such as the lemmas `grind_report` used.
+    TacticReport,
 }
 
 impl Lint {
@@ -70,6 +73,7 @@ impl Lint {
             Self::ManualListConstruction => "manual-list-construction",
             Self::RecursionByMeasure => "recursion-by-measure",
             Self::InexactLiteral => "inexact-literal",
+            Self::TacticReport => "tactic-report",
         }
     }
 }

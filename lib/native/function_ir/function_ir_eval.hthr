@@ -121,7 +121,7 @@ fn Valuation::set(values: Valuation(), id: Nat, value: (w: Nat) → BitVec(w)) �
 
 theorem Valuation::set_here(values: Valuation(), id: Nat, value: (w: Nat) → BitVec(w), w: Nat):
     Valuation::set(values, id, value, w, id) = value(w) {
-    match id.eq_dec(id) as λ d => (match d { Inl(_) => value(w), Inr(_) => values(w, id) }) = value(w) {
+    match id.eq_dec(id) {
         Inl(_) => refl,
         Inr(ne) => false_elim(ne(refl)),
     }
@@ -129,7 +129,7 @@ theorem Valuation::set_here(values: Valuation(), id: Nat, value: (w: Nat) → Bi
 
 theorem Valuation::set_other(values: Valuation(), id: Nat, value: (w: Nat) → BitVec(w), w, query: Nat,
     ne: query ≠ id): Valuation::set(values, id, value, w, query) = values(w, query) {
-    match query.eq_dec(id) as λ d => (match d { Inl(_) => value(w), Inr(_) => values(w, query) }) = values(w, query) {
+    match query.eq_dec(id) {
         Inl(e) => false_elim(ne(e)),
         Inr(_) => refl,
     }
@@ -151,7 +151,7 @@ theorem word_value_word(word: BitVec(64)): word_value(word, 64) = word { refl }
 
 // A one-bit result at every width: the bit, then zeroes.
 fn bit_value(b: Bool) → (w: Nat) → BitVec(w) {
-    λ w => match w as λ k => BitVec(k) { Zero => BitVec::nil(), Succ(_) => BitVec::zero().cons_bit(b) }
+    λ w => match w { Zero => BitVec::nil(), Succ(_) => BitVec::zero().cons_bit(b) }
 }
 
 theorem bit_value_bit(b: Bool): bit_value(b, 1) = BitVec::ofBool(b) {
@@ -446,10 +446,7 @@ theorem loop_eval_len(step: Valuation() → Valuation(), parameters: List<Nat>, 
         Succ(rest) => λ state same => {
             let after = step(pass_valuation(parameters, count, Succ(rest), state));
             let next_len: (words_of(after, next).len() = parameters.len()) = trans(words_of_len(after, next), lengths);
-            match after(1, exit).head_bit() as λ b => (match b {
-                False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
-                True => LoopEnd(words_of(after, next), False),
-            }).state.len() = parameters.len() {
+            match after(1, exit).head_bit() {
                 False => loop_eval_len(step, parameters, count, exit, next, lengths, rest, words_of(after, next), next_len),
                 True => next_len,
             }
@@ -584,8 +581,7 @@ theorem StructuredRegion::eval_frame(self region: StructuredRegion, call: Answer
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ values w id h => {
             let parts = absent_append(id, when_true.writes(), when_false.writes(), h);
-            match values(1, condition).head_bit() as λ b =>
-                (match b { False => when_false.eval(call, values)(w, id), True => when_true.eval(call, values)(w, id) }) = values(w, id) {
+            match values(1, condition).head_bit() {
                 False => when_false.eval_frame(call, values, w, id, parts.right),
                 True => when_true.eval_frame(call, values, w, id, parts.left),
             }
@@ -756,9 +752,7 @@ fn Valuation::Same(values, other: Valuation()) → Type { (w: Nat) → (id: Nat)
 theorem Valuation::set_same(values, other: Valuation(), same: Valuation::Same(values, other), id: Nat,
     value, value2: (w: Nat) → BitVec(w), at: (w: Nat) → value2(w) = value(w)):
     Valuation::Same(Valuation::set(values, id, value), Valuation::set(other, id, value2)) {
-    λ w query => match query.eq_dec(id) as λ d =>
-        (match d as λ _ => BitVec(w) { Inl(_) => value2(w), Inr(_) => other(w, query) }) =
-            (match d as λ _ => BitVec(w) { Inl(_) => value(w), Inr(_) => values(w, query) }) {
+    λ w query => match query.eq_dec(id) {
         Inl(_) => at(w),
         Inr(_) => same(w, query),
     }
@@ -997,13 +991,13 @@ theorem program_eval_computes(functions: List<Function>, ok: program_evaluable(f
             let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
             let ih = program_eval_computes(earlier, parts.right);
             match f.eq_dec(earlier.len()) as λ d =>
-                arity_fits(match d as λ _ => Option<Nat> { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
+                arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
                     words.len()).IsTrue() →
                 (match d as λ _ => Type {
                     Inl(_) => last.Computes(program_callees(earlier), words,
-                        match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }),
+                        match d { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }),
                     Inr(_) => program_callees(earlier, f, words,
-                        match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }),
+                        match d { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }),
                 }) {
                 Inl(_) => λ fits => last.eval_computes(program_callees(earlier), program_eval(earlier), program_arity(earlier), ih,
                     parts.left, words, last.parameters.len().matches_eq(words.len(), fits)),

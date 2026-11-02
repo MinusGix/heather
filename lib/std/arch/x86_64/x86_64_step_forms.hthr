@@ -440,7 +440,7 @@ theorem word_load_reg_back(base, destination: Gpr):
 }
 theorem word_load_form_at(destination, base: Gpr, rest: List<BitVec(8)>):
     decode_step_form(word_load_bytes(WordLoad(destination := destination, base := base)) ++ rest) = word_load_form(destination, base) {
-    match base as λ b => decode_step_form(word_load_bytes(WordLoad(destination := destination, base := b)) ++ rest) = word_load_form(destination, b) {
+    match base {
         Rax => word_load_reg_back(Rax, destination), Rcx => word_load_reg_back(Rcx, destination),
         Rdx => word_load_reg_back(Rdx, destination), Rbx => word_load_reg_back(Rbx, destination),
         Rsp => word_load_reg_back(Rsp, destination), Rbp => word_load_reg_back(Rbp, destination),
@@ -512,7 +512,7 @@ theorem short_form_complete(control: ShortControl, rest: List<BitVec(8)>):
 theorem near_form_complete(control: NearControl, rest: List<BitVec(8)>):
     decode_step_form(near_control_bytes(control) ++ rest) = near_form(control) {
     match control {
-        JumpIfNear(cc, d) => match cc as λ k => decode_step_form(near_control_bytes(JumpIfNear(k, d)) ++ rest) = near_form(JumpIfNear(k, d)) {
+        JumpIfNear(cc, d) => match cc {
             O => near_form_back(λ x => JumpIfNear(O, x), d),
             NO => near_form_back(λ x => JumpIfNear(NO, x), d),
             B => near_form_back(λ x => JumpIfNear(B, x), d),
@@ -537,7 +537,7 @@ theorem near_form_complete(control: NearControl, rest: List<BitVec(8)>):
 // The stack forms: a slot's register is in reg, its base RSP.
 theorem stack_form_complete(form: StackForm, rest: List<BitVec(8)>):
     decode_step_form(form.bytes() ++ rest) = Some(FormStack(form)) {
-    match form as λ f => decode_step_form(f.bytes() ++ rest) = Some(FormStack(f)) {
+    match form {
         SpillWord(store) => cong_fn(λ (s: Gpr) => Some(FormStack(SpillWord(StackStore(source := s, offset := store.offset)))),
             reg_of_fields(Rsp, store.source, True, False)),
         ReloadWord(load) => cong_fn(λ (d: Gpr) => Some(FormStack(ReloadWord(StackLoad(destination := d, offset := load.offset)))),
@@ -550,7 +550,7 @@ theorem stack_form_complete(form: StackForm, rest: List<BitVec(8)>):
 theorem step_form_complete(form: StepForm, rest: List<BitVec(8)>):
     decode_step_form(step_form_bytes(form) ++ rest) = Some(form) {
     match form {
-        FormEmitted(emitted) => match emitted as λ e => decode_step_form(emitted_bytes(e) ++ rest) = Some(FormEmitted(e)) {
+        FormEmitted(emitted) => match emitted {
             EmitOrdinary(instruction) => ordinary_form_complete(instruction, rest),
             EmitLoad(load) => load_form_complete(load, rest),
             EmitWordLoad(load) => word_load_form_complete(load, rest),
@@ -577,9 +577,7 @@ theorem readable_prefix<M>(access: FetchAccess<M>, memory: M, left: List<BitVec(
     Prefix(left, right) ∨ Prefix(right, left) {
     match left {
         Nil => λ right start _ _ => Inl(Exists(right, refl)),
-        Cons(x, xs) => λ right => match right as λ r => (start: BitVec(64)) →
-                ReadableBytes(access, memory, Cons(x, xs), start) → ReadableBytes(access, memory, r, start) →
-                Prefix(Cons(x, xs), r) ∨ Prefix(r, Cons(x, xs)) {
+        Cons(x, xs) => λ right => match right {
             Nil => λ start _ _ => Inr(Exists(Cons(x, xs), refl)),
             Cons(y, ys) => λ start first second => {
                 let head: (x = y) = readable_head_same(access, memory, start, x, y, xs, ys, first, second);

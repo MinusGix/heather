@@ -10,6 +10,7 @@ use std::sync::Arc as Rc;
 
 use crate::gendefs::GenDefs;
 use crate::inductive::Inductive;
+use crate::layered::{Layer, Layered, index_hash};
 use crate::names::qkey;
 
 /// The syntax-owned prelude class's tag, reserved: [`declaration_tag`] never
@@ -57,13 +58,36 @@ struct TypeLayer {
     record_fields: HashSet<String>,
 }
 
+/// [`TypeLayer`]'s tables, as the layer index numbers them.
+const INDUCTIVES: usize = 0;
+const BY_TAG: usize = 1;
+const IWF_BY_SHAPE: usize = 2;
+const CONSTRUCTORS: usize = 3;
+const MEMBERS: usize = 4;
+const RECORD_FIELDS: usize = 5;
+
+impl Layer for TypeLayer {
+    const TABLES: usize = 6;
+
+    fn keys(&self, table: usize, out: &mut dyn FnMut(u64)) {
+        match table {
+            INDUCTIVES => self.inductives.keys().for_each(|k| out(index_hash(k.as_str()))),
+            BY_TAG => self.by_tag.keys().for_each(|k| out(index_hash(k))),
+            IWF_BY_SHAPE => self.iwf_by_shape.keys().for_each(|k| out(index_hash(k))),
+            CONSTRUCTORS => self.constructors.keys().for_each(|k| out(index_hash(k.as_str()))),
+            MEMBERS => self.members.keys().for_each(|k| out(index_hash(k.as_str()))),
+            RECORD_FIELDS => self.record_fields.iter().for_each(|k| out(index_hash(k.as_str()))),
+            _ => unreachable!("TypeLayer has {} tables", Self::TABLES),
+        }
+    }
+}
+
 /// Append-only nominal indexes split into immutable image layers and one
 /// suffix delta. The indexes for a declaration remain one `TypeLayer`, so a
 /// commit cannot expose only one face of a nominal type.
 #[derive(Clone, Default)]
 pub(crate) struct Types {
-    sealed: Rc<Vec<Rc<TypeLayer>>>,
-    current: Rc<TypeLayer>,
+    tables: Layered<TypeLayer>,
     gdefs: GenDefs,
 }
 
@@ -76,48 +100,45 @@ impl Types {
     }
 
     fn seal_current(&mut self) {
-        let empty = self.current.inductives.is_empty()
-            && self.current.by_tag.is_empty()
-            && self.current.iwf_by_shape.is_empty()
-            && self.current.constructors.is_empty()
-            && self.current.members.is_empty()
-            && self.current.record_fields.is_empty();
+        let current = self.tables.current();
+        let empty = current.inductives.is_empty()
+            && current.by_tag.is_empty()
+            && current.iwf_by_shape.is_empty()
+            && current.constructors.is_empty()
+            && current.members.is_empty()
+            && current.record_fields.is_empty();
         if empty {
             return;
         }
-        crate::stats::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
-        self.current = Rc::new(TypeLayer::default());
-    }
-
-    fn layers(&self) -> impl Iterator<Item = &TypeLayer> {
-        std::iter::once(self.current.as_ref()).chain(self.sealed.iter().rev().map(Rc::as_ref))
+        self.tables.seal_current();
     }
 
     pub(crate) fn inductive(&self, key: &str) -> Option<&Rc<Inductive>> {
-        self.layers().find_map(|layer| layer.inductives.get(key))
+        self.tables.find(INDUCTIVES, key, |layer| layer.inductives.get(key))
     }
 
     pub(crate) fn by_tag(&self, tag: u32) -> Option<&Rc<Inductive>> {
-        self.layers().find_map(|layer| layer.by_tag.get(&tag))
+        self.tables.find(BY_TAG, &tag, |layer| layer.by_tag.get(&tag))
     }
 
     pub(crate) fn iwf_by_shape(&self, tag: u32) -> Option<&Rc<Inductive>> {
-        self.layers()
-            .find_map(|layer| layer.iwf_by_shape.get(&tag))
+        self.tables.find(IWF_BY_SHAPE, &tag, |layer| layer.iwf_by_shape.get(&tag))
     }
 
     pub(crate) fn constructor(&self, key: &str) -> Option<&(Rc<Inductive>, usize)> {
-        self.layers().find_map(|layer| layer.constructors.get(key))
+        self.tables.find(CONSTRUCTORS, key, |layer| layer.constructors.get(key))
     }
 
     /// A mutual group's member: its family and its position among the
     /// family's members.
     pub(crate) fn member(&self, key: &str) -> Option<&(Rc<Inductive>, usize)> {
-        self.layers().find_map(|layer| layer.members.get(key))
+        self.tables.find(MEMBERS, key, |layer| layer.members.get(key))
     }
 
     pub(crate) fn has_record_field(&self, name: &str) -> bool {
-        self.layers().any(|layer| layer.record_fields.contains(name))
+        self.tables
+            .find(RECORD_FIELDS, name, |layer| layer.record_fields.contains(name).then_some(()))
+            .is_some()
     }
 
     pub(crate) fn gdefs(&self) -> &GenDefs {
@@ -145,7 +166,7 @@ impl Types {
         }
         debug_assert!(self.by_tag(ind.tag).is_none());
 
-        let layer = crate::stats::make_mut(&mut self.current);
+        let layer = self.tables.current_mut();
         if let Some(skeleton) = &ind.skel {
             layer.by_tag.insert(skeleton.tag, Rc::clone(skeleton));
             layer.inductives
@@ -176,8 +197,6 @@ impl Types {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc as Rc;
-
     use crate::Elaborator;
     use crate::names::qkey;
 
@@ -241,11 +260,11 @@ mod tests {
         let mut left = image.elaborator();
         let right = image.elaborator();
 
-        assert!(Rc::ptr_eq(&left.types.sealed, &right.types.sealed));
+        assert!(left.types.tables.shares_sealed_with(&right.types.tables));
         assert!(left.types.gdefs.shares_sealed_with(&right.types.gdefs));
         left.elab_source("inductive B { MkB }").unwrap();
 
-        assert!(Rc::ptr_eq(&left.types.sealed, &right.types.sealed));
+        assert!(left.types.tables.shares_sealed_with(&right.types.tables));
         assert!(left.types.gdefs.shares_sealed_with(&right.types.gdefs));
         assert!(left.types.inductive(&qkey("main", "B")).is_some());
         assert!(right.types.inductive(&qkey("main", "B")).is_none());

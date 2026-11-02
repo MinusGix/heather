@@ -77,6 +77,11 @@ pub(crate) struct Inductive {
     /// identical declarations do not share a kernel type.
     pub tag: u32,
     pub params: Vec<String>,
+    /// The type parameter a type constructor over this declaration abstracts
+    /// when the unifier learns one from `?M(a) ≟ D<…>`: `varies A` as written
+    /// (docs/lambda-carrier-instances-design.md §7.1), an index into
+    /// [`Self::params`]. `None` is the default slot, the last parameter.
+    pub varies: Option<usize>,
     /// `record R(p: Prog, env: Val)` — value parameters, kept in surface form
     /// for the same reason the field types are: they are elaborated afresh in
     /// the *ambient* context at every use site
@@ -419,7 +424,7 @@ pub(crate) fn sum_of_payloads(parts: Vec<(Type, Level)>) -> Option<(Type, Level)
     // measured at ~2/3 of a large lowered type's remaining node mass
     // (issues/wf-field-conversion-cost.md, 2026-08-13). `canonical` is
     // `equiv`-preserving by construction, so this is a spelling change only.
-    sum_of_payloads_joined(parts, |l, r| Level::max(l, r).normalize().canonical())
+    sum_of_payloads_joined(parts, |l, r| Level::max(l, r))
 }
 
 /// [`sum_of_payloads`] with each `+`'s level spelled by `join(lhs, rhs)`.
@@ -1374,6 +1379,41 @@ impl Elaborator {
                 d.span,
             );
         }
+        // `varies A` names the type parameter a type constructor over this
+        // declaration abstracts (docs/lambda-carrier-instances-design.md §7.1).
+        // Only a type parameter: the unifier's constructor rule abstracts a
+        // type argument. Naming the last one, the default, is accepted.
+        let varies = match &d.varies {
+            None => None,
+            Some((name, span)) => match d.params.iter().position(|p| p == name) {
+                Some(k) => Some(k),
+                None => {
+                    let what = if d.valparams.iter().any(|p| &p.name == name) {
+                        "is a value parameter; `varies` names a **type** parameter, the one a \
+                         type constructor over this declaration abstracts"
+                            .to_string()
+                    } else {
+                        format!(
+                            "is not a parameter of `{}`; `varies` names one of its type \
+                             parameters ({})",
+                            d.name,
+                            if d.params.is_empty() { "it has none".to_string() } else { d.params.join(", ") }
+                        )
+                    };
+                    return err(format!("`varies {name}`: `{name}` {what}"), *span);
+                }
+            },
+        };
+        if varies.is_some() && (d.index.is_some() || d.is_codata) {
+            return err(
+                format!(
+                    "`varies` on `{}`: an indexed or `codata` declaration has no registered type \
+                     constructor to abstract a parameter of yet",
+                    d.name
+                ),
+                d.varies.as_ref().map_or(d.span, |(_, s)| *s),
+            );
+        }
         let skel = match (&route, shape_tag) {
             (Some(IdxRoute::Iwf(_)), Some(shape_tag)) => Some(Rc::new(shape_of(
                 d,
@@ -1388,6 +1428,7 @@ impl Elaborator {
             scope: Rc::new(self.names.scope().clone()),
             tag,
             params: d.params.clone(),
+            varies,
             valparams: d
                 .valparams
                 .iter()
@@ -1580,7 +1621,7 @@ impl Elaborator {
         args: &[Ty],
         span: Span,
     ) -> R<(Type, Level)> {
-        if let Some(p) = cx.tyvars.iter().rev().find(|p| p.name == name) {
+        if let Some(p) = cx.tyvars.iter_inner().find(|p| p.name == name) {
             if !args.is_empty() {
                 return err(format!("type parameter `{name}` takes no arguments"), span);
             }
@@ -1643,7 +1684,7 @@ impl Elaborator {
             // shadowing rules. Type parameters and declared types retain
             // their existing precedence, including in declaration fields
             // lowered over a use site's context.
-            if cx.aliases.iter().any(|alias| alias.name == name) {
+            if cx.aliases.iter_inner().any(|alias| alias.name == name) {
                 if !args.is_empty() {
                     return err(format!("type alias `{name}` takes no type arguments"), span);
                 }
@@ -1704,18 +1745,18 @@ impl Elaborator {
         let memo = args.is_empty()
             && cx.dicts.is_empty()
             && cx.meta.is_none()
-            && !cx.quoted
+            && !self.under_quotation()
             && ind.scope.module != self.names.module();
         let key = (Rc::as_ptr(ind) as usize, self.in_generated());
         let psi = self.psi.bindings.len();
         if memo {
-            let hit = self.named_type_memo.borrow().get(&key).map(|(_, at, hit)| (*at, hit.clone()));
+            let hit = self.memos.named_type_memo.borrow().get(&key).map(|(_, at, hit)| (*at, hit.clone()));
             if let Some((at, (ty, level))) = hit.filter(|(at, _)| *at <= psi) {
                 if at == psi {
                     return Ok((ty, level));
                 }
                 let out = self.share_registered_lowering(ind.tag, (ty.shift_global((psi - at) as u32), level));
-                self.named_type_memo.borrow_mut().insert(key, (Rc::clone(ind), psi, out.clone()));
+                self.memos.named_type_memo.borrow_mut().insert(key, (Rc::clone(ind), psi, out.clone()));
                 return Ok(out);
             }
         }
@@ -1730,7 +1771,7 @@ impl Elaborator {
         // any depth. Hiding the use site's binders should make every bare
         // lowering closed; this is the backstop, paid once per miss.
         if memo && out.0.shift_local(1) == out.0 {
-            self.named_type_memo.borrow_mut().insert(key, (ind, psi, out.clone()));
+            self.memos.named_type_memo.borrow_mut().insert(key, (ind, psi, out.clone()));
         }
         Ok(out)
     }
@@ -1944,10 +1985,14 @@ impl Elaborator {
     /// registered one. Same disambiguator: no constructor inhabits a
     /// universe, so a spine ending in `Ty l` can only want the type former.
     ///
-    /// Only the bare name: a partial type-argument list (`Result<Nat>` at
-    /// `Type → Type`) is not this reading, and an argument list is a
-    /// constructor's. Every domain must be a universe — a type parameter
-    /// ranges over types — and the count must be the parameter count.
+    /// A **partial** type-argument list fills the leading parameters and
+    /// abstracts the rest (`Parser<T>` at `Type → Type`,
+    /// docs/lambda-carrier-instances-design.md §7.3 reader 1): the written
+    /// arguments are applied to the code function, η-short, so
+    /// `Parser<T>(A)` is the reference spelling of `Parser<T, A>`. An
+    /// argument list is a constructor's. Every domain must be a universe — a
+    /// type parameter ranges over types — and the written and abstracted
+    /// counts must make the parameter count.
     fn check_generic_former_value(
         &self,
         cx: &Cx,
@@ -1962,7 +2007,7 @@ impl Elaborator {
         };
         if ind.params.is_empty()
             || !args.is_empty()
-            || !targs.is_empty()
+            || targs.len() >= ind.params.len()
             || ind.index.is_some()
             || !ind.co_index.is_empty()
         {
@@ -2012,13 +2057,29 @@ impl Elaborator {
                 span,
             );
         }
-        if peeled.len() != ind.params.len() {
+        if peeled.len() + targs.len() != ind.params.len() {
             // Fewer binders than parameters is the `Result` case: the bare
             // name abstracts every parameter, so the constructor that fixes
-            // some of them is a λ the author writes.
+            // the leading ones is a partial application, and one fixing others
+            // is a λ the author writes.
+            if !targs.is_empty() {
+                return err(
+                    format!(
+                        "`{name}` takes {} type argument(s) and {} written here, so the \
+                         expected type constructor must provide {} before its `Type`; it \
+                         provides {}",
+                        ind.params.len(),
+                        targs.len(),
+                        ind.params.len() - targs.len(),
+                        peeled.len()
+                    ),
+                    span,
+                );
+            }
             let hint = if peeled.len() < ind.params.len() {
                 format!(
-                    "; to fix the others, write the constructor as a λ (`λ ({}: Type) => \
+                    "; to fix the leading ones, apply it to them (`{name}<…>`), and to \
+                     fix others, write the constructor as a λ (`λ ({}: Type) => \
                      {name}<…>`)",
                     ind.params[0]
                 )
@@ -2042,17 +2103,27 @@ impl Elaborator {
         // `El(app(D#tycode_fn^δ; ⌜A⌝))` the rest of the elaborator already
         // reads as `D<A>`, where the λ below would leave a β-redex at every
         // use.
+        // The written leading arguments, elaborated in the ambient context.
+        let mut fixed: Vec<(Type, Level)> = Vec::with_capacity(targs.len());
+        for targ in targs {
+            fixed.push(self.elab_ty(cx, targ)?);
+        }
         if let Some(entry) = self.ty_code_fn_now(ind.tag, 0)
             && entry.level.equiv(&want)
-            && entry.param_levels.len() == peeled.len()
-            && entry
-                .param_levels
+            && entry.param_levels.len() == fixed.len() + peeled.len()
+            && entry.param_levels.iter().zip(&fixed).all(|(l, (_, k))| k.equiv(l))
+            && entry.param_levels[fixed.len()..]
                 .iter()
                 .zip(&peeled)
                 .all(|(l, (_, _, _, dom))| matches!(&**dom, Type::Ty(k) if k.equiv(l)))
-            && let Some(head) = self.gen_ref(cx, crate::gendefs::GenDef::TyCodeFn(ind.tag))
         {
-            return Ok(Some(head));
+            let mut codes = Vec::with_capacity(fixed.len());
+            for (t, l) in &fixed {
+                codes.push(Rc::new(crate::expr::ExprElab::quote_type_at(self, cx, t, l, l, span)?));
+            }
+            if let Some(head) = self.code_fn_prefix(cx, ind.tag, &codes) {
+                return Ok(Some(head));
+            }
         }
         let levels: Vec<Level> = peeled
             .iter()
@@ -2066,7 +2137,7 @@ impl Elaborator {
         {
             return Ok(None);
         }
-        let t = self.generic_former_lambda_at(cx, ind, &levels, Some(&want), span)?;
+        let t = self.generic_former_lambda_at(cx, ind, &fixed, &levels, Some(&want), span)?;
         Ok(Some(t))
     }
 
@@ -2083,13 +2154,17 @@ impl Elaborator {
         levels: &[Level],
         span: Span,
     ) -> R<Term> {
-        self.generic_former_lambda_at(cx, ind, levels, None, span)
+        self.generic_former_lambda_at(cx, ind, &[], levels, None, span)
     }
 
+    /// [`Self::generic_former_lambda`] with the leading type arguments
+    /// `fixed` written (scoped in `cx`) and only the remaining ones bound:
+    /// `λ x̄. ⌜D<fixed, El x̄>⌝`.
     fn generic_former_lambda_at(
         &self,
         cx: &Cx,
         ind: &Inductive,
+        fixed: &[(Type, Level)],
         levels: &[Level],
         want: Option<&Level>,
         span: Span,
@@ -2104,10 +2179,10 @@ impl Elaborator {
         // `D<El x₁, …>` lowered directly, as the declaration's own code
         // function template is (`tycode_fn_telescope`): no name to resolve,
         // so nothing in scope can capture it.
-        let targs: Vec<(Type, Level)> = levels
+        let targs: Vec<(Type, Level)> = fixed
             .iter()
-            .enumerate()
-            .map(|(i, l)| {
+            .map(|(t, l)| (t.shift_local(m as u32), l.clone()))
+            .chain(levels.iter().enumerate().map(|(i, l)| {
                 (
                     Type::El {
                         level: l.clone(),
@@ -2115,7 +2190,7 @@ impl Elaborator {
                     },
                     l.clone(),
                 )
-            })
+            }))
             .collect();
         let (lowered, level) = self.lower_instance(&pcx, ind, &targs, &[], span)?;
         let want = want.cloned().unwrap_or_else(|| level.clone());
@@ -2130,7 +2205,7 @@ impl Elaborator {
                 dom: Rc::new(Type::Ty(l.clone())),
                 body: Rc::new(t),
             };
-            cod_level = Level::max(dom_level, cod_level).normalize().canonical();
+            cod_level = Level::max(dom_level, cod_level);
         }
         Ok(t)
     }
@@ -2447,14 +2522,12 @@ impl Elaborator {
         // (issues/binder-symbol-as-notation.md — the symbol is scoped to the
         // binder's scope, and for a class head that scope is the class body).
         // Empty for every declaration whose head writes no `as`.
-        fcx.op_locals = ind.op_symbols.clone();
+        fcx.op_locals = ind.op_symbols.iter().cloned().collect();
         // The use site's binders and `let` aliases stay in Γ, where the
         // arguments are scoped, but out of reach by name: a field spelling
         // `y()` means the declaration's `y`, not a parameter `y` of whatever
         // function names the type (issues/named-type-lowering-per-mention.md).
-        for name in &mut fcx.names {
-            *name = "#use-site".into();
-        }
+        fcx.names = fcx.names.renamed(|_| "#use-site".into());
         fcx.aliases.clear();
         let depth = cx.names.len();
         fcx.tyvars = ind
@@ -2666,7 +2739,7 @@ impl Elaborator {
             };
             // Canonical join — [`Self::lower_shape`]'s note: the raw `Max`
             // tree compounds per field and is copied into every Σ level slot.
-            acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
+            acc_lvl = Level::max(lvl, acc_lvl);
         }
         Ok((acc, acc_lvl, domains))
     }
@@ -3268,7 +3341,7 @@ impl Elaborator {
         // expected type for a flat declaration, the emitted shape for a
         // recursive one. A recursive declaration whose `expected` is not a
         // `Wf` is the error below; it takes no `@` and falls through to it.
-        let at = if !self.emits_at_forms(cx) {
+        let at = if !self.emits_at_forms() {
             None
         } else if ind.recursive {
             wf_slots.as_ref().map(|(s, _)| Rc::clone(s))
@@ -3455,7 +3528,7 @@ impl Elaborator {
         // the object the round exists to stop writing down — and they are
         // still what the fields were checked against above; they are just
         // not written.
-        if self.emits_at_forms(cx) {
+        if self.emits_at_forms() {
             return Ok(Term::PairAt {
                 ty: None,
                 fst: value,
@@ -3966,7 +4039,7 @@ impl Elaborator {
         // field type is a structural read too: keep it inline until a caller
         // actually writes an annotation. Emitting a selected conjunction here
         // recursively matches every remaining instance again at every dot.
-        if self.emits_at_forms(cx) {
+        if self.emits_at_forms() {
             crate::stats::count(crate::stats::Counter::ProjectionStructural);
             // The walk descends a spine that is a `Σ` outright without
             // substituting: `pending` are the earlier fields' projections,
@@ -5199,6 +5272,7 @@ fn shape_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) -> In
         scope,
         tag,
         params: d.params.clone(),
+        varies: None,
         valparams: vec![],
         op_symbols: vec![],
         ctors: sctors,
@@ -6301,7 +6375,7 @@ impl Elaborator {
                 Rc::new(side.shift_local(2)), &index, span,
             )?;
             Ok(oracle
-                .nat_value(&mcx.gamma, &Rc::new(probe), self.fuel)
+                .nat_value(&mcx.gamma, &Rc::new(probe), self.policy.fuel)
                 .and_then(|k| usize::try_from(k).ok())
                 .filter(|&k| k < ind.ctors.len()))
         };

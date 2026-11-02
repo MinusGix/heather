@@ -132,10 +132,9 @@ impl Elaborator {
     /// at `Layer::Meta`, and commit it to the meta-program registry.
     pub(crate) fn elab_meta_decl(&mut self, decl: &Decl) -> R<()> {
         debug_assert_eq!(decl.kind, DeclKind::Fn);
-        let r = self.elab_meta_decl_inner(decl);
-        // The oracle padding must not outlive the declaration, error or not.
-        self.meta_pushed.borrow_mut().clear();
-        r
+        // The oracle padding is the declaration's own, and must not outlive
+        // it, error or not.
+        self.scoped(|s| s.meta_pushed.get_mut(), Vec::new(), |me| me.elab_meta_decl_inner(decl))
     }
 
     /// A `meta fn`'s signature: the binder list and the result type, in the
@@ -175,7 +174,7 @@ impl Elaborator {
                     menv.pushed.push(MetaBinder::Ctx {
                         name: p.name.clone(),
                     });
-                    self.meta_pushed.borrow_mut().push(GlobalBinding::Ctx);
+                    self.scope.meta_pushed.borrow_mut().push(GlobalBinding::Ctx);
                     sig.push(Sig::Ctx);
                 }
                 // `TyCode(g)` as an **ordinary parameter**: a code-of-a-type
@@ -369,7 +368,7 @@ impl Elaborator {
                 lands_in_psi: false,
             };
             if !self
-                .gate
+                .policy.gate
                 .as_ref()
                 .is_some_and(|g| g.admits(&self.psi, &item))
             {
@@ -395,7 +394,7 @@ impl Elaborator {
                     site: crate::KernelSite::Other,
                 })?;
                 let unsealed = recording.finish();
-                if let Some(g) = self.gate.as_ref() {
+                if let Some(g) = self.policy.gate.as_ref() {
                     g.accepted(&self.psi, &item, &unsealed);
                 }
             }
@@ -478,9 +477,7 @@ impl Elaborator {
         let [heather_syntax::ast::Item::Decl(sig_decl)] = &file.items[..] else {
             unreachable!("a slot's expected signature is one declaration")
         };
-        let saved = self.meta_pushed.replace(Vec::new());
-        let elaborated = self.meta_sig(sig_decl);
-        self.meta_pushed.replace(saved);
+        let elaborated = self.scoped_cell(|s| &s.meta_pushed, Vec::new(), || self.meta_sig(sig_decl));
         let (_, _, sig, want_res, want_res_lvl) = elaborated.map_err(|e| ElabError::Elab {
             msg: format!(
                 "`{}`'s expected signature does not elaborate in this file — it needs \
@@ -490,7 +487,7 @@ impl Elaborator {
             span: decl.span,
         })?;
         let (want, want_lvl) = Self::close_meta_ty(&sig, want_res, want_res_lvl);
-        if want_lvl.normalize() != lvl.normalize() {
+        if want_lvl != *lvl {
             return err(
                 format!(
                     "`{}` expects a signature at level {want_lvl:?}, and this one is at \
@@ -656,7 +653,7 @@ impl Elaborator {
         else {
             unreachable!("a `meta fn`'s statement is a code type")
         };
-        if level.normalize() != want_level.normalize() {
+        if *level != want_level {
             return err(
                 format!(
                     "`{}`'s payload lives at a different level than the slot's \
@@ -800,7 +797,7 @@ impl Elaborator {
                 ty: Rc::clone(&ty_i),
                 level: level.clone(),
             });
-            self.meta_pushed.borrow_mut().push(GlobalBinding::Tm {
+            self.scope.meta_pushed.borrow_mut().push(GlobalBinding::Tm {
                 ctx: ctx_i,
                 layer: Layer::Code,
                 ty: ty_i,
@@ -816,17 +813,16 @@ impl Elaborator {
         let mut pcx = Cx::empty();
         pcx.gamma = qctx.shift_global(n);
         pcx.meta = Some(Rc::new(inner));
+        let expected_p = (*qty).clone().shift_global(n);
         // Inside a `box` the component forms stay the only spelling
         // (`docs/intro-by-type-design.md` §2.3): this payload is what the
         // code recursors range over.
-        pcx.quoted = true;
-        let expected_p = (*qty).clone().shift_global(n);
-        self.quote_depth.set(self.quote_depth.get() + 1);
-        let payload_t = self.elab_check(&pcx, payload, &expected_p, &qlvl);
-        self.quote_depth.set(self.quote_depth.get() - 1);
+        let depth = self.scope.quote_depth.get() + 1;
+        let payload_t =
+            self.scoped_cell(|s| &s.quote_depth, depth, || self.elab_check(&pcx, payload, &expected_p, &qlvl));
         // The letbox padding must not outlive this quote, error or not.
         {
-            let mut mp = self.meta_pushed.borrow_mut();
+            let mut mp = self.scope.meta_pushed.borrow_mut();
             let keep = mp.len() - n as usize;
             mp.truncate(keep);
         }
@@ -846,7 +842,7 @@ impl Elaborator {
                 Rc::new(payload_t),
                 &expected_p,
                 &qlvl,
-                self.fuel,
+                self.policy.fuel,
             ) {
                 Ok(t) => (*t).clone(),
                 Err(e) => {
@@ -899,8 +895,8 @@ impl Elaborator {
         let ExprKind::Var(name) = &source.kind else {
             return err("`emit_code` expects a named meta function", source.span);
         };
-        if cx.names.iter().any(|local| local == name)
-            || cx.aliases.iter().any(|local| local.name == *name)
+        if cx.names.iter_inner().any(|local| local == name)
+            || cx.aliases.iter_inner().any(|local| local.name == *name)
             || cx.selfref.as_ref().is_some_and(|local| local.matches(name))
         {
             return err(
@@ -940,7 +936,7 @@ impl Elaborator {
             Layer::Prog,
             &cx.gamma,
             payload,
-            self.fuel,
+            self.policy.fuel,
         )
         .map_err(|_| ElabError::Elab {
             msg: "emitted code does not type at this use site".into(),
@@ -1033,7 +1029,6 @@ impl Elaborator {
         // ingredient becomes its Tarski code wherever the order puts it —
         // however many there are — which is what the old two-code prefix
         // hard-coded.
-        let zero = Level::Zero.normalize();
         let mut applied_args: Vec<Term> = Vec::with_capacity(md.order.len());
         for &pos in &md.order {
             let iname = spec.ingredients[pos].name;
@@ -1053,7 +1048,7 @@ impl Elaborator {
                     // The template binds `(A: Type<0>)`: a type at a higher
                     // level, or with no code in the Tarski universe, is an
                     // instance this level-0 slice honestly cannot take.
-                    if level.normalize() != zero {
+                    if **level != Level::Zero {
                         return Ok(None);
                     }
                     let Some(code) = crate::code::code_of(ty) else {
@@ -1093,7 +1088,7 @@ impl Elaborator {
             heather_kernel::layer::Layer::Prog,
             &cx.gamma,
             payload,
-            self.fuel,
+            self.policy.fuel,
         )
         .map_err(|_| ElabError::Elab {
             msg: format!(
@@ -1291,12 +1286,12 @@ impl Elaborator {
             // The telescope's globals go into the oracle padding for the arm's
             // elaboration: nothing can *name* them, but every ambient global an
             // arm body does name is that many indices further out.
-            self.meta_pushed
+            self.scope.meta_pushed
                 .borrow_mut()
                 .extend(shape.globals.iter().cloned());
             let arm_t = self.elab_check(&acx, &arm.body, &shape.ty, &shape.level);
             {
-                let mut mp = self.meta_pushed.borrow_mut();
+                let mut mp = self.scope.meta_pushed.borrow_mut();
                 let keep = mp.len() - shape.globals.len();
                 mp.truncate(keep);
             }

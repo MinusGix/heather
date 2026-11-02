@@ -9,7 +9,7 @@
 // which must resolve in a client that imports only `linarith` (once, every
 // numeral here silently became an atom).
 import logic; import nat; import int; import omega; import linarith;
-import relation_props; import list; import algebra_rel; import ring; import semiring; import ordered_field; import rat; import creal;
+import relation_props; import order; import list; import algebra_rel; import ring; import semiring; import ordered_field; import rat; import creal;
 
 // The rearrangements issues/linarith-ordered-fields.md names.
 theorem rat_trans(a, b, c: Rat, h1: a <= b, h2: b < c): a < c { linarith(h1, h2) }

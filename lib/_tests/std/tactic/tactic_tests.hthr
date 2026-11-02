@@ -5,7 +5,7 @@
 // whose dictionary `Match` finds in scope. Tests, not library: nothing
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import char; import string; import tactic;
-import relation_props; import algebra_rel; import semiring; import ordered_field;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field;
 
 // A block's `let` is one of the goal's locals: a fact it binds is found by a
 // tactic that searches them, without being handed it
@@ -85,10 +85,10 @@ fn dictionary_in_scope(name: String, count: Nat) → Tac<Expr> {
 section<A: OrderedField(≈, <, <=, +, *)> {
 // A class's lemma at its own dictionary, at an ancestor's (an upcast), and
 // one whose conclusion reads a dictionary field.
-theorem field_law(x, y, z: A, h: x < y, hz: A.unit < z): z * x < z * y { by use_law("OrderedField::mul_lt_mono_l") }
-theorem ancestor_law(x, y, z: A, h: x <= y): z + x <= z + y { by use_law("OrderedAddGroup::add_le_mono_l") }
+theorem field_law(x, y, z: A, h: x < y, hz: A.unit < z): z * x < z * y { by use_law("OrderedSemiring::mul_lt_mono_l") }
+theorem ancestor_law(x, y, z: A, h: x <= y): z + x <= z + y { by use_law("OrderedAddMonoid::add_le_mono_l") }
 theorem field_conclusion(x, y: A, h: x <= y): A.inv(y) <= A.inv(x) { by use_law("LocatedAddGroup::neg_le") }
-theorem zero_conclusion(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y { by use_law("OrderedAddGroup::add_pos") }
+theorem zero_conclusion(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y { by use_law("OrderedAddMonoid::add_pos") }
 
 // `A.inv(x)` is a field read off the dictionary, applied to `x`; `A.unit` is
 // one applied to nothing.

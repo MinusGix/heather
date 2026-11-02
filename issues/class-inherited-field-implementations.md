@@ -5,7 +5,7 @@ labels: [traits,classes,ergonomics,design]
 area: language
 milestone: [math-classes]
 created: 2026-10-23
-updated: 2026-10-23
+updated: 2026-11-02
 ---
 
 From the Arend survey (`docs/arend-survey.md` §4). Arend's records support
@@ -72,3 +72,7 @@ milestone says clients should not do.
 - **`docs/traits-design.md`** owns flattening and the canonical value.
   Assumed here: only that inherited fields are the child's own fields after
   flattening, so filling one is filling a field.
+
+## Log
+
+- 2026-11-02: First order consumer (docs/strict-order-presentation-design.md §2.2). `StrictOrder` and `PseudoOrder` now carry tagged views: `Transitive(<)` as `lt_transitive`, the `≈` pairs `same_lt`/`lt_same`/`same_le`/`le_same`, `Preorder(≤)` as `le_preorder`, and the mixed pairs `lt_le`/`le_lt`. They exist so that a generic `calc` works. Each follows from the class's own fields (`lt_trans`, `lt_respects`, `StrictOrder::le_respects`, `PseudoOrder::le_trans`, `lt_of_lt_of_le`). Today they are filled by reference from hand instances at `Rat`, `CReal`, `Dyadic`, `Nat` and `Int` (eight per carrier, plus four `RelId` transports at `Nat` and `Int`), and `Finite(F)` writes them as literal fields twice. A class-level `lt_transitive := Transitive(lt_trans)` and its siblings would retire all of them. One requirement this adds: the filled field is a *tagged parent* dictionary, so it must also work when the default is a whole parent record, not a single law.

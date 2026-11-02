@@ -936,3 +936,61 @@ and `Fold` (§6.3's table). After them comes the `Fun` wrapper, which binds
 parameters with `Valuation::bind` and reads the result with `Function::eval`.
 That wrapper is §6.1's `Agrees`.
 
+### 16.6 Round 2: primitives, convoys, calls and functions (R5b, 2026-11-02)
+
+The second round added the cases that need no new data layout:
+
+- **Literals and the primitive table.** A literal is a `Const` node (a bit as
+  the one-bit 0 or 1). The binary primitives FunctionIR has a node for share
+  one leaf lemma each per shape: a word operation at its width, a comparison
+  as its bit (`bit_value_bit`), and `&&`/`||` as the bitwise node on one-bit
+  words with a four-case law (`Tm::band_ofBool`). `!` is two nodes, a
+  constant one and an exclusive or. `zero_extend` has no node (a `Move`
+  reads the source at the wider width, which says nothing of its value), so
+  it waits on `function-ir-alu-core`; the byte primitives wait on buffers.
+- **`IfEq` is `If`.** It lowers to the same chain, and its meaning is the
+  plain match by `Tm::convoy_match` (a case split on the bit, both arms
+  `refl`). The `If` case moved into `Tm::if_sound`, which takes the two arms'
+  theorems as arguments, so both nodes share one proof.
+- **Calls are a hypothesis of the theorem, not of the region.** FunctionIR
+  answers a `Call` from the program (`Answers`), so `Tm::LowerHolds` now
+  takes `Tm::CallsAgree(w, call)`: every function whose signature is all
+  64-bit words (`Sig::Words`) is answered by `call` with its meaning, read
+  through `Ty::Answers` (on every word list, the curried meaning applied to
+  the words cast to the parameters, cast to a word). The lowering accepts a
+  call only at such a signature and with word arguments, one per parameter,
+  so the case is the hypothesis at that index plus `Ty::cast_trans`. Wider
+  signatures wait on `function-ir-multi-word-calls`.
+- **The function wrapper is the same relation.** `Fun::lower` binds the
+  parameters at ids `0, 1, …` (the context's ports are them reversed, the
+  last parameter being variable 0) and lowers the body above them;
+  `Fun::lower_sound` proves `Ty::Answers` of the function's curried meaning
+  against `Function::eval`. So the conclusion for function `i` is the
+  hypothesis a caller of `i` needs: a program discharges `CallsAgree` by
+  induction over its functions, each answered by the ones before it as
+  `program_eval` orders them. The proof goes through `Ty::curry_answers`
+  (currying against an uncurried word function) and `Fun::bind_bound` (what
+  `Valuation::bind` leaves at distinct ids).
+
+Per program still nothing is proved: `lib/_tests/native/runtime/rt_lower_tests.hthr`
+instantiates `Fun::lower_sound` at the reflector's `leaf`, `caller` and
+`safe_pred` and lands on the Heather functions by conversion. A `!` lowered
+against a zero constant fails the `Neg` case's proof.
+
+What is left of N1, and what each waits on:
+
+- **The program wrapper.** Discharging `CallsAgree` for `program_eval` needs
+  the call's bound: function `i` is answered only by functions below `i`, so
+  the hypothesis becomes `CallsAgree` below a bound and the lowering refuses a
+  call at or above it. A self-call is not a call under N1 but a loop
+  (`Measured`), and recursion through calls is N2's.
+- **Records.** A record is several ports, so a variable's encoding spans
+  them: `Holds` at `Named(i)` reads its fields at consecutive ports, and
+  `Below`/`Keeps` cover the span. `Make` needs `get(mk(t)) = t` for the
+  table's entry, which the kernel's η for pairs and `Unit` (crates/kernel/DESIGN.md)
+  should give by `refl` for every reflected record.
+- **`Fold` and the byte primitives.** `StructuredRegion::eval` reads every
+  buffer as empty (a `BufferLoad` is zero there); buffers live in
+  `function_ir_state`'s run. So `Fold` needs the theorem stated over that
+  semantics, with `Bytes` encoded as a buffer and a length word.
+

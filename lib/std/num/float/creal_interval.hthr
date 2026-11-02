@@ -142,9 +142,8 @@ theorem Interval::recip_pos_has_real(lo, hi: Dyadic, p: Nat, pos: 0 < lo, {x: CR
 }
 
 theorem Interval::recip_bnd_has_real(lo, hi: Dyadic, p: Nat, {x: CReal}, h: x.Apart(0), hx: Bnd(lo, hi).HasReal(x)): Interval::recip_bnd(lo, hi, p).HasReal(x.inv(h := h)) {
-    match lo.le_dec(0) as λ c => (match c { Inl(_) => match Dyadic::le_dec(0, hi) { Inl(_) => Whole, Inr(_) => Interval::recip_pos(-hi, -lo, p).neg() },
-            Inr(_) => Interval::recip_pos(lo, hi, p) }).HasReal(x.inv(h := h)) {
-        Inl(_) => match Dyadic::le_dec(0, hi) as λ c => (match c { Inl(_) => Whole, Inr(_) => Interval::recip_pos(-hi, -lo, p).neg() }).HasReal(x.inv(h := h)) {
+    match lo.le_dec(0) {
+        Inl(_) => match Dyadic::le_dec(0, hi) {
             Inl(_) => trivial,
             Inr(no) => {
                 let hn: (hi < 0) = Rat::lt_of_not_le(x := hi.rat(), y := Dyadic::rat(0), h := no);
@@ -189,7 +188,7 @@ theorem Interval::one_has_real(): Interval::of_int(1).HasReal(1) {
 }
 
 theorem Interval::npow_has_real(I: Interval, n, p: Nat, {x: CReal}, h: I.HasReal(x)): I.npow(n, p).HasReal(x.npow(n)) {
-    match n as λ k => I.npow(k, p).HasReal(x.npow(k)) {
+    match n {
         Zero => Interval::one_has_real(),
         Succ(k) => Interval::mul_has_real(I.npow(k, p), I, p, Interval::npow_has_real(I, k, p, h), h),
     }
@@ -200,7 +199,7 @@ theorem Interval::pow_step_has_real(I: Interval, n: Nat, H: Interval, p: Nat, {x
 {
     let h = n.half();
     let sq: (H.mul(H, p).HasReal(x.npow(h + h))) = Interval::has_real_respects(H.mul(H, p), CReal::same_sym(x.npow_add(h, h)), Interval::mul_has_real(H, H, p, hh, hh));
-    match Succ(h + h).le_dec(n) as λ c => (match c { Inl(_) => H.mul(H, p).mul(I, p), Inr(_) => H.mul(H, p) }).HasReal(x.npow(n)) {
+    match Succ(h + h).le_dec(n) {
         Inl(le) => j(Succ(h + h).le_antisym(n, le, n.le_succ_half_add()), λ m _ => H.mul(H, p).mul(I, p).HasReal(x.npow(m)), Interval::mul_has_real(H.mul(H, p), I, p, sq, hx)),
         Inr(nle) => j((h + h).le_antisym(n, n.half_add_le(), Nat::lt_of_not_le(n, Succ(h + h), nle)), λ m _ => H.mul(H, p).HasReal(x.npow(m)), sq),
     }
@@ -209,7 +208,7 @@ theorem Interval::pow_step_has_real(I: Interval, n: Nat, H: Interval, p: Nat, {x
 theorem Interval::pow_sq_has_real(I: Interval, fuel, p: Nat, {x: CReal}, hx: I.HasReal(x)): (n: Nat) → I.pow_sq(n, fuel, p).HasReal(x.npow(n)) {
     match fuel {
         Zero => λ n => Interval::npow_has_real(I, n, p, hx),
-        Succ(f) => λ n => match n as λ m => (match m { Zero => Interval::of_int(1), Succ(k) => Interval::pow_step(I, Succ(k), I.pow_sq(Succ(k).half(), f, p), p) }).HasReal(x.npow(m)) {
+        Succ(f) => λ n => match n {
             Zero => Interval::one_has_real(),
             Succ(k) => Interval::pow_step_has_real(I, Succ(k), I.pow_sq(Succ(k).half(), f, p), p, hx, Interval::pow_sq_has_real(I, f, p, hx, Succ(k).half())),
         },
@@ -341,7 +340,7 @@ fn RealExpr::plain(self e: RealExpr) → Bool {
 }
 
 theorem RealExpr::wf_of_plain(self e: RealExpr): e.plain().IsTrue() → e.Wf() {
-    match e as λ f => f.plain().IsTrue() → f.Wf() {
+    match e {
         RRat(_) => λ _ => trivial,
         RReal(_) => λ _ => trivial,
         RAdd(a, b) => λ h => { let k = a.plain().is_true_and(b.plain(), h); And(a.wf_of_plain(k.left), b.wf_of_plain(k.right)) },
@@ -371,7 +370,7 @@ fn RealExpr::enclose(self e: RealExpr, n, p: Nat) → Interval {
 }
 
 theorem RealExpr::enclose_has(self e: RealExpr, n, p: Nat): e.Wf() → e.enclose(n, p).HasReal(e.eval()) {
-    match e as λ f => f.Wf() → f.enclose(n, p).HasReal(f.eval()) {
+    match e {
         RRat(q) => λ _ => Interval::of_rat_has_real(q, p),
         RReal(x) => λ _ => x.enclose_has(n),
         RAdd(a, b) => λ k => Interval::add_has_real(a.enclose(n, p), b.enclose(n, p), p, a.enclose_has(n, p, k.left), b.enclose_has(n, p, k.right)),

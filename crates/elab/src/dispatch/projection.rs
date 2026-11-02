@@ -107,7 +107,7 @@ impl Elaborator {
         // guessing the missing arguments from the subject or global instances.
         let mut scoped_hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for d in cx.dicts.iter().rev() {
+        for d in cx.dicts.iter_inner() {
             if !seen.insert(d.name.clone()) {
                 continue;
             }
@@ -347,9 +347,9 @@ impl Elaborator {
     pub(crate) fn subject_slot_takes_a_type(&self, cx: &Cx, name: &str, span: Span) -> bool {
         // This is a shape probe used only to decide whether two surface
         // readings are ambiguous. Its hypothetical callee is not a body edge.
-        let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
+        let dependency_mark = self.attempt.direct_dependencies.borrow().mark();
         let resolved = self.resolve_reading(cx, name, span);
-        *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
+        self.attempt.direct_dependencies.borrow_mut().rollback(dependency_mark);
         let Ok((_, ty, _)) = resolved else {
             return true;
         };
