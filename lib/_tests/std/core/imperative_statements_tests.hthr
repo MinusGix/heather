@@ -449,5 +449,13 @@ theorem tick_until_zero_lit(): tick_until_zero([1, 2, 0, 5]) = 3 { refl }
 fn tick_tail(mut c: Counter) → Nat { c.tick(4) }
 theorem tick_tail_lit(): tick_tail(Counter(1, [])) = 5 { refl }
 
-// Called on a local that is not `mut`, the method gives the record.
-theorem tick_plain(c: Counter): (λ (d: Counter) => d.tick(1))(c).value = c.n + 1 { refl }
+// Called on a local that is not `mut`, the method is refused at the call:
+// nothing keeps the update. The qualified call is the record
+// (`tick_kernel`).
+// expect-error: `tick` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn tick_plain(d: Counter) → Nat { d.tick(1) }
+// expect-error: `tick` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn tick_plain_lambda(c: Counter) → Nat {
+    let g = λ (d: Counter) => d.tick(1);
+    0
+}

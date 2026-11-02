@@ -417,7 +417,17 @@ fn lower_in_env(mut b: Block, outer: &[String], next: &mut usize) -> R<(Block, V
                     if mine != mut_receiver(&call).unwrap_or("") {
                         env.retain(|n| *n != mine);
                     }
-                    stmts.push(Stmt::Let { name, ty, expr: call_marked(MUTATED, call, span), span, opaque });
+                    if ty.is_some() {
+                        // `let p: T = x.m(a);`: the call binds a private
+                        // name, which the annotated `let` then reads, so the
+                        // annotation is held to the answer, not the record.
+                        let tmp = format!("#mutcall{}", *next);
+                        *next += 1;
+                        stmts.push(Stmt::Let { name: tmp.clone(), ty: None, expr: call_marked(MUTATED, call, span), span, opaque: false });
+                        stmts.push(Stmt::Let { name, ty, expr: var(&tmp, span), span, opaque });
+                    } else {
+                        stmts.push(Stmt::Let { name, ty, expr: call_marked(MUTATED, call, span), span, opaque });
+                    }
                 } else if unmark(&expr, STMT).is_some_and(form_has_exit) || exit_of(&Stmt::Let { name: name.clone(), ty: None, expr: expr.clone(), span, opaque }).is_some() {
                     // An exit, or a form holding one, is the enclosing loop's
                     // to lower in tail position ([`tail`]).

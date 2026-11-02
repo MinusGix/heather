@@ -1,6 +1,6 @@
 ---
 title: Refuse a mut self call on a local that is not mutable, and lift the mut self return/annotation limits
-status: open
+status: closed
 labels: [language,frontend,effects]
 area: language
 milestone: [nh-effects,lang-sequencing]
@@ -27,3 +27,7 @@ Also here: an annotated `let p: T = x.m(a);` is not a candidate (the
 answer is annotated after the call), and `return` inside a `mut self`
 body is refused (the `\0after` route would have to wrap the `Return` value
 in `Mutated` too).
+
+## Log
+
+- 2026-11-02: Built: a dot call of a `mut self` method that no statement threads is refused at the call ("nothing here keeps the update"; `refuse_unthreaded_mut_call` in crates/elab/src/dispatch/member.rs reads the callee's written result head, one surface lookup), with probes in linux_world_tests and imperative_statements_tests. An annotated `let p: T = x.m(a);` is now a candidate, split through a private `#mutcallN`. The `return` limit moved to [[mut-self-early-return]].

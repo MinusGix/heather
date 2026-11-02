@@ -136,7 +136,8 @@ The refusals are named at parse time:
 - an implicit `mut` parameter;
 - `return` in a `mut self` body. The receiver goes back out beside the
   result, and the early exit's `\0after` route would skip that. Lifting this
-  is a small follow-up: wrap the `Return` value in the after-branch too.
+  is a follow-up (`issues/mut-self-early-return.md`): wrap the `Return`
+  value in the after-branch too, with the receiver as it stood at the exit.
 
 ### 2.2 Calling
 
@@ -173,16 +174,25 @@ moved.
 - the statement `x.m(a);` where `m` does not update `x`: "this statement
   discards its value";
 - a `mut self` call on an outer `let mut` reached through a λ: the λ cannot
-  update it.
+  update it;
+- a dot call of a `mut self` method anywhere the statements above do not
+  thread it: on a local that is not mutable (`let p = y.m(a);` with a plain
+  `let y`), or on a `let mut` local inside a larger expression
+  (`f(x.m(a))`). It would give the `Mutated` record where the answer was
+  meant and leave the receiver unchanged, so it is refused at the call:
+  "nothing here keeps the update". The test is on the dot-call path
+  (`refuse_unthreaded_mut_call`, `crates/elab/src/dispatch/member.rs`),
+  which is hot, so it reads the callee's *written* result head, one surface
+  lookup and no reduction; the candidate `elaborate_mut_call` is inferring
+  is let through by its span (`DynamicScope::mut_call_site`). A method whose
+  written result is `Mutated<…>` by hand is refused the same way: that is
+  the same convention, decided by the same type. The qualified call
+  `T::m(y, a)` is the record, as before.
 
-**Not refused yet.** A method-syntax call of a `mut self` method on a local
-that is not mutable, `let p = y.m(a);` with a plain `let y`, gives the
-`Mutated` record. It is not refused at the call: the error appears where `p`
-is used as the answer. Refusing at the call needs the method's result type
-read on the dot-call path, which is hot, so it waits for a cheap test
-(`issues/mut-self-call-on-immutable-refusal.md`). A call with an annotated
-`let p: T = x.m(a);` is not a candidate either, so annotate the answer
-after it.
+An annotated `let p: T = x.m(a);` is a candidate like the unannotated one.
+The declaring block binds the call to a private `#mutcallN` and the
+annotated `let` reads it, so the annotation is held to the answer, not the
+record.
 
 ## 3. The tree reading, and agreement once
 

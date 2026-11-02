@@ -285,6 +285,7 @@ impl Elaborator {
                 named[0].name_span,
             );
         }
+        self.refuse_unthreaded_mut_call(recv, name, span)?;
         let at = at.min(args.len());
         args.insert(at, recv.clone());
         let mut head = Expr {
@@ -310,6 +311,43 @@ impl Elaborator {
             },
             span,
         }))
+    }
+
+    /// A dot call `recv.m(a)` of a `mut self` method that no statement
+    /// threads: anywhere but a marked call on a `let mut` local or `mut`
+    /// parameter (docs/effects-capabilities-design.md §2.2), the call would
+    /// give the `Mutated` record where its answer was meant, with the receiver
+    /// unchanged, so it is refused here rather than where the record is
+    /// used. The test reads the callee's written result head, so the hot
+    /// dot-call path pays one surface lookup and no type is reduced.
+    fn refuse_unthreaded_mut_call(&self, recv: &Expr, callee: &str, span: Span) -> R<()> {
+        if self.scope.mut_call_site.get() == Some(span) {
+            return Ok(());
+        }
+        let Some(abs) = self.lookup_global(callee).map(|g| g.abs) else { return Ok(()) };
+        let Some((module, base)) = self.names.global_name_at(abs).and_then(|key| key.split_once("::")) else {
+            return Ok(());
+        };
+        let Some(decl) = self.names.surface_decl_in(module, base) else { return Ok(()) };
+        let mutated = matches!(&decl.result.kind,
+            heather_syntax::TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD);
+        if !mutated {
+            return Ok(());
+        }
+        let method = callee.rsplit("::").next().unwrap_or(callee);
+        let x = match &recv.kind {
+            ExprKind::Var(x) => x.as_str(),
+            _ => "x",
+        };
+        err(
+            format!(
+                "`{method}` is a `mut self` method, so it updates its receiver, and nothing here keeps the \
+                 update: call it on a `let mut` local of this function's own blocks, as the statement \
+                 `{x}.{method}(…);` or `let p = {x}.{method}(…);`, or call `{callee}(…)` by its qualified \
+                 name for the `Mutated` record"
+            ),
+            span,
+        )
     }
 
     /// The callee of a method call, given the receiver: `name` itself, or
